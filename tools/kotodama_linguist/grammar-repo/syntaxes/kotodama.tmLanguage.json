@@ -18,6 +18,9 @@
       "include": "#strings"
     },
     {
+      "include": "#retiredNumericSuffixes"
+    },
+    {
       "include": "#numbers"
     },
     {
@@ -60,6 +63,7 @@
         }
       ]
     },
+    "__BEGIN_GENERATED_KOTODAMA_V1_SUMVARIANTS__": {},
     "sumVariants": {
       "patterns": [
         {
@@ -68,6 +72,8 @@
         }
       ]
     },
+    "__END_GENERATED_KOTODAMA_V1_SUMVARIANTS__": {},
+    "__BEGIN_GENERATED_KOTODAMA_V1_ROUNDINGVARIANTS__": {},
     "roundingVariants": {
       "patterns": [
         {
@@ -76,6 +82,7 @@
         }
       ]
     },
+    "__END_GENERATED_KOTODAMA_V1_ROUNDINGVARIANTS__": {},
     "jsonConstruction": {
       "patterns": [
         {
@@ -84,6 +91,7 @@
         }
       ]
     },
+    "__BEGIN_GENERATED_KOTODAMA_V1_MEMBERCALLS__": {},
     "memberCalls": {
       "patterns": [
         {
@@ -92,6 +100,17 @@
         }
       ]
     },
+    "__END_GENERATED_KOTODAMA_V1_MEMBERCALLS__": {},
+    "__BEGIN_GENERATED_KOTODAMA_V1_RETIREDNUMERICSUFFIXES__": {},
+    "retiredNumericSuffixes": {
+      "patterns": [
+        {
+          "match": "(?<![A-Za-z0-9_])(?:0[xX][0-9A-Fa-f_]+|0[bB][01_]+|\\d(?:[\\d_]*\\d)?(?:\\.\\d(?:[\\d_]*\\d)?)?(?:[eE][+-]?\\d(?:[\\d_]*\\d)?)?)(?:amt|qty)\\b",
+          "name": "invalid.deprecated.numeric.suffix.kotodama"
+        }
+      ]
+    },
+    "__END_GENERATED_KOTODAMA_V1_RETIREDNUMERICSUFFIXES__": {},
     "comments": {
       "patterns": [
         {
@@ -303,6 +322,7 @@
         }
       ]
     },
+    "__BEGIN_GENERATED_KOTODAMA_V1_TYPES__": {},
     "types": {
       "patterns": [
         {
@@ -311,6 +331,8 @@
         }
       ]
     },
+    "__END_GENERATED_KOTODAMA_V1_TYPES__": {},
+    "__BEGIN_GENERATED_KOTODAMA_V1_KEYWORDS__": {},
     "keywords": {
       "patterns": [
         {
@@ -319,6 +341,7 @@
         }
       ]
     },
+    "__END_GENERATED_KOTODAMA_V1_KEYWORDS__": {},
     "builtins": {
       "patterns": [
         {
@@ -335,6 +358,7 @@
         }
       ]
     },
+    "__BEGIN_GENERATED_KOTODAMA_V1_OPERATORS__": {},
     "operators": {
       "patterns": [
         {
@@ -342,7 +366,8 @@
           "name": "keyword.operator.kotodama"
         }
       ]
-    }
+    },
+    "__END_GENERATED_KOTODAMA_V1_OPERATORS__": {}
   },
   "uuid": "5d167a6a-57c4-468a-9b82-564f4aacb42b"
 }

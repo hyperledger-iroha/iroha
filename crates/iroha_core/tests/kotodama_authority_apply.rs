@@ -3,13 +3,11 @@
 
 use iroha_core::smartcontracts::ivm::host::CoreHost;
 use iroha_data_model::prelude::*;
+use iroha_test_samples::ALICE_ID;
 use ivm::{IVM, ProgramMetadata, encoding, instruction, syscalls as ivm_sys};
 use norito::to_bytes;
 
-fn fixture_account(hex_public_key: &str) -> AccountId {
-    let public_key = hex_public_key.parse().expect("public key");
-    AccountId::new(public_key)
-}
+const AMPLE_TEST_GAS_LIMIT: u64 = 1_000_000;
 
 #[test]
 #[allow(clippy::too_many_lines)]
@@ -37,8 +35,7 @@ fn kotodama_set_account_detail_with_authority() {
     program.extend_from_slice(&code);
 
     // Build authority and VM with CoreHost
-    let authority =
-        fixture_account("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
+    let authority = ALICE_ID.clone();
     // Prepare TLVs for (&AccountId, &Name, &Json)
     let account_tlv = {
         let payload = to_bytes(&authority).expect("encode account");
@@ -91,7 +88,7 @@ fn kotodama_set_account_detail_with_authority() {
     let off_name = align8(off_acc + account_tlv.len() as u64);
     let off_json = align8(off_name + name_tlv.len() as u64);
 
-    let mut vm = IVM::new(200_000);
+    let mut vm = IVM::new(AMPLE_TEST_GAS_LIMIT);
     vm.set_host(CoreHost::new(authority.clone()));
     vm.memory
         .preload_input(off_acc, &account_tlv)

@@ -20,12 +20,13 @@ use iroha_core::{
 use iroha_crypto::HashOf;
 use iroha_data_model::{
     block::BlockHeader,
+    events::data::sorafs::SorafsOrderbookLedgerEventKind,
     isi::InstructionBox,
     query::{
         error::{FindError, QueryExecutionFail},
         sorafs::prelude::{
             FindSorafsOrderbookChannelById, FindSorafsOrderbookChannels,
-            FindSorafsOrderbookOrders, FindSorafsOrderbookPolicy,
+            FindSorafsOrderbookEvents, FindSorafsOrderbookOrders, FindSorafsOrderbookPolicy,
             FindSorafsOrderbookReceiptById, FindSorafsOrderbookStatus,
             FindSorafsReserveProviderById,
         },
@@ -33,8 +34,10 @@ use iroha_data_model::{
     sorafs::{
         orderbook::{
             ORDERBOOK_MAX_OPEN_ORDERS_V1, ORDERBOOK_MAX_OPEN_SETTLEMENT_CHANNELS_V1,
-            ORDERBOOK_QUERY_MAX_ITEMS_V1, OrderbookFinalizedCursorV1, OrderbookLedgerStatusV1,
-            OrderbookOrderStatusV1, OrderbookSettlementChannelStatusV1,
+            ORDERBOOK_QUERY_MAX_ITEMS_V1, OrderbookFinalizedCursorV1,
+            OrderbookFinalizedEventCursorV1, OrderbookFinalizedEventPageV1,
+            OrderbookLedgerStatusV1, OrderbookOrderPageV1, OrderbookOrderStatusV1,
+            OrderbookSettlementChannelPageV1, OrderbookSettlementChannelStatusV1,
         },
         reserve::ReserveLifecycleStage,
     },
@@ -45,7 +48,9 @@ use iroha_data_model::{
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_logger::{debug, warn};
 use mv::storage::StorageReadOnly;
-use sorafs_manifest::orderbook::{OrderSideV1, decode_order_request_v1, decode_settlement_receipt_v1};
+use sorafs_manifest::orderbook::{
+    OrderSideV1, OrderTierV1, decode_order_request_v1, decode_settlement_receipt_v1,
+};
 use sorafs_node::{
     config::OrderbookWorkerPolicy,
     orderbook_transaction_forwarder::{
@@ -65,9 +70,18 @@ use super::orderbook_worker::{
 };
 use crate::{SharedAppState, SoraFsOrderbookTransactionSigner};
 
+const ORDERBOOK_TELEMETRY_MAX_EVENTS_PER_SCAN_V1: usize = 1_024;
+const ORDERBOOK_TELEMETRY_MAX_ORDERS_V1: usize = ORDERBOOK_MAX_OPEN_ORDERS_V1 as usize;
+const ORDERBOOK_TELEMETRY_MAX_CHANNELS_V1: usize =
+    ORDERBOOK_MAX_OPEN_SETTLEMENT_CHANNELS_V1 as usize;
+const ORDERBOOK_TELEMETRY_EVENT_KIND_COUNT_V1: usize = 8;
+const ORDERBOOK_TELEMETRY_TIER_COUNT_V1: usize = 3;
+const ORDERBOOK_TELEMETRY_SIDE_COUNT_V1: usize = 2;
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SorafsOrderbookTransactionForwarderCursorV1 {
     after_sequence: Option<u64>,
+    telemetry: SorafsOrderbookFinalizedTelemetryProjectionV1,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -82,6 +96,71 @@ pub(crate) struct SorafsOrderbookTransactionForwarderScanV1 {
     deferred: usize,
     conflicted: usize,
     rejected: usize,
+    telemetry_published: usize,
+    telemetry_catching_up: usize,
+    telemetry_failed: usize,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct SorafsOrderbookFinalizedTelemetryProjectionV1 {
+    after_event: Option<OrderbookFinalizedEventCursorV1>,
+    event_counts: [u64; ORDERBOOK_TELEMETRY_EVENT_KIND_COUNT_V1],
+    published_event_counts: [u64; ORDERBOOK_TELEMETRY_EVENT_KIND_COUNT_V1],
+    last_event_book_revision: u64,
+    last_event_occurred_at_unix_ms: u64,
+    last_book_revision_advanced_at_unix_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SorafsOrderbookFinalizedMetricsV1 {
+    finalized_cursor: OrderbookFinalizedCursorV1,
+    finalized_at_unix: u64,
+    event_count_deltas: [u64; ORDERBOOK_TELEMETRY_EVENT_KIND_COUNT_V1],
+    open_depth_gib:
+        [[u64; ORDERBOOK_TELEMETRY_SIDE_COUNT_V1]; ORDERBOOK_TELEMETRY_TIER_COUNT_V1],
+    matcher_lag_seconds: u64,
+    settlement_backlog: u64,
+    oldest_settlement_age_seconds: u64,
+    escrow_runway_seconds: u64,
+    book_revision: u64,
+    matcher_scan_book_revision: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SorafsOrderbookFinalizedTelemetryRefreshV1 {
+    Published,
+    CatchingUp,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SorafsOrderbookFinalizedTelemetryErrorV1 {
+    TelemetryUnavailable,
+    FinalizedViewUnavailable,
+    QueryFailed,
+    InvalidEventPage,
+    InvalidOrderPage,
+    InvalidChannelPage,
+    ArithmeticOverflow,
+    OrderCapacityExceeded,
+    ChannelCapacityExceeded,
+    ProjectionMismatch,
+}
+
+impl SorafsOrderbookFinalizedTelemetryErrorV1 {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::TelemetryUnavailable => "telemetry_unavailable",
+            Self::FinalizedViewUnavailable => "finalized_view_unavailable",
+            Self::QueryFailed => "query_failed",
+            Self::InvalidEventPage => "invalid_event_page",
+            Self::InvalidOrderPage => "invalid_order_page",
+            Self::InvalidChannelPage => "invalid_channel_page",
+            Self::ArithmeticOverflow => "arithmetic_overflow",
+            Self::OrderCapacityExceeded => "order_capacity_exceeded",
+            Self::ChannelCapacityExceeded => "channel_capacity_exceeded",
+            Self::ProjectionMismatch => "projection_mismatch",
+        }
+    }
 }
 
 /// Generation is configurable; drain/reconciliation is unconditional.
@@ -133,7 +212,7 @@ enum OrderbookTransactionSubmissionResultV1 {
     Deferred,
 }
 
-fn classify_local_orderbook_transaction_submission(
+fn classify_orderbook_transaction_submission(
     error: &iroha_core::queue::Error,
 ) -> OrderbookTransactionSubmissionDispositionV1 {
     match error {
@@ -150,7 +229,7 @@ fn classify_local_orderbook_transaction_submission(
     }
 }
 
-fn local_orderbook_evidence_blocks_absence_retry(
+fn orderbook_delivery_evidence_blocks_absence_retry(
     queue_pending: bool,
     cache_kind: Option<crate::PipelineStatusKind>,
 ) -> bool {
@@ -180,7 +259,7 @@ fn classify_orderbook_envelope(
     signed_transaction_bytes: Option<&[u8]>,
     finalized_cursor: OrderbookFinalizedCursorV1,
     outcome: OrderbookAuthoritativeTransactionOutcomeV1,
-    local_evidence_blocks_absence_retry: bool,
+    delivery_evidence_blocks_absence_retry: bool,
 ) -> OrderbookEnvelopeReconciliationV1 {
     if finalized_cursor.height == 0 || finalized_cursor.block_hash == [0; 32] {
         return OrderbookEnvelopeReconciliationV1::Unavailable;
@@ -204,7 +283,7 @@ fn classify_orderbook_envelope(
             }
         }
         OrderbookAuthoritativeTransactionOutcomeV1::Absent
-            if local_evidence_blocks_absence_retry =>
+            if delivery_evidence_blocks_absence_retry =>
         {
             OrderbookEnvelopeReconciliationV1::Pending {
                 transaction_digest,
@@ -334,6 +413,571 @@ fn orderbook_finalized_tip_from_view(
         .map(|millis| millis / 1_000)
         .filter(|timestamp| *timestamp != 0)?;
     Some((finalized_cursor, finalized_at_unix))
+}
+
+const fn orderbook_telemetry_event_kind_index(
+    kind: SorafsOrderbookLedgerEventKind,
+) -> usize {
+    match kind {
+        SorafsOrderbookLedgerEventKind::PolicyActivated => 0,
+        SorafsOrderbookLedgerEventKind::OrderAdmitted => 1,
+        SorafsOrderbookLedgerEventKind::OrderCancelled => 2,
+        SorafsOrderbookLedgerEventKind::TradeMatched => 3,
+        SorafsOrderbookLedgerEventKind::OrderExpired => 4,
+        SorafsOrderbookLedgerEventKind::OrderProviderRevoked => 5,
+        SorafsOrderbookLedgerEventKind::ChannelExpired => 6,
+        SorafsOrderbookLedgerEventKind::ReceiptRecorded => 7,
+    }
+}
+
+const fn orderbook_telemetry_tier_index(tier: OrderTierV1) -> usize {
+    match tier {
+        OrderTierV1::Hot => 0,
+        OrderTierV1::Warm => 1,
+        OrderTierV1::Archive => 2,
+    }
+}
+
+const fn orderbook_telemetry_side_index(side: OrderSideV1) -> usize {
+    match side {
+        OrderSideV1::Bid => 0,
+        OrderSideV1::Ask => 1,
+    }
+}
+
+fn orderbook_telemetry_event_shape_is_valid(
+    event: &iroha_data_model::events::data::sorafs::SorafsOrderbookLedgerEvent,
+) -> bool {
+    if event.occurred_at_unix_ms == 0
+        || [
+            event.order_id,
+            event.trade_id,
+            event.channel_id,
+            event.receipt_id,
+        ]
+        .into_iter()
+        .flatten()
+        .any(|identifier| identifier == [0; 32])
+        || event
+            .provider_id
+            .is_some_and(|provider_id| provider_id.as_bytes() == &[0; 32])
+    {
+        return false;
+    }
+    match event.kind {
+        SorafsOrderbookLedgerEventKind::PolicyActivated => {
+            event.order_id.is_none()
+                && event.trade_id.is_none()
+                && event.channel_id.is_none()
+                && event.receipt_id.is_none()
+                && event.provider_id.is_none()
+        }
+        SorafsOrderbookLedgerEventKind::OrderAdmitted => {
+            event.order_id.is_some()
+                && event.trade_id.is_none()
+                && event.channel_id.is_none()
+                && event.receipt_id.is_none()
+        }
+        SorafsOrderbookLedgerEventKind::OrderCancelled
+        | SorafsOrderbookLedgerEventKind::OrderExpired => {
+            event.order_id.is_some()
+                && event.trade_id.is_none()
+                && event.channel_id.is_none()
+                && event.receipt_id.is_none()
+                && event.provider_id.is_none()
+        }
+        SorafsOrderbookLedgerEventKind::OrderProviderRevoked => {
+            event.order_id.is_some()
+                && event.trade_id.is_none()
+                && event.channel_id.is_none()
+                && event.receipt_id.is_none()
+                && event.provider_id.is_some()
+        }
+        SorafsOrderbookLedgerEventKind::TradeMatched => {
+            event.order_id.is_some()
+                && event.trade_id.is_some()
+                && event.channel_id.is_some()
+                && event.receipt_id.is_none()
+                && event.provider_id.is_some()
+        }
+        SorafsOrderbookLedgerEventKind::ChannelExpired => {
+            event.order_id.is_none()
+                && event.trade_id.is_some()
+                && event.channel_id.is_some()
+                && event.receipt_id.is_none()
+                && event.provider_id.is_some()
+        }
+        SorafsOrderbookLedgerEventKind::ReceiptRecorded => {
+            event.order_id.is_none()
+                && event.trade_id.is_some()
+                && event.channel_id.is_some()
+                && event.receipt_id.is_some()
+                && event.provider_id.is_some()
+        }
+    }
+}
+
+fn orderbook_telemetry_event_cursor_is_successor(
+    previous: Option<OrderbookFinalizedEventCursorV1>,
+    current: OrderbookFinalizedEventCursorV1,
+) -> bool {
+    if current.sequence == 0
+        || current.block_height == 0
+        || current.block_hash == [0; 32]
+        || previous
+            .map_or(1, |cursor| cursor.sequence.checked_add(1).unwrap_or(0))
+            != current.sequence
+    {
+        return false;
+    }
+    let Some(previous) = previous else {
+        return current.sequence == 1 && current.event_index == 0;
+    };
+    match previous.block_height.cmp(&current.block_height) {
+        std::cmp::Ordering::Less => current.event_index == 0,
+        std::cmp::Ordering::Equal => {
+            previous.block_hash == current.block_hash
+                && previous
+                    .event_index
+                    .checked_add(1)
+                    .is_some_and(|index| index == current.event_index)
+        }
+        std::cmp::Ordering::Greater => false,
+    }
+}
+
+fn apply_orderbook_finalized_telemetry_event_page(
+    projection: &mut SorafsOrderbookFinalizedTelemetryProjectionV1,
+    page: &OrderbookFinalizedEventPageV1,
+    expected_finalized_cursor: OrderbookFinalizedCursorV1,
+) -> Result<(), SorafsOrderbookFinalizedTelemetryErrorV1> {
+    if page.finalized_cursor != expected_finalized_cursor
+        || page.events.len()
+            > usize::try_from(ORDERBOOK_QUERY_MAX_ITEMS_V1)
+                .map_err(|_| SorafsOrderbookFinalizedTelemetryErrorV1::ArithmeticOverflow)?
+        || (page.has_more && page.events.is_empty())
+        || page.has_more != page.next_after.is_some()
+        || page
+            .next_after
+            .is_some_and(|cursor| page.events.last().map(|event| event.cursor()) != Some(cursor))
+    {
+        return Err(SorafsOrderbookFinalizedTelemetryErrorV1::InvalidEventPage);
+    }
+
+    let mut next = *projection;
+    for record in &page.events {
+        let cursor = record.cursor();
+        if record.block_height > expected_finalized_cursor.height
+            || !orderbook_telemetry_event_cursor_is_successor(next.after_event, cursor)
+            || !orderbook_telemetry_event_shape_is_valid(&record.event)
+            || record.event.book_revision < next.last_event_book_revision
+            || record.event.occurred_at_unix_ms < next.last_event_occurred_at_unix_ms
+        {
+            return Err(SorafsOrderbookFinalizedTelemetryErrorV1::InvalidEventPage);
+        }
+        let kind_index = orderbook_telemetry_event_kind_index(record.event.kind);
+        next.event_counts[kind_index] = next.event_counts[kind_index]
+            .checked_add(1)
+            .ok_or(SorafsOrderbookFinalizedTelemetryErrorV1::ArithmeticOverflow)?;
+        next.after_event = Some(cursor);
+        if record.event.book_revision > next.last_event_book_revision {
+            next.last_book_revision_advanced_at_unix_ms = record.event.occurred_at_unix_ms;
+        }
+        next.last_event_book_revision = record.event.book_revision;
+        next.last_event_occurred_at_unix_ms = record.event.occurred_at_unix_ms;
+    }
+    *projection = next;
+    Ok(())
+}
+
+fn orderbook_telemetry_event_block_hashes_are_finalized(
+    block_hashes: &[HashOf<BlockHeader>],
+    page: &OrderbookFinalizedEventPageV1,
+) -> bool {
+    page.events.iter().all(|record| {
+        record
+            .block_height
+            .checked_sub(1)
+            .and_then(|index| usize::try_from(index).ok())
+            .and_then(|index| block_hashes.get(index))
+            .is_some_and(|hash| hash.as_ref() == &record.block_hash)
+    })
+}
+
+fn consume_orderbook_finalized_telemetry_events(
+    view: &impl StateReadOnly,
+    finalized_cursor: OrderbookFinalizedCursorV1,
+    projection: &mut SorafsOrderbookFinalizedTelemetryProjectionV1,
+) -> Result<bool, SorafsOrderbookFinalizedTelemetryErrorV1> {
+    let mut processed = 0_usize;
+    loop {
+        let remaining = ORDERBOOK_TELEMETRY_MAX_EVENTS_PER_SCAN_V1
+            .checked_sub(processed)
+            .ok_or(SorafsOrderbookFinalizedTelemetryErrorV1::ArithmeticOverflow)?;
+        if remaining == 0 {
+            return Ok(false);
+        }
+        let limit = u32::try_from(remaining)
+            .unwrap_or(u32::MAX)
+            .min(ORDERBOOK_QUERY_MAX_ITEMS_V1);
+        let page =
+            FindSorafsOrderbookEvents::new(Some(finalized_cursor), projection.after_event, limit)
+                .execute(view)
+                .map_err(|_| SorafsOrderbookFinalizedTelemetryErrorV1::QueryFailed)?;
+        let page_len = page.events.len();
+        if !orderbook_telemetry_event_block_hashes_are_finalized(view.block_hashes(), &page) {
+            return Err(SorafsOrderbookFinalizedTelemetryErrorV1::InvalidEventPage);
+        }
+        apply_orderbook_finalized_telemetry_event_page(projection, &page, finalized_cursor)?;
+        processed = processed
+            .checked_add(page_len)
+            .ok_or(SorafsOrderbookFinalizedTelemetryErrorV1::ArithmeticOverflow)?;
+        if !page.has_more {
+            return Ok(true);
+        }
+    }
+}
+
+fn validate_orderbook_telemetry_order_page(
+    page: &OrderbookOrderPageV1,
+    expected_finalized_cursor: OrderbookFinalizedCursorV1,
+    finalized_at_unix: u64,
+    expected_status: OrderbookOrderStatusV1,
+    after_order_id: Option<[u8; 32]>,
+) -> Result<(), SorafsOrderbookFinalizedTelemetryErrorV1> {
+    if page.finalized_cursor != expected_finalized_cursor
+        || page.orders.len()
+            > usize::try_from(ORDERBOOK_QUERY_MAX_ITEMS_V1)
+                .map_err(|_| SorafsOrderbookFinalizedTelemetryErrorV1::ArithmeticOverflow)?
+        || (page.has_more && page.orders.is_empty())
+        || page.has_more != page.next_after_order_id.is_some()
+        || page
+            .next_after_order_id
+            .is_some_and(|cursor| page.orders.last().map(|record| record.order_id) != Some(cursor))
+    {
+        return Err(SorafsOrderbookFinalizedTelemetryErrorV1::InvalidOrderPage);
+    }
+    let mut previous = after_order_id;
+    for record in &page.orders {
+        if previous.is_some_and(|cursor| record.order_id <= cursor)
+            || record.order_id == [0; 32]
+            || record.admitted_policy_digest == [0; 32]
+            || record.status != expected_status
+            || record.remaining_gib == 0
+            || record.admitted_at_unix == 0
+            || record.admission_sequence == 0
+            || record.admitted_at_unix > finalized_at_unix
+            || record.updated_at_unix < record.admitted_at_unix
+            || record.updated_at_unix > finalized_at_unix
+            || record.canonical_cancel.is_some()
+            || record.cancelled_at_unix.is_some()
+            || record.cancelled_policy_digest.is_some()
+        {
+            return Err(SorafsOrderbookFinalizedTelemetryErrorV1::InvalidOrderPage);
+        }
+        previous = Some(record.order_id);
+    }
+    Ok(())
+}
+
+fn validate_orderbook_telemetry_channel_page(
+    page: &OrderbookSettlementChannelPageV1,
+    expected_finalized_cursor: OrderbookFinalizedCursorV1,
+    finalized_at_unix: u64,
+    after_channel_id: Option<[u8; 32]>,
+) -> Result<(), SorafsOrderbookFinalizedTelemetryErrorV1> {
+    if page.finalized_cursor != expected_finalized_cursor
+        || page.channels.len()
+            > usize::try_from(ORDERBOOK_QUERY_MAX_ITEMS_V1)
+                .map_err(|_| SorafsOrderbookFinalizedTelemetryErrorV1::ArithmeticOverflow)?
+        || (page.has_more && page.channels.is_empty())
+        || page.has_more != page.next_after_channel_id.is_some()
+        || page.next_after_channel_id.is_some_and(|cursor| {
+            page.channels.last().map(|record| record.channel_id) != Some(cursor)
+        })
+    {
+        return Err(SorafsOrderbookFinalizedTelemetryErrorV1::InvalidChannelPage);
+    }
+    let mut previous = after_channel_id;
+    for record in &page.channels {
+        if previous.is_some_and(|cursor| record.channel_id <= cursor)
+            || record.channel_id == [0; 32]
+            || record.trade_id == [0; 32]
+            || record.provider_id.as_bytes() == &[0; 32]
+            || record.status != OrderbookSettlementChannelStatusV1::Open
+            || record.remaining_bytes == 0
+            || record.remaining_bytes > record.total_bytes
+            || record.opened_at_unix == 0
+            || record.opened_at_unix > finalized_at_unix
+            || record.expires_at_unix < record.opened_at_unix
+            || record.updated_at_unix < record.opened_at_unix
+            || record.updated_at_unix > finalized_at_unix
+        {
+            return Err(SorafsOrderbookFinalizedTelemetryErrorV1::InvalidChannelPage);
+        }
+        previous = Some(record.channel_id);
+    }
+    Ok(())
+}
+
+fn collect_orderbook_finalized_metrics(
+    view: &impl StateReadOnly,
+    finalized_cursor: OrderbookFinalizedCursorV1,
+    finalized_at_unix: u64,
+    projection: &SorafsOrderbookFinalizedTelemetryProjectionV1,
+) -> Result<SorafsOrderbookFinalizedMetricsV1, SorafsOrderbookFinalizedTelemetryErrorV1> {
+    let status = FindSorafsOrderbookStatus
+        .execute(view)
+        .map_err(|_| SorafsOrderbookFinalizedTelemetryErrorV1::QueryFailed)?;
+    if status.last_match_scan_book_revision > status.book_revision
+        || status.updated_at_unix == 0
+        || status.updated_at_unix > finalized_at_unix
+        || projection.last_event_book_revision > status.book_revision
+        || projection.last_event_occurred_at_unix_ms / 1_000 > finalized_at_unix
+        || projection.last_book_revision_advanced_at_unix_ms / 1_000 > finalized_at_unix
+    {
+        return Err(SorafsOrderbookFinalizedTelemetryErrorV1::ProjectionMismatch);
+    }
+
+    let mut open_depth_gib =
+        [[0_u64; ORDERBOOK_TELEMETRY_SIDE_COUNT_V1]; ORDERBOOK_TELEMETRY_TIER_COUNT_V1];
+    let mut inspected_orders = 0_usize;
+    for lifecycle in [
+        OrderbookOrderStatusV1::Open,
+        OrderbookOrderStatusV1::PartiallyFilled,
+    ] {
+        let mut after_order_id = None;
+        loop {
+            let page = FindSorafsOrderbookOrders::new(
+                Some(finalized_cursor),
+                Some(lifecycle),
+                after_order_id,
+                ORDERBOOK_QUERY_MAX_ITEMS_V1,
+            )
+            .execute(view)
+            .map_err(|_| SorafsOrderbookFinalizedTelemetryErrorV1::QueryFailed)?;
+            validate_orderbook_telemetry_order_page(
+                &page,
+                finalized_cursor,
+                finalized_at_unix,
+                lifecycle,
+                after_order_id,
+            )?;
+            inspected_orders = inspected_orders
+                .checked_add(page.orders.len())
+                .ok_or(SorafsOrderbookFinalizedTelemetryErrorV1::ArithmeticOverflow)?;
+            if inspected_orders > ORDERBOOK_TELEMETRY_MAX_ORDERS_V1
+                || (inspected_orders == ORDERBOOK_TELEMETRY_MAX_ORDERS_V1 && page.has_more)
+            {
+                return Err(SorafsOrderbookFinalizedTelemetryErrorV1::OrderCapacityExceeded);
+            }
+            for record in &page.orders {
+                let order = decode_order_request_v1(&record.canonical_order)
+                    .map_err(|_| SorafsOrderbookFinalizedTelemetryErrorV1::InvalidOrderPage)?;
+                order
+                    .validate()
+                    .map_err(|_| SorafsOrderbookFinalizedTelemetryErrorV1::InvalidOrderPage)?;
+                if order.order_id != record.order_id
+                    || record.remaining_gib > order.quantity_gib
+                    || order.provider_id
+                        != record
+                            .provider_id
+                            .map(|provider_id| *provider_id.as_bytes())
+                    || matches!(
+                        (order.side, record.bid_escrow.is_some()),
+                        (OrderSideV1::Bid, false) | (OrderSideV1::Ask, true)
+                    )
+                {
+                    return Err(SorafsOrderbookFinalizedTelemetryErrorV1::InvalidOrderPage);
+                }
+                let tier = orderbook_telemetry_tier_index(order.tier);
+                let side = orderbook_telemetry_side_index(order.side);
+                open_depth_gib[tier][side] = open_depth_gib[tier][side]
+                    .checked_add(record.remaining_gib)
+                    .ok_or(SorafsOrderbookFinalizedTelemetryErrorV1::ArithmeticOverflow)?;
+            }
+            if !page.has_more {
+                break;
+            }
+            after_order_id = page.next_after_order_id;
+        }
+    }
+    let active_order_count = status
+        .open_orders
+        .checked_add(status.partially_filled_orders)
+        .ok_or(SorafsOrderbookFinalizedTelemetryErrorV1::ArithmeticOverflow)?;
+    if u64::try_from(inspected_orders)
+        .map_err(|_| SorafsOrderbookFinalizedTelemetryErrorV1::ArithmeticOverflow)?
+        != active_order_count
+    {
+        return Err(SorafsOrderbookFinalizedTelemetryErrorV1::ProjectionMismatch);
+    }
+
+    let mut after_channel_id = None;
+    let mut inspected_channels = 0_usize;
+    let mut oldest_opened_at_unix = None::<u64>;
+    let mut earliest_expiry_unix = None::<u64>;
+    loop {
+        let page = FindSorafsOrderbookChannels::new(
+            Some(finalized_cursor),
+            Some(OrderbookSettlementChannelStatusV1::Open),
+            after_channel_id,
+            ORDERBOOK_QUERY_MAX_ITEMS_V1,
+        )
+        .execute(view)
+        .map_err(|_| SorafsOrderbookFinalizedTelemetryErrorV1::QueryFailed)?;
+        validate_orderbook_telemetry_channel_page(
+            &page,
+            finalized_cursor,
+            finalized_at_unix,
+            after_channel_id,
+        )?;
+        inspected_channels = inspected_channels
+            .checked_add(page.channels.len())
+            .ok_or(SorafsOrderbookFinalizedTelemetryErrorV1::ArithmeticOverflow)?;
+        if inspected_channels > ORDERBOOK_TELEMETRY_MAX_CHANNELS_V1
+            || (inspected_channels == ORDERBOOK_TELEMETRY_MAX_CHANNELS_V1 && page.has_more)
+        {
+            return Err(SorafsOrderbookFinalizedTelemetryErrorV1::ChannelCapacityExceeded);
+        }
+        for channel in &page.channels {
+            oldest_opened_at_unix = Some(
+                oldest_opened_at_unix
+                    .map_or(channel.opened_at_unix, |current| current.min(channel.opened_at_unix)),
+            );
+            earliest_expiry_unix = Some(
+                earliest_expiry_unix
+                    .map_or(channel.expires_at_unix, |current| current.min(channel.expires_at_unix)),
+            );
+        }
+        if !page.has_more {
+            break;
+        }
+        after_channel_id = page.next_after_channel_id;
+    }
+    let settlement_backlog = u64::try_from(inspected_channels)
+        .map_err(|_| SorafsOrderbookFinalizedTelemetryErrorV1::ArithmeticOverflow)?;
+    if settlement_backlog != status.open_settlement_channels
+        || status.open_settlement_channels > status.settlement_channels
+    {
+        return Err(SorafsOrderbookFinalizedTelemetryErrorV1::ProjectionMismatch);
+    }
+
+    let admitted_orders = status
+        .open_orders
+        .checked_add(status.partially_filled_orders)
+        .and_then(|value| value.checked_add(status.filled_orders))
+        .and_then(|value| value.checked_add(status.cancelled_orders))
+        .and_then(|value| value.checked_add(status.expired_orders))
+        .and_then(|value| value.checked_add(status.provider_revoked_orders))
+        .ok_or(SorafsOrderbookFinalizedTelemetryErrorV1::ArithmeticOverflow)?;
+    let expected_next_admission_sequence = admitted_orders
+        .checked_add(1)
+        .ok_or(SorafsOrderbookFinalizedTelemetryErrorV1::ArithmeticOverflow)?;
+    let expected_next_trade_sequence = status
+        .trades
+        .checked_add(1)
+        .ok_or(SorafsOrderbookFinalizedTelemetryErrorV1::ArithmeticOverflow)?;
+    let event_count = projection.event_counts.iter().try_fold(0_u64, |total, value| {
+        total.checked_add(*value)
+    });
+    if event_count
+        .ok_or(SorafsOrderbookFinalizedTelemetryErrorV1::ArithmeticOverflow)?
+        != projection.after_event.map_or(0, |cursor| cursor.sequence)
+        || projection.event_counts[1] != admitted_orders
+        || projection.event_counts[2] != status.cancelled_orders
+        || projection.event_counts[3] != status.trades
+        || projection.event_counts[3] != status.settlement_channels
+        || projection.event_counts[4] != status.expired_orders
+        || projection.event_counts[5] != status.provider_revoked_orders
+        || projection.event_counts[7] != status.settlement_receipts
+        || status.next_admission_sequence != expected_next_admission_sequence
+        || status.next_trade_sequence != expected_next_trade_sequence
+    {
+        return Err(SorafsOrderbookFinalizedTelemetryErrorV1::ProjectionMismatch);
+    }
+
+    let mut event_count_deltas = [0_u64; ORDERBOOK_TELEMETRY_EVENT_KIND_COUNT_V1];
+    for (index, delta) in event_count_deltas.iter_mut().enumerate() {
+        *delta = projection.event_counts[index]
+            .checked_sub(projection.published_event_counts[index])
+            .ok_or(SorafsOrderbookFinalizedTelemetryErrorV1::ProjectionMismatch)?;
+    }
+    let matcher_lag_seconds = if status.last_match_scan_book_revision == status.book_revision {
+        0
+    } else {
+        if projection.last_book_revision_advanced_at_unix_ms == 0 {
+            return Err(SorafsOrderbookFinalizedTelemetryErrorV1::ProjectionMismatch);
+        }
+        finalized_at_unix
+            .checked_sub(projection.last_book_revision_advanced_at_unix_ms / 1_000)
+            .ok_or(SorafsOrderbookFinalizedTelemetryErrorV1::ProjectionMismatch)?
+    };
+    let oldest_settlement_age_seconds = oldest_opened_at_unix.map_or(0, |opened_at| {
+        finalized_at_unix.saturating_sub(opened_at)
+    });
+    let escrow_runway_seconds =
+        earliest_expiry_unix.map_or(0, |expiry| expiry.saturating_sub(finalized_at_unix));
+
+    Ok(SorafsOrderbookFinalizedMetricsV1 {
+        finalized_cursor,
+        finalized_at_unix,
+        event_count_deltas,
+        open_depth_gib,
+        matcher_lag_seconds,
+        settlement_backlog,
+        oldest_settlement_age_seconds,
+        escrow_runway_seconds,
+        book_revision: status.book_revision,
+        matcher_scan_book_revision: status.last_match_scan_book_revision,
+    })
+}
+
+fn refresh_sorafs_orderbook_finalized_telemetry(
+    state: &SharedAppState,
+    projection: &mut SorafsOrderbookFinalizedTelemetryProjectionV1,
+) -> Result<SorafsOrderbookFinalizedTelemetryRefreshV1, SorafsOrderbookFinalizedTelemetryErrorV1> {
+    let view = state.state.view();
+    let (finalized_cursor, finalized_at_unix) = orderbook_finalized_tip_from_view(&view)
+        .ok_or(SorafsOrderbookFinalizedTelemetryErrorV1::FinalizedViewUnavailable)?;
+    if !consume_orderbook_finalized_telemetry_events(&view, finalized_cursor, projection)? {
+        state
+            .telemetry
+            .with_metrics(|metrics| metrics.mark_sorafs_orderbook_finalized_projection_unready());
+        return Ok(SorafsOrderbookFinalizedTelemetryRefreshV1::CatchingUp);
+    }
+    let finalized_metrics = collect_orderbook_finalized_metrics(
+        &view,
+        finalized_cursor,
+        finalized_at_unix,
+        projection,
+    )?;
+    let published = state
+        .telemetry
+        .with_metrics(|metrics| {
+            if !metrics.is_enabled() {
+                return false;
+            }
+            metrics.record_sorafs_orderbook_finalized_projection(
+                finalized_metrics.finalized_cursor.height,
+                finalized_metrics.finalized_at_unix,
+                finalized_metrics.event_count_deltas,
+                finalized_metrics.open_depth_gib,
+                finalized_metrics.matcher_lag_seconds,
+                finalized_metrics.settlement_backlog,
+                finalized_metrics.oldest_settlement_age_seconds,
+                finalized_metrics.escrow_runway_seconds,
+                finalized_metrics.book_revision,
+                finalized_metrics.matcher_scan_book_revision,
+            );
+            true
+        })
+        .unwrap_or(false);
+    if !published {
+        return Err(SorafsOrderbookFinalizedTelemetryErrorV1::TelemetryUnavailable);
+    }
+    projection.published_event_counts = projection.event_counts;
+    Ok(SorafsOrderbookFinalizedTelemetryRefreshV1::Published)
 }
 
 fn orderbook_maintenance_due_in_view(
@@ -667,6 +1311,9 @@ pub(crate) fn spawn_sorafs_orderbook_transaction_forwarder_worker(
                         || scan.generation_replayed != 0
                         || scan.generation_deferred != 0
                         || scan.scanned != 0
+                        || scan.telemetry_published != 0
+                        || scan.telemetry_catching_up != 0
+                        || scan.telemetry_failed != 0
                     {
                         debug!(
                             generated = scan.generated,
@@ -679,6 +1326,9 @@ pub(crate) fn spawn_sorafs_orderbook_transaction_forwarder_worker(
                             deferred = scan.deferred,
                             conflicted = scan.conflicted,
                             rejected = scan.rejected,
+                            telemetry_published = scan.telemetry_published,
+                            telemetry_catching_up = scan.telemetry_catching_up,
+                            telemetry_failed = scan.telemetry_failed,
                             generation_enabled = supervision.generation_enabled,
                             "processed durable native SoraFS orderbook transactions"
                         );
@@ -694,6 +1344,31 @@ pub(crate) async fn run_sorafs_orderbook_transaction_forwarder_scan(
     cursor: &mut SorafsOrderbookTransactionForwarderCursorV1,
 ) -> SorafsOrderbookTransactionForwarderScanV1 {
     let mut scan = SorafsOrderbookTransactionForwarderScanV1::default();
+    if state.telemetry.allows_metrics()
+        && state
+            .telemetry
+            .telemetry()
+            .is_some_and(|telemetry| telemetry.is_enabled())
+    {
+        match refresh_sorafs_orderbook_finalized_telemetry(state, &mut cursor.telemetry) {
+            Ok(SorafsOrderbookFinalizedTelemetryRefreshV1::Published) => {
+                scan.telemetry_published = 1;
+            }
+            Ok(SorafsOrderbookFinalizedTelemetryRefreshV1::CatchingUp) => {
+                scan.telemetry_catching_up = 1;
+            }
+            Err(error) => {
+                scan.telemetry_failed = 1;
+                state.telemetry.with_metrics(|metrics| {
+                    metrics.record_sorafs_orderbook_finalized_projection_failure(error.label())
+                });
+                warn!(
+                    reason = error.label(),
+                    "failed to publish finalized SoraFS orderbook telemetry"
+                );
+            }
+        }
+    }
     let policy = state.sorafs_node.config().orderbook_worker_policy();
     if policy.enabled() {
         match generated_orderbook_operation_in_one_finalized_view(state, policy) {
@@ -789,7 +1464,7 @@ pub(crate) async fn run_sorafs_orderbook_transaction_forwarder_scan(
             None => None,
         };
         let exact_transaction_hash = exact_transaction.as_ref().map(SignedTransaction::hash);
-        let local_evidence_before = exact_transaction_hash.as_ref().is_some_and(|hash| {
+        let delivery_evidence_before = exact_transaction_hash.as_ref().is_some_and(|hash| {
             let queue_pending = state
                 .queue
                 .contains_pending_hash(hash.clone(), &state.state);
@@ -797,7 +1472,7 @@ pub(crate) async fn run_sorafs_orderbook_transaction_forwarder_scan(
                 .pipeline_status_cache
                 .lookup(hash)
                 .map(|entry| entry.kind);
-            local_orderbook_evidence_blocks_absence_retry(queue_pending, cache_kind)
+            orderbook_delivery_evidence_blocks_absence_retry(queue_pending, cache_kind)
         });
 
         let Some(observation) = observe_orderbook_transaction_in_one_finalized_view(
@@ -816,7 +1491,7 @@ pub(crate) async fn run_sorafs_orderbook_transaction_forwarder_scan(
             &retained,
             &observation.snapshot,
         );
-        let local_evidence_after = exact_transaction_hash.as_ref().is_some_and(|hash| {
+        let delivery_evidence_after = exact_transaction_hash.as_ref().is_some_and(|hash| {
             let queue_pending = state
                 .queue
                 .contains_pending_hash(hash.clone(), &state.state);
@@ -824,7 +1499,7 @@ pub(crate) async fn run_sorafs_orderbook_transaction_forwarder_scan(
                 .pipeline_status_cache
                 .lookup(hash)
                 .map(|entry| entry.kind);
-            local_orderbook_evidence_blocks_absence_retry(queue_pending, cache_kind)
+            orderbook_delivery_evidence_blocks_absence_retry(queue_pending, cache_kind)
         });
         let envelope = match observation.transaction_outcome {
             Some(outcome) => classify_orderbook_envelope(
@@ -832,7 +1507,7 @@ pub(crate) async fn run_sorafs_orderbook_transaction_forwarder_scan(
                 delivery.signed_transaction_bytes.as_deref(),
                 observation.snapshot.finalized_cursor,
                 outcome,
-                local_evidence_before || local_evidence_after,
+                delivery_evidence_before || delivery_evidence_after,
             ),
             None => OrderbookEnvelopeReconciliationV1::NotSigned,
         };
@@ -1180,7 +1855,7 @@ async fn submit_sorafs_orderbook_transaction(
         ) {
             Ok(_) => OrderbookTransactionSubmissionDispositionV1::Submitted,
             Err(crate::Error::PushIntoQueue { source, .. }) => {
-                classify_local_orderbook_transaction_submission(source.as_ref())
+                classify_orderbook_transaction_submission(source.as_ref())
             }
             Err(_) => OrderbookTransactionSubmissionDispositionV1::Ambiguous,
         }
@@ -1242,7 +1917,12 @@ async fn submit_sorafs_orderbook_transaction(
 
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::{Hash, HashOf};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+    use iroha_data_model::{
+        account::AccountId,
+        events::data::sorafs::SorafsOrderbookLedgerEvent,
+        sorafs::orderbook::OrderbookFinalizedEventV1,
+    };
 
     use super::*;
 
@@ -1257,6 +1937,46 @@ mod tests {
         HashOf::from_untyped_unchecked(Hash::prehashed([seed; 32]))
     }
 
+    fn account(seed: u8) -> AccountId {
+        let keypair = KeyPair::try_from_seed(vec![seed.max(1); 32], Algorithm::Ed25519)
+            .expect("deterministic account");
+        AccountId::new(keypair.public_key().clone())
+    }
+
+    fn finalized_event(
+        sequence: u64,
+        block_height: u64,
+        event_index: u32,
+        kind: SorafsOrderbookLedgerEventKind,
+    ) -> OrderbookFinalizedEventV1 {
+        let (order_id, trade_id, channel_id, receipt_id, provider_id) = match kind {
+            SorafsOrderbookLedgerEventKind::PolicyActivated => (None, None, None, None, None),
+            SorafsOrderbookLedgerEventKind::OrderAdmitted => {
+                (Some([0x11; 32]), None, None, None, None)
+            }
+            _ => panic!("test helper only needs policy and admission events"),
+        };
+        OrderbookFinalizedEventV1 {
+            sequence,
+            block_height,
+            block_hash: [u8::try_from(block_height).unwrap_or(0xFF); 32],
+            event_index,
+            event: SorafsOrderbookLedgerEvent {
+                kind,
+                order_id,
+                trade_id,
+                channel_id,
+                receipt_id,
+                provider_id,
+                book_revision: u64::from(
+                    kind != SorafsOrderbookLedgerEventKind::PolicyActivated,
+                ),
+                authority: account(7),
+                occurred_at_unix_ms: block_height.saturating_mul(1_000),
+            },
+        }
+    }
+
     #[test]
     fn disabled_generation_never_disables_durable_drain() {
         let supervision = orderbook_worker_supervision(OrderbookWorkerPolicy::default());
@@ -1264,20 +1984,20 @@ mod tests {
     }
 
     #[test]
-    fn local_pending_or_committed_evidence_blocks_absence_retry() {
-        assert!(local_orderbook_evidence_blocks_absence_retry(true, None));
+    fn delivery_pending_or_committed_evidence_blocks_absence_retry() {
+        assert!(orderbook_delivery_evidence_blocks_absence_retry(true, None));
         for kind in [
             crate::PipelineStatusKind::Queued,
             crate::PipelineStatusKind::Approved,
             crate::PipelineStatusKind::Committed,
             crate::PipelineStatusKind::Applied,
         ] {
-            assert!(local_orderbook_evidence_blocks_absence_retry(
+            assert!(orderbook_delivery_evidence_blocks_absence_retry(
                 false,
                 Some(kind),
             ));
         }
-        assert!(!local_orderbook_evidence_blocks_absence_retry(
+        assert!(!orderbook_delivery_evidence_blocks_absence_retry(
             false, None,
         ));
     }
@@ -1311,7 +2031,7 @@ mod tests {
     }
 
     #[test]
-    fn envelope_absence_retries_only_without_local_evidence() {
+    fn envelope_absence_retries_only_without_delivery_evidence() {
         let bytes = [0xA5; 32];
         let digest = *blake3_hash(&bytes).as_bytes();
         assert!(matches!(
@@ -1334,5 +2054,252 @@ mod tests {
             ),
             OrderbookEnvelopeReconciliationV1::Absent { .. }
         ));
+    }
+
+    #[test]
+    fn finalized_telemetry_event_pages_reject_gaps_atomically() {
+        let finalized_cursor = cursor(4, 4);
+        let first = finalized_event(
+            1,
+            1,
+            0,
+            SorafsOrderbookLedgerEventKind::PolicyActivated,
+        );
+        let first_cursor = first.cursor();
+        let first_page = OrderbookFinalizedEventPageV1 {
+            finalized_cursor,
+            events: vec![first],
+            has_more: true,
+            next_after: Some(first_cursor),
+        };
+        let mut projection = SorafsOrderbookFinalizedTelemetryProjectionV1::default();
+        apply_orderbook_finalized_telemetry_event_page(
+            &mut projection,
+            &first_page,
+            finalized_cursor,
+        )
+        .expect("initial finalized event");
+        let before_gap = projection;
+
+        let gap_page = OrderbookFinalizedEventPageV1 {
+            finalized_cursor,
+            events: vec![finalized_event(
+                3,
+                2,
+                0,
+                SorafsOrderbookLedgerEventKind::OrderAdmitted,
+            )],
+            has_more: false,
+            next_after: None,
+        };
+        assert_eq!(
+            apply_orderbook_finalized_telemetry_event_page(
+                &mut projection,
+                &gap_page,
+                finalized_cursor,
+            ),
+            Err(SorafsOrderbookFinalizedTelemetryErrorV1::InvalidEventPage)
+        );
+        assert_eq!(
+            projection, before_gap,
+            "a rejected page must not partially advance the projection"
+        );
+    }
+
+    #[test]
+    fn finalized_telemetry_rejects_incomplete_empty_pages_and_bad_block_indices() {
+        let finalized_cursor = cursor(4, 4);
+        let impossible_cursor = OrderbookFinalizedEventCursorV1 {
+            sequence: 1,
+            block_height: 1,
+            block_hash: [1; 32],
+            event_index: 0,
+        };
+        let incomplete = OrderbookFinalizedEventPageV1 {
+            finalized_cursor,
+            events: Vec::new(),
+            has_more: true,
+            next_after: Some(impossible_cursor),
+        };
+        let mut projection = SorafsOrderbookFinalizedTelemetryProjectionV1::default();
+        assert_eq!(
+            apply_orderbook_finalized_telemetry_event_page(
+                &mut projection,
+                &incomplete,
+                finalized_cursor,
+            ),
+            Err(SorafsOrderbookFinalizedTelemetryErrorV1::InvalidEventPage)
+        );
+
+        let bad_index = OrderbookFinalizedEventPageV1 {
+            finalized_cursor,
+            events: vec![finalized_event(
+                1,
+                1,
+                1,
+                SorafsOrderbookLedgerEventKind::PolicyActivated,
+            )],
+            has_more: false,
+            next_after: None,
+        };
+        assert_eq!(
+            apply_orderbook_finalized_telemetry_event_page(
+                &mut projection,
+                &bad_index,
+                finalized_cursor,
+            ),
+            Err(SorafsOrderbookFinalizedTelemetryErrorV1::InvalidEventPage)
+        );
+        assert_eq!(
+            projection,
+            SorafsOrderbookFinalizedTelemetryProjectionV1::default()
+        );
+    }
+
+    #[test]
+    fn finalized_telemetry_rejects_event_hashes_outside_the_finalized_journal() {
+        let finalized_cursor = cursor(4, 4);
+        let block_hashes: Vec<HashOf<BlockHeader>> = (1_u8..=4)
+            .map(|seed| HashOf::from_untyped_unchecked(Hash::prehashed([seed; 32])))
+            .collect();
+        let mut page = OrderbookFinalizedEventPageV1 {
+            finalized_cursor,
+            events: vec![finalized_event(
+                1,
+                2,
+                0,
+                SorafsOrderbookLedgerEventKind::PolicyActivated,
+            )],
+            has_more: false,
+            next_after: None,
+        };
+        assert!(orderbook_telemetry_event_block_hashes_are_finalized(
+            &block_hashes,
+            &page
+        ));
+
+        page.events[0].block_hash = [0xA5; 32];
+        assert!(!orderbook_telemetry_event_block_hashes_are_finalized(
+            &block_hashes,
+            &page
+        ));
+    }
+
+    #[test]
+    fn finalized_telemetry_matcher_clock_tracks_book_mutations_only() {
+        let finalized_cursor = cursor(4, 4);
+        let mut later_policy = finalized_event(
+            3,
+            3,
+            0,
+            SorafsOrderbookLedgerEventKind::PolicyActivated,
+        );
+        later_policy.event.book_revision = 1;
+        let page = OrderbookFinalizedEventPageV1 {
+            finalized_cursor,
+            events: vec![
+                finalized_event(
+                    1,
+                    1,
+                    0,
+                    SorafsOrderbookLedgerEventKind::PolicyActivated,
+                ),
+                finalized_event(
+                    2,
+                    2,
+                    0,
+                    SorafsOrderbookLedgerEventKind::OrderAdmitted,
+                ),
+                later_policy,
+            ],
+            has_more: false,
+            next_after: None,
+        };
+        let mut projection = SorafsOrderbookFinalizedTelemetryProjectionV1::default();
+        apply_orderbook_finalized_telemetry_event_page(
+            &mut projection,
+            &page,
+            finalized_cursor,
+        )
+        .expect("valid finalized event history");
+
+        assert_eq!(projection.last_event_occurred_at_unix_ms, 3_000);
+        assert_eq!(projection.last_book_revision_advanced_at_unix_ms, 2_000);
+    }
+
+    #[test]
+    fn finalized_telemetry_event_overflow_fails_without_partial_publish() {
+        let finalized_cursor = cursor(4, 4);
+        let mut projection = SorafsOrderbookFinalizedTelemetryProjectionV1 {
+            after_event: Some(OrderbookFinalizedEventCursorV1 {
+                sequence: 1,
+                block_height: 1,
+                block_hash: [1; 32],
+                event_index: 0,
+            }),
+            event_counts: [0, u64::MAX, 0, 0, 0, 0, 0, 0],
+            published_event_counts: [0; ORDERBOOK_TELEMETRY_EVENT_KIND_COUNT_V1],
+            last_event_book_revision: 0,
+            last_event_occurred_at_unix_ms: 1_000,
+            last_book_revision_advanced_at_unix_ms: 0,
+        };
+        let before = projection;
+        let page = OrderbookFinalizedEventPageV1 {
+            finalized_cursor,
+            events: vec![finalized_event(
+                2,
+                2,
+                0,
+                SorafsOrderbookLedgerEventKind::OrderAdmitted,
+            )],
+            has_more: false,
+            next_after: None,
+        };
+        assert_eq!(
+            apply_orderbook_finalized_telemetry_event_page(
+                &mut projection,
+                &page,
+                finalized_cursor,
+            ),
+            Err(SorafsOrderbookFinalizedTelemetryErrorV1::ArithmeticOverflow)
+        );
+        assert_eq!(projection, before);
+    }
+
+    #[test]
+    fn finalized_telemetry_rejects_incomplete_order_and_channel_pages() {
+        let finalized_cursor = cursor(4, 4);
+        let order_page = OrderbookOrderPageV1 {
+            finalized_cursor,
+            orders: Vec::new(),
+            has_more: true,
+            next_after_order_id: Some([1; 32]),
+        };
+        assert_eq!(
+            validate_orderbook_telemetry_order_page(
+                &order_page,
+                finalized_cursor,
+                4,
+                OrderbookOrderStatusV1::Open,
+                None,
+            ),
+            Err(SorafsOrderbookFinalizedTelemetryErrorV1::InvalidOrderPage)
+        );
+
+        let channel_page = OrderbookSettlementChannelPageV1 {
+            finalized_cursor,
+            channels: Vec::new(),
+            has_more: true,
+            next_after_channel_id: Some([1; 32]),
+        };
+        assert_eq!(
+            validate_orderbook_telemetry_channel_page(
+                &channel_page,
+                finalized_cursor,
+                4,
+                None,
+            ),
+            Err(SorafsOrderbookFinalizedTelemetryErrorV1::InvalidChannelPage)
+        );
     }
 }

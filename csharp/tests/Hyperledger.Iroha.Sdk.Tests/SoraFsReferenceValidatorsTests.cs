@@ -189,9 +189,10 @@ public sealed class SoraFsReferenceValidatorsTests
         var owner = Encoding.UTF8.GetBytes("merchant@paynet");
         var privateKey = new byte[32];
 
+        Assert.False(Enum.IsDefined((SoraFsOrderbookPayloadKind)6));
         Assert.Throws<ArgumentOutOfRangeException>(() =>
             SoraFsReferenceValidators.SignOrderbookPayload(
-                SoraFsOrderbookPayloadKind.RuntimeSnapshot,
+                (SoraFsOrderbookPayloadKind)6,
                 new byte[] { 1 },
                 privateKey,
                 native));

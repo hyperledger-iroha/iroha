@@ -1948,7 +1948,7 @@ mod tests {
             .try_to_bytes()
             .expect("encode ML-DSA-65 capability key");
         assert_eq!(algorithm, Algorithm::MlDsa);
-        validate_potr_mldsa_capability(&public_key).expect("canonical ML-DSA-65 capability key");
+        validate_potr_mldsa_capability(public_key).expect("canonical ML-DSA-65 capability key");
     }
 
     #[test]

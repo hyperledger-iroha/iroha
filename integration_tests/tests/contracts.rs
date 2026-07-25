@@ -6,10 +6,16 @@ use std::{num::NonZeroU64, str::FromStr as _};
 
 use eyre::{Result, eyre};
 use integration_tests::sandbox;
-use iroha::crypto::{Algorithm, KeyPair};
+use iroha::crypto::{Algorithm, Hash, KeyPair};
 use iroha::data_model::prelude::*;
+use iroha::data_model::{
+    block::consensus_v2::SumeragiV2GenesisContextParameters,
+    parameter::system::{ConsensusHandshakeMetadata, SumeragiConsensusMode, consensus_metadata},
+};
 use iroha_executor_data_model::permission::{
-    governance::CanEnactGovernance, smart_contract::CanRegisterSmartContractCode,
+    account::{AccountAliasPermissionScope, CanManageAccountAlias},
+    governance::CanEnactGovernance,
+    smart_contract::CanRegisterSmartContractCode,
 };
 use iroha_test_network::NetworkBuilder;
 use reqwest::StatusCode;
@@ -202,9 +208,21 @@ fn typed_query_page_parts(
         ));
     }
     let next_offset = if let Some(offset) = next_offset.get("some") {
-        Some(offset.as_i64().ok_or_else(|| {
-            eyre!("typed {view_name} page contains a non-i64 next_offset: {result:?}")
-        })?)
+        let raw = offset.as_str().ok_or_else(|| {
+            eyre!("typed {view_name} page contains a non-canonical next_offset Int: {result:?}")
+        })?;
+        let parsed = raw.parse::<i64>().map_err(|error| {
+            eyre!(
+                "typed {view_name} page contains an out-of-range next_offset Int: \
+                 {result:?}: {error}"
+            )
+        })?;
+        if parsed.to_string() != raw {
+            return Err(eyre!(
+                "typed {view_name} page contains a non-canonical next_offset Int: {result:?}"
+            ));
+        }
+        Some(parsed)
     } else if next_offset
         .get("none")
         .and_then(norito::json::Value::as_bool)
@@ -217,6 +235,40 @@ fn typed_query_page_parts(
         ));
     };
     Ok((ids, next_offset))
+}
+
+#[test]
+fn typed_query_page_parts_require_canonical_active_only_option_int() {
+    for (source, expected) in [
+        (r#"{"items":[],"next_offset":{"some":"3"}}"#, Some(3)),
+        (r#"{"items":[],"next_offset":{"some":"-3"}}"#, Some(-3)),
+        (r#"{"items":[],"next_offset":{"none":true}}"#, None),
+    ] {
+        let page = norito::json::from_str(source).expect("parse canonical typed query page");
+        assert_eq!(
+            typed_query_page_parts(&page, "TestView")
+                .expect("accept canonical active-only Option<Int>")
+                .1,
+            expected
+        );
+    }
+
+    for source in [
+        r#"{"items":[],"next_offset":{"some":3}}"#,
+        r#"{"items":[],"next_offset":{"some":"03"}}"#,
+        r#"{"items":[],"next_offset":{"some":"+3"}}"#,
+        r#"{"items":[],"next_offset":{"some":"-0"}}"#,
+        r#"{"items":[],"next_offset":{"some":"9223372036854775808"}}"#,
+        r#"{"items":[],"next_offset":{"none":false}}"#,
+        r#"{"items":[],"next_offset":{"some":"3","none":true}}"#,
+        r#"{"items":[],"next_offset":{"unknown":true}}"#,
+    ] {
+        let page = norito::json::from_str(source).expect("parse malformed typed query page");
+        assert!(
+            typed_query_page_parts(&page, "TestView").is_err(),
+            "accepted non-canonical active-only Option<Int>: {source}"
+        );
+    }
 }
 
 fn assert_typed_query_projection(
@@ -256,6 +308,109 @@ where
         sorted.as_slice(),
         "the ledger {entity_name} query must expose canonical ID order"
     );
+}
+
+fn signed_consensus_handshake(
+    network: &sandbox::SerializedNetwork,
+) -> Result<ConsensusHandshakeMetadata> {
+    let mut handshakes = network
+        .genesis_isi()
+        .iter()
+        .flatten()
+        .filter_map(|instruction| instruction.as_any().downcast_ref::<SetParameter>())
+        .filter_map(|set_parameter| match set_parameter.inner() {
+            Parameter::Custom(custom)
+                if custom.id() == &consensus_metadata::handshake_meta_id() =>
+            {
+                Some(custom)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    if handshakes.len() != 1 {
+        return Err(eyre!(
+            "typed-query genesis must contain exactly one signed consensus handshake; found {}",
+            handshakes.len()
+        ));
+    }
+    let custom = handshakes
+        .pop()
+        .expect("length checked before reading consensus handshake");
+    norito::json::from_str(custom.payload().get())
+        .map_err(|error| eyre!("decode signed consensus handshake metadata: {error}"))
+}
+
+async fn wait_for_cross_peer_rbc_diagnostics(
+    network: &sandbox::SerializedNetwork,
+    timeout: Duration,
+) -> Result<()> {
+    let expected_validator_count = u32::try_from(network.peers().len())
+        .map_err(|_| eyre!("peer count does not fit in u32"))?;
+    let zero_hash = Hash::prehashed([0; Hash::LENGTH]);
+    let deadline = Instant::now() + timeout;
+
+    loop {
+        let tasks = network
+            .peers()
+            .iter()
+            .map(|peer| {
+                let client = peer.client();
+                tokio::task::spawn_blocking(move || client.get_sumeragi_diagnostics())
+            })
+            .collect::<Vec<_>>();
+        let mut observations = Vec::with_capacity(tasks.len());
+        let mut errors = Vec::new();
+        for task in tasks {
+            match task.await {
+                Ok(Ok(diagnostics)) if diagnostics.npos.is_some() => {
+                    let evidence = diagnostics
+                        .committed_lane_blocks
+                        .into_iter()
+                        .filter(|record| {
+                            record.validator_count == expected_validator_count
+                                && record.min_quorum > 0
+                                && record.prepare_qc_signer_count >= record.min_quorum
+                                && record.commit_qc_signer_count >= record.min_quorum
+                                && record.descriptor_hash != zero_hash
+                                && record.proposal_hash != zero_hash
+                                && record.subject_hash != zero_hash
+                                && record.payload_ownership_hash != zero_hash
+                                && record.rbc_instance_hash != zero_hash
+                        })
+                        .max_by_key(|record| (record.lane_block_height, record.lane_block_view));
+                    observations.push(evidence);
+                }
+                Ok(Ok(_)) => {
+                    errors.push("peer diagnostics did not expose NPoS state".to_owned());
+                    observations.push(None);
+                }
+                Ok(Err(error)) => {
+                    errors.push(error.to_string());
+                    observations.push(None);
+                }
+                Err(error) => {
+                    errors.push(format!("diagnostics task failed: {error}"));
+                    observations.push(None);
+                }
+            }
+        }
+
+        if let Some(first) = observations.first().and_then(Option::as_ref)
+            && observations
+                .iter()
+                .all(|observation| observation.as_ref() == Some(first))
+        {
+            return Ok(());
+        }
+        let last_observed = format!("evidence={observations:?}; errors={errors:?}");
+        if Instant::now() >= deadline {
+            return Err(eyre!(
+                "timed out waiting for identical four-peer certified RBC diagnostics; \
+                 last_observed={last_observed}"
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
 }
 
 fn dynamic_counter_args(key: i64, delta: i64) -> norito::json::Value {
@@ -499,6 +654,7 @@ pub(super) fn deploy_contract_locally_signed(
             lease_expiry_ms: None,
             expected_previous_contract_address: None,
         },
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         metadata,
     )?;
 
@@ -892,12 +1048,33 @@ async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<
         .map(AccountId::new)
         .collect::<Vec<_>>();
     let register_permission: Permission = CanRegisterSmartContractCode.into();
+    let manage_alias_permission: Permission = CanManageAccountAlias {
+        scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
+    }
+    .into();
     let mut builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
         .with_block_cadence(Duration::from_secs(4))
+        .with_npos_consensus()
+        .with_config_layer(|layer| {
+            layer
+                .write(["nexus", "enabled"], true)
+                .write(["nexus", "lane_count"], 1i64)
+                // Contract views share the public contract-route limiter with
+                // deployments. This gate deliberately executes 15 views per
+                // peer in a tight sequence, so give the semantic test a
+                // deterministic budget instead of depending on token refill
+                // timing between otherwise single-pass page requests.
+                .write(["torii", "deploy_rate_per_origin_per_sec"], 10_000i64)
+                .write(["torii", "deploy_burst_per_origin"], 10_000i64);
+        })
         .with_genesis_instruction(Grant::account_permission(
             register_permission,
+            iroha_test_samples::ALICE_ID.clone(),
+        ))
+        .with_genesis_instruction(Grant::account_permission(
+            manage_alias_permission,
             iroha_test_samples::ALICE_ID.clone(),
         ));
     for account_id in &seeded_accounts {
@@ -928,6 +1105,20 @@ async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<
         return Ok(());
     };
     assert_eq!(network.peers().len(), 4, "test requires four voting peers");
+    let handshake = signed_consensus_handshake(&network)?;
+    handshake
+        .validate()
+        .map_err(|error| eyre!("invalid signed consensus handshake: {error}"))?;
+    assert_eq!(
+        handshake.mode,
+        SumeragiConsensusMode::Npos,
+        "typed-query pagination gate requires the Sora NPoS profile"
+    );
+    assert_eq!(
+        handshake.sumeragi_v2.da_layout,
+        SumeragiV2GenesisContextParameters::recommended().da_layout,
+        "typed-query pagination gate requires the signed mandatory DA layout"
+    );
 
     network.ensure_blocks(1).await?;
     let deploy_client = network.peers()[0].client();
@@ -942,6 +1133,7 @@ async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<
     .await?;
     let deploy_height = deploy_client.get_status()?.blocks;
     network.ensure_blocks(deploy_height).await?;
+    wait_for_cross_peer_rbc_diagnostics(&network, Duration::from_secs(120)).await?;
 
     let (account_ids, asset_ids, asset_definition_ids, domain_ids, nft_ids) =
         tokio::task::spawn_blocking({

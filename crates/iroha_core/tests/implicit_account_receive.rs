@@ -1,9 +1,10 @@
 //! End-to-end regressions for global implicit account receive admission.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
-use std::num::NonZeroU64;
+use std::{num::NonZeroU64, sync::Arc};
 
 use iroha_core::{
+    governance::manifest::LaneManifestRegistry,
     kura::Kura,
     query::store::LiveQueryStore,
     smartcontracts::Execute,
@@ -37,7 +38,12 @@ fn balance(state: &State, id: &AssetId) -> Quantity {
 fn test_state(world: World) -> State {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    State::new_for_testing(world, kura, query)
+    let state = State::new_for_testing(world, kura, query);
+    let nexus = state.nexus_snapshot();
+    state.install_lane_manifests(&Arc::new(
+        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
+    ));
+    state
 }
 
 fn seeded_account(seed_byte: u8) -> (AccountId, KeyPair) {

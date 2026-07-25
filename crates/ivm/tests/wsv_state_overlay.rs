@@ -6,10 +6,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use ivm::{
-    IVM, Memory, MockWorldStateView, PointerType, WsvHost, encoding, host::IVMHost, instruction,
-    syscalls,
-};
+use ivm::{IVM, Memory, MockWorldStateView, PointerType, WsvHost, host::IVMHost, syscalls};
 
 mod common;
 
@@ -32,7 +29,7 @@ fn decode_state_payload(ptr: u64, vm: &IVM) -> Vec<u8> {
     );
     let tlv = vm.memory.validate_tlv(ptr).expect("valid TLV pointer");
     assert_eq!(tlv.type_id, PointerType::NoritoBytes);
-    tlv.payload.to_vec()
+    common::decode_bytes_state_value(tlv.payload)
 }
 
 fn sample_account() -> ivm::mock_wsv::AccountId {
@@ -46,25 +43,22 @@ fn sample_account() -> ivm::mock_wsv::AccountId {
 }
 
 fn set_and_get_program() -> Vec<u8> {
-    let mut prog = Vec::new();
-    let set_sys = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        syscalls::SYSCALL_STATE_SET as u8,
-    );
-    let get_sys = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        syscalls::SYSCALL_STATE_GET as u8,
-    );
-    prog.extend_from_slice(&set_sys.to_le_bytes());
-    prog.extend_from_slice(&get_sys.to_le_bytes());
-    prog.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
-    common::assemble(&prog)
+    common::assemble_bytes_state_contract_syscalls(
+        &[
+            u8::try_from(syscalls::SYSCALL_STATE_SET).expect("state syscall fits"),
+            u8::try_from(syscalls::SYSCALL_STATE_GET).expect("state syscall fits"),
+        ],
+        &["counter"],
+    )
 }
 
 #[test]
 fn overlay_stages_and_flushes_on_finish() {
     let p_path = make_tlv(PointerType::Name, b"counter");
-    let p_val = make_tlv(PointerType::NoritoBytes, b"5");
+    let p_val = make_tlv(
+        PointerType::NoritoBytes,
+        &common::encode_bytes_state_value(b"5"),
+    );
     let program = set_and_get_program();
 
     let mut vm = IVM::new(u64::MAX);
@@ -103,15 +97,18 @@ fn overlay_stages_and_flushes_on_finish() {
             .wsv
             .sc_get("counter")
             .expect("state flushed after finish_tx");
-        assert_eq!(stored, b"5");
+        assert_eq!(common::decode_bytes_state_value(&stored), b"5");
     }
 }
 
 #[test]
 fn overlay_restores_snapshot_on_rollback() {
     let p_path = make_tlv(PointerType::Name, b"counter");
-    let initial = b"1".to_vec();
-    let updated = make_tlv(PointerType::NoritoBytes, b"9");
+    let initial = common::encode_bytes_state_value(b"1");
+    let updated = make_tlv(
+        PointerType::NoritoBytes,
+        &common::encode_bytes_state_value(b"9"),
+    );
     let program = set_and_get_program();
 
     let mut wsv = MockWorldStateView::new();
@@ -157,7 +154,7 @@ fn overlay_restores_snapshot_on_rollback() {
             .wsv
             .sc_get("counter")
             .expect("state after rollback should exist");
-        assert_eq!(stored, b"1");
+        assert_eq!(common::decode_bytes_state_value(&stored), b"1");
     }
 }
 
@@ -224,7 +221,10 @@ fn overlay_flush_errors_surface_and_reset_overlay() {
     vm.set_host(host);
 
     let p_path = make_tlv(PointerType::Name, b"counter");
-    let p_val = make_tlv(PointerType::NoritoBytes, b"5");
+    let p_val = make_tlv(
+        PointerType::NoritoBytes,
+        &common::encode_bytes_state_value(b"5"),
+    );
     let program = set_and_get_program();
 
     {

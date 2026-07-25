@@ -15,7 +15,6 @@ public enum SorafsOrderbookPayloadKind: UInt32, Sendable {
     case tradeEvent = 3
     case settlementChannel = 4
     case settlementReceipt = 5
-    case runtimeSnapshot = 6
 
     public var defaultLabel: String {
         switch self {
@@ -24,7 +23,6 @@ public enum SorafsOrderbookPayloadKind: UInt32, Sendable {
         case .tradeEvent: return "trade-event.to"
         case .settlementChannel: return "settlement-channel.to"
         case .settlementReceipt: return "settlement-receipt.to"
-        case .runtimeSnapshot: return "orderbook-runtime-snapshot.to"
         }
     }
 
@@ -32,7 +30,7 @@ public enum SorafsOrderbookPayloadKind: UInt32, Sendable {
         switch self {
         case .orderRequest, .orderCancel, .settlementReceipt:
             return true
-        case .tradeEvent, .settlementChannel, .runtimeSnapshot:
+        case .tradeEvent, .settlementChannel:
             return false
         }
     }

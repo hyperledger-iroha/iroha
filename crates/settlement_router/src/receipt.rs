@@ -132,7 +132,7 @@ mod tests {
         let json_text = json::to_json(&receipt).expect("json encode");
         let parsed: SettlementReceipt = json::from_str(&json_text).expect("json decode");
         assert_eq!(parsed, receipt);
-        assert!(json_text.contains(&format!("\"{}\"", local)));
+        assert!(json_text.contains(&format!("\"{local}\"")));
     }
 
     #[test]

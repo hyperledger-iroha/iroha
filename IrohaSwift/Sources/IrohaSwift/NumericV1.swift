@@ -213,6 +213,7 @@ public enum KotodamaNumericV1Codec {
     }
 }
 
+// BEGIN GENERATED: kotodama-v1-numeric-policy
 private enum NumericV1Kind {
     case int
     case decimal
@@ -238,12 +239,22 @@ private enum NumericV1Kind {
         switch self {
         case .int: return 0x0011
         case .decimal: return 0x0012
-        case .quantity: return 0x0013
+        case .quantity: return 0x0010
         }
     }
 
-    var isScaled: Bool { self != .int }
+    var isScaled: Bool {
+        switch self {
+        case .int: return false
+        case .decimal: return true
+        case .quantity: return true
+        }
+    }
 }
+
+private let numericV1MinKnownPointerType: UInt16 = 0x0001
+private let numericV1MaxAssignedPointerType: UInt16 = 0x0012
+// END GENERATED: kotodama-v1-numeric-policy
 
 private enum NumericV1Internal {
     static let maximumMantissaBytes = 64
@@ -423,11 +434,8 @@ private enum NumericV1Internal {
         guard let pointerType = readUInt16BE(envelope, at: 0) else {
             throw numericFailure(.truncatedEnvelope, "envelope is truncated")
         }
-        guard pointerType != 0x0010 else {
-            throw numericFailure(.typeNotAllowed, "retired Amount pointer type is permanently reserved")
-        }
-        let knownAllowedType = (0x0001...0x000F).contains(pointerType)
-            || (0x0011...0x0013).contains(pointerType)
+        let knownAllowedType = (numericV1MinKnownPointerType...numericV1MaxAssignedPointerType)
+            .contains(pointerType)
         guard knownAllowedType else {
             throw numericFailure(.unknownType, "unknown pointer type")
         }

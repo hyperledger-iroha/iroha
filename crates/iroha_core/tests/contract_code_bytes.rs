@@ -7,7 +7,22 @@ use iroha_core::{
     state::{State, World, WorldReadOnly},
 };
 use iroha_crypto::KeyPair;
+use iroha_data_model::isi::error::{InstructionExecutionError, InvalidParameterError};
 use mv::storage::StorageReadOnly;
+
+fn assert_smart_contract_error(error: &InstructionExecutionError, expected_message: &str) {
+    match error {
+        InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+            message,
+        )) => assert_eq!(message, expected_message),
+        other => panic!("expected InvalidParameter(SmartContract), got {other:?}"),
+    }
+    let source = std::error::Error::source(error).expect("invalid parameter error has a source");
+    assert_eq!(
+        source.to_string(),
+        format!("Invalid smart contract: {expected_message}")
+    );
+}
 
 fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
     let meta = ivm::ProgramMetadata {
@@ -291,7 +306,10 @@ fn native_contract_upload_accepts_out_of_order_chunks_and_cleans_up_on_finalize(
     }
     .execute(&auth, &mut stx)
     .expect_err("missing chunks must retain staging");
-    assert!(format!("{missing}").contains("missing chunk"));
+    assert_smart_contract_error(
+        &missing,
+        &format!("contract upload is missing chunk 0 of {chunk_count}"),
+    );
     let progress = stx
         .world()
         .contract_code_upload_progress(&auth, &code_hash)
@@ -420,7 +438,10 @@ fn native_contract_upload_enforces_shape_quota_and_owner_cancellation() {
     }
     .execute(&auth, &mut stx)
     .expect_err("non-canonical chunk count must fail");
-    assert!(format!("{count_shape_error}").contains("chunk_count mismatch"));
+    assert_smart_contract_error(
+        &count_shape_error,
+        "contract upload chunk_count mismatch: expected 1, got 2",
+    );
     let zero_size_error = UploadSmartContractCodeChunk {
         code_hash: iroha_crypto::Hash::new(b"zero-sized-upload"),
         total_size: 0,
@@ -430,7 +451,10 @@ fn native_contract_upload_enforces_shape_quota_and_owner_cancellation() {
     }
     .execute(&auth, &mut stx)
     .expect_err("zero-sized descriptors must fail before staging");
-    assert!(format!("{zero_size_error}").contains("must be non-zero"));
+    assert_smart_contract_error(
+        &zero_size_error,
+        "contract upload total_size must be non-zero",
+    );
     let portable_size_error = UploadSmartContractCodeChunk {
         code_hash: iroha_crypto::Hash::new(b"non-portable-upload"),
         total_size: 2_147_483_648,
@@ -450,7 +474,10 @@ fn native_contract_upload_enforces_shape_quota_and_owner_cancellation() {
     }
     .execute(&auth, &mut stx)
     .expect_err("out-of-range chunk index must fail");
-    assert!(format!("{index_shape_error}").contains("outside chunk_count"));
+    assert_smart_contract_error(
+        &index_shape_error,
+        "contract upload chunk_index 1 is outside chunk_count 1",
+    );
     let aggregate_error = UploadSmartContractCodeChunk {
         code_hash: iroha_crypto::Hash::new(b"quota-second"),
         total_size: 41,
@@ -471,7 +498,10 @@ fn native_contract_upload_enforces_shape_quota_and_owner_cancellation() {
     }
     .execute(&auth, &mut stx)
     .expect_err("short chunk must fail");
-    assert!(format!("{malformed}").contains("length mismatch"));
+    assert_smart_contract_error(
+        &malformed,
+        "contract upload chunk 0 length mismatch: expected 2, got 1",
+    );
 
     let other = AccountId::new(checked_random_contract_code_keypair().public_key().clone());
     CancelSmartContractCodeUpload {
@@ -900,14 +930,20 @@ fn failed_native_finalization_and_rejected_cap_updates_retain_staging() {
     )))
     .execute(&auth, &mut stx)
     .expect_err("contract code cap must decode as u64");
-    assert!(format!("{invalid_cap_error}").contains("must be a Norito u64"));
+    assert_smart_contract_error(
+        &invalid_cap_error,
+        "max_contract_code_bytes must be a Norito u64",
+    );
     let portable_cap_error = SetParameter::new(Parameter::Custom(CustomParameter::new(
         CustomParameterId("max_contract_code_bytes".parse().unwrap()),
         iroha_primitives::json::Json::new(u64::from(i32::MAX as u32) + 1),
     )))
     .execute(&auth, &mut stx)
     .expect_err("contract code cap must be portable across pointer widths");
-    assert!(format!("{portable_cap_error}").contains("portable consensus limit"));
+    assert_smart_contract_error(
+        &portable_cap_error,
+        "max_contract_code_bytes exceeds the portable consensus limit: 2147483648 > 2147483647",
+    );
     let cap_id = CustomParameterId("max_contract_code_bytes".parse().unwrap());
     let cap_error = SetParameter::new(Parameter::Custom(CustomParameter::new(
         cap_id,

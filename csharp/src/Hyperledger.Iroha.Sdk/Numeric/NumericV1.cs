@@ -553,13 +553,7 @@ public static class NumericV1
         }
 
         var pointerType = BinaryPrimitives.ReadUInt16BigEndian(envelope);
-        if (pointerType == RetiredAmountPointerType)
-        {
-            Fail(ErrorCode.TypeNotAllowed, "retired Amount pointer type is permanently reserved");
-        }
-
-        var knownAllowedType = pointerType is >= 0x0001 and <= 0x000F
-            || pointerType is >= 0x0011 and <= 0x0013;
+        var knownAllowedType = pointerType is >= MinKnownPointerType and <= MaxAssignedPointerType;
         if (!knownAllowedType)
         {
             Fail(ErrorCode.UnknownType, "unknown pointer type");
@@ -797,6 +791,7 @@ public static class NumericV1
 
     private static readonly byte[] Magic = "NRT0"u8.ToArray();
 
+    // BEGIN GENERATED: kotodama-v1-numeric-policy
     private static readonly NumericKind IntKind = new(
         Convert.FromHexString("07c039457363b9e1d36bbd31d93dec4a"),
         0x0011,
@@ -809,10 +804,13 @@ public static class NumericV1
 
     private static readonly NumericKind QuantityKind = new(
         Convert.FromHexString("e4769984c81ce0e8b678f2eb06274ee3"),
-        0x0013,
+        0x0010,
         true);
 
-    private const ushort RetiredAmountPointerType = 0x0010;
+    private const ushort MinKnownPointerType = 0x0001;
+    private const ushort MaxAssignedPointerType = 0x0012;
+    // END GENERATED: kotodama-v1-numeric-policy
+
     private const int MaxMantissaBytes = 64;
     private const int MaxIntTextBytes = 155;
     private const int MaxSignificantDigits = 154;

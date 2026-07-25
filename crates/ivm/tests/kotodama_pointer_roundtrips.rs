@@ -21,8 +21,8 @@ fn run_prog(body: &str) {
 fn roundtrip_nft_mint_asset() {
     let src = r#"
           ledger::nft::mint(
-            NftId::parse("rose:uuid:0123$wonderland.universal"),
-            AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB")
+            nft: NftId::parse("n0$wonderland.universal"),
+            owner: AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV")
           );
     "#;
     run_prog(src);
@@ -31,7 +31,7 @@ fn roundtrip_nft_mint_asset() {
 #[test]
 fn roundtrip_nft_set_metadata() {
     let src = r#"
-          ledger::nft::set_metadata(nft: NftId::parse("rose:uuid:ffff$wonderland.universal"), key: Name::parse("dpn_metadata"), value: Json::parse("{\"meta\":1}"));
+          ledger::nft::set_metadata(nft: NftId::parse("n1$wonderland.universal"), key: Name::parse("dpn_metadata"), value: Json::parse("{\"meta\":1}"));
     "#;
     run_prog(src);
 }
@@ -39,7 +39,7 @@ fn roundtrip_nft_set_metadata() {
 #[test]
 fn roundtrip_transfer_asset() {
     let src = r#"
-          ledger::asset::transfer(source: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), destination: AccountId::parse("sorauﾛ1PｦﾔJdﾐww6ﾆfgｾ73xJkｺﾓｺﾀEｿGzQuﾄg3ﾐeﾕｳｶﾒﾚｻY1FC8K"), asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), amount: 1, dataspace: DataSpaceId::parse("0"));
+          ledger::asset::transfer(source: AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"), destination: AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"), asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), amount: 1, dataspace: DataSpaceId::parse("0"));
     "#;
     run_prog(src);
 }
@@ -47,7 +47,7 @@ fn roundtrip_transfer_asset() {
 #[test]
 fn roundtrip_nft_burn_asset() {
     let src = r#"
-          ledger::nft::burn(NftId::parse("rose:uuid:bead$wonderland.universal"));
+          ledger::nft::burn(nft: NftId::parse("n2$wonderland.universal"));
     "#;
     run_prog(src);
 }
@@ -55,10 +55,10 @@ fn roundtrip_nft_burn_asset() {
 #[test]
 fn roundtrip_nft_mint_asset_accepts_runtime_owner() {
     let src = r#"
-          let owner = AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB");
+          let owner = AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV");
           ledger::nft::mint(
-            NftId::parse("rose:uuid:0123$wonderland.universal"),
-            owner
+            nft: NftId::parse("n0$wonderland.universal"),
+            owner: owner
           );
     "#;
     run_prog(src);
@@ -67,9 +67,9 @@ fn roundtrip_nft_mint_asset_accepts_runtime_owner() {
 #[test]
 fn roundtrip_nft_transfer_asset_accepts_runtime_from() {
     let src = r#"
-          let from = AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB");
-          let to = AccountId::parse("sorauﾛ1PｦﾔJdﾐww6ﾆfgｾ73xJkｺﾓｺﾀEｿGzQuﾄg3ﾐeﾕｳｶﾒﾚｻY1FC8K");
-          let nft = NftId::parse("rose:uuid:bead$wonderland.universal");
+          let from = AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV");
+          let to = AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76");
+          let nft = NftId::parse("n2$wonderland.universal");
           ledger::nft::transfer(source: from, nft: nft, destination: to);
     "#;
     run_prog(src);

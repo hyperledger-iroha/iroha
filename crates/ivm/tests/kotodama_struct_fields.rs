@@ -23,7 +23,7 @@ fn struct_fields_lower_to_syscall_args() {
             kotoage fn main() authorize("TransferDomain") {
                 let args = TransferArgs {
                     domain: DomainId::parse("wonderland.universal"),
-                    to: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"),
+                    to: AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"),
                 };
                 ledger::domain::transfer(source: context::authority(), domain: args.domain, destination: args.to);
             }

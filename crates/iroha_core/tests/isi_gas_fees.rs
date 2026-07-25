@@ -26,8 +26,9 @@ fn new_state(
     world: World,
     kura: Arc<Kura>,
     query_handle: query::store::LiveQueryStoreHandle,
+    chain_id: ChainId,
 ) -> State {
-    let mut state = State::new_for_testing(world, kura, query_handle);
+    let mut state = State::new_with_chain_for_testing(world, kura, query_handle, chain_id);
     state.nexus.get_mut().enabled = false;
     let nexus = state.nexus_snapshot();
     let lane_manifests =
@@ -143,7 +144,8 @@ fn non_vm_instructions_charge_fees() {
     let world = World::with_assets([dom_w, dom_i], [alice, tech], [ad], [payer_balance], []);
     let kura = Kura::blank_kura_for_testing();
     let query_handle = query::store::LiveQueryStore::start_test();
-    let mut state = new_state(world, kura, query_handle);
+    let chain: ChainId = "test-chain".parse().unwrap();
+    let mut state = new_state(world, kura, query_handle, chain.clone());
 
     // 2) Configure pipeline gas policy
     let mut pipeline = state.pipeline.clone();
@@ -183,7 +185,6 @@ fn non_vm_instructions_charge_fees() {
         NonZeroU64::new(1_000_000),
     );
 
-    let chain: ChainId = "test-chain".parse().unwrap();
     let tx = iroha_data_model::transaction::TransactionBuilder::new(
         chain,
         alice_id.clone(),
@@ -192,9 +193,9 @@ fn non_vm_instructions_charge_fees() {
     .with_executable(exec)
     .sign(alice_kp.private_key());
 
-    // 4) Execute via executor and verify fee transfer
+    // 4) Execute after genesis so the production fee exemption does not apply.
     let executor = Executor::default();
-    let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let block_header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block = state.block(block_header);
     let mut state_tx = block.transaction();
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
@@ -259,7 +260,8 @@ fn non_vm_instructions_charge_restricted_gas_asset_on_current_route() {
     let world = World::with_assets([dom_w, dom_i], [alice, tech], [ad], [payer_balance], []);
     let kura = Kura::blank_kura_for_testing();
     let query_handle = query::store::LiveQueryStore::start_test();
-    let mut state = new_state(world, kura, query_handle);
+    let chain: ChainId = "test-chain".parse().unwrap();
+    let mut state = new_state(world, kura, query_handle, chain.clone());
 
     let mut pipeline = state.pipeline.clone();
     pipeline.gas.tech_account_id = gas_id.to_string();
@@ -295,7 +297,6 @@ fn non_vm_instructions_charge_restricted_gas_asset_on_current_route() {
         )],
         NonZeroU64::new(1_000_000),
     );
-    let chain: ChainId = "test-chain".parse().unwrap();
     let tx = iroha_data_model::transaction::TransactionBuilder::new(
         chain,
         alice_id.clone(),
@@ -305,7 +306,7 @@ fn non_vm_instructions_charge_restricted_gas_asset_on_current_route() {
     .sign(alice_kp.private_key());
 
     let executor = Executor::default();
-    let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let block_header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block = state.block(block_header);
     let mut state_tx = block.transaction();
     state_tx.current_dataspace_id = Some(route);
@@ -377,7 +378,8 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor() {
     );
     let kura = Kura::blank_kura_for_testing();
     let query_handle = query::store::LiveQueryStore::start_test();
-    let mut state = new_state(world, kura, query_handle);
+    let chain: ChainId = "test-chain".parse().unwrap();
+    let mut state = new_state(world, kura, query_handle, chain.clone());
     state.nexus.get_mut().fees.sponsor_vault_custody_account_id = custody_id.clone();
 
     // 2) Configure pipeline gas policy.
@@ -422,7 +424,6 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor() {
         None,
     );
 
-    let chain: ChainId = "test-chain".parse().unwrap();
     let tx = iroha_data_model::transaction::TransactionBuilder::new(
         chain,
         alice_id.clone(),
@@ -431,9 +432,9 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor() {
     .with_executable(exec)
     .sign(alice_kp.private_key());
 
-    // 4) Execute via executor and verify sponsored fee transfer
+    // 4) Execute after genesis and verify sponsored fee transfer.
     let executor = Executor::default();
-    let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let block_header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block = state.block(block_header);
     let mut state_tx = block.transaction();
 
@@ -445,7 +446,7 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor() {
         &asset_def_id,
         &instruction,
         init,
-        1,
+        2,
     );
     state_tx.nexus.enabled = false;
 
@@ -537,7 +538,8 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor_via_overlay_pipeline() {
     );
     let kura = Kura::blank_kura_for_testing();
     let query_handle = query::store::LiveQueryStore::start_test();
-    let mut state = new_state(world, kura, query_handle);
+    let chain: ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
+    let mut state = new_state(world, kura, query_handle, chain.clone());
     {
         let nexus = state.nexus.get_mut();
         nexus.enabled = true;
@@ -626,7 +628,6 @@ fn non_vm_instructions_can_charge_gas_to_fee_sponsor_via_overlay_pipeline() {
         )],
         None,
     );
-    let chain: ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
     let tx = iroha_data_model::transaction::TransactionBuilder::new(
         chain,
         alice_id.clone(),
@@ -735,7 +736,8 @@ fn genesis_overlay_pipeline_transactions_remain_fee_free() {
     );
     let kura = Kura::blank_kura_for_testing();
     let query_handle = query::store::LiveQueryStore::start_test();
-    let mut state = new_state(world, kura, query_handle);
+    let chain: ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
+    let mut state = new_state(world, kura, query_handle, chain.clone());
 
     let mut pipeline = state.pipeline.clone();
     pipeline.gas.tech_account_id = gas_id.to_string();
@@ -767,7 +769,6 @@ fn genesis_overlay_pipeline_transactions_remain_fee_free() {
     .into();
     let fee_payment = FeePaymentIntent::authority(Vec::new(), None);
 
-    let chain: ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
     let tx = TransactionBuilder::new(chain, alice_id.clone(), fee_payment)
         .with_executable(Executable::from(core::iter::once(instruction)))
         .sign(alice_kp.private_key());
@@ -835,7 +836,8 @@ fn non_vm_gas_limit_too_low_rejects() {
     let world = World::with([dom], [alice], [ad]);
     let kura = Kura::blank_kura_for_testing();
     let query_handle = query::store::LiveQueryStore::start_test();
-    let state = new_state(world, kura, query_handle);
+    let chain: ChainId = "test-chain".parse().unwrap();
+    let state = new_state(world, kura, query_handle, chain.clone());
 
     // Single SetKeyValue<Account> instruction
     let instruction: InstructionBox = iroha_data_model::isi::SetKeyValue::account(
@@ -862,7 +864,6 @@ fn non_vm_gas_limit_too_low_rejects() {
         Some(gas_limit),
     );
 
-    let chain: ChainId = "test-chain".parse().unwrap();
     let tx = iroha_data_model::transaction::TransactionBuilder::new(
         chain,
         alice_id.clone(),
@@ -903,7 +904,8 @@ fn ivm_syscall_charges_fees() {
     let world = World::with_assets([dom_w, dom_i], [alice, tech], [ad], [payer_balance], []);
     let kura = Kura::blank_kura_for_testing();
     let query_handle = query::store::LiveQueryStore::start_test();
-    let mut state = new_state(world, kura, query_handle);
+    let chain: ChainId = "test-chain".parse().unwrap();
+    let mut state = new_state(world, kura, query_handle, chain.clone());
 
     let mut pipeline = state.pipeline.clone();
     pipeline.gas.tech_account_id = gas_id.to_string();
@@ -940,7 +942,6 @@ fn ivm_syscall_charges_fees() {
         NonZeroU64::new(gas_bound),
     );
 
-    let chain: ChainId = "test-chain".parse().unwrap();
     let tx = iroha_data_model::transaction::TransactionBuilder::new(
         chain,
         alice_id.clone(),
@@ -950,7 +951,7 @@ fn ivm_syscall_charges_fees() {
     .sign(alice_kp.private_key());
 
     let executor = Executor::default();
-    let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let block_header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block = state.block(block_header);
     let mut state_tx = block.transaction();
     let contract_route = iroha_data_model::nexus::DataSpaceId::new(10);
@@ -1084,7 +1085,8 @@ fn ivm_gas_fees_record_settlement_receipt() {
     let world = World::with_assets([dom_w, dom_i], [alice, tech], [ad], [payer_balance], []);
     let kura = Kura::blank_kura_for_testing();
     let query_handle = query::store::LiveQueryStore::start_test();
-    let mut state = new_state(world, kura, query_handle);
+    let chain: ChainId = "test-chain".parse().unwrap();
+    let mut state = new_state(world, kura, query_handle, chain.clone());
 
     // 2) Configure pipeline gas policy
     let mut pipeline = state.pipeline.clone();
@@ -1123,7 +1125,6 @@ fn ivm_gas_fees_record_settlement_receipt() {
         NonZeroU64::new(gas_bound),
     );
 
-    let chain: ChainId = "test-chain".parse().unwrap();
     let tx = iroha_data_model::transaction::TransactionBuilder::new(
         chain,
         alice_id.clone(),
@@ -1133,9 +1134,9 @@ fn ivm_gas_fees_record_settlement_receipt() {
     .sign(alice_kp.private_key());
     let tx_hash = tx.hash();
 
-    // 4) Execute via executor and verify settlement receipt is recorded
+    // 4) Execute after genesis and verify settlement receipt is recorded.
     let executor = Executor::default();
-    let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let block_header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block = state.block(block_header);
     let mut state_tx = block.transaction();
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
@@ -1190,7 +1191,8 @@ fn rejected_tx_does_not_record_settlement_receipt_when_block_gas_limit_exceeded(
     let world = World::with_assets([dom_w, dom_i], [alice, tech], [ad], [payer_balance], []);
     let kura = Kura::blank_kura_for_testing();
     let query_handle = query::store::LiveQueryStore::start_test();
-    let mut state = new_state(world, kura, query_handle);
+    let chain: ChainId = "test-chain".parse().unwrap();
+    let mut state = new_state(world, kura, query_handle, chain.clone());
 
     let mut pipeline = state.pipeline.clone();
     pipeline.gas.tech_account_id = gas_id.to_string();
@@ -1213,7 +1215,6 @@ fn rejected_tx_does_not_record_settlement_receipt_when_block_gas_limit_exceeded(
         NonZeroU64::new(1_000_000),
     );
 
-    let chain: ChainId = "test-chain".parse().unwrap();
     let tx = iroha_data_model::transaction::TransactionBuilder::new(
         chain,
         alice_id.clone(),

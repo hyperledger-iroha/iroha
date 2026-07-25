@@ -5,7 +5,7 @@
 //!
 //! It writes fixtures under `crates/iroha_core/tests/fixtures/`.
 
-use std::{error::Error, fs, io::Write, path::PathBuf, sync::Arc};
+use std::{error::Error, fs, io::Write, path::PathBuf, sync::Arc, time::Duration};
 
 use iroha_core::{
     block::{BlockBuilder, ValidBlock},
@@ -13,7 +13,10 @@ use iroha_core::{
     state::StateReadOnly,
 };
 use iroha_data_model::{prelude::*, transaction::signed::TransactionSignatureError};
+use iroha_primitives::time::TimeSource;
 // use mv::storage::StorageReadOnly; // not needed in example
+
+const FIXTURE_TIME: Duration = Duration::from_millis(1);
 
 fn fixtures_dir() -> PathBuf {
     let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -32,7 +35,7 @@ fn write_fixture(name: &str, content: &str) {
 }
 
 fn events_json_filtered(events: &[iroha_data_model::events::prelude::EventBox]) -> String {
-    let filtered: Vec<_> = events
+    let mut filtered: Vec<_> = events
         .iter()
         .filter(|e| {
             !matches!(
@@ -44,17 +47,43 @@ fn events_json_filtered(events: &[iroha_data_model::events::prelude::EventBox]) 
         })
         .cloned()
         .collect();
+    filtered.sort_by(|a, b| {
+        let a_json = norito::json::to_json(a).expect("serialize event");
+        let b_json = norito::json::to_json(b).expect("serialize event");
+        a_json.cmp(&b_json)
+    });
     norito::json::to_json_pretty(&filtered).unwrap()
 }
 
+fn write_parity_fixture(
+    name: &str,
+    sequential: &[iroha_data_model::events::prelude::EventBox],
+    parallel: &[iroha_data_model::events::prelude::EventBox],
+) {
+    let sequential = events_json_filtered(sequential);
+    let parallel = events_json_filtered(parallel);
+    assert_eq!(
+        sequential, parallel,
+        "sequential and parallel event fixtures differ for {name}"
+    );
+    write_fixture(name, &sequential);
+}
+
 fn sign_fixture_transaction(
-    builder: TransactionBuilder,
+    mut builder: TransactionBuilder,
 ) -> Result<SignedTransaction, TransactionSignatureError> {
+    builder.set_creation_time(FIXTURE_TIME);
     builder.try_sign(iroha_test_samples::ALICE_KEYPAIR.private_key())
+}
+
+fn block_time_source() -> TimeSource {
+    let (_, source) = TimeSource::new_mock(FIXTURE_TIME);
+    source
 }
 
 fn run_block_and_events(
     parallel_apply: bool,
+    chain_id: &ChainId,
     txs: Vec<SignedTransaction>,
 ) -> Result<
     (
@@ -64,8 +93,8 @@ fn run_block_and_events(
     iroha_crypto::Error,
 > {
     // Build a fresh world with default sandbox-like setup (62Fk4FPcMuLvW5QjDGNF2a4jAmjM).
-    let (alice_id, _) = iroha_test_samples::gen_account_in("wonderland");
-    let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
+    let alice_id = iroha_test_samples::ALICE_ID.clone();
+    let bob_id = iroha_test_samples::BOB_ID.clone();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let domain: Domain = Domain::new(domain_id.clone()).build(&alice_id);
     let ad: AssetDefinition = AssetDefinition::new(
@@ -75,6 +104,7 @@ fn run_block_and_events(
         ),
         NumericSpec::default(),
     )
+    .with_name("rose".to_owned())
     .build(&alice_id);
     let acc_a = Account::new(alice_id.clone()).build(&alice_id);
     let acc_b = Account::new(bob_id.clone()).build(&alice_id);
@@ -86,7 +116,8 @@ fn run_block_and_events(
     let world = iroha_core::state::World::with_assets([domain], [acc_a, acc_b], [ad], [a0, b0], []);
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query = iroha_core::query::store::LiveQueryStore::start_test();
-    let mut state = iroha_core::state::State::new_for_testing(world, kura, query);
+    let mut state =
+        iroha_core::state::State::new_with_chain_for_testing(world, kura, query, chain_id.clone());
     let nexus = state.nexus_snapshot();
     state.install_lane_manifests(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
@@ -103,7 +134,7 @@ fn run_block_and_events(
                 iroha_core::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(tx))
             })
             .collect();
-        BlockBuilder::new(accepted)
+        BlockBuilder::new_with_time_source(accepted, block_time_source())
             .chain(0, state.view().latest_block().as_deref())
             .try_sign(iroha_test_samples::ALICE_KEYPAIR.private_key())?
             .unpack(|_| {})
@@ -123,8 +154,8 @@ fn run_block_and_events(
 fn main() -> Result<(), Box<dyn Error>> {
     // 1) Mint/Burn/Transfer
     let chain_id = ChainId::from("chain");
-    let (alice_id, _) = iroha_test_samples::gen_account_in("wonderland");
-    let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
+    let alice_id = iroha_test_samples::ALICE_ID.clone();
+    let bob_id = iroha_test_samples::BOB_ID.clone();
     let rose: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
         DomainId::try_new("wonderland", "universal").unwrap(),
         "rose".parse().unwrap(),
@@ -161,11 +192,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     )?;
     let (events_seq, _state_seq) = run_block_and_events(
         false,
+        &chain_id,
         vec![tx_mint.clone(), tx_burn.clone(), tx_xfer.clone()],
     )?;
-    let (events_par, _state_par) = run_block_and_events(true, vec![tx_mint, tx_burn, tx_xfer])?;
-    write_fixture("mint_burn_transfer", &events_json_filtered(&events_seq));
-    write_fixture("mint_burn_transfer", &events_json_filtered(&events_par));
+    let (events_par, _state_par) =
+        run_block_and_events(true, &chain_id, vec![tx_mint, tx_burn, tx_xfer])?;
+    write_parity_fixture("mint_burn_transfer", &events_seq, &events_par);
 
     // 2) KV + NFT lifecycle
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
@@ -275,10 +307,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         tx_acc_rm,
         tx_dom_rm,
     ];
-    let (events_seq, _) = run_block_and_events(false, txs.clone())?;
-    let (events_par, _) = run_block_and_events(true, txs)?;
-    write_fixture("kv_and_nft_lifecycle", &events_json_filtered(&events_seq));
-    write_fixture("kv_and_nft_lifecycle", &events_json_filtered(&events_par));
+    let (events_seq, _) = run_block_and_events(false, &chain_id, txs.clone())?;
+    let (events_par, _) = run_block_and_events(true, &chain_id, txs)?;
+    write_parity_fixture("kv_and_nft_lifecycle", &events_seq, &events_par);
 
     // 3) Asset definition KV set/remove
     let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
@@ -308,10 +339,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             "spec".parse().unwrap(),
         )]),
     )?;
-    let (events_seq, _) = run_block_and_events(false, vec![tx_set.clone(), tx_rm.clone()])?;
-    let (events_par, _) = run_block_and_events(true, vec![tx_set, tx_rm])?;
-    write_fixture("asset_definition_kv", &events_json_filtered(&events_seq));
-    write_fixture("asset_definition_kv", &events_json_filtered(&events_par));
+    let (events_seq, _) =
+        run_block_and_events(false, &chain_id, vec![tx_set.clone(), tx_rm.clone()])?;
+    let (events_par, _) = run_block_and_events(true, &chain_id, vec![tx_set, tx_rm])?;
+    write_parity_fixture("asset_definition_kv", &events_seq, &events_par);
 
     // 4) Owner transfers (domain + asset definition)
     let tx_dom_xfer = sign_fixture_transaction(
@@ -338,17 +369,14 @@ fn main() -> Result<(), Box<dyn Error>> {
             bob_id.clone(),
         )]),
     )?;
-    let (events_seq, _state_seq) =
-        run_block_and_events(false, vec![tx_dom_xfer.clone(), tx_ad_xfer.clone()])?;
-    let (events_par, _state_par) = run_block_and_events(true, vec![tx_dom_xfer, tx_ad_xfer])?;
-    write_fixture(
-        "owner_transfer_domain_asset_def",
-        &events_json_filtered(&events_seq),
-    );
-    write_fixture(
-        "owner_transfer_domain_asset_def",
-        &events_json_filtered(&events_par),
-    );
+    let (events_seq, _state_seq) = run_block_and_events(
+        false,
+        &chain_id,
+        vec![tx_dom_xfer.clone(), tx_ad_xfer.clone()],
+    )?;
+    let (events_par, _state_par) =
+        run_block_and_events(true, &chain_id, vec![tx_dom_xfer, tx_ad_xfer])?;
+    write_parity_fixture("owner_transfer_domain_asset_def", &events_seq, &events_par);
     Ok(())
 }
 
@@ -358,7 +386,7 @@ mod tests {
 
     #[test]
     fn parity_fixture_transaction_uses_checked_signing_and_verifies() {
-        let (alice_id, _) = iroha_test_samples::gen_account_in("wonderland");
+        let alice_id = iroha_test_samples::ALICE_ID.clone();
         let tx = sign_fixture_transaction(
             TransactionBuilder::new(
                 ChainId::from("chain"),
@@ -375,10 +403,11 @@ mod tests {
 
     #[test]
     fn parity_fixture_block_uses_checked_signing() {
-        let (alice_id, _) = iroha_test_samples::gen_account_in("wonderland");
+        let alice_id = iroha_test_samples::ALICE_ID.clone();
+        let chain_id = ChainId::from("chain");
         let tx = sign_fixture_transaction(
             TransactionBuilder::new(
-                ChainId::from("chain"),
+                chain_id.clone(),
                 alice_id,
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
@@ -386,7 +415,7 @@ mod tests {
         )
         .expect("parity fixture transaction should sign");
 
-        let (_events, _state) =
-            run_block_and_events(false, vec![tx]).expect("parity fixture block should sign");
+        let (_events, _state) = run_block_and_events(false, &chain_id, vec![tx])
+            .expect("parity fixture block should sign");
     }
 }

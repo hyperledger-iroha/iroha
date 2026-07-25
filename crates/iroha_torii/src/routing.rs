@@ -15638,7 +15638,7 @@ mod contract_state_tests {
         let transport = make_tlv(PointerType::NoritoBytes, &persisted);
         let error = decode_contract_state_scalar_json(&transport, &ty)
             .expect_err("the WSV decoder must not accept a recreated VM transport envelope");
-        assert!(error.contains("decode state record"), "{error}");
+        assert!(error.contains("decode durable state record"), "{error}");
     }
 
     #[test]
@@ -19314,8 +19314,8 @@ pub fn validate_contract_view_batch_request(req: &ContractViewBatchDto) -> Resul
 
 #[cfg(feature = "app_api")]
 // Canonical argument preparation checks a conservative predecode gas quote
-// covering bounded complete materialization; keep implicit contract-call/view
-// budgets above that bound.
+// covering bounded complete materialization. Keep implicit contract-call/view
+// budgets above the strict admission floor; representative bounded schemas fit.
 const DEFAULT_CONTRACT_ARGUMENT_GAS_LIMIT: u64 = 1_500_000;
 
 #[cfg(feature = "app_api")]
@@ -50675,11 +50675,9 @@ mod app_api_integration_tests {
                 "/v1/sorafs/storage/fetch",
                 post({
                     let fetch_requests = Arc::clone(&fetch_requests);
-                    let provider_id_hex = provider_id_hex.clone();
                     let fetch_responses = fetch_responses.clone();
                     move |body: Bytes| {
                         let fetch_requests = Arc::clone(&fetch_requests);
-                        let provider_id_hex = provider_id_hex.clone();
                         let fetch_responses = fetch_responses.clone();
                         async move {
                             fetch_requests.fetch_add(1, Ordering::SeqCst);
@@ -50687,10 +50685,6 @@ mod app_api_integration_tests {
                                 crate::sorafs::api::StorageFetchRequestDto,
                             >(&body)
                             .expect("decode fetch request");
-                            assert_eq!(
-                                request.provider_id_hex.as_deref(),
-                                Some(provider_id_hex.as_str())
-                            );
                             let Some(response) = fetch_responses.get(&request.manifest_id_hex)
                             else {
                                 return axum::http::StatusCode::NOT_FOUND.into_response();
@@ -80709,7 +80703,6 @@ async fn fetch_remote_query_projection_archive_from_source(
         manifest_id_hex: manifest_response.manifest_id_hex.clone(),
         offset: 0,
         length: manifest_response.content_length,
-        provider_id_hex: Some(source.provider_id_hex.clone()),
     })
     .map_err(|err| format!("failed to encode remote fetch request: {err}"))?;
     let fetch_url = source

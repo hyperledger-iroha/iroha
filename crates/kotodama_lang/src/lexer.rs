@@ -716,7 +716,16 @@ mod tests {
 
     #[test]
     fn every_retired_numeric_suffix_has_a_stable_diagnostic() {
-        for spelling in ["1i64", "1u128", "1amt", "1.25amt", "1.25float", "10money"] {
+        for spelling in [
+            "1i64",
+            "1u128",
+            "1amt",
+            "1qty",
+            "1.25amt",
+            "1.25qty",
+            "1.25float",
+            "10money",
+        ] {
             let error = lex(spelling).expect_err("retired numeric suffix must fail");
             assert!(
                 error.contains("E_RETIRED_NUMERIC_SUFFIX"),

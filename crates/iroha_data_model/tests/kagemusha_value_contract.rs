@@ -32,7 +32,9 @@ fn pasta_state_boundary_roundtrips_every_limb_without_field_reduction() {
         assert!(KagemushaRecursiveSpendStateBoundaryV2::new(vec![1; malformed_len]).is_err());
     }
     let mut wrong_layout_limb = limbs.clone();
-    wrong_layout_limb[0] = 2;
+    wrong_layout_limb[0] =
+        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V2
+            .saturating_add(1);
     assert!(KagemushaRecursiveSpendStateBoundaryV2::new(wrong_layout_limb).is_err());
 
     let mut wrong_version = boundary;

@@ -46,11 +46,11 @@ pub const MAX_CONSENSUS_SIGNATURE_BYTES: usize = 256;
 const HEIGHT_CONTEXT_IDENTITY_VERSION: u16 = 3;
 /// Permissioned Sumeragi v2 handshake and domain-separation tag.
 pub const PERMISSIONED_TAG: &str = "iroha2-consensus::permissioned-sumeragi@v2";
-/// NPoS Sumeragi v2 handshake and domain-separation tag.
+/// `NPoS` Sumeragi v2 handshake and domain-separation tag.
 pub const NPOS_TAG: &str = "iroha2-consensus::npos-sumeragi@v2";
 /// BLS domain selected by a permissioned v2 genesis.
 pub const PERMISSIONED_BLS_DOMAIN: &str = "bls-iroha2:permissioned-sumeragi:v2";
-/// BLS domain selected by an NPoS v2 genesis.
+/// BLS domain selected by an `NPoS` v2 genesis.
 pub const NPOS_BLS_DOMAIN: &str = "bls-iroha2:npos-sumeragi:v2";
 /// Maximum block-local Kagemusha top-up anchors authenticated by one execution commitment.
 pub const MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK: u32 = 16;
@@ -321,7 +321,7 @@ impl SumeragiV2GenesisContextParameters {
 /// Canonical staged active-lane record committed by v2 genesis metadata.
 pub type GenesisActiveNexusLaneRecord = ((LaneId, AccountId), PublicLaneValidatorRecord);
 
-/// Audited snapshot boundary which explicitly replaces an unavailable parent CommitQC.
+/// Audited snapshot boundary which explicitly replaces an unavailable parent `CommitQC`.
 ///
 /// The complete [`SnapshotV2BootstrapRecord`] is carried inside the signed or digest-pinned
 /// snapshot payload. These fields bind its frozen context to the exact restored ledger
@@ -368,7 +368,7 @@ impl SnapshotV2BootstrapRecord {
 
     /// Validate the record's structural context and snapshot-anchor relationship.
     ///
-    /// Cryptographic PoP validation and comparison with restored live consensus keys are performed
+    /// Cryptographic `PoP` validation and comparison with restored live consensus keys are performed
     /// by the snapshot reader, which owns the authenticated WSV needed for those checks.
     ///
     /// # Errors
@@ -414,7 +414,7 @@ pub struct HeightContext {
     /// Last height governed by this epoch's frozen election snapshot.
     pub epoch_end_height: Height,
     /// Complete transition selected from the committed pre-state when this is
-    /// the last height of an epoch. The CommitQC authenticates these bytes
+    /// the last height of an epoch. The `CommitQC` authenticates these bytes
     /// through [`Self::id`]; non-boundary contexts must carry `None`.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
@@ -426,7 +426,7 @@ pub struct HeightContext {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub parent_commit_qc: Option<QuorumCertificate>,
-    /// Explicit authenticated snapshot boundary used when the parent block body and v2 CommitQC
+    /// Explicit authenticated snapshot boundary used when the parent block body and v2 `CommitQC`
     /// predate the first-release v2 ledger. Mutually exclusive with `parent_commit_qc`.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
@@ -447,10 +447,10 @@ pub struct HeightContext {
 impl HeightContext {
     /// Return the typed hash that identifies every round in this context.
     ///
-    /// The identity commits to the parent CommitQC's semantic finality key
+    /// The identity commits to the parent `CommitQC`'s semantic finality key
     /// (parent context, height, proposal origin, phase, subject, and execution commitment),
     /// rather than its finality view, aggregate signature, or signer subset. Two nodes that
-    /// finalized the same proposal through different valid CommitQCs must derive the same
+    /// finalized the same proposal through different valid `CommitQCs` must derive the same
     /// next-height context.
     #[must_use]
     pub fn id(&self) -> HeightContextId {
@@ -527,7 +527,7 @@ impl HeightContext {
                 if height > 1
                     && anchor.snapshot_height > 0
                     && anchor.snapshot_height.checked_add(1) == Some(height) => {}
-            (0, _, _) | (1, _, _) | (_, Some(_), Some(_)) | (_, None, None) => {
+            (0 | 1, _, _) | (_, Some(_), Some(_)) | (_, None, None) => {
                 return Err(ValidationError::InvalidParentCommit);
             }
             (_, Some(parent), None)
@@ -602,7 +602,9 @@ impl HeightContext {
         let digest = Hash::new((self.leader_seed, self.height).encode());
         let modulus = u64::try_from(self.roster.len()).unwrap_or(u64::MAX);
         let start = digest.as_ref().iter().fold(0_u64, |remainder, byte| {
-            (u128::from(remainder) * 256 + u128::from(*byte)).rem_euclid(u128::from(modulus)) as u64
+            let reduced =
+                (u128::from(remainder) * 256 + u128::from(*byte)).rem_euclid(u128::from(modulus));
+            u64::try_from(reduced).expect("a remainder modulo a u64 modulus always fits u64")
         });
         u32::try_from((start + view % modulus) % modulus)
             .expect("validated roster length fits ValidatorIndex")
@@ -668,7 +670,7 @@ pub struct ConsensusRound {
 
 /// Global Sumeragi v2 voting phase.
 ///
-/// This enum intentionally has no NewView variant: view changes are certified
+/// This enum intentionally has no `NewView` variant: view changes are certified
 /// by [`TimeoutCertificate`].  It is also distinct from lane-local phases.
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
@@ -958,7 +960,10 @@ impl ExecutionCommitment {
     ///
     /// Returns an error when either the state-transition projection or the
     /// versioned Native AMX manifest commitment is non-canonical.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the constructor mirrors the nine canonical V1 execution-commitment fields without an alternate aggregate wire contract"
+    )]
     pub fn new_with_native_amx_application_manifest(
         parent_state_root: Hash,
         post_state_root: Hash,
@@ -986,6 +991,13 @@ impl ExecutionCommitment {
     }
 
     /// Validate the canonical count/root relationship and combined top-up root.
+    ///
+    /// # Errors
+    ///
+    /// Returns an execution-commitment error when a root/count pair is
+    /// inconsistent, a protocol bound is exceeded, a combined state root is
+    /// incorrect, or the Native AMX manifest version or empty-root convention
+    /// is non-canonical.
     pub fn validate(&self) -> Result<(), ValidationError> {
         match (self.topup_anchor_count, self.topup_anchor_root) {
             (0, None) => {}
@@ -1089,6 +1101,13 @@ impl Vote {
     ///
     /// Cryptographic verification remains the authenticated-ingress adapter's
     /// responsibility and must use [`Self::signature_preimage`].
+    ///
+    /// # Errors
+    ///
+    /// Returns a structural validation error when the vote or proposal origin
+    /// belongs to another context, its signer is outside the frozen roster,
+    /// its execution commitment is invalid, or its signature is missing or
+    /// oversized.
     pub fn validate(&self, context: &HeightContext) -> Result<(), ValidationError> {
         validate_round(self.round, context)?;
         validate_proposal_round(self.proposal_round, self.round, self.phase, context)?;
@@ -1143,7 +1162,7 @@ pub struct QuorumCertificateRef {
 impl QuorumCertificateRef {
     /// Return whether both references certify the same committed decision.
     ///
-    /// CommitQCs for one proposal may be assembled in different finality views
+    /// `CommitQCs` for one proposal may be assembled in different finality views
     /// and from different signer subsets. Their stable decision identity binds
     /// the immutable proposal origin while excluding only the finality view.
     #[must_use]
@@ -1251,7 +1270,7 @@ impl QuorumCertificate {
 pub struct TimeoutVote {
     /// Round whose timer expired.
     pub round: ConsensusRound,
-    /// Highest PrepareQC known to the signer, if any.
+    /// Highest `PrepareQC` known to the signer, if any.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub highest_prepare_qc: Option<QuorumCertificate>,
@@ -1279,6 +1298,13 @@ impl TimeoutVote {
 
     /// Validate context binding, high-QC reference, signer, and signature
     /// presence.
+    ///
+    /// # Errors
+    ///
+    /// Returns a structural or quorum error when the timeout round or signer
+    /// is invalid, the reported high certificate is not a valid non-future
+    /// `PrepareQC` for the same context, or the signature is missing or
+    /// oversized.
     pub fn validate(&self, context: &HeightContext) -> Result<(), ValidationError> {
         validate_round(self.round, context)?;
         validate_validator_index(self.signer, context)?;
@@ -1311,20 +1337,20 @@ pub struct TimeoutVoteSignaturePayload {
     pub protocol_version: u16,
     /// Timed-out round.
     pub round: ConsensusRound,
-    /// Highest PrepareQC reported by every signer in this group.
+    /// Highest `PrepareQC` reported by every signer in this group.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub highest_prepare_qc: Option<QuorumCertificateRef>,
 }
 
-/// Aggregate timeout signatures that reported the same highest PrepareQC.
+/// Aggregate timeout signatures that reported the same highest `PrepareQC`.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct TimeoutVoteGroup {
-    /// Highest PrepareQC reported by this group, or none when no lock exists.
+    /// Highest `PrepareQC` reported by this group, or none when no lock exists.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub highest_prepare_qc: Option<QuorumCertificate>,
@@ -1344,7 +1370,7 @@ pub struct TimeoutVoteGroup {
 pub struct TimeoutCertificate {
     /// Round whose timeout was certified.
     pub round: ConsensusRound,
-    /// Groups ordered strictly by their optional PrepareQC reference.
+    /// Groups ordered strictly by their optional `PrepareQC` reference.
     pub groups: Vec<TimeoutVoteGroup>,
 }
 
@@ -1359,7 +1385,7 @@ impl TimeoutCertificate {
         }
     }
 
-    /// Select the highest reported PrepareQC deterministically.
+    /// Select the highest reported `PrepareQC` deterministically.
     ///
     /// View is the primary ordering key. The semantic certificate reference
     /// breaks impossible conflicting-subject ties without depending on which
@@ -1462,7 +1488,7 @@ impl TimeoutCertificate {
 pub struct TimeoutCertificateRef {
     /// Timed-out round certified by the TC.
     pub round: ConsensusRound,
-    /// Highest PrepareQC selected from the grouped timeout votes.
+    /// Highest `PrepareQC` selected from the grouped timeout votes.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub highest_prepare_qc: Option<QuorumCertificateRef>,
@@ -1478,20 +1504,20 @@ pub struct TimeoutCertificateRef {
 )]
 #[norito(tag = "kind", content = "justification", rename_all = "snake_case")]
 pub enum ProposalJustification {
-    /// View-zero justification from the parent CommitQC.
+    /// View-zero justification from the parent `CommitQC`.
     ParentCommit(ParentCommitJustification),
     /// Later-view justification from the immediately preceding timeout.
     Timeout(TimeoutJustification),
 }
 
-/// View-zero proposal justification from the parent CommitQC.
+/// View-zero proposal justification from the parent `CommitQC`.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct ParentCommitJustification {
-    /// Parent CommitQC; absent only for the genesis block.
+    /// Parent `CommitQC`; absent only for the genesis block.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub certificate: Option<QuorumCertificate>,
@@ -1506,7 +1532,7 @@ pub struct ParentCommitJustification {
 pub struct TimeoutJustification {
     /// Certificate authorizing the new view.
     pub timeout_certificate: TimeoutCertificate,
-    /// Full highest PrepareQC selected from the timeout groups.
+    /// Full highest `PrepareQC` selected from the timeout groups.
     ///
     /// First-release proposals require this to be absent: a timeout certificate
     /// carrying prepared value authority installs and commits that exact origin
@@ -1795,6 +1821,12 @@ impl Proposal {
     ///
     /// Cryptographic verification remains the authenticated-ingress adapter's
     /// responsibility and must use [`Self::signature_preimage`].
+    ///
+    /// # Errors
+    ///
+    /// Returns a structural validation error when the proposal, manifest,
+    /// leader, parent/timeout justification, or signature is not valid under
+    /// the frozen height context.
     pub fn validate(&self, context: &HeightContext) -> Result<(), ValidationError> {
         validate_round(self.round, context)?;
         self.manifest.validate(context)?;
@@ -1859,7 +1891,10 @@ impl Proposal {
 /// summary so evidence consumers can independently re-run context, roster, and
 /// signature checks before applying a penalty. Pair order is not semantic;
 /// persistence code canonicalizes it by canonical Norito bytes.
-#[allow(variant_size_differences, clippy::large_enum_variant)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "equivocation evidence retains both complete signed artifacts inline; boxing a variant would change the canonical Norito V1 wire shape"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[cfg_attr(
     feature = "json",
@@ -1962,7 +1997,7 @@ impl IntoSchema for SumeragiV2Equivocation {
     }
 }
 
-/// Authenticated request for a body covered by a PrepareQC or CommitQC.
+/// Authenticated request for a body covered by a `PrepareQC` or `CommitQC`.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -1998,6 +2033,12 @@ impl CertifiedBodyRequest {
     }
 
     /// Validate context, certificate, requester, and signature presence.
+    ///
+    /// # Errors
+    ///
+    /// Returns a structural or quorum error when the requested round or
+    /// certificate is invalid under `context`, the certificate identifies a
+    /// different proposal, or the requester signature is missing or oversized.
     pub fn validate(&self, context: &HeightContext) -> Result<(), ValidationError> {
         validate_round(self.round, context)?;
         self.certificate.validate(context)?;
@@ -2038,10 +2079,10 @@ impl CertifiedBodyResponse {
     pub fn signature_preimage(&self) -> Vec<u8> {
         let payload = CertifiedBodyResponseSignaturePayload {
             protocol_version: PROTOCOL_VERSION,
-            request_hash: self.request_hash.clone(),
+            request_hash: self.request_hash,
             manifest: self.manifest.clone(),
             body_hash: Hash::new(&self.body),
-            responder: self.responder.clone(),
+            responder: self.responder,
         };
         signature_preimage(
             b"iroha:sumeragi:v2:certified-body-response",
@@ -2052,6 +2093,13 @@ impl CertifiedBodyResponse {
     /// Validate the response against the frozen context and signature
     /// presence. The caller additionally matches `request_hash` to an
     /// outstanding authenticated request.
+    ///
+    /// # Errors
+    ///
+    /// Returns a structural validation error when the manifest is invalid,
+    /// the body hash or length differs from the manifest, the responder is
+    /// outside the frozen roster, or the response signature is missing or
+    /// oversized.
     pub fn validate(&self, context: &HeightContext) -> Result<(), ValidationError> {
         self.manifest.validate(context)?;
         if Hash::new(&self.body) != self.manifest.subject.payload_hash {
@@ -2124,7 +2172,7 @@ pub struct CertifiedBodyResponseSignaturePayload {
     pub responder: ValidatorIndex,
 }
 
-/// Authenticated request for the durable CommitQC of one exact height context.
+/// Authenticated request for the durable `CommitQC` of one exact height context.
 ///
 /// A lagging peer already reconstructs its next immutable [`HeightContext`]
 /// from the preceding committed block.  This request deliberately names only
@@ -2141,7 +2189,7 @@ pub struct CommitCertificateRequest {
     pub protocol_version: u16,
     /// Chain identifier included explicitly for replay rejection at ingress.
     pub chain_id: ChainId,
-    /// Exact frozen context whose durable CommitQC is requested.
+    /// Exact frozen context whose durable `CommitQC` is requested.
     pub context_id: HeightContextId,
     /// Height repeated for bounded serving and early rejection.
     pub height: Height,
@@ -2167,6 +2215,12 @@ impl CommitCertificateRequest {
     ///
     /// Cryptographic signature and outer-transport identity verification are
     /// performed by the transport adapter.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the context itself is invalid, the request uses
+    /// another protocol, chain, context, or height, or its signature is missing
+    /// or oversized.
     pub fn validate(&self, context: &HeightContext) -> Result<(), ValidationError> {
         context.validate()?;
         if self.protocol_version != PROTOCOL_VERSION {
@@ -2185,11 +2239,11 @@ impl CommitCertificateRequest {
     }
 }
 
-/// Authenticated response carrying the CommitQC for an exact outstanding
+/// Authenticated response carrying the `CommitQC` for an exact outstanding
 /// [`CommitCertificateRequest`].
 ///
 /// The response never carries a block body.  Its certificate is admitted as a
-/// normal v2 CommitQC through the authoritative reducer; the reducer then
+/// normal v2 `CommitQC` through the authoritative reducer; the reducer then
 /// initiates the existing certified-body fetch and WAL/apply sequence.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -2200,7 +2254,7 @@ impl CommitCertificateRequest {
 pub struct CommitCertificateResponse {
     /// Hash of the exact signed request being answered.
     pub request_hash: HashOf<CommitCertificateRequest>,
-    /// Durable CommitQC recovered from the responder's canonical finality artifact.
+    /// Durable `CommitQC` recovered from the responder's canonical finality artifact.
     pub certificate: QuorumCertificate,
     /// Current authenticated network identity serving the durable artifact.
     ///
@@ -2231,6 +2285,12 @@ impl CommitCertificateResponse {
     ///
     /// Cryptographic aggregate and responder signatures are verified by the
     /// transport and consensus adapters respectively.
+    ///
+    /// # Errors
+    ///
+    /// Returns a structural or quorum error when the certificate is invalid,
+    /// is not a `CommitQC` for `context`, or the response signature is missing
+    /// or oversized.
     pub fn validate(&self, context: &HeightContext) -> Result<(), ValidationError> {
         self.certificate.validate(context)?;
         if self.certificate.phase != GlobalPhase::Commit
@@ -2243,6 +2303,11 @@ impl CommitCertificateResponse {
     }
 
     /// Validate the response against the exact outstanding request.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when either artifact is invalid under `context` or the
+    /// response does not carry the hash of the exact signed request.
     pub fn validate_against(
         &self,
         context: &HeightContext,
@@ -2268,13 +2333,17 @@ pub struct CommitCertificateResponseSignaturePayload {
     pub protocol_version: u16,
     /// Exact signed request being answered.
     pub request_hash: HashOf<CommitCertificateRequest>,
-    /// Exact CommitQC supplied to the authoritative reducer.
+    /// Exact `CommitQC` supplied to the authoritative reducer.
     pub certificate: QuorumCertificate,
     /// Current authenticated network identity serving the artifact.
     pub responder: PeerId,
 }
 
 /// Payload variants accepted by the Sumeragi v2 network envelope.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "consensus variants retain their canonical V1 Norito payloads inline; introducing indirection would change the signed wire representation"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -2291,7 +2360,7 @@ pub enum ConsensusMessageV2Payload {
     Proposal(Proposal),
     /// Prepare or Commit vote.
     Vote(Vote),
-    /// Aggregate PrepareQC or CommitQC.
+    /// Aggregate `PrepareQC` or `CommitQC`.
     QuorumCertificate(QuorumCertificate),
     /// Individual timeout vote.
     TimeoutVote(TimeoutVote),
@@ -2305,9 +2374,9 @@ pub enum ConsensusMessageV2Payload {
     CertifiedBodyRequest(CertifiedBodyRequest),
     /// Response carrying a certified body.
     CertifiedBodyResponse(CertifiedBodyResponse),
-    /// Request the durable CommitQC for the active height context.
+    /// Request the durable `CommitQC` for the active height context.
     CommitCertificateRequest(CommitCertificateRequest),
-    /// Response carrying the active height context's durable CommitQC.
+    /// Response carrying the active height context's durable `CommitQC`.
     CommitCertificateResponse(CommitCertificateResponse),
 }
 
@@ -2348,7 +2417,7 @@ pub enum SumeragiV2StatusPhase {
     Prepare,
     /// Collecting or processing Commit votes.
     Commit,
-    /// A CommitQC is durable and the body is awaiting application.
+    /// A `CommitQC` is durable and the body is awaiting application.
     PendingApply,
 }
 
@@ -2401,7 +2470,7 @@ pub struct SumeragiV2HeightContextStatus {
     pub quorum: DualQuorum,
 }
 
-/// Power-aware summary of the latest authenticated durable CommitQC.
+/// Power-aware summary of the latest authenticated durable `CommitQC`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -2409,7 +2478,7 @@ pub struct SumeragiV2HeightContextStatus {
 )]
 #[norito(deny_unknown_fields)]
 pub struct SumeragiV2CommitQcStatus {
-    /// Stable reference to the exact durable CommitQC.
+    /// Stable reference to the exact durable `CommitQC`.
     pub certificate: QuorumCertificateRef,
     /// Number of validators in the certificate's frozen roster.
     pub validator_count: u32,
@@ -2496,9 +2565,9 @@ pub enum SumeragiV2OutboundIntentKind {
     PrepareVote,
     /// Commit vote intent.
     CommitVote,
-    /// Formed PrepareQC intent.
+    /// Formed `PrepareQC` intent.
     PrepareQc,
-    /// Formed CommitQC intent.
+    /// Formed `CommitQC` intent.
     CommitQc,
     /// Timeout vote intent.
     TimeoutVote,
@@ -2700,13 +2769,13 @@ pub enum SumeragiV2ProgressTransition {
     TimeoutVoteAdmitted,
     /// A Prepare dual quorum formed or arrived.
     PrepareQuorum,
-    /// A PrepareQC lock became durable.
+    /// A `PrepareQC` lock became durable.
     LockInstalled,
     /// A Commit dual quorum formed or arrived.
     CommitQuorum,
     /// A timeout certificate installed a successor view.
     TimeoutCertificateInstalled,
-    /// The exact CommitQC decision became durable.
+    /// The exact `CommitQC` decision became durable.
     DecisionPersisted,
     /// The decided block was applied locally.
     Applied,
@@ -2823,7 +2892,7 @@ pub struct SumeragiV2IgnoreCount {
 ///
 /// Local ages and queue measurements are observation-only: they are never
 /// inputs to protocol transitions, wire fingerprints, or deterministic state.
-/// A lagging node may report a later-view CommitQC intent or
+/// A lagging node may report a later-view `CommitQC` intent or
 /// Commit-quorum/decision transition for this exact active height; all other
 /// diagnostics remain bounded by the status snapshot's current view.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Decode, Encode, IntoSchema)]
@@ -2889,11 +2958,11 @@ pub struct SumeragiV2Status {
     pub phase: SumeragiV2StatusPhase,
     /// Expected leader index for the current view.
     pub leader: ValidatorIndex,
-    /// Persisted PrepareQC lock, if any.
+    /// Persisted `PrepareQC` lock, if any.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub locked_prepare_qc: Option<QuorumCertificateRef>,
-    /// Highest verified PrepareQC known locally, if any.
+    /// Highest verified `PrepareQC` known locally, if any.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub highest_prepare_qc: Option<QuorumCertificateRef>,
@@ -2915,7 +2984,7 @@ pub struct SumeragiV2Status {
     pub last_committed_subject: Option<BlockSubject>,
     /// Frozen election context governing the active height.
     pub height_context: SumeragiV2HeightContextStatus,
-    /// Latest authenticated durable CommitQC summary, when its frozen roster is available.
+    /// Latest authenticated durable `CommitQC` summary, when its frozen roster is available.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub last_commit_qc: Option<SumeragiV2CommitQcStatus>,
@@ -2936,6 +3005,10 @@ impl SumeragiV2Status {
     /// Returns a structural error for an unsupported version, impossible
     /// phase/body pairing, inconsistent commit frontier, or a QC/TC reference
     /// bound to another context, height, phase, or future view.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the ordered status validator preserves stable first-error precedence across the complete public V1 diagnostics contract"
+    )]
     pub fn validate(&self) -> Result<(), SumeragiV2StatusValidationError> {
         use SumeragiV2StatusValidationError as Error;
 
@@ -3135,7 +3208,9 @@ impl SumeragiV2Status {
         }
 
         let validate_round_binding = |round: ConsensusRound| {
-            if round.context_id != self.height_context_id || round.height != self.height {
+            let belongs_to_active_context = round.context_id == self.height_context_id;
+            let belongs_to_active_height = round.height == self.height;
+            if !belongs_to_active_context || !belongs_to_active_height {
                 return Err(Error::LivenessRoundMismatch);
             }
             Ok(())
@@ -3321,9 +3396,9 @@ pub enum SumeragiV2StatusValidationError {
     InvalidHeightContextQuorum,
     /// The reducer phase cannot emit the reported body state.
     PhaseBodyMismatch,
-    /// Commit collection requires a persisted PrepareQC lock.
+    /// Commit collection requires a persisted `PrepareQC` lock.
     CommitWithoutLock,
-    /// Prepare collection cannot retain a prior PrepareQC lock.
+    /// Prepare collection cannot retain a prior `PrepareQC` lock.
     PrepareWithLock,
     /// Pending-apply state did not report the current decided subject and height.
     PendingApplyCommitMismatch,
@@ -3331,33 +3406,33 @@ pub enum SumeragiV2StatusValidationError {
     CommittedHeightNotBehindActiveHeight,
     /// The pre-genesis commit frontier carried a block subject.
     GenesisCommitCarriesSubject,
-    /// The committed subject and authenticated CommitQC summary were not present together.
+    /// The committed subject and authenticated `CommitQC` summary were not present together.
     CommitFrontierAuthenticationMismatch,
-    /// The CommitQC summary did not certify the reported committed subject and height.
+    /// The `CommitQC` summary did not certify the reported committed subject and height.
     CommitSummaryCertificateMismatch,
-    /// The CommitQC summary did not satisfy its frozen dual quorum.
+    /// The `CommitQC` summary did not satisfy its frozen dual quorum.
     InvalidCommitSummaryQuorum,
-    /// A CommitQC for the active context reported different frozen quorum inputs.
+    /// A `CommitQC` for the active context reported different frozen quorum inputs.
     CommitSummaryContextMismatch,
     /// A QC or TC reference was bound to another height context.
     CertificateContextMismatch,
     /// A QC or TC reference was bound to another height.
     CertificateHeightMismatch,
-    /// A status QC reference was not a PrepareQC.
+    /// A status QC reference was not a `PrepareQC`.
     CertificatePhaseMismatch,
     /// A QC reference came from a view above the current view.
     CertificateFromFutureView,
     /// A vote-pool or certificate reference carried an invalid proposal origin.
     InvalidProposalRound,
-    /// A persisted lock was present without a highest PrepareQC.
+    /// A persisted lock was present without a highest `PrepareQC`.
     LockedCertificateWithoutHighest,
-    /// The persisted lock was above the reported highest PrepareQC.
+    /// The persisted lock was above the reported highest `PrepareQC`.
     LockedCertificateAboveHighest,
     /// Lock and highest references disagreed at the same view.
     ConflictingCertificatesAtSameView,
     /// A timeout certificate did not precede the current view.
     TimeoutNotBeforeCurrentView,
-    /// A timeout certificate reported a PrepareQC from above its timed-out view.
+    /// A timeout certificate reported a `PrepareQC` from above its timed-out view.
     TimeoutCarriesFuturePrepare,
     /// A liveness status collection exceeded its fixed protocol bound.
     LivenessCollectionTooLarge,
@@ -3380,6 +3455,10 @@ pub enum SumeragiV2StatusValidationError {
 }
 
 impl fmt::Display for SumeragiV2StatusValidationError {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the exhaustive display table keeps every public status-validation code paired with its stable diagnostic"
+    )]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         use SumeragiV2StatusValidationError as Error;
         match self {
@@ -3565,7 +3644,7 @@ pub enum ValidationError {
     NextEpochModeMismatch,
     /// The next-epoch quorum is not canonically derived from its roster.
     NextEpochQuorumMismatch,
-    /// Next-epoch PoPs are not aligned one-for-one with its roster.
+    /// Next-epoch `PoPs` are not aligned one-for-one with its roster.
     NextEpochProofOfPossessionCount,
     /// A next-epoch roster slot contains no proof of possession.
     MissingNextEpochProofOfPossession,
@@ -3573,7 +3652,7 @@ pub enum ValidationError {
     NextEpochProofOfPossessionTooLarge,
     /// A permissioned next-epoch snapshot assigned non-unit voting power.
     NextEpochPermissionedPowerNotOne,
-    /// The parent certificate is not a CommitQC for the previous height.
+    /// The parent certificate is not a `CommitQC` for the previous height.
     InvalidParentCommit,
     /// The audited snapshot bootstrap record or its height/anchor relationship is malformed.
     InvalidSnapshotBootstrap,
@@ -3623,11 +3702,11 @@ pub enum ValidationError {
     TimeoutGroupsNotStrictlySorted,
     /// The same validator appears in more than one timeout group.
     OverlappingTimeoutSigners,
-    /// A timeout group reported a CommitQC instead of a PrepareQC.
+    /// A timeout group reported a `CommitQC` instead of a `PrepareQC`.
     TimeoutCarriesNonPrepareQc,
     /// A timeout group reported a QC from a future view.
     QcFromFutureView,
-    /// Timeout groups report conflicting PrepareQCs from the same view.
+    /// Timeout groups report conflicting `PrepareQCs` from the same view.
     ConflictingHighestPrepare,
     /// A proposal was not issued by the deterministic leader for its view.
     WrongProposer,
@@ -3670,13 +3749,17 @@ pub enum ValidationError {
     ResponderNotCertified,
     /// The authenticated transport sender differs from the claimed responder.
     ResponderIdentityMismatch,
-    /// A commit-certificate response did not carry a CommitQC for this context.
+    /// A commit-certificate response did not carry a `CommitQC` for this context.
     CommitCertificateMismatch,
     /// A commit-certificate response did not answer the exact outstanding request.
     CommitCertificateRequestMismatch,
 }
 
 impl fmt::Display for ValidationError {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the exhaustive display table keeps every public consensus-validation code paired with its stable diagnostic"
+    )]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::UnsupportedProtocolVersion { expected, actual } => write!(
@@ -5077,6 +5160,18 @@ mod tests {
     }
 
     #[test]
+    fn leader_rotation_reduces_the_maximum_view_without_truncation() {
+        let context = context(&[1, 1, 1, 1]);
+        let roster_len = u64::try_from(context.roster.len()).expect("fixture roster fits u64");
+
+        assert_eq!(
+            context.leader(u64::MAX),
+            context.leader(u64::MAX % roster_len),
+            "view rotation must reduce at the roster boundary before selecting an index"
+        );
+    }
+
+    #[test]
     fn timeout_proposal_rejects_a_selected_prepare_origin() {
         let context = context(&[1, 1, 1, 1]);
         let payload_manifest = manifest(&context);
@@ -5743,6 +5838,30 @@ mod tests {
         assert_eq!(
             future_round.validate(),
             Err(Error::LivenessRoundFromFutureView)
+        );
+
+        let mut cross_context_round = baseline.clone();
+        cross_context_round.liveness.prepare_quorums[0]
+            .round
+            .context_id = HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+            b"foreign liveness quorum context",
+        )));
+        assert_eq!(
+            cross_context_round.validate(),
+            Err(Error::LivenessRoundMismatch),
+            "a liveness round must bind to the status height-context identity"
+        );
+
+        let mut cross_height_round = baseline.clone();
+        cross_height_round.liveness.prepare_quorums[0].round.height =
+            cross_height_round.liveness.prepare_quorums[0]
+                .round
+                .height
+                .saturating_add(1);
+        assert_eq!(
+            cross_height_round.validate(),
+            Err(Error::LivenessRoundMismatch),
+            "a liveness round must bind independently to the status height"
         );
 
         let mut wrong_origin = baseline.clone();

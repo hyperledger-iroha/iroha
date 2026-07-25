@@ -86,7 +86,7 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::asset::CanTransferAssetWithDefinition;
 use iroha_test_network::{NetworkBuilder, NetworkPeer, genesis_factory_with_post_topology};
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR};
-use norito::codec::{Decode, Encode};
+use norito::codec::{DecodeAll, Encode};
 use norito::json::Value as JsonValue;
 use tokio::{
     runtime::Runtime,
@@ -739,23 +739,6 @@ fn wait_for_height_with_timeout(
     Err(eyre!(
         "{context}: timed out waiting for block height >= {target_height}; last observed {last_height}{suffix}"
     ))
-}
-
-fn wait_for_height_with_tick_timeout_across_clients(
-    mut clients_factory: impl FnMut() -> Vec<Client>,
-    target_height: u64,
-    context: &str,
-    timeout_duration: Duration,
-    tick_every_polls: u64,
-) -> Result<SumeragiObservation> {
-    wait_for_height_with_tick_submitters_timeout_across_clients(
-        &mut clients_factory,
-        None,
-        target_height,
-        context,
-        timeout_duration,
-        tick_every_polls,
-    )
 }
 
 fn wait_for_height_with_tick_submitters_timeout_across_clients(
@@ -3625,8 +3608,8 @@ fn wait_for_autoscale_baseline(network: &sandbox::SerializedNetwork, context: &s
 }
 
 fn peer_latest_stdout_log(peer: &NetworkPeer) -> Result<Option<PathBuf>> {
-    let root = peer
-        .kura_store_dir()
+    let kura_store_dir = peer.kura_store_dir();
+    let root = kura_store_dir
         .parent()
         .ok_or_else(|| eyre!("derive peer root from Kura store"))?;
     let mut latest = None::<(u64, PathBuf)>;

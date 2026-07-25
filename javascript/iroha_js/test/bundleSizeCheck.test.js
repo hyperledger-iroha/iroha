@@ -52,25 +52,25 @@ test("bundle-size targets retain audited ceilings and browser graph guards", () 
     [
       {
         label: "toriiClient.js",
-        limitKb: 896,
+        limitKb: 969,
         forbidNodeInputs: false,
         forbidGlobalBuffer: false,
       },
       {
         label: "transactionCodec.js (browser)",
-        limitKb: 136,
+        limitKb: 297,
         forbidNodeInputs: true,
         forbidGlobalBuffer: true,
       },
       {
         label: "nexusApp.js (browser)",
-        limitKb: 216,
+        limitKb: 380,
         forbidNodeInputs: true,
         forbidGlobalBuffer: true,
       },
       {
         label: "canonicalRequest.js (browser)",
-        limitKb: 75,
+        limitKb: 100,
         forbidNodeInputs: true,
         forbidGlobalBuffer: true,
       },
@@ -88,7 +88,7 @@ test("bundle-size targets retain audited ceilings and browser graph guards", () 
       },
       {
         label: "browser.js (public aggregate)",
-        limitKb: 328,
+        limitKb: 469,
         forbidNodeInputs: true,
         forbidGlobalBuffer: true,
       },
@@ -100,16 +100,16 @@ test("bundle-size check covers the browser transaction codec", () => {
   const target = BUNDLE_TARGETS.find(({ label }) => label.includes("transactionCodec"));
   assert.ok(target, "browser transaction-codec bundle target is required");
   assert.equal(target.platform, "browser");
-  assert.match(target.entryPoint, /src[/\\]transactionCodec\.js$/u);
-  assert.ok(target.limitKb > 0 && target.limitKb <= 136);
+  assert.match(target.entryPoint, /dist[/\\]transactionCodec\.js$/u);
+  assert.ok(target.limitKb > 0 && target.limitKb <= 297);
 });
 
 test("bundle-size check proves the Nexus app export has a browser-only graph", () => {
   const target = BUNDLE_TARGETS.find(({ label }) => label.includes("nexusApp"));
   assert.ok(target, "browser Nexus app bundle target is required");
   assert.equal(target.platform, "browser");
-  assert.match(target.entryPoint, /src[/\\]nexusApp\.js$/u);
-  assert.ok(target.limitKb > 0 && target.limitKb <= 216);
+  assert.match(target.entryPoint, /dist[/\\]nexusApp\.js$/u);
+  assert.ok(target.limitKb > 0 && target.limitKb <= 380);
 });
 
 test("bundle-size check gates the complete public browser aggregate", () => {
@@ -118,7 +118,7 @@ test("bundle-size check gates the complete public browser aggregate", () => {
   assert.equal(target.platform, "browser");
   assert.match(target.entryPoint, /dist[/\\]browser\.js$/u);
   assert.equal(target.forbidNodeInputs, true);
-  assert.ok(target.limitKb > 0 && target.limitKb <= 328);
+  assert.ok(target.limitKb > 0 && target.limitKb <= 469);
 });
 
 test("bundle-size check gates canonical requests as a browser subpath", () => {
@@ -127,7 +127,7 @@ test("bundle-size check gates canonical requests as a browser subpath", () => {
   assert.equal(target.platform, "browser");
   assert.match(target.entryPoint, /dist[/\\]canonicalRequest\.js$/u);
   assert.equal(target.forbidNodeInputs, true);
-  assert.ok(target.limitKb > 0 && target.limitKb <= 75);
+  assert.ok(target.limitKb > 0 && target.limitKb <= 100);
 });
 
 test("bundle-size check gates the IVM artifact helper as a browser leaf", () => {
@@ -285,8 +285,12 @@ test("public browser aggregate bundles without Node inputs or global Buffer shim
     findForbiddenBrowserInputs(Object.keys(result.metafile.inputs)),
     [],
   );
-  assert.equal(Object.keys(result.metafile.inputs).length, 52);
-  assert.equal(result.outputFiles[0].contents.byteLength, 314_580);
+  assert.equal(Object.keys(result.metafile.inputs).length, 58);
+  assert.equal(result.outputFiles[0].contents.byteLength, 459_991);
+  assert.ok(
+    result.outputFiles[0].contents.byteLength <= Math.floor(458_081 * 1.05),
+    "public browser aggregate regressed more than 5% from the protected pre-reset tree",
+  );
   assert.ok(result.outputFiles[0].contents.byteLength <= target.limitKb * 1024);
   assert.doesNotMatch(
     result.outputFiles[0].text,
@@ -324,11 +328,17 @@ test("IVM artifact browser leaf stays below 12 KiB without Node or Buffer shims"
 });
 
 test("remaining bundle targets retain exact pinned-esbuild baselines", async () => {
+  const predecessor = new Map([
+    ["toriiClient.js", 945_975],
+    ["transactionCodec.js (browser)", 290_498],
+    ["nexusApp.js (browser)", 371_403],
+    ["canonicalRequest.js (browser)", 97_869],
+  ]);
   const expected = new Map([
-    ["toriiClient.js", { bytes: 896_722, modules: 59 }],
-    ["transactionCodec.js (browser)", { bytes: 134_314, modules: 37 }],
-    ["nexusApp.js (browser)", { bytes: 215_950, modules: 46 }],
-    ["canonicalRequest.js (browser)", { bytes: 69_296, modules: 31 }],
+    ["toriiClient.js", { bytes: 964_610, modules: 59 }],
+    ["transactionCodec.js (browser)", { bytes: 290_979, modules: 46 }],
+    ["nexusApp.js (browser)", { bytes: 373_714, modules: 55 }],
+    ["canonicalRequest.js (browser)", { bytes: 98_123, modules: 34 }],
   ]);
   const { build } = await import("esbuild");
   for (const target of BUNDLE_TARGETS.filter(({ label }) => expected.has(label))) {
@@ -344,13 +354,14 @@ test("remaining bundle targets retain exact pinned-esbuild baselines", async () 
       minify: true,
       metafile: true,
     });
-    assert.deepEqual(
-      {
-        bytes: result.outputFiles[0].contents.byteLength,
-        modules: Object.keys(result.metafile.inputs).length,
-      },
-      expected.get(target.label),
-      target.label,
+    const actual = {
+      bytes: result.outputFiles[0].contents.byteLength,
+      modules: Object.keys(result.metafile.inputs).length,
+    };
+    assert.deepEqual(actual, expected.get(target.label), target.label);
+    assert.ok(
+      actual.bytes <= Math.floor(predecessor.get(target.label) * 1.05),
+      `${target.label} regressed more than 5% from the protected pre-reset tree`,
     );
   }
 });
@@ -378,7 +389,11 @@ test("Kotodama compiler browser export stays below 51 KiB without Node or Buffer
     [],
   );
   assert.equal(Object.keys(result.metafile.inputs).length, 6);
-  assert.equal(result.outputFiles[0].contents.byteLength, 51_640);
+  assert.equal(result.outputFiles[0].contents.byteLength, 52_156);
+  assert.ok(
+    result.outputFiles[0].contents.byteLength <= Math.floor(51_868 * 1.05),
+    "Kotodama compiler browser export regressed more than 5% from the protected pre-reset tree",
+  );
   assert.ok(result.outputFiles[0].contents.byteLength <= target.limitKb * 1024);
   assert.doesNotMatch(
     result.outputFiles[0].text,

@@ -61,7 +61,7 @@ Docs စင့်ခ်လုပ်ခြင်းများ
   - ပြန်ထုတ်ခြင်း- `make docs-syscalls`
   - စစ်ဆေးရန်- `bash scripts/check_syscalls_doc.sh`
 - Syscall ABI ဇယား (crates/ivm/docs/syscalls.md)
-  - စစ်ဆေးရန်- `cargo run -p ivm --bin gen_syscalls_doc -- --check --no-code`
+  - စစ်ဆေးရန်- `cargo run -p ivm --bin gen_syscalls_doc -- --check`
   - ထုတ်ပေးသည့်အပိုင်း (နှင့် ကုဒ်ဒေါ့စ်ဇယား) ကို အပ်ဒိတ်လုပ်ပါ- `cargo run -p ivm --bin gen_syscalls_doc -- --write`
 - Pointer-ABI ဇယားများ (crates/ivm/docs/pointer_abi.md နှင့် ivm.md)
   - စစ်ဆေးရန်- `cargo run -p ivm --bin gen_pointer_types_doc -- --check`

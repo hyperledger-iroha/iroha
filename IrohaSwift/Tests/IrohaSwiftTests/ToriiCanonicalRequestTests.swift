@@ -10,7 +10,7 @@ final class ToriiCanonicalRequestTests: XCTestCase {
 
     func testHeadersProduceVerifiableSignature() throws {
         let seed = Data(repeating: 7, count: 32)
-        let url = URL(string: "https://example.com/v1/accounts/sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB/assets?limit=5")!
+        let url = URL(string: "https://example.com/v1/accounts/sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV/assets?limit=5")!
         let body = Data("{\"foo\":1}".utf8)
         let timestampMs: UInt64 = 1_717_171_717_000
         let nonce = "swift-torii-canonical-nonce"
@@ -19,7 +19,7 @@ final class ToriiCanonicalRequestTests: XCTestCase {
             method: "get",
             url: url,
             body: body,
-            accountId: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+            accountId: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
             privateKey: seed,
             timestampMs: timestampMs,
             nonce: nonce

@@ -53,6 +53,7 @@ async fn trigger_completion_success_should_produce_event_scenario(network: &Netw
             Level::INFO,
             "trigger_completion_event_stream_ready".to_string(),
         )],
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         Metadata::default(),
     );
     let ready_hash = ready_tx.hash();
@@ -107,7 +108,8 @@ async fn trigger_completion_success_should_produce_event_scenario(network: &Netw
     let client = network.client();
     let trigger_tx = client.build_transaction(
         [Instruction::into_instruction_box(Box::new(call_trigger))],
-        <_>::default(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        Metadata::default(),
     );
     let submit_trigger = async {
         spawn_blocking(move || client.submit_transaction_blocking(&trigger_tx)).await??;

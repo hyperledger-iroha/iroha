@@ -427,6 +427,7 @@ fn repo_roundtrip_transfers_balances_and_clears_agreement() -> Result<()> {
 
     let reverse_tx = client.build_transaction(
         vec![repo_instr_box(reverse_repo_instruction)],
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         metadata.clone(),
     );
     client.submit_transaction_blocking(&reverse_tx)?;
@@ -703,6 +704,7 @@ fn repo_margin_call_enforces_cadence_and_participant_rules() -> Result<()> {
     let premature_err = client
         .submit_transaction_blocking(&client.build_transaction(
             vec![repo_instr_box(RepoMarginCallIsi::new(agreement_id.clone()))],
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             metadata.clone(),
         ))
         .unwrap_err();
@@ -722,6 +724,7 @@ fn repo_margin_call_enforces_cadence_and_participant_rules() -> Result<()> {
     let unauthorized_err = unauthorized_client
         .submit_transaction_blocking(&unauthorized_client.build_transaction(
             vec![repo_instr_box(RepoMarginCallIsi::new(agreement_id))],
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             metadata,
         ))
         .unwrap_err();
@@ -891,6 +894,7 @@ fn repo_roundtrip_with_custodian_routes_collateral() -> Result<()> {
     );
     let reverse_tx = client.build_transaction(
         vec![repo_instr_box(reverse_repo_instruction)],
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         metadata.clone(),
     );
     client.submit_transaction_blocking(&reverse_tx)?;

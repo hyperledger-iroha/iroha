@@ -876,7 +876,7 @@ impl HostAxtState {
         }) {
             return Err(VMError::PermissionDenied);
         }
-        if &usage.amount > &usage.handle.budget.remaining {
+        if usage.amount > usage.handle.budget.remaining {
             return Err(VMError::PermissionDenied);
         }
         if let Some(per_use) = usage.handle.budget.per_use.as_ref()
@@ -951,7 +951,7 @@ impl HostAxtState {
             if !seen_nonces.insert(key) {
                 return Err(VMError::PermissionDenied);
             }
-            if &usage.amount > &usage.handle.budget.remaining {
+            if usage.amount > usage.handle.budget.remaining {
                 return Err(VMError::PermissionDenied);
             }
             if let Some(proof) = usage
@@ -991,7 +991,7 @@ impl HostAxtState {
                 .checked_add(&usage.amount)
                 .map_err(|_| VMError::PermissionDenied)?;
 
-            if &accumulator.total > &accumulator.key.budget_remaining {
+            if accumulator.total > accumulator.key.budget_remaining {
                 return Err(VMError::PermissionDenied);
             }
             if let Some(per_use) = accumulator.key.budget_per_use.as_ref()
@@ -1002,7 +1002,7 @@ impl HostAxtState {
         }
 
         for accumulator in &accumulators {
-            if &accumulator.total > &accumulator.key.budget_remaining {
+            if accumulator.total > accumulator.key.budget_remaining {
                 return Err(VMError::PermissionDenied);
             }
             if let Some(per_use) = accumulator.key.budget_per_use.as_ref()
@@ -1152,7 +1152,7 @@ fn manifest_root_array(handle: &AssetHandle) -> Result<[u8; 32], VMError> {
 mod tests {
     use super::*;
 
-    const ACCOUNT_FROM_LITERAL: &str = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
+    const ACCOUNT_FROM_LITERAL: &str = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
     const ACCOUNT_TO_LITERAL: &str = "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76";
 
     fn quantity(value: u128) -> Quantity {

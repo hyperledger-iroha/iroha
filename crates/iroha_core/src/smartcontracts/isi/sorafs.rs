@@ -69,8 +69,7 @@ use sorafs_manifest::{
     StorageClass as ManifestStorageClass,
     alias_cache::decode_alias_proof,
     capacity::{
-        CAPACITY_DISPUTE_VERSION_V1, CapacityDeclarationV1, CapacityDisputeEvidenceV1,
-        CapacityDisputeKind, CapacityDisputeV1, CapacityMetadataEntry,
+        CapacityDeclarationV1, CapacityDisputeKind, CapacityDisputeV1, CapacityMetadataEntry,
         REPLICATION_ORDER_VERSION_V1, ReplicationAssignmentV1, ReplicationOrderSlaV1,
         ReplicationOrderV1,
     },
@@ -2500,10 +2499,6 @@ impl Execute for iroha_data_model::isi::sorafs::RecordCapacityTelemetry {
                 .world
                 .provider_credit_ledger
                 .insert(provider_id, credit_record);
-
-            if proof_failure {
-                register_proof_failure_dispute(state_transaction, &record, pdp_fail, potr_fail)?;
-            }
         }
 
         state_transaction
@@ -2527,93 +2522,6 @@ impl Execute for iroha_data_model::isi::sorafs::RecordCapacityTelemetry {
     }
 }
 
-fn auto_dispute_complainant_id() -> [u8; 32] {
-    *blake3_hash(b"sorafs:auto-proof-dispute:v1").as_bytes()
-}
-
-fn register_proof_failure_dispute(
-    state_transaction: &mut StateTransaction<'_, '_>,
-    record: &CapacityTelemetryRecord,
-    pdp_fail: bool,
-    potr_fail: bool,
-) -> Result<(), InstructionExecutionError> {
-    let telemetry_bytes = norito::to_bytes(record).map_err(|err| {
-        InstructionExecutionError::InvariantViolation(
-            format!("failed to encode telemetry evidence: {err}").into(),
-        )
-    })?;
-    let telemetry_digest = *blake3_hash(&telemetry_bytes).as_bytes();
-    let evidence_uri = format!(
-        "norito://sorafs/capacity_telemetry/{}/{:019}-{:019}",
-        hex::encode(record.provider_id.as_bytes()),
-        record.window_start_epoch,
-        record.window_end_epoch,
-    );
-    let reason = match (pdp_fail, potr_fail) {
-        (true, true) => "PDP and PoTR probes failed in this window",
-        (true, false) => "PDP probes failed in this window",
-        (false, true) => "PoTR probes failed in this window",
-        (false, false) => "proof failure recorded",
-    };
-    let description = format!(
-        "{reason}; pdp_challenges={}, pdp_failures={}, potr_windows={}, potr_breaches={}",
-        record.pdp_challenges, record.pdp_failures, record.potr_windows, record.potr_breaches
-    );
-    let dispute = sorafs_manifest::capacity::CapacityDisputeV1 {
-        version: CAPACITY_DISPUTE_VERSION_V1,
-        provider_id: *record.provider_id.as_bytes(),
-        complainant_id: auto_dispute_complainant_id(),
-        replication_order_id: None,
-        kind: CapacityDisputeKind::ProofFailure,
-        evidence: CapacityDisputeEvidenceV1 {
-            evidence_digest: telemetry_digest,
-            media_type: Some("application/norito".into()),
-            uri: Some(evidence_uri),
-            size_bytes: Some(u64::try_from(telemetry_bytes.len()).unwrap_or(u64::MAX)),
-        },
-        submitted_epoch: record.window_end_epoch,
-        description,
-        requested_remedy: Some("Automatic strike/slash triggered by governance policy".to_owned()),
-    };
-    let dispute_payload = norito::to_bytes(&dispute).map_err(|err| {
-        InstructionExecutionError::InvariantViolation(
-            format!("failed to encode dispute payload: {err}").into(),
-        )
-    })?;
-    let dispute_id = CapacityDisputeId::new(*blake3_hash(&dispute_payload).as_bytes());
-    if state_transaction
-        .world
-        .capacity_disputes
-        .get(&dispute_id)
-        .is_some()
-    {
-        return Ok(());
-    }
-    let evidence = CapacityDisputeEvidence {
-        digest: dispute.evidence.evidence_digest,
-        media_type: dispute.evidence.media_type.clone(),
-        uri: dispute.evidence.uri.clone(),
-        size_bytes: dispute.evidence.size_bytes,
-    };
-    let record = CapacityDisputeRecord::new_pending(
-        dispute_id,
-        record.provider_id,
-        dispute.complainant_id,
-        dispute.replication_order_id,
-        dispute.kind as u8,
-        dispute.submitted_epoch,
-        dispute.description.clone(),
-        dispute.requested_remedy.clone(),
-        evidence,
-        dispute_payload,
-    );
-    state_transaction
-        .world
-        .capacity_disputes
-        .insert(dispute_id, record);
-    Ok(())
-}
-
 impl Execute for iroha_data_model::isi::sorafs::RegisterCapacityDispute {
     fn execute(
         self,
@@ -2623,7 +2531,6 @@ impl Execute for iroha_data_model::isi::sorafs::RegisterCapacityDispute {
         require_permission(state_transaction, authority, "CanFileSorafsCapacityDispute")?;
 
         let mut record: CapacityDisputeRecord = self.record;
-        ensure_provider_owner_registered(state_transaction, &record.provider_id, authority)?;
 
         let dispute = decode_capacity_dispute_payload(&record.dispute_payload)
             .map_err(|err| invalid_parameter(format!("invalid capacity dispute payload: {err}")))?;
@@ -2703,17 +2610,30 @@ impl Execute for iroha_data_model::isi::sorafs::RegisterCapacityDispute {
             ));
         }
 
-        if state_transaction
+        if let Some(existing) = state_transaction
             .world
             .capacity_disputes
             .get(&dispute_id)
-            .is_some()
+            .cloned()
         {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "duplicate capacity dispute identifier".into(),
-            ));
+            if !capacity_dispute_immutable_fields_match(&existing, &record) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "capacity dispute id aliases different immutable content".into(),
+                ));
+            }
+            super::sorafs_reputation::validate_capacity_dispute_opened_replay(
+                state_transaction,
+                authority,
+                &existing,
+            )?;
+            return Ok(());
         }
 
+        super::sorafs_reputation::append_capacity_dispute_opened(
+            state_transaction,
+            authority,
+            &record,
+        )?;
         state_transaction
             .world
             .capacity_disputes
@@ -2721,6 +2641,24 @@ impl Execute for iroha_data_model::isi::sorafs::RegisterCapacityDispute {
 
         Ok(())
     }
+}
+
+fn capacity_dispute_immutable_fields_match(
+    existing: &CapacityDisputeRecord,
+    candidate: &CapacityDisputeRecord,
+) -> bool {
+    // Lifecycle status is intentionally excluded: replaying the canonical
+    // intake remains idempotent after the separate governed resolution.
+    existing.dispute_id == candidate.dispute_id
+        && existing.provider_id == candidate.provider_id
+        && existing.complainant_id == candidate.complainant_id
+        && existing.replication_order_id == candidate.replication_order_id
+        && existing.kind == candidate.kind
+        && existing.submitted_epoch == candidate.submitted_epoch
+        && existing.description == candidate.description
+        && existing.requested_remedy == candidate.requested_remedy
+        && existing.evidence == candidate.evidence
+        && existing.dispute_payload == candidate.dispute_payload
 }
 
 impl Execute for iroha_data_model::isi::sorafs::IssueReplicationOrder {
@@ -5440,7 +5378,8 @@ mod sorafs_tests {
                 ApplySorafsRepairTaskAction, ApprovePinManifest, BindManifestAlias,
                 CompleteReplicationOrder, ExpireReplicationOrder, IssueReplicationOrder,
                 RecordCapacityTelemetry, RegisterCapacityDeclaration, RegisterCapacityDispute,
-                RegisterPinManifest, RegisterProviderOwner, RetirePinManifest, SetPricingSchedule,
+                RegisterPinManifest, RegisterProviderOwner, RetirePinManifest,
+                SetPricingSchedule, SetSorafsReputationJournalAuthorityPolicy,
                 SorafsRepairClaimV1, SorafsRepairCompleteV1, SorafsRepairEscalateV1,
                 SorafsRepairFailV1, SorafsRepairRenewV1, SorafsRepairTaskActionV1,
                 SubmitSorafsRepairAppeal, SubmitSorafsRepairTask, UnregisterProviderOwner,
@@ -5466,6 +5405,10 @@ mod sorafs_tests {
             pricing::{
                 CollateralPolicy, CreditPolicy, PricingScheduleRecord, ProviderCreditRecord,
                 SECONDS_PER_BILLING_MONTH, TierRate,
+            },
+            reputation::{
+                REPUTATION_JOURNAL_AUTHORITY_POLICY_VERSION_V1,
+                ReputationJournalAuthorityPolicyV1,
             },
         },
     };
@@ -5764,6 +5707,36 @@ mod sorafs_tests {
         iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0)
     }
 
+    fn capacity_dispute_block_header() -> iroha_data_model::block::BlockHeader {
+        iroha_data_model::block::BlockHeader::new(
+            nonzero!(1_u64),
+            None,
+            None,
+            None,
+            1_700_000_128_000,
+            0,
+        )
+    }
+
+    fn activate_reputation_policy(
+        stx: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+    ) -> [u8; 32] {
+        let policy = ReputationJournalAuthorityPolicyV1 {
+            version: REPUTATION_JOURNAL_AUTHORITY_POLICY_VERSION_V1,
+            revision: 1,
+            predecessor_policy_digest: None,
+            por_recorder_authority: authority.clone(),
+            dispute_recorder_authority: authority.clone(),
+            token_recorder_authority: authority.clone(),
+        };
+        let digest = policy.canonical_digest().expect("reputation policy digest");
+        SetSorafsReputationJournalAuthorityPolicy::new(policy)
+            .execute(authority, stx)
+            .expect("activate reputation recorder policy");
+        digest
+    }
+
     fn repair_block_header(
         height: u64,
         creation_time_ms: u64,
@@ -6054,6 +6027,9 @@ mod sorafs_tests {
             "CanDeclareSorafsCapacity",
             "CanSubmitSorafsTelemetry",
             "CanFileSorafsCapacityDispute",
+            "CanManageSorafsReputationJournalPolicy",
+            "CanRecordSorafsReputationJournal",
+            "CanResolveSorafsCapacityDispute",
             "CanIssueSorafsReplicationOrder",
             "CanCompleteSorafsReplicationOrder",
             "CanSetSorafsPricing",
@@ -6974,7 +6950,7 @@ mod sorafs_tests {
     #[test]
     fn register_capacity_dispute_inserts_record() {
         let state = make_state();
-        let mut block = state.block(block_header());
+        let mut block = state.block(capacity_dispute_block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
         let (provider, declaration) = sample_capacity_record();
@@ -6983,6 +6959,7 @@ mod sorafs_tests {
         }
         .execute(&alice(), &mut stx)
         .expect("register declaration");
+        activate_reputation_policy(&mut stx, &alice());
 
         let (record, dispute_id) = sample_capacity_dispute(provider);
         let decoded: CapacityDisputeV1 = norito::decode_from_bytes(&record.dispute_payload)
@@ -7002,6 +6979,25 @@ mod sorafs_tests {
             .expect("dispute stored");
         assert_eq!(stored.description, record.description);
         assert!(matches!(stored.status, CapacityDisputeStatus::Pending));
+        let journal_event = stx
+            .world
+            .internal_event_buf
+            .iter()
+            .find_map(|event| match event.as_ref() {
+                DataEvent::Sorafs(SorafsGatewayEvent::ReputationJournal(
+                    iroha_data_model::events::data::sorafs::SorafsReputationJournalEvent::EntryCommitted(
+                        committed,
+                    ),
+                )) => Some(committed),
+                _ => None,
+            })
+            .expect("capacity dispute must append one typed reputation event");
+        assert_eq!(journal_event.provider_id, provider);
+        assert_eq!(journal_event.source_revision, 1);
+        assert_eq!(
+            journal_event.source_kind,
+            iroha_data_model::sorafs::reputation::ReputationJournalSourceKindV1::ProviderDispute
+        );
     }
 
     #[test]
@@ -7254,10 +7250,10 @@ mod sorafs_tests {
     }
 
     #[test]
-    fn capacity_dispute_requires_owner() {
+    fn capacity_dispute_requires_governed_recorder_authority() {
         let mut state = make_state();
         seed_sorafs_permissions(&mut state, &bob());
-        let mut block = state.block(block_header());
+        let mut block = state.block(capacity_dispute_block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
         let (provider, declaration) = sample_capacity_record();
@@ -7266,16 +7262,17 @@ mod sorafs_tests {
         }
         .execute(&alice(), &mut stx)
         .expect("register declaration");
+        activate_reputation_policy(&mut stx, &alice());
 
         let (record, _dispute_id) = sample_capacity_dispute(provider);
         let err = RegisterCapacityDispute { record }
             .execute(&bob(), &mut stx)
-            .expect_err("non-owner dispute must fail");
+            .expect_err("non-governed dispute recorder must fail");
         assert!(matches!(
             err,
             InstructionExecutionError::InvalidParameter(
                 InvalidParameterError::SmartContract(message)
-            ) if message.contains("provider")
+            ) if message.contains("governed dispute recorder")
         ));
     }
 
@@ -7360,9 +7357,9 @@ mod sorafs_tests {
     }
 
     #[test]
-    fn register_capacity_dispute_rejects_duplicate() {
+    fn register_capacity_dispute_exact_replay_is_idempotent() {
         let state = make_state();
-        let mut block = state.block(block_header());
+        let mut block = state.block(capacity_dispute_block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
         let (provider, declaration) = sample_capacity_record();
@@ -7371,6 +7368,7 @@ mod sorafs_tests {
         }
         .execute(&alice(), &mut stx)
         .expect("register declaration");
+        activate_reputation_policy(&mut stx, &alice());
 
         let (record, _dispute_id) = sample_capacity_dispute(provider);
         RegisterCapacityDispute {
@@ -7379,17 +7377,10 @@ mod sorafs_tests {
         .execute(&alice(), &mut stx)
         .expect("register capacity dispute");
 
-        let err = RegisterCapacityDispute { record }
+        RegisterCapacityDispute { record }
             .execute(&alice(), &mut stx)
-            .expect_err("duplicate dispute must be rejected");
-        let message = match err {
-            InstructionExecutionError::InvariantViolation(message) => message,
-            other => panic!("unexpected error: {other:?}"),
-        };
-        assert!(
-            message.contains("duplicate capacity dispute identifier"),
-            "unexpected error message: {message}"
-        );
+            .expect("exact duplicate dispute must be idempotent");
+        assert_eq!(stx.world.capacity_disputes.iter().count(), 1);
     }
 
     #[test]
@@ -12642,7 +12633,7 @@ mod sorafs_tests {
     }
 
     #[test]
-    fn record_capacity_telemetry_records_proof_failure_dispute() {
+    fn record_capacity_telemetry_does_not_mutate_capacity_disputes() {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
@@ -12695,52 +12686,15 @@ mod sorafs_tests {
             &mut stx, provider, 0, window, 100, 90, 40, 7_500, 7_400, 128, proof,
         );
 
-        let disputes: Vec<_> = stx.world.capacity_disputes.iter().collect();
-        assert_eq!(disputes.len(), 1, "expected proof failure dispute");
-        let (_id, dispute) = &disputes[0];
-        assert_eq!(dispute.provider_id, provider);
-        assert_eq!(dispute.kind, CapacityDisputeKind::ProofFailure as u8);
-        assert!(
-            dispute.description.contains("PDP probes failed"),
-            "description must mention PDP failures"
-        );
-
-        let expected_telemetry = CapacityTelemetryRecord::new(
-            provider,
-            0,
-            window,
-            100,
-            90,
-            40,
-            1,
-            1,
-            7_500,
-            7_400,
-            128,
-            proof.pdp_challenges,
-            proof.pdp_failures,
-            proof.potr_windows,
-            proof.potr_breaches,
-        )
-        .with_nonce(window);
-        let telemetry_bytes =
-            norito::to_bytes(&expected_telemetry).expect("encode telemetry evidence");
         assert_eq!(
-            dispute.evidence.digest,
-            *blake3_hash(&telemetry_bytes).as_bytes(),
-            "evidence digest must match telemetry payload"
-        );
-        let expected_uri = format!(
-            "norito://sorafs/capacity_telemetry/{}/{:019}-{:019}",
-            hex::encode(provider.as_bytes()),
+            stx.world.capacity_disputes.iter().count(),
             0,
-            window,
+            "telemetry must not bypass canonical RegisterCapacityDispute execution"
         );
-        assert_eq!(dispute.evidence.uri.as_deref(), Some(expected_uri.as_str()));
     }
 
     #[test]
-    fn record_capacity_telemetry_deduplicates_proof_failure_dispute() {
+    fn duplicate_proof_failure_telemetry_remains_dispute_free() {
         let state = make_state();
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
@@ -12794,21 +12748,16 @@ mod sorafs_tests {
             .execute(&alice(), &mut stx)
             .expect("duplicate telemetry submission");
 
-        let disputes: Vec<_> = stx.world.capacity_disputes.iter().collect();
         assert_eq!(
-            disputes.len(),
-            1,
-            "duplicate telemetry should not create duplicate disputes"
+            stx.world.capacity_disputes.iter().count(),
+            0,
+            "duplicate telemetry must not create an independent capacity dispute"
         );
     }
 
     #[test]
-    fn capacity_dispute_replay_is_deterministic() {
-        fn run_once() -> (
-            CapacityFeeLedgerEntry,
-            ProviderCreditRecord,
-            Vec<(CapacityDisputeId, CapacityDisputeRecord)>,
-        ) {
+    fn proof_failure_telemetry_replay_is_deterministic() {
+        fn run_once() -> (CapacityFeeLedgerEntry, ProviderCreditRecord) {
             let state = make_state();
             let mut block = state.block(block_header());
             let mut stx = block.transaction();
@@ -12882,25 +12831,19 @@ mod sorafs_tests {
                 .get(&provider)
                 .cloned()
                 .expect("credit snapshot");
-            let disputes: Vec<(CapacityDisputeId, CapacityDisputeRecord)> = stx
-                .world
-                .capacity_disputes
-                .iter()
-                .map(|(id, record)| (*id, record.clone()))
-                .collect();
-            assert!(
-                !disputes.is_empty(),
-                "proof failures should emit a capacity dispute"
+            assert_eq!(
+                stx.world.capacity_disputes.iter().count(),
+                0,
+                "telemetry replay must stay outside canonical dispute mutation"
             );
-            (ledger, credit_snapshot, disputes)
+            (ledger, credit_snapshot)
         }
 
-        let (ledger_a, credit_a, disputes_a) = run_once();
-        let (ledger_b, credit_b, disputes_b) = run_once();
+        let (ledger_a, credit_a) = run_once();
+        let (ledger_b, credit_b) = run_once();
 
         assert_eq!(ledger_a, ledger_b, "ledger replay must be deterministic");
         assert_eq!(credit_a, credit_b, "credits must replay identically");
-        assert_eq!(disputes_a, disputes_b, "disputes must replay identically");
     }
 
     #[test]

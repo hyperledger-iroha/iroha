@@ -21,8 +21,6 @@ public enum SoraFsOrderbookPayloadKind : uint
     SettlementChannel = 4,
     /// <summary>A <c>SettlementReceiptV1</c>.</summary>
     SettlementReceipt = 5,
-    /// <summary>An <c>OrderbookRuntimeSnapshotV1</c>.</summary>
-    RuntimeSnapshot = 6,
 }
 
 /// <summary>
@@ -1430,7 +1428,6 @@ public static class SoraFsReferenceValidators
             SoraFsOrderbookPayloadKind.TradeEvent => "trade-event",
             SoraFsOrderbookPayloadKind.SettlementChannel => "settlement-channel",
             SoraFsOrderbookPayloadKind.SettlementReceipt => "settlement-receipt",
-            SoraFsOrderbookPayloadKind.RuntimeSnapshot => "runtime-snapshot",
             _ => throw new ArgumentOutOfRangeException(nameof(kind)),
         };
     }

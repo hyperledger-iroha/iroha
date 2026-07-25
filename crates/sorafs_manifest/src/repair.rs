@@ -1267,7 +1267,7 @@ mod tests {
             ticket_id: RepairTicketId("REP-351".into()),
             provider_id: provider_id(),
             manifest_digest: manifest_digest(),
-            auditor_account: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
+            auditor_account: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
             proposed_penalty: proposed_penalty
                 .parse()
                 .expect("canonical XOR proposed penalty"),
@@ -1347,7 +1347,7 @@ mod tests {
         let report = RepairReportV1 {
             version: REPAIR_REPORT_VERSION_V1,
             ticket_id: RepairTicketId("REP-351".into()),
-            auditor_account: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
+            auditor_account: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
             submitted_at_unix: 1_704_361_600,
             evidence: sample_evidence(),
             notes: Some("auto-generated from PoR pipeline".into()),
@@ -1386,7 +1386,7 @@ mod tests {
             ticket_id: RepairTicketId("REP-351".into()),
             manifest_digest: manifest_digest(),
             provider_id: provider_id(),
-            auditor_account: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
+            auditor_account: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
             state: RepairTaskStateV1::Queued(QueuedRepairStateV1 {
                 queued_at_unix: 1,
                 sla_deadline_unix: Some(2),
@@ -1525,7 +1525,7 @@ mod tests {
             ticket_id: RepairTicketId("REP-351".into()),
             provider_id: provider_id(),
             manifest_digest: manifest_digest(),
-            auditor_account: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
+            auditor_account: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
             proposed_penalty: too_precise,
             submitted_at_unix: 1_704_361_600,
             rationale: "Repeated PoR failures beyond SLA".into(),

@@ -132,9 +132,10 @@ pub(crate) fn validate_runtime_upgrade_manifest_abi(
     if !manifest.added_syscalls.is_empty() || !manifest.added_pointer_types.is_empty() {
         return Err(IvmAdmissionError::ManifestMalformed);
     }
-    let local = Hash::prehashed(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1));
-    let selected = Hash::prehashed(manifest.abi_hash);
-    if selected != local {
+    let local_bytes = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
+    let local = Hash::prehashed(local_bytes);
+    if manifest.abi_hash != local_bytes {
+        let selected = Hash::prehashed(manifest.abi_hash);
         return Err(IvmAdmissionError::ManifestAbiHashMismatch(
             ManifestAbiHashMismatchInfo {
                 expected: selected,
@@ -142,7 +143,7 @@ pub(crate) fn validate_runtime_upgrade_manifest_abi(
             },
         ));
     }
-    Ok(selected)
+    Ok(local)
 }
 
 /// Return the ABI hash selected by the latest effective runtime upgrade.
@@ -459,6 +460,14 @@ mod tests {
         stale.abi_hash[0] ^= 0x80;
         assert!(matches!(
             validate_runtime_upgrade_manifest_abi(&stale),
+            Err(IvmAdmissionError::ManifestAbiHashMismatch(_))
+        ));
+
+        let mut unmarked_alias = valid.clone();
+        unmarked_alias.abi_hash[31] ^= 1;
+        assert_eq!(unmarked_alias.abi_hash[31] & 1, 0);
+        assert!(matches!(
+            validate_runtime_upgrade_manifest_abi(&unmarked_alias),
             Err(IvmAdmissionError::ManifestAbiHashMismatch(_))
         ));
 

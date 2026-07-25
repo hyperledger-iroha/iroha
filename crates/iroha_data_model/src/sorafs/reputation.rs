@@ -7,10 +7,10 @@
 //!
 //! Source identifiers are domain separated from their native identifiers.
 //! Event identifiers are the BLAKE3 digest of the complete canonical entry
-//! with its `event_id` field cleared.  A ledger implementation must retain one
-//! global event-id index and one `(source_id, source_revision)` index.  Exact
-//! event-id replays are idempotent; a different event at an occupied source
-//! revision is equivocation.
+//! with its `event_id` field cleared. A ledger implementation must retain one
+//! global event-id index and one exact source-head index. Exact event-id
+//! replays are idempotent; a different event at an occupied source revision is
+//! equivocation.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -68,6 +68,30 @@ pub struct ReputationJournalSourceIdV1(pub [u8; 32]);
 impl ReputationJournalSourceIdV1 {
     /// Reserved inert identity.
     pub const ZERO: Self = Self([0; 32]);
+
+    /// Derive the globally namespaced source for a native PoR challenge.
+    #[must_use]
+    pub fn for_por_challenge(challenge_id: [u8; 32]) -> Self {
+        source_id(REPUTATION_JOURNAL_POR_SOURCE_ID_DOMAIN_V1, challenge_id)
+    }
+
+    /// Derive the globally namespaced source for a native capacity dispute.
+    #[must_use]
+    pub fn for_provider_dispute(dispute_id: CapacityDisputeId) -> Self {
+        source_id(
+            REPUTATION_JOURNAL_DISPUTE_SOURCE_ID_DOMAIN_V1,
+            *dispute_id.as_bytes(),
+        )
+    }
+
+    /// Derive the globally namespaced source for a native stream-token validation.
+    #[must_use]
+    pub fn for_stream_token_validation(validation_id: [u8; 32]) -> Self {
+        source_id(
+            REPUTATION_JOURNAL_TOKEN_SOURCE_ID_DOMAIN_V1,
+            validation_id,
+        )
+    }
 
     /// Access the raw digest.
     #[must_use]
@@ -196,6 +220,61 @@ impl ReputationJournalAuthorityPolicyV1 {
             }
             ReputationJournalSourceKindV1::StreamToken => &self.token_recorder_authority,
         }
+    }
+}
+
+/// Auditable activation record for one governed recorder-policy revision.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct ReputationJournalAuthorityPolicyRecordV1 {
+    /// Canonical governed policy.
+    pub policy: ReputationJournalAuthorityPolicyV1,
+    /// Canonical domain-separated digest of `policy`.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub policy_digest: [u8; 32],
+    /// Governance authority that activated the revision.
+    pub activated_by: AccountId,
+    /// Exact committing block timestamp in milliseconds since Unix epoch.
+    pub activated_at_unix_ms: u64,
+}
+
+impl ReputationJournalAuthorityPolicyRecordV1 {
+    /// Construct and validate an auditable policy activation record.
+    ///
+    /// # Errors
+    ///
+    /// Returns a policy, digest, or timestamp validation error.
+    pub fn try_new(
+        policy: ReputationJournalAuthorityPolicyV1,
+        activated_by: AccountId,
+        activated_at_unix_ms: u64,
+    ) -> Result<Self, ReputationJournalValidationError> {
+        let policy_digest = policy.canonical_digest()?;
+        ensure_digest(policy_digest, "policy_digest")?;
+        ensure_timestamp(activated_at_unix_ms, "activated_at_unix_ms")?;
+        Ok(Self {
+            policy,
+            policy_digest,
+            activated_by,
+            activated_at_unix_ms,
+        })
+    }
+
+    /// Validate the canonical policy digest and activation timestamp.
+    ///
+    /// # Errors
+    ///
+    /// Returns a policy, digest, or timestamp validation error.
+    pub fn validate(&self) -> Result<(), ReputationJournalValidationError> {
+        ensure_digest(self.policy_digest, "policy_digest")?;
+        ensure_timestamp(self.activated_at_unix_ms, "activated_at_unix_ms")?;
+        if self.policy_digest != self.policy.canonical_digest()? {
+            return Err(ReputationJournalValidationError::AuthorityPolicyDigestMismatch);
+        }
+        Ok(())
     }
 }
 
@@ -721,20 +800,19 @@ impl ReputationJournalPayloadV1 {
         }
     }
 
-    fn source_id(&self) -> ReputationJournalSourceIdV1 {
+    /// Return the domain-separated native source identity.
+    #[must_use]
+    pub fn source_id(&self) -> ReputationJournalSourceIdV1 {
         match self {
-            Self::PorTerminal(outcome) => source_id(
-                REPUTATION_JOURNAL_POR_SOURCE_ID_DOMAIN_V1,
-                outcome.challenge_id,
-            ),
-            Self::ProviderDispute(event) => source_id(
-                REPUTATION_JOURNAL_DISPUTE_SOURCE_ID_DOMAIN_V1,
-                *event.dispute_id.as_bytes(),
-            ),
-            Self::StreamTokenValidation(outcome) => source_id(
-                REPUTATION_JOURNAL_TOKEN_SOURCE_ID_DOMAIN_V1,
-                outcome.validation_id,
-            ),
+            Self::PorTerminal(outcome) => {
+                ReputationJournalSourceIdV1::for_por_challenge(outcome.challenge_id)
+            }
+            Self::ProviderDispute(event) => {
+                ReputationJournalSourceIdV1::for_provider_dispute(event.dispute_id)
+            }
+            Self::StreamTokenValidation(outcome) => {
+                ReputationJournalSourceIdV1::for_stream_token_validation(outcome.validation_id)
+            }
         }
     }
 
@@ -929,6 +1007,88 @@ impl ReputationJournalEntryV1 {
     }
 }
 
+/// Authoritative head of one native reputation source lifecycle.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct ReputationJournalSourceHeadV1 {
+    /// Source family permanently bound to the source id.
+    pub source_kind: ReputationJournalSourceKindV1,
+    /// Latest committed source revision.
+    pub source_revision: u32,
+    /// Content-derived id of the latest committed source event.
+    pub event_id: ReputationJournalEventIdV1,
+    /// Global journal sequence containing the latest source event.
+    pub sequence: u64,
+}
+
+impl ReputationJournalSourceHeadV1 {
+    /// Validate a non-inert source head.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error for an inert revision, event id, or sequence.
+    pub fn validate(self) -> Result<(), ReputationJournalValidationError> {
+        let valid_revision = match self.source_kind {
+            ReputationJournalSourceKindV1::ProviderDispute => {
+                (1..=2).contains(&self.source_revision)
+            }
+            ReputationJournalSourceKindV1::Por
+            | ReputationJournalSourceKindV1::StreamToken => self.source_revision == 1,
+        };
+        if !valid_revision {
+            return Err(ReputationJournalValidationError::InvalidSourceRevision);
+        }
+        if self.event_id == ReputationJournalEventIdV1::ZERO {
+            return Err(ReputationJournalValidationError::ZeroEventId);
+        }
+        if self.sequence == 0 {
+            return Err(ReputationJournalValidationError::InvalidJournalSequence);
+        }
+        Ok(())
+    }
+}
+
+/// Pre-finality journal record persisted by consensus execution.
+///
+/// The committing block hash is deliberately absent while the block executes.
+/// Fixed-view queries resolve `target_block_height` against the finalized block
+/// hash journal and return [`ReputationJournalFinalizedEventV1`].
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct ReputationJournalCommittedEventRecordV1 {
+    /// One-based global journal sequence.
+    pub sequence: u64,
+    /// Executing block height that must later resolve through finality.
+    pub target_block_height: u64,
+    /// Reputation-journal event index within the executing block.
+    pub event_index: u32,
+    /// Complete canonical journal entry.
+    pub entry: ReputationJournalEntryV1,
+}
+
+impl ReputationJournalCommittedEventRecordV1 {
+    /// Validate the persisted position and canonical journal entry.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed validation error for an inert sequence/height or entry.
+    pub fn validate(&self) -> Result<(), ReputationJournalValidationError> {
+        if self.sequence == 0 {
+            return Err(ReputationJournalValidationError::InvalidJournalSequence);
+        }
+        if self.target_block_height == 0 {
+            return Err(ReputationJournalValidationError::InvalidTargetBlockHeight);
+        }
+        self.entry.validate()
+    }
+}
+
 /// Finalized block anchor for one coherent journal query.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -948,7 +1108,11 @@ pub struct ReputationJournalFinalizedCursorV1 {
 impl ReputationJournalFinalizedCursorV1 {
     /// Validate a non-inert finalized identity.
     pub fn validate(self) -> Result<(), ReputationJournalValidationError> {
-        if self.height == 0 || self.block_hash == [0; 32] || self.finalized_at_unix_ms == 0 {
+        if self.height == 0
+            || self.block_hash == [0; 32]
+            || self.finalized_at_unix_ms == 0
+            || self.finalized_at_unix_ms == u64::MAX
+        {
             return Err(ReputationJournalValidationError::InvalidFinalizedCursor);
         }
         Ok(())
@@ -1193,9 +1357,9 @@ pub enum ReputationJournalValidationError {
     /// A required digest is inert.
     #[error("reputation journal digest `{field}` must be non-zero")]
     ZeroDigest { field: &'static str },
-    /// A required timestamp is zero.
-    #[error("reputation journal timestamp `{field}` must be non-zero")]
-    ZeroTimestamp { field: &'static str },
+    /// A required timestamp is zero or the reserved maximum sentinel.
+    #[error("reputation journal timestamp `{field}` must be finite and non-zero")]
+    InvalidTimestamp { field: &'static str },
     /// Two timestamps are not in canonical order.
     #[error("reputation journal timestamp `{later}` must follow `{earlier}`")]
     InvalidTimestampOrder {
@@ -1301,6 +1465,12 @@ pub enum ReputationJournalValidationError {
     /// Journal sequence overflowed.
     #[error("reputation journal event sequence overflow")]
     EventSequenceOverflow,
+    /// Persisted journal sequence zero is reserved.
+    #[error("reputation journal persisted sequence must be non-zero")]
+    InvalidJournalSequence,
+    /// Persisted target block height zero is reserved.
+    #[error("reputation journal target block height must be non-zero")]
+    InvalidTargetBlockHeight,
     /// Committing block/event position moved backwards or repeated.
     #[error("reputation journal block/event position is reordered")]
     BlockEventReordered,
@@ -1332,8 +1502,8 @@ fn ensure_timestamp(
     timestamp: u64,
     field: &'static str,
 ) -> Result<(), ReputationJournalValidationError> {
-    if timestamp == 0 {
-        return Err(ReputationJournalValidationError::ZeroTimestamp { field });
+    if timestamp == 0 || timestamp == u64::MAX {
+        return Err(ReputationJournalValidationError::InvalidTimestamp { field });
     }
     Ok(())
 }
@@ -1368,9 +1538,10 @@ fn cursor_precedes_event(
         return false;
     }
     if cursor.block_height == event.block_height {
-        return cursor.block_hash == event.block_hash && cursor.event_index < event.event_index;
+        return cursor.block_hash == event.block_hash
+            && cursor.event_index.checked_add(1) == Some(event.event_index);
     }
-    true
+    event.event_index == 0
 }
 
 fn validate_block_order(
@@ -1384,9 +1555,11 @@ fn validate_block_order(
         if event.block_hash != previous.block_hash {
             return Err(ReputationJournalValidationError::BlockHashMismatch);
         }
-        if event.event_index <= previous.event_index {
+        if previous.event_index.checked_add(1) != Some(event.event_index) {
             return Err(ReputationJournalValidationError::BlockEventReordered);
         }
+    } else if event.event_index != 0 {
+        return Err(ReputationJournalValidationError::BlockEventReordered);
     }
     Ok(())
 }
@@ -1562,6 +1735,48 @@ mod tests {
     }
 
     #[test]
+    fn policy_activation_and_persisted_index_records_fail_closed() {
+        let policy = policy();
+        let activation =
+            ReputationJournalAuthorityPolicyRecordV1::try_new(policy.clone(), account(9), RECORDED_AT)
+                .expect("canonical policy activation");
+        activation.validate().expect("activation validates");
+
+        let entry = por_entry(4);
+        assert_eq!(
+            entry.source_id,
+            ReputationJournalSourceIdV1::for_por_challenge([4; 32])
+        );
+        let source_head = ReputationJournalSourceHeadV1 {
+            source_kind: ReputationJournalSourceKindV1::Por,
+            source_revision: 1,
+            event_id: entry.event_id,
+            sequence: 1,
+        };
+        source_head.validate().expect("source head validates");
+        let committed = ReputationJournalCommittedEventRecordV1 {
+            sequence: 1,
+            target_block_height: 7,
+            event_index: 0,
+            entry,
+        };
+        committed.validate().expect("committed event validates");
+
+        let mut bad_activation = activation;
+        bad_activation.policy_digest[0] ^= 0x01;
+        assert_eq!(
+            bad_activation.validate(),
+            Err(ReputationJournalValidationError::AuthorityPolicyDigestMismatch)
+        );
+        let mut bad_committed = committed;
+        bad_committed.sequence = 0;
+        assert_eq!(
+            bad_committed.validate(),
+            Err(ReputationJournalValidationError::InvalidJournalSequence)
+        );
+    }
+
+    #[test]
     fn zero_and_cross_bound_id_attacks_fail_closed() {
         let base = por_entry(1);
         for expected in [
@@ -1625,12 +1840,26 @@ mod tests {
             Err(ReputationJournalValidationError::RecordedTimestampMismatch)
         );
 
+        let mut max_timestamp = por_entry(4);
+        max_timestamp.recorded_at_unix_ms = u64::MAX;
+        assert_eq!(
+            max_timestamp.validate(),
+            Err(ReputationJournalValidationError::InvalidTimestamp {
+                field: "recorded_at_unix_ms",
+            })
+        );
+
         let event = finalized_event(1, 0, 3);
         let mut page = page(vec![event]);
         page.finalized_cursor.finalized_at_unix_ms = RECORDED_AT - 1;
         assert_eq!(
             page.validate(),
             Err(ReputationJournalValidationError::EventAfterFinalizedTimestamp)
+        );
+        page.finalized_cursor.finalized_at_unix_ms = u64::MAX;
+        assert_eq!(
+            page.validate(),
+            Err(ReputationJournalValidationError::InvalidFinalizedCursor)
         );
     }
 
@@ -1892,8 +2121,22 @@ mod tests {
 
         let gap = finalized_event(3, 1, 3);
         assert_eq!(
-            page(vec![first, gap]).validate(),
+            page(vec![first.clone(), gap]).validate(),
             Err(ReputationJournalValidationError::EventSequenceGap)
+        );
+
+        let index_gap = finalized_event(2, 2, 4);
+        assert_eq!(
+            page(vec![first.clone(), index_gap]).validate(),
+            Err(ReputationJournalValidationError::BlockEventReordered)
+        );
+
+        let mut next_block_without_reset = finalized_event(2, 1, 5);
+        next_block_without_reset.block_height = 6;
+        next_block_without_reset.block_hash = [0xC1; 32];
+        assert_eq!(
+            page(vec![first, next_block_without_reset]).validate(),
+            Err(ReputationJournalValidationError::BlockEventReordered)
         );
     }
 

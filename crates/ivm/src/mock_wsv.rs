@@ -44,7 +44,7 @@ use crate::{
     ivm::IVM,
     parallel::StateUpdate,
     pointer_abi::{self, PointerType},
-    schema_registry::SchemaRegistry,
+    schema_registry::{DefaultRegistry, SchemaRegistry},
     state_overlay::{DurableStateOverlay, DurableStateSnapshot},
     syscalls,
 };
@@ -2012,8 +2012,8 @@ pub struct WsvHost {
     actual_access: crate::host::AccessLog,
     state_overlay: HashMap<String, Option<Vec<u8>>>,
     tx_active: bool,
-    /// Optional pluggable schema registry for typed Norito encode/decode.
-    schema: Option<std::sync::Arc<dyn SchemaRegistry + Send + Sync>>,
+    /// Authoritative schema registry for typed Norito encode/decode.
+    schema: std::sync::Arc<dyn SchemaRegistry + Send + Sync>,
 }
 
 #[derive(Clone)]
@@ -2041,7 +2041,7 @@ struct WsvHostSnapshot {
     actual_access: crate::host::AccessLog,
     state_overlay: HashMap<String, Option<Vec<u8>>>,
     tx_active: bool,
-    schema: Option<std::sync::Arc<dyn SchemaRegistry + Send + Sync>>,
+    schema: std::sync::Arc<dyn SchemaRegistry + Send + Sync>,
 }
 
 impl WsvHost {
@@ -2175,7 +2175,7 @@ impl WsvHost {
             actual_access: crate::host::AccessLog::default(),
             state_overlay: HashMap::new(),
             tx_active: false,
-            schema: None,
+            schema: Arc::new(DefaultRegistry::new()),
         }
     }
 
@@ -2408,7 +2408,7 @@ impl WsvHost {
         mut self,
         reg: std::sync::Arc<dyn SchemaRegistry + Send + Sync>,
     ) -> Self {
-        self.schema = Some(reg);
+        self.schema = reg;
         self
     }
 
@@ -4276,267 +4276,13 @@ impl IVMHost for WsvHost {
                 Ok(Self::tlv_eq_gas(left_len, right_len))
             }
             crate::syscalls::SYSCALL_SCHEMA_ENCODE
-            | crate::syscalls::SYSCALL_SCHEMA_ENCODE_DIRECT => {
-                let s_tlv = vm.validate_tlv(vm.register(10))?;
-                let v_tlv = vm.validate_tlv(vm.register(11))?;
-                if s_tlv.type_id != PointerType::Name || v_tlv.type_id != PointerType::Json {
-                    return Err(VMError::NoritoInvalid);
-                }
-                let schema = self.decode_name_payload(s_tlv.payload)?.to_string();
-                let json: Json =
-                    decode_from_bytes(v_tlv.payload).map_err(|_| VMError::DecodeError)?;
-                let json_bytes = json.get().as_bytes();
-                let input_len = v_tlv.payload.len();
-                if let Some(reg) = &self.schema
-                    && let Some(bytes) = reg.encode_json(&schema, json_bytes)
-                {
-                    let mut out = Vec::with_capacity(7 + bytes.len() + 32);
-                    out.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
-                    out.push(1);
-                    out.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
-                    out.extend_from_slice(&bytes);
-                    let h: [u8; 32] = iroha_crypto::Hash::new(&bytes).into();
-                    out.extend_from_slice(&h);
-                    let p = vm.alloc_host_tlv(&out)?;
-                    vm.set_register(10, p);
-                    return Ok(Self::schema_gas(input_len, bytes.len()));
-                }
-                match schema.as_str() {
-                    "Order" => {
-                        #[derive(norito::Decode, norito::Encode, Clone, Debug)]
-                        struct Order {
-                            qty: i64,
-                            side: String,
-                        }
-                        let val: njson::Value =
-                            njson::from_slice(json_bytes).map_err(|_| VMError::NoritoInvalid)?;
-                        let qty = val
-                            .get("qty")
-                            .and_then(|v| v.as_i64())
-                            .ok_or(VMError::NoritoInvalid)?;
-                        let side = val
-                            .get("side")
-                            .and_then(|v| v.as_str())
-                            .ok_or(VMError::NoritoInvalid)?
-                            .to_string();
-                        let order = Order { qty, side };
-                        let bytes = norito::to_bytes(&order).map_err(|_| VMError::NoritoInvalid)?;
-                        let mut out = Vec::with_capacity(7 + bytes.len() + 32);
-                        out.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
-                        out.push(1);
-                        out.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
-                        out.extend_from_slice(&bytes);
-                        let h: [u8; 32] = iroha_crypto::Hash::new(&bytes).into();
-                        out.extend_from_slice(&h);
-                        let p = vm.alloc_host_tlv(&out)?;
-                        vm.set_register(10, p);
-                        Ok(Self::schema_gas(input_len, bytes.len()))
-                    }
-                    "TradeV1" => {
-                        #[derive(norito::Decode, norito::Encode, Clone, Debug)]
-                        struct TradeV1 {
-                            qty: i64,
-                            price: i64,
-                            side: String,
-                        }
-                        let val: njson::Value =
-                            njson::from_slice(json_bytes).map_err(|_| VMError::NoritoInvalid)?;
-                        let qty = val
-                            .get("qty")
-                            .and_then(|v| v.as_i64())
-                            .ok_or(VMError::NoritoInvalid)?;
-                        let price = val
-                            .get("price")
-                            .and_then(|v| v.as_i64())
-                            .ok_or(VMError::NoritoInvalid)?;
-                        let side = val
-                            .get("side")
-                            .and_then(|v| v.as_str())
-                            .ok_or(VMError::NoritoInvalid)?
-                            .to_string();
-                        let trade = TradeV1 { qty, price, side };
-                        let bytes = norito::to_bytes(&trade).map_err(|_| VMError::NoritoInvalid)?;
-                        let mut out = Vec::with_capacity(7 + bytes.len() + 32);
-                        out.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
-                        out.push(1);
-                        out.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
-                        out.extend_from_slice(&bytes);
-                        let h: [u8; 32] = iroha_crypto::Hash::new(&bytes).into();
-                        out.extend_from_slice(&h);
-                        let p = vm.alloc_host_tlv(&out)?;
-                        vm.set_register(10, p);
-                        Ok(Self::schema_gas(input_len, bytes.len()))
-                    }
-                    _ => {
-                        let body = norito::to_bytes(&json).map_err(|_| VMError::NoritoInvalid)?;
-                        let mut out = Vec::with_capacity(7 + body.len() + 32);
-                        out.extend_from_slice(&(PointerType::NoritoBytes as u16).to_be_bytes());
-                        out.push(1);
-                        out.extend_from_slice(&(body.len() as u32).to_be_bytes());
-                        out.extend_from_slice(&body);
-                        let h: [u8; 32] = iroha_crypto::Hash::new(&body).into();
-                        out.extend_from_slice(&h);
-                        let p = vm.alloc_host_tlv(&out)?;
-                        vm.set_register(10, p);
-                        Ok(Self::schema_gas(input_len, body.len()))
-                    }
-                }
-            }
-            crate::syscalls::SYSCALL_SCHEMA_DECODE
-            | crate::syscalls::SYSCALL_SCHEMA_DECODE_DIRECT => {
-                let s_tlv = vm.validate_tlv(vm.register(10))?;
-                let b_tlv = vm.validate_tlv(vm.register(11))?;
-                if s_tlv.type_id != PointerType::Name || b_tlv.type_id != PointerType::NoritoBytes {
-                    return Err(VMError::NoritoInvalid);
-                }
-                let policy = vm.syscall_policy();
-                if !pointer_abi::is_type_allowed_for_policy(policy, s_tlv.type_id) {
-                    return Err(VMError::AbiTypeNotAllowed {
-                        abi: vm.abi_version(),
-                        type_id: s_tlv.type_id as u16,
-                    });
-                }
-                if !pointer_abi::is_type_allowed_for_policy(policy, b_tlv.type_id) {
-                    return Err(VMError::AbiTypeNotAllowed {
-                        abi: vm.abi_version(),
-                        type_id: b_tlv.type_id as u16,
-                    });
-                }
-                let schema = self.decode_name_payload(s_tlv.payload)?.to_string();
-                let input_len = b_tlv.payload.len();
-                if let Some(reg) = &self.schema
-                    && let Some(min) = reg.decode_to_json(&schema, b_tlv.payload)
-                {
-                    let json_str =
-                        core::str::from_utf8(&min).map_err(|_| VMError::NoritoInvalid)?;
-                    let json =
-                        Json::from_str_norito(json_str).map_err(|_| VMError::NoritoInvalid)?;
-                    let body = norito::to_bytes(&json).map_err(|_| VMError::NoritoInvalid)?;
-                    let mut out = Vec::with_capacity(7 + body.len() + 32);
-                    out.extend_from_slice(&(PointerType::Json as u16).to_be_bytes());
-                    out.push(1);
-                    out.extend_from_slice(&(body.len() as u32).to_be_bytes());
-                    out.extend_from_slice(&body);
-                    let h: [u8; 32] = iroha_crypto::Hash::new(&body).into();
-                    out.extend_from_slice(&h);
-                    let p = vm.alloc_host_tlv(&out)?;
-                    vm.set_register(10, p);
-                    return Ok(Self::schema_gas(input_len, body.len()));
-                }
-                match schema.as_str() {
-                    "Order" => {
-                        #[derive(norito::Decode, norito::Encode, Clone, Debug)]
-                        struct Order {
-                            qty: i64,
-                            side: String,
-                        }
-                        let order: Order = norito::decode_from_bytes(b_tlv.payload)
-                            .map_err(|_| VMError::NoritoInvalid)?;
-                        let val = {
-                            let mut map = njson::Map::new();
-                            map.insert("qty".to_owned(), njson::Value::from(order.qty));
-                            map.insert("side".to_owned(), njson::Value::from(order.side));
-                            njson::Value::Object(map)
-                        };
-                        let json = Json::from(&val);
-                        let body = norito::to_bytes(&json).map_err(|_| VMError::NoritoInvalid)?;
-                        let mut out = Vec::with_capacity(7 + body.len() + 32);
-                        out.extend_from_slice(&(PointerType::Json as u16).to_be_bytes());
-                        out.push(1);
-                        out.extend_from_slice(&(body.len() as u32).to_be_bytes());
-                        out.extend_from_slice(&body);
-                        let h: [u8; 32] = iroha_crypto::Hash::new(&body).into();
-                        out.extend_from_slice(&h);
-                        let p = vm.alloc_host_tlv(&out)?;
-                        vm.set_register(10, p);
-                        Ok(Self::schema_gas(input_len, body.len()))
-                    }
-                    "TradeV1" => {
-                        #[derive(norito::Decode, norito::Encode, Clone, Debug)]
-                        struct TradeV1 {
-                            qty: i64,
-                            price: i64,
-                            side: String,
-                        }
-                        let trade: TradeV1 = norito::decode_from_bytes(b_tlv.payload)
-                            .map_err(|_| VMError::NoritoInvalid)?;
-                        let val = {
-                            let mut map = njson::Map::new();
-                            map.insert("qty".to_owned(), njson::Value::from(trade.qty));
-                            map.insert("price".to_owned(), njson::Value::from(trade.price));
-                            map.insert("side".to_owned(), njson::Value::from(trade.side));
-                            njson::Value::Object(map)
-                        };
-                        let json = Json::from(&val);
-                        let body = norito::to_bytes(&json).map_err(|_| VMError::NoritoInvalid)?;
-                        let mut out = Vec::with_capacity(7 + body.len() + 32);
-                        out.extend_from_slice(&(PointerType::Json as u16).to_be_bytes());
-                        out.push(1);
-                        out.extend_from_slice(&(body.len() as u32).to_be_bytes());
-                        out.extend_from_slice(&body);
-                        let h: [u8; 32] = iroha_crypto::Hash::new(&body).into();
-                        out.extend_from_slice(&h);
-                        let p = vm.alloc_host_tlv(&out)?;
-                        vm.set_register(10, p);
-                        Ok(Self::schema_gas(input_len, body.len()))
-                    }
-                    _ => {
-                        let json: Json = norito::decode_from_bytes(b_tlv.payload)
-                            .map_err(|_| VMError::NoritoInvalid)?;
-                        let body = norito::to_bytes(&json).map_err(|_| VMError::NoritoInvalid)?;
-                        let mut out = Vec::with_capacity(7 + body.len() + 32);
-                        out.extend_from_slice(&(PointerType::Json as u16).to_be_bytes());
-                        out.push(1);
-                        out.extend_from_slice(&(body.len() as u32).to_be_bytes());
-                        out.extend_from_slice(&body);
-                        let h: [u8; 32] = iroha_crypto::Hash::new(&body).into();
-                        out.extend_from_slice(&h);
-                        let p = vm.alloc_host_tlv(&out)?;
-                        vm.set_register(10, p);
-                        Ok(Self::schema_gas(input_len, body.len()))
-                    }
-                }
-            }
-            crate::syscalls::SYSCALL_SCHEMA_INFO | crate::syscalls::SYSCALL_SCHEMA_INFO_DIRECT => {
-                let tlv = vm.validate_tlv(vm.register(10))?;
-                if tlv.type_id != PointerType::Name {
-                    return Err(VMError::NoritoInvalid);
-                }
-                let name = self.decode_name_payload(tlv.payload)?;
-                let name_str = name.as_ref();
-                let (id_hex, version) = match name_str {
-                    "Order" => {
-                        let id: [u8; 32] = iroha_crypto::Hash::new(b"Order@1").into();
-                        (hex::encode(id), 1u64)
-                    }
-                    "TradeV1" => {
-                        let id: [u8; 32] = iroha_crypto::Hash::new(b"TradeV1@1").into();
-                        (hex::encode(id), 1u64)
-                    }
-                    _ => (String::new(), 0),
-                };
-                if version == 0 {
-                    return Err(VMError::NoritoInvalid);
-                }
-                let input_len = tlv.payload.len();
-                let body_value = {
-                    let mut map = njson::Map::new();
-                    map.insert("id".to_owned(), njson::Value::from(id_hex));
-                    map.insert("version".to_owned(), njson::Value::from(version));
-                    njson::Value::Object(map)
-                };
-                let json = Json::from(&body_value);
-                let body = norito::to_bytes(&json).map_err(|_| VMError::NoritoInvalid)?;
-                let mut out = Vec::with_capacity(7 + body.len() + 32);
-                out.extend_from_slice(&(PointerType::Json as u16).to_be_bytes());
-                out.push(1);
-                out.extend_from_slice(&(body.len() as u32).to_be_bytes());
-                out.extend_from_slice(&body);
-                let h: [u8; 32] = iroha_crypto::Hash::new(&body).into();
-                out.extend_from_slice(&h);
-                let p = vm.alloc_host_tlv(&out)?;
-                vm.set_register(10, p);
-                Ok(Self::schema_gas(input_len, body.len()))
+            | crate::syscalls::SYSCALL_SCHEMA_ENCODE_DIRECT
+            | crate::syscalls::SYSCALL_SCHEMA_DECODE
+            | crate::syscalls::SYSCALL_SCHEMA_DECODE_DIRECT
+            | crate::syscalls::SYSCALL_SCHEMA_INFO
+            | crate::syscalls::SYSCALL_SCHEMA_INFO_DIRECT => {
+                crate::core_host::CoreHost::new_with_registry(Box::new(Arc::clone(&self.schema)))
+                    .syscall(number, vm)
             }
             crate::syscalls::SYSCALL_BUILD_PATH_KEY_NORITO
             | crate::syscalls::SYSCALL_BUILD_PATH_KEY_NORITO_DIRECT
@@ -6572,7 +6318,7 @@ mod tests_permission_json {
     fn parse_add_signatory_ok() {
         let bob = account(
             "wonder",
-            "ed0120C6C6F575510FB87360CB773FAF2665C9BD0FBD00320684A966569A2C0217F063",
+            "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4",
         );
         let target = njson::to_json(&bob).expect("serialize account target");
         let s = format!("{{\"type\":\"add_signatory\",\"target\":{target}}}");
@@ -6587,7 +6333,7 @@ mod tests_permission_json {
     fn parse_remove_signatory_ok() {
         let bob = account(
             "wonder",
-            "ed0120C6C6F575510FB87360CB773FAF2665C9BD0FBD00320684A966569A2C0217F063",
+            "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4",
         );
         let target = njson::to_json(&bob).expect("serialize account target");
         let s = format!("{{\"type\":\"remove_signatory\",\"target\":{target}}}");
@@ -6602,7 +6348,7 @@ mod tests_permission_json {
     fn parse_set_account_quorum_ok() {
         let bob = account(
             "wonder",
-            "ed0120C6C6F575510FB87360CB773FAF2665C9BD0FBD00320684A966569A2C0217F063",
+            "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4",
         );
         let target = njson::to_json(&bob).expect("serialize account target");
         let s = format!("{{\"type\":\"set_account_quorum\",\"target\":{target}}}");
@@ -6617,7 +6363,7 @@ mod tests_permission_json {
     fn parse_set_account_detail_ok() {
         let bob = account(
             "wonder",
-            "ed0120C6C6F575510FB87360CB773FAF2665C9BD0FBD00320684A966569A2C0217F063",
+            "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4",
         );
         let target = njson::to_json(&bob).expect("serialize account target");
         let s = format!("{{\"type\":\"set_account_detail\",\"target\":{target}}}");
@@ -7454,7 +7200,7 @@ mod tests_nft_decode {
         let nft_id: NftId = "n0$wonderland.universal".parse().unwrap();
         let payload = norito::to_bytes(&nft_id).expect("encode nft id");
         let caller: AccountId = test_account_id(
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
             "wonderland",
         );
         let host =
@@ -7558,7 +7304,7 @@ mod tests_null_decode {
     #[test]
     fn decode_syscalls_accept_null_pointers() {
         let caller: AccountId = test_account_id(
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
             "wonderland",
         );
         let host =
@@ -7585,7 +7331,7 @@ mod tests_null_decode {
     #[test]
     fn current_time_syscall_returns_host_time() {
         let caller: AccountId = test_account_id(
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
             "wonderland",
         );
         let mut host =
@@ -7606,7 +7352,7 @@ mod tests_null_decode {
     #[test]
     fn debug_log_syscall_accepts_current_kotodama_payloads_and_charges_bytes() {
         let caller: AccountId = test_account_id(
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
             "wonderland",
         );
         let mut host = WsvHost::new_with_subject(MockWorldStateView::new(), caller, HashMap::new());
@@ -7631,7 +7377,7 @@ mod tests_null_decode {
     #[test]
     fn authority_response_quote_covers_actual_and_fits_default_budget() {
         let caller: AccountId = test_account_id(
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
             "wonderland",
         );
         let mut host = WsvHost::new_with_subject(MockWorldStateView::new(), caller, HashMap::new());
@@ -7651,7 +7397,7 @@ mod tests_null_decode {
     #[test]
     fn add_signatory_syscall_accepts_account_id_payloads() {
         let caller: AccountId = test_account_id(
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
             "wonderland",
         );
         let mut wsv = MockWorldStateView::new();
@@ -7681,7 +7427,7 @@ mod tests_null_decode {
     #[test]
     fn add_signatory_syscall_rejects_malformed_account_payloads() {
         let caller: AccountId = test_account_id(
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
             "wonderland",
         );
         let mut wsv = MockWorldStateView::new();
@@ -7712,7 +7458,7 @@ mod tests_null_decode {
     #[test]
     fn get_account_balance_syscall_accepts_account_id_payloads() {
         let caller: AccountId = test_account_id(
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
             "wonderland",
         );
         let asset = AssetDefinitionId::new(
@@ -7771,7 +7517,7 @@ mod tests_null_decode {
     #[test]
     fn get_account_balance_result_spills_to_owned_heap() {
         let caller: AccountId = test_account_id(
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
             "wonderland",
         );
         let asset = AssetDefinitionId::new(
@@ -7819,7 +7565,7 @@ mod tests_null_decode {
     #[test]
     fn zk_verify_status_paths_charge_payload_bytes() {
         let caller: AccountId = test_account_id(
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
             "wonderland",
         );
         let host =
@@ -7842,7 +7588,7 @@ mod tests_null_decode {
     #[test]
     fn zk_read_helpers_charge_request_and_response_bytes() {
         let caller: AccountId = test_account_id(
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
             "wonderland",
         );
         let host =
@@ -7896,7 +7642,7 @@ mod tests_null_decode {
     #[test]
     fn input_publish_tlv_rejects_oversized_envelope() {
         let caller: AccountId = test_account_id(
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
             "wonderland",
         );
         let host =
@@ -7921,7 +7667,7 @@ mod tests_null_decode {
     #[test]
     fn input_publish_tlv_charges_envelope_bytes() {
         let caller: AccountId = test_account_id(
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
             "wonderland",
         );
         let host =
@@ -7940,7 +7686,7 @@ mod tests_null_decode {
     #[test]
     fn direct_mutation_syscalls_charge_declared_gas() {
         let caller: AccountId = test_account_id(
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
             "wonderland",
         );
         let mut wsv = MockWorldStateView::new();
@@ -7975,7 +7721,7 @@ mod tests_null_decode {
     #[test]
     fn direct_admin_syscalls_require_management_permissions() {
         let caller: AccountId = test_account_id(
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
             "wonderland",
         );
         let mut wsv = MockWorldStateView::new();
@@ -8028,7 +7774,7 @@ mod tests_null_decode {
     #[test]
     fn direct_admin_syscalls_succeed_with_management_permissions() {
         let caller: AccountId = test_account_id(
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
             "wonderland",
         );
         let mut wsv = MockWorldStateView::new();
@@ -8079,7 +7825,7 @@ mod tests_null_decode {
     #[test]
     fn smartcontract_query_json_envelope_charges_request_and_response_bytes() {
         let caller: AccountId = test_account_id(
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
             "wonderland",
         );
         let host =
@@ -8122,7 +7868,7 @@ mod tests_null_decode {
     #[test]
     fn smartcontract_instruction_json_envelope_charges_payload_bytes() {
         let caller: AccountId = test_account_id(
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
             "wonderland",
         );
         let mut wsv = MockWorldStateView::new();
@@ -8173,7 +7919,7 @@ mod tests_null_decode {
             "wonderland",
         );
         let carol: AccountId = test_account_id(
-            "ed012026DB3C0E3D6A4C53E2CD59000B2D5F9ECB41D4EDD5E0C83F9F1B40D0F0A5BF42",
+            "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245",
             "wonderland",
         );
         let asset = AssetDefinitionId::new(
@@ -8263,11 +8009,11 @@ mod tests_null_decode {
                 "destination",
             );
             let contract_subject = test_account_id(
-                "ed012026DB3C0E3D6A4C53E2CD59000B2D5F9ECB41D4EDD5E0C83F9F1B40D0F0A5BF42",
+                "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245",
                 "contract",
             );
             let app = test_account_id(
-                "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
                 "app",
             );
             let asset = AssetDefinitionId::new(
@@ -8337,7 +8083,7 @@ mod tests_null_decode {
     #[test]
     fn execute_instruction_rejects_oversized_json_envelope() {
         let caller: AccountId = test_account_id(
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
             "wonderland",
         );
         let host =
@@ -8378,7 +8124,7 @@ mod tests_null_decode {
     #[test]
     fn decode_int_accepts_norito_i64() {
         let caller: AccountId = test_account_id(
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
             "wonderland",
         );
         let payload = norito::to_bytes(&29_i64).expect("encode i64");
@@ -8397,7 +8143,7 @@ mod tests_null_decode {
     #[test]
     fn wsv_codec_helpers_charge_payload_bytes() {
         let caller: AccountId = test_account_id(
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
             "wonderland",
         );
         let host =
@@ -8550,7 +8296,7 @@ mod tests_null_decode {
     #[test]
     fn decode_int_rejects_non_norito_i64_payloads() {
         let caller: AccountId = test_account_id(
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
             "wonderland",
         );
         let cases = vec![
@@ -8585,7 +8331,7 @@ mod tests_null_decode {
     #[test]
     fn name_decode_rejects_retired_and_noncanonical_payload_forms() {
         let caller: AccountId = test_account_id(
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
             "wonderland",
         );
         let host =
@@ -8627,7 +8373,7 @@ mod tests_null_decode {
     #[test]
     fn json_decode_rejects_retired_blob_payload_forms() {
         let caller: AccountId = test_account_id(
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
             "wonderland",
         );
         let json = Json::from_str_norito(
@@ -8658,7 +8404,7 @@ mod tests_null_decode {
     #[test]
     fn get_public_input_reads_named_fixture_value() {
         let caller: AccountId = test_account_id(
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
             "wonderland",
         );
         let input_name: Name = "trigger_event_json".parse().expect("public input name");
@@ -8691,7 +8437,7 @@ mod tests_null_decode {
     #[test]
     fn large_public_input_dispatch_spills_to_heap_within_reserved_quote() {
         let caller: AccountId = test_account_id(
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
             "wonderland",
         );
         let input_name: Name = "large_payload".parse().expect("public input name");
@@ -8731,7 +8477,7 @@ mod tests_null_decode {
     #[test]
     fn schema_decode_rejects_blob() {
         let caller: AccountId = test_account_id(
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
             "wonderland",
         );
         let host =
@@ -8766,7 +8512,7 @@ mod tests_null_decode {
     #[test]
     fn wsv_schema_helpers_charge_payload_bytes() {
         let caller: AccountId = test_account_id(
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
             "wonderland",
         );
         let host =
@@ -8837,7 +8583,7 @@ mod tests_null_decode {
     #[test]
     fn prepare_codec_quote_is_bounded_and_side_effect_free_for_large_output() {
         let caller: AccountId = test_account_id(
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
             "wonderland",
         );
         let host = WsvHost::new_with_subject(MockWorldStateView::new(), caller, HashMap::new());
@@ -8878,7 +8624,7 @@ mod tests_null_decode {
     #[test]
     fn prepare_codec_quote_does_not_decode_malformed_payload_before_debit() {
         let caller: AccountId = test_account_id(
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
             "wonderland",
         );
         let host = WsvHost::new_with_subject(MockWorldStateView::new(), caller, HashMap::new());
@@ -8905,7 +8651,7 @@ mod tests_null_decode {
     #[test]
     fn bounded_prepare_rejects_forged_extent_without_cloning_or_mutation() {
         let caller: AccountId = test_account_id(
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
             "wonderland",
         );
         let host = WsvHost::new_with_subject(MockWorldStateView::new(), caller, HashMap::new());
@@ -8933,7 +8679,7 @@ mod tests_null_decode {
     #[test]
     fn bounded_prepare_accepts_maximal_practical_payload_under_default_budget() {
         let caller: AccountId = test_account_id(
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
             "wonderland",
         );
         let host = WsvHost::new_with_subject(MockWorldStateView::new(), caller, HashMap::new());
@@ -8954,7 +8700,7 @@ mod tests_null_decode {
     #[test]
     fn insufficient_gas_prevents_prepare_from_querying_or_allocating() {
         let caller: AccountId = test_account_id(
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
             "wonderland",
         );
         let input_name: Name = "trigger_event_json".parse().expect("public input name");
@@ -9000,7 +8746,7 @@ mod tests_null_decode {
     #[test]
     fn bounded_codec_quote_refunds_unused_reserve() {
         let caller: AccountId = test_account_id(
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
             "wonderland",
         );
         let host = WsvHost::new_with_subject(MockWorldStateView::new(), caller, HashMap::new());
@@ -9038,7 +8784,7 @@ mod tests_null_decode {
     #[test]
     fn json_quantity_getter_accepts_only_canonical_strings() {
         let caller: AccountId = test_account_id(
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
             "wonderland",
         );
         let mut host = WsvHost::new_with_subject(MockWorldStateView::new(), caller, HashMap::new());
@@ -9100,7 +8846,7 @@ mod tests_null_decode {
     #[test]
     fn asset_amount_decoder_requires_canonical_amount_pointer() {
         let caller: AccountId = test_account_id(
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
             "wonderland",
         );
         let host = WsvHost::new_with_subject(MockWorldStateView::new(), caller, HashMap::new());
@@ -9174,7 +8920,7 @@ mod tests_null_decode {
     #[test]
     fn state_scan_quote_reserves_once_and_exact_execution_handles_adversarial_page() {
         let caller: AccountId = test_account_id(
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
             "wonderland",
         );
         let mut wsv = MockWorldStateView::new();
@@ -9228,7 +8974,7 @@ mod tests_null_decode {
     #[test]
     fn state_scan_quote_does_not_trust_malformed_name_payload() {
         let caller: AccountId = test_account_id(
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
             "wonderland",
         );
         let host = WsvHost::new_with_subject(MockWorldStateView::new(), caller, HashMap::new());
@@ -9253,7 +8999,7 @@ mod tests_null_decode {
     #[test]
     fn wsv_host_tlv_eq_rejects_equal_invalid_raw_addresses() {
         let caller: AccountId = test_account_id(
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
             "wonderland",
         );
         let mut host = WsvHost::new_with_subject(MockWorldStateView::new(), caller, HashMap::new());

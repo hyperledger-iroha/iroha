@@ -91,7 +91,7 @@ nativeTest("real native addon fingerprints, decodes, and rebuilds the policy ins
     schema_version: 1,
     chain_id: "validation-fee-js-test",
     genesis_hash: "12".repeat(32),
-    policy_version: 1,
+    policy_version: "1",
     previous_policy_hash: null,
     ds_asset_id: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
     ds_scale: 2,
@@ -101,7 +101,7 @@ nativeTest("real native addon fingerprints, decodes, and rebuilds the policy ins
       charging_mode: "PER_QUALIFYING_TRANSFER_INSTRUCTION",
       value: null,
     },
-    effective_from_height: 121_100,
+    effective_from_height: "121100",
     expires_after_height: null,
     exemption_classes: [],
     treasury_payout_binding: null,
@@ -118,7 +118,7 @@ nativeTest("real native addon fingerprints, decodes, and rebuilds the policy ins
     ProposeValidationFeePolicy: {
       policy,
       payout_lifecycle_proposal_id: null,
-      referendum_window: { lower: 100, upper: 140 },
+      referendum_window: { lower: "100", upper: "140" },
       mode: "Plain",
     },
   };

@@ -7,6 +7,7 @@ use iroha_config::parameters::defaults;
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
+    smartcontracts::Execute,
     state::{State, World, WorldReadOnly},
     tx::ValidationFail,
 };
@@ -264,11 +265,7 @@ fn schedule_shielded_only_requires_window() {
         Hash::new(b"missing-window"),
         None,
     );
-    let result =
-        stx2.world
-            .executor()
-            .clone()
-            .execute_instruction(&mut stx2, &owner, schedule.into());
+    let result = schedule.execute(&owner, &mut stx2);
     let err = result.expect_err("transition without window must fail");
     let msg = format!("{err:?}");
     assert!(
@@ -345,10 +342,8 @@ fn shielded_transition_aborts_when_transparent_supply_non_zero() {
         Hash::new(b"abort-shielded"),
         Some(defaults::confidential::POLICY_TRANSITION_WINDOW_BLOCKS),
     );
-    stx2.world
-        .executor()
-        .clone()
-        .execute_instruction(&mut stx2, &owner, schedule.into())
+    schedule
+        .execute(&owner, &mut stx2)
         .expect("schedule transition");
     stx2.apply();
     block2.commit().expect("commit scheduling block");
@@ -440,10 +435,8 @@ fn policy_transition_reaches_shielded_only_on_schedule() {
         Hash::new(b"auto-apply"),
         Some(1),
     );
-    stx2.world
-        .executor()
-        .clone()
-        .execute_instruction(&mut stx2, &owner, InstructionBox::from(schedule))
+    schedule
+        .execute(&owner, &mut stx2)
         .expect("schedule transition");
     stx2.apply();
     block2.commit().expect("commit scheduling block");

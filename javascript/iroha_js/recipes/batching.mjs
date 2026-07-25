@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 
 import { Buffer } from "node:buffer";
+import { ed25519 } from "@noble/curves/ed25519";
 import {
+  AccountAddress,
   buildMintAssetInstruction,
   buildBurnAssetInstruction,
   buildTransferAssetInstruction,
@@ -13,13 +15,17 @@ import {
 } from "../src/index.js";
 
 const chainId = "batching-sample-chain";
-const authority =
-  "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
+const privateKey = Buffer.from(
+  "CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53",
+  "hex",
+);
+const authority = AccountAddress.fromAccount({
+  publicKey: Buffer.from(ed25519.getPublicKey(privateKey)),
+}).toI105();
 const recipient =
   "sorauﾛ1Prﾇuﾉﾉ4ﾒdﾛﾑｲﾄn5tﾆﾒrsR9ﾋ2Gｷ7gWeFzyﾁﾋﾁAHﾌTJQQ4L";
 const assetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
 const assetId = `${assetDefinitionId}#${authority}`;
-const privateKey = Buffer.alloc(32, 0x11);
 // Local encoding-only intent. Live submissions must replace the empty maxima
 // through `quoteAndSignTransaction` before signing.
 const feePayment = { payer: "authority", chargeLimits: [] };

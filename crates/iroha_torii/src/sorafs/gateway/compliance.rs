@@ -18,7 +18,7 @@ use std::{
         Arc, RwLock,
         atomic::{AtomicU64, Ordering as AtomicOrdering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use blake3::Hasher;
@@ -159,12 +159,6 @@ pub enum GatewayComplianceSubjectKindV1 {
     Cid,
     /// Canonical URL.
     Url,
-    /// Canonical account address.
-    AccountId,
-    /// Canonical account alias.
-    AccountAlias,
-    /// Perceptual-family identifier.
-    PerceptualFamily,
 }
 
 /// Baseline deny rule from an admitted feed.
@@ -496,12 +490,7 @@ impl GatewayComplianceCatalogV1 {
         if self.payload.policy_digest != policy.canonical_digest()? {
             return Err(GatewayComplianceError::PolicyDigestMismatch);
         }
-        if observed_at_unix == 0
-            || self.payload.generated_at_unix > observed_at_unix.saturating_add(max_clock_skew_secs)
-            || observed_at_unix >= self.payload.valid_until_unix
-        {
-            return Err(GatewayComplianceError::CatalogNotFresh);
-        }
+        validate_catalog_freshness(&self.payload, observed_at_unix, max_clock_skew_secs)?;
         if self.approvals.len() > MAX_GATEWAY_COMPLIANCE_SIGNERS_V1 {
             return Err(GatewayComplianceError::ResourceLimit {
                 resource: "catalog approvals",
@@ -899,6 +888,10 @@ pub trait GatewayComplianceFeedTransport: Debug + Send + Sync {
 pub struct GatewayComplianceControllerConfig {
     /// Threshold signature and acknowledgement policy.
     pub trust_policy: GatewayComplianceTrustPolicyV1,
+    /// Exact regional serving scope for this independently administered gateway.
+    pub region_scope: String,
+    /// Exact gateway serving scope bound to one active gateway signer identity.
+    pub gateway_scope: String,
     /// Configured external feeds in strict feed-id order.
     pub feeds: Vec<GatewayComplianceFeedPolicy>,
     /// Fetch and decompression limits.
@@ -917,6 +910,43 @@ impl GatewayComplianceControllerConfig {
     /// Validate bounds, ordering, HTTPS allowlists, and pins.
     pub fn validate(&self) -> Result<(), GatewayComplianceError> {
         self.trust_policy.validate()?;
+        if normalize_scope(&self.region_scope).ok().as_deref() != Some(self.region_scope.as_str())
+            || !self.region_scope.starts_with("region:")
+        {
+            return Err(GatewayComplianceError::InvalidPolicy(
+                "region_scope must be one canonical region:<id> scope".into(),
+            ));
+        }
+        if normalize_scope(&self.gateway_scope).ok().as_deref()
+            != Some(self.gateway_scope.as_str())
+        {
+            return Err(GatewayComplianceError::InvalidPolicy(
+                "gateway_scope must be one canonical gateway:<id> scope".into(),
+            ));
+        }
+        let gateway_id = self
+            .gateway_scope
+            .strip_prefix("gateway:")
+            .ok_or_else(|| {
+                GatewayComplianceError::InvalidPolicy(
+                    "gateway_scope must be one canonical gateway:<id> scope".into(),
+                )
+            })?;
+        if self
+            .trust_policy
+            .gateway_signers
+            .binary_search_by(|signer| signer.signer_id.as_str().cmp(gateway_id))
+            .is_err()
+            || self
+                .trust_policy
+                .revoked_gateway_signer_ids
+                .binary_search_by(|signer_id| signer_id.as_str().cmp(gateway_id))
+                .is_ok()
+        {
+            return Err(GatewayComplianceError::InvalidPolicy(
+                "gateway_scope must name one active configured gateway signer".into(),
+            ));
+        }
         if self.feeds.len() > MAX_GATEWAY_COMPLIANCE_SIGNERS_V1 {
             return Err(GatewayComplianceError::ResourceLimit {
                 resource: "configured feeds",
@@ -1100,6 +1130,30 @@ pub trait GatewayComplianceStore: Debug + Send + Sync {
     fn load(&self) -> Result<Option<Vec<u8>>, GatewayComplianceError>;
     /// Atomically replace the committed checkpoint.
     fn store(&self, bytes: &[u8]) -> Result<(), GatewayComplianceError>;
+}
+
+#[cfg(test)]
+#[derive(Debug, Default)]
+struct TestGatewayComplianceStore {
+    bytes: std::sync::Mutex<Option<Vec<u8>>>,
+}
+
+#[cfg(test)]
+impl GatewayComplianceStore for TestGatewayComplianceStore {
+    fn load(&self) -> Result<Option<Vec<u8>>, GatewayComplianceError> {
+        self.bytes
+            .lock()
+            .map(|guard| guard.clone())
+            .map_err(|_| GatewayComplianceError::StatePoisoned)
+    }
+
+    fn store(&self, bytes: &[u8]) -> Result<(), GatewayComplianceError> {
+        *self
+            .bytes
+            .lock()
+            .map_err(|_| GatewayComplianceError::StatePoisoned)? = Some(bytes.to_vec());
+        Ok(())
+    }
 }
 
 /// Filesystem store with no-follow temp creation, fsync, and atomic rename.
@@ -1456,11 +1510,19 @@ impl GatewayComplianceController {
         )?;
         validate_catalog_against_config(&candidate.payload, &self.config)?;
         validate_catalog_transition(guard.chain_head.as_ref(), candidate)?;
-        let accepted = guard
-            .acknowledgements
-            .iter()
-            .filter(|ack| ack.payload.accepted)
-            .count();
+        let mut accepted = 0;
+        for acknowledgement in &guard.acknowledgements {
+            if !acknowledgement.payload.accepted {
+                continue;
+            }
+            acknowledgement.verify(
+                &self.config.trust_policy,
+                digest,
+                observed_at_unix,
+                self.config.max_clock_skew_secs,
+            )?;
+            accepted += 1;
+        }
         if accepted < usize::from(self.config.trust_policy.gateway_ack_threshold) {
             return Err(GatewayComplianceError::GatewayQuorumNotMet {
                 found: accepted,
@@ -1533,6 +1595,12 @@ impl GatewayComplianceController {
         {
             return Err(GatewayComplianceError::RollbackTargetMismatch);
         }
+        previous.verify(
+            &self.config.trust_policy,
+            observed_at_unix,
+            self.config.max_clock_skew_secs,
+        )?;
+        validate_catalog_against_config(&previous.payload, &self.config)?;
         if guard.history.len() >= self.config.max_history_entries {
             return Err(GatewayComplianceError::HistoryFull);
         }
@@ -1569,22 +1637,49 @@ impl GatewayComplianceController {
         observed_at_unix: u64,
     ) -> Result<GatewayComplianceDecision, GatewayComplianceError> {
         let scope = normalize_scope(scope)?;
+        self.evaluate_scopes(&[scope.as_str()], subject_kind, subject, observed_at_unix)
+    }
+
+    /// Evaluate the complete serving scope for this gateway while preserving
+    /// precedence across global, regional, and gateway-specific records.
+    pub fn evaluate_serving(
+        &self,
+        subject_kind: GatewayComplianceSubjectKindV1,
+        subject: &str,
+        observed_at_unix: u64,
+    ) -> Result<GatewayComplianceDecision, GatewayComplianceError> {
+        self.evaluate_scopes(
+            &[
+                self.config.region_scope.as_str(),
+                self.config.gateway_scope.as_str(),
+            ],
+            subject_kind,
+            subject,
+            observed_at_unix,
+        )
+    }
+
+    fn evaluate_scopes(
+        &self,
+        scopes: &[&str],
+        subject_kind: GatewayComplianceSubjectKindV1,
+        subject: &str,
+        observed_at_unix: u64,
+    ) -> Result<GatewayComplianceDecision, GatewayComplianceError> {
         let subject = normalize_subject(subject_kind, subject)?;
         let guard = self.read_state()?;
-        let Some(catalog) = guard.serving.as_ref() else {
-            return Ok(GatewayComplianceDecision {
-                disposition: GatewayComplianceDisposition::Allow,
-                source: GatewayComplianceDecisionSource::NoMatch,
-                reference_id: None,
-                catalog_digest: None,
-            });
-        };
+        let catalog = guard
+            .serving
+            .as_ref()
+            .ok_or(GatewayComplianceError::NoServingCatalog)?;
         let catalog_digest = catalog.payload.catalog_digest()?;
-        if observed_at_unix >= catalog.payload.valid_until_unix {
-            return Err(GatewayComplianceError::CatalogNotFresh);
-        }
+        validate_catalog_freshness(
+            &catalog.payload,
+            observed_at_unix,
+            self.config.max_clock_skew_secs,
+        )?;
         if let Some(hold) = catalog.payload.legal_safety_holds.iter().find(|hold| {
-            scope_matches(&hold.scope, &scope)
+            scopes_match(&hold.scope, scopes)
                 && hold.subject_kind == subject_kind
                 && hold.subject == subject
                 && active_interval(
@@ -1601,7 +1696,7 @@ impl GatewayComplianceController {
             });
         }
         if let Some(appeal) = catalog.payload.appeal_overrides.iter().find(|appeal| {
-            scope_matches(&appeal.scope, &scope)
+            scopes_match(&appeal.scope, scopes)
                 && appeal.subject_kind == subject_kind
                 && appeal.subject == subject
                 && active_interval(
@@ -1618,7 +1713,7 @@ impl GatewayComplianceController {
             });
         }
         if let Some(rule) = catalog.payload.baseline_rules.iter().find(|rule| {
-            scope_matches(&rule.scope, &scope)
+            scopes_match(&rule.scope, scopes)
                 && rule.subject_kind == subject_kind
                 && rule.subject == subject
                 && active_interval(
@@ -1630,7 +1725,7 @@ impl GatewayComplianceController {
                     toggle_enabled(
                         &catalog.payload.toggles,
                         toggle_id,
-                        &scope,
+                        &rule.scope,
                         observed_at_unix,
                     )
                 })
@@ -1686,6 +1781,107 @@ impl GatewayComplianceController {
         **guard = next;
         Ok(())
     }
+}
+
+/// Build a fresh governed empty catalog for Torii request tests.
+#[cfg(test)]
+pub(crate) fn allow_all_gateway_compliance_controller_for_tests(
+) -> Arc<GatewayComplianceController> {
+    use ed25519_dalek::{Signer as _, SigningKey};
+
+    let catalog_key = SigningKey::from_bytes(&[0xC1; 32]);
+    let gateway_key = SigningKey::from_bytes(&[0xD2; 32]);
+    let trust_policy = GatewayComplianceTrustPolicyV1 {
+        policy_id: [0xE3; 32],
+        catalog_threshold: 1,
+        catalog_signers: vec![GatewayComplianceTrustedSignerV1 {
+            signer_id: "catalog-test".into(),
+            public_key: catalog_key.verifying_key().to_bytes(),
+        }],
+        revoked_catalog_signer_ids: Vec::new(),
+        gateway_ack_threshold: 1,
+        gateway_signers: vec![GatewayComplianceTrustedSignerV1 {
+            signer_id: "gateway-test".into(),
+            public_key: gateway_key.verifying_key().to_bytes(),
+        }],
+        revoked_gateway_signer_ids: Vec::new(),
+    };
+    let config = GatewayComplianceControllerConfig {
+        trust_policy: trust_policy.clone(),
+        region_scope: "region:test".into(),
+        gateway_scope: "gateway:gateway-test".into(),
+        feeds: Vec::new(),
+        fetch_limits: GatewayComplianceFetchLimits::default(),
+        max_clock_skew_secs: 300,
+        max_feed_age_secs: 3_600,
+        max_catalog_validity_secs: 86_400,
+        max_history_entries: 16,
+    };
+    let observed_at_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("test clock must follow the Unix epoch")
+        .as_secs()
+        .max(1);
+    let payload = GatewayComplianceCatalogPayloadV1 {
+        version: GATEWAY_COMPLIANCE_CATALOG_VERSION_V1,
+        sequence: 1,
+        predecessor_digest: None,
+        policy_digest: trust_policy
+            .canonical_digest()
+            .expect("test trust policy must be canonical"),
+        generated_at_unix: observed_at_unix,
+        valid_until_unix: observed_at_unix.saturating_add(86_400),
+        source_anchors: Vec::new(),
+        baseline_rules: Vec::new(),
+        appeal_overrides: Vec::new(),
+        legal_safety_holds: Vec::new(),
+        toggles: Vec::new(),
+    };
+    let signing_digest = payload
+        .signing_digest()
+        .expect("test catalog must be canonical");
+    let catalog = GatewayComplianceCatalogV1 {
+        payload,
+        approvals: vec![GatewayComplianceCatalogApprovalV1 {
+            version: GATEWAY_COMPLIANCE_APPROVAL_VERSION_V1,
+            signer_id: "catalog-test".into(),
+            signature: catalog_key.sign(&signing_digest).to_bytes(),
+        }],
+    };
+    let controller = Arc::new(
+        GatewayComplianceController::new(config, Arc::new(TestGatewayComplianceStore::default()))
+            .expect("test compliance controller must initialize"),
+    );
+    let catalog_digest = controller
+        .stage_catalog(catalog, observed_at_unix)
+        .expect("test catalog must stage");
+    let acknowledgement_payload = GatewayComplianceAcknowledgementPayloadV1 {
+        version: GATEWAY_COMPLIANCE_ACK_VERSION_V1,
+        gateway_id: "gateway-test".into(),
+        catalog_digest,
+        observed_at_unix,
+        accepted: true,
+        rejection_code: None,
+    };
+    let acknowledgement_digest = hash_canonical(
+        ACK_SIGNING_DOMAIN_V1,
+        &acknowledgement_payload,
+        MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1,
+    )
+    .expect("test acknowledgement must encode");
+    controller
+        .acknowledge(
+            GatewayComplianceAcknowledgementV1 {
+                payload: acknowledgement_payload,
+                signature: gateway_key.sign(&acknowledgement_digest).to_bytes(),
+            },
+            observed_at_unix,
+        )
+        .expect("test acknowledgement must commit");
+    controller
+        .promote(observed_at_unix)
+        .expect("test catalog must promote");
+    controller
 }
 
 fn validate_signer_inventory(
@@ -1894,31 +2090,84 @@ fn normalize_subject(
     match kind {
         GatewayComplianceSubjectKindV1::Provider
         | GatewayComplianceSubjectKindV1::ManifestDigest => normalize_hex(trimmed, 64),
-        GatewayComplianceSubjectKindV1::PerceptualFamily => normalize_hex(trimmed, 32),
-        GatewayComplianceSubjectKindV1::Cid => {
-            let normalized = trimmed.to_ascii_lowercase();
-            if !normalized.starts_with('b')
-                || !normalized
-                    .bytes()
-                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
-            {
-                return Err(GatewayComplianceError::InvalidCatalog(
-                    "CID subjects must use canonical lowercase base32".into(),
-                ));
-            }
-            Ok(normalized)
-        }
+        GatewayComplianceSubjectKindV1::Cid => normalize_cid(trimmed),
         GatewayComplianceSubjectKindV1::Url => normalize_subject_url(trimmed),
-        GatewayComplianceSubjectKindV1::AccountId
-        | GatewayComplianceSubjectKindV1::AccountAlias => {
-            if trimmed.bytes().any(|byte| byte.is_ascii_whitespace()) {
+    }
+}
+
+fn normalize_cid(value: &str) -> Result<String, GatewayComplianceError> {
+    let encoded = value.strip_prefix('b').ok_or_else(|| {
+        GatewayComplianceError::InvalidCatalog(
+            "CID subjects must use the lowercase base32 multibase prefix".into(),
+        )
+    })?;
+    if encoded.is_empty()
+        || encoded
+            .bytes()
+            .any(|byte| !matches!(byte, b'a'..=b'z' | b'2'..=b'7'))
+    {
+        return Err(GatewayComplianceError::InvalidCatalog(
+            "CID subjects must use canonical lowercase base32 without padding".into(),
+        ));
+    }
+    let decoded = decode_base32_lower(encoded)?;
+    if encode_base32_lower(&decoded) != encoded {
+        return Err(GatewayComplianceError::InvalidCatalog(
+            "CID subject is not a canonical base32 round-trip".into(),
+        ));
+    }
+    Ok(value.to_owned())
+}
+
+fn decode_base32_lower(value: &str) -> Result<Vec<u8>, GatewayComplianceError> {
+    let mut output = Vec::with_capacity(value.len().saturating_mul(5) / 8);
+    let mut accumulator = 0_u16;
+    let mut bits = 0_u8;
+    for byte in value.bytes() {
+        let digit = match byte {
+            b'a'..=b'z' => byte - b'a',
+            b'2'..=b'7' => byte - b'2' + 26,
+            _ => {
                 return Err(GatewayComplianceError::InvalidCatalog(
-                    "account subjects must not contain whitespace".into(),
+                    "CID subject contains a non-base32 digit".into(),
                 ));
             }
-            Ok(trimmed.to_owned())
+        };
+        accumulator = (accumulator << 5) | u16::from(digit);
+        bits += 5;
+        if bits >= 8 {
+            bits -= 8;
+            output.push((accumulator >> bits) as u8);
+            accumulator &= (1_u16 << bits).saturating_sub(1);
         }
     }
+    if bits != 0 && accumulator != 0 {
+        return Err(GatewayComplianceError::InvalidCatalog(
+            "CID subject contains non-zero base32 padding bits".into(),
+        ));
+    }
+    Ok(output)
+}
+
+fn encode_base32_lower(value: &[u8]) -> String {
+    const ALPHABET: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
+    let mut output = String::with_capacity(value.len().saturating_mul(8).div_ceil(5));
+    let mut accumulator = 0_u16;
+    let mut bits = 0_u8;
+    for byte in value {
+        accumulator = (accumulator << 8) | u16::from(*byte);
+        bits += 8;
+        while bits >= 5 {
+            bits -= 5;
+            output.push(char::from(ALPHABET[usize::from((accumulator >> bits) & 0x1f)]));
+            accumulator &= (1_u16 << bits).saturating_sub(1);
+        }
+    }
+    if bits != 0 {
+        let digit = usize::from((accumulator << (5 - bits)) & 0x1f);
+        output.push(char::from(ALPHABET[digit]));
+    }
+    output
 }
 
 fn normalize_hex(value: &str, expected_length: usize) -> Result<String, GatewayComplianceError> {
@@ -2025,6 +2274,20 @@ fn validate_catalog_transition(
                 return Err(GatewayComplianceError::InvalidPredecessor);
             }
         }
+    }
+    Ok(())
+}
+
+fn validate_catalog_freshness(
+    payload: &GatewayComplianceCatalogPayloadV1,
+    observed_at_unix: u64,
+    max_clock_skew_secs: u64,
+) -> Result<(), GatewayComplianceError> {
+    if observed_at_unix == 0
+        || payload.generated_at_unix > observed_at_unix.saturating_add(max_clock_skew_secs)
+        || observed_at_unix >= payload.valid_until_unix
+    {
+        return Err(GatewayComplianceError::CatalogNotFresh);
     }
     Ok(())
 }
@@ -2193,6 +2456,71 @@ fn validate_checkpoint(
         }
         validate_catalog_against_config(&catalog.payload, config)?;
     }
+    let chain_head_digest = checkpoint
+        .chain_head
+        .as_ref()
+        .map(|catalog| catalog.payload.catalog_digest())
+        .transpose()?;
+    let serving_digest = checkpoint
+        .serving
+        .as_ref()
+        .map(|catalog| catalog.payload.catalog_digest())
+        .transpose()?;
+    let previous_serving_digest = checkpoint
+        .previous_serving
+        .as_ref()
+        .map(|catalog| catalog.payload.catalog_digest())
+        .transpose()?;
+    match (
+        checkpoint.chain_head.as_ref(),
+        checkpoint.serving.as_ref(),
+        checkpoint.previous_serving.as_ref(),
+    ) {
+        (None, None, None) => {}
+        (Some(_), Some(_), previous) => {
+            if ![serving_digest, previous_serving_digest]
+                .into_iter()
+                .flatten()
+                .any(|digest| Some(digest) == chain_head_digest)
+            {
+                return Err(GatewayComplianceError::InvalidCheckpoint(
+                    "chain head is not one of the retained serving catalogs".into(),
+                ));
+            }
+            if let Some(previous) = previous {
+                let serving = checkpoint.serving.as_ref().expect("matched Some serving");
+                if serving_digest == previous_serving_digest {
+                    return Err(GatewayComplianceError::InvalidCheckpoint(
+                        "serving and previous_serving catalogs must be distinct".into(),
+                    ));
+                }
+                let (older, newer) = if serving.payload.sequence < previous.payload.sequence {
+                    (serving, previous)
+                } else {
+                    (previous, serving)
+                };
+                if older.payload.sequence.checked_add(1) == Some(newer.payload.sequence) {
+                    validate_catalog_transition(Some(older), newer).map_err(|_| {
+                        GatewayComplianceError::InvalidCheckpoint(
+                            "adjacent retained catalogs break predecessor lineage".into(),
+                        )
+                    })?;
+                } else if chain_head_digest != serving_digest
+                    || older.payload.sequence >= newer.payload.sequence
+                {
+                    return Err(GatewayComplianceError::InvalidCheckpoint(
+                        "non-adjacent retained catalogs are inconsistent with a promotion after rollback"
+                            .into(),
+                    ));
+                }
+            }
+        }
+        _ => {
+            return Err(GatewayComplianceError::InvalidCheckpoint(
+                "chain_head, serving, and previous_serving topology is inconsistent".into(),
+            ));
+        }
+    }
     if let Some(candidate) = checkpoint.candidate.as_ref() {
         validate_catalog_transition(checkpoint.chain_head.as_ref(), candidate)?;
         let digest = candidate.payload.catalog_digest()?;
@@ -2217,16 +2545,66 @@ fn validate_checkpoint(
         ));
     }
     let mut operation_ids = BTreeSet::new();
+    let mut active_history_digest = None;
+    let mut last_promotion_digest = None;
+    let mut previous_recorded_at = 0;
     for record in &checkpoint.history {
         if record.operation_id.iter().all(|byte| *byte == 0)
+            || record.serving_digest.iter().all(|byte| *byte == 0)
             || !operation_ids.insert(record.operation_id)
         {
             return Err(GatewayComplianceError::InvalidCheckpoint(
-                "history contains zero or duplicate operation ids".into(),
+                "history contains zero digests or duplicate operation ids".into(),
             ));
         }
         validate_token(&record.action, "history action")?;
         validate_token(&record.reason_code, "history reason_code")?;
+        if record.recorded_at_unix == 0 || record.recorded_at_unix < previous_recorded_at {
+            return Err(GatewayComplianceError::InvalidCheckpoint(
+                "history timestamps must be non-zero and monotonic".into(),
+            ));
+        }
+        if record.previous_serving_digest != active_history_digest {
+            return Err(GatewayComplianceError::InvalidCheckpoint(
+                "history serving lineage is discontinuous".into(),
+            ));
+        }
+        match record.action.as_str() {
+            "promotion" => last_promotion_digest = Some(record.serving_digest),
+            "rollback" if record.previous_serving_digest.is_some() => {}
+            "rollback" => {
+                return Err(GatewayComplianceError::InvalidCheckpoint(
+                    "rollback history requires a previous serving digest".into(),
+                ));
+            }
+            _ => {
+                return Err(GatewayComplianceError::InvalidCheckpoint(
+                    "history action must be promotion or rollback".into(),
+                ));
+            }
+        }
+        active_history_digest = Some(record.serving_digest);
+        previous_recorded_at = record.recorded_at_unix;
+    }
+    if checkpoint.history.is_empty() {
+        if chain_head_digest.is_some()
+            || serving_digest.is_some()
+            || previous_serving_digest.is_some()
+        {
+            return Err(GatewayComplianceError::InvalidCheckpoint(
+                "serving catalogs require promotion history".into(),
+            ));
+        }
+    } else {
+        let last = checkpoint.history.last().expect("history is non-empty");
+        if active_history_digest != serving_digest
+            || last_promotion_digest != chain_head_digest
+            || last.previous_serving_digest != previous_serving_digest
+        {
+            return Err(GatewayComplianceError::InvalidCheckpoint(
+                "checkpoint pointers do not match durable history lineage".into(),
+            ));
+        }
     }
     encode_bounded(checkpoint, MAX_GATEWAY_COMPLIANCE_CHECKPOINT_BYTES_V1)?;
     Ok(())
@@ -2267,23 +2645,27 @@ fn fetch_feed_bytes(
     limits: GatewayComplianceFetchLimits,
     transport: &dyn GatewayComplianceFeedTransport,
 ) -> Result<Vec<u8>, GatewayComplianceError> {
+    let started = Instant::now();
     let mut current = validate_feed_url(feed, &feed.url)?;
     for redirect_count in 0..=limits.max_redirects {
         let host = current
             .host_str()
             .ok_or_else(|| GatewayComplianceError::UnsafeUrl("missing host".into()))?;
-        let mut addresses = transport.resolve(host, limits.connect_timeout)?;
+        let remaining = remaining_fetch_time(started, limits.total_timeout)?;
+        let mut addresses = transport.resolve(host, limits.connect_timeout.min(remaining))?;
+        let remaining = remaining_fetch_time(started, limits.total_timeout)?;
         normalize_resolved_addresses(&mut addresses, limits.max_dns_addresses)?;
         let response = transport.fetch(&GatewayComplianceFetchRequest {
             url: current.clone(),
             pinned_addresses: addresses.clone(),
-            connect_timeout: limits.connect_timeout,
-            total_timeout: limits.total_timeout,
+            connect_timeout: limits.connect_timeout.min(remaining),
+            total_timeout: remaining,
             max_encoded_bytes: limits.max_encoded_bytes,
         })?;
-        if response.elapsed > limits.total_timeout {
+        if response.elapsed > remaining {
             return Err(GatewayComplianceError::FetchTimeout);
         }
+        remaining_fetch_time(started, limits.total_timeout)?;
         if !addresses.contains(&response.connected_address) {
             return Err(GatewayComplianceError::DnsRebinding);
         }
@@ -2301,7 +2683,9 @@ fn fetch_feed_bytes(
                 maximum: limits.max_encoded_bytes,
             });
         }
-        let mut revalidated = transport.resolve(host, limits.connect_timeout)?;
+        let remaining = remaining_fetch_time(started, limits.total_timeout)?;
+        let mut revalidated = transport.resolve(host, limits.connect_timeout.min(remaining))?;
+        remaining_fetch_time(started, limits.total_timeout)?;
         normalize_resolved_addresses(&mut revalidated, limits.max_dns_addresses)?;
         if revalidated != addresses {
             return Err(GatewayComplianceError::DnsRebinding);
@@ -2325,13 +2709,26 @@ fn fetch_feed_bytes(
                 response.status
             )));
         }
-        return decompress_bounded(
+        remaining_fetch_time(started, limits.total_timeout)?;
+        let decoded = decompress_bounded(
             &response.body,
             response.content_encoding,
             limits.max_decoded_bytes,
-        );
+        )?;
+        remaining_fetch_time(started, limits.total_timeout)?;
+        return Ok(decoded);
     }
     Err(GatewayComplianceError::TooManyRedirects)
+}
+
+fn remaining_fetch_time(
+    started: Instant,
+    total_timeout: Duration,
+) -> Result<Duration, GatewayComplianceError> {
+    total_timeout
+        .checked_sub(started.elapsed())
+        .filter(|remaining| !remaining.is_zero())
+        .ok_or(GatewayComplianceError::FetchTimeout)
 }
 
 fn validate_feed_url(
@@ -2542,8 +2939,8 @@ fn active_interval(start: u64, end: Option<u64>, observed: u64) -> bool {
     start <= observed && end.is_none_or(|end| observed < end)
 }
 
-fn scope_matches(rule_scope: &str, request_scope: &str) -> bool {
-    rule_scope == "global" || rule_scope == request_scope
+fn scopes_match(rule_scope: &str, request_scopes: &[&str]) -> bool {
+    rule_scope == "global" || request_scopes.contains(&rule_scope)
 }
 
 fn toggle_enabled(
@@ -2942,6 +3339,8 @@ mod tests {
     fn config() -> GatewayComplianceControllerConfig {
         GatewayComplianceControllerConfig {
             trust_policy: trust_policy(),
+            region_scope: "region:eu".into(),
+            gateway_scope: "gateway:gateway-eu".into(),
             feeds: vec![feed_policy()],
             fetch_limits: GatewayComplianceFetchLimits::default(),
             max_clock_skew_secs: 300,
@@ -3004,6 +3403,15 @@ mod tests {
         catalog_digest: [u8; 32],
         accepted: bool,
     ) -> GatewayComplianceAcknowledgementV1 {
+        acknowledgement_at(gateway_index, catalog_digest, accepted, NOW + 10)
+    }
+
+    fn acknowledgement_at(
+        gateway_index: usize,
+        catalog_digest: [u8; 32],
+        accepted: bool,
+        observed_at_unix: u64,
+    ) -> GatewayComplianceAcknowledgementV1 {
         let gateway_id = if gateway_index == 0 {
             "gateway-eu"
         } else {
@@ -3013,7 +3421,7 @@ mod tests {
             version: GATEWAY_COMPLIANCE_ACK_VERSION_V1,
             gateway_id: gateway_id.into(),
             catalog_digest,
-            observed_at_unix: NOW + 10,
+            observed_at_unix,
             accepted,
             rejection_code: (!accepted).then(|| "reload-failed".into()),
         };
@@ -3026,6 +3434,44 @@ mod tests {
         GatewayComplianceAcknowledgementV1 {
             payload,
             signature: gateway_keys()[gateway_index].sign(&digest).to_bytes(),
+        }
+    }
+
+    fn rollback_authorization(
+        operation_id: [u8; 32],
+        from_catalog_digest: [u8; 32],
+        to_catalog_digest: [u8; 32],
+        authorized_at_unix: u64,
+    ) -> GatewayComplianceRollbackV1 {
+        let payload = GatewayComplianceRollbackPayloadV1 {
+            version: GATEWAY_COMPLIANCE_ROLLBACK_VERSION_V1,
+            operation_id,
+            from_catalog_digest,
+            to_catalog_digest,
+            reason_code: "bad-feed".into(),
+            authorized_at_unix,
+        };
+        let digest = hash_canonical(
+            ROLLBACK_SIGNING_DOMAIN_V1,
+            &payload,
+            MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1,
+        )
+        .expect("rollback digest");
+        let keys = catalog_keys();
+        GatewayComplianceRollbackV1 {
+            payload,
+            approvals: vec![
+                GatewayComplianceCatalogApprovalV1 {
+                    version: GATEWAY_COMPLIANCE_APPROVAL_VERSION_V1,
+                    signer_id: "council-a".into(),
+                    signature: keys[0].sign(&digest).to_bytes(),
+                },
+                GatewayComplianceCatalogApprovalV1 {
+                    version: GATEWAY_COMPLIANCE_APPROVAL_VERSION_V1,
+                    signer_id: "council-b".into(),
+                    signature: keys[1].sign(&digest).to_bytes(),
+                },
+            ],
         }
     }
 
@@ -3134,6 +3580,128 @@ mod tests {
     }
 
     #[test]
+    fn serving_rejects_zero_rolled_back_and_expired_clocks() {
+        let controller =
+            GatewayComplianceController::new(config(), Arc::new(MemoryStore::default()))
+                .expect("controller");
+        promote(&controller, sign_catalog(payload(1, None)));
+        for observed_at_unix in [0, NOW - 301, NOW + 3_600] {
+            assert!(matches!(
+                controller.evaluate_serving(
+                    GatewayComplianceSubjectKindV1::ManifestDigest,
+                    &subject(1),
+                    observed_at_unix,
+                ),
+                Err(GatewayComplianceError::CatalogNotFresh)
+            ));
+        }
+    }
+
+    #[test]
+    fn promotion_revalidates_acknowledgement_freshness() {
+        let controller =
+            GatewayComplianceController::new(config(), Arc::new(MemoryStore::default()))
+                .expect("controller");
+        let digest = controller
+            .stage_catalog(sign_catalog(payload(1, None)), NOW + 5)
+            .expect("stage");
+        for gateway_index in 0..2 {
+            controller
+                .acknowledge(
+                    acknowledgement_at(gateway_index, digest, true, NOW + 10),
+                    NOW + 10,
+                )
+                .expect("acknowledge");
+        }
+        assert!(matches!(
+            controller.promote(NOW + 311),
+            Err(GatewayComplianceError::InvalidAcknowledgement(_))
+        ));
+        assert!(
+            controller
+                .checkpoint()
+                .expect("checkpoint")
+                .serving
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn promotion_rejects_clock_rollback_in_history() {
+        let controller =
+            GatewayComplianceController::new(config(), Arc::new(MemoryStore::default()))
+                .expect("controller");
+        let first_digest = controller
+            .stage_catalog(sign_catalog(payload(1, None)), NOW + 5)
+            .expect("stage first");
+        for gateway_index in 0..2 {
+            controller
+                .acknowledge(
+                    acknowledgement_at(gateway_index, first_digest, true, NOW + 10),
+                    NOW + 10,
+                )
+                .expect("acknowledge first");
+        }
+        controller.promote(NOW + 100).expect("promote first");
+
+        let mut second = payload(2, Some(first_digest));
+        second.generated_at_unix = NOW + 40;
+        second.valid_until_unix = NOW + 1_000;
+        let second_digest = controller
+            .stage_catalog(sign_catalog(second), NOW + 45)
+            .expect("stage second");
+        for gateway_index in 0..2 {
+            controller
+                .acknowledge(
+                    acknowledgement_at(gateway_index, second_digest, true, NOW + 50),
+                    NOW + 50,
+                )
+                .expect("acknowledge second");
+        }
+        assert!(matches!(
+            controller.promote(NOW + 50),
+            Err(GatewayComplianceError::InvalidCheckpoint(_))
+        ));
+        assert_eq!(
+            controller
+                .checkpoint()
+                .expect("checkpoint")
+                .chain_head
+                .expect("chain head")
+                .payload
+                .catalog_digest()
+                .expect("digest"),
+            first_digest
+        );
+    }
+
+    #[test]
+    fn cid_subjects_require_canonical_lowercase_base32_round_trip() {
+        let canonical = "bafyr6iffuws2ljnfuws2ljnfuws2ljnfuws2ljnfuws2ljnfuws2ljnfuu";
+        assert_eq!(
+            normalize_subject(GatewayComplianceSubjectKindV1::Cid, canonical)
+                .expect("canonical CID"),
+            canonical
+        );
+        for malformed in [
+            "",
+            "b",
+            "Bafyr6iffuws2ljnfuws2ljnfuws2ljnfuws2ljnfuws2ljnfuws2ljnfuu",
+            "ba0",
+            "ba1",
+            "ba8",
+            "ba9",
+            "ba",
+            "b=",
+        ] {
+            assert!(
+                normalize_subject(GatewayComplianceSubjectKindV1::Cid, malformed).is_err(),
+                "malformed CID unexpectedly admitted: {malformed}"
+            );
+        }
+    }
+
+    #[test]
     fn controller_config_rejects_unbounded_fetch_and_freshness_windows() {
         let mut redirects = config();
         redirects.fetch_limits.max_redirects = 9;
@@ -3155,6 +3723,150 @@ mod tests {
             freshness.validate(),
             Err(GatewayComplianceError::InvalidPolicy(_))
         ));
+
+        let mut unknown_gateway = config();
+        unknown_gateway.gateway_scope = "gateway:gateway-unknown".into();
+        assert!(matches!(
+            unknown_gateway.validate(),
+            Err(GatewayComplianceError::InvalidPolicy(_))
+        ));
+
+        let mut malformed_region = config();
+        malformed_region.region_scope = "gateway:gateway-eu".into();
+        assert!(matches!(
+            malformed_region.validate(),
+            Err(GatewayComplianceError::InvalidPolicy(_))
+        ));
+    }
+
+    #[test]
+    fn serving_evaluation_fails_closed_without_a_promoted_catalog() {
+        let controller =
+            GatewayComplianceController::new(config(), Arc::new(MemoryStore::default()))
+                .expect("controller");
+        assert!(matches!(
+            controller.evaluate_serving(
+                GatewayComplianceSubjectKindV1::ManifestDigest,
+                &subject(1),
+                NOW
+            ),
+            Err(GatewayComplianceError::NoServingCatalog)
+        ));
+    }
+
+    #[test]
+    fn allow_all_test_controller_serves_from_a_governed_catalog() {
+        let controller = allow_all_gateway_compliance_controller_for_tests();
+        let observed_at_unix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("test clock")
+            .as_secs();
+        let decision = controller
+            .evaluate_serving(
+                GatewayComplianceSubjectKindV1::ManifestDigest,
+                &subject(0xA4),
+                observed_at_unix,
+            )
+            .expect("allow-all decision");
+        assert_eq!(
+            decision.source,
+            GatewayComplianceDecisionSource::NoMatch
+        );
+        assert_eq!(
+            decision.disposition,
+            GatewayComplianceDisposition::Allow
+        );
+        assert!(decision.catalog_digest.is_some());
+    }
+
+    #[test]
+    fn serving_precedence_spans_global_region_and_gateway_scopes() {
+        let controller =
+            GatewayComplianceController::new(config(), Arc::new(MemoryStore::default()))
+                .expect("controller");
+        let mut candidate = payload(1, None);
+        candidate
+            .baseline_rules
+            .push(GatewayComplianceBaselineRuleV1 {
+                rule_id: "global-baseline".into(),
+                scope: "global".into(),
+                subject_kind: GatewayComplianceSubjectKindV1::ManifestDigest,
+                subject: subject(9),
+                source_id: "baseline".into(),
+                reason_code: "policy-deny".into(),
+                toggle_id: None,
+                effective_from_unix: NOW,
+                expires_at_unix: Some(NOW + 1_000),
+            });
+        candidate
+            .appeal_overrides
+            .push(GatewayComplianceAppealOverrideV1 {
+                appeal_id: "regional-appeal".into(),
+                scope: "region:eu".into(),
+                subject_kind: GatewayComplianceSubjectKindV1::ManifestDigest,
+                subject: subject(9),
+                decision_digest: [0x69; 32],
+                effective_from_unix: NOW,
+                expires_at_unix: NOW + 1_000,
+            });
+        candidate
+            .baseline_rules
+            .push(GatewayComplianceBaselineRuleV1 {
+                rule_id: "global-baseline-held".into(),
+                scope: "global".into(),
+                subject_kind: GatewayComplianceSubjectKindV1::ManifestDigest,
+                subject: subject(10),
+                source_id: "baseline".into(),
+                reason_code: "policy-deny".into(),
+                toggle_id: None,
+                effective_from_unix: NOW,
+                expires_at_unix: Some(NOW + 1_000),
+            });
+        candidate
+            .appeal_overrides
+            .push(GatewayComplianceAppealOverrideV1 {
+                appeal_id: "regional-appeal-held".into(),
+                scope: "region:eu".into(),
+                subject_kind: GatewayComplianceSubjectKindV1::ManifestDigest,
+                subject: subject(10),
+                decision_digest: [0x6A; 32],
+                effective_from_unix: NOW,
+                expires_at_unix: NOW + 1_000,
+            });
+        candidate
+            .legal_safety_holds
+            .push(GatewayComplianceLegalSafetyHoldV1 {
+                hold_id: "gateway-hold".into(),
+                scope: "gateway:gateway-eu".into(),
+                subject_kind: GatewayComplianceSubjectKindV1::ManifestDigest,
+                subject: subject(10),
+                authority_reference: "court-order-10".into(),
+                effective_from_unix: NOW,
+                expires_at_unix: Some(NOW + 1_000),
+            });
+        promote(&controller, sign_catalog(candidate));
+        assert_eq!(
+            controller
+                .evaluate_serving(
+                    GatewayComplianceSubjectKindV1::ManifestDigest,
+                    &subject(9),
+                    NOW + 30,
+                )
+                .expect("regional appeal decision")
+                .source,
+            GatewayComplianceDecisionSource::AcceptedAppeal
+        );
+        assert_eq!(
+            controller
+                .evaluate_serving(
+                    GatewayComplianceSubjectKindV1::ManifestDigest,
+                    &subject(10),
+                    NOW + 30,
+                )
+                .expect("gateway hold decision")
+                .source,
+            GatewayComplianceDecisionSource::LegalSafetyHold
+        );
     }
 
     #[test]
@@ -3318,6 +4030,60 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn rollback_rejects_an_expired_last_known_good_catalog() {
+        let controller =
+            GatewayComplianceController::new(config(), Arc::new(MemoryStore::default()))
+                .expect("controller");
+        let mut first = payload(1, None);
+        first.valid_until_unix = NOW + 100;
+        let first_digest = promote(&controller, sign_catalog(first));
+
+        let mut second = payload(2, Some(first_digest));
+        second.generated_at_unix = NOW + 30;
+        second.valid_until_unix = NOW + 1_000;
+        let second_digest = controller
+            .stage_catalog(sign_catalog(second), NOW + 35)
+            .expect("stage second");
+        for gateway_index in 0..2 {
+            controller
+                .acknowledge(
+                    acknowledgement_at(gateway_index, second_digest, true, NOW + 40),
+                    NOW + 40,
+                )
+                .expect("acknowledge second");
+        }
+        controller.promote(NOW + 50).expect("promote second");
+
+        let rollback =
+            rollback_authorization([0xD1; 32], second_digest, first_digest, NOW + 120);
+        assert!(matches!(
+            controller.rollback(&rollback, NOW + 120),
+            Err(GatewayComplianceError::CatalogNotFresh)
+        ));
+    }
+
+    #[test]
+    fn checkpoint_rejects_pointer_and_history_lineage_substitution() {
+        let store = Arc::new(MemoryStore::default());
+        let controller =
+            GatewayComplianceController::new(config(), store.clone()).expect("controller");
+        promote(&controller, sign_catalog(payload(1, None)));
+
+        let mut checkpoint = controller.checkpoint().expect("checkpoint");
+        checkpoint.history[0].serving_digest = [0xBA; 32];
+        let encoded = encode_bounded(
+            &checkpoint,
+            MAX_GATEWAY_COMPLIANCE_CHECKPOINT_BYTES_V1,
+        )
+        .expect("encode tampered checkpoint");
+        store.store(&encoded).expect("store tampered checkpoint");
+        assert!(matches!(
+            GatewayComplianceController::new(config(), store),
+            Err(GatewayComplianceError::InvalidCheckpoint(_))
+        ));
+    }
+
     #[derive(Debug)]
     struct ScriptedTransport {
         resolutions: Mutex<VecDeque<Vec<IpAddr>>>,
@@ -3437,6 +4203,43 @@ mod tests {
         assert!(matches!(
             fetch_feed_bytes(&policy, GatewayComplianceFetchLimits::default(), &redirect),
             Err(GatewayComplianceError::UnsafeUrl(_))
+        ));
+    }
+
+    #[derive(Debug)]
+    struct DeadlineTransport {
+        response: GatewayComplianceFetchResponse,
+    }
+
+    impl GatewayComplianceFeedTransport for DeadlineTransport {
+        fn resolve(
+            &self,
+            _hostname: &str,
+            _timeout: Duration,
+        ) -> Result<Vec<IpAddr>, GatewayComplianceError> {
+            std::thread::sleep(Duration::from_millis(8));
+            Ok(vec!["93.184.216.34".parse().expect("public IP")])
+        }
+
+        fn fetch(
+            &self,
+            _request: &GatewayComplianceFetchRequest,
+        ) -> Result<GatewayComplianceFetchResponse, GatewayComplianceError> {
+            Ok(self.response.clone())
+        }
+    }
+
+    #[test]
+    fn feed_fetch_enforces_one_cumulative_deadline() {
+        let mut limits = GatewayComplianceFetchLimits::default();
+        limits.connect_timeout = Duration::from_millis(10);
+        limits.total_timeout = Duration::from_millis(15);
+        let mut response = fetch_response(Vec::new());
+        response.elapsed = Duration::from_millis(8);
+        let transport = DeadlineTransport { response };
+        assert!(matches!(
+            fetch_feed_bytes(&feed_policy(), limits, &transport),
+            Err(GatewayComplianceError::FetchTimeout)
         ));
     }
 

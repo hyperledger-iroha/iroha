@@ -17,11 +17,11 @@ fn account_id_literal(public_key: &str) -> Vec<u8> {
 }
 
 fn alice_account_id_literal() -> Vec<u8> {
-    account_id_literal("ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774")
+    account_id_literal("ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03")
 }
 
 fn bob_account_id_literal() -> Vec<u8> {
-    account_id_literal("ed0120C6C6F575510FB87360CB773FAF2665C9BD0FBD00320684A966569A2C0217F063")
+    account_id_literal("ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4")
 }
 
 fn assemble(code: &[u8]) -> Vec<u8> {

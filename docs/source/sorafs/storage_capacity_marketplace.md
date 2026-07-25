@@ -82,13 +82,14 @@ rollout checks required before hosted production settlement.
   surfaces descriptive errors when probes are missing. These counters feed the new
   `SorafsPenaltyPolicy.max_pdp_failures` and `.max_potr_breaches` knobs so any proof failure can
   trigger an immediate strike/slash without waiting for utilisation/uptime caps.
-- Proof failure governance evidence is now emitted automatically. Whenever `RecordCapacityTelemetry`
-  receives a snapshot whose PDP or PoTR counters exceed the configured limits, the runtime files a
-  `proof_failure` `CapacityDisputeRecord` with a canonical `CapacityDisputeV1` payload. The evidence
-  digest references the Norito-encoded telemetry payload (retrievable via the URI
-  `norito://sorafs/capacity_telemetry/<provider_hex>/<start_epoch>-<end_epoch>`), so governance,
-  Taikai/CDN reviewers, and auditors can fetch the exact snapshot that triggered the strike without
-  relying on ad hoc bundles.
+- Proof-failure telemetry drives only the configured penalty and alert path; it
+  never creates or signs a capacity dispute. A governed recorder must submit
+  the canonical `RegisterCapacityDispute` transaction with its reviewed
+  `CapacityDisputeV1` evidence digest. Registration stores the pending dispute
+  and appends its chain-authoritative reputation-journal `Opened` event
+  atomically. `ResolveSorafsCapacityDispute` later updates the same record and
+  appends the exact predecessor-bound revision-two `Resolved` event atomically.
+  Relayers and telemetry submitters do not become trusted dispute recorders.
 - `POST /v1/sorafs/capacity/schedule` allows operators to submit governance-issued `ReplicationOrderV1`
   payloads; the embedded `sorafs-node` manager validates the order, tracks outstanding assignments,
   and returns a scheduling summary with remaining capacity so orchestration tooling can act on the
@@ -225,11 +226,15 @@ in-sync with the implementation.
    (`sorafs_manifest_builder capacity dispute` and
    `cargo test -p sorafs_car --test capacity_cli`) so every `CapacityDisputeV1` bundle has
    canonical JSON/Norito artefacts.
-2. Exercise the deterministic ledger hooks by running
-   `cargo test -p iroha_core -- capacity_dispute_replay_is_deterministic` plus the penalty
-   suites the roadmap references (`record_capacity_telemetry_penalises_persistent_under_delivery`).
-   These tests live in `crates/iroha_core/src/smartcontracts/isi/sorafs.rs` and guarantee
-   that disputes, penalties, and slashes replay faithfully across nodes.
+2. Exercise the deterministic ledger hooks with the focused selectors
+   `register_capacity_dispute_exact_replay_is_idempotent`,
+   `capacity_dispute_requires_governed_recorder_authority`, and
+   `capacity_dispute_resolution_is_atomic_terminal_and_replay_safe`. Run
+   `proof_failure_telemetry_replay_is_deterministic` and
+   `record_capacity_telemetry_does_not_mutate_capacity_disputes` separately to
+   prove that telemetry penalties replay without opening disputes. These tests
+   live in `crates/iroha_core/src/smartcontracts/isi/sorafs.rs` and
+   `crates/iroha_core/src/smartcontracts/isi/sorafs_reputation.rs`.
 3. Follow the escalation workflow in `docs/source/sorafs/dispute_revocation_runbook.md`—
    the runbook covers evidence capture, council ballots, and revocation/failover procedures.
    Link the resulting meeting minutes or strike approvals back into

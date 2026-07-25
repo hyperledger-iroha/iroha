@@ -35,7 +35,7 @@ fn caller_account() -> ivm::mock_wsv::AccountId {
 
 fn literal_account() -> ivm::mock_wsv::AccountId {
     iroha_data_model::account::AccountId::parse_encoded(
-        "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+        "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
     )
     .expect("parse test account literal")
     .into_account_id()
@@ -68,8 +68,8 @@ fn kotodama_revoke_role_denies_mint() {
     // 2) Revoke role then attempt mint (should fail with PermissionDenied)
     let prog_revoke_then_mint = compile(
         r#"
-          ledger::role::revoke(AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), Name::parse("minter"));
-          ledger::asset::mint(account: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), amount: 1);
+          ledger::role::revoke(AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"), Name::parse("minter"));
+          ledger::asset::mint(account: AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"), asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), amount: 1);
     "#,
     );
     load(&mut vm, &prog_revoke_then_mint, "revoke role program");
@@ -94,7 +94,6 @@ fn kotodama_delete_role_prevents_grant() {
     let prog_boot = compile(
         r#"
           ledger::domain::register(DomainId::parse("default.universal"));
-          ledger::account::register(AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"));
           ledger::asset::register(asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), name: "ROSE", scale: 0, mintable: 1);
           ledger::role::create(Name::parse("minter"), Json::parse("{\"perms\":[\"mint_asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM\"]}"));
     "#,
@@ -106,7 +105,7 @@ fn kotodama_delete_role_prevents_grant() {
     let prog_delete_then_grant = compile(
         r#"
           ledger::role::delete(Name::parse("minter"));
-          ledger::role::grant(AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), Name::parse("minter"));
+          ledger::role::grant(AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"), Name::parse("minter"));
     "#,
     );
     load(
@@ -135,10 +134,9 @@ fn kotodama_delete_role_denied_while_assigned_then_succeeds_after_revoke() {
     let boot = compile(
         r#"
           ledger::domain::register(DomainId::parse("default.universal"));
-          ledger::account::register(AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"));
           ledger::asset::register(asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), name: "ROSE", scale: 0, mintable: 1);
           ledger::role::create(Name::parse("minter"), Json::parse("{\"perms\":[\"mint_asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM\"]}"));
-          ledger::role::grant(AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), Name::parse("minter"));
+          ledger::role::grant(AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"), Name::parse("minter"));
     "#,
     );
     load(&mut vm, &boot, "bootstrap role program");
@@ -156,7 +154,7 @@ fn kotodama_delete_role_denied_while_assigned_then_succeeds_after_revoke() {
     // Revoke then delete -> should succeed
     let revoke_delete = compile(
         r#"
-          ledger::role::revoke(AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), Name::parse("minter"));
+          ledger::role::revoke(AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"), Name::parse("minter"));
           ledger::role::delete(Name::parse("minter"));
     "#,
     );
@@ -181,10 +179,9 @@ fn kotodama_combined_revoke_then_delete_blocks_grant_and_mint() {
     let boot = compile(
         r#"
           ledger::domain::register(DomainId::parse("default.universal"));
-          ledger::account::register(AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"));
           ledger::asset::register(asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), name: "ROSE", scale: 0, mintable: 1);
           ledger::role::create(Name::parse("minter"), Json::parse("{\"perms\":[\"mint_asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM\"]}"));
-          ledger::role::grant(AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), Name::parse("minter"));
+          ledger::role::grant(AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"), Name::parse("minter"));
     "#,
     );
     load(&mut vm, &boot, "bootstrap role program");
@@ -193,7 +190,7 @@ fn kotodama_combined_revoke_then_delete_blocks_grant_and_mint() {
     // Revoke then delete role
     let revoke_delete = compile(
         r#"
-          ledger::role::revoke(AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), Name::parse("minter"));
+          ledger::role::revoke(AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"), Name::parse("minter"));
           ledger::role::delete(Name::parse("minter"));
     "#,
     );
@@ -203,7 +200,7 @@ fn kotodama_combined_revoke_then_delete_blocks_grant_and_mint() {
     // Attempt to grant role now fails (role no longer exists)
     let grant_again = compile(
         r#"
-          ledger::role::grant(AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), Name::parse("minter"));
+          ledger::role::grant(AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"), Name::parse("minter"));
     "#,
     );
     load(&mut vm, &grant_again, "grant deleted role program");
@@ -213,7 +210,7 @@ fn kotodama_combined_revoke_then_delete_blocks_grant_and_mint() {
     // Mint is denied without the role
     let mint = compile(
         r#"
-          ledger::asset::mint(account: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), amount: 1);
+          ledger::asset::mint(account: AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"), asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), amount: 1);
     "#,
     );
     load(&mut vm, &mint, "mint after role deletion program");

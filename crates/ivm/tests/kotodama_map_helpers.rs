@@ -61,7 +61,7 @@ fn ir_lower_ensure_state_map() {
     let src = r#"
         seiyaku EnsureLowering {
           state StateMap<int, int> m;
-          kotoage fn f(int k) -> int authorize("WriteState") { return m.ensure(k); }
+          kotoage fn f(int k) -> int authorize("WriteState") { return m.ensure(key: k); }
         }
     "#;
     let prog = parse(src).expect("parse ensure");
@@ -121,17 +121,14 @@ fn ir_lower_ensure_pointer_variants_use_pointer_syscalls() {
         ("Name", r#"Name::parse("alias")"#),
         (
             "AccountId",
-            r#"AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB")"#,
+            r#"AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV")"#,
         ),
         (
             "AssetDefinitionId",
             r#"AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")"#,
         ),
         ("DomainId", r#"DomainId::parse("wonderland.universal")"#),
-        (
-            "NftId",
-            r#"NftId::parse("rose:uuid:0123$wonderland.universal")"#,
-        ),
+        ("NftId", r#"NftId::parse("n0$wonderland.universal")"#),
     ];
     for (ty, ctor) in cases {
         let src = format!(
@@ -139,7 +136,7 @@ fn ir_lower_ensure_pointer_variants_use_pointer_syscalls() {
         seiyaku C {{
             state StateMap<int, {ty}> S;
             kotoage fn main() -> {ty} authorize("WriteState") {{
-                return S.ensure(7, {ctor});
+                return S.ensure(key: 7, default: {ctor});
             }}
         }}
         "#
@@ -224,8 +221,8 @@ fn runtime_durable_ensure_state_map() {
         seiyaku C {
             state StateMap<int, int> S;
             kotoage fn main() -> int authorize("WriteState") {
-                let x = S.ensure(7);
-                let y = S.ensure(7);
+                let x = S.ensure(key: 7);
+                let y = S.ensure(key: 7);
                 return x + y;
             }
         }

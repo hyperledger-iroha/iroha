@@ -1,28 +1,14 @@
 //! Verify Kotodama lowering of `StateMap<int, int>` into durable host state.
 
-use std::{collections::HashMap, str::FromStr};
+use std::collections::HashMap;
 
 use iroha_crypto::PublicKey;
-use iroha_data_model::prelude::Name;
 use ivm::{
-    CoreHost, IVM, PointerType, encoding, instruction,
+    CoreHost, IVM,
     kotodama::{compiler::Compiler as KotodamaCompiler, ir, parser, semantic},
     mock_wsv::{AccountId, MockWorldStateView, WsvHost},
-    syscalls,
 };
 mod common;
-
-fn make_tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
-    let payload = common::payload_for_type(pty, payload);
-    let mut v = Vec::with_capacity(7 + payload.len() + 32);
-    v.extend_from_slice(&(pty as u16).to_be_bytes());
-    v.push(1);
-    v.extend_from_slice(&(payload.len() as u32).to_be_bytes());
-    v.extend_from_slice(payload.as_ref());
-    let h: [u8; 32] = iroha_crypto::Hash::new(payload).into();
-    v.extend_from_slice(&h);
-    v
-}
 
 fn encoded_state_path(name: &str, key: i64) -> String {
     let key = ivm::numeric_tlv::encode_int(&iroha_primitives::bigint::BigInt::from_i128(
@@ -57,25 +43,15 @@ fn kotodama_state_map_set_writes_corehost_state() {
     common::select_kotodama_entrypoint(&mut vm, &code, "main");
     vm.run().expect("run kotodama");
 
-    // Query CoreHost state via its reversible canonical-Norito key path.
-    let path = Name::from_str(&encoded_state_path("M", 1)).expect("valid path");
-    let path_tlv = make_tlv(PointerType::Name, path.as_ref().as_bytes());
-    let p_path = vm.alloc_input_tlv(&path_tlv).expect("alloc path");
-    let mut get_prog_bytes = Vec::new();
-    let scall = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        syscalls::SYSCALL_STATE_GET as u8,
-    );
-    get_prog_bytes.extend_from_slice(&scall.to_le_bytes());
-    get_prog_bytes.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
-    let get_prog = common::assemble(&get_prog_bytes);
-    vm.set_register(10, p_path);
-    vm.load_program(&get_prog).expect("load get");
-    vm.run().expect("state get");
-    let p_out = vm.register(10);
-    let tlv = vm.memory.validate_tlv(p_out).expect("validate out");
-    assert_eq!(tlv.type_id, PointerType::NoritoBytes);
-    assert_eq!(common::decode_int_state_value(tlv.payload), 7);
+    // Inspect the host-owned state directly. Loading a CNTR-less helper program
+    // for a contract-bound state syscall would correctly fail admission.
+    let stored = {
+        let host = vm.host_mut_any().expect("CoreHost available");
+        let host = host.downcast_mut::<CoreHost>().expect("CoreHost type");
+        host.state_bytes(&encoded_state_path("M", 1))
+            .expect("state value written")
+    };
+    assert_eq!(common::decode_int_state_value(&stored), 7);
 }
 
 #[test]
@@ -184,27 +160,17 @@ fn kotodama_foreach_reads_durable_state_map_entries() {
     vm.load_program(&code).expect("load loop program");
     common::select_kotodama_entrypoint(&mut vm, &code, "main");
     vm.run().expect("execute loop program");
-    // Read back the mirrored entries written inside the loop.
-    let mut get_prog_bytes = Vec::new();
-    let scall = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        syscalls::SYSCALL_STATE_GET as u8,
-    );
-    get_prog_bytes.extend_from_slice(&scall.to_le_bytes());
-    get_prog_bytes.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
-    let get_prog = common::assemble(&get_prog_bytes);
+    // Read back the mirrored entries from the host-owned world state.
+    let wsv = {
+        let host = vm.host_mut_any().expect("WsvHost available");
+        let host = host.downcast_mut::<WsvHost>().expect("WsvHost type");
+        host.wsv.clone()
+    };
     for (path, expected) in [
         (encoded_state_path("Mirror", 0), 5_i64),
         (encoded_state_path("Mirror", 1), 9_i64),
     ] {
-        let path_tlv = make_tlv(PointerType::Name, path.as_bytes());
-        let p_path = vm.alloc_input_tlv(&path_tlv).expect("alloc path");
-        vm.set_register(10, p_path);
-        vm.load_program(&get_prog).expect("load get");
-        vm.run().expect("state get");
-        let out = vm.register(10);
-        let tlv = vm.memory.validate_tlv(out).expect("validate out");
-        assert_eq!(tlv.type_id, PointerType::NoritoBytes);
-        assert_eq!(common::decode_int_state_value(tlv.payload), expected);
+        let stored = wsv.sc_get(&path).expect("mirrored state value");
+        assert_eq!(common::decode_int_state_value(&stored), expected);
     }
 }

@@ -1955,15 +1955,13 @@ impl SoraServiceLeaseStateV1 {
             .runtime_price_per_sequence
             .try_mul_decimal(&Numeric::from(billed_sequences))?;
         let storage_gib =
-            (u128::from(accounted_storage_bytes) + u128::from(SORA_STORAGE_BYTES_PER_GIB) - 1)
-                / u128::from(SORA_STORAGE_BYTES_PER_GIB);
+            u128::from(accounted_storage_bytes).div_ceil(u128::from(SORA_STORAGE_BYTES_PER_GIB));
         let storage_units = u128::from(billed_sequences) * storage_gib;
         let storage_cost = self
             .storage_price_per_gib_sequence
             .try_mul_decimal(&Numeric::new(storage_units, 0))?;
-        let egress_mib =
-            (u128::from(self.accounted_egress_bytes) + u128::from(SORA_NETWORK_BYTES_PER_MIB) - 1)
-                / u128::from(SORA_NETWORK_BYTES_PER_MIB);
+        let egress_mib = u128::from(self.accounted_egress_bytes)
+            .div_ceil(u128::from(SORA_NETWORK_BYTES_PER_MIB));
         let egress_cost = self
             .egress_price_per_mib
             .try_mul_decimal(&Numeric::new(egress_mib, 0))?;
@@ -2740,8 +2738,7 @@ impl SoraServiceManifestV1 {
         let storage_gib = if storage_bytes == 0 {
             0
         } else {
-            (storage_bytes + u128::from(SORA_STORAGE_BYTES_PER_GIB) - 1)
-                / u128::from(SORA_STORAGE_BYTES_PER_GIB)
+            storage_bytes.div_ceil(u128::from(SORA_STORAGE_BYTES_PER_GIB))
         };
         let storage_cost = self
             .economics
@@ -28431,9 +28428,13 @@ mod tests {
             b"soracloud-full-bootstrap-proof-refresh",
         )
         .expect("bootstrap key");
-        let mut full_bootstrap_key = refresh_key.clone();
-        full_bootstrap_key.mode = iroha_crypto::fhe_bfv::BfvBootstrapKeyMode::FullBootstrapV1;
-        full_bootstrap_key.full_bootstrap_material = Some(sample_full_bootstrap_material(&params));
+        let full_bootstrap_key = iroha_crypto::fhe_bfv::full_bootstrap_key_from_material_v1(
+            &params,
+            &public_key,
+            "soracloud-full-bootstrap-proof",
+            sample_full_bootstrap_material(&params),
+        )
+        .expect("full-bootstrap key");
         let evaluation_keys = BfvEvaluationKeyBundle {
             relinearization_key: relinearization_key.clone(),
             rotation_keys: Vec::new(),

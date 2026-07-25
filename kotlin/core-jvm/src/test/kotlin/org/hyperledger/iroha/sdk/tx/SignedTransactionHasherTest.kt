@@ -169,7 +169,6 @@ class SignedTransactionHasherTest {
             "canonical.prefix.hex",
             "canonical.hash",
             "payload.prehash",
-            "pinned.sdk.defective.hash",
             "versioned.base64",
         )
         val result = Properties()

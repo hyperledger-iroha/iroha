@@ -224,7 +224,7 @@ def test_summary_includes_artifact_metadata(tmp_path: Path) -> None:
 
     creation_time_ms = 1_735_000_000_123
     chain = "00000002"
-    authority = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"
+    authority = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
     time_to_live_ms = 5000
     nonce = 42
     payloads_path = _write_payloads(

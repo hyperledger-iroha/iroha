@@ -3797,8 +3797,7 @@ class HttpClientTransportTest {
             opaqueId = "opaque:" + "11".repeat(32),
             receiptHash = "22".repeat(32),
             uaid = "uaid:" + "33".repeat(31) + "35",
-            accountId = AccountAddress.fromAccount(TestEd25519Keys.publicKey(0x11), "ed25519")
-                .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT),
+            accountId = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
         )
 
     private fun sampleIdentifierVerifierPolicy(

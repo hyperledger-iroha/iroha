@@ -677,6 +677,12 @@ mod tests {
             .expect("u128 nano-XOR fixture fits Quantity")
     }
 
+    fn maximum_quantity() -> Quantity {
+        "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047"
+            .parse()
+            .expect("signed 512-bit maximum quantity")
+    }
+
     #[derive(Encode)]
     struct ForgedCapacityFeeLedgerEntry {
         provider_id: ProviderId,
@@ -858,8 +864,7 @@ mod tests {
         assert_eq!(corrupt, corrupt_before);
 
         let mut fee_delta_overflow = sample_accrual();
-        fee_delta_overflow.storage_fee_delta =
-            Quantity::from_canonical_numeric(Numeric::new(i128::MAX, 0)).expect("bounded quantity");
+        fee_delta_overflow.storage_fee_delta = maximum_quantity();
         fee_delta_overflow.egress_fee_delta = quantity_nanos(1);
         let mut clean = CapacityFeeLedgerEntry::default();
         assert!(matches!(
@@ -888,8 +893,7 @@ mod tests {
         ));
         assert_eq!(entry, committed);
 
-        entry.penalty_slashed =
-            Quantity::from_canonical_numeric(Numeric::new(i128::MAX, 0)).expect("bounded quantity");
+        entry.penalty_slashed = maximum_quantity();
         let overflow = entry.clone();
         assert!(matches!(
             entry.apply_penalty(&quantity_nanos(1), 7),

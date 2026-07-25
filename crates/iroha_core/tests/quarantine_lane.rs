@@ -3,10 +3,11 @@
 #![allow(clippy::items_after_statements)]
 
 // no nonzero macro used in this file
-use std::borrow::Cow;
+use std::{borrow::Cow, sync::Arc};
 
 use iroha_core::{
     block::{self, BlockBuilder},
+    governance::manifest::LaneManifestRegistry,
     state::StateReadOnly,
 };
 use iroha_data_model::prelude::*;
@@ -23,7 +24,12 @@ fn quarantine_overflow_rejects_one_tx() {
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query = iroha_core::query::store::LiveQueryStore::start_test();
 
-    let mut state = iroha_core::state::State::new_for_testing(world, kura, query);
+    let mut state =
+        iroha_core::state::State::new_with_chain_for_testing(world, kura, query, chain_id.clone());
+    let nexus = state.nexus_snapshot();
+    state.install_lane_manifests(&Arc::new(
+        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
+    ));
 
     // Configure quarantine: allow only 1 tx per block (to force overflow).
     let mut cfg = state.view().pipeline().clone();

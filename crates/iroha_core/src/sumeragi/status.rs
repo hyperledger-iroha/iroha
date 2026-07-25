@@ -2329,6 +2329,7 @@ pub fn clear_v2_status() {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     }
+    set_committed_lane_blocks(Vec::new());
     bump_v2_watchdog_revision();
 }
 
@@ -5467,6 +5468,7 @@ pub struct CommittedLaneBlockSnapshot {
 }
 
 impl CommittedLaneBlockSnapshot {
+    /// Build an operator snapshot from one fully validated committed lane session.
     pub(crate) fn from_committed_session_with_execution_status(
         session: &crate::lane_consensus::CommittedLaneBlockSession,
         execution_status: CommittedLaneBlockExecutionStatus,
@@ -6727,6 +6729,8 @@ fn validate_committed_lane_block_snapshot(
 /// The public diagnostics endpoint reconstructs authoritative rows from State
 /// and Kura instead of this cache.
 pub fn set_committed_lane_blocks(mut entries: Vec<CommittedLaneBlockSnapshot>) {
+    #[cfg(test)]
+    let _guard = rbc_status_test_guard();
     entries.retain(
         |entry| match validate_committed_lane_block_snapshot(entry) {
             Ok(()) => true,

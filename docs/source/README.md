@@ -55,7 +55,7 @@ Docs sync checks
   - Regenerate: `make docs-syscalls`
   - Check only: `bash scripts/check_syscalls_doc.sh`
 - Syscall ABI table (crates/ivm/docs/syscalls.md)
-  - Check only: `cargo run -p ivm --bin gen_syscalls_doc -- --check --no-code`
+  - Check only: `cargo run -p ivm --bin gen_syscalls_doc -- --check`
   - Update generated section (and code docs table): `cargo run -p ivm --bin gen_syscalls_doc -- --write`
 - Pointer‑ABI tables (crates/ivm/docs/pointer_abi.md and ivm.md)
   - Check only: `cargo run -p ivm --bin gen_pointer_types_doc -- --check`

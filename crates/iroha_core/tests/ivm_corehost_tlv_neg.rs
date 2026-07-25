@@ -27,6 +27,12 @@ fn quantity_tlv(value: u64) -> Vec<u8> {
         .expect("encode quantity pointer envelope")
 }
 
+fn local_contract_debug_host(authority: AccountId) -> CoreHost {
+    let mut host = CoreHost::new(authority);
+    host.set_local_contract_debug_execution();
+    host
+}
+
 #[test]
 fn get_authority_spills_to_owned_heap_after_input_exhaustion() {
     let authority = ALICE_ID.clone();
@@ -63,7 +69,7 @@ fn execute_instruction_rejects_retired_blob_carriers_without_register_mutation()
         ("raw binary", canonical.clone()),
         ("hex text", hex::encode(&canonical).into_bytes()),
     ] {
-        let mut host = CoreHost::new(authority.clone());
+        let mut host = local_contract_debug_host(authority.clone());
         let mut vm = IVM::new(u64::MAX);
         let envelope = build_tlv(PointerType::Blob as u16, 1, &payload, false);
         let pointer = vm
@@ -234,7 +240,7 @@ fn register_contract_bytes_enforces_tlv_provenance_type_hash_and_payload() {
         .expect("store owned HEAP envelope");
     heap_vm.set_register(10, heap_pointer);
     assert!(
-        CoreHost::new(authority.clone())
+        local_contract_debug_host(authority.clone())
             .syscall(
                 syscalls::SYSCALL_REGISTER_SMART_CONTRACT_BYTES,
                 &mut heap_vm
@@ -253,7 +259,7 @@ fn register_contract_bytes_enforces_tlv_provenance_type_hash_and_payload() {
             .unwrap_or_else(|error| panic!("store {label} fixture: {error:?}"));
         vm.set_register(10, pointer);
         assert_eq!(
-            CoreHost::new(authority.clone())
+            local_contract_debug_host(authority.clone())
                 .syscall(syscalls::SYSCALL_REGISTER_SMART_CONTRACT_BYTES, &mut vm),
             Err(ivm::VMError::NoritoInvalid),
             "{label} must fail provenance validation"
@@ -269,7 +275,7 @@ fn register_contract_bytes_enforces_tlv_provenance_type_hash_and_payload() {
         .expect("load non-literal code bytes");
     code_vm.set_register(10, code_pointer);
     assert_eq!(
-        CoreHost::new(authority.clone()).syscall(
+        local_contract_debug_host(authority.clone()).syscall(
             syscalls::SYSCALL_REGISTER_SMART_CONTRACT_BYTES,
             &mut code_vm,
         ),
@@ -290,7 +296,7 @@ fn register_contract_bytes_enforces_tlv_provenance_type_hash_and_payload() {
         .expect("store bytes beyond the owned HEAP range");
     partial_vm.set_register(10, partial_pointer);
     assert_eq!(
-        CoreHost::new(authority.clone()).syscall(
+        local_contract_debug_host(authority.clone()).syscall(
             syscalls::SYSCALL_REGISTER_SMART_CONTRACT_BYTES,
             &mut partial_vm,
         ),
@@ -323,7 +329,7 @@ fn register_contract_bytes_enforces_tlv_provenance_type_hash_and_payload() {
             .unwrap_or_else(|error| panic!("allocate {label} fixture: {error:?}"));
         vm.set_register(10, pointer);
         assert_eq!(
-            CoreHost::new(authority.clone())
+            local_contract_debug_host(authority.clone())
                 .syscall(syscalls::SYSCALL_REGISTER_SMART_CONTRACT_BYTES, &mut vm),
             Err(expected),
             "{label} must fail closed"

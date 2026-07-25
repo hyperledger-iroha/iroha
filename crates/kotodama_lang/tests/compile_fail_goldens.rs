@@ -380,7 +380,7 @@ const CASES: &[CompileFailCase] = &[
     },
     CompileFailCase {
         name: "retired-amount-type",
-        source: "seiyaku RetiredAmountType {\nfn value(Amount input) { }\n}",
+        source: "seiyaku RejectedAmountType {\nfn value(Amount input) { }\n}",
         phase: DiagnosticPhase::Parse,
         code: "E_RETIRED_NUMERIC_TYPE",
         message: "numeric type `Amount` is not part of Kotodama V1; use `quantity`",
@@ -396,7 +396,15 @@ const CASES: &[CompileFailCase] = &[
     },
     CompileFailCase {
         name: "retired-amount-suffix",
-        source: "seiyaku RetiredAmountSuffix {\nfn value() -> quantity { 1.25amt }\n}",
+        source: "seiyaku RejectedAmountSuffix {\nfn value() -> quantity { 1.25amt }\n}",
+        phase: DiagnosticPhase::Lex,
+        code: "E_RETIRED_NUMERIC_SUFFIX",
+        message: "numeric literal suffixes are not part of Kotodama V1",
+        line: 2,
+    },
+    CompileFailCase {
+        name: "retired-quantity-suffix",
+        source: "seiyaku RejectedQuantitySuffix {\nfn value() -> quantity { 1.25qty }\n}",
         phase: DiagnosticPhase::Lex,
         code: "E_RETIRED_NUMERIC_SUFFIX",
         message: "numeric literal suffixes are not part of Kotodama V1",

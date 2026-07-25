@@ -53,7 +53,9 @@ fn plain_ballot_revotes_extend_only_and_owner_matches() {
         rid.clone(),
         iroha_core::state::GovernanceReferendumRecord {
             h_start: 0,
-            h_end: 10_000,
+            // Keep the shortest re-vote valid for the inclusive referendum
+            // window so the monotonic-lock check is the rejecting contract.
+            h_end: 11,
             status: iroha_core::state::GovernanceReferendumStatus::Proposed,
             mode: iroha_core::state::GovernanceReferendumMode::Plain,
         },

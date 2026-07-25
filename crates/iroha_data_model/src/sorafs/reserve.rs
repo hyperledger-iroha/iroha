@@ -1580,14 +1580,18 @@ mod tests {
         assert_eq!(
             lifecycle.accrued_interest,
             "0.049315068"
-                .parse()
-                .expect("nanounit interest fixture is canonical")
+                .parse::<XorQuantity>()
+                .expect("rounded nanounit interest is canonical")
+        );
+        assert_eq!(
+            lifecycle.accrued_interest.try_to_micro(),
+            Err(DealAmountError::InexactMicroProjection)
         );
         assert_eq!(
             lifecycle.total_due_after_credit,
             "0.049315068"
-                .parse()
-                .expect("nanounit total-due fixture is canonical")
+                .parse::<XorQuantity>()
+                .expect("rounded nanounit total is canonical")
         );
         assert!(lifecycle.requires_governance_notification);
     }

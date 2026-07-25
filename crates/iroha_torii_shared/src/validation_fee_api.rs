@@ -219,6 +219,10 @@ pub struct ValidationFeeVerifiedParliamentProposalV1 {
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
 #[norito(deny_unknown_fields)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "the canonical V1 JSON/Norito field names intentionally share the `_at_height` suffix"
+)]
 pub struct ValidationFeeVerifiedEnactmentWindowV1 {
     /// Inclusive referendum opening height.
     pub opens_at_height: String,
@@ -427,6 +431,14 @@ impl ValidationFeeCurrentPolicyProofV1 {
     /// # Errors
     ///
     /// Returns a stable explanation when any portable binding is malformed or inconsistent.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the ordered V1 proof checks preserve fail-closed validation and stable error precedence"
+    )]
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "the public V1 verifier owns one ChainId across finality verification and registry binding"
+    )]
     pub fn verify_against(
         &self,
         chain_id: ChainId,
@@ -578,6 +590,10 @@ impl ValidationFeeCurrentPolicyProofV1 {
     ///
     /// Returns an error for any proof failure, absent registry, deployment
     /// genesis mismatch, or policy-chain genesis mismatch.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "the public V1 verifier owns one ChainId across finality verification and immutable deployment binding"
+    )]
     pub fn verify_with_immutable_binding(
         &self,
         chain_id: ChainId,
@@ -920,6 +936,10 @@ pub struct ValidationFeeProposalLockV1 {
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
 #[norito(tag = "kind", content = "payload", rename_all = "SCREAMING_SNAKE_CASE")]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "boxing one payload would change the canonical public V1 enum construction and wire shape"
+)]
 pub enum ValidationFeeProposalDraftPayloadV1 {
     /// Draft a policy proposal.
     Policy {

@@ -1232,6 +1232,10 @@ pub struct IrohaRuntimeDeps {
     moderation_quarantine_key_wrapper: Option<Arc<dyn sorafs_node::ModerationQuarantineKeyWrapper>>,
     privacy_cycle_prf_provider: Option<Arc<dyn sorafs_node::PrivacyCyclePrfProviderV1>>,
     privacy_release_anchor: Option<Arc<dyn sorafs_node::PrivacyReleaseAnchorV1>>,
+    sorafs_gateway_acme_client:
+        Option<Arc<dyn iroha_torii::sorafs::gateway::AcmeClient>>,
+    sorafs_gateway_compliance_feed_transport:
+        Option<Arc<dyn iroha_torii::sorafs::gateway::GatewayComplianceFeedTransport>>,
 }
 
 impl IrohaRuntimeDeps {
@@ -1264,6 +1268,32 @@ impl IrohaRuntimeDeps {
         anchor: Arc<dyn sorafs_node::PrivacyReleaseAnchorV1>,
     ) -> Self {
         self.privacy_release_anchor = Some(anchor);
+        self
+    }
+
+    /// Attach the runtime-owned ACME client used by the SoraFS regional gateway.
+    ///
+    /// Account and DNS-provider credentials remain inside the implementation
+    /// and never enter resolved configuration or Torii state.
+    #[must_use]
+    pub fn with_sorafs_gateway_acme_client(
+        mut self,
+        client: Arc<dyn iroha_torii::sorafs::gateway::AcmeClient>,
+    ) -> Self {
+        self.sorafs_gateway_acme_client = Some(client);
+        self
+    }
+
+    /// Attach the authenticated, address-pinned SoraFS compliance feed transport.
+    ///
+    /// Bearer tokens, client identities, DNS credentials, and TLS key material
+    /// remain owned by the deployment adapter.
+    #[must_use]
+    pub fn with_sorafs_gateway_compliance_feed_transport(
+        mut self,
+        transport: Arc<dyn iroha_torii::sorafs::gateway::GatewayComplianceFeedTransport>,
+    ) -> Self {
+        self.sorafs_gateway_compliance_feed_transport = Some(transport);
         self
     }
 }
@@ -8972,6 +9002,10 @@ impl Iroha {
             runtime_deps.moderation_quarantine_key_wrapper.clone();
         let privacy_cycle_prf_provider = runtime_deps.privacy_cycle_prf_provider.clone();
         let privacy_release_anchor = runtime_deps.privacy_release_anchor.clone();
+        let sorafs_gateway_acme_client = runtime_deps.sorafs_gateway_acme_client.clone();
+        let sorafs_gateway_compliance_feed_transport = runtime_deps
+            .sorafs_gateway_compliance_feed_transport
+            .clone();
         let sorafs_runtime_deps = sorafs_node::NodeRuntimeDeps::default();
         let sorafs_runtime_deps =
             if let Some(key_wrapper) = moderation_quarantine_key_wrapper.as_ref() {
@@ -9094,6 +9128,12 @@ impl Iroha {
             // node key for reproducible deployments; reference production
             // must inject its governed PKCS#11/HSM-backed signer here.
             .with_sorafs_orderbook_transaction_signer(Arc::new(config.common.key_pair.clone()))
+            // Moderation orchestration signs exact, bounded native ISI
+            // envelopes through an independent runtime-only boundary. The
+            // reference launcher adapts the node key for reproducibility;
+            // production operators must inject the governed PKCS#11/HSM
+            // signer through ToriiRuntimeDeps at this boundary.
+            .with_sorafs_moderation_transaction_signer(Arc::new(config.common.key_pair.clone()))
             .with_torii_proxy_bridge_signer(config.common.key_pair.clone())
             .with_vpn_helper_ticket_secret(config.network.soranet_vpn.helper_ticket_secret);
         let runtime_deps = if let Some(cache) = shared_sorafs_cache {
@@ -9116,6 +9156,17 @@ impl Iroha {
         } else {
             runtime_deps
         };
+        let runtime_deps = if let Some(client) = sorafs_gateway_acme_client {
+            runtime_deps.with_sorafs_gateway_acme_client(client)
+        } else {
+            runtime_deps
+        };
+        let runtime_deps =
+            if let Some(transport) = sorafs_gateway_compliance_feed_transport {
+                runtime_deps.with_sorafs_gateway_compliance_feed_transport(transport)
+            } else {
+                runtime_deps
+            };
         let queue_backpressure = queue.backpressure_handle();
         // Start proof lanes before Torii begins accepting submissions so one-time GPU setup happens
         // during node startup instead of the first hot-path transaction burst.

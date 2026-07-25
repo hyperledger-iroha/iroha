@@ -20,14 +20,14 @@ pub const PROOF_OUTCOME_RECORD_VERSION_V1: u16 = 1;
 pub const PROOF_OUTCOME_QUERY_MAX_ITEMS_V1: usize = 64;
 /// Hard encoded-byte ceiling for one committed proof-outcome event page.
 pub const PROOF_OUTCOME_QUERY_MAX_EVENT_PAGE_BYTES_V1: usize = 1024 * 1024;
-/// Hard byte ceiling for one canonical dual-signed PoTR receipt.
+/// Hard byte ceiling for one canonical dual-signed `PoTR` receipt.
 pub const PROOF_OUTCOME_MAX_POTR_RECEIPT_BYTES_V1: usize = 64 * 1024;
 /// First-release governed proof-signer policy version.
 pub const PROOF_OUTCOME_SIGNER_POLICY_VERSION_V1: u16 = 1;
 /// Maximum canonical ML-DSA provider public-key bytes retained by signer policy.
 pub const PROOF_OUTCOME_MAX_PROVIDER_KEY_BYTES_V1: usize = 8 * 1024;
 
-/// Provider-scoped governed keys used to validate relayed PDP and PoTR outcomes.
+/// Provider-scoped governed keys used to validate relayed PDP and `PoTR` outcomes.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -52,7 +52,7 @@ pub struct ProofOutcomeSignerPolicyV1 {
     /// Admission-governed PDP Ed25519 public key.
     #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
     pub pdp_public_key: [u8; 32],
-    /// Admission-governed PoTR ML-DSA public key.
+    /// Admission-governed `PoTR` ML-DSA public key.
     #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
     pub potr_mldsa_public_key: Vec<u8>,
     /// Governed gateway Ed25519 public key.
@@ -133,7 +133,7 @@ impl PdpOutcomeStatusV1 {
     }
 }
 
-/// Payload-free stable PoTR terminal classification.
+/// Payload-free stable `PoTR` terminal classification.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -247,7 +247,7 @@ pub struct PotrOutcomeProjectionV1 {
 pub enum ProofOutcomeProjectionV1 {
     /// PDP terminal metadata and detached proof attestation.
     Pdp(PdpOutcomeProjectionV1),
-    /// PoTR metadata and exact dual-signed receipt.
+    /// `PoTR` metadata and exact dual-signed receipt.
     Potr(PotrOutcomeProjectionV1),
 }
 
@@ -271,7 +271,7 @@ impl ProofOutcomeProjectionV1 {
 pub struct ProofOutcomeRecordV1 {
     /// Projection schema version.
     pub version: u16,
-    /// Protocol-scoped exactly-once identity: challenge ID for PDP and request scope for PoTR.
+    /// Protocol-scoped exactly-once identity: challenge ID for PDP and request scope for `PoTR`.
     #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
     pub identity_digest: [u8; 32],
     /// Digest of the canonical governance archive or final signed receipt.
@@ -323,7 +323,7 @@ pub struct ProofOutcomeFinalizedCursorV1 {
 pub struct ProofOutcomeFinalizedRecordV1 {
     /// Finalized state anchor at which the outcome was read.
     pub finalized_cursor: ProofOutcomeFinalizedCursorV1,
-    /// Chain-authoritative PDP or PoTR outcome.
+    /// Chain-authoritative PDP or `PoTR` outcome.
     pub outcome: ProofOutcomeRecordV1,
 }
 

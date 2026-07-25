@@ -200,8 +200,9 @@ async fn setup_domain(client: &IrohaClient, label: &str) -> Result<NameRecordV1>
     let domain = DomainId::parse_fully_qualified(&domain_literal(label))?;
     let instruction = domain_setup_instruction(&domain, &client.account)?;
     let client = client.clone();
+    let submit_client = client.clone();
     run_sns_client_call("ensure SNS domain", move || {
-        client.submit_blocking(
+        submit_client.submit_blocking(
             instruction,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )?;

@@ -47,7 +47,7 @@
   - 再生成: `make docs-syscalls`
   - 差分チェックのみ: `bash scripts/check_syscalls_doc.sh`
 - システムコール ABI 表: `crates/ivm/docs/syscalls.md`
-  - チェックのみ: `cargo run -p ivm --bin gen_syscalls_doc -- --check --no-code`
+  - チェックのみ: `cargo run -p ivm --bin gen_syscalls_doc -- --check`
   - 生成セクションの更新: `cargo run -p ivm --bin gen_syscalls_doc -- --write`
 - ポインタ ABI テーブル: `crates/ivm/docs/pointer_abi.md` と `ivm.md`
   - チェックのみ: `cargo run -p ivm --bin gen_pointer_types_doc -- --check`

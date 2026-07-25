@@ -86,15 +86,7 @@ fn prepare_state_with_bound_stark_vk(
 ) {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let mut state = State::new(
-        iroha_core::state::World::new(),
-        kura,
-        query,
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let mut state = State::new(iroha_core::state::World::new(), kura, query);
+    let mut state = State::new_for_testing(iroha_core::state::World::new(), kura, query);
     state.zk.stark.enabled = true;
 
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);

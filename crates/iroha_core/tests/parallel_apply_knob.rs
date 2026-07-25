@@ -6,10 +6,11 @@
 //! sequential mode and be non-zero in parallel mode. Without telemetry, the
 //! public status snapshot should still expose post-apply detached counters.
 
-use std::borrow::Cow;
+use std::{borrow::Cow, sync::Arc};
 
 use iroha_core::{
     block::{BlockBuilder, ValidBlock},
+    governance::manifest::LaneManifestRegistry,
     state::StateReadOnly,
 };
 use iroha_data_model::prelude::*;
@@ -36,7 +37,12 @@ fn build_world() -> (
     let world = iroha_core::state::World::with([domain], [acc_a], [ad]);
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query = iroha_core::query::store::LiveQueryStore::start_test();
-    let state = iroha_core::state::State::new_for_testing(world, kura, query);
+    let state =
+        iroha_core::state::State::new_with_chain_for_testing(world, kura, query, chain_id.clone());
+    let nexus = state.nexus_snapshot();
+    state.install_lane_manifests(&Arc::new(
+        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
+    ));
     (state, chain_id, alice_id, alice_kp)
 }
 

@@ -201,8 +201,11 @@ public final class AndroidOkHttpClientRefactorTests {
   private static SignedTransaction sampleTransaction(final byte seed) {
     final TransactionPayload payload =
         TransactionPayload.builder()
+            .setFeePayment(
+                org.hyperledger.iroha.android.model.FeePaymentIntent.authority(
+                    java.util.Collections.emptyList(), 1L))
             .setChainId(String.format("%08x", seed))
-            .setAuthority("sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE")
+            .setAuthority("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV")
             .setCreationTimeMs(1_700_000_000_000L + (seed & 0xFF))
             .setInstructionBytes(new byte[] {seed, (byte) (seed + 1)})
             .setTimeToLiveMs(5_000L)

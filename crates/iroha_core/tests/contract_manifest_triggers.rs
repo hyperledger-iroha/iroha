@@ -927,7 +927,11 @@ seiyaku Test {{
         pipeline_action.filter,
         PipelineEventFilterBox::Block(BlockEventFilter::new().for_status(BlockStatus::Approved))
     );
-    assert_eq!(pipeline_action.authority, contract_address.subject_id());
+    assert_eq!(
+        pipeline_action.authority,
+        contract_address.subject_id(),
+        "a manifest trigger without an explicit authority must execute as the immutable contract subject"
+    );
     assert_contract_trigger_metadata(
         &pipeline_action.metadata,
         &contract_address,

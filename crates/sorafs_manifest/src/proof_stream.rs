@@ -309,7 +309,7 @@ impl ProofStreamHttpRequestV1 {
 
     /// Render the exact canonical HTTP object.
     #[must_use]
-    pub fn to_json_value(&self) -> Value {
+    pub fn to_json_value(self) -> Value {
         let request = self.request;
         let mut map = Map::new();
         map.insert(

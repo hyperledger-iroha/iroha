@@ -1288,13 +1288,29 @@ fn decode_i105_literal(
     input: &str,
     expected_discriminant: Option<u16>,
 ) -> Result<(u16, Vec<u8>), AccountAddressError> {
-    let (found, canonical) = decode_i105_literal_with_embedded_discriminant(input)?;
-    if let Some(expected) = expected_discriminant
-        && found != expected
-    {
-        return Err(AccountAddressError::UnexpectedNetworkPrefix { expected, found });
+    match decode_i105_literal_with_embedded_discriminant(input) {
+        Ok((found, canonical)) => {
+            if let Some(expected) = expected_discriminant
+                && found != expected
+            {
+                return Err(AccountAddressError::UnexpectedNetworkPrefix { expected, found });
+            }
+            Ok((found, canonical))
+        }
+        Err(error) => {
+            let Some(expected) = expected_discriminant else {
+                return Err(error);
+            };
+            let sentinel = i105_sentinel_for_discriminant(expected);
+            let Some(payload) = input.strip_prefix(sentinel.as_str()) else {
+                return Err(error);
+            };
+            match decode_i105_payload(payload) {
+                Err(exact_error) => Err(exact_error),
+                Ok(_) => Err(error),
+            }
+        }
     }
-    Ok((found, canonical))
 }
 
 fn decode_i105_literal_with_embedded_discriminant(

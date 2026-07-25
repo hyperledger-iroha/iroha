@@ -128,9 +128,10 @@ fn command_text(command: &mut Command, description: &str) -> String {
     let value = String::from_utf8(output.stdout)
         .unwrap_or_else(|_| panic!("{description} output is not UTF-8"));
     let trimmed = value.trim_end_matches(['\r', '\n']);
-    if trimmed.is_empty() || trimmed.contains(char::is_whitespace) {
-        panic!("{description} output is not one canonical value");
-    }
+    assert!(
+        !(trimmed.is_empty() || trimmed.contains(char::is_whitespace)),
+        "{description} output is not one canonical value"
+    );
     trimmed.to_owned()
 }
 

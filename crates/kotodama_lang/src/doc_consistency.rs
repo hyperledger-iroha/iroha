@@ -271,6 +271,7 @@ mod tests {
             "#roundingVariants",
             "#jsonConstruction",
             "#memberCalls",
+            "#retiredNumericSuffixes",
         ] {
             assert_eq!(
                 top_level_includes
@@ -322,6 +323,11 @@ mod tests {
             textmate_match(&textmate_value, "memberCalls"),
             format!(r"(?<=\.)(?:{})(?=\s*\()", member_names.join("|")),
             "TextMate member calls drifted from bounded List, quantity, or typed JSON APIs"
+        );
+        assert_eq!(
+            textmate_match(&textmate_value, "retiredNumericSuffixes"),
+            r"(?<![A-Za-z0-9_])(?:0[xX][0-9A-Fa-f_]+|0[bB][01_]+|\d(?:[\d_]*\d)?(?:\.\d(?:[\d_]*\d)?)?(?:[eE][+-]?\d(?:[\d_]*\d)?)?)(?:amt|qty)\b",
+            "TextMate retired numeric suffix highlighting drifted from amt/qty fix-it policy"
         );
 
         let mut type_names = V1_SOURCE_TYPE_NAMES.to_vec();

@@ -186,55 +186,6 @@ fn sorafs_node_cli_ingest_por_flow() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
-fn cli_reports_corrupt_checkpoint_without_panicking() -> Result<(), Box<dyn std::error::Error>> {
-    if !ingest_tests_enabled() {
-        eprintln!("skipping corrupt checkpoint check (SORAFS_NODE_SKIP_INGEST_TESTS=1)");
-        return Ok(());
-    }
-
-    let temp_dir = TempDir::new()?;
-    let storage_dir = temp_dir.path().canonicalize()?.join("storage");
-    let orderbook_dir = storage_dir.join("orderbook");
-    fs::create_dir_all(&orderbook_dir)?;
-    fs::write(
-        orderbook_dir.join("runtime-snapshot.to"),
-        b"not a canonical Norito checkpoint",
-    )?;
-
-    let base = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .ok_or("failed to resolve workspace root")?
-        .join("fixtures/sorafs_manifest/por");
-    let mut cmd = cargo_bin_cmd!("sorafs-node");
-    let assert = cmd
-        .arg("ingest")
-        .arg("por")
-        .arg(format!("--data-dir={}", storage_dir.display()))
-        .arg(format!(
-            "--challenge={}",
-            base.join("challenge_v1.to").display()
-        ))
-        .arg(format!("--proof={}", base.join("proof_v1.to").display()))
-        .assert()
-        .failure();
-    let stderr = String::from_utf8(assert.get_output().stderr.clone())?;
-    assert!(
-        stderr.contains(&format!(
-            "failed to initialise SoraFS runtime from {}",
-            storage_dir.display()
-        )),
-        "unexpected stderr: {stderr}"
-    );
-    assert!(
-        !stderr.contains("panicked at"),
-        "unexpected panic: {stderr}"
-    );
-
-    Ok(())
-}
-
-#[test]
 fn sorafs_node_cli_ingest_por_replays_proof() -> Result<(), Box<dyn std::error::Error>> {
     if !ingest_tests_enabled() {
         eprintln!("skipping PoR replay (SORAFS_NODE_SKIP_INGEST_TESTS=1)");

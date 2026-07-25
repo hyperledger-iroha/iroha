@@ -47,6 +47,21 @@ impl PolicyJuryVoteChoice {
     }
 }
 
+/// ZK proof references attached to a policy-jury ballot commitment.
+#[cfg(feature = "zk-ballot")]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct PolicyJuryZkEnvelope {
+    /// URI referencing the proof bundle backing the reveal.
+    pub proof_uri: String,
+    /// Optional attached artefacts (e.g., Sigma transcripts).
+    #[norito(default)]
+    pub attachments: Vec<String>,
+}
+
 /// Ballot channel used for a juror's vote.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(not(feature = "zk-ballot"), derive(Copy))]
@@ -60,13 +75,7 @@ pub enum PolicyJuryBallotMode {
     Plaintext,
     /// Commitments reference a ZK proof artifact.
     #[cfg(feature = "zk-ballot")]
-    ZkEnvelope {
-        /// URI referencing the proof bundle backing the reveal.
-        proof_uri: String,
-        /// Optional attached artefacts (e.g., Sigma transcripts).
-        #[norito(default)]
-        attachments: Vec<String>,
-    },
+    ZkEnvelope(PolicyJuryZkEnvelope),
 }
 
 /// Juror ballot commitment produced during the sealed phase.
@@ -126,7 +135,7 @@ impl PolicyJuryBallotCommitV1 {
         }
         #[cfg(feature = "zk-ballot")]
         {
-            let expects_zk = matches!(self.mode, PolicyJuryBallotMode::ZkEnvelope { .. });
+            let expects_zk = matches!(self.mode, PolicyJuryBallotMode::ZkEnvelope(_));
             if expects_zk && reveal.zk_proof_uris.is_empty() {
                 return Err(PolicyJuryBallotError::MissingZkEvidence);
             }
@@ -766,10 +775,10 @@ mod tests {
     #[cfg(feature = "zk-ballot")]
     #[test]
     fn zk_ballot_commit_requires_proof_references() {
-        let commit = sample_commit(PolicyJuryBallotMode::ZkEnvelope {
+        let commit = sample_commit(PolicyJuryBallotMode::ZkEnvelope(PolicyJuryZkEnvelope {
             proof_uri: "sorafs://proofs/pj-2026-02/juror-1".into(),
             attachments: Vec::new(),
-        });
+        }));
         let reveal = sample_reveal(PolicyJuryVoteChoice::Approve);
         let err = commit
             .verify_reveal(&reveal)

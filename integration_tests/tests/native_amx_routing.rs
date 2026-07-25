@@ -1788,6 +1788,7 @@ async fn mixed_dataspace_native_amx_routes_and_commits_with_receipts() -> Result
                 "native AMX routing receipt convergence tick".to_owned(),
             )
             .into(),
+            FeePaymentIntent::authority(Vec::new(), None),
         )?;
 
         Ok(())

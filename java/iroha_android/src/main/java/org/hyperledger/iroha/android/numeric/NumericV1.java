@@ -414,12 +414,8 @@ public final class NumericV1 {
     }
     final ByteBuffer header = ByteBuffer.wrap(envelope).order(ByteOrder.BIG_ENDIAN);
     final int pointerType = header.getShort() & 0xFFFF;
-    if (pointerType == 0x0010) {
-      fail(ErrorCode.TYPE_NOT_ALLOWED, "retired Amount pointer type is permanently reserved");
-    }
     final boolean knownAllowedType =
-        (pointerType >= 0x0001 && pointerType <= 0x000F)
-            || (pointerType >= 0x0011 && pointerType <= 0x0013);
+        pointerType >= MIN_KNOWN_POINTER_TYPE && pointerType <= MAX_ASSIGNED_POINTER_TYPE;
     if (!knownAllowedType) fail(ErrorCode.UNKNOWN_TYPE, "unknown pointer type");
     if (pointerType != kind.pointerType) fail(ErrorCode.WRONG_TYPE, "pointer type does not match");
     if ((header.get() & 0xFF) != 1) fail(ErrorCode.INVALID_ENVELOPE_VERSION, "version must be 1");
@@ -579,10 +575,11 @@ public final class NumericV1 {
     throw new NumericException(code, message);
   }
 
+  // BEGIN GENERATED: kotodama-v1-numeric-policy
   private enum Kind {
     INT("07c039457363b9e1d36bbd31d93dec4a", 0x0011, false),
     DECIMAL("ba2ffed52e4d8ee16f17efefe1828524", 0x0012, true),
-    QUANTITY("e4769984c81ce0e8b678f2eb06274ee3", 0x0013, true);
+    QUANTITY("e4769984c81ce0e8b678f2eb06274ee3", 0x0010, true);
 
     final byte[] schemaHash;
     final int pointerType;
@@ -594,6 +591,10 @@ public final class NumericV1 {
       this.scaled = scaled;
     }
   }
+
+  private static final int MIN_KNOWN_POINTER_TYPE = 0x0001;
+  private static final int MAX_ASSIGNED_POINTER_TYPE = 0x0012;
+  // END GENERATED: kotodama-v1-numeric-policy
 
   private static final class Scaled {
     final BigInteger mantissa;

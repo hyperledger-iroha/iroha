@@ -57,15 +57,7 @@ fn zk_roots_get_respects_cap_and_max() {
     // Build state with small roots cap
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let mut state = State::new(
-        World::new(),
-        kura,
-        query,
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let mut state = State::new(World::new(), kura, query);
+    let mut state = State::new_for_testing(World::new(), kura, query);
     state
         .set_zk(cfg::Zk {
             halo2: cfg::Halo2 {
@@ -95,6 +87,7 @@ fn zk_roots_get_respects_cap_and_max() {
                 metal_debug_fused: defaults::zk::fastpq::METAL_DEBUG_FUSED,
             },
             stark: cfg::Stark::default(),
+            sccp: cfg::Sccp::default(),
             root_history_cap: 4,
             ballot_history_cap: defaults::zk::vote::BALLOT_HISTORY_CAP,
             empty_root_on_empty: defaults::zk::ledger::EMPTY_ROOT_ON_EMPTY,

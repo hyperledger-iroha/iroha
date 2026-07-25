@@ -11,7 +11,6 @@ import pytest
 import requests
 
 from iroha_python import (
-    AccountAddress,
     AccountAsset,
     AccountAssetsPage,
     AssetHolderRecord,
@@ -32,7 +31,7 @@ from iroha_python._privacy_backends import (
     _is_production_verify_backend_label,
     _require_production_verify_backend_label,
 )
-from iroha_python.client import ACCOUNT_ONBOARDING_TOKEN_HEADER
+from iroha_python.client import ACCOUNT_ONBOARDING_TOKEN_HEADER, DATA_MODEL_VERSION
 from iroha_python.repo import (
     RepoAgreementListPage,
     RepoCashLeg,
@@ -45,7 +44,6 @@ from iroha_python.tx import (
     _normalize_rwa_quantity_fields,
     _normalize_u128_quantity,
 )
-
 
 FEE_PAYMENT = authority_fee_payment(charge_limits=[])
 
@@ -740,7 +738,9 @@ def test_get_asset_definition_returns_none_for_missing_definition() -> None:
 
 
 def test_data_model_validation_uses_typed_node_capabilities() -> None:
-    session = FakeSession([response(200, {"abi_version": 1, "data_model_version": 1})])
+    session = FakeSession(
+        [response(200, {"abi_version": 1, "data_model_version": DATA_MODEL_VERSION})]
+    )
     client = ToriiClient("http://torii.example", session=session, max_retries=0)
 
     client._ensure_data_model_validation()
@@ -1998,14 +1998,8 @@ def test_mint_assets_and_wait_batches_records_in_one_transaction() -> None:
     client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
     captured: dict[str, object] = {}
     asset_definition_id = "7MBRDd8cGFBZkFGdDMwV7S6FPwbw"
-    adult = AccountAddress.from_account(
-        domain="wonderland",
-        public_key=bytes([0x11] * 32),
-    ).to_i105(0x02F1)
-    business = AccountAddress.from_account(
-        domain="wonderland",
-        public_key=bytes([0x22] * 32),
-    ).to_i105(0x02F1)
+    adult = account_address(0x11)
+    business = account_address(0x22)
 
     def fake_submit(draft: object, **kwargs: object) -> dict[str, object]:
         captured["draft"] = draft
@@ -2063,18 +2057,9 @@ def test_transfer_assets_and_wait_batches_records_in_one_transaction() -> None:
     client = ToriiClient("http://torii.example", session=FakeSession([]), max_retries=0)
     captured: dict[str, object] = {}
     asset_definition_id = "7MBRDd8cGFBZkFGdDMwV7S6FPwbw"
-    source = AccountAddress.from_account(
-        domain="wonderland",
-        public_key=bytes([0x11] * 32),
-    ).to_i105(0x02F1)
-    dest = AccountAddress.from_account(
-        domain="wonderland",
-        public_key=bytes([0x22] * 32),
-    ).to_i105(0x02F1)
-    fees = AccountAddress.from_account(
-        domain="wonderland",
-        public_key=bytes([0x33] * 32),
-    ).to_i105(0x02F1)
+    source = account_address(0x11)
+    dest = account_address(0x22)
+    fees = account_address(0x33)
 
     def fake_submit(draft: object, **kwargs: object) -> dict[str, object]:
         captured["draft"] = draft

@@ -21,7 +21,7 @@ fn ballot_proof_roundtrip() {
     assert_eq!(dec.envelope_bytes, vec![1, 2, 3, 4]);
     assert_eq!(dec.root_hint, Some([0xAA; 32]));
     assert_eq!(dec.nullifier, Some([0x55; 32]));
-    assert_eq!(dec.amount.as_deref(), Some("42"));
+    assert_eq!(dec.amount, Some(42_u64.into()));
     assert_eq!(dec.duration_blocks, Some(64));
     assert_eq!(dec.direction.as_deref(), Some("Aye"));
 }

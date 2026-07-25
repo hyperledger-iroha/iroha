@@ -330,6 +330,24 @@ def test_entrypoint_rejects_each_forged_reserved_view(view_name: str) -> None:
         EntrypointValueTypeV1.from_payload(wrong_leaf)
 
 
+@pytest.mark.parametrize("reserved_name", (*_QUERY_VIEW_LAYOUTS, "QueryPage"))
+def test_entrypoint_reserved_struct_name_does_not_bypass_exact_shape_validation(
+    reserved_name: str,
+) -> None:
+    forged = {
+        "nodes": [
+            {
+                "kind": "Struct",
+                "value": {"name": reserved_name, "fields": ["value"]},
+            },
+            _leaf_node("Int"),
+        ]
+    }
+
+    with pytest.raises(TypeError, match="forged reserved"):
+        EntrypointValueTypeV1.from_payload(forged)
+
+
 def test_entrypoint_ordinary_struct_keeps_its_nominal_struct_prefix() -> None:
     pair = {
         "nodes": [
@@ -458,6 +476,8 @@ def test_contract_manifest_decodes_checked_in_canonical_kotodama_manifests(
         "seiyaku",
         "match",
         "int",
+        "Amount",
+        "amount",
         "state_map_get",
         "__kotodama_quantity_ratio_round",
         "__kotodama_decimal_to_int_trunc",

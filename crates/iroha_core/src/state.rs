@@ -24002,6 +24002,77 @@ struct LaneConsensusLifecycleSnapshot {
     reset_heights: BTreeMap<LaneId, u64>,
 }
 
+/// State-authenticated authority for replacing one reused lane-local
+/// certificate slot after a canonical same-incarnation reset.
+///
+/// Kura cannot derive the reset watermark from storage geometry alone.  The
+/// fields remain private to `State`, so storage callers can only obtain this
+/// capability from one consistent committed lifecycle snapshot.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CertifiedLaneBlockPersistenceAuthority {
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    lane_incarnation: Hash,
+    canonical_reset_height: Option<u64>,
+}
+
+impl CertifiedLaneBlockPersistenceAuthority {
+    #[cfg(test)]
+    pub(crate) fn for_test(
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_incarnation: Hash,
+        canonical_reset_height: Option<u64>,
+    ) -> Self {
+        Self {
+            lane_id,
+            dataspace_id,
+            lane_incarnation,
+            canonical_reset_height,
+        }
+    }
+
+    pub(crate) fn authorizes_proposal(
+        &self,
+        proposal: &crate::sumeragi::consensus::LaneBlockProposalV1,
+    ) -> bool {
+        let descriptor = &proposal.descriptor;
+        descriptor.lane_id == self.lane_id
+            && descriptor.dataspace_id == self.dataspace_id
+            && descriptor.lane_incarnation == self.lane_incarnation
+            && self
+                .canonical_reset_height
+                .is_none_or(|reset_height| descriptor.proposal_height > reset_height)
+    }
+
+    pub(crate) fn permits_slot_replacement(
+        &self,
+        existing: &iroha_data_model::block::consensus::LaneBlockDescriptorV1,
+        replacement: &iroha_data_model::block::consensus::LaneBlockDescriptorV1,
+    ) -> bool {
+        self.permits_frontier_replacement(existing, replacement)
+            && existing.lane_block_height == replacement.lane_block_height
+    }
+
+    pub(crate) fn permits_frontier_replacement(
+        &self,
+        existing: &iroha_data_model::block::consensus::LaneBlockDescriptorV1,
+        replacement: &iroha_data_model::block::consensus::LaneBlockDescriptorV1,
+    ) -> bool {
+        let Some(reset_height) = self.canonical_reset_height else {
+            return false;
+        };
+        existing.lane_id == self.lane_id
+            && existing.dataspace_id == self.dataspace_id
+            && existing.lane_incarnation == self.lane_incarnation
+            && replacement.lane_id == self.lane_id
+            && replacement.dataspace_id == self.dataspace_id
+            && replacement.lane_incarnation == self.lane_incarnation
+            && existing.proposal_height <= reset_height
+            && reset_height < replacement.proposal_height
+    }
+}
+
 struct MergeConsensusSnapshot {
     lifecycle: LaneConsensusLifecycleSnapshot,
     admission: MergeAdmissionSnapshot,
@@ -24010,6 +24081,20 @@ struct MergeConsensusSnapshot {
 }
 
 impl LaneConsensusLifecycleSnapshot {
+    fn certified_lane_block_persistence_authority(
+        &self,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+    ) -> Option<CertifiedLaneBlockPersistenceAuthority> {
+        let lane_incarnation = self.incarnations.get(&lane_id).copied()?;
+        Some(CertifiedLaneBlockPersistenceAuthority {
+            lane_id,
+            dataspace_id,
+            lane_incarnation,
+            canonical_reset_height: self.reset_heights.get(&lane_id).copied(),
+        })
+    }
+
     fn lane_visible_after_reset(&self, lane_id: LaneId, proposal_height: u64) -> bool {
         self.reset_heights
             .get(&lane_id)
@@ -24319,6 +24404,60 @@ impl State {
             }
             std::thread::yield_now();
         }
+    }
+
+    fn certified_lane_block_persistence_authority(
+        &self,
+        proposal: &crate::sumeragi::consensus::LaneBlockProposalV1,
+    ) -> core::result::Result<CertifiedLaneBlockPersistenceAuthority, &'static str> {
+        let descriptor = &proposal.descriptor;
+        let lifecycle = self.lane_consensus_lifecycle_snapshot();
+        if !lifecycle.lane_route_and_incarnation_matches(
+            descriptor.lane_id,
+            descriptor.dataspace_id,
+            descriptor.proposal_height,
+            descriptor.lane_incarnation,
+        ) {
+            return Err("certified lane block proposal is outside the committed lane lifecycle");
+        }
+        let authority = lifecycle
+            .certified_lane_block_persistence_authority(descriptor.lane_id, descriptor.dataspace_id)
+            .ok_or("certified lane block lane has no committed incarnation")?;
+        authority
+            .authorizes_proposal(proposal)
+            .then_some(authority)
+            .ok_or("certified lane block proposal is not visible after the canonical reset")
+    }
+
+    pub(crate) fn persist_committed_lane_block_session_lifecycle_bound(
+        &self,
+        session: &crate::lane_consensus::CommittedLaneBlockSession,
+        signer_pops: &BTreeMap<PublicKey, Vec<u8>>,
+    ) -> core::result::Result<(), String> {
+        // Every production lifecycle publisher takes this same lock before it
+        // opens an odd state-view generation.  Holding it across authority
+        // derivation and Kura publication prevents a copied reset watermark
+        // from outliving the committed lifecycle which authorized it.
+        let _state_write_lock = self.state_write_lock.lock();
+        let generation = self.state_view_generation();
+        if generation % 2 != 0 {
+            return Err(
+                "cannot persist a lane certificate during an active State publication".to_owned(),
+            );
+        }
+        let authority = self
+            .certified_lane_block_persistence_authority(&session.proposal)
+            .map_err(str::to_owned)?;
+        self.kura
+            .persist_committed_lane_block_session_with_authority(session, signer_pops, &authority)
+            .map_err(|error| error.to_string())?;
+        if self.state_view_generation() != generation {
+            return Err(
+                "State lifecycle generation changed under lane certificate persistence lock"
+                    .to_owned(),
+            );
+        }
+        Ok(())
     }
 
     fn merge_consensus_snapshot(&self) -> MergeConsensusSnapshot {
@@ -27446,14 +27585,16 @@ impl State {
         )
     }
 
-    /// Create a test State whose isolated Kura is opened at the supplied pre-genesis Nexus
-    /// geometry.
+    /// Create an isolated State whose Kura is opened at the supplied authoritative
+    /// pre-genesis Nexus geometry.
     ///
     /// This is intentionally separate from [`Self::set_nexus`]: installing a
     /// fixture's initial catalog is not a runtime lifecycle transition and must
-    /// not archive a synthetic default-primary segment.
-    #[cfg(test)]
-    pub(crate) fn new_with_nexus_for_testing(
+    /// not archive a synthetic default-primary segment. Unlike the ordinary test
+    /// convenience constructors, this preserves the supplied Nexus fee and
+    /// governance settings exactly so genesis pre-execution matches peer startup.
+    #[must_use]
+    pub fn new_with_pre_genesis_nexus_for_testing(
         world: World,
         mut nexus: iroha_config::parameters::actual::Nexus,
         query_handle: LiveQueryStoreHandle,
@@ -27472,6 +27613,18 @@ impl State {
         )
         .expect("test fixture durable State startup journals must validate");
         state.install_pre_genesis_nexus_for_testing(nexus);
+        state
+    }
+
+    /// Create a test State whose isolated Kura is opened at the supplied pre-genesis Nexus
+    /// geometry and whose remaining runtime settings use unit-test defaults.
+    #[cfg(test)]
+    pub(crate) fn new_with_nexus_for_testing(
+        world: World,
+        nexus: iroha_config::parameters::actual::Nexus,
+        query_handle: LiveQueryStoreHandle,
+    ) -> Self {
+        let mut state = Self::new_with_pre_genesis_nexus_for_testing(world, nexus, query_handle);
         state.configure_test_runtime_defaults();
         state
     }
@@ -27480,7 +27633,6 @@ impl State {
     ///
     /// The caller must have opened Kura with the same lane geometry. This helper
     /// is for tests that need a named store root or custom retention policy.
-    #[cfg(test)]
     pub(crate) fn install_pre_genesis_nexus_for_testing(
         &mut self,
         mut nexus: iroha_config::parameters::actual::Nexus,
@@ -29206,7 +29358,7 @@ impl State {
     }
 
     #[inline]
-    fn state_view_generation(&self) -> u64 {
+    pub(crate) fn state_view_generation(&self) -> u64 {
         self.view_generation.load(Ordering::Acquire)
     }
 
@@ -35724,6 +35876,58 @@ impl State {
                 descriptor.lane_block_height,
                 descriptor.lane_id,
                 descriptor.dataspace_id,
+                descriptor.lane_block_view,
+            )
+        });
+        sessions
+    }
+
+    /// Snapshot one bounded latest-certified frontier for every active lane route.
+    ///
+    /// Unlike the explicit historical recovery snapshot above, this projection
+    /// never walks lane-local certificate history. The lifecycle snapshot is
+    /// held logically consistent across every route so reset, dataspace, and
+    /// incarnation filters cannot be mixed between generations.
+    #[must_use]
+    pub(crate) fn latest_certified_lane_block_frontier_sessions_snapshot_cached(
+        &self,
+    ) -> Vec<crate::lane_consensus::CommittedLaneBlockSession> {
+        // Frontier lookup may durably repair a reused ordinary slot with the
+        // snapshot's reset authority. Serialize the complete multi-route
+        // projection with lifecycle publication so that capability cannot
+        // outlive the generation which granted it.
+        let _state_write_lock = self.state_write_lock.lock();
+        let lifecycle = self.lane_consensus_lifecycle_snapshot();
+        let mut sessions = Self::lane_block_artifact_routes(&lifecycle.nexus)
+            .into_iter()
+            .filter_map(|(lane_id, dataspace_id)| {
+                let authority =
+                    lifecycle.certified_lane_block_persistence_authority(lane_id, dataspace_id)?;
+                let artifact = self
+                    .kura
+                    .latest_certified_lane_block_frontier_with_authority(lane_id, &authority)?;
+                let descriptor = &artifact.proposal.descriptor;
+                (descriptor.dataspace_id == dataspace_id
+                    && lifecycle.lane_route_and_incarnation_matches(
+                        lane_id,
+                        dataspace_id,
+                        descriptor.proposal_height,
+                        descriptor.lane_incarnation,
+                    ))
+                .then_some(crate::lane_consensus::CommittedLaneBlockSession {
+                    proposal: artifact.proposal,
+                    prepare_qc: artifact.prepare_qc,
+                    commit_qc: artifact.commit_qc,
+                })
+            })
+            .collect::<Vec<_>>();
+        sessions.sort_by_key(|session| {
+            let descriptor = &session.proposal.descriptor;
+            (
+                descriptor.lane_id,
+                descriptor.dataspace_id,
+                descriptor.proposal_height,
+                descriptor.lane_block_height,
                 descriptor.lane_block_view,
             )
         });
@@ -65197,14 +65401,14 @@ mod tests {
     }
 
     #[test]
-    fn test_nexus_fixture_constructor_opens_custom_primary_without_default_segment() {
+    fn test_nexus_fixture_constructor_opens_custom_primary_without_archiving_default_segment() {
         let custom_primary = LaneConfig {
             alias: "custom-primary".to_owned(),
             ..LaneConfig::default()
         };
         let custom_catalog =
             LaneCatalog::new(nonzero!(1_u32), vec![custom_primary]).expect("custom lane catalog");
-        let state = State::new_with_nexus_for_testing(
+        let state = State::new_with_pre_genesis_nexus_for_testing(
             World::default(),
             iroha_config::parameters::actual::Nexus {
                 enabled: true,
@@ -65229,6 +65433,10 @@ mod tests {
         assert_ne!(primary.kura_segment, default_primary.kura_segment);
         assert!(!default_primary.blocks_dir(&store_root).exists());
         assert!(!default_primary.merge_log_path(&store_root).exists());
+        assert!(
+            !store_root.join("retired").exists(),
+            "opening a fixture at its authoritative primary must not archive synthetic default geometry"
+        );
     }
 
     #[test]
@@ -96023,8 +96231,21 @@ seiyaku SequentialNfts {
             fresh_proposal_height,
             fresh_lane_block_height,
         );
-        kura.persist_committed_lane_block_session(&fresh_session, &fresh_signer_pops)
+        state
+            .persist_committed_lane_block_session_lifecycle_bound(
+                &fresh_session,
+                &fresh_signer_pops,
+            )
             .expect("persist same-incarnation post-reset certified block");
+        assert_eq!(
+            state
+                .latest_certified_lane_block_frontier_sessions_snapshot_cached()
+                .into_iter()
+                .map(|session| session.proposal.descriptor.lane_block_height)
+                .collect::<Vec<_>>(),
+            vec![fresh_lane_block_height],
+            "the production frontier must cross the reset watermark to the lower fresh lane height"
+        );
         assert_eq!(
             state
                 .certified_lane_block_tips_snapshot_cached()

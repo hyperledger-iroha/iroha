@@ -699,9 +699,7 @@ function validatePointerLiteralV1(bytes, label) {
     throw new TypeError(`${label} pointer TLV is truncated`);
   }
   const typeId = (bytes[0] << 8) | bytes[1];
-  const allowedType =
-    (typeId >= 0x0001 && typeId <= 0x000f) ||
-    (typeId >= 0x0011 && typeId <= 0x0013);
+  const allowedType = typeId >= 0x0001 && typeId <= 0x0012;
   if (!allowedType) {
     throw new TypeError(`${label} pointer TLV type is not allowed by ABI v1`);
   }

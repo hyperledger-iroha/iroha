@@ -45892,9 +45892,6 @@ fn sorafs_reference_orderbook_kind_from_bridge(
         sorafs_reference_ffi::SORAFS_REFERENCE_ORDERBOOK_KIND_SETTLEMENT_RECEIPT => {
             Ok(OrderbookValidationPayloadKindV1::SettlementReceipt)
         }
-        sorafs_reference_ffi::SORAFS_REFERENCE_ORDERBOOK_KIND_RUNTIME_SNAPSHOT => {
-            Ok(OrderbookValidationPayloadKindV1::RuntimeSnapshot)
-        }
         _ => Err(ERR_SORAFS_REFERENCE),
     }
 }
@@ -52929,7 +52926,7 @@ mod tests {
         let mut map = JsonMap::new();
         map.insert(
             "owner".to_owned(),
-            JsonValue::from("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"),
+            JsonValue::from("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"),
         );
         let mut value = JsonValue::Object(map);
         assert!(normalize_zk_ballot_public_inputs(&mut value).is_err());
@@ -52954,7 +52951,7 @@ mod tests {
         let mut map = JsonMap::new();
         map.insert(
             "owner".to_owned(),
-            JsonValue::from("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"),
+            JsonValue::from("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"),
         );
         map.insert("amount".to_owned(), JsonValue::from("100"));
         map.insert("duration_blocks".to_owned(), JsonValue::from(64u64));
@@ -54930,15 +54927,15 @@ mod sorafs_tests {
     }
 
     #[test]
-    fn sorafs_reference_orderbook_signing_rejects_runtime_payload_via_bridge_ffi() {
-        let payload = repo_fixture("fixtures/sorafs_manifest/orderbook/runtime_snapshot_v1.to");
+    fn sorafs_reference_orderbook_signing_rejects_retired_snapshot_selector_via_bridge_ffi() {
+        let payload = b"retired runtime snapshot";
         let private_key = [0xB7; 32];
         let mut signed_ptr: *mut c_uchar = ptr::null_mut();
         let mut signed_len: c_ulong = 0;
 
         let rc = unsafe {
             connect_norito_sorafs_reference_sign_orderbook_payload(
-                sorafs_reference_ffi::SORAFS_REFERENCE_ORDERBOOK_KIND_RUNTIME_SNAPSHOT,
+                6,
                 payload.as_ptr(),
                 payload.len() as c_ulong,
                 private_key.as_ptr(),

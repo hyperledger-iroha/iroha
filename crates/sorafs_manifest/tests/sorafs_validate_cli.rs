@@ -1085,16 +1085,6 @@ fn sorafs_validate_bundle_accepts_committed_fixture_root() {
     );
     assert!(
         inputs.iter().any(|input| {
-            input.get("kind").and_then(Value::as_str) == Some("orderbook_runtime_snapshot")
-                && input
-                    .get("path")
-                    .and_then(Value::as_str)
-                    .is_some_and(|path| path.ends_with("orderbook/runtime_snapshot_v1.to"))
-        }),
-        "{outcome:?}"
-    );
-    assert!(
-        inputs.iter().any(|input| {
             input.get("kind").and_then(Value::as_str) == Some("pdp_commitment")
                 && input
                     .get("path")

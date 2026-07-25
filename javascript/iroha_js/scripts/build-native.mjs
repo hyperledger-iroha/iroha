@@ -52,6 +52,7 @@ export function runNativeBuild({
   const cargoManifest = join(repoRoot, "Cargo.toml");
   const buildArgs = [
     "build",
+    "--locked",
     "--manifest-path",
     cargoManifest,
     "-p",

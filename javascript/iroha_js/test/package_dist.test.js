@@ -519,6 +519,11 @@ test("package Nexus browser defaults build, finalize, and submit the shared cano
     creationTimeMs: nexusFixture.transfer_input.creation_time_ms,
     ttlMs: nexusFixture.transfer_input.ttl_ms,
     nonce: nexusFixture.transfer_input.nonce,
+    feePayment: {
+      payer: nexusFixture.transfer_input.fee_payment.payer,
+      chargeLimits: [...nexusFixture.transfer_input.fee_payment.value.charge_limits],
+      gasLimit: nexusFixture.transfer_input.fee_payment.value.gas_limit,
+    },
     metadata: nexusFixture.transfer_input.metadata,
     feePayment: {
       payer: nexusFixture.transfer_input.fee_payment.payer,

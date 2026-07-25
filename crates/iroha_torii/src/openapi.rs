@@ -5525,6 +5525,115 @@ fn canonical_request_auth_header_parameters() -> Vec<Value> {
     ]
 }
 
+fn gateway_compliance_get_operation(
+    summary: &str,
+    description: &str,
+    mut parameters: Vec<Value>,
+) -> Map {
+    parameters.extend(canonical_request_auth_header_parameters());
+    let mut methods = json_get_operation(
+        "SoraFS",
+        summary,
+        description,
+        "#/components/schemas/JsonValue",
+        parameters,
+    );
+    if let Some(Value::Object(operation)) = methods.get_mut("get")
+        && let Some(Value::Object(responses)) = operation.get_mut("responses")
+    {
+        responses.insert(
+            "401".into(),
+            json_response(
+                "Canonical account-signature authentication is missing or invalid.",
+                schema_ref("JsonValue"),
+            ),
+        );
+        responses.insert(
+            "403".into(),
+            json_response(
+                "The authenticated account does not hold the governed gateway compliance operator role.",
+                schema_ref("JsonValue"),
+            ),
+        );
+        responses.insert(
+            "503".into(),
+            json_response(
+                "The configured durable controller or runtime feed transport is unavailable.",
+                schema_ref("JsonValue"),
+            ),
+        );
+    }
+    methods
+}
+
+fn gateway_compliance_post_operation(
+    summary: &str,
+    description: &str,
+    request_body: bool,
+    success_status: &str,
+) -> Map {
+    let mut methods = json_post_operation_with_success_status(
+        "SoraFS",
+        summary,
+        description,
+        "#/components/schemas/JsonValue",
+        "#/components/schemas/JsonValue",
+        canonical_request_auth_header_parameters(),
+        success_status,
+    );
+    if let Some(Value::Object(operation)) = methods.get_mut("post") {
+        if !request_body {
+            operation.remove("requestBody");
+        } else if let Some(Value::Object(body)) = operation.get_mut("requestBody") {
+            body.insert(
+                "description".into(),
+                Value::String(
+                    "Exact canonical Norito JSON bytes. Alternate whitespace, field order, media types, and compatibility aliases are rejected."
+                        .to_owned(),
+                ),
+            );
+        }
+        if let Some(Value::Object(responses)) = operation.get_mut("responses") {
+            for (status, description) in [
+                (
+                    "400",
+                    "The request body or canonical JSON representation is invalid.",
+                ),
+                (
+                    "401",
+                    "Canonical account-signature authentication is missing or invalid.",
+                ),
+                (
+                    "403",
+                    "The authenticated account lacks the governed role or a catalog signature is not trusted.",
+                ),
+                (
+                    "409",
+                    "The requested transition conflicts with durable controller state.",
+                ),
+                (
+                    "413",
+                    "The request exceeds a governed V1 resource bound.",
+                ),
+                (
+                    "422",
+                    "The signed payload is invalid for the active compliance policy.",
+                ),
+                (
+                    "503",
+                    "The durable gateway compliance controller is unavailable.",
+                ),
+            ] {
+                responses.insert(
+                    status.into(),
+                    json_response(description, schema_ref("JsonValue")),
+                );
+            }
+        }
+    }
+    methods
+}
+
 fn operator_signature_header_parameters() -> Vec<Value> {
     vec![
         string_header_param(
@@ -5958,6 +6067,61 @@ fn sorafs_paths() -> Map {
             "Return a bounded exclusive-cursor page of typed, payload-free repair-ledger events from finalized chain state. Supports `If-None-Match` with a canonical-page `ETag`; clients poll this route for new committed events.",
             "#/components/schemas/JsonValue",
             repair_events_query_params,
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/gateway/compliance/feeds/{feed_id}".to_owned(),
+        Value::Object(gateway_compliance_get_operation(
+            "Fetch one authenticated compliance feed.",
+            "Resolve, fetch, trust-pin, decompress, decode, normalize, and return one configured bounded feed through the runtime-injected transport. This operation does not sign, stage, or promote a catalog.",
+            vec![string_path_param(
+                "feed_id",
+                "Canonical configured gateway compliance feed identifier.",
+            )],
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/gateway/compliance/status".to_owned(),
+        Value::Object(gateway_compliance_get_operation(
+            "Fetch durable gateway compliance status.",
+            "Return the payload-safe durable controller checkpoint, including the staged candidate, signed gateway acknowledgements, serving and last-known-good catalogs, predecessor-chain head, and bounded history.",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/gateway/compliance/stage".to_owned(),
+        Value::Object(gateway_compliance_post_operation(
+            "Stage a signed compliance catalog.",
+            "Verify and durably stage one exact canonical threshold-signed, predecessor-bound catalog. Identical replay is idempotent; same-sequence substitution fails closed.",
+            true,
+            "202",
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/gateway/compliance/acknowledge".to_owned(),
+        Value::Object(gateway_compliance_post_operation(
+            "Acknowledge a staged compliance catalog.",
+            "Verify and durably record one exact canonical signed regional-gateway acknowledgement for the currently staged catalog. Gateway identity equivocation fails closed.",
+            true,
+            "202",
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/gateway/compliance/promote".to_owned(),
+        Value::Object(gateway_compliance_post_operation(
+            "Promote the staged compliance catalog.",
+            "Atomically promote the staged catalog only after the configured distinct regional-gateway acknowledgement quorum. The canonical signed request body must be empty.",
+            false,
+            "200",
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/gateway/compliance/rollback".to_owned(),
+        Value::Object(gateway_compliance_post_operation(
+            "Roll back to the last-known-good compliance catalog.",
+            "Verify the exact threshold-signed rollback authorization and atomically move the serving pointer to the last-known-good catalog without rewriting the signed predecessor-chain head.",
+            true,
+            "200",
         )),
     );
     paths.insert(

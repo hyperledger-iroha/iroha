@@ -6,14 +6,11 @@ use std::{
 };
 
 use iroha_config::parameters::actual;
-use iroha_data_model::{
-    prelude::Quantity,
-    sorafs::{
-        orderbook::{ORDERBOOK_MAX_FILLS_PER_EXECUTION_V1, ORDERBOOK_MAX_MAINTENANCE_ITEMS_V1},
-        transparency::{
-            MODERATION_PRIVACY_PARAMETERS_VERSION_V1, ModerationPrivacyModeV1,
-            ModerationPrivacyParametersV1,
-        },
+use iroha_data_model::sorafs::{
+    orderbook::{ORDERBOOK_MAX_FILLS_PER_EXECUTION_V1, ORDERBOOK_MAX_MAINTENANCE_ITEMS_V1},
+    transparency::{
+        MODERATION_PRIVACY_PARAMETERS_VERSION_V1, ModerationPrivacyModeV1,
+        ModerationPrivacyParametersV1,
     },
 };
 
@@ -48,14 +45,12 @@ pub struct StorageConfig {
     stream_token_signing_key_path: Option<PathBuf>,
     orderbook_worker: OrderbookWorkerPolicy,
     reserve_worker: ReserveWorkerPolicy,
-    orderbook: OrderbookAdmissionPolicy,
     reputation_trust_policy_path: Option<PathBuf>,
     pricing_trust_policy_path: Option<PathBuf>,
     hedging_feed_trust_policy_path: Option<PathBuf>,
     privacy_aggregate_schedule: Option<PrivacyAggregateScheduleConfig>,
     privacy_aggregate_policy: Option<PrivacyAggregatePolicyConfig>,
     evidence_viewer_audit_schedule: Option<PrivacyAggregateScheduleConfig>,
-    reserve_lifecycle_schedule: Option<ReserveLifecycleScheduleConfig>,
     governance_dir: Option<PathBuf>,
     governance_dag_publisher_peer_id: Option<String>,
     governance_dag_signing_key_path: Option<PathBuf>,
@@ -183,12 +178,6 @@ impl StorageConfig {
         self.reserve_worker
     }
 
-    /// Temporary local admission policy; non-authoritative and not a compatibility branch.
-    #[must_use]
-    pub fn orderbook_admission_policy(&self) -> &OrderbookAdmissionPolicy {
-        &self.orderbook
-    }
-
     /// Canonical external trust-policy file used for reputation snapshot admission.
     #[must_use]
     pub fn reputation_trust_policy_path(&self) -> Option<&PathBuf> {
@@ -223,12 +212,6 @@ impl StorageConfig {
     #[must_use]
     pub fn evidence_viewer_audit_schedule(&self) -> Option<PrivacyAggregateScheduleConfig> {
         self.evidence_viewer_audit_schedule
-    }
-
-    /// Optional config-backed reserve lifecycle advancement scheduler.
-    #[must_use]
-    pub fn reserve_lifecycle_schedule(&self) -> Option<ReserveLifecycleScheduleConfig> {
-        self.reserve_lifecycle_schedule
     }
 
     /// Optional directory used to materialise governance artefacts.
@@ -318,14 +301,12 @@ impl StorageConfig {
             stream_token_signing_key_path: storage.stream_tokens.signing_key_path.clone(),
             orderbook_worker: OrderbookWorkerPolicy::from(storage.orderbook_worker),
             reserve_worker: ReserveWorkerPolicy::from(storage.reserve_worker),
-            orderbook: OrderbookAdmissionPolicy::from(storage.orderbook.clone()),
             reputation_trust_policy_path: storage.reputation_trust_policy_path.clone(),
             pricing_trust_policy_path: storage.pricing_trust_policy_path.clone(),
             hedging_feed_trust_policy_path: storage.hedging_feed_trust_policy_path.clone(),
             privacy_aggregate_schedule: storage.privacy_aggregates.clone().into_schedule_config(),
             privacy_aggregate_policy: storage.privacy_aggregates.clone().into_policy_config(),
             evidence_viewer_audit_schedule: storage.evidence_viewer_audits.into_schedule_config(),
-            reserve_lifecycle_schedule: storage.reserve_lifecycle.into_schedule_config(),
             governance_dir: storage.governance_dag_dir.clone(),
             governance_dag_publisher_peer_id: storage.governance_dag_publisher_peer_id.clone(),
             governance_dag_signing_key_path: storage.governance_dag_signing_key_path.clone(),
@@ -485,13 +466,6 @@ impl StorageConfigBuilder {
         self
     }
 
-    /// Override the temporary non-authoritative local orderbook policy.
-    #[must_use]
-    pub fn orderbook_admission_policy(mut self, policy: OrderbookAdmissionPolicy) -> Self {
-        self.inner.orderbook = policy;
-        self
-    }
-
     /// Override the canonical reputation trust-policy path.
     #[must_use]
     pub fn reputation_trust_policy_path(mut self, path: Option<PathBuf>) -> Self {
@@ -540,16 +514,6 @@ impl StorageConfigBuilder {
         schedule: Option<PrivacyAggregateScheduleConfig>,
     ) -> Self {
         self.inner.evidence_viewer_audit_schedule = schedule;
-        self
-    }
-
-    /// Override the optional config-backed reserve lifecycle scheduler.
-    #[must_use]
-    pub fn reserve_lifecycle_schedule(
-        mut self,
-        schedule: Option<ReserveLifecycleScheduleConfig>,
-    ) -> Self {
-        self.inner.reserve_lifecycle_schedule = schedule;
         self
     }
 
@@ -947,86 +911,6 @@ impl From<actual::SorafsReserveWorker> for ReserveWorkerPolicy {
 impl Default for ReserveWorkerPolicy {
     fn default() -> Self {
         Self::from(actual::SorafsReserveWorker::default())
-    }
-}
-
-/// Temporary local orderbook policy retained only until local-authority removal.
-///
-/// This policy is non-authoritative and does not define compatibility behavior.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OrderbookAdmissionPolicy {
-    min_order_gib: u64,
-    price_tick: Quantity,
-}
-
-impl OrderbookAdmissionPolicy {
-    /// Construct a local orderbook admission policy.
-    #[must_use]
-    pub fn new(min_order_gib: u64, price_tick: Quantity) -> Self {
-        Self {
-            min_order_gib: min_order_gib.max(1),
-            price_tick,
-        }
-    }
-
-    /// Minimum accepted order quantity in GiB.
-    #[must_use]
-    pub fn min_order_gib(&self) -> u64 {
-        self.min_order_gib
-    }
-
-    /// Exact accepted XOR price tick per GiB.
-    #[must_use]
-    pub fn price_tick(&self) -> &Quantity {
-        &self.price_tick
-    }
-}
-
-impl From<actual::SorafsOrderbook> for OrderbookAdmissionPolicy {
-    fn from(policy: actual::SorafsOrderbook) -> Self {
-        Self::new(policy.min_order_gib, policy.price_tick)
-    }
-}
-
-/// Config-backed local reserve lifecycle advancement schedule.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ReserveLifecycleScheduleConfig {
-    interval_seconds: u64,
-    initial_delay_seconds: u64,
-}
-
-impl ReserveLifecycleScheduleConfig {
-    /// Construct a reserve lifecycle advancement schedule, clamping zero cadence to one second.
-    #[must_use]
-    pub fn new(interval_seconds: u64, initial_delay_seconds: u64) -> Self {
-        Self {
-            interval_seconds: interval_seconds.max(1),
-            initial_delay_seconds,
-        }
-    }
-
-    /// Interval between lifecycle advancement ticks, in seconds.
-    #[must_use]
-    pub fn interval_seconds(&self) -> u64 {
-        self.interval_seconds
-    }
-
-    /// Delay before the first lifecycle advancement tick, in seconds.
-    #[must_use]
-    pub fn initial_delay_seconds(&self) -> u64 {
-        self.initial_delay_seconds
-    }
-}
-
-trait ReserveLifecycleScheduleConfigExt {
-    fn into_schedule_config(self) -> Option<ReserveLifecycleScheduleConfig>;
-}
-
-impl ReserveLifecycleScheduleConfigExt for actual::SorafsReserveLifecycleSchedule {
-    fn into_schedule_config(self) -> Option<ReserveLifecycleScheduleConfig> {
-        self.enabled.then(|| {
-            ReserveLifecycleScheduleConfig::new(self.interval_seconds, self.initial_delay_seconds)
-        })
     }
 }
 
@@ -1796,10 +1680,6 @@ mod tests {
                 "sorafs.sf1.backup:eu".into(),
             ],
         };
-        actual.orderbook = actual::SorafsOrderbook {
-            min_order_gib: 8,
-            price_tick: "0.025".parse().expect("exact orderbook price tick"),
-        };
         actual.reputation_trust_policy_path =
             Some(PathBuf::from("/tmp/sorafs-reputation-policy.to"));
         actual.pricing_trust_policy_path = Some(PathBuf::from("/tmp/sorafs-pricing-policy.to"));
@@ -1827,12 +1707,6 @@ mod tests {
             cycle_seconds: 24,
             publish_delay_seconds: 6,
         };
-        actual.reserve_lifecycle = actual::SorafsReserveLifecycleSchedule {
-            enabled: true,
-            interval_seconds: 30,
-            initial_delay_seconds: 7,
-        };
-
         let cfg = StorageConfig::from(&actual);
         assert!(cfg.enabled());
         assert_eq!(cfg.data_dir(), &PathBuf::from("/tmp/sorafs"));
@@ -1899,9 +1773,6 @@ mod tests {
                 "sorafs.sf1.backup:eu".to_string()
             ]
         );
-        let orderbook = cfg.orderbook_admission_policy();
-        assert_eq!(orderbook.min_order_gib(), 8);
-        assert_eq!(orderbook.price_tick().to_string(), "0.025");
         assert_eq!(
             cfg.reputation_trust_policy_path(),
             Some(&PathBuf::from("/tmp/sorafs-reputation-policy.to"))
@@ -1952,10 +1823,6 @@ mod tests {
                 publish_delay_seconds: 6,
             })
         );
-        assert_eq!(
-            cfg.reserve_lifecycle_schedule(),
-            Some(ReserveLifecycleScheduleConfig::new(30, 7))
-        );
         let penalty = cfg.penalty();
         let defaults = actual::SorafsPenaltyPolicy::default();
         assert_eq!(penalty.strike_threshold, defaults.strike_threshold);
@@ -2003,26 +1870,6 @@ mod tests {
 
         let cfg = StorageConfig::from(&actual);
         assert_eq!(cfg.evidence_viewer_audit_schedule(), None);
-    }
-
-    #[test]
-    fn reserve_lifecycle_schedule_is_none_when_disabled_and_clamps_zero_interval() {
-        let mut actual = actual::SorafsStorage::default();
-        actual.reserve_lifecycle = actual::SorafsReserveLifecycleSchedule {
-            enabled: false,
-            interval_seconds: 0,
-            initial_delay_seconds: 5,
-        };
-
-        let cfg = StorageConfig::from(&actual);
-        assert_eq!(cfg.reserve_lifecycle_schedule(), None);
-
-        actual.reserve_lifecycle.enabled = true;
-        let cfg = StorageConfig::from(&actual);
-        assert_eq!(
-            cfg.reserve_lifecycle_schedule(),
-            Some(ReserveLifecycleScheduleConfig::new(1, 5))
-        );
     }
 
     #[test]

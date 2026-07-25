@@ -135,7 +135,8 @@ fn setup_state() -> (State, AccountId, iroha_crypto::KeyPair, AssetDefinitionId)
     let (account_id, keypair) = gen_account_in("zkd");
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let mut state = State::new_with_chain(World::new(), kura, query, ChainId::from(TEST_CHAIN_ID));
+    let mut state =
+        State::new_with_chain_for_testing(World::new(), kura, query, ChainId::from(TEST_CHAIN_ID));
 
     // ZkTransfer/Unshield execute real proof verification under `verify_backend_with_timing_checked`,
     // so these tests must opt into the halo2 verifier explicitly.
@@ -451,7 +452,7 @@ fn unshield_emits_confidential_event() {
 
     assert_eq!(unshield_event.asset_definition, asset_def_id);
     assert_eq!(unshield_event.account, account_id);
-    assert_eq!(unshield_event.public_amount, note.amount);
+    assert_eq!(unshield_event.public_amount, note.amount.into());
     assert_eq!(unshield_event.nullifiers, vec![nullifier]);
     assert_eq!(unshield_event.root_hint, Some(root));
     assert_eq!(

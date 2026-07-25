@@ -69,6 +69,11 @@ test("successful Cargo execution records provenance for the exact profile output
       platform: "linux",
       readSourceState: () => states.shift(),
       runCargo(args) {
+        assert.deepEqual(args.slice(0, 3), [
+          "build",
+          "--locked",
+          "--manifest-path",
+        ]);
         assert.deepEqual(args.slice(-2), ["--profile", "deploy"]);
         mkdirSync(path.dirname(nativePath), { recursive: true });
         writeFileSync(nativePath, "deploy-native-output");

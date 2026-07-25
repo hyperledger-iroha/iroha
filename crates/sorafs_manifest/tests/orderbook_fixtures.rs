@@ -6,11 +6,10 @@ use std::{fs, path::Path};
 
 use assert_cmd::cargo::cargo_bin_cmd;
 use sorafs_manifest::{
-    BYTES_PER_GIB, ORDERBOOK_CANCEL_VERSION_V1, ORDERBOOK_ORDER_VERSION_V1,
-    ORDERBOOK_RUNTIME_SNAPSHOT_VERSION_V1, ORDERBOOK_TRADE_EVENT_VERSION_V1, OrderCancelV1,
-    OrderRequestV1, OrderbookRuntimeSnapshotV1, OrderbookValidationPayloadKindV1,
+    ORDERBOOK_CANCEL_VERSION_V1, ORDERBOOK_ORDER_VERSION_V1, ORDERBOOK_TRADE_EVENT_VERSION_V1,
+    OrderCancelV1, OrderRequestV1, OrderbookValidationPayloadKindV1,
     SETTLEMENT_CHANNEL_VERSION_V1, SETTLEMENT_RECEIPT_VERSION_V1, SettlementChannelV1,
-    SettlementReceiptV1, TradeEventV1, derive_orderbook_order_id_v1, trade_escrow_requirement_v1,
+    SettlementReceiptV1, TradeEventV1, derive_orderbook_order_id_v1,
     validate_orderbook_payload_bytes, verify_order_cancel_signature_v1,
     verify_order_request_signature_v1, verify_settlement_receipt_signature_v1,
 };
@@ -166,72 +165,6 @@ fn settlement_receipt_fixture_decodes_and_validates() {
 }
 
 #[test]
-fn runtime_snapshot_fixture_decodes_and_validates() {
-    let bytes = read_fixture_bytes("runtime_snapshot_v1");
-    let snapshot: OrderbookRuntimeSnapshotV1 =
-        norito::decode_from_bytes(&bytes).expect("runtime snapshot fixture should decode");
-    snapshot
-        .validate()
-        .expect("runtime snapshot fixture must validate");
-    for entry in &snapshot.open_orders {
-        verify_order_request_signature_v1(&entry.order)
-            .expect("snapshot open-order signature must verify");
-    }
-    for receipt in &snapshot.settlement_receipts {
-        verify_settlement_receipt_signature_v1(receipt)
-            .expect("snapshot settlement-receipt signature must verify");
-    }
-    assert_eq!(snapshot.version, ORDERBOOK_RUNTIME_SNAPSHOT_VERSION_V1);
-    assert_eq!(snapshot.next_sequence, 4);
-    assert_eq!(snapshot.generated_at_unix, 1_700_000_130);
-    assert_eq!(snapshot.owner_nonce_high_waters.len(), 1);
-    assert_eq!(
-        snapshot.owner_nonce_high_waters[0].owner_account,
-        b"provider@sora"
-    );
-    assert_eq!(snapshot.owner_nonce_high_waters[0].highest_nonce, 9);
-    assert_eq!(snapshot.open_orders.len(), 1);
-    assert_eq!(
-        snapshot.open_orders[0].order.order_id,
-        derive_orderbook_order_id_v1(
-            &snapshot.open_orders[0].order.owner_account,
-            snapshot.open_orders[0].order.nonce,
-        )
-    );
-    assert_eq!(snapshot.open_orders[0].sequence, 3);
-    assert_eq!(snapshot.trades.len(), 1);
-    assert_eq!(snapshot.trades[0].trade_id, [0x83; 32]);
-    assert_eq!(snapshot.settlement_channels.len(), 1);
-    assert_eq!(snapshot.settlement_channels[0].channel_id, [0x82; 32]);
-    let expected_total_bytes = snapshot.trades[0].filled_gib * BYTES_PER_GIB;
-    assert_eq!(
-        snapshot.settlement_channels[0].total_bytes,
-        expected_total_bytes
-    );
-    assert_eq!(
-        snapshot.settlement_channels[0].remaining_bytes,
-        expected_total_bytes - snapshot.settlement_receipts[0].bytes_delivered
-    );
-    let expected_escrow = trade_escrow_requirement_v1(&snapshot.trades[0])
-        .expect("fixture trade escrow should compute")
-        .checked_sub(&snapshot.settlement_receipts[0].xor_debited)
-        .expect("fixture receipt debit should fit escrow");
-    assert_eq!(snapshot.settlement_channels[0].xor_locked, expected_escrow);
-    assert_eq!(
-        snapshot.settlement_channels[0].updated_at_unix,
-        1_700_000_120
-    );
-    assert_eq!(snapshot.settlement_receipts.len(), 1);
-    assert_eq!(snapshot.settlement_receipts[0].receipt_id, [0x81; 32]);
-    assert_eq!(snapshot.expired_order_ids, vec![[0x74; 32]]);
-    assert_eq!(
-        norito::to_bytes(&snapshot).expect("fixture should re-encode"),
-        bytes
-    );
-    assert_json_hex_matches("runtime_snapshot_v1", &bytes);
-}
-
-#[test]
 fn orderbook_reference_outcomes_match_cross_sdk_fixtures_exactly() {
     let order = read_fixture_bytes("order_request_v1");
     let order_outcome = validate_orderbook_payload_bytes(
@@ -312,7 +245,7 @@ fn orderbook_negative_vectors_preserve_signature_shape_and_break_canonical_encod
 
 #[test]
 fn orderbook_fixture_regeneration_is_byte_identical() {
-    const FILES: [&str; 18] = [
+    const FILES: [&str; 16] = [
         "order_request_v1.json",
         "order_request_v1.to",
         "order_cancel_v1.json",
@@ -323,8 +256,6 @@ fn orderbook_fixture_regeneration_is_byte_identical() {
         "settlement_channel_v1.to",
         "settlement_receipt_v1.json",
         "settlement_receipt_v1.to",
-        "runtime_snapshot_v1.json",
-        "runtime_snapshot_v1.to",
         "order_request_validation_outcome_v1.json",
         "negative/order_request_bad_signature_v1.json",
         "negative/order_request_bad_signature_v1.to",

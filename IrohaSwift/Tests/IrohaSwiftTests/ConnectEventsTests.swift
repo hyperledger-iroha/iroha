@@ -118,7 +118,7 @@ final class ConnectEventsTests: XCTestCase {
             "quantity": "1"
         ]
         let json: [String: Any] = [
-            "account_id": "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+            "account_id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
             "assets": [asset],
             "last_updated_ms": 1.25
         ]

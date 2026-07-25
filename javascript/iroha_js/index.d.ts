@@ -5044,7 +5044,6 @@ export declare const SORAFS_ORDERBOOK_PAYLOAD_KINDS: Readonly<{
   TRADE_EVENT: "trade-event";
   SETTLEMENT_CHANNEL: "settlement-channel";
   SETTLEMENT_RECEIPT: "settlement-receipt";
-  RUNTIME_SNAPSHOT: "runtime-snapshot";
 }>;
 
 /** Canonical maximum byte length for a V1 orderbook owner account. */
@@ -5055,8 +5054,7 @@ export type SorafsOrderbookPayloadKind =
   | "order-cancel"
   | "trade-event"
   | "settlement-channel"
-  | "settlement-receipt"
-  | "runtime-snapshot";
+  | "settlement-receipt";
 
 export type SorafsOrderbookSignablePayloadKind =
   | "order-request"
@@ -13854,7 +13852,6 @@ export function encodeNumericNoritoValue(
   value: NumericLike,
   context?: string,
 ): Uint8Array;
-
 export function noritoEncodeInstruction(instruction: object | string): Buffer;
 export function noritoDecodeBlockProofs(
   bytes: ArrayBufferView | ArrayBuffer | Buffer,
@@ -15691,6 +15688,7 @@ export const NumericV1: {
   readonly INT_MAX: bigint;
   readonly MAX_MANTISSA_BYTES: 64;
   readonly MAX_SCALE: 28;
+  // BEGIN GENERATED: kotodama-v1-numeric-policy
   readonly schemas: {
     readonly int: {
       readonly name: "iroha.numeric.IntValueV1";
@@ -15707,10 +15705,11 @@ export const NumericV1: {
     readonly quantity: {
       readonly name: "iroha.numeric.QuantityValueV1";
       readonly hash: string;
-      readonly pointerType: 0x0013;
+      readonly pointerType: 0x0010;
       readonly scaled: true;
     };
   };
+  // END GENERATED: kotodama-v1-numeric-policy
   encodeIntFrame(value: KotodamaInt | bigint | string): Uint8Array;
   encodeDecimalFrame(value: KotodamaDecimal | string): Uint8Array;
   encodeQuantityFrame(value: KotodamaQuantity | string): Uint8Array;

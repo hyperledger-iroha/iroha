@@ -102,12 +102,12 @@ struct TransferDeltaTranscript {
 | `ivm::host` & ტესტები | ძირითადი/ნაგულისხმევი მასპინძლები განიხილავენ `transfer_v1`-ს, როგორც სერიულ დანართს, სანამ სფერო აქტიურია, ზედაპირული `SYSCALL_TRANSFER_V1_BATCH_{BEGIN,END,APPLY}` და იმიტირებული WSV ჰოსტი ბუფერებს ჩანაწერებს ჩადენამდე, ასე რომ რეგრესიის ტესტებმა შეიძლება დაამტკიცონ დეტერმინისტული ბალანსი განახლებები.【crates/ivm/src/core_host.rs:1001】【crates/ivm/src/host.rs:451】【crates/ivm/src/mock_wsv.rs :3713】【crates/ivm/tests/wsv_host_pointer_tlv.rs:219】【crates/ivm/tests/wsv_host_pointer_tlv.rs:287】
 | `iroha_core` | გამოუშვით `TransferTranscript` მდგომარეობიდან გადასვლის შემდეგ, შექმენით `FastpqTransitionBatch` ჩანაწერები აშკარა `public_inputs`-ით `StateBlock::capture_exec_witness`-ის დროს და გაუშვით FASTPQ პროვერის ხაზი ისე, რომ ორივე Torii მიიღოს Statistics Backending და/C. `TransitionBatch` შეყვანები. `TransferAssetBatch` აჯგუფებს თანმიმდევრულ გადარიცხვებს ერთ ტრანსკრიპტში, გამოტოვებს პოსეიდონის დაიჯესტს მრავალ დელტა პარტიებისთვის, რათა გაჯეტმა შეძლოს განმეორებითი გამეორება შენატანებში დეტერმინისტულად. |
 | `fastpq_prover` | `gadgets::transfer` ახლა ამოწმებს მრავალ დელტას ტრანსკრიპტებს (ბალანსის არითმეტიკა + პოსეიდონის დაიჯესტი) და ზედაპირების სტრუქტურირებულ მოწმეებს (მათ შორის, ჩანაცვლებითი დაწყვილებული SMT blobs) დამგეგმავისთვის (`crates/fastpq_prover/src/gadgets/transfer.rs`). `trace::build_trace` შიფრავს ამ ტრანსკრიპტებს სერიის მეტამონაცემებიდან, უარყოფს გადაცემის პარტიებს, რომლებსაც აკლია `transfer_transcripts` დატვირთვა, ამაგრებს დამოწმებულ მოწმეებს `Trace::transfer_witnesses`-ზე და `TracePolynomialData::transfer_plan()` დამუშავებული გეგმები არ შეინარჩუნებს გაჯეტის გეგმებს. (`crates/fastpq_prover/src/trace.rs`). მწკრივების რაოდენობის რეგრესიის აღკაზმულობა ახლა იგზავნება `fastpq_row_bench`-ის (`crates/fastpq_prover/src/bin/fastpq_row_bench.rs:1`) მეშვეობით, რომელიც მოიცავს 65536 დაფარულ მწკრივს სცენარს, ხოლო დაწყვილებული SMT გაყვანილობა რჩება TF-3 სურათების დამხმარე ეტაპს მიღმა (ეს ადგილის დამხმარეები არ შეინარჩუნებენ სცენარს. |
-| Kotodama | ამცირებს `transfer_batch((from,to,asset,amount), …)` დამხმარეს `transfer_v1_batch_begin`-ში, თანმიმდევრულ `transfer_asset` ზარებში და `transfer_v1_batch_end`-ში. თითოეული არგუმენტი უნდა შეესაბამებოდეს `(AccountId, AccountId, AssetDefinitionId, int)` ფორმას; ერთჯერადი გადარიცხვები ინარჩუნებს არსებულ მშენებელს. |
+| Kotodama | ამცირებს `transfer_batch((from,to,asset,amount), …)` დამხმარეს `transfer_v1_batch_begin`-ში, თანმიმდევრულ `transfer_asset` ზარებში და `transfer_v1_batch_end`-ში. თითოეული არგუმენტი უნდა შეესაბამებოდეს `(AccountId, AccountId, AssetDefinitionId, quantity)` ფორმას; ერთჯერადი გადარიცხვები ინარჩუნებს არსებულ მშენებელს. |
 
 მაგალითი Kotodama გამოყენების:
 
 ```text
-fn pay(AccountId a, AccountId b, AssetDefinitionId asset, int x) {
+fn pay(AccountId a, AccountId b, AssetDefinitionId asset, quantity x) {
     transfer_batch((a, b, asset, x), (b, a, asset, 1));
 }
 ```

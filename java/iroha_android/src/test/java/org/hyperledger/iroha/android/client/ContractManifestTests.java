@@ -94,6 +94,8 @@ public final class ContractManifestTests {
           response,
           "\"seiyaku_name\":\"Ledger\"",
           "\"seiyaku_name\":\"Option\""),
+      replaceFirst(response, "\"seiyaku_name\":\"Ledger\"", "\"seiyaku_name\":\"Amount\""),
+      replaceFirst(response, "\"seiyaku_name\":\"Ledger\"", "\"seiyaku_name\":\"amount\""),
       replaceFirst(
           response,
           "\"seiyaku_name\":\"Ledger\"",

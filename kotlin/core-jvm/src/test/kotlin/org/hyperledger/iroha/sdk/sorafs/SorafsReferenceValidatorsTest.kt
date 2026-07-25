@@ -18,9 +18,14 @@ class SorafsReferenceValidatorsTest {
     @Test
     fun exposesBridgeSelectors() {
         assertEquals(1, SorafsOrderbookPayloadKind.ORDER_REQUEST.bridgeCode)
-        assertEquals(6, SorafsOrderbookPayloadKind.RUNTIME_SNAPSHOT.bridgeCode)
+        assertTrue(SorafsOrderbookPayloadKind.values().none { it.bridgeCode == 6 })
+        assertTrue(
+            SorafsOrderbookPayloadKind.values().none {
+                it.defaultLabel == "orderbook-runtime-snapshot.to"
+            },
+        )
         assertTrue(SorafsOrderbookPayloadKind.ORDER_REQUEST.isUserSignedPayload)
-        assertTrue(!SorafsOrderbookPayloadKind.RUNTIME_SNAPSHOT.isUserSignedPayload)
+        assertTrue(!SorafsOrderbookPayloadKind.TRADE_EVENT.isUserSignedPayload)
         assertEquals(1, SorafsPdpPayloadKind.COMMITMENT.bridgeCode)
         assertEquals(3, SorafsPdpPayloadKind.PROOF.bridgeCode)
         assertEquals(1, SorafsPopPayloadKind.CREDENTIAL.bridgeCode)
@@ -128,10 +133,10 @@ class SorafsReferenceValidatorsTest {
     }
 
     @Test
-    fun rejectsRuntimeSnapshotSigningBeforeNativeDispatch() {
+    fun rejectsNonSignableOrderbookPayloadBeforeNativeDispatch() {
         val error = assertThrows(IllegalArgumentException::class.java) {
             SorafsReferenceValidators.signOrderbookPayload(
-                SorafsOrderbookPayloadKind.RUNTIME_SNAPSHOT,
+                SorafsOrderbookPayloadKind.TRADE_EVENT,
                 ByteArray(0),
                 ByteArray(32) { 0xB7.toByte() },
             )

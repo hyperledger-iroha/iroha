@@ -24,7 +24,7 @@ def _fixture_entry(creation_time_ms: int) -> dict:
         "name": "alpha",
         "encoded_file": "alpha.norito",
         "chain": "00000002",
-        "authority": "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+        "authority": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
         "payload_base64": "AA==",
         "payload_hash": MODULE._iroha_hash(payload),
         "signed_base64": "AQ==",

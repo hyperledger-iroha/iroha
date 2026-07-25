@@ -1,10 +1,9 @@
 //! `DefaultHost` implements standalone `ZK_VERIFY_BATCH` status-vector output.
 
-use iroha_zkp_halo2 as h2;
-use iroha_zkp_halo2::norito_helpers as nh;
+use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope};
 use ivm::{
     IVMHost, PointerType, VMError,
-    host::{self, DefaultHost, ZkCurve, ZkHalo2Backend, ZkHalo2Config},
+    host::{self, DefaultHost, ZkHalo2Backend, ZkHalo2Config},
     syscalls,
 };
 
@@ -19,35 +18,17 @@ fn make_tlv(type_id: PointerType, payload: &[u8]) -> Vec<u8> {
     tlv
 }
 
-fn valid_batch_envelope() -> h2::OpenVerifyEnvelope {
-    let params = h2::Params::new(8).expect("params");
-    let coeffs: Vec<h2::PrimeField64> = (0..params.n())
-        .map(|i| h2::PrimeField64::from((i as u64) + 1))
-        .collect();
-    let poly = h2::Polynomial::from_coeffs(coeffs);
-    let mut transcript = h2::Transcript::new(ivm::host::LABEL_BATCH);
-    let commitment = poly.commit(&params).expect("commit");
-    let z = h2::PrimeField64::from(5u64);
-    let (proof, t) = poly
-        .open(&params, &mut transcript, z, commitment)
-        .expect("open");
-    h2::OpenVerifyEnvelope {
-        params: nh::params_to_wire(&params),
-        public: nh::poly_open_public::<h2::backend::pallas::PallasBackend>(
-            params.n(),
-            z,
-            t,
-            commitment,
-        ),
-        proof: nh::proof_to_wire(&proof),
-        transcript_label: ivm::host::LABEL_BATCH.to_string(),
-        vk_commitment: None,
-        public_inputs_schema_hash: None,
-        domain_tag: None,
-    }
+fn canonical_batch_envelope(seed: u8) -> OpenVerifyEnvelope {
+    OpenVerifyEnvelope::new(
+        BackendTag::Halo2IpaPasta,
+        ivm::host::LABEL_BATCH,
+        [seed; 32],
+        vec![seed, seed.wrapping_add(1)],
+        vec![seed.wrapping_add(2), seed.wrapping_add(3)],
+    )
 }
 
-fn batch_payload(envs: Vec<h2::OpenVerifyEnvelope>) -> Vec<u8> {
+fn batch_payload(envs: Vec<OpenVerifyEnvelope>) -> Vec<u8> {
     norito::to_bytes(&envs).expect("encode batch payload")
 }
 
@@ -62,22 +43,20 @@ fn decode_statuses(vm: &ivm::IVM) -> Vec<u8> {
 
 #[test]
 fn zk_verify_batch_syscall_returns_status_vector_in_default_host() {
-    let env_ok = valid_batch_envelope();
-    let mut env_bad = env_ok.clone();
-    env_bad.public.t[0] = env_bad.public.t[0].wrapping_add(1);
-    let payload = batch_payload(vec![env_ok, env_bad]);
+    let payload = batch_payload(vec![
+        canonical_batch_envelope(1),
+        canonical_batch_envelope(5),
+    ]);
     let tlv = make_tlv(PointerType::NoritoBytes, &payload);
     let cfg = ZkHalo2Config {
         enabled: true,
-        curve: ZkCurve::Pallas,
         backend: ZkHalo2Backend::Ipa,
-        max_k: 18,
         verifier_budget_ms: 50,
         verifier_max_batch: 8,
         ..ZkHalo2Config::default()
     };
 
-    let mut vm = ivm::IVM::new(1_000_000);
+    let mut vm = ivm::IVM::new(u64::MAX);
     let mut host = DefaultHost::new().with_zk_halo2_config(cfg);
     let ptr = vm.alloc_input_tlv(&tlv).expect("alloc tlv");
     vm.set_register(10, ptr);
@@ -85,16 +64,16 @@ fn zk_verify_batch_syscall_returns_status_vector_in_default_host() {
         .expect("syscall ok");
 
     assert_ne!(vm.register(10), 0);
-    assert_eq!(vm.register(11), host::ERR_VERIFY);
-    assert_eq!(vm.register(12), 1);
-    assert_eq!(decode_statuses(&vm), vec![1, 0]);
+    assert_eq!(vm.register(11), host::ERR_BACKEND);
+    assert_eq!(vm.register(12), 0);
+    assert_eq!(decode_statuses(&vm), vec![0, 0]);
 }
 
 #[test]
 fn zk_verify_batch_syscall_rejects_non_norito_pointer_before_disabled_status() {
-    let payload = batch_payload(vec![valid_batch_envelope()]);
+    let payload = batch_payload(vec![canonical_batch_envelope(1)]);
     let tlv = make_tlv(PointerType::Blob, &payload);
-    let mut vm = ivm::IVM::new(1_000_000);
+    let mut vm = ivm::IVM::new(u64::MAX);
     let mut host = DefaultHost::new();
     let ptr = vm.alloc_input_tlv(&tlv).expect("alloc tlv");
     vm.set_register(10, ptr);

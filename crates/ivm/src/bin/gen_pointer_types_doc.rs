@@ -3,26 +3,77 @@
 //!   cargo run -p ivm --bin gen_pointer_types_doc -- --write
 //!   cargo run -p ivm --bin gen_pointer_types_doc -- --check
 
-use std::{fs, path::PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 const BEGIN: &str = "<!-- BEGIN GENERATED POINTER TYPES -->";
 const END: &str = "<!-- END GENERATED POINTER TYPES -->";
 
-fn normalized_generated_block(
-    text: &str,
-    marker_end: usize,
-    expected_block: &str,
-) -> (usize, String) {
-    let mut replace_end = marker_end;
-    while text.as_bytes().get(replace_end) == Some(&b'\n') {
-        replace_end += 1;
+fn localized_pointer_doc_paths(workspace_root: &Path) -> Result<Vec<PathBuf>, String> {
+    let localized_root = workspace_root.join("docs/i18n/root");
+    let entries = fs::read_dir(&localized_root)
+        .map_err(|error| format!("read {}: {error}", localized_root.display()))?;
+    let mut paths = Vec::new();
+    for entry in entries {
+        let entry = entry
+            .map_err(|error| format!("read entry in {}: {error}", localized_root.display()))?;
+        let path = entry.path().join("ivm.md");
+        if path.is_file() {
+            paths.push(path);
+        }
     }
-    let separator = if replace_end == text.len() {
-        "\n"
-    } else {
-        "\n\n"
-    };
-    (replace_end, format!("{expected_block}{separator}"))
+    paths.sort();
+    if paths.is_empty() {
+        return Err(format!(
+            "no localized pointer documents found under {}",
+            localized_root.display()
+        ));
+    }
+    Ok(paths)
+}
+
+fn render_generated_block(text: &str, expected_block: &str) -> Result<String, String> {
+    let begin = text
+        .find(BEGIN)
+        .ok_or_else(|| format!("begin marker `{BEGIN}` not found"))?;
+    if text[begin + BEGIN.len()..].contains(BEGIN) {
+        return Err(format!("multiple begin markers `{BEGIN}` found"));
+    }
+
+    let end_start = begin
+        + text[begin..]
+            .find(END)
+            .ok_or_else(|| format!("end marker `{END}` not found after begin marker"))?;
+    let end = end_start + END.len();
+    if text[end..].contains(END) {
+        return Err(format!("multiple end markers `{END}` found"));
+    }
+
+    let mut rendered = text.to_owned();
+    rendered.replace_range(begin..end, expected_block);
+    Ok(rendered)
+}
+
+fn process(path: &Path, expected_block: &str, write: bool, check: bool) {
+    let text =
+        fs::read_to_string(path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+    let rendered = render_generated_block(&text, expected_block)
+        .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+    if check {
+        assert_eq!(
+            text,
+            rendered,
+            "{} out of date; run: cargo run -p ivm --bin gen_pointer_types_doc -- --write",
+            path.display()
+        );
+    }
+    if write && text != rendered {
+        fs::write(path, rendered)
+            .unwrap_or_else(|error| panic!("write {}: {error}", path.display()));
+        eprintln!("updated: {}", path.display());
+    }
 }
 
 fn main() {
@@ -38,43 +89,16 @@ fn main() {
 
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let path_pointer = PathBuf::from(manifest_dir).join("docs/pointer_abi.md");
-    let path_ivm_md = PathBuf::from(manifest_dir)
+    let workspace_root = PathBuf::from(manifest_dir)
         .parent()
         .and_then(|p| p.parent())
         .expect("workspace root")
-        .join("ivm.md");
+        .to_path_buf();
+    let path_ivm_md = workspace_root.join("ivm.md");
 
     // Render expected table
     let table = ivm::render_pointer_types_markdown_table();
     let expected_block = format!("{BEGIN}\n{table}{END}");
-
-    // Helper: check/replace in a single file
-    fn process(path: &PathBuf, expected_block: &str, write: bool, check: bool) {
-        let mut text = fs::read_to_string(path).expect("read doc file");
-        let beg = text
-            .find(BEGIN)
-            .unwrap_or_else(|| panic!("begin marker not found in {}", path.display()));
-        let end = text
-            .find(END)
-            .unwrap_or_else(|| panic!("end marker not found in {}", path.display()));
-        let marker_end = end + END.len();
-        let (replace_end, replacement) =
-            normalized_generated_block(&text, marker_end, expected_block);
-        let section = &text[beg..replace_end];
-        if check {
-            assert_eq!(
-                section,
-                replacement,
-                "{} out of date; run: cargo run -p ivm --bin gen_pointer_types_doc -- --write",
-                path.display()
-            );
-        }
-        if write {
-            text.replace_range(beg..replace_end, &replacement);
-            fs::write(path, text).expect("write doc file");
-            eprintln!("updated: {}", path.display());
-        }
-    }
 
     if !write && !check {
         eprintln!("usage: --write or --check");
@@ -83,34 +107,65 @@ fn main() {
 
     process(&path_pointer, &expected_block, write, check);
     process(&path_ivm_md, &expected_block, write, check);
+    let localized_paths = localized_pointer_doc_paths(&workspace_root)
+        .unwrap_or_else(|error| panic!("discover localized pointer documents: {error}"));
+    for path in localized_paths {
+        process(&path, &expected_block, write, check);
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::normalized_generated_block;
+    use std::{
+        fs,
+        sync::atomic::{AtomicU64, Ordering},
+    };
+
+    use super::{BEGIN, END, localized_pointer_doc_paths, render_generated_block};
+
+    static NEXT_TEMP_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
     #[test]
-    fn generated_block_spacing_is_canonical_and_idempotent() {
-        let marker = "<!-- END -->";
-        let expected = "<!-- BEGIN -->\nbody\n<!-- END -->";
+    fn generated_block_replacement_preserves_localized_surroundings() {
+        let prefix = "---\nlang: ar\ndirection: rtl\n---\n\n<div dir=\"rtl\">\n\nمقدمة\n\n";
+        let suffix = "\n\nخاتمة\n\n</div>\n";
+        let current = format!("{prefix}{BEGIN}\nstale\n{END}{suffix}");
+        let expected_block = format!("{BEGIN}\ncanonical\n{END}");
+        let expected = format!("{prefix}{expected_block}{suffix}");
 
-        let with_following_text = format!("{expected}\n\n\nNotes\n");
-        let marker_end = with_following_text.find(marker).expect("end marker") + marker.len();
-        let (replace_end, replacement) =
-            normalized_generated_block(&with_following_text, marker_end, expected);
-        assert_eq!(replacement, format!("{expected}\n\n"));
-        let mut normalized = with_following_text;
-        normalized.replace_range(0..replace_end, &replacement);
-        assert_eq!(normalized, format!("{expected}\n\nNotes\n"));
+        let rendered =
+            render_generated_block(&current, &expected_block).expect("replace generated block");
+        assert_eq!(rendered, expected);
+        assert_eq!(
+            render_generated_block(&rendered, &expected_block).expect("idempotent replacement"),
+            rendered
+        );
+    }
 
-        let marker_end = normalized.find(marker).expect("end marker") + marker.len();
-        let (replace_end, second) = normalized_generated_block(&normalized, marker_end, expected);
-        assert_eq!(&normalized[..replace_end], second);
+    #[test]
+    fn localized_pointer_document_discovery_is_sorted() {
+        let unique = NEXT_TEMP_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "ivm-pointer-doc-generator-{}-{unique}",
+            std::process::id()
+        ));
+        let localized_root = root.join("docs/i18n/root");
+        for locale in ["zh-hant", "am"] {
+            let locale_root = localized_root.join(locale);
+            fs::create_dir_all(&locale_root).expect("create locale directory");
+            fs::write(locale_root.join("ivm.md"), "test").expect("write localized document");
+        }
+        fs::create_dir_all(localized_root.join("missing")).expect("create unrelated locale");
 
-        let at_eof = format!("{expected}\n\n");
-        let marker_end = at_eof.find(marker).expect("end marker") + marker.len();
-        let (replace_end, replacement) = normalized_generated_block(&at_eof, marker_end, expected);
-        assert_eq!(replace_end, at_eof.len());
-        assert_eq!(replacement, format!("{expected}\n"));
+        let paths = localized_pointer_doc_paths(&root).expect("discover localized documents");
+        assert_eq!(
+            paths,
+            [
+                localized_root.join("am/ivm.md"),
+                localized_root.join("zh-hant/ivm.md"),
+            ]
+        );
+
+        fs::remove_dir_all(root).expect("remove temporary directory");
     }
 }

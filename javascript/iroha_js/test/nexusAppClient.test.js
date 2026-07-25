@@ -88,6 +88,14 @@ function authoritativeAppliedStatus(
   };
 }
 
+function fixtureFeePayment() {
+  return {
+    payer: fixture.transfer_input.fee_payment.payer,
+    chargeLimits: [...fixture.transfer_input.fee_payment.value.charge_limits],
+    gasLimit: fixture.transfer_input.fee_payment.value.gas_limit,
+  };
+}
+
 function fixtureSignable(overrides = {}) {
   return {
     payloadBytes: Buffer.from(fixturePayloadBytes),
@@ -189,6 +197,7 @@ test("NexusAppClient builds a signable transfer draft", () => {
     sourceAssetHoldingId: "asset#account-i105",
     quantity: "12.5",
     destinationAccountId: "destination-i105",
+    feePayment: fixtureFeePayment(),
   });
 
   assert.deepEqual(draft.signable.payloadBytes, payloadBytes);
@@ -215,6 +224,7 @@ test("NexusAppClient validates quantities before invoking custom transaction cod
   const base = {
     sourceAssetHoldingId: "asset#account-i105",
     destinationAccountId: "destination-i105",
+    feePayment: fixtureFeePayment(),
   };
 
   for (const quantity of [7, " 7", "07", "+7", "7.0", "-7"]) {
@@ -272,6 +282,7 @@ test("NexusAppClient snapshots extension owners and invokes capabilities intrins
     sourceAssetHoldingId: fixture.transfer_input.source_asset_id,
     quantity: fixture.transfer_input.quantity,
     destinationAccountId: fixture.transfer_input.destination_account_id,
+    feePayment: fixtureFeePayment(),
   });
   assert.deepEqual(draft.signable.payloadBytes, fixturePayloadBytes);
 });
@@ -310,6 +321,7 @@ test("NexusAppClient payload hashing matches the shared Nexus fixture", () => {
     creationTimeMs: fixture.transfer_input.creation_time_ms,
     ttlMs: fixture.transfer_input.ttl_ms,
     nonce: fixture.transfer_input.nonce,
+    feePayment: fixtureFeePayment(),
     metadata: fixture.transfer_input.metadata,
   });
 
@@ -333,6 +345,7 @@ test("NexusAppClient default browser codec reproduces the shared Nexus fixture",
     creationTimeMs: fixture.transfer_input.creation_time_ms,
     ttlMs: fixture.transfer_input.ttl_ms,
     nonce: fixture.transfer_input.nonce,
+    feePayment: fixtureFeePayment(),
     metadata: fixture.transfer_input.metadata,
   });
 
@@ -358,6 +371,7 @@ test("NexusAppClient verifies custom payload bytes and hash aliases", () => {
     sourceAssetHoldingId: "asset#approved-account-i105",
     quantity: "1",
     destinationAccountId: "destination-i105",
+    feePayment: fixtureFeePayment(),
   });
   assert.deepEqual(positive.signable.payloadBytes, fixturePayloadBytes);
   assert.equal(positive.signable.payloadHashHex, expectedHash);
@@ -406,6 +420,7 @@ test("NexusAppClient verifies custom payload bytes and hash aliases", () => {
           sourceAssetHoldingId: "asset#approved-account-i105",
           quantity: "1",
           destinationAccountId: "destination-i105",
+          feePayment: fixtureFeePayment(),
         }),
       (error) => error instanceof NexusAppError && error.code === code,
     );
@@ -431,6 +446,7 @@ test("NexusAppClient verifies custom payload bytes and hash aliases", () => {
           sourceAssetHoldingId: "asset#approved-account-i105",
           quantity: "1",
           destinationAccountId: "destination-i105",
+          feePayment: fixtureFeePayment(),
         }),
       (error) => error instanceof NexusAppError && error.code === "invalid_payload_hash",
     );
@@ -459,6 +475,7 @@ test("NexusAppClient bounds and validates custom payload byte containers before 
           sourceAssetHoldingId: "asset#approved-account-i105",
           quantity: "1",
           destinationAccountId: "destination-i105",
+          feePayment: fixtureFeePayment(),
         }),
       TypeError,
     );
@@ -477,6 +494,7 @@ test("NexusAppClient bounds and validates custom payload byte containers before 
           sourceAssetHoldingId: "asset#approved-account-i105",
           quantity: "1",
           destinationAccountId: "destination-i105",
+          feePayment: fixtureFeePayment(),
         }),
       TypeError,
     );
@@ -544,6 +562,7 @@ test("NexusAppClient runs connect approval, wallet signature, finalize, submit, 
       sourceAssetHoldingId: fixture.transfer_input.source_asset_id,
       quantity: "1",
       destinationAccountId: "destination-i105",
+      feePayment: fixtureFeePayment(),
     },
     { timeoutMs: 1 },
   );
@@ -1062,6 +1081,7 @@ test("NexusAppClient rejects conflicting Connect approval and transfer alias fam
     quantity: fixture.transfer_input.quantity,
     destinationAccountId: destinationAccount,
     destination: destinationAccount,
+    feePayment: fixtureFeePayment(),
   });
   assert.deepEqual(equivalent.signable.payloadBytes, fixturePayloadBytes);
   assert.equal(codecCalls, 1, "equivalent aliases remain compatible");
@@ -1480,6 +1500,7 @@ test("NexusAppClient accepts shared approvedAccount session field", async () => 
       sourceAssetHoldingId: fixture.transfer_input.source_asset_id,
       quantity: "1",
       destinationAccountId: "destination-i105",
+      feePayment: fixtureFeePayment(),
     },
     { wait: false },
   );

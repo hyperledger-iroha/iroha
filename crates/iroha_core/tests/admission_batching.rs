@@ -5,10 +5,11 @@
 //! one intentionally bad signature per batch.
 
 use core::time::Duration;
-use std::time::SystemTime;
+use std::{sync::Arc, time::SystemTime};
 
 use iroha_core::{
     block::ValidBlock,
+    governance::manifest::LaneManifestRegistry,
     prelude::*,
     state::State,
     tx::{AcceptTransactionFail, SignatureRejectionCode},
@@ -30,7 +31,12 @@ fn setup_world_with_account(algo: Algorithm) -> (State, AccountId, ChainId, KeyP
     let domain = Domain::new(domain_id.clone()).build(&account_id);
     let account = Account::new(account_id.clone()).build(&account_id);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
-    let state = State::new_for_testing(world, kura, query_handle);
+    let chain = ChainId::from("chain");
+    let state = State::new_with_chain_for_testing(world, kura, query_handle, chain.clone());
+    let nexus = state.nexus_snapshot();
+    state.install_lane_manifests(&Arc::new(
+        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
+    ));
     let mut crypto_cfg = iroha_config::parameters::actual::Crypto::default();
     if !crypto_cfg.allowed_signing.contains(&algo) {
         crypto_cfg.allowed_signing.push(algo);
@@ -40,7 +46,7 @@ fn setup_world_with_account(algo: Algorithm) -> (State, AccountId, ChainId, KeyP
     #[cfg(feature = "sm")]
     if matches!(algo, Algorithm::Sm2) {}
     state.set_crypto(crypto_cfg);
-    (state, account_id, ChainId::from("chain"), kp)
+    (state, account_id, chain, kp)
 }
 
 fn checked_random_keypair() -> KeyPair {
@@ -103,13 +109,18 @@ fn build_block_with_txs(
 ) -> SignedBlock {
     // Build a few transactions where exactly one is signed by a wrong key
     let mk = |msg: &str, kp: &KeyPair| {
-        TransactionBuilder::new(
+        let mut tx = TransactionBuilder::new(
             chain.clone(),
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([Log::new(Level::INFO, msg.to_string())])
-        .sign(kp.private_key())
+        .sign(good_kp.private_key());
+        tx.set_signature(TransactionSignature(checked_signature_of(
+            kp.private_key(),
+            tx.payload(),
+        )));
+        tx
     };
     let txs = vec![
         mk("ok-1", good_kp),
@@ -672,7 +683,7 @@ fn secp256k1_batch_bisection_finds_bad_sig() {
 
 #[test]
 fn rejects_transaction_signed_with_disallowed_algorithm() {
-    let (state, authority, chain, _) = setup_world_with_account(Algorithm::Ed25519);
+    let (state, authority, chain, secp) = setup_world_with_account(Algorithm::Secp256k1);
     let max_clock_drift = core::time::Duration::from_secs(0);
     let default_limits = TransactionParameters::default();
     let tx_limits = TransactionParameters::with_max_signatures(
@@ -683,8 +694,6 @@ fn rejects_transaction_signed_with_disallowed_algorithm() {
         default_limits.max_decompressed_bytes(),
         default_limits.max_metadata_depth(),
     );
-    let secp = checked_random_keypair_with_algorithm(Algorithm::Secp256k1);
-
     let tx = TransactionBuilder::new(
         chain.clone(),
         authority.clone(),
@@ -717,7 +726,7 @@ fn rejects_transaction_signed_with_disallowed_algorithm() {
 
 #[test]
 fn accepts_transaction_once_algorithm_whitelisted() {
-    let (state, authority, chain, _) = setup_world_with_account(Algorithm::Ed25519);
+    let (state, authority, chain, secp) = setup_world_with_account(Algorithm::Secp256k1);
     let max_clock_drift = Duration::from_secs(0);
     let default_limits = TransactionParameters::default();
     let tx_limits = TransactionParameters::with_max_signatures(
@@ -728,8 +737,6 @@ fn accepts_transaction_once_algorithm_whitelisted() {
         default_limits.max_decompressed_bytes(),
         default_limits.max_metadata_depth(),
     );
-    let secp = checked_random_keypair_with_algorithm(Algorithm::Secp256k1);
-
     let tx = TransactionBuilder::new(
         chain.clone(),
         authority.clone(),

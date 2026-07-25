@@ -87,15 +87,7 @@ fn verify_then_vendor_submit_ballot_applies() {
     let world = iroha_core::state::World::with([domain], [account], Vec::<AssetDefinition>::new());
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let mut state = State::new(
-        world,
-        kura,
-        query,
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let mut state = State::new(world, kura, query);
+    let mut state = State::new_for_testing(world, kura, query);
     // Governance and ISI verification consult the node `Zk` config guardrails, so ensure
     // halo2 verification is enabled here (in addition to the host-local halo2 config used by
     // the syscall verifier).

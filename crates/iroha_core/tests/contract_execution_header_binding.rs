@@ -9,11 +9,33 @@ use iroha_core::{
 };
 use iroha_crypto::KeyPair;
 use iroha_data_model::{
-    isi::smart_contract_code::{RegisterSmartContractBytes, RegisterSmartContractCode},
+    isi::{
+        error::{InstructionExecutionError, InvalidParameterError},
+        smart_contract_code::{RegisterSmartContractBytes, RegisterSmartContractCode},
+    },
     prelude::*,
 };
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
+
+fn assert_manifest_signature_error(error: &InstructionExecutionError, field: &str) {
+    const EXPECTED: &str = "manifest signature verification failed";
+    match error {
+        InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+            message,
+        )) => assert_eq!(
+            message, EXPECTED,
+            "{field} mutation returned the wrong provenance error"
+        ),
+        other => panic!("{field} mutation returned the wrong error type: {other:?}"),
+    }
+    let source = std::error::Error::source(error).expect("invalid parameter error has a source");
+    assert_eq!(
+        source.to_string(),
+        format!("Invalid smart contract: {EXPECTED}"),
+        "{field} mutation returned the wrong provenance error source"
+    );
+}
 
 fn contract_artifact() -> Vec<u8> {
     let metadata = ivm::ProgramMetadata {
@@ -205,12 +227,7 @@ fn signed_and_registered_contract_rejects_every_execution_header_mutation() {
         }
         .execute(&authority, &mut transaction)
         .expect_err("the original signature must not authorize a mutated header");
-        assert!(
-            error
-                .to_string()
-                .contains("manifest signature verification failed"),
-            "{field} mutation returned the wrong provenance error: {error}"
-        );
+        assert_manifest_signature_error(&error, field);
         assert!(
             transaction
                 .world

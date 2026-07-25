@@ -2809,6 +2809,14 @@ export function browserSignedTransactionHashHex(signedTransaction) {
     try {
       validateInstructionTransactionPayload(payload, null);
     } catch (instructionError) {
+      const boundsError = [transferError, instructionError].find(
+        (error) =>
+          error instanceof BrowserTransactionCodecError &&
+          error.code === "bounds_exceeded",
+      );
+      if (boundsError !== undefined) {
+        throw boundsError;
+      }
       fail(
         "malformed_signed_transaction",
         `signedTransaction payload is neither a supported transfer nor a supported deployment transaction (${transferError.message}; ${instructionError.message})`,

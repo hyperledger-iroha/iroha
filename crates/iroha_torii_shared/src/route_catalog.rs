@@ -3326,75 +3326,75 @@ pub mod sorafs {
     pub const PDP_EXPORT: RouteDescriptor =
         documented_post("sorafs.pdp.export", "/v1/sorafs/pdp/export")
             .with_authentication(AuthenticationPolicy::OperatorSignature);
-    /// Submit one canonical encrypted PoP enrollment.
+    /// Submit one canonical encrypted `PoP` enrollment.
     pub const POP_ENROLLMENT: RouteDescriptor =
         documented_post("sorafs.pop.enrollment.submit", "/v1/sorafs/pop/enrollments")
             .with_authentication(AuthenticationPolicy::ProtocolHandshake);
-    /// Read payload-free PoP enrollment status.
+    /// Read payload-free `PoP` enrollment status.
     pub const POP_ENROLLMENT_STATUS: RouteDescriptor = documented_post(
         "sorafs.pop.enrollment.status",
         "/v1/sorafs/pop/enrollments/status",
     )
     .with_authentication(AuthenticationPolicy::ProtocolHandshake);
-    /// Record one governed dual-control PoP approval.
+    /// Record one governed dual-control `PoP` approval.
     pub const POP_APPROVAL: RouteDescriptor =
         documented_post("sorafs.pop.approval.record", "/v1/sorafs/pop/approvals")
             .with_authentication(AuthenticationPolicy::ProtocolHandshake);
-    /// Trigger runtime-resolved HSM-backed PoP issuance.
+    /// Trigger runtime-resolved HSM-backed `PoP` issuance.
     pub const POP_ISSUE: RouteDescriptor =
         documented_post("sorafs.pop.credential.issue", "/v1/sorafs/pop/issue")
             .with_authentication(AuthenticationPolicy::ProtocolHandshake);
-    /// Enqueue a governed PoP revocation successor.
+    /// Enqueue a governed `PoP` revocation successor.
     pub const POP_REVOCATION: RouteDescriptor = documented_post(
         "sorafs.pop.revocation.enqueue",
         "/v1/sorafs/pop/revocations",
     )
     .with_authentication(AuthenticationPolicy::ProtocolHandshake);
-    /// Submit the next durable PoP registry outbox entry.
+    /// Submit the next durable `PoP` registry outbox entry.
     pub const POP_REGISTRY_SUBMIT: RouteDescriptor = documented_post(
         "sorafs.pop.registry.submit",
         "/v1/sorafs/pop/registry/submit-next",
     )
     .with_authentication(AuthenticationPolicy::ProtocolHandshake);
-    /// Reconcile the next finalized PoP registry projection.
+    /// Reconcile the next finalized `PoP` registry projection.
     pub const POP_REGISTRY_RECONCILE: RouteDescriptor = documented_post(
         "sorafs.pop.registry.reconcile",
         "/v1/sorafs/pop/registry/reconcile-next",
     )
     .with_authentication(AuthenticationPolicy::ProtocolHandshake);
-    /// Read the current finalized PoP registry projection.
+    /// Read the current finalized `PoP` registry projection.
     pub const POP_REGISTRY_PROJECTION: RouteDescriptor = documented_post(
         "sorafs.pop.registry.projection",
         "/v1/sorafs/pop/registry/projection",
     )
     .with_authentication(AuthenticationPolicy::ProtocolHandshake);
-    /// Fetch finalized encrypted PoP wallet delivery.
+    /// Fetch finalized encrypted `PoP` wallet delivery.
     pub const POP_WALLET_DELIVERY: RouteDescriptor = documented_post(
         "sorafs.pop.wallet.delivery",
         "/v1/sorafs/pop/wallet/delivery",
     )
     .with_authentication(AuthenticationPolicy::ProtocolHandshake);
-    /// Import finalized encrypted PoP wallet delivery.
+    /// Import finalized encrypted `PoP` wallet delivery.
     pub const POP_WALLET_IMPORT: RouteDescriptor =
         documented_post("sorafs.pop.wallet.import", "/v1/sorafs/pop/wallet/import")
             .with_authentication(AuthenticationPolicy::ProtocolHandshake);
-    /// Acknowledge durable PoP wallet delivery.
+    /// Acknowledge durable `PoP` wallet delivery.
     pub const POP_WALLET_ACKNOWLEDGE: RouteDescriptor = documented_post(
         "sorafs.pop.wallet.acknowledge",
         "/v1/sorafs/pop/wallet/acknowledge",
     )
     .with_authentication(AuthenticationPolicy::ProtocolHandshake);
-    /// Synchronize a runtime-only PoP wallet witness.
+    /// Synchronize a runtime-only `PoP` wallet witness.
     pub const POP_WALLET_SYNCHRONIZE: RouteDescriptor = documented_post(
         "sorafs.pop.wallet.synchronize",
         "/v1/sorafs/pop/wallet/synchronize",
     )
     .with_authentication(AuthenticationPolicy::ProtocolHandshake);
-    /// Generate a PoP membership proof from local wallet custody.
+    /// Generate a `PoP` membership proof from local wallet custody.
     pub const POP_WALLET_PROVE: RouteDescriptor =
         documented_post("sorafs.pop.wallet.prove", "/v1/sorafs/pop/wallet/prove")
             .with_authentication(AuthenticationPolicy::ProtocolHandshake);
-    /// Verify a PoP membership proof and consume its nullifier.
+    /// Verify a `PoP` membership proof and consume its nullifier.
     pub const POP_VERIFY: RouteDescriptor =
         documented_post("sorafs.pop.membership.verify", "/v1/sorafs/pop/verify")
             .with_authentication(AuthenticationPolicy::ProtocolHandshake);
@@ -3991,6 +3991,10 @@ pub mod contracts_and_verification_keys {
         app_get(id, path).with_projections(RouteProjections::SDK)
     }
 
+    const fn app_signed_sdk_get(id: &'static str, path: &'static str) -> RouteDescriptor {
+        app_signed_get(id, path).with_projections(RouteProjections::SDK)
+    }
+
     const fn app_sdk_post(id: &'static str, path: &'static str) -> RouteDescriptor {
         app_post(id, path).with_projections(RouteProjections::SDK)
     }
@@ -4090,25 +4094,29 @@ pub mod contracts_and_verification_keys {
         SORAFS_ORDERBOOK_EVENTS_GET => app_sdk_get("contracts.sorafs_orderbook_events_get", "/v1/sorafs/orderbook/events");
         SORAFS_ORDERBOOK_EVENTS_STREAM_GET => app_unprojected_protocol_get("contracts.sorafs_orderbook_events_stream_get", "/v1/sorafs/orderbook/events/stream");
         SORAFS_ORDERBOOK_EVENTS_WS_GET => app_unprojected_protocol_get("contracts.sorafs_orderbook_events_ws_get", "/v1/sorafs/orderbook/events/ws");
-        SORAFS_RESERVE_LIFECYCLE_POST => app_sdk_post("contracts.sorafs_reserve_lifecycle_post", "/v1/sorafs/reserve/lifecycle");
-        SORAFS_RESERVE_LIFECYCLE_GET => app_sdk_get("contracts.sorafs_reserve_lifecycle_get", "/v1/sorafs/reserve/lifecycle");
-        SORAFS_RESERVE_LIFECYCLE_PROVIDERS_BY_PROVIDER_ID_HEX_GET => app_sdk_get("contracts.sorafs_reserve_lifecycle_providers_by_provider_id_hex_get", "/v1/sorafs/reserve/lifecycle/providers/{provider_id_hex}");
-        SORAFS_RESERVE_LIFECYCLE_POLICY_POST => app_sdk_post("contracts.sorafs_reserve_lifecycle_policy_post", "/v1/sorafs/reserve/lifecycle/policy");
-        SORAFS_RESERVE_LIFECYCLE_POLICY_GET => app_sdk_get("contracts.sorafs_reserve_lifecycle_policy_get", "/v1/sorafs/reserve/lifecycle/policy");
-        SORAFS_RESERVE_LIFECYCLE_ADVANCE_POST => app_sdk_post("contracts.sorafs_reserve_lifecycle_advance_post", "/v1/sorafs/reserve/lifecycle/advance");
-        SORAFS_RESERVE_CREDIT_LINES_GET => app_sdk_get("contracts.sorafs_reserve_credit_lines_get", "/v1/sorafs/reserve/credit-lines");
-        SORAFS_RESERVE_CREDIT_LINES_PROVIDERS_BY_PROVIDER_ID_HEX_GET => app_sdk_get("contracts.sorafs_reserve_credit_lines_providers_by_provider_id_hex_get", "/v1/sorafs/reserve/credit-lines/providers/{provider_id_hex}");
-        SORAFS_RESERVE_LIFECYCLE_EVENTS_GET => app_sdk_get("contracts.sorafs_reserve_lifecycle_events_get", "/v1/sorafs/reserve/lifecycle/events");
-        SORAFS_RESERVE_LIFECYCLE_EVENTS_STREAM_GET => app_unprojected_protocol_get("contracts.sorafs_reserve_lifecycle_events_stream_get", "/v1/sorafs/reserve/lifecycle/events/stream");
-        SORAFS_RESERVE_LIFECYCLE_EVENTS_WS_GET => app_unprojected_protocol_get("contracts.sorafs_reserve_lifecycle_events_ws_get", "/v1/sorafs/reserve/lifecycle/events/ws");
+        SORAFS_RESERVE_POLICY_GET => app_signed_sdk_get("contracts.sorafs_reserve_policy_get", "/v1/sorafs/reserve/policy");
+        SORAFS_RESERVE_PROVIDERS_GET => app_signed_sdk_get("contracts.sorafs_reserve_providers_get", "/v1/sorafs/reserve/providers");
+        SORAFS_RESERVE_PROVIDERS_BY_PROVIDER_ID_HEX_GET => app_signed_sdk_get("contracts.sorafs_reserve_providers_by_provider_id_hex_get", "/v1/sorafs/reserve/providers/{provider_id_hex}");
         SORAFS_RESERVE_TOP_UP_POST => app_sdk_post("contracts.sorafs_reserve_top_up_post", "/v1/sorafs/reserve/top-up");
         SORAFS_RESERVE_WITHDRAW_POST => app_sdk_post("contracts.sorafs_reserve_withdraw_post", "/v1/sorafs/reserve/withdraw");
-        SORAFS_RESERVE_MOVEMENTS_GET => app_sdk_get("contracts.sorafs_reserve_movements_get", "/v1/sorafs/reserve/movements");
-        SORAFS_RESERVE_MOVEMENTS_BY_MOVEMENT_ID_HEX_CUSTODY_POST => app_sdk_post("contracts.sorafs_reserve_movements_by_movement_id_hex_custody_post", "/v1/sorafs/reserve/movements/{movement_id_hex}/custody");
-        SORAFS_RESERVE_BALANCES_BY_PROVIDER_ID_HEX_GET => app_sdk_get("contracts.sorafs_reserve_balances_by_provider_id_hex_get", "/v1/sorafs/reserve/balances/{provider_id_hex}");
+        SORAFS_RESERVE_MOVEMENTS_GET => app_signed_sdk_get("contracts.sorafs_reserve_movements_get", "/v1/sorafs/reserve/movements");
+        SORAFS_RESERVE_MOVEMENTS_BY_MOVEMENT_ID_HEX_GET => app_signed_sdk_get("contracts.sorafs_reserve_movements_by_movement_id_hex_get", "/v1/sorafs/reserve/movements/{movement_id_hex}");
+        SORAFS_RESERVE_MOVEMENTS_BY_MOVEMENT_ID_HEX_DECISION_POST => app_sdk_post("contracts.sorafs_reserve_movements_by_movement_id_hex_decision_post", "/v1/sorafs/reserve/movements/{movement_id_hex}/decision");
+        SORAFS_RESERVE_CREDIT_DRAW_POST => app_sdk_post("contracts.sorafs_reserve_credit_draw_post", "/v1/sorafs/reserve/credit/draw");
+        SORAFS_RESERVE_CREDIT_REPAY_POST => app_sdk_post("contracts.sorafs_reserve_credit_repay_post", "/v1/sorafs/reserve/credit/repay");
         SORAFS_RESERVE_APPEALS_POST => app_sdk_post("contracts.sorafs_reserve_appeals_post", "/v1/sorafs/reserve/appeals");
-        SORAFS_RESERVE_APPEALS_GET => app_sdk_get("contracts.sorafs_reserve_appeals_get", "/v1/sorafs/reserve/appeals");
+        SORAFS_RESERVE_APPEALS_GET => app_signed_sdk_get("contracts.sorafs_reserve_appeals_get", "/v1/sorafs/reserve/appeals");
+        SORAFS_RESERVE_APPEALS_BY_APPEAL_ID_HEX_GET => app_signed_sdk_get("contracts.sorafs_reserve_appeals_by_appeal_id_hex_get", "/v1/sorafs/reserve/appeals/{appeal_id_hex}");
         SORAFS_RESERVE_APPEALS_BY_APPEAL_ID_HEX_DECISION_POST => app_sdk_post("contracts.sorafs_reserve_appeals_by_appeal_id_hex_decision_post", "/v1/sorafs/reserve/appeals/{appeal_id_hex}/decision");
+        SORAFS_RESERVE_EVENTS_GET => app_signed_sdk_get("contracts.sorafs_reserve_events_get", "/v1/sorafs/reserve/events");
+        SORAFS_RESERVE_EVENTS_STREAM_GET => app_unprojected_protocol_get("contracts.sorafs_reserve_events_stream_get", "/v1/sorafs/reserve/events/stream");
+        SORAFS_RESERVE_EVENTS_WS_GET => app_unprojected_protocol_get("contracts.sorafs_reserve_events_ws_get", "/v1/sorafs/reserve/events/ws");
+        SORAFS_GATEWAY_COMPLIANCE_FEEDS_BY_FEED_ID_GET => app_signed_get("contracts.sorafs_gateway_compliance_feeds_by_feed_id_get", "/v1/sorafs/gateway/compliance/feeds/{feed_id}");
+        SORAFS_GATEWAY_COMPLIANCE_STATUS_GET => app_signed_get("contracts.sorafs_gateway_compliance_status_get", "/v1/sorafs/gateway/compliance/status");
+        SORAFS_GATEWAY_COMPLIANCE_STAGE_POST => app_signed_post("contracts.sorafs_gateway_compliance_stage_post", "/v1/sorafs/gateway/compliance/stage");
+        SORAFS_GATEWAY_COMPLIANCE_ACKNOWLEDGE_POST => app_signed_post("contracts.sorafs_gateway_compliance_acknowledge_post", "/v1/sorafs/gateway/compliance/acknowledge");
+        SORAFS_GATEWAY_COMPLIANCE_PROMOTE_POST => app_signed_post("contracts.sorafs_gateway_compliance_promote_post", "/v1/sorafs/gateway/compliance/promote");
+        SORAFS_GATEWAY_COMPLIANCE_ROLLBACK_POST => app_signed_post("contracts.sorafs_gateway_compliance_rollback_post", "/v1/sorafs/gateway/compliance/rollback");
         SORAFS_APPEALS_PRICING_CONFIG_GET => app_get("contracts.sorafs_appeals_pricing_config_get", "/v1/sorafs/appeals/pricing/config");
         SORAFS_APPEALS_PRICING_STATUS_GET => app_get("contracts.sorafs_appeals_pricing_status_get", "/v1/sorafs/appeals/pricing/status");
         SORAFS_APPEALS_PRICING_QUOTE_POST => app_post("contracts.sorafs_appeals_pricing_quote_post", "/v1/sorafs/appeals/pricing/quote");
@@ -4834,25 +4842,23 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     contracts_and_verification_keys::SORAFS_ORDERBOOK_EVENTS_GET,
     contracts_and_verification_keys::SORAFS_ORDERBOOK_EVENTS_STREAM_GET,
     contracts_and_verification_keys::SORAFS_ORDERBOOK_EVENTS_WS_GET,
-    contracts_and_verification_keys::SORAFS_RESERVE_LIFECYCLE_POST,
-    contracts_and_verification_keys::SORAFS_RESERVE_LIFECYCLE_GET,
-    contracts_and_verification_keys::SORAFS_RESERVE_LIFECYCLE_PROVIDERS_BY_PROVIDER_ID_HEX_GET,
-    contracts_and_verification_keys::SORAFS_RESERVE_LIFECYCLE_POLICY_POST,
-    contracts_and_verification_keys::SORAFS_RESERVE_LIFECYCLE_POLICY_GET,
-    contracts_and_verification_keys::SORAFS_RESERVE_LIFECYCLE_ADVANCE_POST,
-    contracts_and_verification_keys::SORAFS_RESERVE_CREDIT_LINES_GET,
-    contracts_and_verification_keys::SORAFS_RESERVE_CREDIT_LINES_PROVIDERS_BY_PROVIDER_ID_HEX_GET,
-    contracts_and_verification_keys::SORAFS_RESERVE_LIFECYCLE_EVENTS_GET,
-    contracts_and_verification_keys::SORAFS_RESERVE_LIFECYCLE_EVENTS_STREAM_GET,
-    contracts_and_verification_keys::SORAFS_RESERVE_LIFECYCLE_EVENTS_WS_GET,
+    contracts_and_verification_keys::SORAFS_RESERVE_POLICY_GET,
+    contracts_and_verification_keys::SORAFS_RESERVE_PROVIDERS_GET,
+    contracts_and_verification_keys::SORAFS_RESERVE_PROVIDERS_BY_PROVIDER_ID_HEX_GET,
     contracts_and_verification_keys::SORAFS_RESERVE_TOP_UP_POST,
     contracts_and_verification_keys::SORAFS_RESERVE_WITHDRAW_POST,
     contracts_and_verification_keys::SORAFS_RESERVE_MOVEMENTS_GET,
-    contracts_and_verification_keys::SORAFS_RESERVE_MOVEMENTS_BY_MOVEMENT_ID_HEX_CUSTODY_POST,
-    contracts_and_verification_keys::SORAFS_RESERVE_BALANCES_BY_PROVIDER_ID_HEX_GET,
+    contracts_and_verification_keys::SORAFS_RESERVE_MOVEMENTS_BY_MOVEMENT_ID_HEX_GET,
+    contracts_and_verification_keys::SORAFS_RESERVE_MOVEMENTS_BY_MOVEMENT_ID_HEX_DECISION_POST,
+    contracts_and_verification_keys::SORAFS_RESERVE_CREDIT_DRAW_POST,
+    contracts_and_verification_keys::SORAFS_RESERVE_CREDIT_REPAY_POST,
     contracts_and_verification_keys::SORAFS_RESERVE_APPEALS_POST,
     contracts_and_verification_keys::SORAFS_RESERVE_APPEALS_GET,
+    contracts_and_verification_keys::SORAFS_RESERVE_APPEALS_BY_APPEAL_ID_HEX_GET,
     contracts_and_verification_keys::SORAFS_RESERVE_APPEALS_BY_APPEAL_ID_HEX_DECISION_POST,
+    contracts_and_verification_keys::SORAFS_RESERVE_EVENTS_GET,
+    contracts_and_verification_keys::SORAFS_RESERVE_EVENTS_STREAM_GET,
+    contracts_and_verification_keys::SORAFS_RESERVE_EVENTS_WS_GET,
     contracts_and_verification_keys::SORAFS_APPEALS_PRICING_CONFIG_GET,
     contracts_and_verification_keys::SORAFS_APPEALS_PRICING_STATUS_GET,
     contracts_and_verification_keys::SORAFS_APPEALS_PRICING_QUOTE_POST,

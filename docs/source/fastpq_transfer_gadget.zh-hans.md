@@ -102,12 +102,12 @@ struct TransferDeltaTranscript {
 | `ivm::host` 和测试 |当范围处于活动状态时，核心/默认主机将 `transfer_v1` 视为批量追加，表面 `SYSCALL_TRANSFER_V1_BATCH_{BEGIN,END,APPLY}` 和模拟 WSV 主机在提交之前缓冲条目，因此回归测试可以断言确定性平衡更新。【crates/ivm/src/core_host.rs:1001】【crates/ivm/src/host.rs:451】【crates/ivm/src/mock_wsv.rs :3713】【板条箱/ivm/tests/wsv_host_pointer_tlv.rs:219】【板条箱/ivm/tests/wsv_host_pointer_tlv.rs:287】
 | `iroha_core` |状态转换后发出 `TransferTranscript`，在 `StateBlock::capture_exec_witness` 期间使用显式 `public_inputs` 构建 `FastpqTransitionBatch` 记录，并运行 FASTPQ 验证器通道，以便 Torii/CLI 工具和 Stage6 后端接收规范`TransitionBatch` 输入。 `TransferAssetBatch` 将顺序传输分组为单个转录本，省略多增量批次的海神摘要，以便小工具可以确定性地跨条目迭代。 |
 | `fastpq_prover` | `gadgets::transfer` 现在为规划器 (`crates/fastpq_prover/src/gadgets/transfer.rs`) 验证多增量转录本（平衡算术 + Poseidon 摘要）并显示结构化见证（包括占位符配对的 SMT blob）。 `trace::build_trace` 从批次元数据中解码这些转录本，拒绝缺少 `transfer_transcripts` 有效负载的传输批次，将经过验证的见证附加到 `Trace::transfer_witnesses`，并且 `TracePolynomialData::transfer_plan()` 使聚合计划保持活动状态，直到规划器使用小工具 (`crates/fastpq_prover/src/trace.rs`)。行计数回归线束现在通过 `fastpq_row_bench` (`crates/fastpq_prover/src/bin/fastpq_row_bench.rs:1`) 提供，覆盖多达 65536 行填充的场景，而成对的 SMT 布线仍然落后于 TF-3 批处理辅助里程碑（占位符使走线布局保持稳定，直到交换落地）。 |
-| Kotodama |将 `transfer_batch((from,to,asset,amount), …)` 帮助程序降低为 `transfer_v1_batch_begin`、顺序 `transfer_asset` 调用和 `transfer_v1_batch_end`。每个元组参数必须遵循 `(AccountId, AccountId, AssetDefinitionId, int)` 形状；单一转让保留现有的建设者。 |
+| Kotodama |将 `transfer_batch((from,to,asset,amount), …)` 帮助程序降低为 `transfer_v1_batch_begin`、顺序 `transfer_asset` 调用和 `transfer_v1_batch_end`。每个元组参数必须遵循 `(AccountId, AccountId, AssetDefinitionId, quantity)` 形状；单一转让保留现有的建设者。 |
 
 Kotodama 用法示例：
 
 ```text
-fn pay(AccountId a, AccountId b, AssetDefinitionId asset, int x) {
+fn pay(AccountId a, AccountId b, AssetDefinitionId asset, quantity x) {
     transfer_batch((a, b, asset, x), (b, a, asset, 1));
 }
 ```

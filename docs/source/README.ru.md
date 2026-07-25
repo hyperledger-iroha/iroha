@@ -81,7 +81,7 @@ Kotodama и конвейеру выполнения, ориентированн�
   - Только проверка: `bash scripts/check_syscalls_doc.sh`
 - Таблица ABI syscalls (`crates/ivm/docs/syscalls.md`)
   - Только проверка:
-    `cargo run -p ivm --bin gen_syscalls_doc -- --check --no-code`
+    `cargo run -p ivm --bin gen_syscalls_doc -- --check`
   - Обновление сгенерированного раздела (и таблицы в код‑доках):
     `cargo run -p ivm --bin gen_syscalls_doc -- --write`
 - Таблицы pointer‑ABI (`crates/ivm/docs/pointer_abi.md` и `ivm.md`)

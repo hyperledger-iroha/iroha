@@ -11,7 +11,7 @@ fn kotodama_set_account_detail_with_constructors() {
         seiyaku SetAccountDetail {
         kotoage fn main() authorize("SetAccountDetail") {
           // Use a valid AccountId multihash form for Iroha v2
-          ledger::account::set_detail(account: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), key: Name::parse("cursor"), value: Json::parse("{\"x\":1}"));
+          ledger::account::set_detail(account: AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"), key: Name::parse("cursor"), value: Json::parse("{\"x\":1}"));
         }
         }
     "#;

@@ -196,8 +196,12 @@ tests:
     input_series:
       - series: 'torii_sorafs_reserve_defaulted_providers'
         values: '1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
-      - series: 'torii_sorafs_reserve_credit_shortfall_micro_xor{provider_id="provider-a"}'
+      - series: 'torii_sorafs_reserve_credit_shortfall_micro_xor{stage="default"}'
         values: '5000000 5000000 5000000 5000000 5000000 5000000 5000000 5000000 5000000 5000000 5000000 5000000 5000000 5000000 5000000 5000000 5000000 5000000'
+      - series: 'torii_sorafs_reserve_finalized_projection_ready'
+        values: '0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0'
+      - series: 'torii_sorafs_reserve_finalized_projection_failure_total'
+        values: '0 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
       - series: 'torii_sorafs_reserve_appeal_backlog'
         values: '11 11 11 11 11 11 11 11 11 11 11 11 11 11 11 11 11 11'
       - series: 'torii_sorafs_reserve_chain_reconciled_movements{status="rejected"}'
@@ -205,23 +209,40 @@ tests:
       - series: 'torii_sorafs_reserve_service_rate_limit_total{route="top_up",reason="quota"}'
         values: '0 0 0 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14'
     alert_rule_test:
-      - alertname: SoraFSReserveRuntimeDefaults
+      - alertname: SoraFSReserveFinalizedProjectionUnavailable
         eval_time: 3m
         exp_alerts: []
-      - alertname: SoraFSReserveRuntimeDefaults
+      - alertname: SoraFSReserveFinalizedProjectionUnavailable
         eval_time: 7m
         exp_alerts:
           - exp_labels:
               severity: critical
             exp_annotations:
-              summary: "Reserve runtime reports defaulted providers"
-      - alertname: SoraFSReserveRuntimeCreditShortfall
+              summary: "Reserve finalized projection is unavailable"
+      - alertname: SoraFSReserveFinalizedProjectionFailures
+        eval_time: 3m
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "Reserve finalized projection refresh failed"
+      - alertname: SoraFSReserveFinalizedDefaults
+        eval_time: 3m
+        exp_alerts: []
+      - alertname: SoraFSReserveFinalizedDefaults
         eval_time: 7m
         exp_alerts:
           - exp_labels:
               severity: critical
             exp_annotations:
-              summary: "Reserve runtime reports uncovered credit shortfall"
+              summary: "Reserve finalized ledger reports defaulted providers"
+      - alertname: SoraFSReserveFinalizedCreditShortfall
+        eval_time: 7m
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "Reserve finalized ledger reports uncovered credit shortfall"
       - alertname: SoraFSReserveAppealBacklogHigh
         eval_time: 10m
         exp_alerts: []

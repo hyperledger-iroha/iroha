@@ -5,6 +5,7 @@ use iroha_core::{
     executor::Executor,
     kura::Kura,
     query::{insert_proof_record_for_test, store::LiveQueryStore},
+    smartcontracts::Execute,
     state::{State, WorldReadOnly},
     telemetry::StateTelemetry,
 };
@@ -221,10 +222,8 @@ fn manual_prune_has_no_caller_controlled_retention_bypass() {
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-    let prune: InstructionBox =
-        iroha_data_model::isi::zk::PruneProofs::new(Some("bridge/ics23".to_owned())).into();
-    Executor::default()
-        .execute_instruction(&mut stx, &ALICE_ID.clone(), prune)
+    iroha_data_model::isi::zk::PruneProofs::new(Some("bridge/ics23".to_owned()))
+        .execute(&ALICE_ID, &mut stx)
         .expect("manual bridge prune");
 
     assert!(stx.world.proofs().get(&older_id).is_none());

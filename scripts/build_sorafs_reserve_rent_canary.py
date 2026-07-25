@@ -156,6 +156,7 @@ TRUE_CLAIMS: dict[str, tuple[str, ...]] = {
     ),
     "metrics_alerts": (
         "metrics_scrape_success",
+        "finalized_projection_ready",
         "dashboard_provisioned",
         "alert_rules_installed",
     ),
@@ -610,6 +611,12 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
             {
                 "metrics": args.metrics,
                 "metric_count": len(args.metrics),
+                "metrics_scrape_blake3_hex": args.metrics_scrape_blake3_hex,
+                "metrics_scraped_at_unix": args.metrics_scraped_at_unix,
+                "finalized_projection_height": args.finalized_projection_height,
+                "finalized_projection_failure_increase_5m": (
+                    args.finalized_projection_failure_increase_5m
+                ),
             }
         )
     elif args.kind == "provider_bake":
@@ -913,6 +920,24 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
                     "--rejected-appeal-count must match rejected --appeal-probe inventory"
                 )
     elif args.kind == "metrics_alerts":
+        require_kind_options(
+            args,
+            errors,
+            (
+                ("--metrics-scrape-blake3-hex", args.metrics_scrape_blake3_hex),
+                ("--metrics-scraped-at-unix", args.metrics_scraped_at_unix),
+                ("--finalized-projection-height", args.finalized_projection_height),
+                (
+                    "--finalized-projection-failure-increase-5m",
+                    args.finalized_projection_failure_increase_5m,
+                ),
+            ),
+        )
+        validate_hex64(
+            args.metrics_scrape_blake3_hex,
+            option="--metrics-scrape-blake3-hex",
+            errors=errors,
+        )
         args.metrics = validate_name_set(
             split_csv_values(args.metric),
             allowed=REQUIRED_METRICS,
@@ -1244,6 +1269,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--approved-appeal-count", type=non_negative_int_arg)
     parser.add_argument("--rejected-appeal-count", type=non_negative_int_arg)
     parser.add_argument("--metric", action="append", default=[])
+    parser.add_argument("--metrics-scrape-blake3-hex")
+    parser.add_argument("--metrics-scraped-at-unix", type=positive_int_arg)
+    parser.add_argument("--finalized-projection-height", type=positive_int_arg)
+    parser.add_argument(
+        "--finalized-projection-failure-increase-5m",
+        type=non_negative_int_arg,
+    )
     parser.add_argument("--bake-id")
     parser.add_argument("--started-at-unix", type=positive_int_arg)
     parser.add_argument("--completed-at-unix", type=positive_int_arg)

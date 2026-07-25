@@ -2,6 +2,8 @@
 
 use ivm::syscalls::compute_abi_hash;
 
+const ABI_V1_HASH_GOLDEN: &str = "dcbb03608ed9d87b4a8d942c0d7045d3044de8d4d8413347c87143386f56aec1";
+
 #[test]
 fn abi_hash_is_stable() {
     let h1 = compute_abi_hash(ivm::SyscallPolicy::AbiV1);
@@ -12,8 +14,5 @@ fn abi_hash_is_stable() {
 #[test]
 fn abi_hash_matches_v1_golden() {
     let hash = compute_abi_hash(ivm::SyscallPolicy::AbiV1);
-    assert_eq!(
-        hex::encode(hash),
-        "2a6e921ac81ce3ecc6797c5da227eb5f4ff57d521201863ef8590f1713ef52a1"
-    );
+    assert_eq!(hex::encode(hash), ABI_V1_HASH_GOLDEN);
 }

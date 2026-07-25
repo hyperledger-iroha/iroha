@@ -119,15 +119,21 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: python/iroha_python/pyproject.toml
-      - run: python -m pip install pytest
+          cache-dependency-path: python/iroha_python/requirements-ci.lock
+      - name: Install hash-locked Python test dependencies
+        run: >-
+          python -m pip install
+          --require-hashes
+          --only-binary=:all:
+          -r requirements-ci.lock
       - name: Verify Python Numeric V1 fixture parity
         env:
-          PYTHONPATH: src
-        run: |
-          python -m pytest tests/numeric_v1_test.py
-          python -m pytest tests/client_ledger_helpers_test.py -k \
-            'asset_quantity_builder_boundary_is_exact_and_canonical or repo_and_settlement_quantity_builders_reject_alternate_inputs or repo_agreement_readback_rejects_noncanonical_quantities or repo_agreement_readback_requires_quantity_fields'
+          PYTHONPATH: src:../norito_py/src:..
+        run: >-
+          python -m pytest
+          tests/dependency_lock_test.py
+          tests/numeric_v1_test.py
+          tests/numeric_v1_quantity_test.py
 
   dotnet:
     runs-on: ubuntu-latest

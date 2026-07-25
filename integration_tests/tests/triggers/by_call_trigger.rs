@@ -502,6 +502,7 @@ async fn trigger_failure_should_not_cancel_other_triggers_execution() -> Result<
                     Level::INFO,
                     "trigger probe".to_string(),
                 ))],
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 Metadata::default(),
             );
             spawn_blocking({

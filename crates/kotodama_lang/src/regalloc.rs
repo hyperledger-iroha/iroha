@@ -914,31 +914,114 @@ struct ArgumentRegisterClobber {
     position: usize,
     internal_call: bool,
     uses: HashSet<Temp>,
+    /// Temps whose current values are needed after this instruction on a
+    /// control-flow path, including fields carried by virtual tuples.
+    live_across: HashSet<Temp>,
+}
+
+fn update_tuple_definitions(tuple_defs: &mut HashMap<Temp, Vec<Temp>>, instruction: &Instr) {
+    match instruction {
+        Instr::TuplePack { dest, items } => {
+            tuple_defs.insert(*dest, items.clone());
+        }
+        Instr::Copy { dest, src } => {
+            if let Some(items) = tuple_defs.get(src).cloned() {
+                tuple_defs.insert(*dest, items);
+            } else {
+                tuple_defs.remove(dest);
+            }
+        }
+        Instr::TupleGet { dest, tuple, index } => {
+            let child_items = tuple_defs
+                .get(tuple)
+                .and_then(|items| items.get(*index))
+                .and_then(|item| tuple_defs.get(item))
+                .cloned();
+            if let Some(items) = child_items {
+                tuple_defs.insert(*dest, items);
+            } else {
+                tuple_defs.remove(dest);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn extend_virtual_tuple_liveness(live: &mut HashSet<Temp>, tuple_defs: &HashMap<Temp, Vec<Temp>>) {
+    let mut pending = live.iter().copied().collect::<Vec<_>>();
+    while let Some(tuple) = pending.pop() {
+        if let Some(items) = tuple_defs.get(&tuple) {
+            for item in items {
+                if live.insert(*item) {
+                    pending.push(*item);
+                }
+            }
+        }
+    }
 }
 
 fn collect_argument_register_clobbers(function: &Function) -> Vec<ArgumentRegisterClobber> {
-    let mut clobbers = Vec::new();
-    let mut position = 0usize;
+    let mut label_to_idx = HashMap::with_capacity(function.blocks.len());
+    for (idx, block) in function.blocks.iter().enumerate() {
+        label_to_idx.insert(block.label, idx);
+    }
+    let mut tuple_defs = HashMap::new();
+    let mut block_uses = Vec::with_capacity(function.blocks.len());
+    let mut block_defs = Vec::with_capacity(function.blocks.len());
+    let mut block_succs = Vec::with_capacity(function.blocks.len());
     for block in &function.blocks {
         for instruction in &block.instrs {
+            update_tuple_definitions(&mut tuple_defs, instruction);
+        }
+        let (uses, defs) = block_uses_defs(block);
+        block_uses.push(uses);
+        block_defs.push(defs);
+        block_succs.push(block_successors(block, &label_to_idx));
+    }
+    let (_, live_out) = compute_liveness(&block_uses, &block_defs, &block_succs);
+
+    let mut clobbers = Vec::new();
+    let mut position = 0usize;
+    let mut block_starts = Vec::with_capacity(function.blocks.len());
+    for block in &function.blocks {
+        block_starts.push(position);
+        position = position.saturating_add(block.instrs.len().saturating_add(1));
+    }
+    for (block_idx, block) in function.blocks.iter().enumerate() {
+        let mut live = live_out[block_idx].clone();
+        visit_terminator_uses(&block.terminator, |temp| {
+            live.insert(temp);
+        });
+        for (instruction_idx, instruction) in block.instrs.iter().enumerate().rev() {
+            let position = block_starts[block_idx].saturating_add(instruction_idx);
+            let mut uses = HashSet::new();
+            visit_instr_uses(instruction, |temp| {
+                uses.insert(temp);
+            });
+            let mut defs = HashSet::new();
+            visit_instr_defs(instruction, |temp| {
+                defs.insert(temp);
+            });
             if !instruction_preserves_argument_registers(instruction) {
-                let mut uses = HashSet::new();
-                visit_instr_uses(instruction, |temp| {
-                    uses.insert(temp);
-                });
+                let mut live_across = live.difference(&defs).copied().collect();
+                extend_virtual_tuple_liveness(&mut live_across, &tuple_defs);
                 clobbers.push(ArgumentRegisterClobber {
                     position,
                     internal_call: matches!(
                         instruction,
                         Instr::Call { .. } | Instr::CallMulti { .. }
                     ),
-                    uses,
+                    uses: uses.clone(),
+                    live_across,
                 });
             }
-            position = position.saturating_add(1);
+            for temp in defs {
+                live.remove(&temp);
+            }
+            live.extend(uses);
         }
-        position = position.saturating_add(1);
     }
+    clobbers.sort_unstable_by_key(|clobber| clobber.position);
     clobbers
 }
 
@@ -947,12 +1030,8 @@ fn interval_can_use_argument_registers(
     clobbers: &[ArgumentRegisterClobber],
 ) -> bool {
     clobbers.iter().all(|clobber| {
-        let crosses = interval.start < clobber.position && clobber.position < interval.end;
-        let unsafe_host_operand = !clobber.internal_call
-            && clobber.uses.contains(&interval.temp)
-            && interval.start <= clobber.position
-            && clobber.position <= interval.end;
-        !crosses && !unsafe_host_operand
+        !clobber.live_across.contains(&interval.temp)
+            && (clobber.internal_call || !clobber.uses.contains(&interval.temp))
     })
 }
 
@@ -1092,31 +1171,7 @@ fn collect_live_intervals(func: &Function) -> Vec<Interval> {
         for instr in &block.instrs {
             visit_instr_uses(instr, |temp| add_use(&mut intervals, temp, position));
             visit_instr_defs(instr, |dest| add_def(&mut intervals, dest, position));
-            match instr {
-                Instr::TuplePack { dest, items } => {
-                    tuple_defs.insert(*dest, items.clone());
-                }
-                Instr::Copy { dest, src } => {
-                    if let Some(items) = tuple_defs.get(src).cloned() {
-                        tuple_defs.insert(*dest, items);
-                    } else {
-                        tuple_defs.remove(dest);
-                    }
-                }
-                Instr::TupleGet { dest, tuple, index } => {
-                    let child_items = tuple_defs
-                        .get(tuple)
-                        .and_then(|items| items.get(*index))
-                        .and_then(|item| tuple_defs.get(item))
-                        .cloned();
-                    if let Some(items) = child_items {
-                        tuple_defs.insert(*dest, items);
-                    } else {
-                        tuple_defs.remove(dest);
-                    }
-                }
-                _ => {}
-            }
+            update_tuple_definitions(&mut tuple_defs, instr);
             position = position.saturating_add(1);
         }
         visit_terminator_uses(&block.terminator, |temp| {
@@ -2874,6 +2929,49 @@ mod tests {
     }
 
     #[test]
+    fn virtual_tuple_fields_needed_after_a_call_use_preserved_homes() {
+        let field = Temp(0);
+        let tuple = Temp(1);
+        let extracted = Temp(2);
+        let function = Function {
+            name: "tuple_across_call".into(),
+            params: vec![],
+            blocks: vec![BasicBlock {
+                label: Label(0),
+                instrs: vec![
+                    Instr::Const {
+                        dest: field,
+                        value: 7,
+                    },
+                    Instr::TuplePack {
+                        dest: tuple,
+                        items: vec![field],
+                    },
+                    Instr::Call {
+                        callee: "helper".into(),
+                        args: Vec::new(),
+                        dest: None,
+                    },
+                    Instr::TupleGet {
+                        dest: extracted,
+                        tuple,
+                        index: 0,
+                    },
+                ],
+                terminator: Terminator::Return(Some(extracted)),
+            }],
+            entry: Label(0),
+            location: crate::ast::SourceLocation { line: 1, column: 1 },
+        };
+
+        let allocation = allocate(&function);
+        assert!(
+            ALLOC_POOL.contains(&allocation.regs[&field]),
+            "a virtual tuple field materialized after the call must survive it: {allocation:#?}"
+        );
+    }
+
+    #[test]
     fn reuse_registers_when_intervals_do_not_overlap() {
         let mut blocks = Vec::new();
         let mut instrs = Vec::new();
@@ -3169,6 +3267,103 @@ mod tests {
 
         let allocation = allocate(&function);
         assert!(ALLOC_POOL.contains(&allocation.regs[&carried]));
+    }
+
+    #[test]
+    fn disjoint_branch_liveness_does_not_create_false_call_crossings() {
+        let condition = Temp(0);
+        let branch_local = Temp(1);
+        let short_value = Temp(2);
+        let merged = Temp(3);
+        let call_result = Temp(4);
+        let rhs_value = Temp(5);
+        let function = Function {
+            name: "disjoint_branch_call".into(),
+            params: Vec::new(),
+            blocks: vec![
+                BasicBlock {
+                    label: Label(0),
+                    instrs: vec![
+                        Instr::Const {
+                            dest: condition,
+                            value: 1,
+                        },
+                        Instr::Const {
+                            dest: branch_local,
+                            value: 0,
+                        },
+                    ],
+                    terminator: Terminator::Branch {
+                        cond: condition,
+                        then_bb: Label(1),
+                        else_bb: Label(3),
+                    },
+                },
+                BasicBlock {
+                    label: Label(1),
+                    instrs: vec![
+                        Instr::Const {
+                            dest: short_value,
+                            value: 0,
+                        },
+                        Instr::Copy {
+                            dest: merged,
+                            src: short_value,
+                        },
+                    ],
+                    terminator: Terminator::Jump(Label(2)),
+                },
+                BasicBlock {
+                    label: Label(2),
+                    instrs: vec![Instr::Call {
+                        callee: "relay".into(),
+                        args: vec![merged],
+                        dest: Some(call_result),
+                    }],
+                    terminator: Terminator::Return(Some(call_result)),
+                },
+                BasicBlock {
+                    label: Label(3),
+                    instrs: vec![
+                        Instr::Unary {
+                            dest: rhs_value,
+                            op: crate::ast::UnaryOp::Not,
+                            operand: branch_local,
+                        },
+                        Instr::Copy {
+                            dest: merged,
+                            src: rhs_value,
+                        },
+                    ],
+                    terminator: Terminator::Jump(Label(2)),
+                },
+            ],
+            entry: Label(0),
+            location: crate::ast::SourceLocation { line: 1, column: 1 },
+        };
+
+        let call_position = 6;
+        let intervals = collect_live_intervals(&function);
+        for temp in [branch_local, merged] {
+            let interval = intervals
+                .iter()
+                .find(|interval| interval.temp == temp)
+                .expect("branch-local interval");
+            assert!(
+                interval.start < call_position && call_position < interval.end,
+                "the physical block layout must reproduce the conservative linear crossing"
+            );
+        }
+
+        let allocation = allocate(&function);
+        assert!(
+            [branch_local, merged]
+                .iter()
+                .all(|temp| ARG_REGS.contains(&allocation.regs[temp])),
+            "values that cannot reach the call must stay in caller-saved registers: {allocation:#?}"
+        );
+        assert!(allocation.stack.is_empty(), "{allocation:#?}");
+        assert_eq!(allocation.frame_size, 0);
     }
 
     #[test]

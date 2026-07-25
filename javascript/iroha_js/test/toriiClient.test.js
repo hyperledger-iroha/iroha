@@ -381,7 +381,7 @@ function sampleAccountForms() {
     publicKey,
   });
   const i105Literal = address.toI105(SORA_I105_DISCRIMINANT);
-  const nonCanonicalI105 = address.toI105(0x02f2);
+  const malformedI105 = i105Literal.replace(/^sora/u, "ｓｏｒａ");
   const canonical = normalizeAccountId(
     i105Literal,
     "toriiClient.sampleAccountForms",
@@ -396,7 +396,7 @@ function sampleAccountForms() {
   return Object.freeze({
     canonical,
     i105: i105Literal,
-    nonCanonicalI105,
+    malformedI105,
     local8,
   });
 }
@@ -607,7 +607,6 @@ function fixtureAccountForms(label, domain = "fixture-domain") {
   const address = fixtureAccountAddress(label, domain);
   return {
     i105: address.toI105(SORA_I105_DISCRIMINANT),
-    nonCanonicalI105: address.toI105(0x02f2),
   };
 }
 
@@ -15128,7 +15127,7 @@ test("governanceSubmitZk ballots reject noncanonical owners", async () => {
         electionId: "ref-zk",
         proof: [1, 2, 3],
         public: {
-          owner: SAMPLE_ACCOUNT_FORMS.nonCanonicalI105,
+          owner: SAMPLE_ACCOUNT_FORMS.malformedI105,
           amount: "42",
           duration_blocks: 128,
         },
@@ -15179,7 +15178,7 @@ test("governanceSubmitZkBallotV1 rejects noncanonical owner", async () => {
         electionId: "ref-zk",
         backend: "halo2/ipa",
         envelope: [4, 5],
-        owner: SAMPLE_ACCOUNT_FORMS.nonCanonicalI105,
+        owner: SAMPLE_ACCOUNT_FORMS.malformedI105,
         amount: "42",
         duration_blocks: 128,
       }),
@@ -15250,7 +15249,7 @@ test("governanceSubmitZkBallotProofV1 rejects noncanonical owner", async () => {
         chainId: "chain-0",
         electionId: "ref-zk",
         ballot: {
-          owner: SAMPLE_ACCOUNT_FORMS.nonCanonicalI105,
+          owner: SAMPLE_ACCOUNT_FORMS.malformedI105,
           amount: "42",
           duration_blocks: 128,
         },

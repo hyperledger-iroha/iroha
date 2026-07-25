@@ -3168,7 +3168,7 @@ mod tests {
         let chain: ChainId = "chain".parse().expect("chain id");
         let _authority_domain: DomainId =
             DomainId::try_new("chain", "universal").expect("chain domain id");
-        let authority = AccountId::new(checked_random_keypair().public_key().clone());
+        let authority = AccountId::new(keypair.public_key().clone());
         let tx = TransactionBuilder::new(
             chain.clone(),
             authority.clone(),

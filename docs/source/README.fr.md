@@ -81,7 +81,7 @@ Vérifications de synchronisation de la doc
   - Vérification seule : `bash scripts/check_syscalls_doc.sh`
 - Tableau d’ABI de syscalls (`crates/ivm/docs/syscalls.md`)
   - Vérification seule :
-    `cargo run -p ivm --bin gen_syscalls_doc -- --check --no-code`
+    `cargo run -p ivm --bin gen_syscalls_doc -- --check`
   - Mise à jour de la section générée (et du tableau dans la doc de code) :
     `cargo run -p ivm --bin gen_syscalls_doc -- --write`
 - Tableaux de pointer‑ABI (`crates/ivm/docs/pointer_abi.md` et `ivm.md`)

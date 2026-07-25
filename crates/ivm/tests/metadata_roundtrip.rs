@@ -63,6 +63,9 @@ fn metadata_parse_rejects_bad_magic_and_short() {
     m[7] ^= 0xFF; // vector_length flipped
     assert!(matches!(
         ProgramMetadata::parse(&m),
-        Err(VMError::InvalidMetadata)
+        Err(VMError::ProgramVectorLengthTooLarge {
+            vector_length: u8::MAX,
+            max_allowed: ivm::VECTOR_LENGTH_MAX,
+        })
     ));
 }

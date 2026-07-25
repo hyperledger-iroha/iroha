@@ -214,9 +214,8 @@ Exact numeric helpers
   and `0x010140..0x01014F` implement nominal non-negative `quantity`
   operations. The generated table below is the signature source of truth.
 - Numeric operands are schema-bound, uncompressed Norito frames in pointer
-  types `Int=0x0011`, `Decimal=0x0012`, and `Quantity=0x0013`. Pointer ID
-  `0x0010` is the permanently retired pre-release `Amount` ID and is rejected
-  as disallowed; `0x0014` is unassigned and rejected as unknown.
+  types `Quantity=0x0010`, `Int=0x0011`, and `Decimal=0x0012`. Pointer ID
+  `0x0013` is unassigned and rejected as unknown.
 - The domain is `-2^511..=2^511-1`; decimal and quantity scale is `0..=28`.
   Exact division distinguishes division by zero, repeating expansion, and a
   terminating result whose minimum scale exceeds 28. Rounded operations name

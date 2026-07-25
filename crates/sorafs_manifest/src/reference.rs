@@ -23,8 +23,8 @@ use crate::{
     GovernanceLogValidationError, GovernanceSignatureAlgorithm, HedgingFeedStatusV1,
     HedgingPriceFeedV1, HedgingReferencePriceDecisionV1, HedgingValidationError,
     ORDERBOOK_CANCEL_VERSION_V1, ORDERBOOK_ORDER_VERSION_V1, OrderCancelReasonV1, OrderCancelV1,
-    OrderRequestV1, OrderSideV1, OrderTierV1, OrderbookRuntimeSnapshotV1, OrderbookSignatureV1,
-    OrderbookValidationError, PDP_CHALLENGE_MAX_CANONICAL_BYTES_V1,
+    OrderRequestV1, OrderSideV1, OrderTierV1, OrderbookSignatureV1, OrderbookValidationError,
+    PDP_CHALLENGE_MAX_CANONICAL_BYTES_V1,
     PDP_COMMITMENT_MAX_CANONICAL_BYTES_V1, PDP_MAX_HOT_LEAVES_PER_SEGMENT_SAMPLE_V1,
     PDP_MAX_MERKLE_PATH_DEPTH_V1, PDP_MAX_SEGMENT_SAMPLES_V1, PDP_MAX_TOTAL_HOT_LEAF_SAMPLES_V1,
     PDP_PROOF_MAX_CANONICAL_BYTES_V1, PdpChallengeV1, PdpChallengeValidationError, PdpCommitmentV1,
@@ -45,8 +45,8 @@ use crate::{
     SignedReplicationOrderValidationError, TradeEventV1, XorQuantity, decode_billing_line_item_v1,
     decode_billing_statement_v1, decode_hedging_price_feed_v1,
     decode_hedging_reference_price_decision_v1, decode_order_cancel_v1, decode_order_request_v1,
-    decode_orderbook_runtime_snapshot_v1, decode_settlement_channel_v1,
-    decode_settlement_receipt_v1, decode_trade_event_v1, sign_order_cancel_ed25519_v1,
+    decode_settlement_channel_v1, decode_settlement_receipt_v1, decode_trade_event_v1,
+    sign_order_cancel_ed25519_v1,
     sign_order_request_ed25519_v1, sign_settlement_receipt_ed25519_v1,
     validate_governance_dag_head_against_chain_v1, verify_envelope_untrusted_signers,
     verify_order_cancel_signature_v1, verify_order_request_signature_v1, verify_pdp_bundle_v1,
@@ -248,8 +248,6 @@ pub enum FixtureBundlePayloadKindV1 {
     OrderbookSettlementChannel,
     /// [`SettlementReceiptV1`] orderbook payload.
     OrderbookSettlementReceipt,
-    /// [`OrderbookRuntimeSnapshotV1`] orderbook payload.
-    OrderbookRuntimeSnapshot,
 }
 
 impl FixtureBundlePayloadKindV1 {
@@ -274,7 +272,6 @@ impl FixtureBundlePayloadKindV1 {
             Self::OrderbookTradeEvent => "orderbook_trade_event",
             Self::OrderbookSettlementChannel => "settlement_channel",
             Self::OrderbookSettlementReceipt => "settlement_receipt",
-            Self::OrderbookRuntimeSnapshot => "orderbook_runtime_snapshot",
         }
     }
 
@@ -299,7 +296,6 @@ impl FixtureBundlePayloadKindV1 {
             Self::OrderbookTradeEvent => "TradeEventV1",
             Self::OrderbookSettlementChannel => "SettlementChannelV1",
             Self::OrderbookSettlementReceipt => "SettlementReceiptV1",
-            Self::OrderbookRuntimeSnapshot => "OrderbookRuntimeSnapshotV1",
         }
     }
 }
@@ -1154,11 +1150,6 @@ fn validate_fixture_bundle_payload(
                 generated_at,
             )?
         }
-        FixtureBundlePayloadKindV1::OrderbookRuntimeSnapshot => validate_orderbook_bundle_payload(
-            OrderbookValidationPayloadKindV1::RuntimeSnapshot,
-            payload,
-            generated_at,
-        )?,
     }
     Ok(())
 }
@@ -1956,35 +1947,6 @@ fn settlement_receipt_context(receipt: &SettlementReceiptV1) -> Vec<ValidationCo
     context
 }
 
-fn orderbook_runtime_snapshot_context(
-    snapshot: &OrderbookRuntimeSnapshotV1,
-) -> Vec<ValidationContextFieldV1> {
-    vec![
-        ValidationContextFieldV1::new("schema", "OrderbookRuntimeSnapshotV1"),
-        ValidationContextFieldV1::new("version", snapshot.version.to_string()),
-        ValidationContextFieldV1::new("next_sequence", snapshot.next_sequence.to_string()),
-        ValidationContextFieldV1::new("generated_at_unix", snapshot.generated_at_unix.to_string()),
-        ValidationContextFieldV1::new(
-            "owner_nonce_high_water_count",
-            snapshot.owner_nonce_high_waters.len().to_string(),
-        ),
-        ValidationContextFieldV1::new("open_order_count", snapshot.open_orders.len().to_string()),
-        ValidationContextFieldV1::new("trade_count", snapshot.trades.len().to_string()),
-        ValidationContextFieldV1::new(
-            "settlement_channel_count",
-            snapshot.settlement_channels.len().to_string(),
-        ),
-        ValidationContextFieldV1::new(
-            "settlement_receipt_count",
-            snapshot.settlement_receipts.len().to_string(),
-        ),
-        ValidationContextFieldV1::new(
-            "expired_order_count",
-            snapshot.expired_order_ids.len().to_string(),
-        ),
-    ]
-}
-
 fn append_orderbook_signature_context(
     context: &mut Vec<ValidationContextFieldV1>,
     signature: &crate::OrderbookSignatureV1,
@@ -2739,8 +2701,6 @@ pub enum OrderbookValidationPayloadKindV1 {
     SettlementChannel,
     /// [`SettlementReceiptV1`] payload.
     SettlementReceipt,
-    /// [`OrderbookRuntimeSnapshotV1`] payload.
-    RuntimeSnapshot,
 }
 
 impl OrderbookValidationPayloadKindV1 {
@@ -2751,7 +2711,6 @@ impl OrderbookValidationPayloadKindV1 {
             Self::TradeEvent => "orderbook_trade_event",
             Self::SettlementChannel => "settlement_channel",
             Self::SettlementReceipt => "settlement_receipt",
-            Self::RuntimeSnapshot => "orderbook_runtime_snapshot",
         }
     }
 
@@ -2762,7 +2721,6 @@ impl OrderbookValidationPayloadKindV1 {
             Self::TradeEvent => "TradeEventV1",
             Self::SettlementChannel => "SettlementChannelV1",
             Self::SettlementReceipt => "SettlementReceiptV1",
-            Self::RuntimeSnapshot => "OrderbookRuntimeSnapshotV1",
         }
     }
 
@@ -2773,7 +2731,6 @@ impl OrderbookValidationPayloadKindV1 {
             Self::TradeEvent => "trade_event",
             Self::SettlementChannel => "settlement_channel",
             Self::SettlementReceipt => "settlement_receipt",
-            Self::RuntimeSnapshot => "runtime_snapshot",
         }
     }
 
@@ -2784,7 +2741,6 @@ impl OrderbookValidationPayloadKindV1 {
             Self::TradeEvent => "orderbook trade event accepted",
             Self::SettlementChannel => "settlement channel accepted",
             Self::SettlementReceipt => "settlement receipt accepted",
-            Self::RuntimeSnapshot => "orderbook runtime snapshot accepted",
         }
     }
 }
@@ -2978,32 +2934,7 @@ pub fn validate_orderbook_payload_bytes(
                 Err(error) => orderbook_decode_error(kind, error.to_string(), inputs, generated_at),
             }
         }
-        OrderbookValidationPayloadKindV1::RuntimeSnapshot => {
-            match decode_orderbook_runtime_snapshot_v1(bytes) {
-                Ok(payload) => validate_orderbook_payload_value(
-                    kind,
-                    validate_orderbook_runtime_snapshot_reference(&payload),
-                    orderbook_runtime_snapshot_context(&payload),
-                    inputs,
-                    generated_at,
-                ),
-                Err(error) => orderbook_decode_error(kind, error.to_string(), inputs, generated_at),
-            }
-        }
     }
-}
-
-fn validate_orderbook_runtime_snapshot_reference(
-    snapshot: &OrderbookRuntimeSnapshotV1,
-) -> Result<(), OrderbookValidationError> {
-    snapshot.validate()?;
-    for entry in &snapshot.open_orders {
-        verify_order_request_signature_v1(&entry.order)?;
-    }
-    for receipt in &snapshot.settlement_receipts {
-        verify_settlement_receipt_signature_v1(receipt)?;
-    }
-    Ok(())
 }
 
 /// Validates a Norito-encoded SoraFS hedging/billing payload and emits a reference outcome.
@@ -3302,8 +3233,8 @@ pub fn build_signed_orderbook_settlement_receipt_bytes_ed25519_v1(
 ///
 /// This helper accepts `OrderRequestV1`, `OrderCancelV1`, and
 /// `SettlementReceiptV1` payloads. Runtime-generated trade events, settlement
-/// channels, and snapshots are intentionally not accepted because they are not
-/// directly signed by SDK users.
+/// channels are intentionally not accepted because they are not directly
+/// signed by SDK users.
 pub fn sign_orderbook_payload_bytes_ed25519_v1(
     kind: OrderbookValidationPayloadKindV1,
     bytes: &[u8],
@@ -6218,8 +6149,7 @@ fn orderbook_validation_code(error: &OrderbookValidationError) -> &'static str {
         | OrderbookValidationError::UnsupportedCancelVersion { .. }
         | OrderbookValidationError::UnsupportedTradeVersion { .. }
         | OrderbookValidationError::UnsupportedChannelVersion { .. }
-        | OrderbookValidationError::UnsupportedReceiptVersion { .. }
-        | OrderbookValidationError::UnsupportedSnapshotVersion { .. } => "SFS-VAL-002",
+        | OrderbookValidationError::UnsupportedReceiptVersion { .. } => "SFS-VAL-002",
         OrderbookValidationError::InvalidOrderId
         | OrderbookValidationError::InvalidMakerOrderId
         | OrderbookValidationError::InvalidTakerOrderId
@@ -7138,55 +7068,6 @@ mod tests {
         .expect("orderbook fixture channel should open")
     }
 
-    fn orderbook_runtime_snapshot() -> OrderbookRuntimeSnapshotV1 {
-        let signing_key = SigningKey::from_bytes(&[0xB7; 32]);
-        let mut open = orderbook_order_request();
-        open.side = OrderSideV1::Ask;
-        open.provider_id = Some([0x91; 32]);
-        open.owner_account = b"provider@sora".to_vec();
-        open.expiry_unix = 1_800_000_500;
-        open.nonce = 8;
-        open.order_id = crate::derive_orderbook_order_id_v1(&open.owner_account, open.nonce);
-        let open = sign_order_request_ed25519_v1(open, &signing_key)
-            .expect("re-sign runtime snapshot open order");
-        let trade = orderbook_trade_event();
-        let channel = orderbook_settlement_channel(&trade);
-        let mut receipt = orderbook_settlement_receipt();
-        receipt.channel_id = channel.channel_id;
-        receipt.trade_id = channel.trade_id;
-        let split = crate::deterministic_settlement_split_v1(
-            &channel.xor_locked,
-            &channel.remaining_fee_xor_locked,
-            receipt.bytes_delivered,
-            channel.remaining_bytes,
-        )
-        .expect("derive runtime snapshot settlement split");
-        receipt.xor_debited = split.xor_debited;
-        receipt.provider_credit = split.provider_credit;
-        receipt.fee_amount = split.fee_amount;
-        let receipt = sign_settlement_receipt_ed25519_v1(receipt, &signing_key)
-            .expect("re-sign runtime snapshot settlement receipt");
-        let channel = crate::apply_settlement_receipt_v1(&channel, &receipt)
-            .expect("orderbook fixture receipt should apply");
-        OrderbookRuntimeSnapshotV1 {
-            version: crate::ORDERBOOK_RUNTIME_SNAPSHOT_VERSION_V1,
-            next_sequence: 4,
-            generated_at_unix: 1_800_000_020,
-            owner_nonce_high_waters: vec![crate::OrderbookOwnerNonceHighWaterV1 {
-                owner_account: open.owner_account.clone(),
-                highest_nonce: open.nonce,
-            }],
-            open_orders: vec![crate::OrderBookEntryV1 {
-                order: open,
-                sequence: 3,
-            }],
-            trades: vec![trade],
-            settlement_channels: vec![channel],
-            settlement_receipts: vec![receipt],
-            expired_order_ids: vec![[0x74; 32]],
-        }
-    }
-
     fn hedging_digest(label: &str) -> [u8; 32] {
         let hash = blake3::hash(label.as_bytes());
         let mut out = [0_u8; 32];
@@ -7743,13 +7624,11 @@ mod tests {
         let order = replication_order();
         let orderbook_order = orderbook_order_request();
         let receipt = orderbook_settlement_receipt();
-        let snapshot = orderbook_runtime_snapshot();
         let advert_bytes = to_bytes(&advert).expect("encode advert");
         let order_bytes = to_bytes(&order).expect("encode order");
         let orderbook_order_bytes =
             to_bytes(&orderbook_order).expect("encode orderbook order request");
         let receipt_bytes = to_bytes(&receipt).expect("encode settlement receipt");
-        let snapshot_bytes = to_bytes(&snapshot).expect("encode runtime snapshot");
         let payloads = [
             FixtureBundlePayloadV1::new(
                 FixtureBundlePayloadKindV1::ProviderAdvert,
@@ -7771,11 +7650,6 @@ mod tests {
                 "orderbook/settlement_receipt_v1.to",
                 &receipt_bytes,
             ),
-            FixtureBundlePayloadV1::new(
-                FixtureBundlePayloadKindV1::OrderbookRuntimeSnapshot,
-                "orderbook/runtime_snapshot_v1.to",
-                &snapshot_bytes,
-            ),
         ];
 
         let outcome = validate_fixture_bundle_payloads(&payloads, 1_700_000_001, 46);
@@ -7785,7 +7659,7 @@ mod tests {
             outcome
                 .context
                 .iter()
-                .any(|field| field.key == "artifact_count" && field.value == "5"),
+                .any(|field| field.key == "artifact_count" && field.value == "4"),
             "{outcome:?}"
         );
         assert!(
@@ -7799,13 +7673,6 @@ mod tests {
             outcome.inputs.iter().any(|input| {
                 input.kind == "settlement_receipt"
                     && input.path == "orderbook/settlement_receipt_v1.to"
-            }),
-            "{outcome:?}"
-        );
-        assert!(
-            outcome.inputs.iter().any(|input| {
-                input.kind == "orderbook_runtime_snapshot"
-                    && input.path == "orderbook/runtime_snapshot_v1.to"
             }),
             "{outcome:?}"
         );
@@ -9442,43 +9309,19 @@ mod tests {
     }
 
     #[test]
-    fn sign_orderbook_payload_bytes_ed25519_v1_rejects_runtime_payloads() {
-        let snapshot_bytes =
-            to_bytes(&orderbook_runtime_snapshot()).expect("encode orderbook runtime snapshot");
+    fn sign_orderbook_payload_bytes_ed25519_v1_rejects_runtime_generated_payloads() {
+        let trade_bytes = to_bytes(&orderbook_trade_event()).expect("encode orderbook trade event");
 
         assert_eq!(
             sign_orderbook_payload_bytes_ed25519_v1(
-                OrderbookValidationPayloadKindV1::RuntimeSnapshot,
-                &snapshot_bytes,
+                OrderbookValidationPayloadKindV1::TradeEvent,
+                &trade_bytes,
                 &[0xB7; 32],
             ),
             Err(OrderbookPayloadSigningError::UnsupportedPayloadKind {
-                kind: OrderbookValidationPayloadKindV1::RuntimeSnapshot
+                kind: OrderbookValidationPayloadKindV1::TradeEvent
             })
         );
-    }
-
-    #[test]
-    fn validate_orderbook_payload_bytes_accepts_runtime_snapshot() {
-        let snapshot = orderbook_runtime_snapshot();
-        let bytes = to_bytes(&snapshot).expect("encode orderbook runtime snapshot");
-        let outcome = validate_orderbook_payload_bytes(
-            OrderbookValidationPayloadKindV1::RuntimeSnapshot,
-            &bytes,
-            "orderbook-runtime-snapshot.to",
-            32,
-        );
-
-        assert!(outcome.is_ok(), "{outcome:?}");
-        assert_eq!(outcome.code, "SFS-OK-000");
-        assert!(outcome.context.iter().any(|field| {
-            field.key == "owner_nonce_high_water_count"
-                && field.value == snapshot.owner_nonce_high_waters.len().to_string()
-        }));
-        assert!(outcome.context.iter().any(|field| {
-            field.key == "settlement_receipt_count"
-                && field.value == snapshot.settlement_receipts.len().to_string()
-        }));
     }
 
     #[test]
@@ -9639,37 +9482,6 @@ mod tests {
             OrderbookValidationPayloadKindV1::SettlementReceipt,
             &receipt_bytes,
             "bad-orderbook-receipt-signature.to",
-            35,
-        );
-        assert!(!receipt_outcome.is_ok());
-        assert_eq!(receipt_outcome.code, "SFS-SIG-007", "{receipt_outcome:?}");
-        assert_eq!(receipt_outcome.category, CATEGORY_SIGNATURE);
-    }
-
-    #[test]
-    fn validate_orderbook_payload_bytes_rejects_forged_runtime_snapshot_signatures() {
-        let mut forged_order = orderbook_runtime_snapshot();
-        forged_order.open_orders[0].order.signature.signature[0] ^= 1;
-        let order_bytes = to_bytes(&forged_order).expect("encode forged-order snapshot");
-        let order_outcome = validate_orderbook_payload_bytes(
-            OrderbookValidationPayloadKindV1::RuntimeSnapshot,
-            &order_bytes,
-            "forged-order-snapshot.to",
-            35,
-        );
-        assert!(!order_outcome.is_ok());
-        assert_eq!(order_outcome.code, "SFS-SIG-007", "{order_outcome:?}");
-        assert_eq!(order_outcome.category, CATEGORY_SIGNATURE);
-
-        let mut forged_receipt = orderbook_runtime_snapshot();
-        forged_receipt.settlement_receipts[0]
-            .settlement_signature
-            .signature[0] ^= 1;
-        let receipt_bytes = to_bytes(&forged_receipt).expect("encode forged-receipt snapshot");
-        let receipt_outcome = validate_orderbook_payload_bytes(
-            OrderbookValidationPayloadKindV1::RuntimeSnapshot,
-            &receipt_bytes,
-            "forged-receipt-snapshot.to",
             35,
         );
         assert!(!receipt_outcome.is_ok());

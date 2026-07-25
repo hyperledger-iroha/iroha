@@ -143,6 +143,33 @@ surface. Test fixtures submit the same native instructions used in production;
 there is no second reserve record format that can feed admission, settlement,
 reputation, or compliance decisions.
 
+## Torii and client boundary
+
+Reserve mutations accept one exact caller-signed `SignedTransaction` encoded as
+versioned Norito. The transaction must contain exactly one route-matching
+native instruction, use the active chain ID and governed authority, carry the
+exact five-minute V1 TTL, and omit nonce, metadata, attachments, and
+compatibility payloads. Torii binds provider revision and policy digest against
+one immutable ledger view before strict durable ingress.
+
+The V1 HTTP surface is:
+
+- `POST /v1/sorafs/reserve/top-up` and `/withdraw`;
+- `POST /v1/sorafs/reserve/movements/{movement_id_hex}/decision`;
+- `POST /v1/sorafs/reserve/credit/draw` and `/credit/repay`;
+- `POST /v1/sorafs/reserve/appeals` and
+  `/appeals/{appeal_id_hex}/decision`;
+- authenticated finalized reads under `/policy`, `/providers`, `/movements`,
+  `/appeals`, and `/events`; and
+- committed event streaming under `/events/stream` and `/events/ws`.
+
+There is no lifecycle update/advance route, custody callback route, balance
+alias, credit-line alias, local JSON mutation body, or fallback endpoint. The
+Rust client submits the same signed transaction bytes and exposes finalized
+exclusive-cursor filters; operators construct governance-only policy,
+registration, rent, and lifecycle instructions through the normal transaction
+tooling or the supervised worker.
+
 ## Durable signing, submission, and reconciliation
 
 Generated operations enter the bounded reserve transaction forwarder before
@@ -188,6 +215,25 @@ Paged queries are exclusive-cursor, bounded, canonically encoded, and tied to a
 Reputation, orderbook, compliance, and transparency consumers must use these
 committed projections rather than local reserve summaries.
 
+## Finalized telemetry projection
+
+Reserve dashboards are no longer fed by a `sorafs_node` runtime snapshot. The
+supervised Torii worker rebuilds movement and appeal totals from the contiguous
+typed finalized event journal, then scans current provider accounts in the same
+immutable finalized view. It publishes only after journal-derived pending
+movement and appeal totals exactly match the committed per-provider counters.
+Until that check succeeds, or after any query/cursor/arithmetic/capacity error,
+`torii_sorafs_reserve_finalized_projection_ready` is zero and no partial
+economic gauges replace the last complete projection.
+
+Provider credit metrics are aggregated by the five fixed lifecycle stages;
+movement metrics use the three fixed native statuses. Provider IDs, movement
+IDs, appeal IDs, account IDs, and payload material are never metric labels.
+Each complete publication exposes its finalized height, while failed refreshes
+increment a payload-free counter. Event catch-up is bounded to 1,024 records per
+scan and the current provider scan fails closed above the explicit 4,096-record
+V1 telemetry capacity instead of publishing a truncated view.
+
 ## Required validation evidence
 
 `scripts/build_sorafs_reserve_rent_canary.py` builds the payload-free evidence
@@ -205,6 +251,11 @@ Reserve/rent promotion evidence must cover:
 - lifecycle exact-boundary, day-zero convergence, and no-op suppression;
 - funded-provider lifecycle rejection;
 - active-policy rotation and stale-revision concurrency;
+- finalized-event catch-up, cursor-gap/underflow rejection, atomic page replay,
+  provider-counter reconciliation, bounded labels, and projection capacity;
+- a fresh metrics scrape digest with projection readiness equal to one, a
+  positive represented finalized height, and zero refresh failures over the
+  preceding five minutes;
 - restart during signing/submission and retry exhaustion;
 - exact applied/rejected/absent transaction observation;
 - corrupt signed bytes, digest mismatch, missing/duplicate Kura entrypoints, and

@@ -1073,6 +1073,9 @@ fn preflight_singular_source_materialization(
         | SingularQueryBox::FindSorafsProofOutcomeEvents(_) => {
             return Err(reject_unbounded("SoraFS proof-outcome query"));
         }
+        SingularQueryBox::FindSorafsReputationJournalEvents(_) => {
+            return Err(reject_unbounded("SoraFS reputation-journal query"));
+        }
         SingularQueryBox::FindSorafsModerationPolicy(_)
         | SingularQueryBox::FindSorafsModerationAppeal(_)
         | SingularQueryBox::FindSorafsModerationJurorEligibility(_)
@@ -1316,6 +1319,9 @@ impl ExecuteSingularQuery for SingularQueryBox {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
             SingularQueryBox::FindSorafsProofOutcomeEvents(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindSorafsReputationJournalEvents(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
             SingularQueryBox::FindSorafsModerationPolicy(q) => {
@@ -7108,6 +7114,51 @@ mod tests {
                 &dispatch_error,
                 Error::Conversion(message)
                     if message.contains("require at least one committed block")
+            ),
+            "unexpected dispatch error: {dispatch_error}"
+        );
+    }
+
+    #[test]
+    fn reputation_journal_query_is_dispatched_but_metered_ivm_fails_closed() {
+        let state = State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let query = || {
+            SingularQueryBox::FindSorafsReputationJournalEvents(
+                iroha_data_model::query::sorafs::prelude::FindSorafsReputationJournalEvents {
+                    expected_finalized_cursor: None,
+                    after: None,
+                    limit: 1,
+                },
+            )
+        };
+        let view = state.view();
+
+        let preflight_error = preflight_singular_source_materialization(
+            &query(),
+            &view,
+            Some(QueryExecutionBudget::from_weighted_limit(1_000_000, 1, 1)),
+        )
+        .expect_err("metered IVM query must reject decode-heavy materialization");
+        assert!(
+            matches!(
+                &preflight_error,
+                Error::Conversion(message)
+                    if message.contains("SoraFS reputation-journal query")
+            ),
+            "unexpected preflight error: {preflight_error}"
+        );
+
+        let dispatch_error = ExecuteSingularQuery::execute(query(), &view)
+            .expect_err("empty test state has no finalized anchor");
+        assert!(
+            matches!(
+                &dispatch_error,
+                Error::Conversion(message)
+                    if message.contains("latest finalized Kura block")
             ),
             "unexpected dispatch error: {dispatch_error}"
         );

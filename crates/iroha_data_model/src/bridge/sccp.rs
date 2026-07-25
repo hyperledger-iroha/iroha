@@ -933,7 +933,7 @@ pub struct SccpTronSourceEmitterV1 {
 /// Exact governed immutable Solana source-program deployment identity.
 ///
 /// Every address is the raw 32-byte Solana public key. No Base58 text enters
-/// consensus state. The Loader-v3 ProgramData identity and deployment slot
+/// consensus state. The Loader-v3 `ProgramData` identity and deployment slot
 /// make the reviewed executable revision explicit, while the state account
 /// and route commitment bind the program to one configured value-moving lane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
@@ -947,13 +947,13 @@ pub struct SccpTronSourceEmitterV1 {
 pub struct SccpSolanaSourceEmitterV1 {
     /// Immutable source bridge program public key.
     pub program_id: [u8; 32],
-    /// Loader-v3 ProgramData account public key for the reviewed executable.
+    /// Loader-v3 `ProgramData` account public key for the reviewed executable.
     pub program_data_address: [u8; 32],
     /// Nonzero Loader-v3 deployment slot of the reviewed executable.
     pub program_data_slot: u64,
     /// Program-owned source-state account public key.
     pub state_account: [u8; 32],
-    /// Blake2b-256 hash of the immutable source ProgramData executable bytes.
+    /// Blake2b-256 hash of the immutable source `ProgramData` executable bytes.
     pub program_code_hash: [u8; 32],
     /// Commitment to the exact source program's immutable route configuration.
     pub route_config_hash: [u8; 32],
@@ -978,7 +978,7 @@ pub enum SccpSourceEmitterV1 {
     #[codec(index = 1)]
     #[norito(rename = "tron")]
     Tron(SccpTronSourceEmitterV1),
-    /// Solana Loader-v3 program, ProgramData, and route-state identity.
+    /// Solana Loader-v3 program, `ProgramData`, and route-state identity.
     #[codec(index = 2)]
     #[norito(rename = "solana")]
     Solana(SccpSolanaSourceEmitterV1),

@@ -2,10 +2,11 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(feature = "zk-tests")]
 
-use std::borrow::Cow;
+use std::{borrow::Cow, sync::Arc};
 
 use iroha_core::{
     block::{BlockBuilder, ValidBlock},
+    governance::manifest::LaneManifestRegistry,
     zk::test_utils::halo2_fixture_envelope,
 };
 use iroha_data_model::{
@@ -32,21 +33,13 @@ fn zk_events_carry_proof_hash_in_metadata_inserted() {
     let world = iroha_core::state::World::with([domain], [acc], [ad]);
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query = iroha_core::query::store::LiveQueryStore::start_test();
-    let state = {
-        #[cfg(feature = "telemetry")]
-        {
-            iroha_core::state::State::new(
-                world,
-                kura,
-                query,
-                iroha_core::telemetry::StateTelemetry::default(),
-            )
-        }
-        #[cfg(not(feature = "telemetry"))]
-        {
-            iroha_core::state::State::new(world, kura, query)
-        }
-    };
+    let chain_id = ChainId::from("chain");
+    let state =
+        iroha_core::state::State::new_with_chain_for_testing(world, kura, query, chain_id.clone());
+    let nexus = state.nexus_snapshot();
+    state.install_lane_manifests(&Arc::new(
+        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
+    ));
 
     // Prepare ZK ISIs: mint, register policy, transfer, unshield
     let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
@@ -99,7 +92,7 @@ fn zk_events_carry_proof_hash_in_metadata_inserted() {
         )),
     ];
     let tx = TransactionBuilder::new(
-        ChainId::from("chain"),
+        chain_id,
         authority_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )

@@ -8467,8 +8467,6 @@ pub struct SorafsStorage {
     pub orderbook_worker: SorafsOrderbookWorker,
     /// Durable native reserve/rent transaction worker policy.
     pub reserve_worker: SorafsReserveWorker,
-    /// Temporary local admission policy; non-authoritative and not a compatibility branch.
-    pub orderbook: SorafsOrderbook,
     /// Canonical Norito trust-policy file required for reputation snapshot admission.
     pub reputation_trust_policy_path: Option<PathBuf>,
     /// Canonical Norito trust-policy file required for governed pricing admission.
@@ -8479,8 +8477,6 @@ pub struct SorafsStorage {
     pub privacy_aggregates: SorafsPrivacyAggregateSchedule,
     /// Local SFM-4b3 evidence-viewer audit-report publication scheduler.
     pub evidence_viewer_audits: SorafsEvidenceViewerAuditSchedule,
-    /// Local SFM-6 reserve lifecycle advancement scheduler.
-    pub reserve_lifecycle: SorafsReserveLifecycleSchedule,
     /// Optional filesystem directory used to publish governance artefacts.
     pub governance_dag_dir: Option<PathBuf>,
     /// Optional publisher peer identifier used for signed Governance DAG blocks.
@@ -8696,7 +8692,7 @@ pub struct SorafsModerationOrchestrator {
     pub max_outbox_entries: usize,
     /// Maximum stable operation identities and terminal dead letters.
     pub max_idempotency_records: usize,
-    /// Maximum settlement/publication handoff identities.
+    /// Independent retention ceiling for downstream handoffs and panel notifications.
     pub max_handoffs: usize,
     /// Safe attempts under one unchanged operation identity.
     pub max_submit_attempts: u32,
@@ -8753,17 +8749,6 @@ pub struct SorafsReserveWorker {
     pub max_attempts: u32,
     /// Maximum canonical durable checkpoint size.
     pub checkpoint_max_bytes: Bytes<u64>,
-}
-
-/// Temporary local orderbook policy retained only until local-authority removal.
-///
-/// This policy is non-authoritative and does not define compatibility behavior.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SorafsOrderbook {
-    /// Minimum accepted order quantity in GiB.
-    pub min_order_gib: u64,
-    /// Accepted XOR price tick per GiB.
-    pub price_tick: Quantity,
 }
 
 /// Local SFM-4c privacy aggregate publication scheduler.
@@ -8834,17 +8819,6 @@ pub struct SorafsEvidenceViewerAuditSchedule {
     pub publish_delay_seconds: u64,
 }
 
-/// Local SFM-6 reserve lifecycle advancement scheduler.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SorafsReserveLifecycleSchedule {
-    /// Whether config-backed lifecycle advancement is enabled.
-    pub enabled: bool,
-    /// Interval between lifecycle advancement ticks, in seconds.
-    pub interval_seconds: u64,
-    /// Delay before the first lifecycle advancement tick, in seconds.
-    pub initial_delay_seconds: u64,
-}
-
 /// Authentication and abuse controls for `/v1/sorafs/storage/pin`.
 #[derive(Debug, Clone)]
 pub struct SorafsStoragePin {
@@ -8884,13 +8858,11 @@ impl Default for SorafsStorage {
             stream_tokens: SorafsTokenConfig::default(),
             orderbook_worker: SorafsOrderbookWorker::default(),
             reserve_worker: SorafsReserveWorker::default(),
-            orderbook: SorafsOrderbook::default(),
             reputation_trust_policy_path: None,
             pricing_trust_policy_path: None,
             hedging_feed_trust_policy_path: None,
             privacy_aggregates: SorafsPrivacyAggregateSchedule::default(),
             evidence_viewer_audits: SorafsEvidenceViewerAuditSchedule::default(),
-            reserve_lifecycle: SorafsReserveLifecycleSchedule::default(),
             governance_dag_dir: defaults::sorafs::storage::governance_dir(),
             governance_dag_publisher_peer_id:
                 defaults::sorafs::storage::governance_publisher_peer_id(),
@@ -9004,15 +8976,6 @@ impl Default for SorafsReserveWorker {
     }
 }
 
-impl Default for SorafsOrderbook {
-    fn default() -> Self {
-        Self {
-            min_order_gib: defaults::sorafs::storage::orderbook::MIN_ORDER_GIB,
-            price_tick: defaults::sorafs::storage::orderbook::price_tick(),
-        }
-    }
-}
-
 impl Default for SorafsPrivacyAggregateSchedule {
     fn default() -> Self {
         Self {
@@ -9055,17 +9018,6 @@ impl Default for SorafsEvidenceViewerAuditSchedule {
             cycle_seconds: defaults::sorafs::storage::evidence_viewer_audits::CYCLE_SECONDS,
             publish_delay_seconds:
                 defaults::sorafs::storage::evidence_viewer_audits::PUBLISH_DELAY_SECONDS,
-        }
-    }
-}
-
-impl Default for SorafsReserveLifecycleSchedule {
-    fn default() -> Self {
-        Self {
-            enabled: defaults::sorafs::storage::reserve_lifecycle::ENABLED,
-            interval_seconds: defaults::sorafs::storage::reserve_lifecycle::INTERVAL_SECONDS,
-            initial_delay_seconds:
-                defaults::sorafs::storage::reserve_lifecycle::INITIAL_DELAY_SECONDS,
         }
     }
 }
@@ -9726,6 +9678,10 @@ pub struct SorafsGatewayCompliance {
     pub checkpoint_path: PathBuf,
     /// Non-zero governance policy identity.
     pub policy_id: [u8; 32],
+    /// Canonical region identity for this gateway.
+    pub region_id: String,
+    /// Canonical gateway identity bound to one active gateway signer.
+    pub gateway_id: String,
     /// Required distinct catalog approvals.
     pub catalog_threshold: u16,
     /// Canonically ordered catalog signers.

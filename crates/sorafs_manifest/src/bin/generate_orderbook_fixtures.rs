@@ -14,12 +14,10 @@ use norito::{
 };
 use sorafs_manifest::{
     ByteRangeV1, ORDERBOOK_CANCEL_VERSION_V1, ORDERBOOK_ORDER_VERSION_V1,
-    ORDERBOOK_RUNTIME_SNAPSHOT_VERSION_V1, ORDERBOOK_TRADE_EVENT_VERSION_V1, OrderBookEntryV1,
-    OrderCancelReasonV1, OrderCancelV1, OrderRequestV1, OrderSideV1, OrderTierV1,
-    OrderbookOwnerNonceHighWaterV1, OrderbookRuntimeSnapshotV1, OrderbookSignatureV1,
-    OrderbookValidationPayloadKindV1, SETTLEMENT_RECEIPT_VERSION_V1, SettlementChannelStatusV1,
-    SettlementChannelV1, SettlementReceiptV1, SignatureAlgorithm, TradeEventV1,
-    apply_settlement_receipt_v1, derive_orderbook_order_id_v1,
+    ORDERBOOK_TRADE_EVENT_VERSION_V1, OrderCancelReasonV1, OrderCancelV1, OrderRequestV1,
+    OrderSideV1, OrderTierV1, OrderbookSignatureV1, OrderbookValidationPayloadKindV1,
+    SETTLEMENT_RECEIPT_VERSION_V1, SettlementChannelStatusV1, SettlementChannelV1,
+    SettlementReceiptV1, SignatureAlgorithm, TradeEventV1, derive_orderbook_order_id_v1,
     open_settlement_channel_for_trade_v1, sign_order_cancel_ed25519_v1,
     sign_order_request_ed25519_v1, sign_settlement_receipt_ed25519_v1,
     validate_orderbook_payload_bytes, verify_order_cancel_signature_v1,
@@ -115,49 +113,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     )?;
     verify_settlement_receipt_signature_v1(&receipt)?;
 
-    let snapshot_owner = b"provider@sora".to_vec();
-    let snapshot_nonce = 9;
-    let snapshot_open_order = sign_order_request_ed25519_v1(
-        OrderRequestV1 {
-            version: ORDERBOOK_ORDER_VERSION_V1,
-            order_id: derive_orderbook_order_id_v1(&snapshot_owner, snapshot_nonce),
-            side: OrderSideV1::Ask,
-            tier: OrderTierV1::Hot,
-            price_per_gib: "1.3".parse().expect("canonical XOR quantity"),
-            quantity_gib: 32,
-            remaining_gib: 24,
-            owner_account: snapshot_owner,
-            provider_id: Some(id(0x91)),
-            expiry_unix: 1_800_000_100,
-            nonce: snapshot_nonce,
-            maker_fee_bps: 10,
-            taker_fee_bps: 15,
-            signature: empty_signature(&signing_key),
-        },
-        &signing_key,
-    )?;
-    verify_order_request_signature_v1(&snapshot_open_order)?;
-
-    let snapshot_channel = apply_settlement_receipt_v1(&channel, &receipt)?;
-    let runtime_snapshot = OrderbookRuntimeSnapshotV1 {
-        version: ORDERBOOK_RUNTIME_SNAPSHOT_VERSION_V1,
-        next_sequence: 4,
-        generated_at_unix: 1_700_000_130,
-        owner_nonce_high_waters: vec![OrderbookOwnerNonceHighWaterV1 {
-            owner_account: snapshot_open_order.owner_account.clone(),
-            highest_nonce: snapshot_open_order.nonce,
-        }],
-        open_orders: vec![OrderBookEntryV1 {
-            order: snapshot_open_order,
-            sequence: 3,
-        }],
-        trades: vec![trade.clone()],
-        settlement_channels: vec![snapshot_channel],
-        settlement_receipts: vec![receipt.clone()],
-        expired_order_ids: vec![id(0x74)],
-    };
-    runtime_snapshot.validate()?;
-
     write_norito_pair(
         &fixture_dir.join("order_request_v1"),
         &order,
@@ -183,12 +138,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         &receipt,
         receipt_json(&receipt),
     )?;
-    write_norito_pair(
-        &fixture_dir.join("runtime_snapshot_v1"),
-        &runtime_snapshot,
-        runtime_snapshot_json(&runtime_snapshot),
-    )?;
-
     let order_bytes = norito::to_bytes(&order)?;
     let order_outcome = validate_orderbook_payload_bytes(
         OrderbookValidationPayloadKindV1::OrderRequest,
@@ -434,132 +383,6 @@ fn receipt_json(receipt: &SettlementReceiptV1) -> Value {
         signature_json(&receipt.settlement_signature),
     );
     Value::Object(map)
-}
-
-fn runtime_snapshot_json(snapshot: &OrderbookRuntimeSnapshotV1) -> Value {
-    let mut map = Map::new();
-    map.insert("version".into(), Value::from(snapshot.version));
-    map.insert("next_sequence".into(), Value::from(snapshot.next_sequence));
-    map.insert(
-        "generated_at_unix".into(),
-        Value::from(snapshot.generated_at_unix),
-    );
-    map.insert(
-        "owner_nonce_high_water_count".into(),
-        Value::from(snapshot.owner_nonce_high_waters.len() as u64),
-    );
-    map.insert(
-        "owner_nonce_high_waters".into(),
-        Value::Array(
-            snapshot
-                .owner_nonce_high_waters
-                .iter()
-                .map(owner_nonce_high_water_json)
-                .collect(),
-        ),
-    );
-    map.insert(
-        "open_order_count".into(),
-        Value::from(snapshot.open_orders.len() as u64),
-    );
-    map.insert(
-        "trade_count".into(),
-        Value::from(snapshot.trades.len() as u64),
-    );
-    map.insert(
-        "settlement_channel_count".into(),
-        Value::from(snapshot.settlement_channels.len() as u64),
-    );
-    map.insert(
-        "settlement_receipt_count".into(),
-        Value::from(snapshot.settlement_receipts.len() as u64),
-    );
-    map.insert(
-        "expired_order_count".into(),
-        Value::from(snapshot.expired_order_ids.len() as u64),
-    );
-    map.insert(
-        "open_orders".into(),
-        Value::Array(
-            snapshot
-                .open_orders
-                .iter()
-                .map(open_order_entry_json)
-                .collect(),
-        ),
-    );
-    map.insert(
-        "trade_ids_hex".into(),
-        bytes32_array_json(snapshot.trades.iter().map(|trade| trade.trade_id)),
-    );
-    map.insert(
-        "settlement_channel_ids_hex".into(),
-        bytes32_array_json(
-            snapshot
-                .settlement_channels
-                .iter()
-                .map(|channel| channel.channel_id),
-        ),
-    );
-    map.insert(
-        "settlement_receipt_ids_hex".into(),
-        bytes32_array_json(
-            snapshot
-                .settlement_receipts
-                .iter()
-                .map(|receipt| receipt.receipt_id),
-        ),
-    );
-    map.insert(
-        "expired_order_ids_hex".into(),
-        bytes32_array_json(snapshot.expired_order_ids.iter().copied()),
-    );
-    Value::Object(map)
-}
-
-fn owner_nonce_high_water_json(entry: &OrderbookOwnerNonceHighWaterV1) -> Value {
-    let mut map = Map::new();
-    map.insert(
-        "owner_account".into(),
-        Value::from(String::from_utf8_lossy(&entry.owner_account).to_string()),
-    );
-    map.insert("highest_nonce".into(), Value::from(entry.highest_nonce));
-    Value::Object(map)
-}
-
-fn open_order_entry_json(entry: &OrderBookEntryV1) -> Value {
-    let mut map = Map::new();
-    map.insert("sequence".into(), Value::from(entry.sequence));
-    map.insert(
-        "order_id_hex".into(),
-        Value::from(encode(entry.order.order_id)),
-    );
-    map.insert("side".into(), Value::from(order_side(entry.order.side)));
-    map.insert("tier".into(), Value::from(order_tier(entry.order.tier)));
-    map.insert(
-        "price_per_gib".into(),
-        Value::from(entry.order.price_per_gib.to_string()),
-    );
-    map.insert("quantity_gib".into(), Value::from(entry.order.quantity_gib));
-    map.insert(
-        "remaining_gib".into(),
-        Value::from(entry.order.remaining_gib),
-    );
-    map.insert(
-        "owner_account".into(),
-        Value::from(String::from_utf8_lossy(&entry.order.owner_account).to_string()),
-    );
-    map.insert("expiry_unix".into(), Value::from(entry.order.expiry_unix));
-    Value::Object(map)
-}
-
-fn bytes32_array_json(items: impl IntoIterator<Item = [u8; 32]>) -> Value {
-    Value::Array(
-        items
-            .into_iter()
-            .map(|item| Value::from(encode(item)))
-            .collect(),
-    )
 }
 
 fn signature_json(signature: &OrderbookSignatureV1) -> Value {

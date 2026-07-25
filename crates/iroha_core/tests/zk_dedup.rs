@@ -35,7 +35,7 @@ fn open_verify_proof(vk_hash: [u8; 32]) -> ProofBox {
 #[test]
 fn preverify_state_wrapper_requires_bound_commitments_and_dedups() {
     // Build minimal state and block context
-    let state = State::new(
+    let state = State::new_for_testing(
         World::new(),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),

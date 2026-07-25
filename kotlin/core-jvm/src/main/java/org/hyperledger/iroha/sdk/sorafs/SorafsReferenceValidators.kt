@@ -14,7 +14,6 @@ enum class SorafsOrderbookPayloadKind(
     TRADE_EVENT(3, "trade-event.to", false),
     SETTLEMENT_CHANNEL(4, "settlement-channel.to", false),
     SETTLEMENT_RECEIPT(5, "settlement-receipt.to", true),
-    RUNTIME_SNAPSHOT(6, "orderbook-runtime-snapshot.to", false),
 }
 
 /** PDP payload kind accepted by the Rust-backed SoraFS reference validator. */

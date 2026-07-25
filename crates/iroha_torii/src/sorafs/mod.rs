@@ -10,6 +10,8 @@ pub mod concurrency;
 pub mod delegated_routing;
 pub mod discovery;
 pub mod gateway;
+#[cfg(feature = "app_api")]
+pub(crate) mod gateway_compliance_api;
 pub mod gc;
 pub mod hosts;
 pub mod limits;
@@ -27,6 +29,8 @@ pub mod quota;
 pub mod registry;
 #[cfg(feature = "app_api")]
 pub(crate) mod reserve_runtime;
+#[cfg(feature = "app_api")]
+pub(crate) mod reserve_api;
 pub(crate) mod reserve_worker;
 pub mod site;
 pub mod token;

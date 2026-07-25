@@ -412,7 +412,16 @@ class KotodamaPerfGateTests(unittest.TestCase):
         base_step = workflow.split(base_marker, 1)[1].split(
             "\n      - name:", 1
         )[0]
-        self.assertIn("cargo bench -p ivm --bench bench_kotodama", base_step)
+        self.assertIn(
+            "cargo bench --locked -p ivm --bench bench_kotodama", base_step
+        )
+        self.assertTrue(
+            all(
+                line.strip().startswith("cargo bench --locked ")
+                for line in base_step.splitlines()
+                if line.strip().startswith("cargo bench ")
+            )
+        )
         self.assertIn("--bench queries -- typed_core_query_", base_step)
 
         candidate_marker = "      - name: Measure candidate revision\n"
@@ -420,6 +429,13 @@ class KotodamaPerfGateTests(unittest.TestCase):
         candidate_step = workflow.split(candidate_marker, 1)[1].split(
             "\n      - name:", 1
         )[0]
+        self.assertTrue(
+            all(
+                line.strip().startswith("cargo bench --locked ")
+                for line in candidate_step.splitlines()
+                if line.strip().startswith("cargo bench ")
+            )
+        )
         self.assertIn("--bench queries -- typed_core_query_", candidate_step)
         self.assertNotIn("KOTODAMA_BASE_FILTER", workflow)
 
@@ -445,7 +461,7 @@ class KotodamaPerfGateTests(unittest.TestCase):
         self.assertEqual(workflow.count(build_marker), 1)
         build_step = workflow.split(build_marker, 1)[1].split(marker, 1)[0]
         self.assertIn(
-            "cargo build -p ivm --bin koto -p iroha_cli --bin iroha",
+            "cargo build --locked -p ivm --bin koto -p iroha_cli --bin iroha",
             build_step,
         )
         self.assertIn("python3 scripts/check_kotodama_docs.py", build_step)

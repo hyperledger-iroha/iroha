@@ -107,6 +107,47 @@ seiyaku GovernanceEnactFixture {
     (artifact, verified.manifest)
 }
 
+fn prepare_approved_enactment(
+    stx: &mut iroha_core::state::StateTransaction<'_, '_>,
+    proposal_id: [u8; 32],
+) -> ([u8; 32], iroha_data_model::governance::types::AtWindow) {
+    let preimage_hash = {
+        let proposal = stx
+            .world
+            .governance_proposals_mut()
+            .get_mut(&proposal_id)
+            .expect("proposal record present");
+        proposal.status = iroha_core::state::GovernanceProposalStatus::Approved;
+        proposal.finalization_evidence = Some(
+            iroha_data_model::governance::types::GovernanceFinalizationEvidence {
+                proposal_id,
+                referendum_id: proposal_id,
+                finalized_at_height: 0,
+                mode: iroha_data_model::isi::governance::VotingMode::Plain,
+                approve: 1,
+                reject: 0,
+                abstain: 0,
+                min_turnout: 1,
+                approval_threshold_numerator: 1,
+                approval_threshold_denominator: 2,
+                approved: true,
+            },
+        );
+        proposal.kind.fingerprint()
+    };
+    let at_window = iroha_data_model::governance::types::AtWindow { lower: 0, upper: 0 };
+    stx.world.governance_referenda_mut().insert(
+        hex::encode(proposal_id),
+        iroha_core::state::GovernanceReferendumRecord {
+            h_start: at_window.lower,
+            h_end: at_window.upper,
+            status: iroha_core::state::GovernanceReferendumStatus::Closed,
+            mode: iroha_core::state::GovernanceReferendumMode::Plain,
+        },
+    );
+    (preimage_hash, at_window)
+}
+
 #[test]
 #[allow(clippy::too_many_lines)]
 fn enact_inserts_manifest_and_marks_enacted() {
@@ -174,21 +215,12 @@ fn enact_inserts_manifest_and_marks_enacted() {
     .expect("propose");
 
     let pid = compute_proposal_id(&contract_address, &code_hex, &abi_hex);
-    {
-        let mut rec = stx
-            .world
-            .governance_proposals()
-            .get(&pid)
-            .cloned()
-            .expect("proposal record present");
-        rec.status = iroha_core::state::GovernanceProposalStatus::Approved;
-        stx.world.governance_proposals_mut().insert(pid, rec);
-    }
+    let (preimage_hash, at_window) = prepare_approved_enactment(&mut stx, pid);
     // Enact
     let instr = iroha_data_model::isi::governance::EnactReferendum {
         referendum_id: pid,
-        preimage_hash: [0u8; 32],
-        at_window: iroha_data_model::governance::types::AtWindow { lower: 1, upper: 2 },
+        preimage_hash,
+        at_window,
     };
     instr
         .execute(&account_id, &mut stx)
@@ -276,20 +308,24 @@ fn enact_rejects_unregistered_bytecode_without_creating_an_active_stub() {
             enacted_at_height: None,
         },
     );
+    let (preimage_hash, at_window) = prepare_approved_enactment(&mut stx, pid);
 
     let error = iroha_data_model::isi::governance::EnactReferendum {
         referendum_id: pid,
-        preimage_hash: [0; 32],
-        at_window: iroha_data_model::governance::types::AtWindow { lower: 1, upper: 2 },
+        preimage_hash,
+        at_window,
     }
     .execute(&account_id, &mut stx)
     .expect_err("governance cannot activate a hash-only contract stub");
-    assert!(
-        error
-            .to_string()
-            .contains("verified contract bytecode must be registered"),
-        "unexpected missing-bytecode error: {error}"
-    );
+    match &error {
+        iroha_data_model::isi::error::InstructionExecutionError::InvalidParameter(
+            iroha_data_model::isi::error::InvalidParameterError::SmartContract(message),
+        ) => assert_eq!(
+            message,
+            "verified contract bytecode must be registered before governance enactment"
+        ),
+        other => panic!("unexpected missing-bytecode error: {other:?}"),
+    }
     assert!(stx.world.contract_manifests().get(&code_hash).is_none());
     assert!(
         stx.world
@@ -372,6 +408,7 @@ fn enact_rejects_on_conflicting_existing_manifest() {
             enacted_at_height: None,
         },
     );
+    let (preimage_hash, at_window) = prepare_approved_enactment(&mut stx, pid);
 
     // Pre-insert conflicting manifest via instruction
     let mut man = verified_manifest;
@@ -384,8 +421,8 @@ fn enact_rejects_on_conflicting_existing_manifest() {
     // Enact should fail due to abi_hash mismatch
     let instr = iroha_data_model::isi::governance::EnactReferendum {
         referendum_id: pid,
-        preimage_hash: [0u8; 32],
-        at_window: iroha_data_model::governance::types::AtWindow { lower: 1, upper: 2 },
+        preimage_hash,
+        at_window,
     };
     let err = instr.execute(&account_id, &mut stx).unwrap_err();
     let s = format!("{err}");

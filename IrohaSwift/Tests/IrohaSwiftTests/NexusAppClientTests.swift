@@ -5,7 +5,7 @@ import XCTest
 final class NexusAppClientTests: XCTestCase {
     private static let assetDefinitionID = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1"
     private static let publicKey = Data(hexString: "d04ab232742bb4ab3a1368bd4615e4e6d0224ab71a016baf8520a332c9778737")!
-    private static let walletSignature = Data(hexString: "c82d2ee732a9251153eff6f510a0d12b292cb51a5d961a7eddb84f6ee944e34eaca60ca2f1ccfe7a53fd6813fc9a6db9e35cb276b2411b7d583d45fdc6caee05")!
+    private static let walletSignature = Data(hexString: "a79c4abe27cff185da6be1af15f0b7b36ca8f8729bd671eceed6758ec07a68ef79771ef904484f3ee3f8546f71aa8a40e99b5bf18820e80192491e32cedd9a01")!
     private static let accountID = "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB"
     private static let destinationAccountID = "sorauﾛ1Prﾇuﾉﾉ4ﾒdﾛﾑｲﾄn5tﾆﾒrsR9ﾋ2Gｷ7gWeFzyﾁﾋﾁAHﾌTJQQ4L"
 

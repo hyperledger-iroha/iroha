@@ -15,9 +15,9 @@ final class SorafsReferenceValidatorsTests: XCTestCase {
 
     func testBridgeSelectors() {
         XCTAssertEqual(SorafsOrderbookPayloadKind.orderRequest.rawValue, 1)
-        XCTAssertEqual(SorafsOrderbookPayloadKind.runtimeSnapshot.rawValue, 6)
+        XCTAssertNil(SorafsOrderbookPayloadKind(rawValue: 6))
         XCTAssertTrue(SorafsOrderbookPayloadKind.orderRequest.isUserSignedPayload)
-        XCTAssertFalse(SorafsOrderbookPayloadKind.runtimeSnapshot.isUserSignedPayload)
+        XCTAssertFalse(SorafsOrderbookPayloadKind.tradeEvent.isUserSignedPayload)
         XCTAssertEqual(SorafsPdpPayloadKind.commitment.rawValue, 1)
         XCTAssertEqual(SorafsPdpPayloadKind.proof.rawValue, 3)
         XCTAssertEqual(SorafsPopPayloadKind.credential.rawValue, 1)
@@ -187,17 +187,17 @@ final class SorafsReferenceValidatorsTests: XCTestCase {
         }
     }
 
-    func testRejectsRuntimeSnapshotSigningBeforeNativeDispatch() {
+    func testRejectsNonSignableOrderbookPayloadBeforeNativeDispatch() {
         XCTAssertThrowsError(
             try SorafsReferenceValidators.signOrderbookPayload(
-                kind: .runtimeSnapshot,
+                kind: .tradeEvent,
                 payload: Data(),
                 privateKey: Data(repeating: 0xB7, count: 32)
             )
         ) { error in
             XCTAssertEqual(
                 error as? SorafsReferenceValidationError,
-                .unsupportedOrderbookPayloadKind(.runtimeSnapshot)
+                .unsupportedOrderbookPayloadKind(.tradeEvent)
             )
         }
     }

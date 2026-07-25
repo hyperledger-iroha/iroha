@@ -2611,7 +2611,7 @@ mod sequence_gpu {
             if sym.is_null() {
                 return None;
             }
-            Some(unsafe { std::mem::transmute(sym) })
+            Some(unsafe { std::mem::transmute::<*mut c_void, SequencePlanHelperFn>(sym) })
         }
         #[cfg(not(unix))]
         {

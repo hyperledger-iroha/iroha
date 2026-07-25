@@ -2395,7 +2395,7 @@ fn make_network_builder(
     let pipeline_time = config
         .pipeline_time
         .unwrap_or_else(default_izanami_pipeline_time);
-    builder = builder.with_pipeline_time(pipeline_time);
+    builder = builder.with_block_cadence(pipeline_time);
     if let Some(profile) = &config.nexus {
         builder = builder.with_config_table(profile.config_layer.clone());
         let gas_account_id = instructions::nexus_gas_account_id()?.to_string();
@@ -6698,6 +6698,10 @@ async fn submit_plan(
                                             );
                                             let transaction = client.build_transaction_from_items(
                                                 instructions_for_submit,
+                                                iroha_data_model::transaction::FeePaymentIntent::authority(
+                                                    Vec::new(),
+                                                    None,
+                                                ),
                                                 metadata,
                                             );
                                             let hash = transaction.hash();
@@ -6757,6 +6761,10 @@ async fn submit_plan(
                                         submission_metadata(submission_counter_for_submit.as_ref());
                                     let transaction = client.build_transaction_from_items(
                                         instructions_for_submit.clone(),
+                                        iroha_data_model::transaction::FeePaymentIntent::authority(
+                                            Vec::new(),
+                                            None,
+                                        ),
                                         metadata,
                                     );
                                     let hash = transaction.hash();
@@ -12334,7 +12342,7 @@ mod tests {
         )?;
         let network = make_network_builder(&config, genesis)?.build();
 
-        assert_eq!(network.pipeline_time(), pipeline_time);
+        assert_eq!(network.block_cadence(), pipeline_time);
         let layers: Vec<Table> = network.config_layers().map(Cow::into_owned).collect();
         let lookup = |path: &[&str]| {
             layers.iter().rev().find_map(|layer| {
@@ -12632,7 +12640,7 @@ mod tests {
         }
 
         assert_eq!(
-            network.pipeline_time(),
+            network.block_cadence(),
             default_nexus_pipeline_time(),
             "nexus runs without explicit pipeline_time should use Izanami fast pipeline defaults"
         );
@@ -12805,7 +12813,7 @@ mod tests {
                 std::panic::resume_unwind(payload);
             }
         };
-        assert_eq!(network.pipeline_time(), default_izanami_pipeline_time());
+        assert_eq!(network.block_cadence(), default_izanami_pipeline_time());
         Ok(())
     }
 

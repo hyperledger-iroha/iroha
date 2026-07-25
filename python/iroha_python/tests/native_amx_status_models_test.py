@@ -456,18 +456,13 @@ def test_native_amx_parser_accepts_mixed_role_proposal_without_current_entrypoin
     _seal_native_amx_receipt(payload["native_amx_receipts"][0])
 
     parsed = SumeragiLaneSettlementCommitment.from_payload(payload)
+    parsed_leg = parsed.native_amx_receipts[0].legs[1]
 
     assert (
-        parsed.native_amx_receipts[0]
-        .legs[1]
-        .participant_proposal.descriptor.accepted_transaction_hashes
+        parsed_leg.participant_proposal.descriptor.accepted_transaction_hashes
         == (_hash(0xC5), _hash(0xC7))
     )
-    assert (
-        parsed.native_amx_receipts[0]
-        .legs[1]
-        .requires_mixed_role_anchor_validation
-    )
+    assert parsed_leg.requires_mixed_role_anchor_validation
 
 
 def test_native_amx_parser_rejects_unordered_participant_source_group() -> None:

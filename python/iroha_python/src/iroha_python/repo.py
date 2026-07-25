@@ -3,21 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import Decimal
-from typing import TYPE_CHECKING, Any, Dict, Mapping, Optional, Union
+from typing import Any, Dict, Mapping, Optional
 
-from .numeric_v1 import KotodamaQuantity, NumericV1Codec
-
-if TYPE_CHECKING:  # pragma: no cover - typing only
-    from .tx import QuantityLike
-else:
-    QuantityLike = Union[KotodamaQuantity, str, int, Decimal]
-
-
-def _normalize_quantity(value: QuantityLike) -> str:
-    from .tx import _normalize_quantity as _tx_normalize_quantity
-
-    return _tx_normalize_quantity(value)
+from ._quantity import QuantityLike, _normalize_quantity
+from .numeric_v1 import NumericV1Codec
 
 
 def _decode_quantity(value: Any, context: str) -> str:
@@ -95,6 +84,7 @@ def _page_metadata(payload: Mapping[str, Any], item_count: int) -> Dict[str, Any
         "indexed_block_hash": indexed_block_hash,
         "query_source": query_source,
     }
+
 
 __all__ = [
     "RepoCashLeg",

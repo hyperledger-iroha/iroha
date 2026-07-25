@@ -19,6 +19,8 @@ use ivm::{IVM, PointerType, ProgramMetadata, encoding, instruction, syscalls as 
 use mv::storage::StorageReadOnly;
 use norito::NoritoSerialize;
 
+const AMPLE_TEST_GAS_LIMIT: u64 = 1_000_000;
+
 fn with_core_host<R>(vm: &mut IVM, f: impl FnOnce(&mut CoreHost) -> R) -> R {
     CoreHost::with_host(vm, f)
 }
@@ -119,7 +121,7 @@ fn host_bridges_nft_mint_and_transfer() {
 
     let nft_blob = tlv_blob(&nft_id, PointerType::NftId as u16);
     let owner_blob = tlv_blob(&owner, PointerType::AccountId as u16);
-    let mut vm = IVM::new(50_000);
+    let mut vm = IVM::new(AMPLE_TEST_GAS_LIMIT);
     vm.set_host(CoreHost::new(owner.clone()));
     let mut cursor = 0;
     let ptr_nft = load_input_blob(&mut vm, &mut cursor, &nft_blob);
@@ -180,7 +182,7 @@ fn host_bridges_nft_mint_and_transfer() {
     let from_blob = tlv_blob(&owner, PointerType::AccountId as u16);
     let nft_blob2 = tlv_blob(&nft_id, PointerType::NftId as u16);
     let to_blob = tlv_blob(&recipient, PointerType::AccountId as u16);
-    let mut vm2 = IVM::new(50_000);
+    let mut vm2 = IVM::new(AMPLE_TEST_GAS_LIMIT);
     vm2.set_host(CoreHost::new(owner.clone()));
     let mut cursor2 = 0;
     let ptr_from = load_input_blob(&mut vm2, &mut cursor2, &from_blob);
@@ -275,7 +277,7 @@ fn host_rejects_insufficient_asset_transfer() {
     tx.apply();
     block.commit().unwrap();
 
-    let mut vm = IVM::new(50_000);
+    let mut vm = IVM::new(AMPLE_TEST_GAS_LIMIT);
     let mut cursor = 0;
     let ptr_from = load_input_blob(&mut vm, &mut cursor, &from_tlv);
     let ptr_to = load_input_blob(&mut vm, &mut cursor, &to_tlv);
@@ -366,7 +368,7 @@ fn host_batches_transfer_v1_calls() {
     let asset_tlv = tlv_blob(&asset_def_id, PointerType::AssetDefinitionId as u16);
     let amount_a_tlv = quantity_tlv(Quantity::from(7_u64));
     let amount_b_tlv = quantity_tlv(Quantity::from(4_u64));
-    let mut vm = IVM::new(50_000);
+    let mut vm = IVM::new(AMPLE_TEST_GAS_LIMIT);
     vm.set_host(CoreHost::new(from.clone()));
     let mut cursor = 0;
     let ptr_from = load_input_blob(&mut vm, &mut cursor, &from_tlv);
@@ -445,7 +447,7 @@ fn host_rejects_nft_transfer_from_non_owner() {
     let nft_tlv = tlv_blob(&nft_id, PointerType::NftId as u16);
     let to_tlv = tlv_blob(&charlie, PointerType::AccountId as u16);
 
-    let mut vm = IVM::new(50_000);
+    let mut vm = IVM::new(AMPLE_TEST_GAS_LIMIT);
     vm.set_host(CoreHost::new(alice.clone()));
     let mut cursor = 0;
     let ptr_from = load_input_blob(&mut vm, &mut cursor, &from_tlv);
@@ -457,10 +459,24 @@ fn host_rejects_nft_transfer_from_non_owner() {
         &[(10, ptr_from), (11, ptr_nft), (12, ptr_to)],
     );
 
-    // World: domain, register alice, bob, charlie, and register NFT owned by bob
+    // Seed a valid ledger fixture directly. This test exercises transfer
+    // authorization, not account/NFT registration authorization.
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let state = State::new_for_testing(World::new(), kura, query_handle);
+    let domain_id: DomainId = DomainId::try_new("wonder", "universal").unwrap();
+    let domain = Domain::new(domain_id).build(&alice);
+    let alice_account = Account::new(alice.clone()).build(&alice);
+    let bob_account = Account::new(bob.clone()).build(&bob);
+    let charlie_account = Account::new(charlie.clone()).build(&charlie);
+    let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&bob);
+    let world = World::with_assets(
+        [domain],
+        [alice_account, bob_account, charlie_account],
+        [],
+        [],
+        [nft],
+    );
+    let state = State::new_for_testing(world, kura, query_handle);
     let header = iroha_data_model::block::BlockHeader::new(
         core::num::NonZeroU64::new(1).unwrap(),
         None,
@@ -471,29 +487,6 @@ fn host_rejects_nft_transfer_from_non_owner() {
     );
     let mut block = state.block(header);
     let mut tx = block.transaction();
-    let domain_id: DomainId = DomainId::try_new("wonder", "universal").unwrap();
-    let reg_domain = RegisterBox::from(Register::domain(Domain::new(domain_id.clone())));
-    let reg_alice = RegisterBox::from(Register::account(new_account_in_domain(&alice)));
-    let reg_bob = RegisterBox::from(Register::account(new_account_in_domain(&bob)));
-    let reg_charlie = RegisterBox::from(Register::account(new_account_in_domain(&charlie)));
-    // Prepare NewNft to be registered by bob as the owner (authority = bob)
-    let new_nft = Nft::new(nft_id.clone(), Metadata::default());
-    let reg_nft = RegisterBox::from(Register::nft(new_nft));
-    let executor = tx.world.executor().clone();
-    for instr in [
-        InstructionBox::from(reg_domain),
-        InstructionBox::from(reg_alice),
-        InstructionBox::from(reg_bob),
-        InstructionBox::from(reg_charlie),
-    ] {
-        executor
-            .execute_instruction(&mut tx, &alice, instr)
-            .unwrap();
-    }
-    // Register NFT with bob as the authority so the owner is bob
-    executor
-        .execute_instruction(&mut tx, &bob, InstructionBox::from(reg_nft))
-        .unwrap();
 
     // Apply queued transfer: should be rejected since alice is not the owner
     let err = with_core_host(&mut vm, |host| host.apply_queued(&mut tx, &alice))
@@ -511,7 +504,7 @@ fn host_bridges_set_account_detail() {
     let val_tlv = tlv_blob(&val, PointerType::Json as u16);
     let authority_tlv = tlv_blob(&authority, PointerType::AccountId as u16);
 
-    let mut vm = IVM::new(100_000);
+    let mut vm = IVM::new(AMPLE_TEST_GAS_LIMIT);
     vm.set_host(CoreHost::new(authority.clone()));
     let mut cursor = 0;
     let ptr_account = load_input_blob(&mut vm, &mut cursor, &authority_tlv);
@@ -584,7 +577,7 @@ fn host_bridges_mint_asset() {
     let asset_tlv = tlv_blob(&asset_def, PointerType::AssetDefinitionId as u16);
     let amount_tlv = quantity_tlv(Quantity::from(123_u64));
 
-    let mut vm = IVM::new(100_000);
+    let mut vm = IVM::new(AMPLE_TEST_GAS_LIMIT);
     vm.set_host(CoreHost::new(authority.clone()));
     let mut cursor = 0;
     let ptr_authority = load_input_blob(&mut vm, &mut cursor, &authority_tlv);
@@ -661,7 +654,7 @@ fn host_bridges_nft_set_metadata_and_burn() {
     let owner_tlv = tlv_blob(&owner, PointerType::AccountId as u16);
 
     // VM
-    let mut vm = IVM::new(100_000);
+    let mut vm = IVM::new(AMPLE_TEST_GAS_LIMIT);
     vm.set_host(CoreHost::new(owner.clone()));
     let mut cursor = 0;
     let ptr_nft = load_input_blob(&mut vm, &mut cursor, &nft_tlv);
@@ -740,7 +733,7 @@ fn transfer_batch_apply_syscall_enqueues_batch() {
     assert_eq!(decoded.entries().len(), 2, "encode/decode sanity check");
     let batch_tlv = norito_bytes_tlv(&batch);
 
-    let mut vm = IVM::new(50_000);
+    let mut vm = IVM::new(AMPLE_TEST_GAS_LIMIT);
     vm.set_host(CoreHost::new(from.clone()));
     let mut cursor = 0;
     let ptr_batch = load_input_blob(&mut vm, &mut cursor, &batch_tlv);

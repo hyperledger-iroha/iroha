@@ -121,6 +121,10 @@ pub struct ConsensusHandshakeMetadata {
 impl ConsensusHandshakeMetadata {
     /// Validate the first-release signed handshake envelope.
     ///
+    /// # Errors
+    ///
+    /// Returns an error when the wire version is not the first-release version
+    /// or the signed Sumeragi v2 genesis context is invalid.
     pub fn validate(&self) -> Result<(), String> {
         let expected_version = u32::from(crate::block::consensus_v2::PROTOCOL_VERSION);
         if self.wire_protocol_version != expected_version {
@@ -460,7 +464,7 @@ mod model {
             self
         }
 
-        /// Validate all signed NPoS election and reconfiguration invariants.
+        /// Validate all signed `NPoS` election and reconfiguration invariants.
         ///
         /// # Errors
         /// Returns a stable diagnostic when a seed, window, bond, percentage,
@@ -2120,8 +2124,6 @@ mod tests {
             "vrf_commit_window_blocks",
             "vrf_reveal_window_blocks",
             "max_validators",
-            "min_self_bond",
-            "min_nomination_bond",
             "max_nominator_concentration_pct",
             "seat_band_pct",
             "max_entity_correlation_pct",
@@ -2138,6 +2140,14 @@ mod tests {
                 .as_u64()
                 .unwrap_or_else(|| panic!("`{field}` should serialize as number"));
             *value = norito::json::Value::String(number.to_string());
+        }
+        for field in ["min_self_bond", "min_nomination_bond"] {
+            assert!(
+                map.get(field)
+                    .and_then(norito::json::Value::as_str)
+                    .is_some(),
+                "Quantity field `{field}` must retain its canonical JSON string encoding"
+            );
         }
         let custom = CustomParameter::new(
             SumeragiNposParameters::parameter_id(),

@@ -94,6 +94,10 @@ pub mod u64_string {
         })
     }
 
+    #[expect(
+        clippy::trivially_copy_pass_by_ref,
+        reason = "Norito `with` serializers receive fields by shared reference"
+    )]
     pub fn serialize(value: &u64, out: &mut String) {
         JsonSerialize::json_serialize(&value.to_string(), out);
     }

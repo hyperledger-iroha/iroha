@@ -983,15 +983,6 @@ fn minimal_config_snapshot() {
                             67108864,
                         ),
                     },
-                    orderbook: SorafsOrderbook {
-                        min_order_gib: 1,
-                        price_tick: Quantity(
-                            Numeric {
-                                mantissa: 1,
-                                scale: 3,
-                            },
-                        ),
-                    },
                     reputation_trust_policy_path: None,
                     pricing_trust_policy_path: None,
                     hedging_feed_trust_policy_path: None,
@@ -1018,11 +1009,6 @@ fn minimal_config_snapshot() {
                         enabled: false,
                         cycle_seconds: 86400,
                         publish_delay_seconds: 3600,
-                    },
-                    reserve_lifecycle: SorafsReserveLifecycleSchedule {
-                        enabled: false,
-                        interval_seconds: 3600,
-                        initial_delay_seconds: 0,
                     },
                     governance_dag_dir: None,
                     governance_dag_publisher_peer_id: None,

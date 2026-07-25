@@ -7,12 +7,14 @@ use iroha_core::{
     smartcontracts::ivm::host::CoreHost,
     state::{State, World, WorldReadOnly},
 };
-use iroha_data_model::{account::NewAccount, prelude::*};
+use iroha_data_model::prelude::*;
 use iroha_test_samples::ALICE_ID;
 use ivm::{IVM, PointerType, ProgramMetadata, encoding, instruction, syscalls as ivm_sys};
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
 use norito::NoritoSerialize;
+
+const AMPLE_TEST_GAS_LIMIT: u64 = 1_000_000;
 
 fn tlv_blob<T: NoritoSerialize>(val: &T, ty: PointerType) -> Vec<u8> {
     let payload = norito::to_bytes(val).expect("encode payload");
@@ -77,30 +79,16 @@ fn setup_state(
 ) -> State {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let state = State::new_for_testing(World::new(), kura, query_handle);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-    {
-        let mut block = state.block(header);
-        let mut tx = block.transaction();
-        let executor = tx.world.executor().clone();
-        let reg_domain = Register::domain(Domain::new(asset_domain.clone()));
-        let reg_account = Register::account(NewAccount::new(authority.clone()));
-        let reg_asset = Register::asset_definition(
-            AssetDefinition::numeric(asset_def.clone()).with_name(asset_name.to_string()),
-        );
-        for instr in [
-            InstructionBox::from(reg_domain),
-            InstructionBox::from(reg_account),
-            InstructionBox::from(reg_asset),
-        ] {
-            executor
-                .execute_instruction(&mut tx, authority, instr)
-                .expect("setup instruction");
-        }
-        tx.apply();
-        block.commit().expect("commit setup");
-    }
-    state
+    let domain = Domain::new(asset_domain.clone()).build(authority);
+    let account = Account::new(authority.clone()).build(authority);
+    let asset_definition = AssetDefinition::numeric(asset_def.clone())
+        .with_name(asset_name.to_string())
+        .build(authority);
+    State::new_for_testing(
+        World::with([domain], [account], [asset_definition]),
+        kura,
+        query_handle,
+    )
 }
 
 fn data_event_debug(events: Vec<iroha_data_model::events::EventBox>) -> Vec<String> {
@@ -156,7 +144,7 @@ fn ivm_host_shadow_execute_matches_native_execute() {
 
     // CoreHost path via syscalls.
     let host_events = {
-        let mut vm = IVM::new(100_000);
+        let mut vm = IVM::new(AMPLE_TEST_GAS_LIMIT);
         vm.set_host(CoreHost::new(authority.clone()));
         let account_tlv = tlv_blob(&authority, PointerType::AccountId);
         let key_tlv = tlv_blob(&key, PointerType::Name);

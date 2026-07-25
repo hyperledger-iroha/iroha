@@ -1,77 +1,58 @@
 #![cfg(feature = "ivm_zk_tests")]
 
-use iroha_zkp_halo2::{
-    GoldilocksParams, GoldilocksPolynomial, GoldilocksScalar, OpenVerifyEnvelope, Transcript,
-    backend::goldilocks::GoldilocksBackend, norito_helpers as nh,
-};
-use ivm::{IVMHost, syscalls};
+use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope};
+use ivm::{IVMHost, gas::ZkGasScheduleV1, syscalls};
 
-fn verify_gas(payload_len: usize) -> u64 {
-    64_u64.saturating_add(u64::try_from(payload_len).unwrap_or(u64::MAX))
+fn canonical_goldilocks_envelope() -> OpenVerifyEnvelope {
+    OpenVerifyEnvelope::new(
+        BackendTag::Stark,
+        "stark/fri/goldilocks-test-v1",
+        [1; 32],
+        vec![1, 2, 3],
+        vec![4, 5, 6],
+    )
 }
 
-fn tlv_from_env(env: &OpenVerifyEnvelope) -> Vec<u8> {
-    let payload = norito::to_bytes(env).expect("encode envelope");
+fn tlv_from_payload(payload: &[u8]) -> Vec<u8> {
     let mut tlv = Vec::with_capacity(2 + 1 + 4 + payload.len() + 32);
     tlv.extend_from_slice(&u16::to_be_bytes(ivm::PointerType::NoritoBytes as u16));
     tlv.push(1);
     tlv.extend_from_slice(&(payload.len() as u32).to_be_bytes());
-    tlv.extend_from_slice(payload.as_ref());
-    let hash: [u8; 32] = iroha_crypto::Hash::new(&payload).into();
+    tlv.extend_from_slice(payload);
+    let hash: [u8; 32] = iroha_crypto::Hash::new(payload).into();
     tlv.extend_from_slice(&hash);
     tlv
 }
 
-fn make_goldilocks_envelope() -> OpenVerifyEnvelope {
-    let params = GoldilocksParams::new(8).expect("params");
-    let coeffs: Vec<GoldilocksScalar> = (0u64..8).map(|i| GoldilocksScalar::from(i + 1)).collect();
-    let poly = GoldilocksPolynomial::from_coeffs(coeffs);
-    let label = ivm::host::LABEL_TRANSFER;
-    let mut tr = Transcript::new(label);
-    let p_g = poly.commit(&params).expect("commit");
-    let z = GoldilocksScalar::from(5u64);
-    let (proof, t) = poly.open(&params, &mut tr, z, p_g).expect("open");
-    OpenVerifyEnvelope {
-        params: nh::params_to_wire(&params),
-        public: nh::poly_open_public::<GoldilocksBackend>(params.n(), z, t, p_g),
-        proof: nh::proof_to_wire(&proof),
-        transcript_label: label.to_string(),
-        vk_commitment: None,
-        public_inputs_schema_hash: None,
-        domain_tag: None,
-    }
-}
-
-#[test]
-fn zk_verify_transfer_goldilocks_opening_succeeds() {
-    let env = make_goldilocks_envelope();
-    let env_payload = norito::to_bytes(&env).expect("encode env");
-    let tlv = tlv_from_env(&env);
-
-    let mut vm = ivm::IVM::new(1_000_000);
-    let mut host = ivm::host::DefaultHost::new().with_zk_curve_str("goldilocks");
+fn run_default_host(envelope: &OpenVerifyEnvelope, curve: Option<&str>) -> (u64, u64, u64) {
+    let payload = norito::to_bytes(envelope).expect("encode canonical envelope");
+    let tlv = tlv_from_payload(&payload);
+    let mut vm = ivm::IVM::new(u64::MAX);
+    let mut host = curve.map_or_else(ivm::host::DefaultHost::new, |curve| {
+        ivm::host::DefaultHost::new().with_zk_curve_str(curve)
+    });
     let ptr = vm.alloc_input_tlv(&tlv).expect("alloc tlv");
     vm.set_register(10, ptr);
     let gas = host
         .syscall(syscalls::SYSCALL_ZK_VERIFY_TRANSFER, &mut vm)
         .expect("syscall ok");
-    assert_eq!(gas, verify_gas(env_payload.len()));
-    assert_eq!(vm.register(10), 1);
-    assert_eq!(vm.register(11), 0);
+    let expected =
+        ZkGasScheduleV1::default().actual_single_gas(payload.len(), envelope.public_inputs.len());
+    assert_eq!(gas, expected);
+    (vm.register(10), vm.register(11), gas)
 }
 
 #[test]
-fn zk_verify_transfer_goldilocks_rejected_by_toy_curve() {
-    let env = make_goldilocks_envelope();
-    let tlv = tlv_from_env(&env);
+fn zk_verify_transfer_goldilocks_requires_registered_backend() {
+    let (verified, status, _) =
+        run_default_host(&canonical_goldilocks_envelope(), Some("goldilocks"));
+    assert_eq!(verified, 0);
+    assert_eq!(status, ivm::host::ERR_BACKEND);
+}
 
-    let mut vm = ivm::IVM::new(1_000_000);
-    // Default host uses the Toy/Pallas curve; Goldilocks envelope must be rejected.
-    let mut host = ivm::host::DefaultHost::new();
-    let ptr = vm.alloc_input_tlv(&tlv).expect("alloc tlv");
-    vm.set_register(10, ptr);
-    host.syscall(syscalls::SYSCALL_ZK_VERIFY_TRANSFER, &mut vm)
-        .expect("syscall ok");
-    assert_eq!(vm.register(10), 0);
-    assert_eq!(vm.register(11), 3); // ERR_CURVE
+#[test]
+fn zk_verify_transfer_goldilocks_default_host_fails_closed() {
+    let (verified, status, _) = run_default_host(&canonical_goldilocks_envelope(), None);
+    assert_eq!(verified, 0);
+    assert_eq!(status, ivm::host::ERR_BACKEND);
 }

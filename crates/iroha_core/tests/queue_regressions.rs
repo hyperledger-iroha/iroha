@@ -64,8 +64,13 @@ fn build_state() -> (Arc<State>, ChainId, AccountId, KeyPair) {
     let account = Account::new(account_id.clone()).build(&account_id);
     let world = World::with([domain], [account], std::iter::empty());
 
-    let state = Arc::new(State::new_for_testing(world, kura, query_handle));
     let chain_id = ChainId::from("queue-regressions-chain");
+    let state = Arc::new(State::new_with_chain_for_testing(
+        world,
+        kura,
+        query_handle,
+        chain_id.clone(),
+    ));
 
     (state, chain_id, account_id, key_pair)
 }

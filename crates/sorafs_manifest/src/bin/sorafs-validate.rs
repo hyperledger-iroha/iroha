@@ -2033,25 +2033,6 @@ impl OrderbookArgs {
                     PathBuf::from(require_value(args, index, arg)?),
                     arg,
                 )?;
-            } else if let Some(value) = arg.strip_prefix("--snapshot=") {
-                parsed.set_payload(
-                    OrderbookValidationPayloadKindV1::RuntimeSnapshot,
-                    PathBuf::from(value),
-                    "--snapshot",
-                )?;
-            } else if let Some(value) = arg.strip_prefix("--runtime-snapshot=") {
-                parsed.set_payload(
-                    OrderbookValidationPayloadKindV1::RuntimeSnapshot,
-                    PathBuf::from(value),
-                    "--runtime-snapshot",
-                )?;
-            } else if arg == "--snapshot" || arg == "--runtime-snapshot" {
-                index += 1;
-                parsed.set_payload(
-                    OrderbookValidationPayloadKindV1::RuntimeSnapshot,
-                    PathBuf::from(require_value(args, index, arg)?),
-                    arg,
-                )?;
             } else if let Some(value) = arg.strip_prefix("--format=") {
                 parsed.format = Some(OutputFormat::parse(value)?);
             } else if arg == "--format" {
@@ -2826,11 +2807,8 @@ fn parse_orderbook_kind(value: &str) -> Result<OrderbookValidationPayloadKindV1,
         "trade" | "trade-event" => Ok(OrderbookValidationPayloadKindV1::TradeEvent),
         "channel" | "settlement-channel" => Ok(OrderbookValidationPayloadKindV1::SettlementChannel),
         "receipt" | "settlement-receipt" => Ok(OrderbookValidationPayloadKindV1::SettlementReceipt),
-        "snapshot" | "runtime-snapshot" | "orderbook-runtime-snapshot" => {
-            Ok(OrderbookValidationPayloadKindV1::RuntimeSnapshot)
-        }
         other => Err(CliError::Config(format!(
-            "unsupported orderbook --kind `{other}`; expected order-request, order-cancel, trade-event, settlement-channel, settlement-receipt, or runtime-snapshot"
+            "unsupported orderbook --kind `{other}`; expected order-request, order-cancel, trade-event, settlement-channel, or settlement-receipt"
         ))),
     }
 }
@@ -3345,7 +3323,6 @@ fn orderbook_kind_label(kind: OrderbookValidationPayloadKindV1) -> &'static str 
         OrderbookValidationPayloadKindV1::TradeEvent => "trade-event",
         OrderbookValidationPayloadKindV1::SettlementChannel => "settlement-channel",
         OrderbookValidationPayloadKindV1::SettlementReceipt => "settlement-receipt",
-        OrderbookValidationPayloadKindV1::RuntimeSnapshot => "runtime-snapshot",
     }
 }
 
@@ -3508,14 +3485,6 @@ const BUNDLE_PAYLOAD_CANDIDATES: &[(FixtureBundlePayloadKindV1, &[&str])] = &[
             "orderbook_settlement_receipt_v1.to",
         ],
     ),
-    (
-        FixtureBundlePayloadKindV1::OrderbookRuntimeSnapshot,
-        &[
-            "orderbook/runtime_snapshot_v1.to",
-            "runtime_snapshot_v1.to",
-            "orderbook_runtime_snapshot_v1.to",
-        ],
-    ),
 ];
 
 fn read_bundle_payloads(bundle: &Path) -> Result<Vec<OwnedBundlePayload>, CliError> {
@@ -3644,7 +3613,7 @@ Usage:
   sorafs-validate admission --input <path> [--renewal <path> | --revocation <path>] [--format table|json|yaml] [--telemetry-out <path>]
   sorafs-validate order (--order <path> | --signed-order <path>) [--format table|json|yaml] [--telemetry-out <path>]
   sorafs-validate orderbook --kind <payload-kind> --input <path> [--format table|json|yaml] [--telemetry-out <path>]
-  sorafs-validate orderbook --order <path> | --cancel <path> | --trade <path> | --channel <path> | --receipt <path> | --snapshot <path>
+  sorafs-validate orderbook --order <path> | --cancel <path> | --trade <path> | --channel <path> | --receipt <path>
   sorafs-validate pdp [--commitment <path>] [--challenge <path>] [--proof <path>] [--format table|json|yaml] [--telemetry-out <path>]
   sorafs-validate pop --kind <payload-kind> --input <path> [--format table|json|yaml] [--telemetry-out <path>]
   sorafs-validate pop --credential <path> | --root <path> | --revocations <path> | --issued-bundle <path> | --enrollment <path> | --renewal <path> | --proof <path>
@@ -4431,14 +4400,10 @@ mod tests {
     }
 
     #[test]
-    fn orderbook_args_parse_accepts_runtime_snapshot_alias() {
+    fn orderbook_args_parse_rejects_retired_runtime_snapshot_alias() {
         let args = ["--runtime-snapshot=snapshot.to".to_owned()];
-        let parsed = OrderbookArgs::parse(&args).expect("parse args");
-        assert_eq!(parsed.input, Some(PathBuf::from("snapshot.to")));
-        assert!(matches!(
-            parsed.kind,
-            Some(OrderbookValidationPayloadKindV1::RuntimeSnapshot)
-        ));
+        let error = OrderbookArgs::parse(&args).expect_err("retired alias must be rejected");
+        assert!(error.to_string().contains("unsupported orderbook option"));
     }
 
     #[test]
@@ -4475,10 +4440,7 @@ mod tests {
             parse_orderbook_kind("settlement-receipt"),
             Ok(OrderbookValidationPayloadKindV1::SettlementReceipt)
         ));
-        assert!(matches!(
-            parse_orderbook_kind("runtime-snapshot"),
-            Ok(OrderbookValidationPayloadKindV1::RuntimeSnapshot)
-        ));
+        assert!(parse_orderbook_kind("runtime-snapshot").is_err());
     }
 
     #[test]

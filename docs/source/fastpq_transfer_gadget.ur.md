@@ -102,12 +102,12 @@ struct TransferDeltaTranscript {
 | `ivm::host` & ٹیسٹ | کور/ڈیفالٹ میزبان `transfer_v1` کو بیچ کے ساتھ جوڑتے ہیں جبکہ دائرہ کار فعال ہوتا ہے ، سطح `SYSCALL_TRANSFER_V1_BATCH_{BEGIN,END,APPLY}` ، اور MOCK WSV میزبان بفرز اندراجات سے پہلے رجعت ٹیسٹوں کا ارتکاب کرنے سے پہلے ڈٹرمینسٹک توازن کا دعوی کرسکتا ہے۔ تازہ ترین معلومات .
 | `iroha_core` | ریاستی منتقلی کے بعد `TransferTranscript` emit ، Kotodama کے ساتھ Kotodama کے ساتھ Kotodama کے ساتھ `StateBlock::capture_exec_witness` بنائیں ، اور فاسٹ پی کیو پروور لین کو چلائیں لہذا دونوں Torii/CLI ٹولنگ حاصل کریں اور اسٹیج 6 بیکینڈ کو کینونیکل حاصل کریں۔ `TransferAssetBatch` گروپس ایک ہی ٹرانسکرپٹ میں ترتیب وار منتقلی کرتے ہیں ، ملٹی ڈیلٹا بیچوں کے لئے پوسیڈن ڈائجسٹ کو چھوڑ دیتے ہیں تاکہ گیجٹ انٹریوں کے عین مطابق داخل ہوسکے۔ |
 | `fastpq_prover` | `gadgets::transfer` اب کثیر ڈیلٹا ٹرانسکرپٹس (بیلنس ریاضی + پوسیڈن ڈائجسٹ) اور سطحوں کے ساختہ گواہوں (جس میں پلیس ہولڈر کے جوڑے والے ایس ایم ٹی بلبس بھی شامل ہے) کے پلانر (`crates/fastpq_prover/src/gadgets/transfer.rs`) کی توثیق کرتا ہے۔ `trace::build_trace` بیچ میٹا ڈیٹا سے باہر ان نقلوں کو ڈیکوڈ کرتا ہے ، `transfer_transcripts` پے لوڈ سے محروم منتقلی بیچوں کو مسترد کرتا ہے ، توثیق شدہ گواہوں کو `Trace::transfer_witnesses` سے منسلک کرتا ہے ، اور `TracePolynomialData::transfer_plan()` منصوبے کو زندہ رکھتا ہے۔ قطار گنتی کے رجعت کا استعمال اب `fastpq_row_bench` (`crates/fastpq_prover/src/bin/fastpq_row_bench.rs:1`) کے ذریعے جہاز کرتا ہے ، جس میں 65536 بولڈ قطاروں تک کے منظرناموں کا احاطہ کیا جاتا ہے ، جبکہ جوڑ بنانے والی ایس ایم ٹی وائرنگ TF-3 بیچ-ہیلپر سنگ میل کے پیچھے رہ جاتی ہے (جگہ کے حامل اس سوئپ لینڈس کو تبدیل کرتے ہیں جب تک کہ اس میں سوئپ زمین کو مستحکم رکھا جاتا ہے۔ |
-| Kotodama | `transfer_batch((from,to,asset,amount), …)` مددگار کو `transfer_v1_batch_begin` میں کم کرتا ہے ، ترتیب `transfer_asset` کالز ، اور `transfer_v1_batch_end`۔ ہر ٹیوپل دلیل کو `(AccountId, AccountId, AssetDefinitionId, int)` شکل پر عمل کرنا چاہئے۔ سنگل ٹرانسفر موجودہ بلڈر کو برقرار رکھتا ہے۔ |
+| Kotodama | `transfer_batch((from,to,asset,amount), …)` مددگار کو `transfer_v1_batch_begin` میں کم کرتا ہے ، ترتیب `transfer_asset` کالز ، اور `transfer_v1_batch_end`۔ ہر ٹیوپل دلیل کو `(AccountId, AccountId, AssetDefinitionId, quantity)` شکل پر عمل کرنا چاہئے۔ سنگل ٹرانسفر موجودہ بلڈر کو برقرار رکھتا ہے۔ |
 
 مثال Kotodama استعمال:
 
 ```text
-fn pay(AccountId a, AccountId b, AssetDefinitionId asset, int x) {
+fn pay(AccountId a, AccountId b, AssetDefinitionId asset, quantity x) {
     transfer_batch((a, b, asset, x), (b, a, asset, 1));
 }
 ```

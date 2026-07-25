@@ -246,6 +246,8 @@ public sealed class ContractManifestTests
             ReplaceFirst(response, "#ABA2", "#0000"),
             ReplaceFirst(response, "\"seiyaku_name\":\"Ledger\"", "\"seiyaku_name\":\"match\""),
             ReplaceFirst(response, "\"seiyaku_name\":\"Ledger\"", "\"seiyaku_name\":\"Option\""),
+            ReplaceFirst(response, "\"seiyaku_name\":\"Ledger\"", "\"seiyaku_name\":\"Amount\""),
+            ReplaceFirst(response, "\"seiyaku_name\":\"Ledger\"", "\"seiyaku_name\":\"amount\""),
             ReplaceFirst(response, "\"seiyaku_name\":\"Ledger\"", "\"seiyaku_name\":\"__kotodama_link_private\""),
             ReplaceFirst(response, "\"seiyaku_name\":\"Ledger\"", "\"seiyaku_name\":\"state_map_get\""),
             ReplaceFirst(response, "\"namespace\":\"TransferError\"", "\"namespace\":\"Option\""),

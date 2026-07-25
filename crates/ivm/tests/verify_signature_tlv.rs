@@ -1,7 +1,7 @@
 //! Signature verification opcode/syscall tests using TLVs.
 
 use ivm::signature::{Ed25519BatchEntry, Ed25519BatchRequest};
-use ivm::{IVM, Memory, PointerType, encoding, instruction};
+use ivm::{IVM, Memory, PointerType, VMError, encoding, instruction};
 
 mod common;
 use common::assemble;
@@ -89,7 +89,11 @@ fn run_syscall_verify_signature_blob(
     vm.register(10)
 }
 
-fn run_syscall_verify_signature_ed25519(message_type: PointerType, message: &[u8], key_tag: u8) {
+fn run_syscall_verify_signature_ed25519(
+    message_type: PointerType,
+    message: &[u8],
+    key_tag: u8,
+) -> Result<u64, VMError> {
     use ed25519_dalek::Signer;
 
     let sk = ed25519_test_key(key_tag);
@@ -135,8 +139,8 @@ fn run_syscall_verify_signature_ed25519(message_type: PointerType, message: &[u8
     prog.extend_from_slice(&halt.to_le_bytes());
     let prog = assemble(&prog);
     vm.load_program(&prog).unwrap();
-    vm.run().unwrap();
-    assert_eq!(vm.register(10), 1);
+    vm.run()?;
+    Ok(vm.register(10))
 }
 
 #[test]
@@ -885,17 +889,27 @@ fn opcode_verify_dilithium_via_tlv() {
 #[test]
 fn syscall_verify_signature_ed25519_via_tlv() {
     let msg = b"ivm-ed25519";
-    run_syscall_verify_signature_ed25519(PointerType::Blob, msg, 5);
+    assert_eq!(
+        run_syscall_verify_signature_ed25519(PointerType::Blob, msg, 5)
+            .expect("canonical Blob message must verify"),
+        1
+    );
 }
 
 #[test]
-fn syscall_verify_signature_accepts_norito_message_tlv() {
+fn syscall_verify_signature_rejects_norito_message_tlv() {
     let message = br#"{"amount":123,"dpn_id":"dpn-live"}"#;
-    run_syscall_verify_signature_ed25519(PointerType::NoritoBytes, message, 6);
+    assert_eq!(
+        run_syscall_verify_signature_ed25519(PointerType::NoritoBytes, message, 6),
+        Err(VMError::NoritoInvalid)
+    );
 }
 
 #[test]
-fn syscall_verify_signature_accepts_json_message_tlv() {
+fn syscall_verify_signature_rejects_json_message_tlv() {
     let message = br#"{"amount":456,"dpn_id":"dpn-json"}"#;
-    run_syscall_verify_signature_ed25519(PointerType::Json, message, 7);
+    assert_eq!(
+        run_syscall_verify_signature_ed25519(PointerType::Json, message, 7),
+        Err(VMError::NoritoInvalid)
+    );
 }

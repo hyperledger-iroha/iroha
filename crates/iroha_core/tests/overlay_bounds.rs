@@ -4,9 +4,12 @@
 //! `overlay_max_instructions` or `overlay_max_bytes`, and other transactions in
 //! the same block still apply (non-forking semantics).
 
-use std::{borrow::Cow, str::FromStr};
+use std::{borrow::Cow, str::FromStr, sync::Arc};
 
-use iroha_core::{block::BlockBuilder, smartcontracts::Execute, state::StateReadOnly};
+use iroha_core::{
+    block::BlockBuilder, governance::manifest::LaneManifestRegistry, smartcontracts::Execute,
+    state::StateReadOnly,
+};
 use iroha_data_model::prelude::*;
 use norito::codec::Encode as NoritoEncode;
 
@@ -26,6 +29,10 @@ fn build_min_world() -> (
     let query = iroha_core::query::store::LiveQueryStore::start_test();
     let state =
         iroha_core::state::State::new_with_chain_for_testing(world, kura, query, chain_id.clone());
+    let nexus = state.nexus_snapshot();
+    state.install_lane_manifests(&Arc::new(
+        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
+    ));
     (state, chain_id, authority_id, kp)
 }
 

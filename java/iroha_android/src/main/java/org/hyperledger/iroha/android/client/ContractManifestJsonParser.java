@@ -21,6 +21,7 @@ public final class ContractManifestJsonParser {
   private static final Pattern MANIFEST_HASH =
       Pattern.compile("^hash:([0-9A-F]{64})#([0-9A-F]{4})$");
   private static final Pattern CONVENIENCE_HASH = Pattern.compile("^[0-9a-f]{64}$");
+  // BEGIN GENERATED: kotodama-v1-validator-policy
   private static final Set<String> RESERVED_IDENTIFIERS =
       set(
           "authorize",
@@ -34,18 +35,19 @@ public final class ContractManifestJsonParser {
           "fn",
           "for",
           "hajimari",
+          "始まり",
           "if",
           "in",
-          "int",
-          "decimal",
-          "quantity",
           "kaizen",
+          "改善",
           "kotoage",
+          "言挙げ",
           "let",
           "match",
           "module",
           "return",
           "seiyaku",
+          "誓約",
           "state",
           "struct",
           "trigger",
@@ -54,17 +56,79 @@ public final class ContractManifestJsonParser {
           "view");
   private static final Set<String> RESERVED_DECLARATION_NAMES =
       set(
-          "int", "decimal", "quantity", "bool", "string", "bytes", "Json", "AccountId",
-          "AssetDefinitionId", "AssetId", "DomainId", "Name", "NftId", "DataSpaceId",
-          "Option", "Result", "List", "StateMap", "Secret", "AccountView", "AssetView",
-          "AssetDefinitionView", "DomainView", "NftView", "QueryPage", "AxtDescriptor",
-          "AssetHandle", "ProofBlob", "SoracloudRequest", "SoracloudResponse",
-          "state_map_get", "__kotodama_list_len", "__kotodama_list_get",
-          "__kotodama_list_try_set", "__kotodama_list_try_push", "__kotodama_list_pop",
-          "__kotodama_list_contains", "__kotodama_list_take", "__kotodama_list_enumerate",
-          "__kotodama_decimal_div_round", "__kotodama_quantity_div_round",
-          "__kotodama_quantity_ratio_round", "__kotodama_decimal_to_int_trunc",
+          "int",
+          "decimal",
+          "quantity",
+          "bool",
+          "string",
+          "bytes",
+          "Json",
+          "AccountId",
+          "AssetDefinitionId",
+          "AssetId",
+          "DomainId",
+          "Name",
+          "NftId",
+          "DataSpaceId",
+          "Option",
+          "Result",
+          "List",
+          "StateMap",
+          "Secret",
+          "AccountView",
+          "AssetView",
+          "AssetDefinitionView",
+          "DomainView",
+          "NftView",
+          "QueryPage",
+          "AxtDescriptor",
+          "AssetHandle",
+          "ProofBlob",
+          "SoracloudRequest",
+          "SoracloudResponse",
+          "state_map_get",
+          "__kotodama_list_len",
+          "__kotodama_list_get",
+          "__kotodama_list_try_set",
+          "__kotodama_list_try_push",
+          "__kotodama_list_pop",
+          "__kotodama_list_contains",
+          "__kotodama_list_take",
+          "__kotodama_list_enumerate",
+          "__kotodama_decimal_div_round",
+          "__kotodama_quantity_div_round",
+          "__kotodama_quantity_ratio_round",
+          "__kotodama_decimal_to_int_trunc",
           "__kotodama_decimal_to_int_round");
+  private static final Set<String> RETIRED_NUMERIC_TYPE_NAMES =
+      set(
+          "i8",
+          "i16",
+          "i32",
+          "i64",
+          "i128",
+          "isize",
+          "u8",
+          "u16",
+          "u32",
+          "u64",
+          "u128",
+          "usize",
+          "num",
+          "Int",
+          "Integer",
+          "float",
+          "f32",
+          "f64",
+          "Decimal",
+          "Fixed",
+          "FixedPoint",
+          "Amount",
+          "amount",
+          "money",
+          "Quantity",
+          "number");
+  // END GENERATED: kotodama-v1-validator-policy
   private static final Map<String, ContractManifest.ValueKindV1> VALUE_KINDS = valueKinds();
 
   private ContractManifestJsonParser() {}
@@ -112,7 +176,7 @@ public final class ContractManifestJsonParser {
     final String seiyakuName = optionalExactString(root, "seiyaku_name", "manifest.seiyaku_name");
     if (seiyakuName != null) {
       check(
-          canonicalDeclarationIdentifier(seiyakuName),
+          canonicalTypeDeclarationIdentifier(seiyakuName),
           "manifest.seiyaku_name must be a canonical Kotodama identifier");
     }
     final String codeHash = optionalManifestHash(root, "code_hash", "manifest.code_hash");
@@ -552,7 +616,10 @@ public final class ContractManifestJsonParser {
         stringList(
             required(root, "fields", "entrypoint struct node"), "entrypoint struct node.fields");
     check(
-        canonicalSourceIdentifier(name) && !fields.isEmpty(),
+        (canonicalTypeDeclarationIdentifier(name)
+                || "QueryPage".equals(name)
+                || isCoreQueryViewName(name))
+            && !fields.isEmpty(),
         "entrypoint struct node must use canonical Kotodama identifiers");
     for (final String field : fields) {
       check(
@@ -1016,7 +1083,7 @@ public final class ContractManifestJsonParser {
     final String name =
         exactString(required(root, "name", "error code descriptor"), "error code descriptor.name");
     check(
-        canonicalDeclarationIdentifier(namespace) && canonicalSourceIdentifier(name),
+        canonicalTypeDeclarationIdentifier(namespace) && canonicalSourceIdentifier(name),
         "error code namespace and name must be canonical Kotodama identifiers");
     final long code =
         unsignedInteger(
@@ -1303,12 +1370,16 @@ public final class ContractManifestJsonParser {
         && !value.startsWith("__kotodama_link_");
   }
 
+  private static boolean canonicalTypeDeclarationIdentifier(final String value) {
+    return canonicalDeclarationIdentifier(value) && !RETIRED_NUMERIC_TYPE_NAMES.contains(value);
+  }
+
   private static boolean canonicalEntrypointName(final String value) {
     return "hajimari".equals(value)
         || "始まり".equals(value)
         || "kaizen".equals(value)
         || "改善".equals(value)
-        || canonicalSourceIdentifier(value);
+        || canonicalDeclarationIdentifier(value);
   }
 
   private static void unique(final List<String> values, final String path) {

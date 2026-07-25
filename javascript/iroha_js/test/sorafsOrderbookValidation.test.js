@@ -25,8 +25,8 @@ const SETTLEMENT_RECEIPT_FIXTURE = new URL(
   "../../../fixtures/sorafs_manifest/orderbook/settlement_receipt_v1.to",
   import.meta.url,
 );
-const RUNTIME_SNAPSHOT_FIXTURE = new URL(
-  "../../../fixtures/sorafs_manifest/orderbook/runtime_snapshot_v1.to",
+const TRADE_EVENT_FIXTURE = new URL(
+  "../../../fixtures/sorafs_manifest/orderbook/trade_event_v1.to",
   import.meta.url,
 );
 const ORDER_REQUEST_OUTCOME_FIXTURE = new URL(
@@ -100,19 +100,6 @@ test("validateOrderbookPayload matches signature and noncanonical outcome fixtur
   }
 });
 
-test("validateOrderbookPayload accepts runtime snapshot fixture", () => {
-  const outcome = validateOrderbookPayload(
-    SORAFS_ORDERBOOK_PAYLOAD_KINDS.RUNTIME_SNAPSHOT,
-    readFileSync(RUNTIME_SNAPSHOT_FIXTURE),
-    { generated_at: 1_700_000_456 },
-  );
-
-  assert.equal(outcome.status, "Ok");
-  assert.equal(outcome.code, "SFS-OK-000");
-  assert.equal(outcome.inputs[0]?.kind, "orderbook_runtime_snapshot");
-  assert.equal(outcome.generated_at, 1_700_000_456);
-});
-
 test("validateOrderbookPayload reports malformed payloads as reference outcomes", () => {
   const outcome = validateOrderbookPayload("settlement-receipt", Buffer.alloc(8), {
     generatedAtUnix: 1_700_000_789,
@@ -133,6 +120,7 @@ test("validateOrderbookPayload rejects unknown and retired kind aliases", () => 
     "orderbook-order-request",
     "ORDER-REQUEST",
     " order-request ",
+    "runtime-snapshot",
   ]) {
     assert.throws(
       () => validateOrderbookPayload(kind, Buffer.alloc(8)),
@@ -177,8 +165,8 @@ test("signOrderbookPayload rejects non-signable orderbook payload kinds", () => 
   assert.throws(
     () =>
       signOrderbookPayload(
-        "runtime-snapshot",
-        readFileSync(RUNTIME_SNAPSHOT_FIXTURE),
+        "trade-event",
+        readFileSync(TRADE_EVENT_FIXTURE),
         ORDERBOOK_PRIVATE_KEY,
       ),
     /cannot be signed/i,

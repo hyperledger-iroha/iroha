@@ -168,9 +168,9 @@ def test_authenticated_inputs_reject_truncation_and_tampering() -> None:
     bad_hash[-1] ^= 1
     _assert_code("payload_hash_mismatch", lambda: NumericV1Codec.decode_int_envelope(bad_hash))
 
-    retired = bytearray(NumericV1Codec.encode_int_envelope(KotodamaInt("1")))
-    retired[:3] = b"\x00\x10\x02"
-    _assert_code("type_not_allowed", lambda: NumericV1Codec.decode_int_envelope(retired))
+    unassigned = bytearray(NumericV1Codec.encode_int_envelope(KotodamaInt("1")))
+    unassigned[:3] = b"\x00\x13\x02"
+    _assert_code("unknown_type", lambda: NumericV1Codec.decode_int_envelope(unassigned))
 
     known_wrong = bytearray(NumericV1Codec.encode_int_envelope(KotodamaInt("1")))
     known_wrong[:3] = b"\x00\x01\x02"

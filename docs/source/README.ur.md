@@ -83,7 +83,7 @@ translation_last_reviewed: 2025-11-14
   - صرف چیک: ‎`bash scripts/check_syscalls_doc.sh`‎
 - syscall ABI ٹیبل ‎(`crates/ivm/docs/syscalls.md`)‎
   - صرف چیک:
-    ‎`cargo run -p ivm --bin gen_syscalls_doc -- --check --no-code`‎
+    ‎`cargo run -p ivm --bin gen_syscalls_doc -- --check`‎
   - جنریٹڈ سیکشن (اور کوڈ ڈاک ٹیبل) اپ ڈیٹ کرنے کے لیے:
     ‎`cargo run -p ivm --bin gen_syscalls_doc -- --write`‎
 - pointer‑ABI ٹیبلز ‎(`crates/ivm/docs/pointer_abi.md`‎ اور ‎`ivm.md`‎)

@@ -5,6 +5,7 @@ use std::{borrow::Cow, num::NonZeroU64, sync::Arc};
 
 use iroha_core::{
     block::{BlockBuilder, BlockValidationError, ValidBlock},
+    governance::manifest::LaneManifestRegistry,
     kura::Kura,
     query::store::LiveQueryStore,
     smartcontracts::ivm::cache::IvmCache,
@@ -16,10 +17,7 @@ use iroha_data_model::{
     block::{BlockHeader, SignedBlock, builder::BlockBuilder as ModelBlockBuilder},
     prelude::*,
 };
-use iroha_primitives::{
-    numeric::{Numeric, NumericSpec},
-    time::TimeSource,
-};
+use iroha_primitives::{numeric::NumericSpec, time::TimeSource};
 use iroha_test_samples::gen_account_in;
 use mv::storage::StorageReadOnly;
 
@@ -34,11 +32,13 @@ fn adversarial_block_fixture_uses_checked_bls_randomness() {
     assert_eq!(key_pair.public_key().algorithm(), Algorithm::BlsNormal);
 }
 
-fn balance(state: &State, id: &AssetId) -> Numeric {
-    state.view().world().assets().get(id).map_or_else(
-        || Numeric::new(0, 0),
-        |value| value.clone().into_inner().into(),
-    )
+fn balance(state: &State, id: &AssetId) -> Quantity {
+    state
+        .view()
+        .world()
+        .assets()
+        .get(id)
+        .map_or_else(Quantity::zero, |value| value.clone().into_inner())
 }
 
 struct AdversarialSetup {
@@ -80,7 +80,12 @@ fn setup_world() -> AdversarialSetup {
     );
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let state = State::new_for_testing(world, kura, query);
+    let chain_id = ChainId::from("adversarial-block-rejections");
+    let state = State::new_with_chain_for_testing(world, kura, query, chain_id);
+    let nexus = state.nexus_snapshot();
+    state.install_lane_manifests(&Arc::new(
+        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
+    ));
     AdversarialSetup {
         state,
         alice_id,
@@ -202,8 +207,8 @@ fn adversarial_transactions_rejected_without_state_mutation() {
     state_block.commit().expect("commit state");
 
     // Only the valid transfer applies: Alice loses 10, Bob gains 10.
-    assert_eq!(balance(&state, &alice_asset_id), Numeric::new(40, 0));
-    assert_eq!(balance(&state, &bob_asset_id), Numeric::new(10, 0));
+    assert_eq!(balance(&state, &alice_asset_id), Quantity::from(40_u64));
+    assert_eq!(balance(&state, &bob_asset_id), Quantity::from(10_u64));
 }
 
 #[test]
@@ -241,6 +246,11 @@ fn block_history_tamper_rejected_without_mutation() {
             .unpack(|_| {});
     let committed_baseline = baseline_valid.commit_unchecked().unpack(|_| {});
     let committed_baseline_signed: SignedBlock = committed_baseline.clone().into();
+    assert!(
+        committed_baseline.as_ref().error(0).is_none(),
+        "baseline transaction rejected during execution: {:?}",
+        committed_baseline.as_ref().error(0)
+    );
     let _ = baseline_state_block.apply_without_execution(&committed_baseline, vec![peer.clone()]);
     baseline_state_block
         .kura()
@@ -256,8 +266,8 @@ fn block_history_tamper_rejected_without_mutation() {
         height_after_baseline, 1,
         "baseline block height should be 1"
     );
-    assert_eq!(balance(&state, &alice_asset_id), Numeric::new(50, 0));
-    assert_eq!(balance(&state, &bob_asset_id), Numeric::new(5, 0));
+    assert_eq!(balance(&state, &alice_asset_id), Quantity::from(50_u64));
+    assert_eq!(balance(&state, &bob_asset_id), Quantity::from(5_u64));
 
     // Forge a block that rewinds height to 1 with a conflicting prev hash and extra mint.
     let rewind_tx = TransactionBuilder::new(
@@ -308,8 +318,8 @@ fn block_history_tamper_rejected_without_mutation() {
 
     // State stays on the canonical head.
     assert_eq!(state.view().height(), height_after_baseline);
-    assert_eq!(balance(&state, &alice_asset_id), Numeric::new(50, 0));
-    assert_eq!(balance(&state, &bob_asset_id), Numeric::new(5, 0));
+    assert_eq!(balance(&state, &alice_asset_id), Quantity::from(50_u64));
+    assert_eq!(balance(&state, &bob_asset_id), Quantity::from(5_u64));
 
     let summary = format!(
         "{{\"scenario\":\"prev_hash_tamper\",\"expected_prev_hash\":{},\"canonical_height\":{},\"alice_balance\":\"{}\",\"bob_balance\":\"{}\"}}",

@@ -46,7 +46,7 @@ fn create_transfer_set_nft_with_tlv() {
     );
     let carol = account(
         "wonder",
-        "ed0120C6C6F575510FB87360CB773FAF2665C9BD0FBD00320684A966569A2C0217F063",
+        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
     );
 
     let mut wsv = MockWorldStateView::new();
@@ -123,13 +123,20 @@ fn create_transfer_set_nft_with_tlv() {
 
     // Set NFT data as non-owner/non-issuer should now fail (caller=carol, owner=bob, issuer=alice)
     let tlv_nft = make_tlv(PointerType::NftId as u16, nft0.as_bytes());
+    let tlv_key = make_tlv(PointerType::Name as u16, b"dpn_metadata");
     let tlv_json = make_tlv(PointerType::Json as u16, br#"{"k":"v2"}"#);
     vm.memory.preload_input(0, &tlv_nft).expect("preload input");
+    let key_offset = tlv_nft.len() as u64 + 8;
     vm.memory
-        .preload_input(tlv_nft.len() as u64 + 8, &tlv_json)
+        .preload_input(key_offset, &tlv_key)
+        .expect("preload input");
+    let json_offset = key_offset + tlv_key.len() as u64 + 8;
+    vm.memory
+        .preload_input(json_offset, &tlv_json)
         .expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
-    vm.set_register(11, Memory::INPUT_START + tlv_nft.len() as u64 + 8);
+    vm.set_register(11, Memory::INPUT_START + key_offset);
+    vm.set_register(12, Memory::INPUT_START + json_offset);
     vm.load_program(&prog_set).unwrap();
     assert!(matches!(vm.run(), Err(ivm::VMError::PermissionDenied)));
 }

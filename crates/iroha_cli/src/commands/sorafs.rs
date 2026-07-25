@@ -32,15 +32,13 @@ use iroha::{
     client::{
         Client, SorafsAliasListFilter, SorafsAppealFinanceReadbackFilter,
         SorafsGatewayFetchOptions, SorafsGatewayScoreboardOptions,
-        SorafsModerationBallotEventsFilter, SorafsModerationBallotTallyRequest,
-        SorafsModerationBallotsFilter, SorafsModerationModelRegistryFilter,
+        SorafsModerationBallotEventsFilter, SorafsModerationBallotsFilter,
+        SorafsModerationModelRegistryFilter,
         SorafsModerationQuarantineFilter, SorafsModerationQuarantineObjectStoreRequest,
         SorafsModerationQuarantineReleaseRequest, SorafsModerationQuarantineReviewRequest,
         SorafsModerationScreeningResultRequest, SorafsModerationScreeningResultsFilter,
         SorafsPinAlias, SorafsPinListFilter, SorafsPinRegisterArgs, SorafsRepairFinalizedAnchor,
-        SorafsRepairTasksFilter, SorafsReplicationListFilter, SorafsReserveAppealReadbackFilter,
-        SorafsReserveCreditLineReadbackFilter, SorafsReserveLifecyclePolicyReadbackFilter,
-        SorafsReserveMovementReadbackFilter, SorafsTokenOverrides,
+        SorafsRepairTasksFilter, SorafsReplicationListFilter, SorafsTokenOverrides,
         SorafsTransparencyReadbackFilter,
     },
     http::{Response, StatusCode},
@@ -125,9 +123,10 @@ use iroha_data_model::{
     isi::{
         InstructionBox, Transfer,
         sorafs::{
-            ApplySorafsRepairTaskAction, SorafsRepairClaimV1, SorafsRepairCompleteV1,
-            SorafsRepairEscalateV1, SorafsRepairFailV1, SorafsRepairRenewV1,
-            SorafsRepairTaskActionV1,
+            ApplySorafsRepairTaskAction, FinalizeSorafsModerationCase,
+            SorafsRepairClaimV1, SorafsRepairCompleteV1, SorafsRepairEscalateV1,
+            SorafsRepairFailV1, SorafsRepairRenewV1, SorafsRepairTaskActionV1,
+            SubmitSorafsModerationCommit, SubmitSorafsModerationReveal,
         },
     },
     metadata::Metadata,
@@ -520,30 +519,6 @@ pub enum ReserveCommand {
     Ledger(ReserveLedgerArgs),
     /// Project reserve lifecycle stage and automatic credit draw state.
     Lifecycle(ReserveLifecycleArgs),
-    /// Submit a signed local reserve top-up movement intent to Torii.
-    TopUp(ReserveMovementSubmitArgs),
-    /// Submit a signed local reserve withdrawal movement intent to Torii.
-    Withdraw(ReserveMovementSubmitArgs),
-    /// List signed visible local reserve movement records.
-    Movements(ReserveMovementsArgs),
-    /// Fetch signed visible local reserve balance status for one provider.
-    Status(ReserveStatusArgs),
-    /// Attach signed chain custody status evidence to a local reserve movement.
-    Custody(ReserveCustodyArgs),
-    /// List signed visible local reserve credit-line states.
-    CreditLines(ReserveCreditLinesArgs),
-    /// Fetch signed visible local reserve credit-line state for one provider.
-    CreditStatus(ReserveCreditStatusArgs),
-    /// Submit a signed local reserve lifecycle appeal.
-    AppealSubmit(ReserveAppealSubmitArgs),
-    /// List signed visible local reserve appeals.
-    Appeals(ReserveAppealsArgs),
-    /// Attach a signed decision to a local reserve appeal.
-    AppealDecide(ReserveAppealDecideArgs),
-    /// Submit a signed local reserve lifecycle policy update.
-    PolicyUpdate(ReservePolicyUpdateArgs),
-    /// Fetch signed local reserve lifecycle policy state.
-    Policy(ReservePolicyArgs),
 }
 
 impl Run for ReserveCommand {
@@ -552,18 +527,6 @@ impl Run for ReserveCommand {
             Self::Quote(args) => args.run(context),
             Self::Ledger(args) => args.run(context),
             Self::Lifecycle(args) => args.run(context),
-            Self::TopUp(args) => args.run_top_up(context),
-            Self::Withdraw(args) => args.run_withdrawal(context),
-            Self::Movements(args) => args.run(context),
-            Self::Status(args) => args.run(context),
-            Self::Custody(args) => args.run(context),
-            Self::CreditLines(args) => args.run(context),
-            Self::CreditStatus(args) => args.run(context),
-            Self::AppealSubmit(args) => args.run(context),
-            Self::Appeals(args) => args.run(context),
-            Self::AppealDecide(args) => args.run(context),
-            Self::PolicyUpdate(args) => args.run(context),
-            Self::Policy(args) => args.run(context),
         }
     }
 }
@@ -1800,7 +1763,7 @@ impl TransparencySourceEntryCanaryArgs {
 
 #[derive(clap::Subcommand, Debug)]
 pub enum ModerationCommand {
-    /// Inspect and advance local moderation committee ballots.
+    /// Inspect finalized moderation cases and submit native ledger actions.
     #[command(subcommand)]
     Ballots(ModerationBallotsCommand),
     /// Admit and inspect local moderation model registry records.
@@ -1827,20 +1790,20 @@ impl Run for ModerationCommand {
 
 #[derive(clap::Subcommand, Debug)]
 pub enum ModerationBallotsCommand {
-    /// List local moderation ballot records.
+    /// List finalized chain-authoritative moderation case projections.
     List(ModerationBallotsListArgs),
-    /// Get one local moderation ballot record.
+    /// Get one finalized chain-authoritative moderation case projection.
     Get(ModerationBallotsGetArgs),
     /// Get the payload-free no-show plan for one closed moderation ballot.
     #[command(name = "no-show-plan")]
     NoShowPlan(ModerationBallotsNoShowPlanArgs),
-    /// List local moderation ballot governance events.
+    /// List typed committed moderation events.
     Events(ModerationBallotsEventsArgs),
-    /// Submit a juror ballot commit payload.
+    /// Submit a juror commit as an exact caller-signed native transaction.
     Commit(ModerationBallotsCommitArgs),
-    /// Submit a juror ballot reveal payload.
+    /// Submit a juror reveal as an exact caller-signed native transaction.
     Reveal(ModerationBallotsRevealArgs),
-    /// Finalize a local moderation ballot tally.
+    /// Submit governed native moderation finalization.
     Tally(ModerationBallotsTallyArgs),
     /// Execute pending commit/reveal/tally actions from a coordination status.
     Execute(ModerationBallotsExecuteArgs),
@@ -2009,12 +1972,13 @@ impl ModerationBallotsCommitArgs {
     fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
     where
         C: RunContext,
-        F: FnOnce(&Client, &SoraFsModerationBallotCommitV1) -> Result<Response<Vec<u8>>>,
+        F: FnOnce(&Client, &SignedTransaction) -> Result<HashOf<SignedTransaction>>,
     {
         let commit = load_moderation_ballot_commit_payload(&self.payload, self.format.as_str())?;
         let client = context.client_from_config();
-        let response = submit(&client, &commit)?;
-        render_json_response_ok_or_accepted(context, response)
+        let transaction = build_moderation_commit_transaction(&client, &commit)?;
+        let hash = submit(&client, &transaction)?;
+        render_moderation_transaction_hash(context, &hash)
     }
 }
 
@@ -2038,12 +2002,13 @@ impl ModerationBallotsRevealArgs {
     fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
     where
         C: RunContext,
-        F: FnOnce(&Client, &SoraFsModerationBallotRevealV1) -> Result<Response<Vec<u8>>>,
+        F: FnOnce(&Client, &SignedTransaction) -> Result<HashOf<SignedTransaction>>,
     {
         let reveal = load_moderation_ballot_reveal_payload(&self.payload, self.format.as_str())?;
         let client = context.client_from_config();
-        let response = submit(&client, &reveal)?;
-        render_json_response_ok_or_accepted(context, response)
+        let transaction = build_moderation_reveal_transaction(&client, &reveal)?;
+        let hash = submit(&client, &transaction)?;
+        render_moderation_transaction_hash(context, &hash)
     }
 }
 
@@ -2067,17 +2032,14 @@ impl ModerationBallotsTallyArgs {
     fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
     where
         C: RunContext,
-        F: FnOnce(&Client, &SorafsModerationBallotTallyRequest<'_>) -> Result<Response<Vec<u8>>>,
+        F: FnOnce(&Client, &SignedTransaction) -> Result<HashOf<SignedTransaction>>,
     {
         let case_id = required_trimmed_text(&self.case_id, "--case-id")?;
         let round_id = required_trimmed_text(&self.round_id, "--round-id")?;
-        let request = SorafsModerationBallotTallyRequest {
-            case_id: case_id.as_str(),
-            round_id: round_id.as_str(),
-        };
         let client = context.client_from_config();
-        let response = submit(&client, &request)?;
-        render_json_response_ok_or_accepted(context, response)
+        let transaction = build_moderation_finalization_transaction(&client, case_id, round_id)?;
+        let hash = submit(&client, &transaction)?;
+        render_moderation_transaction_hash(context, &hash)
     }
 }
 
@@ -2124,10 +2086,9 @@ impl ModerationBallotsExecuteArgs {
     ) -> Result<()>
     where
         C: RunContext,
-        FCommit: FnMut(&Client, &SoraFsModerationBallotCommitV1) -> Result<Response<Vec<u8>>>,
-        FReveal: FnMut(&Client, &SoraFsModerationBallotRevealV1) -> Result<Response<Vec<u8>>>,
-        FTally:
-            FnMut(&Client, &SorafsModerationBallotTallyRequest<'_>) -> Result<Response<Vec<u8>>>,
+        FCommit: FnMut(&Client, &SignedTransaction) -> Result<HashOf<SignedTransaction>>,
+        FReveal: FnMut(&Client, &SignedTransaction) -> Result<HashOf<SignedTransaction>>,
+        FTally: FnMut(&Client, &SignedTransaction) -> Result<HashOf<SignedTransaction>>,
     {
         if self.commit_payloads.is_empty() && self.reveal_payloads.is_empty() && !self.submit_tally
         {
@@ -2152,13 +2113,14 @@ impl ModerationBallotsExecuteArgs {
                     key.round_id
                 ));
             }
-            let response = submit_commit(&client, &commit)?;
+            let transaction = build_moderation_commit_transaction(&client, &commit)?;
+            let hash = submit_commit(&client, &transaction)?;
             actions.push(moderation_ballot_execution_action_json(
                 "commit",
                 &key.case_id,
                 &key.round_id,
                 Some(&key.juror_id),
-                response,
+                &hash,
             )?);
         }
 
@@ -2173,25 +2135,24 @@ impl ModerationBallotsExecuteArgs {
                     key.round_id
                 ));
             }
-            let response = submit_reveal(&client, &reveal)?;
+            let transaction = build_moderation_reveal_transaction(&client, &reveal)?;
+            let hash = submit_reveal(&client, &transaction)?;
             actions.push(moderation_ballot_execution_action_json(
                 "reveal",
                 &key.case_id,
                 &key.round_id,
                 Some(&key.juror_id),
-                response,
+                &hash,
             )?);
         }
 
         if self.submit_tally {
             for (case_id, round_id) in &coordination.tally_ready {
-                let request = SorafsModerationBallotTallyRequest {
-                    case_id: case_id.as_str(),
-                    round_id: round_id.as_str(),
-                };
-                let response = submit_tally(&client, &request)?;
+                let transaction =
+                    build_moderation_finalization_transaction(&client, case_id, round_id)?;
+                let hash = submit_tally(&client, &transaction)?;
                 actions.push(moderation_ballot_execution_action_json(
-                    "tally", case_id, round_id, None, response,
+                    "tally", case_id, round_id, None, &hash,
                 )?);
             }
         }
@@ -2536,8 +2497,6 @@ pub enum ModerationQuarantineCommand {
     Release(ModerationQuarantineReleaseArgs),
     /// Build a reviewed quarantine appeal finance handoff.
     AppealHandoff(ModerationQuarantineAppealHandoffArgs),
-    /// Announce a reviewed quarantine appeal ballot from a confirmed deposit.
-    AppealBallot(ModerationQuarantineAppealBallotArgs),
     /// Read one role-gated local quarantine operator-panel workflow view.
     OperatorPanel(ModerationQuarantineOperatorPanelArgs),
     /// Build a payload-free bridge automation plan from the operator-panel view.
@@ -2557,7 +2516,6 @@ impl Run for ModerationQuarantineCommand {
             Self::Review(args) => args.run(context),
             Self::Release(args) => args.run(context),
             Self::AppealHandoff(args) => args.run(context),
-            Self::AppealBallot(args) => args.run(context),
             Self::OperatorPanel(args) => args.run(context),
             Self::BridgePlan(args) => args.run(context),
             Self::OperatorServe(args) => args.run(context),
@@ -3092,39 +3050,6 @@ impl ModerationQuarantineAppealHandoffArgs {
         let client = context.client_from_config();
         let response = submit(&client, &quarantine_id, &payload)?;
         render_json_response(context, response)
-    }
-}
-
-#[derive(clap::Args, Debug)]
-pub struct ModerationQuarantineAppealBallotArgs {
-    /// 16-byte local quarantine id encoded as hexadecimal.
-    #[arg(long = "quarantine-id", value_name = "HEX")]
-    quarantine_id: String,
-    /// JSON appeal ballot announcement payload path.
-    #[arg(long = "input", value_name = "PATH")]
-    input: PathBuf,
-}
-
-impl Run for ModerationQuarantineAppealBallotArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(
-            context,
-            Client::post_sorafs_moderation_quarantine_appeal_ballot_json,
-        )
-    }
-}
-
-impl ModerationQuarantineAppealBallotArgs {
-    fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
-    where
-        C: RunContext,
-        F: FnOnce(&Client, &str, &[u8]) -> Result<Response<Vec<u8>>>,
-    {
-        let quarantine_id = normalize_hex_digest::<16>(&self.quarantine_id, "--quarantine-id")?;
-        let payload = load_sorafs_json_payload(&self.input, "moderation quarantine appeal ballot")?;
-        let client = context.client_from_config();
-        let response = submit(&client, &quarantine_id, &payload)?;
-        render_json_response_ok_or_accepted(context, response)
     }
 }
 
@@ -4153,428 +4078,6 @@ impl ReserveLifecycleArgs {
             .wrap_err("failed to compute reserve lifecycle projection")?;
         let value = build_reserve_lifecycle_value(&self.quote_path, &lifecycle)?;
         context.print_data(&value)
-    }
-}
-
-#[derive(clap::Args, Debug)]
-pub struct ReserveMovementSubmitArgs {
-    /// Hex-encoded provider identifier.
-    #[arg(long = "provider-id-hex", value_name = "HEX")]
-    provider_id_hex: String,
-    /// Provider account submitting the signed movement.
-    #[arg(long = "provider-account", value_name = "ACCOUNT_ID")]
-    provider_account: String,
-    /// Reserve escrow account for the provider.
-    #[arg(long = "reserve-account", value_name = "ACCOUNT_ID")]
-    reserve_account: String,
-    /// Asset definition identifier used for the reserve transfer.
-    #[arg(long = "asset-definition", value_name = "AID")]
-    asset_definition: String,
-    /// Movement amount as a canonical XOR decimal (up to 9 fractional digits).
-    #[arg(long = "amount", value_name = "XOR")]
-    amount: String,
-    /// Idempotency key for safe retries.
-    #[arg(long = "idempotency-key", value_name = "TEXT")]
-    idempotency_key: String,
-    /// Optional observation timestamp in Unix seconds.
-    #[arg(long = "observed-at-unix", value_name = "SECONDS")]
-    observed_at_unix: Option<u64>,
-}
-
-impl ReserveMovementSubmitArgs {
-    fn run_top_up<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(context, Client::post_sorafs_reserve_top_up_json)
-    }
-
-    fn run_withdrawal<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(context, Client::post_sorafs_reserve_withdrawal_json)
-    }
-
-    fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
-    where
-        C: RunContext,
-        F: FnOnce(&Client, &[u8]) -> Result<Response<Vec<u8>>>,
-    {
-        let payload = build_reserve_movement_request_value(context, self)?;
-        let body = norito::json::to_vec(&payload)
-            .wrap_err("failed to encode reserve movement request JSON")?;
-        let client = context.client_from_config();
-        let response = submit(&client, &body)?;
-        render_json_response_ok_or_accepted(context, response)
-    }
-}
-
-#[derive(clap::Args, Debug)]
-pub struct ReserveMovementsArgs {
-    /// Optional movement sequence to resume from.
-    #[arg(long = "since", value_name = "SEQUENCE")]
-    since: Option<u64>,
-    /// Maximum number of movement records to return.
-    #[arg(long = "limit", value_name = "COUNT")]
-    limit: Option<u32>,
-}
-
-impl Run for ReserveMovementsArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(context, Client::get_sorafs_reserve_movements)
-    }
-}
-
-impl ReserveMovementsArgs {
-    fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
-    where
-        C: RunContext,
-        F: FnOnce(&Client, SorafsReserveMovementReadbackFilter) -> Result<Response<Vec<u8>>>,
-    {
-        let filter = SorafsReserveMovementReadbackFilter {
-            since: self.since,
-            limit: self.limit,
-        };
-        let client = context.client_from_config();
-        let response = get(&client, filter)?;
-        render_json_response(context, response)
-    }
-}
-
-#[derive(clap::Args, Debug)]
-pub struct ReserveStatusArgs {
-    /// Hex-encoded provider identifier.
-    #[arg(long = "provider-id-hex", value_name = "HEX")]
-    provider_id_hex: String,
-}
-
-impl Run for ReserveStatusArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(context, Client::get_sorafs_reserve_balance)
-    }
-}
-
-impl ReserveStatusArgs {
-    fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
-    where
-        C: RunContext,
-        F: FnOnce(&Client, &str) -> Result<Response<Vec<u8>>>,
-    {
-        let provider_id_hex = normalize_hex_32_lower(&self.provider_id_hex, "--provider-id-hex")?;
-        let client = context.client_from_config();
-        let response = get(&client, &provider_id_hex)?;
-        render_json_response(context, response)
-    }
-}
-
-#[derive(clap::Args, Debug)]
-pub struct ReserveCreditLinesArgs {
-    /// Maximum number of credit-line states to return.
-    #[arg(long = "limit", value_name = "COUNT")]
-    limit: Option<u32>,
-}
-
-impl Run for ReserveCreditLinesArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(context, Client::get_sorafs_reserve_credit_lines)
-    }
-}
-
-impl ReserveCreditLinesArgs {
-    fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
-    where
-        C: RunContext,
-        F: FnOnce(&Client, SorafsReserveCreditLineReadbackFilter) -> Result<Response<Vec<u8>>>,
-    {
-        let filter = SorafsReserveCreditLineReadbackFilter { limit: self.limit };
-        let client = context.client_from_config();
-        let response = get(&client, filter)?;
-        render_json_response(context, response)
-    }
-}
-
-#[derive(clap::Args, Debug)]
-pub struct ReserveCreditStatusArgs {
-    /// Hex-encoded provider identifier.
-    #[arg(long = "provider-id-hex", value_name = "HEX")]
-    provider_id_hex: String,
-}
-
-impl Run for ReserveCreditStatusArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(context, Client::get_sorafs_reserve_credit_line)
-    }
-}
-
-impl ReserveCreditStatusArgs {
-    fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
-    where
-        C: RunContext,
-        F: FnOnce(&Client, &str) -> Result<Response<Vec<u8>>>,
-    {
-        let provider_id_hex = normalize_hex_32_lower(&self.provider_id_hex, "--provider-id-hex")?;
-        let client = context.client_from_config();
-        let response = get(&client, &provider_id_hex)?;
-        render_json_response(context, response)
-    }
-}
-
-#[derive(clap::Args, Debug)]
-pub struct ReserveCustodyArgs {
-    /// Hex-encoded reserve movement identifier.
-    #[arg(long = "movement-id-hex", value_name = "HEX")]
-    movement_id_hex: String,
-    /// Custody status to attach to the movement.
-    #[arg(long = "status", value_enum, value_name = "STATUS")]
-    status: ReserveCustodyStatusArg,
-    /// Hex-encoded chain transaction hash for the custody status.
-    #[arg(long = "tx-hash-hex", value_name = "HEX")]
-    tx_hash_hex: String,
-    /// Optional observation timestamp in Unix seconds.
-    #[arg(long = "observed-at-unix", value_name = "SECONDS")]
-    observed_at_unix: Option<u64>,
-}
-
-impl Run for ReserveCustodyArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(context, Client::post_sorafs_reserve_movement_custody_json)
-    }
-}
-
-impl ReserveCustodyArgs {
-    fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
-    where
-        C: RunContext,
-        F: FnOnce(&Client, &str, &[u8]) -> Result<Response<Vec<u8>>>,
-    {
-        let (movement_id_hex, payload) = build_reserve_movement_custody_value(self)?;
-        let body = norito::json::to_vec(&payload)
-            .wrap_err("failed to encode reserve movement custody JSON")?;
-        let client = context.client_from_config();
-        let response = submit(&client, &movement_id_hex, &body)?;
-        render_json_response_ok_or_accepted(context, response)
-    }
-}
-
-#[derive(clap::Args, Debug)]
-pub struct ReserveAppealSubmitArgs {
-    /// Hex-encoded provider identifier.
-    #[arg(long = "provider-id-hex", value_name = "HEX")]
-    provider_id_hex: String,
-    /// Provider account submitting the signed appeal.
-    #[arg(long = "provider-account", value_name = "ACCOUNT_ID")]
-    provider_account: String,
-    /// Requested lifecycle stage override.
-    #[arg(long = "requested-stage", value_enum, value_name = "STAGE")]
-    requested_stage: Option<ReserveLifecycleStageArg>,
-    /// Appeal reason to record.
-    #[arg(long = "reason", value_name = "TEXT")]
-    reason: String,
-    /// Optional payload-free evidence digest.
-    #[arg(long = "evidence-digest-hex", value_name = "HEX")]
-    evidence_digest_hex: Option<String>,
-    /// Idempotency key for safe retries.
-    #[arg(long = "idempotency-key", value_name = "TEXT")]
-    idempotency_key: String,
-    /// Optional observation timestamp in Unix seconds.
-    #[arg(long = "observed-at-unix", value_name = "SECONDS")]
-    observed_at_unix: Option<u64>,
-}
-
-impl Run for ReserveAppealSubmitArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(context, Client::post_sorafs_reserve_appeal_json)
-    }
-}
-
-impl ReserveAppealSubmitArgs {
-    fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
-    where
-        C: RunContext,
-        F: FnOnce(&Client, &[u8]) -> Result<Response<Vec<u8>>>,
-    {
-        let payload = build_reserve_appeal_request_value(context, self)?;
-        let body =
-            norito::json::to_vec(&payload).wrap_err("failed to encode reserve appeal JSON")?;
-        let client = context.client_from_config();
-        let response = submit(&client, &body)?;
-        render_json_response_ok_or_accepted(context, response)
-    }
-}
-
-#[derive(clap::Args, Debug)]
-pub struct ReserveAppealsArgs {
-    /// Maximum number of appeal records to return.
-    #[arg(long = "limit", value_name = "COUNT")]
-    limit: Option<u32>,
-}
-
-impl Run for ReserveAppealsArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(context, Client::get_sorafs_reserve_appeals)
-    }
-}
-
-impl ReserveAppealsArgs {
-    fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
-    where
-        C: RunContext,
-        F: FnOnce(&Client, SorafsReserveAppealReadbackFilter) -> Result<Response<Vec<u8>>>,
-    {
-        let filter = SorafsReserveAppealReadbackFilter { limit: self.limit };
-        let client = context.client_from_config();
-        let response = get(&client, filter)?;
-        render_json_response(context, response)
-    }
-}
-
-#[derive(clap::Args, Debug)]
-pub struct ReserveAppealDecideArgs {
-    /// Hex-encoded reserve appeal identifier.
-    #[arg(long = "appeal-id-hex", value_name = "HEX")]
-    appeal_id_hex: String,
-    /// Final appeal decision status.
-    #[arg(long = "status", value_enum, value_name = "STATUS")]
-    status: ReserveAppealDecisionStatusArg,
-    /// Account signing the appeal decision.
-    #[arg(long = "decision-account", value_name = "ACCOUNT_ID")]
-    decision_account: String,
-    /// Decision rationale to record.
-    #[arg(long = "rationale", value_name = "TEXT")]
-    rationale: String,
-    /// Optional observation timestamp in Unix seconds.
-    #[arg(long = "observed-at-unix", value_name = "SECONDS")]
-    observed_at_unix: Option<u64>,
-}
-
-impl Run for ReserveAppealDecideArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(context, Client::post_sorafs_reserve_appeal_decision_json)
-    }
-}
-
-impl ReserveAppealDecideArgs {
-    fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
-    where
-        C: RunContext,
-        F: FnOnce(&Client, &str, &[u8]) -> Result<Response<Vec<u8>>>,
-    {
-        let (appeal_id_hex, payload) = build_reserve_appeal_decision_value(context, self)?;
-        let body = norito::json::to_vec(&payload)
-            .wrap_err("failed to encode reserve appeal decision JSON")?;
-        let client = context.client_from_config();
-        let response = submit(&client, &appeal_id_hex, &body)?;
-        render_json_response_ok_or_accepted(context, response)
-    }
-}
-
-#[derive(clap::Args, Debug)]
-pub struct ReservePolicyUpdateArgs {
-    /// Account signing the policy update.
-    #[arg(long = "authority-account", value_name = "ACCOUNT_ID")]
-    authority_account: String,
-    /// Grace window before delinquency.
-    #[arg(long = "grace-days", value_name = "DAYS")]
-    grace_period_days: u16,
-    /// Default threshold after the due date.
-    #[arg(long = "default-after-days", value_name = "DAYS")]
-    default_after_days: u16,
-    /// Unix timestamp when the policy becomes effective.
-    #[arg(long = "effective-at-unix", value_name = "SECONDS")]
-    effective_at_unix: u64,
-    /// Policy update reason to record.
-    #[arg(long = "reason", value_name = "TEXT")]
-    reason: String,
-    /// Idempotency key for safe retries.
-    #[arg(long = "idempotency-key", value_name = "TEXT")]
-    idempotency_key: String,
-    /// Optional observation timestamp in Unix seconds.
-    #[arg(long = "observed-at-unix", value_name = "SECONDS")]
-    observed_at_unix: Option<u64>,
-}
-
-impl Run for ReservePolicyUpdateArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(context, Client::post_sorafs_reserve_lifecycle_policy_json)
-    }
-}
-
-impl ReservePolicyUpdateArgs {
-    fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
-    where
-        C: RunContext,
-        F: FnOnce(&Client, &[u8]) -> Result<Response<Vec<u8>>>,
-    {
-        let payload = build_reserve_lifecycle_policy_value(context, self)?;
-        let body = norito::json::to_vec(&payload)
-            .wrap_err("failed to encode reserve lifecycle policy JSON")?;
-        let client = context.client_from_config();
-        let response = submit(&client, &body)?;
-        render_json_response_ok_or_accepted(context, response)
-    }
-}
-
-#[derive(clap::Args, Debug)]
-pub struct ReservePolicyArgs {
-    /// Maximum number of policy records to return.
-    #[arg(long = "limit", value_name = "COUNT")]
-    limit: Option<u32>,
-}
-
-impl Run for ReservePolicyArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(context, Client::get_sorafs_reserve_lifecycle_policy)
-    }
-}
-
-impl ReservePolicyArgs {
-    fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
-    where
-        C: RunContext,
-        F: FnOnce(&Client, SorafsReserveLifecyclePolicyReadbackFilter) -> Result<Response<Vec<u8>>>,
-    {
-        let filter = SorafsReserveLifecyclePolicyReadbackFilter { limit: self.limit };
-        let client = context.client_from_config();
-        let response = get(&client, filter)?;
-        render_json_response(context, response)
-    }
-}
-
-#[derive(clap::ValueEnum, Clone, Copy, Debug)]
-enum ReserveLifecycleStageArg {
-    /// Active reserve state.
-    Active,
-    /// Warning reserve state.
-    Warning,
-    /// Grace reserve state.
-    Grace,
-    /// Delinquent reserve state.
-    Delinquent,
-    /// Default reserve state.
-    Default,
-}
-
-impl ReserveLifecycleStageArg {
-    const fn label(self) -> &'static str {
-        match self {
-            Self::Active => "active",
-            Self::Warning => "warning",
-            Self::Grace => "grace",
-            Self::Delinquent => "delinquent",
-            Self::Default => "default",
-        }
-    }
-}
-
-#[derive(clap::ValueEnum, Clone, Copy, Debug)]
-enum ReserveAppealDecisionStatusArg {
-    /// Accept the appeal.
-    Accepted,
-    /// Reject the appeal.
-    Rejected,
-}
-
-impl ReserveAppealDecisionStatusArg {
-    const fn label(self) -> &'static str {
-        match self {
-            Self::Accepted => "accepted",
-            Self::Rejected => "rejected",
-        }
     }
 }
 
@@ -9657,6 +9160,9 @@ fn xml_escape(value: &str) -> String {
     out
 }
 
+const MODERATION_NATIVE_ACTION_INPUT_MAX_BYTES_V1: usize = 2 * 1024 * 1024;
+const MODERATION_COORDINATION_STATUS_MAX_BYTES_V1: usize = 4 * 1024 * 1024;
+
 fn load_moderation_ballot_commit_payload(
     path: &Path,
     format: &str,
@@ -9712,34 +9218,19 @@ fn load_moderation_ballot_reveal_payload(
 }
 
 fn read_moderation_ballot_payload_file(path: &Path) -> Result<Vec<u8>> {
-    let bytes = fs::read(path).wrap_err_with(|| {
-        format!(
-            "failed to read moderation ballot payload `{}`",
-            path.display()
-        )
-    })?;
-    if bytes.is_empty() {
-        return Err(eyre!(
-            "moderation ballot payload `{}` must not be empty",
-            path.display()
-        ));
-    }
-    Ok(bytes)
+    read_bounded_moderation_file(
+        path,
+        "moderation ballot payload",
+        MODERATION_NATIVE_ACTION_INPUT_MAX_BYTES_V1,
+    )
 }
 
 fn load_moderation_commit_reveal_status_payload(path: &Path) -> Result<Value> {
-    let bytes = fs::read(path).wrap_err_with(|| {
-        format!(
-            "failed to read moderation commit/reveal status `{}`",
-            path.display()
-        )
-    })?;
-    if bytes.is_empty() {
-        return Err(eyre!(
-            "moderation commit/reveal status `{}` must not be empty",
-            path.display()
-        ));
-    }
+    let bytes = read_bounded_moderation_file(
+        path,
+        "moderation commit/reveal status",
+        MODERATION_COORDINATION_STATUS_MAX_BYTES_V1,
+    )?;
     let status: Value = norito::json::from_slice(&bytes).wrap_err_with(|| {
         format!(
             "failed to parse moderation commit/reveal status JSON `{}`",
@@ -9748,6 +9239,26 @@ fn load_moderation_commit_reveal_status_payload(path: &Path) -> Result<Value> {
     })?;
     ensure_moderation_bridge_plan_has_no_payload(&status)?;
     Ok(status)
+}
+
+fn read_bounded_moderation_file(path: &Path, label: &str, maximum: usize) -> Result<Vec<u8>> {
+    let metadata = fs::metadata(path)
+        .wrap_err_with(|| format!("failed to inspect {label} `{}`", path.display()))?;
+    if metadata.len() == 0 || metadata.len() > maximum as u64 {
+        return Err(eyre!(
+            "{label} `{}` must contain between 1 and {maximum} bytes",
+            path.display(),
+        ));
+    }
+    let bytes =
+        fs::read(path).wrap_err_with(|| format!("failed to read {label} `{}`", path.display()))?;
+    if bytes.is_empty() || bytes.len() > maximum {
+        return Err(eyre!(
+            "{label} `{}` must contain between 1 and {maximum} bytes",
+            path.display(),
+        ));
+    }
+    Ok(bytes)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -9860,18 +9371,81 @@ fn moderation_commit_reveal_juror_list<'a>(
         .collect()
 }
 
+fn build_moderation_commit_transaction(
+    client: &Client,
+    commit: &SoraFsModerationBallotCommitV1,
+) -> Result<SignedTransaction> {
+    commit
+        .validate()
+        .wrap_err("moderation ballot commit validation failed")?;
+    if commit.committed_at_unix_ms != 0 {
+        return Err(eyre!(
+            "moderation commit committed_at_unix_ms must be zero; the ledger records the accepted timestamp"
+        ));
+    }
+    if commit.juror_id != client.account.to_string() {
+        return Err(eyre!(
+            "moderation commit juror_id must equal the configured transaction authority"
+        ));
+    }
+    let payload = norito::to_bytes(commit).wrap_err("encode canonical moderation commit")?;
+    client
+        .try_build_sorafs_moderation_transaction(SubmitSorafsModerationCommit::new(payload))
+        .wrap_err("build caller-signed native moderation commit transaction")
+}
+
+fn build_moderation_reveal_transaction(
+    client: &Client,
+    reveal: &SoraFsModerationBallotRevealV1,
+) -> Result<SignedTransaction> {
+    reveal
+        .validate()
+        .wrap_err("moderation ballot reveal validation failed")?;
+    if reveal.revealed_at_unix_ms != 0 {
+        return Err(eyre!(
+            "moderation reveal revealed_at_unix_ms must be zero; the ledger records the accepted timestamp"
+        ));
+    }
+    if reveal.juror_id != client.account.to_string() {
+        return Err(eyre!(
+            "moderation reveal juror_id must equal the configured transaction authority"
+        ));
+    }
+    let payload = norito::to_bytes(reveal).wrap_err("encode canonical moderation reveal")?;
+    client
+        .try_build_sorafs_moderation_transaction(SubmitSorafsModerationReveal::new(payload))
+        .wrap_err("build caller-signed native moderation reveal transaction")
+}
+
+fn build_moderation_finalization_transaction(
+    client: &Client,
+    case_id: impl Into<String>,
+    round_id: impl Into<String>,
+) -> Result<SignedTransaction> {
+    client
+        .try_build_sorafs_moderation_transaction(FinalizeSorafsModerationCase::new(
+            case_id.into(),
+            round_id.into(),
+        ))
+        .wrap_err("build governed native moderation finalization transaction")
+}
+
+fn render_moderation_transaction_hash<C: RunContext>(
+    context: &mut C,
+    hash: &HashOf<SignedTransaction>,
+) -> Result<()> {
+    context.print_data(&norito::json!({
+        "transaction_hash_hex": (encode(hash.as_ref()))
+    }))
+}
+
 fn moderation_ballot_execution_action_json(
     action: &str,
     case_id: &str,
     round_id: &str,
     juror_id: Option<&str>,
-    response: Response<Vec<u8>>,
+    hash: &HashOf<SignedTransaction>,
 ) -> Result<Value> {
-    let status = response.status();
-    let body = response.into_body();
-    if !matches!(status, StatusCode::OK | StatusCode::ACCEPTED) {
-        return Err(make_http_error(status, &body));
-    }
     let mut fields = Map::new();
     fields.insert("action".into(), Value::from(action.to_string()));
     fields.insert("case_id".into(), Value::from(case_id.to_string()));
@@ -9881,16 +9455,8 @@ fn moderation_ballot_execution_action_json(
         juror_id.map_or(Value::Null, |value| Value::from(value.to_string())),
     );
     fields.insert(
-        "response_status".into(),
-        Value::from(u64::from(status.as_u16())),
-    );
-    fields.insert(
-        "response_bytes".into(),
-        Value::from(u64::try_from(body.len()).unwrap_or(u64::MAX)),
-    );
-    fields.insert(
-        "response_body_blake3".into(),
-        Value::from(encode(blake3::hash(&body).as_bytes())),
+        "transaction_hash_hex".into(),
+        Value::from(encode(hash.as_ref())),
     );
     fields.insert("payload_bytes_included".into(), Value::Bool(false));
     fields.insert("private_payloads_included".into(), Value::Bool(false));
@@ -10542,6 +10108,31 @@ fn moderation_ballots_executor_canary_execution_summary(path: &Path) -> Result<V
         .unwrap_or(&[]);
     for action in actions {
         let action_fields = value_object(action, "moderation ballots executor action summary")?;
+        let transaction_hash_hex = required_string_field(
+            action_fields,
+            "transaction_hash_hex",
+            "moderation ballots executor action summary",
+        )?;
+        let canonical_transaction_hash = normalize_hex_digest::<32>(
+            transaction_hash_hex,
+            "moderation ballots executor action transaction_hash_hex",
+        )?;
+        if transaction_hash_hex != canonical_transaction_hash {
+            return Err(eyre!(
+                "moderation ballots executor action transaction_hash_hex must be canonical lowercase hex"
+            ));
+        }
+        for stale_field in [
+            "response_status",
+            "response_bytes",
+            "response_body_blake3",
+        ] {
+            if action_fields.contains_key(stale_field) {
+                return Err(eyre!(
+                    "moderation ballots executor action must not contain legacy `{stale_field}`"
+                ));
+            }
+        }
         require_json_bool_false(
             action_fields,
             "payload_bytes_included",
@@ -17950,29 +17541,29 @@ fn moderation_quarantine_bridge_plan_json(quarantine_id_hex: &str, panel: &Value
     let record_obj = value_object(record, "operator panel record")?;
     let record_state = required_string_field(record_obj, "state", "operator panel record")?;
     let object_status = required_string_field(root, "object_status", "operator panel response")?;
-    let ballot_count = root
-        .get("ballot_count")
+    let case_count = root
+        .get("case_count")
         .and_then(Value::as_u64)
         .unwrap_or_default();
-    let returned_ballot_count = root
-        .get("returned_ballot_count")
+    let returned_case_count = root
+        .get("returned_case_count")
         .and_then(Value::as_u64)
         .unwrap_or_default();
     let next_actions = root
         .get("next_actions")
         .and_then(Value::as_array)
         .ok_or_else(|| eyre!("operator panel response is missing `next_actions` array"))?;
-    let ballots = root
-        .get("ballots")
+    let cases = root
+        .get("cases")
         .and_then(Value::as_array)
         .map(Vec::as_slice)
         .unwrap_or(&[]);
-    let ballot_ref = first_moderation_ballot_reference(ballots);
+    let case_ref = first_moderation_case_reference(cases);
     let mut actions = Vec::with_capacity(next_actions.len());
     let mut required_count = 0_u64;
     for (index, action) in next_actions.iter().enumerate() {
         let planned =
-            moderation_quarantine_bridge_action_json(index, action, quarantine_id_hex, ballot_ref)?;
+            moderation_quarantine_bridge_action_json(index, action, quarantine_id_hex, case_ref)?;
         if planned
             .as_object()
             .and_then(|fields| fields.get("required"))
@@ -18000,10 +17591,10 @@ fn moderation_quarantine_bridge_plan_json(quarantine_id_hex: &str, panel: &Value
         "object_status".into(),
         Value::from(object_status.to_string()),
     );
-    plan.insert("ballot_count".into(), Value::from(ballot_count));
+    plan.insert("case_count".into(), Value::from(case_count));
     plan.insert(
-        "returned_ballot_count".into(),
-        Value::from(returned_ballot_count),
+        "returned_case_count".into(),
+        Value::from(returned_case_count),
     );
     plan.insert("action_count".into(), Value::from(actions.len() as u64));
     plan.insert("required_action_count".into(), Value::from(required_count));
@@ -18061,8 +17652,9 @@ fn moderation_quarantine_bridge_action_status(action: &str, required: bool) -> &
         }
         "review" => "operator_review_required",
         "appeal_handoff" => "ready_for_appeal_finance_handoff",
-        "appeal_ballot" => "ready_after_confirmed_deposit",
-        "collect_commits_reveals_tally" => "waiting_for_commit_reveal_tally",
+        "submit_native_appeal_intake" => "ready_for_caller_signed_native_appeal",
+        "await_chain_sortition_activation" => "waiting_for_finalized_chain_activation",
+        "submit_native_case_actions" => "waiting_for_native_commit_reveal_finalization",
         "publish_transparency_source_entry" => "ready_for_transparency_source_entry",
         "release_complete" => "complete",
         _ => "operator_attention_required",
@@ -18118,18 +17710,23 @@ fn moderation_quarantine_bridge_action_cli(
             "--input",
             "<appeal-handoff.json>",
         ]),
-        "appeal_ballot" => command(&[
+        "submit_native_appeal_intake" => command(&[
+            "iroha",
+            "transaction",
+            "submit",
+            "--file",
+            "<signed-native-moderation-appeal.norito>",
+        ]),
+        "await_chain_sortition_activation" => command(&[
             "iroha",
             "sorafs",
             "moderation",
-            "quarantine",
-            "appeal-ballot",
-            "--quarantine-id",
-            quarantine_id_hex,
-            "--input",
-            "<appeal-ballot.json>",
+            "ballots",
+            "events",
+            "--limit",
+            "25",
         ]),
-        "collect_commits_reveals_tally" => {
+        "submit_native_case_actions" => {
             if let Some((case_id, round_id)) = ballot_ref {
                 command(&[
                     "iroha",
@@ -18196,19 +17793,19 @@ fn moderation_quarantine_juror_plan_json(quarantine_id_hex: &str, panel: &Value)
         ));
     }
     let ballot_count = root
-        .get("ballot_count")
+        .get("case_count")
         .and_then(Value::as_u64)
         .unwrap_or_default();
     let returned_ballot_count = root
-        .get("returned_ballot_count")
+        .get("returned_case_count")
         .and_then(Value::as_u64)
         .unwrap_or_default();
     let truncated_ballots = root
-        .get("truncated_ballots")
+        .get("truncated_cases")
         .and_then(Value::as_bool)
         .unwrap_or(false);
     let ballots = root
-        .get("ballots")
+        .get("cases")
         .and_then(Value::as_array)
         .map(Vec::as_slice)
         .unwrap_or(&[]);
@@ -18563,17 +18160,19 @@ fn moderation_quarantine_commit_reveal_ballot_status_json(
     status.insert("automation_status".into(), Value::from(automation_status));
     status.insert("ready_to_tally".into(), Value::Bool(ready_to_tally));
     let tally_request = if ready_to_tally {
-        let mut body = Map::new();
-        body.insert("case_id".into(), Value::from(case_id.to_string()));
-        body.insert("round_id".into(), Value::from(round_id.to_string()));
         let mut request = Map::new();
         request.insert(
             "route".into(),
-            Value::from(format!(
-                "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/ballot-tally"
-            )),
+            Value::from("/v1/sorafs/moderation/ballots/tally"),
         );
-        request.insert("body".into(), Value::Object(body));
+        request.insert(
+            "instruction".into(),
+            Value::from("FinalizeSorafsModerationCase"),
+        );
+        request.insert(
+            "submission".into(),
+            Value::from("caller-signed-native-transaction"),
+        );
         request.insert(
             "cli".into(),
             Value::Array(
@@ -18741,25 +18340,30 @@ struct ModerationJurorPlanCounts {
 fn moderation_quarantine_juror_plan_ballot_json(
     ballot: &Value,
 ) -> Result<(Value, ModerationJurorPlanCounts)> {
-    let ballot_obj = value_object(ballot, "operator panel ballot")?;
-    let announcement = ballot_obj
-        .get("announcement")
-        .ok_or_else(|| eyre!("operator panel ballot is missing `announcement`"))?;
-    let announcement_obj = value_object(announcement, "operator panel ballot announcement")?;
-    let context = announcement_obj
+    let ballot_obj = value_object(ballot, "operator panel finalized case")?;
+    let case = ballot_obj
+        .get("case")
+        .ok_or_else(|| eyre!("operator panel finalized case is missing `case`"))?;
+    let case_obj = value_object(case, "operator panel finalized case record")?;
+    let spec = case_obj
+        .get("spec")
+        .ok_or_else(|| eyre!("operator panel finalized case record is missing `spec`"))?;
+    let spec_obj = value_object(spec, "operator panel finalized case spec")?;
+    let context = spec_obj
         .get("context")
-        .ok_or_else(|| eyre!("operator panel ballot announcement is missing `context`"))?;
-    let context_obj = value_object(context, "operator panel ballot context")?;
-    let case_id = required_string_field(context_obj, "case_id", "operator panel ballot context")?;
+        .ok_or_else(|| eyre!("operator panel finalized case spec is missing `context`"))?;
+    let context_obj = value_object(context, "operator panel finalized case context")?;
+    let case_id =
+        required_string_field(context_obj, "case_id", "operator panel finalized case context")?;
     let round_id = required_string_field(
-        announcement_obj,
+        spec_obj,
         "round_id",
-        "operator panel ballot announcement",
+        "operator panel finalized case spec",
     )?;
-    let juror_values = announcement_obj
-        .get("juror_ids")
+    let juror_values = spec_obj
+        .get("jurors")
         .and_then(Value::as_array)
-        .ok_or_else(|| eyre!("operator panel ballot announcement is missing `juror_ids` array"))?;
+        .ok_or_else(|| eyre!("operator panel finalized case spec is missing `jurors` array"))?;
     let commits = moderation_juror_ids_from_entries(ballot_obj, "commits")?;
     let reveals = moderation_juror_ids_from_entries(ballot_obj, "reveals")?;
     let mut jurors = Vec::with_capacity(juror_values.len());
@@ -18802,20 +18406,26 @@ fn moderation_quarantine_juror_plan_ballot_json(
     );
     fields.insert(
         "quorum".into(),
-        announcement_obj
+        spec_obj
             .get("quorum")
             .cloned()
             .unwrap_or(Value::Null),
     );
+    fields.insert(
+        "announced_at_unix_ms".into(),
+        case_obj
+            .get("opened_at_unix_ms")
+            .cloned()
+            .unwrap_or(Value::Null),
+    );
     for field in [
-        "announced_at_unix_ms",
         "commit_deadline_unix_ms",
         "challenge_deadline_unix_ms",
         "reveal_deadline_unix_ms",
     ] {
         fields.insert(
             field.into(),
-            announcement_obj.get(field).cloned().unwrap_or(Value::Null),
+            spec_obj.get(field).cloned().unwrap_or(Value::Null),
         );
     }
     fields.insert("juror_count".into(), Value::from(juror_values.len() as u64));
@@ -18825,7 +18435,7 @@ fn moderation_quarantine_juror_plan_ballot_json(
         "tally_status".into(),
         Value::from(
             if ballot_obj
-                .get("tally")
+                .get("outcome")
                 .is_some_and(|tally| !tally.is_null())
             {
                 "tallied"
@@ -18845,7 +18455,7 @@ fn moderation_juror_ids_from_entries(ballot_obj: &Map, field: &str) -> Result<BT
     };
     for entry in entries {
         let entry_obj = value_object(entry, field)?;
-        let juror_id = required_string_field(entry_obj, "juror_id", field)?;
+        let juror_id = required_string_field(entry_obj, "juror", field)?;
         jurors.insert(juror_id.to_string());
     }
     Ok(jurors)
@@ -18937,12 +18547,12 @@ fn moderation_quarantine_juror_plan_entry_json(
     Ok(Value::Object(entry))
 }
 
-fn first_moderation_ballot_reference(ballots: &[Value]) -> Option<(&str, &str)> {
-    for ballot in ballots {
-        let ballot_obj = ballot.as_object()?;
-        let announcement = ballot_obj.get("announcement")?.as_object()?;
-        let round_id = announcement.get("round_id")?.as_str()?;
-        let context = announcement.get("context")?.as_object()?;
+fn first_moderation_case_reference(cases: &[Value]) -> Option<(&str, &str)> {
+    for case in cases {
+        let case_obj = case.as_object()?.get("case")?.as_object()?;
+        let spec = case_obj.get("spec")?.as_object()?;
+        let round_id = spec.get("round_id")?.as_str()?;
+        let context = spec.get("context")?.as_object()?;
         let case_id = context.get("case_id")?.as_str()?;
         return Some((case_id, round_id));
     }
@@ -19033,25 +18643,6 @@ trait ModerationOperatorWorkflowSource: Send + Sync {
             "SoraFS moderation operator service appeal-handoff forwarding is unavailable"
         ))
     }
-
-    fn post_appeal_ballot(
-        &self,
-        _quarantine_id_hex: &str,
-        _payload: &[u8],
-    ) -> Result<Response<Vec<u8>>> {
-        Err(eyre!(
-            "SoraFS moderation operator service appeal-ballot forwarding is unavailable"
-        ))
-    }
-
-    fn post_ballot_tally(
-        &self,
-        _request: &SorafsModerationBallotTallyRequest<'_>,
-    ) -> Result<Response<Vec<u8>>> {
-        Err(eyre!(
-            "SoraFS moderation operator service ballot-tally forwarding is unavailable"
-        ))
-    }
 }
 
 impl ModerationOperatorWorkflowSource for Client {
@@ -19085,21 +18676,6 @@ impl ModerationOperatorWorkflowSource for Client {
         payload: &[u8],
     ) -> Result<Response<Vec<u8>>> {
         self.post_sorafs_moderation_quarantine_appeal_handoff_json(quarantine_id_hex, payload)
-    }
-
-    fn post_appeal_ballot(
-        &self,
-        quarantine_id_hex: &str,
-        payload: &[u8],
-    ) -> Result<Response<Vec<u8>>> {
-        self.post_sorafs_moderation_quarantine_appeal_ballot_json(quarantine_id_hex, payload)
-    }
-
-    fn post_ballot_tally(
-        &self,
-        request: &SorafsModerationBallotTallyRequest<'_>,
-    ) -> Result<Response<Vec<u8>>> {
-        self.post_sorafs_moderation_ballot_tally(request)
     }
 }
 
@@ -19164,8 +18740,6 @@ impl ModerationOperatorService {
                 Value::from("/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/review"),
                 Value::from("/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/release"),
                 Value::from("/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/appeal-handoff"),
-                Value::from("/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/appeal-ballot"),
-                Value::from("/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/ballot-tally"),
             ]),
         );
         Value::Object(fields)
@@ -19273,24 +18847,6 @@ impl ModerationOperatorService {
                     return err.into_response();
                 }
                 self.appeal_handoff_response(&quarantine_id_hex, request.body)
-            }
-            ModerationOperatorRoute::AppealBallot { quarantine_id_hex } => {
-                if let Err(err) = moderation_operator_expect_method(request, "POST", true)
-                    .and_then(|_| moderation_operator_reject_query(request.query))
-                    .and_then(|_| self.require_csrf_token(request))
-                {
-                    return err.into_response();
-                }
-                self.appeal_ballot_response(&quarantine_id_hex, request.body)
-            }
-            ModerationOperatorRoute::BallotTally { quarantine_id_hex } => {
-                if let Err(err) = moderation_operator_expect_method(request, "POST", true)
-                    .and_then(|_| moderation_operator_reject_query(request.query))
-                    .and_then(|_| self.require_csrf_token(request))
-                {
-                    return err.into_response();
-                }
-                self.ballot_tally_response(&quarantine_id_hex, request.body)
             }
         }
     }
@@ -19569,81 +19125,6 @@ impl ModerationOperatorService {
         moderation_operator_success_json_response(response, "appeal-handoff")
     }
 
-    fn appeal_ballot_response(
-        &self,
-        quarantine_id_hex: &str,
-        body: &[u8],
-    ) -> ModerationOperatorHttpResponse {
-        let payload =
-            match moderation_operator_payload_free_json_body(body, "appeal-ballot request") {
-                Ok(payload) => payload,
-                Err(err) => return err.into_response(),
-            };
-        let response = match self
-            .workflow_source
-            .post_appeal_ballot(quarantine_id_hex, &payload)
-        {
-            Ok(response) => response,
-            Err(err) => {
-                return moderation_operator_json_error(
-                    StatusCode::BAD_GATEWAY,
-                    format!("failed to forward appeal-ballot request to Torii: {err}"),
-                );
-            }
-        };
-        moderation_operator_success_json_response(response, "appeal-ballot")
-    }
-
-    fn ballot_tally_response(
-        &self,
-        quarantine_id_hex: &str,
-        body: &[u8],
-    ) -> ModerationOperatorHttpResponse {
-        let reference = match moderation_operator_ballot_tally_payload_from_body(body) {
-            Ok(Some(reference)) => reference,
-            Ok(None) => match self.ballot_tally_reference_from_operator_panel(quarantine_id_hex) {
-                Ok(reference) => reference,
-                Err(err) => {
-                    return moderation_operator_json_error(
-                        StatusCode::BAD_GATEWAY,
-                        format!("failed to derive ballot tally reference from Torii: {err}"),
-                    );
-                }
-            },
-            Err(err) => return err.into_response(),
-        };
-        let request = reference.as_request();
-        let response = match self.workflow_source.post_ballot_tally(&request) {
-            Ok(response) => response,
-            Err(err) => {
-                return moderation_operator_json_error(
-                    StatusCode::BAD_GATEWAY,
-                    format!("failed to forward ballot-tally request to Torii: {err}"),
-                );
-            }
-        };
-        moderation_operator_success_json_response(response, "ballot-tally")
-    }
-
-    fn ballot_tally_reference_from_operator_panel(
-        &self,
-        quarantine_id_hex: &str,
-    ) -> Result<ModerationOperatorBallotTallyReference> {
-        let response = self.workflow_source.get_operator_panel(
-            quarantine_id_hex,
-            SorafsModerationQuarantineFilter {
-                limit: self.default_limit,
-            },
-        )?;
-        let status = response.status();
-        let body = response.into_body();
-        if status != StatusCode::OK {
-            return Err(make_http_error(status, &body));
-        }
-        let panel = moderation_operator_payload_free_panel_json(&body)?;
-        moderation_operator_ballot_tally_reference_from_panel(&panel)
-    }
-
     fn browser_ui_response(&self) -> ModerationOperatorHttpResponse {
         let html = MODERATION_OPERATOR_BROWSER_UI_HTML
             .replace(
@@ -19890,10 +19371,6 @@ pre {
       <h2>Bridge</h2>
       <textarea id="handoffPayload">{}</textarea>
       <button type="button" id="sendHandoff">Handoff</button>
-      <textarea id="ballotPayload">{}</textarea>
-      <button type="button" id="sendBallot">Ballot</button>
-      <textarea id="tallyPayload">{}</textarea>
-      <button type="button" id="sendTally">Tally</button>
     </div>
   </aside>
   <section>
@@ -20046,12 +19523,6 @@ $("sendRelease").addEventListener("click", () => run("mutationOutput", () =>
 $("sendHandoff").addEventListener("click", () => run("mutationOutput", () =>
   requestJson(workflowPath("appeal-handoff"), {method: "POST", body: JSON.stringify(parsePayload("handoffPayload"))})
 ));
-$("sendBallot").addEventListener("click", () => run("mutationOutput", () =>
-  requestJson(workflowPath("appeal-ballot"), {method: "POST", body: JSON.stringify(parsePayload("ballotPayload"))})
-));
-$("sendTally").addEventListener("click", () => run("mutationOutput", () =>
-  requestJson(workflowPath("ballot-tally"), {method: "POST", body: JSON.stringify(parsePayload("tallyPayload"))})
-));
 $("refreshAll").addEventListener("click", async () => {
   await run("serviceOutput", () => requestJson("/v1/sorafs/moderation/operator-panel/status"));
   if ($("quarantineId").value.trim()) {
@@ -20135,8 +19606,6 @@ enum ModerationOperatorRoute {
     Review { quarantine_id_hex: String },
     Release { quarantine_id_hex: String },
     AppealHandoff { quarantine_id_hex: String },
-    AppealBallot { quarantine_id_hex: String },
-    BallotTally { quarantine_id_hex: String },
 }
 
 fn moderation_operator_handle_stream(
@@ -20455,8 +19924,6 @@ fn moderation_operator_route(
         "review" => Ok(ModerationOperatorRoute::Review { quarantine_id_hex }),
         "release" => Ok(ModerationOperatorRoute::Release { quarantine_id_hex }),
         "appeal-handoff" => Ok(ModerationOperatorRoute::AppealHandoff { quarantine_id_hex }),
-        "appeal-ballot" => Ok(ModerationOperatorRoute::AppealBallot { quarantine_id_hex }),
-        "ballot-tally" => Ok(ModerationOperatorRoute::BallotTally { quarantine_id_hex }),
         _ => Err(ModerationOperatorRequestError::new(
             StatusCode::NOT_FOUND,
             "unknown SoraFS moderation operator service workflow endpoint",
@@ -20650,72 +20117,6 @@ fn moderation_operator_release_payload_from_body(
     })
 }
 
-struct ModerationOperatorBallotTallyReference {
-    case_id: String,
-    round_id: String,
-}
-
-impl ModerationOperatorBallotTallyReference {
-    fn as_request(&self) -> SorafsModerationBallotTallyRequest<'_> {
-        SorafsModerationBallotTallyRequest {
-            case_id: self.case_id.as_str(),
-            round_id: self.round_id.as_str(),
-        }
-    }
-}
-
-fn moderation_operator_ballot_tally_payload_from_body(
-    body: &[u8],
-) -> Result<Option<ModerationOperatorBallotTallyReference>, ModerationOperatorRequestError> {
-    let value = moderation_operator_payload_free_json_value(body, "ballot-tally request")?;
-    let fields = value_object(&value, "ballot-tally request").map_err(|err| {
-        ModerationOperatorRequestError::new(StatusCode::BAD_REQUEST, err.to_string())
-    })?;
-    let case_id = optional_json_text(fields, "case_id").map_err(|err| {
-        ModerationOperatorRequestError::new(StatusCode::BAD_REQUEST, err.to_string())
-    })?;
-    let round_id = optional_json_text(fields, "round_id").map_err(|err| {
-        ModerationOperatorRequestError::new(StatusCode::BAD_REQUEST, err.to_string())
-    })?;
-    match (case_id, round_id) {
-        (Some(case_id), Some(round_id)) => Ok(Some(ModerationOperatorBallotTallyReference {
-            case_id,
-            round_id,
-        })),
-        (None, None) => Ok(None),
-        _ => Err(ModerationOperatorRequestError::new(
-            StatusCode::BAD_REQUEST,
-            "ballot-tally request must provide both case_id and round_id, or neither",
-        )),
-    }
-}
-
-fn moderation_operator_ballot_tally_reference_from_panel(
-    panel: &Value,
-) -> Result<ModerationOperatorBallotTallyReference> {
-    let root = value_object(panel, "operator panel response")?;
-    let schema = required_string_field(root, "schema", "operator panel response")?;
-    if schema != "sorafs.moderation.quarantine.operator_panel.v1" {
-        return Err(eyre!(
-            "operator panel response schema `{schema}` is not supported by ballot-tally"
-        ));
-    }
-    let ballots = root
-        .get("ballots")
-        .and_then(Value::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or(&[]);
-    let Some((case_id, round_id)) = first_moderation_ballot_reference(ballots) else {
-        return Err(eyre!(
-            "operator panel response does not include a moderation ballot reference"
-        ));
-    };
-    Ok(ModerationOperatorBallotTallyReference {
-        case_id: required_trimmed_text(case_id, "case_id")?,
-        round_id: required_trimmed_text(round_id, "round_id")?,
-    })
-}
-
 fn moderation_operator_payload_free_json_body(
     body: &[u8],
     label: &str,
@@ -20838,163 +20239,6 @@ fn normalize_hex_lower(value: &str, flag: &str, byte_len: usize) -> Result<Strin
 
 fn normalize_hex_16_lower(value: &str, flag: &str) -> Result<String> {
     normalize_hex_lower(value, flag, 16)
-}
-
-fn normalize_hex_32_lower(value: &str, flag: &str) -> Result<String> {
-    normalize_hex_lower(value, flag, 32)
-}
-
-fn build_reserve_movement_request_value<C: RunContext>(
-    context: &C,
-    args: &ReserveMovementSubmitArgs,
-) -> Result<Value> {
-    let provider_id_hex = normalize_hex_32_lower(&args.provider_id_hex, "--provider-id-hex")?;
-    let provider_account = crate::resolve_account_id(context, &args.provider_account)
-        .wrap_err("failed to resolve --provider-account")?;
-    let reserve_account = crate::resolve_account_id(context, &args.reserve_account)
-        .wrap_err("failed to resolve --reserve-account")?;
-    let asset_definition = AssetDefinitionId::parse_address_literal(&args.asset_definition)
-        .wrap_err("failed to parse --asset-definition")?;
-    let amount = parse_xor_quantity_labeled(&args.amount, "reserve movement amount")?;
-    if amount.is_zero() {
-        return Err(eyre!("reserve movement amount must be greater than zero"));
-    }
-    let idempotency_key = required_trimmed_text(&args.idempotency_key, "--idempotency-key")?;
-
-    let mut root = Map::new();
-    root.insert("provider_id_hex".into(), Value::from(provider_id_hex));
-    root.insert(
-        "provider_account".into(),
-        Value::from(provider_account.to_string()),
-    );
-    root.insert(
-        "reserve_account".into(),
-        Value::from(reserve_account.to_string()),
-    );
-    root.insert(
-        "asset_definition_id".into(),
-        Value::from(asset_definition.to_string()),
-    );
-    root.insert("amount".into(), xor_quantity_value(&amount));
-    root.insert("idempotency_key".into(), Value::from(idempotency_key));
-    root.insert(
-        "observed_at_unix".into(),
-        args.observed_at_unix.map_or(Value::Null, Value::from),
-    );
-    Ok(Value::Object(root))
-}
-
-fn build_reserve_movement_custody_value(args: &ReserveCustodyArgs) -> Result<(String, Value)> {
-    let movement_id_hex = normalize_hex_32_lower(&args.movement_id_hex, "--movement-id-hex")?;
-    let tx_hash_hex = normalize_hex_32_lower(&args.tx_hash_hex, "--tx-hash-hex")?;
-    let mut root = Map::new();
-    root.insert("status".into(), Value::from(args.status.label()));
-    root.insert("tx_hash_hex".into(), Value::from(tx_hash_hex));
-    root.insert(
-        "observed_at_unix".into(),
-        args.observed_at_unix.map_or(Value::Null, Value::from),
-    );
-    Ok((movement_id_hex, Value::Object(root)))
-}
-
-fn build_reserve_appeal_request_value<C: RunContext>(
-    context: &C,
-    args: &ReserveAppealSubmitArgs,
-) -> Result<Value> {
-    let provider_id_hex = normalize_hex_32_lower(&args.provider_id_hex, "--provider-id-hex")?;
-    let provider_account = crate::resolve_account_id(context, &args.provider_account)
-        .wrap_err("failed to resolve --provider-account")?;
-    let reason = required_trimmed_text(&args.reason, "--reason")?;
-    let idempotency_key = required_trimmed_text(&args.idempotency_key, "--idempotency-key")?;
-    let evidence_digest_hex = args
-        .evidence_digest_hex
-        .as_deref()
-        .map(|digest| normalize_hex_32_lower(digest, "--evidence-digest-hex"))
-        .transpose()?;
-
-    let mut root = Map::new();
-    root.insert("provider_id_hex".into(), Value::from(provider_id_hex));
-    root.insert(
-        "provider_account".into(),
-        Value::from(provider_account.to_string()),
-    );
-    root.insert(
-        "requested_stage".into(),
-        args.requested_stage
-            .map_or(Value::Null, |stage| Value::from(stage.label())),
-    );
-    root.insert("reason".into(), Value::from(reason));
-    root.insert(
-        "evidence_digest_hex".into(),
-        evidence_digest_hex.map_or(Value::Null, Value::from),
-    );
-    root.insert("idempotency_key".into(), Value::from(idempotency_key));
-    root.insert(
-        "observed_at_unix".into(),
-        args.observed_at_unix.map_or(Value::Null, Value::from),
-    );
-    Ok(Value::Object(root))
-}
-
-fn build_reserve_appeal_decision_value<C: RunContext>(
-    context: &C,
-    args: &ReserveAppealDecideArgs,
-) -> Result<(String, Value)> {
-    let appeal_id_hex = normalize_hex_32_lower(&args.appeal_id_hex, "--appeal-id-hex")?;
-    let decision_account = crate::resolve_account_id(context, &args.decision_account)
-        .wrap_err("failed to resolve --decision-account")?;
-    let rationale = required_trimmed_text(&args.rationale, "--rationale")?;
-    let mut root = Map::new();
-    root.insert("status".into(), Value::from(args.status.label()));
-    root.insert(
-        "decision_account".into(),
-        Value::from(decision_account.to_string()),
-    );
-    root.insert("rationale".into(), Value::from(rationale));
-    root.insert(
-        "observed_at_unix".into(),
-        args.observed_at_unix.map_or(Value::Null, Value::from),
-    );
-    Ok((appeal_id_hex, Value::Object(root)))
-}
-
-fn build_reserve_lifecycle_policy_value<C: RunContext>(
-    context: &C,
-    args: &ReservePolicyUpdateArgs,
-) -> Result<Value> {
-    if args.grace_period_days >= args.default_after_days {
-        return Err(eyre!(
-            "--grace-days must be lower than --default-after-days for reserve lifecycle policy"
-        ));
-    }
-    let authority_account = crate::resolve_account_id(context, &args.authority_account)
-        .wrap_err("failed to resolve --authority-account")?;
-    let reason = required_trimmed_text(&args.reason, "--reason")?;
-    let idempotency_key = required_trimmed_text(&args.idempotency_key, "--idempotency-key")?;
-    let mut root = Map::new();
-    root.insert(
-        "authority_account".into(),
-        Value::from(authority_account.to_string()),
-    );
-    root.insert(
-        "grace_period_days".into(),
-        Value::from(u64::from(args.grace_period_days)),
-    );
-    root.insert(
-        "default_after_days".into(),
-        Value::from(u64::from(args.default_after_days)),
-    );
-    root.insert(
-        "effective_at_unix".into(),
-        Value::from(args.effective_at_unix),
-    );
-    root.insert("reason".into(), Value::from(reason));
-    root.insert("idempotency_key".into(), Value::from(idempotency_key));
-    root.insert(
-        "observed_at_unix".into(),
-        args.observed_at_unix.map_or(Value::Null, Value::from),
-    );
-    Ok(Value::Object(root))
 }
 
 fn parse_xor_quantity(input: &str) -> Result<XorQuantity> {
@@ -21716,280 +20960,6 @@ mod tests {
         assert!(
             root.get("lifecycle_projection").is_some(),
             "full projection should be embedded"
-        );
-    }
-
-    #[test]
-    fn reserve_movement_builder_renders_signed_route_payload() {
-        let ctx = TestContext::new();
-        let provider_account = sample_account_literal("reserve-provider");
-        let reserve_account = sample_account_literal("reserve-escrow");
-        let asset_definition = xor_asset_id().to_string();
-        let args = ReserveMovementSubmitArgs {
-            provider_id_hex: format!("0x{}", "AB".repeat(32)),
-            provider_account: provider_account.clone(),
-            reserve_account: reserve_account.clone(),
-            asset_definition: asset_definition.clone(),
-            amount: "1.25".to_owned(),
-            idempotency_key: "provider-a-top-up-1".to_owned(),
-            observed_at_unix: Some(1_800_000_500),
-        };
-
-        let value =
-            build_reserve_movement_request_value(&ctx, &args).expect("movement request JSON");
-        let root = value
-            .as_object()
-            .expect("reserve movement payload should be an object");
-        assert_eq!(
-            root.get("provider_id_hex").and_then(Value::as_str),
-            Some("ab".repeat(32).as_str())
-        );
-        assert_eq!(
-            root.get("provider_account").and_then(Value::as_str),
-            Some(provider_account.as_str())
-        );
-        assert_eq!(
-            root.get("reserve_account").and_then(Value::as_str),
-            Some(reserve_account.as_str())
-        );
-        assert_eq!(
-            root.get("asset_definition_id").and_then(Value::as_str),
-            Some(asset_definition.as_str())
-        );
-        assert_eq!(root.get("amount").and_then(Value::as_str), Some("1.25"));
-        assert_eq!(
-            root.get("idempotency_key").and_then(Value::as_str),
-            Some("provider-a-top-up-1")
-        );
-        assert_eq!(
-            root.get("observed_at_unix").and_then(Value::as_u64),
-            Some(1_800_000_500)
-        );
-    }
-
-    #[test]
-    fn reserve_movement_builder_rejects_zero_amount() {
-        let ctx = TestContext::new();
-        let account = sample_account_literal("reserve-provider");
-        let args = ReserveMovementSubmitArgs {
-            provider_id_hex: "11".repeat(32),
-            provider_account: account.clone(),
-            reserve_account: account,
-            asset_definition: xor_asset_id().to_string(),
-            amount: "0".to_owned(),
-            idempotency_key: "zero-amount".to_owned(),
-            observed_at_unix: None,
-        };
-
-        let err = build_reserve_movement_request_value(&ctx, &args)
-            .expect_err("zero movement amount should be rejected");
-        assert!(
-            err.to_string().contains("greater than zero"),
-            "unexpected error: {err:?}"
-        );
-    }
-
-    #[test]
-    fn reserve_movement_builder_preserves_sub_micro_and_wide_amounts() {
-        let ctx = TestContext::new();
-        let account = sample_account_literal("reserve-provider-exact");
-        for canonical in [
-            "0.000000001",
-            "340282366920938463463374607431768211456.000000001",
-        ] {
-            let args = ReserveMovementSubmitArgs {
-                provider_id_hex: "22".repeat(32),
-                provider_account: account.clone(),
-                reserve_account: account.clone(),
-                asset_definition: xor_asset_id().to_string(),
-                amount: canonical.to_owned(),
-                idempotency_key: format!("exact-{canonical}"),
-                observed_at_unix: None,
-            };
-            let value =
-                build_reserve_movement_request_value(&ctx, &args).expect("exact movement request");
-            assert_eq!(value.get("amount").and_then(Value::as_str), Some(canonical));
-        }
-    }
-
-    #[test]
-    fn reserve_movement_builder_rejects_noncanonical_amounts() {
-        let ctx = TestContext::new();
-        let account = sample_account_literal("reserve-provider-noncanonical");
-        for invalid in ["1.0", "+1", "01", "-1", "0.0000000001"] {
-            let args = ReserveMovementSubmitArgs {
-                provider_id_hex: "33".repeat(32),
-                provider_account: account.clone(),
-                reserve_account: account.clone(),
-                asset_definition: xor_asset_id().to_string(),
-                amount: invalid.to_owned(),
-                idempotency_key: "invalid-exact-amount".to_owned(),
-                observed_at_unix: None,
-            };
-            assert!(
-                build_reserve_movement_request_value(&ctx, &args).is_err(),
-                "invalid movement amount must be rejected: {invalid:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn reserve_custody_builder_renders_signed_route_payload() {
-        let args = ReserveCustodyArgs {
-            movement_id_hex: format!("0x{}", "AB".repeat(32)),
-            status: ReserveCustodyStatusArg::Confirmed,
-            tx_hash_hex: format!("0x{}", "CD".repeat(32)),
-            observed_at_unix: Some(1_800_000_900),
-        };
-
-        let (movement_id_hex, value) =
-            build_reserve_movement_custody_value(&args).expect("custody request JSON");
-        assert_eq!(movement_id_hex, "ab".repeat(32));
-        let root = value
-            .as_object()
-            .expect("reserve custody payload should be an object");
-        assert_eq!(
-            root.get("status").and_then(Value::as_str),
-            Some("confirmed")
-        );
-        assert_eq!(
-            root.get("tx_hash_hex").and_then(Value::as_str),
-            Some("cd".repeat(32).as_str())
-        );
-        assert_eq!(
-            root.get("observed_at_unix").and_then(Value::as_u64),
-            Some(1_800_000_900)
-        );
-    }
-
-    #[test]
-    fn reserve_custody_builder_rejects_bad_hashes() {
-        let args = ReserveCustodyArgs {
-            movement_id_hex: "deadbeef".to_owned(),
-            status: ReserveCustodyStatusArg::Submitted,
-            tx_hash_hex: "22".repeat(32),
-            observed_at_unix: None,
-        };
-
-        let err = build_reserve_movement_custody_value(&args)
-            .expect_err("short movement id should be rejected");
-        assert!(
-            err.to_string().contains("--movement-id-hex"),
-            "unexpected error: {err:?}"
-        );
-    }
-
-    #[test]
-    fn reserve_appeal_builder_renders_signed_route_payload() {
-        let ctx = TestContext::new();
-        let provider_account = sample_account_literal("reserve-provider");
-        let args = ReserveAppealSubmitArgs {
-            provider_id_hex: format!("0x{}", "AB".repeat(32)),
-            provider_account: provider_account.clone(),
-            requested_stage: Some(ReserveLifecycleStageArg::Grace),
-            reason: "provider supplied payment evidence".to_owned(),
-            evidence_digest_hex: Some(format!("0x{}", "CD".repeat(32))),
-            idempotency_key: "appeal-provider-a-1".to_owned(),
-            observed_at_unix: Some(1_800_001_000),
-        };
-
-        let value = build_reserve_appeal_request_value(&ctx, &args).expect("appeal request JSON");
-        let root = value
-            .as_object()
-            .expect("reserve appeal payload should be an object");
-        assert_eq!(
-            root.get("provider_id_hex").and_then(Value::as_str),
-            Some("ab".repeat(32).as_str())
-        );
-        assert_eq!(
-            root.get("provider_account").and_then(Value::as_str),
-            Some(provider_account.as_str())
-        );
-        assert_eq!(
-            root.get("requested_stage").and_then(Value::as_str),
-            Some("grace")
-        );
-        assert_eq!(
-            root.get("evidence_digest_hex").and_then(Value::as_str),
-            Some("cd".repeat(32).as_str())
-        );
-        assert_eq!(
-            root.get("observed_at_unix").and_then(Value::as_u64),
-            Some(1_800_001_000)
-        );
-    }
-
-    #[test]
-    fn reserve_appeal_decision_builder_renders_signed_route_payload() {
-        let ctx = TestContext::new();
-        let decision_account = sample_account_literal("reserve-authority");
-        let args = ReserveAppealDecideArgs {
-            appeal_id_hex: format!("0x{}", "EF".repeat(32)),
-            status: ReserveAppealDecisionStatusArg::Accepted,
-            decision_account: decision_account.clone(),
-            rationale: "evidence accepted".to_owned(),
-            observed_at_unix: Some(1_800_001_100),
-        };
-
-        let (appeal_id_hex, value) =
-            build_reserve_appeal_decision_value(&ctx, &args).expect("appeal decision JSON");
-        assert_eq!(appeal_id_hex, "ef".repeat(32));
-        let root = value
-            .as_object()
-            .expect("reserve appeal decision payload should be an object");
-        assert_eq!(root.get("status").and_then(Value::as_str), Some("accepted"));
-        assert_eq!(
-            root.get("decision_account").and_then(Value::as_str),
-            Some(decision_account.as_str())
-        );
-        assert_eq!(
-            root.get("rationale").and_then(Value::as_str),
-            Some("evidence accepted")
-        );
-    }
-
-    #[test]
-    fn reserve_lifecycle_policy_builder_renders_and_validates_windows() {
-        let ctx = TestContext::new();
-        let authority_account = sample_account_literal("reserve-authority");
-        let args = ReservePolicyUpdateArgs {
-            authority_account: authority_account.clone(),
-            grace_period_days: 7,
-            default_after_days: 30,
-            effective_at_unix: 1_800_001_200,
-            reason: "initial staged policy".to_owned(),
-            idempotency_key: "policy-1".to_owned(),
-            observed_at_unix: Some(1_800_001_210),
-        };
-
-        let value =
-            build_reserve_lifecycle_policy_value(&ctx, &args).expect("lifecycle policy JSON");
-        let root = value
-            .as_object()
-            .expect("reserve lifecycle policy payload should be an object");
-        assert_eq!(
-            root.get("authority_account").and_then(Value::as_str),
-            Some(authority_account.as_str())
-        );
-        assert_eq!(
-            root.get("grace_period_days").and_then(Value::as_u64),
-            Some(7)
-        );
-        assert_eq!(
-            root.get("default_after_days").and_then(Value::as_u64),
-            Some(30)
-        );
-
-        let invalid = ReservePolicyUpdateArgs {
-            grace_period_days: 30,
-            default_after_days: 30,
-            ..args
-        };
-        let err = build_reserve_lifecycle_policy_value(&ctx, &invalid)
-            .expect_err("invalid policy windows should fail");
-        assert!(
-            err.to_string().contains("--grace-days"),
-            "unexpected error: {err:?}"
         );
     }
 
@@ -24610,21 +23580,7 @@ mod tests {
             juror_id: "juror-1@moderation".to_string(),
             choice: SoraFsModerationVoteChoice::Overturn,
             nonce: vec![0xC3; 32],
-            revealed_at_unix_ms: 1_800_000_400_000,
-        }
-    }
-
-    fn moderation_ballot_commit_fixture() -> SoraFsModerationBallotCommitV1 {
-        use iroha_data_model::sorafs::moderation::SORAFS_MODERATION_BALLOT_COMMIT_VERSION_V1;
-
-        let reveal = moderation_ballot_reveal_fixture();
-        SoraFsModerationBallotCommitV1 {
-            version: SORAFS_MODERATION_BALLOT_COMMIT_VERSION_V1,
-            context: reveal.context.clone(),
-            round_id: reveal.round_id.clone(),
-            juror_id: reveal.juror_id.clone(),
-            commitment_blake2b_256: reveal.compute_commitment(),
-            committed_at_unix_ms: 1_800_000_300_000,
+            revealed_at_unix_ms: 0,
         }
     }
 
@@ -24648,8 +23604,55 @@ mod tests {
             round_id: reveal.round_id.clone(),
             juror_id: reveal.juror_id.clone(),
             commitment_blake2b_256: reveal.compute_commitment(),
-            committed_at_unix_ms: 1_800_000_300_000,
+            committed_at_unix_ms: 0,
         }
+    }
+
+    fn moderation_commit_from_transaction(
+        transaction: &SignedTransaction,
+    ) -> SoraFsModerationBallotCommitV1 {
+        let iroha_data_model::transaction::Executable::Instructions(instructions) =
+            transaction.instructions()
+        else {
+            panic!("moderation commit transaction must contain instructions");
+        };
+        assert_eq!(instructions.len(), 1);
+        let instruction = instructions[0]
+            .as_any()
+            .downcast_ref::<SubmitSorafsModerationCommit>()
+            .expect("native moderation commit instruction");
+        decode_from_bytes(instruction.commit_payload()).expect("decode embedded moderation commit")
+    }
+
+    fn moderation_reveal_from_transaction(
+        transaction: &SignedTransaction,
+    ) -> SoraFsModerationBallotRevealV1 {
+        let iroha_data_model::transaction::Executable::Instructions(instructions) =
+            transaction.instructions()
+        else {
+            panic!("moderation reveal transaction must contain instructions");
+        };
+        assert_eq!(instructions.len(), 1);
+        let instruction = instructions[0]
+            .as_any()
+            .downcast_ref::<SubmitSorafsModerationReveal>()
+            .expect("native moderation reveal instruction");
+        decode_from_bytes(instruction.reveal_payload()).expect("decode embedded moderation reveal")
+    }
+
+    fn moderation_finalization_from_transaction(
+        transaction: &SignedTransaction,
+    ) -> &FinalizeSorafsModerationCase {
+        let iroha_data_model::transaction::Executable::Instructions(instructions) =
+            transaction.instructions()
+        else {
+            panic!("moderation finalization transaction must contain instructions");
+        };
+        assert_eq!(instructions.len(), 1);
+        instructions[0]
+            .as_any()
+            .downcast_ref::<FinalizeSorafsModerationCase>()
+            .expect("native moderation finalization instruction")
     }
 
     fn write_commit_reveal_status_file(
@@ -24836,7 +23839,9 @@ mod tests {
 
     #[test]
     fn moderation_ballots_commit_reads_json_payload() {
-        let commit = moderation_ballot_commit_fixture();
+        let mut ctx = TestContext::new();
+        let commit =
+            moderation_ballot_commit_fixture_for_juror(&ctx.cfg.account.to_string());
         let mut file = NamedTempFile::new().expect("commit file");
         file.write_all(
             norito::json::to_json_pretty(&commit)
@@ -24848,27 +23853,21 @@ mod tests {
             payload: file.path().to_path_buf(),
             format: "json".to_string(),
         };
-        let mut ctx = TestContext::new();
-
-        args.run_with(&mut ctx, |_client, request| {
-            assert_eq!(request, &commit);
-            Ok(Response::builder()
-                .status(StatusCode::ACCEPTED)
-                .header("Content-Type", "application/json")
-                .body(norito::json::to_vec(
-                    &norito::json!({ "status": "commit_accepted" }),
-                )?)
-                .unwrap())
+        args.run_with(&mut ctx, |_client, transaction| {
+            assert_eq!(moderation_commit_from_transaction(transaction), commit);
+            Ok(transaction.hash())
         })
         .expect("run should succeed");
 
         assert_eq!(ctx.printed.len(), 1);
-        assert!(ctx.printed[0].contains("\"commit_accepted\""));
+        assert!(ctx.printed[0].contains("\"transaction_hash_hex\""));
     }
 
     #[test]
     fn moderation_ballots_reveal_reads_norito_payload() {
-        let reveal = moderation_ballot_reveal_fixture();
+        let mut ctx = TestContext::new();
+        let reveal =
+            moderation_ballot_reveal_fixture_for_juror(&ctx.cfg.account.to_string());
         let encoded = to_bytes(&reveal).expect("encode reveal");
         let mut file = NamedTempFile::new().expect("reveal file");
         file.write_all(&encoded).expect("write reveal norito");
@@ -24876,22 +23875,14 @@ mod tests {
             payload: file.path().to_path_buf(),
             format: "norito".to_string(),
         };
-        let mut ctx = TestContext::new();
-
-        args.run_with(&mut ctx, |_client, request| {
-            assert_eq!(request, &reveal);
-            Ok(Response::builder()
-                .status(StatusCode::ACCEPTED)
-                .header("Content-Type", "application/json")
-                .body(norito::json::to_vec(
-                    &norito::json!({ "status": "reveal_accepted" }),
-                )?)
-                .unwrap())
+        args.run_with(&mut ctx, |_client, transaction| {
+            assert_eq!(moderation_reveal_from_transaction(transaction), reveal);
+            Ok(transaction.hash())
         })
         .expect("run should succeed");
 
         assert_eq!(ctx.printed.len(), 1);
-        assert!(ctx.printed[0].contains("\"reveal_accepted\""));
+        assert!(ctx.printed[0].contains("\"transaction_hash_hex\""));
     }
 
     #[test]
@@ -24902,21 +23893,16 @@ mod tests {
         };
         let mut ctx = TestContext::new();
 
-        args.run_with(&mut ctx, |_client, request| {
-            assert_eq!(request.case_id, "case-401");
-            assert_eq!(request.round_id, "round-7");
-            Ok(Response::builder()
-                .status(StatusCode::ACCEPTED)
-                .header("Content-Type", "application/json")
-                .body(norito::json::to_vec(
-                    &norito::json!({ "winning_choice": "uphold" }),
-                )?)
-                .unwrap())
+        args.run_with(&mut ctx, |_client, transaction| {
+            let instruction = moderation_finalization_from_transaction(transaction);
+            assert_eq!(instruction.case_id(), "case-401");
+            assert_eq!(instruction.round_id(), "round-7");
+            Ok(transaction.hash())
         })
         .expect("run should succeed");
 
         assert_eq!(ctx.printed.len(), 1);
-        assert!(ctx.printed[0].contains("\"uphold\""));
+        assert!(ctx.printed[0].contains("\"transaction_hash_hex\""));
     }
 
     #[test]
@@ -24936,9 +23922,65 @@ mod tests {
     }
 
     #[test]
+    fn moderation_native_action_and_coordination_inputs_are_bounded() {
+        let action = NamedTempFile::new().expect("action payload file");
+        action
+            .as_file()
+            .set_len((MODERATION_NATIVE_ACTION_INPUT_MAX_BYTES_V1 + 1) as u64)
+            .expect("extend action payload");
+        let action_err = read_moderation_ballot_payload_file(action.path())
+            .expect_err("oversized native action input must be rejected");
+        assert!(action_err.to_string().contains("between 1 and"));
+
+        let status = NamedTempFile::new().expect("coordination status file");
+        status
+            .as_file()
+            .set_len((MODERATION_COORDINATION_STATUS_MAX_BYTES_V1 + 1) as u64)
+            .expect("extend coordination status");
+        let status_err = load_moderation_commit_reveal_status_payload(status.path())
+            .expect_err("oversized coordination input must be rejected");
+        assert!(status_err.to_string().contains("between 1 and"));
+    }
+
+    #[test]
+    fn moderation_native_juror_actions_reject_caller_timestamps() {
+        let ctx = TestContext::new();
+        let client = ctx.client_from_config();
+        let juror_id = client.account.to_string();
+        let mut commit = moderation_ballot_commit_fixture_for_juror(&juror_id);
+        commit.committed_at_unix_ms = 1;
+        let commit_err = build_moderation_commit_transaction(&client, &commit)
+            .expect_err("caller-supplied commit timestamp must be rejected");
+        assert!(commit_err.to_string().contains("must be zero"));
+
+        let mut reveal = moderation_ballot_reveal_fixture_for_juror(&juror_id);
+        reveal.revealed_at_unix_ms = 1;
+        let reveal_err = build_moderation_reveal_transaction(&client, &reveal)
+            .expect_err("caller-supplied reveal timestamp must be rejected");
+        assert!(reveal_err.to_string().contains("must be zero"));
+    }
+
+    #[test]
+    fn moderation_native_juror_actions_require_transaction_authority() {
+        let ctx = TestContext::new();
+        let client = ctx.client_from_config();
+        let commit = moderation_ballot_commit_fixture_for_juror("other-juror@moderation");
+        let commit_err = build_moderation_commit_transaction(&client, &commit)
+            .expect_err("substituted commit juror must be rejected");
+        assert!(commit_err.to_string().contains("transaction authority"));
+
+        let reveal = moderation_ballot_reveal_fixture_for_juror("other-juror@moderation");
+        let reveal_err = build_moderation_reveal_transaction(&client, &reveal)
+            .expect_err("substituted reveal juror must be rejected");
+        assert!(reveal_err.to_string().contains("transaction authority"));
+    }
+
+    #[test]
     fn moderation_ballots_execute_submits_pending_actions_payload_free() {
-        let commit = moderation_ballot_commit_fixture_for_juror("juror-1@moderation");
-        let reveal = moderation_ballot_reveal_fixture_for_juror("juror-2@moderation");
+        let mut ctx = TestContext::new();
+        let juror_id = ctx.cfg.account.to_string();
+        let commit = moderation_ballot_commit_fixture_for_juror(&juror_id);
+        let reveal = moderation_ballot_reveal_fixture_for_juror(&juror_id);
         let mut commit_file = NamedTempFile::new().expect("commit file");
         commit_file
             .write_all(
@@ -24952,7 +23994,7 @@ mod tests {
             .write_all(&to_bytes(&reveal).expect("encode reveal"))
             .expect("write reveal norito");
         let status_file =
-            write_commit_reveal_status_file(&["juror-1@moderation"], &["juror-2@moderation"], true);
+            write_commit_reveal_status_file(&[juror_id.as_str()], &[juror_id.as_str()], true);
         let args = ModerationBallotsExecuteArgs {
             status: status_file.path().to_path_buf(),
             commit_payloads: vec![commit_file.path().to_path_buf()],
@@ -24961,48 +24003,33 @@ mod tests {
             reveal_format: "norito".to_string(),
             submit_tally: true,
         };
-        let mut ctx = TestContext::new();
         let mut committed = Vec::new();
         let mut revealed = Vec::new();
         let mut tallied = Vec::new();
 
         args.run_with(
             &mut ctx,
-            |_client, request| {
-                committed.push(request.juror_id.clone());
-                Ok(Response::builder()
-                    .status(StatusCode::ACCEPTED)
-                    .header("Content-Type", "application/json")
-                    .body(norito::json::to_vec(
-                        &norito::json!({ "status": "commit_accepted" }),
-                    )?)
-                    .unwrap())
+            |_client, transaction| {
+                committed.push(moderation_commit_from_transaction(transaction).juror_id);
+                Ok(transaction.hash())
             },
-            |_client, request| {
-                revealed.push(request.juror_id.clone());
-                Ok(Response::builder()
-                    .status(StatusCode::ACCEPTED)
-                    .header("Content-Type", "application/json")
-                    .body(norito::json::to_vec(
-                        &norito::json!({ "status": "reveal_accepted" }),
-                    )?)
-                    .unwrap())
+            |_client, transaction| {
+                revealed.push(moderation_reveal_from_transaction(transaction).juror_id);
+                Ok(transaction.hash())
             },
-            |_client, request| {
-                tallied.push((request.case_id.to_string(), request.round_id.to_string()));
-                Ok(Response::builder()
-                    .status(StatusCode::ACCEPTED)
-                    .header("Content-Type", "application/json")
-                    .body(norito::json::to_vec(
-                        &norito::json!({ "status": "tallied" }),
-                    )?)
-                    .unwrap())
+            |_client, transaction| {
+                let instruction = moderation_finalization_from_transaction(transaction);
+                tallied.push((
+                    instruction.case_id().to_string(),
+                    instruction.round_id().to_string(),
+                ));
+                Ok(transaction.hash())
             },
         )
         .expect("execution should succeed");
 
-        assert_eq!(committed, vec!["juror-1@moderation"]);
-        assert_eq!(revealed, vec!["juror-2@moderation"]);
+        assert_eq!(committed, vec![juror_id.clone()]);
+        assert_eq!(revealed, vec![juror_id]);
         assert_eq!(
             tallied,
             vec![("case-401".to_string(), "round-7".to_string())]
@@ -25249,9 +24276,7 @@ mod tests {
                 "case_id": "case-401",
                 "round_id": "round-7",
                 "juror_id": "juror-1@moderation",
-                "response_status": 202_u64,
-                "response_bytes": 21_u64,
-                "response_body_blake3": ("ab".repeat(32)),
+                "transaction_hash_hex": ("ab".repeat(32)),
                 "payload_bytes_included": false,
                 "private_payloads_included": false
             }, {
@@ -25259,9 +24284,7 @@ mod tests {
                 "case_id": "case-401",
                 "round_id": "round-7",
                 "juror_id": null,
-                "response_status": 200_u64,
-                "response_bytes": 18_u64,
-                "response_body_blake3": ("cd".repeat(32)),
+                "transaction_hash_hex": ("cd".repeat(32)),
                 "payload_bytes_included": false,
                 "private_payloads_included": false
             }]
@@ -26025,73 +25048,6 @@ mod tests {
     }
 
     #[test]
-    fn moderation_quarantine_appeal_ballot_reads_json_payload() {
-        let quarantine_id = [0xA6_u8; 16];
-        let input = write_json_file(&norito::json!({
-            "deposit_confirmation": {
-                "escrow_id_hex": ("11".repeat(32)),
-                "case_id": "case-401",
-                "round_id": "round-7",
-                "payer_account": "payer",
-                "destination_account": "treasury",
-                "asset_definition_id": "xor#wonderland",
-                "deposit_xor": "100",
-                "idempotency_key": "case-401-round-7",
-                "evidence_hashes_hex": [("22".repeat(32))]
-            },
-            "juror_ids": ["juror-1", "juror-2"],
-            "quorum": 2_u64,
-            "commit_deadline_unix_ms": 1_800_000_500_000_u64,
-            "challenge_deadline_unix_ms": 1_800_000_600_000_u64,
-            "reveal_deadline_unix_ms": 1_800_000_700_000_u64
-        }));
-        let args = ModerationQuarantineAppealBallotArgs {
-            quarantine_id: format!("0x{}", encode(quarantine_id).to_ascii_uppercase()),
-            input: input.path().to_path_buf(),
-        };
-        let mut ctx = TestContext::new();
-
-        args.run_with(&mut ctx, |_client, id, payload| {
-            assert_eq!(id, encode(quarantine_id));
-            let value: Value = norito::json::from_slice(payload)?;
-            assert_eq!(value.get("quorum").and_then(Value::as_u64), Some(2));
-            Ok(Response::builder()
-                .status(StatusCode::ACCEPTED)
-                .header("Content-Type", "application/json")
-                .body(norito::json::to_vec(&norito::json!({
-                    "schema": "sorafs.moderation.quarantine.appeal_ballot.v1",
-                    "status": "announced"
-                }))?)
-                .unwrap())
-        })
-        .expect("run should succeed");
-
-        assert_eq!(ctx.printed.len(), 1);
-        assert!(ctx.printed[0].contains("announced"));
-    }
-
-    #[test]
-    fn moderation_quarantine_appeal_ballot_rejects_empty_payload() {
-        let input = NamedTempFile::new().expect("empty appeal ballot payload");
-        let args = ModerationQuarantineAppealBallotArgs {
-            quarantine_id: encode([0xA7_u8; 16]),
-            input: input.path().to_path_buf(),
-        };
-        let mut ctx = TestContext::new();
-
-        let err = args
-            .run_with(&mut ctx, |_client, _, _| {
-                unreachable!("submit must not run")
-            })
-            .expect_err("empty appeal ballot payload must be rejected");
-        assert!(
-            err.to_string()
-                .contains("moderation quarantine appeal ballot payload")
-        );
-        assert!(ctx.printed.is_empty());
-    }
-
-    #[test]
     fn moderation_quarantine_operator_panel_reads_workflow_view() {
         let quarantine_id = [0xA8_u8; 16];
         let args = ModerationQuarantineOperatorPanelArgs {
@@ -26156,18 +25112,9 @@ mod tests {
                         "state": "reviewed"
                     },
                     "object_status": "stored",
-                    "ballot_count": 1_u64,
-                    "returned_ballot_count": 1_u64,
-                    "ballots": [{
-                        "announcement": {
-                            "context": {
-                                "case_id": "quarantine-case",
-                                "evidence_uri": "sorafs://moderation/quarantine"
-                            },
-                            "round_id": "round-7"
-                        },
-                        "tally": null
-                    }],
+                    "case_count": 1_u64,
+                    "returned_case_count": 1_u64,
+                    "cases": [(fixture_finalized_moderation_case(&[], &[], &[]))],
                     "operator_routes": {
                         "object": "/v1/sorafs/moderation/quarantine/object"
                     },
@@ -26178,7 +25125,7 @@ mod tests {
                             "required": false
                         },
                         {
-                            "action": "collect_commits_reveals_tally",
+                            "action": "submit_native_case_actions",
                             "route": "/v1/sorafs/moderation/ballots",
                             "required": true
                         }
@@ -26205,7 +25152,7 @@ mod tests {
         assert_eq!(actions.len(), 2);
         assert_eq!(
             actions[1].get("automation_status").and_then(Value::as_str),
-            Some("waiting_for_commit_reveal_tally")
+            Some("waiting_for_native_commit_reveal_finalization")
         );
         let cli = actions[1]
             .get("cli")
@@ -26544,6 +25491,55 @@ mod tests {
         .expect("operator service")
     }
 
+    fn fixture_finalized_moderation_case(
+        jurors: &[&str],
+        committed_jurors: &[&str],
+        revealed_jurors: &[&str],
+    ) -> Value {
+        let jurors = jurors.iter().copied().map(Value::from).collect::<Vec<_>>();
+        let commits = committed_jurors
+            .iter()
+            .map(|juror| norito::json!({ "juror": (*juror) }))
+            .collect::<Vec<_>>();
+        let reveals = revealed_jurors
+            .iter()
+            .map(|juror| norito::json!({ "juror": (*juror) }))
+            .collect::<Vec<_>>();
+        norito::json!({
+            "case": {
+                "spec": {
+                    "context": {
+                        "case_id": "quarantine-case",
+                        "evidence_uri": "sorafs://moderation/quarantine"
+                    },
+                    "round_id": "round-7",
+                    "jurors": (jurors),
+                    "quorum": 2_u64,
+                    "commit_deadline_unix_ms": 1_800_000_200_000_u64,
+                    "challenge_deadline_unix_ms": 1_800_000_300_000_u64,
+                    "reveal_deadline_unix_ms": 1_800_000_400_000_u64
+                },
+                "opened_at_unix_ms": 1_800_000_100_000_u64
+            },
+            "commits": (commits),
+            "reveals": (reveals),
+            "challenges": [],
+            "outcome": null,
+            "no_shows": []
+        })
+    }
+
+    fn fixture_payload_bearing_finalized_moderation_case() -> Value {
+        let mut case = fixture_finalized_moderation_case(&["juror-a@moderation"], &[], &[]);
+        case.as_object_mut()
+            .expect("finalized case fixture object")
+            .insert(
+                "payload_b64".to_owned(),
+                Value::from("c2hvdWxkLW5vdC1sZWFr"),
+            );
+        case
+    }
+
     struct FixtureModerationOperatorMutationSource {
         expected_quarantine_id_hex: String,
         expected_kind: &'static str,
@@ -26609,18 +25605,6 @@ mod tests {
             self.response()
         }
 
-        fn post_appeal_ballot(
-            &self,
-            quarantine_id_hex: &str,
-            payload: &[u8],
-        ) -> Result<Response<Vec<u8>>> {
-            assert_eq!(self.expected_kind, "appeal-ballot");
-            assert_eq!(quarantine_id_hex, self.expected_quarantine_id_hex);
-            let value: Value = norito::json::from_slice(payload).expect("ballot payload JSON");
-            assert_eq!(value.get("quorum").and_then(Value::as_u64), Some(2));
-            assert!(!String::from_utf8_lossy(payload).contains("payload_b64"));
-            self.response()
-        }
     }
 
     fn fixture_moderation_operator_mutation_service(
@@ -26645,82 +25629,6 @@ mod tests {
             "operator@moderation".to_string(),
         )
         .expect("operator mutation service")
-    }
-
-    struct FixtureModerationOperatorBallotTallySource {
-        expected_quarantine_id_hex: String,
-        expected_limit: Option<u32>,
-        panel_body: Option<Vec<u8>>,
-        expected_case_id: String,
-        expected_round_id: String,
-        status: StatusCode,
-        body: Vec<u8>,
-    }
-
-    impl ModerationOperatorWorkflowSource for FixtureModerationOperatorBallotTallySource {
-        fn get_operator_panel(
-            &self,
-            quarantine_id_hex: &str,
-            filter: SorafsModerationQuarantineFilter,
-        ) -> Result<Response<Vec<u8>>> {
-            assert_eq!(quarantine_id_hex, self.expected_quarantine_id_hex);
-            assert_eq!(filter.limit, self.expected_limit);
-            Ok(Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", "application/json")
-                .body(
-                    self.panel_body
-                        .as_ref()
-                        .expect("fixture does not serve operator-panel reads")
-                        .clone(),
-                )
-                .unwrap())
-        }
-
-        fn post_ballot_tally(
-            &self,
-            request: &SorafsModerationBallotTallyRequest<'_>,
-        ) -> Result<Response<Vec<u8>>> {
-            assert_eq!(request.case_id, self.expected_case_id);
-            assert_eq!(request.round_id, self.expected_round_id);
-            Ok(Response::builder()
-                .status(self.status)
-                .header("Content-Type", "application/json")
-                .body(self.body.clone())
-                .unwrap())
-        }
-    }
-
-    fn fixture_moderation_operator_ballot_tally_service(
-        quarantine_id: [u8; 16],
-        default_limit: Option<u32>,
-        panel: Option<Value>,
-        expected_case_id: &str,
-        expected_round_id: &str,
-        status: StatusCode,
-        body: Value,
-    ) -> ModerationOperatorService {
-        let args = ModerationQuarantineOperatorServeArgs {
-            listen: "127.0.0.1:0".to_string(),
-            limit: default_limit,
-            max_body_bytes: 2048,
-        };
-        args.service(
-            Arc::new(FixtureModerationOperatorBallotTallySource {
-                expected_quarantine_id_hex: encode(quarantine_id),
-                expected_limit: default_limit,
-                panel_body: panel.map(|value| {
-                    norito::json::to_vec(&value).expect("fixture operator-panel JSON")
-                }),
-                expected_case_id: expected_case_id.to_string(),
-                expected_round_id: expected_round_id.to_string(),
-                status,
-                body: norito::json::to_vec(&body).expect("fixture tally response JSON"),
-            }),
-            "http://torii.test/".to_string(),
-            "operator@moderation".to_string(),
-        )
-        .expect("operator ballot tally service")
     }
 
     fn handle_moderation_operator_raw_request(
@@ -26806,9 +25714,9 @@ mod tests {
                     "state": "reviewed"
                 },
                 "object_status": "stored",
-                "ballot_count": 0_u64,
-                "returned_ballot_count": 0_u64,
-                "ballots": [],
+                "case_count": 0_u64,
+                "returned_case_count": 0_u64,
+                "cases": [],
                 "next_actions": [{
                     "action": "review",
                     "route": "/v1/sorafs/moderation/quarantine/review",
@@ -26858,29 +25766,16 @@ mod tests {
                     "state": "reviewed"
                 },
                 "object_status": "stored",
-                "ballot_count": 1_u64,
-                "returned_ballot_count": 1_u64,
-                "truncated_ballots": false,
-                "ballots": [{
-                    "announcement": {
-                        "context": {
-                            "case_id": "quarantine-case",
-                            "evidence_uri": "sorafs://moderation/quarantine"
-                        },
-                        "round_id": "round-7",
-                        "juror_ids": ["juror-a@moderation", "juror-b@moderation"],
-                        "quorum": 2_u64,
-                        "announced_at_unix_ms": 1_800_000_100_000_u64,
-                        "commit_deadline_unix_ms": 1_800_000_200_000_u64,
-                        "challenge_deadline_unix_ms": 1_800_000_300_000_u64,
-                        "reveal_deadline_unix_ms": 1_800_000_400_000_u64
-                    },
-                    "commits": [{
-                        "juror_id": "juror-a@moderation"
-                    }],
-                    "reveals": [],
-                    "tally": null
-                }],
+                "case_count": 1_u64,
+                "returned_case_count": 1_u64,
+                "truncated_cases": false,
+                "cases": [(
+                    fixture_finalized_moderation_case(
+                        &["juror-a@moderation", "juror-b@moderation"],
+                        &["juror-a@moderation"],
+                        &[],
+                    )
+                )],
                 "next_actions": []
             }),
         );
@@ -26960,37 +25855,20 @@ mod tests {
                     "state": "reviewed"
                 },
                 "object_status": "stored",
-                "ballot_count": 1_u64,
-                "returned_ballot_count": 1_u64,
-                "truncated_ballots": false,
-                "ballots": [{
-                    "announcement": {
-                        "context": {
-                            "case_id": "quarantine-case",
-                            "evidence_uri": "sorafs://moderation/quarantine"
-                        },
-                        "round_id": "round-7",
-                        "juror_ids": [
+                "case_count": 1_u64,
+                "returned_case_count": 1_u64,
+                "truncated_cases": false,
+                "cases": [(
+                    fixture_finalized_moderation_case(
+                        &[
                             "juror-a@moderation",
                             "juror-b@moderation",
-                            "juror-c@moderation"
+                            "juror-c@moderation",
                         ],
-                        "quorum": 2_u64,
-                        "announced_at_unix_ms": 1_800_000_100_000_u64,
-                        "commit_deadline_unix_ms": 1_800_000_200_000_u64,
-                        "challenge_deadline_unix_ms": 1_800_000_300_000_u64,
-                        "reveal_deadline_unix_ms": 1_800_000_400_000_u64
-                    },
-                    "commits": [{
-                        "juror_id": "juror-a@moderation"
-                    }, {
-                        "juror_id": "juror-c@moderation"
-                    }],
-                    "reveals": [{
-                        "juror_id": "juror-c@moderation"
-                    }],
-                    "tally": null
-                }],
+                        &["juror-a@moderation", "juror-c@moderation"],
+                        &["juror-c@moderation"],
+                    )
+                )],
                 "next_actions": []
             }),
         );
@@ -27090,39 +25968,20 @@ mod tests {
                     "state": "reviewed"
                 },
                 "object_status": "stored",
-                "ballot_count": 1_u64,
-                "returned_ballot_count": 1_u64,
-                "truncated_ballots": false,
-                "ballots": [{
-                    "announcement": {
-                        "context": {
-                            "case_id": "quarantine-case",
-                            "evidence_uri": "sorafs://moderation/quarantine"
-                        },
-                        "round_id": "round-7",
-                        "juror_ids": [
+                "case_count": 1_u64,
+                "returned_case_count": 1_u64,
+                "truncated_cases": false,
+                "cases": [(
+                    fixture_finalized_moderation_case(
+                        &[
                             "juror-a@moderation",
                             "juror-b@moderation",
-                            "juror-c@moderation"
+                            "juror-c@moderation",
                         ],
-                        "quorum": 2_u64,
-                        "announced_at_unix_ms": 1_800_000_100_000_u64,
-                        "commit_deadline_unix_ms": 1_800_000_200_000_u64,
-                        "challenge_deadline_unix_ms": 1_800_000_300_000_u64,
-                        "reveal_deadline_unix_ms": 1_800_000_400_000_u64
-                    },
-                    "commits": [{
-                        "juror_id": "juror-a@moderation"
-                    }, {
-                        "juror_id": "juror-c@moderation"
-                    }],
-                    "reveals": [{
-                        "juror_id": "juror-a@moderation"
-                    }, {
-                        "juror_id": "juror-c@moderation"
-                    }],
-                    "tally": null
-                }],
+                        &["juror-a@moderation", "juror-c@moderation"],
+                        &["juror-a@moderation", "juror-c@moderation"],
+                    )
+                )],
                 "next_actions": []
             }),
         );
@@ -27187,7 +26046,21 @@ mod tests {
                 .and_then(Value::as_object)
                 .and_then(|request| request.get("route"))
                 .and_then(Value::as_str),
-            Some("/v1/sorafs/moderation/quarantine/a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8a8/ballot-tally")
+            Some("/v1/sorafs/moderation/ballots/tally")
+        );
+        assert_eq!(
+            ballots[0]
+                .get("tally_request")
+                .and_then(Value::as_object)
+                .and_then(|request| request.get("submission"))
+                .and_then(Value::as_str),
+            Some("caller-signed-native-transaction")
+        );
+        assert!(
+            ballots[0]
+                .get("tally_request")
+                .and_then(Value::as_object)
+                .is_some_and(|request| !request.contains_key("body"))
         );
     }
 
@@ -27206,18 +26079,9 @@ mod tests {
                     "state": "reviewed"
                 },
                 "object_status": "stored",
-                "ballot_count": 1_u64,
-                "returned_ballot_count": 1_u64,
-                "ballots": [{
-                    "announcement": {
-                        "context": {
-                            "case_id": "quarantine-case"
-                        },
-                        "round_id": "round-7",
-                        "juror_ids": ["juror-a@moderation"]
-                    },
-                    "payload_b64": "c2hvdWxkLW5vdC1sZWFr"
-                }],
+                "case_count": 1_u64,
+                "returned_case_count": 1_u64,
+                "cases": [(fixture_payload_bearing_finalized_moderation_case())],
                 "next_actions": []
             }),
         );
@@ -27248,18 +26112,9 @@ mod tests {
                     "state": "reviewed"
                 },
                 "object_status": "stored",
-                "ballot_count": 1_u64,
-                "returned_ballot_count": 1_u64,
-                "ballots": [{
-                    "announcement": {
-                        "context": {
-                            "case_id": "quarantine-case"
-                        },
-                        "round_id": "round-7",
-                        "juror_ids": ["juror-a@moderation"]
-                    },
-                    "payload_b64": "c2hvdWxkLW5vdC1sZWFr"
-                }],
+                "case_count": 1_u64,
+                "returned_case_count": 1_u64,
+                "cases": [(fixture_payload_bearing_finalized_moderation_case())],
                 "next_actions": []
             }),
         );
@@ -27290,18 +26145,9 @@ mod tests {
                     "state": "reviewed"
                 },
                 "object_status": "stored",
-                "ballot_count": 1_u64,
-                "returned_ballot_count": 1_u64,
-                "ballots": [{
-                    "announcement": {
-                        "context": {
-                            "case_id": "quarantine-case"
-                        },
-                        "round_id": "round-7",
-                        "juror_ids": ["juror-a@moderation"]
-                    },
-                    "payload_b64": "c2hvdWxkLW5vdC1sZWFr"
-                }],
+                "case_count": 1_u64,
+                "returned_case_count": 1_u64,
+                "cases": [(fixture_payload_bearing_finalized_moderation_case())],
                 "next_actions": []
             }),
         );
@@ -27454,7 +26300,7 @@ mod tests {
         assert!(body.contains("juror-plan"));
         assert!(body.contains("juror-notifications"));
         assert!(body.contains("commit-reveal-status"));
-        assert!(body.contains("ballot-tally"));
+        assert!(!body.contains(&["ballot", "tally"].join("-")));
         assert!(body.contains(MODERATION_OPERATOR_CSRF_HEADER));
         assert!(body.contains(&service.csrf_token));
         let http = String::from_utf8(response.to_http_bytes()).expect("HTTP response UTF-8");
@@ -27663,36 +26509,6 @@ mod tests {
     }
 
     #[test]
-    fn moderation_operator_service_forwards_appeal_ballot_payload() {
-        let quarantine_id = [0xB1_u8; 16];
-        let quarantine_id_hex = encode(quarantine_id);
-        let service = fixture_moderation_operator_mutation_service(
-            quarantine_id,
-            "appeal-ballot",
-            StatusCode::ACCEPTED,
-            norito::json!({
-                "schema": "sorafs.moderation.quarantine.appeal_ballot.v1",
-                "status": "announced"
-            }),
-        );
-        let body = r#"{"quorum":2,"juror_ids":["juror-a","juror-b"]}"#;
-        let response = handle_moderation_operator_raw_request(
-            &service,
-            format!(
-                "POST /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/appeal-ballot HTTP/1.1\r\nHost: local\r\nContent-Length: {}\r\n\r\n{body}",
-                body.len()
-            ),
-        );
-
-        assert_eq!(response.status, StatusCode::ACCEPTED);
-        let value: Value = norito::json::from_slice(&response.body).expect("ballot response JSON");
-        assert_eq!(
-            value.get("status").and_then(Value::as_str),
-            Some("announced")
-        );
-    }
-
-    #[test]
     fn moderation_operator_service_rejects_mutation_payload_bytes() {
         let quarantine_id = [0xB2_u8; 16];
         let quarantine_id_hex = encode(quarantine_id);
@@ -27707,152 +26523,6 @@ mod tests {
             &service,
             format!(
                 "POST /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/appeal-handoff HTTP/1.1\r\nHost: local\r\nContent-Length: {}\r\n\r\n{body}",
-                body.len()
-            ),
-        );
-
-        assert_eq!(response.status, StatusCode::BAD_REQUEST);
-        let body = String::from_utf8(response.body).expect("error body UTF-8");
-        assert!(body.contains("payload bytes"));
-    }
-
-    #[test]
-    fn moderation_operator_service_tallies_ballot_from_operator_panel_reference() {
-        let quarantine_id = [0xB3_u8; 16];
-        let quarantine_id_hex = encode(quarantine_id);
-        let service = fixture_moderation_operator_ballot_tally_service(
-            quarantine_id,
-            Some(4),
-            Some(norito::json!({
-                "schema": "sorafs.moderation.quarantine.operator_panel.v1",
-                "status": "ready",
-                "record": {
-                    "quarantine_id_hex": (quarantine_id_hex.clone()),
-                    "state": "appeal_ballot_announced"
-                },
-                "object_status": "stored",
-                "ballots": [{
-                    "announcement": {
-                        "round_id": "round-derived",
-                        "context": {
-                            "case_id": "case-derived"
-                        }
-                    }
-                }],
-                "next_actions": []
-            })),
-            "case-derived",
-            "round-derived",
-            StatusCode::ACCEPTED,
-            norito::json!({
-                "schema": "sorafs.moderation.ballot.tally.v1",
-                "status": "tallied",
-                "winning_choice": "uphold"
-            }),
-        );
-        let body = "{}";
-        let response = handle_moderation_operator_raw_request(
-            &service,
-            format!(
-                "POST /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/ballot-tally HTTP/1.1\r\nHost: local\r\nContent-Length: {}\r\n\r\n{body}",
-                body.len()
-            ),
-        );
-
-        assert_eq!(response.status, StatusCode::ACCEPTED);
-        let value: Value = norito::json::from_slice(&response.body).expect("tally response JSON");
-        assert_eq!(
-            value.get("winning_choice").and_then(Value::as_str),
-            Some("uphold")
-        );
-    }
-
-    #[test]
-    fn moderation_operator_service_tallies_explicit_ballot_reference() {
-        let quarantine_id = [0xB4_u8; 16];
-        let quarantine_id_hex = encode(quarantine_id);
-        let service = fixture_moderation_operator_ballot_tally_service(
-            quarantine_id,
-            Some(4),
-            None,
-            "case-explicit",
-            "round-explicit",
-            StatusCode::OK,
-            norito::json!({
-                "schema": "sorafs.moderation.ballot.tally.v1",
-                "status": "tallied"
-            }),
-        );
-        let body = r#"{"case_id":" case-explicit ","round_id":" round-explicit "}"#;
-        let response = handle_moderation_operator_raw_request(
-            &service,
-            format!(
-                "POST /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/ballot-tally HTTP/1.1\r\nHost: local\r\nContent-Length: {}\r\n\r\n{body}",
-                body.len()
-            ),
-        );
-
-        assert_eq!(response.status, StatusCode::OK);
-        let value: Value = norito::json::from_slice(&response.body).expect("tally response JSON");
-        assert_eq!(value.get("status").and_then(Value::as_str), Some("tallied"));
-    }
-
-    #[test]
-    fn moderation_operator_service_rejects_tally_without_ballot_reference() {
-        let quarantine_id = [0xB5_u8; 16];
-        let quarantine_id_hex = encode(quarantine_id);
-        let service = fixture_moderation_operator_ballot_tally_service(
-            quarantine_id,
-            None,
-            Some(norito::json!({
-                "schema": "sorafs.moderation.quarantine.operator_panel.v1",
-                "status": "ready",
-                "record": {
-                    "quarantine_id_hex": (quarantine_id_hex.clone()),
-                    "state": "reviewed"
-                },
-                "object_status": "stored",
-                "ballots": [],
-                "next_actions": []
-            })),
-            "unused-case",
-            "unused-round",
-            StatusCode::ACCEPTED,
-            norito::json!({ "status": "must_not_be_called" }),
-        );
-        let body = "{}";
-        let response = handle_moderation_operator_raw_request(
-            &service,
-            format!(
-                "POST /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/ballot-tally HTTP/1.1\r\nHost: local\r\nContent-Length: {}\r\n\r\n{body}",
-                body.len()
-            ),
-        );
-
-        assert_eq!(response.status, StatusCode::BAD_GATEWAY);
-        let body = String::from_utf8(response.body).expect("error body UTF-8");
-        assert!(body.contains("does not include a moderation ballot reference"));
-    }
-
-    #[test]
-    fn moderation_operator_service_rejects_tally_payload_bytes() {
-        let quarantine_id = [0xB6_u8; 16];
-        let quarantine_id_hex = encode(quarantine_id);
-        let service = fixture_moderation_operator_ballot_tally_service(
-            quarantine_id,
-            None,
-            None,
-            "unused-case",
-            "unused-round",
-            StatusCode::ACCEPTED,
-            norito::json!({ "status": "must_not_be_called" }),
-        );
-        let body =
-            r#"{"case_id":"case-a","round_id":"round-a","payload_b64":"c2hvdWxkLW5vdC1sZWFr"}"#;
-        let response = handle_moderation_operator_raw_request(
-            &service,
-            format!(
-                "POST /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/ballot-tally HTTP/1.1\r\nHost: local\r\nContent-Length: {}\r\n\r\n{body}",
                 body.len()
             ),
         );

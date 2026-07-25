@@ -6480,7 +6480,11 @@ mod tests {
             Ok(GET_PRIVATE_INPUT_GAS)
         );
         assert!(vm.register(10) >= Memory::HEAP_START);
-        assert!(vm.registers.tag(10));
+        assert_eq!(
+            vm.ensure_public_tlv_register(10),
+            Err(VMError::PrivacyViolation),
+            "the host must mark the complete private-input envelope as private memory"
+        );
 
         vm.memory
             .set_heap_limit(0x10_000)

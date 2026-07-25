@@ -274,7 +274,7 @@ mod tests {
 /// Entries are positional: entry `i` describes the transition from
 /// `previous_account_ids[i]` to the next account id in the record. Only an
 /// explicit [`Self::AccountIdRekey`] transition can carry controller continuity.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -288,6 +288,7 @@ pub enum AccountRekeyTransitionProvenance {
     ///
     /// Legacy history is retained for audit, but permanently remains non-authorizing.
     #[codec(index = 0)]
+    #[default]
     LegacyUnspecified,
     /// The stable alias was assigned to a different, independently controlled account.
     #[codec(index = 1)]
@@ -295,12 +296,6 @@ pub enum AccountRekeyTransitionProvenance {
     /// The canonical account-id rekey operation retired the predecessor controller.
     #[codec(index = 2)]
     AccountIdRekey,
-}
-
-impl Default for AccountRekeyTransitionProvenance {
-    fn default() -> Self {
-        Self::LegacyUnspecified
-    }
 }
 
 /// Structural failures in an account rekey record's transition history.

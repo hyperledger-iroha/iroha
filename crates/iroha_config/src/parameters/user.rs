@@ -1057,8 +1057,10 @@ impl Root {
             let reply_source_capacity = network
                 .max_total_connections
                 .or(lane_profile.derived_limits().max_total_connections)
-                .map(NonZeroUsize::get)
-                .unwrap_or(lane_profile.defaults().max_total_connections);
+                .map_or(
+                    lane_profile.defaults().max_total_connections,
+                    NonZeroUsize::get,
+                );
             if sumeragi.queues.authenticated_non_validator_sources.get() > reply_source_capacity {
                 emitter.emit(
                     Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
@@ -12776,6 +12778,12 @@ pub struct SnapshotBootstrapPolicy {
 
 impl SnapshotBootstrapPolicy {
     /// Validate that the policy is either fully disabled or fully and canonically specified.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when disabled bootstrap retains an audit anchor, or
+    /// when enabled bootstrap lacks a canonical lowercase SHA-256 digest or a
+    /// non-zero audited height.
     pub fn validate(&self) -> core::result::Result<(), String> {
         if !self.enabled {
             if self.audited_sha256.is_some() || self.audited_height.is_some() {
@@ -13164,6 +13172,10 @@ impl SoracloudRuntimeInrou {
 }
 
 /// User-level runtime-originated transaction submission settings.
+#[expect(
+    clippy::struct_field_names,
+    reason = "the fee_* names are canonical public configuration and JSON keys and cannot be shortened without breaking the V1 shape"
+)]
 #[derive(Debug, Clone, Default, ReadConfig, norito::JsonDeserialize)]
 pub struct SoracloudRuntimeSubmission {
     /// Exact fee payer: `authority` or `sponsor`.
@@ -13176,12 +13188,7 @@ pub struct SoracloudRuntimeSubmission {
 
 impl SoracloudRuntimeSubmission {
     fn parse(self) -> actual::SoracloudRuntimeSubmission {
-        let fee_payer = match self
-            .fee_payer
-            .as_deref()
-            .map(str::trim)
-            .unwrap_or("authority")
-        {
+        let fee_payer = match self.fee_payer.as_deref().map_or("authority", str::trim) {
             "authority" => {
                 assert!(
                     self.fee_program_id.is_none() && self.fee_program_revision.is_none(),
@@ -15491,9 +15498,7 @@ impl AccountOnboarding {
         let (Some(authority), Some(private_key)) = (authority, private_key) else {
             return None;
         };
-        let Some(public_key) = authority.try_signatory() else {
-            return None;
-        };
+        let public_key = authority.try_signatory()?;
         match KeyPair::new(public_key.clone(), private_key) {
             Ok(signer) => Some(signer),
             Err(err) => {
@@ -15544,9 +15549,8 @@ impl AccountOnboarding {
             );
             return None;
         };
-        match <[u8; 32]>::try_from(decoded.as_slice()) {
-            Ok(digest) => Some(digest),
-            Err(_) => {
+        <[u8; 32]>::try_from(decoded.as_slice()).map_or_else(
+            |_| {
                 emit_torii_config_error(
                     emitter,
                     format!(
@@ -15554,8 +15558,9 @@ impl AccountOnboarding {
                     ),
                 );
                 None
-            }
-        }
+            },
+            Some,
+        )
     }
 
     fn parse_credential_scope(
@@ -15821,6 +15826,10 @@ impl AccountOnboarding {
         valid.then_some(parsed_permissions)
     }
 
+    #[expect(
+        clippy::option_option,
+        reason = "outer None marks an invalid configured value, while Some(None) is the valid absent state and Some(Some(_)) is valid presence"
+    )]
     fn parse_fee_sponsor_program_id(
         raw: Option<String>,
         emitter: &mut Emitter<ParseError>,
@@ -15850,6 +15859,10 @@ impl AccountOnboarding {
         Some(Some(parsed))
     }
 
+    #[expect(
+        clippy::option_option,
+        reason = "outer None marks invalid auto-renew configuration, while Some(None) is valid absence and Some(Some(_)) is valid presence"
+    )]
     fn parse_auto_renew(
         config: Option<AccountOnboardingAutoRenew>,
         emitter: &mut Emitter<ParseError>,
@@ -16138,9 +16151,7 @@ impl ToriiFaucet {
         let (Some(authority), Some(private_key)) = (authority, private_key) else {
             return None;
         };
-        let Some(public_key) = authority.try_signatory() else {
-            return None;
-        };
+        let public_key = authority.try_signatory()?;
         match KeyPair::new(public_key.clone(), private_key) {
             Ok(signer) => Some(signer),
             Err(err) => {
@@ -18106,7 +18117,7 @@ pub struct SorafsModerationOrchestrator {
         default = "defaults::sorafs::storage::moderation_orchestrator::MAX_IDEMPOTENCY_RECORDS"
     )]
     pub max_idempotency_records: u32,
-    /// Maximum settlement/publication handoff identities.
+    /// Independent retention ceiling for downstream handoffs and panel notifications.
     #[config(default = "defaults::sorafs::storage::moderation_orchestrator::MAX_HANDOFFS")]
     pub max_handoffs: u32,
     /// Safe attempts under one unchanged operation identity.
@@ -18233,29 +18244,32 @@ impl SorafsModerationOrchestrator {
             );
         }
 
-        let maintenance_authority = match self.maintenance_authority.as_deref() {
-            Some(raw) => match AccountId::parse_encoded(raw) {
-                Ok(parsed) if parsed.canonical() == raw => Some(parsed.into_account_id()),
-                Ok(_) | Err(_) => {
-                    emit(
-                        emitter,
-                        "torii.sorafs.storage.moderation_orchestrator.maintenance_authority must be one canonical AccountId",
-                    );
-                    None
-                }
-            },
-            None => {
-                emit(
-                    emitter,
-                    "torii.sorafs.storage.moderation_orchestrator.maintenance_authority is required when enabled",
-                );
-                None
-            }
+        let Some(authority_literal) = self.maintenance_authority.as_deref() else {
+            emit(
+                emitter,
+                "torii.sorafs.storage.moderation_orchestrator.maintenance_authority is required when enabled",
+            );
+            return None;
         };
+        let Ok(decoded_account) = AccountId::parse_encoded(authority_literal) else {
+            emit(
+                emitter,
+                "torii.sorafs.storage.moderation_orchestrator.maintenance_authority must be one canonical AccountId",
+            );
+            return None;
+        };
+        if decoded_account.canonical() != authority_literal {
+            emit(
+                emitter,
+                "torii.sorafs.storage.moderation_orchestrator.maintenance_authority must be one canonical AccountId",
+            );
+            return None;
+        }
+        let maintenance_authority = decoded_account.into_account_id();
 
         Some(actual::SorafsModerationOrchestrator {
             checkpoint_path: self.checkpoint_path,
-            maintenance_authority: maintenance_authority?,
+            maintenance_authority,
             max_cases: usize::try_from(self.max_cases).unwrap_or(usize::MAX),
             max_events: usize::try_from(self.max_events).unwrap_or(usize::MAX),
             max_outbox_entries: usize::try_from(self.max_outbox_entries).unwrap_or(usize::MAX),
@@ -18520,9 +18534,6 @@ pub struct SorafsStorage {
     /// Durable native reserve/rent transaction worker policy.
     #[config(nested)]
     pub reserve_worker: SorafsReserveWorkerConfig,
-    /// Temporary local admission policy; non-authoritative and not a compatibility branch.
-    #[config(nested)]
-    pub orderbook: SorafsOrderbookConfig,
     /// Canonical Norito trust-policy file required for reputation snapshot admission.
     ///
     /// When absent, the reputation publication endpoint remains fail-closed.
@@ -18541,9 +18552,6 @@ pub struct SorafsStorage {
     /// Local SFM-4b3 evidence-viewer audit-report publication scheduler.
     #[config(nested)]
     pub evidence_viewer_audits: SorafsEvidenceViewerAuditScheduleConfig,
-    /// Local SFM-6 reserve lifecycle advancement scheduler.
-    #[config(nested)]
-    pub reserve_lifecycle: SorafsReserveLifecycleScheduleConfig,
     /// Authentication and rate limits for manifest pin submissions.
     #[config(nested)]
     pub pin: SorafsStoragePin,
@@ -18584,13 +18592,11 @@ impl Default for SorafsStorage {
             stream_tokens: SorafsStreamTokenConfig::default(),
             orderbook_worker: SorafsOrderbookWorkerConfig::default(),
             reserve_worker: SorafsReserveWorkerConfig::default(),
-            orderbook: SorafsOrderbookConfig::default(),
             reputation_trust_policy_path: None,
             pricing_trust_policy_path: None,
             hedging_feed_trust_policy_path: None,
             privacy_aggregates: SorafsPrivacyAggregateScheduleConfig::default(),
             evidence_viewer_audits: SorafsEvidenceViewerAuditScheduleConfig::default(),
-            reserve_lifecycle: SorafsReserveLifecycleScheduleConfig::default(),
             pin: SorafsStoragePin::default(),
             governance_dag_dir: defaults::sorafs::storage::governance_dir(),
             governance_dag_publisher_peer_id:
@@ -18692,13 +18698,11 @@ impl SorafsStorage {
             stream_tokens: self.stream_tokens.parse(),
             orderbook_worker: self.orderbook_worker.parse(emitter),
             reserve_worker: self.reserve_worker.parse(emitter),
-            orderbook: self.orderbook.parse(),
             reputation_trust_policy_path: self.reputation_trust_policy_path,
             pricing_trust_policy_path: self.pricing_trust_policy_path,
             hedging_feed_trust_policy_path: self.hedging_feed_trust_policy_path,
             privacy_aggregates: self.privacy_aggregates.parse(emitter),
             evidence_viewer_audits: self.evidence_viewer_audits.parse(),
-            reserve_lifecycle: self.reserve_lifecycle.parse(),
             pin: self.pin.parse(),
             governance_dag_dir: self.governance_dag_dir,
             governance_dag_publisher_peer_id: self.governance_dag_publisher_peer_id,
@@ -19542,40 +19546,6 @@ impl SorafsReserveWorkerConfig {
     }
 }
 
-/// Temporary local orderbook policy retained only until local-authority removal.
-///
-/// This policy is non-authoritative and does not define compatibility behavior.
-#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
-pub struct SorafsOrderbookConfig {
-    /// Minimum accepted order quantity in GiB.
-    #[config(default = "defaults::sorafs::storage::orderbook::MIN_ORDER_GIB")]
-    pub min_order_gib: u64,
-    /// Accepted XOR price tick per GiB.
-    #[config(default = "defaults::sorafs::storage::orderbook::price_tick()")]
-    pub price_tick: Quantity,
-}
-
-impl Default for SorafsOrderbookConfig {
-    fn default() -> Self {
-        Self {
-            min_order_gib: defaults::sorafs::storage::orderbook::MIN_ORDER_GIB,
-            price_tick: defaults::sorafs::storage::orderbook::price_tick(),
-        }
-    }
-}
-
-impl SorafsOrderbookConfig {
-    fn parse(self) -> actual::SorafsOrderbook {
-        if self.price_tick.is_zero() {
-            panic!("sorafs.storage.orderbook.price_tick must be greater than zero");
-        }
-        actual::SorafsOrderbook {
-            min_order_gib: self.min_order_gib.max(1),
-            price_tick: self.price_tick,
-        }
-    }
-}
-
 /// One fixed public population in the governed SFM-4c privacy query.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
 pub struct SorafsPrivacyAggregatePopulationConfig {
@@ -19978,41 +19948,6 @@ impl SorafsEvidenceViewerAuditScheduleConfig {
             enabled: self.enabled,
             cycle_seconds: self.cycle_seconds.max(1),
             publish_delay_seconds: self.publish_delay_seconds,
-        }
-    }
-}
-
-/// Local SFM-6 reserve lifecycle advancement scheduler.
-#[derive(Debug, ReadConfig, Clone, Copy, norito::JsonDeserialize)]
-pub struct SorafsReserveLifecycleScheduleConfig {
-    /// Whether config-backed reserve lifecycle advancement is enabled.
-    #[config(default = "defaults::sorafs::storage::reserve_lifecycle::ENABLED")]
-    pub enabled: bool,
-    /// Interval between lifecycle advancement ticks, in seconds.
-    #[config(default = "defaults::sorafs::storage::reserve_lifecycle::INTERVAL_SECONDS")]
-    pub interval_seconds: u64,
-    /// Delay before the first lifecycle advancement tick, in seconds.
-    #[config(default = "defaults::sorafs::storage::reserve_lifecycle::INITIAL_DELAY_SECONDS")]
-    pub initial_delay_seconds: u64,
-}
-
-impl Default for SorafsReserveLifecycleScheduleConfig {
-    fn default() -> Self {
-        Self {
-            enabled: defaults::sorafs::storage::reserve_lifecycle::ENABLED,
-            interval_seconds: defaults::sorafs::storage::reserve_lifecycle::INTERVAL_SECONDS,
-            initial_delay_seconds:
-                defaults::sorafs::storage::reserve_lifecycle::INITIAL_DELAY_SECONDS,
-        }
-    }
-}
-
-impl SorafsReserveLifecycleScheduleConfig {
-    fn parse(self) -> actual::SorafsReserveLifecycleSchedule {
-        actual::SorafsReserveLifecycleSchedule {
-            enabled: self.enabled,
-            interval_seconds: self.interval_seconds.max(1),
-            initial_delay_seconds: self.initial_delay_seconds,
         }
     }
 }
@@ -20841,6 +20776,20 @@ impl SorafsGateway {
             })
         });
 
+        if compliance.enabled
+            && (denylist.path.is_some()
+                || denylist.catalog_path.is_some()
+                || !denylist.opt_out_packs.is_empty()
+                || !denylist.extra_packs.is_empty()
+                || denylist.jurisdiction.is_some())
+        {
+            emitter.emit(
+                Report::new(ParseError::InvalidToriiConfig).attach(
+                    "torii.sorafs.gateway.denylist bootstrap sources are forbidden when the governed compliance controller is enabled",
+                ),
+            );
+        }
+
         actual::SorafsGateway {
             require_manifest_envelope,
             enforce_admission,
@@ -21203,6 +21152,10 @@ pub struct SorafsGatewayCompliance {
     pub checkpoint_path: Option<PathBuf>,
     /// Non-zero governance policy identity as lowercase hexadecimal.
     pub policy_id_hex: Option<String>,
+    /// Canonical regional identity for this independently administered gateway.
+    pub region_id: Option<String>,
+    /// Canonical gateway identity; must name one active configured gateway signer.
+    pub gateway_id: Option<String>,
     /// Required distinct catalog approvals.
     #[config(default)]
     pub catalog_threshold: u16,
@@ -21262,6 +21215,8 @@ impl Default for SorafsGatewayCompliance {
             enabled: defaults::sorafs::gateway::compliance::ENABLED,
             checkpoint_path: None,
             policy_id_hex: None,
+            region_id: None,
+            gateway_id: None,
             catalog_threshold: 0,
             catalog_signers: Vec::new(),
             revoked_catalog_signer_ids: Vec::new(),
@@ -21397,6 +21352,8 @@ impl SorafsGatewayCompliance {
         if !self.enabled {
             if self.checkpoint_path.is_some()
                 || self.policy_id_hex.is_some()
+                || self.region_id.is_some()
+                || self.gateway_id.is_some()
                 || self.catalog_threshold != 0
                 || !self.catalog_signers.is_empty()
                 || !self.revoked_catalog_signer_ids.is_empty()
@@ -21439,6 +21396,26 @@ impl SorafsGatewayCompliance {
             "torii.sorafs.gateway.compliance.policy_id_hex",
             self.policy_id_hex.as_deref(),
         );
+        let region_id = match self.region_id.as_deref() {
+            Some(region_id) if canonical_token(region_id) => Some(region_id.to_owned()),
+            _ => {
+                emit(
+                    emitter,
+                    "torii.sorafs.gateway.compliance.region_id must be one canonical non-secret identifier",
+                );
+                None
+            }
+        };
+        let gateway_id = match self.gateway_id.as_deref() {
+            Some(gateway_id) if canonical_token(gateway_id) => Some(gateway_id.to_owned()),
+            _ => {
+                emit(
+                    emitter,
+                    "torii.sorafs.gateway.compliance.gateway_id must be one canonical non-secret identifier",
+                );
+                None
+            }
+        };
         let catalog_signers = parse_signers(
             emitter,
             "torii.sorafs.gateway.compliance.catalog_signers",
@@ -21461,6 +21438,20 @@ impl SorafsGatewayCompliance {
             &self.revoked_gateway_signer_ids,
             &gateway_signers,
         );
+        if gateway_id.as_ref().is_some_and(|gateway_id| {
+            !gateway_signers
+                .iter()
+                .any(|signer| signer.signer_id == *gateway_id)
+                || self
+                    .revoked_gateway_signer_ids
+                    .binary_search(gateway_id)
+                    .is_ok()
+        }) {
+            emit(
+                emitter,
+                "torii.sorafs.gateway.compliance.gateway_id must name one active configured gateway signer",
+            );
+        }
         for (path, threshold, signers, revoked) in [
             (
                 "catalog_threshold",
@@ -21609,6 +21600,8 @@ impl SorafsGatewayCompliance {
         Some(actual::SorafsGatewayCompliance {
             checkpoint_path: checkpoint_path?,
             policy_id: policy_id?,
+            region_id: region_id?,
+            gateway_id: gateway_id?,
             catalog_threshold: self.catalog_threshold,
             catalog_signers,
             revoked_catalog_signer_ids: self.revoked_catalog_signer_ids,
@@ -22480,7 +22473,7 @@ mod offline_cfg_tests {
             "audit_export_dir": null,
             "embedded_signature_policy": null,
             "signer": {
-                "account_id": "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+                "account_id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                 "private_key": "802620282ED9F3CF92811C3818DBC4AE594ED59DC1A2F78E4241E31924E101D6B1FB83"
             },
             "account_aliases": [
@@ -22521,7 +22514,7 @@ mod offline_cfg_tests {
         let signer = parsed.signer.expect("signer present");
         assert_eq!(
             signer.account_id,
-            "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"
+            "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
         );
         assert_eq!(parsed.account_aliases[0].iban, "DE137017");
         assert_eq!(parsed.currency_assets[0].currency, "USD");
@@ -23742,7 +23735,7 @@ pin_torii_urls = [
     }
 
     #[test]
-    fn sorafs_storage_orderbook_policy_rejects_zero_price_tick() {
+    fn sorafs_storage_rejects_removed_local_orderbook_policy() {
         let mut table = base_table();
         let sorafs: Table = toml::from_str(
             r#"
@@ -23754,7 +23747,10 @@ price_tick = "0"
         .expect("parse sorafs orderbook policy");
         table.insert("sorafs".into(), Value::Table(sorafs));
 
-        assert!(std::panic::catch_unwind(|| load_root(table)).is_err());
+        assert!(
+            std::panic::catch_unwind(|| load_root(table)).is_err(),
+            "removed process-local orderbook policy must not be accepted"
+        );
     }
 
     fn assert_orderbook_workers_eq(
@@ -24374,27 +24370,6 @@ publish_delay_seconds = 17
         assert!(schedule.enabled);
         assert_eq!(schedule.cycle_seconds, 1);
         assert_eq!(schedule.publish_delay_seconds, 17);
-    }
-
-    #[test]
-    fn sorafs_storage_reserve_lifecycle_schedule_parses_and_clamps_interval() {
-        let mut table = base_table();
-        let sorafs: Table = toml::from_str(
-            r"
-[storage.reserve_lifecycle]
-enabled = true
-interval_seconds = 0
-initial_delay_seconds = 17
-",
-        )
-        .expect("parse sorafs reserve lifecycle schedule");
-        table.insert("sorafs".into(), Value::Table(sorafs));
-
-        let actual = load_root(table);
-        let schedule = actual.torii.sorafs_storage.reserve_lifecycle;
-        assert!(schedule.enabled);
-        assert_eq!(schedule.interval_seconds, 1);
-        assert_eq!(schedule.initial_delay_seconds, 17);
     }
 
     #[test]

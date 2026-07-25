@@ -58,7 +58,7 @@ translator: manual
   - רענון: `make docs-syscalls`
   - בדיקה בלבד: `bash scripts/check_syscalls_doc.sh`
 - טבלת ABI של קריאות מערכת (`crates/ivm/docs/syscalls.md`)
-  - בדיקה בלבד: `cargo run -p ivm --bin gen_syscalls_doc -- --check --no-code`
+  - בדיקה בלבד: `cargo run -p ivm --bin gen_syscalls_doc -- --check`
   - עדכון קטעים גנריים (והטבלה בתיעוד הקוד): `cargo run -p ivm --bin gen_syscalls_doc -- --write`
 - טבלאות Pointer-ABI (`crates/ivm/docs/pointer_abi.md` ו־`ivm.md`)
   - בדיקה בלבד: `cargo run -p ivm --bin gen_pointer_types_doc -- --check`

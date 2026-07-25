@@ -8,9 +8,21 @@ use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
     smartcontracts::Execute,
-    state::{ElectionState, State, World},
+    state::{
+        ElectionState, GovernancePipeline, GovernanceProposalRecord, GovernanceProposalStatus,
+        GovernanceReferendumMode, GovernanceReferendumRecord, GovernanceReferendumStatus, State,
+        World,
+    },
 };
-use iroha_data_model::{block::BlockHeader, isi::governance::FinalizeReferendum};
+use iroha_data_model::{
+    block::BlockHeader,
+    governance::types::{
+        AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal, ProposalKind,
+    },
+    isi::governance::FinalizeReferendum,
+    nexus::DataSpaceId,
+    smart_contract::ContractAddress,
+};
 use iroha_test_samples::ALICE_ID;
 
 #[test]
@@ -22,7 +34,42 @@ fn finalize_referendum_rejects_unfinalized_zk_election() {
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
 
-    let rid = "ref-finalize-zk".to_string();
+    let proposal_id = [0x42; 32];
+    let rid = hex::encode(proposal_id);
+    let referendum = GovernanceReferendumRecord {
+        h_start: 0,
+        h_end: 10,
+        status: GovernanceReferendumStatus::Open,
+        mode: GovernanceReferendumMode::Zk,
+    };
+    let contract_address = ContractAddress::derive(
+        iroha_config::parameters::defaults::common::chain_discriminant(),
+        &ALICE_ID,
+        0,
+        DataSpaceId::UNIVERSAL,
+    )
+    .expect("test contract address");
+    stx.world.governance_proposals_mut().insert(
+        proposal_id,
+        GovernanceProposalRecord {
+            proposer: ALICE_ID.clone(),
+            kind: ProposalKind::DeployContract(DeployContractProposal {
+                contract_address,
+                code_hash_hex: ContractCodeHash::new([0x11; 32]),
+                abi_hash_hex: ContractAbiHash::new(ivm::syscalls::compute_abi_hash(
+                    ivm::SyscallPolicy::AbiV1,
+                )),
+                abi_version: AbiVersion::new(1),
+                manifest_provenance: None,
+            }),
+            created_height: 1,
+            status: GovernanceProposalStatus::Proposed,
+            pipeline: GovernancePipeline::seeded(1, Some(&referendum), &stx.gov),
+            parliament_snapshot: None,
+            finalization_evidence: None,
+            enacted_at_height: None,
+        },
+    );
     stx.world.elections_mut().insert(
         rid.clone(),
         ElectionState {
@@ -41,19 +88,13 @@ fn finalize_referendum_rejects_unfinalized_zk_election() {
             domain_tag: String::new(),
         },
     );
-    stx.world.governance_referenda_mut().insert(
-        rid.clone(),
-        iroha_core::state::GovernanceReferendumRecord {
-            h_start: 0,
-            h_end: 10,
-            status: iroha_core::state::GovernanceReferendumStatus::Proposed,
-            mode: iroha_core::state::GovernanceReferendumMode::Zk,
-        },
-    );
+    stx.world
+        .governance_referenda_mut()
+        .insert(rid.clone(), referendum);
 
     let instr = FinalizeReferendum {
         referendum_id: rid,
-        proposal_id: [0u8; 32],
+        proposal_id,
     };
     let err = instr.execute(&ALICE_ID, &mut stx).unwrap_err();
     assert!(err.to_string().contains("election tally not finalized"));

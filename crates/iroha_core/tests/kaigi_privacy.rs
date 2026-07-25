@@ -24,8 +24,6 @@ use halo2_proofs::{
     transcript::{Blake2bWrite, Challenge255, TranscriptWriterBuffer},
 };
 use iroha_config::parameters::actual::VerifyingKeyRef;
-#[cfg(feature = "telemetry")]
-use iroha_core::telemetry::StateTelemetry;
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
@@ -412,15 +410,8 @@ fn kaigi_privacy_join_updates_record_and_private_leave_is_rejected() {
     let roster = build_roster_artifacts();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let telemetry = StateTelemetry::default();
-    let mut state = State::new(
-        test_world::world_with_test_accounts(),
-        kura,
-        query_handle,
-        #[cfg(feature = "telemetry")]
-        telemetry,
-    );
+    let mut state =
+        State::new_for_testing(test_world::world_with_test_accounts(), kura, query_handle);
     state.zk.halo2.enabled = true;
     state.zk.verify_timeout = Duration::ZERO;
     state.zk.kaigi_roster_join_vk = Some(roster.vk_ref.clone());
@@ -579,15 +570,8 @@ fn kaigi_privacy_join_rejects_noncanonical_proof_envelope_metadata() {
         let roster = build_roster_artifacts();
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        #[cfg(feature = "telemetry")]
-        let telemetry = StateTelemetry::default();
-        let mut state = State::new(
-            test_world::world_with_test_accounts(),
-            kura,
-            query_handle,
-            #[cfg(feature = "telemetry")]
-            telemetry,
-        );
+        let mut state =
+            State::new_for_testing(test_world::world_with_test_accounts(), kura, query_handle);
         state.zk.halo2.enabled = true;
         state.zk.verify_timeout = Duration::ZERO;
         state.zk.kaigi_roster_join_vk = Some(roster.vk_ref.clone());
@@ -671,15 +655,8 @@ fn usage_summary_emitted_on_record_usage() {
     let usage = build_usage_artifacts();
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let telemetry = StateTelemetry::default();
-    let mut state = State::new(
-        test_world::world_with_test_accounts(),
-        kura,
-        query_handle,
-        #[cfg(feature = "telemetry")]
-        telemetry,
-    );
+    let mut state =
+        State::new_for_testing(test_world::world_with_test_accounts(), kura, query_handle);
     state.zk.halo2.enabled = true;
     state.zk.verify_timeout = Duration::ZERO;
     state.zk.kaigi_roster_join_vk = Some(roster.vk_ref.clone());

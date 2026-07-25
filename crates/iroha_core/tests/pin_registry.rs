@@ -154,7 +154,7 @@ fn alias_proof_fixture_decodes() {
     assert_eq!(bundle.binding.expiry_epoch, 36);
     assert_eq!(
         bundle.binding.manifest_cid.as_slice(),
-        default_digest().as_bytes()
+        root_cid_for_manifest(default_digest()).as_bytes()
     );
     assert!(
         !bundle.council_signatures.is_empty(),

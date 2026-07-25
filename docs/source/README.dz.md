@@ -61,7 +61,7 @@ translator: machine-google-reviewed
   - བསྐྱར་གསོ་: `make docs-syscalls`
   - བརྟག་དཔྱད་རྐྱངམ་གཅིག་: `bash scripts/check_syscalls_doc.sh`
 - སི་ཀཱལ་ཨེ་བི་ཨའི་ཐིག་ཁྲམ་ (ཀེར་ཊི་/ཨཝ་ཨེམ་/ཌོཀསི/སི་ཀཱལ་.md)
-  - བརྟག་དཔྱད་རྐྱངམ་གཅིག་: `cargo run -p ivm --bin gen_syscalls_doc -- --check --no-code`
+  - བརྟག་དཔྱད་རྐྱངམ་གཅིག་: `cargo run -p ivm --bin gen_syscalls_doc -- --check`
   - བཟོ་བཏོན་འབད་ཡོད་པའི་དབྱེ་ཚན་ (དང་ཨང་རྟགས་ཡིག་ཆ་ཚུ་ཐིག་ཁྲམ་): `cargo run -p ivm --bin gen_syscalls_doc -- --write` དུས་མཐུན་བཟོ་ཡོདཔ།
 - དཔག་བྱེད་-ཨེ་བི་ཨའི་ཐིག་ཁྲམ་ཚུ་ (ཀེར་ཊི་/ཨཝ་ཨེམ་/ཌོཀ་/པོའིནཊར་_ཨེམ་ཌི་དང་ཨའི་ཝི་ཨེམ་ཌི་)
   - བརྟག་དཔྱད་རྐྱངམ་གཅིག་: `cargo run -p ivm --bin gen_pointer_types_doc -- --check`

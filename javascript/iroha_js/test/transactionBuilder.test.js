@@ -80,7 +80,10 @@ const AUTHORITY_ID = i105FromEd25519PublicKeyHex(AUTHORITY_PUBLIC_KEY_HEX);
 const AUTHORITY_ID_INPUT = i105FromEd25519PublicKeyHex(
   AUTHORITY_PUBLIC_KEY_HEX,
 );
-const PRIVATE_KEY = Buffer.alloc(32, 0x11);
+const PRIVATE_KEY = Buffer.from(
+  "CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53",
+  "hex",
+);
 const AUTHORITY_FEE_PAYMENT = Object.freeze({
   payer: "authority",
   chargeLimits: Object.freeze([]),

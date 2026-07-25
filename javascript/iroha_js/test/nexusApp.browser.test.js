@@ -22,6 +22,14 @@ function hexBytes(value) {
   );
 }
 
+function fixtureFeePayment() {
+  return {
+    payer: fixture.transfer_input.fee_payment.payer,
+    chargeLimits: [...fixture.transfer_input.fee_payment.value.charge_limits],
+    gasLimit: fixture.transfer_input.fee_payment.value.gas_limit,
+  };
+}
+
 function mockResponse(status, body = "", headers = {}) {
   const encoded = new TextEncoder().encode(body);
   const normalizedHeaders = new Map(
@@ -152,6 +160,7 @@ test("browser Nexus defaults build, finalize, and submit the shared canonical tr
     creationTimeMs: fixture.transfer_input.creation_time_ms,
     ttlMs: fixture.transfer_input.ttl_ms,
     nonce: fixture.transfer_input.nonce,
+    feePayment: fixtureFeePayment(),
     metadata: fixture.transfer_input.metadata,
   });
   const receipt = await client.finalizeAndSubmit(
@@ -201,6 +210,7 @@ test("browser Nexus classifies rejected and timed-out post-submit status waits",
       creationTimeMs: fixture.transfer_input.creation_time_ms,
       ttlMs: fixture.transfer_input.ttl_ms,
       nonce: fixture.transfer_input.nonce,
+      feePayment: fixtureFeePayment(),
       metadata: fixture.transfer_input.metadata,
       feePayment: {
         payer: fixture.transfer_input.fee_payment.payer,
@@ -295,6 +305,7 @@ test("browser Nexus snapshots transfer descriptors before alias resolution", () 
     sourceAssetHoldingId: "asset#snapshot-authority",
     quantity: "1",
     destinationAccountId: "destination",
+    feePayment: fixtureFeePayment(),
   };
   let proxyGets = 0;
   const draft = client.buildTransferDraft(

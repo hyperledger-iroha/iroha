@@ -61,7 +61,7 @@ Sənədlərin sinxronizasiyasını yoxlayır
   - Yenidən yarat: `make docs-syscalls`
   - Yalnız yoxlayın: `bash scripts/check_syscalls_doc.sh`
 - Syscall ABI cədvəli (cates/ivm/docs/syscalls.md)
-  - Yalnız yoxlayın: `cargo run -p ivm --bin gen_syscalls_doc -- --check --no-code`
+  - Yalnız yoxlayın: `cargo run -p ivm --bin gen_syscalls_doc -- --check`
   - Yeni yaradılan bölmə (və kod sənədləri cədvəli): `cargo run -p ivm --bin gen_syscalls_doc -- --write`
 - Pointer‑ABI cədvəlləri (cates/ivm/docs/pointer_abi.md və ivm.md)
   - Yalnız yoxlayın: `cargo run -p ivm --bin gen_pointer_types_doc -- --check`

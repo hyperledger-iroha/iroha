@@ -1793,8 +1793,9 @@ pub fn render_abi_hashes_markdown_table() -> String {
 }
 
 const ABI_V1_SURFACE_DOMAIN: &[u8] = b"IVM_ABI_V1_FULL_SURFACE\0";
-const ABI_SURFACE_DESCRIPTOR_FORMAT_VERSION: u16 = 7;
-const PROGRAM_HEADER_LAYOUT_V1: &str = "49-bytes:magic[4]=IVM\\0;version_major:u8;version_minor:u8;mode:u8;vector_length:u8;max_cycles:u64le;abi_version:u8;abi_hash[32]=SHA-256(canonical-ABI-descriptor-for-abi_version);abi-hash-validated-before-prefix-or-instruction-decode";
+const ABI_SURFACE_DESCRIPTOR_FORMAT_VERSION: u16 = 8;
+const ABI_V1_NORITO_ENCODE_FLAGS: u8 = norito::core::header_flags::COMPACT_LEN;
+const PROGRAM_HEADER_LAYOUT_V1: &str = "49-bytes:magic[4]=IVM\\0;version_major:u8;version_minor:u8;mode:u8;vector_length:u8;max_cycles:u64le;abi_version:u8;abi_hash[32]=Iroha-Hash-v1(canonical-ABI-descriptor-for-abi_version;Blake2b-256-with-final-byte-LSB-set-to-1);abi-hash-validated-before-prefix-or-instruction-decode";
 const NUMERIC_MANTISSA_BITS_V1: u16 = 512;
 const DECIMAL_MAX_SCALE_V1: u8 = 28;
 const NUMERIC_WIRE_FORMAT_VERSION_V1: u8 = 1;
@@ -1898,7 +1899,6 @@ struct AbiNumericJsonSurface {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct AbiNumericSurface {
     semantics_descriptor_version: u8,
-    retired_amount_pointer_type_id: u16,
     int_pointer_type_id: u16,
     decimal_pointer_type_id: u16,
     quantity_pointer_type_id: u16,
@@ -2362,14 +2362,14 @@ fn numeric_operator_surface_v1() -> Vec<AbiNumericOperatorSurface> {
     for operator in ARITHMETIC {
         for lhs in TYPES {
             for rhs in TYPES {
-                let allowed = match (operator, lhs, rhs) {
-                    (_, "int", "int") => true,
-                    ("+" | "-" | "*" | "/", "decimal", "decimal") => true,
-                    ("+" | "-", "quantity", "quantity")
-                    | ("*" | "/", "quantity", "decimal")
-                    | ("/", "quantity", "quantity") => true,
-                    _ => false,
-                };
+                let allowed = matches!(
+                    (operator, lhs, rhs),
+                    (_, "int", "int")
+                        | ("+" | "-" | "*" | "/", "decimal", "decimal")
+                        | ("+" | "-", "quantity", "quantity")
+                        | ("*" | "/", "quantity", "decimal")
+                        | ("/", "quantity", "quantity")
+                );
                 let (result, semantics) = if !allowed {
                     INVALID
                 } else {
@@ -2518,7 +2518,6 @@ fn semantic_abi_surface_v1() -> Result<
         },
         AbiNumericSurface {
             semantics_descriptor_version: 3,
-            retired_amount_pointer_type_id: PointerType::RetiredAmount as u16,
             int_pointer_type_id,
             decimal_pointer_type_id,
             quantity_pointer_type_id,
@@ -3187,10 +3186,6 @@ fn encode_abi_surface(surface: &AbiSurface) -> Result<Vec<u8>, AbiSurfaceError> 
         entrypoint.u64("max_schema_depth", surface.entrypoint.max_schema_depth)
     })?;
     descriptor.record("numeric", |numeric| {
-        numeric.u16(
-            "retired_amount_pointer_type_id",
-            surface.numeric.retired_amount_pointer_type_id,
-        )?;
         numeric.u16("int_pointer_type_id", surface.numeric.int_pointer_type_id)?;
         numeric.u16(
             "decimal_pointer_type_id",
@@ -3432,6 +3427,7 @@ fn embedded_state_type_surface_v1() -> Result<Vec<AbiEmbeddedStateTypeSurface>, 
         .into_iter()
         .map(|(name, value, layout)| {
             let tag = value.wire_tag();
+            let _flags = norito::core::DecodeFlagsGuard::enter(ABI_V1_NORITO_ENCODE_FLAGS);
             let canonical_sample_frame =
                 norito::to_bytes(&value).map_err(|_| AbiSurfaceError::SurfaceTooLarge)?;
             Ok(AbiEmbeddedStateTypeSurface {
@@ -3624,7 +3620,7 @@ fn typed_state_value_surface_v1() -> Result<AbiTypedStateValueSurface, AbiSurfac
             .map_err(|_| AbiSurfaceError::SurfaceTooLarge)?,
         norito_version_major: norito::core::VERSION_MAJOR,
         norito_version_minor: norito::core::VERSION_MINOR,
-        norito_default_encode_flags: norito::core::default_encode_flags(),
+        norito_default_encode_flags: ABI_V1_NORITO_ENCODE_FLAGS,
         enum_discriminant_layout: "explicit-u32-little-endian-codec-index-followed-by-variant-fields-in-declaration-order",
         schema_hash_domain: STATE_VALUE_SCHEMA_HASH_DOMAIN_V1,
         schema_hash_algorithm: "iroha_crypto::Hash::new(schema-hash-domain||exact-canonical-Norito-schema-frame)",
@@ -3699,7 +3695,7 @@ fn collect_abi_surface(policy: crate::SyscallPolicy) -> Result<AbiSurface, AbiSu
     let durable_state = AbiDurableStateSurface {
         semantics_version: 3,
         contract_interface_section_magic: crate::metadata::CONTRACT_INTERFACE_SECTION_MAGIC,
-        contract_interface_section_layout: "ASCII-CNTR+u32le(payload-bytes)+canonical-Norito-frame(EmbeddedContractInterfaceV1 fields in exact order:seiyaku_name,compiler_fingerprint,abi_hash[32],features_bitmap,access_set_hints,kotoba,entrypoints,states,error_codes);abi_hash=SHA-256(canonical-ABI-descriptor-for-declared-abi_version)-and-must-equal-runtime-descriptor-before-admission",
+        contract_interface_section_layout: "ASCII-CNTR+u32le(payload-bytes)+canonical-Norito-frame(EmbeddedContractInterfaceV1 fields in exact order:seiyaku_name,compiler_fingerprint,abi_hash[32],features_bitmap,access_set_hints,kotoba,entrypoints,states,error_codes);abi_hash=Iroha-Hash-v1(canonical-ABI-descriptor-for-declared-abi_version;Blake2b-256-with-final-byte-LSB-set-to-1)-and-must-equal-runtime-descriptor-before-admission",
         contract_interface_schema_name: crate::metadata::CONTRACT_INTERFACE_SCHEMA_NAME_V1,
         contract_interface_schema_hash:
             <crate::metadata::EmbeddedContractInterfaceV1 as norito::NoritoSerialize>::schema_hash(),
@@ -4098,6 +4094,36 @@ mod tests {
     }
 
     #[test]
+    fn abi_hash_uses_the_documented_iroha_hash_v1_commitment() {
+        let descriptor = abi_surface_descriptor(crate::SyscallPolicy::AbiV1)
+            .expect("the canonical ABI-v1 descriptor must be available");
+        let hash = compute_abi_hash(crate::SyscallPolicy::AbiV1);
+
+        assert_eq!(hash, *iroha_crypto::Hash::new(descriptor).as_ref());
+        assert_ne!(
+            hash,
+            iroha_crypto::sha256(descriptor),
+            "ABI v1 uses marked Blake2b-256, not raw SHA-256"
+        );
+        assert_eq!(
+            hash[hash.len() - 1] & 1,
+            1,
+            "Iroha Hash v1 must set the final-byte marker bit"
+        );
+    }
+
+    #[test]
+    fn abi_descriptor_ignores_ambient_norito_layout_flags() {
+        let canonical = build_abi_surface_descriptor(crate::SyscallPolicy::AbiV1)
+            .expect("build canonical ABI descriptor");
+        let _ambient = norito::core::DecodeFlagsGuard::enter(0);
+        let under_noncanonical_ambient = build_abi_surface_descriptor(crate::SyscallPolicy::AbiV1)
+            .expect("build ABI descriptor under alternate ambient flags");
+
+        assert_eq!(under_noncanonical_ambient, canonical);
+    }
+
+    #[test]
     fn abi_hash_binds_typed_private_input_and_full_width_commitment_semantics() {
         use crate::private_input::{
             MAX_PRIVATE_INPUT_RECORD_BYTES_V1, MAX_PRIVATE_INPUT_TRANSPORT_BYTES_V1,
@@ -4268,7 +4294,12 @@ mod tests {
         assert_eq!(typed.norito_version_minor, norito::core::VERSION_MINOR);
         assert_eq!(
             typed.norito_default_encode_flags,
-            norito::core::default_encode_flags()
+            ABI_V1_NORITO_ENCODE_FLAGS
+        );
+        assert_eq!(
+            ABI_V1_NORITO_ENCODE_FLAGS,
+            norito::core::default_encode_flags(),
+            "Norito's workspace default must remain aligned with the pinned ABI-v1 layout"
         );
         assert_eq!(typed.schema_hash_domain, STATE_VALUE_SCHEMA_HASH_DOMAIN_V1);
         assert_eq!(
@@ -4809,17 +4840,10 @@ mod tests {
                 1
             );
         }
-        assert_eq!(
-            PointerType::from_u16(0x0010),
-            Some(PointerType::RetiredAmount)
-        );
-        assert!(!surface.pointer_type_ids.contains(&0x0010));
-        assert_eq!(PointerType::from_u16(0x0013), Some(PointerType::Quantity));
-        assert!(surface.pointer_type_ids.contains(&0x0013));
-        assert_eq!(
-            surface.numeric.retired_amount_pointer_type_id,
-            PointerType::RetiredAmount as u16
-        );
+        assert_eq!(PointerType::from_u16(0x0010), Some(PointerType::Quantity));
+        assert!(surface.pointer_type_ids.contains(&0x0010));
+        assert_eq!(PointerType::from_u16(0x0013), None);
+        assert!(!surface.pointer_type_ids.contains(&0x0013));
         assert_eq!(surface.numeric.int_pointer_type_id, PointerType::Int as u16);
         assert_eq!(
             surface.numeric.decimal_pointer_type_id,
@@ -4949,9 +4973,6 @@ mod tests {
             changed
                 .pointer_type_ids
                 .retain(|type_id| *type_id != PointerType::Decimal as u16);
-        });
-        assert_surface_mutation_changes_hash(|changed| {
-            changed.numeric.retired_amount_pointer_type_id += 1;
         });
         assert_surface_mutation_changes_hash(|changed| {
             changed.numeric.int_pointer_type_id += 1;
@@ -5258,11 +5279,7 @@ mod tests {
         for &pointer_type in crate::pointer_abi::PointerType::all() {
             assert_eq!(
                 allowed.contains(&pointer_type),
-                !matches!(
-                    pointer_type,
-                    crate::pointer_abi::PointerType::RetiredAmount
-                        | crate::pointer_abi::PointerType::TestOnly
-                ),
+                !matches!(pointer_type, crate::pointer_abi::PointerType::TestOnly),
                 "pointer policy completeness for {pointer_type:?}"
             );
         }

@@ -1374,21 +1374,6 @@ pub mod sorafs {
             }
         }
 
-        /// Temporary local orderbook defaults retained only until local-authority removal.
-        ///
-        /// These values are not consulted by the native ledger worker and do
-        /// not define a compatibility branch.
-        pub mod orderbook {
-            /// Minimum accepted order quantity in GiB.
-            pub const MIN_ORDER_GIB: u64 = 1;
-            /// Accepted XOR price tick per GiB.
-            pub fn price_tick() -> iroha_primitives::numeric::Quantity {
-                "0.001"
-                    .parse()
-                    .expect("default SoraFS orderbook price tick")
-            }
-        }
-
         /// Durable native orderbook transaction worker defaults.
         pub mod orderbook_worker {
             use std::num::{NonZeroU32, NonZeroU64};
@@ -1396,7 +1381,7 @@ pub mod sorafs {
             use iroha_config_base::util::Bytes;
             use nonzero_ext::nonzero;
 
-            /// New reserve-work generation is opt-in; durable drain is unconditional.
+            /// New orderbook-work generation is opt-in; durable drain is unconditional.
             pub const ENABLED: bool = false;
             /// Finalized-state scan cadence.
             pub const SCAN_INTERVAL_MS: NonZeroU64 = nonzero!(1_000_u64);
@@ -1528,16 +1513,6 @@ pub mod sorafs {
             pub const CYCLE_SECONDS: u64 = 24 * 60 * 60;
             /// Default delay after a cycle closes before publication (seconds).
             pub const PUBLISH_DELAY_SECONDS: u64 = 60 * 60;
-        }
-
-        /// Reserve lifecycle scheduler defaults.
-        pub mod reserve_lifecycle {
-            /// Enable config-backed SFM-6 reserve lifecycle advancement.
-            pub const ENABLED: bool = false;
-            /// Default reserve lifecycle scheduler cadence (seconds).
-            pub const INTERVAL_SECONDS: u64 = 60 * 60;
-            /// Default delay before the first reserve lifecycle scheduler tick (seconds).
-            pub const INITIAL_DELAY_SECONDS: u64 = 0;
         }
 
         /// Stream token issuance defaults.

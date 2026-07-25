@@ -3111,8 +3111,8 @@ mod tests {
     fn lossy_f64_conversion_is_explicit_and_finite_across_the_domain() {
         let beyond_exact_binary_range = decimal("9007199254740993");
         assert_eq!(
-            beyond_exact_binary_range.to_f64_lossy(),
-            9_007_199_254_740_992.0
+            beyond_exact_binary_range.to_f64_lossy().to_bits(),
+            9_007_199_254_740_992.0_f64.to_bits()
         );
 
         for endpoint in [
@@ -4487,6 +4487,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::too_many_lines)] // The full-width matrix stays together so its corpus cannot drift between helpers.
     #[test]
     fn full_width_decimal_arithmetic_matches_independent_rational_reference() {
         const ROUNDING_MODES: [RoundingMode; 7] = [

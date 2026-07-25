@@ -1954,6 +1954,35 @@ pub fn gateway_tls_renew(
     if options.hostnames.is_empty() {
         return Err("sorafs-gateway tls renew requires at least one hostname".into());
     }
+    if options
+        .account_email
+        .as_deref()
+        .is_some_and(|email| email.trim().is_empty())
+    {
+        return Err("sorafs-gateway tls renew account email cannot be empty".into());
+    }
+    let directory_url = Url::parse(&options.directory_url)
+        .map_err(|error| format!("invalid ACME directory URL: {error}"))?;
+    if !matches!(directory_url.scheme(), "http" | "https") {
+        return Err("ACME directory URL must use http or https".into());
+    }
+    if options
+        .dns_provider_id
+        .as_deref()
+        .is_some_and(|provider| provider.trim().is_empty())
+    {
+        return Err("sorafs-gateway tls renew DNS provider id cannot be empty".into());
+    }
+    if options.output_dir.as_os_str().is_empty() {
+        return Err("sorafs-gateway tls renew output directory cannot be empty".into());
+    }
+    if options.output_dir.exists() && !options.force {
+        return Err(format!(
+            "TLS output directory {} already exists; use --force to replace it",
+            options.output_dir.display()
+        )
+        .into());
+    }
     Err(
         "sorafs-gateway tls renew has no built-in ACME backend; enable Torii ACME only with a runtime-injected provider client"
             .into(),

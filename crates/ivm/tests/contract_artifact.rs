@@ -1762,22 +1762,27 @@ fn verify_rejects_raw_control_flow_into_a_distinct_entrypoint() {
         (
             "conditional branch",
             ivm::encoding::wide::encode_branch(wide::control::BEQ, 0, 0, 2),
+            "ordinary control flow at pc 8 is shared by function roots",
         ),
         (
             "tail jump",
             ivm::encoding::wide::encode_jump(wide::control::JAL, 0, 2),
+            "ordinary control flow at pc 8 is shared by function roots",
         ),
         (
             "direct call",
             ivm::encoding::wide::encode_jump(wide::control::JAL, 1, 2),
+            "reaches distinct entrypoint",
         ),
         (
             "long jump",
             ivm::encoding::wide::encode_offset24(wide::control::JMP, 2),
+            "ordinary control flow at pc 8 is shared by function roots",
         ),
         (
             "long direct call",
             ivm::encoding::wide::encode_offset24(wide::control::JALS, 2),
+            "reaches distinct entrypoint",
         ),
     ];
     let targets = [
@@ -1787,7 +1792,7 @@ fn verify_rejects_raw_control_flow_into_a_distinct_entrypoint() {
         ("kaizen", EntryPointKind::Kaizen),
     ];
 
-    for (encoding, transfer) in transfers {
+    for (encoding, transfer, expected_error) in transfers {
         for (target_name, target_kind) in targets {
             let bytes = contract_artifact_with_code(
                 1,
@@ -1804,12 +1809,17 @@ fn verify_rejects_raw_control_flow_into_a_distinct_entrypoint() {
             );
             let error = ivm::verify_contract_artifact(&bytes)
                 .expect_err("raw cross-entrypoint control flow must fail admission");
+            let error = error.to_string();
             assert!(
-                error
-                    .to_string()
-                    .contains(&format!("reaches distinct entrypoint `{target_name}`")),
+                error.contains(expected_error),
                 "{encoding} into {target_name} returned the wrong error: {error}"
             );
+            if expected_error == "reaches distinct entrypoint" {
+                assert!(
+                    error.contains(&format!("`{target_name}`")),
+                    "{encoding} named the wrong target entrypoint: {error}"
+                );
+            }
         }
     }
 }

@@ -81,7 +81,7 @@ translation_last_reviewed: 2025-11-14
   - التحقق فقط: ‎`bash scripts/check_syscalls_doc.sh`‎
 - جدول ABI لنداءات النظام ‎(`crates/ivm/docs/syscalls.md`)‎
   - التحقق فقط:
-    ‎`cargo run -p ivm --bin gen_syscalls_doc -- --check --no-code`‎
+    ‎`cargo run -p ivm --bin gen_syscalls_doc -- --check`‎
   - تحديث القسم المولّد (وجداول التوثيق في الكود):
     ‎`cargo run -p ivm --bin gen_syscalls_doc -- --write`‎
 - جداول pointer‑ABI ‎(`crates/ivm/docs/pointer_abi.md`‎ و ‎`ivm.md`‎)

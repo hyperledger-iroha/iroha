@@ -138,7 +138,7 @@ seiyaku CallAwareRuntime {
   }
 
   view fn run() -> bool {
-    let pair = swap(false, true);
+    let pair = swap(left: false, right: true);
     let checked = pair.0 && !pair.1;
     return relay(checked);
   }

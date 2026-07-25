@@ -1092,6 +1092,8 @@ fn tx_ivm_rejects_missing_gas_limit_without_hanging() -> eyre::Result<()> {
         .current_dir(dir.path())
         .arg("tx")
         .arg("ivm")
+        .arg("--fee-payer")
+        .arg("authority")
         .arg("--path")
         .arg(&program_path)
         .bounded_output()?;
@@ -1140,6 +1142,8 @@ fn tx_ivm_accepts_gas_limit_flag_and_skips_local_missing_intent_error() -> eyre:
         .current_dir(dir.path())
         .arg("tx")
         .arg("ivm")
+        .arg("--fee-payer")
+        .arg("authority")
         .arg("--path")
         .arg(&program_path)
         .arg("--gas-limit")

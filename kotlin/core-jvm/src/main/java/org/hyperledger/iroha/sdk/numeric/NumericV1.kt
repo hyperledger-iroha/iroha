@@ -203,6 +203,7 @@ private fun scaledText(mantissa: BigInteger, scale: Int): String {
     return (if (negative) "-" else "") + digits.substring(0, split) + "." + digits.substring(split)
 }
 
+// BEGIN GENERATED: kotodama-v1-numeric-policy
 private enum class NumericKind(
     val schemaHash: ByteArray,
     val pointerType: Int,
@@ -210,8 +211,12 @@ private enum class NumericKind(
 ) {
     INT("07c039457363b9e1d36bbd31d93dec4a".hexBytes(), 0x0011, false),
     DECIMAL("ba2ffed52e4d8ee16f17efefe1828524".hexBytes(), 0x0012, true),
-    QUANTITY("e4769984c81ce0e8b678f2eb06274ee3".hexBytes(), 0x0013, true),
+    QUANTITY("e4769984c81ce0e8b678f2eb06274ee3".hexBytes(), 0x0010, true),
 }
+
+private const val MIN_KNOWN_POINTER_TYPE = 0x0001
+private const val MAX_ASSIGNED_POINTER_TYPE = 0x0012
+// END GENERATED: kotodama-v1-numeric-policy
 
 /** Canonical schema-bound frames and pointer envelopes for Kotodama V1 numerics. */
 object NumericV1Codec {
@@ -411,10 +416,7 @@ object NumericV1Codec {
         }
         val header = ByteBuffer.wrap(envelope).order(ByteOrder.BIG_ENDIAN)
         val pointerType = header.short.toInt() and 0xFFFF
-        if (pointerType == 0x0010) {
-            fail(NumericV1ErrorCode.TYPE_NOT_ALLOWED, "retired Amount pointer type is permanently reserved")
-        }
-        val knownAllowedType = pointerType in 0x0001..0x000F || pointerType in 0x0011..0x0013
+        val knownAllowedType = pointerType in MIN_KNOWN_POINTER_TYPE..MAX_ASSIGNED_POINTER_TYPE
         if (!knownAllowedType) fail(NumericV1ErrorCode.UNKNOWN_TYPE, "unknown pointer type")
         if (pointerType != kind.pointerType) fail(NumericV1ErrorCode.WRONG_TYPE, "pointer type does not match")
         if ((header.get().toInt() and 0xFF) != 1) {

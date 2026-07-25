@@ -102,12 +102,12 @@ struct TransferDeltaTranscript {
 | `ivm::host` һәм һынауҙар | Core/Default хужалары дауалау `transfer_v1` партия ҡушымтаһы булараҡ, шул уҡ ваҡытта даирәһе әүҙем, өҫтө `SYSCALL_TRANSFER_V1_BATCH_{BEGIN,END,APPLY}`, һәм макет WSV хост буферҙары яҙмалар, шулай итеп, регрессия һынауҙары раҫлай ала детерминистик баланс . Яңыртыуҙар.【крат/вм/срк/core_host.rs. 1001】【крат/вм/срк/хост.р. р. :3713】【крат/вм/тестар/wsv_host_pointer_rs:219】【краттар/вм/тестар/wsv_host_pointer_rs:287】
 | `iroha_core` | 18NI00000000071X рекордтары менән асыҡ `public_inputs` ваҡытында Kotodama рекордтары менән Emil `TransferTranscript` Эмит `TransitionBatch` индереүҙәр. `TransferAssetBatch` төркөмдәре эҙмә-эҙлекле күсермәләр бер транскриптҡа, посейдон даеджер өсөн күп дельта партиялары үткәрмәй, шуға күрә гаджет итерминистик рәүештә яҙмалар аша итерацион була ала. |
 | `fastpq_prover` | `gadgets::transfer` хәҙер күп деталь транскрипттарын раҫлай (баланс арифметик + Посейдон distest) һәм ер өҫтө шаһиттар (шул иҫәптән урын хужаһы парлы СМТ таптары) планлаштырыусы өсөн (`crates/fastpq_prover/src/gadgets/transfer.rs`). `trace::build_trace` был стенограммаларҙы партия метамағлүмәттәренән сығара, трансфер партияларын кире ҡаға, `transfer_transcripts` файҙалы йөктө юҡҡа сыға, `Trace::transfer_witnesses`-ға раҫланған шаһиттарҙы беркетәләр, ә `TracePolynomialData::transfer_plan()` агрегацияланған планды гаджет ҡулланғанға тиклем тере тота. (`crates/fastpq_prover/src/trace.rs`). 18NI000000084X (`crates/fastpq_prover/src/bin/fastpq_row_bench.rs:1`) аша рәт-һан регрессия йүгәндәре 65536-ға тиклем сценарийҙарҙы ҡаплау, ә парлы SMT проводкаһы TF-3 партия-ярҙамсыһы артында ҡала (урын хужалары эҙҙәр планировкаһы тотороҡло һаҡлай, был ерҙәрҙе алмаштырғансы). |
-| Kotodama | `transfer_batch((from,to,asset,amount), …)` ярҙамсыһы `transfer_v1_batch_begin`, эҙмә-эҙлекле `transfer_asset`, һәм `transfer_v1_batch_end` түбән. Һәр кортеж аргументы `(AccountId, AccountId, AssetDefinitionId, int)` формаһын үтәргә тейеш; бер күсермәләр ғәмәлдәге төҙөүсене һаҡлай. |
+| Kotodama | `transfer_batch((from,to,asset,amount), …)` ярҙамсыһы `transfer_v1_batch_begin`, эҙмә-эҙлекле `transfer_asset`, һәм `transfer_v1_batch_end` түбән. Һәр кортеж аргументы `(AccountId, AccountId, AssetDefinitionId, quantity)` формаһын үтәргә тейеш; бер күсермәләр ғәмәлдәге төҙөүсене һаҡлай. |
 
 Миҫал Kotodama ҡулланыу:
 
 ```text
-fn pay(AccountId a, AccountId b, AssetDefinitionId asset, int x) {
+fn pay(AccountId a, AccountId b, AssetDefinitionId asset, quantity x) {
     transfer_batch((a, b, asset, x), (b, a, asset, 1));
 }
 ```

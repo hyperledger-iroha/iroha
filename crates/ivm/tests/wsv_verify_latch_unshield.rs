@@ -8,6 +8,7 @@ use iroha_data_model::{
     prelude::{Mintable, *},
     proof::VerifyingKeyId,
 };
+use iroha_primitives::numeric::Quantity;
 use ivm::{
     IVM, IVMHost, PointerType,
     host::{ZkCurve, ZkHalo2Backend, ZkHalo2Config},
@@ -150,7 +151,7 @@ fn wsv_verify_latch_allows_unshield_then_resets() {
                 json_object([
                     ("asset", json_value(&asset.to_string())),
                     ("to", json_value(&caller_id)),
-                    ("public_amount", json_value(&1u64)),
+                    ("public_amount", json_value(&Quantity::from(1u64))),
                     ("inputs", inputs_json.clone()),
                     ("proof", proof_json.clone()),
                     ("root_hint", norito::json::Value::Null),
@@ -287,7 +288,7 @@ fn wsv_unshield_routes_private_change_outputs() {
             json_object([
                 ("asset", json_value(&asset.to_string())),
                 ("to", json_value(&caller)),
-                ("public_amount", json_value(&2u64)),
+                ("public_amount", json_value(&Quantity::from(2u64))),
                 ("inputs", json_value(&vec![vec![5u64; 32]])),
                 (
                     "outputs",
@@ -403,7 +404,7 @@ fn unshield_rejects_mismatched_verifying_key() {
             json_object([
                 ("asset", json_value(&asset.to_string())),
                 ("to", json_value(&caller_id)),
-                ("public_amount", json_value(&1u64)),
+                ("public_amount", json_value(&Quantity::from(1u64))),
                 ("inputs", json_value(&vec![vec![0u64; 32]])),
                 ("proof", norito::json::to_value(&proof).unwrap()),
                 ("root_hint", norito::json::Value::Null),
@@ -481,7 +482,7 @@ fn unshield_accepts_and_checks_inline_verifying_key() {
             json_object([
                 ("asset", json_value(&asset.to_string())),
                 ("to", json_value(&caller_id)),
-                ("public_amount", json_value(&1u64)),
+                ("public_amount", json_value(&Quantity::from(1u64))),
                 ("inputs", json_value(&vec![vec![0u64; 32]])),
                 ("proof", norito::json::to_value(&good_attachment).unwrap()),
                 ("root_hint", norito::json::Value::Null),
@@ -526,7 +527,7 @@ fn unshield_accepts_and_checks_inline_verifying_key() {
             json_object([
                 ("asset", json_value(&asset.to_string())),
                 ("to", json_value(&caller_id)),
-                ("public_amount", json_value(&1u64)),
+                ("public_amount", json_value(&Quantity::from(1u64))),
                 ("inputs", json_value(&vec![vec![0u64; 32]])),
                 ("proof", norito::json::to_value(&bad_attachment).unwrap()),
                 ("root_hint", norito::json::Value::Null),

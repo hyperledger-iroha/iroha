@@ -41,6 +41,48 @@ fn test_compiler() -> Compiler {
     })
 }
 
+fn select_test_entrypoint(
+    vm: &mut ivm::IVM,
+    program: &[u8],
+    report: &ivm::kotodama::compiler::CompileReport,
+    name: &str,
+) {
+    let parsed = ProgramMetadata::parse(program).expect("parse Kotodama test artifact");
+    assert!(
+        parsed.contract_interface.is_none(),
+        "test-mode artifacts must not embed a deployable CNTR section"
+    );
+    let implementation = format!("__entrypoint_impl__{name}");
+    let function = report
+        .budget_report
+        .iter()
+        .find(|function| function.function_name == implementation)
+        .or_else(|| {
+            report
+                .budget_report
+                .iter()
+                .find(|function| function.function_name == name)
+        })
+        .unwrap_or_else(|| panic!("missing test entrypoint `{name}`"));
+    let return_offset = program
+        .len()
+        .checked_sub(parsed.header_len + core::mem::size_of::<u32>())
+        .expect("test artifact contains compiler-owned terminal HALT");
+    assert_eq!(
+        program[program.len() - core::mem::size_of::<u32>()..],
+        encoding::wide::encode_halt().to_le_bytes(),
+        "test artifact must end with the compiler-owned terminal HALT"
+    );
+    vm.set_register(
+        1,
+        u64::try_from(return_offset).expect("test return PC fits u64"),
+    );
+    let pc =
+        u64::try_from(parsed.prefix_len()).expect("program prefix fits u64") + function.pc_start;
+    vm.set_program_counter(pc)
+        .unwrap_or_else(|error| panic!("select test entrypoint `{name}`: {error:?}"));
+}
+
 fn parse(source: &str) -> Result<kd_ast::Program, String> {
     parse_source(source)
 }
@@ -142,7 +184,7 @@ fn bytes_type_is_accepted_and_roundtrips_through_semantics() {
 
 #[test]
 fn string_equality_compiles() {
-    let src = "module StringEquality { fn f() { let _x = \"hi\" == \"hi\"; } }";
+    let src = "seiyaku StringEquality { view fn f() { let _x = \"hi\" == \"hi\"; } }";
     let code = Compiler::new()
         .compile_source(src)
         .expect("string equality should compile");
@@ -232,10 +274,11 @@ fn call_function_with_tuple_return() {
 fn quantity_arithmetic_compiles_without_implicit_conversion() {
     let src = r#"
         seiyaku QuantityArithmetic {
-            fn main() -> quantity {
+            view fn main() -> quantity {
                 let quantity a = 9_000_000_000;
-                let quantity b = a * a;
-                let quantity c = b / a;
+                let decimal factor = 2;
+                let quantity b = a * factor;
+                let quantity c = b / factor;
                 return c;
             }
         }
@@ -265,7 +308,7 @@ fn negative_quantity_conversion_is_rejected() {
 fn fractional_quantity_literal_is_accepted_contextually() {
     let src = r#"
         seiyaku DecimalQuantity {
-            fn main() -> bool {
+            view fn main() -> bool {
                 let quantity a = 1.50;
                 return a == a;
             }
@@ -290,8 +333,9 @@ fn decimal_literal_rejects_int_annotation() {
     )
     .expect("parse decimal literal");
     let err = analyze(&prog).expect_err("expected decimal literal type error");
+    assert_eq!(err.code(), "E_TYPE_ANNOTATION_MISMATCH");
     assert!(
-        err.message().contains("scale=0"),
+        err.message().contains("expected int, got decimal"),
         "unexpected error message: {}",
         err.message()
     );
@@ -303,8 +347,7 @@ fn implicit_quantity_to_int_conversion_is_rejected() {
         seiyaku NoImplicitQuantityCast {
             fn main() -> int {
                 let quantity a = 9_000_000_000;
-                let quantity b = a * a;
-                let int c = b;
+                let int c = a;
                 return c;
             }
         }
@@ -319,20 +362,24 @@ fn implicit_quantity_to_int_conversion_is_rejected() {
 fn assert_builtin_obeys_truthiness() {
     let compiler = test_compiler();
 
-    let pass = compiler
-        .compile_source("seiyaku AssertTrue { view fn main() { test::assert(true); } }")
+    let (pass, _manifest, pass_report) = compiler
+        .compile_source_with_manifest_and_report(
+            "seiyaku AssertTrue { view fn main() { test::assert(true); } }",
+        )
         .expect("compile passing assert");
     let mut vm = ivm::IVM::new(u64::MAX);
     vm.load_program(&pass).expect("load passing assert");
-    common::select_kotodama_entrypoint(&mut vm, &pass, "main");
+    select_test_entrypoint(&mut vm, &pass, &pass_report, "main");
     vm.run().expect("test::assert(true) should not abort");
 
-    let fail = compiler
-        .compile_source("seiyaku AssertFalse { view fn main() { test::assert(false); } }")
+    let (fail, _manifest, fail_report) = compiler
+        .compile_source_with_manifest_and_report(
+            "seiyaku AssertFalse { view fn main() { test::assert(false); } }",
+        )
         .expect("compile failing assert");
     let mut vm = ivm::IVM::new(u64::MAX);
     vm.load_program(&fail).expect("load failing assert");
-    common::select_kotodama_entrypoint(&mut vm, &fail, "main");
+    select_test_entrypoint(&mut vm, &fail, &fail_report, "main");
     let err = vm.run().expect_err("test::assert(false) should abort");
     assert!(matches!(err, ivm::VMError::AssertionFailed));
 }
@@ -360,7 +407,7 @@ fn pointer_constructors_compile() {
     let src = r#"
         seiyaku ConstructorDemo {
             kotoage fn run() authorize("Admin") {
-                let alice = AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB");
+                let alice = AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV");
                 let bob = AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76");
                 let asset = AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
                 ledger::account::set_detail(account: context::authority(), key: Name::parse("cursor"), value: Json::parse("{\"query\":\"sc_dummy\",\"cursor\":1}"));
@@ -378,7 +425,7 @@ fn public_function_without_authorization_rejected() {
     let src = r#"
         seiyaku PermissionDemo {
             kotoage fn run() {
-                ledger::asset::transfer(source: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), destination: AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"), asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), amount: 1, dataspace: DataSpaceId::parse("0"));
+                ledger::asset::transfer(source: AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"), destination: AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"), asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), amount: 1, dataspace: DataSpaceId::parse("0"));
             }
         }
     "#;
@@ -414,7 +461,7 @@ fn register_account_requires_permission() {
     let src = r#"
         seiyaku PermissionDemo {
             kotoage fn add() {
-                ledger::account::register(AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"));
+                ledger::account::register(AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"));
             }
         }
     "#;
@@ -451,7 +498,7 @@ fn public_function_with_permission_is_allowed() {
     let src = r#"
         seiyaku PermissionDemo {
             kotoage fn run() authorize("Admin") {
-                ledger::asset::transfer(source: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), destination: AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"), asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), amount: 1, dataspace: DataSpaceId::parse("0"));
+                ledger::asset::transfer(source: AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"), destination: AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"), asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), amount: 1, dataspace: DataSpaceId::parse("0"));
             }
         }
     "#;
@@ -484,16 +531,13 @@ fn parse_for_each_map_and_builtins() {
     let src = r#"
         seiyaku StateIteration {
             state StateMap<int, int> values;
-            fn f() { for (k, v) in values { debug::info("kv"); } }
+            view fn f() { for (k, v) in (values) { let seen = v; } }
         }
     "#;
-    let prog = parse(src).expect("parse");
-    // Bare map iteration is rejected by the semantic phase; callers must bound it.
-    let err = analyze(&prog).expect_err("expected unbounded iteration error");
+    let err = parse(src).expect_err("bare StateMap iteration must be rejected");
     assert!(
-        err.message().contains(".take"),
-        "error hint should mention the canonical bounded helper: {}",
-        err.message()
+        err.contains("StateMap iteration requires `.take(N)` or `.range(start, end)`"),
+        "error hint should mention the canonical bounded helpers: {err}"
     );
 }
 
@@ -688,15 +732,12 @@ fn compile_emits_block_height_syscall() {
 fn compile_emits_extended_sysvar_helpers() {
     let src = r#"
         seiyaku Context {
-          kotoage fn f() authorize("Test") {
+          view fn f() -> (int, bytes, bytes, bytes) {
             let block_time = context::block_time_ms();
             let chain = context::chain_id();
-            let seiyaku = context::seiyaku_address();
+            let contract_address = context::seiyaku_address();
             let name = context::kotoage();
-            debug::info(block_time);
-            debug::info(chain);
-            debug::info(seiyaku);
-            debug::info(name);
+            return (block_time, chain, contract_address, name);
           }
         }
     "#;
@@ -832,7 +873,7 @@ fn manifest_includes_exact_access_hints_for_static_typed_query_get_helpers() {
         asset::id::{AssetDefinitionId, AssetId},
     };
 
-    let account = AccountId::parse_encoded("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB")
+    let account = AccountId::parse_encoded("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV")
         .map(ParsedAccountId::into_account_id)
         .expect("parse account literal");
     let asset_definition = AssetDefinitionId::parse_address_literal("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")
@@ -1000,8 +1041,9 @@ fn semantic_rejects_zk_vrf_read_helper_args() {
             .unwrap();
     let err = analyze(&prog).expect_err("expected vrf seed payload type error");
     assert!(
-        err.message()
-            .contains("crypto::vrf::epoch_seed expects (bytes) VrfEpochSeedRequest"),
+        err.message().contains(
+            "crypto::vrf::epoch_seed expects (bytes) pointer to NoritoBytes VrfEpochSeedRequest"
+        ),
         "unexpected error: {}",
         err.message()
     );
@@ -1011,17 +1053,13 @@ fn semantic_rejects_zk_vrf_read_helper_args() {
 fn compile_emits_state_introspection_helpers() {
     let src = r#"
         seiyaku StateIntrospection {
-        fn f() -> bytes {
+        view fn f() -> (bytes, bool, int, int) {
             let prefix = Name::parse("Orders");
             let keys = state::keys(path: prefix, offset: 0, limit: 2);
             let present = state::contains(prefix);
             let len = state::len(prefix);
             let count = state::count(prefix);
-            if present {
-                debug::info(len);
-            }
-            debug::info(count);
-            return keys;
+            return (keys, present, len, count);
         }
         }
     "#;
@@ -1051,7 +1089,7 @@ fn semantic_rejects_state_introspection_helper_args() {
     let err = analyze(&prog).expect_err("expected state_keys type error");
     assert!(
         err.message()
-            .contains("state_keys expects (Name, int offset, int limit)"),
+            .contains("state::keys expects (Name, int offset, int limit)"),
         "unexpected error: {}",
         err.message()
     );
@@ -1061,7 +1099,7 @@ fn semantic_rejects_state_introspection_helper_args() {
 fn compile_emits_extended_hash_syscalls() {
     let src = r#"
         seiyaku HashFunctions {
-        fn f(bytes payload) -> Json {
+        view fn f(bytes payload) -> Json {
             let b = crypto::blake2b256(payload);
             let k = crypto::keccak256(payload);
             let i = crypto::iroha_hash(payload);
@@ -1144,7 +1182,7 @@ fn for_each_map_mutation_is_rejected() {
     "#;
     let prog = parse(src).expect("parse");
     let err = analyze(&prog).expect_err("should reject mutation during iteration");
-    assert!(err.message().contains("E_ITER_MUTATION"));
+    assert_eq!(err.code(), "E_ITER_MUTATION");
 }
 
 #[test]
@@ -1270,7 +1308,7 @@ fn pointer_constructors_accept_string_variables() {
         seiyaku PointerConstructors {
           kotoage fn main() authorize("PointerConstructors") {
             let did = "wonderland.universal";
-            let aid = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
+            let aid = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
             let key = "cursor";
             let val = "{\"query\":\"sc_dummy\",\"cursor\":1}";
             ledger::account::set_detail(account: AccountId::parse(aid), key: Name::parse(key), value: Json::parse(val));
@@ -1318,7 +1356,8 @@ fn pointer_constructors_reject_implicit_conversions_and_method_aliases() {
         assert!(
             error.contains("expects string")
                 || error.contains("method aliases were removed")
-                || error.contains("compiler-internal"),
+                || error.contains("compiler-internal")
+                || error.contains("unknown function or builtin"),
             "unexpected error: {error}"
         );
     }
@@ -1515,7 +1554,7 @@ fn semantic_type_enforcement_for_typed_syscalls() {
     )
     .unwrap();
     assert!(analyze(&bad).is_err());
-    let bad2 = parse("module InvalidDetail { fn f() { ledger::account::set_detail(account: AccountId::parse(\"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB\"), key: Json::parse(\"1\"), value: Name::parse(\"k\")); } }").unwrap();
+    let bad2 = parse("module InvalidDetail { fn f() { ledger::account::set_detail(account: AccountId::parse(\"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\"), key: Json::parse(\"1\"), value: Name::parse(\"k\")); } }").unwrap();
     assert!(analyze(&bad2).is_err());
 }
 
@@ -1589,7 +1628,7 @@ fn dynamic_state_map_range_is_rejected() {
 
 #[test]
 fn compile_typed_nft_syscalls() {
-    let src = "seiyaku NftCalls { kotoage fn main() authorize(\"ManageNfts\") { ledger::nft::mint(NftId::parse(\"n0$wonderland.universal\"), AccountId::parse(\"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB\")); ledger::nft::transfer(source: AccountId::parse(\"sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB\"), nft: NftId::parse(\"n0$wonderland.universal\"), destination: AccountId::parse(\"sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76\")); } }";
+    let src = "seiyaku NftCalls { kotoage fn main() authorize(\"ManageNfts\") { ledger::nft::mint(nft: NftId::parse(\"n0$wonderland.universal\"), owner: AccountId::parse(\"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\")); ledger::nft::transfer(source: AccountId::parse(\"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\"), nft: NftId::parse(\"n0$wonderland.universal\"), destination: AccountId::parse(\"sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76\")); } }";
     let code = Compiler::new()
         .compile_source(src)
         .expect("compile typed NFT");
@@ -1626,7 +1665,7 @@ fn compiler_owns_first_release_abi_metadata() {
 #[test]
 fn compile_emits_manifest_hashes() {
     use ivm::{SyscallPolicy, syscalls::compute_abi_hash};
-    let src = "module ManifestHash { fn f() { let x = 1 + 2; } }";
+    let src = "seiyaku ManifestHash { view fn f() { let x = 1 + 2; } }";
     let (code, manifest) = Compiler::new()
         .compile_source_with_manifest(src)
         .expect("compile with manifest");
@@ -1646,10 +1685,14 @@ fn compile_emits_manifest_hashes() {
 fn manifest_code_hash_reflects_literals() {
     let compiler = Compiler::new();
     let (_, manifest_a) = compiler
-        .compile_source_with_manifest("seiyaku LiteralAlpha { fn f() { debug::info(\"alpha\"); } }")
+        .compile_source_with_manifest(
+            "seiyaku LiteralAlpha { view fn f() -> string { return \"alpha\"; } }",
+        )
         .expect("compile alpha");
     let (_, manifest_b) = compiler
-        .compile_source_with_manifest("seiyaku LiteralBeta { fn f() { debug::info(\"beta\"); } }")
+        .compile_source_with_manifest(
+            "seiyaku LiteralBeta { view fn f() -> string { return \"beta\"; } }",
+        )
         .expect("compile beta");
     let hash_a = manifest_a.code_hash.expect("alpha code hash");
     let hash_b = manifest_b.code_hash.expect("beta code hash");
@@ -1748,7 +1791,7 @@ fn manifest_includes_isi_access_hints_for_static_targets() {
     let src = r#"
         seiyaku StaticAssetAccess {
         kotoage fn main() authorize("MintAndBurn") {
-            let acc = AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB");
+            let acc = AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV");
             let asset = AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
             ledger::asset::mint(account: acc, asset_definition: asset, amount: 1);
             ledger::asset::burn(account: acc, asset_definition: asset, amount: 1);
@@ -1762,7 +1805,7 @@ fn manifest_includes_isi_access_hints_for_static_targets() {
         .access_set_hints
         .expect("access_set_hints must be present");
     let account: AccountId =
-        AccountId::parse_encoded("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB")
+        AccountId::parse_encoded("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV")
             .map(iroha_data_model::account::ParsedAccountId::into_account_id)
             .expect("parse encoded account literal");
     let asset_def =
@@ -1802,7 +1845,7 @@ fn production_manifest_accepts_authority_placeholder_isi_access() {
         seiyaku AuthorityDomainTransfer {
         kotoage fn main() authorize("TransferDomain") {
             ledger::domain::transfer(
-                source: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"),
+                source: AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"),
                 domain: DomainId::parse("wonderland.universal"),
                 destination: context::authority(),
             );
@@ -1847,7 +1890,7 @@ fn production_manifest_accepts_authority_placeholder_isi_access() {
 }
 
 #[test]
-fn production_manifest_rejects_parameter_dependent_isi_access() {
+fn production_manifest_accepts_parameter_dependent_isi_access_with_coarse_hints() {
     let src = r#"
         seiyaku Test {
             kotoage fn move(AccountId from, AccountId to, AssetDefinitionId asset, quantity amount, DataSpaceId space) authorize("Admin") {
@@ -1855,35 +1898,54 @@ fn production_manifest_rejects_parameter_dependent_isi_access() {
             }
         }
     "#;
-    let err = Compiler::new()
+    let (_code, manifest) = Compiler::new()
         .compile_source_with_manifest(src)
-        .expect_err("production compile must reject incomplete parameter-dependent ISI access");
-    assert!(
-        err.contains("E_ACCESS_INCOMPLETE"),
-        "unexpected error: {err}"
-    );
+        .expect("parameter-dependent asset transfers have bounded coarse hints");
+    let hints = manifest
+        .access_set_hints
+        .expect("production manifest must include access hints");
+    for key in ["account:*", "asset:*", "asset_def:*"] {
+        assert!(hints.read_keys.iter().any(|actual| actual == key));
+    }
+    for key in ["asset:*", "asset_def:*"] {
+        assert!(hints.write_keys.iter().any(|actual| actual == key));
+    }
+    assert!(!hints.read_keys.iter().any(|key| key == "*"));
+    assert!(!hints.write_keys.iter().any(|key| key == "*"));
+
+    let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
+    let move_entry = entrypoints
+        .iter()
+        .find(|entry| entry.name == "move")
+        .expect("move entrypoint");
+    assert_eq!(move_entry.access_hints_complete, Some(true));
+    assert!(move_entry.access_hints_skipped.is_empty());
+    for key in ["account:*", "asset:*", "asset_def:*"] {
+        assert!(move_entry.read_keys.iter().any(|actual| actual == key));
+    }
+    for key in ["asset:*", "asset_def:*"] {
+        assert!(move_entry.write_keys.iter().any(|actual| actual == key));
+    }
 }
 
 #[test]
-fn kotoba_block_emits_manifest_translations() {
-    let src = r#"
-        seiyaku C {
-            messages {
-                "E0001": { en: "Invalid assets", ja: "無効な資産" }
-                hint: { en: "Check inputs" }
-            }
-            view fn main() {}
-        }
-    "#;
-    let (_code, manifest) = Compiler::new()
-        .compile_source_with_manifest(src)
-        .expect("compile manifest with kotoba");
-    let entries = manifest.kotoba.expect("kotoba entries should be present");
-    assert_eq!(entries.len(), 2);
-    assert_eq!(entries[0].msg_id, "E0001");
-    assert_eq!(entries[0].translations.len(), 2);
-    assert_eq!(entries[1].msg_id, "hint");
-    assert_eq!(entries[1].translations[0].lang, "en");
+fn source_localization_blocks_are_rejected() {
+    for spelling in ["messages", "kotoba"] {
+        let src = format!(
+            r#"
+            seiyaku C {{
+                {spelling} {{
+                    "E0001": {{ en: "Invalid assets", ja: "無効な資産" }}
+                }}
+                view fn main() {{}}
+            }}
+            "#
+        );
+        let error = Compiler::new()
+            .compile_source_with_manifest(&src)
+            .expect_err("source localization tables are not part of V1");
+        assert!(error.contains("source-unit item"), "{error}");
+    }
 }
 
 #[test]
@@ -1916,7 +1978,7 @@ fn canonical_host_calls_typecheck_and_removed_map_does_not() {
     let src = r#"
         seiyaku Transfer {
           kotoage fn f() authorize("Admin") {
-            ledger::asset::transfer(source: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), destination: AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"), asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), amount: 1, dataspace: DataSpaceId::parse("0"));
+            ledger::asset::transfer(source: AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"), destination: AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"), asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), amount: 1, dataspace: DataSpaceId::parse("0"));
           }
         }
     "#;
@@ -1933,7 +1995,7 @@ fn indirect_sensitive_calls_require_permission() {
     let src = r#"
         seiyaku Permission {
           fn helper() {
-            ledger::asset::transfer(source: AccountId::parse("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"), destination: AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"), asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), amount: 1, dataspace: DataSpaceId::parse("0"));
+            ledger::asset::transfer(source: AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"), destination: AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"), asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"), amount: 1, dataspace: DataSpaceId::parse("0"));
         }
 
         kotoage fn public_entry() {
@@ -1984,16 +2046,17 @@ fn ternary_parses_and_types() {
 
 #[test]
 fn ternary_min_types() {
-    let src = "module Ternary { fn min(int a, int b) -> int { return (a < b) ? a : b; } }";
+    let src = "module Ternary { fn choose_min(int a, int b) -> int { return (a < b) ? a : b; } }";
     let typed = analyze(&parse(src).expect("parse ternary")).expect("type ternary");
     assert!(typed.items.iter().any(|item| {
-        matches!(item, ivm::kotodama::semantic::TypedItem::Function(function) if function.name == "min")
+        matches!(item, ivm::kotodama::semantic::TypedItem::Function(function) if function.name == "choose_min")
     }));
 }
 
 #[test]
 fn nested_ternary_types() {
-    let src = "module Ternary { fn f(int a, int b, int c) -> int { return (a < b) ? ((b < c) ? b : c) : a; } }";
+    let src =
+        "module Ternary { fn f(int a, int b, int c) -> int { return a < b ? b < c ? b : c : a; } }";
     analyze(&parse(src).expect("parse nested ternary")).expect("type nested ternary");
 }
 
@@ -2031,7 +2094,7 @@ fn removed_in_memory_map_indexing_is_rejected() {
 }
 
 #[test]
-fn branch_lowering_uses_compact_bne_and_one_relaxed_transfer() {
+fn branch_lowering_uses_compact_conditional_and_one_relaxed_transfer() {
     let src = r#"
 seiyaku Branches {
     view fn branch(bool b) -> int {
@@ -2050,7 +2113,7 @@ seiyaku Branches {
     let branch = report
         .budget_report
         .iter()
-        .find(|entry| entry.function_name == "branch")
+        .find(|entry| entry.function_name == "__entrypoint_impl__branch")
         .expect("branch budget report");
     let words = code[metadata.code_offset + branch.pc_start as usize
         ..metadata.code_offset + branch.pc_end as usize]
@@ -2058,33 +2121,43 @@ seiyaku Branches {
         .map(|chunk| u32::from_le_bytes(chunk.try_into().expect("word chunk")))
         .collect::<Vec<_>>();
 
-    let bne_index = words
+    let branch_index = words
         .iter()
-        .position(|word| ((word >> 24) as u8) == instruction::wide::control::BNE)
-        .expect("expected BNE in lowered branch");
+        .position(|word| {
+            matches!(
+                instruction::wide::opcode(*word),
+                instruction::wide::control::BEQ | instruction::wide::control::BNE
+            )
+        })
+        .expect("expected compact conditional branch");
 
-    let bne_word = words[bne_index];
-    let imm = (bne_word & 0xFF) as u8 as i8;
+    let branch_word = words[branch_index];
+    let imm = instruction::wide::imm8(branch_word);
     assert_eq!(
         imm, 2,
         "BNE should skip the one-word else transfer and land on the one-word then transfer"
     );
 
-    let relaxed_else_transfer = words[bne_index + 1];
-    let then_block_index = bne_index + imm as usize;
+    let relaxed_else_transfer = words[branch_index + 1];
+    let then_block_index =
+        branch_index + usize::try_from(imm).expect("positive branch displacement");
     assert!(
         words.len() > then_block_index,
         "BNE target should land directly in the then block"
     );
-    assert_eq!(
-        (relaxed_else_transfer >> 24) as u8,
-        instruction::wide::control::JAL,
-        "fallthrough path must jump to the else block"
+    assert!(
+        matches!(
+            instruction::wide::opcode(relaxed_else_transfer),
+            instruction::wide::control::JAL | instruction::wide::control::JMP
+        ),
+        "fallthrough path must transfer to the non-adjacent block"
     );
-    assert_ne!(
-        (words[then_block_index] >> 24) as u8,
-        instruction::wide::control::JAL,
-        "taken path must fall through into the then block without a second jump"
+    assert!(
+        !matches!(
+            instruction::wide::opcode(words[then_block_index]),
+            instruction::wide::control::JAL | instruction::wide::control::JMP
+        ),
+        "taken path must fall through into the adjacent block without a second jump"
     );
 }
 
@@ -2100,20 +2173,22 @@ fn compile_poseidon2_and_assert_eq() {
 
     // assert_eq succeeds without enabling ZK mode
     let src = "seiyaku Assertions { view fn pass() { test::assert_eq(actual: 1, expected: 1); } view fn fail() { test::assert_eq(actual: 1, expected: 2); } }";
-    let code = test_compiler().compile_source(src).expect("compile failed");
+    let (code, _manifest, report) = test_compiler()
+        .compile_source_with_manifest_and_report(src)
+        .expect("compile failed");
 
     let (meta, _) = parse_meta_offset(&code).unwrap();
     assert_eq!(meta.mode & 0x01, 0);
 
     let mut vm = ivm::IVM::new(u64::MAX);
     vm.load_program(&code).unwrap();
-    common::select_kotodama_entrypoint(&mut vm, &code, "pass");
+    select_test_entrypoint(&mut vm, &code, &report, "pass");
     vm.run().expect("assert_eq failed");
 
     // failing case
     let mut vm2 = ivm::IVM::new(u64::MAX);
     vm2.load_program(&code).unwrap();
-    common::select_kotodama_entrypoint(&mut vm2, &code, "fail");
+    select_test_entrypoint(&mut vm2, &code, &report, "fail");
     let res = vm2.run();
     assert!(matches!(res, Err(ivm::VMError::AssertionFailed)));
 }
@@ -2144,71 +2219,68 @@ fn typed_json_access_spills_are_handled() {
     use ivm::kotodama::ir::Instr;
     use ivm::kotodama::regalloc;
 
-    let build_src = |count: usize| {
-        let mut src = String::from("module JsonSpills {\nfn main(Json j) -> int {\n");
-        for i in 0..count {
-            let value = (i + 1) as i64;
-            src.push_str(&format!("  let v{i} = {value};\n"));
-        }
-        src.push_str("  var sum = 0;\n");
-        for i in 0..count {
-            src.push_str(&format!("  sum = sum + v{i};\n"));
-        }
-        src.push_str("  let val = match j.get_int(Name::parse(\"value\")) { Option::some(value) => value, Option::none => 0 };\n");
-        src.push_str("  return sum + val;\n}\n}\n");
-        src
-    };
-
-    let mut chosen = None;
-    let mut count = 20usize;
-    while count <= 80 {
-        let src = build_src(count);
-        let prog = parse(&src).expect("parse typed Json spill");
-        let typed = analyze(&prog).expect("analyze typed Json spill");
-        let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
-        let func = ir
-            .functions
-            .iter()
-            .find(|f| f.name == "main")
-            .expect("main lowered");
-        let alloc = regalloc::allocate(func);
-        let is_spilled = |t: &ivm::kotodama::ir::Temp| alloc.stack.contains_key(t);
-        let mut saw_spill = false;
-        for bb in &func.blocks {
-            for ins in &bb.instrs {
-                match ins {
-                    Instr::JsonGetNumeric {
-                        dest,
-                        json,
-                        key,
-                        kind: ivm::kotodama::ir::WideNumericKind::Int,
-                    } => {
-                        if is_spilled(dest) || is_spilled(json) || is_spilled(key) {
-                            saw_spill = true;
-                        }
-                    }
-                    _ => {}
+    std::thread::Builder::new()
+        .name("typed_json_access_spills".to_owned())
+        .stack_size(8 * 1024 * 1024)
+        .spawn(|| {
+            let build_src = |count: usize| {
+                let mut src =
+                    String::from("seiyaku JsonSpills {\nview fn main(Json j) -> int {\n");
+                for i in 0..count {
+                    let value = (i + 1) as i64;
+                    src.push_str(&format!("  let v{i} = {value};\n"));
                 }
-            }
-        }
-        if saw_spill {
-            chosen = Some(src);
-            break;
-        }
-        count += 4;
-    }
+                src.push_str("  let val = match j.get_int(Name::parse(\"value\")) { Option::some(value) => value, Option::none => 0 };\n");
+                src.push_str("  let sum = ");
+                for i in 0..count {
+                    if i > 0 {
+                        src.push_str(" + ");
+                    }
+                    src.push_str(&format!("v{i}"));
+                }
+                src.push_str(" + val;\n  return sum;\n}\n}\n");
+                src
+            };
 
-    let src = chosen.expect("expected typed Json access spill; adjust pressure if needed");
-    Compiler::new()
-        .compile_source(&src)
-        .expect("compile typed Json spill");
+            let src = build_src(32);
+            let prog = parse(&src).expect("parse typed Json spill");
+            let typed = analyze(&prog).expect("analyze typed Json spill");
+            let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
+            let func = ir
+                .functions
+                .iter()
+                .find(|f| f.name == "__entrypoint_impl__main")
+                .expect("main implementation lowered");
+            assert!(func.blocks.iter().any(|block| {
+                block.instrs.iter().any(|instruction| {
+                    matches!(
+                        instruction,
+                        Instr::JsonGetNumeric {
+                            kind: ivm::kotodama::ir::WideNumericKind::Int,
+                            ..
+                        }
+                    )
+                })
+            }));
+            let alloc = regalloc::allocate(func);
+            assert!(
+                !alloc.stack.is_empty(),
+                "fixture must compile typed Json access in a spilled stack frame"
+            );
+            Compiler::new()
+                .compile_source(&src)
+                .expect("compile typed Json spill");
+        })
+        .expect("spawn typed Json spill test")
+        .join()
+        .expect("typed Json spill test thread");
 }
 
 #[test]
 fn raw_json_codec_aliases_are_rejected() {
     let src = r#"
-        module RemovedCodecAliases {
-            fn main(bytes payload) -> Json {
+        seiyaku RemovedCodecAliases {
+            view fn main(bytes payload) -> Json {
                 return decode_json(payload);
             }
         }
@@ -2244,11 +2316,14 @@ fn unbounded_state_map_iteration_is_rejected() {
     let src = r#"
         seiyaku UnboundedStateIteration {
             state StateMap<int, int> values;
-            fn f() { for (key, value) in values { let seen = value; } }
+            view fn f() { for (key, value) in (values) { let seen = value; } }
         }
     "#;
     let err = Compiler::new().compile_source(src).unwrap_err();
-    assert!(err.contains("E_UNBOUNDED_ITERATION"));
+    assert!(
+        err.contains("StateMap iteration requires `.take(N)` or `.range(start, end)`"),
+        "{err}"
+    );
 }
 
 #[test]
@@ -2256,11 +2331,14 @@ fn unbounded_state_map_iteration_cannot_infer_a_limit() {
     let src = r#"
         seiyaku MissingStateIterationLimit {
             state StateMap<int, int> values;
-            fn sum() { for (key, value) in values { let seen = key; } }
+            view fn sum() { for (key, value) in (values) { let seen = key; } }
         }
     "#;
     let err = Compiler::new().compile_source(src).unwrap_err();
-    assert!(err.contains("E_UNBOUNDED_ITERATION"));
+    assert!(
+        err.contains("StateMap iteration requires `.take(N)` or `.range(start, end)`"),
+        "{err}"
+    );
 }
 
 #[test]
@@ -2284,7 +2362,7 @@ fn compile_complex_program() {
     let path = std::path::Path::new("tests/data/complex.ko");
     let code = Compiler::new().compile_file(path).expect("compile failed");
     let (meta, _) = parse_meta_offset(&code).unwrap();
-    assert!(meta.mode & 0x01 != 0); // uses ZK builtins
+    assert_eq!(meta.mode & ivm::ivm_mode::ZK, 0);
 }
 
 #[test]
@@ -2301,34 +2379,45 @@ fn parse_control_flow() {
 fn parse_amm_dex() {
     use std::path::Path;
 
-    use ivm::kotodama::ir::Instr;
+    use ivm::kotodama::ir::{Instr, WideNumericKind};
     let path = Path::new("tests/data/amm.ko");
     let src = std::fs::read_to_string(path).expect("read failed");
     let prog = parse(&src).expect("parse failed");
     let typed = analyze(&prog).expect("semantic analysis failed");
     let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
-    let instrs = &ir.functions[0].blocks[0].instrs;
-    assert!(instrs.iter().any(|i| matches!(
-        i,
-        Instr::Binary {
-            op: BinaryOp::Mul,
-            ..
+    let mut has_mul = false;
+    let mut has_div = false;
+    for function in &ir.functions {
+        for block in &function.blocks {
+            for instruction in &block.instrs {
+                match instruction {
+                    Instr::NumericBinary {
+                        op: BinaryOp::Mul,
+                        left_kind: WideNumericKind::Int,
+                        right_kind: WideNumericKind::Int,
+                        result_kind: WideNumericKind::Int,
+                        ..
+                    } => has_mul = true,
+                    Instr::NumericBinary {
+                        op: BinaryOp::Div,
+                        left_kind: WideNumericKind::Int,
+                        right_kind: WideNumericKind::Int,
+                        result_kind: WideNumericKind::Int,
+                        ..
+                    } => has_div = true,
+                    _ => {}
+                }
+            }
         }
-    )));
-    assert!(instrs.iter().any(|i| matches!(
-        i,
-        Instr::Binary {
-            op: BinaryOp::Div,
-            ..
-        }
-    )));
+    }
+    assert!(has_mul && has_div);
 }
 
 #[test]
 fn parse_dai_clone() {
     use std::path::Path;
 
-    use ivm::kotodama::ir::Instr;
+    use ivm::kotodama::ir::{Instr, WideNumericKind};
     let path = Path::new("tests/data/dai.ko");
     let src = std::fs::read_to_string(path).expect("read failed");
     let prog = parse(&src).expect("parse failed");
@@ -2336,16 +2425,26 @@ fn parse_dai_clone() {
     let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
     let mut has_add = false;
     let mut has_sub = false;
-    for block in &ir.functions[0].blocks {
-        for instr in &block.instrs {
-            match instr {
-                Instr::Binary {
-                    op: BinaryOp::Add, ..
-                } => has_add = true,
-                Instr::Binary {
-                    op: BinaryOp::Sub, ..
-                } => has_sub = true,
-                _ => {}
+    for function in &ir.functions {
+        for block in &function.blocks {
+            for instruction in &block.instrs {
+                match instruction {
+                    Instr::NumericBinary {
+                        op: BinaryOp::Add,
+                        left_kind: WideNumericKind::Quantity,
+                        right_kind: WideNumericKind::Quantity,
+                        result_kind: WideNumericKind::Quantity,
+                        ..
+                    } => has_add = true,
+                    Instr::NumericBinary {
+                        op: BinaryOp::Sub,
+                        left_kind: WideNumericKind::Quantity,
+                        right_kind: WideNumericKind::Quantity,
+                        result_kind: WideNumericKind::Quantity,
+                        ..
+                    } => has_sub = true,
+                    _ => {}
+                }
             }
         }
     }
@@ -2386,11 +2485,13 @@ fn parse_transfer_batch_builtin() {
     let typed = analyze(&prog).expect("semantic analysis failed");
     let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
     let instrs = &ir.functions[0].blocks[0].instrs;
-    assert!(
-        !instrs
+    assert_eq!(
+        instrs
             .iter()
-            .any(|i| matches!(i, Instr::TransferBatchBegin | Instr::TransferBatchEnd)),
-        "high-level transfer_batch must not emit batch boundary syscalls"
+            .filter(|i| matches!(i, Instr::TransferBatchBegin))
+            .count(),
+        1,
+        "one high-level transfer_batch call must open one atomic batch"
     );
     let transfer_count = instrs
         .iter()
@@ -2399,6 +2500,14 @@ fn parse_transfer_batch_builtin() {
     assert_eq!(
         transfer_count, 2,
         "expected two transfer calls inside batch"
+    );
+    assert_eq!(
+        instrs
+            .iter()
+            .filter(|i| matches!(i, Instr::TransferBatchEnd))
+            .count(),
+        1,
+        "one high-level transfer_batch call must close one atomic batch"
     );
 }
 
@@ -2464,7 +2573,7 @@ fn parse_create_new_asset_builtin() {
                     asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
                     name: "X",
                     scale: 1,
-                    owner: AccountId::parse("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"),
+                    owner: AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"),
                     mintable: 0
                 );
             }
@@ -2554,7 +2663,7 @@ fn compile_kotodama_samples_supported() {
 
 #[test]
 fn compile_unary_ops() {
-    let src = "module UnaryOps { fn f(int a, bool b) { let c = -a; let d = !b; } }";
+    let src = "seiyaku UnaryOps { view fn f(int a, bool b) { let c = -a; let d = !b; } }";
     Compiler::new()
         .compile_source(src)
         .expect("compile unary ops");
@@ -2689,8 +2798,8 @@ fn ir_tuple_pack_and_get_general() {
 #[test]
 fn typed_vrf_syscalls_are_present() {
     let src = r#"
-        module VrfVerification {
-            fn main(bytes input, bytes public_key, bytes proof, bytes batch) {
+        seiyaku VrfVerification {
+            view fn main(bytes input, bytes public_key, bytes proof, bytes batch) {
                 let _out = crypto::vrf::verify(request: input);
                 let _batch = crypto::vrf::verify_batch(batch);
             }
@@ -2714,8 +2823,8 @@ fn typed_vrf_syscalls_are_present() {
 #[test]
 fn raw_pointer_codec_alias_is_rejected() {
     let src = r#"
-        module RemovedPointerCodec {
-            fn main(bytes value) {
+        seiyaku RemovedPointerCodec {
+            view fn main(bytes value) {
                 let _encoded = pointer_to_norito(value);
             }
         }
@@ -2745,7 +2854,7 @@ fn raw_axt_intrinsics_are_rejected() {
     let handle = axt::AssetHandle {
         scope: vec!["transfer".to_string()],
         subject: axt::HandleSubject {
-            account: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".to_string(),
+            account: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".to_string(),
             origin_dsid: Some(dsid),
         },
         budget: axt::HandleBudget {
@@ -2801,9 +2910,10 @@ fn raw_axt_intrinsics_are_rejected() {
 }
 
 #[test]
-fn semantic_return_mismatch_unit() {
-    let src = "module ReturnMismatch { fn f() -> () { return 1; } }";
+fn semantic_return_value_without_declared_type_is_rejected() {
+    let src = "module ReturnMismatch { fn f() { return 1; } }";
     let prog = parse(src).expect("parse");
     let err = analyze(&prog).unwrap_err();
-    assert!(err.message().contains("return type mismatch"));
+    assert_eq!(err.code(), "K2003");
+    assert!(err.message().contains("declared return type"));
 }

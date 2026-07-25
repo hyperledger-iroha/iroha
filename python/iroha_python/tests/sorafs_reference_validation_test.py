@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+
 from iroha_python import (
     ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1,
     SORAFS_GOVERNANCE_DAG_CID_BYTES_V1,
@@ -100,18 +101,6 @@ def test_orderbook_signature_and_noncanonical_outcomes_match_exactly() -> None:
         )
 
 
-def test_validate_orderbook_payload_accepts_canonical_runtime_snapshot() -> None:
-    outcome = validate_orderbook_payload(
-        SORAFS_ORDERBOOK_PAYLOAD_KINDS["RUNTIME_SNAPSHOT"],
-        memoryview(_fixture(_ORDERBOOK_FIXTURES / "runtime_snapshot_v1.to")),
-        generated_at_unix=1_700_000_456,
-    )
-
-    assert outcome["status"] == "Ok"
-    assert outcome["code"] == "SFS-OK-000"
-    assert outcome["inputs"][0]["kind"] == "orderbook_runtime_snapshot"
-
-
 def test_validate_orderbook_payload_reports_malformed_norito() -> None:
     outcome = validate_orderbook_payload(
         "settlement-receipt",
@@ -145,11 +134,11 @@ def test_sign_orderbook_payload_deterministically_reproduces_signed_fixtures() -
 
 
 def test_sign_orderbook_payload_rejects_non_signable_and_bad_keys() -> None:
-    snapshot = _fixture(_ORDERBOOK_FIXTURES / "runtime_snapshot_v1.to")
+    trade = _fixture(_ORDERBOOK_FIXTURES / "trade_event_v1.to")
     order = _fixture(_ORDERBOOK_FIXTURES / "order_request_v1.to")
 
     with pytest.raises(ValueError, match="cannot be signed"):
-        sign_orderbook_payload("runtime-snapshot", snapshot, bytes([0xB7]) * 32)
+        sign_orderbook_payload("trade-event", trade, bytes([0xB7]) * 32)
     with pytest.raises(ValueError, match="32 bytes"):
         sign_orderbook_payload("order-request", order, bytes([0xB7]) * 31)
 
@@ -728,6 +717,7 @@ def test_reference_validation_rejects_bad_arguments_before_native_validation() -
         "orderbook-order-request",
         "ORDER-REQUEST",
         " order-request ",
+        "runtime-snapshot",
     ):
         with pytest.raises(ValueError, match="unsupported SoraFS orderbook payload kind"):
             validate_orderbook_payload(kind, b"\x00" * 8)

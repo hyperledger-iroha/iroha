@@ -54,7 +54,6 @@ const EXPECTED_COMPACT_FIXTURE_KEYS = new Set([
   "canonical.prefix.hex",
   "canonical.hash",
   "payload.prehash",
-  "pinned.sdk.defective.hash",
   "versioned.base64",
 ]);
 
@@ -321,10 +320,47 @@ function signPayload(payload) {
   };
 }
 
-function expectCodecError(action, code) {
+function mixedTorsionSignature(message) {
+  const privateKey = PRIVATE_KEY;
+  const extended = ed25519.utils.getExtendedPublicKey(privateKey);
+  const orderTwoTorsion = ed25519.Point.fromHex(
+    "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+  );
+  const publicKey = Buffer.from(extended.point.toBytes());
+  const scalarFromDigest = (digest) => {
+    let scalar = 0n;
+    for (let index = digest.length - 1; index >= 0; index -= 1) {
+      scalar = (scalar << 8n) | BigInt(digest[index]);
+    }
+    return scalar % ed25519.CURVE.n;
+  };
+  const hashToScalar = (...parts) =>
+    scalarFromDigest(
+      createHash("sha512")
+        .update(Buffer.concat(parts.map((part) => Buffer.from(part))))
+        .digest(),
+    );
+  const nonce = hashToScalar(extended.prefix, message);
+  const encodedNonce = Buffer.from(
+    ed25519.Point.BASE.multiply(nonce).add(orderTwoTorsion).toBytes(),
+  );
+  const challenge = hashToScalar(encodedNonce, publicKey, message);
+  let response = (nonce + challenge * extended.scalar) % ed25519.CURVE.n;
+  const encodedResponse = Buffer.alloc(32);
+  for (let index = 0; index < encodedResponse.length; index += 1) {
+    encodedResponse[index] = Number(response & 0xffn);
+    response >>= 8n;
+  }
+  return {
+    publicKey,
+    signature: Buffer.concat([encodedNonce, encodedResponse]),
+  };
+}
+
+function expectCodecError(action, code, context = "codec error") {
   assert.throws(action, (error) => {
-    assert.ok(error instanceof BrowserTransactionCodecError);
-    assert.equal(error.code, code);
+    assert.ok(error instanceof BrowserTransactionCodecError, context);
+    assert.equal(error.code, code, context);
     return true;
   });
 }
@@ -876,7 +912,7 @@ test("browser rejects non-canonical scaled Numeric archives with trailing zeros"
       browserSignedTransactionHashHex(
         replaceSignedPayload(canonicalSigned, nonCanonicalPayload),
       ),
-    "malformed_payload",
+    "malformed_signed_transaction",
   );
 
   assert.doesNotThrow(() =>
@@ -942,6 +978,7 @@ test("browser signed payload validation enforces byte caps before decoding or bi
     expectCodecError(
       () => browserSignedTransactionHashHex(mutated),
       "bounds_exceeded",
+      context,
     );
     assert.ok(mutated.length < 1024 * 1024, `${context} fixture must stay bounded`);
   }
@@ -1036,31 +1073,10 @@ test("browser byte ingress copies ArrayBuffer and SAB views and bounds before co
 });
 
 test("browser strict Ed25519 rejects the mixed-torsion signature accepted by cofactored verify", () => {
-  const authority = "sorauﾛ1NｹﾑMjzﾇｽCB6ﾌLLﾕXｴﾍﾎﾜ7nhﾉ4NｿﾙｳBHZﾜﾜzﾜｦWn8AJ13K";
-  const destination = "sorauﾛ1Nﾛﾓzｺｻﾐsﾓeeﾃb4QU8ｱｦrｿｻoRﾈxBﾕ8eｱa9kﾘxﾔaiY575DM";
-  const publicKey = Buffer.from(
-    "48075a597e721a156e2e0799de5cc0c5324dc6e7eaf1cdd46250868ec53215dd",
-    "hex",
-  );
-  const signature = Buffer.from(
-    "88fc2ecb6b72920cf6476056977d8dde846c8fc3b180ea9dc3973a1d0f2d0fb3eda13e150fc47692e90dd4a773d83dfaf454c7d0de9af8e68c5fbbd503f6a10c",
-    "hex",
-  );
-  const payload = buildBrowserTransferPayload({
-    chainId: "strict-sig",
-    authority,
-    sourceAssetHoldingId: `${ASSET_DEFINITION}#${authority}`,
-    quantity: "1",
-    destinationAccountId: destination,
-    metadata: {},
-    creationTimeMs: 1,
-    ttlMs: 1,
-    nonce: 1,
-  });
+  const payload = buildBrowserTransferPayload(sampleInput({ chainId: "strict-sig" }));
   const payloadHashHex = browserTransactionPayloadHashHex(payload);
-  assert.equal(
-    payloadHashHex,
-    "e249bef6c1b5202881c8996347ee0e7c5a65aa8078c5d7848d004781b0cf79e3",
+  const { publicKey, signature } = mixedTorsionSignature(
+    Buffer.from(payloadHashHex, "hex"),
   );
   assert.equal(
     ed25519.verify(signature, Buffer.from(payloadHashHex, "hex"), publicKey, {
@@ -1072,7 +1088,7 @@ test("browser strict Ed25519 rejects the mixed-torsion signature accepted by cof
   const signable = {
     payloadBytes: payload,
     payloadHashHex,
-    authority,
+    authority: AUTHORITY,
     signingPublicKey: publicKey,
   };
   expectCodecError(
@@ -1085,7 +1101,7 @@ test("browser strict Ed25519 rejects the mixed-torsion signature accepted by cof
       payloadHashHex,
       signature,
       publicKey,
-      authority,
+      authority: AUTHORITY,
     }),
   );
 });
@@ -1261,7 +1277,7 @@ test("browser hash rejects wrong versions, trailing data, and overlong field len
       browserSignedTransactionHashHex(
         replaceSignedPayload(finalized.signedTransaction, Buffer.of(0)),
       ),
-    "malformed_payload",
+    "malformed_signed_transaction",
   );
 
   const versioned = finalized.signedTransaction;

@@ -6,10 +6,9 @@ summary: SFM-2 target architecture and current gap status for XOR orderbook, str
 # SoraFS XOR Orderbook & Streaming Settlement
 
 ## Status
-SFM-2 now has an initial Norito payload, reference-validator foundation, and
-local runtime mirror surface. `crates/sorafs_manifest` ships the `orderbook`
-module with versioned order, cancel, trade, settlement-channel,
-settlement-receipt, and runtime replay snapshot payloads plus
+SFM-2 now has an initial Norito payload and reference-validator foundation.
+`crates/sorafs_manifest` ships the `orderbook` module with versioned order,
+cancel, trade, settlement-channel, and settlement-receipt payloads plus
 structural/accounting validators. The module also exposes pure deterministic
 helpers for matching one maker/taker pair,
 matching full order-book snapshots with price-time priority, calculating fees
@@ -22,7 +21,7 @@ settlement-receipt payloads.
 the `sorafs-validate orderbook` CLI validates those payloads by kind or alias.
 The composite fixture-bundle validator also accepts the committed orderbook
 payloads so release smoke checks catch drift in order, trade, channel, and
-settlement receipt, and runtime snapshot fixtures.
+settlement-receipt fixtures.
 
 The authoritative native ledger now owns policy, admission sequence, nonce
 high-water, remaining quantity, lifecycle, book revision, deterministic trades,
@@ -41,14 +40,18 @@ event reads are finalized-chain typed projections with bounded pagination,
 explicit finalized cursors, stale-cursor rejection, and ETags. SSE and
 WebSocket event streams poll only the finalized typed event journal.
 
-`sorafs_node` still contains a pre-cutover local mirror, checkpoint, local
-policy, and local event/outbox implementation. It is not the production Torii
-source of truth and remains an explicit deletion blocker; no release evidence
-may use it. The remaining production work is a supervised durable
-matcher/maintenance and settlement-forwarding worker with finality
-reconciliation, removal of that local implementation and its config/checkpoint
-surface, published SDK release artifacts, live observability, four-peer
-recovery tests, and genuine rollout evidence. The Rust reference API, C ABI,
+The pre-cutover `sorafs_node` mirror, checkpoint, policy/config surface,
+mutation/event API, settlement publication outbox, and test-only Torii
+authority are deleted. The supervised worker derives bounded match,
+maintenance, and settlement operations from one finalized view, persists them
+before runtime/HSM signing, forwards them through strict durable ingress, and
+reconciles exact or semantic application, rejection, absence, retry, and
+conflict against committed state. Its bounded observability projection consumes
+the typed finalized event journal, validates complete cursor pages, scans
+authoritative active orders/channels under the same immutable finalized anchor,
+and publishes ready/height/freshness/failure signals only after all counters
+reconcile. Remaining production work is source validation, published SDK release
+artifacts, four-peer recovery tests, and genuine rollout evidence. The Rust reference API, C ABI,
 CLI, committed fixtures, SDK validator/builders, target observability fixtures,
 Prometheus metric handles, and bundle-validation selectors are present.
 `scripts/check_sorafs_orderbook_rollout_evidence.py` now provides the
@@ -105,17 +108,17 @@ until they are implemented and verified.
 | Component | Responsibility | Current workspace status |
 |-----------|----------------|--------------------------|
 | On-chain orderbook contract | Store bids/asks, match orders, record fills, and enforce escrow requirements. | Shipped locally: governance-chained policy with exact matcher/settlement identities, canonical signed admission/cancellation, price-time matching against an expected revision, atomic buyer-custody partitioning, channel creation, expiry/refund, replay-safe receipt settlement, typed finalized queries, and committed events. Four-peer promotion evidence remains external. |
-| Off-chain matching engine | Reconcile finalized state and submit bounded matching/maintenance transactions. | The native transition exists; the supervised HSM-capable durable worker, retry/dead-letter lifecycle, and finality reconciliation are still open. The competing `sorafs_node` mirror is scheduled for deletion and cannot satisfy this component. |
-| Escrow and streaming-settlement service | Manage escrow channels and debit buyers per delivered chunk range. | Native matching creates funded channel locks, native maintenance refunds expiry, and native receipt admission atomically credits provider/treasury. A supervised retry-safe settlement forwarder/reconciler and live governance publication remain open. |
+| Off-chain matching engine | Reconcile finalized state and submit bounded matching/maintenance transactions. | The supervised HSM-capable durable worker derives one native operation from a finalized view per scan, persists it before signing, drains regardless of generation policy, and reconciles exact/semantic finality with bounded retries and conflict dead letters. Deployment and four-peer evidence remain external. |
+| Escrow and streaming-settlement service | Manage escrow channels and debit buyers per delivered chunk range. | Native matching creates funded channel locks, native maintenance refunds expiry, and native receipt admission atomically credits provider/treasury. The same durable worker forwards retained provider-signed receipts and reconciles settlement finality; live governance publication evidence remains open. |
 | Pricing oracle feeder | Supply XOR/USD price, tier multipliers, and fee schedules. | Generic oracle/pricing foundations exist, but no SoraFS orderbook feeder is wired. |
 | API gateway | Expose order placement, cancellation, depth, trades, settlement receipt submission, and event streams. | Torii POST routes validate and forward already-signed native transactions. GET/SSE/WebSocket routes return bounded finalized typed projections with cursor consistency and stale-anchor rejection. Client release smoke and live multi-peer stream evidence remain open. |
-| Analytics and dashboards | Publish pricing, fee, utilization, depth, and settlement reports. | Local runtime mirror emits the existing order flow/depth/lag/backlog/divergence metric families; live dashboard wiring and rollout evidence are not shipped. |
+| Analytics and dashboards | Publish pricing, fee, utilization, depth, and settlement reports. | The supervised worker now emits bounded finalized-ledger flow, depth, matcher, channel-age/runway, revision, projection-ready/height/freshness/failure metrics. API outcomes are counters with closed route/outcome labels; dashboards and alert rules consume those real emitters. Live scrape, alert-routing, and rollout evidence remain external. |
 
 ### Target Data Flow
 1. Provider or buyer submits a signed order through the API.
-2. The matcher validates the order, updates its mirror, and submits the canonical transaction.
+2. Torii validates the signed envelope and submits the canonical native transaction without a book mutation.
 3. The contract executes deterministic price-time matching and emits fill/cancel events.
-4. Ingest services update caches and publish depth/trade streams.
+4. Consumers query or stream the typed finalized event journal; any cache is rebuildable and non-authoritative.
 5. Filled orders open settlement channels. Delivered ranges generate signed receipts that debit buyer escrow and credit providers.
 6. Trades and settlement receipts are written to governance evidence for audit and reconciliation.
 
@@ -125,10 +128,6 @@ until they are implemented and verified.
 - `TradeEventV1`: trade id, maker/taker order ids, tier, price, filled quantity, maker/taker fees, and timestamp.
 - `SettlementChannelV1`: channel id, trade id, buyer account bytes, provider id, total/remaining bytes, locked XOR, status, and timestamps.
 - `SettlementReceiptV1`: receipt id, channel id, trade id, byte range, chunk hash, bytes delivered, XOR debited, provider credit, fee amount, issued timestamp, and signature material.
-- `OrderbookRuntimeSnapshotV1`: local replay checkpoint carrying next admission
-  sequence, generated timestamp, per-owner nonce high-waters, open orders,
-  emitted trades, settlement channels, accepted receipts, and expired-order
-  tombstones.
 - `ByteRangeV1`, `OrderSideV1`, `OrderTierV1`, `OrderCancelReasonV1`, `SettlementChannelStatusV1`, and `OrderbookSignatureV1`.
 
 The payloads use Norito, deterministic `XorAmount` micro-XOR values, and
@@ -144,13 +143,11 @@ BLAKE3 digests over domain-separated canonical Norito payloads with only the
 mutable signature bytes cleared, then verify Ed25519 signatures against the
 embedded public key.
 
-Durable order-state mutation, request-envelope authentication, capability
-authorization, contract submission, native escrow mutation, and governance
-publication remain outside this payload/helper layer. The authoritative native
-ISI layer supplies the state transitions and escrow settlement. Torii validates
-and forwards an exact signed native transaction; it does not call the local
-mirror. The residual mirror remains deletion-only and is never a contract or
-production API source of truth.
+The manifest payload/helper layer is intentionally not an authority. The
+native ISI layer supplies durable order/channel/escrow transitions; Torii
+authenticates and forwards exact signed native transactions; the supervised
+forwarder owns only retry-safe delivery state. No residual book mirror,
+compatibility state, or alternate production API exists.
 
 ## Implemented Authoritative Ledger Foundation
 
@@ -241,28 +238,23 @@ unchanged.
 - `verify_order_request_signature_v1`, `verify_order_cancel_signature_v1`, and
   `verify_settlement_receipt_signature_v1` validate payload structure and
   verify embedded Ed25519 signatures.
-- `OrderbookRuntimeSnapshotV1::validate` checks canonical local replay
-  snapshots for version/timestamp validity, unique open-order ids/sequences,
-  sequence-window consistency, unique emitted trade/channel/receipt ids, channel
-  trade references, receipt channel references, non-overlapping accepted receipt
-  ranges, and expired-order tombstone consistency.
-
 These helpers are deterministic local mechanics only. They verify the embedded
 payload signer but do not by themselves bind that signer to a
 request/capability, submit transactions, or persist runtime escrow/order state.
-`sorafs_node` adds local checkpoint persistence for its mirror on top of these
-pure helpers when storage is enabled.
+Only native ISIs persist order/channel/escrow state; `sorafs_node` retains
+bounded delivery checkpoints for exact native transaction forwarding, not a
+book.
 
 ## Implemented Reference Validation Surface
 - `validate_orderbook_payload_bytes` accepts `OrderRequestV1`, `OrderCancelV1`,
-  `TradeEventV1`, `SettlementChannelV1`, `SettlementReceiptV1`, and
-  `OrderbookRuntimeSnapshotV1` bytes through `OrderbookValidationPayloadKindV1`.
+  `TradeEventV1`, `SettlementChannelV1`, and `SettlementReceiptV1` bytes through
+  `OrderbookValidationPayloadKindV1`.
 - The validator emits stable `ValidationOutcomeV1` records and maps orderbook
   structural, settlement-accounting, policy, signature, and Norito decode
   failures into the reference SDK error catalogue.
 - The `sorafs-validate orderbook` CLI supports `--kind <payload-kind> --input
   <path>` plus payload aliases: `--order`, `--cancel`, `--trade`, `--channel`,
-  `--receipt`, and `--snapshot`.
+  and `--receipt`. The retired runtime-snapshot alias is rejected.
 - The `sorafs-validate sign --kind orderbook --payload-kind
   order-request|order-cancel|settlement-receipt` CLI path signs those
   orderbook payloads with runtime-only Ed25519 seeds, validates the signed
@@ -286,11 +278,10 @@ pure helpers when storage is enabled.
   and Swift wrap them through the shared `connect_norito_bridge` C/JNI/native
   facade.
 - The `reference_ffi` C ABI exposes `sorafs_reference_validate_orderbook_json`
-  with stable `SORAFS_REFERENCE_ORDERBOOK_KIND_*` selectors for SDK bindings,
-  including `SORAFS_REFERENCE_ORDERBOOK_KIND_RUNTIME_SNAPSHOT`.
+  with stable `SORAFS_REFERENCE_ORDERBOOK_KIND_*` selectors for SDK bindings.
 - Fixture-bundle validation accepts orderbook order, cancel, trade, settlement
-  channel, settlement receipt, and runtime snapshot payloads alongside the
-  existing manifest-linked SoraFS artifacts.
+  channel, and settlement-receipt payloads alongside the existing
+  manifest-linked SoraFS artifacts.
 
 ## Target Matching And Settlement Rules
 - Native matching preserves the `match_order_book_v1` price-time priority and
@@ -298,8 +289,8 @@ pure helpers when storage is enabled.
 - Deterministic expiry handling and stale order cancellation.
 - The authoritative ledger enforces one governance-chained, environment-free
   policy digest covering exact matcher/settlement accounts, quantity, tick, fee,
-  expiry, receipt freshness/size, and per-channel retention bounds. The
-  competing local `sorafs.storage.orderbook` policy is deletion-only.
+  expiry, receipt freshness/size, and per-channel retention bounds. The retired
+  `sorafs.storage.orderbook` local policy is rejected by configuration parsing.
 - Maker/taker fee accounting with deterministic treasury accrual.
 - Escrow checks before order acceptance; settlement debits must preserve double-entry accounting.
 - Provider failures must close or breach settlement channels in a way that feeds reputation, repair/slashing, and governance evidence.
@@ -325,51 +316,54 @@ Implemented authoritative Torii routes:
   height/hash, and event index.
 - `GET /v1/sorafs/orderbook/events/stream` and `/events/ws` replay the requested
   finalized page and poll the typed committed-event query for later finalized
-  records. They never subscribe to the local mirror's broadcast history.
+  records. No process-local broadcast history exists.
 
 Still-open API/service work:
 
-- Add supervised matcher/maintenance and settlement transaction workers with
-  runtime-only HSM signers, durable operation identities, bounded retry/dead
-  letters, pipeline/finality reconciliation, and metrics.
-- Remove the residual `sorafs_node.is_enabled()` feature-gate dependency and the
-  local mirror/config/checkpoint methods once the workers are wired.
-- Complete clean-consumer SDK smoke, authenticated deployment tests, and live
-  multi-peer stream/restart evidence.
+- Complete clean-consumer SDK smoke, authenticated deployment tests, runtime
+  PKCS#11/HSM signer injection, and live multi-peer stream/restart evidence.
 
 ## Observability
-Local orderbook-specific runtime metric emission is wired for the local mirror.
-The repository also ships target observability assets and matching Prometheus
-metric handles for the future durable runtime:
+The deleted mirror no longer emits orderbook metrics. The supervised native
+forwarder builds telemetry only from one immutable finalized state view. It
+consumes at most 1,024 typed committed events per scan, validates strict
+sequence/block/index cursors, bounds active-order and open-channel scans by the
+native V1 capacities, rejects malformed/incomplete pages and arithmetic
+overflow, and cross-checks event totals, lifecycle counters, trades, receipts,
+admission/trade sequences, and channel totals before publishing. Matcher lag
+is measured from the last committed event that actually advanced the book
+revision, so later receipt or policy events cannot hide a stale matcher.
+Catch-up or any error clears
+`torii_sorafs_orderbook_finalized_projection_ready`; a successful refresh
+writes the ready bit last and exposes the finalized height and block timestamp.
+No local book, provider-id label, or mirror-divergence gauge exists.
 
-- `dashboards/grafana/sorafs_orderbook_observability.json` tracks target order
-  flow, depth, matching lag, settlement backlog, API error ratio, escrow runway,
-  and contract/mirror divergence metrics.
+- `dashboards/grafana/sorafs_orderbook_observability.json` tracks committed
+  event flow, authoritative tier/side depth, bounded matcher lag, settlement
+  backlog/age/runway, API counter-derived error ratio, and finalized projection
+  readiness, height, and freshness.
 - `dashboards/alerts/sorafs_orderbook_rules.yml` defines alert thresholds for
-  matching lag, settlement backlog, contract/matcher divergence, API error
-  ratio, and escrow runway.
+  projection unavailability/staleness/failures/replica-height skew, matching
+  lag, settlement backlog, API error ratio, and escrow runway.
+  Projection-derived matcher and
+  settlement alerts are gated on the ready bit so retained diagnostic values
+  cannot page as if they were a fresh projection.
 - `dashboards/alerts/tests/sorafs_orderbook_rules.test.yml` provides synthetic
   Prometheus rule coverage for the alert pack.
 - `iroha_telemetry::metrics::Metrics` registers the
   `torii_sorafs_orderbook_*` Prometheus families consumed by those fixtures and
-  exposes helpers for order flow, depth, matcher lag, settlement backlog,
-  mirror divergence, API error ratio, and escrow runway.
+  exposes one fail-closed finalized projection publication helper plus bounded
+  route/outcome API counters. Route labels are mapped to a closed vocabulary;
+  unknown values collapse to `other`.
 
-Runtime services must call those helpers with live matcher, API, contract, and
-settlement data before the dashboard and alerts can be considered rollout
-evidence. The local mirror currently records order flow, depth, zero matcher
-lag for in-process matching, settlement backlog/oldest age, provider escrow
-runway from observed receipt debit rates, cumulative Torii orderbook API error
-ratios per route, and contract/mirror divergence as false because no contract
-mirror exists. Receipt submission updates the local settlement backlog and
-escrow runway gauges as channels close or remain open.
-Additional metrics still needed at runtime include settlement channel
-opens/closes beyond the local mirror, bytes streamed, maker/taker fees, surge
-factor, and stale price oracle state.
+Live Prometheus scrape freshness, alert installation/routing, and reviewed
+production evidence remain deployment obligations. No compatibility mirror is
+available as a fallback source.
 
 ## Security & Compliance Requirements
 - On-chain state and settlement receipts must be auditable and replayable.
-- The matcher must not become the source of truth; contract reconciliation must detect divergence.
+- The matcher must not become the source of truth; every worker action and
+  replica comparison must reconcile the same finalized ledger cursor.
 - Governance must be able to pause order placement and fee/surge updates.
 - Wash trading and self-crossing rules need explicit policy before beta.
 - Access control should reuse SoraFS authentication/capability patterns already used by Torii-facing SoraFS APIs.
@@ -400,8 +394,8 @@ Implemented:
   order-stream invariant scenarios for filled/open balance conservation and
   non-crossing book remainders, deterministic permutation-invariance scenarios
   that prove canonical sequence drives matching and expired tombstone ordering,
-  plus runtime replay snapshot round-trips and overlapping receipt-range
-  rejection.
+  plus overlapping receipt-range rejection. Retired runtime-snapshot selectors
+  and CLI aliases are covered only as negative compatibility rejection.
 - `crates/sorafs_manifest/src/reference.rs` unit tests cover accepted orderbook
   payloads, malformed Norito, policy failures, signature failures, and
   settlement-accounting imbalance outcomes; bundle tests cover orderbook
@@ -410,38 +404,32 @@ Implemented:
   orderbook CLI kind path, receipt alias, duplicate alias rejection, and
   supported kind aliases.
 - `crates/sorafs_manifest/src/reference_ffi.rs` tests cover accepted orderbook
-  FFI validation, bundle validation with orderbook payloads including runtime
-  snapshots, and unsupported selector rejection.
+  FFI validation, bundle validation with canonical order/trade/channel/receipt
+  payloads, and unsupported retired-selector rejection.
 - `fixtures/sorafs_manifest/orderbook/` contains deterministic `.to` and JSON
   commentary fixtures for orders, cancellations, trades, settlement channels,
-  settlement receipts, and runtime replay snapshots; regenerate them with
+  and settlement receipts; regenerate them with
   `cargo run -p sorafs_manifest --bin generate_orderbook_fixtures`.
 - `crates/sorafs_manifest/tests/orderbook_fixtures.rs` round-trips the
   committed orderbook fixtures and checks JSON `norito_bytes_hex` commentary
   against the canonical bytes.
-- `crates/sorafs_node` unit tests cover local runtime matching, settlement
-  channel opening, owner-checked cancellation, receipt application,
-  overlapping-range rejection, tampered signed-order rejection, `NodeHandle`
-  snapshot state, local Governance DAG receipt publication, and orderbook
-  metric updates, plus canonical runtime snapshot export/restore and
-  storage-data-dir checkpoint reload, and config-backed minimum order
-  quantity/price tick rejection.
+- `crates/sorafs_node` tests cover the bounded durable transaction forwarder,
+  canonical signing material, retry/attempt ceilings, restart recovery,
+  reconciliation retention, checkpoint corruption, and dead-letter bounds.
 - `crates/iroha_config` unit and fixture tests cover
-  `sorafs.storage.orderbook` parsing, nonzero clamping, and default snapshot
-  visibility for the local orderbook admission policy.
-- `crates/iroha_torii` app-API tests cover the local order/cancel/book/trade/
-  channel/receipt handler round trip, wrong-owner cancellation rejection, and
-  overlapping receipt rejection, missing canonical request-auth rejection,
-  embedded payload-signer/request-signer mismatch rejection, known-channel
-  receipt provider-role rejection, local provider-advert capability
-  enforcement for asks and known-channel receipts, plus local event history,
-  SSE backlog replay, and WebSocket frame-shape coverage.
+  bounded `sorafs.storage.orderbook_worker` operational policy and explicitly
+  reject the retired `[storage.orderbook]` authority table.
+- `crates/iroha_torii` and native smart-contract tests cover exact
+  signed-transaction route binding, owner/authority/provider/policy/revision
+  negatives, native price-time/escrow/channel/receipt atomicity, durable worker
+  reconciliation, finalized queries/cursors, event hash-chain validation, SSE
+  backlog replay, and WebSocket frame shape.
 
 Required before rollout:
-- Runtime/service tests proving authoritative ledger and durable matcher parity
-  with the reference full-book price-time semantics, channel creation, receipt
-  authorization, automatic lock funding/refund/expiry, settled asset balances,
-  and contract reconciliation once those layers exist.
+- Full focused and workspace validation of authoritative ledger/durable-worker
+  parity with reference price-time semantics, channel creation, receipt
+  authorization, lock funding/refund/expiry, settled balances, and finality
+  reconciliation.
 - External fuzz harnesses for random order streams beyond the deterministic
   generated matcher invariant and permutation-invariance scenarios.
 - Integration tests spanning contract, matcher, settlement service, API, and governance evidence publication.
@@ -482,6 +470,8 @@ python3 scripts/build_sorafs_orderbook_canary.py \
   @scripts/examples/sorafs_orderbook_contract_canary.args.example
 python3 scripts/build_sorafs_orderbook_canary.py \
   @scripts/examples/sorafs_orderbook_api_canary.args.example
+python3 scripts/build_sorafs_orderbook_canary.py \
+  @scripts/examples/sorafs_orderbook_observability_canary.args.example
 python3 scripts/build_sorafs_orderbook_canary.py \
   @scripts/examples/sorafs_orderbook_reconciliation_canary.args.example
 ```
@@ -527,15 +517,20 @@ reject missing, inflated, duplicate, or unknown language evidence, and bind
 duplicate artifact entries before promotion can report ready. They also require
 artifact IDs to start with a reviewed SDK language prefix and at least one
 distinct SDK release artifact per reviewed SDK language before promotion can
-report ready. Orderbook payload-safety artifacts must explicitly
-set `raw_contract_state_included`, `divergence_detected`,
-`raw_snapshot_included`, `raw_receipts_included`, `response_bodies_included`,
-`debug_artifacts`, `critical_alerts_firing`, `contract_mirror_divergence`, and
-`raw_ledger_included` to `false` before promotion can report ready.
+report ready. Matcher evidence must affirm finalized-cursor replay, committed
+state reconciliation, and absence of a local book authority. Orderbook
+payload-safety artifacts must explicitly set `raw_contract_state_included`,
+`raw_receipts_included`, `response_bodies_included`, `debug_artifacts`,
+`critical_alerts_firing`, and `raw_ledger_included` to `false` before promotion
+can report ready.
 Observability
 artifacts also bind `metric_count` to the unique canonical `metrics` inventory,
 require the reviewed orderbook metrics set, and reject duplicate or unknown
-metric labels before promotion can report ready. The summary exports the sorted
+metric labels before promotion can report ready. They require a successful
+scrape no more than 120 seconds old, a ready non-zero-height finalized
+projection whose finalized timestamp is not newer than the scrape or more than
+120 seconds behind it, and zero projection failures during the reviewed
+collection window. The summary exports the sorted
 reviewed `metrics` inventory plus `metric_count_values`, and the aggregate
 production-readiness gate requires those fields to match the observability
 artifact fingerprint before final promotion can report ready. Aggregate
@@ -547,16 +542,17 @@ final promotion can report ready. Reconciliation artifacts also bind
 `sources[].name` inventories, require peer labels to use reviewed lowercase
 `orderbook-peer-*` labels without non-production markers, and reject duplicate
 peer entries plus duplicate or unknown source entries before promotion can
-report ready. The collection planner's
+report ready. The closed source inventory names the finalized ledger, matcher
+worker, Torii finalized projection, settlement worker, and Governance DAG; no
+process-local mirror is recognized. The collection planner's
 dry-run JSON also includes the checker-backed `evidence_contract` map so operators can inspect
 the exact required fields for each requested evidence kind before collecting or
 submitting live orderbook artifacts. Use the payload-free SFM-2 orderbook
 canary builder for reviewed promotion evidence after those deployment facts
 exist; route-bearing API gateway canaries require explicit
 `--route-body-blake3-hex` evidence. The builder does not replace the missing
-durable matcher/maintenance worker, daemonized settlement forwarder, local
-mirror removal, SDK release smoke, live dashboard wiring, or reconciliation
-evidence.
+runtime HSM/KMS, SDK release smoke, live scrape/alert routing, multi-peer
+deployment, or reconciliation evidence.
 
 ## Rollout Status
 - Done locally: canonical order/cancel/trade/channel/receipt payloads and
@@ -565,17 +561,20 @@ evidence.
   bounded price-time matching, partial/final state, atomic buyer-custody
   partitioning, trade/channel creation, expiry/refund, receipt settlement, typed
   finalized queries/events; signed-transaction Torii forwarding; finalized
-  REST/SSE/WebSocket projections; reference CLI/FFI/fixtures; rollout checker,
-  planner, and payload-free canary contracts.
+  REST/SSE/WebSocket projections; durable matcher/maintenance/settlement
+  generation, signing, submission, retry/dead-letter, and finality
+  reconciliation; deletion of the mirror-local
+  book/config/checkpoint/outbox and runtime-snapshot format; reference
+  CLI/FFI/fixtures; rollout checker, planner,
+  payload-free canary contracts; bounded fail-closed finalized observability,
+  API counters with closed labels, dashboards, and Prometheus rule tests.
 - The rollout evidence gate also publishes contract-surface policy digests as
   `valid_policy_digests` and rejects governance approval artifacts whose
   `policy_digest_hex` is not anchored to one of those valid policies.
-- Remaining: implement and supervise durable HSM-backed matcher/maintenance and
-  settlement-forwarding/reconciliation workers; delete the local
-  `sorafs_node` book, config, checkpoint, outbox, and test-only Torii authority;
-  complete SDK release/live smoke, dashboards/alert routing, four-peer
-  retry/restart/recovery tests, and genuine staged/live evidence that passes the
-  SFM-2 gate.
+- Remaining: validate and deploy the supervised worker with a runtime
+  PKCS#11/HSM signer; complete SDK release/live smoke, live scrape and alert
+  routing, four-peer retry/restart/recovery tests,
+  and genuine staged/live evidence that passes the SFM-2 gate.
 
 The runner validates the schema-closed collection-plan envelope before printing
 dry-run JSON or executing the verifier. The shared runner plan guard rejects

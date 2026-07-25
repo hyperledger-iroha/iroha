@@ -61,9 +61,9 @@ pub use iroha_data_model::sorafs::moderation_ledger::{
 
 /// Checkpoint schema version.
 ///
-/// Version two adds generation-bound signed-envelope retirement history. V1 is
-/// pre-release state and is intentionally rejected instead of migrated.
-pub const MODERATION_ORCHESTRATOR_CHECKPOINT_VERSION_V1: u16 = 2;
+/// Version four adds generation-fenced leases for every external collaborator
+/// call. Earlier pre-release state is intentionally rejected instead of migrated.
+pub const MODERATION_ORCHESTRATOR_CHECKPOINT_VERSION_V1: u16 = 4;
 /// Hard ceiling for one canonical native moderation instruction.
 pub const MODERATION_NATIVE_INSTRUCTION_MAX_BYTES_V1: usize = 2 * 1024 * 1024;
 /// Hard ceiling for one persisted orchestrator checkpoint.
@@ -72,6 +72,14 @@ pub const MODERATION_ORCHESTRATOR_CHECKPOINT_MAX_BYTES_V1: u64 = 32 * 1024 * 102
 pub const MODERATION_SIGNED_TRANSACTION_MAX_BYTES_V1: usize = 10 * 1024 * 1024;
 /// Exact first-release lifetime for every signed moderation transaction.
 pub const MODERATION_TRANSACTION_TTL_MS_V1: u64 = 5 * 60 * 1_000;
+/// Exact first-release worker lease for one panel-notification delivery.
+pub const MODERATION_PANEL_NOTIFICATION_LEASE_MS_V1: u64 = 30_000;
+/// Exact first-release lease for signer, ingress, lookup, and terminal-sink work.
+pub const MODERATION_EXTERNAL_WORK_LEASE_MS_V1: u64 = 30_000;
+/// Initial retry delay for a panel-notification delivery.
+pub const MODERATION_PANEL_NOTIFICATION_BACKOFF_BASE_MS_V1: u64 = 1_000;
+/// Maximum retry delay for a panel-notification delivery.
+pub const MODERATION_PANEL_NOTIFICATION_BACKOFF_MAX_MS_V1: u64 = 5 * 60 * 1_000;
 
 const ACTION_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.moderation.native-action.v1";
 const OPERATION_ID_DOMAIN_V1: &[u8] = b"sorafs.moderation.operation-id.v1";
@@ -82,6 +90,20 @@ const POP_PROOF_PAYLOAD_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.moderation.pop-proof-
 const SIGNED_TRANSACTION_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.moderation.signed-transaction.v1";
 const RETIRED_ENVELOPE_RECORD_DIGEST_DOMAIN_V1: &[u8] =
     b"sorafs.moderation.retired-envelope-record.v1";
+const PANEL_NOTIFICATION_ID_DOMAIN_V1: &[u8] =
+    b"sorafs.moderation.panel-notification-id.v1";
+const PANEL_NOTIFICATION_SCOPE_DOMAIN_V1: &[u8] =
+    b"sorafs.moderation.panel-notification-scope.v1";
+const PANEL_NOTIFICATION_LEASE_DOMAIN_V1: &[u8] =
+    b"sorafs.moderation.panel-notification-lease.v1";
+const PANEL_NOTIFICATION_RECORD_DOMAIN_V1: &[u8] =
+    b"sorafs.moderation.panel-notification-record.v1";
+const PANEL_NOTIFICATION_OUTBOX_DOMAIN_V1: &[u8] =
+    b"sorafs.moderation.panel-notification-outbox.v1";
+const EXTERNAL_WORK_DIGEST_DOMAIN_V1: &[u8] =
+    b"sorafs.moderation.external-work-digest.v1";
+const EXTERNAL_WORK_LEASE_DOMAIN_V1: &[u8] =
+    b"sorafs.moderation.external-work-lease.v1";
 static CHECKPOINT_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 #[cfg(any(target_os = "linux", target_os = "android"))]
 const SAFE_OPEN_FLAGS: std::os::raw::c_int = 0x0002_0000 | 0x0008_0000;
@@ -425,7 +447,7 @@ pub struct ModerationOrchestratorConfigV1 {
     pub max_outbox_entries: usize,
     /// Maximum durable operation tombstones.
     pub max_idempotency_records: usize,
-    /// Maximum terminal handoff records.
+    /// Maximum retained records in each finalized delivery family.
     pub max_handoffs: usize,
     /// Maximum safe submission attempts and envelope generations under one operation identity.
     pub max_submit_attempts: u32,
@@ -838,6 +860,159 @@ pub enum ModerationHandoffFailureV1 {
     Permanent,
 }
 
+/// Payload-free panel-notification category derived from finalized ledger state.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize,
+)]
+pub enum ModerationPanelNotificationKindV1 {
+    /// A primary juror may accept the finalized assignment.
+    PrimaryAssignment,
+    /// A failover candidate should remain available during the acceptance window.
+    WaitlistStandby,
+    /// The authoritative commit/reveal ballot is open for this juror.
+    BallotActivated,
+}
+
+impl ModerationPanelNotificationKindV1 {
+    const fn tag(self) -> u8 {
+        match self {
+            Self::PrimaryAssignment => 0,
+            Self::WaitlistStandby => 1,
+            Self::BallotActivated => 2,
+        }
+    }
+}
+
+/// One payload-free notification derived from an exact finalized operation.
+///
+/// The record intentionally contains no case identifier, evidence locator,
+/// reason, attestation, holder material, or message body. The recipient resolves
+/// current assignment details from the finalized ledger after receiving the
+/// stable notification identity.
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+pub struct ModerationPanelNotificationV1 {
+    /// Stable delivery identity used for sink-side idempotency.
+    pub notification_id: [u8; 32],
+    /// Semantic native-operation identity that caused the notification.
+    pub source_operation_id: [u8; 32],
+    /// Digest of the case/round scope; the raw scope is deliberately not retained.
+    pub scope_digest: [u8; 32],
+    /// Payload-free lifecycle category.
+    pub kind: ModerationPanelNotificationKindV1,
+    /// Public ledger account to notify.
+    pub recipient: AccountId,
+    /// Exact committed event proving that the source operation finalized.
+    pub finalized_event_cursor: ModerationFinalizedEventCursorV1,
+    /// Consensus timestamp of the source event.
+    pub source_occurred_at_unix_ms: u64,
+}
+
+/// Lease returned to a notification worker after the claim is durable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModerationPanelNotificationClaimV1 {
+    /// Payload-free notification metadata.
+    pub notification: ModerationPanelNotificationV1,
+    /// Runtime worker identity.
+    pub worker_id: [u8; 32],
+    /// Generation-bound compare-and-swap token.
+    pub lease_token: [u8; 32],
+    /// Exclusive lease expiry.
+    pub lease_expires_at_unix_ms: u64,
+    /// One-based bounded delivery attempt.
+    pub attempt: u32,
+    /// Immutable attempt ceiling captured when the finalized event was scanned.
+    pub attempt_limit: u32,
+}
+
+/// Stable sink receipt used to finalize a notification delivery.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ModerationPanelNotificationDeliveryReceiptV1 {
+    /// Notification identity supplied to the sink.
+    pub notification_id: [u8; 32],
+    /// Non-secret digest of the sink's idempotent receipt.
+    pub receipt_digest: [u8; 32],
+    /// Runtime time at which the sink durably accepted the notification.
+    pub delivered_at_unix_ms: u64,
+}
+
+/// Safe, payload-free notification delivery failure class.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModerationPanelNotificationFailureV1 {
+    /// The sink established that no delivery occurred.
+    NotDelivered,
+    /// Delivery may have occurred; retrying the identical identity is required.
+    Ambiguous,
+    /// The sink permanently rejected this notification.
+    Permanent,
+}
+
+/// Durable terminal reason for a panel notification.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize,
+)]
+pub enum ModerationPanelNotificationDeadLetterReasonV1 {
+    /// The sink permanently rejected the payload-free notification.
+    PermanentRejection,
+    /// Every bounded claim was consumed without a durable receipt.
+    RetryExhausted,
+}
+
+/// Public persisted state of a panel notification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModerationPanelNotificationStatusV1 {
+    /// Awaiting its first attempt or a bounded retry delay.
+    Pending {
+        /// Earliest runtime time at which a worker may claim it.
+        available_at_unix_ms: u64,
+        /// Attempts already consumed.
+        attempts: u32,
+        /// Immutable attempt ceiling.
+        attempt_limit: u32,
+    },
+    /// Durably leased to exactly one worker generation.
+    Claimed {
+        /// Current worker identity.
+        worker_id: [u8; 32],
+        /// Exclusive lease expiry.
+        lease_expires_at_unix_ms: u64,
+        /// Attempts already consumed.
+        attempts: u32,
+        /// Immutable attempt ceiling.
+        attempt_limit: u32,
+    },
+    /// A stable sink receipt was durably recorded.
+    Delivered {
+        /// Non-secret stable receipt digest.
+        receipt_digest: [u8; 32],
+        /// Durable sink delivery time.
+        delivered_at_unix_ms: u64,
+        /// Attempts consumed before delivery.
+        attempts: u32,
+        /// Immutable attempt ceiling.
+        attempt_limit: u32,
+    },
+    /// No more delivery attempts are permitted.
+    DeadLetter {
+        /// Fixed terminal reason.
+        reason: ModerationPanelNotificationDeadLetterReasonV1,
+        /// Runtime time at which the record became terminal.
+        dead_lettered_at_unix_ms: u64,
+        /// Attempts consumed before terminalization.
+        attempts: u32,
+        /// Immutable attempt ceiling.
+        attempt_limit: u32,
+    },
+}
+
+/// Outcome of an idempotent receipt finalization.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModerationPanelNotificationFinalizeOutcomeV1 {
+    /// The claim and receipt became durable in this call.
+    Delivered,
+    /// The byte-identical receipt was already durable.
+    AlreadyDelivered,
+}
+
 /// Runtime-only dependencies.
 #[derive(Clone)]
 pub struct ModerationOrchestratorDepsV1 {
@@ -924,6 +1099,39 @@ enum StoredOutboxStateV1 {
     Submitted,
 }
 
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize,
+)]
+enum StoredExternalWorkKindV1 {
+    Sign,
+    Submit,
+    Lookup,
+    Handoff,
+}
+
+impl StoredExternalWorkKindV1 {
+    const fn tag(self) -> u8 {
+        match self {
+            Self::Sign => 0,
+            Self::Submit => 1,
+            Self::Lookup => 2,
+            Self::Handoff => 3,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+struct StoredExternalWorkClaimV1 {
+    kind: StoredExternalWorkKindV1,
+    generation: u32,
+    claimed_at_finalized_height: u64,
+    claimed_at_finalized_block_hash: [u8; 32],
+    claimed_at_unix_ms: u64,
+    lease_expires_at_unix_ms: u64,
+    work_digest: [u8; 32],
+    lease_token: [u8; 32],
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 enum StoredRetiredEnvelopeDispositionV1 {
     NotFound,
@@ -962,6 +1170,10 @@ struct StoredOutboxEntryV1 {
     signed_transaction_bytes: Option<Vec<u8>>,
     attempts: u32,
     state: StoredOutboxStateV1,
+    work_generation: u32,
+    work_claim: Option<StoredExternalWorkClaimV1>,
+    last_lookup_finalized_height: u64,
+    last_lookup_finalized_block_hash: [u8; 32],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
@@ -985,12 +1197,44 @@ struct StoredDeadLetterV1 {
 struct StoredHandoffV1 {
     handoff: ModerationTerminalHandoffV1,
     attempts: u32,
+    work_generation: u32,
+    work_claim: Option<StoredExternalWorkClaimV1>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+enum StoredPanelNotificationStateV1 {
+    Pending,
+    Claimed,
+    Delivered,
+    DeadLetter,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+struct StoredPanelNotificationV1 {
+    notification: ModerationPanelNotificationV1,
+    attempt_limit: u32,
+    attempts: u32,
+    claim_generation: u32,
+    available_at_unix_ms: u64,
+    state: StoredPanelNotificationStateV1,
+    claimed_by: Option<[u8; 32]>,
+    lease_token: Option<[u8; 32]>,
+    claimed_at_unix_ms: Option<u64>,
+    lease_expires_at_unix_ms: Option<u64>,
+    receipt_digest: Option<[u8; 32]>,
+    delivered_at_unix_ms: Option<u64>,
+    dead_letter_reason: Option<ModerationPanelNotificationDeadLetterReasonV1>,
+    dead_lettered_at_unix_ms: Option<u64>,
+    record_digest: [u8; 32],
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ModerationOrchestratorCheckpointV1 {
     version: u16,
     generation: u64,
+    panel_notification_clock_unix_ms: u64,
+    panel_notification_scanned_cursor: Option<ModerationFinalizedEventCursorV1>,
+    panel_notification_outbox_digest: [u8; 32],
     finalized_snapshot: Option<ModerationFinalizedLedgerSnapshotV1>,
     finalized_snapshot_digest: Option<[u8; 32]>,
     operations: Vec<StoredOperationV1>,
@@ -998,13 +1242,66 @@ struct ModerationOrchestratorCheckpointV1 {
     dead_letters: Vec<StoredDeadLetterV1>,
     pending_handoffs: Vec<StoredHandoffV1>,
     completed_handoffs: Vec<[u8; 32]>,
+    panel_notifications: Vec<StoredPanelNotificationV1>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct ExternalWorkIdentityV1 {
+    identity: [u8; 32],
+    kind: StoredExternalWorkKindV1,
+    work_digest: [u8; 32],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ExternalLookupProbeV1 {
+    transaction_id: [u8; 32],
+}
+
+#[derive(Debug, Clone)]
+enum PreparedExternalWorkV1 {
+    Sign {
+        identity: ExternalWorkIdentityV1,
+        claim: StoredExternalWorkClaimV1,
+        request: ModerationTransactionRequestV1,
+    },
+    Submit {
+        identity: ExternalWorkIdentityV1,
+        claim: StoredExternalWorkClaimV1,
+        request: ModerationTransactionRequestV1,
+        signed: ModerationSignedTransactionV1,
+    },
+    Lookup {
+        identity: ExternalWorkIdentityV1,
+        claim: StoredExternalWorkClaimV1,
+        operation_id: [u8; 32],
+        probes: Vec<ExternalLookupProbeV1>,
+    },
+    Handoff {
+        identity: ExternalWorkIdentityV1,
+        claim: StoredExternalWorkClaimV1,
+        handoff: ModerationTerminalHandoffV1,
+    },
+}
+
+impl PreparedExternalWorkV1 {
+    fn identity(&self) -> ExternalWorkIdentityV1 {
+        match self {
+            Self::Sign { identity, .. }
+            | Self::Submit { identity, .. }
+            | Self::Lookup { identity, .. }
+            | Self::Handoff { identity, .. } => *identity,
+        }
+    }
 }
 
 impl Default for ModerationOrchestratorCheckpointV1 {
     fn default() -> Self {
-        Self {
+        let mut state = Self {
             version: MODERATION_ORCHESTRATOR_CHECKPOINT_VERSION_V1,
             generation: 0,
+            panel_notification_clock_unix_ms: 0,
+            panel_notification_scanned_cursor: None,
+            panel_notification_outbox_digest: [0; 32],
             finalized_snapshot: None,
             finalized_snapshot_digest: None,
             operations: Vec::new(),
@@ -1012,7 +1309,10 @@ impl Default for ModerationOrchestratorCheckpointV1 {
             dead_letters: Vec::new(),
             pending_handoffs: Vec::new(),
             completed_handoffs: Vec::new(),
-        }
+            panel_notifications: Vec::new(),
+        };
+        refresh_panel_notification_outbox_digest(&mut state);
+        state
     }
 }
 
@@ -1085,16 +1385,7 @@ impl ModerationOrchestratorV1 {
                 }
             };
         validate_checkpoint(&state, &config, &chain_id)?;
-        let mut recovered_signing_claim = false;
-        for entry in &mut state.outbox {
-            if entry.state == StoredOutboxStateV1::Signing {
-                entry.state = StoredOutboxStateV1::Ready;
-                entry.baseline_finalized_height = 0;
-                entry.baseline_finalized_block_hash = [0; 32];
-                recovered_signing_claim = true;
-            }
-        }
-        if recovered_signing_claim {
+        if recover_external_work_after_restart(&mut state) {
             persist_checkpoint(&config, &chain_id, &mut state)?;
         }
         Ok(Self {
@@ -1119,10 +1410,13 @@ impl ModerationOrchestratorV1 {
     /// Fails closed on stale/equivocating finalized anchors, invalid snapshots,
     /// unsafe ambiguous retry state, capacity exhaustion, or checkpoint failure.
     pub fn reconcile(&self) -> Result<ModerationFinalizedCursorV1, ModerationOrchestratorError> {
-        let mut state = self.lock_state()?;
-        self.reconcile_locked(&mut state)?;
-        let cursor = snapshot_cursor(&state)?;
-        self.process_handoffs_locked(&mut state)?;
+        let (snapshot, digest) = self.read_validated_finalized_snapshot()?;
+        let cursor = snapshot.anchor();
+        {
+            let mut state = self.lock_state()?;
+            self.install_finalized_snapshot_locked(&mut state, snapshot, digest)?;
+        }
+        self.drive_external_work()?;
         Ok(cursor)
     }
 
@@ -1148,95 +1442,84 @@ impl ModerationOrchestratorV1 {
         action.canonical_bytes()?;
         let action_digest = action.action_digest()?;
         let operation_id = action.operation_id(&self.chain_id, &authority)?;
+        let (snapshot, digest) = self.read_validated_finalized_snapshot()?;
+        let cursor = snapshot.anchor();
+        let replay = {
+            let mut state = self.lock_state()?;
+            self.install_finalized_snapshot_locked(&mut state, snapshot, digest)?;
 
-        let mut state = self.lock_state()?;
-        self.reconcile_locked(&mut state)?;
-        let cursor = snapshot_cursor(&state)?;
-
-        if let Some(existing) = find_operation(&state, operation_id) {
-            if existing.action_digest != action_digest || existing.authority != authority {
-                return Err(ModerationOrchestratorError::IdempotencyConflict { operation_id });
+            if let Some(existing) = find_operation(&state, operation_id) {
+                if existing.action_digest != action_digest || existing.authority != authority {
+                    return Err(ModerationOrchestratorError::IdempotencyConflict {
+                        operation_id,
+                    });
+                }
+                true
+            } else {
+                let finalized_snapshot = state
+                    .finalized_snapshot
+                    .as_ref()
+                    .ok_or(ModerationOrchestratorError::FinalizedReaderUnavailable)?;
+                validate_finalized_action_authority(finalized_snapshot, &authority, &action)?;
+                match action_effect(finalized_snapshot, &authority, &action)? {
+                    ActionEffect::Exact => {
+                        ensure_operation_capacity(&state, &self.config)?;
+                        state.operations.push(StoredOperationV1 {
+                            operation_id,
+                            authority: authority.clone(),
+                            action_digest,
+                            status: StoredOperationStatusV1::Finalized,
+                            transaction_id: None,
+                        });
+                        self.persist_checkpoint_locked(&mut state)?;
+                        true
+                    }
+                    ActionEffect::Conflict => {
+                        return Err(ModerationOrchestratorError::FinalizedConflict {
+                            operation_id,
+                        });
+                    }
+                    ActionEffect::Absent => {
+                        ensure_operation_capacity(&state, &self.config)?;
+                        ensure_outbox_capacity(&state, &self.config)?;
+                        state.operations.push(StoredOperationV1 {
+                            operation_id,
+                            authority: authority.clone(),
+                            action_digest,
+                            status: StoredOperationStatusV1::Pending,
+                            transaction_id: None,
+                        });
+                        state.outbox.push(StoredOutboxEntryV1 {
+                            operation_id,
+                            authority: authority.clone(),
+                            action: action.clone(),
+                            action_digest,
+                            request_binding_digest,
+                            envelope_generation: 1,
+                            retired_envelopes: Vec::new(),
+                            baseline_finalized_height: 0,
+                            baseline_finalized_block_hash: [0; 32],
+                            transaction_id: None,
+                            signed_transaction_digest: None,
+                            signed_transaction_bytes: None,
+                            attempts: 0,
+                            state: StoredOutboxStateV1::Ready,
+                            work_generation: 0,
+                            work_claim: None,
+                            last_lookup_finalized_height: 0,
+                            last_lookup_finalized_block_hash: [0; 32],
+                        });
+                        self.persist_checkpoint_locked(&mut state)?;
+                        false
+                    }
+                }
             }
-            return Ok(ModerationSubmitOutcomeV1 {
-                operation_id,
-                transaction_id: existing.transaction_id,
-                status: existing.status.into(),
-                finalized_cursor: cursor,
-                replay: true,
-            });
-        }
+        };
 
-        validate_finalized_action_authority(
-            state
-                .finalized_snapshot
-                .as_ref()
-                .ok_or(ModerationOrchestratorError::FinalizedReaderUnavailable)?,
-            &authority,
-            &action,
-        )?;
-
-        match action_effect(
-            state
-                .finalized_snapshot
-                .as_ref()
-                .ok_or(ModerationOrchestratorError::FinalizedReaderUnavailable)?,
-            &authority,
-            &action,
-        )? {
-            ActionEffect::Exact => {
-                ensure_operation_capacity(&state, &self.config)?;
-                state.operations.push(StoredOperationV1 {
-                    operation_id,
-                    authority,
-                    action_digest,
-                    status: StoredOperationStatusV1::Finalized,
-                    transaction_id: None,
-                });
-                self.persist_checkpoint_locked(&mut state)?;
-                return Ok(ModerationSubmitOutcomeV1 {
-                    operation_id,
-                    transaction_id: None,
-                    status: ModerationOperationStatusV1::Finalized,
-                    finalized_cursor: cursor,
-                    replay: true,
-                });
-            }
-            ActionEffect::Conflict => {
-                return Err(ModerationOrchestratorError::FinalizedConflict { operation_id });
-            }
-            ActionEffect::Absent => {}
-        }
-
-        ensure_operation_capacity(&state, &self.config)?;
-        ensure_outbox_capacity(&state, &self.config)?;
-        state.operations.push(StoredOperationV1 {
-            operation_id,
-            authority: authority.clone(),
-            action_digest,
-            status: StoredOperationStatusV1::Pending,
-            transaction_id: None,
-        });
-        state.outbox.push(StoredOutboxEntryV1 {
-            operation_id,
-            authority: authority.clone(),
-            action: action.clone(),
-            action_digest,
-            request_binding_digest,
-            envelope_generation: 1,
-            retired_envelopes: Vec::new(),
-            baseline_finalized_height: 0,
-            baseline_finalized_block_hash: [0; 32],
-            transaction_id: None,
-            signed_transaction_digest: None,
-            signed_transaction_bytes: None,
-            attempts: 0,
-            state: StoredOutboxStateV1::Ready,
-        });
-        self.persist_checkpoint_locked(&mut state)?;
-
-        // Advance the durable staged delivery. Cross-replica races are resolved
-        // by exact transaction observation and the authoritative action effect.
-        self.reconcile_outbox_locked(&mut state)?;
+        // All HSM, ingress, lookup, and terminal-sink calls happen after the
+        // snapshot/action mutation lock has been released.
+        self.drive_external_work()?;
+        let state = self.lock_state()?;
         let operation = find_operation(&state, operation_id).ok_or_else(|| {
             ModerationOrchestratorError::CheckpointCorrupt(
                 "submitted operation disappeared".to_owned(),
@@ -1247,7 +1530,7 @@ impl ModerationOrchestratorV1 {
             transaction_id: operation.transaction_id,
             status: operation.status.into(),
             finalized_cursor: cursor,
-            replay: false,
+            replay,
         })
     }
 
@@ -1411,6 +1694,317 @@ impl ModerationOrchestratorV1 {
         })
     }
 
+    /// Durably claim due panel notifications for delivery outside the state lock.
+    ///
+    /// The returned metadata is deliberately payload-free. Workers must use
+    /// `notification_id` as the sink idempotency key and resolve any user-facing
+    /// content from current finalized ledger state. A delivery that outlives its
+    /// lease must be retried under a new claim; the stale worker cannot commit.
+    ///
+    /// # Errors
+    ///
+    /// Fails for a zero worker/time, clock rollback, an excessive batch,
+    /// arithmetic exhaustion, corrupt state, or checkpoint failure.
+    pub fn claim_panel_notifications(
+        &self,
+        worker_id: [u8; 32],
+        now_unix_ms: u64,
+        limit: usize,
+    ) -> Result<Vec<ModerationPanelNotificationClaimV1>, ModerationOrchestratorError> {
+        if worker_id == [0; 32] || now_unix_ms == 0 {
+            return Err(ModerationOrchestratorError::InvalidPanelNotificationClaim);
+        }
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        if limit > self.config.max_handoffs {
+            return Err(ModerationOrchestratorError::ResourceExhausted {
+                resource: "panel notification claim batch",
+                limit: self.config.max_handoffs,
+            });
+        }
+        let lease_expires_at_unix_ms = now_unix_ms
+            .checked_add(MODERATION_PANEL_NOTIFICATION_LEASE_MS_V1)
+            .ok_or(ModerationOrchestratorError::GenerationOverflow)?;
+
+        let mut state = self.lock_state()?;
+        validate_panel_notification_clock(&state, now_unix_ms)?;
+        preflight_expired_panel_notification_claims(&state, now_unix_ms)?;
+        state.panel_notification_clock_unix_ms = now_unix_ms;
+        recover_expired_panel_notification_claims(
+            &mut state,
+            now_unix_ms,
+        )?;
+
+        let due = state
+            .panel_notifications
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| {
+                entry.state == StoredPanelNotificationStateV1::Pending
+                    && entry.available_at_unix_ms <= now_unix_ms
+            })
+            .map(|(index, _)| index)
+            .take(limit)
+            .collect::<Vec<_>>();
+        let mut claims = Vec::with_capacity(due.len());
+        for index in due {
+            let entry = &mut state.panel_notifications[index];
+            if entry.attempts >= entry.attempt_limit {
+                dead_letter_panel_notification(
+                    entry,
+                    ModerationPanelNotificationDeadLetterReasonV1::RetryExhausted,
+                    now_unix_ms,
+                );
+                continue;
+            }
+            entry.attempts = entry
+                .attempts
+                .checked_add(1)
+                .ok_or(ModerationOrchestratorError::GenerationOverflow)?;
+            entry.claim_generation = entry
+                .claim_generation
+                .checked_add(1)
+                .ok_or(ModerationOrchestratorError::GenerationOverflow)?;
+            let lease_token = panel_notification_lease_token(
+                entry.notification.notification_id,
+                worker_id,
+                entry.claim_generation,
+                entry.attempts,
+                now_unix_ms,
+                lease_expires_at_unix_ms,
+            );
+            entry.state = StoredPanelNotificationStateV1::Claimed;
+            entry.claimed_by = Some(worker_id);
+            entry.lease_token = Some(lease_token);
+            entry.claimed_at_unix_ms = Some(now_unix_ms);
+            entry.lease_expires_at_unix_ms = Some(lease_expires_at_unix_ms);
+            entry.receipt_digest = None;
+            entry.delivered_at_unix_ms = None;
+            entry.dead_letter_reason = None;
+            entry.dead_lettered_at_unix_ms = None;
+            refresh_panel_notification_record_digest(entry);
+            claims.push(ModerationPanelNotificationClaimV1 {
+                notification: entry.notification.clone(),
+                worker_id,
+                lease_token,
+                lease_expires_at_unix_ms,
+                attempt: entry.attempts,
+                attempt_limit: entry.attempt_limit,
+            });
+        }
+        self.persist_checkpoint_locked(&mut state)?;
+        Ok(claims)
+    }
+
+    /// Atomically record one stable delivery receipt under the exact live claim.
+    ///
+    /// Calling this again with the same worker, lease token, and receipt returns
+    /// `AlreadyDelivered`; any substituted receipt or reclaimed lease fails
+    /// closed.
+    ///
+    /// # Errors
+    ///
+    /// Fails for invalid receipt material, clock rollback, a missing or stale
+    /// claim, receipt substitution, corrupt state, or checkpoint failure.
+    pub fn finalize_panel_notification_delivery(
+        &self,
+        worker_id: [u8; 32],
+        lease_token: [u8; 32],
+        receipt: ModerationPanelNotificationDeliveryReceiptV1,
+        now_unix_ms: u64,
+    ) -> Result<
+        ModerationPanelNotificationFinalizeOutcomeV1,
+        ModerationOrchestratorError,
+    > {
+        if worker_id == [0; 32]
+            || lease_token == [0; 32]
+            || receipt.notification_id == [0; 32]
+            || receipt.receipt_digest == [0; 32]
+            || receipt.delivered_at_unix_ms == 0
+            || now_unix_ms == 0
+            || receipt.delivered_at_unix_ms > now_unix_ms
+        {
+            return Err(ModerationOrchestratorError::InvalidPanelNotificationReceipt);
+        }
+        let mut state = self.lock_state()?;
+        validate_panel_notification_clock(&state, now_unix_ms)?;
+        let position = state
+            .panel_notifications
+            .iter()
+            .position(|entry| entry.notification.notification_id == receipt.notification_id)
+            .ok_or(ModerationOrchestratorError::PanelNotificationNotFound {
+                notification_id: receipt.notification_id,
+            })?;
+        let entry = &state.panel_notifications[position];
+
+        if entry.state == StoredPanelNotificationStateV1::Delivered {
+            if entry.claimed_by == Some(worker_id)
+                && entry.lease_token == Some(lease_token)
+                && entry.receipt_digest == Some(receipt.receipt_digest)
+                && entry.delivered_at_unix_ms == Some(receipt.delivered_at_unix_ms)
+            {
+                state.panel_notification_clock_unix_ms = now_unix_ms;
+                self.persist_checkpoint_locked(&mut state)?;
+                return Ok(ModerationPanelNotificationFinalizeOutcomeV1::AlreadyDelivered);
+            }
+            return Err(ModerationOrchestratorError::PanelNotificationReceiptConflict {
+                notification_id: receipt.notification_id,
+            });
+        }
+
+        let live_claim = entry.state == StoredPanelNotificationStateV1::Claimed
+            && entry.claimed_by == Some(worker_id)
+            && entry.lease_token == Some(lease_token)
+            && receipt.delivered_at_unix_ms
+                >= entry.notification.source_occurred_at_unix_ms
+            && entry
+                .lease_expires_at_unix_ms
+                .is_some_and(|expires_at| now_unix_ms < expires_at);
+        if !live_claim {
+            return Err(ModerationOrchestratorError::PanelNotificationClaimConflict {
+                notification_id: receipt.notification_id,
+            });
+        }
+
+        state.panel_notification_clock_unix_ms = now_unix_ms;
+        let entry = &mut state.panel_notifications[position];
+        entry.state = StoredPanelNotificationStateV1::Delivered;
+        entry.receipt_digest = Some(receipt.receipt_digest);
+        entry.delivered_at_unix_ms = Some(receipt.delivered_at_unix_ms);
+        entry.dead_letter_reason = None;
+        entry.dead_lettered_at_unix_ms = None;
+        refresh_panel_notification_record_digest(entry);
+        self.persist_checkpoint_locked(&mut state)?;
+        Ok(ModerationPanelNotificationFinalizeOutcomeV1::Delivered)
+    }
+
+    /// Release one live claim after a fixed, payload-free delivery result.
+    ///
+    /// Safe/ambiguous failures use deterministic bounded exponential backoff;
+    /// permanent failures and exhausted attempts become durable dead letters.
+    ///
+    /// # Errors
+    ///
+    /// Fails for a missing/stale claim, clock rollback, arithmetic exhaustion,
+    /// corrupt state, or checkpoint failure.
+    pub fn release_panel_notification_claim(
+        &self,
+        notification_id: [u8; 32],
+        worker_id: [u8; 32],
+        lease_token: [u8; 32],
+        failure: ModerationPanelNotificationFailureV1,
+        now_unix_ms: u64,
+    ) -> Result<(), ModerationOrchestratorError> {
+        if notification_id == [0; 32]
+            || worker_id == [0; 32]
+            || lease_token == [0; 32]
+            || now_unix_ms == 0
+        {
+            return Err(ModerationOrchestratorError::InvalidPanelNotificationClaim);
+        }
+        let mut state = self.lock_state()?;
+        validate_panel_notification_clock(&state, now_unix_ms)?;
+        let position = state
+            .panel_notifications
+            .iter()
+            .position(|entry| entry.notification.notification_id == notification_id)
+            .ok_or(ModerationOrchestratorError::PanelNotificationNotFound {
+                notification_id,
+            })?;
+        let entry = &state.panel_notifications[position];
+        if entry.state == StoredPanelNotificationStateV1::Delivered
+            && entry.claimed_by == Some(worker_id)
+            && entry.lease_token == Some(lease_token)
+        {
+            state.panel_notification_clock_unix_ms = now_unix_ms;
+            self.persist_checkpoint_locked(&mut state)?;
+            return Ok(());
+        }
+        let live_claim = entry.state == StoredPanelNotificationStateV1::Claimed
+            && entry.claimed_by == Some(worker_id)
+            && entry.lease_token == Some(lease_token)
+            && entry
+                .lease_expires_at_unix_ms
+                .is_some_and(|expires_at| now_unix_ms < expires_at);
+        if !live_claim {
+            return Err(ModerationOrchestratorError::PanelNotificationClaimConflict {
+                notification_id,
+            });
+        }
+        let retry_available_at_unix_ms = match failure {
+            ModerationPanelNotificationFailureV1::NotDelivered
+            | ModerationPanelNotificationFailureV1::Ambiguous
+                if entry.attempts < entry.attempt_limit =>
+            {
+                Some(
+                    now_unix_ms
+                        .checked_add(panel_notification_backoff_ms(entry.attempts))
+                        .ok_or(ModerationOrchestratorError::GenerationOverflow)?,
+                )
+            }
+            ModerationPanelNotificationFailureV1::NotDelivered
+            | ModerationPanelNotificationFailureV1::Ambiguous
+            | ModerationPanelNotificationFailureV1::Permanent => None,
+        };
+
+        state.panel_notification_clock_unix_ms = now_unix_ms;
+        let entry = &mut state.panel_notifications[position];
+        match (failure, retry_available_at_unix_ms) {
+            (ModerationPanelNotificationFailureV1::Permanent, _) => {
+                dead_letter_panel_notification(
+                    entry,
+                    ModerationPanelNotificationDeadLetterReasonV1::PermanentRejection,
+                    now_unix_ms,
+                );
+            }
+            (
+                ModerationPanelNotificationFailureV1::NotDelivered
+                | ModerationPanelNotificationFailureV1::Ambiguous,
+                None,
+            ) => {
+                dead_letter_panel_notification(
+                    entry,
+                    ModerationPanelNotificationDeadLetterReasonV1::RetryExhausted,
+                    now_unix_ms,
+                );
+            }
+            (
+                ModerationPanelNotificationFailureV1::NotDelivered
+                | ModerationPanelNotificationFailureV1::Ambiguous,
+                Some(available_at_unix_ms),
+            ) => {
+                entry.available_at_unix_ms = available_at_unix_ms;
+                entry.state = StoredPanelNotificationStateV1::Pending;
+                clear_panel_notification_claim(entry);
+                entry.receipt_digest = None;
+                entry.delivered_at_unix_ms = None;
+                entry.dead_letter_reason = None;
+                entry.dead_lettered_at_unix_ms = None;
+                refresh_panel_notification_record_digest(entry);
+            }
+        }
+        self.persist_checkpoint_locked(&mut state)
+    }
+
+    /// Return the durable payload-free state for one notification.
+    ///
+    /// # Errors
+    ///
+    /// Fails after a durability fault or poisoned state lock.
+    pub fn panel_notification_status(
+        &self,
+        notification_id: [u8; 32],
+    ) -> Result<Option<ModerationPanelNotificationStatusV1>, ModerationOrchestratorError> {
+        let state = self.lock_state()?;
+        state
+            .panel_notifications
+            .iter()
+            .find(|entry| entry.notification.notification_id == notification_id)
+            .map(panel_notification_status)
+            .transpose()
+    }
+
     fn lock_state(
         &self,
     ) -> Result<
@@ -1444,10 +2038,12 @@ impl ModerationOrchestratorV1 {
         Ok(())
     }
 
-    fn reconcile_locked(
+    fn read_validated_finalized_snapshot(
         &self,
-        state: &mut ModerationOrchestratorCheckpointV1,
-    ) -> Result<(), ModerationOrchestratorError> {
+    ) -> Result<
+        (ModerationFinalizedLedgerSnapshotV1, [u8; 32]),
+        ModerationOrchestratorError,
+    > {
         let snapshot = self
             .deps
             .snapshot_reader
@@ -1469,7 +2065,17 @@ impl ModerationOrchestratorV1 {
                 }
             })?;
         validate_finalized_snapshot(&snapshot, &self.config)?;
+        validate_panel_notification_source_provenance(&snapshot)?;
         let digest = finalized_snapshot_digest(&snapshot)?;
+        Ok((snapshot, digest))
+    }
+
+    fn install_finalized_snapshot_locked(
+        &self,
+        state: &mut ModerationOrchestratorCheckpointV1,
+        snapshot: ModerationFinalizedLedgerSnapshotV1,
+        digest: [u8; 32],
+    ) -> Result<(), ModerationOrchestratorError> {
         if let (Some(previous), Some(previous_digest)) = (
             state.finalized_snapshot.as_ref(),
             state.finalized_snapshot_digest,
@@ -1480,24 +2086,34 @@ impl ModerationOrchestratorV1 {
                     observed: snapshot.finalized_height,
                 });
             }
-            if snapshot.finalized_height == previous.finalized_height {
-                if snapshot.finalized_block_hash != previous.finalized_block_hash
-                    || digest != previous_digest
-                {
-                    return Err(ModerationOrchestratorError::FinalizedEquivocation {
-                        height: snapshot.finalized_height,
-                    });
-                }
+            if snapshot.finalized_at_unix_ms < previous.finalized_at_unix_ms {
+                return Err(ModerationOrchestratorError::InvalidFinalizedSnapshot(
+                    "finalized moderation time regressed".to_owned(),
+                ));
+            }
+            if snapshot.finalized_height == previous.finalized_height
+                && (snapshot.finalized_block_hash != previous.finalized_block_hash
+                    || digest != previous_digest)
+            {
+                return Err(ModerationOrchestratorError::FinalizedEquivocation {
+                    height: snapshot.finalized_height,
+                });
             }
         }
-        state.finalized_snapshot = Some(snapshot);
-        state.finalized_snapshot_digest = Some(digest);
-        self.reconcile_outbox_locked(state)?;
+        let previous_snapshot = state.finalized_snapshot.replace(snapshot);
+        let previous_snapshot_digest = state.finalized_snapshot_digest.replace(digest);
+        if let Err(error) = self.queue_panel_notifications_locked(state) {
+            state.finalized_snapshot = previous_snapshot;
+            state.finalized_snapshot_digest = previous_snapshot_digest;
+            return Err(error);
+        }
+        recover_expired_external_work_claims(state)?;
+        self.reconcile_outbox_authoritative_locked(state)?;
         self.queue_terminal_handoffs_locked(state)?;
         self.persist_checkpoint_locked(state)
     }
 
-    fn reconcile_outbox_locked(
+    fn reconcile_outbox_authoritative_locked(
         &self,
         state: &mut ModerationOrchestratorCheckpointV1,
     ) -> Result<(), ModerationOrchestratorError> {
@@ -1513,10 +2129,25 @@ impl ModerationOrchestratorV1 {
             .enumerate()
             .map(|(index, operation)| (operation.operation_id, index))
             .collect::<BTreeMap<_, _>>();
+        let effects = state
+            .outbox
+            .iter()
+            .map(|entry| action_effect(&snapshot, &entry.authority, &entry.action))
+            .collect::<Result<Vec<_>, _>>()?;
+        ensure_dead_letter_capacity(
+            state,
+            &self.config,
+            effects
+                .iter()
+                .filter(|effect| **effect == ActionEffect::Conflict)
+                .count(),
+        )?;
         let mut retained = Vec::with_capacity(state.outbox.len());
         let mut dead = Vec::new();
-
-        for mut entry in std::mem::take(&mut state.outbox) {
+        for (entry, effect) in std::mem::take(&mut state.outbox)
+            .into_iter()
+            .zip(effects)
+        {
             let operation_position = operation_index
                 .get(&entry.operation_id)
                 .copied()
@@ -1525,234 +2156,739 @@ impl ModerationOrchestratorV1 {
                         "outbox entry has no idempotency record".to_owned(),
                     )
                 })?;
-            match action_effect(&snapshot, &entry.authority, &entry.action)? {
+            match effect {
                 ActionEffect::Exact => {
                     let operation = &mut state.operations[operation_position];
                     operation.status = StoredOperationStatusV1::Finalized;
                     if operation.transaction_id.is_none() {
-                        operation.transaction_id = entry.transaction_id;
+                        operation.transaction_id = retired_history_fence_transaction_id(&entry)
+                            .or(entry.transaction_id);
                     }
-                    continue;
                 }
                 ActionEffect::Conflict => {
-                    state.operations[operation_position].status = StoredOperationStatusV1::Rejected;
+                    state.operations[operation_position].status =
+                        StoredOperationStatusV1::Rejected;
                     dead.push(StoredDeadLetterV1 {
                         identity: entry.operation_id,
                         action_label: entry.action.label().to_owned(),
                         reason: StoredDeadLetterReasonV1::FinalizedConflict,
                         finalized_cursor: cursor,
                     });
-                    continue;
                 }
-                ActionEffect::Absent => {}
-            }
-
-            self.reconcile_retired_envelopes_locked(&mut entry, cursor);
-            if let Some(fenced_transaction_id) =
-                retired_history_fence_transaction_id(&entry)
-            {
-                state.operations[operation_position].transaction_id =
-                    Some(fenced_transaction_id);
-                retained.push(entry);
-                continue;
-            }
-            state.operations[operation_position].transaction_id = entry.transaction_id;
-
-            if matches!(
-                entry.state,
-                StoredOutboxStateV1::Ready | StoredOutboxStateV1::Signing
-            ) {
-                retained.push(entry);
-                continue;
-            }
-            let request = moderation_transaction_request(&self.chain_id, &entry)?;
-            let signed = moderation_signed_transaction(&entry)?;
-            let transaction = signed.decode_for_request(&request).map_err(|_| {
-                ModerationOrchestratorError::CheckpointCorrupt(
-                    "active outbox envelope failed exact validation".to_owned(),
-                )
-            })?;
-            let timing = signed_envelope_timing(&transaction)?;
-            let expired = snapshot.finalized_at_unix_ms >= timing.expires_at_unix_ms;
-            if entry.state == StoredOutboxStateV1::Signed && !expired {
-                retained.push(entry);
-                continue;
-            }
-            let expected_transaction_id = signed.transaction_id;
-            match self
-                .deps
-                .submitter
-                .lookup(entry.operation_id, Some(expected_transaction_id))
-            {
-                ModerationSubmissionLookupV1::Pending { transaction_id }
-                | ModerationSubmissionLookupV1::Applied { transaction_id }
-                    if transaction_id == expected_transaction_id =>
-                {
-                    entry.state = StoredOutboxStateV1::Submitted;
+                ActionEffect::Absent => {
                     state.operations[operation_position].transaction_id =
-                        Some(expected_transaction_id);
-                    retained.push(entry);
-                }
-                ModerationSubmissionLookupV1::Rejected {
-                    transaction_id,
-                    observed_finalized_height,
-                } if transaction_id
-                    .is_none_or(|candidate| candidate == expected_transaction_id)
-                    && observed_finalized_height > entry.baseline_finalized_height
-                    && observed_finalized_height <= cursor.height =>
-                {
-                    state.operations[operation_position].status = StoredOperationStatusV1::Rejected;
-                    state.operations[operation_position].transaction_id =
-                        Some(expected_transaction_id);
-                    dead.push(StoredDeadLetterV1 {
-                        identity: entry.operation_id,
-                        action_label: entry.action.label().to_owned(),
-                        reason: StoredDeadLetterReasonV1::PermanentRejection,
-                        finalized_cursor: cursor,
-                    });
-                }
-                ModerationSubmissionLookupV1::NotFound {
-                    observed_finalized_height,
-                } if observed_finalized_height > entry.baseline_finalized_height
-                    && observed_finalized_height <= cursor.height =>
-                {
-                    if entry.attempts >= self.config.max_submit_attempts {
-                        state.operations[operation_position].status =
-                            StoredOperationStatusV1::Rejected;
-                        state.operations[operation_position].transaction_id =
-                            Some(expected_transaction_id);
-                        dead.push(StoredDeadLetterV1 {
-                            identity: entry.operation_id,
-                            action_label: entry.action.label().to_owned(),
-                            reason: StoredDeadLetterReasonV1::RetryExhaustedNotFound,
-                            finalized_cursor: cursor,
-                        });
-                    } else if expired {
-                        let next_generation =
-                            next_envelope_generation(entry.envelope_generation)?;
-                        if next_generation > self.config.max_submit_attempts {
-                            state.operations[operation_position].status =
-                                StoredOperationStatusV1::Rejected;
-                            state.operations[operation_position].transaction_id =
-                                Some(expected_transaction_id);
-                            dead.push(StoredDeadLetterV1 {
-                                identity: entry.operation_id,
-                                action_label: entry.action.label().to_owned(),
-                                reason: StoredDeadLetterReasonV1::RetryExhaustedNotFound,
-                                finalized_cursor: cursor,
-                            });
-                        } else if observed_finalized_height == cursor.height {
-                            self.retire_expired_envelope(
-                                &mut entry,
-                                &signed,
-                                timing,
-                                cursor,
-                                snapshot.finalized_at_unix_ms,
-                                next_generation,
-                            )?;
-                            state.operations[operation_position].transaction_id = None;
-                            retained.push(entry);
-                        } else {
-                            entry.state = StoredOutboxStateV1::Ambiguous;
-                            retained.push(entry);
-                        }
-                    } else {
-                        entry.baseline_finalized_height = cursor.height;
-                        entry.baseline_finalized_block_hash = cursor.block_hash;
-                        entry.state = StoredOutboxStateV1::Signed;
-                        retained.push(entry);
-                    }
-                }
-                ModerationSubmissionLookupV1::Unknown
-                | ModerationSubmissionLookupV1::Pending { .. }
-                | ModerationSubmissionLookupV1::Applied { .. }
-                | ModerationSubmissionLookupV1::Rejected { .. }
-                | ModerationSubmissionLookupV1::NotFound { .. } => {
-                    entry.state = StoredOutboxStateV1::Ambiguous;
+                        retired_history_fence_transaction_id(&entry)
+                            .or(entry.transaction_id);
                     retained.push(entry);
                 }
             }
-        }
-        if state.dead_letters.len().saturating_add(dead.len()) > self.config.max_idempotency_records
-        {
-            return Err(ModerationOrchestratorError::ResourceExhausted {
-                resource: "dead letters",
-                limit: self.config.max_idempotency_records,
-            });
         }
         state.outbox = retained;
         state.dead_letters.extend(dead);
+        Ok(())
+    }
 
-        let deliverable = state
-            .outbox
-            .iter()
-            .filter(|entry| {
+    fn drive_external_work(&self) -> Result<(), ModerationOrchestratorError> {
+        let mut attempted = BTreeSet::new();
+        let mut deferred_operations = BTreeSet::new();
+        loop {
+            let prepared = {
+                let mut state = self.lock_state()?;
+                self.prepare_next_external_work_locked(
+                    &mut state,
+                    &attempted,
+                    &deferred_operations,
+                )?
+            };
+            let Some(prepared) = prepared else {
+                return Ok(());
+            };
+            let identity = prepared.identity();
+            attempted.insert(identity);
+            self.execute_external_work(prepared)?;
+            if identity.kind == StoredExternalWorkKindV1::Submit {
+                deferred_operations.insert(identity.identity);
+            }
+        }
+    }
+
+    fn prepare_next_external_work_locked(
+        &self,
+        state: &mut ModerationOrchestratorCheckpointV1,
+        attempted: &BTreeSet<ExternalWorkIdentityV1>,
+        deferred_operations: &BTreeSet<[u8; 32]>,
+    ) -> Result<Option<PreparedExternalWorkV1>, ModerationOrchestratorError> {
+        let recovered = recover_expired_external_work_claims(state)?;
+        let snapshot = state
+            .finalized_snapshot
+            .as_ref()
+            .ok_or(ModerationOrchestratorError::FinalizedReaderUnavailable)?;
+        let cursor = snapshot.anchor();
+        let finalized_at_unix_ms = snapshot.finalized_at_unix_ms;
+        let mut position = 0;
+        while position < state.outbox.len() {
+            if deferred_operations.contains(&state.outbox[position].operation_id) {
+                position += 1;
+                continue;
+            }
+            if state.outbox[position].work_claim.is_some() {
+                position += 1;
+                continue;
+            }
+            if state.outbox[position].state == StoredOutboxStateV1::Signing {
+                return Err(ModerationOrchestratorError::CheckpointCorrupt(
+                    "signing outbox entry has no external-work claim".to_owned(),
+                ));
+            }
+
+            let entry = &state.outbox[position];
+            let complete_transaction = entry.transaction_id.is_some()
+                && entry.signed_transaction_digest.is_some()
+                && entry.signed_transaction_bytes.is_some();
+            let expired = if complete_transaction {
+                let request = moderation_transaction_request(&self.chain_id, entry)?;
+                let signed = moderation_signed_transaction(entry)?;
+                let transaction = signed.decode_for_request(&request).map_err(|_| {
+                    ModerationOrchestratorError::CheckpointCorrupt(
+                        "active outbox envelope failed exact validation".to_owned(),
+                    )
+                })?;
+                finalized_at_unix_ms >= signed_envelope_timing(&transaction)?.expires_at_unix_ms
+            } else {
+                false
+            };
+            let unresolved_retired = entry.retired_envelopes.iter().any(|record| {
                 matches!(
-                    entry.state,
-                    StoredOutboxStateV1::Ready | StoredOutboxStateV1::Signed
-                ) && retired_history_fence_transaction_id(entry).is_none()
+                    record.disposition,
+                    StoredRetiredEnvelopeDispositionV1::NotFound
+                        | StoredRetiredEnvelopeDispositionV1::Pending
+                )
+            });
+            let include_active_lookup = matches!(
+                entry.state,
+                StoredOutboxStateV1::Ambiguous | StoredOutboxStateV1::Submitted
+            ) || (entry.state == StoredOutboxStateV1::Signed && expired);
+            let lookup_needed =
+                complete_transaction && (unresolved_retired || include_active_lookup);
+            if lookup_needed {
+                let work_digest = outbox_lookup_work_digest(entry, cursor);
+                let identity = ExternalWorkIdentityV1 {
+                    identity: entry.operation_id,
+                    kind: StoredExternalWorkKindV1::Lookup,
+                    work_digest,
+                };
+                if attempted.contains(&identity) {
+                    position += 1;
+                    continue;
+                }
+                let mut candidate = entry.clone();
+                let generation = next_external_work_generation(candidate.work_generation)?;
+                let claim = external_work_claim(
+                    StoredExternalWorkKindV1::Lookup,
+                    candidate.operation_id,
+                    generation,
+                    work_digest,
+                    cursor,
+                    finalized_at_unix_ms,
+                )?;
+                let mut probes = candidate
+                    .retired_envelopes
+                    .iter()
+                    .map(|record| ExternalLookupProbeV1 {
+                        transaction_id: record.transaction_id,
+                    })
+                    .collect::<Vec<_>>();
+                if include_active_lookup
+                    && let Some(transaction_id) = candidate.transaction_id
+                {
+                    probes.push(ExternalLookupProbeV1 { transaction_id });
+                }
+                candidate.work_generation = generation;
+                candidate.work_claim = Some(claim.clone());
+                state.outbox[position] = candidate;
+                self.persist_checkpoint_locked(state)?;
+                return Ok(Some(PreparedExternalWorkV1::Lookup {
+                    identity,
+                    claim,
+                    operation_id: state.outbox[position].operation_id,
+                    probes,
+                }));
+            }
+
+            if retired_history_fence_transaction_id(entry).is_some() {
+                position += 1;
+                continue;
+            }
+            match entry.state {
+                StoredOutboxStateV1::Ready => {
+                    let mut candidate = entry.clone();
+                    candidate.baseline_finalized_height = cursor.height;
+                    candidate.baseline_finalized_block_hash = cursor.block_hash;
+                    candidate.state = StoredOutboxStateV1::Signing;
+                    let request = moderation_transaction_request(&self.chain_id, &candidate)?;
+                    let work_digest = outbox_sign_work_digest(&candidate);
+                    let identity = ExternalWorkIdentityV1 {
+                        identity: candidate.operation_id,
+                        kind: StoredExternalWorkKindV1::Sign,
+                        work_digest,
+                    };
+                    if attempted.contains(&identity) {
+                        position += 1;
+                        continue;
+                    }
+                    let generation =
+                        next_external_work_generation(candidate.work_generation)?;
+                    let claim = external_work_claim(
+                        StoredExternalWorkKindV1::Sign,
+                        candidate.operation_id,
+                        generation,
+                        work_digest,
+                        cursor,
+                        finalized_at_unix_ms,
+                    )?;
+                    candidate.work_generation = generation;
+                    candidate.work_claim = Some(claim.clone());
+                    state.outbox[position] = candidate;
+                    self.persist_checkpoint_locked(state)?;
+                    return Ok(Some(PreparedExternalWorkV1::Sign {
+                        identity,
+                        claim,
+                        request,
+                    }));
+                }
+                StoredOutboxStateV1::Signed if !expired => {
+                    if entry.attempts >= self.config.max_submit_attempts {
+                        self.dead_letter_submission_locked(
+                            state,
+                            position,
+                            StoredDeadLetterReasonV1::RetryExhaustedNotFound,
+                        )?;
+                        continue;
+                    }
+                    let mut candidate = entry.clone();
+                    let request =
+                        moderation_transaction_request(&self.chain_id, &candidate)?;
+                    let signed = moderation_signed_transaction(&candidate)?;
+                    signed.decode_for_request(&request).map_err(|_| {
+                        ModerationOrchestratorError::CheckpointCorrupt(
+                            "retained signed transaction failed exact validation".to_owned(),
+                        )
+                    })?;
+                    candidate.attempts = candidate
+                        .attempts
+                        .checked_add(1)
+                        .ok_or(ModerationOrchestratorError::GenerationOverflow)?;
+                    candidate.state = StoredOutboxStateV1::Ambiguous;
+                    let work_digest = outbox_submit_work_digest(&candidate);
+                    let identity = ExternalWorkIdentityV1 {
+                        identity: candidate.operation_id,
+                        kind: StoredExternalWorkKindV1::Submit,
+                        work_digest,
+                    };
+                    if attempted.contains(&identity) {
+                        position += 1;
+                        continue;
+                    }
+                    let generation =
+                        next_external_work_generation(candidate.work_generation)?;
+                    let claim = external_work_claim(
+                        StoredExternalWorkKindV1::Submit,
+                        candidate.operation_id,
+                        generation,
+                        work_digest,
+                        cursor,
+                        finalized_at_unix_ms,
+                    )?;
+                    candidate.work_generation = generation;
+                    candidate.work_claim = Some(claim.clone());
+                    state.outbox[position] = candidate;
+                    self.persist_checkpoint_locked(state)?;
+                    return Ok(Some(PreparedExternalWorkV1::Submit {
+                        identity,
+                        claim,
+                        request,
+                        signed,
+                    }));
+                }
+                StoredOutboxStateV1::Signing
+                | StoredOutboxStateV1::Signed
+                | StoredOutboxStateV1::Ambiguous
+                | StoredOutboxStateV1::Submitted => {
+                    position += 1;
+                }
+            }
+        }
+
+        for position in 0..state.pending_handoffs.len() {
+            let entry = &state.pending_handoffs[position];
+            if entry.work_claim.is_some() {
+                continue;
+            }
+            let work_digest = handoff_work_digest(&entry.handoff);
+            let identity = ExternalWorkIdentityV1 {
+                identity: entry.handoff.handoff_id,
+                kind: StoredExternalWorkKindV1::Handoff,
+                work_digest,
+            };
+            if attempted.contains(&identity) {
+                continue;
+            }
+            let mut candidate = entry.clone();
+            if candidate.attempts < self.config.max_submit_attempts {
+                candidate.attempts = candidate
+                    .attempts
+                    .checked_add(1)
+                    .ok_or(ModerationOrchestratorError::GenerationOverflow)?;
+            }
+            let generation = next_external_work_generation(candidate.work_generation)?;
+            let claim = external_work_claim(
+                StoredExternalWorkKindV1::Handoff,
+                candidate.handoff.handoff_id,
+                generation,
+                work_digest,
+                cursor,
+                finalized_at_unix_ms,
+            )?;
+            candidate.work_generation = generation;
+            candidate.work_claim = Some(claim.clone());
+            let handoff = candidate.handoff.clone();
+            state.pending_handoffs[position] = candidate;
+            self.persist_checkpoint_locked(state)?;
+            return Ok(Some(PreparedExternalWorkV1::Handoff {
+                identity,
+                claim,
+                handoff,
+            }));
+        }
+        if recovered {
+            self.persist_checkpoint_locked(state)?;
+        }
+        Ok(None)
+    }
+
+    fn execute_external_work(
+        &self,
+        prepared: PreparedExternalWorkV1,
+    ) -> Result<(), ModerationOrchestratorError> {
+        match prepared {
+            PreparedExternalWorkV1::Sign {
+                claim, request, ..
+            } => match self.deps.submitter.sign(&request) {
+                Ok(signed) => {
+                    let validated = signed
+                        .decode_for_request(&request)
+                        .map_err(|_| {
+                            ModerationOrchestratorError::InvalidAction(
+                                "runtime signer returned an invalid exact transaction"
+                                    .to_owned(),
+                            )
+                        })
+                        .and_then(|transaction| signed_envelope_timing(&transaction));
+                    match validated {
+                        Ok(timing) => {
+                            self.finalize_sign_work(&claim, signed, timing)
+                        }
+                        Err(error) => {
+                            self.finalize_invalid_sign_work(&claim)?;
+                            Err(error)
+                        }
+                    }
+                }
+                Err(failure) => self.finalize_sign_failure(&claim, failure),
+            },
+            PreparedExternalWorkV1::Submit {
+                claim,
+                request,
+                signed,
+                ..
+            } => {
+                let result = self.deps.submitter.submit_signed(&request, &signed);
+                self.finalize_submit_work(&claim, &signed, result)
+            }
+            PreparedExternalWorkV1::Lookup {
+                claim,
+                operation_id,
+                probes,
+                ..
+            } => {
+                let observations = probes
+                    .into_iter()
+                    .map(|probe| {
+                        let lookup = self
+                            .deps
+                            .submitter
+                            .lookup(operation_id, Some(probe.transaction_id));
+                        (probe, lookup)
+                    })
+                    .collect::<Vec<_>>();
+                self.finalize_lookup_work(&claim, observations)
+            }
+            PreparedExternalWorkV1::Handoff { claim, handoff, .. } => {
+                let result = match handoff.kind {
+                    ModerationTerminalHandoffKindV1::Settlement => {
+                        self.deps.settlement_sink.deliver(&handoff)
+                    }
+                    ModerationTerminalHandoffKindV1::Publication => {
+                        self.deps.publication_sink.deliver(&handoff)
+                    }
+                };
+                self.finalize_handoff_work(&claim, result)
+            }
+        }
+    }
+
+    fn finalize_sign_work(
+        &self,
+        claim: &StoredExternalWorkClaimV1,
+        signed: ModerationSignedTransactionV1,
+        timing: SignedEnvelopeTimingV1,
+    ) -> Result<(), ModerationOrchestratorError> {
+        let mut state = self.lock_state()?;
+        let Some(position) = outbox_claim_position(
+            &state,
+            StoredExternalWorkKindV1::Sign,
+            claim,
+        ) else {
+            return Ok(());
+        };
+        let duplicate_or_stale = state.outbox[position]
+            .retired_envelopes
+            .iter()
+            .any(|record| {
+                record.transaction_id == signed.transaction_id
+                    || record.signed_transaction_digest == signed.canonical_bytes_digest
             })
-            .map(|entry| entry.operation_id)
-            .collect::<Vec<_>>();
-        for operation_id in deliverable {
-            self.try_submit_locked(state, operation_id)?;
+            || state.outbox[position]
+                .retired_envelopes
+                .last()
+                .is_some_and(|previous| {
+                    timing.created_at_unix_ms <= previous.created_at_unix_ms
+                        || timing.expires_at_unix_ms
+                            <= previous.retired_at_finalized_unix_ms
+                });
+        if duplicate_or_stale {
+            reset_sign_claim(&mut state.outbox[position]);
+            self.persist_checkpoint_locked(&mut state)?;
+            return Err(ModerationOrchestratorError::InvalidAction(
+                "runtime signer did not advance the retired envelope generation".to_owned(),
+            ));
+        }
+        state.outbox[position].transaction_id = Some(signed.transaction_id);
+        state.outbox[position].signed_transaction_digest =
+            Some(signed.canonical_bytes_digest);
+        state.outbox[position].signed_transaction_bytes = Some(signed.canonical_bytes);
+        state.outbox[position].state = StoredOutboxStateV1::Signed;
+        state.outbox[position].work_claim = None;
+        state.outbox[position].last_lookup_finalized_height = 0;
+        state.outbox[position].last_lookup_finalized_block_hash = [0; 32];
+        let operation_id = state.outbox[position].operation_id;
+        let transaction_id = state.outbox[position].transaction_id;
+        if let Some(operation) = state
+            .operations
+            .iter_mut()
+            .find(|operation| operation.operation_id == operation_id)
+        {
+            operation.transaction_id = transaction_id;
+        }
+        self.persist_checkpoint_locked(&mut state)
+    }
+
+    fn finalize_invalid_sign_work(
+        &self,
+        claim: &StoredExternalWorkClaimV1,
+    ) -> Result<(), ModerationOrchestratorError> {
+        let mut state = self.lock_state()?;
+        if let Some(position) =
+            outbox_claim_position(&state, StoredExternalWorkKindV1::Sign, claim)
+        {
+            reset_sign_claim(&mut state.outbox[position]);
+            self.persist_checkpoint_locked(&mut state)?;
         }
         Ok(())
     }
 
-    fn reconcile_retired_envelopes_locked(
+    fn finalize_sign_failure(
         &self,
-        entry: &mut StoredOutboxEntryV1,
-        cursor: ModerationFinalizedCursorV1,
-    ) {
-        let operation_id = entry.operation_id;
-        for record in &mut entry.retired_envelopes {
-            let lookup = self
-                .deps
-                .submitter
-                .lookup(operation_id, Some(record.transaction_id));
-            let next_disposition = match lookup {
-                ModerationSubmissionLookupV1::Applied { transaction_id }
-                    if transaction_id == record.transaction_id =>
-                {
-                    StoredRetiredEnvelopeDispositionV1::Applied
-                }
-                ModerationSubmissionLookupV1::Pending { transaction_id }
-                    if transaction_id == record.transaction_id =>
-                {
-                    match record.disposition {
-                        StoredRetiredEnvelopeDispositionV1::Applied
-                        | StoredRetiredEnvelopeDispositionV1::Rejected => record.disposition,
-                        StoredRetiredEnvelopeDispositionV1::NotFound
-                        | StoredRetiredEnvelopeDispositionV1::Pending => {
-                            StoredRetiredEnvelopeDispositionV1::Pending
-                        }
-                    }
-                }
-                ModerationSubmissionLookupV1::Rejected {
-                    transaction_id: Some(transaction_id),
-                    observed_finalized_height,
-                } if transaction_id == record.transaction_id
-                    && observed_finalized_height >= record.retired_at_finalized_height
-                    && observed_finalized_height <= cursor.height =>
-                {
-                    if record.disposition == StoredRetiredEnvelopeDispositionV1::Applied {
-                        StoredRetiredEnvelopeDispositionV1::Applied
-                    } else {
-                        StoredRetiredEnvelopeDispositionV1::Rejected
-                    }
-                }
-                ModerationSubmissionLookupV1::NotFound { .. }
-                | ModerationSubmissionLookupV1::Pending { .. }
-                | ModerationSubmissionLookupV1::Applied { .. }
-                | ModerationSubmissionLookupV1::Rejected { .. }
-                | ModerationSubmissionLookupV1::Unknown => record.disposition,
+        claim: &StoredExternalWorkClaimV1,
+        failure: ModerationSubmissionFailureV1,
+    ) -> Result<(), ModerationOrchestratorError> {
+        let mut state = self.lock_state()?;
+        let Some(position) = outbox_claim_position(
+            &state,
+            StoredExternalWorkKindV1::Sign,
+            claim,
+        ) else {
+            return Ok(());
+        };
+        match failure {
+            ModerationSubmissionFailureV1::PermanentRejection => {
+                self.dead_letter_submission_locked(
+                    &mut state,
+                    position,
+                    StoredDeadLetterReasonV1::PermanentRejection,
+                )
+            }
+            ModerationSubmissionFailureV1::NotSubmittedUnavailable
+            | ModerationSubmissionFailureV1::NotSubmittedBackpressure
+            | ModerationSubmissionFailureV1::Ambiguous
+            | ModerationSubmissionFailureV1::RuntimeUnavailable => {
+                reset_sign_claim(&mut state.outbox[position]);
+                self.persist_checkpoint_locked(&mut state)
+            }
+        }
+    }
+
+    fn finalize_submit_work(
+        &self,
+        claim: &StoredExternalWorkClaimV1,
+        signed: &ModerationSignedTransactionV1,
+        result: Result<ModerationTransactionReceiptV1, ModerationSubmissionFailureV1>,
+    ) -> Result<(), ModerationOrchestratorError> {
+        let mut state = self.lock_state()?;
+        let Some(position) = outbox_claim_position(
+            &state,
+            StoredExternalWorkKindV1::Submit,
+            claim,
+        ) else {
+            return Ok(());
+        };
+        state.outbox[position].work_claim = None;
+        match result {
+            Ok(receipt)
+                if receipt.transaction_id == signed.transaction_id
+                    && receipt.observed_finalized_height
+                        >= state.outbox[position].baseline_finalized_height =>
+            {
+                state.outbox[position].state = StoredOutboxStateV1::Submitted;
+            }
+            Ok(_) => {
+                state.outbox[position].state = StoredOutboxStateV1::Ambiguous;
+            }
+            Err(
+                ModerationSubmissionFailureV1::Ambiguous
+                | ModerationSubmissionFailureV1::RuntimeUnavailable,
+            ) => {
+                state.outbox[position].state = StoredOutboxStateV1::Ambiguous;
+            }
+            Err(
+                ModerationSubmissionFailureV1::NotSubmittedUnavailable
+                | ModerationSubmissionFailureV1::NotSubmittedBackpressure,
+            ) => {
+                state.outbox[position].state = StoredOutboxStateV1::Signed;
+            }
+            Err(ModerationSubmissionFailureV1::PermanentRejection) => {
+                return self.dead_letter_submission_locked(
+                    &mut state,
+                    position,
+                    StoredDeadLetterReasonV1::PermanentRejection,
+                );
+            }
+        }
+        self.persist_checkpoint_locked(&mut state)
+    }
+
+    fn finalize_lookup_work(
+        &self,
+        claim: &StoredExternalWorkClaimV1,
+        observations: Vec<(ExternalLookupProbeV1, ModerationSubmissionLookupV1)>,
+    ) -> Result<(), ModerationOrchestratorError> {
+        let mut state = self.lock_state()?;
+        let Some(position) = outbox_claim_position(
+            &state,
+            StoredExternalWorkKindV1::Lookup,
+            claim,
+        ) else {
+            return Ok(());
+        };
+        let operation_id = state.outbox[position].operation_id;
+        let operation_position = state
+            .operations
+            .iter()
+            .position(|operation| operation.operation_id == operation_id)
+            .ok_or_else(|| {
+                ModerationOrchestratorError::CheckpointCorrupt(
+                    "lookup outbox entry has no idempotency record".to_owned(),
+                )
+            })?;
+        let cursor = ModerationFinalizedCursorV1 {
+            height: claim.claimed_at_finalized_height,
+            block_hash: claim.claimed_at_finalized_block_hash,
+        };
+        let mut candidate = state.outbox[position].clone();
+        candidate.work_claim = None;
+        candidate.last_lookup_finalized_height = cursor.height;
+        candidate.last_lookup_finalized_block_hash = cursor.block_hash;
+        for record in &mut candidate.retired_envelopes {
+            let Some((_, lookup)) = observations
+                .iter()
+                .find(|(probe, _)| probe.transaction_id == record.transaction_id)
+            else {
+                continue;
             };
-            if next_disposition != record.disposition {
-                record.disposition = next_disposition;
+            let next = retired_envelope_disposition_after_lookup(record, *lookup, cursor);
+            if next != record.disposition {
+                record.disposition = next;
                 refresh_retired_envelope_record_digest(operation_id, record);
             }
         }
+        if let Some(fenced_transaction_id) = retired_history_fence_transaction_id(&candidate) {
+            state.operations[operation_position].transaction_id =
+                Some(fenced_transaction_id);
+            state.outbox[position] = candidate;
+            return self.persist_checkpoint_locked(&mut state);
+        }
+
+        let Some(expected_transaction_id) = candidate.transaction_id else {
+            return Err(ModerationOrchestratorError::CheckpointCorrupt(
+                "lookup claim lost its active transaction".to_owned(),
+            ));
+        };
+        let Some(lookup) = observations
+            .iter()
+            .find(|(probe, _)| probe.transaction_id == expected_transaction_id)
+            .map(|(_, lookup)| *lookup)
+        else {
+            state.operations[operation_position].transaction_id =
+                Some(expected_transaction_id);
+            state.outbox[position] = candidate;
+            return self.persist_checkpoint_locked(&mut state);
+        };
+        let request = moderation_transaction_request(&self.chain_id, &candidate)?;
+        let signed = moderation_signed_transaction(&candidate)?;
+        let transaction = signed.decode_for_request(&request).map_err(|_| {
+            ModerationOrchestratorError::CheckpointCorrupt(
+                "lookup active envelope failed exact validation".to_owned(),
+            )
+        })?;
+        let timing = signed_envelope_timing(&transaction)?;
+        let expired = claim.claimed_at_unix_ms >= timing.expires_at_unix_ms;
+        let mut dead_reason = None;
+        match lookup {
+            ModerationSubmissionLookupV1::Pending { transaction_id }
+            | ModerationSubmissionLookupV1::Applied { transaction_id }
+                if transaction_id == expected_transaction_id =>
+            {
+                candidate.state = StoredOutboxStateV1::Submitted;
+                state.operations[operation_position].transaction_id =
+                    Some(expected_transaction_id);
+            }
+            ModerationSubmissionLookupV1::Rejected {
+                transaction_id,
+                observed_finalized_height,
+            } if transaction_id
+                .is_none_or(|transaction_id| transaction_id == expected_transaction_id)
+                && observed_finalized_height > candidate.baseline_finalized_height
+                && observed_finalized_height <= cursor.height =>
+            {
+                dead_reason = Some(StoredDeadLetterReasonV1::PermanentRejection);
+            }
+            ModerationSubmissionLookupV1::NotFound {
+                observed_finalized_height,
+            } if observed_finalized_height > candidate.baseline_finalized_height
+                && observed_finalized_height <= cursor.height =>
+            {
+                if candidate.attempts >= self.config.max_submit_attempts {
+                    dead_reason =
+                        Some(StoredDeadLetterReasonV1::RetryExhaustedNotFound);
+                } else if expired {
+                    let next_generation =
+                        next_envelope_generation(candidate.envelope_generation)?;
+                    if next_generation > self.config.max_submit_attempts {
+                        dead_reason =
+                            Some(StoredDeadLetterReasonV1::RetryExhaustedNotFound);
+                    } else if observed_finalized_height == cursor.height {
+                        self.retire_expired_envelope(
+                            &mut candidate,
+                            &signed,
+                            timing,
+                            cursor,
+                            claim.claimed_at_unix_ms,
+                            next_generation,
+                        )?;
+                        state.operations[operation_position].transaction_id = None;
+                    } else {
+                        candidate.state = StoredOutboxStateV1::Ambiguous;
+                    }
+                } else {
+                    candidate.baseline_finalized_height = cursor.height;
+                    candidate.baseline_finalized_block_hash = cursor.block_hash;
+                    candidate.state = StoredOutboxStateV1::Signed;
+                }
+            }
+            ModerationSubmissionLookupV1::Unknown
+            | ModerationSubmissionLookupV1::Pending { .. }
+            | ModerationSubmissionLookupV1::Applied { .. }
+            | ModerationSubmissionLookupV1::Rejected { .. }
+            | ModerationSubmissionLookupV1::NotFound { .. } => {
+                candidate.state = StoredOutboxStateV1::Ambiguous;
+            }
+        }
+        state.outbox[position] = candidate;
+        if let Some(reason) = dead_reason {
+            state.operations[operation_position].transaction_id =
+                Some(expected_transaction_id);
+            return self.dead_letter_submission_locked(&mut state, position, reason);
+        }
+        self.persist_checkpoint_locked(&mut state)
+    }
+
+    fn finalize_handoff_work(
+        &self,
+        claim: &StoredExternalWorkClaimV1,
+        result: Result<(), ModerationHandoffFailureV1>,
+    ) -> Result<(), ModerationOrchestratorError> {
+        let mut state = self.lock_state()?;
+        let Some(position) = handoff_claim_position(&state, claim) else {
+            return Ok(());
+        };
+        let cursor = snapshot_cursor(&state)?;
+        let needs_dead_letter = matches!(result, Err(ModerationHandoffFailureV1::Permanent))
+            || (matches!(
+                result,
+                Err(
+                    ModerationHandoffFailureV1::NotDelivered
+                        | ModerationHandoffFailureV1::Ambiguous
+                )
+            ) && state.pending_handoffs[position].attempts
+                >= self.config.max_submit_attempts);
+        if needs_dead_letter {
+            ensure_dead_letter_capacity(&state, &self.config, 1)?;
+        }
+        let mut entry = state.pending_handoffs.remove(position);
+        entry.work_claim = None;
+        match result {
+            Ok(()) => {
+                state.completed_handoffs.push(entry.handoff.handoff_id);
+                state.completed_handoffs.sort_unstable();
+                state.completed_handoffs.dedup();
+            }
+            Err(ModerationHandoffFailureV1::Permanent) => {
+                state.dead_letters.push(StoredDeadLetterV1 {
+                    identity: entry.handoff.handoff_id,
+                    action_label: handoff_label(entry.handoff.kind).to_owned(),
+                    reason: StoredDeadLetterReasonV1::HandoffPermanentRejection,
+                    finalized_cursor: cursor,
+                });
+            }
+            Err(
+                ModerationHandoffFailureV1::NotDelivered
+                | ModerationHandoffFailureV1::Ambiguous,
+            ) if entry.attempts >= self.config.max_submit_attempts => {
+                state.dead_letters.push(StoredDeadLetterV1 {
+                    identity: entry.handoff.handoff_id,
+                    action_label: handoff_label(entry.handoff.kind).to_owned(),
+                    reason: StoredDeadLetterReasonV1::HandoffRetryExhausted,
+                    finalized_cursor: cursor,
+                });
+            }
+            Err(
+                ModerationHandoffFailureV1::NotDelivered
+                | ModerationHandoffFailureV1::Ambiguous,
+            ) => {
+                state.pending_handoffs.insert(position, entry);
+            }
+        }
+        self.persist_checkpoint_locked(&mut state)
     }
 
     fn retire_expired_envelope(
@@ -1796,191 +2932,10 @@ impl ModerationOrchestratorV1 {
         entry.signed_transaction_digest = None;
         entry.signed_transaction_bytes = None;
         entry.state = StoredOutboxStateV1::Ready;
+        entry.work_claim = None;
+        entry.last_lookup_finalized_height = 0;
+        entry.last_lookup_finalized_block_hash = [0; 32];
         Ok(())
-    }
-
-    fn try_submit_locked(
-        &self,
-        state: &mut ModerationOrchestratorCheckpointV1,
-        operation_id: [u8; 32],
-    ) -> Result<(), ModerationOrchestratorError> {
-        let position = state
-            .outbox
-            .iter()
-            .position(|entry| entry.operation_id == operation_id)
-            .ok_or_else(|| {
-                ModerationOrchestratorError::CheckpointCorrupt(
-                    "submission outbox entry is missing".to_owned(),
-                )
-            })?;
-        if state.outbox[position].state == StoredOutboxStateV1::Ready {
-            self.stage_signed_transaction_locked(state, operation_id)?;
-        }
-        self.submit_staged_transaction_locked(state, operation_id)
-    }
-
-    fn stage_signed_transaction_locked(
-        &self,
-        state: &mut ModerationOrchestratorCheckpointV1,
-        operation_id: [u8; 32],
-    ) -> Result<(), ModerationOrchestratorError> {
-        let position = state
-            .outbox
-            .iter()
-            .position(|entry| entry.operation_id == operation_id)
-            .ok_or_else(|| {
-                ModerationOrchestratorError::CheckpointCorrupt(
-                    "signing outbox entry is missing".to_owned(),
-                )
-            })?;
-        if state.outbox[position].state != StoredOutboxStateV1::Ready {
-            return Ok(());
-        }
-        let cursor = snapshot_cursor(state)?;
-        state.outbox[position].baseline_finalized_height = cursor.height;
-        state.outbox[position].baseline_finalized_block_hash = cursor.block_hash;
-        state.outbox[position].state = StoredOutboxStateV1::Signing;
-        self.persist_checkpoint_locked(state)?;
-
-        let request =
-            moderation_transaction_request(&self.chain_id, &state.outbox[position])?;
-        match self.deps.submitter.sign(&request) {
-            Ok(signed) => {
-                let transaction = signed.decode_for_request(&request).map_err(|_| {
-                    ModerationOrchestratorError::CheckpointCorrupt(
-                        "runtime signer returned an invalid exact transaction".to_owned(),
-                    )
-                })?;
-                let timing = signed_envelope_timing(&transaction)?;
-                let duplicate_or_stale = state.outbox[position]
-                    .retired_envelopes
-                    .iter()
-                    .any(|record| {
-                        record.transaction_id == signed.transaction_id
-                            || record.signed_transaction_digest == signed.canonical_bytes_digest
-                    })
-                    || state.outbox[position].retired_envelopes.last().is_some_and(
-                        |previous| {
-                            timing.created_at_unix_ms <= previous.created_at_unix_ms
-                                || timing.expires_at_unix_ms
-                                    <= previous.retired_at_finalized_unix_ms
-                        },
-                    );
-                if duplicate_or_stale {
-                    state.outbox[position].baseline_finalized_height = 0;
-                    state.outbox[position].baseline_finalized_block_hash = [0; 32];
-                    state.outbox[position].state = StoredOutboxStateV1::Ready;
-                    self.persist_checkpoint_locked(state)?;
-                    return Err(ModerationOrchestratorError::InvalidAction(
-                        "runtime signer did not advance the retired envelope generation"
-                            .to_owned(),
-                    ));
-                }
-                state.outbox[position].transaction_id = Some(signed.transaction_id);
-                state.outbox[position].signed_transaction_digest =
-                    Some(signed.canonical_bytes_digest);
-                state.outbox[position].signed_transaction_bytes = Some(signed.canonical_bytes);
-                state.outbox[position].state = StoredOutboxStateV1::Signed;
-                let transaction_id = state.outbox[position].transaction_id;
-                if let Some(operation) = state
-                    .operations
-                    .iter_mut()
-                    .find(|operation| operation.operation_id == operation_id)
-                {
-                    operation.transaction_id = transaction_id;
-                }
-                self.persist_checkpoint_locked(state)
-            }
-            Err(
-                ModerationSubmissionFailureV1::NotSubmittedUnavailable
-                | ModerationSubmissionFailureV1::NotSubmittedBackpressure
-                | ModerationSubmissionFailureV1::Ambiguous
-                | ModerationSubmissionFailureV1::RuntimeUnavailable,
-            ) => {
-                state.outbox[position].baseline_finalized_height = 0;
-                state.outbox[position].baseline_finalized_block_hash = [0; 32];
-                state.outbox[position].state = StoredOutboxStateV1::Ready;
-                self.persist_checkpoint_locked(state)
-            }
-            Err(ModerationSubmissionFailureV1::PermanentRejection) => self
-                .dead_letter_submission_locked(
-                    state,
-                    position,
-                    StoredDeadLetterReasonV1::PermanentRejection,
-                ),
-        }
-    }
-
-    fn submit_staged_transaction_locked(
-        &self,
-        state: &mut ModerationOrchestratorCheckpointV1,
-        operation_id: [u8; 32],
-    ) -> Result<(), ModerationOrchestratorError> {
-        let position = state
-            .outbox
-            .iter()
-            .position(|entry| entry.operation_id == operation_id)
-            .ok_or_else(|| {
-                ModerationOrchestratorError::CheckpointCorrupt(
-                    "submission outbox entry is missing".to_owned(),
-                )
-            })?;
-        if state.outbox[position].state != StoredOutboxStateV1::Signed {
-            return Ok(());
-        }
-        if state.outbox[position].attempts >= self.config.max_submit_attempts {
-            return self.dead_letter_submission_locked(
-                state,
-                position,
-                StoredDeadLetterReasonV1::RetryExhaustedNotFound,
-            );
-        }
-        let request =
-            moderation_transaction_request(&self.chain_id, &state.outbox[position])?;
-        let signed = moderation_signed_transaction(&state.outbox[position])?;
-        signed.decode_for_request(&request).map_err(|_| {
-            ModerationOrchestratorError::CheckpointCorrupt(
-                "retained signed transaction failed exact validation".to_owned(),
-            )
-        })?;
-        state.outbox[position].attempts = state.outbox[position]
-            .attempts
-            .checked_add(1)
-            .ok_or(ModerationOrchestratorError::GenerationOverflow)?;
-        state.outbox[position].state = StoredOutboxStateV1::Ambiguous;
-        self.persist_checkpoint_locked(state)?;
-
-        match self.deps.submitter.submit_signed(&request, &signed) {
-            Ok(receipt) => {
-                if receipt.transaction_id != signed.transaction_id
-                    || receipt.observed_finalized_height < request.baseline_finalized_height
-                {
-                    state.outbox[position].state = StoredOutboxStateV1::Ambiguous;
-                } else {
-                    state.outbox[position].state = StoredOutboxStateV1::Submitted;
-                }
-            }
-            Err(
-                ModerationSubmissionFailureV1::Ambiguous
-                | ModerationSubmissionFailureV1::RuntimeUnavailable,
-            ) => {
-                state.outbox[position].state = StoredOutboxStateV1::Ambiguous;
-            }
-            Err(
-                ModerationSubmissionFailureV1::NotSubmittedUnavailable
-                | ModerationSubmissionFailureV1::NotSubmittedBackpressure,
-            ) => {
-                state.outbox[position].state = StoredOutboxStateV1::Signed;
-            }
-            Err(ModerationSubmissionFailureV1::PermanentRejection) => {
-                return self.dead_letter_submission_locked(
-                    state,
-                    position,
-                    StoredDeadLetterReasonV1::PermanentRejection,
-                );
-            }
-        }
-        self.persist_checkpoint_locked(state)
     }
 
     fn dead_letter_submission_locked(
@@ -2009,6 +2964,185 @@ impl ModerationOrchestratorV1 {
             finalized_cursor: cursor,
         });
         self.persist_checkpoint_locked(state)
+    }
+
+    fn queue_panel_notifications_locked(
+        &self,
+        state: &mut ModerationOrchestratorCheckpointV1,
+    ) -> Result<(), ModerationOrchestratorError> {
+        let snapshot = state
+            .finalized_snapshot
+            .as_ref()
+            .ok_or(ModerationOrchestratorError::FinalizedReaderUnavailable)?;
+        let existing = state
+            .panel_notifications
+            .iter()
+            .map(|entry| entry.notification.notification_id)
+            .collect::<BTreeSet<_>>();
+        let scanned_cursor = state.panel_notification_scanned_cursor;
+        let new_events = snapshot
+            .events
+            .iter()
+            .filter(|event| scanned_cursor.is_none_or(|cursor| event.sequence > cursor.sequence))
+            .collect::<Vec<_>>();
+        if let (Some(scanned), Some(first)) = (scanned_cursor, new_events.first())
+            && scanned
+                .sequence
+                .checked_add(1)
+                .is_none_or(|expected| first.sequence != expected)
+        {
+            return Err(ModerationOrchestratorError::InvalidFinalizedSnapshot(
+                "panel notification event scan contains a sequence gap".to_owned(),
+            ));
+        }
+        let new_scanned_cursor = new_events.last().map(|event| event.cursor());
+        let mut additions = Vec::new();
+        let mut added = BTreeSet::new();
+
+        for event in new_events {
+            let (Some(case_id), Some(round_id)) = (
+                event.event.case_id().as_deref(),
+                event.event.round_id().as_deref(),
+            ) else {
+                continue;
+            };
+            let scope_digest = panel_notification_scope_digest(case_id, round_id);
+            match *event.event.kind() {
+                SorafsModerationLedgerEventKind::SortitionFinalized => {
+                    let appeal = snapshot.appeal(case_id, round_id).ok_or_else(|| {
+                        ModerationOrchestratorError::InvalidFinalizedSnapshot(
+                            "sortition event has no authoritative appeal".to_owned(),
+                        )
+                    })?;
+                    let selection = appeal.appeal.selection.as_ref().ok_or_else(|| {
+                        ModerationOrchestratorError::InvalidFinalizedSnapshot(
+                            "sortition event has no authoritative selection".to_owned(),
+                        )
+                    })?;
+                    if selection.selected_at_unix_ms != *event.event.occurred_at_unix_ms()
+                        || &selection.selected_by != event.event.authority()
+                    {
+                        return Err(ModerationOrchestratorError::InvalidFinalizedSnapshot(
+                            "sortition event provenance differs from the authoritative selection"
+                                .to_owned(),
+                        ));
+                    }
+                    let action = ModerationNativeActionV1::FinalizeSortition(
+                        FinalizeSorafsModerationSortition::new(
+                            case_id.to_owned(),
+                            round_id.to_owned(),
+                            appeal.appeal.pop_snapshot_digest,
+                            selection.randomness_anchor,
+                            selection.jurors.clone(),
+                            selection.waitlist.clone(),
+                        ),
+                    );
+                    let source_operation_id =
+                        action.operation_id(&self.chain_id, event.event.authority())?;
+                    for (kind, recipients) in [
+                        (
+                            ModerationPanelNotificationKindV1::PrimaryAssignment,
+                            selection.jurors.as_slice(),
+                        ),
+                        (
+                            ModerationPanelNotificationKindV1::WaitlistStandby,
+                            selection.waitlist.as_slice(),
+                        ),
+                    ] {
+                        for recipient in recipients {
+                            let entry = new_panel_notification_entry(
+                                &self.chain_id,
+                                source_operation_id,
+                                scope_digest,
+                                kind,
+                                recipient.clone(),
+                                event,
+                                self.config.max_submit_attempts,
+                            );
+                            let notification_id = entry.notification.notification_id;
+                            if !existing.contains(&notification_id) && added.insert(notification_id) {
+                                additions.push(entry);
+                            }
+                        }
+                    }
+                }
+                SorafsModerationLedgerEventKind::CaseActivated => {
+                    let appeal = snapshot.appeal(case_id, round_id).ok_or_else(|| {
+                        ModerationOrchestratorError::InvalidFinalizedSnapshot(
+                            "activation event has no authoritative appeal".to_owned(),
+                        )
+                    })?;
+                    let case = snapshot.case(case_id, round_id).ok_or_else(|| {
+                        ModerationOrchestratorError::InvalidFinalizedSnapshot(
+                            "activation event has no authoritative case".to_owned(),
+                        )
+                    })?;
+                    let selection = appeal.appeal.selection.as_ref().ok_or_else(|| {
+                        ModerationOrchestratorError::InvalidFinalizedSnapshot(
+                            "activation event has no authoritative selection".to_owned(),
+                        )
+                    })?;
+                    if case.case.opened_at_unix_ms != *event.event.occurred_at_unix_ms()
+                        || &case.case.opened_by != event.event.authority()
+                        || appeal.appeal.activated_at_unix_ms
+                            != Some(*event.event.occurred_at_unix_ms())
+                    {
+                        return Err(ModerationOrchestratorError::InvalidFinalizedSnapshot(
+                            "activation event provenance differs from the authoritative case"
+                                .to_owned(),
+                        ));
+                    }
+                    let action = ModerationNativeActionV1::ActivateCase(
+                        ActivateSorafsModerationCase::new(
+                            case_id.to_owned(),
+                            round_id.to_owned(),
+                            selection.sortition_digest,
+                        ),
+                    );
+                    let source_operation_id =
+                        action.operation_id(&self.chain_id, event.event.authority())?;
+                    for recipient in &case.case.spec.jurors {
+                        let entry = new_panel_notification_entry(
+                            &self.chain_id,
+                            source_operation_id,
+                            scope_digest,
+                            ModerationPanelNotificationKindV1::BallotActivated,
+                            recipient.clone(),
+                            event,
+                            self.config.max_submit_attempts,
+                        );
+                        let notification_id = entry.notification.notification_id;
+                        if !existing.contains(&notification_id) && added.insert(notification_id) {
+                            additions.push(entry);
+                        }
+                    }
+                }
+                SorafsModerationLedgerEventKind::PolicyActivated
+                | SorafsModerationLedgerEventKind::AppealSubmitted
+                | SorafsModerationLedgerEventKind::EligibilityRegistered
+                | SorafsModerationLedgerEventKind::SortitionFailed
+                | SorafsModerationLedgerEventKind::AssignmentAccepted
+                | SorafsModerationLedgerEventKind::CaseActivationFailed
+                | SorafsModerationLedgerEventKind::CommitAccepted
+                | SorafsModerationLedgerEventKind::ChallengeRaised
+                | SorafsModerationLedgerEventKind::ChallengeResolved
+                | SorafsModerationLedgerEventKind::RevealAccepted
+                | SorafsModerationLedgerEventKind::CaseFinalized => {}
+            }
+        }
+        make_panel_notification_capacity(
+            state,
+            additions.len(),
+            self.config.max_handoffs,
+        )?;
+        state.panel_notifications.extend(additions);
+        state
+            .panel_notifications
+            .sort_by_key(|entry| entry.notification.notification_id);
+        if let Some(cursor) = new_scanned_cursor {
+            state.panel_notification_scanned_cursor = Some(cursor);
+        }
+        Ok(())
     }
 
     fn queue_terminal_handoffs_locked(
@@ -2068,6 +3202,8 @@ impl ModerationOrchestratorV1 {
                             finalized_cursor: snapshot.anchor(),
                         },
                         attempts: 0,
+                        work_generation: 0,
+                        work_claim: None,
                     });
                 }
             }
@@ -2088,55 +3224,6 @@ impl ModerationOrchestratorV1 {
         Ok(())
     }
 
-    fn process_handoffs_locked(
-        &self,
-        state: &mut ModerationOrchestratorCheckpointV1,
-    ) -> Result<(), ModerationOrchestratorError> {
-        ensure_dead_letter_capacity(state, &self.config, state.pending_handoffs.len())?;
-        let cursor = snapshot_cursor(state)?;
-        let mut retained = Vec::with_capacity(state.pending_handoffs.len());
-        let mut completed = Vec::new();
-        let mut dead = Vec::new();
-        for mut entry in std::mem::take(&mut state.pending_handoffs) {
-            entry.attempts = entry.attempts.saturating_add(1);
-            let sink = match entry.handoff.kind {
-                ModerationTerminalHandoffKindV1::Settlement => &self.deps.settlement_sink,
-                ModerationTerminalHandoffKindV1::Publication => &self.deps.publication_sink,
-            };
-            match sink.deliver(&entry.handoff) {
-                Ok(()) => completed.push(entry.handoff.handoff_id),
-                Err(ModerationHandoffFailureV1::Permanent) => {
-                    dead.push(StoredDeadLetterV1 {
-                        identity: entry.handoff.handoff_id,
-                        action_label: handoff_label(entry.handoff.kind).to_owned(),
-                        reason: StoredDeadLetterReasonV1::HandoffPermanentRejection,
-                        finalized_cursor: cursor,
-                    });
-                }
-                Err(
-                    ModerationHandoffFailureV1::NotDelivered
-                    | ModerationHandoffFailureV1::Ambiguous,
-                ) if entry.attempts >= self.config.max_submit_attempts => {
-                    dead.push(StoredDeadLetterV1 {
-                        identity: entry.handoff.handoff_id,
-                        action_label: handoff_label(entry.handoff.kind).to_owned(),
-                        reason: StoredDeadLetterReasonV1::HandoffRetryExhausted,
-                        finalized_cursor: cursor,
-                    });
-                }
-                Err(
-                    ModerationHandoffFailureV1::NotDelivered
-                    | ModerationHandoffFailureV1::Ambiguous,
-                ) => retained.push(entry),
-            }
-        }
-        state.pending_handoffs = retained;
-        state.completed_handoffs.extend(completed);
-        state.completed_handoffs.sort_unstable();
-        state.completed_handoffs.dedup();
-        state.dead_letters.extend(dead);
-        self.persist_checkpoint_locked(state)
-    }
 }
 
 /// Compute the digest that binds authenticated HTTP material to one native action.
@@ -3205,6 +4292,240 @@ fn action_effect(
     }
 }
 
+fn validate_panel_notification_source_provenance(
+    snapshot: &ModerationFinalizedLedgerSnapshotV1,
+) -> Result<(), ModerationOrchestratorError> {
+    for event in &snapshot.events {
+        let (Some(case_id), Some(round_id)) = (
+            event.event.case_id().as_deref(),
+            event.event.round_id().as_deref(),
+        ) else {
+            continue;
+        };
+        match *event.event.kind() {
+            SorafsModerationLedgerEventKind::SortitionFinalized => {
+                let appeal = snapshot.appeal(case_id, round_id).ok_or_else(|| {
+                    ModerationOrchestratorError::InvalidFinalizedSnapshot(
+                        "sortition event has no authoritative appeal".to_owned(),
+                    )
+                })?;
+                let selection = appeal.appeal.selection.as_ref().ok_or_else(|| {
+                    ModerationOrchestratorError::InvalidFinalizedSnapshot(
+                        "sortition event has no authoritative selection".to_owned(),
+                    )
+                })?;
+                if selection.selected_at_unix_ms != *event.event.occurred_at_unix_ms()
+                    || &selection.selected_by != event.event.authority()
+                {
+                    return Err(ModerationOrchestratorError::InvalidFinalizedSnapshot(
+                        "sortition event provenance differs from the authoritative selection"
+                            .to_owned(),
+                    ));
+                }
+            }
+            SorafsModerationLedgerEventKind::CaseActivated => {
+                let appeal = snapshot.appeal(case_id, round_id).ok_or_else(|| {
+                    ModerationOrchestratorError::InvalidFinalizedSnapshot(
+                        "activation event has no authoritative appeal".to_owned(),
+                    )
+                })?;
+                let case = snapshot.case(case_id, round_id).ok_or_else(|| {
+                    ModerationOrchestratorError::InvalidFinalizedSnapshot(
+                        "activation event has no authoritative case".to_owned(),
+                    )
+                })?;
+                if appeal.appeal.selection.is_none()
+                    || case.case.opened_at_unix_ms != *event.event.occurred_at_unix_ms()
+                    || &case.case.opened_by != event.event.authority()
+                    || appeal.appeal.activated_at_unix_ms
+                        != Some(*event.event.occurred_at_unix_ms())
+                {
+                    return Err(ModerationOrchestratorError::InvalidFinalizedSnapshot(
+                        "activation event provenance differs from the authoritative case"
+                            .to_owned(),
+                    ));
+                }
+            }
+            SorafsModerationLedgerEventKind::PolicyActivated
+            | SorafsModerationLedgerEventKind::AppealSubmitted
+            | SorafsModerationLedgerEventKind::EligibilityRegistered
+            | SorafsModerationLedgerEventKind::SortitionFailed
+            | SorafsModerationLedgerEventKind::AssignmentAccepted
+            | SorafsModerationLedgerEventKind::CaseActivationFailed
+            | SorafsModerationLedgerEventKind::CommitAccepted
+            | SorafsModerationLedgerEventKind::ChallengeRaised
+            | SorafsModerationLedgerEventKind::ChallengeResolved
+            | SorafsModerationLedgerEventKind::RevealAccepted
+            | SorafsModerationLedgerEventKind::CaseFinalized => {}
+        }
+    }
+    Ok(())
+}
+
+fn validate_retained_panel_notification_source(
+    notification: &ModerationPanelNotificationV1,
+    snapshot: &ModerationFinalizedLedgerSnapshotV1,
+    chain_id: &iroha_data_model::ChainId,
+) -> Result<(), ModerationOrchestratorError> {
+    let Some(event) = snapshot
+        .events
+        .iter()
+        .find(|event| event.sequence == notification.finalized_event_cursor.sequence)
+    else {
+        return Ok(());
+    };
+    let (Some(case_id), Some(round_id)) = (
+        event.event.case_id().as_deref(),
+        event.event.round_id().as_deref(),
+    ) else {
+        return Err(ModerationOrchestratorError::CheckpointCorrupt(
+            "panel notification points to an unscoped retained event".to_owned(),
+        ));
+    };
+    if event.cursor() != notification.finalized_event_cursor
+        || *event.event.occurred_at_unix_ms() != notification.source_occurred_at_unix_ms
+        || panel_notification_scope_digest(case_id, round_id) != notification.scope_digest
+    {
+        return Err(ModerationOrchestratorError::CheckpointCorrupt(
+            "panel notification differs from its retained finalized event".to_owned(),
+        ));
+    }
+    let source_operation_id = match notification.kind {
+        ModerationPanelNotificationKindV1::PrimaryAssignment
+        | ModerationPanelNotificationKindV1::WaitlistStandby => {
+            if *event.event.kind() != SorafsModerationLedgerEventKind::SortitionFinalized {
+                return Err(ModerationOrchestratorError::CheckpointCorrupt(
+                    "assignment notification points to a non-sortition event".to_owned(),
+                ));
+            }
+            let appeal = snapshot.appeal(case_id, round_id).ok_or_else(|| {
+                ModerationOrchestratorError::CheckpointCorrupt(
+                    "assignment notification has no authoritative appeal".to_owned(),
+                )
+            })?;
+            let selection = appeal.appeal.selection.as_ref().ok_or_else(|| {
+                ModerationOrchestratorError::CheckpointCorrupt(
+                    "assignment notification has no authoritative selection".to_owned(),
+                )
+            })?;
+            let expected_recipient = if notification.kind
+                == ModerationPanelNotificationKindV1::PrimaryAssignment
+            {
+                selection.jurors.contains(&notification.recipient)
+            } else {
+                selection.waitlist.contains(&notification.recipient)
+            };
+            if !expected_recipient {
+                return Err(ModerationOrchestratorError::CheckpointCorrupt(
+                    "assignment notification recipient is outside the finalized roster"
+                        .to_owned(),
+                ));
+            }
+            ModerationNativeActionV1::FinalizeSortition(
+                FinalizeSorafsModerationSortition::new(
+                    case_id.to_owned(),
+                    round_id.to_owned(),
+                    appeal.appeal.pop_snapshot_digest,
+                    selection.randomness_anchor,
+                    selection.jurors.clone(),
+                    selection.waitlist.clone(),
+                ),
+            )
+            .operation_id(chain_id, event.event.authority())
+            .map_err(|_| {
+                ModerationOrchestratorError::CheckpointCorrupt(
+                    "assignment notification operation identity cannot be reconstructed"
+                        .to_owned(),
+                )
+            })?
+        }
+        ModerationPanelNotificationKindV1::BallotActivated => {
+            if *event.event.kind() != SorafsModerationLedgerEventKind::CaseActivated {
+                return Err(ModerationOrchestratorError::CheckpointCorrupt(
+                    "activation notification points to a different event kind".to_owned(),
+                ));
+            }
+            let appeal = snapshot.appeal(case_id, round_id).ok_or_else(|| {
+                ModerationOrchestratorError::CheckpointCorrupt(
+                    "activation notification has no authoritative appeal".to_owned(),
+                )
+            })?;
+            let selection = appeal.appeal.selection.as_ref().ok_or_else(|| {
+                ModerationOrchestratorError::CheckpointCorrupt(
+                    "activation notification has no authoritative selection".to_owned(),
+                )
+            })?;
+            let case = snapshot.case(case_id, round_id).ok_or_else(|| {
+                ModerationOrchestratorError::CheckpointCorrupt(
+                    "activation notification has no authoritative case".to_owned(),
+                )
+            })?;
+            if !case.case.spec.jurors.contains(&notification.recipient) {
+                return Err(ModerationOrchestratorError::CheckpointCorrupt(
+                    "activation notification recipient is outside the finalized panel".to_owned(),
+                ));
+            }
+            ModerationNativeActionV1::ActivateCase(ActivateSorafsModerationCase::new(
+                case_id.to_owned(),
+                round_id.to_owned(),
+                selection.sortition_digest,
+            ))
+            .operation_id(chain_id, event.event.authority())
+            .map_err(|_| {
+                ModerationOrchestratorError::CheckpointCorrupt(
+                    "activation notification operation identity cannot be reconstructed"
+                        .to_owned(),
+                )
+            })?
+        }
+    };
+    if source_operation_id != notification.source_operation_id {
+        return Err(ModerationOrchestratorError::CheckpointCorrupt(
+            "panel notification source operation identity is invalid".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn external_work_cursor_is_valid(
+    height: u64,
+    block_hash: [u8; 32],
+    snapshot: Option<&ModerationFinalizedLedgerSnapshotV1>,
+) -> bool {
+    if height == 0 || block_hash == [0; 32] {
+        return false;
+    }
+    snapshot.is_some_and(|snapshot| {
+        height <= snapshot.finalized_height
+            && (height != snapshot.finalized_height
+                || block_hash == snapshot.finalized_block_hash)
+    })
+}
+
+fn external_work_claim_is_valid(
+    identity: [u8; 32],
+    claim: &StoredExternalWorkClaimV1,
+    snapshot: Option<&ModerationFinalizedLedgerSnapshotV1>,
+) -> bool {
+    claim.generation != 0
+        && claim.work_digest != [0; 32]
+        && claim.lease_token != [0; 32]
+        && claim.claimed_at_unix_ms != 0
+        && external_work_cursor_is_valid(
+            claim.claimed_at_finalized_height,
+            claim.claimed_at_finalized_block_hash,
+            snapshot,
+        )
+        && snapshot.is_some_and(|snapshot| {
+            claim.claimed_at_unix_ms <= snapshot.finalized_at_unix_ms
+        })
+        && claim
+            .claimed_at_unix_ms
+            .checked_add(MODERATION_EXTERNAL_WORK_LEASE_MS_V1)
+            == Some(claim.lease_expires_at_unix_ms)
+        && external_work_lease_token(identity, claim) == claim.lease_token
+}
+
 fn validate_checkpoint(
     state: &ModerationOrchestratorCheckpointV1,
     config: &ModerationOrchestratorConfigV1,
@@ -3223,18 +4544,86 @@ fn validate_checkpoint(
             .len()
             .saturating_add(state.completed_handoffs.len())
             > config.max_handoffs
+        || state.panel_notifications.len() > config.max_handoffs
     {
         return Err(ModerationOrchestratorError::CheckpointCorrupt(
             "checkpoint exceeds configured retention bounds".to_owned(),
+        ));
+    }
+    if state.panel_notification_outbox_digest == [0; 32]
+        || state.panel_notification_outbox_digest != panel_notification_outbox_digest(state)
+    {
+        return Err(ModerationOrchestratorError::CheckpointCorrupt(
+            "panel notification outbox digest mismatch".to_owned(),
+        ));
+    }
+    if let Some(cursor) = state.panel_notification_scanned_cursor {
+        if cursor.sequence == 0
+            || cursor.block_height == 0
+            || cursor.block_hash == [0; 32]
+        {
+            return Err(ModerationOrchestratorError::CheckpointCorrupt(
+                "panel notification scan cursor is inert".to_owned(),
+            ));
+        }
+    } else if !state.panel_notifications.is_empty() {
+        return Err(ModerationOrchestratorError::CheckpointCorrupt(
+            "panel notifications exist without a finalized scan cursor".to_owned(),
         ));
     }
     match (
         state.finalized_snapshot.as_ref(),
         state.finalized_snapshot_digest,
     ) {
-        (None, None) => {}
+        (None, None) => {
+            if state.panel_notification_scanned_cursor.is_some() {
+                return Err(ModerationOrchestratorError::CheckpointCorrupt(
+                    "panel notification scan cursor exists without a finalized snapshot"
+                        .to_owned(),
+                ));
+            }
+        }
         (Some(snapshot), Some(digest)) => {
             validate_finalized_snapshot(snapshot, config)?;
+            validate_panel_notification_source_provenance(snapshot)?;
+            if !snapshot.events.is_empty()
+                && state.panel_notification_scanned_cursor.is_none()
+            {
+                return Err(ModerationOrchestratorError::CheckpointCorrupt(
+                    "finalized moderation events were not scanned for panel notifications"
+                        .to_owned(),
+                ));
+            }
+            if let Some(scanned) = state.panel_notification_scanned_cursor {
+                let retained_exact = snapshot
+                    .events
+                    .iter()
+                    .find(|event| event.sequence == scanned.sequence);
+                let first_after = snapshot
+                    .events
+                    .iter()
+                    .find(|event| event.sequence > scanned.sequence);
+                let invalid_gap = retained_exact.is_none()
+                    && first_after.is_some_and(|event| {
+                        scanned
+                            .sequence
+                            .checked_add(1)
+                            .is_none_or(|expected| event.sequence != expected)
+                    });
+                if scanned.block_height > snapshot.finalized_height
+                    || snapshot
+                        .events
+                        .last()
+                        .is_some_and(|event| scanned.sequence > event.sequence)
+                    || retained_exact.is_some_and(|event| event.cursor() != scanned)
+                    || invalid_gap
+                {
+                    return Err(ModerationOrchestratorError::CheckpointCorrupt(
+                        "panel notification scan cursor differs from the finalized snapshot"
+                            .to_owned(),
+                    ));
+                }
+            }
             if finalized_snapshot_digest(snapshot)? != digest {
                 return Err(ModerationOrchestratorError::CheckpointCorrupt(
                     "finalized snapshot digest mismatch".to_owned(),
@@ -3307,6 +4696,14 @@ fn validate_checkpoint(
         let complete_transaction = entry.transaction_id.is_some()
             && entry.signed_transaction_digest.is_some()
             && entry.signed_transaction_bytes.is_some();
+        let empty_lookup_cursor = entry.last_lookup_finalized_height == 0
+            && entry.last_lookup_finalized_block_hash == [0; 32];
+        let valid_lookup_cursor = empty_lookup_cursor
+            || external_work_cursor_is_valid(
+                entry.last_lookup_finalized_height,
+                entry.last_lookup_finalized_block_hash,
+                state.finalized_snapshot.as_ref(),
+            );
         let valid_delivery = match entry.state {
             StoredOutboxStateV1::Ready => empty_cursor && empty_transaction,
             StoredOutboxStateV1::Signing => nonzero_cursor && empty_transaction,
@@ -3315,9 +4712,57 @@ fn validate_checkpoint(
                 nonzero_cursor && complete_transaction && entry.attempts != 0
             }
         };
-        if !valid_delivery {
+        let valid_claim = match entry.work_claim.as_ref() {
+            None => entry.state != StoredOutboxStateV1::Signing,
+            Some(claim)
+                if entry.work_generation == claim.generation
+                    && external_work_claim_is_valid(
+                        entry.operation_id,
+                        claim,
+                        state.finalized_snapshot.as_ref(),
+                    ) =>
+            {
+                match claim.kind {
+                    StoredExternalWorkKindV1::Sign => {
+                        entry.state == StoredOutboxStateV1::Signing
+                            && empty_transaction
+                            && claim.work_digest == outbox_sign_work_digest(entry)
+                    }
+                    StoredExternalWorkKindV1::Submit => {
+                        entry.state == StoredOutboxStateV1::Ambiguous
+                            && complete_transaction
+                            && entry.attempts != 0
+                            && claim.work_digest == outbox_submit_work_digest(entry)
+                    }
+                    StoredExternalWorkKindV1::Lookup => {
+                        matches!(
+                            entry.state,
+                            StoredOutboxStateV1::Signed
+                                | StoredOutboxStateV1::Ambiguous
+                                | StoredOutboxStateV1::Submitted
+                        ) && complete_transaction
+                            && claim.work_digest
+                                == outbox_lookup_work_digest(
+                                    entry,
+                                    ModerationFinalizedCursorV1 {
+                                        height: claim.claimed_at_finalized_height,
+                                        block_hash: claim.claimed_at_finalized_block_hash,
+                                    },
+                                )
+                    }
+                    StoredExternalWorkKindV1::Handoff => false,
+                }
+            }
+            Some(_) => false,
+        };
+        if !valid_delivery
+            || !valid_lookup_cursor
+            || !valid_claim
+            || (entry.work_claim.is_some() && entry.work_generation == 0)
+        {
             return Err(ModerationOrchestratorError::CheckpointCorrupt(
-                "outbox crash state is inconsistent".to_owned(),
+                "outbox crash, lookup cursor, or external-work claim is inconsistent"
+                    .to_owned(),
             ));
         }
         if !empty_cursor {
@@ -3363,13 +4808,187 @@ fn validate_checkpoint(
         ));
     }
     for entry in &state.pending_handoffs {
+        let valid_claim = match entry.work_claim.as_ref() {
+            None => true,
+            Some(claim) => {
+                entry.work_generation == claim.generation
+                    && claim.kind == StoredExternalWorkKindV1::Handoff
+                    && claim.work_digest == handoff_work_digest(&entry.handoff)
+                    && external_work_claim_is_valid(
+                        entry.handoff.handoff_id,
+                        claim,
+                        state.finalized_snapshot.as_ref(),
+                    )
+            }
+        };
         if entry.handoff.handoff_id == [0; 32]
             || !handoffs.insert(entry.handoff.handoff_id)
             || entry.attempts > config.max_submit_attempts
+            || !valid_claim
+            || (entry.work_claim.is_some()
+                && (entry.work_generation == 0 || entry.attempts == 0))
         {
             return Err(ModerationOrchestratorError::CheckpointCorrupt(
-                "invalid or duplicate pending handoff".to_owned(),
+                "invalid, duplicate, or unfenced pending handoff".to_owned(),
             ));
+        }
+    }
+    let mut previous_notification_id = None;
+    for entry in &state.panel_notifications {
+        let notification = &entry.notification;
+        let notification_id = notification.notification_id;
+        if previous_notification_id.is_some_and(|previous| previous >= notification_id) {
+            return Err(ModerationOrchestratorError::CheckpointCorrupt(
+                "panel notifications are not strictly sorted and unique".to_owned(),
+            ));
+        }
+        previous_notification_id = Some(notification_id);
+        if notification_id == [0; 32]
+            || notification.source_operation_id == [0; 32]
+            || notification.scope_digest == [0; 32]
+            || notification.finalized_event_cursor.sequence == 0
+            || notification.finalized_event_cursor.block_height == 0
+            || notification.finalized_event_cursor.block_hash == [0; 32]
+            || notification.source_occurred_at_unix_ms == 0
+            || notification_id
+                != panel_notification_id(
+                    chain_id,
+                    notification.source_operation_id,
+                    notification.scope_digest,
+                    notification.kind,
+                    &notification.recipient,
+                    notification.finalized_event_cursor,
+                    notification.source_occurred_at_unix_ms,
+                )
+            || entry.attempt_limit == 0
+            || entry.attempts > entry.attempt_limit
+            || entry.claim_generation != entry.attempts
+            || entry.available_at_unix_ms == 0
+            || entry.available_at_unix_ms < notification.source_occurred_at_unix_ms
+            || entry.record_digest == [0; 32]
+            || entry.record_digest != panel_notification_record_digest(entry)
+            || state
+                .panel_notification_scanned_cursor
+                .is_none_or(|cursor| {
+                    notification.finalized_event_cursor.sequence > cursor.sequence
+                        || notification.finalized_event_cursor.block_height > cursor.block_height
+                })
+        {
+            return Err(ModerationOrchestratorError::CheckpointCorrupt(
+                "panel notification identity, cursor, generation, or record digest is invalid"
+                    .to_owned(),
+            ));
+        }
+        if let Some(snapshot) = state.finalized_snapshot.as_ref() {
+            validate_retained_panel_notification_source(notification, snapshot, chain_id)?;
+        }
+        let claim_fields = (
+            entry.claimed_by,
+            entry.lease_token,
+            entry.claimed_at_unix_ms,
+            entry.lease_expires_at_unix_ms,
+        );
+        let delivery_fields = (entry.receipt_digest, entry.delivered_at_unix_ms);
+        let dead_fields = (entry.dead_letter_reason, entry.dead_lettered_at_unix_ms);
+        match entry.state {
+            StoredPanelNotificationStateV1::Pending => {
+                if claim_fields != (None, None, None, None)
+                    || delivery_fields != (None, None)
+                    || dead_fields != (None, None)
+                {
+                    return Err(ModerationOrchestratorError::CheckpointCorrupt(
+                        "pending panel notification retains terminal or lease state".to_owned(),
+                    ));
+                }
+            }
+            StoredPanelNotificationStateV1::Claimed
+            | StoredPanelNotificationStateV1::Delivered => {
+                let (
+                    Some(worker_id),
+                    Some(lease_token),
+                    Some(claimed_at_unix_ms),
+                    Some(lease_expires_at_unix_ms),
+                ) = claim_fields
+                else {
+                    return Err(ModerationOrchestratorError::CheckpointCorrupt(
+                        "claimed or delivered panel notification has an incomplete lease".to_owned(),
+                    ));
+                };
+                let expected_expiry = claimed_at_unix_ms
+                    .checked_add(MODERATION_PANEL_NOTIFICATION_LEASE_MS_V1);
+                let expected_token = panel_notification_lease_token(
+                    notification_id,
+                    worker_id,
+                    entry.claim_generation,
+                    entry.attempts,
+                    claimed_at_unix_ms,
+                    lease_expires_at_unix_ms,
+                );
+                if entry.attempts == 0
+                    || worker_id == [0; 32]
+                    || lease_token == [0; 32]
+                    || claimed_at_unix_ms == 0
+                    || claimed_at_unix_ms < entry.available_at_unix_ms
+                    || claimed_at_unix_ms > state.panel_notification_clock_unix_ms
+                    || expected_expiry != Some(lease_expires_at_unix_ms)
+                    || expected_token != lease_token
+                    || dead_fields != (None, None)
+                {
+                    return Err(ModerationOrchestratorError::CheckpointCorrupt(
+                        "panel notification lease is invalid".to_owned(),
+                    ));
+                }
+                match entry.state {
+                    StoredPanelNotificationStateV1::Claimed => {
+                        if delivery_fields != (None, None) {
+                            return Err(ModerationOrchestratorError::CheckpointCorrupt(
+                                "claimed panel notification already contains a receipt".to_owned(),
+                            ));
+                        }
+                    }
+                    StoredPanelNotificationStateV1::Delivered => {
+                        let (Some(receipt_digest), Some(delivered_at_unix_ms)) = delivery_fields
+                        else {
+                            return Err(ModerationOrchestratorError::CheckpointCorrupt(
+                                "delivered panel notification has no complete receipt".to_owned(),
+                            ));
+                        };
+                        if receipt_digest == [0; 32]
+                            || delivered_at_unix_ms
+                                < notification.source_occurred_at_unix_ms
+                            || delivered_at_unix_ms > state.panel_notification_clock_unix_ms
+                        {
+                            return Err(ModerationOrchestratorError::CheckpointCorrupt(
+                                "delivered panel notification receipt is invalid".to_owned(),
+                            ));
+                        }
+                    }
+                    StoredPanelNotificationStateV1::Pending
+                    | StoredPanelNotificationStateV1::DeadLetter => unreachable!(),
+                }
+            }
+            StoredPanelNotificationStateV1::DeadLetter => {
+                let (Some(reason), Some(dead_lettered_at_unix_ms)) = dead_fields else {
+                    return Err(ModerationOrchestratorError::CheckpointCorrupt(
+                        "dead-letter panel notification has no terminal provenance".to_owned(),
+                    ));
+                };
+                if claim_fields != (None, None, None, None)
+                    || delivery_fields != (None, None)
+                    || entry.attempts == 0
+                    || dead_lettered_at_unix_ms == 0
+                    || dead_lettered_at_unix_ms
+                        < notification.source_occurred_at_unix_ms
+                    || dead_lettered_at_unix_ms > state.panel_notification_clock_unix_ms
+                    || (reason
+                        == ModerationPanelNotificationDeadLetterReasonV1::RetryExhausted
+                        && entry.attempts != entry.attempt_limit)
+                {
+                    return Err(ModerationOrchestratorError::CheckpointCorrupt(
+                        "dead-letter panel notification state is invalid".to_owned(),
+                    ));
+                }
+            }
         }
     }
     Ok(())
@@ -3384,6 +5003,7 @@ fn persist_checkpoint(
         .generation
         .checked_add(1)
         .ok_or(ModerationOrchestratorError::GenerationOverflow)?;
+    refresh_panel_notification_outbox_digest(state);
     validate_checkpoint(state, config, chain_id)?;
     let bytes = norito::to_bytes(state).map_err(|error| {
         ModerationOrchestratorError::CheckpointIo(format!("encode checkpoint: {error}"))
@@ -3466,6 +5086,60 @@ fn ensure_dead_letter_capacity(
             limit: config.max_idempotency_records,
         });
     }
+    Ok(())
+}
+
+fn make_panel_notification_capacity(
+    state: &mut ModerationOrchestratorCheckpointV1,
+    additional: usize,
+    limit: usize,
+) -> Result<(), ModerationOrchestratorError> {
+    if additional > limit {
+        return Err(ModerationOrchestratorError::ResourceExhausted {
+            resource: "panel notifications",
+            limit,
+        });
+    }
+    let excess = state
+        .panel_notifications
+        .len()
+        .saturating_add(additional)
+        .saturating_sub(limit);
+    if excess == 0 {
+        return Ok(());
+    }
+    let mut terminal = state
+        .panel_notifications
+        .iter()
+        .filter(|entry| {
+            matches!(
+                entry.state,
+                StoredPanelNotificationStateV1::Delivered
+                    | StoredPanelNotificationStateV1::DeadLetter
+            )
+        })
+        .map(|entry| {
+            (
+                entry.notification.finalized_event_cursor.sequence,
+                entry.notification.notification_id,
+            )
+        })
+        .collect::<Vec<_>>();
+    terminal.sort_unstable();
+    if terminal.len() < excess {
+        return Err(ModerationOrchestratorError::ResourceExhausted {
+            resource: "panel notifications",
+            limit,
+        });
+    }
+    let remove = terminal
+        .into_iter()
+        .take(excess)
+        .map(|(_, notification_id)| notification_id)
+        .collect::<BTreeSet<_>>();
+    state
+        .panel_notifications
+        .retain(|entry| !remove.contains(&entry.notification.notification_id));
     Ok(())
 }
 
@@ -3836,6 +5510,298 @@ fn domain_hash(domain: &[u8], parts: &[&[u8]]) -> [u8; 32] {
     *hasher.finalize().as_bytes()
 }
 
+fn next_external_work_generation(
+    generation: u32,
+) -> Result<u32, ModerationOrchestratorError> {
+    generation
+        .checked_add(1)
+        .ok_or(ModerationOrchestratorError::GenerationOverflow)
+}
+
+fn outbox_sign_work_digest(entry: &StoredOutboxEntryV1) -> [u8; 32] {
+    let kind = [StoredExternalWorkKindV1::Sign.tag()];
+    let envelope_generation = entry.envelope_generation.to_le_bytes();
+    let baseline_height = entry.baseline_finalized_height.to_le_bytes();
+    domain_hash(
+        EXTERNAL_WORK_DIGEST_DOMAIN_V1,
+        &[
+            &kind,
+            &entry.operation_id,
+            &envelope_generation,
+            &entry.action_digest,
+            &entry.request_binding_digest,
+            &baseline_height,
+            &entry.baseline_finalized_block_hash,
+        ],
+    )
+}
+
+fn outbox_submit_work_digest(entry: &StoredOutboxEntryV1) -> [u8; 32] {
+    let kind = [StoredExternalWorkKindV1::Submit.tag()];
+    let envelope_generation = entry.envelope_generation.to_le_bytes();
+    let baseline_height = entry.baseline_finalized_height.to_le_bytes();
+    let zero = [0; 32];
+    domain_hash(
+        EXTERNAL_WORK_DIGEST_DOMAIN_V1,
+        &[
+            &kind,
+            &entry.operation_id,
+            &envelope_generation,
+            &entry.action_digest,
+            &entry.request_binding_digest,
+            &baseline_height,
+            &entry.baseline_finalized_block_hash,
+            entry.transaction_id.as_ref().unwrap_or(&zero),
+            entry
+                .signed_transaction_digest
+                .as_ref()
+                .unwrap_or(&zero),
+        ],
+    )
+}
+
+fn outbox_lookup_work_digest(
+    entry: &StoredOutboxEntryV1,
+    cursor: ModerationFinalizedCursorV1,
+) -> [u8; 32] {
+    let zero = [0; 32];
+    let mut material = Vec::with_capacity(
+        1 + 32 + 8 + 32 + 4 + entry.retired_envelopes.len().saturating_mul(36) + 32,
+    );
+    material.push(StoredExternalWorkKindV1::Lookup.tag());
+    material.extend_from_slice(&entry.operation_id);
+    material.extend_from_slice(&cursor.height.to_le_bytes());
+    material.extend_from_slice(&cursor.block_hash);
+    material.extend_from_slice(
+        &u32::try_from(entry.retired_envelopes.len())
+            .unwrap_or(u32::MAX)
+            .to_le_bytes(),
+    );
+    for record in &entry.retired_envelopes {
+        material.extend_from_slice(&record.generation.to_le_bytes());
+        material.extend_from_slice(&record.transaction_id);
+    }
+    material.extend_from_slice(entry.transaction_id.as_ref().unwrap_or(&zero));
+    domain_hash(EXTERNAL_WORK_DIGEST_DOMAIN_V1, &[&material])
+}
+
+fn handoff_work_digest(handoff: &ModerationTerminalHandoffV1) -> [u8; 32] {
+    let kind = [StoredExternalWorkKindV1::Handoff.tag()];
+    let destination = [match handoff.kind {
+        ModerationTerminalHandoffKindV1::Settlement => 0,
+        ModerationTerminalHandoffKindV1::Publication => 1,
+    }];
+    let finalized_height = handoff.finalized_cursor.height.to_le_bytes();
+    domain_hash(
+        EXTERNAL_WORK_DIGEST_DOMAIN_V1,
+        &[
+            &kind,
+            &handoff.handoff_id,
+            &destination,
+            handoff.case_id.as_bytes(),
+            handoff.round_id.as_bytes(),
+            &handoff.outcome_digest,
+            &finalized_height,
+            &handoff.finalized_cursor.block_hash,
+        ],
+    )
+}
+
+fn external_work_lease_token(
+    identity: [u8; 32],
+    claim: &StoredExternalWorkClaimV1,
+) -> [u8; 32] {
+    let kind = [claim.kind.tag()];
+    let generation = claim.generation.to_le_bytes();
+    let height = claim.claimed_at_finalized_height.to_le_bytes();
+    let claimed_at = claim.claimed_at_unix_ms.to_le_bytes();
+    let expires_at = claim.lease_expires_at_unix_ms.to_le_bytes();
+    domain_hash(
+        EXTERNAL_WORK_LEASE_DOMAIN_V1,
+        &[
+            &kind,
+            &identity,
+            &generation,
+            &height,
+            &claim.claimed_at_finalized_block_hash,
+            &claimed_at,
+            &expires_at,
+            &claim.work_digest,
+        ],
+    )
+}
+
+fn external_work_claim(
+    kind: StoredExternalWorkKindV1,
+    identity: [u8; 32],
+    generation: u32,
+    work_digest: [u8; 32],
+    cursor: ModerationFinalizedCursorV1,
+    claimed_at_unix_ms: u64,
+) -> Result<StoredExternalWorkClaimV1, ModerationOrchestratorError> {
+    let lease_expires_at_unix_ms = claimed_at_unix_ms
+        .checked_add(MODERATION_EXTERNAL_WORK_LEASE_MS_V1)
+        .ok_or(ModerationOrchestratorError::GenerationOverflow)?;
+    let mut claim = StoredExternalWorkClaimV1 {
+        kind,
+        generation,
+        claimed_at_finalized_height: cursor.height,
+        claimed_at_finalized_block_hash: cursor.block_hash,
+        claimed_at_unix_ms,
+        lease_expires_at_unix_ms,
+        work_digest,
+        lease_token: [0; 32],
+    };
+    claim.lease_token = external_work_lease_token(identity, &claim);
+    Ok(claim)
+}
+
+fn reset_sign_claim(entry: &mut StoredOutboxEntryV1) {
+    entry.baseline_finalized_height = 0;
+    entry.baseline_finalized_block_hash = [0; 32];
+    entry.transaction_id = None;
+    entry.signed_transaction_digest = None;
+    entry.signed_transaction_bytes = None;
+    entry.state = StoredOutboxStateV1::Ready;
+    entry.work_claim = None;
+}
+
+fn recover_external_work_after_restart(state: &mut ModerationOrchestratorCheckpointV1) -> bool {
+    let mut recovered = false;
+    for entry in &mut state.outbox {
+        let Some(kind) = entry.work_claim.as_ref().map(|claim| claim.kind) else {
+            continue;
+        };
+        match kind {
+            StoredExternalWorkKindV1::Sign => reset_sign_claim(entry),
+            StoredExternalWorkKindV1::Submit | StoredExternalWorkKindV1::Lookup => {
+                entry.work_claim = None;
+            }
+            StoredExternalWorkKindV1::Handoff => continue,
+        }
+        recovered = true;
+    }
+    for entry in &mut state.pending_handoffs {
+        if entry.work_claim.take().is_some() {
+            recovered = true;
+        }
+    }
+    recovered
+}
+
+fn recover_expired_external_work_claims(
+    state: &mut ModerationOrchestratorCheckpointV1,
+) -> Result<bool, ModerationOrchestratorError> {
+    let now_unix_ms = state
+        .finalized_snapshot
+        .as_ref()
+        .ok_or(ModerationOrchestratorError::FinalizedReaderUnavailable)?
+        .finalized_at_unix_ms;
+    let mut recovered = false;
+    for entry in &mut state.outbox {
+        let Some((kind, lease_expires_at_unix_ms)) = entry
+            .work_claim
+            .as_ref()
+            .map(|claim| (claim.kind, claim.lease_expires_at_unix_ms))
+        else {
+            continue;
+        };
+        if lease_expires_at_unix_ms > now_unix_ms {
+            continue;
+        }
+        match kind {
+            StoredExternalWorkKindV1::Sign => reset_sign_claim(entry),
+            StoredExternalWorkKindV1::Submit | StoredExternalWorkKindV1::Lookup => {
+                entry.work_claim = None;
+            }
+            StoredExternalWorkKindV1::Handoff => {
+                return Err(ModerationOrchestratorError::CheckpointCorrupt(
+                    "outbox contains a terminal-handoff claim".to_owned(),
+                ));
+            }
+        }
+        recovered = true;
+    }
+    for entry in &mut state.pending_handoffs {
+        if entry
+            .work_claim
+            .as_ref()
+            .is_some_and(|claim| claim.lease_expires_at_unix_ms <= now_unix_ms)
+        {
+            entry.work_claim = None;
+            recovered = true;
+        }
+    }
+    Ok(recovered)
+}
+
+fn outbox_claim_position(
+    state: &ModerationOrchestratorCheckpointV1,
+    kind: StoredExternalWorkKindV1,
+    claim: &StoredExternalWorkClaimV1,
+) -> Option<usize> {
+    state.outbox.iter().position(|entry| {
+        claim.kind == kind
+            && entry.work_generation == claim.generation
+            && entry.work_claim.as_ref() == Some(claim)
+    })
+}
+
+fn handoff_claim_position(
+    state: &ModerationOrchestratorCheckpointV1,
+    claim: &StoredExternalWorkClaimV1,
+) -> Option<usize> {
+    state.pending_handoffs.iter().position(|entry| {
+        claim.kind == StoredExternalWorkKindV1::Handoff
+            && entry.work_generation == claim.generation
+            && entry.work_claim.as_ref() == Some(claim)
+    })
+}
+
+fn retired_envelope_disposition_after_lookup(
+    record: &StoredRetiredEnvelopeV1,
+    lookup: ModerationSubmissionLookupV1,
+    cursor: ModerationFinalizedCursorV1,
+) -> StoredRetiredEnvelopeDispositionV1 {
+    match lookup {
+        ModerationSubmissionLookupV1::Applied { transaction_id }
+            if transaction_id == record.transaction_id =>
+        {
+            StoredRetiredEnvelopeDispositionV1::Applied
+        }
+        ModerationSubmissionLookupV1::Pending { transaction_id }
+            if transaction_id == record.transaction_id =>
+        {
+            match record.disposition {
+                StoredRetiredEnvelopeDispositionV1::Applied
+                | StoredRetiredEnvelopeDispositionV1::Rejected => record.disposition,
+                StoredRetiredEnvelopeDispositionV1::NotFound
+                | StoredRetiredEnvelopeDispositionV1::Pending => {
+                    StoredRetiredEnvelopeDispositionV1::Pending
+                }
+            }
+        }
+        ModerationSubmissionLookupV1::Rejected {
+            transaction_id: Some(transaction_id),
+            observed_finalized_height,
+        } if transaction_id == record.transaction_id
+            && observed_finalized_height >= record.retired_at_finalized_height
+            && observed_finalized_height <= cursor.height =>
+        {
+            if record.disposition == StoredRetiredEnvelopeDispositionV1::Applied {
+                StoredRetiredEnvelopeDispositionV1::Applied
+            } else {
+                StoredRetiredEnvelopeDispositionV1::Rejected
+            }
+        }
+        ModerationSubmissionLookupV1::NotFound { .. }
+        | ModerationSubmissionLookupV1::Pending { .. }
+        | ModerationSubmissionLookupV1::Applied { .. }
+        | ModerationSubmissionLookupV1::Rejected { .. }
+        | ModerationSubmissionLookupV1::Unknown => record.disposition,
+    }
+}
+
 fn pop_proof_payload_digest(payload: &[u8]) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(POP_PROOF_PAYLOAD_DIGEST_DOMAIN_V1);
@@ -3890,6 +5856,410 @@ fn handoff_label(kind: ModerationTerminalHandoffKindV1) -> &'static str {
         ModerationTerminalHandoffKindV1::Settlement => "terminal_settlement",
         ModerationTerminalHandoffKindV1::Publication => "terminal_publication",
     }
+}
+
+fn panel_notification_scope_digest(case_id: &str, round_id: &str) -> [u8; 32] {
+    domain_hash(
+        PANEL_NOTIFICATION_SCOPE_DOMAIN_V1,
+        &[case_id.as_bytes(), round_id.as_bytes()],
+    )
+}
+
+fn panel_notification_id(
+    chain_id: &iroha_data_model::ChainId,
+    source_operation_id: [u8; 32],
+    scope_digest: [u8; 32],
+    kind: ModerationPanelNotificationKindV1,
+    recipient: &AccountId,
+    cursor: ModerationFinalizedEventCursorV1,
+    source_occurred_at_unix_ms: u64,
+) -> [u8; 32] {
+    let kind = [kind.tag()];
+    let recipient = recipient.to_string();
+    let sequence = cursor.sequence.to_le_bytes();
+    let block_height = cursor.block_height.to_le_bytes();
+    let event_index = cursor.event_index.to_le_bytes();
+    let source_occurred_at_unix_ms = source_occurred_at_unix_ms.to_le_bytes();
+    domain_hash(
+        PANEL_NOTIFICATION_ID_DOMAIN_V1,
+        &[
+            chain_id.as_str().as_bytes(),
+            &source_operation_id,
+            &scope_digest,
+            &kind,
+            recipient.as_bytes(),
+            &sequence,
+            &block_height,
+            &cursor.block_hash,
+            &event_index,
+            &source_occurred_at_unix_ms,
+        ],
+    )
+}
+
+fn new_panel_notification_entry(
+    chain_id: &iroha_data_model::ChainId,
+    source_operation_id: [u8; 32],
+    scope_digest: [u8; 32],
+    kind: ModerationPanelNotificationKindV1,
+    recipient: AccountId,
+    event: &ModerationFinalizedEventV1,
+    attempt_limit: u32,
+) -> StoredPanelNotificationV1 {
+    let cursor = event.cursor();
+    let available_at_unix_ms = *event.event.occurred_at_unix_ms();
+    let notification_id = panel_notification_id(
+        chain_id,
+        source_operation_id,
+        scope_digest,
+        kind,
+        &recipient,
+        cursor,
+        available_at_unix_ms,
+    );
+    let mut entry = StoredPanelNotificationV1 {
+        notification: ModerationPanelNotificationV1 {
+            notification_id,
+            source_operation_id,
+            scope_digest,
+            kind,
+            recipient,
+            finalized_event_cursor: cursor,
+            source_occurred_at_unix_ms: available_at_unix_ms,
+        },
+        attempt_limit,
+        attempts: 0,
+        claim_generation: 0,
+        available_at_unix_ms,
+        state: StoredPanelNotificationStateV1::Pending,
+        claimed_by: None,
+        lease_token: None,
+        claimed_at_unix_ms: None,
+        lease_expires_at_unix_ms: None,
+        receipt_digest: None,
+        delivered_at_unix_ms: None,
+        dead_letter_reason: None,
+        dead_lettered_at_unix_ms: None,
+        record_digest: [0; 32],
+    };
+    refresh_panel_notification_record_digest(&mut entry);
+    entry
+}
+
+fn panel_notification_lease_token(
+    notification_id: [u8; 32],
+    worker_id: [u8; 32],
+    claim_generation: u32,
+    attempt: u32,
+    claimed_at_unix_ms: u64,
+    lease_expires_at_unix_ms: u64,
+) -> [u8; 32] {
+    let claim_generation = claim_generation.to_le_bytes();
+    let attempt = attempt.to_le_bytes();
+    let claimed_at_unix_ms = claimed_at_unix_ms.to_le_bytes();
+    let lease_expires_at_unix_ms = lease_expires_at_unix_ms.to_le_bytes();
+    domain_hash(
+        PANEL_NOTIFICATION_LEASE_DOMAIN_V1,
+        &[
+            &notification_id,
+            &worker_id,
+            &claim_generation,
+            &attempt,
+            &claimed_at_unix_ms,
+            &lease_expires_at_unix_ms,
+        ],
+    )
+}
+
+fn panel_notification_backoff_ms(attempts: u32) -> u64 {
+    let shift = attempts.saturating_sub(1).min(63);
+    MODERATION_PANEL_NOTIFICATION_BACKOFF_BASE_MS_V1
+        .checked_shl(shift)
+        .unwrap_or(u64::MAX)
+        .min(MODERATION_PANEL_NOTIFICATION_BACKOFF_MAX_MS_V1)
+}
+
+fn clear_panel_notification_claim(entry: &mut StoredPanelNotificationV1) {
+    entry.claimed_by = None;
+    entry.lease_token = None;
+    entry.claimed_at_unix_ms = None;
+    entry.lease_expires_at_unix_ms = None;
+}
+
+fn dead_letter_panel_notification(
+    entry: &mut StoredPanelNotificationV1,
+    reason: ModerationPanelNotificationDeadLetterReasonV1,
+    at_unix_ms: u64,
+) {
+    entry.state = StoredPanelNotificationStateV1::DeadLetter;
+    clear_panel_notification_claim(entry);
+    entry.receipt_digest = None;
+    entry.delivered_at_unix_ms = None;
+    entry.dead_letter_reason = Some(reason);
+    entry.dead_lettered_at_unix_ms = Some(at_unix_ms);
+    refresh_panel_notification_record_digest(entry);
+}
+
+fn validate_panel_notification_clock(
+    state: &ModerationOrchestratorCheckpointV1,
+    observed_unix_ms: u64,
+) -> Result<(), ModerationOrchestratorError> {
+    if observed_unix_ms == 0 {
+        return Err(ModerationOrchestratorError::InvalidPanelNotificationClaim);
+    }
+    if observed_unix_ms < state.panel_notification_clock_unix_ms {
+        return Err(ModerationOrchestratorError::PanelNotificationClockRollback {
+            current: state.panel_notification_clock_unix_ms,
+            observed: observed_unix_ms,
+        });
+    }
+    Ok(())
+}
+
+fn preflight_expired_panel_notification_claims(
+    state: &ModerationOrchestratorCheckpointV1,
+    now_unix_ms: u64,
+) -> Result<(), ModerationOrchestratorError> {
+    for entry in &state.panel_notifications {
+        if entry.state != StoredPanelNotificationStateV1::Claimed {
+            continue;
+        }
+        let lease_expires_at_unix_ms = entry.lease_expires_at_unix_ms.ok_or_else(|| {
+            ModerationOrchestratorError::CheckpointCorrupt(
+                "claimed panel notification has no lease expiry".to_owned(),
+            )
+        })?;
+        if now_unix_ms >= lease_expires_at_unix_ms && entry.attempts < entry.attempt_limit {
+            lease_expires_at_unix_ms
+                .checked_add(panel_notification_backoff_ms(entry.attempts))
+                .ok_or(ModerationOrchestratorError::GenerationOverflow)?;
+        }
+    }
+    Ok(())
+}
+
+fn recover_expired_panel_notification_claims(
+    state: &mut ModerationOrchestratorCheckpointV1,
+    now_unix_ms: u64,
+) -> Result<(), ModerationOrchestratorError> {
+    for entry in &mut state.panel_notifications {
+        if entry.state != StoredPanelNotificationStateV1::Claimed {
+            continue;
+        }
+        let lease_expires_at_unix_ms = entry.lease_expires_at_unix_ms.ok_or_else(|| {
+            ModerationOrchestratorError::CheckpointCorrupt(
+                "claimed panel notification has no lease expiry".to_owned(),
+            )
+        })?;
+        if now_unix_ms < lease_expires_at_unix_ms {
+            continue;
+        }
+        if entry.attempts >= entry.attempt_limit {
+            dead_letter_panel_notification(
+                entry,
+                ModerationPanelNotificationDeadLetterReasonV1::RetryExhausted,
+                now_unix_ms,
+            );
+            continue;
+        }
+        let backoff = panel_notification_backoff_ms(entry.attempts);
+        entry.available_at_unix_ms = lease_expires_at_unix_ms
+            .checked_add(backoff)
+            .ok_or(ModerationOrchestratorError::GenerationOverflow)?;
+        entry.state = StoredPanelNotificationStateV1::Pending;
+        clear_panel_notification_claim(entry);
+        entry.receipt_digest = None;
+        entry.delivered_at_unix_ms = None;
+        entry.dead_letter_reason = None;
+        entry.dead_lettered_at_unix_ms = None;
+        refresh_panel_notification_record_digest(entry);
+    }
+    Ok(())
+}
+
+fn panel_notification_status(
+    entry: &StoredPanelNotificationV1,
+) -> Result<ModerationPanelNotificationStatusV1, ModerationOrchestratorError> {
+    match entry.state {
+        StoredPanelNotificationStateV1::Pending => {
+            Ok(ModerationPanelNotificationStatusV1::Pending {
+                available_at_unix_ms: entry.available_at_unix_ms,
+                attempts: entry.attempts,
+                attempt_limit: entry.attempt_limit,
+            })
+        }
+        StoredPanelNotificationStateV1::Claimed => {
+            let worker_id = entry.claimed_by.ok_or_else(|| {
+                ModerationOrchestratorError::CheckpointCorrupt(
+                    "claimed panel notification has no worker".to_owned(),
+                )
+            })?;
+            let lease_expires_at_unix_ms = entry.lease_expires_at_unix_ms.ok_or_else(|| {
+                ModerationOrchestratorError::CheckpointCorrupt(
+                    "claimed panel notification has no lease expiry".to_owned(),
+                )
+            })?;
+            Ok(ModerationPanelNotificationStatusV1::Claimed {
+                worker_id,
+                lease_expires_at_unix_ms,
+                attempts: entry.attempts,
+                attempt_limit: entry.attempt_limit,
+            })
+        }
+        StoredPanelNotificationStateV1::Delivered => {
+            let receipt_digest = entry.receipt_digest.ok_or_else(|| {
+                ModerationOrchestratorError::CheckpointCorrupt(
+                    "delivered panel notification has no receipt".to_owned(),
+                )
+            })?;
+            let delivered_at_unix_ms = entry.delivered_at_unix_ms.ok_or_else(|| {
+                ModerationOrchestratorError::CheckpointCorrupt(
+                    "delivered panel notification has no delivery time".to_owned(),
+                )
+            })?;
+            Ok(ModerationPanelNotificationStatusV1::Delivered {
+                receipt_digest,
+                delivered_at_unix_ms,
+                attempts: entry.attempts,
+                attempt_limit: entry.attempt_limit,
+            })
+        }
+        StoredPanelNotificationStateV1::DeadLetter => {
+            let reason = entry.dead_letter_reason.ok_or_else(|| {
+                ModerationOrchestratorError::CheckpointCorrupt(
+                    "dead-letter panel notification has no reason".to_owned(),
+                )
+            })?;
+            let dead_lettered_at_unix_ms = entry.dead_lettered_at_unix_ms.ok_or_else(|| {
+                ModerationOrchestratorError::CheckpointCorrupt(
+                    "dead-letter panel notification has no terminal time".to_owned(),
+                )
+            })?;
+            Ok(ModerationPanelNotificationStatusV1::DeadLetter {
+                reason,
+                dead_lettered_at_unix_ms,
+                attempts: entry.attempts,
+                attempt_limit: entry.attempt_limit,
+            })
+        }
+    }
+}
+
+fn panel_notification_record_digest(entry: &StoredPanelNotificationV1) -> [u8; 32] {
+    let notification = &entry.notification;
+    let kind = [notification.kind.tag()];
+    let recipient = notification.recipient.to_string();
+    let sequence = notification.finalized_event_cursor.sequence.to_le_bytes();
+    let block_height = notification
+        .finalized_event_cursor
+        .block_height
+        .to_le_bytes();
+    let event_index = notification
+        .finalized_event_cursor
+        .event_index
+        .to_le_bytes();
+    let source_occurred_at_unix_ms = notification.source_occurred_at_unix_ms.to_le_bytes();
+    let attempt_limit = entry.attempt_limit.to_le_bytes();
+    let attempts = entry.attempts.to_le_bytes();
+    let claim_generation = entry.claim_generation.to_le_bytes();
+    let available_at_unix_ms = entry.available_at_unix_ms.to_le_bytes();
+    let state = [match entry.state {
+        StoredPanelNotificationStateV1::Pending => 0,
+        StoredPanelNotificationStateV1::Claimed => 1,
+        StoredPanelNotificationStateV1::Delivered => 2,
+        StoredPanelNotificationStateV1::DeadLetter => 3,
+    }];
+    let claimed_by_presence = [u8::from(entry.claimed_by.is_some())];
+    let claimed_by = entry.claimed_by.unwrap_or([0; 32]);
+    let lease_token_presence = [u8::from(entry.lease_token.is_some())];
+    let lease_token = entry.lease_token.unwrap_or([0; 32]);
+    let claimed_at_presence = [u8::from(entry.claimed_at_unix_ms.is_some())];
+    let claimed_at = entry.claimed_at_unix_ms.unwrap_or(0).to_le_bytes();
+    let lease_expiry_presence = [u8::from(entry.lease_expires_at_unix_ms.is_some())];
+    let lease_expiry = entry.lease_expires_at_unix_ms.unwrap_or(0).to_le_bytes();
+    let receipt_presence = [u8::from(entry.receipt_digest.is_some())];
+    let receipt_digest = entry.receipt_digest.unwrap_or([0; 32]);
+    let delivered_at_presence = [u8::from(entry.delivered_at_unix_ms.is_some())];
+    let delivered_at = entry.delivered_at_unix_ms.unwrap_or(0).to_le_bytes();
+    let dead_reason = [
+        entry.dead_letter_reason.map_or(0, |reason| match reason {
+            ModerationPanelNotificationDeadLetterReasonV1::PermanentRejection => 1,
+            ModerationPanelNotificationDeadLetterReasonV1::RetryExhausted => 2,
+        }),
+    ];
+    let dead_at_presence = [u8::from(entry.dead_lettered_at_unix_ms.is_some())];
+    let dead_at = entry.dead_lettered_at_unix_ms.unwrap_or(0).to_le_bytes();
+    domain_hash(
+        PANEL_NOTIFICATION_RECORD_DOMAIN_V1,
+        &[
+            &notification.notification_id,
+            &notification.source_operation_id,
+            &notification.scope_digest,
+            &kind,
+            recipient.as_bytes(),
+            &sequence,
+            &block_height,
+            &notification.finalized_event_cursor.block_hash,
+            &event_index,
+            &source_occurred_at_unix_ms,
+            &attempt_limit,
+            &attempts,
+            &claim_generation,
+            &available_at_unix_ms,
+            &state,
+            &claimed_by_presence,
+            &claimed_by,
+            &lease_token_presence,
+            &lease_token,
+            &claimed_at_presence,
+            &claimed_at,
+            &lease_expiry_presence,
+            &lease_expiry,
+            &receipt_presence,
+            &receipt_digest,
+            &delivered_at_presence,
+            &delivered_at,
+            &dead_reason,
+            &dead_at_presence,
+            &dead_at,
+        ],
+    )
+}
+
+fn refresh_panel_notification_record_digest(entry: &mut StoredPanelNotificationV1) {
+    entry.record_digest = panel_notification_record_digest(entry);
+}
+
+fn panel_notification_outbox_digest(state: &ModerationOrchestratorCheckpointV1) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(PANEL_NOTIFICATION_OUTBOX_DOMAIN_V1);
+    hasher.update(&state.panel_notification_clock_unix_ms.to_le_bytes());
+    match state.panel_notification_scanned_cursor {
+        Some(cursor) => {
+            hasher.update(&[1]);
+            hasher.update(&cursor.sequence.to_le_bytes());
+            hasher.update(&cursor.block_height.to_le_bytes());
+            hasher.update(&cursor.block_hash);
+            hasher.update(&cursor.event_index.to_le_bytes());
+        }
+        None => {
+            hasher.update(&[0]);
+        }
+    }
+    hasher.update(
+        &u64::try_from(state.panel_notifications.len())
+            .unwrap_or(u64::MAX)
+            .to_le_bytes(),
+    );
+    for entry in &state.panel_notifications {
+        hasher.update(&entry.notification.notification_id);
+        hasher.update(&entry.record_digest);
+    }
+    *hasher.finalize().as_bytes()
+}
+
+fn refresh_panel_notification_outbox_digest(state: &mut ModerationOrchestratorCheckpointV1) {
+    state.panel_notification_outbox_digest = panel_notification_outbox_digest(state);
 }
 
 fn checkpoint_decode_limits(max_bytes: u64) -> Result<DecodeLimits, ModerationOrchestratorError> {
@@ -4238,6 +6608,49 @@ pub enum ModerationOrchestratorError {
     /// Authenticated request binding is malformed or inert.
     #[error("invalid moderation authenticated request binding")]
     InvalidRequestBinding,
+    /// Panel notification worker, lease, or clock input is inert.
+    #[error("invalid moderation panel-notification claim")]
+    InvalidPanelNotificationClaim,
+    /// Panel notification receipt contains inert or inconsistent material.
+    #[error("invalid moderation panel-notification delivery receipt")]
+    InvalidPanelNotificationReceipt,
+    /// Runtime notification time moved behind the durable high-water mark.
+    #[error(
+        "moderation panel-notification clock rollback: current {current}, observed {observed}"
+    )]
+    PanelNotificationClockRollback {
+        /// Durable runtime clock high-water mark.
+        current: u64,
+        /// Regressed runtime observation.
+        observed: u64,
+    },
+    /// A requested notification identity is not retained.
+    #[error(
+        "moderation panel notification {} is not retained",
+        hex::encode(.notification_id)
+    )]
+    PanelNotificationNotFound {
+        /// Stable notification identity.
+        notification_id: [u8; 32],
+    },
+    /// The supplied worker or lease generation is stale or substituted.
+    #[error(
+        "moderation panel-notification claim conflict for {}",
+        hex::encode(.notification_id)
+    )]
+    PanelNotificationClaimConflict {
+        /// Stable notification identity.
+        notification_id: [u8; 32],
+    },
+    /// A delivered notification was replayed with a different receipt.
+    #[error(
+        "moderation panel-notification receipt conflict for {}",
+        hex::encode(.notification_id)
+    )]
+    PanelNotificationReceiptConflict {
+        /// Stable notification identity.
+        notification_id: [u8; 32],
+    },
     /// A stable semantic identity was reused for different action bytes.
     #[error("moderation operation idempotency conflict for {}", hex::encode(.operation_id))]
     IdempotencyConflict {
@@ -4301,9 +6714,14 @@ pub enum ModerationOrchestratorError {
 #[cfg(test)]
 mod tests {
     use std::{
-        collections::BTreeMap,
+        collections::{BTreeMap, BTreeSet},
         num::NonZeroU32,
-        sync::{Arc, Mutex},
+        sync::{
+            Arc, Condvar, Mutex, Weak,
+            atomic::{AtomicUsize, Ordering as AtomicOrdering},
+            mpsc,
+        },
+        thread,
     };
 
     use iroha_crypto::{Algorithm, KeyPair};
@@ -4571,11 +6989,16 @@ mod tests {
     #[derive(Debug, Default)]
     struct MockHandoffSink {
         delivered: Mutex<Vec<[u8; 32]>>,
+        calls: AtomicUsize,
     }
 
     impl MockHandoffSink {
         fn delivered(&self) -> Vec<[u8; 32]> {
             self.delivered.lock().expect("handoff sink lock").clone()
+        }
+
+        fn calls(&self) -> usize {
+            self.calls.load(AtomicOrdering::Relaxed)
         }
     }
 
@@ -4584,11 +7007,221 @@ mod tests {
             &self,
             handoff: &ModerationTerminalHandoffV1,
         ) -> Result<(), ModerationHandoffFailureV1> {
+            self.calls.fetch_add(1, AtomicOrdering::Relaxed);
             let mut delivered = self.delivered.lock().expect("handoff sink lock");
             if !delivered.contains(&handoff.handoff_id) {
                 delivered.push(handoff.handoff_id);
             }
             Ok(())
+        }
+    }
+
+    #[derive(Debug, Default)]
+    struct ReentrantLockProbe {
+        orchestrator: Mutex<Option<Weak<ModerationOrchestratorV1>>>,
+        checks: AtomicUsize,
+    }
+
+    impl ReentrantLockProbe {
+        fn attach(&self, orchestrator: &Arc<ModerationOrchestratorV1>) {
+            *self.orchestrator.lock().expect("probe lock") =
+                Some(Arc::downgrade(orchestrator));
+        }
+
+        fn check(&self) {
+            let orchestrator = self
+                .orchestrator
+                .lock()
+                .expect("probe lock")
+                .as_ref()
+                .and_then(Weak::upgrade);
+            let Some(orchestrator) = orchestrator else {
+                return;
+            };
+            assert!(
+                orchestrator.state.try_lock().is_ok(),
+                "external collaborator ran while the orchestrator mutex was held"
+            );
+            let _ = orchestrator.snapshot();
+            self.checks.fetch_add(1, AtomicOrdering::Relaxed);
+        }
+
+        fn checks(&self) -> usize {
+            self.checks.load(AtomicOrdering::Relaxed)
+        }
+    }
+
+    #[derive(Debug)]
+    struct ProbedSnapshotReader {
+        inner: Arc<MockSnapshotReader>,
+        probe: Arc<ReentrantLockProbe>,
+    }
+
+    impl ModerationFinalizedSnapshotReaderV1 for ProbedSnapshotReader {
+        fn read_finalized_snapshot(
+            &self,
+            max_cases: usize,
+            max_events: usize,
+        ) -> Result<ModerationFinalizedLedgerSnapshotV1, ModerationSnapshotReadErrorV1> {
+            self.probe.check();
+            self.inner
+                .read_finalized_snapshot(max_cases, max_events)
+        }
+    }
+
+    #[derive(Debug)]
+    struct ProbedSubmitter {
+        inner: Arc<MockSubmitter>,
+        probe: Arc<ReentrantLockProbe>,
+    }
+
+    impl ModerationTransactionSubmitterV1 for ProbedSubmitter {
+        fn chain_id(&self) -> ChainId {
+            self.inner.chain_id()
+        }
+
+        fn sign(
+            &self,
+            request: &ModerationTransactionRequestV1,
+        ) -> Result<ModerationSignedTransactionV1, ModerationSubmissionFailureV1> {
+            self.probe.check();
+            self.inner.sign(request)
+        }
+
+        fn submit_signed(
+            &self,
+            request: &ModerationTransactionRequestV1,
+            signed: &ModerationSignedTransactionV1,
+        ) -> Result<ModerationTransactionReceiptV1, ModerationSubmissionFailureV1> {
+            self.probe.check();
+            self.inner.submit_signed(request, signed)
+        }
+
+        fn lookup(
+            &self,
+            operation_id: [u8; 32],
+            transaction_id: Option<[u8; 32]>,
+        ) -> ModerationSubmissionLookupV1 {
+            self.probe.check();
+            self.inner.lookup(operation_id, transaction_id)
+        }
+    }
+
+    #[derive(Debug)]
+    struct ProbedHandoffSink {
+        inner: Arc<MockHandoffSink>,
+        probe: Arc<ReentrantLockProbe>,
+    }
+
+    impl ModerationTerminalHandoffSinkV1 for ProbedHandoffSink {
+        fn deliver(
+            &self,
+            handoff: &ModerationTerminalHandoffV1,
+        ) -> Result<(), ModerationHandoffFailureV1> {
+            self.probe.check();
+            self.inner.deliver(handoff)
+        }
+    }
+
+    #[derive(Debug)]
+    struct BlockingSignSubmitter {
+        inner: Arc<MockSubmitter>,
+        entered: Mutex<Option<mpsc::Sender<()>>>,
+        released: Mutex<bool>,
+        release: Condvar,
+    }
+
+    impl BlockingSignSubmitter {
+        fn new(inner: Arc<MockSubmitter>, entered: mpsc::Sender<()>) -> Self {
+            Self {
+                inner,
+                entered: Mutex::new(Some(entered)),
+                released: Mutex::new(false),
+                release: Condvar::new(),
+            }
+        }
+
+        fn release(&self) {
+            *self.released.lock().expect("release lock") = true;
+            self.release.notify_all();
+        }
+    }
+
+    impl ModerationTransactionSubmitterV1 for BlockingSignSubmitter {
+        fn chain_id(&self) -> ChainId {
+            self.inner.chain_id()
+        }
+
+        fn sign(
+            &self,
+            request: &ModerationTransactionRequestV1,
+        ) -> Result<ModerationSignedTransactionV1, ModerationSubmissionFailureV1> {
+            let entered = self.entered.lock().expect("entered lock").take();
+            if let Some(entered) = entered {
+                entered.send(()).expect("signal blocking signer");
+                let released = self.released.lock().expect("release lock");
+                drop(
+                    self.release
+                        .wait_while(released, |released| !*released)
+                        .expect("wait for signer release"),
+                );
+            }
+            self.inner.sign(request)
+        }
+
+        fn submit_signed(
+            &self,
+            request: &ModerationTransactionRequestV1,
+            signed: &ModerationSignedTransactionV1,
+        ) -> Result<ModerationTransactionReceiptV1, ModerationSubmissionFailureV1> {
+            self.inner.submit_signed(request, signed)
+        }
+
+        fn lookup(
+            &self,
+            operation_id: [u8; 32],
+            transaction_id: Option<[u8; 32]>,
+        ) -> ModerationSubmissionLookupV1 {
+            self.inner.lookup(operation_id, transaction_id)
+        }
+    }
+
+    #[derive(Debug, Default)]
+    struct MockPanelNotificationSink {
+        calls: Mutex<usize>,
+        receipts: Mutex<BTreeMap<[u8; 32], ModerationPanelNotificationDeliveryReceiptV1>>,
+    }
+
+    impl MockPanelNotificationSink {
+        fn deliver(
+            &self,
+            claim: &ModerationPanelNotificationClaimV1,
+            delivered_at_unix_ms: u64,
+        ) -> ModerationPanelNotificationDeliveryReceiptV1 {
+            let mut calls = self.calls.lock().expect("panel sink calls lock");
+            *calls = calls.saturating_add(1);
+            let mut receipts = self.receipts.lock().expect("panel sink receipt lock");
+            *receipts
+                .entry(claim.notification.notification_id)
+                .or_insert_with(|| ModerationPanelNotificationDeliveryReceiptV1 {
+                    notification_id: claim.notification.notification_id,
+                    receipt_digest: domain_hash(
+                        b"sorafs.moderation.test-panel-receipt.v1",
+                        &[&claim.notification.notification_id],
+                    ),
+                    delivered_at_unix_ms,
+                })
+        }
+
+        fn calls(&self) -> usize {
+            *self.calls.lock().expect("panel sink calls lock")
+        }
+
+        fn unique_deliveries(&self) -> usize {
+            self.receipts
+                .lock()
+                .expect("panel sink receipt lock")
+                .len()
         }
     }
 
@@ -5122,11 +7755,63 @@ mod tests {
             signed_transaction_bytes: None,
             attempts: 0,
             state: StoredOutboxStateV1::Ready,
+            work_generation: 0,
+            work_claim: None,
+            last_lookup_finalized_height: 0,
+            last_lookup_finalized_block_hash: [0; 32],
         });
         orchestrator
             .persist_checkpoint_locked(&mut state)
             .expect("persist ready operation");
         operation_id
+    }
+
+    fn execute_one_prepared_sign(
+        orchestrator: &ModerationOrchestratorV1,
+        operation_id: [u8; 32],
+    ) {
+        let prepared = {
+            let mut state = orchestrator.state.lock().expect("orchestrator state");
+            orchestrator
+                .prepare_next_external_work_locked(
+                    &mut state,
+                    &BTreeSet::new(),
+                    &BTreeSet::new(),
+                )
+                .expect("prepare signer work")
+                .expect("one signer claim")
+        };
+        assert!(matches!(
+            &prepared,
+            PreparedExternalWorkV1::Sign { identity, .. }
+                if identity.identity == operation_id
+        ));
+        orchestrator
+            .execute_external_work(prepared)
+            .expect("execute signer work");
+    }
+
+    fn prepare_one_submit(
+        orchestrator: &ModerationOrchestratorV1,
+        operation_id: [u8; 32],
+    ) -> PreparedExternalWorkV1 {
+        let prepared = {
+            let mut state = orchestrator.state.lock().expect("orchestrator state");
+            orchestrator
+                .prepare_next_external_work_locked(
+                    &mut state,
+                    &BTreeSet::new(),
+                    &BTreeSet::new(),
+                )
+                .expect("prepare ingress work")
+                .expect("one ingress claim")
+        };
+        assert!(matches!(
+            &prepared,
+            PreparedExternalWorkV1::Submit { identity, .. }
+                if identity.identity == operation_id
+        ));
+        prepared
     }
 
     fn retained_envelope(
@@ -5387,6 +8072,134 @@ mod tests {
             orchestrator.reconcile(),
             Err(ModerationOrchestratorError::FinalizedEquivocation { .. })
         ));
+    }
+
+    #[test]
+    fn every_external_collaborator_is_reentrant_without_holding_the_state_mutex() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
+        let submitter = Arc::new(MockSubmitter::new(
+            ModerationSubmissionLookupV1::NotFound {
+                observed_finalized_height: 1,
+            },
+        ));
+        let settlement = Arc::new(MockHandoffSink::default());
+        let publication = Arc::new(MockHandoffSink::default());
+        let probe = Arc::new(ReentrantLockProbe::default());
+        let orchestrator = Arc::new(
+            ModerationOrchestratorV1::open(
+                config(&temp, "reentrant-collaborators.norito"),
+                ModerationOrchestratorDepsV1 {
+                    submitter: Arc::new(ProbedSubmitter {
+                        inner: Arc::clone(&submitter),
+                        probe: Arc::clone(&probe),
+                    }),
+                    snapshot_reader: Arc::new(ProbedSnapshotReader {
+                        inner: Arc::clone(&reader),
+                        probe: Arc::clone(&probe),
+                    }),
+                    settlement_sink: Arc::new(ProbedHandoffSink {
+                        inner: Arc::clone(&settlement),
+                        probe: Arc::clone(&probe),
+                    }),
+                    publication_sink: Arc::new(ProbedHandoffSink {
+                        inner: Arc::clone(&publication),
+                        probe: Arc::clone(&probe),
+                    }),
+                },
+            )
+            .expect("orchestrator"),
+        );
+        probe.attach(&orchestrator);
+
+        orchestrator
+            .submit(account(1), policy_action(policy(1)), [0x45; 32])
+            .expect("sign and submit outside the mutex");
+        orchestrator
+            .reconcile()
+            .expect("lookup outside the mutex");
+
+        let governance = account(99);
+        let open = activated_case_snapshot(2, [2; 32], governance.clone());
+        reader.replace(finalized_case_snapshot(
+            open,
+            3,
+            [3; 32],
+            governance,
+        ));
+        orchestrator
+            .reconcile()
+            .expect("terminal sinks outside the mutex");
+
+        assert!(probe.checks() >= 6);
+        assert_eq!(settlement.delivered().len(), 1);
+        assert_eq!(publication.delivered().len(), 1);
+    }
+
+    #[test]
+    fn blocking_signer_claim_allows_concurrent_duplicate_worker_to_exit() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
+        let inner = Arc::new(MockSubmitter::new(
+            ModerationSubmissionLookupV1::NotFound {
+                observed_finalized_height: 1,
+            },
+        ));
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let blocking = Arc::new(BlockingSignSubmitter::new(
+            Arc::clone(&inner),
+            entered_tx,
+        ));
+        let orchestrator = Arc::new(
+            ModerationOrchestratorV1::open(
+                config(&temp, "blocking-duplicate-workers.norito"),
+                ModerationOrchestratorDepsV1 {
+                    submitter: blocking.clone(),
+                    snapshot_reader: reader,
+                    settlement_sink: Arc::new(MockHandoffSink::default()),
+                    publication_sink: Arc::new(MockHandoffSink::default()),
+                },
+            )
+            .expect("orchestrator"),
+        );
+        seed_ready_operation_without_delivery(
+            &orchestrator,
+            account(1),
+            policy_action(policy(1)),
+            [0x46; 32],
+        );
+
+        let first = {
+            let orchestrator = Arc::clone(&orchestrator);
+            thread::spawn(move || orchestrator.drive_external_work())
+        };
+        entered_rx
+            .recv_timeout(core::time::Duration::from_secs(5))
+            .expect("signer entered");
+        let lock_was_free = orchestrator.state.try_lock().is_ok();
+        let (duplicate_tx, duplicate_rx) = mpsc::channel();
+        let duplicate = {
+            let orchestrator = Arc::clone(&orchestrator);
+            thread::spawn(move || {
+                let result = orchestrator.drive_external_work();
+                duplicate_tx.send(result).expect("signal duplicate worker");
+            })
+        };
+        let duplicate_result =
+            duplicate_rx.recv_timeout(core::time::Duration::from_secs(5));
+        blocking.release();
+        first
+            .join()
+            .expect("first worker thread")
+            .expect("first worker finishes");
+        duplicate.join().expect("duplicate worker thread");
+
+        assert!(lock_was_free);
+        duplicate_result
+            .expect("duplicate worker exits while signer is blocked")
+            .expect("duplicate worker exits without duplicate work");
+        assert_eq!(inner.sign_calls(), 1);
+        assert_eq!(inner.calls(), 1);
     }
 
     #[test]
@@ -6047,6 +8860,306 @@ mod tests {
     }
 
     #[test]
+    fn restart_reconciles_crash_before_ingress_without_replacing_signed_bytes() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
+        let submitter = Arc::new(MockSubmitter::new(
+            ModerationSubmissionLookupV1::NotFound {
+                observed_finalized_height: 2,
+            },
+        ));
+        let checkpoint = config(&temp, "crash-before-ingress.norito");
+        let orchestrator = ModerationOrchestratorV1::open(
+            checkpoint.clone(),
+            deps(Arc::clone(&reader), Arc::clone(&submitter)),
+        )
+        .expect("orchestrator");
+        let operation_id = seed_ready_operation_without_delivery(
+            &orchestrator,
+            account(1),
+            policy_action(policy(1)),
+            [0x47; 32],
+        );
+        execute_one_prepared_sign(&orchestrator, operation_id);
+        let interrupted = prepare_one_submit(&orchestrator, operation_id);
+        let retained = match &interrupted {
+            PreparedExternalWorkV1::Submit { signed, .. } => signed.clone(),
+            _ => unreachable!("submit claim"),
+        };
+        drop(interrupted);
+        drop(orchestrator);
+
+        reader.replace(empty_snapshot(2, [2; 32]));
+        let restarted = ModerationOrchestratorV1::open(
+            checkpoint,
+            deps(reader, Arc::clone(&submitter)),
+        )
+        .expect("restart");
+        restarted
+            .reconcile()
+            .expect("lookup proves no ingress before exact retry");
+
+        let state = restarted.state.lock().expect("restarted state");
+        let entry = state
+            .outbox
+            .iter()
+            .find(|entry| entry.operation_id == operation_id)
+            .expect("submitted entry");
+        assert_eq!(entry.state, StoredOutboxStateV1::Submitted);
+        assert_eq!(
+            moderation_signed_transaction(entry).expect("retained exact envelope"),
+            retained
+        );
+        assert_eq!(submitter.sign_calls(), 1);
+        assert_eq!(submitter.calls(), 1);
+    }
+
+    #[test]
+    fn restart_reconciles_crash_after_ingress_effect_without_duplicate_submit() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
+        let submitter = Arc::new(MockSubmitter::new(
+            ModerationSubmissionLookupV1::NotFound {
+                observed_finalized_height: 2,
+            },
+        ));
+        let checkpoint = config(&temp, "crash-after-ingress.norito");
+        let orchestrator = ModerationOrchestratorV1::open(
+            checkpoint.clone(),
+            deps(Arc::clone(&reader), Arc::clone(&submitter)),
+        )
+        .expect("orchestrator");
+        let operation_id = seed_ready_operation_without_delivery(
+            &orchestrator,
+            account(1),
+            policy_action(policy(1)),
+            [0x48; 32],
+        );
+        execute_one_prepared_sign(&orchestrator, operation_id);
+        let interrupted = prepare_one_submit(&orchestrator, operation_id);
+        let retained = match &interrupted {
+            PreparedExternalWorkV1::Submit {
+                request, signed, ..
+            } => {
+                submitter
+                    .submit_signed(request, signed)
+                    .expect("ingress effect before crash");
+                signed.clone()
+            }
+            _ => unreachable!("submit claim"),
+        };
+        drop(interrupted);
+        drop(orchestrator);
+
+        reader.replace(empty_snapshot(2, [2; 32]));
+        let restarted = ModerationOrchestratorV1::open(
+            checkpoint,
+            deps(reader, Arc::clone(&submitter)),
+        )
+        .expect("restart");
+        restarted
+            .reconcile()
+            .expect("lookup finds the pre-crash ingress effect");
+
+        let state = restarted.state.lock().expect("restarted state");
+        let entry = state
+            .outbox
+            .iter()
+            .find(|entry| entry.operation_id == operation_id)
+            .expect("submitted entry");
+        assert_eq!(entry.state, StoredOutboxStateV1::Submitted);
+        assert_eq!(
+            moderation_signed_transaction(entry).expect("retained exact envelope"),
+            retained
+        );
+        assert_eq!(submitter.sign_calls(), 1);
+        assert_eq!(submitter.calls(), 1);
+    }
+
+    #[test]
+    fn expired_work_lease_rejects_stale_signer_completion() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
+        let submitter = Arc::new(MockSubmitter::new(
+            ModerationSubmissionLookupV1::NotFound {
+                observed_finalized_height: 1,
+            },
+        ));
+        let orchestrator = ModerationOrchestratorV1::open(
+            config(&temp, "stale-signer-lease.norito"),
+            deps(Arc::clone(&reader), Arc::clone(&submitter)),
+        )
+        .expect("orchestrator");
+        let operation_id = seed_ready_operation_without_delivery(
+            &orchestrator,
+            account(1),
+            policy_action(policy(1)),
+            [0x49; 32],
+        );
+        let stale = {
+            let mut state = orchestrator.state.lock().expect("orchestrator state");
+            orchestrator
+                .prepare_next_external_work_locked(
+                    &mut state,
+                    &BTreeSet::new(),
+                    &BTreeSet::new(),
+                )
+                .expect("prepare stale signer")
+                .expect("stale signer claim")
+        };
+        assert!(matches!(
+            &stale,
+            PreparedExternalWorkV1::Sign { identity, claim, .. }
+                if identity.identity == operation_id && claim.generation == 1
+        ));
+
+        reader.replace(empty_snapshot_at(
+            2,
+            [2; 32],
+            1 + MODERATION_EXTERNAL_WORK_LEASE_MS_V1,
+        ));
+        orchestrator
+            .reconcile()
+            .expect("new generation reclaims expired signer lease");
+        let before_stale_completion =
+            fs::read(&orchestrator.config.checkpoint_path).expect("checkpoint before stale result");
+        orchestrator
+            .execute_external_work(stale)
+            .expect("stale completion is ignored");
+        let after_stale_completion =
+            fs::read(&orchestrator.config.checkpoint_path).expect("checkpoint after stale result");
+
+        assert_eq!(before_stale_completion, after_stale_completion);
+        assert_eq!(submitter.sign_calls(), 2);
+        assert_eq!(submitter.calls(), 1);
+        let state = orchestrator.state.lock().expect("orchestrator state");
+        let entry = state
+            .outbox
+            .iter()
+            .find(|entry| entry.operation_id == operation_id)
+            .expect("submitted entry");
+        assert_eq!(entry.state, StoredOutboxStateV1::Submitted);
+        assert!(entry.work_generation >= 3);
+        assert!(entry.work_claim.is_none());
+    }
+
+    #[test]
+    fn expired_ingress_lease_fences_stale_receipt_and_duplicate_effect() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
+        let submitter = Arc::new(MockSubmitter::new(
+            ModerationSubmissionLookupV1::NotFound {
+                observed_finalized_height: 2,
+            },
+        ));
+        let orchestrator = ModerationOrchestratorV1::open(
+            config(&temp, "stale-ingress-lease.norito"),
+            deps(Arc::clone(&reader), Arc::clone(&submitter)),
+        )
+        .expect("orchestrator");
+        let operation_id = seed_ready_operation_without_delivery(
+            &orchestrator,
+            account(1),
+            policy_action(policy(1)),
+            [0x4B; 32],
+        );
+        execute_one_prepared_sign(&orchestrator, operation_id);
+        let stale = prepare_one_submit(&orchestrator, operation_id);
+        assert!(matches!(
+            &stale,
+            PreparedExternalWorkV1::Submit { claim, .. }
+                if claim.generation == 2
+        ));
+
+        reader.replace(empty_snapshot_at(
+            2,
+            [2; 32],
+            1 + MODERATION_EXTERNAL_WORK_LEASE_MS_V1,
+        ));
+        orchestrator
+            .reconcile()
+            .expect("lookup and exact retry reclaim expired ingress lease");
+        let before_stale_completion =
+            fs::read(&orchestrator.config.checkpoint_path).expect("checkpoint before stale receipt");
+        orchestrator
+            .execute_external_work(stale)
+            .expect("stale ingress receipt is ignored");
+        let after_stale_completion =
+            fs::read(&orchestrator.config.checkpoint_path).expect("checkpoint after stale receipt");
+
+        assert_eq!(before_stale_completion, after_stale_completion);
+        assert_eq!(submitter.sign_calls(), 1);
+        assert_eq!(submitter.calls(), 1);
+        let state = orchestrator.state.lock().expect("orchestrator state");
+        let entry = state
+            .outbox
+            .iter()
+            .find(|entry| entry.operation_id == operation_id)
+            .expect("submitted entry");
+        assert_eq!(entry.state, StoredOutboxStateV1::Submitted);
+        assert_eq!(entry.attempts, 2);
+        assert!(entry.work_claim.is_none());
+    }
+
+    #[test]
+    fn tampered_external_work_claim_fails_closed_on_restart() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
+        let submitter = Arc::new(MockSubmitter::new(
+            ModerationSubmissionLookupV1::Unknown,
+        ));
+        let checkpoint = config(&temp, "tampered-external-claim.norito");
+        let orchestrator = ModerationOrchestratorV1::open(
+            checkpoint.clone(),
+            deps(Arc::clone(&reader), Arc::clone(&submitter)),
+        )
+        .expect("orchestrator");
+        let operation_id = seed_ready_operation_without_delivery(
+            &orchestrator,
+            account(1),
+            policy_action(policy(1)),
+            [0x4A; 32],
+        );
+        let claimed = {
+            let mut state = orchestrator.state.lock().expect("orchestrator state");
+            orchestrator
+                .prepare_next_external_work_locked(
+                    &mut state,
+                    &BTreeSet::new(),
+                    &BTreeSet::new(),
+                )
+                .expect("prepare signer claim")
+                .expect("one signer claim")
+        };
+        assert!(matches!(
+            claimed,
+            PreparedExternalWorkV1::Sign { identity, .. }
+                if identity.identity == operation_id
+        ));
+        drop(orchestrator);
+
+        let bytes = fs::read(&checkpoint.checkpoint_path).expect("read claimed checkpoint");
+        let mut state: ModerationOrchestratorCheckpointV1 =
+            norito::decode_from_bytes(&bytes).expect("decode claimed checkpoint");
+        state.outbox[0]
+            .work_claim
+            .as_mut()
+            .expect("retained work claim")
+            .lease_token[0] ^= 0x80;
+        write_atomic(
+            &checkpoint.checkpoint_path,
+            &norito::to_bytes(&state).expect("encode tampered claim"),
+        )
+        .expect("write tampered claim");
+
+        assert!(matches!(
+            ModerationOrchestratorV1::open(checkpoint, deps(reader, submitter)),
+            Err(ModerationOrchestratorError::CheckpointCorrupt(message))
+                if message.contains("external-work claim")
+        ));
+    }
+
+    #[test]
     fn restart_submits_the_exact_envelope_persisted_before_ingress() {
         let temp = tempfile::tempdir().expect("tempdir");
         let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
@@ -6065,11 +9178,9 @@ mod tests {
             policy_action(policy(1)),
             [0x51; 32],
         );
+        execute_one_prepared_sign(&orchestrator, operation_id);
         let (retained_id, retained_digest, retained_bytes) = {
-            let mut state = orchestrator.state.lock().expect("orchestrator state");
-            orchestrator
-                .stage_signed_transaction_locked(&mut state, operation_id)
-                .expect("persist exact signed envelope");
+            let state = orchestrator.state.lock().expect("orchestrator state");
             let entry = state
                 .outbox
                 .iter()
@@ -6131,21 +9242,22 @@ mod tests {
             policy_action(policy(1)),
             [0x52; 32],
         );
-        {
+        let interrupted = {
             let mut state = orchestrator.state.lock().expect("orchestrator state");
-            let cursor = snapshot_cursor(&state).expect("finalized cursor");
-            let entry = state
-                .outbox
-                .iter_mut()
-                .find(|entry| entry.operation_id == operation_id)
-                .expect("ready entry");
-            entry.baseline_finalized_height = cursor.height;
-            entry.baseline_finalized_block_hash = cursor.block_hash;
-            entry.state = StoredOutboxStateV1::Signing;
             orchestrator
-                .persist_checkpoint_locked(&mut state)
-                .expect("persist interrupted signing claim");
-        }
+                .prepare_next_external_work_locked(
+                    &mut state,
+                    &BTreeSet::new(),
+                    &BTreeSet::new(),
+                )
+                .expect("prepare interrupted signer work")
+                .expect("one interrupted signer claim")
+        };
+        assert!(matches!(
+            interrupted,
+            PreparedExternalWorkV1::Sign { identity, .. }
+                if identity.identity == operation_id
+        ));
         drop(orchestrator);
 
         let restarted = ModerationOrchestratorV1::open(checkpoint, deps(reader, submitter))
@@ -6182,12 +9294,7 @@ mod tests {
             policy_action(policy(1)),
             [0x53; 32],
         );
-        {
-            let mut state = orchestrator.state.lock().expect("orchestrator state");
-            orchestrator
-                .stage_signed_transaction_locked(&mut state, operation_id)
-                .expect("persist signed transaction");
-        }
+        execute_one_prepared_sign(&orchestrator, operation_id);
         drop(orchestrator);
 
         let original =
@@ -6369,6 +9476,82 @@ mod tests {
         assert_eq!(submitter.sign_calls(), 1);
         assert_eq!(replay.status, ModerationOperationStatusV1::Finalized);
         assert!(replay.replay);
+    }
+
+    #[test]
+    fn terminal_handoff_crash_after_effect_retries_same_id_after_restart() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let governance = account(99);
+        let finalized = finalized_case_snapshot(
+            activated_case_snapshot(2, [2; 32], governance.clone()),
+            3,
+            [3; 32],
+            governance,
+        );
+        let reader = Arc::new(MockSnapshotReader::new(finalized));
+        let submitter = Arc::new(MockSubmitter::new(
+            ModerationSubmissionLookupV1::NotFound {
+                observed_finalized_height: 3,
+            },
+        ));
+        let settlement = Arc::new(MockHandoffSink::default());
+        let publication = Arc::new(MockHandoffSink::default());
+        let checkpoint = config(&temp, "handoff-crash-after-effect.norito");
+        let runtime_deps = || ModerationOrchestratorDepsV1 {
+            submitter: submitter.clone(),
+            snapshot_reader: reader.clone(),
+            settlement_sink: settlement.clone(),
+            publication_sink: publication.clone(),
+        };
+        let orchestrator =
+            ModerationOrchestratorV1::open(checkpoint.clone(), runtime_deps())
+                .expect("orchestrator");
+        let (snapshot, digest) = orchestrator
+            .read_validated_finalized_snapshot()
+            .expect("read finalized snapshot");
+        {
+            let mut state = orchestrator.state.lock().expect("orchestrator state");
+            orchestrator
+                .install_finalized_snapshot_locked(&mut state, snapshot, digest)
+                .expect("queue terminal handoffs");
+        }
+        let interrupted = {
+            let mut state = orchestrator.state.lock().expect("orchestrator state");
+            orchestrator
+                .prepare_next_external_work_locked(
+                    &mut state,
+                    &BTreeSet::new(),
+                    &BTreeSet::new(),
+                )
+                .expect("prepare terminal handoff")
+                .expect("one terminal handoff claim")
+        };
+        let handoff = match &interrupted {
+            PreparedExternalWorkV1::Handoff { handoff, .. } => handoff.clone(),
+            _ => unreachable!("terminal handoff claim"),
+        };
+        assert_eq!(
+            handoff.kind,
+            ModerationTerminalHandoffKindV1::Settlement
+        );
+        settlement
+            .deliver(&handoff)
+            .expect("sink effect before checkpoint finalization");
+        drop(interrupted);
+        drop(orchestrator);
+
+        let restarted =
+            ModerationOrchestratorV1::open(checkpoint, runtime_deps()).expect("restart");
+        restarted
+            .reconcile()
+            .expect("retry identical terminal handoff after crash");
+        assert_eq!(settlement.calls(), 2);
+        assert_eq!(settlement.delivered(), vec![handoff.handoff_id]);
+        assert_eq!(publication.calls(), 1);
+        assert_eq!(publication.delivered().len(), 1);
+        let state = restarted.state.lock().expect("restarted state");
+        assert!(state.pending_handoffs.is_empty());
+        assert_eq!(state.completed_handoffs.len(), 2);
     }
 
     #[test]
@@ -6582,6 +9765,704 @@ mod tests {
             norito::to_bytes(&first_actions).expect("encode first actions"),
             norito::to_bytes(&second_actions).expect("encode second actions")
         );
+    }
+
+    #[test]
+    fn finalized_panel_notifications_are_operation_bound_payload_free_and_byte_identical() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let governance = account(99);
+        let (snapshot, _) =
+            awaiting_acceptance_snapshot(2, [0x22; 32], governance.clone());
+        let selection = snapshot.appeals[0]
+            .appeal
+            .selection
+            .as_ref()
+            .expect("selection")
+            .clone();
+        let expected_source_operation = ModerationNativeActionV1::FinalizeSortition(
+            FinalizeSorafsModerationSortition::new(
+                "case-failover".to_owned(),
+                "round-1".to_owned(),
+                snapshot.appeals[0].appeal.pop_snapshot_digest,
+                selection.randomness_anchor,
+                selection.jurors.clone(),
+                selection.waitlist.clone(),
+            ),
+        )
+        .operation_id(
+            &ChainId::from("moderation-orchestrator-test"),
+            &governance,
+        )
+        .expect("source operation");
+        let first = ModerationOrchestratorV1::open(
+            config(&temp, "panel-replica-a.norito"),
+            deps(
+                Arc::new(MockSnapshotReader::new(snapshot.clone())),
+                Arc::new(MockSubmitter::new(
+                    ModerationSubmissionLookupV1::Unknown,
+                )),
+            ),
+        )
+        .expect("first orchestrator");
+        let second = ModerationOrchestratorV1::open(
+            config(&temp, "panel-replica-b.norito"),
+            deps(
+                Arc::new(MockSnapshotReader::new(snapshot)),
+                Arc::new(MockSubmitter::new(
+                    ModerationSubmissionLookupV1::Unknown,
+                )),
+            ),
+        )
+        .expect("second orchestrator");
+        first.reconcile().expect("first reconciliation");
+        second.reconcile().expect("second reconciliation");
+
+        let first_entries = first
+            .state
+            .lock()
+            .expect("first state")
+            .panel_notifications
+            .clone();
+        let second_entries = second
+            .state
+            .lock()
+            .expect("second state")
+            .panel_notifications
+            .clone();
+        assert_eq!(first_entries.len(), 3);
+        assert_eq!(
+            first_entries
+                .iter()
+                .filter(|entry| {
+                    entry.notification.kind
+                        == ModerationPanelNotificationKindV1::PrimaryAssignment
+                })
+                .count(),
+            2
+        );
+        assert_eq!(
+            first_entries
+                .iter()
+                .filter(|entry| {
+                    entry.notification.kind
+                        == ModerationPanelNotificationKindV1::WaitlistStandby
+                })
+                .count(),
+            1
+        );
+        assert!(first_entries.iter().all(|entry| {
+            entry.notification.source_operation_id == expected_source_operation
+                && entry.notification.finalized_event_cursor.sequence == 5
+                && entry.notification.source_occurred_at_unix_ms == 21
+        }));
+        let first_bytes = norito::to_bytes(&first_entries).expect("encode first notifications");
+        let second_bytes = norito::to_bytes(&second_entries).expect("encode second notifications");
+        assert_eq!(first_bytes, second_bytes);
+        assert_eq!(
+            std::fs::read(&first.config().checkpoint_path).expect("read first checkpoint"),
+            std::fs::read(&second.config().checkpoint_path).expect("read second checkpoint")
+        );
+        for forbidden in [b"case-failover".as_slice(), b"round-1", b"ipfs://"] {
+            assert!(
+                !first_bytes
+                    .windows(forbidden.len())
+                    .any(|window| window == forbidden),
+                "payload-free checkpoint leaked {}",
+                String::from_utf8_lossy(forbidden)
+            );
+        }
+        for forbidden_digest in [[0x41; 32], [0x43; 32]] {
+            assert!(
+                !first_bytes
+                    .windows(forbidden_digest.len())
+                    .any(|window| window == forbidden_digest.as_slice()),
+                "payload-free checkpoint retained a private intake digest"
+            );
+        }
+    }
+
+    #[test]
+    fn finalized_activation_notifies_only_the_authoritative_ballot_roster() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let governance = account(99);
+        let snapshot = activated_case_snapshot(3, [0x27; 32], governance.clone());
+        let selection = snapshot.appeals[0]
+            .appeal
+            .selection
+            .as_ref()
+            .expect("selection");
+        let expected_source_operation =
+            ModerationNativeActionV1::ActivateCase(ActivateSorafsModerationCase::new(
+                "case-failover".to_owned(),
+                "round-1".to_owned(),
+                selection.sortition_digest,
+            ))
+            .operation_id(
+                &ChainId::from("moderation-orchestrator-test"),
+                &governance,
+            )
+            .expect("activation operation");
+        let expected_recipients = snapshot.cases[0]
+            .case
+            .spec
+            .jurors
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let orchestrator = ModerationOrchestratorV1::open(
+            config(&temp, "panel-activation.norito"),
+            deps(
+                Arc::new(MockSnapshotReader::new(snapshot)),
+                Arc::new(MockSubmitter::new(
+                    ModerationSubmissionLookupV1::Unknown,
+                )),
+            ),
+        )
+        .expect("orchestrator");
+        orchestrator.reconcile().expect("queue activation notices");
+        let state = orchestrator.state.lock().expect("state");
+        let actual_recipients = state
+            .panel_notifications
+            .iter()
+            .map(|entry| entry.notification.recipient.clone())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(actual_recipients, expected_recipients);
+        assert_eq!(state.panel_notifications.len(), 2);
+        assert!(state.panel_notifications.iter().all(|entry| {
+            entry.notification.kind == ModerationPanelNotificationKindV1::BallotActivated
+                && entry.notification.source_operation_id == expected_source_operation
+                && entry.notification.finalized_event_cursor.sequence == 6
+        }));
+    }
+
+    #[test]
+    fn panel_notification_terminal_compaction_preserves_scan_progress_and_live_work() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let governance = account(99);
+        let (awaiting, _) =
+            awaiting_acceptance_snapshot(2, [0x29; 32], governance.clone());
+        let reader = Arc::new(MockSnapshotReader::new(awaiting));
+        let mut bounds = config(&temp, "panel-compaction.norito");
+        bounds.max_handoffs = 3;
+        let orchestrator = ModerationOrchestratorV1::open(
+            bounds,
+            deps(
+                Arc::clone(&reader),
+                Arc::new(MockSubmitter::new(
+                    ModerationSubmissionLookupV1::Unknown,
+                )),
+            ),
+        )
+        .expect("orchestrator");
+        orchestrator.reconcile().expect("queue assignments");
+        reader.replace(activated_case_snapshot(
+            3,
+            [0x2A; 32],
+            governance,
+        ));
+        assert!(matches!(
+            orchestrator.reconcile(),
+            Err(ModerationOrchestratorError::ResourceExhausted {
+                resource: "panel notifications",
+                limit: 3
+            })
+        ));
+        assert_eq!(
+            orchestrator
+                .snapshot()
+                .expect("failed queue preserves prior projection")
+                .finalized_height,
+            2
+        );
+
+        let sink = MockPanelNotificationSink::default();
+        let assignments = orchestrator
+            .claim_panel_notifications([0xA1; 32], 1_000, 3)
+            .expect("claim assignments");
+        for claim in &assignments {
+            let receipt = sink.deliver(claim, 1_001);
+            orchestrator
+                .finalize_panel_notification_delivery(
+                    claim.worker_id,
+                    claim.lease_token,
+                    receipt,
+                    1_001,
+                )
+                .expect("finalize assignment");
+        }
+        orchestrator
+            .reconcile()
+            .expect("terminal assignment records compact for activation");
+        {
+            let state = orchestrator.state.lock().expect("state");
+            assert_eq!(state.panel_notifications.len(), 3);
+            assert_eq!(
+                state
+                    .panel_notifications
+                    .iter()
+                    .filter(|entry| {
+                        entry.notification.kind
+                            == ModerationPanelNotificationKindV1::BallotActivated
+                    })
+                    .count(),
+                2
+            );
+            assert_eq!(
+                state
+                    .panel_notification_scanned_cursor
+                    .expect("scan cursor")
+                    .sequence,
+                6
+            );
+        }
+        orchestrator
+            .reconcile()
+            .expect("same finalized event cannot requeue compacted identities");
+        assert_eq!(
+            orchestrator
+                .state
+                .lock()
+                .expect("state")
+                .panel_notifications
+                .len(),
+            3
+        );
+    }
+
+    #[test]
+    fn panel_notification_claims_recover_crashes_and_finalize_one_stable_receipt() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let governance = account(99);
+        let (snapshot, _) = awaiting_acceptance_snapshot(2, [0x23; 32], governance);
+        let reader = Arc::new(MockSnapshotReader::new(snapshot));
+        let submitter = Arc::new(MockSubmitter::new(
+            ModerationSubmissionLookupV1::Unknown,
+        ));
+        let checkpoint = config(&temp, "panel-crash-recovery.norito");
+        let orchestrator = ModerationOrchestratorV1::open(
+            checkpoint.clone(),
+            deps(Arc::clone(&reader), Arc::clone(&submitter)),
+        )
+        .expect("orchestrator");
+        orchestrator.reconcile().expect("queue notifications");
+        let first_claims = orchestrator
+            .claim_panel_notifications([0xA1; 32], 1_000, 3)
+            .expect("first worker claims all notifications");
+        assert_eq!(first_claims.len(), 3);
+        assert!(first_claims.iter().all(|claim| claim.attempt_limit == 3));
+        assert!(
+            orchestrator
+                .claim_panel_notifications([0xB2; 32], 1_000, 3)
+                .expect("duplicate worker scan")
+                .is_empty()
+        );
+        let sink = MockPanelNotificationSink::default();
+        let first_receipt = sink.deliver(&first_claims[0], 1_001);
+        let target_id = first_claims[0].notification.notification_id;
+        drop(orchestrator);
+
+        let restarted = ModerationOrchestratorV1::open(
+            checkpoint,
+            deps(reader, submitter),
+        )
+        .expect("restart with durable claims");
+        assert!(
+            restarted
+                .claim_panel_notifications([0xB2; 32], 30_999, 3)
+                .expect("leases remain exclusive before expiry")
+                .is_empty()
+        );
+        assert!(
+            restarted
+                .claim_panel_notifications([0xB2; 32], 31_000, 3)
+                .expect("expiry begins deterministic backoff")
+                .is_empty()
+        );
+        let second_claims = restarted
+            .claim_panel_notifications([0xB2; 32], 32_000, 3)
+            .expect("expired claims are reclaimed after backoff");
+        assert_eq!(second_claims.len(), 3);
+        assert!(second_claims.iter().all(|claim| claim.attempt == 2));
+        let second_claim = second_claims
+            .iter()
+            .find(|claim| claim.notification.notification_id == target_id)
+            .expect("same notification reclaimed");
+        let deduplicated_receipt = sink.deliver(second_claim, 32_001);
+        assert_eq!(deduplicated_receipt, first_receipt);
+        assert_eq!(sink.calls(), 2);
+        assert_eq!(sink.unique_deliveries(), 1);
+
+        assert!(matches!(
+            restarted.finalize_panel_notification_delivery(
+                first_claims[0].worker_id,
+                first_claims[0].lease_token,
+                first_receipt,
+                32_001,
+            ),
+            Err(ModerationOrchestratorError::PanelNotificationClaimConflict {
+                notification_id
+            }) if notification_id == target_id
+        ));
+        assert_eq!(
+            restarted
+                .finalize_panel_notification_delivery(
+                    second_claim.worker_id,
+                    second_claim.lease_token,
+                    deduplicated_receipt,
+                    32_001,
+                )
+                .expect("reclaimed receipt finalization"),
+            ModerationPanelNotificationFinalizeOutcomeV1::Delivered
+        );
+        assert_eq!(
+            restarted
+                .finalize_panel_notification_delivery(
+                    second_claim.worker_id,
+                    second_claim.lease_token,
+                    deduplicated_receipt,
+                    32_002,
+                )
+                .expect("idempotent receipt replay"),
+            ModerationPanelNotificationFinalizeOutcomeV1::AlreadyDelivered
+        );
+        let mut substituted = deduplicated_receipt;
+        substituted.receipt_digest = [0xEE; 32];
+        assert!(matches!(
+            restarted.finalize_panel_notification_delivery(
+                second_claim.worker_id,
+                second_claim.lease_token,
+                substituted,
+                32_003,
+            ),
+            Err(ModerationOrchestratorError::PanelNotificationReceiptConflict {
+                notification_id
+            }) if notification_id == target_id
+        ));
+        assert!(matches!(
+            restarted
+                .panel_notification_status(target_id)
+                .expect("durable status"),
+            Some(ModerationPanelNotificationStatusV1::Delivered {
+                receipt_digest,
+                attempts: 2,
+                ..
+            }) if receipt_digest == first_receipt.receipt_digest
+        ));
+    }
+
+    #[test]
+    fn panel_notification_backoff_poison_and_retry_exhaustion_are_bounded() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let governance = account(99);
+        let (snapshot, _) =
+            awaiting_acceptance_snapshot(2, [0x24; 32], governance.clone());
+        let orchestrator = ModerationOrchestratorV1::open(
+            config(&temp, "panel-retry.norito"),
+            deps(
+                Arc::new(MockSnapshotReader::new(snapshot.clone())),
+                Arc::new(MockSubmitter::new(
+                    ModerationSubmissionLookupV1::Unknown,
+                )),
+            ),
+        )
+        .expect("retry orchestrator");
+        orchestrator.reconcile().expect("queue retry fixtures");
+        let first = orchestrator
+            .claim_panel_notifications([0xA1; 32], 1_000, 3)
+            .expect("first claims");
+        for claim in &first {
+            orchestrator
+                .release_panel_notification_claim(
+                    claim.notification.notification_id,
+                    claim.worker_id,
+                    claim.lease_token,
+                    ModerationPanelNotificationFailureV1::NotDelivered,
+                    1_001,
+                )
+                .expect("first safe failure");
+        }
+        assert!(
+            orchestrator
+                .claim_panel_notifications([0xB2; 32], 2_000, 3)
+                .expect("backoff scan")
+                .is_empty()
+        );
+        let second = orchestrator
+            .claim_panel_notifications([0xB2; 32], 2_001, 3)
+            .expect("second claims");
+        for claim in &second {
+            orchestrator
+                .release_panel_notification_claim(
+                    claim.notification.notification_id,
+                    claim.worker_id,
+                    claim.lease_token,
+                    ModerationPanelNotificationFailureV1::Ambiguous,
+                    2_002,
+                )
+                .expect("ambiguous delivery is safely retryable by identity");
+        }
+        let third = orchestrator
+            .claim_panel_notifications([0xC3; 32], 4_002, 3)
+            .expect("third claims");
+        for claim in &third {
+            orchestrator
+                .release_panel_notification_claim(
+                    claim.notification.notification_id,
+                    claim.worker_id,
+                    claim.lease_token,
+                    ModerationPanelNotificationFailureV1::NotDelivered,
+                    4_003,
+                )
+                .expect("exhaust final attempt");
+            assert!(matches!(
+                orchestrator
+                    .panel_notification_status(claim.notification.notification_id)
+                    .expect("retry terminal status"),
+                Some(ModerationPanelNotificationStatusV1::DeadLetter {
+                    reason: ModerationPanelNotificationDeadLetterReasonV1::RetryExhausted,
+                    attempts: 3,
+                    ..
+                })
+            ));
+        }
+
+        let poison = ModerationOrchestratorV1::open(
+            config(&temp, "panel-poison.norito"),
+            deps(
+                Arc::new(MockSnapshotReader::new(snapshot)),
+                Arc::new(MockSubmitter::new(
+                    ModerationSubmissionLookupV1::Unknown,
+                )),
+            ),
+        )
+        .expect("poison orchestrator");
+        poison.reconcile().expect("queue poison fixture");
+        let poison_claim = poison
+            .claim_panel_notifications([0xD4; 32], 1_000, 1)
+            .expect("poison claim")
+            .into_iter()
+            .next()
+            .expect("one poison claim");
+        poison
+            .release_panel_notification_claim(
+                poison_claim.notification.notification_id,
+                poison_claim.worker_id,
+                poison_claim.lease_token,
+                ModerationPanelNotificationFailureV1::Permanent,
+                1_001,
+            )
+            .expect("permanent failure dead letters");
+        assert!(matches!(
+            poison
+                .panel_notification_status(poison_claim.notification.notification_id)
+                .expect("poison status"),
+            Some(ModerationPanelNotificationStatusV1::DeadLetter {
+                reason: ModerationPanelNotificationDeadLetterReasonV1::PermanentRejection,
+                attempts: 1,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn panel_notification_claim_inputs_tokens_and_clock_are_fail_closed() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let governance = account(99);
+        let (snapshot, _) = awaiting_acceptance_snapshot(2, [0x28; 32], governance);
+        let mut bounds = config(&temp, "panel-negative-inputs.norito");
+        bounds.max_handoffs = 3;
+        let orchestrator = ModerationOrchestratorV1::open(
+            bounds,
+            deps(
+                Arc::new(MockSnapshotReader::new(snapshot)),
+                Arc::new(MockSubmitter::new(
+                    ModerationSubmissionLookupV1::Unknown,
+                )),
+            ),
+        )
+        .expect("orchestrator");
+        orchestrator.reconcile().expect("queue notifications");
+        assert_eq!(
+            orchestrator.claim_panel_notifications([0; 32], 1_000, 1),
+            Err(ModerationOrchestratorError::InvalidPanelNotificationClaim)
+        );
+        assert!(matches!(
+            orchestrator.claim_panel_notifications([0xA1; 32], 1_000, 4),
+            Err(ModerationOrchestratorError::ResourceExhausted {
+                resource: "panel notification claim batch",
+                limit: 3
+            })
+        ));
+        assert_eq!(
+            orchestrator.claim_panel_notifications([0xA1; 32], u64::MAX, 1),
+            Err(ModerationOrchestratorError::GenerationOverflow)
+        );
+        let claim = orchestrator
+            .claim_panel_notifications([0xA1; 32], 1_000, 1)
+            .expect("valid claim")
+            .into_iter()
+            .next()
+            .expect("one valid claim");
+        assert_eq!(
+            orchestrator.claim_panel_notifications([0xB2; 32], 999, 1),
+            Err(ModerationOrchestratorError::PanelNotificationClockRollback {
+                current: 1_000,
+                observed: 999,
+            })
+        );
+        assert!(matches!(
+            orchestrator.release_panel_notification_claim(
+                claim.notification.notification_id,
+                [0xB2; 32],
+                claim.lease_token,
+                ModerationPanelNotificationFailureV1::NotDelivered,
+                1_001,
+            ),
+            Err(ModerationOrchestratorError::PanelNotificationClaimConflict {
+                notification_id
+            }) if notification_id == claim.notification.notification_id
+        ));
+        assert_eq!(
+            orchestrator.finalize_panel_notification_delivery(
+                claim.worker_id,
+                claim.lease_token,
+                ModerationPanelNotificationDeliveryReceiptV1 {
+                    notification_id: claim.notification.notification_id,
+                    receipt_digest: [0; 32],
+                    delivered_at_unix_ms: 1_001,
+                },
+                1_001,
+            ),
+            Err(ModerationOrchestratorError::InvalidPanelNotificationReceipt)
+        );
+    }
+
+    #[test]
+    fn panel_notification_checkpoint_tampering_and_old_versions_fail_closed() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let governance = account(99);
+        let (snapshot, _) = awaiting_acceptance_snapshot(2, [0x25; 32], governance);
+        let reader = Arc::new(MockSnapshotReader::new(snapshot));
+        let submitter = Arc::new(MockSubmitter::new(
+            ModerationSubmissionLookupV1::Unknown,
+        ));
+        let bounds = config(&temp, "panel-tamper.norito");
+        let orchestrator = ModerationOrchestratorV1::open(
+            bounds.clone(),
+            deps(Arc::clone(&reader), Arc::clone(&submitter)),
+        )
+        .expect("orchestrator");
+        orchestrator.reconcile().expect("queue notifications");
+        orchestrator
+            .claim_panel_notifications([0xA1; 32], 1_000, 3)
+            .expect("durable claims");
+        drop(orchestrator);
+
+        let original = std::fs::read(&bounds.checkpoint_path).expect("read checkpoint");
+        let limits = checkpoint_decode_limits(bounds.checkpoint_max_bytes).expect("decode limits");
+        let mut checkpoint = decode_from_bytes_with_limits::<ModerationOrchestratorCheckpointV1>(
+            &original, limits,
+        )
+        .expect("decode checkpoint");
+        checkpoint.panel_notifications[0].lease_expires_at_unix_ms =
+            checkpoint.panel_notifications[0]
+                .lease_expires_at_unix_ms
+                .map(|value| value.saturating_add(1));
+        std::fs::write(
+            &bounds.checkpoint_path,
+            norito::to_bytes(&checkpoint).expect("encode tampered checkpoint"),
+        )
+        .expect("write tampered checkpoint");
+        assert!(matches!(
+            ModerationOrchestratorV1::open(
+                bounds.clone(),
+                deps(Arc::clone(&reader), Arc::clone(&submitter)),
+            ),
+            Err(ModerationOrchestratorError::CheckpointCorrupt(_))
+        ));
+
+        for version in [2, 3] {
+            let mut old_checkpoint =
+                decode_from_bytes_with_limits::<ModerationOrchestratorCheckpointV1>(
+                    &original, limits,
+                )
+                .expect("decode original checkpoint");
+            old_checkpoint.version = version;
+            std::fs::write(
+                &bounds.checkpoint_path,
+                norito::to_bytes(&old_checkpoint).expect("encode old checkpoint"),
+            )
+            .expect("write old checkpoint");
+            assert!(matches!(
+                ModerationOrchestratorV1::open(
+                    bounds.clone(),
+                    deps(Arc::clone(&reader), Arc::clone(&submitter)),
+                ),
+                Err(ModerationOrchestratorError::CheckpointCorrupt(message))
+                    if message.contains("unsupported checkpoint version")
+            ));
+        }
+    }
+
+    #[test]
+    fn panel_notification_source_provenance_mismatch_is_rejected() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let governance = account(99);
+        let (mut snapshot, _) = awaiting_acceptance_snapshot(2, [0x26; 32], governance);
+        snapshot.events[0].event = SorafsModerationLedgerEvent::new(
+            SorafsModerationLedgerEventKind::SortitionFinalized,
+            Some("case-failover".to_owned()),
+            Some("round-1".to_owned()),
+            account(98),
+            21,
+        );
+        let orchestrator = ModerationOrchestratorV1::open(
+            config(&temp, "panel-provenance.norito"),
+            deps(
+                Arc::new(MockSnapshotReader::new(snapshot)),
+                Arc::new(MockSubmitter::new(
+                    ModerationSubmissionLookupV1::Unknown,
+                )),
+            ),
+        )
+        .expect("orchestrator");
+        assert!(matches!(
+            orchestrator.reconcile(),
+            Err(ModerationOrchestratorError::InvalidFinalizedSnapshot(message))
+                if message.contains("sortition event provenance")
+        ));
+    }
+
+    #[test]
+    fn panel_notification_scan_rejects_cross_snapshot_event_gaps() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let governance = account(99);
+        let (awaiting, _) =
+            awaiting_acceptance_snapshot(2, [0x2B; 32], governance.clone());
+        let reader = Arc::new(MockSnapshotReader::new(awaiting));
+        let orchestrator = ModerationOrchestratorV1::open(
+            config(&temp, "panel-event-gap.norito"),
+            deps(
+                Arc::clone(&reader),
+                Arc::new(MockSubmitter::new(
+                    ModerationSubmissionLookupV1::Unknown,
+                )),
+            ),
+        )
+        .expect("orchestrator");
+        orchestrator.reconcile().expect("scan sortition event");
+        let activated = activated_case_snapshot(3, [0x2C; 32], governance.clone());
+        reader.replace(finalized_case_snapshot(
+            activated,
+            4,
+            [0x2D; 32],
+            governance,
+        ));
+        assert!(matches!(
+            orchestrator.reconcile(),
+            Err(ModerationOrchestratorError::InvalidFinalizedSnapshot(message))
+                if message.contains("sequence gap")
+        ));
     }
 
     #[test]

@@ -39,21 +39,25 @@ pub use governance::{
 use iroha_smart_contract::data_model::{
     isi::{
         AcceptSorafsModerationJurorAssignment, ActivatePublicLaneValidator,
-        ActivateSorafsModerationCase, AdvanceSorafsReserveLifecycle, ApplySorafsRepairTaskAction,
-        ApprovePinManifest, BindManifestAlias, CancelSorafsOrderbookOrder, ChargeSorafsReserveRent,
-        CommitSorafsPopCredentialBatch, CompleteReplicationOrder, DecideSorafsReserveAppeal,
-        DecideSorafsReserveMovement, DrawSorafsReserveCredit, ExitPublicLaneValidator,
-        ExpireReplicationOrder, FinalizeSorafsModerationCase, FinalizeSorafsModerationSortition,
-        IssueReplicationOrder, MaintainSorafsOrderbook, MatchSorafsOrderbook,
-        PublishSorafsPopRevocationList, RaiseSorafsModerationChallenge, RecordCapacityTelemetry,
+        ActivateSorafsModerationCase, AdvanceSorafsReserveLifecycle,
+        AppendSorafsPorReputationJournalEntry, AppendSorafsStreamTokenReputationJournalEntry,
+        ApplySorafsRepairTaskAction, ApprovePinManifest, BindManifestAlias,
+        CancelSorafsOrderbookOrder, ChargeSorafsReserveRent, CommitSorafsPopCredentialBatch,
+        CompleteReplicationOrder, DecideSorafsReserveAppeal, DecideSorafsReserveMovement,
+        DrawSorafsReserveCredit, ExitPublicLaneValidator, ExpireReplicationOrder,
+        FinalizeSorafsModerationCase, FinalizeSorafsModerationSortition, IssueReplicationOrder,
+        MaintainSorafsOrderbook, MatchSorafsOrderbook, PublishSorafsPopRevocationList,
+        RaiseSorafsModerationChallenge, RecordCapacityTelemetry,
         RecordSorafsOrderbookSettlementReceipt, RegisterCapacityDeclaration,
         RegisterCapacityDispute, RegisterPeerWithPop, RegisterPinManifest, RegisterProviderOwner,
         RegisterPublicLaneValidator, RegisterSorafsModerationJurorEligibility,
         RegisterSorafsReserveAccount, RemoveAssetKeyValue, RepaySorafsReserveCredit,
-        RequestSorafsReserveMovement, ResolveSorafsModerationChallenge, RetirePinManifest,
-        SetAssetKeyValue, SetLaneRelayEmergencyValidators, SetPricingSchedule,
-        SetSorafsModerationPolicy, SetSorafsOrderbookPolicy, SetSorafsPopIssuerPolicy,
-        SetSorafsReservePolicy, SubmitSorafsModerationAppeal, SubmitSorafsModerationCommit,
+        RequestSorafsReserveMovement, ResolveSorafsCapacityDispute,
+        ResolveSorafsModerationChallenge, RetirePinManifest, SetAssetKeyValue,
+        SetLaneRelayEmergencyValidators, SetPricingSchedule, SetSorafsModerationPolicy,
+        SetSorafsOrderbookPolicy, SetSorafsPopIssuerPolicy,
+        SetSorafsReputationJournalAuthorityPolicy, SetSorafsReservePolicy,
+        SubmitSorafsModerationAppeal, SubmitSorafsModerationCommit,
         SubmitSorafsModerationReveal, SubmitSorafsOrderbookOrder, SubmitSorafsRepairAppeal,
         SubmitSorafsRepairTask, SubmitSorafsReserveAppeal, UnregisterProviderOwner,
         UpsertProviderCredit,
@@ -137,6 +141,7 @@ pub use sorafs::{
     visit_find_sorafs_pop_registry_status, visit_find_sorafs_pop_revocation_by_nonce_commitment,
     visit_find_sorafs_pop_revocation_publication_by_version, visit_find_sorafs_repair_events,
     visit_find_sorafs_repair_status, visit_find_sorafs_repair_task, visit_find_sorafs_repair_tasks,
+    visit_find_sorafs_reputation_journal_events,
     visit_find_sorafs_reserve_appeal_by_id, visit_find_sorafs_reserve_appeals,
     visit_find_sorafs_reserve_events, visit_find_sorafs_reserve_movement_by_id,
     visit_find_sorafs_reserve_movements, visit_find_sorafs_reserve_policy,
@@ -1126,6 +1131,26 @@ impl InstructionDispatch for InstructionBox {
             sorafs::visit_register_capacity_dispute(executor, isi);
             return;
         }
+        if let Some(isi) = any.downcast_ref::<ResolveSorafsCapacityDispute>() {
+            sorafs::visit_resolve_capacity_dispute(executor, isi);
+            return;
+        }
+        if let Some(isi) =
+            any.downcast_ref::<SetSorafsReputationJournalAuthorityPolicy>()
+        {
+            sorafs::visit_set_reputation_journal_authority_policy(executor, isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<AppendSorafsPorReputationJournalEntry>() {
+            sorafs::visit_append_por_reputation_journal_entry(executor, isi);
+            return;
+        }
+        if let Some(isi) =
+            any.downcast_ref::<AppendSorafsStreamTokenReputationJournalEntry>()
+        {
+            sorafs::visit_append_stream_token_reputation_journal_entry(executor, isi);
+            return;
+        }
         if let Some(isi) = any.downcast_ref::<IssueReplicationOrder>() {
             sorafs::visit_issue_replication_order(executor, isi);
             return;
@@ -1834,9 +1859,11 @@ pub mod sorafs {
     use iroha_executor_data_model::permission::sorafs::{
         CanApproveSorafsPin, CanBindSorafsAlias, CanCompleteSorafsReplicationOrder,
         CanFileSorafsCapacityDispute, CanIssueSorafsReplicationOrder, CanManageSorafsModeration,
-        CanManageSorafsPopRegistry, CanOperateSorafsPopIssuer, CanRegisterSorafsProviderOwner,
-        CanRetireSorafsPin, CanSetSorafsPricing, CanSetSorafsReservePolicy,
-        CanUnregisterSorafsProviderOwner, CanUpsertSorafsProviderCredit,
+        CanManageSorafsPopRegistry, CanManageSorafsReputationJournalPolicy,
+        CanOperateSorafsPopIssuer, CanRecordSorafsReputationJournal,
+        CanRegisterSorafsProviderOwner, CanResolveSorafsCapacityDispute, CanRetireSorafsPin,
+        CanSetSorafsPricing, CanSetSorafsReservePolicy, CanUnregisterSorafsProviderOwner,
+        CanUpsertSorafsProviderCredit,
     };
 
     use super::*;
@@ -1855,8 +1882,9 @@ pub mod sorafs {
         FindSorafsPopIssuerPolicy, FindSorafsPopRegistryStatus,
         FindSorafsPopRevocationByNonceCommitment, FindSorafsPopRevocationPublicationByVersion,
         FindSorafsRepairEvents, FindSorafsRepairStatus, FindSorafsRepairTask,
-        FindSorafsRepairTasks, FindSorafsReserveAppealById, FindSorafsReserveEvents,
-        FindSorafsReserveMovementById, FindSorafsReservePolicy, FindSorafsReserveProviderById,
+        FindSorafsRepairTasks, FindSorafsReputationJournalEvents,
+        FindSorafsReserveAppealById, FindSorafsReserveEvents, FindSorafsReserveMovementById,
+        FindSorafsReservePolicy, FindSorafsReserveProviderById,
     };
 
     /// Authoritative repair tasks are public operational state.
@@ -1896,6 +1924,17 @@ pub mod sorafs {
     pub fn visit_find_sorafs_repair_events<V: Execute + Visit + ?Sized>(
         _executor: &mut V,
         _query: &FindSorafsRepairEvents,
+    ) {
+    }
+
+    /// The payload-free finalized reputation journal is public transparency state.
+    #[expect(
+        clippy::trivially_copy_pass_by_ref,
+        reason = "the generated Visit dispatch ABI passes every query operation by shared reference"
+    )]
+    pub fn visit_find_sorafs_reputation_journal_events<V: Execute + Visit + ?Sized>(
+        _executor: &mut V,
+        _query: &FindSorafsReputationJournalEvents,
     ) {
     }
 
@@ -2355,6 +2394,71 @@ pub mod sorafs {
         }
 
         deny!(executor, "Can't file SoraFS capacity dispute");
+    }
+
+    /// Resolve an authoritative capacity dispute when permitted.
+    pub fn visit_resolve_capacity_dispute<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &ResolveSorafsCapacityDispute,
+    ) {
+        if executor.context().curr_block.is_genesis()
+            || CanResolveSorafsCapacityDispute
+                .is_owned_by(&executor.context().authority, executor.host())
+        {
+            execute!(executor, isi);
+        }
+        deny!(executor, "Can't resolve SoraFS capacity dispute");
+    }
+
+    /// Activate or rotate the governed reputation-recorder policy when permitted.
+    pub fn visit_set_reputation_journal_authority_policy<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &SetSorafsReputationJournalAuthorityPolicy,
+    ) {
+        if executor.context().curr_block.is_genesis()
+            || CanManageSorafsReputationJournalPolicy
+                .is_owned_by(&executor.context().authority, executor.host())
+        {
+            execute!(executor, isi);
+        }
+        deny!(
+            executor,
+            "Can't manage the authoritative SoraFS reputation recorder policy"
+        );
+    }
+
+    /// Append a governed PoR reputation projection when permitted.
+    pub fn visit_append_por_reputation_journal_entry<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &AppendSorafsPorReputationJournalEntry,
+    ) {
+        if executor.context().curr_block.is_genesis()
+            || CanRecordSorafsReputationJournal
+                .is_owned_by(&executor.context().authority, executor.host())
+        {
+            execute!(executor, isi);
+        }
+        deny!(
+            executor,
+            "Can't record an authoritative SoraFS reputation event"
+        );
+    }
+
+    /// Append a governed stream-token reputation projection when permitted.
+    pub fn visit_append_stream_token_reputation_journal_entry<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &AppendSorafsStreamTokenReputationJournalEntry,
+    ) {
+        if executor.context().curr_block.is_genesis()
+            || CanRecordSorafsReputationJournal
+                .is_owned_by(&executor.context().authority, executor.host())
+        {
+            execute!(executor, isi);
+        }
+        deny!(
+            executor,
+            "Can't record an authoritative SoraFS reputation event"
+        );
     }
 
     /// Issue a replication order when permitted.
@@ -5566,14 +5670,17 @@ mod sorafs_permission_tests {
         block::BlockHeader,
         isi::sorafs::{
             AcceptSorafsModerationJurorAssignment, ActivateSorafsModerationCase,
-            ApprovePinManifest, BindManifestAlias, CommitSorafsPopCredentialBatch,
-            CompleteReplicationOrder, ExpireReplicationOrder, FinalizeSorafsModerationSortition,
-            IssueReplicationOrder, PublishSorafsPopRevocationList, RecordCapacityTelemetry,
+            AppendSorafsPorReputationJournalEntry,
+            AppendSorafsStreamTokenReputationJournalEntry, ApprovePinManifest,
+            BindManifestAlias, CommitSorafsPopCredentialBatch, CompleteReplicationOrder,
+            ExpireReplicationOrder, FinalizeSorafsModerationSortition, IssueReplicationOrder,
+            PublishSorafsPopRevocationList, RecordCapacityTelemetry,
             RegisterCapacityDeclaration, RegisterCapacityDispute, RegisterPinManifest,
-            RegisterProviderOwner, RegisterSorafsModerationJurorEligibility, RetirePinManifest,
-            SetPricingSchedule, SetSorafsModerationPolicy, SetSorafsPopIssuerPolicy,
-            SubmitSorafsModerationAppeal, SubmitSorafsModerationCommit, UnregisterProviderOwner,
-            UpsertProviderCredit,
+            RegisterProviderOwner, RegisterSorafsModerationJurorEligibility,
+            ResolveSorafsCapacityDispute, RetirePinManifest, SetPricingSchedule,
+            SetSorafsModerationPolicy, SetSorafsPopIssuerPolicy,
+            SetSorafsReputationJournalAuthorityPolicy, SubmitSorafsModerationAppeal,
+            SubmitSorafsModerationCommit, UnregisterProviderOwner, UpsertProviderCredit,
         },
         metadata::Metadata,
         permission::Permission as PermissionObject,
@@ -5590,12 +5697,12 @@ mod sorafs_permission_tests {
             FindSorafsPopCommitmentRootByVersion, FindSorafsPopCredentialCommitmentByDigest,
             FindSorafsPopIssuerPolicy, FindSorafsPopRegistryStatus,
             FindSorafsPopRevocationByNonceCommitment, FindSorafsPopRevocationPublicationByVersion,
-            FindSorafsReserveEvents,
+            FindSorafsReputationJournalEvents, FindSorafsReserveEvents,
         },
         sorafs::{
             capacity::{
                 CapacityDeclarationRecord, CapacityDisputeEvidence, CapacityDisputeId,
-                CapacityDisputeRecord, CapacityTelemetryRecord, ProviderId,
+                CapacityDisputeOutcome, CapacityDisputeRecord, CapacityTelemetryRecord, ProviderId,
             },
             moderation_ledger::{
                 MODERATION_APPEAL_INTAKE_VERSION_V1, MODERATION_LEDGER_POLICY_VERSION_V1,
@@ -5604,15 +5711,24 @@ mod sorafs_permission_tests {
             pin_registry::{ManifestAliasBinding, ManifestDigest, ReplicationOrderId},
             pop_registry::{POP_ISSUER_POLICY_VERSION_V1, PopIssuerPolicyV1},
             pricing::{PricingScheduleRecord, ProviderCreditRecord},
+            reputation::{
+                REPUTATION_JOURNAL_AUTHORITY_POLICY_VERSION_V1, PorTerminalOutcomeV1,
+                PorTerminalStatusV1, ReputationJournalAuthorityPolicyV1,
+                ReputationJournalEntryV1, ReputationJournalFinalizedCursorV1,
+                ReputationJournalPayloadV1, StreamTokenValidationOutcomeV1,
+                StreamTokenValidationStatusV1,
+            },
             reserve::ReserveFinalizedCursorV1,
         },
     };
     use iroha_executor_data_model::permission::sorafs::{
         CanApproveSorafsPin, CanBindSorafsAlias, CanCompleteSorafsReplicationOrder,
         CanFileSorafsCapacityDispute, CanIssueSorafsReplicationOrder, CanManageSorafsModeration,
-        CanManageSorafsPopRegistry, CanOperateSorafsPopIssuer, CanRegisterSorafsPin,
-        CanRegisterSorafsProviderOwner, CanRetireSorafsPin, CanSetSorafsPricing,
-        CanSetSorafsReservePolicy, CanUnregisterSorafsProviderOwner, CanUpsertSorafsProviderCredit,
+        CanManageSorafsPopRegistry, CanManageSorafsReputationJournalPolicy,
+        CanOperateSorafsPopIssuer, CanRecordSorafsReputationJournal, CanRegisterSorafsPin,
+        CanRegisterSorafsProviderOwner, CanResolveSorafsCapacityDispute, CanRetireSorafsPin,
+        CanSetSorafsPricing, CanSetSorafsReservePolicy, CanUnregisterSorafsProviderOwner,
+        CanUpsertSorafsProviderCredit,
     };
     use iroha_executor_data_model::permission::{
         domain::CanRegisterDomain, parameter::CanSetParameters, sccp::CanManageSccpGovernance,
@@ -5867,6 +5983,81 @@ mod sorafs_permission_tests {
         ))
     }
 
+    fn reputation_policy() -> ReputationJournalAuthorityPolicyV1 {
+        let authority = authority_account_id();
+        ReputationJournalAuthorityPolicyV1 {
+            version: REPUTATION_JOURNAL_AUTHORITY_POLICY_VERSION_V1,
+            revision: 1,
+            predecessor_policy_digest: None,
+            por_recorder_authority: authority.clone(),
+            dispute_recorder_authority: authority.clone(),
+            token_recorder_authority: authority,
+        }
+    }
+
+    fn por_reputation_entry() -> ReputationJournalEntryV1 {
+        let policy = reputation_policy();
+        ReputationJournalEntryV1::try_new(
+            sample_provider_id(),
+            policy.canonical_digest().expect("reputation policy digest"),
+            authority_account_id(),
+            1_700_000_000_000,
+            None,
+            ReputationJournalPayloadV1::PorTerminal(PorTerminalOutcomeV1 {
+                challenge_id: [0x31; 32],
+                manifest_digest: [0x32; 32],
+                epoch_id: 1,
+                drand_round: 2,
+                forced: false,
+                sample_count: 4,
+                failed_samples: 0,
+                issued_at_unix_ms: 1_699_999_998_000,
+                deadline_at_unix_ms: 1_700_000_000_000,
+                responded_at_unix_ms: Some(1_699_999_999_000),
+                decided_at_unix_ms: 1_700_000_000_000,
+                proof_digest: Some([0x33; 32]),
+                repair_task_id: None,
+                verifier_latency_ms: Some(7),
+                status: PorTerminalStatusV1::Verified,
+            }),
+        )
+        .expect("canonical PoR reputation fixture")
+    }
+
+    fn token_reputation_entry() -> ReputationJournalEntryV1 {
+        let policy = reputation_policy();
+        ReputationJournalEntryV1::try_new(
+            sample_provider_id(),
+            policy.canonical_digest().expect("reputation policy digest"),
+            authority_account_id(),
+            1_700_000_000_000,
+            None,
+            ReputationJournalPayloadV1::StreamTokenValidation(
+                StreamTokenValidationOutcomeV1 {
+                    validation_id: [0x41; 32],
+                    request_digest: [0x42; 32],
+                    token_body_digest: Some([0x43; 32]),
+                    token_key_version: Some(1),
+                    validated_at_unix_ms: 1_700_000_000_000,
+                    status: StreamTokenValidationStatusV1::Accepted,
+                },
+            ),
+        )
+        .expect("canonical reputation fixture")
+    }
+
+    fn resolve_capacity_dispute() -> ResolveSorafsCapacityDispute {
+        ResolveSorafsCapacityDispute::new(
+            CapacityDisputeId::new([0x01; 32]),
+            reputation_policy()
+                .canonical_digest()
+                .expect("reputation policy digest"),
+            CapacityDisputeOutcome::Upheld,
+            [0x44; 32],
+            Some("upheld".to_owned()),
+        )
+    }
+
     fn issue_replication_order() -> IssueReplicationOrder {
         IssueReplicationOrder::new(ReplicationOrderId::new([0x11; 32]), vec![0x22], 1, 2)
     }
@@ -6012,6 +6203,34 @@ mod sorafs_permission_tests {
         register_capacity_dispute(),
         CanFileSorafsCapacityDispute,
         sorafs::visit_register_capacity_dispute
+    );
+
+    sorafs_permission_case!(
+        resolve_capacity_dispute_requires_permission,
+        resolve_capacity_dispute(),
+        CanResolveSorafsCapacityDispute,
+        sorafs::visit_resolve_capacity_dispute
+    );
+
+    sorafs_permission_case!(
+        set_reputation_policy_requires_permission,
+        SetSorafsReputationJournalAuthorityPolicy::new(reputation_policy()),
+        CanManageSorafsReputationJournalPolicy,
+        sorafs::visit_set_reputation_journal_authority_policy
+    );
+
+    sorafs_permission_case!(
+        append_por_reputation_requires_permission,
+        AppendSorafsPorReputationJournalEntry::new(por_reputation_entry()),
+        CanRecordSorafsReputationJournal,
+        sorafs::visit_append_por_reputation_journal_entry
+    );
+
+    sorafs_permission_case!(
+        append_stream_token_reputation_requires_permission,
+        AppendSorafsStreamTokenReputationJournalEntry::new(token_reputation_entry()),
+        CanRecordSorafsReputationJournal,
+        sorafs::visit_append_stream_token_reputation_journal_entry
     );
 
     sorafs_permission_case!(
@@ -6176,6 +6395,22 @@ mod sorafs_permission_tests {
     }
 
     #[test]
+    fn reputation_journal_query_is_public_transparency_state() {
+        assert_allowed_without_permission(
+            FindSorafsReputationJournalEvents::new(
+                Some(ReputationJournalFinalizedCursorV1 {
+                    height: 7,
+                    block_hash: [0x45; 32],
+                    finalized_at_unix_ms: 1_700_000_000_000,
+                }),
+                None,
+                16,
+            ),
+            sorafs::visit_find_sorafs_reputation_journal_events,
+        );
+    }
+
+    #[test]
     fn complete_moderation_snapshot_is_manager_only() {
         let query = FindSorafsModerationSnapshot::new(8, 16);
         assert_denied_without_permission(
@@ -6235,6 +6470,47 @@ mod sorafs_permission_tests {
                 "derived default Visit dispatch must not bypass foreign juror privacy"
             );
         });
+    }
+
+    fn orderbook_page_queries() -> Vec<iroha_smart_contract::data_model::query::AnyQueryBox> {
+        [
+            FindSorafsOrderbookTrades::new(None, None, 10).into(),
+            FindSorafsOrderbookChannels::new(None, None, None, 10).into(),
+            FindSorafsOrderbookEvents::new(None, None, 10).into(),
+        ]
+        .into_iter()
+        .map(iroha_smart_contract::data_model::query::AnyQueryBox::Singular)
+        .collect()
+    }
+
+    #[test]
+    fn derived_default_visit_dispatches_orderbook_pages_through_permission_checks() {
+        with_mock_permissions(vec![PermissionObject::from(CanRegisterSorafsPin)], || {
+            for query in orderbook_page_queries() {
+                let mut executor = MockExecutor::new(false);
+                executor.visit_query(&query);
+                assert!(
+                    executor.verdict().is_err(),
+                    "derived dispatch must reject an unrelated SoraFS permission"
+                );
+            }
+        });
+
+        for permission in [
+            PermissionObject::from(CanSetSorafsPricing),
+            PermissionObject::from(CanCompleteSorafsReplicationOrder),
+        ] {
+            with_mock_permissions(vec![permission], || {
+                for query in orderbook_page_queries() {
+                    let mut executor = MockExecutor::new(false);
+                    executor.visit_query(&query);
+                    assert!(
+                        executor.verdict().is_ok(),
+                        "derived dispatch must accept an orderbook operator permission"
+                    );
+                }
+            });
+        }
     }
 
     fn custom_parameter(name: &str) -> SetParameter {

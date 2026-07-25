@@ -641,7 +641,7 @@ fn durable_name_to_account_id_map_roundtrip() {
     "#;
 
     let vm = run_program(src);
-    assert_eq!(common::decode_i64_register(&vm, 10), 1);
+    assert_eq!(vm.register(10), 1);
 }
 
 #[test]
@@ -669,7 +669,7 @@ fn durable_name_to_account_id_map_roundtrip_across_wsv_invocations() {
 
     let (_, wsv) = run_program_with_wsv(write_src, MockWorldStateView::new());
     let (vm, _) = run_program_with_wsv(read_src, wsv);
-    assert_eq!(common::decode_i64_register(&vm, 10), 1);
+    assert_eq!(vm.register(10), 1);
 }
 
 #[test]
@@ -692,7 +692,7 @@ fn durable_name_to_blob_map_write_from_json_hex_roundtrip() {
     "#;
 
     let vm = run_program(src);
-    assert_eq!(common::decode_i64_register(&vm, 10), 1);
+    assert_eq!(vm.register(10), 1);
 }
 
 #[test]
@@ -804,7 +804,7 @@ fn durable_name_map_branch_value_survives_following_state_work() {
             state StateMap<int, int> EntryByPosition;
 
             fn next_index() -> int {
-                let value = Counter.ensure(1, 0);
+                let value = Counter.ensure(key: 1, default: 0);
                 Counter[1] = value + 1;
                 return value;
             }

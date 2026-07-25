@@ -5,7 +5,7 @@ use std::{fs, path::PathBuf};
 
 use eyre::{Result, WrapErr, ensure};
 use iroha_data_model::block::consensus::LaneBlockCommitment;
-use iroha_primitives::numeric::Numeric;
+use iroha_primitives::numeric::{Numeric, Quantity};
 use norito::{core::NoritoDeserialize as _, json};
 
 struct CommitmentFixture {
@@ -93,12 +93,13 @@ fn lane_commitment_json_matches_norito_payloads() -> Result<()> {
 #[allow(clippy::too_many_lines)] // fixture validation requires exhaustive assertions
 fn lane_commitment_receipt_totals_are_consistent() -> Result<()> {
     for fixture in load_lane_commitments()? {
-        let sum_local: u128 = fixture
+        let sum_local = fixture
             .commitment
             .receipts
             .iter()
-            .map(|receipt| receipt.local_amount)
-            .sum();
+            .try_fold(Quantity::zero(), |sum, receipt| {
+                sum.checked_add(&receipt.local_amount)
+            })?;
         ensure!(
             sum_local == fixture.commitment.total_local_amount,
             "local totals mismatch for {} (expected {}, got {})",
@@ -107,12 +108,13 @@ fn lane_commitment_receipt_totals_are_consistent() -> Result<()> {
             sum_local
         );
 
-        let sum_due: u128 = fixture
+        let sum_due = fixture
             .commitment
             .receipts
             .iter()
-            .map(|receipt| receipt.xor_due)
-            .sum();
+            .try_fold(Quantity::zero(), |sum, receipt| {
+                sum.checked_add(&receipt.xor_due)
+            })?;
         ensure!(
             sum_due == fixture.commitment.total_xor_due,
             "xor_due totals mismatch for {} (expected {}, got {})",
@@ -121,12 +123,13 @@ fn lane_commitment_receipt_totals_are_consistent() -> Result<()> {
             sum_due
         );
 
-        let sum_after_haircut: u128 = fixture
+        let sum_after_haircut = fixture
             .commitment
             .receipts
             .iter()
-            .map(|receipt| receipt.xor_after_haircut)
-            .sum();
+            .try_fold(Quantity::zero(), |sum, receipt| {
+                sum.checked_add(&receipt.xor_after_haircut)
+            })?;
         ensure!(
             sum_after_haircut == fixture.commitment.total_xor_after_haircut,
             "xor_after_haircut totals mismatch for {} (expected {}, got {})",
@@ -142,8 +145,10 @@ fn lane_commitment_receipt_totals_are_consistent() -> Result<()> {
             fixture.commitment.total_xor_due,
             fixture.commitment.total_xor_after_haircut
         );
-        let expected_variance =
-            fixture.commitment.total_xor_due - fixture.commitment.total_xor_after_haircut;
+        let expected_variance = fixture
+            .commitment
+            .total_xor_due
+            .checked_sub(&fixture.commitment.total_xor_after_haircut)?;
         ensure!(
             expected_variance == fixture.commitment.total_xor_variance,
             "variance mismatch for {} (expected {}, got {})",
@@ -151,12 +156,13 @@ fn lane_commitment_receipt_totals_are_consistent() -> Result<()> {
             fixture.commitment.total_xor_variance,
             expected_variance
         );
-        let summed_variance: u128 = fixture
+        let summed_variance = fixture
             .commitment
             .receipts
             .iter()
-            .map(|receipt| receipt.xor_variance)
-            .sum();
+            .try_fold(Quantity::zero(), |sum, receipt| {
+                sum.checked_add(&receipt.xor_variance)
+            })?;
         ensure!(
             summed_variance == fixture.commitment.total_xor_variance,
             "per-receipt variance mismatch for {} (expected {}, got {})",
@@ -200,8 +206,10 @@ fn lane_commitment_receipt_totals_are_consistent() -> Result<()> {
                 idx,
                 fixture.name
             );
+            let expected_receipt_variance =
+                receipt.xor_due.checked_sub(&receipt.xor_after_haircut)?;
             ensure!(
-                receipt.xor_variance == receipt.xor_due - receipt.xor_after_haircut,
+                receipt.xor_variance == expected_receipt_variance,
                 "receipt {} in {} has inconsistent variance field",
                 idx,
                 fixture.name

@@ -1139,6 +1139,8 @@ mod model {
         FindSorafsProofOutcome(sorafs::prelude::FindSorafsProofOutcome),
         /// Fetch a cursor-bounded page of finalized PDP/PoTR proof-outcome events.
         FindSorafsProofOutcomeEvents(sorafs::prelude::FindSorafsProofOutcomeEvents),
+        /// Fetch a cursor-bounded page of finalized reputation-journal events.
+        FindSorafsReputationJournalEvents(sorafs::prelude::FindSorafsReputationJournalEvents),
         /// Fetch the active authoritative `SoraFS` moderation policy.
         FindSorafsModerationPolicy(sorafs::prelude::FindSorafsModerationPolicy),
         /// Fetch one authoritative moderation appeal intake and sortition lifecycle.
@@ -1317,10 +1319,14 @@ mod model {
         SorafsRepairStatus(crate::sorafs::moderation_ledger::RepairFinalizedStatusV1),
         /// Cursor-bounded page of committed repair-ledger events.
         SorafsRepairEventPage(crate::sorafs::moderation_ledger::RepairFinalizedEventPageV1),
-        /// Finalized chain-authoritative PDP or PoTR proof outcome.
+        /// Finalized chain-authoritative PDP or `PoTR` proof outcome.
         SorafsProofOutcome(crate::sorafs::proof_ledger::ProofOutcomeFinalizedRecordV1),
         /// Cursor-bounded page of committed PDP/PoTR proof-outcome events.
         SorafsProofOutcomeEventPage(crate::sorafs::proof_ledger::ProofOutcomeFinalizedEventPageV1),
+        /// Cursor-bounded page of committed reputation-journal events.
+        SorafsReputationJournalEventPage(
+            crate::sorafs::reputation::ReputationJournalFinalizedEventPageV1,
+        ),
         /// Active authoritative `SoraFS` moderation policy payload.
         SorafsModerationPolicy(crate::sorafs::moderation_ledger::ModerationLedgerPolicyRecord),
         /// Authoritative appeal intake, `PoP` snapshot, and sortition lifecycle.
@@ -5414,6 +5420,9 @@ pub mod sorafs {
                 ProofOutcomeFinalizedCursorV1, ProofOutcomeFinalizedEventCursorV1,
                 ProofOutcomeKindV1,
             },
+            reputation::{
+                ReputationJournalFinalizedCursorV1, ReputationJournalFinalizedEventCursorV1,
+            },
             reserve::{ReserveFinalizedCursorV1, ReserveFinalizedEventCursorV1},
         },
     };
@@ -5701,7 +5710,7 @@ pub mod sorafs {
             pub limit: u32,
         }
 
-        /// Fetch one finalized chain-authoritative PDP or PoTR proof outcome.
+        /// Fetch one finalized chain-authoritative PDP or `PoTR` proof outcome.
         #[derive(Copy)]
         pub struct FindSorafsProofOutcome {
             /// Proof protocol namespace for the exactly-once identity.
@@ -5719,6 +5728,17 @@ pub mod sorafs {
             pub expected_finalized_cursor: Option<ProofOutcomeFinalizedCursorV1>,
             /// Exclusive committed-event cursor.
             pub after: Option<ProofOutcomeFinalizedEventCursorV1>,
+            /// Requested page size; validated against the hard query ceiling.
+            pub limit: u32,
+        }
+
+        /// Fetch an exclusive-cursor page from the one global reputation journal.
+        #[derive(Copy)]
+        pub struct FindSorafsReputationJournalEvents {
+            /// Optional finalized anchor; absent selects the latest committed view.
+            pub expected_finalized_cursor: Option<ReputationJournalFinalizedCursorV1>,
+            /// Exclusive globally sequenced committed-event cursor.
+            pub after: Option<ReputationJournalFinalizedEventCursorV1>,
             /// Requested page size; validated against the hard query ceiling.
             pub limit: u32,
         }
@@ -6137,6 +6157,16 @@ pub mod sorafs {
         }
     }
 
+    impl fmt::Display for FindSorafsReputationJournalEvents {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(
+                f,
+                "Find committed SoraFS reputation-journal events with limit {}",
+                self.limit
+            )
+        }
+    }
+
     impl fmt::Display for FindSorafsModerationPolicy {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             f.write_str("Find active SoraFS moderation policy")
@@ -6257,6 +6287,7 @@ pub mod sorafs {
             FindSorafsPopIssuerPolicy, FindSorafsPopRegistryStatus,
             FindSorafsPopRevocationByNonceCommitment, FindSorafsPopRevocationPublicationByVersion,
             FindSorafsProofOutcome, FindSorafsProofOutcomeEvents, FindSorafsProviderOwner,
+            FindSorafsReputationJournalEvents,
             FindSorafsRepairEvents, FindSorafsRepairStatus, FindSorafsRepairTask,
             FindSorafsRepairTasks, FindSorafsReserveAppealById, FindSorafsReserveAppeals,
             FindSorafsReserveEvents, FindSorafsReserveMovementById, FindSorafsReserveMovements,
@@ -6439,6 +6470,10 @@ impl_sorafs_orderbook_singular_query!(
 impl_sorafs_orderbook_singular_query!(
     sorafs::prelude::FindSorafsProofOutcomeEvents
         => crate::sorafs::proof_ledger::ProofOutcomeFinalizedEventPageV1
+);
+impl_sorafs_orderbook_singular_query!(
+    sorafs::prelude::FindSorafsReputationJournalEvents
+        => crate::sorafs::reputation::ReputationJournalFinalizedEventPageV1
 );
 impl_sorafs_orderbook_singular_query!(
     sorafs::prelude::FindSorafsModerationPolicy
@@ -7459,6 +7494,12 @@ mod tests {
             height: 9,
             block_hash: [0xA9; 32],
         };
+        let reputation_cursor =
+            crate::sorafs::reputation::ReputationJournalFinalizedCursorV1 {
+                height: 10,
+                block_hash: [0xAA; 32],
+                finalized_at_unix_ms: 1_700_000_010_000,
+            };
         let queries: Vec<SingularQueryBox> = vec![
             sorafs::prelude::FindSorafsOrderbookPolicy.into(),
             sorafs::prelude::FindSorafsOrderbookOrderById::new([0x11; 32]).into(),
@@ -7580,6 +7621,19 @@ mod tests {
                         block_height: 9,
                         block_hash: [0xA9; 32],
                         event_index: 0,
+                    },
+                ),
+                25,
+            )
+            .into(),
+            sorafs::prelude::FindSorafsReputationJournalEvents::new(
+                Some(reputation_cursor),
+                Some(
+                    crate::sorafs::reputation::ReputationJournalFinalizedEventCursorV1 {
+                        sequence: 8,
+                        block_height: 10,
+                        block_hash: reputation_cursor.block_hash,
+                        event_index: 1,
                     },
                 ),
                 25,

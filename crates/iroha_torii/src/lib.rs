@@ -2123,6 +2123,12 @@ struct AppState {
     #[cfg(feature = "app_api")]
     sorafs_gateway_tls_state: Option<Arc<RwLock<sorafs::gateway::TlsStateSnapshot>>>,
     #[cfg(feature = "app_api")]
+    sorafs_gateway_compliance_controller:
+        Option<Arc<sorafs::gateway::GatewayComplianceController>>,
+    #[cfg(feature = "app_api")]
+    sorafs_gateway_compliance_feed_transport:
+        Option<Arc<dyn sorafs::gateway::GatewayComplianceFeedTransport>>,
+    #[cfg(feature = "app_api")]
     sorafs_pin_policy: sorafs::PinSubmissionPolicy,
     #[cfg(feature = "app_api")]
     sorafs_blinded_resolver: Option<Arc<sorafs::BlindedCidResolver>>,
@@ -52956,83 +52962,135 @@ impl Torii {
                 .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
         );
         builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_RESERVE_LIFECYCLE_POST,
-            catalog_post(sorafs::api::handle_post_sorafs_reserve_lifecycle_update),
+            &route_catalog::contracts_and_verification_keys::SORAFS_RESERVE_POLICY_GET,
+            catalog_get(sorafs::reserve_api::handle_get_sorafs_reserve_policy)
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
         );
         builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_RESERVE_LIFECYCLE_GET,
-            catalog_get(sorafs::api::handle_get_sorafs_reserve_lifecycle_snapshot),
+            &route_catalog::contracts_and_verification_keys::SORAFS_RESERVE_PROVIDERS_GET,
+            catalog_get(sorafs::reserve_api::handle_get_sorafs_reserve_providers)
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
         );
         builder.route(
-        &route_catalog::contracts_and_verification_keys::SORAFS_RESERVE_LIFECYCLE_PROVIDERS_BY_PROVIDER_ID_HEX_GET,
-        catalog_get(sorafs::api::handle_get_sorafs_reserve_lifecycle_provider),
-    );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_RESERVE_LIFECYCLE_POLICY_POST,
-            catalog_post(sorafs::api::handle_post_sorafs_reserve_lifecycle_policy),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_RESERVE_LIFECYCLE_POLICY_GET,
-            catalog_get(sorafs::api::handle_get_sorafs_reserve_lifecycle_policy),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_RESERVE_LIFECYCLE_ADVANCE_POST,
-            catalog_post(sorafs::api::handle_post_sorafs_reserve_lifecycle_advance),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_RESERVE_CREDIT_LINES_GET,
-            catalog_get(sorafs::api::handle_get_sorafs_reserve_credit_lines),
-        );
-        builder.route(
-        &route_catalog::contracts_and_verification_keys::SORAFS_RESERVE_CREDIT_LINES_PROVIDERS_BY_PROVIDER_ID_HEX_GET,
-        catalog_get(sorafs::api::handle_get_sorafs_reserve_credit_line_provider),
-    );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_RESERVE_LIFECYCLE_EVENTS_GET,
-            catalog_get(sorafs::api::handle_get_sorafs_reserve_lifecycle_events),
-        );
-        builder.route(
-        &route_catalog::contracts_and_verification_keys::SORAFS_RESERVE_LIFECYCLE_EVENTS_STREAM_GET,
-        catalog_get(sorafs::api::handle_get_sorafs_reserve_lifecycle_events_stream)
-            .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
-    );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_RESERVE_LIFECYCLE_EVENTS_WS_GET,
-            catalog_get(sorafs::api::handle_get_sorafs_reserve_lifecycle_events_ws)
-                .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
+            &route_catalog::contracts_and_verification_keys::SORAFS_RESERVE_PROVIDERS_BY_PROVIDER_ID_HEX_GET,
+            catalog_get(sorafs::reserve_api::handle_get_sorafs_reserve_provider)
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::SORAFS_RESERVE_TOP_UP_POST,
-            catalog_post(sorafs::api::handle_post_sorafs_reserve_top_up),
+            catalog_post(sorafs::reserve_api::handle_post_sorafs_reserve_top_up),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::SORAFS_RESERVE_WITHDRAW_POST,
-            catalog_post(sorafs::api::handle_post_sorafs_reserve_withdrawal),
+            catalog_post(sorafs::reserve_api::handle_post_sorafs_reserve_withdrawal),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::SORAFS_RESERVE_MOVEMENTS_GET,
-            catalog_get(sorafs::api::handle_get_sorafs_reserve_movements),
+            catalog_get(sorafs::reserve_api::handle_get_sorafs_reserve_movements)
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
         );
         builder.route(
-        &route_catalog::contracts_and_verification_keys::SORAFS_RESERVE_MOVEMENTS_BY_MOVEMENT_ID_HEX_CUSTODY_POST,
-        catalog_post(sorafs::api::handle_post_sorafs_reserve_movement_custody),
-    );
+            &route_catalog::contracts_and_verification_keys::SORAFS_RESERVE_MOVEMENTS_BY_MOVEMENT_ID_HEX_GET,
+            catalog_get(sorafs::reserve_api::handle_get_sorafs_reserve_movement)
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+        );
         builder.route(
-        &route_catalog::contracts_and_verification_keys::SORAFS_RESERVE_BALANCES_BY_PROVIDER_ID_HEX_GET,
-        catalog_get(sorafs::api::handle_get_sorafs_reserve_balance),
-    );
+            &route_catalog::contracts_and_verification_keys::SORAFS_RESERVE_MOVEMENTS_BY_MOVEMENT_ID_HEX_DECISION_POST,
+            catalog_post(sorafs::reserve_api::handle_post_sorafs_reserve_movement_decision),
+        );
+        builder.route(
+            &route_catalog::contracts_and_verification_keys::SORAFS_RESERVE_CREDIT_DRAW_POST,
+            catalog_post(sorafs::reserve_api::handle_post_sorafs_reserve_credit_draw),
+        );
+        builder.route(
+            &route_catalog::contracts_and_verification_keys::SORAFS_RESERVE_CREDIT_REPAY_POST,
+            catalog_post(sorafs::reserve_api::handle_post_sorafs_reserve_credit_repay),
+        );
         builder.route(
             &route_catalog::contracts_and_verification_keys::SORAFS_RESERVE_APPEALS_POST,
-            catalog_post(sorafs::api::handle_post_sorafs_reserve_appeal),
+            catalog_post(sorafs::reserve_api::handle_post_sorafs_reserve_appeal),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::SORAFS_RESERVE_APPEALS_GET,
-            catalog_get(sorafs::api::handle_get_sorafs_reserve_appeals),
+            catalog_get(sorafs::reserve_api::handle_get_sorafs_reserve_appeals)
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
         );
         builder.route(
-        &route_catalog::contracts_and_verification_keys::SORAFS_RESERVE_APPEALS_BY_APPEAL_ID_HEX_DECISION_POST,
-        catalog_post(sorafs::api::handle_post_sorafs_reserve_appeal_decision),
-    );
+            &route_catalog::contracts_and_verification_keys::SORAFS_RESERVE_APPEALS_BY_APPEAL_ID_HEX_GET,
+            catalog_get(sorafs::reserve_api::handle_get_sorafs_reserve_appeal)
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+        );
+        builder.route(
+            &route_catalog::contracts_and_verification_keys::SORAFS_RESERVE_APPEALS_BY_APPEAL_ID_HEX_DECISION_POST,
+            catalog_post(sorafs::reserve_api::handle_post_sorafs_reserve_appeal_decision),
+        );
+        builder.route(
+            &route_catalog::contracts_and_verification_keys::SORAFS_RESERVE_EVENTS_GET,
+            catalog_get(sorafs::reserve_api::handle_get_sorafs_reserve_events)
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+        );
+        builder.route(
+            &route_catalog::contracts_and_verification_keys::SORAFS_RESERVE_EVENTS_STREAM_GET,
+            catalog_get(sorafs::reserve_api::handle_get_sorafs_reserve_events_stream)
+                .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
+        );
+        builder.route(
+            &route_catalog::contracts_and_verification_keys::SORAFS_RESERVE_EVENTS_WS_GET,
+            catalog_get(sorafs::reserve_api::handle_get_sorafs_reserve_events_ws)
+                .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
+        );
+        builder.route(
+            &route_catalog::contracts_and_verification_keys::SORAFS_GATEWAY_COMPLIANCE_FEEDS_BY_FEED_ID_GET,
+            catalog_get(
+                sorafs::gateway_compliance_api::handle_get_sorafs_gateway_compliance_feed,
+            )
+            .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+        );
+        builder.route(
+            &route_catalog::contracts_and_verification_keys::SORAFS_GATEWAY_COMPLIANCE_STATUS_GET,
+            catalog_get(
+                sorafs::gateway_compliance_api::handle_get_sorafs_gateway_compliance_status,
+            )
+            .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+        );
+        builder.route(
+            &route_catalog::contracts_and_verification_keys::SORAFS_GATEWAY_COMPLIANCE_STAGE_POST,
+            catalog_post(
+                sorafs::gateway_compliance_api::handle_post_sorafs_gateway_compliance_stage,
+            )
+            .layer(DefaultBodyLimit::max(
+                sorafs::gateway::MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1,
+            ))
+            .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+        );
+        builder.route(
+            &route_catalog::contracts_and_verification_keys::SORAFS_GATEWAY_COMPLIANCE_ACKNOWLEDGE_POST,
+            catalog_post(
+                sorafs::gateway_compliance_api::handle_post_sorafs_gateway_compliance_acknowledge,
+            )
+            .layer(DefaultBodyLimit::max(
+                sorafs::gateway::MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1,
+            ))
+            .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+        );
+        builder.route(
+            &route_catalog::contracts_and_verification_keys::SORAFS_GATEWAY_COMPLIANCE_PROMOTE_POST,
+            catalog_post(
+                sorafs::gateway_compliance_api::handle_post_sorafs_gateway_compliance_promote,
+            )
+            .layer(DefaultBodyLimit::max(0))
+            .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+        );
+        builder.route(
+            &route_catalog::contracts_and_verification_keys::SORAFS_GATEWAY_COMPLIANCE_ROLLBACK_POST,
+            catalog_post(
+                sorafs::gateway_compliance_api::handle_post_sorafs_gateway_compliance_rollback,
+            )
+            .layer(DefaultBodyLimit::max(
+                sorafs::gateway::MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1,
+            ))
+            .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+        );
         builder.route(
             &route_catalog::contracts_and_verification_keys::SORAFS_APPEALS_PRICING_CONFIG_GET,
             catalog_get(sorafs::api::handle_get_sorafs_appeal_pricing_config),
@@ -55703,6 +55761,12 @@ impl Torii {
             );
         }
         #[cfg(feature = "app_api")]
+        if sorafs_node.is_enabled() && config.sorafs_gateway.compliance.is_none() {
+            panic!(
+                "torii.sorafs.storage.enabled requires the governed torii.sorafs.gateway.compliance controller"
+            );
+        }
+        #[cfg(feature = "app_api")]
         let sorafs_gateway_security = if sorafs_node.is_enabled() {
             Some(build_sorafs_gateway_security(
                 &config.sorafs_gateway,
@@ -56460,6 +56524,14 @@ impl Torii {
             sorafs_gateway_tls_state: gateway_components
                 .as_ref()
                 .map(|components| Arc::clone(&components.tls_state)),
+            #[cfg(feature = "app_api")]
+            sorafs_gateway_compliance_controller: gateway_components
+                .as_ref()
+                .and_then(|components| components.compliance_controller.clone()),
+            #[cfg(feature = "app_api")]
+            sorafs_gateway_compliance_feed_transport: gateway_components
+                .as_ref()
+                .and_then(|components| components.compliance_feed_transport.clone()),
             #[cfg(feature = "app_api")]
             sorafs_pin_policy: self.sorafs_pin_policy.clone(),
             #[cfg(feature = "app_api")]
@@ -57330,6 +57402,8 @@ fn gateway_compliance_controller_config(
         .collect();
     sorafs::gateway::GatewayComplianceControllerConfig {
         trust_policy,
+        region_scope: format!("region:{}", config.region_id),
+        gateway_scope: format!("gateway:{}", config.gateway_id),
         feeds,
         fetch_limits: GatewayComplianceFetchLimits {
             max_encoded_bytes: usize::try_from(config.max_encoded_bytes.0).unwrap_or_else(|_| {
@@ -57363,6 +57437,17 @@ fn build_sorafs_gateway_security(
         TlsStateSnapshot,
     };
 
+    if config.compliance.is_some()
+        && (config.denylist.path.is_some()
+            || config.denylist.catalog_path.is_some()
+            || !config.denylist.opt_out_packs.is_empty()
+            || !config.denylist.extra_packs.is_empty()
+            || config.denylist.jurisdiction.is_some())
+    {
+        panic!(
+            "governed SoraFS gateway compliance cannot run with the obsolete unsigned denylist bootstrap authority"
+        );
+    }
     let denylist = Arc::new(GatewayDenylist::new());
     let denylist_catalog = populate_gateway_denylist(&denylist, &config.denylist).map(Arc::new);
     let rate_limit = GatewayRateLimitConfig {
@@ -57527,6 +57612,8 @@ mod gateway_runtime_config_tests {
         iroha_config::parameters::actual::SorafsGatewayCompliance {
             checkpoint_path,
             policy_id: [0xA5; 32],
+            region_id: "apac".into(),
+            gateway_id: "gateway-apac".into(),
             catalog_threshold: 2,
             catalog_signers: vec![
                 compliance_signer("catalog-a", 0x11),
@@ -57611,6 +57698,11 @@ mod gateway_runtime_config_tests {
         let mapped = gateway_compliance_controller_config(&source);
 
         assert_eq!(mapped.trust_policy.policy_id, source.policy_id);
+        assert_eq!(mapped.region_scope, format!("region:{}", source.region_id));
+        assert_eq!(
+            mapped.gateway_scope,
+            format!("gateway:{}", source.gateway_id)
+        );
         assert_eq!(
             mapped.trust_policy.catalog_threshold,
             source.catalog_threshold
@@ -61183,6 +61275,7 @@ pub(crate) mod tests_runtime_handlers {
         let sorafs_node = sorafs_node::NodeHandle::new(
             sorafs_node::config::StorageConfig::builder()
                 .enabled(false)
+                .data_dir(kura.store_root().join("sorafs"))
                 .build(),
         );
         #[cfg(feature = "app_api")]
@@ -61481,6 +61574,12 @@ pub(crate) mod tests_runtime_handlers {
             sorafs_gateway_denylist_catalog: None,
             #[cfg(feature = "app_api")]
             sorafs_gateway_tls_state: None,
+            #[cfg(feature = "app_api")]
+            sorafs_gateway_compliance_controller: Some(
+                sorafs::gateway::allow_all_gateway_compliance_controller_for_tests(),
+            ),
+            #[cfg(feature = "app_api")]
+            sorafs_gateway_compliance_feed_transport: None,
             #[cfg(feature = "app_api")]
             sorafs_pin_policy: sorafs_pin_policy.clone(),
             #[cfg(feature = "app_api")]

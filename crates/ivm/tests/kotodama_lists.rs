@@ -1,6 +1,11 @@
 //! End-to-end coverage for bounded Kotodama List lowering and execution.
 
-use ivm::{IVM, KotodamaCompiler, ProgramMetadata};
+use std::collections::BTreeMap;
+
+use iroha_crypto::Hash;
+use iroha_data_model::prelude::Name;
+use iroha_primitives::json::Json;
+use ivm::{IVM, KotodamaCompiler, ProgramMetadata, host::DefaultHost, pointer_abi::PointerType};
 use ivm_abi::{list::ListLayoutV1, sum::SumLayoutV1};
 mod common;
 
@@ -65,6 +70,56 @@ fn positive_gas_delta(measured: u64, control: u64, operation: &str) -> u64 {
         "{operation} must consume gas beyond its matched control: measured={measured}, control={control}"
     );
     measured - control
+}
+
+fn argument_tlv(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(7 + payload.len() + Hash::LENGTH);
+    out.extend_from_slice(&(pointer_type as u16).to_be_bytes());
+    out.push(1);
+    out.extend_from_slice(
+        &u32::try_from(payload.len())
+            .expect("test payload fits u32")
+            .to_be_bytes(),
+    );
+    out.extend_from_slice(payload);
+    out.extend_from_slice(Hash::new(payload).as_ref());
+    out
+}
+
+fn run_parameterized_int_entrypoint(program: &[u8], index: i64) -> (IVM, u64) {
+    let metadata = ProgramMetadata::parse(program).expect("parse parameterized List metadata");
+    let entrypoint = metadata
+        .contract_interface
+        .as_ref()
+        .expect("parameterized List contract interface")
+        .entrypoints
+        .iter()
+        .find(|entrypoint| entrypoint.name == "main")
+        .expect("main entrypoint");
+    let schema = entrypoint
+        .argument_schema
+        .as_ref()
+        .expect("parameterized List schema");
+    let entrypoint_pc =
+        u64::try_from(metadata.prefix_len()).expect("prefix fits u64") + entrypoint.entry_pc;
+    let payload =
+        Json::from_str_norito(&format!(r#"{{"index":"{index}"}}"#)).expect("valid List arguments");
+    let record =
+        ivm::encode_argument_record_from_json(schema, &payload).expect("encode List arguments");
+    let key: Name = "trigger_event_json".parse().expect("public input key");
+    let host = DefaultHost::new().with_public_inputs(BTreeMap::from([(
+        key,
+        argument_tlv(PointerType::NoritoBytes, &record),
+    )]));
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_host(host);
+    vm.load_program(program)
+        .expect("load parameterized List program");
+    vm.set_program_counter(entrypoint_pc)
+        .expect("select parameterized List entrypoint");
+    vm.run().expect("execute parameterized List program");
+    let gas = u64::MAX.saturating_sub(vm.remaining_gas());
+    (vm, gas)
 }
 
 #[test]
@@ -142,29 +197,58 @@ fn list_gas_grows_with_the_active_element_count_at_fixed_capacity() {
 }
 
 #[test]
-fn get_gas_is_constant_for_present_indices_and_cheaper_for_missing_indices() {
+fn get_gas_is_deterministic_and_does_not_scan_preceding_elements() {
+    let program = KotodamaCompiler::new()
+        .compile_source(
+            r#"
+            seiyaku ListGetGas {
+                view fn main(int index) -> int {
+                    let List<int, 8> values = [10, 20, 30, 40];
+                    return values.get(index).unwrap_or(99);
+                }
+            }
+            "#,
+        )
+        .expect("compile parameterized List get contract");
+    let control = KotodamaCompiler::new()
+        .compile_source(
+            r#"
+            seiyaku ListGetGasControl {
+                view fn main(int index) -> int {
+                    return 0;
+                }
+            }
+            "#,
+        )
+        .expect("compile matched argument-decoding control");
+
     let mut samples = Vec::new();
     for (index, expected) in [(0, 10), (1, 20), (3, 40), (8, 99)] {
-        let (vm, gas) = run_main_body_with_gas(
-            "int",
-            &format!(
-                r#"
-            let List<int, 8> values = [10, 20, 30, 40];
-            return values.get({index}).unwrap_or(99);
-            "#
-            ),
-        );
+        let (vm, gas) = run_parameterized_int_entrypoint(&program, index);
+        let (_, control_gas) = run_parameterized_int_entrypoint(&control, index);
+        let (_, repeated_gas) = run_parameterized_int_entrypoint(&program, index);
+        let (_, repeated_control_gas) = run_parameterized_int_entrypoint(&control, index);
         assert_eq!(common::decode_i64_register(&vm, 10), expected);
-        samples.push((index, gas));
+        let operation_gas = gas
+            .checked_sub(control_gas)
+            .expect("List get exceeds matched decode control");
+        let repeated_operation_gas = repeated_gas
+            .checked_sub(repeated_control_gas)
+            .expect("repeated List get exceeds matched decode control");
+        assert_eq!(
+            operation_gas, repeated_operation_gas,
+            "identical List get input must consume identical gas"
+        );
+        samples.push((index, operation_gas));
     }
 
-    assert_eq!(
-        samples[0].1, samples[1].1,
-        "get must not scan preceding elements"
+    assert!(
+        samples[0].1 < samples[1].1,
+        "canonical exact-int zero must retain its cheaper zero-magnitude path: {samples:?}"
     );
     assert_eq!(
         samples[1].1, samples[2].1,
-        "get must have constant work for every present index"
+        "get must not scan preceding elements with the same exact-int width: {samples:?}"
     );
     assert!(
         samples[3].1 < samples[0].1,

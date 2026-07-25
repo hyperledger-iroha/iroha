@@ -396,6 +396,7 @@ fn sora_parliament_zk_lifecycle_with_20_citizens() {
         .get(&referendum_id)
         .copied()
         .expect("referendum exists before enact");
+    let proposal_fingerprint = proposal_after_finalize.kind.fingerprint();
 
     let header_3 = BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0);
     let mut block_3 = state.block(header_3);
@@ -403,7 +404,7 @@ fn sora_parliament_zk_lifecycle_with_20_citizens() {
 
     EnactReferendum {
         referendum_id: proposal_id,
-        preimage_hash: [0; 32],
+        preimage_hash: proposal_fingerprint,
         at_window: AtWindow {
             lower: referendum_window.h_start,
             upper: referendum_window.h_end,

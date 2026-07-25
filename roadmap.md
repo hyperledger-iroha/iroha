@@ -62,12 +62,31 @@ reconciliation now consume one complete finalized native projection. Source
 validation and four-peer exactly-once evidence remain release-blocking for the
 repair lane.
 
-Active local-authority debt remains in the other three ledger-backed domains.
-The `sorafs_node` local orderbook and reserve runtimes and the process-local
-moderation ballot/scheduler state must be removed from production paths in
-favor of signed native transactions and rebuildable finalized-chain
-projections. The orderbook, reserve/rent, and moderation lanes remain open
-until those authority removals and distributed recovery proofs are complete.
+The reputation lane now has a native committed input journal with governed
+predecessor-bound recorder policy, one globally contiguous sequence, typed
+payload-free committed events, and a fixed-view finalized query. PoR terminals
+and stream-token outcomes have exact append instructions; canonical capacity
+dispute registration and resolution update the dispute record and journal
+atomically. This is source implementation only. Integrated validation,
+authenticated Torii/OpenAPI and SDK transaction/query projections, committed
+PDP/PoTR/repair/orderbook/reserve producers, the durable finalized-cursor
+ingest/reconciliation/outbox service, external threshold signing, and reviewed
+deployment evidence remain open. The existing local
+`/v1/sorafs/reputation/*` snapshot checkpoint is not the production committed
+journal projection.
+
+Within the four ledger-authority domains enumerated by V1-C04, active
+local-authority debt remains only in moderation.
+The process-local reserve runtime, checkpoint, scheduler, mutation API, and
+obsolete routes are deleted; reserve mutations now forward exact caller-signed
+native transactions and reserve reads use authenticated finalized projections.
+Its metrics now rebuild from the typed finalized journal and committed provider
+accounts with bounded labels and an explicit reconciled-height readiness bit.
+The competing `sorafs_node` orderbook, checkpoint, config, mutation/event API,
+and pre-release snapshot wire are also deleted. The reserve/rent and orderbook
+lanes remain open for full source validation and reviewed distributed recovery
+evidence. Process-local moderation ballot state must still be removed in favor
+of signed native transactions and rebuildable finalized-chain projections.
 Taira and Minamoto mutation remains separately authorized cutover work.
 
 ## Memory-containment follow-ups
@@ -244,71 +263,6 @@ pins the pair bound, with defensive ceilings of 8 KiB per step and exactly
 21,764 bytes per canonical pair. Those ceilings are not availability signals;
 promotion must pin measured values and pass independent review and device
 evidence.
-
-Torii readiness carries a required nullable authenticated `artifact_set` bound
-to exact roles `kagemusha_recursive_step_eq_v4_verifier_record` and
-`kagemusha_recursive_step_ep_v4_verifier_record` with circuits
-`kagemusha-recursive-spend-step-eq-compact-layout-v5` and
-`kagemusha-recursive-spend-step-ep-compact-lineage-v5`, respectively.
-A null set requires both recursive records and backend construction to be
-unavailable with exactly one `recursive_v4_registry_unavailable` or
-`recursive_v4_registry_malformed` blocker; a present set forbids both.
-`proof_backend_available` reports authenticated backend construction
-independently. `recursive_lineage_supported` additionally requires the
-authenticated artifact set and distinct active Eq/Ep records, with
-`recursive_lineage_unavailable` present exactly when that conjunction is
-false. `ready` is true only when the complete blocker set is empty.
-
-The ABI-21/V4 recursive transport and data model are the only release target.
-V2 remains only for unchanged amount, note/opening, authorization, membership,
-finality, recipient/acknowledgement, and other explicitly reused leaf
-primitives. No decoder upgrades retired V2/V3 recursive lifecycle bytes, and no
-work is planned for the retired nested-init, full-anchor peer, padded
-tag-history, duplicated peer-identity, or linear lineage-witness shapes.
-
-SCCP first-release readiness no longer carries a production diagnostic fixture
-activation path: the governance CLI has no TAIRA/TRON diagnostic bundle command,
-runtime crates no longer publish `sccp-test-fixtures` feature aliases, and
-transparent message admission requires configured production source material
-instead of accepting the local TAIRA/TRON diagnostic proof.
-
-The exact-numeric Kotodama V1 implementation and migration are complete:
-type-first declarations, signed 512-bit `int`, exact `decimal`, nominal
-non-negative `quantity`, canonical compact frames and JSON, staged logical-limb
-gas, authenticated 49-byte ABI headers, manifests, and all mapped `.to`
-artifacts now share one first-release descriptor. No retired numeric type,
-declaration order, pointer layout, quote/refund meter, old artifact, or
-compatibility migration is planned.
-
-Witness-bearing `Secret<int|decimal|quantity>` execution remains a deliberate
-fail-closed release gate. The current Halo2 `IvmExecutionBindV1` circuit binds
-public commitments but does not constrain IVM transitions, memory, syscalls,
-typed witnesses, `crypto::valcom`, effects, or gas. Production `CoreHost`
-therefore rejects `GET_PRIVATE_INPUT`, and consensus dispatch rejects every
-selector that can reach it. Release enablement requires the complete semantic
-proof statement and adversarial obligations documented in
-`crates/ivm/docs/kotodama_gap_analysis.md`; a binding-only proof, raw witness
-transport, compiler metadata, or the limited MockProver circuit cannot satisfy
-that gate.
-
-Remaining exact-numeric release work is evidence only: archive the authenticated
-Apple M1 Ultra reference calibration and slowest-supported-tier run for the
-exact release SHA, then pass full workspace build/test and strict Clippy,
-the supported-architecture parity matrix, Linux sanitizer fuzzing, and every
-platform SDK shared-fixture job. The broader IVM/Kotodama/Torii corridor still
-requires the non-skipped four-peer typed-query pagination exercise and
-controlled 5% performance gates against the canonical type-first authorized
-Kotodama grammar and separate suite/runtime artifact identities. Future ABI
-descriptor changes must regenerate the header documentation,
-every mapped `.to` golden, and the compiler manifests together. No retired
-grammar, numeric type, 17-byte deployable header, CRUD route, carrier, or
-compatibility migration is planned.
-
-Kotodama register allocation is now interval-level across ABI clobbers rather
-than selected once per function. Remaining release evidence is to run the
-focused allocator/codegen/runtime regressions and phase benchmarks after the
-shared Cargo corridor clears; no compatibility allocator or alternate ABI
-calling convention is planned.
 
 ## SORA Economic Constitution
 
@@ -3225,11 +3179,21 @@ excluded from the first release.
   canonical-alias JSON probe now reads through no-follow descriptors, closing
   the SF1 determinism report's prior Node-helper gap without reopening fixture
   symlink-following in CI.
-- SoraFS reputation V1 now has the deterministic on-chain/off-chain core:
-  canonical Norito/JSON schemas, fixed-point provider scoring, fixed-point
-  EigenTrust-style trust-edge iteration, degradation flags, snapshot Merkle
-  roots/proofs, Governance DAG payload validation, and scoreboard consumption
-  through `reputation_score_bps`. `sorafs_cli reputation verify` also validates
+- SoraFS reputation V1 now has the deterministic snapshot/proof core and a
+  native committed input journal. The journal pins a governed
+  predecessor-bound recorder-policy history, one global contiguous sequence,
+  exact source revisions and predecessors, provider/policy/authority/block-time
+  binding, payload-free typed commit events, and a fixed-view finalized query.
+  PoR terminals and stream-token outcomes have exact native append
+  instructions. `RegisterCapacityDispute` appends `Opened` atomically with the
+  canonical dispute record, while `ResolveSorafsCapacityDispute` updates the
+  record and appends its exact revision-two `Resolved` event atomically;
+  capacity telemetry may apply penalties and alerts but never creates a
+  dispute. The existing snapshot core retains canonical Norito/JSON schemas,
+  fixed-point provider scoring, fixed-point EigenTrust-style trust-edge
+  iteration, degradation flags, snapshot Merkle roots/proofs, Governance DAG
+  payload validation, and scoreboard consumption through
+  `reputation_score_bps`. `sorafs_cli reputation verify` also validates
   archived Norito snapshots and optional provider Merkle proofs, and Torii now
   exposes the local SoraFS reputation publish/latest/provider-proof surface at
   `/v1/sorafs/reputation/*`. `sorafs_cli reputation publish`, `snapshot`, and
@@ -4612,10 +4576,16 @@ excluded from the first release.
   snapshot-bound reputation artifact kind against the publish/latest
   `snapshot_id_hex`/`merkle_root_hex` binding before final readiness can report
   ready.
-  Remaining SFM-3 rollout work is deploying the ingest/publisher service and
-  capturing live run evidence that passes this gate, not the scoring, proof,
-  local Torii API, cache validators, SSE/WebSocket push, SDK convenience
-  clients, operator CLI core, local observability wiring, or evidence verifier.
+  Remaining SFM-3 work includes integrated source validation, authenticated
+  Torii/OpenAPI and SDK journal transaction/query projections, committed
+  PDP/PoTR/repair/orderbook/reserve producers, and the durable finalized-cursor
+  ingest/reconciliation/outbox service that emits deterministic signing
+  material while threshold signing remains external. The service, publisher,
+  and regional API must then be deployed and produce live evidence that passes
+  the gate. The existing local Torii snapshot API, cache validators,
+  SSE/WebSocket push, SDK convenience clients, operator CLI core, local
+  observability wiring, and evidence verifier remain foundations, but those
+  snapshot routes are not the committed journal projection.
   The rollout-gate static contract now pins the live reputation ingest
   pipeline, scoring engine, snapshot publisher, regional public API/GraphQL
   gateway, S3/IPFS publication, and production promotion surfaces as unshipped
@@ -5897,21 +5867,23 @@ excluded from the first release.
   `false`, now has focused missing-field regressions proving those
   payload-safety flags and `critical_alerts_firing` must be explicitly encoded
   as `false`, validates each generated artifact through the SFM-4 checker
-  contract, and writes atomically without following output symlinks. Remaining
-		  SFM-4 gateway compliance production work is the always-on compliance
-  controller daemon, persisted production catalog state, moderation
-  toggle/override service deployment,
-  deployed SFM-4c receipt publication, and captured staged multi-gateway
-  evidence that passes this gate. The rollout-gate static contract now pins
-  the compliance controller, moderation-toggle service, appeal override
-  service, production feed sync/ack/history endpoints, and gateway compliance
-  promotion commands as unshipped service surfaces with reusable matchers and
-  segment-aware negative controls while preserving local denylist bundle
-  tooling, GAR/proof-token helpers, honey-audit evidence, and rollout evidence
-  checkers. The static contract now also scans CLI sources for nested
-  deployed-only compliance spellings such as `compliance controller`,
-  `compliance moderation toggle`, `compliance feed-sync`, and
-  `compliance promote`, while preserving local denylist, GAR/proof-token,
+  contract, and writes atomically without following output symlinks. The
+  governed controller now survives construction in Torii `AppState`; six
+  canonical X-Iroha-signed, role-gated feed/status/stage/acknowledge/promote/
+  rollback routes expose it; and live manifest/CID/provider serving evaluates
+  the promoted catalog across global, configured-region, and configured-gateway
+  scopes. Missing or invalid serving state fails closed, and enabling the
+  controller forbids every obsolete unsigned denylist bootstrap source.
+  Remaining SFM-4 gateway compliance production work is independently audited
+  standard-daemon feed and ACME adapters, finalized appeal/hold catalog
+  producers, external threshold signing, deployed SFM-4c receipt publication,
+  and captured staged multi-gateway evidence that passes this gate. The
+  rollout-gate static contract pins that single authenticated route family and
+  rejects obsolete or competing controller, moderation-toggle, appeal-override,
+  feed-sync/history, and promotion route spellings while preserving local
+  denylist bundle tooling, GAR/proof-token helpers, honey-audit evidence, and
+  rollout evidence checkers. It also scans CLI sources for unshipped separately
+  packaged service spellings while preserving local denylist, GAR/proof-token,
   transparency source-entry, canary, and proof labels;
 - SFM-4c transparency ledger V1 data-model payloads are now shipped:
   `iroha_data_model::sorafs::transparency` defines
@@ -7151,54 +7123,18 @@ excluded from the first release.
   runtime CLI helpers, runtime service emission of those metric families,
   released native bridge artifacts, reconciliation tests, governance approval
   flow, and staged billing evidence that passes the gate; SFM-6
-  currently ships the
-  reserve policy, quote/ledger, lifecycle projection, matrix, digest,
-  dashboard, alert tooling, fail-closed rollout evidence gate, matching
-  collection planner, and a local `sorafs_node` reserve lifecycle runtime that
-  persists provider summaries, derives ledger/lifecycle projections from the
-  shared policy math, keeps sequenced lifecycle events for replay, and records
-  idempotent local top-up/withdrawal movement intents with provider balances
-  plus submitted/confirmed/rejected custody status evidence and
-  lifecycle-derived credit-line draw/accrual state, with privacy-safe
-  transparency/governance source entries derived from accepted local reserve
-  lifecycle, movement, appeal, and lifecycle-policy records,
-  plus Torii reserve runtime metrics for lifecycle-stage counts, credit-line
-  usage, defaults, appeal backlog, movement custody state, chain-reconciled
-  movement state, and reserve service request/rate-limit counters,
-  plus signed Torii lifecycle update/readback/event routes with SSE/WebSocket
-  streams and signed reserve top-up, withdrawal, private movement-history, and
-  private balance readback routes plus a signed movement custody-status update
-  route that rewinds local provider balances for rejected movement evidence
-  and advances a separate chain-confirmed reserve balance for confirmed
-  custody evidence,
-  private credit-line readback routes, and signed local reserve
-  appeal submission/decision plus lifecycle-policy update/readback routes that
-  apply effective policy windows to later local lifecycle projections,
-  with `iroha app sorafs reserve
-  top-up|withdraw|movements|status|custody|credit-lines|credit-status|appeal-submit|appeals|appeal-decide|policy-update|policy` wrapping those signed local paths
-  for operators, and accepted local appeal decisions with requested stages now
-  apply lifecycle overrides to provider summaries, credit-line state, lifecycle
-  events, and transparency readback. Local reserve lifecycle stages now also
-  publish reserve-adjusted reputation snapshots through the existing reputation
-  pipeline while preserving prior provider metrics/score where available, and
-  local orderbook ask admission now rejects providers whose reserve lifecycle
-  projection disables adverts while accepted appeal overrides can restore that
-  admission, and Torii reserve lifecycle/appeal/custody routes sync
-  advert-disabled reserve providers and rejected reserve custody movements into
-  the gateway compliance provider denylist using reserve-scoped source metadata
-  so static/operator denylist entries are preserved; later accepted reserve
-  appeals clear reserve-owned movement-custody entries when no higher-priority
-  lifecycle default remains. Already-effective lifecycle-policy updates now
-  reproject retained provider summaries into new lifecycle replay events,
-  refresh local credit-line state, and re-run the reserve gateway compliance
-  projection for affected providers. A signed local lifecycle-advance route now
-  deterministically ages retained provider summaries by whole elapsed days at an
-  operator-supplied observation timestamp, emits replay events, refreshes
-  credit-line state, and feeds the same gateway compliance and orderbook
-  admission projection. A config-backed reserve lifecycle scheduler now invokes
-  the same local advancement path on an opt-in cadence from
-  `torii.sorafs.storage.reserve_lifecycle`, with parsed initial-delay and
-  interval settings. The SFM-6 gate now also requires quote
+  now uses only native reserve policy/provider/movement/rent/lifecycle/credit/
+  repayment/appeal state and committed events. Exact caller-signed native
+  transactions enter strict durable ingress; the supervised worker derives
+  bounded rent/lifecycle operations from one finalized view and reconciles its
+  durable outbox against exact Kura outcomes. Authenticated reads and event
+  streams return typed finalized projections. The former local runtime,
+  checkpoint, scheduler, mutation bodies, compatibility aliases, and CLI
+  adapters are deleted. Reserve metrics are rebuilt from the typed finalized
+  event journal and current provider accounts, use only bounded lifecycle/status
+  labels, publish a finalized height, remain unready until pending movement and
+  appeal totals reconcile, and bind the evidence artifact to a fresh scrape
+  digest with zero recent projection failures. The SFM-6 gate also requires quote
   matrices to bind to a valid policy digest, ledger digests to bind to that policy/matrix tuple,
   and lifecycle, signed-route, movement, credit-line, appeal, metrics,
   provider-bake, and governance artifacts to carry the same payload-free
@@ -23480,140 +23416,15 @@ signed ancestor-linked solid-block header proof,
 
 ## IVM, Kotodama, and Norito
 
-**Status:** active first-release hardening.
+**Status:** external release evidence remains.
 
-- Keep the Iroha Virtual Machine syscall and pointer-ABI surface deterministic
-  across hardware and peers.
-- Freeze only the reset Kotodama V1 surface: one named `seiyaku`/`誓約` per
-  deployable source, typed HIR modules, explicit `kotoage fn`/`言挙げ fn`,
-  `view fn`, and private `fn` plus `hajimari`/`始まり` and `kaizen`/`改善`
-  lifecycle declarations, strict canonical types and namespaces, checked
-  arithmetic, bounded loops, `StateMap`, stable error enums, caller
-  `authorize(...)`, and ZK-only noninterfering `Secret<T>`. Retired spellings,
-  English declaration spellings, implicit helpers, raw host operations, and
-  AST prelude injection stay rejected rather than entering a compatibility
-  edition. Keep source-visible execution context, seiyaku queries, exact
-  kotoage grants, and test invocation branded with `seiyaku`/`kotoage`; do not
-  reintroduce English `contract`/`entrypoint` capability aliases.
-- Keep Rust as the sole canonical compiler behind `koto`, `iroha contract dev`,
-  Musubi, and the asynchronous Node binding. Browser clients use the explicit
-  compiler service. The content-addressed module graph, atomic publisher,
-  canonical formatter, structural CST, LSP, and human/JSON/SARIF diagnostics
-  must continue to share one grammar and compiler session.
-- Preserve typed-HIR test linking: standalone test modules are independently
-  parsed, resolved, and typed before their HIR items are linked and revalidated
-  as one suite; source ASTs are never textually merged. Keep canonical `NodeId`
-  and exact `SourceRange` side tables, multi-source diagnostic attribution,
-  byte-neutral source metadata, the normative grammar, CST recovery, formatter,
-  LSP data, and generated editor tables synchronized.
-- Preserve single-evaluation aggregate lowering: synthetic struct fields,
-  tuple/nested destructuring, and aggregate `Option` joins must project one
-  captured source value, while virtual pointer-backed fields must materialize
-  their exact typed literals before durable-state encoding. Keep mixed
-  pointer/scalar `StateMap` requests, present/absent/nested fallback side
-  effects, and malformed dynamic-pointer cases in the release regression set.
-- Keep local test suites immutable after compilation. Their return sentinel is
-  described by an exact compiler-owned sidecar interface paired with a generic
-  IVM 1.0 image that embeds no deployable `CNTR` or `DBG1`. The crate-private
-  validation profile checks the current ABI and terminal return `HALT`, and the
-  suite remains distinct from any separately prepared, ordinarily admitted
-  runtime artifact. The runner checks both compiler report hashes before
-  loading; nested runtime calls terminate through compiler-emitted entrypoint
-  wrappers rather than post-build byte mutation. Test-only selectors and
-  syscalls must never enter production admission or the ABI-v1 hash.
-- Preserve the corrected ABI-v1 artifact contract: `code_hash` covers the
-  complete canonical `.to` image, debug data is a hash-keyed sidecar, CNTR is
-  validated rather than trusted, and transitive bytecode effects/access drive
-  conservative scheduling whenever precision is incomplete.
-- Preserve exact per-key `StateMap` scheduling only for direct bytecode paths
-  that prove an authenticated canonical `Name` literal at every state syscall.
-  Same-key writes conflict while distinct proven children remain independent;
-  dynamic, helper-hidden, transitive, ambiguous, forged, and unverifiable
-  accesses retain `state:*`. Static scans use the explicit `state:Map[*]`
-  scheduler key, and CNTR hints never narrow the bytecode-derived fence by
-  themselves.
-- Keep `pipeline.ivm_max_cycles_upper_bound` mandatory and non-zero (default
-  `1_000_000`) and file-configured only. Admission and every VM execution path
-  must enforce that node policy; environment variables and consensus custom
-  parameters never override or disable it, and every artifact carries a
-  positive hash-covered cycle limit.
-- Keep public invocation arguments as one bounded, schema-hashed canonical
-  Norito record. JSON conversion belongs at Torii/CLI/SDK construction
-  boundaries; a predecode gas quote binds the signed wire lengths and the
-  validated schema's maximum aggregate allocation, signed bytes remain
-  host-owned behind a domain-separated guest binding, paid execution decodes
-  once, and a complete INPUT/owned-HEAP allocation preflight precedes
-  materialization. Signed transport rejects malformed, noncanonical,
-  oversized, schema-mismatched, or deterministically unmaterializable records.
-- Keep caller authorization uniform across direct, nested, trigger, overlay,
-  and proved execution. Protected overlays retain and live-recheck their named
-  permission before applying effects, while every grant, revoke, role binding,
-  and role-permission change shares the synthetic authorization scheduler
-  dependency.
-- Keep production private-witness dispatch fail closed while completing the
-  proof-carrying invocation statement. `Secret<int>`, `Secret<decimal>`,
-  `Secret<quantity>`, and `GET_PRIVATE_INPUT` remain local/prover/test-host
-  capabilities; ordinary consensus must reject any seiyaku selector with a
-  reachable private-input read, including helper-hidden reads, and raw witness
-  bytes must never enter signed transactions or replay. `CoreHost` quote and
-  execution must independently reject `GET_PRIVATE_INPUT` even if resolver
-  admission is bypassed. Before removing that gate, bind the seiyaku address
-  and code hash, seiyaku selector, public arguments, authority and chain, state
-  root and exact read/write sets, outputs
-  and events, gas schedule and ceiling, and circuit and verifier-key versions.
-- Maintain the exhaustive builtin registry as the source of signature, mode,
-  effect, syscall, access, gas, and lowering policy. Every new privileged
-  operation must update bytecode-derived admission, ABI-v1 hashes/goldens,
-  deterministic host behavior, docs, and adversarial tests in the same change.
-  The typed two-quantity nested contract-call path remains bound to the
-  ungated ABI-v1 `CALL_CONTRACT_QUANTITY2` syscall at `0x010029`; removing,
-  renumbering, or changing that operation must repeat the same complete
-  artifact and documentation refresh. Its current canonical ABI-v1 hash is
-  `2a6e921ac81ce3ecc6797c5da227eb5f4ff57d521201863ef8590f1713ef52a1`.
-- Finish release validation for the bounded-List, exact-decimal/quantity,
-  native-JSON, and typed core-query-page corridor. The implementation, source
-  migration, canonical header refresh, mapped goldens, compiler manifests, and
-  Torii query/lookup OpenAPI synchronization are complete. Remaining work is to
-  prove one host query and one projection decode per typed request, run the
-  non-skipped four-peer pagination lane, and capture the real-base 5%
-  performance gates.
-- Hold the performance contract: sub-1% assembler padding, compact indexed
-  literals/near control flow, SSA optimization and call-aware allocation,
-  authenticated no-op builds with zero rewrites, and warm prepared execution
-  without program reparsing, opcode rewalks, or full-memory/template clones.
-  Scheduler access derivation receives the overlay's immutable prepared
-  contract; manifest/fence analysis and trigger lookup must not clone or hash
-  bytecode, parse metadata, decode instructions, or rebuild runtime templates
-  on a warm call. Keep mutable pre-execution policy metadata-only; preparation
-  owns opcode and syscall validation for the ungated ABI V1 surface.
-- Preserve canonical Norito headers and wire layouts for blocks, transactions,
-  SDK fixtures, and cross-library compatibility tests. The JavaScript pure
-  Norito fallback now covers asset-definition registration frames, and
-  Java/Kotlin columnar helpers cover optional string/u32 plus bytes+bool row
-  shapes, so remaining SDK parity work should focus on new observable wire
-  formats as they land. Norito columnar NCB views now read their `u32`
-  row-count prefix through a shared checked helper, keeping truncated row-count
-  prefixes on `Error::LengthMismatch`. Norito AoS optional string/u32 decoders
-  now reject noncanonical option discriminants instead of treating any nonzero
-  tag as `Some`. Norito streaming baseline RLE block
-  decode now reads DC differences and AC records through checked helpers so
-  truncated or overflowed cursor state returns `CodecError::TruncatedBlock`
-  before cursor advancement, and baseline chunk frame/chroma metadata now uses
-  checked fixed-width readers so truncated frame headers and chroma length
-  fields fail before payload slicing. Bundled rANS SIMD stream lane lengths now
-  use a checked prefix reader so malformed SIMD headers fail before cursor
-  advancement or lane slicing.
-
-**Next checkpoints:** archive the authenticated Numeric V1 Apple M1 Ultra
-calibration and slowest-supported-tier evidence for the candidate SHA; run the
-full workspace format/build/test and strict-Clippy gates; and require the Linux
-sanitizer, cross-architecture, and platform SDK shared-fixture workflows.
-Complete the non-skipped four-peer typed-query pagination lane, controlled-runner
-5% performance gates, and independent runtime-manifest parser cross-check.
-Retain the four-peer hidden/dynamic-access scheduler regression while finishing
-the remaining Norito wire-format evidence. Future syscall or opcode changes remain ABI version 1
-until this first release and must refresh every golden, manifest, document, and
-table together.
+- Archive immutable source, `Cargo.lock`, benchmark workload, and toolchain
+  provenance for the documented predecessor, then run the candidate and
+  predecessor on the same controlled runner. The documented predecessor lacks
+  `Cargo.lock`, and the available older lock is incompatible, so no
+  reproducible locked 5% comparison is claimed.
+- Run the C# SDK gate on a supported .NET 8 environment. `dotnet` is not
+  installed on the current host.
 
 ## Privacy, ZK, and FHE
 

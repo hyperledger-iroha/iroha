@@ -402,6 +402,15 @@ impl FeeSponsorProgramRevision {
     ///
     /// Selector existence checks that depend on live instruction, contract, or
     /// asset registries remain the responsibility of stateful admission.
+    ///
+    /// # Errors
+    ///
+    /// Returns a precise [`FeeSponsorProgramRevisionError`] for the first
+    /// non-canonical revision, rule, selector, or asset-budget invariant.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "ordered validation preserves deterministic first-error precedence"
+    )]
     pub fn validate(&self) -> Result<(), FeeSponsorProgramRevisionError> {
         if self.revision == 0 {
             return Err(FeeSponsorProgramRevisionError::ZeroRevision);
@@ -539,6 +548,11 @@ impl FeeSponsorProgramRevision {
     }
 
     /// Validate this revision as the strict successor of `latest`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the revision is internally invalid or does not
+    /// advance monotonically beyond the latest enacted revision.
     pub fn validate_successor_of(
         &self,
         latest: Option<u64>,

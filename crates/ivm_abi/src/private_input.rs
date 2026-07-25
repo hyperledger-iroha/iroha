@@ -101,6 +101,7 @@ impl PrivateInputKindV1 {
 /// untrusted bytes; the VM host always performs bounded canonical validation
 /// after gas has been debited.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[norito(schema_name = "iroha.kotodama.PrivateInputRecordV1")]
 pub struct PrivateInputRecordV1 {
     /// Nominal numeric payload kind.
     pub kind: PrivateInputKindV1,
@@ -147,5 +148,13 @@ mod tests {
                 kind.tag() as u32
             );
         }
+    }
+
+    #[test]
+    fn private_input_record_uses_its_nominal_v1_schema() {
+        assert_eq!(
+            <PrivateInputRecordV1 as norito::NoritoSerialize>::schema_hash(),
+            norito::core::schema_hash_for_name(PRIVATE_INPUT_RECORD_NAME_V1)
+        );
     }
 }

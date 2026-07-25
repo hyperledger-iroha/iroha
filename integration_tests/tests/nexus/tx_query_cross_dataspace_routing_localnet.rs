@@ -1265,6 +1265,7 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
                 Level::INFO,
                 "wrong ingress route probe ds1".to_owned(),
             ))],
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             Metadata::default(),
         );
         submit_transaction_and_expect_route(
@@ -1282,6 +1283,7 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
                 Level::INFO,
                 "wrong ingress route probe ds2".to_owned(),
             ))],
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             Metadata::default(),
         );
         submit_transaction_and_expect_route(
@@ -1512,6 +1514,7 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         [InstructionBox::from(PublishSpaceDirectoryManifest {
             manifest: ds2_manifest.clone(),
         })],
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         Metadata::default(),
     );
     rt.block_on(submit_transaction_and_expect_route(

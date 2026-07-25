@@ -19,7 +19,7 @@ public final class SorafsReferenceValidatorsTests {
     rejectsGeneratedAtBeforeNativeDispatch();
     rejectsBlankLabelBeforeNativeDispatch();
     boundsGovernanceDagInputsBeforeNativeDispatch();
-    rejectsRuntimeSnapshotSigningBeforeNativeDispatch();
+    rejectsNonSignableOrderbookPayloadBeforeNativeDispatch();
     rejectsBadSigningKeyBeforeNativeDispatch();
     rejectsInvalidOrderIdDerivationInputsBeforeNativeDispatch();
     rejectsOversizedOrderbookOwnerAccountsBeforeNativeDispatch();
@@ -36,9 +36,12 @@ public final class SorafsReferenceValidatorsTests {
 
   private static void exposesBridgeSelectors() {
     assert SorafsOrderbookPayloadKind.ORDER_REQUEST.bridgeCode() == 1;
-    assert SorafsOrderbookPayloadKind.RUNTIME_SNAPSHOT.bridgeCode() == 6;
+    for (final SorafsOrderbookPayloadKind kind : SorafsOrderbookPayloadKind.values()) {
+      assert kind.bridgeCode() != 6;
+      assert !"orderbook-runtime-snapshot.to".equals(kind.defaultLabel());
+    }
     assert SorafsOrderbookPayloadKind.ORDER_REQUEST.isUserSignedPayload();
-    assert !SorafsOrderbookPayloadKind.RUNTIME_SNAPSHOT.isUserSignedPayload();
+    assert !SorafsOrderbookPayloadKind.TRADE_EVENT.isUserSignedPayload();
     assert SorafsPdpPayloadKind.COMMITMENT.bridgeCode() == 1;
     assert SorafsPdpPayloadKind.PROOF.bridgeCode() == 3;
     assert SorafsPopPayloadKind.CREDENTIAL.bridgeCode() == 1;
@@ -144,15 +147,15 @@ public final class SorafsReferenceValidatorsTests {
     }
   }
 
-  private static void rejectsRuntimeSnapshotSigningBeforeNativeDispatch() {
+  private static void rejectsNonSignableOrderbookPayloadBeforeNativeDispatch() {
     boolean threw = false;
     try {
       SorafsReferenceValidators.signOrderbookPayload(
-          SorafsOrderbookPayloadKind.RUNTIME_SNAPSHOT, new byte[0], repeatedKey(0xB7));
+          SorafsOrderbookPayloadKind.TRADE_EVENT, new byte[0], repeatedKey(0xB7));
     } catch (final IllegalArgumentException ex) {
       threw = ex.getMessage() != null && ex.getMessage().contains("cannot be signed");
     }
-    assert threw : "runtime snapshots should be rejected before native dispatch";
+    assert threw : "non-signable payloads should be rejected before native dispatch";
   }
 
   private static void rejectsBadSigningKeyBeforeNativeDispatch() {

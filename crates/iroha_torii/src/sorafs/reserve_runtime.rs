@@ -21,6 +21,7 @@ use iroha_crypto::HashOf;
 use iroha_data_model::{
     asset::AssetId,
     block::BlockHeader,
+    events::data::sorafs::SorafsReserveLedgerEventKind,
     isi::{
         InstructionBox,
         sorafs::{AdvanceSorafsReserveLifecycle, ChargeSorafsReserveRent},
@@ -28,7 +29,8 @@ use iroha_data_model::{
     query::{
         error::{FindError, QueryExecutionFail},
         sorafs::prelude::{
-            FindSorafsReserveAppealById, FindSorafsReserveMovementById, FindSorafsReservePolicy,
+            FindSorafsReserveAppealById, FindSorafsReserveEvents,
+            FindSorafsReserveMovementById, FindSorafsReservePolicy,
             FindSorafsReserveProviderById, FindSorafsReserveProviders,
         },
     },
@@ -36,7 +38,9 @@ use iroha_data_model::{
         capacity::ProviderId,
         reserve::{
             RESERVE_QUERY_MAX_ITEMS_V1, RESERVE_RENT_MAX_BILLING_PERIODS_V1,
-            ReserveAuthorityPolicyRecordV1, ReserveFinalizedCursorV1, ReserveProviderAccountV1,
+            ReserveAuthorityPolicyRecordV1, ReserveFinalizedCursorV1,
+            ReserveFinalizedEventCursorV1, ReserveFinalizedEventPageV1, ReserveLifecycleStage,
+            ReserveProviderAccountV1,
         },
     },
     transaction::{
@@ -45,6 +49,7 @@ use iroha_data_model::{
 };
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_logger::{debug, warn};
+use iroha_primitives::numeric::{Numeric, RoundingMode};
 use mv::storage::StorageReadOnly;
 use sorafs_manifest::deal::XorQuantity;
 use sorafs_node::{
@@ -65,10 +70,17 @@ use super::reserve_worker::{
 };
 use crate::{SharedAppState, SoraFsReserveTransactionSigner};
 
+const RESERVE_TELEMETRY_MAX_EVENTS_PER_SCAN_V1: usize = 1_024;
+const RESERVE_TELEMETRY_MAX_PROVIDERS_V1: usize = 4_096;
+const RESERVE_LIFECYCLE_STAGE_COUNT_V1: usize = 5;
+const RESERVE_MOVEMENT_STATUS_COUNT_V1: usize = 3;
+const RESERVE_RECONCILED_STATUS_COUNT_V1: usize = 2;
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SorafsReserveTransactionForwarderCursorV1 {
     after_sequence: Option<u64>,
     after_provider_id: Option<ProviderId>,
+    telemetry: SorafsReserveFinalizedTelemetryProjectionV1,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -83,6 +95,59 @@ pub(crate) struct SorafsReserveTransactionForwarderScanV1 {
     deferred: usize,
     conflicted: usize,
     rejected: usize,
+    telemetry_published: usize,
+    telemetry_catching_up: usize,
+    telemetry_failed: usize,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct SorafsReserveFinalizedTelemetryProjectionV1 {
+    after_event: Option<ReserveFinalizedEventCursorV1>,
+    custody_counts: [u64; RESERVE_MOVEMENT_STATUS_COUNT_V1],
+    reconciled_counts: [u64; RESERVE_RECONCILED_STATUS_COUNT_V1],
+    open_appeals: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SorafsReserveFinalizedProviderMetricsV1 {
+    finalized_cursor: ReserveFinalizedCursorV1,
+    lifecycle_stage_counts: [u64; RESERVE_LIFECYCLE_STAGE_COUNT_V1],
+    credit_principal_micro_xor: [u128; RESERVE_LIFECYCLE_STAGE_COUNT_V1],
+    credit_shortfall_micro_xor: [u128; RESERVE_LIFECYCLE_STAGE_COUNT_V1],
+    accrued_interest_micro_xor: [u128; RESERVE_LIFECYCLE_STAGE_COUNT_V1],
+    pending_movements: u64,
+    open_appeals: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SorafsReserveFinalizedTelemetryRefreshV1 {
+    Published,
+    CatchingUp,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SorafsReserveFinalizedTelemetryErrorV1 {
+    FinalizedViewUnavailable,
+    QueryFailed,
+    InvalidEventPage,
+    InvalidProviderPage,
+    ArithmeticOverflow,
+    ProviderCapacityExceeded,
+    ProjectionMismatch,
+}
+
+impl SorafsReserveFinalizedTelemetryErrorV1 {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::FinalizedViewUnavailable => "finalized_view_unavailable",
+            Self::QueryFailed => "query_failed",
+            Self::InvalidEventPage => "invalid_event_page",
+            Self::InvalidProviderPage => "invalid_provider_page",
+            Self::ArithmeticOverflow => "arithmetic_overflow",
+            Self::ProviderCapacityExceeded => "provider_capacity_exceeded",
+            Self::ProjectionMismatch => "projection_mismatch",
+        }
+    }
 }
 
 /// Supervision is intentionally split: `enabled` permits generation of new
@@ -401,6 +466,361 @@ fn reserve_finalized_cursor_from_view(
 fn current_reserve_finalized_cursor(state: &SharedAppState) -> Option<ReserveFinalizedCursorV1> {
     let view = state.state.query_view();
     reserve_finalized_cursor_from_view(&view)
+}
+
+const fn reserve_lifecycle_stage_index(stage: ReserveLifecycleStage) -> usize {
+    match stage {
+        ReserveLifecycleStage::Active => 0,
+        ReserveLifecycleStage::Warning => 1,
+        ReserveLifecycleStage::Grace => 2,
+        ReserveLifecycleStage::Delinquent => 3,
+        ReserveLifecycleStage::Default => 4,
+    }
+}
+
+fn reserve_quantity_to_metric_micro_xor(
+    amount: &XorQuantity,
+) -> Result<u128, SorafsReserveFinalizedTelemetryErrorV1> {
+    amount
+        .as_quantity()
+        .try_mul_decimal(&Numeric::from(1_000_000_u64))
+        .and_then(|scaled| {
+            scaled.as_numeric().try_decimal_div_round(
+                &Numeric::from(1_u64),
+                0,
+                RoundingMode::TowardZero,
+            )
+        })
+        .ok()
+        .and_then(|scaled| scaled.try_mantissa_u128())
+        .ok_or(SorafsReserveFinalizedTelemetryErrorV1::ArithmeticOverflow)
+}
+
+fn reserve_telemetry_event_shape_is_valid(
+    event: &iroha_data_model::events::data::sorafs::SorafsReserveLedgerEvent,
+) -> bool {
+    if event.policy_digest == [0; 32] || event.occurred_at_unix_ms == 0 {
+        return false;
+    }
+    match event.kind {
+        SorafsReserveLedgerEventKind::PolicyActivated => {
+            event.provider_id.is_none()
+                && event.operation_id.is_none()
+                && event.provider_revision == 0
+                && event.resulting_lifecycle_stage.is_none()
+        }
+        SorafsReserveLedgerEventKind::ProviderRegistered => {
+            event.provider_id.is_some()
+                && event.operation_id.is_none()
+                && event.provider_revision == 1
+                && event.resulting_lifecycle_stage.is_some()
+        }
+        SorafsReserveLedgerEventKind::MovementRequested
+        | SorafsReserveLedgerEventKind::MovementApproved
+        | SorafsReserveLedgerEventKind::MovementRejected
+        | SorafsReserveLedgerEventKind::AppealSubmitted
+        | SorafsReserveLedgerEventKind::AppealAccepted
+        | SorafsReserveLedgerEventKind::AppealRejected => {
+            event.provider_id.is_some()
+                && event.operation_id.is_some_and(|operation_id| operation_id != [0; 32])
+                && event.provider_revision > 0
+                && event.resulting_lifecycle_stage.is_some()
+        }
+        SorafsReserveLedgerEventKind::RentCharged
+        | SorafsReserveLedgerEventKind::LifecycleAdvanced
+        | SorafsReserveLedgerEventKind::CreditDrawn
+        | SorafsReserveLedgerEventKind::CreditRepaid => {
+            event.provider_id.is_some()
+                && event.operation_id.is_none()
+                && event.provider_revision > 0
+                && event.resulting_lifecycle_stage.is_some()
+        }
+    }
+}
+
+fn reserve_telemetry_event_cursor_is_successor(
+    previous: Option<ReserveFinalizedEventCursorV1>,
+    current: ReserveFinalizedEventCursorV1,
+) -> bool {
+    if current.sequence == 0
+        || current.block_height == 0
+        || current.block_hash == [0; 32]
+        || previous
+            .map_or(1, |cursor| cursor.sequence.checked_add(1).unwrap_or(0))
+            != current.sequence
+    {
+        return false;
+    }
+    let Some(previous) = previous else {
+        return current.sequence == 1 && current.event_index == 0;
+    };
+    match previous.block_height.cmp(&current.block_height) {
+        std::cmp::Ordering::Less => current.event_index == 0,
+        std::cmp::Ordering::Equal => {
+            previous.block_hash == current.block_hash
+                && previous
+                    .event_index
+                    .checked_add(1)
+                    .is_some_and(|index| index == current.event_index)
+        }
+        std::cmp::Ordering::Greater => false,
+    }
+}
+
+fn apply_reserve_finalized_telemetry_event_page(
+    projection: &mut SorafsReserveFinalizedTelemetryProjectionV1,
+    page: &ReserveFinalizedEventPageV1,
+    expected_finalized_cursor: ReserveFinalizedCursorV1,
+) -> Result<(), SorafsReserveFinalizedTelemetryErrorV1> {
+    if page.finalized_cursor != expected_finalized_cursor
+        || page.events.len()
+            > usize::try_from(RESERVE_QUERY_MAX_ITEMS_V1)
+                .map_err(|_| SorafsReserveFinalizedTelemetryErrorV1::ArithmeticOverflow)?
+        || (page.has_more && page.events.is_empty())
+        || page.has_more != page.next_after.is_some()
+        || page
+            .next_after
+            .is_some_and(|cursor| page.events.last().map(|event| event.cursor()) != Some(cursor))
+    {
+        return Err(SorafsReserveFinalizedTelemetryErrorV1::InvalidEventPage);
+    }
+
+    let mut next = *projection;
+    for record in &page.events {
+        let cursor = record.cursor();
+        if record.block_height > expected_finalized_cursor.height
+            || !reserve_telemetry_event_cursor_is_successor(next.after_event, cursor)
+            || !reserve_telemetry_event_shape_is_valid(&record.event)
+        {
+            return Err(SorafsReserveFinalizedTelemetryErrorV1::InvalidEventPage);
+        }
+        match record.event.kind {
+            SorafsReserveLedgerEventKind::MovementRequested => {
+                next.custody_counts[0] = next.custody_counts[0]
+                    .checked_add(1)
+                    .ok_or(SorafsReserveFinalizedTelemetryErrorV1::ArithmeticOverflow)?;
+            }
+            SorafsReserveLedgerEventKind::MovementApproved => {
+                next.custody_counts[0] = next.custody_counts[0]
+                    .checked_sub(1)
+                    .ok_or(SorafsReserveFinalizedTelemetryErrorV1::ProjectionMismatch)?;
+                next.custody_counts[1] = next.custody_counts[1]
+                    .checked_add(1)
+                    .ok_or(SorafsReserveFinalizedTelemetryErrorV1::ArithmeticOverflow)?;
+                next.reconciled_counts[0] = next.reconciled_counts[0]
+                    .checked_add(1)
+                    .ok_or(SorafsReserveFinalizedTelemetryErrorV1::ArithmeticOverflow)?;
+            }
+            SorafsReserveLedgerEventKind::MovementRejected => {
+                next.custody_counts[0] = next.custody_counts[0]
+                    .checked_sub(1)
+                    .ok_or(SorafsReserveFinalizedTelemetryErrorV1::ProjectionMismatch)?;
+                next.custody_counts[2] = next.custody_counts[2]
+                    .checked_add(1)
+                    .ok_or(SorafsReserveFinalizedTelemetryErrorV1::ArithmeticOverflow)?;
+                next.reconciled_counts[1] = next.reconciled_counts[1]
+                    .checked_add(1)
+                    .ok_or(SorafsReserveFinalizedTelemetryErrorV1::ArithmeticOverflow)?;
+            }
+            SorafsReserveLedgerEventKind::AppealSubmitted => {
+                next.open_appeals = next
+                    .open_appeals
+                    .checked_add(1)
+                    .ok_or(SorafsReserveFinalizedTelemetryErrorV1::ArithmeticOverflow)?;
+            }
+            SorafsReserveLedgerEventKind::AppealAccepted
+            | SorafsReserveLedgerEventKind::AppealRejected => {
+                next.open_appeals = next
+                    .open_appeals
+                    .checked_sub(1)
+                    .ok_or(SorafsReserveFinalizedTelemetryErrorV1::ProjectionMismatch)?;
+            }
+            SorafsReserveLedgerEventKind::PolicyActivated
+            | SorafsReserveLedgerEventKind::ProviderRegistered
+            | SorafsReserveLedgerEventKind::RentCharged
+            | SorafsReserveLedgerEventKind::LifecycleAdvanced
+            | SorafsReserveLedgerEventKind::CreditDrawn
+            | SorafsReserveLedgerEventKind::CreditRepaid => {}
+        }
+        next.after_event = Some(cursor);
+    }
+    *projection = next;
+    Ok(())
+}
+
+fn consume_reserve_finalized_telemetry_events(
+    view: &impl StateReadOnly,
+    finalized_cursor: ReserveFinalizedCursorV1,
+    projection: &mut SorafsReserveFinalizedTelemetryProjectionV1,
+) -> Result<bool, SorafsReserveFinalizedTelemetryErrorV1> {
+    let mut processed = 0_usize;
+    loop {
+        let remaining = RESERVE_TELEMETRY_MAX_EVENTS_PER_SCAN_V1
+            .checked_sub(processed)
+            .ok_or(SorafsReserveFinalizedTelemetryErrorV1::ArithmeticOverflow)?;
+        if remaining == 0 {
+            return Ok(false);
+        }
+        let limit = u32::try_from(remaining)
+            .unwrap_or(u32::MAX)
+            .min(RESERVE_QUERY_MAX_ITEMS_V1);
+        let page = FindSorafsReserveEvents::new(
+            Some(finalized_cursor),
+            projection.after_event,
+            limit,
+        )
+        .execute(view)
+        .map_err(|_| SorafsReserveFinalizedTelemetryErrorV1::QueryFailed)?;
+        let page_len = page.events.len();
+        apply_reserve_finalized_telemetry_event_page(
+            projection,
+            &page,
+            finalized_cursor,
+        )?;
+        processed = processed
+            .checked_add(page_len)
+            .ok_or(SorafsReserveFinalizedTelemetryErrorV1::ArithmeticOverflow)?;
+        if !page.has_more {
+            return Ok(true);
+        }
+    }
+}
+
+fn collect_reserve_finalized_provider_metrics(
+    view: &impl StateReadOnly,
+    finalized_cursor: ReserveFinalizedCursorV1,
+) -> Result<SorafsReserveFinalizedProviderMetricsV1, SorafsReserveFinalizedTelemetryErrorV1> {
+    let mut metrics = SorafsReserveFinalizedProviderMetricsV1 {
+        finalized_cursor,
+        lifecycle_stage_counts: [0; RESERVE_LIFECYCLE_STAGE_COUNT_V1],
+        credit_principal_micro_xor: [0; RESERVE_LIFECYCLE_STAGE_COUNT_V1],
+        credit_shortfall_micro_xor: [0; RESERVE_LIFECYCLE_STAGE_COUNT_V1],
+        accrued_interest_micro_xor: [0; RESERVE_LIFECYCLE_STAGE_COUNT_V1],
+        pending_movements: 0,
+        open_appeals: 0,
+    };
+    let mut after_provider_id = None;
+    let mut provider_count = 0_usize;
+
+    loop {
+        let page = FindSorafsReserveProviders::new(
+            Some(finalized_cursor),
+            after_provider_id,
+            RESERVE_QUERY_MAX_ITEMS_V1,
+        )
+        .execute(view)
+        .map_err(|_| SorafsReserveFinalizedTelemetryErrorV1::QueryFailed)?;
+        if page.finalized_cursor != finalized_cursor
+            || page.accounts.len()
+                > usize::try_from(RESERVE_QUERY_MAX_ITEMS_V1)
+                    .map_err(|_| SorafsReserveFinalizedTelemetryErrorV1::ArithmeticOverflow)?
+            || (page.has_more && page.accounts.is_empty())
+            || page.has_more != page.next_after.is_some()
+            || page
+                .next_after
+                .is_some_and(|cursor| {
+                    page.accounts.last().map(|account| account.terms.provider_id) != Some(cursor)
+                })
+        {
+            return Err(SorafsReserveFinalizedTelemetryErrorV1::InvalidProviderPage);
+        }
+        provider_count = provider_count
+            .checked_add(page.accounts.len())
+            .ok_or(SorafsReserveFinalizedTelemetryErrorV1::ArithmeticOverflow)?;
+        if provider_count > RESERVE_TELEMETRY_MAX_PROVIDERS_V1
+            || (provider_count == RESERVE_TELEMETRY_MAX_PROVIDERS_V1 && page.has_more)
+        {
+            return Err(SorafsReserveFinalizedTelemetryErrorV1::ProviderCapacityExceeded);
+        }
+
+        let mut previous_provider_id = after_provider_id;
+        for account in &page.accounts {
+            let provider_id = account.terms.provider_id;
+            if previous_provider_id.is_some_and(|previous| provider_id <= previous) {
+                return Err(SorafsReserveFinalizedTelemetryErrorV1::InvalidProviderPage);
+            }
+            previous_provider_id = Some(provider_id);
+
+            let stage = reserve_lifecycle_stage_index(account.lifecycle_stage);
+            metrics.lifecycle_stage_counts[stage] = metrics.lifecycle_stage_counts[stage]
+                .checked_add(1)
+                .ok_or(SorafsReserveFinalizedTelemetryErrorV1::ArithmeticOverflow)?;
+            let credit_principal = reserve_quantity_to_metric_micro_xor(&account.debt_principal)?;
+            let accrued_interest =
+                reserve_quantity_to_metric_micro_xor(&account.accrued_interest)?;
+            let total_debt = account
+                .total_debt()
+                .map_err(|_| SorafsReserveFinalizedTelemetryErrorV1::ArithmeticOverflow)?;
+            let credit_shortfall = if total_debt > account.credit_cap {
+                total_debt
+                    .checked_sub(&account.credit_cap)
+                    .map_err(|_| SorafsReserveFinalizedTelemetryErrorV1::ArithmeticOverflow)?
+            } else {
+                XorQuantity::zero()
+            };
+            let credit_shortfall = reserve_quantity_to_metric_micro_xor(&credit_shortfall)?;
+            metrics.credit_principal_micro_xor[stage] =
+                metrics.credit_principal_micro_xor[stage]
+                    .checked_add(credit_principal)
+                    .ok_or(SorafsReserveFinalizedTelemetryErrorV1::ArithmeticOverflow)?;
+            metrics.credit_shortfall_micro_xor[stage] =
+                metrics.credit_shortfall_micro_xor[stage]
+                    .checked_add(credit_shortfall)
+                    .ok_or(SorafsReserveFinalizedTelemetryErrorV1::ArithmeticOverflow)?;
+            metrics.accrued_interest_micro_xor[stage] = metrics.accrued_interest_micro_xor[stage]
+                .checked_add(accrued_interest)
+                .ok_or(SorafsReserveFinalizedTelemetryErrorV1::ArithmeticOverflow)?;
+            metrics.pending_movements = metrics
+                .pending_movements
+                .checked_add(u64::from(account.pending_movements))
+                .ok_or(SorafsReserveFinalizedTelemetryErrorV1::ArithmeticOverflow)?;
+            metrics.open_appeals = metrics
+                .open_appeals
+                .checked_add(u64::from(account.open_appeals))
+                .ok_or(SorafsReserveFinalizedTelemetryErrorV1::ArithmeticOverflow)?;
+        }
+
+        if !page.has_more {
+            return Ok(metrics);
+        }
+        after_provider_id = page.next_after;
+    }
+}
+
+fn refresh_sorafs_reserve_finalized_telemetry(
+    state: &SharedAppState,
+    projection: &mut SorafsReserveFinalizedTelemetryProjectionV1,
+) -> Result<SorafsReserveFinalizedTelemetryRefreshV1, SorafsReserveFinalizedTelemetryErrorV1> {
+    let view = state.state.view();
+    let finalized_cursor = reserve_finalized_cursor_from_view(&view)
+        .ok_or(SorafsReserveFinalizedTelemetryErrorV1::FinalizedViewUnavailable)?;
+    if !consume_reserve_finalized_telemetry_events(&view, finalized_cursor, projection)? {
+        state
+            .telemetry
+            .with_metrics(|metrics| metrics.mark_sorafs_reserve_finalized_projection_unready());
+        return Ok(SorafsReserveFinalizedTelemetryRefreshV1::CatchingUp);
+    }
+
+    let provider_metrics =
+        collect_reserve_finalized_provider_metrics(&view, finalized_cursor)?;
+    if provider_metrics.pending_movements != projection.custody_counts[0]
+        || provider_metrics.open_appeals != projection.open_appeals
+    {
+        return Err(SorafsReserveFinalizedTelemetryErrorV1::ProjectionMismatch);
+    }
+    state.telemetry.with_metrics(|metrics| {
+        metrics.record_sorafs_reserve_finalized_projection(
+            provider_metrics.finalized_cursor.height,
+            provider_metrics.lifecycle_stage_counts,
+            provider_metrics.credit_principal_micro_xor,
+            provider_metrics.credit_shortfall_micro_xor,
+            provider_metrics.accrued_interest_micro_xor,
+            projection.open_appeals,
+            projection.custody_counts,
+            projection.reconciled_counts,
+        );
+    });
+    Ok(SorafsReserveFinalizedTelemetryRefreshV1::Published)
 }
 
 fn collect_generated_reserve_operations_in_one_finalized_view(
@@ -731,6 +1151,9 @@ pub(crate) fn spawn_sorafs_reserve_transaction_forwarder_worker(
                         || scan.generation_replayed != 0
                         || scan.generation_deferred != 0
                         || scan.scanned != 0
+                        || scan.telemetry_published != 0
+                        || scan.telemetry_catching_up != 0
+                        || scan.telemetry_failed != 0
                     {
                         debug!(
                             generated = scan.generated,
@@ -743,6 +1166,9 @@ pub(crate) fn spawn_sorafs_reserve_transaction_forwarder_worker(
                             deferred = scan.deferred,
                             conflicted = scan.conflicted,
                             rejected = scan.rejected,
+                            telemetry_published = scan.telemetry_published,
+                            telemetry_catching_up = scan.telemetry_catching_up,
+                            telemetry_failed = scan.telemetry_failed,
                             generation_enabled = supervision.generation_enabled,
                             "processed durable native SoraFS reserve/rent transactions"
                         );
@@ -758,6 +1184,26 @@ pub(crate) async fn run_sorafs_reserve_transaction_forwarder_scan(
     cursor: &mut SorafsReserveTransactionForwarderCursorV1,
 ) -> SorafsReserveTransactionForwarderScanV1 {
     let mut scan = SorafsReserveTransactionForwarderScanV1::default();
+    if state.telemetry.allows_metrics() {
+        match refresh_sorafs_reserve_finalized_telemetry(state, &mut cursor.telemetry) {
+            Ok(SorafsReserveFinalizedTelemetryRefreshV1::Published) => {
+                scan.telemetry_published = 1;
+            }
+            Ok(SorafsReserveFinalizedTelemetryRefreshV1::CatchingUp) => {
+                scan.telemetry_catching_up = 1;
+            }
+            Err(error) => {
+                scan.telemetry_failed = 1;
+                state.telemetry.with_metrics(|metrics| {
+                    metrics.record_sorafs_reserve_finalized_projection_failure()
+                });
+                warn!(
+                    reason = error.label(),
+                    "failed to publish finalized SoraFS reserve/rent telemetry"
+                );
+            }
+        }
+    }
     let policy = state.sorafs_node.config().reserve_worker_policy();
     if policy.enabled() {
         match collect_generated_reserve_operations_in_one_finalized_view(
@@ -1316,6 +1762,54 @@ mod tests {
         HashOf::from_untyped_unchecked(Hash::prehashed([seed; 32]))
     }
 
+    fn finalized_reserve_event(
+        sequence: u64,
+        block_height: u64,
+        event_index: u32,
+        kind: SorafsReserveLedgerEventKind,
+    ) -> iroha_data_model::sorafs::reserve::ReserveFinalizedEventV1 {
+        use iroha_data_model::events::data::sorafs::SorafsReserveLedgerEvent;
+
+        let policy_event = kind == SorafsReserveLedgerEventKind::PolicyActivated;
+        let provider_registration = kind == SorafsReserveLedgerEventKind::ProviderRegistered;
+        let operation_event = matches!(
+            kind,
+            SorafsReserveLedgerEventKind::MovementRequested
+                | SorafsReserveLedgerEventKind::MovementApproved
+                | SorafsReserveLedgerEventKind::MovementRejected
+                | SorafsReserveLedgerEventKind::AppealSubmitted
+                | SorafsReserveLedgerEventKind::AppealAccepted
+                | SorafsReserveLedgerEventKind::AppealRejected
+        );
+        iroha_data_model::sorafs::reserve::ReserveFinalizedEventV1 {
+            sequence,
+            block_height,
+            block_hash: [u8::try_from(block_height).unwrap_or(u8::MAX); 32],
+            event_index,
+            event: SorafsReserveLedgerEvent {
+                kind,
+                provider_id: (!policy_event).then(|| ProviderId::new([0xA1; 32])),
+                operation_id: operation_event.then(|| {
+                    let mut operation_id = [0xB1; 32];
+                    operation_id[..8].copy_from_slice(&sequence.to_be_bytes());
+                    operation_id
+                }),
+                policy_digest: [0xC1; 32],
+                provider_revision: if policy_event {
+                    0
+                } else if provider_registration {
+                    1
+                } else {
+                    sequence
+                },
+                resulting_lifecycle_stage: (!policy_event)
+                    .then_some(ReserveLifecycleStage::Active),
+                authority: account(0xD1),
+                occurred_at_unix_ms: sequence.saturating_mul(1_000),
+            },
+        }
+    }
+
     fn account(seed: u8) -> AccountId {
         let private = PrivateKey::from_bytes(Algorithm::Ed25519, &[seed; 32])
             .expect("valid deterministic Ed25519 seed");
@@ -1813,6 +2307,188 @@ mod tests {
                 false,
             ),
             ReserveEnvelopeReconciliationV1::Unavailable
+        );
+    }
+
+    #[test]
+    fn finalized_telemetry_projection_rebuilds_across_pages_without_payload_labels() {
+        let finalized_cursor = cursor(3, 0xF1);
+        let first_events = vec![
+            finalized_reserve_event(
+                1,
+                1,
+                0,
+                SorafsReserveLedgerEventKind::PolicyActivated,
+            ),
+            finalized_reserve_event(
+                2,
+                1,
+                1,
+                SorafsReserveLedgerEventKind::ProviderRegistered,
+            ),
+            finalized_reserve_event(
+                3,
+                2,
+                0,
+                SorafsReserveLedgerEventKind::MovementRequested,
+            ),
+        ];
+        let first_after = first_events.last().map(|event| event.cursor());
+        let first = ReserveFinalizedEventPageV1 {
+            finalized_cursor,
+            events: first_events,
+            has_more: true,
+            next_after: first_after,
+        };
+        let second = ReserveFinalizedEventPageV1 {
+            finalized_cursor,
+            events: vec![
+                finalized_reserve_event(
+                    4,
+                    2,
+                    1,
+                    SorafsReserveLedgerEventKind::MovementApproved,
+                ),
+                finalized_reserve_event(
+                    5,
+                    3,
+                    0,
+                    SorafsReserveLedgerEventKind::AppealSubmitted,
+                ),
+                finalized_reserve_event(
+                    6,
+                    3,
+                    1,
+                    SorafsReserveLedgerEventKind::AppealRejected,
+                ),
+            ],
+            has_more: false,
+            next_after: None,
+        };
+        let mut projection = SorafsReserveFinalizedTelemetryProjectionV1::default();
+
+        apply_reserve_finalized_telemetry_event_page(
+            &mut projection,
+            &first,
+            finalized_cursor,
+        )
+        .expect("first finalized event page");
+        assert_eq!(projection.custody_counts, [1, 0, 0]);
+        assert_eq!(projection.open_appeals, 0);
+        apply_reserve_finalized_telemetry_event_page(
+            &mut projection,
+            &second,
+            finalized_cursor,
+        )
+        .expect("second finalized event page");
+
+        assert_eq!(projection.after_event, second.events.last().map(|event| event.cursor()));
+        assert_eq!(projection.custody_counts, [0, 1, 0]);
+        assert_eq!(projection.reconciled_counts, [1, 0]);
+        assert_eq!(projection.open_appeals, 0);
+    }
+
+    #[test]
+    fn finalized_telemetry_page_failure_is_atomic_for_gaps_and_terminal_underflow() {
+        let finalized_cursor = cursor(2, 0xF2);
+        let mut projection = SorafsReserveFinalizedTelemetryProjectionV1::default();
+        let gap = ReserveFinalizedEventPageV1 {
+            finalized_cursor,
+            events: vec![finalized_reserve_event(
+                2,
+                1,
+                0,
+                SorafsReserveLedgerEventKind::MovementRequested,
+            )],
+            has_more: false,
+            next_after: None,
+        };
+        assert_eq!(
+            apply_reserve_finalized_telemetry_event_page(
+                &mut projection,
+                &gap,
+                finalized_cursor,
+            ),
+            Err(SorafsReserveFinalizedTelemetryErrorV1::InvalidEventPage)
+        );
+        assert_eq!(
+            projection,
+            SorafsReserveFinalizedTelemetryProjectionV1::default()
+        );
+
+        let terminal_without_request = ReserveFinalizedEventPageV1 {
+            finalized_cursor,
+            events: vec![finalized_reserve_event(
+                1,
+                1,
+                0,
+                SorafsReserveLedgerEventKind::MovementRejected,
+            )],
+            has_more: false,
+            next_after: None,
+        };
+        assert_eq!(
+            apply_reserve_finalized_telemetry_event_page(
+                &mut projection,
+                &terminal_without_request,
+                finalized_cursor,
+            ),
+            Err(SorafsReserveFinalizedTelemetryErrorV1::ProjectionMismatch)
+        );
+        assert_eq!(
+            projection,
+            SorafsReserveFinalizedTelemetryProjectionV1::default()
+        );
+    }
+
+    #[test]
+    fn finalized_telemetry_rejects_malformed_continuation_shape() {
+        let finalized_cursor = cursor(1, 0xF3);
+        let event = finalized_reserve_event(
+            1,
+            1,
+            0,
+            SorafsReserveLedgerEventKind::PolicyActivated,
+        );
+        let page = ReserveFinalizedEventPageV1 {
+            finalized_cursor,
+            events: vec![event],
+            has_more: true,
+            next_after: None,
+        };
+        let mut projection = SorafsReserveFinalizedTelemetryProjectionV1::default();
+        assert_eq!(
+            apply_reserve_finalized_telemetry_event_page(
+                &mut projection,
+                &page,
+                finalized_cursor,
+            ),
+            Err(SorafsReserveFinalizedTelemetryErrorV1::InvalidEventPage)
+        );
+        assert_eq!(
+            projection,
+            SorafsReserveFinalizedTelemetryProjectionV1::default()
+        );
+    }
+
+    #[test]
+    fn reserve_metric_projection_truncates_sub_micro_precision_deterministically() {
+        use iroha_primitives::numeric::Quantity;
+
+        let one_nano = XorQuantity::try_from_quantity(
+            Quantity::from_canonical_numeric(Numeric::new(1, 9))
+                .expect("one nano-XOR is canonical"),
+        )
+        .expect("one nano-XOR is within the exact XOR scale");
+        let one_micro = XorQuantity::try_from_micro(1).expect("one micro-XOR");
+
+        assert_eq!(
+            reserve_quantity_to_metric_micro_xor(&one_nano),
+            Ok(0)
+        );
+        assert_eq!(
+            reserve_quantity_to_metric_micro_xor(&one_micro),
+            Ok(1)
         );
     }
 

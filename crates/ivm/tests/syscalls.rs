@@ -78,13 +78,11 @@ fn syscall_policy_gating_allows_known_and_rejects_unknown_v1() {
     vm.load_program(&bytes).unwrap();
     vm.run().expect("known syscall should be allowed under V1");
 
-    // Replace syscall with an unknown number and expect UnknownSyscall
+    // Unknown ABI numbers are rejected during authenticated program admission.
     let mut bad = assemble_syscall(0xDF);
     bad[4 + 1 + 1 + 1 + 1 + 8] = 1; // ABI v1
     let mut vm2 = IVM::new(u64::MAX);
-    vm2.load_program(&bad).unwrap();
-    let res = vm2.run();
-    assert!(matches!(res, Err(VMError::UnknownSyscall(0xDF))));
+    assert_eq!(vm2.load_program(&bad), Err(VMError::UnknownSyscall(0xDF)));
 }
 
 #[test]
@@ -329,23 +327,14 @@ fn test_custom_syscall() {
 
 #[test]
 fn removed_hw_probe_syscalls_reject() {
-    let mut vm = IVM::new(u64::MAX);
-    let prog = assemble_syscall(0xF2);
-    vm.load_program(&prog).unwrap();
-    let res = vm.run();
-    assert!(matches!(res, Err(VMError::UnknownSyscall(0xF2))));
-
-    let mut vm2 = IVM::new(u64::MAX);
-    let prog2 = assemble_syscall(0xF3);
-    vm2.load_program(&prog2).unwrap();
-    let res2 = vm2.run();
-    assert!(matches!(res2, Err(VMError::UnknownSyscall(0xF3))));
-
-    let mut vm3 = IVM::new(u64::MAX);
-    let prog3 = assemble_syscall(0xF8);
-    vm3.load_program(&prog3).unwrap();
-    let res3 = vm3.run();
-    assert!(matches!(res3, Err(VMError::UnknownSyscall(0xF8))));
+    for number in [0xF2, 0xF3] {
+        let mut vm = IVM::new(u64::MAX);
+        let program = assemble_syscall(number);
+        assert_eq!(
+            vm.load_program(&program),
+            Err(VMError::UnknownSyscall(u32::from(number)))
+        );
+    }
 }
 
 #[test]
@@ -353,6 +342,12 @@ fn test_verify_proof_syscall() {
     let mut vm = IVM::new(u64::MAX);
     let prog = assemble_syscall(syscalls::SYSCALL_VERIFY_PROOF as u8);
     vm.load_program(&prog).unwrap();
+    let proof = norito::to_bytes(&vm.execution_proof()).expect("encode execution proof");
+    let proof_tlv = make_tlv(PointerType::NoritoBytes as u16, &proof);
+    let proof_pointer = vm
+        .alloc_input_tlv(&proof_tlv)
+        .expect("allocate proof input");
+    vm.set_register(10, proof_pointer);
     let err = vm.run().expect_err("VERIFY_PROOF should be unimplemented");
     assert!(matches!(
         err,

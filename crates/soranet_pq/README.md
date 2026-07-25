@@ -59,17 +59,16 @@ verify_mldsa(MlDsaSuite::MlDsa65, dsa_keys.public_key(), b"", message, sig.as_by
 
 ## C FFI
 
-`soranet_pq` emits the `cdylib` and `staticlib` artifacts whenever it is the
-primary package being built (for example, `cargo build -p soranet_pq`). This
-prevents workspace consumers from repeatedly generating the same FFI artifacts,
-which in turn avoids the Cargo warning about colliding output filenames, while
-keeping the developer workflow unchanged when explicitly building this crate.
+Workspace builds emit the Rust library. Build the C-compatible artifacts
+explicitly with Cargo's crate-type override; Rust does not support conditional
+crate types in source attributes.
 A ready-to-use header lives at `crates/soranet_pq/include/soranet_pq.h` and
 mirrors the exported symbols in `src/ffi.rs`:
 
 ```bash
-# Build the release library and copy the header for your project
-cargo build -p soranet_pq --release
+# Build the release C artifacts and copy the header for your project
+cargo rustc -p soranet_pq --release --lib \
+  --crate-type=rlib,cdylib,staticlib
 cp crates/soranet_pq/include/soranet_pq.h /path/to/project/include/
 ```
 
@@ -83,14 +82,4 @@ cbindgen --config crates/soranet_pq/cbindgen.toml \
 ```
 
 The generated header exposes the `soranet_mlkem_*` and `soranet_mldsa_*` entry
-points alongside the shared error codes used throughout the C ABI. When you
-need these artifacts during a workspace-wide build (where `soranet_pq` is just a
-dependency), enable the `ffi-artifacts` feature explicitly:
-
-```bash
-# Build workspace benches/tests and still emit the FFI libraries
-cargo bench --features soranet_pq/ffi-artifacts --no-run
-```
-
-You can also add `features = ["ffi-artifacts"]` to the dependency entry in
-`Cargo.toml` if another crate always needs the artifacts.
+points alongside the shared error codes used throughout the C ABI.

@@ -1,3 +1,4 @@
+// BEGIN GENERATED: kotodama-v1-validator-policy
 /** Canonical Kotodama V1 lexical keywords generated from `grammar/v1.lex`. */
 export const KOTODAMA_V1_KEYWORDS = Object.freeze([
   "authorize",
@@ -32,7 +33,7 @@ export const KOTODAMA_V1_KEYWORDS = Object.freeze([
   "view",
 ]);
 
-/** Source declaration names reserved by canonical V1 types and compiler intrinsics. */
+/** Names reserved for non-type source declarations. */
 export const KOTODAMA_V1_DECLARATION_RESERVED = Object.freeze([
   "int",
   "decimal",
@@ -80,19 +81,56 @@ export const KOTODAMA_V1_DECLARATION_RESERVED = Object.freeze([
   "__kotodama_decimal_to_int_round",
 ]);
 
+/** Retired numeric spellings reserved only for types and source units. */
+export const KOTODAMA_V1_RETIRED_TYPE_NAMES = Object.freeze([
+  "i8",
+  "i16",
+  "i32",
+  "i64",
+  "i128",
+  "isize",
+  "u8",
+  "u16",
+  "u32",
+  "u64",
+  "u128",
+  "usize",
+  "num",
+  "Int",
+  "Integer",
+  "float",
+  "f32",
+  "f64",
+  "Decimal",
+  "Fixed",
+  "FixedPoint",
+  "Amount",
+  "amount",
+  "money",
+  "Quantity",
+  "number",
+]);
+
 const KEYWORD_SET = new Set(KOTODAMA_V1_KEYWORDS);
 const DECLARATION_RESERVED_SET = new Set(KOTODAMA_V1_DECLARATION_RESERVED);
-const NUMERIC_TYPE_KEYWORD_SET = new Set(["int", "decimal", "quantity"]);
+const RETIRED_TYPE_SET = new Set(KOTODAMA_V1_RETIRED_TYPE_NAMES);
+// END GENERATED: kotodama-v1-validator-policy
 
 /** Return whether a string is one exact source identifier under V1 resolution rules. */
-export function isCanonicalKotodamaIdentifier(value, { declaration = false } = {}) {
+export function isCanonicalKotodamaIdentifier(
+  value,
+  { declaration = false, typeDeclaration = false } = {},
+) {
   return (
     typeof value === "string" &&
     /^[A-Za-z_][A-Za-z0-9_]*$/u.test(value) &&
     !KEYWORD_SET.has(value) &&
-    !NUMERIC_TYPE_KEYWORD_SET.has(value) &&
     !value.startsWith("__kotodama_link_") &&
-    (!declaration || !DECLARATION_RESERVED_SET.has(value))
+    (!declaration || !DECLARATION_RESERVED_SET.has(value)) &&
+    (!typeDeclaration || (
+      !DECLARATION_RESERVED_SET.has(value) &&
+      !RETIRED_TYPE_SET.has(value)
+    ))
   );
 }
 

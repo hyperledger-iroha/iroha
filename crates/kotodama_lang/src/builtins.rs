@@ -792,6 +792,32 @@ impl Builtin {
             "schema_encode_direct" => Self::SchemaEncodeDirect,
             "schema_decode_direct" => Self::SchemaDecodeDirect,
             "schema_info_direct" => Self::SchemaInfoDirect,
+            "numeric_to_int" => Self::NumericToInt,
+            "numeric_neg" => Self::NumericNeg,
+            "numeric_add" => Self::NumericAdd,
+            "numeric_sub" => Self::NumericSub,
+            "numeric_mul" => Self::NumericMul,
+            "numeric_div" => Self::NumericDiv,
+            "numeric_rem" => Self::NumericRem,
+            "numeric_eq" => Self::NumericEq,
+            "numeric_ne" => Self::NumericNe,
+            "numeric_lt" => Self::NumericLt,
+            "numeric_le" => Self::NumericLe,
+            "numeric_gt" => Self::NumericGt,
+            "numeric_ge" => Self::NumericGe,
+            "numeric_to_int_direct" => Self::NumericToIntDirect,
+            "numeric_add_direct" => Self::NumericAddDirect,
+            "numeric_sub_direct" => Self::NumericSubDirect,
+            "numeric_mul_direct" => Self::NumericMulDirect,
+            "numeric_div_direct" => Self::NumericDivDirect,
+            "numeric_rem_direct" => Self::NumericRemDirect,
+            "numeric_neg_direct" => Self::NumericNegDirect,
+            "numeric_eq_direct" => Self::NumericEqDirect,
+            "numeric_ne_direct" => Self::NumericNeDirect,
+            "numeric_lt_direct" => Self::NumericLtDirect,
+            "numeric_le_direct" => Self::NumericLeDirect,
+            "numeric_gt_direct" => Self::NumericGtDirect,
+            "numeric_ge_direct" => Self::NumericGeDirect,
             "wrapping_add" => Self::WrappingAdd,
             "wrapping_sub" => Self::WrappingSub,
             "wrapping_mul" => Self::WrappingMul,
@@ -2094,6 +2120,19 @@ impl Builtin {
                 | Self::Path
                 | Self::Valcom
                 | Self::TestInvokeEntrypoint
+                | Self::NumericToInt
+                | Self::NumericNeg
+                | Self::NumericAdd
+                | Self::NumericSub
+                | Self::NumericMul
+                | Self::NumericDiv
+                | Self::NumericRem
+                | Self::NumericEq
+                | Self::NumericNe
+                | Self::NumericLt
+                | Self::NumericLe
+                | Self::NumericGt
+                | Self::NumericGe
         ) {
             BuiltinLowering::DerivedSyscalls
         } else {

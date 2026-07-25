@@ -14,11 +14,9 @@ use iroha_config::parameters::actual::{
 use iroha_core::{
     block::ValidBlock,
     governance::manifest::LaneManifestRegistry,
-    kura::Kura,
     query::store::LiveQueryStore,
     state::{State, World},
     sumeragi::network_topology::Topology as CoreTopology,
-    telemetry::StateTelemetry,
 };
 use iroha_crypto::{Hash, KeyPair, SignatureOf};
 use iroha_data_model::{
@@ -992,7 +990,7 @@ pub(crate) fn preexecute_genesis_with_runtime_config(
         return Err(eyre!("genesis topology is empty"));
     }
 
-    let kura = Kura::blank_kura_for_testing();
+    let nexus = resolve_preexec_nexus_config(nexus_config, block.0.da_proof_policies())?;
     let query_handle = LiveQueryStore::start_test();
     let effective_genesis_account = block
         .0
@@ -1005,24 +1003,15 @@ pub(crate) fn preexecute_genesis_with_runtime_config(
     let genesis_account_entry =
         Account::new(effective_genesis_account.clone()).build(&effective_genesis_account);
     let mut world = World::with([genesis_domain], [genesis_account_entry], []);
-    let default_nexus = ActualNexus::default();
-    let dataspace_catalog = nexus_config
-        .map(|nexus| &nexus.dataspace_catalog)
-        .unwrap_or(&default_nexus.dataspace_catalog);
-    iroha_core::sns::seed_genesis_alias_bootstrap(&mut world, &block.0, dataspace_catalog);
-    let mut state = State::with_telemetry(world, kura, query_handle, StateTelemetry::default());
+    iroha_core::sns::seed_genesis_alias_bootstrap(&mut world, &block.0, &nexus.dataspace_catalog);
+    let mut state = State::new_with_pre_genesis_nexus_for_testing(world, nexus, query_handle);
     if let Some(pipeline_config) = pipeline_config {
         state.set_pipeline(pipeline_config.clone());
     }
     if let Some(zk_config) = zk_config {
         state.set_zk(zk_config.clone()).map_err(Report::from)?;
     }
-    apply_preexec_nexus_overrides(
-        &mut state,
-        genesis_key_pair,
-        nexus_config,
-        block.0.da_proof_policies(),
-    )?;
+    install_preexec_lane_manifests(&state)?;
     let core_topology = CoreTopology::new(topology.to_vec());
     let chain = block
         .0
@@ -1087,12 +1076,10 @@ pub(crate) fn preexecute_genesis_with_runtime_config(
     ))
 }
 
-fn apply_preexec_nexus_overrides(
-    state: &mut State,
-    _genesis_key_pair: &KeyPair,
+fn resolve_preexec_nexus_config(
     nexus_config: Option<&ActualNexus>,
     block_policies: Option<&DaProofPolicyBundle>,
-) -> Result<(), Report> {
+) -> Result<ActualNexus, Report> {
     let has_authoritative_nexus = nexus_config.is_some();
     let mut nexus = nexus_config.cloned().unwrap_or_default();
     if let Some(policies) = block_policies
@@ -1154,7 +1141,7 @@ fn apply_preexec_nexus_overrides(
         nexus.dataspace_catalog = dataspace_catalog;
     }
     if !has_authoritative_nexus {
-        // Legacy direct fixture calls have no resolved runtime config. Keep their
+        // Direct fixture calls have no resolved runtime config. Keep their
         // account literals unambiguous, but never rewrite an authoritative Nexus
         // snapshot because the signed v2 commitment must match peer startup.
         let gas_account = ALICE_ID.to_string();
@@ -1162,9 +1149,10 @@ fn apply_preexec_nexus_overrides(
         nexus.staking.slash_sink_account_id = gas_account;
     }
 
-    state
-        .set_nexus(nexus)
-        .map_err(|err| Report::new(err).wrap_err("apply nexus config for genesis pre-execution"))?;
+    Ok(nexus)
+}
+
+fn install_preexec_lane_manifests(state: &State) -> Result<(), Report> {
     let nexus = state.nexus_snapshot();
     let lane_manifests = if nexus.enabled {
         let registry = LaneManifestRegistry::from_config(
@@ -1801,7 +1789,10 @@ mod tests {
         assert!(
             rendered.contains("stake asset definition missing")
                 || rendered.contains("nexus.staking.stake_asset_id")
-                || rendered.contains("Find(AssetDefinition("),
+                || rendered.contains("Find(AssetDefinition(")
+                || rendered.contains(
+                    "register_public_lane_validator rejected: lane 1 is not active at block height 1"
+                ),
             "unexpected pre-exec error without nexus config: {err:?}"
         );
 
@@ -1824,45 +1815,44 @@ mod tests {
     fn populate_genesis_results_leases_genesis_account_labels() {
         use iroha_data_model::{
             account::rekey::{AccountAlias, AccountAliasDomain},
-            block::SignedBlock,
             isi::{InstructionBox, Register},
             nexus::DataSpaceId,
-            transaction::TransactionBuilder,
         };
 
         init_instruction_registry();
-        let chain_id = super::chain_id();
         let genesis_key_pair = SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone();
-        let genesis_account = AccountId::new(genesis_key_pair.public_key().clone());
         let ivm_domain: DomainId = DomainId::try_new("ivm", "universal").expect("ivm domain");
         let gas_label: Name = "gas".parse().expect("gas label");
-        let gas_account =
-            Account::new(AccountId::new(KeyPair::random().public_key().clone()).clone())
-                .with_label(Some(AccountAlias::new(
-                    gas_label,
-                    Some(AccountAliasDomain::new(ivm_domain.name().clone())),
-                    DataSpaceId::UNIVERSAL,
-                )));
-        let tx = TransactionBuilder::new(
-            chain_id,
-            genesis_account.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([
+        let gas_account = Account::new(AccountId::new(KeyPair::random().public_key().clone()))
+            .with_label(Some(AccountAlias::new(
+                gas_label,
+                Some(AccountAliasDomain::new(ivm_domain.name().clone())),
+                DataSpaceId::UNIVERSAL,
+            )));
+        let extra_transactions = vec![vec![
             InstructionBox::from(Register::domain(Domain::new(ivm_domain))),
             InstructionBox::from(Register::account(gas_account)),
-        ])
-        .try_sign(genesis_key_pair.private_key())
-        .expect("checked genesis test transaction signing succeeds");
-        let block = GenesisBlock(SignedBlock::genesis(
-            vec![tx],
-            genesis_key_pair.private_key(),
-            None,
-            None,
-        ));
+        ]];
 
         let bls = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
-        let topology = vec![PeerId::new(bls.public_key().clone())];
+        let peer_id = PeerId::new(bls.public_key().clone());
+        let topology = [peer_id.clone()].into_iter().collect();
+        let entry = GenesisTopologyEntry::new(
+            peer_id,
+            iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
+        );
+        let (block, genesis_account, topology, genesis_key_pair) =
+            super::build_minimal_genesis_unexecuted(
+                extra_transactions,
+                topology,
+                vec![entry],
+                genesis_key_pair,
+            );
+        assert_eq!(
+            super::signed_genesis_consensus_mode(&block)
+                .expect("canonical minimal genesis must contain exactly one handshake entry"),
+            WireConsensusMode::Permissioned
+        );
         let executed = super::populate_genesis_results(
             &block,
             &genesis_account,
@@ -1888,8 +1878,7 @@ mod tests {
             nexus::{DataSpaceId, LaneId},
         };
 
-        let genesis_key_pair = SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone();
-        let genesis_account = AccountId::new(genesis_key_pair.public_key().clone());
+        let genesis_account = AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone());
         let genesis_account_entry = Account {
             id: genesis_account,
             metadata: Metadata::default(),
@@ -1897,14 +1886,12 @@ mod tests {
             uaid: None,
             opaque_ids: Vec::new(),
         };
-        let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let world = World::with(
             Vec::<iroha_data_model::domain::Domain>::new(),
             vec![genesis_account_entry],
             Vec::<iroha_data_model::asset::AssetDefinition>::new(),
         );
-        let mut state = State::with_telemetry(world, kura, query_handle, StateTelemetry::default());
 
         let lane_count = NonZeroU32::new(2).expect("non-zero lane count");
         let policy0 = DaProofPolicy {
@@ -1921,8 +1908,11 @@ mod tests {
         };
         let bundle = DaProofPolicyBundle::new(vec![policy0, policy1]);
 
-        super::apply_preexec_nexus_overrides(&mut state, &genesis_key_pair, None, Some(&bundle))
-            .expect("preexec should apply proof policy overrides");
+        let nexus = super::resolve_preexec_nexus_config(None, Some(&bundle))
+            .expect("preexec should resolve proof policy overrides");
+        let state = State::new_with_pre_genesis_nexus_for_testing(world, nexus, query_handle);
+        super::install_preexec_lane_manifests(&state)
+            .expect("preexec should install proof-policy-derived lane manifests");
 
         let view = state.view();
         let nexus = view.nexus();

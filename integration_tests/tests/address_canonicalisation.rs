@@ -992,6 +992,7 @@ async fn account_transactions_get_returns_i105_literals() -> Result<()> {
                     key,
                     norito::json!("addrfmtget"),
                 )],
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 Metadata::default(),
             );
             let mut submitted = false;
@@ -1125,6 +1126,7 @@ async fn account_transactions_query_returns_i105_literals() -> Result<()> {
                     key,
                     norito::json!("addrfmtquery"),
                 )],
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 Metadata::default(),
             );
             let mut submitted = false;

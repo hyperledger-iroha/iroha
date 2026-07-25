@@ -113,18 +113,21 @@ impl IVMHost for PermissiveHost {
 }
 
 #[test]
-fn run_with_host_enforces_syscall_policy_before_host_dispatch() {
-    let scall = encoding::wide::encode_sys(instruction::wide::system::SCALL, 0xF8);
+fn program_admission_enforces_syscall_policy_before_host_dispatch() {
+    let scall = encoding::wide::encode_sys(instruction::wide::system::SCALL, 0xDF);
     let halt = encoding::wide::encode_halt();
     let program = program_with(ProgramMetadata::default(), &[scall, halt]);
     let mut vm = IVM::new(10_000);
-    vm.load_program(&program).expect("load program");
-    let mut host = PermissiveHost { called: false };
-
-    let err = vm
-        .run_with_host(&mut host)
-        .expect_err("policy must reject before host dispatch");
-    assert!(matches!(err, VMError::UnknownSyscall(0xF8)));
+    vm.set_host(PermissiveHost { called: false });
+    assert_eq!(
+        vm.load_program(&program),
+        Err(VMError::UnknownSyscall(0xDF))
+    );
+    let host = vm
+        .host_mut_any()
+        .expect("permissive host remains attached")
+        .downcast_mut::<PermissiveHost>()
+        .expect("permissive host type");
     assert!(!host.called);
 }
 

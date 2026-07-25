@@ -12,9 +12,16 @@ fn kotodama_host_state_calls_run() {
     // ensure pointer-ABI plumbing and syscalls are wired end-to-end.
     let src = r#"
         seiyaku StateHostCalls {
+          state bytes demo;
+
+          hajimari() {
+            demo = b"";
+          }
+
           kotoage fn main() authorize("StateHostCalls") {
-            state::set(Name::parse("demo"), b"hello");
-            let _b = state::get(Name::parse("demo"));
+            demo = b"hello";
+            let encoded = state::get(Name::parse("demo"));
+            state::set(Name::parse("demo"), encoded);
             state::delete(Name::parse("demo"));
           }
         }
@@ -27,4 +34,7 @@ fn kotodama_host_state_calls_run() {
     vm.load_program(&code).expect("load");
     common::select_kotodama_entrypoint(&mut vm, &code, "main");
     vm.run().expect("run");
+    let host = vm.host_mut_any().expect("CoreHost available");
+    let host = host.downcast_mut::<CoreHost>().expect("CoreHost type");
+    assert!(host.state_bytes("demo").is_none());
 }

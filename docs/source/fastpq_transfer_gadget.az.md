@@ -102,12 +102,12 @@ hətta transkript isteğe bağlı sahələri buraxsa belə, həmişə determinis
 | `ivm::host` & testlər | Əsas/Defolt hostlar əhatə dairəsi aktiv olduqda, `transfer_v1`-ni toplu əlavə kimi qəbul edir, səth `SYSCALL_TRANSFER_V1_BATCH_{BEGIN,END,APPLY}` və saxta WSV hostu reqressiya testlərinin deterministik balansı təsdiq edə bilməsi üçün girişləri həyata keçirməzdən əvvəl bufer edir. yeniləmələr.【crates/ivm/src/core_host.rs:1001】【crates/ivm/src/host.rs:451】【crates/ivm/src/mock_wsv.rs :3713】【crates/ivm/tests/wsv_host_pointer_tlv.rs:219】【crates/ivm/tests/wsv_host_pointer_tlv.rs:287】
 | `iroha_core` | Vəziyyətə keçiddən sonra `TransferTranscript` buraxın, `StateBlock::capture_exec_witness` zamanı açıq `public_inputs` ilə `FastpqTransitionBatch` qeydlərini qurun və FASTPQ prover zolağını işə salın ki, həm Torii, həm də St. `TransitionBatch` girişləri. `TransferAssetBatch` ardıcıl köçürmələri tək transkriptdə qruplaşdırır, çox delta topluları üçün poseidon həzmini buraxır, beləliklə qadcet deterministik olaraq girişlər arasında təkrarlana bilsin. |
 | `fastpq_prover` | `gadgets::transfer` indi planlayıcı (`crates/fastpq_prover/src/gadgets/transfer.rs`) üçün çox delta transkriptləri (balans arifmetik + Poseidon həzm) və strukturlaşdırılmış şahidləri (o cümlədən yertutan qoşalaşmış SMT blobları) təsdiqləyir. `trace::build_trace` həmin transkriptləri toplu metaməlumatlardan deşifrə edir, `transfer_transcripts` faydalı yükü olmayan köçürmə partiyalarını rədd edir, təsdiq edilmiş şahidləri `Trace::transfer_witnesses`-ə əlavə edir və `TracePolynomialData::transfer_plan()` plana əməl edənə qədər planı tamamlayır. (`crates/fastpq_prover/src/trace.rs`). Sıra sayı reqressiya qoşqu indi `fastpq_row_bench` (`crates/fastpq_prover/src/bin/fastpq_row_bench.rs:1`) vasitəsilə göndərilir, 65536 yastıqlı cərgəyə qədər ssenariləri əhatə edir, qoşalaşmış SMT naqilləri isə TF-3 toplu yardımçı mərhələnin arxasında qalır (yer tutucular həmin yerləri dəyişdirənə qədər iz cədvəlini saxlayır). |
-| Kotodama | `transfer_batch((from,to,asset,amount), …)` köməkçisini `transfer_v1_batch_begin`, ardıcıl `transfer_asset` zəngləri və `transfer_v1_batch_end`-ə endirir. Hər bir dəst arqumenti `(AccountId, AccountId, AssetDefinitionId, int)` formasına uyğun olmalıdır; tək köçürmələr mövcud inşaatçı saxlayır. |
+| Kotodama | `transfer_batch((from,to,asset,amount), …)` köməkçisini `transfer_v1_batch_begin`, ardıcıl `transfer_asset` zəngləri və `transfer_v1_batch_end`-ə endirir. Hər bir dəst arqumenti `(AccountId, AccountId, AssetDefinitionId, quantity)` formasına uyğun olmalıdır; tək köçürmələr mövcud inşaatçı saxlayır. |
 
 Misal Kotodama istifadə:
 
 ```text
-fn pay(AccountId a, AccountId b, AssetDefinitionId asset, int x) {
+fn pay(AccountId a, AccountId b, AssetDefinitionId asset, quantity x) {
     transfer_batch((a, b, asset, x), (b, a, asset, 1));
 }
 ```

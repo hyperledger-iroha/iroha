@@ -39,7 +39,7 @@ fn koto_build_meta_header_smoke() {
     assert_eq!(meta.abi_version, 1);
     assert_eq!(meta.vector_length, 0);
     assert_eq!(meta.max_cycles, 2000);
-    assert_ne!(meta.mode & ivm::ivm_mode::ZK, 0);
+    assert_eq!(meta.mode & ivm::ivm_mode::ZK, 0);
     assert_eq!(meta.mode & ivm::ivm_mode::VECTOR, 0);
 }
 

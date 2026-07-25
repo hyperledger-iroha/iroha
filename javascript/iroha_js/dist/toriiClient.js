@@ -22773,7 +22773,7 @@ function normalizeManifestPayload(manifest, context) {
         : requireCanonicalKotodamaIdentifier(
             seiyakuName,
             `${context}.seiyaku_name`,
-            { declaration: true },
+            { typeDeclaration: true },
           );
   }
   if (hasField("code_hash", "codeHash")) {
@@ -23480,7 +23480,7 @@ function normalizeManifestErrorCodesPayload(value, context) {
       namespace: requireCanonicalKotodamaIdentifier(
         record.namespace,
         `${context}[${index}].namespace`,
-        { declaration: true },
+        { typeDeclaration: true },
       ),
       name: requireCanonicalKotodamaIdentifier(
         record.name,

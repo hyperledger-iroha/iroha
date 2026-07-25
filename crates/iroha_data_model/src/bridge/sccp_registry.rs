@@ -1012,9 +1012,9 @@ pub struct SccpTronDestinationDeploymentV1 {
 /// Exact immutable Solana route and native-verifier deployment identity.
 ///
 /// All account identities are raw 32-byte Solana public keys. The route and
-/// native verifier are distinct programs with independently pinned ProgramData,
+/// native verifier are distinct programs with independently pinned `ProgramData`,
 /// state/material, code, configuration, and verification-key roles. Reusing a
-/// program or ProgramData account across those trust boundaries is rejected.
+/// program or `ProgramData` account across those trust boundaries is rejected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -1028,26 +1028,26 @@ pub struct SccpSolanaDestinationDeploymentV1 {
     pub token_mint_address: [u8; 32],
     /// Immutable value-moving route program public key.
     pub route_program_id: [u8; 32],
-    /// Loader-v3 ProgramData account for the route executable.
+    /// Loader-v3 `ProgramData` account for the route executable.
     pub route_program_data_address: [u8; 32],
-    /// Nonzero deployment slot of the reviewed route ProgramData revision.
+    /// Nonzero deployment slot of the reviewed route `ProgramData` revision.
     pub route_program_data_slot: u64,
     /// Program-owned route-state account public key.
     pub route_state_account: [u8; 32],
-    /// Blake2b-256 hash of the immutable route ProgramData executable bytes.
+    /// Blake2b-256 hash of the immutable route `ProgramData` executable bytes.
     pub route_program_code_hash: [u8; 32],
     /// Native recursive verifier program public key.
     pub native_verifier_program_id: [u8; 32],
-    /// Loader-v3 ProgramData account for the native verifier executable.
+    /// Loader-v3 `ProgramData` account for the native verifier executable.
     pub native_verifier_program_data_address: [u8; 32],
-    /// Nonzero deployment slot of the reviewed verifier ProgramData revision.
+    /// Nonzero deployment slot of the reviewed verifier `ProgramData` revision.
     pub native_verifier_program_data_slot: u64,
     /// Program-owned sealed verification-material account public key.
     ///
     /// This role holds the governed VK/config material and is distinct from a
     /// generic mutable program state account.
     pub native_verifier_material_account: [u8; 32],
-    /// Blake2b-256 hash of the immutable native-verifier ProgramData bytes.
+    /// Blake2b-256 hash of the immutable native-verifier `ProgramData` bytes.
     pub native_verifier_program_code_hash: [u8; 32],
     /// Commitment to the exact native-verifier runtime configuration.
     pub native_verifier_config_hash: [u8; 32],

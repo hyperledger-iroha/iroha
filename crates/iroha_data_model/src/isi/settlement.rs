@@ -259,6 +259,11 @@ impl FxCorridorPolicyRegistry {
     }
 
     /// Decode a matching policy-registry custom parameter.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Norito error when a parameter with the registry identifier
+    /// does not contain a valid [`FxCorridorPolicyRegistry`].
     #[cfg(feature = "json")]
     pub fn from_custom_parameter(
         custom: &crate::parameter::CustomParameter,

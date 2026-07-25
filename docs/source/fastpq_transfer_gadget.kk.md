@@ -102,12 +102,12 @@ lands, провер синтетикалық жолмен кілт/баланс 
 | `ivm::host` & сынақтар | Негізгі/әдепкі хосттар `transfer_v1` ауқымы белсенді болғанда пакеттік қосымша ретінде қарастырады, беті `SYSCALL_TRANSFER_V1_BATCH_{BEGIN,END,APPLY}` және жалған WSV хосты жазбаларды орындамас бұрын буферлейді, осылайша регрессия сынақтары детерминирленген теңгерімді бекіте алады. жаңартулар.【crates/ivm/src/core_host.rs:1001】【crates/ivm/src/host.rs:451】【crates/ivm/src/mock_wsv.rs :3713】【crates/ivm/tests/wsv_host_pointer_tlv.rs:219】【crates/ivm/tests/wsv_host_pointer_tlv.rs:287】
 | `iroha_core` | Күйге көшкеннен кейін `TransferTranscript` шығарыңыз, `StateBlock::capture_exec_witness` кезінде анық `public_inputs` бар `FastpqTransitionBatch` жазбаларын жасаңыз және Torii және St. `TransitionBatch` кірістері. `TransferAssetBatch` дәйекті тасымалдауларды бір транскриптке топтайды, көп дельталық топтамалар үшін посейдон дайджестін өткізіп жібереді, осылайша гаджет жазбалар бойынша анықтаушы түрде қайталай алады. |
 | `fastpq_prover` | `gadgets::transfer` енді жоспарлаушы (`crates/fastpq_prover/src/gadgets/transfer.rs`) үшін көп дельта транскрипттерін (баланс арифметикасы + Посейдон дайджест) тексереді және құрылымдық куәгерлерді (соның ішінде толтырғышпен жұптастырылған SMT блоктары) көрсетеді. `trace::build_trace` пакеттік метадеректерден алынған транскрипттерді декодтайды, `transfer_transcripts` пайдалы жүктемесі жоқ тасымалдау топтамаларын қабылдамайды, расталған куәлерді `Trace::transfer_witnesses` құжатына қосады және `TracePolynomialData::transfer_plan()` жиынтықты жоспарлағанға дейін сақтайды. (`crates/fastpq_prover/src/trace.rs`). Жолдарды санау регрессиялық жиегі қазір 65536 толтырылған жолға дейінгі сценарийлерді қамтитын `fastpq_row_bench` (`crates/fastpq_prover/src/bin/fastpq_row_bench.rs:1`) арқылы жеткізіледі, ал жұптастырылған SMT сымдары TF-3 пакеттік көмекші кезеңінің артында қалады (орын толтырғыштар сол жерге дейін бақылау кестесін сақтайды). |
-| Kotodama | `transfer_batch((from,to,asset,amount), …)` көмекшісін `transfer_v1_batch_begin`, дәйекті `transfer_asset` және `transfer_v1_batch_end` қоңырауларына төмендетеді. Әрбір кортеж аргументі `(AccountId, AccountId, AssetDefinitionId, int)` пішініне сәйкес келуі керек; бірыңғай трансферттер бар құрылысшыны сақтайды. |
+| Kotodama | `transfer_batch((from,to,asset,amount), …)` көмекшісін `transfer_v1_batch_begin`, дәйекті `transfer_asset` және `transfer_v1_batch_end` қоңырауларына төмендетеді. Әрбір кортеж аргументі `(AccountId, AccountId, AssetDefinitionId, quantity)` пішініне сәйкес келуі керек; бірыңғай трансферттер бар құрылысшыны сақтайды. |
 
 Kotodama пайдалану мысалы:
 
 ```text
-fn pay(AccountId a, AccountId b, AssetDefinitionId asset, int x) {
+fn pay(AccountId a, AccountId b, AssetDefinitionId asset, quantity x) {
     transfer_batch((a, b, asset, x), (b, a, asset, 1));
 }
 ```

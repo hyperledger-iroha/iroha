@@ -1,10 +1,11 @@
 //! Validate that by-call trigger execution emits both the trigger event and resulting data events.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
-use std::borrow::Cow;
+use std::{borrow::Cow, sync::Arc};
 
 use iroha_core::{
     block::{BlockBuilder, ValidBlock},
+    governance::manifest::LaneManifestRegistry,
     query::store::LiveQueryStore,
     smartcontracts::triggers::{
         set::{ExecutableRef, SetReadOnly},
@@ -51,6 +52,10 @@ fn build_state_and_ids() -> (State, ChainId, TriggerId, AssetId) {
     let query = LiveQueryStore::start_test();
     let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
     let state = State::new_with_chain_for_testing(world, kura.clone(), query, chain_id.clone());
+    let nexus = state.nexus_snapshot();
+    state.install_lane_manifests(&Arc::new(
+        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
+    ));
 
     let trigger_id: TriggerId = "sse_smoke_trigger".parse().expect("trigger id");
     let asset_id = AssetId::new(stored_asset_definition_id, ALICE_ID.clone());
@@ -103,6 +108,11 @@ fn register_trigger(
         ValidBlock::validate_unchecked(register_block.into(), &mut register_state_block)
             .unpack(|_| {});
     let committed_register = valid_register.commit_unchecked().unpack(|_| {});
+    assert!(
+        committed_register.as_ref().error(0).is_none(),
+        "register trigger transaction rejected during execution: {:?}",
+        committed_register.as_ref().error(0)
+    );
     let _ = register_state_block.apply_without_execution(&committed_register, Vec::new());
     let fragment_count = register_state_block.committed_fragment_count();
     register_state_block
@@ -144,13 +154,13 @@ fn execute_trigger(
         ValidBlock::validate_unchecked(execute_block.into(), &mut execute_state_block)
             .unpack(|_| {});
     let committed_execute = valid_execute.commit_unchecked().unpack(|_| {});
-    let events = execute_state_block.apply_without_execution(&committed_execute, Vec::new());
-    let fragment_count = execute_state_block.committed_fragment_count();
-    execute_state_block.commit().expect("execute block commits");
     let execute_error = committed_execute
         .as_ref()
         .error(0)
         .map(|error| format!("{error:?}"));
+    let events = execute_state_block.apply_without_execution(&committed_execute, Vec::new());
+    let fragment_count = execute_state_block.committed_fragment_count();
+    execute_state_block.commit().expect("execute block commits");
     (events, fragment_count, execute_error)
 }
 

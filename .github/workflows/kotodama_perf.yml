@@ -139,9 +139,9 @@ jobs:
       - name: Measure base revision
         working-directory: baseline
         run: |
-          cargo bench -p ivm --bench bench_kotodama -- --save-baseline base
-          cargo bench -p iroha_core --bench kotodama_runtime_cache -- --save-baseline base
-          cargo bench -p iroha_core --bench queries -- typed_core_query_ --save-baseline base
+          cargo bench --locked -p ivm --bench bench_kotodama -- --save-baseline base
+          cargo bench --locked -p iroha_core --bench kotodama_runtime_cache -- --save-baseline base
+          cargo bench --locked -p iroha_core --bench queries -- typed_core_query_ --save-baseline base
 
       # Criterion writes a `new` sample even while saving the named `base`.
       # Delete those current slots so a benchmark omitted by the candidate
@@ -162,9 +162,9 @@ jobs:
       - name: Measure candidate revision
         working-directory: candidate
         run: |
-          cargo bench -p ivm --bench bench_kotodama -- --save-baseline candidate
-          cargo bench -p iroha_core --bench kotodama_runtime_cache -- --save-baseline candidate
-          cargo bench -p iroha_core --bench queries -- typed_core_query_ --save-baseline candidate
+          cargo bench --locked -p ivm --bench bench_kotodama -- --save-baseline candidate
+          cargo bench --locked -p iroha_core --bench kotodama_runtime_cache -- --save-baseline candidate
+          cargo bench --locked -p iroha_core --bench queries -- typed_core_query_ --save-baseline candidate
 
       - name: Enforce five-percent ceiling
         working-directory: candidate
@@ -175,7 +175,7 @@ jobs:
 
       - name: Build canonical Kotodama release tools
         working-directory: candidate
-        run: cargo build -p ivm --bin koto -p iroha_cli --bin iroha
+        run: cargo build --locked -p ivm --bin koto -p iroha_cli --bin iroha
 
       - name: Compile every Kotodama documentation source
         working-directory: candidate

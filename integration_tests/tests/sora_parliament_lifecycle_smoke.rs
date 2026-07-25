@@ -529,6 +529,7 @@ async fn submit_permission_grants_and_wait(
             grants
                 .into_iter()
                 .map(|(account_id, permission)| Grant::account_permission(permission, account_id)),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .wrap_err_with(|| submit_context.to_owned())?;
     for (account_id, permissions) in required_permissions {
@@ -1230,6 +1231,7 @@ async fn setup_hostile_fixture(
                 .iter()
                 .chain(honest.iter())
                 .map(|(account_id, _)| Register::account(Account::new(account_id.clone()))),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .wrap_err("register hostile-fixture accounts")?;
     for (account_id, _) in attackers.iter().chain(honest.iter()) {
@@ -1283,6 +1285,7 @@ async fn setup_hostile_fixture(
                         account_id.clone(),
                     )
                 }),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .wrap_err("transfer hostile-fixture funding allocations")?;
     for (account_id, _) in attackers.iter().chain(honest.iter()) {
@@ -1304,7 +1307,7 @@ async fn setup_hostile_fixture(
             .submit(
                 RegisterCitizen {
                     owner: account_id.clone(),
-                    amount: CITIZEN_BOND,
+                    amount: CITIZEN_BOND.into(),
                 },
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
@@ -1543,6 +1546,7 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
             citizens
                 .iter()
                 .map(|(account_id, _)| Register::account(Account::new(account_id.clone()))),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .wrap_err("register citizen accounts")?;
     for (account_id, _) in &citizens {
@@ -1697,7 +1701,7 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
         .submit(
             RegisterCitizen {
                 owner: outsider_id.clone(),
-                amount: CITIZEN_BOND,
+                amount: CITIZEN_BOND.into(),
             },
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -1720,7 +1724,7 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
             .submit(
                 RegisterCitizen {
                     owner: account_id.clone(),
-                    amount: CITIZEN_BOND,
+                    amount: CITIZEN_BOND.into(),
                 },
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
@@ -1926,7 +1930,7 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
                 CastPlainBallot {
                     referendum_id: referendum_id.clone(),
                     owner: account_id.clone(),
-                    amount: BALLOT_LOCK,
+                    amount: BALLOT_LOCK.into(),
                     duration_blocks: BALLOT_DURATION_BLOCKS,
                     direction: if idx < FIRST_REFERENDUM_APPROVE_VOTERS {
                         0
@@ -2177,7 +2181,7 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
                 CastPlainBallot {
                     referendum_id: reject_referendum_id.clone(),
                     owner: account_id.clone(),
-                    amount: BALLOT_LOCK,
+                    amount: BALLOT_LOCK.into(),
                     duration_blocks: BALLOT_DURATION_BLOCKS,
                     direction: if idx < SECOND_REFERENDUM_REJECT_VOTERS {
                         1
@@ -2621,7 +2625,7 @@ async fn sora_parliament_hostile_takeover_enacts_malicious_deploy_and_runtime_af
                 CastPlainBallot {
                     referendum_id: deploy_referendum_id.clone(),
                     owner: account_id.clone(),
-                    amount: BALLOT_LOCK,
+                    amount: BALLOT_LOCK.into(),
                     duration_blocks: BALLOT_DURATION_BLOCKS,
                     direction: 0,
                 },
@@ -2791,7 +2795,7 @@ async fn sora_parliament_hostile_takeover_enacts_malicious_deploy_and_runtime_af
                 CastPlainBallot {
                     referendum_id: runtime_referendum_id.clone(),
                     owner: account_id.clone(),
-                    amount: BALLOT_LOCK,
+                    amount: BALLOT_LOCK.into(),
                     duration_blocks: BALLOT_DURATION_BLOCKS,
                     direction: 0,
                 },

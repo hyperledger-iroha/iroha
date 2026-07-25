@@ -2,9 +2,12 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! execute within a single transaction (WSV Overlays & Commit ordering).
 
-use std::borrow::Cow;
+use std::{borrow::Cow, sync::Arc};
 
-use iroha_core::block::{BlockBuilder, ValidBlock};
+use iroha_core::{
+    block::{BlockBuilder, ValidBlock},
+    governance::manifest::LaneManifestRegistry,
+};
 // no specific event enum imports needed here
 use iroha_data_model::prelude::*;
 
@@ -26,7 +29,13 @@ fn data_events_follow_instruction_order_in_tx() {
     let world = iroha_core::state::World::with([domain], [acc], [ad]);
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query = iroha_core::query::store::LiveQueryStore::start_test();
-    let state = iroha_core::state::State::new_for_testing(world, kura, query);
+    let chain_id = ChainId::from("chain");
+    let state =
+        iroha_core::state::State::new_with_chain_for_testing(world, kura, query, chain_id.clone());
+    let nexus = state.nexus_snapshot();
+    state.install_lane_manifests(&Arc::new(
+        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
+    ));
 
     // Single transaction: three instructions in a fixed order
     let asset = AssetId::of(
@@ -50,7 +59,7 @@ fn data_events_follow_instruction_order_in_tx() {
         Mint::asset_quantity(10_u32, asset.clone()).into(),
     ];
     let tx = TransactionBuilder::new(
-        ChainId::from("chain"),
+        chain_id,
         authority_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )

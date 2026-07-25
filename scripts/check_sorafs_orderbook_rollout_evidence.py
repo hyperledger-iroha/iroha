@@ -89,6 +89,7 @@ DEFAULT_MAX_EVIDENCE_AGE_SECS = 7 * 24 * 60 * 60
 DEFAULT_MAX_ROUTE_LATENCY_MS = 1_500
 DEFAULT_MAX_STREAM_LAG_MS = 2_000
 DEFAULT_MAX_MATCHER_LAG_MS = 1_000
+DEFAULT_MAX_METRICS_SCRAPE_AGE_SECS = 120
 DEFAULT_MIN_RECONCILIATION_PEERS = 4
 HEX64_LEN = 64
 ORDER_REF_PATTERN = re.compile(r"^orderbook-order-[a-z0-9]+(?:-[a-z0-9]+)*\Z")
@@ -128,19 +129,25 @@ REQUIRED_API_ROUTES = (
 )
 REQUIRED_STREAMS = ("sse_orderbook_events", "websocket_orderbook_events")
 REQUIRED_METRICS = (
-    "torii_sorafs_orderbook_order_flow_total",
-    "torii_sorafs_orderbook_open_depth",
-    "torii_sorafs_orderbook_matcher_lag_ms",
+    "torii_sorafs_orderbook_finalized_events_total",
+    "torii_sorafs_orderbook_open_depth_gib",
+    "torii_sorafs_orderbook_matcher_lag_seconds",
     "torii_sorafs_orderbook_settlement_backlog",
-    "torii_sorafs_orderbook_api_error_ratio",
+    "torii_sorafs_orderbook_oldest_settlement_age_seconds",
     "torii_sorafs_orderbook_escrow_runway_seconds",
-    "torii_sorafs_orderbook_contract_mirror_divergence",
+    "torii_sorafs_orderbook_finalized_projection_ready",
+    "torii_sorafs_orderbook_finalized_projection_height",
+    "torii_sorafs_orderbook_finalized_projection_timestamp_seconds",
+    "torii_sorafs_orderbook_finalized_projection_failures_total",
+    "torii_sorafs_orderbook_book_revision",
+    "torii_sorafs_orderbook_matcher_scan_book_revision",
+    "torii_sorafs_orderbook_api_requests_total",
 )
 REQUIRED_RECONCILIATION_SOURCES = (
-    "contract",
-    "matcher",
-    "torii-mirror",
-    "settlement-service",
+    "finalized-ledger",
+    "matcher-worker",
+    "torii-finalized-projection",
+    "settlement-worker",
     "governance-dag",
 )
 REQUIRED_SDK_LANGUAGES = (
@@ -250,10 +257,11 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "daemonized",
         "contract_forwarding_enabled",
         "price_time_priority_verified",
-        "replay_snapshot_verified",
+        "finalized_cursor_replay_verified",
+        "committed_state_reconciliation_verified",
+        "local_book_authority_absent",
         "durable_checkpoint_verified",
         "contract_digest_hex",
-        "divergence_detected",
         "matcher_lag_ms",
         "accepted_order_count",
         "accepted_orders",
@@ -261,7 +269,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "matched_orders",
         "rejected_invalid_order_count",
         "rejected_invalid_orders",
-        "raw_snapshot_included",
+        "raw_ledger_included",
     ),
     "settlement_service": COMMON_EVIDENCE_REQUIRED_FIELDS
     + (
@@ -312,11 +320,16 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
     "observability": COMMON_EVIDENCE_REQUIRED_FIELDS
     + (
         "metrics_scrape_success",
+        "metrics_scraped_at_unix",
         "contract_digest_hex",
         "dashboard_provisioned",
         "alert_rules_installed",
         "live_dashboard_wired",
         "critical_alerts_firing",
+        "finalized_projection_ready",
+        "finalized_projection_height",
+        "finalized_projection_timestamp_seconds",
+        "finalized_projection_failure_delta",
         "metrics",
         "metric_count",
         "response_bodies_included",
@@ -328,9 +341,9 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "contract_digest_hex",
         "source_count",
         "sources",
-        "contract_mirror_reconciliation_passed",
+        "finalized_projection_reconciliation_passed",
+        "replica_finalized_state_equal",
         "evidence_dag_published",
-        "contract_mirror_divergence",
         "mismatch_count",
         "unreconciled_event_count",
         "raw_ledger_included",
@@ -479,6 +492,13 @@ FINGERPRINT_FIELDS: tuple[str, ...] = (
     "policy_digest_hex",
     "metric_count",
     "metrics",
+    "metrics_scraped_at_unix",
+    "finalized_projection_ready",
+    "finalized_projection_height",
+    "finalized_projection_timestamp_seconds",
+    "finalized_projection_failure_delta",
+    "finalized_projection_reconciliation_passed",
+    "replica_finalized_state_equal",
 )
 
 
@@ -532,10 +552,11 @@ def validate_matcher_service(
     require_bool_true(payload, "daemonized", errors)
     require_bool_true(payload, "contract_forwarding_enabled", errors)
     require_bool_true(payload, "price_time_priority_verified", errors)
-    require_bool_true(payload, "replay_snapshot_verified", errors)
+    require_bool_true(payload, "finalized_cursor_replay_verified", errors)
+    require_bool_true(payload, "committed_state_reconciliation_verified", errors)
+    require_bool_true(payload, "local_book_authority_absent", errors)
     require_bool_true(payload, "durable_checkpoint_verified", errors)
     require_hex(payload, "contract_digest_hex", HEX64_LEN, errors)
-    require_false(payload, "divergence_detected", errors)
     require_maximum_int(payload, "matcher_lag_ms", options.max_matcher_lag_ms, errors)
     require_positive_int(payload, "accepted_order_count", errors)
     require_positive_int(payload, "matched_order_count", errors)
@@ -587,7 +608,7 @@ def validate_matcher_service(
         label_error=ORDER_REF_ERROR,
         errors=errors,
     )
-    require_false(payload, "raw_snapshot_included", errors)
+    require_false(payload, "raw_ledger_included", errors)
 
 
 def validate_settlement_service(payload: dict[str, Any], errors: list[str]) -> None:
@@ -756,13 +777,57 @@ def validate_sdk_release(payload: dict[str, Any], errors: list[str]) -> None:
     validate_sdk_artifact_language_coverage(artifact_records, errors)
 
 
-def validate_observability(payload: dict[str, Any], errors: list[str]) -> None:
+def validate_observability(
+    payload: dict[str, Any],
+    errors: list[str],
+    options: ValidationOptions,
+) -> None:
     require_bool_true(payload, "metrics_scrape_success", errors)
+    metrics_scraped_at_unix = require_recent_timestamp(
+        payload,
+        "metrics_scraped_at_unix",
+        errors,
+        now_unix=options.now_unix,
+        max_age_secs=DEFAULT_MAX_METRICS_SCRAPE_AGE_SECS,
+    )
     require_hex(payload, "contract_digest_hex", HEX64_LEN, errors)
     require_bool_true(payload, "dashboard_provisioned", errors)
     require_bool_true(payload, "alert_rules_installed", errors)
     require_bool_true(payload, "live_dashboard_wired", errors)
     require_false(payload, "critical_alerts_firing", errors)
+    require_bool_true(payload, "finalized_projection_ready", errors)
+    require_positive_int(payload, "finalized_projection_height", errors)
+    finalized_projection_timestamp_seconds = require_recent_timestamp(
+        payload,
+        "finalized_projection_timestamp_seconds",
+        errors,
+        now_unix=options.now_unix,
+        max_age_secs=DEFAULT_MAX_METRICS_SCRAPE_AGE_SECS,
+    )
+    require_zero_count(payload, "finalized_projection_failure_delta", errors)
+    generated_at_unix = payload.get("generated_at_unix")
+    if (
+        isinstance(generated_at_unix, int)
+        and not isinstance(generated_at_unix, bool)
+        and metrics_scraped_at_unix > generated_at_unix
+    ):
+        errors.append("metrics_scraped_at_unix must not be after generated_at_unix")
+    if (
+        metrics_scraped_at_unix > 0
+        and finalized_projection_timestamp_seconds > metrics_scraped_at_unix
+    ):
+        errors.append(
+            "finalized_projection_timestamp_seconds must not be after metrics_scraped_at_unix"
+        )
+    elif (
+        metrics_scraped_at_unix > 0
+        and finalized_projection_timestamp_seconds > 0
+        and metrics_scraped_at_unix - finalized_projection_timestamp_seconds
+        > DEFAULT_MAX_METRICS_SCRAPE_AGE_SECS
+    ):
+        errors.append(
+            "finalized_projection_timestamp_seconds is stale at metrics_scraped_at_unix"
+        )
     require_string_coverage(payload, "metrics", "", REQUIRED_METRICS, errors)
     require_only_required_values(payload, "metrics", "", REQUIRED_METRICS, errors)
     require_positive_int(payload, "metric_count", errors)
@@ -807,9 +872,9 @@ def validate_reconciliation(
         field="name",
         allow_scalar_items=False,
     )
-    require_bool_true(payload, "contract_mirror_reconciliation_passed", errors)
+    require_bool_true(payload, "finalized_projection_reconciliation_passed", errors)
+    require_bool_true(payload, "replica_finalized_state_equal", errors)
     require_bool_true(payload, "evidence_dag_published", errors)
-    require_false(payload, "contract_mirror_divergence", errors)
     require_zero_count(payload, "mismatch_count", errors)
     require_zero_count(payload, "unreconciled_event_count", errors)
     require_false(payload, "raw_ledger_included", errors)
@@ -853,7 +918,7 @@ def validate_kind_specific(
     elif kind.name == "sdk_release":
         validate_sdk_release(payload, errors)
     elif kind.name == "observability":
-        validate_observability(payload, errors)
+        validate_observability(payload, errors, options)
     elif kind.name == "reconciliation":
         validate_reconciliation(payload, errors, options)
     elif kind.name == "governance_approval":

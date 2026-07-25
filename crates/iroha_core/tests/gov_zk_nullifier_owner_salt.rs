@@ -17,7 +17,7 @@ use iroha_data_model::{
     events::data::DataEvent,
     prelude::*,
 };
-use iroha_primitives::{json::Json, numeric::Numeric};
+use iroha_primitives::{json::Json, numeric::Quantity};
 use mv::storage::StorageReadOnly;
 
 fn canonical_abi_hex() -> String {
@@ -90,8 +90,7 @@ fn zk_ballot_nullifier_commit_duplicate_rejected() {
     state.zk.halo2.enabled = true;
     state.zk.verify_timeout = Duration::ZERO;
     // Install Halo2 verifying key defaults for governance
-    let bundle = zk_testkit::add2inst_public_bundle(5, 8);
-    let bundle_alt = zk_testkit::add2inst_public_bundle(6, 8);
+    let bundle = zk_testkit::vote_merkle8_bundle();
     let mut cfg = state.gov.clone();
     let vk_name = bundle.vk_id.name.clone();
     cfg.vk_ballot = Some(iroha_config::parameters::actual::VerifyingKeyRef {
@@ -132,13 +131,6 @@ fn zk_ballot_nullifier_commit_duplicate_rejected() {
         Grant::account_permission(p1, alice_id.clone())
             .execute(&alice_id, &mut stx)
             .expect("grant propose");
-        let p2: Permission = CanSubmitGovernanceBallot {
-            referendum_id: "any".to_string(),
-        }
-        .into();
-        Grant::account_permission(p2, alice_id.clone())
-            .execute(&alice_id, &mut stx)
-            .expect("grant ballot");
         let manage_vk = Permission::new("CanManageVerifyingKeys".to_string(), Json::new(()));
         Grant::account_permission(manage_vk, alice_id.clone())
             .execute(&alice_id, &mut stx)
@@ -186,13 +178,20 @@ fn zk_ballot_nullifier_commit_duplicate_rejected() {
     };
     {
         let mut stx = sblock.transaction();
+        let submit_ballot: Permission = CanSubmitGovernanceBallot {
+            referendum_id: rid.clone(),
+        }
+        .into();
+        Grant::account_permission(submit_ballot, alice_id.clone())
+            .execute(&alice_id, &mut stx)
+            .expect("grant ballot for election");
         create
             .execute(&alice_id, &mut stx)
             .expect("create election");
         stx.apply();
     }
 
-    let proof_b64 = bundle.proof_b64.clone();
+    let proof_b64 = bundle.proof_b64();
     let root_hint = hex::encode(bundle.root_bytes());
     let public = norito::json::object([
         (
@@ -237,32 +236,29 @@ fn zk_ballot_nullifier_commit_duplicate_rejected() {
         let e = instr2.execute(&alice_id, &mut stx2).unwrap_err();
         let s = format!("{e}");
         assert!(s.contains("duplicate ballot nullifier"));
-        stx2.apply();
+        let rejected_events = stx2.world.take_external_events();
+        assert!(rejected_events.iter().any(|event| matches!(
+            event.as_data_event(),
+            Some(DataEvent::Governance(GovernanceEvent::BallotRejected(rejected)))
+                if rejected.reason.contains("duplicate ballot nullifier")
+        )));
+        // A rejected instruction rolls back its tentative slash and asset mutations.
     }
-    let locks_after = sblock
+    let locks_after_rejection = sblock
         .world
         .governance_locks()
         .get(&rid)
         .cloned()
-        .expect("locks after slash");
-    let rec = locks_after
+        .expect("locks after rejected duplicate");
+    let rec = locks_after_rejection
         .locks
         .get(&alice_id)
-        .expect("alice lock after slash");
-    assert_eq!(rec.amount, 75);
-    assert_eq!(rec.slashed, 25);
-    let ledger = sblock
-        .world
-        .governance_slashes()
-        .get(&rid)
-        .cloned()
-        .expect("slash ledger");
-    let entry = ledger.slashes.get(&alice_id).expect("slash ledger entry");
-    assert_eq!(entry.total_slashed, 25);
-    assert_eq!(entry.total_restituted, 0);
-    assert_eq!(
-        entry.last_reason,
-        iroha_data_model::events::data::governance::GovernanceSlashReason::DoubleVote
+        .expect("alice lock after rejected duplicate");
+    assert_eq!(rec.amount, Quantity::from(100_u64));
+    assert_eq!(rec.slashed, Quantity::zero());
+    assert!(
+        sblock.world.governance_slashes().get(&rid).is_none(),
+        "rejected duplicate must not persist a slash ledger"
     );
     let escrow_asset_id = AssetId::new(def_id.clone(), escrow_id.clone());
     let receiver_asset_id = AssetId::new(def_id.clone(), receiver_id.clone());
@@ -280,10 +276,46 @@ fn zk_ballot_nullifier_commit_duplicate_rejected() {
         .expect("receiver asset after slash")
         .clone()
         .0;
-    assert_eq!(escrow_balance, Numeric::new(75, 0));
-    assert_eq!(receiver_balance, Numeric::new(25, 0));
+    assert_eq!(escrow_balance, Quantity::from(100_u64));
+    assert_eq!(receiver_balance, Quantity::zero());
 
-    // Changing the proof (commit) allows a second distinct ballot.
+    // The same commitment is distinct in another election because the election id is part of the
+    // nullifier domain separation.
+    let rid_alt = format!("{rid}-alt");
+    let create_alt = iroha_data_model::isi::zk::CreateElection {
+        election_id: rid_alt.clone(),
+        options: 1,
+        eligible_root: bundle.root_bytes(),
+        start_ts: 0,
+        end_ts: 0,
+        vk_ballot: bundle.vk_id.clone(),
+        vk_tally: bundle.vk_id.clone(),
+        domain_tag: "gov:ballot:v1".to_string(),
+    };
+    {
+        let mut stx_alt = sblock.transaction();
+        let submit_ballot: Permission = CanSubmitGovernanceBallot {
+            referendum_id: rid_alt.clone(),
+        }
+        .into();
+        Grant::account_permission(submit_ballot, alice_id.clone())
+            .execute(&alice_id, &mut stx_alt)
+            .expect("grant ballot for second election");
+        create_alt
+            .execute(&alice_id, &mut stx_alt)
+            .expect("create second election");
+        stx_alt.world.governance_referenda_mut().insert(
+            rid_alt.clone(),
+            iroha_core::state::GovernanceReferendumRecord {
+                h_start: 0,
+                h_end: 100,
+                status: iroha_core::state::GovernanceReferendumStatus::Proposed,
+                mode: iroha_core::state::GovernanceReferendumMode::Zk,
+            },
+        );
+        stx_alt.apply();
+    }
+
     let public2 = norito::json::object([
         (
             "owner",
@@ -304,31 +336,29 @@ fn zk_ballot_nullifier_commit_duplicate_rejected() {
     ])
     .expect("serialize public inputs");
     let instr3 = CastZkBallot {
-        election_id: rid.clone(),
-        proof_b64: bundle_alt.proof_b64.clone(),
+        election_id: rid_alt,
+        proof_b64: bundle.proof_b64(),
         public_inputs_json: norito::json::to_json(&public2).unwrap(),
     };
     {
         let mut stx3 = sblock.transaction();
         instr3
             .execute(&alice_id, &mut stx3)
-            .expect("second ballot ok");
+            .expect("same commitment in second election must be accepted");
         stx3.apply();
     }
 
-    // Check that we saw a BallotAccepted and a BallotRejected among events
+    // Both successful elections emit acceptance. The rejected duplicate event was observed only
+    // inside its rolled-back transaction above.
     let events = sblock.world.take_external_events();
     let mut saw_accept = false;
-    let mut saw_reject = false;
     for event in events {
         if let Some(DataEvent::Governance(ge)) = event.as_data_event() {
             match ge {
                 GovernanceEvent::BallotAccepted(_) => saw_accept = true,
-                GovernanceEvent::BallotRejected(_) => saw_reject = true,
                 _ => {}
             }
         }
     }
     assert!(saw_accept, "expected at least one BallotAccepted event");
-    assert!(saw_reject, "expected at least one BallotRejected event");
 }

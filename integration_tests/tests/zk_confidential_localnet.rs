@@ -1245,6 +1245,7 @@ async fn submit_and_wait_non_empty_block_with_tx(
 ) -> Result<(String, SignedTransaction)> {
     let tx = tx_builder_client.build_transaction_from_items(
         instructions,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         iroha_data_model::metadata::Metadata::default(),
     );
     let tx_hash = tx.hash().to_string();
@@ -2751,6 +2752,7 @@ async fn confidential_unshield_rejects_corrupted_proof_bytes_localnet() -> Resul
                 None,
             ),
         )],
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         iroha_data_model::metadata::Metadata::default(),
     );
 
@@ -2881,6 +2883,7 @@ async fn confidential_unshield_rejects_corrupted_vk_bytes_localnet() -> Result<(
                 None,
             ),
         )],
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         iroha_data_model::metadata::Metadata::default(),
     );
 
@@ -3011,6 +3014,7 @@ async fn confidential_unshield_rejects_wrong_statement_hint_localnet() -> Result
                 Some(marker(199)),
             ),
         )],
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         iroha_data_model::metadata::Metadata::default(),
     );
 
@@ -3285,6 +3289,7 @@ async fn confidential_zknative_transparent_transfer_after_mint_rejected_localnet
             10_u64,
             recipient.clone(),
         ))],
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         iroha_data_model::metadata::Metadata::default(),
     );
     let submit_result = submit_transaction_on_any_peer(
@@ -3432,6 +3437,7 @@ async fn confidential_unshield_rejected_when_disabled() -> Result<()> {
                 None,
             ),
         )],
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         iroha_data_model::metadata::Metadata::default(),
     );
 
@@ -3537,6 +3543,7 @@ async fn confidential_shield_rejected_when_disabled() -> Result<()> {
                 live_encrypted_payload(marker(7)),
             ),
         )],
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         iroha_data_model::metadata::Metadata::default(),
     );
 
@@ -3628,6 +3635,7 @@ async fn confidential_shield_rejected_without_zk_registration() -> Result<()> {
                 live_encrypted_payload(marker(11)),
             ),
         )],
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         iroha_data_model::metadata::Metadata::default(),
     );
 
@@ -3757,6 +3765,7 @@ async fn confidential_unshield_rejected_with_stale_root_hint() -> Result<()> {
                 Some(marker(77)),
             ),
         )],
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         iroha_data_model::metadata::Metadata::default(),
     );
 
@@ -3854,6 +3863,7 @@ async fn confidential_unshield_rejected_without_zk_registration() -> Result<()> 
                 None,
             ),
         )],
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         iroha_data_model::metadata::Metadata::default(),
     );
 
@@ -4005,6 +4015,7 @@ async fn confidential_unshield_duplicate_nullifier_rejected() -> Result<()> {
                 None,
             ),
         )],
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         iroha_data_model::metadata::Metadata::default(),
     );
 
@@ -4117,6 +4128,7 @@ async fn confidential_shield_and_unshield_rejected_in_transparent_only_mode() ->
                 live_encrypted_payload(marker(15)),
             ),
         )],
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         iroha_data_model::metadata::Metadata::default(),
     );
     let shield_result = submit_transaction_on_any_peer(
@@ -4168,6 +4180,7 @@ async fn confidential_shield_and_unshield_rejected_in_transparent_only_mode() ->
                 None,
             ),
         )],
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         iroha_data_model::metadata::Metadata::default(),
     );
     let unshield_result = submit_transaction_on_any_peer(
@@ -4274,6 +4287,7 @@ async fn confidential_transfer_rejected_in_transparent_only_mode() -> Result<()>
                 None,
             ),
         )],
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         iroha_data_model::metadata::Metadata::default(),
     );
 

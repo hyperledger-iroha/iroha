@@ -1,11 +1,11 @@
 //! Admission-time guard: reject IVM programs that invoke unknown syscalls under ABI v1.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
-use std::{borrow::Cow, num::NonZeroU64};
+use std::{borrow::Cow, num::NonZeroU64, sync::Arc};
 
 use iroha_core::{
-    kura::Kura, prelude::World, query::store::LiveQueryStore, smartcontracts::ivm::cache::IvmCache,
-    state::State,
+    governance::manifest::LaneManifestRegistry, kura::Kura, prelude::World,
+    query::store::LiveQueryStore, smartcontracts::ivm::cache::IvmCache, state::State,
 };
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
@@ -40,6 +40,13 @@ fn unlisted_syscall_number() -> u8 {
         .expect("ABI v1 should leave at least one u8 syscall number unmapped")
 }
 
+fn install_current_lane_manifest_registry(state: &State) {
+    let nexus = state.nexus_snapshot();
+    state.install_lane_manifests(&Arc::new(
+        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
+    ));
+}
+
 #[test]
 fn unknown_syscall_number_rejected_during_ivm_admission() {
     // Minimal world with a single authority account.
@@ -53,7 +60,9 @@ fn unknown_syscall_number_rejected_during_ivm_admission() {
     let domain = Domain::new(domain_id.clone()).build(&account_id);
     let account = Account::new(account_id.clone()).build(&account_id);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
-    let state = State::new_for_testing(world, kura, query_handle);
+    let chain: ChainId = "chain".parse().unwrap();
+    let state = State::new_with_chain_for_testing(world, kura, query_handle, chain.clone());
+    install_current_lane_manifest_registry(&state);
 
     // Build a tiny program with an unknown syscall followed by HALT.
     let unknown_syscall = unlisted_syscall_number();
@@ -77,7 +86,6 @@ fn unknown_syscall_number_rejected_during_ivm_admission() {
     // Submit the program; admission should fail before execution due to the unknown syscall.
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
-    let chain: ChainId = "chain".parse().unwrap();
     let tx = TransactionBuilder::new(
         chain.clone(),
         account_id.clone(),
@@ -90,12 +98,14 @@ fn unknown_syscall_number_rejected_during_ivm_admission() {
     let accepted = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx));
     let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
     match result {
-        Err(TransactionRejectionReason::Validation(ValidationFail::NotPermitted(msg))) => {
+        Err(TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
+            iroha_data_model::executor::IvmAdmissionError::BytecodeDecodingFailed(msg),
+        ))) => {
             assert!(
-                msg.contains("unknown syscall number"),
+                msg.contains(&format!("unknown syscall number {unknown_syscall}")),
                 "unexpected rejection message: {msg}"
             );
         }
-        other => panic!("expected validation failure for unknown syscall, got {other:?}"),
+        other => panic!("expected strict decode failure for unknown syscall, got {other:?}"),
     }
 }

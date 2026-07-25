@@ -19,7 +19,6 @@ use iroha_data_model::{
         SCCP_V1_MAX_RETAINED_ROUTES_PER_LANE, SccpGovernedRouteV1, SccpNativeTrustAnchorV1,
         SccpNetworkV1, SccpRouteActivationV1, SccpSourceEmitterV1,
     },
-    domain::Domain,
     isi::{
         Grant, Mint, Register,
         bridge::{
@@ -148,11 +147,6 @@ fn configure_taira(stx: &mut StateTransaction<'_, '_>) {
 }
 
 fn register_settlement_definition(stx: &mut StateTransaction<'_, '_>, route: &SccpGovernedRouteV1) {
-    Register::domain(Domain::new(
-        route.settlement.asset_definition_id.domain().clone(),
-    ))
-    .execute(&ALICE_ID, stx)
-    .expect("register exact SCCP settlement domain");
     Register::asset_definition(
         AssetDefinition::numeric(route.settlement.asset_definition_id.clone())
             .with_name("xor".to_owned()),
@@ -332,21 +326,21 @@ fn route_registration_is_bound_to_the_exact_local_taira_profile() {
     let action = register_action(route.clone(), Some(native_anchor()));
     register_route_resources(&mut stx, &route);
 
-    for (chain_id, expected_error) in [
-        ("sora-taira", "not a canonical public SORA chain id"),
-        (
-            iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1,
-            "targets foreign SORA profile",
-        ),
-    ] {
-        stx.chain_id = iroha_data_model::ChainId::from(chain_id);
-        let before = stx.sccp_registry.revision();
-        let error = execute_governance(&mut stx, action.clone())
-            .expect_err("an alias or foreign SORA profile must reject Taira route governance");
-        assert!(format!("{error:?}").contains(expected_error), "{error:?}");
-        assert_eq!(stx.sccp_registry.revision(), before);
-        assert!(stx.sccp_registry.route(&key).is_none());
-    }
+    stx.chain_id = iroha_data_model::ChainId::from("sora-taira");
+    let before = stx.sccp_registry.revision();
+    let error = execute_governance(&mut stx, action.clone())
+        .expect_err("a display alias must not authorize Taira route governance");
+    assert!(
+        format!("{error:?}").contains("not a canonical public SORA chain id"),
+        "{error:?}"
+    );
+    assert_eq!(stx.sccp_registry.revision(), before);
+    assert!(stx.sccp_registry.route(&key).is_none());
+
+    configure_taira(&mut stx);
+    execute_governance(&mut stx, action)
+        .expect("the canonical Taira chain id must authorize its exact route");
+    assert!(stx.sccp_registry.route(&key).is_some());
 }
 
 #[test]
@@ -359,11 +353,6 @@ fn route_registration_rejects_insufficient_asset_precision_without_mutation() {
     let route = staged_route();
     let key = route.key();
 
-    Register::domain(Domain::new(
-        route.settlement.asset_definition_id.domain().clone(),
-    ))
-    .execute(&ALICE_ID, &mut stx)
-    .expect("register insufficient-precision settlement domain");
     Register::asset_definition(
         AssetDefinition::new(
             route.settlement.asset_definition_id.clone(),

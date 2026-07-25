@@ -61,7 +61,7 @@ translator: machine-google-reviewed
   - 再生：`make docs-syscalls`
   - 仅检查：`bash scripts/check_syscalls_doc.sh`
 - Syscall ABI 表 (crates/ivm/docs/syscalls.md)
-  - 仅检查：`cargo run -p ivm --bin gen_syscalls_doc -- --check --no-code`
+  - 仅检查：`cargo run -p ivm --bin gen_syscalls_doc -- --check`
   - 更新生成的部分（和代码文档表）：`cargo run -p ivm --bin gen_syscalls_doc -- --write`
 - 指针 ABI 表（crates/ivm/docs/pointer_abi.md 和 ivm.md）
   - 仅检查：`cargo run -p ivm --bin gen_pointer_types_doc -- --check`

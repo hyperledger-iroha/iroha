@@ -37,7 +37,7 @@
       "profile": "Tier3",
       "state": null
     },
-    "twap_local_per_xor": "1.245600",
+    "twap_local_per_xor": "1.2456",
     "twap_window_seconds": 300,
     "volatility_class": {
       "bucket": "Dislocated",

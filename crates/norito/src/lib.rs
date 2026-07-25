@@ -5711,7 +5711,7 @@ pub mod json {
             use rayon::prelude::*;
             ranges
                 .into_par_iter()
-                .map(|(s, e)| plan_stage1_chunk(s, input[s..e].as_bytes()))
+                .map(|(s, e)| plan_stage1_chunk(s, &input.as_bytes()[s..e]))
                 .collect()
         };
         #[cfg(not(feature = "parallel-stage1-rayon"))]
@@ -9695,7 +9695,7 @@ pub(crate) fn guarded_try_deserialize_erased(
         }
         DECODE_PANIC_DEPTH.with(|depth| depth.set(depth.get().saturating_add(1)));
         let _guard = PanicDepthGuard;
-        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| decode())) {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(decode)) {
             Ok(result) => result,
             Err(payload) => {
                 if crate::debug_trace_enabled() {

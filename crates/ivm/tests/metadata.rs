@@ -145,7 +145,7 @@ fn parse_rejects_unknown_mode_bits() {
         m.mode = 0x80; // unknown bit
     });
     let err = ProgramMetadata::parse(&bytes).unwrap_err();
-    assert_eq!(err, VMError::InvalidMetadata);
+    assert_eq!(err, VMError::UnsupportedProgramFeatureBits { bits: 0x80 });
 }
 
 #[test]
@@ -206,7 +206,13 @@ fn parse_rejects_vector_len_above_abi_max() {
         m.vector_length = ivm::VECTOR_LENGTH_MAX + 1;
     });
     let err = ProgramMetadata::parse(&bytes).unwrap_err();
-    assert_eq!(err, VMError::InvalidMetadata);
+    assert_eq!(
+        err,
+        VMError::ProgramVectorLengthTooLarge {
+            vector_length: ivm::VECTOR_LENGTH_MAX + 1,
+            max_allowed: ivm::VECTOR_LENGTH_MAX,
+        }
+    );
 }
 
 #[test]
@@ -215,13 +221,19 @@ fn parse_rejects_wrong_major_version() {
         m.version_major = 0;
     });
     let err = ProgramMetadata::parse(&bytes).unwrap_err();
-    assert_eq!(err, VMError::InvalidMetadata);
+    assert_eq!(
+        err,
+        VMError::UnsupportedProgramVersion { major: 0, minor: 1 }
+    );
 
     let bytes = encode_with(ProgramMetadata::default(), |m| {
         m.version_major = 2;
     });
     let err = ProgramMetadata::parse(&bytes).unwrap_err();
-    assert_eq!(err, VMError::InvalidMetadata);
+    assert_eq!(
+        err,
+        VMError::UnsupportedProgramVersion { major: 2, minor: 1 }
+    );
 }
 
 #[test]
@@ -277,7 +289,10 @@ fn parse_rejects_unknown_minor_version() {
         m.version_minor = 2;
     });
     let err = ProgramMetadata::parse(&bytes).unwrap_err();
-    assert_eq!(err, VMError::InvalidMetadata);
+    assert_eq!(
+        err,
+        VMError::UnsupportedProgramVersion { major: 1, minor: 2 }
+    );
 }
 
 #[test]

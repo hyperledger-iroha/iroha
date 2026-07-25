@@ -864,6 +864,7 @@ fn run_registration_iteration(
         [InstructionBox::from(PublishSpaceDirectoryManifest {
             manifest: manifest.clone(),
         })],
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         Metadata::default(),
     );
     let (manifest_publish_submit_latency, manifest_publish_commit_apply_latency) = rt
@@ -913,6 +914,7 @@ fn run_registration_iteration(
             revoked_epoch: BENCH_MANIFEST_ACTIVATION_EPOCH.saturating_add(1),
             reason: Some("runtime registration benchmark revoke".to_owned()),
         })],
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         Metadata::default(),
     );
     let (manifest_revoke_submit_latency, manifest_revoke_commit_apply_latency) = rt

@@ -2,17 +2,13 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![allow(clippy::cast_possible_truncation)]
 
-use std::num::NonZeroU64;
+use std::{num::NonZeroU64, sync::Arc};
 
-use iroha_core::smartcontracts::ivm::host::CoreHost;
+use iroha_core::{governance::manifest::LaneManifestRegistry, smartcontracts::ivm::host::CoreHost};
 use iroha_crypto::KeyPair;
 use iroha_data_model::prelude::*;
+use iroha_test_samples::ALICE_ID;
 use ivm::{IVM, ProgramMetadata, encoding, instruction, syscalls as ivm_sys};
-
-fn fixture_account(hex_public_key: &str) -> AccountId {
-    let public_key = hex_public_key.parse().expect("public key");
-    AccountId::new(public_key)
-}
 
 fn program_with_scall(sys: u8) -> Vec<u8> {
     let mut code = Vec::new();
@@ -49,6 +45,13 @@ fn checked_random_ivm_admission_keypair() -> KeyPair {
     KeyPair::try_random().expect("generate checked IVM admission transaction keypair")
 }
 
+fn install_current_lane_manifest_registry(state: &iroha_core::state::State) {
+    let nexus = state.nexus_snapshot();
+    state.install_lane_manifests(&Arc::new(
+        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
+    ));
+}
+
 #[test]
 fn ivm_admission_fixture_uses_checked_randomness() {
     let _key_pair = checked_random_ivm_admission_keypair();
@@ -60,12 +63,15 @@ fn deny_unlisted_syscall_in_current() {
     let prog = program_with_scall(unlisted_syscall_number());
     let mut vm = IVM::new(u64::MAX);
     // Any authority is fine; it won't be used
-    let authority =
-        fixture_account("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
+    let authority = ALICE_ID.clone();
     vm.set_host(CoreHost::new(authority));
-    vm.load_program(&prog).unwrap();
-    let err = vm.run().unwrap_err();
-    assert!(matches!(err, ivm::VMError::UnknownSyscall(_)));
+    let err = vm
+        .load_program(&prog)
+        .expect_err("strict program loading must reject an unknown syscall");
+    assert_eq!(
+        err,
+        ivm::VMError::UnknownSyscall(u32::from(unlisted_syscall_number()))
+    );
 }
 
 #[test]
@@ -73,8 +79,7 @@ fn allow_forwarded_alloc_in_current() {
     // ALLOC is forwarded by CoreHost and should be permitted.
     let prog = program_with_scall(ivm_sys::SYSCALL_ALLOC as u8);
     let mut vm = IVM::new(u64::MAX);
-    let authority =
-        fixture_account("ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
+    let authority = ALICE_ID.clone();
     vm.set_host(CoreHost::new(authority));
     vm.load_program(&prog).unwrap();
     // Set x10 = 16 for allocation size
@@ -110,11 +115,12 @@ fn unknown_syscall_is_rejected_at_admission() {
     let account = Account::new(account_id.clone()).build(&account_id);
     let world =
         iroha_core::state::World::with([domain], [account], std::iter::empty::<AssetDefinition>());
-    let state = State::new_for_testing(world, kura, query_handle);
+    let chain: ChainId = "chain".parse().expect("chain id");
+    let state = State::new_with_chain_for_testing(world, kura, query_handle, chain.clone());
+    install_current_lane_manifest_registry(&state);
 
     // Program calls an unknown syscall number before halting.
     let prog = program_with_scall(unlisted_syscall_number());
-    let chain: ChainId = "chain".parse().expect("chain id");
     let tx = TransactionBuilder::new(
         chain,
         account_id.clone(),
@@ -129,13 +135,16 @@ fn unknown_syscall_is_rejected_at_admission() {
     let mut ivm_cache = IvmCache::new();
     let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
     let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
+    let unknown_syscall = unlisted_syscall_number();
     match result {
-        Err(TransactionRejectionReason::Validation(ValidationFail::NotPermitted(msg))) => {
+        Err(TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
+            iroha_data_model::executor::IvmAdmissionError::BytecodeDecodingFailed(msg),
+        ))) => {
             assert!(
-                msg.contains("unknown syscall number"),
-                "expected UnknownSyscall, got {msg}"
+                msg.contains(&format!("unknown syscall number {unknown_syscall}")),
+                "expected strict unknown-syscall decode failure, got {msg}"
             );
         }
-        other => panic!("expected NotPermitted(UnknownSyscall), got {other:?}"),
+        other => panic!("expected BytecodeDecodingFailed(UnknownSyscall), got {other:?}"),
     }
 }

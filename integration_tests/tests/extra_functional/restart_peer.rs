@@ -310,7 +310,7 @@ fn private_uploaded_model_bundle(model_digest: ManifestDigest) -> SoraUploadedMo
             aad_digest: Hash::new(b"private-upload-wrapped-aad"),
         },
         pricing_policy: SoraUploadedModelPricingPolicyV1 {
-            storage_xor_nanos: 0,
+            storage_price: Quantity::zero(),
         },
         decryption_policy_ref: PRIVATE_MODEL_POLICY_ID.to_owned(),
     }

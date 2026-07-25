@@ -61,7 +61,7 @@ Hujjatlarni sinxronlashtirish tekshiruvlari
   - Qayta tiklash: `make docs-syscalls`
   - Faqat tekshirish: `bash scripts/check_syscalls_doc.sh`
 - Syscall ABI jadvali (crates/ivm/docs/syscalls.md)
-  - Faqat tekshirish: `cargo run -p ivm --bin gen_syscalls_doc -- --check --no-code`
+  - Faqat tekshirish: `cargo run -p ivm --bin gen_syscalls_doc -- --check`
   - Yangilangan bo'lim (va kodlar jadvali): `cargo run -p ivm --bin gen_syscalls_doc -- --write`
 - Pointer‑ABI jadvallari (crates/ivm/docs/pointer_abi.md va ivm.md)
   - Faqat tekshirish: `cargo run -p ivm --bin gen_pointer_types_doc -- --check`

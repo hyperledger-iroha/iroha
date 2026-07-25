@@ -1,15 +1,17 @@
 [package]
 name = "soranet_pq"
-build = "build.rs"
+build = false
 
 edition.workspace = true
 version.workspace = true
 authors.workspace = true
 license.workspace = true
 
+[lib]
+crate-type = ["rlib"]
+
 [features]
 default = ["pqc"]
-ffi-artifacts = []
 pqc = ["dep:pqcrypto-traits", "dep:pqcrypto-mldsa", "dep:pqcrypto-mlkem"]
 
 [lints]

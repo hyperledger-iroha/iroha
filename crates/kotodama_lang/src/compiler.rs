@@ -1818,6 +1818,14 @@ mod tests {
         );
     }
 
+    fn assert_test_mode_override_read(keys: &[String]) {
+        assert_eq!(
+            keys,
+            [format!("state:{}", ir::TEST_TRIGGER_EVENT_OVERRIDE_KEY)],
+            "test-mode entrypoints must disclose their compiler-owned argument-override read"
+        );
+    }
+
     fn assert_conservative_ledger_read(read_keys: &[String], write_keys: &[String]) {
         assert!(
             read_keys.iter().any(|key| key == GLOBAL_WILDCARD_KEY),
@@ -2032,7 +2040,7 @@ mod tests {
 
     fn sample_account_id() -> iroha_data_model::account::AccountId {
         iroha_data_model::account::AccountId::new(
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+            "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D"
                 .parse()
                 .expect("public key"),
         )
@@ -2054,7 +2062,7 @@ mod tests {
 
     fn sample_account_id_alt() -> iroha_data_model::account::AccountId {
         iroha_data_model::account::AccountId::new(
-            "ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+            "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
                 .parse()
                 .expect("public key"),
         )
@@ -5011,7 +5019,7 @@ view fn read_input() -> bytes {
             .expect("read_input entrypoint");
         assert_ne!(read_input.access_hints_complete, Some(false));
         assert!(read_input.access_hints_skipped.is_empty());
-        assert!(read_input.read_keys.is_empty());
+        assert_test_mode_override_read(&read_input.read_keys);
         assert!(read_input.write_keys.is_empty());
     }
 
@@ -5100,7 +5108,7 @@ kotoage fn inspect() -> int authorize("DebugContract") {
             .expect("inspect entrypoint");
         assert_ne!(inspect.access_hints_complete, Some(false));
         assert!(inspect.access_hints_skipped.is_empty());
-        assert!(inspect.read_keys.is_empty());
+        assert_test_mode_override_read(&inspect.read_keys);
         assert!(inspect.write_keys.is_empty());
     }
 
@@ -5175,7 +5183,7 @@ kotoage fn inspect() -> int authorize("InspectContract") {
             .expect("inspect entrypoint");
         assert_ne!(inspect.access_hints_complete, Some(false));
         assert!(inspect.access_hints_skipped.is_empty());
-        assert!(inspect.read_keys.is_empty());
+        assert_test_mode_override_read(&inspect.read_keys);
         assert!(inspect.write_keys.is_empty());
     }
 
@@ -5546,7 +5554,7 @@ kotoage fn batch() authorize("Admin") {
             .expect("batch entrypoint");
         assert_ne!(batch.access_hints_complete, Some(false));
         assert!(batch.access_hints_skipped.is_empty());
-        assert!(batch.read_keys.is_empty());
+        assert_test_mode_override_read(&batch.read_keys);
         assert!(batch.write_keys.is_empty());
     }
 
@@ -5789,7 +5797,7 @@ view fn check() -> int {
             .expect("check entrypoint");
         assert_ne!(check.access_hints_complete, Some(false));
         assert!(check.access_hints_skipped.is_empty());
-        assert!(check.read_keys.is_empty());
+        assert_test_mode_override_read(&check.read_keys);
         assert!(check.write_keys.is_empty());
     }
 
@@ -5852,7 +5860,7 @@ view fn proof() -> bytes {
             .expect("proof entrypoint");
         assert_ne!(proof.access_hints_complete, Some(false));
         assert!(proof.access_hints_skipped.is_empty());
-        assert!(proof.read_keys.is_empty());
+        assert_test_mode_override_read(&proof.read_keys);
         assert!(proof.write_keys.is_empty());
     }
 
@@ -6447,7 +6455,7 @@ seiyaku UnshieldAmount {{
             format!(
                 r#"
 seiyaku RuntimeUnshieldAmount {{
-  fn build({amount_type} amount) {{
+  view fn build({amount_type} amount) {{
     let _bytes = crypto::zk::build_unshield(
       asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
       destination: AccountId::parse("{account}"),
@@ -6771,7 +6779,7 @@ view fn digest() -> bytes {
             .expect("digest entrypoint");
         assert_ne!(digest.access_hints_complete, Some(false));
         assert!(digest.access_hints_skipped.is_empty());
-        assert!(digest.read_keys.is_empty());
+        assert_test_mode_override_read(&digest.read_keys);
         assert!(digest.write_keys.is_empty());
     }
 
@@ -6881,7 +6889,7 @@ view fn crypt() -> int {
             .expect("crypt entrypoint");
         assert_ne!(crypt.access_hints_complete, Some(false));
         assert!(crypt.access_hints_skipped.is_empty());
-        assert!(crypt.read_keys.is_empty());
+        assert_test_mode_override_read(&crypt.read_keys);
         assert!(crypt.write_keys.is_empty());
     }
 
@@ -7166,7 +7174,7 @@ seiyaku CompilerFixture {
             .expect("length entrypoint");
         assert_ne!(entrypoint.access_hints_complete, Some(false));
         assert!(entrypoint.access_hints_skipped.is_empty());
-        assert!(entrypoint.read_keys.is_empty());
+        assert_test_mode_override_read(&entrypoint.read_keys);
         assert!(entrypoint.write_keys.is_empty());
     }
 
@@ -7694,7 +7702,7 @@ view fn account() -> AccountId { return ledger::account::resolve_alias("merchant
     #[test]
     fn account_id_canonical_literal_stays_static_without_alias_resolution() {
         let canonical = iroha_data_model::account::AccountId::new(
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+            "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D"
                 .parse()
                 .expect("public key"),
         )
@@ -8654,7 +8662,7 @@ kotoage fn main() authorize("AssetAdmin") {{
         let asset_def = AssetDefinitionId::parse_address_literal("6pEP9RjNoZ7beWkT3pLfKoM1dyfi")
             .expect("sample asset definition");
         let account =
-            AccountId::parse_encoded("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB")
+            AccountId::parse_encoded("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV")
                 .map(ParsedAccountId::into_account_id)
                 .expect("sample account");
         let asset = AssetId::of(asset_def.clone(), account.clone());
@@ -9287,7 +9295,13 @@ seiyaku Test {
             .find(|entry| entry.name == "bad_peer")
             .expect("entrypoint");
         assert_eq!(entry.access_hints_complete, Some(false));
-        assert_eq!(entry.read_keys, [GLOBAL_WILDCARD_KEY.to_owned()]);
+        assert_eq!(
+            entry.read_keys,
+            [
+                GLOBAL_WILDCARD_KEY.to_owned(),
+                format!("state:{}", ir::TEST_TRIGGER_EVENT_OVERRIDE_KEY),
+            ]
+        );
         assert_eq!(entry.write_keys, [GLOBAL_WILDCARD_KEY.to_owned()]);
         assert_eq!(
             entry.access_hints_skipped,
@@ -9303,7 +9317,7 @@ seiyaku Test {
             .into_iter()
             .find(|entry| entry.name == "bad_peer")
             .expect("bad_peer entrypoint");
-        assert_eq!(production_entry.read_keys, entry.read_keys);
+        assert_eq!(production_entry.read_keys, [GLOBAL_WILDCARD_KEY.to_owned()]);
         assert_eq!(production_entry.write_keys, entry.write_keys);
         assert_eq!(
             production_entry.access_hints_complete,
@@ -10736,7 +10750,7 @@ seiyaku Test {
 
         let trigger_id = TriggerId::new(Name::from_str("wake").expect("trigger name"));
         let authority = AccountId::new(
-            "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+            "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D"
                 .parse()
                 .expect("public key"),
         );
@@ -11608,7 +11622,7 @@ seiyaku Counter {
         let implementation = report
             .budget_report
             .iter()
-            .find(|entry| entry.function_name == "__entrypoint_impl__run")
+            .find(|entry| entry.function_name == "run")
             .expect("run implementation budget report");
         assert_eq!(
             implementation.frame_bytes, 16,
@@ -11974,7 +11988,11 @@ seiyaku Counter {
             .expect("compile branch optimization fixture");
         let metadata = ProgramMetadata::parse(&artifact).expect("parse branch artifact");
         let function_words = |name: &str| {
-            let implementation = format!("__entrypoint_impl__{name}");
+            let implementation = if name == "copied_length" {
+                name.to_owned()
+            } else {
+                format!("__entrypoint_impl__{name}")
+            };
             let budget = report
                 .budget_report
                 .iter()

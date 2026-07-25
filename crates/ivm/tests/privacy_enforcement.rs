@@ -72,8 +72,16 @@ fn blob_tlv(payload: &[u8]) -> Vec<u8> {
 }
 
 fn mark_one_private_stack_byte(vm: &mut IVM, address: u64) {
-    vm.set_register(1, address);
-    vm.set_register(2, 0xA5A5_A5A5_A5A5_A5A5);
+    let word_address = address & !7;
+    let byte_offset = usize::try_from(address - word_address).expect("word byte offset");
+    let bytes: [u8; 8] = vm
+        .memory
+        .load_region(word_address, 8)
+        .expect("load public stack word before retagging")
+        .try_into()
+        .expect("fixed stack word");
+    vm.set_register(1, word_address);
+    vm.set_register(2, u64::from_le_bytes(bytes));
     vm.registers.set_tag(2, true);
     vm.execute_instruction(Instruction::Store {
         rs: 2,
@@ -81,24 +89,14 @@ fn mark_one_private_stack_byte(vm: &mut IVM, address: u64) {
         offset: 0,
     })
     .expect("store private stack word");
-    vm.store_bytes(address + 1, &[0; 7])
-        .expect("leave exactly one private byte");
-}
-
-fn mark_private_stack_word_preserving_bytes(vm: &mut IVM, address: u64) {
-    let value = vm
-        .memory
-        .load_u64(address)
-        .expect("load public stack word before retagging");
-    vm.set_register(1, address);
-    vm.set_register(2, value);
-    vm.registers.set_tag(2, true);
-    vm.execute_instruction(Instruction::Store {
-        rs: 2,
-        addr_reg: 1,
-        offset: 0,
-    })
-    .expect("retag unchanged stack word as private");
+    if byte_offset != 0 {
+        vm.store_bytes(word_address, &bytes[..byte_offset])
+            .expect("restore public bytes before the selected byte");
+    }
+    if byte_offset + 1 < bytes.len() {
+        vm.store_bytes(address + 1, &bytes[byte_offset + 1..])
+            .expect("restore public bytes after the selected byte");
+    }
 }
 
 #[test]
@@ -798,7 +796,7 @@ fn compiled_secret_commitment_executes_end_to_end() {
         "Secret<T> artifacts must bind ZK execution mode"
     );
 
-    let mut vm = IVM::new(1_000_000);
+    let mut vm = IVM::new(u64::MAX);
     vm.set_host(int_private_host(&[7, 11]));
     vm.load_program(&artifact).expect("load compiled artifact");
     common::select_kotodama_entrypoint(&mut vm, &artifact, "commitment");
@@ -863,7 +861,7 @@ fn typed_int_decimal_and_quantity_commitments_execute_and_bind_nominal_kind() {
     let mut commitments = Vec::new();
     for (kind, records) in cases {
         let artifact = compile(kind);
-        let mut vm = IVM::new(1_000_000);
+        let mut vm = IVM::new(u64::MAX);
         vm.set_host(typed_private_host(records));
         vm.load_program(&artifact)
             .unwrap_or_else(|error| panic!("load Secret<{kind}> artifact: {error}"));
@@ -1210,7 +1208,7 @@ fn signature_opcodes_reject_private_tlv_header_payload_and_checksum_bytes() {
             let envelope = blob_tlv(&[0_u8; 32]);
             vm.store_bytes(pointer, &envelope)
                 .expect("seed public signature TLV");
-            mark_private_stack_word_preserving_bytes(&mut vm, pointer + private_offset);
+            mark_one_private_stack_byte(&mut vm, pointer + private_offset);
             for register in [1, 2, 3] {
                 vm.set_register(register, pointer);
                 vm.registers.set_tag(register, false);
@@ -1253,7 +1251,9 @@ fn megabyte_public_tlv_privacy_preflight_checks_ranges_before_gas_debit() {
 
     let run = |private_byte_offset: Option<usize>| {
         let program = raw_zk_program(&[scall(syscalls::SYSCALL_INPUT_PUBLISH_TLV)]);
-        let mut vm = IVM::new(64);
+        // Allocate the one-megabyte stack fixture independently of the low
+        // execution budget, then apply the budget the assertion exercises.
+        let mut vm = IVM::new(u64::MAX);
         vm.load_program(&program).expect("load low-gas ZK syscall");
         let envelope = blob_tlv(&vec![0x5A; 1024 * 1024]);
         let pointer = Memory::STACK_START;
@@ -1266,6 +1266,7 @@ fn megabyte_public_tlv_privacy_preflight_checks_ranges_before_gas_debit() {
             );
         }
         vm.set_register(10, pointer);
+        vm.set_gas_limit(64);
         let mut host = ExpensivePrepareHost {
             prepares: Cell::new(0),
             calls: Cell::new(0),

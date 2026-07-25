@@ -106,7 +106,7 @@ fn price_reference_fixtures_are_canonical() {
     .expect("price feed aggregates");
     let report = Report {
         body: aggregation.report.clone(),
-        signature: zero_signature(),
+        signature: fixture_signature(0x44),
     };
     let feed_event = FeedEvent {
         feed_id: feed_config.feed_id.clone(),
@@ -178,7 +178,7 @@ fn follow_reference_fixtures_are_canonical() {
     .expect("follow feed aggregates");
     let report = Report {
         body: aggregation.report.clone(),
-        signature: zero_signature(),
+        signature: fixture_signature(0x66),
     };
     let feed_event = FeedEvent {
         feed_id: feed_config.feed_id.clone(),
@@ -229,7 +229,7 @@ fn regenerate_follow_reference_fixtures() {
     .expect("price feed aggregates");
     let price_report = Report {
         body: price_aggregation.report.clone(),
-        signature: zero_signature(),
+        signature: fixture_signature(0x44),
     };
     let price_feed_event = FeedEvent {
         feed_id: price_feed_config.feed_id.clone(),
@@ -289,7 +289,7 @@ fn regenerate_follow_reference_fixtures() {
     .expect("follow feed aggregates");
     let report = Report {
         body: aggregation.report.clone(),
-        signature: zero_signature(),
+        signature: fixture_signature(0x66),
     };
     let feed_event = FeedEvent {
         feed_id: feed_config.feed_id.clone(),
@@ -419,7 +419,7 @@ fn price_observation(
             outcome: ObservationOutcome::Value(value),
             timestamp_ms: Some(1_700_000_000_123),
         },
-        signature: zero_signature(),
+        signature: fixture_signature(0x11),
     }
 }
 
@@ -504,13 +504,13 @@ fn follow_observation(
             outcome: ObservationOutcome::Value(value),
             timestamp_ms,
         },
-        signature: zero_signature(),
+        signature: fixture_signature(0x55),
     }
 }
 
-fn zero_signature<T>() -> SignatureOf<T> {
-    let signature =
-        Signature::from_hex("00".repeat(128)).expect("generate deterministic zero signature");
+fn fixture_signature<T>(byte: u8) -> SignatureOf<T> {
+    let signature = Signature::from_hex(format!("{byte:02x}").repeat(128))
+        .expect("generate deterministic fixture signature");
     SignatureOf::from_signature(signature)
 }
 

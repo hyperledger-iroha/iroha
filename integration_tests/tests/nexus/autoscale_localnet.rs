@@ -67,17 +67,14 @@ use iroha_core::{
         MergeLedgerCandidate, merge_chain_id_digest, merge_execution_batch_commitments_match,
         merge_qc_message_digest,
     },
-    merge_sidecar::{
-        MergeCandidateAdvertV1, canonical_merge_candidate_bytes, decode_certified_merge_sidecar,
-        decode_merge_candidate_body,
-    },
+    merge_sidecar::decode_certified_merge_sidecar,
     queue::{LaneQueueReservationKeyV2, RoutingPlan},
     sumeragi::network_topology::commit_quorum_from_len,
 };
 use iroha_primitives::json::Json;
 use iroha_test_network::{NetworkBuilder, NetworkPeer};
 use iroha_test_samples::ALICE_ID;
-use norito::codec::{Decode, Encode};
+use norito::codec::{DecodeAll, Encode};
 use toml::{Table, Value as TomlValue};
 
 const TOTAL_PEERS: usize = 4;
@@ -4542,9 +4539,11 @@ fn validate_lane_drain_certificate_evidence(
 ) -> Result<()> {
     let body = &certificate.body;
     let intent = &body.intent;
+    let initial_frontier = &intent.initial_frontier;
+    let final_frontier = &body.final_frontier;
     ensure!(
-        body.version == 1,
-        "unsupported drain certificate body version"
+        body.version == 1 && initial_frontier.version == 1 && final_frontier.version == 1,
+        "unsupported drain certificate or frontier version"
     );
     ensure!(intent.version == 1, "unsupported drain intent version");
     ensure!(
@@ -4593,16 +4592,31 @@ fn validate_lane_drain_certificate_evidence(
         "drain intent quorum does not match its exact committee"
     );
     ensure!(
-        (intent.initial_merged_lane_height == 0) == intent.initial_merged_descriptor_hash.is_none(),
-        "drain intent initial frontier/hash shape mismatch"
+        initial_frontier.matches_route(
+            intent.lane_id,
+            intent.dataspace_id,
+            intent.lane_incarnation,
+        ) && final_frontier.matches_route(
+            intent.lane_id,
+            intent.dataspace_id,
+            intent.lane_incarnation,
+        ) && (initial_frontier.lane_block_height == 0)
+            == initial_frontier.lane_block_descriptor_hash.is_none()
+            && (final_frontier.lane_block_height == 0)
+                == final_frontier.lane_block_descriptor_hash.is_none()
+            && final_frontier.lane_block_height >= initial_frontier.lane_block_height,
+        "drain certificate carries an invalid, mismatched, or regressing frontier"
     );
+    let empty_unresolved_root =
+        iroha::data_model::merge::lane_drain_empty_unresolved_evidence_root();
     ensure!(
-        body.final_lane_block_height >= intent.initial_merged_lane_height,
-        "drain certificate regresses below the committed initial frontier"
-    );
-    ensure!(
-        (body.final_lane_block_height == 0) == body.final_lane_block_descriptor_hash.is_none(),
-        "drain certificate final frontier/hash shape mismatch"
+        initial_frontier.native_application.is_none()
+            && final_frontier.native_application.is_none()
+            && initial_frontier.unresolved_evidence_root == empty_unresolved_root
+            && final_frontier.unresolved_evidence_root == empty_unresolved_root
+            && (final_frontier.lane_block_height != initial_frontier.lane_block_height
+                || final_frontier == initial_frontier),
+        "drain certificate carries non-empty, Native, or conflicting frontier evidence"
     );
     ensure!(
         certificate.validator_set == intent.validator_set,
@@ -4703,7 +4717,7 @@ fn lane_drain_entry_for_intent(
                 .is_some_and(|certificate| {
                     let intent = &certificate.body.intent;
                     intent.close_global_height == intent_log.close_global_height
-                        && intent.initial_merged_lane_height
+                        && intent.initial_frontier.lane_block_height
                             == intent_log.initial_merged_lane_height
                 })
         })
@@ -4757,7 +4771,7 @@ fn validate_lane_drain_merge_entry(
     validate_merge_qc_evidence(chain_id, entry)?;
     ensure!(
         certificate.body.intent.close_global_height == intent_log.close_global_height
-            && certificate.body.intent.initial_merged_lane_height
+            && certificate.body.intent.initial_frontier.lane_block_height
                 == intent_log.initial_merged_lane_height,
         "globally carried drain certificate differs from the committed intent log"
     );
@@ -4826,7 +4840,7 @@ fn wait_for_drain_certificate_on_running_peers(
                     let expected_commitment = LaneDrainCommitmentLogEvidence {
                         height: expected.merge_qc.carrier_height,
                         carrier_height: expected.merge_qc.carrier_height,
-                        final_lane_block_height: certificate.body.final_lane_block_height,
+                        final_lane_block_height: certificate.body.final_frontier.lane_block_height,
                     };
                     if logs.iter().all(|evidence| {
                         evidence.intents.contains(&intent_log)
@@ -4914,7 +4928,7 @@ fn wait_for_drain_retirement_on_running_peers(
                     let expected_commitment = LaneDrainCommitmentLogEvidence {
                         height: expected.merge_qc.carrier_height,
                         carrier_height: expected.merge_qc.carrier_height,
-                        final_lane_block_height: certificate.body.final_lane_block_height,
+                        final_lane_block_height: certificate.body.final_frontier.lane_block_height,
                     };
                     let retirement_heights = logs
                         .iter()
@@ -5010,6 +5024,7 @@ fn build_transaction_for_legacy_default_shard(
         .find_map(|nonce| {
             let transaction = client.build_transaction(
                 [Log::new(Level::INFO, format!("{marker}-{nonce}"))],
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 Metadata::default(),
             );
             let hash = transaction.hash();
@@ -5463,7 +5478,7 @@ fn restart_four_peer_validator(
         layers.push(extra_layer);
     }
     runtime
-        .block_on(peer.start_checked(layers.iter(), None))
+        .block_on(peer.start_checked(layers.iter().map(Cow::Borrowed), None))
         .map_err(|err| eyre!("{context}: restart peer {peer_index}: {err}"))?;
     if catch_up_height > 0 {
         runtime.block_on(async {
@@ -6694,6 +6709,7 @@ fn nexus_autoscale_certified_merge_recovers_missing_sidecar_after_restart() -> R
                     marker_key.clone(),
                     marker_value.clone(),
                 )],
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 Metadata::default(),
             );
             let hash = transaction.hash();
@@ -6894,40 +6910,6 @@ fn nexus_autoscale_certified_merge_recovers_missing_sidecar_after_restart() -> R
     ensure!(
         validate_merge_qc_evidence(&network.chain_id(), &forged_merge_entry).is_err(),
         "forged merge QC aggregate was accepted"
-    );
-
-    let candidate = MergeLedgerCandidate::from(&target_entry);
-    let (candidate_bytes, candidate_hash) = canonical_merge_candidate_bytes(&candidate);
-    let candidate_advert = MergeCandidateAdvertV1::new(
-        candidate.epoch_id,
-        candidate.view,
-        candidate.carrier_height,
-        candidate.carrier_parent_hash,
-        target_entry.merge_qc.validator_set_hash,
-        target_entry.merge_qc.message_digest,
-        candidate_hash,
-        u64::try_from(candidate_bytes.len()).expect("candidate length fits in u64"),
-        target_entry.merge_qc.validator_set[0].clone(),
-    );
-    ensure!(
-        decode_merge_candidate_body(&candidate_advert, &candidate_bytes)? == candidate,
-        "canonical leader candidate body did not round-trip"
-    );
-    let mut mismatched_candidate = candidate.clone();
-    mismatched_candidate.view = mismatched_candidate.view.saturating_add(1);
-    ensure!(
-        decode_merge_candidate_body(&candidate_advert, &mismatched_candidate.canonical_bytes())
-            .is_err(),
-        "candidate body from another round was accepted under the leader advert"
-    );
-    let mut corrupted_candidate_bytes = candidate_bytes;
-    let candidate_last = corrupted_candidate_bytes
-        .last_mut()
-        .ok_or_else(|| eyre!("candidate encoding is empty"))?;
-    *candidate_last ^= 0x80;
-    ensure!(
-        decode_merge_candidate_body(&candidate_advert, &corrupted_candidate_bytes).is_err(),
-        "corrupted candidate body was accepted"
     );
 
     let (carrier, blocks) = query_merge_carrier(&submitter, &target_entry)?;

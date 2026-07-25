@@ -61,7 +61,7 @@ translator: machine-google-reviewed
   - Վերականգնել՝ `make docs-syscalls`
   - Ստուգեք միայն՝ `bash scripts/check_syscalls_doc.sh`
 - Syscall ABI աղյուսակ (crates/ivm/docs/syscalls.md)
-  - Ստուգեք միայն՝ `cargo run -p ivm --bin gen_syscalls_doc -- --check --no-code`
+  - Ստուգեք միայն՝ `cargo run -p ivm --bin gen_syscalls_doc -- --check`
   - Թարմացրեք ստեղծված բաժինը (և կոդերի փաստաթղթերի աղյուսակը)՝ `cargo run -p ivm --bin gen_syscalls_doc -- --write`
 - Pointer-ABI աղյուսակներ (crates/ivm/docs/pointer_abi.md և ivm.md)
   - Ստուգեք միայն՝ `cargo run -p ivm --bin gen_pointer_types_doc -- --check`

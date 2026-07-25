@@ -802,10 +802,10 @@ pub enum BridgeFinalityAttestationValidationError {
     /// Status and proof name different committed block subjects.
     #[error("bridge finality attestation status and proof subjects do not match")]
     StatusSubjectMismatch,
-    /// The status does not expose its latest authenticated durable CommitQC.
+    /// The status does not expose its latest authenticated durable `CommitQC`.
     #[error("bridge finality attestation status has no durable CommitQC")]
     StatusCommitMissing,
-    /// Status and proof carry different exact CommitQCs.
+    /// Status and proof carry different exact `CommitQCs`.
     #[error("bridge finality attestation status and proof CommitQCs do not match")]
     StatusCommitMismatch,
     /// The signature does not verify under the declared canonical node key.
@@ -3063,11 +3063,17 @@ mod tests {
             .as_mut()
             .expect("boundary snapshot")
             .leader_seed[0] ^= 0x80;
+        let replacement_context_id = forged_context_id.finality_artifact.context_id();
         forged_context_id
             .finality_artifact
             .commit_qc
             .round
-            .context_id = forged_context_id.finality_artifact.context_id();
+            .context_id = replacement_context_id;
+        forged_context_id
+            .finality_artifact
+            .commit_qc
+            .proposal_round
+            .context_id = replacement_context_id;
         let mut verifier = BridgeFinalityVerifier::with_context(
             original_context.chain_id,
             forged_context_id.finality_artifact.context_id(),

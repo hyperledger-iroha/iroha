@@ -100,7 +100,8 @@ fn note_fixture(
 fn shield_and_transfer_emit_audit_roots_and_commitments() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let mut state = State::new_with_chain(World::new(), kura, query, ChainId::from(TEST_CHAIN_ID));
+    let mut state =
+        State::new_with_chain_for_testing(World::new(), kura, query, ChainId::from(TEST_CHAIN_ID));
 
     state.zk.halo2.enabled = true;
     state.zk.verify_timeout = std::time::Duration::ZERO;

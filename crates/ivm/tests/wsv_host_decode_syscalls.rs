@@ -237,48 +237,56 @@ fn wsv_host_schema_decode_roundtrip_direct() {
 }
 
 #[test]
-fn wsv_host_schema_encode_decode_unknown_schema_roundtrip() {
-    let mut vm = IVM::new(u64::MAX);
-    vm.set_host(wsv_host());
-
-    let schema = b"UnknownSchema";
+fn wsv_host_schema_unknown_and_malformed_inputs_fail_closed_for_both_abis() {
     let json = br#"{"hello":"world","n":1}"#;
     let expected =
         Json::from_str_norito(std::str::from_utf8(json).expect("json utf8")).expect("parse json");
 
-    let p_schema = vm
-        .alloc_input_tlv(&make_tlv(PointerType::Name, schema))
-        .expect("alloc schema");
-    let p_json = vm
-        .alloc_input_tlv(&make_tlv(PointerType::Json, json))
-        .expect("alloc json");
+    for syscall in [
+        syscalls::SYSCALL_SCHEMA_ENCODE,
+        syscalls::SYSCALL_SCHEMA_ENCODE_DIRECT,
+    ] {
+        let mut vm = IVM::new(u64::MAX);
+        vm.set_host(wsv_host());
+        let p_schema = vm
+            .alloc_input_tlv(&make_tlv(PointerType::Name, b"UnknownSchema"))
+            .expect("alloc schema");
+        let p_json = vm
+            .alloc_input_tlv(&make_tlv(PointerType::Json, json))
+            .expect("alloc json");
+        let enc_prog = common::assemble_syscalls(&[syscall as u8]);
+        vm.set_register(10, p_schema);
+        vm.set_register(11, p_json);
+        vm.load_program(&enc_prog).expect("load program");
+        assert_eq!(vm.run(), Err(VMError::NoritoInvalid));
+        assert_eq!(vm.register(10), p_schema);
+        assert_eq!(vm.register(11), p_json);
+    }
 
-    let enc_prog = common::assemble_syscalls(&[syscalls::SYSCALL_SCHEMA_ENCODE as u8]);
-    vm.set_register(10, p_schema);
-    vm.set_register(11, p_json);
-    vm.load_program(&enc_prog).expect("load program");
-    vm.run().expect("schema encode");
-
-    let p_blob = vm.register(10);
-    let tlv_blob = vm.memory.validate_tlv(p_blob).expect("encoded blob tlv");
-    assert_eq!(tlv_blob.type_id, PointerType::NoritoBytes);
-    let encoded_json: Json =
-        norito::decode_from_bytes(tlv_blob.payload).expect("decode norito json");
-    assert_eq!(encoded_json, expected);
-
-    let p_blob_in = vm
-        .alloc_input_tlv(&make_tlv(PointerType::NoritoBytes, tlv_blob.payload))
-        .expect("alloc blob");
-    let dec_prog = common::assemble_syscalls(&[syscalls::SYSCALL_SCHEMA_DECODE as u8]);
-    vm.set_register(10, p_schema);
-    vm.set_register(11, p_blob_in);
-    vm.load_program(&dec_prog).expect("load program");
-    vm.run().expect("schema decode");
-
-    let out_ptr = vm.register(10);
-    let tlv_out = vm.memory.validate_tlv(out_ptr).expect("output tlv");
-    assert_eq!(tlv_out.type_id, PointerType::Json);
-    let decoded_json: Json =
-        norito::decode_from_bytes(tlv_out.payload).expect("decode output json");
-    assert_eq!(decoded_json, expected);
+    let encoded = norito::to_bytes(&expected).expect("encode adversarial generic JSON");
+    for (schema, payload) in [
+        (&b"UnknownSchema"[..], encoded.as_slice()),
+        (&b"Order"[..], encoded.as_slice()),
+    ] {
+        for syscall in [
+            syscalls::SYSCALL_SCHEMA_DECODE,
+            syscalls::SYSCALL_SCHEMA_DECODE_DIRECT,
+        ] {
+            let mut vm = IVM::new(u64::MAX);
+            vm.set_host(wsv_host());
+            let p_schema = vm
+                .alloc_input_tlv(&make_tlv(PointerType::Name, schema))
+                .expect("alloc schema");
+            let p_blob_in = vm
+                .alloc_input_tlv(&make_tlv(PointerType::NoritoBytes, payload))
+                .expect("alloc blob");
+            let dec_prog = common::assemble_syscalls(&[syscall as u8]);
+            vm.set_register(10, p_schema);
+            vm.set_register(11, p_blob_in);
+            vm.load_program(&dec_prog).expect("load program");
+            assert_eq!(vm.run(), Err(VMError::NoritoInvalid));
+            assert_eq!(vm.register(10), p_schema);
+            assert_eq!(vm.register(11), p_blob_in);
+        }
+    }
 }

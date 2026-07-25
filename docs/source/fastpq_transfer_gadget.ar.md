@@ -102,12 +102,12 @@ struct TransferDeltaTranscript {
 | `ivm::host` والاختبارات | يتعامل المضيفون الأساسيون/الافتراضيون مع `transfer_v1` كملحق دفعة بينما يكون النطاق نشطًا، والسطح `SYSCALL_TRANSFER_V1_BATCH_{BEGIN,END,APPLY}`، ويقوم مضيف WSV الوهمي بتخزين الإدخالات مؤقتًا قبل الالتزام حتى تتمكن اختبارات الانحدار من تأكيد التوازن الحتمي التحديثات.[الصناديق/ivm/src/core_host.rs:1001] 【الصناديق/ivm/src/host.rs:451】الصناديق/ivm/src/mock_wsv.rs :3713】[صناديق/ivm/tests/wsv_host_pointer_tlv.rs:219] 【صناديق/ivm/tests/wsv_host_pointer_tlv.rs:287】
 | `iroha_core` | قم بإصدار `TransferTranscript` بعد انتقال الحالة، وقم بإنشاء سجلات `FastpqTransitionBatch` باستخدام `public_inputs` الصريح أثناء `StateBlock::capture_exec_witness`، وقم بتشغيل مسار إثبات FASTPQ بحيث تتلقى كل من أدوات Torii/CLI والواجهة الخلفية Stage6 البيانات الأساسية المدخلات `TransitionBatch`. يقوم `TransferAssetBatch` بتجميع عمليات النقل المتسلسلة في نسخة واحدة، مع حذف ملخص بوسيدون لدفعات متعددة الدلتا حتى يتمكن الجهاز من التكرار عبر الإدخالات بشكل حتمي. |
 | `fastpq_prover` | يقوم `gadgets::transfer` الآن بالتحقق من صحة نصوص الدلتا المتعددة (حساب التوازن + ملخص Poseidon) وأسطح الشهود المنظمة (بما في ذلك نقاط SMT المقترنة بالعنصر النائب) للمخطط (`crates/fastpq_prover/src/gadgets/transfer.rs`). يقوم `trace::build_trace` بفك تشفير هذه النصوص من بيانات تعريف الدفعة، ويرفض دفعات النقل التي تفتقد الحمولة `transfer_transcripts`، ويرفق الشهود الذين تم التحقق من صحتهم بـ `Trace::transfer_witnesses`، ويبقي `TracePolynomialData::transfer_plan()` الخطة المجمعة حية حتى يستهلك المخطط الأداة (`crates/fastpq_prover/src/trace.rs`). يتم الآن شحن مجموعة انحدار عدد الصفوف عبر `fastpq_row_bench` (`crates/fastpq_prover/src/bin/fastpq_row_bench.rs:1`)، والتي تغطي سيناريوهات تصل إلى 65536 صفًا مبطنًا، بينما تظل أسلاك SMT المقترنة خلف معلم مساعد الدُفعة TF-3 (العناصر النائبة تحافظ على استقرار تخطيط التتبع حتى تصل هذه المبادلة). |
-| Kotodama | يخفض المساعد `transfer_batch((from,to,asset,amount), …)` إلى `transfer_v1_batch_begin`، واستدعاءات `transfer_asset` المتسلسلة، و`transfer_v1_batch_end`. يجب أن تتبع كل وسيطة صف الشكل `(AccountId, AccountId, AssetDefinitionId, int)`؛ عمليات النقل الفردية تحافظ على المنشئ الحالي. |
+| Kotodama | يخفض المساعد `transfer_batch((from,to,asset,amount), …)` إلى `transfer_v1_batch_begin`، واستدعاءات `transfer_asset` المتسلسلة، و`transfer_v1_batch_end`. يجب أن تتبع كل وسيطة صف الشكل `(AccountId, AccountId, AssetDefinitionId, quantity)`؛ عمليات النقل الفردية تحافظ على المنشئ الحالي. |
 
 مثال لاستخدام Kotodama:
 
 ```text
-fn pay(AccountId a, AccountId b, AssetDefinitionId asset, int x) {
+fn pay(AccountId a, AccountId b, AssetDefinitionId asset, quantity x) {
     transfer_batch((a, b, asset, x), (b, a, asset, 1));
 }
 ```

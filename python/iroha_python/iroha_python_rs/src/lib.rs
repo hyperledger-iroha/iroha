@@ -4634,7 +4634,6 @@ fn parse_sorafs_orderbook_payload_kind(kind: &str) -> PyResult<OrderbookValidati
         "trade-event" => Ok(OrderbookValidationPayloadKindV1::TradeEvent),
         "settlement-channel" => Ok(OrderbookValidationPayloadKindV1::SettlementChannel),
         "settlement-receipt" => Ok(OrderbookValidationPayloadKindV1::SettlementReceipt),
-        "runtime-snapshot" => Ok(OrderbookValidationPayloadKindV1::RuntimeSnapshot),
         _ => Err(PyValueError::new_err(format!(
             "unsupported SoraFS orderbook payload kind `{kind}`"
         ))),
@@ -5103,11 +5102,13 @@ mod sorafs_reference_validation_py_tests {
             parse_sorafs_orderbook_payload_kind("settlement-receipt"),
             Ok(OrderbookValidationPayloadKindV1::SettlementReceipt)
         ));
-        assert!(matches!(
-            parse_sorafs_orderbook_payload_kind("runtime-snapshot"),
-            Ok(OrderbookValidationPayloadKindV1::RuntimeSnapshot)
-        ));
-        for retired in ["order", "order_request", " ORDER-REQUEST", "request"] {
+        for retired in [
+            "order",
+            "order_request",
+            " ORDER-REQUEST",
+            "request",
+            "runtime-snapshot",
+        ] {
             assert!(parse_sorafs_orderbook_payload_kind(retired).is_err());
         }
         assert!(parse_sorafs_orderbook_side_py("Bid").is_err());

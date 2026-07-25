@@ -767,6 +767,11 @@ impl FeePaymentIntent {
     /// Empty limits are structurally valid because fee-free networks have no
     /// applicable components. Admission rejects missing limits whenever a fee
     /// component is enabled by the authoritative schedule.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a zero sponsor revision, a zero charge maximum,
+    /// or charge limits that are duplicated or not in canonical order.
     pub fn validate(&self) -> Result<(), FeePaymentIntentError> {
         if matches!(
             self,
@@ -1804,11 +1809,11 @@ impl TransactionBuilder {
         self,
         private_key: &iroha_crypto::PrivateKey,
     ) -> Result<SignedTransaction, TransactionSignatureError> {
+        use iroha_crypto::PublicKey;
+
         let payload = self.payload;
 
         Self::validate_payload_fee_payment(&payload)?;
-
-        use iroha_crypto::PublicKey;
 
         let expected = payload
             .authority
@@ -3422,11 +3427,11 @@ mod ttl_tests {
     #[test]
     fn zero_ttl_is_preserved_not_none() {
         let chain: ChainId = "test-chain".parse().unwrap();
-        let authority = AccountId::new(
-            "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
+        let private_key: iroha_crypto::PrivateKey =
+            "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
                 .parse()
-                .expect("public key"),
-        );
+                .unwrap();
+        let authority = AccountId::new(iroha_crypto::PublicKey::from(private_key.clone()));
         let mut builder = TransactionBuilder::new(
             chain,
             authority,
@@ -3434,14 +3439,7 @@ mod ttl_tests {
         );
         builder.set_ttl(Duration::from_millis(0));
         // Internally we approximate zero by 1ms to distinguish from None
-        let ttl = builder
-            .clone()
-            .sign(
-                &"802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
-                    .parse()
-                    .unwrap(),
-            )
-            .time_to_live();
+        let ttl = builder.clone().sign(&private_key).time_to_live();
         assert_eq!(ttl, Some(Duration::from_millis(1)));
     }
 
@@ -3622,14 +3620,11 @@ mod attachments_tests {
     #[test]
     fn signed_tx_with_attachments_roundtrip() {
         let chain: ChainId = "test-chain".parse().unwrap();
-        let authority =
-            AccountId::parse_encoded("sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE")
-                .expect("valid authority")
-                .into_account_id();
         let private_key: iroha_crypto::PrivateKey =
             "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
                 .parse()
                 .unwrap();
+        let authority = AccountId::new(iroha_crypto::PublicKey::from(private_key.clone()));
 
         let attachments =
             crate::proof::ProofAttachmentList(vec![crate::proof::ProofAttachment::new_ref(
@@ -3778,7 +3773,7 @@ mod norito_rpc_fixture_tests {
     }
 
     fn parse_compact_hash_fixture(raw: &str) -> std::collections::BTreeMap<String, String> {
-        const EXPECTED_KEYS: [&str; 13] = [
+        const EXPECTED_KEYS: [&str; 12] = [
             "schema.version",
             "source.tag",
             "source.commit",
@@ -3790,7 +3785,6 @@ mod norito_rpc_fixture_tests {
             "canonical.prefix.hex",
             "canonical.hash",
             "payload.prehash",
-            "pinned.sdk.defective.hash",
             "versioned.base64",
         ];
         let mut properties = std::collections::BTreeMap::new();
@@ -3897,38 +3891,6 @@ mod norito_rpc_fixture_tests {
     )]
     #[test]
     fn norito_rpc_fixture_manifest_roundtrips() {
-        // Most fixtures are produced by SDK schemas that intentionally exercise instructions
-        // newer than the Rust data model in this checkout. Keep that compatibility boundary
-        // explicit: a new failure, a changed failure mode, or a fixture becoming decodable must
-        // all be reviewed instead of being silently skipped.
-        const EXPECTED_RUST_DECODE_UNSUPPORTED: &[&str] = &[
-            "register_asset_definition",
-            "transfer_asset",
-            "transfer_domain",
-            "transfer_asset_definition",
-            "transfer_nft_demo",
-            "mint_asset",
-            "burn_asset",
-            "grant_revoke_permission",
-            "grant_revoke_role",
-            "grant_revoke_role_permission",
-            "asset_metadata_parity",
-            "set_parameter_next_mode",
-            "executor_upgrade_demo",
-            "register_peer_with_pop_demo",
-            "unregister_peer_demo",
-            "register_role_demo",
-            "register_nft_demo",
-            "trigger_repetitions_demo",
-            "register_time_trigger_demo",
-            "register_precommit_trigger_demo",
-            "register_pipeline_trigger_demo",
-            "repo_initiate_tri_party",
-            "repo_reverse_unwind",
-            "settlement_dvp_atomic",
-            "settlement_pvp_net",
-        ];
-
         let path = manifest_path();
         let raw = fs::read_to_string(&path)
             .unwrap_or_else(|err| panic!("failed to read {path:?}: {err}"));
@@ -3946,14 +3908,6 @@ mod norito_rpc_fixture_tests {
         let mut payload_bytes_values = BTreeSet::new();
         let mut signed_hashes = BTreeSet::new();
         let mut signed_bytes_values = BTreeSet::new();
-        let expected_decode_unsupported: BTreeSet<&str> =
-            EXPECTED_RUST_DECODE_UNSUPPORTED.iter().copied().collect();
-        assert_eq!(
-            expected_decode_unsupported.len(),
-            EXPECTED_RUST_DECODE_UNSUPPORTED.len(),
-            "Rust decode incompatibility allowlist must not contain duplicates"
-        );
-        let mut seen_decode_unsupported = BTreeSet::new();
         for fixture in fixtures {
             let entry = require_object(fixture, "fixture");
             let name = require_str(entry, "name", "fixture");
@@ -4037,31 +3991,8 @@ mod norito_rpc_fixture_tests {
                 "{name}: signed_hash mismatch"
             );
 
-            let (signed_tx, used) = match SignedTransaction::decode_from_slice(&signed_bytes) {
-                Ok(decoded) => {
-                    assert!(
-                        !expected_decode_unsupported.contains(name),
-                        "{name}: fixture is now Rust-decodable; remove it from the explicit incompatibility allowlist and review its semantic roundtrip"
-                    );
-                    decoded
-                }
-                Err(err) => {
-                    assert!(
-                        expected_decode_unsupported.contains(name),
-                        "{name}: unexpected Rust signed transaction decode failure: {err}"
-                    );
-                    assert_eq!(
-                        err.to_string(),
-                        "length mismatch",
-                        "{name}: reviewed Rust decode incompatibility changed failure mode"
-                    );
-                    assert!(
-                        seen_decode_unsupported.insert(name),
-                        "duplicate Rust decode incompatibility fixture: {name}"
-                    );
-                    continue;
-                }
-            };
+            let (signed_tx, used) = SignedTransaction::decode_from_slice(&signed_bytes)
+                .unwrap_or_else(|err| panic!("{name}: signed transaction decode failed: {err}"));
             assert_eq!(
                 used,
                 signed_bytes.len(),
@@ -4174,11 +4105,6 @@ mod norito_rpc_fixture_tests {
                 "{name}: signed bytes mismatch after re-encode"
             );
         }
-
-        assert_eq!(
-            seen_decode_unsupported, expected_decode_unsupported,
-            "Rust decode incompatibility allowlist must exactly match the manifest failures"
-        );
     }
 
     #[test]
@@ -4247,21 +4173,27 @@ mod norito_rpc_fixture_tests {
             6,
             "the shared fixture must exercise a two-byte External COMPACT_LEN"
         );
-        assert_eq!(&canonical[..6], expected_prefix.as_slice());
+        assert_eq!(
+            &canonical[..expected_prefix.len()],
+            expected_prefix.as_slice()
+        );
+        let first_length_index = expected_prefix.len() - 2;
         assert_ne!(
-            canonical[4] & 0x80,
+            canonical[first_length_index] & 0x80,
             0,
             "the first External length byte must continue"
         );
+        let terminal_index = expected_prefix.len() - 1;
+        let terminal = canonical[terminal_index];
         assert_eq!(
-            canonical[5] & 0x80,
+            terminal & 0x80,
             0,
             "the second External length byte must terminate"
         );
         let mut overlong_entrypoint = Vec::with_capacity(canonical.len() + 1);
-        overlong_entrypoint.extend_from_slice(&canonical[..5]);
-        overlong_entrypoint.extend_from_slice(&[canonical[5] | 0x80, 0x00]);
-        overlong_entrypoint.extend_from_slice(&canonical[6..]);
+        overlong_entrypoint.extend_from_slice(&canonical[..terminal_index]);
+        overlong_entrypoint.extend_from_slice(&[terminal | 0x80, 0x00]);
+        overlong_entrypoint.extend_from_slice(&canonical[terminal_index + 1..]);
         assert!(
             norito::codec::decode_adaptive::<TransactionEntrypoint>(&overlong_entrypoint).is_err(),
             "overlong External field length must be rejected"

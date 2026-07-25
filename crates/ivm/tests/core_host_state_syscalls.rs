@@ -1,6 +1,10 @@
 //! CoreHost durable state syscalls: STATE_GET/SET/DEL with pointer-ABI.
 
-use ivm::{CoreHost, IVM, Memory, PointerType, VMError, encoding, instruction, syscalls};
+use ivm::{
+    CoreHost, EmbeddedContractInterfaceV1, EmbeddedEntrypointDescriptor, EmbeddedStateDescriptor,
+    EmbeddedStateType, IVM, Memory, PointerType, ProgramMetadata, VMError, encoding, instruction,
+    state_value, syscalls,
+};
 mod common;
 
 fn make_tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
@@ -20,6 +24,71 @@ fn saturate_input(vm: &mut IVM) {
     while vm.alloc_input_tlv(&filler).is_ok() {}
 }
 
+fn bytes_state_value(value: &[u8]) -> Vec<u8> {
+    let schema = state_value::StateValueSchemaV1 {
+        nodes: vec![state_value::StateValueNodeV1::Leaf(
+            state_value::StateValueKindV1::Bytes,
+        )],
+    };
+    let schema_payload = norito::to_bytes(&schema).expect("encode bytes state schema");
+    let record = state_value::StateValueRecordV1 {
+        schema_hash: state_value::state_value_schema_hash_v1(&schema_payload),
+        atoms: vec![state_value::StateValueAtomV1::Pointer(make_tlv(
+            PointerType::Blob,
+            value,
+        ))],
+    };
+    norito::to_bytes(&record).expect("encode bytes state value")
+}
+
+fn state_program(number: u32, name: &str, write: bool) -> Vec<u8> {
+    let access_key = format!("state:{name}");
+    let entrypoint = EmbeddedEntrypointDescriptor {
+        name: if write { "update" } else { "inspect" }.to_owned(),
+        kind: if write {
+            iroha_data_model::smart_contract::manifest::EntryPointKind::Kotoage
+        } else {
+            iroha_data_model::smart_contract::manifest::EntryPointKind::View
+        },
+        params: Vec::new(),
+        argument_schema: None,
+        return_type: None,
+        return_schema: None,
+        permission: write.then(|| "Execute".to_owned()),
+        read_keys: (!write).then_some(access_key.clone()).into_iter().collect(),
+        write_keys: write.then_some(access_key).into_iter().collect(),
+        access_hints_complete: Some(true),
+        access_hints_skipped: Vec::new(),
+        triggers: Vec::new(),
+        entry_pc: 0,
+    };
+    let interface = EmbeddedContractInterfaceV1 {
+        seiyaku_name: "StateSyscallFixture".to_owned(),
+        compiler_fingerprint: "ivm-integration-tests".to_owned(),
+        abi_hash: syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
+        features_bitmap: 0,
+        access_set_hints: None,
+        kotoba: Vec::new(),
+        entrypoints: vec![entrypoint],
+        states: vec![EmbeddedStateDescriptor {
+            name: name.to_owned(),
+            ty: EmbeddedStateType::Bytes,
+        }],
+        error_codes: Vec::new(),
+    };
+    let mut program = ProgramMetadata::default().encode();
+    program.extend_from_slice(&interface.encode_section());
+    program.extend_from_slice(
+        &encoding::wide::encode_sys(
+            instruction::wide::system::SCALL,
+            u8::try_from(number).expect("state syscall fits compact encoding"),
+        )
+        .to_le_bytes(),
+    );
+    program.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
+    program
+}
+
 #[test]
 fn core_host_state_set_get_del_roundtrip() {
     let mut vm = IVM::new(u64::MAX);
@@ -27,34 +96,20 @@ fn core_host_state_set_get_del_roundtrip() {
 
     // Allocate TLVs for path and value in INPUT
     let path_tlv = make_tlv(PointerType::Name, b"foo");
-    let val1 = vec![1u8, 2, 3, 4];
+    let val1 = bytes_state_value(&[1u8, 2, 3, 4]);
     let val1_tlv = make_tlv(PointerType::NoritoBytes, &val1);
     let p_path = vm.alloc_input_tlv(&path_tlv).expect("alloc path");
     let p_val1 = vm.alloc_input_tlv(&val1_tlv).expect("alloc val1");
 
     // Build program: SCALL STATE_SET; HALT
-    let mut set_prog = Vec::new();
-    let set_sys = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        syscalls::SYSCALL_STATE_SET as u8,
-    );
-    set_prog.extend_from_slice(&set_sys.to_le_bytes());
-    set_prog.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
-    let set_prog = common::assemble(&set_prog);
+    let set_prog = state_program(syscalls::SYSCALL_STATE_SET, "foo", true);
     vm.set_register(10, p_path);
     vm.set_register(11, p_val1);
     vm.load_program(&set_prog).expect("load set");
     vm.run().expect("state set");
 
     // GET program: r10 = path; SCALL GET; value returned in r10 (pointer or 0)
-    let mut get_prog = Vec::new();
-    let get_sys = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        syscalls::SYSCALL_STATE_GET as u8,
-    );
-    get_prog.extend_from_slice(&get_sys.to_le_bytes());
-    get_prog.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
-    let get_prog = common::assemble(&get_prog);
+    let get_prog = state_program(syscalls::SYSCALL_STATE_GET, "foo", false);
     vm.set_register(10, p_path);
     vm.load_program(&get_prog).expect("load get");
     vm.run().expect("state get");
@@ -65,14 +120,7 @@ fn core_host_state_set_get_del_roundtrip() {
     assert_eq!(tlv.payload, &val1[..]);
 
     // DEL program: r10=path; SCALL DEL; HALT
-    let mut del_prog = Vec::new();
-    let del_sys = encoding::wide::encode_sys(
-        instruction::wide::system::SCALL,
-        syscalls::SYSCALL_STATE_DEL as u8,
-    );
-    del_prog.extend_from_slice(&del_sys.to_le_bytes());
-    del_prog.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
-    let del_prog = common::assemble(&del_prog);
+    let del_prog = state_program(syscalls::SYSCALL_STATE_DEL, "foo", true);
     vm.set_register(10, p_path);
     vm.load_program(&del_prog).expect("load del");
     vm.run().expect("state del");
@@ -89,7 +137,7 @@ fn core_host_state_syscalls_require_pointers() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(CoreHost::new());
 
-    let get_prog = common::assemble_syscalls(&[syscalls::SYSCALL_STATE_GET as u8]);
+    let get_prog = state_program(syscalls::SYSCALL_STATE_GET, "foo", false);
     vm.set_register(10, 0);
     vm.load_program(&get_prog).expect("load get");
     let err = vm.run().expect_err("state get without path should fail");
@@ -97,14 +145,14 @@ fn core_host_state_syscalls_require_pointers() {
 
     let path_tlv = make_tlv(PointerType::Name, b"foo");
     let p_path = vm.alloc_input_tlv(&path_tlv).expect("alloc path");
-    let set_prog = common::assemble_syscalls(&[syscalls::SYSCALL_STATE_SET as u8]);
+    let set_prog = state_program(syscalls::SYSCALL_STATE_SET, "foo", true);
     vm.set_register(10, p_path);
     vm.set_register(11, 0);
     vm.load_program(&set_prog).expect("load set");
     let err = vm.run().expect_err("state set without value should fail");
     assert!(matches!(err, VMError::NoritoInvalid));
 
-    let del_prog = common::assemble_syscalls(&[syscalls::SYSCALL_STATE_DEL as u8]);
+    let del_prog = state_program(syscalls::SYSCALL_STATE_DEL, "foo", true);
     vm.set_register(10, 0);
     vm.load_program(&del_prog).expect("load del");
     let err = vm.run().expect_err("state del without path should fail");
@@ -117,12 +165,12 @@ fn core_host_state_get_spills_to_heap_when_input_bump_is_full() {
     vm.set_host(CoreHost::new());
 
     let path_tlv = make_tlv(PointerType::Name, b"spill");
-    let expected = vec![0xAB; 64];
+    let expected = bytes_state_value(&[0xAB; 64]);
     let val_tlv = make_tlv(PointerType::NoritoBytes, &expected);
     let p_path = vm.alloc_input_tlv(&path_tlv).expect("alloc path");
     let p_val = vm.alloc_input_tlv(&val_tlv).expect("alloc value");
 
-    let set_prog = common::assemble_syscalls(&[syscalls::SYSCALL_STATE_SET as u8]);
+    let set_prog = state_program(syscalls::SYSCALL_STATE_SET, "spill", true);
     vm.set_register(10, p_path);
     vm.set_register(11, p_val);
     vm.load_program(&set_prog).expect("load set");
@@ -130,7 +178,7 @@ fn core_host_state_get_spills_to_heap_when_input_bump_is_full() {
 
     saturate_input(&mut vm);
 
-    let get_prog = common::assemble_syscalls(&[syscalls::SYSCALL_STATE_GET as u8]);
+    let get_prog = state_program(syscalls::SYSCALL_STATE_GET, "spill", false);
     vm.set_register(10, p_path);
     vm.load_program(&get_prog).expect("load get");
     vm.run().expect("state get");

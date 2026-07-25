@@ -1651,14 +1651,26 @@ mod tests {
             ("List<int, 4>", "List<int, 8>")
         );
 
-        let retired_suffix = "seiyaku C { fn quantity_value() -> quantity { 1.25amt } }";
-        let retired_error = reject(retired_suffix);
-        let retired_diagnostic = diagnostic(&retired_error, "E_RETIRED_NUMERIC_SUFFIX");
-        assert_eq!(primary_text(retired_suffix, retired_diagnostic), "1.25amt");
-        assert!(
-            retired_diagnostic.fix.is_none(),
-            "first-release V1 diagnostics must reject retired suffixes without compatibility rewrites"
-        );
+        for (retired_suffix, spelling, replacement) in [
+            (
+                "seiyaku C { fn quantity_value() -> quantity { 1.25amt } }",
+                "1.25amt",
+                "1.25",
+            ),
+            (
+                "seiyaku C { fn quantity_value() -> quantity { 1.25qty } }",
+                "1.25qty",
+                "1.25",
+            ),
+        ] {
+            let retired_error = reject(retired_suffix);
+            let retired_diagnostic = diagnostic(&retired_error, "E_RETIRED_NUMERIC_SUFFIX");
+            assert_eq!(primary_text(retired_suffix, retired_diagnostic), spelling);
+            assert_eq!(
+                fix_text(retired_suffix, retired_diagnostic),
+                (spelling, replacement)
+            );
+        }
 
         let scale_29 = format!("0.{}1", "0".repeat(28));
         let invalid_quantity =

@@ -595,7 +595,9 @@ Clock rollback and poisoned accounting state also fail closed with `503`.
 Once a manifest is pinned, clients retrieve deterministic byte ranges via
 `POST /v1/sorafs/storage/fetch`. The request body mirrors the DTO defined in
 Torii (`StorageFetchRequestDto`) and must include the manifest digest, the byte
-offset, and the number of bytes to return.【crates/iroha_torii/src/sorafs/api.rs:68】
+offset, and the number of bytes to return. The serving provider identity comes
+from the node's governed runtime configuration and cannot be supplied or
+overridden by the caller.【crates/iroha_torii/src/sorafs/api.rs:68】
 
 ```json
 {

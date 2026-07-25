@@ -3,13 +3,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  mkdtempSync,
   readdirSync,
   readFileSync,
-  rmSync,
-  writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -107,35 +103,24 @@ test("live recipes reject ambiguous security flags before I/O", () => {
     /TORII_REQUIRE_PERMISSIONS must be exactly 0 or 1/u,
   );
 
-  const tempRoot = mkdtempSync(join(tmpdir(), "iroha-js-contract-recipe-"));
-  try {
-    const contractPath = join(tempRoot, "fixture.to");
-    writeFileSync(contractPath, Buffer.from([0, 1, 2, 3]));
-    const contract = spawnSync(
-      process.execPath,
-      [join(ROOT, "recipes", "contracts.mjs")],
-      {
-        cwd: ROOT,
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          AUTHORITY:
-            "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
-          PRIVATE_KEY_HEX: "11".repeat(32),
-          CONTRACT_CODE_PATH: contractPath,
-          CONTRACT_ALIAS: "fixture::universal",
-          TORII_ALLOW_INSECURE: "yes",
-        },
-        timeout: 30_000,
+  const insecure = spawnSync(
+    process.execPath,
+    [join(ROOT, "recipes", "assets_iterators.mjs")],
+    {
+      cwd: ROOT,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        TORII_REQUIRE_PERMISSIONS: "0",
+        TORII_ALLOW_INSECURE: "yes",
       },
-    );
-    assert.equal(contract.status, 1, contract.stdout);
-    assert.match(
-      contract.stderr,
-      /TORII_ALLOW_INSECURE must be exactly 0 or 1/u,
-    );
-    assert.doesNotMatch(contract.stderr, /ECONNREFUSED|fetch failed/u);
-  } finally {
-    rmSync(tempRoot, { recursive: true, force: true });
-  }
+      timeout: 30_000,
+    },
+  );
+  assert.equal(insecure.status, 1, insecure.stdout);
+  assert.match(
+    insecure.stderr,
+    /TORII_ALLOW_INSECURE must be exactly 0 or 1/u,
+  );
+  assert.doesNotMatch(insecure.stderr, /ECONNREFUSED|fetch failed/u);
 });

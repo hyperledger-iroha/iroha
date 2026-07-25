@@ -93,6 +93,16 @@ use tokio::sync::Mutex;
 use crate::config::WorkloadProfile;
 use crate::smart_contracts;
 
+fn quantity_to_u64_exact(quantity: &Quantity) -> Option<u64> {
+    if quantity.scale() != 0 {
+        return None;
+    }
+    quantity
+        .as_numeric()
+        .try_mantissa_u128()
+        .and_then(|value| u64::try_from(value).ok())
+}
+
 /// Record describing an account and its signing material.
 #[derive(Clone, Debug)]
 pub struct AccountRecord {
@@ -453,7 +463,7 @@ pub fn prepare_state(
             .try_mul_decimal(&bootstrap_lane_count.into())
             .expect("bootstrap validator stake must remain representable");
         npos_bootstrap_stake = Some(
-            u64::try_from(stake_amount)
+            quantity_to_u64_exact(&stake_amount)
                 .expect("Izanami workload accounting requires an integer-valued validator bond"),
         );
 
@@ -499,7 +509,7 @@ pub fn prepare_state(
         }
 
         for validator in &validator_accounts {
-            if total_bootstrap_stake_value > 0 {
+            if !total_bootstrap_stake.is_zero() {
                 nexus_genesis.push(InstructionBox::from(Mint::asset_quantity(
                     total_bootstrap_stake.clone(),
                     AssetId::new(stake_asset.clone(), validator.id.clone()),
@@ -3377,7 +3387,7 @@ mod tests {
             for validator_id in &validator_ids {
                 assert_eq!(
                     state.available_public_lane_stake_share(*lane_id, validator_id, validator_id),
-                    u64::try_from(SumeragiNposParameters::default().min_self_bond().clone())
+                    quantity_to_u64_exact(SumeragiNposParameters::default().min_self_bond())
                         .expect("default self-bond must fit Izanami workload accounting"),
                     "bootstrap lane {} should seed validator {} with min self-bond",
                     lane_id,
@@ -3395,7 +3405,7 @@ mod tests {
                 .expect("state prepared");
         let setup = state.nexus_staking.as_ref().expect("staking setup");
         let expected_stake =
-            u64::try_from(SumeragiNposParameters::default().min_self_bond().clone())
+            quantity_to_u64_exact(SumeragiNposParameters::default().min_self_bond())
                 .expect("default self-bond must fit Izanami workload accounting")
                 .checked_mul(
                     u64::try_from(profile.bootstrap_public_lanes.len()).unwrap_or(u64::MAX),
@@ -3414,7 +3424,7 @@ mod tests {
                         {
                             Some((
                                 asset.destination.account().clone(),
-                                u64::try_from(asset.object.as_numeric().clone())
+                                quantity_to_u64_exact(&asset.object)
                                     .expect("stake mint should remain integer-valued"),
                             ))
                         }

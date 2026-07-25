@@ -436,13 +436,6 @@ impl PreparedContract {
     pub(crate) fn prepared_program(&self) -> &PreparedProgram {
         &self.inner.prepared_program
     }
-
-    #[cfg(test)]
-    pub(crate) fn shares_prepared_program_with(&self, other: &Self) -> bool {
-        self.inner
-            .prepared_program
-            .shares_ops(&other.inner.prepared_program)
-    }
 }
 
 impl fmt::Debug for PreparedContract {

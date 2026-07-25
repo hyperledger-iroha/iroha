@@ -4113,6 +4113,7 @@ async fn sumeragi_status_json_endpoint_decodes_to_wire_end_to_end() -> Result<()
         wait_for_status_responses(&network, Duration::from_secs(30)).await?;
         network.client().submit::<InstructionBox>(
             Log::new(Level::INFO, "status endpoint bootstrap tick".to_owned()).into(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )?;
         let warmup_statuses =
             wait_for_height_quorum_with_bounded_lag(&network, 2, Duration::from_secs(45)).await?;
@@ -4361,6 +4362,7 @@ async fn permissioned_localnet_reaches_100_blocks() -> Result<()> {
             peer.client()
                 .submit_with_metadata::<InstructionBox>(
                     Log::new(Level::INFO, message).into(),
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                     metadata,
                 )
                 .wrap_err_with(|| {
@@ -4635,6 +4637,7 @@ async fn permissioned_localnet_soak_thousands() -> Result<()> {
             client
                 .submit::<InstructionBox>(
                     Log::new(Level::INFO, format!("localnet soak {idx}")).into(),
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 )
                 .wrap_err_with(|| format!("failed to submit log instruction {idx}"))?;
             if (idx + 1) % submit_batch == 0 {

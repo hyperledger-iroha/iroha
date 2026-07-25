@@ -47,7 +47,6 @@ export const SORAFS_ORDERBOOK_PAYLOAD_KINDS = Object.freeze({
   TRADE_EVENT: "trade-event",
   SETTLEMENT_CHANNEL: "settlement-channel",
   SETTLEMENT_RECEIPT: "settlement-receipt",
-  RUNTIME_SNAPSHOT: "runtime-snapshot",
 });
 
 /** Canonical maximum byte length for a V1 orderbook owner account. */

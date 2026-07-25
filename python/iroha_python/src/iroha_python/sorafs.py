@@ -549,7 +549,6 @@ SORAFS_ORDERBOOK_PAYLOAD_KINDS: Mapping[str, str] = MappingProxyType(
         "TRADE_EVENT": "trade-event",
         "SETTLEMENT_CHANNEL": "settlement-channel",
         "SETTLEMENT_RECEIPT": "settlement-receipt",
-        "RUNTIME_SNAPSHOT": "runtime-snapshot",
     }
 )
 SORAFS_PDP_PAYLOAD_KINDS: Mapping[str, str] = MappingProxyType(

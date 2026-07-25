@@ -451,15 +451,8 @@ mod tests {
             Err(VMError::PointerAbiFault(PointerAbiFaultV1::UnknownType))
         ));
 
-        let mut retired = envelope.clone();
-        retired[..2].copy_from_slice(&(PointerType::RetiredAmount as u16).to_be_bytes());
-        assert!(matches!(
-            decode_int_bytes(&retired),
-            Err(VMError::PointerAbiFault(PointerAbiFaultV1::TypeNotAllowed))
-        ));
-
         let mut unassigned = envelope.clone();
-        unassigned[..2].copy_from_slice(&0x0014_u16.to_be_bytes());
+        unassigned[..2].copy_from_slice(&0x0013_u16.to_be_bytes());
         assert!(matches!(
             decode_int_bytes(&unassigned),
             Err(VMError::PointerAbiFault(PointerAbiFaultV1::UnknownType))

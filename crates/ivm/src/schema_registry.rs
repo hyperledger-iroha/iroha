@@ -1,9 +1,10 @@
-//! Simple pluggable schema registry used by hosts to encode/decode
-//! typed Norito payloads.
+//! Pluggable schema registry used by hosts to encode/decode typed Norito payloads.
 //!
-//! This is a development scaffold: schemas are identified by a string name and
-//! return a stable 32-byte id (hash) and a simple version. Encoding/decoding
-//! is currently implemented for a couple of example types.
+//! Schemas are resolved only through explicitly registered names and families.
+//! Unsupported names fail closed; registered schemas expose a stable 32-byte id
+//! and version for host metadata.
+
+use std::sync::Arc;
 
 use iroha_crypto::Hash as IrohaHash;
 use iroha_data_model::query::{
@@ -52,6 +53,8 @@ pub struct SchemaInfo {
 pub trait SchemaRegistry {
     /// Return schema info for the given name.
     fn info(&self, name: &str) -> Option<SchemaInfo>;
+    /// Resolve a canonical family name from either that family or an exact schema name.
+    fn resolve_family(&self, name: &str) -> Option<String>;
     /// Encode a JSON payload according to `name` into Norito bytes.
     fn encode_json(&self, name: &str, json: &[u8]) -> Option<Vec<u8>>;
     /// Decode Norito bytes according to `name` into minified JSON bytes.
@@ -62,7 +65,33 @@ pub trait SchemaRegistry {
     fn current(&self, base: &str) -> Option<(String, SchemaInfo)>;
 }
 
-/// Default in-memory registry with a couple of example schemas.
+impl<T: SchemaRegistry + ?Sized> SchemaRegistry for Arc<T> {
+    fn info(&self, name: &str) -> Option<SchemaInfo> {
+        (**self).info(name)
+    }
+
+    fn resolve_family(&self, name: &str) -> Option<String> {
+        (**self).resolve_family(name)
+    }
+
+    fn encode_json(&self, name: &str, json: &[u8]) -> Option<Vec<u8>> {
+        (**self).encode_json(name, json)
+    }
+
+    fn decode_to_json(&self, name: &str, bytes: &[u8]) -> Option<Vec<u8>> {
+        (**self).decode_to_json(name, bytes)
+    }
+
+    fn list_versions(&self, base: &str) -> Option<Vec<(String, SchemaInfo)>> {
+        (**self).list_versions(base)
+    }
+
+    fn current(&self, base: &str) -> Option<(String, SchemaInfo)> {
+        (**self).current(base)
+    }
+}
+
+/// Production default registry for the host schema syscalls.
 #[derive(Default)]
 pub struct DefaultRegistry;
 
@@ -107,6 +136,18 @@ impl DefaultRegistry {
             version: 1,
         }
     }
+
+    fn exact_object<'a>(
+        value: &'a norito::json::Value,
+        expected_fields: &[&str],
+    ) -> Option<&'a norito::json::Map> {
+        let object = value.as_object()?;
+        (object.len() == expected_fields.len()
+            && expected_fields
+                .iter()
+                .all(|field| object.contains_key(*field)))
+        .then_some(object)
+    }
 }
 
 impl SchemaRegistry for DefaultRegistry {
@@ -116,6 +157,18 @@ impl SchemaRegistry for DefaultRegistry {
             "OrderByTime" => Some(self.info_order_by_time()),
             "TradeV1" => Some(self.info_trade_v1()),
             "TradeV2" => Some(self.info_trade_v2()),
+            "QueryRequest" => Some(self.info_query_request()),
+            "QueryResponse" => Some(self.info_query_response()),
+            _ => None,
+        }
+    }
+
+    fn resolve_family(&self, name: &str) -> Option<String> {
+        match name {
+            "Order" | "OrderByTime" => Some("Order".to_owned()),
+            "Trade" | "TradeV1" | "TradeV2" => Some("Trade".to_owned()),
+            "QueryRequest" => Some("QueryRequest".to_owned()),
+            "QueryResponse" => Some("QueryResponse".to_owned()),
             _ => None,
         }
     }
@@ -124,33 +177,37 @@ impl SchemaRegistry for DefaultRegistry {
         match name {
             "Order" => {
                 let v: norito::json::Value = norito::json::from_slice(json).ok()?;
-                let qty = v.get("qty")?.as_i64()?;
-                let side = v.get("side")?.as_str()?.to_string();
+                let object = Self::exact_object(&v, &["qty", "side"])?;
+                let qty = object.get("qty")?.as_i64()?;
+                let side = object.get("side")?.as_str()?.to_string();
                 let order = OrderSchema { qty, side };
                 norito::to_bytes(&order).ok()
             }
             "OrderByTime" => {
                 let v: norito::json::Value = norito::json::from_slice(json).ok()?;
-                let qty = v.get("qty")?.as_i64()?;
-                let side = v.get("side")?.as_str()?.to_string();
-                let tif = u32::try_from(v.get("tif")?.as_u64()?).ok()?;
+                let object = Self::exact_object(&v, &["qty", "side", "tif"])?;
+                let qty = object.get("qty")?.as_i64()?;
+                let side = object.get("side")?.as_str()?.to_string();
+                let tif = u32::try_from(object.get("tif")?.as_u64()?).ok()?;
                 let order = OrderByTimeSchema { qty, side, tif };
                 norito::to_bytes(&order).ok()
             }
             "TradeV1" => {
                 let v: norito::json::Value = norito::json::from_slice(json).ok()?;
-                let qty = v.get("qty")?.as_i64()?;
-                let price = v.get("price")?.as_i64()?;
-                let side = v.get("side")?.as_str()?.to_string();
+                let object = Self::exact_object(&v, &["price", "qty", "side"])?;
+                let qty = object.get("qty")?.as_i64()?;
+                let price = object.get("price")?.as_i64()?;
+                let side = object.get("side")?.as_str()?.to_string();
                 let t = TradeV1Schema { qty, price, side };
                 norito::to_bytes(&t).ok()
             }
             "TradeV2" => {
                 let v: norito::json::Value = norito::json::from_slice(json).ok()?;
-                let qty = v.get("qty")?.as_i64()?;
-                let price = v.get("price")?.as_i64()?;
-                let side = v.get("side")?.as_str()?.to_string();
-                let venue = v.get("venue")?.as_str()?.to_string();
+                let object = Self::exact_object(&v, &["price", "qty", "side", "venue"])?;
+                let qty = object.get("qty")?.as_i64()?;
+                let price = object.get("price")?.as_i64()?;
+                let side = object.get("side")?.as_str()?.to_string();
+                let venue = object.get("venue")?.as_str()?.to_string();
                 let t = TradeV2Schema {
                     qty,
                     price,
@@ -311,12 +368,114 @@ mod tests {
     }
 
     #[test]
-    fn order_by_time_rejects_tif_overflow() {
+    fn order_by_time_rejects_tif_outside_u32() {
         let reg = DefaultRegistry::new();
-        let overflow = u64::from(u32::MAX) + 1;
-        let input = format!(r#"{{"qty":5,"side":"sell","tif":{overflow}}}"#);
+        assert!(
+            reg.encode_json(
+                "OrderByTime",
+                br#"{"qty":5,"side":"sell","tif":4294967296}"#,
+            )
+            .is_none()
+        );
+    }
 
-        assert!(reg.encode_json("OrderByTime", input.as_bytes()).is_none());
+    #[test]
+    fn registry_metadata_is_coherent_for_base_and_exact_names() {
+        let reg = DefaultRegistry::new();
+        let families: [(&str, &[&str], &str); 4] = [
+            ("Order", &["Order", "OrderByTime"], "OrderByTime"),
+            ("Trade", &["TradeV1", "TradeV2"], "TradeV2"),
+            ("QueryRequest", &["QueryRequest"], "QueryRequest"),
+            ("QueryResponse", &["QueryResponse"], "QueryResponse"),
+        ];
+
+        for (family, exact_names, expected_current) in families {
+            assert_eq!(reg.resolve_family(family).as_deref(), Some(family));
+            let versions = reg.list_versions(family).expect("known family versions");
+            assert_eq!(versions.len(), exact_names.len());
+            for exact_name in exact_names {
+                assert_eq!(
+                    reg.resolve_family(exact_name).as_deref(),
+                    Some(family),
+                    "family for {exact_name}"
+                );
+                let listed = versions
+                    .iter()
+                    .find(|(name, _)| name == exact_name)
+                    .expect("exact schema is listed");
+                assert_eq!(reg.info(exact_name), Some(listed.1));
+            }
+            let current = reg.current(family).expect("known family current");
+            assert_eq!(current.0, expected_current);
+            assert_eq!(reg.info(&current.0), Some(current.1));
+            assert!(versions.contains(&current));
+        }
+
+        for unknown in ["UnknownSchema", "OrderV2", "TradeV3", "Query"] {
+            assert_eq!(reg.resolve_family(unknown), None);
+            assert_eq!(reg.info(unknown), None);
+            assert_eq!(reg.list_versions(unknown), None);
+            assert_eq!(reg.current(unknown), None);
+        }
+    }
+
+    #[test]
+    fn manual_schema_encoders_require_exact_json_shapes() {
+        let reg = DefaultRegistry::new();
+        let invalid: [(&str, &str, &[u8]); 9] = [
+            (
+                "Order extra field",
+                "Order",
+                &br#"{"qty":5,"side":"buy","tif":30}"#[..],
+            ),
+            (
+                "OrderByTime extra field",
+                "OrderByTime",
+                &br#"{"qty":5,"side":"buy","tif":30,"price":7}"#[..],
+            ),
+            (
+                "TradeV1 extra field",
+                "TradeV1",
+                &br#"{"qty":5,"price":7,"side":"buy","venue":"X"}"#[..],
+            ),
+            (
+                "TradeV2 extra field",
+                "TradeV2",
+                &br#"{"qty":5,"price":7,"side":"buy","venue":"X","tif":30}"#[..],
+            ),
+            (
+                "duplicate field",
+                "Order",
+                &br#"{"qty":5,"qty":6,"side":"buy"}"#[..],
+            ),
+            (
+                "wrong qty type",
+                "Order",
+                &br#"{"qty":"5","side":"buy"}"#[..],
+            ),
+            (
+                "wrong tif type",
+                "OrderByTime",
+                &br#"{"qty":5,"side":"buy","tif":"30"}"#[..],
+            ),
+            (
+                "wrong price type",
+                "TradeV1",
+                &br#"{"qty":5,"price":"7","side":"buy"}"#[..],
+            ),
+            (
+                "wrong venue type",
+                "TradeV2",
+                &br#"{"qty":5,"price":7,"side":"buy","venue":9}"#[..],
+            ),
+        ];
+
+        for (label, schema, json) in invalid {
+            assert!(
+                reg.encode_json(schema, json).is_none(),
+                "{label} must fail closed"
+            );
+        }
     }
 
     #[test]
