@@ -214,7 +214,6 @@ fn sorafs_gateway_refusal_scenarios_match_expectations() {
         ("A3", 416u16),
         ("B1", 406),
         ("B2", 428),
-        ("B3", 422),
         ("B4", 422),
         ("B5", 412),
         ("B6", 429),

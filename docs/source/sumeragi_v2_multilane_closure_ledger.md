@@ -101,8 +101,8 @@ retirement blocker; same-route identity drift fails closed.
 **Closure condition.** Add one typed predicate whose inputs include coordinator
 route/incarnation/proposal identity and participant route/incarnation/proposal
 identity. Use it at every production consumer. The false branch must create no
-separate participant receipt, marker, index row, diagnostic record, frontier,
-or drain blocker.
+separate participant receipt, marker, latest-pointer update, diagnostic record,
+frontier, or drain blocker.
 
 **Focused and adversarial tests.** Cover exact same-route coordinator legs,
 same lane with a different dataspace, same route with a stale incarnation,
@@ -239,9 +239,11 @@ or duplicate application.
 `NativeAmxApplicationManifestLeafV1`, and `ExecutionCommitment` in
 `crates/iroha_data_model/src/block/consensus_v2.rs` define the versioned
 canonical manifest, empty root, leaf validation, root, and leaf count. Kura
-persists the leaf/proof artifact and exact participant receipt, binding route,
+persists the leaf/proof artifact and exact participant receipt as separate,
+immutable, versioned files named by participant height. Each file binds route,
 incarnation, predecessor, descriptor, proposal, settlement, ordered
-source/result membership, global application identity, and executed wire.
+source/result membership, global application identity, and executed wire;
+same-height publication is no-clobber and accepts only byte-identical replay.
 
 **Closure condition.** Define a versioned canonical Native application
 manifest. Its Merkle leaves and proofs bind route, incarnation, predecessor,
@@ -282,68 +284,145 @@ wire, exact receipt group, and active incarnation.
 evidence, while `crates/iroha_core/src/sumeragi/v2_apply.rs` invokes
 persistence and idempotent startup/replay repair in durability order. Pruned
 bodies remain verifiable through QC-authenticated manifest evidence; weaker
-hash-only evidence remains fail-closed.
+hash-only evidence remains fail-closed. The Kura namespace contains one
+immutable versioned manifest file and one immutable versioned receipt file per
+participant height, followed by a descriptor-bound, replaceable exact-latest
+pointer. Publication uses create-new temporaries, no-clobber promotion, file
+and directory durability sync, and exact readback.
 
-**Closure condition.** Persist finality plus manifest first, then exact Native
-sidecars and the latest index, and only then publish replicated WSV frontiers.
-Retain the canonical executed wire until manifest and sidecars are durable.
+**Closure condition.** Persist finality plus the immutable per-height manifest
+first, then the matching immutable per-height receipt and exact-latest pointer,
+and only then publish replicated WSV frontiers. Retain the canonical executed
+wire until the manifest and receipt are durable.
 After body pruning, validate through the QC-authenticated manifest root and
 proof. Hash-only legacy evidence stays fail-closed unless the exact canonical
 wire is recovered from authenticated storage or QC signers. Startup must
-idempotently repair a finalized marker missing its sidecar/index by
-revalidating block, checkpoint, finality, manifest, roots, and exact group under
-the publication guard without recursive locking.
+idempotently repair a finalized marker missing its receipt or latest pointer
+by revalidating block, checkpoint, finality, manifest, roots, and exact group
+under the publication guard without recursive locking. Recovery must either
+promote a valid lone publication temporary, remove a byte-identical temporary
+beside its stable file, or reject malformed, oversized, conflicting, or
+ambiguous temporary state.
 
 **Focused and adversarial tests.** Inject a crash before/after finality,
-manifest, each sidecar, index, frontier, and body-retention release. Cover body
-eviction, missing/corrupt checkpoint or finality, forged manifest proof,
+manifest, receipt, latest pointer, frontier, and body-retention release. Cover
+body eviction, missing/corrupt checkpoint or finality, forged manifest proof,
 conflicting marker, repair repeated twice, repair interrupted at every write,
-recursive-lock regression, and bounded authenticated wire recovery.
+valid lone and duplicate publication temporaries, malformed/conflicting/
+oversized temporaries, recursive-lock regression, and bounded authenticated
+wire recovery. Exercise the versioned prune intent as a temporary only, as a
+stable intent before deletion, after each individual manifest/receipt unlink,
+after the complete pair unlink, and with identical stable and temporary copies;
+each restart must finish idempotently without deleting the exact latest pair.
 
 **Formal obligation and mutation.** Invariant
-`MLNativeDurabilityPrecedesFrontier` orders durable finality/manifest,
-sidecar/index, and replicated frontier. Mutation `ML-MUT-NAT-06` reorders any
-two boundaries or drops idempotent repair; the model must expose an
-unverifiable frontier or lost durable application.
+`MLNativeDurabilityPrecedesFrontier` orders durable finality, immutable
+manifest, immutable receipt, exact-latest pointer, and replicated frontier.
+Mutation `ML-MUT-NAT-06` reorders any two boundaries or drops idempotent
+repair; the model must expose an unverifiable frontier or lost durable
+application.
 
 **Release gates.** `G-UNIT`, `G-FORMAL`, `G-4P`, `G-12P`, and `G-FINAL`.
 
-### ML-NAT-07 — bounded latest index and lane-artifact policy
+### ML-NAT-07 — bounded standalone evidence and exact-latest pointer
 
 **Implementation:** Implemented.
 **Closure:** Implemented.
 **Evidence:** Open.
 
-**Production map.** Kura persists a route/incarnation-bound Native receipt
-latest index, uses it for bounded exact lookup, and explicitly reconstructs it
-through
+**Production map.** Kura persists immutable versioned manifest and receipt
+files keyed by participant height. A separate route/incarnation-bound,
+descriptor-bound latest pointer is replaceable derived state used for bounded
+exact lookup and explicitly reconstructed through
 `Kura::rebuild_native_amx_participant_receipt_latest_indexes_on_startup`.
 `Kura::ensure_first_release_lane_retirement_admissible_locked` in
 `crates/iroha_core/src/kura/lane_geometry.rs` recognizes, accounts, validates,
-archives, and purges Native manifests, receipts, their append indexes, and the
-latest index while rejecting malformed, oversized, temporary, unexpected, or
-symlinked artifacts.
+archives, and purges the per-height manifests and receipts plus the exact-latest
+pointer while rejecting legacy dense data/index layouts and malformed,
+oversized, temporary, unexpected, non-regular, hardlinked, or symlinked
+artifacts. A versioned prune intent binds route, incarnation, and every
+`(kind, participant height, artifact hash)` removal before either member of an
+old complete pair is unlinked.
 
-**Closure condition.** Persist and rebuild a bounded latest index keyed by
-`(lane, dataspace, incarnation)`. Validate every index entry against its exact
-receipt and application evidence. Include receipt, manifest, proof, and index
-files in disk accounting, archive authentication, retirement, purge, and
-same-ID recreation allowlists. Reject temporary, unexpected, malformed,
-truncated, oversized, non-regular, and symlinked artifacts. Index
-reconstruction is an explicit startup operation, never an unbounded read-path
-scan.
+**Closure condition.** Persist and rebuild one bounded exact-latest pointer
+keyed by `(lane, dataspace, incarnation)`. Validate it against the highest
+retained receipt and the exact finality/manifest/receipt/application join.
+Retain each evidence kind within the configured Kura sidecar-retention count
+and the existing shared Native sidecar aggregate-byte budget, allowing only one
+bounded transient publication slot; derive the prune-intent count and byte
+bounds from those same limits. Include per-height receipt and manifest files,
+their proofs, the latest pointer, and an attributable prune intent in disk
+accounting, archive authentication, retirement, purge, and same-ID recreation
+allowlists. Reject legacy dense layouts, temporary ambiguity, unexpected,
+malformed, truncated, oversized, non-regular, hardlinked, and symlinked
+artifacts. Pointer reconstruction is an explicit startup operation, never an
+unbounded read-path scan.
 
-**Focused and adversarial tests.** Cover missing, stale, duplicate,
-same-height-conflicting, truncated, oversized, reordered, and corrupt indexes;
-route/incarnation ABA; unexpected/temp files; symlinked file/directory
-components; disk-accounting overflow; archive/recovery/purge at each crash
-boundary; and exact recreation cleanup without deleting a sibling lane.
+**Focused and adversarial tests.** Cover a missing, stale, conflicting,
+truncated, oversized, or corrupt latest pointer; duplicate and conflicting
+same-height immutable files; route/incarnation ABA; configured retained-count
+overflow; per-kind aggregate-byte addition overflow and budget overflow;
+unexpected, legacy-dense, malformed, and oversized temporary files; symlinked
+or hardlinked file/directory components; exact disk-accounting boundaries;
+archive/recovery/purge at each crash boundary; and exact recreation cleanup
+without deleting a sibling lane.
 
 **Formal obligation and mutation.** Invariant `MLNativeLatestIndexExact`
-states that one bounded index row names the unique latest revalidated artifact
-for each active route/incarnation. Mutation `ML-MUT-NAT-07` indexes by lane ID,
-accepts ambiguous same-height evidence, or omits an artifact class from
-retirement; the model must expose stale authorization or unsafe destruction.
+states that one bounded derived pointer names the unique latest revalidated
+artifact for each active route/incarnation. Mutation `ML-MUT-NAT-07` binds only
+the lane ID, accepts ambiguous same-height evidence, accepts a legacy dense
+layout, or omits an artifact class from retirement; the model must expose stale
+authorization or unsafe destruction.
+
+**Release gates.** `G-UNIT`, `G-FORMAL`, `G-4P`, `G-12P`, and `G-FINAL`.
+
+## QueuePlan admission closure
+
+### ML-QUEUE-01 — globally unique durable admission before autonomous ownership
+
+**Implementation:** Implemented.
+**Closure:** Implemented.
+**Evidence:** Open.
+
+**Production map.** `QueuePlanAdmissionBindingV2` and
+`validate_queue_plan_admission_certificate_for_chain_digest_v2` in
+`crates/iroha_core/src/torii_proxy.rs` define the exact request, transaction,
+routing-plan, context, enqueue-time, and journal-record identity certified by
+the coordinator quorum. `persist_and_wait_for_queue_plan_admission` and
+`submit_signed_transaction_for_ingress_globally_synced` in
+`crates/iroha_torii/src/lib.rs` persist the certificate before wakeup and wait
+for the exact replicated WSV registry value before returning public acceptance.
+`State::stage_queue_plan_admissions` owns the immutable global CAS.
+`Queue::reserve_transactions_for_lane_bounded`, queue replay/expiry, and
+`V2LaneWorkAdapter::refresh_merge_candidates` admit autonomous ownership only
+for the exact binding, preserve the durable tombstone across restart/TTL, and
+reject or clean up a definitive conflict through the authenticated loser path.
+
+**Closure condition.** One transaction/request identity may acquire at most one
+global QueuePlan binding. A public `202` requires the exact coordinator quorum
+certificate to be durable, its wakeup to be published, and the matching WSV
+registry value to be visible. Autonomous reservation and execution require
+that exact immutable binding. Restart, local expiry, cancellation, guard drop,
+or a deferred path must neither erase the durable owner nor bypass the global
+CAS; a conflicting binding must fail closed and can never execute.
+
+**Focused and adversarial tests.** Cover split-route public acceptance,
+execution before global CAS, two conflicting CAS attempts, restart ABA, local
+TTL expiry, deferred ingress, cancellation, guard drop, missing or mismatched
+binding material, and duplicate execution. Inject every crash boundary between
+certificate persistence, wakeup, WSV publication, queue reservation, carrier
+application, and authenticated loser cleanup.
+
+**Formal obligation and mutation.** The bounded
+`SumeragiV2QueuePlanAdmissionRegistry` kernel checks
+`MLAdmissionCasUnique`, `MLCertificateDurable`, `MLPublic202Exact`,
+`MLExecutionRequiresExactBinding`, `MLQueueEligibilityExact`,
+`MLAdmissionAtMostOnceExecution`, `MLImmutableAdmissionTombstone`, and
+`MLCancellationStopsExecution`. Conceptual mutation `ML-MUT-QUEUE-01` maps
+only to the ten QueuePlan `_bug.cfg` controls recorded in
+`multilane_source_bindings.json`; each must produce its exact named TLC
+counterexample. The positive Apalache run checks the fixed kernel only and is
+not a mutation runner or deductive proof.
 
 **Release gates.** `G-UNIT`, `G-FORMAL`, `G-4P`, `G-12P`, and `G-FINAL`.
 
@@ -355,7 +434,7 @@ retirement; the model must expose stale authorization or unsafe destruction.
 **Closure:** Implemented.
 **Evidence:** Open.
 
-**Production map.** `LaneQueueReservationKeyV1`,
+**Production map.** `LaneQueueReservationKeyV2`,
 `LaneQueueReservationStore`, `Queue::reserve_transactions_for_lane`,
 `Queue::retain_lane_reservation`, `Queue::release_lane_reservation`,
 `Queue::commit_lane_reservation`,
@@ -368,10 +447,11 @@ selection and calls `Queue::reserve_transactions_for_lane_bounded` before
 payload publication; losing and retired work use the exact release path.
 
 **Closure condition.** The deterministic lane leader selects a non-empty FIFO
-batch and fsyncs one exact `LaneQueueReservationKeyV1` record before ownership
+batch and fsyncs one exact `LaneQueueReservationKeyV2` record before ownership
 leaves the ordinary queue. Selection binds active route/incarnation and
-canonical enqueue order. No transaction can be visible to both owners or to
-neither owner at any crash point.
+canonical enqueue order, and requires the admission binding to be an exact
+immutable WSV registry match. No transaction can be visible to both owners or
+to neither owner at any crash point.
 
 **Focused and adversarial tests.** Cover empty and bounded batches, FIFO order,
 duplicate transactions, two lanes racing for one transaction, stale
@@ -627,20 +707,22 @@ partial activation.
 `State::lane_has_drain_blocking_evidence` covers ordinary queued work,
 live reservations, certified/unmerged and delayed lane work, pending merge
 entries, and unapplied/unverifiable Native controls. Kura revalidates the exact
-manifest, receipt, latest index, finality, checkpoint, and application
-identity before a Native-derived frontier can be used.
+per-height manifest, matching per-height receipt, descriptor-bound latest
+pointer, finality, checkpoint, and application identity before a
+Native-derived frontier can be used.
 
 **Closure condition.** Use one drain predicate and one frontier for intent,
 vote/certificate validation, global commitment, archive, and removal. Ordinary
 queue work, live reservations, certified-unmerged autonomous bundles, delayed
 work, pending merge entries, and unapplied or unverifiable Native controls are
 blockers. A Native-derived frontier is drainable only while its exact manifest
-proof, receipt, index, application block, finality, and checkpoint revalidate.
+proof, receipt, latest pointer, application block, finality, and checkpoint
+revalidate.
 
 **Focused and adversarial tests.** Exercise every blocker alone and in
 combination, including a blocker arriving after intent or certificate but
 before retirement. Cover locally missing evidence, body pruning, corrupt
-receipt/index/proof, pending fetch, delayed pre-close work, close-height
+receipt/latest-pointer/proof, pending fetch, delayed pre-close work, close-height
 boundaries, conflicting same-height frontiers, and no skipping of a blocked
 highest lane.
 
@@ -696,24 +778,28 @@ expected counterexample.
 live in `crates/iroha_core/src/kura/lane_geometry.rs`. Production retirement
 uses `Kura::ensure_first_release_lane_retirement_admissible_locked`, whose
 bounded scanner recognizes and authenticates autonomous payload, availability,
-NewView, certificate, merge/application receipt, Native manifest/receipt/index,
-and release evidence. Geometry journaling archives the exact incarnation
-before removal, resumes interrupted archive/GC idempotently, and same-ID
-provisioning allocates a fresh incarnation.
+NewView, certificate, merge/application receipt, immutable per-height Native
+manifest/receipt pairs, their descriptor-bound latest pointer, and release
+evidence. It requires the exact finality/manifest/receipt/latest-pointer join,
+rejects obsolete dense Native data/index files, and applies the configured
+retention and shared aggregate-byte budgets before archive. Geometry journaling
+archives the exact incarnation before removal, resumes interrupted archive/GC
+idempotently, and same-ID provisioning allocates a fresh incarnation.
 
 **Closure condition.** Archive every recognized lane evidence class atomically
 before removing active storage. Bind every archive and purge operation to the
 exact retired incarnation. On recreation allocate a fresh incarnation and
-reject all delayed QCs, reservations, markers, receipts, manifests, indexes,
-journal claims, merge entries, and diagnostic evidence from every earlier
-incarnation. Preserve authenticated historical proof only where policy
-requires it.
+reject all delayed QCs, reservations, markers, receipts, manifests, latest
+pointers, prune intents, journal claims, merge entries, and diagnostic evidence
+from every earlier incarnation. Preserve authenticated historical proof only
+where policy requires it.
 
 **Focused and adversarial tests.** Cover archive validation and every journal
 crash phase; malformed, oversized, temp, unexpected, non-regular, and symlinked
-artifacts; disk accounting; partial archive pairs; purge/recovery idempotence;
-same-ID A/B/A recreation; delayed old QC/reservation/marker/sidecar/claim/merge
-artifact; and sibling-lane preservation.
+or hardlinked artifacts; configured count and aggregate-byte overflow; disk
+accounting; partial archive pairs; purge/recovery idempotence; same-ID A/B/A
+recreation; delayed old QC/reservation/marker/sidecar/claim/merge artifact; and
+sibling-lane preservation.
 
 **Formal obligation and mutation.** Invariant `MLRetirementConsumesExactIncarnation`
 states that destruction consumes all and only the certified retired
@@ -795,11 +881,13 @@ order, active-incarnation filtering, same-height conflict, missing/pruned
 evidence, malformed sidecars/indexes, restart, and assurance that no
 authoritative consensus field migrates to diagnostics.
 
-**Formal obligation and mutation.** Invariant `MLDiagnosticsAreDerived`
-states that diagnostics are a bounded read-only projection and conflict is
-explicit. Mutation `ML-MUT-API-01` resolves conflict by arrival order, reads a
-volatile cache, or feeds diagnostics back into consensus; the model must expose
-nondeterminism or false authority.
+**Static release invariant and negative control.**
+`MLDiagnosticsAreDerived` states that diagnostics are a bounded read-only
+State/Kura projection and conflict is explicit. This is not a TLA+ invariant:
+its source-bound Rust derivation and endpoint contract tests are the
+authoritative check. Negative control `ML-MUT-API-01` resolves conflict by
+arrival order, reads a volatile cache, or feeds diagnostics back into
+consensus; the static/unit contract must then fail.
 
 **Release gates.** `G-UNIT`, `G-12P`, `G-SDK`, and `G-FINAL`.
 
@@ -835,10 +923,12 @@ fields, invalid enum states, malformed hashes/integers, over-bound vectors, and
 nondeterministic order. Run source and generated/distribution JavaScript tests,
 Swift tests, Kotlin core-jvm tests, and mirrored Java tests.
 
-**Formal obligation and mutation.** Invariant `MLApiAuthoritySeparation`
-states that no diagnostics-only field can satisfy an authoritative status
-claim. Mutation `ML-MUT-API-02` aliases the two parsers or response types; the
-API contract test must accept a swapped payload and therefore fail.
+**Differential release invariant and negative control.**
+`MLApiAuthoritySeparation` states that no diagnostics-only field can satisfy an
+authoritative status claim. This is not a TLA+ invariant: the source-bound
+OpenAPI and SDK endpoint/parser corpus is the authoritative check. Negative
+control `ML-MUT-API-02` aliases the two parsers or response types; a swapped
+payload must then be accepted and the differential contract must fail.
 
 **Release gates.** `G-SDK` and `G-FINAL`.
 
@@ -866,10 +956,12 @@ edges, absent/forged deferred marker, reordered/duplicate validators, bitmap
 padding and out-of-range bits, under/over quorum, 95/97-byte PoP or signature,
 duplicate/oversized legs, wrong route/incarnation, and nested receipt material.
 
-**Formal obligation and mutation.** Invariant `MLSdkAcceptSetEqualsRust`
-defines the Rust decoder/validator accept set as the first-release contract.
-Mutation `ML-MUT-API-03` weakens one SDK check; differential corpus execution
-must detect an accept/reject mismatch.
+**Differential release invariant and negative control.**
+`MLSdkAcceptSetEqualsRust` defines the Rust decoder/validator accept set as the
+first-release contract. This is not a TLA+ invariant: the source-bound grouped
+corpus executed by every SDK is the authoritative differential check. Negative
+control `ML-MUT-API-03` weakens one SDK check; corpus execution must detect an
+accept/reject mismatch.
 
 **Release gates.** `G-SDK` and `G-FINAL`.
 
@@ -905,10 +997,13 @@ deterministic regeneration. Include every `ML-NAT-04` and `ML-API-03` negative,
 plus stale incarnation, same-route, mixed-role, manifest/proof, and application
 block identity cases. A generated fixture diff must fail CI.
 
-**Formal obligation and mutation.** Invariant `MLFixtureHasOneCanonicalOwner`
-states that Rust generation defines one versioned corpus consumed without
-hand-edited SDK copies. Mutation `ML-MUT-API-04` changes one consumer fixture or
-uses a singleton helper for a grouped case; parity CI must fail.
+**Differential release invariant and negative control.**
+`MLFixtureHasOneCanonicalOwner` states that Rust generation defines one
+versioned corpus consumed without hand-edited SDK copies. This is not a TLA+
+invariant: the source-bound regeneration guard, fixture hash, and per-SDK
+suite-source manifest are the authoritative differential check. Negative
+control `ML-MUT-API-04` changes one consumer fixture or uses a singleton helper
+for a grouped case; parity CI must fail.
 
 **Release gates.** `G-SDK` and `G-FINAL`.
 
@@ -941,12 +1036,14 @@ wrong-Norito-flag payloads. Exercise a mixed-version committee and require it to
 fail closed before signing. Run the legacy-codec guard and assert no implicit
 fallback decoder exists.
 
-**Formal obligation and mutation.** Invariant `MLConsensusLayoutAgreement`
-states that all signers interpret one versioned byte string as one identity.
-Mutation `ML-MUT-WIRE-01` enables legacy fallback or mixed layouts; the model
-must expose two decoded identities for one signing slot.
+**Static release invariant and negative control.**
+`MLConsensusLayoutAgreement` states that all signers interpret one versioned
+byte string as one identity. This is not a TLA+ invariant: versioned decoder
+tests plus the source-bound legacy-codec guard are the authoritative check.
+Negative control `ML-MUT-WIRE-01` enables a retired fallback or mixed-layout
+path; the static guard or exact decoder tests must then fail.
 
-**Release gates.** `G-UNIT`, `G-SDK`, `G-FORMAL`, and `G-FINAL`.
+**Release gates.** `G-UNIT`, `G-SDK`, and `G-FINAL`.
 
 ## Release gate registry
 
@@ -961,14 +1058,18 @@ Every modified production function has a focused positive test and at least one
 negative test. The combined matrix covers source/entrypoint/session drift,
 restart equivocation, height jumps, wrong predecessors, stale incarnations,
 ABA, zero/partial/duplicate/4,097-source groups, forged QCs/manifests/proofs,
-tampered results, body eviction, corrupt/truncated/oversized indexes, symlinks,
-reservation duplication, base-state mismatch, bounded fetches, and every
-persistence crash boundary. Tests that exercise only `#[cfg(test)]` producer
-helpers do not close a live-path obligation.
+tampered results, body eviction, corrupt/truncated/oversized latest pointers,
+configured retained-count overflow, aggregate-byte addition/budget overflow,
+malformed/conflicting/oversized publication temporaries, legacy dense evidence,
+symlinks/hardlinks, every Native prune stage (temporary-only, stable before
+unlink, each partial pair unlink, complete pair unlink, and stable plus
+identical temporary), reservation duplication, base-state mismatch, bounded
+fetches, and every persistence crash boundary. Tests that exercise only
+`#[cfg(test)]` producer helpers do not close a live-path obligation.
 
-The release runner now inventories 113 exact, non-ignored multilane focus
-tests: 54 core multilane tests, 35 core queue-journal tests, seven in
-`iroha_data_model`, 15 in Torii, and two in the integration support library.
+The release runner now inventories 123 exact, non-ignored multilane focus
+tests: 54 core multilane tests, 38 core queue-journal tests, seven in
+`iroha_data_model`, 22 in Torii, and two in the integration support library.
 That source inventory is not a passing test transcript; the full focused rerun
 and archived receipt remain required.
 
@@ -976,23 +1077,29 @@ and archived receipt remain required.
 
 **Evidence:** Open.
 
-Port current production behavior for autoscale, Native application, and
-autonomous reservation/carrier ownership into `docs/formal/sumeragi_v2`.
-Positive TLC and Apalache models must pass all invariants named in this ledger.
-Every `ML-MUT-*` case must produce its expected counterexample. CI must bind
-model assumptions and invariants to the current production symbols named by
-the corresponding row, reject a source hash mismatch, and archive model,
-configuration, tool-version, result, and source hashes. Existing generic
-Sumeragi models are not substitutes for these multilane models.
+Port current production behavior for autoscale, Native application,
+autonomous reservation/carrier ownership, and QueuePlan admission into
+`docs/formal/sumeragi_v2`. Positive TLC and Apalache models must pass the TLA+
+invariants named by their four kernel rows. Every conceptual `ML-MUT-*` case is
+classified and machine-mapped in `multilane_source_bindings.json`: a
+`tla_counterexample` case must own its exact non-empty `_bug.cfg` set and
+produce each named TLC counterexample, while a `static_release` or
+`differential_release` case must own no TLA mutation config and is enforced by
+its exact source-bound release-check contract. The structural mapping checker
+is non-Cargo; execution of Rust unit and cross-SDK checks remains in `G-UNIT`
+and `G-SDK`. CI must reject missing, duplicate, or reassigned mappings and
+source hash drift, then archive model, configuration, tool-version, result,
+and source hashes. Existing generic Sumeragi models are not substitutes for
+these multilane models.
 
 A 2026-07-24 source-bound checkpoint for source manifest
-`182a281fc46ed6d99dc010f444707dfcfaf3aae3cfe9f4b7a71d1b1090e690b9`
+`af1361d00f08bbf340c57e6b4992c0a8166a7e9e67f9f4c5771827ce5c69e7a6`
 passed direct pinned TLC positives (autoscale `14/14`; Native `1,121`
 generated/`304` distinct; autonomous `294` generated/`169` distinct), all
 `27/27` named mutation witnesses, all three Apalache v0.52.2 typecheck/positive
 bounds, and `8/8` runner negative controls. The three-result Apalache evidence
 TSV SHA-256 is
-`f4cbd74f82376523cb3cfb0cc0d08699293378974866424891a175c3e121343b`.
+`1e972edae1804b9996fdeeadd4f89df6f9dd2f2bd27756e6eba6310b7fbfe92f`.
 This is supporting bounded evidence, not gate closure: the checksum-pinned
 TLAPM standard library was installed for the rerun, but no clean aggregate
 release receipt was archived, and bounded checks are not deductive proof

@@ -3106,6 +3106,37 @@ impl AcceptedTransaction<'static> {
         })
     }
 
+    /// Accept an entrypoint at one explicit validation instant.
+    ///
+    /// Durable recovery uses the persisted enqueue instant to prove that an acknowledged
+    /// entrypoint passed the same chain, signature, crypto-policy, clock, and limit checks as
+    /// ingress before classifying its current terminal state.
+    ///
+    /// # Errors
+    ///
+    /// See [`AcceptTransactionFail`].
+    pub(crate) fn accept_entrypoint_at_time(
+        tx: TransactionEntrypoint,
+        expected_chain_id: &ChainId,
+        max_clock_drift: Duration,
+        limits: TransactionParameters,
+        crypto: &iroha_config::parameters::actual::Crypto,
+        validation_time: Duration,
+    ) -> Result<Self, AcceptTransactionFail> {
+        Self::validate_entrypoint_with_now(
+            &tx,
+            expected_chain_id,
+            max_clock_drift,
+            limits,
+            crypto,
+            validation_time,
+        )?;
+        Ok(match tx {
+            TransactionEntrypoint::External(signed) => Self::from_external_with_hot_cache(signed),
+            other => Self::from_entrypoint(Cow::Owned(other)),
+        })
+    }
+
     /// Accept an already-decoded gossip entrypoint and seed its canonical entrypoint frame bytes.
     ///
     /// # Errors

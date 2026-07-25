@@ -375,6 +375,11 @@ isi! {
         /// Pending movement identifier.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub movement_id: [u8; 32],
+        /// Provider account revision expected by the decision.
+        pub expected_provider_revision: u64,
+        /// Exact active reserve policy digest expected by the decision service.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub policy_digest: [u8; 32],
         /// Whether governance approves the movement.
         pub approve: bool,
         /// Bounded governance rationale.
@@ -486,6 +491,11 @@ isi! {
         /// Pending appeal identifier.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub appeal_id: [u8; 32],
+        /// Provider account revision expected by the decision.
+        pub expected_provider_revision: u64,
+        /// Exact active reserve policy digest expected by the decision service.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub policy_digest: [u8; 32],
         /// Whether governance accepts and applies the requested stage.
         pub accept: bool,
         /// Bounded governance rationale.
@@ -1265,9 +1275,17 @@ impl RequestSorafsReserveMovement {
 impl DecideSorafsReserveMovement {
     /// Construct a terminal reserve movement decision.
     #[must_use]
-    pub fn new(movement_id: [u8; 32], approve: bool, rationale: String) -> Self {
+    pub fn new(
+        movement_id: [u8; 32],
+        expected_provider_revision: u64,
+        policy_digest: [u8; 32],
+        approve: bool,
+        rationale: String,
+    ) -> Self {
         Self {
             movement_id,
+            expected_provider_revision,
+            policy_digest,
             approve,
             rationale,
         }
@@ -1374,9 +1392,17 @@ impl SubmitSorafsReserveAppeal {
 impl DecideSorafsReserveAppeal {
     /// Construct a terminal reserve appeal decision.
     #[must_use]
-    pub fn new(appeal_id: [u8; 32], accept: bool, rationale: String) -> Self {
+    pub fn new(
+        appeal_id: [u8; 32],
+        expected_provider_revision: u64,
+        policy_digest: [u8; 32],
+        accept: bool,
+        rationale: String,
+    ) -> Self {
         Self {
             appeal_id,
+            expected_provider_revision,
+            policy_digest,
             accept,
             rationale,
         }
@@ -1770,6 +1796,8 @@ impl_sorafs_decode_from_slice!(RequestSorafsReserveMovement {
 
 impl_sorafs_decode_from_slice!(DecideSorafsReserveMovement {
     movement_id: [u8; 32],
+    expected_provider_revision: u64,
+    policy_digest: [u8; 32],
     approve: bool,
     rationale: String,
 });
@@ -1814,6 +1842,8 @@ impl_sorafs_decode_from_slice!(SubmitSorafsReserveAppeal {
 
 impl_sorafs_decode_from_slice!(DecideSorafsReserveAppeal {
     appeal_id: [u8; 32],
+    expected_provider_revision: u64,
+    policy_digest: [u8; 32],
     accept: bool,
     rationale: String,
 });
@@ -2026,6 +2056,8 @@ mod tests {
             revision: 1,
             predecessor_policy_digest: None,
             market_id: [0xA5; 32],
+            matcher_authority: owner(),
+            settlement_authority: owner(),
             paused: false,
             min_order_gib: 1,
             max_order_gib: 1_024,
@@ -2057,6 +2089,8 @@ mod tests {
                     .parse()
                     .expect("treasury public key"),
             ),
+            operations_authority: owner(),
+            decision_authority: owner(),
             grace_period_days: 7,
             default_after_days: 30,
             max_provider_debt: XorQuantity::try_from_micro(1_000_000_000)
@@ -2064,6 +2098,30 @@ mod tests {
             max_pending_movements_per_provider: 4,
             max_open_appeals_per_provider: 2,
         }
+    }
+
+    #[test]
+    fn reserve_policy_digest_commits_service_authorities() {
+        let policy = reserve_policy();
+        let baseline = policy.digest().expect("baseline reserve policy digest");
+
+        let mut operations_rotated = policy.clone();
+        operations_rotated.operations_authority = policy.treasury_account.clone();
+        assert_ne!(
+            operations_rotated
+                .digest()
+                .expect("operations-authority digest"),
+            baseline
+        );
+
+        let mut decision_rotated = policy;
+        decision_rotated.decision_authority = decision_rotated.treasury_account.clone();
+        assert_ne!(
+            decision_rotated
+                .digest()
+                .expect("decision-authority digest"),
+            baseline
+        );
     }
 
     fn reserve_terms() -> ReserveProviderTermsV1 {
@@ -2350,6 +2408,8 @@ mod tests {
         ));
         assert_slice_roundtrip(DecideSorafsReserveMovement::new(
             [0x57; 32],
+            2,
+            [0x56; 32],
             true,
             "approved".to_owned(),
         ));
@@ -2388,6 +2448,8 @@ mod tests {
         ));
         assert_slice_roundtrip(DecideSorafsReserveAppeal::new(
             [0x58; 32],
+            7,
+            [0x56; 32],
             false,
             "evidence insufficient".to_owned(),
         ));
@@ -2588,7 +2650,13 @@ mod tests {
         );
         assert_registry_decodes(
             &registry,
-            DecideSorafsReserveMovement::new([0x57; 32], true, "approved".to_owned()),
+            DecideSorafsReserveMovement::new(
+                [0x57; 32],
+                2,
+                [0x56; 32],
+                true,
+                "approved".to_owned(),
+            ),
         );
         assert_registry_decodes(
             &registry,
@@ -2630,7 +2698,13 @@ mod tests {
         );
         assert_registry_decodes(
             &registry,
-            DecideSorafsReserveAppeal::new([0x58; 32], false, "evidence insufficient".to_owned()),
+            DecideSorafsReserveAppeal::new(
+                [0x58; 32],
+                7,
+                [0x56; 32],
+                false,
+                "evidence insufficient".to_owned(),
+            ),
         );
         assert_registry_decodes(
             &registry,

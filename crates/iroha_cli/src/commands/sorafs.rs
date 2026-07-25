@@ -37,14 +37,12 @@ use iroha::{
         SorafsModerationQuarantineFilter, SorafsModerationQuarantineObjectStoreRequest,
         SorafsModerationQuarantineReleaseRequest, SorafsModerationQuarantineReviewRequest,
         SorafsModerationScreeningResultRequest, SorafsModerationScreeningResultsFilter,
-        SorafsPinAlias, SorafsPinListFilter, SorafsPinRegisterArgs, SorafsRepairStatusFilter,
-        SorafsRepairWorkerClaimRequest, SorafsRepairWorkerCompleteRequest,
-        SorafsRepairWorkerFailRequest, SorafsReplicationListFilter,
-        SorafsReserveAppealReadbackFilter, SorafsReserveCreditLineReadbackFilter,
-        SorafsReserveLifecyclePolicyReadbackFilter, SorafsReserveMovementReadbackFilter,
-        SorafsTokenOverrides, SorafsTransparencyReadbackFilter,
+        SorafsPinAlias, SorafsPinListFilter, SorafsPinRegisterArgs, SorafsRepairFinalizedAnchor,
+        SorafsRepairTasksFilter, SorafsReplicationListFilter, SorafsReserveAppealReadbackFilter,
+        SorafsReserveCreditLineReadbackFilter, SorafsReserveLifecyclePolicyReadbackFilter,
+        SorafsReserveMovementReadbackFilter, SorafsTokenOverrides,
+        SorafsTransparencyReadbackFilter,
     },
-    config::Config,
     http::{Response, StatusCode},
 };
 use iroha_config::{
@@ -57,7 +55,7 @@ use iroha_config::{
 };
 use iroha_core::soranet_incentives::{RelayEarningsAccumulator, RelayPayoutLedger};
 use iroha_crypto::{
-    HybridPublicKey, HybridSuite, SignatureOf,
+    HashOf, HybridPublicKey, HybridSuite,
     soranet::{
         blinding::canonical_cache_key,
         certificate::CertificateValidationPhase,
@@ -77,14 +75,16 @@ use rand::{
 use reqwest::blocking::Client as BlockingHttpClient;
 use sorafs_car::{
     CarBuildPlan, CarChunk, CarWriteStats, CarWriter, ChunkStore, FilePlan, PorMerkleTree,
-    fetch_plan::{chunk_fetch_specs_from_json, parse_digest_hex, try_chunk_fetch_specs_to_json},
+    fetch_plan::{
+        TOOLKIT_PACK_REPORT_SCHEMA_V1, chunk_fetch_plan_from_json, parse_digest_hex,
+        try_chunk_fetch_specs_to_json,
+    },
 };
 use sorafs_chunker::ChunkProfile;
 use sorafs_manifest::chunker_registry;
 use sorafs_manifest::deal::XorQuantity;
 use sorafs_manifest::repair::{
-    REPAIR_SLASH_PROPOSAL_VERSION_V1, REPAIR_WORKER_SIGNATURE_VERSION_V1, RepairSlashProposalV1,
-    RepairTicketId, RepairWorkerActionV1, RepairWorkerSignaturePayloadV1,
+    REPAIR_SLASH_PROPOSAL_VERSION_V1, RepairSlashProposalV1, RepairTicketId,
 };
 use sorafs_manifest::{
     ChunkingProfileV1, DagCodecId, GovernanceProofs, ManifestBuilder, ManifestV1, PinPolicy,
@@ -122,7 +122,14 @@ use tokio::runtime::Runtime;
 use iroha_data_model::{
     account::AccountId,
     asset::{AssetDefinitionId, AssetId},
-    isi::{InstructionBox, Transfer},
+    isi::{
+        InstructionBox, Transfer,
+        sorafs::{
+            ApplySorafsRepairTaskAction, SorafsRepairClaimV1, SorafsRepairCompleteV1,
+            SorafsRepairEscalateV1, SorafsRepairFailV1, SorafsRepairRenewV1,
+            SorafsRepairTaskActionV1,
+        },
+    },
     metadata::Metadata,
     name::Name,
     prelude::ChainId,
@@ -145,6 +152,7 @@ use iroha_data_model::{
             RelayEpochMetricsV1, RelayRewardInstructionV1,
         },
     },
+    transaction::{FeePaymentIntent, SignedTransaction},
 };
 use iroha_primitives::numeric::{Numeric, Quantity};
 use norito::{NoritoSerialize, decode_from_bytes};
@@ -3330,15 +3338,17 @@ impl ModerationQuarantineBridgePlanArgs {
 
 #[derive(clap::Subcommand, Debug)]
 pub enum RepairCommand {
-    /// List repair tickets (optionally filtered by manifest/provider/status).
+    /// List finalized chain-authoritative repair tasks.
     List(RepairListArgs),
-    /// Claim a queued repair ticket as a repair worker.
+    /// Claim a queued repair task with a native ledger action.
     Claim(RepairClaimArgs),
-    /// Mark a repair ticket as completed.
+    /// Renew the current repair lease with a native ledger action.
+    Renew(RepairRenewArgs),
+    /// Commit a successful terminal repair outcome.
     Complete(RepairCompleteArgs),
-    /// Mark a repair ticket as failed.
+    /// Commit an unsuccessful terminal repair outcome.
     Fail(RepairFailArgs),
-    /// Escalate a repair ticket into a slash proposal.
+    /// Atomically escalate a repair task into a terminal slash proposal.
     Escalate(RepairEscalateArgs),
 }
 
@@ -3347,6 +3357,7 @@ impl Run for RepairCommand {
         match self {
             RepairCommand::List(args) => args.run(context),
             RepairCommand::Claim(args) => args.run(context),
+            RepairCommand::Renew(args) => args.run(context),
             RepairCommand::Complete(args) => args.run(context),
             RepairCommand::Fail(args) => args.run(context),
             RepairCommand::Escalate(args) => args.run(context),
@@ -3356,52 +3367,85 @@ impl Run for RepairCommand {
 
 #[derive(clap::Args, Debug)]
 pub struct RepairListArgs {
-    /// Optional manifest digest to scope the listing.
-    #[arg(long = "manifest-digest", value_name = "HEX")]
-    manifest_digest: Option<String>,
-    /// Optional status filter (queued, verifying, in_progress, completed, failed, escalated).
-    #[arg(long)]
-    status: Option<String>,
-    /// Optional provider identifier filter (hex-encoded).
-    #[arg(long = "provider-id", value_name = "HEX")]
-    provider_id: Option<String>,
+    /// Fetch one canonical repair ticket instead of a page.
+    #[arg(long = "ticket-id", value_name = "ID")]
+    ticket_id: Option<String>,
+    /// Bounded task page size (1 through 500).
+    #[arg(long, value_name = "COUNT")]
+    limit: Option<u32>,
+    /// Optional finalized block height; requires `--expected-finalized-block-hash`.
+    #[arg(long = "expected-finalized-height", value_name = "HEIGHT")]
+    expected_finalized_height: Option<u64>,
+    /// Optional finalized block hash; requires `--expected-finalized-height`.
+    #[arg(long = "expected-finalized-block-hash", value_name = "HEX")]
+    expected_finalized_block_hash: Option<String>,
+    /// Optional exclusive immutable task-id cursor.
+    #[arg(long = "after-task-id", value_name = "HEX")]
+    after_task_id: Option<String>,
 }
 
 impl Run for RepairListArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(
             context,
-            Client::get_sorafs_repair_status_all,
-            Client::get_sorafs_repair_status,
+            Client::get_sorafs_repair_tasks,
+            Client::get_sorafs_repair_task,
         )
     }
 }
 
 impl RepairListArgs {
-    fn run_with<C, F, G>(&self, context: &mut C, list_all: F, list_manifest: G) -> Result<()>
+    fn run_with<C, F, G>(&self, context: &mut C, list: F, get: G) -> Result<()>
     where
         C: RunContext,
-        F: FnOnce(&Client, &SorafsRepairStatusFilter<'_>) -> Result<Response<Vec<u8>>>,
-        G: FnOnce(&Client, &str, &SorafsRepairStatusFilter<'_>) -> Result<Response<Vec<u8>>>,
+        F: FnOnce(&Client, &SorafsRepairTasksFilter<'_>) -> Result<Response<Vec<u8>>>,
+        G: FnOnce(&Client, &str, &SorafsRepairFinalizedAnchor<'_>) -> Result<Response<Vec<u8>>>,
     {
-        let manifest = self
-            .manifest_digest
+        if self.limit.is_some_and(|limit| !(1..=500).contains(&limit)) {
+            return Err(eyre!("--limit must be within 1..=500"));
+        }
+        if self.expected_finalized_height.is_some() != self.expected_finalized_block_hash.is_some()
+        {
+            return Err(eyre!(
+                "--expected-finalized-height and --expected-finalized-block-hash must be supplied together"
+            ));
+        }
+        if self.expected_finalized_height == Some(0) {
+            return Err(eyre!("--expected-finalized-height must be non-zero"));
+        }
+        let finalized_block_hash = self
+            .expected_finalized_block_hash
             .as_deref()
-            .map(|hex| normalize_hex_digest::<32>(hex, "--manifest-digest"))
+            .map(|hex| normalize_hex_digest::<32>(hex, "--expected-finalized-block-hash"))
             .transpose()?;
-        let provider = self
-            .provider_id
+        let after_task_id = self
+            .after_task_id
             .as_deref()
-            .map(|hex| normalize_hex_digest::<32>(hex, "--provider-id"))
+            .map(|hex| normalize_hex_digest::<32>(hex, "--after-task-id"))
             .transpose()?;
-        let filter = SorafsRepairStatusFilter {
-            status: self.status.as_deref(),
-            provider_id: provider.as_deref(),
+        let finalized = SorafsRepairFinalizedAnchor {
+            expected_finalized_height: self.expected_finalized_height,
+            expected_finalized_block_hash_hex: finalized_block_hash.as_deref(),
         };
         let client = context.client_from_config();
-        let response = match manifest.as_deref() {
-            Some(digest) => list_manifest(&client, digest, &filter)?,
-            None => list_all(&client, &filter)?,
+        let response = match self.ticket_id.as_deref() {
+            Some(ticket_id) => {
+                if self.limit.is_some() || after_task_id.is_some() {
+                    return Err(eyre!(
+                        "--limit and --after-task-id cannot be combined with --ticket-id"
+                    ));
+                }
+                let ticket_id = parse_repair_ticket_id(ticket_id, "--ticket-id")?;
+                get(&client, &ticket_id.0, &finalized)?
+            }
+            None => {
+                let filter = SorafsRepairTasksFilter {
+                    finalized,
+                    limit: self.limit,
+                    after_task_id_hex: after_task_id.as_deref(),
+                };
+                list(&client, &filter)?
+            }
         };
         render_json_response(context, response)
     }
@@ -3412,15 +3456,12 @@ pub struct RepairClaimArgs {
     /// Repair ticket identifier (e.g., `REP-401`).
     #[arg(long = "ticket-id", value_name = "ID")]
     ticket_id: String,
-    /// Manifest digest bound to the ticket (hex-encoded).
-    #[arg(long = "manifest-digest", value_name = "HEX")]
-    manifest_digest: String,
-    /// Provider identifier owning the ticket (hex-encoded).
-    #[arg(long = "provider-id", value_name = "HEX")]
-    provider_id: String,
-    /// Optional timestamp for the claim (RFC3339 or `@unix_seconds`).
-    #[arg(long = "claimed-at", value_name = "RFC3339|@UNIX")]
-    claimed_at: Option<String>,
+    /// Exact task revision observed before claiming.
+    #[arg(long = "expected-revision", value_name = "REVISION")]
+    expected_revision: u64,
+    /// Requested lease duration measured from the committing block time.
+    #[arg(long = "lease-duration-ms", default_value_t = 60_000)]
+    lease_duration_ms: u64,
     /// Optional idempotency key (auto-generated when omitted).
     #[arg(long = "idempotency-key", value_name = "KEY")]
     idempotency_key: Option<String>,
@@ -3436,37 +3477,82 @@ impl RepairClaimArgs {
     fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
     where
         C: RunContext,
-        F: FnOnce(&Client, &SorafsRepairWorkerClaimRequest) -> Result<Response<Vec<u8>>>,
+        F: FnOnce(&Client, &SignedTransaction) -> Result<HashOf<SignedTransaction>>,
     {
         ensure_optional_non_empty(self.idempotency_key.as_deref(), "idempotency-key")?;
         let ticket_id = parse_repair_ticket_id(&self.ticket_id, "--ticket-id")?;
-        let manifest_digest = parse_hex_array::<32>(&self.manifest_digest, "--manifest-digest")?;
-        let provider_id = parse_hex_array::<32>(&self.provider_id, "--provider-id")?;
-        let claimed_at_unix = parse_timestamp_or_now(self.claimed_at.as_deref(), "claimed-at")?;
+        validate_repair_revision(self.expected_revision, "--expected-revision")?;
+        if self.lease_duration_ms == 0 {
+            return Err(eyre!("--lease-duration-ms must be non-zero"));
+        }
         let idempotency_key = match self.idempotency_key.clone() {
             Some(idempotency_key) => idempotency_key,
             None => generate_nonce_hex(12)?,
         };
-        let action = RepairWorkerActionV1::Claim { claimed_at_unix };
-        let (worker_id, signature) = build_repair_worker_signature(
-            context.config(),
-            &ticket_id,
-            manifest_digest,
-            provider_id,
-            &idempotency_key,
-            action,
-        )?;
-        let request = SorafsRepairWorkerClaimRequest {
-            ticket_id,
-            manifest_digest_hex: encode(manifest_digest),
-            worker_id,
-            claimed_at_unix,
+        let action = SorafsRepairTaskActionV1::Claim(SorafsRepairClaimV1 {
+            lease_duration_ms: self.lease_duration_ms,
             idempotency_key,
-            signature,
-        };
+        });
         let client = context.client_from_config();
-        let response = submit(&client, &request)?;
-        render_json_response(context, response)
+        let transaction =
+            build_repair_action_transaction(&client, &ticket_id, self.expected_revision, action)?;
+        let hash = submit(&client, &transaction)?;
+        render_repair_transaction_hash(context, &hash)
+    }
+}
+
+#[derive(clap::Args, Debug)]
+pub struct RepairRenewArgs {
+    /// Repair ticket identifier (e.g., `REP-401`).
+    #[arg(long = "ticket-id", value_name = "ID")]
+    ticket_id: String,
+    /// Exact task revision observed before renewing.
+    #[arg(long = "expected-revision", value_name = "REVISION")]
+    expected_revision: u64,
+    /// Exact current lease generation.
+    #[arg(long = "lease-generation", value_name = "GENERATION")]
+    lease_generation: u64,
+    /// Requested lease duration measured from the committing block time.
+    #[arg(long = "lease-duration-ms", default_value_t = 60_000)]
+    lease_duration_ms: u64,
+    /// Optional idempotency key (auto-generated when omitted).
+    #[arg(long = "idempotency-key", value_name = "KEY")]
+    idempotency_key: Option<String>,
+}
+
+impl Run for RepairRenewArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        self.run_with(context, Client::post_sorafs_repair_heartbeat)
+    }
+}
+
+impl RepairRenewArgs {
+    fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
+    where
+        C: RunContext,
+        F: FnOnce(&Client, &SignedTransaction) -> Result<HashOf<SignedTransaction>>,
+    {
+        ensure_optional_non_empty(self.idempotency_key.as_deref(), "idempotency-key")?;
+        let ticket_id = parse_repair_ticket_id(&self.ticket_id, "--ticket-id")?;
+        validate_repair_revision(self.expected_revision, "--expected-revision")?;
+        validate_repair_revision(self.lease_generation, "--lease-generation")?;
+        if self.lease_duration_ms == 0 {
+            return Err(eyre!("--lease-duration-ms must be non-zero"));
+        }
+        let idempotency_key = match self.idempotency_key.clone() {
+            Some(idempotency_key) => idempotency_key,
+            None => generate_nonce_hex(12)?,
+        };
+        let action = SorafsRepairTaskActionV1::Renew(SorafsRepairRenewV1 {
+            lease_generation: self.lease_generation,
+            lease_duration_ms: self.lease_duration_ms,
+            idempotency_key,
+        });
+        let client = context.client_from_config();
+        let transaction =
+            build_repair_action_transaction(&client, &ticket_id, self.expected_revision, action)?;
+        let hash = submit(&client, &transaction)?;
+        render_repair_transaction_hash(context, &hash)
     }
 }
 
@@ -3475,18 +3561,15 @@ pub struct RepairCompleteArgs {
     /// Repair ticket identifier (e.g., `REP-401`).
     #[arg(long = "ticket-id", value_name = "ID")]
     ticket_id: String,
-    /// Manifest digest bound to the ticket (hex-encoded).
-    #[arg(long = "manifest-digest", value_name = "HEX")]
-    manifest_digest: String,
-    /// Provider identifier owning the ticket (hex-encoded).
-    #[arg(long = "provider-id", value_name = "HEX")]
-    provider_id: String,
-    /// Optional timestamp for the completion (RFC3339 or `@unix_seconds`).
-    #[arg(long = "completed-at", value_name = "RFC3339|@UNIX")]
-    completed_at: Option<String>,
-    /// Optional resolution notes.
-    #[arg(long = "resolution-notes", value_name = "TEXT")]
-    resolution_notes: Option<String>,
+    /// Exact task revision observed before completion.
+    #[arg(long = "expected-revision", value_name = "REVISION")]
+    expected_revision: u64,
+    /// Exact current lease generation.
+    #[arg(long = "lease-generation", value_name = "GENERATION")]
+    lease_generation: u64,
+    /// Digest of external completion evidence.
+    #[arg(long = "evidence-digest", value_name = "HEX")]
+    evidence_digest: String,
     /// Optional idempotency key (auto-generated when omitted).
     #[arg(long = "idempotency-key", value_name = "KEY")]
     idempotency_key: Option<String>,
@@ -3502,43 +3585,27 @@ impl RepairCompleteArgs {
     fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
     where
         C: RunContext,
-        F: FnOnce(&Client, &SorafsRepairWorkerCompleteRequest) -> Result<Response<Vec<u8>>>,
+        F: FnOnce(&Client, &SignedTransaction) -> Result<HashOf<SignedTransaction>>,
     {
         ensure_optional_non_empty(self.idempotency_key.as_deref(), "idempotency-key")?;
-        ensure_optional_non_empty(self.resolution_notes.as_deref(), "resolution-notes")?;
         let ticket_id = parse_repair_ticket_id(&self.ticket_id, "--ticket-id")?;
-        let manifest_digest = parse_hex_array::<32>(&self.manifest_digest, "--manifest-digest")?;
-        let provider_id = parse_hex_array::<32>(&self.provider_id, "--provider-id")?;
-        let completed_at_unix =
-            parse_timestamp_or_now(self.completed_at.as_deref(), "completed-at")?;
+        validate_repair_revision(self.expected_revision, "--expected-revision")?;
+        validate_repair_revision(self.lease_generation, "--lease-generation")?;
+        let evidence_digest = parse_hex_array::<32>(&self.evidence_digest, "--evidence-digest")?;
         let idempotency_key = match self.idempotency_key.clone() {
             Some(idempotency_key) => idempotency_key,
             None => generate_nonce_hex(12)?,
         };
-        let action = RepairWorkerActionV1::Complete {
-            completed_at_unix,
-            resolution_notes: self.resolution_notes.clone(),
-        };
-        let (worker_id, signature) = build_repair_worker_signature(
-            context.config(),
-            &ticket_id,
-            manifest_digest,
-            provider_id,
-            &idempotency_key,
-            action,
-        )?;
-        let request = SorafsRepairWorkerCompleteRequest {
-            ticket_id,
-            manifest_digest_hex: encode(manifest_digest),
-            worker_id,
-            completed_at_unix,
-            resolution_notes: self.resolution_notes.clone(),
+        let action = SorafsRepairTaskActionV1::Complete(SorafsRepairCompleteV1 {
+            lease_generation: self.lease_generation,
+            evidence_digest,
             idempotency_key,
-            signature,
-        };
+        });
         let client = context.client_from_config();
-        let response = submit(&client, &request)?;
-        render_json_response(context, response)
+        let transaction =
+            build_repair_action_transaction(&client, &ticket_id, self.expected_revision, action)?;
+        let hash = submit(&client, &transaction)?;
+        render_repair_transaction_hash(context, &hash)
     }
 }
 
@@ -3547,18 +3614,15 @@ pub struct RepairFailArgs {
     /// Repair ticket identifier (e.g., `REP-401`).
     #[arg(long = "ticket-id", value_name = "ID")]
     ticket_id: String,
-    /// Manifest digest bound to the ticket (hex-encoded).
-    #[arg(long = "manifest-digest", value_name = "HEX")]
-    manifest_digest: String,
-    /// Provider identifier owning the ticket (hex-encoded).
-    #[arg(long = "provider-id", value_name = "HEX")]
-    provider_id: String,
-    /// Optional timestamp for the failure (RFC3339 or `@unix_seconds`).
-    #[arg(long = "failed-at", value_name = "RFC3339|@UNIX")]
-    failed_at: Option<String>,
-    /// Failure reason.
-    #[arg(long = "reason", value_name = "TEXT")]
-    reason: String,
+    /// Exact task revision observed before failure.
+    #[arg(long = "expected-revision", value_name = "REVISION")]
+    expected_revision: u64,
+    /// Exact current lease generation.
+    #[arg(long = "lease-generation", value_name = "GENERATION")]
+    lease_generation: u64,
+    /// Digest of the external failure reason or evidence.
+    #[arg(long = "failure-digest", value_name = "HEX")]
+    failure_digest: String,
     /// Optional idempotency key (auto-generated when omitted).
     #[arg(long = "idempotency-key", value_name = "KEY")]
     idempotency_key: Option<String>,
@@ -3574,44 +3638,27 @@ impl RepairFailArgs {
     fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
     where
         C: RunContext,
-        F: FnOnce(&Client, &SorafsRepairWorkerFailRequest) -> Result<Response<Vec<u8>>>,
+        F: FnOnce(&Client, &SignedTransaction) -> Result<HashOf<SignedTransaction>>,
     {
         ensure_optional_non_empty(self.idempotency_key.as_deref(), "idempotency-key")?;
-        if self.reason.trim().is_empty() {
-            return Err(eyre!("--reason must not be empty"));
-        }
         let ticket_id = parse_repair_ticket_id(&self.ticket_id, "--ticket-id")?;
-        let manifest_digest = parse_hex_array::<32>(&self.manifest_digest, "--manifest-digest")?;
-        let provider_id = parse_hex_array::<32>(&self.provider_id, "--provider-id")?;
-        let failed_at_unix = parse_timestamp_or_now(self.failed_at.as_deref(), "failed-at")?;
+        validate_repair_revision(self.expected_revision, "--expected-revision")?;
+        validate_repair_revision(self.lease_generation, "--lease-generation")?;
+        let failure_digest = parse_hex_array::<32>(&self.failure_digest, "--failure-digest")?;
         let idempotency_key = match self.idempotency_key.clone() {
             Some(idempotency_key) => idempotency_key,
             None => generate_nonce_hex(12)?,
         };
-        let action = RepairWorkerActionV1::Fail {
-            failed_at_unix,
-            reason: self.reason.clone(),
-        };
-        let (worker_id, signature) = build_repair_worker_signature(
-            context.config(),
-            &ticket_id,
-            manifest_digest,
-            provider_id,
-            &idempotency_key,
-            action,
-        )?;
-        let request = SorafsRepairWorkerFailRequest {
-            ticket_id,
-            manifest_digest_hex: encode(manifest_digest),
-            worker_id,
-            failed_at_unix,
-            reason: self.reason.clone(),
+        let action = SorafsRepairTaskActionV1::Fail(SorafsRepairFailV1 {
+            lease_generation: self.lease_generation,
+            failure_digest,
             idempotency_key,
-            signature,
-        };
+        });
         let client = context.client_from_config();
-        let response = submit(&client, &request)?;
-        render_json_response(context, response)
+        let transaction =
+            build_repair_action_transaction(&client, &ticket_id, self.expected_revision, action)?;
+        let hash = submit(&client, &transaction)?;
+        render_repair_transaction_hash(context, &hash)
     }
 }
 
@@ -3620,6 +3667,12 @@ pub struct RepairEscalateArgs {
     /// Repair ticket identifier (e.g., `REP-401`).
     #[arg(long = "ticket-id", value_name = "ID")]
     ticket_id: String,
+    /// Exact task revision observed before escalation.
+    #[arg(long = "expected-revision", value_name = "REVISION")]
+    expected_revision: u64,
+    /// Exact current lease generation.
+    #[arg(long = "lease-generation", value_name = "GENERATION")]
+    lease_generation: u64,
     /// Manifest digest bound to the ticket (hex-encoded).
     #[arg(long = "manifest-digest", value_name = "HEX")]
     manifest_digest: String,
@@ -3638,6 +3691,9 @@ pub struct RepairEscalateArgs {
     /// Optional timestamp for the proposal (RFC3339 or `@unix_seconds`).
     #[arg(long = "submitted-at", value_name = "RFC3339|@UNIX")]
     submitted_at: Option<String>,
+    /// Optional idempotency key (auto-generated when omitted).
+    #[arg(long = "idempotency-key", value_name = "KEY")]
+    idempotency_key: Option<String>,
 }
 
 impl Run for RepairEscalateArgs {
@@ -3650,12 +3706,15 @@ impl RepairEscalateArgs {
     fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
     where
         C: RunContext,
-        F: FnOnce(&Client, &RepairSlashProposalV1) -> Result<Response<Vec<u8>>>,
+        F: FnOnce(&Client, &SignedTransaction) -> Result<HashOf<SignedTransaction>>,
     {
+        ensure_optional_non_empty(self.idempotency_key.as_deref(), "idempotency-key")?;
         if self.rationale.trim().is_empty() {
             return Err(eyre!("--rationale must not be empty"));
         }
         let ticket_id = parse_repair_ticket_id(&self.ticket_id, "--ticket-id")?;
+        validate_repair_revision(self.expected_revision, "--expected-revision")?;
+        validate_repair_revision(self.lease_generation, "--lease-generation")?;
         let manifest_digest = parse_hex_array::<32>(&self.manifest_digest, "--manifest-digest")?;
         let provider_id = parse_hex_array::<32>(&self.provider_id, "--provider-id")?;
         let auditor_account = match self.auditor.as_deref() {
@@ -3667,7 +3726,7 @@ impl RepairEscalateArgs {
         let proposed_penalty = parse_xor_quantity_labeled(&self.penalty, "--penalty")?;
         let proposal = RepairSlashProposalV1 {
             version: REPAIR_SLASH_PROPOSAL_VERSION_V1,
-            ticket_id,
+            ticket_id: ticket_id.clone(),
             provider_id,
             manifest_digest,
             auditor_account,
@@ -3675,16 +3734,28 @@ impl RepairEscalateArgs {
             submitted_at_unix,
             rationale: self.rationale.clone(),
             // Approval summaries embedded by the proposal submitter are not an
-            // authority source. The repair store derives decisions only from
-            // its authenticated, durably recorded governance votes.
+            // authority source. Governance decisions derive only from
+            // authenticated records committed to the native repair ledger.
             approval: None,
         };
         proposal
             .validate()
             .map_err(|err| eyre!("invalid repair slash proposal payload: {err}"))?;
+        let idempotency_key = match self.idempotency_key.clone() {
+            Some(idempotency_key) => idempotency_key,
+            None => generate_nonce_hex(12)?,
+        };
+        let action = SorafsRepairTaskActionV1::Escalate(SorafsRepairEscalateV1 {
+            lease_generation: self.lease_generation,
+            slash_proposal_payload: norito::to_bytes(&proposal)
+                .wrap_err("failed to encode canonical repair slash proposal")?,
+            idempotency_key,
+        });
         let client = context.client_from_config();
-        let response = submit(&client, &proposal)?;
-        render_json_response(context, response)
+        let transaction =
+            build_repair_action_transaction(&client, &ticket_id, self.expected_revision, action)?;
+        let hash = submit(&client, &transaction)?;
+        render_repair_transaction_hash(context, &hash)
     }
 }
 
@@ -4735,7 +4806,7 @@ pub struct FetchArgs {
     /// Path to the Norito-encoded manifest (`.to`) describing the payload layout.
     #[arg(long, value_name = "PATH", required_unless_present = "storage_ticket")]
     pub manifest: Option<PathBuf>,
-    /// Path to the chunk fetch plan JSON (for example, `chunk_fetch_specs` from `iroha sorafs toolkit pack --json-out`).
+    /// Path to a canonical payload-bound `sorafs.chunk_fetch_plan.v1` JSON envelope.
     #[arg(long, value_name = "PATH", required_unless_present = "storage_ticket")]
     pub plan: Option<PathBuf>,
     /// Hex-encoded manifest hash used as the manifest identifier on gateways.
@@ -4983,8 +5054,10 @@ impl Run for FetchArgs {
         })?;
         let plan_value: norito::json::Value =
             norito::json::from_slice(&plan_bytes).wrap_err("failed to parse chunk plan JSON")?;
-        let mut chunk_specs = chunk_fetch_specs_from_json(&plan_value)
-            .map_err(|err| eyre!("failed to parse chunk fetch specs: {err}"))?;
+        let parsed_plan = chunk_fetch_plan_from_json(&plan_value)
+            .map_err(|err| eyre!("failed to parse canonical chunk fetch plan: {err}"))?;
+        let plan_payload_digest = parsed_plan.payload_digest;
+        let mut chunk_specs = parsed_plan.chunk_fetch_specs;
         if chunk_specs.is_empty() {
             return Err(eyre!("chunk fetch plan contained no entries"));
         }
@@ -5012,8 +5085,8 @@ impl Run for FetchArgs {
             ));
         }
         let manifest_id_hex = hex::encode(manifest_id_bytes);
-        let payload_digest_hex = hex::encode(manifest.car_digest);
-        let payload_digest = blake3::Hash::from(manifest.car_digest);
+        let payload_digest_hex = hex::encode(plan_payload_digest);
+        let payload_digest = blake3::Hash::from_bytes(plan_payload_digest);
 
         let transport_policy =
             parse_transport_policy_flag(self.transport_policy.as_ref(), "--transport-policy")?;
@@ -11260,30 +11333,37 @@ fn parse_repair_ticket_id(value: &str, flag: &str) -> Result<RepairTicketId> {
     Ok(ticket_id)
 }
 
-fn build_repair_worker_signature(
-    config: &Config,
+fn validate_repair_revision(value: u64, flag: &str) -> Result<()> {
+    if value == 0 {
+        return Err(eyre!("{flag} must be non-zero"));
+    }
+    Ok(())
+}
+
+fn build_repair_action_transaction(
+    client: &Client,
     ticket_id: &RepairTicketId,
-    manifest_digest: [u8; 32],
-    provider_id: [u8; 32],
-    idempotency_key: &str,
-    action: RepairWorkerActionV1,
-) -> Result<(String, SignatureOf<RepairWorkerSignaturePayloadV1>)> {
-    let worker_id = config.account.to_string();
-    let payload = RepairWorkerSignaturePayloadV1 {
-        version: REPAIR_WORKER_SIGNATURE_VERSION_V1,
-        ticket_id: ticket_id.clone(),
-        manifest_digest,
-        provider_id,
-        worker_id: worker_id.clone(),
-        idempotency_key: idempotency_key.to_string(),
-        action,
-    };
-    payload
-        .validate()
-        .map_err(|err| eyre!("invalid repair worker signature payload: {err}"))?;
-    let signature = SignatureOf::try_new(config.key_pair.private_key(), &payload)
-        .wrap_err("failed to sign SoraFS repair worker payload")?;
-    Ok((worker_id, signature))
+    expected_revision: u64,
+    action: SorafsRepairTaskActionV1,
+) -> Result<SignedTransaction> {
+    let instruction =
+        ApplySorafsRepairTaskAction::new(ticket_id.0.clone(), expected_revision, action);
+    client
+        .try_build_transaction_from_items(
+            [instruction],
+            FeePaymentIntent::authority(Vec::new(), None),
+            Metadata::default(),
+        )
+        .wrap_err("failed to build caller-signed native SoraFS repair transaction")
+}
+
+fn render_repair_transaction_hash<C: RunContext>(
+    context: &mut C,
+    hash: &HashOf<SignedTransaction>,
+) -> Result<()> {
+    context.print_data(&norito::json!({
+        "transaction_hash_hex": (encode(hash.as_ref()))
+    }))
 }
 
 fn parse_quantity_str(value: &str, flag: &str) -> Result<Quantity> {
@@ -13087,6 +13167,7 @@ impl Run for ToolkitPackArgs {
             .dag_codec(DagCodecId(car_stats.dag_codec))
             .chunking_profile(chunk_profile.clone())
             .chunk_digest_sha3_256(chunk_digest_sha3)
+            .por_root(*chunk_store.por_tree().root())
             .content_length(plan.content_length)
             .car_digest(car_payload_digest)
             .car_size(car_stats.car_size)
@@ -13454,6 +13535,10 @@ fn build_pack_report(ctx: &PackReportContext<'_>) -> Result<Value> {
         Value::from(ctx.manifest.content_length),
     );
     manifest_obj.insert(
+        "por_root_hex".into(),
+        Value::from(encode(ctx.manifest.por_root)),
+    );
+    manifest_obj.insert(
         "car_digest_hex".into(),
         Value::from(encode(ctx.manifest.car_digest)),
     );
@@ -13492,6 +13577,7 @@ fn build_pack_report(ctx: &PackReportContext<'_>) -> Result<Value> {
     manifest_obj.insert("council_signatures".into(), Value::Array(council_entries));
 
     let mut report_obj = Map::new();
+    report_obj.insert("schema".into(), Value::from(TOOLKIT_PACK_REPORT_SCHEMA_V1));
     report_obj.insert("chunking".into(), Value::Object(chunking_obj));
     report_obj.insert("chunk_digests".into(), Value::Array(chunk_digests));
     report_obj.insert("chunk_fetch_specs".into(), chunk_fetch_specs);
@@ -16443,7 +16529,7 @@ impl Run for PinRegisterArgs {
         let manifest_bytes = fs::read(&self.manifest).wrap_err_with(|| {
             format!("failed to read manifest from `{}`", self.manifest.display())
         })?;
-        let manifest = sorafs_manifest::decode_manifest_v1_canonical(&manifest_bytes)
+        sorafs_manifest::decode_manifest_v1_canonical(&manifest_bytes)
             .wrap_err("failed to decode exact canonical manifest payload")?;
         let alias_inputs = self.load_alias_inputs()?;
         let successor = self
@@ -16465,9 +16551,7 @@ impl Run for PinRegisterArgs {
             .post_sorafs_pin_register(SorafsPinRegisterArgs {
                 authority: &config.account,
                 private_key: config.key_pair.private_key(),
-                manifest: &manifest,
-                manifest_bytes: None,
-                chunk_digest_sha3_256: manifest.chunk_digest_sha3_256,
+                manifest_payload: &manifest_bytes,
                 submitted_epoch: self.submitted_epoch,
                 alias: alias_ref,
                 successor_of: successor,
@@ -22536,6 +22620,11 @@ mod tests {
                 aliases: vec!["sf1".into()],
             })
             .chunk_digest_sha3_256([0xCD; 32])
+            .por_root(if payload_bytes == 0 {
+                sorafs_manifest::EMPTY_POR_ROOT_V1
+            } else {
+                [0xCE; 32]
+            })
             .content_length(payload_bytes)
             .car_digest([0xAB; 32])
             .car_size(car_bytes)
@@ -25631,18 +25720,20 @@ mod tests {
     fn moderation_screening_submit_reads_authenticated_authority_json() {
         let idempotency_key = [0xA1_u8; 32];
         let expected_idempotency_key = encode(idempotency_key);
+        let uppercase_idempotency_key =
+            format!("0x{}", encode(idempotency_key).to_ascii_uppercase());
         let authority_b64 = STANDARD.encode(b"canonical committee aggregate");
         let member_one_b64 = STANDARD.encode(b"canonical signed member one");
         let member_two_b64 = STANDARD.encode(b"canonical signed member two");
         let mut file = NamedTempFile::new().expect("screening result file");
         file.write_all(
             &norito::json::to_vec(&norito::json!({
-                "idempotency_key_hex": (format!("0x{}", encode(idempotency_key).to_ascii_uppercase())),
+                "idempotency_key_hex": uppercase_idempotency_key,
                 "evidence_kind": "committee_aggregate",
-                "authority_b64": authority_b64.clone(),
+                "authority_b64": (authority_b64.clone()),
                 "committee_member_results_b64": [
-                    member_one_b64.clone(),
-                    member_two_b64.clone(),
+                    (member_one_b64.clone()),
+                    (member_two_b64.clone()),
                 ],
             }))
             .expect("serialize screening JSON"),
@@ -27784,23 +27875,40 @@ mod tests {
         assert!(result.is_err(), "lowercase ticket id should fail");
     }
 
+    fn single_repair_action(transaction: &SignedTransaction) -> &ApplySorafsRepairTaskAction {
+        let iroha_data_model::transaction::Executable::Instructions(instructions) =
+            transaction.instructions()
+        else {
+            panic!("repair transaction must contain native instructions");
+        };
+        assert_eq!(instructions.len(), 1);
+        instructions[0]
+            .as_any()
+            .downcast_ref::<ApplySorafsRepairTaskAction>()
+            .expect("repair transaction contains ApplySorafsRepairTaskAction")
+    }
+
     #[test]
-    fn repair_list_scopes_manifest_and_filters() {
+    fn repair_list_uses_finalized_task_cursor() {
         let args = RepairListArgs {
-            manifest_digest: Some(format!("0x{}", "AB".repeat(32))),
-            status: Some("queued".to_string()),
-            provider_id: Some("FF".repeat(32)),
+            ticket_id: None,
+            limit: Some(25),
+            expected_finalized_height: Some(7),
+            expected_finalized_block_hash: Some(format!("0x{}", "AB".repeat(32))),
+            after_task_id: Some("CD".repeat(32)),
         };
         let mut ctx = TestContext::new();
-        let expected_provider = "ff".repeat(32);
 
         args.run_with(
             &mut ctx,
-            |_client, _| unreachable!("list_all should not be called"),
-            |_client, digest, filter| {
-                assert_eq!(digest, &"ab".repeat(32));
-                assert_eq!(filter.status, Some("queued"));
-                assert_eq!(filter.provider_id, Some(expected_provider.as_str()));
+            |_client, filter| {
+                assert_eq!(filter.limit, Some(25));
+                assert_eq!(filter.finalized.expected_finalized_height, Some(7));
+                assert_eq!(
+                    filter.finalized.expected_finalized_block_hash_hex,
+                    Some("ab".repeat(32).as_str())
+                );
+                assert_eq!(filter.after_task_id_hex, Some("cd".repeat(32).as_str()));
                 Ok(Response::builder()
                     .status(StatusCode::OK)
                     .header("Content-Type", "application/json")
@@ -27809,6 +27917,7 @@ mod tests {
                     }))?)
                     .unwrap())
             },
+            |_client, _, _| unreachable!("single-task lookup should not be called"),
         )
         .expect("run should succeed");
 
@@ -27817,95 +27926,54 @@ mod tests {
     }
 
     #[test]
-    fn repair_claim_builds_signed_request() {
-        let manifest_digest = [0x11_u8; 32];
-        let provider_id = [0x22_u8; 32];
+    fn repair_claim_builds_native_signed_transaction() {
         let args = RepairClaimArgs {
             ticket_id: "REP-501".to_string(),
-            manifest_digest: encode(manifest_digest),
-            provider_id: encode(provider_id),
-            claimed_at: Some("@1700000501".to_string()),
+            expected_revision: 2,
+            lease_duration_ms: 60_000,
             idempotency_key: Some("claim-501".to_string()),
         };
         let mut ctx = TestContext::new();
-        let expected_worker_id = ctx.config().account.to_string();
-        let public_key = ctx.config().key_pair.public_key().clone();
 
-        args.run_with(&mut ctx, |_client, request| {
-            assert_eq!(request.ticket_id.0, "REP-501");
-            assert_eq!(request.manifest_digest_hex, encode(manifest_digest));
-            assert_eq!(request.worker_id, expected_worker_id);
-            assert_eq!(request.idempotency_key, "claim-501");
-            assert_eq!(request.claimed_at_unix, 1_700_000_501);
-            let payload = RepairWorkerSignaturePayloadV1 {
-                version: REPAIR_WORKER_SIGNATURE_VERSION_V1,
-                ticket_id: request.ticket_id.clone(),
-                manifest_digest,
-                provider_id,
-                worker_id: request.worker_id.clone(),
-                idempotency_key: request.idempotency_key.clone(),
-                action: RepairWorkerActionV1::Claim {
-                    claimed_at_unix: request.claimed_at_unix,
-                },
+        args.run_with(&mut ctx, |_client, transaction| {
+            let apply = single_repair_action(transaction);
+            assert_eq!(apply.ticket_id, "REP-501");
+            assert_eq!(apply.expected_revision, 2);
+            let SorafsRepairTaskActionV1::Claim(action) = &apply.action else {
+                panic!("expected claim action");
             };
-            request
-                .signature
-                .verify(&public_key, &payload)
-                .expect("signature should verify");
-            Ok(Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", "application/json")
-                .body(norito::json::to_vec(&norito::json!({ "ok": true }))?)
-                .unwrap())
+            assert_eq!(action.lease_duration_ms, 60_000);
+            assert_eq!(action.idempotency_key, "claim-501");
+            Ok(transaction.hash())
         })
         .expect("run should succeed");
 
         assert_eq!(ctx.printed.len(), 1);
+        assert!(ctx.printed[0].contains("transaction_hash_hex"));
     }
 
     #[test]
-    fn repair_complete_builds_signed_request() {
-        let manifest_digest = [0x33_u8; 32];
-        let provider_id = [0x44_u8; 32];
-        let args = RepairCompleteArgs {
+    fn repair_renew_builds_native_signed_transaction() {
+        let args = RepairRenewArgs {
             ticket_id: "REP-502".to_string(),
-            manifest_digest: encode(manifest_digest),
-            provider_id: encode(provider_id),
-            completed_at: Some("@1700000502".to_string()),
-            resolution_notes: Some("patched".to_string()),
-            idempotency_key: Some("complete-502".to_string()),
+            expected_revision: 3,
+            lease_generation: 2,
+            lease_duration_ms: 90_000,
+            idempotency_key: Some("renew-502".to_string()),
         };
         let mut ctx = TestContext::new();
-        let expected_worker_id = ctx.config().account.to_string();
-        let public_key = ctx.config().key_pair.public_key().clone();
 
-        args.run_with(&mut ctx, |_client, request| {
-            assert_eq!(request.ticket_id.0, "REP-502");
-            assert_eq!(request.manifest_digest_hex, encode(manifest_digest));
-            assert_eq!(request.worker_id, expected_worker_id);
-            assert_eq!(request.idempotency_key, "complete-502");
-            assert_eq!(request.completed_at_unix, 1_700_000_502);
-            let payload = RepairWorkerSignaturePayloadV1 {
-                version: REPAIR_WORKER_SIGNATURE_VERSION_V1,
-                ticket_id: request.ticket_id.clone(),
-                manifest_digest,
-                provider_id,
-                worker_id: request.worker_id.clone(),
-                idempotency_key: request.idempotency_key.clone(),
-                action: RepairWorkerActionV1::Complete {
-                    completed_at_unix: request.completed_at_unix,
-                    resolution_notes: request.resolution_notes.clone(),
-                },
+        args.run_with(&mut ctx, |_client, transaction| {
+            let apply = single_repair_action(transaction);
+            assert_eq!(apply.ticket_id, "REP-502");
+            assert_eq!(apply.expected_revision, 3);
+            let SorafsRepairTaskActionV1::Renew(action) = &apply.action else {
+                panic!("expected renew action");
             };
-            request
-                .signature
-                .verify(&public_key, &payload)
-                .expect("signature should verify");
-            Ok(Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", "application/json")
-                .body(norito::json::to_vec(&norito::json!({ "ok": true }))?)
-                .unwrap())
+            assert_eq!(action.lease_generation, 2);
+            assert_eq!(action.lease_duration_ms, 90_000);
+            assert_eq!(action.idempotency_key, "renew-502");
+            Ok(transaction.hash())
         })
         .expect("run should succeed");
 
@@ -27913,48 +27981,28 @@ mod tests {
     }
 
     #[test]
-    fn repair_fail_builds_signed_request() {
-        let manifest_digest = [0x55_u8; 32];
-        let provider_id = [0x66_u8; 32];
-        let args = RepairFailArgs {
+    fn repair_complete_builds_native_signed_transaction() {
+        let evidence_digest = [0x33_u8; 32];
+        let args = RepairCompleteArgs {
             ticket_id: "REP-503".to_string(),
-            manifest_digest: encode(manifest_digest),
-            provider_id: encode(provider_id),
-            failed_at: Some("@1700000503".to_string()),
-            reason: "checksum_mismatch".to_string(),
-            idempotency_key: Some("fail-503".to_string()),
+            expected_revision: 4,
+            lease_generation: 2,
+            evidence_digest: encode(evidence_digest),
+            idempotency_key: Some("complete-503".to_string()),
         };
         let mut ctx = TestContext::new();
-        let expected_worker_id = ctx.config().account.to_string();
-        let public_key = ctx.config().key_pair.public_key().clone();
 
-        args.run_with(&mut ctx, |_client, request| {
-            assert_eq!(request.ticket_id.0, "REP-503");
-            assert_eq!(request.manifest_digest_hex, encode(manifest_digest));
-            assert_eq!(request.worker_id, expected_worker_id);
-            assert_eq!(request.idempotency_key, "fail-503");
-            assert_eq!(request.failed_at_unix, 1_700_000_503);
-            let payload = RepairWorkerSignaturePayloadV1 {
-                version: REPAIR_WORKER_SIGNATURE_VERSION_V1,
-                ticket_id: request.ticket_id.clone(),
-                manifest_digest,
-                provider_id,
-                worker_id: request.worker_id.clone(),
-                idempotency_key: request.idempotency_key.clone(),
-                action: RepairWorkerActionV1::Fail {
-                    failed_at_unix: request.failed_at_unix,
-                    reason: request.reason.clone(),
-                },
+        args.run_with(&mut ctx, |_client, transaction| {
+            let apply = single_repair_action(transaction);
+            assert_eq!(apply.ticket_id, "REP-503");
+            assert_eq!(apply.expected_revision, 4);
+            let SorafsRepairTaskActionV1::Complete(action) = &apply.action else {
+                panic!("expected complete action");
             };
-            request
-                .signature
-                .verify(&public_key, &payload)
-                .expect("signature should verify");
-            Ok(Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", "application/json")
-                .body(norito::json::to_vec(&norito::json!({ "ok": true }))?)
-                .unwrap())
+            assert_eq!(action.lease_generation, 2);
+            assert_eq!(action.evidence_digest, evidence_digest);
+            assert_eq!(action.idempotency_key, "complete-503");
+            Ok(transaction.hash())
         })
         .expect("run should succeed");
 
@@ -27962,23 +28010,66 @@ mod tests {
     }
 
     #[test]
-    fn repair_escalate_builds_unapproved_slash_proposal() {
+    fn repair_fail_builds_native_signed_transaction() {
+        let failure_digest = [0x55_u8; 32];
+        let args = RepairFailArgs {
+            ticket_id: "REP-504".to_string(),
+            expected_revision: 5,
+            lease_generation: 3,
+            failure_digest: encode(failure_digest),
+            idempotency_key: Some("fail-504".to_string()),
+        };
+        let mut ctx = TestContext::new();
+
+        args.run_with(&mut ctx, |_client, transaction| {
+            let apply = single_repair_action(transaction);
+            assert_eq!(apply.ticket_id, "REP-504");
+            assert_eq!(apply.expected_revision, 5);
+            let SorafsRepairTaskActionV1::Fail(action) = &apply.action else {
+                panic!("expected fail action");
+            };
+            assert_eq!(action.lease_generation, 3);
+            assert_eq!(action.failure_digest, failure_digest);
+            assert_eq!(action.idempotency_key, "fail-504");
+            Ok(transaction.hash())
+        })
+        .expect("run should succeed");
+
+        assert_eq!(ctx.printed.len(), 1);
+    }
+
+    #[test]
+    fn repair_escalate_builds_native_atomic_slash_transaction() {
         let manifest_digest = [0x77_u8; 32];
         let provider_id = [0x88_u8; 32];
         let args = RepairEscalateArgs {
-            ticket_id: "REP-504".to_string(),
+            ticket_id: "REP-505".to_string(),
+            expected_revision: 6,
+            lease_generation: 4,
             manifest_digest: encode(manifest_digest),
             provider_id: encode(provider_id),
             penalty: "0.0000009".to_owned(),
             rationale: "sla_missed".to_string(),
             auditor: None,
             submitted_at: Some("@1700000504".to_string()),
+            idempotency_key: Some("escalate-505".to_string()),
         };
         let mut ctx = TestContext::new();
         let expected_auditor = ctx.config().account.to_string();
 
-        args.run_with(&mut ctx, |_client, proposal| {
-            assert_eq!(proposal.ticket_id.0, "REP-504");
+        args.run_with(&mut ctx, |_client, transaction| {
+            let apply = single_repair_action(transaction);
+            assert_eq!(apply.ticket_id, "REP-505");
+            assert_eq!(apply.expected_revision, 6);
+            let SorafsRepairTaskActionV1::Escalate(action) = &apply.action else {
+                panic!("expected escalate action");
+            };
+            assert_eq!(action.lease_generation, 4);
+            assert_eq!(action.idempotency_key, "escalate-505");
+            let proposal: RepairSlashProposalV1 =
+                norito::decode_from_bytes(&action.slash_proposal_payload)
+                    .expect("decode canonical slash proposal");
+            assert_eq!(proposal.ticket_id.0, "REP-505");
             assert_eq!(proposal.provider_id, provider_id);
             assert_eq!(proposal.manifest_digest, manifest_digest);
             assert_eq!(proposal.auditor_account, expected_auditor);
@@ -27988,11 +28079,7 @@ mod tests {
             );
             assert_eq!(proposal.submitted_at_unix, 1_700_000_504);
             assert!(proposal.approval.is_none());
-            Ok(Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", "application/json")
-                .body(norito::json::to_vec(&norito::json!({ "ok": true }))?)
-                .unwrap())
+            Ok(transaction.hash())
         })
         .expect("run should succeed");
 
@@ -28000,41 +28087,21 @@ mod tests {
     }
 
     #[test]
-    fn repair_escalate_allows_missing_approval_summary() {
-        let manifest_digest = [0x79_u8; 32];
-        let provider_id = [0x81_u8; 32];
-        let args = RepairEscalateArgs {
-            ticket_id: "REP-505".to_string(),
-            manifest_digest: encode(manifest_digest),
-            provider_id: encode(provider_id),
-            penalty: "0.0000012".to_owned(),
-            rationale: "missing-approval".to_string(),
-            auditor: None,
-            submitted_at: Some("@1700000605".to_string()),
+    fn repair_action_rejects_zero_compare_and_set_revision() {
+        let args = RepairClaimArgs {
+            ticket_id: "REP-506".to_string(),
+            expected_revision: 0,
+            lease_duration_ms: 60_000,
+            idempotency_key: Some("claim-506".to_string()),
         };
         let mut ctx = TestContext::new();
-        let expected_auditor = ctx.config().account.to_string();
-
-        args.run_with(&mut ctx, |_client, proposal| {
-            assert_eq!(proposal.ticket_id.0, "REP-505");
-            assert_eq!(proposal.provider_id, provider_id);
-            assert_eq!(proposal.manifest_digest, manifest_digest);
-            assert_eq!(proposal.auditor_account, expected_auditor);
-            assert_eq!(
-                proposal.proposed_penalty,
-                "0.0000012".parse::<XorQuantity>().expect("valid quantity")
-            );
-            assert_eq!(proposal.submitted_at_unix, 1_700_000_605);
-            assert!(proposal.approval.is_none());
-            Ok(Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", "application/json")
-                .body(norito::json::to_vec(&norito::json!({ "ok": true }))?)
-                .unwrap())
-        })
-        .expect("run should succeed");
-
-        assert_eq!(ctx.printed.len(), 1);
+        let error = args
+            .run_with(&mut ctx, |_client, _| {
+                unreachable!("zero revision must fail before submission")
+            })
+            .expect_err("zero compare-and-set revision must fail");
+        assert!(error.to_string().contains("--expected-revision"));
+        assert!(ctx.printed.is_empty());
     }
 
     #[test]
@@ -28312,6 +28379,7 @@ mod tests {
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(ChunkProfile::DEFAULT, BLAKE3_256_MULTIHASH_CODE)
             .chunk_digest_sha3_256([0xCD; 32])
+            .por_root(sorafs_manifest::EMPTY_POR_ROOT_V1)
             .content_length(0)
             .car_digest([0x11; 32])
             .car_size(0)
@@ -28372,6 +28440,7 @@ mod tests {
                 aliases: vec!["sf1".into()],
             })
             .chunk_digest_sha3_256([0xCD; 32])
+            .por_root([0xCE; 32])
             .content_length(1_048_576)
             .car_digest([0xAB; 32])
             .car_size(1_111_111)
@@ -28447,6 +28516,18 @@ mod tests {
         assert_eq!(
             report.get("manifest_digest_hex").and_then(Value::as_str),
             Some(digest_hex.as_str())
+        );
+        let por_root_hex = hex::encode(manifest.por_root);
+        assert_eq!(
+            report.get("por_root_hex").and_then(Value::as_str),
+            Some(por_root_hex.as_str())
+        );
+        assert_eq!(
+            report
+                .get("manifest")
+                .and_then(|manifest| manifest.get("por_root_hex"))
+                .and_then(Value::as_str),
+            Some(por_root_hex.as_str())
         );
     }
 

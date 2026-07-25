@@ -632,7 +632,9 @@ class SorafsReferenceValidators private constructor() {
             val value = label ?: fallback
             require(value.isNotBlank()) { "label must not be blank" }
             require(value.trim() == value) { "label must not contain surrounding whitespace" }
-            require(value.indexOf('\u0000') < 0) { "label must not contain NUL" }
+            require(value.none(Char::isISOControl)) {
+                "label must not contain control characters"
+            }
             val bytes = value.toByteArray(StandardCharsets.UTF_8)
             require(bytes.size <= REFERENCE_MAX_LABEL_BYTES_V1) {
                 "label must be at most $REFERENCE_MAX_LABEL_BYTES_V1 UTF-8 bytes"

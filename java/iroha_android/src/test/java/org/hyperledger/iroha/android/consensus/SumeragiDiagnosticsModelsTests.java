@@ -18,6 +18,8 @@ import org.hyperledger.iroha.android.consensus.SumeragiDiagnosticsModels.Autonom
 import org.hyperledger.iroha.android.consensus.SumeragiDiagnosticsModels.NativeAmxParticipantApplication;
 import org.hyperledger.iroha.android.consensus.SumeragiDiagnosticsModels.NativeAmxParticipantApplicationState;
 import org.hyperledger.iroha.android.consensus.SumeragiDiagnosticsModels.NativeAmxParticipantApplications;
+import org.hyperledger.iroha.android.consensus.SumeragiDiagnosticsModels.PipelineExecutionStatus;
+import org.hyperledger.iroha.android.consensus.SumeragiDiagnosticsModels.SumeragiDiagnosticsStatus;
 import org.hyperledger.iroha.android.util.HashLiteral;
 import org.junit.Test;
 
@@ -196,7 +198,98 @@ public final class SumeragiDiagnosticsModelsTests {
                 BigInteger.valueOf(7L),
                 2,
                 hash(0x77),
-                U64_MAX.add(BigInteger.ONE)));
+            U64_MAX.add(BigInteger.ONE)));
+  }
+
+  @Test
+  public void completeDiagnosticsModelMirrorsRequiredVectorsAndBounds() {
+    final SumeragiDiagnosticsStatus status =
+        diagnostics(BigInteger.ZERO, BigInteger.ONE, Collections.emptyList(), 0, Collections.emptyList());
+    assertEquals(BigInteger.ONE, status.txQueueCapacity());
+    assertEquals(0, status.nativeAmxParticipantApplications().size());
+    assertEquals(0, status.autonomousLaneExecutions().size());
+
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            diagnostics(
+                BigInteger.valueOf(2),
+                BigInteger.ONE,
+                Collections.emptyList(),
+                0,
+                Collections.emptyList()));
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            diagnostics(
+                BigInteger.ZERO,
+                BigInteger.ONE,
+                Collections.nCopies(SumeragiDiagnosticsModels.DIAGNOSTIC_LANES_MAX + 1, new Object()),
+                0,
+                Collections.emptyList()));
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            diagnostics(
+                BigInteger.ZERO,
+                BigInteger.ONE,
+                Collections.emptyList(),
+                1,
+                Collections.emptyList()));
+  }
+
+  private static SumeragiDiagnosticsStatus diagnostics(
+      final BigInteger depth,
+      final BigInteger capacity,
+      final List<?> laneCommitments,
+      final long sealedTotal,
+      final List<String> sealedAliases) {
+    return new SumeragiDiagnosticsStatus(
+        pipeline(),
+        depth,
+        capacity,
+        BigInteger.ZERO,
+        BigInteger.ONE,
+        false,
+        false,
+        false,
+        false,
+        BigInteger.ZERO,
+        null,
+        laneCommitments,
+        Collections.emptyList(),
+        Collections.emptyList(),
+        Collections.emptyList(),
+        Collections.emptyList(),
+        Collections.emptyList(),
+        Collections.emptyList(),
+        sealedTotal,
+        sealedAliases,
+        Collections.emptyList(),
+        Collections.emptyList(),
+        Collections.emptyList());
+  }
+
+  private static PipelineExecutionStatus pipeline() {
+    final BigInteger zero = BigInteger.ZERO;
+    return new PipelineExecutionStatus(
+        zero,
+        zero,
+        zero,
+        zero,
+        zero,
+        zero,
+        zero,
+        zero,
+        zero,
+        zero,
+        zero,
+        zero,
+        zero,
+        zero,
+        zero,
+        zero,
+        zero);
   }
 
   private static NativeAmxParticipantApplication application(final long laneId) {

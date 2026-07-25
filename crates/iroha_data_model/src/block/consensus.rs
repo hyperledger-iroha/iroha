@@ -4117,7 +4117,8 @@ pub struct SumeragiPipelineExecutionStatus {
 /// The bound matches the compiled maximum number of active execution lanes,
 /// so diagnostics never need to truncate an active route/incarnation while
 /// still refusing an unbounded operator payload.
-pub const SUMERAGI_NATIVE_AMX_PARTICIPANT_APPLICATIONS_MAX: usize = 1_024;
+pub const SUMERAGI_NATIVE_AMX_PARTICIPANT_APPLICATIONS_MAX: usize =
+    crate::nexus::MAX_ACTIVE_EXECUTION_LANES;
 
 /// Maximum number of grouped Native AMX sources represented by one
 /// participant-application row.
@@ -4699,7 +4700,6 @@ pub struct SumeragiDiagnosticsStatus {
     /// Bounded Native AMX participant-control application evidence.
     pub native_amx_participant_applications: Vec<SumeragiNativeAmxParticipantApplication>,
     /// Bounded restart-stable autonomous lane execution stages.
-    #[norito(default)]
     pub autonomous_lane_executions: Vec<SumeragiAutonomousLaneExecution>,
 }
 
@@ -7771,6 +7771,17 @@ mod tests {
             .expect("NPoS diagnostics object")
             .insert("unknown".to_owned(), norito::json::Value::from(true));
         assert!(norito::json::from_value::<SumeragiDiagnosticsStatus>(nested).is_err());
+
+        let mut missing_autonomous =
+            norito::json::to_value(&diagnostics(None)).expect("serialize diagnostics");
+        missing_autonomous
+            .as_object_mut()
+            .expect("diagnostics object")
+            .remove("autonomous_lane_executions");
+        assert!(
+            norito::json::from_value::<SumeragiDiagnosticsStatus>(missing_autonomous).is_err(),
+            "the first-release autonomous diagnostics vector is required"
+        );
     }
 
     #[test]

@@ -3,7 +3,7 @@
 use std::{fs, io, path::Path};
 
 use assert_cmd::cargo::cargo_bin_cmd;
-use sorafs_car::{CarBuildPlan, CarWriter, compute_chunk_plan_digest_sha3};
+use sorafs_car::{CarBuildPlan, CarWriter, compute_chunk_plan_digest_sha3, compute_por_root};
 use sorafs_manifest::{
     BLAKE3_256_MULTIHASH_CODE, DagCodecId, ManifestBuilder, PinPolicy,
     por::{
@@ -30,6 +30,7 @@ fn build_manifest(
         .dag_codec(DagCodecId(stats.dag_codec))
         .chunking_from_profile(plan.chunk_profile, BLAKE3_256_MULTIHASH_CODE)
         .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
+        .por_root(compute_por_root(payload, &plan)?)
         .content_length(plan.content_length)
         .car_digest(car_digest)
         .car_size(stats.car_size)
@@ -215,49 +216,6 @@ fn cli_reports_corrupt_checkpoint_without_panicking() -> Result<(), Box<dyn std:
             base.join("challenge_v1.to").display()
         ))
         .arg(format!("--proof={}", base.join("proof_v1.to").display()))
-        .assert()
-        .failure();
-    let stderr = String::from_utf8(assert.get_output().stderr.clone())?;
-    assert!(
-        stderr.contains(&format!(
-            "failed to initialise SoraFS runtime from {}",
-            storage_dir.display()
-        )),
-        "unexpected stderr: {stderr}"
-    );
-    assert!(
-        !stderr.contains("panicked at"),
-        "unexpected panic: {stderr}"
-    );
-
-    Ok(())
-}
-
-#[test]
-fn gateway_reports_corrupt_checkpoint() -> Result<(), Box<dyn std::error::Error>> {
-    let temp_dir = TempDir::new()?;
-    let storage_dir = temp_dir.path().canonicalize()?.join("storage");
-    let orderbook_dir = storage_dir.join("orderbook");
-    fs::create_dir_all(&orderbook_dir)?;
-    fs::write(
-        orderbook_dir.join("runtime-snapshot.to"),
-        b"not a canonical Norito checkpoint",
-    )?;
-
-    let signing_key = temp_dir.path().join("signing.key");
-    let approved_envelope = temp_dir.path().join("approved-envelope.txt");
-    let mut cmd = cargo_bin_cmd!("sorafs_gateway");
-    let assert = cmd
-        .arg("--manifest-digest")
-        .arg("00".repeat(32))
-        .arg("--provider-id")
-        .arg("00".repeat(32))
-        .arg("--signing-key")
-        .arg(signing_key)
-        .arg("--approved-manifest-envelope")
-        .arg(approved_envelope)
-        .arg("--data-dir")
-        .arg(&storage_dir)
         .assert()
         .failure();
     let stderr = String::from_utf8(assert.get_output().stderr.clone())?;

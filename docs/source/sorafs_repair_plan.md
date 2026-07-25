@@ -1,33 +1,36 @@
 ---
 title: SoraFS Repair Automation & Auditor API
-summary: SF-8b implementation status for native repair authority, local worker projections, and the remaining finalized-chain cutover and rollout evidence.
+summary: SF-8b implementation status for native repair authority, signed-transaction ingress, rebuildable worker projections, and remaining rollout evidence.
 ---
 
 # SoraFS Repair Automation & Auditor API
 
 ## Goals & Scope
 - Automate remediation when Proof-of-Replication (PoR) or Proof-of-Retrievability (PoTR) checks detect replica loss or degraded providers.
-- Provide deterministic auditor APIs for reporting evidence, filing slashing proposals, and tracking repair progress with Norito-authenticated envelopes.
+- Provide deterministic auditor and worker APIs for submitting caller-signed
+  native transactions and tracking finalized repair state.
 - Track the validation pipeline that checks submitted evidence before tasks enter the scheduler.
 - Capture SLAs, telemetry, and governance hooks so operators, auditors, and DealEngine share a common source of truth.
 
 ## Status
-The SF-8b operational foundations and native ledger model are implemented.
-The ledger owns canonical task identity, source binding, compare-and-set
-leases, terminal outcomes, slash state, appeals, typed events, and singular
-queries. `sorafs_node` still owns a separate `FileRepairStore`, worker
-scheduler, event sequence, PoR history linkage, local/orchestrator rehydration,
-watchdog escalation, governance publication hooks, and GC protection. Torii's
-signed auditor and worker routes still mutate and read that local store.
-Those paths are useful test/development projections, but they are not a
-production authority and cannot satisfy multi-peer exactly-once repair.
+The SF-8b native ledger model and Torii command cutover are implemented. The
+ledger owns canonical task identity, source binding, compare-and-set leases,
+terminal outcomes, slash proposals, appeals, typed events, and singular
+queries. Every command route accepts exactly one caller-signed
+`SignedTransaction` containing the route-specific native repair instruction
+and forwards it through strict durable transaction ingress. Reads return
+finalized ledger projections; obsolete local status-by-manifest, SSE, and
+WebSocket authority routes are not shipped.
 
-Remaining SF-8b implementation work is to submit every auditor/worker
-transition as a native transaction, reconcile finalized task and event
-queries, rebuild daemon state solely from committed history, and delete the
-authoritative local mutation path. After that cutover, operators must archive a
-production PoR/PoTR failure, repair, escalation, and governance handoff from
-the reviewed four-validator deployment.
+`sorafs_node` still contains a local `RepairManager`, filesystem projection,
+PoR history linkage, watchdog/GC helpers, and rehydration machinery. Those
+surfaces may support tests or rebuildable execution caches only; they must not
+authorize a production transition. Remaining local work is to remove the
+public competing manager/checkpoint dependencies, make every storage action
+depend on the exact finalized live lease, and prove cross-peer exactly-once
+execution and restart reconciliation. Operators must then archive a production
+PoR/PoTR failure, repair, escalation, appeal, and governance handoff from the
+reviewed four-validator deployment.
 `scripts/check_sorafs_repair_rollout_evidence.py` now provides the fail-closed
 SF-8b rollout evidence gate for deployed repair promotion packets, and
 `scripts/run_sorafs_repair_rollout_evidence.py` provides the matching reviewed
@@ -97,12 +100,12 @@ response-file examples cover auditor-roster and worker-lifecycle canaries.
 ## Component Overview
 | Component | Responsibilities | Implementation Notes |
 |-----------|-----------------|----------------------|
-| Repair Scheduler | Accepts repair signals, creates tasks, drives workflow until closure. | Native repair state is authoritative; the current `sorafs_node::repair` file store and async workers must be converted into a finalized-chain projection and transaction submitter. |
-| Repair Worker | Executes local rehydration, chunk fetch/re-seed, orchestrator requests, and governance callbacks. | Attempts local rehydration from co-located manifests before invoking the optional repair orchestrator hook for remote fetches. |
-| Auditor API | Signed REST/Norito endpoints for auditors to submit evidence and proposals. | Hosted by Torii under `/v1/sorafs/audit/repair/*`, requires `SignedAuditorRequestV1` for report/slash submissions. |
-| Payload Validator | Validates repair records, evidence, reports, slash proposals, escalation policy/approval payloads, worker signatures, audit events, and signed auditor envelopes. | Implemented in `sorafs_manifest::repair` plus `sorafs_manifest::reference::validate_repair_payload_bytes`; live PoR/PoTR replay evidence remains rollout work. |
+| Repair Scheduler | Accepts repair signals, creates tasks, drives workflow until closure. | Native repair state is authoritative; durable forwarders submit native transactions and reconcile finalized task/event queries. |
+| Repair Worker | Executes local rehydration, chunk fetch/re-seed, and orchestrator requests. | Execution is permitted only for the exact finalized live lease; any retained local state is a rebuildable cache. |
+| Auditor API | Route-specific signed-transaction ingress for reports, escalations, appeals, and worker actions. | Torii accepts one caller-signed native transaction on each `/v1/sorafs/audit/repair/*` command route and performs exact instruction/action matching before strict durable ingress. |
+| Payload Validator | Validates canonical report, slash-proposal, policy, approval, task-event, and audit-event payloads. | Implemented in `sorafs_manifest::repair` plus `sorafs_manifest::reference::validate_repair_payload_bytes`; transaction signatures, authority, permissions, revisions, leases, and idempotency are enforced by the common transaction/native-ISI path. |
 | SLA & Telemetry | Metrics, logs, and alerts for backlog, latency, and outcomes. | Instrumented via `iroha_telemetry`, exported to OTLP + Prometheus. |
-| Persistence | Durable recording of tasks, events, and outcomes. | Native ledger records and finalized event queries are the V1 authority. `repair_state.to` is a rebuildable development cache only and must not gate production transitions. |
+| Persistence | Durable recording of tasks, events, and outcomes. | Native ledger records and finalized event queries are the V1 authority. Any filesystem projection is disposable and must not gate production transitions. |
 | CLI Tooling | Operator-facing commands for queue inspection, manual escalation, and GC inspection/dry-run. | `iroha sorafs repair *` and `iroha sorafs gc *` commands with JSON output + Norito envelopes. |
 
 ## Norito Data Model
@@ -212,22 +215,26 @@ struct GcAuditEventV1 {
     payload: GcAuditPayloadV1,
 }
 
-struct SignedAuditorRequestV1 {
-    version: U8,
-    auditor_account: String,
-    nonce: U64,
-    payload: AuditorRequestPayloadV1,
-    signature: AuditorSignatureV1,
-}
-
 ```
 
-- `RepairTaskEventV1` captures append-only status changes, including the actor (worker or scheduler) and optional free-form messages.
-- `SignedAuditorRequestV1` wraps `RepairReportV1` or `RepairSlashProposalV1` payloads. Torii accepts JSON or Norito `SignedAuditorRequestV1` bodies on the `/report` and `/slash` endpoints, validates the envelope version, non-zero nonce, auditor-account match, payload kind, Ed25519 signature over the canonical signed payload, signer key binding to the canonical auditor account, enforces persistent per-auditor monotonic nonce replay checks, and rejects legacy raw `RepairReportV1`/`RepairSlashProposalV1` request bodies. Signatures use the same algorithm metadata as provider adverts (`SignatureAlgorithm` enum).
+- `RepairTaskEventV1` is a bounded reference/publication payload; it is not the
+  committed transition journal. The authoritative typed
+  `SorafsRepairLedgerEvent` contains the ticket and task identities, provider,
+  manifest, resulting revision, transaction authority, transition kind, and
+  committing-block timestamp, without a free-form message.
+- Command authentication uses the canonical Iroha `SignedTransaction` envelope.
+  `/report` requires `SubmitSorafsRepairTask`; `/slash`, `/claim`,
+  `/heartbeat`, `/complete`, and `/fail` require the matching
+  `ApplySorafsRepairTaskAction` variant; `/appeal` requires
+  `SubmitSorafsRepairAppeal`. Deleted pre-release
+  `SignedAuditorRequestV1` and `RepairWorkerSignaturePayloadV1` envelopes are
+  neither accepted nor retained as compatibility formats.
 - `RepairAuditEventV1` and `GcAuditEventV1` wrap payloads with deterministic ordering metadata plus signer/digest fields for governance audit trails. Envelope validation is mandatory before publication: sequence numbers are non-zero, header and payload timestamps are identical, repair signers equal the payload actor (or the canonical `sorafs-repair` fallback), and GC signers equal `sorafs-gc`. `payload_digest` is BLAKE3 over the canonical header-bearing `norito::to_bytes(payload)` archive; bare codec payloads are never accepted as the digest preimage.
 - GC audit payloads use the closed first-release reason vocabulary `retention_expired` or `retention_expired_provider_missing`; only the latter permits an all-zero provider identifier. Blocked outcomes use exactly `repair_active`, `deal_active`, or `shared_chunks` and must report zero freed bytes. Successful evictions may also report zero for valid empty manifests. Unknown labels or inconsistent provider/outcome fields fail before any governance artifact is written.
 
-`RepairTaskStateV1` is a tagged union (`queued`, `in_progress`, `completed`, `failed`, `escalated`) whose payloads are the dedicated state structs above. State transitions are persisted as append-only `RepairTaskEventV1` records, each containing `{ticket_id, manifest_digest, provider_id, status, occurred_at, message}` to simplify replay and auditing.
+`RepairTaskStateV1` remains a reference payload for fixture and publication
+validation. Native `RepairLedgerTaskV1` state plus the append-only
+`SorafsRepairLedgerEvent` journal are the V1 execution authority.
 
 ## Scheduler Flow
 1. **Triggers**
@@ -236,32 +243,53 @@ struct SignedAuditorRequestV1 {
    - Auditors call `/v1/sorafs/audit/repair/report`.
 
 2. **Payload Validation**
-   - `RepairEvidenceV1`, reports, slash proposals, escalation approvals, worker signatures, audit events, and signed auditor envelopes are validated through `sorafs_manifest::repair` and `sorafs_manifest::reference::validate_repair_payload_bytes`.
-   - Validation failures reject auditor submissions before scheduler mutation
-     and return structured Torii errors for operator follow-up.
+   - `RepairEvidenceV1`, reports, slash proposals, escalation approvals, task
+     events, and audit events are validated through `sorafs_manifest::repair`
+     and `sorafs_manifest::reference::validate_repair_payload_bytes`.
+   - Torii rejects a command unless the signed transaction contains exactly one
+     route-matching native instruction. Native execution then enforces
+     authority, permissions, expected revision, lease generation, bounded
+     canonical payloads, and exact idempotency before any committed mutation.
 
 3. **Task Creation**
-   - Scheduler groups by `(manifest_digest, provider_id)` to avoid duplicate efforts. Existing open tasks are updated with merged evidence; otherwise a new `RepairTaskV1` is created.
-   - SLA deadlines: `PoR` tasks must start within 15 minutes, finish within 2 hours; `PoTR` tasks start within 5 minutes, finish within 30 minutes. Manual reports default to 4 hours.
+   - The producer derives one deterministic source identity and task identity,
+     then submits `SubmitSorafsRepairTask` in a caller-signed transaction.
+     Native execution admits one authoritative task, treats an exact replay as
+     idempotent, and rejects conflicting reuse.
+   - SLA and retry policy inputs are bounded native instruction fields and
+     governed `iroha_config` values; process-local scheduler defaults cannot
+     alter committed task state.
 
 4. **Worker Assignment**
-   - Workers claim tickets via `/v1/sorafs/audit/repair/claim` and must send `/v1/sorafs/audit/repair/heartbeat` updates before the lease TTL elapses.
-   - Tasks enter `in_progress` and the worker performs orchestrator-driven recovery (chunk fetch, re-seed, or manifest re-issuance).
-   - Workers close tickets with `/v1/sorafs/audit/repair/complete` or `/v1/sorafs/audit/repair/fail`, and Torii rejects stale/out-of-order updates based on lease TTL + heartbeat cadence.
+   - A worker reads the exact finalized revision, submits a caller-signed
+     `Claim` action, and reconciles the committed lease owner, generation, and
+     expiry before doing storage work.
+   - Renew, complete, and fail transactions carry the expected revision and
+     exact lease generation. Native execution rejects stale, expired,
+     non-owner, and replay-conflicting actions.
 
 5. **Failure & Escalation**
-   - Retries use exponential backoff derived from `sorafs.repair.backoff_initial_secs` and `sorafs.repair.backoff_max_secs`, with `sorafs.repair.max_attempts` enforcing the cap.
-   - After the final failure (or SLA breach), tasks move to `escalated` and a `RepairSlashProposalV1` draft is generated using `sorafs.repair.default_slash_penalty` for auditor review.
-   - Escalations automatically notify governance via `sorafs_governance_event`.
+   - Failure and escalation are explicit native actions, not local watchdog
+     mutations. Expected revision, live lease generation, idempotency key, and
+     bounded evidence or failure digests are committed atomically.
+   - Finalized escalation state carries the slash proposal material consumed by
+     separately governed reserve, reputation, transparency, and Governance DAG
+     producers.
 
 6. **Governance Decision**
-   - Escalations open a dispute window (`governance.sorafs_repair_escalation.dispute_window_secs`) during which governance voters submit approve/reject votes.
-   - At the dispute deadline (`escalated_at_unix + dispute_window_secs`) the decision is computed deterministically: require `minimum_voters`, approvals exceed rejections, and the approval ratio (basis points) meets `quorum_bps`. Ties or insufficient quorum reject the slash.
-   - Approved decisions open an appeal window (`appeal_window_secs`); appeals recorded within the window mark the decision as appealed and halt automatic slashing.
+   - The provider owner submits `SubmitSorafsRepairAppeal` against the exact
+     escalated task revision. Appeal state is committed on-chain and is visible
+     through the finalized task and event projections.
+   - `RepairEscalationApprovalV1` is a bounded governance
+     publication/reference payload. It cannot mutate the task or replace the
+     native appeal record.
 
 7. **Queue Hygiene**
-   - The watchdog reclaims expired leases, re-queues the ticket with backoff, and escalates if the attempt cap is exceeded.
-   - Metrics track queue depth and latency buckets; Alertmanager fires if `queued` tasks older than SLA exceed thresholds.
+   - Expired leases become eligible for a new native claim; no local watchdog
+     may rewrite lease or terminal state.
+   - Supervised workers rebuild queues from finalized task/event queries and
+     emit bounded metrics. Restart reconciliation must prove that duplicate
+     submissions across peers still yield one lease and one terminal outcome.
 
 ## Governance Escalation Policy
 The escalation policy is sourced from `governance.sorafs_repair_escalation` in `iroha_config` and is enforced for every repair slash proposal.
@@ -275,56 +303,66 @@ The escalation policy is sourced from `governance.sorafs_repair_escalation` in `
 | `max_penalty` | 1,000,000,000 | Maximum slash penalty allowed for repair escalations (nano-XOR). |
 
 - Scheduler-generated proposals are capped at `max_penalty`; auditor submissions above the cap are rejected.
-- Vote records are stored in `repair_state.to` with deterministic ordering (`voter_id` sorting) so all nodes derive the same decision timestamp and outcome.
+- Governance approval material remains a canonical publication/reference
+  payload; it does not turn a local vote file into repair authority. Slash and
+  appeal state that affects repair execution must be committed through native
+  transitions and reconciled from finalized queries.
 
 ## Auditor API Surface
 | Method & Path | Description | Auth | Success Response |
 |---------------|-------------|------|------------------|
-| `POST /v1/sorafs/audit/repair/report` | Submit a signed `SignedAuditorRequestV1` carrying `RepairReportV1` to enqueue a repair task. | Required | `200 OK` with `RepairTaskRecordV1` (Norito base64). |
-| `POST /v1/sorafs/audit/repair/slash` | Submit a signed `SignedAuditorRequestV1` carrying `RepairSlashProposalV1` for governance consideration. | Required | `200 OK` with `RepairTaskRecordV1` (Norito base64). |
-| `GET /v1/sorafs/audit/repair/status` | List repair tasks across manifests (filter by provider/status). | Auditor or operator JWT | `200 OK` with records (Norito base64). |
-| `GET /v1/sorafs/audit/repair/status/{manifest_hex}` | Fetch repair tasks for a manifest. | Auditor or operator JWT | `200 OK` with records (Norito base64). |
-| `GET /v1/sorafs/audit/repair/events` | Poll the local sequenced repair event backlog (`since`, `limit`) with ETag support. | Torii rate limit/perimeter | `200 OK` JSON containing `events[]` and `next_since`. |
-| `GET /v1/sorafs/audit/repair/events/stream` | Replay the selected backlog, then stream live repair task transitions as Server-Sent Events. | Torii rate limit/perimeter | `text/event-stream` frames keyed by repair status. |
-| `GET /v1/sorafs/audit/repair/events/ws` | Replay the selected backlog, then stream live repair task transitions over WebSocket JSON frames. | Torii rate limit/perimeter | WebSocket frames `{event, data}` keyed by repair status. |
+| `POST /v1/sorafs/audit/repair/report` | Submit one caller-signed transaction containing `SubmitSorafsRepairTask`. | Transaction authority + native permission checks | `202 Accepted` from strict durable transaction ingress. |
+| `POST /v1/sorafs/audit/repair/slash` | Submit one caller-signed transaction containing `ApplySorafsRepairTaskAction::Escalate`. | Active lease authority + native permission checks | `202 Accepted` from strict durable transaction ingress. |
+| `POST /v1/sorafs/audit/repair/appeal` | Submit one caller-signed transaction containing `SubmitSorafsRepairAppeal`. | Provider-owner authority | `202 Accepted` from strict durable transaction ingress. |
+| `GET /v1/sorafs/audit/repair/status` | Fetch authoritative repair counters at an optional exact finalized anchor. | Query perimeter | `200 OK` finalized projection; stale anchor is `409 Conflict`. |
+| `GET /v1/sorafs/audit/repair/tasks` | Page authoritative tasks with an immutable exclusive task-id cursor and exact finalized anchor. | Query perimeter | `200 OK` finalized projection. |
+| `GET /v1/sorafs/audit/repair/tasks/{ticket_id}` | Fetch one authoritative task, including lease, terminal, slash, appeal, revision, and receipts. | Query perimeter | `200 OK` finalized projection. |
+| `GET /v1/sorafs/audit/repair/events` | Page typed payload-free committed events with an exclusive four-field cursor, exact finalized anchor, and ETag. | Query perimeter | `200 OK` finalized projection. |
 
 ## Worker API Surface
 | Method & Path | Description | Auth | Success Response |
 |---------------|-------------|------|------------------|
-| `POST /v1/sorafs/audit/repair/claim` | Claim a queued repair ticket (`manifest_digest_hex`, `worker_id`, `claimed_at_unix`, `idempotency_key`). | Worker signature + `CanOperateSorafsRepair` | `200 OK` with `RepairTaskRecordV1` (Norito base64). |
-| `POST /v1/sorafs/audit/repair/heartbeat` | Renew the active lease (`manifest_digest_hex`, `heartbeat_at_unix`, `idempotency_key`). | Worker signature + `CanOperateSorafsRepair` | `200 OK` with `RepairTaskRecordV1` (Norito base64). |
-| `POST /v1/sorafs/audit/repair/complete` | Complete a ticket (`manifest_digest_hex`, `completed_at_unix`, optional notes, `idempotency_key`). | Worker signature + `CanOperateSorafsRepair` | `200 OK` with `RepairTaskRecordV1` (Norito base64). |
-| `POST /v1/sorafs/audit/repair/fail` | Fail a ticket (`manifest_digest_hex`, `failed_at_unix`, reason, `idempotency_key`). | Worker signature + `CanOperateSorafsRepair` | `200 OK` with `RepairTaskRecordV1` (Norito base64). |
+| `POST /v1/sorafs/audit/repair/claim` | Submit `ApplySorafsRepairTaskAction::Claim` with expected revision, bounded lease duration, and idempotency key. | Signed transaction + `CanOperateSorafsRepair` | `202 Accepted`. |
+| `POST /v1/sorafs/audit/repair/heartbeat` | Submit `ApplySorafsRepairTaskAction::Renew` with expected revision, exact lease generation, bounded duration, and idempotency key. | Current lease owner + `CanOperateSorafsRepair` | `202 Accepted`. |
+| `POST /v1/sorafs/audit/repair/complete` | Submit `ApplySorafsRepairTaskAction::Complete` with expected revision, exact lease generation, evidence digest, and idempotency key. | Current lease owner + `CanOperateSorafsRepair` | `202 Accepted`. |
+| `POST /v1/sorafs/audit/repair/fail` | Submit `ApplySorafsRepairTaskAction::Fail` with expected revision, exact lease generation, failure digest, and idempotency key. | Current lease owner + `CanOperateSorafsRepair` | `202 Accepted`. |
 
 ### Repair Lease & Idempotency
-- Claims expire after `sorafs.repair.claim_ttl_secs`; heartbeats extend leases by `sorafs.repair.heartbeat_interval_secs`.
-- Torii rejects stale/out-of-order timestamps, lease mismatches, retry claims before backoff expiry, and idempotency key reuse with different payloads.
+- Lease expiry is derived from finalized committing-block time plus the bounded
+  requested duration. Renew/complete/fail/escalate require the exact active
+  lease generation and expected task revision.
+- Native execution rejects stale revisions, non-owner actions, expired or
+  mismatched leases, premature retry claims, and idempotency-key reuse with
+  different canonical action bytes.
 
 ### Authentication
-- Auditor endpoints (`/report`, `/slash`) accept JSON or Norito `SignedAuditorRequestV1` envelopes and reject invalid envelope versions, zero nonces, auditor-account mismatches, wrong payload kind, unsupported signature algorithms, invalid Ed25519 signatures, signer keys that do not match the canonical auditor account, and stale or replayed per-auditor nonces. Legacy raw `RepairReportV1`/`RepairSlashProposalV1` request bodies are rejected.
-- Repair worker endpoints (`/claim`, `/heartbeat`, `/complete`, `/fail`) require a `RepairWorkerSignaturePayloadV1` signature from the worker account (i105 account id/signatory key) plus the on-chain `CanOperateSorafsRepair` permission for the ticket's provider. The signed payload includes `manifest_digest`, `provider_id`, action summary, and timestamps for auditability; `manifest_digest_hex` must match the ticket record. Provider owners receive this permission automatically and may delegate/revoke it via `GrantPermission`. No admin-only repair overrides are supported in production paths.
-- Dashboard or service integrations must submit the same signed envelope or
-  worker-signature payload as CLI/API clients; no token-to-envelope injection
-  path is shipped in the current Torii implementation.
+- Every command uses the common Iroha signed-transaction envelope; transaction
+  authority is the only caller identity admitted by the route.
+- Report admission requires the governed repair submitter permission.
+  Claim/renew/complete/fail/escalate additionally enforce provider-scoped
+  `CanOperateSorafsRepair`, task revision, and lease ownership in native
+  execution. Appeals require the committed provider owner. There is no
+  admin-only repair override.
+- Dashboard or service integrations must construct and sign the same native
+  transaction as CLI/API clients. Torii does not inject an authority or wrap an
+  unsigned repair body.
 
 ### Rate Limiting & Replay Protection
-- Signed auditor envelopes require a non-zero `nonce`; Torii persists the highest accepted nonce per canonical auditor account in the repair state snapshot and rejects any signed report or slash proposal whose nonce is less than or equal to the stored value.
-- Torii applies the existing origin/perimeter limiter before decoding and a
-  dedicated per-auditor limiter after signed-envelope validation and before
-  scheduler mutation. Configure it with
-  `sorafs.repair.auditor_rate_per_sec` and
-  `sorafs.repair.auditor_burst`; defaults are 4 requests/second with a burst of
-  16, and setting either value to `0` disables that side of the limiter.
+- Torii applies the common transaction-ingress perimeter and replay controls
+  before submission. The ledger transaction nonce/hash plus instruction-level
+  source identities, revisions, lease generations, and idempotency receipts
+  provide durable replay/equivocation protection.
+- Route-specific local nonce or rate-limit state is not authoritative and
+  cannot make an otherwise invalid ledger transition succeed.
 
 ## Validation Pipeline
-- Implemented local validation covers canonical Norito decoding, schema
-  versions, non-zero digests and provider identifiers, timestamps, SLA policy,
-  escalation approval policy, signed auditor envelope signatures, worker action
-  signatures, payload kind matching, and auditor nonce replay protection.
+- Implemented validation covers canonical Norito decoding, schema versions,
+  non-zero digests and provider identifiers, timestamps, SLA and escalation
+  policy, exact route/instruction matching, signed-transaction verification,
+  authority/permission checks, revisions, leases, and idempotency.
 - `sorafs-validate repair` exposes the same checks for fixture and release
   validation across repair evidence, reports, task records, slash proposals,
-  escalation policy/approval payloads, signed auditor requests, worker
-  signatures, task events, and audit events.
+  escalation policy/approval payloads, task events, and audit events.
 - Production PoR/PoTR Merkle replay archives, object-storage evidence retention,
   and auditor notification wiring remain live rollout evidence items.
 
@@ -356,39 +394,52 @@ The rollout evidence scripts have focused Python coverage in:
 ## Persistence & Retention
 - The native ledger is the production persistence boundary for repair task,
   lease, terminal, slash, appeal, and event state.
-- The current daemon projection is persisted as a Norito snapshot
-  (`repair_state.to`) under `sorafs.repair.state_dir` (defaults to
-  `<sorafs.storage.data_dir>/repair` when unset). It is not authoritative and
-  must become fully rebuildable from finalized native queries.
-- Snapshot schema captures `version`, `next_por_history_id`, `next_audit_sequence`, `tasks[]` (report, state, lease, governance votes/decisions, events), `por_history[]`, and `auditor_nonces[]` with the highest accepted nonce per canonical auditor account.
-- Writes use private, no-follow, bounded atomic replacement plus file and parent-directory sync. Startup rejects non-canonical, corrupt, truncated, trailing, unsafe-path, hard-linked, over-limit, unordered, duplicate, or forged snapshots; production recovery must discard/rebuild this projection rather than let it override committed repair state.
-- Snapshot decoding enforces independent per-sequence and per-field ceilings plus cumulative element, allocation, and nesting-depth budgets before semantic validation. Embedded slash-proposal archives have a tighter schema-derived 4 KiB field/sequence ceiling and their canonical bytes, digest, and publication stage must remain an inseparable tuple.
-- Cross-process locking and a persisted checkpoint digest reject stale local writers. Until cutover, sequence/nonce reservations, idempotency caches, dropped-event counts, PoR history, and governance votes share the snapshot; production V1 must instead derive transition ordering and idempotency from committed transactions and finalized event cursors.
-- Retention is enforced by capping `RepairTaskEventV1` history per ticket; governance audit events remain append-only in the DAG for immutable history.
+- The native journal is contiguous and bounded-query consumers persist only
+  their exclusive finalized cursor and rebuildable execution state. A complete
+  production projection must be recoverable from finalized task/event queries
+  and may never advance its cursor before the corresponding local side effect
+  is durable.
+- Any retained `repair_state.to` or `FileRepairStore` is a development/test
+  artifact. Production startup must reject or ignore it as an authority;
+  recovery discards and rebuilds the projection instead of migrating or
+  accepting local-only transitions.
+- Durable transaction forwarders use bounded atomic checkpoints, exact
+  signed-transaction bytes, retry/dead-letter state, and finalized
+  reconciliation. Corrupt, truncated, trailing, unsafe-path, hard-linked,
+  oversized, stale-writer, or post-rename durability failures fail closed.
+- Governance audit publications remain append-only in the DAG, but they do not
+  replace the native task, lease, terminal, slash, or appeal records.
 
 ## CLI & Torii Integration
-- `iroha sorafs repair list --manifest-digest <hex>`: shows tasks, statuses, and deadlines.
-- `iroha sorafs repair claim --ticket-id <id> --manifest-digest <hex> --provider-id <hex>`: signs a worker claim.
-- `iroha sorafs repair complete --ticket-id <id> --manifest-digest <hex> --provider-id <hex>`: signs a completion update.
-- `iroha sorafs repair fail --ticket-id <id> --manifest-digest <hex> --provider-id <hex>`: signs a failure update.
-- `iroha sorafs repair escalate --ticket-id <id> --manifest-digest <hex> --provider-id <hex> --penalty <quantity> --rationale <text>`: submits an unapproved slash proposal for governance review. The CLI never accepts or embeds vote counts or approval timestamps; after cutover, decisions must derive exclusively from authenticated votes committed to the native repair ledger.
+- Command clients construct one route-specific native instruction, sign the
+  containing Iroha transaction with the actual authority account, and submit
+  the exact signed bytes. Torii never fills in authority, revision, lease
+  generation, or idempotency data.
+- Repair inspection uses the finalized `/status`, `/tasks`,
+  `/tasks/{ticket_id}`, and `/events` queries. Clients pin
+  `expected_finalized_height` plus `expected_finalized_block_hash_hex` across a
+  scan and restart on `409 Conflict`.
+- Worker tooling must read the committed task revision and lease generation
+  before signing claim, renew, complete, fail, or escalate transactions. A
+  retry reuses the exact signed transaction and idempotency key.
 - `iroha sorafs gc inspect`: reports retained manifests and retention deadlines (read-only).
 - `iroha sorafs gc dry-run`: reports only expired manifests that GC would evict (read-only).
-- CLI commands return JSON payloads from Torii (Norito-encoded values rendered as JSON).
-- Repair status listings include ordered `RepairTaskEventV1` logs for auditability, capped to the most recent transitions to bound payload size. Every snapshot also returns `events_dropped`, the exact number of omitted oldest events, so truncation is never silent.
-- Torii exposes dedicated local repair event backlog, SSE, and WebSocket
-  endpoints at `/v1/sorafs/audit/repair/events`,
-  `/v1/sorafs/audit/repair/events/stream`, and
-  `/v1/sorafs/audit/repair/events/ws`. The stream wrapper adds a local
-  monotonic `sequence` around the canonical `RepairTaskEventV1` payload without
-  changing the canonical repair task event, governance audit event, or Norito
-  repair state schema.
-- The generated Torii OpenAPI document advertises all three repair event routes,
-  including `since` and `limit` query parameters for backlog replay.
+- Torii exposes only the finalized, cursor-bounded committed-event polling
+  route. The deleted local SSE and WebSocket routes are not V1 compatibility
+  aliases.
+- The generated Torii OpenAPI document advertises the signed-transaction
+  request contract, `202 Accepted` ingress response, finalized anchor pairs,
+  immutable task/event cursors, and the absence of obsolete local routes.
 
 ## Governance & Escalation
-- Collateral adjustments feed into the Reserve+Rent engine: when a task escalates, the provider's collateral ratio is recomputed and can trigger Reserve lifecycle downgrades (`Warning`, `Grace`, etc.) described in `sorafs_reserve_rent_plan.md`.
-- Slash proposals automatically populate `governance/sorafs/slashing/proposals/` in the DAG with Norito proofs for council review.
+- Finalized repair escalation and appeal events are the only valid inputs to
+  Reserve+Rent, reputation, transparency, and Governance DAG handoff workers.
+  Each worker must use a durable cursor and idempotency key, submit any custody
+  mutation as its own governed native transaction, and reconcile committed
+  state.
+- Automatic collateral mutation and automatic DAG publication are not implied
+  by the repair instruction. Production promotion remains blocked until these
+  finalized-event consumers and their retry/recovery evidence are deployed.
 - Weekly governance meeting reviews:
   - Total repairs, escalations, penalties.
   - Auditor performance (response time, quality).
@@ -413,8 +464,10 @@ the policy maximum.
 
 ## Rollout Evidence Gate
 
-Use the rollout gate only after the native finalized-chain cutover and after
-the deployed auditor roster, SF-9 coordinator, PoR/PoTR failure capture,
+Use the rollout gate only after the residual public
+`RepairManager`/filesystem checkpoint and GC/reconciliation dependencies have
+been removed, exact-live-lease execution and restart reconciliation have been
+proved, and the deployed auditor roster, SF-9 coordinator, PoR/PoTR failure capture,
 signed auditor API, repair worker lifecycle, committed repair event streams,
 governance handoff, observability, and governance packet have produced
 reviewed, payload-free JSON evidence:
@@ -455,6 +508,11 @@ carry a matching `policy_digest_hex`. Signed auditor API, worker lifecycle, and
 event stream artifacts must also keep `route_count` equal to the unique
 canonical `routes[].name` inventory and reject duplicate or unknown route
 entries. Every route response must carry a `body_blake3_hex` digest.
+The closed route/status map requires `202 Accepted` for report, slash, appeal,
+claim, heartbeat, complete, and fail commands, and `200 OK` for status, task
+list, single-task, and committed-event queries. The `auditor_api` kind name and
+`raw_auditor_request` redaction key are stable evidence-schema identifiers;
+neither denotes the deleted `SignedAuditorRequestV1` wire envelope.
 Auditor-roster artifacts also bind `auditor_count` to the unique canonical
 `auditors[].name` inventory, require reviewed `repair-auditor-*` labels without
 non-production markers, and reject duplicate auditor entries before promotion
@@ -464,15 +522,23 @@ unique canonical `failure_sources` inventory, keep `failure_event_count` equal
 to the unique canonical `failure_events[].name` inventory, require reviewed
 `repair-failure-event-*` labels without non-production markers, require
 reviewed failure events to cover both PoR and PoTR sources, and reject
-duplicate or unknown source entries plus duplicate event entries. Worker lifecycle artifacts
-require `status_count`, bind it to the unique canonical `statuses_observed`
-inventory, and reject missing, inflated, duplicate, or unknown lifecycle-status
-evidence. Governance handoff artifacts require `handoff_target_count`, bind it
+duplicate or unknown source entries plus duplicate event entries. Worker
+lifecycle artifacts require `status_count`, bind it to the unique canonical
+`statuses_observed` inventory, reject missing, inflated, duplicate, or unknown
+lifecycle-status evidence, and require finalized task projection, exact live
+lease execution, durable transaction forwarding, restart reconciliation, and a
+single terminal outcome. Governance handoff artifacts require
+`handoff_target_count`, bind it
 to the unique canonical `handoff_targets` inventory, and reject missing,
 inflated, duplicate, or unknown handoff-target evidence. Observability artifacts
 also bind `metric_count` to the unique canonical `metrics` inventory, require
 the reviewed repair metrics, and reject duplicate or unknown metric labels
 before promotion can report ready.
+The canary builder only encodes these reviewed operator assertions in the
+closed payload-free schema; generating a canary does not prove them. Promotion
+requires genuine signed artifacts from the reviewed deployment, and reviewers
+must validate the underlying finalized cursors, transaction receipts, restart
+records, and cross-peer terminal outcome outside the payload-free bundle.
 The summary exports the sorted reviewed `metrics` inventory plus
 `metric_count_values`, and the aggregate production-readiness gate requires
 those fields to match the observability artifact fingerprint before final
@@ -496,11 +562,19 @@ evidence-contract, and command-step shapes before any live repair contact.
 
 ## Rollout Status
 Implemented engineering coverage:
-- `sorafs_node::repair` owns the scheduler, persistent repair store, PoR history linkage, worker leases, watchdog escalation, and governance audit/slash publication hooks.
-- Torii exposes the auditor repair/slash submission paths with signed `SignedAuditorRequestV1` envelopes, nonce replay protection, and Norito/JSON request validation.
-- Local golden and integration coverage now exercises the repair schemas, scheduler state transitions, auditor request validation, PoR failure binding, REST endpoints, and repair worker flows.
+- Native records/ISIs own task admission, compare-and-set lease actions,
+  terminal outcomes, slash proposals, appeals, action receipts, status, and
+  committed-event sequencing.
+- Torii command routes accept exactly one matching caller-signed native
+  transaction and forward through strict durable ingress; query routes return
+  finalized projections with exact anchors and immutable cursors.
+- Durable repair forwarders and finalized-lease-gated storage execution cover
+  retry, response loss, restart, stale/wrong lease, and reconciliation
+  failures. Local golden and integration coverage exercises native authority,
+  route matching, query cursors, and cross-peer duplicate submission.
 - `iroha sorafs repair` and `iroha sorafs gc` provide operator CLI coverage;
-  `sorafs-validate repair` provides release/fixture validation.
+  `sorafs-validate repair` validates the remaining canonical manifest repair
+  payloads, not deleted custom request envelopes.
 - `scripts/build_sorafs_repair_canary.py` provides checked-in payload-free
   canary generation for the local SF-8b rollout gate.
 - The SF-8b rollout evidence gate, collection planner, operator argfile
@@ -509,10 +583,10 @@ Implemented engineering coverage:
   digest binding plus governance handoff digest and handoff policy digest
   binding.
 
-Remaining implementation work is the finalized-chain cutover: replace
-`FileRepairStore` mutations and local event streams with native repair
-transactions and committed task/event projections, then prove cross-peer
-exactly-once execution and restart reconciliation. Remaining rollout work after
-that cutover is genuine operator evidence for a production PoR/PoTR failure,
-repair, escalation, and governance handoff, followed by the SF-8b rollout
-evidence gate.
+Remaining implementation work is to remove the residual public
+`RepairManager`/filesystem checkpoint and GC/reconciliation dependencies so no
+production code can consult competing local authority. Remaining rollout work
+is genuine four-validator evidence for a production PoR/PoTR failure, one
+cross-peer lease and terminal outcome, escalation/appeal, restart
+reconciliation, and governance handoff, followed by the SF-8b rollout evidence
+gate.

@@ -15,19 +15,18 @@ use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSe
 use thiserror::Error;
 
 use crate::{
-    AdmissionRecord, AdvertValidationError, AuditorSignatureVerificationError,
-    BillingLineDirectionV1, BillingLineItemKindV1, BillingLineItemV1, BillingStatementV1,
-    ByteRangeV1, GovernanceDagBlockV1, GovernanceDagBlockValidationError,
-    GovernanceDagChainValidationError, GovernanceDagHeadChainValidationError, GovernanceDagHeadV1,
-    GovernanceDagHeadValidationError, GovernanceLogNodeV1, GovernanceLogPayloadV1,
-    GovernanceLogSignatureVerificationError, GovernanceLogValidationError,
-    GovernanceSignatureAlgorithm, HedgingFeedStatusV1, HedgingPriceFeedV1,
-    HedgingReferencePriceDecisionV1, HedgingValidationError, ORDERBOOK_CANCEL_VERSION_V1,
-    ORDERBOOK_ORDER_VERSION_V1, OrderCancelReasonV1, OrderCancelV1, OrderRequestV1, OrderSideV1,
-    OrderTierV1, OrderbookRuntimeSnapshotV1, OrderbookSignatureV1, OrderbookValidationError,
-    PDP_CHALLENGE_MAX_CANONICAL_BYTES_V1, PDP_COMMITMENT_MAX_CANONICAL_BYTES_V1,
-    PDP_MAX_HOT_LEAVES_PER_SEGMENT_SAMPLE_V1, PDP_MAX_MERKLE_PATH_DEPTH_V1,
-    PDP_MAX_SEGMENT_SAMPLES_V1, PDP_MAX_TOTAL_HOT_LEAF_SAMPLES_V1,
+    AdmissionRecord, AdvertValidationError, BillingLineDirectionV1, BillingLineItemKindV1,
+    BillingLineItemV1, BillingStatementV1, ByteRangeV1, GovernanceDagBlockV1,
+    GovernanceDagBlockValidationError, GovernanceDagChainValidationError,
+    GovernanceDagHeadChainValidationError, GovernanceDagHeadV1, GovernanceDagHeadValidationError,
+    GovernanceLogNodeV1, GovernanceLogPayloadV1, GovernanceLogSignatureVerificationError,
+    GovernanceLogValidationError, GovernanceSignatureAlgorithm, HedgingFeedStatusV1,
+    HedgingPriceFeedV1, HedgingReferencePriceDecisionV1, HedgingValidationError,
+    ORDERBOOK_CANCEL_VERSION_V1, ORDERBOOK_ORDER_VERSION_V1, OrderCancelReasonV1, OrderCancelV1,
+    OrderRequestV1, OrderSideV1, OrderTierV1, OrderbookRuntimeSnapshotV1, OrderbookSignatureV1,
+    OrderbookValidationError, PDP_CHALLENGE_MAX_CANONICAL_BYTES_V1,
+    PDP_COMMITMENT_MAX_CANONICAL_BYTES_V1, PDP_MAX_HOT_LEAVES_PER_SEGMENT_SAMPLE_V1,
+    PDP_MAX_MERKLE_PATH_DEPTH_V1, PDP_MAX_SEGMENT_SAMPLES_V1, PDP_MAX_TOTAL_HOT_LEAF_SAMPLES_V1,
     PDP_PROOF_MAX_CANONICAL_BYTES_V1, PdpChallengeV1, PdpChallengeValidationError, PdpCommitmentV1,
     PdpCommitmentValidationError, PdpProofV1, PdpProofValidationError, PdpVerificationError,
     PopCommitmentRootV1, PopCredentialV1, PopCredentialValidationError, PopEligibilityClassV1,
@@ -40,20 +39,20 @@ use crate::{
     ProviderAdmissionValidationError, ProviderAdvertV1, RepairAuditEventV1,
     RepairEscalationApprovalV1, RepairEscalationPolicyV1, RepairEvidenceV1, RepairReportV1,
     RepairSlashProposalV1, RepairTaskEventV1, RepairTaskRecordV1, RepairTaskStateV1,
-    RepairValidationError, RepairWorkerActionV1, RepairWorkerSignaturePayloadV1,
-    ReplicationOrderSignatureVerificationError, ReplicationOrderV1,
+    RepairValidationError, ReplicationOrderSignatureVerificationError, ReplicationOrderV1,
     ReplicationOrderValidationError, SETTLEMENT_RECEIPT_VERSION_V1, SettlementChannelStatusV1,
-    SettlementChannelV1, SettlementReceiptV1, SignatureAlgorithm, SignedAuditorRequestPayloadV1,
-    SignedAuditorRequestV1, SignedReplicationOrderV1, SignedReplicationOrderValidationError,
-    TradeEventV1, XorQuantity, decode_billing_line_item_v1, decode_billing_statement_v1,
-    decode_hedging_price_feed_v1, decode_hedging_reference_price_decision_v1,
-    decode_order_cancel_v1, decode_order_request_v1, decode_orderbook_runtime_snapshot_v1,
-    decode_settlement_channel_v1, decode_settlement_receipt_v1, decode_trade_event_v1,
-    sign_order_cancel_ed25519_v1, sign_order_request_ed25519_v1,
-    sign_settlement_receipt_ed25519_v1, validate_governance_dag_head_against_chain_v1,
-    verify_envelope_untrusted_signers, verify_pdp_bundle_v1, verify_pdp_witnesses_v1,
-    verify_pop_commitment_root_signature_v1, verify_pop_credential_signature_v1,
-    verify_pop_revocation_list_signature_v1,
+    SettlementChannelV1, SettlementReceiptV1, SignatureAlgorithm, SignedReplicationOrderV1,
+    SignedReplicationOrderValidationError, TradeEventV1, XorQuantity, decode_billing_line_item_v1,
+    decode_billing_statement_v1, decode_hedging_price_feed_v1,
+    decode_hedging_reference_price_decision_v1, decode_order_cancel_v1, decode_order_request_v1,
+    decode_orderbook_runtime_snapshot_v1, decode_settlement_channel_v1,
+    decode_settlement_receipt_v1, decode_trade_event_v1, sign_order_cancel_ed25519_v1,
+    sign_order_request_ed25519_v1, sign_settlement_receipt_ed25519_v1,
+    validate_governance_dag_head_against_chain_v1, verify_envelope_untrusted_signers,
+    verify_order_cancel_signature_v1, verify_order_request_signature_v1, verify_pdp_bundle_v1,
+    verify_pdp_witnesses_v1, verify_pop_commitment_root_signature_v1,
+    verify_pop_credential_signature_v1, verify_pop_revocation_list_signature_v1,
+    verify_settlement_receipt_signature_v1,
 };
 
 /// Current schema version for [`ValidationOutcomeV1`].
@@ -2680,10 +2679,6 @@ pub enum RepairValidationPayloadKindV1 {
     EscalationPolicy,
     /// [`RepairEscalationApprovalV1`] payload.
     EscalationApproval,
-    /// [`SignedAuditorRequestV1`] payload with signature verification.
-    SignedAuditorRequest,
-    /// [`RepairWorkerSignaturePayloadV1`] payload.
-    WorkerSignaturePayload,
     /// [`RepairTaskEventV1`] payload.
     TaskEvent,
     /// [`RepairAuditEventV1`] payload.
@@ -2699,8 +2694,6 @@ impl RepairValidationPayloadKindV1 {
             Self::SlashProposal => "repair_slash_proposal",
             Self::EscalationPolicy => "repair_escalation_policy",
             Self::EscalationApproval => "repair_escalation_approval",
-            Self::SignedAuditorRequest => "signed_auditor_request",
-            Self::WorkerSignaturePayload => "repair_worker_signature_payload",
             Self::TaskEvent => "repair_task_event",
             Self::AuditEvent => "repair_audit_event",
         }
@@ -2714,8 +2707,6 @@ impl RepairValidationPayloadKindV1 {
             Self::SlashProposal => "RepairSlashProposalV1",
             Self::EscalationPolicy => "RepairEscalationPolicyV1",
             Self::EscalationApproval => "RepairEscalationApprovalV1",
-            Self::SignedAuditorRequest => "SignedAuditorRequestV1",
-            Self::WorkerSignaturePayload => "RepairWorkerSignaturePayloadV1",
             Self::TaskEvent => "RepairTaskEventV1",
             Self::AuditEvent => "RepairAuditEventV1",
         }
@@ -2729,8 +2720,6 @@ impl RepairValidationPayloadKindV1 {
             Self::SlashProposal => "repair slash proposal accepted",
             Self::EscalationPolicy => "repair escalation policy accepted",
             Self::EscalationApproval => "repair escalation approval accepted",
-            Self::SignedAuditorRequest => "signed auditor request accepted",
-            Self::WorkerSignaturePayload => "repair worker signature payload accepted",
             Self::TaskEvent => "repair task event accepted",
             Self::AuditEvent => "repair audit event accepted",
         }
@@ -2938,7 +2927,7 @@ pub fn validate_orderbook_payload_bytes(
         OrderbookValidationPayloadKindV1::OrderRequest => match decode_order_request_v1(bytes) {
             Ok(payload) => validate_orderbook_payload_value(
                 kind,
-                payload.validate(),
+                verify_order_request_signature_v1(&payload),
                 order_request_context(&payload),
                 inputs,
                 generated_at,
@@ -2948,7 +2937,7 @@ pub fn validate_orderbook_payload_bytes(
         OrderbookValidationPayloadKindV1::OrderCancel => match decode_order_cancel_v1(bytes) {
             Ok(payload) => validate_orderbook_payload_value(
                 kind,
-                payload.validate(),
+                verify_order_cancel_signature_v1(&payload),
                 order_cancel_context(&payload),
                 inputs,
                 generated_at,
@@ -2981,7 +2970,7 @@ pub fn validate_orderbook_payload_bytes(
             match decode_settlement_receipt_v1(bytes) {
                 Ok(payload) => validate_orderbook_payload_value(
                     kind,
-                    payload.validate(),
+                    verify_settlement_receipt_signature_v1(&payload),
                     settlement_receipt_context(&payload),
                     inputs,
                     generated_at,
@@ -2993,7 +2982,7 @@ pub fn validate_orderbook_payload_bytes(
             match decode_orderbook_runtime_snapshot_v1(bytes) {
                 Ok(payload) => validate_orderbook_payload_value(
                     kind,
-                    payload.validate(),
+                    validate_orderbook_runtime_snapshot_reference(&payload),
                     orderbook_runtime_snapshot_context(&payload),
                     inputs,
                     generated_at,
@@ -3002,6 +2991,19 @@ pub fn validate_orderbook_payload_bytes(
             }
         }
     }
+}
+
+fn validate_orderbook_runtime_snapshot_reference(
+    snapshot: &OrderbookRuntimeSnapshotV1,
+) -> Result<(), OrderbookValidationError> {
+    snapshot.validate()?;
+    for entry in &snapshot.open_orders {
+        verify_order_request_signature_v1(&entry.order)?;
+    }
+    for receipt in &snapshot.settlement_receipts {
+        verify_settlement_receipt_signature_v1(receipt)?;
+    }
+    Ok(())
 }
 
 /// Validates a Norito-encoded SoraFS hedging/billing payload and emits a reference outcome.
@@ -3830,30 +3832,6 @@ pub fn validate_repair_payload_bytes(
             let approval = decode_repair_payload!(RepairEscalationApprovalV1);
             let context = repair_escalation_approval_context(&approval);
             if let Err(error) = approval.validate() {
-                return repair_validation_error_outcome(error, context, inputs, generated_at);
-            }
-            context
-        }
-        RepairValidationPayloadKindV1::SignedAuditorRequest => {
-            let request = decode_repair_payload!(SignedAuditorRequestV1);
-            let mut context = signed_auditor_request_context(&request);
-            match request.verify_signature() {
-                Ok(public_key) => {
-                    context.push(ValidationContextFieldV1::new(
-                        "auditor_public_key",
-                        public_key.to_string(),
-                    ));
-                    context
-                }
-                Err(error) => {
-                    return auditor_signature_error_outcome(error, context, inputs, generated_at);
-                }
-            }
-        }
-        RepairValidationPayloadKindV1::WorkerSignaturePayload => {
-            let payload = decode_repair_payload!(RepairWorkerSignaturePayloadV1);
-            let context = repair_worker_signature_payload_context(&payload);
-            if let Err(error) = payload.validate() {
                 return repair_validation_error_outcome(error, context, inputs, generated_at);
             }
             context
@@ -5993,67 +5971,6 @@ fn repair_escalation_approval_context(
     ]
 }
 
-fn signed_auditor_request_context(
-    request: &SignedAuditorRequestV1,
-) -> Vec<ValidationContextFieldV1> {
-    let mut context = vec![
-        ValidationContextFieldV1::new("auditor_account", request.auditor_account.clone()),
-        ValidationContextFieldV1::new("nonce", request.nonce.to_string()),
-        ValidationContextFieldV1::new(
-            "payload_kind",
-            signed_auditor_payload_label(&request.payload),
-        ),
-        ValidationContextFieldV1::new(
-            "signature_algorithm",
-            format!("{:?}", request.signature.algorithm),
-        ),
-    ];
-    match &request.payload {
-        SignedAuditorRequestPayloadV1::RepairReport(report) => {
-            context.push(ValidationContextFieldV1::new(
-                "ticket_id",
-                report.ticket_id.to_string(),
-            ));
-            context.push(ValidationContextFieldV1::new(
-                "manifest_digest_hex",
-                hex::encode(report.evidence.manifest_digest),
-            ));
-            context.push(ValidationContextFieldV1::new(
-                "provider_id_hex",
-                hex::encode(report.evidence.provider_id),
-            ));
-        }
-        SignedAuditorRequestPayloadV1::SlashProposal(proposal) => {
-            context.push(ValidationContextFieldV1::new(
-                "ticket_id",
-                proposal.ticket_id.to_string(),
-            ));
-            context.push(ValidationContextFieldV1::new(
-                "manifest_digest_hex",
-                hex::encode(proposal.manifest_digest),
-            ));
-            context.push(ValidationContextFieldV1::new(
-                "provider_id_hex",
-                hex::encode(proposal.provider_id),
-            ));
-        }
-    }
-    context
-}
-
-fn repair_worker_signature_payload_context(
-    payload: &RepairWorkerSignaturePayloadV1,
-) -> Vec<ValidationContextFieldV1> {
-    vec![
-        ValidationContextFieldV1::new("ticket_id", payload.ticket_id.to_string()),
-        ValidationContextFieldV1::new("manifest_digest_hex", hex::encode(payload.manifest_digest)),
-        ValidationContextFieldV1::new("provider_id_hex", hex::encode(payload.provider_id)),
-        ValidationContextFieldV1::new("worker_id", payload.worker_id.clone()),
-        ValidationContextFieldV1::new("idempotency_key", payload.idempotency_key.clone()),
-        ValidationContextFieldV1::new("action", repair_worker_action_label(&payload.action)),
-    ]
-}
-
 fn repair_task_event_context(event: &RepairTaskEventV1) -> Vec<ValidationContextFieldV1> {
     let mut context = vec![
         ValidationContextFieldV1::new("ticket_id", event.ticket_id.to_string()),
@@ -6086,24 +6003,6 @@ fn repair_task_state_label(state: &RepairTaskStateV1) -> String {
         RepairTaskStateV1::Completed(_) => "completed",
         RepairTaskStateV1::Failed(_) => "failed",
         RepairTaskStateV1::Escalated(_) => "escalated",
-    }
-    .to_owned()
-}
-
-fn signed_auditor_payload_label(payload: &SignedAuditorRequestPayloadV1) -> String {
-    match payload {
-        SignedAuditorRequestPayloadV1::RepairReport(_) => "repair_report",
-        SignedAuditorRequestPayloadV1::SlashProposal(_) => "slash_proposal",
-    }
-    .to_owned()
-}
-
-fn repair_worker_action_label(action: &RepairWorkerActionV1) -> String {
-    match action {
-        RepairWorkerActionV1::Claim { .. } => "claim",
-        RepairWorkerActionV1::Heartbeat { .. } => "heartbeat",
-        RepairWorkerActionV1::Complete { .. } => "complete",
-        RepairWorkerActionV1::Fail { .. } => "fail",
     }
     .to_owned()
 }
@@ -6159,33 +6058,6 @@ fn repair_validation_error_outcome(
     )
 }
 
-fn auditor_signature_error_outcome(
-    error: AuditorSignatureVerificationError,
-    mut context: Vec<ValidationContextFieldV1>,
-    inputs: Vec<ValidationInputV1>,
-    generated_at: u64,
-) -> ValidationOutcomeV1 {
-    let code = auditor_signature_verification_code(&error);
-    let category = auditor_signature_verification_category(&error);
-    context.push(ValidationContextFieldV1::new(
-        "signature_error",
-        error.to_string(),
-    ));
-    ValidationOutcomeV1::error(
-        code,
-        category,
-        format!("signed auditor request validation failed: {error}"),
-        repair_validation_action(code),
-        vec![
-            "sorafs.reference.repair".to_owned(),
-            format!("sorafs.reference.code.{code}"),
-        ],
-        context,
-        inputs,
-        generated_at,
-    )
-}
-
 fn repair_validation_action(code: &str) -> &'static str {
     match code {
         "SFS-NORITO-001" => "Re-encode the repair payload with the canonical SoraFS Norito schema.",
@@ -6197,16 +6069,13 @@ fn repair_validation_action(code: &str) -> &'static str {
             "Attach complete repair evidence with non-zero PoR samples, latency, or replica shortfall details."
         }
         "SFS-REP-002" => {
-            "Regenerate the repair task, report, event, or worker payload from canonical scheduler state."
+            "Regenerate the repair evidence, report, task record, slash proposal, escalation policy, escalation approval, task event, or audit event from canonical scheduler and governed repair state."
         }
         "SFS-POL-005" => {
             "Correct the repair timestamps or SLA/deadline ordering before submitting the payload."
         }
         "SFS-GOV-002" => {
             "Regenerate the repair escalation or slash governance payload from the governed policy state."
-        }
-        "SFS-SIG-004" => {
-            "Resign the auditor request with the governed auditor Ed25519 key and canonical payload bytes."
         }
         "SFS-INT-001" => {
             "Retry validation after checking the local validator build and Norito encoder."
@@ -6365,7 +6234,11 @@ fn orderbook_validation_code(error: &OrderbookValidationError) -> &'static str {
         | OrderbookValidationError::SettlementChannelNotOpen { .. } => "SFS-POL-007",
         OrderbookValidationError::InvalidSignature
         | OrderbookValidationError::InvalidPublicKeyLength { .. }
-        | OrderbookValidationError::InvalidSignatureLength { .. } => "SFS-SIG-007",
+        | OrderbookValidationError::InvalidSignatureLength { .. }
+        | OrderbookValidationError::UnsupportedSignatureAlgorithm { .. }
+        | OrderbookValidationError::InvalidPublicKey { .. }
+        | OrderbookValidationError::SignaturePayloadEncoding { .. }
+        | OrderbookValidationError::SignatureVerification { .. } => "SFS-SIG-007",
         OrderbookValidationError::SettlementImbalance { .. }
         | OrderbookValidationError::ReceiptExceedsChannelBytes { .. }
         | OrderbookValidationError::ReceiptExceedsRemainingBytes { .. }
@@ -6494,22 +6367,7 @@ fn repair_validation_code(error: &RepairValidationError) -> &'static str {
         | RepairValidationError::InvalidQuorumBps { .. }
         | RepairValidationError::InvalidMinimumVoters
         | RepairValidationError::InvalidVoteCount => "SFS-GOV-002",
-        RepairValidationError::InvalidPublicKey | RepairValidationError::InvalidSignature => {
-            "SFS-SIG-004"
-        }
         _ => "SFS-REP-002",
-    }
-}
-
-fn auditor_signature_verification_code(error: &AuditorSignatureVerificationError) -> &'static str {
-    match error {
-        AuditorSignatureVerificationError::Validation(error) => repair_validation_code(error),
-        AuditorSignatureVerificationError::PayloadEncoding { .. } => "SFS-INT-001",
-        AuditorSignatureVerificationError::UnsupportedAlgorithm(_)
-        | AuditorSignatureVerificationError::InvalidPublicKeyLength { .. }
-        | AuditorSignatureVerificationError::InvalidSignatureLength { .. }
-        | AuditorSignatureVerificationError::InvalidPublicKey { .. }
-        | AuditorSignatureVerificationError::Verification { .. } => "SFS-SIG-004",
     }
 }
 
@@ -6764,20 +6622,7 @@ fn repair_validation_category(error: &RepairValidationError) -> &'static str {
         | RepairValidationError::InvalidQuorumBps { .. }
         | RepairValidationError::InvalidMinimumVoters
         | RepairValidationError::InvalidVoteCount => CATEGORY_POLICY,
-        RepairValidationError::InvalidPublicKey | RepairValidationError::InvalidSignature => {
-            CATEGORY_SIGNATURE
-        }
         _ => CATEGORY_VALIDATION,
-    }
-}
-
-fn auditor_signature_verification_category(
-    error: &AuditorSignatureVerificationError,
-) -> &'static str {
-    match error {
-        AuditorSignatureVerificationError::Validation(error) => repair_validation_category(error),
-        AuditorSignatureVerificationError::PayloadEncoding { .. } => CATEGORY_INTERNAL,
-        _ => CATEGORY_SIGNATURE,
     }
 }
 
@@ -6821,7 +6666,11 @@ fn orderbook_validation_category(error: &OrderbookValidationError) -> &'static s
         | OrderbookValidationError::SettlementChannelNotOpen { .. } => CATEGORY_POLICY,
         OrderbookValidationError::InvalidSignature
         | OrderbookValidationError::InvalidPublicKeyLength { .. }
-        | OrderbookValidationError::InvalidSignatureLength { .. } => CATEGORY_SIGNATURE,
+        | OrderbookValidationError::InvalidSignatureLength { .. }
+        | OrderbookValidationError::UnsupportedSignatureAlgorithm { .. }
+        | OrderbookValidationError::InvalidPublicKey { .. }
+        | OrderbookValidationError::SignaturePayloadEncoding { .. }
+        | OrderbookValidationError::SignatureVerification { .. } => CATEGORY_SIGNATURE,
         _ => CATEGORY_VALIDATION,
     }
 }
@@ -6961,16 +6810,15 @@ mod tests {
     use super::*;
     use crate::repair::QueuedRepairStateV1;
     use crate::{
-        AdvertEndpoint, AdvertSignature, AuditorSignatureV1, AvailabilityTier, CapabilityTlv,
-        CapabilityType, CapacityMetadataEntry, EndpointKind, EndpointMetadata, EndpointMetadataKey,
+        AdvertEndpoint, AdvertSignature, AvailabilityTier, CapabilityTlv, CapabilityType,
+        CapacityMetadataEntry, EndpointKind, EndpointMetadata, EndpointMetadataKey,
         POTR_RECEIPT_VERSION_V1, PathDiversityPolicy, PotrSignatureAlgorithm, PotrSignatureV1,
         PotrStatus, ProviderAdvertBodyV1, ProviderCapabilityRangeV1, QosHints,
-        REFRESH_RECOMMENDATION_SECS, REPAIR_EVIDENCE_VERSION_V1, REPAIR_REPORT_VERSION_V1,
-        REPAIR_TASK_VERSION_V1, REPLICATION_ORDER_VERSION_V1, RendezvousTopic, RepairCauseV1,
-        RepairEvidenceV1, RepairPdpFailureCauseV1, RepairPdpFailureKindV1, RepairPorFailureCauseV1,
-        RepairReportV1, RepairTaskRecordV1, RepairTaskStateV1, RepairTicketId,
-        ReplicationAssignmentV1, ReplicationOrderSlaV1, SIGNED_AUDITOR_REQUEST_VERSION_V1,
-        SignatureAlgorithm, SignedAuditorRequestPayloadV1, SignedAuditorRequestV1, StakePointer,
+        REFRESH_RECOMMENDATION_SECS, REPAIR_EVIDENCE_VERSION_V1, REPAIR_TASK_VERSION_V1,
+        REPLICATION_ORDER_VERSION_V1, RendezvousTopic, RepairCauseV1, RepairEvidenceV1,
+        RepairPdpFailureCauseV1, RepairPdpFailureKindV1, RepairPorFailureCauseV1,
+        RepairTaskRecordV1, RepairTaskStateV1, RepairTicketId, ReplicationAssignmentV1,
+        ReplicationOrderSlaV1, SignatureAlgorithm, StakePointer,
     };
 
     fn workspace_fixture(path: &str) -> PathBuf {
@@ -7178,68 +7026,83 @@ mod tests {
         );
     }
 
-    fn orderbook_signature() -> crate::OrderbookSignatureV1 {
+    fn empty_orderbook_signature(signing_key: &SigningKey) -> crate::OrderbookSignatureV1 {
         crate::OrderbookSignatureV1 {
             algorithm: SignatureAlgorithm::Ed25519,
-            public_key: vec![0xD7; PUBLIC_KEY_LENGTH],
-            signature: vec![0x57; SIGNATURE_LENGTH],
+            public_key: signing_key.verifying_key().to_bytes().to_vec(),
+            signature: Vec::new(),
         }
     }
 
     fn orderbook_order_request() -> OrderRequestV1 {
+        let signing_key = SigningKey::from_bytes(&[0xB7; 32]);
         let owner_account = b"buyer@sora".to_vec();
         let nonce = 7;
-        OrderRequestV1 {
-            version: crate::ORDERBOOK_ORDER_VERSION_V1,
-            order_id: crate::derive_orderbook_order_id_v1(&owner_account, nonce),
-            side: OrderSideV1::Bid,
-            tier: OrderTierV1::Hot,
-            price_per_gib: crate::XorQuantity::try_from_micro(1_250_000)
-                .expect("legacy micro-XOR value is representable"),
-            quantity_gib: 64,
-            remaining_gib: 64,
-            owner_account,
-            expiry_unix: 1_800_000_000,
-            nonce,
-            maker_fee_bps: 10,
-            taker_fee_bps: 15,
-            signature: orderbook_signature(),
-        }
+        sign_order_request_ed25519_v1(
+            OrderRequestV1 {
+                version: crate::ORDERBOOK_ORDER_VERSION_V1,
+                order_id: crate::derive_orderbook_order_id_v1(&owner_account, nonce),
+                side: OrderSideV1::Bid,
+                tier: OrderTierV1::Hot,
+                price_per_gib: crate::XorQuantity::try_from_micro(1_250_000)
+                    .expect("legacy micro-XOR value is representable"),
+                quantity_gib: 64,
+                remaining_gib: 64,
+                owner_account,
+                expiry_unix: 1_800_000_000,
+                nonce,
+                maker_fee_bps: 10,
+                taker_fee_bps: 15,
+                signature: empty_orderbook_signature(&signing_key),
+            },
+            &signing_key,
+        )
+        .expect("sign orderbook order request fixture")
     }
 
     fn orderbook_order_cancel() -> OrderCancelV1 {
+        let signing_key = SigningKey::from_bytes(&[0xB7; 32]);
         let order = orderbook_order_request();
-        OrderCancelV1 {
-            version: crate::ORDERBOOK_CANCEL_VERSION_V1,
-            order_id: order.order_id,
-            owner_account: order.owner_account,
-            reason: OrderCancelReasonV1::OwnerRequested,
-            nonce: 9,
-            signature: orderbook_signature(),
-        }
+        sign_order_cancel_ed25519_v1(
+            OrderCancelV1 {
+                version: crate::ORDERBOOK_CANCEL_VERSION_V1,
+                order_id: order.order_id,
+                owner_account: order.owner_account,
+                reason: OrderCancelReasonV1::OwnerRequested,
+                nonce: 9,
+                signature: empty_orderbook_signature(&signing_key),
+            },
+            &signing_key,
+        )
+        .expect("sign orderbook cancel fixture")
     }
 
     fn orderbook_settlement_receipt() -> SettlementReceiptV1 {
-        SettlementReceiptV1 {
-            version: crate::SETTLEMENT_RECEIPT_VERSION_V1,
-            receipt_id: [0x81; 32],
-            channel_id: [0x82; 32],
-            trade_id: [0x83; 32],
-            range: crate::ByteRangeV1 {
-                start: 128,
-                end: 384,
+        let signing_key = SigningKey::from_bytes(&[0xB7; 32]);
+        sign_settlement_receipt_ed25519_v1(
+            SettlementReceiptV1 {
+                version: crate::SETTLEMENT_RECEIPT_VERSION_V1,
+                receipt_id: [0x81; 32],
+                channel_id: [0x82; 32],
+                trade_id: [0x83; 32],
+                range: crate::ByteRangeV1 {
+                    start: 128,
+                    end: 384,
+                },
+                chunk_hash: [0x84; 32],
+                bytes_delivered: 256,
+                xor_debited: crate::XorQuantity::try_from_micro(100)
+                    .expect("legacy micro-XOR value is representable"),
+                provider_credit: crate::XorQuantity::try_from_micro(90)
+                    .expect("legacy micro-XOR value is representable"),
+                fee_amount: crate::XorQuantity::try_from_micro(10)
+                    .expect("legacy micro-XOR value is representable"),
+                issued_at_unix: 1_800_000_010,
+                settlement_signature: empty_orderbook_signature(&signing_key),
             },
-            chunk_hash: [0x84; 32],
-            bytes_delivered: 256,
-            xor_debited: crate::XorQuantity::try_from_micro(100)
-                .expect("legacy micro-XOR value is representable"),
-            provider_credit: crate::XorQuantity::try_from_micro(90)
-                .expect("legacy micro-XOR value is representable"),
-            fee_amount: crate::XorQuantity::try_from_micro(10)
-                .expect("legacy micro-XOR value is representable"),
-            issued_at_unix: 1_800_000_010,
-            settlement_signature: orderbook_signature(),
-        }
+            &signing_key,
+        )
+        .expect("sign orderbook settlement receipt fixture")
     }
 
     fn orderbook_trade_event() -> TradeEventV1 {
@@ -7272,17 +7135,22 @@ mod tests {
     }
 
     fn orderbook_runtime_snapshot() -> OrderbookRuntimeSnapshotV1 {
+        let signing_key = SigningKey::from_bytes(&[0xB7; 32]);
         let mut open = orderbook_order_request();
         open.side = OrderSideV1::Ask;
         open.owner_account = b"provider@sora".to_vec();
         open.expiry_unix = 1_800_000_500;
         open.nonce = 8;
         open.order_id = crate::derive_orderbook_order_id_v1(&open.owner_account, open.nonce);
+        let open = sign_order_request_ed25519_v1(open, &signing_key)
+            .expect("re-sign runtime snapshot open order");
         let trade = orderbook_trade_event();
         let channel = orderbook_settlement_channel(&trade);
         let mut receipt = orderbook_settlement_receipt();
         receipt.channel_id = channel.channel_id;
         receipt.trade_id = channel.trade_id;
+        let receipt = sign_settlement_receipt_ed25519_v1(receipt, &signing_key)
+            .expect("re-sign runtime snapshot settlement receipt");
         let channel = crate::apply_settlement_receipt_v1(&channel, &receipt)
             .expect("orderbook fixture receipt should apply");
         OrderbookRuntimeSnapshotV1 {
@@ -7579,17 +7447,6 @@ mod tests {
         }
     }
 
-    fn repair_report() -> RepairReportV1 {
-        RepairReportV1 {
-            version: REPAIR_REPORT_VERSION_V1,
-            ticket_id: RepairTicketId("REP-351".to_owned()),
-            auditor_account: "auditor@sora".to_owned(),
-            submitted_at_unix: 1_700_000_050,
-            evidence: repair_evidence(),
-            notes: Some("queued for repair".to_owned()),
-        }
-    }
-
     fn repair_task_record() -> RepairTaskRecordV1 {
         RepairTaskRecordV1 {
             version: REPAIR_TASK_VERSION_V1,
@@ -7606,26 +7463,6 @@ mod tests {
             scheduler_notes: Some("waiting for worker claim".to_owned()),
             slash_proposal_digest: None,
         }
-    }
-
-    fn signed_auditor_request() -> SignedAuditorRequestV1 {
-        let signing_key = SigningKey::from_bytes(&[0xB6; 32]);
-        let mut request = SignedAuditorRequestV1 {
-            version: SIGNED_AUDITOR_REQUEST_VERSION_V1,
-            auditor_account: "auditor@sora".to_owned(),
-            nonce: 99,
-            payload: SignedAuditorRequestPayloadV1::RepairReport(repair_report()),
-            signature: AuditorSignatureV1 {
-                algorithm: SignatureAlgorithm::Ed25519,
-                public_key: signing_key.verifying_key().to_bytes().to_vec(),
-                signature: vec![0; 64],
-            },
-        };
-        let payload_bytes =
-            norito::to_bytes(&request.signature_payload()).expect("encode auditor payload");
-        let signature = signing_key.sign(&payload_bytes);
-        request.signature.signature = signature.to_bytes().to_vec();
-        request
     }
 
     fn signed_advert(now: u64) -> ProviderAdvertV1 {
@@ -8984,20 +8821,6 @@ mod tests {
     }
 
     #[test]
-    fn validate_repair_payload_bytes_accepts_signed_auditor_request() {
-        let request = signed_auditor_request();
-        let bytes = to_bytes(&request).expect("encode signed auditor request");
-        let outcome = validate_repair_payload_bytes(
-            RepairValidationPayloadKindV1::SignedAuditorRequest,
-            &bytes,
-            "signed-auditor.to",
-            28,
-        );
-        assert!(outcome.is_ok(), "{outcome:?}");
-        assert_eq!(outcome.code, "SFS-OK-000");
-    }
-
-    #[test]
     fn validate_repair_payload_bytes_rejects_malformed_norito() {
         let outcome = validate_repair_payload_bytes(
             RepairValidationPayloadKindV1::TaskRecord,
@@ -9028,22 +8851,6 @@ mod tests {
         assert!(!outcome.is_ok());
         assert_eq!(outcome.code, "SFS-REP-001", "{outcome:?}");
         assert_eq!(outcome.category, CATEGORY_VALIDATION);
-    }
-
-    #[test]
-    fn validate_repair_payload_bytes_rejects_bad_auditor_signature() {
-        let mut request = signed_auditor_request();
-        request.signature.signature[0] ^= 0x01;
-        let bytes = to_bytes(&request).expect("encode signed auditor request");
-        let outcome = validate_repair_payload_bytes(
-            RepairValidationPayloadKindV1::SignedAuditorRequest,
-            &bytes,
-            "bad-signed-auditor.to",
-            31,
-        );
-        assert!(!outcome.is_ok());
-        assert_eq!(outcome.code, "SFS-SIG-004", "{outcome:?}");
-        assert_eq!(outcome.category, CATEGORY_SIGNATURE);
     }
 
     #[test]
@@ -9337,6 +9144,29 @@ mod tests {
             decode_from_bytes(&to_bytes(&outcome).expect("encode outcome"))
                 .expect("decode outcome");
         assert_eq!(roundtrip, outcome);
+    }
+
+    #[test]
+    fn validate_orderbook_payload_bytes_accepts_signed_cancel_and_receipt() {
+        let cases = [
+            (
+                OrderbookValidationPayloadKindV1::OrderCancel,
+                to_bytes(&orderbook_order_cancel()).expect("encode signed order cancellation"),
+                "orderbook-cancel.to",
+            ),
+            (
+                OrderbookValidationPayloadKindV1::SettlementReceipt,
+                to_bytes(&orderbook_settlement_receipt())
+                    .expect("encode signed settlement receipt"),
+                "settlement-receipt.to",
+            ),
+        ];
+
+        for (kind, bytes, label) in cases {
+            let outcome = validate_orderbook_payload_bytes(kind, &bytes, label, 32);
+            assert!(outcome.is_ok(), "{kind:?}: {outcome:?}");
+            assert_eq!(outcome.code, "SFS-OK-000", "{kind:?}: {outcome:?}");
+        }
     }
 
     #[test]
@@ -9725,7 +9555,7 @@ mod tests {
     #[test]
     fn validate_orderbook_payload_bytes_rejects_signature_failure() {
         let mut order = orderbook_order_request();
-        order.signature.signature.pop();
+        order.signature.signature[0] ^= 1;
         let bytes = to_bytes(&order).expect("encode orderbook order request");
         let outcome = validate_orderbook_payload_bytes(
             OrderbookValidationPayloadKindV1::OrderRequest,
@@ -9737,6 +9567,96 @@ mod tests {
         assert!(!outcome.is_ok());
         assert_eq!(outcome.code, "SFS-SIG-007", "{outcome:?}");
         assert_eq!(outcome.category, CATEGORY_SIGNATURE);
+    }
+
+    #[test]
+    fn orderbook_signature_errors_share_the_canonical_outcome_mapping() {
+        let errors = [
+            OrderbookValidationError::InvalidSignature,
+            OrderbookValidationError::InvalidPublicKeyLength { length: 31 },
+            OrderbookValidationError::InvalidSignatureLength { length: 63 },
+            OrderbookValidationError::UnsupportedSignatureAlgorithm {
+                algorithm: SignatureAlgorithm::MultiSig,
+            },
+            OrderbookValidationError::InvalidPublicKey {
+                reason: "invalid point".to_owned(),
+            },
+            OrderbookValidationError::SignaturePayloadEncoding {
+                reason: "encoding failed".to_owned(),
+            },
+            OrderbookValidationError::SignatureVerification {
+                reason: "forged signature".to_owned(),
+            },
+        ];
+
+        for error in errors {
+            assert_eq!(orderbook_validation_code(&error), "SFS-SIG-007");
+            assert_eq!(
+                orderbook_validation_category(&error),
+                CATEGORY_SIGNATURE,
+                "{error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_orderbook_payload_bytes_rejects_cancel_and_receipt_signature_failures() {
+        let mut cancel = orderbook_order_cancel();
+        cancel.signature.signature[0] ^= 1;
+        let cancel_bytes = to_bytes(&cancel).expect("encode forged order cancellation");
+        let cancel_outcome = validate_orderbook_payload_bytes(
+            OrderbookValidationPayloadKindV1::OrderCancel,
+            &cancel_bytes,
+            "bad-orderbook-cancel-signature.to",
+            35,
+        );
+        assert!(!cancel_outcome.is_ok());
+        assert_eq!(cancel_outcome.code, "SFS-SIG-007", "{cancel_outcome:?}");
+        assert_eq!(cancel_outcome.category, CATEGORY_SIGNATURE);
+
+        let mut receipt = orderbook_settlement_receipt();
+        receipt.settlement_signature.signature[0] ^= 1;
+        let receipt_bytes = to_bytes(&receipt).expect("encode forged settlement receipt");
+        let receipt_outcome = validate_orderbook_payload_bytes(
+            OrderbookValidationPayloadKindV1::SettlementReceipt,
+            &receipt_bytes,
+            "bad-orderbook-receipt-signature.to",
+            35,
+        );
+        assert!(!receipt_outcome.is_ok());
+        assert_eq!(receipt_outcome.code, "SFS-SIG-007", "{receipt_outcome:?}");
+        assert_eq!(receipt_outcome.category, CATEGORY_SIGNATURE);
+    }
+
+    #[test]
+    fn validate_orderbook_payload_bytes_rejects_forged_runtime_snapshot_signatures() {
+        let mut forged_order = orderbook_runtime_snapshot();
+        forged_order.open_orders[0].order.signature.signature[0] ^= 1;
+        let order_bytes = to_bytes(&forged_order).expect("encode forged-order snapshot");
+        let order_outcome = validate_orderbook_payload_bytes(
+            OrderbookValidationPayloadKindV1::RuntimeSnapshot,
+            &order_bytes,
+            "forged-order-snapshot.to",
+            35,
+        );
+        assert!(!order_outcome.is_ok());
+        assert_eq!(order_outcome.code, "SFS-SIG-007", "{order_outcome:?}");
+        assert_eq!(order_outcome.category, CATEGORY_SIGNATURE);
+
+        let mut forged_receipt = orderbook_runtime_snapshot();
+        forged_receipt.settlement_receipts[0]
+            .settlement_signature
+            .signature[0] ^= 1;
+        let receipt_bytes = to_bytes(&forged_receipt).expect("encode forged-receipt snapshot");
+        let receipt_outcome = validate_orderbook_payload_bytes(
+            OrderbookValidationPayloadKindV1::RuntimeSnapshot,
+            &receipt_bytes,
+            "forged-receipt-snapshot.to",
+            35,
+        );
+        assert!(!receipt_outcome.is_ok());
+        assert_eq!(receipt_outcome.code, "SFS-SIG-007", "{receipt_outcome:?}");
+        assert_eq!(receipt_outcome.category, CATEGORY_SIGNATURE);
     }
 
     #[test]

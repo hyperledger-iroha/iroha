@@ -9,7 +9,7 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
-    num::{NonZeroU64, NonZeroUsize},
+    num::{NonZeroU32, NonZeroU64, NonZeroUsize},
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -101,15 +101,15 @@ use crate::{
     native_amx::{
         MAX_NATIVE_AMX_SIGNING_GUARD_RECORDS_HARD, NativeAmxAttestationRequestV2,
         NativeAmxCommitRequestV2, NativeAmxMessage, NativeAmxSessionCache, NativeAmxSessionError,
-        NativeAmxSessionKey, NativeAmxSigningGuard, NativeAmxVoteV2, aggregate_votes_to_qc,
-        validate_native_amx_qc,
+        NativeAmxSessionKey, NativeAmxSigningGuard, NativeAmxSigningGuardLimits, NativeAmxVoteV2,
+        aggregate_votes_to_qc, validate_native_amx_qc,
     },
     queue::{
-        LaneQueueReservationKeyV1, LaneQueueReservationOutcome, LaneQueueReservationRoutingMode,
+        LaneQueueReservationKeyV2, LaneQueueReservationOutcome, LaneQueueReservationRoutingMode,
         LaneQueueReservationSelectionLimits, LaneReservedTransaction, Queue, RoutingDecision,
         RoutingPlan,
     },
-    state::{State, WorldReadOnly},
+    state::{PendingQueuePlanAdmissionDisposition, State, WorldReadOnly},
 };
 
 #[cfg(test)]
@@ -122,20 +122,7 @@ const MAX_FETCH_MERGE_SIGNER_PROOFS: usize = 4_096;
 const MAX_FETCH_MERGE_VALIDATORS: usize = 4_096;
 const MAX_FETCH_MERGE_QC_BYTES: usize = 4 * 1024 * 1024;
 const MERGE_QC_PROOF_BYTES: usize = 96;
-const MAX_AUTHENTICATED_MERGE_QCS: usize = 64;
 const MERGE_QC_AUTH_CACHE_DOMAIN: &[u8] = b"iroha:sumeragi:v2:merge-qc-auth-cache:v1\0";
-// Reserve enough of every configured consensus frame for the NetworkMessage,
-// P2P relay, largest supported peer key, and canonical Norito framing. Exact
-// materialized frame length is checked as well; this headroom rejects an
-// oversized candidate body before constructing a retained outbound carrier.
-const MERGE_LEADER_BODY_FRAME_HEADROOM_BYTES: usize = 1024 * 1024;
-/// Reserve deterministic carrier space for the block header, execution
-/// context framing, merge/lifecycle attachments, and signatures around
-/// autonomous payload envelopes.
-const AUTONOMOUS_CARRIER_HEADROOM_BYTES: usize = 1024 * 1024;
-/// Queue reservation is a durable operation, so retry it on a bounded cadence
-/// rather than on every 10 ms runtime poll.
-const AUTONOMOUS_PRODUCER_RECHECK: Duration = Duration::from_millis(100);
 const NANOS_PER_SECOND: u128 = 1_000_000_000;
 
 /// Derive the same saturating linear timeout used by certified global views.
@@ -315,7 +302,7 @@ fn merge_lane_execution_carries_lane(
         .any(
             |((((entrypoint, entrypoint_hash), encoded_reservation), encoded_plan), receipt)| {
                 let Ok(reservation) =
-                    norito::decode_from_bytes::<LaneQueueReservationKeyV1>(encoded_reservation)
+                    norito::decode_from_bytes::<LaneQueueReservationKeyV2>(encoded_reservation)
                 else {
                     return true;
                 };
@@ -584,6 +571,16 @@ pub(crate) struct V2LaneWorkLimits {
     native_request_capacity: NonZeroUsize,
     reply_source_capacity: NonZeroUsize,
     merge_share_frame_capacity: NonZeroUsize,
+    historical_recovery_response_frame_capacity: NonZeroUsize,
+    authenticated_merge_qc_capacity: NonZeroUsize,
+    merge_leader_body_frame_headroom_bytes: NonZeroUsize,
+    autonomous_carrier_headroom_bytes: NonZeroUsize,
+    autonomous_producer_recheck: Duration,
+    historical_recovery_stuck_attempts: NonZeroU32,
+    historical_recovery_retry_tier_attempts: NonZeroU32,
+    historical_recovery_max_retry_tier: NonZeroU32,
+    sidecar_service_burst: NonZeroUsize,
+    native_amx_signing_guard_limits: NativeAmxSigningGuardLimits,
 }
 
 impl V2LaneWorkLimits {
@@ -597,6 +594,16 @@ impl V2LaneWorkLimits {
         native_request_capacity: NonZeroUsize,
         reply_source_capacity: NonZeroUsize,
         merge_share_frame_capacity: NonZeroUsize,
+        historical_recovery_response_frame_capacity: NonZeroUsize,
+        authenticated_merge_qc_capacity: NonZeroUsize,
+        merge_leader_body_frame_headroom_bytes: NonZeroUsize,
+        autonomous_carrier_headroom_bytes: NonZeroUsize,
+        autonomous_producer_recheck: Duration,
+        historical_recovery_stuck_attempts: NonZeroU32,
+        historical_recovery_retry_tier_attempts: NonZeroU32,
+        historical_recovery_max_retry_tier: NonZeroU32,
+        sidecar_service_burst: NonZeroUsize,
+        native_amx_signing_guard_limits: NativeAmxSigningGuardLimits,
     ) -> Self {
         Self {
             session_capacity,
@@ -607,6 +614,16 @@ impl V2LaneWorkLimits {
             native_request_capacity,
             reply_source_capacity,
             merge_share_frame_capacity,
+            historical_recovery_response_frame_capacity,
+            authenticated_merge_qc_capacity,
+            merge_leader_body_frame_headroom_bytes,
+            autonomous_carrier_headroom_bytes,
+            autonomous_producer_recheck,
+            historical_recovery_stuck_attempts,
+            historical_recovery_retry_tier_attempts,
+            historical_recovery_max_retry_tier,
+            sidecar_service_burst,
+            native_amx_signing_guard_limits,
         }
     }
 }
@@ -614,20 +631,7 @@ impl V2LaneWorkLimits {
 fn native_amx_signing_guard_capacity(
     limits: V2LaneWorkLimits,
 ) -> Result<NonZeroUsize, V2LaneWorkError> {
-    let requested = limits
-        .session_capacity
-        .get()
-        .checked_mul(limits.body_buckets_per_session.get())
-        .ok_or_else(|| {
-            V2LaneWorkError::SigningGuard(
-                "native AMX signing-record capacity overflows usize".to_owned(),
-            )
-        })?;
-    NonZeroUsize::new(requested.min(MAX_NATIVE_AMX_SIGNING_GUARD_RECORDS_HARD)).ok_or_else(|| {
-        V2LaneWorkError::SigningGuard(
-            "native AMX signing-record capacity must be non-zero".to_owned(),
-        )
-    })
+    Ok(limits.native_amx_signing_guard_limits.max_records)
 }
 
 /// One authenticated lane-local transport action emitted by the adapter.
@@ -1159,10 +1163,6 @@ fn validate_superseded_lane_output(message: &BlockMessage) -> Result<(), String>
     }
 }
 
-const HISTORICAL_RECOVERY_STUCK_ATTEMPTS: u32 = 32;
-const HISTORICAL_RECOVERY_RETRY_TIER_ATTEMPTS: u32 = 4;
-const HISTORICAL_RECOVERY_MAX_RETRY_TIER: u32 = 6;
-
 /// Stable, payload-free identity for one earlier-height recovery owner.
 ///
 /// Diagnostics deliberately retain only typed route/incarnation/hash fields.
@@ -1404,6 +1404,8 @@ pub(crate) struct HistoricalRecoveryWait {
     total_attempts: u64,
     first_observation: bool,
     became_stuck: bool,
+    retry_tier_attempts: NonZeroU32,
+    max_retry_tier: NonZeroU32,
 }
 
 impl HistoricalRecoveryWait {
@@ -1441,8 +1443,8 @@ impl HistoricalRecoveryWait {
     pub(crate) fn retry_delay(self, floor: Duration, ceiling: Duration) -> Duration {
         let ceiling = ceiling.max(floor);
         let tier = (self.consecutive_attempts.saturating_sub(1)
-            / HISTORICAL_RECOVERY_RETRY_TIER_ATTEMPTS)
-            .min(HISTORICAL_RECOVERY_MAX_RETRY_TIER);
+            / self.retry_tier_attempts.get())
+        .min(self.max_retry_tier.get());
         floor.saturating_mul(1_u32 << tier).min(ceiling)
     }
 }
@@ -1467,15 +1469,26 @@ struct HistoricalRecoveryWaitRecord {
 
 struct HistoricalRecoveryDiagnostics {
     capacity: usize,
+    stuck_attempts: NonZeroU32,
+    retry_tier_attempts: NonZeroU32,
+    max_retry_tier: NonZeroU32,
     records: BTreeMap<HistoricalRecoveryIdentity, HistoricalRecoveryWaitRecord>,
     order: VecDeque<HistoricalRecoveryIdentity>,
 }
 
 impl HistoricalRecoveryDiagnostics {
-    fn new(capacity: usize) -> Self {
+    fn new(
+        capacity: usize,
+        stuck_attempts: NonZeroU32,
+        retry_tier_attempts: NonZeroU32,
+        max_retry_tier: NonZeroU32,
+    ) -> Self {
         debug_assert!(capacity > 0);
         Self {
             capacity: capacity.max(1),
+            stuck_attempts,
+            retry_tier_attempts,
+            max_retry_tier,
             records: BTreeMap::new(),
             order: VecDeque::new(),
         }
@@ -1496,7 +1509,7 @@ impl HistoricalRecoveryDiagnostics {
             };
             let first_observation = record.seen_reason_bits & bit == 0;
             record.seen_reason_bits |= bit;
-            let became_stuck = consecutive_attempts >= HISTORICAL_RECOVERY_STUCK_ATTEMPTS
+            let became_stuck = consecutive_attempts >= self.stuck_attempts.get()
                 && record.reported_stuck_bits & bit == 0;
             if became_stuck {
                 record.reported_stuck_bits |= bit;
@@ -1510,6 +1523,8 @@ impl HistoricalRecoveryDiagnostics {
                 total_attempts: record.observation.total_attempts.saturating_add(1),
                 first_observation,
                 became_stuck,
+                retry_tier_attempts: self.retry_tier_attempts,
+                max_retry_tier: self.max_retry_tier,
             };
             return record.observation;
         }
@@ -1530,6 +1545,8 @@ impl HistoricalRecoveryDiagnostics {
             total_attempts: 1,
             first_observation: true,
             became_stuck: false,
+            retry_tier_attempts: self.retry_tier_attempts,
+            max_retry_tier: self.max_retry_tier,
         };
         self.records.insert(
             identity,
@@ -1568,6 +1585,14 @@ enum HistoricalRecoveryPersistence {
 struct OutstandingHistoricalRecoveryRequest {
     request_hash: HashOf<LaneHistoricalRecoveryRequestV1>,
     request: LaneHistoricalRecoveryRequestV1,
+}
+
+#[derive(Clone, Debug)]
+struct OutstandingNativeParticipantRecoveryRequest {
+    request_hash: HashOf<LaneHistoricalRecoveryRequestV1>,
+    request: LaneHistoricalRecoveryRequestV1,
+    eligible_peers: Vec<PeerId>,
+    next_peer_index: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -1640,7 +1665,6 @@ pub(crate) struct V2LaneWorkAdapter {
         BTreeMap<(LaneId, DataSpaceId), PendingAutonomousReservationBatch>,
     autonomous_production_attempted_routes: BTreeSet<(LaneId, DataSpaceId)>,
     next_autonomous_producer_tick: Instant,
-    autonomous_ordinary_fallback_allowed: bool,
     pending_autonomous_anchor_payloads: BTreeMap<AutonomousLanePayloadKey, LaneExecutablePayloadV1>,
     autonomous_payloads: BTreeMap<AutonomousLanePayloadKey, LaneExecutablePayloadV1>,
     autonomous_payload_order: VecDeque<AutonomousLanePayloadKey>,
@@ -1682,9 +1706,10 @@ pub(crate) struct V2LaneWorkAdapter {
     historical_recovery_request_owners:
         BTreeMap<HashOf<LaneHistoricalRecoveryRequestV1>, HistoricalRecoveryIdentity>,
     native_participant_recovery_requests:
-        BTreeMap<NativeAmxParticipantRecoveryMarkerV1, OutstandingHistoricalRecoveryRequest>,
+        BTreeMap<NativeAmxParticipantRecoveryMarkerV1, OutstandingNativeParticipantRecoveryRequest>,
     native_participant_recovery_request_owners:
         BTreeMap<HashOf<LaneHistoricalRecoveryRequestV1>, NativeAmxParticipantRecoveryMarkerV1>,
+    native_participant_recovery_retry_cursor: usize,
     committed_lane_output_cursor: usize,
     admitted_relays: BTreeSet<(LaneId, DataSpaceId, Hash, u64, Hash)>,
     merge_entries: BTreeMap<MergeKey, PendingMerge>,
@@ -1831,7 +1856,7 @@ impl V2LaneWorkAdapter {
         let native_signing_guard = if voting_enabled
             && local_peer.public_key().try_algorithm().ok() == Some(Algorithm::BlsNormal)
         {
-            let max_records = native_amx_signing_guard_capacity(limits)?;
+            let _max_records = native_amx_signing_guard_capacity(limits)?;
             let chain_id = context.chain_id.clone().into_inner();
             Some(
                 NativeAmxSigningGuard::open(
@@ -1841,7 +1866,7 @@ impl V2LaneWorkAdapter {
                     context.epoch,
                     Hash::new(chain_id.as_bytes()),
                     local_peer.clone(),
-                    max_records,
+                    limits.native_amx_signing_guard_limits,
                 )
                 .map_err(|error| V2LaneWorkError::SigningGuard(error.to_string()))?,
             )
@@ -1875,7 +1900,6 @@ impl V2LaneWorkAdapter {
             pending_autonomous_reservation_batches: BTreeMap::new(),
             autonomous_production_attempted_routes: BTreeSet::new(),
             next_autonomous_producer_tick: Instant::now(),
-            autonomous_ordinary_fallback_allowed: false,
             pending_autonomous_anchor_payloads: BTreeMap::new(),
             autonomous_payloads: BTreeMap::new(),
             autonomous_payload_order: VecDeque::new(),
@@ -1912,11 +1936,15 @@ impl V2LaneWorkAdapter {
             historical_recovery_sessions: VecDeque::new(),
             historical_recovery_diagnostics: HistoricalRecoveryDiagnostics::new(
                 limits.session_capacity.get(),
+                limits.historical_recovery_stuck_attempts,
+                limits.historical_recovery_retry_tier_attempts,
+                limits.historical_recovery_max_retry_tier,
             ),
             historical_recovery_requests: BTreeMap::new(),
             historical_recovery_request_owners: BTreeMap::new(),
             native_participant_recovery_requests: BTreeMap::new(),
             native_participant_recovery_request_owners: BTreeMap::new(),
+            native_participant_recovery_retry_cursor: 0,
             committed_lane_output_cursor: 0,
             admitted_relays: BTreeSet::new(),
             merge_entries: BTreeMap::new(),
@@ -2242,7 +2270,8 @@ impl V2LaneWorkAdapter {
             return Ok(());
         }
         self.next_autonomous_producer_tick =
-            now.checked_add(AUTONOMOUS_PRODUCER_RECHECK).unwrap_or(now);
+            now.checked_add(self.limits.autonomous_producer_recheck)
+                .unwrap_or(now);
         let output_guard = Arc::clone(&self.output_guard);
         let operation = output_guard
             .begin_fail_stop_operation()
@@ -2297,8 +2326,14 @@ impl V2LaneWorkAdapter {
         }
         let route_count = routes.len();
         let max_payload_bytes = limits.max_payload_bytes().get();
-        let carrier_headroom = AUTONOMOUS_CARRIER_HEADROOM_BYTES.min(max_payload_bytes / 4);
-        let usable_envelope_bytes = max_payload_bytes.saturating_sub(carrier_headroom);
+        let usable_envelope_bytes = max_payload_bytes
+            .checked_sub(self.limits.autonomous_carrier_headroom_bytes.get())
+            .ok_or_else(|| {
+                V2LaneWorkError::InvalidContext(
+                    "autonomous carrier headroom exhausts the configured payload budget"
+                        .to_owned(),
+                )
+            })?;
         let block_gas_limit = {
             let world = self.state.world_view();
             crate::state::gas_limit_from_parameters(world.parameters())
@@ -2440,16 +2475,6 @@ impl V2LaneWorkAdapter {
         }
         operation.complete();
         Ok(())
-    }
-
-    /// Permit the current global leader to fall back to ordinary carrier
-    /// execution after the runner's bounded autonomous-anchor wait expires.
-    ///
-    /// This changes proposal selection only. Any lane reservation remains
-    /// exact and live until the resulting global lock either anchors its
-    /// payload or drives the durable losing-slot release path.
-    pub(crate) fn allow_ordinary_execution_after_autonomous_wait(&mut self) {
-        self.autonomous_ordinary_fallback_allowed = true;
     }
 
     /// Derive the stripped carrier header shared by merge pre-execution and
@@ -2642,6 +2667,7 @@ impl V2LaneWorkAdapter {
         let committed_height = u64::try_from(self.state.committed_height())
             .map_err(|_| V2LaneWorkError::StateHeightMismatch)?;
         let mut repaired_carriers = BTreeSet::new();
+        let mut remote_recovery_markers = BTreeSet::new();
         for marker in &pending_native {
             if marker.application_block_height > committed_height {
                 return Err(V2LaneWorkError::Persistence(format!(
@@ -2659,7 +2685,9 @@ impl V2LaneWorkAdapter {
                 ));
             };
             let Some(block) = self.kura.get_block(height) else {
-                self.schedule_native_participant_recovery_request(*marker)?;
+                let recovery_marker = NativeAmxParticipantRecoveryMarkerV1::from(*marker);
+                remote_recovery_markers.insert(recovery_marker);
+                let _queued = self.schedule_native_participant_recovery_request(recovery_marker)?;
                 continue;
             };
             if block.hash() != marker.application_block_hash {
@@ -2684,16 +2712,13 @@ impl V2LaneWorkAdapter {
             .state
             .native_amx_participant_frontiers_pending_durable_evidence_snapshot_cached()
             .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
-        if let Some(marker) = pending_native
+        for marker in pending_native
             .iter()
-            .find(|marker| unresolved_native.contains(marker))
+            .filter(|marker| unresolved_native.contains(marker))
         {
             let recovery_marker = NativeAmxParticipantRecoveryMarkerV1::from(*marker);
-            if self
-                .native_participant_recovery_requests
-                .contains_key(&recovery_marker)
-            {
-                return Ok(repaired);
+            if remote_recovery_markers.contains(&recovery_marker) {
+                continue;
             }
             return Err(V2LaneWorkError::Persistence(format!(
                 "Native AMX participant frontier at lane {} remains without exact durable evidence after repair",
@@ -4041,29 +4066,83 @@ impl V2LaneWorkAdapter {
         if let Some(retired) = self.native_participant_recovery_requests.remove(&marker) {
             self.native_participant_recovery_request_owners
                 .remove(&retired.request_hash);
+            self.effects.retain(|effect| {
+                !matches!(
+                    effect,
+                    V2LaneWorkEffect::PostLaneBlock {
+                        message: BlockMessage::LaneHistoricalRecoveryRequest(request),
+                        ..
+                    } if HashOf::new(request.as_ref()) == retired.request_hash
+                )
+            });
+            self.effect_keys = self.effects.iter().map(lane_work_effect_key).collect();
         }
     }
 
-    fn native_participant_recovery_marker_is_pending(
+    fn pending_native_participant_recovery_markers(
         &self,
-        marker: NativeAmxParticipantRecoveryMarkerV1,
-    ) -> Result<bool, V2LaneWorkError> {
-        self.state
+    ) -> Result<BTreeSet<NativeAmxParticipantRecoveryMarkerV1>, V2LaneWorkError> {
+        let markers = self
+            .state
             .native_amx_participant_frontiers_pending_durable_evidence_snapshot_cached()
-            .map(|markers| {
-                markers
-                    .into_iter()
-                    .map(NativeAmxParticipantRecoveryMarkerV1::from)
-                    .any(|candidate| candidate == marker)
-            })
-            .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))
+            .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
+        if markers.len() > self.limits.session_capacity.get() {
+            return Err(V2LaneWorkError::Persistence(
+                "Native AMX participant carrier recovery exceeds the bounded session capacity"
+                    .to_owned(),
+            ));
+        }
+        Ok(markers
+            .into_iter()
+            .map(NativeAmxParticipantRecoveryMarkerV1::from)
+            .collect())
+    }
+
+    fn reconcile_native_participant_recovery_requests(
+        &mut self,
+    ) -> Result<BTreeSet<NativeAmxParticipantRecoveryMarkerV1>, V2LaneWorkError> {
+        let pending = self.pending_native_participant_recovery_markers()?;
+        let resolved = self
+            .native_participant_recovery_requests
+            .keys()
+            .filter(|marker| !pending.contains(marker))
+            .copied()
+            .collect::<Vec<_>>();
+        for marker in resolved {
+            self.retire_native_participant_recovery_request(marker);
+        }
+        Ok(pending)
+    }
+
+    /// Advance at most one deterministic Native participant recovery fanout.
+    ///
+    /// State remains the authoritative retry queue. An effect-capacity or
+    /// request-capacity boundary therefore leaves no response owner behind;
+    /// the next service turn rotates to the next pending marker and retries.
+    pub(crate) fn service_next_native_participant_recovery_request(
+        &mut self,
+    ) -> Result<(), V2LaneWorkError> {
+        let output_guard = Arc::clone(&self.output_guard);
+        let Some(_permit) = output_guard.acquire() else {
+            return Err(V2LaneWorkError::RestartRequired);
+        };
+        let pending = self.reconcile_native_participant_recovery_requests()?;
+        if pending.is_empty() {
+            self.native_participant_recovery_retry_cursor = 0;
+            return Ok(());
+        }
+        let markers = pending.into_iter().collect::<Vec<_>>();
+        let start = self.native_participant_recovery_retry_cursor % markers.len();
+        let marker = markers[start];
+        let _queued = self.schedule_native_participant_recovery_request(marker)?;
+        self.native_participant_recovery_retry_cursor = (start + 1) % markers.len();
+        Ok(())
     }
 
     fn schedule_native_participant_recovery_request(
         &mut self,
-        marker: crate::state::AppliedNativeAmxParticipantFrontierMarker,
-    ) -> Result<(), V2LaneWorkError> {
-        let marker = NativeAmxParticipantRecoveryMarkerV1::from(marker);
+        marker: NativeAmxParticipantRecoveryMarkerV1,
+    ) -> Result<bool, V2LaneWorkError> {
         if !native_participant_recovery_marker_is_well_formed(&marker)
             || !self.lane_route_active(
                 marker.lane_id,
@@ -4124,8 +4203,30 @@ impl V2LaneWorkAdapter {
             ));
         }
         let request_hash = HashOf::new(&request);
+        let local_peer = self.local_peer.clone();
+        let mut seen = BTreeSet::new();
+        let eligible_peers = finality
+            .commit_qc
+            .signers
+            .iter()
+            .filter_map(|index| {
+                usize::try_from(*index)
+                    .ok()
+                    .and_then(|index| finality.height_context.roster.get(index))
+                    .map(|entry| entry.validator.clone())
+            })
+            .filter(|peer| peer != &local_peer && seen.insert(peer.clone()))
+            .collect::<Vec<_>>();
+        if eligible_peers.is_empty() {
+            return Err(V2LaneWorkError::Persistence(
+                "Native participant carrier recovery has no remote CommitQC signer".to_owned(),
+            ));
+        }
         if let Some(existing) = self.native_participant_recovery_requests.get(&marker) {
-            if existing.request != request || existing.request_hash != request_hash {
+            if existing.request != request
+                || existing.request_hash != request_hash
+                || existing.eligible_peers != eligible_peers
+            {
                 self.retire_native_participant_recovery_request(marker);
             }
         }
@@ -4139,9 +4240,7 @@ impl V2LaneWorkAdapter {
                 .saturating_add(self.native_participant_recovery_requests.len())
                 >= self.limits.session_capacity.get()
             {
-                return Err(V2LaneWorkError::Persistence(
-                    "historical recovery request capacity exhausted".to_owned(),
-                ));
+                return Ok(false);
             }
             if self
                 .historical_recovery_request_owners
@@ -4154,40 +4253,43 @@ impl V2LaneWorkAdapter {
                     "Native participant recovery request hash aliases another owner".to_owned(),
                 ));
             }
+        }
+
+        let next_peer_index = self
+            .native_participant_recovery_requests
+            .get(&marker)
+            .map_or(0, |outstanding| {
+                outstanding.next_peer_index % eligible_peers.len()
+            });
+        let peer = eligible_peers[next_peer_index].clone();
+        if !self.push_effect(V2LaneWorkEffect::PostLaneBlock {
+            peer,
+            message: BlockMessage::LaneHistoricalRecoveryRequest(Box::new(request.clone())),
+        }) {
+            return Ok(false);
+        }
+        let following_peer_index = (next_peer_index + 1) % eligible_peers.len();
+        if let Some(outstanding) = self.native_participant_recovery_requests.get_mut(&marker) {
+            outstanding.next_peer_index = following_peer_index;
+        } else {
+            debug_assert!(
+                !self
+                    .native_participant_recovery_request_owners
+                    .contains_key(&request_hash)
+            );
             self.native_participant_recovery_request_owners
                 .insert(request_hash, marker);
             self.native_participant_recovery_requests.insert(
                 marker,
-                OutstandingHistoricalRecoveryRequest {
+                OutstandingNativeParticipantRecoveryRequest {
                     request_hash,
-                    request: request.clone(),
+                    request,
+                    eligible_peers,
+                    next_peer_index: following_peer_index,
                 },
             );
         }
-
-        let message = BlockMessage::LaneHistoricalRecoveryRequest(Box::new(request));
-        let local_peer = self.local_peer.clone();
-        let mut seen = BTreeSet::new();
-        for peer in finality
-            .commit_qc
-            .signers
-            .iter()
-            .filter_map(|index| {
-                usize::try_from(*index)
-                    .ok()
-                    .and_then(|index| finality.height_context.roster.get(index))
-                    .map(|entry| entry.validator.clone())
-            })
-            .filter(|peer| peer != &local_peer && seen.insert(peer.clone()))
-        {
-            if !self.push_effect(V2LaneWorkEffect::PostLaneBlock {
-                peer,
-                message: message.clone(),
-            }) {
-                break;
-            }
-        }
-        Ok(())
+        Ok(true)
     }
 
     fn historical_recovery_request_fits_frame(
@@ -4500,6 +4602,10 @@ impl V2LaneWorkAdapter {
     pub(crate) fn has_pending_historical_recovery(&self) -> bool {
         !self.historical_recovery_sessions.is_empty()
             || !self.native_participant_recovery_requests.is_empty()
+            || match self.pending_native_participant_recovery_markers() {
+                Ok(markers) => !markers.is_empty(),
+                Err(_) => true,
+            }
     }
 
     /// Return the bounded deterministic stage/stuck-reason snapshot.
@@ -5112,7 +5218,7 @@ impl V2LaneWorkAdapter {
         &self,
         proposal: &LaneBlockProposalV1,
         author: &PeerId,
-        reservation_keys: &[crate::queue::LaneQueueReservationKeyV1],
+        reservation_keys: &[crate::queue::LaneQueueReservationKeyV2],
     ) -> bool {
         let Ok((reservation_owner_hash, proposal_identity_hash)) =
             autonomous_lane_reservation_identity_hashes_for_proposal(
@@ -5894,14 +6000,15 @@ impl V2LaneWorkAdapter {
         &self,
         response: &LaneHistoricalRecoveryResponseV1,
     ) -> bool {
-        BlockMessage::LaneHistoricalRecoveryResponse(Box::new(response.clone()))
-            .encode()
-            .len()
+        let block_message_bytes =
+            BlockMessage::LaneHistoricalRecoveryResponse(Box::new(response.clone()))
+                .encode()
+                .len();
+        super::fair_v2_ingress_required_lane_p2p_frame_bytes(block_message_bytes)
             <= self
                 .limits
-                .merge_share_frame_capacity
+                .historical_recovery_response_frame_capacity
                 .get()
-                .min(MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES)
     }
 
     fn peer_is_global_finality_signer(
@@ -6611,8 +6718,8 @@ impl V2LaneWorkAdapter {
         {
             return V2LaneIngressOutcome::Rejected;
         }
-        let pending = match self.native_participant_recovery_marker_is_pending(marker) {
-            Ok(pending) => pending,
+        let pending = match self.pending_native_participant_recovery_markers() {
+            Ok(pending) => pending.contains(&marker),
             Err(_) => return V2LaneIngressOutcome::Rejected,
         };
         if !pending {
@@ -6666,12 +6773,9 @@ impl V2LaneWorkAdapter {
             self.output_guard.close_admission_for_restart();
             return V2LaneIngressOutcome::Rejected;
         }
-        match self.native_participant_recovery_marker_is_pending(marker) {
-            Ok(false) => {
-                self.retire_native_participant_recovery_request(marker);
-                V2LaneIngressOutcome::Inserted
-            }
-            Ok(true) | Err(_) => {
+        match self.reconcile_native_participant_recovery_requests() {
+            Ok(pending) if !pending.contains(&marker) => V2LaneIngressOutcome::Inserted,
+            Ok(_) | Err(_) => {
                 self.output_guard.close_admission_for_restart();
                 V2LaneIngressOutcome::Rejected
             }
@@ -6832,7 +6936,9 @@ impl V2LaneWorkAdapter {
         if self.authenticated_merge_qcs.insert(qc_key) {
             self.authenticated_merge_qc_order.push_back(qc_key);
         }
-        while self.authenticated_merge_qc_order.len() > MAX_AUTHENTICATED_MERGE_QCS {
+        while self.authenticated_merge_qc_order.len()
+            > self.limits.authenticated_merge_qc_capacity.get()
+        {
             let oldest = self
                 .authenticated_merge_qc_order
                 .pop_front()
@@ -7580,7 +7686,11 @@ impl V2LaneWorkAdapter {
             self.remove_acknowledged_sidecar_retry_effect(admission);
             let posts = self
                 .merge_sidecars
-                .drain_outbound_chunks(self.sidecar_effect_slots().min(8), now);
+                .drain_outbound_chunks(
+                    self.sidecar_effect_slots()
+                        .min(self.limits.sidecar_service_burst.get()),
+                    now,
+                );
             for post in posts {
                 self.push_merge_sidecar_post_or_restart(post)?;
             }
@@ -7708,7 +7818,11 @@ impl V2LaneWorkAdapter {
         if !materialize {
             let posts = self
                 .merge_sidecars
-                .drain_outbound_chunks(self.sidecar_effect_slots().min(8), now);
+                .drain_outbound_chunks(
+                    self.sidecar_effect_slots()
+                        .min(self.limits.sidecar_service_burst.get()),
+                    now,
+                );
             let inserted = !posts.is_empty();
             for post in posts {
                 self.push_merge_sidecar_post_or_restart(post)?;
@@ -7758,7 +7872,11 @@ impl V2LaneWorkAdapter {
         }
         let posts = self
             .merge_sidecars
-            .drain_outbound_chunks(self.sidecar_effect_slots().min(8), now);
+            .drain_outbound_chunks(
+                self.sidecar_effect_slots()
+                    .min(self.limits.sidecar_service_burst.get()),
+                now,
+            );
         let inserted = !posts.is_empty();
         for post in posts {
             self.push_merge_sidecar_post_or_restart(post)?;
@@ -8434,6 +8552,12 @@ impl V2LaneWorkAdapter {
                 qc.body.phase == CertPhase::Commit
                     && committed_proposals.contains(&qc.body.proposal_hash)
             }
+            V2LaneWorkEffect::PostLaneBlock {
+                message:
+                    BlockMessage::LaneHistoricalRecoveryRequest(_)
+                    | BlockMessage::LaneHistoricalRecoveryResponse(_),
+                ..
+            } => true,
             V2LaneWorkEffect::PostLaneBlock { .. }
             | V2LaneWorkEffect::PostLaneDrainVote { .. }
             | V2LaneWorkEffect::BroadcastMerge(_) => false,
@@ -10329,7 +10453,7 @@ impl V2LaneWorkAdapter {
                     .limits
                     .merge_share_frame_capacity
                     .get()
-                    .checked_sub(MERGE_LEADER_BODY_FRAME_HEADROOM_BYTES)
+                    .checked_sub(self.limits.merge_leader_body_frame_headroom_bytes.get())
                     .unwrap_or(0)
                     .min(MAX_MERGE_LEDGER_ENTRY_BYTES);
                 if body.is_empty() || body.len() > body_limit {
@@ -10655,6 +10779,60 @@ impl V2LaneWorkAdapter {
         {
             return Ok(());
         }
+        // Reconcile the durable QueuePlan admission store only at an exact
+        // canonical Kura/WSV parent frontier. Exact registry matches are safe
+        // to forget after their global carrier is durable; absent claims stay
+        // pending across losing proposals and are attached to the next local
+        // leader candidate. Authenticated stale or conflicting claims are
+        // definitive losers and can be removed; malformed durable evidence
+        // still fails closed.
+        let mut pending_queue_plan_admissions = Vec::new();
+        for (certificate_hash, certificate_bytes) in self
+            .kura
+            .pending_queue_plan_admission_certificates_bounded(
+                crate::kura::MAX_PENDING_QUEUE_PLAN_ADMISSION_CERTIFICATES,
+            )
+            .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?
+        {
+            let (admission, disposition) = self
+                .state
+                .classify_pending_queue_plan_admission(&certificate_bytes, self.context.height)
+                .map_err(|error| {
+                    V2LaneWorkError::Persistence(format!(
+                        "pending QueuePlan admission certificate cannot be reconciled: {error}"
+                    ))
+                })?;
+            match disposition {
+                PendingQueuePlanAdmissionDisposition::Exact => self
+                    .kura
+                    .remove_pending_queue_plan_admission_certificate(certificate_hash)
+                    .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?,
+                PendingQueuePlanAdmissionDisposition::DefinitiveConflict
+                | PendingQueuePlanAdmissionDisposition::Stale => {
+                    let queue = self.lane_drain_queue.as_ref().ok_or_else(|| {
+                        V2LaneWorkError::Persistence(
+                            "losing QueuePlan admission cannot be retired without the live queue"
+                                .to_owned(),
+                        )
+                    })?;
+                    queue
+                        .reject_exact_queue_plan_admission_claim(
+                            &admission.certificate.binding,
+                        )
+                        .map_err(|error| {
+                            V2LaneWorkError::Persistence(format!(
+                                "losing QueuePlan admission queue claim cannot be durably rejected: {error}"
+                            ))
+                        })?;
+                    self.kura
+                        .remove_pending_queue_plan_admission_certificate(certificate_hash)
+                        .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
+                }
+                PendingQueuePlanAdmissionDisposition::EligibleAbsent => {
+                    pending_queue_plan_admissions.push(certificate_bytes);
+                }
+            }
+        }
         self.drive_lane_drain(active_view)?;
 
         let expected_epoch = self
@@ -10728,8 +10906,10 @@ impl V2LaneWorkAdapter {
         let local_is_leader =
             self.local_validator_index() == Some(self.context.leader(active_view));
         let leader_candidates = if authorized_digest.is_none() && local_is_leader {
-            if let Some(candidate) = self.lane_drain_merge_candidate(&parent_header, active_view)? {
-                vec![candidate]
+            let base = if let Some(candidate) =
+                self.lane_drain_merge_candidate(&parent_header, active_view)?
+            {
+                Some(candidate)
             } else {
                 let execution_candidate = self
                     .state
@@ -10737,16 +10917,27 @@ impl V2LaneWorkAdapter {
                     .then(|| self.merge_carrier_context_header(active_view))
                     .transpose()?
                     .and_then(|header| self.state.build_merge_execution_candidate(header));
-                execution_candidate
-                    .or_else(|| {
-                        self.state
-                            .merge_entry_candidates_from_lane_relays_for_view(active_view)
-                            .into_iter()
-                            .find(|candidate| candidate.epoch_id == expected_epoch)
-                    })
-                    .into_iter()
-                    .collect()
-            }
+                execution_candidate.or_else(|| {
+                    self.state
+                        .merge_entry_candidates_from_lane_relays_for_view(active_view)
+                        .into_iter()
+                        .find(|candidate| candidate.epoch_id == expected_epoch)
+                })
+            };
+            self.state
+                .merge_candidate_with_queue_plan_admissions(
+                    &parent_header,
+                    active_view,
+                    base,
+                    pending_queue_plan_admissions,
+                )
+                .map_err(|error| {
+                    V2LaneWorkError::Persistence(format!(
+                        "pending QueuePlan admissions cannot be attached to the canonical merge candidate: {error}"
+                    ))
+                })?
+                .into_iter()
+                .collect()
         } else {
             Vec::new()
         };
@@ -11176,10 +11367,7 @@ impl CandidateWorkProvider for &mut V2LaneWorkAdapter {
                 .flat_map(|payload| payload.entrypoint_hashes.iter().copied())
                 .collect::<BTreeSet<_>>();
             let nexus = self.state.nexus_snapshot();
-            if !self.autonomous_ordinary_fallback_allowed
-                && proposal_lookahead_enabled(&nexus, self.context.height)
-                && !candidates.is_empty()
-            {
+            if proposal_lookahead_enabled(&nexus, self.context.height) && !candidates.is_empty() {
                 let autonomous_routes = self
                     .state
                     .consensus_lane_routes_at_height(self.context.height);
@@ -11963,7 +12151,7 @@ pub(super) mod tests {
 
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf};
     use iroha_data_model::{
-        ChainId,
+        ChainId, Level,
         account::AccountId,
         block::{
             BlockExecutionContextBundle, BlockHeader, BlockSignature, ExternalExecutionContext,
@@ -11976,6 +12164,7 @@ pub(super) mod tests {
             consensus_v2 as wire,
         },
         consensus::{ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus},
+        isi::Log,
         nexus::{
             DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog, LaneConfig,
             LaneFastpqProofMaterial, LaneId, LaneStorageProfile, LaneVisibility,
@@ -12076,6 +12265,21 @@ pub(super) mod tests {
                 nonzero,
                 nonzero,
                 iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_CONSENSUS,
+                iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_BLOCK_SYNC,
+                iroha_config::parameters::defaults::sumeragi::V2_AUTHENTICATED_MERGE_QC_CAPACITY,
+                iroha_config::parameters::defaults::sumeragi::V2_MERGE_LEADER_BODY_FRAME_HEADROOM_BYTES,
+                iroha_config::parameters::defaults::sumeragi::V2_AUTONOMOUS_CARRIER_HEADROOM_BYTES,
+                iroha_config::parameters::defaults::sumeragi::V2_AUTONOMOUS_PRODUCER_RECHECK,
+                iroha_config::parameters::defaults::sumeragi::V2_HISTORICAL_RECOVERY_STUCK_ATTEMPTS,
+                iroha_config::parameters::defaults::sumeragi::V2_HISTORICAL_RECOVERY_RETRY_TIER_ATTEMPTS,
+                iroha_config::parameters::defaults::sumeragi::V2_HISTORICAL_RECOVERY_MAX_RETRY_TIER,
+                iroha_config::parameters::defaults::sumeragi::V2_SIDECAR_SERVICE_BURST,
+                NativeAmxSigningGuardLimits::new(
+                    iroha_config::parameters::defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_RECORD_CAPACITY,
+                    iroha_config::parameters::defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_RECORD_BYTES,
+                    iroha_config::parameters::defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_ANCHOR_BYTES,
+                )
+                .expect("default Native AMX signing limits"),
             ),
         )
     }
@@ -12375,27 +12579,42 @@ pub(super) mod tests {
         validators
     }
 
-    fn limits_with_native_capacity(
-        session_capacity: usize,
-        body_buckets_per_session: usize,
-    ) -> V2LaneWorkLimits {
+    fn limits_with_native_capacity(record_capacity: usize) -> V2LaneWorkLimits {
         let one = NonZeroUsize::new(1).expect("non-zero fixture limit");
+        let record_capacity =
+            NonZeroUsize::new(record_capacity).expect("non-zero signing-record capacity");
         V2LaneWorkLimits::new(
-            NonZeroUsize::new(session_capacity).expect("non-zero session capacity"),
-            NonZeroUsize::new(body_buckets_per_session).expect("non-zero body-bucket capacity"),
+            one,
+            one,
             one,
             one,
             one,
             one,
             one,
             iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_CONSENSUS,
+            iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_BLOCK_SYNC,
+            iroha_config::parameters::defaults::sumeragi::V2_AUTHENTICATED_MERGE_QC_CAPACITY,
+            iroha_config::parameters::defaults::sumeragi::V2_MERGE_LEADER_BODY_FRAME_HEADROOM_BYTES,
+            iroha_config::parameters::defaults::sumeragi::V2_AUTONOMOUS_CARRIER_HEADROOM_BYTES,
+            iroha_config::parameters::defaults::sumeragi::V2_AUTONOMOUS_PRODUCER_RECHECK,
+            iroha_config::parameters::defaults::sumeragi::V2_HISTORICAL_RECOVERY_STUCK_ATTEMPTS,
+            iroha_config::parameters::defaults::sumeragi::V2_HISTORICAL_RECOVERY_RETRY_TIER_ATTEMPTS,
+            iroha_config::parameters::defaults::sumeragi::V2_HISTORICAL_RECOVERY_MAX_RETRY_TIER,
+            iroha_config::parameters::defaults::sumeragi::V2_SIDECAR_SERVICE_BURST,
+            NativeAmxSigningGuardLimits::new(
+                record_capacity,
+                iroha_config::parameters::defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_RECORD_BYTES,
+                iroha_config::parameters::defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_ANCHOR_BYTES,
+            )
+            .expect("valid explicit Native AMX signing limits"),
         )
     }
 
     #[test]
-    fn native_amx_signing_guard_capacity_preserves_small_product() {
-        let capacity = native_amx_signing_guard_capacity(limits_with_native_capacity(8, 16))
-            .expect("small representable capacity");
+    fn native_amx_signing_guard_capacity_preserves_explicit_runtime_bound() {
+        let capacity =
+            native_amx_signing_guard_capacity(limits_with_native_capacity(128))
+                .expect("explicit capacity");
         assert_eq!(capacity.get(), 128);
     }
 
@@ -12636,27 +12855,27 @@ pub(super) mod tests {
 
     #[test]
     fn native_amx_signing_guard_capacity_preserves_exact_hard_boundary() {
-        let capacity = native_amx_signing_guard_capacity(limits_with_native_capacity(2_048, 512))
+        let capacity = native_amx_signing_guard_capacity(limits_with_native_capacity(
+            MAX_NATIVE_AMX_SIGNING_GUARD_RECORDS_HARD,
+        ))
             .expect("exact protocol boundary");
         assert_eq!(capacity.get(), MAX_NATIVE_AMX_SIGNING_GUARD_RECORDS_HARD);
     }
 
     #[test]
-    fn native_amx_signing_guard_capacity_caps_deployed_localnet_oversized_product() {
-        let capacity =
-            native_amx_signing_guard_capacity(limits_with_native_capacity(20_000, 10_000))
-                .expect("representable deployed-localnet capacity");
-        assert_eq!(capacity.get(), MAX_NATIVE_AMX_SIGNING_GUARD_RECORDS_HARD);
-    }
-
-    #[test]
-    fn native_amx_signing_guard_capacity_rejects_usize_overflow() {
-        let error = native_amx_signing_guard_capacity(limits_with_native_capacity(usize::MAX, 2))
-            .expect_err("overflow must fail closed");
+    fn native_amx_signing_guard_capacity_rejects_above_hard_bound_without_clipping() {
+        let above_hard =
+            NonZeroUsize::new(MAX_NATIVE_AMX_SIGNING_GUARD_RECORDS_HARD + 1).expect("non-zero");
+        let error = NativeAmxSigningGuardLimits::new(
+            above_hard,
+            iroha_config::parameters::defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_RECORD_BYTES,
+            iroha_config::parameters::defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_ANCHOR_BYTES,
+        )
+        .expect_err("above-hard record capacity must fail closed");
         assert!(matches!(
             error,
-            V2LaneWorkError::SigningGuard(message)
-                if message == "native AMX signing-record capacity overflows usize"
+            crate::native_amx::NativeAmxSigningGuardError::InvalidInput(message)
+                if message.contains("exceeds its implementation maximum")
         ));
     }
 
@@ -12786,6 +13005,7 @@ pub(super) mod tests {
             activation_root: Hash::new(b"v2 direct-decision sidecar activations"),
             lane_snapshots: Vec::new(),
             lane_drain_certificates: Vec::new(),
+            queue_plan_admissions: Vec::new(),
             execution_batch: None,
             global_state_root: Hash::new(b"v2 direct-decision sidecar state"),
             merge_qc: reference.merge_qc,
@@ -14163,10 +14383,13 @@ pub(super) mod tests {
             proposal.descriptor.lane_id,
             proposal.descriptor.dataspace_id,
         ));
-        let mut reservation = crate::queue::LaneQueueReservationKeyV1 {
-            version: crate::queue::LaneQueueReservationKeyV1::VERSION,
+        let mut reservation = crate::queue::LaneQueueReservationKeyV2 {
+            version: crate::queue::LaneQueueReservationKeyV2::VERSION,
             signed_transaction_hash: accepted.hash(),
             entrypoint_hash: entrypoint.hash(),
+            queue_plan_admission_binding_hash: Hash::new(
+                b"autonomous-recovery-queue-plan-admission-binding",
+            ),
             routing_plan_digest: routing_plan.digest(),
             coordinator_leg: routing_plan.coordinator_leg(),
             lane_id: proposal.descriptor.lane_id,
@@ -15212,7 +15435,7 @@ pub(super) mod tests {
         adapter: &V2LaneWorkAdapter,
         proposal: &LaneBlockProposalV1,
         producer: &PeerId,
-        reservation: &mut crate::queue::LaneQueueReservationKeyV1,
+        reservation: &mut crate::queue::LaneQueueReservationKeyV2,
     ) {
         let (reservation_owner_hash, proposal_identity_hash) =
             autonomous_lane_reservation_identity_hashes_for_proposal(
@@ -18529,7 +18752,127 @@ pub(super) mod tests {
 
     #[test]
     #[allow(clippy::too_many_lines)]
-    fn native_participant_pruned_carrier_response_repairs_exact_evidence_and_retires_request() {
+    fn native_participant_recovery_response_accepts_valid_carrier_above_autonomous_bundle_bound() {
+        let (mut adapter, keys) = fixture_at_height(wire::ConsensusMode::Permissioned, 1);
+        let transaction_key =
+            KeyPair::try_from_seed(vec![0xD8; 32], Algorithm::Ed25519).expect("transaction key");
+        let transaction = TransactionBuilder::new(
+            adapter.context.chain_id.clone(),
+            AccountId::new(transaction_key.public_key().clone()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(
+            Level::INFO,
+            "x".repeat(MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES + 512 * 1024),
+        )])
+        .sign(transaction_key.private_key());
+        let entrypoint_hash = transaction.hash_as_entrypoint();
+        let header = BlockHeader::new(
+            NonZeroU64::new(adapter.context.height).expect("non-zero carrier height"),
+            None,
+            None,
+            None,
+            adapter.context.height,
+            0,
+        );
+        let leader_index =
+            usize::try_from(adapter.context.leader(0)).expect("fixture leader index fits usize");
+        let mut builder = BlockBuilder::new(header);
+        builder.push_transaction(transaction);
+        let mut carrier = builder.build_with_signature(
+            u64::try_from(leader_index).expect("leader index fits u64"),
+            keys[leader_index].private_key(),
+        );
+        carrier
+            .set_transaction_results(
+                Vec::new(),
+                &[entrypoint_hash],
+                vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
+            )
+            .expect("attach large carrier result");
+        let signature =
+            SignatureOf::try_from_hash(keys[leader_index].private_key(), carrier.header().hash())
+                .expect("sign result-bearing large Native carrier");
+        carrier
+            .replace_signatures(
+                [BlockSignature::new(
+                    u64::try_from(leader_index).expect("leader index fits u64"),
+                    signature,
+                )]
+                .into_iter()
+                .collect(),
+            )
+            .expect("replace large carrier signature");
+
+        let carrier_wire_len = carrier
+            .encode_wire()
+            .expect("encode large canonical carrier")
+            .len();
+        assert!(
+            carrier_wire_len > MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES,
+            "fixture must cross the unrelated autonomous source-bundle bound"
+        );
+        assert!(
+            carrier_wire_len
+                < iroha_config::parameters::defaults::sumeragi::BLOCK_MAX_PAYLOAD_BYTES.get(),
+            "fixture remains within the configured canonical block-body budget"
+        );
+        let finality = verified_finality_artifact_for_block(&adapter, &keys, &carrier);
+        let request = LaneHistoricalRecoveryRequestV1 {
+            version: LANE_HISTORICAL_RECOVERY_VERSION_V2,
+            requester: adapter.local_peer.clone(),
+            certificate: None,
+            signer_pops: BTreeMap::new(),
+            kind: LaneHistoricalRecoveryKindV1::NativeAmxParticipantCanonicalBlock {
+                marker: Box::new(native_participant_recovery_marker_for_block(
+                    &adapter, &carrier,
+                )),
+                finality_artifact_hash: HashOf::new(&finality),
+                execution_commitment: Box::new(finality.commit_qc.execution_commitment),
+            },
+        };
+        let response = LaneHistoricalRecoveryResponseV1 {
+            version: LANE_HISTORICAL_RECOVERY_VERSION_V2,
+            request_hash: HashOf::new(&request),
+            payload: LaneHistoricalRecoveryPayloadV1::CanonicalBlock {
+                block: carrier,
+                finality_artifact: finality,
+            },
+        };
+        let encoded_len = BlockMessage::LaneHistoricalRecoveryResponse(Box::new(response.clone()))
+            .encode()
+            .len();
+        let required_frame =
+            super::super::fair_v2_ingress_required_lane_p2p_frame_bytes(encoded_len);
+        assert!(encoded_len > MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES);
+        assert!(
+            required_frame
+                <= iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_BLOCK_SYNC.get(),
+            "configured ConsensusPayload frame must carry every default-valid canonical body"
+        );
+        let sender = PeerId::new(keys[0].public_key().clone());
+        let admitted = fair_v2_ingress_admit_for_test(InboundBlockMessage::new(
+            BlockMessage::LaneHistoricalRecoveryResponse(Box::new(response.clone())),
+            Some(sender),
+        ));
+        assert!(matches!(
+            admitted.message(),
+            BlockMessage::LaneHistoricalRecoveryResponse(_)
+        ));
+
+        adapter.limits.merge_share_frame_capacity =
+            NonZeroUsize::new(1).expect("non-zero undersized consensus frame");
+        adapter.limits.historical_recovery_response_frame_capacity =
+            NonZeroUsize::new(required_frame).expect("non-zero exact recovery frame");
+        assert!(adapter.historical_recovery_response_fits_frame(&response));
+        adapter.limits.historical_recovery_response_frame_capacity =
+            NonZeroUsize::new(required_frame - 1).expect("non-zero undersized recovery frame");
+        assert!(!adapter.historical_recovery_response_fits_frame(&response));
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn native_participant_pruned_carrier_retries_queue_pressure_and_retires_carrier_siblings() {
         let fixture_capacity = NonZeroUsize::new(8).expect("non-zero fixture capacity");
         let limits = V2LaneWorkLimits::new(
             fixture_capacity,
@@ -18540,6 +18883,21 @@ pub(super) mod tests {
             fixture_capacity,
             fixture_capacity,
             iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_CONSENSUS,
+            iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_BLOCK_SYNC,
+            iroha_config::parameters::defaults::sumeragi::V2_AUTHENTICATED_MERGE_QC_CAPACITY,
+            iroha_config::parameters::defaults::sumeragi::V2_MERGE_LEADER_BODY_FRAME_HEADROOM_BYTES,
+            iroha_config::parameters::defaults::sumeragi::V2_AUTONOMOUS_CARRIER_HEADROOM_BYTES,
+            iroha_config::parameters::defaults::sumeragi::V2_AUTONOMOUS_PRODUCER_RECHECK,
+            iroha_config::parameters::defaults::sumeragi::V2_HISTORICAL_RECOVERY_STUCK_ATTEMPTS,
+            iroha_config::parameters::defaults::sumeragi::V2_HISTORICAL_RECOVERY_RETRY_TIER_ATTEMPTS,
+            iroha_config::parameters::defaults::sumeragi::V2_HISTORICAL_RECOVERY_MAX_RETRY_TIER,
+            iroha_config::parameters::defaults::sumeragi::V2_SIDECAR_SERVICE_BURST,
+            NativeAmxSigningGuardLimits::new(
+                iroha_config::parameters::defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_RECORD_CAPACITY,
+                iroha_config::parameters::defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_RECORD_BYTES,
+                iroha_config::parameters::defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_ANCHOR_BYTES,
+            )
+            .expect("default Native AMX signing limits"),
         );
         let kura = Kura::blank_kura_for_testing_with_blocks_in_memory(
             NonZeroUsize::new(1).expect("retain one carrier body"),
@@ -18871,12 +19229,36 @@ pub(super) mod tests {
         );
 
         assert!(adapter.drain_effects(usize::MAX).is_empty());
+        adapter.limits.effect_capacity = NonZeroUsize::new(1).expect("one pressure slot");
+        let pressure_peer = finality
+            .height_context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .find(|peer| peer != &adapter.local_peer)
+            .expect("fixture has a remote pressure target");
+        assert!(adapter.push_effect(V2LaneWorkEffect::PostLaneBlock {
+            peer: pressure_peer,
+            message: BlockMessage::LaneBlockProposal(request.coordinator_proposal.clone()),
+        }));
         assert_eq!(
             adapter
                 .repair_globally_applied_lane_receipts()
-                .expect("schedule exact Native carrier recovery"),
+                .expect("queue pressure defers Native carrier recovery"),
             0,
+            "an absent carrier cannot repair evidence locally"
         );
+        assert!(
+            adapter.native_participant_recovery_requests.is_empty()
+                && adapter
+                    .native_participant_recovery_request_owners
+                    .is_empty(),
+            "queue pressure must not leave an outstanding request or response owner"
+        );
+        let _pressure = adapter.drain_effects(1);
+        adapter
+            .service_next_native_participant_recovery_request()
+            .expect("retry Native carrier recovery after pressure");
         let (target, recovery_request) = adapter
             .drain_effects(usize::MAX)
             .into_iter()
@@ -18888,6 +19270,23 @@ pub(super) mod tests {
                 _ => None,
             })
             .expect("scheduled authenticated Native carrier request");
+        let eligible_commit_signers = finality
+            .commit_qc
+            .signers
+            .iter()
+            .filter_map(|index| {
+                usize::try_from(*index)
+                    .ok()
+                    .and_then(|index| finality.height_context.roster.get(index))
+                    .map(|entry| entry.validator.clone())
+            })
+            .filter(|peer| peer != &adapter.local_peer)
+            .collect::<Vec<_>>();
+        assert!(
+            eligible_commit_signers.len() >= 2,
+            "four-peer finality leaves at least two remote CommitQC recovery sources"
+        );
+        assert_eq!(target, eligible_commit_signers[0]);
         assert!(V2LaneWorkAdapter::peer_is_global_finality_signer(
             &finality, &target,
         ));
@@ -18905,6 +19304,114 @@ pub(super) mod tests {
         assert_eq!(**requested_marker, marker);
         assert_eq!(*finality_artifact_hash, HashOf::new(&finality));
         assert_eq!(**requested_execution, execution_commitment);
+        adapter
+            .service_next_native_participant_recovery_request()
+            .expect("advance bounded CommitQC recovery fanout");
+        let next_effects = adapter.drain_effects(usize::MAX);
+        assert_eq!(
+            next_effects.len(),
+            1,
+            "each service turn advances at most one deterministic recovery destination"
+        );
+        let V2LaneWorkEffect::PostLaneBlock {
+            peer: next_target,
+            message: BlockMessage::LaneHistoricalRecoveryRequest(next_request),
+        } = &next_effects[0]
+        else {
+            panic!("bounded retry fanout must retain the exact recovery request")
+        };
+        assert_eq!(next_target, &eligible_commit_signers[1]);
+        assert_eq!(next_request.as_ref(), &recovery_request);
+        for expected_target in eligible_commit_signers
+            .iter()
+            .skip(2)
+            .chain(std::iter::once(&eligible_commit_signers[0]))
+        {
+            adapter
+                .service_next_native_participant_recovery_request()
+                .expect("continue deterministic CommitQC recovery rotation");
+            let retry_effects = adapter.drain_effects(usize::MAX);
+            assert_eq!(
+                retry_effects.len(),
+                1,
+                "each retry cadence advances one recovery destination"
+            );
+            let V2LaneWorkEffect::PostLaneBlock {
+                peer,
+                message: BlockMessage::LaneHistoricalRecoveryRequest(request),
+            } = &retry_effects[0]
+            else {
+                panic!("recovery rotation must retain the exact request")
+            };
+            assert_eq!(peer, expected_target);
+            assert_eq!(request.as_ref(), &recovery_request);
+        }
+        adapter
+            .service_next_native_participant_recovery_request()
+            .expect("leave an exact main-marker retry queued for cleanup");
+        assert!(
+            adapter.effects.iter().any(|effect| matches!(
+                effect,
+                V2LaneWorkEffect::PostLaneBlock {
+                    message: BlockMessage::LaneHistoricalRecoveryRequest(request),
+                    ..
+                } if HashOf::new(request.as_ref()) == HashOf::new(&recovery_request)
+            )),
+            "the fixture must retain a queued main-marker request when repair succeeds"
+        );
+
+        let mut sibling_marker = marker;
+        sibling_marker.lane_id = LaneId::new(2);
+        sibling_marker.dataspace_id = DataSpaceId::new(8);
+        sibling_marker.lane_incarnation =
+            Hash::new(b"same-carrier sibling participant incarnation");
+        sibling_marker.descriptor_hash = Hash::new(b"same-carrier sibling descriptor");
+        sibling_marker.proposal_hash = Hash::new(b"same-carrier sibling proposal");
+        sibling_marker.settlement_hash =
+            HashOf::from_untyped_unchecked(Hash::new(b"same-carrier sibling settlement"));
+        let mut sibling_request = recovery_request.clone();
+        let LaneHistoricalRecoveryKindV1::NativeAmxParticipantCanonicalBlock {
+            marker: sibling_requested_marker,
+            ..
+        } = &mut sibling_request.kind
+        else {
+            unreachable!("Native sibling request keeps its recovery kind")
+        };
+        *sibling_requested_marker = Box::new(sibling_marker);
+        let sibling_request_hash = HashOf::new(&sibling_request);
+        assert_ne!(sibling_request_hash, HashOf::new(&recovery_request));
+        assert!(adapter.push_effect(V2LaneWorkEffect::PostLaneBlock {
+            peer: target.clone(),
+            message: BlockMessage::LaneHistoricalRecoveryRequest(
+                Box::new(sibling_request.clone(),)
+            ),
+        }));
+        adapter
+            .native_participant_recovery_request_owners
+            .insert(sibling_request_hash, sibling_marker);
+        adapter.native_participant_recovery_requests.insert(
+            sibling_marker,
+            OutstandingNativeParticipantRecoveryRequest {
+                request_hash: sibling_request_hash,
+                request: sibling_request,
+                eligible_peers: vec![target.clone()],
+                next_peer_index: 1,
+            },
+        );
+        assert_eq!(
+            sibling_marker.application_block_height,
+            marker.application_block_height
+        );
+        assert_eq!(
+            sibling_marker.application_block_hash,
+            marker.application_block_hash
+        );
+        assert_eq!(
+            adapter.native_participant_recovery_requests.len(),
+            2,
+            "the fixture retains two response owners for one exact carrier"
+        );
+
         let request_hash = HashOf::new(&recovery_request);
         let response = LaneHistoricalRecoveryResponseV1 {
             version: LANE_HISTORICAL_RECOVERY_VERSION_V2,
@@ -19008,6 +19515,19 @@ pub(super) mod tests {
             adapter
                 .native_participant_recovery_request_owners
                 .is_empty()
+        );
+        assert!(
+            adapter.effects.iter().all(|effect| !matches!(
+                effect,
+                V2LaneWorkEffect::PostLaneBlock {
+                    message: BlockMessage::LaneHistoricalRecoveryRequest(request),
+                    ..
+                } if matches!(
+                    HashOf::new(request.as_ref()),
+                    hash if hash == request_hash || hash == sibling_request_hash
+                )
+            )),
+            "repairing one carrier must purge queued requests for the repaired marker and every resolved sibling marker"
         );
 
         assert_eq!(
@@ -19374,8 +19894,8 @@ pub(super) mod tests {
             "conflicting finality must fail before Kura import"
         );
 
-        let frame_capacity = adapter.limits.merge_share_frame_capacity;
-        adapter.limits.merge_share_frame_capacity =
+        let frame_capacity = adapter.limits.historical_recovery_response_frame_capacity;
+        adapter.limits.historical_recovery_response_frame_capacity =
             NonZeroUsize::new(1).expect("non-zero undersized frame");
         assert_eq!(
             adapter.accept_historical_recovery_response(
@@ -19385,7 +19905,7 @@ pub(super) mod tests {
             V2LaneIngressOutcome::Rejected,
             "oversized responses must fail before Kura import"
         );
-        adapter.limits.merge_share_frame_capacity = frame_capacity;
+        adapter.limits.historical_recovery_response_frame_capacity = frame_capacity;
         assert!(
             adapter.historical_recovery_requests.contains_key(&identity),
             "rejected evidence must retain the exact retry owner"
@@ -20547,6 +21067,27 @@ pub(super) mod tests {
                 } if published == &payload
             )
         }));
+
+        let exact_reservations = queue.live_lane_reservations();
+        let queued_after_reservation = queue.queued_len();
+        let context = adapter.context.clone();
+        for _ in 0..3 {
+            let heartbeat_work = (&mut adapter)
+                .prepare(&context, 0, &[])
+                .expect("heartbeat retry carries durable autonomous ownership");
+            assert_eq!(heartbeat_work.autonomous_lane_payloads.len(), 1);
+
+            adapter.next_autonomous_producer_tick = Instant::now();
+            adapter
+                .schedule_autonomous_lane_production(0, limits)
+                .expect("heartbeat retry drives the idempotent lane producer");
+            assert_eq!(
+                queue.live_lane_reservations(),
+                exact_reservations,
+                "heartbeat/global retry must neither release nor duplicate exact reservations"
+            );
+            assert_eq!(queue.queued_len(), queued_after_reservation);
+        }
     }
 
     #[test]
@@ -20712,10 +21253,13 @@ pub(super) mod tests {
             proposal.descriptor.lane_id,
             proposal.descriptor.dataspace_id,
         ));
-        let mut reservation = crate::queue::LaneQueueReservationKeyV1 {
-            version: crate::queue::LaneQueueReservationKeyV1::VERSION,
+        let mut reservation = crate::queue::LaneQueueReservationKeyV2 {
+            version: crate::queue::LaneQueueReservationKeyV2::VERSION,
             signed_transaction_hash: accepted.hash(),
             entrypoint_hash: entrypoint.hash(),
+            queue_plan_admission_binding_hash: Hash::new(
+                b"autonomous-ready-queue-plan-admission-binding",
+            ),
             routing_plan_digest: routing_plan.digest(),
             coordinator_leg: routing_plan.coordinator_leg(),
             lane_id: proposal.descriptor.lane_id,
@@ -20925,10 +21469,13 @@ pub(super) mod tests {
             proposal.descriptor.lane_id,
             proposal.descriptor.dataspace_id,
         ));
-        let mut reservation = crate::queue::LaneQueueReservationKeyV1 {
-            version: crate::queue::LaneQueueReservationKeyV1::VERSION,
+        let mut reservation = crate::queue::LaneQueueReservationKeyV2 {
+            version: crate::queue::LaneQueueReservationKeyV2::VERSION,
             signed_transaction_hash: accepted.hash(),
             entrypoint_hash: entrypoint.hash(),
+            queue_plan_admission_binding_hash: Hash::new(
+                b"pending-autonomous-queue-plan-admission-binding",
+            ),
             routing_plan_digest: routing_plan.digest(),
             coordinator_leg: routing_plan.coordinator_leg(),
             lane_id: proposal.descriptor.lane_id,
@@ -21003,6 +21550,45 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn repeated_heartbeat_retries_never_make_autonomous_routes_ordinary_eligible() {
+        let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
+        let lane_id = LaneId::new(1);
+        let dataspace_id = DataSpaceId::new(7);
+        prepare_autonomous_test_lane(&mut adapter, &keys, lane_id, dataspace_id);
+
+        let transaction_key = KeyPair::try_from_seed(vec![0xE1; 32], Algorithm::Ed25519)
+            .expect("deterministic autonomous-route transaction key");
+        let transaction = TransactionBuilder::new(
+            adapter.context.chain_id.clone(),
+            AccountId::new(transaction_key.public_key().clone()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .sign(transaction_key.private_key());
+        let accepted =
+            crate::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(transaction));
+        let routing_plan = RoutingPlan::single(RoutingDecision::new(lane_id, dataspace_id));
+        let candidate = CandidateDescriptor::new(&accepted, &routing_plan);
+        let context = adapter.context.clone();
+        let mut provider = &mut adapter;
+
+        for _ in 0..3 {
+            let heartbeat = provider
+                .prepare(&context, 0, &[])
+                .expect("an empty heartbeat requires no ordinary lane ownership");
+            assert!(heartbeat.native_amx_receipts.is_empty());
+
+            let unavailable = provider
+                .prepare(&context, 0, &[candidate])
+                .expect_err("autonomous route must remain unavailable to ordinary execution");
+            assert_eq!(unavailable.indices(), &BTreeSet::from([0]));
+            assert_eq!(
+                unavailable.reason(),
+                "waiting for deterministic autonomous lane authors to publish durable FIFO reservations"
+            );
+        }
+    }
+
+    #[test]
     fn losing_autonomous_carrier_is_durably_retired_before_cache_drop() {
         let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
         let (losing_block, proposal) = planned_lane_candidate_block_at_view(&adapter, &keys, 0);
@@ -21017,10 +21603,13 @@ pub(super) mod tests {
             proposal.descriptor.lane_id,
             proposal.descriptor.dataspace_id,
         ));
-        let mut reservation = crate::queue::LaneQueueReservationKeyV1 {
-            version: crate::queue::LaneQueueReservationKeyV1::VERSION,
+        let mut reservation = crate::queue::LaneQueueReservationKeyV2 {
+            version: crate::queue::LaneQueueReservationKeyV2::VERSION,
             signed_transaction_hash: accepted.hash(),
             entrypoint_hash: entrypoint.hash(),
+            queue_plan_admission_binding_hash: Hash::new(
+                b"losing-autonomous-queue-plan-admission-binding",
+            ),
             routing_plan_digest: routing_plan.digest(),
             coordinator_leg: routing_plan.coordinator_leg(),
             lane_id: proposal.descriptor.lane_id,
@@ -21134,10 +21723,13 @@ pub(super) mod tests {
             proposal.descriptor.lane_id,
             proposal.descriptor.dataspace_id,
         ));
-        let mut reservation = crate::queue::LaneQueueReservationKeyV1 {
-            version: crate::queue::LaneQueueReservationKeyV1::VERSION,
+        let mut reservation = crate::queue::LaneQueueReservationKeyV2 {
+            version: crate::queue::LaneQueueReservationKeyV2::VERSION,
             signed_transaction_hash: accepted.hash(),
             entrypoint_hash: entrypoint.hash(),
+            queue_plan_admission_binding_hash: Hash::new(
+                b"autonomous-ingress-queue-plan-admission-binding",
+            ),
             routing_plan_digest: routing_plan.digest(),
             coordinator_leg: routing_plan.coordinator_leg(),
             lane_id: proposal.descriptor.lane_id,
@@ -21729,6 +22321,7 @@ pub(super) mod tests {
             activation_root: crate::merge::merge_activation_root(&active_lanes),
             lane_snapshots: Vec::new(),
             lane_drain_certificates: Vec::new(),
+            queue_plan_admissions: Vec::new(),
             execution_batch: None,
             global_state_root: crate::merge::reduce_merge_hint_roots(&[]),
         }

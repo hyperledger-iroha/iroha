@@ -616,7 +616,7 @@ fn register_manifest_rejects_retired_successor() {
     let mut block = state.block(block_header(1));
     let mut tx = block.transaction();
     bootstrap_sorafs(&mut tx);
-    register_and_approve(&mut tx, parent, default_chunk_digest(), &council_keys);
+    register_and_approve(&mut tx, parent, chunk_digest_for_seed(0xE5), &council_keys);
     tx.apply();
     block.commit().expect("commit approved predecessor");
 
@@ -665,7 +665,7 @@ fn register_manifest_with_successor_persists_pointer() {
     let mut block = state.block(block_header(1));
     let mut tx = block.transaction();
     bootstrap_sorafs(&mut tx);
-    register_and_approve(&mut tx, parent, default_chunk_digest(), &council_keys);
+    register_and_approve(&mut tx, parent, chunk_digest_for_seed(0xE7), &council_keys);
     tx.apply();
     block.commit().expect("commit approved predecessor");
 
@@ -892,6 +892,8 @@ fn assert_governed_policy_rejection(state: State, policy: PinPolicy, expected_me
         },
         retention_epoch: policy.retention_epoch,
     };
+    let submitted_digest =
+        ManifestDigest::from_manifest(&manifest).expect("digest governed policy fixture");
     let err = RegisterPinManifest {
         manifest_payload: manifest.encode().expect("encode governed policy fixture"),
         submitted_epoch: 5,
@@ -911,7 +913,7 @@ fn assert_governed_policy_rejection(state: State, policy: PinPolicy, expected_me
         other => panic!("expected invalid parameter error, received {other:?}"),
     }
     assert!(
-        tx.world().pin_manifests().get(&default_digest()).is_none(),
+        tx.world().pin_manifests().get(&submitted_digest).is_none(),
         "rejected manifest policy must not store registry state"
     );
     assert_eq!(
@@ -948,6 +950,7 @@ fn manifest_fixture_with_chunk_digest(seed: u8, chunk_digest_sha3_256: [u8; 32])
         .dag_codec(DagCodecId(chunker_registry::MANIFEST_DAG_CODEC))
         .chunking_from_registry(chunker_registry::default_descriptor().id)
         .chunk_digest_sha3_256(chunk_digest_sha3_256)
+        .por_root([commitment.wrapping_add(2).max(1); 32])
         .content_length(default_content_length())
         .car_digest([commitment.wrapping_add(1).max(1); 32])
         .car_size(default_content_length() + 4096)
@@ -1103,6 +1106,15 @@ fn register_and_approve(
         .get(&digest)
         .expect("manifest stored")
         .clone();
+    tx.gov.sorafs_pin_policy.require_council_signatures = true;
+    tx.gov.sorafs_pin_policy.approval_quorum = 1;
+    tx.gov.sorafs_pin_policy.approval_signers =
+        vec![iroha_config::parameters::actual::SorafsPinApprovalSigner {
+            signer_id: "council-a".to_owned(),
+            public_key: council_keys.public_key().clone(),
+            valid_from_block_height: 0,
+            revoked_at_block_height: None,
+        }];
     let envelope = build_envelope(&stored, council_keys);
 
     ApprovePinManifest {

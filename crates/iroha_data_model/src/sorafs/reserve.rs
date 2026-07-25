@@ -694,6 +694,12 @@ pub struct ReserveAuthorityPolicyV1 {
     pub custody_account: AccountId,
     /// Governance treasury receiving rent and credit repayments.
     pub treasury_account: AccountId,
+    /// Exact service account authorized to register reserve partitions and
+    /// administer deterministic rent, lifecycle, and credit transitions.
+    pub operations_authority: AccountId,
+    /// Exact service account authorized to decide pending reserve movements
+    /// and lifecycle appeals.
+    pub decision_authority: AccountId,
     /// Grace period before delinquency.
     pub grace_period_days: u16,
     /// Default threshold after the due date.
@@ -1126,6 +1132,56 @@ pub struct ReserveFinalizedEventPageV1 {
     pub has_more: bool,
     /// Exclusive continuation cursor, present only when `has_more` is true.
     pub next_after: Option<ReserveFinalizedEventCursorV1>,
+}
+
+/// Finalized, exclusive-provider-id page of authoritative reserve accounts.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+pub struct ReserveProviderAccountPageV1 {
+    /// Finalized state anchor shared by every account in the page.
+    pub finalized_cursor: ReserveFinalizedCursorV1,
+    /// Accounts ordered by immutable provider identifier.
+    pub accounts: Vec<ReserveProviderAccountV1>,
+    /// Whether at least one later provider account exists at this anchor.
+    pub has_more: bool,
+    /// Exclusive provider-id continuation, present only when `has_more` is true.
+    pub next_after: Option<ProviderId>,
+}
+
+/// Finalized, exclusive-movement-id page of authoritative reserve movements.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+pub struct ReserveMovementPageV1 {
+    /// Finalized state anchor shared by every movement in the page.
+    pub finalized_cursor: ReserveFinalizedCursorV1,
+    /// Movement records ordered by immutable movement identifier.
+    pub movements: Vec<ReserveMovementRecordV1>,
+    /// Whether at least one later movement exists at this anchor.
+    pub has_more: bool,
+    /// Exclusive movement-id continuation, present only when `has_more` is true.
+    #[cfg_attr(
+        feature = "json",
+        norito(with = "crate::json_helpers::fixed_bytes::option")
+    )]
+    pub next_after: Option<[u8; 32]>,
+}
+
+/// Finalized, exclusive-appeal-id page of authoritative reserve appeals.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+pub struct ReserveAppealPageV1 {
+    /// Finalized state anchor shared by every appeal in the page.
+    pub finalized_cursor: ReserveFinalizedCursorV1,
+    /// Appeal records ordered by immutable appeal identifier.
+    pub appeals: Vec<ReserveAppealRecordV1>,
+    /// Whether at least one later appeal exists at this anchor.
+    pub has_more: bool,
+    /// Exclusive appeal-id continuation, present only when `has_more` is true.
+    #[cfg_attr(
+        feature = "json",
+        norito(with = "crate::json_helpers::fixed_bytes::option")
+    )]
+    pub next_after: Option<[u8; 32]>,
 }
 
 fn validate_ratio(value: u32, field: ReserveRatioField) -> Result<(), ReservePolicyError> {
@@ -1619,6 +1675,7 @@ mod tests {
                 operation_id: Some([0x41; 32]),
                 policy_digest: [0x51; 32],
                 provider_revision: 9,
+                resulting_lifecycle_stage: Some(ReserveLifecycleStage::Active),
                 authority: reserve_account().terms.provider_account,
                 occurred_at_unix_ms: 12_345,
             },
@@ -1655,5 +1712,87 @@ mod tests {
                 .expect("decode finalized reserve event page JSON");
             assert_eq!(decoded, page);
         }
+    }
+
+    #[test]
+    fn finalized_reserve_record_pages_round_trip_canonically() {
+        let finalized_cursor = ReserveFinalizedCursorV1 {
+            height: 9,
+            block_hash: [0x91; 32],
+        };
+        let account = reserve_account();
+        let provider_id = account.terms.provider_id;
+        let provider_account = account.terms.provider_account.clone();
+        let movement = ReserveMovementRecordV1 {
+            movement_id: [0x51; 32],
+            provider_id,
+            kind: ReserveMovementKindV1::TopUp,
+            amount: XorQuantity::try_from_micro(2_000_000).expect("movement amount fixture"),
+            requested_by: provider_account.clone(),
+            expected_provider_revision: 1,
+            policy_digest: [0x41; 32],
+            status: ReserveMovementStatusV1::Pending,
+            requested_at_unix: 86_401,
+            decided_by: None,
+            decided_at_unix: None,
+            rationale: None,
+        };
+        let appeal = ReserveAppealRecordV1 {
+            appeal_id: [0x61; 32],
+            provider_id,
+            submitted_by: provider_account,
+            requested_stage: ReserveLifecycleStage::Active,
+            reason: "canonical appeal fixture".to_owned(),
+            evidence_digest: Some([0x71; 32]),
+            expected_provider_revision: 2,
+            status: ReserveAppealStatusV1::Pending,
+            submitted_at_unix: 86_402,
+            decided_by: None,
+            decided_at_unix: None,
+            rationale: None,
+        };
+        let provider_page = ReserveProviderAccountPageV1 {
+            finalized_cursor,
+            accounts: vec![account],
+            has_more: true,
+            next_after: Some(provider_id),
+        };
+        let movement_page = ReserveMovementPageV1 {
+            finalized_cursor,
+            movements: vec![movement],
+            has_more: true,
+            next_after: Some([0x51; 32]),
+        };
+        let appeal_page = ReserveAppealPageV1 {
+            finalized_cursor,
+            appeals: vec![appeal],
+            has_more: true,
+            next_after: Some([0x61; 32]),
+        };
+
+        macro_rules! assert_page_round_trip {
+            ($page:expr, $ty:ty) => {{
+                let encoded = norito::to_bytes(&$page).expect("encode canonical reserve page");
+                let decoded: $ty =
+                    norito::decode_from_bytes(&encoded).expect("decode canonical reserve page");
+                assert_eq!(decoded, $page);
+                assert_eq!(
+                    norito::to_bytes(&decoded).expect("re-encode canonical reserve page"),
+                    encoded
+                );
+                #[cfg(feature = "json")]
+                {
+                    let encoded =
+                        norito::json::to_vec(&$page).expect("encode canonical reserve page JSON");
+                    let decoded: $ty = norito::json::from_slice(&encoded)
+                        .expect("decode canonical reserve page JSON");
+                    assert_eq!(decoded, $page);
+                }
+            }};
+        }
+
+        assert_page_round_trip!(provider_page, ReserveProviderAccountPageV1);
+        assert_page_round_trip!(movement_page, ReserveMovementPageV1);
+        assert_page_round_trip!(appeal_page, ReserveAppealPageV1);
     }
 }

@@ -1,0 +1,27 @@
+{
+  "status": "Error",
+  "code": "SFS-NORITO-001",
+  "category": "norito",
+  "message": "failed to decode OrderRequestV1 Norito payload: failed to decode orderbook payload: length mismatch",
+  "action": "Re-encode the orderbook payload with the canonical SoraFS Norito schema.",
+  "docs_url": "docs/portal/docs/sorafs/reference-sdk/errors.md",
+  "telemetry_tags": [
+    "sorafs.reference.orderbook",
+    "sorafs.reference.orderbook.order_request",
+    "sorafs.reference.code.SFS-NORITO-001"
+  ],
+  "context": [
+    {
+      "key": "schema",
+      "value": "OrderRequestV1"
+    }
+  ],
+  "inputs": [
+    {
+      "kind": "orderbook_order_request",
+      "path": "order_request_trailing_bytes_v1.to"
+    }
+  ],
+  "version": 1,
+  "generated_at": 123
+}

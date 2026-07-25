@@ -3,7 +3,8 @@
 
 use std::{
     collections::BTreeSet,
-    num::NonZeroU32,
+    fs,
+    num::{NonZeroU32, NonZeroUsize},
     time::{Duration, Instant},
 };
 
@@ -20,7 +21,9 @@ use iroha::{
         asset::{AssetDefinition, AssetDefinitionId, AssetId},
         block::{
             ExternalExecutionRouteLeg, ExternalExecutionRouteRole, Header, SignedBlock,
-            consensus::{LaneBlockCommitment, NativeAmxPhase, NativeAmxReceipt},
+            consensus::{
+                LaneBlockCommitment, NativeAmxLegRecordV2, NativeAmxPhase, NativeAmxReceipt,
+            },
         },
         da::commitment::DaProofPolicyBundle,
         domain::{Domain, DomainId},
@@ -41,16 +44,24 @@ use iroha::{
         peer::PeerId,
         prelude::Quantity,
         query::block::prelude::FindBlocks,
-        transaction::{SignedTransaction, TransactionEntrypoint},
+        transaction::{FeePaymentIntent, SignedTransaction, TransactionEntrypoint},
     },
 };
-use iroha_config::parameters::actual::LaneConfig as ActualLaneConfig;
-use iroha_core::da::proof_policy_bundle;
+use iroha_config::{
+    kura::{FsyncMode, InitMode},
+    parameters::{
+        actual::{Kura as KuraConfig, LaneConfig as ActualLaneConfig},
+        defaults,
+    },
+};
+use iroha_config_base::WithOrigin;
+use iroha_core::{da::proof_policy_bundle, kura::Kura};
 use iroha_crypto::{Algorithm, KeyPair, PrivateKey};
 use iroha_data_model::prelude::QueryBuilderExt;
 use iroha_test_network::{
-    NetworkBuilder, dataspace_setup_instruction, domain_setup_instruction_in_dataspace,
-    genesis_factory_with_post_topology, init_instruction_registry,
+    NetworkBuilder, NetworkPeer, dataspace_setup_instruction,
+    domain_setup_instruction_in_dataspace, genesis_factory_with_post_topology,
+    init_instruction_registry,
 };
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 use norito::json::{self, Value as JsonValue};
@@ -77,6 +88,16 @@ const PIPELINE_TIME: Duration = Duration::from_secs(2);
 const NATIVE_AMX_SOAK_ITERATIONS_ENV: &str = "IROHA_NATIVE_AMX_SOAK_ITERATIONS";
 const NATIVE_AMX_SOAK_ITERATIONS_DEFAULT: usize = 10;
 const NATIVE_AMX_SOAK_ITERATIONS_MAX: usize = 100;
+const NATIVE_AMX_GROUP_SIZE: usize = 2;
+const EVICTED_BLOCK_INDEX_START: u64 = u64::MAX;
+const BLOCK_INDEX_ENTRY_BYTES: usize = core::mem::size_of::<u64>() * 2;
+const NATIVE_AMX_GROUPED_PRUNING_MARKER: &str = "[multilane-release-native-evidence] \
+grouped_sources=2 durable_manifest=passed body_eviction_recovery=passed \
+authenticated_remote_recovery=passed exact_once=passed";
+const NATIVE_AMX_MANIFEST_FILE_PREFIX: &str = "native_amx_manifest_v1_";
+const NATIVE_AMX_RECEIPT_FILE_PREFIX: &str = "native_amx_receipt_v1_";
+const NATIVE_AMX_EVIDENCE_FILE_SUFFIX: &str = ".norito";
+const NATIVE_AMX_LATEST_POINTER_FILE: &str = "native_amx_participant_receipts.latest_v1.norito";
 
 #[derive(Clone)]
 struct ConfigLayer(Table);
@@ -140,7 +161,7 @@ fn fee_asset_definition_id() -> AssetDefinitionId {
     )
 }
 
-fn da_proof_policy_bundle() -> DaProofPolicyBundle {
+fn native_amx_lane_catalog() -> LaneCatalog {
     let lane_count = NonZeroU32::new(3).expect("lane count");
     let lanes = vec![
         ModelLaneConfig {
@@ -165,7 +186,11 @@ fn da_proof_policy_bundle() -> DaProofPolicyBundle {
             ..ModelLaneConfig::default()
         },
     ];
-    let catalog = LaneCatalog::new(lane_count, lanes).expect("lane catalog");
+    LaneCatalog::new(lane_count, lanes).expect("lane catalog")
+}
+
+fn da_proof_policy_bundle() -> DaProofPolicyBundle {
+    let catalog = native_amx_lane_catalog();
     let lane_config = ActualLaneConfig::from_catalog(&catalog);
     proof_policy_bundle(&lane_config)
 }
@@ -584,6 +609,220 @@ fn assert_native_amx_execution_context(
         );
     }
     Ok(receipt.clone())
+}
+
+#[derive(Clone)]
+struct GroupedNativeAmxEvidence {
+    block: SignedBlock,
+    transactions: Vec<SignedTransaction>,
+    receipts: Vec<NativeAmxReceipt>,
+    bank_leg: NativeAmxLegRecordV2,
+    ordered_sources: Vec<[u8; Hash::LENGTH]>,
+}
+
+fn native_amx_source_id(transaction: &SignedTransaction) -> [u8; Hash::LENGTH] {
+    let mut source_id = [0_u8; Hash::LENGTH];
+    source_id.copy_from_slice(transaction.hash().as_ref());
+    source_id
+}
+
+fn bank_participant_leg(receipt: &NativeAmxReceipt) -> Result<&NativeAmxLegRecordV2> {
+    receipt
+        .legs
+        .iter()
+        .find(|leg| {
+            leg.lane_id == LaneId::new(BANK_LANE)
+                && leg.dataspace_id == DataSpaceId::new(BANK_DATASPACE)
+        })
+        .ok_or_else(|| eyre!("Native AMX receipt omitted the separate BANK participant leg"))
+}
+
+fn assert_grouped_native_amx_execution(
+    block: &SignedBlock,
+    transactions: &[SignedTransaction],
+) -> Result<GroupedNativeAmxEvidence> {
+    ensure!(
+        transactions.len() == NATIVE_AMX_GROUP_SIZE,
+        "grouped Native AMX release evidence requires exactly {NATIVE_AMX_GROUP_SIZE} sources"
+    );
+    let source_set = transactions
+        .iter()
+        .map(native_amx_source_id)
+        .collect::<BTreeSet<_>>();
+    ensure!(
+        source_set.len() == NATIVE_AMX_GROUP_SIZE,
+        "grouped Native AMX release evidence reused a source identity"
+    );
+    let mut ordered_sources = source_set.into_iter().collect::<Vec<_>>();
+    ordered_sources.sort_unstable();
+
+    let submitted_entrypoints = transactions
+        .iter()
+        .map(|transaction| Hash::from(transaction.hash_as_entrypoint()))
+        .collect::<BTreeSet<_>>();
+    ensure!(
+        submitted_entrypoints.len() == NATIVE_AMX_GROUP_SIZE,
+        "grouped Native AMX release evidence reused a transaction entrypoint"
+    );
+    let ordered_entrypoints = block
+        .entrypoint_hashes()
+        .map(Hash::from)
+        .filter(|hash| submitted_entrypoints.contains(hash))
+        .collect::<Vec<_>>();
+    ensure!(
+        ordered_entrypoints.len() == NATIVE_AMX_GROUP_SIZE
+            && ordered_entrypoints.iter().copied().collect::<BTreeSet<_>>()
+                == submitted_entrypoints,
+        "the exact grouped Native AMX sources did not share one canonical application block"
+    );
+
+    let receipts = transactions
+        .iter()
+        .map(|transaction| assert_native_amx_execution_context(block, transaction))
+        .collect::<Result<Vec<_>>>()?;
+    let canonical_bank_leg = bank_participant_leg(
+        receipts
+            .first()
+            .ok_or_else(|| eyre!("grouped Native AMX execution produced no receipt"))?,
+    )?
+    .clone();
+    let descriptor = &canonical_bank_leg.participant_proposal.descriptor;
+    ensure!(
+        descriptor.accepted_transaction_hashes == ordered_entrypoints,
+        "BANK participant proposal did not bind the exact ordered two-source entrypoint group"
+    );
+    ensure!(
+        canonical_bank_leg.participant_settlement.tx_count == u64::try_from(NATIVE_AMX_GROUP_SIZE)?
+            && canonical_bank_leg
+                .participant_settlement
+                .receipts
+                .iter()
+                .map(|receipt| receipt.source_id)
+                .collect::<Vec<_>>()
+                == ordered_sources,
+        "BANK participant settlement did not bind the exact ordered two-source group"
+    );
+    ensure!(
+        canonical_bank_leg
+            .participant_settlement
+            .receipts
+            .iter()
+            .all(|receipt| {
+                receipt.local_amount == Quantity::zero()
+                    && receipt.xor_due == Quantity::zero()
+                    && receipt.xor_after_haircut == Quantity::zero()
+                    && receipt.xor_variance == Quantity::zero()
+                    && receipt.timestamp_ms == block.header().height().get()
+            })
+            && canonical_bank_leg
+                .participant_settlement
+                .nexus_fee_receipts
+                .is_empty()
+            && canonical_bank_leg
+                .participant_settlement
+                .native_amx_receipts
+                .is_empty(),
+        "BANK participant settlement must remain zero-effect and contain no nested receipts"
+    );
+
+    for (transaction, receipt) in transactions.iter().zip(&receipts) {
+        let leg = bank_participant_leg(receipt)?;
+        ensure!(
+            leg.participant_proposal == canonical_bank_leg.participant_proposal
+                && leg.participant_settlement == canonical_bank_leg.participant_settlement
+                && leg.participant_settlement_hash
+                    == canonical_bank_leg.participant_settlement_hash,
+            "grouped Native AMX sources did not share one exact BANK proposal and settlement"
+        );
+        ensure!(
+            receipt.source_id == native_amx_source_id(transaction)
+                && ordered_sources.contains(&receipt.source_id),
+            "grouped Native AMX receipt source is absent from the exact settlement membership"
+        );
+        for body in [&leg.prepare_qc.body, &leg.commit_qc.body] {
+            ensure!(
+                body.source_id == receipt.source_id
+                    && body.tx_entrypoint_hash == transaction.hash_as_entrypoint()
+                    && body.participant_proposal_hash
+                        == canonical_bank_leg.participant_proposal.proposal_hash
+                    && body.participant_settlement_commitment
+                        == Hash::from(canonical_bank_leg.participant_settlement_hash)
+                    && body.participant_previous_block_height
+                        == descriptor.previous_lane_block_height
+                    && body.participant_previous_block_descriptor_hash
+                        == descriptor.previous_lane_block_descriptor_hash
+                    && body.participant_lane_block_height == descriptor.lane_block_height
+                    && body.participant_lane_block_view == descriptor.lane_block_view,
+                "grouped Native AMX QC body drifted from its exact source/proposal/settlement/predecessor identity"
+            );
+        }
+    }
+
+    Ok(GroupedNativeAmxEvidence {
+        block: block.clone(),
+        transactions: transactions.to_vec(),
+        receipts,
+        bank_leg: canonical_bank_leg,
+        ordered_sources,
+    })
+}
+
+async fn wait_for_grouped_native_amx_durable_application(
+    client: &Client,
+    evidence: &GroupedNativeAmxEvidence,
+    context: &str,
+) -> Result<()> {
+    let started = Instant::now();
+    let mut last_error: Option<String> = None;
+    let descriptor = &evidence.bank_leg.participant_proposal.descriptor;
+    while started.elapsed() <= STATUS_WAIT_TIMEOUT {
+        let client = client.clone();
+        match spawn_blocking(move || client.get_sumeragi_diagnostics()).await {
+            Ok(Ok(diagnostics)) => {
+                let application_rows = diagnostics
+                    .native_amx_participant_applications
+                    .iter()
+                    .filter(|row| row.application_block_hash == Some(evidence.block.hash()))
+                    .collect::<Vec<_>>();
+                let exact = application_rows.len() == 1
+                    && application_rows[0].lane_id == LaneId::new(BANK_LANE)
+                    && application_rows[0].dataspace_id == DataSpaceId::new(BANK_DATASPACE)
+                    && application_rows[0].lane_incarnation == descriptor.lane_incarnation
+                    && application_rows[0].participant_height == descriptor.lane_block_height
+                    && application_rows[0].participant_view == descriptor.lane_block_view
+                    && application_rows[0].predecessor_height
+                        == descriptor.previous_lane_block_height
+                    && application_rows[0].predecessor_descriptor_hash
+                        == descriptor.previous_lane_block_descriptor_hash
+                    && application_rows[0].descriptor_hash == descriptor.descriptor_hash
+                    && application_rows[0].proposal_hash
+                        == evidence.bank_leg.participant_proposal.proposal_hash
+                    && application_rows[0].settlement_hash
+                        == evidence.bank_leg.participant_settlement_hash
+                    && application_rows[0].source_count
+                        == u64::try_from(evidence.ordered_sources.len())?
+                    && application_rows[0].source_count >= 2
+                    && application_rows[0].application_block_height
+                        == Some(evidence.block.header().height().get())
+                    && application_rows[0].state.as_str() == "durably_applied";
+                if exact {
+                    return Ok(());
+                }
+                last_error = Some(format!(
+                    "typed diagnostics did not expose the exact two-source BANK durable application: {application_rows:?}"
+                ));
+            }
+            Ok(Err(error)) => last_error = Some(error.to_string()),
+            Err(error) => last_error = Some(format!("diagnostics task join error: {error}")),
+        }
+        sleep(STATUS_POLL_INTERVAL).await;
+    }
+    let suffix = last_error
+        .map(|error| format!("; last diagnostics error: {error}"))
+        .unwrap_or_default();
+    Err(eyre!(
+        "{context}: timed out waiting for exact grouped Native AMX durable application{suffix}"
+    ))
 }
 
 async fn wait_for_all_peers_to_observe_block(
@@ -1098,41 +1337,356 @@ fn native_amx_soak_iterations() -> Result<usize> {
     Ok(iterations)
 }
 
-fn native_amx_soak_transaction(
-    submitter: &Client,
-    iteration: usize,
-    initialize_dataspaces: bool,
-) -> Result<SignedTransaction> {
-    let merchant_domain = DomainId::try_new(format!("soakmerchant{iteration:03}"), "acme")
-        .wrap_err("construct soak merchant domain")?;
-    let treasury_domain = DomainId::try_new(format!("soakbankvault{iteration:03}"), "bank")
-        .wrap_err("construct soak bank domain")?;
+fn native_amx_bootstrap_transaction(submitter: &Client) -> Result<SignedTransaction> {
     let acme_dataspace = DataSpaceId::new(ACME_DATASPACE);
     let bank_dataspace = DataSpaceId::new(BANK_DATASPACE);
-    let mut instructions = Vec::with_capacity(if initialize_dataspaces { 4 } else { 2 });
-    if initialize_dataspaces {
-        instructions.push(dataspace_setup_instruction(
-            "acme",
+    let instructions = vec![
+        dataspace_setup_instruction("acme", acme_dataspace, &submitter.account)?,
+        dataspace_setup_instruction("bank", bank_dataspace, &submitter.account)?,
+        domain_setup_instruction_in_dataspace(
+            &DomainId::try_new("soakbootstrapmerchant", "acme")?,
             acme_dataspace,
             &submitter.account,
-        )?);
-        instructions.push(dataspace_setup_instruction(
-            "bank",
+        )?,
+        domain_setup_instruction_in_dataspace(
+            &DomainId::try_new("soakbootstrapvault", "bank")?,
             bank_dataspace,
             &submitter.account,
-        )?);
+        )?,
+    ];
+    Ok(submitter.build_transaction(
+        instructions,
+        FeePaymentIntent::authority(Vec::new(), None),
+        Metadata::default(),
+    ))
+}
+
+fn native_amx_soak_transactions(
+    submitter: &Client,
+    iteration: usize,
+) -> Result<Vec<SignedTransaction>> {
+    let acme_dataspace = DataSpaceId::new(ACME_DATASPACE);
+    let bank_dataspace = DataSpaceId::new(BANK_DATASPACE);
+    let mut transactions = (0..NATIVE_AMX_GROUP_SIZE)
+        .map(|member| {
+            let merchant_domain =
+                DomainId::try_new(format!("soakmerchant{iteration:03}{member}"), "acme")
+                    .wrap_err("construct grouped soak merchant domain")?;
+            let treasury_domain =
+                DomainId::try_new(format!("soakbankvault{iteration:03}{member}"), "bank")
+                    .wrap_err("construct grouped soak bank domain")?;
+            let instructions = vec![
+                domain_setup_instruction_in_dataspace(
+                    &merchant_domain,
+                    acme_dataspace,
+                    &submitter.account,
+                )?,
+                domain_setup_instruction_in_dataspace(
+                    &treasury_domain,
+                    bank_dataspace,
+                    &submitter.account,
+                )?,
+            ];
+            Ok(submitter.build_transaction(
+                instructions,
+                FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    transactions.sort_by_key(native_amx_source_id);
+    Ok(transactions)
+}
+
+async fn submit_grouped_native_amx_transactions(
+    submitter: &Client,
+    transactions: Vec<SignedTransaction>,
+    context: &str,
+) -> Result<GroupedNativeAmxEvidence> {
+    ensure!(
+        transactions.len() == NATIVE_AMX_GROUP_SIZE,
+        "{context}: expected exactly {NATIVE_AMX_GROUP_SIZE} grouped transactions"
+    );
+    let payloads = transactions
+        .iter()
+        .map(|transaction| submitter.prepare_transaction_payload(transaction))
+        .collect::<Vec<_>>();
+    submitter
+        .submit_prepared_transaction_payload_batch_async(&payloads)
+        .await
+        .wrap_err_with(|| format!("{context}: submit exact two-source Torii batch"))?;
+
+    let first_entrypoint = transactions[0].hash_as_entrypoint();
+    let block = wait_for_block_with_entrypoint(submitter, first_entrypoint, context).await?;
+    for transaction in &transactions {
+        ensure!(
+            block
+                .entrypoint_hashes()
+                .any(|hash| hash == transaction.hash_as_entrypoint()),
+            "{context}: Torii accepted the two-source batch but the sources landed in separate canonical blocks"
+        );
     }
-    instructions.push(domain_setup_instruction_in_dataspace(
-        &merchant_domain,
-        acme_dataspace,
-        &submitter.account,
-    )?);
-    instructions.push(domain_setup_instruction_in_dataspace(
-        &treasury_domain,
-        bank_dataspace,
-        &submitter.account,
-    )?);
-    Ok(submitter.build_transaction(instructions, Metadata::default()))
+    assert_grouped_native_amx_execution(&block, &transactions)
+        .wrap_err_with(|| format!("{context}: validate grouped Native AMX carrier evidence"))
+}
+
+async fn advance_past_native_amx_eviction_tail(
+    submitter: &Client,
+    target_height: u64,
+    context: &str,
+) -> Result<(HashOf<TransactionEntrypoint>, SignedBlock)> {
+    let mut last_height = target_height;
+    let mut final_barrier = None;
+    for offset in 0..3 {
+        let transaction = submitter.build_transaction(
+            [InstructionBox::from(Log::new(
+                Level::INFO,
+                format!("{context}: post-carrier eviction-tail barrier {offset}"),
+            ))],
+            FeePaymentIntent::authority(Vec::new(), None),
+            Metadata::default(),
+        );
+        let entrypoint_hash = transaction.hash_as_entrypoint();
+        submit_and_wait_for_approval(submitter, transaction).await?;
+        let block = wait_for_block_with_entrypoint(
+            submitter,
+            entrypoint_hash,
+            &format!("{context}: eviction-tail barrier {offset}"),
+        )
+        .await?;
+        last_height = block.header().height().get();
+        final_barrier = Some((entrypoint_hash, block));
+    }
+    ensure!(
+        last_height > target_height.saturating_add(2),
+        "{context}: carrier height {target_height} remained inside the two-block Kura eviction tail at height {last_height}"
+    );
+    final_barrier.ok_or_else(|| eyre!("{context}: no eviction-tail barrier was committed"))
+}
+
+fn offline_kura_config(store_dir: std::path::PathBuf) -> KuraConfig {
+    KuraConfig {
+        init_mode: InitMode::Strict,
+        store_dir: WithOrigin::inline(store_dir),
+        max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
+        blocks_in_memory: NonZeroUsize::new(2).expect("two is non-zero"),
+        debug_output_new_blocks: false,
+        merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+        fsync_mode: FsyncMode::Batched,
+        fsync_interval: defaults::kura::FSYNC_INTERVAL,
+        block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+        roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
+        eviction_required_replicas: defaults::kura::EVICTION_REQUIRED_REPLICAS,
+    }
+}
+
+fn decode_block_index_entry(bytes: &[u8], height: u64) -> Result<(u64, u64)> {
+    ensure!(height > 0, "block index height must be positive");
+    let index = usize::try_from(height.saturating_sub(1))?;
+    let start = index
+        .checked_mul(BLOCK_INDEX_ENTRY_BYTES)
+        .ok_or_else(|| eyre!("block index byte offset overflow"))?;
+    let end = start
+        .checked_add(BLOCK_INDEX_ENTRY_BYTES)
+        .ok_or_else(|| eyre!("block index byte range overflow"))?;
+    let entry = bytes
+        .get(start..end)
+        .ok_or_else(|| eyre!("block index omits height {height}"))?;
+    let offset = u64::from_le_bytes(entry[..8].try_into().expect("index offset is eight bytes"));
+    let length = u64::from_le_bytes(entry[8..].try_into().expect("index length is eight bytes"));
+    Ok((offset, length))
+}
+
+fn native_amx_primary_blocks_dir(peer: &NetworkPeer) -> std::path::PathBuf {
+    ActualLaneConfig::from_catalog(&native_amx_lane_catalog())
+        .primary()
+        .blocks_dir(peer.kura_store_dir())
+}
+
+fn native_amx_block_index_entry(peer: &NetworkPeer, height: u64) -> Result<(u64, u64)> {
+    decode_block_index_entry(
+        &fs::read(native_amx_primary_blocks_dir(peer).join("blocks.index"))?,
+        height,
+    )
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NativeAmxArtifactSelection {
+    All,
+    Receipts,
+    Manifests,
+}
+
+fn canonical_native_amx_height_artifact(name: &str) -> Option<(NativeAmxArtifactSelection, u64)> {
+    for (prefix, selection) in [
+        (
+            NATIVE_AMX_MANIFEST_FILE_PREFIX,
+            NativeAmxArtifactSelection::Manifests,
+        ),
+        (
+            NATIVE_AMX_RECEIPT_FILE_PREFIX,
+            NativeAmxArtifactSelection::Receipts,
+        ),
+    ] {
+        let Some(height) = name
+            .strip_prefix(prefix)
+            .and_then(|height| height.strip_suffix(NATIVE_AMX_EVIDENCE_FILE_SUFFIX))
+        else {
+            continue;
+        };
+        if height.len() != 20 || !height.bytes().all(|byte| byte.is_ascii_digit()) {
+            return None;
+        }
+        let height = height.parse::<u64>().ok()?;
+        if height == 0 || format!("{prefix}{height:020}{NATIVE_AMX_EVIDENCE_FILE_SUFFIX}") != name {
+            return None;
+        }
+        return Some((selection, height));
+    }
+    None
+}
+
+fn native_amx_artifact_snapshot(
+    peer: &NetworkPeer,
+    selection: NativeAmxArtifactSelection,
+) -> Result<Vec<(String, Hash)>> {
+    let lane_config = ActualLaneConfig::from_catalog(&native_amx_lane_catalog());
+    let bank_entry = lane_config
+        .entry(LaneId::new(BANK_LANE))
+        .ok_or_else(|| eyre!("Native AMX lane catalog omitted BANK storage"))?;
+    let artifact_dir = bank_entry
+        .blocks_dir(peer.kura_store_dir())
+        .join("lane_artifacts");
+    let mut snapshot = Vec::new();
+    for entry in fs::read_dir(&artifact_dir)
+        .wrap_err_with(|| format!("scan Native AMX evidence {}", artifact_dir.display()))?
+    {
+        let entry = entry.wrap_err_with(|| {
+            format!("read Native AMX evidence entry {}", artifact_dir.display())
+        })?;
+        let name = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| eyre!("Native AMX evidence file name is not UTF-8"))?;
+        let artifact_selection = if name == NATIVE_AMX_LATEST_POINTER_FILE {
+            Some(NativeAmxArtifactSelection::Receipts)
+        } else {
+            canonical_native_amx_height_artifact(&name).map(|(selection, _)| selection)
+        };
+        let Some(artifact_selection) = artifact_selection else {
+            ensure!(
+                !name.starts_with("native_amx_"),
+                "unexpected, temporary, or legacy Native AMX evidence file: {}",
+                artifact_dir.join(&name).display()
+            );
+            continue;
+        };
+        if !matches!(selection, NativeAmxArtifactSelection::All) && selection != artifact_selection
+        {
+            continue;
+        }
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path)
+            .wrap_err_with(|| format!("inspect Native AMX evidence {}", path.display()))?;
+        ensure!(
+            metadata.file_type().is_file() && !metadata.file_type().is_symlink(),
+            "Native AMX evidence must be a regular non-symlink file: {}",
+            path.display()
+        );
+        let bytes = fs::read(&path)
+            .wrap_err_with(|| format!("read Native AMX evidence {}", path.display()))?;
+        ensure!(
+            !bytes.is_empty(),
+            "Native AMX evidence file is empty: {}",
+            path.display()
+        );
+        snapshot.push((name, Hash::new(&bytes)));
+    }
+    snapshot.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+    Ok(snapshot)
+}
+
+fn native_amx_evidence_artifact_snapshot(peer: &NetworkPeer) -> Result<Vec<(String, Hash)>> {
+    let snapshot = native_amx_artifact_snapshot(peer, NativeAmxArtifactSelection::All)?;
+    ensure!(
+        snapshot
+            .iter()
+            .any(|(name, _)| name.starts_with(NATIVE_AMX_MANIFEST_FILE_PREFIX)),
+        "Native AMX evidence snapshot omitted standalone manifests"
+    );
+    ensure!(
+        snapshot
+            .iter()
+            .any(|(name, _)| name.starts_with(NATIVE_AMX_RECEIPT_FILE_PREFIX)),
+        "Native AMX evidence snapshot omitted standalone receipts"
+    );
+    ensure!(
+        snapshot
+            .iter()
+            .any(|(name, _)| name == NATIVE_AMX_LATEST_POINTER_FILE),
+        "Native AMX evidence snapshot omitted the latest pointer"
+    );
+    Ok(snapshot)
+}
+
+fn evict_native_amx_carrier_body_offline(peer: &NetworkPeer, height: u64) -> Result<u64> {
+    let catalog = native_amx_lane_catalog();
+    let lane_config = ActualLaneConfig::from_catalog(&catalog);
+    let config = offline_kura_config(peer.kura_store_dir());
+    let (kura, block_count) =
+        Kura::new_with_configured_lane_catalog(&config, &lane_config, &catalog)?;
+    ensure!(
+        u64::try_from(block_count.0)?.saturating_sub(2) > height,
+        "Native AMX carrier height {height} is still inside the two-block eviction tail at durable height {}",
+        block_count.0
+    );
+    let height =
+        NonZeroUsize::new(usize::try_from(height)?).ok_or_else(|| eyre!("zero carrier height"))?;
+    let payload_len = kura
+        .advertise_required_replicas_for_bench(height)
+        .ok_or_else(|| eyre!("Native AMX carrier has no inline body to evict"))?;
+    let freed = kura.evict_block_bodies_for_bench(payload_len)?;
+    ensure!(
+        freed >= payload_len,
+        "Native AMX carrier eviction freed {freed} bytes, below selected body length {payload_len}"
+    );
+    kura.remove_evicted_block_sidecar_for_testing(height)?;
+    drop(kura);
+
+    let height_u64 = u64::try_from(height.get())?;
+    let (offset, retained_len) = native_amx_block_index_entry(peer, height_u64)?;
+    ensure!(
+        offset == EVICTED_BLOCK_INDEX_START && retained_len == payload_len,
+        "Native AMX carrier index was not durably marked evicted: offset={offset}, length={retained_len}, expected={payload_len}"
+    );
+    ensure!(
+        !native_amx_primary_blocks_dir(peer)
+            .join("da_blocks")
+            .join(format!("{height_u64:020}.norito"))
+            .exists(),
+        "Native AMX remote-recovery fixture retained a local DA body"
+    );
+    Ok(payload_len)
+}
+
+fn remove_latest_native_amx_manifest_offline(
+    peer: &NetworkPeer,
+    evidence: &GroupedNativeAmxEvidence,
+) -> Result<()> {
+    let catalog = native_amx_lane_catalog();
+    let lane_config = ActualLaneConfig::from_catalog(&catalog);
+    let config = offline_kura_config(peer.kura_store_dir());
+    let (kura, _) = Kura::new_with_configured_lane_catalog(&config, &lane_config, &catalog)?;
+    let descriptor = &evidence.bank_leg.participant_proposal.descriptor;
+    kura.remove_latest_native_amx_participant_manifest_for_testing(
+        descriptor.lane_id,
+        descriptor.dataspace_id,
+        descriptor.lane_incarnation,
+        descriptor.lane_block_height,
+        evidence.block.hash(),
+    )?;
+    drop(kura);
+    Ok(())
 }
 
 fn ensure_entrypoint_committed_once(
@@ -1195,6 +1749,7 @@ async fn mixed_dataspace_native_amx_routes_and_commits_with_receipts() -> Result
                     &submitter.account,
                 )?,
             ],
+            FeePaymentIntent::authority(Vec::new(), None),
             Metadata::default(),
         );
         let entrypoint_hash = transaction.hash_as_entrypoint();
@@ -1284,6 +1839,7 @@ async fn native_amx_queue_journal_replays_plan_after_restart() -> Result<()> {
                     &submitter.account,
                 )?,
             ],
+            FeePaymentIntent::authority(Vec::new(), None),
             Metadata::default(),
         );
         let entrypoint_hash = transaction.hash_as_entrypoint();
@@ -1381,7 +1937,33 @@ async fn native_amx_rotating_validator_fault_soak_preserves_independent_particip
             .config_layers()
             .map(|layer| ConfigLayer(layer.into_owned()))
             .collect();
+        let bootstrap_submitter = network
+            .peers()
+            .first()
+            .ok_or_else(|| eyre!("Native AMX release network has no bootstrap peer"))?
+            .client_for(&ALICE_ID, ALICE_KEYPAIR.private_key().clone());
+        let bootstrap_transaction = native_amx_bootstrap_transaction(&bootstrap_submitter)?;
+        let bootstrap_entrypoint = bootstrap_transaction.hash_as_entrypoint();
+        submit_and_wait_for_approval(&bootstrap_submitter, bootstrap_transaction.clone()).await?;
+        let bootstrap_block = wait_for_block_with_entrypoint(
+            &bootstrap_submitter,
+            bootstrap_entrypoint,
+            "Native AMX dataspace bootstrap",
+        )
+        .await?;
+        let bootstrap_receipt =
+            assert_native_amx_execution_context(&bootstrap_block, &bootstrap_transaction)?;
+        wait_for_all_peers_to_observe_native_amx_evidence(
+            &network,
+            &bootstrap_transaction,
+            bootstrap_block.hash(),
+            &bootstrap_receipt,
+            "Native AMX dataspace bootstrap convergence",
+        )
+        .await?;
+
         let mut observed_sources = BTreeSet::new();
+        let mut pruning_evidence: Option<GroupedNativeAmxEvidence> = None;
 
         for iteration in 0..iterations {
             let offline_index = iteration % PEERS;
@@ -1397,51 +1979,37 @@ async fn native_amx_rotating_validator_fault_soak_preserves_independent_particip
                 .ok_or_else(|| eyre!("iteration {iteration}: missing submit peer"))?;
             let submitter =
                 submit_peer.client_for(&ALICE_ID, ALICE_KEYPAIR.private_key().clone());
-            let transaction =
-                native_amx_soak_transaction(&submitter, iteration, iteration == 0)?;
-            let entrypoint_hash = transaction.hash_as_entrypoint();
+            let transactions = native_amx_soak_transactions(&submitter, iteration)?;
 
             offline_peer.shutdown().await;
 
             // Always restart the rotated validator, even if the three-live-peer
             // commit attempt fails. This keeps the failure diagnostic local to
             // the iteration and lets network teardown remain deterministic.
-            let outage_result: Result<(SignedBlock, NativeAmxReceipt)> = async {
-                let approved_route =
-                    submit_and_wait_for_approval(&submitter, transaction.clone()).await?;
-                if let Some((lane_id, dataspace_id)) = approved_route {
-                    ensure!(
-                        (lane_id == LaneId::new(ACME_LANE)
-                            && dataspace_id == DataSpaceId::new(ACME_DATASPACE))
-                            || (lane_id == LaneId::new(UNIVERSAL_LANE)
-                                && dataspace_id == DataSpaceId::UNIVERSAL),
-                        "iteration {iteration}: unexpected coordinator route lane {} dataspace {}",
-                        lane_id.as_u32(),
-                        dataspace_id.as_u64()
-                    );
-                }
-                let block = wait_for_block_with_entrypoint(
+            let outage_result: Result<GroupedNativeAmxEvidence> = async {
+                let evidence = submit_grouped_native_amx_transactions(
                     &submitter,
-                    entrypoint_hash,
+                    transactions,
                     &format!("iteration {iteration}: three-live-validator commit"),
                 )
                 .await?;
-                let receipt = assert_native_amx_execution_context(&block, &transaction)?;
-                ensure!(
-                    observed_sources.insert(receipt.source_id),
-                    "iteration {iteration}: a source identity was reused"
-                );
-                let [first, second] = receipt.legs.as_slice() else {
-                    return Err(eyre!(
-                        "iteration {iteration}: expected exactly two participant legs"
-                    ));
-                };
-                ensure!(
-                    first.prepare_qc.body != second.prepare_qc.body
-                        && first.commit_qc.body != second.commit_qc.body,
-                    "iteration {iteration}: participant routes did not retain independent phase-QC bodies"
-                );
-                Ok((block, receipt))
+                for receipt in &evidence.receipts {
+                    ensure!(
+                        observed_sources.insert(receipt.source_id),
+                        "iteration {iteration}: a grouped source identity was reused"
+                    );
+                    let [first, second] = receipt.legs.as_slice() else {
+                        return Err(eyre!(
+                            "iteration {iteration}: expected exactly two participant legs"
+                        ));
+                    };
+                    ensure!(
+                        first.prepare_qc.body != second.prepare_qc.body
+                            && first.commit_qc.body != second.commit_qc.body,
+                        "iteration {iteration}: participant routes did not retain independent phase-QC bodies"
+                    );
+                }
+                Ok(evidence)
             }
             .await;
 
@@ -1452,51 +2020,220 @@ async fn native_amx_rotating_validator_fault_soak_preserves_independent_particip
                     format!("iteration {iteration}: restart validator {offline_index}")
                 });
             restart_result?;
-            let (block, receipt) = outage_result?;
+            let evidence = outage_result?;
 
-            let relay = wait_for_all_peers_to_observe_native_amx_evidence(
-                &network,
-                &transaction,
-                block.hash(),
-                &receipt,
-                &format!("iteration {iteration}: post-restart convergence"),
-            )
-            .await?;
-            assert_native_amx_relay_tamper_matrix(&relay, &receipt)?;
+            let mut canonical_group_relay: Option<LaneRelayEnvelope> = None;
+            for (member, (transaction, receipt)) in evidence
+                .transactions
+                .iter()
+                .zip(&evidence.receipts)
+                .enumerate()
+            {
+                let relay = wait_for_all_peers_to_observe_native_amx_evidence(
+                    &network,
+                    transaction,
+                    evidence.block.hash(),
+                    receipt,
+                    &format!(
+                        "iteration {iteration}: grouped member {member} post-restart convergence"
+                    ),
+                )
+                .await?;
+                assert_native_amx_relay_tamper_matrix(&relay, receipt)?;
+                if let Some(canonical) = canonical_group_relay.as_ref() {
+                    ensure!(
+                        relay.settlement_commitment == canonical.settlement_commitment,
+                        "iteration {iteration}: grouped sources exposed different coordinator settlements"
+                    );
+                } else {
+                    canonical_group_relay = Some(relay);
+                }
+            }
+            let relay_sources = canonical_group_relay
+                .as_ref()
+                .ok_or_else(|| eyre!("iteration {iteration}: grouped relay was not published"))?
+                .settlement_commitment
+                .native_amx_receipts
+                .iter()
+                .map(|receipt| receipt.source_id)
+                .collect::<BTreeSet<_>>();
+            ensure!(
+                relay_sources
+                    == evidence
+                        .ordered_sources
+                        .iter()
+                        .copied()
+                        .collect::<BTreeSet<_>>(),
+                "iteration {iteration}: coordinator relay did not bind the exact grouped source membership"
+            );
 
             for (peer_index, peer) in network.peers().iter().enumerate() {
                 let client = peer.client();
-                ensure_entrypoint_committed_once(
+                for transaction in &evidence.transactions {
+                    ensure_entrypoint_committed_once(
+                        &client,
+                        transaction.hash_as_entrypoint(),
+                        &format!("iteration {iteration}: peer {peer_index}"),
+                    )?;
+                }
+                wait_for_grouped_native_amx_durable_application(
                     &client,
-                    entrypoint_hash,
+                    &evidence,
                     &format!("iteration {iteration}: peer {peer_index}"),
-                )?;
-                let diagnostics = client
-                    .get_sumeragi_diagnostics()
-                    .wrap_err_with(|| {
-                        format!("iteration {iteration}: peer {peer_index} diagnostics")
-                    })?;
-                let durable_rows = diagnostics
+                )
+                .await?;
+                let diagnostics = client.get_sumeragi_diagnostics().wrap_err_with(|| {
+                    format!("iteration {iteration}: peer {peer_index} diagnostics")
+                })?;
+                let same_route_rows = diagnostics
                     .native_amx_participant_applications
                     .iter()
                     .filter(|row| {
-                        row.application_block_hash == Some(block.hash())
-                            && row.state.as_str() == "durably_applied"
+                        row.application_block_hash == Some(evidence.block.hash())
+                            && row.lane_id == LaneId::new(ACME_LANE)
+                            && row.dataspace_id == DataSpaceId::new(ACME_DATASPACE)
                     })
-                    .collect::<Vec<_>>();
+                    .count();
                 ensure!(
-                    durable_rows.len() == 1
-                        && durable_rows[0].lane_id == LaneId::new(BANK_LANE)
-                        && durable_rows[0].dataspace_id == DataSpaceId::new(BANK_DATASPACE),
-                    "iteration {iteration}: peer {peer_index} must expose exactly the separate BANK participant application, got {durable_rows:?}"
+                    same_route_rows == 0,
+                    "iteration {iteration}: peer {peer_index} published a forbidden separate same-route coordinator marker"
                 );
             }
+            pruning_evidence = Some(evidence);
         }
 
         ensure!(
-            observed_sources.len() == iterations,
+            observed_sources.len() == iterations.saturating_mul(NATIVE_AMX_GROUP_SIZE),
             "fault soak lost or duplicated Native AMX source identities"
         );
+
+        let pruning_evidence =
+            pruning_evidence.ok_or_else(|| eyre!("fault soak produced no grouped evidence"))?;
+        let pruning_peer = network
+            .peers()
+            .first()
+            .cloned()
+            .ok_or_else(|| eyre!("missing Native AMX pruning peer"))?;
+        let pruning_submitter = network
+            .peers()
+            .get(1)
+            .ok_or_else(|| eyre!("missing pruning-tail submit peer"))?
+            .client_for(&ALICE_ID, ALICE_KEYPAIR.private_key().clone());
+        let (barrier_entrypoint, barrier_block) = advance_past_native_amx_eviction_tail(
+            &pruning_submitter,
+            pruning_evidence.block.header().height().get(),
+            context,
+        )
+        .await?;
+        timeout(
+            STATUS_WAIT_TIMEOUT,
+            pruning_peer.once_block(barrier_block.header().height().get()),
+        )
+        .await
+        .wrap_err("pruning peer did not durably cross the carrier eviction tail")?;
+        let pruning_barrier = wait_for_block_with_entrypoint(
+            &pruning_peer.client(),
+            barrier_entrypoint,
+            "pruning peer exact eviction-tail barrier",
+        )
+        .await?;
+        ensure!(
+            pruning_barrier.hash() == barrier_block.hash(),
+            "pruning peer observed a different eviction-tail barrier identity"
+        );
+        pruning_peer.shutdown().await;
+        let evidence_artifacts = native_amx_evidence_artifact_snapshot(&pruning_peer)?;
+        let receipt_artifacts = native_amx_artifact_snapshot(
+            &pruning_peer,
+            NativeAmxArtifactSelection::Receipts,
+        )?;
+        let manifest_artifacts = native_amx_artifact_snapshot(
+            &pruning_peer,
+            NativeAmxArtifactSelection::Manifests,
+        )?;
+        let eviction_height = pruning_evidence.block.header().height().get();
+        let evicted_payload_len =
+            evict_native_amx_carrier_body_offline(&pruning_peer, eviction_height)?;
+        ensure!(
+            native_amx_evidence_artifact_snapshot(&pruning_peer)? == evidence_artifacts,
+            "Native AMX body eviction changed durable receipt/manifest/index evidence"
+        );
+        remove_latest_native_amx_manifest_offline(&pruning_peer, &pruning_evidence)?;
+        ensure!(
+            native_amx_artifact_snapshot(
+                &pruning_peer,
+                NativeAmxArtifactSelection::Receipts,
+            )? == receipt_artifacts,
+            "Native AMX remote-recovery fixture changed receipt/latest-index evidence"
+        );
+        ensure!(
+            native_amx_artifact_snapshot(
+                &pruning_peer,
+                NativeAmxArtifactSelection::Manifests,
+            )? != manifest_artifacts,
+            "Native AMX remote-recovery fixture failed to create an exact manifest gap"
+        );
+        pruning_peer
+            .start_checked(config_layers.iter().cloned(), None)
+            .await
+            .wrap_err("restart Native AMX peer after authenticated carrier eviction")?;
+        ensure!(
+            native_amx_block_index_entry(&pruning_peer, eviction_height)?
+                == (EVICTED_BLOCK_INDEX_START, evicted_payload_len),
+            "Native AMX restart reinserted the evicted carrier body into inline Kura storage"
+        );
+
+        let recovered_block = wait_for_block_with_entrypoint(
+            &pruning_peer.client(),
+            pruning_evidence.transactions[0].hash_as_entrypoint(),
+            "post-pruning Native AMX carrier recovery",
+        )
+        .await?;
+        ensure!(
+            recovered_block.hash() == pruning_evidence.block.hash(),
+            "authenticated recovery returned a different Native AMX carrier identity"
+        );
+        ensure!(
+            native_amx_primary_blocks_dir(&pruning_peer)
+                .join("da_blocks")
+                .join(format!("{eviction_height:020}.norito"))
+                .is_file(),
+            "authenticated CommitQC-signer recovery did not restore the local DA body"
+        );
+        let recovered_evidence =
+            assert_grouped_native_amx_execution(&recovered_block, &pruning_evidence.transactions)?;
+        ensure!(
+            recovered_evidence.receipts == pruning_evidence.receipts
+                && recovered_evidence.bank_leg == pruning_evidence.bank_leg
+                && recovered_evidence.ordered_sources == pruning_evidence.ordered_sources,
+            "authenticated recovery changed the exact Native AMX manifest-backed group evidence"
+        );
+        ensure!(
+            native_amx_evidence_artifact_snapshot(&pruning_peer)? == evidence_artifacts,
+            "Native AMX startup recovery changed exact durable manifest/receipt/index artifacts"
+        );
+        for (peer_index, peer) in network.peers().iter().enumerate() {
+            let client = peer.client();
+            wait_for_grouped_native_amx_durable_application(
+                &client,
+                &pruning_evidence,
+                &format!("post-pruning peer {peer_index} durable evidence"),
+            )
+            .await?;
+            for transaction in &pruning_evidence.transactions {
+                ensure_entrypoint_committed_once(
+                    &client,
+                    transaction.hash_as_entrypoint(),
+                    &format!("post-pruning peer {peer_index} exact-once"),
+                )?;
+            }
+        }
+        ensure!(
+            native_amx_block_index_entry(&pruning_peer, eviction_height)?
+                == (EVICTED_BLOCK_INDEX_START, evicted_payload_len),
+            "Native AMX proof recovery repopulated the inline carrier body"
+        );
+        eprintln!("{NATIVE_AMX_GROUPED_PRUNING_MARKER}");
         Ok(())
     }
     .await;

@@ -32,6 +32,7 @@ use norito::{
     derive::{JsonDeserialize, JsonSerialize},
     json::{self, Map, Value},
 };
+use sorafs_car::fetch_plan::chunk_fetch_plan_from_json;
 #[cfg(test)]
 use sorafs_car::sorafs_chunker::ChunkProfile;
 use sorafs_manifest::pdp::PdpCommitmentV1;
@@ -255,6 +256,13 @@ impl DaManifestBundle {
             .or_else(|| object.get("chunkPlan"))
             .cloned()
             .ok_or_else(|| eyre!("DA manifest response missing `chunk_plan` field"))?;
+        let parsed_chunk_plan = chunk_fetch_plan_from_json(&chunk_plan)
+            .map_err(|err| eyre!("DA manifest response contained invalid chunk_plan: {err}"))?;
+        if hex::encode(parsed_chunk_plan.payload_digest) != blob_hash_hex {
+            return Err(eyre!(
+                "DA manifest response contained invalid chunk_plan: payload digest does not match blob_hash"
+            ));
+        }
         let sampling_plan = object
             .get("sampling_plan")
             .map(parse_sampling_plan)
@@ -298,6 +306,13 @@ impl DaManifestBundle {
         output_dir: impl AsRef<Path>,
         ticket_label: impl AsRef<str>,
     ) -> Result<DaManifestPersistedPaths> {
+        let parsed_chunk_plan = chunk_fetch_plan_from_json(&self.chunk_plan)
+            .map_err(|err| eyre!("refusing to persist invalid DA chunk plan: {err}"))?;
+        if hex::encode(parsed_chunk_plan.payload_digest) != self.blob_hash_hex {
+            return Err(eyre!(
+                "refusing to persist DA chunk plan whose payload digest does not match blob_hash"
+            ));
+        }
         let root = output_dir.as_ref();
         if root.as_os_str().is_empty() {
             return Err(eyre!("manifest output directory must not be empty"));
@@ -979,12 +994,13 @@ fn proof_to_json(report: &ProofReport) -> Value {
                 .collect(),
         ),
     );
+    map.insert("chunk_count".into(), Value::from(report.proof.chunk_count));
     map.insert(
-        "chunk_roots".into(),
+        "chunk_merkle_path".into(),
         Value::Array(
             report
                 .proof
-                .chunk_roots
+                .chunk_merkle_path
                 .iter()
                 .map(|digest| Value::from(hex::encode(digest)))
                 .collect(),
@@ -1285,6 +1301,20 @@ mod tests {
             .expect("fixture seed derives DA Ed25519 keypair")
     }
 
+    fn empty_chunk_fetch_plan(payload_digest_byte: u8) -> Value {
+        Value::Object(Map::from_iter([
+            (
+                "schema".into(),
+                Value::from(sorafs_car::fetch_plan::CHUNK_FETCH_PLAN_SCHEMA_V1),
+            ),
+            (
+                "payload_digest_blake3_hex".into(),
+                Value::from(hex::encode([payload_digest_byte; 32])),
+            ),
+            ("chunk_fetch_specs".into(), Value::Array(Vec::new())),
+        ]))
+    }
+
     fn sampling_plan_json(sample_seed: Option<Value>, group: Option<Value>) -> Value {
         let mut sample = Map::from_iter([
             ("index".into(), Value::from(1)),
@@ -1488,13 +1518,7 @@ mod tests {
             "manifest".into(),
             Value::Object(Map::from_iter([("dummy".into(), Value::from(1))])),
         );
-        object.insert(
-            "chunk_plan".into(),
-            Value::Object(Map::from_iter([(
-                "chunk_fetch_specs".into(),
-                Value::Array(Vec::new()),
-            )])),
-        );
+        object.insert("chunk_plan".into(), empty_chunk_fetch_plan(0x33));
         object.insert("manifest_hash".into(), Value::from("55".repeat(32)));
         let json = Value::Object(object);
         let bundle = DaManifestBundle::from_json(&json).expect("bundle");
@@ -1506,6 +1530,47 @@ mod tests {
         assert_eq!(bundle.lane_id, 0);
         assert_eq!(bundle.epoch, 1);
         assert!(bundle.sampling_plan.is_none());
+    }
+
+    #[test]
+    fn manifest_bundle_rejects_retired_or_unbound_chunk_plans() {
+        let base = Map::from_iter([
+            ("storage_ticket".into(), Value::from("11".repeat(32))),
+            ("client_blob_id".into(), Value::from("22".repeat(32))),
+            ("blob_hash".into(), Value::from("33".repeat(32))),
+            ("chunk_root".into(), Value::from("44".repeat(32))),
+            ("manifest_hash".into(), Value::from("55".repeat(32))),
+            ("lane_id".into(), Value::from(0)),
+            ("epoch".into(), Value::from(1)),
+            ("manifest_len".into(), Value::from(4)),
+            (
+                "manifest_norito".into(),
+                Value::from(BASE64.encode([0u8; 4])),
+            ),
+        ]);
+        let invalid_plans = [
+            Value::Array(Vec::new()),
+            Value::Object(Map::from_iter([
+                (
+                    "schema".into(),
+                    Value::from(sorafs_car::fetch_plan::CHUNK_FETCH_PLAN_SCHEMA_V1),
+                ),
+                ("chunk_fetch_specs".into(), Value::Array(Vec::new())),
+            ])),
+            empty_chunk_fetch_plan(0),
+            empty_chunk_fetch_plan(0x77),
+        ];
+
+        for plan in invalid_plans {
+            let mut object = base.clone();
+            object.insert("chunk_plan".into(), plan);
+            let err = DaManifestBundle::from_json(&Value::Object(object))
+                .expect_err("retired or unbound plan must be rejected");
+            assert!(
+                err.to_string().contains("invalid chunk_plan"),
+                "unexpected error: {err:?}"
+            );
+        }
     }
 
     #[test]
@@ -1522,13 +1587,7 @@ mod tests {
             "manifest_norito".into(),
             Value::from(BASE64.encode([0u8; 4])),
         );
-        object.insert(
-            "chunk_plan".into(),
-            Value::Object(Map::from_iter([(
-                "chunk_fetch_specs".into(),
-                Value::Array(Vec::new()),
-            )])),
-        );
+        object.insert("chunk_plan".into(), empty_chunk_fetch_plan(0x33));
         object.insert("manifest_hash".into(), Value::from("66".repeat(32)));
         object.insert(
             "sampling_plan".into(),
@@ -1734,10 +1793,10 @@ mod tests {
             manifest_len: manifest_bytes.len() as u64,
             manifest_bytes: manifest_bytes.clone(),
             manifest_json: norito::json::value::to_value(&manifest).expect("manifest json"),
-            chunk_plan: Value::Object(Map::from_iter([(
-                "chunk_fetch_specs".into(),
-                Value::Array(Vec::new()),
-            )])),
+            chunk_plan: sorafs_car::fetch_plan::try_chunk_fetch_plan_to_json(
+                &build_car_plan_from_manifest(&manifest).expect("build manifest CAR plan"),
+            )
+            .expect("render canonical chunk fetch plan"),
             sampling_plan: None,
         };
         let dir = tempdir().expect("tempdir");

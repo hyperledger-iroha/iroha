@@ -126,10 +126,12 @@ SDK-ներ `sorafs_orchestrator`-ի միջոցով):
 - `iroha app sorafs pin list|show`, `alias list` և `replication list` փաթաթում են
   pin-registry REST վերջնակետերը և տպեք հում Norito JSON՝ ատեստավորման բլոկներով
   աուդիտորական ապացույցների համար:
-- `iroha app sorafs storage pin` և `torii /v1/sorafs/pin/register` ընդունում են Norito
-  կամ JSON-ի դրսևորումներ՝ գումարած կամընտիր կեղծանունների ապացույցներ և իրավահաջորդներ. սխալ ձևակերպված ապացույցներ
-  բարձրացնել `400`, հնացած մակերևույթը `503` `Warning: 110`-ով, և
-  ժամկետանց ապացույցները վերադարձնում են `412`:
+- `torii /v1/sorafs/pin/register`-ն ընդունում է փակ JSON V1 հարցումը։
+  `manifest_payload`-ը պետք է լինի canonical Norito `ManifestV1` բայթերի ճշգրիտ,
+  canonical padding-ով base64-ը։ Torii-ն digest-ը, chunker-ը, բովանդակության
+  երկարությունը, pin policy-ն և fee input-ները ստանում է միայն վերծանված
+  manifest-ից և մերժում է հանված կրկնօրինակ summary դաշտերը։ `alias`-ը և
+  ոչ զրոյական `successor_of_hex` predecessor-ը մնում են կամընտիր։
 - `iroha app sorafs repair list` հայելիները վերանորոգում են հերթի ֆիլտրերը, մինչդեռ
   `repair claim|complete|fail|escalate` ներկայացնել ստորագրված աշխատողի գործողությունները կամ կտրատել
   առաջարկներ Torii-ին: Շեղ առաջարկները կարող են ներառել կառավարման հաստատման ամփոփագիր

@@ -120,10 +120,12 @@ SF-6 のセキュリティ (CLI Rust `sorafs_fetch` と SDK のサポート)
 
 - `iroha app sorafs pin list|show` و`alias list` و`replication list` 残りの部分
   ピン Norito JSON の認証が必要です。
-- `iroha app sorafs storage pin` و`torii /v1/sorafs/pin/register` のマニフェスト
-  Norito JSON の証明 別名 後継者証拠
-  証明 `400` 証明 証明 `503` 証明 `Warning: 110` 証明
-  証明は `412` です。
+- `torii /v1/sorafs/pin/register` は閉じた JSON V1 リクエストを受け付けます。
+  `manifest_payload` は canonical Norito `ManifestV1` バイトを正確に canonical
+  padded base64 化したものでなければなりません。Torii は digest、chunker、
+  content length、pin policy、fee input をデコード済み manifest のみから導出し、
+  廃止済みの重複 summary フィールドを拒否します。`alias` とゼロでない
+  `successor_of_hex` predecessor は引き続き任意です。
 - 残り REST (`/v1/sorafs/pin`、`/v1/sorafs/aliases`、`/v1/sorafs/replication`)
   تتضمن هياكل attestation حتى يتمكن العملاء من التحقق من البيانات مقابل أحدث
   ありがとうございます。## いいえ

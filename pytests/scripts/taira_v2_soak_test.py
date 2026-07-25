@@ -6,6 +6,8 @@ import hashlib
 import os
 from pathlib import Path
 import subprocess
+import sys
+import time
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "run_taira_v2_24h_soak.sh"
@@ -15,6 +17,15 @@ EXPECTED_TEST = (
 HEAD_COMMIT = "1" * 40
 HEAD_TREE = "2" * 40
 CARGO_LOCK_SHA256 = "3" * 64
+SOURCE_MANIFEST = "b" * 64
+PROGRAM_TARGET = (
+    REPO_ROOT
+    / "target"
+    / "sumeragi-v2-release"
+    / SOURCE_MANIFEST
+    / "programs"
+    / "invocation.tairafixture"
+)
 PINNED_ENV = {
     "IROHA_TEST_REQUIRE_NETWORK": "1",
     "IROHA_TAIRA_SIM_DURATION_SECS": "86400",
@@ -30,14 +41,87 @@ PINNED_ENV = {
     "IROHA_TAIRA_MAX_LAGGED_CYCLE_RATIO": "0.35",
     "IROHA_TAIRA_MIN_COMMITTED_TPS_RATIO": "0.6",
     "IROHA_TAIRA_KEEP_LOCALNET": "1",
-    "IROHA_TEST_SKIP_BUILD": "0",
-    "IROHA_TEST_ALLOW_REENTRANT_BUILD": "1",
+    "IROHA_TEST_SKIP_BUILD": "1",
+    "IROHA_TEST_ALLOW_REENTRANT_BUILD": "0",
     "IROHA_TEST_BUILD_TIMEOUT_MS": "3600",
     "IROHA_TEST_BUILD_PROFILE": "release",
     "PROFILE": "release",
     "RUST_LOG": "info",
     "CARGO_NET_OFFLINE": "true",
 }
+
+
+def _install_source_bound_fake_localnet_binaries() -> tuple[Path, str]:
+    program_target = PROGRAM_TARGET
+    attestation = program_target / ".sumeragi-v2-prebuilt-binaries.tsv"
+    if attestation.is_file():
+        return program_target, hashlib.sha256(attestation.read_bytes()).hexdigest()
+    binaries = {
+        "irohad": program_target / "release" / "iroha3d",
+        "irohad_message_control": (
+            program_target / "message-control" / "release" / "iroha3d"
+        ),
+        "iroha": program_target / "release" / "iroha",
+        "kagami": program_target / "release" / "kagami",
+    }
+    for label, binary in binaries.items():
+        binary.parent.mkdir(parents=True, exist_ok=True)
+        temporary = binary.with_name(
+            f".{binary.name}.{os.getpid()}.{time.time_ns()}.tmp"
+        )
+        temporary.write_text(
+            f"#!/bin/sh\nprintf '%s\\n' mocked-{label}\n",
+            encoding="utf-8",
+        )
+        temporary.chmod(0o500)
+        os.replace(temporary, binary)
+
+    cargo_lock_sha256 = hashlib.sha256(
+        (REPO_ROOT / "Cargo.lock").read_bytes()
+    ).hexdigest()
+    attestation_temporary = attestation.with_name(
+        f".{attestation.name}.{os.getpid()}.{time.time_ns()}.tmp"
+    )
+    rows = [
+        ("schema_version", "2"),
+        ("source_manifest_sha256", SOURCE_MANIFEST),
+        ("cargo_lock_sha256", cargo_lock_sha256),
+        ("cargo_version_sha256", hashlib.sha256(b"cargo fixture\n").hexdigest()),
+        ("rustc_version_sha256", hashlib.sha256(b"rustc fixture\n").hexdigest()),
+        ("host_triple", "fixture-host"),
+        ("target_triple", "fixture-host"),
+        ("profile", "release"),
+        ("bundle_dir", str(program_target)),
+    ]
+    for label, relative in (
+        ("irohad", "release/iroha3d"),
+        ("irohad_message_control", "message-control/release/iroha3d"),
+        ("iroha", "release/iroha"),
+        ("kagami", "release/kagami"),
+    ):
+        binary = binaries[label]
+        rows.extend(
+            (
+                (f"{label}_relative_path", relative),
+                (f"{label}_sha256", hashlib.sha256(binary.read_bytes()).hexdigest()),
+                (f"{label}_size_bytes", str(binary.stat().st_size)),
+                (f"{label}_mode_octal", "0500"),
+            )
+        )
+    attestation_temporary.write_text(
+        "".join(f"{key}\t{value}\n" for key, value in rows),
+        encoding="utf-8",
+    )
+    attestation_temporary.chmod(0o400)
+    os.replace(attestation_temporary, attestation)
+    for directory in sorted(
+        (path for path in program_target.rglob("*") if path.is_dir()),
+        key=lambda path: len(path.parts),
+        reverse=True,
+    ):
+        directory.chmod(0o500)
+    program_target.chmod(0o500)
+    return program_target, hashlib.sha256(attestation.read_bytes()).hexdigest()
 
 
 def _stubbed_environment(
@@ -47,15 +131,16 @@ def _stubbed_environment(
     run_mode: str = "one",
     evidence_check_status: int = 0,
 ) -> tuple[dict[str, str], Path]:
+    program_target, manifest_sha256 = _install_source_bound_fake_localnet_binaries()
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     python = bin_dir / "python3"
     python.write_text(
         f"""#!/bin/sh
 case "$1" in
-  *compute_workspace_source_manifest.py) printf '%s\n' 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' ;;
+  *compute_workspace_source_manifest.py) printf '%s\n' '{SOURCE_MANIFEST}' ;;
   *check_taira_v2_soak_evidence.py) exit {evidence_check_status} ;;
-  *) exec /usr/bin/python3 "$@" ;;
+  *) exec "$TAIRA_REAL_PYTHON3" "$@" ;;
 esac
 """,
         encoding="utf-8",
@@ -156,6 +241,9 @@ esac
     env["IROHA_RELEASE_HEAD_COMMIT"] = HEAD_COMMIT
     env["IROHA_RELEASE_HEAD_TREE"] = HEAD_TREE
     env["IROHA_RELEASE_CARGO_LOCK_SHA256"] = CARGO_LOCK_SHA256
+    env["IROHA_TEST_TARGET_DIR"] = str(program_target)
+    env["IROHA_RELEASE_PREBUILT_MANIFEST_SHA256"] = manifest_sha256
+    env["TAIRA_REAL_PYTHON3"] = sys.executable
     return env, capture
 
 
@@ -192,7 +280,7 @@ def test_launcher_pins_complete_profile_and_runs_exactly_one_test(
     assert "does not match the parent release invocation" in mismatch.stderr
     assert not capture.exists()
 
-    env["IROHA_RELEASE_SOURCE_MANIFEST_SHA256"] = "a" * 64
+    env["IROHA_RELEASE_SOURCE_MANIFEST_SHA256"] = SOURCE_MANIFEST
     result = _run_launcher(env)
 
     assert result.returncode == 0, result.stderr
@@ -211,11 +299,16 @@ def test_launcher_pins_complete_profile_and_runs_exactly_one_test(
     for name, value in PINNED_ENV.items():
         assert captured_lines.count(f"{name}={value}") == 2
         assert f"{name}=inherited-malicious-override" not in captured_lines
-    source_root = REPO_ROOT / "target" / "sumeragi-v2-release" / ("a" * 64)
+    source_root = REPO_ROOT / "target" / "sumeragi-v2-release" / SOURCE_MANIFEST
     evidence_root = source_root / "evidence" / "taira-v2-24h"
     assert not (evidence_root / ".taira_v2_24h_soak.lock").exists()
-    assert captured.count(f"IROHA_RELEASE_SOURCE_MANIFEST_SHA256={'a' * 64}\n") == 2
-    assert captured.count(f"IROHA_TEST_TARGET_DIR={source_root / 'programs'}\n") == 2
+    assert (
+        captured.count(
+            f"IROHA_RELEASE_SOURCE_MANIFEST_SHA256={SOURCE_MANIFEST}\n"
+        )
+        == 2
+    )
+    assert captured.count(f"IROHA_TEST_TARGET_DIR={PROGRAM_TARGET}\n") == 2
     assert captured.count(f"CARGO_TARGET_DIR={source_root / 'test-suite'}\n") == 2
     evidence_values = {
         line.split("=", 1)[1]
@@ -243,11 +336,35 @@ def test_launcher_pins_complete_profile_and_runs_exactly_one_test(
     assert completion_fields["log_sha256"] == hashlib.sha256(
         run_log.read_bytes()
     ).hexdigest()
+    assert (
+        completion_fields["prebuilt_manifest_sha256"]
+        == env["IROHA_RELEASE_PREBUILT_MANIFEST_SHA256"]
+    )
     assert completion_pointer.read_text(encoding="utf-8").strip() == str(completion)
-    assert captured.count("TEST_NETWORK_BIN_IROHAD=<unset>\n") == 2
-    assert captured.count("KAGAMI_BIN=<unset>\n") == 2
-    assert captured.count("TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL=<unset>\n") == 2
-    assert captured.count("TEST_NETWORK_BIN_IROHA=<unset>\n") == 2
+    program_target = PROGRAM_TARGET
+    assert (
+        captured.count(
+            f"TEST_NETWORK_BIN_IROHAD={program_target / 'release' / 'iroha3d'}\n"
+        )
+        == 2
+    )
+    assert (
+        captured.count(f"KAGAMI_BIN={program_target / 'release' / 'kagami'}\n")
+        == 2
+    )
+    assert (
+        captured.count(
+            "TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL="
+            f"{program_target / 'message-control' / 'release' / 'iroha3d'}\n"
+        )
+        == 2
+    )
+    assert (
+        captured.count(
+            f"TEST_NETWORK_BIN_IROHA={program_target / 'release' / 'iroha'}\n"
+        )
+        == 2
+    )
     assert captured.count("TEST_NETWORK_IROHAD_FEATURES=<unset>\n") == 2
     assert captured.count("CARGO_BIN_EXE_iroha=<unset>\n") == 2
     assert "passed with exactly one test" in result.stderr
@@ -290,7 +407,7 @@ def test_launcher_rejects_profile_override_arguments_before_cargo(
 
 def test_launcher_rejects_a_concurrent_source_bound_soak(tmp_path: Path) -> None:
     env, capture = _stubbed_environment(tmp_path)
-    source_root = REPO_ROOT / "target" / "sumeragi-v2-release" / ("a" * 64)
+    source_root = REPO_ROOT / "target" / "sumeragi-v2-release" / SOURCE_MANIFEST
     lock_path = source_root / "evidence" / "taira-v2-24h" / ".taira_v2_24h_soak.lock"
     lock_path.mkdir(parents=True, exist_ok=False)
     try:

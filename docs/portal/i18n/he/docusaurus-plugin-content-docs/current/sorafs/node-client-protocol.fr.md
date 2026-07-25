@@ -133,10 +133,12 @@ Erreurs courantes remontées aux opérateurs/SDKs :
 - `iroha app sorafs pin list|show`, `alias list` ו-`replication list` מסמלים
   נקודות קצה REST du pin-registry et impriment du Norito JSON brut avec blocks
   d'attestation pour l'audit.
-- `iroha app sorafs storage pin` ו-`torii /v1/sorafs/pin/register` מקובלים
-  מניפסט Norito או JSON, בתוספת des proofs d'alias optionnels et des successors;
-  des proofs mal formés renvoient `400`, des proofs consolètes exposent `503` avec
-  `Warning: 110`, et des proofs expirés renvoient `412`.
+- `torii /v1/sorafs/pin/register` מקבל את בקשת JSON V1 הסגורה.
+  `manifest_payload` חייב להיות base64 קנוני מרופד ומדויק של בתי
+  `ManifestV1` הקנוניים של Norito. ‏Torii גוזר את ה-digest, ה-chunker, אורך
+  התוכן, מדיניות ה-pin וקלטי העמלה רק מה-manifest המפוענח, ודוחה שדות סיכום
+  כפולים שהוצאו משימוש. `alias` ו-predecessor לא-אפס ב-`successor_of_hex`
+  נשארים אופציונליים.
 - Les נקודות קצה REST (`/v1/sorafs/pin`, `/v1/sorafs/aliases`,
   `/v1/sorafs/replication`) incluent des structures d'atestation pour que les
   clients vérifient les données avec les derniers headers de bloc avant d'agir.

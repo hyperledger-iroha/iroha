@@ -26,6 +26,7 @@ import org.hyperledger.iroha.sdk.crypto.KeyManagementException
 import org.hyperledger.iroha.sdk.client.queue.PendingTransactionQueue
 import org.hyperledger.iroha.sdk.crypto.export.KeyExportBundle
 import org.hyperledger.iroha.sdk.crypto.export.KeyExportException
+import org.hyperledger.iroha.sdk.consensus.SumeragiDiagnosticsStatus
 import org.hyperledger.iroha.sdk.nexus.*
 import org.hyperledger.iroha.sdk.sorafs.GatewayFetchRequest
 import org.hyperledger.iroha.sdk.sorafs.GatewayFetchSummary
@@ -493,6 +494,14 @@ class HttpClientTransport(
         "account onboarding readiness",
         200,
     )
+
+    override fun getSumeragiDiagnostics(): CompletableFuture<SumeragiDiagnosticsStatus> =
+        fetchJson(
+            buildJsonGetRequest("/v1/sumeragi/diagnostics", emptyMap()),
+            Function { payload -> SumeragiDiagnosticsStatus.parseJson(payload) },
+            "Sumeragi diagnostics",
+            200,
+        )
 
     override fun resolveAccountAliasIndex(
         index: BigInteger,

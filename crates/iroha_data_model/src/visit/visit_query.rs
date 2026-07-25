@@ -81,6 +81,9 @@ pub fn visit_singular_query<V: Visit + ?Sized>(visitor: &mut V, query: &Singular
         visit_find_sorafs_reserve_provider_by_id(FindSorafsReserveProviderById),
         visit_find_sorafs_reserve_movement_by_id(FindSorafsReserveMovementById),
         visit_find_sorafs_reserve_appeal_by_id(FindSorafsReserveAppealById),
+        visit_find_sorafs_reserve_providers(FindSorafsReserveProviders),
+        visit_find_sorafs_reserve_movements(FindSorafsReserveMovements),
+        visit_find_sorafs_reserve_appeals(FindSorafsReserveAppeals),
         visit_find_sorafs_reserve_events(FindSorafsReserveEvents),
         visit_find_sorafs_pop_issuer_policy(FindSorafsPopIssuerPolicy),
         visit_find_sorafs_pop_credential_commitment_by_digest(FindSorafsPopCredentialCommitmentByDigest),
@@ -89,6 +92,7 @@ pub fn visit_singular_query<V: Visit + ?Sized>(visitor: &mut V, query: &Singular
         visit_find_sorafs_pop_revocation_by_nonce_commitment(FindSorafsPopRevocationByNonceCommitment),
         visit_find_sorafs_pop_audit_digest_by_sequence(FindSorafsPopAuditDigestBySequence),
         visit_find_sorafs_pop_registry_status(FindSorafsPopRegistryStatus),
+        visit_find_sorafs_pin_manifest(FindSorafsPinManifest),
         visit_find_sorafs_repair_task(FindSorafsRepairTask),
         visit_find_sorafs_repair_tasks(FindSorafsRepairTasks),
         visit_find_sorafs_repair_status(FindSorafsRepairStatus),
@@ -294,6 +298,15 @@ macro_rules! query_visitors {
             visit_find_sorafs_reserve_appeal_by_id(
                 &$crate::query::sorafs::prelude::FindSorafsReserveAppealById
             ),
+            visit_find_sorafs_reserve_providers(
+                &$crate::query::sorafs::prelude::FindSorafsReserveProviders
+            ),
+            visit_find_sorafs_reserve_movements(
+                &$crate::query::sorafs::prelude::FindSorafsReserveMovements
+            ),
+            visit_find_sorafs_reserve_appeals(
+                &$crate::query::sorafs::prelude::FindSorafsReserveAppeals
+            ),
             visit_find_sorafs_reserve_events(
                 &$crate::query::sorafs::prelude::FindSorafsReserveEvents
             ),
@@ -317,6 +330,9 @@ macro_rules! query_visitors {
             ),
             visit_find_sorafs_pop_registry_status(
                 &$crate::query::sorafs::prelude::FindSorafsPopRegistryStatus
+            ),
+            visit_find_sorafs_pin_manifest(
+                &$crate::query::sorafs::prelude::FindSorafsPinManifest
             ),
             visit_find_sorafs_repair_task(
                 &$crate::query::sorafs::prelude::FindSorafsRepairTask
@@ -507,6 +523,9 @@ mod tests {
             SingularQueryBox::FindSorafsReserveProviderById(_) => {}
             SingularQueryBox::FindSorafsReserveMovementById(_) => {}
             SingularQueryBox::FindSorafsReserveAppealById(_) => {}
+            SingularQueryBox::FindSorafsReserveProviders(_) => {}
+            SingularQueryBox::FindSorafsReserveMovements(_) => {}
+            SingularQueryBox::FindSorafsReserveAppeals(_) => {}
             SingularQueryBox::FindSorafsReserveEvents(_) => {}
             SingularQueryBox::FindSorafsPopIssuerPolicy(_) => {}
             SingularQueryBox::FindSorafsPopCredentialCommitmentByDigest(_) => {}
@@ -515,6 +534,7 @@ mod tests {
             SingularQueryBox::FindSorafsPopRevocationByNonceCommitment(_) => {}
             SingularQueryBox::FindSorafsPopAuditDigestBySequence(_) => {}
             SingularQueryBox::FindSorafsPopRegistryStatus(_) => {}
+            SingularQueryBox::FindSorafsPinManifest(_) => {}
             SingularQueryBox::FindSorafsRepairTask(_) => {}
             SingularQueryBox::FindSorafsRepairTasks(_) => {}
             SingularQueryBox::FindSorafsRepairStatus(_) => {}
@@ -674,6 +694,12 @@ mod tests {
                 crate::query::sorafs::prelude::FindSorafsProofOutcome::new(
                     crate::sorafs::proof_ledger::ProofOutcomeKindV1::Pdp,
                     [0x51; 32],
+                    None,
+                ),
+            ),
+            SingularQueryBox::FindSorafsPinManifest(
+                crate::query::sorafs::prelude::FindSorafsPinManifest::new(
+                    crate::sorafs::pin_registry::ManifestDigest::new([0x52; 32]),
                     None,
                 ),
             ),

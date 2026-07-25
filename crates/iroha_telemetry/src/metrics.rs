@@ -18404,7 +18404,7 @@ impl Metrics {
     /// Record one bounded committed routing-authority cache outcome.
     pub fn inc_sorafs_routing_authority_cache(&self, outcome: &str) {
         let outcome = match outcome {
-            "hit" | "rebuild" | "rebuild_failure" => outcome,
+            "hit" | "rebuild" | "rebuild_failure" | "stale_rejected" | "fork_rejected" => outcome,
             _ => "invalid",
         };
         self.torii_sorafs_routing_authority_cache_total
@@ -19631,6 +19631,8 @@ mod test {
         assert_eq!(provider_total, 2, "provider capability gauge updates");
 
         metrics.inc_sorafs_routing_authority_cache("hit");
+        metrics.inc_sorafs_routing_authority_cache("stale_rejected");
+        metrics.inc_sorafs_routing_authority_cache("fork_rejected");
         metrics.inc_sorafs_routing_authority_cache("unbounded-runtime-value");
         assert_eq!(
             metrics
@@ -19639,6 +19641,22 @@ mod test {
                 .get(),
             1,
             "routing authority cache hit counter increments"
+        );
+        assert_eq!(
+            metrics
+                .torii_sorafs_routing_authority_cache_total
+                .with_label_values(&["stale_rejected"])
+                .get(),
+            1,
+            "routing authority stale rejection counter increments"
+        );
+        assert_eq!(
+            metrics
+                .torii_sorafs_routing_authority_cache_total
+                .with_label_values(&["fork_rejected"])
+                .get(),
+            1,
+            "routing authority fork rejection counter increments"
         );
         assert_eq!(
             metrics

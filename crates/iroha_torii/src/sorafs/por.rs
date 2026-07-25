@@ -28,6 +28,7 @@ use std::os::unix::fs::{DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as 
 #[cfg(feature = "app_api")]
 use async_trait::async_trait;
 use dashmap::DashMap;
+use iroha_data_model::sorafs::moderation_ledger::sorafs_repair_task_id_v1;
 #[cfg(feature = "app_api")]
 use iroha_futures::supervisor::ShutdownSignal;
 #[cfg(feature = "app_api")]
@@ -46,7 +47,7 @@ use sorafs_manifest::por::{
     PorReportIsoWeekValidationError, PorWeeklyReportV1, PorWeeklyReportValidationError,
     ProviderVrfSubmissionV1, ProviderVrfSubmissionValidationError, provider_vrf_input,
 };
-use sorafs_node::PorVerdictOutcome;
+use sorafs_node::por_repair_source_identity_v1;
 #[cfg(feature = "app_api")]
 use sorafs_node::{
     ManifestVrfBundle, ManifestVrfKey, PlannedChallenge, PorChallengePlannerError, PorRandomness,
@@ -60,22 +61,32 @@ const POR_STATUS_EXPORT_VERSION_V1: u8 = 1;
 const POR_COORDINATOR_SNAPSHOT_VERSION_V1: u8 = 1;
 const MAX_POR_COORDINATOR_RECORDS: usize = 65_536;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PorCoordinatorVerdictOutcome {
+    Inserted,
+    Existing,
+}
+
 #[derive(Debug, Clone)]
 struct RecordedVerdict {
     outcome: AuditOutcomeV1,
     failure_reason: Option<String>,
     decided_at: u64,
     proof_digest: Option<[u8; 32]>,
+    canonical_digest: [u8; 32],
 }
 
-impl From<&AuditVerdictV1> for RecordedVerdict {
-    fn from(verdict: &AuditVerdictV1) -> Self {
-        Self {
+impl RecordedVerdict {
+    fn from_verdict(verdict: &AuditVerdictV1) -> Result<Self, PorCoordinatorError> {
+        let canonical = to_bytes(verdict)
+            .map_err(|error| PorCoordinatorError::CanonicalVerdictEncoding(error.to_string()))?;
+        Ok(Self {
             outcome: verdict.outcome,
             failure_reason: verdict.failure_reason.clone(),
             decided_at: verdict.decided_at,
             proof_digest: verdict.proof_digest,
-        }
+            canonical_digest: *blake3::hash(&canonical).as_bytes(),
+        })
     }
 }
 
@@ -87,6 +98,7 @@ struct RecordedVerdictSnapshot {
     decided_at: u64,
     #[norito(default)]
     proof_digest: Option<[u8; 32]>,
+    canonical_digest: [u8; 32],
 }
 
 impl From<&RecordedVerdict> for RecordedVerdictSnapshot {
@@ -96,6 +108,7 @@ impl From<&RecordedVerdict> for RecordedVerdictSnapshot {
             failure_reason: verdict.failure_reason.clone(),
             decided_at: verdict.decided_at,
             proof_digest: verdict.proof_digest,
+            canonical_digest: verdict.canonical_digest,
         }
     }
 }
@@ -113,6 +126,7 @@ impl RecordedVerdictSnapshot {
             failure_reason: self.failure_reason,
             decided_at: self.decided_at,
             proof_digest: self.proof_digest,
+            canonical_digest: self.canonical_digest,
         })
     }
 }
@@ -425,6 +439,7 @@ impl PorCoordinator {
         &self,
         verdict: &AuditVerdictV1,
     ) -> Result<(), PorCoordinatorError> {
+        let canonical_digest = RecordedVerdict::from_verdict(verdict)?.canonical_digest;
         let _mutation = self.mutation_lock.lock();
         let previous = {
             let mut entry = self.records.get_mut(&verdict.challenge_id).ok_or_else(|| {
@@ -433,11 +448,11 @@ impl PorCoordinator {
                     challenge_id_hex: hex::encode(verdict.challenge_id),
                 }
             })?;
-            if entry.verdict.as_ref().is_none_or(|recorded| {
-                recorded.outcome != verdict.outcome
-                    || recorded.proof_digest != verdict.proof_digest
-                    || recorded.decided_at != verdict.decided_at
-            }) {
+            if entry
+                .verdict
+                .as_ref()
+                .is_none_or(|recorded| recorded.canonical_digest != canonical_digest)
+            {
                 return Err(PorCoordinatorError::RollbackConflict {
                     challenge_id: verdict.challenge_id,
                     challenge_id_hex: hex::encode(verdict.challenge_id),
@@ -445,7 +460,7 @@ impl PorCoordinator {
             }
             let previous = entry.clone();
             entry.verdict = None;
-            entry.repair_history_id = None;
+            entry.repair_task_id = None;
             entry.responded_at = entry.proof_submitted_at;
             previous
         };
@@ -456,53 +471,68 @@ impl PorCoordinator {
         Ok(())
     }
 
-    /// Attach node-side repair history after both lifecycle stores committed.
-    pub(crate) fn update_verdict_outcome(
-        &self,
-        challenge_id: [u8; 32],
-        outcome: &PorVerdictOutcome,
-    ) -> Result<(), PorCoordinatorError> {
-        let _mutation = self.mutation_lock.lock();
-        let Some(repair_history_id) = outcome.repair_history_id else {
-            return Ok(());
-        };
-        let previous = {
-            let mut entry = self.records.get_mut(&challenge_id).ok_or_else(|| {
-                PorCoordinatorError::UnknownChallenge {
-                    challenge_id,
-                    challenge_id_hex: hex::encode(challenge_id),
-                }
-            })?;
-            let previous = entry.clone();
-            entry.repair_history_id = Some(repair_history_id);
-            previous
-        };
-        if let Err(error) = self.persist() {
-            self.records.insert(challenge_id, previous);
-            return Err(error);
-        }
-        Ok(())
-    }
-
-    /// Record an audit verdict emitted by governance.
+    /// Validate a governance verdict against the current coordinator record.
     ///
     /// # Errors
     ///
     /// Returns [`PorCoordinatorError`] if the verdict is invalid, references an
-    /// unknown challenge, or persistence fails.
-    pub(crate) fn record_verdict(
+    /// unknown challenge, or conflicts with a terminal record.
+    pub(crate) fn validate_verdict_candidate(
         &self,
         verdict: &AuditVerdictV1,
         trusted_auditor_keys: &[Vec<u8>],
         auditor_threshold: usize,
-        outcome: PorVerdictOutcome,
-    ) -> Result<(), PorCoordinatorError> {
+    ) -> Result<PorCoordinatorVerdictOutcome, PorCoordinatorError> {
         verdict
             .validate()
             .map_err(PorCoordinatorError::InvalidVerdict)?;
         verdict
             .verify_signatures_with_policy(trusted_auditor_keys, auditor_threshold)
             .map_err(PorCoordinatorError::InvalidVerdictSignature)?;
+        let recorded_verdict = RecordedVerdict::from_verdict(verdict)?;
+        let repair_task_id = (verdict.outcome == AuditOutcomeV1::Failed)
+            .then(|| sorafs_repair_task_id_v1(por_repair_source_identity_v1(verdict.challenge_id)));
+        let entry = self.records.get(&verdict.challenge_id).ok_or_else(|| {
+            PorCoordinatorError::UnknownChallenge {
+                challenge_id: verdict.challenge_id,
+                challenge_id_hex: hex::encode(verdict.challenge_id),
+            }
+        })?;
+        entry.ensure_consistency(verdict.manifest_digest, verdict.provider_id)?;
+        if let Some(existing) = &entry.verdict {
+            return if existing.canonical_digest == recorded_verdict.canonical_digest
+                && entry.repair_task_id == repair_task_id
+            {
+                Ok(PorCoordinatorVerdictOutcome::Existing)
+            } else {
+                Err(PorCoordinatorError::VerdictConflict {
+                    challenge_id: verdict.challenge_id,
+                    challenge_id_hex: hex::encode(verdict.challenge_id),
+                })
+            };
+        }
+        entry.validate_verdict_transition(verdict)?;
+        Ok(PorCoordinatorVerdictOutcome::Inserted)
+    }
+
+    /// Commit a previously validated audit verdict.
+    ///
+    /// Exact replays return [`PorCoordinatorVerdictOutcome::Existing`].
+    pub(crate) fn record_verdict(
+        &self,
+        verdict: &AuditVerdictV1,
+        trusted_auditor_keys: &[Vec<u8>],
+        auditor_threshold: usize,
+    ) -> Result<PorCoordinatorVerdictOutcome, PorCoordinatorError> {
+        verdict
+            .validate()
+            .map_err(PorCoordinatorError::InvalidVerdict)?;
+        verdict
+            .verify_signatures_with_policy(trusted_auditor_keys, auditor_threshold)
+            .map_err(PorCoordinatorError::InvalidVerdictSignature)?;
+        let recorded_verdict = RecordedVerdict::from_verdict(verdict)?;
+        let repair_task_id = (verdict.outcome == AuditOutcomeV1::Failed)
+            .then(|| sorafs_repair_task_id_v1(por_repair_source_identity_v1(verdict.challenge_id)));
         let _mutation = self.mutation_lock.lock();
         let previous = {
             let mut entry = self.records.get_mut(&verdict.challenge_id).ok_or_else(|| {
@@ -512,16 +542,21 @@ impl PorCoordinator {
                 }
             })?;
             entry.ensure_consistency(verdict.manifest_digest, verdict.provider_id)?;
-            if entry.verdict.is_some() {
-                return Err(PorCoordinatorError::DuplicateVerdict {
+            if let Some(existing) = &entry.verdict {
+                if existing.canonical_digest == recorded_verdict.canonical_digest
+                    && entry.repair_task_id == repair_task_id
+                {
+                    return Ok(PorCoordinatorVerdictOutcome::Existing);
+                }
+                return Err(PorCoordinatorError::VerdictConflict {
                     challenge_id: verdict.challenge_id,
                     challenge_id_hex: hex::encode(verdict.challenge_id),
                 });
             }
             entry.validate_verdict_transition(verdict)?;
             let previous = entry.clone();
-            entry.verdict = Some(RecordedVerdict::from(verdict));
-            entry.repair_history_id = outcome.repair_history_id;
+            entry.verdict = Some(recorded_verdict);
+            entry.repair_task_id = repair_task_id;
             if entry.proof_digest.is_none() {
                 entry.proof_digest = verdict.proof_digest;
             }
@@ -534,7 +569,7 @@ impl PorCoordinator {
             self.records.insert(verdict.challenge_id, previous);
             return Err(error);
         }
-        Ok(())
+        Ok(PorCoordinatorVerdictOutcome::Inserted)
     }
 
     /// Snapshot challenge statuses using optional filters.
@@ -819,7 +854,7 @@ struct ChallengeRecord {
     proof_submitted_at: Option<u64>,
     responded_at: Option<u64>,
     verdict: Option<RecordedVerdict>,
-    repair_history_id: Option<u64>,
+    repair_task_id: Option<[u8; 32]>,
 }
 
 impl ChallengeRecord {
@@ -830,7 +865,7 @@ impl ChallengeRecord {
             proof_submitted_at: None,
             responded_at: None,
             verdict: None,
-            repair_history_id: None,
+            repair_task_id: None,
         }
     }
 
@@ -914,11 +949,7 @@ impl ChallengeRecord {
             issued_at: self.challenge.issued_at,
             responded_at: self.responded_at,
             proof_digest: self.proof_digest,
-            repair_task_id: self.repair_history_id.map(|id| {
-                let mut bytes = [0u8; 16];
-                bytes[..8].copy_from_slice(&id.to_le_bytes());
-                bytes
-            }),
+            repair_task_id: self.repair_task_id,
             failure_reason: None,
             verifier_latency_ms: None,
         };
@@ -963,8 +994,8 @@ impl ChallengeRecord {
 
         let expected_responded_at = match &self.verdict {
             None => {
-                if self.repair_history_id.is_some() {
-                    return Err("repair history cannot exist without a verdict".to_owned());
+                if self.repair_task_id.is_some() {
+                    return Err("repair task cannot exist without a verdict".to_owned());
                 }
                 self.proof_submitted_at
             }
@@ -985,7 +1016,7 @@ impl ChallengeRecord {
                     AuditOutcomeV1::Success => {
                         if verdict.failure_reason.is_some()
                             || self.proof_digest.is_none()
-                            || self.repair_history_id.is_some()
+                            || self.repair_task_id.is_some()
                         {
                             return Err(
                                 "successful verdict has inconsistent proof, reason, or repair state"
@@ -998,8 +1029,15 @@ impl ChallengeRecord {
                             .failure_reason
                             .as_deref()
                             .is_none_or(|reason| reason.trim().is_empty())
+                            || self.repair_task_id
+                                != Some(sorafs_repair_task_id_v1(por_repair_source_identity_v1(
+                                    self.challenge.challenge_id,
+                                )))
                         {
-                            return Err("failed verdict is missing a reason".to_owned());
+                            return Err(
+                                "failed verdict is missing its reason or native repair task"
+                                    .to_owned(),
+                            );
                         }
                     }
                     AuditOutcomeV1::Repaired => {
@@ -1008,6 +1046,7 @@ impl ChallengeRecord {
                             .as_deref()
                             .is_none_or(|reason| reason.trim().is_empty())
                             || self.proof_digest.is_none()
+                            || self.repair_task_id.is_some()
                         {
                             return Err(
                                 "repaired verdict is missing a proof or failure reason".to_owned()
@@ -1015,8 +1054,8 @@ impl ChallengeRecord {
                         }
                     }
                 }
-                if self.repair_history_id == Some(0) {
-                    return Err("repair history id zero is reserved".to_owned());
+                if verdict.canonical_digest == [0; 32] {
+                    return Err("verdict canonical digest cannot be zero".to_owned());
                 }
                 self.proof_submitted_at.or(Some(verdict.decided_at))
             }
@@ -1035,7 +1074,7 @@ struct ChallengeRecordSnapshot {
     proof_submitted_at: Option<u64>,
     responded_at: Option<u64>,
     verdict: Option<RecordedVerdictSnapshot>,
-    repair_history_id: Option<u64>,
+    repair_task_id: Option<[u8; 32]>,
 }
 
 impl<'a> norito::core::DecodeFromSlice<'a> for ChallengeRecordSnapshot {
@@ -1052,7 +1091,7 @@ impl From<&ChallengeRecord> for ChallengeRecordSnapshot {
             proof_submitted_at: record.proof_submitted_at,
             responded_at: record.responded_at,
             verdict: record.verdict.as_ref().map(RecordedVerdictSnapshot::from),
-            repair_history_id: record.repair_history_id,
+            repair_task_id: record.repair_task_id,
         }
     }
 }
@@ -1069,7 +1108,7 @@ impl ChallengeRecordSnapshot {
             proof_submitted_at: self.proof_submitted_at,
             responded_at: self.responded_at,
             verdict,
-            repair_history_id: self.repair_history_id,
+            repair_task_id: self.repair_task_id,
         })
     }
 }
@@ -3509,14 +3548,17 @@ pub enum PorCoordinatorError {
         /// Hex representation of the challenge identifier.
         challenge_id_hex: String,
     },
-    /// Verdict already finalised the challenge.
-    #[error("verdict already recorded for challenge {challenge_id_hex}")]
-    DuplicateVerdict {
-        /// Challenge identifier receiving a duplicate verdict.
+    /// A terminal verdict conflicts with the canonical verdict already retained.
+    #[error("verdict conflicts with the terminal record for challenge {challenge_id_hex}")]
+    VerdictConflict {
+        /// Challenge identifier receiving a conflicting verdict.
         challenge_id: [u8; 32],
         /// Hex representation of the challenge identifier.
         challenge_id_hex: String,
     },
+    /// Canonical verdict bytes could not be encoded for exact replay binding.
+    #[error("failed to encode canonical PoR verdict: {0}")]
+    CanonicalVerdictEncoding(String),
     /// A compensating rollback encountered a later or different transition.
     #[error("cannot roll back challenge {challenge_id_hex}; lifecycle state changed")]
     RollbackConflict {
@@ -4354,20 +4396,7 @@ mod tests {
             .expect("proof");
         let verdict = sample_verdict(&challenge, AuditOutcomeV1::Success, Some(proof_digest));
         coordinator
-            .record_verdict(
-                &verdict,
-                &auditor_keys(),
-                1,
-                PorVerdictOutcome {
-                    stats: sorafs_node::PorVerdictStats {
-                        success_samples: 64,
-                        failed_samples: 0,
-                    },
-                    repair_history_id: None,
-                    consecutive_failures: 0,
-                    slash: None,
-                },
-            )
+            .record_verdict(&verdict, &auditor_keys(), 1)
             .expect("verdict");
         let statuses = coordinator.query_statuses(&PorStatusFilter::default(), None, None);
         assert_eq!(statuses.len(), 1);
@@ -4412,18 +4441,6 @@ mod tests {
         assert_eq!(statuses[0].challenge_id, matching.challenge_id);
     }
 
-    fn verdict_outcome(sample_count: u16, failed: bool) -> PorVerdictOutcome {
-        PorVerdictOutcome {
-            stats: sorafs_node::PorVerdictStats {
-                success_samples: if failed { 0 } else { u64::from(sample_count) },
-                failed_samples: if failed { u64::from(sample_count) } else { 0 },
-            },
-            repair_history_id: failed.then_some(1),
-            consecutive_failures: u64::from(failed),
-            slash: None,
-        }
-    }
-
     #[test]
     fn forged_proofs_and_verdicts_leave_coordinator_state_retryable() {
         let coordinator = PorCoordinator::new();
@@ -4464,12 +4481,7 @@ mod tests {
             resign_verdict(&mut forged);
             assert!(
                 coordinator
-                    .record_verdict(
-                        &forged,
-                        &auditor_keys(),
-                        1,
-                        verdict_outcome(challenge.sample_count, false),
-                    )
+                    .record_verdict(&forged, &auditor_keys(), 1)
                     .is_err()
             );
             let status = coordinator.query_statuses(&PorStatusFilter::default(), None, None);
@@ -4478,21 +4490,20 @@ mod tests {
         }
 
         coordinator
-            .record_verdict(
-                &valid,
-                &auditor_keys(),
-                1,
-                verdict_outcome(challenge.sample_count, false),
-            )
+            .record_verdict(&valid, &auditor_keys(), 1)
             .expect("valid verdict retry");
+        assert_eq!(
+            coordinator
+                .record_verdict(&valid, &auditor_keys(), 1)
+                .expect("exact verdict replay"),
+            PorCoordinatorVerdictOutcome::Existing
+        );
+        let mut conflicting = valid.clone();
+        conflicting.decided_at = conflicting.decided_at.saturating_add(1);
+        resign_verdict(&mut conflicting);
         assert!(matches!(
-            coordinator.record_verdict(
-                &valid,
-                &auditor_keys(),
-                1,
-                verdict_outcome(challenge.sample_count, false),
-            ),
-            Err(PorCoordinatorError::DuplicateVerdict { .. })
+            coordinator.record_verdict(&conflicting, &auditor_keys(), 1),
+            Err(PorCoordinatorError::VerdictConflict { .. })
         ));
     }
 
@@ -4519,12 +4530,7 @@ mod tests {
             Some(proof.proof_digest()),
         );
         assert!(matches!(
-            coordinator.record_verdict(
-                &verdict,
-                &[vec![0xEF; 32]],
-                1,
-                verdict_outcome(challenge.sample_count, false),
-            ),
+            coordinator.record_verdict(&verdict, &[vec![0xEF; 32]], 1),
             Err(PorCoordinatorError::InvalidVerdictSignature(
                 sorafs_manifest::por::PorSignatureVerificationError::UntrustedAuditorSigner
             ))
@@ -4532,12 +4538,7 @@ mod tests {
         let mut threshold_keys = auditor_keys();
         threshold_keys.push(vec![0xF0; 32]);
         assert!(matches!(
-            coordinator.record_verdict(
-                &verdict,
-                &threshold_keys,
-                2,
-                verdict_outcome(challenge.sample_count, false),
-            ),
+            coordinator.record_verdict(&verdict, &threshold_keys, 2),
             Err(PorCoordinatorError::InvalidVerdictSignature(
                 sorafs_manifest::por::PorSignatureVerificationError::InsufficientTrustedAuditorSignatures {
                     actual: 1,
@@ -4546,12 +4547,7 @@ mod tests {
             ))
         ));
         coordinator
-            .record_verdict(
-                &verdict,
-                &auditor_keys(),
-                1,
-                verdict_outcome(challenge.sample_count, false),
-            )
+            .record_verdict(&verdict, &auditor_keys(), 1)
             .expect("trusted auditor threshold");
     }
 
@@ -4581,14 +4577,15 @@ mod tests {
             AuditOutcomeV1::Success,
             Some(proof.proof_digest()),
         );
-        let outcome = verdict_outcome(challenge.sample_count, false);
         coordinator
-            .record_verdict(&verdict, &auditor_keys(), 1, outcome.clone())
+            .record_verdict(&verdict, &auditor_keys(), 1)
             .unwrap();
-        assert!(matches!(
-            coordinator.record_verdict(&verdict, &auditor_keys(), 1, outcome),
-            Err(PorCoordinatorError::DuplicateVerdict { .. })
-        ));
+        assert_eq!(
+            coordinator
+                .record_verdict(&verdict, &auditor_keys(), 1)
+                .expect("exact replay"),
+            PorCoordinatorVerdictOutcome::Existing
+        );
         coordinator.rollback_verdict(&verdict).unwrap();
         let status = coordinator.query_statuses(&PorStatusFilter::default(), None, None);
         assert_eq!(status[0].status, PorChallengeOutcome::Pending);
@@ -4679,12 +4676,7 @@ mod tests {
         let verdict = sample_verdict(&challenge, AuditOutcomeV1::Success, Some(digest));
         fs::set_permissions(&blocked_parent, fs::Permissions::from_mode(0o755)).unwrap();
         assert!(matches!(
-            coordinator.record_verdict(
-                &verdict,
-                &auditor_keys(),
-                1,
-                verdict_outcome(challenge.sample_count, false),
-            ),
+            coordinator.record_verdict(&verdict, &auditor_keys(), 1),
             Err(PorCoordinatorError::Persistence(_))
         ));
         let status = coordinator.query_statuses(&PorStatusFilter::default(), None, None);
@@ -4693,12 +4685,7 @@ mod tests {
 
         fs::set_permissions(&blocked_parent, fs::Permissions::from_mode(0o700)).unwrap();
         coordinator
-            .record_verdict(
-                &verdict,
-                &auditor_keys(),
-                1,
-                verdict_outcome(challenge.sample_count, false),
-            )
+            .record_verdict(&verdict, &auditor_keys(), 1)
             .expect("verdict succeeds after persistence recovery");
     }
 
@@ -4711,21 +4698,19 @@ mod tests {
         coordinator.record_challenge(&challenge).expect("challenge");
         let verdict = sample_verdict(&challenge, AuditOutcomeV1::Failed, None);
         coordinator
-            .record_verdict(
-                &verdict,
-                &auditor_keys(),
-                1,
-                PorVerdictOutcome {
-                    stats: sorafs_node::PorVerdictStats {
-                        success_samples: 0,
-                        failed_samples: 64,
-                    },
-                    repair_history_id: Some(42),
-                    consecutive_failures: 1,
-                    slash: None,
-                },
-            )
+            .record_verdict(&verdict, &auditor_keys(), 1)
             .expect("verdict");
+        let status = coordinator
+            .query_statuses(&PorStatusFilter::default(), None, None)
+            .pop()
+            .expect("failed challenge status");
+        assert_eq!(
+            status.repair_task_id,
+            Some(sorafs_repair_task_id_v1(por_repair_source_identity_v1(
+                challenge.challenge_id
+            )))
+        );
+        status.validate().expect("canonical failed status");
         let cycle = PorReportIsoWeek {
             year: 2023,
             week: 46,
@@ -4765,20 +4750,7 @@ mod tests {
         verdict.decided_at = issued_at + 500;
         resign_verdict(&mut verdict);
         coordinator
-            .record_verdict(
-                &verdict,
-                &auditor_keys(),
-                1,
-                PorVerdictOutcome {
-                    stats: sorafs_node::PorVerdictStats {
-                        success_samples: 0,
-                        failed_samples: 64,
-                    },
-                    repair_history_id: Some(u64::from(provider_byte)),
-                    consecutive_failures: 1,
-                    slash: None,
-                },
-            )
+            .record_verdict(&verdict, &auditor_keys(), 1)
             .expect("verdict");
     }
 
@@ -4861,20 +4833,7 @@ mod tests {
                 .expect("proof");
             let verdict = sample_verdict(&challenge, AuditOutcomeV1::Repaired, Some(proof_digest));
             coordinator
-                .record_verdict(
-                    &verdict,
-                    &auditor_keys(),
-                    1,
-                    PorVerdictOutcome {
-                        stats: sorafs_node::PorVerdictStats {
-                            success_samples: 48,
-                            failed_samples: 16,
-                        },
-                        repair_history_id: Some(99),
-                        consecutive_failures: 0,
-                        slash: None,
-                    },
-                )
+                .record_verdict(&verdict, &auditor_keys(), 1)
                 .expect("verdict");
             expected_digest = proof_digest;
         }
@@ -4887,10 +4846,7 @@ mod tests {
         assert_eq!(status.status, PorChallengeOutcome::Repaired);
         assert_eq!(status.proof_digest, Some(expected_digest));
         assert!(status.responded_at.is_some());
-        let repair_task = status.repair_task_id.expect("repair id");
-        let mut repair_bytes = [0u8; 8];
-        repair_bytes.copy_from_slice(&repair_task[..8]);
-        assert_eq!(u64::from_le_bytes(repair_bytes), 99);
+        assert_eq!(status.repair_task_id, None);
     }
 
     #[cfg(feature = "app_api")]
@@ -5113,6 +5069,10 @@ mod tests {
                     BLAKE3_256_MULTIHASH_CODE,
                 )
                 .chunk_digest_sha3_256(sorafs_car::compute_chunk_plan_digest_sha3(&plan.chunks))
+                .por_root(
+                    sorafs_car::compute_por_root(payload, &plan)
+                        .expect("derive canonical fixture PoR root"),
+                )
                 .content_length(plan.content_length)
                 .car_digest(digest.into())
                 .car_size(plan.content_length)

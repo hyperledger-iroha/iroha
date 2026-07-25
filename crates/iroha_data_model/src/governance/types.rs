@@ -406,14 +406,19 @@ impl JsonDeserialize for AbiVersion {
 )]
 pub enum ProposalKind {
     /// Deploy an IVM contract identified by its canonical public address and content hashes.
+    #[codec(index = 0)]
     DeployContract(DeployContractProposal),
     /// Schedule a runtime upgrade manifest through governance.
+    #[codec(index = 1)]
     RuntimeUpgrade(RuntimeUpgradeProposal),
     /// Apply one closed SCCP route-registry action through governance.
+    #[codec(index = 2)]
     SccpRouteGovernance(SccpRouteGovernanceProposal),
     /// Enact one validation-fee policy through SORA Parliament.
+    #[codec(index = 3)]
     ValidationFeePolicy(ValidationFeePolicyProposal),
     /// Authorize one exact validation-fee treasury payout lifecycle.
+    #[codec(index = 4)]
     ValidationFeePayoutLifecycle(ValidationFeePayoutLifecycleProposal),
 }
 
@@ -973,7 +978,8 @@ pub struct ParliamentEnactmentCertificate {
 }
 
 /// Domain separator for proposal fingerprints (`Blake2b-256`).
-pub const PROPOSAL_FINGERPRINT_DOMAIN: &[u8] = b"gov:proposal:v1";
+pub const PROPOSAL_FINGERPRINT_DOMAIN: &[u8] =
+    crate::validation_fee::GOVERNANCE_PROPOSAL_FINGERPRINT_DOMAIN_V1;
 
 impl ProposalKind {
     /// Compute the deterministic proposal fingerprint (`Blake2b-32`).

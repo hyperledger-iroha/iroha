@@ -6,10 +6,15 @@ package org.hyperledger.iroha.sdk.consensus
 import java.math.BigInteger
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
 import org.hyperledger.iroha.sdk.core.util.HashLiteral
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFails
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
@@ -159,6 +164,130 @@ class SumeragiDiagnosticsModelsTest {
                 SumeragiAutonomousLaneExecutionStuckReason.AWAITING_MERGE_SELECTION,
             )
         }
+    }
+
+    @Test
+    fun `complete diagnostics parser preserves every required first release vector`() {
+        val expected = diagnostics()
+        val parsed = SumeragiDiagnosticsStatus.parseJson(Json.encodeToString(expected))
+
+        assertEquals(expected.pipelineExecution, parsed.pipelineExecution)
+        assertEquals(expected.nativeAmxParticipantApplications, parsed.nativeAmxParticipantApplications)
+        assertEquals(expected.autonomousLaneExecutions, parsed.autonomousLaneExecutions)
+        assertEquals(BigInteger.ONE, parsed.txQueueCapacity)
+    }
+
+    @Test
+    fun `complete diagnostics parser rejects unknown and missing fields`() {
+        val root = Json.parseToJsonElement(Json.encodeToString(diagnostics())).jsonObject
+
+        assertFails {
+            SumeragiDiagnosticsStatus.parseJson(
+                JsonObject(root + ("legacy_round" to JsonPrimitive(1))).toString(),
+            )
+        }
+        assertFails {
+            SumeragiDiagnosticsStatus.parseJson(
+                JsonObject(root - "autonomous_lane_executions").toString(),
+            )
+        }
+        val pipeline = root.getValue("pipeline_execution").jsonObject
+        assertFails {
+            SumeragiDiagnosticsStatus.parseJson(
+                JsonObject(
+                    root +
+                        (
+                            "pipeline_execution" to
+                                JsonObject(pipeline + ("legacy_total" to JsonPrimitive(0)))
+                            ),
+                ).toString(),
+            )
+        }
+    }
+
+    @Test
+    fun `complete diagnostics parser enforces queue bounds and canonical vector order`() {
+        val root = Json.parseToJsonElement(Json.encodeToString(diagnostics())).jsonObject
+        assertFails {
+            SumeragiDiagnosticsStatus.parseJson(
+                JsonObject(root + ("tx_queue_depth" to JsonPrimitive(2))).toString(),
+            )
+        }
+
+        val unorderedApplications = JsonArray(
+            listOf(
+                Json.parseToJsonElement(Json.encodeToString(application(4))),
+                Json.parseToJsonElement(Json.encodeToString(application(3))),
+            ),
+        )
+        assertFails {
+            SumeragiDiagnosticsStatus.parseJson(
+                JsonObject(
+                    root + ("native_amx_participant_applications" to unorderedApplications),
+                ).toString(),
+            )
+        }
+
+        val autonomous = Json.parseToJsonElement(
+            Json.encodeToString(autonomousExecution(3)),
+        )
+        assertFails {
+            SumeragiDiagnosticsStatus.parseJson(
+                JsonObject(
+                    root +
+                        ("autonomous_lane_executions" to JsonArray(listOf(autonomous, autonomous))),
+                ).toString(),
+            )
+        }
+    }
+
+    private fun diagnostics(): SumeragiDiagnosticsStatus =
+        SumeragiDiagnosticsStatus(
+            pipelineExecution = pipeline(),
+            txQueueDepth = BigInteger.ZERO,
+            txQueueCapacity = BigInteger.ONE,
+            txQueueRetainedBytes = BigInteger.ZERO,
+            txQueueMaxRetainedBytes = BigInteger.ONE,
+            txQueueSaturated = false,
+            txQueueSaturatedByCount = false,
+            txQueueSaturatedByBytes = false,
+            txQueueSaturatedByAge = false,
+            txQueueOldestQueuedAgeMs = BigInteger.ZERO,
+            laneCommitments = emptyList(),
+            dataspaceCommitments = emptyList(),
+            laneSettlementCommitments = emptyList(),
+            laneRelayEnvelopes = emptyList(),
+            lanePayloadOwnerships = emptyList(),
+            committedLaneBlocks = emptyList(),
+            laneBlockSessions = emptyList(),
+            laneGovernanceSealedTotal = 0,
+            laneGovernanceSealedAliases = emptyList(),
+            laneGovernance = emptyList(),
+            nativeAmxParticipantApplications = listOf(application(3)),
+            autonomousLaneExecutions = listOf(autonomousExecution(3)),
+        )
+
+    private fun pipeline(): SumeragiPipelineExecutionStatus {
+        val zero = BigInteger.ZERO
+        return SumeragiPipelineExecutionStatus(
+            txVerticesTotal = zero,
+            txEdgesTotal = zero,
+            overlayCountTotal = zero,
+            overlayInstrTotal = zero,
+            overlayBytesTotal = zero,
+            rbcChunksTotal = zero,
+            rbcBytesTotal = zero,
+            detachedPreparedTotal = zero,
+            detachedMergedTotal = zero,
+            detachedFallbackTotal = zero,
+            detachedFallbackFeePostprocessingTotal = zero,
+            detachedFallbackUserExecutorTotal = zero,
+            detachedFallbackDurableStateTotal = zero,
+            detachedFallbackUnsupportedInstructionTotal = zero,
+            detachedFallbackRejectedEvalTotal = zero,
+            detachedFallbackOverlayErrorTotal = zero,
+            quarantineExecutedTotal = zero,
+        )
     }
 
     private fun application(laneId: Long): SumeragiNativeAmxParticipantApplication =

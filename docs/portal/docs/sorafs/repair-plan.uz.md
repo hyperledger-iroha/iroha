@@ -1,40 +1,18 @@
+<!-- Auto-generated stub for Uzbek (uz) translation. Replace this content with the full translation. -->
+
 ---
 lang: uz
 direction: ltr
 source: docs/portal/docs/sorafs/repair-plan.md
-status: complete
+status: needs-translation
 generator: scripts/sync_docs_i18n.py
-source_hash: 302b74b4022656e57c2b876a8f15bf5301a593030a18ad1b93780061e5d783ef
-source_last_modified: "2026-01-21T19:17:13.232211+00:00"
-translation_last_reviewed: 2026-02-07
-id: repair-plan
-title: SoraFS Repair Automation & Auditor API
-sidebar_label: Repair Automation
-description: Governance policy, escalation lifecycle, and API expectations for SoraFS repair automation.
-translator: machine-google-reviewed
+source_hash: 3b3148617cf0935fe010a37343fc7398400d9c33572b8c41329f6334f3b03496
+source_last_modified: "2026-07-25T00:40:34.079232+00:00"
+translation_last_reviewed: null
 ---
 
-::: Eslatma Kanonik manba
-Nometall `docs/source/sorafs_repair_plan.md`. Sphinx to'plami tugagunga qadar ikkala versiyani ham sinxronlashtiring.
-:::
+# Translation In Progress
 
-## Boshqaruv qarorlarining hayot aylanishi
-1. Ko'tarilgan ta'mirlash slash taklif loyihasini yaratadi va bahs oynasini ochadi.
-2. Boshqaruv saylovchilari nizolar oynasida ma'qullash/rad etish ovozlarini beradilar.
-3. `escalated_at_unix + dispute_window_secs` da qaror deterministik tarzda hisoblanadi: minimal saylovchilar, ma'qullashlar rad etishlardan oshib ketadi va ma'qullash nisbati kvorum chegarasiga javob beradi.
-4. Tasdiqlangan qarorlar apellyatsiya oynasini ochadi; `approved_at_unix + appeal_window_secs` dan oldin qayd etilgan shikoyatlar qarorni shikoyat qilingan deb belgilaydi.
-5. Barcha takliflar uchun jarima miqdori qo'llaniladi; chegaradan yuqori bo'lgan arizalar rad etiladi.
+This file is a placeholder for the Uzbek translation of the English document. Once the translation is complete, update the `status` field in the metadata above.
 
-## Boshqaruvni kuchaytirish siyosati
-Eskalatsiya siyosati `iroha_config` da `governance.sorafs_repair_escalation` dan olingan va har bir tuzatish taklifi uchun qo'llaniladi.
-
-| Sozlama | Standart | Ma'nosi |
-|---------|---------|---------|
-| `quorum_bps` | 6667 | Hisoblangan ovozlar orasida minimal ma'qullash nisbati (asosiy ball). |
-| `minimum_voters` | 3 | Qarorni hal qilish uchun zarur bo'lgan alohida saylovchilarning minimal soni. |
-| `dispute_window_secs` | 86400 | Ovoz berish yakunlangunga qadar kuchaygan vaqt (sekundlar). |
-| `appeal_window_secs` | 604800 | Tasdiqlangandan keyin murojaatlar qabul qilinadigan vaqt (sekundlar). |
-| `max_penalty` | 1 000 000 000 | Ta'mirlash eskalatsiyasi uchun ruxsat etilgan maksimal slash jazosi (nano-XOR). |
-
-- Rejalashtiruvchi tomonidan yaratilgan takliflar `max_penalty` bilan cheklangan; chegaradan yuqori auditorlik takliflari rad etiladi.
-- Ovoz berish yozuvlari `repair_state.to` da deterministik tartib bilan (`voter_id` saralash) saqlanadi, shuning uchun barcha tugunlar bir xil qaror vaqt tamg'asi va natijasini oladi.
+This stub awaits translation. Replace the placeholder body with the completed text and update the metadata status to `complete` when finished.

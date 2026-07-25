@@ -1014,6 +1014,11 @@ fn preflight_singular_source_materialization(
                 charge(owner, &mut remaining)?;
             }
         }
+        SingularQueryBox::FindSorafsPinManifest(query) => {
+            if let Some(manifest) = world.pin_manifests().get(&query.digest) {
+                charge(manifest, &mut remaining)?;
+            }
+        }
         SingularQueryBox::FindSorafsOrderbookPolicy(_)
         | SingularQueryBox::FindSorafsOrderbookOrderById(_)
         | SingularQueryBox::FindSorafsOrderbookCancellationByOrderId(_)
@@ -1032,6 +1037,9 @@ fn preflight_singular_source_materialization(
         | SingularQueryBox::FindSorafsReserveProviderById(_)
         | SingularQueryBox::FindSorafsReserveMovementById(_)
         | SingularQueryBox::FindSorafsReserveAppealById(_)
+        | SingularQueryBox::FindSorafsReserveProviders(_)
+        | SingularQueryBox::FindSorafsReserveMovements(_)
+        | SingularQueryBox::FindSorafsReserveAppeals(_)
         | SingularQueryBox::FindSorafsReserveEvents(_) => {
             return Err(reject_unbounded("SoraFS reserve query"));
         }
@@ -1197,6 +1205,9 @@ impl ExecuteSingularQuery for SingularQueryBox {
             SingularQueryBox::FindSorafsProviderOwner(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
+            SingularQueryBox::FindSorafsPinManifest(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
             SingularQueryBox::FindSorafsOrderbookPolicy(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
@@ -1243,6 +1254,15 @@ impl ExecuteSingularQuery for SingularQueryBox {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
             SingularQueryBox::FindSorafsReserveAppealById(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindSorafsReserveProviders(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindSorafsReserveMovements(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindSorafsReserveAppeals(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
             SingularQueryBox::FindSorafsReserveEvents(q) => {

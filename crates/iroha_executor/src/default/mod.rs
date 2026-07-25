@@ -126,19 +126,21 @@ pub use sorafs::{
     visit_find_sorafs_moderation_policy, visit_find_sorafs_moderation_reveal,
     visit_find_sorafs_moderation_snapshot, visit_find_sorafs_moderation_status,
     visit_find_sorafs_orderbook_cancellation_by_order_id,
-    visit_find_sorafs_orderbook_channel_by_id, visit_find_sorafs_orderbook_order_by_id,
+    visit_find_sorafs_orderbook_channel_by_id, visit_find_sorafs_orderbook_channels,
+    visit_find_sorafs_orderbook_events, visit_find_sorafs_orderbook_order_by_id,
     visit_find_sorafs_orderbook_orders, visit_find_sorafs_orderbook_policy,
     visit_find_sorafs_orderbook_receipt_by_id, visit_find_sorafs_orderbook_receipts,
     visit_find_sorafs_orderbook_status, visit_find_sorafs_orderbook_trade_by_id,
-    visit_find_sorafs_pop_audit_digest_by_sequence,
+    visit_find_sorafs_orderbook_trades, visit_find_sorafs_pop_audit_digest_by_sequence,
     visit_find_sorafs_pop_commitment_root_by_version,
     visit_find_sorafs_pop_credential_commitment_by_digest, visit_find_sorafs_pop_issuer_policy,
     visit_find_sorafs_pop_registry_status, visit_find_sorafs_pop_revocation_by_nonce_commitment,
     visit_find_sorafs_pop_revocation_publication_by_version, visit_find_sorafs_repair_events,
     visit_find_sorafs_repair_status, visit_find_sorafs_repair_task, visit_find_sorafs_repair_tasks,
-    visit_find_sorafs_reserve_appeal_by_id, visit_find_sorafs_reserve_movement_by_id,
-    visit_find_sorafs_reserve_events, visit_find_sorafs_reserve_policy,
-    visit_find_sorafs_reserve_provider_by_id,
+    visit_find_sorafs_reserve_appeal_by_id, visit_find_sorafs_reserve_appeals,
+    visit_find_sorafs_reserve_events, visit_find_sorafs_reserve_movement_by_id,
+    visit_find_sorafs_reserve_movements, visit_find_sorafs_reserve_policy,
+    visit_find_sorafs_reserve_provider_by_id, visit_find_sorafs_reserve_providers,
 };
 /// Re-export staking visitor helpers used by the default executor.
 pub use staking::{
@@ -1853,8 +1855,8 @@ pub mod sorafs {
         FindSorafsPopIssuerPolicy, FindSorafsPopRegistryStatus,
         FindSorafsPopRevocationByNonceCommitment, FindSorafsPopRevocationPublicationByVersion,
         FindSorafsRepairEvents, FindSorafsRepairStatus, FindSorafsRepairTask,
-        FindSorafsRepairTasks, FindSorafsReserveAppealById, FindSorafsReserveMovementById,
-        FindSorafsReserveEvents, FindSorafsReservePolicy, FindSorafsReserveProviderById,
+        FindSorafsRepairTasks, FindSorafsReserveAppealById, FindSorafsReserveEvents,
+        FindSorafsReserveMovementById, FindSorafsReservePolicy, FindSorafsReserveProviderById,
     };
 
     /// Authoritative repair tasks are public operational state.
@@ -2053,6 +2055,30 @@ pub mod sorafs {
     pub fn visit_find_sorafs_reserve_appeal_by_id<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         _query: &FindSorafsReserveAppealById,
+    ) {
+        visit_reserve_read(executor);
+    }
+
+    /// Validate permission to list provider reserve accounts.
+    pub fn visit_find_sorafs_reserve_providers<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        _query: &FindSorafsReserveProviders,
+    ) {
+        visit_reserve_read(executor);
+    }
+
+    /// Validate permission to list reserve custody movements.
+    pub fn visit_find_sorafs_reserve_movements<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        _query: &FindSorafsReserveMovements,
+    ) {
+        visit_reserve_read(executor);
+    }
+
+    /// Validate permission to list reserve lifecycle appeals.
+    pub fn visit_find_sorafs_reserve_appeals<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        _query: &FindSorafsReserveAppeals,
     ) {
         visit_reserve_read(executor);
     }
@@ -2573,12 +2599,12 @@ pub mod sorafs {
         execute_with_reserve_governance(executor, isi);
     }
 
-    /// Register a provider reserve partition when governance is permitted.
+    /// Register a provider reserve partition through the exact governed service account.
     pub fn visit_register_reserve_account<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         isi: &RegisterSorafsReserveAccount,
     ) {
-        execute_with_reserve_governance(executor, isi);
+        execute!(executor, isi);
     }
 
     /// Admit a provider-signed reserve movement request.
@@ -2589,36 +2615,36 @@ pub mod sorafs {
         execute!(executor, isi);
     }
 
-    /// Decide a reserve movement when governance is permitted.
+    /// Decide a reserve movement through the exact governed decision account.
     pub fn visit_decide_reserve_movement<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         isi: &DecideSorafsReserveMovement,
     ) {
-        execute_with_reserve_governance(executor, isi);
+        execute!(executor, isi);
     }
 
-    /// Charge deterministic provider rent when governance is permitted.
+    /// Charge deterministic provider rent through the exact governed operations account.
     pub fn visit_charge_reserve_rent<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         isi: &ChargeSorafsReserveRent,
     ) {
-        execute_with_reserve_governance(executor, isi);
+        execute!(executor, isi);
     }
 
-    /// Advance reserve lifecycle state when governance is permitted.
+    /// Advance reserve lifecycle state through the exact governed operations account.
     pub fn visit_advance_reserve_lifecycle<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         isi: &AdvanceSorafsReserveLifecycle,
     ) {
-        execute_with_reserve_governance(executor, isi);
+        execute!(executor, isi);
     }
 
-    /// Draw protocol reserve credit when governance is permitted.
+    /// Draw protocol reserve credit through the exact governed operations account.
     pub fn visit_draw_reserve_credit<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         isi: &DrawSorafsReserveCredit,
     ) {
-        execute_with_reserve_governance(executor, isi);
+        execute!(executor, isi);
     }
 
     /// Admit a provider-signed credit repayment.
@@ -2637,12 +2663,12 @@ pub mod sorafs {
         execute!(executor, isi);
     }
 
-    /// Decide a reserve lifecycle appeal when governance is permitted.
+    /// Decide a reserve lifecycle appeal through the exact governed decision account.
     pub fn visit_decide_reserve_appeal<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         isi: &DecideSorafsReserveAppeal,
     ) {
-        execute_with_reserve_governance(executor, isi);
+        execute!(executor, isi);
     }
 
     /// Activate a `PoP` issuer policy when governance permission is present.
@@ -6391,14 +6417,76 @@ mod sorafs_permission_tests {
             None,
             10,
         );
-        assert_denied_without_permission(
-            query,
-            sorafs::visit_find_sorafs_reserve_events,
-        );
+        assert_denied_without_permission(query, sorafs::visit_find_sorafs_reserve_events);
         assert_allowed_with_permission(
             query,
             PermissionObject::from(CanSetSorafsReservePolicy),
             sorafs::visit_find_sorafs_reserve_events,
+        );
+    }
+
+    #[test]
+    fn reserve_point_queries_require_governance_permission() {
+        let permission = PermissionObject::from(CanSetSorafsReservePolicy);
+        let policy = FindSorafsReservePolicy::new();
+        assert_denied_without_permission(policy, sorafs::visit_find_sorafs_reserve_policy);
+        assert_allowed_with_permission(
+            policy,
+            permission.clone(),
+            sorafs::visit_find_sorafs_reserve_policy,
+        );
+        let provider = FindSorafsReserveProviderById::new(ProviderId::new([0x51; 32]));
+        assert_denied_without_permission(
+            provider,
+            sorafs::visit_find_sorafs_reserve_provider_by_id,
+        );
+        assert_allowed_with_permission(
+            provider,
+            permission.clone(),
+            sorafs::visit_find_sorafs_reserve_provider_by_id,
+        );
+        let movement = FindSorafsReserveMovementById::new([0x61; 32]);
+        assert_denied_without_permission(
+            movement,
+            sorafs::visit_find_sorafs_reserve_movement_by_id,
+        );
+        assert_allowed_with_permission(
+            movement,
+            permission.clone(),
+            sorafs::visit_find_sorafs_reserve_movement_by_id,
+        );
+        let appeal = FindSorafsReserveAppealById::new([0x71; 32]);
+        assert_denied_without_permission(appeal, sorafs::visit_find_sorafs_reserve_appeal_by_id);
+        assert_allowed_with_permission(
+            appeal,
+            permission,
+            sorafs::visit_find_sorafs_reserve_appeal_by_id,
+        );
+    }
+
+    #[test]
+    fn reserve_record_page_queries_require_governance_permission() {
+        let permission = PermissionObject::from(CanSetSorafsReservePolicy);
+        let providers = FindSorafsReserveProviders::new(None, None, 10);
+        assert_denied_without_permission(providers, sorafs::visit_find_sorafs_reserve_providers);
+        assert_allowed_with_permission(
+            providers,
+            permission.clone(),
+            sorafs::visit_find_sorafs_reserve_providers,
+        );
+        let movements = FindSorafsReserveMovements::new(None, None, 10);
+        assert_denied_without_permission(movements, sorafs::visit_find_sorafs_reserve_movements);
+        assert_allowed_with_permission(
+            movements,
+            permission.clone(),
+            sorafs::visit_find_sorafs_reserve_movements,
+        );
+        let appeals = FindSorafsReserveAppeals::new(None, None, 10);
+        assert_denied_without_permission(appeals, sorafs::visit_find_sorafs_reserve_appeals);
+        assert_allowed_with_permission(
+            appeals,
+            permission,
+            sorafs::visit_find_sorafs_reserve_appeals,
         );
     }
 

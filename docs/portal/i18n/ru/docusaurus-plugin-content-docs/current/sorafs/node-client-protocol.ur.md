@@ -125,10 +125,12 @@ translation_last_reviewed: 2026-02-07
 ## CLI и помощники REST- `iroha app sorafs pin list|show`, `alias list`, или `replication list` контактный реестр
   Обертывание конечных точек REST и доказательства аудита, а также блоки аттестации.
   raw Norito Печать JSON کرتے ہیں۔
-- `iroha app sorafs storage pin` или `torii /v1/sorafs/pin/register` Norito یا JSON
-  манифестирует کے ساتھ необязательные доказательства псевдонима اور преемники принимают کرتے ہیں؛ уродливый
-  доказательства پر `400`, устаревшие доказательства پر `503` مع `Warning: 110`, доказательства с истекшим сроком годности
-  پر `412`۔
+- `torii /v1/sorafs/pin/register` принимает закрытый JSON-запрос V1.
+  `manifest_payload` должен быть точным каноническим padded-base64 от байтов
+  канонического Norito `ManifestV1`. Torii выводит digest, chunker, content
+  length, pin policy и fee inputs только из декодированного manifest и отклоняет
+  выведенные из обращения дублирующие summary fields. `alias` и ненулевой
+  predecessor `successor_of_hex` остаются опциональными.
 - Конечные точки REST (`/v1/sorafs/pin`, `/v1/sorafs/aliases`, `/v1/sorafs/replication`)
   Структуры аттестации شامل کرتے ہیں تاکہ клиенты последние заголовки блоков کے
   Проверка данных کر سکیں۔

@@ -274,10 +274,13 @@ pub struct DaIngestReceipt {
   `policy_source` اقدار کو ثبوت کے بنڈل میں معنی خیز رکھنے کے لئے ڈور۔ دیکھو
   `crates/iroha_cli/src/commands/da.rs` سب کامنڈ اور `docs/source/da/rent_policy.md` کے لئے
   پالیسی اسکیمہ کے لئے۔ 【کریٹس/اروہ_ سی ایل آئی/ایس آر سی/کمانڈز/ڈی اے آر ایس: 1 】【 دستاویزات/ماخذ/ڈا/کرایہ_پولیسی.MD: 1】
-- پن رجسٹری کی برابری اب SDKs تک پھیلی ہوئی ہے: `ToriiClient.registerSorafsPinManifest(...)` میں
-  جاوا اسکرپٹ ایس ڈی کے نے عین مطابق پے لوڈ کی تعمیر کی ہے جو `iroha app sorafs pin register` کے ذریعہ استعمال ہوتا ہے ، کیننیکل کو نافذ کرتا ہے
-  چنکر میٹا ڈیٹا ، پن کی پالیسیاں ، عرفی ثبوت ، اور جانشین پوسٹ کرنے سے پہلے ہضم ہوتا ہے
-  `/v1/sorafs/pin/register`۔ اس سے سی آئی بوٹس اور آٹومیشن کو جب سی ایل آئی میں گولہ باری سے روکتا ہے
+- Pin registry کی برابری اب SDKs تک پھیلی ہوئی ہے:
+  `ToriiClient.registerSorafsPinManifest(...)`، `manifest_payload` میں عین
+  canonical padded-base64 `ManifestV1` کے ساتھ بند JSON V1 request بناتا ہے۔
+  Torii digest، chunker، content length، pin policy اور fee inputs صرف decoded
+  manifest سے اخذ کرتا اور duplicate summary کو رد کرتا ہے؛ optional alias اور
+  nonzero predecessor برقرار ہیں۔ اس سے `/v1/sorafs/pin/register` استعمال کرتے
+  وقت CI bots اور automation کو CLI چلانے کی ضرورت نہیں رہتی،
   ریکارڈنگ مینی فیسٹ رجسٹریشن ، اور ٹائپ اسکرپٹ/ریڈم کوریج کے ساتھ مددگار جہاز
   زنگ/سوئفٹ کے ساتھ ساتھ جے ایس پر "جمع کروائیں/ثابت کریں" ٹولنگ کی برابری پوری طرح مطمئن ہے۔
 - `iroha app da prove-availability` مندرجہ بالا سبھی زنجیروں میں: یہ اسٹوریج کا ٹکٹ لیتا ہے ، ڈاؤن لوڈ کرتا ہے

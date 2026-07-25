@@ -67,6 +67,7 @@ __all__ = [
     "ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1",
     "SORAFS_ORDERBOOK_PAYLOAD_KINDS",
     "SORAFS_PDP_PAYLOAD_KINDS",
+    "SORAFS_GOVERNANCE_DAG_CID_BYTES_V1",
     "SORAFS_GOVERNANCE_DAG_MAX_BLOCKS_V1",
     "SORAFS_REFERENCE_MAX_INPUT_BYTES_V1",
     "SORAFS_REFERENCE_MAX_LABEL_BYTES_V1",
@@ -558,6 +559,7 @@ SORAFS_PDP_PAYLOAD_KINDS: Mapping[str, str] = MappingProxyType(
         "PROOF": "proof",
     }
 )
+SORAFS_GOVERNANCE_DAG_CID_BYTES_V1 = 32
 SORAFS_GOVERNANCE_DAG_MAX_BLOCKS_V1 = 64
 SORAFS_REFERENCE_MAX_INPUT_BYTES_V1 = 67_108_864
 SORAFS_REFERENCE_MAX_LABEL_BYTES_V1 = 1_024
@@ -1118,6 +1120,14 @@ def validate_governance_dag_block(
         if expected_block_cid is None
         else _bytes_payload(expected_block_cid, "expected_block_cid")
     )
+    if (
+        expected_cid is not None
+        and len(expected_cid) != SORAFS_GOVERNANCE_DAG_CID_BYTES_V1
+    ):
+        raise ValueError(
+            "expected_block_cid must contain exactly "
+            f"{SORAFS_GOVERNANCE_DAG_CID_BYTES_V1} bytes"
+        )
     _governance_reference_aggregate_bytes(
         "governance DAG block validation",
         len(payload_bytes),
@@ -1601,8 +1611,9 @@ def multi_fetch_local(
     Parameters
     ----------
     plan:
-        JSON string (or mapping/path) describing the chunk fetch plan emitted by
-        `sorafs_manifest_builder`.
+        JSON string (or mapping/path) containing the payload-bound
+        ``sorafs.chunk_fetch_plan.v1`` envelope emitted by
+        ``sorafs_manifest_builder``. Retired bare-array plans are rejected.
     providers:
         Iterable of :class:`SorafsLocalProviderSpec` definitions. Each entry points at a local
         payload file (tests reuse the shared fixture bundle).

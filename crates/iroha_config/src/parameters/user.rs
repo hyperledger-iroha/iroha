@@ -42,7 +42,10 @@ use iroha_config_base::{
 use iroha_data_model::{
     domain::DomainId,
     merge::{MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES, MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES},
-    sorafs::capacity::ProviderId,
+    sorafs::{
+        capacity::ProviderId,
+        orderbook::{ORDERBOOK_MAX_FILLS_PER_EXECUTION_V1, ORDERBOOK_MAX_MAINTENANCE_ITEMS_V1},
+    },
     soranet::vpn::{VpnExitClassV1, VpnFlowLabelV1},
 };
 use iroha_primitives::numeric::Numeric;
@@ -1392,6 +1395,20 @@ impl VerifyingKeyRef {
     }
 }
 
+/// One governed Ed25519 signer authorized to approve SoraFS pin manifests.
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+pub struct SorafsPinApprovalSigner {
+    /// Stable payload-free signer identifier.
+    pub signer_id: String,
+    /// Raw Ed25519 public key as 64 lowercase hexadecimal characters.
+    pub public_key_hex: String,
+    /// First executing block height at which this key may approve manifests.
+    #[config(default)]
+    pub valid_from_block_height: u64,
+    /// First executing block height at which this key is revoked.
+    pub revoked_at_block_height: Option<u64>,
+}
+
 /// Governance configuration (user view)
 /// User-level configuration container for `Governance`.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
@@ -1417,6 +1434,14 @@ pub struct SorafsPinPolicyConstraints {
         default = "crate::parameters::defaults::governance::sorafs_pin_policy::REQUIRE_COUNCIL_SIGNATURES"
     )]
     pub require_council_signatures: bool,
+    /// Required number of distinct active trusted approval signatures.
+    #[config(
+        default = "crate::parameters::defaults::governance::sorafs_pin_policy::APPROVAL_QUORUM"
+    )]
+    pub approval_quorum: u16,
+    /// Canonically signer-id-ordered trusted Ed25519 approval roster.
+    #[config(default = "Vec::new()")]
+    pub approval_signers: Vec<SorafsPinApprovalSigner>,
 }
 
 impl Default for SorafsPinPolicyConstraints {
@@ -1431,12 +1456,25 @@ impl Default for SorafsPinPolicyConstraints {
             allowed_storage_classes: None,
             require_council_signatures:
                 crate::parameters::defaults::governance::sorafs_pin_policy::REQUIRE_COUNCIL_SIGNATURES,
+            approval_quorum:
+                crate::parameters::defaults::governance::sorafs_pin_policy::APPROVAL_QUORUM,
+            approval_signers: Vec::new(),
         }
     }
 }
 
 impl SorafsPinPolicyConstraints {
     fn parse(self) -> actual::SorafsPinPolicyConstraints {
+        fn canonical_signer_id(value: &str) -> bool {
+            !value.is_empty()
+                && value.len() <= 128
+                && value.bytes().all(|byte| {
+                    byte.is_ascii_lowercase()
+                        || byte.is_ascii_digit()
+                        || matches!(byte, b'.' | b'-' | b'_' | b':')
+                })
+        }
+
         let allowed_storage_classes = self.allowed_storage_classes.map(|classes| {
             classes
                 .into_vec()
@@ -1452,12 +1490,93 @@ impl SorafsPinPolicyConstraints {
                 .collect::<BTreeSet<_>>()
         });
 
+        if self.approval_signers.len()
+            > crate::parameters::defaults::governance::sorafs_pin_policy::MAX_APPROVAL_SIGNERS
+        {
+            panic!(
+                "governance.sorafs_pin_policy.approval_signers must contain at most {} entries",
+                crate::parameters::defaults::governance::sorafs_pin_policy::MAX_APPROVAL_SIGNERS,
+            );
+        }
+        let mut approval_signers = Vec::with_capacity(self.approval_signers.len());
+        let mut previous_signer_id: Option<String> = None;
+        let mut public_keys = BTreeSet::new();
+        for (index, signer) in self.approval_signers.into_iter().enumerate() {
+            if !canonical_signer_id(&signer.signer_id)
+                || previous_signer_id
+                    .as_deref()
+                    .is_some_and(|previous| previous >= signer.signer_id.as_str())
+            {
+                panic!(
+                    "governance.sorafs_pin_policy.approval_signers[{index}].signer_id must be canonical and strictly ordered"
+                );
+            }
+            if signer.public_key_hex.len() != 64
+                || !signer
+                    .public_key_hex
+                    .bytes()
+                    .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+            {
+                panic!(
+                    "governance.sorafs_pin_policy.approval_signers[{index}].public_key_hex must be exactly 64 lowercase hexadecimal characters"
+                );
+            }
+            let mut public_key_bytes = [0_u8; 32];
+            hex::decode_to_slice(&signer.public_key_hex, &mut public_key_bytes)
+                .expect("validated lowercase 32-byte hexadecimal");
+            let public_key = PublicKey::from_bytes(Algorithm::Ed25519, &public_key_bytes)
+                .unwrap_or_else(|err| {
+                    panic!(
+                        "governance.sorafs_pin_policy.approval_signers[{index}].public_key_hex is not a valid Ed25519 public key: {err}"
+                    )
+                });
+            if !public_keys.insert(public_key.clone()) {
+                panic!(
+                    "governance.sorafs_pin_policy.approval_signers public keys must be distinct"
+                );
+            }
+            if signer
+                .revoked_at_block_height
+                .is_some_and(|revoked_at| revoked_at <= signer.valid_from_block_height)
+            {
+                panic!(
+                    "governance.sorafs_pin_policy.approval_signers[{index}].revoked_at_block_height must be greater than valid_from_block_height"
+                );
+            }
+            previous_signer_id = Some(signer.signer_id.clone());
+            approval_signers.push(actual::SorafsPinApprovalSigner {
+                signer_id: signer.signer_id,
+                public_key,
+                valid_from_block_height: signer.valid_from_block_height,
+                revoked_at_block_height: signer.revoked_at_block_height,
+            });
+        }
+        if self.require_council_signatures && approval_signers.is_empty() {
+            panic!(
+                "governance.sorafs_pin_policy.require_council_signatures requires a non-empty approval_signers roster"
+            );
+        }
+        let quorum_is_invalid = self.approval_quorum == 0
+            || if approval_signers.is_empty() {
+                self.approval_quorum
+                    != crate::parameters::defaults::governance::sorafs_pin_policy::APPROVAL_QUORUM
+            } else {
+                usize::from(self.approval_quorum) > approval_signers.len()
+            };
+        if quorum_is_invalid {
+            panic!(
+                "governance.sorafs_pin_policy.approval_quorum must be nonzero and not exceed the governed signer count"
+            );
+        }
+
         actual::SorafsPinPolicyConstraints {
             min_replicas_floor: self.min_replicas_floor,
             max_replicas_ceiling: self.max_replicas_ceiling,
             max_retention_epoch: self.max_retention_epoch,
             allowed_storage_classes,
             require_council_signatures: self.require_council_signatures,
+            approval_quorum: self.approval_quorum,
+            approval_signers,
         }
     }
 }
@@ -5775,6 +5894,86 @@ pub struct SumeragiQueues {
     pub ready_bodies: NonZeroUsize,
 }
 
+/// User-facing finite runtime bounds for Sumeragi v2 lane and Native AMX services.
+#[derive(Debug, Clone, Copy, ReadConfig)]
+pub struct SumeragiV2RuntimeLimits {
+    /// Authenticated merge-QC identities retained by one height-local adapter.
+    #[config(default = "defaults::sumeragi::V2_AUTHENTICATED_MERGE_QC_CAPACITY")]
+    pub authenticated_merge_qc_capacity: NonZeroUsize,
+    /// Bytes reserved around a merge-leader candidate body in its consensus frame.
+    #[config(default = "defaults::sumeragi::V2_MERGE_LEADER_BODY_FRAME_HEADROOM_BYTES")]
+    pub merge_leader_body_frame_headroom_bytes: NonZeroUsize,
+    /// Bytes reserved around autonomous payload envelopes in the canonical carrier.
+    #[config(default = "defaults::sumeragi::V2_AUTONOMOUS_CARRIER_HEADROOM_BYTES")]
+    pub autonomous_carrier_headroom_bytes: NonZeroUsize,
+    /// Cadence for retrying durable autonomous queue reservation.
+    #[config(default = "defaults::sumeragi::V2_AUTONOMOUS_PRODUCER_RECHECK.into()")]
+    pub autonomous_producer_recheck_ms: DurationMs,
+    /// Consecutive identical recovery waits before the stage is reported stuck.
+    #[config(default = "defaults::sumeragi::V2_HISTORICAL_RECOVERY_STUCK_ATTEMPTS")]
+    pub historical_recovery_stuck_attempts: NonZeroU32,
+    /// Attempts spent in each exponential historical-recovery retry tier.
+    #[config(default = "defaults::sumeragi::V2_HISTORICAL_RECOVERY_RETRY_TIER_ATTEMPTS")]
+    pub historical_recovery_retry_tier_attempts: NonZeroU32,
+    /// Highest exponential historical-recovery retry tier.
+    #[config(default = "defaults::sumeragi::V2_HISTORICAL_RECOVERY_MAX_RETRY_TIER")]
+    pub historical_recovery_max_retry_tier: NonZeroU32,
+    /// Sidecar chunks transferred during one bounded adapter service turn.
+    #[config(default = "defaults::sumeragi::V2_SIDECAR_SERVICE_BURST")]
+    pub sidecar_service_burst: NonZeroUsize,
+    /// Concurrent certified merge-sidecar assemblies retained globally.
+    #[config(default = "defaults::sumeragi::V2_MERGE_SIDECAR_INBOUND_SESSION_CAPACITY")]
+    pub merge_sidecar_inbound_session_capacity: NonZeroUsize,
+    /// Concurrent certified merge-sidecar assemblies admitted from one peer.
+    #[config(default = "defaults::sumeragi::V2_MERGE_SIDECAR_INBOUND_SESSIONS_PER_PEER")]
+    pub merge_sidecar_inbound_sessions_per_peer: NonZeroUsize,
+    /// Global reserved-byte ceiling for incomplete certified merge sidecars.
+    #[config(default = "defaults::sumeragi::V2_MERGE_SIDECAR_INBOUND_ASSEMBLY_BYTES")]
+    pub merge_sidecar_inbound_assembly_bytes: NonZeroUsize,
+    /// Per-peer reserved-byte ceiling for incomplete certified merge sidecars.
+    #[config(default = "defaults::sumeragi::V2_MERGE_SIDECAR_INBOUND_ASSEMBLY_BYTES_PER_PEER")]
+    pub merge_sidecar_inbound_assembly_bytes_per_peer: NonZeroUsize,
+    /// Deferred global blocks waiting for exact certified sidecars.
+    #[config(default = "defaults::sumeragi::V2_MERGE_SIDECAR_DEFERRED_BLOCK_CAPACITY")]
+    pub merge_sidecar_deferred_block_capacity: NonZeroUsize,
+    /// Maximum future carrier-height distance admitted for deferred sidecars.
+    #[config(default = "defaults::sumeragi::V2_MERGE_SIDECAR_FUTURE_BLOCK_DISTANCE")]
+    pub merge_sidecar_future_block_distance: NonZeroU64,
+    /// Base timeout before retrying an incomplete certified sidecar request.
+    #[config(default = "defaults::sumeragi::V2_MERGE_SIDECAR_REQUEST_TIMEOUT.into()")]
+    pub merge_sidecar_request_timeout_ms: DurationMs,
+    /// Concurrent response sessions retained for one authenticated source.
+    #[config(default = "defaults::sumeragi::V2_MERGE_SIDECAR_OUTBOUND_SESSIONS_PER_SOURCE")]
+    pub merge_sidecar_outbound_sessions_per_source: NonZeroUsize,
+    /// Response bytes retained for one authenticated source.
+    #[config(default = "defaults::sumeragi::V2_MERGE_SIDECAR_OUTBOUND_BYTES_PER_SOURCE")]
+    pub merge_sidecar_outbound_bytes_per_source: NonZeroUsize,
+    /// Idempotency request gates retained for one authenticated source.
+    #[config(default = "defaults::sumeragi::V2_MERGE_SIDECAR_SERVER_REQUEST_GATES_PER_SOURCE")]
+    pub merge_sidecar_server_request_gates_per_source: NonZeroUsize,
+    /// Lifetime of a completed/rejected server request gate.
+    #[config(default = "defaults::sumeragi::V2_MERGE_SIDECAR_SERVER_REQUEST_GATE_TTL.into()")]
+    pub merge_sidecar_server_request_gate_ttl_ms: DurationMs,
+    /// Durable merge-signing decisions retained before committed-frontier GC.
+    #[config(default = "defaults::sumeragi::V2_MERGE_SIGNING_GUARD_RECORD_CAPACITY")]
+    pub merge_signing_guard_record_capacity: NonZeroUsize,
+    /// Runtime byte ceiling for one canonical merge-signing decision.
+    #[config(default = "defaults::sumeragi::V2_MERGE_SIGNING_GUARD_RECORD_BYTES")]
+    pub merge_signing_guard_record_bytes: NonZeroUsize,
+    /// Aggregate bytes retained in the merge-signing journal.
+    #[config(default = "defaults::sumeragi::V2_MERGE_SIGNING_GUARD_TOTAL_BYTES")]
+    pub merge_signing_guard_total_bytes: NonZeroUsize,
+    /// Durable Native AMX signing decisions retained at one height.
+    #[config(default = "defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_RECORD_CAPACITY")]
+    pub native_amx_signing_guard_record_capacity: NonZeroUsize,
+    /// Runtime byte ceiling for one canonical Native AMX signing record.
+    #[config(default = "defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_RECORD_BYTES")]
+    pub native_amx_signing_guard_record_bytes: NonZeroUsize,
+    /// Runtime byte ceiling for the Native AMX signing chain anchor.
+    #[config(default = "defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_ANCHOR_BYTES")]
+    pub native_amx_signing_guard_anchor_bytes: NonZeroUsize,
+}
+
 /// User-level consensus key-rotation and HSM policy.
 #[derive(Debug, Clone, ReadConfig)]
 pub struct SumeragiKeys {
@@ -5814,6 +6013,9 @@ pub struct Sumeragi {
     /// Bounded asynchronous adapter queues.
     #[config(nested)]
     pub queues: SumeragiQueues,
+    /// Shared finite lane, recovery, and Native AMX service bounds.
+    #[config(nested)]
+    pub limits: SumeragiV2RuntimeLimits,
     /// Consensus key-rotation and HSM policy.
     #[config(nested)]
     pub keys: SumeragiKeys,
@@ -5928,6 +6130,7 @@ impl Sumeragi {
             role,
             block,
             queues,
+            limits,
             keys,
         } = self;
 
@@ -6086,6 +6289,54 @@ impl Sumeragi {
                 body_source_bytes: queues.body_source_bytes,
                 chunks: queues.chunks,
                 ready_bodies: queues.ready_bodies,
+            },
+            limits: actual::SumeragiV2RuntimeLimits {
+                authenticated_merge_qc_capacity: limits.authenticated_merge_qc_capacity,
+                merge_leader_body_frame_headroom_bytes:
+                    limits.merge_leader_body_frame_headroom_bytes,
+                autonomous_carrier_headroom_bytes: limits.autonomous_carrier_headroom_bytes,
+                autonomous_producer_recheck: limits.autonomous_producer_recheck_ms.0,
+                historical_recovery_stuck_attempts:
+                    limits.historical_recovery_stuck_attempts,
+                historical_recovery_retry_tier_attempts:
+                    limits.historical_recovery_retry_tier_attempts,
+                historical_recovery_max_retry_tier:
+                    limits.historical_recovery_max_retry_tier,
+                sidecar_service_burst: limits.sidecar_service_burst,
+                merge_sidecar_inbound_session_capacity:
+                    limits.merge_sidecar_inbound_session_capacity,
+                merge_sidecar_inbound_sessions_per_peer:
+                    limits.merge_sidecar_inbound_sessions_per_peer,
+                merge_sidecar_inbound_assembly_bytes:
+                    limits.merge_sidecar_inbound_assembly_bytes,
+                merge_sidecar_inbound_assembly_bytes_per_peer:
+                    limits.merge_sidecar_inbound_assembly_bytes_per_peer,
+                merge_sidecar_deferred_block_capacity:
+                    limits.merge_sidecar_deferred_block_capacity,
+                merge_sidecar_future_block_distance:
+                    limits.merge_sidecar_future_block_distance,
+                merge_sidecar_request_timeout:
+                    limits.merge_sidecar_request_timeout_ms.0,
+                merge_sidecar_outbound_sessions_per_source:
+                    limits.merge_sidecar_outbound_sessions_per_source,
+                merge_sidecar_outbound_bytes_per_source:
+                    limits.merge_sidecar_outbound_bytes_per_source,
+                merge_sidecar_server_request_gates_per_source:
+                    limits.merge_sidecar_server_request_gates_per_source,
+                merge_sidecar_server_request_gate_ttl:
+                    limits.merge_sidecar_server_request_gate_ttl_ms.0,
+                merge_signing_guard_record_capacity:
+                    limits.merge_signing_guard_record_capacity,
+                merge_signing_guard_record_bytes:
+                    limits.merge_signing_guard_record_bytes,
+                merge_signing_guard_total_bytes:
+                    limits.merge_signing_guard_total_bytes,
+                native_amx_signing_guard_record_capacity:
+                    limits.native_amx_signing_guard_record_capacity,
+                native_amx_signing_guard_record_bytes:
+                    limits.native_amx_signing_guard_record_bytes,
+                native_amx_signing_guard_anchor_bytes:
+                    limits.native_amx_signing_guard_anchor_bytes,
             },
             keys: actual::SumeragiKeys {
                 activation_lead_blocks: keys.activation_lead_blocks,
@@ -18326,7 +18577,10 @@ pub struct SorafsStorage {
     /// Stream-token issuance configuration for chunk-range gateways.
     #[config(nested)]
     pub stream_tokens: SorafsStreamTokenConfig,
-    /// Local orderbook admission policy.
+    /// Durable native orderbook transaction worker policy.
+    #[config(nested)]
+    pub orderbook_worker: SorafsOrderbookWorkerConfig,
+    /// Temporary local admission policy; non-authoritative and not a compatibility branch.
     #[config(nested)]
     pub orderbook: SorafsOrderbookConfig,
     /// Canonical Norito trust-policy file required for reputation snapshot admission.
@@ -18388,6 +18642,7 @@ impl Default for SorafsStorage {
             adverts: SorafsAdvertOverrides::default(),
             metering_smoothing: SorafsMeteringSmoothing::default(),
             stream_tokens: SorafsStreamTokenConfig::default(),
+            orderbook_worker: SorafsOrderbookWorkerConfig::default(),
             orderbook: SorafsOrderbookConfig::default(),
             reputation_trust_policy_path: None,
             pricing_trust_policy_path: None,
@@ -18494,6 +18749,7 @@ impl SorafsStorage {
             adverts: self.adverts.parse(),
             metering_smoothing: self.metering_smoothing.parse(),
             stream_tokens: self.stream_tokens.parse(),
+            orderbook_worker: self.orderbook_worker.parse(emitter),
             orderbook: self.orderbook.parse(),
             reputation_trust_policy_path: self.reputation_trust_policy_path,
             pricing_trust_policy_path: self.pricing_trust_policy_path,
@@ -19093,7 +19349,138 @@ impl SorafsRuntimeRetentionConfig {
     }
 }
 
-/// Local orderbook admission policy.
+/// Operational policy for the durable native orderbook transaction worker.
+#[derive(Debug, ReadConfig, Clone, Copy, norito::JsonDeserialize)]
+pub struct SorafsOrderbookWorkerConfig {
+    /// Enable finalized-state scanning and native transaction forwarding.
+    #[config(default = "defaults::sorafs::storage::orderbook_worker::ENABLED")]
+    pub enabled: bool,
+    /// Finalized-state scan cadence in milliseconds.
+    #[config(default = "defaults::sorafs::storage::orderbook_worker::SCAN_INTERVAL_MS")]
+    pub scan_interval_ms: NonZeroU64,
+    /// Maximum fills requested by one native match transaction.
+    #[config(default = "defaults::sorafs::storage::orderbook_worker::MATCH_BATCH_LIMIT")]
+    pub match_batch_limit: NonZeroU32,
+    /// Maximum expiries/closures requested by one native maintenance transaction.
+    #[config(default = "defaults::sorafs::storage::orderbook_worker::MAINTENANCE_BATCH_LIMIT")]
+    pub maintenance_batch_limit: NonZeroU32,
+    /// Maximum pending semantic operations retained durably.
+    #[config(default = "defaults::sorafs::storage::orderbook_worker::MAX_PENDING")]
+    pub max_pending: NonZeroU32,
+    /// Maximum finalized idempotency tombstones retained durably.
+    #[config(default = "defaults::sorafs::storage::orderbook_worker::MAX_COMPLETED")]
+    pub max_completed: NonZeroU32,
+    /// Maximum terminal dead letters retained durably.
+    #[config(default = "defaults::sorafs::storage::orderbook_worker::MAX_DEAD_LETTERS")]
+    pub max_dead_letters: NonZeroU32,
+    /// Maximum signing/submission attempts under one semantic identity.
+    #[config(default = "defaults::sorafs::storage::orderbook_worker::MAX_ATTEMPTS")]
+    pub max_attempts: NonZeroU32,
+    /// Maximum canonical durable checkpoint size.
+    #[config(default = "defaults::sorafs::storage::orderbook_worker::CHECKPOINT_MAX_BYTES")]
+    pub checkpoint_max_bytes: Bytes<u64>,
+}
+
+impl Default for SorafsOrderbookWorkerConfig {
+    fn default() -> Self {
+        use defaults::sorafs::storage::orderbook_worker as worker;
+
+        Self {
+            enabled: worker::ENABLED,
+            scan_interval_ms: worker::SCAN_INTERVAL_MS,
+            match_batch_limit: worker::MATCH_BATCH_LIMIT,
+            maintenance_batch_limit: worker::MAINTENANCE_BATCH_LIMIT,
+            max_pending: worker::MAX_PENDING,
+            max_completed: worker::MAX_COMPLETED,
+            max_dead_letters: worker::MAX_DEAD_LETTERS,
+            max_attempts: worker::MAX_ATTEMPTS,
+            checkpoint_max_bytes: worker::CHECKPOINT_MAX_BYTES,
+        }
+    }
+}
+
+impl SorafsOrderbookWorkerConfig {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::SorafsOrderbookWorker {
+        use defaults::sorafs::storage::orderbook_worker as worker;
+
+        let scan_interval_ms = self.scan_interval_ms.get();
+        if !(worker::SCAN_INTERVAL_MIN_MS..=worker::SCAN_INTERVAL_MAX_MS)
+            .contains(&scan_interval_ms)
+        {
+            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(format!(
+                "sorafs.storage.orderbook_worker.scan_interval_ms must be within {}..={}, got {scan_interval_ms}",
+                worker::SCAN_INTERVAL_MIN_MS,
+                worker::SCAN_INTERVAL_MAX_MS,
+            )));
+        }
+        let match_batch_limit = self.match_batch_limit.get();
+        if match_batch_limit > ORDERBOOK_MAX_FILLS_PER_EXECUTION_V1 {
+            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(format!(
+                "sorafs.storage.orderbook_worker.match_batch_limit must not exceed {ORDERBOOK_MAX_FILLS_PER_EXECUTION_V1}, got {match_batch_limit}"
+            )));
+        }
+        let maintenance_batch_limit = self.maintenance_batch_limit.get();
+        if maintenance_batch_limit > ORDERBOOK_MAX_MAINTENANCE_ITEMS_V1 {
+            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(format!(
+                "sorafs.storage.orderbook_worker.maintenance_batch_limit must not exceed {ORDERBOOK_MAX_MAINTENANCE_ITEMS_V1}, got {maintenance_batch_limit}"
+            )));
+        }
+        for (field, value, maximum) in [
+            (
+                "max_pending",
+                self.max_pending.get(),
+                worker::MAX_PENDING_LIMIT,
+            ),
+            (
+                "max_completed",
+                self.max_completed.get(),
+                worker::MAX_COMPLETED_LIMIT,
+            ),
+            (
+                "max_dead_letters",
+                self.max_dead_letters.get(),
+                worker::MAX_DEAD_LETTERS_LIMIT,
+            ),
+            (
+                "max_attempts",
+                self.max_attempts.get(),
+                worker::MAX_ATTEMPTS_LIMIT,
+            ),
+        ] {
+            if value > maximum {
+                emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(format!(
+                    "sorafs.storage.orderbook_worker.{field} must not exceed {maximum}, got {value}"
+                )));
+            }
+        }
+        if !(worker::CHECKPOINT_MIN_BYTES..=worker::CHECKPOINT_MAX_BYTES_LIMIT)
+            .contains(&self.checkpoint_max_bytes.0)
+        {
+            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(format!(
+                "sorafs.storage.orderbook_worker.checkpoint_max_bytes must be within {}..={}, got {}",
+                worker::CHECKPOINT_MIN_BYTES,
+                worker::CHECKPOINT_MAX_BYTES_LIMIT,
+                self.checkpoint_max_bytes.0,
+            )));
+        }
+
+        actual::SorafsOrderbookWorker {
+            enabled: self.enabled,
+            scan_interval: Duration::from_millis(scan_interval_ms),
+            match_batch_limit,
+            maintenance_batch_limit,
+            max_pending: self.max_pending.get(),
+            max_completed: self.max_completed.get(),
+            max_dead_letters: self.max_dead_letters.get(),
+            max_attempts: self.max_attempts.get(),
+            checkpoint_max_bytes: self.checkpoint_max_bytes,
+        }
+    }
+}
+
+/// Temporary local orderbook policy retained only until local-authority removal.
+///
+/// This policy is non-authoritative and does not define compatibility behavior.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
 pub struct SorafsOrderbookConfig {
     /// Minimum accepted order quantity in GiB.
@@ -19125,6 +19512,24 @@ impl SorafsOrderbookConfig {
     }
 }
 
+/// One fixed public population in the governed SFM-4c privacy query.
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+pub struct SorafsPrivacyAggregatePopulationConfig {
+    /// Stable public population label.
+    pub label: String,
+    /// Governed selector digest as 64 lowercase hex characters.
+    pub digest_hex: String,
+}
+
+/// One fixed public metric coordinate in the governed SFM-4c privacy query.
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+pub struct SorafsPrivacyAggregateMetricConfig {
+    /// Stable metric key.
+    pub key: String,
+    /// Stable public unit.
+    pub unit: String,
+}
+
 /// Local SFM-4c privacy aggregate publication scheduler.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
 pub struct SorafsPrivacyAggregateScheduleConfig {
@@ -19134,6 +19539,9 @@ pub struct SorafsPrivacyAggregateScheduleConfig {
     /// Width of each privacy aggregate cycle, in seconds.
     #[config(default = "defaults::sorafs::storage::privacy_aggregates::CYCLE_SECONDS")]
     pub cycle_seconds: u64,
+    /// Governed inclusive start of the first releasable cycle.
+    #[config(default = "defaults::sorafs::storage::privacy_aggregates::FIRST_CYCLE_START_UNIX")]
+    pub first_cycle_start_unix: u64,
     /// Delay after a cycle closes before publication, in seconds.
     #[config(default = "defaults::sorafs::storage::privacy_aggregates::PUBLISH_DELAY_SECONDS")]
     pub publish_delay_seconds: u64,
@@ -19142,6 +19550,14 @@ pub struct SorafsPrivacyAggregateScheduleConfig {
         default = "defaults::sorafs::storage::privacy_aggregates::AGGREGATE_ID_PREFIX.to_string()"
     )]
     pub aggregate_id_prefix: String,
+    /// Stable query identity as 64 lowercase hex characters.
+    pub query_id_hex: Option<String>,
+    /// Fixed public population universe in strict canonical order.
+    #[config(default)]
+    pub population_inventory: Vec<SorafsPrivacyAggregatePopulationConfig>,
+    /// Fixed public metric schema in strict key order.
+    #[config(default)]
+    pub metric_schema: Vec<SorafsPrivacyAggregateMetricConfig>,
     /// Governed privacy mode.
     #[config(default = "defaults::sorafs::storage::privacy_aggregates::PRIVACY_MODE.to_string()")]
     pub privacy_mode: String,
@@ -19181,10 +19597,15 @@ impl Default for SorafsPrivacyAggregateScheduleConfig {
         Self {
             enabled: defaults::sorafs::storage::privacy_aggregates::ENABLED,
             cycle_seconds: defaults::sorafs::storage::privacy_aggregates::CYCLE_SECONDS,
+            first_cycle_start_unix:
+                defaults::sorafs::storage::privacy_aggregates::FIRST_CYCLE_START_UNIX,
             publish_delay_seconds:
                 defaults::sorafs::storage::privacy_aggregates::PUBLISH_DELAY_SECONDS,
             aggregate_id_prefix:
                 defaults::sorafs::storage::privacy_aggregates::AGGREGATE_ID_PREFIX.to_string(),
+            query_id_hex: defaults::sorafs::storage::privacy_aggregates::query_id_hex(),
+            population_inventory: Vec::new(),
+            metric_schema: Vec::new(),
             privacy_mode:
                 defaults::sorafs::storage::privacy_aggregates::PRIVACY_MODE.to_string(),
             epsilon_numerator:
@@ -19220,6 +19641,32 @@ impl SorafsPrivacyAggregateScheduleConfig {
         let invalid = |message: String, emitter: &mut Emitter<ParseError>| {
             emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(message));
         };
+        let parse_digest = |raw: &str, field: &str, emitter: &mut Emitter<ParseError>| {
+            if raw.len() != 64
+                || raw
+                    .bytes()
+                    .any(|byte| !byte.is_ascii_digit() && !(b'a'..=b'f').contains(&byte))
+            {
+                invalid(
+                    format!(
+                        "torii.sorafs.storage.privacy_aggregates.{field} must be 64 lowercase hex characters"
+                    ),
+                    emitter,
+                );
+                return None;
+            }
+            let decoded = hex::decode(raw).expect("validated lowercase hex");
+            let mut digest = [0_u8; 32];
+            digest.copy_from_slice(&decoded);
+            if digest == [0; 32] {
+                invalid(
+                    format!("torii.sorafs.storage.privacy_aggregates.{field} must be nonzero"),
+                    emitter,
+                );
+                return None;
+            }
+            Some(digest)
+        };
         if self.aggregate_id_prefix.trim() != self.aggregate_id_prefix
             || self.aggregate_id_prefix.is_empty()
             || self.aggregate_id_prefix.len() > 128
@@ -19227,6 +19674,23 @@ impl SorafsPrivacyAggregateScheduleConfig {
         {
             invalid(
                 "torii.sorafs.storage.privacy_aggregates.aggregate_id_prefix is invalid"
+                    .to_string(),
+                emitter,
+            );
+        }
+        if self.cycle_seconds == 0 {
+            invalid(
+                "torii.sorafs.storage.privacy_aggregates.cycle_seconds must be positive"
+                    .to_string(),
+                emitter,
+            );
+        }
+        if self.enabled
+            && (self.first_cycle_start_unix == 0
+                || self.first_cycle_start_unix % self.cycle_seconds.max(1) != 0)
+        {
+            invalid(
+                "torii.sorafs.storage.privacy_aggregates.first_cycle_start_unix must be nonzero and cycle-aligned when enabled"
                     .to_string(),
                 emitter,
             );
@@ -19271,32 +19735,104 @@ impl SorafsPrivacyAggregateScheduleConfig {
                 emitter,
             );
         }
-        let policy_digest = self.policy_digest_hex.as_deref().and_then(|raw| {
-            if raw.len() != 64
-                || raw.bytes().any(|byte| {
-                    !byte.is_ascii_digit() && !(b'a'..=b'f').contains(&byte)
-                })
+        let query_id = self
+            .query_id_hex
+            .as_deref()
+            .and_then(|raw| parse_digest(raw, "query_id_hex", emitter));
+        let policy_digest = self
+            .policy_digest_hex
+            .as_deref()
+            .and_then(|raw| parse_digest(raw, "policy_digest_hex", emitter));
+        let mut population_inventory = Vec::with_capacity(self.population_inventory.len());
+        let mut previous_population: Option<(String, [u8; 32])> = None;
+        let mut population_labels = BTreeSet::new();
+        let mut population_digests = BTreeSet::new();
+        if self.population_inventory.len() > 256 {
+            invalid(
+                "torii.sorafs.storage.privacy_aggregates.population_inventory exceeds 256 entries"
+                    .to_string(),
+                emitter,
+            );
+        }
+        for population in self.population_inventory {
+            let valid_label = !population.label.is_empty()
+                && population.label.trim() == population.label
+                && population.label.len() <= 256
+                && !population.label.chars().any(char::is_control);
+            if !valid_label {
+                invalid(
+                    "torii.sorafs.storage.privacy_aggregates population label is invalid"
+                        .to_string(),
+                    emitter,
+                );
+            }
+            let Some(digest) = parse_digest(
+                &population.digest_hex,
+                "population_inventory.digest_hex",
+                emitter,
+            ) else {
+                continue;
+            };
+            let key = (population.label.clone(), digest);
+            if previous_population
+                .as_ref()
+                .is_some_and(|previous| previous >= &key)
+                || !population_labels.insert(population.label.clone())
+                || !population_digests.insert(digest)
             {
                 invalid(
-                    "torii.sorafs.storage.privacy_aggregates.policy_digest_hex must be 64 lowercase hex characters"
+                    "torii.sorafs.storage.privacy_aggregates.population_inventory must be unique and sorted"
                         .to_string(),
                     emitter,
                 );
-                return None;
             }
-            let decoded = hex::decode(raw).expect("validated lowercase hex");
-            let mut digest = [0_u8; 32];
-            digest.copy_from_slice(&decoded);
-            if digest.iter().all(|byte| *byte == 0) {
+            previous_population = Some(key);
+            population_inventory.push(actual::SorafsPrivacyAggregatePopulation {
+                label: population.label,
+                digest,
+            });
+        }
+        let mut metric_schema = Vec::with_capacity(self.metric_schema.len());
+        let mut previous_metric_key: Option<String> = None;
+        if self.metric_schema.len() > 256 {
+            invalid(
+                "torii.sorafs.storage.privacy_aggregates.metric_schema exceeds 256 entries"
+                    .to_string(),
+                emitter,
+            );
+        }
+        for metric in self.metric_schema {
+            let valid_key = !metric.key.is_empty()
+                && metric.key.trim() == metric.key
+                && metric.key.len() <= 256
+                && !metric.key.chars().any(char::is_control);
+            let valid_unit = !metric.unit.is_empty()
+                && metric.unit.trim() == metric.unit
+                && metric.unit.len() <= 256
+                && !metric.unit.chars().any(char::is_control);
+            if !valid_key || !valid_unit {
                 invalid(
-                    "torii.sorafs.storage.privacy_aggregates.policy_digest_hex must be nonzero"
+                    "torii.sorafs.storage.privacy_aggregates metric schema text is invalid"
                         .to_string(),
                     emitter,
                 );
-                return None;
             }
-            Some(digest)
-        });
+            if previous_metric_key
+                .as_ref()
+                .is_some_and(|previous| previous >= &metric.key)
+            {
+                invalid(
+                    "torii.sorafs.storage.privacy_aggregates.metric_schema must be unique and sorted"
+                        .to_string(),
+                    emitter,
+                );
+            }
+            previous_metric_key = Some(metric.key.clone());
+            metric_schema.push(actual::SorafsPrivacyAggregateMetric {
+                key: metric.key,
+                unit: metric.unit,
+            });
+        }
         if self.enabled && policy_digest.is_none() {
             invalid(
                 "torii.sorafs.storage.privacy_aggregates.policy_digest_hex is required when enabled"
@@ -19304,11 +19840,36 @@ impl SorafsPrivacyAggregateScheduleConfig {
                 emitter,
             );
         }
+        if self.enabled && query_id.is_none() {
+            invalid(
+                "torii.sorafs.storage.privacy_aggregates.query_id_hex is required when enabled"
+                    .to_string(),
+                emitter,
+            );
+        }
+        if self.enabled && population_inventory.is_empty() {
+            invalid(
+                "torii.sorafs.storage.privacy_aggregates.population_inventory is required when enabled"
+                    .to_string(),
+                emitter,
+            );
+        }
+        if self.enabled && metric_schema.is_empty() {
+            invalid(
+                "torii.sorafs.storage.privacy_aggregates.metric_schema is required when enabled"
+                    .to_string(),
+                emitter,
+            );
+        }
         actual::SorafsPrivacyAggregateSchedule {
             enabled: self.enabled,
-            cycle_seconds: self.cycle_seconds.max(1),
+            cycle_seconds: self.cycle_seconds,
+            first_cycle_start_unix: self.first_cycle_start_unix,
             publish_delay_seconds: self.publish_delay_seconds,
             aggregate_id_prefix: self.aggregate_id_prefix,
+            query_id,
+            population_inventory,
+            metric_schema,
             privacy_mode: self.privacy_mode,
             epsilon_numerator: self.epsilon_numerator,
             epsilon_denominator: self.epsilon_denominator,
@@ -22017,6 +22578,114 @@ mod offline_cfg_tests {
         assert!(panic.is_err(), "expected invalid asset definition to panic");
     }
 
+    fn pin_approval_signer(
+        signer_id: &str,
+        keypair: &KeyPair,
+        valid_from_block_height: u64,
+        revoked_at_block_height: Option<u64>,
+    ) -> SorafsPinApprovalSigner {
+        let (_, public_key_bytes) = keypair
+            .public_key()
+            .try_to_bytes()
+            .expect("test Ed25519 key encodes");
+        SorafsPinApprovalSigner {
+            signer_id: signer_id.to_owned(),
+            public_key_hex: hex::encode(public_key_bytes),
+            valid_from_block_height,
+            revoked_at_block_height,
+        }
+    }
+
+    #[test]
+    fn sorafs_pin_approval_roster_defaults_fail_closed_when_enabled() {
+        let defaults = SorafsPinPolicyConstraints::default();
+        assert!(!defaults.require_council_signatures);
+        assert_eq!(
+            defaults.approval_quorum,
+            crate::parameters::defaults::governance::sorafs_pin_policy::APPROVAL_QUORUM
+        );
+        assert!(defaults.approval_signers.is_empty());
+
+        let enabled_without_roster = SorafsPinPolicyConstraints {
+            require_council_signatures: true,
+            ..SorafsPinPolicyConstraints::default()
+        };
+        assert!(
+            std::panic::catch_unwind(|| enabled_without_roster.parse()).is_err(),
+            "council approval must not accept an empty trusted roster"
+        );
+    }
+
+    #[test]
+    fn sorafs_pin_approval_roster_parses_canonical_rotation_windows() {
+        let key_a = KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+            .expect("test Ed25519 key generation");
+        let key_b = KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+            .expect("test Ed25519 key generation");
+        let config = SorafsPinPolicyConstraints {
+            require_council_signatures: true,
+            approval_quorum: 2,
+            approval_signers: vec![
+                pin_approval_signer("council-a-v1", &key_a, 1, Some(10)),
+                pin_approval_signer("council-b-v2", &key_b, 8, None),
+            ],
+            ..SorafsPinPolicyConstraints::default()
+        };
+
+        let parsed = config.parse();
+        assert_eq!(parsed.approval_quorum, 2);
+        assert_eq!(parsed.approval_signers.len(), 2);
+        assert!(parsed.approval_signers[0].is_active_at(1));
+        assert!(!parsed.approval_signers[0].is_active_at(10));
+        assert!(!parsed.approval_signers[1].is_active_at(7));
+        assert!(parsed.approval_signers[1].is_active_at(8));
+    }
+
+    #[test]
+    fn sorafs_pin_approval_roster_rejects_quorum_duplicate_and_invalid_window() {
+        let key_a = KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+            .expect("test Ed25519 key generation");
+        let key_b = KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+            .expect("test Ed25519 key generation");
+
+        let excessive_quorum = SorafsPinPolicyConstraints {
+            require_council_signatures: true,
+            approval_quorum: 2,
+            approval_signers: vec![pin_approval_signer("council-a", &key_a, 0, None)],
+            ..SorafsPinPolicyConstraints::default()
+        };
+        assert!(
+            std::panic::catch_unwind(|| excessive_quorum.parse()).is_err(),
+            "approval quorum must not exceed the trusted roster"
+        );
+
+        let duplicate_key = SorafsPinPolicyConstraints {
+            require_council_signatures: true,
+            approval_signers: vec![
+                pin_approval_signer("council-a", &key_a, 0, None),
+                pin_approval_signer("council-b", &key_a, 0, None),
+            ],
+            ..SorafsPinPolicyConstraints::default()
+        };
+        assert!(
+            std::panic::catch_unwind(|| duplicate_key.parse()).is_err(),
+            "approval roster must reject duplicate public keys"
+        );
+
+        let invalid_window = SorafsPinPolicyConstraints {
+            require_council_signatures: true,
+            approval_signers: vec![
+                pin_approval_signer("council-a", &key_a, 5, Some(5)),
+                pin_approval_signer("council-b", &key_b, 0, None),
+            ],
+            ..SorafsPinPolicyConstraints::default()
+        };
+        assert!(
+            std::panic::catch_unwind(|| invalid_window.parse()).is_err(),
+            "revocation must be strictly later than activation"
+        );
+    }
+
     #[test]
     fn governance_parliament_fields_roundtrip() {
         let cfg = Governance {
@@ -22195,9 +22864,15 @@ mod duration_clamp_tests {
         time::{Duration, Duration as StdDuration},
     };
 
-    use iroha_config_base::{read::ConfigReader, toml::TomlSource};
+    use iroha_config_base::{read::ConfigReader, toml::TomlSource, util::Bytes};
     use iroha_crypto::{ExposedPrivateKey, KeyPair};
-    use iroha_data_model::{account::AccountId, name::Name};
+    use iroha_data_model::{
+        account::AccountId,
+        name::Name,
+        sorafs::orderbook::{
+            ORDERBOOK_MAX_FILLS_PER_EXECUTION_V1, ORDERBOOK_MAX_MAINTENANCE_ITEMS_V1,
+        },
+    };
     use iroha_primitives::numeric::Numeric;
     use toml::{Table, Value};
 
@@ -23015,6 +23690,159 @@ price_tick = "0"
         assert!(std::panic::catch_unwind(|| load_root(table)).is_err());
     }
 
+    fn assert_orderbook_workers_eq(
+        actual: actual::SorafsOrderbookWorker,
+        expected: actual::SorafsOrderbookWorker,
+    ) {
+        assert_eq!(actual.enabled, expected.enabled);
+        assert_eq!(actual.scan_interval, expected.scan_interval);
+        assert_eq!(actual.match_batch_limit, expected.match_batch_limit);
+        assert_eq!(
+            actual.maintenance_batch_limit,
+            expected.maintenance_batch_limit
+        );
+        assert_eq!(actual.max_pending, expected.max_pending);
+        assert_eq!(actual.max_completed, expected.max_completed);
+        assert_eq!(actual.max_dead_letters, expected.max_dead_letters);
+        assert_eq!(actual.max_attempts, expected.max_attempts);
+        assert_eq!(
+            actual.checkpoint_max_bytes.0,
+            expected.checkpoint_max_bytes.0
+        );
+    }
+
+    #[test]
+    fn sorafs_orderbook_worker_defaults_are_operational_only_and_bounded() {
+        use defaults::sorafs::storage::orderbook_worker as worker_defaults;
+
+        let worker = load_root(base_table())
+            .torii
+            .sorafs_storage
+            .orderbook_worker;
+        assert_orderbook_workers_eq(worker, actual::SorafsOrderbookWorker::default());
+        assert!(!worker.enabled);
+        assert_eq!(
+            worker.scan_interval,
+            Duration::from_millis(worker_defaults::SCAN_INTERVAL_MS.get())
+        );
+        assert!(worker.match_batch_limit <= ORDERBOOK_MAX_FILLS_PER_EXECUTION_V1);
+        assert!(worker.maintenance_batch_limit <= ORDERBOOK_MAX_MAINTENANCE_ITEMS_V1);
+        assert!(worker.max_pending <= worker_defaults::MAX_PENDING_LIMIT);
+        assert!(worker.max_completed <= worker_defaults::MAX_COMPLETED_LIMIT);
+        assert!(worker.max_dead_letters <= worker_defaults::MAX_DEAD_LETTERS_LIMIT);
+        assert!(worker.max_attempts <= worker_defaults::MAX_ATTEMPTS_LIMIT);
+        assert!(
+            (worker_defaults::CHECKPOINT_MIN_BYTES..=worker_defaults::CHECKPOINT_MAX_BYTES_LIMIT)
+                .contains(&worker.checkpoint_max_bytes.0)
+        );
+    }
+
+    #[test]
+    fn sorafs_orderbook_worker_accepts_exact_resource_boundaries_without_storage_provider() {
+        use defaults::sorafs::storage::orderbook_worker as worker_defaults;
+
+        let mut table = base_table();
+        let sorafs: Table = toml::from_str(&format!(
+            r#"
+[storage]
+enabled = false
+
+[storage.orderbook_worker]
+enabled = true
+scan_interval_ms = {}
+match_batch_limit = {}
+maintenance_batch_limit = {}
+max_pending = {}
+max_completed = {}
+max_dead_letters = {}
+max_attempts = {}
+checkpoint_max_bytes = {}
+"#,
+            worker_defaults::SCAN_INTERVAL_MIN_MS,
+            ORDERBOOK_MAX_FILLS_PER_EXECUTION_V1,
+            ORDERBOOK_MAX_MAINTENANCE_ITEMS_V1,
+            worker_defaults::MAX_PENDING_LIMIT,
+            worker_defaults::MAX_COMPLETED_LIMIT,
+            worker_defaults::MAX_DEAD_LETTERS_LIMIT,
+            worker_defaults::MAX_ATTEMPTS_LIMIT,
+            worker_defaults::CHECKPOINT_MIN_BYTES,
+        ))
+        .expect("parse bounded orderbook worker policy");
+        table.insert("sorafs".into(), Value::Table(sorafs));
+
+        let storage = load_root(table).torii.sorafs_storage;
+        assert!(!storage.enabled);
+        assert_orderbook_workers_eq(
+            storage.orderbook_worker,
+            actual::SorafsOrderbookWorker {
+                enabled: true,
+                scan_interval: Duration::from_millis(worker_defaults::SCAN_INTERVAL_MIN_MS),
+                match_batch_limit: ORDERBOOK_MAX_FILLS_PER_EXECUTION_V1,
+                maintenance_batch_limit: ORDERBOOK_MAX_MAINTENANCE_ITEMS_V1,
+                max_pending: worker_defaults::MAX_PENDING_LIMIT,
+                max_completed: worker_defaults::MAX_COMPLETED_LIMIT,
+                max_dead_letters: worker_defaults::MAX_DEAD_LETTERS_LIMIT,
+                max_attempts: worker_defaults::MAX_ATTEMPTS_LIMIT,
+                checkpoint_max_bytes: Bytes(worker_defaults::CHECKPOINT_MIN_BYTES),
+            },
+        );
+    }
+
+    #[test]
+    fn sorafs_orderbook_worker_rejects_zero_and_excessive_resource_bounds() {
+        use defaults::sorafs::storage::orderbook_worker as worker_defaults;
+
+        let invalid_fields = [
+            "scan_interval_ms = 0".to_owned(),
+            format!(
+                "scan_interval_ms = {}",
+                worker_defaults::SCAN_INTERVAL_MIN_MS - 1
+            ),
+            format!(
+                "scan_interval_ms = {}",
+                worker_defaults::SCAN_INTERVAL_MAX_MS + 1
+            ),
+            format!(
+                "match_batch_limit = {}",
+                ORDERBOOK_MAX_FILLS_PER_EXECUTION_V1 + 1
+            ),
+            format!(
+                "maintenance_batch_limit = {}",
+                ORDERBOOK_MAX_MAINTENANCE_ITEMS_V1 + 1
+            ),
+            format!("max_pending = {}", worker_defaults::MAX_PENDING_LIMIT + 1),
+            format!(
+                "max_completed = {}",
+                worker_defaults::MAX_COMPLETED_LIMIT + 1
+            ),
+            format!(
+                "max_dead_letters = {}",
+                worker_defaults::MAX_DEAD_LETTERS_LIMIT + 1
+            ),
+            format!("max_attempts = {}", worker_defaults::MAX_ATTEMPTS_LIMIT + 1),
+            format!(
+                "checkpoint_max_bytes = {}",
+                worker_defaults::CHECKPOINT_MIN_BYTES - 1
+            ),
+            format!(
+                "checkpoint_max_bytes = {}",
+                worker_defaults::CHECKPOINT_MAX_BYTES_LIMIT + 1
+            ),
+        ];
+
+        for invalid_field in invalid_fields {
+            let mut table = base_table();
+            let sorafs: Table =
+                toml::from_str(&format!("[storage.orderbook_worker]\n{invalid_field}\n"))
+                    .expect("parse invalid orderbook worker fixture");
+            table.insert("sorafs".into(), Value::Table(sorafs));
+            assert!(
+                actual::Root::from_toml_source(TomlSource::inline(table)).is_err(),
+                "accepted invalid orderbook worker field: {invalid_field}"
+            );
+        }
+    }
+
     #[test]
     fn sorafs_storage_economics_policy_paths_parse() {
         let mut table = base_table();
@@ -23221,15 +24049,17 @@ terminal_retention_secs = 7200
     }
 
     #[test]
-    fn sorafs_storage_privacy_aggregate_policy_parses_and_clamps_cycle() {
+    fn sorafs_storage_privacy_aggregate_policy_parses_canonical_query() {
         let mut table = base_table();
         let sorafs: Table = toml::from_str(
             r#"
 [storage.privacy_aggregates]
 enabled = true
-cycle_seconds = 0
+cycle_seconds = 60
+first_cycle_start_unix = 120
 publish_delay_seconds = 17
 aggregate_id_prefix = "sfm4c-governed"
+query_id_hex = "b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0"
 privacy_mode = "differential_privacy_with_suppression"
 epsilon_numerator = 4
 epsilon_denominator = 5
@@ -23239,6 +24069,14 @@ policy_digest_hex = "c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c
 composition_budget_epsilon_numerator = 12
 composition_budget_epsilon_denominator = 1
 composition_budget_max_publications = 52
+
+[[storage.privacy_aggregates.population_inventory]]
+label = "jurisdiction-a"
+digest_hex = "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0"
+
+[[storage.privacy_aggregates.metric_schema]]
+key = "moderation_actions"
+unit = "count"
 "#,
         )
         .expect("parse sorafs privacy aggregate policy");
@@ -23247,9 +24085,17 @@ composition_budget_max_publications = 52
         let actual = load_root(table);
         let schedule = actual.torii.sorafs_storage.privacy_aggregates;
         assert!(schedule.enabled);
-        assert_eq!(schedule.cycle_seconds, 1);
+        assert_eq!(schedule.cycle_seconds, 60);
+        assert_eq!(schedule.first_cycle_start_unix, 120);
         assert_eq!(schedule.publish_delay_seconds, 17);
         assert_eq!(schedule.aggregate_id_prefix, "sfm4c-governed");
+        assert_eq!(schedule.query_id, Some([0xB0; 32]));
+        assert_eq!(schedule.population_inventory.len(), 1);
+        assert_eq!(schedule.population_inventory[0].label, "jurisdiction-a");
+        assert_eq!(schedule.population_inventory[0].digest, [0xA0; 32]);
+        assert_eq!(schedule.metric_schema.len(), 1);
+        assert_eq!(schedule.metric_schema[0].key, "moderation_actions");
+        assert_eq!(schedule.metric_schema[0].unit, "count");
         assert_eq!(
             schedule.privacy_mode,
             "differential_privacy_with_suppression"
@@ -23271,6 +24117,7 @@ composition_budget_max_publications = 52
                 "enabled = true",
                 "policy_digest_hex is required when enabled",
             ),
+            ("cycle_seconds = 0", "cycle_seconds must be positive"),
             (
                 "epsilon_numerator = 2\nepsilon_denominator = 4",
                 "epsilon must be a reduced positive rational",

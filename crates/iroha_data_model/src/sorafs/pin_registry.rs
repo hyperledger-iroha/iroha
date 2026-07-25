@@ -450,6 +450,9 @@ pub struct PinManifestRecord {
     /// SHA3-256 digest of the ordered chunk metadata emitted during build.
     #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
     pub chunk_digest_sha3_256: [u8; 32],
+    /// Merkle root of the canonical Proof-of-Retrievability tree.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub por_root: [u8; 32],
     /// Total payload length covered by the manifest.
     pub content_length: u64,
     /// Replication policy bound to the manifest.
@@ -481,6 +484,34 @@ pub struct PinManifestRecord {
     pub pin_fee_payment: Option<PinFeePayment>,
 }
 
+/// Finalized block anchor for one coherent pin-manifest query result.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct PinManifestFinalizedCursorV1 {
+    /// Finalized block height observed by the immutable state view.
+    pub height: u64,
+    /// Finalized block hash resolved from that same immutable state view.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub block_hash: [u8; 32],
+}
+
+/// One authoritative pin manifest anchored to finalized chain state.
+#[allow(missing_copy_implementations)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct PinManifestFinalizedRecordV1 {
+    /// Finalized state anchor at which the manifest was read.
+    pub finalized_cursor: PinManifestFinalizedCursorV1,
+    /// Chain-authoritative pin-manifest lifecycle record.
+    pub manifest: PinManifestRecord,
+}
+
 impl PinManifestRecord {
     /// Construct a new pending record from the supplied fields.
     #[allow(clippy::too_many_arguments)]
@@ -490,6 +521,8 @@ impl PinManifestRecord {
         root_cid: ManifestRootCid,
         chunker: ChunkerProfileHandle,
         chunk_digest_sha3_256: [u8; 32],
+        por_root: [u8; 32],
+        content_length: u64,
         policy: PinPolicy,
         submitted_by: AccountId,
         submitted_epoch: u64,
@@ -502,7 +535,8 @@ impl PinManifestRecord {
             root_cid,
             chunker,
             chunk_digest_sha3_256,
-            content_length: 0,
+            por_root,
+            content_length,
             policy,
             submitted_by,
             submitted_epoch,
@@ -514,13 +548,6 @@ impl PinManifestRecord {
             council_envelope_digest: None,
             pin_fee_payment: None,
         }
-    }
-
-    /// Attach the total content length represented by the manifest.
-    #[must_use]
-    pub fn with_content_length(mut self, content_length: u64) -> Self {
-        self.content_length = content_length;
-        self
     }
 
     /// Record the public pin fee payment associated with this manifest.
@@ -878,6 +905,8 @@ mod tests {
                 .expect("canonical root CID"),
             chunker,
             chunk_digest,
+            [0xCE; 32],
+            1_048_576,
             PinPolicy::default(),
             AccountId::new(
                 "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C"
@@ -891,6 +920,8 @@ mod tests {
         );
         assert!(matches!(record.status, PinStatus::Pending));
         assert_eq!(record.chunk_digest_sha3_256, chunk_digest);
+        assert_eq!(record.por_root, [0xCE; 32]);
+        assert_eq!(record.content_length, 1_048_576);
 
         record.approve(64, Some([2; 32]));
         assert!(record.status.is_active());
@@ -959,6 +990,7 @@ mod tests {
                 aliases: vec!["sorafs.sf1@1.0.0".into()],
             })
             .chunk_digest_sha3_256([0xAC; 32])
+            .por_root([0xAD; 32])
             .content_length(1_048_576)
             .car_digest([0xAB; 32])
             .car_size(1_100_000)

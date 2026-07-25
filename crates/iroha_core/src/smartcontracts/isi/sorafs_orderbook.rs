@@ -710,6 +710,19 @@ fn active_policy(
     Ok((record, now))
 }
 
+fn require_governed_orderbook_authority(
+    authority: &AccountId,
+    governed_authority: &AccountId,
+    role: &str,
+) -> Result<(), InstructionExecutionError> {
+    if authority != governed_authority {
+        return Err(invalid_parameter(format!(
+            "orderbook {role} authority {authority} does not match governed authority {governed_authority}"
+        )));
+    }
+    Ok(())
+}
+
 fn canonical_owner(
     owner_bytes: &[u8],
     authority: &AccountId,
@@ -1545,6 +1558,14 @@ impl Execute for SetSorafsOrderbookPolicy {
                         "orderbook market id is immutable after first activation",
                     ));
                 }
+                let status = active_status(state_transaction, now)?;
+                if self.policy.settlement_authority != current.policy.settlement_authority
+                    && status.open_settlement_channels != 0
+                {
+                    return Err(invalid_parameter(
+                        "orderbook settlement authority cannot rotate while settlement channels are open",
+                    ));
+                }
                 None
             }
         };
@@ -1809,18 +1830,18 @@ impl Execute for MatchSorafsOrderbook {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), InstructionExecutionError> {
-        require_permission(
-            state_transaction,
-            authority,
-            "CanCompleteSorafsReplicationOrder",
-        )?;
         if !(1..=ORDERBOOK_MAX_FILLS_PER_EXECUTION_V1).contains(&self.max_fills) {
             return Err(invalid_parameter(format!(
                 "orderbook max_fills {} is outside 1..={ORDERBOOK_MAX_FILLS_PER_EXECUTION_V1}",
                 self.max_fills
             )));
         }
-        let (_policy, now) = active_policy(state_transaction, self.policy_digest)?;
+        let (policy, now) = active_policy(state_transaction, self.policy_digest)?;
+        require_governed_orderbook_authority(
+            authority,
+            &policy.policy.matcher_authority,
+            "matcher",
+        )?;
         let mut status = active_status(state_transaction, now)?;
         if self.expected_book_revision != status.book_revision {
             return Err(invalid_parameter(format!(
@@ -1994,7 +2015,7 @@ impl Execute for MatchSorafsOrderbook {
                 buyer: bid_before.record.owner.clone(),
                 provider: ask_before.record.owner.clone(),
                 provider_id,
-                settlement_authority: authority.clone(),
+                settlement_authority: policy.policy.settlement_authority.clone(),
                 total_bytes,
                 remaining_bytes: total_bytes,
                 initial_xor_locked: escrow.clone(),
@@ -2109,18 +2130,18 @@ impl Execute for MaintainSorafsOrderbook {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), InstructionExecutionError> {
-        require_permission(
-            state_transaction,
-            authority,
-            "CanCompleteSorafsReplicationOrder",
-        )?;
         if !(1..=ORDERBOOK_MAX_MAINTENANCE_ITEMS_V1).contains(&self.max_items) {
             return Err(invalid_parameter(format!(
                 "orderbook maintenance max_items {} is outside 1..={ORDERBOOK_MAX_MAINTENANCE_ITEMS_V1}",
                 self.max_items
             )));
         }
-        let (_policy, now) = active_policy(state_transaction, self.policy_digest)?;
+        let (policy, now) = active_policy(state_transaction, self.policy_digest)?;
+        require_governed_orderbook_authority(
+            authority,
+            &policy.policy.matcher_authority,
+            "matcher",
+        )?;
         let mut status = active_status(state_transaction, now)?;
         if self.expected_book_revision != status.book_revision {
             return Err(invalid_parameter(format!(
@@ -2364,11 +2385,6 @@ impl Execute for RecordSorafsOrderbookSettlementReceipt {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), InstructionExecutionError> {
-        require_permission(
-            state_transaction,
-            authority,
-            "CanCompleteSorafsReplicationOrder",
-        )?;
         let receipt = decode_settlement_receipt_v1(&self.receipt_payload).map_err(|error| {
             invalid_parameter(format!("invalid canonical settlement receipt: {error}"))
         })?;
@@ -2376,8 +2392,18 @@ impl Execute for RecordSorafsOrderbookSettlementReceipt {
             invalid_parameter(format!("invalid settlement receipt signature: {error}"))
         })?;
         let (policy, now) = active_policy(state_transaction, self.policy_digest)?;
+        require_governed_orderbook_authority(
+            authority,
+            &policy.policy.settlement_authority,
+            "settlement",
+        )?;
         let mut channel = read_channel(state_transaction.world(), receipt.channel_id)?
             .ok_or_else(|| invalid_parameter("settlement receipt references an unknown channel"))?;
+        if channel.settlement_authority != policy.policy.settlement_authority {
+            return Err(corrupt_state(
+                "open settlement channel authority does not match the active governed authority",
+            ));
+        }
         if channel.status != OrderbookSettlementChannelStatusV1::Open {
             return Err(invalid_parameter("settlement receipt channel is not open"));
         }
@@ -3494,6 +3520,8 @@ mod tests {
             revision: 1,
             predecessor_policy_digest: None,
             market_id: [0xA5; 32],
+            matcher_authority: account(&keypair(0xA1)),
+            settlement_authority: account(&keypair(0xA2)),
             paused: false,
             min_order_gib: 2,
             max_order_gib: 1_024,
@@ -3643,9 +3671,10 @@ mod tests {
         }
         let authority = account(keypairs[0]);
         let mut permissions = Permissions::new();
-        for permission in ["CanSetSorafsPricing", "CanCompleteSorafsReplicationOrder"] {
-            permissions.insert(Permission::new(permission.to_owned(), Json::new(())));
-        }
+        permissions.insert(Permission::new(
+            "CanSetSorafsPricing".to_owned(),
+            Json::new(()),
+        ));
         world.account_permissions.insert(authority, permissions);
         State::new_for_testing(
             world,
@@ -3699,9 +3728,10 @@ mod tests {
             [],
         );
         let mut permissions = Permissions::new();
-        for permission in ["CanSetSorafsPricing", "CanCompleteSorafsReplicationOrder"] {
-            permissions.insert(Permission::new(permission.to_owned(), Json::new(())));
-        }
+        permissions.insert(Permission::new(
+            "CanSetSorafsPricing".to_owned(),
+            Json::new(()),
+        ));
         world.account_permissions.insert(settlement_id, permissions);
         let mut state = State::new_for_testing(
             world,
@@ -3854,7 +3884,9 @@ mod tests {
         state_transaction: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
     ) -> [u8; 32] {
-        let policy = policy();
+        let mut policy = policy();
+        policy.matcher_authority = authority.clone();
+        policy.settlement_authority = authority.clone();
         let digest = policy.digest().expect("digest policy");
         SetSorafsOrderbookPolicy::new(policy)
             .execute(authority, state_transaction)
@@ -5075,11 +5107,17 @@ mod tests {
         let buyer = keypair(0x35);
         let provider = keypair(0x36);
         let treasury = keypair(0x37);
+        let attacker = keypair(0x38);
         let settlement_id = account(&settlement);
         let buyer_id = account(&buyer);
         let provider_id = account(&provider);
-        let state =
+        let attacker_id = account(&attacker);
+        let mut state =
             state_with_settlement_accounts(&settlement, &buyer, &provider, &treasury, 100_000);
+        let (attacker_key, attacker_value) = Account::new(attacker_id.clone())
+            .build(&attacker_id)
+            .into_key_value();
+        state.world.accounts.insert(attacker_key, attacker_value);
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx, 0x90);
@@ -5100,6 +5138,18 @@ mod tests {
         let before_funding = read_status(stx.world())
             .expect("read status")
             .expect("status");
+        assert!(
+            MatchSorafsOrderbook::new(policy_digest, before_funding.book_revision, 1)
+                .execute(&attacker_id, &mut stx)
+                .is_err(),
+            "an account outside the governed matcher role must be rejected"
+        );
+        assert_eq!(
+            read_status(stx.world())
+                .expect("read status after unauthorized match")
+                .expect("status"),
+            before_funding
+        );
         stx.world
             .provider_owners
             .remove(ProviderId::new([0x72; 32]));
@@ -5163,6 +5213,7 @@ mod tests {
         assert_eq!(channel.buyer, buyer_id);
         assert_eq!(channel.provider, provider_id);
         assert_eq!(channel.provider_id, ProviderId::new([0x72; 32]));
+        assert_eq!(&channel.settlement_authority, &settlement_id);
         assert_eq!(channel.remaining_bytes, 5 * BYTES_PER_GIB);
         stx.world
             .provider_owners
@@ -5228,6 +5279,36 @@ mod tests {
                 .expect("read status")
                 .expect("status"),
             status
+        );
+        let active_policy = read_policy(stx.world())
+            .expect("read active policy")
+            .expect("active policy");
+        let mut rotated = active_policy.policy.clone();
+        rotated.revision = rotated
+            .revision
+            .checked_add(1)
+            .expect("fixture policy revision");
+        rotated.predecessor_policy_digest = Some(active_policy.policy_digest);
+        rotated.settlement_authority = attacker_id;
+        let error = SetSorafsOrderbookPolicy::new(rotated)
+            .execute(&settlement_id, &mut stx)
+            .expect_err("settlement authority rotation must wait for open channels to close");
+        match error {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                message,
+            )) => assert!(
+                message.contains(
+                    "settlement authority cannot rotate while settlement channels are open"
+                ),
+                "unexpected settlement-authority rotation error: {message}"
+            ),
+            other => panic!("unexpected settlement-authority rotation error: {other:?}"),
+        }
+        assert_eq!(
+            read_policy(stx.world())
+                .expect("read unchanged active policy")
+                .expect("active policy"),
+            active_policy
         );
     }
 
@@ -5329,9 +5410,11 @@ mod tests {
     fn maintenance_expires_signed_orders_with_bounded_revision_cas() {
         let operator = keypair(0x38);
         let buyer = keypair(0x39);
+        let attacker = keypair(0x3A);
         let operator_id = account(&operator);
         let buyer_id = account(&buyer);
-        let state = state_with_accounts(&[&operator, &buyer]);
+        let attacker_id = account(&attacker);
+        let state = state_with_accounts(&[&operator, &buyer, &attacker]);
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         let policy_digest = activate_policy(&mut stx, &operator_id);
@@ -5366,6 +5449,24 @@ mod tests {
             .smart_contract_state
             .insert(status_key().clone(), encode(&status));
 
+        assert!(
+            MaintainSorafsOrderbook::new(policy_digest, 1, 1)
+                .execute(&attacker_id, &mut stx)
+                .is_err(),
+            "an account outside the governed matcher role must not maintain the book"
+        );
+        assert_eq!(
+            read_order(stx.world(), expired.order_id)
+                .expect("read order after unauthorized maintenance")
+                .expect("order"),
+            record
+        );
+        assert_eq!(
+            read_status(stx.world())
+                .expect("read status after unauthorized maintenance")
+                .expect("status"),
+            status
+        );
         assert!(
             MaintainSorafsOrderbook::new(policy_digest, 1, 0)
                 .execute(&operator_id, &mut stx)
@@ -5617,7 +5718,7 @@ mod tests {
     }
 
     #[test]
-    fn receipt_rejects_permission_policy_signer_time_and_canonical_abuse_atomically() {
+    fn receipt_rejects_authority_policy_signer_time_and_canonical_abuse_atomically() {
         let settlement = keypair(0x45);
         let attacker = keypair(0x46);
         let buyer = keypair(0x47);
@@ -5630,10 +5731,10 @@ mod tests {
         let mut state =
             state_with_settlement_accounts(&settlement, &buyer, &provider, &treasury, 1_000);
         let attacker_id = account(&attacker);
-        let (attacker_id, attacker_value) = Account::new(attacker_id.clone())
+        let (attacker_key, attacker_value) = Account::new(attacker_id.clone())
             .build(&attacker_id)
             .into_key_value();
-        state.world.accounts.insert(attacker_id, attacker_value);
+        state.world.accounts.insert(attacker_key, attacker_value);
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx, 0xA2);
@@ -5677,14 +5778,9 @@ mod tests {
                 .is_err()
         );
 
-        stx.world
-            .account_permissions
-            .get_mut(&authority)
-            .expect("permissions")
-            .retain(|permission| permission.name() != "CanCompleteSorafsReplicationOrder");
         assert!(
             RecordSorafsOrderbookSettlementReceipt::new(encode(&base), policy_digest)
-                .execute(&authority, &mut stx)
+                .execute(&attacker_id, &mut stx)
                 .is_err()
         );
         assert!(
@@ -6025,10 +6121,11 @@ mod tests {
             .expect("settlement lock")
             .custody
             .clone();
-        let mut maximum_bytes = vec![0xFF; 64];
-        maximum_bytes.push(0);
+        let mut maximum_bytes = vec![0xFF; iroha_primitives::numeric::MAX_MANTISSA_BYTES];
+        *maximum_bytes.last_mut().expect("non-empty mantissa") = 0x7F;
         let maximum = Quantity::try_from_numeric(Numeric::new(
-            BigInt::from_twos_bytes(&maximum_bytes).expect("512-bit positive maximum"),
+            BigInt::from_twos_bytes(&maximum_bytes)
+                .expect("maximum signed 512-bit positive mantissa"),
             6,
         ))
         .expect("positive maximum is a valid quantity");

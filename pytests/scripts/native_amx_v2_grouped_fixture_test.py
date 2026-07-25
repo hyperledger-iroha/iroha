@@ -372,7 +372,10 @@ def test_grouped_native_amx_v2_negative_control_contract_is_bounded() -> None:
     assert {
         control["validator"] for control in controls
     } == {"receipt_group", "application_evidence"}
-    assert all(1 <= len(control["mutations"]) <= 4 for control in controls)
+    # Coherent committee and outer-group substitutions intentionally update
+    # every mirrored identity field; keep the corpus bounded while allowing
+    # those controls to isolate one invariant rather than fail accidentally.
+    assert all(1 <= len(control["mutations"]) <= 8 for control in controls)
     assert {
         mutation["op"]
         for control in controls
@@ -389,6 +392,17 @@ def test_grouped_native_amx_v2_negative_control_contract_is_bounded() -> None:
         for mutation in control["mutations"]
     )
     assert {
+        "coherent_unordered_validator_set",
+        "zero_pop",
+        "long_pop",
+        "zero_aggregate_signature",
+        "long_aggregate_signature",
+        "outer_group_source_reorder",
+        "outer_group_source_substitution",
+        "source_id_substituted_for_entrypoint_hash",
+        "entrypoint_hash_substituted_for_source_id",
+        "wrong_entrypoint_hash_checksum",
+        "wrong_entrypoint_hash_marker",
         "stale_same_route_incarnation",
         "same_route_coordinator_view_drift",
         "same_route_mixed_role_deferral",

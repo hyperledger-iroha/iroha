@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from iroha_python import (
     ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1,
+    SORAFS_GOVERNANCE_DAG_CID_BYTES_V1,
     SORAFS_GOVERNANCE_DAG_MAX_BLOCKS_V1,
     SORAFS_ORDERBOOK_PAYLOAD_KINDS,
     SORAFS_PDP_PAYLOAD_KINDS,
@@ -40,8 +41,21 @@ def _fixture(path: Path) -> bytes:
     return path.read_bytes()
 
 
-def _governance_outcome_fixture(name: str) -> dict[str, object]:
-    return json.loads((_GOVERNANCE_FIXTURES / name).read_text(encoding="utf-8"))
+def _assert_exact_outcome(
+    outcome: dict[str, object],
+    fixture_root: Path,
+    fixture_name: str,
+) -> None:
+    expected_text = (fixture_root / fixture_name).read_text(encoding="utf-8")
+    assert outcome == json.loads(expected_text)
+    assert json.dumps(outcome, indent=2, ensure_ascii=True) + "\n" == expected_text
+
+
+def _assert_governance_outcome(
+    outcome: dict[str, object],
+    fixture_name: str,
+) -> None:
+    _assert_exact_outcome(outcome, _GOVERNANCE_FIXTURES, fixture_name)
 
 
 def _pdp_fixtures() -> tuple[bytes, bytes, bytes]:
@@ -60,16 +74,30 @@ def test_validate_orderbook_payload_accepts_canonical_order_request() -> None:
     outcome = validate_orderbook_payload(
         "order",
         _fixture(_ORDERBOOK_FIXTURES / "order_request_v1.to"),
-        label="fixtures/sorafs_manifest/orderbook/order_request_v1.to",
-        generated_at_unix=1_700_000_123,
+        label="order_request_v1.to",
+        generated_at_unix=123,
     )
 
-    assert outcome["status"] == "Ok"
-    assert outcome["code"] == "SFS-OK-000"
-    assert outcome["category"] == "validation"
-    assert outcome["generated_at"] == 1_700_000_123
-    assert outcome["inputs"][0]["kind"] == "orderbook_order_request"
-    assert outcome["inputs"][0]["path"] == "fixtures/sorafs_manifest/orderbook/order_request_v1.to"
+    _assert_exact_outcome(
+        outcome,
+        _ORDERBOOK_FIXTURES,
+        "order_request_validation_outcome_v1.json",
+    )
+
+
+def test_orderbook_signature_and_noncanonical_outcomes_match_exactly() -> None:
+    for name in ("order_request_bad_signature", "order_request_trailing_bytes"):
+        outcome = validate_orderbook_payload(
+            "order-request",
+            _fixture(_ORDERBOOK_FIXTURES / "negative" / f"{name}_v1.to"),
+            label=f"{name}_v1.to",
+            generated_at_unix=123,
+        )
+        _assert_exact_outcome(
+            outcome,
+            _ORDERBOOK_FIXTURES,
+            f"negative/{name}_validation_outcome_v1.json",
+        )
 
 
 def test_validate_orderbook_payload_accepts_runtime_snapshot_alias() -> None:
@@ -204,7 +232,7 @@ def test_orderbook_builders_accept_owner_account_at_v1_byte_ceiling() -> None:
         {
             "side": "bid",
             "tier": "hot",
-            "price_per_gib_micro_xor": "1",
+            "price_per_gib": "1",
             "quantity_gib": "1",
             "owner_account": owner_account,
             "expiry_unix": "1700010000",
@@ -242,7 +270,7 @@ def test_orderbook_owner_account_byte_ceiling_rejects_adversarial_inputs() -> No
             {
                 "side": "bid",
                 "tier": "hot",
-                "price_per_gib_micro_xor": "1",
+                "price_per_gib": "1",
                 "quantity_gib": "1",
                 "owner_account": owner_account,
                 "expiry_unix": "1700010000",
@@ -475,10 +503,10 @@ def test_validate_pdp_pair_and_bundle_helpers_accept_bound_fixtures() -> None:
         commitment,
         challenge,
         proof,
-        commitment_label="commitment.to",
-        challenge_label="challenge.to",
-        proof_label="proof.to",
-        generated_at_unix=1_700_001_004,
+        commitment_label="commitment_v1.to",
+        challenge_label="challenge_v1.to",
+        proof_label="proof_v1.to",
+        generated_at_unix=123,
     )
 
     assert commitment_challenge["status"] == "Ok"
@@ -493,17 +521,76 @@ def test_validate_pdp_pair_and_bundle_helpers_accept_bound_fixtures() -> None:
         "pdp_challenge",
         "pdp_proof",
     ]
-    assert bundle["status"] == "Ok"
-    assert bundle["code"] == "SFS-PDP-DIAG-000"
-    assert {entry["key"]: entry["value"] for entry in bundle["context"]}[
-        "production_acceptance"
-    ] == "false"
-    assert [entry["kind"] for entry in bundle["inputs"]] == [
-        "pdp_commitment",
-        "pdp_challenge",
-        "pdp_proof",
-    ]
-    assert bundle["generated_at"] == 1_700_001_004
+    _assert_exact_outcome(bundle, _PDP_FIXTURES, "bundle_validation_outcome_v1.json")
+
+
+def test_all_pdp_negative_outcomes_match_exactly() -> None:
+    commitment, challenge, _proof = _pdp_fixtures()
+
+    single_cases = (
+        (
+            "duplicate_hot_leaf_challenge",
+            lambda payload: validate_pdp_payload(
+                "challenge",
+                payload,
+                label="duplicate_hot_leaf_challenge_v1.to",
+                generated_at_unix=123,
+            ),
+        ),
+        (
+            "missing_signature_proof",
+            lambda payload: validate_pdp_payload(
+                "proof",
+                payload,
+                label="missing_signature_proof_v1.to",
+                generated_at_unix=123,
+            ),
+        ),
+    )
+    pair_names = ("late_proof", "wrong_manifest_proof", "wrong_provider_proof")
+    bundle_names = (
+        "missing_hot_leaf_path_proof",
+        "missing_segment_path_proof",
+        "wrong_path_proof",
+    )
+
+    for name, validate in single_cases:
+        outcome = validate(_fixture(_PDP_FIXTURES / "negative" / f"{name}_v1.to"))
+        _assert_exact_outcome(
+            outcome,
+            _PDP_FIXTURES,
+            f"negative/{name}_validation_outcome_v1.json",
+        )
+
+    for name in pair_names:
+        outcome = validate_pdp_challenge_proof(
+            challenge,
+            _fixture(_PDP_FIXTURES / "negative" / f"{name}_v1.to"),
+            challenge_label="challenge_v1.to",
+            proof_label=f"{name}_v1.to",
+            generated_at_unix=123,
+        )
+        _assert_exact_outcome(
+            outcome,
+            _PDP_FIXTURES,
+            f"negative/{name}_validation_outcome_v1.json",
+        )
+
+    for name in bundle_names:
+        outcome = validate_pdp_bundle(
+            commitment,
+            challenge,
+            _fixture(_PDP_FIXTURES / "negative" / f"{name}_v1.to"),
+            commitment_label="commitment_v1.to",
+            challenge_label="challenge_v1.to",
+            proof_label=f"{name}_v1.to",
+            generated_at_unix=123,
+        )
+        _assert_exact_outcome(
+            outcome,
+            _PDP_FIXTURES,
+            f"negative/{name}_validation_outcome_v1.json",
+        )
 
 
 def test_validate_pdp_payload_reports_malformed_payloads() -> None:
@@ -540,66 +627,51 @@ def test_reference_validation_rejects_bad_arguments_before_native_validation() -
 def test_validate_governance_dag_block_accepts_canonical_fixture() -> None:
     outcome = validate_governance_dag_block(
         _fixture(_GOVERNANCE_FIXTURES / "dag_block_0_v1.to"),
-        label="fixtures/sorafs_manifest/governance/dag_block_0_v1.to",
-        generated_at_unix=1_700_002_001,
+        label="dag_block_0_v1.to",
+        generated_at_unix=123,
     )
 
-    assert outcome["status"] == "Ok"
-    assert outcome["code"] == "SFS-OK-000"
-    assert outcome["generated_at"] == 1_700_002_001
-    assert outcome["inputs"] == [
-        {
-            "kind": "governance_dag_block",
-            "path": "fixtures/sorafs_manifest/governance/dag_block_0_v1.to",
-        }
-    ]
+    _assert_governance_outcome(
+        outcome,
+        "dag_block_validation_outcome_v1.json",
+    )
 
 
 def test_validate_governance_dag_block_rejects_expected_cid_mismatch() -> None:
     outcome = validate_governance_dag_block(
         _fixture(_GOVERNANCE_FIXTURES / "dag_block_0_v1.to"),
-        expected_block_cid=bytes(32),
-        generated_at_unix=1_700_002_002,
+        expected_block_cid=bytes([0x7F]) * 32,
+        generated_at_unix=123,
     )
 
-    assert outcome["status"] == "Error"
-    assert outcome["code"] == "SFS-GOV-004"
-    assert outcome["category"] == "validation"
-    assert outcome["generated_at"] == 1_700_002_002
-    assert outcome["inputs"] == [
-        {
-            "kind": "governance_dag_block",
-            "path": "governance-dag-block.to",
-        }
-    ]
+    _assert_governance_outcome(
+        outcome,
+        "dag_block_cid_mismatch_validation_outcome_v1.json",
+    )
 
 
 def test_validate_governance_dag_head_chain_accepts_root_to_head_fixture() -> None:
     blocks = [
         SorafsGovernanceDagBlockInput(
             _fixture(_GOVERNANCE_FIXTURES / "dag_block_0_v1.to"),
-            "fixtures/sorafs_manifest/governance/dag_block_0_v1.to",
+            "dag_block_0_v1.to",
         ),
         SorafsGovernanceDagBlockInput(
             _fixture(_GOVERNANCE_FIXTURES / "dag_block_1_v1.to"),
-            "fixtures/sorafs_manifest/governance/dag_block_1_v1.to",
+            "dag_block_1_v1.to",
         ),
     ]
     outcome = validate_governance_dag_head_chain(
         _fixture(_GOVERNANCE_FIXTURES / "dag_head_v1.to"),
         blocks,
-        head_label="fixtures/sorafs_manifest/governance/dag_head_v1.to",
-        generated_at_unix=1_700_002_003,
+        head_label="dag_head_v1.to",
+        generated_at_unix=123,
     )
 
-    assert outcome["status"] == "Ok"
-    assert outcome["code"] == "SFS-OK-000"
-    assert outcome["generated_at"] == 1_700_002_003
-    assert [entry["kind"] for entry in outcome["inputs"]] == [
-        "governance_dag_head",
-        "governance_dag_block",
-        "governance_dag_block",
-    ]
+    _assert_governance_outcome(
+        outcome,
+        "dag_head_validation_outcome_v1.json",
+    )
 
 
 def test_validate_governance_dag_head_chain_rejects_reordered_blocks() -> None:
@@ -614,17 +686,13 @@ def test_validate_governance_dag_head_chain_rejects_reordered_blocks() -> None:
     outcome = validate_governance_dag_head_chain(
         _fixture(_GOVERNANCE_FIXTURES / "dag_head_v1.to"),
         blocks,
-        generated_at_unix=1_700_002_004,
+        generated_at_unix=123,
     )
 
-    assert outcome["status"] == "Error"
-    assert outcome["code"] == "SFS-GOV-006"
-    assert outcome["generated_at"] == 1_700_002_004
-    assert [entry["path"] for entry in outcome["inputs"]] == [
-        "governance-dag-head.to",
-        "governance-dag-block-0.to",
-        "governance-dag-block-1.to",
-    ]
+    _assert_governance_outcome(
+        outcome,
+        "dag_head_reordered_validation_outcome_v1.json",
+    )
 
 
 def test_governance_dag_negative_vectors_match_reference_outcomes() -> None:
@@ -636,8 +704,9 @@ def test_governance_dag_negative_vectors_match_reference_outcomes() -> None:
         label="dag_block_bad_signature_v1.to",
         generated_at_unix=123,
     )
-    assert block_signature_outcome == _governance_outcome_fixture(
-        "dag_block_bad_signature_validation_outcome_v1.json"
+    _assert_governance_outcome(
+        block_signature_outcome,
+        "dag_block_bad_signature_validation_outcome_v1.json",
     )
 
     trailing_bytes_outcome = validate_governance_dag_block(
@@ -645,8 +714,9 @@ def test_governance_dag_negative_vectors_match_reference_outcomes() -> None:
         label="dag_block_trailing_bytes_v1.to",
         generated_at_unix=123,
     )
-    assert trailing_bytes_outcome == _governance_outcome_fixture(
-        "dag_block_trailing_bytes_validation_outcome_v1.json"
+    _assert_governance_outcome(
+        trailing_bytes_outcome,
+        "dag_block_trailing_bytes_validation_outcome_v1.json",
     )
 
     head_signature_outcome = validate_governance_dag_head_chain(
@@ -658,8 +728,9 @@ def test_governance_dag_negative_vectors_match_reference_outcomes() -> None:
         head_label="dag_head_bad_signature_v1.to",
         generated_at_unix=123,
     )
-    assert head_signature_outcome == _governance_outcome_fixture(
-        "dag_head_bad_signature_validation_outcome_v1.json"
+    _assert_governance_outcome(
+        head_signature_outcome,
+        "dag_head_bad_signature_validation_outcome_v1.json",
     )
 
     predecessor_outcome = validate_governance_dag_head_chain(
@@ -677,8 +748,9 @@ def test_governance_dag_negative_vectors_match_reference_outcomes() -> None:
         head_label="dag_head_bad_predecessor_v1.to",
         generated_at_unix=123,
     )
-    assert predecessor_outcome == _governance_outcome_fixture(
-        "dag_head_bad_predecessor_validation_outcome_v1.json"
+    _assert_governance_outcome(
+        predecessor_outcome,
+        "dag_head_bad_predecessor_validation_outcome_v1.json",
     )
 
 
@@ -690,6 +762,17 @@ def test_governance_dag_wrappers_enforce_labels_and_block_count() -> None:
             root,
             label="x" * (SORAFS_REFERENCE_MAX_LABEL_BYTES_V1 + 1),
         )
+    with pytest.raises(ValueError, match="control characters"):
+        validate_governance_dag_block(root, label="bad\u0001label")
+    for invalid_length in (0, 31, 33):
+        with pytest.raises(
+            ValueError,
+            match=rf"exactly {SORAFS_GOVERNANCE_DAG_CID_BYTES_V1} bytes",
+        ):
+            validate_governance_dag_block(
+                root,
+                expected_block_cid=bytes(invalid_length),
+            )
     with pytest.raises(ValueError, match=r"1\.\.="):
         validate_governance_dag_head_chain(head, [])
     with pytest.raises(ValueError, match=r"1\.\.="):

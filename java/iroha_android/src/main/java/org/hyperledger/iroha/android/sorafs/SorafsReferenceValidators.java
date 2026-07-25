@@ -746,8 +746,8 @@ public final class SorafsReferenceValidators {
     if (!value.trim().equals(value)) {
       throw new IllegalArgumentException("label must not contain surrounding whitespace");
     }
-    if (value.indexOf('\0') >= 0) {
-      throw new IllegalArgumentException("label must not contain NUL");
+    if (value.codePoints().anyMatch(Character::isISOControl)) {
+      throw new IllegalArgumentException("label must not contain control characters");
     }
     final byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
     if (bytes.length > REFERENCE_MAX_LABEL_BYTES_V1) {

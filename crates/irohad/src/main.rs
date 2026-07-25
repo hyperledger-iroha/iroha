@@ -1231,6 +1231,7 @@ pub struct Iroha {
 pub struct IrohaRuntimeDeps {
     moderation_quarantine_key_wrapper: Option<Arc<dyn sorafs_node::ModerationQuarantineKeyWrapper>>,
     privacy_cycle_prf_provider: Option<Arc<dyn sorafs_node::PrivacyCyclePrfProviderV1>>,
+    privacy_release_anchor: Option<Arc<dyn sorafs_node::PrivacyReleaseAnchorV1>>,
 }
 
 impl IrohaRuntimeDeps {
@@ -1253,6 +1254,16 @@ impl IrohaRuntimeDeps {
         provider: Arc<dyn sorafs_node::PrivacyCyclePrfProviderV1>,
     ) -> Self {
         self.privacy_cycle_prf_provider = Some(provider);
+        self
+    }
+
+    /// Attach the independently administered finalized privacy-release head.
+    #[must_use]
+    pub fn with_privacy_release_anchor(
+        mut self,
+        anchor: Arc<dyn sorafs_node::PrivacyReleaseAnchorV1>,
+    ) -> Self {
+        self.privacy_release_anchor = Some(anchor);
         self
     }
 }
@@ -5045,8 +5056,8 @@ mod network_relay_tests {
             message::{BlockMessage, BlockMessageWire},
         },
         torii_proxy::{
-            TORII_PROXY_REQUEST_VERSION_V3, TORII_PROXY_RESPONSE_VERSION_V1,
-            ToriiProxyHttpResponseV1, ToriiProxyRequestKindV2, ToriiProxyRequestV3,
+            TORII_PROXY_REQUEST_VERSION_V5, TORII_PROXY_RESPONSE_VERSION_V1,
+            ToriiProxyHttpResponseV1, ToriiProxyRequestKindV4, ToriiProxyRequestV5,
             ToriiProxyResponseFormatV1, ToriiProxyResponseV1, ToriiReadEndpointV1,
             ToriiReadProxyRequestV1, ToriiRouteHintV1,
         },
@@ -6112,13 +6123,13 @@ mod network_relay_tests {
     }
 
     fn torii_proxy_request_msg() -> iroha_core::NetworkMessage {
-        iroha_core::NetworkMessage::ToriiProxyRequest(Box::new(ToriiProxyRequestV3 {
-            schema_version: TORII_PROXY_REQUEST_VERSION_V3,
+        iroha_core::NetworkMessage::ToriiProxyRequest(Box::new(ToriiProxyRequestV5 {
+            schema_version: TORII_PROXY_REQUEST_VERSION_V5,
             request_id: Hash::prehashed([0x41; 32]),
             hop_count: 1,
             max_hops: 3,
             visited_peer_ids: Vec::new(),
-            request: ToriiProxyRequestKindV2::Read(ToriiReadProxyRequestV1 {
+            request: ToriiProxyRequestKindV4::Read(ToriiReadProxyRequestV1 {
                 endpoint: ToriiReadEndpointV1::AccountsList,
                 expected_route: ToriiRouteHintV1 {
                     lane_id: LaneId::SINGLE,
@@ -8119,9 +8130,6 @@ impl Iroha {
             replayed = replay_summary.replayed,
             tombstoned_committed = replay_summary.tombstoned_committed,
             tombstoned_expired = replay_summary.tombstoned_expired,
-            tombstoned_stale = replay_summary.tombstoned_stale,
-            tombstoned_malformed = replay_summary.tombstoned_malformed,
-            rejected = replay_summary.rejected,
             "queue plan journal installed"
         );
 
@@ -8956,6 +8964,7 @@ impl Iroha {
         let moderation_quarantine_key_wrapper =
             runtime_deps.moderation_quarantine_key_wrapper.clone();
         let privacy_cycle_prf_provider = runtime_deps.privacy_cycle_prf_provider.clone();
+        let privacy_release_anchor = runtime_deps.privacy_release_anchor.clone();
         let sorafs_runtime_deps = sorafs_node::NodeRuntimeDeps::default();
         let sorafs_runtime_deps =
             if let Some(key_wrapper) = moderation_quarantine_key_wrapper.as_ref() {
@@ -8965,6 +8974,11 @@ impl Iroha {
             };
         let sorafs_runtime_deps = if let Some(provider) = privacy_cycle_prf_provider.as_ref() {
             sorafs_runtime_deps.with_privacy_cycle_prf_provider(Arc::clone(provider))
+        } else {
+            sorafs_runtime_deps
+        };
+        let sorafs_runtime_deps = if let Some(anchor) = privacy_release_anchor.as_ref() {
+            sorafs_runtime_deps.with_privacy_release_anchor(Arc::clone(anchor))
         } else {
             sorafs_runtime_deps
         };
@@ -9058,6 +9072,11 @@ impl Iroha {
             // CanRecordSorafsProofOutcome permission. Deployments can replace
             // this adapter with a PKCS#11/HSM implementation at this boundary.
             .with_sorafs_proof_outcome_signer(Arc::new(config.common.key_pair.clone()))
+            // Native repair forwarding uses an independent runtime-only signer
+            // boundary. The standard launcher adapts the node key; production
+            // deployments can replace it with PKCS#11/HSM signing without
+            // exposing key material to the durable forwarder.
+            .with_sorafs_repair_transaction_signer(Arc::new(config.common.key_pair.clone()))
             .with_torii_proxy_bridge_signer(config.common.key_pair.clone())
             .with_vpn_helper_ticket_secret(config.network.soranet_vpn.helper_ticket_secret);
         let runtime_deps = if let Some(cache) = shared_sorafs_cache {
@@ -9072,6 +9091,11 @@ impl Iroha {
         };
         let runtime_deps = if let Some(provider) = privacy_cycle_prf_provider {
             runtime_deps.with_sorafs_privacy_cycle_prf_provider(provider)
+        } else {
+            runtime_deps
+        };
+        let runtime_deps = if let Some(anchor) = privacy_release_anchor {
+            runtime_deps.with_sorafs_privacy_release_anchor(anchor)
         } else {
             runtime_deps
         };
@@ -13337,8 +13361,8 @@ mod tests {
     mod relay_ingress {
         use super::*;
         use iroha_core::torii_proxy::{
-            TORII_PROXY_REQUEST_VERSION_V3, TORII_PROXY_RESPONSE_VERSION_V1,
-            ToriiProxyHttpResponseV1, ToriiProxyRequestKindV2, ToriiProxyRequestV3,
+            TORII_PROXY_REQUEST_VERSION_V5, TORII_PROXY_RESPONSE_VERSION_V1,
+            ToriiProxyHttpResponseV1, ToriiProxyRequestKindV4, ToriiProxyRequestV5,
             ToriiProxyResponseFormatV1, ToriiProxyResponseV1, ToriiReadEndpointV1,
             ToriiReadProxyRequestV1, ToriiRouteHintV1,
         };
@@ -13352,13 +13376,13 @@ mod tests {
                 dataspace_id: DataSpaceId::new(0),
             };
             let request =
-                iroha_core::NetworkMessage::ToriiProxyRequest(Box::new(ToriiProxyRequestV3 {
-                    schema_version: TORII_PROXY_REQUEST_VERSION_V3,
+                iroha_core::NetworkMessage::ToriiProxyRequest(Box::new(ToriiProxyRequestV5 {
+                    schema_version: TORII_PROXY_REQUEST_VERSION_V5,
                     request_id: Hash::new(b"torii-proxy-request"),
                     hop_count: 1,
                     max_hops: 3,
                     visited_peer_ids: Vec::new(),
-                    request: ToriiProxyRequestKindV2::Read(ToriiReadProxyRequestV1 {
+                    request: ToriiProxyRequestKindV4::Read(ToriiReadProxyRequestV1 {
                         endpoint: ToriiReadEndpointV1::AccountsList,
                         expected_route: route,
                         path_args: Vec::new(),

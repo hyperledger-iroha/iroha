@@ -237,6 +237,9 @@ fn validate_builtin_initial_query_permission(
         | SingularQueryBox::FindSorafsReserveProviderById(_)
         | SingularQueryBox::FindSorafsReserveMovementById(_)
         | SingularQueryBox::FindSorafsReserveAppealById(_)
+        | SingularQueryBox::FindSorafsReserveProviders(_)
+        | SingularQueryBox::FindSorafsReserveMovements(_)
+        | SingularQueryBox::FindSorafsReserveAppeals(_)
         | SingularQueryBox::FindSorafsReserveEvents(_) => {
             let can_set_reserve_policy: Permission =
                 executor_permission::sorafs::CanSetSorafsReservePolicy.into();
@@ -19799,8 +19802,7 @@ seiyaku IdentityRequired {
     fn initial_executor_mirrors_default_private_query_permissions() {
         use iroha_data_model::query::sorafs::prelude::{
             FindSorafsModerationEvents, FindSorafsModerationJurorEligibility,
-            FindSorafsModerationSnapshot, FindSorafsOrderbookPolicy,
-            FindSorafsReserveEvents,
+            FindSorafsModerationSnapshot, FindSorafsOrderbookPolicy, FindSorafsReserveEvents,
         };
 
         let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);

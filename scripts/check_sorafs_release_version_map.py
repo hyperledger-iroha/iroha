@@ -23,6 +23,40 @@ SCHEMA = "sorafs.release.version_map.v1"
 SUPPORTED_ECOSYSTEMS = frozenset(
     {"cargo", "gradle-property", "msbuild", "npm", "plain-semver", "python"}
 )
+REQUIRED_PACKAGE_CONTRACTS: dict[str, tuple[str, str, str | None]] = {
+    "iroha-android-java": (
+        "gradle-property",
+        "java/iroha_android/gradle.properties",
+        "irohaAndroidVersion",
+    ),
+    "iroha-js": ("npm", "javascript/iroha_js/package.json", None),
+    "iroha-python": ("python", "python/iroha_python/pyproject.toml", None),
+    "iroha-sdk-csharp": (
+        "msbuild",
+        "csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj",
+        None,
+    ),
+    "iroha-sdk-kotlin": (
+        "gradle-property",
+        "kotlin/gradle.properties",
+        "irohaSdkVersion",
+    ),
+    "iroha-swift": ("plain-semver", "IrohaSwift/VERSION", None),
+    "norito-java": (
+        "gradle-property",
+        "java/norito_java/gradle.properties",
+        "noritoJavaVersion",
+    ),
+    "sorafs-car": ("cargo", "crates/sorafs_car/Cargo.toml", None),
+    "sorafs-chunker": ("cargo", "crates/sorafs_chunker/Cargo.toml", None),
+    "sorafs-manifest": ("cargo", "crates/sorafs_manifest/Cargo.toml", None),
+    "sorafs-node": ("cargo", "crates/sorafs_node/Cargo.toml", None),
+    "sorafs-orchestrator": (
+        "cargo",
+        "crates/sorafs_orchestrator/Cargo.toml",
+        None,
+    ),
+}
 SEMVER_RE = re.compile(
     r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
     r"(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
@@ -145,7 +179,14 @@ def _read_declared_version(
     return version
 
 
-def validate_version_map(root: Path, map_relative: str = "release/version-map.toml") -> dict[str, Any]:
+def validate_version_map(
+    root: Path,
+    map_relative: str = "release/version-map.toml",
+    *,
+    required_package_contracts: (
+        dict[str, tuple[str, str, str | None]] | None
+    ) = REQUIRED_PACKAGE_CONTRACTS,
+) -> dict[str, Any]:
     """Validate the version map and return its schema-closed summary."""
 
     map_path = _require_regular_repo_file(root, map_relative)
@@ -213,6 +254,34 @@ def validate_version_map(root: Path, map_relative: str = "release/version-map.to
 
     if [row["id"] for row in normalized] != sorted(identifiers):
         raise ValueError("package rows must be sorted by id")
+    if required_package_contracts is not None:
+        required_ids = set(required_package_contracts)
+        if identifiers != required_ids:
+            missing = sorted(required_ids - identifiers)
+            unexpected = sorted(identifiers - required_ids)
+            raise ValueError(
+                "version map package inventory does not match the required "
+                f"first-release contract (missing={missing}, "
+                f"unexpected={unexpected})"
+            )
+        for row in normalized:
+            expected_ecosystem, expected_path, expected_version_key = (
+                required_package_contracts[row["id"]]
+            )
+            actual_contract = (
+                row["ecosystem"],
+                row["path"],
+                row.get("version_key"),
+            )
+            if actual_contract != (
+                expected_ecosystem,
+                expected_path,
+                expected_version_key,
+            ):
+                raise ValueError(
+                    f"package `{row['id']}` does not match its required "
+                    "first-release ecosystem/path contract"
+                )
     return {
         "schema": SCHEMA,
         "release_version": release_version,

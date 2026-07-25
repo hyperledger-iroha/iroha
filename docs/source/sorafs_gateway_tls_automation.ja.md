@@ -2,7 +2,7 @@
 lang: ja
 direction: ltr
 source: docs/source/sorafs_gateway_tls_automation.md
-source_hash: 05e173ab9ada7ad811c7c886fad2460e1f56c588862600675b330e35d7d2c0aa
+source_hash: cbfd3ae800ad3004e8f3612f3978660b64df430cf39d0ff2f4bda8a75ec77d78
 status: complete
 translation_last_reviewed: 2026-07-23
 title: SoraFS ゲートウェイ TLS と ECH オペレーターガイド

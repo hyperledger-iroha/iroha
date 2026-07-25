@@ -18,6 +18,7 @@ public final class SumeragiDiagnosticsModels {
   /** Maximum grouped source count represented by one diagnostics row. */
   public static final long NATIVE_AMX_PARTICIPANT_APPLICATION_SOURCES_MAX = 4_096L;
   public static final int AUTONOMOUS_LANE_EXECUTIONS_MAX = 128;
+  public static final int DIAGNOSTIC_LANES_MAX = 128;
 
   private static final BigInteger U64_MAX =
       BigInteger.ONE.shiftLeft(Long.SIZE).subtract(BigInteger.ONE);
@@ -25,6 +26,193 @@ public final class SumeragiDiagnosticsModels {
       Pattern.compile("^hash:[0-9A-F]{64}#[0-9A-F]{4}$");
 
   private SumeragiDiagnosticsModels() {}
+
+  /** Aggregate execution diagnostics for the latest block-pipeline run. */
+  public static final class PipelineExecutionStatus {
+    private final BigInteger txVerticesTotal;
+    private final BigInteger txEdgesTotal;
+    private final BigInteger overlayCountTotal;
+    private final BigInteger overlayInstrTotal;
+    private final BigInteger overlayBytesTotal;
+    private final BigInteger rbcChunksTotal;
+    private final BigInteger rbcBytesTotal;
+    private final BigInteger detachedPreparedTotal;
+    private final BigInteger detachedMergedTotal;
+    private final BigInteger detachedFallbackTotal;
+    private final BigInteger detachedFallbackFeePostprocessingTotal;
+    private final BigInteger detachedFallbackUserExecutorTotal;
+    private final BigInteger detachedFallbackDurableStateTotal;
+    private final BigInteger detachedFallbackUnsupportedInstructionTotal;
+    private final BigInteger detachedFallbackRejectedEvalTotal;
+    private final BigInteger detachedFallbackOverlayErrorTotal;
+    private final BigInteger quarantineExecutedTotal;
+
+    public PipelineExecutionStatus(
+        final BigInteger txVerticesTotal,
+        final BigInteger txEdgesTotal,
+        final BigInteger overlayCountTotal,
+        final BigInteger overlayInstrTotal,
+        final BigInteger overlayBytesTotal,
+        final BigInteger rbcChunksTotal,
+        final BigInteger rbcBytesTotal,
+        final BigInteger detachedPreparedTotal,
+        final BigInteger detachedMergedTotal,
+        final BigInteger detachedFallbackTotal,
+        final BigInteger detachedFallbackFeePostprocessingTotal,
+        final BigInteger detachedFallbackUserExecutorTotal,
+        final BigInteger detachedFallbackDurableStateTotal,
+        final BigInteger detachedFallbackUnsupportedInstructionTotal,
+        final BigInteger detachedFallbackRejectedEvalTotal,
+        final BigInteger detachedFallbackOverlayErrorTotal,
+        final BigInteger quarantineExecutedTotal) {
+      final BigInteger[] counters = {
+        txVerticesTotal,
+        txEdgesTotal,
+        overlayCountTotal,
+        overlayInstrTotal,
+        overlayBytesTotal,
+        rbcChunksTotal,
+        rbcBytesTotal,
+        detachedPreparedTotal,
+        detachedMergedTotal,
+        detachedFallbackTotal,
+        detachedFallbackFeePostprocessingTotal,
+        detachedFallbackUserExecutorTotal,
+        detachedFallbackDurableStateTotal,
+        detachedFallbackUnsupportedInstructionTotal,
+        detachedFallbackRejectedEvalTotal,
+        detachedFallbackOverlayErrorTotal,
+        quarantineExecutedTotal
+      };
+      for (final BigInteger counter : counters) {
+        requireUnsigned64(counter, "pipeline execution counter");
+      }
+      this.txVerticesTotal = txVerticesTotal;
+      this.txEdgesTotal = txEdgesTotal;
+      this.overlayCountTotal = overlayCountTotal;
+      this.overlayInstrTotal = overlayInstrTotal;
+      this.overlayBytesTotal = overlayBytesTotal;
+      this.rbcChunksTotal = rbcChunksTotal;
+      this.rbcBytesTotal = rbcBytesTotal;
+      this.detachedPreparedTotal = detachedPreparedTotal;
+      this.detachedMergedTotal = detachedMergedTotal;
+      this.detachedFallbackTotal = detachedFallbackTotal;
+      this.detachedFallbackFeePostprocessingTotal = detachedFallbackFeePostprocessingTotal;
+      this.detachedFallbackUserExecutorTotal = detachedFallbackUserExecutorTotal;
+      this.detachedFallbackDurableStateTotal = detachedFallbackDurableStateTotal;
+      this.detachedFallbackUnsupportedInstructionTotal =
+          detachedFallbackUnsupportedInstructionTotal;
+      this.detachedFallbackRejectedEvalTotal = detachedFallbackRejectedEvalTotal;
+      this.detachedFallbackOverlayErrorTotal = detachedFallbackOverlayErrorTotal;
+      this.quarantineExecutedTotal = quarantineExecutedTotal;
+    }
+
+    public BigInteger txVerticesTotal() { return txVerticesTotal; }
+    public BigInteger txEdgesTotal() { return txEdgesTotal; }
+    public BigInteger overlayCountTotal() { return overlayCountTotal; }
+    public BigInteger overlayInstrTotal() { return overlayInstrTotal; }
+    public BigInteger overlayBytesTotal() { return overlayBytesTotal; }
+    public BigInteger rbcChunksTotal() { return rbcChunksTotal; }
+    public BigInteger rbcBytesTotal() { return rbcBytesTotal; }
+    public BigInteger detachedPreparedTotal() { return detachedPreparedTotal; }
+    public BigInteger detachedMergedTotal() { return detachedMergedTotal; }
+    public BigInteger detachedFallbackTotal() { return detachedFallbackTotal; }
+    public BigInteger detachedFallbackFeePostprocessingTotal() {
+      return detachedFallbackFeePostprocessingTotal;
+    }
+    public BigInteger detachedFallbackUserExecutorTotal() {
+      return detachedFallbackUserExecutorTotal;
+    }
+    public BigInteger detachedFallbackDurableStateTotal() {
+      return detachedFallbackDurableStateTotal;
+    }
+    public BigInteger detachedFallbackUnsupportedInstructionTotal() {
+      return detachedFallbackUnsupportedInstructionTotal;
+    }
+    public BigInteger detachedFallbackRejectedEvalTotal() {
+      return detachedFallbackRejectedEvalTotal;
+    }
+    public BigInteger detachedFallbackOverlayErrorTotal() {
+      return detachedFallbackOverlayErrorTotal;
+    }
+    public BigInteger quarantineExecutedTotal() { return quarantineExecutedTotal; }
+  }
+
+  /** Permissionless-election diagnostics present only while NPoS mode is active. */
+  public static final class NposDiagnostics {
+    private final BigInteger epochLengthBlocks;
+    private final BigInteger vrfCommitDeadlineOffset;
+    private final BigInteger vrfRevealDeadlineOffset;
+    private final List<Integer> epochSeed;
+    private final BigInteger prfHeight;
+    private final BigInteger prfView;
+    private final BigInteger vrfPenaltyEpoch;
+    private final BigInteger vrfCommittedNoRevealTotal;
+    private final BigInteger vrfNoParticipationTotal;
+    private final BigInteger vrfLateRevealsTotal;
+
+    public NposDiagnostics(
+        final BigInteger epochLengthBlocks,
+        final BigInteger vrfCommitDeadlineOffset,
+        final BigInteger vrfRevealDeadlineOffset,
+        final List<Integer> epochSeed,
+        final BigInteger prfHeight,
+        final BigInteger prfView,
+        final BigInteger vrfPenaltyEpoch,
+        final BigInteger vrfCommittedNoRevealTotal,
+        final BigInteger vrfNoParticipationTotal,
+        final BigInteger vrfLateRevealsTotal) {
+      requireUnsigned64(epochLengthBlocks, "epochLengthBlocks");
+      requireUnsigned64(vrfCommitDeadlineOffset, "vrfCommitDeadlineOffset");
+      requireUnsigned64(vrfRevealDeadlineOffset, "vrfRevealDeadlineOffset");
+      require(
+          epochLengthBlocks.signum() > 0
+              && vrfCommitDeadlineOffset.signum() > 0
+              && vrfRevealDeadlineOffset.signum() > 0
+              && vrfCommitDeadlineOffset.compareTo(vrfRevealDeadlineOffset) < 0
+              && vrfRevealDeadlineOffset.compareTo(epochLengthBlocks) <= 0,
+          "NPoS diagnostics windows must be strictly ordered within the epoch");
+      require(epochSeed != null && epochSeed.size() == 32, "epochSeed must contain 32 bytes");
+      boolean seedNonzero = false;
+      for (final Integer item : epochSeed) {
+        require(item != null && item >= 0 && item <= 255, "epochSeed contains an invalid byte");
+        seedNonzero |= item != 0;
+      }
+      require(seedNonzero, "epochSeed must not be all zero");
+      for (final BigInteger counter :
+          new BigInteger[] {
+            prfHeight,
+            prfView,
+            vrfPenaltyEpoch,
+            vrfCommittedNoRevealTotal,
+            vrfNoParticipationTotal,
+            vrfLateRevealsTotal
+          }) {
+        requireUnsigned64(counter, "NPoS diagnostics counter");
+      }
+      this.epochLengthBlocks = epochLengthBlocks;
+      this.vrfCommitDeadlineOffset = vrfCommitDeadlineOffset;
+      this.vrfRevealDeadlineOffset = vrfRevealDeadlineOffset;
+      this.epochSeed = Collections.unmodifiableList(new ArrayList<>(epochSeed));
+      this.prfHeight = prfHeight;
+      this.prfView = prfView;
+      this.vrfPenaltyEpoch = vrfPenaltyEpoch;
+      this.vrfCommittedNoRevealTotal = vrfCommittedNoRevealTotal;
+      this.vrfNoParticipationTotal = vrfNoParticipationTotal;
+      this.vrfLateRevealsTotal = vrfLateRevealsTotal;
+    }
+
+    public BigInteger epochLengthBlocks() { return epochLengthBlocks; }
+    public BigInteger vrfCommitDeadlineOffset() { return vrfCommitDeadlineOffset; }
+    public BigInteger vrfRevealDeadlineOffset() { return vrfRevealDeadlineOffset; }
+    public List<Integer> epochSeed() { return epochSeed; }
+    public BigInteger prfHeight() { return prfHeight; }
+    public BigInteger prfView() { return prfView; }
+    public BigInteger vrfPenaltyEpoch() { return vrfPenaltyEpoch; }
+    public BigInteger vrfCommittedNoRevealTotal() { return vrfCommittedNoRevealTotal; }
+    public BigInteger vrfNoParticipationTotal() { return vrfNoParticipationTotal; }
+    public BigInteger vrfLateRevealsTotal() { return vrfLateRevealsTotal; }
+  }
 
   /** Evidence-derived Native AMX participant application state. */
   public enum NativeAmxParticipantApplicationState {
@@ -383,6 +571,188 @@ public final class SumeragiDiagnosticsModels {
       this.rows = Collections.unmodifiableList(copy);
     }
     public List<AutonomousLaneExecution> rows() { return rows; }
+  }
+
+  /** Complete public model for {@code /v1/sumeragi/diagnostics}. */
+  public static final class SumeragiDiagnosticsStatus {
+    private final PipelineExecutionStatus pipelineExecution;
+    private final BigInteger txQueueDepth;
+    private final BigInteger txQueueCapacity;
+    private final BigInteger txQueueRetainedBytes;
+    private final BigInteger txQueueMaxRetainedBytes;
+    private final boolean txQueueSaturated;
+    private final boolean txQueueSaturatedByCount;
+    private final boolean txQueueSaturatedByBytes;
+    private final boolean txQueueSaturatedByAge;
+    private final BigInteger txQueueOldestQueuedAgeMs;
+    private final NposDiagnostics npos;
+    private final List<?> laneCommitments;
+    private final List<?> dataspaceCommitments;
+    private final List<?> laneSettlementCommitments;
+    private final List<?> laneRelayEnvelopes;
+    private final List<?> lanePayloadOwnerships;
+    private final List<?> committedLaneBlocks;
+    private final List<?> laneBlockSessions;
+    private final long laneGovernanceSealedTotal;
+    private final List<String> laneGovernanceSealedAliases;
+    private final List<?> laneGovernance;
+    private final List<NativeAmxParticipantApplication> nativeAmxParticipantApplications;
+    private final List<AutonomousLaneExecution> autonomousLaneExecutions;
+
+    public SumeragiDiagnosticsStatus(
+        final PipelineExecutionStatus pipelineExecution,
+        final BigInteger txQueueDepth,
+        final BigInteger txQueueCapacity,
+        final BigInteger txQueueRetainedBytes,
+        final BigInteger txQueueMaxRetainedBytes,
+        final boolean txQueueSaturated,
+        final boolean txQueueSaturatedByCount,
+        final boolean txQueueSaturatedByBytes,
+        final boolean txQueueSaturatedByAge,
+        final BigInteger txQueueOldestQueuedAgeMs,
+        final NposDiagnostics npos,
+        final List<?> laneCommitments,
+        final List<?> dataspaceCommitments,
+        final List<?> laneSettlementCommitments,
+        final List<?> laneRelayEnvelopes,
+        final List<?> lanePayloadOwnerships,
+        final List<?> committedLaneBlocks,
+        final List<?> laneBlockSessions,
+        final long laneGovernanceSealedTotal,
+        final List<String> laneGovernanceSealedAliases,
+        final List<?> laneGovernance,
+        final List<NativeAmxParticipantApplication> nativeAmxParticipantApplications,
+        final List<AutonomousLaneExecution> autonomousLaneExecutions) {
+      require(pipelineExecution != null, "pipelineExecution must not be null");
+      requireUnsigned64(txQueueDepth, "txQueueDepth");
+      requireUnsigned64(txQueueCapacity, "txQueueCapacity");
+      requireUnsigned64(txQueueRetainedBytes, "txQueueRetainedBytes");
+      requireUnsigned64(txQueueMaxRetainedBytes, "txQueueMaxRetainedBytes");
+      requireUnsigned64(txQueueOldestQueuedAgeMs, "txQueueOldestQueuedAgeMs");
+      require(
+          txQueueDepth.compareTo(txQueueCapacity) <= 0,
+          "transaction queue depth exceeds capacity");
+      require(
+          txQueueRetainedBytes.compareTo(txQueueMaxRetainedBytes) <= 0,
+          "retained transaction bytes exceed their budget");
+      require(
+          txQueueSaturated
+              == (txQueueSaturatedByCount || txQueueSaturatedByBytes || txQueueSaturatedByAge),
+          "queue saturation disagrees with its causes");
+      require(
+          laneGovernanceSealedTotal >= 0 && laneGovernanceSealedTotal <= 0xffff_ffffL,
+          "laneGovernanceSealedTotal must be an unsigned 32-bit value");
+
+      final List<?> copiedLaneCommitments =
+          boundedCopy(laneCommitments, "laneCommitments", DIAGNOSTIC_LANES_MAX);
+      final List<?> copiedDataspaceCommitments =
+          boundedCopy(dataspaceCommitments, "dataspaceCommitments", DIAGNOSTIC_LANES_MAX);
+      final List<?> copiedLaneSettlementCommitments =
+          boundedCopy(
+              laneSettlementCommitments,
+              "laneSettlementCommitments",
+              DIAGNOSTIC_LANES_MAX);
+      final List<?> copiedLaneRelayEnvelopes =
+          boundedCopy(laneRelayEnvelopes, "laneRelayEnvelopes", DIAGNOSTIC_LANES_MAX);
+      final List<?> copiedLanePayloadOwnerships =
+          boundedCopy(
+              lanePayloadOwnerships,
+              "lanePayloadOwnerships",
+              DIAGNOSTIC_LANES_MAX);
+      final List<?> copiedCommittedLaneBlocks =
+          boundedCopy(
+              committedLaneBlocks,
+              "committedLaneBlocks",
+              DIAGNOSTIC_LANES_MAX);
+      final List<?> copiedLaneBlockSessions =
+          boundedCopy(laneBlockSessions, "laneBlockSessions", DIAGNOSTIC_LANES_MAX);
+      final List<?> copiedLaneGovernance =
+          boundedCopy(laneGovernance, "laneGovernance", DIAGNOSTIC_LANES_MAX);
+      final List<String> copiedAliases =
+          boundedCopy(
+              laneGovernanceSealedAliases,
+              "laneGovernanceSealedAliases",
+              DIAGNOSTIC_LANES_MAX);
+      require(
+          copiedAliases.size() == laneGovernanceSealedTotal,
+          "sealed lane aliases must match laneGovernanceSealedTotal");
+      for (int index = 0; index < copiedAliases.size(); index++) {
+        final String alias = copiedAliases.get(index);
+        require(
+            alias != null && !alias.isEmpty() && alias.trim().equals(alias),
+            "sealed lane aliases must be exact non-empty strings");
+        require(
+            copiedAliases.indexOf(alias) == index,
+            "sealed lane aliases must be unique");
+      }
+
+      final NativeAmxParticipantApplications checkedNative =
+          new NativeAmxParticipantApplications(nativeAmxParticipantApplications);
+      final AutonomousLaneExecutions checkedAutonomous =
+          new AutonomousLaneExecutions(autonomousLaneExecutions);
+      this.pipelineExecution = pipelineExecution;
+      this.txQueueDepth = txQueueDepth;
+      this.txQueueCapacity = txQueueCapacity;
+      this.txQueueRetainedBytes = txQueueRetainedBytes;
+      this.txQueueMaxRetainedBytes = txQueueMaxRetainedBytes;
+      this.txQueueSaturated = txQueueSaturated;
+      this.txQueueSaturatedByCount = txQueueSaturatedByCount;
+      this.txQueueSaturatedByBytes = txQueueSaturatedByBytes;
+      this.txQueueSaturatedByAge = txQueueSaturatedByAge;
+      this.txQueueOldestQueuedAgeMs = txQueueOldestQueuedAgeMs;
+      this.npos = npos;
+      this.laneCommitments = copiedLaneCommitments;
+      this.dataspaceCommitments = copiedDataspaceCommitments;
+      this.laneSettlementCommitments = copiedLaneSettlementCommitments;
+      this.laneRelayEnvelopes = copiedLaneRelayEnvelopes;
+      this.lanePayloadOwnerships = copiedLanePayloadOwnerships;
+      this.committedLaneBlocks = copiedCommittedLaneBlocks;
+      this.laneBlockSessions = copiedLaneBlockSessions;
+      this.laneGovernanceSealedTotal = laneGovernanceSealedTotal;
+      this.laneGovernanceSealedAliases = copiedAliases;
+      this.laneGovernance = copiedLaneGovernance;
+      this.nativeAmxParticipantApplications = checkedNative.rows();
+      this.autonomousLaneExecutions = checkedAutonomous.rows();
+    }
+
+    public PipelineExecutionStatus pipelineExecution() { return pipelineExecution; }
+    public BigInteger txQueueDepth() { return txQueueDepth; }
+    public BigInteger txQueueCapacity() { return txQueueCapacity; }
+    public BigInteger txQueueRetainedBytes() { return txQueueRetainedBytes; }
+    public BigInteger txQueueMaxRetainedBytes() { return txQueueMaxRetainedBytes; }
+    public boolean txQueueSaturated() { return txQueueSaturated; }
+    public boolean txQueueSaturatedByCount() { return txQueueSaturatedByCount; }
+    public boolean txQueueSaturatedByBytes() { return txQueueSaturatedByBytes; }
+    public boolean txQueueSaturatedByAge() { return txQueueSaturatedByAge; }
+    public BigInteger txQueueOldestQueuedAgeMs() { return txQueueOldestQueuedAgeMs; }
+    public NposDiagnostics npos() { return npos; }
+    public List<?> laneCommitments() { return laneCommitments; }
+    public List<?> dataspaceCommitments() { return dataspaceCommitments; }
+    public List<?> laneSettlementCommitments() { return laneSettlementCommitments; }
+    public List<?> laneRelayEnvelopes() { return laneRelayEnvelopes; }
+    public List<?> lanePayloadOwnerships() { return lanePayloadOwnerships; }
+    public List<?> committedLaneBlocks() { return committedLaneBlocks; }
+    public List<?> laneBlockSessions() { return laneBlockSessions; }
+    public long laneGovernanceSealedTotal() { return laneGovernanceSealedTotal; }
+    public List<String> laneGovernanceSealedAliases() { return laneGovernanceSealedAliases; }
+    public List<?> laneGovernance() { return laneGovernance; }
+    public List<NativeAmxParticipantApplication> nativeAmxParticipantApplications() {
+      return nativeAmxParticipantApplications;
+    }
+    public List<AutonomousLaneExecution> autonomousLaneExecutions() {
+      return autonomousLaneExecutions;
+    }
+  }
+
+  private static <T> List<T> boundedCopy(
+      final List<T> values, final String field, final int maximum) {
+    require(values != null, field + " must not be null");
+    require(values.size() <= maximum, field + " exceeds its bounded row limit");
+    final ArrayList<T> copy = new ArrayList<>(values);
+    for (final T value : copy) {
+      require(value != null, field + " must not contain null rows");
+    }
+    return Collections.unmodifiableList(copy);
   }
 
   private static int compareAutonomous(

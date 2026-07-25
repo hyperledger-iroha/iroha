@@ -8,7 +8,7 @@
 #![allow(unexpected_cfgs)]
 
 use std::{
-    collections::{BTreeMap, BTreeSet, HashSet},
+    collections::{BTreeMap, BTreeSet},
     fs::{self, File},
     io::{self, Read, Write},
     path::{Path, PathBuf},
@@ -31,11 +31,11 @@ use norito::{
 };
 use sorafs_car::{
     self, CarBuildPlan, CarChunk, ChunkStore, ChunkStoreError, DirectoryPublicationStatus,
-    FilePlan, PayloadSource, PorMerkleTree, PorProof, TaikaiSegmentHint,
+    FilePlan, PayloadSource, PorMerkleTree, PorProof, PorSampleIndices, TaikaiSegmentHint,
 };
 use sorafs_chunker::ChunkProfile;
 use sorafs_manifest::{
-    MANIFEST_VERSION_V1, ManifestV1,
+    MANIFEST_VERSION_V1, MAX_PROOF_STREAM_SAMPLE_COUNT, ManifestV1,
     pdp::{
         PDP_MAX_SEGMENT_SAMPLES_V1, PdpCommitmentV1, PdpCommitmentValidationError,
         PdpMerkleReadError, PdpMerkleTreeError, PdpMerkleTreeV1, PdpProofLeafV1, PdpSampleV1,
@@ -219,6 +219,17 @@ pub enum StorageError {
     /// Chunk profile present in the manifest does not match the ingestion plan.
     #[error("chunk profile mismatch between manifest and plan")]
     ChunkProfileMismatch,
+    /// Rebuilt provider PoR root does not match the canonical manifest commitment.
+    #[error("provider PoR root does not match the manifest commitment")]
+    PorRootMismatch,
+    /// Requested PoR sample count exceeds the proof-stream protocol ceiling.
+    #[error("PoR sample count {requested} exceeds the v1 maximum {maximum}")]
+    PorSampleCountTooLarge {
+        /// Number of samples requested by the caller.
+        requested: usize,
+        /// Maximum sample count accepted by the v1 protocol.
+        maximum: u32,
+    },
     /// Failed to rebuild the PoR tree from persisted chunk data.
     #[error("failed to build PoR tree: {0}")]
     ChunkStore(#[from] ChunkStoreError),
@@ -829,6 +840,7 @@ impl StoredManifest {
             || manifest.root_cid != self.manifest_cid
             || manifest.content_length != self.content_length
             || canonical_profile_handle(&manifest) != self.chunk_profile_handle
+            || manifest.por_root != *self.por_tree.root()
         {
             return Err(corrupt_storage_state(
                 path,
@@ -2013,7 +2025,7 @@ fn validate_persisted_manifest(
         ));
     }
 
-    validate_persisted_por(entry, record, metadata_path)?;
+    validate_persisted_por(entry, record, manifest, metadata_path)?;
     validate_persisted_pdp(
         entry,
         record,
@@ -2084,6 +2096,7 @@ fn validate_persisted_retention(
 fn validate_persisted_por(
     entry: &ManifestIndexEntry,
     record: &StoredManifestRecord,
+    manifest: &ManifestV1,
     metadata_path: &Path,
 ) -> Result<(), StorageError> {
     let commitment = &record.por_commitment;
@@ -2103,6 +2116,12 @@ fn validate_persisted_por(
         return Err(corrupt_storage_state(
             metadata_path,
             "PoR commitment digest does not match the storage index",
+        ));
+    }
+    if commitment.root != manifest.por_root {
+        return Err(corrupt_storage_state(
+            metadata_path,
+            "persisted PoR root does not match the canonical manifest commitment",
         ));
     }
     if commitment.payload_len != record.content_length
@@ -3171,6 +3190,7 @@ impl StorageBackend {
             por_tree,
             pdp_tree,
         } = self.ingest_payload(plan, reader, &chunks_dir)?;
+        ensure_manifest_por_root(manifest, &por_tree)?;
 
         if let Some(roles) = chunk_roles {
             let expected = chunk_records.len();
@@ -3671,6 +3691,15 @@ impl StorageBackend {
         seed: u64,
     ) -> Result<Vec<(usize, PorProof)>, StorageError> {
         self.ensure_durability_healthy()?;
+        if count
+            > usize::try_from(MAX_PROOF_STREAM_SAMPLE_COUNT)
+                .expect("u32 PoR sample ceiling must fit usize")
+        {
+            return Err(StorageError::PorSampleCountTooLarge {
+                requested: count,
+                maximum: MAX_PROOF_STREAM_SAMPLE_COUNT,
+            });
+        }
         if count == 0 {
             if self.manifest(manifest_id).is_none() {
                 return Err(StorageError::ManifestNotFound {
@@ -3688,14 +3717,6 @@ impl StorageBackend {
             }
 
             let target = count.min(total);
-            let mut rng_state = seed;
-            let mut seen = HashSet::new();
-            seen.try_reserve(target).map_err(|_| {
-                StorageError::ChunkStore(ChunkStoreError::AllocationFailed {
-                    context: "PoR sampled leaf set",
-                    requested: target,
-                })
-            })?;
             let mut samples = Vec::new();
             samples.try_reserve_exact(target).map_err(|_| {
                 StorageError::ChunkStore(ChunkStoreError::AllocationFailed {
@@ -3704,23 +3725,30 @@ impl StorageBackend {
                 })
             })?;
 
-            while samples.len() < target {
-                rng_state = splitmix64(rng_state);
-                let leaf_index = (rng_state as usize) % total;
-                if !seen.insert(leaf_index) {
-                    continue;
-                }
-                let Some((chunk_idx, segment_idx, leaf_idx)) = por_tree.leaf_path(leaf_index)
-                else {
-                    continue;
-                };
+            for flat_index in PorSampleIndices::new(por_tree.leaf_count_u64(), target, seed)
+                .map_err(StorageError::ChunkStore)?
+            {
+                let leaf_index = usize::try_from(flat_index).map_err(|_| {
+                    StorageError::ChunkStore(ChunkStoreError::PorCountOverflow {
+                        context: "PoR sampled leaf index host width",
+                    })
+                })?;
+                let (chunk_idx, segment_idx, leaf_idx) =
+                    por_tree.leaf_path(leaf_index).ok_or_else(|| {
+                        StorageError::ChunkStore(ChunkStoreError::PorInvariant {
+                            context: "canonical PoR sample leaf path",
+                        })
+                    })?;
                 let mut payload = ManifestPayload::new(manifest);
                 let proof = por_tree
                     .prove_leaf_with(chunk_idx, segment_idx, leaf_idx, &mut payload)
                     .map_err(StorageError::ChunkStore)?;
-                if let Some(proof) = proof {
-                    samples.push((leaf_index, proof));
-                }
+                let proof = proof.ok_or_else(|| {
+                    StorageError::ChunkStore(ChunkStoreError::PorInvariant {
+                        context: "canonical PoR sample proof path",
+                    })
+                })?;
+                samples.push((leaf_index, proof));
             }
 
             Ok(samples)
@@ -4292,6 +4320,16 @@ fn ensure_chunk_profile_match(
     Ok(())
 }
 
+fn ensure_manifest_por_root(
+    manifest: &ManifestV1,
+    por_tree: &PorMerkleTree,
+) -> Result<(), StorageError> {
+    if manifest.por_root != *por_tree.root() {
+        return Err(StorageError::PorRootMismatch);
+    }
+    Ok(())
+}
+
 fn unix_timestamp() -> Result<u64, StorageError> {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -4812,14 +4850,6 @@ fn invalid_chunk_file(record: &ChunkFileRecord, reason: &str) -> ChunkStoreError
     ))
 }
 
-fn splitmix64(mut state: u64) -> u64 {
-    state = state.wrapping_add(0x9e3779b97f4a7c15);
-    let mut z = state;
-    z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94d049bb133111eb);
-    z ^ (z >> 31)
-}
-
 #[cfg(test)]
 mod tests {
     use std::{
@@ -4862,8 +4892,21 @@ mod tests {
         CarBuildPlan::single_file(bytes)
     }
 
-    fn manifest_builder_for_plan(plan: &CarBuildPlan) -> ManifestBuilder {
-        ManifestBuilder::new().chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
+    fn manifest_builder_for_plan(payload: &[u8], plan: &CarBuildPlan) -> ManifestBuilder {
+        let heap_limit = plan
+            .validate()
+            .expect("valid manifest fixture plan")
+            .estimated_ingest_heap_bytes()
+            .max(1);
+        let mut chunk_store =
+            ChunkStore::with_profile_and_heap_limit(plan.chunk_profile, heap_limit)
+                .expect("bounded manifest fixture chunk store");
+        chunk_store
+            .ingest_plan(payload, plan)
+            .expect("manifest fixture payload matches plan");
+        ManifestBuilder::new()
+            .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
+            .por_root(*chunk_store.por_tree().root())
     }
 
     fn empty_file_plan() -> CarBuildPlan {
@@ -4884,7 +4927,7 @@ mod tests {
     }
 
     fn test_manifest(payload: &[u8], plan: &CarBuildPlan, root_byte: u8) -> ManifestV1 {
-        manifest_builder_for_plan(plan)
+        manifest_builder_for_plan(payload, plan)
             .root_cid(vec![root_byte; 8])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -5275,7 +5318,7 @@ mod tests {
         let payload = b"Hello deterministic SoraFS!";
         let plan = single_file_plan(payload).expect("plan");
 
-        let manifest = manifest_builder_for_plan(&plan)
+        let manifest = manifest_builder_for_plan(payload, &plan)
             .root_cid(vec![0x01, 0x02, 0x03])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -5323,6 +5366,52 @@ mod tests {
     }
 
     #[test]
+    fn ingest_rejects_manifest_por_root_mismatch_without_publication() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let backend = StorageBackend::new(temp_config(&temp_dir)).expect("backend init");
+        let payload = b"manifest PoR commitments must bind the provider payload";
+        let plan = single_file_plan(payload).expect("plan");
+        let mut manifest = test_manifest(payload, &plan, 0x91);
+        manifest.por_root[0] ^= 0x80;
+        let manifest_id = hex::encode(
+            manifest
+                .digest()
+                .expect("mismatched manifest digest")
+                .as_bytes(),
+        );
+
+        let mut reader = payload.as_slice();
+        let error = backend
+            .ingest_manifest(&manifest, &plan, &mut reader)
+            .expect_err("mismatched PoR commitment must fail closed");
+
+        assert!(matches!(&error, StorageError::PorRootMismatch));
+        assert_eq!(
+            error.to_string(),
+            "provider PoR root does not match the manifest commitment"
+        );
+        assert_eq!(backend.manifest_count(), 0);
+        assert_eq!(backend.total_bytes(), 0);
+        assert_eq!(backend.pdp_tree_memory_bytes(), 0);
+        assert_eq!(backend.reserved_pdp_tree_memory_bytes(), 0);
+        assert!(backend.manifest(&manifest_id).is_none());
+        assert!(!backend.manifests_dir.join(manifest_id).exists());
+        assert!(
+            fs::read_dir(&backend.manifests_dir)
+                .expect("read manifests directory")
+                .next()
+                .is_none(),
+            "a rejected manifest must not publish a manifest directory"
+        );
+        let state = backend.state.read().expect("storage state");
+        assert!(state.index.entries.is_empty());
+        assert!(state.inflight_manifests.is_empty());
+        assert_eq!(state.reserved_bytes, 0);
+        drop(state);
+        assert_staging_empty(&backend);
+    }
+
+    #[test]
     fn ingest_manifest_preserves_directory_file_layout() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let backend = StorageBackend::new(temp_config(&temp_dir)).expect("backend init");
@@ -5341,7 +5430,7 @@ mod tests {
             CarBuildPlan::from_files_with_profile(files, sorafs_chunker::ChunkProfile::DEFAULT)
                 .expect("directory plan");
 
-        let manifest = manifest_builder_for_plan(&plan)
+        let manifest = manifest_builder_for_plan(&payload, &plan)
             .root_cid(vec![0x42; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -5397,7 +5486,7 @@ mod tests {
         let payload = b"this payload is definitely longer than sixteen bytes";
         let plan = single_file_plan(payload).expect("plan");
 
-        let manifest = manifest_builder_for_plan(&plan)
+        let manifest = manifest_builder_for_plan(payload, &plan)
             .root_cid(vec![0x0A, 0x0B])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -5431,7 +5520,7 @@ mod tests {
         let payload = b"The five boxing wizards jump quickly";
         let plan = single_file_plan(payload).expect("plan");
 
-        let manifest = manifest_builder_for_plan(&plan)
+        let manifest = manifest_builder_for_plan(payload, &plan)
             .root_cid(vec![0xAB; 32])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -5464,7 +5553,7 @@ mod tests {
         let payload = vec![0xAA; 64 * 3];
         let plan = single_file_plan(&payload).expect("plan");
 
-        let manifest = manifest_builder_for_plan(&plan)
+        let manifest = manifest_builder_for_plan(&payload, &plan)
             .root_cid(vec![0x44; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -5502,7 +5591,7 @@ mod tests {
 
         let payload = b"stripe layout payload";
         let plan = single_file_plan(payload).expect("plan");
-        let manifest = manifest_builder_for_plan(&plan)
+        let manifest = manifest_builder_for_plan(payload, &plan)
             .root_cid(vec![0xAA, 0xBB])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -5564,7 +5653,7 @@ mod tests {
 
         let payload = b"role length check";
         let plan = single_file_plan(payload).expect("plan");
-        let manifest = manifest_builder_for_plan(&plan)
+        let manifest = manifest_builder_for_plan(payload, &plan)
             .root_cid(vec![0xFF, 0xEE])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -5681,7 +5770,7 @@ mod tests {
         let payload = vec![0xBB; 128];
         let plan = single_file_plan(&payload).expect("plan");
 
-        let manifest = manifest_builder_for_plan(&plan)
+        let manifest = manifest_builder_for_plan(&payload, &plan)
             .root_cid(vec![0x55; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -5715,7 +5804,7 @@ mod tests {
         let payload = b"manifest payload round trip bytes";
         let plan = single_file_plan(payload).expect("plan");
 
-        let manifest = manifest_builder_for_plan(&plan)
+        let manifest = manifest_builder_for_plan(payload, &plan)
             .root_cid(vec![0x77; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -5749,7 +5838,7 @@ mod tests {
         let mut policy = PinPolicy::default();
         policy.retention_epoch = 200;
 
-        let manifest = manifest_builder_for_plan(&plan)
+        let manifest = manifest_builder_for_plan(payload, &plan)
             .root_cid(vec![0xFA, 0xCE])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -5867,7 +5956,7 @@ mod tests {
 
         let payload = b"last access persistence";
         let plan = single_file_plan(payload).expect("plan");
-        let manifest = manifest_builder_for_plan(&plan)
+        let manifest = manifest_builder_for_plan(payload, &plan)
             .root_cid(vec![0x11, 0x22])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -5910,7 +5999,7 @@ mod tests {
 
         let payload = b"payload for eviction";
         let plan = single_file_plan(payload).expect("plan");
-        let manifest = manifest_builder_for_plan(&plan)
+        let manifest = manifest_builder_for_plan(payload, &plan)
             .root_cid(vec![0x10, 0x20, 0x30])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -6052,7 +6141,7 @@ mod tests {
         let payload = vec![0xCC; 96];
         let plan = single_file_plan(&payload).expect("plan");
 
-        let manifest = manifest_builder_for_plan(&plan)
+        let manifest = manifest_builder_for_plan(&payload, &plan)
             .root_cid(vec![0x99; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -6105,10 +6194,12 @@ mod tests {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let backend = StorageBackend::new(temp_config(&temp_dir)).expect("backend init");
 
-        let payload = b"SoraFS deterministic sampling data for PoR";
-        let plan = single_file_plan(payload).expect("plan");
+        let payload = (0..(sorafs_car::POR_LEAF_SIZE * 4 + 17))
+            .map(|index| u8::try_from(index % 251).expect("fixture byte"))
+            .collect::<Vec<_>>();
+        let plan = single_file_plan(&payload).expect("plan");
 
-        let manifest = manifest_builder_for_plan(&plan)
+        let manifest = manifest_builder_for_plan(&payload, &plan)
             .root_cid(vec![0xCD; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -6116,28 +6207,62 @@ mod tests {
                 sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
             )
             .content_length(plan.content_length)
-            .car_digest(blake3::hash(payload).into())
+            .car_digest(blake3::hash(&payload).into())
             .car_size(plan.content_length)
             .pin_policy(PinPolicy::default())
             .build()
             .expect("manifest");
 
-        let mut reader = &payload[..];
+        let mut reader = payload.as_slice();
         let manifest_id = backend
             .ingest_manifest(&manifest, &plan, &mut reader)
             .expect("ingest");
 
-        let samples = backend
-            .sample_por(&manifest_id, 4, 42)
-            .expect("PoR samples");
         let stored = backend.manifest(&manifest_id).expect("stored manifest");
+        let leaf_count = stored.por_tree().leaf_count_u64();
+        let collision_seed = (0u64..)
+            .find(|seed| {
+                let first = sorafs_car::splitmix64(*seed);
+                let second = sorafs_car::splitmix64(first);
+                first % leaf_count == second % leaf_count
+            })
+            .expect("bounded fixture has a SplitMix reduction collision");
+        let expected_indices = PorSampleIndices::new(leaf_count, 4, collision_seed)
+            .expect("build shared canonical sample schedule")
+            .map(|index| usize::try_from(index).expect("fixture index fits usize"))
+            .collect::<Vec<_>>();
+        let samples = backend
+            .sample_por(&manifest_id, 4, collision_seed)
+            .expect("PoR samples");
         let expected = stored.por_tree().leaf_count().min(4);
         assert_eq!(samples.len(), expected);
+        assert_eq!(
+            samples.iter().map(|(index, _)| *index).collect::<Vec<_>>(),
+            expected_indices,
+            "provider storage sampling must use the shared collision schedule"
+        );
         let root = *stored.por_tree().root();
 
         for (_idx, proof) in samples {
             assert!(proof.verify(&root));
         }
+    }
+
+    #[test]
+    fn sample_por_rejects_unbounded_sample_count() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let backend = StorageBackend::new(temp_config(&temp_dir)).expect("backend init");
+        let requested = usize::try_from(MAX_PROOF_STREAM_SAMPLE_COUNT)
+            .expect("u32 PoR sample ceiling must fit usize")
+            + 1;
+
+        assert!(matches!(
+            backend.sample_por("missing-manifest", requested, 7),
+            Err(StorageError::PorSampleCountTooLarge {
+                requested: found,
+                maximum: MAX_PROOF_STREAM_SAMPLE_COUNT,
+            }) if found == requested
+        ));
     }
 
     #[test]
@@ -6148,7 +6273,7 @@ mod tests {
         let payload = b"deterministic chunk access";
         let plan = single_file_plan(payload).expect("plan");
 
-        let manifest = manifest_builder_for_plan(&plan)
+        let manifest = manifest_builder_for_plan(payload, &plan)
             .root_cid(vec![0xEE; 8])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -6185,7 +6310,7 @@ mod tests {
         let payload = b"missing chunk digests";
         let plan = single_file_plan(payload).expect("plan");
 
-        let manifest = manifest_builder_for_plan(&plan)
+        let manifest = manifest_builder_for_plan(payload, &plan)
             .root_cid(vec![0xAA; 4])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -6226,7 +6351,7 @@ mod tests {
         let payload = b"stream chunk payload";
         let plan = single_file_plan(payload).expect("plan");
 
-        let manifest = manifest_builder_for_plan(&plan)
+        let manifest = manifest_builder_for_plan(payload, &plan)
             .root_cid(vec![0xBB; 6])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -6556,6 +6681,38 @@ mod tests {
                 ),
                 "tampering case {case} must fail closed"
             );
+        }
+    }
+
+    #[test]
+    fn restart_rejects_persisted_por_root_not_bound_to_manifest() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let payload = b"persisted PoR roots remain bound across provider restart";
+        let (config, backend, manifest_id) = ingest_test_payload(&temp_dir, payload, 0xE9);
+        let mut tampered_commitment_digest = None;
+        rewrite_manifest_record(&backend, &manifest_id, |record| {
+            record.por_commitment.root[0] ^= 0x40;
+            tampered_commitment_digest = Some(
+                record
+                    .por_commitment
+                    .digest()
+                    .expect("tampered PoR commitment digest"),
+            );
+        });
+        rewrite_manifest_index(&backend, |index| {
+            index.entries[0].por_commitment_digest =
+                tampered_commitment_digest.expect("tampered commitment digest recorded");
+        });
+        drop(backend);
+
+        let error = StorageBackend::new(config)
+            .expect_err("restart must reject a persisted PoR root detached from its manifest");
+        match error {
+            StorageError::CorruptStorageState { reason, .. } => assert_eq!(
+                reason,
+                "persisted PoR root does not match the canonical manifest commitment"
+            ),
+            other => panic!("unexpected restart error: {other:?}"),
         }
     }
 
@@ -7055,7 +7212,7 @@ mod tests {
 
         let payload = b"Persistent storage test payload";
         let plan = single_file_plan(payload).expect("plan");
-        let manifest = manifest_builder_for_plan(&plan)
+        let manifest = manifest_builder_for_plan(payload, &plan)
             .root_cid(vec![0xEF; 8])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(

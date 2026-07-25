@@ -5,14 +5,17 @@ from __future__ import annotations
 from copy import deepcopy
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, get_type_hints
 
 import pytest
 
 from iroha_python import (
     SumeragiDiagnosticsSnapshot,
     SumeragiLaneSettlementCommitment,
+    SumeragiNativeAmxAttestationBody,
     SumeragiNativeAmxPhase,
+    SumeragiNativeAmxSourceId,
+    SumeragiNativeAmxTransactionEntrypointHash,
 )
 from iroha_torii_client.client import (
     SumeragiDiagnosticsStatus as CanonicalSumeragiDiagnosticsStatus,
@@ -282,6 +285,16 @@ def test_grouped_native_amx_v2_golden_fixture() -> None:
         == 2
     )
     _validate_application_evidence(fixture)
+
+
+def test_native_amx_source_and_entrypoint_domains_are_distinct_public_types() -> None:
+    hints = get_type_hints(SumeragiNativeAmxAttestationBody)
+    assert SumeragiNativeAmxSourceId is not SumeragiNativeAmxTransactionEntrypointHash
+    assert hints["source_id"] is SumeragiNativeAmxSourceId
+    assert (
+        hints["tx_entrypoint_hash"]
+        is SumeragiNativeAmxTransactionEntrypointHash
+    )
 
 
 @pytest.mark.parametrize(

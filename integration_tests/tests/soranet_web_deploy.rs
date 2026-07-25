@@ -170,6 +170,7 @@ fn build_manifest_and_plan(payload: &[u8]) -> Result<(ManifestV1, CarBuildPlan)>
         .dag_codec(DagCodecId(stats.dag_codec))
         .chunking_from_registry(descriptor.id)
         .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
+        .por_root(sorafs_car::compute_por_root(payload, &plan)?)
         .content_length(plan.content_length)
         .car_digest(stats.car_archive_digest.into())
         .car_size(stats.car_size)
@@ -215,12 +216,11 @@ fn sorafs_pin_fee_bootstrap_instructions() -> Vec<InstructionBox> {
 }
 
 fn register_paid_pin_manifest(client: &Client, manifest: &ManifestV1) -> Result<()> {
+    let manifest_payload = manifest.encode()?;
     client.post_sorafs_pin_register(SorafsPinRegisterArgs {
         authority: &ALICE_ID,
         private_key: ALICE_KEYPAIR.private_key(),
-        manifest,
-        manifest_bytes: None,
-        chunk_digest_sha3_256: manifest.chunk_digest_sha3_256,
+        manifest_payload: &manifest_payload,
         submitted_epoch: 1,
         alias: None,
         successor_of: None,

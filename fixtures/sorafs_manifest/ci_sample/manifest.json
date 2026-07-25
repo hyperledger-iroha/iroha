@@ -2,6 +2,7 @@
   "alias_claims": [],
   "car_digest": "AE5BB8B4A865AD70CBC10CBFEBF5E401C5F50D94DAF566BCEBA915C9133C71B7",
   "car_size": 576,
+  "chunk_digest_sha3_256": "D2EA766EACAF9B2EAB29BC6D04F31080E96AF19BE6194FF5DCF97C34A3FA1F04",
   "chunking": {
     "aliases": [
       "sorafs.sf1@1.0.0",
@@ -29,9 +30,10 @@
   "metadata": [],
   "pin_policy": {
     "min_replicas": 1,
-    "retention_epoch": 0,
+    "retention_epoch": 86400,
     "storage_class": "hot"
   },
+  "por_root": "0EED0DE7EA605B38E24532A6F3A1051AB4EDB4D487A9A674E3FE1250E6363F43",
   "root_cid": [
     1,
     113,

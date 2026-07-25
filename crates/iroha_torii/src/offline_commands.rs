@@ -2574,6 +2574,7 @@ mod tests {
             ),
             execution_batch: Some(execution_batch),
             lane_drain_certificates: Vec::new(),
+            queue_plan_admissions: Vec::new(),
         }
     }
 

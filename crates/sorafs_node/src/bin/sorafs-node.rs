@@ -12,7 +12,7 @@ use std::os::unix::fs::OpenOptionsExt;
 
 use norito::json::{self, Map, Value};
 use sorafs_car::{
-    CarBuildPlan, CarWriter, chunker_registry, fetch_plan::try_chunk_fetch_specs_to_json,
+    CarBuildPlan, CarWriter, chunker_registry, fetch_plan::try_chunk_fetch_plan_to_json,
     verifier::CarVerifier,
 };
 use sorafs_chunker::ChunkProfile;
@@ -20,7 +20,24 @@ use sorafs_manifest::{
     BLAKE3_256_MULTIHASH_CODE, ManifestV1, decode_manifest_v1_canonical,
     por::{AuditOutcomeV1, AuditVerdictV1, PorChallengeV1, PorProofV1},
 };
-use sorafs_node::{NodeHandle, PorVerdictOutcome, config::StorageConfig, store::StorageBackend};
+use sorafs_node::{
+    NodeHandle, PorFailedRepairIntentV1, PorRepairHandoff, PorRepairHandoffError,
+    PorVerdictOutcome, config::StorageConfig, store::StorageBackend,
+};
+
+#[derive(Debug)]
+struct UnavailableCliPorRepairHandoff;
+
+impl PorRepairHandoff for UnavailableCliPorRepairHandoff {
+    fn enqueue_failed_por_repair(
+        &self,
+        _intent: &PorFailedRepairIntentV1,
+    ) -> Result<[u8; 32], PorRepairHandoffError> {
+        Err(PorRepairHandoffError(
+            "the node developer CLI has no native repair transaction handoff".to_owned(),
+        ))
+    }
+}
 
 fn main() {
     if let Err(err) = run() {
@@ -61,7 +78,7 @@ fn print_usage() {
 fn print_por_usage() {
     eprintln!(
         "Usage: sorafs-node ingest por --data-dir=<dir> --challenge=<path> --proof=<path> [--verdict=<path>] [--manifest-id=<hex>] [--json-out=<path>]\n\n\
-         Offline replay helper: verifies embedded signatures and lifecycle binding, but does not establish provider admission, trusted-auditor membership, or beacon/VRF provenance. Production mutation must use Torii's authenticated lifecycle."
+         Offline replay helper: verifies embedded signatures and lifecycle binding, but does not establish provider admission, trusted-auditor membership, or beacon/VRF provenance. Failed verdicts are rejected because this developer CLI has no native repair transaction handoff; production mutation must use Torii's authenticated lifecycle."
     );
 }
 
@@ -148,7 +165,7 @@ fn ingest(
         .map_err(|err| format!("failed to ingest manifest: {err}"))?;
 
     if let Some(path) = plan_json_out {
-        let json_value = try_chunk_fetch_specs_to_json(&plan).map_err(|err| err.to_string())?;
+        let json_value = try_chunk_fetch_plan_to_json(&plan).map_err(|err| err.to_string())?;
         write_json_file(&path, json_value)?;
     }
 
@@ -315,7 +332,12 @@ fn ingest_por_command(args: Vec<String>) -> Result<(), String> {
             .map(|signature| signature.public_key.clone())
             .collect::<Vec<_>>();
         let outcome = handle
-            .record_por_verdict(&verdict, &embedded_auditor_keys, 1)
+            .record_por_verdict(
+                &verdict,
+                &embedded_auditor_keys,
+                1,
+                &UnavailableCliPorRepairHandoff,
+            )
             .map_err(|err| format!("failed to record verdict: {err}"))?;
         Some((verdict, outcome))
     } else {
@@ -399,8 +421,11 @@ fn render_verdict_summary(verdict: &AuditVerdictV1, outcome: &PorVerdictOutcome)
     if let Some(reason) = verdict.failure_reason.clone() {
         map.insert("failure_reason".to_owned(), Value::from(reason));
     }
-    if let Some(history_id) = outcome.repair_history_id {
-        map.insert("repair_history_id".to_owned(), Value::from(history_id));
+    if let Some(task_id) = outcome.repair_task_id {
+        map.insert(
+            "repair_task_id_hex".to_owned(),
+            Value::from(hex::encode(task_id)),
+        );
     }
     map.insert(
         "consecutive_failures".to_owned(),
@@ -519,7 +544,7 @@ fn export(
         let taikai_hint = sorafs_car::taikai_segment_hint_from_sorafs_manifest(&manifest_v1)
             .map_err(|err| format!("failed to derive Taikai metadata: {err}"))?;
         let plan = stored_manifest.to_car_plan_with_hint(chunk_profile, taikai_hint);
-        let json_value = try_chunk_fetch_specs_to_json(&plan).map_err(|err| err.to_string())?;
+        let json_value = try_chunk_fetch_plan_to_json(&plan).map_err(|err| err.to_string())?;
         write_json_file(&path, json_value)?;
     }
 

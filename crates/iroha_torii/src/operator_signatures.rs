@@ -7,6 +7,7 @@
 //! - `x-iroha-operator-nonce`: caller-chosen nonce (unique per request).
 //! - `x-iroha-operator-signature`: base64 signature over the canonical request bytes plus
 //!   `timestamp-ms` and `nonce`.
+//! - `x-iroha-torii-proxy-target-peer-id`: receiver identity for internal Torii-proxy requests.
 //!
 //! Canonical request bytes follow `crate::canonical_request_message`:
 //! ```text
@@ -39,6 +40,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use dashmap::{DashMap, mapref::entry::Entry};
 use iroha_config::parameters::actual::ToriiOperatorSignatures;
 use iroha_crypto::{Algorithm, KeyPair, PublicKey, Signature};
+use iroha_data_model::peer::PeerId;
 use rand::{
     rand_core::{TryCryptoRng, TryRngCore},
     rngs::OsRng,
@@ -50,6 +52,8 @@ const HEADER_OPERATOR_PUBLIC_KEY: &str = "x-iroha-operator-public-key";
 const HEADER_OPERATOR_TIMESTAMP_MS: &str = "x-iroha-operator-timestamp-ms";
 const HEADER_OPERATOR_NONCE: &str = "x-iroha-operator-nonce";
 const HEADER_OPERATOR_SIGNATURE: &str = "x-iroha-operator-signature";
+const HEADER_TORII_PROXY_TARGET_PEER_ID: &str = "x-iroha-torii-proxy-target-peer-id";
+const TORII_PROXY_SIGNATURE_DOMAIN_V1: &[u8] = b"iroha:torii-proxy:http-request:v1";
 
 fn validate_operator_signature_for_public_key(
     signature: &Signature,
@@ -214,6 +218,22 @@ impl OperatorSignatureError {
             format!("operator signature signing failed: {}", message.into()),
         )
     }
+
+    fn torii_proxy_target_mismatch() -> Self {
+        Self::new(
+            StatusCode::FORBIDDEN,
+            "torii_proxy_target_mismatch",
+            "Torii proxy request target does not match the receiving peer",
+        )
+    }
+
+    fn torii_proxy_receiver_unavailable() -> Self {
+        Self::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "torii_proxy_receiver_unavailable",
+            "Torii proxy receiver identity is unavailable",
+        )
+    }
 }
 
 impl fmt::Display for OperatorSignatureError {
@@ -309,9 +329,15 @@ pub struct OperatorSignatures {
     allowed_public_keys: HashSet<PublicKey>,
     node_public_key: PublicKey,
     max_clock_skew: Duration,
-    replay_cache: ReplayCache,
+    operator_replay_cache: ReplayCache,
+    identity_bound_replay_cache: ReplayCache,
+    torii_proxy_replay_cache: ReplayCache,
     max_body_bytes: usize,
 }
+
+/// Public key whose request signature was authenticated by the operator middleware.
+#[derive(Clone, Debug)]
+pub(crate) struct AuthenticatedOperatorPublicKey(pub PublicKey);
 
 impl OperatorSignatures {
     pub fn new(
@@ -321,6 +347,8 @@ impl OperatorSignatures {
         _telemetry: crate::routing::MaybeTelemetry,
     ) -> Self {
         let max_body_bytes = usize::try_from(max_body_bytes).unwrap_or(usize::MAX);
+        let nonce_ttl = config.nonce_ttl;
+        let replay_cache_capacity = config.replay_cache_capacity;
         let allowed_public_keys = config.allowed_public_keys.into_iter().collect();
         Self {
             enabled: config.enabled,
@@ -328,7 +356,9 @@ impl OperatorSignatures {
             allowed_public_keys,
             node_public_key,
             max_clock_skew: config.max_clock_skew,
-            replay_cache: ReplayCache::new(config.nonce_ttl, config.replay_cache_capacity),
+            operator_replay_cache: ReplayCache::new(nonce_ttl, replay_cache_capacity),
+            identity_bound_replay_cache: ReplayCache::new(nonce_ttl, replay_cache_capacity),
+            torii_proxy_replay_cache: ReplayCache::new(nonce_ttl, replay_cache_capacity),
             max_body_bytes,
         }
     }
@@ -393,6 +423,12 @@ impl OperatorSignatures {
             })
     }
 
+    fn request_public_key(headers: &HeaderMap) -> Result<PublicKey, OperatorSignatureError> {
+        Self::parse_required_header(headers, HEADER_OPERATOR_PUBLIC_KEY)?
+            .parse::<PublicKey>()
+            .map_err(|_| OperatorSignatureError::invalid_header(HEADER_OPERATOR_PUBLIC_KEY))
+    }
+
     fn validate_freshness(
         &self,
         timestamp_ms: u64,
@@ -420,12 +456,12 @@ impl OperatorSignatures {
     }
 
     fn admit_nonce(
-        &self,
+        replay_cache: &ReplayCache,
         nonce: &str,
         public_key: &PublicKey,
     ) -> Result<(), OperatorSignatureError> {
         let replay_key = format!("{public_key}:{nonce}");
-        if !self.replay_cache.check_and_insert(replay_key) {
+        if !replay_cache.check_and_insert(replay_key) {
             return Err(OperatorSignatureError::replay());
         }
         Ok(())
@@ -454,10 +490,7 @@ impl OperatorSignatures {
         body: &[u8],
         require_allowlisted_key: bool,
     ) -> Result<(), OperatorSignatureError> {
-        let public_key_str = Self::parse_required_header(headers, HEADER_OPERATOR_PUBLIC_KEY)?;
-        let public_key = public_key_str
-            .parse::<PublicKey>()
-            .map_err(|_| OperatorSignatureError::invalid_header(HEADER_OPERATOR_PUBLIC_KEY))?;
+        let public_key = Self::request_public_key(headers)?;
         if require_allowlisted_key && !self.is_key_allowed(&public_key) {
             return Err(OperatorSignatureError::key_not_allowed());
         }
@@ -486,7 +519,12 @@ impl OperatorSignatures {
         // Admit the nonce only after authenticating the request. `check_and_insert` is atomic for
         // a replay key, so concurrently verified requests using the same nonce still have exactly
         // one winner without letting unauthenticated traffic consume or evict cache entries.
-        self.admit_nonce(nonce, &public_key)?;
+        let replay_cache = if require_allowlisted_key {
+            &self.operator_replay_cache
+        } else {
+            &self.identity_bound_replay_cache
+        };
+        Self::admit_nonce(replay_cache, nonce, &public_key)?;
 
         Ok(())
     }
@@ -522,6 +560,101 @@ impl OperatorSignatures {
         }
         self.authorize_bytes_with_policy(req.headers(), req.method(), req.uri(), body_bytes, false)
     }
+
+    fn torii_proxy_target_peer_id(headers: &HeaderMap) -> Result<PeerId, OperatorSignatureError> {
+        Self::parse_required_header(headers, HEADER_TORII_PROXY_TARGET_PEER_ID)?
+            .parse::<PeerId>()
+            .map_err(|_| OperatorSignatureError::invalid_header(HEADER_TORII_PROXY_TARGET_PEER_ID))
+    }
+
+    fn torii_proxy_request_message(
+        method: &crate::Method,
+        uri: &crate::Uri,
+        body: &[u8],
+        timestamp_ms: u64,
+        nonce: &str,
+        target_peer_id: &PeerId,
+    ) -> Vec<u8> {
+        let canonical_request = canonical_request_message(method, uri, body);
+        let target_peer_id = target_peer_id.to_string();
+        let mut message = Vec::with_capacity(
+            TORII_PROXY_SIGNATURE_DOMAIN_V1.len()
+                + target_peer_id.len()
+                + canonical_request.len()
+                + nonce.len()
+                + 32,
+        );
+        message.extend_from_slice(TORII_PROXY_SIGNATURE_DOMAIN_V1);
+        message.push(b'\n');
+        message.extend_from_slice(target_peer_id.as_bytes());
+        message.push(b'\n');
+        message.extend_from_slice(&canonical_request);
+        message.push(b'\n');
+        message.extend_from_slice(timestamp_ms.to_string().as_bytes());
+        message.push(b'\n');
+        message.extend_from_slice(nonce.as_bytes());
+        message
+    }
+
+    fn authorize_torii_proxy_bytes(
+        &self,
+        headers: &HeaderMap,
+        method: &crate::Method,
+        uri: &crate::Uri,
+        body: &[u8],
+        receiver_peer_id: &PeerId,
+    ) -> Result<(), OperatorSignatureError> {
+        let public_key = Self::request_public_key(headers)?;
+        let target_peer_id = Self::torii_proxy_target_peer_id(headers)?;
+        if &target_peer_id != receiver_peer_id {
+            return Err(OperatorSignatureError::torii_proxy_target_mismatch());
+        }
+
+        let timestamp_str = Self::parse_required_header(headers, HEADER_OPERATOR_TIMESTAMP_MS)?;
+        let timestamp_ms = timestamp_str
+            .parse::<u64>()
+            .map_err(|_| OperatorSignatureError::invalid_header(HEADER_OPERATOR_TIMESTAMP_MS))?;
+        let nonce = Self::parse_required_header(headers, HEADER_OPERATOR_NONCE)?;
+        let signature_str = Self::parse_required_header(headers, HEADER_OPERATOR_SIGNATURE)?;
+        let signature_bytes = BASE64_STANDARD
+            .decode(signature_str)
+            .map_err(|_| OperatorSignatureError::invalid_header(HEADER_OPERATOR_SIGNATURE))?;
+        let signature = parse_operator_signature_for_public_key(&signature_bytes, &public_key)?;
+        validate_operator_signature_for_public_key(&signature, &public_key)?;
+
+        self.validate_freshness(timestamp_ms, nonce)?;
+        let message = Self::torii_proxy_request_message(
+            method,
+            uri,
+            body,
+            timestamp_ms,
+            nonce,
+            &target_peer_id,
+        );
+        signature
+            .verify(&public_key, &message)
+            .map_err(|_| OperatorSignatureError::bad_signature())?;
+        Self::admit_nonce(&self.torii_proxy_replay_cache, nonce, &public_key)?;
+        Ok(())
+    }
+
+    fn authorize_torii_proxy_request(
+        &self,
+        req: &axum::http::Request<Body>,
+        body_bytes: &[u8],
+        receiver_peer_id: &PeerId,
+    ) -> Result<(), OperatorSignatureError> {
+        if body_bytes.len() > self.max_body_bytes {
+            return Err(OperatorSignatureError::payload_too_large());
+        }
+        self.authorize_torii_proxy_bytes(
+            req.headers(),
+            req.method(),
+            req.uri(),
+            body_bytes,
+            receiver_peer_id,
+        )
+    }
 }
 
 /// Build operator signature headers for an internal Torii request.
@@ -554,6 +687,60 @@ fn signed_request_headers_with_rng<R: TryCryptoRng>(
         &nonce,
         &signature,
     ))
+}
+
+/// Build route-specific signature headers for an internal Torii-proxy request.
+///
+/// The signature has its own protocol domain and binds the intended receiver peer. The sender key
+/// is deliberately not checked against the privileged operator allow-list: the proxy handler
+/// remains responsible for binding this authenticated peer identity to the request's authoritative
+/// route.
+pub(crate) fn signed_torii_proxy_request_headers(
+    sender_key_pair: &KeyPair,
+    target_peer_id: &PeerId,
+    method: &crate::Method,
+    uri: &crate::Uri,
+    body: &[u8],
+) -> Result<HeaderMap, OperatorSignatureError> {
+    signed_torii_proxy_request_headers_with_rng(
+        sender_key_pair,
+        target_peer_id,
+        method,
+        uri,
+        body,
+        &mut OsRng,
+    )
+}
+
+fn signed_torii_proxy_request_headers_with_rng<R: TryCryptoRng>(
+    sender_key_pair: &KeyPair,
+    target_peer_id: &PeerId,
+    method: &crate::Method,
+    uri: &crate::Uri,
+    body: &[u8],
+    rng: &mut R,
+) -> Result<HeaderMap, OperatorSignatureError> {
+    let timestamp_ms = OperatorSignatures::now_unix_ms();
+    let nonce = operator_signature_nonce_with_rng(rng)?;
+    let message = OperatorSignatures::torii_proxy_request_message(
+        method,
+        uri,
+        body,
+        timestamp_ms,
+        &nonce,
+        target_peer_id,
+    );
+    let signature = Signature::try_new(sender_key_pair.private_key(), &message)
+        .map_err(|error| OperatorSignatureError::signing(error.to_string()))?;
+    let mut headers = operator_signature_headers(sender_key_pair, timestamp_ms, &nonce, &signature);
+    headers.insert(
+        HEADER_TORII_PROXY_TARGET_PEER_ID,
+        target_peer_id
+            .to_string()
+            .parse()
+            .expect("peer ID must be a valid HTTP header value"),
+    );
+    Ok(headers)
 }
 
 fn operator_signature_nonce_with_rng<R: TryCryptoRng>(
@@ -613,10 +800,16 @@ pub async fn enforce_operator_access(
                 Ok(bytes) => bytes,
                 Err(_) => return OperatorSignatureError::payload_too_large().into_response(),
             };
-        let req = axum::http::Request::from_parts(parts, Body::from(body_bytes.clone()));
+        let mut req = axum::http::Request::from_parts(parts, Body::from(body_bytes.clone()));
         if let Err(err) = app.operator_signatures.authorize_request(&req, &body_bytes) {
             return err.into_response();
         }
+        let authenticated_public_key = match OperatorSignatures::request_public_key(req.headers()) {
+            Ok(public_key) => public_key,
+            Err(error) => return error.into_response(),
+        };
+        req.extensions_mut()
+            .insert(AuthenticatedOperatorPublicKey(authenticated_public_key));
         return next.run(req).await;
     }
 
@@ -667,6 +860,53 @@ pub async fn enforce_identity_bound_signature(
     next.run(req).await
 }
 
+fn torii_proxy_receiver_peer_id(app: &SharedAppState) -> Option<PeerId> {
+    #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
+    {
+        app.local_peer_id.clone()
+    }
+    #[cfg(not(any(feature = "app_api", feature = "p2p_ws", feature = "connect")))]
+    {
+        let _ = app;
+        None
+    }
+}
+
+/// Verify the route-specific internal Torii-proxy signature.
+///
+/// This guard accepts any cryptographically valid peer key, binds the request to this receiver,
+/// and uses a replay cache isolated from both privileged operator and generic identity-bound
+/// traffic. The handler must still authorize the authenticated peer for the routed request.
+pub async fn enforce_torii_proxy_peer_signature(
+    State(app): State<SharedAppState>,
+    req: Request,
+    next: Next,
+) -> Response {
+    let Some(receiver_peer_id) = torii_proxy_receiver_peer_id(&app) else {
+        return OperatorSignatureError::torii_proxy_receiver_unavailable().into_response();
+    };
+    let (parts, body) = req.into_parts();
+    let body_bytes = match axum::body::to_bytes(body, app.operator_signatures.max_body_bytes).await
+    {
+        Ok(bytes) => bytes,
+        Err(_) => return OperatorSignatureError::payload_too_large().into_response(),
+    };
+    let mut req = axum::http::Request::from_parts(parts, Body::from(body_bytes.clone()));
+    if let Err(error) =
+        app.operator_signatures
+            .authorize_torii_proxy_request(&req, &body_bytes, &receiver_peer_id)
+    {
+        return error.into_response();
+    }
+    let authenticated_public_key = match OperatorSignatures::request_public_key(req.headers()) {
+        Ok(public_key) => public_key,
+        Err(error) => return error.into_response(),
+    };
+    req.extensions_mut()
+        .insert(AuthenticatedOperatorPublicKey(authenticated_public_key));
+    next.run(req).await
+}
+
 #[cfg(all(test, feature = "app_api"))]
 mod tests {
     use std::{
@@ -675,7 +915,7 @@ mod tests {
     };
 
     use super::*;
-    use axum::routing::get;
+    use axum::routing::{get, post};
     use iroha_crypto::{Algorithm, KeyPair};
     use rand::rand_core::{TryCryptoRng, TryRngCore};
     use tower::ServiceExt as _;
@@ -765,6 +1005,37 @@ mod tests {
         let signature = Signature::try_new(key_pair.private_key(), &message)
             .expect("checked operator signature fixture");
         operator_signature_headers(key_pair, timestamp_ms, nonce, &signature)
+    }
+
+    fn signed_torii_proxy_headers_with_nonce(
+        sender_key_pair: &KeyPair,
+        target_peer_id: &PeerId,
+        method: &crate::Method,
+        uri: &crate::Uri,
+        body: &[u8],
+        timestamp_ms: u64,
+        nonce: &str,
+    ) -> HeaderMap {
+        let message = OperatorSignatures::torii_proxy_request_message(
+            method,
+            uri,
+            body,
+            timestamp_ms,
+            nonce,
+            target_peer_id,
+        );
+        let signature = Signature::try_new(sender_key_pair.private_key(), &message)
+            .expect("checked Torii proxy signature fixture");
+        let mut headers =
+            operator_signature_headers(sender_key_pair, timestamp_ms, nonce, &signature);
+        headers.insert(
+            HEADER_TORII_PROXY_TARGET_PEER_ID,
+            target_peer_id
+                .to_string()
+                .parse()
+                .expect("Torii proxy target header"),
+        );
+        headers
     }
 
     const ED25519_SMALL_ORDER_POINT: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = [
@@ -910,6 +1181,297 @@ mod tests {
             )
             .expect_err("identity-bound signatures must bind the exact lifecycle route");
         assert_eq!(wrong_route.code, "operator_signature_bad");
+    }
+
+    #[test]
+    fn torii_proxy_signatures_accept_unlisted_peer_keys_without_operator_privileges() {
+        let operator = checked_ed25519_keypair();
+        let remote_peer = checked_ed25519_keypair();
+        let receiver = PeerId::from(checked_ed25519_keypair().public_key().clone());
+        let auth = operator_signatures_with_capacity(&operator, 8);
+        let uri: crate::Uri = "/v1/internal/torii/proxy".parse().expect("Torii proxy URI");
+        let body = b"canonical-norito-request";
+        let headers = signed_torii_proxy_headers_with_nonce(
+            &remote_peer,
+            &receiver,
+            &crate::Method::POST,
+            &uri,
+            body,
+            OperatorSignatures::now_unix_ms(),
+            "unlisted-remote-peer",
+        );
+
+        let operator_error = auth
+            .authorize_bytes(&headers, &crate::Method::POST, &uri, body)
+            .expect_err("remote peer key must not gain privileged operator access");
+        assert_eq!(operator_error.code, "operator_key_not_allowed");
+        auth.authorize_torii_proxy_bytes(&headers, &crate::Method::POST, &uri, body, &receiver)
+            .expect("the proxy crypto layer accepts an unlisted peer for handler authorization");
+    }
+
+    #[test]
+    fn torii_proxy_signatures_reject_wrong_or_tampered_target() {
+        let operator = checked_ed25519_keypair();
+        let remote_peer = checked_ed25519_keypair();
+        let signed_target = PeerId::from(checked_ed25519_keypair().public_key().clone());
+        let receiver = PeerId::from(checked_ed25519_keypair().public_key().clone());
+        let auth = operator_signatures_with_capacity(&operator, 8);
+        let uri: crate::Uri = "/v1/internal/torii/proxy".parse().expect("Torii proxy URI");
+        let body = b"canonical-norito-request";
+        let timestamp_ms = OperatorSignatures::now_unix_ms();
+        let headers = signed_torii_proxy_headers_with_nonce(
+            &remote_peer,
+            &signed_target,
+            &crate::Method::POST,
+            &uri,
+            body,
+            timestamp_ms,
+            "wrong-proxy-target",
+        );
+
+        let wrong_target = auth
+            .authorize_torii_proxy_bytes(&headers, &crate::Method::POST, &uri, body, &receiver)
+            .expect_err("a request signed for another receiver must fail");
+        assert_eq!(wrong_target.code, "torii_proxy_target_mismatch");
+
+        let mut tampered_headers = headers;
+        tampered_headers.insert(
+            HEADER_TORII_PROXY_TARGET_PEER_ID,
+            receiver
+                .to_string()
+                .parse()
+                .expect("tampered Torii proxy target header"),
+        );
+        let tampered_target = auth
+            .authorize_torii_proxy_bytes(
+                &tampered_headers,
+                &crate::Method::POST,
+                &uri,
+                body,
+                &receiver,
+            )
+            .expect_err("the receiver target must be covered by the signature");
+        assert_eq!(tampered_target.code, "operator_signature_bad");
+    }
+
+    #[test]
+    fn torii_proxy_signatures_bind_canonical_request_freshness_and_reject_replay() {
+        let operator = checked_ed25519_keypair();
+        let remote_peer = checked_ed25519_keypair();
+        let receiver = PeerId::from(checked_ed25519_keypair().public_key().clone());
+        let auth = operator_signatures_with_capacity(&operator, 8);
+        let uri: crate::Uri = "/v1/internal/torii/proxy".parse().expect("Torii proxy URI");
+        let other_uri: crate::Uri = "/v1/internal/torii/proxy/alias"
+            .parse()
+            .expect("tampered Torii proxy URI");
+        let body = b"canonical-norito-request";
+        let timestamp_ms = OperatorSignatures::now_unix_ms();
+        let headers = signed_torii_proxy_headers_with_nonce(
+            &remote_peer,
+            &receiver,
+            &crate::Method::POST,
+            &uri,
+            body,
+            timestamp_ms,
+            "path-body-replay",
+        );
+
+        let wrong_method = auth
+            .authorize_torii_proxy_bytes(&headers, &crate::Method::PUT, &uri, body, &receiver)
+            .expect_err("the signature must bind the exact method");
+        assert_eq!(wrong_method.code, "operator_signature_bad");
+        let wrong_path = auth
+            .authorize_torii_proxy_bytes(
+                &headers,
+                &crate::Method::POST,
+                &other_uri,
+                body,
+                &receiver,
+            )
+            .expect_err("the signature must bind the exact route path");
+        assert_eq!(wrong_path.code, "operator_signature_bad");
+        let wrong_body = auth
+            .authorize_torii_proxy_bytes(
+                &headers,
+                &crate::Method::POST,
+                &uri,
+                b"tampered-norito-request",
+                &receiver,
+            )
+            .expect_err("the signature must bind the exact body");
+        assert_eq!(wrong_body.code, "operator_signature_bad");
+        let mut wrong_timestamp_headers = headers.clone();
+        wrong_timestamp_headers.insert(
+            HEADER_OPERATOR_TIMESTAMP_MS,
+            timestamp_ms
+                .saturating_add(1)
+                .to_string()
+                .parse()
+                .expect("tampered timestamp header"),
+        );
+        let wrong_timestamp = auth
+            .authorize_torii_proxy_bytes(
+                &wrong_timestamp_headers,
+                &crate::Method::POST,
+                &uri,
+                body,
+                &receiver,
+            )
+            .expect_err("the signature must bind the exact timestamp");
+        assert_eq!(wrong_timestamp.code, "operator_signature_bad");
+        let mut wrong_nonce_headers = headers.clone();
+        wrong_nonce_headers.insert(
+            HEADER_OPERATOR_NONCE,
+            HeaderValue::from_static("tampered-proxy-nonce"),
+        );
+        let wrong_nonce = auth
+            .authorize_torii_proxy_bytes(
+                &wrong_nonce_headers,
+                &crate::Method::POST,
+                &uri,
+                body,
+                &receiver,
+            )
+            .expect_err("the signature must bind the exact nonce");
+        assert_eq!(wrong_nonce.code, "operator_signature_bad");
+
+        auth.authorize_torii_proxy_bytes(&headers, &crate::Method::POST, &uri, body, &receiver)
+            .expect("failed verification must not consume the authenticated nonce");
+        let replay = auth
+            .authorize_torii_proxy_bytes(&headers, &crate::Method::POST, &uri, body, &receiver)
+            .expect_err("an authenticated Torii proxy nonce must be single-use");
+        assert_eq!(replay.code, "operator_signature_replay");
+    }
+
+    #[test]
+    fn operator_identity_bound_and_torii_proxy_replay_caches_are_partitioned() {
+        let signer = checked_ed25519_keypair();
+        let receiver = PeerId::from(checked_ed25519_keypair().public_key().clone());
+        let auth = operator_signatures_with_capacity(&signer, 8);
+        let uri: crate::Uri = "/v1/internal/torii/proxy".parse().expect("Torii proxy URI");
+        let body = b"canonical-norito-request";
+        let timestamp_ms = OperatorSignatures::now_unix_ms();
+        let nonce = "partitioned-replay-claim";
+        let generic_headers = signed_headers_with_nonce(
+            &signer,
+            &crate::Method::POST,
+            &uri,
+            body,
+            timestamp_ms,
+            nonce,
+        );
+        let proxy_headers = signed_torii_proxy_headers_with_nonce(
+            &signer,
+            &receiver,
+            &crate::Method::POST,
+            &uri,
+            body,
+            timestamp_ms,
+            nonce,
+        );
+
+        auth.authorize_bytes(&generic_headers, &crate::Method::POST, &uri, body)
+            .expect("privileged operator replay partition admits its first use");
+        auth.authorize_bytes_with_policy(&generic_headers, &crate::Method::POST, &uri, body, false)
+            .expect("generic identity-bound replay partition admits its independent first use");
+        auth.authorize_torii_proxy_bytes(
+            &proxy_headers,
+            &crate::Method::POST,
+            &uri,
+            body,
+            &receiver,
+        )
+        .expect("Torii proxy replay partition admits its independent first use");
+
+        assert_eq!(
+            auth.authorize_bytes(&generic_headers, &crate::Method::POST, &uri, body)
+                .expect_err("operator partition must reject its own replay")
+                .code,
+            "operator_signature_replay"
+        );
+        assert_eq!(
+            auth.authorize_bytes_with_policy(
+                &generic_headers,
+                &crate::Method::POST,
+                &uri,
+                body,
+                false,
+            )
+            .expect_err("identity-bound partition must reject its own replay")
+            .code,
+            "operator_signature_replay"
+        );
+        assert_eq!(
+            auth.authorize_torii_proxy_bytes(
+                &proxy_headers,
+                &crate::Method::POST,
+                &uri,
+                body,
+                &receiver,
+            )
+            .expect_err("Torii proxy partition must reject its own replay")
+            .code,
+            "operator_signature_replay"
+        );
+    }
+
+    #[tokio::test]
+    async fn torii_proxy_middleware_exposes_authenticated_unlisted_peer_identity() {
+        let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests();
+        let receiver_key_pair = checked_ed25519_keypair();
+        let receiver = PeerId::from(receiver_key_pair.public_key().clone());
+        Arc::get_mut(&mut app)
+            .expect("unique test app state")
+            .local_peer_id = Some(receiver.clone());
+        let remote_peer = checked_ed25519_keypair();
+        let expected_remote_public_key = remote_peer.public_key().clone();
+        let body = b"canonical-norito-request";
+        let uri: crate::Uri = "/v1/internal/torii/proxy".parse().expect("Torii proxy URI");
+        let headers = signed_torii_proxy_request_headers(
+            &remote_peer,
+            &receiver,
+            &crate::Method::POST,
+            &uri,
+            body,
+        )
+        .expect("Torii proxy signature headers");
+        let proxy_layer = axum::middleware::from_fn_with_state::<
+            _,
+            _,
+            (axum::extract::State<SharedAppState>, axum::extract::Request),
+        >(app.clone(), enforce_torii_proxy_peer_signature);
+        let router = axum::Router::new()
+            .route(
+                uri.path(),
+                post(
+                    move |axum::Extension(authenticated): axum::Extension<
+                        AuthenticatedOperatorPublicKey,
+                    >| {
+                        let expected_remote_public_key = expected_remote_public_key.clone();
+                        async move {
+                            if authenticated.0 == expected_remote_public_key {
+                                StatusCode::OK
+                            } else {
+                                StatusCode::FORBIDDEN
+                            }
+                        }
+                    },
+                )
+                .layer(proxy_layer),
+            )
+            .with_state(app);
+        let mut request = axum::http::Request::builder()
+            .method(crate::Method::POST)
+            .uri(uri)
+            .body(Body::from(body.to_vec()))
+            .expect("Torii proxy request");
+        request.headers_mut().extend(headers);
+
+        let response = router
+            .oneshot(request)
+            .await
+            .expect("Torii proxy middleware response");
+        assert_eq!(response.status(), StatusCode::OK);
     }
 
     #[test]

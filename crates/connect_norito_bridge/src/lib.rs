@@ -45542,11 +45542,15 @@ fn proof_report_to_json(report: &ProofReport) -> JsonValue {
         ),
     );
     map.insert(
-        "chunk_roots_hex".into(),
+        "chunk_count".into(),
+        JsonValue::from(report.proof.chunk_count),
+    );
+    map.insert(
+        "chunk_merkle_path_hex".into(),
         JsonValue::Array(
             report
                 .proof
-                .chunk_roots
+                .chunk_merkle_path
                 .iter()
                 .map(|digest| JsonValue::from(hex::encode(digest)))
                 .collect(),
@@ -54063,7 +54067,7 @@ mod da_proof_summary_tests {
 mod sorafs_tests {
     use std::{ffi::CString, fs, ptr, slice};
 
-    use sorafs_car::{CarBuildPlan, fetch_plan::chunk_fetch_specs_to_string};
+    use sorafs_car::{CarBuildPlan, fetch_plan::chunk_fetch_plan_to_string};
     use sorafs_chunker::ChunkProfile;
     use tempfile::tempdir;
 
@@ -54108,8 +54112,7 @@ mod sorafs_tests {
             .collect();
         let plan =
             CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
-        let plan_json =
-            chunk_fetch_specs_to_string(&plan.chunk_fetch_specs()).expect("plan json render");
+        let plan_json = chunk_fetch_plan_to_string(&plan).expect("plan json render");
 
         let alpha_path = tempdir.path().join("alpha.bin");
         fs::write(&alpha_path, &payload).expect("write payload");

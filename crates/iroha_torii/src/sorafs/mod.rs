@@ -20,7 +20,6 @@ pub mod por;
 pub mod quota;
 #[cfg(feature = "app_api")]
 pub mod registry;
-pub mod repair;
 pub mod site;
 pub mod token;
 
@@ -62,8 +61,6 @@ pub(crate) use quota::{StreamTokenQuotaError, StreamTokenQuotaTracker};
 pub(crate) use registry::{
     CapacitySnapshot, RegistryDeclaration, RegistryError, RegistryFeeLedgerEntry, collect_snapshot,
 };
-#[cfg(feature = "app_api")]
-pub use repair::RepairWorkerRuntime;
 pub use sorafs_manifest::{
     pin_registry::ReplicationOrderV1,
     provider_advert::{EndpointKind, TransportProtocol},

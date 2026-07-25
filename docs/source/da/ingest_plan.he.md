@@ -274,10 +274,13 @@ hashing, chunking ואימות מניפסטים אופציונליים.
   מחרוזות כדי לשמור על ערכי `policy_source` משמעותיים בחבילות ראיות. ראה
   `crates/iroha_cli/src/commands/da.rs` עבור תת-פקודה ו-`docs/source/da/rent_policy.md`
   עבור סכימת המדיניות.【crates/iroha_cli/src/commands/da.rs:1】【docs/source/da/rent_policy.md:1】
-- שוויון רישום פינים מתרחב כעת ל-SDKs: `ToriiClient.registerSorafsPinManifest(...)` ב-
-  JavaScript SDK בונה את המטען המדויק שבו נעשה שימוש על ידי `iroha app sorafs pin register`, אוכפת קנונית
-  מטא נתונים של chunker, מדיניות סיכות, הוכחות כינוי ותקצירים ממשיכים לפני פרסום ב-
-  `/v1/sorafs/pin/register`. זה מונע מבוטי CI ואוטומציה להפגיז ל-CLI כאשר
+- שוויון רישום pin מתרחב כעת ל-SDKs:
+  `ToriiClient.registerSorafsPinManifest(...)` בונה את בקשת JSON V1 הסגורה עם
+  `ManifestV1` המדויק ב-base64 קנוני מרופד בתוך `manifest_payload`. ‏Torii גוזר
+  את ה-digest, ה-chunker, אורך התוכן, מדיניות ה-pin וקלטי העמלה רק מה-manifest
+  המפוענח ודוחה סיכומים כפולים; alias אופציונלי ו-predecessor לא-אפס נשארים.
+  כך בוטי CI ואוטומציה אינם צריכים להפעיל את ה-CLI בעת שימוש ב-
+  `/v1/sorafs/pin/register` לצורך
   מקליט רישומי מניפסט, והעוזר מגיע עם כיסוי TypeScript/README כך של DA-8
   שוויון הכלים "שלח/קבל/הוכח" מתקיים במלואו ב-JS לצד Rust/Swift.【javascript/iroha_js/src/toriiClient.js:1045】【javascript/iroha_js/test/toriiClient.test.js:788】
 - `iroha app da prove-availability` משרשרת את כל האמור לעיל: זה לוקח כרטיס אחסון, מוריד את

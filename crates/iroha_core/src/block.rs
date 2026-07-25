@@ -115,59 +115,9 @@ use norito::codec::Encode;
 use norito::json::Value as JsonValue;
 use sha2::Digest as _;
 
-#[derive(Clone, Debug, Encode)]
-struct LegacyExecutionContextLanePayloadOwnershipPreimage {
-    purpose: String,
-    version: u8,
-    lane_id: LaneId,
-    dataspace_id: DataSpaceId,
-    lane_block_height: u64,
-    lane_block_view: u64,
-    subject_hash: Hash,
-    candidate_indices: Vec<u64>,
-    qc_mode_tag: String,
-}
-
-#[derive(Clone, Debug, Encode)]
-struct LegacyExecutionContextLaneRbcInstancePreimage {
-    purpose: String,
-    version: u8,
-    lane_id: LaneId,
-    dataspace_id: DataSpaceId,
-    lane_block_height: u64,
-    lane_block_view: u64,
-    subject_hash: Hash,
-    payload_ownership_hash: Hash,
-}
-
-#[derive(Clone, Debug, Encode)]
-struct LegacyExecutionContextLaneBlockDescriptorPreimage {
-    purpose: String,
-    version: u8,
-    lane_id: LaneId,
-    dataspace_id: DataSpaceId,
-    proposal_height: u64,
-    previous_lane_block_height: u64,
-    previous_lane_block_descriptor_hash: Option<Hash>,
-    lane_block_height: u64,
-    lane_block_view: u64,
-    subject_hash: Hash,
-    payload_ownership_hash: Hash,
-    rbc_instance_hash: Hash,
-    candidate_indices: Vec<u64>,
-    candidate_hashes: Vec<Hash>,
-    validator_set_hash_version: u16,
-    validator_set_hash: HashOf<Vec<PeerId>>,
-    validator_set: Vec<PeerId>,
-    validator_count: u32,
-    min_quorum: u32,
-    qc_mode_tag: String,
-}
-
 const PUBLIC_TAIRA_CHAIN_ID: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
 // Retained only so historical Taira genesis blocks can replay their legacy digest.
 const ARCHIVED_TAIRA_CHAIN_ID: &str = "809574f5-fee7-5e69-bfcf-52451e42d50f";
-const PK2_STAGING_CHAIN_ID: &str = "cbdc16";
 
 const LEGACY_TAIRA_ZK_POLICY_HASHES: [[u8; 32]; 4] = [
     [
@@ -188,11 +138,6 @@ const LEGACY_TAIRA_ZK_POLICY_HASHES: [[u8; 32]; 4] = [
     ],
 ];
 
-const LEGACY_PK2_STAGING_ZK_POLICY_HASHES: [[u8; 32]; 1] = [[
-    225, 120, 59, 226, 186, 97, 206, 167, 205, 26, 96, 182, 95, 10, 125, 175, 229, 163, 85, 177,
-    207, 177, 4, 173, 214, 42, 14, 173, 94, 111, 38, 251,
-]];
-
 fn is_public_taira_chain_id(chain_id: &ChainId) -> bool {
     matches!(
         chain_id.as_str(),
@@ -202,10 +147,6 @@ fn is_public_taira_chain_id(chain_id: &ChainId) -> bool {
 
 fn is_archived_taira_chain_id(chain_id: &ChainId) -> bool {
     chain_id.as_str() == ARCHIVED_TAIRA_CHAIN_ID
-}
-
-fn is_pk2_staging_chain_id(chain_id: &ChainId) -> bool {
-    chain_id.as_str() == PK2_STAGING_CHAIN_ID
 }
 
 fn legacy_replay_confidential_digest_with_hashes(
@@ -231,29 +172,6 @@ fn taira_legacy_replay_confidential_digest(
     actual: Option<ConfidentialFeatureDigest>,
 ) -> bool {
     legacy_replay_confidential_digest_with_hashes(expected, actual, &LEGACY_TAIRA_ZK_POLICY_HASHES)
-}
-
-fn pk2_staging_legacy_replay_confidential_digest(
-    expected: Option<ConfidentialFeatureDigest>,
-    actual: Option<ConfidentialFeatureDigest>,
-) -> bool {
-    legacy_replay_confidential_digest_with_hashes(
-        expected,
-        actual,
-        &LEGACY_PK2_STAGING_ZK_POLICY_HASHES,
-    )
-}
-
-fn pk2_staging_legacy_replay_execution_context_hash_mismatch(
-    chain_id: &ChainId,
-    allow_missing_legacy_context: bool,
-    is_genesis: bool,
-) -> bool {
-    allow_missing_legacy_context && !is_genesis && is_pk2_staging_chain_id(chain_id)
-}
-
-fn pk2_staging_lane_payload_subject_hash_compatibility(chain_id: &ChainId) -> bool {
-    is_pk2_staging_chain_id(chain_id)
 }
 
 #[cfg(feature = "bls")]
@@ -4934,12 +4852,12 @@ pub(crate) mod valid {
             }
         }
 
-        const fn allow_missing_legacy_context(&self) -> bool {
+        const fn requires_previous_roster_evidence(&self) -> bool {
             match self {
                 #[cfg(test)]
-                Self::Replay => true,
-                Self::SumeragiV2 { .. } => true,
-                Self::LegacyLive | Self::SignedGenesis { .. } => false,
+                Self::Replay => false,
+                Self::SumeragiV2 { .. } => false,
+                Self::LegacyLive | Self::SignedGenesis { .. } => true,
             }
         }
 
@@ -7210,7 +7128,8 @@ pub(crate) mod valid {
             skip_block_signatures: bool,
             validation_profile: ConsensusValidationProfile,
         ) -> Result<StaticValidationData, BlockValidationError> {
-            let allow_missing_legacy_context = validation_profile.allow_missing_legacy_context();
+            let require_previous_roster_evidence =
+                validation_profile.requires_previous_roster_evidence();
             let state_height = state.block_hashes().len();
             let expected_block_height = if soft_fork {
                 state_height
@@ -7274,7 +7193,7 @@ pub(crate) mod valid {
                 block,
                 block.header().height().get(),
                 actual_prev_block_hash,
-                !allow_missing_legacy_context,
+                require_previous_roster_evidence,
             )?;
             Self::validate_npos_effects_header(block)?;
             Self::validate_da_sidecar_hashes(block)?;
@@ -7313,28 +7232,16 @@ pub(crate) mod valid {
             if actual_digest != expected_digest {
                 let is_legacy_taira_digest =
                     taira_legacy_replay_confidential_digest(expected_digest, actual_digest);
-                let is_legacy_pk2_staging_digest =
-                    pk2_staging_legacy_replay_confidential_digest(expected_digest, actual_digest);
                 let is_public_taira_genesis = block.header().is_genesis()
                     && (is_public_taira_chain_id(chain_id) || is_archived_taira_chain_id(chain_id));
-                let is_pk2_staging_genesis =
-                    block.header().is_genesis() && is_pk2_staging_chain_id(chain_id);
-                if (is_legacy_taira_digest
-                    && (allow_missing_legacy_context || is_public_taira_genesis))
-                    || (is_legacy_pk2_staging_digest
-                        && (allow_missing_legacy_context || is_pk2_staging_genesis))
+                if is_legacy_taira_digest
+                    && (validation_profile.replay_compatibility() || is_public_taira_genesis)
                 {
-                    if is_public_taira_genesis && !allow_missing_legacy_context {
+                    if is_public_taira_genesis && !validation_profile.replay_compatibility() {
                         iroha_logger::warn!(
                             block_height,
                             chain_id = chain_id.as_str(),
                             "accepting public Taira genesis with legacy confidential feature digest"
-                        );
-                    } else if is_pk2_staging_genesis && !allow_missing_legacy_context {
-                        iroha_logger::warn!(
-                            block_height,
-                            chain_id = chain_id.as_str(),
-                            "accepting PK2 staging genesis with legacy confidential feature digest"
                         );
                     } else {
                         iroha_logger::debug!(
@@ -7882,10 +7789,9 @@ pub(crate) mod valid {
             BlockValidationError::ExecutionContextInvalid(message.into())
         }
 
-        fn validate_execution_context_header<'block>(
-            block: &'block SignedBlock,
-            legacy_pk2_staging_replay_chain_id: Option<&ChainId>,
-        ) -> Result<Option<&'block BlockExecutionContextBundle>, BlockValidationError> {
+        fn validate_execution_context_header(
+            block: &SignedBlock,
+        ) -> Result<Option<&BlockExecutionContextBundle>, BlockValidationError> {
             match (
                 block.header().execution_context_hash(),
                 block.execution_context(),
@@ -7906,16 +7812,6 @@ pub(crate) mod valid {
                     }
                     let actual = HashOf::new(bundle);
                     if actual != expected {
-                        if let Some(chain_id) = legacy_pk2_staging_replay_chain_id {
-                            iroha_logger::warn!(
-                                block_height = block.header().height().get(),
-                                chain_id = chain_id.as_str(),
-                                ?expected,
-                                ?actual,
-                                "accepting PK2 staging legacy execution context hash mismatch during replay"
-                            );
-                            return Ok(Some(bundle));
-                        }
                         return Err(Self::execution_context_error(
                             "execution context hash mismatch",
                         ));
@@ -8239,93 +8135,9 @@ pub(crate) mod valid {
             ))
         }
 
-        fn validate_legacy_pk2_lane_payload_replay_material(
-            ownership_idx: usize,
-            ownership: &SumeragiLanePayloadOwnership,
-            candidate_indices: &[u64],
-            candidate_hashes: &[Hash],
-        ) -> Result<(), BlockValidationError> {
-            let expected_payload_ownership_hash = Self::execution_context_preimage_hash(
-                &LegacyExecutionContextLanePayloadOwnershipPreimage {
-                    purpose: "nexus:lane-payload-ownership:v1".to_string(),
-                    version: 1,
-                    lane_id: ownership.lane_id,
-                    dataspace_id: ownership.dataspace_id,
-                    lane_block_height: ownership.lane_block_height,
-                    lane_block_view: ownership.lane_block_view,
-                    subject_hash: ownership.subject_hash,
-                    candidate_indices: candidate_indices.to_vec(),
-                    qc_mode_tag: ownership.qc_mode_tag.clone(),
-                },
-                "legacy PK2 lane payload ownership",
-            )?;
-            if ownership.payload_ownership_hash != expected_payload_ownership_hash {
-                return Err(Self::execution_context_replay_material_error(
-                    ownership_idx,
-                    "payload ownership hash mismatch",
-                ));
-            }
-
-            let expected_rbc_instance_hash = Self::execution_context_preimage_hash(
-                &LegacyExecutionContextLaneRbcInstancePreimage {
-                    purpose: "nexus:lane-rbc-instance:v1".to_string(),
-                    version: 1,
-                    lane_id: ownership.lane_id,
-                    dataspace_id: ownership.dataspace_id,
-                    lane_block_height: ownership.lane_block_height,
-                    lane_block_view: ownership.lane_block_view,
-                    subject_hash: ownership.subject_hash,
-                    payload_ownership_hash: ownership.payload_ownership_hash,
-                },
-                "legacy PK2 lane RBC instance",
-            )?;
-            if ownership.rbc_instance_hash != expected_rbc_instance_hash {
-                return Err(Self::execution_context_replay_material_error(
-                    ownership_idx,
-                    "RBC instance hash mismatch",
-                ));
-            }
-
-            let expected_descriptor_hash = Self::execution_context_preimage_hash(
-                &LegacyExecutionContextLaneBlockDescriptorPreimage {
-                    purpose: "nexus:lane-block-descriptor:v1".to_string(),
-                    version: 1,
-                    lane_id: ownership.lane_id,
-                    dataspace_id: ownership.dataspace_id,
-                    proposal_height: ownership.proposal_height,
-                    previous_lane_block_height: ownership.previous_lane_block_height,
-                    previous_lane_block_descriptor_hash: ownership
-                        .previous_lane_block_descriptor_hash,
-                    lane_block_height: ownership.lane_block_height,
-                    lane_block_view: ownership.lane_block_view,
-                    subject_hash: ownership.subject_hash,
-                    payload_ownership_hash: ownership.payload_ownership_hash,
-                    rbc_instance_hash: ownership.rbc_instance_hash,
-                    candidate_indices: candidate_indices.to_vec(),
-                    candidate_hashes: candidate_hashes.to_vec(),
-                    validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-                    validator_set_hash: HashOf::new(&ownership.lane_block_descriptor_validator_set),
-                    validator_set: ownership.lane_block_descriptor_validator_set.clone(),
-                    validator_count: ownership.lane_block_descriptor_validator_count,
-                    min_quorum: ownership.lane_block_descriptor_min_quorum,
-                    qc_mode_tag: ownership.qc_mode_tag.clone(),
-                },
-                "legacy PK2 lane block descriptor",
-            )?;
-            if ownership.lane_block_descriptor_hash != Some(expected_descriptor_hash) {
-                return Err(Self::execution_context_replay_material_error(
-                    ownership_idx,
-                    "descriptor hash mismatch",
-                ));
-            }
-
-            Ok(())
-        }
-
         fn validate_execution_context_lane_payload_ownerships(
             block: &SignedBlock,
             topology: &Topology,
-            chain_id: &ChainId,
             state: &impl StateReadOnly,
             bundle: &BlockExecutionContextBundle,
         ) -> Result<(), BlockValidationError> {
@@ -8450,8 +8262,6 @@ pub(crate) mod valid {
                 }
 
                 let mut local_indices = BTreeSet::new();
-                let mut candidate_indices =
-                    Vec::with_capacity(ownership.accepted_candidate_indices.len());
                 let mut candidate_hashes =
                     Vec::with_capacity(ownership.accepted_candidate_indices.len());
                 for raw_index in &ownership.accepted_candidate_indices {
@@ -8476,7 +8286,6 @@ pub(crate) mod valid {
                             "lane payload ownership entrypoint index {index} is covered more than once"
                         )));
                     }
-                    candidate_indices.push(*raw_index);
                     candidate_hashes.push(Hash::from(context.entrypoint_hash));
                     if context.lane_id != ownership.lane_id
                         || context.dataspace_id != ownership.dataspace_id
@@ -8558,41 +8367,10 @@ pub(crate) mod valid {
                     )));
                 }
                 if let Err(error) = ownership.validate_replay_material() {
-                    let error_message = error.to_string();
-                    if error_message == "subject hash mismatch"
-                        && pk2_staging_lane_payload_subject_hash_compatibility(chain_id)
-                    {
-                        Self::validate_legacy_pk2_lane_payload_replay_material(
-                            ownership_idx,
-                            ownership,
-                            &candidate_indices,
-                            &candidate_hashes,
-                        )?;
-                        let expected = ownership
-                            .compute_replay_hashes()
-                            .map(|hashes| hashes.subject_hash)
-                            .ok();
-                        iroha_logger::warn!(
-                            block_height = proposal_height,
-                            proposal_view,
-                            chain_id = chain_id.as_str(),
-                            ownership_idx,
-                            lane_id = ownership.lane_id.as_u32(),
-                            dataspace_id = ownership.dataspace_id.as_u64(),
-                            lane_block_height = ownership.lane_block_height,
-                            lane_block_view = ownership.lane_block_view,
-                            candidate_indices = ?candidate_indices,
-                            qc_mode_tag = %ownership.qc_mode_tag,
-                            expected = ?expected,
-                            actual = ?ownership.subject_hash,
-                            "accepting PK2 staging lane payload ownership subject hash mismatch"
-                        );
-                    } else {
-                        return Err(Self::execution_context_replay_material_error(
-                            ownership_idx,
-                            error_message,
-                        ));
-                    }
+                    return Err(Self::execution_context_replay_material_error(
+                        ownership_idx,
+                        error.to_string(),
+                    ));
                 }
             }
 
@@ -9418,16 +9196,7 @@ pub(crate) mod valid {
             state: &impl StateReadOnly,
             validation_profile: ConsensusValidationProfile,
         ) -> Result<(), BlockValidationError> {
-            let allow_missing_legacy_context = validation_profile.allow_missing_legacy_context();
-            let legacy_pk2_staging_replay_chain_id =
-                pk2_staging_legacy_replay_execution_context_hash_mismatch(
-                    chain_id,
-                    allow_missing_legacy_context,
-                    block.header().is_genesis(),
-                )
-                .then_some(chain_id);
-            let bundle =
-                Self::validate_execution_context_header(block, legacy_pk2_staging_replay_chain_id)?;
+            let bundle = Self::validate_execution_context_header(block)?;
             let context_required = validation_profile.require_execution_context()
                 && !block.header().is_genesis()
                 && block.external_entrypoint_count() != 0;
@@ -9450,7 +9219,7 @@ pub(crate) mod valid {
                 &validation_profile,
             )?;
             Self::validate_execution_context_lane_payload_ownerships(
-                block, topology, chain_id, state, bundle,
+                block, topology, state, bundle,
             )?;
             Self::validate_execution_context_lane_payload_artifacts(block, state, bundle)?;
             Self::validate_execution_context_autonomous_lane_payloads(
@@ -9770,7 +9539,7 @@ pub(crate) mod valid {
             block: &SignedBlock,
             tx_count: usize,
         ) -> Option<Vec<crate::queue::RoutingDecision>> {
-            let bundle = match Self::validate_execution_context_header(block, None) {
+            let bundle = match Self::validate_execution_context_header(block) {
                 Ok(Some(bundle)) => bundle,
                 Ok(None) => return None,
                 Err(error) => {
@@ -9799,7 +9568,7 @@ pub(crate) mod valid {
             block: &SignedBlock,
             entrypoint_count: usize,
         ) -> Option<Vec<crate::queue::RoutingDecision>> {
-            let bundle = match Self::validate_execution_context_header(block, None) {
+            let bundle = match Self::validate_execution_context_header(block) {
                 Ok(Some(bundle)) => bundle,
                 Ok(None) => return None,
                 Err(error) => {
@@ -16254,10 +16023,13 @@ pub(crate) mod valid {
                     &validator_set[0],
                 )
                 .expect("derive canonical autonomous reservation identity");
-            let reservation = crate::queue::LaneQueueReservationKeyV1 {
-                version: crate::queue::LaneQueueReservationKeyV1::VERSION,
+            let reservation = crate::queue::LaneQueueReservationKeyV2 {
+                version: crate::queue::LaneQueueReservationKeyV2::VERSION,
                 signed_transaction_hash: accepted.hash(),
                 entrypoint_hash: entrypoint.hash(),
+                queue_plan_admission_binding_hash: Hash::new(
+                    b"block-native-amx-queue-plan-admission-binding",
+                ),
                 routing_plan_digest: routing_plan.digest(),
                 coordinator_leg: routing_plan.coordinator_leg(),
                 lane_id,
@@ -19849,7 +19621,7 @@ pub(crate) mod valid {
                 },
             );
 
-            let error = ValidBlock::validate_execution_context_header(&block, None)
+            let error = ValidBlock::validate_execution_context_header(&block)
                 .expect_err("unsupported execution-context bundle version must fail closed");
             assert!(matches!(
                 error,
@@ -20531,69 +20303,30 @@ pub(crate) mod valid {
             );
         }
 
-        fn recompute_lane_payload_ownership_derived_hashes(
-            ownership: &mut SumeragiLanePayloadOwnership,
-        ) {
-            ownership.payload_ownership_hash = Hash::new(
-                norito::to_bytes(&LegacyExecutionContextLanePayloadOwnershipPreimage {
-                    purpose: "nexus:lane-payload-ownership:v1".to_string(),
-                    version: 1,
-                    lane_id: ownership.lane_id,
-                    dataspace_id: ownership.dataspace_id,
-                    lane_block_height: ownership.lane_block_height,
-                    lane_block_view: ownership.lane_block_view,
-                    subject_hash: ownership.subject_hash,
-                    candidate_indices: ownership.accepted_candidate_indices.clone(),
-                    qc_mode_tag: ownership.qc_mode_tag.clone(),
-                })
-                .expect("lane payload ownership preimage encodes"),
+        #[test]
+        fn validate_static_state_dependent_rejects_self_consistent_stale_lane_incarnation() {
+            assert_lane_payload_ownership_context_rejected(
+                "lane-payload-context-stale-incarnation",
+                |ownership| {
+                    ownership.lane_incarnation = Hash::new(b"retired lane incarnation");
+                    let replay_hashes = ownership
+                        .compute_replay_hashes()
+                        .expect("stale-incarnation replay material remains internally consistent");
+                    ownership.subject_hash = replay_hashes.subject_hash;
+                    ownership.payload_ownership_hash = replay_hashes.payload_ownership_hash;
+                    ownership.rbc_instance_hash = replay_hashes.rbc_instance_hash;
+                    ownership.lane_block_descriptor_hash =
+                        Some(replay_hashes.lane_block_descriptor_hash);
+                },
+                "does not bind the active proposal-height lane incarnation",
             );
-            ownership.rbc_instance_hash = Hash::new(
-                norito::to_bytes(&LegacyExecutionContextLaneRbcInstancePreimage {
-                    purpose: "nexus:lane-rbc-instance:v1".to_string(),
-                    version: 1,
-                    lane_id: ownership.lane_id,
-                    dataspace_id: ownership.dataspace_id,
-                    lane_block_height: ownership.lane_block_height,
-                    lane_block_view: ownership.lane_block_view,
-                    subject_hash: ownership.subject_hash,
-                    payload_ownership_hash: ownership.payload_ownership_hash,
-                })
-                .expect("lane RBC instance preimage encodes"),
-            );
-            ownership.lane_block_descriptor_hash = Some(Hash::new(
-                norito::to_bytes(&LegacyExecutionContextLaneBlockDescriptorPreimage {
-                    purpose: "nexus:lane-block-descriptor:v1".to_string(),
-                    version: 1,
-                    lane_id: ownership.lane_id,
-                    dataspace_id: ownership.dataspace_id,
-                    proposal_height: ownership.proposal_height,
-                    previous_lane_block_height: ownership.previous_lane_block_height,
-                    previous_lane_block_descriptor_hash: ownership
-                        .previous_lane_block_descriptor_hash,
-                    lane_block_height: ownership.lane_block_height,
-                    lane_block_view: ownership.lane_block_view,
-                    subject_hash: ownership.subject_hash,
-                    payload_ownership_hash: ownership.payload_ownership_hash,
-                    rbc_instance_hash: ownership.rbc_instance_hash,
-                    candidate_indices: ownership.accepted_candidate_indices.clone(),
-                    candidate_hashes: ownership.accepted_transaction_hashes.clone(),
-                    validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-                    validator_set_hash: HashOf::new(&ownership.lane_block_descriptor_validator_set),
-                    validator_set: ownership.lane_block_descriptor_validator_set.clone(),
-                    validator_count: ownership.lane_block_descriptor_validator_count,
-                    min_quorum: ownership.lane_block_descriptor_min_quorum,
-                    qc_mode_tag: ownership.qc_mode_tag.clone(),
-                })
-                .expect("lane block descriptor preimage encodes"),
-            ));
         }
 
         #[test]
-        fn validate_execution_context_accepts_pk2_staging_subject_hash_compatibility_only() {
+        fn validate_execution_context_rejects_pk2_chain_subject_hash_exception() {
             let (state, topology, _time_source, signed) =
                 signed_default_lane_block_with_execution_context(
-                    "lane-payload-context-pk2-subject-compat",
+                    "lane-payload-context-pk2-subject-reject",
                     1,
                     |transactions, validators, lane_incarnation| {
                         let mut ownership = sample_lane_payload_ownership_for_context_at_slot(
@@ -20608,8 +20341,7 @@ pub(crate) mod valid {
                             vec![Hash::from(transactions[0].hash_as_entrypoint())],
                             validators,
                         );
-                        ownership.subject_hash = Hash::new(b"pk2-staging-subject-compat");
-                        recompute_lane_payload_ownership_derived_hashes(&mut ownership);
+                        ownership.subject_hash = Hash::new(b"pk2-chain-subject-tamper");
                         BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
                             transactions[0].hash_as_entrypoint(),
                             LaneId::SINGLE,
@@ -20619,25 +20351,15 @@ pub(crate) mod valid {
                     },
                 );
             let view = state.query_view();
-            let pk2_chain_id = ChainId::from(PK2_STAGING_CHAIN_ID);
-
-            ValidBlock::validate_execution_context_with_state(
-                &signed,
-                &topology,
-                &pk2_chain_id,
-                &view,
-                ConsensusValidationProfile::LegacyLive,
-            )
-            .expect("PK2 staging preserves compatibility for self-consistent subject hashes");
 
             let err = ValidBlock::validate_execution_context_with_state(
                 &signed,
                 &topology,
-                &state.chain_id,
+                &ChainId::from("cbdc16"),
                 &view,
                 ConsensusValidationProfile::LegacyLive,
             )
-            .expect_err("non-PK2 chains must retain strict subject hash validation");
+            .expect_err("chain identity must never weaken current lane replay validation");
             assert!(
                 matches!(
                     err,
@@ -28292,78 +28014,6 @@ mod tests {
     }
 
     #[test]
-    fn pk2_staging_legacy_replay_confidential_digest_allows_observed_policy_hash_only() {
-        let pk2_policy_hash = [
-            225, 120, 59, 226, 186, 97, 206, 167, 205, 26, 96, 182, 95, 10, 125, 175, 229, 163, 85,
-            177, 207, 177, 4, 173, 214, 42, 14, 173, 94, 111, 38, 251,
-        ];
-        let expected = ConfidentialFeatureDigest::new(
-            Some([0x3A; 32]),
-            Some(1),
-            Some(2),
-            Some(1),
-            Some([0x0D; 32]),
-        );
-        let actual = ConfidentialFeatureDigest::new(
-            expected.vk_set_hash,
-            expected.poseidon_params_id,
-            expected.pedersen_params_id,
-            expected.conf_rules_version,
-            Some(pk2_policy_hash),
-        );
-
-        assert!(pk2_staging_legacy_replay_confidential_digest(
-            Some(expected),
-            Some(actual)
-        ));
-        assert!(!taira_legacy_replay_confidential_digest(
-            Some(expected),
-            Some(actual)
-        ));
-
-        let mut mismatched_params = actual;
-        mismatched_params.poseidon_params_id = Some(9);
-        assert!(!pk2_staging_legacy_replay_confidential_digest(
-            Some(expected),
-            Some(mismatched_params)
-        ));
-
-        let mut unknown_policy = actual;
-        unknown_policy.zk_policy_hash = Some([0x55; 32]);
-        assert!(!pk2_staging_legacy_replay_confidential_digest(
-            Some(expected),
-            Some(unknown_policy)
-        ));
-    }
-
-    #[test]
-    fn pk2_staging_legacy_replay_execution_context_hash_mismatch_is_replay_only() {
-        let pk2_chain_id = ChainId::from("cbdc16");
-        let taira_chain_id = ChainId::from("taira");
-
-        assert!(pk2_staging_legacy_replay_execution_context_hash_mismatch(
-            &pk2_chain_id,
-            true,
-            false
-        ));
-        assert!(!pk2_staging_legacy_replay_execution_context_hash_mismatch(
-            &pk2_chain_id,
-            false,
-            false
-        ));
-        assert!(!pk2_staging_legacy_replay_execution_context_hash_mismatch(
-            &pk2_chain_id,
-            true,
-            true
-        ));
-        assert!(!pk2_staging_legacy_replay_execution_context_hash_mismatch(
-            &taira_chain_id,
-            true,
-            false
-        ));
-    }
-
-    #[test]
     fn public_taira_chain_id_guard_accepts_only_taira_ids() {
         assert!(is_public_taira_chain_id(&ChainId::from(
             "fc56984b-2be7-431d-840e-21514d1883f0"
@@ -28387,15 +28037,6 @@ mod tests {
             PUBLIC_TAIRA_CHAIN_ID
         )));
         assert!(!is_archived_taira_chain_id(&ChainId::from("taira")));
-    }
-
-    #[test]
-    fn pk2_staging_chain_id_guard_accepts_only_cbdc16() {
-        assert!(is_pk2_staging_chain_id(&ChainId::from("cbdc16")));
-        assert!(!is_pk2_staging_chain_id(&ChainId::from("taira")));
-        assert!(!is_pk2_staging_chain_id(&ChainId::from(
-            "00000000-0000-0000-0000-000000000000"
-        )));
     }
 
     fn native_amx_test_catalog(
@@ -29159,8 +28800,18 @@ mod tests {
             .iter_mut()
             .find(|leg| leg.lane_id == LaneId::new(2))
             .expect("participant leg");
-        leg.participant_proposal.proposal_hash =
-            Hash::new(b"conflicting grouped participant proposal");
+        leg.participant_proposal
+            .descriptor
+            .qc_mode_tag
+            .push_str("-conflicting-group");
+        leg.participant_proposal.descriptor.descriptor_hash = leg
+            .participant_proposal
+            .descriptor
+            .computed_descriptor_hash();
+        leg.participant_proposal.proposal_hash = leg.participant_proposal.computed_proposal_hash();
+        for body in [&mut leg.prepare_qc.body, &mut leg.commit_qc.body] {
+            body.participant_proposal_hash = leg.participant_proposal.proposal_hash;
+        }
         assert!(matches!(
             ValidBlock::validate_native_amx_participant_groups(&bundle),
             Err(BlockValidationError::ExecutionContextInvalid(message))
@@ -29570,7 +29221,7 @@ mod tests {
         wrong_phase.legs[0].prepare_qc = wrong_phase.legs[0].commit_qc.clone();
         let error = validate(&wrong_phase).expect_err("wrong phase must fail");
         assert!(
-            error.contains("prerequisite is not a PrepareQC"),
+            error.contains("attestation phase mismatch"),
             "unexpected wrong-phase rejection: {error}"
         );
 
@@ -29650,12 +29301,26 @@ mod tests {
         let mut stale_participant_incarnation =
             signed_native_amx_receipt(source_id, entrypoint_hash, &routing_plan, 42, &keypairs);
         let stale_leg = &mut stale_participant_incarnation.legs[1];
+        let stale_incarnation = Hash::new(b"retired-native-amx-participant-incarnation");
+        stale_leg.participant_proposal.descriptor.lane_incarnation = stale_incarnation;
+        stale_leg.participant_proposal.descriptor.descriptor_hash = stale_leg
+            .participant_proposal
+            .descriptor
+            .computed_descriptor_hash();
+        stale_leg.participant_proposal.proposal_hash =
+            stale_leg.participant_proposal.computed_proposal_hash();
+        stale_leg.participant_settlement.lane_incarnation = stale_incarnation;
+        stale_leg.participant_settlement_hash =
+            iroha_data_model::nexus::compute_settlement_hash(&stale_leg.participant_settlement)
+                .expect("stale participant settlement hashes");
         for body in [
             &mut stale_leg.prepare_qc.body,
             &mut stale_leg.commit_qc.body,
         ] {
-            body.participant_lane_incarnation =
-                Hash::new(b"retired-native-amx-participant-incarnation");
+            body.participant_lane_incarnation = stale_incarnation;
+            body.participant_proposal_hash = stale_leg.participant_proposal.proposal_hash;
+            body.participant_settlement_commitment =
+                Hash::from(stale_leg.participant_settlement_hash);
         }
         let error = validate(&stale_participant_incarnation)
             .expect_err("retired participant incarnation must fail");
@@ -29765,8 +29430,37 @@ mod tests {
         );
 
         let mut unexpected_participant = receipt;
-        unexpected_participant.legs[1].lane_id = LaneId::new(99);
-        unexpected_participant.legs[1].dataspace_id = DataSpaceId::new(99);
+        let unexpected_leg = &mut unexpected_participant.legs[1];
+        unexpected_leg.lane_id = LaneId::new(99);
+        unexpected_leg.dataspace_id = DataSpaceId::new(99);
+        unexpected_leg.participant_proposal.descriptor.lane_id = unexpected_leg.lane_id;
+        unexpected_leg.participant_proposal.descriptor.dataspace_id = unexpected_leg.dataspace_id;
+        unexpected_leg
+            .participant_proposal
+            .descriptor
+            .descriptor_hash = unexpected_leg
+            .participant_proposal
+            .descriptor
+            .computed_descriptor_hash();
+        unexpected_leg.participant_proposal.proposal_hash =
+            unexpected_leg.participant_proposal.computed_proposal_hash();
+        unexpected_leg.participant_settlement.lane_id = unexpected_leg.lane_id;
+        unexpected_leg.participant_settlement.dataspace_id = unexpected_leg.dataspace_id;
+        unexpected_leg.participant_settlement_hash =
+            iroha_data_model::nexus::compute_settlement_hash(
+                &unexpected_leg.participant_settlement,
+            )
+            .expect("unexpected participant settlement hashes");
+        for body in [
+            &mut unexpected_leg.prepare_qc.body,
+            &mut unexpected_leg.commit_qc.body,
+        ] {
+            body.participant_lane_id = unexpected_leg.lane_id;
+            body.participant_dataspace_id = unexpected_leg.dataspace_id;
+            body.participant_proposal_hash = unexpected_leg.participant_proposal.proposal_hash;
+            body.participant_settlement_commitment =
+                Hash::from(unexpected_leg.participant_settlement_hash);
+        }
         assert!(
             validate(&unexpected_participant)
                 .expect_err("unexpected participant leg must fail")

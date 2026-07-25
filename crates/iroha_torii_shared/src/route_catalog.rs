@@ -714,6 +714,8 @@ pub fn validate_catalog(routes: &[RouteDescriptor]) -> Result<(), Vec<CatalogVal
                 AuthenticationPolicy::OperatorSignature
                     | AuthenticationPolicy::OperatorCredentialExchange
             )
+            && !(route.stable_route_id == "operator.internal_torii_proxy"
+                && route.authentication == AuthenticationPolicy::IdentityBoundSignature)
         {
             errors.push(CatalogValidationError {
                 stable_route_id: route_id,
@@ -1332,7 +1334,7 @@ pub mod core {
         Listener::Torii,
     )
     .with_feature_gate(FeatureGate::Any(&["p2p_ws", "connect"]))
-    .with_authentication(AuthenticationPolicy::OperatorSignature);
+    .with_authentication(AuthenticationPolicy::IdentityBoundSignature);
     /// Read the VPN client profile.
     pub const VPN_PROFILE: RouteDescriptor = RouteDescriptor::new(
         "vpn.profile",
@@ -3293,9 +3295,6 @@ pub mod sorafs {
         "sorafs.storage_chunk.read",
         "/v1/sorafs/storage/chunk/{manifest_id}/{chunk_digest}",
     );
-    /// Request a proof-of-replication sample.
-    pub const STORAGE_POR_SAMPLE: RouteDescriptor =
-        documented_post("sorafs.storage_por.sample", "/v1/sorafs/storage/por-sample");
     /// Build a bounded proof-stream payload.
     pub const PROOF_STREAM: RouteDescriptor =
         documented_post("sorafs.proof_stream.build", "/v1/sorafs/proof/stream")
@@ -3556,7 +3555,6 @@ pub mod sorafs {
         STORAGE_TOKEN,
         STORAGE_CAR,
         STORAGE_CHUNK,
-        STORAGE_POR_SAMPLE,
         PROOF_STREAM,
         PDP_CHALLENGE,
         PDP_NEXT,
@@ -4545,7 +4543,6 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     sorafs::STORAGE_TOKEN,
     sorafs::STORAGE_CAR,
     sorafs::STORAGE_CHUNK,
-    sorafs::STORAGE_POR_SAMPLE,
     sorafs::PROOF_STREAM,
     sorafs::PDP_CHALLENGE,
     sorafs::PDP_NEXT,
@@ -4987,6 +4984,30 @@ mod tests {
     }
 
     #[test]
+    fn internal_torii_proxy_is_the_only_identity_bound_operator_route() {
+        assert_eq!(core::INTERNAL_PROXY.surface(), ApiSurface::Operator);
+        assert_eq!(
+            core::INTERNAL_PROXY.authentication(),
+            AuthenticationPolicy::IdentityBoundSignature
+        );
+        assert_eq!(validate_catalog(&[core::INTERNAL_PROXY]), Ok(()));
+
+        let generic_identity_bound_operator = RouteDescriptor::new(
+            "test.identity_bound_operator",
+            HttpMethod::Post,
+            "/v1/tests/identity-bound-operator",
+            ApiSurface::Operator,
+            Listener::Torii,
+        )
+        .with_authentication(AuthenticationPolicy::IdentityBoundSignature);
+        let errors = validate_catalog(&[generic_identity_bound_operator])
+            .expect_err("generic identity-bound keys must not receive operator privileges");
+        assert!(errors.iter().any(|error| {
+            error.kind == CatalogValidationErrorKind::OperatorSurfaceRequiresAuthentication
+        }));
+    }
+
+    #[test]
     fn sccp_governance_descriptor_uses_the_canonical_uri() {
         assert_eq!(
             runtime_governance::GOV_PROPOSE_SCCP.path(),
@@ -5080,6 +5101,7 @@ mod tests {
             (HttpMethod::Post, "/v1/sorafs/capacity/por-challenge"),
             (HttpMethod::Post, "/v1/sorafs/capacity/por"),
             (HttpMethod::Post, "/v1/sorafs/por/trigger"),
+            (HttpMethod::Post, "/v1/sorafs/storage/por-sample"),
             (HttpMethod::Post, "/v1/sorafs/storage/por-challenge"),
             (HttpMethod::Post, "/v1/sorafs/storage/por-proof"),
             (HttpMethod::Post, "/v1/sorafs/storage/por-verdict"),
@@ -5248,6 +5270,7 @@ mod tests {
         for unsupported_path in [
             "/ws/reputation",
             "/sorafs/cid/{cid}/",
+            "/v1/sorafs/storage/por-sample",
             "/v1/sorafs/storage/por-challenge",
             "/v1/sorafs/storage/por-proof",
             "/v1/sorafs/storage/por-verdict",

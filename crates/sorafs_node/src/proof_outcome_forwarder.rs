@@ -8,19 +8,8 @@
 
 use std::{
     collections::BTreeSet,
-    fs::{self, File, OpenOptions},
-    io::{Read, Write as _},
-    path::{Path, PathBuf},
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
-    },
-};
-
-#[cfg(unix)]
-use std::os::unix::{
-    fs::{DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _},
-    io::AsRawFd as _,
+    path::Path,
+    sync::{Arc, Mutex},
 };
 
 use iroha_data_model::{
@@ -44,6 +33,13 @@ use sorafs_manifest::{
 };
 use thiserror::Error;
 
+#[cfg(test)]
+use crate::durable_transaction_forwarder::CheckpointWriterGuard;
+use crate::durable_transaction_forwarder::{
+    self as durable, AtomicCheckpointStore, CheckpointStoreError, DeliveryRecord,
+    DeliveryTransitionError, FinalizedCursorV1, RetryBoundOutcome, StoredDeliveryStateV1,
+};
+
 /// Durable outbox checkpoint schema version.
 pub const PROOF_OUTCOME_OUTBOX_CHECKPOINT_VERSION_V1: u8 = 1;
 /// File containing the canonical proof-outcome delivery checkpoint.
@@ -57,7 +53,9 @@ const CHECKPOINT_LOCK_FILE_NAME: &str = "proof-outcome-forwarder-state.lock";
 const OPERATION_ID_DOMAIN_V1: &[u8] = b"sorafs.proof-outcome.forwarder.operation.v1\0";
 const CHECKPOINT_ELEMENT_AMPLIFICATION_LIMIT: usize = 4;
 const CHECKPOINT_ALLOCATION_AMPLIFICATION_LIMIT: usize = 16;
-const CHECKPOINT_ALLOCATION_FIXED_OVERHEAD_BYTES: usize = 128 * 1024;
+// Maximum-valid PDP/PoTR state requires 463,560 bytes beyond 16x wire.
+// Round up to eight 64 KiB quanta and retain one further quantum as margin.
+const CHECKPOINT_ALLOCATION_FIXED_OVERHEAD_BYTES: usize = 9 * 64 * 1024;
 const CHECKPOINT_MAX_NESTING_DEPTH: usize = 128;
 const PDP_ARCHIVE_DECODE_LIMITS: norito::DecodeLimits = norito::DecodeLimits::new(
     128 * 1024,
@@ -73,30 +71,6 @@ const POTR_RECEIPT_DECODE_LIMITS: norito::DecodeLimits = norito::DecodeLimits::n
     4 * PROOF_OUTCOME_MAX_POTR_RECEIPT_BYTES_V1 + 4 * 1024,
     32,
 );
-static CHECKPOINT_TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
-static CHECKPOINT_PROCESS_LOCKS: Mutex<BTreeSet<PathBuf>> = Mutex::new(BTreeSet::new());
-
-#[cfg(unix)]
-const LOCK_EXCLUSIVE_NONBLOCKING: std::os::raw::c_int = 2 | 4;
-#[cfg(any(target_os = "linux", target_os = "android"))]
-const SAFE_OPEN_FLAGS: std::os::raw::c_int = 0x0002_0000 | 0x0008_0000;
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-const SAFE_OPEN_FLAGS: std::os::raw::c_int = 0x0000_0100 | 0x0100_0000;
-#[cfg(all(
-    unix,
-    not(any(
-        target_os = "linux",
-        target_os = "android",
-        target_os = "macos",
-        target_os = "ios"
-    ))
-))]
-const SAFE_OPEN_FLAGS: std::os::raw::c_int = 0;
-
-#[cfg(unix)]
-unsafe extern "C" {
-    fn flock(fd: std::os::raw::c_int, operation: std::os::raw::c_int) -> std::os::raw::c_int;
-}
 
 /// Bounded persistence and retry policy for the delivery outbox.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -165,15 +139,6 @@ pub enum ProofOutcomeDeliveryStateV1 {
     /// Submission may have occurred and must be reconciled before retry.
     Ambiguous,
     /// The exact transaction is known pending or applied but not finalized as an outcome.
-    Submitted,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
-enum StoredDeliveryStateV1 {
-    Ready,
-    Signing,
-    Signed,
-    Ambiguous,
     Submitted,
 }
 
@@ -318,6 +283,50 @@ impl StoredPendingDeliveryV1 {
     }
 }
 
+impl DeliveryRecord for StoredPendingDeliveryV1 {
+    type Transaction = SignedTransaction;
+
+    fn delivery_state(&self) -> StoredDeliveryStateV1 {
+        self.state
+    }
+
+    fn set_delivery_state(&mut self, state: StoredDeliveryStateV1) {
+        self.state = state;
+    }
+
+    fn attempts(&self) -> u32 {
+        self.attempts
+    }
+
+    fn set_attempts(&mut self, attempts: u32) {
+        self.attempts = attempts;
+    }
+
+    fn baseline_finalized_height(&self) -> u64 {
+        self.baseline_finalized_height
+    }
+
+    fn set_baseline_finalized_height(&mut self, height: u64) {
+        self.baseline_finalized_height = height;
+    }
+
+    fn baseline_finalized_block_hash(&self) -> [u8; 32] {
+        self.baseline_finalized_block_hash
+    }
+
+    fn set_baseline_finalized_block_hash(&mut self, block_hash: [u8; 32]) {
+        self.baseline_finalized_block_hash = block_hash;
+    }
+
+    fn signed_transaction(&self) -> Option<&Self::Transaction> {
+        self.signed_transaction.as_ref()
+    }
+
+    fn set_signed_transaction(&mut self, transaction: Option<Self::Transaction>) {
+        self.signed_transaction = transaction;
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct StoredCompletedDeliveryV1 {
     operation_id: [u8; 32],
@@ -410,12 +419,7 @@ impl ProofOutcomeOutbox {
         // return to `Ready` without a ledger lookup.
         let mut recovered = false;
         for entry in &mut checkpoint.pending {
-            if entry.state == StoredDeliveryStateV1::Signing {
-                entry.state = StoredDeliveryStateV1::Ready;
-                entry.baseline_finalized_height = 0;
-                entry.baseline_finalized_block_hash = [0; 32];
-                recovered = true;
-            }
+            recovered |= durable::recover_interrupted_signing(entry);
         }
         let outbox = Self {
             policy,
@@ -500,19 +504,36 @@ impl ProofOutcomeOutbox {
         &self,
         limit: usize,
     ) -> Result<Vec<ProofOutcomePendingDeliveryV1>, ProofOutcomeOutboxError> {
+        self.pending_after(None, limit)
+    }
+
+    /// Return a circular page of pending entries after an immutable sequence cursor.
+    ///
+    /// Entries with a sequence greater than `after_sequence` are returned first,
+    /// followed by the oldest entries when the page wraps.  At most one snapshot
+    /// of each pending entry is returned.
+    pub fn pending_after(
+        &self,
+        after_sequence: Option<u64>,
+        limit: usize,
+    ) -> Result<Vec<ProofOutcomePendingDeliveryV1>, ProofOutcomeOutboxError> {
         if limit == 0 || limit > PROOF_OUTCOME_OUTBOX_MAX_SCAN_ITEMS_V1 {
             return Err(ProofOutcomeOutboxError::InvalidScanLimit);
         }
         let state = self.lock_state()?;
-        let mut pending = state
-            .checkpoint
-            .pending
+        let pending = &state.checkpoint.pending;
+        if pending.is_empty() {
+            return Ok(Vec::new());
+        }
+        let start = after_sequence.map_or(0, |sequence| {
+            pending.partition_point(|entry| entry.sequence <= sequence)
+        });
+        Ok(pending[start..]
             .iter()
+            .chain(pending[..start].iter())
+            .take(limit.min(pending.len()))
             .map(StoredPendingDeliveryV1::snapshot)
-            .collect::<Vec<_>>();
-        pending.sort_by_key(|entry| entry.sequence);
-        pending.truncate(limit);
-        Ok(pending)
+            .collect())
     }
 
     /// Return payload-free dead letters in stable operation order.
@@ -597,19 +618,14 @@ impl ProofOutcomeOutbox {
         operation_id: [u8; 32],
         baseline_finalized_cursor: ProofOutcomeFinalizedCursorV1,
     ) -> Result<ProofOutcomePendingDeliveryV1, ProofOutcomeOutboxError> {
-        validate_finalized_cursor(baseline_finalized_cursor)?;
         let mut state = self.lock_state()?;
         let mut candidate = state.checkpoint.clone();
         let entry = find_pending_mut(&mut candidate, operation_id)?;
-        if entry.state != StoredDeliveryStateV1::Ready || entry.signed_transaction.is_some() {
-            return Err(ProofOutcomeOutboxError::InvalidTransition);
-        }
-        if entry.attempts >= self.policy.max_attempts {
-            return Err(ProofOutcomeOutboxError::RetryExhausted);
-        }
-        entry.baseline_finalized_height = baseline_finalized_cursor.height;
-        entry.baseline_finalized_block_hash = baseline_finalized_cursor.block_hash;
-        entry.state = StoredDeliveryStateV1::Signing;
+        durable::claim_for_signing(
+            entry,
+            finalized_cursor(baseline_finalized_cursor),
+            self.policy.max_attempts,
+        )?;
         let snapshot = entry.snapshot();
         self.commit_candidate(&mut state, candidate)?;
         Ok(snapshot)
@@ -624,20 +640,12 @@ impl ProofOutcomeOutbox {
         let mut state = self.lock_state()?;
         let mut candidate = state.checkpoint.clone();
         let entry = find_pending_mut(&mut candidate, operation_id)?;
-        if entry.state != StoredDeliveryStateV1::Signing || entry.signed_transaction.is_some() {
-            return Err(ProofOutcomeOutboxError::InvalidTransition);
-        }
-        entry.attempts = entry
-            .attempts
-            .checked_add(1)
-            .ok_or(ProofOutcomeOutboxError::RetryExhausted)?;
         validate_signed_transaction(entry, &transaction)?;
         let transaction_hash = *transaction.hash().as_ref();
         if transaction_hash == [0; 32] {
             return Err(ProofOutcomeOutboxError::InvalidSignedTransaction);
         }
-        entry.signed_transaction = Some(transaction);
-        entry.state = StoredDeliveryStateV1::Signed;
+        durable::store_signed_transaction(entry, transaction)?;
         self.commit_candidate(&mut state, candidate)?;
         Ok(transaction_hash)
     }
@@ -651,13 +659,7 @@ impl ProofOutcomeOutbox {
         operation_id: [u8; 32],
     ) -> Result<(), ProofOutcomeOutboxError> {
         self.mutate_entry(operation_id, |entry| {
-            if entry.state != StoredDeliveryStateV1::Signing || entry.signed_transaction.is_some() {
-                return Err(ProofOutcomeOutboxError::InvalidTransition);
-            }
-            entry.baseline_finalized_height = 0;
-            entry.baseline_finalized_block_hash = [0; 32];
-            entry.state = StoredDeliveryStateV1::Ready;
-            Ok(())
+            durable::release_signing_claim(entry).map_err(Into::into)
         })
     }
 
@@ -669,14 +671,7 @@ impl ProofOutcomeOutbox {
         let mut state = self.lock_state()?;
         let mut candidate = state.checkpoint.clone();
         let entry = find_pending_mut(&mut candidate, operation_id)?;
-        if entry.state != StoredDeliveryStateV1::Signed {
-            return Err(ProofOutcomeOutboxError::InvalidTransition);
-        }
-        let transaction = entry
-            .signed_transaction
-            .clone()
-            .ok_or(ProofOutcomeOutboxError::InvalidTransition)?;
-        entry.state = StoredDeliveryStateV1::Ambiguous;
+        let transaction = durable::begin_submission(entry)?;
         self.commit_candidate(&mut state, candidate)?;
         Ok(transaction)
     }
@@ -684,12 +679,7 @@ impl ProofOutcomeOutbox {
     /// Record that the exact signed transaction is pending or applied.
     pub fn mark_submitted(&self, operation_id: [u8; 32]) -> Result<(), ProofOutcomeOutboxError> {
         self.mutate_entry(operation_id, |entry| {
-            if entry.state != StoredDeliveryStateV1::Ambiguous || entry.signed_transaction.is_none()
-            {
-                return Err(ProofOutcomeOutboxError::InvalidTransition);
-            }
-            entry.state = StoredDeliveryStateV1::Submitted;
-            Ok(())
+            durable::mark_submitted(entry).map_err(Into::into)
         })
     }
 
@@ -699,12 +689,7 @@ impl ProofOutcomeOutbox {
         operation_id: [u8; 32],
     ) -> Result<(), ProofOutcomeOutboxError> {
         self.mutate_entry(operation_id, |entry| {
-            if entry.state != StoredDeliveryStateV1::Ambiguous || entry.signed_transaction.is_none()
-            {
-                return Err(ProofOutcomeOutboxError::InvalidTransition);
-            }
-            entry.state = StoredDeliveryStateV1::Signed;
-            Ok(())
+            durable::mark_not_submitted(entry).map_err(Into::into)
         })
     }
 
@@ -714,36 +699,21 @@ impl ProofOutcomeOutbox {
         operation_id: [u8; 32],
         observed_finalized_cursor: ProofOutcomeFinalizedCursorV1,
     ) -> Result<(), ProofOutcomeOutboxError> {
-        validate_finalized_cursor(observed_finalized_cursor)?;
         let mut state = self.lock_state()?;
         let mut candidate = state.checkpoint.clone();
         let position = pending_position(&candidate, operation_id)?;
-        let entry = &candidate.pending[position];
-        if !matches!(
-            entry.state,
-            StoredDeliveryStateV1::Ambiguous | StoredDeliveryStateV1::Submitted
-        ) || entry.signed_transaction.is_none()
-            || observed_finalized_cursor.height <= entry.baseline_finalized_height
+        if durable::mark_finalized_absent(
+            &mut candidate.pending[position],
+            finalized_cursor(observed_finalized_cursor),
+            self.policy.max_attempts,
+        )? == RetryBoundOutcome::Exhausted
         {
-            return Err(ProofOutcomeOutboxError::InvalidTransition);
-        }
-        if entry.attempts >= self.policy.max_attempts {
             self.move_to_dead_letter(
                 &mut candidate,
                 position,
                 StoredDeadLetterReasonV1::RetryExhausted,
                 observed_finalized_cursor,
             )?;
-        } else {
-            candidate.pending[position].attempts = candidate.pending[position]
-                .attempts
-                .checked_add(1)
-                .ok_or(ProofOutcomeOutboxError::RetryExhausted)?;
-            candidate.pending[position].baseline_finalized_height =
-                observed_finalized_cursor.height;
-            candidate.pending[position].baseline_finalized_block_hash =
-                observed_finalized_cursor.block_hash;
-            candidate.pending[position].state = StoredDeliveryStateV1::Signed;
         }
         self.commit_candidate(&mut state, candidate)
     }
@@ -812,19 +782,17 @@ impl ProofOutcomeOutbox {
         let mut state = self.lock_state()?;
         let mut candidate = state.checkpoint.clone();
         let position = pending_position(&candidate, operation_id)?;
-        if candidate.pending[position].attempts >= self.policy.max_attempts {
+        if durable::mark_transaction_rejected(
+            &mut candidate.pending[position],
+            self.policy.max_attempts,
+        ) == RetryBoundOutcome::Exhausted
+        {
             self.move_to_dead_letter(
                 &mut candidate,
                 position,
                 StoredDeadLetterReasonV1::TransactionRejected,
                 observed_finalized_cursor,
             )?;
-        } else {
-            let entry = &mut candidate.pending[position];
-            entry.state = StoredDeliveryStateV1::Ready;
-            entry.baseline_finalized_height = 0;
-            entry.baseline_finalized_block_hash = [0; 32];
-            entry.signed_transaction = None;
         }
         self.commit_candidate(&mut state, candidate)
     }
@@ -1056,6 +1024,7 @@ fn decode_pdp_archive_source(
     if bytes.is_empty() || bytes.len() > PDP_GOVERNANCE_ARCHIVE_MAX_CANONICAL_BYTES_V1 {
         return Err(ProofOutcomeOutboxError::InvalidSubmission);
     }
+    norito::core::from_bytes_view(bytes).map_err(|_| ProofOutcomeOutboxError::InvalidSubmission)?;
     let archive = norito::decode_from_bytes_with_limits::<PdpGovernanceArchiveV1>(
         bytes,
         PDP_ARCHIVE_DECODE_LIMITS,
@@ -1071,6 +1040,7 @@ fn decode_potr_receipt_source(bytes: &[u8]) -> Result<PotrReceiptV1, ProofOutcom
     if bytes.is_empty() || bytes.len() > PROOF_OUTCOME_MAX_POTR_RECEIPT_BYTES_V1 {
         return Err(ProofOutcomeOutboxError::InvalidSubmission);
     }
+    norito::core::from_bytes_view(bytes).map_err(|_| ProofOutcomeOutboxError::InvalidSubmission)?;
     let receipt =
         norito::decode_from_bytes_with_limits::<PotrReceiptV1>(bytes, POTR_RECEIPT_DECODE_LIMITS)
             .map_err(|_| ProofOutcomeOutboxError::InvalidSubmission)?;
@@ -1163,23 +1133,6 @@ fn validate_checkpoint(
     let mut operations = BTreeSet::new();
     let mut previous_sequence = 0_u64;
     for entry in &checkpoint.pending {
-        let has_baseline_cursor =
-            entry.baseline_finalized_height != 0 && entry.baseline_finalized_block_hash != [0; 32];
-        let has_empty_baseline_cursor =
-            entry.baseline_finalized_height == 0 && entry.baseline_finalized_block_hash == [0; 32];
-        let valid_state = match entry.state {
-            StoredDeliveryStateV1::Ready => {
-                has_empty_baseline_cursor && entry.signed_transaction.is_none()
-            }
-            StoredDeliveryStateV1::Signing => {
-                has_baseline_cursor && entry.signed_transaction.is_none()
-            }
-            StoredDeliveryStateV1::Signed
-            | StoredDeliveryStateV1::Ambiguous
-            | StoredDeliveryStateV1::Submitted => {
-                has_baseline_cursor && entry.signed_transaction.is_some() && entry.attempts != 0
-            }
-        };
         if entry.sequence == 0
             || entry.sequence <= previous_sequence
             || entry.sequence >= checkpoint.next_sequence
@@ -1190,7 +1143,7 @@ fn validate_checkpoint(
             || entry.attempts > policy.max_attempts
             || !operations.insert(entry.operation_id)
             || !identities.insert((entry.kind, entry.identity_digest))
-            || !valid_state
+            || !durable::validate_delivery(entry, policy.max_attempts)
         {
             return Err(ProofOutcomeOutboxError::InvalidCheckpoint);
         }
@@ -1253,77 +1206,43 @@ fn validate_checkpoint(
 fn validate_finalized_cursor(
     cursor: ProofOutcomeFinalizedCursorV1,
 ) -> Result<(), ProofOutcomeOutboxError> {
-    if cursor.height == 0 || cursor.block_hash == [0; 32] {
-        return Err(ProofOutcomeOutboxError::InvalidFinalizedCursor);
-    }
-    Ok(())
+    durable::validate_finalized_cursor(finalized_cursor(cursor)).map_err(Into::into)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct StateDirectoryIdentity {
-    #[cfg(unix)]
-    device: u64,
-    #[cfg(unix)]
-    inode: u64,
-}
-
-fn state_directory_identity(
-    path: &Path,
-) -> Result<StateDirectoryIdentity, ProofOutcomeOutboxError> {
-    let metadata = fs::symlink_metadata(path).map_err(|_| ProofOutcomeOutboxError::CheckpointIo)?;
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        return Err(ProofOutcomeOutboxError::CheckpointIo);
+const fn finalized_cursor(cursor: ProofOutcomeFinalizedCursorV1) -> FinalizedCursorV1 {
+    FinalizedCursorV1 {
+        height: cursor.height,
+        block_hash: cursor.block_hash,
     }
-    Ok(StateDirectoryIdentity {
-        #[cfg(unix)]
-        device: metadata.dev(),
-        #[cfg(unix)]
-        inode: metadata.ino(),
-    })
 }
 
 #[derive(Debug)]
 struct CheckpointStore {
-    root: PathBuf,
-    root_identity: StateDirectoryIdentity,
-    checkpoint_path: PathBuf,
-    lock_path: PathBuf,
-    max_bytes: u64,
+    inner: AtomicCheckpointStore,
 }
 
 impl CheckpointStore {
     fn new(root: &Path, max_bytes: u64) -> Result<Self, ProofOutcomeOutboxError> {
-        ensure_private_state_directory(root)?;
-        let root = fs::canonicalize(root).map_err(|_| ProofOutcomeOutboxError::CheckpointIo)?;
-        let root_identity = state_directory_identity(&root)?;
         Ok(Self {
-            checkpoint_path: root.join(PROOF_OUTCOME_OUTBOX_CHECKPOINT_FILE_NAME_V1),
-            lock_path: root.join(CHECKPOINT_LOCK_FILE_NAME),
-            root,
-            root_identity,
-            max_bytes,
+            inner: AtomicCheckpointStore::new(
+                root,
+                PROOF_OUTCOME_OUTBOX_CHECKPOINT_FILE_NAME_V1,
+                CHECKPOINT_LOCK_FILE_NAME,
+                max_bytes,
+            )?,
         })
-    }
-
-    fn verify_root_identity(&self) -> Result<(), ProofOutcomeOutboxError> {
-        if state_directory_identity(&self.root)? != self.root_identity {
-            return Err(ProofOutcomeOutboxError::CheckpointIo);
-        }
-        Ok(())
     }
 
     fn load(
         &self,
         policy: ProofOutcomeOutboxPolicyV1,
     ) -> Result<(ProofOutcomeOutboxCheckpointV1, Option<[u8; 32]>), ProofOutcomeOutboxError> {
-        self.verify_root_identity()?;
-        let _writer = CheckpointWriterGuard::acquire(&self.lock_path)?;
-        self.verify_root_identity()?;
-        let Some(bytes) = read_checkpoint_bytes(&self.checkpoint_path, self.max_bytes)? else {
-            self.verify_root_identity()?;
+        let (bytes, fingerprint) = self.inner.load_bytes()?;
+        let Some(bytes) = bytes else {
             return Ok((ProofOutcomeOutboxCheckpointV1::default(), None));
         };
-        self.verify_root_identity()?;
+        norito::core::from_bytes_view(&bytes)
+            .map_err(|_| ProofOutcomeOutboxError::InvalidCheckpoint)?;
         let limits = checkpoint_decode_limits(bytes.len())?;
         let checkpoint: ProofOutcomeOutboxCheckpointV1 =
             norito::decode_from_bytes_with_limits(&bytes, limits)
@@ -1336,8 +1255,7 @@ impl CheckpointStore {
         validate_checkpoint(&checkpoint, policy)?;
         validate_checkpoint_source_bindings(&checkpoint)
             .map_err(|_| ProofOutcomeOutboxError::InvalidCheckpoint)?;
-        self.verify_root_identity()?;
-        Ok((checkpoint, Some(*blake3::hash(&bytes).as_bytes())))
+        Ok((checkpoint, fingerprint))
     }
 
     fn commit(
@@ -1345,65 +1263,11 @@ impl CheckpointStore {
         checkpoint: &ProofOutcomeOutboxCheckpointV1,
         expected_fingerprint: Option<[u8; 32]>,
     ) -> Result<[u8; 32], ProofOutcomeOutboxError> {
-        self.verify_root_identity()?;
         let bytes =
             norito::to_bytes(checkpoint).map_err(ProofOutcomeOutboxError::CanonicalEncoding)?;
-        if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > self.max_bytes {
-            return Err(ProofOutcomeOutboxError::CheckpointTooLarge);
-        }
-        let _writer = CheckpointWriterGuard::acquire(&self.lock_path)?;
-        self.verify_root_identity()?;
-        let current = read_checkpoint_bytes(&self.checkpoint_path, self.max_bytes)?;
-        self.verify_root_identity()?;
-        let fingerprint = current
-            .as_deref()
-            .map(blake3::hash)
-            .map(|digest| *digest.as_bytes());
-        if fingerprint != expected_fingerprint {
-            return Err(ProofOutcomeOutboxError::StaleCheckpoint);
-        }
-        let temp_path = self.root.join(format!(
-            ".{PROOF_OUTCOME_OUTBOX_CHECKPOINT_FILE_NAME_V1}.{}.{}.tmp",
-            std::process::id(),
-            CHECKPOINT_TMP_COUNTER.fetch_add(1, Ordering::Relaxed)
-        ));
-        let result = write_checkpoint_temp(&temp_path, &bytes).and_then(|()| {
-            self.verify_root_identity()
-                .map_err(|_| ProofOutcomeOutboxError::CheckpointDurabilityUncertain)?;
-            let latest = read_checkpoint_bytes(&self.checkpoint_path, self.max_bytes)?;
-            self.verify_root_identity()
-                .map_err(|_| ProofOutcomeOutboxError::CheckpointDurabilityUncertain)?;
-            let latest_fingerprint = latest
-                .as_deref()
-                .map(blake3::hash)
-                .map(|digest| *digest.as_bytes());
-            if latest_fingerprint != expected_fingerprint {
-                return Err(ProofOutcomeOutboxError::StaleCheckpoint);
-            }
-            self.verify_root_identity()
-                .map_err(|_| ProofOutcomeOutboxError::CheckpointDurabilityUncertain)?;
-            fs::rename(&temp_path, &self.checkpoint_path)
-                .map_err(|_| ProofOutcomeOutboxError::CheckpointIo)?;
-            self.verify_root_identity()
-                .map_err(|_| ProofOutcomeOutboxError::CheckpointDurabilityUncertain)?;
-            sync_directory(&self.root)
-                .map_err(|_| ProofOutcomeOutboxError::CheckpointDurabilityUncertain)?;
-            self.verify_root_identity()
-                .map_err(|_| ProofOutcomeOutboxError::CheckpointDurabilityUncertain)
-        });
-        if result.is_err() && self.verify_root_identity().is_ok() {
-            let _ = fs::remove_file(&temp_path);
-        }
-        result?;
-        let persisted = read_checkpoint_bytes(&self.checkpoint_path, self.max_bytes)
-            .map_err(|_| ProofOutcomeOutboxError::CheckpointDurabilityUncertain)?
-            .ok_or(ProofOutcomeOutboxError::CheckpointDurabilityUncertain)?;
-        self.verify_root_identity()
-            .map_err(|_| ProofOutcomeOutboxError::CheckpointDurabilityUncertain)?;
-        if persisted != bytes {
-            return Err(ProofOutcomeOutboxError::CheckpointDurabilityUncertain);
-        }
-        Ok(*blake3::hash(&bytes).as_bytes())
+        self.inner
+            .commit_bytes(&bytes, expected_fingerprint)
+            .map_err(Into::into)
     }
 }
 
@@ -1435,206 +1299,6 @@ fn validate_checkpoint_source_bindings(
         .validate_source_binding()?;
     }
     Ok(())
-}
-
-struct CheckpointWriterGuard {
-    _process_guard: CheckpointProcessGuard,
-    _file: File,
-}
-
-impl CheckpointWriterGuard {
-    fn acquire(path: &Path) -> Result<Self, ProofOutcomeOutboxError> {
-        let process_guard = CheckpointProcessGuard::acquire(path)?;
-        let mut options = OpenOptions::new();
-        options.read(true).write(true).create(true);
-        #[cfg(unix)]
-        {
-            options.mode(0o600);
-            options.custom_flags(SAFE_OPEN_FLAGS);
-        }
-        let file = options
-            .open(path)
-            .map_err(|_| ProofOutcomeOutboxError::CheckpointIo)?;
-        validate_open_regular_file(path, &file, 0, true)?;
-        #[cfg(unix)]
-        if unsafe { flock(file.as_raw_fd(), LOCK_EXCLUSIVE_NONBLOCKING) } != 0 {
-            return Err(ProofOutcomeOutboxError::CheckpointBusy);
-        }
-        Ok(Self {
-            _process_guard: process_guard,
-            _file: file,
-        })
-    }
-}
-
-struct CheckpointProcessGuard {
-    path: PathBuf,
-}
-
-impl CheckpointProcessGuard {
-    fn acquire(path: &Path) -> Result<Self, ProofOutcomeOutboxError> {
-        let parent = path.parent().ok_or(ProofOutcomeOutboxError::CheckpointIo)?;
-        let file_name = path
-            .file_name()
-            .ok_or(ProofOutcomeOutboxError::CheckpointIo)?;
-        let path = fs::canonicalize(parent)
-            .map_err(|_| ProofOutcomeOutboxError::CheckpointIo)?
-            .join(file_name);
-        let mut held = CHECKPOINT_PROCESS_LOCKS
-            .lock()
-            .map_err(|_| ProofOutcomeOutboxError::RuntimePoisoned)?;
-        if !held.insert(path.clone()) {
-            return Err(ProofOutcomeOutboxError::CheckpointBusy);
-        }
-        drop(held);
-        Ok(Self { path })
-    }
-}
-
-impl Drop for CheckpointProcessGuard {
-    fn drop(&mut self) {
-        if let Ok(mut held) = CHECKPOINT_PROCESS_LOCKS.lock() {
-            held.remove(&self.path);
-        }
-    }
-}
-
-fn ensure_private_state_directory(path: &Path) -> Result<(), ProofOutcomeOutboxError> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
-            return Err(ProofOutcomeOutboxError::CheckpointIo);
-        }
-        Ok(_) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            let mut builder = fs::DirBuilder::new();
-            builder.recursive(true);
-            #[cfg(unix)]
-            builder.mode(0o700);
-            builder
-                .create(path)
-                .map_err(|_| ProofOutcomeOutboxError::CheckpointIo)?;
-        }
-        Err(_) => return Err(ProofOutcomeOutboxError::CheckpointIo),
-    }
-    let metadata = fs::symlink_metadata(path).map_err(|_| ProofOutcomeOutboxError::CheckpointIo)?;
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        return Err(ProofOutcomeOutboxError::CheckpointIo);
-    }
-    #[cfg(unix)]
-    fs::set_permissions(path, fs::Permissions::from_mode(0o700))
-        .map_err(|_| ProofOutcomeOutboxError::CheckpointIo)?;
-    Ok(())
-}
-
-fn read_checkpoint_bytes(
-    path: &Path,
-    max_bytes: u64,
-) -> Result<Option<Vec<u8>>, ProofOutcomeOutboxError> {
-    let path_metadata = match fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(_) => return Err(ProofOutcomeOutboxError::CheckpointIo),
-    };
-    if path_metadata.file_type().is_symlink() || !path_metadata.is_file() {
-        return Err(ProofOutcomeOutboxError::CheckpointIo);
-    }
-    #[cfg(unix)]
-    if path_metadata.nlink() != 1 {
-        return Err(ProofOutcomeOutboxError::CheckpointIo);
-    }
-    if path_metadata.len() > max_bytes {
-        return Err(ProofOutcomeOutboxError::CheckpointTooLarge);
-    }
-    let mut options = OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    options.custom_flags(SAFE_OPEN_FLAGS);
-    let mut file = options
-        .open(path)
-        .map_err(|_| ProofOutcomeOutboxError::CheckpointIo)?;
-    validate_open_regular_file(path, &file, max_bytes, false)?;
-    let mut bytes = Vec::with_capacity(
-        usize::try_from(path_metadata.len())
-            .unwrap_or(usize::MAX)
-            .min(usize::try_from(max_bytes).unwrap_or(usize::MAX)),
-    );
-    Read::by_ref(&mut file)
-        .take(max_bytes.saturating_add(1))
-        .read_to_end(&mut bytes)
-        .map_err(|_| ProofOutcomeOutboxError::CheckpointIo)?;
-    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > max_bytes {
-        return Err(ProofOutcomeOutboxError::CheckpointTooLarge);
-    }
-    let reopened = fs::symlink_metadata(path).map_err(|_| ProofOutcomeOutboxError::CheckpointIo)?;
-    #[cfg(unix)]
-    if reopened.dev() != path_metadata.dev()
-        || reopened.ino() != path_metadata.ino()
-        || reopened.nlink() != 1
-    {
-        return Err(ProofOutcomeOutboxError::CheckpointIo);
-    }
-    Ok(Some(bytes))
-}
-
-fn validate_open_regular_file(
-    path: &Path,
-    file: &File,
-    max_bytes: u64,
-    allow_lock: bool,
-) -> Result<(), ProofOutcomeOutboxError> {
-    let metadata = file
-        .metadata()
-        .map_err(|_| ProofOutcomeOutboxError::CheckpointIo)?;
-    if !metadata.is_file() || (!allow_lock && metadata.len() > max_bytes) {
-        return Err(ProofOutcomeOutboxError::CheckpointIo);
-    }
-    #[cfg(unix)]
-    {
-        let path_metadata =
-            fs::symlink_metadata(path).map_err(|_| ProofOutcomeOutboxError::CheckpointIo)?;
-        if path_metadata.file_type().is_symlink()
-            || path_metadata.dev() != metadata.dev()
-            || path_metadata.ino() != metadata.ino()
-            || metadata.nlink() != 1
-        {
-            return Err(ProofOutcomeOutboxError::CheckpointIo);
-        }
-    }
-    Ok(())
-}
-
-fn write_checkpoint_temp(path: &Path, bytes: &[u8]) -> Result<(), ProofOutcomeOutboxError> {
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        options.mode(0o600);
-        options.custom_flags(SAFE_OPEN_FLAGS);
-    }
-    let mut file = options
-        .open(path)
-        .map_err(|_| ProofOutcomeOutboxError::CheckpointIo)?;
-    validate_open_regular_file(path, &file, u64::MAX, true)?;
-    file.write_all(bytes)
-        .map_err(|_| ProofOutcomeOutboxError::CheckpointIo)?;
-    file.sync_all()
-        .map_err(|_| ProofOutcomeOutboxError::CheckpointIo)?;
-    #[cfg(unix)]
-    if file
-        .metadata()
-        .map_err(|_| ProofOutcomeOutboxError::CheckpointIo)?
-        .nlink()
-        != 1
-    {
-        return Err(ProofOutcomeOutboxError::CheckpointIo);
-    }
-    Ok(())
-}
-
-fn sync_directory(path: &Path) -> Result<(), ProofOutcomeOutboxError> {
-    File::open(path)
-        .and_then(|directory| directory.sync_all())
-        .map_err(|_| ProofOutcomeOutboxError::CheckpointIo)
 }
 
 fn checkpoint_decode_limits(
@@ -1733,6 +1397,29 @@ pub enum ProofOutcomeOutboxError {
     RuntimePoisoned,
 }
 
+impl From<DeliveryTransitionError> for ProofOutcomeOutboxError {
+    fn from(error: DeliveryTransitionError) -> Self {
+        match error {
+            DeliveryTransitionError::InvalidFinalizedCursor => Self::InvalidFinalizedCursor,
+            DeliveryTransitionError::InvalidTransition => Self::InvalidTransition,
+            DeliveryTransitionError::RetryExhausted => Self::RetryExhausted,
+        }
+    }
+}
+
+impl From<CheckpointStoreError> for ProofOutcomeOutboxError {
+    fn from(error: CheckpointStoreError) -> Self {
+        match error {
+            CheckpointStoreError::Io => Self::CheckpointIo,
+            CheckpointStoreError::TooLarge => Self::CheckpointTooLarge,
+            CheckpointStoreError::Busy => Self::CheckpointBusy,
+            CheckpointStoreError::Stale => Self::StaleCheckpoint,
+            CheckpointStoreError::DurabilityUncertain => Self::CheckpointDurabilityUncertain,
+            CheckpointStoreError::RuntimePoisoned => Self::RuntimePoisoned,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{fs, time::Duration};
@@ -1785,7 +1472,7 @@ mod tests {
         }
     }
 
-    fn signed_receipt() -> PotrReceiptV1 {
+    fn signed_receipt_with_request_id(request_id: [u8; 16]) -> PotrReceiptV1 {
         let gateway = KeyPair::try_from_seed(vec![1; 32], Algorithm::Ed25519).unwrap();
         let provider = KeyPair::try_from_seed(vec![2; 32], Algorithm::MlDsa).unwrap();
         sign_potr_receipt_v1(
@@ -1802,7 +1489,7 @@ mod tests {
                 recorded_at_ms: 1_011,
                 range_start: 0,
                 range_end: 31,
-                request_id: Some([5; 16]),
+                request_id: Some(request_id),
                 trace_id: None,
                 note: None,
                 gateway_signature: None,
@@ -1812,6 +1499,10 @@ mod tests {
             &provider,
         )
         .unwrap()
+    }
+
+    fn signed_receipt() -> PotrReceiptV1 {
+        signed_receipt_with_request_id([5; 16])
     }
 
     fn maximum_bounded_signed_receipt() -> PotrReceiptV1 {
@@ -1930,6 +1621,47 @@ mod tests {
         };
         entry.operation_id = operation_id(&prepared).unwrap();
         checkpoint
+    }
+
+    fn minimum_checkpoint_allocation_budget(bytes: &[u8]) -> usize {
+        let encoded_bytes = bytes.len();
+        let total_elements = encoded_bytes
+            .checked_mul(CHECKPOINT_ELEMENT_AMPLIFICATION_LIMIT)
+            .expect("test checkpoint element ceiling");
+        let ceiling = encoded_bytes
+            .checked_mul(64)
+            .and_then(|budget| budget.checked_add(2 * 1024 * 1024))
+            .expect("finite test allocation ceiling");
+        let decodes = |allocation_budget| {
+            let limits = norito::DecodeLimits::new(
+                encoded_bytes,
+                encoded_bytes,
+                total_elements,
+                allocation_budget,
+                CHECKPOINT_MAX_NESTING_DEPTH,
+            );
+            norito::decode_from_bytes_with_limits::<ProofOutcomeOutboxCheckpointV1>(bytes, limits)
+                .is_ok()
+        };
+        assert!(
+            decodes(ceiling),
+            "finite 64x wire plus 2 MiB ceiling must decode the maximum-valid checkpoint"
+        );
+        let mut lower = 0;
+        let mut upper = ceiling;
+        while lower < upper {
+            let middle = lower + (upper - lower) / 2;
+            if decodes(middle) {
+                upper = middle;
+            } else {
+                lower = middle + 1;
+            }
+        }
+        assert!(decodes(lower));
+        if lower != 0 {
+            assert!(!decodes(lower - 1));
+        }
+        lower
     }
 
     fn signed_transaction(pending: &ProofOutcomePendingDeliveryV1, seed: u8) -> SignedTransaction {
@@ -2067,6 +1799,43 @@ mod tests {
         assert_eq!(retry.attempts, 1);
         assert_eq!(retry.signed_transaction.as_ref(), Some(&transaction));
         assert_eq!(outbox.begin_submission(operation).unwrap(), transaction);
+    }
+
+    #[test]
+    fn pending_after_advances_and_wraps_without_repeating_a_page_entry() {
+        let outbox = ProofOutcomeOutbox::in_memory(policy()).unwrap();
+        for request_id in 1..=5 {
+            outbox
+                .enqueue_potr(
+                    &signed_receipt_with_request_id([request_id; 16]),
+                    [request_id.saturating_add(16); 32],
+                )
+                .unwrap();
+        }
+
+        let first = outbox.pending_after(None, 3).unwrap();
+        assert_eq!(
+            first.iter().map(|entry| entry.sequence).collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
+        let second = outbox
+            .pending_after(first.last().map(|entry| entry.sequence), 3)
+            .unwrap();
+        assert_eq!(
+            second
+                .iter()
+                .map(|entry| entry.sequence)
+                .collect::<Vec<_>>(),
+            vec![4, 5, 1]
+        );
+        assert_eq!(
+            second
+                .iter()
+                .map(|entry| entry.operation_id)
+                .collect::<BTreeSet<_>>()
+                .len(),
+            second.len()
+        );
     }
 
     #[test]
@@ -2255,11 +2024,47 @@ mod tests {
         }
         let checkpoint = outbox.state.lock().unwrap().checkpoint.clone();
         let bytes = norito::to_bytes(&checkpoint).unwrap();
-        let decoded: ProofOutcomeOutboxCheckpointV1 = norito::decode_from_bytes_with_limits(
-            &bytes,
-            checkpoint_decode_limits(bytes.len()).unwrap(),
-        )
-        .expect("maximum bounded PDP/PoTR checkpoint must fit its decode budget");
+        norito::core::from_bytes_view(&bytes)
+            .expect("maximum-valid checkpoint must pass zero-copy canonical preflight");
+        let minimum_allocation = minimum_checkpoint_allocation_budget(&bytes);
+        let proportional_allocation = bytes
+            .len()
+            .checked_mul(CHECKPOINT_ALLOCATION_AMPLIFICATION_LIMIT)
+            .unwrap();
+        let fixed_requirement = minimum_allocation.saturating_sub(proportional_allocation);
+        const MARGIN_QUANTUM: usize = 64 * 1024;
+        let rounded_requirement = fixed_requirement
+            .checked_div(MARGIN_QUANTUM)
+            .and_then(|quanta| quanta.checked_add(1))
+            .and_then(|quanta| quanta.checked_mul(MARGIN_QUANTUM))
+            .unwrap();
+        let maximum_defensible_fixed = rounded_requirement.checked_add(MARGIN_QUANTUM).unwrap();
+        let production_limits = checkpoint_decode_limits(bytes.len()).unwrap();
+        eprintln!(
+            "checkpoint wire={} minimum_allocation={} proportional={} fixed_requirement={} \
+             rounded_requirement={} production_fixed={}",
+            bytes.len(),
+            minimum_allocation,
+            proportional_allocation,
+            fixed_requirement,
+            rounded_requirement,
+            CHECKPOINT_ALLOCATION_FIXED_OVERHEAD_BYTES,
+        );
+        assert!(
+            production_limits.max_total_allocated_bytes() >= minimum_allocation,
+            "production allocation budget must cover the measured maximum-valid checkpoint"
+        );
+        assert!(
+            CHECKPOINT_ALLOCATION_FIXED_OVERHEAD_BYTES >= rounded_requirement,
+            "fixed allowance must reach the first 64 KiB boundary above the measured requirement"
+        );
+        assert!(
+            CHECKPOINT_ALLOCATION_FIXED_OVERHEAD_BYTES <= maximum_defensible_fixed,
+            "fixed allowance must stay within one 64 KiB safety margin of the rounded requirement"
+        );
+        let decoded: ProofOutcomeOutboxCheckpointV1 =
+            norito::decode_from_bytes_with_limits(&bytes, production_limits)
+                .expect("maximum bounded PDP/PoTR checkpoint must fit its decode budget");
         assert_eq!(decoded, checkpoint);
         let exact_policy = ProofOutcomeOutboxPolicyV1 {
             checkpoint_max_bytes: u64::try_from(bytes.len()).unwrap(),
@@ -2320,11 +2125,8 @@ mod tests {
             "fixture must amplify beyond the production allocation budget"
         );
         assert!(
-            norito::decode_from_bytes_with_limits::<ProofOutcomeOutboxCheckpointV1>(
-                &compressed,
-                checkpoint_decode_limits(compressed.len()).unwrap(),
-            )
-            .is_err()
+            norito::core::from_bytes_view(&compressed).is_err(),
+            "zero-copy preflight must reject compressed checkpoint archives"
         );
 
         let dir = TempDir::new().unwrap();
@@ -2545,7 +2347,7 @@ mod tests {
         let dot_alias = dir.path().join(".").join(CHECKPOINT_LOCK_FILE_NAME);
         assert!(matches!(
             CheckpointWriterGuard::acquire(&dot_alias),
-            Err(ProofOutcomeOutboxError::CheckpointBusy)
+            Err(CheckpointStoreError::Busy)
         ));
         drop(held);
 
@@ -2554,7 +2356,7 @@ mod tests {
         std::fs::hard_link(&lock_path, &hardlink).unwrap();
         assert!(matches!(
             CheckpointWriterGuard::acquire(&hardlink),
-            Err(ProofOutcomeOutboxError::CheckpointIo)
+            Err(CheckpointStoreError::Io)
         ));
     }
 }

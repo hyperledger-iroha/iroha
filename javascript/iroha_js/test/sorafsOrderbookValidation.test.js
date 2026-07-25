@@ -29,6 +29,26 @@ const RUNTIME_SNAPSHOT_FIXTURE = new URL(
   "../../../fixtures/sorafs_manifest/orderbook/runtime_snapshot_v1.to",
   import.meta.url,
 );
+const ORDER_REQUEST_OUTCOME_FIXTURE = new URL(
+  "../../../fixtures/sorafs_manifest/orderbook/order_request_validation_outcome_v1.json",
+  import.meta.url,
+);
+const ORDER_REQUEST_BAD_SIGNATURE_FIXTURE = new URL(
+  "../../../fixtures/sorafs_manifest/orderbook/negative/order_request_bad_signature_v1.to",
+  import.meta.url,
+);
+const ORDER_REQUEST_BAD_SIGNATURE_OUTCOME_FIXTURE = new URL(
+  "../../../fixtures/sorafs_manifest/orderbook/negative/order_request_bad_signature_validation_outcome_v1.json",
+  import.meta.url,
+);
+const ORDER_REQUEST_TRAILING_BYTES_FIXTURE = new URL(
+  "../../../fixtures/sorafs_manifest/orderbook/negative/order_request_trailing_bytes_v1.to",
+  import.meta.url,
+);
+const ORDER_REQUEST_TRAILING_BYTES_OUTCOME_FIXTURE = new URL(
+  "../../../fixtures/sorafs_manifest/orderbook/negative/order_request_trailing_bytes_validation_outcome_v1.json",
+  import.meta.url,
+);
 const ORDERBOOK_PRIVATE_KEY = Buffer.alloc(32, 0xb7);
 const ORDERBOOK_OWNER_ACCOUNT = Buffer.from("merchant@paynet", "utf8");
 const MAX_SCALED_XOR =
@@ -38,25 +58,46 @@ function fixed32(byte) {
   return Buffer.alloc(32, byte);
 }
 
+function canonicalOutcomeJson(outcome) {
+  return `${JSON.stringify(outcome, null, 2)}\n`;
+}
+
 test("validateOrderbookPayload accepts canonical order request fixture", () => {
   const outcome = validateOrderbookPayload(
     "order",
     readFileSync(ORDER_REQUEST_FIXTURE),
     {
-      label: "fixtures/sorafs_manifest/orderbook/order_request_v1.to",
-      generatedAtUnix: 1_700_000_123,
+      label: "order_request_v1.to",
+      generatedAtUnix: 123,
     },
   );
 
-  assert.equal(outcome.status, "Ok");
-  assert.equal(outcome.code, "SFS-OK-000");
-  assert.equal(outcome.category, "validation");
-  assert.equal(outcome.generated_at, 1_700_000_123);
-  assert.equal(outcome.inputs[0]?.kind, "orderbook_order_request");
   assert.equal(
-    outcome.inputs[0]?.path,
-    "fixtures/sorafs_manifest/orderbook/order_request_v1.to",
+    canonicalOutcomeJson(outcome),
+    readFileSync(ORDER_REQUEST_OUTCOME_FIXTURE, "utf8"),
   );
+});
+
+test("validateOrderbookPayload matches signature and noncanonical outcome fixtures", () => {
+  for (const [payload, label, expected] of [
+    [
+      ORDER_REQUEST_BAD_SIGNATURE_FIXTURE,
+      "order_request_bad_signature_v1.to",
+      ORDER_REQUEST_BAD_SIGNATURE_OUTCOME_FIXTURE,
+    ],
+    [
+      ORDER_REQUEST_TRAILING_BYTES_FIXTURE,
+      "order_request_trailing_bytes_v1.to",
+      ORDER_REQUEST_TRAILING_BYTES_OUTCOME_FIXTURE,
+    ],
+  ]) {
+    const outcome = validateOrderbookPayload(
+      SORAFS_ORDERBOOK_PAYLOAD_KINDS.ORDER_REQUEST,
+      readFileSync(payload),
+      { label, generatedAtUnix: 123 },
+    );
+    assert.equal(canonicalOutcomeJson(outcome), readFileSync(expected, "utf8"));
+  }
 });
 
 test("validateOrderbookPayload accepts runtime snapshot fixture", () => {

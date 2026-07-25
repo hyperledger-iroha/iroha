@@ -590,6 +590,7 @@ fn evidence_control(id: &str, mutations: Vec<Value>) -> Value {
 fn negative_controls() -> Vec<Value> {
     let receipt = "/golden/receipt_group/native_amx_receipts";
     let first = format!("{receipt}/0");
+    let second = format!("{receipt}/1");
     let first_leg = format!("{first}/legs/0");
     let prepare = format!("{first_leg}/prepare_qc");
     let commit = format!("{first_leg}/commit_qc");
@@ -654,6 +655,37 @@ fn negative_controls() -> Vec<Value> {
                 Some(norito::json!({"left": 0, "right": 1})),
             ),
         ),
+        controls(
+            "coherent_unordered_validator_set",
+            "receipt_group",
+            vec![
+                mutation(
+                    "swap",
+                    &format!("{prepare}/validator_set"),
+                    Some(norito::json!({"left": 0, "right": 1})),
+                ),
+                mutation(
+                    "swap",
+                    &format!("{prepare}/validator_set_pops"),
+                    Some(norito::json!({"left": 0, "right": 1})),
+                ),
+                mutation(
+                    "swap",
+                    &format!("{commit}/validator_set"),
+                    Some(norito::json!({"left": 0, "right": 1})),
+                ),
+                mutation(
+                    "swap",
+                    &format!("{commit}/validator_set_pops"),
+                    Some(norito::json!({"left": 0, "right": 1})),
+                ),
+                mutation(
+                    "swap",
+                    &format!("{same_route_descriptor}/validator_set"),
+                    Some(norito::json!({"left": 0, "right": 1})),
+                ),
+            ],
+        ),
         control(
             "under_quorum_bitmap",
             mutation(
@@ -678,12 +710,64 @@ fn negative_controls() -> Vec<Value> {
                 Some(norito::json!(vec![0x5A_u64; BLS_PROOF_BYTES - 1])),
             ),
         ),
+        controls(
+            "zero_pop",
+            "receipt_group",
+            vec![
+                mutation(
+                    "replace",
+                    &format!("{prepare}/validator_set_pops/0/0"),
+                    Some(norito::json!(0)),
+                ),
+                mutation(
+                    "repeat",
+                    &format!("{prepare}/validator_set_pops/0"),
+                    Some(norito::json!({
+                        "source_index": 0,
+                        "count": (BLS_PROOF_BYTES)
+                    })),
+                ),
+            ],
+        ),
+        control(
+            "long_pop",
+            mutation(
+                "repeat",
+                &format!("{prepare}/validator_set_pops/0"),
+                Some(norito::json!({
+                    "source_index": 0,
+                    "count": (BLS_PROOF_BYTES + 1)
+                })),
+            ),
+        ),
         control(
             "short_aggregate_signature",
             mutation(
                 "replace",
                 &format!("{prepare}/bls_aggregate_signature"),
                 Some(norito::json!(vec![0x5A_u64; BLS_PROOF_BYTES - 1])),
+            ),
+        ),
+        control(
+            "zero_aggregate_signature",
+            mutation(
+                "repeat",
+                &format!("{prepare}/bls_aggregate_signature"),
+                Some(norito::json!({
+                    "source_index": 71,
+                    "count": (BLS_PROOF_BYTES)
+                })),
+            ),
+        ),
+        control(
+            "long_aggregate_signature",
+            mutation(
+                "repeat",
+                &format!("{prepare}/bls_aggregate_signature"),
+                Some(norito::json!({
+                    "source_index": 0,
+                    "count": (BLS_PROOF_BYTES + 1)
+                })),
             ),
         ),
         control(
@@ -791,6 +875,55 @@ fn negative_controls() -> Vec<Value> {
             ),
         ),
         control(
+            "outer_group_source_reorder",
+            mutation(
+                "swap",
+                receipt,
+                Some(norito::json!({"left": 0, "right": 1})),
+            ),
+        ),
+        controls(
+            "outer_group_source_substitution",
+            "receipt_group",
+            vec![
+                mutation(
+                    "replace",
+                    &format!("{second}/source_id"),
+                    Some(norito::json!(
+                        "EFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEF"
+                    )),
+                ),
+                mutation(
+                    "replace",
+                    &format!("{second}/legs/0/prepare_qc/body/source_id"),
+                    Some(norito::json!(
+                        "EFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEF"
+                    )),
+                ),
+                mutation(
+                    "replace",
+                    &format!("{second}/legs/0/commit_qc/body/source_id"),
+                    Some(norito::json!(
+                        "EFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEF"
+                    )),
+                ),
+                mutation(
+                    "replace",
+                    &format!("{second}/legs/1/prepare_qc/body/source_id"),
+                    Some(norito::json!(
+                        "EFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEF"
+                    )),
+                ),
+                mutation(
+                    "replace",
+                    &format!("{second}/legs/1/commit_qc/body/source_id"),
+                    Some(norito::json!(
+                        "EFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEF"
+                    )),
+                ),
+            ],
+        ),
+        control(
             "unsupported_receipt_version",
             mutation(
                 "replace",
@@ -807,6 +940,83 @@ fn negative_controls() -> Vec<Value> {
                     "abababababababababababababababababababababababababababababababab"
                 )),
             ),
+        ),
+        controls(
+            "source_id_substituted_for_entrypoint_hash",
+            "receipt_group",
+            vec![
+                mutation(
+                    "copy",
+                    &format!("{prepare}/body/tx_entrypoint_hash"),
+                    Some(norito::json!({"from": (format!("{first}/source_id"))})),
+                ),
+                mutation(
+                    "copy",
+                    &format!("{commit}/body/tx_entrypoint_hash"),
+                    Some(norito::json!({"from": (format!("{first}/source_id"))})),
+                ),
+            ],
+        ),
+        controls(
+            "entrypoint_hash_substituted_for_source_id",
+            "receipt_group",
+            vec![
+                mutation(
+                    "copy",
+                    &format!("{first}/source_id"),
+                    Some(norito::json!({"from": (format!("{prepare}/body/tx_entrypoint_hash"))})),
+                ),
+                mutation(
+                    "copy",
+                    &format!("{prepare}/body/source_id"),
+                    Some(norito::json!({"from": (format!("{prepare}/body/tx_entrypoint_hash"))})),
+                ),
+                mutation(
+                    "copy",
+                    &format!("{commit}/body/source_id"),
+                    Some(norito::json!({"from": (format!("{prepare}/body/tx_entrypoint_hash"))})),
+                ),
+            ],
+        ),
+        controls(
+            "wrong_entrypoint_hash_checksum",
+            "receipt_group",
+            vec![
+                mutation(
+                    "replace",
+                    &format!("{prepare}/body/tx_entrypoint_hash"),
+                    Some(norito::json!(
+                        "hash:1111111111111111111111111111111111111111111111111111111111111111#0000"
+                    )),
+                ),
+                mutation(
+                    "replace",
+                    &format!("{commit}/body/tx_entrypoint_hash"),
+                    Some(norito::json!(
+                        "hash:1111111111111111111111111111111111111111111111111111111111111111#0000"
+                    )),
+                ),
+            ],
+        ),
+        controls(
+            "wrong_entrypoint_hash_marker",
+            "receipt_group",
+            vec![
+                mutation(
+                    "replace",
+                    &format!("{prepare}/body/tx_entrypoint_hash"),
+                    Some(norito::json!(
+                        "hash:E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2#4F70"
+                    )),
+                ),
+                mutation(
+                    "replace",
+                    &format!("{commit}/body/tx_entrypoint_hash"),
+                    Some(norito::json!(
+                        "hash:E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2#4F70"
+                    )),
+                ),
+            ],
         ),
         controls(
             "stale_same_route_incarnation",

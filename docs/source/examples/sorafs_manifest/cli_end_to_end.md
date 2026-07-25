@@ -36,7 +36,8 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- docs/book \
 The command:
 
 - Streams the payload through `ChunkProfile::DEFAULT`.
-- Emits a CARv2 archive plus chunk-fetch plan.
+- Emits a CARv2 archive plus the strict `sorafs.chunk_fetch_plan.v1` object,
+  binding the ordered chunk ranges to the complete-payload BLAKE3 digest.
 - Builds a `ManifestV1` record, verifies manifest signatures (if provided), and
   writes the envelope.
 - Enforces expectation flags so the run fails if bytes drift.
@@ -100,5 +101,5 @@ captured in the migration ledger entry for auditability.
 ## Cleanup
 
 Artifacts under `target/sorafs/` can be archived or uploaded to staging nodes.
-Keep the manifest, signatures, CAR, and fetch plan together so downstream
+Keep the manifest, signatures, CAR, and payload-bound fetch plan together so downstream
 operators and SDK teams can validate the deployment deterministically.

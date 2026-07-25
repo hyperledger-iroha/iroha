@@ -833,6 +833,9 @@ object NativeAmxV2 {
                     require(it.size == BLS_PROOF_BYTES) {
                         "$path.validator_set_pops[$index] must contain $BLS_PROOF_BYTES bytes"
                     }
+                    require((0 until it.size).any { offset -> it.unsignedByte(offset) != 0 }) {
+                        "$path.validator_set_pops[$index] must not be all zeroes"
+                    }
                 }
             }
         require(pops.size == validators.size) {
@@ -862,6 +865,9 @@ object NativeAmxV2 {
         )
         require(signature.size == BLS_PROOF_BYTES) {
             "$path.bls_aggregate_signature must contain $BLS_PROOF_BYTES bytes"
+        }
+        require((0 until signature.size).any { signature.unsignedByte(it) != 0 }) {
+            "$path.bls_aggregate_signature must not be all zeroes"
         }
         return AttestationQc(
             body,

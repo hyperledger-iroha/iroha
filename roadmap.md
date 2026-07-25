@@ -19,9 +19,9 @@ classified outside the multilane closure ledger.
 
 The remaining work is evidence-driven and must stay in order:
 
-- Finish `G-UNIT` with a fresh archived run of all 113 source-bound focused
-  tests (54 core multilane tests, 35 core queue-journal tests, seven
-  `iroha_data_model` tests, 15 Torii tests, and two integration-support-library
+- Finish `G-UNIT` with a fresh archived run of all 123 source-bound focused
+  tests (54 core multilane tests, 38 core queue-journal tests, seven
+  `iroha_data_model` tests, 22 Torii tests, and two integration-support-library
   tests), then complete and archive the exact Rust-owned 34-control corpus
   replay across OpenAPI, both Python
   surfaces, JavaScript source/distribution, Swift, Kotlin, and Java for
@@ -37,7 +37,7 @@ The remaining work is evidence-driven and must stay in order:
   formatting, SDK, formal, and legacy-codec gates for `G-FINAL`.
 
 Fresh bounded formal support is available for source manifest
-`182a281fc46ed6d99dc010f444707dfcfaf3aae3cfe9f4b7a71d1b1090e690b9`:
+`af1361d00f08bbf340c57e6b4992c0a8166a7e9e67f9f4c5771827ce5c69e7a6`:
 direct TLC positives, all 27 named mutations, and all three Apalache v0.52.2
 bounds passed after installing the checksum-pinned TLAPM standard library.
 `G-FORMAL` remains open until a clean aggregate release receipt archives the
@@ -54,11 +54,20 @@ no trusted foundational envelope. Promotion requires one reviewed production
 deployment, all 17 fresh lane summaries, the ordered nine-prerequisite signed
 envelope, deterministic aggregate replay, and retained rollback capability.
 SF-8b repair is also an active implementation blocker, not an evidence-only
-lane: `FileRepairStore` and the local repair event surface still act as the
-authority used by PDP, PoR, and PoTR failure handoff. Those four lanes remain
-open until task, lease, terminal outcome, slash, and appeal state are committed
-on-chain and every service reconciles finalized repair queries instead of
-mutating the local store.
+lane. PDP, PoR, and PoTR production failure handoff now uses the exact-chain
+durable native transaction forwarder, and storage work is gated by the
+finalized native task cursor, revision, lease owner, generation, and expiry.
+Active local-authority debt remains release-blocking in all four ledger-backed
+domains. The `sorafs_node` local orderbook and reserve runtimes, the public
+`RepairManager` plus its checkpoint/event projections, and the process-local
+moderation ballot/scheduler state must be removed from production paths in
+favor of signed native transactions and rebuildable finalized-chain
+projections. Repair GC and reconciliation still consume the local manager
+today; the repair lane cannot close until those consumers are cut over and
+four-peer evidence shows one terminal outcome across restarts and duplicate
+submissions. The orderbook, reserve/rent, and moderation lanes remain open
+until their corresponding authority removals and distributed recovery proofs
+are complete.
 Taira and Minamoto mutation remains separately authorized cutover work.
 
 ## Memory-containment follow-ups
@@ -1214,8 +1223,9 @@ excluded from the first release.
   RAM-LFE receipts/openings, Core/Torii Soracloud provenance signatures, Torii
   app-auth single-signature/witness payloads, Torii Offline V1/V2 JSON
   signatures, Torii DA receipt operator signatures, Torii DA Taikai SSM
-  publisher signatures, Torii signed query requests, Torii SoraFS repair-worker
-  signatures, SoraFS orchestrator Taikai cache-admission envelope/gossip
+  publisher signatures, Torii signed query requests, caller-signed Torii
+  SoraFS repair command transactions, SoraFS orchestrator Taikai
+  cache-admission envelope/gossip
   signatures, Core oracle observation signatures, SoraDNS directory-builder
   signatures, runtime-upgrade provenance signatures, Offline note key-certificate
   issuer signatures, Core snapshot ML-DSA signature sidecars, Core
@@ -1226,7 +1236,7 @@ excluded from the first release.
   verification, governance-policy verification, moderation summary acceptance,
   transport accounting, provenance-payload, app-auth wrapping/validation,
   offline JSON, DA receipt, Taikai signing-manifest, query-payload,
-  repair-worker-payload, cache-admission payload, observation-payload,
+  repair-transaction payload, cache-admission payload, observation-payload,
   directory-record, runtime-upgrade-provenance, offline-certificate,
   attestation-hash, consensus-preimage, or trust-book mutation,
   ML-DSA public-key recovery from a typed secret rejects all-zero secret-key
@@ -1347,7 +1357,7 @@ excluded from the first release.
   provenance tests now cover both malformed-`R` encodings from valid
   signatures, Torii DA receipt-log,
   transaction-batch deterministic precheck, signed-query routing, Soracloud
-  provenance, and repair-worker authentication
+  provenance, and repair command transaction admission
   tests pin the same pre-backend admission boundary, Connect bridge native and
   Java detached verification plus `_with_alg` envelope/control encoders and
   algorithm-explicit identifier receipt signed attestations now pin both
@@ -1375,8 +1385,8 @@ excluded from the first release.
 			  plus noncanonical, all-zero, or small-order public-key encodings with
 			  distinct diagnostics, provider-advert CLI verification pins the same
 					  malformed-`R` boundary, PoTR receipt validation routes Ed25519 receipt
-					  signatures, provider-admission council signatures, and repair signed-auditor
-					  signatures through the same malformed-`R` preflight, gateway GAR compact-JWS
+						  signatures and provider-admission council signatures through the same
+						  malformed-`R` preflight, gateway GAR compact-JWS
 					  signatures use the same preflight, alias-proof council signatures reject
 					  inert all-zero payloads and malformed `R` encodings before bundle
 					  verification, alias-proof council fixture signatures use checked
@@ -1533,8 +1543,8 @@ excluded from the first release.
   admission before assertion verification,
   the shared SoraFS manifest Ed25519 signature helper routes raw signature
   material through the central malformed-`R` parser, and the shared SoraFS
-  orderbook, provider-admission, alias-proof, gateway GAR, PoTR receipt, and
-  repair auditor verifiers now wrap Ed25519 signature material through that
+  orderbook, provider-admission, alias-proof, gateway GAR, and PoTR receipt
+  verifiers now wrap Ed25519 signature material through that
   parser before backend verification,
   Governance DAG publisher signatures pin the same malformed-`R` rejection
   before governance node verification,
@@ -1568,9 +1578,9 @@ excluded from the first release.
 						  Torii's signed-query request verifier routes signer-resolved Ed25519
 						  material through malformed-`R` admission before authenticated query
 						  execution,
-						  Torii SoraFS repair-worker app API authorization signatures route
-						  signer-resolved Ed25519 material through malformed-`R` admission before
-						  worker action verification,
+							  Torii SoraFS repair command transactions route signer-resolved
+							  Ed25519 material through malformed-`R` admission before native
+							  instruction authorization,
 						  Torii durable DA receipt-log operator signatures route signer-resolved
 						  Ed25519 material through malformed-`R` admission before receipt payload
 					  verification,
@@ -4621,12 +4631,12 @@ excluded from the first release.
   OpenAPI-backed `/v1/sorafs/pin*` and `/v1/sorafs/storage/*` route surface,
   reject legacy unversioned `/sorafs/*` prototype endpoint names and the removed
   `sorafs-storage` feature-flag wording, keep node-storage readback routes on
-  the OpenAPI `{manifest_id}` parameter, align Torii's PoR sample
-  refusal/telemetry scope with `/v1/sorafs/storage/por-sample`, and carry a
-  rollout static contract that keeps those docs and route labels aligned with
-  the OpenAPI route strings. The grouped Torii SoraFS storage tests now
-  canonicalize temporary storage roots before exercising the backend, preserving
-  the production no-symlink parent-chain guard while keeping the
+  the OpenAPI `{manifest_id}` parameter, retire the unauthenticated local PoR
+  sampling route in favor of authenticated `/v1/sorafs/proof/stream`, and
+  carry a rollout static contract that keeps those docs and route labels
+  aligned with the OpenAPI route strings. The grouped Torii SoraFS storage tests
+  now canonicalize temporary storage roots before exercising the backend,
+  preserving the production no-symlink parent-chain guard while keeping the
   storage-pin/fetch/PoR round-trip green on symlinked system temp roots.
 - Soracles provider statistics now expose deterministic inlier-share reputation
   scores in basis points plus clamped governance deltas for off-chain
@@ -4664,8 +4674,8 @@ excluded from the first release.
   `validate_governance_dag_head_chain_bytes`,
   `validate_signed_replication_order_bytes`,
   reusable provider-advert Ed25519 signature verification, signed
-  replication-order Ed25519 signature verification, signed auditor request
-  verification, and the `reference_ffi` C ABI facade returning
+  replication-order Ed25519 signature verification, and the `reference_ffi` C
+  ABI facade returning
   `ValidationOutcomeV1` Norito JSON buffers for signed replication-order,
   admission renewal/revocation, orderbook payload, PDP
   commitment/challenge/proof payload, and peer validators for SDK bindings.
@@ -4836,9 +4846,10 @@ excluded from the first release.
   next-work, proof-submission, status, and terminal-export routes are shipped
   locally, and embedded proof streaming admits `proof_kind=pdp` only for a
   supplied challenge id. That protocol-local completion does not close SF-13:
-  proof failures and governance handoff still converge on
-  `FileRepairStore`/local repair state. Production requires committed repair
-  task submission and finalized-query reconciliation, plus deployed
+  proof failures now use a fail-closed exact-chain durable native repair
+  transaction handoff and storage execution is gated by the exact finalized
+  lease. Production still requires removing residual local repair projections,
+  proving cross-peer exactly-once repair/finality reconciliation, deployed
   multi-provider signature/inclusion verification, Governance DAG archival,
   operator integration, and evidence that passes the gate. Static rollout
   guards must preserve the shipped authenticated provider routes while keeping
@@ -5046,10 +5057,11 @@ excluded from the first release.
   embedded storage are enabled, records scheduler challenge/forced/failure and
   duplicate-sample metrics through the existing telemetry handle, registers the
   PoR ingestion/scheduler metrics for Prometheus export, bounds PoR ingestion
-  provider status readback with total/returned counts, caps manual
-  `/v1/sorafs/storage/por-sample` requests to `count=1..500` before manifest
-  lookup while still capping returned samples by manifest leaves, and adds PoR
-  scheduler panels plus alert fixtures. The SF-9 rollout evidence gate now
+  provider status readback with total/returned counts, retires the local
+  unauthenticated PoR sampler, and bounds authenticated
+  `/v1/sorafs/proof/stream` PoR requests to `sample_count=1..500` before
+  finalized pin lookup and manifest sampling. It also adds PoR scheduler panels
+  plus alert fixtures. The SF-9 rollout evidence gate now
   validates payload-free randomness, scheduler runtime, validator replay,
   reporting/archive handoff, exact SQL/Parquet archive-backend selection,
   governance archive handoff digest evidence, scheduler-runtime and
@@ -5090,11 +5102,13 @@ excluded from the first release.
 	  with duplicate or malformed challenge inputs, duplicate or unknown route/metric
 	  inputs, missing `--route-body-blake3-hex` evidence, and missing or malformed
 	  `--governance-archive-handoff-digest-hex` evidence rejected before
-	  canary writes. The PoR coordinator, bounded local readback, and
-  status/export/report protocol are locally implemented, but failure handoff
-  still targets `FileRepairStore` rather than committed repair state. SF-9 is
-  therefore not evidence-only: it requires chain-authoritative repair task
-  submission and finalized reconciliation in addition to live
+  canary writes. The PoR coordinator, bounded local readback, and
+  status/export/report protocol are locally implemented; proof failures use a
+  fail-closed exact-chain durable native repair transaction handoff and
+  storage execution requires the exact finalized lease. SF-9 is therefore not
+  evidence-only: it still requires removal of residual local repair
+  projections and cross-peer exactly-once finality reconciliation in addition
+  to live
   drand/VRF/auditor run evidence and any operator-required governance archive
   handoff carried as
   `governance_archive_handoff_digest_hex` beside the deployment-specific
@@ -5187,10 +5201,11 @@ excluded from the first release.
   so validation, proof-stream, reputation, observability, and governance
   evidence all fail against detached probe/governance anchors before promotion.
   Local receipt capture, validation, and proof-stream replay are implemented,
-  but latency-breach repair creation still converges on
-  `FileRepairStore`/local repair state. SF-14 is not evidence-only: it requires
-  exactly-once committed repair task creation and finalized reconciliation,
-  live multi-provider receipt evidence, governed provider ML-DSA key
+  and latency breaches use a deterministic exactly-once native repair identity
+  through the durable transaction handoff. SF-14 is not evidence-only: it
+  still requires removal of residual local repair projections, cross-peer
+  finalized reconciliation, live multi-provider receipt evidence, governed
+  provider ML-DSA key
   distribution, reputation weighting evidence, and governance approval that
   passes this gate with receipt-validation artifacts
   bound to governance-approved `pq_key_roster_digest_hex` values and
@@ -5306,26 +5321,33 @@ excluded from the first release.
   replica floors/ceilings, retention ceilings, storage-class allowlists, and
   council-signature requirements into the shared validator, while
   `RegisterPinManifest` enforces the registry DTO subset before state or public
-  pin-fee side effects. Torii `POST /v1/sorafs/pin/register` now accepts
-  optional `manifest_b64` for full `ManifestV1` validation and requires it when
-  governance requires council signatures; the Rust client and `iroha app sorafs
-  pin register` request builders now include the exact manifest bytes. Torii
-  pin-register validation failures now return stable `sorafs_pin_*`
-  `AppQueryValidation` envelope codes for malformed request fields, manifest
-  payload decode failures, governance validation failures, and
-  digest/chunker/content-length/pin-policy mismatches. The Python, JavaScript,
-  C#, and Swift Torii clients now mirror the manifest payload field by accepting
-  base64 or raw manifest-byte aliases and failing closed on duplicate or
-  malformed payload aliases before request submission, and the SoraFS
-  pin-register SDK guard now pins those manifest payload surfaces across
-  JavaScript, Python, Swift, and C# while reading guard inputs and Swift source
-  probes through no-follow descriptors. The manifest-detail readback endpoint
-  `/v1/sorafs/pin/{digest}` now also accepts `limit` (default 50, max 500) for
-  embedded alias and replication-order arrays, emits full counts, returned
-  counts, and truncation flags, and keeps heavyweight manifest audits on the
-  paginated list endpoints. Focus future SF-4 submission work on rollout and
-  production evidence instead of reopening the completed SORAFS-215/SORAFS-216
-  validator wiring tasks.
+  pin-fee side effects. Torii `POST /v1/sorafs/pin/register` now requires
+  `manifest_payload`, the canonical padded-base64 encoding of the exact
+  canonical Norito `ManifestV1`; that payload is the sole source of the digest,
+  chunker, content length, pin policy, and fee inputs. The closed request rejects
+  the retired `manifest_b64`, duplicate summary, fee, and gas fields, bounds the
+  manifest and alias proof before and after decode, and requires canonical alias
+  and non-zero predecessor encodings. The Rust client and `iroha app sorafs pin
+  register` command accept only exact canonical manifest bytes. The Rust,
+  JavaScript, Python, C#, and Swift client builders all emit the same sole
+  `manifest_payload` wire field and fail closed on malformed or conflicting
+  local inputs before request submission. Torii
+  pin-register validation failures return stable `sorafs_pin_*`
+  `AppQueryValidation` envelope codes for malformed request fields, canonical
+  payload failures, and governed manifest validation failures. The SoraFS
+  pin-register SDK guard pins the Rust/Torii/OpenAPI contract plus the
+  JavaScript, Python, Swift, and C# surfaces, including adversarial negative
+  controls, while reading guard inputs and Swift source probes through
+  no-follow descriptors. The manifest-detail readback endpoint
+  `/v1/sorafs/pin/{digest_hex}` now returns exact native Norito JSON
+  `PinManifestFinalizedRecordV1`: one finalized cursor and the authoritative
+  `PinManifestRecord`, including PoR root, content length, and lifecycle status.
+  Its optional expected finalized height/hash must be supplied together, and a
+  stale anchor returns 409. The retired `limit`, attestation, embedded
+  alias/order arrays, counts, and truncation projection are absent; bounded
+  alias and replication audits use their dedicated list endpoints. Focus future
+  SF-4 submission work on rollout and production evidence instead of reopening
+  the completed SORAFS-215/SORAFS-216 validator wiring tasks.
 - SoraFS pricing docs now reflect the implemented egress accounting path:
   `RecordCapacityTelemetry.egress_bytes` is charged through
   `PricingScheduleRecord::egress_charge_bytes_nano`, recorded in the capacity
@@ -7394,24 +7416,21 @@ excluded from the first release.
   mirror is sufficient or selecting the optional RocksDB/IPLD backend.
   Prioritize signed service boundaries before adding public rollout evidence
   for those lanes.
-- SoraFS repair auditor submission wiring now accepts JSON or Norito
-  `SignedAuditorRequestV1` envelopes on the existing `/report` and `/slash`
-  endpoints, validates envelope version, non-zero nonce, auditor-account match,
-  payload kind, Ed25519 signature over the canonical signed payload, and signer
-  key binding to the canonical auditor account, then persists the highest
-  accepted nonce per canonical auditor account in the repair state snapshot and
-  rejects stale or replayed signed report/slash nonces before scheduler
-  mutation. Torii also applies config-backed per-auditor signed report/slash
-  rate limits through `sorafs.repair.auditor_rate_per_sec` and
-  `sorafs.repair.auditor_burst` after signed-envelope validation and before the
-  scheduler mutates state. Legacy raw `RepairReportV1`/`RepairSlashProposalV1`
-  bodies are rejected for both JSON and Norito submissions. Local repair task
-  transitions are now also wrapped in a process-local monotonic `RepairEvent` stream and
-  exposed through Torii JSON polling, SSE, and WebSocket routes under
-  `/v1/sorafs/audit/repair/events*`, with frame-shape coverage while preserving
-  the canonical `RepairTaskEventV1` and governance audit payloads; the
-  generated Torii OpenAPI document advertises the same cursorable event route
-  set. The SF-8b rollout evidence gate now validates payload-free auditor
+- SoraFS repair command wiring now accepts exactly one caller-signed Iroha
+  transaction on each `/v1/sorafs/audit/repair/*` command route, requires the
+  matching native `SubmitSorafsRepairTask`,
+  `ApplySorafsRepairTaskAction::{Escalate,Claim,Renew,Complete,Fail}`, or
+  `SubmitSorafsRepairAppeal` instruction, and forwards the exact transaction
+  through strict durable ingress. Native execution owns authority,
+  provider-scoped permission, revision, lease generation, terminal,
+  slash/appeal, and idempotency checks. Deleted
+  `SignedAuditorRequestV1`/`RepairWorkerSignaturePayloadV1` bodies and raw
+  report/proposal bodies are not compatibility formats. Status, task, and
+  typed payload-free event reads are finalized ledger projections with exact
+  block anchors and immutable exclusive cursors; the obsolete
+  status-by-manifest, SSE, WebSocket, and process-local event-authority routes
+  are absent from the generated OpenAPI source. The SF-8b rollout evidence gate
+  now validates payload-free auditor
   roster, PoR/PoTR failure capture, signed auditor API, worker lifecycle, repair
   event streams, governance handoff, observability, and governance approval
   evidence, requires signed auditor API, worker, event stream, governance
@@ -7465,10 +7484,14 @@ excluded from the first release.
   threshold, external-evidence, checker-backed evidence-contract, and
   command-step shapes before dry-run output or verifier execution.
   `scripts/build_sorafs_repair_canary.py`
-  builds payload-free auditor-roster, failure-capture, signed-auditor-API,
-  worker-lifecycle, event-stream, governance-handoff, observability, and
-  governance-approval canary artifacts through the same checker before rollout
-	  review, requiring complete failure-source, failure-event, route,
+	  builds payload-free auditor-roster, failure-capture, signed-auditor-API,
+	  worker-lifecycle, event-stream, governance-handoff, observability, and
+	  governance-approval canary artifacts through the same checker before rollout
+		  review. The builder encodes reviewed operator assertions but does not
+		  prove finalized task projection, exact-live-lease execution, durable
+		  forwarding, restart reconciliation, or a single terminal outcome;
+		  promotion requires genuine signed deployment artifacts. It requires
+		  complete failure-source, failure-event, route,
 	  lifecycle-status, handoff-target, and metric coverage plus
 	  duplicate or unknown failure-source, route, lifecycle-status,
 	  handoff-target, and metric rejection before writes,
@@ -7480,19 +7503,21 @@ excluded from the first release.
   derived from the reviewed failure-source inventory, derived status and
   handoff-target counts for
   reviewed lifecycle-status and handoff-target inventories, and latency threshold
-  facts before writing. Local repair routes, worker lifecycle handling, and
-  `FileRepairStore` persistence are protocol-local foundations, not production
-  authority. SF-8b first requires ledger-authoritative task identity, leases,
-  terminal outcomes, slash, and appeal state; finalized committed-event queries;
-  and transaction-submitting/reconciling workers with no independent local
-  mutation path. Live PoR/PoTR failure, repair, escalation, governance handoff,
-  deployed-auditor-roster, and coordinator evidence follows that cutover. The
+  facts before writing. Native repair task identity, leases, terminal outcomes,
+  slash/appeal state, signed-transaction ingress, and finalized committed-event
+  queries are implemented. SF-8b still requires removal of the residual public
+  `RepairManager`/filesystem checkpoint and GC/reconciliation dependencies,
+  plus proof that storage execution is gated by the exact finalized live lease
+  with one cross-peer terminal outcome. Live PoR/PoTR failure, repair,
+  escalation, governance handoff, deployed-auditor-roster, and coordinator
+  evidence follows that removal. The
   rollout-gate static contract now pins live operator-evidence capture,
   deployed auditor-roster, SF-9 coordinator runbook, production failure-capture,
   production handoff, and repair promotion routes or subcommands as unshipped
   with reusable matchers and segment-aware negative controls while preserving
-  the signed auditor report/slash endpoints, worker claim/heartbeat/complete/
-  fail endpoints, local status and event-stream routes, `iroha sorafs repair`,
+  the signed-transaction report/slash/appeal and worker
+  claim/heartbeat/complete/fail endpoints, finalized status/task/event routes,
+  `iroha sorafs repair`,
   `iroha sorafs gc`, `sorafs-validate repair`, local repair telemetry, the
   fail-closed SF-8b rollout evidence gate, and payload-free canary evidence
   labels. It also scans CLI sources for nested deployed-only `repair
@@ -12596,8 +12621,8 @@ excluded from the first release.
   provenance signatures; SoraFS Taikai cache admission envelopes and gossip
   wrappers now return `CacheAdmissionError::Signing` from `Signature::try_new`
   instead of unwinding on backend signing failures; the SoraFS fixture manifest
-  exporter, CLI domain-endorsement preparation, and SoraFS repair worker
-  claim/complete/fail payload signing now also propagate
+  exporter, CLI domain-endorsement preparation, and SoraFS repair
+  claim/complete/fail transaction signing now also propagate
   `Signature::try_new`/`SignatureOf::try_new` failures through command errors;
   data-model `BlockBuilder` now exposes `try_build_with_signature` so
   incremental block assembly can propagate `SignatureOf::try_from_hash`
@@ -12782,8 +12807,8 @@ excluded from the first release.
   Ed25519/secp256k1 key generation before draft/finalize regressions consume
   them;
   high-level `iroha` client multisig, account-read, Sumeragi mismatch,
-  operator-header, and SoraFS repair worker fixtures now use checked random key
-  generation plus checked repair-worker signatures before request/response
+  operator-header, and SoraFS repair transaction fixtures now use checked
+  random key generation plus checked transaction signatures before request/response
   regressions consume them;
   high-level `iroha` DA request-signing and rent-ledger account fixtures now use
   checked deterministic Ed25519 seed expansion before request digest and
@@ -13278,20 +13303,20 @@ excluded from the first release.
   `VpnUsageVoucherV1::try_sign`, with the filtered receipt suite covering
   WSV-grace success and wrong-key, tampered, malformed, replayed, and
   substituted receipt/voucher cases;
-  Torii SoraFS repair worker and discovery alias-proof fixtures now use
+  Torii SoraFS repair transaction and discovery alias-proof fixtures now use
   checked `SignatureOf::try_new` / `Signature::try_new`, with repair positive,
-  invalid-signature, fresh-alias, and expired-alias regressions rerun under
+  invalid-transaction-signature, fresh-alias, and expired-alias regressions rerun under
   `app_api`;
   Torii `lib.rs` routed-read escrow, push identity, EVM DA receipt signer,
-  RAM-LFE output-opening, and SoraFS repair-worker auth fixtures now use checked
+  RAM-LFE output-opening, and SoraFS repair transaction auth fixtures now use checked
   seed derivation and `SignatureOf::try_new`, with push, identifier, repair, and
   routed-read regressions rerun;
   Torii grouped core/Nexus/governance test fixtures now use checked
   `Signature::try_new` and `KeyPair::try_from_seed`, with portfolio filtering,
   bridge finality, Nexus disabled/enabled lanes, push rejection/success, and
   gated governance VRF ordering regressions rerun;
-  Torii routing overlong multisig selector, contract bundle, repair-worker
-  action, and account transaction filter fixtures now use checked seed and
+  Torii routing overlong multisig selector, contract bundle, repair native
+  action transaction, and account transaction filter fixtures now use checked seed and
   signature constructors before selector, receipt, repair, and filter
   regressions consume them;
   integration App API canonical request and DA/Taikai ingest fixtures now use
@@ -13525,11 +13550,7 @@ excluded from the first release.
   source-proof and submission-package regressions consume them; Soracloud
   canonical-request witness fixtures now use checked Ed25519 key generation and
   `Signature::try_new`, verifying the witness signature before Norito
-  roundtrip; SoraFS
-  CLI fallback manifest `/transaction`
-  submissions now use a checked `TransactionBuilder::try_sign` helper and
-  return contextual command errors before HTTP dispatch on backend signing
-  failure; genesis batch transaction construction now uses
+  roundtrip; genesis batch transaction construction now uses
   `TransactionBuilder::try_sign` and returns contextual genesis-build errors on
   backend signing failure; `iroha_genesis` build/sign, topology, PoP, parse,
   roundtrip, example, and default-genesis fixtures now use checked default and
@@ -14057,7 +14078,7 @@ excluded from the first release.
   prehash signatures, IVM Ed25519 raw public-key material for CPU, CUDA, Metal,
   Halo2, and VM opcode verification paths, and `sorafs_manifest`
   Ed25519 verifier public keys plus GAR, PoTR, alias-proof, provider-admission,
-  signed-auditor, orderbook,
+  orderbook,
   replication-order, provider-advert, POP credential/root/revocation-list,
   Ed25519 governance-log, and ML-DSA governance-log verifier paths, Torii SoraFS
   discovery advert-cache signatures, SoraFS proof-token frame signatures, Torii

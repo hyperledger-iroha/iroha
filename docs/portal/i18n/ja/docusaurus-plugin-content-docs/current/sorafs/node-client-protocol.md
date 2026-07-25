@@ -124,9 +124,12 @@ SF-6 マルチソース fetch が有効な場合（Rust CLI の `sorafs_fetch`�
 - `iroha app sorafs pin list|show`、`alias list`、`replication list` は pin-registry の
   REST エンドポイントをラップし、監査証拠のためにアテステーションブロック付きの
   生 Norito JSON を出力します。
-- `iroha app sorafs storage pin` と `torii /v1/sorafs/pin/register` は Norito または JSON
-  の manifest と、任意の alias proof/ successor を受け付けます。不正な proof は
-  `400`、古い proof は `Warning: 110` 付きで `503`、期限切れ proof は `412` を返します。
+- `torii /v1/sorafs/pin/register` は閉じた JSON V1 リクエストを受け付けます。
+  `manifest_payload` は canonical Norito `ManifestV1` バイトを正確に canonical
+  padded base64 化したものでなければなりません。Torii は digest、chunker、
+  content length、pin policy、fee input をデコード済み manifest のみから導出し、
+  廃止済みの重複 summary フィールドを拒否します。`alias` とゼロでない
+  `successor_of_hex` predecessor は引き続き任意です。
 - REST エンドポイント（`/v1/sorafs/pin`, `/v1/sorafs/aliases`,
   `/v1/sorafs/replication`）にはアテステーション構造が含まれ、クライアントは
   最新ブロックヘッダーに対してデータを検証してから操作できます。

@@ -31,8 +31,9 @@ use sorafs_car::{
     CarBuildPlan, CarChunk, CarStreamingWriter, CarVerificationReport, CarVerifier, CarWriteStats,
     ChunkFetchSpec, FilePlan, chunker_registry,
     fetch_plan::{
-        chunk_fetch_specs_from_json, expected_payload_digest_from_json,
-        expected_payload_len_from_json, parse_digest_hex,
+        MANIFEST_BUILDER_REPORT_SCHEMA_V1, TOOLKIT_PACK_REPORT_SCHEMA_V1,
+        chunk_fetch_plan_from_json, chunk_fetch_specs_from_embedded_array,
+        expected_payload_digest_from_json, expected_payload_len_from_json, parse_digest_hex,
     },
     gateway::{GatewayFetchConfig, GatewayFetchContext, GatewayFetchError, GatewayProviderInput},
     multi_fetch,
@@ -388,27 +389,68 @@ fn run() -> Result<(), String> {
         None
     };
 
-    let plan_json = if let Some(source) = plan_source {
-        load_json(&source)?
+    let (plan_json, mut chunk_specs, plan_payload_digest) = if let Some(source) = plan_source {
+        let plan_json = load_json(&source)?;
+        let parsed = chunk_fetch_plan_from_json(&plan_json)
+            .map_err(|err| format!("failed to parse canonical chunk fetch plan: {err}"))?;
+        (plan_json, parsed.chunk_fetch_specs, parsed.payload_digest)
     } else if let Some(report) = manifest_report.clone() {
-        report
+        let report_schema = report.get("schema").and_then(Value::as_str);
+        if report_schema != Some(MANIFEST_BUILDER_REPORT_SCHEMA_V1)
+            && report_schema != Some(TOOLKIT_PACK_REPORT_SCHEMA_V1)
+        {
+            return Err(
+                "manifest report must use a recognized canonical V1 report schema".to_string(),
+            );
+        }
+        let manifest_version = report
+            .get("manifest")
+            .and_then(Value::as_object)
+            .and_then(|manifest| manifest.get("version"))
+            .and_then(Value::as_u64);
+        if manifest_version != Some(1) {
+            return Err(
+                "manifest report must contain canonical `manifest.version = 1` before its embedded chunk specs can be used"
+                    .to_string(),
+            );
+        }
+        let embedded_specs = report.get("chunk_fetch_specs").ok_or_else(|| {
+            "canonical manifest report missing embedded `chunk_fetch_specs` field".to_string()
+        })?;
+        let chunk_specs = chunk_fetch_specs_from_embedded_array(embedded_specs)
+            .map_err(|err| format!("failed to parse embedded chunk fetch specs: {err}"))?;
+        if report.get("payload_digest_hex").is_none() {
+            return Err(
+                "canonical manifest report missing whole-payload `payload_digest_hex`".to_string(),
+            );
+        }
+        let payload_digest = expected_payload_digest_from_json(&report)
+            .map_err(|err| format!("failed to parse expected payload digest: {err}"))?
+            .ok_or_else(|| {
+                "canonical manifest report missing whole-payload `payload_digest_hex`".to_string()
+            })?;
+        if payload_digest == [0; 32] {
+            return Err(
+                "canonical manifest report whole-payload digest must not be all zeroes".to_string(),
+            );
+        }
+        (report, chunk_specs, payload_digest)
     } else {
         return Err(
-            "provide either --plan=<chunk_fetch_specs.json> or --manifest-report=<report.json>"
+            "provide either --plan=<sorafs.chunk_fetch_plan.v1.json> or --manifest-report=<canonical-v1-report.json>"
                 .to_string(),
         );
     };
 
-    if expect_payload_digest.is_none() {
-        expect_payload_digest = expected_payload_digest_from_json(&plan_json)
-            .map_err(|err| format!("failed to parse expected payload digest: {err}"))?;
-        if expect_payload_digest.is_none()
-            && let Some(report) = manifest_report.as_ref()
-        {
-            expect_payload_digest = expected_payload_digest_from_json(report)
-                .map_err(|err| format!("failed to parse expected payload digest: {err}"))?;
+    if let Some(expected) = expect_payload_digest {
+        if expected != plan_payload_digest {
+            return Err(
+                "`--expect-payload-digest` does not match the canonical plan whole-payload digest"
+                    .to_string(),
+            );
         }
     }
+    expect_payload_digest = Some(plan_payload_digest);
 
     if expect_payload_len.is_none() {
         expect_payload_len = expected_payload_len_from_json(&plan_json)
@@ -421,8 +463,6 @@ fn run() -> Result<(), String> {
         }
     }
 
-    let mut chunk_specs = chunk_fetch_specs_from_json(&plan_json)
-        .map_err(|err| format!("failed to parse chunk fetch specs: {err}"))?;
     if chunk_specs.is_empty() {
         return Err("chunk fetch plan contained no entries".into());
     }
@@ -480,7 +520,7 @@ fn run() -> Result<(), String> {
 
     let plan = CarBuildPlan {
         chunk_profile,
-        payload_digest: blake3::hash(&[]),
+        payload_digest: blake3::Hash::from_bytes(plan_payload_digest),
         content_length,
         chunks: chunk_specs
             .iter()
@@ -1020,7 +1060,7 @@ fn run() -> Result<(), String> {
 
 const USAGE: &str = concat!(
     "usage: sorafs-fetch \
-     --plan=chunk_fetch_specs.json|- \
+     --plan=chunk_fetch_plan.v1.json|- \
      --provider=name=/path/to/payload[#concurrency] \
      [--provider=name=/path/to/payload[#concurrency][@weight] ...] \
      [--gateway-provider=name=alias,provider-id=hex,gateway-key=hex,base-url=https://...,stream-token=base64 ...] \
@@ -2985,7 +3025,8 @@ mod tests {
     use ed25519_dalek::{PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH, Signer, SigningKey};
     use norito::to_bytes;
     use sorafs_car::{
-        CarWriter, compute_chunk_plan_digest_sha3,
+        CarWriter, compute_chunk_plan_digest_sha3, compute_por_root,
+        fetch_plan::chunk_fetch_plan_to_string,
         multi_fetch::{ChunkReceipt, FetchOutcome, FetchProvider, ProviderId, ProviderReport},
     };
     use sorafs_manifest::{
@@ -3004,6 +3045,14 @@ mod tests {
         let temp = tempdir().expect("tempdir");
         let path = temp.path().canonicalize().expect("canonical tempdir");
         (temp, path)
+    }
+
+    fn write_canonical_plan(path: &Path, plan: &CarBuildPlan) {
+        fs::write(
+            path,
+            chunk_fetch_plan_to_string(plan).expect("render canonical plan"),
+        )
+        .expect("write canonical plan");
     }
 
     fn xor_micro(value: u128) -> XorQuantity {
@@ -4059,24 +4108,8 @@ mod tests {
 
         let plan =
             CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
-        let fetch_specs = plan.chunk_fetch_specs();
-        let fetch_array: Vec<Value> = fetch_specs
-            .iter()
-            .map(|spec| {
-                let mut obj = norito::json::Map::new();
-                obj.insert("chunk_index".into(), Value::from(spec.chunk_index as u64));
-                obj.insert("offset".into(), Value::from(spec.offset));
-                obj.insert("length".into(), Value::from(spec.length as u64));
-                obj.insert("digest_blake3".into(), Value::from(to_hex(&spec.digest)));
-                Value::Object(obj)
-            })
-            .collect();
         let plan_path = temp_path.join("plan.json");
-        fs::write(
-            &plan_path,
-            (to_string_pretty(&Value::Array(fetch_array)).expect("json") + "\n").as_bytes(),
-        )
-        .expect("write plan");
+        write_canonical_plan(&plan_path, &plan);
 
         let advert_path = temp_path.join("provider.advert");
         let descriptor = chunker_registry::default_descriptor();
@@ -4257,24 +4290,8 @@ mod tests {
 
         let plan =
             CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
-        let fetch_specs = plan.chunk_fetch_specs();
-        let fetch_array: Vec<Value> = fetch_specs
-            .iter()
-            .map(|spec| {
-                let mut obj = norito::json::Map::new();
-                obj.insert("chunk_index".into(), Value::from(spec.chunk_index as u64));
-                obj.insert("offset".into(), Value::from(spec.offset));
-                obj.insert("length".into(), Value::from(spec.length as u64));
-                obj.insert("digest_blake3".into(), Value::from(to_hex(&spec.digest)));
-                Value::Object(obj)
-            })
-            .collect();
         let plan_path = temp_path.join("plan.json");
-        fs::write(
-            &plan_path,
-            (to_string_pretty(&Value::Array(fetch_array)).expect("json") + "\n").as_bytes(),
-        )
-        .expect("write plan");
+        write_canonical_plan(&plan_path, &plan);
 
         let advert_path = temp_path.join("provider.advert");
         let descriptor = chunker_registry::default_descriptor();
@@ -4400,24 +4417,8 @@ mod tests {
 
         let plan =
             CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
-        let fetch_specs = plan.chunk_fetch_specs();
-        let fetch_array: Vec<Value> = fetch_specs
-            .iter()
-            .map(|spec| {
-                let mut obj = norito::json::Map::new();
-                obj.insert("chunk_index".into(), Value::from(spec.chunk_index as u64));
-                obj.insert("offset".into(), Value::from(spec.offset));
-                obj.insert("length".into(), Value::from(spec.length as u64));
-                obj.insert("digest_blake3".into(), Value::from(to_hex(&spec.digest)));
-                Value::Object(obj)
-            })
-            .collect();
         let plan_path = temp_path.join("plan.json");
-        fs::write(
-            &plan_path,
-            (to_string_pretty(&Value::Array(fetch_array)).expect("json") + "\n").as_bytes(),
-        )
-        .expect("write plan");
+        write_canonical_plan(&plan_path, &plan);
 
         let descriptor = chunker_registry::default_descriptor();
         let profile_handle = format!(
@@ -4579,24 +4580,8 @@ mod tests {
         let payload = write_payload(&payload_path, 4 * 1024);
         let plan =
             CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
-        let fetch_specs = plan.chunk_fetch_specs();
-        let fetch_array: Vec<Value> = fetch_specs
-            .iter()
-            .map(|spec| {
-                let mut obj = norito::json::Map::new();
-                obj.insert("chunk_index".into(), Value::from(spec.chunk_index as u64));
-                obj.insert("offset".into(), Value::from(spec.offset));
-                obj.insert("length".into(), Value::from(spec.length as u64));
-                obj.insert("digest_blake3".into(), Value::from(to_hex(&spec.digest)));
-                Value::Object(obj)
-            })
-            .collect();
         let plan_path = temp_path.join("plan.json");
-        fs::write(
-            &plan_path,
-            (to_string_pretty(&Value::Array(fetch_array)).expect("json") + "\n").as_bytes(),
-        )
-        .expect("write plan");
+        write_canonical_plan(&plan_path, &plan);
 
         let descriptor = chunker_registry::default_descriptor();
         let profile_handle = format!(
@@ -4690,6 +4675,7 @@ mod tests {
             .dag_codec(DagCodecId(stats.dag_codec))
             .chunking_from_profile(plan.chunk_profile, chunker_registry::DEFAULT_MULTIHASH_CODE)
             .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
+            .por_root(compute_por_root(&payload, &plan).expect("derive canonical fixture PoR root"))
             .content_length(plan.content_length)
             .car_digest(car_digest)
             .car_size(stats.car_size)
@@ -4706,6 +4692,7 @@ mod tests {
         let manifest_hex = to_hex(&manifest_bytes);
 
         let mut manifest_obj = Map::new();
+        manifest_obj.insert("version".into(), Value::from(1_u64));
         manifest_obj.insert("manifest_hex".into(), Value::from(manifest_hex));
         manifest_obj.insert(
             "car_digest_hex".into(),
@@ -4714,6 +4701,10 @@ mod tests {
         manifest_obj.insert("car_size".into(), Value::from(stats.car_size));
 
         let mut report_obj = Map::new();
+        report_obj.insert(
+            "schema".into(),
+            Value::from(MANIFEST_BUILDER_REPORT_SCHEMA_V1),
+        );
         report_obj.insert("chunk_fetch_specs".into(), Value::Array(fetch_array));
         report_obj.insert(
             "payload_digest_hex".into(),
@@ -4792,6 +4783,7 @@ mod tests {
             .dag_codec(DagCodecId(stats.dag_codec))
             .chunking_from_profile(plan.chunk_profile, chunker_registry::DEFAULT_MULTIHASH_CODE)
             .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
+            .por_root(compute_por_root(&payload, &plan).expect("derive canonical fixture PoR root"))
             .content_length(plan.content_length)
             .car_digest(car_digest)
             .car_size(stats.car_size)
@@ -4806,6 +4798,7 @@ mod tests {
 
         let manifest_bytes = to_bytes(&manifest).expect("manifest bytes");
         let mut manifest_obj = Map::new();
+        manifest_obj.insert("version".into(), Value::from(1_u64));
         manifest_obj.insert("manifest_hex".into(), Value::from(to_hex(&manifest_bytes)));
         manifest_obj.insert(
             "car_digest_hex".into(),
@@ -4814,6 +4807,10 @@ mod tests {
         manifest_obj.insert("car_size".into(), Value::from(stats.car_size));
 
         let mut report_obj = Map::new();
+        report_obj.insert(
+            "schema".into(),
+            Value::from(MANIFEST_BUILDER_REPORT_SCHEMA_V1),
+        );
         report_obj.insert("chunk_fetch_specs".into(), Value::Array(fetch_array));
         report_obj.insert(
             "payload_digest_hex".into(),
@@ -4933,24 +4930,8 @@ mod tests {
         let payload = write_payload(&payload_path, 4 * 1024);
         let plan =
             CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
-        let fetch_specs = plan.chunk_fetch_specs();
-        let fetch_array: Vec<Value> = fetch_specs
-            .iter()
-            .map(|spec| {
-                let mut obj = norito::json::Map::new();
-                obj.insert("chunk_index".into(), Value::from(spec.chunk_index as u64));
-                obj.insert("offset".into(), Value::from(spec.offset));
-                obj.insert("length".into(), Value::from(spec.length as u64));
-                obj.insert("digest_blake3".into(), Value::from(to_hex(&spec.digest)));
-                Value::Object(obj)
-            })
-            .collect();
         let plan_path = temp_path.join("plan.json");
-        fs::write(
-            &plan_path,
-            (to_string_pretty(&Value::Array(fetch_array)).expect("json") + "\n").as_bytes(),
-        )
-        .expect("write plan");
+        write_canonical_plan(&plan_path, &plan);
 
         let descriptor = chunker_registry::default_descriptor();
         let profile_handle = format!(
@@ -5027,24 +5008,8 @@ mod tests {
         let payload = write_payload(&payload_path, 4 * 1024);
         let plan =
             CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
-        let fetch_specs = plan.chunk_fetch_specs();
-        let fetch_array: Vec<Value> = fetch_specs
-            .iter()
-            .map(|spec| {
-                let mut obj = norito::json::Map::new();
-                obj.insert("chunk_index".into(), Value::from(spec.chunk_index as u64));
-                obj.insert("offset".into(), Value::from(spec.offset));
-                obj.insert("length".into(), Value::from(spec.length as u64));
-                obj.insert("digest_blake3".into(), Value::from(to_hex(&spec.digest)));
-                Value::Object(obj)
-            })
-            .collect();
         let plan_path = temp_path.join("plan.json");
-        fs::write(
-            &plan_path,
-            (to_string_pretty(&Value::Array(fetch_array)).expect("json") + "\n").as_bytes(),
-        )
-        .expect("write plan");
+        write_canonical_plan(&plan_path, &plan);
 
         let descriptor = chunker_registry::default_descriptor();
         let profile_handle = format!(
@@ -5141,24 +5106,8 @@ mod tests {
         let payload = write_payload(&payload_path, 4 * 1024);
         let plan =
             CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
-        let fetch_specs = plan.chunk_fetch_specs();
-        let fetch_array: Vec<Value> = fetch_specs
-            .iter()
-            .map(|spec| {
-                let mut obj = norito::json::Map::new();
-                obj.insert("chunk_index".into(), Value::from(spec.chunk_index as u64));
-                obj.insert("offset".into(), Value::from(spec.offset));
-                obj.insert("length".into(), Value::from(spec.length as u64));
-                obj.insert("digest_blake3".into(), Value::from(to_hex(&spec.digest)));
-                Value::Object(obj)
-            })
-            .collect();
         let plan_path = temp_path.join("plan.json");
-        fs::write(
-            &plan_path,
-            (to_string_pretty(&Value::Array(fetch_array)).expect("json") + "\n").as_bytes(),
-        )
-        .expect("write plan");
+        write_canonical_plan(&plan_path, &plan);
 
         let descriptor = chunker_registry::default_descriptor();
         let profile_handle = format!(
@@ -5274,24 +5223,8 @@ mod tests {
         let payload = write_payload(&payload_path, 4 * 1024);
         let plan =
             CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
-        let fetch_specs = plan.chunk_fetch_specs();
-        let fetch_array: Vec<Value> = fetch_specs
-            .iter()
-            .map(|spec| {
-                let mut obj = norito::json::Map::new();
-                obj.insert("chunk_index".into(), Value::from(spec.chunk_index as u64));
-                obj.insert("offset".into(), Value::from(spec.offset));
-                obj.insert("length".into(), Value::from(spec.length as u64));
-                obj.insert("digest_blake3".into(), Value::from(to_hex(&spec.digest)));
-                Value::Object(obj)
-            })
-            .collect();
         let plan_path = temp_path.join("plan.json");
-        fs::write(
-            &plan_path,
-            (to_string_pretty(&Value::Array(fetch_array)).expect("json") + "\n").as_bytes(),
-        )
-        .expect("write plan");
+        write_canonical_plan(&plan_path, &plan);
 
         let descriptor = chunker_registry::default_descriptor();
         let profile_handle = format!(

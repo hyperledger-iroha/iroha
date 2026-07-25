@@ -42,10 +42,6 @@ pub const SORAFS_REFERENCE_REPAIR_KIND_SLASH_PROPOSAL: u32 = 4;
 pub const SORAFS_REFERENCE_REPAIR_KIND_ESCALATION_POLICY: u32 = 5;
 /// FFI repair payload kind selector for `RepairEscalationApprovalV1`.
 pub const SORAFS_REFERENCE_REPAIR_KIND_ESCALATION_APPROVAL: u32 = 6;
-/// FFI repair payload kind selector for `SignedAuditorRequestV1`.
-pub const SORAFS_REFERENCE_REPAIR_KIND_SIGNED_AUDITOR_REQUEST: u32 = 7;
-/// FFI repair payload kind selector for `RepairWorkerSignaturePayloadV1`.
-pub const SORAFS_REFERENCE_REPAIR_KIND_WORKER_SIGNATURE: u32 = 8;
 /// FFI repair payload kind selector for `RepairTaskEventV1`.
 pub const SORAFS_REFERENCE_REPAIR_KIND_TASK_EVENT: u32 = 9;
 /// FFI repair payload kind selector for `RepairAuditEventV1`.
@@ -1573,12 +1569,6 @@ fn repair_kind_from_ffi(
         SORAFS_REFERENCE_REPAIR_KIND_ESCALATION_APPROVAL => {
             Ok(RepairValidationPayloadKindV1::EscalationApproval)
         }
-        SORAFS_REFERENCE_REPAIR_KIND_SIGNED_AUDITOR_REQUEST => {
-            Ok(RepairValidationPayloadKindV1::SignedAuditorRequest)
-        }
-        SORAFS_REFERENCE_REPAIR_KIND_WORKER_SIGNATURE => {
-            Ok(RepairValidationPayloadKindV1::WorkerSignaturePayload)
-        }
         SORAFS_REFERENCE_REPAIR_KIND_TASK_EVENT => Ok(RepairValidationPayloadKindV1::TaskEvent),
         SORAFS_REFERENCE_REPAIR_KIND_AUDIT_EVENT => Ok(RepairValidationPayloadKindV1::AuditEvent),
         other => Err(unsupported_selector_error(
@@ -1830,7 +1820,7 @@ fn ffi_error(
 mod tests {
     use std::{fs, path::PathBuf, slice};
 
-    use ed25519_dalek::{PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH, Signer, SigningKey};
+    use ed25519_dalek::{SIGNATURE_LENGTH, Signer, SigningKey};
     use norito::json::Value;
 
     use crate::{
@@ -1844,7 +1834,8 @@ mod tests {
         SETTLEMENT_RECEIPT_VERSION_V1, SIGNED_REPLICATION_ORDER_VERSION_V1, SettlementReceiptV1,
         SignatureAlgorithm, SignedReplicationOrderV1, TradeEventV1, XorQuantity,
         build_billing_line_item_v1, build_billing_statement_v1, derive_reference_price_decision_v1,
-        sign_pop_credential_ed25519_v1,
+        sign_order_request_ed25519_v1, sign_pop_credential_ed25519_v1,
+        sign_settlement_receipt_ed25519_v1,
     };
 
     use super::*;
@@ -1889,56 +1880,65 @@ mod tests {
     }
 
     fn orderbook_settlement_receipt() -> SettlementReceiptV1 {
-        SettlementReceiptV1 {
-            version: SETTLEMENT_RECEIPT_VERSION_V1,
-            receipt_id: [0x81; 32],
-            channel_id: [0x82; 32],
-            trade_id: [0x83; 32],
-            range: ByteRangeV1 {
-                start: 128,
-                end: 384,
+        let signing_key = SigningKey::from_bytes(&[0xB7; 32]);
+        sign_settlement_receipt_ed25519_v1(
+            SettlementReceiptV1 {
+                version: SETTLEMENT_RECEIPT_VERSION_V1,
+                receipt_id: [0x81; 32],
+                channel_id: [0x82; 32],
+                trade_id: [0x83; 32],
+                range: ByteRangeV1 {
+                    start: 128,
+                    end: 384,
+                },
+                chunk_hash: [0x84; 32],
+                bytes_delivered: 256,
+                xor_debited: XorQuantity::try_from_micro(100)
+                    .expect("legacy micro-XOR value is representable"),
+                provider_credit: XorQuantity::try_from_micro(90)
+                    .expect("legacy micro-XOR value is representable"),
+                fee_amount: XorQuantity::try_from_micro(10)
+                    .expect("legacy micro-XOR value is representable"),
+                issued_at_unix: 1_800_000_010,
+                settlement_signature: OrderbookSignatureV1 {
+                    algorithm: SignatureAlgorithm::Ed25519,
+                    public_key: signing_key.verifying_key().to_bytes().to_vec(),
+                    signature: Vec::new(),
+                },
             },
-            chunk_hash: [0x84; 32],
-            bytes_delivered: 256,
-            xor_debited: XorQuantity::try_from_micro(100)
-                .expect("legacy micro-XOR value is representable"),
-            provider_credit: XorQuantity::try_from_micro(90)
-                .expect("legacy micro-XOR value is representable"),
-            fee_amount: XorQuantity::try_from_micro(10)
-                .expect("legacy micro-XOR value is representable"),
-            issued_at_unix: 1_800_000_010,
-            settlement_signature: OrderbookSignatureV1 {
-                algorithm: SignatureAlgorithm::Ed25519,
-                public_key: vec![0xD7; PUBLIC_KEY_LENGTH],
-                signature: vec![0x57; SIGNATURE_LENGTH],
-            },
-        }
+            &signing_key,
+        )
+        .expect("sign orderbook settlement receipt")
     }
 
     fn orderbook_runtime_snapshot() -> OrderbookRuntimeSnapshotV1 {
-        let signature = OrderbookSignatureV1 {
-            algorithm: SignatureAlgorithm::Ed25519,
-            public_key: vec![0xD7; PUBLIC_KEY_LENGTH],
-            signature: vec![0x57; SIGNATURE_LENGTH],
-        };
+        let signing_key = SigningKey::from_bytes(&[0xB7; 32]);
         let owner_account = b"provider@sora".to_vec();
         let nonce = 8;
-        let order = OrderRequestV1 {
-            version: ORDERBOOK_ORDER_VERSION_V1,
-            order_id: crate::derive_orderbook_order_id_v1(&owner_account, nonce),
-            side: OrderSideV1::Ask,
-            tier: OrderTierV1::Hot,
-            price_per_gib: XorQuantity::try_from_micro(1_250_000)
-                .expect("legacy micro-XOR value is representable"),
-            quantity_gib: 4,
-            remaining_gib: 4,
-            owner_account,
-            expiry_unix: 1_800_000_500,
-            nonce,
-            maker_fee_bps: 10,
-            taker_fee_bps: 15,
-            signature,
-        };
+        let order = sign_order_request_ed25519_v1(
+            OrderRequestV1 {
+                version: ORDERBOOK_ORDER_VERSION_V1,
+                order_id: crate::derive_orderbook_order_id_v1(&owner_account, nonce),
+                side: OrderSideV1::Ask,
+                tier: OrderTierV1::Hot,
+                price_per_gib: XorQuantity::try_from_micro(1_250_000)
+                    .expect("legacy micro-XOR value is representable"),
+                quantity_gib: 4,
+                remaining_gib: 4,
+                owner_account,
+                expiry_unix: 1_800_000_500,
+                nonce,
+                maker_fee_bps: 10,
+                taker_fee_bps: 15,
+                signature: OrderbookSignatureV1 {
+                    algorithm: SignatureAlgorithm::Ed25519,
+                    public_key: signing_key.verifying_key().to_bytes().to_vec(),
+                    signature: Vec::new(),
+                },
+            },
+            &signing_key,
+        )
+        .expect("sign runtime snapshot order");
         let trade = TradeEventV1 {
             version: ORDERBOOK_TRADE_EVENT_VERSION_V1,
             trade_id: [0x83; 32],
@@ -1965,6 +1965,8 @@ mod tests {
         let mut receipt = orderbook_settlement_receipt();
         receipt.channel_id = channel.channel_id;
         receipt.trade_id = channel.trade_id;
+        let receipt = sign_settlement_receipt_ed25519_v1(receipt, &signing_key)
+            .expect("re-sign runtime snapshot receipt");
         let channel = crate::apply_settlement_receipt_v1(&channel, &receipt)
             .expect("orderbook fixture receipt should apply");
         OrderbookRuntimeSnapshotV1 {
@@ -3024,26 +3026,33 @@ mod tests {
     }
 
     #[test]
-    fn ffi_rejects_unknown_repair_kind() {
+    fn ffi_rejects_retired_and_unknown_repair_kinds() {
         let bytes = b"not norito";
 
-        // SAFETY: the pointer references live test bytes for the duration of the call.
-        let outcome = outcome_from_buffer(unsafe {
-            sorafs_reference_validate_repair_json(
-                999,
-                bytes.as_ptr(),
-                bytes.len(),
-                std::ptr::null(),
-                0,
-                123,
-            )
-        });
+        for kind in [7, 8, 999] {
+            // SAFETY: the pointer references live test bytes for the duration of the call.
+            let outcome = outcome_from_buffer(unsafe {
+                sorafs_reference_validate_repair_json(
+                    kind,
+                    bytes.as_ptr(),
+                    bytes.len(),
+                    std::ptr::null(),
+                    0,
+                    123,
+                )
+            });
 
-        assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Error"));
-        assert_eq!(
-            outcome.get("code").and_then(Value::as_str),
-            Some("SFS-FFI-001")
-        );
+            assert_eq!(
+                outcome.get("status").and_then(Value::as_str),
+                Some("Error"),
+                "repair kind {kind} must be rejected"
+            );
+            assert_eq!(
+                outcome.get("code").and_then(Value::as_str),
+                Some("SFS-FFI-001"),
+                "repair kind {kind} must map to an unsupported selector"
+            );
+        }
     }
 
     #[test]

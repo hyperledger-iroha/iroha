@@ -274,10 +274,13 @@ ixtiyoriy manifestlarni xeshlash, qismlarga ajratish va tekshirish.
   dalillar to'plamlarida `policy_source` qiymatlarini mazmunli saqlash uchun satrlar. Qarang
   pastki buyruq uchun `crates/iroha_cli/src/commands/da.rs` va `docs/source/da/rent_policy.md`
   siyosat sxemasi uchun.【crates/iroha_cli/src/commands/da.rs:1】【docs/source/da/rent_policy.md:1】
-- PIN ro'yxatga olish kitobi pariteti endi SDK-larga tarqaladi: `ToriiClient.registerSorafsPinManifest(...)`
-  JavaScript SDK `iroha app sorafs pin register` tomonidan ishlatiladigan aniq foydali yukni yaratib, kanonik standartlarni qo'llaydi.
-  chunker metama'lumotlari, pin siyosatlari, taxallus isbotlari va vorisi dayjestlari
-  `/v1/sorafs/pin/register`. Bu CI botlarini va avtomatlashtirishni qachon CLIga o'tishdan saqlaydi
+- Pin registry pariteti endi SDK-larga tarqaladi:
+  `ToriiClient.registerSorafsPinManifest(...)` `manifest_payload` ichida aniq
+  canonical padded-base64 `ManifestV1` bo‘lgan yopiq JSON V1 so‘rovini tuzadi.
+  Torii digest, chunker, content length, pin policy va fee inputlarni faqat decoded
+  manifestdan chiqaradi va duplicate summarylarni rad etadi; optional alias va
+  nonzero predecessor saqlanadi. Bu `/v1/sorafs/pin/register` ishlatilganda CI
+  botlari va avtomatlashtirishning CLI-ga murojaat qilishini oldini oladi
   manifest ro'yxatga olishlarini yozib olish va yordamchi DA-8 uchun TypeScript/README qamrovi bilan yuboriladi.
   Rust/Swift bilan bir qatorda JS da “yuborish/olish/isbotlash” asboblar pariteti to‘liq qondirilgan.【javascript/iroha_js/src/toriiClient.js:1045】【javascript/iroha_js/test/toriiClient.test.js:78】
 - `iroha app da prove-availability` yuqoridagilarning barchasini zanjirlaydi: u saqlash chiptasini oladi, yuklab oladi

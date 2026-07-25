@@ -106,6 +106,15 @@ class SorafsReferenceValidatorsTest {
         }
         assertTrue(oversizedLabel.message.orEmpty().contains("1024"))
 
+        val controlLabel = assertThrows(IllegalArgumentException::class.java) {
+            SorafsReferenceValidators.validateGovernanceDagBlockJson(
+                noritoBytes = ByteArray(0),
+                label = "bad\u0001label",
+                generatedAtUnix = 1,
+            )
+        }
+        assertTrue(controlLabel.message.orEmpty().contains("control characters"))
+
         for (invalidCid in listOf(ByteArray(0), ByteArray(31), ByteArray(33))) {
             val invalidExpectedCid = assertThrows(IllegalArgumentException::class.java) {
                 SorafsReferenceValidators.validateGovernanceDagBlockJson(
@@ -266,32 +275,138 @@ class SorafsReferenceValidatorsTest {
         val json = SorafsReferenceValidators.validateOrderbookPayloadJson(
             SorafsOrderbookPayloadKind.ORDER_REQUEST,
             payload,
+            label = "order_request_v1.to",
             generatedAtUnix = 123,
         )
-        assertTrue(json.contains("\"status\": \"Ok\""), json)
-        assertTrue(json.contains("\"code\": \"SFS-OK-000\""), json)
+        assertEquals(
+            fixture(
+                "sorafs_manifest",
+                "orderbook",
+                "order_request_validation_outcome_v1.json",
+            ).toString(Charsets.UTF_8),
+            json,
+        )
+
+        for (name in listOf("order_request_bad_signature", "order_request_trailing_bytes")) {
+            val outcome = SorafsReferenceValidators.validateOrderbookPayloadJson(
+                SorafsOrderbookPayloadKind.ORDER_REQUEST,
+                fixture("sorafs_manifest", "orderbook", "negative", "${name}_v1.to"),
+                label = "${name}_v1.to",
+                generatedAtUnix = 123,
+            )
+            assertEquals(
+                fixture(
+                    "sorafs_manifest",
+                    "orderbook",
+                    "negative",
+                    "${name}_validation_outcome_v1.json",
+                ).toString(Charsets.UTF_8),
+                outcome,
+                name,
+            )
+        }
+    }
+
+    @Test
+    fun validatesEveryPdpOutcomeFixtureWhenNativeBridgeIsAvailable() {
+        assumeTrue(SorafsReferenceValidators.isNativeAvailable(), "connect_norito_bridge not available")
+        val commitment = fixture("sorafs_manifest", "pdp", "commitment_v1.to")
+        val challenge = fixture("sorafs_manifest", "pdp", "challenge_v1.to")
+        val proof = fixture("sorafs_manifest", "pdp", "proof_v1.to")
+        val bundle = SorafsReferenceValidators.validatePdpBundleJson(
+            commitment,
+            challenge,
+            proof,
+            commitmentLabel = "commitment_v1.to",
+            challengeLabel = "challenge_v1.to",
+            proofLabel = "proof_v1.to",
+            generatedAtUnix = 123,
+        )
+        assertEquals(
+            fixture(
+                "sorafs_manifest",
+                "pdp",
+                "bundle_validation_outcome_v1.json",
+            ).toString(Charsets.UTF_8),
+            bundle,
+        )
+
+        for ((name, kind) in listOf(
+            "duplicate_hot_leaf_challenge" to SorafsPdpPayloadKind.CHALLENGE,
+            "missing_signature_proof" to SorafsPdpPayloadKind.PROOF,
+        )) {
+            val outcome = SorafsReferenceValidators.validatePdpPayloadJson(
+                kind,
+                fixture("sorafs_manifest", "pdp", "negative", "${name}_v1.to"),
+                label = "${name}_v1.to",
+                generatedAtUnix = 123,
+            )
+            assertPdpOutcome(name, outcome)
+        }
+
+        for (name in listOf("late_proof", "wrong_manifest_proof", "wrong_provider_proof")) {
+            val outcome = SorafsReferenceValidators.validatePdpChallengeProofJson(
+                challenge,
+                fixture("sorafs_manifest", "pdp", "negative", "${name}_v1.to"),
+                challengeLabel = "challenge_v1.to",
+                proofLabel = "${name}_v1.to",
+                generatedAtUnix = 123,
+            )
+            assertPdpOutcome(name, outcome)
+        }
+
+        for (name in listOf(
+            "missing_hot_leaf_path_proof",
+            "missing_segment_path_proof",
+            "wrong_path_proof",
+        )) {
+            val outcome = SorafsReferenceValidators.validatePdpBundleJson(
+                commitment,
+                challenge,
+                fixture("sorafs_manifest", "pdp", "negative", "${name}_v1.to"),
+                commitmentLabel = "commitment_v1.to",
+                challengeLabel = "challenge_v1.to",
+                proofLabel = "${name}_v1.to",
+                generatedAtUnix = 123,
+            )
+            assertPdpOutcome(name, outcome)
+        }
     }
 
     @Test
     fun validatesGovernanceDagFixturesAndNegativeVectorsWhenNativeBridgeIsAvailable() {
-        assumeTrue(SorafsReferenceValidators.isNativeAvailable(), "connect_norito_bridge not available")
+        requireGovernanceDagNativeBridge()
         val first = fixture("sorafs_manifest", "governance", "dag_block_0_v1.to")
         val second = fixture("sorafs_manifest", "governance", "dag_block_1_v1.to")
         val head = fixture("sorafs_manifest", "governance", "dag_head_v1.to")
 
         val blockOutcome = SorafsReferenceValidators.validateGovernanceDagBlockJson(
             first,
+            label = "dag_block_0_v1.to",
             generatedAtUnix = 123,
         )
-        assertTrue(blockOutcome.contains("\"status\": \"Ok\""), blockOutcome)
+        assertEquals(
+            fixture(
+                "sorafs_manifest",
+                "governance",
+                "dag_block_validation_outcome_v1.json",
+            ).toString(Charsets.UTF_8),
+            blockOutcome,
+        )
 
         val cidMismatch = SorafsReferenceValidators.validateGovernanceDagBlockJson(
             first,
             expectedBlockCid = ByteArray(32) { 0x7f },
             generatedAtUnix = 123,
         )
-        assertTrue(cidMismatch.contains("\"status\": \"Error\""), cidMismatch)
-        assertTrue(cidMismatch.contains("\"code\": \"SFS-GOV-004\""), cidMismatch)
+        assertEquals(
+            fixture(
+                "sorafs_manifest",
+                "governance",
+                "dag_block_cid_mismatch_validation_outcome_v1.json",
+            ).toString(Charsets.UTF_8),
+            cidMismatch,
+        )
 
         val headOutcome = SorafsReferenceValidators.validateGovernanceDagHeadChainJson(
             head = head,
@@ -300,7 +415,6 @@ class SorafsReferenceValidatorsTest {
             blockLabels = listOf("dag_block_0_v1.to", "dag_block_1_v1.to"),
             generatedAtUnix = 123,
         )
-        assertTrue(headOutcome.contains("\"status\": \"Ok\""), headOutcome)
         val goldenOutcome = fixture(
             "sorafs_manifest",
             "governance",
@@ -313,7 +427,14 @@ class SorafsReferenceValidatorsTest {
             listOf(second, first),
             generatedAtUnix = 123,
         )
-        assertTrue(reordered.contains("\"status\": \"Error\""), reordered)
+        assertEquals(
+            fixture(
+                "sorafs_manifest",
+                "governance",
+                "dag_head_reordered_validation_outcome_v1.json",
+            ).toString(Charsets.UTF_8),
+            reordered,
+        )
 
         val blockSignatureOutcome =
             SorafsReferenceValidators.validateGovernanceDagBlockJson(
@@ -404,6 +525,18 @@ class SorafsReferenceValidatorsTest {
             ).toString(Charsets.UTF_8),
             predecessorOutcome,
         )
+    }
+
+    private fun requireGovernanceDagNativeBridge() {
+        if (SorafsReferenceValidators.isNativeAvailable()) {
+            return
+        }
+        if (System.getenv("IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION") == "1") {
+            throw AssertionError(
+                "ABI-21 connect_norito_bridge with Governance DAG symbols is required.",
+            )
+        }
+        assumeTrue(false, "connect_norito_bridge not available")
     }
 
     @Test
@@ -511,6 +644,19 @@ class SorafsReferenceValidatorsTest {
                 privateKey = ByteArray(32) { 0xB7.toByte() },
             )
         }
+    }
+
+    private fun assertPdpOutcome(name: String, actual: String) {
+        assertEquals(
+            fixture(
+                "sorafs_manifest",
+                "pdp",
+                "negative",
+                "${name}_validation_outcome_v1.json",
+            ).toString(Charsets.UTF_8),
+            actual,
+            name,
+        )
     }
 
     private fun fixture(vararg parts: String): ByteArray {

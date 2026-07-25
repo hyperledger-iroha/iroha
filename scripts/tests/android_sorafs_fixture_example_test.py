@@ -33,7 +33,11 @@ def test_fixture_example_matches_metadata() -> None:
 
     instruction = fixture_example["instruction"]
     plan = load_json(FIXTURE_DIR / metadata["plan_file"])
-    plan_digests = [entry["digest_blake3"] for entry in plan]
+    assert plan["schema"] == "sorafs.chunk_fetch_plan.v1"
+    assert len(plan["payload_digest_blake3_hex"]) == 64
+    plan_digests = [
+        entry["digest_blake3"] for entry in plan["chunk_fetch_specs"]
+    ]
     assert fixture_example["chunk_digests_blake3"] == plan_digests
     assert instruction["submitted_epoch"] == metadata["now_unix_secs"]
     assert set(instruction) == {

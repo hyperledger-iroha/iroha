@@ -7,10 +7,11 @@ repo_root="$(cd -- "${BASH_SOURCE[0]%/*}/.." && pwd -P)"
 readonly repo_root
 readonly fixture_path="${repo_root}/fixtures/sumeragi_v2/native_amx_v2_grouped.json"
 readonly gradle_init_path="${repo_root}/ci/native_amx_v2_grouped_gradle_init.gradle"
-readonly expected_negative_control_count=34
+readonly expected_negative_control_count=45
 readonly source_paths=(
   ci/run_native_amx_v2_grouped_sdk_parity.sh
   ci/native_amx_v2_grouped_gradle_init.gradle
+  crates/iroha_data_model/src/bin/native_amx_grouped.rs
   pytests/scripts/native_amx_v2_grouped_fixture_test.py
   python/iroha_python/tests/native_amx_v2_grouped_fixture_test.py
   python/iroha_python/src/iroha_python/client.py
@@ -263,7 +264,7 @@ case "$surface" in
     assert_pytest_count "$observed_test_count"
     ;;
   python)
-    observed_test_count=35
+    observed_test_count=47
     python3 -c \
       'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else "Python Native AMX V2 parity requires Python >=3.10")'
     run_and_capture \
@@ -274,7 +275,7 @@ case "$surface" in
     assert_pytest_count "$observed_test_count"
     ;;
   javascript)
-    observed_test_count=37
+    observed_test_count=48
     if ! command -v node >/dev/null 2>&1; then
       echo "Node.js is required for grouped Native AMX V2 JavaScript parity" >&2
       exit 1
@@ -290,7 +291,7 @@ case "$surface" in
     fi
     ;;
   swift)
-    observed_test_count=2
+    observed_test_count=3
     if ! command -v swift >/dev/null 2>&1; then
       echo "Swift is required for grouped Native AMX V2 Swift parity" >&2
       exit 1

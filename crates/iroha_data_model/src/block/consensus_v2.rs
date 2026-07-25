@@ -58,7 +58,8 @@ const KAGEMUSHA_TOPUP_POST_STATE_ROOT_DOMAIN: &[u8] = b"iroha:kagemusha:v2:post-
 /// Canonical Native AMX application-manifest wire version.
 pub const NATIVE_AMX_APPLICATION_MANIFEST_VERSION: u16 = 1;
 /// Maximum participant route/incarnation leaves committed by one global block.
-pub const MAX_NATIVE_AMX_APPLICATION_MANIFEST_LEAVES: u32 = 1_024;
+pub const MAX_NATIVE_AMX_APPLICATION_MANIFEST_LEAVES: u32 =
+    crate::nexus::MAX_ACTIVE_EXECUTION_LANES as u32;
 /// Maximum ordered source/result members in one participant application leaf.
 pub const MAX_NATIVE_AMX_APPLICATION_MANIFEST_MEMBERS: usize = 4_096;
 const NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT_DOMAIN: &[u8] =

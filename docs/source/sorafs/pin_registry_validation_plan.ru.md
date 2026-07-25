@@ -31,7 +31,7 @@ points before state or fee side effects.
 flowchart LR
     cli["sorafs_cli / SDK clients"] --> torii["Torii /v1/sorafs/pin/register"]
     torii --> validator["sorafs_manifest::validation"]
-    torii --> manifest["optional ManifestV1 from manifest_b64"]
+    torii --> manifest["required canonical ManifestV1 from manifest_payload"]
     validator --> registry["Pin Registry ISI"]
     registry --> state["pin_manifests / aliases / replication_orders"]
 ```
@@ -42,10 +42,11 @@ flowchart LR
   `ManifestV1` validation helpers.
 - `manifest_pin_policy_constraints_from_config` maps governance configuration
   into `sorafs_manifest::PinPolicyConstraints`.
-- `/v1/sorafs/pin/register` validates DTO fields through the shared validator,
-  accepts optional `manifest_b64` for full Norito `ManifestV1` validation, checks
-  digest/chunker/content-length/policy consistency, and returns stable
-  `sorafs_pin_*` application-validation labels.
+- `/v1/sorafs/pin/register` requires exact canonical Norito `ManifestV1` bytes
+  as canonical padded base64 in `manifest_payload`. Torii derives the digest,
+  chunker, content length, pin policy, and fee inputs solely from the decoded
+  canonical manifest and rejects retired duplicate summary fields. The alias
+  and a nonzero `successor_of_hex` predecessor digest remain optional.
 - `RegisterPinManifest` invokes the shared validation path before mutating pin
   state or applying fee side effects.
 - Tests cover chunker/profile checks, council-signature policy,
@@ -57,9 +58,9 @@ flowchart LR
 | Area | Status | Evidence |
 |------|--------|----------|
 | Shared validator | Done | `validate_chunker_handle`, `validate_pin_policy`, and `validate_manifest` live in `sorafs_manifest::validation`. |
-| Policy wiring | Done | Governance config is mapped into `PinPolicyConstraints`; DTO and full-manifest paths use the same limits. |
-| Torii integration | Done | `/v1/sorafs/pin/register` emits stable `sorafs_pin_*` error labels and supports optional full manifest validation. |
-| Contract enforcement | Done | `RegisterPinManifest` validates before state mutation and unit tests cover failure cases. |
+| Policy wiring | Done | Governance config is mapped into `PinPolicyConstraints`; Torii and consensus validate the same canonical manifest. |
+| Torii integration | Done | `/v1/sorafs/pin/register` requires canonical `manifest_payload` and emits stable `sorafs_pin_*` error labels. |
+| Contract enforcement | Done | `RegisterPinManifest` revalidates and derives persisted commitments before state mutation; unit tests cover failure cases. |
 | Tests | Done | Validator and integration tests cover policy, chunker, council-signature, and side-effect guarantees. |
 | Docs | Done | Architecture, manifest-pipeline, CLI, OpenAPI, status, and roadmap docs describe the shared validation path. |
 
@@ -67,9 +68,9 @@ flowchart LR
 
 - Manifest validation rejects unknown registered chunker profile IDs instead of
   inferring layout from inline parameters.
-- Council-signature requirements are driven by governance configuration; when a
-  policy requires signatures, Torii requires `manifest_b64` so the full
-  governance envelope can be checked.
+- Council-signature requirements are driven by governance configuration. Torii
+  always requires `manifest_payload`, so the full governance envelope is
+  checked before queueing.
 - Error labels are part of the operator contract. Keep Torii, CLI, OpenAPI, and
   tests aligned whenever adding validation cases.
 - Large-manifest performance should be measured in release rehearsals; cache only

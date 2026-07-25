@@ -37,6 +37,7 @@ from iroha_torii_client import (  # noqa: E402  (import depends on sys.path muta
     OfflineRejectedOperation,
     OfflineTopUpAnchor,
     OfflineTopUpFinalityProof,
+    SumeragiDiagnosticsStatus,
     SumeragiV2Status,
     ToriiCanonicalRequestAuth,
     ToriiClient,
@@ -318,6 +319,29 @@ def _sumeragi_diagnostics_payload() -> Dict[str, Any]:
     }
 
 
+def _native_amx_participant_application_payload(
+    *,
+    lane_id: int = 3,
+    state: Any = "durably_applied",
+) -> Dict[str, Any]:
+    return {
+        "lane_id": lane_id,
+        "dataspace_id": 8,
+        "lane_incarnation": _canonical_hash(0x65),
+        "participant_height": 8,
+        "participant_view": 1,
+        "predecessor_height": 7,
+        "predecessor_descriptor_hash": _canonical_hash(0x68),
+        "descriptor_hash": _canonical_hash(0x73),
+        "proposal_hash": _canonical_hash(0x69),
+        "settlement_hash": _canonical_hash(0x6B),
+        "source_count": 2,
+        "application_block_height": 10,
+        "application_block_hash": _canonical_hash(0x79),
+        "state": state,
+    }
+
+
 def _lane_settlement_payload() -> Dict[str, Any]:
     return {
         "block_height": 9,
@@ -523,7 +547,9 @@ def _get_sumeragi_status(payload: Mapping[str, Any]) -> SumeragiV2Status:
     return ToriiClient("http://node.test", session=session).get_sumeragi_status()
 
 
-def _get_sumeragi_diagnostics(payload: Mapping[str, Any]) -> Any:
+def _get_sumeragi_diagnostics(
+    payload: Mapping[str, Any],
+) -> SumeragiDiagnosticsStatus:
     session = RecordingSession()
     session.queue(StubResponse(payload=payload))
     return ToriiClient(
@@ -625,186 +651,283 @@ class RecordingSession(requests.Session):
 
 
 def _sample_sorafs_orderbook_payloads() -> Dict[str, Any]:
-    order_id_hex = "11" * 32
-    trade_id_hex = "22" * 32
-    channel_id_hex = "33" * 32
-    receipt_id_hex = "44" * 32
-    provider_id_hex = "55" * 32
-    chunk_hash_hex = "66" * 32
-    signature = {
-        "algorithm": "Ed25519",
-        "public_key_hex": "AA" * 32,
-        "signature_hex": "BB" * 64,
-    }
+    def fixed(seed: int) -> List[int]:
+        return [seed] * 32
+
+    cursor = {"height": 42, "block_hash": fixed(0xA0)}
     order = {
-        "version": 1,
-        "order_id_hex": f"0x{order_id_hex.upper()}",
-        "side": "bid",
-        "tier": "hot",
-        "price_per_gib": "340282366920938463463374607431768211456.000000001",
-        "quantity_gib": 4,
+        "order_id": fixed(0x11),
+        "owner": "alice@wonderland",
+        "canonical_order": base64.b64encode(b"canonical-order").decode("ascii"),
+        "admitted_policy_digest": fixed(0x12),
+        "admitted_at_unix": 1_700_000_000,
+        "admission_sequence": 7,
         "remaining_gib": 2,
-        "owner_account_hex": "CAFE",
-        "expiry_unix": 1_800_000_000,
-        "nonce": 7,
-        "maker_fee_bps": 25,
-        "taker_fee_bps": 35,
-        "signature": signature,
+        "status": {"status": "open", "value": None},
+        "updated_at_unix": 1_700_000_001,
+        "canonical_cancel": None,
+        "cancelled_at_unix": None,
+        "cancelled_policy_digest": None,
     }
     trade = {
-        "version": 1,
-        "trade_id_hex": trade_id_hex,
-        "maker_order_id_hex": order_id_hex,
-        "taker_order_id_hex": "77" * 32,
-        "tier": "hot",
-        "price_per_gib": "340282366920938463463374607431768211456.000000001",
-        "filled_gib": 2,
-        "maker_fee": "0.000000001",
-        "taker_fee": "1.000000001",
-        "timestamp_unix": 1_700_000_100,
+        "trade_id": fixed(0x22),
+        "maker_order_id": fixed(0x11),
+        "taker_order_id": fixed(0x13),
+        "trade_sequence": 3,
+        "canonical_trade": base64.b64encode(b"canonical-trade").decode("ascii"),
+        "channel_id": fixed(0x33),
+        "book_revision": 9,
+        "recorded_at_unix": 1_700_000_100,
     }
     channel = {
-        "version": 1,
-        "channel_id_hex": channel_id_hex,
-        "trade_id_hex": trade_id_hex,
-        "buyer_account_hex": "FACE",
-        "provider_id_hex": provider_id_hex,
+        "channel_id": fixed(0x33),
+        "trade_id": fixed(0x22),
+        "buyer": "alice@wonderland",
+        "provider": "provider@storage",
+        "provider_id": fixed(0x55),
+        "settlement_authority": "settlement@governance",
         "total_bytes": 2_147_483_648,
         "remaining_bytes": 1_073_741_824,
-        "xor_locked": "340282366920938463463374607431768211456.000000001",
-        "status": "open",
+        "initial_xor_locked": "340282366920938463463374607431768211456.000000001",
+        "remaining_xor_locked": "1.000000001",
+        "status": {"status": "open", "value": None},
         "opened_at_unix": 1_700_000_101,
+        "expires_at_unix": 1_800_000_000,
         "updated_at_unix": 1_700_000_102,
     }
     receipt = {
-        "version": 1,
-        "receipt_id_hex": receipt_id_hex,
-        "channel_id_hex": channel_id_hex,
-        "trade_id_hex": trade_id_hex,
-        "range": {"start": 0, "end": 1024},
-        "chunk_hash_hex": chunk_hash_hex,
-        "bytes_delivered": 1024,
-        "xor_debited": "340282366920938463463374607431768211456.000000001",
-        "provider_credit": "1.000000001",
-        "fee_amount": "0.000000001",
-        "issued_at_unix": 1_700_000_103,
-        "settlement_signature": signature,
+        "receipt_id": fixed(0x44),
+        "channel_id": fixed(0x33),
+        "trade_id": fixed(0x22),
+        "canonical_receipt": base64.b64encode(b"canonical-receipt").decode("ascii"),
+        "admitted_policy_digest": fixed(0x12),
+        "admitted_at_unix": 1_700_000_103,
+        "recorded_by": "settlement@governance",
     }
-    event = {
+    finalized_event = {
         "sequence": 9,
-        "kind": "settlement_receipt_accepted",
-        "generated_at_unix": 1_700_000_104,
-        "order_id_hex": None,
-        "trade_ids_hex": [trade_id_hex],
-        "settlement_channel_ids_hex": [channel_id_hex],
-        "receipt_id_hex": receipt_id_hex,
-        "expired_order_ids_hex": [order_id_hex],
-        "open_order_count": 1,
-        "open_settlement_channel_count": 1,
-        "settlement_receipt_count": 1,
+        "block_height": 42,
+        "block_hash": fixed(0xA0),
+        "event_index": 2,
+        "event": {
+            "kind": {"kind": "receipt_recorded", "detail": None},
+            "order_id": None,
+            "trade_id": fixed(0x22),
+            "channel_id": fixed(0x33),
+            "receipt_id": fixed(0x44),
+            "provider_id": fixed(0x55),
+            "book_revision": 10,
+            "authority": "settlement@governance",
+            "occurred_at_unix_ms": 1_700_000_104_000,
+        },
+    }
+    status = {
+        "open_orders": 1,
+        "partially_filled_orders": 0,
+        "filled_orders": 1,
+        "cancelled_orders": 0,
+        "expired_orders": 0,
+        "trades": 1,
+        "settlement_receipts": 1,
+        "settlement_channels": 1,
+        "open_settlement_channels": 1,
+        "book_revision": 10,
+        "next_admission_sequence": 8,
+        "next_trade_sequence": 4,
+        "updated_at_unix": 1_700_000_104,
+    }
+    submission_receipt = {
+        "payload": {
+            "tx_hash": _canonical_hash(0x71),
+            "entrypoint_hash": _canonical_hash(0x72),
+            "signed_transaction_hash": _canonical_hash(0x73),
+            "submitted_at_ms": 1_700_000_200_000,
+            "submitted_at_height": 42,
+            "signer": "ed0120ABCDEF",
+        },
+        "signature": "AB" * 64,
     }
     return {
-        "order_id_hex": order_id_hex,
-        "trade_id_hex": trade_id_hex,
-        "channel_id_hex": channel_id_hex,
-        "receipt_id_hex": receipt_id_hex,
-        "provider_id_hex": provider_id_hex,
+        "fixed": fixed,
+        "cursor": cursor,
         "order": order,
         "trade": trade,
         "channel": channel,
         "receipt": receipt,
-        "event": event,
+        "finalized_event": finalized_event,
+        "status": status,
+        "submission_receipt": submission_receipt,
     }
 
 
 def test_sorafs_orderbook_read_helpers_build_paths_and_normalize_payloads() -> None:
     payloads = _sample_sorafs_orderbook_payloads()
+    cursor = payloads["cursor"]
+    fixed = payloads["fixed"]
     session = RecordingSession()
     session.queue(
         StubResponse(
             payload={
-                "schema": "sorafs.orderbook.local.v1",
-                "source": "local",
-                "generated_at_unix": 1_700_000_000,
-                "next_sequence": 10,
-                "open_order_count": 1,
-                "trade_count": 1,
-                "settlement_channel_count": 1,
-                "settlement_receipt_count": 1,
-                "depth": {
-                    "hot_bid_gib": 2,
-                    "hot_ask_gib": 0,
-                    "warm_bid_gib": 0,
-                    "warm_ask_gib": 0,
-                    "archive_bid_gib": 0,
-                    "archive_ask_gib": 0,
+                "source": "finalized_chain",
+                "status": payloads["status"],
+                "orders": {
+                    "finalized_cursor": cursor,
+                    "orders": [payloads["order"]],
+                    "has_more": True,
+                    "next_after_order_id": fixed(0x11),
                 },
-                "open_orders": [{"sequence": 1, "order": payloads["order"]}],
-                "trades": [payloads["trade"]],
-                "settlement_channels": [payloads["channel"]],
-                "settlement_receipts": [payloads["receipt"]],
-                "expired_order_ids_hex": [payloads["order_id_hex"]],
             }
         )
     )
-    session.queue(StubResponse(payload={"count": 1, "trades": [payloads["trade"]]}))
-    session.queue(StubResponse(payload={"count": 1, "channels": [payloads["channel"]]}))
-    session.queue(StubResponse(payload={"count": 1, "receipts": [payloads["receipt"]]}))
     session.queue(
         StubResponse(
             payload={
-                "since": 0,
-                "limit": 10,
-                "count": 1,
-                "next_since": 9,
-                "events": [payloads["event"]],
+                "source": "finalized_chain",
+                "trades": {
+                    "finalized_cursor": cursor,
+                    "trades": [payloads["trade"]],
+                    "has_more": False,
+                    "next_after_trade_id": None,
+                },
+            }
+        )
+    )
+    session.queue(
+        StubResponse(
+            payload={
+                "source": "finalized_chain",
+                "channels": {
+                    "finalized_cursor": cursor,
+                    "channels": [payloads["channel"]],
+                    "has_more": False,
+                    "next_after_channel_id": None,
+                },
+            }
+        )
+    )
+    session.queue(
+        StubResponse(
+            payload={
+                "source": "finalized_chain",
+                "receipts": {
+                    "finalized_cursor": cursor,
+                    "receipts": [payloads["receipt"]],
+                    "has_more": False,
+                    "next_after_receipt_id": None,
+                },
+            }
+        )
+    )
+    session.queue(
+        StubResponse(
+            payload={
+                "source": "finalized_chain",
+                "events": {
+                    "finalized_cursor": cursor,
+                    "events": [payloads["finalized_event"]],
+                    "has_more": True,
+                    "next_after": {
+                        "sequence": 9,
+                        "block_height": 42,
+                        "block_hash": fixed(0xA0),
+                        "event_index": 2,
+                    },
+                },
             }
         )
     )
     client = ToriiClient("http://node.test", session=session)
 
-    book = client.get_sorafs_orderbook(headers={"X-Trace": "book"})
-    assert book["open_orders"][0]["order"]["order_id_hex"] == payloads["order_id_hex"]
-    assert book["open_orders"][0]["order"]["owner_account_hex"] == "cafe"
-    assert book["open_orders"][0]["order"]["signature"]["public_key_hex"] == "aa" * 32
+    anchor_hex = "a0" * 32
+    book = client.get_sorafs_orderbook(
+        expected_finalized_height=42,
+        expected_finalized_block_hash_hex=anchor_hex,
+        after_id_hex="10" * 32,
+        limit=25,
+        headers={"X-Trace": "book"},
+    )
+    assert book["source"] == "finalized_chain"
+    assert book["status"]["book_revision"] == 10
+    assert book["orders"]["orders"][0]["order_id"] == fixed(0x11)
+    assert book["orders"]["finalized_cursor"] == cursor
     assert session.calls[0]["method"] == "GET"
     assert session.calls[0]["url"].endswith("/v1/sorafs/orderbook/book")
+    assert session.calls[0]["params"] == {
+        "expected_finalized_height": 42,
+        "expected_finalized_block_hash_hex": anchor_hex,
+        "after_id_hex": "10" * 32,
+        "limit": 25,
+    }
     assert session.calls[0]["headers"]["X-Trace"] == "book"
 
     trades = client.list_sorafs_orderbook_trades()
-    assert trades["trades"][0]["trade_id_hex"] == payloads["trade_id_hex"]
+    assert trades["trades"]["trades"][0]["trade_id"] == fixed(0x22)
     assert session.calls[1]["url"].endswith("/v1/sorafs/orderbook/trades")
 
     channels = client.list_sorafs_orderbook_channels()
-    assert channels["channels"][0]["provider_id_hex"] == payloads["provider_id_hex"]
-    assert channels["channels"][0]["status"] == "open"
+    assert channels["channels"]["channels"][0]["provider_id"] == fixed(0x55)
+    assert channels["channels"]["channels"][0]["status"] == {
+        "status": "open",
+        "value": None,
+    }
     assert session.calls[2]["url"].endswith("/v1/sorafs/orderbook/channels")
 
     receipts = client.list_sorafs_orderbook_receipts()
-    assert receipts["receipts"][0]["range"]["end"] == 1024
-    assert receipts["receipts"][0]["settlement_signature"]["signature_hex"] == "bb" * 64
+    assert receipts["receipts"]["receipts"][0]["receipt_id"] == fixed(0x44)
     assert session.calls[3]["url"].endswith("/v1/sorafs/orderbook/receipts")
 
     events = client.list_sorafs_orderbook_events(
-        since=0,
-        limit="10",
+        expected_finalized_height=42,
+        expected_finalized_block_hash_hex=anchor_hex,
+        after_sequence=8,
+        after_block_height=41,
+        after_block_hash_hex="9f" * 32,
+        after_event_index=1,
+        limit=10,
         if_none_match='"old-events"',
     )
     assert events is not None
-    assert events["events"][0]["kind"] == "settlement_receipt_accepted"
-    assert events["events"][0]["receipt_id_hex"] == payloads["receipt_id_hex"]
+    event = events["events"]["events"][0]
+    assert event["event"]["kind"] == {"kind": "receipt_recorded", "detail": None}
+    assert event["event"]["receipt_id"] == fixed(0x44)
     assert session.calls[4]["url"].endswith("/v1/sorafs/orderbook/events")
-    assert session.calls[4]["params"] == {"since": 0, "limit": 10}
+    assert session.calls[4]["params"] == {
+        "expected_finalized_height": 42,
+        "expected_finalized_block_hash_hex": anchor_hex,
+        "after_sequence": 8,
+        "after_block_height": 41,
+        "after_block_hash_hex": "9f" * 32,
+        "after_event_index": 1,
+        "limit": 10,
+    }
     assert session.calls[4]["headers"]["If-None-Match"] == '"old-events"'
 
 
 def test_sorafs_orderbook_read_helpers_validate_options_and_cache_status() -> None:
     client = ToriiClient("http://node.test", session=RecordingSession())
 
-    with pytest.raises(ValueError, match="positive"):
+    with pytest.raises(ValueError, match="1..=500"):
         client.list_sorafs_orderbook_events(limit=0)
-    with pytest.raises(ValueError, match="one of if_none_match or etag"):
-        client.list_sorafs_orderbook_events(if_none_match='"a"', etag='"b"')
+    with pytest.raises(ValueError, match="1..=500"):
+        client.list_sorafs_orderbook_events(limit=501)
+    with pytest.raises(ValueError, match="requires expected_finalized_height"):
+        client.get_sorafs_orderbook(expected_finalized_height=7)
+    with pytest.raises(ValueError, match="lowercase hexadecimal"):
+        client.get_sorafs_orderbook(
+            expected_finalized_height=7,
+            expected_finalized_block_hash_hex="AA" * 32,
+        )
+    with pytest.raises(ValueError, match="all-zero"):
+        client.get_sorafs_orderbook(
+            expected_finalized_height=7,
+            expected_finalized_block_hash_hex="00" * 32,
+        )
+    with pytest.raises(ValueError, match="all four finalized event cursor"):
+        client.list_sorafs_orderbook_events(after_sequence=1)
+    with pytest.raises(TypeError, match="unexpected keyword argument 'since'"):
+        client.list_sorafs_orderbook_events(since=0)  # type: ignore[call-arg]
+    with pytest.raises(TypeError, match="unexpected keyword argument 'etag'"):
+        client.list_sorafs_orderbook_events(etag='"old"')  # type: ignore[call-arg]
     with pytest.raises(TypeError, match="headers must be a mapping"):
         client.get_sorafs_orderbook(headers="not-a-mapping")  # type: ignore[arg-type]
 
@@ -812,126 +935,59 @@ def test_sorafs_orderbook_read_helpers_validate_options_and_cache_status() -> No
     session.queue(StubResponse(status_code=304))
     cached_client = ToriiClient("http://node.test", session=session)
 
-    assert cached_client.list_sorafs_orderbook_events(etag='"same"') is None
+    assert cached_client.list_sorafs_orderbook_events(if_none_match='"same"') is None
     assert session.calls[0]["headers"]["If-None-Match"] == '"same"'
 
 
-def test_sorafs_orderbook_submit_helpers_sign_exact_payload_bytes() -> None:
+def test_sorafs_orderbook_submit_helpers_forward_signed_transactions() -> None:
     payloads = _sample_sorafs_orderbook_payloads()
     session = RecordingSession()
-    session.queue(
-        StubResponse(
-            payload={
-                "status": "accepted",
-                "sequence": 12,
-                "open_order_count": 1,
-                "accepted_order": payloads["order"],
-                "fills": [
-                    {
-                        "trade": payloads["trade"],
-                        "maker_remaining_gib": 0,
-                        "taker_remaining_gib": 2,
-                        "gross_value": "340282366920938463463374607431768211456.000000001",
-                    }
-                ],
-                "settlement_channels_opened": [payloads["channel"]],
-                "expired_order_ids_hex": [payloads["order_id_hex"]],
-            }
-        )
-    )
-    session.queue(
-        StubResponse(
-            payload={
-                "status": "cancelled",
-                "reason": "owner_requested",
-                "open_order_count": 0,
-                "cancelled_order": payloads["order"],
-            }
-        )
-    )
-    session.queue(
-        StubResponse(
-            payload={
-                "status": "accepted",
-                "settlement_receipt_count": 1,
-                "open_settlement_channel_count": 1,
-                "accepted_receipt": payloads["receipt"],
-                "updated_channel": payloads["channel"],
-            }
-        )
-    )
-    signed_messages: List[bytes] = []
-
-    def signer(message: bytes) -> bytes:
-        signed_messages.append(message)
-        return b"signed-request"
-
-    auth = ToriiCanonicalRequestAuth(
-        account_id="alice@wonderland",
-        signer=signer,
-        timestamp_ms=1234,
-        nonce="nonce-1",
-    )
+    for _ in range(3):
+        session.queue(StubResponse(status_code=202, payload=payloads["submission_receipt"]))
     client = ToriiClient("http://node.test", session=session)
 
     order_result = client.submit_sorafs_orderbook_order(
         b"\x01\x02\x03",
-        canonical_auth=auth,
         headers={"X-Trace": "order-submit"},
     )
-    assert order_result["status"] == "accepted"
-    assert order_result["sequence"] == 12
-    assert order_result["fills"][0]["gross_value"] == (
-        "340282366920938463463374607431768211456.000000001"
-    )
+    assert order_result == payloads["submission_receipt"]
     order_call = session.calls[0]
     assert order_call["method"] == "POST"
     assert order_call["url"].endswith("/v1/sorafs/orderbook/orders")
     assert order_call["data"] == b"\x01\x02\x03"
     assert order_call["headers"]["Accept"] == "application/json"
-    assert order_call["headers"]["Content-Type"] == "application/octet-stream"
+    assert order_call["headers"]["Content-Type"] == "application/x-norito"
     assert order_call["headers"]["X-Trace"] == "order-submit"
-    assert order_call["headers"]["X-Iroha-Account"] == "alice@wonderland"
-    assert order_call["headers"]["X-Iroha-Signature"] == base64.b64encode(
-        b"signed-request"
-    ).decode("ascii")
-    assert signed_messages[0] == canonical_request_signature_message(
-        "POST",
-        "/v1/sorafs/orderbook/orders",
-        b"\x01\x02\x03",
-        timestamp_ms=1234,
-        nonce="nonce-1",
-    )
+    assert "X-Iroha-Account" not in order_call["headers"]
+    assert "X-Iroha-Signature" not in order_call["headers"]
 
-    cancel_result = client.submit_sorafs_orderbook_cancel([4, 5], canonical_auth=auth)
-    assert cancel_result["status"] == "cancelled"
-    assert cancel_result["cancelled_order"]["order_id_hex"] == payloads["order_id_hex"]
+    cancel_result = client.submit_sorafs_orderbook_cancel(memoryview(b"\x04\x05"))
+    assert cancel_result == payloads["submission_receipt"]
     assert session.calls[1]["url"].endswith("/v1/sorafs/orderbook/cancel")
     assert session.calls[1]["data"] == b"\x04\x05"
 
-    receipt_result = client.submit_sorafs_orderbook_receipt(bytearray([6]), canonical_auth=auth)
-    assert receipt_result["status"] == "accepted"
-    assert receipt_result["accepted_receipt"]["receipt_id_hex"] == payloads["receipt_id_hex"]
+    receipt_result = client.submit_sorafs_orderbook_receipt(bytearray([6]))
+    assert receipt_result == payloads["submission_receipt"]
     assert session.calls[2]["url"].endswith("/v1/sorafs/orderbook/receipts")
     assert session.calls[2]["data"] == b"\x06"
 
 
 def test_sorafs_orderbook_submit_helpers_validate_inputs() -> None:
     client = ToriiClient("http://node.test", session=RecordingSession())
-    auth = ToriiCanonicalRequestAuth(
-        account_id="alice@wonderland",
-        signer=lambda _message: b"signed-request",
-    )
 
-    with pytest.raises(ValueError, match="canonical_auth is required"):
-        client.submit_sorafs_orderbook_order(b"\x01", canonical_auth=None)  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="bytes-like canonical versioned SignedTransaction"):
+        client.submit_sorafs_orderbook_order([1, 2, 3])
     with pytest.raises(ValueError, match="must not be empty"):
-        client.submit_sorafs_orderbook_receipt(b"", canonical_auth=auth)
+        client.submit_sorafs_orderbook_receipt(b"")
     with pytest.raises(TypeError, match="headers must be a mapping"):
         client.submit_sorafs_orderbook_cancel(
             b"\x01",
-            canonical_auth=auth,
             headers="not-a-mapping",  # type: ignore[arg-type]
+        )
+    with pytest.raises(ValueError, match="fixed media type"):
+        client.submit_sorafs_orderbook_cancel(
+            b"\x01",
+            headers={"Content-Type": "application/octet-stream"},
         )
 
 
@@ -1008,22 +1064,22 @@ def test_sorafs_orderbook_xor_quantity_parser_rejects_adversarial_values(
     ("parser", "payload_key", "retired_field"),
     [
         (
-            ToriiClient._parse_sorafs_orderbook_order,
+            ToriiClient._parse_sorafs_orderbook_order_record,
             "order",
             "price_per_gib_micro_xor",
         ),
         (
-            ToriiClient._parse_sorafs_orderbook_trade,
+            ToriiClient._parse_sorafs_orderbook_trade_record,
             "trade",
             "maker_fee_micro_xor",
         ),
         (
-            ToriiClient._parse_sorafs_orderbook_channel,
+            ToriiClient._parse_sorafs_orderbook_channel_record,
             "channel",
             "xor_locked_micro",
         ),
         (
-            ToriiClient._parse_sorafs_orderbook_receipt,
+            ToriiClient._parse_sorafs_orderbook_receipt_record,
             "receipt",
             "provider_credit_micro",
         ),
@@ -1046,7 +1102,35 @@ def test_sorafs_orderbook_exact_records_reject_unknown_fields() -> None:
     order["unexpected_amount"] = "1"
 
     with pytest.raises(ValueError, match="unexpected_amount"):
-        ToriiClient._parse_sorafs_orderbook_order(order, context="order")
+        ToriiClient._parse_sorafs_orderbook_order_record(order, context="order")
+
+
+def test_sorafs_orderbook_native_parsers_reject_noncanonical_wire_values() -> None:
+    payloads = _sample_sorafs_orderbook_payloads()
+
+    order = copy.deepcopy(payloads["order"])
+    order["order_id"][0] = True
+    with pytest.raises(TypeError, match="integer byte"):
+        ToriiClient._parse_sorafs_orderbook_order_record(order, context="order")
+
+    order = copy.deepcopy(payloads["order"])
+    order["canonical_order"] = "YQ"
+    with pytest.raises(ValueError, match="canonical"):
+        ToriiClient._parse_sorafs_orderbook_order_record(order, context="order")
+
+    order = copy.deepcopy(payloads["order"])
+    order["status"] = {"status": "open"}
+    with pytest.raises(ValueError, match="missing value"):
+        ToriiClient._parse_sorafs_orderbook_order_record(order, context="order")
+
+    page = {
+        "finalized_cursor": payloads["cursor"],
+        "orders": [payloads["order"]],
+        "has_more": True,
+        "next_after_order_id": None,
+    }
+    with pytest.raises(ValueError, match="presence must match has_more"):
+        ToriiClient._parse_sorafs_orderbook_order_page(page, context="orders")
 
 
 def test_expect_status_surfaces_error_envelope_details() -> None:
@@ -3451,6 +3535,8 @@ def test_get_sumeragi_status_parses_authoritative_v2_snapshot() -> None:
     payload = _sumeragi_v2_status_payload()
     status = _get_sumeragi_status(payload)
 
+    assert type(status) is SumeragiV2Status
+    assert SumeragiV2Status is not SumeragiDiagnosticsStatus
     assert status.protocol_version == 3
     assert status.restart_required is False
     assert status.height == 10
@@ -3780,6 +3866,30 @@ def test_get_sumeragi_status_rejects_operational_diagnostics_fields() -> None:
         _get_sumeragi_status(payload)
 
 
+def test_sumeragi_endpoint_methods_reject_swapped_payload_contracts() -> None:
+    status_session = RecordingSession()
+    status_session.queue(StubResponse(payload=_sumeragi_diagnostics_payload()))
+    status_client = ToriiClient("http://node.test", session=status_session)
+
+    with pytest.raises(RuntimeError, match="sumeragi status contains unknown field"):
+        status_client.get_sumeragi_status()
+    assert status_session.calls[0]["url"].endswith("/v1/sumeragi/status")
+
+    diagnostics_session = RecordingSession()
+    diagnostics_session.queue(StubResponse(payload=_sumeragi_v2_status_payload()))
+    diagnostics_client = ToriiClient(
+        "http://node.test", session=diagnostics_session
+    )
+
+    with pytest.raises(
+        RuntimeError, match="sumeragi diagnostics contains unknown field"
+    ):
+        diagnostics_client.get_sumeragi_diagnostics()
+    assert diagnostics_session.calls[0]["url"].endswith(
+        "/v1/sumeragi/diagnostics"
+    )
+
+
 def test_get_sumeragi_diagnostics_parses_exact_nested_fee_and_native_amx_receipts() -> None:
     payload = _sumeragi_diagnostics_payload()
     settlement = _lane_settlement_payload()
@@ -3960,30 +4070,133 @@ def test_get_sumeragi_diagnostics_rejects_unordered_native_qc_validator_set() ->
 def test_get_sumeragi_diagnostics_parses_ordered_native_application_evidence() -> None:
     payload = _sumeragi_diagnostics_payload()
     payload["native_amx_participant_applications"] = [
-        {
-            "lane_id": 3,
-            "dataspace_id": 8,
-            "lane_incarnation": _canonical_hash(0x65),
-            "participant_height": 8,
-            "participant_view": 1,
-            "predecessor_height": 7,
-            "predecessor_descriptor_hash": _canonical_hash(0x68),
-            "descriptor_hash": _canonical_hash(0x73),
-            "proposal_hash": _canonical_hash(0x69),
-            "settlement_hash": _canonical_hash(0x6B),
-            "source_count": 2,
-            "application_block_height": 10,
-            "application_block_hash": _canonical_hash(0x79),
-            "state": "durably_applied",
-        }
+        _native_amx_participant_application_payload()
     ]
 
-    applications = _get_sumeragi_diagnostics(
-        payload
-    ).native_amx_participant_applications
+    diagnostics = _get_sumeragi_diagnostics(payload)
+    applications = diagnostics.native_amx_participant_applications
 
+    assert type(diagnostics) is SumeragiDiagnosticsStatus
     assert applications[0].participant_height == 8
     assert applications[0].state == "durably_applied"
+
+
+def test_get_sumeragi_diagnostics_accepts_explicit_native_application_conflict() -> None:
+    payload = _sumeragi_diagnostics_payload()
+    application = _native_amx_participant_application_payload(state="conflict")
+    del application["application_block_height"]
+    del application["application_block_hash"]
+    payload["native_amx_participant_applications"] = [application]
+
+    parsed = _get_sumeragi_diagnostics(
+        payload
+    ).native_amx_participant_applications[0]
+
+    assert parsed.state == "conflict"
+    assert parsed.application_block_height is None
+    assert parsed.application_block_hash is None
+
+
+@pytest.mark.parametrize(
+    ("mutate", "error"),
+    [
+        pytest.param(
+            lambda row: row.update(state="applied"),
+            "state has an unknown variant",
+            id="unknown-state",
+        ),
+        pytest.param(
+            lambda row: row.update(state=" conflict "),
+            "state has an unknown variant",
+            id="padded-state",
+        ),
+        pytest.param(
+            lambda row: row.update(
+                state={"state": "durably_applied", "details": None}
+            ),
+            "state has an unknown variant",
+            id="status-style-tagged-state",
+        ),
+        pytest.param(
+            lambda row: row.pop("state"),
+            "missing required field state",
+            id="missing-state",
+        ),
+        pytest.param(
+            lambda row: row.update(legacy_phase="commit"),
+            "unknown field legacy_phase",
+            id="unknown-field",
+        ),
+        pytest.param(
+            lambda row: row.pop("application_block_hash"),
+            "application block height and hash must appear together",
+            id="unpaired-application-block",
+        ),
+        pytest.param(
+            lambda row: row.update(source_count="2"),
+            "source_count must be an integer",
+            id="quoted-source-count",
+        ),
+        pytest.param(
+            lambda row: row.update(source_count=4_097),
+            "source_count exceeds its protocol bound",
+            id="source-count-overflow",
+        ),
+        pytest.param(
+            lambda row: row.update(descriptor_hash="73" * 32),
+            "descriptor_hash must be a canonical hash literal",
+            id="malformed-hash",
+        ),
+    ],
+)
+def test_get_sumeragi_diagnostics_rejects_invalid_native_application_shapes(
+    mutate: Callable[[Dict[str, Any]], Any],
+    error: str,
+) -> None:
+    payload = _sumeragi_diagnostics_payload()
+    application = _native_amx_participant_application_payload()
+    mutate(application)
+    payload["native_amx_participant_applications"] = [application]
+
+    with pytest.raises(RuntimeError, match=error):
+        _get_sumeragi_diagnostics(payload)
+
+
+def test_get_sumeragi_diagnostics_enforces_native_application_bound_and_order() -> None:
+    bounded = _sumeragi_diagnostics_payload()
+    bounded["native_amx_participant_applications"] = [
+        _native_amx_participant_application_payload(lane_id=lane_id)
+        for lane_id in range(1_024)
+    ]
+    bounded_applications = _get_sumeragi_diagnostics(
+        bounded
+    ).native_amx_participant_applications
+    assert len(bounded_applications) == 1_024
+
+    oversized = _sumeragi_diagnostics_payload()
+    oversized["native_amx_participant_applications"] = [None] * 1_025
+    with pytest.raises(
+        RuntimeError,
+        match="native_amx_participant_applications exceeds its protocol item bound",
+    ):
+        _get_sumeragi_diagnostics(oversized)
+
+    unordered = _sumeragi_diagnostics_payload()
+    unordered["native_amx_participant_applications"] = [
+        _native_amx_participant_application_payload(lane_id=4),
+        _native_amx_participant_application_payload(lane_id=3),
+    ]
+    with pytest.raises(RuntimeError, match="strictly ordered by route and incarnation"):
+        _get_sumeragi_diagnostics(unordered)
+
+    duplicate = _sumeragi_diagnostics_payload()
+    application = _native_amx_participant_application_payload()
+    duplicate["native_amx_participant_applications"] = [
+        application,
+        copy.deepcopy(application),
+    ]
+    with pytest.raises(RuntimeError, match="strictly ordered by route and incarnation"):
+        _get_sumeragi_diagnostics(duplicate)
 
 
 def test_get_sumeragi_diagnostics_parses_autonomous_stage_and_conflict() -> None:
@@ -4394,6 +4607,11 @@ def test_get_sumeragi_status_rejects_protocol_context_and_commit_tampering() -> 
     with pytest.raises(RuntimeError, match="restart_required must be a boolean"):
         _get_sumeragi_status(invalid_restart_required)
 
+    quoted_height = _sumeragi_v2_status_payload()
+    quoted_height["height"] = "10"
+    with pytest.raises(RuntimeError, match="height must be an integer"):
+        _get_sumeragi_status(quoted_height)
+
     wrong_quorum = _sumeragi_v2_status_payload()
     wrong_quorum["height_context"]["quorum"]["min_signers"] = 2
     with pytest.raises(RuntimeError, match="quorum is not canonical"):
@@ -4480,6 +4698,7 @@ def test_get_sumeragi_diagnostics_rejects_impossible_queue_bounds() -> None:
         "lane_payload_ownerships",
         "committed_lane_blocks",
         "lane_block_sessions",
+        "autonomous_lane_executions",
     ],
 )
 def test_get_sumeragi_diagnostics_requires_all_canonical_lane_arrays(

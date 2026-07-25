@@ -9559,6 +9559,53 @@
     },
     {
       "expectation": "reject",
+      "id": "coherent_unordered_validator_set",
+      "mutations": [
+        {
+          "op": "swap",
+          "path": "/golden/receipt_group/native_amx_receipts/0/legs/0/prepare_qc/validator_set",
+          "value": {
+            "left": 0,
+            "right": 1
+          }
+        },
+        {
+          "op": "swap",
+          "path": "/golden/receipt_group/native_amx_receipts/0/legs/0/prepare_qc/validator_set_pops",
+          "value": {
+            "left": 0,
+            "right": 1
+          }
+        },
+        {
+          "op": "swap",
+          "path": "/golden/receipt_group/native_amx_receipts/0/legs/0/commit_qc/validator_set",
+          "value": {
+            "left": 0,
+            "right": 1
+          }
+        },
+        {
+          "op": "swap",
+          "path": "/golden/receipt_group/native_amx_receipts/0/legs/0/commit_qc/validator_set_pops",
+          "value": {
+            "left": 0,
+            "right": 1
+          }
+        },
+        {
+          "op": "swap",
+          "path": "/golden/receipt_group/native_amx_receipts/0/legs/0/participant_proposal/descriptor/validator_set",
+          "value": {
+            "left": 0,
+            "right": 1
+          }
+        }
+      ],
+      "validator": "receipt_group"
+    },
+    {
+      "expectation": "reject",
       "id": "under_quorum_bitmap",
       "mutations": [
         {
@@ -9695,6 +9742,41 @@
     },
     {
       "expectation": "reject",
+      "id": "zero_pop",
+      "mutations": [
+        {
+          "op": "replace",
+          "path": "/golden/receipt_group/native_amx_receipts/0/legs/0/prepare_qc/validator_set_pops/0/0",
+          "value": 0
+        },
+        {
+          "op": "repeat",
+          "path": "/golden/receipt_group/native_amx_receipts/0/legs/0/prepare_qc/validator_set_pops/0",
+          "value": {
+            "count": 96,
+            "source_index": 0
+          }
+        }
+      ],
+      "validator": "receipt_group"
+    },
+    {
+      "expectation": "reject",
+      "id": "long_pop",
+      "mutations": [
+        {
+          "op": "repeat",
+          "path": "/golden/receipt_group/native_amx_receipts/0/legs/0/prepare_qc/validator_set_pops/0",
+          "value": {
+            "count": 97,
+            "source_index": 0
+          }
+        }
+      ],
+      "validator": "receipt_group"
+    },
+    {
+      "expectation": "reject",
       "id": "short_aggregate_signature",
       "mutations": [
         {
@@ -9797,6 +9879,36 @@
             90,
             90
           ]
+        }
+      ],
+      "validator": "receipt_group"
+    },
+    {
+      "expectation": "reject",
+      "id": "zero_aggregate_signature",
+      "mutations": [
+        {
+          "op": "repeat",
+          "path": "/golden/receipt_group/native_amx_receipts/0/legs/0/prepare_qc/bls_aggregate_signature",
+          "value": {
+            "count": 96,
+            "source_index": 71
+          }
+        }
+      ],
+      "validator": "receipt_group"
+    },
+    {
+      "expectation": "reject",
+      "id": "long_aggregate_signature",
+      "mutations": [
+        {
+          "op": "repeat",
+          "path": "/golden/receipt_group/native_amx_receipts/0/legs/0/prepare_qc/bls_aggregate_signature",
+          "value": {
+            "count": 97,
+            "source_index": 0
+          }
         }
       ],
       "validator": "receipt_group"
@@ -9974,6 +10086,53 @@
     },
     {
       "expectation": "reject",
+      "id": "outer_group_source_reorder",
+      "mutations": [
+        {
+          "op": "swap",
+          "path": "/golden/receipt_group/native_amx_receipts",
+          "value": {
+            "left": 0,
+            "right": 1
+          }
+        }
+      ],
+      "validator": "receipt_group"
+    },
+    {
+      "expectation": "reject",
+      "id": "outer_group_source_substitution",
+      "mutations": [
+        {
+          "op": "replace",
+          "path": "/golden/receipt_group/native_amx_receipts/1/source_id",
+          "value": "EFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEF"
+        },
+        {
+          "op": "replace",
+          "path": "/golden/receipt_group/native_amx_receipts/1/legs/0/prepare_qc/body/source_id",
+          "value": "EFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEF"
+        },
+        {
+          "op": "replace",
+          "path": "/golden/receipt_group/native_amx_receipts/1/legs/0/commit_qc/body/source_id",
+          "value": "EFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEF"
+        },
+        {
+          "op": "replace",
+          "path": "/golden/receipt_group/native_amx_receipts/1/legs/1/prepare_qc/body/source_id",
+          "value": "EFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEF"
+        },
+        {
+          "op": "replace",
+          "path": "/golden/receipt_group/native_amx_receipts/1/legs/1/commit_qc/body/source_id",
+          "value": "EFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEF"
+        }
+      ],
+      "validator": "receipt_group"
+    },
+    {
+      "expectation": "reject",
       "id": "unsupported_receipt_version",
       "mutations": [
         {
@@ -9992,6 +10151,89 @@
           "op": "replace",
           "path": "/golden/receipt_group/native_amx_receipts/0/source_id",
           "value": "abababababababababababababababababababababababababababababababab"
+        }
+      ],
+      "validator": "receipt_group"
+    },
+    {
+      "expectation": "reject",
+      "id": "source_id_substituted_for_entrypoint_hash",
+      "mutations": [
+        {
+          "op": "copy",
+          "path": "/golden/receipt_group/native_amx_receipts/0/legs/0/prepare_qc/body/tx_entrypoint_hash",
+          "value": {
+            "from": "/golden/receipt_group/native_amx_receipts/0/source_id"
+          }
+        },
+        {
+          "op": "copy",
+          "path": "/golden/receipt_group/native_amx_receipts/0/legs/0/commit_qc/body/tx_entrypoint_hash",
+          "value": {
+            "from": "/golden/receipt_group/native_amx_receipts/0/source_id"
+          }
+        }
+      ],
+      "validator": "receipt_group"
+    },
+    {
+      "expectation": "reject",
+      "id": "entrypoint_hash_substituted_for_source_id",
+      "mutations": [
+        {
+          "op": "copy",
+          "path": "/golden/receipt_group/native_amx_receipts/0/source_id",
+          "value": {
+            "from": "/golden/receipt_group/native_amx_receipts/0/legs/0/prepare_qc/body/tx_entrypoint_hash"
+          }
+        },
+        {
+          "op": "copy",
+          "path": "/golden/receipt_group/native_amx_receipts/0/legs/0/prepare_qc/body/source_id",
+          "value": {
+            "from": "/golden/receipt_group/native_amx_receipts/0/legs/0/prepare_qc/body/tx_entrypoint_hash"
+          }
+        },
+        {
+          "op": "copy",
+          "path": "/golden/receipt_group/native_amx_receipts/0/legs/0/commit_qc/body/source_id",
+          "value": {
+            "from": "/golden/receipt_group/native_amx_receipts/0/legs/0/prepare_qc/body/tx_entrypoint_hash"
+          }
+        }
+      ],
+      "validator": "receipt_group"
+    },
+    {
+      "expectation": "reject",
+      "id": "wrong_entrypoint_hash_checksum",
+      "mutations": [
+        {
+          "op": "replace",
+          "path": "/golden/receipt_group/native_amx_receipts/0/legs/0/prepare_qc/body/tx_entrypoint_hash",
+          "value": "hash:1111111111111111111111111111111111111111111111111111111111111111#0000"
+        },
+        {
+          "op": "replace",
+          "path": "/golden/receipt_group/native_amx_receipts/0/legs/0/commit_qc/body/tx_entrypoint_hash",
+          "value": "hash:1111111111111111111111111111111111111111111111111111111111111111#0000"
+        }
+      ],
+      "validator": "receipt_group"
+    },
+    {
+      "expectation": "reject",
+      "id": "wrong_entrypoint_hash_marker",
+      "mutations": [
+        {
+          "op": "replace",
+          "path": "/golden/receipt_group/native_amx_receipts/0/legs/0/prepare_qc/body/tx_entrypoint_hash",
+          "value": "hash:E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2#4F70"
+        },
+        {
+          "op": "replace",
+          "path": "/golden/receipt_group/native_amx_receipts/0/legs/0/commit_qc/body/tx_entrypoint_hash",
+          "value": "hash:E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2E2#4F70"
         }
       ],
       "validator": "receipt_group"

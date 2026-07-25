@@ -76,7 +76,7 @@ struct PorChallengeStatusV1 {
     issued_at: Timestamp,
     responded_at: Option<Timestamp>,
     proof_digest: Option<Digest32>,
-    repair_task_id: Option<Bytes16>,
+    repair_task_id: Option<Bytes32>,
     failure_reason: Option<String>,
     verifier_latency_ms: Option<U32>,
 }
@@ -122,6 +122,12 @@ struct PorProviderSummaryV1 {
     ticket_id: Option<String>,
 }
 ```
+
+`repair_task_id` is a chain-authoritative 32-byte native repair task identifier.
+The field is part of every canonical status envelope: `failed` requires a
+non-zero value, while every other outcome requires `None`. Pre-release status
+payloads that omit the field or encode the former 16-byte process-local value
+are rejected rather than migrated.
 
 The CLI serialises these types using Norito JSON (`norito::json`) and ensures
 report outputs embed metadata (schema version, hash, generation timestamp).
@@ -216,10 +222,12 @@ substitute.
   omit it only when no proof arrived. Provider/manifest/digest/time mismatches
   leave the legitimate challenge retryable. Exact challenge, proof, and verdict
   replays are rejected, including attempts to resurrect a finalized challenge.
-  The Torii coordinator/node pipeline is serialized and uses compensating
-  rollback when the second state store rejects a transition. Coordinator
-  snapshot failures and repair-history persistence failures roll back the
-  in-memory transition before the other store is changed.
+  A terminal failure uses the exact-chain durable native repair-transaction
+  forwarder and reconciles the finalized task cursor before storage execution.
+  The retained coordinator snapshot and repair-history store are rebuildable
+  local projections only; the residual public repair manager/checkpoint
+  consumers must be removed before promotion, and cross-peer duplicate
+  submissions must prove one terminal outcome.
 - Export files currently contain the raw Norito `PorStatusExportV1` payload.
   Parquet/manifest packaging and SoraFS pinning are production archive tasks.
 - Governance meetings can reference `PorWeeklyReportV1` to decide on penalties,

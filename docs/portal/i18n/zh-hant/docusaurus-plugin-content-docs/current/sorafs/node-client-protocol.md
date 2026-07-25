@@ -126,10 +126,11 @@ SDK 通過 `sorafs_orchestrator`）：
 - `iroha app sorafs pin list|show`、`alias list` 和 `replication list` 包裹
   pin-registry REST 端點並使用證明塊打印原始 Norito JSON
   為審計證據。
-- `iroha app sorafs storage pin` 和 `torii /v1/sorafs/pin/register` 接受 Norito
-  或 JSON 清單加上可選的別名證明和後繼者；格式錯誤的證明
-  提高 `400`，用 `Warning: 110` 證明過時的樣張表面 `503`，以及
-  硬過期的證明返回 `412`。
+- `torii /v1/sorafs/pin/register` 接受封閉的 JSON V1 請求。
+  `manifest_payload` 必須是 canonical Norito `ManifestV1` 位元組精確的、
+  帶 canonical padding 的 base64。Torii 僅從解碼後的 manifest 派生 digest、
+  chunker、content length、pin policy 和 fee input，並拒絕已廢棄的重複
+  summary 欄位。`alias` 和非零 `successor_of_hex` predecessor 仍為可選欄位。
 - `iroha app sorafs repair list` 鏡像修復隊列過濾器，同時
   `repair claim|complete|fail|escalate` 提交簽名的工作人員操作或斜線
   向 Torii 提出建議。 Slash 提案可能包含治理批准摘要

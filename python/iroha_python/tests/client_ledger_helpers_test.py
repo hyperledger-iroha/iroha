@@ -3623,6 +3623,7 @@ def test_zk_client_helpers_reject_invalid_inputs_before_submission(
         getattr(client, method_name)(
             chain_id="chain",
             authority=account_address(0x6B),
+            fee_payment=FEE_PAYMENT,
             private_key_hex="11" * 32,
             **kwargs,
         )

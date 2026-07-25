@@ -19,43 +19,53 @@ response:
 
 ```rust
 use std::error::Error;
-use std::io::{BufRead, BufReader};
+use std::io::BufReader;
 
 use reqwest::blocking::Response;
-use sorafs_car::proof_stream::{ProofStreamItem, ProofStreamMetrics, ProofStreamSummary};
+use sorafs_car::proof_stream::{
+    ProofStreamMetrics, ProofStreamSummary, ProofStreamVerificationContext,
+};
+use sorafs_car::proof_stream_transport::ProofStreamNdjsonReader;
+use sorafs_manifest::ProofStreamRequestV1;
 
 /// Consume an NDJSON proof stream and return aggregated metrics.
-pub fn collect_proof_metrics(response: Response) -> Result<ProofStreamSummary, Box<dyn Error>> {
+pub fn collect_proof_metrics(
+    response: Response,
+    exact_request: ProofStreamRequestV1,
+    trusted_por_root: Option<[u8; 32]>,
+) -> Result<ProofStreamSummary, Box<dyn Error>> {
+    // exact_request must be the request sent to the gateway, including the
+    // non-zero finalized cursor read from the authenticated Approved native
+    // pin record. For PoR, use that record's root; use None for PDP/PoTR.
+    let verification_context =
+        ProofStreamVerificationContext::new(exact_request, trusted_por_root)?;
     if !response.status().is_success() {
         return Err(format!("gateway returned {}", response.status()).into());
     }
 
-    let mut reader = BufReader::new(response);
-    let mut line = String::new();
     let mut metrics = ProofStreamMetrics::default();
-    let mut failures = Vec::new();
 
-    while reader.read_line(&mut line)? != 0 {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            line.clear();
-            continue;
-        }
-        let item = ProofStreamItem::from_ndjson(trimmed.as_bytes())?;
-        if item.status.is_failure() && failures.len() < 5 {
-            failures.push(item.clone());
-        }
+    // Consume the shared bounded reader through EOF. It authenticates each
+    // request digest/cursor plus exact cardinality and ordering.
+    for item in ProofStreamNdjsonReader::new(BufReader::new(response), &verification_context) {
+        let item = item?;
         metrics.record(&item);
-        line.clear();
+    }
+    if metrics.failure_total != 0 {
+        return Err("proof stream reported a failed item".into());
     }
 
-    Ok(ProofStreamSummary::new(metrics, failures))
+    Ok(ProofStreamSummary::new(metrics, Vec::new()))
 }
 ```
 
 The full version (with tests) lives in `docs/examples/sorafs_rust_proof_stream.rs`.
 `ProofStreamSummary::to_json()` renders the same metrics JSON as the CLI, making
-it easy to feed observability backends or CI assertions.
+it easy to feed observability backends or CI assertions. Acquire the root and
+cursor with authenticated `GET /v1/sorafs/pin/{digest_hex}` on the same HTTPS
+origin before constructing the request; never learn either value from a stream
+row. Keep bearer material in a runtime secret, disable redirects, and emit only
+payload-free event projections.
 
 ## Multi-source fetch scoring
 

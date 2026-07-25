@@ -120,9 +120,10 @@ adverts:
   key `profile.sample_multiplier` (integer `1-4`). The value may be a single
   number/string or an object with per-profile overrides, e.g.
   `{"default":2,"sorafs.sf2@1.0.0":3}`.
-  Manual Torii `/v1/sorafs/storage/por-sample` probes reject `count` values
-  outside `1..=500` before manifest lookup, then cap returned samples by the
-  stored manifest leaf count.
+  The unauthenticated local `/v1/sorafs/storage/por-sample` probe is retired.
+  Manual production probes use authenticated `POST /v1/sorafs/proof/stream`;
+  PoR `sample_count` is limited to `1..=500`, and Torii requires an approved
+  finalized pin record before sampling and verifying against its committed root.
 - `pdp_sample_window`: maximum number of distinct PDP segments admitted in one
   governed challenge. Configuration parsing rejects zero and values above the
   protocol ceiling of 500 before the storage worker starts.
@@ -233,8 +234,8 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
 - `ingest` expects a Norito-encoded manifest `.to` file plus the matching payload
   bytes. It reconstructs the chunk plan from the manifest’s chunking profile,
   enforces digest parity, persists chunk files, and optionally emits a
-  `chunk_fetch_specs` JSON blob so downstream tooling can sanity-check the
-  layout.
+  strict `sorafs.chunk_fetch_plan.v1` JSON object so downstream tooling can
+  verify both the whole-payload BLAKE3 binding and the chunk layout.
 - `export` accepts a manifest ID and writes the stored manifest/payload to disk
   (with optional plan JSON) so fixtures remain reproducible across environments.
 
@@ -252,8 +253,9 @@ payloads round-trip cleanly alongside the Torii APIs.【crates/sorafs_node/tests
 >   bounds the returned `files` metadata array (max 500) while preserving
 >   `file_count`/`returned_file_count`/`truncated_files`; omitting `limit`
 >   returns the complete file list for remote cache compatibility.【crates/iroha_torii/src/sorafs/api.rs:1207】
-> - `GET /v1/sorafs/storage/plan/{manifest_id}` — returns the deterministic
->   chunk plan JSON (`chunk_fetch_specs`) for downstream tooling. The `files`,
+> - `GET /v1/sorafs/storage/plan/{manifest_id}` — returns a bounded diagnostic
+>   projection of deterministic chunk metadata for downstream inspection; it is
+>   not a standalone fetch-plan input. The `files`,
 >   `chunk_digests_blake3`, and `chunks` arrays are bounded by `limit` (default
 >   50, max 500), with full count/returned count/truncation metadata for
 >   inventory probes.【crates/iroha_torii/src/sorafs/api.rs:1259】
@@ -291,12 +293,14 @@ payloads round-trip cleanly alongside the Torii APIs.【crates/sorafs_node/tests
      exhaustion, or a pre-rename checkpoint error restores both in-memory
      snapshots and returns an explicit error. Live broadcast, transparency,
      and Governance DAG publication occur only after that checkpoint commits.
-   - Restore `repair/repair_state.to` under the same configured entry and byte
-     ceilings. Repair tasks, PoR failure history, and auditor nonce high-water
-     marks are authoritative: corrupt, oversize, symlinked, or duplicate-filled
-     snapshots stop startup. The node never archives a corrupt store and starts
-     with an empty replacement, and it refuses new records at the ceiling
-     rather than evicting replay or audit state.
+   - Rebuild repair work from the finalized native task and typed-event
+     projections at one exact height/block-hash anchor. Storage execution is
+     permitted only for the reconciled live lease owner, generation, revision,
+     and expiry. The retained `repair/repair_state.to` loader belongs to the
+     residual local `RepairManager`; it is not production authority and its
+     public manager/checkpoint plus GC/reconciliation consumers must be removed
+     before V1 promotion. A local checkpoint may never create, lease, complete,
+     fail, escalate, or appeal a task.
    - Register the SoraFS gateway routes (Norito JSON POST/GET endpoints for pin,
      fetch, PoR sample, telemetry).
    - Spawn the PoR sampling worker and quota monitor.

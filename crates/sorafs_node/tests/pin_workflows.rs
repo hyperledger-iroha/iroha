@@ -2,7 +2,7 @@
 
 use std::{io, path::PathBuf};
 
-use sorafs_car::{CarBuildPlan, CarWriter, compute_chunk_plan_digest_sha3};
+use sorafs_car::{CarBuildPlan, CarWriter, compute_chunk_plan_digest_sha3, compute_por_root};
 use sorafs_manifest::{BLAKE3_256_MULTIHASH_CODE, DagCodecId, ManifestBuilder, PinPolicy};
 use sorafs_node::{NodeHandle, NodeStorageError, config::StorageConfig, store::StorageError};
 use tempfile::TempDir;
@@ -35,6 +35,7 @@ fn build_manifest(payload: &[u8]) -> (CarBuildPlan, sorafs_manifest::ManifestV1)
         .dag_codec(DagCodecId(stats.dag_codec))
         .chunking_from_profile(plan.chunk_profile, BLAKE3_256_MULTIHASH_CODE)
         .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
+        .por_root(compute_por_root(payload, &plan).expect("derive canonical fixture PoR root"))
         .content_length(plan.content_length)
         .car_digest(car_digest)
         .car_size(stats.car_size)

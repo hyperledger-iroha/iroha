@@ -987,9 +987,9 @@ exact regressions and retires nine superseded selectors, producing the
 adds six exact regressions without adding a module. Six source-sealed format,
 legacy-codec, build, Clippy, workspace-test, and daemon-test legs plus the
 G-SCALE tooling preflight bring the current source-bound inventory to 515
-exact tests across 38 modules and 65 pre-network legs.
+exact tests across 38 modules and 78 pre-network legs.
 Its canonical module/test TSV inventory SHA-256 is
-`b45ba53a16889f89b7ef9301bcba4143ae35cb2b6c7ec304f80b5b43622c53f7`.
+`ef281ddf030ca64e634581fa90197e6637f89cb10f937c2f370747fcdb8454a4`.
 Together, the closures bind proposal-origin reducer/deferred identity,
 equivocation evidence, aggregate signatures, finality/header geometry, compact
 offline QCs, parent height-context identity, source-scoped sidecar limits,
@@ -1049,7 +1049,7 @@ authenticated-non-validator, and two-anonymous owners (`4N+2H+2` total)
 capacity-negative boundary and the exact
 PrepareQC count-and-power quorum regressions. Its five integration tests run
 together under their module filter; the complete pre-network corridor now has
-65 legs, including separate exact status and atomic lane-certificate decode
+78 legs, including separate exact status and atomic lane-certificate decode
 contracts, two `iroha_config` geometry modules, the two new `iroha_p2p`
 geometry modules, the shared-byte-budget module, the daemon genesis module,
 plus source-sealed workspace formatting, the legacy-codec guard, workspace
@@ -1309,7 +1309,7 @@ checkpoint across 38 modules and 61 pre-network legs. The final
 successor-parent, lane-rollover, tip-recovery, terminal-ingress, genesis-origin,
 and restart-deadline closure adds six tests without adding a module. Six
 source-sealed command legs and the G-SCALE runner/validator preflight yield the
-current 515-test inventory across 38 modules and 65 pre-network legs. The rollover slice covers
+current 515-test inventory across 38 modules and 78 pre-network legs. The rollover slice covers
 historical Kura CommitQC, body, and lane-certificate rereads; current global
 V2; lane proof/supersession; Native AMX; merge-share, certified-sidecar, and
 untyped fail-closed boundaries. The route slice pins semantic deduplication,
@@ -1566,7 +1566,7 @@ without terminal validation it cannot publish external completion.
 
 On success, the runner publishes exactly
 `release-runner/output/release/RELEASE_COMPLETED.json` beneath the bootstrap
-evidence directory. That receipt binds the 65 pre-network corridor legs and
+evidence directory. That receipt binds the 78 pre-network corridor legs and
 their exact 515-test inventory, semantic test names/counts, commands, logs, and
 resolved tool identities; the formal completion, pinned harness lock, formal
 toolchain, proof ledger/evidence/log; all 160 matrix logs; the chaos

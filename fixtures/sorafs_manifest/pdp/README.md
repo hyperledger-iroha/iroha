@@ -14,10 +14,18 @@ Deterministic Proof-of-Data Possession fixtures for SF-13.
 - `negative/wrong_manifest_proof_v1.*` encodes a structurally valid proof rejected for manifest mismatch.
 - `negative/wrong_path_proof_v1.*` encodes a structurally valid proof rejected for witness coverage mismatch.
 
+`bundle_validation_outcome_v1.json` and every
+`negative/*_validation_outcome_v1.json` file contain the complete canonical
+`ValidationOutcomeV1` emitted at `generated_at=123`. The Rust, JavaScript/
+TypeScript, Python, Swift, Kotlin/JVM, Java Android, and C# SDK tests compare
+each complete outcome against the canonical JSON (byte-for-byte for
+string-returning APIs and after canonical pretty serialization for
+object-returning APIs).
+
 Regenerate after PDP schema changes:
 
 ```sh
-cargo run -p sorafs_manifest --bin generate_pdp_fixtures
+cargo run --locked -p sorafs_manifest --bin generate_pdp_fixtures
 ```
 
 Validate the positive bundle:

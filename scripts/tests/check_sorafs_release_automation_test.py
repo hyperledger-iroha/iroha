@@ -19,6 +19,7 @@ def _copy_workflows(target: Path) -> None:
         *automation.WORKFLOWS,
         *automation.RELEASE_DOCUMENTS,
         *automation.RELEASE_AUTH_HISTORICAL_FINDINGS,
+        *automation.NATIVE_GOVERNANCE_SDK_CONTRACTS,
         automation.PACKAGE_RELEASE_SMOKE_SCRIPT,
     ):
         source = REPO_ROOT / relative
@@ -59,6 +60,83 @@ def test_csharp_ci_requires_native_sorafs_governance_validation() -> None:
     assert "ABI-21 connect_norito_bridge with Governance DAG symbols is required." in (
         validator_tests
     )
+
+
+@pytest.mark.parametrize(
+    "relative",
+    [
+        automation.MOBILE_SDK_ARTIFACTS_WORKFLOW,
+        automation.SWIFT_GOVERNANCE_VALIDATOR_TEST,
+        automation.KOTLIN_GOVERNANCE_VALIDATOR_TEST,
+        automation.JAVA_GOVERNANCE_VALIDATOR_TEST,
+    ],
+)
+def test_native_governance_sdk_contract_requires_fail_closed_environment(
+    tmp_path: Path,
+    relative: str,
+) -> None:
+    _copy_workflows(tmp_path)
+    target = tmp_path / relative
+    source = target.read_text(encoding="utf-8")
+    drifted = source.replace(
+        automation.NATIVE_GOVERNANCE_VALIDATION_REQUIRED_ENV,
+        "REMOVED_NATIVE_GOVERNANCE_REQUIREMENT",
+    )
+    assert drifted != source
+    target.write_text(drifted, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="native Governance DAG"):
+        automation.validate_release_automation(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("relative", "required_call", "unconditional_skip"),
+    [
+        (
+            automation.SWIFT_GOVERNANCE_VALIDATOR_TEST,
+            (
+                "        guard try requireGovernanceDagNativeBridge() else {\n"
+                "            return\n"
+                "        }\n"
+            ),
+            (
+                "        try XCTSkipIf(\n"
+                "            !SorafsReferenceValidators.isGovernanceDagNativeAvailable,\n"
+                '            "SoraFS governance DAG reference bridge unavailable"\n'
+                "        )\n"
+            ),
+        ),
+        (
+            automation.KOTLIN_GOVERNANCE_VALIDATOR_TEST,
+            "        requireGovernanceDagNativeBridge()\n",
+            (
+                "        assumeTrue("
+                "SorafsReferenceValidators.isNativeAvailable(), "
+                '"connect_norito_bridge not available")\n'
+            ),
+        ),
+        (
+            automation.JAVA_GOVERNANCE_VALIDATOR_TEST,
+            "      requireGovernanceDagNativeBridge();\n",
+            "",
+        ),
+    ],
+)
+def test_native_governance_sdk_contract_rejects_unconditional_skip(
+    tmp_path: Path,
+    relative: str,
+    required_call: str,
+    unconditional_skip: str,
+) -> None:
+    _copy_workflows(tmp_path)
+    target = tmp_path / relative
+    source = target.read_text(encoding="utf-8")
+    drifted = source.replace(required_call, unconditional_skip, 1)
+    assert drifted != source
+    target.write_text(drifted, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Governance DAG"):
+        automation.validate_release_automation(tmp_path)
 
 
 @pytest.mark.parametrize(
@@ -599,6 +677,34 @@ def test_validate_release_automation_requires_two_candidate_builds(
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="built exactly twice"):
+        automation.validate_release_automation(tmp_path)
+
+
+def test_validate_release_automation_requires_two_reference_validator_builds(
+    tmp_path: Path,
+) -> None:
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / ".github/workflows/sorafs-cli-release.yml"
+    source = workflow.read_text(encoding="utf-8")
+    first = source.find("bash scripts/package_sorafs_validate_release.sh")
+    second = source.find(
+        "bash scripts/package_sorafs_validate_release.sh",
+        first + 1,
+    )
+    assert first >= 0 and second > first
+    workflow.write_text(
+        source[:second]
+        + "bash removed_reference_validator_packager.sh"
+        + source[
+            second + len("bash scripts/package_sorafs_validate_release.sh") :
+        ],
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="reference-validator package must be built exactly twice",
+    ):
         automation.validate_release_automation(tmp_path)
 
 

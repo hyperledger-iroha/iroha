@@ -10,7 +10,7 @@ use ed25519_dalek::{Signer, SigningKey};
 use hex::FromHex;
 use iroha_crypto::{BlsNormal, KeyGenOption, KeyPair};
 use norito::json::{Map, Value, to_string_pretty};
-use sorafs_car::CarBuildPlan;
+use sorafs_car::{CarBuildPlan, fetch_plan::try_chunk_fetch_plan_to_json};
 use sorafs_chunker::ChunkProfile;
 use sorafs_manifest::{
     AdmissionRecord, AdvertEndpoint, AdvertSignature, AvailabilityTier, CapabilityTlv,
@@ -289,19 +289,11 @@ fn generate_fixtures(out_dir: &Path) -> Result<FixtureSummary, Box<dyn std::erro
 
     let plan_payload: Vec<u8> = (0..(64 * 1024)).map(|idx| (idx % 251) as u8).collect();
     let plan = CarBuildPlan::single_file_with_profile(&plan_payload, ChunkProfile::DEFAULT)?;
-    let plan_specs = plan.try_chunk_fetch_specs()?;
-    let plan_entries: Vec<Value> = plan_specs
-        .iter()
-        .map(|spec| {
-            let mut map = Map::new();
-            map.insert("chunk_index".into(), Value::from(spec.chunk_index as u64));
-            map.insert("offset".into(), Value::from(spec.offset));
-            map.insert("length".into(), Value::from(spec.length as u64));
-            map.insert("digest_blake3".into(), Value::from(hex_lower(spec.digest)));
-            Value::Object(map)
-        })
-        .collect();
-    write_json(out_dir, "multi_fetch_plan.json", Value::Array(plan_entries))?;
+    write_json(
+        out_dir,
+        "multi_fetch_plan.json",
+        try_chunk_fetch_plan_to_json(&plan)?,
+    )?;
     write_readme(out_dir)?;
 
     Ok(FixtureSummary {
@@ -764,8 +756,9 @@ The generator uses test-only Ed25519 seeds `[0x21; 32]` for the provider and `[0
 the one-member council. These keys are public fixture material and must never be used by a live\n\
 provider or governance council. Binary `.to` files are canonical Norito; matching `.json` files\n\
 are human-readable summaries, not alternative wire payloads.\n\n\
-Additional artifacts include a sample multi-source fetch plan so SDKs can exercise chunk scheduling\n\
-end-to-end.\n\n\
+Additional artifacts include a payload-bound `sorafs.chunk_fetch_plan.v1` multi-source plan so SDKs\n\
+can exercise chunk scheduling end-to-end. Standalone plans are strict V1 envelopes; the retired\n\
+bare-array representation is not an accepted interchange format.\n\n\
 Do not edit manually; rerun the generator if data changes.\n",
     );
     let mut file = open_output_file(&path, "README fixture")?;

@@ -135,10 +135,12 @@ SDK (`sorafs_orchestrator` 経由):1. **エントリの収集** — マニフェ
 - `iroha app sorafs pin list|show`、`alias list` および `replication list` 保護ファイル
   エンドポイント REST のピン レジストリと Norito JSON ブルート アベック ブロックの実装
   d'attestation pour l'audit。
-- `iroha app sorafs storage pin` および `torii /v1/sorafs/pin/register` は受け入れられます
-  マニフェスト Norito ou JSON、および証明、エイリアス オプション、および後継者。
-  不正な形式の証明 `400`、廃止された証明 `503` avec
-  `Warning: 110`、および証明の有効期限は `412` です。
+- `torii /v1/sorafs/pin/register` は閉じた JSON V1 リクエストを受け付けます。
+  `manifest_payload` は canonical Norito `ManifestV1` バイトを正確に canonical
+  padded base64 化したものでなければなりません。Torii は digest、chunker、
+  content length、pin policy、fee input をデコード済み manifest のみから導出し、
+  廃止済みの重複 summary フィールドを拒否します。`alias` とゼロでない
+  `successor_of_hex` predecessor は引き続き任意です。
 - エンドポイント REST (`/v1/sorafs/pin`、`/v1/sorafs/aliases`、
   `/v1/sorafs/replication`) 構造証明に含まれる情報
   クライアントは、ブロックの前のヘッダーを確認します。

@@ -8,9 +8,12 @@ use std::{
 use iroha_config::parameters::actual;
 use iroha_data_model::{
     prelude::Quantity,
-    sorafs::transparency::{
-        MODERATION_PRIVACY_PARAMETERS_VERSION_V1, ModerationPrivacyModeV1,
-        ModerationPrivacyParametersV1,
+    sorafs::{
+        orderbook::{ORDERBOOK_MAX_FILLS_PER_EXECUTION_V1, ORDERBOOK_MAX_MAINTENANCE_ITEMS_V1},
+        transparency::{
+            MODERATION_PRIVACY_PARAMETERS_VERSION_V1, ModerationPrivacyModeV1,
+            ModerationPrivacyParametersV1,
+        },
     },
 };
 use sorafs_manifest::deal::XorQuantity;
@@ -19,8 +22,8 @@ use crate::{
     metering::SmoothingConfig,
     pdp_provider::{PDP_PROVIDER_POLICY_VERSION_V1, PdpProviderProtocolPolicyV1},
     transparency::{
-        PrivacyAggregateCycleConfig, PrivacyAggregateScheduleConfig,
-        PrivacyCompositionBudgetPolicyV1,
+        PrivacyAggregateCycleConfig, PrivacyAggregateMetricSchemaV1, PrivacyAggregatePopulationV1,
+        PrivacyAggregateScheduleConfig, PrivacyCompositionBudgetPolicyV1,
     },
 };
 
@@ -44,6 +47,7 @@ pub struct StorageConfig {
     adverts: AdvertOverrides,
     metering_smoothing: MeteringSmoothingConfig,
     stream_token_signing_key_path: Option<PathBuf>,
+    orderbook_worker: OrderbookWorkerPolicy,
     orderbook: OrderbookAdmissionPolicy,
     reputation_trust_policy_path: Option<PathBuf>,
     pricing_trust_policy_path: Option<PathBuf>,
@@ -167,7 +171,13 @@ impl StorageConfig {
         self.stream_token_signing_key_path.as_ref()
     }
 
-    /// Local orderbook admission policy.
+    /// Operational policy for durable native orderbook transaction forwarding.
+    #[must_use]
+    pub fn orderbook_worker_policy(&self) -> OrderbookWorkerPolicy {
+        self.orderbook_worker
+    }
+
+    /// Temporary local admission policy; non-authoritative and not a compatibility branch.
     #[must_use]
     pub fn orderbook_admission_policy(&self) -> &OrderbookAdmissionPolicy {
         &self.orderbook
@@ -300,6 +310,7 @@ impl StorageConfig {
             adverts: AdvertOverrides::from(&storage.adverts),
             metering_smoothing: MeteringSmoothingConfig::from(&storage.metering_smoothing),
             stream_token_signing_key_path: storage.stream_tokens.signing_key_path.clone(),
+            orderbook_worker: OrderbookWorkerPolicy::from(storage.orderbook_worker),
             orderbook: OrderbookAdmissionPolicy::from(storage.orderbook.clone()),
             reputation_trust_policy_path: storage.reputation_trust_policy_path.clone(),
             pricing_trust_policy_path: storage.pricing_trust_policy_path.clone(),
@@ -453,7 +464,14 @@ impl StorageConfigBuilder {
         self
     }
 
-    /// Override the local orderbook admission policy.
+    /// Override the durable native orderbook transaction worker policy.
+    #[must_use]
+    pub fn orderbook_worker_policy(mut self, policy: OrderbookWorkerPolicy) -> Self {
+        self.inner.orderbook_worker = policy;
+        self
+    }
+
+    /// Override the temporary non-authoritative local orderbook policy.
     #[must_use]
     pub fn orderbook_admission_policy(mut self, policy: OrderbookAdmissionPolicy) -> Self {
         self.inner.orderbook = policy;
@@ -650,7 +668,126 @@ impl From<actual::SorafsRuntimeRetention> for RuntimeRetentionPolicy {
     }
 }
 
-/// Config-backed local orderbook admission policy.
+/// Config-backed operational policy for durable native orderbook transactions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OrderbookWorkerPolicy {
+    enabled: bool,
+    scan_interval: Duration,
+    match_batch_limit: u32,
+    maintenance_batch_limit: u32,
+    max_pending: usize,
+    max_completed: usize,
+    max_dead_letters: usize,
+    max_attempts: u32,
+    checkpoint_max_bytes: u64,
+}
+
+impl OrderbookWorkerPolicy {
+    /// Whether the supervised finalized-state worker should run.
+    #[must_use]
+    pub const fn enabled(self) -> bool {
+        self.enabled
+    }
+
+    /// Finalized-state scan cadence.
+    #[must_use]
+    pub const fn scan_interval(self) -> Duration {
+        self.scan_interval
+    }
+
+    /// Maximum fills requested by one native match transaction.
+    #[must_use]
+    pub const fn match_batch_limit(self) -> u32 {
+        self.match_batch_limit
+    }
+
+    /// Maximum expiries/closures requested by one native maintenance transaction.
+    #[must_use]
+    pub const fn maintenance_batch_limit(self) -> u32 {
+        self.maintenance_batch_limit
+    }
+
+    /// Maximum pending semantic operations retained durably.
+    #[must_use]
+    pub const fn max_pending(self) -> usize {
+        self.max_pending
+    }
+
+    /// Maximum finalized idempotency tombstones retained durably.
+    #[must_use]
+    pub const fn max_completed(self) -> usize {
+        self.max_completed
+    }
+
+    /// Maximum terminal dead letters retained durably.
+    #[must_use]
+    pub const fn max_dead_letters(self) -> usize {
+        self.max_dead_letters
+    }
+
+    /// Maximum signing/submission attempts under one semantic identity.
+    #[must_use]
+    pub const fn max_attempts(self) -> u32 {
+        self.max_attempts
+    }
+
+    /// Maximum canonical durable checkpoint size.
+    #[must_use]
+    pub const fn checkpoint_max_bytes(self) -> u64 {
+        self.checkpoint_max_bytes
+    }
+}
+
+impl From<actual::SorafsOrderbookWorker> for OrderbookWorkerPolicy {
+    fn from(policy: actual::SorafsOrderbookWorker) -> Self {
+        use iroha_config::parameters::defaults::sorafs::storage::orderbook_worker as bounds;
+
+        let min_scan_interval = Duration::from_millis(bounds::SCAN_INTERVAL_MIN_MS);
+        let max_scan_interval = Duration::from_millis(bounds::SCAN_INTERVAL_MAX_MS);
+        let max_pending =
+            usize::try_from(bounds::MAX_PENDING_LIMIT).expect("u32 fits supported usize");
+        let max_completed =
+            usize::try_from(bounds::MAX_COMPLETED_LIMIT).expect("u32 fits supported usize");
+        let max_dead_letters =
+            usize::try_from(bounds::MAX_DEAD_LETTERS_LIMIT).expect("u32 fits supported usize");
+        Self {
+            enabled: policy.enabled,
+            scan_interval: policy
+                .scan_interval
+                .clamp(min_scan_interval, max_scan_interval),
+            match_batch_limit: policy
+                .match_batch_limit
+                .clamp(1, ORDERBOOK_MAX_FILLS_PER_EXECUTION_V1),
+            maintenance_batch_limit: policy
+                .maintenance_batch_limit
+                .clamp(1, ORDERBOOK_MAX_MAINTENANCE_ITEMS_V1),
+            max_pending: usize::try_from(policy.max_pending)
+                .unwrap_or(max_pending)
+                .clamp(1, max_pending),
+            max_completed: usize::try_from(policy.max_completed)
+                .unwrap_or(max_completed)
+                .clamp(1, max_completed),
+            max_dead_letters: usize::try_from(policy.max_dead_letters)
+                .unwrap_or(max_dead_letters)
+                .clamp(1, max_dead_letters),
+            max_attempts: policy.max_attempts.clamp(1, bounds::MAX_ATTEMPTS_LIMIT),
+            checkpoint_max_bytes: policy.checkpoint_max_bytes.0.clamp(
+                bounds::CHECKPOINT_MIN_BYTES,
+                bounds::CHECKPOINT_MAX_BYTES_LIMIT,
+            ),
+        }
+    }
+}
+
+impl Default for OrderbookWorkerPolicy {
+    fn default() -> Self {
+        Self::from(actual::SorafsOrderbookWorker::default())
+    }
+}
+
+/// Temporary local orderbook policy retained only until local-authority removal.
+///
+/// This policy is non-authoritative and does not define compatibility behavior.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OrderbookAdmissionPolicy {
     min_order_gib: u64,
@@ -735,7 +872,12 @@ trait PrivacyAggregateScheduleConfigExt {
 /// Governed V1 privacy aggregate policy sourced exclusively from `iroha_config`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrivacyAggregatePolicyConfig {
+    query_id: [u8; 32],
+    first_cycle_start_unix: u64,
+    cycle_seconds: u64,
     aggregate_id_prefix: String,
+    populations: Vec<PrivacyAggregatePopulationV1>,
+    metrics: Vec<PrivacyAggregateMetricSchemaV1>,
     privacy: ModerationPrivacyParametersV1,
     policy_digest: [u8; 32],
     composition_budget: PrivacyCompositionBudgetPolicyV1,
@@ -749,11 +891,19 @@ impl PrivacyAggregatePolicyConfig {
     /// Returns an error when the public identifier, privacy parameters, policy
     /// digest, or durable composition-budget policy is not canonical.
     pub fn new(
+        query_id: [u8; 32],
+        first_cycle_start_unix: u64,
+        cycle_seconds: u64,
         aggregate_id_prefix: String,
+        populations: Vec<PrivacyAggregatePopulationV1>,
+        metrics: Vec<PrivacyAggregateMetricSchemaV1>,
         privacy: ModerationPrivacyParametersV1,
         policy_digest: [u8; 32],
         composition_budget: PrivacyCompositionBudgetPolicyV1,
     ) -> Result<Self, String> {
+        if query_id == [0; 32] {
+            return Err("privacy aggregate query id must be nonzero".to_string());
+        }
         if aggregate_id_prefix.trim() != aggregate_id_prefix
             || aggregate_id_prefix.is_empty()
             || aggregate_id_prefix.len() > 128
@@ -770,13 +920,32 @@ impl PrivacyAggregatePolicyConfig {
         composition_budget
             .validate()
             .map_err(|error| format!("privacy composition budget is invalid: {error}"))?;
-        if composition_budget.budget_id != policy_digest {
+        if composition_budget.budget_id != query_id {
             return Err(
-                "privacy composition budget must be bound to the policy digest".to_string(),
+                "privacy composition budget must be bound to the stable query id".to_string(),
             );
         }
+        let cycle = PrivacyAggregateCycleConfig {
+            query_id,
+            first_cycle_start_unix,
+            cycle_seconds,
+            aggregate_id_prefix: aggregate_id_prefix.clone(),
+            populations: populations.clone(),
+            metrics: metrics.clone(),
+            privacy,
+            policy_digest,
+            metadata: Vec::new(),
+        };
+        cycle
+            .validate()
+            .map_err(|error| format!("privacy aggregate query is invalid: {error}"))?;
         Ok(Self {
+            query_id,
+            first_cycle_start_unix,
+            cycle_seconds,
             aggregate_id_prefix,
+            populations,
+            metrics,
             privacy,
             policy_digest,
             composition_budget,
@@ -787,11 +956,22 @@ impl PrivacyAggregatePolicyConfig {
     #[must_use]
     pub fn cycle_config(&self) -> PrivacyAggregateCycleConfig {
         PrivacyAggregateCycleConfig {
+            query_id: self.query_id,
+            first_cycle_start_unix: self.first_cycle_start_unix,
+            cycle_seconds: self.cycle_seconds,
             aggregate_id_prefix: self.aggregate_id_prefix.clone(),
+            populations: self.populations.clone(),
+            metrics: self.metrics.clone(),
             privacy: self.privacy,
-            policy_digest: Some(self.policy_digest),
+            policy_digest: self.policy_digest,
             metadata: Vec::new(),
         }
+    }
+
+    /// Return the stable governed query identity.
+    #[must_use]
+    pub const fn query_id(&self) -> [u8; 32] {
+        self.query_id
     }
 
     /// Return the governed digest bound into threshold-PRF cycle requests.
@@ -806,7 +986,7 @@ impl PrivacyAggregatePolicyConfig {
         self.privacy.per_subject_metric_cap.is_some()
     }
 
-    /// Durable composition-budget policy bound to the same governed digest.
+    /// Durable composition-budget policy bound to the stable query identity.
     #[must_use]
     pub const fn composition_budget(&self) -> PrivacyCompositionBudgetPolicyV1 {
         self.composition_budget
@@ -823,7 +1003,8 @@ impl PrivacyAggregateScheduleConfigExt for actual::SorafsPrivacyAggregateSchedul
             return None;
         }
         Some(PrivacyAggregateScheduleConfig {
-            cycle_seconds: self.cycle_seconds.max(1),
+            first_cycle_start_unix: self.first_cycle_start_unix,
+            cycle_seconds: self.cycle_seconds,
             publish_delay_seconds: self.publish_delay_seconds,
         })
     }
@@ -847,6 +1028,25 @@ impl PrivacyAggregatePolicyConfigExt for actual::SorafsPrivacyAggregateSchedule 
         let policy_digest = self.policy_digest.unwrap_or_else(|| {
             panic!("enabled SoraFS privacy aggregate config is missing its policy digest")
         });
+        let query_id = self.query_id.unwrap_or_else(|| {
+            panic!("enabled SoraFS privacy aggregate config is missing its query id")
+        });
+        let populations = self
+            .population_inventory
+            .into_iter()
+            .map(|population| PrivacyAggregatePopulationV1 {
+                label: population.label,
+                digest: population.digest,
+            })
+            .collect();
+        let metrics = self
+            .metric_schema
+            .into_iter()
+            .map(|metric| PrivacyAggregateMetricSchemaV1 {
+                key: metric.key,
+                unit: metric.unit,
+            })
+            .collect();
         let uses_dp = !matches!(mode, ModerationPrivacyModeV1::Suppression);
         let uses_suppression = !matches!(mode, ModerationPrivacyModeV1::DifferentialPrivacy);
         let privacy = ModerationPrivacyParametersV1 {
@@ -857,17 +1057,21 @@ impl PrivacyAggregatePolicyConfigExt for actual::SorafsPrivacyAggregateSchedule 
             delta_ppb: uses_dp.then_some(0),
             per_subject_metric_cap: uses_dp.then_some(self.per_subject_metric_cap),
             suppression_threshold: uses_suppression.then_some(self.suppression_threshold),
-            suppressed_count: 0,
         };
         let composition_budget = PrivacyCompositionBudgetPolicyV1 {
-            budget_id: policy_digest,
+            budget_id: query_id,
             epsilon_limit_numerator: self.composition_budget_epsilon_numerator,
             epsilon_limit_denominator: self.composition_budget_epsilon_denominator,
             max_publications: self.composition_budget_max_publications,
         };
         Some(
             PrivacyAggregatePolicyConfig::new(
+                query_id,
+                self.first_cycle_start_unix,
+                self.cycle_seconds,
                 self.aggregate_id_prefix,
+                populations,
+                metrics,
                 privacy,
                 policy_digest,
                 composition_budget,
@@ -885,6 +1089,7 @@ impl PrivacyAggregateScheduleConfigExt for actual::SorafsEvidenceViewerAuditSche
             return None;
         }
         Some(PrivacyAggregateScheduleConfig {
+            first_cycle_start_unix: self.cycle_seconds.max(1),
             cycle_seconds: self.cycle_seconds.max(1),
             publish_delay_seconds: self.publish_delay_seconds,
         })
@@ -1382,6 +1587,79 @@ mod tests {
     }
 
     #[test]
+    fn orderbook_worker_policy_defensively_clamps_programmatic_boundaries() {
+        use iroha_config::parameters::defaults::sorafs::storage::orderbook_worker as bounds;
+
+        let below = OrderbookWorkerPolicy::from(actual::SorafsOrderbookWorker {
+            enabled: true,
+            scan_interval: Duration::ZERO,
+            match_batch_limit: 0,
+            maintenance_batch_limit: 0,
+            max_pending: 0,
+            max_completed: 0,
+            max_dead_letters: 0,
+            max_attempts: 0,
+            checkpoint_max_bytes: iroha_config::base::util::Bytes(0),
+        });
+        assert!(below.enabled());
+        assert_eq!(
+            below.scan_interval(),
+            Duration::from_millis(bounds::SCAN_INTERVAL_MIN_MS)
+        );
+        assert_eq!(below.match_batch_limit(), 1);
+        assert_eq!(below.maintenance_batch_limit(), 1);
+        assert_eq!(below.max_pending(), 1);
+        assert_eq!(below.max_completed(), 1);
+        assert_eq!(below.max_dead_letters(), 1);
+        assert_eq!(below.max_attempts(), 1);
+        assert_eq!(below.checkpoint_max_bytes(), bounds::CHECKPOINT_MIN_BYTES);
+
+        let above = OrderbookWorkerPolicy::from(actual::SorafsOrderbookWorker {
+            enabled: false,
+            scan_interval: Duration::from_millis(bounds::SCAN_INTERVAL_MAX_MS + 1),
+            match_batch_limit: ORDERBOOK_MAX_FILLS_PER_EXECUTION_V1 + 1,
+            maintenance_batch_limit: ORDERBOOK_MAX_MAINTENANCE_ITEMS_V1 + 1,
+            max_pending: bounds::MAX_PENDING_LIMIT + 1,
+            max_completed: bounds::MAX_COMPLETED_LIMIT + 1,
+            max_dead_letters: bounds::MAX_DEAD_LETTERS_LIMIT + 1,
+            max_attempts: bounds::MAX_ATTEMPTS_LIMIT + 1,
+            checkpoint_max_bytes: iroha_config::base::util::Bytes(
+                bounds::CHECKPOINT_MAX_BYTES_LIMIT + 1,
+            ),
+        });
+        assert!(!above.enabled());
+        assert_eq!(
+            above.scan_interval(),
+            Duration::from_millis(bounds::SCAN_INTERVAL_MAX_MS)
+        );
+        assert_eq!(
+            above.match_batch_limit(),
+            ORDERBOOK_MAX_FILLS_PER_EXECUTION_V1
+        );
+        assert_eq!(
+            above.maintenance_batch_limit(),
+            ORDERBOOK_MAX_MAINTENANCE_ITEMS_V1
+        );
+        assert_eq!(
+            above.max_pending(),
+            usize::try_from(bounds::MAX_PENDING_LIMIT).unwrap()
+        );
+        assert_eq!(
+            above.max_completed(),
+            usize::try_from(bounds::MAX_COMPLETED_LIMIT).unwrap()
+        );
+        assert_eq!(
+            above.max_dead_letters(),
+            usize::try_from(bounds::MAX_DEAD_LETTERS_LIMIT).unwrap()
+        );
+        assert_eq!(above.max_attempts(), bounds::MAX_ATTEMPTS_LIMIT);
+        assert_eq!(
+            above.checkpoint_max_bytes(),
+            bounds::CHECKPOINT_MAX_BYTES_LIMIT
+        );
+    }
+
+    #[test]
     fn conversion_from_actual_preserves_fields() {
         let mut actual = actual::SorafsStorage::default();
         actual.enabled = true;
@@ -1410,6 +1688,17 @@ mod tests {
             proof_outcome_forwarder_interval: Duration::from_millis(250),
             proof_outcome_max_attempts: 5,
         };
+        actual.orderbook_worker = actual::SorafsOrderbookWorker {
+            enabled: true,
+            scan_interval: Duration::from_millis(250),
+            match_batch_limit: 17,
+            maintenance_batch_limit: 33,
+            max_pending: 31,
+            max_completed: 47,
+            max_dead_letters: 11,
+            max_attempts: 5,
+            checkpoint_max_bytes: iroha_config::base::util::Bytes(8 * 1024 * 1024),
+        };
         actual.alias = Some("tenant.alpha".into());
         actual.adverts = actual::SorafsAdvertOverrides {
             stake_pointer: Some("stake.pool:abcd".into()),
@@ -1432,7 +1721,17 @@ mod tests {
         actual.privacy_aggregates = actual::SorafsPrivacyAggregateSchedule {
             enabled: true,
             cycle_seconds: 12,
+            first_cycle_start_unix: 120,
             publish_delay_seconds: 3,
+            query_id: Some([0xB0; 32]),
+            population_inventory: vec![actual::SorafsPrivacyAggregatePopulation {
+                label: "jurisdiction-a".to_string(),
+                digest: [0xA0; 32],
+            }],
+            metric_schema: vec![actual::SorafsPrivacyAggregateMetric {
+                key: "moderation_actions".to_string(),
+                unit: "count".to_string(),
+            }],
             policy_digest: Some([0xC0; 32]),
             ..actual::SorafsPrivacyAggregateSchedule::default()
         };
@@ -1479,6 +1778,16 @@ mod tests {
             Duration::from_millis(250)
         );
         assert_eq!(cfg.runtime_retention().proof_outcome_max_attempts(), 5);
+        let orderbook_worker = cfg.orderbook_worker_policy();
+        assert!(orderbook_worker.enabled());
+        assert_eq!(orderbook_worker.scan_interval(), Duration::from_millis(250));
+        assert_eq!(orderbook_worker.match_batch_limit(), 17);
+        assert_eq!(orderbook_worker.maintenance_batch_limit(), 33);
+        assert_eq!(orderbook_worker.max_pending(), 31);
+        assert_eq!(orderbook_worker.max_completed(), 47);
+        assert_eq!(orderbook_worker.max_dead_letters(), 11);
+        assert_eq!(orderbook_worker.max_attempts(), 5);
+        assert_eq!(orderbook_worker.checkpoint_max_bytes(), 8 * 1024 * 1024);
         assert_eq!(cfg.alias(), Some(&"tenant.alpha".to_string()));
         let adverts = cfg.adverts();
         assert_eq!(
@@ -1512,6 +1821,7 @@ mod tests {
         assert_eq!(
             cfg.privacy_aggregate_schedule(),
             Some(PrivacyAggregateScheduleConfig {
+                first_cycle_start_unix: 120,
                 cycle_seconds: 12,
                 publish_delay_seconds: 3,
             })
@@ -1521,7 +1831,8 @@ mod tests {
             .expect("enabled privacy aggregate policy");
         let cycle_policy = privacy_policy.cycle_config();
         assert_eq!(cycle_policy.aggregate_id_prefix, "sfm4c-cycle");
-        assert_eq!(cycle_policy.policy_digest, Some([0xC0; 32]));
+        assert_eq!(cycle_policy.query_id, [0xB0; 32]);
+        assert_eq!(cycle_policy.policy_digest, [0xC0; 32]);
         assert_eq!(privacy_policy.policy_digest(), [0xC0; 32]);
         assert!(privacy_policy.requires_cycle_prf());
         assert_eq!(cycle_policy.privacy.epsilon_numerator, Some(4));
@@ -1531,7 +1842,7 @@ mod tests {
         assert_eq!(
             privacy_policy.composition_budget(),
             PrivacyCompositionBudgetPolicyV1 {
-                budget_id: [0xC0; 32],
+                budget_id: [0xB0; 32],
                 epsilon_limit_numerator: 12,
                 epsilon_limit_denominator: 1,
                 max_publications: 52,
@@ -1540,6 +1851,7 @@ mod tests {
         assert_eq!(
             cfg.evidence_viewer_audit_schedule(),
             Some(PrivacyAggregateScheduleConfig {
+                first_cycle_start_unix: 24,
                 cycle_seconds: 24,
                 publish_delay_seconds: 6,
             })

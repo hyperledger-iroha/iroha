@@ -6,8 +6,8 @@ direction: rtl
 source: docs/source/sorafs_proof_streaming.md
 status: needs-translation
 generator: scripts/sync_docs_i18n.py
-source_hash: a02ced9c65bec9ae5a5ef77634fe35f3c882e399e9ec01f69cb233d0b5b9c2f3
-source_last_modified: "2026-07-24T07:47:34.933947+00:00"
+source_hash: e9e4f5cbd93c1c0361ea460eec7da2e5490d8520782a5a65e18843f33d3cec1c
+source_last_modified: "2026-07-25T00:41:57.153539+00:00"
 translation_last_reviewed: null
 ---
 

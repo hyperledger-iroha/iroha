@@ -719,8 +719,13 @@ public enum SorafsReferenceValidators {
         guard value.trimmingCharacters(in: .whitespacesAndNewlines) == value else {
             throw SorafsReferenceValidationError.invalidLabel("label must not contain surrounding whitespace")
         }
-        guard !value.contains("\u{0}") else {
-            throw SorafsReferenceValidationError.invalidLabel("label must not contain NUL")
+        let containsControlCharacter = value.unicodeScalars.contains { scalar in
+            scalar.value <= 0x1F || (0x7F...0x9F).contains(scalar.value)
+        }
+        guard !containsControlCharacter else {
+            throw SorafsReferenceValidationError.invalidLabel(
+                "label must not contain control characters"
+            )
         }
         guard value.utf8.count <= referenceMaxLabelBytesV1 else {
             throw SorafsReferenceValidationError.invalidLabel(

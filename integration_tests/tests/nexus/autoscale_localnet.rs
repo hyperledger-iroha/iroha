@@ -71,7 +71,7 @@ use iroha_core::{
         MergeCandidateAdvertV1, canonical_merge_candidate_bytes, decode_certified_merge_sidecar,
         decode_merge_candidate_body,
     },
-    queue::{LaneQueueReservationKeyV1, RoutingPlan},
+    queue::{LaneQueueReservationKeyV2, RoutingPlan},
     sumeragi::network_topology::commit_quorum_from_len,
 };
 use iroha_primitives::json::Json;
@@ -5699,7 +5699,7 @@ fn validate_autonomous_merge_execution(
             entrypoint_identities.insert(entrypoint.hash()),
             "autonomous execution repeats an entrypoint at index {index}"
         );
-        let reservation: LaneQueueReservationKeyV1 = norito::decode_from_bytes(reservation_bytes)
+        let reservation: LaneQueueReservationKeyV2 = norito::decode_from_bytes(reservation_bytes)
             .map_err(|err| {
             eyre!("decode autonomous reservation key at index {index}: {err}")
         })?;
@@ -5714,7 +5714,7 @@ fn validate_autonomous_merge_execution(
             "autonomous routing plan {index} is not canonical framed Norito"
         );
         ensure!(
-            reservation.version == LaneQueueReservationKeyV1::VERSION
+            reservation.version == LaneQueueReservationKeyV2::VERSION
                 && reservation.lane_id == origin.lane_id
                 && reservation.dataspace_id == origin.dataspace_id
                 && reservation.lane_incarnation == origin.lane_incarnation

@@ -74,7 +74,7 @@ pub fn orderbook_settlement_escrow_id(channel_id: [u8; 32]) -> EscrowId {
 }
 
 /// Governance-controlled order admission and receipt-retention policy.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -93,6 +93,16 @@ pub struct OrderbookAdmissionPolicyV1 {
     /// Non-zero governance market identifier, immutable after first activation.
     #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
     pub market_id: [u8; 32],
+    /// Exact account authorized to execute bounded matching and maintenance.
+    ///
+    /// Rotation is committed by a predecessor-linked policy revision.
+    pub matcher_authority: AccountId,
+    /// Exact account bound as release authority for newly created settlement
+    /// channels and authorized to record their provider-signed receipts.
+    ///
+    /// Rotation is committed by a predecessor-linked policy revision after
+    /// all channels bound to the preceding authority have closed.
+    pub settlement_authority: AccountId,
     /// Whether new order submissions are paused.
     pub paused: bool,
     /// Smallest accepted order quantity in GiB.
@@ -778,6 +788,8 @@ mod tests {
             revision: 1,
             predecessor_policy_digest: None,
             market_id: [0xA5; 32],
+            matcher_authority: account(0xB1),
+            settlement_authority: account(0xB2),
             paused: false,
             min_order_gib: 1,
             max_order_gib: 1_024,
@@ -799,9 +811,16 @@ mod tests {
         let first = policy.digest().expect("digest policy");
         assert_eq!(first, policy.digest().expect("repeat digest"));
 
-        let mut changed = policy;
+        let mut changed = policy.clone();
         changed.price_tick_micro_xor += 1;
         assert_ne!(first, changed.digest().expect("changed digest"));
+
+        let mut rotated = policy;
+        rotated.matcher_authority = account(0xB3);
+        assert_ne!(
+            first,
+            rotated.digest().expect("rotated-authority policy digest")
+        );
     }
 
     #[test]

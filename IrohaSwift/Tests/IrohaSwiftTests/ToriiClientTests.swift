@@ -68,6 +68,42 @@ private func nativeAmxTestHash(_ seed: UInt8) -> String {
     return "hash:\(body)#\(String(format: "%04X", checksum))"
 }
 
+private func sumeragiV2TestHeightContext(epochEndHeight: UInt64 = 100) -> [String: Any] {
+    [
+        "epoch": 1,
+        "epoch_end_height": epochEndHeight,
+        "mode": ["mode": "permissioned", "details": NSNull()],
+        "epoch_seed": [UInt8](repeating: 0x42, count: 32),
+        "validator_count": 4,
+        "quorum": [
+            "min_signers": 3,
+            "total_power": 4,
+        ],
+    ]
+}
+
+private func sumeragiV2TestLiveness() -> [String: Any] {
+    let idle: [String: Any] = ["stage": "idle", "details": NSNull()]
+    return [
+        "generation": 2,
+        "prepare_quorums": [],
+        "commit_quorums": [],
+        "timeout_quorums": [],
+        "outbound_intents": [],
+        "work": [
+            "candidate": idle,
+            "body_recovery": idle,
+            "body_store": idle,
+            "validation": idle,
+            "application": idle,
+            "successor_height": idle,
+        ],
+        "queues": [],
+        "no_progress_age_ms": 19,
+        "ignore_counts": [],
+    ]
+}
+
 private func canonicalVerifierRecordArchive(
     seed: UInt8,
     verifierKeyLength: Int = 96
@@ -1236,8 +1272,14 @@ private enum DaTestFixtures {
     ]
 
     private static let chunkPlanDictionary: [String: Any] = [
-        "plan_id": "demo-plan",
-        "chunks": 4
+        "schema": "sorafs.chunk_fetch_plan.v1",
+        "payload_digest_blake3_hex": String(repeating: "ef", count: 32),
+        "chunk_fetch_specs": [[
+            "chunk_index": 0,
+            "offset": 0,
+            "length": 4,
+            "digest_blake3": String(repeating: "22", count: 32)
+        ]]
     ]
 
     static var storageTicketInput: String { "0x\(storageTicketHex.uppercased())" }
@@ -1328,12 +1370,16 @@ fileprivate func tcMakeSampleManifestRaw(storageTicket: String = String(repeatin
                 "semver": .string("1.0.0")
             ])
         ]),
-        "chunk_plan": .array([
-            .object([
-                "chunk_index": .number(0),
-                "offset": .number(0),
-                "length": .number(4),
-                "digest_blake3": .string(String(repeating: "ee", count: 32))
+        "chunk_plan": .object([
+            "schema": .string("sorafs.chunk_fetch_plan.v1"),
+            "payload_digest_blake3_hex": .string(String(repeating: "cc", count: 32)),
+            "chunk_fetch_specs": .array([
+                .object([
+                    "chunk_index": .number(0),
+                    "offset": .number(0),
+                    "length": .number(4),
+                    "digest_blake3": .string(String(repeating: "ee", count: 32))
+                ])
             ])
         ])
     ]
@@ -1429,7 +1475,8 @@ fileprivate func tcMakeStubProofSummary() -> ToriiDaProofSummary {
         leafBytes: Data(),
         segmentLeavesHex: [],
         chunkSegmentsHex: [],
-        chunkRootsHex: [],
+        chunkCount: 1,
+        chunkMerklePathHex: [],
         verified: true
     )
     return ToriiDaProofSummary(
@@ -7782,7 +7829,7 @@ final class ToriiClientTests: XCTestCase {
             "manifest_len":\(manifestB64.count),
             "manifest_norito":"\(manifestB64)",
             "manifest":{"chunking":{"namespace":"sorafs","name":"sf1","semver":"1.2.3"}},
-            "chunk_plan":[{"chunk_index":0,"offset":0,"length":4,"digest_blake3":"\(String(repeating: "22", count: 32))"}],
+            "chunk_plan":{"schema":"sorafs.chunk_fetch_plan.v1","payload_digest_blake3_hex":"\(String(repeating: "ef", count: 32))","chunk_fetch_specs":[{"chunk_index":0,"offset":0,"length":4,"digest_blake3":"\(String(repeating: "22", count: 32))"}]},
             "sampling_plan":\(samplingPlan)
         }
         """
@@ -17110,6 +17157,21 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             "subject": subject,
             "execution_commitment": executionCommitment,
         ]
+        let commitQC: [String: Any] = [
+            "round": [
+                "context_id": [contextHash],
+                "height": 14,
+                "view": 2,
+            ],
+            "proposal_round": [
+                "context_id": [contextHash],
+                "height": 14,
+                "view": 2,
+            ],
+            "phase": ["phase": "commit", "details": NSNull()],
+            "subject": subject,
+            "execution_commitment": executionCommitment,
+        ]
         let payload = try JSONSerialization.data(withJSONObject: [
             "protocol_version": 3,
             "node_fingerprint": nativeAmxTestHash(0xA1),
@@ -17136,6 +17198,16 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             "pending_persistence_id": 17,
             "last_committed_height": 14,
             "last_committed_subject": subject,
+            "height_context": sumeragiV2TestHeightContext(),
+            "last_commit_qc": [
+                "certificate": commitQC,
+                "validator_count": 4,
+                "signer_count": 3,
+                "min_signers": 3,
+                "signed_power": 3,
+                "total_power": 4,
+            ],
+            "liveness": sumeragiV2TestLiveness(),
         ])
 
         StubURLProtocol.handler = { request in
@@ -17181,6 +17253,9 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         XCTAssertEqual(snapshot.pendingPersistenceID, 17)
         XCTAssertEqual(snapshot.lastCommittedHeight, 14)
         XCTAssertEqual(snapshot.lastCommittedSubject?.payloadHash, payloadHash)
+        XCTAssertEqual(snapshot.heightContext.validatorCount, 4)
+        XCTAssertEqual(snapshot.lastCommitQC?.certificate.phase, .commit)
+        XCTAssertEqual(snapshot.liveness.generation, 2)
     }
 
     func testSumeragiExecutionCommitmentRejectsNoncanonicalNativeAmxManifest() throws {
@@ -17319,6 +17394,16 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         }
         XCTAssertNoThrow(
             try JSONDecoder().decode(ToriiSumeragiDiagnosticsSnapshot.self, from: conflict)
+        )
+
+        let missingRequiredVector = try mutatedNativeAmxDiagnosticsPayload { root in
+            root.removeValue(forKey: "autonomous_lane_executions")
+        }
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiSumeragiDiagnosticsSnapshot.self,
+                from: missingRequiredVector
+            )
         )
     }
 
@@ -17651,6 +17736,8 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                 "leader": 0,
                 "body_state": ["state": "missing", "details": NSNull()],
                 "last_committed_height": 0,
+                "height_context": sumeragiV2TestHeightContext(),
+                "liveness": sumeragiV2TestLiveness(),
             ]
             mutate(&value)
             return try JSONSerialization.data(withJSONObject: value)
@@ -17663,6 +17750,22 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
 
         assertRejected(try payload { $0["protocol_version"] = 1 })
         assertRejected(try payload { $0.removeValue(forKey: "restart_required") })
+        assertRejected(try payload { $0.removeValue(forKey: "height_context") })
+        assertRejected(try payload { $0.removeValue(forKey: "liveness") })
+        assertRejected(
+            try payload {
+                var context = $0["height_context"] as! [String: Any]
+                context["legacy_epoch_start"] = 0
+                $0["height_context"] = context
+            }
+        )
+        assertRejected(
+            try payload {
+                var liveness = $0["liveness"] as! [String: Any]
+                liveness.removeValue(forKey: "ignore_counts")
+                $0["liveness"] = liveness
+            }
+        )
         assertRejected(try payload { $0["phase"] = "awaiting_proposal" })
         assertRejected(
             try payload {
@@ -20707,33 +20810,17 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
     }
 
     private func makeValidSoraFsPinRegisterRequest(
-        manifestDigestHex: String = String(repeating: "A", count: 64),
-        chunkDigestSha3_256Hex: String = "0x" + String(repeating: "b", count: 64),
+        manifestPayload: String = Data("manifest-norito".utf8).base64EncodedString(),
         successorOfHex: String? = String(repeating: "C", count: 64)
     ) -> ToriiSoraFsPinRegisterRequest {
         ToriiSoraFsPinRegisterRequest(
-            authority: " alice@boi ",
-            privateKey: " ed25519:deadbeef ",
-            chunker: ToriiSoraFsChunkerHandle(
-                profileId: 1,
-                namespace: " sorafs ",
-                name: " sf1 ",
-                semver: " 1.0.0 ",
-                multihashCode: nil
-            ),
-            pinPolicy: ToriiSoraFsPinPolicy(
-                minReplicas: 3,
-                storageClass: ToriiSoraFsStorageClass(type: "hot"),
-                retentionEpoch: 72
-            ),
-            manifestDigestHex: manifestDigestHex,
-            manifestBytes: Data("manifest-norito".utf8),
-            chunkDigestSha3_256Hex: chunkDigestSha3_256Hex,
-            contentLength: 4096,
+            authority: authority,
+            privateKey: "ed25519:deadbeef",
+            manifestPayload: manifestPayload,
             submittedEpoch: 42,
             alias: ToriiSoraFsPinAlias(
-                namespace: " docs ",
-                name: " main ",
+                namespace: "docs",
+                name: "main",
                 proofBase64: Data("alias-proof".utf8).base64EncodedString()
             ),
             successorOfHex: successorOfHex
@@ -20746,26 +20833,6 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         var request = makeValidSoraFsPinRegisterRequest()
         mutate(&request)
         return request
-    }
-
-    private func mutatedSoraFsChunker(
-        _ mutate: (inout ToriiSoraFsChunkerHandle) -> Void
-    ) -> ToriiSoraFsPinRegisterRequest {
-        mutatedSoraFsPinRequest { request in
-            var chunker = request.chunker!
-            mutate(&chunker)
-            request.chunker = chunker
-        }
-    }
-
-    private func mutatedSoraFsPinPolicy(
-        _ mutate: (inout ToriiSoraFsPinPolicy) -> Void
-    ) -> ToriiSoraFsPinRegisterRequest {
-        mutatedSoraFsPinRequest { request in
-            var policy = request.pinPolicy!
-            mutate(&policy)
-            request.pinPolicy = policy
-        }
     }
 
     private func mutatedSoraFsAlias(
@@ -20781,10 +20848,9 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
     @available(iOS 15.0, macOS 12.0, *)
     func testRegisterSoraFsPinManifestPostsNormalizedPayloadAndDecodesResponse() async throws {
         let manifestHex = String(repeating: "a", count: 64)
-        let chunkHex = String(repeating: "b", count: 64)
         let successorHex = String(repeating: "c", count: 64)
         let aliasProof = Data("alias-proof".utf8).base64EncodedString()
-        let manifestBase64 = Data("manifest-norito".utf8).base64EncodedString()
+        let manifestPayload = Data("manifest-norito".utf8).base64EncodedString()
 
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.httpMethod, "POST")
@@ -20792,29 +20858,21 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
             let root = self.bodyJSON(from: request)
-            XCTAssertEqual(root["authority"] as? String, "alice@boi")
+            XCTAssertEqual(root["authority"] as? String, self.authority)
             XCTAssertEqual(root["private_key"] as? String, "ed25519:deadbeef")
-            XCTAssertNil(root["chunker"])
-            XCTAssertEqual(root["chunker_profile_id"] as? Int, 1)
-            XCTAssertEqual(root["chunker_namespace"] as? String, "sorafs")
-            XCTAssertEqual(root["chunker_name"] as? String, "sf1")
-            XCTAssertEqual(root["chunker_semver"] as? String, "1.0.0")
-            XCTAssertEqual(root["chunker_multihash_code"] as? Int, 0)
-            let pinPolicy = root["pin_policy"] as? [String: Any]
-            XCTAssertEqual(pinPolicy?["min_replicas"] as? Int, 3)
-            let storageClass = pinPolicy?["storage_class"] as? [String: Any]
-            XCTAssertEqual(storageClass?["type"] as? String, "Hot")
-            XCTAssertEqual(pinPolicy?["retention_epoch"] as? Int, 72)
-            XCTAssertEqual(root["manifest_digest_hex"] as? String, manifestHex)
-            XCTAssertEqual(root["manifest_b64"] as? String, manifestBase64)
-            XCTAssertEqual(root["chunk_digest_sha3_256_hex"] as? String, chunkHex)
-            XCTAssertEqual(root["content_length"] as? Int, 4096)
+            XCTAssertEqual(root["manifest_payload"] as? String, manifestPayload)
             XCTAssertEqual(root["submitted_epoch"] as? Int, 42)
             let alias = root["alias"] as? [String: Any]
             XCTAssertEqual(alias?["namespace"] as? String, "docs")
             XCTAssertEqual(alias?["name"] as? String, "main")
             XCTAssertEqual(alias?["proof_base64"] as? String, aliasProof)
             XCTAssertEqual(root["successor_of_hex"] as? String, successorHex)
+            XCTAssertNil(root["manifest_b64"])
+            XCTAssertNil(root["chunker_profile_id"])
+            XCTAssertNil(root["pin_policy"])
+            XCTAssertNil(root["manifest_digest_hex"])
+            XCTAssertNil(root["chunk_digest_sha3_256_hex"])
+            XCTAssertNil(root["content_length"])
 
             let responseObject: [String: Any] = [
                 "manifest_digest_hex": manifestHex.uppercased(),
@@ -20856,11 +20914,17 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
     }
 
     @available(iOS 15.0, macOS 12.0, *)
-    func testRegisterSoraFsPinManifestAcceptsManifestBase64Payload() async throws {
-        let manifestBase64 = Data("explicit-manifest".utf8).base64EncodedString()
+    func testRegisterSoraFsPinManifestAcceptsMaximumManifestAndOmitsOptionalFields() async throws {
+        let manifestPayload = Data(repeating: 0xA5, count: 512 * 1024).base64EncodedString()
         StubURLProtocol.handler = { request in
             let root = self.bodyJSON(from: request)
-            XCTAssertEqual(root["manifest_b64"] as? String, manifestBase64)
+            XCTAssertEqual(root["manifest_payload"] as? String, manifestPayload)
+            XCTAssertNil(root["alias"])
+            XCTAssertNil(root["successor_of_hex"])
+            XCTAssertEqual(
+                Set(root.keys),
+                Set(["authority", "private_key", "manifest_payload", "submitted_epoch"])
+            )
             let responseObject: [String: Any] = [
                 "manifest_digest_hex": String(repeating: "a", count: 64),
                 "chunker_handle": "sorafs.sf1@1.0.0",
@@ -20878,40 +20942,61 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             return (response, body)
         }
 
-        var request = makeValidSoraFsPinRegisterRequest()
-        request.manifestBase64 = manifestBase64
-        request.manifestBytes = nil
-        _ = try await makeClient().registerSoraFsPinManifest(request)
+        _ = try await makeClient().registerSoraFsPinManifest(
+            ToriiSoraFsPinRegisterRequest(
+                authority: authority,
+                privateKey: "ed25519:deadbeef",
+                manifestPayload: manifestPayload,
+                submittedEpoch: 0
+            )
+        )
     }
 
     @available(iOS 15.0, macOS 12.0, *)
     func testRegisterSoraFsPinManifestRejectsMalformedInputsBeforeRequest() async throws {
+        let oversizedManifest = Data(
+            repeating: 0xA5,
+            count: 512 * 1024 + 1
+        ).base64EncodedString()
+        let oversizedAliasProof = Data(
+            repeating: 0x5A,
+            count: 1024 * 1024 + 1
+        ).base64EncodedString()
         let invalidRequests: [ToriiSoraFsPinRegisterRequest] = [
-            mutatedSoraFsPinRequest { $0.manifestDigestHex = "abc123" },
-            mutatedSoraFsPinRequest { $0.manifestBase64 = "not base64!"; $0.manifestBytes = nil },
-            mutatedSoraFsPinRequest { $0.manifestBase64 = Data("manifest".utf8).base64EncodedString() },
-            mutatedSoraFsPinRequest { $0.manifestBytes = Data() },
-            mutatedSoraFsPinRequest { $0.chunkDigestSha3_256Hex = String(repeating: "z", count: 64) },
-            mutatedSoraFsPinRequest { $0.successorOfHex = String(repeating: "c", count: 63) },
-            mutatedSoraFsPinRequest { $0.contentLength = nil },
+            mutatedSoraFsPinRequest { $0.authority = nil },
+            mutatedSoraFsPinRequest { $0.authority = "alice@boi" },
+            mutatedSoraFsPinRequest { $0.authority = " \(self.authority)" },
+            mutatedSoraFsPinRequest { $0.privateKey = nil },
+            mutatedSoraFsPinRequest { $0.privateKey = "" },
+            mutatedSoraFsPinRequest { $0.privateKey = " ed25519:deadbeef" },
+            mutatedSoraFsPinRequest { $0.privateKey = "ed25519:dead beef" },
+            mutatedSoraFsPinRequest { $0.privateKey = "ed25519:deadbeef\u{0001}" },
+            mutatedSoraFsPinRequest { $0.manifestPayload = nil },
+            mutatedSoraFsPinRequest { $0.manifestPayload = "" },
+            mutatedSoraFsPinRequest { $0.manifestPayload = "not base64!" },
+            mutatedSoraFsPinRequest { $0.manifestPayload = "bWFuaWZlc3Q" },
+            mutatedSoraFsPinRequest { $0.manifestPayload = "bWFuaWZlc3Q=\n" },
+            mutatedSoraFsPinRequest { $0.manifestPayload = oversizedManifest },
             mutatedSoraFsPinRequest { $0.submittedEpoch = nil },
-            mutatedSoraFsPinRequest { $0.chunker = nil },
-            mutatedSoraFsChunker { $0.profileId = nil },
-            mutatedSoraFsChunker { $0.profileId = 0 },
-            mutatedSoraFsChunker { $0.namespace = " " },
-            mutatedSoraFsChunker { $0.semver = "" },
-            mutatedSoraFsPinRequest { $0.pinPolicy = nil },
-            mutatedSoraFsPinPolicy { $0.minReplicas = nil },
-            mutatedSoraFsPinPolicy { $0.minReplicas = 0 },
-            mutatedSoraFsPinPolicy { $0.storageClass = nil },
-            mutatedSoraFsPinPolicy { $0.storageClass = ToriiSoraFsStorageClass(type: "lava") },
+            mutatedSoraFsPinRequest { $0.successorOfHex = "" },
+            mutatedSoraFsPinRequest { $0.successorOfHex = " " },
+            mutatedSoraFsPinRequest {
+                $0.successorOfHex = " \(String(repeating: "c", count: 64))"
+            },
+            mutatedSoraFsPinRequest { $0.successorOfHex = String(repeating: "c", count: 63) },
+            mutatedSoraFsPinRequest { $0.successorOfHex = String(repeating: "0", count: 64) },
             mutatedSoraFsAlias { $0.namespace = "" },
+            mutatedSoraFsAlias { $0.namespace = "Docs" },
+            mutatedSoraFsAlias { $0.namespace = String(repeating: "a", count: 129) },
+            mutatedSoraFsAlias { $0.namespace = "døcs" },
+            mutatedSoraFsAlias { $0.name = "main/current" },
             mutatedSoraFsAlias { $0.proofBase64 = nil },
             mutatedSoraFsAlias { $0.proofBase64 = "not base64!" },
             mutatedSoraFsAlias { $0.proofBase64 = Data().base64EncodedString() },
             mutatedSoraFsAlias {
                 $0.proofBase64 = Data("alias-proof".utf8).base64EncodedString() + "\n"
             },
+            mutatedSoraFsAlias { $0.proofBase64 = oversizedAliasProof },
         ]
 
         var didSendRequest = false
@@ -21212,7 +21297,16 @@ final class ToriiClientIntegrationTests: XCTestCase {
         let ticket = String(repeating: "a", count: 64)
         let manifestPayload = Data([0xDE, 0xAD, 0xBE, 0xEF])
         let manifestObject: [String: Any] = ["chunker_handle": "demo.profile@1.0.0"]
-        let chunkPlanObject: [String: Any] = ["chunks": [["index": 0, "size": 262_144]]]
+        let chunkPlanObject: [String: Any] = [
+            "schema": "sorafs.chunk_fetch_plan.v1",
+            "payload_digest_blake3_hex": String(repeating: "c", count: 64),
+            "chunk_fetch_specs": [[
+                "chunk_index": 0,
+                "offset": 0,
+                "length": 262_144,
+                "digest_blake3": String(repeating: "22", count: 32)
+            ]]
+        ]
         var responseObject: [String: Any] = [
             "storage_ticket": ticket,
             "client_blob_id": String(repeating: "b", count: 64),
@@ -21251,12 +21345,64 @@ final class ToriiClientIntegrationTests: XCTestCase {
         XCTAssertEqual(decodedPlan, chunkPlanObject as NSDictionary)
     }
 
+    func testDaManifestBundleRejectsRetiredOrUnboundChunkPlans() throws {
+        let chunkSpecs: [ToriiJSONValue] = [
+            .object([
+                "chunk_index": .number(0),
+                "offset": .number(0),
+                "length": .number(1),
+                "digest_blake3": .string(String(repeating: "22", count: 32))
+            ])
+        ]
+        let invalidPlans: [(String, ToriiJSONValue)] = [
+            ("retired bare array", .array(chunkSpecs)),
+            (
+                "missing payload digest",
+                .object([
+                    "schema": .string("sorafs.chunk_fetch_plan.v1"),
+                    "chunk_fetch_specs": .array(chunkSpecs)
+                ])
+            ),
+            (
+                "zero payload digest",
+                .object([
+                    "schema": .string("sorafs.chunk_fetch_plan.v1"),
+                    "payload_digest_blake3_hex": .string(String(repeating: "00", count: 32)),
+                    "chunk_fetch_specs": .array(chunkSpecs)
+                ])
+            ),
+            (
+                "substituted payload digest",
+                .object([
+                    "schema": .string("sorafs.chunk_fetch_plan.v1"),
+                    "payload_digest_blake3_hex": .string(String(repeating: "11", count: 32)),
+                    "chunk_fetch_specs": .array(chunkSpecs)
+                ])
+            )
+        ]
+
+        for (label, plan) in invalidPlans {
+            var raw = tcMakeSampleManifestRaw()
+            raw["chunk_plan"] = plan
+            XCTAssertThrowsError(try ToriiDaManifestBundle(raw: raw), label)
+        }
+    }
+
     @available(iOS 15.0, macOS 12.0, *)
     func testFetchDaPayloadViaGatewayUsesInjectedOrchestrator() async throws {
         let ticket = String(repeating: "e", count: 64)
         let manifestPayload = Data([0xAA, 0xBB, 0xCC])
         let manifestObject: [String: Any] = ["chunker_handle": "demo.chunker@2.1.0"]
-        let chunkPlanObject: [String: Any] = ["chunks": [["index": 0, "size": 1]]]
+        let chunkPlanObject: [String: Any] = [
+            "schema": "sorafs.chunk_fetch_plan.v1",
+            "payload_digest_blake3_hex": String(repeating: "2", count: 64),
+            "chunk_fetch_specs": [[
+                "chunk_index": 0,
+                "offset": 0,
+                "length": 1,
+                "digest_blake3": String(repeating: "22", count: 32)
+            ]]
+        ]
         var responseObject: [String: Any] = [
             "storage_ticket": ticket,
             "client_blob_id": String(repeating: "1", count: 64),
@@ -21455,12 +21601,16 @@ final class ToriiClientIntegrationTests: XCTestCase {
                     "semver": .string("1.0.0")
                 ])
             ]),
-            "chunk_plan": .array([
-                .object([
-                    "chunk_index": .number(0),
-                    "offset": .number(0),
-                    "length": .number(4),
-                    "digest_blake3": .string(String(repeating: "ee", count: 32))
+            "chunk_plan": .object([
+                "schema": .string("sorafs.chunk_fetch_plan.v1"),
+                "payload_digest_blake3_hex": .string(String(repeating: "cc", count: 32)),
+                "chunk_fetch_specs": .array([
+                    .object([
+                        "chunk_index": .number(0),
+                        "offset": .number(0),
+                        "length": .number(4),
+                        "digest_blake3": .string(String(repeating: "ee", count: 32))
+                    ])
                 ])
             ])
         ]
@@ -21552,7 +21702,8 @@ final class ToriiClientIntegrationTests: XCTestCase {
             leafBytes: Data(),
             segmentLeavesHex: [],
             chunkSegmentsHex: [],
-            chunkRootsHex: [],
+            chunkCount: 1,
+            chunkMerklePathHex: [],
             verified: true
         )
         return ToriiDaProofSummary(

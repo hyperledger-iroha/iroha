@@ -1669,32 +1669,6 @@ impl RepairArgs {
                     PathBuf::from(require_value(args, index, "--approval")?),
                     "--approval",
                 )?;
-            } else if let Some(value) = arg.strip_prefix("--signed-auditor-request=") {
-                parsed.set_payload(
-                    RepairValidationPayloadKindV1::SignedAuditorRequest,
-                    PathBuf::from(value),
-                    "--signed-auditor-request",
-                )?;
-            } else if arg == "--signed-auditor-request" || arg == "--signed-auditor" {
-                index += 1;
-                parsed.set_payload(
-                    RepairValidationPayloadKindV1::SignedAuditorRequest,
-                    PathBuf::from(require_value(args, index, arg)?),
-                    arg,
-                )?;
-            } else if let Some(value) = arg.strip_prefix("--worker-signature=") {
-                parsed.set_payload(
-                    RepairValidationPayloadKindV1::WorkerSignaturePayload,
-                    PathBuf::from(value),
-                    "--worker-signature",
-                )?;
-            } else if arg == "--worker-signature" {
-                index += 1;
-                parsed.set_payload(
-                    RepairValidationPayloadKindV1::WorkerSignaturePayload,
-                    PathBuf::from(require_value(args, index, "--worker-signature")?),
-                    "--worker-signature",
-                )?;
             } else if let Some(value) = arg.strip_prefix("--event=") {
                 parsed.set_payload(
                     RepairValidationPayloadKindV1::TaskEvent,
@@ -2787,18 +2761,12 @@ fn parse_repair_kind(value: &str) -> Result<RepairValidationPayloadKindV1, CliEr
         "approval" | "escalation-approval" | "repair-escalation-approval" => {
             Ok(RepairValidationPayloadKindV1::EscalationApproval)
         }
-        "signed-auditor" | "signed-auditor-request" => {
-            Ok(RepairValidationPayloadKindV1::SignedAuditorRequest)
-        }
-        "worker" | "worker-signature" | "worker-signature-payload" => {
-            Ok(RepairValidationPayloadKindV1::WorkerSignaturePayload)
-        }
         "event" | "task-event" | "repair-task-event" => {
             Ok(RepairValidationPayloadKindV1::TaskEvent)
         }
         "audit-event" | "repair-audit-event" => Ok(RepairValidationPayloadKindV1::AuditEvent),
         other => Err(CliError::Config(format!(
-            "unsupported repair --kind `{other}`; expected task, evidence, report, slash-proposal, policy, approval, signed-auditor-request, worker-signature, event, or audit-event"
+            "unsupported repair --kind `{other}`; expected task, evidence, report, slash-proposal, policy, approval, event, or audit-event"
         ))),
     }
 }
@@ -3685,7 +3653,7 @@ Usage:
   sorafs-validate por --challenge <path> --proof <path> [--format table|json|yaml] [--telemetry-out <path>]
   sorafs-validate potr --receipt <path> [--profile hot|warm|archive|cold] [--format table|json|yaml] [--telemetry-out <path>]
   sorafs-validate repair --kind <payload-kind> --input <path> [--format table|json|yaml] [--telemetry-out <path>]
-  sorafs-validate repair --task <path> | --evidence <path> | --report <path> | --signed-auditor-request <path>
+  sorafs-validate repair --task <path> | --evidence <path> | --report <path> | --slash-proposal <path> | --policy <path> | --approval <path> | --event <path> | --audit-event <path>
   sorafs-validate bundle --bundle <dir> [--format table|json|yaml] [--telemetry-out <path>] [--now <unix-seconds>]
   sorafs-validate governance --node <path> --cid <node-cid> [--format table|json|yaml] [--telemetry-out <path>]
   sorafs-validate governance --block <path> [--cid <block-cid|hex:HEX>] [--format table|json|yaml] [--telemetry-out <path>]
@@ -4247,13 +4215,39 @@ mod tests {
             Ok(RepairValidationPayloadKindV1::TaskRecord)
         ));
         assert!(matches!(
-            parse_repair_kind("signed-auditor-request"),
-            Ok(RepairValidationPayloadKindV1::SignedAuditorRequest)
-        ));
-        assert!(matches!(
             parse_repair_kind("audit-event"),
             Ok(RepairValidationPayloadKindV1::AuditEvent)
         ));
+    }
+
+    #[test]
+    fn repair_cli_rejects_retired_envelope_and_worker_aliases() {
+        for kind in [
+            "signed-auditor",
+            "signed-auditor-request",
+            "worker",
+            "worker-signature",
+            "worker-signature-payload",
+        ] {
+            assert!(
+                matches!(parse_repair_kind(kind), Err(CliError::Config(_))),
+                "retired repair kind alias {kind} must be rejected"
+            );
+        }
+
+        for flag in [
+            "--signed-auditor-request=retired.to",
+            "--signed-auditor=retired.to",
+            "--worker-signature=retired.to",
+        ] {
+            assert!(
+                matches!(
+                    RepairArgs::parse(&[flag.to_owned()]),
+                    Err(CliError::Config(message)) if message.contains("unknown repair option")
+                ),
+                "retired repair payload flag {flag} must be rejected"
+            );
+        }
     }
 
     #[test]

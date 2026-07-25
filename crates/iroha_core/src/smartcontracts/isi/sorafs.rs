@@ -16,8 +16,8 @@ use iroha_data_model::{
     query::{
         error::{FindError, QueryExecutionFail},
         sorafs::prelude::{
-            FindSorafsRepairEvents, FindSorafsRepairStatus, FindSorafsRepairTask,
-            FindSorafsRepairTasks,
+            FindSorafsPinManifest, FindSorafsRepairEvents, FindSorafsRepairStatus,
+            FindSorafsRepairTask, FindSorafsRepairTasks,
         },
     },
     sorafs::{
@@ -27,24 +27,25 @@ use iroha_data_model::{
             CapacityTelemetryRecord, ProviderId,
         },
         moderation_ledger::{
-            REPAIR_LEDGER_MAX_APPEAL_REASON_BYTES_V1, REPAIR_LEDGER_MAX_IDEMPOTENCY_KEY_BYTES_V1,
-            REPAIR_LEDGER_MAX_LEASE_MS_V1, REPAIR_LEDGER_MAX_RECEIPTS_V1,
-            REPAIR_LEDGER_MIN_LEASE_MS_V1, REPAIR_LEDGER_TASK_VERSION_V1,
-            REPAIR_QUERY_MAX_EVENT_PAGE_BYTES_V1, REPAIR_QUERY_MAX_ITEMS_V1,
-            REPAIR_QUERY_MAX_TASK_PAGE_BYTES_V1, RepairFinalizedCursorV1,
-            RepairFinalizedEventPageV1, RepairFinalizedEventV1, RepairFinalizedStatusV1,
-            RepairFinalizedTaskV1, RepairLedgerActionReceiptV1, RepairLedgerAppealRecordV1,
-            RepairLedgerCompletedV1, RepairLedgerEscalatedV1, RepairLedgerFailedV1,
-            RepairLedgerLeaseV1, RepairLedgerSlashRecordV1, RepairLedgerStatusV1,
-            RepairLedgerTaskPageV1, RepairLedgerTaskV1, RepairLedgerTerminalKindV1,
-            RepairLedgerTerminalOutcomeV1, sorafs_repair_appeal_id_v1,
+            REPAIR_LEDGER_MAX_APPEAL_REASON_BYTES_V1, REPAIR_LEDGER_MAX_CANONICAL_PAYLOAD_BYTES_V1,
+            REPAIR_LEDGER_MAX_IDEMPOTENCY_KEY_BYTES_V1, REPAIR_LEDGER_MAX_LEASE_MS_V1,
+            REPAIR_LEDGER_MAX_RECEIPTS_V1, REPAIR_LEDGER_MIN_LEASE_MS_V1,
+            REPAIR_LEDGER_TASK_VERSION_V1, REPAIR_QUERY_MAX_EVENT_PAGE_BYTES_V1,
+            REPAIR_QUERY_MAX_ITEMS_V1, REPAIR_QUERY_MAX_TASK_PAGE_BYTES_V1,
+            RepairFinalizedCursorV1, RepairFinalizedEventPageV1, RepairFinalizedEventV1,
+            RepairFinalizedStatusV1, RepairFinalizedTaskV1, RepairLedgerActionReceiptV1,
+            RepairLedgerAppealRecordV1, RepairLedgerCompletedV1, RepairLedgerEscalatedV1,
+            RepairLedgerFailedV1, RepairLedgerLeaseV1, RepairLedgerSlashRecordV1,
+            RepairLedgerStatusV1, RepairLedgerTaskPageV1, RepairLedgerTaskV1,
+            RepairLedgerTerminalKindV1, RepairLedgerTerminalOutcomeV1,
+            sorafs_repair_action_digest_v1, sorafs_repair_appeal_id_v1,
             sorafs_repair_idempotency_digest_v1, sorafs_repair_task_id_v1,
         },
         pin_registry::{
             ChunkerProfileHandle, ManifestAliasBinding, ManifestAliasId, ManifestAliasRecord,
-            ManifestDigest, ManifestRootCid, PinFeePayment, PinManifestRecord, PinPolicy,
-            PinStatus, ReplicationOrderId, ReplicationOrderRecord, ReplicationOrderStatus,
-            StorageClass,
+            ManifestDigest, ManifestRootCid, PinFeePayment, PinManifestFinalizedCursorV1,
+            PinManifestFinalizedRecordV1, PinManifestRecord, PinPolicy, PinStatus,
+            ReplicationOrderId, ReplicationOrderRecord, ReplicationOrderStatus, StorageClass,
         },
         pricing::{
             PricingComputationError, PricingScheduleRecord, ProviderCreditRecord,
@@ -78,7 +79,10 @@ use sorafs_manifest::{
 };
 
 use super::*;
-use crate::{smartcontracts::ValidSingularQuery, state::StateTransaction};
+use crate::{
+    smartcontracts::ValidSingularQuery,
+    state::StateTransaction,
+};
 
 /// Convert governance configuration into manifest validation constraints.
 pub fn manifest_pin_policy_constraints_from_config(
@@ -524,6 +528,7 @@ impl Execute for iroha_data_model::isi::sorafs::RegisterPinManifest {
         })?;
 
         let chunk_digest_sha3_256 = manifest.chunk_digest_sha3_256;
+        let por_root = manifest.por_root;
         let digest = ManifestDigest::from_manifest(&manifest).map_err(|error| {
             invalid_parameter(format!("failed to derive manifest digest: {error}"))
         })?;
@@ -598,14 +603,15 @@ impl Execute for iroha_data_model::isi::sorafs::RegisterPinManifest {
             root_cid,
             chunker,
             chunk_digest_sha3_256,
+            por_root,
+            content_length,
             policy,
             authority.clone(),
             submitted_epoch,
             alias.clone(),
             successor_of,
             Metadata::default(),
-        )
-        .with_content_length(content_length);
+        );
 
         let requires_council_approval = state_transaction
             .gov
@@ -708,10 +714,18 @@ impl Execute for iroha_data_model::isi::sorafs::ApprovePinManifest {
 
         let was_pending = matches!(record.status, PinStatus::Pending);
 
+        let executing_block_height = state_transaction._curr_block.height().get();
         let envelope_digest_from_envelope = self
             .council_envelope
             .as_deref()
-            .map(|envelope| verify_council_envelope(&record, envelope))
+            .map(|envelope| {
+                verify_council_envelope(
+                    &record,
+                    envelope,
+                    &state_transaction.gov.sorafs_pin_policy,
+                    executing_block_height,
+                )
+            })
             .transpose()?;
 
         if let (Some(provided), Some(computed)) =
@@ -892,8 +906,11 @@ fn revoke_repair_worker_permission(
 fn verify_council_envelope(
     record: &PinManifestRecord,
     envelope: &[u8],
+    approval_policy: &iroha_config::parameters::actual::SorafsPinPolicyConstraints,
+    executing_block_height: u64,
 ) -> Result<[u8; 32], InstructionExecutionError> {
     let manifest_label = manifest_hex(&record.digest);
+    validate_council_approval_policy(approval_policy, executing_block_height, &manifest_label)?;
     if envelope.is_empty() || envelope.len() > MAX_COUNCIL_ENVELOPE_BYTES {
         return Err(invalid_parameter(format!(
             "council envelope for manifest {manifest_label} is {} bytes; expected 1..={MAX_COUNCIL_ENVELOPE_BYTES}",
@@ -1050,6 +1067,7 @@ fn verify_council_envelope(
     }
 
     let mut previous_signer: Option<[u8; 32]> = None;
+    let mut verified_signatures = 0_usize;
     for entry in signatures {
         let entry = entry.as_object().ok_or_else(|| {
             invalid_parameter(format!(
@@ -1115,6 +1133,33 @@ fn verify_council_envelope(
                 "failed to parse council signer `{signer_hex}` for manifest {manifest_label}: {err}"
             ))
         })?;
+        let trusted_signer = approval_policy
+            .approval_signers
+            .iter()
+            .find(|trusted| trusted.public_key == public_key)
+            .ok_or_else(|| {
+                invalid_parameter(format!(
+                    "council signer `{signer_hex}` for manifest {manifest_label} is not present in the governed approval roster"
+                ))
+            })?;
+        if !trusted_signer.is_active_at(executing_block_height) {
+            let reason = if executing_block_height < trusted_signer.valid_from_block_height {
+                format!(
+                    "is not active until block {}",
+                    trusted_signer.valid_from_block_height
+                )
+            } else {
+                format!(
+                    "was revoked at block {}",
+                    trusted_signer
+                        .revoked_at_block_height
+                        .expect("inactive post-activation signer must be revoked")
+                )
+            };
+            return Err(invalid_parameter(format!(
+                "council signer `{signer_hex}` for manifest {manifest_label} {reason}; executing block is {executing_block_height}"
+            )));
+        }
 
         let signature_hex = entry
             .get("signature")
@@ -1158,11 +1203,101 @@ fn verify_council_envelope(
                 )));
             }
         }
+        verified_signatures = verified_signatures
+            .checked_add(1)
+            .ok_or_else(|| invalid_parameter("council signature count overflow"))?;
+    }
+
+    if verified_signatures < usize::from(approval_policy.approval_quorum) {
+        return Err(invalid_parameter(format!(
+            "council envelope for manifest {manifest_label} has {verified_signatures} active trusted signatures; approval quorum is {}",
+            approval_policy.approval_quorum
+        )));
     }
 
     let mut digest_bytes = [0u8; 32];
     digest_bytes.copy_from_slice(blake3::hash(envelope).as_bytes());
     Ok(digest_bytes)
+}
+
+fn validate_council_approval_policy(
+    policy: &iroha_config::parameters::actual::SorafsPinPolicyConstraints,
+    executing_block_height: u64,
+    manifest_label: &str,
+) -> Result<(), InstructionExecutionError> {
+    if policy.approval_signers.is_empty() {
+        return Err(invalid_parameter(format!(
+            "governed approval signer roster is empty for manifest {manifest_label}"
+        )));
+    }
+    if policy.approval_signers.len() > MAX_COUNCIL_ENVELOPE_SIGNATURES {
+        return Err(invalid_parameter(format!(
+            "governed approval signer roster for manifest {manifest_label} contains {} entries; maximum is {MAX_COUNCIL_ENVELOPE_SIGNATURES}",
+            policy.approval_signers.len()
+        )));
+    }
+    if policy.approval_quorum == 0
+        || usize::from(policy.approval_quorum) > policy.approval_signers.len()
+    {
+        return Err(invalid_parameter(format!(
+            "governed approval quorum {} is invalid for {} signers on manifest {manifest_label}",
+            policy.approval_quorum,
+            policy.approval_signers.len()
+        )));
+    }
+
+    let mut previous_signer_id: Option<&str> = None;
+    let mut public_keys = BTreeSet::new();
+    let mut active_signers = 0_usize;
+    for signer in &policy.approval_signers {
+        let signer_id_is_canonical = !signer.signer_id.is_empty()
+            && signer.signer_id.len() <= 128
+            && signer.signer_id.bytes().all(|byte| {
+                byte.is_ascii_lowercase()
+                    || byte.is_ascii_digit()
+                    || matches!(byte, b'.' | b'-' | b'_' | b':')
+            });
+        if !signer_id_is_canonical
+            || previous_signer_id.is_some_and(|previous| previous >= signer.signer_id.as_str())
+        {
+            return Err(invalid_parameter(format!(
+                "governed approval signer ids for manifest {manifest_label} must be canonical and strictly ordered"
+            )));
+        }
+        previous_signer_id = Some(&signer.signer_id);
+        if signer.public_key.algorithm() != Algorithm::Ed25519 {
+            return Err(invalid_parameter(format!(
+                "governed approval signer `{}` for manifest {manifest_label} is not Ed25519",
+                signer.signer_id
+            )));
+        }
+        if !public_keys.insert(signer.public_key.clone()) {
+            return Err(invalid_parameter(format!(
+                "governed approval roster for manifest {manifest_label} contains duplicate public keys"
+            )));
+        }
+        if signer
+            .revoked_at_block_height
+            .is_some_and(|revoked_at| revoked_at <= signer.valid_from_block_height)
+        {
+            return Err(invalid_parameter(format!(
+                "governed approval signer `{}` for manifest {manifest_label} has an invalid activation/revocation window",
+                signer.signer_id
+            )));
+        }
+        if signer.is_active_at(executing_block_height) {
+            active_signers = active_signers
+                .checked_add(1)
+                .ok_or_else(|| invalid_parameter("active approval signer count overflow"))?;
+        }
+    }
+    if active_signers < usize::from(policy.approval_quorum) {
+        return Err(invalid_parameter(format!(
+            "governed approval roster for manifest {manifest_label} has {active_signers} active signers at executing block {executing_block_height}; quorum is {}",
+            policy.approval_quorum
+        )));
+    }
+    Ok(())
 }
 
 fn is_canonical_lower_hex(value: &str, decoded_len: usize) -> bool {
@@ -1679,6 +1814,8 @@ mod pin_policy_tests {
             max_retention_epoch: Some(10),
             allowed_storage_classes: Some(allowed.clone()),
             require_council_signatures: true,
+            approval_quorum: 1,
+            approval_signers: Vec::new(),
         };
 
         let constraints = manifest_pin_policy_constraints_from_config(&config);
@@ -3032,9 +3169,7 @@ const REPAIR_SOURCE_STATE_KEY_PREFIX_V1: &str = "sorafs_repair_source_v1_";
 const REPAIR_EVENT_STATE_KEY_PREFIX_V1: &str = "sorafs_repair_event_v1_";
 const REPAIR_EVENT_JOURNAL_HEAD_STATE_KEY_V1: &str = "sorafs_repair_event_head_v1";
 const REPAIR_TICKET_STATE_KEY_DOMAIN_V1: &[u8] = b"sorafs.repair.ticket-state-key.v1";
-const REPAIR_ACTION_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.repair.action-digest.v1";
 const REPAIR_STATE_MAX_BYTES_V1: usize = 256 * 1024;
-const REPAIR_PAYLOAD_MAX_BYTES_V1: usize = 64 * 1024;
 const REPAIR_QUERY_MAX_TASK_STATE_READ_BYTES_V1: usize = 16 * 1024 * 1024;
 const REPAIR_QUERY_MAX_EVENT_STATE_READ_BYTES_V1: usize = 32 * 1024 * 1024;
 const REPAIR_STATE_LIMITS_V1: DecodeLimits = DecodeLimits::new(
@@ -3046,9 +3181,9 @@ const REPAIR_STATE_LIMITS_V1: DecodeLimits = DecodeLimits::new(
 );
 const REPAIR_PAYLOAD_LIMITS_V1: DecodeLimits = DecodeLimits::new(
     256,
-    REPAIR_PAYLOAD_MAX_BYTES_V1,
+    REPAIR_LEDGER_MAX_CANONICAL_PAYLOAD_BYTES_V1,
     2_048,
-    2 * REPAIR_PAYLOAD_MAX_BYTES_V1,
+    2 * REPAIR_LEDGER_MAX_CANONICAL_PAYLOAD_BYTES_V1,
     64,
 );
 
@@ -3168,9 +3303,9 @@ fn decode_repair_payload<T>(bytes: &[u8], label: &str) -> Result<T, InstructionE
 where
     for<'de> T: norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
 {
-    if bytes.is_empty() || bytes.len() > REPAIR_PAYLOAD_MAX_BYTES_V1 {
+    if bytes.is_empty() || bytes.len() > REPAIR_LEDGER_MAX_CANONICAL_PAYLOAD_BYTES_V1 {
         return Err(invalid_parameter(format!(
-            "{label} payload length {} is outside 1..={REPAIR_PAYLOAD_MAX_BYTES_V1}",
+            "{label} payload length {} is outside 1..={REPAIR_LEDGER_MAX_CANONICAL_PAYLOAD_BYTES_V1}",
             bytes.len()
         )));
     }
@@ -3313,6 +3448,43 @@ fn read_repair_status(
         ));
     }
     Ok(Some(status))
+}
+
+fn repair_namespace_has_key(
+    world: &impl crate::state::WorldReadOnly,
+    prefix: &str,
+) -> Result<bool, InstructionExecutionError> {
+    let start = Name::from_str(prefix).map_err(|error| {
+        corrupt_repair_state(format!(
+            "repair state namespace prefix `{prefix}` is invalid: {error}"
+        ))
+    })?;
+    Ok(world
+        .smart_contract_state()
+        .range(start..)
+        .next()
+        .is_some_and(|(key, _)| key.to_string().starts_with(prefix)))
+}
+
+fn read_repair_status_or_prove_empty(
+    world: &impl crate::state::WorldReadOnly,
+) -> Result<RepairLedgerStatusV1, InstructionExecutionError> {
+    if let Some(status) = read_repair_status(world)? {
+        return Ok(status);
+    }
+    if world
+        .smart_contract_state()
+        .get(repair_event_journal_head_key())
+        .is_some()
+        || repair_namespace_has_key(world, REPAIR_TASK_STATE_KEY_PREFIX_V1)?
+        || repair_namespace_has_key(world, REPAIR_SOURCE_STATE_KEY_PREFIX_V1)?
+        || repair_namespace_has_key(world, REPAIR_EVENT_STATE_KEY_PREFIX_V1)?
+    {
+        return Err(corrupt_repair_state(
+            "repair ledger status is absent while orphaned repair state remains",
+        ));
+    }
+    Ok(RepairLedgerStatusV1::default())
 }
 
 fn validate_repair_task_record(
@@ -4019,24 +4191,8 @@ fn repair_action_digest<T: norito::core::NoritoSerialize>(
     authority: &AccountId,
     action: &T,
 ) -> Result<[u8; 32], InstructionExecutionError> {
-    let bytes = norito::to_bytes(action)
-        .map_err(|error| invalid_parameter(format!("failed to encode repair action: {error}")))?;
-    let authority = authority.to_string();
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(REPAIR_ACTION_DIGEST_DOMAIN_V1);
-    hasher.update(
-        &u64::try_from(authority.len())
-            .expect("string length fits u64")
-            .to_le_bytes(),
-    );
-    hasher.update(authority.as_bytes());
-    hasher.update(
-        &u64::try_from(bytes.len())
-            .expect("slice length fits u64")
-            .to_le_bytes(),
-    );
-    hasher.update(&bytes);
-    Ok(*hasher.finalize().as_bytes())
+    sorafs_repair_action_digest_v1(authority, action)
+        .map_err(|error| invalid_parameter(format!("failed to encode repair action: {error}")))
 }
 
 fn repair_action_is_replay(
@@ -4699,6 +4855,31 @@ fn ensure_repair_query_encoded_budget<T: norito::core::NoritoSerialize>(
     Ok(())
 }
 
+fn resolve_pin_manifest_finalized_cursor(
+    state_ro: &impl crate::state::StateReadOnly,
+) -> Result<PinManifestFinalizedCursorV1, QueryExecutionFail> {
+    let height = u64::try_from(state_ro.block_hashes().len()).map_err(|_| {
+        QueryExecutionFail::Conversion(
+            "finalized pin-manifest height does not fit into u64".to_owned(),
+        )
+    })?;
+    let block_hash = state_ro
+        .block_hashes()
+        .last()
+        .map(|hash| *hash.as_ref())
+        .ok_or_else(|| {
+            QueryExecutionFail::Conversion(
+                "pin-manifest queries require at least one committed block".to_owned(),
+            )
+        })?;
+    if height == 0 || block_hash == [0; 32] {
+        return Err(QueryExecutionFail::Conversion(
+            "finalized pin-manifest query anchor is invalid".to_owned(),
+        ));
+    }
+    Ok(PinManifestFinalizedCursorV1 { height, block_hash })
+}
+
 fn resolve_repair_finalized_cursor(
     state_ro: &impl crate::state::StateReadOnly,
 ) -> Result<RepairFinalizedCursorV1, QueryExecutionFail> {
@@ -5153,6 +5334,38 @@ fn query_repair_event_page(
     Ok(page)
 }
 
+impl ValidSingularQuery for FindSorafsPinManifest {
+    fn execute(
+        &self,
+        state_ro: &impl crate::state::StateReadOnly,
+    ) -> Result<PinManifestFinalizedRecordV1, QueryExecutionFail> {
+        if self.digest.as_bytes() == &[0; 32] {
+            return Err(QueryExecutionFail::Conversion(
+                "pin-manifest digest must be non-zero".to_owned(),
+            ));
+        }
+        let finalized_cursor = resolve_pin_manifest_finalized_cursor(state_ro)?;
+        if self
+            .expected_finalized_cursor
+            .is_some_and(|expected| expected != finalized_cursor)
+        {
+            return Err(QueryExecutionFail::Expired);
+        }
+        let manifest = state_ro
+            .world()
+            .pin_manifests()
+            .get(&self.digest)
+            .cloned()
+            .ok_or(QueryExecutionFail::Find(FindError::SorafsPinManifest(
+                self.digest,
+            )))?;
+        Ok(PinManifestFinalizedRecordV1 {
+            finalized_cursor,
+            manifest,
+        })
+    }
+}
+
 impl ValidSingularQuery for FindSorafsRepairTask {
     fn execute(
         &self,
@@ -5177,9 +5390,7 @@ impl ValidSingularQuery for FindSorafsRepairTasks {
         &self,
         state_ro: &impl crate::state::StateReadOnly,
     ) -> Result<RepairLedgerTaskPageV1, QueryExecutionFail> {
-        read_repair_status(state_ro.world())
-            .map_err(repair_query_failure)?
-            .ok_or(QueryExecutionFail::Find(FindError::SorafsRepairStatus))?;
+        read_repair_status_or_prove_empty(state_ro.world()).map_err(repair_query_failure)?;
         let finalized_cursor =
             resolve_repair_query_finalized_cursor(self.expected_finalized_cursor, state_ro)?;
         query_repair_task_page(self, state_ro, finalized_cursor)
@@ -5193,9 +5404,8 @@ impl ValidSingularQuery for FindSorafsRepairStatus {
     ) -> Result<RepairFinalizedStatusV1, QueryExecutionFail> {
         let finalized_cursor =
             resolve_repair_query_finalized_cursor(self.expected_finalized_cursor, state_ro)?;
-        let status = read_repair_status(state_ro.world())
-            .map_err(repair_query_failure)?
-            .ok_or(QueryExecutionFail::Find(FindError::SorafsRepairStatus))?;
+        let status =
+            read_repair_status_or_prove_empty(state_ro.world()).map_err(repair_query_failure)?;
         Ok(RepairFinalizedStatusV1 {
             finalized_cursor,
             status,
@@ -5329,8 +5539,67 @@ mod sorafs_tests {
         (serialized, signature_hex)
     }
 
-    fn council_envelope_error(record: &PinManifestRecord, envelope: &[u8]) -> String {
-        match verify_council_envelope(record, envelope)
+    fn council_approval_signer(
+        signer_id: &str,
+        keypair: &KeyPair,
+        valid_from_block_height: u64,
+        revoked_at_block_height: Option<u64>,
+    ) -> iroha_config::parameters::actual::SorafsPinApprovalSigner {
+        iroha_config::parameters::actual::SorafsPinApprovalSigner {
+            signer_id: signer_id.to_owned(),
+            public_key: keypair.public_key().clone(),
+            valid_from_block_height,
+            revoked_at_block_height,
+        }
+    }
+
+    fn council_approval_policy(
+        quorum: u16,
+        mut signers: Vec<iroha_config::parameters::actual::SorafsPinApprovalSigner>,
+    ) -> iroha_config::parameters::actual::SorafsPinPolicyConstraints {
+        signers.sort_by(|left, right| left.signer_id.cmp(&right.signer_id));
+        iroha_config::parameters::actual::SorafsPinPolicyConstraints {
+            require_council_signatures: true,
+            approval_quorum: quorum,
+            approval_signers: signers,
+            ..Default::default()
+        }
+    }
+
+    fn set_council_approval_policy(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        quorum: u16,
+        signers: Vec<iroha_config::parameters::actual::SorafsPinApprovalSigner>,
+    ) {
+        let policy = council_approval_policy(quorum, signers);
+        state_transaction
+            .gov
+            .sorafs_pin_policy
+            .require_council_signatures = true;
+        state_transaction.gov.sorafs_pin_policy.approval_quorum = policy.approval_quorum;
+        state_transaction.gov.sorafs_pin_policy.approval_signers = policy.approval_signers;
+    }
+
+    fn build_trusted_envelope(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        record: &PinManifestRecord,
+        keypair: &KeyPair,
+    ) -> (Vec<u8>, String) {
+        set_council_approval_policy(
+            state_transaction,
+            1,
+            vec![council_approval_signer("council-a", keypair, 0, None)],
+        );
+        build_envelope(record, keypair)
+    }
+
+    fn council_envelope_error(
+        record: &PinManifestRecord,
+        envelope: &[u8],
+        policy: &iroha_config::parameters::actual::SorafsPinPolicyConstraints,
+        executing_block_height: u64,
+    ) -> String {
+        match verify_council_envelope(record, envelope, policy, executing_block_height)
             .expect_err("adversarial council envelope must fail")
         {
             InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
@@ -5572,6 +5841,49 @@ mod sorafs_tests {
         }
     }
 
+    fn repair_report_payloads_at_ledger_boundary(report: &RepairReportV1) -> (Vec<u8>, Vec<u8>) {
+        let encode_with_padding = |padding: usize| {
+            let mut candidate = report.clone();
+            candidate.evidence.evidence_json = Some(format!("\"{}\"", "x".repeat(padding)));
+            candidate
+                .validate()
+                .expect("boundary repair report remains semantically valid");
+            to_bytes(&candidate).expect("encode boundary repair report")
+        };
+
+        let mut largest_accepted_padding = 0_usize;
+        let mut first_rejected_padding = REPAIR_LEDGER_MAX_CANONICAL_PAYLOAD_BYTES_V1;
+        while encode_with_padding(first_rejected_padding).len()
+            <= REPAIR_LEDGER_MAX_CANONICAL_PAYLOAD_BYTES_V1
+        {
+            first_rejected_padding = first_rejected_padding
+                .checked_mul(2)
+                .expect("repair report boundary search remains bounded");
+        }
+        while largest_accepted_padding + 1 < first_rejected_padding {
+            let candidate_padding =
+                largest_accepted_padding + (first_rejected_padding - largest_accepted_padding) / 2;
+            if encode_with_padding(candidate_padding).len()
+                <= REPAIR_LEDGER_MAX_CANONICAL_PAYLOAD_BYTES_V1
+            {
+                largest_accepted_padding = candidate_padding;
+            } else {
+                first_rejected_padding = candidate_padding;
+            }
+        }
+
+        let largest_accepted = encode_with_padding(largest_accepted_padding);
+        let first_rejected = encode_with_padding(first_rejected_padding);
+        assert_eq!(
+            first_rejected_padding,
+            largest_accepted_padding + 1,
+            "boundary search finds adjacent valid report payloads"
+        );
+        assert!(largest_accepted.len() <= REPAIR_LEDGER_MAX_CANONICAL_PAYLOAD_BYTES_V1);
+        assert!(first_rejected.len() > REPAIR_LEDGER_MAX_CANONICAL_PAYLOAD_BYTES_V1);
+        (largest_accepted, first_rejected)
+    }
+
     fn grant_repair_operator(state: &mut State, account: &AccountId, provider_id: ProviderId) {
         let permission = AccountPermission::from(CanOperateSorafsRepair { provider_id });
         let mut permissions = {
@@ -5806,6 +6118,7 @@ mod sorafs_tests {
             ))
             .chunking_from_registry(sorafs_manifest::chunker_registry::default_descriptor().id)
             .chunk_digest_sha3_256(chunk_digest_sha3_256)
+            .por_root([commitment.wrapping_add(2).max(1); 32])
             .content_length(default_content_length())
             .car_digest([commitment.wrapping_add(1).max(1); 32])
             .car_size(
@@ -5850,6 +6163,10 @@ mod sorafs_tests {
     pub(super) fn root_cid_for_manifest(digest: ManifestDigest) -> ManifestRootCid {
         let manifest = manifest_fixture(fixture_seed_for_digest(digest));
         ManifestRootCid::try_from_slice(&manifest.root_cid).expect("canonical root CID")
+    }
+
+    fn por_root_for_manifest(digest: ManifestDigest) -> [u8; 32] {
+        manifest_fixture(fixture_seed_for_digest(digest)).por_root
     }
 
     pub(super) fn default_root_cid() -> ManifestRootCid {
@@ -5989,6 +6306,7 @@ mod sorafs_tests {
         assert_eq!(record.digest, default_digest());
         assert_eq!(record.root_cid, default_root_cid());
         assert_eq!(record.chunker, default_chunker());
+        assert_eq!(record.por_root, por_root_for_manifest(default_digest()));
         assert_eq!(record.policy, default_policy());
         let payment = record
             .pin_fee_payment
@@ -6249,6 +6567,11 @@ mod sorafs_tests {
             .expect("manifest stored")
             .clone();
         let council_key = checked_ed25519_keypair();
+        set_council_approval_policy(
+            stx,
+            1,
+            vec![council_approval_signer("council-a", &council_key, 0, None)],
+        );
         let (envelope, _) = build_envelope(&stored_record, &council_key);
 
         let approve = ApprovePinManifest {
@@ -6274,14 +6597,15 @@ mod sorafs_tests {
             root_cid_for_manifest(digest),
             default_chunker(),
             chunk_digest,
+            por_root_for_manifest(digest),
+            content_length,
             policy,
             alice(),
             5,
             None,
             successor_of,
             Metadata::default(),
-        )
-        .with_content_length(content_length);
+        );
         match status {
             PinStatus::Pending => {}
             PinStatus::Approved(epoch) => {
@@ -6329,14 +6653,15 @@ mod sorafs_tests {
             root_cid_for_manifest(digest),
             default_chunker(),
             chunk_digest,
+            por_root_for_manifest(digest),
+            default_content_length(),
             default_policy(),
             alice(),
             5,
             Some(alias),
             None,
             Metadata::default(),
-        )
-        .with_content_length(default_content_length());
+        );
         stx.world.pin_manifests.insert(digest, record.clone());
         record
     }
@@ -6620,11 +6945,14 @@ mod sorafs_tests {
     }
 
     pub(super) fn bob() -> AccountId {
-        AccountId::new(
-            "ed01208D5C8358EA5B64A79653A76F516E436EB93E3EC7117B0C9DD861B029BEA0FC8B"
-                .parse()
-                .expect("public key"),
-        )
+        iroha_test_samples::BOB_ID.clone()
+    }
+
+    #[test]
+    fn sorafs_account_fixtures_are_distinct_valid_ed25519_identities() {
+        assert_eq!(alice().signatory().algorithm(), Algorithm::Ed25519);
+        assert_eq!(bob().signatory().algorithm(), Algorithm::Ed25519);
+        assert_ne!(alice(), bob());
     }
 
     #[test]
@@ -7181,6 +7509,11 @@ mod sorafs_tests {
         assert_eq!(stx.world.replication_orders.iter().count(), 0);
 
         let council_key = checked_ed25519_keypair();
+        set_council_approval_policy(
+            &mut stx,
+            1,
+            vec![council_approval_signer("council-a", &council_key, 0, None)],
+        );
         let (envelope, _) = build_envelope(&pending, &council_key);
         ApprovePinManifest {
             digest: default_digest(),
@@ -7566,6 +7899,11 @@ mod sorafs_tests {
             .cloned()
             .expect("manifest stored");
         let council_key = checked_ed25519_keypair();
+        set_council_approval_policy(
+            &mut stx,
+            1,
+            vec![council_approval_signer("council-a", &council_key, 0, None)],
+        );
         let (envelope, _) = build_envelope(&stored_record, &council_key);
 
         ApprovePinManifest {
@@ -7706,18 +8044,25 @@ mod sorafs_tests {
             default_root_cid(),
             default_chunker(),
             default_chunk_digest(),
+            por_root_for_manifest(default_digest()),
+            default_content_length(),
             policy,
             alice(),
             approval_epoch,
             Some(alias.clone()),
             None,
             Metadata::default(),
-        )
-        .with_content_length(default_content_length());
+        );
         stx.world
             .pin_manifests
             .insert(default_digest(), record.clone());
-        let (envelope, _) = build_envelope(&record, &checked_ed25519_keypair());
+        let council_key = checked_ed25519_keypair();
+        set_council_approval_policy(
+            &mut stx,
+            1,
+            vec![council_approval_signer("council-a", &council_key, 0, None)],
+        );
+        let (envelope, _) = build_envelope(&record, &council_key);
 
         let error = ApprovePinManifest {
             digest: default_digest(),
@@ -8370,7 +8715,7 @@ mod sorafs_tests {
             .expect("manifest stored")
             .clone();
         let council_key = checked_ed25519_keypair();
-        let (envelope, _) = build_envelope(&stored_record, &council_key);
+        let (envelope, _) = build_trusted_envelope(&mut stx, &stored_record, &council_key);
         let expected_digest = {
             let hash = blake3_hash(&envelope);
             let mut out = [0u8; 32];
@@ -8420,7 +8765,8 @@ mod sorafs_tests {
             .expect("manifest stored")
             .clone();
         let council_key = checked_ed25519_keypair();
-        let (envelope, _signature_hex) = build_envelope(&stored_record, &council_key);
+        let (envelope, _signature_hex) =
+            build_trusted_envelope(&mut stx, &stored_record, &council_key);
 
         let mut invalid_json =
             String::from_utf8(envelope.clone()).expect("envelope is valid UTF-8 JSON");
@@ -8473,7 +8819,8 @@ mod sorafs_tests {
             .expect("manifest stored")
             .clone();
         let council_key = checked_ed25519_keypair();
-        let (envelope, signature_hex) = build_envelope(&stored_record, &council_key);
+        let (envelope, signature_hex) =
+            build_trusted_envelope(&mut stx, &stored_record, &council_key);
 
         let mut modified_signature =
             hex::decode(&signature_hex).expect("signature hex decodes cleanly");
@@ -8530,7 +8877,8 @@ mod sorafs_tests {
             .expect("manifest stored")
             .clone();
         let council_key = checked_ed25519_keypair();
-        let (envelope, signature_hex) = build_envelope(&stored_record, &council_key);
+        let (envelope, signature_hex) =
+            build_trusted_envelope(&mut stx, &stored_record, &council_key);
         let inert_signature_hex = hex::encode([0_u8; 64]);
 
         let mut invalid_json =
@@ -8582,7 +8930,8 @@ mod sorafs_tests {
             .expect("manifest stored")
             .clone();
         let council_key = checked_ed25519_keypair();
-        let (envelope, _signature_hex) = build_envelope(&stored_record, &council_key);
+        let (envelope, _signature_hex) =
+            build_trusted_envelope(&mut stx, &stored_record, &council_key);
         let (_, signer_bytes) = council_key
             .public_key()
             .try_to_bytes()
@@ -8644,7 +8993,8 @@ mod sorafs_tests {
             .expect("manifest stored")
             .clone();
         let council_key = checked_ed25519_keypair();
-        let (envelope, signature_hex) = build_envelope(&stored_record, &council_key);
+        let (envelope, signature_hex) =
+            build_trusted_envelope(&mut stx, &stored_record, &council_key);
 
         for (label, replacement_r) in [
             ("small-order", SMALL_ORDER_ED25519_R),
@@ -8686,6 +9036,186 @@ mod sorafs_tests {
     }
 
     #[test]
+    fn approve_manifest_rejects_self_selected_signer_and_below_quorum() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
+        insert_pending_manifest(&mut stx, default_digest(), default_chunk_digest());
+        let record = stx
+            .world
+            .pin_manifests
+            .get(&default_digest())
+            .expect("pending manifest")
+            .clone();
+
+        let trusted_key = checked_ed25519_keypair();
+        let second_trusted_key = checked_ed25519_keypair();
+        let attacker_key = checked_ed25519_keypair();
+        set_council_approval_policy(
+            &mut stx,
+            1,
+            vec![council_approval_signer("council-a", &trusted_key, 0, None)],
+        );
+        let (attacker_envelope, _) = build_envelope(&record, &attacker_key);
+        let untrusted_error = ApprovePinManifest {
+            digest: default_digest(),
+            approved_epoch: 5,
+            council_envelope: Some(attacker_envelope),
+            council_envelope_digest: None,
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("an envelope must not self-select its approval key");
+        assert!(matches!(
+            untrusted_error,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("not present in the governed approval roster")
+        ));
+
+        set_council_approval_policy(
+            &mut stx,
+            2,
+            vec![
+                council_approval_signer("council-a", &trusted_key, 0, None),
+                council_approval_signer("council-b", &second_trusted_key, 0, None),
+            ],
+        );
+        let (single_signature_envelope, _) = build_envelope(&record, &trusted_key);
+        let quorum_error = ApprovePinManifest {
+            digest: default_digest(),
+            approved_epoch: 5,
+            council_envelope: Some(single_signature_envelope),
+            council_envelope_digest: None,
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("one trusted signature must not satisfy a two-signer quorum");
+        assert!(matches!(
+            quorum_error,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("has 1 active trusted signatures")
+                && message.contains("approval quorum is 2")
+        ));
+        let stored = stx
+            .world
+            .pin_manifests
+            .get(&default_digest())
+            .expect("manifest remains stored");
+        assert_eq!(stored.status, PinStatus::Pending);
+        assert!(stored.council_envelope_digest.is_none());
+    }
+
+    #[test]
+    fn approve_manifest_rejects_not_yet_active_governed_signer() {
+        let state = make_state();
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
+        insert_pending_manifest(&mut stx, default_digest(), default_chunk_digest());
+        let record = stx
+            .world
+            .pin_manifests
+            .get(&default_digest())
+            .expect("pending manifest")
+            .clone();
+        let active_key = checked_ed25519_keypair();
+        let future_key = checked_ed25519_keypair();
+        set_council_approval_policy(
+            &mut stx,
+            1,
+            vec![
+                council_approval_signer("council-active", &active_key, 0, None),
+                council_approval_signer("council-future", &future_key, 2, None),
+            ],
+        );
+        let (envelope, _) = build_envelope(&record, &future_key);
+
+        let error = ApprovePinManifest {
+            digest: default_digest(),
+            approved_epoch: 5,
+            council_envelope: Some(envelope),
+            council_envelope_digest: None,
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("a scheduled future key must not approve early");
+        assert!(matches!(
+            error,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("is not active until block 2")
+                && message.contains("executing block is 1")
+        ));
+        assert_eq!(
+            stx.world
+                .pin_manifests
+                .get(&default_digest())
+                .expect("manifest remains stored")
+                .status,
+            PinStatus::Pending
+        );
+    }
+
+    #[test]
+    fn approve_manifest_rejects_revoked_signer_despite_backdated_approval_epoch() {
+        let state = make_state();
+        let mut block = state.block(repair_block_header(10, 0));
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx);
+        let record = PinManifestRecord::new(
+            default_digest(),
+            default_root_cid(),
+            default_chunker(),
+            default_chunk_digest(),
+            por_root_for_manifest(default_digest()),
+            default_content_length(),
+            default_policy(),
+            alice(),
+            0,
+            None,
+            None,
+            Metadata::default(),
+        );
+        stx.world
+            .pin_manifests
+            .insert(default_digest(), record.clone());
+        let current_key = checked_ed25519_keypair();
+        let revoked_key = checked_ed25519_keypair();
+        set_council_approval_policy(
+            &mut stx,
+            1,
+            vec![
+                council_approval_signer("council-current", &current_key, 0, None),
+                council_approval_signer("council-revoked", &revoked_key, 0, Some(10)),
+            ],
+        );
+        let (envelope, _) = build_envelope(&record, &revoked_key);
+
+        let error = ApprovePinManifest {
+            digest: default_digest(),
+            approved_epoch: 0,
+            council_envelope: Some(envelope),
+            council_envelope_digest: None,
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("caller-selected approval epoch must not backdate signer authority");
+        assert!(matches!(
+            error,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("was revoked at block 10")
+                && message.contains("executing block is 10")
+        ));
+        let stored = stx
+            .world
+            .pin_manifests
+            .get(&default_digest())
+            .expect("manifest remains stored");
+        assert_eq!(stored.status, PinStatus::Pending);
+        assert!(stored.council_envelope_digest.is_none());
+    }
+
+    #[test]
     fn council_envelope_rejects_resource_and_canonicalization_attacks() {
         let state = make_state();
         let mut block = state.block(block_header());
@@ -8698,11 +9228,17 @@ mod sorafs_tests {
             .get(&default_digest())
             .expect("pending manifest")
             .clone();
-        let (envelope, _) = build_envelope(&record, &checked_ed25519_keypair());
-        verify_council_envelope(&record, &envelope).expect("baseline envelope verifies");
+        let council_key = checked_ed25519_keypair();
+        let policy = council_approval_policy(
+            1,
+            vec![council_approval_signer("council-a", &council_key, 0, None)],
+        );
+        let (envelope, _) = build_envelope(&record, &council_key);
+        verify_council_envelope(&record, &envelope, &policy, 1)
+            .expect("baseline envelope verifies");
 
         let oversized = vec![b' '; MAX_COUNCIL_ENVELOPE_BYTES + 1];
-        assert!(council_envelope_error(&record, &oversized).contains("expected 1..="));
+        assert!(council_envelope_error(&record, &oversized, &policy, 1).contains("expected 1..="));
 
         let baseline: Value = json::from_slice(&envelope).expect("parse baseline envelope");
 
@@ -8715,6 +9251,8 @@ mod sorafs_tests {
             council_envelope_error(
                 &record,
                 &json::to_vec(&unknown_top).expect("encode unknown-field envelope"),
+                &policy,
+                1,
             )
             .contains("unknown field")
         );
@@ -8732,6 +9270,8 @@ mod sorafs_tests {
                 &record,
                 &json::to_vec(&unknown_signature_field)
                     .expect("encode signature unknown-field envelope"),
+                &policy,
+                1,
             )
             .contains("unknown field")
         );
@@ -8749,6 +9289,8 @@ mod sorafs_tests {
                 &record,
                 &json::to_vec(&invalid_multihash_type)
                     .expect("encode invalid multihash type envelope"),
+                &policy,
+                1,
             )
             .contains("must be a string")
         );
@@ -8775,6 +9317,8 @@ mod sorafs_tests {
             council_envelope_error(
                 &record,
                 &json::to_vec(&uppercase_signer).expect("encode uppercase envelope"),
+                &policy,
+                1,
             )
             .contains("lowercase hex")
         );
@@ -8790,6 +9334,8 @@ mod sorafs_tests {
             council_envelope_error(
                 &record,
                 &json::to_vec(&duplicate_signer).expect("encode duplicate signer envelope"),
+                &policy,
+                1,
             )
             .contains("distinct signer keys")
         );
@@ -8805,6 +9351,8 @@ mod sorafs_tests {
             council_envelope_error(
                 &record,
                 &json::to_vec(&signature_flood).expect("encode signature flood"),
+                &policy,
+                1,
             )
             .contains("maximum")
         );
@@ -8824,6 +9372,8 @@ mod sorafs_tests {
             let message = council_envelope_error(
                 &record,
                 &json::to_vec(&invalid_aliases).expect("encode invalid aliases"),
+                &policy,
+                1,
             );
             assert!(
                 message.contains("unknown profile alias")
@@ -8856,7 +9406,8 @@ mod sorafs_tests {
             .expect("manifest stored")
             .clone();
         let council_key = checked_ed25519_keypair();
-        let (envelope, _signature_hex) = build_envelope(&stored_record, &council_key);
+        let (envelope, _signature_hex) =
+            build_trusted_envelope(&mut stx, &stored_record, &council_key);
 
         let approve = ApprovePinManifest {
             digest: default_digest(),
@@ -8902,7 +9453,7 @@ mod sorafs_tests {
             .expect("manifest stored")
             .clone();
         let council_key = checked_ed25519_keypair();
-        let (envelope, _) = build_envelope(&stored_record, &council_key);
+        let (envelope, _) = build_trusted_envelope(&mut stx, &stored_record, &council_key);
 
         let approve = ApprovePinManifest {
             digest: default_digest(),
@@ -9073,7 +9624,17 @@ mod sorafs_tests {
         let expected_digest = record
             .council_envelope_digest
             .expect("initial approval digest recorded");
-        let (replacement, _) = build_envelope(&record, &checked_ed25519_keypair());
+        let replacement_key = checked_ed25519_keypair();
+        stx.gov
+            .sorafs_pin_policy
+            .approval_signers
+            .push(council_approval_signer(
+                "council-b",
+                &replacement_key,
+                0,
+                None,
+            ));
+        let (replacement, _) = build_envelope(&record, &replacement_key);
 
         let error = ApprovePinManifest {
             digest: default_digest(),
@@ -9241,7 +9802,7 @@ mod sorafs_tests {
             alias.clone(),
         );
         let council_key = checked_ed25519_keypair();
-        let (envelope, signature_hex) = build_envelope(&record, &council_key);
+        let (envelope, signature_hex) = build_trusted_envelope(&mut stx, &record, &council_key);
 
         let mut modified_signature =
             hex::decode(&signature_hex).expect("signature hex decodes cleanly");
@@ -9310,7 +9871,7 @@ mod sorafs_tests {
             .insert(alias_id.clone(), stale_record);
 
         let council_key = checked_ed25519_keypair();
-        let (envelope, _) = build_envelope(&record, &council_key);
+        let (envelope, _) = build_trusted_envelope(&mut stx, &record, &council_key);
         let approve = ApprovePinManifest {
             digest: default_digest(),
             approved_epoch: 9,
@@ -9360,7 +9921,7 @@ mod sorafs_tests {
             alias.clone(),
         );
         let council_key = checked_ed25519_keypair();
-        let (envelope, _) = build_envelope(&record, &council_key);
+        let (envelope, _) = build_trusted_envelope(&mut stx, &record, &council_key);
 
         let approve = ApprovePinManifest {
             digest: default_digest(),
@@ -13329,6 +13890,147 @@ mod sorafs_tests {
     }
 
     #[test]
+    fn pin_manifest_query_is_finalized_cursor_bound_and_authoritative() {
+        use crate::smartcontracts::ValidSingularQuery;
+
+        let mut state = make_state();
+        let digest = default_digest();
+        let record = PinManifestRecord::new(
+            digest,
+            default_root_cid(),
+            default_chunker(),
+            default_chunk_digest(),
+            por_root_for_manifest(digest),
+            default_content_length(),
+            default_policy(),
+            alice(),
+            5,
+            None,
+            None,
+            Metadata::default(),
+        );
+        state.world.pin_manifests.insert(digest, record.clone());
+        let header = block_header();
+        let block_hash = iroha_crypto::HashOf::new(&header);
+        let block_hash_bytes = *block_hash.as_ref();
+        state.push_block_hash_for_testing(block_hash);
+
+        let result = FindSorafsPinManifest::new(digest, None)
+            .execute(&state.view())
+            .expect("finalized pin-manifest query");
+        assert_eq!(result.manifest, record);
+        assert_eq!(result.finalized_cursor.height, 1);
+        assert_eq!(result.finalized_cursor.block_hash, block_hash_bytes);
+
+        let stale = PinManifestFinalizedCursorV1 {
+            height: 1,
+            block_hash: [0xED; 32],
+        };
+        assert_eq!(
+            FindSorafsPinManifest::new(digest, Some(stale)).execute(&state.view()),
+            Err(QueryExecutionFail::Expired)
+        );
+        assert_eq!(
+            FindSorafsPinManifest::new(ManifestDigest::new([0xEF; 32]), None)
+                .execute(&state.view()),
+            Err(QueryExecutionFail::Find(FindError::SorafsPinManifest(
+                ManifestDigest::new([0xEF; 32])
+            )))
+        );
+    }
+
+    #[test]
+    fn repair_report_payload_boundary_is_shared_and_rejection_is_atomic() {
+        let mut state = make_state();
+        let provider = ProviderId::new([0xC7; 32]);
+        let authority = alice();
+        let source_identity = [0xC8; 32];
+        grant_repair_operator(&mut state, &authority, provider);
+        let report = repair_report(
+            "REP-PAYLOAD-BOUNDARY",
+            provider,
+            [0xC9; 32],
+            &authority,
+            2_000,
+        );
+        let (largest_accepted, first_rejected) = repair_report_payloads_at_ledger_boundary(&report);
+
+        decode_repair_payload::<RepairReportV1>(&largest_accepted, "repair report")
+            .expect("largest in-bound canonical report passes the native decoder");
+        let decode_error =
+            decode_repair_payload::<RepairReportV1>(&first_rejected, "repair report")
+                .expect_err("first out-of-bound canonical report fails the native decoder");
+        assert!(
+            decode_error.to_string().contains("payload length"),
+            "unexpected boundary decode error: {decode_error}"
+        );
+
+        let error = transact_repair(&mut state, 1, 2_000_000, |transaction| {
+            SubmitSorafsRepairTask::new(source_identity, first_rejected.clone())
+                .execute(&authority, transaction)
+        })
+        .expect_err("oversized canonical report must not mutate repair state");
+        assert!(
+            error.to_string().contains("payload length"),
+            "unexpected oversized report error: {error}"
+        );
+        {
+            let view = state.view();
+            let world = view.world();
+            assert!(
+                read_repair_status(world)
+                    .expect("read repair status")
+                    .is_none()
+            );
+            assert!(
+                read_repair_source_binding(world, source_identity)
+                    .expect("read repair source binding")
+                    .is_none()
+            );
+            assert!(
+                read_repair_task(world, &report.ticket_id.0)
+                    .expect("read repair task")
+                    .is_none()
+            );
+            assert!(
+                read_repair_event_journal_head(world)
+                    .expect("read repair event journal")
+                    .is_none()
+            );
+        }
+
+        transact_repair(&mut state, 1, 2_000_000, |transaction| {
+            SubmitSorafsRepairTask::new(source_identity, largest_accepted.clone())
+                .execute(&authority, transaction)
+        })
+        .expect("largest in-bound canonical report commits");
+        let view = state.view();
+        let world = view.world();
+        let status = read_repair_status(world)
+            .expect("read committed repair status")
+            .expect("repair status exists");
+        assert_eq!(status.tasks, 1);
+        let task = read_repair_task(world, &report.ticket_id.0)
+            .expect("read committed repair task")
+            .expect("repair task exists");
+        assert_eq!(task.canonical_report, largest_accepted);
+        assert_eq!(
+            read_repair_source_binding(world, source_identity)
+                .expect("read committed source binding")
+                .expect("source binding exists")
+                .task_id,
+            task.task_id
+        );
+        assert_eq!(
+            read_repair_event_journal_head(world)
+                .expect("read committed repair journal")
+                .expect("repair journal exists")
+                .last_sequence,
+            1
+        );
+    }
+
+    #[test]
     fn repair_ledger_prevents_split_brain_and_duplicate_terminal_outcomes() {
         let mut state = make_state();
         let provider = ProviderId::new([0xD1; 32]);
@@ -13577,6 +14279,60 @@ mod sorafs_tests {
             ));
             assert!(matches!(
                 FindSorafsRepairEvents::new(None, None, limit).execute(&view),
+                Err(QueryExecutionFail::Conversion(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn repair_status_and_task_queries_prove_a_clean_empty_ledger() {
+        let mut state = make_state();
+        transact_repair(&mut state, 1, 1_000, |_| Ok(())).expect("commit empty finalized block");
+        let view = state.view();
+
+        let status = FindSorafsRepairStatus::new(None)
+            .execute(&view)
+            .expect("clean repair ledger status");
+        assert_eq!(status.status, RepairLedgerStatusV1::default());
+        let page = FindSorafsRepairTasks::new(Some(status.finalized_cursor), None, 10)
+            .execute(&view)
+            .expect("clean empty repair task page");
+        assert_eq!(page.finalized_cursor, status.finalized_cursor);
+        assert!(page.tasks.is_empty());
+        assert!(!page.has_more);
+        assert_eq!(page.next_after_task_id, None);
+    }
+
+    #[test]
+    fn absent_repair_status_rejects_every_orphaned_namespace() {
+        let orphan_keys = [
+            repair_task_key("REP-ORPHAN-TASK"),
+            repair_source_key([0x91; 32]),
+            repair_event_key(1),
+            repair_event_journal_head_key().clone(),
+        ];
+        for (index, orphan_key) in orphan_keys.into_iter().enumerate() {
+            let mut state = make_state();
+            transact_repair(
+                &mut state,
+                1,
+                2_000 + u64::try_from(index).expect("index fits u64"),
+                |transaction| {
+                    transaction
+                        .world
+                        .smart_contract_state
+                        .insert(orphan_key, vec![0xFF]);
+                    Ok(())
+                },
+            )
+            .expect("commit orphaned repair state");
+            let view = state.view();
+            assert!(matches!(
+                FindSorafsRepairStatus::new(None).execute(&view),
+                Err(QueryExecutionFail::Conversion(_))
+            ));
+            assert!(matches!(
+                FindSorafsRepairTasks::new(None, None, 10).execute(&view),
                 Err(QueryExecutionFail::Conversion(_))
             ));
         }
@@ -13855,7 +14611,7 @@ mod sorafs_tests {
                 report.evidence.evidence_json = Some(evidence_json.clone());
                 let report_payload = to_bytes(&report).expect("encode large repair report");
                 assert!(
-                    report_payload.len() <= REPAIR_PAYLOAD_MAX_BYTES_V1,
+                    report_payload.len() <= REPAIR_LEDGER_MAX_CANONICAL_PAYLOAD_BYTES_V1,
                     "large repair fixture must remain an admissible bounded payload"
                 );
                 SubmitSorafsRepairTask::new(source_identity, report_payload)

@@ -115,15 +115,15 @@ this file stays focused on the multi-team runbook tied to DOCS-7.
      ```bash
      iroha app sorafs pin register \
      --manifest "${OUT}/portal.manifest.to" \
-     --chunk-digest "$(jq -r '.chunk_digest_sha3_hex' "${OUT}/portal.manifest.submit.json")" \
      --submitted-epoch "${SUBMITTED_EPOCH}" \
      --alias-namespace docs \
      --alias-name portal \
      --alias-proof "${ALIAS_PROOF}"
      ```
 
-   - This wrapper hits the same `/v1/sorafs/pin/register` endpoint but
-     relies on a precomputed digest.
+   - This wrapper sends the canonical manifest bytes to
+     `/v1/sorafs/pin/register`; Torii derives every digest, chunker, content,
+     policy, and fee input from the decoded manifest.
 
 3. **Verify registry state**
 

@@ -85,8 +85,10 @@ Test coverage highlights:
   eligibility, alignment violations bubble up as explicit warnings, and stream
   budgets clamp concurrency, with unit tests covering chunk-too-large,
   length/offset mismatches, capability absence, and single-stream throttling.【crates/sorafs_car/src/multi_fetch.rs:190-262】【crates/sorafs_car/src/multi_fetch.rs:456-520】【crates/sorafs_car/src/multi_fetch.rs:1341-1501】
-- Fixtures in `fixtures/sorafs_manifest/provider_admission/` include both modern
-  multi-fetch plan for SDK integration tests (`multi_fetch_plan.json`).【fixtures/sorafs_manifest/provider_admission/README.md:1】
+- Fixtures in `fixtures/sorafs_manifest/provider_admission/` include the modern
+  payload-bound `sorafs.chunk_fetch_plan.v1` object for SDK integration tests
+  (`multi_fetch_plan.json`). Retired standalone arrays are deliberately absent.
+  【fixtures/sorafs_manifest/provider_admission/README.md:1】
 - Torii now exports range fetch observability metrics —
   `torii_sorafs_provider_range_capability_total` (feature-labelled gauge),
   `torii_sorafs_range_fetch_throttle_events_total` (throttle reasons), and

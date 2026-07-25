@@ -390,7 +390,7 @@ PLIST
   local header_hash
   header_hash="$(shasum -a 256 "$root/dist/NoritoBridge.xcframework/ios-arm64/Headers/connect_norito_bridge.h" | awk '{print $1}')"
 
-  cat >"$root/dist/NoritoBridge.artifacts.json" <<JSON
+  cat >"$root/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json" <<JSON
 {
   "version": "1.0.0",
   "native_bridge_abi_version": 21,
@@ -470,6 +470,9 @@ PLIST
   }
 }
 JSON
+  ln -s \
+    "NoritoBridge.xcframework/NoritoBridge.artifacts.json" \
+    "$root/dist/NoritoBridge.artifacts.json"
 
   mkdir -p "$root/kotlin/client-android/src/main"
   cat >"$root/kotlin/settings.gradle.kts" <<'SETTINGS'
@@ -793,6 +796,68 @@ run_expect_android_unstripped_fail() {
 fixture="$TMP_DIR/valid"
 make_fixture "$fixture"
 run_expect_pass "$fixture"
+
+custom_apple_artifact_dir="$TMP_DIR/custom-apple-artifact-dir"
+make_fixture "$custom_apple_artifact_dir"
+mv \
+  "$custom_apple_artifact_dir/dist" \
+  "$custom_apple_artifact_dir/staged-apple"
+MOBILE_SDK_APPLE_ARTIFACT_DIR="$custom_apple_artifact_dir/staged-apple" \
+  run_expect_pass "$custom_apple_artifact_dir" --apple-only
+
+regular_public_manifest="$TMP_DIR/regular-public-manifest"
+make_fixture "$regular_public_manifest"
+rm "$regular_public_manifest/dist/NoritoBridge.artifacts.json"
+cp \
+  "$regular_public_manifest/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json" \
+  "$regular_public_manifest/dist/NoritoBridge.artifacts.json"
+run_expect_fail \
+  "$regular_public_manifest" \
+  "public NoritoBridge artifact manifest must be a relative symlink"
+
+absolute_public_manifest="$TMP_DIR/absolute-public-manifest"
+make_fixture "$absolute_public_manifest"
+rm "$absolute_public_manifest/dist/NoritoBridge.artifacts.json"
+ln -s \
+  "$absolute_public_manifest/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json" \
+  "$absolute_public_manifest/dist/NoritoBridge.artifacts.json"
+run_expect_fail \
+  "$absolute_public_manifest" \
+  "public NoritoBridge artifact manifest has a non-canonical symlink target"
+
+noncanonical_public_manifest="$TMP_DIR/noncanonical-public-manifest"
+make_fixture "$noncanonical_public_manifest"
+rm "$noncanonical_public_manifest/dist/NoritoBridge.artifacts.json"
+ln -s \
+  "./NoritoBridge.xcframework/NoritoBridge.artifacts.json" \
+  "$noncanonical_public_manifest/dist/NoritoBridge.artifacts.json"
+run_expect_fail \
+  "$noncanonical_public_manifest" \
+  "public NoritoBridge artifact manifest has a non-canonical symlink target"
+
+dangling_public_manifest="$TMP_DIR/dangling-public-manifest"
+make_fixture "$dangling_public_manifest"
+rm \
+  "$dangling_public_manifest/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json"
+run_expect_fail \
+  "$dangling_public_manifest" \
+  "missing embedded NoritoBridge artifact manifest"
+
+mismatched_public_manifest="$TMP_DIR/mismatched-public-manifest"
+make_fixture "$mismatched_public_manifest"
+cp \
+  "$mismatched_public_manifest/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json" \
+  "$mismatched_public_manifest/dist/NoritoBridge.public.artifacts.json"
+sed -i.bak 's/"version": "1.0.0"/"version": "mismatched"/' \
+  "$mismatched_public_manifest/dist/NoritoBridge.public.artifacts.json"
+rm -f "$mismatched_public_manifest/dist/NoritoBridge.public.artifacts.json.bak"
+rm "$mismatched_public_manifest/dist/NoritoBridge.artifacts.json"
+ln -s \
+  "NoritoBridge.public.artifacts.json" \
+  "$mismatched_public_manifest/dist/NoritoBridge.artifacts.json"
+run_expect_fail \
+  "$mismatched_public_manifest" \
+  "public NoritoBridge artifact manifest has a non-canonical symlink target"
 
 sentinel_only_source="$TMP_DIR/sentinel-only-source"
 make_fixture "$sentinel_only_source"
@@ -1121,8 +1186,8 @@ run_expect_fail "$retired_rust_jni" "Rust bridge exposes retired or unexpected K
 wrong_bridge_abi="$TMP_DIR/wrong-bridge-abi"
 make_fixture "$wrong_bridge_abi"
 sed -i.bak 's/"native_bridge_abi_version": 21/"native_bridge_abi_version": 20/' \
-  "$wrong_bridge_abi/dist/NoritoBridge.artifacts.json"
-rm -f "$wrong_bridge_abi/dist/NoritoBridge.artifacts.json.bak"
+  "$wrong_bridge_abi/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json"
+rm -f "$wrong_bridge_abi/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json.bak"
 run_expect_fail "$wrong_bridge_abi" "exact first-release NoritoBridge ABI 21"
 
 enabled_privacy="$TMP_DIR/enabled-privacy"
@@ -1130,8 +1195,8 @@ make_fixture "$enabled_privacy"
 sed -i.bak \
   -e 's/"privacy_production_enabled": false/"privacy_production_enabled": true/' \
   -e 's/"cargo_features": \[\]/"cargo_features": ["privacy-production-enabled"]/' \
-  "$enabled_privacy/dist/NoritoBridge.artifacts.json"
-rm -f "$enabled_privacy/dist/NoritoBridge.artifacts.json.bak"
+  "$enabled_privacy/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json"
+rm -f "$enabled_privacy/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json.bak"
 touch "$enabled_privacy/dist/NoritoBridge.xcframework/.privacy-production-enabled"
 run_expect_pass "$enabled_privacy"
 
@@ -1140,8 +1205,8 @@ make_fixture "$enabled_without_marker"
 sed -i.bak \
   -e 's/"privacy_production_enabled": false/"privacy_production_enabled": true/' \
   -e 's/"cargo_features": \[\]/"cargo_features": ["privacy-production-enabled"]/' \
-  "$enabled_without_marker/dist/NoritoBridge.artifacts.json"
-rm -f "$enabled_without_marker/dist/NoritoBridge.artifacts.json.bak"
+  "$enabled_without_marker/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json"
+rm -f "$enabled_without_marker/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json.bak"
 run_expect_fail "$enabled_without_marker" "missing privacy-production-enabled XCFramework marker"
 
 default_with_marker="$TMP_DIR/default-with-marker"
@@ -1154,8 +1219,8 @@ make_fixture "$missing_production_cargo_features"
 sed -i.bak \
   -e 's/"privacy_production_enabled": false/"privacy_production_enabled": true/' \
   -e '/"cargo_features": \[\],/d' \
-  "$missing_production_cargo_features/dist/NoritoBridge.artifacts.json"
-rm -f "$missing_production_cargo_features/dist/NoritoBridge.artifacts.json.bak"
+  "$missing_production_cargo_features/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json"
+rm -f "$missing_production_cargo_features/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json.bak"
 touch "$missing_production_cargo_features/dist/NoritoBridge.xcframework/.privacy-production-enabled"
 run_expect_fail \
   "$missing_production_cargo_features" \
@@ -1164,8 +1229,8 @@ run_expect_fail \
 empty_production_cargo_features="$TMP_DIR/empty-production-cargo-features"
 make_fixture "$empty_production_cargo_features"
 sed -i.bak 's/"privacy_production_enabled": false/"privacy_production_enabled": true/' \
-  "$empty_production_cargo_features/dist/NoritoBridge.artifacts.json"
-rm -f "$empty_production_cargo_features/dist/NoritoBridge.artifacts.json.bak"
+  "$empty_production_cargo_features/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json"
+rm -f "$empty_production_cargo_features/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json.bak"
 touch "$empty_production_cargo_features/dist/NoritoBridge.xcframework/.privacy-production-enabled"
 run_expect_fail \
   "$empty_production_cargo_features" \
@@ -1176,8 +1241,8 @@ make_fixture "$extra_production_cargo_features"
 sed -i.bak \
   -e 's/"privacy_production_enabled": false/"privacy_production_enabled": true/' \
   -e 's/"cargo_features": \[\]/"cargo_features": ["privacy-production-enabled", "unexpected-feature"]/' \
-  "$extra_production_cargo_features/dist/NoritoBridge.artifacts.json"
-rm -f "$extra_production_cargo_features/dist/NoritoBridge.artifacts.json.bak"
+  "$extra_production_cargo_features/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json"
+rm -f "$extra_production_cargo_features/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json.bak"
 touch "$extra_production_cargo_features/dist/NoritoBridge.xcframework/.privacy-production-enabled"
 run_expect_fail \
   "$extra_production_cargo_features" \
@@ -1188,8 +1253,8 @@ make_fixture "$wrong_production_cargo_features"
 sed -i.bak \
   -e 's/"privacy_production_enabled": false/"privacy_production_enabled": true/' \
   -e 's/"cargo_features": \[\]/"cargo_features": ["wrong-feature"]/' \
-  "$wrong_production_cargo_features/dist/NoritoBridge.artifacts.json"
-rm -f "$wrong_production_cargo_features/dist/NoritoBridge.artifacts.json.bak"
+  "$wrong_production_cargo_features/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json"
+rm -f "$wrong_production_cargo_features/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json.bak"
 touch "$wrong_production_cargo_features/dist/NoritoBridge.xcframework/.privacy-production-enabled"
 run_expect_fail \
   "$wrong_production_cargo_features" \
@@ -1199,8 +1264,8 @@ default_with_production_cargo_feature="$TMP_DIR/default-with-production-cargo-fe
 make_fixture "$default_with_production_cargo_feature"
 sed -i.bak \
   's/"cargo_features": \[\]/"cargo_features": ["privacy-production-enabled"]/' \
-  "$default_with_production_cargo_feature/dist/NoritoBridge.artifacts.json"
-rm -f "$default_with_production_cargo_feature/dist/NoritoBridge.artifacts.json.bak"
+  "$default_with_production_cargo_feature/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json"
+rm -f "$default_with_production_cargo_feature/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json.bak"
 run_expect_fail \
   "$default_with_production_cargo_feature" \
   "default NoritoBridge artifact cargo_features must be exactly []"
@@ -1208,15 +1273,15 @@ run_expect_fail \
 invalid_privacy_state="$TMP_DIR/invalid-privacy-state"
 make_fixture "$invalid_privacy_state"
 sed -i.bak 's/"privacy_production_enabled": false/"privacy_production_enabled": "false"/' \
-  "$invalid_privacy_state/dist/NoritoBridge.artifacts.json"
-rm -f "$invalid_privacy_state/dist/NoritoBridge.artifacts.json.bak"
+  "$invalid_privacy_state/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json"
+rm -f "$invalid_privacy_state/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json.bak"
 run_expect_fail "$invalid_privacy_state" "must contain exactly one boolean privacy_production_enabled field"
 
 dirty_source_manifest="$TMP_DIR/dirty-source-manifest"
 make_fixture "$dirty_source_manifest"
 sed -i.bak 's/"source_tree_dirty": false/"source_tree_dirty": true/' \
-  "$dirty_source_manifest/dist/NoritoBridge.artifacts.json"
-rm -f "$dirty_source_manifest/dist/NoritoBridge.artifacts.json.bak"
+  "$dirty_source_manifest/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json"
+rm -f "$dirty_source_manifest/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json.bak"
 run_expect_fail "$dirty_source_manifest" "release artifact must be built from a clean source tree"
 MOBILE_SDK_ALLOW_DIRTY_SOURCE=1 run_expect_pass "$dirty_source_manifest"
 
@@ -1224,8 +1289,8 @@ duplicate_mixed_privacy_state="$TMP_DIR/duplicate-mixed-privacy-state"
 make_fixture "$duplicate_mixed_privacy_state"
 sed -i.bak '/"privacy_production_enabled": false/a\
   "privacy_production_enabled": "false",' \
-  "$duplicate_mixed_privacy_state/dist/NoritoBridge.artifacts.json"
-rm -f "$duplicate_mixed_privacy_state/dist/NoritoBridge.artifacts.json.bak"
+  "$duplicate_mixed_privacy_state/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json"
+rm -f "$duplicate_mixed_privacy_state/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json.bak"
 run_expect_fail "$duplicate_mixed_privacy_state" "must contain exactly one boolean privacy_production_enabled field"
 
 apple_only_without_android="$TMP_DIR/apple-only-without-android"
@@ -1250,7 +1315,7 @@ run_expect_fail "$missing_header" "missing XCFramework slice header"
 
 missing_hash="$TMP_DIR/missing-hash"
 make_fixture "$missing_hash"
-cat >"$missing_hash/dist/NoritoBridge.artifacts.json" <<'JSON'
+cat >"$missing_hash/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json" <<'JSON'
 {
   "version": "1.0.0",
   "privacy_production_enabled": false,
@@ -1279,7 +1344,9 @@ import json
 import sys
 
 root = Path(sys.argv[1])
-manifest_path = root / "dist/NoritoBridge.artifacts.json"
+manifest_path = root / (
+    "dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json"
+)
 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 binary = root / "dist/NoritoBridge.xcframework/ios-arm64/libNoritoBridge.a"
 manifest["hashes"]["ios-arm64"] = hashlib.sha256(binary.read_bytes()).hexdigest()
@@ -1305,16 +1372,16 @@ symbol_inventory_mismatch="$TMP_DIR/symbol-inventory-mismatch"
 make_fixture "$symbol_inventory_mismatch"
 sed -i.bak \
   's/connect_norito_canonical_json_blake3_v1/unexpected_symbol/' \
-  "$symbol_inventory_mismatch/dist/NoritoBridge.artifacts.json"
-rm -f "$symbol_inventory_mismatch/dist/NoritoBridge.artifacts.json.bak"
+  "$symbol_inventory_mismatch/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json"
+rm -f "$symbol_inventory_mismatch/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json.bak"
 run_expect_fail "$symbol_inventory_mismatch" "required symbol inventory is missing or non-canonical"
 
 extra_manifest_symbol="$TMP_DIR/extra-manifest-symbol"
 make_fixture "$extra_manifest_symbol"
 sed -i.bak '/"connect_norito_kagemusha_recursive_spend_init_v4",/i\
     "connect_norito_kagemusha_unexpected_v2",' \
-  "$extra_manifest_symbol/dist/NoritoBridge.artifacts.json"
-rm -f "$extra_manifest_symbol/dist/NoritoBridge.artifacts.json.bak"
+  "$extra_manifest_symbol/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json"
+rm -f "$extra_manifest_symbol/dist/NoritoBridge.xcframework/NoritoBridge.artifacts.json.bak"
 run_expect_fail "$extra_manifest_symbol" "required symbol inventory is missing or non-canonical"
 
 missing_android_publication="$TMP_DIR/missing-android-publication"

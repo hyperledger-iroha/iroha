@@ -1,11 +1,13 @@
 //! Repair scheduler supporting SoraFS auditor workflows.
 //!
-//! The scheduler persists repair tickets via a repair store abstraction, tracks
-//! proof-of-retrievability failures, and emits metrics so operators can monitor
-//! SLA adherence. Repair state is stored in bounded, canonical Norito snapshots
-//! using private atomic files, inter-process writer exclusion, stale-writer
-//! detection, and fail-closed startup validation. Sequence allocation, replay
-//! guards, and worker idempotency results share the same durable checkpoint.
+//! The scheduler persists locally administered repair tickets via a repair
+//! store abstraction and emits metrics so operators can monitor SLA adherence.
+//! Production PoR failures bypass the discarded local history admission path
+//! and use the native repair transaction forwarder. Local repair state is stored
+//! in bounded, canonical Norito snapshots using private atomic files,
+//! inter-process writer exclusion, stale-writer detection, and fail-closed
+//! startup validation. Sequence allocation, replay guards, and worker
+//! idempotency results share the same durable checkpoint.
 
 use std::{
     cmp::Reverse,
@@ -28,12 +30,15 @@ use std::os::windows::fs::OpenOptionsExt as _;
 
 use blake3::hash;
 use hex;
-use iroha_logger::{debug, error, warn};
+#[cfg(test)]
+use iroha_logger::debug;
+use iroha_logger::{error, warn};
 use iroha_telemetry::metrics::{global_or_default, global_sorafs_repair_otel};
 use rand::{rand_core::TryRngCore as _, rngs::OsRng};
+#[cfg(test)]
+use sorafs_manifest::por::AuditVerdictV1;
 use sorafs_manifest::{
     deal::XorQuantity,
-    por::AuditVerdictV1,
     repair::{
         CompletedRepairStateV1, EscalatedRepairStateV1, FailedRepairStateV1,
         InProgressRepairStateV1, QueuedRepairStateV1, REPAIR_TASK_EVENT_VERSION_V1,
@@ -168,6 +173,7 @@ pub enum RepairStoreError {
 /// Storage backend for repair tickets and PoR history.
 trait RepairStore: std::fmt::Debug + Send + Sync {
     fn next_audit_sequence(&self) -> Result<u64, RepairStoreError>;
+    #[cfg(test)]
     fn append_por_history(
         &self,
         observation: PorHistoryObservation,
@@ -1521,6 +1527,7 @@ impl RepairStore for FileRepairStore {
         Ok(sequence)
     }
 
+    #[cfg(test)]
     fn append_por_history(
         &self,
         observation: PorHistoryObservation,
@@ -1754,6 +1761,7 @@ impl RepairStore for UnavailableRepairStore {
         self.unavailable()
     }
 
+    #[cfg(test)]
     fn append_por_history(
         &self,
         _observation: PorHistoryObservation,
@@ -1890,6 +1898,7 @@ struct RepairBacklogStats {
 }
 
 /// Summary of work performed by an automated repair worker tick.
+#[cfg(test)]
 #[derive(Debug, Clone, Default)]
 pub struct RepairWorkerReport {
     /// Tickets successfully claimed by the worker.
@@ -1906,6 +1915,7 @@ pub struct RepairWorkerReport {
     pub errors: u32,
 }
 
+#[cfg(test)]
 impl RepairWorkerReport {
     pub(crate) fn record_claim(&mut self) {
         self.claimed = self.claimed.saturating_add(1);
@@ -2191,8 +2201,9 @@ impl RepairManager {
         self.store.next_audit_sequence()
     }
 
-    /// Register a PoR verdict; returns a history identifier when the verdict recorded failures.
-    pub fn register_por_verdict(
+    /// Exercise the discarded process-local PoR history path in legacy store tests.
+    #[cfg(test)]
+    fn register_por_verdict(
         &self,
         verdict: &AuditVerdictV1,
         failed_samples: u64,
@@ -5169,6 +5180,7 @@ struct PorHistoryEntry {
 }
 
 impl PorHistoryEntry {
+    #[cfg(test)]
     fn from_observation(id: u64, observation: PorHistoryObservation) -> Self {
         Self {
             id,
@@ -5199,6 +5211,7 @@ impl PorHistoryEntry {
         }
     }
 
+    #[cfg(test)]
     fn matches_observation(&self, observation: &PorHistoryObservation) -> bool {
         self.observation() == *observation
     }

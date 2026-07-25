@@ -784,11 +784,17 @@ class TransactionDraft:
 
         if not isinstance(proof, Mapping):
             raise TypeError("proof must be a mapping")
+        try:
+            normalized_public_amount = _normalize_quantity(public_amount)
+        except TypeError as exc:
+            raise TypeError(f"public_amount: {exc}") from exc
+        except ValueError as exc:
+            raise ValueError(f"public_amount: {exc}") from exc
         self.add_instruction(
             Instruction.unshield_prepared(
                 _require_non_empty_string(asset_definition_id, "asset_definition_id"),
                 _require_non_empty_string(to_account_id, "to_account_id"),
-                _normalize_quantity(public_amount),
+                normalized_public_amount,
                 list(inputs),
                 dict(proof),
                 outputs=list(outputs or []),

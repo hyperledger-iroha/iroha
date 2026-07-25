@@ -14,9 +14,13 @@ on:
       - "ci/check_kagemusha_candidate_android_lab.sh"
       - "ci/check_kagemusha_candidate_android_lab_compile.sh"
       - "scripts/package_mobile_sdk_artifacts.sh"
+      - "scripts/check_sorafs_release_automation.py"
+      - "scripts/tests/check_sorafs_release_automation_test.py"
       - "IrohaSwift/**"
       - "kotlin/**"
+      - "java/iroha_android/**"
       - "crates/connect_norito_bridge/**"
+      - "fixtures/sorafs_manifest/governance/**"
   push:
     tags:
       - "v*"
@@ -67,6 +71,8 @@ jobs:
     needs: checker-self-test
     runs-on: macos-14
     timeout-minutes: 120
+    env:
+      IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
@@ -119,6 +125,9 @@ jobs:
     needs: checker-self-test
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    env:
+      IROHA_NATIVE_LIBRARY_PATH: ${{ github.workspace }}/target/debug
+      IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9
@@ -166,6 +175,8 @@ jobs:
           cargo install cargo-ndk --locked
       - name: Compile candidate Android lab main and instrumentation sources only
         run: ci/check_kagemusha_candidate_android_lab_compile.sh
+      - name: Build host SoraFS reference native bridge
+        run: cargo build --locked -p connect_norito_bridge
       - name: Build Android native bridge libraries
         working-directory: kotlin
         run: >-
@@ -190,6 +201,14 @@ jobs:
             :core-jvm:publishReleasePublicationToMobileSdkRepository \
             :client-android:publishReleasePublicationToMobileSdkRepository \
             :offline-wallet-android:publishReleasePublicationToMobileSdkRepository
+      - name: Test mirrored Java Android Governance DAG reference validators
+        working-directory: java/iroha_android
+        env:
+          ANDROID_HARNESS_MAINS: org.hyperledger.iroha.android.sorafs.SorafsReferenceValidatorsTests
+        run: >-
+          ./gradlew :core:test
+          --tests org.hyperledger.iroha.android.GradleHarnessTests
+          --console=plain
       - name: Validate Android mobile SDK artifact
         run: bash scripts/check_mobile_sdk_artifacts.sh --android-only --require-built-android
       - name: Package Android mobile SDK artifact

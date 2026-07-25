@@ -17,6 +17,61 @@ offline Cargo resolution; fetch the locked dependencies before launching it.
 USAGE
 }
 
+sha256_file() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  else
+    shasum -a 256 "$1" | awk '{print $1}'
+  fi
+}
+
+wait_for_external_cargo() {
+  local active_compilers
+  while true; do
+    ps -axo pid,etime,command
+    active_compilers="$(
+      ps -axo pid=,command= | awk '
+        {
+          executable = $2
+          sub(/^.*\//, "", executable)
+          if (executable == "cargo" || executable == "rustc") {
+            print
+          }
+        }
+      '
+    )"
+    if [[ -z "$active_compilers" ]]; then
+      return
+    fi
+    printf '%s\n' \
+      "waiting for active Cargo/rustc processes before Taira command:" \
+      "$active_compilers" >&2
+    sleep 10
+  done
+}
+
+run_cargo() {
+  wait_for_external_cargo
+  command cargo "$@"
+}
+
+source "${REPO_ROOT}/scripts/sumeragi_v2_prebuilt_bundle.sh"
+
+localnet_binary_attestation_valid() {
+  sumeragi_v2_localnet_binary_attestation_valid \
+    "$REPO_ROOT" "$source_manifest_sha256"
+}
+
+ensure_source_bound_localnet_binaries() {
+  sumeragi_v2_ensure_source_bound_localnet_binaries \
+    "$REPO_ROOT" "$source_manifest_sha256"
+}
+
+export_source_bound_localnet_binaries() {
+  sumeragi_v2_export_source_bound_localnet_binaries \
+    "$REPO_ROOT" "$source_manifest_sha256"
+}
+
 if (($#)); then
   if (($# == 1)) && [[ "$1" == "--help" || "$1" == "-h" ]]; then
     usage
@@ -83,16 +138,17 @@ readonly evidence_root="${source_bound_root}/evidence/taira-v2-24h"
 unset TEST_NETWORK_BIN_IROHAD KAGAMI_BIN CARGO_BIN_EXE_iroha3d CARGO_BIN_EXE_kagami
 unset TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL TEST_NETWORK_BIN_IROHA CARGO_BIN_EXE_iroha
 unset TEST_NETWORK_IROHAD_FEATURES TEST_NETWORK_CARGO
-export IROHA_TEST_SKIP_BUILD=0
-export IROHA_TEST_ALLOW_REENTRANT_BUILD=1
+export IROHA_TEST_SKIP_BUILD=1
+export IROHA_TEST_ALLOW_REENTRANT_BUILD=0
 export IROHA_TEST_BUILD_TIMEOUT_MS=3600
 export IROHA_TEST_BUILD_PROFILE=release
 export PROFILE=release
 export RUST_LOG=info
 export CARGO_NET_OFFLINE=true
 export CARGO_TARGET_DIR="${source_bound_root}/test-suite"
-export IROHA_TEST_TARGET_DIR="${source_bound_root}/programs"
 export IROHA_RELEASE_SOURCE_MANIFEST_SHA256="$source_manifest_sha256"
+ensure_source_bound_localnet_binaries
+export_source_bound_localnet_binaries
 
 # A source digest intentionally selects one build/evidence root. Serialize the
 # complete 24-hour run so two release jobs cannot overwrite that root's binary
@@ -134,7 +190,7 @@ rm -f -- "$partial_evidence_path" "$completion_attestation"
 # exact ignored test to exist, then validate the executed libtest summary too so
 # an inventory/execution race cannot become zero-test release evidence.
 ignored_inventory="$(
-  cargo test --locked --offline --release -p integration_tests \
+  run_cargo test --locked --offline --release -p integration_tests \
     --test consensus_and_da -- --list --ignored
 )"
 inventory_count="$(grep -Fxc "${TAIRA_SOAK_TEST}: test" <<<"$ignored_inventory" || true)"
@@ -144,7 +200,7 @@ if [[ "$inventory_count" != 1 ]]; then
 fi
 
 set +e
-cargo test --locked --offline --release -p integration_tests --test consensus_and_da \
+run_cargo test --locked --offline --release -p integration_tests --test consensus_and_da \
   "$TAIRA_SOAK_TEST" -- \
   --exact --ignored --nocapture --test-threads=1 \
   2>&1 | tee "$run_log"
@@ -200,13 +256,8 @@ if [[ -n "${IROHA_RELEASE_EXPECTED_IDENTITY_PATH:-}" ]]; then
 fi
 
 mv -- "$partial_evidence_path" "$evidence_path"
-if command -v sha256sum >/dev/null 2>&1; then
-  evidence_sha256="$(sha256sum "$evidence_path" | awk '{print $1}')"
-  log_sha256="$(sha256sum "$run_log" | awk '{print $1}')"
-else
-  evidence_sha256="$(shasum -a 256 "$evidence_path" | awk '{print $1}')"
-  log_sha256="$(shasum -a 256 "$run_log" | awk '{print $1}')"
-fi
+evidence_sha256="$(sha256_file "$evidence_path")"
+log_sha256="$(sha256_file "$run_log")"
 completion_tmp="${invocation_dir}/.COMPLETED.tsv.$$"
 printf '%s\t%s\n' \
   schema_version 1 \
@@ -214,6 +265,7 @@ printf '%s\t%s\n' \
   head_tree "$head_tree" \
   source_manifest_sha256 "$source_manifest_sha256" \
   cargo_lock_sha256 "$cargo_lock_sha256" \
+  prebuilt_manifest_sha256 "$IROHA_RELEASE_PREBUILT_MANIFEST_SHA256" \
   evidence_sha256 "$evidence_sha256" \
   log_sha256 "$log_sha256" \
   >"$completion_tmp"

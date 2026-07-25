@@ -1,0 +1,66 @@
+{
+  "status": "Error",
+  "code": "SFS-SIG-008",
+  "category": "signature",
+  "message": "PDP proof validation failed: invalid PDP proof signature: invalid PDP Ed25519 signature: signature payload must not be all zero",
+  "action": "Regenerate the PDP proof from the challenged segments, hot-leaf witnesses, and provider signature.",
+  "docs_url": "docs/portal/docs/sorafs/reference-sdk/errors.md",
+  "telemetry_tags": [
+    "sorafs.reference.pdp",
+    "sorafs.reference.code.SFS-SIG-008"
+  ],
+  "context": [
+    {
+      "key": "schema",
+      "value": "PdpProofV1"
+    },
+    {
+      "key": "version",
+      "value": "1"
+    },
+    {
+      "key": "challenge_id_hex",
+      "value": "cf0fcb348631bfcd6f4c3cdf128ca59faa20d7b899baa2822b6dc968a6a4dab8"
+    },
+    {
+      "key": "manifest_digest_hex",
+      "value": "4242424242424242424242424242424242424242424242424242424242424242"
+    },
+    {
+      "key": "provider_id_hex",
+      "value": "1010101010101010101010101010101010101010101010101010101010101010"
+    },
+    {
+      "key": "epoch_id",
+      "value": "1700000"
+    },
+    {
+      "key": "proof_leaf_count",
+      "value": "2"
+    },
+    {
+      "key": "hot_leaf_proof_count",
+      "value": "5"
+    },
+    {
+      "key": "signature_len",
+      "value": "64"
+    },
+    {
+      "key": "issued_at_unix",
+      "value": "1700000050"
+    },
+    {
+      "key": "proof_error",
+      "value": "invalid PDP proof signature: invalid PDP Ed25519 signature: signature payload must not be all zero"
+    }
+  ],
+  "inputs": [
+    {
+      "kind": "pdp_proof",
+      "path": "missing_signature_proof_v1.to"
+    }
+  ],
+  "version": 1,
+  "generated_at": 123
+}

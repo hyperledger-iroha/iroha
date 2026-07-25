@@ -10,8 +10,10 @@ Checks that the Iroha mobile SDK packaging surface is ready for wallet
 integration:
   - SwiftPM package manifest and NoritoBridge binary target exist.
   - NoritoBridge.xcframework contains iOS device, iOS simulator, and macOS slices.
-  - NoritoBridge.artifacts.json records per-slice SHA-256 hashes and the
-    privacy-production feature state, which must match the XCFramework marker.
+  - The canonical manifest is embedded in the XCFramework, and the public
+    NoritoBridge.artifacts.json path is its stable relative symlink.
+  - The manifest records per-slice SHA-256 hashes and the privacy-production
+    feature state, which must match the XCFramework marker.
   - Every manifest hash matches the actual slice, all headers are identical,
     and the manifest ABI/source fingerprint matches the checked-out bridge.
   - Apple archives contain their declared architectures and the complete
@@ -29,6 +31,8 @@ jobs.
 Dirty bridge inputs are rejected by default. --allow-dirty-source (or
 MOBILE_SDK_ALLOW_DIRTY_SOURCE=1) permits a local integration artifact only when
 its manifest dirty bit and exact dependency-closure fingerprint match.
+MOBILE_SDK_APPLE_ARTIFACT_DIR may point Apple validation at a staged artifact
+directory; it defaults to <root>/dist.
 USAGE
 }
 
@@ -266,7 +270,7 @@ VALIDATION_FEE_JNI_SYMBOLS=(
 relpath() {
   local path="$1"
   case "$path" in
-    "$ROOT_DIR"/*) printf '%s' "${path#$ROOT_DIR/}" ;;
+    "$ROOT_DIR"/*) printf '%s' "${path#"$ROOT_DIR"/}" ;;
     *) printf '%s' "$path" ;;
   esac
 }
@@ -1264,6 +1268,7 @@ check_xcframework() {
   local xcframework="$APPLE_ARTIFACT_DIR/NoritoBridge.xcframework"
   local info="$xcframework/Info.plist"
   local manifest="$APPLE_ARTIFACT_DIR/NoritoBridge.artifacts.json"
+  local embedded_manifest="$xcframework/NoritoBridge.artifacts.json"
   local privacy_marker="$xcframework/.privacy-production-enabled"
   local slices=(ios-arm64 ios-arm64_x86_64-simulator macos-arm64)
   local slice
@@ -1290,6 +1295,12 @@ check_xcframework() {
     fi
   done
 
+  require_file "$embedded_manifest" "embedded NoritoBridge artifact manifest"
+  if [[ ! -L "$manifest" ]]; then
+    fail "public NoritoBridge artifact manifest must be a relative symlink"
+  elif [[ "$(readlink "$manifest")" != "NoritoBridge.xcframework/NoritoBridge.artifacts.json" ]]; then
+    fail "public NoritoBridge artifact manifest has a non-canonical symlink target"
+  fi
   require_file "$manifest" "NoritoBridge artifact manifest"
   if [[ -f "$manifest" ]]; then
     local privacy_keys=()

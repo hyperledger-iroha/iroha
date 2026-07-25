@@ -664,8 +664,9 @@ function transformDaProofRecord(raw) {
     chunk_segments_hex: Array.isArray(raw.chunk_segments_hex)
       ? raw.chunk_segments_hex.slice()
       : [],
-    chunk_roots_hex: Array.isArray(raw.chunk_roots_hex)
-      ? raw.chunk_roots_hex.slice()
+    chunk_count: toSafeIntegerLike(raw.chunk_count),
+    chunk_merkle_path_hex: Array.isArray(raw.chunk_merkle_path_hex)
+      ? raw.chunk_merkle_path_hex.slice()
       : [],
     verified: Boolean(raw.verified),
   };
@@ -809,9 +810,13 @@ function buildDaProofRecord(proofInput, index) {
       proof.chunk_segments_hex,
       `daProofSummary.proofs[${index}].chunk_segments_hex`,
     ),
-    chunk_roots: normalizeHexArray(
-      proof.chunk_roots_hex,
-      `daProofSummary.proofs[${index}].chunk_roots_hex`,
+    chunk_count: toJsonInteger(
+      proof.chunk_count,
+      `daProofSummary.proofs[${index}].chunk_count`,
+    ),
+    chunk_merkle_path: normalizeHexArray(
+      proof.chunk_merkle_path_hex,
+      `daProofSummary.proofs[${index}].chunk_merkle_path_hex`,
     ),
     verified: Boolean(proof.verified),
   };

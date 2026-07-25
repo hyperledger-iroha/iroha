@@ -5,8 +5,9 @@ summary: SFM-1 local HTTP Routing V1 service, authority model, security bounds, 
 
 # Sora Network Indexer Plan
 
-> **Status (July 2026):** The local SFM-1 delegated-routing service is
-> implemented in Torii. `GET /routing/v1/providers/{cid}` and
+> **Status (July 2026):** The canonical SFM-1 authority join and cache are
+> implemented in `sorafs_orchestrator`; Torii supplies one immutable finalized
+> state view and serves the delegated-routing API. `GET /routing/v1/providers/{cid}` and
 > `GET /routing/v1/peers/{peer_id}` expose the vendor-neutral HTTP Routing V1
 > content and peer lookup shapes. The earlier provider-discovery endpoints
 > remain available for advert ingestion and operator readback. Regional
@@ -37,6 +38,16 @@ view is reconstructed from committed state after restart, so it needs no
 independent checkpoint. Durable anti-replay state remains in the existing
 provider-advert cache, whose loader rejects corrupt, oversized, non-canonical,
 unadmitted, and symlink-backed checkpoints.
+
+The join result is cached by the exact finalized height and raw block hash.
+Concurrent callers for one identity share a single rebuild. An older identity
+is rejected without evicting the current entry, and a different hash at the
+same height is treated as finalized-view equivocation. A newer identity
+atomically replaces the preceding entry even when its bounded rebuild fails;
+there is no last-known-good authority fallback. The projection is canonical
+Norito and is byte-identical across replicas regardless of source-record input
+order. Cache metrics expose only fixed outcome labels for hit, rebuild,
+failure, eviction, stale rejection, and fork rejection.
 
 ## HTTP Routing V1 contract
 
@@ -77,11 +88,13 @@ closed rather than merging ownership.
 
 The first-release handler rejects authority snapshots above 65,536 manifests
 or orders, more than 262,144 aggregate provider assignment references,
-replication-order payloads above 1 MiB, adverts with more than 32 endpoints,
-path identifiers above 256 bytes, raw queries above 2 KiB, and filter/Accept
-fan-out above their fixed limits. Replication payloads are decoded under
-Norito allocation/depth limits, structurally validated, re-encoded, and
-byte-compared before their assignments enter the index.
+individual replication-order payloads above 1 MiB, aggregate replication-order
+payloads above 64 MiB, or a canonical authority projection above 16 MiB.
+Adverts with more than 32 endpoints, path identifiers above 256 bytes, raw
+queries above 2 KiB, and filter/Accept fan-out above their fixed limits are also
+rejected. Replication payloads are decoded under Norito allocation/depth
+limits, structurally validated, re-encoded, and byte-compared before their
+assignments enter the index.
 
 The implementation deliberately skips unsafe endpoint strings rather than
 turning them into connectable multiaddrs. A still-authorized peer with no safe
@@ -101,6 +114,9 @@ Focused tests cover:
 - pending/expired orders, pending/retired/future pins, future completion,
   corrupt/oversized/non-canonical order payloads, exact replay, and identity
   equivocation;
+- concurrent single-flight rebuilding, monotonic stale rejection, same-height
+  fork rejection, newer failure replacement without fallback, bounded
+  eviction, and byte-identical projections across replicas and input orders;
 - expired/missing/unassigned adverts, unsafe endpoints, deterministic ordering,
   result caps, JSON/NDJSON negotiation, cache headers, and payload-safe errors.
 

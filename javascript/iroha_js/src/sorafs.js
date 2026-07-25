@@ -93,6 +93,8 @@ export const SORAFS_PDP_PAYLOAD_KINDS = Object.freeze({
 
 /** Maximum ordered block count accepted by governance DAG head validation. */
 export const SORAFS_GOVERNANCE_DAG_MAX_BLOCKS_V1 = 64;
+/** Exact byte length of a canonical Governance DAG block CID. */
+export const SORAFS_GOVERNANCE_DAG_CID_BYTES_V1 = 32;
 /** Maximum aggregate bytes accepted by one governance DAG reference call. */
 export const SORAFS_REFERENCE_MAX_INPUT_BYTES_V1 = 67_108_864;
 /** Maximum UTF-8 bytes accepted by one governance DAG diagnostic label. */
@@ -909,6 +911,14 @@ export function validateGovernanceDagBlock(bytes, options = {}) {
     expectedValue === undefined || expectedValue === null
       ? undefined
       : toBuffer(expectedValue);
+  if (
+    expectedBlockCid !== undefined &&
+    expectedBlockCid.length !== SORAFS_GOVERNANCE_DAG_CID_BYTES_V1
+  ) {
+    throw new TypeError(
+      `options.expectedBlockCid must contain exactly ${SORAFS_GOVERNANCE_DAG_CID_BYTES_V1} bytes`,
+    );
+  }
   governanceReferenceAggregateBytes(
     "governance DAG block validation",
     payload.length,

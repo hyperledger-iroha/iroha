@@ -1314,7 +1314,7 @@ def check_zk_ace_proof_builder_coverage(errors):
         "Python catalog-named ZK-ACE proof builder must delegate to the native-backed builder",
         "Python tests must cover ZK-ACE alias delegation, missing-native propagation, and malformed native prover payloads",
         "JS ZK-ACE positive-amount coverage missing",
-        "must require positive ZK-ACE proof and transfer amounts",
+        "must require positive u128 proof inputs and an exact Quantity transfer boundary",
         "Python transaction draft must require positive decimal u128 ZK-ACE transfer amounts",
         "Python client ZK-ACE helper must expose the strict positive-u128 amount contract",
         "privacy algorithm catalogs pin executable ZK-ACE proof-builder descriptor shape",
@@ -1351,7 +1351,7 @@ def check_zk_ace_proof_builder_coverage(errors):
             "function normalizeZkAcePublicInputs",
             "asPositiveU128JsonNumber(source.amount, `${name}.amount`)",
             "function buildZkAceAuthorizedTransferInstruction",
-            'asPositiveU128JsonNumber(source.amount, "zkAceAuthorizedTransfer.amount")',
+            'asPositiveProofScalarQuantity(source.amount, "zkAceAuthorizedTransfer.amount")',
         ):
             require(
                 snippet in text,
@@ -1366,7 +1366,7 @@ def check_zk_ace_proof_builder_coverage(errors):
         "BigInt(Number.MAX_SAFE_INTEGER) + 1n",
         "Number.NaN",
         "{ toString: () => \"17\" }",
-        "canonicalAmountTransfer.amount, 17",
+        "maximumTransfer.amount, maximumAmount",
         "buildZkAceAuthorizationProofV1({",
         "buildZkAceAuthorizedTransferInstruction({",
     ):
@@ -2186,7 +2186,7 @@ def check_public_privacy_required_production_plan_rows_coverage(errors):
         ("pq-masp-stark-v0", "stale asset-set root", "duplicate PQ nullifier", "ML-DSA or ML-KEM domain mismatch", "malformed proof bytes", "wrong verifier key", "public input mismatch"),
     )
     expected_security_notes = (
-        ("anonymous-pgc-k-out-of-n-v1", "Requires fresh anonymity-set roots and replay/link-tag state.", "Amount privacy depends on the range-proof component and commitment binding.", "Receiver ciphertext commitments must bind to the same transaction digest as the proof.", "Production Anonymous PGC proof admission requires a caller-supplied proof envelope bound to the anonymity root, receiver set, link tag, range commitments, chain id, and domain separator.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
+        ("anonymous-pgc-k-out-of-n-v1", "Requires fresh anonymity-set roots and replay/link-tag state.", "Amount privacy depends on the range-proof component and commitment binding.", "Receiver ciphertext commitments must bind to the same transaction digest as the proof.", "Production Anonymous PGC proof admission requires a caller-supplied proof envelope bound to the anonymity root, receiver set, link tag, range commitments, payment binding hash, chain id, and domain separator.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
         ("verange-transparent-range-v1", "This range-proof backend component is not a standalone payment protocol.", "Range parameters must be bound to the transaction payload and verifier key.", "Aggregated proof limits must be enforced by validators.", "The SDK dev fixture is non-production and verifies deterministic binding only; production VeRange proving remains unavailable until the hardening gates pass.", "Wallet witnesses and private range inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
         ("zkat-policy-private-auth-v1", "Hides authorization policy, not payment fields.", "Policy commitments require explicit epoch, replay, and rotation semantics.", "Combining with ZK-ACE requires both proofs to bind the same transaction digest.", "Production zkAt proof admission requires canonical policy commitments, transaction digest binding, account/action/domain binding, verifier-key registration, deterministic vectors, parser/verifier fuzzing, performance gates, and internal cryptographic review.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
         ("zk-ams-recursive-admission-v0", "Admission privacy is separate from later payment privacy.", "Duplicate admission prevention depends on issuer-scoped nullifiers.", "Recursive batching must bind every admitted account commitment.", "This production admission component is proof-verifiable but not a standalone payment protocol.", "Production ZK-AMS admission requires canonical issuer roots, admission-nullifier sets, anonymous account commitments, recursive admission digests, domain binding, verifier-key registration, deterministic vectors, parser/verifier fuzzing, performance gates, and internal cryptographic review.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet admission witnesses and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
@@ -6265,7 +6265,10 @@ def check_workflow_commands(errors):
             errors,
         )
         require(
-            re.search(r"(?m)^\s+- uses:\s+Swatinem/rust-cache@v2\s*$", main_job_block)
+            re.search(
+                r"(?m)^\s+- uses:\s+Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32\s*$",
+                main_job_block,
+            )
             is not None,
             "Privacy SDK guard workflow must cache Rust artifacts for aggregate native Python builds",
             errors,
@@ -6336,7 +6339,11 @@ def check_workflow_runs_native_bridge_tests(errors):
         errors,
     )
     require(
-        re.search(r"(?m)^\s+- uses:\s+Swatinem/rust-cache@v2\s*$", job_block) is not None,
+        re.search(
+            r"(?m)^\s+- uses:\s+Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32\s*$",
+            job_block,
+        )
+        is not None,
         "Privacy SDK guard workflow must cache Rust artifacts for native bridge tests",
         errors,
     )
@@ -6363,7 +6370,10 @@ def check_workflow_runs_csharp_sdk_tests(errors):
     )
     if job_block is None:
         return
-    dotnet_setup_match = re.search(r"(?m)^\s+- uses:\s+actions/setup-dotnet@v4\s*$", job_block)
+    dotnet_setup_match = re.search(
+        r"(?m)^\s+- uses:\s+actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9\s*$",
+        job_block,
+    )
     dotnet_version_match = re.search(r"(?m)^\s+dotnet-version:\s+8\.0\.x\s*$", job_block)
     command_match = workflow_command_match(job_block, csharp_sdk_command)
     require(
@@ -6474,7 +6484,10 @@ def check_workflow_runs_jvm_sdk_tests(errors):
     )
     if job_block is None:
         return
-    java_setup_match = re.search(r"(?m)^\s+- uses:\s+actions/setup-java@v4\s*$", job_block)
+    java_setup_match = re.search(
+        r"(?m)^\s+- uses:\s+actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9\s*$",
+        job_block,
+    )
     java_distribution_match = re.search(r'(?m)^\s+distribution:\s+"temurin"\s*$', job_block)
     java_version_match = re.search(r'(?m)^\s+java-version:\s+"21"\s*$', job_block)
     command_match = workflow_command_match(job_block, jvm_sdk_command)
@@ -6522,7 +6535,10 @@ def check_workflow_runs_javascript_sdk_tests(errors):
     )
     if job_block is None:
         return
-    setup_match = re.search(r"(?m)^\s+- uses:\s+actions/setup-node@v4\s*$", job_block)
+    setup_match = re.search(
+        r"(?m)^\s+- uses:\s+actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020\s*$",
+        job_block,
+    )
     install_match = workflow_command_match(job_block, js_sdk_install_command)
     test_match = workflow_command_match(job_block, js_sdk_command)
     require(
@@ -6628,7 +6644,10 @@ def check_workflow_runs_python_sdk_tests(errors):
     )
     if job_block is None:
         return
-    setup_match = re.search(r"(?m)^\s+- uses:\s+actions/setup-python@v5\s*$", job_block)
+    setup_match = re.search(
+        r"(?m)^\s+- uses:\s+actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065\s*$",
+        job_block,
+    )
     test_match = workflow_command_match(job_block, python_sdk_command)
     require(
         re.search(r"(?m)^\s+runs-on:\s+ubuntu-latest\s*$", job_block) is not None,
@@ -6641,7 +6660,11 @@ def check_workflow_runs_python_sdk_tests(errors):
         errors,
     )
     require(
-        re.search(r"(?m)^\s+- uses:\s+Swatinem/rust-cache@v2\s*$", job_block) is not None,
+        re.search(
+            r"(?m)^\s+- uses:\s+Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32\s*$",
+            job_block,
+        )
+        is not None,
         "Privacy SDK guard workflow must cache Rust artifacts for Python native builds",
         errors,
     )
@@ -7629,8 +7652,8 @@ if mode == "--negative-control-public-required-production-plan-security-notes-co
     target = "javascript/iroha_js/test/privacyCatalogParity.test.js"
     original = read(target)
     mutated = original.replace(
-        '"anonymous-pgc-k-out-of-n-v1": Object.freeze(["Requires fresh anonymity-set roots and replay/link-tag state.", "Amount privacy depends on the range-proof component and commitment binding.", "Receiver ciphertext commitments must bind to the same transaction digest as the proof.", "Production Anonymous PGC proof admission requires a caller-supplied proof envelope bound to the anonymity root, receiver set, link tag, range commitments, chain id, and domain separator.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."])',
-        '"anonymous-pgc-k-out-of-n-v1": Object.freeze(["Requires fresh anonymity-set roots and replay/link-tag state.", "Amount privacy depends on the range-proof component and commitment binding.", "Receiver ciphertext commitments must bind to the same transaction digest as the proof.", "Production Anonymous PGC proof admission requires a caller-supplied proof envelope bound to the anonymity root, receiver set, link tag, range commitments, chain id, and domain separator.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, latency gates, and internal cryptographic review."])',
+        '"anonymous-pgc-k-out-of-n-v1": Object.freeze(["Requires fresh anonymity-set roots and replay/link-tag state.", "Amount privacy depends on the range-proof component and commitment binding.", "Receiver ciphertext commitments must bind to the same transaction digest as the proof.", "Production Anonymous PGC proof admission requires a caller-supplied proof envelope bound to the anonymity root, receiver set, link tag, range commitments, payment binding hash, chain id, and domain separator.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."])',
+        '"anonymous-pgc-k-out-of-n-v1": Object.freeze(["Requires fresh anonymity-set roots and replay/link-tag state.", "Amount privacy depends on the range-proof component and commitment binding.", "Receiver ciphertext commitments must bind to the same transaction digest as the proof.", "Production Anonymous PGC proof admission requires a caller-supplied proof envelope bound to the anonymity root, receiver set, link tag, range commitments, payment binding hash, chain id, and domain separator.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, latency gates, and internal cryptographic review."])',
         1,
     )
     if mutated == original:
@@ -10135,7 +10158,7 @@ if mode == "--negative-control-jvm-sdk-job-workflow":
 if mode == "--negative-control-jvm-sdk-setup-workflow":
     original = read(workflow_path)
     mutated = original.replace(
-        "      - uses: actions/setup-java@v4\n",
+        "      - uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9\n",
         "",
         1,
     )
@@ -10192,7 +10215,9 @@ if mode == "--negative-control-jvm-sdk-setup-order-workflow":
     mutated = original.replace(run_line, "", 1)
     if mutated == original:
         raise SystemExit("negative control failed: unable to mutate JVM SDK setup order")
-    insert = mutated.index("      - uses: actions/setup-java@v4\n")
+    insert = mutated.index(
+        "      - uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9\n"
+    )
     mutated = (
         mutated[:insert]
         + "      - name: Privacy JVM SDK tests\n"
@@ -10311,7 +10336,7 @@ if mode == "--negative-control-csharp-sdk-job-workflow":
 if mode == "--negative-control-csharp-sdk-setup-workflow":
     original = read(workflow_path)
     mutated = original.replace(
-        "      - uses: actions/setup-dotnet@v4\n",
+        "      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9\n",
         "",
         1,
     )
@@ -10350,7 +10375,9 @@ if mode == "--negative-control-csharp-sdk-setup-order-workflow":
     mutated = original.replace(run_line, "", 1)
     if mutated == original:
         raise SystemExit("negative control failed: unable to mutate C# SDK setup order")
-    insert = mutated.index("      - uses: actions/setup-dotnet@v4\n")
+    insert = mutated.index(
+        "      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9\n"
+    )
     mutated = (
         mutated[:insert]
         + "      - name: Privacy C# SDK tests\n"
@@ -10483,7 +10510,7 @@ if mode == "--negative-control-js-sdk-runner-workflow":
 if mode == "--negative-control-js-sdk-node-setup-workflow":
     original = read(workflow_path)
     mutated = original.replace(
-        "      - uses: actions/setup-node@v4\n",
+        "      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020\n",
         "",
         1,
     )
@@ -10613,7 +10640,9 @@ if mode == "--negative-control-js-sdk-node-setup-order-workflow":
     mutated = original.replace(install_block, "", 1)
     if mutated == original:
         raise SystemExit("negative control failed: unable to move JavaScript SDK install before Node setup")
-    insert = mutated.index("      - uses: actions/setup-node@v4\n")
+    insert = mutated.index(
+        "      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020\n"
+    )
     mutated = mutated[:insert] + install_block + mutated[insert:]
     text_overrides[workflow_path] = mutated
     try:
@@ -10754,7 +10783,7 @@ if mode == "--negative-control-python-sdk-runner-workflow":
 if mode == "--negative-control-python-sdk-setup-workflow":
     original = read(workflow_path)
     mutated = original.replace(
-        "      - uses: actions/setup-python@v5\n",
+        "      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065\n",
         "",
         1,
     )
@@ -10793,7 +10822,9 @@ if mode == "--negative-control-python-sdk-setup-order-workflow":
     mutated = original.replace(run_line, "", 1)
     if mutated == original:
         raise SystemExit("negative control failed: unable to mutate Python SDK setup order")
-    insert = mutated.index("      - uses: actions/setup-python@v5\n")
+    insert = mutated.index(
+        "      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065\n"
+    )
     mutated = (
         mutated[:insert]
         + "      - name: Privacy Python SDK tests\n"
@@ -10816,15 +10847,15 @@ if mode == "--negative-control-python-sdk-rust-cache-workflow":
         "    runs-on: ubuntu-latest\n"
         "    timeout-minutes: 45\n"
         "    steps:\n"
-        "      - uses: actions/checkout@v4\n"
-        "      - uses: Swatinem/rust-cache@v2\n"
+        "      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262\n"
+        "      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32\n"
         "        with:\n"
         "          cache-on-failure: \"true\"\n",
         "  privacy_python_sdk_tests:\n"
         "    runs-on: ubuntu-latest\n"
         "    timeout-minutes: 45\n"
         "    steps:\n"
-        "      - uses: actions/checkout@v4\n",
+        "      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262\n",
         1,
     )
     if mutated == original:
@@ -11016,8 +11047,8 @@ if mode == "--negative-control-main-rust-cache-workflow":
         "    runs-on: ubuntu-latest\n"
         "    timeout-minutes: 45\n"
         "    steps:\n"
-        "      - uses: actions/checkout@v4\n"
-        "      - uses: Swatinem/rust-cache@v2\n"
+        "      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262\n"
+        "      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32\n"
         "        with:\n"
         "          cache-on-failure: \"true\"\n",
         "  privacy-sdk-guard:\n"
@@ -11025,7 +11056,7 @@ if mode == "--negative-control-main-rust-cache-workflow":
         "    runs-on: ubuntu-latest\n"
         "    timeout-minutes: 45\n"
         "    steps:\n"
-        "      - uses: actions/checkout@v4\n",
+        "      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262\n",
         1,
     )
     if mutated == original:

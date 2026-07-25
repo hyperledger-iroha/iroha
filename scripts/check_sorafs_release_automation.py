@@ -267,6 +267,12 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         "artifacts/release-gate/artifacts/sorafs-release/sorafs-release.spdx.json",
         "name: Generate platform binary SBOM",
         "name: Package reference validator and FFI header",
+        "name: Package reference validator and FFI header reproducibly",
+        "sorafs-validate-first.XXXXXX",
+        "sorafs-validate-replay.XXXXXX",
+        'cmp "${first_out}/${relative}" "${replay_out}/${relative}"',
+        "for suffix in .tar.gz.sha256 .manifest.json.sha256; do",
+        "cmp candidate-package-first.json candidate-package-replay.json",
         "artifacts/sorafs-cli/reference-validator",
         "output-file: artifacts/sorafs-cli/sorafs-cli-${{ matrix.target }}.spdx.json",
         "name: Scan platform binary SBOM",
@@ -335,6 +341,55 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         "runs-on: macos-14",
         "bash ci/sdk_sorafs_orchestrator.sh",
         "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+    ),
+}
+NATIVE_GOVERNANCE_VALIDATION_REQUIRED_ENV = (
+    "IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION"
+)
+MOBILE_SDK_ARTIFACTS_WORKFLOW = ".github/workflows/mobile_sdk_artifacts.yml"
+SWIFT_GOVERNANCE_VALIDATOR_TEST = (
+    "IrohaSwift/Tests/IrohaSwiftTests/SorafsReferenceValidatorsTests.swift"
+)
+KOTLIN_GOVERNANCE_VALIDATOR_TEST = (
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sorafs/"
+    "SorafsReferenceValidatorsTest.kt"
+)
+JAVA_GOVERNANCE_VALIDATOR_TEST = (
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sorafs/"
+    "SorafsReferenceValidatorsTests.java"
+)
+NATIVE_GOVERNANCE_SDK_CONTRACTS: dict[str, tuple[str, ...]] = {
+    MOBILE_SDK_ARTIFACTS_WORKFLOW: (
+        '- "scripts/check_sorafs_release_automation.py"',
+        '- "scripts/tests/check_sorafs_release_automation_test.py"',
+        '- "java/iroha_android/**"',
+        '- "fixtures/sorafs_manifest/governance/**"',
+        "name: Build host SoraFS reference native bridge",
+        "run: cargo build --locked -p connect_norito_bridge",
+        "IROHA_NATIVE_LIBRARY_PATH: ${{ github.workspace }}/target/debug",
+        "name: Test mirrored Java Android Governance DAG reference validators",
+        (
+            "ANDROID_HARNESS_MAINS: "
+            "org.hyperledger.iroha.android.sorafs.SorafsReferenceValidatorsTests"
+        ),
+        "--tests org.hyperledger.iroha.android.GradleHarnessTests",
+    ),
+    SWIFT_GOVERNANCE_VALIDATOR_TEST: (
+        NATIVE_GOVERNANCE_VALIDATION_REQUIRED_ENV,
+        "ABI-21 connect_norito_bridge with Governance DAG symbols is required.",
+        "guard try requireGovernanceDagNativeBridge() else",
+        "throw XCTSkip(\"SoraFS governance DAG reference bridge unavailable\")",
+    ),
+    KOTLIN_GOVERNANCE_VALIDATOR_TEST: (
+        NATIVE_GOVERNANCE_VALIDATION_REQUIRED_ENV,
+        "ABI-21 connect_norito_bridge with Governance DAG symbols is required.",
+        "        requireGovernanceDagNativeBridge()\n",
+        'assumeTrue(false, "connect_norito_bridge not available")',
+    ),
+    JAVA_GOVERNANCE_VALIDATOR_TEST: (
+        NATIVE_GOVERNANCE_VALIDATION_REQUIRED_ENV,
+        "ABI-21 connect_norito_bridge with Governance DAG symbols is required.",
+        "      requireGovernanceDagNativeBridge();\n",
     ),
 }
 
@@ -520,6 +575,129 @@ def _workflow_job(source: str, name: str) -> str | None:
         source,
     )
     return match.group(0) if match is not None else None
+
+
+def _contract_section(
+    source: str,
+    start_marker: str,
+    end_marker: str,
+) -> str | None:
+    """Return one bounded source section used by a static SDK contract."""
+
+    try:
+        start = source.index(start_marker)
+        end = source.index(end_marker, start + len(start_marker))
+    except ValueError:
+        return None
+    return source[start:end]
+
+
+def _validate_native_governance_sdk_contract(root: Path) -> list[str]:
+    """Require fail-closed native Governance DAG parity in release SDK jobs."""
+
+    errors: list[str] = []
+    sources: dict[str, str] = {}
+    for relative, markers in NATIVE_GOVERNANCE_SDK_CONTRACTS.items():
+        path = _require_regular_repo_file(root, relative)
+        try:
+            source = _read_bytes_no_follow(path).decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise ValueError(
+                f"{relative}: native Governance DAG SDK contract must be UTF-8"
+            ) from error
+        sources[relative] = source
+        for marker in markers:
+            if marker not in source:
+                errors.append(
+                    f"{relative}: missing native Governance DAG contract marker "
+                    f"`{marker}`"
+                )
+
+    workflow = sources[MOBILE_SDK_ARTIFACTS_WORKFLOW]
+    required_env_marker = (
+        f'{NATIVE_GOVERNANCE_VALIDATION_REQUIRED_ENV}: "1"'
+    )
+    for job_name in ("apple-mobile-sdk", "android-mobile-sdk"):
+        job = _workflow_job(workflow, job_name)
+        if job is None:
+            errors.append(
+                f"{MOBILE_SDK_ARTIFACTS_WORKFLOW}: missing `{job_name}` job"
+            )
+        elif required_env_marker not in job:
+            errors.append(
+                f"{MOBILE_SDK_ARTIFACTS_WORKFLOW}: `{job_name}` must require "
+                "native Governance DAG validation"
+            )
+    if workflow.count(required_env_marker) != 2:
+        errors.append(
+            f"{MOBILE_SDK_ARTIFACTS_WORKFLOW}: native Governance DAG validation "
+            "must be required exactly once in each release SDK job"
+        )
+
+    swift = sources[SWIFT_GOVERNANCE_VALIDATOR_TEST]
+    swift_section = _contract_section(
+        swift,
+        (
+            "func "
+            "testValidatesGovernanceDagFixturesAndNegativeVectorsWhenNativeBridgeIsAvailable"
+        ),
+        "func testSignsOrderbookFixtureWhenNativeBridgeIsAvailable",
+    )
+    if swift_section is None:
+        errors.append(
+            f"{SWIFT_GOVERNANCE_VALIDATOR_TEST}: malformed Governance DAG golden test"
+        )
+    elif "XCTSkipIf(" in swift_section:
+        errors.append(
+            f"{SWIFT_GOVERNANCE_VALIDATOR_TEST}: Governance DAG golden test "
+            "must not unconditionally skip when the native bridge is unavailable"
+        )
+
+    kotlin = sources[KOTLIN_GOVERNANCE_VALIDATOR_TEST]
+    kotlin_section = _contract_section(
+        kotlin,
+        (
+            "fun "
+            "validatesGovernanceDagFixturesAndNegativeVectorsWhenNativeBridgeIsAvailable"
+        ),
+        "fun signsOrderbookFixtureWhenNativeBridgeIsAvailable",
+    )
+    if kotlin_section is None:
+        errors.append(
+            f"{KOTLIN_GOVERNANCE_VALIDATOR_TEST}: malformed Governance DAG golden test"
+        )
+    elif (
+        "assumeTrue(SorafsReferenceValidators.isNativeAvailable()"
+        in kotlin_section
+    ):
+        errors.append(
+            f"{KOTLIN_GOVERNANCE_VALIDATOR_TEST}: Governance DAG golden test "
+            "must not unconditionally skip when the native bridge is unavailable"
+        )
+
+    java = sources[JAVA_GOVERNANCE_VALIDATOR_TEST]
+    java_section = _contract_section(
+        java,
+        (
+            "private static void "
+            "validatesGovernanceDagFixturesAndNegativeVectorsWhenNativeBridgeIsAvailable"
+        ),
+        "private static void signsOrderbookFixtureWhenNativeBridgeIsAvailable",
+    )
+    if java_section is None:
+        errors.append(
+            f"{JAVA_GOVERNANCE_VALIDATOR_TEST}: malformed Governance DAG golden test"
+        )
+    elif re.search(
+        r"if\s*\(\s*!SorafsReferenceValidators\.isNativeAvailable\(\)\s*\)"
+        r"\s*\{\s*return;\s*\}",
+        java_section,
+    ):
+        errors.append(
+            f"{JAVA_GOVERNANCE_VALIDATOR_TEST}: Governance DAG golden test "
+            "must not unconditionally return when the native bridge is unavailable"
+        )
+    return errors
 
 
 def _validate_workflow_source(relative: str, source: str) -> list[str]:
@@ -893,6 +1071,11 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
                 f"{relative}: deterministic platform candidate must be built "
                 "exactly twice for byte-identical replay"
             )
+        if source.count("bash scripts/package_sorafs_validate_release.sh") != 2:
+            errors.append(
+                f"{relative}: deterministic reference-validator package must be "
+                "built exactly twice for byte-identical replay"
+            )
         if source.count('cmp \\\n            "${first_out}/${package_name}') != 2:
             errors.append(
                 f"{relative}: platform archive and manifest replay comparisons "
@@ -932,6 +1115,7 @@ def validate_release_automation(root: Path) -> dict[str, Any]:
                 )
     errors.extend(_validate_release_auth_document_tree(root))
     errors.extend(_validate_package_release_smoke(root))
+    errors.extend(_validate_native_governance_sdk_contract(root))
     if errors:
         raise ValueError("; ".join(errors))
     return {

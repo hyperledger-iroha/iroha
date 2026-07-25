@@ -52,6 +52,7 @@ every accepted encoded form:
     lane committee then certifies the final globally applied frontier; a merge
     QC globally orders that certificate; and only a strictly later global block
     may retire the lane. Unmerged relay progress, unapplied certified execution,
+    an incomplete Native finality/manifest/receipt/latest-pointer join,
     unrepaired application evidence, or frontier drift blocks completion.
 
 ## Candidate forms
@@ -250,6 +251,36 @@ horizon for an authoritative pending block: withholding holders cannot convert
 temporary unavailability into permanent rejection. Pending state is pruned only
 when the canonical block is committed or superseded.
 
+## Native participant application evidence
+
+Native participant finality remains control-only; the globally ordered carrier
+is the sole economic executor. For every participant height requiring separate
+application, Kura stores one immutable versioned manifest file and one
+immutable versioned receipt file. Both use create-new temporaries, no-clobber
+promotion, directory durability sync, and exact readback. A byte-identical
+same-height replay is idempotent; a conflicting identity cannot overwrite the
+stable file. A separate route/incarnation-bound latest pointer is replaceable
+derived state, published through its descriptor-bound directory and rebuilt
+explicitly from the standalone files at startup.
+
+The standalone histories are bounded by the configured Kura sidecar-retention
+count and the existing shared Native sidecar aggregate-byte budget, including
+one bounded transient publication slot. Pair compaction first fsyncs a
+versioned intent naming the lane, dataspace, incarnation, and every
+`(artifact kind, participant height, artifact hash)` to remove. Startup
+recovers a publication temporary beside no stable file or an identical stable
+file, a temporary-only or stable prune intent, every individual
+manifest/receipt unlink stage, a completely unlinked pair, and identical
+stable-plus-temporary prune intents. Completion is idempotent and must preserve
+the exact pair named by the latest pointer.
+
+Legacy dense Native data/index files and malformed, conflicting, unexpected,
+oversized, non-regular, hardlinked, or symlinked artifacts fail closed before
+interpretation or deletion. Drain, archive validation, retirement, purge, and
+same-ID recreation use the same exact finality/manifest/receipt/latest-pointer
+join, so retained evidence from an earlier incarnation cannot authorize the
+new lane.
+
 ## Atomic commit and recovery
 
 For a carrier block, commit proceeds in this order:
@@ -262,14 +293,15 @@ For a carrier block, commit proceeds in this order:
    sparse `(entry hash -> carrier height/hash)` record, and canonical block as
    one rollback-safe operation.
 4. Persist the V2 finality artifact and the execution commitment's canonical
-   Native AMX application manifest. Persist exact participant receipts and
-   route/incarnation latest indexes before their WSV frontiers become visible.
+   Native AMX application manifest. For each participant height, publish its
+   immutable manifest file, immutable receipt file, and descriptor-bound exact
+   latest pointer before its WSV frontier becomes visible.
 5. Persist the staged WSV checkpoint, apply ordinary block effects after the
    already-staged merge effects, and atomically commit the WSV overlay.
 6. Persist the commit manifest and exact merge-application receipt, repair any
-   interrupted Native manifest/receipt/index publication, then publish the
-   entry into the bounded in-memory merge cache and emit one `MergeLedgerEvent`
-   for the first live publication.
+   interrupted Native manifest/receipt/latest-pointer or pair-prune
+   publication, then publish the entry into the bounded in-memory merge cache
+   and emit one `MergeLedgerEvent` for the first live publication.
 7. Only after canonical Kura and WSV application is durable, transition each
    exact reservation through Commit and ForgetCommit. Startup re-enters this
    boundary idempotently after any crash.
@@ -391,7 +423,10 @@ The production-bound formal models
 application-evidence, and lane-lifecycle invariants. Focused unit and adversarial
 fixtures exercise malformed QCs, candidate equivocation, corrupt or
 out-of-order sidecars, bounded-resource abuse, crash points, restart replay, and
-stale-incarnation rejection.
+stale-incarnation rejection. Native evidence cases additionally cover
+configured retained-count and aggregate-byte overflow, malformed/conflicting/
+oversized publication temporaries, obsolete dense layouts, and every
+temporary/stable/partial-unlink prune crash stage.
 
 Those implementation and focused-test statements are not release evidence. All
 multilane gates remain open until the focused/adversarial, source-bound formal,

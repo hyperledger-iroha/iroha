@@ -120,16 +120,12 @@ Logiciels compatibles, opérateurs/SDK disponibles :
 - `iroha app sorafs pin list|show`, `alias list` et `replication list` fonctionnent
   points de terminaison REST pin-registry et certification Norito JSON avec blocs
   для аудиторских доказательств.
-- `iroha app sorafs storage pin` et `torii /v1/sorafs/pin/register` pour Norito
-  ou JSON manifeste plus de preuves d'alias et de successeurs ; épreuves mal formées
-  возвращают `400`, épreuves périmées de `503` à `Warning: 110`, épreuves périmées
-  возвращают `412`.
--Points de terminaison REST (`/v1/sorafs/pin`, `/v1/sorafs/aliases`,
-  `/v1/sorafs/replication`) pour l'attestation de structure, pour tous les clients
-  проверить данные относительно последних bloc-têtes avant la conception.
-
-## Ссылки- Spécifications canoniques :
-  [`docs/source/sorafs_node_client_protocol.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs_node_client_protocol.md)
+- `torii /v1/sorafs/pin/register` accepte la requête JSON V1 fermée.
+  `manifest_payload` doit être le base64 canonique avec padding exact des octets
+  Norito `ManifestV1` canoniques. Torii dérive le digest, le chunker, la longueur
+  du contenu, la politique de pin et les entrées de frais uniquement du manifest
+  décodé, et rejette les champs de résumé dupliqués retirés. `alias` et un
+  predecessor `successor_of_hex` non nul restent optionnels.
 - Norito types : `crates/sorafs_manifest/src/{provider_advert,provider_admission}.rs`
 - Aide CLI : `crates/iroha_cli/src/commands/sorafs.rs`,
   `crates/sorafs_car/src/bin/sorafs_fetch.rs`

@@ -26,6 +26,17 @@ RETIRED_LANE_HANDOFF_SOURCES = (
     f"const {'LANE_EXECUTABLE_PAYLOAD_' + 'HANDOFF_VERSION_V2'}: u8 = 2;\n",
     f'const RETIRED_DOMAIN: &str = "{"nexus:lane-executable-payload-" + "handoff:v2"}";\n',
 )
+RETIRED_PK2_MULTILANE_COMPATIBILITY_SOURCES = (
+    f"struct {'LegacyExecutionContextLane' + 'PayloadOwnershipPreimage'} {{}}\n",
+    f"struct {'LegacyExecutionContextLane' + 'RbcInstancePreimage'} {{}}\n",
+    f"struct {'LegacyExecutionContextLane' + 'BlockDescriptorPreimage'} {{}}\n",
+    f"fn {'validate_legacy_pk2_lane_payload_' + 'replay_material'}() {{}}\n",
+    f"fn {'pk2_staging_lane_payload_subject_hash_' + 'compatibility'}() {{}}\n",
+    f"fn {'pk2_staging_legacy_replay_execution_context_hash_' + 'mismatch'}() {{}}\n",
+    f"fn {'allow_missing_legacy_' + 'context'}() {{}}\n",
+    f'const MESSAGE: &str = "{"accepting PK2 staging lane payload " + "ownership"}";\n',
+    f'const MESSAGE: &str = "{"accepting PK2 staging legacy execution context hash " + "mismatch"}";\n',
+)
 
 
 def _init_repo(tmp_path: Path) -> Path:
@@ -78,6 +89,7 @@ def test_guard_allows_clean_root_and_crate_manifests(tmp_path: Path) -> None:
     assert "No retired codec dependencies found." in result.stdout
     assert "No retired Native AMX V1 consensus codecs found." in result.stdout
     assert "No retired lane executable payload handoff codecs found." in result.stdout
+    assert "No retired PK2 multilane compatibility paths found." in result.stdout
 
 
 def test_guard_rejects_root_manifest_dependency(tmp_path: Path) -> None:
@@ -197,4 +209,22 @@ def test_guard_rejects_retired_lane_executable_payload_handoff_codec(
 
     assert result.returncode == 1
     assert "retired lane executable payload handoff codec detected in:" in result.stderr
+    assert str(source) in result.stderr
+
+
+@pytest.mark.parametrize(
+    "retired_source", RETIRED_PK2_MULTILANE_COMPATIBILITY_SOURCES
+)
+def test_guard_rejects_retired_pk2_multilane_compatibility_path(
+    tmp_path: Path, retired_source: str
+) -> None:
+    repo = _init_repo(tmp_path)
+    source = repo / "crates" / "demo" / "src" / "lib.rs"
+    source.parent.mkdir()
+    source.write_text(retired_source, encoding="utf-8")
+
+    result = _run_guard(repo)
+
+    assert result.returncode == 1
+    assert "retired PK2 multilane compatibility path detected in:" in result.stderr
     assert str(source) in result.stderr

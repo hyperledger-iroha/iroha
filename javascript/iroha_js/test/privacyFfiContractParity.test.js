@@ -7588,8 +7588,8 @@ test("privacy native availability proof probes use shared Norito request archive
       "private static void RequireAbi",
       "C# privacy native request call",
     ),
-    /var\s+request\s*=\s*requestArchive\.ToArray\(\);[\s\S]*IsNoritoV1Archive\(request\)[\s\S]*Clear\(request\)/,
-    "C# privacy bridge must validate request Norito frame headers before native dispatch",
+    /var\s+request\s*=\s*requestArchive\.ToArray\(\);[\s\S]*IsNoritoV1Archive\(request\)[\s\S]*Array\.Clear\(request,\s*0,\s*request\.Length\)/,
+    "C# privacy bridge must validate request Norito frame headers before native dispatch and zero the request copy",
   );
   assert.match(
     sliceBetween(

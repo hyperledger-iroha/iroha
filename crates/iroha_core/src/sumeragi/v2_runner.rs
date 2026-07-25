@@ -7,7 +7,7 @@
 
 use std::{
     collections::BTreeSet,
-    num::NonZeroUsize,
+    num::{NonZeroU64, NonZeroUsize},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -79,8 +79,11 @@ use super::{
     v2_worker::{ExactFanoutOwnership, ProductionV2Services, V2CleanupSupervisor},
 };
 use crate::{
-    kura::Kura, merge_sidecar::CertifiedMergeSidecarMessage, native_amx::NativeAmxMessage,
-    queue::Queue, state::State,
+    kura::Kura,
+    merge_sidecar::CertifiedMergeSidecarMessage,
+    native_amx::NativeAmxMessage,
+    queue::{GlobalQueueSelectionLease, Queue},
+    state::State,
 };
 
 const IDLE_POLL: Duration = Duration::from_millis(10);
@@ -129,6 +132,18 @@ struct PendingLocalEvents {
     owner: LocalProposalOwner,
     subject: wire::BlockSubject,
     events: Vec<PipelineEventBox>,
+}
+
+/// Queue ownership retained until the exact local proposal is decided or abandoned.
+///
+/// The ordinary transaction remains in the queue while this process-local fence prevents the
+/// autonomous lane producer from reserving the same hash. The fence follows only the first exact
+/// lock for this proposal subject and is released on every replacement, rejection, or decision.
+#[derive(Debug)]
+struct PendingGlobalSelection {
+    owner: LocalProposalOwner,
+    subject: wire::BlockSubject,
+    _lease: GlobalQueueSelectionLease,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -279,6 +294,7 @@ struct LocalProposalState {
     heartbeat_only: Option<LocalProposalOwner>,
     candidate_work_wait: Option<CandidateWorkWait>,
     pending_events: Option<PendingLocalEvents>,
+    global_selection: Option<PendingGlobalSelection>,
 }
 
 impl LocalProposalState {
@@ -325,13 +341,34 @@ impl LocalProposalState {
                 self.pending_events = None;
             }
         }
+        if self
+            .global_selection
+            .as_ref()
+            .is_some_and(|selection| selection.owner != owner)
+        {
+            let preserve = self.global_selection.as_ref().is_some_and(|selection| {
+                owner.installs_first_exact_lock_for(selection.owner, selection.subject)
+            });
+            if preserve {
+                self.global_selection
+                    .as_mut()
+                    .expect("global selection was observed above")
+                    .owner = owner;
+            } else {
+                self.global_selection = None;
+            }
+        }
         let continued_exact_work = self
             .submitted
             .is_some_and(|(candidate, _)| candidate == owner)
             || self
                 .pending_events
                 .as_ref()
-                .is_some_and(|pending| pending.owner == owner);
+                .is_some_and(|pending| pending.owner == owner)
+            || self
+                .global_selection
+                .as_ref()
+                .is_some_and(|selection| selection.owner == owner);
         if self.attempted.is_some_and(|candidate| candidate != owner) {
             self.attempted = continued_exact_work.then_some(owner);
         }
@@ -348,6 +385,37 @@ impl LocalProposalState {
             self.candidate_work_wait = None;
         }
         owner
+    }
+
+    /// Keep retrying deferred autonomous work for the bounded observation
+    /// window, then arm an explicit empty heartbeat for this exact owner.
+    ///
+    /// Expiry deliberately changes only proposal shape. It never changes the
+    /// lane adapter's routing or queue-ownership policy.
+    fn defer_candidate_work(
+        &mut self,
+        owner: LocalProposalOwner,
+        now: Instant,
+        wait_bound: Duration,
+    ) {
+        if self.heartbeat_only == Some(owner) {
+            self.candidate_work_wait = None;
+            return;
+        }
+        let started_at = self
+            .candidate_work_wait
+            .filter(|wait| wait.owner == owner)
+            .map_or(now, |wait| wait.started_at);
+        if now.saturating_duration_since(started_at) < wait_bound {
+            self.candidate_work_wait = Some(CandidateWorkWait {
+                owner,
+                started_at,
+                next_retry: deadline_after(now, CANDIDATE_WORK_RECHECK),
+            });
+            return;
+        }
+        self.heartbeat_only = Some(owner);
+        self.candidate_work_wait = None;
     }
 
     fn handle_validation_rejection(
@@ -367,6 +435,11 @@ impl LocalProposalState {
             .is_some_and(|pending| pending.owner == owner && pending.subject == rejected_subject)
         {
             self.pending_events = None;
+        }
+        if self.global_selection.as_ref().is_some_and(|selection| {
+            selection.owner == owner && selection.subject == rejected_subject
+        }) {
+            self.global_selection = None;
         }
         if self.heartbeat_only == Some(owner) {
             return LocalValidationDisposition::FatalHeartbeat;
@@ -611,6 +684,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         ingress_ready,
         output_guard,
         consensus_frame_byte_capacity,
+        block_sync_frame_byte_capacity,
     } = worker;
 
     // Reject an unsupported voting host before any recovery or durable
@@ -732,6 +806,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             &shared_config,
             network.reply_route_source_capacity(),
             consensus_frame_byte_capacity,
+            block_sync_frame_byte_capacity,
         )?;
         let candidate_limits = candidate_limits(&context, &shared_config)?;
         let local_validator = local_validator_index(&context, &local_peer, config.role)?;
@@ -945,9 +1020,13 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         )?;
         dispatch_lane_work_effects(&mut lane_work, &services, control_queue_capacity)?;
         // Startup recovery and durable constructor work must not consume the
-        // live height cadence. Interrupted-tip replay remains permanently
-        // unarmed because the already-decided runtime is consumed as soon as
-        // its local Apply finishes; the fresh successor is armed normally.
+        // live height cadence. Constructor repair already emitted the first
+        // bounded Native recovery request for every marker it could own; any
+        // pressure-deferred marker, or retransmission to the next authenticated
+        // signer, waits for `next_lane_retransmit`. Interrupted-tip replay
+        // remains permanently unarmed because the already-decided runtime is
+        // consumed as soon as its local Apply finishes; the fresh successor is
+        // armed normally.
         // These additions are infallible after the early representability
         // probes above.
         let height_started_at = Instant::now();
@@ -1106,6 +1185,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 drive_merge_sidecar_recovery(&mut executor, &mut services, &mut lane_work)?;
                 let now = Instant::now();
                 if now >= next_lane_retransmit {
+                    lane_work.service_next_native_participant_recovery_request()?;
                     lane_work.schedule_autonomous_new_view_timeouts(
                         now,
                         executor.current_tag().view(),
@@ -1141,6 +1221,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 drive_merge_sidecar_recovery(&mut executor, &mut services, &mut lane_work)?;
                 let now = Instant::now();
                 if now >= next_lane_retransmit {
+                    lane_work.service_next_native_participant_recovery_request()?;
                     lane_work.schedule_autonomous_new_view_timeouts(
                         now,
                         executor.current_tag().view(),
@@ -1319,7 +1400,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 &common_config.key_pair,
                 output_guard.as_ref(),
                 state.as_ref(),
-                queue.as_ref(),
+                &queue,
                 kura.as_ref(),
                 first_height_genesis.as_ref(),
                 height_started_at,
@@ -1410,7 +1491,7 @@ fn schedule_local_proposal(
     key_pair: &KeyPair,
     output_guard: &ConsensusOutputGuard,
     state: &State,
-    queue: &Queue,
+    queue: &Arc<Queue>,
     kura: &Kura,
     genesis_body: Option<&SignedBlock>,
     height_started_at: Instant,
@@ -1630,20 +1711,7 @@ fn schedule_local_proposal(
             && report.work_deferred > 0
         {
             let now = Instant::now();
-            let started_at = proposal_state
-                .candidate_work_wait
-                .filter(|wait| wait.owner == owner)
-                .map_or(now, |wait| wait.started_at);
-            if now.saturating_duration_since(started_at) < candidate_work_wait_bound {
-                proposal_state.candidate_work_wait = Some(CandidateWorkWait {
-                    owner,
-                    started_at,
-                    next_retry: deadline_after(now, CANDIDATE_WORK_RECHECK),
-                });
-                return Ok(());
-            }
-            lane_work.allow_ordinary_execution_after_autonomous_wait();
-            proposal_state.candidate_work_wait = None;
+            proposal_state.defer_candidate_work(owner, now, candidate_work_wait_bound);
             return Ok(());
         }
         proposal_state.candidate_work_wait = None;
@@ -1652,7 +1720,8 @@ fn schedule_local_proposal(
         {
             return Err(V2RunnerError::LaneCandidateBinding);
         }
-        let (_block, canonical_wire, encoded_payload, events, report) = candidate.into_parts();
+        let (_block, canonical_wire, encoded_payload, events, report, selection_lease) =
+            candidate.into_parts();
         let subject = encoded_payload.manifest().subject;
         proposal_state.pending_events = Some(PendingLocalEvents {
             owner,
@@ -1668,6 +1737,11 @@ fn schedule_local_proposal(
             services,
             proposal_state,
         )?;
+        proposal_state.global_selection = Some(PendingGlobalSelection {
+            owner,
+            subject,
+            _lease: selection_lease,
+        });
         proposal_state.attempted = Some(owner);
     }
 
@@ -2437,6 +2511,7 @@ fn lane_work_limits(
     config: &SumeragiV2Config,
     reply_source_capacity: usize,
     consensus_frame_byte_capacity: usize,
+    block_sync_frame_byte_capacity: usize,
 ) -> Result<V2LaneWorkLimits, V2RunnerError> {
     let non_zero = |value: u64| {
         usize::try_from(value)
@@ -2444,6 +2519,26 @@ fn lane_work_limits(
             .and_then(NonZeroUsize::new)
             .ok_or(V2RunnerError::InvalidLimits)
     };
+    let non_zero_u32 = |value: u64| {
+        u32::try_from(value)
+            .ok()
+            .and_then(std::num::NonZeroU32::new)
+            .ok_or(V2RunnerError::InvalidLimits)
+    };
+    let merge_leader_body_frame_headroom_bytes =
+        non_zero(config.limits.merge_leader_body_frame_headroom_bytes)?;
+    if merge_leader_body_frame_headroom_bytes.get() >= consensus_frame_byte_capacity {
+        return Err(V2RunnerError::InvalidLimits);
+    }
+    let autonomous_producer_recheck_ms =
+        NonZeroU64::new(config.limits.autonomous_producer_recheck_ms)
+            .ok_or(V2RunnerError::InvalidLimits)?;
+    let native_amx_signing_guard_limits = crate::native_amx::NativeAmxSigningGuardLimits::new(
+        non_zero(config.limits.native_amx_signing_guard_record_capacity)?,
+        non_zero(config.limits.native_amx_signing_guard_record_bytes)?,
+        non_zero(config.limits.native_amx_signing_guard_anchor_bytes)?,
+    )
+    .map_err(|_| V2RunnerError::InvalidLimits)?;
     Ok(V2LaneWorkLimits::new(
         non_zero(config.limits.control_queue_capacity)?,
         non_zero(config.limits.max_transactions)?,
@@ -2453,6 +2548,16 @@ fn lane_work_limits(
         non_zero(config.limits.control_queue_capacity)?,
         NonZeroUsize::new(reply_source_capacity).ok_or(V2RunnerError::InvalidLimits)?,
         NonZeroUsize::new(consensus_frame_byte_capacity).ok_or(V2RunnerError::InvalidLimits)?,
+        NonZeroUsize::new(block_sync_frame_byte_capacity).ok_or(V2RunnerError::InvalidLimits)?,
+        non_zero(config.limits.authenticated_merge_qc_capacity)?,
+        merge_leader_body_frame_headroom_bytes,
+        non_zero(config.limits.autonomous_carrier_headroom_bytes)?,
+        Duration::from_millis(autonomous_producer_recheck_ms.get()),
+        non_zero_u32(config.limits.historical_recovery_stuck_attempts)?,
+        non_zero_u32(config.limits.historical_recovery_retry_tier_attempts)?,
+        non_zero_u32(config.limits.historical_recovery_max_retry_tier)?,
+        non_zero(config.limits.sidecar_service_burst)?,
+        native_amx_signing_guard_limits,
     ))
 }
 
@@ -4544,6 +4649,7 @@ mod tests {
                 subject: subject_a,
                 events: Vec::new(),
             }),
+            global_selection: None,
         };
 
         state.reconcile(owner_b);
@@ -4553,6 +4659,43 @@ mod tests {
         assert!(state.heartbeat_only.is_none());
         assert!(state.candidate_work_wait.is_none());
         assert!(state.pending_events.is_none());
+    }
+
+    #[test]
+    fn deferred_autonomous_work_timeout_arms_only_an_empty_heartbeat() {
+        let (context, _) = context();
+        let owner = proposal_owner(
+            &context,
+            EventTag::new(context.height, 3, Generation::new(17)),
+            None,
+            None,
+        );
+        let started_at = Instant::now();
+        let wait_bound = Duration::from_secs(2);
+        let mut state = LocalProposalState::default();
+
+        state.defer_candidate_work(owner, started_at, wait_bound);
+        assert_eq!(state.heartbeat_only, None);
+        assert!(
+            state
+                .candidate_work_wait
+                .is_some_and(|wait| wait.owner == owner && wait.started_at == started_at)
+        );
+
+        let expired_at = started_at
+            .checked_add(wait_bound)
+            .expect("fixture wait deadline is representable");
+        state.defer_candidate_work(owner, expired_at, wait_bound);
+        assert_eq!(state.heartbeat_only, Some(owner));
+        assert!(state.candidate_work_wait.is_none());
+
+        state.defer_candidate_work(owner, expired_at, wait_bound);
+        assert_eq!(
+            state.heartbeat_only,
+            Some(owner),
+            "repeated timeout handling must never re-arm ordinary candidate work"
+        );
+        assert!(state.candidate_work_wait.is_none());
     }
 
     #[test]
@@ -4691,6 +4834,7 @@ mod tests {
                 subject,
                 events: Vec::new(),
             }),
+            global_selection: None,
         };
 
         assert!(state.take_prepared_events(decided, tag, subject).is_none());

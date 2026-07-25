@@ -14,7 +14,7 @@ translator: machine-google-reviewed
 
 _Sonuncu dəfə `python3 scripts/inventory_env_toggles.py --json docs/source/agents/env_var_inventory.json --md docs/source/agents/env_var_inventory.md` vasitəsilə yeniləndi
 
-Ümumi istinadlar: **505** · Unikal dəyişənlər: **137**
+Ümumi istinadlar: **502** · Unikal dəyişənlər: **137**
 
 ## ACTIONS_ID_TOKEN_REQUEST_TOKEN (məhsul: 1)
 
@@ -265,9 +265,6 @@ _Sonuncu dəfə `python3 scripts/inventory_env_toggles.py --json docs/source/age
 - test: sandıqlar/sorafs_manifest/tests/por_fixtures.rs:11 — `env!("CARGO_MANIFEST_DIR"),`
 - test: sandıqlar/sorafs_manifest/tests/provider_admission_fixtures.rs:12 — `cmd.current_dir(env!("CARGO_MANIFEST_DIR"))`
 - test: sandıqlar/sorafs_manifest/tests/replication_order_fixtures.rs:8 — `env!("CARGO_MANIFEST_DIR"),`
-- məhsul: qutular/sorafs_node/src/bin/sorafs_gateway.rs:55 — `PathBuf::from(env!("CARGO_MANIFEST_DIR"))`
-- məhsul: crates/sorafs_node/src/bin/sorafs_gateway.rs:59 — `PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/sorafs_gateway/1.0.0")`
-- test: crates/sorafs_node/src/gateway.rs:2006 — `PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/sorafs_gateway/1.0.0");`
 - test: sandıqlar/sorafs_node/tests/cli.rs:122 — `let base = Path::new(env!("CARGO_MANIFEST_DIR"))`
 - test: sandıqlar/sorafs_node/tests/gateway.rs:14 — `PathBuf::from(env!("CARGO_MANIFEST_DIR"))`
 - test: sandıqlar/sorafs_node/tests/gateway.rs:30 — `let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))`

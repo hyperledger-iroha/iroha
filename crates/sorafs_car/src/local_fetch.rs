@@ -14,14 +14,13 @@ use std::{
     sync::Arc,
 };
 
-use blake3::hash as blake3_hash;
 use norito::json::Value;
 use sorafs_chunker::ChunkProfile;
 use thiserror::Error;
 
 use crate::{
     CarBuildPlan, CarChunk, ChunkFetchSpec, FilePlan, chunker_registry,
-    fetch_plan::{FetchPlanError, chunk_fetch_specs_from_json},
+    fetch_plan::{FetchPlanError, chunk_fetch_plan_from_json},
     multi_fetch::{
         self, ChunkResponse, FetchOptions, FetchOutcome, FetchProvider, FetchRequest,
         ProviderScoreContext, ProviderScoreDecision, ScorePolicy,
@@ -190,7 +189,9 @@ pub fn execute_local_fetch(
     let mut processed = process_providers(providers)?;
     let mut path_lookup = build_path_lookup(&processed);
 
-    let specs = chunk_fetch_specs_from_json(plan_json)?;
+    let parsed_plan = chunk_fetch_plan_from_json(plan_json)?;
+    let plan_payload_digest = parsed_plan.payload_digest;
+    let specs = parsed_plan.chunk_fetch_specs;
     if specs.is_empty() {
         return Err(LocalFetchError::Fetch(
             "chunk fetch plan must contain at least one chunk".into(),
@@ -198,7 +199,7 @@ pub fn execute_local_fetch(
     }
 
     let chunk_profile = resolve_chunk_profile(options.chunker_handle.as_deref())?;
-    let plan = build_plan(&specs, chunk_profile);
+    let plan = build_plan(&specs, plan_payload_digest, chunk_profile);
 
     let telemetry_snapshot = telemetry_snapshot(&options.telemetry);
     let telemetry_provided = !options.telemetry.is_empty();
@@ -233,6 +234,15 @@ pub fn execute_local_fetch(
 
     let fetch_options = build_fetch_options(&options)?;
     let outcome = run_fetch(&plan, fetch_providers, path_lookup, fetch_options)?;
+    let mut payload_hasher = blake3::Hasher::new();
+    for chunk in &outcome.chunks {
+        payload_hasher.update(chunk);
+    }
+    if payload_hasher.finalize() != plan.payload_digest {
+        return Err(LocalFetchError::Fetch(
+            "assembled payload digest does not match canonical chunk fetch plan".into(),
+        ));
+    }
 
     Ok(LocalFetchResult {
         chunk_count: specs.len(),
@@ -313,7 +323,11 @@ fn resolve_chunk_profile(handle: Option<&str>) -> Result<ChunkProfile, LocalFetc
     Ok(ChunkProfile::DEFAULT)
 }
 
-fn build_plan(specs: &[ChunkFetchSpec], chunk_profile: ChunkProfile) -> CarBuildPlan {
+fn build_plan(
+    specs: &[ChunkFetchSpec],
+    payload_digest: [u8; 32],
+    chunk_profile: ChunkProfile,
+) -> CarBuildPlan {
     let content_length = specs
         .iter()
         .map(|spec| spec.offset + u64::from(spec.length))
@@ -321,7 +335,7 @@ fn build_plan(specs: &[ChunkFetchSpec], chunk_profile: ChunkProfile) -> CarBuild
         .unwrap_or(0);
     CarBuildPlan {
         chunk_profile,
-        payload_digest: blake3_hash(&[]),
+        payload_digest: blake3::Hash::from_bytes(payload_digest),
         content_length,
         chunks: specs
             .iter()

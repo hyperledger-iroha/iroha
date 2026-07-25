@@ -875,7 +875,7 @@ public static class PrivacyNative
         }
         finally
         {
-            Clear(request);
+            Array.Clear(request, 0, request.Length);
         }
     }
 

@@ -53,9 +53,14 @@ const NATIVE_AMX_SIGNING_BODY_DOMAIN: &[u8] = b"iroha:native-amx:v2:signing-body
 const NATIVE_AMX_SIGNING_RECORD_DOMAIN: &[u8] = b"iroha:native-amx:v2:record-chain:v4\0";
 const NATIVE_AMX_SIGNING_GENESIS_DOMAIN: &[u8] = b"iroha:native-amx:v2:record-genesis:v4\0";
 /// Absolute bound for durable Native AMX signing decisions retained at one height.
-pub(crate) const MAX_NATIVE_AMX_SIGNING_GUARD_RECORDS_HARD: usize = 1_048_576;
-const MAX_NATIVE_AMX_SIGNING_GUARD_RECORD_BYTES: usize = 16 * 1024;
-const MAX_NATIVE_AMX_SIGNING_GUARD_ANCHOR_BYTES: usize = 4 * 1024;
+pub(crate) const MAX_NATIVE_AMX_SIGNING_GUARD_RECORDS_HARD: usize =
+    iroha_config::parameters::defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_RECORD_CAPACITY_MAX;
+/// Absolute byte bound for one canonical durable Native AMX signing decision.
+pub(crate) const MAX_NATIVE_AMX_SIGNING_GUARD_RECORD_BYTES_HARD: usize =
+    iroha_config::parameters::defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_RECORD_BYTES_MAX;
+/// Absolute byte bound for the durable Native AMX signing chain anchor.
+pub(crate) const MAX_NATIVE_AMX_SIGNING_GUARD_ANCHOR_BYTES_HARD: usize =
+    iroha_config::parameters::defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_ANCHOR_BYTES_MAX;
 #[cfg(unix)]
 const NATIVE_AMX_SIGNING_DIRECTORY_MODE: u32 = 0o700;
 #[cfg(unix)]
@@ -597,6 +602,37 @@ impl NativeAmxSigningGuardError {
     }
 }
 
+/// Validated runtime ceilings for one Native AMX signing journal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct NativeAmxSigningGuardLimits {
+    pub(crate) max_records: NonZeroUsize,
+    pub(crate) max_record_bytes: NonZeroUsize,
+    pub(crate) max_anchor_bytes: NonZeroUsize,
+}
+
+impl NativeAmxSigningGuardLimits {
+    /// Validate configured journal ceilings against fixed implementation maxima.
+    pub(crate) fn new(
+        max_records: NonZeroUsize,
+        max_record_bytes: NonZeroUsize,
+        max_anchor_bytes: NonZeroUsize,
+    ) -> Result<Self, NativeAmxSigningGuardError> {
+        if max_records.get() > MAX_NATIVE_AMX_SIGNING_GUARD_RECORDS_HARD
+            || max_record_bytes.get() > MAX_NATIVE_AMX_SIGNING_GUARD_RECORD_BYTES_HARD
+            || max_anchor_bytes.get() > MAX_NATIVE_AMX_SIGNING_GUARD_ANCHOR_BYTES_HARD
+        {
+            return Err(NativeAmxSigningGuardError::InvalidInput(
+                "signing journal runtime ceiling exceeds its implementation maximum".to_owned(),
+            ));
+        }
+        Ok(Self {
+            max_records,
+            max_record_bytes,
+            max_anchor_bytes,
+        })
+    }
+}
+
 /// Crash-safe local anti-equivocation journal for Native AMX v2 votes.
 ///
 /// Every record is appended to a hash chain. The updated chain anchor is also
@@ -617,7 +653,7 @@ pub(crate) struct NativeAmxSigningGuard {
     lock_path: PathBuf,
     owner_lock: File,
     lock_identity: NativeAmxFileIdentity,
-    max_records: usize,
+    limits: NativeAmxSigningGuardLimits,
     inner: Mutex<NativeAmxSigningGuardInner>,
 }
 
@@ -634,7 +670,7 @@ impl NativeAmxSigningGuard {
         epoch: u64,
         chain_id_hash: Hash,
         signer: PeerId,
-        max_records: NonZeroUsize,
+        limits: NativeAmxSigningGuardLimits,
     ) -> Result<Self, NativeAmxSigningGuardError> {
         #[cfg(not(unix))]
         {
@@ -645,7 +681,7 @@ impl NativeAmxSigningGuard {
                 epoch,
                 chain_id_hash,
                 signer,
-                max_records,
+                limits,
             );
             return Err(NativeAmxSigningGuardError::UnsupportedPlatform);
         }
@@ -659,7 +695,7 @@ impl NativeAmxSigningGuard {
                 epoch,
                 chain_id_hash,
                 signer,
-                max_records,
+                limits,
             )
         }
     }
@@ -672,18 +708,17 @@ impl NativeAmxSigningGuard {
         epoch: u64,
         chain_id_hash: Hash,
         signer: PeerId,
-        max_records: NonZeroUsize,
+        limits: NativeAmxSigningGuardLimits,
     ) -> Result<Self, NativeAmxSigningGuardError> {
         if active_height == 0
             || chain_id_hash.as_ref().iter().all(|byte| *byte == 0)
             || context_id.0.as_ref().iter().all(|byte| *byte == 0)
-            || max_records.get() > MAX_NATIVE_AMX_SIGNING_GUARD_RECORDS_HARD
         {
             return Err(NativeAmxSigningGuardError::InvalidInput(
                 "height, context, chain, or record capacity is invalid".to_owned(),
             ));
         }
-        let max_records_u32 = u32::try_from(max_records.get()).map_err(|_| {
+        let max_records_u32 = u32::try_from(limits.max_records.get()).map_err(|_| {
             NativeAmxSigningGuardError::InvalidInput(
                 "record capacity does not fit the durable format".to_owned(),
             )
@@ -702,7 +737,13 @@ impl NativeAmxSigningGuard {
             &owner_lock,
             lock_identity,
         )?;
-        native_amx_reconcile_guard_temps(&directory, &directory_handle, owner_uid)?;
+        native_amx_reconcile_guard_temps(
+            &directory,
+            &directory_handle,
+            owner_uid,
+            limits.max_record_bytes.get(),
+            limits.max_anchor_bytes.get(),
+        )?;
 
         let supplied_binding = NativeAmxHeightBindingV2 {
             active_height,
@@ -712,16 +753,24 @@ impl NativeAmxSigningGuard {
             signer: signer.clone(),
             max_records: max_records_u32,
         };
-        let durable_anchor = Self::read_anchor(&directory, owner_uid)?;
+        let durable_anchor =
+            Self::read_anchor(&directory, owner_uid, limits.max_anchor_bytes.get())?;
         let (anchor, records, source_claims, slot_claims) = match durable_anchor {
             None => {
                 Self::ensure_empty_uninitialized_directory(&directory)?;
                 let anchor = NativeAmxSigningAnchorV2::empty(supplied_binding)?;
-                Self::persist_anchor(&directory, &directory_handle, owner_uid, &anchor)?;
+                Self::persist_anchor(
+                    &directory,
+                    &directory_handle,
+                    owner_uid,
+                    &anchor,
+                    limits.max_anchor_bytes.get(),
+                )?;
                 (anchor, BTreeMap::new(), BTreeMap::new(), BTreeMap::new())
             }
             Some(anchor) => {
                 if anchor.binding.chain_id_hash != chain_id_hash || anchor.binding.signer != signer
+                    || anchor.binding.max_records != max_records_u32
                 {
                     return Err(NativeAmxSigningGuardError::ContextMismatch);
                 }
@@ -730,6 +779,8 @@ impl NativeAmxSigningGuard {
                     &directory_handle,
                     owner_uid,
                     &anchor,
+                    limits.max_records.get(),
+                    limits.max_record_bytes.get(),
                 )?;
                 if active_height < anchor.binding.active_height {
                     return Err(NativeAmxSigningGuardError::HeightRegression {
@@ -767,7 +818,13 @@ impl NativeAmxSigningGuard {
                         return Err(NativeAmxSigningGuardError::ContextMismatch);
                     }
                     let next_anchor = NativeAmxSigningAnchorV2::empty(supplied_binding)?;
-                    Self::persist_anchor(&directory, &directory_handle, owner_uid, &next_anchor)?;
+                    Self::persist_anchor(
+                        &directory,
+                        &directory_handle,
+                        owner_uid,
+                        &next_anchor,
+                        limits.max_anchor_bytes.get(),
+                    )?;
                     for path in loaded.anchored_paths {
                         fs::remove_file(&path)
                             .map_err(|error| native_amx_unsafe_journal(&path, error.to_string()))?;
@@ -793,7 +850,7 @@ impl NativeAmxSigningGuard {
         )?;
         let anchor_identity = native_amx_secure_file_identity(
             &Self::anchor_path(&directory),
-            MAX_NATIVE_AMX_SIGNING_GUARD_ANCHOR_BYTES,
+            limits.max_anchor_bytes.get(),
             owner_uid,
         )?;
         let record_identities = records
@@ -802,7 +859,7 @@ impl NativeAmxSigningGuard {
                 let path = Self::record_path(&directory, record);
                 native_amx_secure_file_identity(
                     &path,
-                    MAX_NATIVE_AMX_SIGNING_GUARD_RECORD_BYTES,
+                    limits.max_record_bytes.get(),
                     owner_uid,
                 )
                 .map(|identity| (key.clone(), (path, identity)))
@@ -816,7 +873,7 @@ impl NativeAmxSigningGuard {
             lock_path,
             owner_lock,
             lock_identity,
-            max_records: max_records.get(),
+            limits,
             inner: Mutex::new(NativeAmxSigningGuardInner {
                 anchor,
                 anchor_identity,
@@ -854,6 +911,7 @@ impl NativeAmxSigningGuard {
     fn read_anchor(
         directory: &Path,
         owner_uid: u32,
+        max_anchor_bytes: usize,
     ) -> Result<Option<NativeAmxSigningAnchorV2>, NativeAmxSigningGuardError> {
         let path = Self::anchor_path(directory);
         match fs::symlink_metadata(&path) {
@@ -861,11 +919,7 @@ impl NativeAmxSigningGuard {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(error) => return Err(native_amx_unsafe_journal(&path, error.to_string())),
         }
-        let bytes = native_amx_read_secure_file(
-            &path,
-            MAX_NATIVE_AMX_SIGNING_GUARD_ANCHOR_BYTES,
-            owner_uid,
-        )?;
+        let bytes = native_amx_read_secure_file(&path, max_anchor_bytes, owner_uid)?;
         let anchor = norito::decode_from_bytes::<NativeAmxSigningAnchorV2>(&bytes)
             .map_err(|error| native_amx_unsafe_journal(&path, error.to_string()))?;
         let canonical = norito::to_bytes(&anchor)
@@ -903,12 +957,9 @@ impl NativeAmxSigningGuard {
         directory: &Path,
         path: &Path,
         owner_uid: u32,
+        max_record_bytes: usize,
     ) -> Result<NativeAmxSigningRecordV2, NativeAmxSigningGuardError> {
-        let bytes = native_amx_read_secure_file(
-            path,
-            MAX_NATIVE_AMX_SIGNING_GUARD_RECORD_BYTES,
-            owner_uid,
-        )?;
+        let bytes = native_amx_read_secure_file(path, max_record_bytes, owner_uid)?;
         let record = norito::decode_from_bytes::<NativeAmxSigningRecordV2>(&bytes)
             .map_err(|error| native_amx_unsafe_journal(path, error.to_string()))?;
         let canonical = norito::to_bytes(&record)
@@ -957,6 +1008,8 @@ impl NativeAmxSigningGuard {
         directory_handle: &File,
         owner_uid: u32,
         anchor: &NativeAmxSigningAnchorV2,
+        max_records: usize,
+        max_record_bytes: usize,
     ) -> Result<LoadedNativeAmxJournal, NativeAmxSigningGuardError> {
         let mut current = BTreeMap::<u32, (NativeAmxSigningRecordV2, PathBuf)>::new();
         let mut stale_paths = Vec::new();
@@ -978,13 +1031,13 @@ impl NativeAmxSigningGuard {
                 return Err(native_amx_unsafe_journal(&path, "unknown journal file"));
             }
             final_record_count = final_record_count.saturating_add(1);
-            if final_record_count > MAX_NATIVE_AMX_SIGNING_GUARD_RECORDS_HARD + 1 {
+            if final_record_count > max_records {
                 return Err(native_amx_unsafe_journal(
                     directory,
-                    "record count exceeds the protocol hard limit",
+                    "record count exceeds the configured runtime limit",
                 ));
             }
-            let record = Self::read_record(directory, &path, owner_uid)?;
+            let record = Self::read_record(directory, &path, owner_uid, max_record_bytes)?;
             let record_height = record.body.authority_context_height;
             if record_height > anchor.binding.active_height {
                 return Err(NativeAmxSigningGuardError::FutureHeight {
@@ -1164,29 +1217,30 @@ impl NativeAmxSigningGuard {
         directory_handle: &File,
         owner_uid: u32,
         anchor: &NativeAmxSigningAnchorV2,
+        max_anchor_bytes: usize,
     ) -> Result<(), NativeAmxSigningGuardError> {
         let bytes = norito::to_bytes(anchor)
             .map_err(|error| native_amx_unsafe_journal(directory, error.to_string()))?;
-        if bytes.len() > MAX_NATIVE_AMX_SIGNING_GUARD_ANCHOR_BYTES {
+        if bytes.len() > max_anchor_bytes {
             return Err(native_amx_unsafe_journal(
                 directory,
-                "chain anchor exceeds its hard byte limit",
+                "chain anchor exceeds its configured runtime byte limit",
             ));
         }
         let temp = Self::anchor_temp_path(directory);
         native_amx_write_new_secure_temp(
             &temp,
             &bytes,
-            MAX_NATIVE_AMX_SIGNING_GUARD_ANCHOR_BYTES,
+            max_anchor_bytes,
             owner_uid,
         )?;
         let path = Self::anchor_path(directory);
         fs::rename(&temp, &path)
             .map_err(|error| native_amx_unsafe_journal(&path, error.to_string()))?;
         native_amx_sync_directory_handle(directory, directory_handle)?;
-        let persisted = Self::read_anchor(directory, owner_uid)?.ok_or_else(|| {
-            native_amx_unsafe_journal(&path, "anchor disappeared after publication")
-        })?;
+        let persisted = Self::read_anchor(directory, owner_uid, max_anchor_bytes)?.ok_or_else(
+            || native_amx_unsafe_journal(&path, "anchor disappeared after publication"),
+        )?;
         if &persisted != anchor {
             return Err(native_amx_unsafe_journal(
                 &path,
@@ -1203,7 +1257,7 @@ impl NativeAmxSigningGuard {
         let anchor_path = Self::anchor_path(&self.directory);
         let anchor_identity = native_amx_secure_file_identity(
             &anchor_path,
-            MAX_NATIVE_AMX_SIGNING_GUARD_ANCHOR_BYTES,
+            self.limits.max_anchor_bytes.get(),
             self.owner_uid,
         )?;
         if anchor_identity != inner.anchor_identity {
@@ -1233,7 +1287,7 @@ impl NativeAmxSigningGuard {
             }
             let linked_identity = native_amx_secure_file_identity(
                 path,
-                MAX_NATIVE_AMX_SIGNING_GUARD_RECORD_BYTES,
+                self.limits.max_record_bytes.get(),
                 self.owner_uid,
             )?;
             if linked_identity != *retained_identity {
@@ -1319,7 +1373,7 @@ impl NativeAmxSigningGuard {
                 highest_view: inner.anchor.highest_view.expect("checked"),
             });
         }
-        if inner.records.len() >= self.max_records {
+        if inner.records.len() >= self.limits.max_records.get() {
             return Err(NativeAmxSigningGuardError::Capacity);
         }
         let sequence = inner.anchor.record_count.checked_add(1).ok_or_else(|| {
@@ -1333,10 +1387,10 @@ impl NativeAmxSigningGuard {
         )?;
         let bytes = norito::to_bytes(&record)
             .map_err(|error| native_amx_unsafe_journal(&self.directory, error.to_string()))?;
-        if bytes.len() > MAX_NATIVE_AMX_SIGNING_GUARD_RECORD_BYTES {
+        if bytes.len() > self.limits.max_record_bytes.get() {
             return Err(native_amx_unsafe_journal(
                 &self.directory,
-                "record exceeds its hard byte limit",
+                "record exceeds its configured runtime byte limit",
             ));
         }
         let path = Self::record_path(&self.directory, &record);
@@ -1344,7 +1398,7 @@ impl NativeAmxSigningGuard {
         native_amx_write_new_secure_temp(
             &temp,
             &bytes,
-            MAX_NATIVE_AMX_SIGNING_GUARD_RECORD_BYTES,
+            self.limits.max_record_bytes.get(),
             self.owner_uid,
         )?;
         match fs::symlink_metadata(&path) {
@@ -1369,7 +1423,12 @@ impl NativeAmxSigningGuard {
             &self.owner_lock,
             self.lock_identity,
         )?;
-        let persisted = Self::read_record(&self.directory, &path, self.owner_uid)?;
+        let persisted = Self::read_record(
+            &self.directory,
+            &path,
+            self.owner_uid,
+            self.limits.max_record_bytes.get(),
+        )?;
         if persisted != record {
             return Err(native_amx_unsafe_journal(
                 &path,
@@ -1378,7 +1437,7 @@ impl NativeAmxSigningGuard {
         }
         let record_identity = native_amx_secure_file_identity(
             &path,
-            MAX_NATIVE_AMX_SIGNING_GUARD_RECORD_BYTES,
+            self.limits.max_record_bytes.get(),
             self.owner_uid,
         )?;
 
@@ -1395,10 +1454,11 @@ impl NativeAmxSigningGuard {
             &self.directory_handle,
             self.owner_uid,
             &next_anchor,
+            self.limits.max_anchor_bytes.get(),
         )?;
         let anchor_identity = native_amx_secure_file_identity(
             &Self::anchor_path(&self.directory),
-            MAX_NATIVE_AMX_SIGNING_GUARD_ANCHOR_BYTES,
+            self.limits.max_anchor_bytes.get(),
             self.owner_uid,
         )?;
         native_amx_verify_owned_directory(
@@ -1792,6 +1852,8 @@ fn native_amx_reconcile_guard_temps(
     directory: &Path,
     directory_handle: &File,
     owner_uid: u32,
+    max_record_bytes: usize,
+    max_anchor_bytes: usize,
 ) -> Result<(), NativeAmxSigningGuardError> {
     let mut temp_path = None;
     for item in fs::read_dir(directory)
@@ -1818,9 +1880,9 @@ fn native_amx_reconcile_guard_temps(
         let metadata = fs::symlink_metadata(&path)
             .map_err(|error| native_amx_unsafe_journal(&path, error.to_string()))?;
         let max_bytes = if name == NATIVE_AMX_SIGNING_GUARD_ANCHOR_TEMP {
-            MAX_NATIVE_AMX_SIGNING_GUARD_ANCHOR_BYTES
+            max_anchor_bytes
         } else {
-            MAX_NATIVE_AMX_SIGNING_GUARD_RECORD_BYTES
+            max_record_bytes
         };
         native_amx_validate_secure_file_metadata(&path, &metadata, max_bytes, owner_uid)?;
         temp_path = Some(path);
@@ -3430,6 +3492,15 @@ mod tests {
         NonZeroUsize::new(value).expect("test signing capacity is non-zero")
     }
 
+    fn signing_guard_limits(max_records: usize) -> NativeAmxSigningGuardLimits {
+        NativeAmxSigningGuardLimits::new(
+            signing_guard_capacity(max_records),
+            iroha_config::parameters::defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_RECORD_BYTES,
+            iroha_config::parameters::defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_ANCHOR_BYTES,
+        )
+        .expect("test signing guard limits are valid")
+    }
+
     #[cfg(unix)]
     fn open_signing_guard(
         root: &Path,
@@ -3444,7 +3515,7 @@ mod tests {
             body.epoch,
             body.chain_id_hash,
             signer,
-            signing_guard_capacity(max_records),
+            signing_guard_limits(max_records),
         )
     }
 
@@ -3511,7 +3582,7 @@ mod tests {
                 body.epoch,
                 body.chain_id_hash,
                 signer,
-                signing_guard_capacity(8),
+                signing_guard_limits(8),
             ),
             Err(NativeAmxSigningGuardError::UnsupportedPlatform)
         ));
@@ -3759,7 +3830,7 @@ mod tests {
                 base.epoch,
                 base.chain_id_hash,
                 signer.clone(),
-                signing_guard_capacity(8),
+                signing_guard_limits(8),
             ),
             Err(NativeAmxSigningGuardError::ContextMismatch)
         ));
@@ -3771,7 +3842,7 @@ mod tests {
                 base.epoch + 1,
                 base.chain_id_hash,
                 signer.clone(),
-                signing_guard_capacity(8),
+                signing_guard_limits(8),
             ),
             Err(NativeAmxSigningGuardError::ContextMismatch)
         ));
@@ -3802,7 +3873,7 @@ mod tests {
             base.epoch,
             base.chain_id_hash,
             signer.clone(),
-            signing_guard_capacity(16),
+            signing_guard_limits(8),
         )
         .expect("advance exact next height");
         let mut next = base;
@@ -4091,6 +4162,7 @@ mod tests {
             &guard.directory_handle,
             guard.owner_uid,
             &next_anchor,
+            guard.limits.max_anchor_bytes.get(),
         )
         .expect("publish next-height anchor before simulated crash");
         drop(guard);
@@ -4208,14 +4280,15 @@ mod tests {
         let body = body(NativeAmxPhase::Prepare);
         let guard = open_signing_guard(root.path(), &body, signer, 8).expect("open signing guard");
 
-        let mut zero_context = body;
-        zero_context.round.context_id = HeightContextId(
-            HashOf::<HeightContext>::from_untyped_unchecked(Hash::prehashed([0; Hash::LENGTH])),
+        let mut foreign_context = body;
+        foreign_context.round.context_id =
+            HeightContextId(HashOf::<HeightContext>::from_untyped_unchecked(Hash::new(
+                b"foreign-signing-guard-context",
+            )));
+        assert_eq!(
+            guard.record(&foreign_context),
+            Err(NativeAmxSigningGuardError::ContextMismatch)
         );
-        assert!(matches!(
-            guard.record(&zero_context),
-            Err(NativeAmxSigningGuardError::InvalidInput(_))
-        ));
 
         let mut zero_source = body;
         zero_source.source_id = [0; Hash::LENGTH];
@@ -4224,15 +4297,25 @@ mod tests {
             Err(NativeAmxSigningGuardError::InvalidInput(_))
         ));
 
-        let mut zero_entrypoint = body;
-        zero_entrypoint.tx_entrypoint_hash =
-            HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::prehashed(
-                [0; Hash::LENGTH],
-            ));
+        let mut zero_planned_height = body;
+        zero_planned_height.planned_coordinator_block_height = 0;
         assert!(matches!(
-            guard.record(&zero_entrypoint),
+            guard.record(&zero_planned_height),
             Err(NativeAmxSigningGuardError::InvalidInput(_))
         ));
+
+        guard.record(&body).expect("record baseline body");
+
+        let mut entrypoint_drift = body;
+        entrypoint_drift.phase = NativeAmxPhase::Commit;
+        entrypoint_drift.tx_entrypoint_hash =
+            HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(
+                b"conflicting-signing-guard-entrypoint",
+            ));
+        assert_eq!(
+            guard.record(&entrypoint_drift),
+            Err(NativeAmxSigningGuardError::PlanEquivocation)
+        );
 
         let mut mismatched_view = body;
         mismatched_view.coordinator_lane_block_view += 1;
@@ -4328,15 +4411,12 @@ mod tests {
         );
         drop(guard);
 
+        let _ = signer;
         assert!(matches!(
-            NativeAmxSigningGuard::open(
-                root.path(),
-                first.authority_context_height,
-                first.round.context_id,
-                first.epoch,
-                first.chain_id_hash,
-                signer,
+            NativeAmxSigningGuardLimits::new(
                 signing_guard_capacity(MAX_NATIVE_AMX_SIGNING_GUARD_RECORDS_HARD + 1),
+                iroha_config::parameters::defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_RECORD_BYTES,
+                iroha_config::parameters::defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_ANCHOR_BYTES,
             ),
             Err(NativeAmxSigningGuardError::InvalidInput(_))
         ));
@@ -4947,6 +5027,14 @@ mod tests {
 
         assert_eq!(
             ed25519_vote.validate_ingress(NativeAmxPhase::Commit, None),
+            Err(NativeAmxVoteIngressError::InvalidSignature),
+            "the fixed-width signature gate runs before signer-algorithm inspection"
+        );
+
+        let mut non_bls_vote = ed25519_vote;
+        non_bls_vote.bls_signature = vec![0_u8; NATIVE_AMX_BLS_PROOF_BYTES];
+        assert_eq!(
+            non_bls_vote.validate_ingress(NativeAmxPhase::Commit, None),
             Err(NativeAmxVoteIngressError::SignerNotBlsNormal)
         );
 

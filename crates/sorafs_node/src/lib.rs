@@ -10,13 +10,15 @@
 pub mod capacity;
 pub mod config;
 pub mod deal;
+mod durable_transaction_forwarder;
 mod economics;
-pub mod gateway;
 mod governance;
 pub mod metering;
 mod moderation;
 pub mod moderation_orchestrator;
+pub mod native_repair_worker;
 mod orderbook;
+pub mod orderbook_transaction_forwarder;
 pub mod pdp_provider;
 pub mod pop_credentials;
 pub mod por;
@@ -24,7 +26,9 @@ pub mod potr;
 pub mod proof_outcome_forwarder;
 mod reconciliation;
 pub mod repair;
+pub mod repair_transaction_forwarder;
 mod reserve;
+pub mod reserve_transaction_forwarder;
 pub mod scheduler;
 pub mod store;
 pub mod telemetry;
@@ -84,8 +88,10 @@ pub use pdp_provider::{
 };
 pub use por::{
     ManifestVrfBundle, ManifestVrfKey, PlannedChallenge, PorChallengePlannerError,
-    PorProtocolMetricsSnapshot, PorRandomness, PorTracker, PorTrackerError, PorVerdictStats,
-    build_por_challenge_for_manifest,
+    PorFailedRepairIntentV1, PorProtocolMetricsSnapshot, PorRandomness, PorRepairHandoff,
+    PorRepairHandoffError, PorTracker, PorTrackerError, PorVerdictStats,
+    build_por_challenge_for_manifest, canonical_por_failure_repair_report_v1,
+    por_repair_source_identity_v1,
 };
 pub use potr::{
     POTR_EXPORT_MAX_RECORDS_V1, POTR_RECEIPT_MAX_CANONICAL_BYTES_V1,
@@ -114,8 +120,8 @@ pub use reserve::{
 pub struct PorVerdictOutcome {
     /// Statistics extracted from the verdict.
     pub stats: PorVerdictStats,
-    /// Identifier that can be referenced by repair reports (present on failure).
-    pub repair_history_id: Option<u64>,
+    /// Chain-authoritative native repair task identifier (failed verdicts only).
+    pub repair_task_id: Option<[u8; 32]>,
     /// Current consecutive failure streak for this provider/manifest.
     pub consecutive_failures: u64,
     /// Recommended slash derived from the configured policy and provider bond state.
@@ -292,10 +298,12 @@ const EVIDENCE_VIEWER_AUDIT_CYCLE_ID_DOMAIN_V1: &[u8] =
 const PRIVACY_AGGREGATE_ENTRY_ID_DOMAIN_V1: &[u8] =
     b"sorafs.node.transparency.privacy_aggregate.entry_id.v1";
 
+#[cfg(test)]
+use std::collections::{HashSet, hash_map::Entry};
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque, hash_map::Entry},
+    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
     fs,
     io::{self, ErrorKind, Read, Write},
     num::NonZeroU64,
@@ -311,6 +319,7 @@ use capacity::{
 use config::{GcConfig, OrderbookAdmissionPolicy, RepairConfig, StorageConfig};
 use iroha_crypto::numeric::{Numeric, Quantity, RoundingMode};
 use iroha_data_model::{
+    account::AccountId,
     da::ingest::DaStripeLayout,
     sorafs::{
         capacity::{CapacityDeclarationRecord, ProviderId},
@@ -320,10 +329,13 @@ use iroha_data_model::{
             AdversarialCorpusManifestV1, ModerationReproManifestV1, SoraFsModerationBallotCommitV1,
             SoraFsModerationBallotRevealV1, SoraFsModerationVoteChoice,
         },
+        moderation_ledger::RepairFinalizedCursorV1,
+        orderbook::OrderbookFinalizedCursorV1,
         reserve::ReserveLifecycleStage,
         transparency::{
-            ModerationLedgerCyclePublicationV1, ModerationLedgerEntryV1,
-            ModerationLedgerMetadataV1, ModerationPrivacyAggregateV1, ProofTokenIssuanceV1,
+            MODERATION_LEDGER_MAX_PUBLIC_TEXT_BYTES_V1, ModerationLedgerCyclePublicationV1,
+            ModerationLedgerEntryKindV1, ModerationLedgerEntryV1, ModerationLedgerMetadataV1,
+            ModerationPrivacyAggregateV1, ProofTokenIssuanceV1,
         },
     },
 };
@@ -333,10 +345,25 @@ use iroha_telemetry::metrics::{
 };
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
 use norito::json::Value as JsonValue;
+use orderbook_transaction_forwarder::{
+    ORDERBOOK_TRANSACTION_MAX_CANONICAL_BYTES_V1, OrderbookOperationV1,
+    OrderbookTransactionContextV1, OrderbookTransactionDeadLetterV1,
+    OrderbookTransactionEnqueueResultV1, OrderbookTransactionForwarder,
+    OrderbookTransactionForwarderError, OrderbookTransactionForwarderPolicyV1,
+    OrderbookTransactionPendingV1, OrderbookTransactionSigningRequestV1,
+};
 use rand::{rand_core::TryRngCore as _, rngs::OsRng};
+#[cfg(test)]
+pub use repair::RepairWorkerReport;
 pub use repair::{
     RepairManager, RepairSchedulerError, RepairSlashProposalStage, RepairTaskFilters,
-    RepairTaskSnapshot, RepairWatchdogReport, RepairWorkerReport,
+    RepairTaskSnapshot, RepairWatchdogReport,
+};
+use repair_transaction_forwarder::{
+    REPAIR_TRANSACTION_MAX_CANONICAL_BYTES_V1, RepairOperationV1, RepairTransactionContextV1,
+    RepairTransactionDeadLetterV1, RepairTransactionEnqueueResultV1, RepairTransactionForwarder,
+    RepairTransactionForwarderError, RepairTransactionForwarderPolicyV1,
+    RepairTransactionPendingV1, RepairTransactionSigningRequestV1,
 };
 use reserve::ReserveLifecycleRuntime;
 use sorafs_car::{CarBuildPlan, PorProof};
@@ -389,17 +416,23 @@ use sorafs_manifest::{
 use thiserror::Error;
 use tokio::sync::broadcast;
 pub use transparency::{
-    PrivacyAggregateCycleConfig, PrivacyAggregateCycleWindow, PrivacyAggregateScheduleConfig,
-    PrivacyAggregateSourceEvent, PrivacyAggregateSourceMetric, PrivacyCompositionBudgetChainV1,
+    PRIVACY_AGGREGATE_MAX_POPULATIONS_V1, PRIVACY_AGGREGATE_MAX_SOURCE_EVENTS_V1,
+    PrivacyAggregateCycleConfig, PrivacyAggregateCycleWindow, PrivacyAggregateMetricSchemaV1,
+    PrivacyAggregatePopulationV1, PrivacyAggregateScheduleConfig, PrivacyAggregateSourceEvent,
+    PrivacyAggregateSourceMetric, PrivacyCompositionBudgetChainV1,
     PrivacyCompositionBudgetChargeV1, PrivacyCompositionBudgetError,
     PrivacyCompositionBudgetLedgerV1, PrivacyCompositionBudgetPolicyV1,
+    PrivacyCyclePrfInputErrorV1, PrivacyCyclePrfInputV1, PrivacyCyclePrfOutputV1,
     PrivacyCyclePrfProviderErrorV1, PrivacyCyclePrfProviderV1, PrivacyCyclePrfRequestErrorV1,
-    PrivacyCyclePrfRequestV1, ProofTokenIssuanceIngestError, TransparencyLedgerIngestError,
-    TransparencyLedgerSourceEntry, TransparencySourceEntryAdapterError,
-    appeal_finance_report_source_entry, appeal_finance_settlement_receipt_source_entry,
-    gar_enforcement_receipt_source_entry, moderation_ballot_governance_event_source_entry,
-    moderation_evidence_viewer_audit_report_source_entry, proof_token_issuance_from_base64,
-    proof_token_issuance_from_frame, reserve_appeal_source_entry,
+    PrivacyCyclePrfRequestV1, PrivacyReleaseAnchorErrorV1, PrivacyReleaseAnchorHeadV1,
+    PrivacyReleaseAnchorV1, PrivacySourceEventRecordOutcomeV1, ProofTokenIssuanceIngestError,
+    TransparencyLedgerIngestError, TransparencyLedgerSourceEntry,
+    TransparencySourceEntryAdapterError, appeal_finance_report_source_entry,
+    appeal_finance_settlement_receipt_source_entry, gar_enforcement_receipt_source_entry,
+    moderation_ballot_governance_event_source_entry,
+    moderation_evidence_viewer_audit_report_source_entry, privacy_aggregate_cycle_id,
+    privacy_metric_schema_digest, privacy_population_inventory_digest,
+    proof_token_issuance_from_base64, proof_token_issuance_from_frame, reserve_appeal_source_entry,
     reserve_lifecycle_event_source_entry, reserve_lifecycle_policy_source_entry,
     reserve_movement_source_entry,
 };
@@ -452,6 +485,7 @@ impl RepairSlashStage {
     }
 }
 
+#[cfg(test)]
 fn repair_idempotency_key(
     action: &str,
     worker_id: &str,
@@ -463,6 +497,7 @@ fn repair_idempotency_key(
     format!("{action}-{digest_hex}")
 }
 
+#[cfg(test)]
 fn repair_mutation_operation_digest(
     operation: &str,
     ticket_ids: &[RepairTicketId],
@@ -478,6 +513,7 @@ fn repair_mutation_operation_digest(
     *hasher.finalize().as_bytes()
 }
 
+#[cfg(test)]
 fn hash_length_prefixed_material(material: &mut Vec<u8>, bytes: &[u8]) {
     material.extend_from_slice(&u64::try_from(bytes.len()).unwrap_or(u64::MAX).to_le_bytes());
     material.extend_from_slice(bytes);
@@ -562,12 +598,9 @@ fn collect_due_evidence_viewer_audit_window(
     due_windows: &mut BTreeSet<PrivacyAggregateCycleWindow>,
 ) -> Result<(), GovernancePublishError> {
     let timestamp_unix = timestamp_unix_ms / 1_000;
-    let Some(window) = schedule.event_window(timestamp_unix).map_err(|err| {
+    let window = schedule.event_window(timestamp_unix).map_err(|err| {
         GovernancePublishError::other(format!("evidence viewer audit schedule: {err}"))
-    })?
-    else {
-        return Ok(());
-    };
+    })?;
     if window.cycle_end_unix > latest_window.cycle_end_unix
         || window.due_at_unix > latest_window.due_at_unix
     {
@@ -1464,6 +1497,7 @@ fn repair_task_terminal(task: &RepairTaskRecordV1) -> bool {
     )
 }
 
+#[cfg(test)]
 #[derive(Debug, Default)]
 struct RepairRehydrateOutcome {
     missing_before: usize,
@@ -1976,6 +2010,230 @@ pub enum PrivacyAggregateScheduleOutcome {
     },
 }
 
+const PRIVACY_PUBLISH_REQUEST_DIGEST_DOMAIN_V1: &[u8] =
+    b"sorafs.node.transparency.privacy_publish_request.v1";
+
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+enum PrivacyPublishRequestOutcomeV1 {
+    Published { publication_bytes: Vec<u8> },
+    AllBucketsSuppressed,
+}
+
+#[derive(Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+struct PrivacyPublishRequestReceiptV1 {
+    idempotency_key: String,
+    request_digest: [u8; 32],
+    query_id: [u8; 32],
+    requested_now_unix: u64,
+    cycle_id: [u8; 16],
+    cycle_start_unix: u64,
+    cycle_end_unix: u64,
+    publish_delay_seconds: u64,
+    due_at_unix: u64,
+    outcome: PrivacyPublishRequestOutcomeV1,
+}
+
+impl std::fmt::Debug for PrivacyPublishRequestReceiptV1 {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PrivacyPublishRequestReceiptV1")
+            .field("idempotency_key", &"<redacted>")
+            .field("request_digest", &self.request_digest)
+            .field("query_id", &self.query_id)
+            .field("requested_now_unix", &self.requested_now_unix)
+            .field("cycle_id", &self.cycle_id)
+            .field("cycle_start_unix", &self.cycle_start_unix)
+            .field("cycle_end_unix", &self.cycle_end_unix)
+            .field("publish_delay_seconds", &self.publish_delay_seconds)
+            .field("due_at_unix", &self.due_at_unix)
+            .field(
+                "outcome",
+                &match &self.outcome {
+                    PrivacyPublishRequestOutcomeV1::Published { .. } => "published",
+                    PrivacyPublishRequestOutcomeV1::AllBucketsSuppressed => {
+                        "all_buckets_suppressed"
+                    }
+                },
+            )
+            .finish()
+    }
+}
+
+impl PrivacyPublishRequestReceiptV1 {
+    fn validate(&self) -> Result<(), GovernancePublishError> {
+        validate_privacy_publish_idempotency_key(&self.idempotency_key)?;
+        if self.query_id == [0; 32]
+            || self.requested_now_unix == 0
+            || self.request_digest
+                != privacy_publish_request_digest(
+                    self.query_id,
+                    &self.idempotency_key,
+                    self.cycle_id,
+                )
+            || self.cycle_start_unix == 0
+            || self.cycle_end_unix <= self.cycle_start_unix
+            || self.cycle_end_unix.checked_add(self.publish_delay_seconds) != Some(self.due_at_unix)
+            || self.requested_now_unix < self.due_at_unix
+            || self.cycle_id
+                != transparency::privacy_aggregate_cycle_id(
+                    self.query_id,
+                    self.cycle_start_unix,
+                    self.cycle_end_unix,
+                )
+        {
+            return Err(GovernancePublishError::other(
+                "privacy publish-request receipt is invalid",
+            ));
+        }
+        if let PrivacyPublishRequestOutcomeV1::Published { publication_bytes } = &self.outcome {
+            let publication = decode_canonical_governance_payload::<
+                ModerationLedgerCyclePublicationV1,
+            >(publication_bytes)?;
+            if publication.block.cycle_id != self.cycle_id
+                || publication.block.cycle_start_unix != self.cycle_start_unix
+                || publication.block.cycle_end_unix != self.cycle_end_unix
+            {
+                return Err(GovernancePublishError::other(
+                    "privacy publish-request receipt publication mismatch",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn outcome(&self) -> Result<PrivacyAggregateScheduleOutcome, GovernancePublishError> {
+        self.validate()?;
+        let window = PrivacyAggregateCycleWindow {
+            cycle_start_unix: self.cycle_start_unix,
+            cycle_end_unix: self.cycle_end_unix,
+            due_at_unix: self.due_at_unix,
+        };
+        match &self.outcome {
+            PrivacyPublishRequestOutcomeV1::Published { publication_bytes } => {
+                let publication = decode_canonical_governance_payload::<
+                    ModerationLedgerCyclePublicationV1,
+                >(publication_bytes)?;
+                Ok(PrivacyAggregateScheduleOutcome::Published {
+                    window,
+                    publication,
+                })
+            }
+            PrivacyPublishRequestOutcomeV1::AllBucketsSuppressed => {
+                Ok(PrivacyAggregateScheduleOutcome::AllBucketsSuppressed {
+                    window,
+                    cycle_id: self.cycle_id,
+                })
+            }
+        }
+    }
+}
+
+fn validate_privacy_publish_idempotency_key(
+    idempotency_key: &str,
+) -> Result<(), GovernancePublishError> {
+    if idempotency_key.is_empty()
+        || idempotency_key.len() > 256
+        || idempotency_key.trim() != idempotency_key
+        || idempotency_key.chars().any(char::is_control)
+    {
+        return Err(GovernancePublishError::other(
+            "privacy publish idempotency key is invalid",
+        ));
+    }
+    Ok(())
+}
+
+fn privacy_publish_request_digest(
+    query_id: [u8; 32],
+    idempotency_key: &str,
+    expected_cycle_id: [u8; 16],
+) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(PRIVACY_PUBLISH_REQUEST_DIGEST_DOMAIN_V1);
+    hasher.update(&query_id);
+    hasher.update(&expected_cycle_id);
+    hasher.update(&(idempotency_key.len() as u64).to_le_bytes());
+    hasher.update(idempotency_key.as_bytes());
+    *hasher.finalize().as_bytes()
+}
+
+fn validate_privacy_release_lineage(
+    release_ledger: &transparency::PrivacyReleaseLedgerV1,
+    schedule: PrivacyAggregateScheduleConfig,
+    config: &PrivacyAggregateCycleConfig,
+) -> Result<(), GovernancePublishError> {
+    if let Some(record) = release_ledger.records.last()
+        && (record.query_id != config.query_id
+            || record.first_cycle_start_unix != config.first_cycle_start_unix
+            || record.cycle_seconds != config.cycle_seconds
+            || record.first_cycle_start_unix != schedule.first_cycle_start_unix
+            || record.cycle_seconds != schedule.cycle_seconds
+            || record.publish_delay_seconds != schedule.publish_delay_seconds)
+    {
+        return Err(GovernancePublishError::other(
+            "durable privacy release cadence does not match the configured query lineage",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_privacy_publish_receipt_release(
+    receipt: &PrivacyPublishRequestReceiptV1,
+    record: &transparency::PrivacyReleaseRecordV1,
+) -> Result<(), GovernancePublishError> {
+    receipt.validate()?;
+    if record.release_id != receipt.cycle_id
+        || record.query_id != receipt.query_id
+        || record.cycle_start_unix != receipt.cycle_start_unix
+        || record.cycle_end_unix != receipt.cycle_end_unix
+        || record.publish_delay_seconds != receipt.publish_delay_seconds
+        || record.due_at_unix != receipt.due_at_unix
+    {
+        return Err(GovernancePublishError::other(
+            "privacy publish-request receipt conflicts with its release record",
+        ));
+    }
+    match &receipt.outcome {
+        PrivacyPublishRequestOutcomeV1::Published { publication_bytes } => {
+            let publication = decode_canonical_governance_payload::<
+                ModerationLedgerCyclePublicationV1,
+            >(publication_bytes)?;
+            let payload_digest = *blake3::hash(publication_bytes).as_bytes();
+            let block_hash = publication.block.block_hash().map_err(|error| {
+                GovernancePublishError::other(format!("hash privacy receipt publication: {error}"))
+            })?;
+            let aggregate_inventory_digest =
+                privacy_published_aggregate_inventory_digest(&publication.privacy_aggregates)?;
+            if record.status != transparency::PrivacyReleaseStatusV1::Published
+                || record.publication_payload_digest != Some(payload_digest)
+                || record.published_aggregate_inventory_digest != Some(aggregate_inventory_digest)
+                || record.publication_block_hash != Some(block_hash)
+                || record.previous_publication_block_hash != publication.block.previous_block_hash
+                || publication.block.cycle_id != record.release_id
+                || publication.block.cycle_start_unix != record.cycle_start_unix
+                || publication.block.cycle_end_unix != record.cycle_end_unix
+                || publication.block.generated_at_unix != record.cycle_end_unix
+            {
+                return Err(GovernancePublishError::other(
+                    "published privacy request receipt conflicts with its exact release bytes",
+                ));
+            }
+        }
+        PrivacyPublishRequestOutcomeV1::AllBucketsSuppressed => {
+            if record.status != transparency::PrivacyReleaseStatusV1::Suppressed
+                || record.publication_payload_digest.is_some()
+                || record.published_aggregate_inventory_digest.is_some()
+                || record.publication_block_hash.is_some()
+            {
+                return Err(GovernancePublishError::other(
+                    "suppressed privacy request receipt conflicts with its exact release",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Result of one scheduled evidence-viewer audit-report publication attempt.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ModerationEvidenceViewerAuditScheduleOutcome {
@@ -2175,14 +2433,15 @@ impl RepairOrchestratorError {
 
 /// Interface for orchestrator-backed repair rehydration.
 pub trait RepairOrchestrator: Send + Sync + std::fmt::Debug {
-    /// Fetch missing chunks from remote sources for the supplied repair task.
+    /// Fetch invalid chunks from remote sources for the exact native lease.
     ///
-    /// Implementations must return payloads whose digests match `missing_chunks`.
+    /// Implementations must return no more payloads than `invalid_chunks` and
+    /// each payload must match one requested digest and length.
     fn rehydrate_missing_chunks(
         &self,
-        task: &RepairTaskRecordV1,
+        context: &native_repair_worker::NativeRepairExecutionContextV1,
         manifest: &StoredManifest,
-        missing_chunks: &[ChunkFileRecord],
+        invalid_chunks: &[ChunkFileRecord],
     ) -> Result<Vec<RepairChunkPayload>, RepairOrchestratorError>;
 }
 
@@ -2195,6 +2454,7 @@ pub trait RepairOrchestrator: Send + Sync + std::fmt::Debug {
 pub struct NodeRuntimeDeps {
     moderation_quarantine_key_wrapper: Option<Arc<dyn ModerationQuarantineKeyWrapper>>,
     privacy_cycle_prf_provider: Option<Arc<dyn PrivacyCyclePrfProviderV1>>,
+    privacy_release_anchor: Option<Arc<dyn PrivacyReleaseAnchorV1>>,
 }
 
 impl std::fmt::Debug for NodeRuntimeDeps {
@@ -2208,6 +2468,10 @@ impl std::fmt::Debug for NodeRuntimeDeps {
             .field(
                 "privacy_cycle_prf_provider",
                 &self.privacy_cycle_prf_provider.is_some(),
+            )
+            .field(
+                "privacy_release_anchor",
+                &self.privacy_release_anchor.is_some(),
             )
             .finish()
     }
@@ -2231,6 +2495,13 @@ impl NodeRuntimeDeps {
         provider: Arc<dyn PrivacyCyclePrfProviderV1>,
     ) -> Self {
         self.privacy_cycle_prf_provider = Some(provider);
+        self
+    }
+
+    /// Attach the independently administered finalized privacy-release head.
+    #[must_use]
+    pub fn with_privacy_release_anchor(mut self, anchor: Arc<dyn PrivacyReleaseAnchorV1>) -> Self {
+        self.privacy_release_anchor = Some(anchor);
         self
     }
 }
@@ -2269,6 +2540,23 @@ impl std::ops::Deref for OpaquePrivacyCyclePrfProvider {
     }
 }
 
+#[derive(Clone)]
+struct OpaquePrivacyReleaseAnchor(Arc<dyn PrivacyReleaseAnchorV1>);
+
+impl std::fmt::Debug for OpaquePrivacyReleaseAnchor {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("PrivacyReleaseAnchorV1(<runtime-only>)")
+    }
+}
+
+impl std::ops::Deref for OpaquePrivacyReleaseAnchor {
+    type Target = dyn PrivacyReleaseAnchorV1;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref()
+    }
+}
+
 /// Lightweight handle representing the embedded SoraFS storage worker.
 #[derive(Debug, Clone)]
 pub struct NodeHandle {
@@ -2282,6 +2570,8 @@ pub struct NodeHandle {
     por: PorTracker,
     potr: PotrTracker,
     proof_outcome_outbox: ProofOutcomeOutbox,
+    repair_transaction_forwarder: RepairTransactionForwarder,
+    orderbook_transaction_forwarder: OrderbookTransactionForwarder,
     por_history: Arc<RwLock<HashMap<PorHistoryKey, PorHistoryEntry>>>,
     storage: Option<Arc<StorageBackend>>,
     pdp_provider: Option<PdpProviderProtocol>,
@@ -2341,9 +2631,13 @@ pub struct NodeHandle {
     transparency_ledger_source_entries:
         Arc<RwLock<BTreeMap<String, TransparencyLedgerSourceEntry>>>,
     privacy_aggregate_source_events: Arc<RwLock<BTreeMap<String, PrivacyAggregateSourceEvent>>>,
+    privacy_source_event_receipts: Arc<RwLock<BTreeMap<String, [u8; 32]>>>,
+    privacy_publish_request_receipts: Arc<RwLock<BTreeMap<String, PrivacyPublishRequestReceiptV1>>>,
     published_privacy_aggregate_cycles: Arc<RwLock<BTreeSet<[u8; 16]>>>,
     privacy_composition_budget: Arc<RwLock<PrivacyCompositionBudgetLedgerV1>>,
+    privacy_release_ledger: Arc<RwLock<transparency::PrivacyReleaseLedgerV1>>,
     privacy_cycle_prf_provider: Option<OpaquePrivacyCyclePrfProvider>,
+    privacy_release_anchor: Option<OpaquePrivacyReleaseAnchor>,
     published_evidence_viewer_audit_cycles: Arc<RwLock<BTreeSet<[u8; 16]>>>,
 }
 
@@ -3592,6 +3886,170 @@ fn restore_governance_outbox(
     })
 }
 
+fn validate_privacy_release_outbox(
+    release_ledger: &transparency::PrivacyReleaseLedgerV1,
+    published_cycles: &BTreeSet<[u8; 16]>,
+    outbox: &GovernanceOutboxRuntime,
+) -> Result<(), GovernancePublishError> {
+    let records = release_ledger
+        .records
+        .iter()
+        .map(|record| (record.release_id, record))
+        .collect::<BTreeMap<_, _>>();
+    let mut pending_cycles = BTreeSet::new();
+    for entry in outbox
+        .entries
+        .values()
+        .filter(|entry| entry.kind == GovernanceOutboxKindV1::TransparencyLedgerPublication)
+    {
+        let publication = decode_canonical_governance_payload::<ModerationLedgerCyclePublicationV1>(
+            &entry.payload_bytes,
+        )?;
+        let is_privacy = !publication.proofs.is_empty()
+            && publication
+                .proofs
+                .iter()
+                .all(|proof| proof.entry.kind == ModerationLedgerEntryKindV1::PrivacyAggregate);
+        if !is_privacy {
+            continue;
+        }
+        let cycle_id = publication.block.cycle_id;
+        if !published_cycles.contains(&cycle_id) || !pending_cycles.insert(cycle_id) {
+            return Err(GovernancePublishError::other(
+                "pending privacy publication has no unique published-cycle guard",
+            ));
+        }
+        let record = records.get(&cycle_id).ok_or_else(|| {
+            GovernancePublishError::other(
+                "pending privacy publication has no durable privacy release record",
+            )
+        })?;
+        let payload_digest = *blake3::hash(&entry.payload_bytes).as_bytes();
+        if record.status != transparency::PrivacyReleaseStatusV1::Published
+            || record.publication_payload_digest != Some(payload_digest)
+            || publication.block.cycle_start_unix != record.cycle_start_unix
+            || publication.block.cycle_end_unix != record.cycle_end_unix
+            || publication.block.generated_at_unix != record.cycle_end_unix
+            || publication.block.previous_block_hash != record.previous_publication_block_hash
+            || publication.block.block_hash().map_err(|error| {
+                GovernancePublishError::other(format!(
+                    "hash pending privacy publication block: {error}"
+                ))
+            })? != record.publication_block_hash.ok_or_else(|| {
+                GovernancePublishError::other("published privacy release omitted its block hash")
+            })?
+        {
+            return Err(GovernancePublishError::other(
+                "pending privacy publication conflicts with its durable release record",
+            ));
+        }
+        let mut populations = Vec::with_capacity(publication.privacy_aggregates.len());
+        let mut metric_schema: Option<Vec<PrivacyAggregateMetricSchemaV1>> = None;
+        for aggregate in &publication.privacy_aggregates {
+            if aggregate.policy_digest != record.policy_digest
+                || aggregate.privacy != record.privacy
+            {
+                return Err(GovernancePublishError::other(
+                    "pending privacy aggregate payload conflicts with release policy",
+                ));
+            }
+            match (aggregate.noise_source, record.prf_commitment) {
+                (
+                    sorafs_manifest::ModerationPrivacyNoiseSourceV1::ThresholdPrf(commitment),
+                    Some(expected),
+                ) if commitment.commitment == expected => {}
+                (sorafs_manifest::ModerationPrivacyNoiseSourceV1::SuppressionOnly, None) => {}
+                _ => {
+                    return Err(GovernancePublishError::other(
+                        "pending privacy aggregate payload conflicts with release randomness evidence",
+                    ));
+                }
+            }
+            populations.push(PrivacyAggregatePopulationV1 {
+                label: aggregate.population_label.clone(),
+                digest: aggregate.population_digest,
+            });
+            let aggregate_schema = aggregate
+                .metrics
+                .iter()
+                .map(|metric| PrivacyAggregateMetricSchemaV1 {
+                    key: metric.key.clone(),
+                    unit: metric.unit.clone(),
+                })
+                .collect::<Vec<_>>();
+            if metric_schema
+                .as_ref()
+                .is_some_and(|expected| expected != &aggregate_schema)
+            {
+                return Err(GovernancePublishError::other(
+                    "pending privacy aggregate payloads use inconsistent metric schemas",
+                ));
+            }
+            metric_schema.get_or_insert(aggregate_schema);
+        }
+        let metric_schema = metric_schema.ok_or_else(|| {
+            GovernancePublishError::other(
+                "pending privacy publication omitted its aggregate payload inventory",
+            )
+        })?;
+        populations.sort_by(|left, right| {
+            left.label
+                .cmp(&right.label)
+                .then_with(|| left.digest.cmp(&right.digest))
+        });
+        if privacy_published_aggregate_inventory_digest(&publication.privacy_aggregates)?
+            != record.published_aggregate_inventory_digest.ok_or_else(|| {
+                GovernancePublishError::other(
+                    "published privacy release omitted its aggregate inventory digest",
+                )
+            })?
+            || privacy_metric_schema_digest(&metric_schema) != record.metric_schema_digest
+            || (record.privacy.per_subject_metric_cap.is_some()
+                && privacy_population_inventory_digest(&populations)
+                    != record.population_inventory_digest)
+        {
+            return Err(GovernancePublishError::other(
+                "pending privacy aggregate payload inventory conflicts with release bindings",
+            ));
+        }
+    }
+    Ok(())
+}
+
+const PRIVACY_PUBLISHED_AGGREGATE_INVENTORY_DOMAIN_V1: &[u8] =
+    b"sorafs.node.transparency.privacy_release.published_aggregate_inventory.v1";
+
+fn privacy_published_aggregate_inventory_digest(
+    aggregates: &[ModerationPrivacyAggregateV1],
+) -> Result<[u8; 32], GovernancePublishError> {
+    if aggregates.is_empty() {
+        return Err(GovernancePublishError::other(
+            "privacy publication aggregate inventory is empty",
+        ));
+    }
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(PRIVACY_PUBLISHED_AGGREGATE_INVENTORY_DOMAIN_V1);
+    hasher.update(&(aggregates.len() as u64).to_le_bytes());
+    let mut previous_id: Option<&str> = None;
+    for aggregate in aggregates {
+        if previous_id.is_some_and(|previous| previous >= aggregate.aggregate_id.as_str()) {
+            return Err(GovernancePublishError::other(
+                "privacy publication aggregate inventory is not canonical",
+            ));
+        }
+        let digest = aggregate.aggregate_hash().map_err(|error| {
+            GovernancePublishError::other(format!(
+                "hash privacy publication aggregate inventory: {error}"
+            ))
+        })?;
+        hasher.update(&(aggregate.aggregate_id.len() as u64).to_le_bytes());
+        hasher.update(aggregate.aggregate_id.as_bytes());
+        hasher.update(&digest);
+        previous_id = Some(aggregate.aggregate_id.as_str());
+    }
+    Ok(*hasher.finalize().as_bytes())
+}
+
 fn publish_governance_outbox_entry(
     publisher: &dyn GovernancePublisher,
     entry: &GovernanceOutboxEntryV1,
@@ -3713,8 +4171,11 @@ struct AuxiliaryRuntimeCheckpointV1 {
     reputation_events: Vec<ReputationSnapshotEventV1>,
     transparency_source_entries: Vec<TransparencyLedgerSourceEntry>,
     privacy_source_events: Vec<PrivacyAggregateSourceEvent>,
+    privacy_source_event_receipts: Vec<transparency::PrivacySourceEventReceiptV1>,
+    privacy_publish_request_receipts: Vec<PrivacyPublishRequestReceiptV1>,
     published_privacy_aggregate_cycles: Vec<[u8; 16]>,
     privacy_composition_budget: PrivacyCompositionBudgetLedgerV1,
+    privacy_release_ledger: transparency::PrivacyReleaseLedgerV1,
     published_evidence_viewer_audit_cycles: Vec<[u8; 16]>,
     governance_outbox_next_sequence: u64,
     governance_outbox_entries: Vec<GovernanceOutboxEntryV1>,
@@ -3828,6 +4289,28 @@ pub enum NodeInitError {
         /// Validation or I/O diagnostic.
         message: String,
     },
+    /// The durable native repair-transaction forwarder could not be opened or validated.
+    #[error(
+        "failed to initialise SoraFS repair transaction forwarder `{path}`: {message}",
+        path = path.display()
+    )]
+    RepairTransactionForwarder {
+        /// Configured storage root containing the repair delivery checkpoint.
+        path: PathBuf,
+        /// Validation or I/O diagnostic.
+        message: String,
+    },
+    /// The durable native orderbook-transaction forwarder could not be opened or validated.
+    #[error(
+        "failed to initialise SoraFS orderbook transaction forwarder `{path}`: {message}",
+        path = path.display()
+    )]
+    OrderbookTransactionForwarder {
+        /// Configured storage root containing the orderbook delivery checkpoint.
+        path: PathBuf,
+        /// Validation or I/O diagnostic.
+        message: String,
+    },
     /// A durable runtime checkpoint could not be read, decoded, or validated.
     #[error(
         "failed to restore SoraFS {component} checkpoint `{path}`: {message}",
@@ -3907,6 +4390,12 @@ pub enum NodeInitError {
         "SoraFS differential-privacy aggregates require an injected runtime-only threshold PRF provider"
     )]
     PrivacyCyclePrfProviderUnavailable,
+    /// Differential-privacy aggregates were enabled without an independently
+    /// administered finalized release-head dependency.
+    #[error(
+        "SoraFS differential-privacy aggregates require an injected finalized privacy release anchor"
+    )]
+    PrivacyReleaseAnchorUnavailable,
 }
 
 impl NodeInitError {
@@ -4090,6 +4579,44 @@ impl PdpTerminalHandoff for NodeHandle {
         idempotency_key: [u8; 32],
         archive: &PdpGovernanceArchiveV1,
     ) -> Result<[u8; 32], pdp_provider::PdpExternalHandoffError> {
+        self.archive_pdp_terminal_outcome(idempotency_key, archive)
+    }
+
+    fn repair(
+        &self,
+        idempotency_key: [u8; 32],
+        report: &RepairReportV1,
+    ) -> Result<[u8; 32], pdp_provider::PdpExternalHandoffError> {
+        #[cfg(test)]
+        {
+            let bytes = norito::to_bytes(report).map_err(|error| {
+                pdp_provider::PdpExternalHandoffError(format!("encode PDP repair handoff: {error}"))
+            })?;
+            self.enqueue_repair_report_idempotent(idempotency_key, report)
+                .map_err(|error| pdp_provider::PdpExternalHandoffError(error.to_string()))?;
+            return Ok(pdp_handoff_receipt(
+                b"repair",
+                idempotency_key,
+                *blake3::hash(&bytes).as_bytes(),
+            ));
+        }
+        #[cfg(not(test))]
+        {
+            let _ = (idempotency_key, report);
+            Err(pdp_provider::PdpExternalHandoffError(
+                "chain-authoritative repair transaction handoff is required".to_owned(),
+            ))
+        }
+    }
+}
+
+impl NodeHandle {
+    /// Durably archive one terminal PDP outcome and enqueue its proof-ledger projection.
+    pub fn archive_pdp_terminal_outcome(
+        &self,
+        idempotency_key: [u8; 32],
+        archive: &PdpGovernanceArchiveV1,
+    ) -> Result<[u8; 32], pdp_provider::PdpExternalHandoffError> {
         archive.validate().map_err(|error| {
             pdp_provider::PdpExternalHandoffError(format!(
                 "validate PDP governance archive handoff: {error}"
@@ -4117,27 +4644,46 @@ impl PdpTerminalHandoff for NodeHandle {
             *blake3::hash(&bytes).as_bytes(),
         ))
     }
-
-    fn repair(
-        &self,
-        idempotency_key: [u8; 32],
-        report: &RepairReportV1,
-    ) -> Result<[u8; 32], pdp_provider::PdpExternalHandoffError> {
-        let bytes = norito::to_bytes(report).map_err(|error| {
-            pdp_provider::PdpExternalHandoffError(format!("encode PDP repair handoff: {error}"))
-        })?;
-        self.enqueue_repair_report_idempotent(idempotency_key, report)
-            .map_err(|error| pdp_provider::PdpExternalHandoffError(error.to_string()))?;
-        Ok(pdp_handoff_receipt(
-            b"repair",
-            idempotency_key,
-            *blake3::hash(&bytes).as_bytes(),
-        ))
-    }
 }
 
 impl potr::PotrLatencyRepairHandoff for NodeHandle {
     fn enqueue_proof_outcome(
+        &self,
+        source_identity: [u8; 32],
+        receipt: &PotrReceiptV1,
+        admission_envelope_digest: [u8; 32],
+    ) -> Result<[u8; 32], potr::PotrRepairHandoffError> {
+        self.enqueue_potr_proof_outcome(source_identity, receipt, admission_envelope_digest)
+    }
+
+    fn enqueue_latency_repair(
+        &self,
+        source_identity: [u8; 32],
+        report: &RepairReportV1,
+    ) -> Result<[u8; 32], potr::PotrRepairHandoffError> {
+        #[cfg(test)]
+        {
+            self.enqueue_repair_report_idempotent(source_identity, report)
+                .map_err(|error| potr::PotrRepairHandoffError(error.to_string()))?;
+            let mut hasher = blake3::Hasher::new();
+            hasher.update(b"sorafs.potr.repair-acceptance.v1\0");
+            hasher.update(&source_identity);
+            hasher.update(report.ticket_id.0.as_bytes());
+            return Ok(*hasher.finalize().as_bytes());
+        }
+        #[cfg(not(test))]
+        {
+            let _ = (source_identity, report);
+            Err(potr::PotrRepairHandoffError(
+                "chain-authoritative repair transaction handoff is required".to_owned(),
+            ))
+        }
+    }
+}
+
+impl NodeHandle {
+    /// Durably enqueue one final PoTR receipt for native proof-ledger submission.
+    pub fn enqueue_potr_proof_outcome(
         &self,
         source_identity: [u8; 32],
         receipt: &PotrReceiptV1,
@@ -4152,20 +4698,6 @@ impl potr::PotrLatencyRepairHandoff for NodeHandle {
             .enqueue_potr(receipt, admission_envelope_digest)
             .map(ProofOutcomeEnqueueResultV1::operation_id)
             .map_err(|error| potr::PotrRepairHandoffError(error.to_string()))
-    }
-
-    fn enqueue_latency_repair(
-        &self,
-        source_identity: [u8; 32],
-        report: &RepairReportV1,
-    ) -> Result<[u8; 32], potr::PotrRepairHandoffError> {
-        self.enqueue_repair_report_idempotent(source_identity, report)
-            .map_err(|error| potr::PotrRepairHandoffError(error.to_string()))?;
-        let mut hasher = blake3::Hasher::new();
-        hasher.update(b"sorafs.potr.repair-acceptance.v1\0");
-        hasher.update(&source_identity);
-        hasher.update(report.ticket_id.0.as_bytes());
-        Ok(*hasher.finalize().as_bytes())
     }
 }
 
@@ -4313,6 +4845,7 @@ impl NodeHandle {
         let NodeRuntimeDeps {
             moderation_quarantine_key_wrapper,
             privacy_cycle_prf_provider,
+            privacy_release_anchor,
         } = runtime_deps;
         let moderation_screening_authority = if config.moderation_screening_enabled() {
             if !config.enabled() {
@@ -4362,6 +4895,11 @@ impl NodeHandle {
                 .is_some_and(config::PrivacyAggregatePolicyConfig::requires_cycle_prf);
         if privacy_cycle_prf_required && privacy_cycle_prf_provider.is_none() {
             return Err(NodeInitError::PrivacyCyclePrfProviderUnavailable);
+        }
+        let privacy_release_anchor_required = config.privacy_aggregate_schedule().is_some()
+            && config.privacy_aggregate_policy().is_some();
+        if privacy_release_anchor_required && privacy_release_anchor.is_none() {
+            return Err(NodeInitError::PrivacyReleaseAnchorUnavailable);
         }
         let reputation_trust_policy = config
             .reputation_trust_policy_path()
@@ -4474,6 +5012,54 @@ impl NodeHandle {
                 }
             })?
         };
+        let repair_transaction_state_dir = config.data_dir().join("repair-transaction-forwarder");
+        let repair_transaction_policy = RepairTransactionForwarderPolicyV1 {
+            max_pending: state_entry_limit,
+            max_completed: state_entry_limit,
+            max_dead_letters: state_entry_limit,
+            max_attempts: repair_config.max_attempts(),
+            max_transaction_bytes: REPAIR_TRANSACTION_MAX_CANONICAL_BYTES_V1,
+            checkpoint_max_bytes: config.runtime_retention().checkpoint_max_bytes(),
+        };
+        let repair_transaction_forwarder = if storage.is_some() {
+            RepairTransactionForwarder::open(
+                &repair_transaction_state_dir,
+                repair_transaction_policy,
+            )
+            .map_err(|error| NodeInitError::RepairTransactionForwarder {
+                path: repair_transaction_state_dir.clone(),
+                message: error.to_string(),
+            })?
+        } else {
+            RepairTransactionForwarder::in_memory(repair_transaction_policy).map_err(|error| {
+                NodeInitError::RepairTransactionForwarder {
+                    path: repair_transaction_state_dir.clone(),
+                    message: error.to_string(),
+                }
+            })?
+        };
+        let orderbook_worker_policy = config.orderbook_worker_policy();
+        let orderbook_transaction_state_dir =
+            config.data_dir().join("orderbook-transaction-forwarder");
+        let orderbook_transaction_policy = OrderbookTransactionForwarderPolicyV1 {
+            max_pending: orderbook_worker_policy.max_pending(),
+            max_completed: orderbook_worker_policy.max_completed(),
+            max_dead_letters: orderbook_worker_policy.max_dead_letters(),
+            max_attempts: orderbook_worker_policy.max_attempts(),
+            max_transaction_bytes: ORDERBOOK_TRANSACTION_MAX_CANONICAL_BYTES_V1,
+            checkpoint_max_bytes: orderbook_worker_policy.checkpoint_max_bytes(),
+        };
+        // This durability boundary is independent of both provider storage and
+        // supervised scanning. `enabled` gates only the worker loop; any
+        // operation admitted through this handle is always persisted.
+        let orderbook_transaction_forwarder = OrderbookTransactionForwarder::open(
+            &orderbook_transaction_state_dir,
+            orderbook_transaction_policy,
+        )
+        .map_err(|error| NodeInitError::OrderbookTransactionForwarder {
+            path: orderbook_transaction_state_dir.clone(),
+            message: error.to_string(),
+        })?;
         let runtime_checkpoint_initialization = if storage.is_some() {
             Some(inspect_runtime_checkpoint_initialization(
                 config.data_dir(),
@@ -4546,6 +5132,8 @@ impl NodeHandle {
             por: PorTracker::with_entry_limit(state_entry_limit),
             potr,
             proof_outcome_outbox,
+            repair_transaction_forwarder,
+            orderbook_transaction_forwarder,
             por_history: Arc::new(RwLock::new(HashMap::new())),
             storage,
             pdp_provider,
@@ -4622,12 +5210,18 @@ impl NodeHandle {
             moderation_event_sender,
             transparency_ledger_source_entries: Arc::new(RwLock::new(BTreeMap::new())),
             privacy_aggregate_source_events: Arc::new(RwLock::new(BTreeMap::new())),
+            privacy_source_event_receipts: Arc::new(RwLock::new(BTreeMap::new())),
+            privacy_publish_request_receipts: Arc::new(RwLock::new(BTreeMap::new())),
             published_privacy_aggregate_cycles: Arc::new(RwLock::new(BTreeSet::new())),
             privacy_composition_budget: Arc::new(RwLock::new(
                 PrivacyCompositionBudgetLedgerV1::default(),
             )),
+            privacy_release_ledger: Arc::new(RwLock::new(
+                transparency::PrivacyReleaseLedgerV1::default(),
+            )),
             privacy_cycle_prf_provider: privacy_cycle_prf_provider
                 .map(OpaquePrivacyCyclePrfProvider),
+            privacy_release_anchor: privacy_release_anchor.map(OpaquePrivacyReleaseAnchor),
             published_evidence_viewer_audit_cycles: Arc::new(RwLock::new(BTreeSet::new())),
         };
 
@@ -4731,6 +5325,12 @@ impl NodeHandle {
             );
         }
 
+        node.reconcile_privacy_release_anchor()
+            .map_err(|error| NodeInitError::Checkpoint {
+                component: "privacy release anchor",
+                path: crate::auxiliary_runtime_checkpoint_path(node.config.data_dir()),
+                message: error.to_string(),
+            })?;
         Ok(node)
     }
 
@@ -4752,6 +5352,16 @@ impl NodeHandle {
         limit: usize,
     ) -> Result<Vec<ProofOutcomePendingDeliveryV1>, ProofOutcomeOutboxError> {
         self.proof_outcome_outbox.pending(limit)
+    }
+
+    /// Return a circular page of proof-outcome deliveries after a sequence cursor.
+    pub fn pending_proof_outcome_deliveries_after(
+        &self,
+        after_sequence: Option<u64>,
+        limit: usize,
+    ) -> Result<Vec<ProofOutcomePendingDeliveryV1>, ProofOutcomeOutboxError> {
+        self.proof_outcome_outbox
+            .pending_after(after_sequence, limit)
     }
 
     /// Return payload-free terminal proof-outcome deliveries for operator reconciliation.
@@ -4852,6 +5462,306 @@ impl NodeHandle {
         observed_finalized_cursor: iroha_data_model::sorafs::proof_ledger::ProofOutcomeFinalizedCursorV1,
     ) -> Result<(), ProofOutcomeOutboxError> {
         self.proof_outcome_outbox
+            .mark_transaction_rejected(operation_id, observed_finalized_cursor)
+    }
+
+    /// Durably enqueue one authority-bound native repair operation.
+    pub fn enqueue_repair_transaction(
+        &self,
+        authority: AccountId,
+        operation: RepairOperationV1,
+        context: &RepairTransactionContextV1,
+    ) -> Result<RepairTransactionEnqueueResultV1, RepairTransactionForwarderError> {
+        self.repair_transaction_forwarder
+            .enqueue_unsigned_operation(authority, operation, context)
+    }
+
+    /// Return a fair circular page of pending native repair transactions.
+    pub fn pending_repair_transactions_after(
+        &self,
+        after_sequence: Option<u64>,
+        limit: usize,
+    ) -> Result<Vec<RepairTransactionPendingV1>, RepairTransactionForwarderError> {
+        self.repair_transaction_forwarder
+            .pending_after(after_sequence, limit)
+    }
+
+    /// Return payload-free terminal repair-transaction dead letters.
+    pub fn repair_transaction_dead_letters(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<RepairTransactionDeadLetterV1>, RepairTransactionForwarderError> {
+        self.repair_transaction_forwarder.dead_letters(limit)
+    }
+
+    /// Claim one native repair operation for isolated runtime signing.
+    pub fn claim_repair_transaction_for_signing(
+        &self,
+        operation_id: [u8; 32],
+    ) -> Result<RepairTransactionSigningRequestV1, RepairTransactionForwarderError> {
+        self.repair_transaction_forwarder
+            .claim_for_signing(operation_id)
+    }
+
+    /// Read exact repair semantics for finalized reconciliation without claiming a signer attempt.
+    pub fn repair_transaction_operation_for_reconciliation(
+        &self,
+        operation_id: [u8; 32],
+    ) -> Result<RepairTransactionSigningRequestV1, RepairTransactionForwarderError> {
+        self.repair_transaction_forwarder
+            .operation_for_reconciliation(operation_id)
+    }
+
+    /// Persist exact signed native repair-transaction bytes before queue exposure.
+    pub fn store_signed_repair_transaction(
+        &self,
+        operation_id: [u8; 32],
+        signed_transaction_bytes: &[u8],
+    ) -> Result<[u8; 32], RepairTransactionForwarderError> {
+        self.repair_transaction_forwarder
+            .store_signed_transaction(operation_id, signed_transaction_bytes)
+    }
+
+    /// Release an interrupted repair-transaction signing claim.
+    pub fn release_repair_transaction_signing_claim(
+        &self,
+        operation_id: [u8; 32],
+    ) -> Result<(), RepairTransactionForwarderError> {
+        self.repair_transaction_forwarder
+            .release_signing_claim(operation_id)
+    }
+
+    /// Mark exact signed repair bytes ambiguous before transaction ingress.
+    pub fn begin_repair_transaction_submission(
+        &self,
+        operation_id: [u8; 32],
+    ) -> Result<Vec<u8>, RepairTransactionForwarderError> {
+        self.repair_transaction_forwarder
+            .begin_submission(operation_id)
+    }
+
+    /// Record that an exact repair transaction is pending or applied.
+    pub fn mark_repair_transaction_submitted(
+        &self,
+        operation_id: [u8; 32],
+    ) -> Result<(), RepairTransactionForwarderError> {
+        self.repair_transaction_forwarder
+            .mark_submitted(operation_id)
+    }
+
+    /// Record a repair queue failure proven to precede submission.
+    pub fn mark_repair_transaction_not_submitted(
+        &self,
+        operation_id: [u8; 32],
+    ) -> Result<(), RepairTransactionForwarderError> {
+        self.repair_transaction_forwarder
+            .mark_not_submitted(operation_id)
+    }
+
+    /// Permit retry after finalized absence of the exact repair operation.
+    pub fn mark_repair_transaction_finalized_absent(
+        &self,
+        operation_id: [u8; 32],
+        observed_finalized_cursor: RepairFinalizedCursorV1,
+    ) -> Result<(), RepairTransactionForwarderError> {
+        self.repair_transaction_forwarder
+            .mark_finalized_absent(operation_id, observed_finalized_cursor)
+    }
+
+    /// Reconcile an exact semantic repair operation committed by any ingress.
+    pub fn mark_repair_transaction_semantic_finalized(
+        &self,
+        operation_id: [u8; 32],
+        finalized_cursor: RepairFinalizedCursorV1,
+    ) -> Result<(), RepairTransactionForwarderError> {
+        self.repair_transaction_forwarder
+            .mark_semantic_finalized(operation_id, finalized_cursor)
+    }
+
+    /// Dead-letter a repair operation that conflicts with finalized state.
+    pub fn mark_repair_transaction_finalized_conflict(
+        &self,
+        operation_id: [u8; 32],
+        observed_finalized_cursor: RepairFinalizedCursorV1,
+    ) -> Result<(), RepairTransactionForwarderError> {
+        self.repair_transaction_forwarder
+            .mark_finalized_conflict(operation_id, observed_finalized_cursor)
+    }
+
+    /// Clear a rejected repair envelope for bounded replacement signing.
+    pub fn mark_repair_transaction_rejected(
+        &self,
+        operation_id: [u8; 32],
+        observed_finalized_cursor: RepairFinalizedCursorV1,
+    ) -> Result<(), RepairTransactionForwarderError> {
+        self.repair_transaction_forwarder
+            .mark_transaction_rejected(operation_id, observed_finalized_cursor)
+    }
+
+    /// Durably enqueue one native orderbook operation bound to finalized governance state.
+    pub fn enqueue_orderbook_transaction(
+        &self,
+        operation: OrderbookOperationV1,
+        context: &OrderbookTransactionContextV1,
+    ) -> Result<OrderbookTransactionEnqueueResultV1, OrderbookTransactionForwarderError> {
+        self.orderbook_transaction_forwarder
+            .enqueue_unsigned_operation(operation, context)
+    }
+
+    /// Durably enqueue one canonical signed native orderbook transaction.
+    ///
+    /// The forwarder binds both the exact governed authority and active chain
+    /// identity from the finalized context before persisting any bytes.
+    pub fn enqueue_signed_orderbook_transaction(
+        &self,
+        signed_transaction_bytes: &[u8],
+        context: &OrderbookTransactionContextV1,
+    ) -> Result<OrderbookTransactionEnqueueResultV1, OrderbookTransactionForwarderError> {
+        self.orderbook_transaction_forwarder
+            .enqueue_signed_transaction(signed_transaction_bytes, context)
+    }
+
+    /// Return the oldest bounded page of pending native orderbook transactions.
+    pub fn pending_orderbook_transactions(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<OrderbookTransactionPendingV1>, OrderbookTransactionForwarderError> {
+        self.orderbook_transaction_forwarder.pending(limit)
+    }
+
+    /// Return a fair circular page of pending native orderbook transactions.
+    pub fn pending_orderbook_transactions_after(
+        &self,
+        after_sequence: Option<u64>,
+        limit: usize,
+    ) -> Result<Vec<OrderbookTransactionPendingV1>, OrderbookTransactionForwarderError> {
+        self.orderbook_transaction_forwarder
+            .pending_after(after_sequence, limit)
+    }
+
+    /// Read exact orderbook semantics for finalized reconciliation without claiming an attempt.
+    pub fn orderbook_transaction_operation_for_reconciliation(
+        &self,
+        operation_id: [u8; 32],
+    ) -> Result<OrderbookTransactionSigningRequestV1, OrderbookTransactionForwarderError> {
+        self.orderbook_transaction_forwarder
+            .operation_for_reconciliation(operation_id)
+    }
+
+    /// Return payload-free terminal orderbook-transaction dead letters.
+    pub fn orderbook_transaction_dead_letters(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<OrderbookTransactionDeadLetterV1>, OrderbookTransactionForwarderError> {
+        self.orderbook_transaction_forwarder.dead_letters(limit)
+    }
+
+    /// Claim one native orderbook operation for isolated runtime signing.
+    pub fn claim_orderbook_transaction_for_signing(
+        &self,
+        operation_id: [u8; 32],
+    ) -> Result<OrderbookTransactionSigningRequestV1, OrderbookTransactionForwarderError> {
+        self.orderbook_transaction_forwarder
+            .claim_for_signing(operation_id)
+    }
+
+    /// Persist exact signed orderbook transaction bytes before submitter exposure.
+    pub fn store_signed_orderbook_transaction(
+        &self,
+        operation_id: [u8; 32],
+        signed_transaction_bytes: &[u8],
+    ) -> Result<[u8; 32], OrderbookTransactionForwarderError> {
+        self.orderbook_transaction_forwarder
+            .store_signed_transaction(operation_id, signed_transaction_bytes)
+    }
+
+    /// Release an interrupted orderbook-transaction signing claim.
+    pub fn release_orderbook_transaction_signing_claim(
+        &self,
+        operation_id: [u8; 32],
+    ) -> Result<(), OrderbookTransactionForwarderError> {
+        self.orderbook_transaction_forwarder
+            .release_signing_claim(operation_id)
+    }
+
+    /// Mark exact signed orderbook bytes ambiguous before transaction ingress.
+    pub fn begin_orderbook_transaction_submission(
+        &self,
+        operation_id: [u8; 32],
+    ) -> Result<Vec<u8>, OrderbookTransactionForwarderError> {
+        self.orderbook_transaction_forwarder
+            .begin_submission(operation_id)
+    }
+
+    /// Record that an exact orderbook transaction is pending or applied.
+    pub fn mark_orderbook_transaction_submitted(
+        &self,
+        operation_id: [u8; 32],
+    ) -> Result<(), OrderbookTransactionForwarderError> {
+        self.orderbook_transaction_forwarder
+            .mark_submitted(operation_id)
+    }
+
+    /// Record an orderbook queue failure proven to precede submission.
+    pub fn mark_orderbook_transaction_not_submitted(
+        &self,
+        operation_id: [u8; 32],
+    ) -> Result<(), OrderbookTransactionForwarderError> {
+        self.orderbook_transaction_forwarder
+            .mark_not_submitted(operation_id)
+    }
+
+    /// Permit exact-byte retry after finalized absence of an orderbook transaction.
+    pub fn mark_orderbook_transaction_finalized_absent(
+        &self,
+        operation_id: [u8; 32],
+        observed_finalized_cursor: OrderbookFinalizedCursorV1,
+    ) -> Result<(), OrderbookTransactionForwarderError> {
+        self.orderbook_transaction_forwarder
+            .mark_finalized_absent(operation_id, observed_finalized_cursor)
+    }
+
+    /// Reconcile exact finalized orderbook success by retained transaction digest.
+    pub fn mark_orderbook_transaction_finalized(
+        &self,
+        operation_id: [u8; 32],
+        expected_transaction_digest: [u8; 32],
+        finalized_cursor: OrderbookFinalizedCursorV1,
+    ) -> Result<(), OrderbookTransactionForwarderError> {
+        self.orderbook_transaction_forwarder.mark_finalized(
+            operation_id,
+            expected_transaction_digest,
+            finalized_cursor,
+        )
+    }
+
+    /// Reconcile exact semantic orderbook success committed through another ingress.
+    pub fn mark_orderbook_transaction_semantic_finalized(
+        &self,
+        operation_id: [u8; 32],
+        finalized_cursor: OrderbookFinalizedCursorV1,
+    ) -> Result<(), OrderbookTransactionForwarderError> {
+        self.orderbook_transaction_forwarder
+            .mark_semantic_finalized(operation_id, finalized_cursor)
+    }
+
+    /// Dead-letter an orderbook operation that conflicts with finalized state.
+    pub fn mark_orderbook_transaction_finalized_conflict(
+        &self,
+        operation_id: [u8; 32],
+        observed_finalized_cursor: OrderbookFinalizedCursorV1,
+    ) -> Result<(), OrderbookTransactionForwarderError> {
+        self.orderbook_transaction_forwarder
+            .mark_finalized_conflict(operation_id, observed_finalized_cursor)
+    }
+
+    /// Clear a rejected orderbook envelope for bounded replacement signing.
+    pub fn mark_orderbook_transaction_rejected(
+        &self,
+        operation_id: [u8; 32],
+        observed_finalized_cursor: OrderbookFinalizedCursorV1,
+    ) -> Result<(), OrderbookTransactionForwarderError> {
+        self.orderbook_transaction_forwarder
             .mark_transaction_rejected(operation_id, observed_finalized_cursor)
     }
 
@@ -6761,7 +7671,10 @@ impl NodeHandle {
     pub fn record_privacy_aggregate_source_event(
         &self,
         event: PrivacyAggregateSourceEvent,
-    ) -> Result<(), GovernancePublishError> {
+    ) -> Result<PrivacySourceEventRecordOutcomeV1, GovernancePublishError> {
+        let _mutation_guard = self.runtime_mutation_lock.lock().map_err(|_| {
+            GovernancePublishError::other("runtime publication transaction lock poisoned")
+        })?;
         let _checkpoint_guard = self.auxiliary_checkpoint_lock.lock().map_err(|_| {
             GovernancePublishError::other("auxiliary checkpoint transaction lock poisoned")
         })?;
@@ -6770,25 +7683,119 @@ impl NodeHandle {
         event.validate().map_err(|err| {
             GovernancePublishError::other(format!("invalid privacy aggregate source event: {err}"))
         })?;
-        let mut guard = self
+        let canonical_digest = event.canonical_digest().map_err(|err| {
+            GovernancePublishError::other(format!("digest privacy aggregate source event: {err}"))
+        })?;
+        let configured_policy = self.config.privacy_aggregate_policy();
+        let configured_schedule = self.config.privacy_aggregate_schedule();
+        let active_query = match (configured_schedule, configured_policy) {
+            (Some(schedule), Some(policy)) => {
+                schedule.validate().map_err(|err| {
+                    GovernancePublishError::other(format!("privacy aggregate schedule: {err}"))
+                })?;
+                let config = policy.cycle_config();
+                config.validate().map_err(|err| {
+                    GovernancePublishError::other(format!("privacy aggregate policy: {err}"))
+                })?;
+                if schedule.first_cycle_start_unix != config.first_cycle_start_unix
+                    || schedule.cycle_seconds != config.cycle_seconds
+                {
+                    return Err(GovernancePublishError::other(
+                        "privacy aggregate schedule conflicts with the governed query cadence",
+                    ));
+                }
+                let release_ledger = self
+                    .privacy_release_ledger
+                    .read()
+                    .map_err(|_| GovernancePublishError::other("privacy release ledger poisoned"))?
+                    .clone();
+                release_ledger.validate().map_err(|error| {
+                    GovernancePublishError::other(format!(
+                        "invalid privacy release ledger: {error}"
+                    ))
+                })?;
+                validate_privacy_release_lineage(&release_ledger, schedule, &config)?;
+                Some((schedule, config))
+            }
+            (None, None) => None,
+            _ => {
+                return Err(GovernancePublishError::other(
+                    "privacy aggregate schedule and governed policy must be enabled together",
+                ));
+            }
+        };
+        if let Some(existing_digest) = self
+            .privacy_source_event_receipts
+            .read()
+            .map_err(|_| {
+                GovernancePublishError::other("privacy source-event receipt index poisoned")
+            })?
+            .get(&event.event_id)
+            .copied()
+        {
+            return if existing_digest == canonical_digest {
+                Ok(PrivacySourceEventRecordOutcomeV1::AlreadyRecorded)
+            } else {
+                Err(GovernancePublishError::other(
+                    "privacy aggregate source-event idempotency key equivocation",
+                ))
+            };
+        }
+        if let Some((schedule, config)) = active_query {
+            config.validate_source_event(&event).map_err(|err| {
+                GovernancePublishError::other(format!(
+                    "invalid privacy aggregate source event under governed policy: {err}"
+                ))
+            })?;
+            let window = schedule
+                .event_window(event.occurred_at_unix)
+                .map_err(|err| {
+                    GovernancePublishError::other(format!("privacy aggregate schedule: {err}"))
+                })?;
+            let cycle_id = transparency::privacy_aggregate_cycle_id(
+                config.query_id,
+                window.cycle_start_unix,
+                window.cycle_end_unix,
+            );
+            if self
+                .published_privacy_aggregate_cycles
+                .read()
+                .map_err(|_| GovernancePublishError::other("privacy cycle index poisoned"))?
+                .contains(&cycle_id)
+            {
+                return Err(GovernancePublishError::other(
+                    "privacy aggregate source event targets a finalized release window",
+                ));
+            }
+        }
+        let mut event_guard = self
             .privacy_aggregate_source_events
             .write()
             .map_err(|_| GovernancePublishError::other("privacy aggregate event index poisoned"))?;
-        if guard.contains_key(&event.event_id) {
-            return Err(GovernancePublishError::other(format!(
-                "duplicate privacy aggregate source event `{}`",
-                event.event_id
-            )));
+        if event_guard.contains_key(&event.event_id) {
+            return Err(GovernancePublishError::other(
+                "privacy aggregate source event exists without its durable receipt",
+            ));
         }
         let limit = self.config.runtime_retention().state_entry_limit();
-        if guard.len() >= limit {
+        if event_guard.len() >= limit {
             return Err(GovernancePublishError::other(format!(
                 "privacy aggregate source-event retention exhausted (limit {limit})"
             )));
         }
+        let mut receipt_guard = self.privacy_source_event_receipts.write().map_err(|_| {
+            GovernancePublishError::other("privacy source-event receipt index poisoned")
+        })?;
+        if receipt_guard.len() >= limit {
+            return Err(GovernancePublishError::other(format!(
+                "privacy aggregate source-event receipt retention exhausted (limit {limit})"
+            )));
+        }
         let event_id = event.event_id.clone();
-        guard.insert(event_id.clone(), event);
-        drop(guard);
+        event_guard.insert(event_id.clone(), event);
+        receipt_guard.insert(event_id.clone(), canonical_digest);
+        drop(receipt_guard);
+        drop(event_guard);
         if let Err(err) = self.persist_auxiliary_runtime_checkpoint_unlocked() {
             if err.committed {
                 return Err(GovernancePublishError::other(err.to_string()));
@@ -6799,9 +7806,17 @@ impl NodeHandle {
                     GovernancePublishError::other("privacy source-event rollback lock poisoned")
                 })?
                 .remove(&event_id);
+            self.privacy_source_event_receipts
+                .write()
+                .map_err(|_| {
+                    GovernancePublishError::other(
+                        "privacy source-event receipt rollback lock poisoned",
+                    )
+                })?
+                .remove(&event_id);
             return Err(GovernancePublishError::other(err.to_string()));
         }
-        Ok(())
+        Ok(PrivacySourceEventRecordOutcomeV1::Recorded)
     }
 
     /// Return the number of source events currently retained by the aggregate worker.
@@ -6827,26 +7842,166 @@ impl NodeHandle {
             .map(|budget| budget.clone())
     }
 
+    fn reconcile_privacy_release_anchor(&self) -> Result<(), GovernancePublishError> {
+        let policy = self.config.privacy_aggregate_policy();
+        let schedule = self.configured_privacy_aggregate_schedule();
+        let release_ledger = self
+            .privacy_release_ledger
+            .read()
+            .map_err(|_| GovernancePublishError::other("privacy release ledger poisoned"))?
+            .clone();
+        release_ledger.validate().map_err(|error| {
+            GovernancePublishError::other(format!(
+                "invalid durable privacy release ledger: {error}"
+            ))
+        })?;
+        let configured_query_id = policy.map(config::PrivacyAggregatePolicyConfig::query_id);
+        let query_id = match release_ledger.records.last() {
+            Some(record) => {
+                if configured_query_id.is_some_and(|query_id| query_id != record.query_id) {
+                    return Err(GovernancePublishError::other(
+                        "durable privacy release state does not match the configured query",
+                    ));
+                }
+                if let Some(policy) = policy {
+                    let config = policy.cycle_config();
+                    let schedule = schedule.ok_or_else(|| {
+                        GovernancePublishError::other(
+                            "durable privacy release cadence does not match the configured query lineage",
+                        )
+                    })?;
+                    validate_privacy_release_lineage(&release_ledger, schedule, &config)?;
+                }
+                record.query_id
+            }
+            None => {
+                let Some(query_id) = configured_query_id else {
+                    return Ok(());
+                };
+                query_id
+            }
+        };
+        let local_head = release_ledger.head(query_id).map_err(|error| {
+            GovernancePublishError::other(format!(
+                "privacy release ledger does not match the configured query: {error}"
+            ))
+        })?;
+        let requires_anchor = policy.is_some() || !release_ledger.records.is_empty();
+        let Some(anchor) = self.privacy_release_anchor.as_deref() else {
+            if requires_anchor {
+                return Err(GovernancePublishError::other(
+                    "finalized privacy release anchor is unavailable",
+                ));
+            }
+            return Ok(());
+        };
+        let mut finalized = anchor.finalized_head(query_id).map_err(|error| {
+            GovernancePublishError::other(format!("read finalized privacy release anchor: {error}"))
+        })?;
+        if !finalized.validate() || finalized.query_id() != query_id {
+            return Err(GovernancePublishError::other(
+                "finalized privacy release anchor is malformed or bound to another query",
+            ));
+        }
+        if finalized.sequence() > local_head.sequence()
+            || (finalized.sequence() == local_head.sequence() && finalized != local_head)
+        {
+            return Err(GovernancePublishError::other(
+                "local privacy release checkpoint is behind or equivocates with the finalized anchor",
+            ));
+        }
+        if finalized == local_head {
+            return Ok(());
+        }
+
+        let published_cycles = self
+            .published_privacy_aggregate_cycles
+            .read()
+            .map_err(|_| GovernancePublishError::other("privacy cycle index poisoned"))?
+            .clone();
+        let outbox = self
+            .governance_outbox
+            .read()
+            .map_err(|_| GovernancePublishError::other("governance outbox lock poisoned"))?
+            .clone();
+        validate_privacy_release_outbox(&release_ledger, &published_cycles, &outbox)?;
+        while finalized.sequence() < local_head.sequence() {
+            let next_index = usize::try_from(finalized.sequence()).map_err(|_| {
+                GovernancePublishError::other("privacy release anchor sequence exceeds usize")
+            })?;
+            let record = release_ledger.records.get(next_index).ok_or_else(|| {
+                GovernancePublishError::other(
+                    "privacy release anchor is not a prefix of the local release chain",
+                )
+            })?;
+            let expected = if next_index == 0 {
+                PrivacyReleaseAnchorHeadV1::genesis(query_id)
+            } else {
+                PrivacyReleaseAnchorHeadV1::from_record(
+                    &release_ledger.records[next_index.saturating_sub(1)],
+                )
+            };
+            if expected != finalized {
+                return Err(GovernancePublishError::other(
+                    "privacy release anchor predecessor conflicts with the local release chain",
+                ));
+            }
+            if record.status == transparency::PrivacyReleaseStatusV1::Published {
+                let has_exact_pending_publication = outbox.entries.values().any(|entry| {
+                    entry.kind == GovernanceOutboxKindV1::TransparencyLedgerPublication
+                        && record.publication_payload_digest == Some(entry.payload_digest)
+                });
+                if !has_exact_pending_publication {
+                    return Err(GovernancePublishError::other(
+                        "unanchored privacy release lacks its exact durable publication outbox entry",
+                    ));
+                }
+            }
+            let next = PrivacyReleaseAnchorHeadV1::from_record(record);
+            anchor
+                .compare_and_set_finalized_head(finalized, next)
+                .map_err(|error| {
+                    GovernancePublishError::other(format!(
+                        "advance finalized privacy release anchor: {error}"
+                    ))
+                })?;
+            let observed = anchor.finalized_head(query_id).map_err(|error| {
+                GovernancePublishError::other(format!(
+                    "confirm finalized privacy release anchor: {error}"
+                ))
+            })?;
+            if observed != next {
+                return Err(GovernancePublishError::other(
+                    "finalized privacy release anchor did not confirm the exact committed head",
+                ));
+            }
+            finalized = observed;
+        }
+        Ok(())
+    }
+
     /// Return the config-backed privacy aggregate scheduler, when enabled.
     #[must_use]
     pub fn configured_privacy_aggregate_schedule(&self) -> Option<PrivacyAggregateScheduleConfig> {
         self.config.privacy_aggregate_schedule()
     }
 
-    fn derive_privacy_cycle_prf_output(
+    fn derive_privacy_cycle_prf_input(
         &self,
         config: &PrivacyAggregateCycleConfig,
         window: PrivacyAggregateCycleWindow,
-    ) -> Result<Option<[u8; 32]>, GovernancePublishError> {
+    ) -> Result<Option<PrivacyCyclePrfInputV1>, GovernancePublishError> {
         if config.privacy.per_subject_metric_cap.is_none() {
             return Ok(None);
         }
-        let policy_digest = config.policy_digest.ok_or_else(|| {
-            GovernancePublishError::other(
-                "differential-privacy cycle is missing its governed policy digest",
-            )
-        })?;
-        let request = PrivacyCyclePrfRequestV1::new(policy_digest, window).map_err(|_| {
+        let request = PrivacyCyclePrfRequestV1::new(
+            config.query_id,
+            config.policy_digest,
+            privacy_population_inventory_digest(&config.populations),
+            privacy_metric_schema_digest(&config.metrics),
+            window,
+        )
+        .map_err(|_| {
             GovernancePublishError::other("privacy cycle PRF request binding is invalid")
         })?;
         let provider = self.privacy_cycle_prf_provider.as_deref().ok_or_else(|| {
@@ -6872,12 +8027,7 @@ impl NodeHandle {
                     GovernancePublishError::other("runtime threshold PRF provider internal failure")
                 }
             })?;
-        if output == [0; 32] {
-            return Err(GovernancePublishError::other(
-                "runtime threshold PRF provider returned an invalid all-zero output",
-            ));
-        }
-        Ok(Some(output))
+        Ok(Some(PrivacyCyclePrfInputV1::new(request, output)))
     }
 
     /// Return the config-backed evidence-viewer audit scheduler, when enabled.
@@ -6900,7 +8050,7 @@ impl NodeHandle {
         cycle_id: [u8; 16],
         cycle_start_unix: u64,
         cycle_end_unix: u64,
-        generated_at_unix: u64,
+        _generated_at_unix: u64,
         previous_block_hash: Option<[u8; 32]>,
         aggregates: Vec<ModerationPrivacyAggregateV1>,
     ) -> Result<ModerationLedgerCyclePublicationV1, GovernancePublishError> {
@@ -6908,7 +8058,7 @@ impl NodeHandle {
             cycle_id,
             cycle_start_unix,
             cycle_end_unix,
-            generated_at_unix,
+            cycle_end_unix,
             previous_block_hash,
             aggregates,
         )?;
@@ -6929,24 +8079,31 @@ impl NodeHandle {
                 "privacy aggregate cycle requires at least one aggregate",
             ));
         }
+        if generated_at_unix != cycle_end_unix {
+            return Err(GovernancePublishError::other(
+                "privacy aggregate publication timestamp must equal the exact cycle end",
+            ));
+        }
 
         let mut seen_aggregate_ids = BTreeSet::new();
+        let mut cycle_policy_digest = None;
+        let mut cycle_noise_source = None;
         let mut keyed = Vec::with_capacity(aggregates.len());
         for aggregate in aggregates {
             aggregate.validate().map_err(|err| {
                 GovernancePublishError::other(format!("invalid privacy aggregate: {err}"))
             })?;
-            if aggregate.window_start_unix < cycle_start_unix
-                || aggregate.window_end_unix > cycle_end_unix
+            if aggregate.window_start_unix != cycle_start_unix
+                || aggregate.window_end_unix != cycle_end_unix
             {
                 return Err(GovernancePublishError::other(format!(
-                    "privacy aggregate `{}` window must be contained in the publication cycle",
+                    "privacy aggregate `{}` window must equal the publication cycle",
                     aggregate.aggregate_id
                 )));
             }
-            if aggregate.generated_at_unix > generated_at_unix {
+            if aggregate.generated_at_unix != cycle_end_unix {
                 return Err(GovernancePublishError::other(format!(
-                    "privacy aggregate `{}` generated_at timestamp must not exceed publication generated_at",
+                    "privacy aggregate `{}` generated_at timestamp must equal the exact cycle end",
                     aggregate.aggregate_id
                 )));
             }
@@ -6955,6 +8112,24 @@ impl NodeHandle {
                     "duplicate privacy aggregate id `{}` in cycle",
                     aggregate.aggregate_id
                 )));
+            }
+            match cycle_policy_digest {
+                Some(policy_digest) if policy_digest != aggregate.policy_digest => {
+                    return Err(GovernancePublishError::other(
+                        "privacy aggregate cycle contains mixed policy digests",
+                    ));
+                }
+                None => cycle_policy_digest = Some(aggregate.policy_digest),
+                Some(_) => {}
+            }
+            match cycle_noise_source {
+                Some(noise_source) if noise_source != aggregate.noise_source => {
+                    return Err(GovernancePublishError::other(
+                        "privacy aggregate cycle contains mixed privacy noise sources",
+                    ));
+                }
+                None => cycle_noise_source = Some(aggregate.noise_source),
+                Some(_) => {}
             }
             let aggregate_hash = aggregate.aggregate_hash().map_err(|err| {
                 GovernancePublishError::other(format!("hash privacy aggregate: {err}"))
@@ -6992,14 +8167,19 @@ impl NodeHandle {
                 })?;
             entries.push(entry);
         }
+        let ordered_aggregates = keyed
+            .iter()
+            .map(|(_, _, _, _, aggregate)| aggregate.clone())
+            .collect::<Vec<_>>();
 
-        let publication = ModerationLedgerCyclePublicationV1::from_entries(
+        let publication = ModerationLedgerCyclePublicationV1::from_entries_with_privacy_aggregates(
             cycle_id,
             cycle_start_unix,
             cycle_end_unix,
             generated_at_unix,
             previous_block_hash,
             &entries,
+            &ordered_aggregates,
         )
         .map_err(|err| {
             GovernancePublishError::other(format!(
@@ -7021,10 +8201,10 @@ impl NodeHandle {
         cycle_id: [u8; 16],
         cycle_start_unix: u64,
         cycle_end_unix: u64,
-        generated_at_unix: u64,
+        _generated_at_unix: u64,
         previous_block_hash: Option<[u8; 32]>,
         config: PrivacyAggregateCycleConfig,
-        cycle_prf_output: Option<[u8; 32]>,
+        cycle_prf_input: Option<PrivacyCyclePrfInputV1>,
     ) -> Result<ModerationLedgerCyclePublicationV1, GovernancePublishError> {
         let events = self
             .privacy_aggregate_source_events
@@ -7040,9 +8220,8 @@ impl NodeHandle {
         let aggregates = transparency::build_privacy_aggregates_from_source_events(
             cycle_start_unix,
             cycle_end_unix,
-            generated_at_unix,
             &config,
-            cycle_prf_output,
+            cycle_prf_input,
             &events,
         )
         .map_err(|err| {
@@ -7052,159 +8231,268 @@ impl NodeHandle {
             cycle_id,
             cycle_start_unix,
             cycle_end_unix,
-            generated_at_unix,
+            cycle_end_unix,
             previous_block_hash,
             aggregates,
         )
     }
 
-    /// Publish the oldest due privacy aggregate cycle with retained source events.
+    /// Publish exactly one direct-successor privacy aggregate cycle.
     ///
-    /// This method derives the latest due cycle from `schedule`, then catches up
-    /// older unpublished event-backed cycles first so delayed scheduler ticks do
-    /// not strand stale source events. Duplicate publication of the same cycle
-    /// id is suppressed within the node runtime, and the method returns a
-    /// structured skip reason when no cycle is due, the latest due cycle is
-    /// empty, already published, or every due event-backed cycle is fully
-    /// suppressed by privacy policy.
+    /// Window selection depends only on the governed activation/cadence and the
+    /// durable release cursor. Source-event presence never affects which cycle
+    /// is selected.
     fn publish_due_privacy_aggregate_cycle_from_source_events(
         &self,
         now_unix: u64,
+        expected_cycle_id: [u8; 16],
+        idempotency_key: String,
         schedule: PrivacyAggregateScheduleConfig,
         config: PrivacyAggregateCycleConfig,
         composition_budget: Option<PrivacyCompositionBudgetPolicyV1>,
-        previous_block_hash: Option<[u8; 32]>,
     ) -> Result<PrivacyAggregateScheduleOutcome, GovernancePublishError> {
         let _mutation_guard = self.runtime_mutation_lock.lock().map_err(|_| {
             GovernancePublishError::other("runtime publication transaction lock poisoned")
         })?;
         self.ensure_durability_healthy()
             .map_err(GovernancePublishError::other)?;
+        validate_privacy_publish_idempotency_key(&idempotency_key)?;
+        schedule.validate().map_err(|err| {
+            GovernancePublishError::other(format!("privacy aggregate schedule: {err}"))
+        })?;
+        config.validate().map_err(|err| {
+            GovernancePublishError::other(format!("privacy aggregate policy: {err}"))
+        })?;
+        if schedule.first_cycle_start_unix != config.first_cycle_start_unix
+            || schedule.cycle_seconds != config.cycle_seconds
+        {
+            return Err(GovernancePublishError::other(
+                "privacy aggregate schedule conflicts with the governed query cadence",
+            ));
+        }
+        let release_ledger = self
+            .privacy_release_ledger
+            .read()
+            .map_err(|_| GovernancePublishError::other("privacy release ledger poisoned"))?
+            .clone();
+        release_ledger.validate().map_err(|error| {
+            GovernancePublishError::other(format!("invalid privacy release ledger: {error}"))
+        })?;
+        validate_privacy_release_lineage(&release_ledger, schedule, &config)?;
+        if self.privacy_release_anchor.is_none() {
+            return Err(GovernancePublishError::other(
+                "finalized privacy release anchor is unavailable",
+            ));
+        }
+        self.reconcile_privacy_release_anchor()?;
+        let request_digest =
+            privacy_publish_request_digest(config.query_id, &idempotency_key, expected_cycle_id);
+        let head = release_ledger.head(config.query_id).map_err(|error| {
+            GovernancePublishError::other(format!("invalid privacy release head: {error}"))
+        })?;
+        let cycle_start_unix = release_ledger
+            .records
+            .last()
+            .map_or(config.first_cycle_start_unix, |record| {
+                record.cycle_end_unix
+            });
+        let cycle_end_unix = cycle_start_unix
+            .checked_add(config.cycle_seconds)
+            .ok_or_else(|| GovernancePublishError::other("privacy cycle window overflow"))?;
+        let window = PrivacyAggregateCycleWindow {
+            cycle_start_unix,
+            cycle_end_unix,
+            due_at_unix: cycle_end_unix
+                .checked_add(schedule.publish_delay_seconds)
+                .ok_or_else(|| {
+                    GovernancePublishError::other("privacy cycle due timestamp overflow")
+                })?,
+        };
+        let cycle_id = transparency::privacy_aggregate_cycle_id(
+            config.query_id,
+            window.cycle_start_unix,
+            window.cycle_end_unix,
+        );
+        if let Some(receipt) = self
+            .privacy_publish_request_receipts
+            .read()
+            .map_err(|_| {
+                GovernancePublishError::other("privacy publish-request receipt index poisoned")
+            })?
+            .get(&idempotency_key)
+            .cloned()
+        {
+            if receipt.request_digest != request_digest || receipt.cycle_id != expected_cycle_id {
+                return Err(GovernancePublishError::other(
+                    "privacy publish idempotency key equivocation",
+                ));
+            }
+            let record = release_ledger
+                .records
+                .iter()
+                .find(|record| record.release_id == receipt.cycle_id)
+                .ok_or_else(|| {
+                    GovernancePublishError::other(
+                        "privacy publish-request receipt references an unknown terminal release",
+                    )
+                })?;
+            validate_privacy_publish_receipt_release(&receipt, record)?;
+            self.flush_governance_outbox()?;
+            return receipt.outcome();
+        }
+        if cycle_id != expected_cycle_id {
+            return Err(GovernancePublishError::other(
+                "privacy publish expected cycle does not match the direct successor",
+            ));
+        }
         let Some(latest_window) = schedule.due_window(now_unix).map_err(|err| {
             GovernancePublishError::other(format!("privacy aggregate schedule: {err}"))
         })?
         else {
             return Ok(PrivacyAggregateScheduleOutcome::NotDue);
         };
-        let mut published_cycles = self
+        if window.cycle_end_unix > latest_window.cycle_end_unix {
+            return Ok(PrivacyAggregateScheduleOutcome::NotDue);
+        }
+        let published_cycles = self
             .published_privacy_aggregate_cycles
             .read()
             .map_err(|_| {
                 GovernancePublishError::other("privacy aggregate published-cycle index poisoned")
             })?
             .clone();
-
-        let source_events = self
+        let state_limit = self.config.runtime_retention().state_entry_limit();
+        if published_cycles.contains(&cycle_id) {
+            return Err(GovernancePublishError::other(
+                "privacy published-cycle guard is ahead of the durable release cursor",
+            ));
+        }
+        if published_cycles.len() >= state_limit {
+            return Err(GovernancePublishError::other(format!(
+                "privacy aggregate published-cycle retention exhausted (limit {state_limit})"
+            )));
+        }
+        let events = self
             .privacy_aggregate_source_events
             .read()
             .map_err(|_| GovernancePublishError::other("privacy aggregate event index poisoned"))?
             .values()
+            .filter(|event| {
+                event.occurred_at_unix >= window.cycle_start_unix
+                    && event.occurred_at_unix < window.cycle_end_unix
+            })
             .cloned()
             .collect::<Vec<_>>();
-
-        let mut due_windows = BTreeMap::<PrivacyAggregateCycleWindow, Vec<_>>::new();
-        for event in source_events {
-            let Some(window) = schedule
-                .event_window(event.occurred_at_unix)
-                .map_err(|err| {
-                    GovernancePublishError::other(format!("privacy aggregate schedule: {err}"))
-                })?
-            else {
-                continue;
-            };
-            if window.due_at_unix > now_unix || window.cycle_end_unix > latest_window.cycle_end_unix
-            {
-                continue;
-            }
-            let cycle_id = transparency::privacy_aggregate_cycle_id(window);
-            if published_cycles.contains(&cycle_id) {
-                continue;
-            }
-            due_windows.entry(window).or_default().push(event);
-        }
-
-        if due_windows.is_empty() {
-            let cycle_id = transparency::privacy_aggregate_cycle_id(latest_window);
-            if published_cycles.contains(&cycle_id) {
-                return Ok(PrivacyAggregateScheduleOutcome::AlreadyPublished {
-                    window: latest_window,
+        let private_source_digest = transparency::canonical_private_source_digest(
+            window.cycle_start_unix,
+            window.cycle_end_unix,
+            &config,
+            &events,
+        )
+        .map_err(|error| {
+            GovernancePublishError::other(format!(
+                "digest scheduled privacy aggregate source: {error}"
+            ))
+        })?;
+        let cycle_prf_input = self.derive_privacy_cycle_prf_input(&config, window)?;
+        let prf_evidence = cycle_prf_input.as_ref().map(|input| {
+            (
+                input.request().binding_digest(),
+                input.commitment().commitment,
+            )
+        });
+        let aggregates = match transparency::build_privacy_aggregates_from_source_events(
+            window.cycle_start_unix,
+            window.cycle_end_unix,
+            &config,
+            cycle_prf_input,
+            &events,
+        ) {
+            Ok(aggregates) => aggregates,
+            Err(
+                transparency::PrivacyAggregateWorkerError::AllBucketsSuppressed
+                | transparency::PrivacyAggregateWorkerError::NoSourceEvents,
+            ) => {
+                let receipt = PrivacyPublishRequestReceiptV1 {
+                    idempotency_key,
+                    request_digest,
+                    query_id: config.query_id,
+                    requested_now_unix: now_unix,
+                    cycle_id,
+                    cycle_start_unix: window.cycle_start_unix,
+                    cycle_end_unix: window.cycle_end_unix,
+                    publish_delay_seconds: schedule.publish_delay_seconds,
+                    due_at_unix: window.due_at_unix,
+                    outcome: PrivacyPublishRequestOutcomeV1::AllBucketsSuppressed,
+                };
+                self.commit_processed_privacy_cycle(
+                    cycle_id,
+                    window,
+                    &config,
+                    private_source_digest,
+                    head.latest_publication_block_hash(),
+                    receipt,
+                )?;
+                return Ok(PrivacyAggregateScheduleOutcome::AllBucketsSuppressed {
+                    window,
                     cycle_id,
                 });
             }
-            return Ok(PrivacyAggregateScheduleOutcome::NoSourceEvents {
-                window: latest_window,
-                cycle_id,
-            });
-        }
-
-        let mut first_suppressed = None;
-        for (window, events) in due_windows {
-            let cycle_id = transparency::privacy_aggregate_cycle_id(window);
-            let state_limit = self.config.runtime_retention().state_entry_limit();
-            if !published_cycles.contains(&cycle_id) && published_cycles.len() >= state_limit {
+            Err(err) => {
                 return Err(GovernancePublishError::other(format!(
-                    "privacy aggregate published-cycle retention exhausted (limit {state_limit})"
+                    "build scheduled privacy aggregate cycle: {err}"
                 )));
             }
-            let cycle_prf_output = self.derive_privacy_cycle_prf_output(&config, window)?;
-            let aggregates = match transparency::build_privacy_aggregates_from_source_events(
-                window.cycle_start_unix,
-                window.cycle_end_unix,
-                now_unix,
-                &config,
-                cycle_prf_output,
-                &events,
-            ) {
-                Ok(aggregates) => aggregates,
-                Err(transparency::PrivacyAggregateWorkerError::AllBucketsSuppressed) => {
-                    first_suppressed.get_or_insert((window, cycle_id));
-                    self.commit_processed_privacy_cycle(cycle_id, window)?;
-                    published_cycles.insert(cycle_id);
-                    continue;
-                }
-                Err(err) => {
-                    return Err(GovernancePublishError::other(format!(
-                        "build scheduled privacy aggregate cycle: {err}"
-                    )));
-                }
-            };
-            let publication = Self::build_privacy_aggregate_publication(
-                cycle_id,
-                window.cycle_start_unix,
-                window.cycle_end_unix,
-                now_unix,
-                previous_block_hash,
-                aggregates,
-            )?;
-            self.commit_published_privacy_cycle(
-                window,
-                &publication,
-                config.privacy,
-                composition_budget,
-            )?;
-            return Ok(PrivacyAggregateScheduleOutcome::Published {
-                window,
-                publication,
-            });
-        }
-
-        if let Some((window, cycle_id)) = first_suppressed {
-            Ok(PrivacyAggregateScheduleOutcome::AllBucketsSuppressed { window, cycle_id })
-        } else {
-            let cycle_id = transparency::privacy_aggregate_cycle_id(latest_window);
-            Ok(PrivacyAggregateScheduleOutcome::NoSourceEvents {
-                window: latest_window,
-                cycle_id,
-            })
-        }
+        };
+        let publication = Self::build_privacy_aggregate_publication(
+            cycle_id,
+            window.cycle_start_unix,
+            window.cycle_end_unix,
+            window.cycle_end_unix,
+            head.latest_publication_block_hash(),
+            aggregates,
+        )?;
+        let publication_bytes = norito::to_bytes(&publication).map_err(|err| {
+            GovernancePublishError::other(format!(
+                "encode privacy publication idempotency receipt: {err}"
+            ))
+        })?;
+        let receipt = PrivacyPublishRequestReceiptV1 {
+            idempotency_key,
+            request_digest,
+            query_id: config.query_id,
+            requested_now_unix: now_unix,
+            cycle_id,
+            cycle_start_unix: window.cycle_start_unix,
+            cycle_end_unix: window.cycle_end_unix,
+            publish_delay_seconds: schedule.publish_delay_seconds,
+            due_at_unix: window.due_at_unix,
+            outcome: PrivacyPublishRequestOutcomeV1::Published { publication_bytes },
+        };
+        self.commit_published_privacy_cycle(
+            window,
+            &publication,
+            &config,
+            private_source_digest,
+            prf_evidence,
+            composition_budget,
+            receipt,
+        )?;
+        Ok(PrivacyAggregateScheduleOutcome::Published {
+            window,
+            publication,
+        })
     }
 
     fn commit_published_privacy_cycle(
         &self,
         window: PrivacyAggregateCycleWindow,
         publication: &ModerationLedgerCyclePublicationV1,
-        privacy: iroha_data_model::sorafs::transparency::ModerationPrivacyParametersV1,
+        config: &PrivacyAggregateCycleConfig,
+        private_source_digest: [u8; 32],
+        prf_evidence: Option<([u8; 32], [u8; 32])>,
         composition_budget: Option<PrivacyCompositionBudgetPolicyV1>,
+        request_receipt: PrivacyPublishRequestReceiptV1,
     ) -> Result<(), GovernancePublishError> {
         publication.validate().map_err(|err| {
             GovernancePublishError::other(format!(
@@ -7214,9 +8502,16 @@ impl NodeHandle {
         let cycle_id = publication.block.cycle_id;
         if publication.block.cycle_start_unix != window.cycle_start_unix
             || publication.block.cycle_end_unix != window.cycle_end_unix
+            || publication.block.generated_at_unix != window.cycle_end_unix
+            || cycle_id
+                != transparency::privacy_aggregate_cycle_id(
+                    config.query_id,
+                    window.cycle_start_unix,
+                    window.cycle_end_unix,
+                )
         {
             return Err(GovernancePublishError::other(
-                "scheduled privacy aggregate publication window mismatch",
+                "scheduled privacy aggregate publication identity or window mismatch",
             ));
         }
         let encoded = norito::to_bytes(publication).map_err(|err| {
@@ -7224,6 +8519,22 @@ impl NodeHandle {
                 "encode scheduled privacy aggregate publication: {err}"
             ))
         })?;
+        request_receipt.validate()?;
+        if request_receipt.cycle_id != cycle_id
+            || request_receipt.query_id != config.query_id
+            || request_receipt.cycle_start_unix != window.cycle_start_unix
+            || request_receipt.cycle_end_unix != window.cycle_end_unix
+            || request_receipt.due_at_unix != window.due_at_unix
+            || !matches!(
+                &request_receipt.outcome,
+                PrivacyPublishRequestOutcomeV1::Published { publication_bytes }
+                    if publication_bytes == &encoded
+            )
+        {
+            return Err(GovernancePublishError::other(
+                "privacy publish-request receipt does not match the publication",
+            ));
+        }
         let checkpoint_guard = self.auxiliary_checkpoint_lock.lock().map_err(|_| {
             GovernancePublishError::other("auxiliary checkpoint transaction lock poisoned")
         })?;
@@ -7234,6 +8545,11 @@ impl NodeHandle {
             .privacy_composition_budget
             .read()
             .map_err(|_| GovernancePublishError::other("privacy composition budget poisoned"))?
+            .clone();
+        let previous_release_ledger = self
+            .privacy_release_ledger
+            .read()
+            .map_err(|_| GovernancePublishError::other("privacy release ledger poisoned"))?
             .clone();
         let previous_published = self
             .published_privacy_aggregate_cycles
@@ -7247,6 +8563,13 @@ impl NodeHandle {
             .read()
             .map_err(|_| GovernancePublishError::other("privacy aggregate event index poisoned"))?
             .clone();
+        let previous_request_receipts = self
+            .privacy_publish_request_receipts
+            .read()
+            .map_err(|_| {
+                GovernancePublishError::other("privacy publish-request receipt index poisoned")
+            })?
+            .clone();
         let previous_outbox = self
             .governance_outbox
             .read()
@@ -7254,12 +8577,12 @@ impl NodeHandle {
             .clone();
 
         let mut next_budget = previous_budget.clone();
-        match (
-            privacy.epsilon_numerator,
-            privacy.epsilon_denominator,
+        let budget_charge = match (
+            config.privacy.epsilon_numerator,
+            config.privacy.epsilon_denominator,
             composition_budget,
         ) {
-            (Some(numerator), Some(denominator), Some(policy)) => {
+            (Some(numerator), Some(denominator), Some(policy)) => Some(
                 next_budget
                     .charge(
                         policy,
@@ -7272,9 +8595,9 @@ impl NodeHandle {
                         GovernancePublishError::other(format!(
                             "charge privacy composition budget: {err}"
                         ))
-                    })?;
-            }
-            (None, None, _) => {}
+                    })?,
+            ),
+            (None, None, _) => None,
             (Some(_), Some(_), None) => {
                 return Err(GovernancePublishError::other(
                     "differential-privacy publication requires a governed composition budget",
@@ -7285,7 +8608,65 @@ impl NodeHandle {
                     "privacy epsilon numerator and denominator must be supplied together",
                 ));
             }
+        };
+        if config.privacy.per_subject_metric_cap.is_some() != prf_evidence.is_some() {
+            return Err(GovernancePublishError::other(
+                "privacy release PRF evidence does not match the governed mode",
+            ));
         }
+
+        let publication_payload_digest = *blake3::hash(&encoded).as_bytes();
+        let published_aggregate_inventory_digest =
+            privacy_published_aggregate_inventory_digest(&publication.privacy_aggregates)?;
+        let publication_block_hash = publication.block.block_hash().map_err(|err| {
+            GovernancePublishError::other(format!("hash privacy publication block: {err}"))
+        })?;
+        let mut next_release_ledger = previous_release_ledger.clone();
+        let (prf_request_binding, prf_commitment) = prf_evidence
+            .map_or((None, None), |(binding, commitment)| {
+                (Some(binding), Some(commitment))
+            });
+        next_release_ledger
+            .append(transparency::PrivacyReleaseRecordV1 {
+                sequence: 0,
+                release_id: cycle_id,
+                query_id: config.query_id,
+                first_cycle_start_unix: config.first_cycle_start_unix,
+                cycle_seconds: config.cycle_seconds,
+                publish_delay_seconds: window
+                    .due_at_unix
+                    .checked_sub(window.cycle_end_unix)
+                    .ok_or_else(|| {
+                        GovernancePublishError::other(
+                            "privacy publication due timestamp precedes its release window",
+                        )
+                    })?,
+                cycle_start_unix: window.cycle_start_unix,
+                cycle_end_unix: window.cycle_end_unix,
+                due_at_unix: window.due_at_unix,
+                private_source_digest,
+                policy_digest: config.policy_digest,
+                population_inventory_digest: privacy_population_inventory_digest(
+                    &config.populations,
+                ),
+                metric_schema_digest: privacy_metric_schema_digest(&config.metrics),
+                privacy: config.privacy,
+                prf_request_binding,
+                prf_commitment,
+                budget_charge_digest: budget_charge.map(|charge| charge.charge_digest),
+                publication_payload_digest: Some(publication_payload_digest),
+                published_aggregate_inventory_digest: Some(published_aggregate_inventory_digest),
+                previous_publication_block_hash: publication.block.previous_block_hash,
+                publication_block_hash: Some(publication_block_hash),
+                status: transparency::PrivacyReleaseStatusV1::Published,
+                previous_record_digest: None,
+                record_digest: [0; 32],
+            })
+            .map_err(|error| {
+                GovernancePublishError::other(format!(
+                    "append durable privacy release record: {error}"
+                ))
+            })?;
 
         let mut next_published = previous_published.clone();
         if !next_published.insert(cycle_id) {
@@ -7298,6 +8679,16 @@ impl NodeHandle {
             event.occurred_at_unix < window.cycle_start_unix
                 || event.occurred_at_unix >= window.cycle_end_unix
         });
+        let mut next_request_receipts = previous_request_receipts.clone();
+        if next_request_receipts.len() >= self.config.runtime_retention().state_entry_limit()
+            || next_request_receipts
+                .insert(request_receipt.idempotency_key.clone(), request_receipt)
+                .is_some()
+        {
+            return Err(GovernancePublishError::other(
+                "privacy publish-request receipt retention exhausted or duplicated",
+            ));
+        }
         let repair_reserved_slots = {
             let intents = self.repair_mutation_intents.read().map_err(|_| {
                 GovernancePublishError::other("repair mutation intent lock poisoned")
@@ -7326,8 +8717,10 @@ impl NodeHandle {
         )?;
         self.install_privacy_publication_state(
             next_budget,
+            next_release_ledger,
             next_published,
             next_events,
+            next_request_receipts,
             next_outbox,
         )?;
         if let Err(err) = self.persist_auxiliary_runtime_checkpoint_unlocked() {
@@ -7336,8 +8729,10 @@ impl NodeHandle {
             }
             if let Err(rollback_err) = self.install_privacy_publication_state(
                 previous_budget,
+                previous_release_ledger,
                 previous_published,
                 previous_events,
+                previous_request_receipts,
                 previous_outbox,
             ) {
                 self.mark_durability_unhealthy(format!(
@@ -7350,6 +8745,7 @@ impl NodeHandle {
             return Err(GovernancePublishError::other(err.to_string()));
         }
         drop(checkpoint_guard);
+        self.reconcile_privacy_release_anchor()?;
         self.flush_governance_outbox()?;
         Ok(())
     }
@@ -7357,14 +8753,20 @@ impl NodeHandle {
     fn install_privacy_publication_state(
         &self,
         budget: PrivacyCompositionBudgetLedgerV1,
+        release_ledger: transparency::PrivacyReleaseLedgerV1,
         published: BTreeSet<[u8; 16]>,
         events: BTreeMap<String, PrivacyAggregateSourceEvent>,
+        request_receipts: BTreeMap<String, PrivacyPublishRequestReceiptV1>,
         outbox: GovernanceOutboxRuntime,
     ) -> Result<(), GovernancePublishError> {
         let mut budget_guard = self
             .privacy_composition_budget
             .write()
             .map_err(|_| GovernancePublishError::other("privacy composition budget poisoned"))?;
+        let mut release_guard = self
+            .privacy_release_ledger
+            .write()
+            .map_err(|_| GovernancePublishError::other("privacy release ledger poisoned"))?;
         let mut published_guard =
             self.published_privacy_aggregate_cycles
                 .write()
@@ -7381,9 +8783,15 @@ impl NodeHandle {
             .governance_outbox
             .write()
             .map_err(|_| GovernancePublishError::other("governance outbox lock poisoned"))?;
+        let mut request_receipts_guard =
+            self.privacy_publish_request_receipts.write().map_err(|_| {
+                GovernancePublishError::other("privacy publish-request receipt index poisoned")
+            })?;
         *budget_guard = budget;
+        *release_guard = release_ledger;
         *published_guard = published;
         *events_guard = events;
+        *request_receipts_guard = request_receipts;
         *outbox_guard = outbox;
         Ok(())
     }
@@ -7392,46 +8800,165 @@ impl NodeHandle {
         &self,
         cycle_id: [u8; 16],
         window: PrivacyAggregateCycleWindow,
+        config: &PrivacyAggregateCycleConfig,
+        private_source_digest: [u8; 32],
+        previous_publication_block_hash: Option<[u8; 32]>,
+        request_receipt: PrivacyPublishRequestReceiptV1,
     ) -> Result<(), GovernancePublishError> {
-        let _checkpoint_guard = self.auxiliary_checkpoint_lock.lock().map_err(|_| {
+        let checkpoint_guard = self.auxiliary_checkpoint_lock.lock().map_err(|_| {
             GovernancePublishError::other("auxiliary checkpoint transaction lock poisoned")
         })?;
         self.ensure_durability_healthy()
             .map_err(GovernancePublishError::other)?;
-        let mut published = self
+        if config.privacy.per_subject_metric_cap.is_some()
+            || cycle_id
+                != transparency::privacy_aggregate_cycle_id(
+                    config.query_id,
+                    window.cycle_start_unix,
+                    window.cycle_end_unix,
+                )
+        {
+            return Err(GovernancePublishError::other(
+                "only suppression-only releases may commit without a publication",
+            ));
+        }
+        request_receipt.validate()?;
+        if request_receipt.cycle_id != cycle_id
+            || request_receipt.query_id != config.query_id
+            || request_receipt.cycle_start_unix != window.cycle_start_unix
+            || request_receipt.cycle_end_unix != window.cycle_end_unix
+            || request_receipt.due_at_unix != window.due_at_unix
+            || !matches!(
+                &request_receipt.outcome,
+                PrivacyPublishRequestOutcomeV1::AllBucketsSuppressed
+            )
+        {
+            return Err(GovernancePublishError::other(
+                "privacy publish-request receipt does not match the suppressed release",
+            ));
+        }
+        let previous_budget = self
+            .privacy_composition_budget
+            .read()
+            .map_err(|_| GovernancePublishError::other("privacy composition budget poisoned"))?
+            .clone();
+        let previous_release_ledger = self
+            .privacy_release_ledger
+            .read()
+            .map_err(|_| GovernancePublishError::other("privacy release ledger poisoned"))?
+            .clone();
+        let previous_published = self
             .published_privacy_aggregate_cycles
-            .write()
+            .read()
             .map_err(|_| {
                 GovernancePublishError::other("privacy aggregate published-cycle index poisoned")
-            })?;
-        let mut events = self
+            })?
+            .clone();
+        let previous_events = self
             .privacy_aggregate_source_events
-            .write()
-            .map_err(|_| GovernancePublishError::other("privacy aggregate event index poisoned"))?;
-        let previous_published = published.clone();
-        let previous_events = events.clone();
-        published.insert(cycle_id);
-        events.retain(|_, event| {
+            .read()
+            .map_err(|_| GovernancePublishError::other("privacy aggregate event index poisoned"))?
+            .clone();
+        let previous_request_receipts = self
+            .privacy_publish_request_receipts
+            .read()
+            .map_err(|_| {
+                GovernancePublishError::other("privacy publish-request receipt index poisoned")
+            })?
+            .clone();
+        let previous_outbox = self
+            .governance_outbox
+            .read()
+            .map_err(|_| GovernancePublishError::other("governance outbox lock poisoned"))?
+            .clone();
+
+        let mut next_release_ledger = previous_release_ledger.clone();
+        next_release_ledger
+            .append(transparency::PrivacyReleaseRecordV1 {
+                sequence: 0,
+                release_id: cycle_id,
+                query_id: config.query_id,
+                first_cycle_start_unix: config.first_cycle_start_unix,
+                cycle_seconds: config.cycle_seconds,
+                publish_delay_seconds: window
+                    .due_at_unix
+                    .checked_sub(window.cycle_end_unix)
+                    .ok_or_else(|| {
+                        GovernancePublishError::other(
+                            "privacy publication due timestamp precedes its release window",
+                        )
+                    })?,
+                cycle_start_unix: window.cycle_start_unix,
+                cycle_end_unix: window.cycle_end_unix,
+                due_at_unix: window.due_at_unix,
+                private_source_digest,
+                policy_digest: config.policy_digest,
+                population_inventory_digest: privacy_population_inventory_digest(
+                    &config.populations,
+                ),
+                metric_schema_digest: privacy_metric_schema_digest(&config.metrics),
+                privacy: config.privacy,
+                prf_request_binding: None,
+                prf_commitment: None,
+                budget_charge_digest: None,
+                publication_payload_digest: None,
+                published_aggregate_inventory_digest: None,
+                previous_publication_block_hash,
+                publication_block_hash: None,
+                status: transparency::PrivacyReleaseStatusV1::Suppressed,
+                previous_record_digest: None,
+                record_digest: [0; 32],
+            })
+            .map_err(|error| {
+                GovernancePublishError::other(format!(
+                    "append durable suppressed privacy release record: {error}"
+                ))
+            })?;
+        let mut next_published = previous_published.clone();
+        if !next_published.insert(cycle_id) {
+            return Err(GovernancePublishError::other(
+                "privacy aggregate cycle was already committed",
+            ));
+        }
+        let mut next_events = previous_events.clone();
+        next_events.retain(|_, event| {
             event.occurred_at_unix < window.cycle_start_unix
                 || event.occurred_at_unix >= window.cycle_end_unix
         });
-        drop(published);
-        drop(events);
+        let mut next_request_receipts = previous_request_receipts.clone();
+        if next_request_receipts.len() >= self.config.runtime_retention().state_entry_limit()
+            || next_request_receipts
+                .insert(request_receipt.idempotency_key.clone(), request_receipt)
+                .is_some()
+        {
+            return Err(GovernancePublishError::other(
+                "privacy publish-request receipt retention exhausted or duplicated",
+            ));
+        }
+        self.install_privacy_publication_state(
+            previous_budget.clone(),
+            next_release_ledger,
+            next_published,
+            next_events,
+            next_request_receipts,
+            previous_outbox.clone(),
+        )?;
         if let Err(err) = self.persist_auxiliary_runtime_checkpoint_unlocked() {
             if err.committed {
                 return Err(GovernancePublishError::other(err.to_string()));
             }
-            *self
-                .published_privacy_aggregate_cycles
-                .write()
-                .map_err(|_| {
-                    GovernancePublishError::other("privacy cycle rollback lock poisoned")
-                })? = previous_published;
-            *self.privacy_aggregate_source_events.write().map_err(|_| {
-                GovernancePublishError::other("privacy source-event rollback lock poisoned")
-            })? = previous_events;
+            self.install_privacy_publication_state(
+                previous_budget,
+                previous_release_ledger,
+                previous_published,
+                previous_events,
+                previous_request_receipts,
+                previous_outbox,
+            )?;
             return Err(GovernancePublishError::other(err.to_string()));
         }
+        drop(checkpoint_guard);
+        self.reconcile_privacy_release_anchor()?;
         Ok(())
     }
 
@@ -7439,12 +8966,13 @@ impl NodeHandle {
     ///
     /// The complete public policy and composition budget come from
     /// `iroha_config`; hidden cycle randomness comes exclusively from the
-    /// runtime threshold-PRF provider. Callers may supply only the evaluation
-    /// timestamp and predecessor block hash.
+    /// runtime threshold-PRF provider. The predecessor and trusted evaluation
+    /// time are derived inside the node; callers supply only the expected
+    /// direct-successor cycle and a bounded idempotency key.
     pub fn publish_due_configured_privacy_aggregate_cycle_from_source_events(
         &self,
-        now_unix: u64,
-        previous_block_hash: Option<[u8; 32]>,
+        expected_cycle_id: [u8; 16],
+        idempotency_key: String,
     ) -> Result<PrivacyAggregateScheduleOutcome, GovernancePublishError> {
         let Some(schedule) = self.configured_privacy_aggregate_schedule() else {
             return Ok(PrivacyAggregateScheduleOutcome::Disabled);
@@ -7458,11 +8986,12 @@ impl NodeHandle {
             (policy.cycle_config(), policy.composition_budget())
         };
         self.publish_due_privacy_aggregate_cycle_from_source_events(
-            now_unix,
+            unix_now_secs(),
+            expected_cycle_id,
+            idempotency_key,
             schedule,
             config,
             Some(composition_budget),
-            previous_block_hash,
         )
     }
 
@@ -7599,6 +9128,7 @@ impl NodeHandle {
     }
 
     /// Return local repair events after `since_sequence`, capped by `limit`.
+    #[cfg(test)]
     #[must_use]
     pub fn repair_events_since(
         &self,
@@ -7609,6 +9139,7 @@ impl NodeHandle {
     }
 
     /// Return a gap-aware bounded replay of local repair events.
+    #[cfg(test)]
     #[must_use]
     pub fn repair_events_replay(
         &self,
@@ -7627,6 +9158,7 @@ impl NodeHandle {
     }
 
     /// Return the latest local repair event sequence accepted by this node.
+    #[cfg(test)]
     #[must_use]
     pub fn latest_repair_event_sequence(&self) -> Option<u64> {
         self.repair_events
@@ -7636,6 +9168,7 @@ impl NodeHandle {
     }
 
     /// Subscribe to live local repair events.
+    #[cfg(test)]
     #[must_use]
     pub fn subscribe_repair_events(&self) -> broadcast::Receiver<RepairEvent> {
         self.repair_event_sender.subscribe()
@@ -8507,6 +10040,15 @@ impl NodeHandle {
         candidate: &Arc<dyn PrivacyCyclePrfProviderV1>,
     ) -> bool {
         self.privacy_cycle_prf_provider
+            .as_ref()
+            .is_some_and(|active| Arc::ptr_eq(&active.0, candidate))
+    }
+
+    /// Return whether `candidate` is the exact finalized privacy-release
+    /// anchor retained by this node.
+    #[must_use]
+    pub fn uses_privacy_release_anchor(&self, candidate: &Arc<dyn PrivacyReleaseAnchorV1>) -> bool {
+        self.privacy_release_anchor
             .as_ref()
             .is_some_and(|active| Arc::ptr_eq(&active.0, candidate))
     }
@@ -11097,6 +12639,29 @@ impl NodeHandle {
             .values()
             .cloned()
             .collect();
+        let privacy_source_event_receipts = self
+            .privacy_source_event_receipts
+            .read()
+            .map_err(|_| {
+                GovernancePublishError::other("privacy source-event receipt index poisoned")
+            })?
+            .iter()
+            .map(
+                |(event_id, canonical_digest)| transparency::PrivacySourceEventReceiptV1 {
+                    event_id: event_id.clone(),
+                    canonical_digest: *canonical_digest,
+                },
+            )
+            .collect();
+        let privacy_publish_request_receipts = self
+            .privacy_publish_request_receipts
+            .read()
+            .map_err(|_| {
+                GovernancePublishError::other("privacy publish-request receipt index poisoned")
+            })?
+            .values()
+            .cloned()
+            .collect();
         let published_privacy_aggregate_cycles = self
             .published_privacy_aggregate_cycles
             .read()
@@ -11108,6 +12673,11 @@ impl NodeHandle {
             .privacy_composition_budget
             .read()
             .map_err(|_| GovernancePublishError::other("privacy composition budget poisoned"))?
+            .clone();
+        let privacy_release_ledger = self
+            .privacy_release_ledger
+            .read()
+            .map_err(|_| GovernancePublishError::other("privacy release ledger poisoned"))?
             .clone();
         let published_evidence_viewer_audit_cycles = self
             .published_evidence_viewer_audit_cycles
@@ -11142,8 +12712,11 @@ impl NodeHandle {
             reputation_events,
             transparency_source_entries,
             privacy_source_events,
+            privacy_source_event_receipts,
+            privacy_publish_request_receipts,
             published_privacy_aggregate_cycles,
             privacy_composition_budget,
+            privacy_release_ledger,
             published_evidence_viewer_audit_cycles,
             governance_outbox_next_sequence,
             governance_outbox_entries,
@@ -11479,8 +13052,23 @@ impl NodeHandle {
                 state_limit,
             ),
             (
+                "privacy source-event receipts",
+                checkpoint.privacy_source_event_receipts.len(),
+                state_limit,
+            ),
+            (
+                "privacy publish-request receipts",
+                checkpoint.privacy_publish_request_receipts.len(),
+                state_limit,
+            ),
+            (
                 "published privacy cycles",
                 checkpoint.published_privacy_aggregate_cycles.len(),
+                state_limit,
+            ),
+            (
+                "privacy release records",
+                checkpoint.privacy_release_ledger.records.len(),
                 state_limit,
             ),
             (
@@ -11839,6 +13427,34 @@ impl NodeHandle {
                 ));
             }
         }
+        let mut privacy_receipts = BTreeMap::new();
+        for receipt in checkpoint.privacy_source_event_receipts {
+            if receipt.event_id.is_empty()
+                || receipt.event_id.len() > MODERATION_LEDGER_MAX_PUBLIC_TEXT_BYTES_V1
+                || receipt.event_id.trim() != receipt.event_id
+                || receipt.event_id.chars().any(char::is_control)
+                || receipt.canonical_digest == [0; 32]
+                || privacy_receipts
+                    .insert(receipt.event_id, receipt.canonical_digest)
+                    .is_some()
+            {
+                return Err(GovernancePublishError::other(
+                    "invalid or duplicate privacy source-event receipt in auxiliary checkpoint",
+                ));
+            }
+        }
+        let mut privacy_publish_receipts = BTreeMap::new();
+        for receipt in checkpoint.privacy_publish_request_receipts {
+            receipt.validate()?;
+            if privacy_publish_receipts
+                .insert(receipt.idempotency_key.clone(), receipt)
+                .is_some()
+            {
+                return Err(GovernancePublishError::other(
+                    "duplicate privacy publish-request receipt in auxiliary checkpoint",
+                ));
+            }
+        }
         let mut privacy_events = BTreeMap::new();
         for event in checkpoint.privacy_source_events {
             event.validate().map_err(|err| {
@@ -11846,12 +13462,18 @@ impl NodeHandle {
                     "invalid privacy source event in auxiliary checkpoint: {err}"
                 ))
             })?;
-            if privacy_events
-                .insert(event.event_id.clone(), event)
-                .is_some()
+            let event_digest = event.canonical_digest().map_err(|err| {
+                GovernancePublishError::other(format!(
+                    "digest privacy source event in auxiliary checkpoint: {err}"
+                ))
+            })?;
+            if privacy_receipts.get(&event.event_id) != Some(&event_digest)
+                || privacy_events
+                    .insert(event.event_id.clone(), event)
+                    .is_some()
             {
                 return Err(GovernancePublishError::other(
-                    "duplicate privacy source event in auxiliary checkpoint",
+                    "privacy source event is duplicate or lacks its exact durable receipt",
                 ));
             }
         }
@@ -11877,6 +13499,77 @@ impl NodeHandle {
                 "privacy composition budget charge references an unpublished cycle",
             ));
         }
+        let privacy_release_ledger = checkpoint.privacy_release_ledger;
+        privacy_release_ledger.validate().map_err(|err| {
+            GovernancePublishError::other(format!(
+                "invalid privacy release ledger in auxiliary checkpoint: {err}"
+            ))
+        })?;
+        let release_cycle_ids = privacy_release_ledger
+            .records
+            .iter()
+            .map(|record| record.release_id)
+            .collect::<BTreeSet<_>>();
+        if release_cycle_ids != privacy_cycles {
+            return Err(GovernancePublishError::other(
+                "privacy release records and published-cycle guards differ",
+            ));
+        }
+        let mut receipt_cycle_ids = BTreeSet::new();
+        for receipt in privacy_publish_receipts.values() {
+            if !receipt_cycle_ids.insert(receipt.cycle_id) {
+                return Err(GovernancePublishError::other(
+                    "multiple privacy publish-request receipts reference one release",
+                ));
+            }
+            let Some(record) = privacy_release_ledger
+                .records
+                .iter()
+                .find(|record| record.release_id == receipt.cycle_id)
+            else {
+                return Err(GovernancePublishError::other(
+                    "privacy publish-request receipt references an unknown release",
+                ));
+            };
+            validate_privacy_publish_receipt_release(receipt, record)?;
+        }
+        if receipt_cycle_ids != release_cycle_ids {
+            return Err(GovernancePublishError::other(
+                "privacy release ledger and publish-request receipt inventory differ",
+            ));
+        }
+        let budget_charges = privacy_composition_budget
+            .chains
+            .iter()
+            .flat_map(|chain| chain.charges.iter())
+            .map(|charge| (charge.cycle_id, charge))
+            .collect::<BTreeMap<_, _>>();
+        let dp_release_count = privacy_release_ledger
+            .records
+            .iter()
+            .filter(|record| record.privacy.per_subject_metric_cap.is_some())
+            .count();
+        if budget_charges.len() != dp_release_count {
+            return Err(GovernancePublishError::other(
+                "privacy release records and composition-budget charges differ",
+            ));
+        }
+        for record in &privacy_release_ledger.records {
+            if record.privacy.per_subject_metric_cap.is_some() {
+                let charge = budget_charges.get(&record.release_id).ok_or_else(|| {
+                    GovernancePublishError::other(
+                        "differential-privacy release has no composition-budget charge",
+                    )
+                })?;
+                if record.budget_charge_digest != Some(charge.charge_digest)
+                    || record.status != transparency::PrivacyReleaseStatusV1::Published
+                {
+                    return Err(GovernancePublishError::other(
+                        "differential-privacy release charge linkage is invalid",
+                    ));
+                }
+            }
+        }
         let evidence_cycles = checkpoint
             .published_evidence_viewer_audit_cycles
             .into_iter()
@@ -11892,6 +13585,11 @@ impl NodeHandle {
             checkpoint.governance_outbox_next_sequence,
             checkpoint.governance_outbox_entries,
             state_limit,
+        )?;
+        validate_privacy_release_outbox(
+            &privacy_release_ledger,
+            &privacy_cycles,
+            &governance_outbox,
         )?;
         for entry in governance_outbox
             .entries
@@ -12186,6 +13884,12 @@ impl NodeHandle {
             .write()
             .map_err(|_| GovernancePublishError::other("privacy source-event index poisoned"))? =
             privacy_events;
+        *self.privacy_source_event_receipts.write().map_err(|_| {
+            GovernancePublishError::other("privacy source-event receipt index poisoned")
+        })? = privacy_receipts;
+        *self.privacy_publish_request_receipts.write().map_err(|_| {
+            GovernancePublishError::other("privacy publish-request receipt index poisoned")
+        })? = privacy_publish_receipts;
         *self
             .published_privacy_aggregate_cycles
             .write()
@@ -12197,6 +13901,11 @@ impl NodeHandle {
             .map_err(|_| GovernancePublishError::other("privacy composition budget poisoned"))? =
             privacy_composition_budget;
         *self
+            .privacy_release_ledger
+            .write()
+            .map_err(|_| GovernancePublishError::other("privacy release ledger poisoned"))? =
+            privacy_release_ledger;
+        *self
             .published_evidence_viewer_audit_cycles
             .write()
             .map_err(|_| GovernancePublishError::other("evidence cycle index poisoned"))? =
@@ -12206,6 +13915,7 @@ impl NodeHandle {
             .write()
             .map_err(|_| GovernancePublishError::other("governance outbox lock poisoned"))? =
             governance_outbox;
+        self.reconcile_privacy_release_anchor()?;
         Ok(())
     }
 
@@ -14247,6 +15957,7 @@ impl NodeHandle {
             .map_err(RepairSchedulerError::Store)
     }
 
+    #[cfg(test)]
     fn prepare_repair_mutation_intents(
         &self,
         _mutation_guard: &std::sync::MutexGuard<'_, ()>,
@@ -14911,6 +16622,7 @@ impl NodeHandle {
         Ok(broadcasts)
     }
 
+    #[cfg(test)]
     fn run_repair_task_mutation<T>(
         &self,
         ticket_ids: &[RepairTicketId],
@@ -15721,6 +17433,7 @@ impl NodeHandle {
     }
 
     /// Enqueue a repair report submitted by an auditor.
+    #[cfg(test)]
     pub fn enqueue_repair_report(
         &self,
         report: &RepairReportV1,
@@ -15741,6 +17454,7 @@ impl NodeHandle {
     ///
     /// Exact replays return the original task. Reusing `source_identity` for a
     /// different canonical report fails closed.
+    #[cfg(test)]
     pub fn enqueue_repair_report_idempotent(
         &self,
         source_identity: [u8; 32],
@@ -15764,6 +17478,7 @@ impl NodeHandle {
     }
 
     /// Record a signed repair auditor request nonce for replay protection.
+    #[cfg(test)]
     pub fn record_repair_auditor_nonce(
         &self,
         auditor_account: &str,
@@ -15779,6 +17494,7 @@ impl NodeHandle {
     ///
     /// Returns an error when the durable repair store is unavailable or cannot
     /// prove that its checkpoint state is trustworthy.
+    #[cfg(test)]
     pub fn repair_tasks(
         &self,
         filters: RepairTaskFilters,
@@ -15793,6 +17509,7 @@ impl NodeHandle {
     ///
     /// Returns an error when the durable repair store is unavailable or cannot
     /// prove that its checkpoint state is trustworthy.
+    #[cfg(test)]
     pub fn repair_task_snapshots(
         &self,
         filters: RepairTaskFilters,
@@ -15807,6 +17524,7 @@ impl NodeHandle {
     ///
     /// Returns an error when the durable repair store is unavailable or cannot
     /// prove that its checkpoint state is trustworthy.
+    #[cfg(test)]
     pub fn repair_tasks_for_manifest(
         &self,
         manifest_digest: &[u8; 32],
@@ -15820,6 +17538,7 @@ impl NodeHandle {
     ///
     /// Returns an error when the durable repair store is unavailable or cannot
     /// prove that its checkpoint state is trustworthy.
+    #[cfg(test)]
     pub fn repair_task_snapshots_for_manifest(
         &self,
         manifest_digest: &[u8; 32],
@@ -15833,6 +17552,7 @@ impl NodeHandle {
     ///
     /// Returns an error when the durable repair store is unavailable or cannot
     /// prove that its checkpoint state is trustworthy.
+    #[cfg(test)]
     pub fn repair_task_record(
         &self,
         ticket_id: &RepairTicketId,
@@ -15847,6 +17567,7 @@ impl NodeHandle {
     ///
     /// Returns an error when the durable repair store is unavailable or cannot
     /// prove that its checkpoint state is trustworthy.
+    #[cfg(test)]
     pub fn repair_task_snapshot(
         &self,
         ticket_id: &RepairTicketId,
@@ -15856,6 +17577,7 @@ impl NodeHandle {
     }
 
     /// Submit a slash proposal tied to an escalated repair ticket.
+    #[cfg(test)]
     pub fn submit_repair_slash_proposal(
         &self,
         proposal: &RepairSlashProposalV1,
@@ -15873,6 +17595,7 @@ impl NodeHandle {
     }
 
     /// Mark the specified repair ticket as in progress.
+    #[cfg(test)]
     pub fn mark_repair_in_progress(
         &self,
         ticket_id: &RepairTicketId,
@@ -15893,6 +17616,7 @@ impl NodeHandle {
     }
 
     /// Mark the specified repair ticket as completed.
+    #[cfg(test)]
     pub fn mark_repair_completed(
         &self,
         ticket_id: &RepairTicketId,
@@ -15915,6 +17639,7 @@ impl NodeHandle {
     }
 
     /// Mark the specified repair ticket as failed.
+    #[cfg(test)]
     pub fn mark_repair_failed(
         &self,
         ticket_id: &RepairTicketId,
@@ -15933,6 +17658,7 @@ impl NodeHandle {
     }
 
     /// Claim a repair ticket for a worker.
+    #[cfg(test)]
     pub fn claim_repair_ticket(
         &self,
         ticket_id: &RepairTicketId,
@@ -15960,6 +17686,7 @@ impl NodeHandle {
     }
 
     /// Record a heartbeat for an active repair lease.
+    #[cfg(test)]
     pub fn heartbeat_repair_ticket(
         &self,
         ticket_id: &RepairTicketId,
@@ -15981,6 +17708,7 @@ impl NodeHandle {
     }
 
     /// Mark a claimed repair ticket as completed.
+    #[cfg(test)]
     pub fn complete_repair_ticket(
         &self,
         ticket_id: &RepairTicketId,
@@ -16013,6 +17741,7 @@ impl NodeHandle {
     }
 
     /// Mark a claimed repair ticket as failed.
+    #[cfg(test)]
     pub fn fail_repair_ticket(
         &self,
         ticket_id: &RepairTicketId,
@@ -16043,6 +17772,7 @@ impl NodeHandle {
     }
 
     /// Run a repair watchdog sweep to requeue leases and escalate SLA breaches.
+    #[cfg(test)]
     pub fn run_repair_watchdog_once(
         &self,
         now_unix: u64,
@@ -16066,6 +17796,7 @@ impl NodeHandle {
         )
     }
 
+    #[cfg(test)]
     fn missing_chunk_records(manifest: &StoredManifest) -> Vec<ChunkFileRecord> {
         let total = manifest.chunk_count();
         let mut missing = Vec::new();
@@ -16080,6 +17811,7 @@ impl NodeHandle {
         missing
     }
 
+    #[cfg(test)]
     fn rehydrate_missing_chunks_from_local_replicas(
         &self,
         storage: &StorageBackend,
@@ -16200,9 +17932,11 @@ impl NodeHandle {
         outcome
     }
 
+    #[cfg(test)]
     fn rehydrate_missing_chunks_from_orchestrator(
         &self,
         task: &RepairTaskRecordV1,
+        worker_id: &str,
         manifest: &StoredManifest,
         missing_chunks: &[ChunkFileRecord],
     ) -> RepairRehydrateOutcome {
@@ -16224,7 +17958,24 @@ impl NodeHandle {
             return outcome;
         };
 
-        let payloads = match orchestrator.rehydrate_missing_chunks(task, manifest, &remaining) {
+        let mut task_id_hasher = blake3::Hasher::new();
+        task_id_hasher.update(b"sorafs.repair.test-only-local-task.v1\0");
+        task_id_hasher.update(task.ticket_id.0.as_bytes());
+        let context = native_repair_worker::NativeRepairExecutionContextV1 {
+            chain_id: iroha_data_model::ChainId::from("test-only-local-repair"),
+            finalized_cursor: RepairFinalizedCursorV1 {
+                height: 1,
+                block_hash: [1; 32],
+            },
+            task_id: *task_id_hasher.finalize().as_bytes(),
+            ticket_id: task.ticket_id.0.clone(),
+            manifest_digest: task.manifest_digest,
+            provider_id: task.provider_id,
+            lease_owner_account: worker_id.to_owned(),
+            task_revision: 1,
+            lease_generation: 1,
+        };
+        let payloads = match orchestrator.rehydrate_missing_chunks(&context, manifest, &remaining) {
             Ok(payloads) => payloads,
             Err(err) => {
                 outcome.errors = outcome.errors.saturating_add(1);
@@ -16321,6 +18072,7 @@ impl NodeHandle {
     }
 
     /// Run a single repair worker tick for the supplied worker identifier.
+    #[cfg(test)]
     pub fn run_repair_worker_once(&self, worker_id: &str, now_unix: u64) -> RepairWorkerReport {
         let mut report = RepairWorkerReport::default();
         if !self.repair_config.enabled() || now_unix == 0 {
@@ -16441,6 +18193,7 @@ impl NodeHandle {
                             let orchestrator_outcome = self
                                 .rehydrate_missing_chunks_from_orchestrator(
                                     &task,
+                                    worker_id,
                                     &manifest,
                                     &missing_chunks,
                                 );
@@ -17232,44 +18985,51 @@ impl NodeHandle {
         verdict: &AuditVerdictV1,
         trusted_auditor_keys: &[Vec<u8>],
         auditor_threshold: usize,
+        repair_handoff: &dyn PorRepairHandoff,
     ) -> Result<PorVerdictOutcome, PorTrackerError> {
         let _checkpoint_guard = self.auxiliary_checkpoint_lock.lock().map_err(|_| {
-            PorTrackerError::RepairStore(repair::RepairStoreError::Other(
+            PorTrackerError::RuntimeCheckpoint(
                 "auxiliary checkpoint transaction lock poisoned".to_owned(),
-            ))
+            )
         })?;
         self.ensure_durability_healthy()
             .map_err(PorTrackerError::RuntimeCheckpoint)?;
         {
             let history = self.por_history.read().map_err(|_| {
-                PorTrackerError::RepairStore(repair::RepairStoreError::Other(
-                    "PoR history lock poisoned".to_owned(),
-                ))
+                PorTrackerError::RuntimeCheckpoint("PoR history lock poisoned".to_owned())
             })?;
             let key = (verdict.manifest_digest, verdict.provider_id);
             let limit = self.config.runtime_retention().state_entry_limit();
             if !history.contains_key(&key) && history.len() >= limit {
-                return Err(PorTrackerError::RepairStore(
-                    repair::RepairStoreError::Other(format!(
-                        "PoR history retention exhausted (limit {limit})"
-                    )),
-                ));
+                return Err(PorTrackerError::RuntimeCheckpoint(format!(
+                    "PoR history retention exhausted (limit {limit})"
+                )));
             }
         }
         let previous_tracker = self.por.checkpoint();
-        let (stats, repair_history_id) = self.por.record_verdict_with(
+        let transition = self.por.record_verdict_with(
             verdict,
             trusted_auditor_keys,
             auditor_threshold,
-            |stats| {
-                if self.repair_config.enabled() {
-                    self.repair
-                        .register_por_verdict(verdict, stats.failed_samples)
-                } else {
-                    Ok(None)
-                }
-            },
+            |intent| repair_handoff.enqueue_failed_por_repair(intent),
         )?;
+        let stats = transition.stats;
+        if !transition.newly_finalized {
+            let consecutive_failures = self
+                .por_history
+                .read()
+                .map_err(|_| {
+                    PorTrackerError::RuntimeCheckpoint("PoR history lock poisoned".to_owned())
+                })?
+                .get(&(verdict.manifest_digest, verdict.provider_id))
+                .map_or(0, |entry| entry.consecutive_failures);
+            return Ok(PorVerdictOutcome {
+                stats,
+                repair_task_id: transition.repair_task_id,
+                consecutive_failures,
+                slash: None,
+            });
+        }
         let previous_history = self
             .por_history
             .read()
@@ -17277,27 +19037,34 @@ impl NodeHandle {
                 PorTrackerError::RuntimeCheckpoint("PoR history lock poisoned".to_owned())
             })?
             .clone();
-        let consecutive_failures = self.update_por_history_entry(verdict)?;
-        let slash = self.evaluate_por_penalty(verdict, &stats, consecutive_failures)?;
+        let (consecutive_failures, slash) =
+            match self
+                .update_por_history_entry(verdict)
+                .and_then(|consecutive_failures| {
+                    self.evaluate_por_penalty(verdict, &stats, consecutive_failures)
+                        .map(|slash| (consecutive_failures, slash))
+                }) {
+                Ok(outcome) => outcome,
+                Err(error) => {
+                    if let Err(rollback) =
+                        self.rollback_por_verdict_state(previous_tracker, previous_history)
+                    {
+                        let message = self.record_unrecoverable_rollback(
+                            "failed to roll back finalized PoR state after bookkeeping error",
+                            rollback,
+                        );
+                        return Err(PorTrackerError::RuntimeCheckpoint(message));
+                    }
+                    return Err(error);
+                }
+            };
         if let Err(err) = self.persist_auxiliary_runtime_checkpoint_unlocked() {
             if err.committed {
                 return Err(PorTrackerError::RuntimeCheckpoint(err.to_string()));
             }
-            let history_rollback = self.por_history.write().map(|mut history| {
-                *history = previous_history;
-            });
-            let tracker_rollback = self.por.restore_checkpoint(previous_tracker);
-            if history_rollback.is_err() || tracker_rollback.is_err() {
-                let rollback = match (history_rollback, tracker_rollback) {
-                    (Err(_), Err(tracker)) => format!(
-                        "PoR history rollback lock poisoned; tracker rollback failed: {tracker}"
-                    ),
-                    (Err(_), Ok(())) => "PoR history rollback lock poisoned".to_owned(),
-                    (Ok(()), Err(tracker)) => {
-                        format!("PoR tracker rollback failed: {tracker}")
-                    }
-                    (Ok(()), Ok(())) => unreachable!(),
-                };
+            if let Err(rollback) =
+                self.rollback_por_verdict_state(previous_tracker, previous_history)
+            {
                 let message = self.record_unrecoverable_rollback(
                     "failed to roll back finalized PoR state after checkpoint error",
                     rollback,
@@ -17316,7 +19083,7 @@ impl NodeHandle {
             .record_por_samples(stats.success_samples, stats.failed_samples);
         Ok(PorVerdictOutcome {
             stats,
-            repair_history_id,
+            repair_task_id: transition.repair_task_id,
             consecutive_failures: slash.as_ref().map_or(consecutive_failures, |_| 0),
             slash,
         })
@@ -17404,6 +19171,18 @@ impl NodeHandle {
     ) -> Result<PotrRecordOutcome, PotrTrackerError> {
         self.potr
             .record_receipt(receipt, gateway_public_key, admission, self)
+    }
+
+    /// Record a PoTR receipt using an explicit chain-authoritative repair handoff.
+    pub fn record_potr_receipt_with_handoff(
+        &self,
+        receipt: PotrReceiptV1,
+        gateway_public_key: &[u8; 32],
+        admission: &AdmissionRecord,
+        repair_handoff: &dyn potr::PotrLatencyRepairHandoff,
+    ) -> Result<PotrRecordOutcome, PotrTrackerError> {
+        self.potr
+            .record_receipt(receipt, gateway_public_key, admission, repair_handoff)
     }
 
     /// Retrieve PoTR receipts matching the manifest/provider filters.
@@ -17766,6 +19545,30 @@ impl NodeHandle {
             }
         }
         Ok(entry.consecutive_failures)
+    }
+
+    fn rollback_por_verdict_state(
+        &self,
+        previous_tracker: por::PorTrackerCheckpointV1,
+        previous_history: HashMap<PorHistoryKey, PorHistoryEntry>,
+    ) -> Result<(), String> {
+        let history_rollback = self
+            .por_history
+            .write()
+            .map(|mut history| {
+                *history = previous_history;
+            })
+            .map_err(|_| "PoR history rollback lock poisoned".to_owned());
+        let tracker_rollback = self
+            .por
+            .restore_checkpoint(previous_tracker)
+            .map_err(|error| format!("PoR tracker rollback failed: {error}"));
+        match (history_rollback, tracker_rollback) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(history), Ok(())) => Err(history),
+            (Ok(()), Err(tracker)) => Err(tracker),
+            (Err(history), Err(tracker)) => Err(format!("{history}; {tracker}")),
+        }
     }
 
     fn evaluate_por_penalty(
@@ -18152,6 +19955,18 @@ mod tests {
         sample_verdict as por_sample_verdict,
     };
 
+    #[derive(Debug)]
+    struct SuccessfulPorRepairHandoff;
+
+    impl PorRepairHandoff for SuccessfulPorRepairHandoff {
+        fn enqueue_failed_por_repair(
+            &self,
+            intent: &PorFailedRepairIntentV1,
+        ) -> Result<[u8; 32], PorRepairHandoffError> {
+            Ok(intent.repair_task_id())
+        }
+    }
+
     fn xor(value: &str) -> XorQuantity {
         value.parse().expect("canonical XOR quantity")
     }
@@ -18160,8 +19975,13 @@ mod tests {
         value.parse().expect("canonical quantity")
     }
 
-    fn manifest_builder_for_plan(plan: &CarBuildPlan) -> ManifestBuilder {
-        ManifestBuilder::new().chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
+    fn manifest_builder_for_plan(payload: &[u8], plan: &CarBuildPlan) -> ManifestBuilder {
+        ManifestBuilder::new()
+            .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
+            .por_root(
+                sorafs_car::compute_por_root(payload, plan)
+                    .expect("derive canonical fixture PoR root"),
+            )
     }
 
     fn subsequent_por_challenge(base: &PorChallengeV1, seconds: u64) -> PorChallengeV1 {
@@ -18194,6 +20014,104 @@ mod tests {
             .data_dir(root.join("storage"))
             .build();
         (cfg, temp_dir)
+    }
+
+    #[test]
+    fn orderbook_forwarder_survives_restart_when_worker_and_provider_are_disabled() {
+        use iroha_data_model::{
+            ChainId,
+            isi::sorafs::MatchSorafsOrderbook,
+            sorafs::orderbook::{
+                ORDERBOOK_ADMISSION_POLICY_VERSION_V1, OrderbookAdmissionPolicyRecord,
+                OrderbookAdmissionPolicyV1, OrderbookFinalizedCursorV1,
+            },
+        };
+
+        let temp_dir = tempfile::tempdir().expect("create orderbook forwarder temp dir");
+        let data_dir = temp_dir.path().join("validator-state");
+        let config = StorageConfig::builder()
+            .enabled(false)
+            .data_dir(data_dir.clone())
+            .build();
+        assert!(!config.orderbook_worker_policy().enabled());
+
+        let matcher =
+            KeyPair::try_from_seed(vec![0x61; 32], Algorithm::Ed25519).expect("matcher key");
+        let settlement =
+            KeyPair::try_from_seed(vec![0x62; 32], Algorithm::Ed25519).expect("settlement key");
+        let matcher_authority = AccountId::new(matcher.public_key().clone());
+        let policy = OrderbookAdmissionPolicyV1 {
+            version: ORDERBOOK_ADMISSION_POLICY_VERSION_V1,
+            revision: 1,
+            predecessor_policy_digest: None,
+            market_id: [0x63; 32],
+            matcher_authority: matcher_authority.clone(),
+            settlement_authority: AccountId::new(settlement.public_key().clone()),
+            paused: false,
+            min_order_gib: 1,
+            max_order_gib: 1_024,
+            price_tick_micro_xor: 1,
+            max_maker_fee_bps: 100,
+            max_taker_fee_bps: 100,
+            max_order_lifetime_secs: 86_400,
+            max_receipt_age_secs: 3_600,
+            max_clock_skew_secs: 30,
+            max_receipt_bytes: 1 << 30,
+            max_receipts_per_channel: 128,
+        };
+        let policy_digest = policy.digest().expect("digest orderbook policy");
+        let context = OrderbookTransactionContextV1 {
+            chain_id: ChainId::from("orderbook-forwarder-restart-test"),
+            policy_record: OrderbookAdmissionPolicyRecord {
+                policy,
+                policy_digest,
+                activated_at_unix: 1,
+                activated_by: matcher_authority,
+            },
+            book_revision: 7,
+            finalized_cursor: OrderbookFinalizedCursorV1 {
+                height: 11,
+                block_hash: [0x64; 32],
+            },
+        };
+        let operation = OrderbookOperationV1::Match(MatchSorafsOrderbook::new(
+            policy_digest,
+            context.book_revision,
+            8,
+        ));
+
+        let operation_id = {
+            let node = NodeHandle::try_new(config.clone()).expect("start validator-only node");
+            assert!(node.storage.is_none());
+            let operation_id = node
+                .enqueue_orderbook_transaction(operation, &context)
+                .expect("persist orderbook operation")
+                .operation_id();
+            assert_eq!(
+                node.pending_orderbook_transactions(1)
+                    .expect("read pending operation")[0]
+                    .operation_id,
+                operation_id
+            );
+            operation_id
+        };
+
+        assert!(
+            data_dir
+                .join("orderbook-transaction-forwarder")
+                .join(
+                    crate::orderbook_transaction_forwarder::ORDERBOOK_TRANSACTION_FORWARDER_CHECKPOINT_FILE_NAME_V1,
+                )
+                .is_file()
+        );
+        let recovered = NodeHandle::try_new(config).expect("restart validator-only node");
+        assert!(recovered.storage.is_none());
+        let pending = recovered
+            .pending_orderbook_transactions(1)
+            .expect("recover pending orderbook operation");
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].operation_id, operation_id);
+        assert_eq!(pending[0].expected_book_revision, Some(7));
     }
 
     #[derive(Debug)]
@@ -18288,7 +20206,6 @@ mod tests {
     #[derive(Debug, Clone, Copy)]
     enum TestPrivacyCyclePrfMode {
         Bound,
-        Zero,
         Failure(PrivacyCyclePrfProviderErrorV1),
     }
 
@@ -18311,13 +20228,6 @@ mod tests {
             }
         }
 
-        fn zero() -> Self {
-            Self {
-                mode: TestPrivacyCyclePrfMode::Zero,
-                requests: Mutex::new(Vec::new()),
-            }
-        }
-
         fn failing(error: PrivacyCyclePrfProviderErrorV1) -> Self {
             Self {
                 mode: TestPrivacyCyclePrfMode::Failure(error),
@@ -18334,7 +20244,7 @@ mod tests {
         fn derive_cycle_output(
             &self,
             request: &PrivacyCyclePrfRequestV1,
-        ) -> Result<[u8; 32], PrivacyCyclePrfProviderErrorV1> {
+        ) -> Result<PrivacyCyclePrfOutputV1, PrivacyCyclePrfProviderErrorV1> {
             self.requests
                 .lock()
                 .expect("test PRF requests")
@@ -18346,11 +20256,56 @@ mod tests {
                     hasher.update(&request.binding_digest());
                     let output = *hasher.finalize().as_bytes();
                     debug_assert_ne!(output, [0; 32]);
-                    Ok(output)
+                    Ok(PrivacyCyclePrfOutputV1::new(output)
+                        .expect("test PRF hash cannot be all zeroes"))
                 }
-                TestPrivacyCyclePrfMode::Zero => Ok([0; 32]),
                 TestPrivacyCyclePrfMode::Failure(error) => Err(error),
             }
+        }
+    }
+
+    #[derive(Default)]
+    struct TestPrivacyReleaseAnchor {
+        heads: Mutex<BTreeMap<[u8; 32], PrivacyReleaseAnchorHeadV1>>,
+    }
+
+    impl PrivacyReleaseAnchorV1 for TestPrivacyReleaseAnchor {
+        fn finalized_head(
+            &self,
+            query_id: [u8; 32],
+        ) -> Result<PrivacyReleaseAnchorHeadV1, PrivacyReleaseAnchorErrorV1> {
+            Ok(self
+                .heads
+                .lock()
+                .map_err(|_| PrivacyReleaseAnchorErrorV1::Internal)?
+                .get(&query_id)
+                .copied()
+                .unwrap_or_else(|| PrivacyReleaseAnchorHeadV1::genesis(query_id)))
+        }
+
+        fn compare_and_set_finalized_head(
+            &self,
+            expected: PrivacyReleaseAnchorHeadV1,
+            next: PrivacyReleaseAnchorHeadV1,
+        ) -> Result<(), PrivacyReleaseAnchorErrorV1> {
+            if expected.query_id() != next.query_id()
+                || next.sequence() != expected.sequence().saturating_add(1)
+            {
+                return Err(PrivacyReleaseAnchorErrorV1::InvalidState);
+            }
+            let mut heads = self
+                .heads
+                .lock()
+                .map_err(|_| PrivacyReleaseAnchorErrorV1::Internal)?;
+            let current = heads
+                .get(&expected.query_id())
+                .copied()
+                .unwrap_or_else(|| PrivacyReleaseAnchorHeadV1::genesis(expected.query_id()));
+            if current != expected {
+                return Err(PrivacyReleaseAnchorErrorV1::Conflict);
+            }
+            heads.insert(next.query_id(), next);
+            Ok(())
         }
     }
 
@@ -18358,11 +20313,16 @@ mod tests {
         Arc::new(TestPrivacyCyclePrfProvider::bound())
     }
 
+    fn test_privacy_release_anchor() -> Arc<dyn PrivacyReleaseAnchorV1> {
+        Arc::new(TestPrivacyReleaseAnchor::default())
+    }
+
     fn node_with_test_privacy_cycle_prf_provider(config: StorageConfig) -> NodeHandle {
         NodeHandle::try_new_with_runtime_deps(
             config,
             NodeRuntimeDeps::default()
-                .with_privacy_cycle_prf_provider(test_privacy_cycle_prf_provider()),
+                .with_privacy_cycle_prf_provider(test_privacy_cycle_prf_provider())
+                .with_privacy_release_anchor(test_privacy_release_anchor()),
         )
         .expect("initialise node with test-only privacy cycle PRF provider")
     }
@@ -18773,6 +20733,17 @@ mod tests {
 
         let restored = NodeHandle::new(cfg);
         assert_eq!(restored.privacy_aggregate_source_event_count(), 1);
+        assert_eq!(
+            restored
+                .record_privacy_aggregate_source_event(privacy_source_event(
+                    "restart-event",
+                    "restart-population",
+                    0x42,
+                    1_800_000_001,
+                ))
+                .expect("restart retry is idempotent"),
+            PrivacySourceEventRecordOutcomeV1::AlreadyRecorded
+        );
     }
 
     #[test]
@@ -19867,7 +21838,8 @@ mod tests {
         use iroha_data_model::sorafs::transparency::{
             MODERATION_PRIVACY_AGGREGATE_VERSION_V1, MODERATION_PRIVACY_PARAMETERS_VERSION_V1,
             ModerationLedgerMetadataV1, ModerationPrivacyAggregateMetricV1,
-            ModerationPrivacyModeV1, ModerationPrivacyParametersV1,
+            ModerationPrivacyModeV1, ModerationPrivacyNoiseSourceV1, ModerationPrivacyParametersV1,
+            ModerationPrivacyThresholdPrfCommitmentV1,
         };
 
         ModerationPrivacyAggregateV1 {
@@ -19875,7 +21847,7 @@ mod tests {
             aggregate_id: aggregate_id.to_string(),
             window_start_unix: 1_800_000_000,
             window_end_unix: 1_800_604_800,
-            generated_at_unix: 1_800_604_801,
+            generated_at_unix: 1_800_604_800,
             population_label: format!("{aggregate_id}-population"),
             population_digest: [seed; 32],
             privacy: ModerationPrivacyParametersV1 {
@@ -19886,11 +21858,12 @@ mod tests {
                 delta_ppb: Some(0),
                 per_subject_metric_cap: Some(1),
                 suppression_threshold: Some(25),
-                suppressed_count: 2,
             },
-            source_event_count: 128,
-            source_subject_count: 96,
-            source_payload_digest: [seed.wrapping_add(1); 32],
+            noise_source: ModerationPrivacyNoiseSourceV1::ThresholdPrf(
+                ModerationPrivacyThresholdPrfCommitmentV1 {
+                    commitment: [0xCC; 32],
+                },
+            ),
             metrics: vec![
                 ModerationPrivacyAggregateMetricV1 {
                     key: "appeals_upheld".to_string(),
@@ -19903,7 +21876,7 @@ mod tests {
                     unit: "count".to_string(),
                 },
             ],
-            policy_digest: Some([seed.wrapping_add(2); 32]),
+            policy_digest: [0xC0; 32],
             metadata: vec![ModerationLedgerMetadataV1 {
                 key: "publisher".to_string(),
                 value: "sfm4c".to_string(),
@@ -19921,7 +21894,7 @@ mod tests {
             event_id: event_id.to_string(),
             occurred_at_unix,
             population_label: population_label.to_string(),
-            population_digest: Some([seed; 32]),
+            population_digest: [seed; 32],
             subject_digest: *blake3::hash(event_id.as_bytes()).as_bytes(),
             metrics: vec![
                 PrivacyAggregateSourceMetric {
@@ -19935,7 +21908,7 @@ mod tests {
                     unit: "count".to_string(),
                 },
             ],
-            policy_digest: Some([0xC0; 32]),
+            policy_digest: [0xC0; 32],
         }
     }
 
@@ -20000,7 +21973,30 @@ mod tests {
         };
 
         PrivacyAggregateCycleConfig {
+            query_id: [0xB0; 32],
+            first_cycle_start_unix: 100,
+            cycle_seconds: 100,
             aggregate_id_prefix: "sfm4c-weekly".to_string(),
+            populations: vec![
+                PrivacyAggregatePopulationV1 {
+                    label: "jurisdiction-a".to_string(),
+                    digest: [0xA0; 32],
+                },
+                PrivacyAggregatePopulationV1 {
+                    label: "jurisdiction-b".to_string(),
+                    digest: [0xB0; 32],
+                },
+            ],
+            metrics: vec![
+                PrivacyAggregateMetricSchemaV1 {
+                    key: "appeals_upheld".to_string(),
+                    unit: "count".to_string(),
+                },
+                PrivacyAggregateMetricSchemaV1 {
+                    key: "moderation_actions".to_string(),
+                    unit: "count".to_string(),
+                },
+            ],
             privacy: ModerationPrivacyParametersV1 {
                 version: MODERATION_PRIVACY_PARAMETERS_VERSION_V1,
                 mode: ModerationPrivacyModeV1::DifferentialPrivacyWithSuppression,
@@ -20009,9 +22005,8 @@ mod tests {
                 delta_ppb: Some(0),
                 per_subject_metric_cap: Some(1),
                 suppression_threshold: Some(2),
-                suppressed_count: 0,
             },
-            policy_digest: Some([0xC0; 32]),
+            policy_digest: [0xC0; 32],
             metadata: vec![ModerationLedgerMetadataV1 {
                 key: "publisher".to_string(),
                 value: "sfm4c-worker".to_string(),
@@ -20021,14 +22016,40 @@ mod tests {
 
     fn privacy_aggregate_schedule_config() -> PrivacyAggregateScheduleConfig {
         PrivacyAggregateScheduleConfig {
+            first_cycle_start_unix: 100,
             cycle_seconds: 100,
             publish_delay_seconds: 10,
         }
     }
 
+    fn privacy_cycle_prf_input(
+        config: &PrivacyAggregateCycleConfig,
+        cycle_start_unix: u64,
+        cycle_end_unix: u64,
+        due_at_unix: u64,
+        output: [u8; 32],
+    ) -> PrivacyCyclePrfInputV1 {
+        let request = PrivacyCyclePrfRequestV1::new(
+            config.query_id,
+            config.policy_digest,
+            privacy_population_inventory_digest(&config.populations),
+            privacy_metric_schema_digest(&config.metrics),
+            PrivacyAggregateCycleWindow {
+                cycle_start_unix,
+                cycle_end_unix,
+                due_at_unix,
+            },
+        )
+        .expect("test privacy PRF request");
+        PrivacyCyclePrfInputV1::new(
+            request,
+            PrivacyCyclePrfOutputV1::new(output).expect("test privacy PRF input"),
+        )
+    }
+
     fn privacy_composition_budget_policy() -> PrivacyCompositionBudgetPolicyV1 {
         PrivacyCompositionBudgetPolicyV1 {
-            budget_id: [0xC0; 32],
+            budget_id: [0xB0; 32],
             epsilon_limit_numerator: 80,
             epsilon_limit_denominator: 1,
             max_publications: 100,
@@ -20036,11 +22057,21 @@ mod tests {
     }
 
     fn privacy_aggregate_policy_config() -> config::PrivacyAggregatePolicyConfig {
-        let cycle = privacy_aggregate_cycle_config();
+        privacy_aggregate_policy_config_for_cycle(privacy_aggregate_cycle_config())
+    }
+
+    fn privacy_aggregate_policy_config_for_cycle(
+        cycle: PrivacyAggregateCycleConfig,
+    ) -> config::PrivacyAggregatePolicyConfig {
         config::PrivacyAggregatePolicyConfig::new(
+            cycle.query_id,
+            cycle.first_cycle_start_unix,
+            cycle.cycle_seconds,
             cycle.aggregate_id_prefix,
+            cycle.populations,
+            cycle.metrics,
             cycle.privacy,
-            cycle.policy_digest.expect("test privacy policy digest"),
+            cycle.policy_digest,
             privacy_composition_budget_policy(),
         )
         .expect("test privacy aggregate policy")
@@ -21258,6 +23289,7 @@ mod tests {
         );
 
         let schedule = PrivacyAggregateScheduleConfig {
+            first_cycle_start_unix: 1_800_000_000,
             cycle_seconds: 100,
             publish_delay_seconds: 10,
         };
@@ -21321,6 +23353,7 @@ mod tests {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let root = temp_dir.path().canonicalize().expect("canonical temp dir");
         let schedule = PrivacyAggregateScheduleConfig {
+            first_cycle_start_unix: 1_800_000_000,
             cycle_seconds: 100,
             publish_delay_seconds: 10,
         };
@@ -21402,6 +23435,7 @@ mod tests {
         let cfg = StorageConfig::builder().enabled(false).build();
         let empty = NodeHandle::new(cfg);
         let schedule = PrivacyAggregateScheduleConfig {
+            first_cycle_start_unix: 1_800_000_000,
             cycle_seconds: 100,
             publish_delay_seconds: 10,
         };
@@ -21423,6 +23457,7 @@ mod tests {
             .publish_due_moderation_evidence_viewer_audit_report(
                 1_800_000_110,
                 PrivacyAggregateScheduleConfig {
+                    first_cycle_start_unix: 1_800_000_000,
                     cycle_seconds: 0,
                     publish_delay_seconds: 10,
                 },
@@ -21447,13 +23482,13 @@ mod tests {
             )],
         );
         let oversized = PrivacyAggregateScheduleConfig {
+            first_cycle_start_unix: 1_799_992_033,
             cycle_seconds: 86_401,
             publish_delay_seconds: 1,
         };
         let due_at_unix = oversized
             .event_window(1_800_000_010)
             .expect("oversized event window")
-            .expect("non-zero oversized window")
             .due_at_unix;
         let err = handle
             .publish_due_moderation_evidence_viewer_audit_report(
@@ -21583,7 +23618,7 @@ mod tests {
 
         let payload = b"digest-lookup-fixture";
         let plan = CarBuildPlan::single_file(payload).expect("plan");
-        let manifest = manifest_builder_for_plan(&plan)
+        let manifest = manifest_builder_for_plan(payload, &plan)
             .root_cid(vec![0xAA; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -27030,6 +29065,44 @@ mod tests {
     }
 
     #[test]
+    fn privacy_aggregate_publication_rejects_mixed_cycle_policy_or_randomness() {
+        use iroha_data_model::sorafs::transparency::{
+            ModerationPrivacyNoiseSourceV1, ModerationPrivacyThresholdPrfCommitmentV1,
+        };
+
+        let aggregate_a = privacy_aggregate_fixture("sfm4c-jurisdiction-a", 0xA0);
+        let mut aggregate_b = privacy_aggregate_fixture("sfm4c-jurisdiction-b", 0xB0);
+        aggregate_b.policy_digest = [0xD0; 32];
+        let err = NodeHandle::build_privacy_aggregate_publication(
+            *b"cycle-2026-wk-03",
+            1_800_000_000,
+            1_800_604_800,
+            1_800_604_800,
+            None,
+            vec![aggregate_a.clone(), aggregate_b.clone()],
+        )
+        .expect_err("mixed policy digests are rejected");
+        assert!(err.to_string().contains("mixed policy digests"));
+
+        aggregate_b.policy_digest = aggregate_a.policy_digest;
+        aggregate_b.noise_source = ModerationPrivacyNoiseSourceV1::ThresholdPrf(
+            ModerationPrivacyThresholdPrfCommitmentV1 {
+                commitment: [0xDD; 32],
+            },
+        );
+        let err = NodeHandle::build_privacy_aggregate_publication(
+            *b"cycle-2026-wk-03",
+            1_800_000_000,
+            1_800_604_800,
+            1_800_604_800,
+            None,
+            vec![aggregate_a, aggregate_b],
+        )
+        .expect_err("mixed privacy randomness commitments are rejected");
+        assert!(err.to_string().contains("mixed privacy noise sources"));
+    }
+
+    #[test]
     fn publish_privacy_aggregate_cycle_rejects_out_of_window_without_publishing() {
         let (cfg, _dir) = storage_config_with_temp_dir();
         let handle = NodeHandle::new(cfg);
@@ -27052,34 +29125,44 @@ mod tests {
 
         assert!(
             err.to_string()
-                .contains("window must be contained in the publication cycle")
+                .contains("window must equal the publication cycle")
         );
         assert!(publisher.take().is_empty());
     }
 
     #[test]
-    fn record_privacy_aggregate_source_event_rejects_duplicates() {
+    fn record_privacy_aggregate_source_event_is_idempotent_and_rejects_equivocation() {
         let (cfg, _dir) = storage_config_with_temp_dir();
         let handle = NodeHandle::new(cfg);
         let event = privacy_source_event("event-a", "jurisdiction-a", 0xA0, 1_800_000_010);
 
-        handle
-            .record_privacy_aggregate_source_event(event.clone())
-            .expect("record source event");
-        let err = handle
-            .record_privacy_aggregate_source_event(event)
-            .expect_err("duplicate source event rejected");
-
-        assert!(
-            err.to_string()
-                .contains("duplicate privacy aggregate source event")
+        assert_eq!(
+            handle
+                .record_privacy_aggregate_source_event(event.clone())
+                .expect("record source event"),
+            PrivacySourceEventRecordOutcomeV1::Recorded
         );
+        assert_eq!(
+            handle
+                .record_privacy_aggregate_source_event(event.clone())
+                .expect("exact retry is idempotent"),
+            PrivacySourceEventRecordOutcomeV1::AlreadyRecorded
+        );
+        let mut equivocation = event;
+        equivocation.occurred_at_unix += 1;
+        let err = handle
+            .record_privacy_aggregate_source_event(equivocation)
+            .expect_err("changed bytes under one event id are rejected");
+
+        assert!(err.to_string().contains("idempotency key equivocation"));
         assert_eq!(handle.privacy_aggregate_source_event_count(), 1);
     }
 
     #[test]
     fn publish_privacy_aggregate_cycle_from_source_events_suppresses_and_publishes() {
-        use iroha_data_model::sorafs::transparency::ModerationLedgerEntryKindV1;
+        use iroha_data_model::sorafs::transparency::{
+            MODERATION_PRIVACY_RANDOMNESS_COMMITMENT_METADATA_KEY_V1, ModerationLedgerEntryKindV1,
+        };
 
         let (cfg, _dir) = storage_config_with_temp_dir();
         let handle = NodeHandle::new(cfg);
@@ -27097,6 +29180,14 @@ mod tests {
                 .expect("record source event");
         }
 
+        let config = privacy_aggregate_cycle_config();
+        let cycle_prf_input = privacy_cycle_prf_input(
+            &config,
+            1_800_000_000,
+            1_800_604_800,
+            1_800_604_801,
+            [0x5A; 32],
+        );
         let publication = handle
             .publish_privacy_aggregate_cycle_from_source_events(
                 *b"cycle-2026-wk-04",
@@ -27104,28 +29195,28 @@ mod tests {
                 1_800_604_800,
                 1_800_604_801,
                 None,
-                privacy_aggregate_cycle_config(),
-                Some([0x5A; 32]),
+                config,
+                Some(cycle_prf_input),
             )
             .expect("publish aggregate cycle from source events");
 
         publication.validate().expect("publication validates");
-        assert_eq!(publication.block.entry_count, 1);
+        assert_eq!(publication.block.entry_count, 2);
         let entry = &publication.proofs[0].entry;
         assert_eq!(entry.kind, ModerationLedgerEntryKindV1::PrivacyAggregate);
         assert!(entry.subject.contains("jurisdiction-a"));
         assert_eq!(entry.evidence_uris.len(), 0);
         assert!(
-            entry
-                .metadata
-                .iter()
-                .any(|item| item.key == "suppressed_count" && item.value == "1")
+            entry.metadata.iter().any(|item| {
+                item.key == MODERATION_PRIVACY_RANDOMNESS_COMMITMENT_METADATA_KEY_V1
+            })
         );
         assert!(
-            entry
-                .metadata
-                .iter()
-                .any(|item| item.key == "source_event_count" && item.value == "2")
+            entry.metadata.iter().all(|item| !matches!(
+                item.key.as_str(),
+                "source_event_count" | "source_subject_count" | "suppressed_count"
+            )),
+            "public ledger metadata must not disclose exact private counts"
         );
 
         let published = publisher.take();
@@ -27195,10 +29286,11 @@ mod tests {
         let outcome = handle
             .publish_due_privacy_aggregate_cycle_from_source_events(
                 211,
+                privacy_aggregate_cycle_id([0xB0; 32], 100, 200),
+                "publish-once".to_string(),
                 privacy_aggregate_schedule_config(),
                 privacy_aggregate_cycle_config(),
                 Some(privacy_composition_budget_policy()),
-                None,
             )
             .expect("publish due aggregate cycle");
         let publication = match outcome {
@@ -27214,21 +29306,22 @@ mod tests {
         };
         assert_eq!(publication.block.cycle_start_unix, 100);
         assert_eq!(publication.block.cycle_end_unix, 200);
-        assert_eq!(publication.block.generated_at_unix, 211);
-        assert_eq!(publication.block.entry_count, 1);
+        assert_eq!(publication.block.generated_at_unix, 200);
+        assert_eq!(publication.block.entry_count, 2);
 
         let repeated = handle
             .publish_due_privacy_aggregate_cycle_from_source_events(
                 211,
+                privacy_aggregate_cycle_id([0xB0; 32], 100, 200),
+                "publish-once".to_string(),
                 privacy_aggregate_schedule_config(),
                 privacy_aggregate_cycle_config(),
                 Some(privacy_composition_budget_policy()),
-                None,
             )
             .expect("repeat due aggregate cycle");
         assert!(matches!(
             repeated,
-            PrivacyAggregateScheduleOutcome::AlreadyPublished { .. }
+            PrivacyAggregateScheduleOutcome::Published { .. }
         ));
         assert_eq!(publisher.take().len(), 1);
     }
@@ -27254,13 +29347,14 @@ mod tests {
         let first = handle
             .publish_due_privacy_aggregate_cycle_from_source_events(
                 311,
+                privacy_aggregate_cycle_id([0xB0; 32], 100, 200),
+                "catchup-cycle-1".to_string(),
                 privacy_aggregate_schedule_config(),
                 privacy_aggregate_cycle_config(),
                 Some(privacy_composition_budget_policy()),
-                None,
             )
             .expect("publish first stale aggregate cycle");
-        match first {
+        let first_publication = match first {
             PrivacyAggregateScheduleOutcome::Published {
                 window,
                 publication,
@@ -27269,18 +29363,20 @@ mod tests {
                 assert_eq!(window.cycle_end_unix, 200);
                 assert_eq!(publication.block.cycle_start_unix, 100);
                 assert_eq!(publication.block.cycle_end_unix, 200);
-                assert_eq!(publication.block.generated_at_unix, 311);
+                assert_eq!(publication.block.generated_at_unix, 200);
+                publication
             }
             other => panic!("expected stale published outcome, got {other:?}"),
-        }
+        };
 
         let second = handle
             .publish_due_privacy_aggregate_cycle_from_source_events(
                 311,
+                privacy_aggregate_cycle_id([0xB0; 32], 200, 300),
+                "catchup-cycle-2".to_string(),
                 privacy_aggregate_schedule_config(),
                 privacy_aggregate_cycle_config(),
                 Some(privacy_composition_budget_policy()),
-                None,
             )
             .expect("publish latest aggregate cycle after catch-up");
         match second {
@@ -27292,9 +29388,79 @@ mod tests {
                 assert_eq!(window.cycle_end_unix, 300);
                 assert_eq!(publication.block.cycle_start_unix, 200);
                 assert_eq!(publication.block.cycle_end_unix, 300);
+                assert_eq!(publication.block.generated_at_unix, 300);
             }
             other => panic!("expected latest published outcome, got {other:?}"),
         }
+
+        let replayed = handle
+            .publish_due_privacy_aggregate_cycle_from_source_events(
+                311,
+                privacy_aggregate_cycle_id([0xB0; 32], 100, 200),
+                "catchup-cycle-1".to_string(),
+                privacy_aggregate_schedule_config(),
+                privacy_aggregate_cycle_config(),
+                Some(privacy_composition_budget_policy()),
+            )
+            .expect("old exact request replays after the head advances");
+        let replayed_publication = match replayed {
+            PrivacyAggregateScheduleOutcome::Published { publication, .. } => publication,
+            other => panic!("expected replayed publication, got {other:?}"),
+        };
+        assert_eq!(
+            norito::to_bytes(&replayed_publication).expect("encode replayed publication"),
+            norito::to_bytes(&first_publication).expect("encode original publication")
+        );
+
+        let mut rotated_delay = privacy_aggregate_schedule_config();
+        rotated_delay.publish_delay_seconds = rotated_delay.publish_delay_seconds.saturating_add(1);
+        let rotated_replay = handle
+            .publish_due_privacy_aggregate_cycle_from_source_events(
+                311,
+                privacy_aggregate_cycle_id([0xB0; 32], 100, 200),
+                "catchup-cycle-1".to_string(),
+                rotated_delay,
+                privacy_aggregate_cycle_config(),
+                Some(privacy_composition_budget_policy()),
+            )
+            .expect_err("old exact request cannot replay under a rotated release cadence");
+        assert!(
+            rotated_replay
+                .to_string()
+                .contains("cadence does not match the configured query lineage")
+        );
+
+        let stale_fresh = handle
+            .publish_due_privacy_aggregate_cycle_from_source_events(
+                411,
+                privacy_aggregate_cycle_id([0xB0; 32], 100, 200),
+                "catchup-stale-fresh".to_string(),
+                privacy_aggregate_schedule_config(),
+                privacy_aggregate_cycle_config(),
+                Some(privacy_composition_budget_policy()),
+            )
+            .expect_err("a fresh key cannot target an old terminal release");
+        assert!(
+            stale_fresh
+                .to_string()
+                .contains("does not match the direct successor")
+        );
+
+        let mismatched_old_key = handle
+            .publish_due_privacy_aggregate_cycle_from_source_events(
+                411,
+                privacy_aggregate_cycle_id([0xB0; 32], 200, 300),
+                "catchup-cycle-1".to_string(),
+                privacy_aggregate_schedule_config(),
+                privacy_aggregate_cycle_config(),
+                Some(privacy_composition_budget_policy()),
+            )
+            .expect_err("an old key cannot be rebound to another cycle");
+        assert!(
+            mismatched_old_key
+                .to_string()
+                .contains("idempotency key equivocation")
+        );
         assert_eq!(publisher.take().len(), 2);
     }
 
@@ -27305,7 +29471,9 @@ mod tests {
         let trait_provider: Arc<dyn PrivacyCyclePrfProviderV1> = provider.clone();
         let handle = NodeHandle::try_new_with_runtime_deps(
             cfg,
-            NodeRuntimeDeps::default().with_privacy_cycle_prf_provider(trait_provider),
+            NodeRuntimeDeps::default()
+                .with_privacy_cycle_prf_provider(trait_provider)
+                .with_privacy_release_anchor(test_privacy_release_anchor()),
         )
         .expect("initialise node with recording threshold PRF provider");
         let publisher = Arc::new(RecordingPublisher::default());
@@ -27321,46 +29489,60 @@ mod tests {
                 .expect("record source event");
         }
 
-        let outcome = handle
+        let first = handle
             .publish_due_privacy_aggregate_cycle_from_source_events(
                 311,
+                privacy_aggregate_cycle_id([0xB0; 32], 100, 200),
+                "prf-cycle-1".to_string(),
                 privacy_aggregate_schedule_config(),
                 privacy_aggregate_cycle_config(),
                 Some(privacy_composition_budget_policy()),
-                None,
             )
-            .expect("publish due aggregate cycle with stale suppressed window");
-        match outcome {
+            .expect("publish first due aggregate cycle");
+        match first {
+            PrivacyAggregateScheduleOutcome::Published {
+                window,
+                publication,
+            } => {
+                assert_eq!(window.cycle_start_unix, 100);
+                assert_eq!(window.cycle_end_unix, 200);
+                assert_eq!(publication.block.entry_count, 2);
+            }
+            other => panic!("expected first published outcome, got {other:?}"),
+        }
+        let second = handle
+            .publish_due_privacy_aggregate_cycle_from_source_events(
+                311,
+                privacy_aggregate_cycle_id([0xB0; 32], 200, 300),
+                "prf-cycle-2".to_string(),
+                privacy_aggregate_schedule_config(),
+                privacy_aggregate_cycle_config(),
+                Some(privacy_composition_budget_policy()),
+            )
+            .expect("publish second due aggregate cycle");
+        match second {
             PrivacyAggregateScheduleOutcome::Published {
                 window,
                 publication,
             } => {
                 assert_eq!(window.cycle_start_unix, 200);
                 assert_eq!(window.cycle_end_unix, 300);
-                assert_eq!(publication.block.entry_count, 1);
+                assert_eq!(publication.block.entry_count, 2);
             }
-            other => panic!("expected later published outcome, got {other:?}"),
+            other => panic!("expected second published outcome, got {other:?}"),
         }
-        assert_eq!(publisher.take().len(), 1);
+        assert_eq!(publisher.take().len(), 2);
         let requests = provider.requests();
         assert_eq!(requests.len(), 2);
         assert_eq!(requests[0].policy_digest(), [0xC0; 32]);
         assert_eq!(requests[1].policy_digest(), [0xC0; 32]);
         assert_eq!(
-            (
-                requests[0].cycle_start_unix(),
-                requests[0].cycle_end_unix(),
-                requests[0].due_at_unix(),
-            ),
-            (100, 200, 210)
+            (requests[0].cycle_start_unix(), requests[0].cycle_end_unix()),
+            (100, 200)
         );
         assert_eq!(
-            (
-                requests[1].cycle_start_unix(),
-                requests[1].cycle_end_unix(),
-                requests[1].due_at_unix(),
-            ),
-            (200, 300, 310)
+            (requests[1].cycle_start_unix(), requests[1].cycle_end_unix()),
+            (200, 300)
         );
         assert_ne!(requests[0].cycle_id(), requests[1].cycle_id());
         assert_ne!(requests[0].binding_digest(), requests[1].binding_digest());
@@ -27378,50 +29560,66 @@ mod tests {
     }
 
     #[test]
-    fn privacy_cycle_prf_rejects_zero_and_failed_outputs_without_diagnostics() {
-        for (mode, expected) in [
-            (
-                TestPrivacyCyclePrfMode::Zero,
-                "runtime threshold PRF provider returned an invalid all-zero output",
-            ),
-            (
-                TestPrivacyCyclePrfMode::Failure(PrivacyCyclePrfProviderErrorV1::Internal),
-                "runtime threshold PRF provider internal failure",
-            ),
-        ] {
-            let temp_dir = tempfile::tempdir().expect("create temp dir");
-            let root = temp_dir.path().canonicalize().expect("canonical temp dir");
-            let cfg = privacy_aggregate_storage_config(&root);
-            let provider: Arc<dyn PrivacyCyclePrfProviderV1> = Arc::new(match mode {
-                TestPrivacyCyclePrfMode::Zero => TestPrivacyCyclePrfProvider::zero(),
-                TestPrivacyCyclePrfMode::Failure(error) => {
-                    TestPrivacyCyclePrfProvider::failing(error)
-                }
-                TestPrivacyCyclePrfMode::Bound => unreachable!("bounded mode is not an error case"),
-            });
-            let handle = NodeHandle::try_new_with_runtime_deps(
+    fn differential_privacy_startup_requires_finalized_release_anchor() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let root = temp_dir.path().canonicalize().expect("canonical temp dir");
+        let cfg = privacy_aggregate_storage_config(&root);
+        assert!(matches!(
+            NodeHandle::try_new_with_runtime_deps(
                 cfg,
-                NodeRuntimeDeps::default().with_privacy_cycle_prf_provider(provider),
-            )
-            .expect("initialise node with error-injecting threshold PRF provider");
-            for event in [
-                privacy_source_event("alpha-1", "jurisdiction-a", 0xA0, 110),
-                privacy_source_event("alpha-2", "jurisdiction-a", 0xA0, 120),
-            ] {
-                handle
-                    .record_privacy_aggregate_source_event(event)
-                    .expect("record source event");
-            }
-            let error = handle
-                .publish_due_configured_privacy_aggregate_cycle_from_source_events(211, None)
-                .expect_err("invalid provider output must fail closed");
-            assert_eq!(error.to_string(), expected);
-            assert!(
-                !error
-                    .to_string()
-                    .contains("TEST-PRF-VENDOR-DIAGNOSTIC-MUST-NOT-LEAK")
-            );
+                NodeRuntimeDeps::default()
+                    .with_privacy_cycle_prf_provider(test_privacy_cycle_prf_provider()),
+            ),
+            Err(NodeInitError::PrivacyReleaseAnchorUnavailable)
+        ));
+    }
+
+    #[test]
+    fn privacy_cycle_prf_rejects_zero_output_before_provider_boundary() {
+        assert_eq!(
+            PrivacyCyclePrfOutputV1::new([0; 32]).expect_err("zero output must fail"),
+            PrivacyCyclePrfInputErrorV1::ZeroOutput
+        );
+    }
+
+    #[test]
+    fn privacy_cycle_prf_redacts_failed_provider_diagnostics() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let root = temp_dir.path().canonicalize().expect("canonical temp dir");
+        let cfg = privacy_aggregate_storage_config(&root);
+        let provider: Arc<dyn PrivacyCyclePrfProviderV1> = Arc::new(
+            TestPrivacyCyclePrfProvider::failing(PrivacyCyclePrfProviderErrorV1::Internal),
+        );
+        let handle = NodeHandle::try_new_with_runtime_deps(
+            cfg,
+            NodeRuntimeDeps::default()
+                .with_privacy_cycle_prf_provider(provider)
+                .with_privacy_release_anchor(test_privacy_release_anchor()),
+        )
+        .expect("initialise node with error-injecting threshold PRF provider");
+        for event in [
+            privacy_source_event("alpha-1", "jurisdiction-a", 0xA0, 110),
+            privacy_source_event("alpha-2", "jurisdiction-a", 0xA0, 120),
+        ] {
+            handle
+                .record_privacy_aggregate_source_event(event)
+                .expect("record source event");
         }
+        let error = handle
+            .publish_due_configured_privacy_aggregate_cycle_from_source_events(
+                privacy_aggregate_cycle_id([0xB0; 32], 100, 200),
+                "failed-provider".to_string(),
+            )
+            .expect_err("failed provider output must fail closed");
+        assert_eq!(
+            error.to_string(),
+            "runtime threshold PRF provider internal failure"
+        );
+        assert!(
+            !error
+                .to_string()
+                .contains("TEST-PRF-VENDOR-DIAGNOSTIC-MUST-NOT-LEAK")
+        );
     }
 
     #[test]
@@ -27434,12 +29632,14 @@ mod tests {
             config,
             NodeRuntimeDeps::default()
                 .with_moderation_quarantine_key_wrapper(quarantine_wrapper)
-                .with_privacy_cycle_prf_provider(privacy_provider),
+                .with_privacy_cycle_prf_provider(privacy_provider)
+                .with_privacy_release_anchor(test_privacy_release_anchor()),
         )
         .expect("initialise node with runtime crypto providers");
         let debug = format!("{node:?}");
         assert!(debug.contains("ModerationQuarantineKeyWrapper(<runtime-only>)"));
         assert!(debug.contains("PrivacyCyclePrfProviderV1(<runtime-only>)"));
+        assert!(debug.contains("PrivacyReleaseAnchorV1(<runtime-only>)"));
         assert!(!debug.contains("kms:test/quarantine-v1"));
         assert!(!debug.contains("TEST-PRF-VENDOR-DIAGNOSTIC-MUST-NOT-LEAK"));
     }
@@ -27473,7 +29673,10 @@ mod tests {
         }
 
         let outcome = handle
-            .publish_due_configured_privacy_aggregate_cycle_from_source_events(211, None)
+            .publish_due_configured_privacy_aggregate_cycle_from_source_events(
+                privacy_aggregate_cycle_id([0xB0; 32], 100, 200),
+                "configured-cycle-1".to_string(),
+            )
             .expect("publish configured aggregate cycle");
         let publication = match outcome {
             PrivacyAggregateScheduleOutcome::Published {
@@ -27486,7 +29689,7 @@ mod tests {
             }
             other => panic!("expected published outcome, got {other:?}"),
         };
-        assert_eq!(publication.block.generated_at_unix, 211);
+        assert_eq!(publication.block.generated_at_unix, 200);
         assert_eq!(publisher.take().len(), 1);
         assert_eq!(handle.privacy_aggregate_source_event_count(), 0);
         let budget = handle
@@ -27498,6 +29701,31 @@ mod tests {
             budget.chains[0].charges[0].cycle_id,
             publication.block.cycle_id
         );
+        assert_eq!(
+            handle
+                .record_privacy_aggregate_source_event(privacy_source_event(
+                    "alpha-1",
+                    "jurisdiction-a",
+                    0xA0,
+                    110,
+                ))
+                .expect("processed event retry remains idempotent"),
+            PrivacySourceEventRecordOutcomeV1::AlreadyRecorded
+        );
+        let replay_error = handle
+            .record_privacy_aggregate_source_event(privacy_source_event(
+                "late-replay",
+                "jurisdiction-a",
+                0xA0,
+                110,
+            ))
+            .expect_err("a finalized release window must reject later source events");
+        assert!(
+            replay_error
+                .to_string()
+                .contains("targets a finalized release window")
+        );
+        assert_eq!(handle.privacy_aggregate_source_event_count(), 0);
     }
 
     #[test]
@@ -27511,7 +29739,14 @@ mod tests {
             .privacy_aggregate_schedule(Some(schedule))
             .privacy_aggregate_policy(Some(privacy_aggregate_policy_config()))
             .build();
-        let source = node_with_test_privacy_cycle_prf_provider(cfg.clone());
+        let anchor = Arc::new(TestPrivacyReleaseAnchor::default());
+        let source = NodeHandle::try_new_with_runtime_deps(
+            cfg.clone(),
+            NodeRuntimeDeps::default()
+                .with_privacy_cycle_prf_provider(test_privacy_cycle_prf_provider())
+                .with_privacy_release_anchor(anchor.clone()),
+        )
+        .expect("initialise source node with shared release anchor");
         for event in [
             privacy_source_event("alpha-1", "jurisdiction-a", 0xA0, 110),
             privacy_source_event("alpha-2", "jurisdiction-a", 0xA0, 120),
@@ -27522,7 +29757,10 @@ mod tests {
         }
 
         let published = source
-            .publish_due_configured_privacy_aggregate_cycle_from_source_events(211, None)
+            .publish_due_configured_privacy_aggregate_cycle_from_source_events(
+                privacy_aggregate_cycle_id([0xB0; 32], 100, 200),
+                "restore-cycle-1".to_string(),
+            )
             .expect("commit configured privacy cycle without publisher");
         let cycle_id = match published {
             PrivacyAggregateScheduleOutcome::Published { publication, .. } => {
@@ -27534,7 +29772,13 @@ mod tests {
         assert_eq!(source.privacy_aggregate_source_event_count(), 0);
         drop(source);
 
-        let restored = node_with_test_privacy_cycle_prf_provider(cfg);
+        let restored = NodeHandle::try_new_with_runtime_deps(
+            cfg,
+            NodeRuntimeDeps::default()
+                .with_privacy_cycle_prf_provider(test_privacy_cycle_prf_provider())
+                .with_privacy_release_anchor(anchor),
+        )
+        .expect("restore node with shared release anchor");
         assert_eq!(restored.pending_governance_publication_count(), 1);
         assert_eq!(restored.privacy_aggregate_source_event_count(), 0);
         let budget = restored
@@ -27545,11 +29789,14 @@ mod tests {
         assert_eq!(budget.chains[0].charges[0].cycle_id, cycle_id);
 
         let repeated = restored
-            .publish_due_configured_privacy_aggregate_cycle_from_source_events(211, None)
+            .publish_due_configured_privacy_aggregate_cycle_from_source_events(
+                privacy_aggregate_cycle_id([0xB0; 32], 100, 200),
+                "restore-cycle-1".to_string(),
+            )
             .expect("repeat restored privacy cycle");
         assert!(matches!(
             repeated,
-            PrivacyAggregateScheduleOutcome::AlreadyPublished { .. }
+            PrivacyAggregateScheduleOutcome::Published { .. }
         ));
         assert_eq!(
             restored
@@ -27570,6 +29817,287 @@ mod tests {
     }
 
     #[test]
+    fn privacy_publish_receipt_checkpoint_rejects_pre_due_observation_and_delay_tampering() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let root = temp_dir.path().canonicalize().expect("canonical temp dir");
+        let cfg = privacy_aggregate_storage_config(&root);
+        let checkpoint_path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
+        let anchor = Arc::new(TestPrivacyReleaseAnchor::default());
+        let source = NodeHandle::try_new_with_runtime_deps(
+            cfg.clone(),
+            NodeRuntimeDeps::default()
+                .with_privacy_cycle_prf_provider(test_privacy_cycle_prf_provider())
+                .with_privacy_release_anchor(anchor.clone()),
+        )
+        .expect("initialise privacy receipt source node");
+        assert!(matches!(
+            source
+                .publish_due_configured_privacy_aggregate_cycle_from_source_events(
+                    privacy_aggregate_cycle_id([0xB0; 32], 100, 200),
+                    "receipt-tamper-cycle-1".to_string(),
+                )
+                .expect("commit privacy release"),
+            PrivacyAggregateScheduleOutcome::Published { .. }
+        ));
+        drop(source);
+
+        let original = fs::read(&checkpoint_path).expect("read privacy receipt checkpoint");
+        for tamper in 0..2 {
+            let mut checkpoint: AuxiliaryRuntimeCheckpointV1 =
+                norito::decode_from_bytes(&original).expect("decode privacy receipt checkpoint");
+            let receipt = checkpoint
+                .privacy_publish_request_receipts
+                .first_mut()
+                .expect("privacy publish receipt");
+            match tamper {
+                0 => receipt.requested_now_unix = receipt.due_at_unix.saturating_sub(1),
+                1 => {
+                    receipt.publish_delay_seconds = receipt.publish_delay_seconds.saturating_add(1);
+                }
+                _ => unreachable!("bounded privacy receipt tamper case"),
+            }
+            write_local_checkpoint_atomic(
+                &checkpoint_path,
+                &norito::to_bytes(&checkpoint).expect("encode tampered privacy receipt checkpoint"),
+            )
+            .expect("write tampered privacy receipt checkpoint");
+            let error = NodeHandle::try_new_with_runtime_deps(
+                cfg.clone(),
+                NodeRuntimeDeps::default()
+                    .with_privacy_cycle_prf_provider(test_privacy_cycle_prf_provider())
+                    .with_privacy_release_anchor(anchor.clone()),
+            )
+            .expect_err("tampered privacy publish receipt must fail restart");
+            assert!(matches!(
+                error,
+                NodeInitError::Checkpoint {
+                    component: "auxiliary runtime",
+                    ..
+                }
+            ));
+        }
+        write_local_checkpoint_atomic(&checkpoint_path, &original)
+            .expect("restore canonical privacy receipt checkpoint");
+        NodeHandle::try_new_with_runtime_deps(
+            cfg,
+            NodeRuntimeDeps::default()
+                .with_privacy_cycle_prf_provider(test_privacy_cycle_prf_provider())
+                .with_privacy_release_anchor(anchor),
+        )
+        .expect("canonical privacy receipt checkpoint restores");
+    }
+
+    #[test]
+    fn privacy_source_receipt_only_checkpoint_rejects_oversized_event_id() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let root = temp_dir.path().canonicalize().expect("canonical temp dir");
+        let cfg = privacy_aggregate_storage_config(&root);
+        let checkpoint_path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
+        let anchor = Arc::new(TestPrivacyReleaseAnchor::default());
+        let source = NodeHandle::try_new_with_runtime_deps(
+            cfg.clone(),
+            NodeRuntimeDeps::default()
+                .with_privacy_cycle_prf_provider(test_privacy_cycle_prf_provider())
+                .with_privacy_release_anchor(anchor.clone()),
+        )
+        .expect("initialise privacy source-receipt node");
+        source
+            .record_privacy_aggregate_source_event(privacy_source_event(
+                "receipt-only-event",
+                "jurisdiction-a",
+                0xA0,
+                110,
+            ))
+            .expect("record privacy source event");
+        assert!(matches!(
+            source
+                .publish_due_configured_privacy_aggregate_cycle_from_source_events(
+                    privacy_aggregate_cycle_id([0xB0; 32], 100, 200),
+                    "receipt-only-cycle-1".to_string(),
+                )
+                .expect("commit privacy release"),
+            PrivacyAggregateScheduleOutcome::Published { .. }
+        ));
+        assert_eq!(source.privacy_aggregate_source_event_count(), 0);
+        drop(source);
+
+        let bytes = fs::read(&checkpoint_path).expect("read receipt-only checkpoint");
+        let mut checkpoint: AuxiliaryRuntimeCheckpointV1 =
+            norito::decode_from_bytes(&bytes).expect("decode receipt-only checkpoint");
+        assert!(checkpoint.privacy_source_events.is_empty());
+        checkpoint
+            .privacy_source_event_receipts
+            .first_mut()
+            .expect("retained source-event receipt")
+            .event_id = "x".repeat(MODERATION_LEDGER_MAX_PUBLIC_TEXT_BYTES_V1 + 1);
+        write_local_checkpoint_atomic(
+            &checkpoint_path,
+            &norito::to_bytes(&checkpoint).expect("encode oversized receipt-only checkpoint"),
+        )
+        .expect("write oversized receipt-only checkpoint");
+
+        let error = NodeHandle::try_new_with_runtime_deps(
+            cfg,
+            NodeRuntimeDeps::default()
+                .with_privacy_cycle_prf_provider(test_privacy_cycle_prf_provider())
+                .with_privacy_release_anchor(anchor),
+        )
+        .expect_err("oversized retained source-event receipt must fail restart");
+        assert!(matches!(
+            error,
+            NodeInitError::Checkpoint {
+                component: "auxiliary runtime",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn privacy_release_restart_rejects_cadence_and_delay_rotation() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let root = temp_dir.path().canonicalize().expect("canonical temp dir");
+        let cfg = privacy_aggregate_storage_config(&root);
+        let anchor = Arc::new(TestPrivacyReleaseAnchor::default());
+        let source = NodeHandle::try_new_with_runtime_deps(
+            cfg,
+            NodeRuntimeDeps::default()
+                .with_privacy_cycle_prf_provider(test_privacy_cycle_prf_provider())
+                .with_privacy_release_anchor(anchor.clone()),
+        )
+        .expect("initialise privacy delay-lineage node");
+        assert!(matches!(
+            source
+                .publish_due_configured_privacy_aggregate_cycle_from_source_events(
+                    privacy_aggregate_cycle_id([0xB0; 32], 100, 200),
+                    "delay-lineage-cycle-1".to_string(),
+                )
+                .expect("commit privacy release"),
+            PrivacyAggregateScheduleOutcome::Published { .. }
+        ));
+        drop(source);
+
+        let mut delay_schedule = privacy_aggregate_schedule_config();
+        delay_schedule.publish_delay_seconds =
+            delay_schedule.publish_delay_seconds.saturating_add(1);
+        let mut first_schedule = privacy_aggregate_schedule_config();
+        first_schedule.first_cycle_start_unix = first_schedule
+            .first_cycle_start_unix
+            .saturating_add(first_schedule.cycle_seconds);
+        let mut first_cycle = privacy_aggregate_cycle_config();
+        first_cycle.first_cycle_start_unix = first_schedule.first_cycle_start_unix;
+        let mut width_schedule = privacy_aggregate_schedule_config();
+        width_schedule.cycle_seconds /= 2;
+        let mut width_cycle = privacy_aggregate_cycle_config();
+        width_cycle.cycle_seconds = width_schedule.cycle_seconds;
+
+        for (case, schedule, policy) in [
+            (
+                "publish delay",
+                delay_schedule,
+                privacy_aggregate_policy_config(),
+            ),
+            (
+                "first-cycle activation",
+                first_schedule,
+                privacy_aggregate_policy_config_for_cycle(first_cycle),
+            ),
+            (
+                "cycle width",
+                width_schedule,
+                privacy_aggregate_policy_config_for_cycle(width_cycle),
+            ),
+        ] {
+            let rotated_cfg = StorageConfig::builder()
+                .enabled(true)
+                .data_dir(root.join("storage"))
+                .privacy_aggregate_schedule(Some(schedule))
+                .privacy_aggregate_policy(Some(policy))
+                .build();
+            let error = NodeHandle::try_new_with_runtime_deps(
+                rotated_cfg,
+                NodeRuntimeDeps::default()
+                    .with_privacy_cycle_prf_provider(test_privacy_cycle_prf_provider())
+                    .with_privacy_release_anchor(anchor.clone()),
+            )
+            .expect_err("cadence rotation must fail the durable query lineage");
+            assert!(
+                matches!(
+                    &error,
+                    NodeInitError::Checkpoint {
+                        component: "auxiliary runtime",
+                        ..
+                    }
+                ),
+                "{case} rotation returned the wrong startup error: {error}"
+            );
+            assert!(
+                error
+                    .to_string()
+                    .contains("cadence does not match the configured query lineage"),
+                "{case} rotation was not rejected as a lineage conflict: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn privacy_checkpoint_rollback_behind_finalized_release_anchor_fails_closed() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let root = temp_dir.path().canonicalize().expect("canonical temp dir");
+        let cfg = privacy_aggregate_storage_config(&root);
+        let checkpoint_path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
+        let anchor = Arc::new(TestPrivacyReleaseAnchor::default());
+        let source = NodeHandle::try_new_with_runtime_deps(
+            cfg.clone(),
+            NodeRuntimeDeps::default()
+                .with_privacy_cycle_prf_provider(test_privacy_cycle_prf_provider())
+                .with_privacy_release_anchor(anchor.clone()),
+        )
+        .expect("initialise source node");
+        for event in [
+            privacy_source_event("alpha-1", "jurisdiction-a", 0xA0, 110),
+            privacy_source_event("alpha-2", "jurisdiction-a", 0xA0, 120),
+        ] {
+            source
+                .record_privacy_aggregate_source_event(event)
+                .expect("record source event");
+        }
+        let rolled_back_checkpoint =
+            fs::read(&checkpoint_path).expect("capture pre-release checkpoint");
+        assert!(matches!(
+            source
+                .publish_due_configured_privacy_aggregate_cycle_from_source_events(
+                    privacy_aggregate_cycle_id([0xB0; 32], 100, 200),
+                    "rollback-cycle-1".to_string(),
+                )
+                .expect("commit privacy release"),
+            PrivacyAggregateScheduleOutcome::Published { .. }
+        ));
+        assert_eq!(
+            anchor
+                .finalized_head([0xB0; 32])
+                .expect("read finalized release head")
+                .sequence(),
+            1
+        );
+        drop(source);
+
+        fs::write(&checkpoint_path, rolled_back_checkpoint)
+            .expect("simulate checkpoint rollback behind finalized head");
+        let error = NodeHandle::try_new_with_runtime_deps(
+            cfg,
+            NodeRuntimeDeps::default()
+                .with_privacy_cycle_prf_provider(test_privacy_cycle_prf_provider())
+                .with_privacy_release_anchor(anchor),
+        )
+        .expect_err("rollback behind the finalized release anchor must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("behind or equivocates with the finalized anchor")
+        );
+    }
+
+    #[test]
     fn publish_due_configured_privacy_aggregate_cycle_skips_when_disabled() {
         let cfg = StorageConfig::builder()
             .enabled(false)
@@ -27579,13 +30107,16 @@ mod tests {
         assert_eq!(handle.configured_privacy_aggregate_schedule(), None);
 
         let outcome = handle
-            .publish_due_configured_privacy_aggregate_cycle_from_source_events(211, None)
+            .publish_due_configured_privacy_aggregate_cycle_from_source_events(
+                privacy_aggregate_cycle_id([0xB0; 32], 100, 200),
+                "disabled-cycle".to_string(),
+            )
             .expect("disabled configured aggregate cycle");
         assert_eq!(outcome, PrivacyAggregateScheduleOutcome::Disabled);
     }
 
     #[test]
-    fn publish_due_privacy_aggregate_cycle_from_source_events_skips_empty_and_suppressed() {
+    fn publish_due_privacy_aggregate_cycle_from_source_events_emits_fixed_empty_population_set() {
         let (cfg, _dir) = storage_config_with_temp_dir();
         let handle = node_with_test_privacy_cycle_prf_provider(cfg);
         let publisher = Arc::new(RecordingPublisher::default());
@@ -27594,39 +30125,27 @@ mod tests {
         let empty = handle
             .publish_due_privacy_aggregate_cycle_from_source_events(
                 211,
+                privacy_aggregate_cycle_id([0xB0; 32], 100, 200),
+                "empty-cycle-1".to_string(),
                 privacy_aggregate_schedule_config(),
                 privacy_aggregate_cycle_config(),
                 Some(privacy_composition_budget_policy()),
-                None,
             )
             .expect("empty due aggregate cycle");
-        assert!(matches!(
-            empty,
-            PrivacyAggregateScheduleOutcome::NoSourceEvents { .. }
-        ));
-
-        handle
-            .record_privacy_aggregate_source_event(privacy_source_event(
-                "alpha-1",
-                "jurisdiction-a",
-                0xA0,
-                110,
-            ))
-            .expect("record source event");
-        let suppressed = handle
-            .publish_due_privacy_aggregate_cycle_from_source_events(
-                211,
-                privacy_aggregate_schedule_config(),
-                privacy_aggregate_cycle_config(),
-                Some(privacy_composition_budget_policy()),
-                None,
-            )
-            .expect("suppressed due aggregate cycle");
-        assert!(matches!(
-            suppressed,
-            PrivacyAggregateScheduleOutcome::AllBucketsSuppressed { .. }
-        ));
-        assert!(publisher.take().is_empty());
+        let publication = match empty {
+            PrivacyAggregateScheduleOutcome::Published {
+                window,
+                publication,
+            } => {
+                assert_eq!(window.cycle_start_unix, 100);
+                assert_eq!(window.cycle_end_unix, 200);
+                publication
+            }
+            other => panic!("expected empty fixed-schema publication, got {other:?}"),
+        };
+        assert_eq!(publication.block.generated_at_unix, 200);
+        assert_eq!(publication.block.entry_count, 2);
+        assert_eq!(publisher.take().len(), 1);
     }
 
     #[test]
@@ -27866,7 +30385,12 @@ mod tests {
             .expect("record proof succeeds");
         let verdict = por_sample_verdict(&challenge, proof.proof_digest());
         handle
-            .record_por_verdict(&verdict, &por_sample_auditor_keys(), 1)
+            .record_por_verdict(
+                &verdict,
+                &por_sample_auditor_keys(),
+                1,
+                &SuccessfulPorRepairHandoff,
+            )
             .expect("record verdict succeeds");
 
         let after = handle
@@ -27895,7 +30419,12 @@ mod tests {
         verdict.proof_digest = None;
         resign_por_sample_verdict(&mut verdict);
         handle
-            .record_por_verdict(&verdict, &por_sample_auditor_keys(), 1)
+            .record_por_verdict(
+                &verdict,
+                &por_sample_auditor_keys(),
+                1,
+                &SuccessfulPorRepairHandoff,
+            )
             .expect("record failure verdict");
 
         let status = handle
@@ -27930,7 +30459,12 @@ mod tests {
         verdict.proof_digest = None;
         resign_por_sample_verdict(&mut verdict);
         handle
-            .record_por_verdict(&verdict, &por_sample_auditor_keys(), 1)
+            .record_por_verdict(
+                &verdict,
+                &por_sample_auditor_keys(),
+                1,
+                &SuccessfulPorRepairHandoff,
+            )
             .expect("record failure verdict");
 
         let overview_after = handle.por_ingestion_overview();
@@ -27971,7 +30505,12 @@ mod tests {
             .record_por_challenge(&challenge)
             .expect("record first challenge");
         let first = handle
-            .record_por_verdict(&verdict, &por_sample_auditor_keys(), 1)
+            .record_por_verdict(
+                &verdict,
+                &por_sample_auditor_keys(),
+                1,
+                &SuccessfulPorRepairHandoff,
+            )
             .expect("record first failure");
         assert_eq!(first.consecutive_failures, 1);
         assert!(first.slash.is_none());
@@ -27986,7 +30525,12 @@ mod tests {
             .record_por_challenge(&second_challenge)
             .expect("record second challenge");
         let second = handle
-            .record_por_verdict(&second_verdict, &por_sample_auditor_keys(), 1)
+            .record_por_verdict(
+                &second_verdict,
+                &por_sample_auditor_keys(),
+                1,
+                &SuccessfulPorRepairHandoff,
+            )
             .expect("record second failure");
 
         let slash = second.slash.expect("slash recommendation expected");
@@ -28023,7 +30567,12 @@ mod tests {
             .record_por_challenge(&challenge)
             .expect("record challenge");
         let first = handle
-            .record_por_verdict(&verdict, &por_sample_auditor_keys(), 1)
+            .record_por_verdict(
+                &verdict,
+                &por_sample_auditor_keys(),
+                1,
+                &SuccessfulPorRepairHandoff,
+            )
             .expect("record verdict");
         assert!(first.slash.is_some());
 
@@ -28038,7 +30587,12 @@ mod tests {
             .record_por_challenge(&later_challenge)
             .expect("record challenge after cooldown start");
         let second = handle
-            .record_por_verdict(&later_verdict, &por_sample_auditor_keys(), 1)
+            .record_por_verdict(
+                &later_verdict,
+                &por_sample_auditor_keys(),
+                1,
+                &SuccessfulPorRepairHandoff,
+            )
             .expect("record verdict during cooldown");
         assert!(second.slash.is_none());
         assert_eq!(second.consecutive_failures, 1);
@@ -29373,7 +31927,7 @@ mod tests {
 
         let payload = b"repair-worker-fixture";
         let plan = CarBuildPlan::single_file(payload).expect("plan");
-        let manifest = manifest_builder_for_plan(&plan)
+        let manifest = manifest_builder_for_plan(payload, &plan)
             .root_cid(vec![0xEA; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -29507,7 +32061,7 @@ mod tests {
 
         let payload = b"repair-worker-rehydrate";
         let plan = CarBuildPlan::single_file(payload).expect("plan");
-        let manifest_a = manifest_builder_for_plan(&plan)
+        let manifest_a = manifest_builder_for_plan(payload, &plan)
             .root_cid(vec![0xA1; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -29520,7 +32074,7 @@ mod tests {
             .pin_policy(PinPolicy::default())
             .build()
             .expect("manifest");
-        let manifest_b = manifest_builder_for_plan(&plan)
+        let manifest_b = manifest_builder_for_plan(payload, &plan)
             .root_cid(vec![0xB2; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -29617,7 +32171,7 @@ mod tests {
 
         let payload = b"repair-worker-orchestrator";
         let plan = CarBuildPlan::single_file(payload).expect("plan");
-        let manifest = manifest_builder_for_plan(&plan)
+        let manifest = manifest_builder_for_plan(payload, &plan)
             .root_cid(vec![0xC3; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -29760,7 +32314,7 @@ mod tests {
         let now_unix = retention_epoch + 10;
         let mut policy = PinPolicy::default();
         policy.retention_epoch = retention_epoch;
-        let manifest = manifest_builder_for_plan(&plan)
+        let manifest = manifest_builder_for_plan(payload, &plan)
             .root_cid(vec![0x11; 8])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -30624,7 +33178,7 @@ mod tests {
         let plan = CarBuildPlan::single_file(payload).expect("plan");
         let mut policy = PinPolicy::default();
         policy.retention_epoch = 1_700_000_000;
-        let manifest = manifest_builder_for_plan(&plan)
+        let manifest = manifest_builder_for_plan(payload, &plan)
             .root_cid(vec![0x33; 8])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -30779,7 +33333,7 @@ mod tests {
         let now_unix = retention_epoch + 10;
         let mut policy = PinPolicy::default();
         policy.retention_epoch = retention_epoch;
-        let manifest = manifest_builder_for_plan(&plan)
+        let manifest = manifest_builder_for_plan(payload, &plan)
             .root_cid(vec![0x22; 8])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -30851,7 +33405,7 @@ mod tests {
         let mut policy = PinPolicy::default();
         policy.retention_epoch = retention_epoch;
 
-        let manifest_a = manifest_builder_for_plan(&plan)
+        let manifest_a = manifest_builder_for_plan(payload, &plan)
             .root_cid(vec![0x33; 8])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -30864,7 +33418,7 @@ mod tests {
             .pin_policy(policy.clone())
             .build()
             .expect("manifest a");
-        let manifest_b = manifest_builder_for_plan(&plan)
+        let manifest_b = manifest_builder_for_plan(payload, &plan)
             .root_cid(vec![0x44; 8])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -30928,7 +33482,7 @@ mod tests {
         let plan_a = CarBuildPlan::single_file(payload_a).expect("plan");
         let mut policy_a = PinPolicy::default();
         policy_a.retention_epoch = retention_epoch;
-        let manifest_a = manifest_builder_for_plan(&plan_a)
+        let manifest_a = manifest_builder_for_plan(payload_a, &plan_a)
             .root_cid(vec![0x01; 8])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -30951,7 +33505,7 @@ mod tests {
         let plan_b = CarBuildPlan::single_file(payload_b).expect("plan");
         let mut policy_b = PinPolicy::default();
         policy_b.retention_epoch = retention_epoch;
-        let manifest_b = manifest_builder_for_plan(&plan_b)
+        let manifest_b = manifest_builder_for_plan(payload_b, &plan_b)
             .root_cid(vec![0x02; 8])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -31004,7 +33558,7 @@ mod tests {
         let expired_plan = CarBuildPlan::single_file(&expired_payload).expect("plan");
         let mut expired_policy = PinPolicy::default();
         expired_policy.retention_epoch = unix_now_secs().saturating_sub(10);
-        let expired_manifest = manifest_builder_for_plan(&expired_plan)
+        let expired_manifest = manifest_builder_for_plan(&expired_payload, &expired_plan)
             .root_cid(vec![0x33; 8])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -31024,7 +33578,7 @@ mod tests {
 
         let new_payload = vec![0xBB; 24];
         let new_plan = CarBuildPlan::single_file(&new_payload).expect("plan");
-        let new_manifest = manifest_builder_for_plan(&new_plan)
+        let new_manifest = manifest_builder_for_plan(&new_payload, &new_plan)
             .root_cid(vec![0x44; 8])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -32035,7 +34589,7 @@ mod tests {
 
         let payload = b"node handle storage fetch test";
         let plan = CarBuildPlan::single_file(payload).expect("plan");
-        let manifest = manifest_builder_for_plan(&plan)
+        let manifest = manifest_builder_for_plan(payload, &plan)
             .root_cid(vec![0xAA; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -32067,7 +34621,7 @@ mod tests {
 
         let payload = b"SoraFS node handle PoR sampling payload";
         let plan = CarBuildPlan::single_file(payload).expect("plan");
-        let manifest = manifest_builder_for_plan(&plan)
+        let manifest = manifest_builder_for_plan(payload, &plan)
             .root_cid(vec![0xBB; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -32153,7 +34707,7 @@ mod tests {
 
         let payload = vec![0xEE; 128 * 1024];
         let plan = CarBuildPlan::single_file(&payload).expect("plan");
-        let manifest = manifest_builder_for_plan(&plan)
+        let manifest = manifest_builder_for_plan(&payload, &plan)
             .root_cid(vec![0xDD; 8])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -32323,7 +34877,7 @@ mod tests {
         let plan = CarBuildPlan::single_file(payload).expect("plan");
         let mut policy = PinPolicy::default();
         policy.retention_epoch = retention_epoch;
-        let manifest = manifest_builder_for_plan(&plan)
+        let manifest = manifest_builder_for_plan(payload, &plan)
             .root_cid(cid)
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -32344,13 +34898,268 @@ mod tests {
     }
 
     #[test]
+    fn finalized_native_repair_rejects_stale_leases_and_deduplicates_after_restart() {
+        use crate::{
+            native_repair_worker::{NativeRepairExecutionErrorV1, NativeRepairTerminalKindV1},
+            repair_transaction_forwarder::{
+                RepairOperationV1, RepairTransactionContextV1, RepairTransactionEnqueueResultV1,
+            },
+        };
+        use iroha_data_model::{
+            ChainId,
+            isi::sorafs::SorafsRepairTaskActionV1,
+            sorafs::moderation_ledger::{
+                REPAIR_LEDGER_TASK_VERSION_V1, RepairFinalizedCursorV1, RepairFinalizedTaskV1,
+                RepairLedgerLeaseV1, RepairLedgerTaskV1, sorafs_repair_task_id_v1,
+            },
+        };
+
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let repair_actual = iroha_config::parameters::actual::SorafsRepair {
+            enabled: true,
+            ..Default::default()
+        };
+        let repair_config = RepairConfig::from(&repair_actual);
+        let handle =
+            NodeHandle::new_with_policies(cfg.clone(), repair_config.clone(), GcConfig::default());
+        let provider_id = [0xC1; 32];
+        let declaration = CapacityDeclarationV1 {
+            version: CAPACITY_DECLARATION_VERSION_V1,
+            provider_id,
+            stake: sorafs_manifest::provider_advert::StakePointer {
+                pool_id: [0xC2; 32],
+                stake_amount: xor("1"),
+            },
+            committed_capacity_gib: 100,
+            chunker_commitments: vec![ChunkerCommitmentV1 {
+                profile_id: "sorafs.sf1@1.0.0".into(),
+                profile_aliases: None,
+                committed_gib: 100,
+                capability_refs: Vec::new(),
+            }],
+            lane_commitments: vec![LaneCommitmentV1 {
+                lane_id: "default".into(),
+                max_gib: 100,
+            }],
+            pricing: None,
+            valid_from: 1,
+            valid_until: 10,
+            metadata: Vec::new(),
+        };
+        let record = CapacityDeclarationRecord::new(
+            ProviderId::new(provider_id),
+            to_bytes(&declaration).expect("encode capacity declaration"),
+            declaration.committed_capacity_gib,
+            1,
+            declaration.valid_from,
+            declaration.valid_until,
+            Metadata::default(),
+        );
+        handle
+            .record_capacity_declaration(&record)
+            .expect("bind local provider");
+
+        let payload = b"finalized-native-repair-corrupt-chunk";
+        let plan = CarBuildPlan::single_file(payload).expect("chunk plan");
+        let build_manifest = |root_cid: Vec<u8>| {
+            manifest_builder_for_plan(payload, &plan)
+                .root_cid(root_cid)
+                .dag_codec(DagCodecId(0x71))
+                .chunking_from_profile(
+                    sorafs_chunker::ChunkProfile::DEFAULT,
+                    sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
+                )
+                .content_length(plan.content_length)
+                .car_digest(blake3::hash(payload).into())
+                .car_size(plan.content_length)
+                .pin_policy(PinPolicy::default())
+                .build()
+                .expect("manifest")
+        };
+        let target_manifest = build_manifest(vec![0xC3; 16]);
+        let source_manifest = build_manifest(vec![0xC4; 16]);
+        let mut reader = payload.as_slice();
+        handle
+            .ingest_manifest(&target_manifest, &plan, &mut reader)
+            .expect("ingest target manifest");
+        let mut reader = payload.as_slice();
+        handle
+            .ingest_manifest(&source_manifest, &plan, &mut reader)
+            .expect("ingest source manifest");
+        let target_digest: [u8; 32] = target_manifest.digest().expect("target digest").into();
+        let source_digest: [u8; 32] = source_manifest.digest().expect("source digest").into();
+        let target = handle
+            .manifest_metadata_by_digest(&target_digest)
+            .expect("target metadata")
+            .chunk(0)
+            .expect("target chunk")
+            .clone();
+        let source = handle
+            .manifest_metadata_by_digest(&source_digest)
+            .expect("source metadata")
+            .chunk(0)
+            .expect("source chunk")
+            .clone();
+        assert_eq!(target.digest, source.digest);
+        assert_ne!(target.path, source.path);
+        let corrupt = vec![0xA5; target.length as usize];
+        std::fs::write(&target.path, &corrupt).expect("corrupt target chunk");
+
+        let authority_key =
+            KeyPair::try_from_seed(vec![0xC5; 32], Algorithm::Ed25519).expect("authority key");
+        let authority = AccountId::new(authority_key.public_key().clone());
+        let other_key =
+            KeyPair::try_from_seed(vec![0xC6; 32], Algorithm::Ed25519).expect("other key");
+        let other = AccountId::new(other_key.public_key().clone());
+        let ticket_id = RepairTicketId("REP-NATIVE-FINALIZED-1".to_owned());
+        let report = RepairReportV1 {
+            version: REPAIR_REPORT_VERSION_V1,
+            ticket_id: ticket_id.clone(),
+            auditor_account: authority.to_string(),
+            submitted_at_unix: 1,
+            evidence: RepairEvidenceV1 {
+                version: REPAIR_EVIDENCE_VERSION_V1,
+                manifest_digest: target_digest,
+                provider_id,
+                por_history_id: None,
+                cause: RepairCauseV1::Manual(RepairManualCauseV1 {
+                    reason: "corrupt chunk".to_owned(),
+                }),
+                evidence_json: None,
+                notes: None,
+            },
+            notes: None,
+        };
+        let source_identity = [0xC7; 32];
+        let finalized_cursor = RepairFinalizedCursorV1 {
+            height: 7,
+            block_hash: [0xC8; 32],
+        };
+        let finalized_task = RepairFinalizedTaskV1 {
+            finalized_cursor,
+            task: RepairLedgerTaskV1 {
+                version: REPAIR_LEDGER_TASK_VERSION_V1,
+                task_id: sorafs_repair_task_id_v1(source_identity),
+                source_identity,
+                ticket_id: ticket_id.0.clone(),
+                canonical_report: to_bytes(&report).expect("encode canonical report"),
+                manifest_digest: target_digest,
+                provider_id,
+                submitted_by: authority.clone(),
+                submitted_at_unix_ms: 1_000,
+                revision: 2,
+                lease: Some(RepairLedgerLeaseV1 {
+                    owner: authority.clone(),
+                    generation: 1,
+                    acquired_at_unix_ms: 1_000,
+                    renewed_at_unix_ms: 1_000,
+                    expires_at_unix_ms: 60_000,
+                }),
+                terminal_outcome: None,
+                slash: None,
+                appeal: None,
+                action_receipts: Vec::new(),
+                updated_at_unix_ms: 1_000,
+            },
+        };
+        let context = RepairTransactionContextV1 {
+            chain_id: ChainId::from("native-repair-test-chain"),
+            finalized_cursor,
+        };
+        let stale_context = RepairTransactionContextV1 {
+            chain_id: context.chain_id.clone(),
+            finalized_cursor: RepairFinalizedCursorV1 {
+                height: 8,
+                block_hash: [0xC9; 32],
+            },
+        };
+        assert!(matches!(
+            handle.execute_finalized_native_repair(
+                &finalized_task,
+                &authority,
+                &stale_context,
+                2_000,
+            ),
+            Err(NativeRepairExecutionErrorV1::StaleFinalizedCursor)
+        ));
+        assert_eq!(
+            std::fs::read(&target.path).expect("read corrupt target"),
+            corrupt
+        );
+        assert!(
+            handle
+                .pending_repair_transactions_after(None, 8)
+                .expect("empty forwarder")
+                .is_empty()
+        );
+        assert!(matches!(
+            handle.execute_finalized_native_repair(&finalized_task, &other, &context, 2_000,),
+            Err(NativeRepairExecutionErrorV1::LeaseOwnerMismatch)
+        ));
+        assert_eq!(
+            std::fs::read(&target.path).expect("read corrupt target"),
+            corrupt
+        );
+
+        let first = handle
+            .execute_finalized_native_repair(&finalized_task, &authority, &context, 2_000)
+            .expect("execute exact finalized native lease");
+        assert!(matches!(
+            first.enqueue_result,
+            RepairTransactionEnqueueResultV1::Inserted { .. }
+        ));
+        assert!(matches!(
+            first.terminal_kind,
+            NativeRepairTerminalKindV1::Complete { .. }
+        ));
+        assert_eq!(first.invalid_chunks_before, 1);
+        assert_eq!(first.invalid_chunks_after, 0);
+        assert_eq!(
+            blake3::hash(&std::fs::read(&target.path).expect("read restored target")).as_bytes(),
+            &target.digest
+        );
+
+        let replay = handle
+            .execute_finalized_native_repair(&finalized_task, &authority, &context, 2_001)
+            .expect("deduplicate exact terminal operation");
+        assert_eq!(replay.operation_id, first.operation_id);
+        assert!(matches!(
+            replay.enqueue_result,
+            RepairTransactionEnqueueResultV1::Existing { .. }
+        ));
+        let request = handle
+            .repair_transaction_operation_for_reconciliation(first.operation_id)
+            .expect("read exact native terminal operation");
+        assert_eq!(request.chain_id, context.chain_id);
+        assert_eq!(request.authority, authority);
+        assert!(matches!(
+            request.operation,
+            RepairOperationV1::Action(ref instruction)
+                if matches!(
+                    instruction.action(),
+                    SorafsRepairTaskActionV1::Complete(action)
+                        if action.lease_generation == 1
+                )
+        ));
+        drop(handle);
+
+        let restored = NodeHandle::new_with_policies(cfg, repair_config, GcConfig::default());
+        let pending = restored
+            .pending_repair_transactions_after(None, 8)
+            .expect("restore durable native terminal operation");
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].operation_id, first.operation_id);
+        assert_eq!(pending[0].chain_id, context.chain_id);
+    }
+
+    #[test]
     fn node_handle_storage_methods_error_when_disabled() {
         let cfg = StorageConfig::builder().enabled(false).build();
         let handle = NodeHandle::new(cfg);
 
         let payload = b"disabled storage payload";
         let plan = CarBuildPlan::single_file(payload).expect("plan");
-        let manifest = manifest_builder_for_plan(&plan)
+        let manifest = manifest_builder_for_plan(payload, &plan)
             .root_cid(vec![0xCC; 8])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -32380,7 +35189,7 @@ mod tests {
     impl RepairOrchestrator for StaticRepairOrchestrator {
         fn rehydrate_missing_chunks(
             &self,
-            _task: &RepairTaskRecordV1,
+            _context: &native_repair_worker::NativeRepairExecutionContextV1,
             _manifest: &StoredManifest,
             _missing_chunks: &[ChunkFileRecord],
         ) -> Result<Vec<RepairChunkPayload>, RepairOrchestratorError> {

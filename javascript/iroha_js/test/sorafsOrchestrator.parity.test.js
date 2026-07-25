@@ -26,12 +26,15 @@ function loadJson(relativePath) {
 }
 
 const METADATA = loadJson("metadata.json");
-const PLAN_SPECS = loadJson("plan.json");
+const PLAN_ENVELOPE = loadJson("plan.json");
+assert.equal(PLAN_ENVELOPE.schema, "sorafs.chunk_fetch_plan.v1");
+assert.match(PLAN_ENVELOPE.payload_digest_blake3_hex, /^[0-9a-f]{64}$/u);
+const PLAN_SPECS = PLAN_ENVELOPE.chunk_fetch_specs;
 const PROVIDER_FIXTURE = loadJson("providers.json");
 const OPTIONS_FIXTURE = loadJson("options.json");
 const TELEMETRY_FIXTURE = loadJson("telemetry.json");
 
-const PLAN_JSON = JSON.stringify(PLAN_SPECS, null, 2);
+const PLAN_JSON = JSON.stringify(PLAN_ENVELOPE, null, 2);
 const PAYLOAD_FIXTURE_PATH = path.join(REPO_ROOT, METADATA.payload_path);
 const PAYLOAD_BYTES = readFileSync(PAYLOAD_FIXTURE_PATH);
 

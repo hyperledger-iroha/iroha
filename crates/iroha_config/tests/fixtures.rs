@@ -958,6 +958,19 @@ fn minimal_config_snapshot() {
                         default_rate_limit_bytes: 8388608,
                         default_requests_per_minute: 120,
                     },
+                    orderbook_worker: SorafsOrderbookWorker {
+                        enabled: false,
+                        scan_interval: 1s,
+                        match_batch_limit: 64,
+                        maintenance_batch_limit: 128,
+                        max_pending: 4096,
+                        max_completed: 65536,
+                        max_dead_letters: 4096,
+                        max_attempts: 8,
+                        checkpoint_max_bytes: Bytes(
+                            67108864,
+                        ),
+                    },
                     orderbook: SorafsOrderbook {
                         min_order_gib: 1,
                         price_tick: Quantity(
@@ -973,8 +986,12 @@ fn minimal_config_snapshot() {
                     privacy_aggregates: SorafsPrivacyAggregateSchedule {
                         enabled: false,
                         cycle_seconds: 604800,
+                        first_cycle_start_unix: 0,
                         publish_delay_seconds: 3600,
                         aggregate_id_prefix: "sfm4c-cycle",
+                        query_id: None,
+                        population_inventory: vec![],
+                        metric_schema: vec![],
                         privacy_mode: "differential_privacy_with_suppression",
                         epsilon_numerator: 4,
                         epsilon_denominator: 5,
@@ -1570,6 +1587,19 @@ fn minimal_config_snapshot() {
                     body_source_bytes: 34603008,
                     chunks: 2048,
                     ready_bodies: 128,
+                },
+                limits: SumeragiV2RuntimeLimits {
+                    authenticated_merge_qc_capacity: 64,
+                    merge_leader_body_frame_headroom_bytes: 1048576,
+                    autonomous_carrier_headroom_bytes: 1048576,
+                    autonomous_producer_recheck: 100ms,
+                    historical_recovery_stuck_attempts: 32,
+                    historical_recovery_retry_tier_attempts: 4,
+                    historical_recovery_max_retry_tier: 6,
+                    sidecar_service_burst: 8,
+                    native_amx_signing_guard_record_capacity: 524288,
+                    native_amx_signing_guard_record_bytes: 16384,
+                    native_amx_signing_guard_anchor_bytes: 4096,
                 },
                 keys: SumeragiKeys {
                     activation_lead_blocks: 1,
@@ -2474,6 +2504,8 @@ fn minimal_config_snapshot() {
                     max_retention_epoch: None,
                     allowed_storage_classes: None,
                     require_council_signatures: false,
+                    approval_quorum: 1,
+                    approval_signers: vec![],
                 },
                 sorafs_pin_fee_asset_id: AssetDefinitionId {
                     aid_bytes: [

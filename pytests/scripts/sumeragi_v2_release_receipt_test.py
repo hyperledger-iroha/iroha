@@ -92,6 +92,17 @@ SCALING_CONFIGURATION_DATA = b"[nexus]\nenabled = true\n"
 SCALING_TRIAL_HARNESS_DATA = b"#!/usr/bin/env bash\nexit 0\n"
 SCALING_IROHAD_SHA256 = "c" * 64
 SCALING_IROHA_CLI_SHA256 = "d" * 64
+CARGO_VERSION_OUTPUT = b"cargo 1.93.1 (083ac5135 2025-12-15)\n"
+RUSTC_VERSION_OUTPUT = (
+    b"rustc 1.93.1 (01f6ddf75 2026-02-11)\n"
+    b"binary: rustc\n"
+    b"commit-hash: 01f6ddf75fixture\n"
+    b"commit-date: 2026-02-11\n"
+    b"host: x86_64-unknown-linux-gnu\n"
+    b"release: 1.93.1\n"
+    b"LLVM version: 21.1.0\n"
+)
+PREBUILT_HOST_TRIPLE = "x86_64-unknown-linux-gnu"
 
 
 def sha256(path: Path) -> str:
@@ -995,6 +1006,171 @@ def make_scaling_evidence(
     }
 
 
+def make_prebuilt_binary_bundle(
+    release_root: Path,
+    *,
+    sealed_manifest: str,
+    lock: str,
+) -> dict[str, Path | str | list[Path]]:
+    bundle = (
+        release_root
+        / "target"
+        / "sumeragi-v2-release"
+        / sealed_manifest
+        / "programs"
+        / "invocation.Fixture01"
+    )
+    release = bundle / "release"
+    message_control_release = bundle / "message-control" / "release"
+    release.mkdir(parents=True)
+    message_control_release.mkdir(parents=True)
+    binary_specs = (
+        ("irohad", "release/iroha3d"),
+        ("irohad_message_control", "message-control/release/iroha3d"),
+        ("iroha", "release/iroha"),
+        ("kagami", "release/kagami"),
+    )
+    binaries: list[Path] = []
+    fields = {
+        "schema_version": "2",
+        "source_manifest_sha256": sealed_manifest,
+        "cargo_lock_sha256": lock,
+        "cargo_version_sha256": hashlib.sha256(CARGO_VERSION_OUTPUT).hexdigest(),
+        "rustc_version_sha256": hashlib.sha256(RUSTC_VERSION_OUTPUT).hexdigest(),
+        "host_triple": PREBUILT_HOST_TRIPLE,
+        "target_triple": PREBUILT_HOST_TRIPLE,
+        "profile": "release",
+        "bundle_dir": str(bundle),
+    }
+    for prefix, relative in binary_specs:
+        binary = bundle.joinpath(*relative.split("/"))
+        binary.write_bytes(f"fixture-prebuilt-{prefix}\n".encode("ascii"))
+        binary.chmod(0o500)
+        binaries.append(binary)
+        fields[f"{prefix}_relative_path"] = relative
+        fields[f"{prefix}_sha256"] = sha256(binary)
+        fields[f"{prefix}_size_bytes"] = str(binary.stat().st_size)
+        fields[f"{prefix}_mode_octal"] = "0500"
+    manifest = bundle / ".sumeragi-v2-prebuilt-binaries.tsv"
+    write_tsv(manifest, fields)
+    manifest.chmod(0o400)
+    for directory in (
+        release,
+        message_control_release,
+        bundle / "message-control",
+        bundle,
+    ):
+        directory.chmod(0o500)
+    return {
+        "prebuilt_bundle": bundle,
+        "prebuilt_manifest": manifest,
+        "prebuilt_manifest_sha256": sha256(manifest),
+        "prebuilt_binaries": binaries,
+    }
+
+
+def make_g4p_evidence(
+    tmp_path: Path,
+    *,
+    head: str,
+    tree: str,
+    sealed_manifest: str,
+    lock: str,
+    prebuilt_manifest_sha256: str,
+) -> dict[str, Path | list[Path]]:
+    evidence_dir = tmp_path / "g4p"
+    evidence_dir.mkdir()
+    release_tests = (
+        (
+            "nexus_and_streaming",
+            "nexus::autoscale_localnet::"
+            "nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_"
+            "rejects_stale_artifacts",
+        ),
+        (
+            "nexus_and_streaming",
+            "nexus::autoscale_localnet::"
+            "nexus_autoscale_certified_merge_recovers_missing_sidecar_after_restart",
+        ),
+        (
+            "nexus_and_streaming",
+            "nexus::autoscale_localnet::"
+            "nexus_autoscale_two_phase_drain_closes_certifies_then_retires_after_"
+            "restart",
+        ),
+        (
+            "native_amx_routing",
+            "native_amx_rotating_validator_fault_soak_preserves_independent_"
+            "participant_qcs",
+        ),
+    )
+
+    logs = []
+    summary_lines = ["target\ttest\tstatus\tlog_sha256\tlog"]
+    for index, (target, test) in enumerate(release_tests):
+        log = evidence_dir / f"run-{index:02d}-{target}.log"
+        release_markers = []
+        if index in (0, 3):
+            release_markers.append(
+                f"[multilane-release-gate] started: {test}"
+            )
+        if target == "native_amx_routing":
+            release_markers.append(
+                "[multilane-release-native-evidence] grouped_sources=2 "
+                "durable_manifest=passed body_eviction_recovery=passed "
+                "authenticated_remote_recovery=passed exact_once=passed"
+            )
+        if index in (0, 3):
+            release_markers.append(
+                f"[multilane-release-gate] completed: {test}"
+            )
+        log.write_text(
+            "\n".join(
+                (
+                    "running 1 test",
+                    *release_markers,
+                    f"test {test} ... ok",
+                    "",
+                    "test result: ok. 1 passed; 0 failed; 0 ignored; "
+                    "0 measured; 7 filtered out; finished in 0.01s",
+                )
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        logs.append(log)
+        summary_lines.append(
+            f"{target}\t{test}\tpassed\t{sha256(log)}\t{log.name}"
+        )
+    summary = evidence_dir / "runs.tsv"
+    summary.write_text("\n".join(summary_lines) + "\n", encoding="utf-8")
+    completion = evidence_dir / "COMPLETED.tsv"
+    write_tsv(
+        completion,
+        {
+            "schema_version": "1",
+            "mode": "mandatory-four-peer-multilane-release",
+            "head_commit": head,
+            "head_tree": tree,
+            "source_manifest_sha256": sealed_manifest,
+            "cargo_lock_sha256": lock,
+            "prebuilt_manifest_sha256": prebuilt_manifest_sha256,
+            "expected_runs": "4",
+            "passed_runs": "4",
+            "failed_runs": "0",
+            "skipped_runs": "0",
+            "native_grouped_pruning_evidence": "passed",
+            "runs_sha256": sha256(summary),
+        },
+    )
+    return {
+        "g4p_completion": completion,
+        "g4p_summary": summary,
+        "g4p_logs": logs,
+        "g4p_log": logs[0],
+    }
+
+
 def make_g12_evidence(
     tmp_path: Path,
     *,
@@ -1002,6 +1178,7 @@ def make_g12_evidence(
     tree: str,
     sealed_manifest: str,
     lock: str,
+    prebuilt_manifest_sha256: str,
 ) -> dict[str, Path | list[Path]]:
     seed_dir = tmp_path / "g12-seed"
     soak_dir = tmp_path / "g12-soak"
@@ -1051,6 +1228,7 @@ def make_g12_evidence(
             "head_tree": tree,
             "source_manifest_sha256": sealed_manifest,
             "cargo_lock_sha256": lock,
+            "prebuilt_manifest_sha256": prebuilt_manifest_sha256,
             "expected_runs": "10",
             "passed_runs": "10",
             "failed_runs": "0",
@@ -1071,6 +1249,7 @@ def make_g12_evidence(
             "head_tree": tree,
             "source_manifest_sha256": sealed_manifest,
             "cargo_lock_sha256": lock,
+            "prebuilt_manifest_sha256": prebuilt_manifest_sha256,
             "seed": "nexus-cross-dataspace-v1-seed-00",
             "duration_seconds": "7200",
             "expected_runs": "1",
@@ -1442,6 +1621,7 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
     canonical_production_tests = writer_symbols["_canonical_production_tests"](
         ROOT_DIR
     )
+    canonical_g_unit_rows = writer_symbols["_canonical_g_unit_rows"](ROOT_DIR)
     data_status_test = writer_symbols["_DATA_STATUS_TEST"]
     data_lane_certificate_test = writer_symbols["_DATA_LANE_CERTIFICATE_TEST"]
     taira_contract_tests = writer_symbols["_TAIRA_CONTRACT_TESTS"]
@@ -1490,6 +1670,20 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
         required_lines.append(f"{modules[0]}\t{test}")
     corridor_required = corridor_dir / "production-required-tests.tsv"
     corridor_required.write_text("\n".join(required_lines) + "\n", encoding="utf-8")
+    corridor_g_unit = corridor_dir / "g-unit-required-tests.tsv"
+    corridor_g_unit.write_text(
+        "\n".join(
+            [
+                "leg_id\tcrate\ttest",
+                *(
+                    f"{leg_id}\t{package}\t{test}"
+                    for leg_id, package, test in canonical_g_unit_rows
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     corridor_summary_lines = [
         "leg_index\tleg_id\tkind\trequired_test_count\tobserved_test_count\t"
         "command_status\ttee_status\tlog_sha256\tlog\tcommand"
@@ -1498,9 +1692,26 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
     module_by_leg = {
         leg_id: module for leg_id, module, _ in production_modules
     }
+    g_unit_by_leg: dict[str, list[str]] = {}
+    for leg_id, _, test in canonical_g_unit_rows:
+        g_unit_by_leg.setdefault(leg_id, []).append(test)
     for index, (leg_id, kind, required_count, command) in enumerate(corridor_legs):
         log = corridor_logs_dir / f"{index:02d}-{leg_id}.log"
-        if kind.startswith("cargo-"):
+        if kind == "cargo-focus":
+            test_lines = g_unit_by_leg[leg_id]
+            assert len(test_lines) == required_count
+            log_lines = [
+                line
+                for test in test_lines
+                for line in (
+                    "running 1 test",
+                    f"test {test} ... ok",
+                    "",
+                    "test result: ok. 1 passed; 0 failed; 0 ignored; "
+                    "0 measured; 42 filtered out; finished in 0.01s",
+                )
+            ]
+        elif kind.startswith("cargo-"):
             test_lines = []
             if kind == "cargo-module":
                 test_lines = [
@@ -1591,8 +1802,34 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
         "cargo_verus",
     ):
         path = tool_dir / name
-        path.write_text(f"fixture {name}\n", encoding="utf-8")
+        if name == "cargo":
+            path.write_bytes(
+                b"#!/bin/sh\n"
+                b"test \"$#\" = 1 && test \"$1\" = --version || exit 91\n"
+                b"printf '%s\\n' 'cargo 1.93.1 (083ac5135 2025-12-15)'\n"
+            )
+            path.chmod(0o500)
+        elif name == "rustc":
+            path.write_bytes(
+                b"#!/bin/sh\n"
+                b"test \"$#\" = 1 && test \"$1\" = -vV || exit 92\n"
+                b"cat <<'RUSTC_VERSION'\n"
+                + RUSTC_VERSION_OUTPUT
+                + b"RUSTC_VERSION\n"
+            )
+            path.chmod(0o500)
+        else:
+            path.write_text(f"fixture {name}\n", encoding="utf-8")
         tool_paths[name] = path
+    prebuilt = make_prebuilt_binary_bundle(
+        release_root,
+        sealed_manifest=sealed_manifest,
+        lock=lock,
+    )
+    prebuilt_manifest = prebuilt["prebuilt_manifest"]
+    prebuilt_manifest_sha256 = prebuilt["prebuilt_manifest_sha256"]
+    assert isinstance(prebuilt_manifest, Path)
+    assert isinstance(prebuilt_manifest_sha256, str)
     corridor_completion = corridor_dir / "COMPLETED.tsv"
     isolated_cargo_home = tool_dir / "cargo-home"
     isolated_cargo_home.mkdir()
@@ -1606,8 +1843,11 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
             "cargo_lock_sha256": lock,
             "leg_count": str(len(corridor_legs)),
             "production_required_test_count": str(len(required_lines) - 1),
+            "g_unit_expected_test_count": str(len(canonical_g_unit_rows)),
+            "g_unit_passed_test_count": str(len(canonical_g_unit_rows)),
             "summary_sha256": sha256(corridor_summary),
             "production_required_tests_sha256": sha256(corridor_required),
+            "g_unit_inventory_sha256": sha256(corridor_g_unit),
             "java_path": str(tool_paths["java"].resolve()),
             "java_sha256": sha256(tool_paths["java"]),
             "cargo_path": str(tool_paths["cargo"].resolve()),
@@ -1640,6 +1880,8 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
             ),
             "tlc_profile": "ci",
             "tlaps_threads": "1",
+            "prebuilt_manifest_path": str(prebuilt_manifest),
+            "prebuilt_manifest_sha256": prebuilt_manifest_sha256,
         },
     )
 
@@ -1688,7 +1930,7 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
                 "jar_sha256\t"
                 "1ac65e9c16595c19241519b209c8055d1aa79bf718f23df7cde5cf9b3dd88f2a",
                 f"source_manifest_sha256\t{sealed_manifest}",
-                "result_count\t3",
+                "result_count\t4",
                 "result\tautoscale-lifecycle\tSumeragiV2AutoscaleLifecycle\t"
                 "multilane_autoscale_lifecycle_fixed.cfg\t8\tNoError\t"
                 f"{'1' * 64}\t{'2' * 64}\t{'3' * 64}",
@@ -1700,6 +1942,10 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
                 "SumeragiV2AutonomousReservationCarrier\t"
                 "multilane_autonomous_reservation_carrier_fixed.cfg\t10\tNoError\t"
                 f"{'7' * 64}\t{'8' * 64}\t{'9' * 64}",
+                "result\tqueue-plan-admission-registry\t"
+                "SumeragiV2QueuePlanAdmissionRegistry\t"
+                "multilane_queue_plan_admission_registry_fixed.cfg\t8\tNoError\t"
+                f"{'a' * 64}\t{'b' * 64}\t{'c' * 64}",
             )
         )
         + "\n",
@@ -1791,6 +2037,10 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
     )
 
     seed_dir = tmp_path / "seed"
+    seed_source_bound_root = (
+        release_root / "target" / "sumeragi-v2-release" / sealed_manifest
+    )
+    seed_program_target = seed_source_bound_root / "programs"
     runs_dir = seed_dir / "runs"
     localnets_dir = seed_dir / "localnets"
     localnet_manifests_dir = seed_dir / "localnet-manifests"
@@ -1868,11 +2118,22 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
                     sha256(run_log),
                     output,
                     f"localnets/run-{index:03d}",
+                    f"CARGO_TARGET_DIR={seed_source_bound_root / 'test-suite'} "
+                    f"IROHA_TEST_TARGET_DIR={seed_program_target} "
                     f"IROHA_RELEASE_SOURCE_MANIFEST_SHA256={sealed_manifest} "
+                    "TEST_NETWORK_BIN_IROHAD="
+                    f"{seed_program_target / 'release' / 'iroha3d'} "
+                    "TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL="
+                    f"{seed_program_target / 'message-control' / 'release' / 'iroha3d'} "
+                    f"TEST_NETWORK_BIN_IROHA={seed_program_target / 'release' / 'iroha'} "
+                    f"KAGAMI_BIN={seed_program_target / 'release' / 'kagami'} "
+                    "CARGO_NET_OFFLINE=true "
                     "IROHA_TEST_REQUIRE_NETWORK=1 "
                     "IROHA_TEST_NETWORK_START_ATTEMPTS=1 "
-                    "IROHA_TEST_SKIP_BUILD=0 "
-                    "IROHA_TEST_ALLOW_REENTRANT_BUILD=1 "
+                    "IROHA_TEST_SKIP_BUILD=1 "
+                    "IROHA_TEST_ALLOW_REENTRANT_BUILD=0 "
+                    "IROHA_TEST_BUILD_PROFILE=release "
+                    "PROFILE=release "
                     "IROHA_TEST_BUILD_TIMEOUT_MS=3600 "
                     "IROHA_TEST_PROCESS_TIMEOUT_MS=300 "
                     "IROHA_TEST_NETWORK_PERMIT_WAIT_TIMEOUT=300 "
@@ -1880,7 +2141,7 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
                     "TEST_NETWORK_TMP_DIR=${SEED_MATRIX_EVIDENCE_DIRECTORY}/"
                     f"localnets/run-{index:03d} "
                     "IROHA_TEST_NETWORK_KEEP_DIRS=1 "
-                    "cargo test --locked -p integration_tests --test "
+                    "cargo test --locked --offline -p integration_tests --test "
                     "sumeragi_v2_runner_isolated "
                     f"sumeragi_v2_runner::{scenario} -- --exact --nocapture "
                     "--test-threads=1",
@@ -1901,6 +2162,7 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
         "head_tree": tree,
         "source_manifest_sha256": sealed_manifest,
         "cargo_lock_sha256": lock,
+        "prebuilt_manifest_sha256": prebuilt_manifest_sha256,
         "completed_runs": str(seed_run_count),
         "expected_runs": str(seed_run_count),
         "summary_sha256": sha256(seed_summary),
@@ -1978,6 +2240,7 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
             "head_tree": tree,
             "source_manifest_sha256": sealed_manifest,
             "cargo_lock_sha256": lock,
+            "prebuilt_manifest_sha256": prebuilt_manifest_sha256,
             "evidence_sha256": sha256(taira_evidence),
             "log_sha256": sha256(taira_log),
         },
@@ -1993,10 +2256,21 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
         tree=tree,
         sealed_manifest=sealed_manifest,
         lock=lock,
+        prebuilt_manifest_sha256=prebuilt_manifest_sha256,
+    )
+    g4p = make_g4p_evidence(
+        tmp_path,
+        head=head,
+        tree=tree,
+        sealed_manifest=sealed_manifest,
+        lock=lock,
+        prebuilt_manifest_sha256=prebuilt_manifest_sha256,
     )
     return {
         **bootstrap,
         **scaling,
+        **prebuilt,
+        **g4p,
         **g12,
         "candidate": candidate,
         "sealed": sealed,
@@ -2020,6 +2294,7 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
         "corridor_completion": corridor_completion,
         "corridor_summary": corridor_summary,
         "corridor_required": corridor_required,
+        "corridor_g_unit": corridor_g_unit,
         "corridor_logs": corridor_logs,
         "corridor_log": corridor_logs[0],
         "formal_completion": formal_completion,
@@ -2036,6 +2311,7 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
         "formal_tlaps_resource_summary": formal_tlaps_resource_summary,
         "formal_verus_tool": tool_paths["verus"],
         "corridor_cargo_tool": tool_paths["cargo"],
+        "corridor_rustc_tool": tool_paths["rustc"],
         "corridor_cargo_home": isolated_cargo_home,
         "seed_completion": seed_completion,
         "seed_summary": seed_summary,
@@ -2155,6 +2431,8 @@ def run_writer(
             str(evidence["chaos_completion"]),
             "--taira-completion",
             str(evidence["taira_completion"]),
+            "--g4p-completion",
+            str(evidence["g4p_completion"]),
             "--g12-seed-completion",
             str(evidence["g12_seed_completion"]),
             "--g12-fault-soak-completion",
@@ -2197,6 +2475,36 @@ def rewrite_json(path: Path, value: dict[str, object]) -> None:
     path.chmod(0o600)
     path.write_bytes(canonical_json(value))
     path.chmod(0o400)
+
+
+def read_tsv_fields(path: Path) -> dict[str, str]:
+    return dict(
+        line.split("\t", 1)
+        for line in path.read_text(encoding="utf-8").splitlines()
+    )
+
+
+def rewrite_prebuilt_manifest(
+    evidence: dict[str, Path | str | list[Path]],
+    data: bytes,
+    *,
+    update_corridor_digest: bool = True,
+) -> None:
+    manifest = evidence["prebuilt_manifest"]
+    bundle = evidence["prebuilt_bundle"]
+    corridor = evidence["corridor_completion"]
+    assert isinstance(manifest, Path)
+    assert isinstance(bundle, Path)
+    assert isinstance(corridor, Path)
+    bundle.chmod(0o700)
+    manifest.chmod(0o600)
+    manifest.write_bytes(data)
+    manifest.chmod(0o400)
+    bundle.chmod(0o500)
+    if update_corridor_digest:
+        fields = read_tsv_fields(corridor)
+        fields["prebuilt_manifest_sha256"] = sha256(manifest)
+        write_tsv(corridor, fields)
 
 
 def load_writer_module() -> ModuleType:
@@ -2441,6 +2749,7 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
         "corridor_completion": "corridor_completion",
         "corridor_summary": "corridor_summary",
         "corridor_production_inventory": "corridor_required",
+        "g_unit_focused_test_inventory": "corridor_g_unit",
         "formal_completion": "formal_completion",
         "formal_gate_log": "formal_log",
         "formal_proof_coverage": "formal_ledger",
@@ -2501,6 +2810,65 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
     ]
     assert len(scaling_preflight_logs) == 1
 
+    prebuilt = receipt["evidence"]["prebuilt_binary_bundle"]
+    prebuilt_manifest = evidence["prebuilt_manifest"]
+    prebuilt_binaries = evidence["prebuilt_binaries"]
+    prebuilt_bundle = evidence["prebuilt_bundle"]
+    assert isinstance(prebuilt_manifest, Path)
+    assert isinstance(prebuilt_binaries, list)
+    assert isinstance(prebuilt_bundle, Path)
+    assert prebuilt["schema_version"] == 2
+    assert prebuilt["manifest"] == {
+        "path": str(prebuilt_manifest),
+        "sha256": sha256(prebuilt_manifest),
+        "size_bytes": prebuilt_manifest.stat().st_size,
+        "mode": "0400",
+        "owner_uid": os.geteuid(),
+        "nlink": 1,
+    }
+    assert prebuilt["source_manifest_sha256"] == evidence["sealed_manifest"]
+    assert prebuilt["cargo_lock_sha256"] == evidence["lock"]
+    assert prebuilt["bundle_dir"] == str(prebuilt_bundle)
+    assert prebuilt["host_triple"] == PREBUILT_HOST_TRIPLE
+    assert prebuilt["target_triple"] == PREBUILT_HOST_TRIPLE
+    assert prebuilt["profile"] == "release"
+    assert prebuilt["version_transcripts"] == {
+        "cargo": {
+            "argv": [str(evidence["corridor_cargo_tool"]), "--version"],
+            "sha256": hashlib.sha256(CARGO_VERSION_OUTPUT).hexdigest(),
+            "size_bytes": len(CARGO_VERSION_OUTPUT),
+        },
+        "rustc": {
+            "argv": [str(evidence["corridor_rustc_tool"]), "-vV"],
+            "sha256": hashlib.sha256(RUSTC_VERSION_OUTPUT).hexdigest(),
+            "size_bytes": len(RUSTC_VERSION_OUTPUT),
+        },
+    }
+    assert prebuilt["binaries"] == [
+        {
+            "role": role,
+            "relative_path": relative,
+            "path": str(path),
+            "sha256": sha256(path),
+            "size_bytes": path.stat().st_size,
+            "mode": "0500",
+            "owner_uid": os.geteuid(),
+            "nlink": 1,
+        }
+        for (role, relative), path in zip(
+            (
+                ("irohad", "release/iroha3d"),
+                (
+                    "irohad_message_control",
+                    "message-control/release/iroha3d",
+                ),
+                ("iroha", "release/iroha"),
+                ("kagami", "release/kagami"),
+            ),
+            prebuilt_binaries,
+        )
+    ]
+
     scaling_root = evidence["scaling_root"]
     assert isinstance(scaling_root, Path)
     scaling_bundle = receipt["evidence"]["multilane_scaling_bundle"]
@@ -2559,6 +2927,28 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
         "retained_tooling": expected_retained_tooling,
     }
 
+    g4p = receipt["evidence"]["g4p_multilane"]
+    assert g4p["schema_version"] == 1
+    g4p_logs = evidence["g4p_logs"]
+    assert isinstance(g4p_logs, list)
+    g4p_expected = {
+        "completion": evidence["g4p_completion"],
+        "run_summary": evidence["g4p_summary"],
+    }
+    for receipt_name, path in g4p_expected.items():
+        assert isinstance(path, Path)
+        assert g4p[receipt_name] == {
+            "path": str(path.resolve()),
+            "sha256": sha256(path),
+            "size_bytes": path.stat().st_size,
+            "mode": f"{path.stat().st_mode & 0o7777:04o}",
+            "owner_uid": os.geteuid(),
+            "nlink": 1,
+        }
+    assert [record["path"] for record in g4p["run_logs"]] == [
+        str(path.resolve()) for path in g4p_logs
+    ]
+
     g12 = receipt["evidence"]["g12_cross_dataspace"]
     g12_seed_logs = evidence["g12_seed_logs"]
     assert isinstance(g12_seed_logs, list)
@@ -2581,6 +2971,291 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
     assert [record["path"] for record in g12["seed_run_logs"]] == [
         str(path.resolve()) for path in g12_seed_logs
     ]
+
+
+@pytest.mark.parametrize("mutation", ("unknown", "duplicate", "reordered"))
+def test_receipt_rejects_noncanonical_prebuilt_manifest_fields(
+    tmp_path: Path, mutation: str
+) -> None:
+    evidence = make_evidence(tmp_path)
+    manifest = evidence["prebuilt_manifest"]
+    assert isinstance(manifest, Path)
+    rows = manifest.read_bytes().splitlines(keepends=True)
+    if mutation == "unknown":
+        rows.append(b"unexpected_field\tunexpected\n")
+    elif mutation == "duplicate":
+        rows.append(rows[0])
+    else:
+        rows[0], rows[1] = rows[1], rows[0]
+    rewrite_prebuilt_manifest(evidence, b"".join(rows))
+    writer = fixture_writer(tmp_path)
+
+    result = run_writer(evidence, terminal_output_path(evidence), writer)
+
+    assert result.returncode == 1
+    assert "exact ordered 25 fields" in result.stderr
+
+
+def test_receipt_rejects_forged_external_prebuilt_manifest_digest(
+    tmp_path: Path,
+) -> None:
+    evidence = make_evidence(tmp_path)
+    completion = evidence["corridor_completion"]
+    assert isinstance(completion, Path)
+    fields = read_tsv_fields(completion)
+    fields["prebuilt_manifest_sha256"] = "0" * 64
+    write_tsv(completion, fields)
+    writer = fixture_writer(tmp_path)
+
+    result = run_writer(evidence, terminal_output_path(evidence), writer)
+
+    assert result.returncode == 1
+    assert "externally carried digest" in result.stderr
+
+
+@pytest.mark.parametrize("mutation", ("completion_path", "bundle_field"))
+def test_receipt_rejects_prebuilt_manifest_path_substitution(
+    tmp_path: Path, mutation: str
+) -> None:
+    evidence = make_evidence(tmp_path)
+    manifest = evidence["prebuilt_manifest"]
+    completion = evidence["corridor_completion"]
+    assert isinstance(manifest, Path)
+    assert isinstance(completion, Path)
+    if mutation == "completion_path":
+        outside = tmp_path / "outside" / manifest.name
+        outside.parent.mkdir()
+        shutil.copy2(manifest, outside)
+        fields = read_tsv_fields(completion)
+        fields["prebuilt_manifest_path"] = str(outside)
+        fields["prebuilt_manifest_sha256"] = sha256(outside)
+        write_tsv(completion, fields)
+        expected = "outside its exact source-bound invocation bundle"
+    else:
+        fields = read_tsv_fields(manifest)
+        fields["bundle_dir"] = str(tmp_path / "substituted-bundle")
+        rewrite_prebuilt_manifest(
+            evidence,
+            "".join(f"{name}\t{value}\n" for name, value in fields.items()).encode(),
+        )
+        expected = "not bound to the exact release identity"
+    writer = fixture_writer(tmp_path)
+
+    result = run_writer(evidence, terminal_output_path(evidence), writer)
+
+    assert result.returncode == 1
+    assert expected in result.stderr
+
+
+@pytest.mark.parametrize("mutation", ("manifest_hash", "binary_bytes"))
+def test_receipt_rejects_prebuilt_binary_hash_substitution(
+    tmp_path: Path, mutation: str
+) -> None:
+    evidence = make_evidence(tmp_path)
+    manifest = evidence["prebuilt_manifest"]
+    binaries = evidence["prebuilt_binaries"]
+    assert isinstance(manifest, Path)
+    assert isinstance(binaries, list)
+    if mutation == "manifest_hash":
+        fields = read_tsv_fields(manifest)
+        fields["iroha_sha256"] = "0" * 64
+        rewrite_prebuilt_manifest(
+            evidence,
+            "".join(f"{name}\t{value}\n" for name, value in fields.items()).encode(),
+        )
+    else:
+        binary = binaries[2]
+        binary.chmod(0o700)
+        binary.write_bytes(b"tampered-prebuilt-iroha\n")
+        binary.chmod(0o500)
+    writer = fixture_writer(tmp_path)
+
+    result = run_writer(evidence, terminal_output_path(evidence), writer)
+
+    assert result.returncode == 1
+    assert "binary identity does not match manifest" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "fixture_name",
+    ("prebuilt_manifest", "prebuilt_binary", "prebuilt_bundle"),
+)
+def test_receipt_rejects_prebuilt_artifact_mode_drift(
+    tmp_path: Path, fixture_name: str
+) -> None:
+    evidence = make_evidence(tmp_path)
+    if fixture_name == "prebuilt_manifest":
+        artifact = evidence["prebuilt_manifest"]
+        expected = "exact mode 0400"
+    elif fixture_name == "prebuilt_binary":
+        binaries = evidence["prebuilt_binaries"]
+        assert isinstance(binaries, list)
+        artifact = binaries[0]
+        expected = "exact mode 0500"
+    else:
+        artifact = evidence["prebuilt_bundle"]
+        expected = "exact mode 0500"
+    assert isinstance(artifact, Path)
+    artifact.chmod(0o700)
+    writer = fixture_writer(tmp_path)
+
+    result = run_writer(evidence, terminal_output_path(evidence), writer)
+
+    assert result.returncode == 1
+    assert expected in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "expected"),
+    (
+        (
+            "irohad_size_bytes",
+            str(1024 * 1024 * 1024 + 1),
+            "metadata is not exact and bounded",
+        ),
+        (
+            "cargo_version_sha256",
+            "0" * 64,
+            "Cargo version digest does not match the authenticated tool",
+        ),
+        (
+            "rustc_version_sha256",
+            "0" * 64,
+            "rustc version digest does not match the authenticated tool",
+        ),
+        (
+            "host_triple",
+            "aarch64-unknown-linux-gnu",
+            "not bound to the exact release identity",
+        ),
+    ),
+)
+def test_receipt_rejects_prebuilt_bound_and_toolchain_forgery(
+    tmp_path: Path, field: str, value: str, expected: str
+) -> None:
+    evidence = make_evidence(tmp_path)
+    manifest = evidence["prebuilt_manifest"]
+    assert isinstance(manifest, Path)
+    fields = read_tsv_fields(manifest)
+    fields[field] = value
+    if field == "host_triple":
+        fields["target_triple"] = value
+    rewrite_prebuilt_manifest(
+        evidence,
+        "".join(f"{name}\t{item}\n" for name, item in fields.items()).encode(),
+    )
+    writer = fixture_writer(tmp_path)
+
+    result = run_writer(evidence, terminal_output_path(evidence), writer)
+
+    assert result.returncode == 1
+    assert expected in result.stderr
+
+
+def test_receipt_rejects_unmanifested_prebuilt_bundle_file(tmp_path: Path) -> None:
+    evidence = make_evidence(tmp_path)
+    bundle = evidence["prebuilt_bundle"]
+    assert isinstance(bundle, Path)
+    bundle.chmod(0o700)
+    (bundle / ".late.tmp").write_bytes(b"unmanifested\n")
+    bundle.chmod(0o500)
+    writer = fixture_writer(tmp_path)
+
+    result = run_writer(evidence, terminal_output_path(evidence), writer)
+
+    assert result.returncode == 1
+    assert "exact closed inventory" in result.stderr
+
+
+@pytest.mark.parametrize("fixture_name", ("prebuilt_manifest", "prebuilt_binary"))
+def test_receipt_rejects_prebuilt_artifact_symlink(
+    tmp_path: Path, fixture_name: str
+) -> None:
+    evidence = make_evidence(tmp_path)
+    bundle = evidence["prebuilt_bundle"]
+    assert isinstance(bundle, Path)
+    if fixture_name == "prebuilt_manifest":
+        artifact = evidence["prebuilt_manifest"]
+    else:
+        binaries = evidence["prebuilt_binaries"]
+        assert isinstance(binaries, list)
+        artifact = binaries[0]
+    assert isinstance(artifact, Path)
+    replacement = tmp_path / f"{fixture_name}-replacement"
+    replacement.write_bytes(artifact.read_bytes())
+    replacement.chmod(artifact.stat().st_mode & 0o7777)
+    parent = artifact.parent
+    parent.chmod(0o700)
+    artifact.unlink()
+    try:
+        artifact.symlink_to(replacement)
+    except (NotImplementedError, OSError) as error:
+        pytest.skip(f"symlinks unavailable: {error}")
+    parent.chmod(0o500)
+    writer = fixture_writer(tmp_path)
+
+    result = run_writer(evidence, terminal_output_path(evidence), writer)
+
+    assert result.returncode == 1
+    assert "non-symlink" in result.stderr
+
+
+def test_receipt_rejects_prebuilt_binary_hardlink_alias(tmp_path: Path) -> None:
+    evidence = make_evidence(tmp_path)
+    binaries = evidence["prebuilt_binaries"]
+    assert isinstance(binaries, list)
+    try:
+        os.link(binaries[0], tmp_path / "prebuilt-binary-alias")
+    except OSError as error:
+        pytest.skip(f"hard links unavailable: {error}")
+    writer = fixture_writer(tmp_path)
+
+    result = run_writer(evidence, terminal_output_path(evidence), writer)
+
+    assert result.returncode == 1
+    assert "exactly one hard link" in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("completion_name", "expected"),
+    (
+        (
+            "seed_completion",
+            "seed completion does not describe the exact release matrix",
+        ),
+        (
+            "taira_completion",
+            "Taira completion is not bound to the exact release identity",
+        ),
+        (
+            "g4p_completion",
+            "G-4P completion is not exact passing release-bound accounting",
+        ),
+        (
+            "g12_seed_completion",
+            "G-12P seed completion is not exact passing release-bound accounting",
+        ),
+        (
+            "g12_soak_completion",
+            "G-12P fault-soak completion is not exact passing release-bound accounting",
+        ),
+    ),
+)
+def test_receipt_rejects_cross_completion_prebuilt_manifest_mismatch(
+    tmp_path: Path, completion_name: str, expected: str
+) -> None:
+    evidence = make_evidence(tmp_path)
+    completion = evidence[completion_name]
+    assert isinstance(completion, Path)
+    fields = read_tsv_fields(completion)
+    fields["prebuilt_manifest_sha256"] = "0" * 64
+    write_tsv(completion, fields)
+    writer = fixture_writer(tmp_path)
+
+    result = run_writer(evidence, terminal_output_path(evidence), writer)
+
+    assert result.returncode == 1
+    assert expected in result.stderr
 
 
 @pytest.mark.parametrize("report_state", ["missing", "failed", "tampered"])
@@ -2793,6 +3468,111 @@ def test_receipt_rejects_scaling_artifact_mutated_by_revalidator(
 @pytest.mark.parametrize(
     ("fixture_name", "expected"),
     (
+        ("g4p_completion", "G-4P completion is unavailable"),
+        ("g4p_summary", "G-4P run summary is unavailable"),
+        ("g4p_log", "G-4P run log 0 is unavailable"),
+    ),
+)
+def test_receipt_requires_complete_g4p_evidence_inventory(
+    tmp_path: Path, fixture_name: str, expected: str
+) -> None:
+    evidence = make_evidence(tmp_path)
+    path = evidence[fixture_name]
+    assert isinstance(path, Path)
+    path.unlink()
+    writer = fixture_writer(tmp_path)
+
+    result = run_writer(evidence, terminal_output_path(evidence), writer)
+
+    assert result.returncode == 1
+    assert expected in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("fixture_name", "expected"),
+    (
+        ("g4p_summary", "G-4P run summary digest mismatch"),
+        ("g4p_log", "G-4P run log 0 digest mismatch"),
+    ),
+)
+def test_receipt_rejects_tampered_g4p_summary_or_log(
+    tmp_path: Path, fixture_name: str, expected: str
+) -> None:
+    evidence = make_evidence(tmp_path)
+    path = evidence[fixture_name]
+    assert isinstance(path, Path)
+    path.write_text(
+        path.read_text(encoding="utf-8") + "tampered\n",
+        encoding="utf-8",
+    )
+    writer = fixture_writer(tmp_path)
+
+    result = run_writer(evidence, terminal_output_path(evidence), writer)
+
+    assert result.returncode == 1
+    assert expected in result.stderr
+
+
+def test_receipt_rejects_rehashed_g4p_run_identity_mismatch(
+    tmp_path: Path,
+) -> None:
+    evidence = make_evidence(tmp_path)
+    summary = evidence["g4p_summary"]
+    completion = evidence["g4p_completion"]
+    assert isinstance(summary, Path)
+    assert isinstance(completion, Path)
+    rows = summary.read_text(encoding="utf-8").splitlines()
+    fields = rows[1].split("\t")
+    fields[0] = "native_amx_routing"
+    rows[1] = "\t".join(fields)
+    summary.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    completion_fields = dict(
+        line.split("\t", 1)
+        for line in completion.read_text(encoding="utf-8").splitlines()
+    )
+    completion_fields["runs_sha256"] = sha256(summary)
+    write_tsv(completion, completion_fields)
+    writer = fixture_writer(tmp_path)
+
+    result = run_writer(evidence, terminal_output_path(evidence), writer)
+
+    assert result.returncode == 1
+    assert "G-4P run summary row 0 is not canonical" in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("schema_version", "2"),
+        ("source_manifest_sha256", "0" * 64),
+    ),
+)
+def test_receipt_rejects_g4p_completion_schema_or_release_mismatch(
+    tmp_path: Path, field: str, value: str
+) -> None:
+    evidence = make_evidence(tmp_path)
+    completion = evidence["g4p_completion"]
+    assert isinstance(completion, Path)
+    fields = dict(
+        line.split("\t", 1)
+        for line in completion.read_text(encoding="utf-8").splitlines()
+    )
+    fields[field] = value
+    write_tsv(completion, fields)
+    writer = fixture_writer(tmp_path)
+
+    result = run_writer(evidence, terminal_output_path(evidence), writer)
+
+    assert result.returncode == 1
+    assert (
+        "G-4P completion is not exact passing release-bound accounting"
+        in result.stderr
+    )
+
+
+@pytest.mark.parametrize(
+    ("fixture_name", "expected"),
+    (
         ("g12_seed_completion", "G-12P seed completion is unavailable"),
         (
             "g12_soak_completion",
@@ -2895,7 +3675,7 @@ def test_receipt_rejects_rehashed_noncanonical_apalache_evidence(
     assert isinstance(completion, Path)
     apalache.write_text(
         apalache.read_text(encoding="utf-8").replace(
-            "result_count\t3", "result_count\t2", 1
+            "result_count\t4", "result_count\t3", 1
         ),
         encoding="utf-8",
     )
@@ -3687,6 +4467,7 @@ def test_receipt_rejects_cross_source_completion(
         ("formal_verus_tool", "formal verus tool digest mismatch"),
         ("corridor_summary", "corridor summary digest mismatch"),
         ("corridor_required", "corridor production inventory digest mismatch"),
+        ("corridor_g_unit", "corridor G-UNIT inventory digest mismatch"),
         ("corridor_log", "corridor log 0 digest mismatch"),
         ("corridor_cargo_tool", "corridor cargo tool digest mismatch"),
         ("seed_summary", "summary digest mismatch"),
@@ -3973,6 +4754,72 @@ def test_receipt_rejects_rehashed_missing_corridor_leg(tmp_path: Path) -> None:
     assert "must contain every exact release leg" in result.stderr
 
 
+def test_receipt_rejects_rehashed_noncanonical_g_unit_inventory(
+    tmp_path: Path,
+) -> None:
+    evidence = make_evidence(tmp_path)
+    writer = fixture_writer(tmp_path)
+    inventory = evidence["corridor_g_unit"]
+    completion = evidence["corridor_completion"]
+    assert isinstance(inventory, Path)
+    assert isinstance(completion, Path)
+    lines = inventory.read_text(encoding="utf-8").splitlines()
+    row = lines[1].split("\t")
+    row[2] = "native_amx::tests::forged_g_unit_identity"
+    lines[1] = "\t".join(row)
+    inventory.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    fields = dict(
+        line.split("\t", 1)
+        for line in completion.read_text(encoding="utf-8").splitlines()
+    )
+    fields["g_unit_inventory_sha256"] = sha256(inventory)
+    write_tsv(completion, fields)
+
+    result = run_writer(evidence, tmp_path / "receipt.json", writer)
+
+    assert result.returncode == 1
+    assert "corridor G-UNIT inventory row 0 is not canonical" in result.stderr
+
+
+def test_receipt_rejects_rehashed_g_unit_log_missing_named_test(
+    tmp_path: Path,
+) -> None:
+    evidence = make_evidence(tmp_path)
+    writer = fixture_writer(tmp_path)
+    logs = evidence["corridor_logs"]
+    summary = evidence["corridor_summary"]
+    completion = evidence["corridor_completion"]
+    assert isinstance(logs, list)
+    assert isinstance(summary, Path)
+    assert isinstance(completion, Path)
+    log = logs[0]
+    first_result = next(
+        line
+        for line in log.read_text(encoding="utf-8").splitlines()
+        if line.startswith("test ") and line.endswith(" ... ok")
+    )
+    log.write_text(
+        log.read_text(encoding="utf-8").replace(first_result + "\n", "", 1),
+        encoding="utf-8",
+    )
+    summary_lines = summary.read_text(encoding="utf-8").splitlines()
+    row = summary_lines[1].split("\t")
+    row[7] = sha256(log)
+    summary_lines[1] = "\t".join(row)
+    summary.write_text("\n".join(summary_lines) + "\n", encoding="utf-8")
+    fields = dict(
+        line.split("\t", 1)
+        for line in completion.read_text(encoding="utf-8").splitlines()
+    )
+    fields["summary_sha256"] = sha256(summary)
+    write_tsv(completion, fields)
+
+    result = run_writer(evidence, tmp_path / "receipt.json", writer)
+
+    assert result.returncode == 1
+    assert "G-UNIT leg g-unit-iroha-core lacks one required passing test" in result.stderr
+
+
 def test_receipt_rejects_missing_or_altered_source_sealed_full_suite_leg(
     tmp_path: Path,
 ) -> None:
@@ -4152,6 +4999,57 @@ def test_receipt_requires_exact_nocapture_seed_diagnostic(tmp_path: Path) -> Non
     assert (
         "seed summary row 17 is not the exact release run" in command_result.stderr
     )
+
+
+@pytest.mark.parametrize(
+    ("pattern", "replacement"),
+    (
+        (r"IROHA_TEST_SKIP_BUILD=1", "IROHA_TEST_SKIP_BUILD=0"),
+        (
+            r"IROHA_TEST_ALLOW_REENTRANT_BUILD=0",
+            "IROHA_TEST_ALLOW_REENTRANT_BUILD=1",
+        ),
+        (r"cargo test --locked --offline", "cargo test --locked"),
+        (
+            r"IROHA_TEST_TARGET_DIR=[^ ]+",
+            "IROHA_TEST_TARGET_DIR=/tmp/escaped-program-target",
+        ),
+        (
+            r"TEST_NETWORK_BIN_IROHAD=[^ ]+",
+            "TEST_NETWORK_BIN_IROHAD=/tmp/escaped-iroha3d",
+        ),
+    ),
+)
+def test_receipt_rejects_nested_or_unbound_seed_replay(
+    tmp_path: Path,
+    pattern: str,
+    replacement: str,
+) -> None:
+    evidence = make_evidence(tmp_path)
+    writer = fixture_writer(tmp_path)
+    summary = evidence["seed_summary"]
+    completion = evidence["seed_completion"]
+    assert isinstance(summary, Path)
+    assert isinstance(completion, Path)
+
+    lines = summary.read_text(encoding="utf-8").splitlines()
+    row = lines[18].split("\t")
+    mutated, replacement_count = re.subn(pattern, replacement, row[10], count=1)
+    assert replacement_count == 1
+    row[10] = mutated
+    lines[18] = "\t".join(row)
+    summary.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    completion_fields = dict(
+        line.split("\t", 1)
+        for line in completion.read_text(encoding="utf-8").splitlines()
+    )
+    completion_fields["summary_sha256"] = sha256(summary)
+    write_tsv(completion, completion_fields)
+
+    result = run_writer(evidence, tmp_path / "receipt.json", writer)
+
+    assert result.returncode == 1
+    assert "seed summary row 17 is not the exact release run" in result.stderr
 
 
 def test_receipt_rejects_rehashed_chaos_log_without_required_semantics(

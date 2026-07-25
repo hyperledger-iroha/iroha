@@ -134,10 +134,12 @@ SF-6 を使用して複数のファイルを取得できます (`sorafs_fetch` �
 - `iroha app sorafs pin list|show`、`alias list` y `replication list` 環境ロス
   エンドポイント REST デルのピン レジストリとインプリメント Norito JSON のブロック ブロック
   監査パラ証拠。
-- `iroha app sorafs storage pin` y `torii /v1/sorafs/pin/register` アセプタンマニフェスト
-  Norito o JSON のエイリアスオプションと後継の証明。マルフォルマドの証拠
-  エレバン `400`、証明は古い指数 `503` コン `Warning: 110`、y 証明
-  エクスピラドス デブエルベン `412`。
+- `torii /v1/sorafs/pin/register` は閉じた JSON V1 リクエストを受け付けます。
+  `manifest_payload` は canonical Norito `ManifestV1` バイトを正確に canonical
+  padded base64 化したものでなければなりません。Torii は digest、chunker、
+  content length、pin policy、fee input をデコード済み manifest のみから導出し、
+  廃止済みの重複 summary フィールドを拒否します。`alias` とゼロでない
+  `successor_of_hex` predecessor は引き続き任意です。
 - エンドポイント REST を失った (`/v1/sorafs/pin`、`/v1/sorafs/aliases`、
   `/v1/sorafs/replication`) 証明書の構造を含む
   クライアントは、実際のヘッダーの内容を確認してから、実際のブロックを確認します。

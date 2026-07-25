@@ -22,8 +22,10 @@ or request a broad PoTR receipt history.
 ## CLI Usage
 
 ```bash
-export TORII_URL="https://gateway.local/"
+export TORII_URL="https://gateway.example/"
 export PROVIDER_ID_HEX="1111111111111111111111111111111111111111111111111111111111111111"
+# Inject this value from the runtime secret store; do not pass it in argv.
+export SORAFS_PROOF_BEARER_TOKEN="..."
 
 sorafs_cli proof stream \
   --manifest=artifacts/manifest.to \
@@ -31,36 +33,46 @@ sorafs_cli proof stream \
   --provider-id-hex="${PROVIDER_ID_HEX}" \
   --proof-kind=por \
   --samples=128 \
-  --stream-token="$(cat stream.token)" \
+  --bearer-token-env=SORAFS_PROOF_BEARER_TOKEN \
   --summary-out=artifacts/proof_stream_summary.json \
   --governance-evidence-dir=artifacts/proof_stream_evidence
 ```
 
-- The command POSTs to `--torii-url/v1/sorafs/proof/stream` with canonical
-  Norito JSON matching `ProofStreamHttpRequestV1`: canonical lowercase
-  `manifest_digest_hex` and `provider_id_hex`, the proof kind, a padded
-  `nonce_b64`, and exactly the fields allowed by that proof kind. A full
-  regional gateway route may instead be supplied with `--gateway-url`; the
-  retired `--endpoint`, textual `--provider-id`, and `nonce_hex` forms are
-  rejected.
+- The CLI accepts a bare HTTPS `--torii-url` origin or an exact HTTPS
+  `--gateway-url` ending in `/v1/sorafs/proof/stream`. It rejects HTTP,
+  userinfo, queries, fragments, redirects, and path aliases.
+- Authentication is mandatory. `--bearer-token-env` names an uppercase runtime
+  environment variable; the credential itself never enters argv, output, or
+  evidence. The retired `--stream-token` form is rejected.
+- Before streaming, the CLI authenticates an exact native
+  `GET /v1/sorafs/pin/{manifest_digest_hex}` against the same origin. The
+  record must be `Approved` and must match the local exact canonical manifest's
+  digest, root CID, chunker, chunk-plan digest, PoR root, content length, and
+  pin policy. The returned finalized height and block hash must both be
+  non-zero.
+- The command then POSTs canonical Norito JSON matching
+  `ProofStreamHttpRequestV1`. Every proof kind carries both
+  `expected_finalized_height` and `expected_finalized_block_hash_hex` from that
+  readback. Each response row must echo the exact request digest and finalized
+  cursor.
 - PoR `sample_count` is bounded to `1..=500`; oversized requests fail before
   manifest lookup so gateways do not perform unbounded sampling work.
-- The request body supplies `manifest_digest_hex` (BLAKE3-256 of the canonical
-  manifest) and `provider_id_hex` so gateways can resolve the stored manifest
-  deterministically.
-- Each streamed NDJSON line is re-emitted to STDOUT unless you pass
-  `--emit-events=false`. Use this flag when piping to tooling that expects a
-  single JSON summary.
+- The shared transport verifier authenticates canonical rows, exact
+  cardinality, request-derived PoR order, duplicates, truncation, and extra
+  rows through EOF before the CLI publishes anything.
+- With `--emit-events=true`, each NDJSON event is a payload-free projection:
+  digests, identifiers, indices, finalized anchors, result, and timing only.
+  It never contains leaf bytes, Merkle paths, signed receipts, nonces, or
+  credentials. Use `--emit-events=false` when a consumer expects only the final
+  summary.
 - `--summary-out` writes the aggregated metrics to disk so CI pipelines can
   archive results alongside manifests, signatures, and CAR summaries.
 - `--governance-evidence-dir=<dir>` copies the manifest, writes `metadata.json`
-  (CLI version, resolved endpoint, manifest digest, capture timestamp), and persists the
-  summary JSON in the supplied directory so release packets have ready-to-archive
-  evidence for governance reviews.
-- Streams now fail when any gateway item reports `result: failure` or when local
-  PoR verification rejects a proof. Tune the budgets via `--max-failures=N` and
-  `--max-verification-failures=N` (defaults: `0` for both) when you need to
-  allow a small number of retries during rehearsals.
+  (CLI version, redacted HTTPS origin/path, manifest digest, capture timestamp),
+  and persists the summary JSON. Redirect targets and URL credentials can
+  never enter this evidence.
+- Any gateway failure or local verification failure rejects the command. V1
+  deliberately has no failure-budget override.
 - `--samples` defaults to `32` for PoR and must not exceed `500`. For PDP pass
   `--proof-kind=pdp --challenge-id-hex=<64-lowercase-hex>` and omit sampling
   and deadline options. For PoTR pass `--proof-kind=potr`,
@@ -68,16 +80,22 @@ sorafs_cli proof stream \
   `--orchestrator-job-id-hex=<32-lowercase-hex>`; Torii returns only the exact
   finalized outcome whose signed receipt carries that job ID.
 
+Successful end-to-end CLI coverage must use a real authenticated TLS Torii
+fixture that exposes both native pin readback and proof streaming on the same
+origin. The retired local HTTP mock success cases are not a supported
+compatibility path, and the CLI has no insecure test bypass.
+
 ## V1 response semantics
 
 - **PoR is generated live.** The current Torii PoR branch samples the requested
   manifest from the configured local `sorafs_node` storage and emits one
   successful row per witness. Each row includes `leaf_index_flat`,
   `chunk_index`, `segment_index`, `leaf_index`, and `proof`. The client rejects
-  a row unless the outer indices equal the witness indices and the witness is
-  internally valid against its derived root. Supply `--por-root-hex` when the
-  client must also verify against an independently trusted PoR root. PoR rows
-  never carry finalized-outcome provenance.
+  a row unless the outer indices equal the witness indices, its request digest
+  and finalized cursor match the request, its witness verifies against the
+  ledger-authoritative manifest root, and its position matches the
+  request-derived sample schedule. PoR rows carry the finalized pin-manifest
+  cursor, not finalized-outcome provenance.
 - **PDP is an exact finalized lookup.** The lookup key is
   `(pdp, challenge_id)`. The response is one terminal `success` or `failure`
   row; there is no `pending` result. `outcome_identity_hex` equals
@@ -121,44 +139,31 @@ job mismatches never fall back to a local cache or a broader scan.
 
 ### Summary structure
 
-The final JSON summary mirrors the following layout. This PDP failure example
-shows the provenance present on every finalized PDP/PoTR row:
+The CLI writes a summary only after a complete, successful, request-bound
+sequence. A representative PoR summary is:
 
 ```json
 {
-  "proof_kind": "pdp",
-  "requested_challenge_id_hex": "3333333333333333333333333333333333333333333333333333333333333333",
+  "endpoint": "https://gateway.example/v1/sorafs/proof/stream",
+  "manifest_digest_hex": "1111111111111111111111111111111111111111111111111111111111111111",
+  "provider_id_hex": "2222222222222222222222222222222222222222222222222222222222222222",
+  "proof_kind": "por",
+  "request_digest_hex": "3333333333333333333333333333333333333333333333333333333333333333",
+  "finalized_block_height": 12345,
+  "finalized_block_hash_hex": "4444444444444444444444444444444444444444444444444444444444444444",
+  "nonce_digest_hex": "5555555555555555555555555555555555555555555555555555555555555555",
   "metrics": {
-    "item_total": 1,
-    "success_total": 0,
-    "failure_total": 1,
-    "failure_by_reason": {
-      "deadline_expired": 1
-    }
-  },
-  "failure_samples": [
-    {
-      "manifest_digest_hex": "1111111111111111111111111111111111111111111111111111111111111111",
-      "provider_id_hex": "2222222222222222222222222222222222222222222222222222222222222222",
-      "outcome_identity_hex": "3333333333333333333333333333333333333333333333333333333333333333",
-      "outcome_digest_hex": "4444444444444444444444444444444444444444444444444444444444444444",
-      "admission_envelope_digest_hex": "5555555555555555555555555555555555555555555555555555555555555555",
-      "finalized_block_height": 12345,
-      "finalized_block_hash_hex": "6666666666666666666666666666666666666666666666666666666666666666",
-      "committed_at_ms": 1700000500000,
-      "challenge_id_hex": "3333333333333333333333333333333333333333333333333333333333333333",
-      "proof_kind": "pdp",
-      "result": "failure",
-      "failure_reason": "deadline_expired"
-    }
-  ]
+    "item_total": 32,
+    "success_total": 32,
+    "failure_total": 0,
+    "failure_by_reason": {}
+  }
 }
 ```
 
-PoTR failure samples additionally carry `receipt_b64`, `latency_ms`,
-`deadline_ms`, `tier`, `recorded_at_ms`, and optional `trace_id`; those fields
-must exactly project the decoded final receipt. PoR summaries contain live
-witness rows and latency statistics but no committed-outcome fields.
+The summary never includes the bearer token, raw nonce, proof payload, leaf
+bytes, signed PoTR receipt, or a URL query/userinfo component. A failed stream
+produces no events, summary file, or evidence directory.
 
 This data maps directly onto the metrics documented in
 `docs/source/sorafs_proof_streaming_plan.md`:
@@ -187,10 +192,12 @@ names listed above and can be imported directly with the Prometheus exporter ena
 
 ## Operational note
 
-- **Event volume.** The CLI prints per-item NDJSON locally; set
-  `--emit-events=false` when you only need the final summary blob for CI.
-- **Promotion boundary.** Finalized proof-outcome queries and local protocol
-  coverage do not by themselves close the readiness lane. Promotion still
-  requires retry-safe terminal-outcome transaction forwarding/reconciliation,
-  the chain-authoritative repair handoff, and genuine multi-provider deployment
-  evidence.
+- **Event volume.** The CLI can print one payload-free projection per verified
+  item; set `--emit-events=false` when you only need the final summary blob for
+  CI.
+- **Promotion boundary.** Finalized proof-outcome queries, retry-safe
+  terminal-outcome forwarding, and exact-chain native repair handoff do not by
+  themselves close the readiness lane. Promotion still requires removal of the
+  residual local repair manager/checkpoint consumers, cross-peer restart
+  reconciliation with one terminal outcome, and genuine multi-provider
+  deployment evidence.

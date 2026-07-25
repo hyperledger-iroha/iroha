@@ -42,7 +42,8 @@ function buildStubProofSummary() {
         leaf_bytes_b64: Buffer.from([1, 2, 3]).toString("base64"),
         segment_leaves_hex: ["aa"],
         chunk_segments_hex: ["bb"],
-        chunk_roots_hex: ["cc"],
+        chunk_count: 2n,
+        chunk_merkle_path_hex: ["cc"],
         verified: true,
       },
     ],
@@ -209,7 +210,8 @@ test("buildDaProofSummaryArtifact produces Norito-aligned payload", () => {
         leaf_bytes_b64: Buffer.from([9, 8, 7]).toString("base64"),
         segment_leaves_hex: ["aa"],
         chunk_segments_hex: ["bb"],
-        chunk_roots_hex: ["cc"],
+        chunk_count: 2n,
+        chunk_merkle_path_hex: ["cc"],
         verified: true,
       },
     ],
@@ -226,7 +228,8 @@ test("buildDaProofSummaryArtifact produces Norito-aligned payload", () => {
   assert.equal(artifact.proofs.length, 1);
   assert.equal(artifact.proofs[0].leaf_bytes_b64, Buffer.from([9, 8, 7]).toString("base64"));
   assert.equal(artifact.proofs[0].chunk_digest, "11");
-  assert.equal(artifact.proofs[0].chunk_roots[0], "cc");
+  assert.equal(artifact.proofs[0].chunk_count, 2);
+  assert.equal(artifact.proofs[0].chunk_merkle_path[0], "cc");
 });
 
 test("emitDaProofSummaryArtifact writes JSON artifacts", async () => {
@@ -260,7 +263,8 @@ test("emitDaProofSummaryArtifact writes JSON artifacts", async () => {
         leaf_bytes_b64: Buffer.from([1, 2]).toString("base64"),
         segment_leaves_hex: [],
         chunk_segments_hex: [],
-        chunk_roots_hex: [],
+        chunk_count: 1n,
+        chunk_merkle_path_hex: [],
         verified: true,
       },
     ],

@@ -7,8 +7,10 @@ import json
 import os
 import plistlib
 import shutil
+import signal
 import stat
 import subprocess
+import time
 from pathlib import Path
 
 
@@ -21,7 +23,7 @@ SLICE_IDS = (
     "ios-arm64_x86_64-simulator",
     "macos-arm64",
 )
-REPO_BUILD_LOCK = ROOT / "build" / ".NoritoBridge.build-publish.lock"
+REPO_BUILD_LOCK = ROOT / "build" / ".NoritoBridge.build-publish.lockfile"
 
 
 def _write_executable(path: Path, contents: str) -> None:
@@ -112,6 +114,12 @@ while [[ $# -gt 0 ]]; do
 done
 test -n "$candidate"
 test -f "${NORITO_BRIDGE_OUT_DIR:?}/NoritoBridge.xcframework/live-sentinel"
+if [[ -n "${NORITO_BRIDGE_XCODE_WAIT_MARKER:-}" ]]; then
+  : > "$NORITO_BRIDGE_XCODE_WAIT_MARKER"
+  while true; do
+    sleep 1
+  done
+fi
 mkdir -p "$candidate/unexpected-partial"
 printf 'must-not-publish\\n' > "$candidate/unexpected-partial/junk"
 exit 65
@@ -122,6 +130,9 @@ exit 65
         """#!/usr/bin/env bash
 set -euo pipefail
 if [[ "${1:-}" == "-" ]]; then
+  exec "${REAL_PYTHON3:?}" "$@"
+fi
+if [[ "${1:-}" == */exec_with_file_lock.py ]]; then
   exec "${REAL_PYTHON3:?}" "$@"
 fi
 case "${2:-}" in
@@ -281,7 +292,7 @@ def test_manual_xcframework_fallback_writes_required_info_plist(
     assert checked_candidate.name.startswith(".NoritoBridge.publish.")
     assert not checked_candidate.exists()
     assert not list(out_dir.glob(".NoritoBridge.publish.*"))
-    assert not REPO_BUILD_LOCK.exists()
+    assert REPO_BUILD_LOCK.is_file()
 
 
 def test_prepublication_checker_failure_preserves_live_pair(
@@ -317,4 +328,68 @@ def test_prepublication_checker_failure_preserves_live_pair(
     assert checked_candidate.parent == out_dir
     assert not checked_candidate.exists()
     assert not list(out_dir.glob(".NoritoBridge.publish.*"))
-    assert not REPO_BUILD_LOCK.exists()
+    assert REPO_BUILD_LOCK.is_file()
+
+
+def test_termination_cleans_lock_and_candidate_without_touching_live_pair(
+    tmp_path: Path,
+) -> None:
+    _, out_dir, env, _ = _build_environment(tmp_path)
+    wait_marker = tmp_path / "xcodebuild-waiting"
+    env["NORITO_BRIDGE_XCODE_WAIT_MARKER"] = str(wait_marker)
+    live_framework = out_dir / "NoritoBridge.xcframework"
+    live_manifest = out_dir / "NoritoBridge.artifacts.json"
+    original_manifest = live_manifest.read_bytes()
+
+    process = subprocess.Popen(
+        [
+            "bash",
+            str(SCRIPT),
+            "--bridge-version",
+            "1.0.0",
+            "--allow-dirty-source",
+        ],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    deadline = time.monotonic() + 10
+    while not wait_marker.exists() and process.poll() is None:
+        if time.monotonic() >= deadline:
+            process.kill()
+            raise AssertionError("builder did not reach the xcodebuild wait point")
+        time.sleep(0.05)
+    if not wait_marker.exists():
+        _, stderr = process.communicate(timeout=5)
+        raise AssertionError(f"builder exited before the wait point: {stderr}")
+
+    os.killpg(process.pid, signal.SIGTERM)
+    _, stderr = process.communicate(timeout=10)
+
+    assert process.returncode == 143, stderr
+    assert (live_framework / "live-sentinel").is_file()
+    assert live_manifest.is_file()
+    assert not live_manifest.is_symlink()
+    assert live_manifest.read_bytes() == original_manifest
+    assert not list(out_dir.glob(".NoritoBridge.publish.*"))
+    assert REPO_BUILD_LOCK.is_file()
+
+
+def test_builder_does_not_require_process_table_access(tmp_path: Path) -> None:
+    _, out_dir, env, _ = _build_environment(tmp_path)
+    tools_dir = Path(env["PATH"].split(os.pathsep, 1)[0])
+    _write_executable(
+        tools_dir / "ps",
+        """#!/usr/bin/env bash
+echo "process table access denied" >&2
+exit 99
+""",
+    )
+
+    result = _run_builder(env)
+    assert result.returncode == 0, result.stderr
+    assert (out_dir / "NoritoBridge.artifacts.json").is_symlink()
+    assert REPO_BUILD_LOCK.is_file()

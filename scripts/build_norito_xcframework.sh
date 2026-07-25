@@ -17,15 +17,20 @@ set -euo pipefail
 # Outputs into ./dist/NoritoBridge.xcframework
 
 ROOT_DIR=$(cd "$(dirname "$0")/.." && pwd)
+BUILD_PUBLISH_LOCK="$ROOT_DIR/build/.NoritoBridge.build-publish.lockfile"
+if [[ "${NORITO_BRIDGE_BUILD_LOCK_HELD:-0}" != "1" ]]; then
+  mkdir -p "$(dirname "$BUILD_PUBLISH_LOCK")"
+  exec python3 "$ROOT_DIR/scripts/exec_with_file_lock.py" \
+    "$BUILD_PUBLISH_LOCK" \
+    "NORITO_BRIDGE_BUILD_LOCK_HELD=1" \
+    "$0" "$@"
+fi
 CRATE_DIR="$ROOT_DIR/crates/connect_norito_bridge"
 INC_DIR="$CRATE_DIR/include"
 OUT_DIR="${NORITO_BRIDGE_OUT_DIR:-$ROOT_DIR/dist}"
 BUILD_DIR="${NORITO_BRIDGE_BUILD_DIR:-$ROOT_DIR/build/norito_bridge}"
 STAGE_DIR="$BUILD_DIR/stage"
 PUBLISH_ROOT=""
-BUILD_PUBLISH_LOCK="$ROOT_DIR/build/.NoritoBridge.build-publish.lock"
-BUILD_PUBLISH_LOCK_HELD=0
-BUILD_PUBLISH_LOCK_TOKEN="$$.$RANDOM.$RANDOM"
 
 LIB_CRATE_NAME="connect_norito_bridge"
 FRAMEWORK_NAME="NoritoBridge"
@@ -34,30 +39,11 @@ FRAMEWORK_BUNDLE_ID="${FRAMEWORK_BUNDLE_ID:-org.hyperledger.iroha.NoritoBridge}"
 
 cleanup_build_state() {
   local status=$?
-  local owner_token=""
   trap - EXIT HUP INT TERM
   set +e
   if [[ -n "$PUBLISH_ROOT" && -d "$PUBLISH_ROOT" \
     && "${PUBLISH_ROOT##*/}" == .NoritoBridge.publish.* ]]; then
     rm -rf -- "$PUBLISH_ROOT"
-  fi
-  if [[ "$BUILD_PUBLISH_LOCK_HELD" == "1" \
-    && -d "$BUILD_PUBLISH_LOCK" \
-    && ! -L "$BUILD_PUBLISH_LOCK" \
-    && "${BUILD_PUBLISH_LOCK##*/}" == .NoritoBridge.build-publish.lock ]]; then
-    if [[ -f "$BUILD_PUBLISH_LOCK/owner" && ! -L "$BUILD_PUBLISH_LOCK/owner" ]]; then
-      owner_token=$(sed -n '3p' "$BUILD_PUBLISH_LOCK/owner")
-    fi
-    if [[ -z "$owner_token" || "$owner_token" == "$BUILD_PUBLISH_LOCK_TOKEN" ]]; then
-      rm -f -- \
-        "$BUILD_PUBLISH_LOCK/owner" \
-        "$BUILD_PUBLISH_LOCK/owner.tmp.$BUILD_PUBLISH_LOCK_TOKEN"
-      if ! rmdir -- "$BUILD_PUBLISH_LOCK"; then
-        echo "[!] Unable to remove NoritoBridge build lock: $BUILD_PUBLISH_LOCK" >&2
-      fi
-    else
-      echo "[!] NoritoBridge build lock ownership changed; refusing to remove it" >&2
-    fi
   fi
   exit "$status"
 }
@@ -65,92 +51,6 @@ trap cleanup_build_state EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
-
-process_start_identity() {
-  local pid="$1"
-  ps -p "$pid" -o lstart= 2>/dev/null \
-    | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//'
-}
-
-lock_age_seconds() {
-  local lock_path="$1"
-  local modified=""
-  local now=""
-  if modified=$(stat -f %m "$lock_path" 2>/dev/null); then
-    :
-  elif modified=$(stat -c %Y "$lock_path" 2>/dev/null); then
-    :
-  else
-    return 1
-  fi
-  now=$(date +%s)
-  printf '%s\n' "$((now - modified))"
-}
-
-lock_owner_is_live() {
-  local owner_file="$BUILD_PUBLISH_LOCK/owner"
-  local owner_pid=""
-  local owner_start=""
-  local current_start=""
-  if [[ ! -f "$owner_file" || -L "$owner_file" ]]; then
-    return 1
-  fi
-  owner_pid=$(sed -n '1p' "$owner_file")
-  owner_start=$(sed -n '2p' "$owner_file")
-  if [[ ! "$owner_pid" =~ ^[0-9]+$ || -z "$owner_start" ]]; then
-    return 1
-  fi
-  current_start=$(process_start_identity "$owner_pid")
-  [[ -n "$current_start" && "$current_start" == "$owner_start" ]]
-}
-
-acquire_build_publish_lock() {
-  local attempt=0
-  local lock_age=""
-  local owner_tmp=""
-  local process_start=""
-  local stale_lock=""
-
-  mkdir -p "$(dirname "$BUILD_PUBLISH_LOCK")"
-  while [[ "$attempt" -lt 3 ]]; do
-    attempt=$((attempt + 1))
-    if mkdir "$BUILD_PUBLISH_LOCK" 2>/dev/null; then
-      BUILD_PUBLISH_LOCK_HELD=1
-      process_start=$(process_start_identity "$$")
-      if [[ -z "$process_start" ]]; then
-        echo "[-] Unable to identify the NoritoBridge build lock owner" >&2
-        exit 1
-      fi
-      owner_tmp="$BUILD_PUBLISH_LOCK/owner.tmp.$BUILD_PUBLISH_LOCK_TOKEN"
-      printf '%s\n%s\n%s\n' \
-        "$$" "$process_start" "$BUILD_PUBLISH_LOCK_TOKEN" > "$owner_tmp"
-      mv "$owner_tmp" "$BUILD_PUBLISH_LOCK/owner"
-      return
-    fi
-
-    if [[ -L "$BUILD_PUBLISH_LOCK" || ! -d "$BUILD_PUBLISH_LOCK" ]]; then
-      echo "[-] Refusing unexpected NoritoBridge build lock path: $BUILD_PUBLISH_LOCK" >&2
-      exit 1
-    fi
-    if lock_owner_is_live; then
-      echo "[-] Another NoritoBridge builder holds $BUILD_PUBLISH_LOCK" >&2
-      exit 1
-    fi
-    lock_age=$(lock_age_seconds "$BUILD_PUBLISH_LOCK" || true)
-    if [[ -z "$lock_age" || "$lock_age" -lt 30 ]]; then
-      echo "[-] NoritoBridge build lock has no live authenticated owner but is too new to reclaim: $BUILD_PUBLISH_LOCK" >&2
-      exit 1
-    fi
-
-    stale_lock="$(dirname "$BUILD_PUBLISH_LOCK")/.NoritoBridge.build-publish.stale.$$.$RANDOM"
-    if mv "$BUILD_PUBLISH_LOCK" "$stale_lock" 2>/dev/null; then
-      rm -rf -- "$stale_lock"
-      echo "[+] Reclaimed stale NoritoBridge build lock" >&2
-    fi
-  done
-  echo "[-] Unable to acquire NoritoBridge build lock: $BUILD_PUBLISH_LOCK" >&2
-  exit 1
-}
 
 : "${IPHONEOS_DEPLOYMENT_TARGET:=15.0}"
 : "${IPHONESIMULATOR_DEPLOYMENT_TARGET:=15.0}"
@@ -255,7 +155,6 @@ fi
 echo "[+] Using iOS deployment target (device): $IPHONEOS_DEPLOYMENT_TARGET" >&2
 echo "[+] Using iOS deployment target (simulator): $IPHONESIMULATOR_DEPLOYMENT_TARGET" >&2
 
-acquire_build_publish_lock
 if [[ "${NORITO_BRIDGE_PRESERVE_CARGO_TARGETS:-0}" == "1" || "${NORITO_BRIDGE_SKIP_CARGO_BUILDS:-0}" == "1" ]]; then
   rm -rf "$STAGE_DIR"
 else

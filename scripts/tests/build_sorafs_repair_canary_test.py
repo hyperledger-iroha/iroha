@@ -149,10 +149,43 @@ def test_builds_payload_free_worker_lifecycle_canary(tmp_path: Path) -> None:
     )
     assert payload["status_count"] == len(MODULE.REQUIRED_LIFECYCLE_STATUSES)
     assert payload["statuses_observed"] == list(MODULE.REQUIRED_LIFECYCLE_STATUSES)
+    assert payload["finalized_task_projection_verified"] is True
+    assert payload["exact_live_lease_execution_verified"] is True
+    assert payload["durable_transaction_forwarding_verified"] is True
+    assert payload["restart_reconciliation_verified"] is True
+    assert payload["single_terminal_outcome_verified"] is True
     assert payload["raw_repair_payloads_included"] is False
     kind, errors = CHECKER.validate_evidence_payload(payload, checker_options())
     assert kind == "worker_lifecycle"
     assert errors == []
+
+
+def test_route_canaries_emit_exact_command_and_query_status_codes(
+    tmp_path: Path,
+) -> None:
+    observed: dict[str, int] = {}
+    for kind in ("auditor_api", "worker_lifecycle", "event_streams"):
+        assert MODULE.main(args_for(kind, tmp_path)) == 0
+        payload = json.loads(canary_path(tmp_path, kind).read_text("utf-8"))
+        observed.update(
+            {record["name"]: record["status_code"] for record in payload["routes"]}
+        )
+
+    assert observed == CHECKER.REQUIRED_ROUTE_STATUS_CODES
+
+
+def test_retired_global_route_status_override_is_rejected(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    args = args_for("worker_lifecycle", tmp_path)
+    args.extend(["--route-status-code", "200"])
+
+    assert MODULE.main(args) == 2
+
+    captured = capsys.readouterr()
+    assert "unrecognized arguments: --route-status-code 200" in captured.err
+    assert not canary_path(tmp_path, "worker_lifecycle").exists()
 
 
 def test_builds_payload_free_governance_handoff_canary(tmp_path: Path) -> None:

@@ -4652,6 +4652,7 @@ mod tests {
             lane_snapshots: Vec::new(),
             execution_batch: None,
             lane_drain_certificates: Vec::new(),
+            queue_plan_admissions: Vec::new(),
             global_state_root: Hash::new_from_chunks(&[b"state", label]),
         }
     }

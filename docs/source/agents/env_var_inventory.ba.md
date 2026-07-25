@@ -14,7 +14,7 @@ translator: machine-google-reviewed
 
 _Һуңғы яңыртылған аша `python3 scripts/inventory_env_toggles.py --json docs/source/agents/env_var_inventory.json --md docs/source/agents/env_var_inventory.md`.
 
-Дөйөм һылтанмалар: **505** · Үҙенсәлекле үҙгәртеүселәр: **137**
+Дөйөм һылтанмалар: **502** · Үҙенсәлекле үҙгәртеүселәр: **137**
 
 ## АКЦИЯҺЫ_ИД_ТОКЕН_СИМӘТ_ТОКЕН (прод: 1)
 
@@ -265,9 +265,6 @@ _Һуңғы яңыртылған аша `python3 scripts/inventory_env_toggles.p
 - тест: йәшниктәр/сорафтар_манифест/тестар/por_fixtures. rs:11 — `env!("CARGO_MANIFEST_DIR"),`
 - тест: йәшниктәр/сорафтар_манифест/тестар/провиратор_адмиссия_фикстуралар.12 — `cmd.current_dir(env!("CARGO_MANIFEST_DIR"))`
 - тест: йәшниктәр/сорафтар_манифест/тест/репликация_ордаҡ_фикстуралар. 8 — `env!("CARGO_MANIFEST_DIR"),`
-- prod: йәшниктәр/sorafs_node/src/bin/sorafs_gateway.rs:55 — `PathBuf::from(env!("CARGO_MANIFEST_DIR"))`
-- prod: йәшниктәр/сорафтар_төймә/src/bin/sorafs_gateway.59 — `PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/sorafs_gateway/1.0.0")`
-- тест: йәшниктәр/sorafs_node/src/gateaway.rs:2006 — `PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/sorafs_gateway/1.0.0");`
 - тест: йәшниктәр/сорафтар_төймә/тестар/кли.р.:122 — `let base = Path::new(env!("CARGO_MANIFEST_DIR"))`X .
 - тест: йәшниктәр/сорафтар_төйөн/тестар/ҡапҡалар:14 — `let mut cmd = Command::new(env::var("CARGO").unwrap_or_else(|_| "cargo".into()));`.
 - тест: йәшниктәр/сорафтар_төйөн/тестар/ҡапҡалар.р.:30 — `let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))`X.

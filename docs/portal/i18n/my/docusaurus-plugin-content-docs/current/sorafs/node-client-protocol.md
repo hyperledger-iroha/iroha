@@ -126,10 +126,12 @@ SF-6 ရင်းမြစ်ပေါင်းစုံကို ရယူခ�
 - `iroha app sorafs pin list|show`၊ `alias list` နှင့် `replication list`
   pin-registry REST အဆုံးမှတ်များနှင့် ကုန်ကြမ်း Norito JSON ကို အထောက်အထားလုပ်ကွက်များဖြင့် ပရင့်ထုတ်ပါ။
   စာရင်းစစ်အထောက်အထားအတွက်။
-- `iroha app sorafs storage pin` နှင့် `torii /v1/sorafs/pin/register` Norito လက်ခံ
-  သို့မဟုတ် JSON သည် ပေါင်း၍ ရွေးချယ်နိုင်သော alias အထောက်အထားများနှင့် ဆက်ခံသူများကို ဖော်ပြသည်။ ပုံစံမမှန်သောသက်သေများ
-  `400` ကိုမြှင့်ပါ၊ `503` ကို `Warning: 110` ဖြင့် ၊
-  သက်တမ်းကုန်ဆုံးခဲသော အထောက်အထားများ `412` ကို ပြန်ပေးသည်။
+- `torii /v1/sorafs/pin/register` သည် ပိတ်ထားသော JSON V1 request ကို လက်ခံသည်။
+  `manifest_payload` သည် canonical Norito `ManifestV1` bytes ၏ တိကျသော
+  canonical padded base64 ဖြစ်ရမည်။ Torii သည် digest၊ chunker၊ content length၊
+  pin policy နှင့် fee input များကို decoded manifest တစ်ခုတည်းမှ ထုတ်ယူပြီး
+  ပယ်ဖျက်ထားသော duplicate summary fields များကို ငြင်းပယ်သည်။ `alias` နှင့်
+  zero မဟုတ်သော `successor_of_hex` predecessor သည် optional အဖြစ် ကျန်ရှိသည်။
 - `iroha app sorafs repair list` မှန်များ တန်းစီနေသော ဇကာများကို ပြုပြင်နေစဉ်
   `repair claim|complete|fail|escalate` လက်မှတ်ရေးထိုးထားသော အလုပ်သမားလုပ်ဆောင်ချက်များ သို့မဟုတ် မျဉ်းစောင်းများ တင်သွင်းပါ။
   Torii သို့ အဆိုပြုချက်များ။ မျဉ်းစောင်း အဆိုပြုချက်များတွင် အုပ်ချုပ်မှုခွင့်ပြုချက် အနှစ်ချုပ် ပါဝင်နိုင်သည်။

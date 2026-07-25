@@ -869,6 +869,15 @@ impl ModerationOrchestratorV1 {
             });
         }
 
+        validate_finalized_action_authority(
+            state
+                .finalized_snapshot
+                .as_ref()
+                .ok_or(ModerationOrchestratorError::FinalizedReaderUnavailable)?,
+            &authority,
+            &action,
+        )?;
+
         match action_effect(
             state
                 .finalized_snapshot
@@ -943,8 +952,9 @@ impl ModerationOrchestratorV1 {
     /// Run deterministic deadline maintenance after a finalized reconciliation.
     ///
     /// Only native sortition, activation/failover, and finalization ISIs are
-    /// emitted. Each uses the injected governance authority and stable semantic
-    /// identity. At most `limit` actions are attempted.
+    /// emitted. The injected operational identity must equal the authority in
+    /// the finalized policy or panel selection; configuration cannot override
+    /// ledger authority. At most `limit` actions are attempted.
     ///
     /// # Errors
     ///
@@ -2354,6 +2364,67 @@ enum ActionEffect {
     Conflict,
 }
 
+fn validate_finalized_action_authority(
+    snapshot: &ModerationFinalizedLedgerSnapshotV1,
+    authenticated: &AccountId,
+    action: &ModerationNativeActionV1,
+) -> Result<(), ModerationOrchestratorError> {
+    let expected = match action {
+        ModerationNativeActionV1::FinalizeSortition(_) => snapshot
+            .policy
+            .as_ref()
+            .map(|record| &record.activated_by)
+            .ok_or_else(|| {
+                ModerationOrchestratorError::InvalidAction(
+                    "finalize_sortition requires an active finalized moderation policy".to_owned(),
+                )
+            })?,
+        ModerationNativeActionV1::ActivateCase(value) => finalized_selection_authority(
+            snapshot,
+            value.case_id(),
+            value.round_id(),
+            action.label(),
+        )?,
+        ModerationNativeActionV1::ResolveChallenge(value) => finalized_selection_authority(
+            snapshot,
+            value.case_id(),
+            value.round_id(),
+            action.label(),
+        )?,
+        ModerationNativeActionV1::FinalizeCase(value) => finalized_selection_authority(
+            snapshot,
+            value.case_id(),
+            value.round_id(),
+            action.label(),
+        )?,
+        ModerationNativeActionV1::SetPolicy(_)
+        | ModerationNativeActionV1::SubmitAppeal(_)
+        | ModerationNativeActionV1::RegisterEligibility(_)
+        | ModerationNativeActionV1::AcceptAssignment(_)
+        | ModerationNativeActionV1::SubmitCommit(_)
+        | ModerationNativeActionV1::RaiseChallenge(_)
+        | ModerationNativeActionV1::SubmitReveal(_) => return Ok(()),
+    };
+    require_exact_authority(authenticated, expected, action.label())
+}
+
+fn finalized_selection_authority<'a>(
+    snapshot: &'a ModerationFinalizedLedgerSnapshotV1,
+    case_id: &str,
+    round_id: &str,
+    action: &'static str,
+) -> Result<&'a AccountId, ModerationOrchestratorError> {
+    snapshot
+        .appeal(case_id, round_id)
+        .and_then(|entry| entry.appeal.selection.as_ref())
+        .map(|selection| &selection.selected_by)
+        .ok_or_else(|| {
+            ModerationOrchestratorError::InvalidAction(format!(
+                "{action} requires a finalized panel selection for the exact case and round"
+            ))
+        })
+}
+
 fn action_effect(
     snapshot: &ModerationFinalizedLedgerSnapshotV1,
     authority: &AccountId,
@@ -3253,16 +3324,16 @@ pub enum ModerationOrchestratorError {
     /// Native action is malformed or noncanonical.
     #[error("invalid native moderation action: {0}")]
     InvalidAction(String),
-    /// Authenticated principal differs from the authority encoded by the action.
+    /// Authenticated principal differs from the action or finalized-ledger authority.
     #[error(
-        "moderation authority mismatch for {action}: authenticated `{authenticated}`, native `{native}`"
+        "moderation authority mismatch for {action}: authenticated `{authenticated}`, required `{native}`"
     )]
     AuthorityMismatch {
         /// Action label.
         action: &'static str,
         /// Verified principal.
         authenticated: String,
-        /// Native payload authority.
+        /// Authority required by the native payload or finalized projection.
         native: String,
     },
     /// Authenticated request binding is malformed or inert.
@@ -3975,6 +4046,43 @@ mod tests {
         }
     }
 
+    fn assert_finalized_authority_rejection_has_no_native_mutation(
+        snapshot: ModerationFinalizedLedgerSnapshotV1,
+        authenticated: AccountId,
+        required: &AccountId,
+        action: ModerationNativeActionV1,
+    ) {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let finalized_height = snapshot.finalized_height;
+        let reader = Arc::new(MockSnapshotReader::new(snapshot));
+        let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::NotFound {
+            observed_finalized_height: finalized_height,
+        }));
+        let orchestrator = ModerationOrchestratorV1::open(
+            config(&temp, "authority-negative.norito"),
+            deps(reader, Arc::clone(&submitter)),
+        )
+        .expect("orchestrator");
+        let action_label = action.label();
+
+        let error = orchestrator
+            .submit(authenticated.clone(), action, [0xE1; 32])
+            .expect_err("non-ledger authority must fail closed");
+        assert_eq!(
+            error,
+            ModerationOrchestratorError::AuthorityMismatch {
+                action: action_label,
+                authenticated: authenticated.to_string(),
+                native: required.to_string(),
+            }
+        );
+        assert_eq!(submitter.calls(), 0);
+        let state = orchestrator.state.lock().expect("orchestrator state");
+        assert!(state.operations.is_empty());
+        assert!(state.outbox.is_empty());
+        assert!(state.dead_letters.is_empty());
+    }
+
     #[test]
     fn duplicate_cross_replica_submission_reuses_one_transaction() {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -4005,6 +4113,113 @@ mod tests {
         assert_eq!(submitter.calls(), 1);
         assert_eq!(first_outcome.operation_id, second_outcome.operation_id);
         assert_eq!(first_outcome.transaction_id, second_outcome.transaction_id);
+    }
+
+    #[test]
+    fn finalize_sortition_rejects_non_policy_authority_without_mutation() {
+        let governance = account(90);
+        let imposter = account(91);
+        let action =
+            ModerationNativeActionV1::FinalizeSortition(FinalizeSorafsModerationSortition::new(
+                "case-authority".to_owned(),
+                "round-1".to_owned(),
+                [0x31; 32],
+                [0x32; 32],
+                Vec::new(),
+                Vec::new(),
+            ));
+        assert_finalized_authority_rejection_has_no_native_mutation(
+            snapshot_with_policy(1, [1; 32], policy(1), governance.clone()),
+            imposter,
+            &governance,
+            action,
+        );
+    }
+
+    #[test]
+    fn selection_governed_actions_reject_non_selected_authority_without_mutation() {
+        let governance = account(90);
+        let imposter = account(91);
+        let (awaiting, sortition_digest) =
+            awaiting_acceptance_snapshot(2, [2; 32], governance.clone());
+        assert_finalized_authority_rejection_has_no_native_mutation(
+            awaiting,
+            imposter.clone(),
+            &governance,
+            ModerationNativeActionV1::ActivateCase(ActivateSorafsModerationCase::new(
+                "case-failover".to_owned(),
+                "round-1".to_owned(),
+                sortition_digest,
+            )),
+        );
+
+        for action in [
+            ModerationNativeActionV1::ResolveChallenge(ResolveSorafsModerationChallenge::new(
+                "case-failover".to_owned(),
+                "round-1".to_owned(),
+                "challenge-authority".to_owned(),
+                ModerationChallengeDecisionV1::Rejected,
+            )),
+            ModerationNativeActionV1::FinalizeCase(FinalizeSorafsModerationCase::new(
+                "case-failover".to_owned(),
+                "round-1".to_owned(),
+            )),
+        ] {
+            assert_finalized_authority_rejection_has_no_native_mutation(
+                activated_case_snapshot(2, [2; 32], governance.clone()),
+                imposter.clone(),
+                &governance,
+                action,
+            );
+        }
+    }
+
+    #[test]
+    fn historical_operation_replay_precedes_rotated_finalized_authority() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let original_governance = account(90);
+        let rotated_governance = account(91);
+        let reader = Arc::new(MockSnapshotReader::new(snapshot_with_policy(
+            1,
+            [1; 32],
+            policy(1),
+            original_governance.clone(),
+        )));
+        let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::NotFound {
+            observed_finalized_height: 1,
+        }));
+        let orchestrator = ModerationOrchestratorV1::open(
+            config(&temp, "authority-replay.norito"),
+            deps(Arc::clone(&reader), Arc::clone(&submitter)),
+        )
+        .expect("orchestrator");
+        let action =
+            ModerationNativeActionV1::FinalizeSortition(FinalizeSorafsModerationSortition::new(
+                "case-authority-replay".to_owned(),
+                "round-1".to_owned(),
+                [0x41; 32],
+                [0x42; 32],
+                Vec::new(),
+                Vec::new(),
+            ));
+        let first = orchestrator
+            .submit(original_governance.clone(), action.clone(), [0xA1; 32])
+            .expect("initial submission");
+        assert!(!first.replay);
+        assert_eq!(submitter.calls(), 1);
+
+        reader.replace(snapshot_with_policy(
+            2,
+            [2; 32],
+            policy(2),
+            rotated_governance,
+        ));
+        let replay = orchestrator
+            .submit(original_governance, action, [0xA1; 32])
+            .expect("retained historical replay");
+        assert!(replay.replay);
+        assert_eq!(replay.operation_id, first.operation_id);
+        assert_eq!(submitter.calls(), 1);
     }
 
     #[test]

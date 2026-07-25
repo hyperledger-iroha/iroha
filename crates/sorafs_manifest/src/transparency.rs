@@ -97,6 +97,9 @@ pub const PROOF_TOKEN_MAX_ENTRY_IDS_V1: usize = 256;
 pub const PROOF_TOKEN_MAX_ENTRY_ID_BYTES_V1: usize = 256;
 /// Maximum number of metrics in one privacy aggregate.
 pub const MODERATION_PRIVACY_MAX_METRICS_V1: usize = 256;
+/// Reserved ledger-entry metadata key carrying the typed cycle PRF commitment.
+pub const MODERATION_PRIVACY_RANDOMNESS_COMMITMENT_METADATA_KEY_V1: &str =
+    "cycle_randomness_commitment_blake3";
 /// Only permitted V1 `delta_ppb` value.
 ///
 /// SoraFS V1 uses a pure differential-privacy mechanism, so delta is
@@ -220,8 +223,6 @@ pub struct ModerationPrivacyParametersV1 {
     /// Minimum distinct-subject count required before a bucket can be published.
     #[norito(default)]
     pub suppression_threshold: Option<u64>,
-    /// Number of source buckets suppressed before publication.
-    pub suppressed_count: u64,
 }
 
 /// One privacy-safe aggregate metric.
@@ -248,6 +249,34 @@ pub struct ModerationPrivacyAggregateMetricV1 {
     pub unit: String,
 }
 
+/// Typed noise-source evidence for one privacy aggregate release.
+///
+/// Every aggregate carries this field on wire. Differential-privacy modes
+/// require a nonzero threshold-PRF commitment, while suppression-only
+/// aggregates use the explicit no-randomness variant. There is no absent or
+/// legacy metadata representation.
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, JsonSerialize, JsonDeserialize,
+)]
+#[norito(tag = "source", content = "value", rename_all = "snake_case")]
+pub enum ModerationPrivacyNoiseSourceV1 {
+    /// The release uses deterministic k-suppression without random noise.
+    SuppressionOnly,
+    /// The release uses hidden threshold-PRF output committed by BLAKE3-256.
+    ThresholdPrf(ModerationPrivacyThresholdPrfCommitmentV1),
+}
+
+/// Nonzero public commitment to hidden threshold-PRF cycle output.
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, JsonSerialize, JsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
+pub struct ModerationPrivacyThresholdPrfCommitmentV1 {
+    /// BLAKE3-256 commitment bound to the governed policy and exact cycle window.
+    #[norito(with = "fixed_bytes")]
+    pub commitment: [u8; 32],
+}
+
 /// Canonical privacy-safe moderation aggregate for SFM-4c dashboards.
 #[derive(
     Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, JsonSerialize, JsonDeserialize,
@@ -271,19 +300,13 @@ pub struct ModerationPrivacyAggregateV1 {
     pub population_digest: [u8; 32],
     /// Explicit privacy parameters applied before publication.
     pub privacy: ModerationPrivacyParametersV1,
-    /// Number of source events considered before privacy filtering/noising.
-    pub source_event_count: u64,
-    /// Number of distinct private subjects considered before suppression.
-    pub source_subject_count: u64,
-    /// BLAKE3 digest of the canonical source aggregate payload.
-    #[norito(with = "fixed_bytes")]
-    pub source_payload_digest: [u8; 32],
+    /// Typed evidence for the randomness source selected by [`Self::privacy`].
+    pub noise_source: ModerationPrivacyNoiseSourceV1,
     /// Published privacy-safe metrics, sorted by key.
     pub metrics: Vec<ModerationPrivacyAggregateMetricV1>,
-    /// Optional digest of the aggregate policy/configuration.
-    #[norito(default)]
-    #[norito(with = "fixed_bytes::option")]
-    pub policy_digest: Option<[u8; 32]>,
+    /// Digest of the governed aggregate policy/configuration.
+    #[norito(with = "fixed_bytes")]
+    pub policy_digest: [u8; 32],
     /// Public key/value metadata. Keys must be unique and sorted.
     #[norito(default)]
     pub metadata: Vec<ModerationLedgerMetadataV1>,
@@ -459,6 +482,11 @@ pub struct ModerationLedgerCyclePublicationV1 {
     pub block: ModerationLedgerBlockV1,
     /// Inclusion proofs for every entry covered by [`Self::block`], sorted by leaf index.
     pub proofs: Vec<ModerationLedgerProofV1>,
+    /// Exact canonical privacy aggregates carried by privacy-only publications.
+    ///
+    /// This inventory is empty for non-privacy publications. When present, it
+    /// is sorted by aggregate id and binds one-to-one to [`Self::proofs`].
+    pub privacy_aggregates: Vec<ModerationPrivacyAggregateV1>,
 }
 
 impl ModerationPrivacyParametersV1 {
@@ -483,11 +511,6 @@ impl ModerationPrivacyParametersV1 {
                 require_delta_parameter(self.delta_ppb)?;
                 require_positive_parameter("per_subject_metric_cap", self.per_subject_metric_cap)?;
                 require_absent_parameter("suppression_threshold", self.suppression_threshold)?;
-                if self.suppressed_count != 0 {
-                    return Err(TransparencyLedgerError::InvalidPrivacyParameter {
-                        field: "suppressed_count",
-                    });
-                }
             }
             ModerationPrivacyModeV1::Suppression => {
                 require_absent_parameter("epsilon_numerator", self.epsilon_numerator)?;
@@ -532,28 +555,50 @@ impl ModerationPrivacyAggregateV1 {
         if self.window_end_unix <= self.window_start_unix {
             return Err(TransparencyLedgerError::InvalidPrivacyAggregateWindow);
         }
-        if self.generated_at_unix < self.window_end_unix {
+        if self.generated_at_unix != self.window_end_unix {
             return Err(TransparencyLedgerError::InvalidPrivacyAggregateGeneratedAt);
         }
         require_public_text("population_label", &self.population_label)?;
         require_nonzero32("population_digest", &self.population_digest)?;
         self.privacy.validate()?;
-        if self.source_event_count == 0 {
-            return Err(TransparencyLedgerError::InvalidPrivacyParameter {
-                field: "source_event_count",
-            });
+        match (self.privacy.mode, self.noise_source) {
+            (
+                ModerationPrivacyModeV1::DifferentialPrivacy
+                | ModerationPrivacyModeV1::DifferentialPrivacyWithSuppression,
+                ModerationPrivacyNoiseSourceV1::ThresholdPrf(commitment),
+            ) => {
+                require_nonzero32("cycle_randomness_commitment", &commitment.commitment)?;
+            }
+            (
+                ModerationPrivacyModeV1::DifferentialPrivacy
+                | ModerationPrivacyModeV1::DifferentialPrivacyWithSuppression,
+                ModerationPrivacyNoiseSourceV1::SuppressionOnly,
+            ) => {
+                return Err(TransparencyLedgerError::MissingPrivacyRandomnessCommitment);
+            }
+            (
+                ModerationPrivacyModeV1::Suppression,
+                ModerationPrivacyNoiseSourceV1::ThresholdPrf(_),
+            ) => {
+                return Err(TransparencyLedgerError::UnexpectedPrivacyRandomnessCommitment);
+            }
+            (
+                ModerationPrivacyModeV1::Suppression,
+                ModerationPrivacyNoiseSourceV1::SuppressionOnly,
+            ) => {}
         }
-        if self.source_subject_count == 0 || self.source_subject_count > self.source_event_count {
-            return Err(TransparencyLedgerError::InvalidPrivacyParameter {
-                field: "source_subject_count",
-            });
-        }
-        require_nonzero32("source_payload_digest", &self.source_payload_digest)?;
         validate_privacy_metrics(&self.metrics)?;
-        if let Some(policy_digest) = &self.policy_digest {
-            require_nonzero32("policy_digest", policy_digest)?;
-        }
+        require_nonzero32("policy_digest", &self.policy_digest)?;
         validate_metadata(&self.metadata)?;
+        if self
+            .metadata
+            .iter()
+            .any(|item| item.key == MODERATION_PRIVACY_RANDOMNESS_COMMITMENT_METADATA_KEY_V1)
+        {
+            return Err(TransparencyLedgerError::ReservedPrivacyMetadataKey {
+                key: MODERATION_PRIVACY_RANDOMNESS_COMMITMENT_METADATA_KEY_V1,
+            });
+        }
         Ok(())
     }
 
@@ -617,6 +662,13 @@ impl ModerationPrivacyAggregateV1 {
             "privacy_mode",
             privacy_mode_label(self.privacy.mode).to_string(),
         )?;
+        if let ModerationPrivacyNoiseSourceV1::ThresholdPrf(commitment) = self.noise_source {
+            insert_metadata(
+                &mut metadata,
+                MODERATION_PRIVACY_RANDOMNESS_COMMITMENT_METADATA_KEY_V1,
+                hex::encode(commitment.commitment),
+            )?;
+        }
         if let Some(per_subject_metric_cap) = self.privacy.per_subject_metric_cap {
             insert_metadata(
                 &mut metadata,
@@ -624,16 +676,6 @@ impl ModerationPrivacyAggregateV1 {
                 per_subject_metric_cap.to_string(),
             )?;
         }
-        insert_metadata(
-            &mut metadata,
-            "source_event_count",
-            self.source_event_count.to_string(),
-        )?;
-        insert_metadata(
-            &mut metadata,
-            "source_subject_count",
-            self.source_subject_count.to_string(),
-        )?;
         if let Some(suppression_threshold) = self.privacy.suppression_threshold {
             insert_metadata(
                 &mut metadata,
@@ -641,11 +683,6 @@ impl ModerationPrivacyAggregateV1 {
                 suppression_threshold.to_string(),
             )?;
         }
-        insert_metadata(
-            &mut metadata,
-            "suppressed_count",
-            self.privacy.suppressed_count.to_string(),
-        )?;
         insert_metadata(
             &mut metadata,
             "window_end_unix",
@@ -671,7 +708,7 @@ impl ModerationPrivacyAggregateV1 {
             subject_digest: hash_text(PRIVACY_AGGREGATE_SUBJECT_DOMAIN_V1, &self.aggregate_id),
             payload_digest,
             summary_digest: payload_digest,
-            policy_digest: self.policy_digest,
+            policy_digest: Some(self.policy_digest),
             evidence_uris: Vec::new(),
             metadata: metadata
                 .into_iter()
@@ -1119,6 +1156,33 @@ impl ModerationLedgerCyclePublicationV1 {
         previous_block_hash: Option<[u8; 32]>,
         entries: &[ModerationLedgerEntryV1],
     ) -> Result<Self, TransparencyLedgerError> {
+        Self::from_entries_with_privacy_aggregates(
+            cycle_id,
+            cycle_start_unix,
+            cycle_end_unix,
+            generated_at_unix,
+            previous_block_hash,
+            entries,
+            &[],
+        )
+    }
+
+    /// Build a canonical privacy-only cycle publication carrying its exact
+    /// typed aggregate payload inventory.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TransparencyLedgerError`] when the entries, aggregates, or
+    /// their one-to-one binding are malformed.
+    pub fn from_entries_with_privacy_aggregates(
+        cycle_id: [u8; 16],
+        cycle_start_unix: u64,
+        cycle_end_unix: u64,
+        generated_at_unix: u64,
+        previous_block_hash: Option<[u8; 32]>,
+        entries: &[ModerationLedgerEntryV1],
+        privacy_aggregates: &[ModerationPrivacyAggregateV1],
+    ) -> Result<Self, TransparencyLedgerError> {
         let block = ModerationLedgerBlockV1::build(
             cycle_id,
             cycle_start_unix,
@@ -1156,6 +1220,7 @@ impl ModerationLedgerCyclePublicationV1 {
             version: MODERATION_LEDGER_PUBLICATION_VERSION_V1,
             block,
             proofs,
+            privacy_aggregates: privacy_aggregates.to_vec(),
         };
         publication.validate()?;
         Ok(publication)
@@ -1199,6 +1264,61 @@ impl ModerationLedgerCyclePublicationV1 {
             }
             proof.verify_against_block(&self.block)?;
             previous_leaf_index = Some(proof.leaf_index);
+        }
+        self.validate_privacy_aggregate_inventory()?;
+        Ok(())
+    }
+
+    fn validate_privacy_aggregate_inventory(&self) -> Result<(), TransparencyLedgerError> {
+        let privacy_proof_count = self
+            .proofs
+            .iter()
+            .filter(|proof| proof.entry.kind == ModerationLedgerEntryKindV1::PrivacyAggregate)
+            .count();
+        if privacy_proof_count == 0 {
+            if self.privacy_aggregates.is_empty() {
+                return Ok(());
+            }
+            return Err(TransparencyLedgerError::UnexpectedPublicationPrivacyAggregates);
+        }
+        if privacy_proof_count != self.proofs.len() {
+            return Err(TransparencyLedgerError::MixedPublicationPrivacyEntries);
+        }
+        if self.privacy_aggregates.len() != privacy_proof_count {
+            return Err(
+                TransparencyLedgerError::PublicationPrivacyAggregateCountMismatch {
+                    expected: privacy_proof_count,
+                    found: self.privacy_aggregates.len(),
+                },
+            );
+        }
+        if self.block.generated_at_unix != self.block.cycle_end_unix {
+            return Err(TransparencyLedgerError::InvalidPrivacyPublicationGeneratedAt);
+        }
+
+        let mut previous_id: Option<&str> = None;
+        for aggregate in &self.privacy_aggregates {
+            aggregate.validate()?;
+            if previous_id.is_some_and(|previous| previous >= aggregate.aggregate_id.as_str()) {
+                return Err(TransparencyLedgerError::PublicationPrivacyAggregatesUnsorted);
+            }
+            if aggregate.window_start_unix != self.block.cycle_start_unix
+                || aggregate.window_end_unix != self.block.cycle_end_unix
+                || aggregate.generated_at_unix != self.block.generated_at_unix
+            {
+                return Err(TransparencyLedgerError::PublicationPrivacyAggregateWindowMismatch);
+            }
+            previous_id = Some(aggregate.aggregate_id.as_str());
+        }
+        for (aggregate, proof) in self.privacy_aggregates.iter().zip(&self.proofs) {
+            let expected_entry = aggregate.to_ledger_entry(
+                self.block.cycle_id,
+                proof.entry.entry_id,
+                proof.entry.sequence,
+            )?;
+            if expected_entry != proof.entry {
+                return Err(TransparencyLedgerError::PublicationPrivacyAggregateEntryMismatch);
+            }
         }
         Ok(())
     }
@@ -1299,8 +1419,8 @@ pub enum TransparencyLedgerError {
     /// Privacy aggregate end is not greater than window start.
     #[error("moderation privacy aggregate window end must be greater than window start")]
     InvalidPrivacyAggregateWindow,
-    /// Privacy aggregate generation timestamp predates the window end.
-    #[error("moderation privacy aggregate generated_at timestamp must be >= window end")]
+    /// Privacy aggregate generation timestamp is not the exact window end.
+    #[error("moderation privacy aggregate generated_at timestamp must equal window end")]
     InvalidPrivacyAggregateGeneratedAt,
     /// Entry list is empty.
     #[error("moderation ledger block requires at least one entry")]
@@ -1389,6 +1509,18 @@ pub enum TransparencyLedgerError {
         /// Field name.
         field: &'static str,
     },
+    /// A DP aggregate omitted its typed threshold-PRF commitment.
+    #[error("moderation privacy aggregate requires a typed threshold-PRF commitment")]
+    MissingPrivacyRandomnessCommitment,
+    /// A suppression-only aggregate carried randomness evidence.
+    #[error("moderation suppression-only aggregate must not carry a randomness commitment")]
+    UnexpectedPrivacyRandomnessCommitment,
+    /// Caller metadata attempted to shadow a typed privacy field.
+    #[error("moderation privacy aggregate metadata key `{key}` is reserved")]
+    ReservedPrivacyMetadataKey {
+        /// Reserved metadata key.
+        key: &'static str,
+    },
     /// Privacy aggregate does not contain any metrics.
     #[error("moderation privacy aggregate requires at least one metric")]
     PrivacyAggregateMetricsMissing,
@@ -1430,6 +1562,34 @@ pub enum TransparencyLedgerError {
         /// Duplicate proof leaf index.
         leaf_index: u32,
     },
+    /// A non-privacy publication unexpectedly carried privacy aggregate payloads.
+    #[error("non-privacy publication must not carry privacy aggregate payloads")]
+    UnexpectedPublicationPrivacyAggregates,
+    /// A publication mixed privacy and non-privacy entry kinds.
+    #[error("privacy aggregate publication must not mix entry kinds")]
+    MixedPublicationPrivacyEntries,
+    /// Privacy aggregate payload count does not match the proof inventory.
+    #[error(
+        "moderation ledger publication has `{found}` privacy aggregates but expects `{expected}`"
+    )]
+    PublicationPrivacyAggregateCountMismatch {
+        /// Expected privacy aggregate count.
+        expected: usize,
+        /// Observed privacy aggregate count.
+        found: usize,
+    },
+    /// Privacy aggregate payloads are not strictly sorted by aggregate id.
+    #[error("moderation ledger publication privacy aggregates must be sorted by aggregate id")]
+    PublicationPrivacyAggregatesUnsorted,
+    /// A privacy publication was not generated at the exact cycle end.
+    #[error("privacy publication generated_at timestamp must equal cycle end")]
+    InvalidPrivacyPublicationGeneratedAt,
+    /// A carried privacy aggregate does not match the publication cycle window.
+    #[error("privacy aggregate payload does not match the publication cycle window")]
+    PublicationPrivacyAggregateWindowMismatch,
+    /// A carried privacy aggregate does not reproduce its exact ledger entry.
+    #[error("privacy aggregate payload does not match its publication proof entry")]
+    PublicationPrivacyAggregateEntryMismatch,
     /// Norito canonical encoding failed while hashing.
     #[error("failed to encode moderation ledger payload for canonical hashing")]
     CanonicalEncode,
@@ -1906,7 +2066,7 @@ mod tests {
             aggregate_id: "sfm4c-weekly-jurisdiction-a".to_string(),
             window_start_unix: 1_767_225_600,
             window_end_unix: 1_767_830_400,
-            generated_at_unix: 1_767_830_401,
+            generated_at_unix: 1_767_830_400,
             population_label: "jurisdiction-a".to_string(),
             population_digest: digest(0xA0),
             privacy: ModerationPrivacyParametersV1 {
@@ -1917,11 +2077,12 @@ mod tests {
                 delta_ppb: Some(0),
                 per_subject_metric_cap: Some(2),
                 suppression_threshold: Some(25),
-                suppressed_count: 3,
             },
-            source_event_count: 128,
-            source_subject_count: 96,
-            source_payload_digest: digest(0xA1),
+            noise_source: ModerationPrivacyNoiseSourceV1::ThresholdPrf(
+                ModerationPrivacyThresholdPrfCommitmentV1 {
+                    commitment: digest(0xA3),
+                },
+            ),
             metrics: vec![
                 ModerationPrivacyAggregateMetricV1 {
                     key: "appeals_upheld".to_string(),
@@ -1934,7 +2095,7 @@ mod tests {
                     unit: "count".to_string(),
                 },
             ],
-            policy_digest: Some(digest(0xA2)),
+            policy_digest: digest(0xA2),
             metadata: vec![ModerationLedgerMetadataV1 {
                 key: "publisher".to_string(),
                 value: "sfm4c".to_string(),
@@ -2236,7 +2397,7 @@ mod tests {
             aggregate_entry.summary_digest,
             aggregate_entry.payload_digest
         );
-        assert_eq!(aggregate_entry.policy_digest, aggregate.policy_digest);
+        assert_eq!(aggregate_entry.policy_digest, Some(aggregate.policy_digest));
         assert_eq!(
             aggregate_entry
                 .metadata
@@ -2245,6 +2406,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 "aggregate_id",
+                "cycle_randomness_commitment_blake3",
                 "delta_ppb",
                 "epsilon_denominator",
                 "epsilon_numerator",
@@ -2252,26 +2414,184 @@ mod tests {
                 "population_label",
                 "privacy_mode",
                 "publisher",
-                "source_event_count",
-                "source_subject_count",
-                "suppressed_count",
                 "suppression_threshold",
                 "window_end_unix",
                 "window_start_unix",
             ]
         );
 
-        let entries = vec![entry(0x22, 2), aggregate_entry];
-        let publication = ModerationLedgerCyclePublicationV1::from_entries(
+        let entries = vec![aggregate_entry];
+        let publication = ModerationLedgerCyclePublicationV1::from_entries_with_privacy_aggregates(
             cycle_id(),
             1_767_225_600,
             1_767_830_400,
-            1_767_830_401,
+            1_767_830_400,
             None,
             &entries,
+            std::slice::from_ref(&aggregate),
         )
         .expect("publication builds with aggregate entry");
-        assert_eq!(publication.block.entry_count, 2);
+        assert_eq!(publication.block.entry_count, 1);
+        assert_eq!(publication.privacy_aggregates, vec![aggregate]);
+    }
+
+    #[test]
+    fn privacy_aggregate_rejects_noncanonical_generated_at() {
+        let mut aggregate = privacy_aggregate();
+        aggregate.generated_at_unix = aggregate.window_end_unix + 1;
+        assert_eq!(
+            aggregate.validate(),
+            Err(TransparencyLedgerError::InvalidPrivacyAggregateGeneratedAt)
+        );
+        let bytes = norito::to_bytes(&aggregate).expect("aggregate encodes");
+        let decoded: ModerationPrivacyAggregateV1 =
+            norito::decode_from_bytes(&bytes).expect("aggregate decodes");
+        assert_eq!(
+            decoded.validate(),
+            Err(TransparencyLedgerError::InvalidPrivacyAggregateGeneratedAt)
+        );
+        let json = norito::json::to_string(&aggregate).expect("aggregate JSON encodes");
+        let decoded_json: ModerationPrivacyAggregateV1 =
+            norito::json::from_str(&json).expect("aggregate JSON decodes");
+        assert_eq!(
+            decoded_json.validate(),
+            Err(TransparencyLedgerError::InvalidPrivacyAggregateGeneratedAt)
+        );
+    }
+
+    #[test]
+    fn privacy_publication_requires_exact_payload_inventory() {
+        let aggregate = privacy_aggregate();
+        let entry = aggregate
+            .to_ledger_entry(cycle_id(), [0x44; 16], 1)
+            .expect("aggregate converts");
+        assert_eq!(
+            ModerationLedgerCyclePublicationV1::from_entries(
+                cycle_id(),
+                aggregate.window_start_unix,
+                aggregate.window_end_unix,
+                aggregate.window_end_unix,
+                None,
+                &[entry],
+            ),
+            Err(
+                TransparencyLedgerError::PublicationPrivacyAggregateCountMismatch {
+                    expected: 1,
+                    found: 0,
+                }
+            )
+        );
+    }
+
+    #[test]
+    fn privacy_publication_rejects_payload_inventory_tampering() {
+        let aggregate_a = privacy_aggregate();
+        let mut aggregate_b = aggregate_a.clone();
+        aggregate_b.aggregate_id = "sfm4c-weekly-jurisdiction-b".to_string();
+        aggregate_b.population_label = "jurisdiction-b".to_string();
+        aggregate_b.population_digest = digest(0xB0);
+        let entries = vec![
+            aggregate_a
+                .to_ledger_entry(cycle_id(), [0x44; 16], 1)
+                .expect("first aggregate converts"),
+            aggregate_b
+                .to_ledger_entry(cycle_id(), [0x45; 16], 2)
+                .expect("second aggregate converts"),
+        ];
+        let publication = ModerationLedgerCyclePublicationV1::from_entries_with_privacy_aggregates(
+            cycle_id(),
+            aggregate_a.window_start_unix,
+            aggregate_a.window_end_unix,
+            aggregate_a.window_end_unix,
+            None,
+            &entries,
+            &[aggregate_a, aggregate_b],
+        )
+        .expect("privacy publication builds");
+
+        let mut metric_tamper = publication.clone();
+        metric_tamper.privacy_aggregates[0].metrics[0].value += 1;
+        assert_eq!(
+            metric_tamper.validate(),
+            Err(TransparencyLedgerError::PublicationPrivacyAggregateEntryMismatch)
+        );
+
+        let mut population_tamper = publication.clone();
+        population_tamper.privacy_aggregates[0].population_digest[0] ^= 1;
+        assert_eq!(
+            population_tamper.validate(),
+            Err(TransparencyLedgerError::PublicationPrivacyAggregateEntryMismatch)
+        );
+
+        let mut ordering_tamper = publication.clone();
+        ordering_tamper.privacy_aggregates.swap(0, 1);
+        assert_eq!(
+            ordering_tamper.validate(),
+            Err(TransparencyLedgerError::PublicationPrivacyAggregatesUnsorted)
+        );
+
+        let mut count_tamper = publication.clone();
+        count_tamper.privacy_aggregates.pop();
+        assert_eq!(
+            count_tamper.validate(),
+            Err(
+                TransparencyLedgerError::PublicationPrivacyAggregateCountMismatch {
+                    expected: 2,
+                    found: 1,
+                }
+            )
+        );
+
+        let mut hash_tamper = publication;
+        hash_tamper.proofs[0].entry.payload_digest[0] ^= 1;
+        assert!(matches!(
+            hash_tamper.validate(),
+            Err(TransparencyLedgerError::ProofEntryHashMismatch
+                | TransparencyLedgerError::ProofRootMismatch)
+        ));
+    }
+
+    #[test]
+    fn privacy_aggregate_json_rejects_retired_exact_count_fields() {
+        let aggregate = privacy_aggregate();
+        let canonical =
+            norito::json::to_string(&aggregate).expect("encode canonical aggregate JSON");
+        let parsed: norito::json::Value =
+            norito::json::from_str(&canonical).expect("parse canonical aggregate JSON");
+
+        for field in [
+            "source_event_count",
+            "source_subject_count",
+            "source_payload_digest",
+        ] {
+            let mut forged = parsed.clone();
+            let norito::json::Value::Object(object) = &mut forged else {
+                panic!("aggregate JSON must be an object");
+            };
+            object.insert(field.to_string(), norito::json::Value::from(7_u64));
+            let forged = norito::json::to_string(&forged).expect("encode forged aggregate JSON");
+            assert!(
+                norito::json::from_str::<ModerationPrivacyAggregateV1>(&forged).is_err(),
+                "retired public exact count `{field}` must be rejected"
+            );
+        }
+
+        let mut forged = parsed;
+        let norito::json::Value::Object(object) = &mut forged else {
+            panic!("aggregate JSON must be an object");
+        };
+        let Some(norito::json::Value::Object(privacy)) = object.get_mut("privacy") else {
+            panic!("aggregate privacy JSON must be an object");
+        };
+        privacy.insert(
+            "suppressed_count".to_string(),
+            norito::json::Value::from(1_u64),
+        );
+        let forged = norito::json::to_string(&forged).expect("encode forged aggregate JSON");
+        assert!(
+            norito::json::from_str::<ModerationPrivacyAggregateV1>(&forged).is_err(),
+            "retired public suppressed bucket count must be rejected"
+        );
     }
 
     #[test]
@@ -2280,7 +2600,6 @@ mod tests {
         aggregate.privacy.mode = ModerationPrivacyModeV1::DifferentialPrivacy;
         aggregate.privacy.epsilon_numerator = None;
         aggregate.privacy.suppression_threshold = None;
-        aggregate.privacy.suppressed_count = 0;
         assert_eq!(
             aggregate.validate(),
             Err(TransparencyLedgerError::MissingPrivacyParameter {
@@ -2296,6 +2615,78 @@ mod tests {
         assert_eq!(
             aggregate.validate(),
             Err(TransparencyLedgerError::InvalidPrivacyParameter { field: "delta_ppb" })
+        );
+    }
+
+    #[test]
+    fn privacy_aggregate_requires_nonzero_typed_randomness_commitment() {
+        let mut aggregate = privacy_aggregate();
+        aggregate.noise_source = ModerationPrivacyNoiseSourceV1::SuppressionOnly;
+        assert_eq!(
+            aggregate.validate(),
+            Err(TransparencyLedgerError::MissingPrivacyRandomnessCommitment)
+        );
+
+        aggregate.noise_source = ModerationPrivacyNoiseSourceV1::ThresholdPrf(
+            ModerationPrivacyThresholdPrfCommitmentV1 {
+                commitment: [0; 32],
+            },
+        );
+        assert_eq!(
+            aggregate.validate(),
+            Err(TransparencyLedgerError::MissingDigest {
+                field: "cycle_randomness_commitment",
+            })
+        );
+    }
+
+    #[test]
+    fn privacy_aggregate_rejects_commitment_on_suppression_only_release() {
+        let mut aggregate = privacy_aggregate();
+        aggregate.privacy = ModerationPrivacyParametersV1 {
+            version: MODERATION_PRIVACY_PARAMETERS_VERSION_V1,
+            mode: ModerationPrivacyModeV1::Suppression,
+            epsilon_numerator: None,
+            epsilon_denominator: None,
+            delta_ppb: None,
+            per_subject_metric_cap: None,
+            suppression_threshold: Some(25),
+        };
+        assert_eq!(
+            aggregate.validate(),
+            Err(TransparencyLedgerError::UnexpectedPrivacyRandomnessCommitment)
+        );
+
+        aggregate.noise_source = ModerationPrivacyNoiseSourceV1::SuppressionOnly;
+        aggregate
+            .validate()
+            .expect("suppression-only release accepts explicit no-randomness source");
+    }
+
+    #[test]
+    fn privacy_aggregate_rejects_missing_policy_and_shadow_commitment() {
+        let mut aggregate = privacy_aggregate();
+        aggregate.policy_digest = [0; 32];
+        assert_eq!(
+            aggregate.validate(),
+            Err(TransparencyLedgerError::MissingDigest {
+                field: "policy_digest",
+            })
+        );
+
+        let mut aggregate = privacy_aggregate();
+        aggregate.metadata.insert(
+            0,
+            ModerationLedgerMetadataV1 {
+                key: MODERATION_PRIVACY_RANDOMNESS_COMMITMENT_METADATA_KEY_V1.to_string(),
+                value: hex::encode([0x11; 32]),
+            },
+        );
+        assert_eq!(
+            aggregate.validate(),
+            Err(TransparencyLedgerError::ReservedPrivacyMetadataKey {
+                key: MODERATION_PRIVACY_RANDOMNESS_COMMITMENT_METADATA_KEY_V1,
+            })
         );
     }
 

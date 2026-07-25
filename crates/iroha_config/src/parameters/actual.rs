@@ -5664,6 +5664,61 @@ impl Default for SumeragiQueues {
     }
 }
 
+/// Shared finite runtime bounds for Sumeragi v2 lane and Native AMX services.
+#[derive(Debug, Clone, Copy)]
+pub struct SumeragiV2RuntimeLimits {
+    /// Authenticated merge-QC identities retained by one height-local adapter.
+    pub authenticated_merge_qc_capacity: NonZeroUsize,
+    /// Bytes reserved around a merge-leader candidate body in its consensus frame.
+    pub merge_leader_body_frame_headroom_bytes: NonZeroUsize,
+    /// Bytes reserved around autonomous payload envelopes in the canonical carrier.
+    pub autonomous_carrier_headroom_bytes: NonZeroUsize,
+    /// Cadence for retrying durable autonomous queue reservation.
+    pub autonomous_producer_recheck: Duration,
+    /// Consecutive identical recovery waits before the stage is reported stuck.
+    pub historical_recovery_stuck_attempts: NonZeroU32,
+    /// Attempts spent in each exponential historical-recovery retry tier.
+    pub historical_recovery_retry_tier_attempts: NonZeroU32,
+    /// Highest exponential historical-recovery retry tier.
+    pub historical_recovery_max_retry_tier: NonZeroU32,
+    /// Sidecar chunks transferred during one bounded adapter service turn.
+    pub sidecar_service_burst: NonZeroUsize,
+    /// Durable Native AMX signing decisions retained at one height.
+    pub native_amx_signing_guard_record_capacity: NonZeroUsize,
+    /// Runtime byte ceiling for one canonical Native AMX signing record.
+    pub native_amx_signing_guard_record_bytes: NonZeroUsize,
+    /// Runtime byte ceiling for the Native AMX signing chain anchor.
+    pub native_amx_signing_guard_anchor_bytes: NonZeroUsize,
+}
+
+impl Default for SumeragiV2RuntimeLimits {
+    fn default() -> Self {
+        Self {
+            authenticated_merge_qc_capacity:
+                defaults::sumeragi::V2_AUTHENTICATED_MERGE_QC_CAPACITY,
+            merge_leader_body_frame_headroom_bytes:
+                defaults::sumeragi::V2_MERGE_LEADER_BODY_FRAME_HEADROOM_BYTES,
+            autonomous_carrier_headroom_bytes:
+                defaults::sumeragi::V2_AUTONOMOUS_CARRIER_HEADROOM_BYTES,
+            autonomous_producer_recheck:
+                defaults::sumeragi::V2_AUTONOMOUS_PRODUCER_RECHECK,
+            historical_recovery_stuck_attempts:
+                defaults::sumeragi::V2_HISTORICAL_RECOVERY_STUCK_ATTEMPTS,
+            historical_recovery_retry_tier_attempts:
+                defaults::sumeragi::V2_HISTORICAL_RECOVERY_RETRY_TIER_ATTEMPTS,
+            historical_recovery_max_retry_tier:
+                defaults::sumeragi::V2_HISTORICAL_RECOVERY_MAX_RETRY_TIER,
+            sidecar_service_burst: defaults::sumeragi::V2_SIDECAR_SERVICE_BURST,
+            native_amx_signing_guard_record_capacity:
+                defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_RECORD_CAPACITY,
+            native_amx_signing_guard_record_bytes:
+                defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_RECORD_BYTES,
+            native_amx_signing_guard_anchor_bytes:
+                defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_ANCHOR_BYTES,
+        }
+    }
+}
+
 /// Consensus key-rotation and HSM policy.
 #[derive(Debug, Clone)]
 pub struct SumeragiKeys {
@@ -5711,6 +5766,8 @@ pub struct Sumeragi {
     pub block: SumeragiBlock,
     /// Bounded asynchronous adapter queues.
     pub queues: SumeragiQueues,
+    /// Shared finite lane, recovery, and Native AMX service bounds.
+    pub limits: SumeragiV2RuntimeLimits,
     /// Consensus key-rotation and HSM policy.
     pub keys: SumeragiKeys,
 }
@@ -5721,6 +5778,7 @@ impl Default for Sumeragi {
             role: NodeRole::Validator,
             block: SumeragiBlock::default(),
             queues: SumeragiQueues::default(),
+            limits: SumeragiV2RuntimeLimits::default(),
             keys: SumeragiKeys::default(),
         }
     }
@@ -5877,6 +5935,84 @@ impl Sumeragi {
             .ok_or(SumeragiV2ConfigError::LimitOverflow(
                 "Sumeragi v2 ready-body byte capacity",
             ))?;
+        let authenticated_merge_qc_capacity = canonical_bounded_size(
+            "sumeragi.limits.authenticated_merge_qc_capacity",
+            self.limits.authenticated_merge_qc_capacity.get(),
+            defaults::sumeragi::V2_AUTHENTICATED_MERGE_QC_CAPACITY_MAX,
+        )?;
+        let merge_leader_body_frame_headroom_bytes = canonical_bounded_size(
+            "sumeragi.limits.merge_leader_body_frame_headroom_bytes",
+            self.limits.merge_leader_body_frame_headroom_bytes.get(),
+            defaults::sumeragi::V2_MERGE_LEADER_BODY_FRAME_HEADROOM_BYTES_MAX,
+        )?;
+        let autonomous_carrier_headroom_bytes = canonical_bounded_size(
+            "sumeragi.limits.autonomous_carrier_headroom_bytes",
+            self.limits.autonomous_carrier_headroom_bytes.get(),
+            defaults::sumeragi::V2_AUTONOMOUS_CARRIER_HEADROOM_BYTES_MAX,
+        )?;
+        if autonomous_carrier_headroom_bytes >= max_payload_bytes {
+            return Err(SumeragiV2ConfigError::LimitAboveMaximum {
+                field: "sumeragi.limits.autonomous_carrier_headroom_bytes",
+                actual: autonomous_carrier_headroom_bytes,
+                maximum: max_payload_bytes - 1,
+            });
+        }
+        let autonomous_producer_recheck_ms = canonical_duration_ms(
+            "sumeragi.limits.autonomous_producer_recheck_ms",
+            self.limits.autonomous_producer_recheck,
+        )?;
+        if autonomous_producer_recheck_ms
+            > defaults::sumeragi::V2_AUTONOMOUS_PRODUCER_RECHECK_MAX_MS
+        {
+            return Err(SumeragiV2ConfigError::LimitAboveMaximum {
+                field: "sumeragi.limits.autonomous_producer_recheck_ms",
+                actual: autonomous_producer_recheck_ms,
+                maximum: defaults::sumeragi::V2_AUTONOMOUS_PRODUCER_RECHECK_MAX_MS,
+            });
+        }
+        let historical_recovery_stuck_attempts = canonical_bounded_u32(
+            "sumeragi.limits.historical_recovery_stuck_attempts",
+            self.limits.historical_recovery_stuck_attempts,
+            defaults::sumeragi::V2_HISTORICAL_RECOVERY_ATTEMPTS_MAX,
+        )?;
+        let historical_recovery_retry_tier_attempts = canonical_bounded_u32(
+            "sumeragi.limits.historical_recovery_retry_tier_attempts",
+            self.limits.historical_recovery_retry_tier_attempts,
+            defaults::sumeragi::V2_HISTORICAL_RECOVERY_ATTEMPTS_MAX,
+        )?;
+        let historical_recovery_max_retry_tier = canonical_bounded_u32(
+            "sumeragi.limits.historical_recovery_max_retry_tier",
+            self.limits.historical_recovery_max_retry_tier,
+            defaults::sumeragi::V2_HISTORICAL_RECOVERY_RETRY_TIER_MAX,
+        )?;
+        let sidecar_service_burst = canonical_bounded_size(
+            "sumeragi.limits.sidecar_service_burst",
+            self.limits.sidecar_service_burst.get(),
+            defaults::sumeragi::V2_SIDECAR_SERVICE_BURST_MAX,
+        )?;
+        let maximum_service_burst = runtime_completion_reserve.min(chunk_queue_capacity);
+        if sidecar_service_burst > maximum_service_burst {
+            return Err(SumeragiV2ConfigError::LimitAboveMaximum {
+                field: "sumeragi.limits.sidecar_service_burst",
+                actual: sidecar_service_burst,
+                maximum: maximum_service_burst,
+            });
+        }
+        let native_amx_signing_guard_record_capacity = canonical_bounded_size(
+            "sumeragi.limits.native_amx_signing_guard_record_capacity",
+            self.limits.native_amx_signing_guard_record_capacity.get(),
+            defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_RECORD_CAPACITY_MAX,
+        )?;
+        let native_amx_signing_guard_record_bytes = canonical_bounded_size(
+            "sumeragi.limits.native_amx_signing_guard_record_bytes",
+            self.limits.native_amx_signing_guard_record_bytes.get(),
+            defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_RECORD_BYTES_MAX,
+        )?;
+        let native_amx_signing_guard_anchor_bytes = canonical_bounded_size(
+            "sumeragi.limits.native_amx_signing_guard_anchor_bytes",
+            self.limits.native_amx_signing_guard_anchor_bytes.get(),
+            defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_ANCHOR_BYTES_MAX,
+        )?;
 
         if self.keys.allowed_algorithms.is_empty()
             || !self.keys.allowed_algorithms.contains(&Algorithm::BlsNormal)
@@ -5924,6 +6060,17 @@ impl Sumeragi {
                 ready_body_capacity,
                 ready_body_bytes,
                 certified_request_capacity: body_queue_capacity,
+                authenticated_merge_qc_capacity,
+                merge_leader_body_frame_headroom_bytes,
+                autonomous_carrier_headroom_bytes,
+                autonomous_producer_recheck_ms,
+                historical_recovery_stuck_attempts,
+                historical_recovery_retry_tier_attempts,
+                historical_recovery_max_retry_tier,
+                sidecar_service_burst,
+                native_amx_signing_guard_record_capacity,
+                native_amx_signing_guard_record_bytes,
+                native_amx_signing_guard_anchor_bytes,
             },
             key_policy: SumeragiV2KeyPolicy {
                 activation_lead_blocks: self.keys.activation_lead_blocks,
@@ -5938,10 +6085,11 @@ impl Sumeragi {
 }
 /// Version of the canonical Norito shared-config projection.
 ///
-/// Version 3 additionally binds the authenticated non-validator fair-ingress geometry.
-/// Nodes with incompatible source isolation or the retired fixed pacemaker
-/// deadline therefore derive a different handshake fingerprint.
-pub const SUMERAGI_V2_CONFIG_FORMAT_VERSION: u16 = 3;
+/// Version 4 additionally binds lane scheduling, recovery, merge-cache, and
+/// Native AMX signing-journal runtime ceilings. Nodes with incompatible
+/// resource or service geometry therefore derive a different handshake
+/// fingerprint.
+pub const SUMERAGI_V2_CONFIG_FORMAT_VERSION: u16 = 4;
 
 const SUMERAGI_V2_CONFIG_FINGERPRINT_DOMAIN: &[u8] =
     b"iroha:sumeragi:v2:shared-config-fingerprint\0";
@@ -6046,6 +6194,28 @@ pub struct SumeragiV2Limits {
     pub ready_body_bytes: u64,
     /// Maximum certified body-fetch requests in flight.
     pub certified_request_capacity: u64,
+    /// Authenticated merge-QC identities retained by one height-local adapter.
+    pub authenticated_merge_qc_capacity: u64,
+    /// Bytes reserved around a merge-leader candidate body in its consensus frame.
+    pub merge_leader_body_frame_headroom_bytes: u64,
+    /// Bytes reserved around autonomous payload envelopes in the canonical carrier.
+    pub autonomous_carrier_headroom_bytes: u64,
+    /// Cadence for retrying durable autonomous queue reservation.
+    pub autonomous_producer_recheck_ms: u64,
+    /// Consecutive identical recovery waits before the stage is reported stuck.
+    pub historical_recovery_stuck_attempts: u64,
+    /// Attempts spent in each exponential historical-recovery retry tier.
+    pub historical_recovery_retry_tier_attempts: u64,
+    /// Highest exponential historical-recovery retry tier.
+    pub historical_recovery_max_retry_tier: u64,
+    /// Sidecar chunks transferred during one bounded adapter service turn.
+    pub sidecar_service_burst: u64,
+    /// Durable Native AMX signing decisions retained at one height.
+    pub native_amx_signing_guard_record_capacity: u64,
+    /// Runtime byte ceiling for one canonical Native AMX signing record.
+    pub native_amx_signing_guard_record_bytes: u64,
+    /// Runtime byte ceiling for the Native AMX signing chain anchor.
+    pub native_amx_signing_guard_anchor_bytes: u64,
 }
 
 /// Canonical consensus signing-key policy.
@@ -6146,6 +6316,17 @@ pub enum SumeragiV2ConfigError {
     /// A duration or size exceeded its fixed-width canonical representation.
     #[error("{0} exceeds the canonical u64 representation")]
     LimitOverflow(&'static str),
+    /// A finite runtime limit exceeded its fixed implementation ceiling or
+    /// the configured resource budget which contains it.
+    #[error("{field} is {actual}, above the admitted maximum {maximum}")]
+    LimitAboveMaximum {
+        /// Fully-qualified configuration field.
+        field: &'static str,
+        /// Configured value.
+        actual: u64,
+        /// Greatest admitted value.
+        maximum: u64,
+    },
     /// The serialized reducer FIFO cannot admit its reserved traffic classes.
     #[error("Sumeragi v2 command queue capacity {actual} is below minimum {minimum}")]
     CommandQueueTooSmall {
@@ -6237,6 +6418,40 @@ fn canonical_size(
     value: usize,
 ) -> core::result::Result<u64, SumeragiV2ConfigError> {
     u64::try_from(value).map_err(|_| SumeragiV2ConfigError::LimitOverflow(field))
+}
+
+fn canonical_bounded_size(
+    field: &'static str,
+    value: usize,
+    maximum: usize,
+) -> core::result::Result<u64, SumeragiV2ConfigError> {
+    let value = canonical_size(field, value)?;
+    let maximum = canonical_size(field, maximum)?;
+    if value > maximum {
+        return Err(SumeragiV2ConfigError::LimitAboveMaximum {
+            field,
+            actual: value,
+            maximum,
+        });
+    }
+    Ok(value)
+}
+
+fn canonical_bounded_u32(
+    field: &'static str,
+    value: NonZeroU32,
+    maximum: u32,
+) -> core::result::Result<u64, SumeragiV2ConfigError> {
+    let value = u64::from(value.get());
+    let maximum = u64::from(maximum);
+    if value > maximum {
+        return Err(SumeragiV2ConfigError::LimitAboveMaximum {
+            field,
+            actual: value,
+            maximum,
+        });
+    }
+    Ok(value)
 }
 
 /// Trusted peers configuration: the local peer and its peers.
@@ -7924,7 +8139,9 @@ pub struct SorafsStorage {
     pub metering_smoothing: SorafsMeteringSmoothing,
     /// Stream-token issuance configuration for chunk-range gateways.
     pub stream_tokens: SorafsTokenConfig,
-    /// Local orderbook admission policy.
+    /// Durable native orderbook transaction worker policy.
+    pub orderbook_worker: SorafsOrderbookWorker,
+    /// Temporary local admission policy; non-authoritative and not a compatibility branch.
     pub orderbook: SorafsOrderbook,
     /// Canonical Norito trust-policy file required for reputation snapshot admission.
     pub reputation_trust_policy_path: Option<PathBuf>,
@@ -8165,7 +8382,32 @@ pub struct SorafsModerationOrchestrator {
     pub maintenance_batch_limit: usize,
 }
 
-/// SoraFS local orderbook admission policy.
+/// Operational policy for the durable native orderbook transaction worker.
+#[derive(Debug, Clone, Copy)]
+pub struct SorafsOrderbookWorker {
+    /// Whether finalized-state scanning and transaction forwarding are enabled.
+    pub enabled: bool,
+    /// Finalized-state scan cadence.
+    pub scan_interval: Duration,
+    /// Maximum fills requested by one native match transaction.
+    pub match_batch_limit: u32,
+    /// Maximum expiries/closures requested by one native maintenance transaction.
+    pub maintenance_batch_limit: u32,
+    /// Maximum pending semantic operations retained durably.
+    pub max_pending: u32,
+    /// Maximum finalized idempotency tombstones retained durably.
+    pub max_completed: u32,
+    /// Maximum terminal dead letters retained durably.
+    pub max_dead_letters: u32,
+    /// Maximum signing/submission attempts under one semantic identity.
+    pub max_attempts: u32,
+    /// Maximum canonical durable checkpoint size.
+    pub checkpoint_max_bytes: Bytes<u64>,
+}
+
+/// Temporary local orderbook policy retained only until local-authority removal.
+///
+/// This policy is non-authoritative and does not define compatibility behavior.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SorafsOrderbook {
     /// Minimum accepted order quantity in GiB.
@@ -8176,15 +8418,41 @@ pub struct SorafsOrderbook {
 
 /// Local SFM-4c privacy aggregate publication scheduler.
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SorafsPrivacyAggregatePopulation {
+    /// Stable public population label.
+    pub label: String,
+    /// Governed selector digest.
+    pub digest: [u8; 32],
+}
+
+/// One fixed metric coordinate in the governed privacy query.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SorafsPrivacyAggregateMetric {
+    /// Stable metric key.
+    pub key: String,
+    /// Stable public unit.
+    pub unit: String,
+}
+
+/// Local SFM-4c privacy aggregate publication scheduler.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SorafsPrivacyAggregateSchedule {
     /// Whether config-backed due-cycle publication is enabled.
     pub enabled: bool,
     /// Width of each privacy aggregate cycle, in seconds.
     pub cycle_seconds: u64,
+    /// Governed inclusive start of the first releasable cycle.
+    pub first_cycle_start_unix: u64,
     /// Delay after a cycle closes before publication, in seconds.
     pub publish_delay_seconds: u64,
     /// Public aggregate identifier prefix.
     pub aggregate_id_prefix: String,
+    /// Stable governed query identity, unchanged across policy rotations.
+    pub query_id: Option<[u8; 32]>,
+    /// Fixed, sorted public population universe.
+    pub population_inventory: Vec<SorafsPrivacyAggregatePopulation>,
+    /// Fixed, sorted public metric schema.
+    pub metric_schema: Vec<SorafsPrivacyAggregateMetric>,
     /// Governed privacy mode.
     pub privacy_mode: String,
     /// Reduced governed epsilon numerator.
@@ -8264,6 +8532,7 @@ impl Default for SorafsStorage {
             adverts: SorafsAdvertOverrides::default(),
             metering_smoothing: SorafsMeteringSmoothing::default(),
             stream_tokens: SorafsTokenConfig::default(),
+            orderbook_worker: SorafsOrderbookWorker::default(),
             orderbook: SorafsOrderbook::default(),
             reputation_trust_policy_path: None,
             pricing_trust_policy_path: None,
@@ -8349,6 +8618,24 @@ impl Default for SorafsPdpProviderPolicy {
     }
 }
 
+impl Default for SorafsOrderbookWorker {
+    fn default() -> Self {
+        use defaults::sorafs::storage::orderbook_worker as worker;
+
+        Self {
+            enabled: worker::ENABLED,
+            scan_interval: Duration::from_millis(worker::SCAN_INTERVAL_MS.get()),
+            match_batch_limit: worker::MATCH_BATCH_LIMIT.get(),
+            maintenance_batch_limit: worker::MAINTENANCE_BATCH_LIMIT.get(),
+            max_pending: worker::MAX_PENDING.get(),
+            max_completed: worker::MAX_COMPLETED.get(),
+            max_dead_letters: worker::MAX_DEAD_LETTERS.get(),
+            max_attempts: worker::MAX_ATTEMPTS.get(),
+            checkpoint_max_bytes: worker::CHECKPOINT_MAX_BYTES,
+        }
+    }
+}
+
 impl Default for SorafsOrderbook {
     fn default() -> Self {
         Self {
@@ -8363,10 +8650,15 @@ impl Default for SorafsPrivacyAggregateSchedule {
         Self {
             enabled: defaults::sorafs::storage::privacy_aggregates::ENABLED,
             cycle_seconds: defaults::sorafs::storage::privacy_aggregates::CYCLE_SECONDS,
+            first_cycle_start_unix:
+                defaults::sorafs::storage::privacy_aggregates::FIRST_CYCLE_START_UNIX,
             publish_delay_seconds:
                 defaults::sorafs::storage::privacy_aggregates::PUBLISH_DELAY_SECONDS,
             aggregate_id_prefix:
                 defaults::sorafs::storage::privacy_aggregates::AGGREGATE_ID_PREFIX.to_string(),
+            query_id: None,
+            population_inventory: Vec::new(),
+            metric_schema: Vec::new(),
             privacy_mode:
                 defaults::sorafs::storage::privacy_aggregates::PRIVACY_MODE.to_string(),
             epsilon_numerator:
@@ -9173,6 +9465,30 @@ impl Default for SorafsAdvertOverrides {
     }
 }
 
+/// One governed Ed25519 signer authorized to approve SoraFS pin manifests.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SorafsPinApprovalSigner {
+    /// Stable payload-free signer identifier.
+    pub signer_id: String,
+    /// Governed Ed25519 verifying key.
+    pub public_key: PublicKey,
+    /// First executing block height at which this key may approve manifests.
+    pub valid_from_block_height: u64,
+    /// First executing block height at which this key is revoked.
+    pub revoked_at_block_height: Option<u64>,
+}
+
+impl SorafsPinApprovalSigner {
+    /// Return whether this signer is authorized at `block_height`.
+    #[must_use]
+    pub fn is_active_at(&self, block_height: u64) -> bool {
+        block_height >= self.valid_from_block_height
+            && self
+                .revoked_at_block_height
+                .is_none_or(|revoked_at| block_height < revoked_at)
+    }
+}
+
 /// Governance-defined constraints enforced on SoraFS pin policies.
 #[derive(Debug, Clone)]
 pub struct SorafsPinPolicyConstraints {
@@ -9186,6 +9502,10 @@ pub struct SorafsPinPolicyConstraints {
     pub allowed_storage_classes: Option<BTreeSet<SorafsStorageClass>>,
     /// Whether manifest validation requires council signatures.
     pub require_council_signatures: bool,
+    /// Required number of distinct active trusted approval signatures.
+    pub approval_quorum: u16,
+    /// Canonically signer-id-ordered trusted Ed25519 approval roster.
+    pub approval_signers: Vec<SorafsPinApprovalSigner>,
 }
 
 impl Default for SorafsPinPolicyConstraints {
@@ -9199,6 +9519,8 @@ impl Default for SorafsPinPolicyConstraints {
             allowed_storage_classes: None,
             require_council_signatures:
                 super::defaults::governance::sorafs_pin_policy::REQUIRE_COUNCIL_SIGNATURES,
+            approval_quorum: super::defaults::governance::sorafs_pin_policy::APPROVAL_QUORUM,
+            approval_signers: Vec::new(),
         }
     }
 }

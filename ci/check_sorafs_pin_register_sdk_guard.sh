@@ -53,6 +53,10 @@ required_paths = (
     "csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiJsonSerializerContext.cs",
     "csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs",
     "csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj",
+    "crates/iroha/src/client.rs",
+    "crates/iroha_torii/src/openapi.rs",
+    "crates/iroha_torii/src/routing.rs",
+    "crates/iroha_torii/tests/sorafs_discovery.rs",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/RegisterPinManifestInstruction.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sorafs/SorafsRegisterPinManifestBuilderTests.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/testing/SimpleJson.java",
@@ -146,6 +150,50 @@ negative_control_commands = (
     ("JavaScript source negative control", f"{main_command} --negative-control-js-source-endpoint"),
     ("JavaScript adversarial test negative control", f"{main_command} --negative-control-js-adversarial-test"),
     ("Python adversarial test negative control", f"{main_command} --negative-control-python-adversarial-test"),
+    (
+        "Rust client sole-manifest-source negative control",
+        f"{main_command} --negative-control-rust-client-dual-manifest-source",
+    ),
+    (
+        "Rust client canonical wire-key negative control",
+        f"{main_command} --negative-control-rust-client-manifest-b64-wire",
+    ),
+    (
+        "Rust client manifest bound negative control",
+        f"{main_command} --negative-control-rust-client-manifest-bound",
+    ),
+    (
+        "Rust client canonical decode negative control",
+        f"{main_command} --negative-control-rust-client-canonical-decode",
+    ),
+    (
+        "Rust client retired helper negative control",
+        f"{main_command} --negative-control-rust-client-retired-helper",
+    ),
+    (
+        "Torii retired manifest_b64 negative control",
+        f"{main_command} --negative-control-torii-retired-manifest-b64",
+    ),
+    (
+        "Torii retired summary-field negative control",
+        f"{main_command} --negative-control-torii-retired-summary-field",
+    ),
+    (
+        "Torii manifest bound negative control",
+        f"{main_command} --negative-control-torii-manifest-bound",
+    ),
+    (
+        "Torii canonical decode negative control",
+        f"{main_command} --negative-control-torii-canonical-decode",
+    ),
+    (
+        "Torii retired helper negative control",
+        f"{main_command} --negative-control-torii-retired-helper",
+    ),
+    (
+        "Python retired fee_payment negative control",
+        f"{main_command} --negative-control-python-fee-payment-field",
+    ),
     ("Swift contract test negative control", f"{main_command} --negative-control-swift-contract-test"),
     ("Swift retired request field negative control", f"{main_command} --negative-control-swift-retired-request-field"),
     ("C# malformed response test negative control", f"{main_command} --negative-control-csharp-malformed-response-test"),
@@ -217,6 +265,61 @@ def require_min_count(path, needle, minimum, label):
     )
 
 
+def require_regex_slice(path, pattern, label):
+    match = re.search(pattern, read(path), flags=re.MULTILINE | re.DOTALL)
+    require(match is not None, f"{path} missing structured {label} slice")
+    return match.group(0)
+
+
+def rust_public_field_names(item_text):
+    return re.findall(r"(?m)^\s+pub\s+([a-z][a-z0-9_]*)\s*:", item_text)
+
+
+def rust_named_field_names(item_text):
+    return re.findall(
+        r"(?m)^\s+(?:pub(?:\([^)]*\))?\s+)?([a-z][a-z0-9_]*)\s*:",
+        item_text,
+    )
+
+
+def require_exact_fields(actual, expected, label):
+    require(
+        actual == expected,
+        f"{label} fields must be exactly {expected}; got {actual}",
+    )
+
+
+def compact_source(text):
+    return re.sub(r"\s+", "", text)
+
+
+def require_ordered_fragments(text, fragments, label):
+    compact = compact_source(text)
+    cursor = -1
+    for fragment, fragment_label in fragments:
+        compact_fragment = compact_source(fragment)
+        position = compact.find(compact_fragment)
+        require(
+            position >= 0,
+            f"{label} missing {fragment_label}: {fragment}",
+        )
+        require(
+            position > cursor,
+            f"{label} must perform {fragment_label} in fail-closed order",
+        )
+        cursor = position
+
+
+def rust_function_is_declared(source, name):
+    return (
+        re.search(
+            rf"(?m)^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+{re.escape(name)}\s*\(",
+            source,
+        )
+        is not None
+    )
+
+
 def workflow_job(workflow, job):
     marker = f"  {job}:\n"
     start = workflow.find(marker)
@@ -259,7 +362,10 @@ def check_workflow():
 
     jvm = workflow_job(workflow, jvm_job)
     require("    runs-on: ubuntu-latest" in jvm, "JVM SDK tests must run on Ubuntu")
-    java_setup_match = re.search(r"(?m)^\s+- uses:\s+actions/setup-java@v4\s*$", jvm)
+    java_setup_match = re.search(
+        r"(?m)^\s+- uses:\s+actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9\s*$",
+        jvm,
+    )
     java_command_match = re.search(rf"(?m)^\s+run:\s+{re.escape(jvm_command)}\s*$", jvm)
     require(java_setup_match is not None, "JVM SDK tests must set up Java")
     require(re.search(r'(?m)^\s+distribution:\s+"temurin"\s*$', jvm) is not None, "JVM SDK tests must pin Temurin Java")
@@ -273,7 +379,10 @@ def check_workflow():
 
     csharp = workflow_job(workflow, csharp_job)
     require("    runs-on: ubuntu-latest" in csharp, "C# SDK tests must run on Ubuntu")
-    dotnet_setup_match = re.search(r"(?m)^\s+- uses:\s+actions/setup-dotnet@v4\s*$", csharp)
+    dotnet_setup_match = re.search(
+        r"(?m)^\s+- uses:\s+actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9\s*$",
+        csharp,
+    )
     dotnet_command_match = re.search(rf"(?m)^\s+run:\s+{re.escape(csharp_command)}\s*$", csharp)
     require(dotnet_setup_match is not None, "C# SDK tests must set up .NET")
     require(re.search(r"(?m)^\s+dotnet-version:\s+8\.0\.x\s*$", csharp) is not None, "C# SDK tests must pin .NET 8")
@@ -286,7 +395,10 @@ def check_workflow():
 
     js = workflow_job(workflow, js_job)
     require("    runs-on: ubuntu-latest" in js, "JavaScript SDK tests must run on Ubuntu")
-    node_setup_match = re.search(r"(?m)^\s+- uses:\s+actions/setup-node@v6\s*$", js)
+    node_setup_match = re.search(
+        r"(?m)^\s+- uses:\s+actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38\s*$",
+        js,
+    )
     node_install_match = re.search(rf"(?m)^\s+run:\s+{re.escape(js_install_command)}\s*$", js)
     require(node_setup_match is not None, "JavaScript SDK tests must set up Node")
     require(re.search(r'(?m)^\s+node-version:\s+"24"\s*$', js) is not None, "JavaScript SDK tests must pin Node 24")
@@ -312,7 +424,10 @@ def check_workflow():
 
     python = workflow_job(workflow, python_job)
     require("    runs-on: ubuntu-latest" in python, "Python SDK tests must run on Ubuntu")
-    python_setup_match = re.search(r"(?m)^\s+- uses:\s+actions/setup-python@v5\s*$", python)
+    python_setup_match = re.search(
+        r"(?m)^\s+- uses:\s+actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065\s*$",
+        python,
+    )
     python_command_match = re.search(rf"(?m)^\s+run:\s+{re.escape(python_command)}\s*$", python)
     require(python_setup_match is not None, "Python SDK tests must set up Python")
     require(re.search(r'(?m)^\s+python-version:\s+"3\.11"\s*$', python) is not None, "Python SDK tests must pin Python 3.11")
@@ -382,6 +497,347 @@ def check_scripts():
     require_contains("ci/check_sorafs_pin_register_csharp_sdk.sh", "8.0.*) ;;", "C# SDK dotnet 8 matcher")
 
 
+def check_rust_wire_contract():
+    client_path = "crates/iroha/src/client.rs"
+    client_source = read(client_path)
+    client_args = require_regex_slice(
+        client_path,
+        r"^pub struct SorafsPinRegisterArgs<'a>\s*\{.*?^\}",
+        "Rust client SorafsPinRegisterArgs",
+    )
+    require_exact_fields(
+        rust_named_field_names(client_args),
+        [
+            "authority",
+            "private_key",
+            "manifest_payload",
+            "submitted_epoch",
+            "alias",
+            "successor_of",
+        ],
+        "Rust client SorafsPinRegisterArgs",
+    )
+    require_exact_fields(
+        rust_public_field_names(client_args),
+        rust_named_field_names(client_args),
+        "Rust client SorafsPinRegisterArgs public surface",
+    )
+    require(
+        re.search(r"(?m)^\s+pub manifest_payload:\s*&'a \[u8\],\s*$", client_args)
+        is not None,
+        "Rust client manifest_payload must be exact borrowed canonical bytes",
+    )
+
+    client_validator = require_regex_slice(
+        client_path,
+        r"^    fn validate_sorafs_pin_register_manifest_payload\b.*?^    \}",
+        "Rust client canonical manifest_payload validator",
+    )
+    client_builder = require_regex_slice(
+        client_path,
+        r"^    fn build_sorafs_pin_register_payload\b.*?^    \}",
+        "Rust client pin-register builder",
+    )
+    require_ordered_fragments(
+        client_validator,
+        [
+            (
+                "manifest_payload.is_empty() || manifest_payload.len() > "
+                "sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES",
+                "manifest byte-length validation",
+            ),
+            (
+                "sorafs_manifest::decode_manifest_v1_canonical(manifest_payload)",
+                "canonical ManifestV1 decode",
+            ),
+        ],
+        "Rust client canonical manifest_payload validator",
+    )
+    require(
+        compact_source(client_validator).count(
+            "sorafs_manifest::decode_manifest_v1_canonical(manifest_payload)"
+        )
+        == 1,
+        "Rust client manifest_payload validator must directly decode the sole canonical byte source exactly once",
+    )
+    require_ordered_fragments(
+        client_builder,
+        [
+            (
+                "Self::validate_sorafs_pin_register_manifest_payload(manifest_payload)?;",
+                "canonical manifest validation",
+            ),
+            (
+                "base64::engine::general_purpose::STANDARD.encode(manifest_payload)",
+                "direct canonical manifest base64 encoding",
+            ),
+        ],
+        "Rust client pin-register builder",
+    )
+    require(
+        not rust_function_is_declared(
+            client_source, "post_sorafs_pin_register_with_manifest_digest"
+        ),
+        "Rust client must not retain the retired digest-override registration API",
+    )
+    for retired_helper in (
+        "sorafs_pin_register_manifest_bytes",
+        "validate_sorafs_pin_register_manifest_match",
+    ):
+        require(
+            not rust_function_is_declared(client_source, retired_helper),
+            f"Rust client must not retain retired dual-source helper {retired_helper}",
+        )
+    wire_keys = re.findall(
+        r'map\.insert\(\s*"([a-z0-9_]+)"\.into\(\)',
+        client_builder,
+        flags=re.MULTILINE | re.DOTALL,
+    )
+    require_exact_fields(
+        wire_keys,
+        [
+            "authority",
+            "private_key",
+            "manifest_payload",
+            "submitted_epoch",
+            "alias",
+            "successor_of_hex",
+        ],
+        "Rust client pin-register wire payload",
+    )
+    require_exact_fields(
+        re.findall(r'"([a-z][a-z0-9_]*)"', client_builder),
+        wire_keys,
+        "Rust client pin-register literal wire-key surface",
+    )
+    require_contains(
+        client_path,
+        "build_register_manifest_payload_rejects_noncanonical_legacy_manifest_bytes",
+        "Rust noncanonical ManifestV1 adversarial test",
+    )
+    require_contains(
+        client_path,
+        "build_register_manifest_payload_rejects_oversized_manifest_before_decode",
+        "Rust pre-decode manifest bound test",
+    )
+
+    torii_path = "crates/iroha_torii/src/routing.rs"
+    torii_source = read(torii_path)
+    torii_dto = require_regex_slice(
+        torii_path,
+        r"^pub struct RegisterPinManifestDto\s*\{.*?^\}",
+        "Torii RegisterPinManifestDto",
+    )
+    require_exact_fields(
+        rust_named_field_names(torii_dto),
+        [
+            "authority",
+            "private_key",
+            "manifest_payload",
+            "submitted_epoch",
+            "alias",
+            "successor_of_hex",
+        ],
+        "Torii RegisterPinManifestDto",
+    )
+    require_exact_fields(
+        rust_public_field_names(torii_dto),
+        rust_named_field_names(torii_dto),
+        "Torii RegisterPinManifestDto public surface",
+    )
+    require(
+        re.search(r"(?m)^\s+pub manifest_payload:\s*String,\s*$", torii_dto)
+        is not None,
+        "Torii RegisterPinManifestDto.manifest_payload must be canonical base64 text",
+    )
+    require(
+        re.search(
+            r"#\[norito\(deny_unknown_fields\)\](?:\s*///[^\n]*)*\s*"
+            r"pub struct RegisterPinManifestDto\s*\{",
+            torii_source,
+        )
+        is not None,
+        "Torii RegisterPinManifestDto must reject unknown and retired fields",
+    )
+
+    torii_handler = require_regex_slice(
+        torii_path,
+        r"^pub async fn handle_post_sorafs_register_manifest\b.*?^\}",
+        "Torii pin-register handler",
+    )
+    require(
+        "decode_sorafs_pin_manifest_payload(&req.manifest_payload" in torii_handler,
+        "Torii pin-register handler must derive manifest state only from req.manifest_payload",
+    )
+    torii_decoder = require_regex_slice(
+        torii_path,
+        r"^fn decode_sorafs_pin_manifest_payload\b.*?^\}",
+        "Torii canonical manifest_payload decoder",
+    )
+    require(
+        "constSORAFS_PIN_MANIFEST_MAX_BASE64_BYTES:usize="
+        "sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES.div_ceil(3)*4;"
+        in compact_source(torii_source),
+        "Torii encoded manifest bound must be derived from MAX_MANIFEST_ENCODED_BYTES",
+    )
+    require_ordered_fragments(
+        torii_decoder,
+        [
+            (
+                "manifest_payload.is_empty() || "
+                "manifest_payload.len() > SORAFS_PIN_MANIFEST_MAX_BASE64_BYTES",
+                "encoded-size validation before allocation",
+            ),
+            (
+                "base64::engine::general_purpose::STANDARD"
+                ".decode(manifest_payload.as_bytes())",
+                "base64 decode",
+            ),
+            (
+                "manifest_bytes.is_empty() || "
+                "manifest_bytes.len() > sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES",
+                "decoded-size validation",
+            ),
+            (
+                "base64::engine::general_purpose::STANDARD.encode(&manifest_bytes) "
+                "!= manifest_payload",
+                "canonical padded-base64 round trip",
+            ),
+            (
+                "sorafs_manifest::decode_manifest_v1_canonical(&manifest_bytes)",
+                "canonical ManifestV1 decode",
+            ),
+            ("validate_manifest(&manifest, constraints)", "manifest policy validation"),
+        ],
+        "Torii canonical manifest_payload decoder",
+    )
+    require(
+        compact_source(torii_decoder).count(
+            "sorafs_manifest::decode_manifest_v1_canonical(&manifest_bytes)"
+        )
+        == 1,
+        "Torii manifest_payload decoder must directly decode the sole canonical byte source exactly once",
+    )
+    for retired_helper in (
+        "validate_manifest_payload_matches_request",
+        "manifest_policy_from_dto",
+    ):
+        require(
+            not rust_function_is_declared(torii_source, retired_helper),
+            f"Torii pin-register path retains retired matching helper {retired_helper}",
+        )
+    require_contains(
+        torii_path,
+        "register_manifest_json_rejects_every_retired_summary_field",
+        "Torii retired summary-field adversarial test",
+    )
+    require_contains(
+        torii_path,
+        "register_manifest_rejects_oversized_manifest_before_base64_decode",
+        "Torii pre-decode manifest bound test",
+    )
+
+    route_tests_path = "crates/iroha_torii/tests/sorafs_discovery.rs"
+    require_contains(
+        route_tests_path,
+        "sorafs_pin_register_route_decodes_exact_canonical_manifest_payload",
+        "Torii route canonical-manifest test",
+    )
+    require_contains(
+        route_tests_path,
+        "sorafs_pin_register_route_rejects_retired_request_fields",
+        "Torii route retired-field adversarial test",
+    )
+    require_contains(
+        route_tests_path,
+        "sorafs_pin_register_rejects_malformed_manifest_payload_base64",
+        "Torii route malformed-base64 adversarial test",
+    )
+    route_retired_test = require_regex_slice(
+        route_tests_path,
+        r"^async fn sorafs_pin_register_route_rejects_retired_request_fields\b.*?^\}",
+        "Torii route retired request-field test",
+    )
+    for retired_field in (
+        "manifest_b64",
+        "manifest_digest_hex",
+        "chunker_profile_id",
+        "pin_policy",
+        "chunk_digest_sha3_256_hex",
+        "content_length",
+        "fee_payment",
+        "gas_asset_id",
+    ):
+        require(
+            f'"{retired_field}"' in route_retired_test,
+            f"Torii route retired-field test missing {retired_field} adversarial vector",
+        )
+
+    openapi_path = "crates/iroha_torii/src/openapi.rs"
+    openapi_route = require_regex_slice(
+        openapi_path,
+        (
+            r"^\s+paths\.insert\(\s*"
+            r'"/v1/sorafs/pin/register"\.to_owned\(\),.*?'
+            r"(?=^\s+paths\.insert\()"
+        ),
+        "typed SoraFS pin-register OpenAPI operation",
+    )
+    for needle, label in (
+        (
+            "`manifest_payload` is the sole metadata source",
+            "manifest-authoritative operation description",
+        ),
+        (
+            "#/components/schemas/SorafsPinRegisterRequestV1",
+            "typed request schema",
+        ),
+        (
+            "#/components/schemas/SorafsPinRegisterResponseV1",
+            "typed response schema",
+        ),
+    ):
+        require(
+            needle in openapi_route,
+            f"Torii pin-register OpenAPI operation missing {label}",
+        )
+    openapi_schemas = require_regex_slice(
+        openapi_path,
+        r"^fn insert_sorafs_pin_register_schemas\b.*?^\}",
+        "SoraFS pin-register OpenAPI schemas",
+    )
+    for needle, label in (
+        (
+            '"required": ["authority", "private_key", "manifest_payload", '
+            '"submitted_epoch"]',
+            "exact required request fields",
+        ),
+        ('"additionalProperties": false', "closed object schemas"),
+        (
+            "sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES",
+            "manifest payload size source",
+        ),
+        (
+            '"decodedType": "sorafs_manifest::ManifestV1"',
+            "canonical decoded type",
+        ),
+        (
+            '"requireByteIdenticalCanonicalReencode": true',
+            "canonical byte-identical re-encode requirement",
+        ),
+        ('"requireValidatedManifest": true', "manifest validation requirement"),
+    ):
+        require(
+            needle in openapi_schemas,
+            f"Torii pin-register OpenAPI schemas missing {label}",
+        )
+    require_contains(
+        openapi_path,
+        "sorafs_pin_register_openapi_is_closed_and_manifest_authoritative",
+        "strict typed pin-register OpenAPI contract test",
+    )
+
+
 def check_javascript_contract():
     for path in ("javascript/iroha_js/src/toriiClient.js", "javascript/iroha_js/dist/toriiClient.js"):
         require_contains(path, "async registerSorafsPinManifest(input = {})", "register API")
@@ -416,7 +872,39 @@ def check_python_contract():
         require_contains(path, "_SORAFS_MAX_MANIFEST_ENCODED_BYTES = 512 * 1024", "manifest payload bound")
         require_contains(path, "_SORAFS_MAX_ALIAS_PROOF_BYTES = 1024 * 1024", "alias proof bound")
         require_contains(path, "successor_of_hex must not be zero", "inert successor rejection")
+    normalizer = require_regex_slice(
+        "python/iroha_python/src/iroha_python/client.py",
+        r"^def _normalize_sorafs_pin_register_request\b.*?(?=^def )",
+        "Python pin-register request normalizer",
+    )
+    allowed_match = re.search(
+        r"allowed_fields\s*=\s*\{(.*?)^\s*\}",
+        normalizer,
+        flags=re.MULTILINE | re.DOTALL,
+    )
+    require(
+        allowed_match is not None,
+        "Python pin-register normalizer must declare an exact allowed_fields set",
+    )
+    allowed_fields = re.findall(r'"([a-z0-9_]+)"', allowed_match.group(1))
+    require_exact_fields(
+        allowed_fields,
+        [
+            "authority",
+            "private_key",
+            "manifest_payload",
+            "submitted_epoch",
+            "alias",
+            "successor_of_hex",
+        ],
+        "Python pin-register request normalizer",
+    )
+    require(
+        '"fee_payment"' not in normalizer,
+        "Python pin-register normalizer must reject retired fee_payment",
+    )
     require_contains("python/iroha_python/tests/client_sorafs_pin_register_test.py", "test_register_sorafs_pin_manifest_rejects_retired_and_unknown_fields", "retired request-field adversarial test")
+    require_contains("python/iroha_python/tests/client_sorafs_pin_register_test.py", '"fee_payment",', "retired fee_payment adversarial vector")
     require_contains("python/iroha_python/tests/client_sorafs_pin_register_test.py", "test_register_sorafs_pin_manifest_rejects_alias_object_with_flat_alias_fields", "alias object adversarial test")
     require_contains("python/iroha_python/tests/client_sorafs_pin_register_test.py", "test_register_sorafs_pin_manifest_rejects_invalid_inputs_before_request", "invalid input adversarial test")
     require_contains("python/iroha_python/tests/client_sorafs_pin_register_test.py", '"manifest_payload": b"manifest-norito"', "manifest bytes request test")
@@ -494,6 +982,7 @@ def run_checks():
         require((root / path).exists(), f"required file is missing: {path}")
     check_workflow()
     check_scripts()
+    check_rust_wire_contract()
     check_javascript_contract()
     check_python_contract()
     check_swift_contract()
@@ -586,7 +1075,9 @@ if mode == "--negative-control-jvm-sdk-setup-order-workflow":
     run_line = f"        run: {jvm_command}\n"
     mutated = original.replace(run_line, "", 1)
     require(mutated != original, "negative control failed: unable to mutate JVM SDK setup order")
-    insert = mutated.index("      - uses: actions/setup-java@v4\n")
+    insert = mutated.index(
+        "      - uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9\n"
+    )
     mutated = (
         mutated[:insert]
         + "      - name: SoraFS pin-register JVM and Java SDK tests\n"
@@ -600,7 +1091,9 @@ if mode == "--negative-control-csharp-sdk-setup-order-workflow":
     run_line = f"        run: {csharp_command}\n"
     mutated = original.replace(run_line, "", 1)
     require(mutated != original, "negative control failed: unable to mutate C# SDK setup order")
-    insert = mutated.index("      - uses: actions/setup-dotnet@v4\n")
+    insert = mutated.index(
+        "      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9\n"
+    )
     mutated = (
         mutated[:insert]
         + "      - name: SoraFS pin-register C# SDK tests\n"
@@ -638,7 +1131,9 @@ if mode == "--negative-control-js-sdk-node-setup-order-workflow":
     )
     mutated = original.replace(install_block, "", 1)
     require(mutated != original, "negative control failed: unable to move JavaScript SDK install before Node setup")
-    insert = mutated.index("      - uses: actions/setup-node@v6\n")
+    insert = mutated.index(
+        "      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38\n"
+    )
     mutated = mutated[:insert] + install_block + mutated[insert:]
     reject_mutation(workflow_path, mutated, "JavaScript SDK Node setup ordering drift")
 
@@ -647,7 +1142,9 @@ if mode == "--negative-control-python-sdk-setup-order-workflow":
     run_line = f"        run: {python_command}\n"
     mutated = original.replace(run_line, "", 1)
     require(mutated != original, "negative control failed: unable to mutate Python SDK setup order")
-    insert = mutated.index("      - uses: actions/setup-python@v5\n")
+    insert = mutated.index(
+        "      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065\n"
+    )
     mutated = (
         mutated[:insert]
         + "      - name: SoraFS pin-register Python SDK tests\n"
@@ -746,26 +1243,26 @@ workflow_modes = {
     "--negative-control-swift-sdk-script-workflow": (f"        run: {swift_command}", "        run: bash ci/check_sorafs_pin_register_swift_sdk.sh --skip", "Swift SDK script drift"),
     "--negative-control-swift-sdk-needs-workflow": (main_job_needs_line, "    needs: [sorafs_pin_register_jvm_sdk_tests, sorafs_pin_register_csharp_sdk_tests, sorafs_pin_register_javascript_sdk_tests, sorafs_pin_register_python_sdk_tests]", "Swift SDK dependency drift"),
     "--negative-control-jvm-sdk-job-workflow": ("  sorafs_pin_register_jvm_sdk_tests:\n", "  sorafs_pin_register_jvm_sdk_tests_disabled:\n", "JVM SDK job drift"),
-    "--negative-control-jvm-sdk-setup-workflow": ("      - uses: actions/setup-java@v4\n", "", "JVM SDK setup drift"),
+    "--negative-control-jvm-sdk-setup-workflow": ("      - uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9\n", "", "JVM SDK setup drift"),
     "--negative-control-jvm-sdk-distribution-workflow": ('          distribution: "temurin"', '          distribution: "zulu"', "JVM SDK Java distribution drift"),
     "--negative-control-jvm-sdk-java-version-workflow": ('          java-version: "21"', '          java-version: "17"', "JVM SDK Java version drift"),
     "--negative-control-jvm-sdk-script-workflow": (f"        run: {jvm_command}", "        run: bash ci/check_sorafs_pin_register_jvm_sdk.sh --skip", "JVM SDK script drift"),
     "--negative-control-jvm-sdk-needs-workflow": (main_job_needs_line, "    needs: [sorafs_pin_register_swift_sdk_check, sorafs_pin_register_csharp_sdk_tests, sorafs_pin_register_javascript_sdk_tests, sorafs_pin_register_python_sdk_tests]", "JVM SDK dependency drift"),
     "--negative-control-csharp-sdk-job-workflow": ("  sorafs_pin_register_csharp_sdk_tests:\n", "  sorafs_pin_register_csharp_sdk_tests_disabled:\n", "C# SDK job drift"),
-    "--negative-control-csharp-sdk-setup-workflow": ("      - uses: actions/setup-dotnet@v4\n", "", "C# SDK setup drift"),
+    "--negative-control-csharp-sdk-setup-workflow": ("      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9\n", "", "C# SDK setup drift"),
     "--negative-control-csharp-sdk-dotnet-version-workflow": ("          dotnet-version: 8.0.x", "          dotnet-version: 7.0.x", "C# SDK dotnet version drift"),
     "--negative-control-csharp-sdk-script-workflow": (f"        run: {csharp_command}", "        run: bash ci/check_sorafs_pin_register_csharp_sdk.sh --skip", "C# SDK script drift"),
     "--negative-control-csharp-sdk-needs-workflow": (main_job_needs_line, "    needs: [sorafs_pin_register_swift_sdk_check, sorafs_pin_register_jvm_sdk_tests, sorafs_pin_register_javascript_sdk_tests, sorafs_pin_register_python_sdk_tests]", "C# SDK dependency drift"),
     "--negative-control-js-sdk-job-workflow": ("  sorafs_pin_register_javascript_sdk_tests:\n", "  sorafs_pin_register_javascript_sdk_tests_disabled:\n", "JavaScript SDK job drift"),
     "--negative-control-js-sdk-runner-workflow": ("  sorafs_pin_register_javascript_sdk_tests:\n    runs-on: ubuntu-latest", "  sorafs_pin_register_javascript_sdk_tests:\n    runs-on: macos-latest", "JavaScript SDK runner drift"),
-    "--negative-control-js-sdk-node-setup-workflow": ("      - uses: actions/setup-node@v6\n", "", "JavaScript SDK Node setup drift"),
+    "--negative-control-js-sdk-node-setup-workflow": ("      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38\n", "", "JavaScript SDK Node setup drift"),
     "--negative-control-js-sdk-node-version-workflow": ('          node-version: "24"', '          node-version: "22"', "JavaScript SDK Node version drift"),
     "--negative-control-js-sdk-node-cache-workflow": ("          cache-dependency-path: javascript/iroha_js/package-lock.json", "          cache-dependency-path: javascript/iroha_js/package.json", "JavaScript SDK cache path drift"),
     "--negative-control-js-sdk-install-workflow": (f"        run: {js_install_command}", "        run: npm install --prefix javascript/iroha_js", "JavaScript SDK install drift"),
     "--negative-control-js-sdk-script-workflow": (f"        run: {js_command}", "        run: bash ci/check_sorafs_pin_register_js_sdk.sh --skip", "JavaScript SDK script drift"),
     "--negative-control-js-sdk-needs-workflow": (main_job_needs_line, "    needs: [sorafs_pin_register_swift_sdk_check, sorafs_pin_register_jvm_sdk_tests, sorafs_pin_register_csharp_sdk_tests, sorafs_pin_register_python_sdk_tests]", "JavaScript SDK dependency drift"),
     "--negative-control-python-sdk-job-workflow": ("  sorafs_pin_register_python_sdk_tests:\n", "  sorafs_pin_register_python_sdk_tests_disabled:\n", "Python SDK job drift"),
-    "--negative-control-python-sdk-setup-workflow": ("      - uses: actions/setup-python@v5\n", "", "Python SDK setup drift"),
+    "--negative-control-python-sdk-setup-workflow": ("      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065\n", "", "Python SDK setup drift"),
     "--negative-control-python-sdk-version-workflow": ('          python-version: "3.11"', '          python-version: "3.10"', "Python SDK version drift"),
     "--negative-control-python-sdk-script-workflow": (f"        run: {python_command}", "        run: bash ci/check_sorafs_pin_register_python_sdk.sh --skip", "Python SDK script drift"),
     "--negative-control-python-sdk-needs-workflow": (main_job_needs_line, "    needs: [sorafs_pin_register_swift_sdk_check, sorafs_pin_register_jvm_sdk_tests, sorafs_pin_register_csharp_sdk_tests, sorafs_pin_register_javascript_sdk_tests]", "Python SDK dependency drift"),
@@ -798,6 +1295,81 @@ if mode in workflow_modes:
     workflow_mutation(old, new, label)
 
 source_modes = {
+    "--negative-control-rust-client-dual-manifest-source": (
+        "crates/iroha/src/client.rs",
+        "    pub manifest_payload: &'a [u8],\n",
+        "    pub manifest_payload: &'a [u8],\n"
+        "    pub manifest_bytes: Option<&'a [u8]>,\n",
+        "Rust client dual manifest source drift",
+    ),
+    "--negative-control-rust-client-manifest-b64-wire": (
+        "crates/iroha/src/client.rs",
+        '            "manifest_payload".into(),\n',
+        '            "manifest_b64".into(),\n',
+        "Rust client retired manifest_b64 wire key drift",
+    ),
+    "--negative-control-rust-client-manifest-bound": (
+        "crates/iroha/src/client.rs",
+        "manifest_payload.len() > sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES",
+        "manifest_payload.len() > usize::MAX",
+        "Rust client manifest bound drift",
+    ),
+    "--negative-control-rust-client-canonical-decode": (
+        "crates/iroha/src/client.rs",
+        "sorafs_manifest::decode_manifest_v1_canonical(manifest_payload)",
+        "norito::decode_from_bytes(manifest_payload)",
+        "Rust client canonical manifest decode drift",
+    ),
+    "--negative-control-rust-client-retired-helper": (
+        "crates/iroha/src/client.rs",
+        "    fn validate_sorafs_pin_register_manifest_payload(manifest_payload: &[u8]) -> Result<()> {\n",
+        "    fn sorafs_pin_register_manifest_bytes(manifest_payload: &[u8]) -> &[u8] {\n"
+        "        manifest_payload\n"
+        "    }\n\n"
+        "    fn validate_sorafs_pin_register_manifest_payload(manifest_payload: &[u8]) -> Result<()> {\n",
+        "Rust client retired dual-source helper drift",
+    ),
+    "--negative-control-torii-retired-manifest-b64": (
+        "crates/iroha_torii/src/routing.rs",
+        "    pub manifest_payload: String,\n",
+        "    pub manifest_payload: String,\n"
+        "    pub manifest_b64: Option<String>,\n",
+        "Torii retired manifest_b64 field drift",
+    ),
+    "--negative-control-torii-retired-summary-field": (
+        "crates/iroha_torii/src/routing.rs",
+        "    pub submitted_epoch: u64,\n",
+        "    pub submitted_epoch: u64,\n"
+        "    pub content_length: u64,\n",
+        "Torii retired summary field drift",
+    ),
+    "--negative-control-torii-manifest-bound": (
+        "crates/iroha_torii/src/routing.rs",
+        "manifest_payload.len() > SORAFS_PIN_MANIFEST_MAX_BASE64_BYTES",
+        "manifest_payload.len() > usize::MAX",
+        "Torii encoded manifest bound drift",
+    ),
+    "--negative-control-torii-canonical-decode": (
+        "crates/iroha_torii/src/routing.rs",
+        "sorafs_manifest::decode_manifest_v1_canonical(&manifest_bytes)",
+        "norito::decode_from_bytes(&manifest_bytes)",
+        "Torii canonical manifest decode drift",
+    ),
+    "--negative-control-torii-retired-helper": (
+        "crates/iroha_torii/src/routing.rs",
+        "#[cfg(feature = \"app_api\")]\nfn decode_sorafs_pin_manifest_payload(\n",
+        "#[cfg(feature = \"app_api\")]\n"
+        "fn validate_manifest_payload_matches_request() {}\n\n"
+        "#[cfg(feature = \"app_api\")]\n"
+        "fn decode_sorafs_pin_manifest_payload(\n",
+        "Torii retired manifest matching helper drift",
+    ),
+    "--negative-control-python-fee-payment-field": (
+        "python/iroha_python/src/iroha_python/client.py",
+        '        "submitted_epoch",\n',
+        '        "submitted_epoch",\n        "fee_payment",\n',
+        "Python retired fee_payment field drift",
+    ),
     "--negative-control-js-source-endpoint": (
         "javascript/iroha_js/src/toriiClient.js",
         '"/v1/sorafs/pin/register"',

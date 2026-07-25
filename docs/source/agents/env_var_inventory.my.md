@@ -14,7 +14,7 @@ translator: machine-google-reviewed
 
 _`python3 scripts/inventory_env_toggles.py --json docs/source/agents/env_var_inventory.json --md docs/source/agents/env_var_inventory.md`_ မှတစ်ဆင့် နောက်ဆုံးပြန်လည်စတင်သည်
 
-စုစုပေါင်း ကိုးကားချက်များ- **505** · ထူးခြားသော ကိန်းရှင်များ- **137**
+စုစုပေါင်း ကိုးကားချက်များ- **502** · ထူးခြားသော ကိန်းရှင်များ- **137**
 
 ## ACTIONS_ID_TOKEN_REQUEST_TOKEN (ထုတ်ကုန်- ၁)
 
@@ -265,9 +265,6 @@ _`python3 scripts/inventory_env_toggles.py --json docs/source/agents/env_var_inv
 - စမ်းသပ်မှု- သေတ္တာ/sorafs_manifest/tests/por_fixtures.rs:11 — `env!("CARGO_MANIFEST_DIR"),`
 - စမ်းသပ်မှု- သေတ္တာ/sorafs_manifest/tests/provider_admission_fixtures.rs:12 — `cmd.current_dir(env!("CARGO_MANIFEST_DIR"))`
 - စမ်းသပ်မှု- သေတ္တာ/sorafs_manifest/tests/replication_order_fixtures.rs:8 — `env!("CARGO_MANIFEST_DIR"),`
-- ကုန်ပစ္စည်း- သေတ္တာ/sorafs_node/src/bin/sorafs_gateway.rs:55 — `PathBuf::from(env!("CARGO_MANIFEST_DIR"))`
-- ကုန်ပစ္စည်း- သေတ္တာ/sorafs_node/src/bin/sorafs_gateway.rs:59 — `PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/sorafs_gateway/1.0.0")`
-- စမ်းသပ်မှု- သေတ္တာ/sorafs_node/src/gateway.rs:2006 — `PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/sorafs_gateway/1.0.0");`
 - စမ်းသပ်မှု- သေတ္တာ/sorafs_node/tests/cli.rs:122 — `let base = Path::new(env!("CARGO_MANIFEST_DIR"))`
 - စမ်းသပ်မှု- သေတ္တာ/sorafs_node/tests/gateway.rs:14 — `PathBuf::from(env!("CARGO_MANIFEST_DIR"))`
 - စမ်းသပ်မှု- သေတ္တာ/sorafs_node/tests/gateway.rs:30 — `let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))`

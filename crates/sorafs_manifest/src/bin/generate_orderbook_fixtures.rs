@@ -6,6 +6,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use ed25519_dalek::SigningKey;
 use hex::encode;
 use norito::{
     core::NoritoSerialize,
@@ -16,43 +17,58 @@ use sorafs_manifest::{
     ORDERBOOK_RUNTIME_SNAPSHOT_VERSION_V1, ORDERBOOK_TRADE_EVENT_VERSION_V1, OrderBookEntryV1,
     OrderCancelReasonV1, OrderCancelV1, OrderRequestV1, OrderSideV1, OrderTierV1,
     OrderbookOwnerNonceHighWaterV1, OrderbookRuntimeSnapshotV1, OrderbookSignatureV1,
-    SETTLEMENT_RECEIPT_VERSION_V1, SettlementChannelStatusV1, SettlementChannelV1,
-    SettlementReceiptV1, SignatureAlgorithm, TradeEventV1, apply_settlement_receipt_v1,
-    derive_orderbook_order_id_v1, open_settlement_channel_for_trade_v1,
+    OrderbookValidationPayloadKindV1, SETTLEMENT_RECEIPT_VERSION_V1, SettlementChannelStatusV1,
+    SettlementChannelV1, SettlementReceiptV1, SignatureAlgorithm, TradeEventV1,
+    apply_settlement_receipt_v1, derive_orderbook_order_id_v1,
+    open_settlement_channel_for_trade_v1, sign_order_cancel_ed25519_v1,
+    sign_order_request_ed25519_v1, sign_settlement_receipt_ed25519_v1,
+    validate_orderbook_payload_bytes, verify_order_cancel_signature_v1,
+    verify_order_request_signature_v1, verify_settlement_receipt_signature_v1,
 };
+
+const VALIDATION_GENERATED_AT: u64 = 123;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let fixture_dir = PathBuf::from("fixtures/sorafs_manifest/orderbook");
+    let negative_dir = fixture_dir.join("negative");
     fs::create_dir_all(&fixture_dir)?;
+    fs::create_dir_all(&negative_dir)?;
+    let signing_key = SigningKey::from_bytes(&[0xB7; 32]);
 
     let order_owner = b"buyer@sora".to_vec();
     let order_nonce = 7;
-    let order = OrderRequestV1 {
-        version: ORDERBOOK_ORDER_VERSION_V1,
-        order_id: derive_orderbook_order_id_v1(&order_owner, order_nonce),
-        side: OrderSideV1::Bid,
-        tier: OrderTierV1::Hot,
-        price_per_gib: "1.25".parse().expect("canonical XOR quantity"),
-        quantity_gib: 64,
-        remaining_gib: 64,
-        owner_account: order_owner,
-        expiry_unix: 1_800_000_000,
-        nonce: order_nonce,
-        maker_fee_bps: 10,
-        taker_fee_bps: 15,
-        signature: signature(),
-    };
-    order.validate()?;
+    let order = sign_order_request_ed25519_v1(
+        OrderRequestV1 {
+            version: ORDERBOOK_ORDER_VERSION_V1,
+            order_id: derive_orderbook_order_id_v1(&order_owner, order_nonce),
+            side: OrderSideV1::Bid,
+            tier: OrderTierV1::Hot,
+            price_per_gib: "1.25".parse().expect("canonical XOR quantity"),
+            quantity_gib: 64,
+            remaining_gib: 64,
+            owner_account: order_owner,
+            expiry_unix: 1_800_000_000,
+            nonce: order_nonce,
+            maker_fee_bps: 10,
+            taker_fee_bps: 15,
+            signature: empty_signature(&signing_key),
+        },
+        &signing_key,
+    )?;
+    verify_order_request_signature_v1(&order)?;
 
-    let cancel = OrderCancelV1 {
-        version: ORDERBOOK_CANCEL_VERSION_V1,
-        order_id: order.order_id,
-        owner_account: order.owner_account.clone(),
-        reason: OrderCancelReasonV1::OwnerRequested,
-        nonce: 8,
-        signature: signature(),
-    };
-    cancel.validate()?;
+    let cancel = sign_order_cancel_ed25519_v1(
+        OrderCancelV1 {
+            version: ORDERBOOK_CANCEL_VERSION_V1,
+            order_id: order.order_id,
+            owner_account: order.owner_account.clone(),
+            reason: OrderCancelReasonV1::OwnerRequested,
+            nonce: 8,
+            signature: empty_signature(&signing_key),
+        },
+        &signing_key,
+    )?;
+    verify_order_cancel_signature_v1(&cancel)?;
 
     let trade = TradeEventV1 {
         version: ORDERBOOK_TRADE_EVENT_VERSION_V1,
@@ -76,43 +92,49 @@ fn main() -> Result<(), Box<dyn Error>> {
         1_700_000_110,
     )?;
 
-    let receipt = SettlementReceiptV1 {
-        version: SETTLEMENT_RECEIPT_VERSION_V1,
-        receipt_id: id(0x81),
-        channel_id: channel.channel_id,
-        trade_id: trade.trade_id,
-        range: ByteRangeV1 {
-            start: 128,
-            end: 384,
+    let receipt = sign_settlement_receipt_ed25519_v1(
+        SettlementReceiptV1 {
+            version: SETTLEMENT_RECEIPT_VERSION_V1,
+            receipt_id: id(0x81),
+            channel_id: channel.channel_id,
+            trade_id: trade.trade_id,
+            range: ByteRangeV1 {
+                start: 128,
+                end: 384,
+            },
+            chunk_hash: id(0x84),
+            bytes_delivered: 256,
+            xor_debited: "0.0001".parse().expect("canonical XOR quantity"),
+            provider_credit: "0.00009".parse().expect("canonical XOR quantity"),
+            fee_amount: "0.00001".parse().expect("canonical XOR quantity"),
+            issued_at_unix: 1_700_000_120,
+            settlement_signature: empty_signature(&signing_key),
         },
-        chunk_hash: id(0x84),
-        bytes_delivered: 256,
-        xor_debited: "0.0001".parse().expect("canonical XOR quantity"),
-        provider_credit: "0.00009".parse().expect("canonical XOR quantity"),
-        fee_amount: "0.00001".parse().expect("canonical XOR quantity"),
-        issued_at_unix: 1_700_000_120,
-        settlement_signature: signature(),
-    };
-    receipt.validate()?;
+        &signing_key,
+    )?;
+    verify_settlement_receipt_signature_v1(&receipt)?;
 
     let snapshot_owner = b"provider@sora".to_vec();
     let snapshot_nonce = 9;
-    let snapshot_open_order = OrderRequestV1 {
-        version: ORDERBOOK_ORDER_VERSION_V1,
-        order_id: derive_orderbook_order_id_v1(&snapshot_owner, snapshot_nonce),
-        side: OrderSideV1::Ask,
-        tier: OrderTierV1::Hot,
-        price_per_gib: "1.3".parse().expect("canonical XOR quantity"),
-        quantity_gib: 32,
-        remaining_gib: 24,
-        owner_account: snapshot_owner,
-        expiry_unix: 1_800_000_100,
-        nonce: snapshot_nonce,
-        maker_fee_bps: 10,
-        taker_fee_bps: 15,
-        signature: signature(),
-    };
-    snapshot_open_order.validate()?;
+    let snapshot_open_order = sign_order_request_ed25519_v1(
+        OrderRequestV1 {
+            version: ORDERBOOK_ORDER_VERSION_V1,
+            order_id: derive_orderbook_order_id_v1(&snapshot_owner, snapshot_nonce),
+            side: OrderSideV1::Ask,
+            tier: OrderTierV1::Hot,
+            price_per_gib: "1.3".parse().expect("canonical XOR quantity"),
+            quantity_gib: 32,
+            remaining_gib: 24,
+            owner_account: snapshot_owner,
+            expiry_unix: 1_800_000_100,
+            nonce: snapshot_nonce,
+            maker_fee_bps: 10,
+            taker_fee_bps: 15,
+            signature: empty_signature(&signing_key),
+        },
+        &signing_key,
+    )?;
+    verify_order_request_signature_v1(&snapshot_open_order)?;
 
     let snapshot_channel = apply_settlement_receipt_v1(&channel, &receipt)?;
     let runtime_snapshot = OrderbookRuntimeSnapshotV1 {
@@ -165,6 +187,64 @@ fn main() -> Result<(), Box<dyn Error>> {
         runtime_snapshot_json(&runtime_snapshot),
     )?;
 
+    let order_bytes = norito::to_bytes(&order)?;
+    let order_outcome = validate_orderbook_payload_bytes(
+        OrderbookValidationPayloadKindV1::OrderRequest,
+        &order_bytes,
+        "order_request_v1.to",
+        VALIDATION_GENERATED_AT,
+    );
+    write_expected_outcome(
+        &fixture_dir.join("order_request_validation_outcome_v1.json"),
+        &order_outcome,
+        true,
+        "SFS-OK-000",
+    )?;
+
+    let mut forged_order = order.clone();
+    *forged_order
+        .signature
+        .signature
+        .first_mut()
+        .ok_or("orderbook fixture signature must not be empty")? ^= 1;
+    write_norito_pair(
+        &negative_dir.join("order_request_bad_signature_v1"),
+        &forged_order,
+        order_json(&forged_order),
+    )?;
+    let forged_order_bytes = norito::to_bytes(&forged_order)?;
+    let forged_outcome = validate_orderbook_payload_bytes(
+        OrderbookValidationPayloadKindV1::OrderRequest,
+        &forged_order_bytes,
+        "order_request_bad_signature_v1.to",
+        VALIDATION_GENERATED_AT,
+    );
+    write_expected_outcome(
+        &negative_dir.join("order_request_bad_signature_validation_outcome_v1.json"),
+        &forged_outcome,
+        false,
+        "SFS-SIG-007",
+    )?;
+
+    let mut trailing_order_bytes = order_bytes;
+    trailing_order_bytes.push(0);
+    fs::write(
+        negative_dir.join("order_request_trailing_bytes_v1.to"),
+        &trailing_order_bytes,
+    )?;
+    let trailing_outcome = validate_orderbook_payload_bytes(
+        OrderbookValidationPayloadKindV1::OrderRequest,
+        &trailing_order_bytes,
+        "order_request_trailing_bytes_v1.to",
+        VALIDATION_GENERATED_AT,
+    );
+    write_expected_outcome(
+        &negative_dir.join("order_request_trailing_bytes_validation_outcome_v1.json"),
+        &trailing_outcome,
+        false,
+        "SFS-NORITO-001",
+    )?;
+
     Ok(())
 }
 
@@ -172,12 +252,30 @@ fn id(seed: u8) -> [u8; 32] {
     [seed; 32]
 }
 
-fn signature() -> OrderbookSignatureV1 {
+fn empty_signature(signing_key: &SigningKey) -> OrderbookSignatureV1 {
     OrderbookSignatureV1 {
         algorithm: SignatureAlgorithm::Ed25519,
-        public_key: vec![0xD7; 32],
-        signature: vec![0x57; 64],
+        public_key: signing_key.verifying_key().to_bytes().to_vec(),
+        signature: Vec::new(),
     }
+}
+
+fn write_expected_outcome(
+    path: &Path,
+    outcome: &sorafs_manifest::ValidationOutcomeV1,
+    expected_ok: bool,
+    expected_code: &str,
+) -> Result<(), Box<dyn Error>> {
+    if outcome.is_ok() != expected_ok || outcome.code != expected_code {
+        return Err(format!(
+            "generated orderbook outcome returned status_ok={} code={}, expected status_ok={expected_ok} code={expected_code}",
+            outcome.is_ok(),
+            outcome.code,
+        )
+        .into());
+    }
+    fs::write(path, format!("{}\n", to_string_pretty(outcome)?))?;
+    Ok(())
 }
 
 fn write_norito_pair<T>(

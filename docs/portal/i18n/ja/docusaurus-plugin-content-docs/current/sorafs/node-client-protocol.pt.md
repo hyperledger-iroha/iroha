@@ -129,10 +129,12 @@ Provedores com の範囲には、メタデータが含まれています:
 - `iroha app sorafs pin list|show`、`alias list`、`replication list` は OS に関与します
   エンドポイント REST do pin-registry e imprimem Norito JSON ブルート コム ブロック
   聴覚的証拠の証明。
-- `iroha app sorafs storage pin` e `torii /v1/sorafs/pin/register` アセチタムマニフェスト
-  Norito ou JSON com エイリアス証明と後継オプション。マルフォルマドの証拠
-  geram `400`、証明が古い retornam `503` com `Warning: 110`、e 証明 expirados
-  レトルナム`412`。
+- `torii /v1/sorafs/pin/register` は閉じた JSON V1 リクエストを受け付けます。
+  `manifest_payload` は canonical Norito `ManifestV1` バイトを正確に canonical
+  padded base64 化したものでなければなりません。Torii は digest、chunker、
+  content length、pin policy、fee input をデコード済み manifest のみから導出し、
+  廃止済みの重複 summary フィールドを拒否します。`alias` とゼロでない
+  `successor_of_hex` predecessor は引き続き任意です。
 - エンドポイント REST (`/v1/sorafs/pin`、`/v1/sorafs/aliases`、`/v1/sorafs/replication`)
   顧客の検証に必要な証明書を含める
   究極のヘッダーデブロコアンテスデアジール。

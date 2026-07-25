@@ -35,6 +35,82 @@ public sealed class SoraFsReferenceValidatorsTests
     }
 
     [Fact]
+    public void OrderbookPdpAvailabilityRequiresAbiAndEverySymbol()
+    {
+        Assert.True(SoraFsReferenceValidators.IsOrderbookPdpAvailable(
+            new FakeNativeBoundary()));
+        Assert.False(SoraFsReferenceValidators.IsOrderbookPdpAvailable(
+            new FakeNativeBoundary { Abi = 20 }));
+        Assert.False(SoraFsReferenceValidators.IsOrderbookPdpAvailable(
+            new FakeNativeBoundary { OrderbookPdpSymbolsAvailable = false }));
+        Assert.False(SoraFsReferenceValidators.IsOrderbookPdpAvailable(
+            new FakeNativeBoundary
+            {
+                AbiError = new DllNotFoundException("bridge missing"),
+            }));
+    }
+
+    [Fact]
+    public void OrderbookAndPdpValidationCopyInputsAndFreeOutputs()
+    {
+        var native = new FakeNativeBoundary();
+        var order = new byte[] { 1, 2, 3 };
+        var orderJson = SoraFsReferenceValidators.ValidateOrderbookPayloadJson(
+            SoraFsOrderbookPayloadKind.OrderRequest,
+            order,
+            "order.to",
+            123,
+            native);
+
+        Assert.Equal(1, native.OrderbookCalls);
+        Assert.Equal((uint)SoraFsOrderbookPayloadKind.OrderRequest, native.LastOrderbookKind);
+        Assert.NotSame(order, native.LastOrderbookBytes);
+        Assert.Equal(order, native.LastOrderbookBytes!);
+        Assert.Equal("order.to", Encoding.UTF8.GetString(native.LastOrderbookLabel!));
+        Assert.Contains("\"generated_at\":123", orderJson, StringComparison.Ordinal);
+        Assert.Equal(1, native.FreeCalls);
+
+        var commitment = new byte[] { 4 };
+        var challenge = new byte[] { 5 };
+        var proof = new byte[] { 6 };
+        var bundleJson = SoraFsReferenceValidators.ValidatePdpBundleJson(
+            commitment,
+            challenge,
+            proof,
+            "commitment.to",
+            "challenge.to",
+            "proof.to",
+            456,
+            native);
+
+        Assert.Equal(1, native.PdpBundleCalls);
+        Assert.NotSame(commitment, native.LastPdpCommitment);
+        Assert.NotSame(challenge, native.LastPdpChallenge);
+        Assert.NotSame(proof, native.LastPdpProof);
+        Assert.Equal(commitment, native.LastPdpCommitment!);
+        Assert.Equal(challenge, native.LastPdpChallenge!);
+        Assert.Equal(proof, native.LastPdpProof!);
+        Assert.Equal(
+            "commitment.to",
+            Encoding.UTF8.GetString(native.LastPdpCommitmentLabel!));
+        Assert.Equal(
+            "challenge.to",
+            Encoding.UTF8.GetString(native.LastPdpChallengeLabel!));
+        Assert.Equal("proof.to", Encoding.UTF8.GetString(native.LastPdpProofLabel!));
+        Assert.Contains("\"generated_at\":456", bundleJson, StringComparison.Ordinal);
+        Assert.Equal(2, native.FreeCalls);
+
+        native.LastOrderbookBytes![0] = 0x7f;
+        native.LastPdpCommitment![0] = 0x7f;
+        native.LastPdpChallenge![0] = 0x7f;
+        native.LastPdpProof![0] = 0x7f;
+        Assert.Equal(1, order[0]);
+        Assert.Equal(4, commitment[0]);
+        Assert.Equal(5, challenge[0]);
+        Assert.Equal(6, proof[0]);
+    }
+
+    [Fact]
     public void GovernanceBlockValidationCopiesInputsAndFreesOutput()
     {
         var native = new FakeNativeBoundary();
@@ -275,6 +351,146 @@ public sealed class SoraFsReferenceValidatorsTests
     }
 
     [Fact]
+    public void OrderbookAndPdpFixturesMatchExactNativeReferenceOutcomesWhenAvailable()
+    {
+        if (!SoraFsReferenceValidators.IsOrderbookPdpAvailable())
+        {
+            Assert.False(
+                string.Equals(
+                    Environment.GetEnvironmentVariable(
+                        "IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION"),
+                    "1",
+                    StringComparison.Ordinal),
+                "ABI-21 connect_norito_bridge with orderbook/PDP symbols is required.");
+            return;
+        }
+
+        var orderbookRoot = Path.Combine(
+            AppContext.BaseDirectory,
+            "Fixtures",
+            "sorafs_manifest",
+            "orderbook");
+        var orderOutcome = SoraFsReferenceValidators.ValidateOrderbookPayloadJson(
+            SoraFsOrderbookPayloadKind.OrderRequest,
+            File.ReadAllBytes(Path.Combine(orderbookRoot, "order_request_v1.to")),
+            "order_request_v1.to",
+            123);
+        Assert.Equal(
+            File.ReadAllText(
+                Path.Combine(
+                    orderbookRoot,
+                    "order_request_validation_outcome_v1.json"),
+                Encoding.UTF8),
+            orderOutcome);
+
+        foreach (var name in new[]
+        {
+            "order_request_bad_signature",
+            "order_request_trailing_bytes",
+        })
+        {
+            var outcome = SoraFsReferenceValidators.ValidateOrderbookPayloadJson(
+                SoraFsOrderbookPayloadKind.OrderRequest,
+                File.ReadAllBytes(
+                    Path.Combine(orderbookRoot, "negative", $"{name}_v1.to")),
+                $"{name}_v1.to",
+                123);
+            Assert.Equal(
+                File.ReadAllText(
+                    Path.Combine(
+                        orderbookRoot,
+                        "negative",
+                        $"{name}_validation_outcome_v1.json"),
+                    Encoding.UTF8),
+                outcome);
+        }
+
+        var pdpRoot = Path.Combine(
+            AppContext.BaseDirectory,
+            "Fixtures",
+            "sorafs_manifest",
+            "pdp");
+        var commitment = File.ReadAllBytes(Path.Combine(pdpRoot, "commitment_v1.to"));
+        var challenge = File.ReadAllBytes(Path.Combine(pdpRoot, "challenge_v1.to"));
+        var proof = File.ReadAllBytes(Path.Combine(pdpRoot, "proof_v1.to"));
+        var commitmentChallenge =
+            SoraFsReferenceValidators.ValidatePdpCommitmentChallengeJson(
+                commitment,
+                challenge,
+                "commitment_v1.to",
+                "challenge_v1.to",
+                123);
+        using (var outcome = JsonDocument.Parse(commitmentChallenge))
+        {
+            Assert.Equal("Ok", outcome.RootElement.GetProperty("status").GetString());
+            Assert.Equal(
+                "SFS-PDP-DIAG-000",
+                outcome.RootElement.GetProperty("code").GetString());
+        }
+        var bundle = SoraFsReferenceValidators.ValidatePdpBundleJson(
+            commitment,
+            challenge,
+            proof,
+            "commitment_v1.to",
+            "challenge_v1.to",
+            "proof_v1.to",
+            123);
+        Assert.Equal(
+            File.ReadAllText(
+                Path.Combine(pdpRoot, "bundle_validation_outcome_v1.json"),
+                Encoding.UTF8),
+            bundle);
+
+        foreach (var (name, kind) in new[]
+        {
+            ("duplicate_hot_leaf_challenge", SoraFsPdpPayloadKind.Challenge),
+            ("missing_signature_proof", SoraFsPdpPayloadKind.Proof),
+        })
+        {
+            var outcome = SoraFsReferenceValidators.ValidatePdpPayloadJson(
+                kind,
+                ReadPdpNegative(pdpRoot, name),
+                $"{name}_v1.to",
+                123);
+            AssertPdpOutcome(pdpRoot, name, outcome);
+        }
+
+        foreach (var name in new[]
+        {
+            "late_proof",
+            "wrong_manifest_proof",
+            "wrong_provider_proof",
+        })
+        {
+            var outcome = SoraFsReferenceValidators.ValidatePdpChallengeProofJson(
+                challenge,
+                ReadPdpNegative(pdpRoot, name),
+                "challenge_v1.to",
+                $"{name}_v1.to",
+                123);
+            AssertPdpOutcome(pdpRoot, name, outcome);
+        }
+
+        foreach (var name in new[]
+        {
+            "missing_hot_leaf_path_proof",
+            "missing_segment_path_proof",
+            "wrong_path_proof",
+        })
+        {
+            var outcome = SoraFsReferenceValidators.ValidatePdpBundleJson(
+                commitment,
+                challenge,
+                ReadPdpNegative(pdpRoot, name),
+                "commitment_v1.to",
+                "challenge_v1.to",
+                $"{name}_v1.to",
+                123);
+            AssertPdpOutcome(pdpRoot, name, outcome);
+        }
+    }
+
+    [Fact]
     public void GovernanceFixturesAndNegativeVectorsMatchNativeReferenceWhenAvailable()
     {
         if (!SoraFsReferenceValidators.IsAvailable())
@@ -315,26 +531,26 @@ public sealed class SoraFsReferenceValidatorsTests
             "dag_block_0_v1.to",
             null,
             123);
-        AssertOutcome(
-            blockOutcome,
-            "Ok",
-            "SFS-OK-000",
-            123,
-            "validation",
-            ("governance_dag_block", "dag_block_0_v1.to"));
+        Assert.Equal(
+            File.ReadAllText(
+                Path.Combine(
+                    fixtureRoot,
+                    "dag_block_validation_outcome_v1.json"),
+                Encoding.UTF8),
+            blockOutcome);
 
         var cidMismatch = SoraFsReferenceValidators.ValidateGovernanceDagBlockJson(
             first,
             null,
             Enumerable.Repeat((byte)0x7f, 32).ToArray(),
             123);
-        AssertOutcome(
-            cidMismatch,
-            "Error",
-            "SFS-GOV-004",
-            123,
-            "validation",
-            ("governance_dag_block", "governance-dag-block.to"));
+        Assert.Equal(
+            File.ReadAllText(
+                Path.Combine(
+                    fixtureRoot,
+                    "dag_block_cid_mismatch_validation_outcome_v1.json"),
+                Encoding.UTF8),
+            cidMismatch);
 
         var headOutcome = SoraFsReferenceValidators.ValidateGovernanceDagHeadChainJson(
             head,
@@ -352,15 +568,13 @@ public sealed class SoraFsReferenceValidatorsTests
             },
             null,
             123);
-        AssertOutcome(
-            reordered,
-            "Error",
-            "SFS-GOV-006",
-            123,
-            "validation",
-            ("governance_dag_head", "governance-dag-head.to"),
-            ("governance_dag_block", "governance-dag-block-0.to"),
-            ("governance_dag_block", "governance-dag-block-1.to"));
+        Assert.Equal(
+            File.ReadAllText(
+                Path.Combine(
+                    fixtureRoot,
+                    "dag_head_reordered_validation_outcome_v1.json"),
+                Encoding.UTF8),
+            reordered);
 
         var blockSignatureOutcome =
             SoraFsReferenceValidators.ValidateGovernanceDagBlockJson(
@@ -516,6 +730,27 @@ public sealed class SoraFsReferenceValidatorsTests
         Assert.Equal(1, native.FreeCalls);
     }
 
+    private static byte[] ReadPdpNegative(string pdpRoot, string name)
+    {
+        return File.ReadAllBytes(
+            Path.Combine(pdpRoot, "negative", $"{name}_v1.to"));
+    }
+
+    private static void AssertPdpOutcome(
+        string pdpRoot,
+        string name,
+        string actual)
+    {
+        Assert.Equal(
+            File.ReadAllText(
+                Path.Combine(
+                    pdpRoot,
+                    "negative",
+                    $"{name}_validation_outcome_v1.json"),
+                Encoding.UTF8),
+            actual);
+    }
+
     private static string ValidOutcomeJson(ulong generatedAt)
     {
         var outcome = new Dictionary<string, object?>
@@ -542,29 +777,6 @@ public sealed class SoraFsReferenceValidatorsTests
         return JsonSerializer.Serialize(outcome);
     }
 
-    private static void AssertOutcome(
-        string json,
-        string expectedStatus,
-        string expectedCode,
-        ulong expectedGeneratedAt,
-        string expectedCategory,
-        params (string Kind, string Path)[] expectedInputs)
-    {
-        using var document = JsonDocument.Parse(json);
-        var outcome = document.RootElement;
-        Assert.Equal(expectedStatus, outcome.GetProperty("status").GetString());
-        Assert.Equal(expectedCode, outcome.GetProperty("code").GetString());
-        Assert.Equal(expectedCategory, outcome.GetProperty("category").GetString());
-        Assert.Equal(expectedGeneratedAt, outcome.GetProperty("generated_at").GetUInt64());
-        var inputs = outcome.GetProperty("inputs");
-        Assert.Equal(expectedInputs.Length, inputs.GetArrayLength());
-        for (var index = 0; index < expectedInputs.Length; index++)
-        {
-            Assert.Equal(expectedInputs[index].Kind, inputs[index].GetProperty("kind").GetString());
-            Assert.Equal(expectedInputs[index].Path, inputs[index].GetProperty("path").GetString());
-        }
-    }
-
     private sealed class FakeNativeBoundary : ISoraFsReferenceNativeBoundary
     {
         private readonly HashSet<IntPtr> allocations = new();
@@ -575,6 +787,8 @@ public sealed class SoraFsReferenceValidatorsTests
 
         internal bool SymbolsAvailable { get; set; } = true;
 
+        internal bool OrderbookPdpSymbolsAvailable { get; set; } = true;
+
         internal int ReturnCode { get; set; }
 
         internal Func<ulong, byte[]> OutputFactory { get; set; } =
@@ -584,7 +798,29 @@ public sealed class SoraFsReferenceValidatorsTests
 
         internal int HeadCalls { get; private set; }
 
+        internal int OrderbookCalls { get; private set; }
+
+        internal int PdpBundleCalls { get; private set; }
+
         internal int FreeCalls { get; private set; }
+
+        internal uint LastOrderbookKind { get; private set; }
+
+        internal byte[]? LastOrderbookBytes { get; private set; }
+
+        internal byte[]? LastOrderbookLabel { get; private set; }
+
+        internal byte[]? LastPdpCommitment { get; private set; }
+
+        internal byte[]? LastPdpCommitmentLabel { get; private set; }
+
+        internal byte[]? LastPdpChallenge { get; private set; }
+
+        internal byte[]? LastPdpChallengeLabel { get; private set; }
+
+        internal byte[]? LastPdpProof { get; private set; }
+
+        internal byte[]? LastPdpProofLabel { get; private set; }
 
         internal byte[]? LastBlockBytes { get; private set; }
 
@@ -612,6 +848,77 @@ public sealed class SoraFsReferenceValidatorsTests
         public bool HasGovernanceDagSymbols()
         {
             return SymbolsAvailable;
+        }
+
+        public bool HasOrderbookPdpSymbols()
+        {
+            return OrderbookPdpSymbolsAvailable;
+        }
+
+        public NativeValidationResult ValidateOrderbookPayload(
+            uint kind,
+            byte[] bytes,
+            byte[] label,
+            ulong generatedAt)
+        {
+            OrderbookCalls++;
+            LastOrderbookKind = kind;
+            LastOrderbookBytes = bytes;
+            LastOrderbookLabel = label;
+            LastGeneratedAt = generatedAt;
+            return AllocateResult(generatedAt);
+        }
+
+        public NativeValidationResult ValidatePdpPayload(
+            uint kind,
+            byte[] bytes,
+            byte[] label,
+            ulong generatedAt)
+        {
+            LastGeneratedAt = generatedAt;
+            return AllocateResult(generatedAt);
+        }
+
+        public NativeValidationResult ValidatePdpCommitmentChallenge(
+            byte[] commitment,
+            byte[] commitmentLabel,
+            byte[] challenge,
+            byte[] challengeLabel,
+            ulong generatedAt)
+        {
+            LastGeneratedAt = generatedAt;
+            return AllocateResult(generatedAt);
+        }
+
+        public NativeValidationResult ValidatePdpChallengeProof(
+            byte[] challenge,
+            byte[] challengeLabel,
+            byte[] proof,
+            byte[] proofLabel,
+            ulong generatedAt)
+        {
+            LastGeneratedAt = generatedAt;
+            return AllocateResult(generatedAt);
+        }
+
+        public NativeValidationResult ValidatePdpBundle(
+            byte[] commitment,
+            byte[] commitmentLabel,
+            byte[] challenge,
+            byte[] challengeLabel,
+            byte[] proof,
+            byte[] proofLabel,
+            ulong generatedAt)
+        {
+            PdpBundleCalls++;
+            LastPdpCommitment = commitment;
+            LastPdpCommitmentLabel = commitmentLabel;
+            LastPdpChallenge = challenge;
+            LastPdpChallengeLabel = challengeLabel;
+            LastPdpProof = proof;
+            LastPdpProofLabel = proofLabel;
+            LastGeneratedAt = generatedAt;
+            return AllocateResult(generatedAt);
         }
 
         public NativeValidationResult ValidateGovernanceDagBlock(

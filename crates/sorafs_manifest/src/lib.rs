@@ -326,7 +326,7 @@ pub use pdp::{
 };
 pub use pin_registry::{
     AliasBindingV1, AliasBindingValidationError, ManifestPolicyV1, ManifestPolicyValidationError,
-    PinRecordV1, PinRecordValidationError, ReplicationOrderV1 as PinRegistryReplicationOrderV1,
+    ReplicationOrderV1 as PinRegistryReplicationOrderV1,
     ReplicationOrderValidationError as PinRegistryReplicationOrderValidationError,
     ReplicationReceiptStatus, ReplicationReceiptV1, ReplicationReceiptValidationError,
 };
@@ -433,18 +433,15 @@ pub use reference::{
     validate_replication_order_bytes, validate_signed_replication_order_bytes,
 };
 pub use repair::{
-    AuditorSignatureV1, AuditorSignatureVerificationError, GC_AUDIT_EVENT_VERSION_V1,
-    GC_AUDIT_PAYLOAD_VERSION_V1, GcAuditEventV1, GcAuditPayloadV1,
+    GC_AUDIT_EVENT_VERSION_V1, GC_AUDIT_PAYLOAD_VERSION_V1, GcAuditEventV1, GcAuditPayloadV1,
     REPAIR_ESCALATION_APPROVAL_VERSION_V1, REPAIR_ESCALATION_POLICY_VERSION_V1,
     REPAIR_EVIDENCE_VERSION_V1, REPAIR_REPORT_VERSION_V1, REPAIR_SLASH_PROPOSAL_VERSION_V1,
-    REPAIR_TASK_EVENT_VERSION_V1, REPAIR_TASK_VERSION_V1, REPAIR_WORKER_SIGNATURE_VERSION_V1,
-    RepairAuditEventV1, RepairCauseV1, RepairEscalationApprovalV1, RepairEscalationPolicyV1,
-    RepairEvidenceV1, RepairLatencySlaCauseV1, RepairManualCauseV1, RepairPdpFailureCauseV1,
-    RepairPdpFailureKindV1, RepairPorFailureCauseV1, RepairReplicaShortfallCauseV1, RepairReportV1,
-    RepairSlashProposalV1, RepairTaskEventV1, RepairTaskRecordV1, RepairTaskStateV1,
-    RepairTaskStatusV1, RepairTicketId, RepairValidationError, RepairWorkerActionV1,
-    RepairWorkerSignaturePayloadV1, SIGNED_AUDITOR_REQUEST_VERSION_V1,
-    SignedAuditorRequestPayloadV1, SignedAuditorRequestSignaturePayloadV1, SignedAuditorRequestV1,
+    REPAIR_TASK_EVENT_VERSION_V1, REPAIR_TASK_VERSION_V1, RepairAuditEventV1, RepairCauseV1,
+    RepairEscalationApprovalV1, RepairEscalationPolicyV1, RepairEvidenceV1,
+    RepairLatencySlaCauseV1, RepairManualCauseV1, RepairPdpFailureCauseV1, RepairPdpFailureKindV1,
+    RepairPorFailureCauseV1, RepairReplicaShortfallCauseV1, RepairReportV1, RepairSlashProposalV1,
+    RepairTaskEventV1, RepairTaskRecordV1, RepairTaskStateV1, RepairTaskStatusV1, RepairTicketId,
+    RepairValidationError,
 };
 pub use reputation::signed::{
     MAX_REPUTATION_FUTURE_SKEW_SECS, MAX_REPUTATION_SIGNER_ID_LEN,
@@ -484,11 +481,13 @@ pub use transparency::{
     MODERATION_LEDGER_MAX_PUBLIC_TEXT_BYTES_V1, MODERATION_LEDGER_PROOF_VERSION_V1,
     MODERATION_LEDGER_PUBLICATION_VERSION_V1, MODERATION_PRIVACY_AGGREGATE_VERSION_V1,
     MODERATION_PRIVACY_DELTA_PPB_MAX, MODERATION_PRIVACY_MAX_METRICS_V1,
-    MODERATION_PRIVACY_PARAMETERS_VERSION_V1, ModerationLedgerBlockV1,
+    MODERATION_PRIVACY_PARAMETERS_VERSION_V1,
+    MODERATION_PRIVACY_RANDOMNESS_COMMITMENT_METADATA_KEY_V1, ModerationLedgerBlockV1,
     ModerationLedgerCyclePublicationV1, ModerationLedgerEntryKindV1, ModerationLedgerEntryV1,
     ModerationLedgerMetadataV1, ModerationLedgerProofNodeV1, ModerationLedgerProofSideV1,
     ModerationLedgerProofV1, ModerationPrivacyAggregateMetricV1, ModerationPrivacyAggregateV1,
-    ModerationPrivacyModeV1, ModerationPrivacyParametersV1, PROOF_TOKEN_ISSUANCE_VERSION_V1,
+    ModerationPrivacyModeV1, ModerationPrivacyNoiseSourceV1, ModerationPrivacyParametersV1,
+    ModerationPrivacyThresholdPrfCommitmentV1, PROOF_TOKEN_ISSUANCE_VERSION_V1,
     PROOF_TOKEN_MAX_ENTRY_ID_BYTES_V1, PROOF_TOKEN_MAX_ENTRY_IDS_V1, ProofTokenIssuanceV1,
     TransparencyLedgerError,
 };
@@ -511,6 +510,9 @@ pub use self::gateway_fixture::{
 
 /// Manifest version identifier.
 pub const MANIFEST_VERSION_V1: u8 = 1;
+
+/// Canonical Proof-of-Retrievability root for an empty V1 payload.
+pub const EMPTY_POR_ROOT_V1: [u8; 32] = [0; 32];
 
 /// Multihash code for BLAKE3-256.
 pub const BLAKE3_256_MULTIHASH_CODE: u64 = 0x1f;
@@ -541,6 +543,8 @@ pub struct ManifestV1 {
     pub chunking: ChunkingProfileV1,
     /// SHA3-256 commitment to the ordered chunk metadata plan.
     pub chunk_digest_sha3_256: [u8; 32],
+    /// Merkle root of the Proof-of-Retrievability tree for this exact payload.
+    pub por_root: [u8; 32],
     pub content_length: u64,
     pub car_digest: [u8; 32],
     pub car_size: u64,
@@ -577,6 +581,7 @@ pub struct ManifestBuilder {
     dag_codec: Option<DagCodecId>,
     chunking: Option<ChunkingProfileV1>,
     chunk_digest_sha3_256: Option<[u8; 32]>,
+    por_root: Option<[u8; 32]>,
     content_length: Option<u64>,
     car_digest: Option<[u8; 32]>,
     car_size: Option<u64>,
@@ -628,6 +633,13 @@ impl ManifestBuilder {
     #[must_use]
     pub fn chunk_digest_sha3_256(mut self, digest: [u8; 32]) -> Self {
         self.chunk_digest_sha3_256 = Some(digest);
+        self
+    }
+
+    /// Set the Merkle root of the Proof-of-Retrievability tree.
+    #[must_use]
+    pub fn por_root(mut self, root: [u8; 32]) -> Self {
+        self.por_root = Some(root);
         self
     }
 
@@ -711,6 +723,9 @@ impl ManifestBuilder {
         let chunk_digest_sha3_256 = self
             .chunk_digest_sha3_256
             .ok_or(ManifestBuildError::MissingField("chunk_digest_sha3_256"))?;
+        let por_root = self
+            .por_root
+            .ok_or(ManifestBuildError::MissingField("por_root"))?;
         let content_length = self
             .content_length
             .ok_or(ManifestBuildError::MissingField("content_length"))?;
@@ -730,6 +745,7 @@ impl ManifestBuilder {
             dag_codec,
             chunking,
             chunk_digest_sha3_256,
+            por_root,
             content_length,
             car_digest,
             car_size,
@@ -968,6 +984,7 @@ mod tests {
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(ChunkProfile::DEFAULT, BLAKE3_256_MULTIHASH_CODE)
             .chunk_digest_sha3_256([0xAC; 32])
+            .por_root([0xAD; 32])
             .content_length(1_048_576)
             .car_digest([0xAB; 32])
             .car_size(1_100_000)
@@ -1024,6 +1041,17 @@ mod tests {
     }
 
     #[test]
+    fn digest_binds_the_por_root() {
+        let manifest = sample_manifest();
+        let mut substituted = manifest.clone();
+        substituted.por_root[0] ^= 1;
+        assert_ne!(
+            manifest.digest().expect("original digest"),
+            substituted.digest().expect("substituted digest")
+        );
+    }
+
+    #[test]
     fn builder_rejects_missing_fields() {
         let err = ManifestBuilder::new().build().unwrap_err();
         assert!(matches!(err, ManifestBuildError::MissingField("root_cid")));
@@ -1032,6 +1060,24 @@ mod tests {
             .root_cid(canonical_manifest_root_cid([0xAA; 32]))
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(ChunkProfile::DEFAULT, BLAKE3_256_MULTIHASH_CODE)
+            .chunk_digest_sha3_256([0xAC; 32])
+            .content_length(1)
+            .car_digest([0xAB; 32])
+            .car_size(2)
+            .pin_policy(PinPolicy {
+                min_replicas: 1,
+                storage_class: StorageClass::Hot,
+                retention_epoch: 1,
+            })
+            .build()
+            .expect_err("PoR root is mandatory");
+        assert_eq!(err, ManifestBuildError::MissingField("por_root"));
+
+        let err = ManifestBuilder::new()
+            .root_cid(canonical_manifest_root_cid([0xAA; 32]))
+            .dag_codec(DagCodecId(0x71))
+            .chunking_from_profile(ChunkProfile::DEFAULT, BLAKE3_256_MULTIHASH_CODE)
+            .por_root([0xAD; 32])
             .content_length(1)
             .car_digest([0xAB; 32])
             .car_size(2)
