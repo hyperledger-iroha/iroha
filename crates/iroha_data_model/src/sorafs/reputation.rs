@@ -49,8 +49,7 @@ pub const REPUTATION_JOURNAL_DISPUTE_SOURCE_ID_DOMAIN_V1: &[u8] =
 pub const REPUTATION_JOURNAL_TOKEN_SOURCE_ID_DOMAIN_V1: &[u8] =
     b"sorafs.reputation.journal.source.stream-token.v1";
 /// Domain separator for content-derived journal event identifiers.
-pub const REPUTATION_JOURNAL_EVENT_ID_DOMAIN_V1: &[u8] =
-    b"sorafs.reputation.journal.event-id.v1";
+pub const REPUTATION_JOURNAL_EVENT_ID_DOMAIN_V1: &[u8] = b"sorafs.reputation.journal.event-id.v1";
 
 /// Globally namespaced identity of one native reputation source.
 #[derive(
@@ -87,10 +86,7 @@ impl ReputationJournalSourceIdV1 {
     /// Derive the globally namespaced source for a native stream-token validation.
     #[must_use]
     pub fn for_stream_token_validation(validation_id: [u8; 32]) -> Self {
-        source_id(
-            REPUTATION_JOURNAL_TOKEN_SOURCE_ID_DOMAIN_V1,
-            validation_id,
-        )
+        source_id(REPUTATION_JOURNAL_TOKEN_SOURCE_ID_DOMAIN_V1, validation_id)
     }
 
     /// Access the raw digest.
@@ -144,7 +140,7 @@ pub enum ReputationJournalSourceKindV1 {
 }
 
 /// Governed accounts allowed to append each first-release journal source.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -177,9 +173,11 @@ impl ReputationJournalAuthorityPolicyV1 {
     /// revision, or a non-canonical predecessor link.
     pub fn validate(&self) -> Result<(), ReputationJournalValidationError> {
         if self.version != REPUTATION_JOURNAL_AUTHORITY_POLICY_VERSION_V1 {
-            return Err(ReputationJournalValidationError::UnsupportedAuthorityPolicyVersion {
-                found: self.version,
-            });
+            return Err(
+                ReputationJournalValidationError::UnsupportedAuthorityPolicyVersion {
+                    found: self.version,
+                },
+            );
         }
         if self.revision == 0 {
             return Err(ReputationJournalValidationError::ZeroAuthorityPolicyRevision);
@@ -199,8 +197,8 @@ impl ReputationJournalAuthorityPolicyV1 {
     /// Returns a policy validation or canonical encoding error.
     pub fn canonical_digest(&self) -> Result<[u8; 32], ReputationJournalValidationError> {
         self.validate()?;
-        let bytes =
-            norito::to_bytes(self).map_err(|_| ReputationJournalValidationError::CanonicalEncoding)?;
+        let bytes = norito::to_bytes(self)
+            .map_err(|_| ReputationJournalValidationError::CanonicalEncoding)?;
         Ok(domain_digest(
             REPUTATION_JOURNAL_AUTHORITY_POLICY_DIGEST_DOMAIN_V1,
             &bytes,
@@ -209,15 +207,10 @@ impl ReputationJournalAuthorityPolicyV1 {
 
     /// Return the exact recorder authorized for `source`.
     #[must_use]
-    pub const fn recorder_authority(
-        &self,
-        source: ReputationJournalSourceKindV1,
-    ) -> &AccountId {
+    pub const fn recorder_authority(&self, source: ReputationJournalSourceKindV1) -> &AccountId {
         match source {
             ReputationJournalSourceKindV1::Por => &self.por_recorder_authority,
-            ReputationJournalSourceKindV1::ProviderDispute => {
-                &self.dispute_recorder_authority
-            }
+            ReputationJournalSourceKindV1::ProviderDispute => &self.dispute_recorder_authority,
             ReputationJournalSourceKindV1::StreamToken => &self.token_recorder_authority,
         }
     }
@@ -362,7 +355,7 @@ impl PorTerminalStatusV1 {
 }
 
 /// Payload-free terminal PoR projection.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -443,9 +436,7 @@ impl PorTerminalOutcomeV1 {
         }
         if self.sample_count == 0
             || self.failed_samples > self.sample_count
-            || self
-                .proof_digest
-                .is_some_and(|digest| digest == [0; 32])
+            || self.proof_digest.is_some_and(|digest| digest == [0; 32])
             || self
                 .repair_task_id
                 .is_some_and(|task_id| task_id == [0; 32])
@@ -539,8 +530,26 @@ pub enum ProviderDisputeKindV1 {
     Other,
 }
 
+/// Resolution material for a terminal provider-dispute transition.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct ProviderDisputeResolutionV1 {
+    /// Existing capacity-governance outcome vocabulary.
+    pub outcome: CapacityDisputeOutcome,
+    /// Exact committing decision time.
+    pub resolved_at_unix_ms: u64,
+    /// Digest of the canonical decision evidence/envelope.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub decision_digest: [u8; 32],
+    /// Optional bounded, canonical governance rationale.
+    pub rationale: Option<String>,
+}
+
 /// Chain-authoritative provider-dispute lifecycle transition.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -553,21 +562,11 @@ pub enum ProviderDisputeStatusV1 {
     /// Dispute became active at `submitted_at_unix_ms`.
     Opened,
     /// Governance committed one terminal outcome.
-    Resolved {
-        /// Existing capacity-governance outcome vocabulary.
-        outcome: CapacityDisputeOutcome,
-        /// Exact committing decision time.
-        resolved_at_unix_ms: u64,
-        /// Digest of the canonical decision evidence/envelope.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-        decision_digest: [u8; 32],
-        /// Optional bounded, canonical governance rationale.
-        rationale: Option<String>,
-    },
+    Resolved(ProviderDisputeResolutionV1),
 }
 
 /// Payload-free provider-dispute journal projection.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -597,12 +596,12 @@ impl ProviderDisputeEventV1 {
                     return Err(ReputationJournalValidationError::RecordedTimestampMismatch);
                 }
             }
-            ProviderDisputeStatusV1::Resolved {
+            ProviderDisputeStatusV1::Resolved(ProviderDisputeResolutionV1 {
                 resolved_at_unix_ms,
                 decision_digest,
                 rationale,
                 ..
-            } => {
+            }) => {
                 ensure_timestamp(*resolved_at_unix_ms, "resolved_at_unix_ms")?;
                 ensure_digest(*decision_digest, "decision_digest")?;
                 if *resolved_at_unix_ms <= self.submitted_at_unix_ms {
@@ -722,7 +721,7 @@ impl StreamTokenValidationStatusV1 {
 }
 
 /// Payload-free result of one provider-bound stream-token validation.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -771,7 +770,7 @@ impl StreamTokenValidationOutcomeV1 {
 }
 
 /// One typed first-release journal payload.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -821,7 +820,7 @@ impl ReputationJournalPayloadV1 {
             Self::PorTerminal(_) | Self::StreamTokenValidation(_) => 1,
             Self::ProviderDispute(event) => match &event.status {
                 ProviderDisputeStatusV1::Opened => 1,
-                ProviderDisputeStatusV1::Resolved { .. } => 2,
+                ProviderDisputeStatusV1::Resolved(_) => 2,
             },
         }
     }
@@ -836,7 +835,7 @@ impl ReputationJournalPayloadV1 {
 }
 
 /// One chain-authoritative reputation journal entry.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -961,8 +960,8 @@ impl ReputationJournalEntryV1 {
         if self.event_id != self.expected_event_id()? {
             return Err(ReputationJournalValidationError::EventIdMismatch);
         }
-        let encoded =
-            norito::to_bytes(self).map_err(|_| ReputationJournalValidationError::CanonicalEncoding)?;
+        let encoded = norito::to_bytes(self)
+            .map_err(|_| ReputationJournalValidationError::CanonicalEncoding)?;
         if encoded.len() > REPUTATION_JOURNAL_MAX_ENTRY_BYTES_V1 {
             return Err(ReputationJournalValidationError::EntryTooLarge {
                 found: encoded.len(),
@@ -1035,8 +1034,9 @@ impl ReputationJournalSourceHeadV1 {
             ReputationJournalSourceKindV1::ProviderDispute => {
                 (1..=2).contains(&self.source_revision)
             }
-            ReputationJournalSourceKindV1::Por
-            | ReputationJournalSourceKindV1::StreamToken => self.source_revision == 1,
+            ReputationJournalSourceKindV1::Por | ReputationJournalSourceKindV1::StreamToken => {
+                self.source_revision == 1
+            }
         };
         if !valid_revision {
             return Err(ReputationJournalValidationError::InvalidSourceRevision);
@@ -1312,8 +1312,8 @@ impl ReputationJournalFinalizedEventPageV1 {
             previous = Some(event);
         }
 
-        let encoded =
-            norito::to_bytes(self).map_err(|_| ReputationJournalValidationError::CanonicalEncoding)?;
+        let encoded = norito::to_bytes(self)
+            .map_err(|_| ReputationJournalValidationError::CanonicalEncoding)?;
         if encoded.len() > REPUTATION_JOURNAL_QUERY_MAX_EVENT_PAGE_BYTES_V1 {
             return Err(ReputationJournalValidationError::EncodedPageTooLarge {
                 found: encoded.len(),
@@ -1329,7 +1329,10 @@ impl ReputationJournalFinalizedEventPageV1 {
 pub enum ReputationJournalValidationError {
     /// Recorder policy version is unsupported.
     #[error("unsupported reputation journal authority-policy version {found}")]
-    UnsupportedAuthorityPolicyVersion { found: u16 },
+    UnsupportedAuthorityPolicyVersion {
+        /// Version found in the rejected policy.
+        found: u16,
+    },
     /// Recorder policy revision zero is reserved.
     #[error("reputation journal authority-policy revision must be non-zero")]
     ZeroAuthorityPolicyRevision,
@@ -1341,7 +1344,10 @@ pub enum ReputationJournalValidationError {
     MissingPolicyPredecessor,
     /// Entry version is unsupported.
     #[error("unsupported reputation journal entry version {found}")]
-    UnsupportedEntryVersion { found: u16 },
+    UnsupportedEntryVersion {
+        /// Version found in the rejected entry.
+        found: u16,
+    },
     /// Event id zero is reserved.
     #[error("reputation journal event id must be non-zero")]
     ZeroEventId,
@@ -1356,14 +1362,22 @@ pub enum ReputationJournalValidationError {
     ZeroProviderId,
     /// A required digest is inert.
     #[error("reputation journal digest `{field}` must be non-zero")]
-    ZeroDigest { field: &'static str },
+    ZeroDigest {
+        /// Canonical field name containing the zero digest.
+        field: &'static str,
+    },
     /// A required timestamp is zero or the reserved maximum sentinel.
     #[error("reputation journal timestamp `{field}` must be finite and non-zero")]
-    InvalidTimestamp { field: &'static str },
+    InvalidTimestamp {
+        /// Canonical field name containing the invalid timestamp.
+        field: &'static str,
+    },
     /// Two timestamps are not in canonical order.
     #[error("reputation journal timestamp `{later}` must follow `{earlier}`")]
     InvalidTimestampOrder {
+        /// Timestamp field that must occur first.
         earlier: &'static str,
+        /// Timestamp field that must occur later.
         later: &'static str,
     },
     /// Source decision time must equal the committing block time.
@@ -1407,7 +1421,12 @@ pub enum ReputationJournalValidationError {
     EventIdMismatch,
     /// Entry exceeds the hard encoded-byte bound.
     #[error("reputation journal entry has {found} bytes; maximum is {maximum}")]
-    EntryTooLarge { found: usize, maximum: usize },
+    EntryTooLarge {
+        /// Encoded byte count found.
+        found: usize,
+        /// Maximum admitted encoded bytes.
+        maximum: usize,
+    },
     /// The active policy digest differs from the entry binding.
     #[error("reputation journal authority-policy digest mismatch")]
     AuthorityPolicyDigestMismatch,
@@ -1434,10 +1453,20 @@ pub enum ReputationJournalValidationError {
     EventAfterFinalizedTimestamp,
     /// Page item count exceeds the hard bound.
     #[error("reputation journal page has {found} items; maximum is {maximum}")]
-    TooManyPageItems { found: usize, maximum: usize },
+    TooManyPageItems {
+        /// Item count found.
+        found: usize,
+        /// Maximum admitted item count.
+        maximum: usize,
+    },
     /// Encoded page exceeds the hard byte bound.
     #[error("reputation journal page has {found} bytes; maximum is {maximum}")]
-    EncodedPageTooLarge { found: usize, maximum: usize },
+    EncodedPageTooLarge {
+        /// Encoded byte count found.
+        found: usize,
+        /// Maximum admitted encoded bytes.
+        maximum: usize,
+    },
     /// A page claims continuation without advancing.
     #[error("reputation journal continuation page must contain an event")]
     EmptyContinuationPage,
@@ -1663,7 +1692,11 @@ mod tests {
         .expect("valid PoR entry")
     }
 
-    fn finalized_event(sequence: u64, event_index: u32, seed: u8) -> ReputationJournalFinalizedEventV1 {
+    fn finalized_event(
+        sequence: u64,
+        event_index: u32,
+        seed: u8,
+    ) -> ReputationJournalFinalizedEventV1 {
         ReputationJournalFinalizedEventV1 {
             sequence,
             block_height: 5,
@@ -1681,7 +1714,9 @@ mod tests {
         }
     }
 
-    fn page(events: Vec<ReputationJournalFinalizedEventV1>) -> ReputationJournalFinalizedEventPageV1 {
+    fn page(
+        events: Vec<ReputationJournalFinalizedEventV1>,
+    ) -> ReputationJournalFinalizedEventPageV1 {
         ReputationJournalFinalizedEventPageV1 {
             finalized_cursor: finalized_cursor(),
             events,
@@ -1705,12 +1740,12 @@ mod tests {
                 kind: ProviderDisputeKindV1::ProofFailure,
                 evidence_digest: digest_from_u32(index.saturating_add(20_000)),
                 submitted_at_unix_ms: RECORDED_AT - 1_000,
-                status: ProviderDisputeStatusV1::Resolved {
+                status: ProviderDisputeStatusV1::Resolved(ProviderDisputeResolutionV1 {
                     outcome: CapacityDisputeOutcome::Upheld,
                     resolved_at_unix_ms: RECORDED_AT,
                     decision_digest: digest_from_u32(index.saturating_add(30_000)),
                     rationale: Some(rationale),
-                },
+                }),
             }),
         )
         .expect("valid resolved dispute")
@@ -1735,11 +1770,28 @@ mod tests {
     }
 
     #[test]
+    fn instruction_payloads_have_total_structural_order() {
+        fn assert_total_order<T: Ord>() {}
+
+        assert_total_order::<ReputationJournalAuthorityPolicyV1>();
+        assert_total_order::<ReputationJournalEntryV1>();
+
+        let first = por_entry(1);
+        let second = por_entry(2);
+        let ordering = first.cmp(&second);
+        assert_ne!(ordering, std::cmp::Ordering::Equal);
+        assert_eq!(ordering, second.cmp(&first).reverse());
+    }
+
+    #[test]
     fn policy_activation_and_persisted_index_records_fail_closed() {
         let policy = policy();
-        let activation =
-            ReputationJournalAuthorityPolicyRecordV1::try_new(policy.clone(), account(9), RECORDED_AT)
-                .expect("canonical policy activation");
+        let activation = ReputationJournalAuthorityPolicyRecordV1::try_new(
+            policy.clone(),
+            account(9),
+            RECORDED_AT,
+        )
+        .expect("canonical policy activation");
         activation.validate().expect("activation validates");
 
         let entry = por_entry(4);
@@ -1801,10 +1853,7 @@ mod tests {
         }
 
         let mut wrong_source = base;
-        wrong_source.source_id = source_id(
-            REPUTATION_JOURNAL_TOKEN_SOURCE_ID_DOMAIN_V1,
-            [1; 32],
-        );
+        wrong_source.source_id = source_id(REPUTATION_JOURNAL_TOKEN_SOURCE_ID_DOMAIN_V1, [1; 32]);
         assert_eq!(
             wrong_source.validate(),
             Err(ReputationJournalValidationError::SourceIdMismatch)
@@ -1886,8 +1935,7 @@ mod tests {
         let ReputationJournalPayloadV1::PorTerminal(outcome) = &mut payload else {
             unreachable!()
         };
-        outcome.status =
-            PorTerminalStatusV1::Failed(PorTerminalFailureKindV1::DeadlineExpired);
+        outcome.status = PorTerminalStatusV1::Failed(PorTerminalFailureKindV1::DeadlineExpired);
         outcome.failed_samples = outcome.sample_count + 1;
         outcome.responded_at_unix_ms = None;
         outcome.proof_digest = None;
@@ -1913,8 +1961,7 @@ mod tests {
         let ReputationJournalPayloadV1::PorTerminal(failed) = &mut failed_payload else {
             unreachable!()
         };
-        failed.status =
-            PorTerminalStatusV1::Failed(PorTerminalFailureKindV1::DeadlineExpired);
+        failed.status = PorTerminalStatusV1::Failed(PorTerminalFailureKindV1::DeadlineExpired);
         failed.failed_samples = failed.sample_count;
         failed.responded_at_unix_ms = None;
         failed.proof_digest = None;
@@ -2022,10 +2069,8 @@ mod tests {
             .is_violation()
         );
         assert!(
-            !StreamTokenValidationStatusV1::Excluded(
-                StreamTokenExcludedKindV1::InvalidSignature
-            )
-            .counts_for_provider()
+            !StreamTokenValidationStatusV1::Excluded(StreamTokenExcludedKindV1::InvalidSignature)
+                .counts_for_provider()
         );
 
         let mut malformed = accepted;
@@ -2058,12 +2103,12 @@ mod tests {
                     kind: ProviderDisputeKindV1::Other,
                     evidence_digest: [0x22; 32],
                     submitted_at_unix_ms: RECORDED_AT - 1,
-                    status: ProviderDisputeStatusV1::Resolved {
+                    status: ProviderDisputeStatusV1::Resolved(ProviderDisputeResolutionV1 {
                         outcome: CapacityDisputeOutcome::Dismissed,
                         resolved_at_unix_ms: RECORDED_AT,
                         decision_digest: [0x23; 32],
                         rationale: Some("x".repeat(REPUTATION_JOURNAL_MAX_TEXT_BYTES_V1 + 1)),
-                    },
+                    }),
                 }),
             ),
             Err(ReputationJournalValidationError::InvalidText)
@@ -2244,12 +2289,12 @@ mod tests {
                 kind: ProviderDisputeKindV1::ProofFailure,
                 evidence_digest: [0x62; 32],
                 submitted_at_unix_ms: RECORDED_AT - 1_000,
-                status: ProviderDisputeStatusV1::Resolved {
+                status: ProviderDisputeStatusV1::Resolved(ProviderDisputeResolutionV1 {
                     outcome: CapacityDisputeOutcome::Upheld,
                     resolved_at_unix_ms: RECORDED_AT,
                     decision_digest: [0x63; 32],
                     rationale: Some("proof failure upheld".to_owned()),
-                },
+                }),
             }),
         )
         .expect("resolve dispute");

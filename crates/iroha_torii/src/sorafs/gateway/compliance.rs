@@ -52,6 +52,8 @@ pub const MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1: usize = 16 * 1024 * 1024;
 pub const MAX_GATEWAY_COMPLIANCE_CHECKPOINT_BYTES_V1: usize = 64 * 1024 * 1024;
 /// Maximum bounded controller history records.
 pub const MAX_GATEWAY_COMPLIANCE_HISTORY_V1: usize = 4_096;
+/// Maximum durable mutation-idempotency records.
+pub const MAX_GATEWAY_COMPLIANCE_IDEMPOTENCY_RECORDS_V1: usize = 4_096;
 
 const CATALOG_SIGNING_DOMAIN_V1: &[u8] = b"sorafs-gateway-compliance-catalog-v1";
 const ACK_SIGNING_DOMAIN_V1: &[u8] = b"sorafs-gateway-compliance-ack-v1";
@@ -917,21 +919,17 @@ impl GatewayComplianceControllerConfig {
                 "region_scope must be one canonical region:<id> scope".into(),
             ));
         }
-        if normalize_scope(&self.gateway_scope).ok().as_deref()
-            != Some(self.gateway_scope.as_str())
+        if normalize_scope(&self.gateway_scope).ok().as_deref() != Some(self.gateway_scope.as_str())
         {
             return Err(GatewayComplianceError::InvalidPolicy(
                 "gateway_scope must be one canonical gateway:<id> scope".into(),
             ));
         }
-        let gateway_id = self
-            .gateway_scope
-            .strip_prefix("gateway:")
-            .ok_or_else(|| {
-                GatewayComplianceError::InvalidPolicy(
-                    "gateway_scope must be one canonical gateway:<id> scope".into(),
-                )
-            })?;
+        let gateway_id = self.gateway_scope.strip_prefix("gateway:").ok_or_else(|| {
+            GatewayComplianceError::InvalidPolicy(
+                "gateway_scope must be one canonical gateway:<id> scope".into(),
+            )
+        })?;
         if self
             .trust_policy
             .gateway_signers
@@ -1086,6 +1084,77 @@ pub struct GatewayComplianceHistoryRecordV1 {
     pub reason_code: String,
 }
 
+/// Exact durable gateway-compliance mutation kind.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    NoritoSerialize,
+    NoritoDeserialize,
+    JsonSerialize,
+    JsonDeserialize,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+)]
+#[norito(tag = "kind", content = "value", rename_all = "snake_case")]
+pub enum GatewayComplianceMutationKindV1 {
+    /// Stage a threshold-signed candidate catalog.
+    Stage,
+    /// Record a signed regional-gateway acknowledgement.
+    Acknowledge,
+    /// Promote the staged catalog.
+    Promote,
+    /// Roll back to the last-known-good catalog.
+    Rollback,
+}
+
+impl GatewayComplianceMutationKindV1 {
+    fn history_action(self) -> Option<&'static str> {
+        match self {
+            Self::Stage | Self::Acknowledge => None,
+            Self::Promote => Some("promotion"),
+            Self::Rollback => Some("rollback"),
+        }
+    }
+}
+
+/// Cryptographic idempotency binding supplied by the authenticated API.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GatewayComplianceMutationBindingV1 {
+    /// Digest-form operation key. Raw caller-provided keys are never persisted.
+    pub key_digest: [u8; 32],
+    /// Digest of the exact canonical method, target, and request bytes.
+    pub request_digest: [u8; 32],
+}
+
+/// Stable response returned for an initial mutation and every exact replay.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GatewayComplianceMutationResultV1 {
+    /// Catalog affected by the committed mutation.
+    pub catalog_digest: [u8; 32],
+    /// Unix second at which the initial mutation committed.
+    pub recorded_at_unix: u64,
+}
+
+/// Durable replay binding for one successful mutation.
+#[derive(
+    Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
+)]
+pub struct GatewayComplianceIdempotencyRecordV1 {
+    /// Digest-form operation key.
+    pub key_digest: [u8; 32],
+    /// Digest of the exact canonical request.
+    pub request_digest: [u8; 32],
+    /// Mutation performed by the request.
+    pub operation: GatewayComplianceMutationKindV1,
+    /// Catalog affected by the mutation.
+    pub catalog_digest: [u8; 32],
+    /// Unix second at which the initial mutation committed.
+    pub recorded_at_unix: u64,
+}
+
 /// Durable controller state.
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
@@ -1107,6 +1176,8 @@ pub struct GatewayComplianceCheckpointV1 {
     pub acknowledgements: Vec<GatewayComplianceAcknowledgementV1>,
     /// Bounded immutable promotion/rollback history.
     pub history: Vec<GatewayComplianceHistoryRecordV1>,
+    /// Bounded immutable exact-request replay registry.
+    pub idempotency_records: Vec<GatewayComplianceIdempotencyRecordV1>,
 }
 
 impl GatewayComplianceCheckpointV1 {
@@ -1120,6 +1191,7 @@ impl GatewayComplianceCheckpointV1 {
             candidate: None,
             acknowledgements: Vec::new(),
             history: Vec::new(),
+            idempotency_records: Vec::new(),
         }
     }
 }
@@ -1419,46 +1491,78 @@ impl GatewayComplianceController {
         Ok(payload)
     }
 
-    /// Durably stage a threshold-signed candidate. Replaying identical input is
-    /// idempotent; same-sequence substitution is rejected.
+    /// Durably stage a threshold-signed candidate under an exact request
+    /// binding. Exact replays return the original durable result even after a
+    /// later promotion; same-key substitution and same-sequence equivocation
+    /// are rejected.
     pub fn stage_catalog(
         &self,
         catalog: GatewayComplianceCatalogV1,
         observed_at_unix: u64,
-    ) -> Result<[u8; 32], GatewayComplianceError> {
+        binding: GatewayComplianceMutationBindingV1,
+    ) -> Result<GatewayComplianceMutationResultV1, GatewayComplianceError> {
+        let mut guard = self.write_state()?;
+        if let Some(result) =
+            replay_mutation(&guard, GatewayComplianceMutationKindV1::Stage, binding)?
+        {
+            return Ok(result);
+        }
+        validate_new_mutation(&guard, binding, observed_at_unix)?;
         let digest = catalog.verify(
             &self.config.trust_policy,
             observed_at_unix,
             self.config.max_clock_skew_secs,
         )?;
         validate_catalog_against_config(&catalog.payload, &self.config)?;
-        let mut guard = self.write_state()?;
         validate_catalog_transition(guard.chain_head.as_ref(), &catalog)?;
+        let mut replace_candidate = true;
         if let Some(candidate) = guard.candidate.as_ref() {
             let existing = candidate.payload.catalog_digest()?;
             if existing == digest {
-                return Ok(digest);
+                replace_candidate = false;
             }
-            if candidate.payload.sequence == catalog.payload.sequence {
+            if existing != digest && candidate.payload.sequence == catalog.payload.sequence {
                 return Err(GatewayComplianceError::CatalogEquivocation {
                     sequence: catalog.payload.sequence,
                 });
             }
         }
         let mut next = guard.clone();
-        next.candidate = Some(catalog);
-        next.acknowledgements.clear();
+        if replace_candidate {
+            next.candidate = Some(catalog);
+            next.acknowledgements.clear();
+        }
+        append_mutation_record(
+            &mut next,
+            GatewayComplianceMutationKindV1::Stage,
+            binding,
+            digest,
+            observed_at_unix,
+        );
         self.commit(&mut guard, next)?;
-        Ok(digest)
+        Ok(GatewayComplianceMutationResultV1 {
+            catalog_digest: digest,
+            recorded_at_unix: observed_at_unix,
+        })
     }
 
-    /// Durably record one signed gateway acknowledgement.
+    /// Durably record one signed gateway acknowledgement under an exact
+    /// request binding.
     pub fn acknowledge(
         &self,
         acknowledgement: GatewayComplianceAcknowledgementV1,
         observed_at_unix: u64,
-    ) -> Result<(), GatewayComplianceError> {
+        binding: GatewayComplianceMutationBindingV1,
+    ) -> Result<GatewayComplianceMutationResultV1, GatewayComplianceError> {
         let mut guard = self.write_state()?;
+        if let Some(result) = replay_mutation(
+            &guard,
+            GatewayComplianceMutationKindV1::Acknowledge,
+            binding,
+        )? {
+            return Ok(result);
+        }
+        validate_new_mutation(&guard, binding, observed_at_unix)?;
         let candidate = guard
             .candidate
             .as_ref()
@@ -1470,19 +1574,22 @@ impl GatewayComplianceController {
             observed_at_unix,
             self.config.max_clock_skew_secs,
         )?;
+        let mut append_acknowledgement = true;
         if let Some(existing) = guard
             .acknowledgements
             .iter()
             .find(|entry| entry.payload.gateway_id == acknowledgement.payload.gateway_id)
         {
             if existing == &acknowledgement {
-                return Ok(());
+                append_acknowledgement = false;
+            } else {
+                return Err(GatewayComplianceError::GatewayEquivocation(
+                    acknowledgement.payload.gateway_id.clone(),
+                ));
             }
-            return Err(GatewayComplianceError::GatewayEquivocation(
-                acknowledgement.payload.gateway_id.clone(),
-            ));
         }
-        if guard.acknowledgements.len() >= MAX_GATEWAY_COMPLIANCE_ACKS_V1 {
+        if append_acknowledgement && guard.acknowledgements.len() >= MAX_GATEWAY_COMPLIANCE_ACKS_V1
+        {
             return Err(GatewayComplianceError::ResourceLimit {
                 resource: "gateway acknowledgements",
                 found: guard.acknowledgements.len().saturating_add(1),
@@ -1490,15 +1597,41 @@ impl GatewayComplianceController {
             });
         }
         let mut next = guard.clone();
-        next.acknowledgements.push(acknowledgement);
-        next.acknowledgements
-            .sort_by(|left, right| left.payload.gateway_id.cmp(&right.payload.gateway_id));
-        self.commit(&mut guard, next)
+        if append_acknowledgement {
+            next.acknowledgements.push(acknowledgement);
+            next.acknowledgements
+                .sort_by(|left, right| left.payload.gateway_id.cmp(&right.payload.gateway_id));
+        }
+        append_mutation_record(
+            &mut next,
+            GatewayComplianceMutationKindV1::Acknowledge,
+            binding,
+            digest,
+            observed_at_unix,
+        );
+        self.commit(&mut guard, next)?;
+        Ok(GatewayComplianceMutationResultV1 {
+            catalog_digest: digest,
+            recorded_at_unix: observed_at_unix,
+        })
     }
 
-    /// Promote the staged catalog after the configured regional-gateway quorum.
-    pub fn promote(&self, observed_at_unix: u64) -> Result<[u8; 32], GatewayComplianceError> {
+    /// Promote the exact expected staged catalog after the configured
+    /// regional-gateway quorum.
+    pub fn promote(
+        &self,
+        expected_catalog_digest: [u8; 32],
+        expected_sequence: u64,
+        observed_at_unix: u64,
+        binding: GatewayComplianceMutationBindingV1,
+    ) -> Result<GatewayComplianceMutationResultV1, GatewayComplianceError> {
         let mut guard = self.write_state()?;
+        if let Some(result) =
+            replay_mutation(&guard, GatewayComplianceMutationKindV1::Promote, binding)?
+        {
+            return Ok(result);
+        }
+        validate_new_mutation(&guard, binding, observed_at_unix)?;
         let candidate = guard
             .candidate
             .as_ref()
@@ -1510,6 +1643,9 @@ impl GatewayComplianceController {
         )?;
         validate_catalog_against_config(&candidate.payload, &self.config)?;
         validate_catalog_transition(guard.chain_head.as_ref(), candidate)?;
+        if digest != expected_catalog_digest || candidate.payload.sequence != expected_sequence {
+            return Err(GatewayComplianceError::PromotionTargetMismatch);
+        }
         let mut accepted = 0;
         for acknowledgement in &guard.acknowledgements {
             if !acknowledgement.payload.accepted {
@@ -1537,7 +1673,6 @@ impl GatewayComplianceController {
             .as_ref()
             .map(|catalog| catalog.payload.catalog_digest())
             .transpose()?;
-        let operation_id = derive_operation_id(b"promotion", &digest, observed_at_unix);
         let mut next = guard.clone();
         let promoted = next
             .candidate
@@ -1548,15 +1683,25 @@ impl GatewayComplianceController {
         next.chain_head = Some(promoted);
         next.acknowledgements.clear();
         next.history.push(GatewayComplianceHistoryRecordV1 {
-            operation_id,
+            operation_id: binding.key_digest,
             previous_serving_digest: previous_digest,
             serving_digest: digest,
             recorded_at_unix: observed_at_unix,
             action: "promotion".into(),
             reason_code: "gateway-quorum".into(),
         });
+        append_mutation_record(
+            &mut next,
+            GatewayComplianceMutationKindV1::Promote,
+            binding,
+            digest,
+            observed_at_unix,
+        );
         self.commit(&mut guard, next)?;
-        Ok(digest)
+        Ok(GatewayComplianceMutationResultV1 {
+            catalog_digest: digest,
+            recorded_at_unix: observed_at_unix,
+        })
     }
 
     /// Roll the serving pointer back to the last-known-good catalog while
@@ -1565,21 +1710,24 @@ impl GatewayComplianceController {
         &self,
         authorization: &GatewayComplianceRollbackV1,
         observed_at_unix: u64,
-    ) -> Result<[u8; 32], GatewayComplianceError> {
+        binding: GatewayComplianceMutationBindingV1,
+    ) -> Result<GatewayComplianceMutationResultV1, GatewayComplianceError> {
+        if binding.key_digest != authorization.payload.operation_id {
+            return Err(GatewayComplianceError::IdempotencyConflict);
+        }
+        let mut guard = self.write_state()?;
+        if let Some(result) =
+            replay_mutation(&guard, GatewayComplianceMutationKindV1::Rollback, binding)?
+        {
+            return Ok(result);
+        }
+        validate_new_mutation(&guard, binding, observed_at_unix)?;
         verify_rollback(
             authorization,
             &self.config.trust_policy,
             observed_at_unix,
             self.config.max_clock_skew_secs,
         )?;
-        let mut guard = self.write_state()?;
-        if guard
-            .history
-            .iter()
-            .any(|record| record.operation_id == authorization.payload.operation_id)
-        {
-            return Err(GatewayComplianceError::Replay);
-        }
         let current = guard
             .serving
             .as_ref()
@@ -1623,8 +1771,18 @@ impl GatewayComplianceController {
             action: "rollback".into(),
             reason_code: authorization.payload.reason_code.clone(),
         });
+        append_mutation_record(
+            &mut next,
+            GatewayComplianceMutationKindV1::Rollback,
+            binding,
+            previous_digest,
+            observed_at_unix,
+        );
         self.commit(&mut guard, next)?;
-        Ok(previous_digest)
+        Ok(GatewayComplianceMutationResultV1 {
+            catalog_digest: previous_digest,
+            recorded_at_unix: observed_at_unix,
+        })
     }
 
     /// Evaluate the active catalog with mandatory precedence:
@@ -1783,10 +1941,81 @@ impl GatewayComplianceController {
     }
 }
 
+fn validate_mutation_binding(
+    binding: GatewayComplianceMutationBindingV1,
+) -> Result<(), GatewayComplianceError> {
+    if binding.key_digest.iter().all(|byte| *byte == 0)
+        || binding.request_digest.iter().all(|byte| *byte == 0)
+    {
+        return Err(GatewayComplianceError::IdempotencyConflict);
+    }
+    Ok(())
+}
+
+fn replay_mutation(
+    checkpoint: &GatewayComplianceCheckpointV1,
+    operation: GatewayComplianceMutationKindV1,
+    binding: GatewayComplianceMutationBindingV1,
+) -> Result<Option<GatewayComplianceMutationResultV1>, GatewayComplianceError> {
+    validate_mutation_binding(binding)?;
+    let Some(record) = checkpoint
+        .idempotency_records
+        .iter()
+        .find(|record| record.key_digest == binding.key_digest)
+    else {
+        return Ok(None);
+    };
+    if record.operation != operation || record.request_digest != binding.request_digest {
+        return Err(GatewayComplianceError::IdempotencyConflict);
+    }
+    Ok(Some(GatewayComplianceMutationResultV1 {
+        catalog_digest: record.catalog_digest,
+        recorded_at_unix: record.recorded_at_unix,
+    }))
+}
+
+fn validate_new_mutation(
+    checkpoint: &GatewayComplianceCheckpointV1,
+    binding: GatewayComplianceMutationBindingV1,
+    observed_at_unix: u64,
+) -> Result<(), GatewayComplianceError> {
+    validate_mutation_binding(binding)?;
+    if checkpoint.idempotency_records.len() >= MAX_GATEWAY_COMPLIANCE_IDEMPOTENCY_RECORDS_V1 {
+        return Err(GatewayComplianceError::IdempotencyRegistryFull);
+    }
+    if observed_at_unix == 0
+        || checkpoint
+            .idempotency_records
+            .last()
+            .is_some_and(|record| observed_at_unix < record.recorded_at_unix)
+    {
+        return Err(GatewayComplianceError::MutationTimeInvalid);
+    }
+    Ok(())
+}
+
+fn append_mutation_record(
+    checkpoint: &mut GatewayComplianceCheckpointV1,
+    operation: GatewayComplianceMutationKindV1,
+    binding: GatewayComplianceMutationBindingV1,
+    catalog_digest: [u8; 32],
+    recorded_at_unix: u64,
+) {
+    checkpoint
+        .idempotency_records
+        .push(GatewayComplianceIdempotencyRecordV1 {
+            key_digest: binding.key_digest,
+            request_digest: binding.request_digest,
+            operation,
+            catalog_digest,
+            recorded_at_unix,
+        });
+}
+
 /// Build a fresh governed empty catalog for Torii request tests.
 #[cfg(test)]
-pub(crate) fn allow_all_gateway_compliance_controller_for_tests(
-) -> Arc<GatewayComplianceController> {
+pub(crate) fn allow_all_gateway_compliance_controller_for_tests() -> Arc<GatewayComplianceController>
+{
     use ed25519_dalek::{Signer as _, SigningKey};
 
     let catalog_key = SigningKey::from_bytes(&[0xC1; 32]);
@@ -1853,8 +2082,16 @@ pub(crate) fn allow_all_gateway_compliance_controller_for_tests(
             .expect("test compliance controller must initialize"),
     );
     let catalog_digest = controller
-        .stage_catalog(catalog, observed_at_unix)
-        .expect("test catalog must stage");
+        .stage_catalog(
+            catalog,
+            observed_at_unix,
+            GatewayComplianceMutationBindingV1 {
+                key_digest: [0x01; 32],
+                request_digest: [0x81; 32],
+            },
+        )
+        .expect("test catalog must stage")
+        .catalog_digest;
     let acknowledgement_payload = GatewayComplianceAcknowledgementPayloadV1 {
         version: GATEWAY_COMPLIANCE_ACK_VERSION_V1,
         gateway_id: "gateway-test".into(),
@@ -1876,10 +2113,22 @@ pub(crate) fn allow_all_gateway_compliance_controller_for_tests(
                 signature: gateway_key.sign(&acknowledgement_digest).to_bytes(),
             },
             observed_at_unix,
+            GatewayComplianceMutationBindingV1 {
+                key_digest: [0x02; 32],
+                request_digest: [0x82; 32],
+            },
         )
         .expect("test acknowledgement must commit");
     controller
-        .promote(observed_at_unix)
+        .promote(
+            catalog_digest,
+            1,
+            observed_at_unix,
+            GatewayComplianceMutationBindingV1 {
+                key_digest: [0x03; 32],
+                request_digest: [0x83; 32],
+            },
+        )
         .expect("test catalog must promote");
     controller
 }
@@ -2159,7 +2408,9 @@ fn encode_base32_lower(value: &[u8]) -> String {
         bits += 8;
         while bits >= 5 {
             bits -= 5;
-            output.push(char::from(ALPHABET[usize::from((accumulator >> bits) & 0x1f)]));
+            output.push(char::from(
+                ALPHABET[usize::from((accumulator >> bits) & 0x1f)],
+            ));
             accumulator &= (1_u16 << bits).saturating_sub(1);
         }
     }
@@ -2432,6 +2683,7 @@ fn validate_checkpoint(
     }
     if checkpoint.history.len() > config.max_history_entries
         || checkpoint.acknowledgements.len() > MAX_GATEWAY_COMPLIANCE_ACKS_V1
+        || checkpoint.idempotency_records.len() > MAX_GATEWAY_COMPLIANCE_IDEMPOTENCY_RECORDS_V1
     {
         return Err(GatewayComplianceError::InvalidCheckpoint(
             "checkpoint inventory exceeds configured bounds".into(),
@@ -2603,6 +2855,93 @@ fn validate_checkpoint(
         {
             return Err(GatewayComplianceError::InvalidCheckpoint(
                 "checkpoint pointers do not match durable history lineage".into(),
+            ));
+        }
+    }
+    let mut known_catalog_digests = BTreeSet::new();
+    for catalog in [
+        checkpoint.chain_head.as_ref(),
+        checkpoint.serving.as_ref(),
+        checkpoint.previous_serving.as_ref(),
+        checkpoint.candidate.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        known_catalog_digests.insert(catalog.payload.catalog_digest()?);
+    }
+    for record in &checkpoint.history {
+        known_catalog_digests.insert(record.serving_digest);
+        if let Some(digest) = record.previous_serving_digest {
+            known_catalog_digests.insert(digest);
+        }
+    }
+
+    let mut idempotency_keys = BTreeSet::new();
+    let mut previous_idempotency_timestamp = 0;
+    for record in &checkpoint.idempotency_records {
+        if record.key_digest.iter().all(|byte| *byte == 0)
+            || record.request_digest.iter().all(|byte| *byte == 0)
+            || record.catalog_digest.iter().all(|byte| *byte == 0)
+            || !idempotency_keys.insert(record.key_digest)
+        {
+            return Err(GatewayComplianceError::InvalidCheckpoint(
+                "idempotency records contain zero digests or duplicate keys".into(),
+            ));
+        }
+        if record.recorded_at_unix == 0 || record.recorded_at_unix < previous_idempotency_timestamp
+        {
+            return Err(GatewayComplianceError::InvalidCheckpoint(
+                "idempotency record timestamps must be non-zero and monotonic".into(),
+            ));
+        }
+        if !known_catalog_digests.contains(&record.catalog_digest) {
+            return Err(GatewayComplianceError::InvalidCheckpoint(
+                "idempotency record references an unknown catalog".into(),
+            ));
+        }
+        if let Some(action) = record.operation.history_action() {
+            let Some(history) = checkpoint
+                .history
+                .iter()
+                .find(|history| history.operation_id == record.key_digest)
+            else {
+                return Err(GatewayComplianceError::InvalidCheckpoint(
+                    "terminal mutation idempotency record has no matching history".into(),
+                ));
+            };
+            if history.action != action
+                || history.serving_digest != record.catalog_digest
+                || history.recorded_at_unix != record.recorded_at_unix
+            {
+                return Err(GatewayComplianceError::InvalidCheckpoint(
+                    "terminal mutation idempotency record disagrees with history".into(),
+                ));
+            }
+        }
+        previous_idempotency_timestamp = record.recorded_at_unix;
+    }
+    for history in &checkpoint.history {
+        let expected_operation = match history.action.as_str() {
+            "promotion" => GatewayComplianceMutationKindV1::Promote,
+            "rollback" => GatewayComplianceMutationKindV1::Rollback,
+            _ => unreachable!("history actions were validated above"),
+        };
+        let Some(record) = checkpoint
+            .idempotency_records
+            .iter()
+            .find(|record| record.key_digest == history.operation_id)
+        else {
+            return Err(GatewayComplianceError::InvalidCheckpoint(
+                "history has no matching idempotency record".into(),
+            ));
+        };
+        if record.operation != expected_operation
+            || record.catalog_digest != history.serving_digest
+            || record.recorded_at_unix != history.recorded_at_unix
+        {
+            return Err(GatewayComplianceError::InvalidCheckpoint(
+                "history disagrees with its idempotency record".into(),
             ));
         }
     }
@@ -2974,15 +3313,6 @@ fn toggle_enabled(
         .is_none_or(|toggle| toggle.enabled)
 }
 
-fn derive_operation_id(action: &[u8], catalog_digest: &[u8; 32], observed_at: u64) -> [u8; 32] {
-    let mut hasher = Hasher::new();
-    hasher.update(b"sorafs-gateway-compliance-operation-v1");
-    hasher.update(action);
-    hasher.update(catalog_digest);
-    hasher.update(&observed_at.to_le_bytes());
-    *hasher.finalize().as_bytes()
-}
-
 fn hash_canonical<T: norito::NoritoSerialize>(
     domain: &[u8],
     value: &T,
@@ -3183,6 +3513,9 @@ pub enum GatewayComplianceError {
         /// Conflicting sequence.
         sequence: u64,
     },
+    /// Promotion expectation does not identify the staged catalog exactly.
+    #[error("gateway compliance promotion target mismatch")]
+    PromotionTargetMismatch,
     /// No candidate is staged.
     #[error("no gateway compliance catalog is staged")]
     NoStagedCatalog,
@@ -3204,9 +3537,15 @@ pub enum GatewayComplianceError {
     /// Rollback targets do not match serving/LKG state.
     #[error("gateway compliance rollback target mismatch")]
     RollbackTargetMismatch,
-    /// Replay-resistant operation id has already committed.
-    #[error("gateway compliance operation replay")]
-    Replay,
+    /// An idempotency key is already bound to another request or action.
+    #[error("gateway compliance idempotency binding conflict")]
+    IdempotencyConflict,
+    /// Durable replay protection is full and must be archived by an operator.
+    #[error("gateway compliance idempotency registry reached its V1 bound")]
+    IdempotencyRegistryFull,
+    /// Mutation time is zero or regresses behind the last durable operation.
+    #[error("gateway compliance mutation time is zero or regressed")]
+    MutationTimeInvalid,
     /// Durable history must be archived before additional actions.
     #[error("gateway compliance history reached its configured bound")]
     HistoryFull,
@@ -3258,7 +3597,10 @@ mod tests {
     use std::{
         collections::{BTreeSet, VecDeque},
         io::Write as _,
-        sync::Mutex,
+        sync::{
+            Mutex,
+            atomic::{AtomicBool, Ordering as TestAtomicOrdering},
+        },
     };
 
     use ed25519_dalek::{Signer as _, SigningKey};
@@ -3271,6 +3613,13 @@ mod tests {
     #[derive(Debug, Default)]
     struct MemoryStore {
         bytes: Mutex<Option<Vec<u8>>>,
+        fail_next_store: AtomicBool,
+    }
+
+    impl MemoryStore {
+        fn fail_next_store(&self) {
+            self.fail_next_store.store(true, TestAtomicOrdering::SeqCst);
+        }
     }
 
     impl GatewayComplianceStore for MemoryStore {
@@ -3282,6 +3631,11 @@ mod tests {
         }
 
         fn store(&self, bytes: &[u8]) -> Result<(), GatewayComplianceError> {
+            if self.fail_next_store.swap(false, TestAtomicOrdering::SeqCst) {
+                return Err(GatewayComplianceError::Persistence(
+                    "injected test store failure".into(),
+                ));
+            }
             *self
                 .bytes
                 .lock()
@@ -3347,6 +3701,25 @@ mod tests {
             max_feed_age_secs: 3_600,
             max_catalog_validity_secs: 7_200,
             max_history_entries: 16,
+        }
+    }
+
+    fn mutation_binding(nonce: u8) -> GatewayComplianceMutationBindingV1 {
+        assert_ne!(nonce, 0, "test idempotency key must be non-zero");
+        GatewayComplianceMutationBindingV1 {
+            key_digest: [nonce; 32],
+            request_digest: [nonce.wrapping_add(1); 32],
+        }
+    }
+
+    fn indexed_mutation_binding(index: u64) -> GatewayComplianceMutationBindingV1 {
+        let mut key_digest = [0xA1; 32];
+        key_digest[..8].copy_from_slice(&index.to_be_bytes());
+        let mut request_digest = [0xB2; 32];
+        request_digest[..8].copy_from_slice(&index.to_be_bytes());
+        GatewayComplianceMutationBindingV1 {
+            key_digest,
+            request_digest,
         }
     }
 
@@ -3479,16 +3852,40 @@ mod tests {
         controller: &GatewayComplianceController,
         catalog: GatewayComplianceCatalogV1,
     ) -> [u8; 32] {
+        let sequence = catalog.payload.sequence;
+        let offset = sequence
+            .checked_sub(1)
+            .and_then(|value| value.checked_mul(30))
+            .expect("test sequence offset");
+        let base_nonce = u8::try_from(sequence.checked_mul(8).expect("test mutation nonce"))
+            .expect("test mutation nonce fits");
         let digest = controller
-            .stage_catalog(catalog, NOW + 5)
-            .expect("stage catalog");
+            .stage_catalog(catalog, NOW + offset + 5, mutation_binding(base_nonce))
+            .expect("stage catalog")
+            .catalog_digest;
         controller
-            .acknowledge(acknowledgement(0, digest, true), NOW + 10)
+            .acknowledge(
+                acknowledgement_at(0, digest, true, NOW + offset + 10),
+                NOW + offset + 10,
+                mutation_binding(base_nonce + 1),
+            )
             .expect("first acknowledgement");
         controller
-            .acknowledge(acknowledgement(1, digest, true), NOW + 10)
+            .acknowledge(
+                acknowledgement_at(1, digest, true, NOW + offset + 10),
+                NOW + offset + 10,
+                mutation_binding(base_nonce + 2),
+            )
             .expect("second acknowledgement");
-        controller.promote(NOW + 20).expect("promote catalog")
+        controller
+            .promote(
+                digest,
+                sequence,
+                NOW + offset + 20,
+                mutation_binding(base_nonce + 3),
+            )
+            .expect("promote catalog")
+            .catalog_digest
     }
 
     #[test]
@@ -3498,19 +3895,34 @@ mod tests {
             GatewayComplianceController::new(config(), store.clone()).expect("controller");
         let first = sign_catalog(payload(1, None));
         let first_digest = controller
-            .stage_catalog(first.clone(), NOW + 5)
-            .expect("stage first");
+            .stage_catalog(first.clone(), NOW + 5, mutation_binding(1))
+            .expect("stage first")
+            .catalog_digest;
         controller
-            .acknowledge(acknowledgement(0, first_digest, true), NOW + 10)
+            .acknowledge(
+                acknowledgement(0, first_digest, true),
+                NOW + 10,
+                mutation_binding(2),
+            )
             .expect("ack");
         assert!(matches!(
-            controller.promote(NOW + 20),
+            controller.promote(first_digest, 1, NOW + 20, mutation_binding(3)),
             Err(GatewayComplianceError::GatewayQuorumNotMet { .. })
         ));
         controller
-            .acknowledge(acknowledgement(1, first_digest, true), NOW + 10)
+            .acknowledge(
+                acknowledgement(1, first_digest, true),
+                NOW + 10,
+                mutation_binding(4),
+            )
             .expect("ack");
-        assert_eq!(controller.promote(NOW + 20).expect("promote"), first_digest);
+        assert_eq!(
+            controller
+                .promote(first_digest, 1, NOW + 20, mutation_binding(5))
+                .expect("promote")
+                .catalog_digest,
+            first_digest
+        );
 
         let recovered =
             GatewayComplianceController::new(config(), store).expect("recover checkpoint");
@@ -3528,8 +3940,296 @@ mod tests {
 
         let wrong_successor = sign_catalog(payload(2, Some([0xFF; 32])));
         assert!(matches!(
-            recovered.stage_catalog(wrong_successor, NOW + 30),
+            recovered.stage_catalog(wrong_successor, NOW + 30, mutation_binding(6)),
             Err(GatewayComplianceError::InvalidPredecessor)
+        ));
+    }
+
+    #[test]
+    fn exact_mutation_replays_survive_promotion_expiry_and_restart() {
+        let store = Arc::new(MemoryStore::default());
+        let controller =
+            GatewayComplianceController::new(config(), store.clone()).expect("controller");
+        let catalog = sign_catalog(payload(1, None));
+        let stage_binding = indexed_mutation_binding(1);
+        let first_ack_binding = indexed_mutation_binding(2);
+        let second_ack_binding = indexed_mutation_binding(3);
+        let promote_binding = indexed_mutation_binding(4);
+
+        let staged = controller
+            .stage_catalog(catalog.clone(), NOW + 5, stage_binding)
+            .expect("stage");
+        let first_ack = acknowledgement(0, staged.catalog_digest, true);
+        let second_ack = acknowledgement(1, staged.catalog_digest, true);
+        let first_ack_result = controller
+            .acknowledge(first_ack.clone(), NOW + 10, first_ack_binding)
+            .expect("first acknowledgement");
+        controller
+            .acknowledge(second_ack, NOW + 10, second_ack_binding)
+            .expect("second acknowledgement");
+        let promoted = controller
+            .promote(staged.catalog_digest, 1, NOW + 20, promote_binding)
+            .expect("promote");
+        assert_eq!(
+            controller
+                .checkpoint()
+                .expect("checkpoint")
+                .idempotency_records
+                .len(),
+            4
+        );
+
+        let recovered =
+            GatewayComplianceController::new(config(), store).expect("recover checkpoint");
+        assert_eq!(
+            recovered
+                .stage_catalog(catalog, NOW + 7_200, stage_binding)
+                .expect("expired exact stage replay"),
+            staged
+        );
+        assert_eq!(
+            recovered
+                .acknowledge(first_ack, NOW + 7_200, first_ack_binding)
+                .expect("expired exact acknowledgement replay"),
+            first_ack_result
+        );
+        assert_eq!(
+            recovered
+                .promote(staged.catalog_digest, 1, NOW + 7_200, promote_binding,)
+                .expect("expired exact promotion replay"),
+            promoted
+        );
+        assert_eq!(
+            recovered
+                .checkpoint()
+                .expect("checkpoint after replays")
+                .idempotency_records
+                .len(),
+            4,
+            "exact replays must not append or evict replay records"
+        );
+    }
+
+    #[test]
+    fn new_keys_for_identical_stage_and_acknowledgement_commit_distinct_replay_records() {
+        let store = Arc::new(MemoryStore::default());
+        let controller =
+            GatewayComplianceController::new(config(), store.clone()).expect("controller");
+        let catalog = sign_catalog(payload(1, None));
+        let first = controller
+            .stage_catalog(catalog.clone(), NOW + 5, indexed_mutation_binding(1))
+            .expect("first stage");
+        let second = controller
+            .stage_catalog(catalog, NOW + 6, indexed_mutation_binding(2))
+            .expect("idempotent stage under a new key");
+        assert_eq!(first.catalog_digest, second.catalog_digest);
+
+        let acknowledgement = acknowledgement(0, first.catalog_digest, true);
+        controller
+            .acknowledge(
+                acknowledgement.clone(),
+                NOW + 10,
+                indexed_mutation_binding(3),
+            )
+            .expect("first acknowledgement");
+        controller
+            .acknowledge(acknowledgement, NOW + 11, indexed_mutation_binding(4))
+            .expect("idempotent acknowledgement under a new key");
+
+        let checkpoint = controller.checkpoint().expect("checkpoint");
+        assert_eq!(checkpoint.acknowledgements.len(), 1);
+        assert_eq!(checkpoint.idempotency_records.len(), 4);
+        let recovered =
+            GatewayComplianceController::new(config(), store).expect("recover checkpoint");
+        assert_eq!(
+            recovered
+                .checkpoint()
+                .expect("recovered checkpoint")
+                .idempotency_records
+                .len(),
+            4
+        );
+    }
+
+    #[test]
+    fn idempotency_key_substitution_and_cross_action_reuse_fail_closed() {
+        let controller =
+            GatewayComplianceController::new(config(), Arc::new(MemoryStore::default()))
+                .expect("controller");
+        let catalog = sign_catalog(payload(1, None));
+        let binding = indexed_mutation_binding(1);
+        let staged = controller
+            .stage_catalog(catalog.clone(), NOW + 5, binding)
+            .expect("stage");
+        let changed_request = GatewayComplianceMutationBindingV1 {
+            key_digest: binding.key_digest,
+            request_digest: [0xEF; 32],
+        };
+        assert!(matches!(
+            controller.stage_catalog(catalog, NOW + 6, changed_request),
+            Err(GatewayComplianceError::IdempotencyConflict)
+        ));
+        assert!(matches!(
+            controller.acknowledge(
+                acknowledgement(0, staged.catalog_digest, true),
+                NOW + 10,
+                binding,
+            ),
+            Err(GatewayComplianceError::IdempotencyConflict)
+        ));
+        assert_eq!(
+            controller
+                .checkpoint()
+                .expect("checkpoint")
+                .idempotency_records
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn promotion_expectation_failure_does_not_consume_the_operation_key() {
+        let controller =
+            GatewayComplianceController::new(config(), Arc::new(MemoryStore::default()))
+                .expect("controller");
+        let catalog = sign_catalog(payload(1, None));
+        let digest = controller
+            .stage_catalog(catalog, NOW + 5, indexed_mutation_binding(1))
+            .expect("stage")
+            .catalog_digest;
+        for gateway_index in 0..2 {
+            controller
+                .acknowledge(
+                    acknowledgement(gateway_index, digest, true),
+                    NOW + 10,
+                    indexed_mutation_binding(2 + gateway_index as u64),
+                )
+                .expect("acknowledge");
+        }
+        let promotion_binding = indexed_mutation_binding(4);
+        assert!(matches!(
+            controller.promote([0xFF; 32], 1, NOW + 20, promotion_binding),
+            Err(GatewayComplianceError::PromotionTargetMismatch)
+        ));
+        assert_eq!(
+            controller
+                .promote(digest, 1, NOW + 20, promotion_binding)
+                .expect("corrected promotion")
+                .catalog_digest,
+            digest
+        );
+    }
+
+    #[test]
+    fn persistence_failure_commits_neither_state_nor_replay_binding() {
+        let store = Arc::new(MemoryStore::default());
+        let controller =
+            GatewayComplianceController::new(config(), store.clone()).expect("controller");
+        let catalog = sign_catalog(payload(1, None));
+        let binding = indexed_mutation_binding(1);
+        store.fail_next_store();
+        assert!(matches!(
+            controller.stage_catalog(catalog.clone(), NOW + 5, binding),
+            Err(GatewayComplianceError::Persistence(_))
+        ));
+        let checkpoint = controller.checkpoint().expect("in-memory checkpoint");
+        assert!(checkpoint.candidate.is_none());
+        assert!(checkpoint.idempotency_records.is_empty());
+        assert!(store.load().expect("durable store").is_none());
+
+        assert_eq!(
+            controller
+                .stage_catalog(catalog, NOW + 5, binding)
+                .expect("retry after failed store")
+                .recorded_at_unix,
+            NOW + 5
+        );
+    }
+
+    #[test]
+    fn full_idempotency_registry_replays_known_keys_and_rejects_new_keys() {
+        let store = Arc::new(MemoryStore::default());
+        let controller =
+            GatewayComplianceController::new(config(), store.clone()).expect("controller");
+        let catalog = sign_catalog(payload(1, None));
+        let digest = controller
+            .stage_catalog(catalog.clone(), NOW + 5, indexed_mutation_binding(1))
+            .expect("stage")
+            .catalog_digest;
+        let mut checkpoint = controller.checkpoint().expect("checkpoint");
+        checkpoint.idempotency_records =
+            (1..=u64::try_from(MAX_GATEWAY_COMPLIANCE_IDEMPOTENCY_RECORDS_V1)
+                .expect("registry bound fits u64"))
+                .map(|index| {
+                    let binding = indexed_mutation_binding(index);
+                    GatewayComplianceIdempotencyRecordV1 {
+                        key_digest: binding.key_digest,
+                        request_digest: binding.request_digest,
+                        operation: GatewayComplianceMutationKindV1::Stage,
+                        catalog_digest: digest,
+                        recorded_at_unix: NOW + 5,
+                    }
+                })
+                .collect();
+        let bytes = encode_bounded(&checkpoint, MAX_GATEWAY_COMPLIANCE_CHECKPOINT_BYTES_V1)
+            .expect("encode full registry");
+        store.store(&bytes).expect("store full registry");
+
+        let recovered =
+            GatewayComplianceController::new(config(), store).expect("recover full registry");
+        assert_eq!(
+            recovered
+                .stage_catalog(catalog.clone(), NOW + 7_200, indexed_mutation_binding(1),)
+                .expect("known key replay"),
+            GatewayComplianceMutationResultV1 {
+                catalog_digest: digest,
+                recorded_at_unix: NOW + 5,
+            }
+        );
+        assert!(matches!(
+            recovered.stage_catalog(
+                catalog,
+                NOW + 6,
+                indexed_mutation_binding(
+                    u64::try_from(MAX_GATEWAY_COMPLIANCE_IDEMPOTENCY_RECORDS_V1)
+                        .expect("registry bound fits u64")
+                        + 1,
+                ),
+            ),
+            Err(GatewayComplianceError::IdempotencyRegistryFull)
+        ));
+        assert_eq!(
+            recovered
+                .checkpoint()
+                .expect("checkpoint")
+                .idempotency_records
+                .len(),
+            MAX_GATEWAY_COMPLIANCE_IDEMPOTENCY_RECORDS_V1
+        );
+    }
+
+    #[test]
+    fn checkpoint_rejects_duplicate_idempotency_keys() {
+        let store = Arc::new(MemoryStore::default());
+        let controller =
+            GatewayComplianceController::new(config(), store.clone()).expect("controller");
+        controller
+            .stage_catalog(
+                sign_catalog(payload(1, None)),
+                NOW + 5,
+                indexed_mutation_binding(1),
+            )
+            .expect("stage");
+        let mut checkpoint = controller.checkpoint().expect("checkpoint");
+        checkpoint
+            .idempotency_records
+            .push(checkpoint.idempotency_records[0].clone());
+        let bytes = encode_bounded(&checkpoint, MAX_GATEWAY_COMPLIANCE_CHECKPOINT_BYTES_V1)
+            .expect("encode poisoned checkpoint");
+        store.store(&bytes).expect("store poisoned checkpoint");
+        assert!(matches!(
+            GatewayComplianceController::new(config(), store),
+            Err(GatewayComplianceError::InvalidCheckpoint(_))
         ));
     }
 
@@ -3560,21 +4260,25 @@ mod tests {
         let mut stale = payload(1, None);
         stale.source_anchors[0].generated_at_unix = NOW - 3_601;
         assert!(matches!(
-            controller.stage_catalog(sign_catalog(stale), NOW + 5),
+            controller.stage_catalog(sign_catalog(stale), NOW + 5, mutation_binding(1)),
             Err(GatewayComplianceError::InvalidCatalog(_))
         ));
 
         let mut future = payload(1, None);
         future.source_anchors[0].generated_at_unix = NOW + 301;
         assert!(matches!(
-            controller.stage_catalog(sign_catalog(future), NOW + 5),
+            controller.stage_catalog(sign_catalog(future), NOW + 5, mutation_binding(2)),
             Err(GatewayComplianceError::InvalidCatalog(_))
         ));
 
         let mut excessive_validity = payload(1, None);
         excessive_validity.valid_until_unix = NOW + 7_201;
         assert!(matches!(
-            controller.stage_catalog(sign_catalog(excessive_validity), NOW + 5),
+            controller.stage_catalog(
+                sign_catalog(excessive_validity),
+                NOW + 5,
+                mutation_binding(3),
+            ),
             Err(GatewayComplianceError::InvalidCatalog(_))
         ));
     }
@@ -3603,18 +4307,20 @@ mod tests {
             GatewayComplianceController::new(config(), Arc::new(MemoryStore::default()))
                 .expect("controller");
         let digest = controller
-            .stage_catalog(sign_catalog(payload(1, None)), NOW + 5)
-            .expect("stage");
+            .stage_catalog(sign_catalog(payload(1, None)), NOW + 5, mutation_binding(1))
+            .expect("stage")
+            .catalog_digest;
         for gateway_index in 0..2 {
             controller
                 .acknowledge(
                     acknowledgement_at(gateway_index, digest, true, NOW + 10),
                     NOW + 10,
+                    mutation_binding(2 + gateway_index as u8),
                 )
                 .expect("acknowledge");
         }
         assert!(matches!(
-            controller.promote(NOW + 311),
+            controller.promote(digest, 1, NOW + 311, mutation_binding(4)),
             Err(GatewayComplianceError::InvalidAcknowledgement(_))
         ));
         assert!(
@@ -3627,40 +4333,33 @@ mod tests {
     }
 
     #[test]
-    fn promotion_rejects_clock_rollback_in_history() {
+    fn every_mutation_rejects_clock_rollback_before_state_change() {
         let controller =
             GatewayComplianceController::new(config(), Arc::new(MemoryStore::default()))
                 .expect("controller");
         let first_digest = controller
-            .stage_catalog(sign_catalog(payload(1, None)), NOW + 5)
-            .expect("stage first");
+            .stage_catalog(sign_catalog(payload(1, None)), NOW + 5, mutation_binding(1))
+            .expect("stage first")
+            .catalog_digest;
         for gateway_index in 0..2 {
             controller
                 .acknowledge(
                     acknowledgement_at(gateway_index, first_digest, true, NOW + 10),
                     NOW + 10,
+                    mutation_binding(2 + gateway_index as u8),
                 )
                 .expect("acknowledge first");
         }
-        controller.promote(NOW + 100).expect("promote first");
+        controller
+            .promote(first_digest, 1, NOW + 100, mutation_binding(4))
+            .expect("promote first");
 
         let mut second = payload(2, Some(first_digest));
         second.generated_at_unix = NOW + 40;
         second.valid_until_unix = NOW + 1_000;
-        let second_digest = controller
-            .stage_catalog(sign_catalog(second), NOW + 45)
-            .expect("stage second");
-        for gateway_index in 0..2 {
-            controller
-                .acknowledge(
-                    acknowledgement_at(gateway_index, second_digest, true, NOW + 50),
-                    NOW + 50,
-                )
-                .expect("acknowledge second");
-        }
         assert!(matches!(
-            controller.promote(NOW + 50),
-            Err(GatewayComplianceError::InvalidCheckpoint(_))
+            controller.stage_catalog(sign_catalog(second), NOW + 45, mutation_binding(5)),
+            Err(GatewayComplianceError::MutationTimeInvalid)
         ));
         assert_eq!(
             controller
@@ -3768,14 +4467,8 @@ mod tests {
                 observed_at_unix,
             )
             .expect("allow-all decision");
-        assert_eq!(
-            decision.source,
-            GatewayComplianceDecisionSource::NoMatch
-        );
-        assert_eq!(
-            decision.disposition,
-            GatewayComplianceDisposition::Allow
-        );
+        assert_eq!(decision.source, GatewayComplianceDecisionSource::NoMatch);
+        assert_eq!(decision.disposition, GatewayComplianceDisposition::Allow);
         assert!(decision.catalog_digest.is_some());
     }
 
@@ -3872,7 +4565,8 @@ mod tests {
     #[test]
     fn hold_then_appeal_then_baseline_precedence_is_deterministic() {
         let store = Arc::new(MemoryStore::default());
-        let controller = GatewayComplianceController::new(config(), store).expect("controller");
+        let controller =
+            GatewayComplianceController::new(config(), store.clone()).expect("controller");
         let mut candidate = payload(1, None);
         for (id, byte) in [
             ("held", 1_u8),
@@ -3965,7 +4659,8 @@ mod tests {
     #[test]
     fn threshold_rollback_changes_serving_pointer_but_preserves_chain_head() {
         let store = Arc::new(MemoryStore::default());
-        let controller = GatewayComplianceController::new(config(), store).expect("controller");
+        let controller =
+            GatewayComplianceController::new(config(), store.clone()).expect("controller");
         let first = sign_catalog(payload(1, None));
         let first_digest = promote(&controller, first);
         let second = sign_catalog(payload(2, Some(first_digest)));
@@ -3977,7 +4672,7 @@ mod tests {
             from_catalog_digest: second_digest,
             to_catalog_digest: first_digest,
             reason_code: "bad-feed".into(),
-            authorized_at_unix: NOW + 40,
+            authorized_at_unix: NOW + 55,
         };
         let digest = hash_canonical(
             ROLLBACK_SIGNING_DOMAIN_V1,
@@ -4001,10 +4696,11 @@ mod tests {
                 },
             ],
         };
-        assert_eq!(
-            controller.rollback(&rollback, NOW + 45).expect("rollback"),
-            first_digest
-        );
+        let rollback_result = controller
+            .rollback(&rollback, NOW + 55, mutation_binding(0xC1))
+            .expect("rollback");
+        assert_eq!(rollback_result.catalog_digest, first_digest);
+        assert_eq!(rollback_result.recorded_at_unix, NOW + 55);
         let checkpoint = controller.checkpoint().expect("checkpoint");
         assert_eq!(
             checkpoint
@@ -4025,9 +4721,30 @@ mod tests {
             second_digest
         );
         assert!(matches!(
-            controller.rollback(&rollback, NOW + 45),
-            Err(GatewayComplianceError::Replay)
+            controller.rollback(
+                &rollback,
+                NOW + 56,
+                GatewayComplianceMutationBindingV1 {
+                    key_digest: [0xC1; 32],
+                    request_digest: [0xFE; 32],
+                },
+            ),
+            Err(GatewayComplianceError::IdempotencyConflict)
         ));
+        assert_eq!(
+            controller
+                .rollback(&rollback, NOW + 3_599, mutation_binding(0xC1))
+                .expect("exact replay"),
+            rollback_result
+        );
+        let recovered =
+            GatewayComplianceController::new(config(), store).expect("recover rollback state");
+        assert_eq!(
+            recovered
+                .rollback(&rollback, NOW + 7_200, mutation_binding(0xC1))
+                .expect("exact rollback replay after restart"),
+            rollback_result
+        );
     }
 
     #[test]
@@ -4043,22 +4760,25 @@ mod tests {
         second.generated_at_unix = NOW + 30;
         second.valid_until_unix = NOW + 1_000;
         let second_digest = controller
-            .stage_catalog(sign_catalog(second), NOW + 35)
-            .expect("stage second");
+            .stage_catalog(sign_catalog(second), NOW + 35, mutation_binding(12))
+            .expect("stage second")
+            .catalog_digest;
         for gateway_index in 0..2 {
             controller
                 .acknowledge(
                     acknowledgement_at(gateway_index, second_digest, true, NOW + 40),
                     NOW + 40,
+                    mutation_binding(13 + gateway_index as u8),
                 )
                 .expect("acknowledge second");
         }
-        controller.promote(NOW + 50).expect("promote second");
+        controller
+            .promote(second_digest, 2, NOW + 50, mutation_binding(15))
+            .expect("promote second");
 
-        let rollback =
-            rollback_authorization([0xD1; 32], second_digest, first_digest, NOW + 120);
+        let rollback = rollback_authorization([0xD1; 32], second_digest, first_digest, NOW + 120);
         assert!(matches!(
-            controller.rollback(&rollback, NOW + 120),
+            controller.rollback(&rollback, NOW + 120, mutation_binding(0xD1)),
             Err(GatewayComplianceError::CatalogNotFresh)
         ));
     }
@@ -4072,11 +4792,28 @@ mod tests {
 
         let mut checkpoint = controller.checkpoint().expect("checkpoint");
         checkpoint.history[0].serving_digest = [0xBA; 32];
-        let encoded = encode_bounded(
-            &checkpoint,
-            MAX_GATEWAY_COMPLIANCE_CHECKPOINT_BYTES_V1,
-        )
-        .expect("encode tampered checkpoint");
+        let encoded = encode_bounded(&checkpoint, MAX_GATEWAY_COMPLIANCE_CHECKPOINT_BYTES_V1)
+            .expect("encode tampered checkpoint");
+        store.store(&encoded).expect("store tampered checkpoint");
+        assert!(matches!(
+            GatewayComplianceController::new(config(), store),
+            Err(GatewayComplianceError::InvalidCheckpoint(_))
+        ));
+    }
+
+    #[test]
+    fn checkpoint_rejects_terminal_history_without_exact_replay_record() {
+        let store = Arc::new(MemoryStore::default());
+        let controller =
+            GatewayComplianceController::new(config(), store.clone()).expect("controller");
+        promote(&controller, sign_catalog(payload(1, None)));
+
+        let mut checkpoint = controller.checkpoint().expect("checkpoint");
+        checkpoint
+            .idempotency_records
+            .retain(|record| record.operation != GatewayComplianceMutationKindV1::Promote);
+        let encoded = encode_bounded(&checkpoint, MAX_GATEWAY_COMPLIANCE_CHECKPOINT_BYTES_V1)
+            .expect("encode tampered checkpoint");
         store.store(&encoded).expect("store tampered checkpoint");
         assert!(matches!(
             GatewayComplianceController::new(config(), store),

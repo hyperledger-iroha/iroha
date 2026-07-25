@@ -182,6 +182,21 @@ evidence and cannot mark gateway compliance ready.
   `metrics` inventory, require the reviewed gateway compliance metrics
   inventory, and reject duplicate or unknown metric entries before promotion can
   report ready.
+  The reviewed inventory names the emitted
+  `torii_sorafs_gateway_compliance_requests_total`,
+  `torii_sorafs_gateway_compliance_serving_decisions_total`,
+  `torii_sorafs_gateway_compliance_failures_total`,
+  `torii_sorafs_gateway_compliance_serving_catalog_sequence`,
+  `torii_sorafs_gateway_compliance_serving_catalog_valid_until_seconds`, and
+  `torii_sorafs_gateway_compliance_ready` families. Request, decision, and
+  failure dimensions use closed label vocabularies; provider, CID, manifest,
+  rule, feed, and payload values are never labels. The
+  `dashboards/grafana/sorafs_gateway_compliance.json` dashboard and
+  `dashboards/alerts/sorafs_gateway_compliance_rules.yml` rules cover control
+  outcomes, serving decisions, bounded failure classes, serving-catalog
+  sequence skew, expiry, and fail-closed readiness. The checked-in Prometheus
+  rule tests exercise both firing and healthy cases. Legacy placeholder metric
+  names cannot satisfy promotion evidence.
   The summary exports the sorted reviewed `metrics` inventory plus
   `metric_count_values`, and the aggregate production-readiness gate requires
   those fields to match the observability artifact fingerprint before final

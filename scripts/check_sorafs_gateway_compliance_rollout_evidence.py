@@ -181,12 +181,12 @@ REQUIRED_ENFORCEMENT_ROUTES = (
     "provider",
 )
 REQUIRED_METRICS = (
-    "sorafs_gateway_policy_denials_total",
-    "sorafs_gateway_denylist_reload_total",
-    "sorafs_gateway_denylist_reload_latency_ms",
-    "sorafs_gateway_honey_audit_failures_total",
-    "sorafs_gateway_compliance_override_total",
-    "sorafs_transparency_source_entries_total",
+    "torii_sorafs_gateway_compliance_requests_total",
+    "torii_sorafs_gateway_compliance_serving_decisions_total",
+    "torii_sorafs_gateway_compliance_failures_total",
+    "torii_sorafs_gateway_compliance_serving_catalog_sequence",
+    "torii_sorafs_gateway_compliance_serving_catalog_valid_until_seconds",
+    "torii_sorafs_gateway_compliance_ready",
 )
 BUNDLE_BOUND_KINDS = (
     "controller_runtime",
