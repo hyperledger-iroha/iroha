@@ -467,7 +467,7 @@ web_login = "demo"
         assert_eq!(
             fs::read_dir(&out_dir)
                 .expect("fresh output inventory")
-                .filter_map(|entry| entry.ok())
+                .filter_map(std::result::Result::ok)
                 .count(),
             2
         );

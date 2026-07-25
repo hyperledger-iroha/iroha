@@ -13542,13 +13542,11 @@ mod tests {
                 .reattach_reply_route(route.clone())
                 .expect("fixture route must match the exact relay occurrence");
             let upstream = Arc::new(Semaphore::new(1));
-            relay
-                .retain_authenticated_source_credit(
-                    upstream
-                        .try_acquire_owned()
-                        .expect("upstream fixture source credit remains"),
-                )
-                .expect("upstream fixture source credit attaches");
+            relay.retain_authenticated_source_credit(
+                upstream
+                    .try_acquire_owned()
+                    .expect("upstream fixture source credit remains"),
+            );
             let (peer, authenticated_via, payload, _, reply_route, p2p_guard) =
                 relay.into_parts_with_reply_route();
             let iroha_core::NetworkMessage::SumeragiBlock(message) = payload else {
@@ -13802,26 +13800,22 @@ mod tests {
                     "127.0.0.1:1".parse().expect("semantic origin address"),
                     key.public_key().clone(),
                 );
-                message
-                    .retain_authenticated_source_credit(
-                        Arc::clone(&upstream)
-                            .try_acquire_owned()
-                            .expect("upstream source credit remains"),
-                    )
-                    .expect("first upstream credit attaches");
+                message.retain_authenticated_source_credit(
+                    Arc::clone(&upstream)
+                        .try_acquire_owned()
+                        .expect("upstream source credit remains"),
+                );
                 high_tx
                     .try_send(message)
                     .expect("the same high-priority lane retains A1 through A8");
             }
 
             let mut ninth = RelayWorkItem::new(via, v2_vote_msg(), 9);
-            ninth
-                .retain_authenticated_source_credit(
-                    Arc::clone(&upstream)
-                        .try_acquire_owned()
-                        .expect("the ninth upstream source credit remains"),
-                )
-                .expect("ninth upstream credit attaches");
+            ninth.retain_authenticated_source_credit(
+                Arc::clone(&upstream)
+                    .try_acquire_owned()
+                    .expect("the ninth upstream source credit remains"),
+            );
             high_tx
                 .try_send(ninth)
                 .expect("A9 remains behind A1..A8 on the same high-priority lane");
@@ -13830,13 +13824,11 @@ mod tests {
             let responsive_id = responsive.id().clone();
             let responsive_upstream = Arc::new(Semaphore::new(1));
             let mut responsive_message = RelayWorkItem::new(responsive, v2_vote_msg(), 10);
-            responsive_message
-                .retain_authenticated_source_credit(
-                    Arc::clone(&responsive_upstream)
-                        .try_acquire_owned()
-                        .expect("responsive upstream credit remains"),
-                )
-                .expect("responsive upstream credit attaches");
+            responsive_message.retain_authenticated_source_credit(
+                Arc::clone(&responsive_upstream)
+                    .try_acquire_owned()
+                    .expect("responsive upstream credit remains"),
+            );
             high_tx
                 .try_send(responsive_message)
                 .expect("B sits behind blocked A9 on the exact same priority lane");
@@ -13921,21 +13913,17 @@ mod tests {
             let safety_upstream = Arc::new(Semaphore::new(1));
             let shared_high_upstream = Arc::new(Semaphore::new(1));
             let mut safety = RelayWorkItem::new(peer.clone(), v2_vote_msg(), 1);
-            safety
-                .retain_authenticated_source_credit(
-                    Arc::clone(&safety_upstream)
-                        .try_acquire_owned()
-                        .expect("safety source credit remains"),
-                )
-                .expect("safety source credit attaches once");
+            safety.retain_authenticated_source_credit(
+                Arc::clone(&safety_upstream)
+                    .try_acquire_owned()
+                    .expect("safety source credit remains"),
+            );
             let mut shared_high = RelayWorkItem::new(peer, v2_vote_msg(), 2);
-            shared_high
-                .retain_authenticated_source_credit(
-                    Arc::clone(&shared_high_upstream)
-                        .try_acquire_owned()
-                        .expect("shared-high source credit remains"),
-                )
-                .expect("shared-high source credit attaches once");
+            shared_high.retain_authenticated_source_credit(
+                Arc::clone(&shared_high_upstream)
+                    .try_acquire_owned()
+                    .expect("shared-high source credit remains"),
+            );
 
             let (high_tx, high_rx) = mpsc::channel(2);
             high_tx
@@ -14020,8 +14008,7 @@ mod tests {
                         upstream
                             .try_acquire_owned()
                             .expect("independent upstream source credit remains"),
-                    )
-                    .expect("independent upstream source credit attaches once");
+                    );
                     high_tx
                         .try_send(work)
                         .expect("all eight exact owners fit the same high lane");
@@ -14098,13 +14085,11 @@ mod tests {
             relay
                 .reattach_reply_route(route)
                 .expect("fixture route reattaches to its exact occurrence");
-            relay
-                .retain_authenticated_source_credit(
-                    Arc::clone(&upstream)
-                        .try_acquire_owned()
-                        .expect("one upstream credit remains"),
-                )
-                .expect("upstream credit attaches once");
+            relay.retain_authenticated_source_credit(
+                Arc::clone(&upstream)
+                    .try_acquire_owned()
+                    .expect("one upstream credit remains"),
+            );
             let (peer, authenticated_via, message, size_bytes, reply_route, p2p_guard) =
                 relay.into_parts_with_reply_route();
             let source = SumeragiRelaySource {
@@ -14230,13 +14215,11 @@ mod tests {
             relay
                 .reattach_reply_route(route)
                 .expect("second fixture route reattaches");
-            relay
-                .retain_authenticated_source_credit(
-                    Arc::clone(&upstream)
-                        .try_acquire_owned()
-                        .expect("second upstream credit remains"),
-                )
-                .expect("second upstream credit attaches");
+            relay.retain_authenticated_source_credit(
+                Arc::clone(&upstream)
+                    .try_acquire_owned()
+                    .expect("second upstream credit remains"),
+            );
             let (peer, authenticated_via, message, size_bytes, reply_route, p2p_guard) =
                 relay.into_parts_with_reply_route();
             let source = SumeragiRelaySource {

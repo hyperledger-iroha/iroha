@@ -4781,13 +4781,16 @@ fn committed_proof_provenance_fragment(
         concat!(
             "\"outcome_identity_hex\":\"{outcome_identity_hex}\",",
             "\"outcome_digest_hex\":\"{outcome_digest_hex}\",",
-            "\"admission_envelope_digest_hex\":\"{}\",",
+            "\"admission_envelope_digest_hex\":\"{admission_envelope_digest_hex}\",",
             "\"finalized_block_height\":17,",
-            "\"finalized_block_hash_hex\":\"{}\",",
+            "\"finalized_block_hash_hex\":\"{finalized_block_hash_hex}\",",
             "\"committed_at_ms\":{committed_at_ms}"
         ),
-        "ad".repeat(32),
-        "fe".repeat(32),
+        outcome_identity_hex = outcome_identity_hex,
+        outcome_digest_hex = outcome_digest_hex,
+        admission_envelope_digest_hex = "ad".repeat(32),
+        finalized_block_hash_hex = "fe".repeat(32),
+        committed_at_ms = committed_at_ms,
     )
 }
 

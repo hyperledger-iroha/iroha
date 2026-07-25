@@ -430,6 +430,10 @@ fn assert_exact_finalized_block_fixture(fixture: &SccpFinalizedBlockTestFixtureV
         .expect("exact SCCP fixture finality is cryptographically valid");
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "the canonical fixture matrix keeps entrypoint, result, body-root, and exact SCCP ordering assertions together"
+)]
 fn assert_exact_fixture_block_body(block: &SignedBlock) {
     assert!(
         block.has_results(),

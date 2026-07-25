@@ -2703,6 +2703,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one repair-ledger vector binds deterministic identity, canonical roundtrip, cursor, and mutation invariants"
+    )]
     fn repair_identity_and_ledger_roundtrip_are_stable() {
         let source_identity = [0xA5; 32];
         let task_id = sorafs_repair_task_id_v1(source_identity);

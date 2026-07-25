@@ -1132,7 +1132,11 @@ fn native_amx_soak_transaction(
         bank_dataspace,
         &submitter.account,
     )?);
-    Ok(submitter.build_transaction(instructions, Metadata::default()))
+    Ok(submitter.build_transaction(
+        instructions,
+        FeePaymentIntent::authority(Vec::new(), None),
+        Metadata::default(),
+    ))
 }
 
 fn ensure_entrypoint_committed_once(

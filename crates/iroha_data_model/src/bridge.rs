@@ -1290,7 +1290,7 @@ mod tests {
     fn attestation_for_fixture(fixture: &V2Fixture) -> BridgeFinalityAttestationV1 {
         use crate::block::consensus_v2::{
             SumeragiV2BodyState, SumeragiV2CommitQcStatus, SumeragiV2HeightContextStatus,
-            SumeragiV2Status, SumeragiV2StatusPhase,
+            SumeragiV2LivenessStatus, SumeragiV2Status, SumeragiV2StatusPhase,
         };
 
         let artifact = &fixture.proof.finality_artifact;
@@ -1338,7 +1338,7 @@ mod tests {
                 signed_power,
                 total_power: context.quorum.total_power,
             }),
-            liveness: Default::default(),
+            liveness: SumeragiV2LivenessStatus::default(),
         };
         let body = BridgeFinalityAttestationBodyV1 {
             version: BRIDGE_FINALITY_ATTESTATION_VERSION_V1,

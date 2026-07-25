@@ -1294,6 +1294,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one adversarial legacy-layout matrix proves every optional multilane field requires an explicit Option discriminant"
+    )]
     fn multilane_optional_fields_require_explicit_option_discriminants() {
         #[derive(Encode)]
         struct LegacyLaneDrainIntentV1 {

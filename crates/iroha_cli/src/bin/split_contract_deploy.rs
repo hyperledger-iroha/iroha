@@ -84,23 +84,9 @@ fn sign_transaction(
     .wrap_err("failed to sign split contract deploy transaction")
 }
 
-fn fee_payment_selection_matches(requested: &FeePaymentIntent, quoted: &FeePaymentIntent) -> bool {
-    match (requested, quoted) {
-        (FeePaymentIntent::Authority(requested), FeePaymentIntent::Authority(quoted)) => {
-            requested.gas_limit == quoted.gas_limit
-        }
-        (FeePaymentIntent::Sponsor(requested), FeePaymentIntent::Sponsor(quoted)) => {
-            requested.program_id == quoted.program_id
-                && requested.program_revision == quoted.program_revision
-                && requested.gas_limit == quoted.gas_limit
-        }
-        _ => false,
-    }
-}
-
 fn quote_and_resign_transaction(
     client: &Client,
-    draft: SignedTransaction,
+    draft: &SignedTransaction,
     fee_payment: &FeePaymentIntent,
     private_key: &PrivateKey,
 ) -> Result<(SignedTransaction, FeeQuoteResponse)> {
@@ -109,7 +95,7 @@ fn quote_and_resign_transaction(
     let quote = client
         .quote_fees(&payload)
         .wrap_err("failed to quote exact split-deploy transaction fees")?;
-    if !fee_payment_selection_matches(fee_payment, &quote.intent) {
+    if !fee_payment.has_same_payer_and_gas_bound(&quote.intent) {
         return Err(eyre!(
             "fee quote changed the selected payer, sponsor revision, or gas bound"
         ));
@@ -132,18 +118,18 @@ fn quote_native_upload_plan(
     fee_payment: &FeePaymentIntent,
     private_key: &PrivateKey,
 ) -> Result<(NativeUploadPlan, Vec<FeeQuoteResponse>)> {
-    let mut quotes = Vec::with_capacity(plan.pre_stage.len() + 1);
+    let mut fee_quotes = Vec::with_capacity(plan.pre_stage.len() + 1);
     for (_, _, transaction) in &mut plan.pre_stage {
-        let (quoted, quote) =
-            quote_and_resign_transaction(client, transaction.clone(), fee_payment, private_key)?;
-        *transaction = quoted;
-        quotes.push(quote);
+        let (quoted_transaction, quote) =
+            quote_and_resign_transaction(client, transaction, fee_payment, private_key)?;
+        *transaction = quoted_transaction;
+        fee_quotes.push(quote);
     }
-    let (quoted, quote) =
-        quote_and_resign_transaction(client, plan.finalize.2, fee_payment, private_key)?;
-    plan.finalize.2 = quoted;
-    quotes.push(quote);
-    Ok((plan, quotes))
+    let (quoted_transaction, quote) =
+        quote_and_resign_transaction(client, &plan.finalize.2, fee_payment, private_key)?;
+    plan.finalize.2 = quoted_transaction;
+    fee_quotes.push(quote);
+    Ok((plan, fee_quotes))
 }
 
 fn write_tx(out_dir: &Path, stem: &str, tx: &SignedTransaction) -> Result<(PathBuf, usize)> {
@@ -440,7 +426,7 @@ fn main() -> Result<()> {
         [InstructionBox::from(RegisterSmartContractCode { manifest })],
     )?;
     let (register_manifest_tx, register_manifest_quote) =
-        quote_and_resign_transaction(&client, register_manifest_tx, &fee_payment, &private_key)?;
+        quote_and_resign_transaction(&client, &register_manifest_tx, &fee_payment, &private_key)?;
     fee_quotes.push(register_manifest_quote);
     let commit_tx = build_commit_transaction(
         &client.chain,
@@ -455,7 +441,7 @@ fn main() -> Result<()> {
         expected_previous_contract_address.clone(),
     )?;
     let (commit_tx, commit_quote) =
-        quote_and_resign_transaction(&client, commit_tx, &fee_payment, &private_key)?;
+        quote_and_resign_transaction(&client, &commit_tx, &fee_payment, &private_key)?;
     fee_quotes.push(commit_quote);
 
     let register_manifest_hash = register_manifest_tx.hash();

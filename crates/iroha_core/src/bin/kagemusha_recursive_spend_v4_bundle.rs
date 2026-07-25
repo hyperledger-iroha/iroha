@@ -281,6 +281,14 @@ struct FileSnapshot {
     changed_nanoseconds: i64,
 }
 
+#[cfg(unix)]
+fn checked_stat_value<T, U>(value: T) -> Option<U>
+where
+    U: TryFrom<T>,
+{
+    U::try_from(value).ok()
+}
+
 impl FileSnapshot {
     fn from_metadata(metadata: &fs::Metadata) -> Self {
         #[cfg(unix)]
@@ -314,15 +322,15 @@ impl FileSnapshot {
         use rustix::fs::FileType as RustixFileType;
 
         (RustixFileType::from_raw_mode(value.st_mode) == RustixFileType::RegularFile
-            && u64::try_from(value.st_nlink).ok()? == 1)
+            && checked_stat_value::<_, u64>(value.st_nlink)? == 1)
             .then_some(Self {
-                device: u64::try_from(value.st_dev).ok()?,
-                inode: u64::try_from(value.st_ino).ok()?,
-                length: u64::try_from(value.st_size).ok()?,
-                modified_seconds: i64::try_from(value.st_mtime).ok()?,
-                modified_nanoseconds: i64::try_from(value.st_mtime_nsec).ok()?,
-                changed_seconds: i64::try_from(value.st_ctime).ok()?,
-                changed_nanoseconds: i64::try_from(value.st_ctime_nsec).ok()?,
+                device: checked_stat_value(value.st_dev)?,
+                inode: checked_stat_value(value.st_ino)?,
+                length: checked_stat_value(value.st_size)?,
+                modified_seconds: checked_stat_value(value.st_mtime)?,
+                modified_nanoseconds: checked_stat_value(value.st_mtime_nsec)?,
+                changed_seconds: checked_stat_value(value.st_ctime)?,
+                changed_nanoseconds: checked_stat_value(value.st_ctime_nsec)?,
             })
     }
 }
@@ -447,6 +455,13 @@ struct PreparedArtifact {
 struct GeneratedArtifact {
     spec: InputSpec,
     payload: GeneratedPayload,
+}
+
+struct PreparedBundle {
+    metadata: BundleMetadata,
+    generated_artifacts: Vec<GeneratedArtifact>,
+    vesta_proving_key_size_bytes: u64,
+    pallas_proving_key_size_bytes: u64,
 }
 
 enum GeneratedPayload {
@@ -841,7 +856,7 @@ fn hash_open_file(
 ) -> Result<[u8; 32], Box<dyn Error>> {
     let mut hasher = Sha256::new();
     let mut total = 0_u64;
-    let mut buffer = [0_u8; 64 * 1024];
+    let mut buffer = vec![0_u8; 64 * 1024];
     loop {
         let read = file.read(&mut buffer)?;
         if read == 0 {
@@ -877,15 +892,19 @@ fn decode_canonical_circuit_params(
     Ok(params)
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "generation, calibration, and artifact extraction form one ordered fail-closed capability-consuming flow"
+)]
 fn prepare_bundle_metadata(
     options: &BTreeMap<String, String>,
     source_identity: &FullSourceTreeIdentityV1,
-    step_eq_params_input: &mut OpenedInput,
-    step_ep_params_input: &mut OpenedInput,
+    vesta_params_input: &mut OpenedInput,
+    pallas_params_input: &mut OpenedInput,
     supervisor_permit: KagemushaGenerationSupervisorPermitV4,
-    step_eq_proving_key_sink: &mut (dyn Write + Send),
-    step_ep_proving_key_sink: &mut (dyn Write + Send),
-) -> Result<(BundleMetadata, Vec<GeneratedArtifact>, [u64; 2]), Box<dyn Error>> {
+    vesta_proving_key_output: &mut (dyn Write + Send),
+    pallas_proving_key_output: &mut (dyn Write + Send),
+) -> Result<PreparedBundle, Box<dyn Error>> {
     let chain_id: ChainId = required(options, "chain-id").parse()?;
     if chain_id.as_str().is_empty()
         || chain_id.as_str().len() > 128
@@ -936,65 +955,70 @@ fn prepare_bundle_metadata(
         return Err("release heights must define a non-empty, nonzero activation window".into());
     }
 
-    let requested_step_eq_params =
-        decode_canonical_circuit_params(step_eq_params_input, "--step-eq-circuit-params")?;
-    let requested_step_ep_params =
-        decode_canonical_circuit_params(step_ep_params_input, "--step-ep-circuit-params")?;
+    let requested_vesta_params =
+        decode_canonical_circuit_params(vesta_params_input, "--step-eq-circuit-params")?;
+    let requested_pallas_params =
+        decode_canonical_circuit_params(pallas_params_input, "--step-ep-circuit-params")?;
     let generated = generate_kagemusha_pasta_cycle_artifacts_v4(
-        requested_step_eq_params,
-        requested_step_ep_params,
+        requested_vesta_params,
+        requested_pallas_params,
         supervisor_permit,
-        step_eq_proving_key_sink,
-        step_ep_proving_key_sink,
+        vesta_proving_key_output,
+        pallas_proving_key_output,
     )
     .map_err(|error| format!("current-source Kagemusha V4 generation failed: {error}"))?;
-    let step_eq = generated.step_eq;
-    let step_ep = generated.step_ep;
+    let vesta_generated = generated.step_eq;
+    let pallas_generated = generated.step_ep;
     let measured_proof_pair = generated.measured_live_pair_bytes;
 
-    let eq_layout = step_eq
+    let vesta_layout = vesta_generated
         .circuit_params
         .validate()
         .map_err(|error| format!("generated Eq CircuitParamsV4 validation failed: {error}"))?;
-    let ep_layout = step_ep
+    let pallas_layout = pallas_generated
         .circuit_params
         .validate()
         .map_err(|error| format!("generated Ep CircuitParamsV4 validation failed: {error}"))?;
-    if step_eq.circuit_params.k != step_ep.circuit_params.k || eq_layout != ep_layout {
+    if vesta_generated.circuit_params.k != pallas_generated.circuit_params.k
+        || vesta_layout != pallas_layout
+    {
         return Err("generated Eq/Ep profiles select different IPA/public layouts".into());
     }
-    if step_eq.compiled_protocol_structure_sha256 == [0; 32]
-        || step_ep.compiled_protocol_structure_sha256 == [0; 32]
-        || step_eq.compiled_protocol_structure_sha256 == step_ep.compiled_protocol_structure_sha256
-        || step_eq.step_proof_size_bytes != step_eq.circuit_params.max_parent_proof_bytes
-        || step_ep.step_proof_size_bytes != step_ep.circuit_params.max_parent_proof_bytes
+    if vesta_generated.compiled_protocol_structure_sha256 == [0; 32]
+        || pallas_generated.compiled_protocol_structure_sha256 == [0; 32]
+        || vesta_generated.compiled_protocol_structure_sha256
+            == pallas_generated.compiled_protocol_structure_sha256
+        || vesta_generated.step_proof_size_bytes
+            != vesta_generated.circuit_params.max_parent_proof_bytes
+        || pallas_generated.step_proof_size_bytes
+            != pallas_generated.circuit_params.max_parent_proof_bytes
     {
         return Err("generated V4 profile calibration metadata is inconsistent".into());
     }
 
-    let measured_eq = validate_kagemusha_step_bootstrap_payload_v4(
-        &step_eq.bootstrap_witness,
-        &step_eq.circuit_params,
+    let vesta_bootstrap_bytes = validate_kagemusha_step_bootstrap_payload_v4(
+        &vesta_generated.bootstrap_witness,
+        &vesta_generated.circuit_params,
         KagemushaPastaCycleParityV1::StepEq,
-        step_eq.compiled_protocol_structure_sha256,
+        vesta_generated.compiled_protocol_structure_sha256,
     )?;
-    let measured_ep = validate_kagemusha_step_bootstrap_payload_v4(
-        &step_ep.bootstrap_witness,
-        &step_ep.circuit_params,
+    let pallas_bootstrap_bytes = validate_kagemusha_step_bootstrap_payload_v4(
+        &pallas_generated.bootstrap_witness,
+        &pallas_generated.circuit_params,
         KagemushaPastaCycleParityV1::StepEp,
-        step_ep.compiled_protocol_structure_sha256,
+        pallas_generated.compiled_protocol_structure_sha256,
     )?;
-    if u32::try_from(measured_eq) != Ok(step_eq.step_proof_size_bytes)
-        || u32::try_from(measured_ep) != Ok(step_ep.step_proof_size_bytes)
+    if u32::try_from(vesta_bootstrap_bytes) != Ok(vesta_generated.step_proof_size_bytes)
+        || u32::try_from(pallas_bootstrap_bytes) != Ok(pallas_generated.step_proof_size_bytes)
     {
         return Err("generated bootstrap measurements differ from calibrated Step sizes".into());
     }
 
     let max_proof_bytes = u32::try_from(measured_proof_pair.len())
         .map_err(|_| "measured V4 proof pair length does not fit u32")?;
-    let measured_steps = step_eq
+    let measured_steps = vesta_generated
         .step_proof_size_bytes
-        .checked_add(step_ep.step_proof_size_bytes)
+        .checked_add(pallas_generated.step_proof_size_bytes)
         .ok_or("generated V4 Step-size sum overflow")?;
     if max_proof_bytes <= measured_steps
         || max_proof_bytes > KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4
@@ -1003,8 +1027,8 @@ fn prepare_bundle_metadata(
     }
     let measured = validate_kagemusha_proof_pair_measurement_v4(
         &measured_proof_pair,
-        &step_eq.circuit_params,
-        &step_ep.circuit_params,
+        &vesta_generated.circuit_params,
+        &pallas_generated.circuit_params,
         max_proof_bytes,
     )?;
     if measured != measured_proof_pair.len() {
@@ -1014,32 +1038,28 @@ fn prepare_bundle_metadata(
     let generated_artifacts = vec![
         GeneratedArtifact {
             spec: INPUTS[0],
-            payload: GeneratedPayload::Memory(step_eq.parameters),
+            payload: GeneratedPayload::Memory(vesta_generated.parameters),
         },
         GeneratedArtifact {
             spec: INPUTS[2],
-            payload: GeneratedPayload::Memory(step_eq.verifying_key),
+            payload: GeneratedPayload::Memory(vesta_generated.verifying_key),
         },
         GeneratedArtifact {
             spec: INPUTS[3],
-            payload: GeneratedPayload::Memory(step_eq.bootstrap_witness),
+            payload: GeneratedPayload::Memory(vesta_generated.bootstrap_witness),
         },
         GeneratedArtifact {
             spec: INPUTS[4],
-            payload: GeneratedPayload::Memory(step_ep.parameters),
+            payload: GeneratedPayload::Memory(pallas_generated.parameters),
         },
         GeneratedArtifact {
             spec: INPUTS[6],
-            payload: GeneratedPayload::Memory(step_ep.verifying_key),
+            payload: GeneratedPayload::Memory(pallas_generated.verifying_key),
         },
         GeneratedArtifact {
             spec: INPUTS[7],
-            payload: GeneratedPayload::Memory(step_ep.bootstrap_witness),
+            payload: GeneratedPayload::Memory(pallas_generated.bootstrap_witness),
         },
-    ];
-    let proving_key_sizes = [
-        step_eq.proving_key_size_bytes,
-        step_ep.proving_key_size_bytes,
     ];
     let metadata =
         BundleMetadata {
@@ -1060,26 +1080,33 @@ fn prepare_bundle_metadata(
                 ProfileMetadata {
                     parity: KagemushaPastaCycleParityV1::StepEq,
                     circuit_id: KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4,
-                    circuit_params_sha256: step_eq.circuit_params.sha256().map_err(|error| {
-                        format!("failed to identify Eq CircuitParamsV4: {error}")
-                    })?,
-                    circuit_params: step_eq.circuit_params,
-                    compiled_protocol_structure_sha256: step_eq.compiled_protocol_structure_sha256,
-                    step_proof_size_bytes: step_eq.step_proof_size_bytes,
+                    circuit_params_sha256: vesta_generated.circuit_params.sha256().map_err(
+                        |error| format!("failed to identify Eq CircuitParamsV4: {error}"),
+                    )?,
+                    circuit_params: vesta_generated.circuit_params,
+                    compiled_protocol_structure_sha256: vesta_generated
+                        .compiled_protocol_structure_sha256,
+                    step_proof_size_bytes: vesta_generated.step_proof_size_bytes,
                 },
                 ProfileMetadata {
                     parity: KagemushaPastaCycleParityV1::StepEp,
                     circuit_id: KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
-                    circuit_params_sha256: step_ep.circuit_params.sha256().map_err(|error| {
-                        format!("failed to identify Ep CircuitParamsV4: {error}")
-                    })?,
-                    circuit_params: step_ep.circuit_params,
-                    compiled_protocol_structure_sha256: step_ep.compiled_protocol_structure_sha256,
-                    step_proof_size_bytes: step_ep.step_proof_size_bytes,
+                    circuit_params_sha256: pallas_generated.circuit_params.sha256().map_err(
+                        |error| format!("failed to identify Ep CircuitParamsV4: {error}"),
+                    )?,
+                    circuit_params: pallas_generated.circuit_params,
+                    compiled_protocol_structure_sha256: pallas_generated
+                        .compiled_protocol_structure_sha256,
+                    step_proof_size_bytes: pallas_generated.step_proof_size_bytes,
                 },
             ],
         };
-    Ok((metadata, generated_artifacts, proving_key_sizes))
+    Ok(PreparedBundle {
+        metadata,
+        generated_artifacts,
+        vesta_proving_key_size_bytes: vesta_generated.proving_key_size_bytes,
+        pallas_proving_key_size_bytes: pallas_generated.proving_key_size_bytes,
+    })
 }
 
 fn validate_generated_artifacts(artifacts: &[GeneratedArtifact]) -> Result<(), Box<dyn Error>> {
@@ -1114,6 +1141,46 @@ fn profile_for(metadata: &BundleMetadata, parity: KagemushaPastaCycleParityV1) -
         KagemushaPastaCycleParityV1::StepEq => &metadata.profiles[0],
         KagemushaPastaCycleParityV1::StepEp => &metadata.profiles[1],
     }
+}
+
+fn framed_schema_matches_release(framed_schema: &str, release_schema: &str) -> bool {
+    framed_schema == release_schema
+}
+
+fn framed_generations_match_release_and_profile(
+    framed_release: &str,
+    release_id: &str,
+    framed_parameters: &str,
+    profile_parameters: &str,
+) -> bool {
+    framed_release == release_id && framed_parameters == profile_parameters
+}
+
+fn roster_generation_matches_release(archive_generation: &str, release_id: &str) -> bool {
+    archive_generation == release_id
+}
+
+fn roster_generation_binding_is_exact(
+    archive_generation: &str,
+    descriptor_generation: &str,
+    release_id: &str,
+) -> bool {
+    roster_generation_matches_release(archive_generation, release_id)
+        && descriptor_generation == release_id
+        && archive_generation == descriptor_generation
+}
+
+fn descriptor_matches_framed_artifact(
+    descriptor: &KagemushaPastaCycleArtifactV4,
+    header: &KagemushaPastaCycleFramedArtifactHeaderV4,
+    expected: InputSpec,
+    expected_size: u64,
+) -> bool {
+    descriptor.kind == header.kind
+        && descriptor.file_name == expected.file_name
+        && descriptor.size_bytes == expected_size
+        && descriptor.payload_size_bytes == header.payload_size_bytes
+        && descriptor.payload_sha256 == header.payload_sha256
 }
 
 fn validate_header_v4(
@@ -1217,18 +1284,18 @@ fn validate_header_against_candidate_v4(
     if encoded_header_len == 0
         || encoded_header_len > KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_HEADER_MAX_BYTES_V4
         || expected_size > KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V4
-        || header.manifest_schema != manifest.schema
+        || !framed_schema_matches_release(&header.manifest_schema, &manifest.schema)
         || header.bridge_abi_version != manifest.bridge_abi_version
         || header.proof_backend != manifest.proof_backend
         || header.transcript_profile != manifest.transcript_profile
-        || header.generation != manifest.generation
-        || header.parameter_generation != profile.parameter_generation
+        || !framed_generations_match_release_and_profile(
+            &header.generation,
+            &manifest.generation,
+            &header.parameter_generation,
+            &profile.parameter_generation,
+        )
         || header.ipa_k != profile.ipa_k
-        || descriptor.kind != header.kind
-        || descriptor.file_name != expected_spec.file_name
-        || descriptor.size_bytes != expected_size
-        || descriptor.payload_size_bytes != header.payload_size_bytes
-        || descriptor.payload_sha256 != header.payload_sha256
+        || !descriptor_matches_framed_artifact(descriptor, header, *expected_spec, expected_size)
         || profile
             .artifacts
             .iter()
@@ -1467,9 +1534,23 @@ fn validate_embedded_candidate_source(
     Ok(())
 }
 
+#[cfg_attr(
+    any(target_os = "linux", target_os = "android", target_os = "macos"),
+    expect(
+        clippy::too_many_lines,
+        reason = "candidate generation is one ordered capability-consuming and atomically staged publication flow"
+    )
+)]
+#[cfg_attr(
+    not(any(target_os = "linux", target_os = "android", target_os = "macos")),
+    expect(
+        unused_variables,
+        reason = "unsupported targets reject before the one-shot generation permit can be consumed"
+    )
+)]
 fn build_candidate(
     options: &BTreeMap<String, String>,
-    _supervisor_permit: KagemushaGenerationSupervisorPermitV4,
+    supervisor_permit: KagemushaGenerationSupervisorPermitV4,
 ) -> Result<(), Box<dyn Error>> {
     #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos")))]
     return Err(
@@ -1510,39 +1591,45 @@ fn build_candidate(
             trusted_parent.path.join(staging_name),
             std::ffi::OsStr::new(staging_name),
         )?;
-        let mut step_eq_proving_key_sink =
+        let mut vesta_proving_key_output =
             BoundedDigestFileWriter::new(&publication, ".step-eq-proving-key.part")?;
-        let mut step_ep_proving_key_sink =
+        let mut pallas_proving_key_output =
             BoundedDigestFileWriter::new(&publication, ".step-ep-proving-key.part")?;
-        let mut step_eq_params_input = open_input(
+        let mut vesta_params_input = open_input(
             Path::new(required(options, "step-eq-circuit-params")),
             1024 * 1024,
             "Eq inline circuit parameters",
         )?;
-        let mut step_ep_params_input = open_input(
+        let mut pallas_params_input = open_input(
             Path::new(required(options, "step-ep-circuit-params")),
             1024 * 1024,
             "Ep inline circuit parameters",
         )?;
-        let (metadata, mut generated_artifacts, proving_key_sizes) = prepare_bundle_metadata(
+        let PreparedBundle {
+            metadata,
+            mut generated_artifacts,
+            vesta_proving_key_size_bytes,
+            pallas_proving_key_size_bytes,
+        } = prepare_bundle_metadata(
             options,
             &source_identity,
-            &mut step_eq_params_input,
-            &mut step_ep_params_input,
-            _supervisor_permit,
-            &mut step_eq_proving_key_sink,
-            &mut step_ep_proving_key_sink,
+            &mut vesta_params_input,
+            &mut pallas_params_input,
+            supervisor_permit,
+            &mut vesta_proving_key_output,
+            &mut pallas_proving_key_output,
         )?;
         generated_artifacts.push(GeneratedArtifact {
             spec: INPUTS[1],
             payload: GeneratedPayload::Staged(
-                step_eq_proving_key_sink.finish(proving_key_sizes[0], "Eq proving key")?,
+                vesta_proving_key_output.finish(vesta_proving_key_size_bytes, "Eq proving key")?,
             ),
         });
         generated_artifacts.push(GeneratedArtifact {
             spec: INPUTS[5],
             payload: GeneratedPayload::Staged(
-                step_ep_proving_key_sink.finish(proving_key_sizes[1], "Ep proving key")?,
+                pallas_proving_key_output
+                    .finish(pallas_proving_key_size_bytes, "Ep proving key")?,
             ),
         });
         generated_artifacts.sort_by_key(|artifact| {
@@ -1563,8 +1650,8 @@ fn build_candidate(
             "top-up finality roster",
         )?;
         #[cfg(unix)]
-        if roster_input.snapshot.identity() == step_eq_params_input.snapshot.identity()
-            || roster_input.snapshot.identity() == step_ep_params_input.snapshot.identity()
+        if roster_input.snapshot.identity() == vesta_params_input.snapshot.identity()
+            || roster_input.snapshot.identity() == pallas_params_input.snapshot.identity()
         {
             return Err("top-up finality roster aliases an inline circuit-parameter input".into());
         }
@@ -1672,6 +1759,10 @@ fn open_and_match_candidate_file(
     Ok(())
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "the staged-candidate audit must retain one ordered inode, digest, schema, artifact, roster, and source revalidation flow"
+)]
 fn verify_staged_candidate_for_publication(
     candidate: &PublicationDirectory,
     expected_commit: &str,
@@ -1785,7 +1876,11 @@ fn verify_staged_candidate_for_publication(
         .validate()
         .map_err(|error| format!("invalid staged V4 top-up finality roster: {error}"))?;
     if roster.chain_id != manifest.chain_id
-        || roster.artifact_generation != manifest.generation
+        || !roster_generation_binding_is_exact(
+            &roster.artifact_generation,
+            &roster_descriptor.artifact_generation,
+            &manifest.generation,
+        )
         || roster_descriptor.file_name != KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V4
     {
         return Err("staged V4 top-up finality roster is not manifest-bound".into());
@@ -1821,12 +1916,21 @@ fn verify_staged_candidate_for_publication(
     Ok(())
 }
 
+#[cfg_attr(
+    any(target_os = "linux", target_os = "android", target_os = "macos"),
+    expect(
+        clippy::too_many_lines,
+        reason = "candidate validation and its atomically published evidence report form one ordered fail-closed audit"
+    )
+)]
 fn validate_candidate(options: &BTreeMap<String, String>) -> Result<(), Box<dyn Error>> {
     #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos")))]
     return Err("Kagemusha V4 candidate validation requires Linux, Android, or macOS".into());
 
     #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
     {
+        use std::os::unix::fs::PermissionsExt as _;
+
         let candidate =
             PublicationDirectory::open_existing(PathBuf::from(required(options, "candidate-dir")))?;
         candidate.verify_candidate_inventory()?;
@@ -1948,7 +2052,11 @@ fn validate_candidate(options: &BTreeMap<String, String>) -> Result<(), Box<dyn 
             .validate()
             .map_err(|error| format!("invalid V4 candidate top-up finality roster: {error}"))?;
         if roster.chain_id != manifest.chain_id
-            || roster.artifact_generation != manifest.generation
+            || !roster_generation_binding_is_exact(
+                &roster.artifact_generation,
+                &roster_descriptor.artifact_generation,
+                &manifest.generation,
+            )
             || roster_descriptor.file_name != KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V4
         {
             return Err("V4 candidate top-up finality roster is not manifest-bound".into());
@@ -2016,13 +2124,12 @@ fn validate_candidate(options: &BTreeMap<String, String>) -> Result<(), Box<dyn 
             out_dir
                 .parent()
                 .filter(|path| !path.as_os_str().is_empty())
-                .unwrap_or(Path::new(".")),
+                .unwrap_or_else(|| Path::new(".")),
         )?;
         if output_parent.starts_with(&repository_root) {
             return Err("candidate validation output must be outside the source repository".into());
         }
         let trusted_parent = TrustedOutputParent::open(&out_dir)?;
-        use std::os::unix::fs::PermissionsExt as _;
         let mut staging_builder = tempfile::Builder::new();
         staging_builder
             .prefix(".kagemusha-v4-validation-staging-")
@@ -2074,6 +2181,13 @@ fn validate_candidate(options: &BTreeMap<String, String>) -> Result<(), Box<dyn 
     }
 }
 
+#[cfg_attr(
+    any(target_os = "linux", target_os = "android", target_os = "macos"),
+    expect(
+        clippy::too_many_lines,
+        reason = "release authentication, byte-for-byte copying, revalidation, and atomic publication form one ordered security ceremony"
+    )
+)]
 fn finalize_release(options: &BTreeMap<String, String>) -> Result<(), Box<dyn Error>> {
     #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos")))]
     return Err(
@@ -2083,6 +2197,8 @@ fn finalize_release(options: &BTreeMap<String, String>) -> Result<(), Box<dyn Er
 
     #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
     {
+        use std::os::unix::fs::PermissionsExt as _;
+
         let candidate =
             PublicationDirectory::open_existing(PathBuf::from(required(options, "candidate-dir")))?;
         candidate.verify_candidate_inventory()?;
@@ -2270,7 +2386,6 @@ fn finalize_release(options: &BTreeMap<String, String>) -> Result<(), Box<dyn Er
             return Err(format!("output directory already exists: {}", out_dir.display()).into());
         }
         let trusted_parent = TrustedOutputParent::open(&out_dir)?;
-        use std::os::unix::fs::PermissionsExt as _;
 
         let mut staging_builder = tempfile::Builder::new();
         staging_builder
@@ -2504,7 +2619,9 @@ fn prepare_topup_finality_roster(
     roster
         .validate()
         .map_err(|error| format!("invalid top-up finality roster: {error}"))?;
-    if roster.chain_id != metadata.chain_id || roster.artifact_generation != metadata.generation {
+    if roster.chain_id != metadata.chain_id
+        || !roster_generation_matches_release(&roster.artifact_generation, &metadata.generation)
+    {
         return Err("top-up finality roster chain or generation mismatch".into());
     }
     let mut covered_until = metadata.activation_height;
@@ -2542,6 +2659,10 @@ fn prepare_topup_finality_roster(
     Ok((bytes, descriptor))
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "candidate framing, manifest construction, and pre-publication verification are one ordered security boundary"
+)]
 fn write_candidate(
     publication: &PublicationDirectory,
     metadata: BundleMetadata,
@@ -2549,14 +2670,18 @@ fn write_candidate(
     roster_bytes: &[u8],
     roster_descriptor: KagemushaTopUpFinalityRosterArtifactReferenceV4,
 ) -> Result<(), Box<dyn Error>> {
-    let mut eq_artifacts = Vec::with_capacity(4);
-    let mut ep_artifacts = Vec::with_capacity(4);
+    let mut vesta_artifact_descriptors = Vec::with_capacity(4);
+    let mut pallas_artifact_descriptors = Vec::with_capacity(4);
     let mut staged_headers = Vec::with_capacity(8);
     for artifact in prepared {
         let (header, descriptor) = package_artifact(publication, artifact)?;
         match header.parity {
-            KagemushaPastaCycleParityV1::StepEq => eq_artifacts.push(descriptor.clone()),
-            KagemushaPastaCycleParityV1::StepEp => ep_artifacts.push(descriptor.clone()),
+            KagemushaPastaCycleParityV1::StepEq => {
+                vesta_artifact_descriptors.push(descriptor.clone());
+            }
+            KagemushaPastaCycleParityV1::StepEp => {
+                pallas_artifact_descriptors.push(descriptor.clone());
+            }
         }
         staged_headers.push((header, descriptor));
     }
@@ -2601,7 +2726,7 @@ fn write_candidate(
                 compiled_protocol_structure_sha256: metadata.profiles[0]
                     .compiled_protocol_structure_sha256,
                 step_proof_size_bytes: metadata.profiles[0].step_proof_size_bytes,
-                artifacts: eq_artifacts,
+                artifacts: vesta_artifact_descriptors,
             },
             KagemushaPastaCycleProofProfileV4 {
                 parity: metadata.profiles[1].parity,
@@ -2612,7 +2737,7 @@ fn write_candidate(
                 compiled_protocol_structure_sha256: metadata.profiles[1]
                     .compiled_protocol_structure_sha256,
                 step_proof_size_bytes: metadata.profiles[1].step_proof_size_bytes,
-                artifacts: ep_artifacts,
+                artifacts: pallas_artifact_descriptors,
             },
         ],
         topup_finality_roster_artifact: roster_descriptor,
@@ -2802,7 +2927,7 @@ impl TrustedOutputParent {
         let parent = out_dir
             .parent()
             .filter(|path| !path.as_os_str().is_empty())
-            .unwrap_or(Path::new("."));
+            .unwrap_or_else(|| Path::new("."));
         let path = fs::canonicalize(parent)?;
         let effective_uid = rustix::process::geteuid().as_raw();
         for ancestor in path.ancestors() {
@@ -2881,8 +3006,8 @@ impl TrustedOutputParent {
             rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
         )?;
         if RustixFileType::from_raw_mode(staging.st_mode) != RustixFileType::Directory
-            || u64::try_from(staging.st_dev) != Ok(publication.device)
-            || u64::try_from(staging.st_ino) != Ok(publication.inode)
+            || checked_stat_value(staging.st_dev) != Some(publication.device)
+            || checked_stat_value(staging.st_ino) != Some(publication.inode)
         {
             return Err(
                 "staging directory name no longer identifies the verified directory".into(),
@@ -2932,6 +3057,8 @@ impl PublicationDirectory {
 
     #[cfg(unix)]
     fn open_existing(path: PathBuf) -> io::Result<Self> {
+        use rustix::fs::{Mode, OFlags};
+
         let before = fs::symlink_metadata(&path)?;
         if before.file_type().is_symlink() || !before.is_dir() {
             return Err(io::Error::other(
@@ -2939,8 +3066,6 @@ impl PublicationDirectory {
             ));
         }
         let path = fs::canonicalize(path)?;
-        use rustix::fs::{Mode, OFlags};
-
         let file = File::from(rustix::fs::open(
             &path,
             OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
@@ -2990,13 +3115,13 @@ impl PublicationDirectory {
                     ));
                 }
             }
-            return Ok(Self {
+            Ok(Self {
                 path,
                 device: opened.dev(),
                 inode: opened.ino(),
                 file,
                 path_bound,
-            });
+            })
         }
         #[cfg(not(unix))]
         {
@@ -3269,7 +3394,7 @@ impl PublicationDirectory {
         })?;
         let mut payload_hasher = Sha256::new();
         let mut remaining = descriptor.payload_size_bytes;
-        let mut buffer = [0_u8; 64 * 1024];
+        let mut buffer = vec![0_u8; 64 * 1024];
         while remaining != 0 {
             let buffer_len = u64::try_from(buffer.len())?;
             let limit = usize::try_from(remaining.min(buffer_len))?;
@@ -3431,6 +3556,25 @@ mod tests {
         }
     }
 
+    fn assert_descriptor_binding(
+        descriptor: &KagemushaPastaCycleArtifactV4,
+        header: &KagemushaPastaCycleFramedArtifactHeaderV4,
+        spec: InputSpec,
+        total_size: u64,
+    ) {
+        assert!(descriptor_matches_framed_artifact(
+            descriptor, header, spec, total_size
+        ));
+        let mut wrong_kind = descriptor.clone();
+        wrong_kind.kind = KagemushaPastaCycleArtifactKindV4::VerifyingKey;
+        assert!(!descriptor_matches_framed_artifact(
+            &wrong_kind,
+            header,
+            spec,
+            total_size
+        ));
+    }
+
     #[test]
     fn embedded_candidate_source_seal_must_be_present_exact_and_canonical() {
         let commit = "a".repeat(40);
@@ -3580,6 +3724,49 @@ mod tests {
                 KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_BOOTSTRAP_FILE_NAME_V4,
             ]
         );
+    }
+
+    #[test]
+    fn cross_layer_bindings_reject_top_level_and_descriptor_substitution() {
+        let manifest_schema = KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V4;
+        assert!(framed_schema_matches_release(
+            manifest_schema,
+            manifest_schema
+        ));
+        assert!(!framed_schema_matches_release(
+            "substituted.schema",
+            manifest_schema
+        ));
+
+        let release_generation = "release-generation";
+        let parameter_generation = "parameter-generation";
+        assert!(framed_generations_match_release_and_profile(
+            release_generation,
+            release_generation,
+            parameter_generation,
+            parameter_generation,
+        ));
+        assert!(!framed_generations_match_release_and_profile(
+            parameter_generation,
+            release_generation,
+            release_generation,
+            parameter_generation,
+        ));
+        assert!(roster_generation_binding_is_exact(
+            release_generation,
+            release_generation,
+            release_generation,
+        ));
+        assert!(!roster_generation_binding_is_exact(
+            parameter_generation,
+            release_generation,
+            release_generation,
+        ));
+        assert!(!roster_generation_binding_is_exact(
+            release_generation,
+            parameter_generation,
+            release_generation,
+        ));
     }
 
     #[test]
@@ -3804,6 +3991,7 @@ mod tests {
             },
         )
         .expect("frame test payload");
+        assert_descriptor_binding(&descriptor, &header, spec, total_size);
         let bytes = fs::read(publication_path.join(spec.file_name)).expect("read staged frame");
         assert_eq!(&bytes[..8], KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_KEY_MAGIC_V4);
         assert_eq!(

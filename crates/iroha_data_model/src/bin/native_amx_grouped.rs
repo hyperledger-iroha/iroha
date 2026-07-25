@@ -27,7 +27,7 @@ use iroha_data_model::{
 use iroha_primitives::numeric::Quantity;
 use norito::json::{self, Value};
 
-pub(super) const FIXTURE_PATH: &str = concat!(
+pub const FIXTURE_PATH: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../fixtures/sumeragi_v2/native_amx_v2_grouped.json"
 );
@@ -289,6 +289,10 @@ fn body(
     })
 }
 
+#[expect(
+    clippy::large_types_passed_by_value,
+    reason = "the QC takes ownership of the attestation body and stores it without a large clone"
+)]
 fn qc(
     context: &FixtureContext,
     body: NativeAmxAttestationBodyV2,
@@ -301,7 +305,7 @@ fn qc(
         .collect::<Result<Vec<_>, _>>()?;
     let signature_payloads = signatures
         .iter()
-        .map(|signature| signature.payload())
+        .map(Signature::payload)
         .collect::<Vec<_>>();
     let aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(&signature_payloads)?;
     let mut signers_bitmap = vec![0_u8; context.validators.len().div_ceil(8)];
@@ -553,19 +557,27 @@ fn application_evidence(
 }
 
 fn mutation(op: &str, path: &str, value: Option<Value>) -> Value {
-    match value {
-        Some(value) => norito::json!({
+    value.map_or_else(
+        || {
+            norito::json!({
+                "op": (op),
+                "path": (path),
+            })
+        },
+        |value| {
+            norito::json!({
             "op": (op),
             "path": (path),
             "value": (value),
-        }),
-        None => norito::json!({
-            "op": (op),
-            "path": (path),
-        }),
-    }
+            })
+        },
+    )
 }
 
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "the fixture helper owns the mutation vector so callers do not clone its JSON values"
+)]
 fn controls(id: &str, validator: &str, mutations: Vec<Value>) -> Value {
     norito::json!({
         "id": (id),
@@ -1042,7 +1054,7 @@ fn document() -> Result<Value, Box<dyn Error>> {
     }))
 }
 
-pub(super) fn write_fixture(check_only: bool) -> Result<(), Box<dyn Error>> {
+pub fn write_fixture(check_only: bool) -> Result<(), Box<dyn Error>> {
     let rendered = format!("{}\n", json::to_string_pretty(&document()?)?);
     if check_only {
         let existing = fs::read_to_string(FIXTURE_PATH)?;

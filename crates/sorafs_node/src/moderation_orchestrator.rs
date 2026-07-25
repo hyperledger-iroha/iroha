@@ -95,6 +95,10 @@ const ACTION_LIMITS: DecodeLimits = DecodeLimits::new(
 );
 
 /// One exact native moderation mutation.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "boxing a variant would change the canonical public Norito action shape"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub enum ModerationNativeActionV1 {
     /// Activate a policy revision.
@@ -1166,14 +1170,13 @@ impl ModerationOrchestratorV1 {
                     observed: snapshot.finalized_height,
                 });
             }
-            if snapshot.finalized_height == previous.finalized_height {
-                if snapshot.finalized_block_hash != previous.finalized_block_hash
-                    || digest != previous_digest
-                {
-                    return Err(ModerationOrchestratorError::FinalizedEquivocation {
-                        height: snapshot.finalized_height,
-                    });
-                }
+            if snapshot.finalized_height == previous.finalized_height
+                && (snapshot.finalized_block_hash != previous.finalized_block_hash
+                    || digest != previous_digest)
+            {
+                return Err(ModerationOrchestratorError::FinalizedEquivocation {
+                    height: snapshot.finalized_height,
+                });
             }
         }
         state.finalized_snapshot = Some(snapshot);
@@ -3760,7 +3763,7 @@ mod tests {
                 reveal_deadline_unix_ms: intake.reveal_deadline_unix_ms,
                 policy_digest: intake.policy_digest,
             },
-            policy: appeal.policy.clone(),
+            policy: appeal.policy,
             status: ModerationCaseStatusV1::Open,
             opened_at_unix_ms: 31,
             opened_by: governance.clone(),
@@ -4081,18 +4084,14 @@ mod tests {
             )
             .expect("orchestrator");
             orchestrator
-                .submit(
-                    authority.clone(),
-                    policy_action(active_policy.clone()),
-                    [0x11; 32],
-                )
+                .submit(authority.clone(), policy_action(active_policy), [0x11; 32])
                 .expect("ambiguous submit remains pending");
         }
 
         reader.replace(snapshot_with_policy(
             2,
             [2; 32],
-            active_policy.clone(),
+            active_policy,
             authority.clone(),
         ));
         let restarted =

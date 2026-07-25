@@ -12793,18 +12793,7 @@ fn submit_soracloud_draft_transaction(
     let quote = client
         .quote_fees(&payload)
         .wrap_err("failed to quote exact Soracloud mutation fees")?;
-    let selection_matches = match (&requested_fee_payment, &quote.intent) {
-        (FeePaymentIntent::Authority(requested), FeePaymentIntent::Authority(quoted)) => {
-            requested.gas_limit == quoted.gas_limit
-        }
-        (FeePaymentIntent::Sponsor(requested), FeePaymentIntent::Sponsor(quoted)) => {
-            requested.program_id == quoted.program_id
-                && requested.program_revision == quoted.program_revision
-                && requested.gas_limit == quoted.gas_limit
-        }
-        _ => false,
-    };
-    if !selection_matches {
+    if !requested_fee_payment.has_same_payer_and_gas_bound(&quote.intent) {
         return Err(eyre!(
             "fee quote changed the selected payer, sponsor revision, or gas bound"
         ));

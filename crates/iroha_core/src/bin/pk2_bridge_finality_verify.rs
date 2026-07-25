@@ -1,7 +1,7 @@
 //! Verify one PK2 bridge-finality proof against a live Sumeragi-v2 status snapshot.
 //!
 //! This binary is deliberately a narrow deployment boundary. It accepts only
-//! the current typed JSON schemas, pins the PK2 chain, protocol, NPoS mode,
+//! the current typed JSON schemas, pins the PK2 chain, protocol, `NPoS` mode,
 //! exact reporting-node identity, ordered validator keys, and count threshold,
 //! and delegates the complete header/context/PoP/BLS verification to
 //! `iroha_core::bridge`.
@@ -157,7 +157,7 @@ struct AttestedExpectedRosterDocument {
     signed_genesis_sha256: String,
 }
 
-/// Stable projection of the fields which define one semantic CommitQC decision.
+/// Stable projection of the fields which define one semantic `CommitQC` decision.
 ///
 /// This deliberately mirrors `QuorumCertificateRef::same_commit_decision`: the
 /// certification-round view, signer subset, and aggregate signature are
@@ -231,6 +231,10 @@ struct AttestedVerificationReceipt {
 }
 
 #[derive(Debug, Clone, Copy)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "explicit hash suffixes distinguish three security-bound hash domains"
+)]
 struct ValidatedSignedGenesis {
     block_hash: HashOf<BlockHeader>,
     proposal_wire_hash: Hash,
@@ -295,6 +299,10 @@ fn run_cli(cli: Cli) -> Result<String, String> {
     Ok(json)
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "the mutually exclusive path/fd grammar and final descriptor-uniqueness audit form one ordered fail-closed parse"
+)]
 fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Cli, String> {
     let mut status = None;
     let mut proof = None;
@@ -481,12 +489,12 @@ fn validate_distinct_inherited_fds(cli: &Cli) -> Result<(), String> {
             challenge,
         } => {
             let sources = vec![attestation, signed_genesis, expected_roster];
-            if let ChallengeSource::InheritedFd(fd) = challenge {
-                if !seen.insert(*fd) {
-                    return Err(format!(
-                        "inherited fd {fd} is reused for multiple verifier inputs"
-                    ));
-                }
+            if let ChallengeSource::InheritedFd(fd) = challenge
+                && !seen.insert(*fd)
+            {
+                return Err(format!(
+                    "inherited fd {fd} is reused for multiple verifier inputs"
+                ));
             }
             sources
         }
@@ -943,10 +951,14 @@ fn verify_genesis_finality_proof(
         .map_err(|error| format!("cryptographic genesis finality verification failed: {error}"))?;
     Ok((
         hex::encode((artifact.context_id().0).as_ref()),
-        semantic_commit_decision_id(artifact.commit_qc.as_ref())?,
+        semantic_commit_decision_id(&artifact.commit_qc.as_ref())?,
     ))
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "status binding, proof audit, quorum accounting, and cryptographic verification form one ordered fail-closed flow"
+)]
 fn verify_decoded(
     status: &SumeragiV2Status,
     proof: &BridgeFinalityProof,
@@ -1144,7 +1156,7 @@ fn verify_decoded(
     };
     verify_finality_proof(proof, &verification)
         .map_err(|error| format!("cryptographic bridge finality verification failed: {error}"))?;
-    let commit_decision_id = semantic_commit_decision_id(artifact.commit_qc.as_ref())?;
+    let commit_decision_id = semantic_commit_decision_id(&artifact.commit_qc.as_ref())?;
 
     Ok(VerificationReceipt {
         schema_version: LEGACY_RECEIPT_SCHEMA_VERSION,
@@ -1241,7 +1253,7 @@ fn parse_expected_peer_key(key: &str, label: &str) -> Result<PeerId, String> {
     Ok(peer)
 }
 
-fn semantic_commit_decision_id(certificate: QuorumCertificateRef) -> Result<String, String> {
+fn semantic_commit_decision_id(certificate: &QuorumCertificateRef) -> Result<String, String> {
     if certificate.phase != GlobalPhase::Commit {
         return Err("semantic commit decision identity requires a CommitQC".to_owned());
     }
@@ -1285,8 +1297,8 @@ mod tests {
                 BlockSubject, ConsensusRound, DataAvailabilityLayout, DualQuorum,
                 ExecutionCommitment, GlobalPhase, HeightContext, PayloadEncoding,
                 QuorumCertificate, SumeragiV2BodyState, SumeragiV2CommitQcStatus,
-                SumeragiV2HeightContextStatus, SumeragiV2StatusPhase, ValidatorPower,
-                finality::V2FinalityArtifact,
+                SumeragiV2HeightContextStatus, SumeragiV2LivenessStatus, SumeragiV2StatusPhase,
+                ValidatorPower, finality::V2FinalityArtifact,
             },
         },
         bridge::{
@@ -1309,6 +1321,10 @@ mod tests {
         challenge: [u8; 32],
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the fixture constructs one cryptographically linked genesis, context, quorum certificate, status, proof, and attestation"
+    )]
     fn fixture() -> Fixture {
         let mut keys = (0..4)
             .map(|_| {
@@ -1468,7 +1484,7 @@ mod tests {
                 signed_power,
                 total_power: context.quorum.total_power,
             }),
-            liveness: Default::default(),
+            liveness: SumeragiV2LivenessStatus::default(),
         };
         let expectations = ExpectedRosterDocument {
             schema_version: LEGACY_EXPECTATIONS_SCHEMA_VERSION,
@@ -1897,7 +1913,7 @@ mod tests {
         assert_eq!(receipt.height, 1);
         assert_eq!(
             receipt.commit_decision_id,
-            semantic_commit_decision_id(fixture.proof.finality_artifact.commit_qc.as_ref())
+            semantic_commit_decision_id(&fixture.proof.finality_artifact.commit_qc.as_ref())
                 .expect("semantic commit decision id")
         );
         assert_eq!(receipt.validator_keys.len(), 4);
@@ -1974,8 +1990,8 @@ mod tests {
         let alternate = alternate_qc.as_ref();
         assert!(baseline.same_commit_decision(alternate));
         assert_eq!(
-            semantic_commit_decision_id(baseline).expect("baseline decision id"),
-            semantic_commit_decision_id(alternate).expect("alternate decision id"),
+            semantic_commit_decision_id(&baseline).expect("baseline decision id"),
+            semantic_commit_decision_id(&alternate).expect("alternate decision id"),
         );
 
         let mut different_execution = baseline;
@@ -1983,8 +1999,8 @@ mod tests {
             Hash::new(b"different deterministic post state");
         assert!(!baseline.same_commit_decision(different_execution));
         assert_ne!(
-            semantic_commit_decision_id(baseline).expect("baseline decision id"),
-            semantic_commit_decision_id(different_execution)
+            semantic_commit_decision_id(&baseline).expect("baseline decision id"),
+            semantic_commit_decision_id(&different_execution)
                 .expect("different execution decision id"),
         );
 
@@ -1992,8 +2008,8 @@ mod tests {
         different_subject.subject.payload_hash = Hash::new(b"different payload");
         assert!(!baseline.same_commit_decision(different_subject));
         assert_ne!(
-            semantic_commit_decision_id(baseline).expect("baseline decision id"),
-            semantic_commit_decision_id(different_subject).expect("different subject decision id"),
+            semantic_commit_decision_id(&baseline).expect("baseline decision id"),
+            semantic_commit_decision_id(&different_subject).expect("different subject decision id"),
         );
 
         let mut different_origin = baseline;
@@ -2002,15 +2018,15 @@ mod tests {
             different_origin.proposal_round.view.saturating_add(1);
         assert!(!baseline.same_commit_decision(different_origin));
         assert_ne!(
-            semantic_commit_decision_id(baseline).expect("baseline decision id"),
-            semantic_commit_decision_id(different_origin)
+            semantic_commit_decision_id(&baseline).expect("baseline decision id"),
+            semantic_commit_decision_id(&different_origin)
                 .expect("different proposal-origin decision id"),
         );
 
         let mut prepare = baseline;
         prepare.phase = GlobalPhase::Prepare;
         assert!(
-            semantic_commit_decision_id(prepare)
+            semantic_commit_decision_id(&prepare)
                 .expect_err("PrepareQC is not a semantic commit decision")
                 .contains("requires a CommitQC")
         );

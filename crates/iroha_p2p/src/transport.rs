@@ -1027,6 +1027,11 @@ pub mod ws {
     ///
     /// This is useful for applying custom TCP dial logic (proxies, socket options) while
     /// still speaking WebSocket/WSS at the HTTP layer.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error when the WebSocket client handshake over the supplied
+    /// stream cannot be completed.
     pub async fn connect_with_stream<R, S>(
         request: R,
         stream: S,
@@ -1075,10 +1080,9 @@ pub mod ws {
                     buf.put_slice(&self.read_buf.split_to(n));
                     std::task::Poll::Ready(Ok(()))
                 }
-                Some(Ok(Message::Text(_)))
-                | Some(Ok(Message::Ping(_)))
-                | Some(Ok(Message::Pong(_)))
-                | Some(Ok(Message::Frame(_))) => {
+                Some(Ok(
+                    Message::Text(_) | Message::Ping(_) | Message::Pong(_) | Message::Frame(_),
+                )) => {
                     // Ignore control/text frames and read next
                     cx.waker().wake_by_ref();
                     std::task::Poll::Pending
@@ -1140,6 +1144,11 @@ pub mod ws {
     }
 
     /// Connect a WSS endpoint `wss://host:port/p2p` and return a duplex stream.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-input error when `endpoint` cannot form a WebSocket
+    /// request, or an I/O error when the WSS connection or handshake fails.
     pub async fn connect_wss(
         endpoint: &str,
     ) -> std::io::Result<WsDuplex<MaybeTlsStream<tokio::net::TcpStream>>> {
@@ -1157,6 +1166,11 @@ pub mod ws {
     }
 
     /// Connect a WS endpoint `ws://host:port/p2p` and return a duplex stream.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invalid-input error when `endpoint` cannot form a WebSocket
+    /// request, or an I/O error when the WS connection or handshake fails.
     pub async fn connect_ws(
         endpoint: &str,
     ) -> std::io::Result<WsDuplex<MaybeTlsStream<tokio::net::TcpStream>>> {

@@ -23080,11 +23080,11 @@ moderation_screening_authority_bundle_digest_hex = "{}"
         );
 
         for invalid_storage in [
-            r#"
+            r"
 [storage]
 enabled = true
 moderation_screening_enabled = true
-"#
+"
             .to_owned(),
             format!(
                 r#"
@@ -23426,7 +23426,7 @@ initial_delay_seconds = 17
             actual
                 .network
                 .max_total_connections
-                .map(|capacity| capacity.get()),
+                .map(std::num::NonZeroUsize::get),
             Some(131),
         );
     }

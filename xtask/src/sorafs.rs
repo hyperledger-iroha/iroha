@@ -827,6 +827,7 @@ struct RouteBindingOutput {
     headers_template: String,
 }
 
+#[derive(Debug)]
 pub struct GatewayTlsRenewOutcome {
     pub certificate_path: PathBuf,
     pub private_key_path: PathBuf,

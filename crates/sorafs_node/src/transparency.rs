@@ -2258,22 +2258,21 @@ pub(crate) fn build_privacy_aggregates_from_source_events(
         .values()
         .filter(|bucket| distinct_subject_count(bucket) < suppression_threshold)
         .count() as u64;
+    let build_context = PopulationAggregateBuildContext {
+        cycle_start_unix,
+        cycle_end_unix,
+        generated_at_unix,
+        config,
+        cycle_prf_output: cycle_prf_output.as_ref(),
+        suppressed_count,
+    };
     let mut aggregates = Vec::new();
     for (population, mut bucket) in groups {
         bucket.sort_by(|left, right| left.event_id.cmp(&right.event_id));
         if distinct_subject_count(&bucket) < suppression_threshold {
             continue;
         }
-        let aggregate = build_population_aggregate(
-            cycle_start_unix,
-            cycle_end_unix,
-            generated_at_unix,
-            config,
-            cycle_prf_output.as_ref(),
-            suppressed_count,
-            population,
-            &bucket,
-        )?;
+        let aggregate = build_population_aggregate(&build_context, population, &bucket)?;
         aggregates.push(aggregate);
     }
     if aggregates.is_empty() {
@@ -2289,16 +2288,22 @@ struct PopulationKey {
     digest: [u8; 32],
 }
 
-fn build_population_aggregate(
+struct PopulationAggregateBuildContext<'a> {
     cycle_start_unix: u64,
     cycle_end_unix: u64,
     generated_at_unix: u64,
-    config: &PrivacyAggregateCycleConfig,
-    cycle_prf_output: Option<&[u8; 32]>,
+    config: &'a PrivacyAggregateCycleConfig,
+    cycle_prf_output: Option<&'a [u8; 32]>,
     suppressed_count: u64,
+}
+
+fn build_population_aggregate(
+    context: &PopulationAggregateBuildContext<'_>,
     population: PopulationKey,
     events: &[PrivacyAggregateSourceEvent],
 ) -> Result<ModerationPrivacyAggregateV1, PrivacyAggregateWorkerError> {
+    let config = context.config;
+    let cycle_prf_output = context.cycle_prf_output;
     let policy_digest = resolve_policy_digest(config.policy_digest, events)?;
     let metrics = clipped_population_metrics(events, config.privacy.per_subject_metric_cap)?;
     let source_subject_count = distinct_subject_count(events);
@@ -2309,7 +2314,7 @@ fn build_population_aggregate(
         cycle_prf_output,
         &population,
         events,
-        suppressed_count,
+        context.suppressed_count,
         policy_digest,
     );
     let published_metrics = metrics
@@ -2332,13 +2337,13 @@ fn build_population_aggregate(
         .collect::<Result<Vec<_>, PrivacyAggregateWorkerError>>()?;
 
     let mut privacy = config.privacy;
-    privacy.suppressed_count = suppressed_count;
+    privacy.suppressed_count = context.suppressed_count;
     let aggregate = ModerationPrivacyAggregateV1 {
         version: MODERATION_PRIVACY_AGGREGATE_VERSION_V1,
         aggregate_id,
-        window_start_unix: cycle_start_unix,
-        window_end_unix: cycle_end_unix,
-        generated_at_unix,
+        window_start_unix: context.cycle_start_unix,
+        window_end_unix: context.cycle_end_unix,
+        generated_at_unix: context.generated_at_unix,
         population_label: population.label,
         population_digest: population.digest,
         privacy,

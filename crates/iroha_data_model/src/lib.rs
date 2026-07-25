@@ -12,6 +12,13 @@
 
 #![allow(unexpected_cfgs)]
 #![allow(semicolon_in_expressions_from_macros)]
+#![cfg_attr(
+    test,
+    expect(
+        clippy::large_stack_arrays,
+        reason = "test-only derive expansion materializes the complete data-model type registry as one local array; production code does not allocate it"
+    )
+)]
 
 #[allow(unused_extern_crates)]
 extern crate bech32;

@@ -7324,6 +7324,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one authoritative SoraFS vector keeps every singular V1 query payload roundtrip in registry order"
+    )]
     fn sorafs_authoritative_singular_query_payloads_roundtrip() {
         use norito::codec::{Decode, Encode};
 

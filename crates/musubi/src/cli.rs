@@ -92,7 +92,7 @@ impl DiagnosticFormat {
 }
 
 #[derive(Debug)]
-pub(crate) struct RenderedDiagnostics {
+struct RenderedDiagnostics {
     rendered: String,
 }
 
@@ -104,7 +104,7 @@ impl std::fmt::Display for RenderedDiagnostics {
 
 impl std::error::Error for RenderedDiagnostics {}
 
-pub(crate) fn rendered_diagnostics(error: &eyre::Report) -> Option<&str> {
+pub fn rendered_diagnostics(error: &eyre::Report) -> Option<&str> {
     error
         .downcast_ref::<RenderedDiagnostics>()
         .map(|diagnostics| diagnostics.rendered.as_str())

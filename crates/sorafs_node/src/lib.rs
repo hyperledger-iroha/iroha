@@ -1976,6 +1976,25 @@ pub enum PrivacyAggregateScheduleOutcome {
     },
 }
 
+/// Complete input for publishing one test-built privacy aggregate source cycle.
+#[cfg(test)]
+struct PrivacyAggregateSourceCycleInput {
+    /// Stable identifier assigned to the published cycle.
+    cycle_id: [u8; 16],
+    /// Inclusive source-event window start, in Unix seconds.
+    cycle_start_unix: u64,
+    /// Exclusive source-event window end, in Unix seconds.
+    cycle_end_unix: u64,
+    /// Publication generation timestamp, in Unix seconds.
+    generated_at_unix: u64,
+    /// Optional hash linking the cycle to its predecessor.
+    previous_block_hash: Option<[u8; 32]>,
+    /// Governed aggregation and privacy policy.
+    config: PrivacyAggregateCycleConfig,
+    /// Optional hidden threshold-PRF output for this cycle.
+    cycle_prf_output: Option<[u8; 32]>,
+}
+
 /// Result of one scheduled evidence-viewer audit-report publication attempt.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ModerationEvidenceViewerAuditScheduleOutcome {
@@ -7018,14 +7037,17 @@ impl NodeHandle {
     #[cfg(test)]
     fn publish_privacy_aggregate_cycle_from_source_events(
         &self,
-        cycle_id: [u8; 16],
-        cycle_start_unix: u64,
-        cycle_end_unix: u64,
-        generated_at_unix: u64,
-        previous_block_hash: Option<[u8; 32]>,
-        config: PrivacyAggregateCycleConfig,
-        cycle_prf_output: Option<[u8; 32]>,
+        input: PrivacyAggregateSourceCycleInput,
     ) -> Result<ModerationLedgerCyclePublicationV1, GovernancePublishError> {
+        let PrivacyAggregateSourceCycleInput {
+            cycle_id,
+            cycle_start_unix,
+            cycle_end_unix,
+            generated_at_unix,
+            previous_block_hash,
+            config,
+            cycle_prf_output,
+        } = input;
         let events = self
             .privacy_aggregate_source_events
             .read()
@@ -17407,7 +17429,6 @@ impl NodeHandle {
     }
 
     /// Retrieve PoTR receipts matching the manifest/provider filters.
-    #[must_use]
     pub fn potr_receipts(
         &self,
         manifest_digest: &[u8; 32],
@@ -27098,15 +27119,15 @@ mod tests {
         }
 
         let publication = handle
-            .publish_privacy_aggregate_cycle_from_source_events(
-                *b"cycle-2026-wk-04",
-                1_800_000_000,
-                1_800_604_800,
-                1_800_604_801,
-                None,
-                privacy_aggregate_cycle_config(),
-                Some([0x5A; 32]),
-            )
+            .publish_privacy_aggregate_cycle_from_source_events(PrivacyAggregateSourceCycleInput {
+                cycle_id: *b"cycle-2026-wk-04",
+                cycle_start_unix: 1_800_000_000,
+                cycle_end_unix: 1_800_604_800,
+                generated_at_unix: 1_800_604_801,
+                previous_block_hash: None,
+                config: privacy_aggregate_cycle_config(),
+                cycle_prf_output: Some([0x5A; 32]),
+            })
             .expect("publish aggregate cycle from source events");
 
         publication.validate().expect("publication validates");
@@ -27160,15 +27181,15 @@ mod tests {
             .expect("record source event");
 
         let err = handle
-            .publish_privacy_aggregate_cycle_from_source_events(
-                *b"cycle-2026-wk-04",
-                1_800_000_000,
-                1_800_604_800,
-                1_800_604_801,
-                None,
-                privacy_aggregate_cycle_config(),
-                None,
-            )
+            .publish_privacy_aggregate_cycle_from_source_events(PrivacyAggregateSourceCycleInput {
+                cycle_id: *b"cycle-2026-wk-04",
+                cycle_start_unix: 1_800_000_000,
+                cycle_end_unix: 1_800_604_800,
+                generated_at_unix: 1_800_604_801,
+                previous_block_hash: None,
+                config: privacy_aggregate_cycle_config(),
+                cycle_prf_output: None,
+            })
             .expect_err("missing cycle PRF output rejected");
 
         assert!(err.to_string().contains("hidden cycle PRF output"));
