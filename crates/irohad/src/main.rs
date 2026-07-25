@@ -4761,11 +4761,19 @@ impl NetworkRelayShared {
                 Some(certificate.proposal.descriptor.lane_block_height),
                 Some(certificate.proposal.descriptor.lane_block_view),
             ),
-            LaneHistoricalRecoveryRequest(request) => (
-                "LaneHistoricalRecoveryRequest",
-                Some(request.proposal().descriptor.lane_block_height),
-                Some(request.proposal().descriptor.lane_block_view),
-            ),
+            LaneHistoricalRecoveryRequest(request) => {
+                let proposal = request.proposal();
+                (
+                    "LaneHistoricalRecoveryRequest",
+                    proposal
+                        .map(|proposal| proposal.descriptor.lane_block_height)
+                        .or_else(|| {
+                            let source_height = request.source_height();
+                            (source_height != 0).then_some(source_height)
+                        }),
+                    proposal.map(|proposal| proposal.descriptor.lane_block_view),
+                )
+            }
             LaneHistoricalRecoveryResponse(response) => match &response.payload {
                 iroha_core::sumeragi::message::LaneHistoricalRecoveryPayloadV1::CanonicalBlock {
                     block,

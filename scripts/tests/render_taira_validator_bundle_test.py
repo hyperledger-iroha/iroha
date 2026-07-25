@@ -27,6 +27,10 @@ TAIRA_CITIZEN_ID = (
 TAIRA_GENESIS_DEPLOYER_ID = (
     "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A"
 )
+TAIRA_GAS_ASSET_ID = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
+TAIRA_CONSENSUS_FINGERPRINT = (
+    "0x21591690e3c4d51fb3b81425aa8b9986eb417cc6a211dcfb8bce51c7600a6a7e"
+)
 TAIRA_FEE_SPONSOR_SELECTORS = [
     "iroha.log",
     "iroha.register",
@@ -140,6 +144,26 @@ def _contract_deployment_gate_projection(payload: dict) -> dict:
             .get("name")
             == "CanRegisterSmartContractCode"
         ],
+        "account_registration_grants": [
+            instruction["Grant"]["Permission"]
+            for instruction in instructions
+            if instruction.get("Grant", {})
+            .get("Permission", {})
+            .get("object", {})
+            .get("name")
+            == "CanRegisterAccount"
+        ],
+        "deployer_gas_mints": [
+            instruction["Mint"]["Asset"]
+            for instruction in instructions
+            if instruction.get("Mint", {}).get("Asset", {}).get("destination")
+            == f"{TAIRA_GAS_ASSET_ID}#{TAIRA_GENESIS_DEPLOYER_ID}"
+        ],
+        "fee_sponsor_funding": [
+            instruction["FundFeeSponsorProgram"]
+            for instruction in instructions
+            if "FundFeeSponsorProgram" in instruction
+        ],
     }
 
 
@@ -168,6 +192,30 @@ def test_checked_in_taira_genesis_contract_deployment_gate_is_release_pinned() -
                 "object": {"name": "CanRegisterSmartContractCode"},
             }
         ],
+        "account_registration_grants": [
+            {
+                "destination": TAIRA_GENESIS_DEPLOYER_ID,
+                "object": {"name": "CanRegisterAccount"},
+            }
+        ],
+        "deployer_gas_mints": [
+            {
+                "destination": (
+                    f"{TAIRA_GAS_ASSET_ID}#{TAIRA_GENESIS_DEPLOYER_ID}"
+                ),
+                "object": "100000001",
+            }
+        ],
+        "fee_sponsor_funding": [
+            {
+                "program_id": {
+                    "sponsor": TAIRA_GENESIS_DEPLOYER_ID,
+                    "name": "cbsi_web",
+                },
+                "asset_definition_id": TAIRA_GAS_ASSET_ID,
+                "amount": "100000000",
+            }
+        ],
     }
     selector_wire_ids = [
         selector["value"]["wire_id"] for selector in projection["selectors"]
@@ -177,6 +225,53 @@ def test_checked_in_taira_genesis_contract_deployment_gate_is_release_pinned() -
         not in selector_wire_ids
     )
     assert "iroha.custom" not in selector_wire_ids
+
+
+def test_checked_in_taira_genesis_gas_parameters_are_structured_parameters() -> None:
+    genesis = json.loads(TAIRA_GENESIS_PATH.read_text(encoding="utf-8"))
+    custom = genesis["transactions"][0]["parameters"]["custom"]
+
+    assert genesis["consensus_fingerprint"] == TAIRA_CONSENSUS_FINGERPRINT
+    assert {
+        key: custom[key]
+        for key in (
+            "ivm_gas_limit_per_block",
+            "ivm_gas_accepted_assets",
+            "ivm_gas_units_per_gas",
+        )
+    } == {
+        "ivm_gas_limit_per_block": {
+            "id": "ivm_gas_limit_per_block",
+            "payload": 50_000_000,
+        },
+        "ivm_gas_accepted_assets": {
+            "id": "ivm_gas_accepted_assets",
+            "payload": [TAIRA_GAS_ASSET_ID],
+        },
+        "ivm_gas_units_per_gas": {
+            "id": "ivm_gas_units_per_gas",
+            "payload": [
+                {
+                    "asset": TAIRA_GAS_ASSET_ID,
+                    "units_per_gas": 0,
+                    "twap_local_per_xor": "1",
+                    "liquidity_profile": "tier1",
+                    "volatility_class": "stable",
+                }
+            ],
+        },
+    }
+    assert all(
+        isinstance(instruction, dict) and len(instruction) == 1
+        for instruction in _genesis_instructions(genesis)
+    )
+    assert {
+        key: custom["sumeragi_npos_parameters"]["payload"][key]
+        for key in ("min_self_bond", "min_nomination_bond")
+    } == {
+        "min_self_bond": "1000",
+        "min_nomination_bond": "1",
+    }
 
 
 BASE_CONFIG = """# baseline
@@ -311,9 +406,13 @@ def test_render_bundle_rewrites_peer_specific_sections(tmp_path: Path) -> None:
     assert 'public_key = "peer-3-public"' in config
     assert 'private_key = "peer-3-private"' in config
     assert (
-        'public_address = "taira-validator-3.sora.org:1337"' in config
+        'public_address = "addr:taira-validator-3.sora.org:1337#99FF"' in config
     )
-    assert '"peer-4-public@taira-validator-4.sora.org:1337"' in config
+    assert 'address = "addr:0.0.0.0:1337#BF18"' in config
+    assert 'address = "addr:0.0.0.0:18080#2F16"' in config
+    assert (
+        '"peer-4-public@addr:taira-validator-4.sora.org:1337#E168"' in config
+    )
     assert '{ public_key = "peer-2-public", pop_hex = "peer-2-pop" }' in config
     assert 'authority = "bootstrap-authority"' in config
     assert 'authority = "faucet-authority"' in config
@@ -360,6 +459,34 @@ def test_render_bundle_rewrites_peer_specific_sections(tmp_path: Path) -> None:
         {"validator": "test-validator-3", "peer_id": "peer-3-public"},
         {"validator": "test-validator-4", "peer_id": "peer-4-public"},
     ]
+
+
+def test_socket_addresses_are_crc_bound_and_fail_closed() -> None:
+    assert (
+        MODULE._canonical_socket_address(
+            "TAIRA-VALIDATOR-1.SORA.ORG:1337", "fixture"
+        )
+        == "addr:taira-validator-1.sora.org:1337#D426"
+    )
+    assert (
+        MODULE._canonical_socket_address(
+            "addr:127.0.0.1:39080#4B72", "fixture"
+        )
+        == "addr:127.0.0.1:39080#4B72"
+    )
+
+    for invalid in (
+        "addr:127.0.0.1:39080#0000",
+        "127.0.0.1:70000",
+        "https://taira.sora.org",
+        "addr:127.0.0.1:39080",
+    ):
+        try:
+            MODULE._canonical_socket_address(invalid, "fixture")
+        except ValueError:
+            pass
+        else:  # pragma: no cover - defensive assertion
+            raise AssertionError(f"renderer accepted invalid socket address {invalid!r}")
 
 
 def test_render_bundle_injects_public_roster_into_unsigned_genesis(tmp_path: Path) -> None:
@@ -450,6 +577,56 @@ def test_genesis_renderer_preserves_fresh_contract_deployment_gate(
     assert _contract_deployment_gate_projection(
         rendered
     ) == _contract_deployment_gate_projection(checked_in)
+    assert (
+        rendered["transactions"][0]["parameters"]["custom"]
+        == checked_in["transactions"][0]["parameters"]["custom"]
+    )
+
+
+def test_genesis_renderer_rejects_merged_instruction_objects(tmp_path: Path) -> None:
+    roster_path = tmp_path / "validator_roster.toml"
+    base_genesis_path = tmp_path / "genesis.json"
+    output_dir = tmp_path / "out"
+    _write_roster(roster_path)
+    validators = MODULE.load_roster(roster_path)
+    base_genesis_path.write_text(
+        json.dumps(
+            {
+                "sumeragi_v2": {
+                    "da_layout": {},
+                    "nexus_amx_context_hash": "01" * 32,
+                },
+                "transactions": [
+                    {
+                        "instructions": [
+                            {
+                                "Register": {"Domain": {"id": "test.universal"}},
+                                "ivm_gas_limit_per_block": {
+                                    "id": "ivm_gas_limit_per_block",
+                                    "payload": 50_000_000,
+                                },
+                            }
+                        ],
+                        "ivm_triggers": [],
+                        "topology": [],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    try:
+        MODULE.render_genesis_template(
+            base_genesis_path,
+            validators,
+            output_dir,
+        )
+    except ValueError as error:
+        assert "transaction 0 instruction 0" in str(error)
+        assert "single-key structured instruction object" in str(error)
+    else:  # pragma: no cover - defensive assertion
+        raise AssertionError("renderer accepted a merged genesis instruction object")
 
 
 def test_load_roster_requires_explicit_direct_torii_hostname(tmp_path: Path) -> None:
