@@ -86,7 +86,9 @@ TRUE_CLAIMS: dict[str, tuple[str, ...]] = {
         "daemonized",
         "contract_forwarding_enabled",
         "price_time_priority_verified",
-        "replay_snapshot_verified",
+        "finalized_cursor_replay_verified",
+        "committed_state_reconciliation_verified",
+        "local_book_authority_absent",
         "durable_checkpoint_verified",
     ),
     "settlement_service": (
@@ -117,9 +119,11 @@ TRUE_CLAIMS: dict[str, tuple[str, ...]] = {
         "dashboard_provisioned",
         "alert_rules_installed",
         "live_dashboard_wired",
+        "finalized_projection_ready",
     ),
     "reconciliation": (
-        "contract_mirror_reconciliation_passed",
+        "finalized_projection_reconciliation_passed",
+        "replica_finalized_state_equal",
         "evidence_dag_published",
     ),
     "governance_approval": (
@@ -134,13 +138,13 @@ TRUE_CLAIMS: dict[str, tuple[str, ...]] = {
 }
 FORCED_FALSE_FIELDS: dict[str, tuple[str, ...]] = {
     "contract_surface": ("raw_contract_state_included",),
-    "matcher_service": ("divergence_detected", "raw_snapshot_included"),
+    "matcher_service": ("raw_ledger_included",),
     "settlement_service": ("raw_receipts_included",),
     "api_gateway": ("response_bodies_included",),
     "event_streams": ("response_bodies_included",),
     "sdk_release": ("debug_artifacts",),
     "observability": ("critical_alerts_firing", "response_bodies_included"),
-    "reconciliation": ("contract_mirror_divergence", "raw_ledger_included"),
+    "reconciliation": ("raw_ledger_included",),
     "governance_approval": (),
 }
 
@@ -452,6 +456,14 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
     elif args.kind == "observability":
         payload.update(
             {
+                "metrics_scraped_at_unix": args.metrics_scraped_at_unix,
+                "finalized_projection_height": args.finalized_projection_height,
+                "finalized_projection_timestamp_seconds": (
+                    args.finalized_projection_timestamp_seconds
+                ),
+                "finalized_projection_failure_delta": (
+                    args.finalized_projection_failure_delta
+                ),
                 "metrics": args.metrics,
                 "metric_count": len(args.metrics),
             }
@@ -600,6 +612,18 @@ def validate_kind_inputs(args: argparse.Namespace, errors: list[str]) -> None:
         )
         args.artifacts = parse_artifacts(args.artifact, errors)
     elif args.kind == "observability":
+        if args.metrics_scraped_at_unix is None:
+            errors.append("--metrics-scraped-at-unix is required for observability")
+        if args.finalized_projection_height is None:
+            errors.append("--finalized-projection-height is required for observability")
+        if args.finalized_projection_timestamp_seconds is None:
+            errors.append(
+                "--finalized-projection-timestamp-seconds is required for observability"
+            )
+        if args.finalized_projection_failure_delta is None:
+            errors.append(
+                "--finalized-projection-failure-delta is required for observability"
+            )
         args.metrics = validate_name_set(
             split_csv_values(args.metric),
             allowed=REQUIRED_METRICS,
@@ -765,6 +789,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--language", action="append", default=[])
     parser.add_argument("--artifact", action="append", default=[])
     parser.add_argument("--metric", action="append", default=[])
+    parser.add_argument("--metrics-scraped-at-unix", type=positive_int_arg)
+    parser.add_argument("--finalized-projection-height", type=positive_int_arg)
+    parser.add_argument(
+        "--finalized-projection-timestamp-seconds",
+        type=positive_int_arg,
+    )
+    parser.add_argument(
+        "--finalized-projection-failure-delta",
+        type=non_negative_int_arg,
+    )
     parser.add_argument("--peer-count", type=positive_int_arg)
     parser.add_argument("--peer", action="append", default=[])
     parser.add_argument("--source", action="append", default=[])

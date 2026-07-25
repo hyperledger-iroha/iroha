@@ -202,7 +202,7 @@ use rand_core_06::OsRng;
 use sorafs_car::{
     CarBuildPlan, CarChunk, ChunkFetchSpec, ChunkStore, ChunkStoreError, FilePlan, InMemoryPayload,
     PorProof,
-    fetch_plan::chunk_fetch_specs_from_json,
+    fetch_plan::chunk_fetch_plan_from_json,
     gateway::{GatewayFetchConfig, GatewayProviderInput},
     local_fetch::{
         self, LocalFetchError, LocalFetchOptions, LocalProviderInput, ProviderMetadataInput,
@@ -230,6 +230,7 @@ use sorafs_manifest::{
     },
     reference_ffi::{
         SORAFS_REFERENCE_FFI_MAX_INPUT_BYTES_V1, SORAFS_REFERENCE_FFI_MAX_LABEL_BYTES_V1,
+        SORAFS_REFERENCE_GOVERNANCE_DAG_CID_BYTES_V1,
         SORAFS_REFERENCE_GOVERNANCE_DAG_MAX_BLOCKS_V1,
     },
     sign_orderbook_payload_bytes_ed25519_v1, validate_governance_dag_block_bytes,
@@ -3784,8 +3785,10 @@ pub struct JsDaProofRecord {
     pub segment_leaves_hex: Vec<String>,
     #[doc = "Hex digests for each segment-level branch."]
     pub chunk_segments_hex: Vec<String>,
-    #[doc = "Hex digests for each chunk-level branch."]
-    pub chunk_roots_hex: Vec<String>,
+    #[doc = "Total number of chunks committed by the PoR root."]
+    pub chunk_count: u64,
+    #[doc = "Hex digests in the chunk-level Merkle authentication path."]
+    pub chunk_merkle_path_hex: Vec<String>,
     #[doc = "Whether the proof verified against the supplied root."]
     pub verified: bool,
 }
@@ -3985,7 +3988,8 @@ fn proof_to_js_record(report: &ProofReport) -> JsDaProofRecord {
         leaf_bytes_b64: STANDARD.encode(&report.proof.leaf_bytes),
         segment_leaves_hex: hex_list(&report.proof.segment_leaves),
         chunk_segments_hex: hex_list(&report.proof.chunk_segments),
-        chunk_roots_hex: hex_list(&report.proof.chunk_roots),
+        chunk_count: report.proof.chunk_count,
+        chunk_merkle_path_hex: hex_list(&report.proof.chunk_merkle_path),
         verified: report.verified,
     }
 }
@@ -4987,6 +4991,7 @@ fn build_gateway_fetch_config(
 
 fn build_gateway_plan(
     specs: &[ChunkFetchSpec],
+    payload_digest: [u8; 32],
     chunker_handle: &str,
 ) -> napi::Result<CarBuildPlan> {
     let descriptor = sorafs_car::chunker_registry::lookup_by_handle(chunker_handle)
@@ -5007,7 +5012,7 @@ fn build_gateway_plan(
         .collect();
     Ok(CarBuildPlan {
         chunk_profile: descriptor.profile,
-        payload_digest: blake3_hash(&[]),
+        payload_digest: blake3::Hash::from_bytes(payload_digest),
         content_length,
         chunks,
         files: vec![FilePlan {
@@ -5405,6 +5410,7 @@ fn convert_fetch_session_to_js(
     session: FetchSession,
     manifest_id_hex: &str,
     chunker_handle: &str,
+    expected_payload_digest: [u8; 32],
     telemetry_region: Option<String>,
     metadata: JsGatewayMetadata,
 ) -> napi::Result<JsGatewayFetchResult> {
@@ -5412,6 +5418,11 @@ fn convert_fetch_session_to_js(
     let policy_report = session.policy_report;
 
     let payload_bytes = outcome.assemble_payload();
+    if blake3_hash(&payload_bytes).as_bytes() != &expected_payload_digest {
+        return Err(invalid_arg(
+            "assembled payload digest does not match canonical chunk fetch plan",
+        ));
+    }
     let assembled_bytes_u64 = u64::try_from(payload_bytes.len()).map_err(|_| {
         invalid_arg("assembled payload exceeds u64 range (too large for JavaScript)")
     })?;
@@ -5656,8 +5667,10 @@ pub fn sorafs_gateway_fetch(
 
     let plan_value: json::Value = json::from_str(&plan_json)
         .map_err(|err| invalid_arg(format!("failed to parse plan JSON: {err}")))?;
-    let mut specs = chunk_fetch_specs_from_json(&plan_value)
+    let parsed_plan = chunk_fetch_plan_from_json(&plan_value)
         .map_err(|err| invalid_arg(format!("invalid chunk fetch plan: {err}")))?;
+    let plan_payload_digest = parsed_plan.payload_digest;
+    let mut specs = parsed_plan.chunk_fetch_specs;
     if specs.is_empty() {
         return Err(invalid_arg(
             "chunk fetch plan must contain at least one chunk",
@@ -5672,7 +5685,7 @@ pub fn sorafs_gateway_fetch(
         }
     }
 
-    let plan = build_gateway_plan(&specs, chunker_handle_trimmed)?;
+    let plan = build_gateway_plan(&specs, plan_payload_digest, chunker_handle_trimmed)?;
 
     let provider_inputs = providers
         .iter()
@@ -5743,6 +5756,7 @@ pub fn sorafs_gateway_fetch(
         session,
         &manifest_id,
         chunker_handle_trimmed,
+        plan_payload_digest,
         telemetry_region,
         js_metadata,
     )
@@ -5911,7 +5925,8 @@ fn parse_da_proof_record(value: &Value, index: usize) -> napi::Result<JsDaProofR
         leaf_bytes_b64: string_field_ctx(map, "leaf_bytes_b64", &ctx)?,
         segment_leaves_hex: string_list_field_ctx(map, "segment_leaves", &ctx)?,
         chunk_segments_hex: string_list_field_ctx(map, "chunk_segments", &ctx)?,
-        chunk_roots_hex: string_list_field_ctx(map, "chunk_roots", &ctx)?,
+        chunk_count: u64_field_ctx(map, "chunk_count", &ctx)?,
+        chunk_merkle_path_hex: string_list_field_ctx(map, "chunk_merkle_path", &ctx)?,
         verified: bool_field_ctx(map, "verified", &ctx)?,
     })
 }
@@ -6489,25 +6504,32 @@ fn validate_sorafs_reference_aggregate_bytes(
     Ok(())
 }
 
+fn validate_sorafs_reference_governance_cid<'a>(
+    cid: Option<&'a [u8]>,
+    context: &str,
+) -> napi::Result<Option<&'a [u8]>> {
+    let Some(cid) = cid else {
+        return Ok(None);
+    };
+    let exact_bytes = SORAFS_REFERENCE_GOVERNANCE_DAG_CID_BYTES_V1 as usize;
+    if cid.len() != exact_bytes {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{context} must contain exactly {exact_bytes} bytes"),
+        ));
+    }
+    Ok(Some(cid))
+}
+
 fn parse_sorafs_orderbook_payload_kind(
     kind: &str,
 ) -> napi::Result<OrderbookValidationPayloadKindV1> {
-    let normalized = kind.trim().to_ascii_lowercase().replace('_', "-");
-    match normalized.as_str() {
-        "order" | "order-request" | "request" | "orderbook-order-request" => {
-            Ok(OrderbookValidationPayloadKindV1::OrderRequest)
-        }
-        "cancel" | "order-cancel" | "orderbook-order-cancel" => {
-            Ok(OrderbookValidationPayloadKindV1::OrderCancel)
-        }
-        "trade" | "trade-event" | "orderbook-trade-event" => {
-            Ok(OrderbookValidationPayloadKindV1::TradeEvent)
-        }
-        "channel" | "settlement-channel" => Ok(OrderbookValidationPayloadKindV1::SettlementChannel),
-        "receipt" | "settlement-receipt" => Ok(OrderbookValidationPayloadKindV1::SettlementReceipt),
-        "snapshot" | "runtime-snapshot" | "orderbook-runtime-snapshot" => {
-            Ok(OrderbookValidationPayloadKindV1::RuntimeSnapshot)
-        }
+    match kind {
+        "order-request" => Ok(OrderbookValidationPayloadKindV1::OrderRequest),
+        "order-cancel" => Ok(OrderbookValidationPayloadKindV1::OrderCancel),
+        "trade-event" => Ok(OrderbookValidationPayloadKindV1::TradeEvent),
+        "settlement-channel" => Ok(OrderbookValidationPayloadKindV1::SettlementChannel),
+        "settlement-receipt" => Ok(OrderbookValidationPayloadKindV1::SettlementReceipt),
         _ => Err(napi::Error::new(
             napi::Status::InvalidArg,
             format!("unsupported SoraFS orderbook payload kind `{kind}`"),
@@ -6516,8 +6538,7 @@ fn parse_sorafs_orderbook_payload_kind(
 }
 
 fn parse_sorafs_orderbook_side(side: &str) -> napi::Result<OrderSideV1> {
-    let normalized = side.trim().to_ascii_lowercase();
-    match normalized.as_str() {
+    match side {
         "bid" => Ok(OrderSideV1::Bid),
         "ask" => Ok(OrderSideV1::Ask),
         _ => Err(napi::Error::new(
@@ -6528,8 +6549,7 @@ fn parse_sorafs_orderbook_side(side: &str) -> napi::Result<OrderSideV1> {
 }
 
 fn parse_sorafs_orderbook_tier(tier: &str) -> napi::Result<OrderTierV1> {
-    let normalized = tier.trim().to_ascii_lowercase();
-    match normalized.as_str() {
+    match tier {
         "hot" => Ok(OrderTierV1::Hot),
         "warm" => Ok(OrderTierV1::Warm),
         "archive" => Ok(OrderTierV1::Archive),
@@ -6541,9 +6561,8 @@ fn parse_sorafs_orderbook_tier(tier: &str) -> napi::Result<OrderTierV1> {
 }
 
 fn parse_sorafs_orderbook_cancel_reason(reason: &str) -> napi::Result<OrderCancelReasonV1> {
-    let normalized = reason.trim().to_ascii_lowercase().replace('_', "-");
-    match normalized.as_str() {
-        "owner-requested" | "owner" | "requested" => Ok(OrderCancelReasonV1::OwnerRequested),
+    match reason {
+        "owner-requested" => Ok(OrderCancelReasonV1::OwnerRequested),
         "expired" => Ok(OrderCancelReasonV1::Expired),
         "governance" => Ok(OrderCancelReasonV1::Governance),
         "replaced" => Ok(OrderCancelReasonV1::Replaced),
@@ -6640,6 +6659,7 @@ pub fn sorafs_build_signed_orderbook_order_request(
     quantity_gib: String,
     remaining_gib: Option<String>,
     owner_account: Uint8Array,
+    provider_id: Uint8Array,
     expiry_unix: String,
     nonce: String,
     maker_fee_bps: u32,
@@ -6667,8 +6687,21 @@ pub fn sorafs_build_signed_orderbook_order_request(
             ),
         ));
     }
+    let side = parse_sorafs_orderbook_side(&side)?;
+    let provider_id = if provider_id.is_empty() {
+        None
+    } else {
+        let provider_id = parse_sorafs_fixed32(&provider_id, "provider_id")?;
+        if provider_id == [0; 32] {
+            return Err(napi::Error::new(
+                napi::Status::InvalidArg,
+                "provider_id must not be all zero",
+            ));
+        }
+        Some(provider_id)
+    };
     let fields = OrderbookOrderRequestFieldsV1 {
-        side: parse_sorafs_orderbook_side(&side)?,
+        side,
         tier: parse_sorafs_orderbook_tier(&tier)?,
         price_per_gib: parse_sorafs_xor_quantity(&price_per_gib, "price_per_gib")?,
         quantity_gib,
@@ -6677,6 +6710,7 @@ pub fn sorafs_build_signed_orderbook_order_request(
             None => quantity_gib,
         },
         owner_account,
+        provider_id,
         expiry_unix: parse_sorafs_decimal_u64(&expiry_unix, "expiry_unix")?,
         nonce,
         maker_fee_bps: parse_sorafs_fee_bps(maker_fee_bps, "maker_fee_bps")?,
@@ -6789,11 +6823,10 @@ enum SorafsPdpPayloadKind {
 }
 
 fn parse_sorafs_pdp_payload_kind(kind: &str) -> napi::Result<SorafsPdpPayloadKind> {
-    let normalized = kind.trim().to_ascii_lowercase().replace('_', "-");
-    match normalized.as_str() {
-        "commitment" | "pdp-commitment" => Ok(SorafsPdpPayloadKind::Commitment),
-        "challenge" | "pdp-challenge" => Ok(SorafsPdpPayloadKind::Challenge),
-        "proof" | "pdp-proof" => Ok(SorafsPdpPayloadKind::Proof),
+    match kind {
+        "commitment" => Ok(SorafsPdpPayloadKind::Commitment),
+        "challenge" => Ok(SorafsPdpPayloadKind::Challenge),
+        "proof" => Ok(SorafsPdpPayloadKind::Proof),
         _ => Err(napi::Error::new(
             napi::Status::InvalidArg,
             format!("unsupported SoraFS PDP payload kind `{kind}`"),
@@ -6904,18 +6937,20 @@ pub fn sorafs_validate_governance_dag_block_json(
 ) -> napi::Result<String> {
     let generated_at = parse_sorafs_generated_at_unix(generated_at_unix)?;
     validate_sorafs_reference_label(&label, "label")?;
+    let expected_block_cid = expected_block_cid.as_ref().map(|cid| {
+        let cid: &[u8] = cid.as_ref();
+        cid
+    });
+    let expected_block_cid =
+        validate_sorafs_reference_governance_cid(expected_block_cid, "expected_block_cid")?;
     validate_sorafs_reference_aggregate_bytes(
         "governance DAG block validation",
         [
             bytes.len(),
             label.len(),
-            expected_block_cid.as_ref().map_or(0, |cid| cid.len()),
+            expected_block_cid.map_or(0, <[u8]>::len),
         ],
     )?;
-    let expected_block_cid = expected_block_cid.as_ref().and_then(|cid| {
-        let cid: &[u8] = cid.as_ref();
-        (!cid.is_empty()).then_some(cid)
-    });
     let outcome = validate_governance_dag_block_bytes(
         bytes.as_ref(),
         label,
@@ -6968,20 +7003,27 @@ mod sorafs_orderbook_validation_tests {
     use super::*;
 
     #[test]
-    fn parse_sorafs_orderbook_payload_kind_accepts_sdk_aliases() {
+    fn parse_sorafs_orderbook_payload_kind_requires_exact_v1_name() {
         assert_eq!(
-            parse_sorafs_orderbook_payload_kind("order").unwrap(),
+            parse_sorafs_orderbook_payload_kind("order-request").unwrap(),
             OrderbookValidationPayloadKindV1::OrderRequest
         );
         assert_eq!(
-            parse_sorafs_orderbook_payload_kind("settlement_channel").unwrap(),
+            parse_sorafs_orderbook_payload_kind("settlement-channel").unwrap(),
             OrderbookValidationPayloadKindV1::SettlementChannel
         );
-        assert_eq!(
-            parse_sorafs_orderbook_payload_kind("runtime-snapshot").unwrap(),
-            OrderbookValidationPayloadKindV1::RuntimeSnapshot
-        );
-        assert!(parse_sorafs_orderbook_payload_kind("unknown").is_err());
+        for retired in [
+            "order",
+            "order_request",
+            " ORDER-REQUEST",
+            "request",
+            "runtime-snapshot",
+        ] {
+            assert!(parse_sorafs_orderbook_payload_kind(retired).is_err());
+        }
+        assert!(parse_sorafs_orderbook_side("Bid").is_err());
+        assert!(parse_sorafs_orderbook_tier(" hot").is_err());
+        assert!(parse_sorafs_orderbook_cancel_reason("owner_requested").is_err());
     }
 
     #[test]
@@ -6999,20 +7041,22 @@ mod sorafs_orderbook_validation_tests {
     }
 
     #[test]
-    fn parse_sorafs_pdp_payload_kind_accepts_sdk_aliases() {
+    fn parse_sorafs_pdp_payload_kind_requires_exact_v1_name() {
         assert_eq!(
             parse_sorafs_pdp_payload_kind("commitment").unwrap(),
             SorafsPdpPayloadKind::Commitment
         );
         assert_eq!(
-            parse_sorafs_pdp_payload_kind("pdp_challenge").unwrap(),
+            parse_sorafs_pdp_payload_kind("challenge").unwrap(),
             SorafsPdpPayloadKind::Challenge
         );
         assert_eq!(
-            parse_sorafs_pdp_payload_kind("pdp-proof").unwrap(),
+            parse_sorafs_pdp_payload_kind("proof").unwrap(),
             SorafsPdpPayloadKind::Proof
         );
-        assert!(parse_sorafs_pdp_payload_kind("unknown").is_err());
+        for retired in ["pdp-commitment", "pdp_challenge", " PROOF", "Proof"] {
+            assert!(parse_sorafs_pdp_payload_kind(retired).is_err());
+        }
     }
 
     #[test]
@@ -7045,6 +7089,16 @@ mod sorafs_orderbook_validation_tests {
             validate_sorafs_reference_aggregate_bytes("governance DAG", [maximum_input, 1])
                 .is_err()
         );
+
+        assert!(validate_sorafs_reference_governance_cid(None, "expected CID").is_ok());
+        let exact_cid = [0_u8; SORAFS_REFERENCE_GOVERNANCE_DAG_CID_BYTES_V1 as usize];
+        assert!(validate_sorafs_reference_governance_cid(Some(&exact_cid), "expected CID").is_ok());
+        for invalid_length in [0, exact_cid.len() - 1, exact_cid.len() + 1] {
+            let invalid = vec![0_u8; invalid_length];
+            assert!(
+                validate_sorafs_reference_governance_cid(Some(&invalid), "expected CID").is_err()
+            );
+        }
     }
 
     #[test]
@@ -16544,7 +16598,7 @@ mod tests {
         to_bytes,
     };
     use sorafs_car::{
-        CarBuildPlan, CarWriter, chunker_registry, fetch_plan::chunk_fetch_specs_to_string,
+        CarBuildPlan, CarWriter, chunker_registry, fetch_plan::chunk_fetch_plan_to_string,
     };
     use sorafs_chunker::ChunkProfile;
     use sorafs_manifest::{
@@ -21846,9 +21900,7 @@ seiyaku Privacy {
 
         let plan =
             CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
-        let plan_json =
-            sorafs_car::fetch_plan::chunk_fetch_specs_to_string(&plan.chunk_fetch_specs())
-                .expect("serialize plan");
+        let plan_json = chunk_fetch_plan_to_string(&plan).expect("serialize plan");
 
         let providers = vec![
             JsLocalProviderSpec {
@@ -21930,6 +21982,10 @@ seiyaku Privacy {
                 chunker_registry::DEFAULT_MULTIHASH_CODE,
             ))
             .chunk_digest_sha3_256(sorafs_car::compute_chunk_plan_digest_sha3(&plan.chunks))
+            .por_root(
+                sorafs_car::compute_por_root(&payload, &plan)
+                    .expect("derive canonical fixture PoR root"),
+            )
             .content_length(plan.content_length)
             .car_digest(car_stats.car_archive_digest.into())
             .car_size(car_stats.car_size)
@@ -21960,8 +22016,7 @@ seiyaku Privacy {
             u16::try_from(plan.chunks.len()).expect("chunk count fits in u16"),
         );
 
-        let plan_json =
-            chunk_fetch_specs_to_string(&plan.chunk_fetch_specs()).expect("serialize plan");
+        let plan_json = chunk_fetch_plan_to_string(&plan).expect("serialize plan");
         let tempdir = tempdir().expect("tempdir");
         let norito_dir = tempdir.path().join("norito");
         let car_dir = tempdir.path().join("car");
@@ -22343,9 +22398,7 @@ seiyaku Privacy {
 
         let plan =
             CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
-        let plan_json =
-            sorafs_car::fetch_plan::chunk_fetch_specs_to_string(&plan.chunk_fetch_specs())
-                .expect("serialize plan");
+        let plan_json = chunk_fetch_plan_to_string(&plan).expect("serialize plan");
 
         let issued_at = unix_time_now().unwrap_or(1_700_000_000);
         let providers = vec![
@@ -22439,9 +22492,7 @@ seiyaku Privacy {
 
         let plan =
             CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
-        let plan_json =
-            sorafs_car::fetch_plan::chunk_fetch_specs_to_string(&plan.chunk_fetch_specs())
-                .expect("serialize plan");
+        let plan_json = chunk_fetch_plan_to_string(&plan).expect("serialize plan");
 
         let providers = vec![
             JsLocalProviderSpec {

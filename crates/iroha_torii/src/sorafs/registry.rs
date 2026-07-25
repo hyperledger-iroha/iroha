@@ -2149,6 +2149,8 @@ mod tests {
             fixture_manifest_root_cid(),
             chunker,
             [0xBB; 32],
+            [0; 32],
+            0,
             policy,
             submitter,
             42,

@@ -14,7 +14,7 @@ translator: machine-google-reviewed
 
 `python3 scripts/inventory_env_toggles.py --json docs/source/agents/env_var_inventory.json --md docs/source/agents/env_var_inventory.md`_ کے ذریعے تازہ ترین
 
-کل حوالہ جات: ** 505 ** · منفرد متغیرات: ** 137 **
+کل حوالہ جات: ** 502 ** · منفرد متغیرات: ** 137 **
 
 ## ایکشن_ڈ_ٹوکین_رکیوسٹ_ٹوکن (پروڈ: 1)
 
@@ -265,9 +265,6 @@ translator: machine-google-reviewed
 - ٹیسٹ: کریٹس/sorafs_manifest/tests/por_fixtures.rs: 11 - `env!("CARGO_MANIFEST_DIR"),`
 - ٹیسٹ: کریٹس/sorafs_manifest/tests/provider_admission_fixtures.rs: 12 - `cmd.current_dir(env!("CARGO_MANIFEST_DIR"))`
 - ٹیسٹ: کریٹس/sorafs_manifest/tests/replication_order_fixtures.rs: 8 - `env!("CARGO_MANIFEST_DIR"),`
-- پروڈ: کریٹس/sorafs_node/src/bin/sorafs_gateway.rs: 55 - `PathBuf::from(env!("CARGO_MANIFEST_DIR"))`
-- پروڈ: کریٹس/sorafs_node/src/bin/sorafs_gateway.rs: 59 - `PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/sorafs_gateway/1.0.0")`
-- ٹیسٹ: کریٹس/sorafs_node/src/گیٹ وے۔ آر ایس: 2006 - `PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/sorafs_gateway/1.0.0");`
 - ٹیسٹ: کریٹس/sorafs_node/tests/cli.rs: 122 - `let base = Path::new(env!("CARGO_MANIFEST_DIR"))`
 - ٹیسٹ: کریٹس/sorafs_node/ٹیسٹ/گیٹ وے۔ آر ایس: 14 - `PathBuf::from(env!("CARGO_MANIFEST_DIR"))`
 - ٹیسٹ: کریٹس/sorafs_node/ٹیسٹ/گیٹ وے۔ آر ایس: 30 - `let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))`

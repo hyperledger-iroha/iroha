@@ -57,8 +57,10 @@ pub mod local_fetch;
 pub mod moderation;
 pub mod multi_fetch;
 pub mod policy;
+#[cfg(feature = "manifest")]
 #[path = "proof_stream.rs"]
 pub mod proof_stream;
+#[cfg(feature = "manifest")]
 #[path = "proof_stream_transport.rs"]
 pub mod proof_stream_transport;
 #[cfg(feature = "manifest")]
@@ -101,6 +103,16 @@ pub fn compute_chunk_plan_digest_sha3(chunks: &[CarChunk]) -> [u8; 32] {
             .iter()
             .map(|chunk| (chunk.offset, u64::from(chunk.length), chunk.digest)),
     )
+}
+
+/// Compute the canonical PoR commitment for `payload` under an existing CAR plan.
+///
+/// The plan is revalidated against the payload before the root is returned, so manifest
+/// producers cannot commit to geometry that differs from the bytes they package.
+pub fn compute_por_root(payload: &[u8], plan: &CarBuildPlan) -> Result<[u8; 32], ChunkStoreError> {
+    let mut store = ChunkStore::with_profile(plan.chunk_profile);
+    store.ingest_plan(payload, plan)?;
+    Ok(*store.por_tree().root())
 }
 
 /// Identifier assigned to registered chunking profiles.
@@ -929,8 +941,12 @@ const CAR_CHUNK_LENGTH_LIMIT: u32 = u32::MAX;
 // Keep a single untrusted plan entry from requesting a multi-gigabyte allocation. Canonical
 // SoraFS profiles are at most 512 KiB and DA ingest is specified at no more than 2 MiB, so this
 // ceiling retains headroom without making allocation size attacker-controlled.
-const CHUNK_STORE_MAX_CHUNK_BYTES: u32 = 4 * 1024 * 1024;
-const CAR_PLAN_MAX_CHUNKS: usize = 4_194_304;
+/// Maximum byte length of one chunk accepted by the canonical CAR/PoR pipeline.
+pub const CHUNK_STORE_MAX_CHUNK_BYTES: u32 = 4 * 1024 * 1024;
+/// Maximum number of chunks accepted by one canonical CAR plan.
+pub const CAR_PLAN_MAX_CHUNKS: usize = 4_194_304;
+/// Maximum authentication-path depth for the canonical chunk Merkle tree.
+pub const POR_CHUNK_MERKLE_MAX_DEPTH: usize = 22;
 const CAR_PLAN_MAX_FILES: usize = 1_000_000;
 #[cfg(unix)]
 const CAR_DIRECTORY_MAX_ENTRIES: usize = 1_000_000;
@@ -2834,25 +2850,13 @@ impl ChunkStore {
                 limit: self.max_estimated_heap_bytes,
             });
         }
-        let mut rng_state = seed;
-        let mut seen = HashSet::new();
-        seen.try_reserve(target)
-            .map_err(|_| ChunkStoreError::AllocationFailed {
-                context: "PoR sample uniqueness set",
-                requested: target,
-            })?;
         let mut samples = Vec::new();
         try_reserve_store(&mut samples, target, "PoR samples")?;
-        while samples.len() < target {
-            rng_state = splitmix64(rng_state);
-            let idx = usize::try_from(rng_state % total_u64).map_err(|_| {
-                ChunkStoreError::PorCountOverflow {
+        for flat_index in PorSampleIndices::new(total_u64, target, seed)? {
+            let idx =
+                usize::try_from(flat_index).map_err(|_| ChunkStoreError::PorCountOverflow {
                     context: "PoR sampled leaf index",
-                }
-            })?;
-            if !seen.insert(idx) {
-                continue;
-            }
+                })?;
             let (chunk_idx, segment_idx, leaf_idx) =
                 self.por_tree
                     .leaf_path(idx)
@@ -3067,6 +3071,7 @@ impl ChunkStore {
         #[cfg(feature = "manifest")]
         let mut pdp_builder = (plan.content_length != 0).then(PdpMerkleTreeBuilderV1::new);
 
+        let mut next_por_leaf_index = 0u64;
         for (idx, chunk_plan) in plan.chunks.iter().enumerate() {
             let expected_len = chunk_plan.length as usize;
             buffer.resize(expected_len, 0);
@@ -3101,15 +3106,18 @@ impl ChunkStore {
                 blake3: chunk_plan.digest,
             });
 
-            let (chunk_tree, chunk_root) = PorMerkleTree::build_chunk_tree_from_bytes(
-                idx,
-                chunk_plan.offset,
-                chunk_plan.length,
-                chunk_plan.digest,
-                &buffer,
-            )?;
+            let (chunk_tree, chunk_root, next_leaf_index) =
+                PorMerkleTree::build_chunk_tree_from_bytes(
+                    idx,
+                    chunk_plan.offset,
+                    chunk_plan.length,
+                    chunk_plan.digest,
+                    next_por_leaf_index,
+                    &buffer,
+                )?;
             chunk_roots.push(chunk_root);
             chunk_nodes.push(chunk_tree);
+            next_por_leaf_index = next_leaf_index;
 
             sink.write_chunk(idx, chunk_plan, &buffer)?;
         }
@@ -3192,7 +3200,8 @@ pub const POR_LEAF_SIZE: usize = 4 * 1024;
 const POR_LEAF_DOMAIN: &[u8] = b"sorafs:por:leaf:v1";
 const POR_SEGMENT_DOMAIN: &[u8] = b"sorafs:por:segment:v1";
 const POR_CHUNK_DOMAIN: &[u8] = b"sorafs:por:chunk:v1";
-const POR_ROOT_DOMAIN: &[u8] = b"sorafs:por:root:v1";
+const POR_CHUNK_NODE_DOMAIN: &[u8] = b"sorafs:por:chunk-node:v1";
+const POR_ROOT_DOMAIN: &[u8] = b"sorafs:por:root-merkle:v1";
 
 fn try_reserve_store<T>(
     values: &mut Vec<T>,
@@ -3225,12 +3234,26 @@ fn checked_por_heap_add_product(
     Ok(())
 }
 
+fn ensure_por_chunk_count(chunk_count: usize) -> Result<(), ChunkStoreError> {
+    if chunk_count > CAR_PLAN_MAX_CHUNKS {
+        return Err(ChunkStoreError::InvalidPlan(
+            CarPlanValidationError::TooManyChunks {
+                count: chunk_count,
+                maximum: CAR_PLAN_MAX_CHUNKS,
+            },
+        ));
+    }
+    Ok(())
+}
+
 /// Two-level Merkle tree used for Proof-of-Retrievability sampling.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PorMerkleTree {
     root: [u8; 32],
     chunks: Vec<PorChunkTree>,
+    chunk_merkle_levels: Vec<Vec<[u8; 32]>>,
     payload_len: u64,
+    leaf_count: u64,
 }
 
 impl PorMerkleTree {
@@ -3240,7 +3263,9 @@ impl PorMerkleTree {
         Self {
             root: [0u8; 32],
             chunks: Vec::new(),
+            chunk_merkle_levels: Vec::new(),
             payload_len: 0,
+            leaf_count: 0,
         }
     }
 
@@ -3265,13 +3290,21 @@ impl PorMerkleTree {
                 context: "non-empty payload chunk inventory",
             });
         }
+        ensure_por_chunk_count(chunks.len())?;
 
         let mut chunk_nodes = Vec::new();
         try_reserve_store(&mut chunk_nodes, chunks.len(), "PoR chunk nodes")?;
         let mut chunk_roots = Vec::new();
         try_reserve_store(&mut chunk_roots, chunks.len(), "PoR chunk roots")?;
         let mut expected_offset = 0u64;
+        let mut next_leaf_index = 0u64;
         for (index, chunk) in chunks.iter().enumerate() {
+            if chunk.length > CHUNK_STORE_MAX_CHUNK_BYTES {
+                return Err(ChunkStoreError::ChunkLengthTooLarge {
+                    length: chunk.length as usize,
+                    limit: CHUNK_STORE_MAX_CHUNK_BYTES,
+                });
+            }
             if chunk.length == 0 || chunk.offset != expected_offset {
                 return Err(ChunkStoreError::PorInvariant {
                     context: "payload chunk geometry",
@@ -3304,15 +3337,17 @@ impl PorMerkleTree {
             if blake3::hash(bytes).as_bytes() != &chunk.blake3 {
                 return Err(ChunkStoreError::DigestMismatch { chunk_index: index });
             }
-            let (chunk_tree, chunk_root) = Self::build_chunk_tree_from_bytes(
+            let (chunk_tree, chunk_root, next_index) = Self::build_chunk_tree_from_bytes(
                 index,
                 chunk.offset,
                 chunk.length,
                 chunk.blake3,
+                next_leaf_index,
                 bytes,
             )?;
             chunk_roots.push(chunk_root);
             chunk_nodes.push(chunk_tree);
+            next_leaf_index = next_index;
             expected_offset =
                 u64::try_from(chunk_end).map_err(|_| ChunkStoreError::PorInvariant {
                     context: "payload chunk end conversion",
@@ -3325,12 +3360,6 @@ impl PorMerkleTree {
         }
 
         Self::try_from_chunks(chunk_nodes, chunk_roots, payload_len)
-    }
-
-    /// Alias for [`Self::try_from_payload`] retained while callers migrate to explicit `try_`
-    /// construction.
-    pub fn from_payload(payload: &[u8], chunks: &[StoredChunk]) -> Result<Self, ChunkStoreError> {
-        Self::try_from_payload(payload, chunks)
     }
 
     /// Builds a PoR tree from precomputed chunk subtrees and validates all canonical geometry and
@@ -3354,13 +3383,16 @@ impl PorMerkleTree {
                 context: "PoR chunk root inventory",
             });
         }
+        ensure_por_chunk_count(chunks.len())?;
 
         let mut expected_chunk_offset = 0u64;
         let mut total_segments = 0usize;
-        let mut total_leaves = 0usize;
+        let mut total_leaves = 0u64;
+        let mut expected_leaf_index = 0u64;
         for (chunk_index, chunk) in chunks.iter().enumerate() {
             if chunk.chunk_index != chunk_index
                 || chunk.length == 0
+                || chunk.length > CHUNK_STORE_MAX_CHUNK_BYTES
                 || chunk.offset != expected_chunk_offset
                 || chunk.root != chunk_roots[chunk_index]
                 || chunk.segments.is_empty()
@@ -3407,7 +3439,12 @@ impl PorMerkleTree {
                         context: "PoR segment geometry",
                     });
                 }
-                total_leaves = total_leaves.checked_add(segment.leaves.len()).ok_or(
+                let segment_leaf_count = u64::try_from(segment.leaves.len()).map_err(|_| {
+                    ChunkStoreError::PorCountOverflow {
+                        context: "PoR segment leaf count",
+                    }
+                })?;
+                total_leaves = total_leaves.checked_add(segment_leaf_count).ok_or(
                     ChunkStoreError::PorCountOverflow {
                         context: "PoR leaf count",
                     },
@@ -3423,6 +3460,7 @@ impl PorMerkleTree {
                         }
                     })?;
                     if expected_leaf_len == 0
+                        || leaf.flat_index != expected_leaf_index
                         || leaf.offset != expected_leaf_offset
                         || leaf.length != expected_leaf_len_u32
                     {
@@ -3435,6 +3473,11 @@ impl PorMerkleTree {
                         .ok_or(ChunkStoreError::PorInvariant {
                             context: "PoR leaf range",
                         })?;
+                    expected_leaf_index = expected_leaf_index.checked_add(1).ok_or(
+                        ChunkStoreError::PorCountOverflow {
+                            context: "PoR canonical flat leaf index",
+                        },
+                    )?;
                     remaining_segment -= expected_leaf_len;
                 }
                 if remaining_segment != 0
@@ -3486,23 +3529,32 @@ impl PorMerkleTree {
         }
         // Keep the checked accumulations above even though the values are not otherwise required:
         // they prove the infallible compatibility count accessors cannot overflow.
-        let _ = (total_segments, total_leaves);
-        let root = hash_root(payload_len, &chunk_roots);
+        let _ = total_segments;
+        let chunk_merkle_levels = build_chunk_merkle_levels(&chunk_roots)?;
+        let chunk_tree_root = if chunk_roots.len() == 1 {
+            chunk_roots[0]
+        } else {
+            chunk_merkle_levels
+                .last()
+                .and_then(|level| level.first())
+                .copied()
+                .ok_or(ChunkStoreError::PorInvariant {
+                    context: "PoR chunk Merkle root",
+                })?
+        };
+        let root = hash_root(
+            payload_len,
+            chunk_roots.len(),
+            total_leaves,
+            &chunk_tree_root,
+        )?;
         Ok(Self {
             root,
             chunks,
+            chunk_merkle_levels,
             payload_len,
+            leaf_count: total_leaves,
         })
-    }
-
-    /// Alias for [`Self::try_from_chunks`] retained while callers migrate to explicit `try_`
-    /// construction.
-    pub fn from_chunks(
-        chunks: Vec<PorChunkTree>,
-        chunk_roots: Vec<[u8; 32]>,
-        payload_len: u64,
-    ) -> Result<Self, ChunkStoreError> {
-        Self::try_from_chunks(chunks, chunk_roots, payload_len)
     }
 
     /// Returns the root digest of the PoR tree.
@@ -3523,6 +3575,12 @@ impl PorMerkleTree {
         self.payload_len
     }
 
+    /// Returns the authenticated total number of PoR leaves represented by this tree.
+    #[must_use]
+    pub fn leaf_count_u64(&self) -> u64 {
+        self.leaf_count
+    }
+
     /// Returns true if the tree is empty.
     #[must_use]
     pub fn is_empty(&self) -> bool {
@@ -3531,17 +3589,8 @@ impl PorMerkleTree {
 
     /// Returns the total number of PoR leaves tracked by this tree, rejecting host-width overflow.
     pub fn try_leaf_count(&self) -> Result<usize, ChunkStoreError> {
-        self.chunks.iter().try_fold(0usize, |chunk_total, chunk| {
-            chunk
-                .segments
-                .iter()
-                .try_fold(chunk_total, |total, segment| {
-                    total.checked_add(segment.leaves.len()).ok_or(
-                        ChunkStoreError::PorCountOverflow {
-                            context: "PoR leaf count",
-                        },
-                    )
-                })
+        usize::try_from(self.leaf_count).map_err(|_| ChunkStoreError::PorCountOverflow {
+            context: "PoR leaf count host width",
         })
     }
 
@@ -3666,7 +3715,7 @@ impl PorMerkleTree {
         try_reserve_store(&mut leaf_bytes, leaf_len, "PoR proof leaf bytes")?;
         leaf_bytes.resize(leaf_len, 0);
         source.read_exact(leaf.offset, &mut leaf_bytes)?;
-        if hash_leaf(leaf.offset, &leaf_bytes) != leaf.digest {
+        if hash_leaf(leaf.flat_index, leaf.offset, &leaf_bytes) != leaf.digest {
             return Err(ChunkStoreError::PorProofLeafDigestMismatch {
                 chunk_index,
                 segment_index,
@@ -3692,14 +3741,17 @@ impl PorMerkleTree {
         for entry in &chunk.segments {
             chunk_segments.push(entry.digest);
         }
-        let mut chunk_roots = Vec::new();
-        try_reserve_store(&mut chunk_roots, self.chunks.len(), "PoR proof chunk roots")?;
-        for entry in &self.chunks {
-            chunk_roots.push(entry.root);
-        }
+        let chunk_merkle_path = self.chunk_merkle_path(chunk_index)?;
 
         Ok(Some(PorProof {
             payload_len: self.payload_len,
+            chunk_count: u64::try_from(self.chunks.len()).map_err(|_| {
+                ChunkStoreError::PorCountOverflow {
+                    context: "PoR proof chunk count",
+                }
+            })?,
+            leaf_count: self.leaf_count,
+            leaf_index_flat: leaf.flat_index,
             chunk_index,
             chunk_offset: chunk.offset,
             chunk_length: chunk.length,
@@ -3716,8 +3768,39 @@ impl PorMerkleTree {
             leaf_digest: leaf.digest,
             segment_leaves,
             chunk_segments,
-            chunk_roots,
+            chunk_merkle_path,
         }))
+    }
+
+    fn chunk_merkle_path(&self, chunk_index: usize) -> Result<Vec<[u8; 32]>, ChunkStoreError> {
+        let depth = chunk_merkle_depth(self.chunks.len());
+        let mut path = Vec::new();
+        try_reserve_store(&mut path, depth, "PoR proof chunk Merkle path")?;
+        let mut index = chunk_index;
+        let mut width = self.chunks.len();
+        for level in 0..depth {
+            let sibling_index = if index % 2 == 0 {
+                index.checked_add(1).filter(|sibling| *sibling < width)
+            } else {
+                Some(index - 1)
+            }
+            .unwrap_or(index);
+            let sibling = if level == 0 {
+                self.chunks.get(sibling_index).map(|chunk| chunk.root)
+            } else {
+                self.chunk_merkle_levels
+                    .get(level - 1)
+                    .and_then(|nodes| nodes.get(sibling_index))
+                    .copied()
+            }
+            .ok_or(ChunkStoreError::PorInvariant {
+                context: "PoR chunk Merkle path",
+            })?;
+            path.push(sibling);
+            index /= 2;
+            width = width.div_ceil(2);
+        }
+        Ok(path)
     }
 
     fn estimate_proof_heap(
@@ -3749,9 +3832,9 @@ impl PorMerkleTree {
         )?;
         checked_por_heap_add_product(
             &mut estimated,
-            self.chunks.len(),
+            chunk_merkle_depth(self.chunks.len()),
             std::mem::size_of::<[u8; 32]>(),
-            "PoR proof chunk roots",
+            "PoR proof chunk Merkle path",
         )?;
         Ok(estimated)
     }
@@ -3796,8 +3879,9 @@ impl PorMerkleTree {
         chunk_offset: u64,
         chunk_length: u32,
         chunk_digest: [u8; 32],
+        first_leaf_index: u64,
         bytes: &[u8],
-    ) -> Result<(PorChunkTree, [u8; 32]), ChunkStoreError> {
+    ) -> Result<(PorChunkTree, [u8; 32], u64), ChunkStoreError> {
         let expected_len =
             usize::try_from(chunk_length).map_err(|_| ChunkStoreError::PorInvariant {
                 context: "PoR chunk length host width",
@@ -3818,6 +3902,7 @@ impl PorMerkleTree {
             "PoR chunk segment roots",
         )?;
         let mut segment_start = 0usize;
+        let mut next_leaf_index = first_leaf_index;
         while segment_start < bytes.len() {
             let segment_len = (bytes.len() - segment_start).min(POR_SEGMENT_SIZE);
             let segment_end =
@@ -3849,14 +3934,25 @@ impl PorMerkleTree {
                         context: "PoR leaf absolute offset",
                     },
                 )?;
-                let digest = hash_leaf(absolute_offset, &bytes[leaf_start..leaf_end]);
+                let digest = hash_leaf(
+                    next_leaf_index,
+                    absolute_offset,
+                    &bytes[leaf_start..leaf_end],
+                );
                 leaves.push(PorLeaf {
+                    flat_index: next_leaf_index,
                     offset: absolute_offset,
                     length: u32::try_from(leaf_len).map_err(|_| ChunkStoreError::PorInvariant {
                         context: "PoR leaf length width",
                     })?,
                     digest,
                 });
+                next_leaf_index =
+                    next_leaf_index
+                        .checked_add(1)
+                        .ok_or(ChunkStoreError::PorCountOverflow {
+                            context: "PoR canonical flat leaf index",
+                        })?;
                 leaf_hashes.push(digest);
                 leaf_start = leaf_end;
             }
@@ -3905,6 +4001,7 @@ impl PorMerkleTree {
                 segments,
             },
             chunk_root,
+            next_leaf_index,
         ))
     }
 }
@@ -3932,6 +4029,8 @@ pub struct PorSegment {
 /// PoR metadata for a sampling leaf (4 KiB target).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PorLeaf {
+    /// Canonical flattened index committed into this leaf digest.
+    pub flat_index: u64,
     pub offset: u64,
     pub length: u32,
     pub digest: [u8; 32],
@@ -3941,6 +4040,9 @@ pub struct PorLeaf {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PorProof {
     pub payload_len: u64,
+    pub chunk_count: u64,
+    pub leaf_count: u64,
+    pub leaf_index_flat: u64,
     pub chunk_index: usize,
     pub chunk_offset: u64,
     pub chunk_length: u32,
@@ -3957,10 +4059,62 @@ pub struct PorProof {
     pub leaf_digest: [u8; 32],
     pub segment_leaves: Vec<[u8; 32]>,
     pub chunk_segments: Vec<[u8; 32]>,
-    pub chunk_roots: Vec<[u8; 32]>,
+    pub chunk_merkle_path: Vec<[u8; 32]>,
 }
 
 impl PorProof {
+    fn reconstructed_root(&self) -> Option<[u8; 32]> {
+        let chunk_count = usize::try_from(self.chunk_count).ok()?;
+        if !(1..=CAR_PLAN_MAX_CHUNKS).contains(&chunk_count)
+            || self.chunk_index >= chunk_count
+            || self.chunk_merkle_path.len() != chunk_merkle_depth(chunk_count)
+            || self.chunk_merkle_path.len() > POR_CHUNK_MERKLE_MAX_DEPTH
+        {
+            return None;
+        }
+        let mut chunk_tree_root = self.chunk_root;
+        let mut chunk_tree_index = self.chunk_index;
+        let mut chunk_tree_width = chunk_count;
+        for (level, sibling) in self.chunk_merkle_path.iter().enumerate() {
+            let is_unpaired_tail =
+                chunk_tree_width % 2 == 1 && chunk_tree_index + 1 == chunk_tree_width;
+            if is_unpaired_tail && sibling != &chunk_tree_root {
+                return None;
+            }
+            let (left, right) = if chunk_tree_index % 2 == 0 {
+                (&chunk_tree_root, sibling)
+            } else {
+                (sibling, &chunk_tree_root)
+            };
+            chunk_tree_root = hash_chunk_node(
+                u32::try_from(level).ok()?,
+                u64::try_from(chunk_tree_index / 2).ok()?,
+                left,
+                right,
+            );
+            chunk_tree_index /= 2;
+            chunk_tree_width = chunk_tree_width.div_ceil(2);
+        }
+        hash_root(
+            self.payload_len,
+            chunk_count,
+            self.leaf_count,
+            &chunk_tree_root,
+        )
+        .ok()
+    }
+
+    /// Checks that every digest and geometry claim inside this witness agrees with the others.
+    ///
+    /// This is not an authenticity check: the root is reconstructed from the untrusted witness
+    /// itself. Call [`Self::verify`] with a trusted, externally authenticated PoR root before
+    /// accepting the proof.
+    #[must_use]
+    pub fn is_internally_consistent(&self) -> bool {
+        self.reconstructed_root()
+            .is_some_and(|witness_root| self.verify(&witness_root))
+    }
+
     /// Verifies the proof against the expected PoR root.
     #[must_use]
     pub fn verify(&self, expected_root: &[u8; 32]) -> bool {
@@ -3972,7 +4126,20 @@ impl PorProof {
             Ok(value) => value,
             Err(_) => return false,
         };
-        if self.chunk_length == 0 || self.segment_length == 0 || self.leaf_length == 0 {
+        let chunk_count = match usize::try_from(self.chunk_count) {
+            Ok(count) if (1..=CAR_PLAN_MAX_CHUNKS).contains(&count) => count,
+            _ => return false,
+        };
+        if self.chunk_index >= chunk_count
+            || self.leaf_count == 0
+            || self.leaf_index_flat >= self.leaf_count
+            || self.chunk_merkle_path.len() != chunk_merkle_depth(chunk_count)
+            || self.chunk_merkle_path.len() > POR_CHUNK_MERKLE_MAX_DEPTH
+            || self.chunk_length == 0
+            || self.chunk_length > CHUNK_STORE_MAX_CHUNK_BYTES
+            || self.segment_length == 0
+            || self.leaf_length == 0
+        {
             return false;
         }
         let expected_segment_count = u64::from(self.chunk_length).div_ceil(segment_size);
@@ -4055,11 +4222,7 @@ impl PorProof {
         if self.chunk_segments.get(self.segment_index) != Some(&self.segment_digest) {
             return false;
         }
-        if self.chunk_roots.get(self.chunk_index) != Some(&self.chunk_root) {
-            return false;
-        }
-
-        let recomputed_leaf = hash_leaf(self.leaf_offset, &self.leaf_bytes);
+        let recomputed_leaf = hash_leaf(self.leaf_index_flat, self.leaf_offset, &self.leaf_bytes);
         if recomputed_leaf != self.leaf_digest {
             return false;
         }
@@ -4088,14 +4251,15 @@ impl PorProof {
             return false;
         }
 
-        let recomputed_root = hash_root(self.payload_len, &self.chunk_roots);
-        &recomputed_root == expected_root
+        self.reconstructed_root()
+            .is_some_and(|recomputed_root| &recomputed_root == expected_root)
     }
 }
 
-fn hash_leaf(offset: u64, bytes: &[u8]) -> [u8; 32] {
+fn hash_leaf(flat_index: u64, offset: u64, bytes: &[u8]) -> [u8; 32] {
     let mut hasher = Hasher::new();
     hasher.update(POR_LEAF_DOMAIN);
+    hasher.update(&flat_index.to_le_bytes());
     hasher.update(&offset.to_le_bytes());
     hasher.update(&(bytes.len() as u32).to_le_bytes());
     hasher.update(bytes);
@@ -4168,18 +4332,193 @@ fn hash_chunk_from_entries(index: u64, chunk: &PorChunkTree) -> Result<[u8; 32],
     Ok(hasher.finalize().into())
 }
 
-fn hash_root(total_len: u64, chunk_roots: &[[u8; 32]]) -> [u8; 32] {
-    let mut hasher = Hasher::new();
-    hasher.update(POR_ROOT_DOMAIN);
-    hasher.update(&total_len.to_le_bytes());
-    hasher.update(&(chunk_roots.len() as u64).to_le_bytes());
-    for root in chunk_roots {
-        hasher.update(root);
+fn chunk_merkle_depth(chunk_count: usize) -> usize {
+    if chunk_count <= 1 {
+        0
+    } else {
+        usize::BITS as usize - (chunk_count - 1).leading_zeros() as usize
     }
+}
+
+fn hash_chunk_node(level: u32, parent_index: u64, left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
+    let mut hasher = Hasher::new();
+    hasher.update(POR_CHUNK_NODE_DOMAIN);
+    hasher.update(&level.to_le_bytes());
+    hasher.update(&parent_index.to_le_bytes());
+    hasher.update(left);
+    hasher.update(right);
     hasher.finalize().into()
 }
 
-fn splitmix64(mut state: u64) -> u64 {
+fn build_chunk_merkle_levels(
+    chunk_roots: &[[u8; 32]],
+) -> Result<Vec<Vec<[u8; 32]>>, ChunkStoreError> {
+    if chunk_roots.is_empty() {
+        return Ok(Vec::new());
+    }
+    if chunk_roots.len() > CAR_PLAN_MAX_CHUNKS {
+        return Err(ChunkStoreError::PorInvariant {
+            context: "PoR chunk Merkle count",
+        });
+    }
+    let mut levels: Vec<Vec<[u8; 32]>> = Vec::new();
+    let mut width = chunk_roots.len();
+    let mut level = 0_u32;
+    while width > 1 {
+        let parent_count = width.div_ceil(2);
+        let mut parents = Vec::new();
+        try_reserve_store(&mut parents, parent_count, "PoR chunk Merkle level")?;
+        for parent_index in 0..parent_count {
+            let child_index = parent_index * 2;
+            let (left, right) = if levels.is_empty() {
+                let left = &chunk_roots[child_index];
+                let right = chunk_roots.get(child_index + 1).unwrap_or(left);
+                (left, right)
+            } else {
+                let children = levels.last().expect("non-empty chunk Merkle levels");
+                let left = &children[child_index];
+                let right = children.get(child_index + 1).unwrap_or(left);
+                (left, right)
+            };
+            let parent_index =
+                u64::try_from(parent_index).map_err(|_| ChunkStoreError::PorCountOverflow {
+                    context: "PoR chunk Merkle parent index",
+                })?;
+            parents.push(hash_chunk_node(level, parent_index, left, right));
+        }
+        width = parents.len();
+        levels.push(parents);
+        level = level
+            .checked_add(1)
+            .ok_or(ChunkStoreError::PorCountOverflow {
+                context: "PoR chunk Merkle level",
+            })?;
+    }
+    if levels.len() > POR_CHUNK_MERKLE_MAX_DEPTH {
+        return Err(ChunkStoreError::PorInvariant {
+            context: "PoR chunk Merkle depth",
+        });
+    }
+    Ok(levels)
+}
+
+fn hash_root(
+    total_len: u64,
+    chunk_count: usize,
+    leaf_count: u64,
+    chunk_tree_root: &[u8; 32],
+) -> Result<[u8; 32], ChunkStoreError> {
+    let minimum_leaf_count = total_len.div_ceil(u64::try_from(POR_LEAF_SIZE).map_err(|_| {
+        ChunkStoreError::PorCountOverflow {
+            context: "PoR leaf size",
+        }
+    })?);
+    if total_len == 0
+        || chunk_count == 0
+        || chunk_count > CAR_PLAN_MAX_CHUNKS
+        || leaf_count < minimum_leaf_count
+        || leaf_count > total_len
+    {
+        return Err(ChunkStoreError::PorInvariant {
+            context: "PoR root chunk count",
+        });
+    }
+    let chunk_count =
+        u64::try_from(chunk_count).map_err(|_| ChunkStoreError::PorCountOverflow {
+            context: "PoR root chunk count",
+        })?;
+    if leaf_count < chunk_count {
+        return Err(ChunkStoreError::PorInvariant {
+            context: "PoR root leaf population",
+        });
+    }
+    let mut hasher = Hasher::new();
+    hasher.update(POR_ROOT_DOMAIN);
+    hasher.update(&total_len.to_le_bytes());
+    hasher.update(&chunk_count.to_le_bytes());
+    hasher.update(&leaf_count.to_le_bytes());
+    hasher.update(chunk_tree_root);
+    Ok(hasher.finalize().into())
+}
+
+/// Deterministic, allocation-bounded iterator over unique PoR sample indices.
+///
+/// Each SplitMix64 candidate is reduced into the authenticated leaf population. Collisions use
+/// deterministic linear probing, which guarantees progress and keeps producers and verifiers on
+/// the same exact schedule without allocating in proportion to the full payload.
+#[derive(Debug)]
+pub struct PorSampleIndices {
+    leaf_count: u64,
+    target: usize,
+    emitted: usize,
+    rng_state: u64,
+    seen: HashSet<u64>,
+}
+
+impl PorSampleIndices {
+    /// Build a deterministic sample schedule bounded by `min(count, leaf_count)`.
+    pub fn new(leaf_count: u64, count: usize, seed: u64) -> Result<Self, ChunkStoreError> {
+        let target = usize::try_from(leaf_count.min(u64::try_from(count).map_err(|_| {
+            ChunkStoreError::PorCountOverflow {
+                context: "PoR requested sample count",
+            }
+        })?))
+        .map_err(|_| ChunkStoreError::PorCountOverflow {
+            context: "PoR sample schedule target",
+        })?;
+        let mut seen = HashSet::new();
+        seen.try_reserve(target)
+            .map_err(|_| ChunkStoreError::AllocationFailed {
+                context: "PoR sample uniqueness set",
+                requested: target,
+            })?;
+        Ok(Self {
+            leaf_count,
+            target,
+            emitted: 0,
+            rng_state: seed,
+            seen,
+        })
+    }
+
+    /// Return the exact number of indices this schedule will emit.
+    #[must_use]
+    pub fn sample_count(&self) -> usize {
+        self.target
+    }
+}
+
+impl Iterator for PorSampleIndices {
+    type Item = u64;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.emitted == self.target || self.leaf_count == 0 {
+            return None;
+        }
+        self.rng_state = splitmix64(self.rng_state);
+        let mut candidate = self.rng_state % self.leaf_count;
+        while !self.seen.insert(candidate) {
+            candidate = if candidate + 1 == self.leaf_count {
+                0
+            } else {
+                candidate + 1
+            };
+        }
+        self.emitted += 1;
+        Some(candidate)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = self.target - self.emitted;
+        (remaining, Some(remaining))
+    }
+}
+
+impl ExactSizeIterator for PorSampleIndices {}
+
+/// SplitMix64 round used by the canonical PoR sample schedule.
+#[must_use]
+pub fn splitmix64(mut state: u64) -> u64 {
     state = state.wrapping_add(0x9e3779b97f4a7c15);
     let mut z = state;
     z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
@@ -5967,7 +6306,7 @@ fn validate_car_plan(plan: &CarBuildPlan) -> Result<CarPlanValidation, CarPlanVa
         plan.chunks.len(),
         std::mem::size_of::<StoredChunk>()
             + std::mem::size_of::<PorChunkTree>()
-            + std::mem::size_of::<[u8; 32]>() * 2
+            + std::mem::size_of::<[u8; 32]>() * 3
             + std::mem::size_of::<ExpectedSinkChunk>()
             + std::mem::size_of::<PersistedChunkRecord>()
             + 32,
@@ -6100,7 +6439,7 @@ fn estimate_direct_chunk_store_heap(
         std::mem::size_of::<ChunkDigest>()
             + std::mem::size_of::<StoredChunk>()
             + std::mem::size_of::<PorChunkTree>()
-            + std::mem::size_of::<[u8; 32]>() * 2
+            + std::mem::size_of::<[u8; 32]>() * 3
             + std::mem::size_of::<ExpectedSinkChunk>()
             + std::mem::size_of::<PersistedChunkRecord>()
             + 32,
@@ -7170,7 +7509,8 @@ mod tests {
                     );
                     let start = leaf.offset as usize;
                     let end = start + leaf.length as usize;
-                    let expected_leaf = hash_leaf(leaf.offset, &vectors.input[start..end]);
+                    let expected_leaf =
+                        hash_leaf(leaf.flat_index, leaf.offset, &vectors.input[start..end]);
                     assert_eq!(leaf.digest, expected_leaf);
                     segment_total += leaf.length as u64;
                     leaf_roots.push(leaf.digest);
@@ -7193,7 +7533,20 @@ mod tests {
             expected_chunk_roots.push(chunk.root);
         }
 
-        let expected_root = hash_root(store.payload_len(), &expected_chunk_roots);
+        let expected_levels =
+            build_chunk_merkle_levels(&expected_chunk_roots).expect("build expected chunk tree");
+        let expected_chunk_tree_root = expected_levels
+            .last()
+            .and_then(|level| level.first())
+            .copied()
+            .unwrap_or(expected_chunk_roots[0]);
+        let expected_root = hash_root(
+            store.payload_len(),
+            expected_chunk_roots.len(),
+            por_tree.leaf_count_u64(),
+            &expected_chunk_tree_root,
+        )
+        .expect("hash expected PoR root");
         assert_eq!(por_tree.root(), &expected_root);
     }
 
@@ -7888,9 +8241,98 @@ mod tests {
         tampered.segment_leaves.push([0x55; 32]);
         assert!(!tampered.verify(tree.root()));
 
-        let mut tampered = proof;
-        tampered.chunk_roots.clear();
+        let mut tampered = proof.clone();
+        tampered.leaf_count = tampered.leaf_count.saturating_add(1);
         assert!(!tampered.verify(tree.root()));
+
+        let mut tampered = proof.clone();
+        tampered.leaf_index_flat = if tampered.leaf_count > 1 {
+            (tampered.leaf_index_flat + 1) % tampered.leaf_count
+        } else {
+            tampered.leaf_count
+        };
+        assert!(!tampered.verify(tree.root()));
+
+        let mut tampered = proof;
+        tampered.chunk_count = tampered.chunk_count.saturating_add(1);
+        assert!(!tampered.verify(tree.root()));
+    }
+
+    #[test]
+    fn por_proof_above_legacy_chunk_cap_is_logarithmic_and_roundtrips() {
+        const CHUNK_COUNT: usize = 2_049;
+        let payload = (0..CHUNK_COUNT)
+            .map(|index| u8::try_from(index % 251).expect("fixture byte"))
+            .collect::<Vec<_>>();
+        let chunks = payload
+            .iter()
+            .enumerate()
+            .map(|(index, byte)| StoredChunk {
+                offset: u64::try_from(index).expect("fixture offset"),
+                length: 1,
+                blake3: blake3::hash(core::slice::from_ref(byte)).into(),
+            })
+            .collect::<Vec<_>>();
+        let tree = PorMerkleTree::try_from_payload(&payload, &chunks)
+            .expect("build PoR tree above the retired 2,048-chunk cap");
+        let proof = tree
+            .try_prove_leaf(CHUNK_COUNT - 1, 0, 0, &payload)
+            .expect("construct proof")
+            .expect("last chunk proof");
+        assert_eq!(proof.chunk_count, CHUNK_COUNT as u64);
+        assert_eq!(proof.chunk_merkle_path.len(), 12);
+        assert!(proof.verify(tree.root()));
+
+        let encoded = por_json::proof_to_value(&proof);
+        let decoded = por_json::proof_from_value(&encoded).expect("roundtrip canonical proof JSON");
+        assert_eq!(decoded, proof);
+        assert!(decoded.verify(tree.root()));
+    }
+
+    #[test]
+    fn por_direct_construction_enforces_canonical_chunk_bounds_before_work() {
+        assert!(matches!(
+            ensure_por_chunk_count(CAR_PLAN_MAX_CHUNKS + 1),
+            Err(ChunkStoreError::InvalidPlan(
+                CarPlanValidationError::TooManyChunks {
+                    count,
+                    maximum: CAR_PLAN_MAX_CHUNKS,
+                }
+            )) if count == CAR_PLAN_MAX_CHUNKS + 1
+        ));
+
+        let mut payload = vec![0x5a; CHUNK_STORE_MAX_CHUNK_BYTES as usize];
+        let canonical_chunk = StoredChunk {
+            offset: 0,
+            length: CHUNK_STORE_MAX_CHUNK_BYTES,
+            blake3: blake3::hash(&payload).into(),
+        };
+        let tree =
+            PorMerkleTree::try_from_payload(&payload, core::slice::from_ref(&canonical_chunk))
+                .expect("the exact canonical chunk ceiling is accepted");
+        let proof = tree
+            .try_prove_leaf(0, 0, 0, &payload)
+            .expect("construct proof at chunk ceiling")
+            .expect("one proof");
+        assert!(proof.verify(tree.root()));
+
+        payload.push(0x5b);
+        let oversized_chunk = StoredChunk {
+            offset: 0,
+            length: CHUNK_STORE_MAX_CHUNK_BYTES + 1,
+            blake3: [0; 32],
+        };
+        assert!(matches!(
+            PorMerkleTree::try_from_payload(&payload, &[oversized_chunk]),
+            Err(ChunkStoreError::ChunkLengthTooLarge {
+                length,
+                limit: CHUNK_STORE_MAX_CHUNK_BYTES,
+            }) if length == CHUNK_STORE_MAX_CHUNK_BYTES as usize + 1
+        ));
+
+        let mut oversized_proof = proof;
+        oversized_proof.chunk_length = CHUNK_STORE_MAX_CHUNK_BYTES + 1;
+        assert!(!oversized_proof.verify(tree.root()));
     }
 
     #[test]
@@ -7919,6 +8361,33 @@ mod tests {
             assert_eq!(proof.segment_index, segment_idx);
             assert_eq!(proof.leaf_index, leaf_idx);
         }
+    }
+
+    #[test]
+    fn por_sampling_collision_resolution_is_deterministic_and_bounded() {
+        let leaf_count = 5u64;
+        let collision_seed = (0u64..)
+            .find(|seed| {
+                let first = splitmix64(*seed);
+                let second = splitmix64(first);
+                first % leaf_count == second % leaf_count
+            })
+            .expect("small population has a reduced SplitMix collision");
+        let first_candidate = splitmix64(collision_seed) % leaf_count;
+        let expected_second = (first_candidate + 1) % leaf_count;
+        let samples = PorSampleIndices::new(leaf_count, 5, collision_seed)
+            .expect("build bounded sample schedule")
+            .collect::<Vec<_>>();
+        assert_eq!(samples[0], first_candidate);
+        assert_eq!(samples[1], expected_second);
+        assert_eq!(samples.len(), 5);
+        assert_eq!(samples.iter().copied().collect::<HashSet<_>>().len(), 5);
+        assert_eq!(
+            PorSampleIndices::new(leaf_count, 500, collision_seed)
+                .expect("request truncates to population")
+                .count(),
+            5
+        );
     }
 
     #[test]
@@ -8040,6 +8509,13 @@ mod tests {
             Err(ChunkStoreError::PorInvariant { .. })
         ));
 
+        let mut reordered_flat_index = chunks.clone();
+        reordered_flat_index[0].segments[0].leaves[0].flat_index += 1;
+        assert!(matches!(
+            PorMerkleTree::try_from_chunks(reordered_flat_index, roots.clone(), tree.payload_len),
+            Err(ChunkStoreError::PorInvariant { .. })
+        ));
+
         let mut forged_segment = chunks;
         forged_segment[0].segments[0].digest[0] ^= 0xff;
         assert!(matches!(
@@ -8058,6 +8534,7 @@ mod tests {
                 u64::MAX,
                 length,
                 blake3::hash(&payload).into(),
+                0,
                 &payload,
             ),
             Err(ChunkStoreError::PorInvariant { .. })

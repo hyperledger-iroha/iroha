@@ -922,6 +922,24 @@ pub mod sorafs {
     }
 
     permission! {
+        /// Permission to activate or rotate the authoritative reputation recorder policy.
+        #[derive(Copy)]
+        pub struct CanManageSorafsReputationJournalPolicy;
+    }
+
+    permission! {
+        /// Permission to submit policy-authorized PoR or stream-token reputation entries.
+        #[derive(Copy)]
+        pub struct CanRecordSorafsReputationJournal;
+    }
+
+    permission! {
+        /// Permission to commit the terminal outcome of an authoritative capacity dispute.
+        #[derive(Copy)]
+        pub struct CanResolveSorafsCapacityDispute;
+    }
+
+    permission! {
         /// Permission to register or update a `SoraFS` provider owner binding.
         #[derive(Copy)]
         pub struct CanRegisterSorafsProviderOwner;

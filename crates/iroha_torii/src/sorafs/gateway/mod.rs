@@ -4,6 +4,7 @@ mod acme;
 mod compliance;
 mod controller;
 mod denylist;
+mod feed_transport;
 mod policy;
 mod rate_limit;
 mod telemetry;
@@ -12,6 +13,8 @@ pub use acme::{
     AcmeAutomation, AcmeAutomationError, AcmeClient, AcmeClientError, AcmeConfig,
     CertificateBundle, CertificateOrder, ChallengeProfile,
 };
+#[cfg(test)]
+pub(crate) use compliance::allow_all_gateway_compliance_controller_for_tests;
 pub use compliance::{
     FileGatewayComplianceStore, GATEWAY_COMPLIANCE_ACK_VERSION_V1,
     GATEWAY_COMPLIANCE_APPROVAL_VERSION_V1, GATEWAY_COMPLIANCE_CATALOG_VERSION_V1,
@@ -25,13 +28,16 @@ pub use compliance::{
     GatewayComplianceDisposition, GatewayComplianceError, GatewayComplianceFeedDocumentV1,
     GatewayComplianceFeedHostPolicy, GatewayComplianceFeedPolicy, GatewayComplianceFeedTransport,
     GatewayComplianceFetchLimits, GatewayComplianceFetchRequest, GatewayComplianceFetchResponse,
-    GatewayComplianceHistoryRecordV1, GatewayComplianceLegalSafetyHoldV1,
+    GatewayComplianceHistoryRecordV1, GatewayComplianceIdempotencyRecordV1,
+    GatewayComplianceLegalSafetyHoldV1, GatewayComplianceMutationBindingV1,
+    GatewayComplianceMutationKindV1, GatewayComplianceMutationResultV1,
     GatewayComplianceRollbackPayloadV1, GatewayComplianceRollbackV1,
     GatewayComplianceSourceAnchorV1, GatewayComplianceStore, GatewayComplianceSubjectKindV1,
     GatewayComplianceToggleV1, GatewayComplianceTrustPolicyV1, GatewayComplianceTrustedSignerV1,
     MAX_GATEWAY_COMPLIANCE_ACKS_V1, MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1,
     MAX_GATEWAY_COMPLIANCE_CHECKPOINT_BYTES_V1, MAX_GATEWAY_COMPLIANCE_ENTRIES_V1,
-    MAX_GATEWAY_COMPLIANCE_HISTORY_V1, MAX_GATEWAY_COMPLIANCE_SIGNERS_V1,
+    MAX_GATEWAY_COMPLIANCE_HISTORY_V1, MAX_GATEWAY_COMPLIANCE_IDEMPOTENCY_RECORDS_V1,
+    MAX_GATEWAY_COMPLIANCE_SIGNERS_V1,
 };
 pub use controller::TlsAutomationHandle;
 pub use denylist::{
@@ -39,6 +45,7 @@ pub use denylist::{
     DenylistPolicyTier, GatewayDenylist, PerceptualFamilyEntry, PerceptualMatch,
     PerceptualMatchBasis, PerceptualObservation,
 };
+pub use feed_transport::ProductionGatewayComplianceFeedTransport;
 pub use policy::{
     GatewayPolicy, GatewayPolicyConfig, PolicyDecision, PolicyViolation, RequestContext,
     build_gar_violation_event,

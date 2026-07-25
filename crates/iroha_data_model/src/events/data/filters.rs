@@ -1002,6 +1002,23 @@ impl super::EventFilter for SorafsGatewayEventFilter {
                     .as_ref()
                     .is_none_or(|expected| payload.provider_id.as_ref() == Some(expected))
             }
+            super::sorafs::SorafsGatewayEvent::ReputationJournal(payload) => {
+                if self.manifest_digest_matcher.is_some()
+                    || self.policy_matcher.is_some()
+                    || self.detail_matcher.is_some()
+                {
+                    return false;
+                }
+                match payload {
+                    super::sorafs::SorafsReputationJournalEvent::PolicyActivated(_) => {
+                        self.provider_matcher.is_none()
+                    }
+                    super::sorafs::SorafsReputationJournalEvent::EntryCommitted(event) => self
+                        .provider_matcher
+                        .as_ref()
+                        .is_none_or(|expected| &event.provider_id == expected),
+                }
+            }
         }
     }
 }

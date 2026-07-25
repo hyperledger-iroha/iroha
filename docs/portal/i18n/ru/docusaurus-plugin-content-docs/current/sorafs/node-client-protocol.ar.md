@@ -120,10 +120,12 @@ translation_last_reviewed: 2026-02-07
 
 - `iroha app sorafs pin list|show` и `alias list` и `replication list` для REST
   Закрепите контакты Norito JSON для проверки подлинности.
-- `iroha app sorafs storage pin` и `torii /v1/sorafs/pin/register` манифестирует
-  Создайте Norito в формате JSON для доказательства псевдонима и преемника; تؤدي доказательства
-  Найдите `400`, проверьте доказательства `503` и `Warning: 110`, нажмите на него.
-  доказательства المنتهية تمامًا `412`.
+- `torii /v1/sorafs/pin/register` принимает закрытый JSON-запрос V1.
+  `manifest_payload` должен быть точным каноническим padded-base64 от байтов
+  канонического Norito `ManifestV1`. Torii выводит digest, chunker, content
+  length, pin policy и fee inputs только из декодированного manifest и отклоняет
+  выведенные из обращения дублирующие summary fields. `alias` и ненулевой
+  predecessor `successor_of_hex` остаются опциональными.
 - Нет REST (`/v1/sorafs/pin`, `/v1/sorafs/aliases`, `/v1/sorafs/replication`)
   تتضمن هياكل аттестация حتى يتمكن العملاء من التحقق من البيانات مقابل أحدث
   Он сказал, что это не так.## المراجع

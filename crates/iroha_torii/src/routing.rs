@@ -211,8 +211,7 @@ use iroha_data_model::{
 };
 use sorafs_manifest::{
     ManifestV1, ManifestValidationError, PinPolicy as ManifestPinPolicy,
-    PinPolicyConstraints as ManifestPinPolicyConstraints, ProfileId,
-    StorageClass as ManifestStorageClass,
+    PinPolicyConstraints as ManifestPinPolicyConstraints, StorageClass as ManifestStorageClass,
     capacity::{
         CapacityDeclarationV1, CapacityDeclarationValidationError, CapacityDisputeV1,
         ReplicationOrderV1, ReplicationOrderValidationError,
@@ -222,7 +221,7 @@ use sorafs_manifest::{
         AuditVerdictV1, PorChallengeOutcome, PorChallengeStatusV1, PorChallengeV1, PorProofV1,
         PorReportIsoWeek, PorWeeklyReportV1,
     },
-    validate_chunker_handle, validate_manifest, validate_pin_policy,
+    validate_manifest,
 };
 use sorafs_node::{DealEngineError, DealSettlementOutcome, UsageOutcome};
 
@@ -245,6 +244,19 @@ fn _json_helper_sanity() {
     let _ = json_object(vec![("foo", json_value(&1u64))]);
     let _ = json_object(vec![("bar", json_value(&2u64))]);
     let _ = norito::json::to_json_pretty(&json_object(vec![("baz", json_value(&3u64))])).unwrap();
+}
+
+#[allow(clippy::redundant_pub_crate)]
+pub(crate) fn conversion_error(message: String) -> Error {
+    Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+        iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
+    ))
+}
+
+fn reject_server_side_signing(endpoint: &'static str) -> Error {
+    conversion_error(format!(
+        "{endpoint} no longer accepts private_key payloads; submit a locally signed transaction instead"
+    ))
 }
 
 #[cfg(feature = "telemetry")]
@@ -13198,6 +13210,67 @@ pub(crate) fn push_accepted_transaction_for_ingress_with_routing_plan_strict_dur
         Some(routing_plan),
         true,
     )
+}
+
+pub(crate) fn push_accepted_transaction_for_ingress_with_routing_plan_strict_durable_claim(
+    queue: Arc<Queue>,
+    state: Arc<CoreState>,
+    accepted_tx: iroha_core::tx::AcceptedTransaction<'static>,
+    routing_plan: RoutingPlan,
+    expected_admission_binding: &iroha_core::torii_proxy::QueuePlanAdmissionBindingV2,
+) -> Result<queue::QueuePlanDurableAdmissionV2> {
+    let pressure = {
+        let block_time = state.sumeragi_block_cadence();
+        queue.refresh_pressure_budget_from_block_time(block_time)
+    };
+    if pressure.saturated_by_age {
+        iroha_logger::debug!(
+            tx_hash = %accepted_tx.hash(),
+            queued = pressure.queued_tx_count,
+            tracked = pressure.tracked_tx_count,
+            capacity = pressure.capacity.get(),
+            oldest_queued_tx_age_ms = pressure.oldest_queued_tx_age_ms,
+            "local queue is latency-saturated; keeping strict durable ingress open until capacity is exhausted"
+        );
+    }
+
+    queue
+        .push_with_lane_with_state_and_routing_plan_strict_global_admission_claim(
+            accepted_tx,
+            state.as_ref(),
+            routing_plan,
+            expected_admission_binding,
+        )
+        .map_err(|queue::Failure { tx, err }| {
+            if matches!(err, queue::Error::Full) {
+                iroha_logger::debug!(
+                    tx_hash = %tx.as_ref().hash(),
+                    "queue rejected strict durable transaction due to backpressure"
+                );
+            } else {
+                iroha_logger::warn!(
+                    tx_hash = %tx.as_ref().hash(),
+                    ?err,
+                    "failed to durably admit transaction with an exact queue-plan claim"
+                );
+            }
+            drop(tx);
+            (err, queue.current_backpressure())
+        })
+        .map_err(|(err, backpressure)| Error::PushIntoQueue {
+            source: Box::new(err),
+            backpressure,
+        })
+        .inspect(|claim| {
+            let route = claim.routing_plan.coordinator_route();
+            iroha_logger::debug!(
+                lane = route.lane_id.as_u32(),
+                dataspace = route.dataspace_id.as_u64(),
+                authority_height = claim.context.authority_height,
+                proposal_height = claim.context.proposal_height,
+                "transaction enqueued with a durable queue-plan admission claim"
+            );
+        })
 }
 
 fn push_accepted_transaction_for_ingress_with_durability(
@@ -31666,33 +31739,15 @@ pub struct SubscriptionUsageResponseDto {
     crate::json_macros::JsonSerialize,
     norito::derive::NoritoSerialize,
 )]
+#[norito(deny_unknown_fields)]
 /// Request payload for Torii SoraFS pin registration endpoint.
 pub struct RegisterPinManifestDto {
     /// Account authorizing the transaction.
     pub authority: iroha_data_model::account::AccountId,
     /// Signing key exposed for API transport.
     pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
-    /// Numeric profile identifier advertised by the manifest/descriptor.
-    pub chunker_profile_id: u32,
-    /// Chunker namespace (e.g., `sorafs`).
-    pub chunker_namespace: String,
-    /// Chunker name (e.g., `sf1`).
-    pub chunker_name: String,
-    /// Chunker semantic version.
-    pub chunker_semver: String,
-    /// Multihash code used for chunk digests.
-    pub chunker_multihash_code: u64,
-    /// Replication policy attached to the manifest.
-    pub pin_policy: PinPolicyDto,
-    /// Hex-encoded canonical manifest digest (BLAKE3-256).
-    pub manifest_digest_hex: String,
-    /// Optional base64-encoded Norito `ManifestV1` payload for full Torii-side validation.
-    #[norito(default)]
-    pub manifest_b64: Option<String>,
-    /// SHA3-256 digest of chunk metadata (hex-encoded, optional 0x prefix accepted).
-    pub chunk_digest_sha3_256_hex: String,
-    /// Total content length covered by the manifest.
-    pub content_length: u64,
+    /// Exact canonical Norito `ManifestV1` payload encoded as canonical padded base64.
+    pub manifest_payload: String,
     /// Epoch (inclusive) recorded for submission.
     pub submitted_epoch: u64,
     /// Optional alias binding to associate with the manifest.
@@ -31708,59 +31763,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RegisterPinManifestDto {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         norito::core::decode_field_canonical(bytes)
     }
-}
-
-#[cfg(feature = "app_api")]
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
-/// DTO for SoraFS pin policy input.
-pub struct PinPolicyDto {
-    /// Minimum replica count required for the manifest to stay admissible.
-    pub min_replicas: u16,
-    /// Desired storage temperature for the pinned payload.
-    pub storage_class: PinPolicyStorageClassDto,
-    /// Epoch at which the operator wants the manifest to expire.
-    pub retention_epoch: u64,
-}
-
-#[cfg(feature = "app_api")]
-impl<'a> norito::core::DecodeFromSlice<'a> for PinPolicyDto {
-    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        norito::core::decode_field_canonical(bytes)
-    }
-}
-
-#[cfg(feature = "app_api")]
-/// Storage-class tiers supported by the pin policy handler.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
-#[allow(clippy::enum_variant_names)]
-#[norito(tag = "type", content = "value")]
-pub enum PinPolicyStorageClassDto {
-    /// Highest availability, lowest latency tier.
-    Hot,
-    /// Balanced durability and cost tier.
-    Warm,
-    /// Archival tier for long-term retention.
-    Cold,
 }
 
 #[cfg(feature = "app_api")]
@@ -31805,6 +31807,7 @@ pub struct RegisterPinManifestResponseDto {
     crate::json_macros::JsonSerialize,
     norito::derive::NoritoSerialize,
 )]
+#[norito(deny_unknown_fields)]
 /// Alias binding payload supplied alongside manifest registration.
 pub struct PinAliasDto {
     /// Alias namespace (e.g., `sora`).
@@ -31845,7 +31848,6 @@ const _: () = {
 
     fn assert_all() {
         assert_manifest_traits::<RegisterPinManifestDto>();
-        assert_manifest_traits::<PinPolicyDto>();
         assert_manifest_traits::<PinAliasDto>();
     }
 
@@ -32621,67 +32623,19 @@ pub async fn handle_post_sorafs_register_manifest(
 
     let manifest_constraints =
         manifest_pin_policy_constraints_from_config(&state.gov.sorafs_pin_policy);
-
-    let descriptor = validate_chunker_handle(
-        ProfileId(req.chunker_profile_id),
-        &req.chunker_namespace,
-        &req.chunker_name,
-        &req.chunker_semver,
-        req.chunker_multihash_code,
-        None,
-    )
-    .map_err(|err| {
-        sorafs_pin_manifest_validation_error("sorafs_pin_manifest_chunker_invalid", err)
-    })?;
-
-    let manifest_policy = manifest_policy_from_dto(&req.pin_policy);
-
-    validate_pin_policy(&manifest_policy, &manifest_constraints).map_err(|err| {
-        sorafs_pin_manifest_validation_error("sorafs_pin_manifest_policy_invalid", err)
-    })?;
-
-    let manifest_digest_bytes =
-        parse_sorafs_pin_hex_array::<32>(&req.manifest_digest_hex, "manifest_digest_hex")?;
-    let chunk_digest =
-        parse_sorafs_pin_hex_array::<32>(&req.chunk_digest_sha3_256_hex, "chunk_digest_sha3_256")?;
-    let (manifest_payload, manifest) = validate_manifest_payload_matches_request(
-        &req,
-        &manifest_constraints,
-        &manifest_digest_bytes,
-        &chunk_digest,
-        &manifest_policy,
-    )?;
-
-    let policy = convert_manifest_policy(&manifest_policy);
-
-    let alias_binding = if let Some(alias) = req.alias.as_ref() {
-        let proof = base64::engine::general_purpose::STANDARD
-            .decode(alias.proof_base64.as_bytes())
-            .map_err(|err| {
-                sorafs_pin_validation_error(
-                    "sorafs_pin_alias_proof_base64_invalid",
-                    format!("invalid base64 in alias proof: {err}"),
-                )
-            })?;
-        Some(
-            iroha_data_model::sorafs::pin_registry::ManifestAliasBinding {
-                name: alias.name.clone(),
-                namespace: alias.namespace.clone(),
-                proof,
-            },
-        )
-    } else {
-        None
-    };
-
-    let successor_digest = if let Some(hex) = req.successor_of_hex.as_ref() {
-        let bytes = parse_sorafs_pin_hex_array::<32>(hex, "successor_of_hex")?;
-        Some(iroha_data_model::sorafs::pin_registry::ManifestDigest::new(
-            bytes,
-        ))
-    } else {
-        None
-    };
+    let (manifest_payload, manifest, manifest_digest_bytes) =
+        decode_sorafs_pin_manifest_payload(&req.manifest_payload, &manifest_constraints)?;
+    let policy = convert_manifest_policy(&manifest.pin_policy);
+    let alias_binding = req
+        .alias
+        .as_ref()
+        .map(decode_sorafs_pin_alias_binding)
+        .transpose()?;
+    let successor_digest = req
+        .successor_of_hex
+        .as_deref()
+        .map(parse_sorafs_pin_successor_digest)
+        .transpose()?;
 
     let isi = sorafs::RegisterPinManifest::new(
         manifest_payload,
@@ -32736,7 +32690,7 @@ pub async fn handle_post_sorafs_register_manifest(
         manifest_digest_hex: hex::encode(manifest_digest_bytes),
         chunker_handle: format!(
             "{}.{}@{}",
-            descriptor.namespace, descriptor.name, descriptor.semver
+            manifest.chunking.namespace, manifest.chunking.name, manifest.chunking.semver
         ),
         submitted_epoch: req.submitted_epoch,
         content_length: manifest.content_length,
@@ -33711,6 +33665,7 @@ pub(crate) async fn handle_post_sorafs_record_por_verdict(
     authenticated_signer: PublicKey,
     trusted_auditor_keys: Vec<Vec<u8>>,
     auditor_threshold: usize,
+    repair_handoff: &dyn sorafs_node::PorRepairHandoff,
 ) -> Result<impl IntoResponse> {
     let _pipeline = por_coordinator.lock_pipeline().await;
     verify_authenticated_por_verdict(
@@ -33723,49 +33678,24 @@ pub(crate) async fn handle_post_sorafs_record_por_verdict(
         return Err(quota_limit_error(err));
     }
     por_coordinator
-        .record_verdict(
-            &verdict,
-            &trusted_auditor_keys,
-            auditor_threshold,
-            sorafs_node::PorVerdictOutcome {
-                stats: sorafs_node::PorVerdictStats {
-                    success_samples: 0,
-                    failed_samples: 0,
-                },
-                repair_history_id: None,
-                consecutive_failures: 0,
-                slash: None,
-            },
-        )
+        .validate_verdict_candidate(&verdict, &trusted_auditor_keys, auditor_threshold)
         .map_err(por_coordinator_error)?;
     let outcome = match sorafs_node.record_por_verdict(
         &verdict,
         &trusted_auditor_keys,
         auditor_threshold,
+        repair_handoff,
     ) {
         Ok(outcome) => outcome,
-        Err(node_error) => {
-            if let Err(rollback_error) = por_coordinator.rollback_verdict(&verdict) {
-                iroha_logger::error!(
-                    ?node_error,
-                    ?rollback_error,
-                    challenge_id = %hex::encode(verdict.challenge_id),
-                    "failed to compensate SoraFS PoR verdict node commit"
-                );
-                return Err(conversion_error(format!(
-                    "PoR verdict node commit failed ({node_error}); coordinator rollback also failed ({rollback_error})"
-                )));
-            }
-            return Err(por_tracker_error(node_error));
-        }
+        Err(node_error) => return Err(por_tracker_error(node_error)),
     };
-    if let Err(error) = por_coordinator.update_verdict_outcome(verdict.challenge_id, &outcome) {
-        iroha_logger::error!(
-            ?error,
-            challenge_id = %hex::encode(verdict.challenge_id),
-            "failed to persist SoraFS PoR repair-history link after terminal commit"
-        );
-    }
+    por_coordinator
+        .record_verdict(&verdict, &trusted_auditor_keys, auditor_threshold)
+        .map_err(por_coordinator_error)?;
+    debug_assert_eq!(
+        outcome.repair_task_id.is_some(),
+        verdict.outcome == sorafs_manifest::por::AuditOutcomeV1::Failed
+    );
     observe_sorafs_metering(&telemetry, &sorafs_node);
 
     iroha_logger::info!(
@@ -33889,35 +33819,6 @@ pub(crate) fn parse_hex_array<const N: usize>(value: &str, field: &str) -> Resul
     bytes
         .try_into()
         .map_err(|_| conversion_error(format!("`{field}` must be {N} bytes (got {len})")))
-}
-
-fn parse_sorafs_pin_hex_array<const N: usize>(
-    value: &str,
-    field: &'static str,
-) -> Result<[u8; N], Error> {
-    let trimmed = value.trim_start_matches("0x");
-    let bytes = hex::decode(trimmed).map_err(|err| {
-        sorafs_pin_validation_error(
-            sorafs_pin_hex_error_code(field),
-            format!("invalid hex in `{field}` (expected {N} bytes): {err}"),
-        )
-    })?;
-    let len = bytes.len();
-    bytes.try_into().map_err(|_| {
-        sorafs_pin_validation_error(
-            sorafs_pin_hex_error_code(field),
-            format!("`{field}` must be {N} bytes (got {len})"),
-        )
-    })
-}
-
-fn sorafs_pin_hex_error_code(field: &'static str) -> &'static str {
-    match field {
-        "manifest_digest_hex" => "sorafs_pin_manifest_digest_hex_invalid",
-        "chunk_digest_sha3_256" => "sorafs_pin_chunk_digest_hex_invalid",
-        "successor_of_hex" => "sorafs_pin_successor_hex_invalid",
-        _ => "sorafs_pin_hex_invalid",
-    }
 }
 
 fn parse_hash_hex(value: &str, field: &str) -> Result<Hash, Error> {
@@ -34252,48 +34153,61 @@ fn por_coordinator_error(err: PorCoordinatorError) -> Error {
     }
 }
 
-#[cfg(feature = "app_api")]
-fn manifest_policy_from_dto(dto: &PinPolicyDto) -> ManifestPinPolicy {
-    let storage_class = match dto.storage_class {
-        PinPolicyStorageClassDto::Hot => ManifestStorageClass::Hot,
-        PinPolicyStorageClassDto::Warm => ManifestStorageClass::Warm,
-        PinPolicyStorageClassDto::Cold => ManifestStorageClass::Cold,
-    };
-    ManifestPinPolicy {
-        min_replicas: dto.min_replicas,
-        storage_class,
-        retention_epoch: dto.retention_epoch,
-    }
-}
+const SORAFS_PIN_ALIAS_SEGMENT_MAX_BYTES: usize = 128;
+const SORAFS_PIN_ALIAS_PROOF_MAX_BYTES: usize = 1024 * 1024;
+const SORAFS_PIN_ALIAS_PROOF_MAX_BASE64_BYTES: usize =
+    SORAFS_PIN_ALIAS_PROOF_MAX_BYTES.div_ceil(3) * 4;
+const SORAFS_PIN_MANIFEST_MAX_BASE64_BYTES: usize =
+    sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES.div_ceil(3) * 4;
 
 #[cfg(feature = "app_api")]
-fn validate_manifest_payload_matches_request(
-    req: &RegisterPinManifestDto,
+fn decode_sorafs_pin_manifest_payload(
+    manifest_payload: &str,
     constraints: &ManifestPinPolicyConstraints,
-    expected_digest: &[u8; 32],
-    expected_chunk_digest: &[u8; 32],
-    expected_policy: &ManifestPinPolicy,
-) -> Result<(Vec<u8>, ManifestV1)> {
-    let Some(manifest_b64) = req.manifest_b64.as_ref() else {
+) -> Result<(Vec<u8>, ManifestV1, [u8; 32])> {
+    if manifest_payload.is_empty() || manifest_payload.len() > SORAFS_PIN_MANIFEST_MAX_BASE64_BYTES
+    {
         return Err(sorafs_pin_validation_error(
-            "sorafs_pin_manifest_payload_required",
-            "manifest_b64 is required because pin registration stores the canonical manifest payload",
+            "sorafs_pin_manifest_payload_size_invalid",
+            format!(
+                "manifest_payload must encode 1..={} bytes",
+                sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES
+            ),
         ));
-    };
+    }
 
     let manifest_bytes = base64::engine::general_purpose::STANDARD
-        .decode(manifest_b64.as_bytes())
+        .decode(manifest_payload.as_bytes())
         .map_err(|err| {
             sorafs_pin_validation_error(
                 "sorafs_pin_manifest_payload_base64_invalid",
-                format!("invalid base64 in manifest_b64: {err}"),
+                format!(
+                    "invalid base64 in manifest_payload; expected canonical padded base64: {err}"
+                ),
             )
         })?;
+    if manifest_bytes.is_empty()
+        || manifest_bytes.len() > sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES
+    {
+        return Err(sorafs_pin_validation_error(
+            "sorafs_pin_manifest_payload_size_invalid",
+            format!(
+                "manifest_payload must encode 1..={} bytes",
+                sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES
+            ),
+        ));
+    }
+    if base64::engine::general_purpose::STANDARD.encode(&manifest_bytes) != manifest_payload {
+        return Err(sorafs_pin_validation_error(
+            "sorafs_pin_manifest_payload_base64_invalid",
+            "manifest_payload must use exact canonical padded base64",
+        ));
+    }
     let manifest =
         sorafs_manifest::decode_manifest_v1_canonical(&manifest_bytes).map_err(|err| {
             sorafs_pin_validation_error(
                 "sorafs_pin_manifest_payload_decode_failed",
-                format!("invalid canonical Norito ManifestV1 in manifest_b64: {err}"),
+                format!("invalid canonical Norito ManifestV1 in manifest_payload: {err}"),
             )
         })?;
 
@@ -34304,60 +34218,110 @@ fn validate_manifest_payload_matches_request(
     let digest = manifest.digest().map_err(|err| {
         sorafs_pin_validation_error(
             "sorafs_pin_manifest_payload_digest_failed",
-            format!("failed to digest manifest_b64: {err}"),
+            format!("failed to digest manifest_payload: {err}"),
         )
     })?;
-    if digest.as_bytes() != expected_digest {
+    Ok((manifest_bytes, manifest, *digest.as_bytes()))
+}
+
+#[cfg(feature = "app_api")]
+fn validate_sorafs_pin_alias_segment(value: &str, field: &str) -> Result<()> {
+    let bytes = value.as_bytes();
+    if bytes.is_empty()
+        || bytes.len() > SORAFS_PIN_ALIAS_SEGMENT_MAX_BYTES
+        || !bytes.iter().all(|byte| {
+            byte.is_ascii_lowercase()
+                || byte.is_ascii_digit()
+                || matches!(*byte, b'.' | b'-' | b'_')
+        })
+    {
         return Err(sorafs_pin_validation_error(
-            "sorafs_pin_manifest_digest_mismatch",
+            "sorafs_pin_alias_segment_invalid",
             format!(
-                "manifest_b64 digest {} does not match manifest_digest_hex {}",
-                hex::encode(digest.as_bytes()),
-                hex::encode(expected_digest)
+                "{field} must contain 1..={SORAFS_PIN_ALIAS_SEGMENT_MAX_BYTES} lowercase ASCII \
+                 letters, digits, '.', '-', or '_'"
             ),
         ));
     }
+    Ok(())
+}
 
-    if manifest.chunking.profile_id.0 != req.chunker_profile_id
-        || manifest.chunking.namespace != req.chunker_namespace
-        || manifest.chunking.name != req.chunker_name
-        || manifest.chunking.semver != req.chunker_semver
-        || manifest.chunking.multihash_code != req.chunker_multihash_code
+#[cfg(feature = "app_api")]
+fn decode_sorafs_pin_alias_binding(
+    alias: &PinAliasDto,
+) -> Result<iroha_data_model::sorafs::pin_registry::ManifestAliasBinding> {
+    validate_sorafs_pin_alias_segment(&alias.namespace, "alias.namespace")?;
+    validate_sorafs_pin_alias_segment(&alias.name, "alias.name")?;
+    if alias.proof_base64.is_empty()
+        || alias.proof_base64.len() > SORAFS_PIN_ALIAS_PROOF_MAX_BASE64_BYTES
     {
         return Err(sorafs_pin_validation_error(
-            "sorafs_pin_manifest_chunker_mismatch",
-            "manifest_b64 chunker descriptor does not match request chunker fields",
+            "sorafs_pin_alias_proof_size_invalid",
+            format!("alias.proof_base64 must encode 1..={SORAFS_PIN_ALIAS_PROOF_MAX_BYTES} bytes"),
         ));
     }
-
-    if manifest.content_length != req.content_length {
+    let proof = base64::engine::general_purpose::STANDARD
+        .decode(alias.proof_base64.as_bytes())
+        .map_err(|err| {
+            sorafs_pin_validation_error(
+                "sorafs_pin_alias_proof_base64_invalid",
+                format!(
+                    "invalid base64 in alias.proof_base64; expected canonical padded base64: {err}"
+                ),
+            )
+        })?;
+    if proof.is_empty() || proof.len() > SORAFS_PIN_ALIAS_PROOF_MAX_BYTES {
         return Err(sorafs_pin_validation_error(
-            "sorafs_pin_manifest_content_length_mismatch",
-            format!(
-                "manifest_b64 content_length {} does not match request content_length {}",
-                manifest.content_length, req.content_length
-            ),
+            "sorafs_pin_alias_proof_size_invalid",
+            format!("alias.proof_base64 must encode 1..={SORAFS_PIN_ALIAS_PROOF_MAX_BYTES} bytes"),
         ));
     }
-
-    if &manifest.chunk_digest_sha3_256 != expected_chunk_digest {
+    if base64::engine::general_purpose::STANDARD.encode(&proof) != alias.proof_base64 {
         return Err(sorafs_pin_validation_error(
-            "sorafs_pin_manifest_chunk_digest_mismatch",
-            "manifest_b64 chunk_digest_sha3_256 does not match request chunk_digest_sha3_256_hex",
+            "sorafs_pin_alias_proof_base64_invalid",
+            "alias.proof_base64 must use exact canonical padded base64",
         ));
     }
 
-    if manifest.pin_policy.min_replicas != expected_policy.min_replicas
-        || manifest.pin_policy.storage_class != expected_policy.storage_class
-        || manifest.pin_policy.retention_epoch != expected_policy.retention_epoch
+    Ok(
+        iroha_data_model::sorafs::pin_registry::ManifestAliasBinding {
+            name: alias.name.clone(),
+            namespace: alias.namespace.clone(),
+            proof,
+        },
+    )
+}
+
+#[cfg(feature = "app_api")]
+fn parse_sorafs_pin_successor_digest(
+    successor_of_hex: &str,
+) -> Result<iroha_data_model::sorafs::pin_registry::ManifestDigest> {
+    if successor_of_hex.len() != 64
+        || !successor_of_hex
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        || successor_of_hex.bytes().all(|byte| byte == b'0')
     {
         return Err(sorafs_pin_validation_error(
-            "sorafs_pin_manifest_policy_mismatch",
-            "manifest_b64 pin_policy does not match request pin_policy",
+            "sorafs_pin_successor_digest_invalid",
+            "successor_of_hex must be an exact non-zero lowercase 32-byte hex digest",
         ));
     }
-
-    Ok((manifest_bytes, manifest))
+    let bytes = hex::decode(successor_of_hex).map_err(|err| {
+        sorafs_pin_validation_error(
+            "sorafs_pin_successor_digest_invalid",
+            format!("invalid successor_of_hex: {err}"),
+        )
+    })?;
+    let bytes: [u8; 32] = bytes.try_into().map_err(|_| {
+        sorafs_pin_validation_error(
+            "sorafs_pin_successor_digest_invalid",
+            "successor_of_hex must decode to exactly 32 bytes",
+        )
+    })?;
+    Ok(iroha_data_model::sorafs::pin_registry::ManifestDigest::new(
+        bytes,
+    ))
 }
 
 fn convert_manifest_policy(
@@ -34405,25 +34369,12 @@ fn sorafs_pin_validation_error(code: &'static str, message: impl Into<String>) -
     }
 }
 
-#[allow(clippy::redundant_pub_crate)]
-pub(crate) fn conversion_error(message: String) -> Error {
-    Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-        iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
-    ))
-}
-
 #[cfg(feature = "app_api")]
 fn contract_not_found_error(code: &'static str, message: impl Into<String>) -> Error {
     Error::AppNotFound {
         code,
         message: message.into(),
     }
-}
-
-fn reject_server_side_signing(endpoint: &'static str) -> Error {
-    conversion_error(format!(
-        "{endpoint} no longer accepts private_key payloads; submit a locally signed transaction instead"
-    ))
 }
 
 fn deal_engine_error(err: DealEngineError) -> Error {
@@ -35090,6 +35041,7 @@ mod sorafs_pin_tests {
             ))
             .chunking_from_registry(sorafs_manifest::ProfileId(1))
             .chunk_digest_sha3_256([0xCD; 32])
+            .por_root([0xCE; 32])
             .content_length(1024)
             .car_digest([0xAB; 32])
             .car_size(4096)
@@ -35117,43 +35069,14 @@ mod sorafs_pin_tests {
         manifest
     }
 
-    fn pin_policy_dto_from_manifest(policy: &sorafs_manifest::PinPolicy) -> PinPolicyDto {
-        PinPolicyDto {
-            min_replicas: policy.min_replicas,
-            storage_class: match policy.storage_class {
-                ManifestStorageClass::Hot => PinPolicyStorageClassDto::Hot,
-                ManifestStorageClass::Warm => PinPolicyStorageClassDto::Warm,
-                ManifestStorageClass::Cold => PinPolicyStorageClassDto::Cold,
-            },
-            retention_epoch: policy.retention_epoch,
-        }
-    }
-
-    fn request_from_manifest(
-        manifest: &ManifestV1,
-        include_manifest_payload: bool,
-    ) -> RegisterPinManifestDto {
-        let manifest_digest = manifest.digest().expect("manifest digest");
-        let descriptor = sorafs_manifest::chunker_registry::default_descriptor();
+    fn request_from_manifest(manifest: &ManifestV1) -> RegisterPinManifestDto {
         let kp = checked_pin_keypair(0x78, "derive pin manifest registration fixture key");
-        let manifest_b64 = include_manifest_payload.then(|| {
-            let bytes = manifest.encode().expect("encode canonical manifest");
-            base64::engine::general_purpose::STANDARD.encode(bytes)
-        });
 
         RegisterPinManifestDto {
             authority: dm::AccountId::new(kp.public_key().clone()),
             private_key: dm::ExposedPrivateKey(kp.private_key().clone()),
-            chunker_profile_id: descriptor.id.0,
-            chunker_namespace: descriptor.namespace.to_string(),
-            chunker_name: descriptor.name.to_string(),
-            chunker_semver: descriptor.semver.to_string(),
-            chunker_multihash_code: descriptor.multihash_code,
-            pin_policy: pin_policy_dto_from_manifest(&manifest.pin_policy),
-            manifest_digest_hex: hex::encode(manifest_digest.as_bytes()),
-            manifest_b64,
-            chunk_digest_sha3_256_hex: hex::encode(manifest.chunk_digest_sha3_256),
-            content_length: manifest.content_length,
+            manifest_payload: base64::engine::general_purpose::STANDARD
+                .encode(manifest.encode().expect("encode canonical manifest")),
             submitted_epoch: 5,
             alias: None,
             successor_of_hex: None,
@@ -35211,38 +35134,76 @@ mod sorafs_pin_tests {
     }
 
     #[test]
+    fn register_manifest_json_rejects_every_retired_summary_field() {
+        let request = request_from_manifest(&default_manifest());
+        let canonical = norito::json::to_value(&request).expect("serialize canonical request");
+        for retired in [
+            "manifest_b64",
+            "manifest_digest_hex",
+            "chunker_profile_id",
+            "chunker_namespace",
+            "chunker_name",
+            "chunker_semver",
+            "chunker_multihash_code",
+            "pin_policy",
+            "chunk_digest_sha3_256_hex",
+            "content_length",
+            "fee_payment",
+            "gas_asset_id",
+        ] {
+            let mut mutated = canonical.clone();
+            mutated
+                .as_object_mut()
+                .expect("request JSON object")
+                .insert(retired.to_owned(), Value::Null);
+            let error = norito::json::from_value::<RegisterPinManifestDto>(mutated)
+                .expect_err("retired request field must fail closed");
+            assert!(
+                error.to_string().contains(retired),
+                "unknown-field error must identify `{retired}`: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn register_manifest_json_rejects_unknown_nested_alias_fields() {
+        let mut request = request_from_manifest(&default_manifest());
+        request.alias = Some(PinAliasDto {
+            namespace: "sora".into(),
+            name: "docs".into(),
+            proof_base64: base64::engine::general_purpose::STANDARD.encode(b"proof"),
+        });
+        let mut value = norito::json::to_value(&request).expect("serialize canonical request");
+        value
+            .as_object_mut()
+            .and_then(|request| request.get_mut("alias"))
+            .and_then(Value::as_object_mut)
+            .expect("alias JSON object")
+            .insert("proof".into(), Value::String("legacy".into()));
+        let error = norito::json::from_value::<RegisterPinManifestDto>(value)
+            .expect_err("retired nested alias field must fail closed");
+        assert!(
+            error.to_string().contains("proof"),
+            "unknown-field error must identify nested field: {error}"
+        );
+    }
+
+    #[test]
     fn manifest_policy_helpers_round_trip_all_storage_classes() {
         use iroha_data_model::sorafs::pin_registry::StorageClass as DmStorageClass;
 
         let cases = [
-            (
-                PinPolicyStorageClassDto::Hot,
-                ManifestStorageClass::Hot,
-                DmStorageClass::Hot,
-            ),
-            (
-                PinPolicyStorageClassDto::Warm,
-                ManifestStorageClass::Warm,
-                DmStorageClass::Warm,
-            ),
-            (
-                PinPolicyStorageClassDto::Cold,
-                ManifestStorageClass::Cold,
-                DmStorageClass::Cold,
-            ),
+            (ManifestStorageClass::Hot, DmStorageClass::Hot),
+            (ManifestStorageClass::Warm, DmStorageClass::Warm),
+            (ManifestStorageClass::Cold, DmStorageClass::Cold),
         ];
 
-        for (dto_storage_class, manifest_storage_class, dm_storage_class) in cases {
-            let dto = PinPolicyDto {
+        for (manifest_storage_class, dm_storage_class) in cases {
+            let manifest_policy = ManifestPinPolicy {
                 min_replicas: 3,
-                storage_class: dto_storage_class,
+                storage_class: manifest_storage_class,
                 retention_epoch: 42,
             };
-            let manifest_policy = manifest_policy_from_dto(&dto);
-            assert_eq!(manifest_policy.min_replicas, 3);
-            assert_eq!(manifest_policy.storage_class, manifest_storage_class);
-            assert_eq!(manifest_policy.retention_epoch, 42);
-
             let dm_policy = convert_manifest_policy(&manifest_policy);
             assert_eq!(dm_policy.min_replicas, 3);
             assert_eq!(dm_policy.storage_class, dm_storage_class);
@@ -35289,23 +35250,11 @@ mod sorafs_pin_tests {
         );
     }
 
-    #[test]
-    fn parse_sorafs_pin_hex_array_rejects_invalid_manifest_digest_with_stable_code() {
-        let err = parse_sorafs_pin_hex_array::<32>("zz", "manifest_digest_hex")
-            .expect_err("invalid hex must be rejected");
-        let (code, message) = app_validation_error(err);
-        assert_eq!(code, "sorafs_pin_manifest_digest_hex_invalid");
-        assert!(
-            message.contains("manifest_digest_hex"),
-            "unexpected error message: {message}"
-        );
-    }
-
     #[tokio::test]
     async fn sorafs_pin_validation_error_emits_stable_norito_envelope_code() {
         let response = sorafs_pin_validation_error(
-            "sorafs_pin_manifest_payload_required",
-            "manifest_b64 is required",
+            "sorafs_pin_manifest_payload_base64_invalid",
+            "manifest_payload must be canonical padded base64",
         )
         .into_response();
         assert_eq!(response.status(), axum::http::StatusCode::BAD_REQUEST);
@@ -35316,15 +35265,21 @@ mod sorafs_pin_tests {
             .to_bytes();
         let envelope =
             norito::decode_from_bytes::<crate::ErrorEnvelope>(&bytes).expect("error envelope");
-        assert_eq!(envelope.code(), "sorafs_pin_manifest_payload_required");
-        assert_eq!(envelope.message(), "manifest_b64 is required");
+        assert_eq!(
+            envelope.code(),
+            "sorafs_pin_manifest_payload_base64_invalid"
+        );
+        assert_eq!(
+            envelope.message(),
+            "manifest_payload must be canonical padded base64"
+        );
     }
 
     #[tokio::test]
     #[cfg(feature = "app_api")]
     async fn register_manifest_handler_accepts_request() {
         let manifest = default_manifest();
-        let req = request_from_manifest(&manifest, true);
+        let req = request_from_manifest(&manifest);
         let (chain_id, queue, state, telemetry) = handler_context(|_| {});
 
         let resp = handle_post_sorafs_register_manifest(
@@ -35343,7 +35298,12 @@ mod sorafs_pin_tests {
             .unwrap()
             .to_bytes();
         let v: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
-        assert!(v.get("manifest_digest_hex").is_some());
+        let expected_digest = hex::encode(manifest.digest().expect("manifest digest").as_bytes());
+        assert_eq!(
+            v.get("manifest_digest_hex")
+                .and_then(norito::json::Value::as_str),
+            Some(expected_digest.as_str())
+        );
         assert_eq!(
             v.get("submitted_epoch")
                 .and_then(norito::json::Value::as_u64),
@@ -35353,12 +35313,13 @@ mod sorafs_pin_tests {
 
     #[tokio::test]
     #[cfg(feature = "app_api")]
-    async fn register_manifest_handler_validates_manifest_payload() {
+    async fn register_manifest_handler_rejects_noncanonical_base64_manifest_payload() {
         let manifest = default_manifest();
-        let req = request_from_manifest(&manifest, true);
+        let mut req = request_from_manifest(&manifest);
+        req.manifest_payload.push('\n');
         let (chain_id, queue, state, telemetry) = handler_context(|_| {});
 
-        let resp = handle_post_sorafs_register_manifest(
+        let err = match handle_post_sorafs_register_manifest(
             Arc::clone(&chain_id),
             queue,
             state,
@@ -35366,22 +35327,27 @@ mod sorafs_pin_tests {
             NoritoJson(req),
         )
         .await
-        .expect("handler ok")
-        .into_response();
-        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+        {
+            Ok(_) => panic!("noncanonical base64 must fail closed"),
+            Err(err) => err,
+        };
+        assert_eq!(
+            app_validation_error(err).0,
+            "sorafs_pin_manifest_payload_base64_invalid"
+        );
     }
 
     #[tokio::test]
     #[cfg(feature = "app_api")]
     async fn register_manifest_handler_rejects_legacy_encoded_manifest_payload() {
         let manifest = default_manifest();
-        let mut req = request_from_manifest(&manifest, true);
+        let mut req = request_from_manifest(&manifest);
         let legacy_manifest_bytes = {
             let _guard = norito::core::DecodeFlagsGuard::enter(0);
             norito::to_bytes(&manifest).expect("noncanonical manifest fixture encoding")
         };
-        req.manifest_b64 =
-            Some(base64::engine::general_purpose::STANDARD.encode(legacy_manifest_bytes));
+        req.manifest_payload =
+            base64::engine::general_purpose::STANDARD.encode(legacy_manifest_bytes);
         let (chain_id, queue, state, telemetry) = handler_context(|_| {});
 
         let err = match handle_post_sorafs_register_manifest(
@@ -35404,12 +35370,11 @@ mod sorafs_pin_tests {
 
     #[tokio::test]
     #[cfg(feature = "app_api")]
-    async fn register_manifest_handler_requires_manifest_payload_for_council_policy() {
+    async fn register_manifest_handler_rejects_empty_manifest_payload_before_decode() {
         let manifest = default_manifest();
-        let req = request_from_manifest(&manifest, false);
-        let (chain_id, queue, state, telemetry) = handler_context(|state| {
-            state.gov.sorafs_pin_policy.require_council_signatures = true;
-        });
+        let mut req = request_from_manifest(&manifest);
+        req.manifest_payload.clear();
+        let (chain_id, queue, state, telemetry) = handler_context(|_| {});
 
         let err = match handle_post_sorafs_register_manifest(
             Arc::clone(&chain_id),
@@ -35420,15 +35385,13 @@ mod sorafs_pin_tests {
         )
         .await
         {
-            Ok(_) => {
-                panic!("missing manifest payload must fail when council signatures are required")
-            }
+            Ok(_) => panic!("empty manifest payload must fail before decode"),
             Err(err) => err,
         };
         let (code, message) = app_validation_error(err);
-        assert_eq!(code, "sorafs_pin_manifest_payload_required");
+        assert_eq!(code, "sorafs_pin_manifest_payload_size_invalid");
         assert!(
-            message.contains("manifest_b64 is required"),
+            message.contains("manifest_payload must encode"),
             "unexpected error message: {message}"
         );
     }
@@ -35439,7 +35402,7 @@ mod sorafs_pin_tests {
     {
         let mut manifest = default_manifest();
         manifest.governance.council_signatures.clear();
-        let req = request_from_manifest(&manifest, true);
+        let req = request_from_manifest(&manifest);
         let (chain_id, queue, state, telemetry) = handler_context(|state| {
             state.gov.sorafs_pin_policy.require_council_signatures = true;
         });
@@ -35464,31 +35427,85 @@ mod sorafs_pin_tests {
         );
     }
 
-    #[tokio::test]
-    #[cfg(feature = "app_api")]
-    async fn register_manifest_handler_rejects_manifest_digest_mismatch_with_stable_code() {
-        let manifest = default_manifest();
-        let mut req = request_from_manifest(&manifest, true);
-        req.manifest_digest_hex = hex::encode([0xEE; 32]);
-        let (chain_id, queue, state, telemetry) = handler_context(|_| {});
-
-        let err = match handle_post_sorafs_register_manifest(
-            Arc::clone(&chain_id),
-            queue,
-            state,
-            telemetry,
-            NoritoJson(req),
+    #[test]
+    fn register_manifest_rejects_oversized_manifest_before_base64_decode() {
+        let payload = "A".repeat(SORAFS_PIN_MANIFEST_MAX_BASE64_BYTES + 1);
+        let err = decode_sorafs_pin_manifest_payload(
+            payload.as_str(),
+            &ManifestPinPolicyConstraints::default(),
         )
-        .await
-        {
-            Ok(_) => panic!("manifest payload digest mismatch must fail"),
-            Err(err) => err,
-        };
+        .expect_err("oversized manifest must fail before decode");
         let (code, message) = app_validation_error(err);
-        assert_eq!(code, "sorafs_pin_manifest_digest_mismatch");
+        assert_eq!(code, "sorafs_pin_manifest_payload_size_invalid");
         assert!(
-            message.contains("does not match manifest_digest_hex"),
+            message.contains("manifest_payload must encode"),
             "unexpected error message: {message}"
+        );
+    }
+
+    #[test]
+    fn register_manifest_successor_digest_is_exact_lowercase_and_nonzero() {
+        let valid = hex::encode([0xAB; 32]);
+        let digest =
+            parse_sorafs_pin_successor_digest(&valid).expect("canonical successor must parse");
+        assert_eq!(digest.as_bytes(), &[0xAB; 32]);
+
+        for invalid in [
+            String::new(),
+            "0".repeat(64),
+            valid.to_ascii_uppercase(),
+            format!("0x{valid}"),
+            "a".repeat(63),
+        ] {
+            let err = parse_sorafs_pin_successor_digest(&invalid)
+                .expect_err("noncanonical successor must fail closed");
+            assert_eq!(
+                app_validation_error(err).0,
+                "sorafs_pin_successor_digest_invalid"
+            );
+        }
+    }
+
+    #[test]
+    fn register_manifest_alias_is_bounded_and_canonical() {
+        let valid = PinAliasDto {
+            namespace: "sora".into(),
+            name: "docs".into(),
+            proof_base64: base64::engine::general_purpose::STANDARD.encode(b"proof"),
+        };
+        decode_sorafs_pin_alias_binding(&valid).expect("canonical alias must parse");
+
+        let mut invalid_segment = valid.clone();
+        invalid_segment.namespace = "Sora".into();
+        assert_eq!(
+            app_validation_error(
+                decode_sorafs_pin_alias_binding(&invalid_segment)
+                    .expect_err("uppercase alias must fail")
+            )
+            .0,
+            "sorafs_pin_alias_segment_invalid"
+        );
+
+        let mut empty_proof = valid.clone();
+        empty_proof.proof_base64.clear();
+        assert_eq!(
+            app_validation_error(
+                decode_sorafs_pin_alias_binding(&empty_proof)
+                    .expect_err("empty alias proof must fail")
+            )
+            .0,
+            "sorafs_pin_alias_proof_size_invalid"
+        );
+
+        let mut oversized_proof = valid;
+        oversized_proof.proof_base64 = "A".repeat(SORAFS_PIN_ALIAS_PROOF_MAX_BASE64_BYTES + 1);
+        assert_eq!(
+            app_validation_error(
+                decode_sorafs_pin_alias_binding(&oversized_proof)
+                    .expect_err("oversized alias proof must fail before decode")
+            )
+            .0,
+            "sorafs_pin_alias_proof_size_invalid"
         );
     }
 
@@ -35496,7 +35513,7 @@ mod sorafs_pin_tests {
     #[cfg(feature = "app_api")]
     async fn register_manifest_handler_rejects_invalid_alias_proof_with_stable_code() {
         let manifest = default_manifest();
-        let mut req = request_from_manifest(&manifest, true);
+        let mut req = request_from_manifest(&manifest);
         req.alias = Some(PinAliasDto {
             namespace: "sora".into(),
             name: "docs".into(),
@@ -35519,61 +35536,27 @@ mod sorafs_pin_tests {
         let (code, message) = app_validation_error(err);
         assert_eq!(code, "sorafs_pin_alias_proof_base64_invalid");
         assert!(
-            message.contains("invalid base64 in alias proof"),
+            message.contains("canonical padded base64"),
             "unexpected error message: {message}"
         );
     }
 
     #[tokio::test]
     async fn register_manifest_accepts_alias_binding() {
-        use crate::{mk_app_state_for_tests, routing::PinPolicyStorageClassDto};
+        use crate::mk_app_state_for_tests;
 
         let app = mk_app_state_for_tests();
         let chain_id = Arc::clone(&app.chain_id);
         let queue = Arc::clone(&app.queue);
         let state = Arc::clone(&app.state);
         let manifest = default_manifest();
-        let manifest_digest = manifest.digest().expect("manifest digest");
-        let manifest_digest_hex = hex::encode(manifest_digest.as_bytes());
-        let descriptor = sorafs_manifest::chunker_registry::default_descriptor();
-        let policy = manifest.pin_policy.clone();
-        let pin_policy_dto = PinPolicyDto {
-            min_replicas: policy.min_replicas,
-            storage_class: match policy.storage_class {
-                ManifestStorageClass::Hot => PinPolicyStorageClassDto::Hot,
-                ManifestStorageClass::Warm => PinPolicyStorageClassDto::Warm,
-                ManifestStorageClass::Cold => PinPolicyStorageClassDto::Cold,
-            },
-            retention_epoch: policy.retention_epoch,
-        };
-        let kp = checked_pin_keypair(0x79, "derive pin manifest alias fixture key");
-        let authority = dm::AccountId::new(kp.public_key().clone());
         let proof_bytes = b"alias-proof";
-        let req = RegisterPinManifestDto {
-            authority,
-            private_key: dm::ExposedPrivateKey(kp.private_key().clone()),
-            chunker_profile_id: descriptor.id.0,
-            chunker_namespace: descriptor.namespace.to_string(),
-            chunker_name: descriptor.name.to_string(),
-            chunker_semver: descriptor.semver.to_string(),
-            chunker_multihash_code: descriptor.multihash_code,
-            pin_policy: pin_policy_dto,
-            manifest_digest_hex,
-            manifest_b64: Some(
-                base64::engine::general_purpose::STANDARD
-                    .encode(manifest.encode().expect("encode canonical manifest")),
-            ),
-            chunk_digest_sha3_256_hex: hex::encode(manifest.chunk_digest_sha3_256),
-            content_length: manifest.content_length,
-            submitted_epoch: 5,
-            alias: Some(PinAliasDto {
-                namespace: "sora".into(),
-                name: "docs".into(),
-                proof_base64: base64::engine::general_purpose::STANDARD
-                    .encode(proof_bytes.as_slice()),
-            }),
-            successor_of_hex: None,
-        };
+        let mut req = request_from_manifest(&manifest);
+        req.alias = Some(PinAliasDto {
+            namespace: "sora".into(),
+            name: "docs".into(),
+            proof_base64: base64::engine::general_purpose::STANDARD.encode(proof_bytes.as_slice()),
+        });
 
         #[cfg(feature = "telemetry")]
         let telemetry = app.telemetry.clone();
@@ -36716,6 +36699,18 @@ mod sorafs_capacity_tests {
     #[tokio::test]
     #[cfg(feature = "app_api")]
     async fn por_handlers_record_pipeline() {
+        #[derive(Debug)]
+        struct TestPorRepairHandoff;
+
+        impl sorafs_node::PorRepairHandoff for TestPorRepairHandoff {
+            fn enqueue_failed_por_repair(
+                &self,
+                intent: &sorafs_node::PorFailedRepairIntentV1,
+            ) -> Result<[u8; 32], sorafs_node::PorRepairHandoffError> {
+                Ok(intent.repair_task_id())
+            }
+        }
+
         let (_state, _queue, _chain_id, telemetry) = test_state_components();
         let (node, _dir) = sorafs_node_with_temp_storage();
         let por_coordinator = Arc::new(sorafs::PorCoordinator::new());
@@ -36761,6 +36756,7 @@ mod sorafs_capacity_tests {
             auditor_signer,
             trusted_auditor_keys,
             1,
+            &TestPorRepairHandoff,
         )
         .await
         .expect("verdict handler ok")
@@ -50754,11 +50750,9 @@ mod app_api_integration_tests {
                 "/v1/sorafs/storage/fetch",
                 post({
                     let fetch_requests = Arc::clone(&fetch_requests);
-                    let provider_id_hex = provider_id_hex.clone();
                     let fetch_responses = fetch_responses.clone();
                     move |body: Bytes| {
                         let fetch_requests = Arc::clone(&fetch_requests);
-                        let provider_id_hex = provider_id_hex.clone();
                         let fetch_responses = fetch_responses.clone();
                         async move {
                             fetch_requests.fetch_add(1, Ordering::SeqCst);
@@ -50766,10 +50760,6 @@ mod app_api_integration_tests {
                                 crate::sorafs::api::StorageFetchRequestDto,
                             >(&body)
                             .expect("decode fetch request");
-                            assert_eq!(
-                                request.provider_id_hex.as_deref(),
-                                Some(provider_id_hex.as_str())
-                            );
                             let Some(response) = fetch_responses.get(&request.manifest_id_hex)
                             else {
                                 return axum::http::StatusCode::NOT_FOUND.into_response();
@@ -51118,15 +51108,16 @@ mod app_api_integration_tests {
             manifest_digest.clone(),
             manifest_root_cid.clone(),
             default_projection_registry_chunker_handle(),
-            [0xAB; 32],
+            manifest.chunk_digest_sha3_256,
+            manifest.por_root,
+            content_length,
             policy,
             issuer.clone(),
             5,
             None,
             None,
             iroha_data_model::metadata::Metadata::default(),
-        )
-        .with_content_length(content_length);
+        );
         manifest_record.record_pin_fee_payment(
             iroha_data_model::sorafs::pin_registry::PinFeePayment {
                 paid_by: issuer.clone(),
@@ -80328,6 +80319,16 @@ pub(crate) fn query_projection_archive_storage_artifacts(
             plan.chunk_profile,
             sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
         )
+        .chunk_digest_sha3_256(sorafs_car::compute_chunk_plan_digest_sha3(&plan.chunks))
+        .por_root(
+            sorafs_car::compute_por_root(archive_payload.payload.as_slice(), &plan).map_err(
+                |err| {
+                    query_projection_archive_validation_error(format!(
+                        "failed to derive SoraFS PoR root for query projection archive: {err}"
+                    ))
+                },
+            )?,
+        )
         .content_length(plan.content_length)
         .car_digest(car_digest)
         .car_size(stats.car_size)
@@ -80850,7 +80851,6 @@ async fn fetch_remote_query_projection_archive_from_source(
         manifest_id_hex: manifest_response.manifest_id_hex.clone(),
         offset: 0,
         length: manifest_response.content_length,
-        provider_id_hex: Some(source.provider_id_hex.clone()),
     })
     .map_err(|err| format!("failed to encode remote fetch request: {err}"))?;
     let fetch_url = source

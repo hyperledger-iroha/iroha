@@ -14,7 +14,9 @@ use sorafs_car::{
     CarBuildPlan, CarChunk, ChunkStore, DirectoryChunkSinkOutput, DirectoryPublicationStatus,
     FileEntry, InMemoryPayload, ProfileId,
     chunker_registry::{self, ChunkerProfileDescriptor},
-    fetch_plan::{chunk_fetch_specs_to_string, try_chunk_fetch_specs_to_json},
+    fetch_plan::{
+        CHUNK_STORE_REPORT_SCHEMA_V1, chunk_fetch_plan_to_string, try_chunk_fetch_specs_to_json,
+    },
     por_json::{parse_proof_spec, proof_from_value, proof_to_value, sample_to_map, tree_to_value},
 };
 
@@ -302,6 +304,7 @@ fn run() -> Result<(), String> {
     let por_tree = store.por_tree();
 
     let mut root = Map::new();
+    root.insert("schema".into(), Value::from(CHUNK_STORE_REPORT_SCHEMA_V1));
     root.insert("input_bytes".into(), Value::from(store.payload_len()));
     root.insert(
         "payload_digest_blake3".into(),
@@ -405,11 +408,8 @@ fn run() -> Result<(), String> {
     }
 
     if let Some(path) = chunk_fetch_plan_out {
-        let specs = plan
-            .try_chunk_fetch_specs()
-            .map_err(|err| format!("failed to derive chunk fetch specs: {err}"))?;
-        let plan_text = chunk_fetch_specs_to_string(&specs)
-            .map_err(|err| format!("failed to serialise chunk fetch specs: {err}"))?;
+        let plan_text = chunk_fetch_plan_to_string(&plan)
+            .map_err(|err| format!("failed to serialise chunk fetch plan: {err}"))?;
         write_text(path.as_path(), &plan_text)?;
         if path.as_os_str() == "-" {
             report_written_to_stdout = true;

@@ -274,10 +274,13 @@ pub struct DaIngestReceipt {
   ептәр һаҡлау өсөн Norito X ҡиммәттәре мәғәнәле дәлилдәр өйөмдәре. Күрергә
   `crates/iroha_cli/src/commands/da.rs` өсөн подкомманд һәм `docs/source/da/rent_policy.md`
   сәйәсәт схемаһы өсөн.【крат/ироха_кли/срк/командалар/да.р.р.:1】【Сығанаҡ/да/да/алент_полиция.мд:1】
-- Пин реестр паритеты хәҙер SDK-ға тиклем һуҙыла: Norito-ла.
-  JavaScript SDK аныҡ файҙалы йөкләмәһен төҙөй, `iroha app sorafs pin register` тарафынан ҡулланылған, канонлы тормошҡа ашырыу
-  chunker метамағлүмәттәр, булавка сәйәсәте, псевдоним дәлилдәр, һәм вариҫы үҙләштереү алдынан POSTing .
-  `/v1/sorafs/pin/register`. Был CI боттарҙы һәм автоматлаштырыуҙы CLI-ға снарядтарҙан тота, ҡасан
+- Пин реестры паритеты хәҙер SDK-ларға тиклем һуҙыла:
+  `ToriiClient.registerSorafsPinManifest(...)` `manifest_payload` эсендә теүәл
+  canonical padded-base64 `ManifestV1` булған ябыҡ JSON V1 һорауын төҙөй. Torii
+  digest, chunker, content length, pin policy һәм fee input-тарҙы тик decoded
+  manifest-тан сығара һәм duplicate summary-ҙарҙы кире ҡаға; optional alias һәм
+  nonzero predecessor ҡала. Был `/v1/sorafs/pin/register` ҡулланғанда CI боттарҙы
+  һәм автоматлаштырыуҙы CLI-ға мөрәжәғәт итеүҙән һаҡлай,
   яҙма рәүештә теркәүҙәр, һәм ярҙамсы суднолар менән TypeScript/README ҡаплау шулай DA-8’s
   “Дауа/алыу/иҫбатлау” инструменталь паритет тулыһынса ҡәнәғәт JS менән бер рәттән JS.【javascript/iroha_js/scr/sriiClient.js:1045】【жавастрипт/ироха_js/тест/toriClienClient.test.tes.js:788】
 - `iroha app da prove-availability` сылбырҙары бөтә өҫтәге: ул һаҡлау билеты кәрәк, скачать

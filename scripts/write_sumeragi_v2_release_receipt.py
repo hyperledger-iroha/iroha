@@ -68,6 +68,7 @@ _MAX_LOCK_BYTES = 128 * 1024 * 1024
 _MAX_POLICY_BYTES = 16 * 1024 * 1024
 _MAX_HELPER_BYTES = 16 * 1024 * 1024
 _MAX_TOOL_BYTES = 512 * 1024 * 1024
+_MAX_RUNNER_TOOL_TOTAL_BYTES = 4 * 1024 * 1024 * 1024
 _MAX_REPLAY_OUTPUT_BYTES = 4 * 1024 * 1024
 _MAX_LOCALNET_MANIFEST_INDEX_BYTES = 1024 * 1024
 _MAX_LOCALNET_MANIFEST_BYTES = 64 * 1024 * 1024
@@ -76,8 +77,49 @@ _MAX_SCALING_BUNDLE_FILE_COUNT = 256
 _MAX_SCALING_BUNDLE_DIRECTORY_COUNT = 512
 _MAX_SCALING_BUNDLE_FILE_BYTES = 256 * 1024 * 1024
 _MAX_SCALING_BUNDLE_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
+_MAX_G4P_TSV_BYTES = 1024 * 1024
+_MAX_G4P_LOG_BYTES = 16 * 1024 * 1024
 _MAX_G12_TSV_BYTES = 1024 * 1024
 _MAX_G12_LOG_BYTES = 16 * 1024 * 1024
+_MAX_PREBUILT_MANIFEST_BYTES = 32 * 1024
+_MAX_PREBUILT_VERSION_TRANSCRIPT_BYTES = 64 * 1024
+_MAX_PREBUILT_BINARY_BYTES = 2 * 1024 * 1024 * 1024
+_MAX_RELEASE_TSV_BYTES = 16 * 1024 * 1024
+_MAX_RELEASE_TEXT_BYTES = 256 * 1024 * 1024
+_MAX_RELEASE_JSON_BYTES = 128 * 1024 * 1024
+_PREBUILT_MANIFEST_NAME = ".sumeragi-v2-prebuilt-binaries.tsv"
+_PREBUILT_INVOCATION_RE = re.compile(r"invocation\.[A-Za-z0-9]+")
+_PREBUILT_TRIPLE_RE = re.compile(r"[A-Za-z0-9_]+(?:-[A-Za-z0-9_.]+)+")
+_PREBUILT_BINARY_SPECS = (
+    ("irohad", "release/iroha3d"),
+    (
+        "irohad_message_control",
+        "message-control/release/iroha3d",
+    ),
+    ("iroha", "release/iroha"),
+    ("kagami", "release/kagami"),
+)
+_PREBUILT_MANIFEST_FIELDS = (
+    "schema_version",
+    "source_manifest_sha256",
+    "cargo_lock_sha256",
+    "cargo_version_sha256",
+    "rustc_version_sha256",
+    "host_triple",
+    "target_triple",
+    "profile",
+    "bundle_dir",
+    *(
+        field
+        for prefix, _ in _PREBUILT_BINARY_SPECS
+        for field in (
+            f"{prefix}_relative_path",
+            f"{prefix}_sha256",
+            f"{prefix}_size_bytes",
+            f"{prefix}_mode_octal",
+        )
+    ),
+)
 _SCALING_REQUIRED_TOOLING = (
     ("localnet", "scripts/deploy_localnet.sh"),
     ("load_generator", "scripts/tx_load.py"),
@@ -169,6 +211,12 @@ _APALACHE_RESULTS = (
         "multilane_autonomous_reservation_carrier_fixed.cfg",
         "10",
     ),
+    (
+        "queue-plan-admission-registry",
+        "SumeragiV2QueuePlanAdmissionRegistry",
+        "multilane_queue_plan_admission_registry_fixed.cfg",
+        "8",
+    ),
 )
 _G12_SEED_PREFIX = "nexus-cross-dataspace-v1-seed-"
 _G12_SEED_TEST = (
@@ -178,6 +226,35 @@ _G12_SEED_TEST = (
 _G12_SOAK_TEST = (
     "nexus::cross_dataspace_localnet::"
     "cross_dataspace_two_hour_fault_soak_preserves_multilane_application"
+)
+_G4P_RELEASE_TESTS = (
+    (
+        "nexus_and_streaming",
+        "nexus::autoscale_localnet::"
+        "nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_"
+        "rejects_stale_artifacts",
+    ),
+    (
+        "nexus_and_streaming",
+        "nexus::autoscale_localnet::"
+        "nexus_autoscale_certified_merge_recovers_missing_sidecar_after_restart",
+    ),
+    (
+        "nexus_and_streaming",
+        "nexus::autoscale_localnet::"
+        "nexus_autoscale_two_phase_drain_closes_certifies_then_retires_after_"
+        "restart",
+    ),
+    (
+        "native_amx_routing",
+        "native_amx_rotating_validator_fault_soak_preserves_independent_"
+        "participant_qcs",
+    ),
+)
+_G4P_NATIVE_AMX_GROUPED_PRUNING_MARKER = (
+    "[multilane-release-native-evidence] grouped_sources=2 "
+    "durable_manifest=passed body_eviction_recovery=passed "
+    "authenticated_remote_recovery=passed exact_once=passed"
 )
 _CHAOS_MARKER = (
     "SUMERAGI_V2_CHAOS_COMPLETED permissioned_heights=50000 "
@@ -264,6 +341,72 @@ _CORRIDOR_SUMMARY_FIELDS = (
     "command",
 )
 _PRODUCTION_TEST_COUNT = 515
+_G_UNIT_TEST_COUNT = 256
+_G_UNIT_GROUPS = (
+    (
+        "required_multilane_core_focus_tests",
+        "g-unit-iroha-core",
+        "iroha_core",
+        99,
+        "lib",
+    ),
+    (
+        "required_multilane_queue_journal_focus_tests",
+        "g-unit-iroha-core-queue-journal",
+        "iroha_core",
+        101,
+        "lib",
+    ),
+    (
+        "required_multilane_config_lib_focus_tests",
+        "g-unit-iroha-config-lib",
+        "iroha_config",
+        3,
+        "lib",
+    ),
+    (
+        "required_multilane_config_runtime_focus_tests",
+        "g-unit-iroha-config-runtime",
+        "iroha_config",
+        2,
+        "test:sumeragi_v2_merge_runtime_config",
+    ),
+    (
+        "required_multilane_config_fixtures_focus_tests",
+        "g-unit-iroha-config-fixtures",
+        "iroha_config",
+        1,
+        "test:fixtures",
+    ),
+    (
+        "required_multilane_data_model_focus_tests",
+        "g-unit-iroha-data-model",
+        "iroha_data_model",
+        8,
+        "lib",
+    ),
+    (
+        "required_multilane_torii_focus_tests",
+        "g-unit-iroha-torii",
+        "iroha_torii",
+        39,
+        "lib",
+    ),
+    (
+        "required_multilane_torii_shared_focus_tests",
+        "g-unit-iroha-torii-shared",
+        "iroha_torii_shared",
+        1,
+        "lib",
+    ),
+    (
+        "required_multilane_integration_lib_focus_tests",
+        "g-unit-integration-tests",
+        "integration_tests",
+        2,
+        "lib",
+    ),
+)
 _PRODUCTION_MODULES = (
     (
         "production-kura-progress-durability",
@@ -437,31 +580,41 @@ _CROSS_SDK_TESTS = (
 )
 _NATIVE_AMX_GROUPED_PARITY_HARNESS = "ci/run_native_amx_v2_grouped_sdk_parity.sh"
 _NATIVE_AMX_GROUPED_FIXTURE = "fixtures/sumeragi_v2/native_amx_v2_grouped.json"
-_NATIVE_AMX_GROUPED_NEGATIVE_CONTROL_COUNT = 34
+_NATIVE_AMX_GROUPED_NEGATIVE_CONTROL_COUNT = 50
 _NATIVE_AMX_GROUPED_PARITY_SUITES = (
-    ("openapi", 4),
-    ("python", 35),
-    ("javascript", 37),
-    ("swift", 2),
+    ("openapi", 7),
+    ("python", 56),
+    ("javascript", 54),
+    ("swift", 3),
     ("kotlin", 6),
     ("java", 5),
 )
 _NATIVE_AMX_GROUPED_SUITE_SOURCE_PATHS = (
     "ci/run_native_amx_v2_grouped_sdk_parity.sh",
     "ci/native_amx_v2_grouped_gradle_init.gradle",
+    "crates/iroha_data_model/src/bin/native_amx_grouped.rs",
     "pytests/scripts/native_amx_v2_grouped_fixture_test.py",
     "python/iroha_python/tests/native_amx_v2_grouped_fixture_test.py",
     "python/iroha_python/src/iroha_python/client.py",
     "python/iroha_python/src/iroha_python/__init__.py",
     "python/iroha_torii_client/client.py",
+    "python/iroha_torii_client/native_amx.py",
     "javascript/iroha_js/test/nativeAmxV2GroupedFixture.test.js",
     "javascript/iroha_js/src/toriiClient.js",
     "javascript/iroha_js/dist/toriiClient.js",
     "javascript/iroha_js/index.d.ts",
+    "javascript/iroha_js/package.json",
+    "javascript/iroha_js/package-lock.json",
     "IrohaSwift/Tests/IrohaSwiftTests/NativeAmxV2GroupedFixtureTests.swift",
+    "IrohaSwift/Sources/IrohaSwift/CanonicalNoritoEncoding.swift",
+    "IrohaSwift/Sources/IrohaSwift/Crypto.swift",
+    "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift",
+    "IrohaSwift/Sources/IrohaSwift/Norito.swift",
     "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift",
     "IrohaSwift/Package.swift",
     "IrohaSwift/Package.resolved",
+    "crates/connect_norito_bridge/include/connect_norito_bridge.h",
+    "crates/connect_norito_bridge/src/lib.rs",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/consensus/"
     "NativeAmxV2GroupedFixtureTest.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/consensus/"
@@ -498,20 +651,28 @@ _JS_STATUS_TESTS = (
 def _native_amx_grouped_suite_source_manifest(repo_root: Path) -> str:
     digest = hashlib.sha256()
     for relative_path in _NATIVE_AMX_GROUPED_SUITE_SOURCE_PATHS:
-        source = _regular_file(
+        source = _bounded_path_contract(
             repo_root / relative_path,
             f"grouped Native AMX V2 suite source {relative_path}",
+            maximum_bytes=_MAX_TOOL_BYTES,
+            require_single_link=False,
         )
-        digest.update(f"{relative_path}\t{_sha256(source)}\n".encode())
+        digest.update(f"{relative_path}\t{source.sha256}\n".encode())
     return digest.hexdigest()
 
 
-def _canonical_production_tests(repo_root: Path) -> list[str]:
-    runner = repo_root / "scripts" / "run_sumeragi_v2_release_gates.sh"
-    try:
-        source = runner.read_text(encoding="utf-8")
-    except UnicodeDecodeError as error:
-        raise ReceiptError("release runner inventory is not UTF-8") from error
+def _canonical_production_tests(
+    repo_root: Path,
+    runner_snapshot: EvidenceSnapshot | None = None,
+) -> list[str]:
+    if runner_snapshot is None:
+        runner_snapshot = _bounded_evidence_snapshot(
+            repo_root / "scripts" / "run_sumeragi_v2_release_gates.sh",
+            "release runner inventory",
+            maximum_bytes=_MAX_POLICY_BYTES,
+            require_single_link=False,
+        )
+    source = _decode_lf_text(runner_snapshot, "release runner inventory")
     marker = "required_production_liveness_tests=(\n"
     if source.count(marker) != 1:
         raise ReceiptError("release runner lacks one canonical production inventory")
@@ -548,6 +709,77 @@ def _canonical_production_tests(repo_root: Path) -> list[str]:
             f"{_PRODUCTION_TEST_COUNT} tests"
         )
     return tests
+
+
+def _canonical_g_unit_rows(
+    repo_root: Path,
+    runner_snapshot: EvidenceSnapshot | None = None,
+) -> list[tuple[str, str, str]]:
+    if runner_snapshot is None:
+        runner_snapshot = _bounded_evidence_snapshot(
+            repo_root / "scripts" / "run_sumeragi_v2_release_gates.sh",
+            "release runner G-UNIT inventory",
+            maximum_bytes=_MAX_POLICY_BYTES,
+            require_single_link=False,
+        )
+    source = _decode_lf_text(runner_snapshot, "release runner G-UNIT inventory")
+    rows: list[tuple[str, str, str]] = []
+    for array_name, leg_id, package, expected_count, cargo_target in _G_UNIT_GROUPS:
+        marker = f"{array_name}=(\n"
+        if source.count(marker) != 1:
+            raise ReceiptError(
+                f"release runner lacks one canonical {array_name} G-UNIT inventory"
+            )
+        body = source.split(marker, 1)[1].split("\n)", 1)[0]
+        tests = [
+            line.strip()
+            for line in body.splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        ]
+        if (
+            len(tests) != expected_count
+            or len(set(tests)) != expected_count
+            or any(
+                re.fullmatch(
+                    (
+                        r"[A-Za-z0-9_]+(?:::[A-Za-z0-9_]+)+"
+                        if cargo_target == "lib"
+                        else r"[A-Za-z0-9_]+(?:::[A-Za-z0-9_]+)*"
+                    ),
+                    test,
+                )
+                is None
+                for test in tests
+            )
+        ):
+            raise ReceiptError(
+                f"release runner {array_name} inventory is not exactly "
+                f"{expected_count} distinct tests"
+            )
+        rows.extend((leg_id, package, test) for test in tests)
+    names = [test for _, _, test in rows]
+    if len(rows) != _G_UNIT_TEST_COUNT or len(set(names)) != _G_UNIT_TEST_COUNT:
+        raise ReceiptError(
+            f"release runner G-UNIT inventory is not exactly "
+            f"{_G_UNIT_TEST_COUNT} globally distinct tests"
+        )
+    return rows
+
+
+def _g_unit_leg_command(array_name: str, package: str, cargo_target: str) -> str:
+    if cargo_target == "lib":
+        target = "--lib"
+    elif cargo_target.startswith("test:"):
+        test_target = cargo_target.removeprefix("test:")
+        if re.fullmatch(r"[A-Za-z0-9_]+", test_target) is None:
+            raise ReceiptError("G-UNIT test target is not canonical")
+        target = f"--test {test_target}"
+    else:
+        raise ReceiptError("G-UNIT Cargo target is not canonical")
+    return (
+        f"for test in {array_name}; do cargo test --locked --offline "
+        f'-p {package} {target} "$test" -- --exact --test-threads=1; done'
+    )
 
 
 def _production_module_command(module: str) -> str:
@@ -598,12 +830,23 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
     legs = [
         (
             leg_id,
-            "cargo-module",
+            "cargo-focus",
             count,
-            _production_module_command(module),
+            _g_unit_leg_command(array_name, package, cargo_target),
         )
-        for leg_id, module, count in _PRODUCTION_MODULES
+        for array_name, leg_id, package, count, cargo_target in _G_UNIT_GROUPS
     ]
+    legs.extend(
+        (
+            (
+                leg_id,
+                "cargo-module",
+                count,
+                _production_module_command(module),
+            )
+            for leg_id, module, count in _PRODUCTION_MODULES
+        )
+    )
     legs.append(
         (
             "status-rust",
@@ -685,6 +928,15 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
             "-- --test-threads=1",
         )
     )
+    legs.append(
+        (
+            "native-amx-rust-fixture-check",
+            "command",
+            0,
+            "cargo run --locked --offline -p iroha_data_model --bin "
+            "sumeragi_v2_wire_fixtures -- --check",
+        )
+    )
     legs.extend(
         (
             f"native-amx-grouped-{surface}",
@@ -722,7 +974,7 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
             (
                 "preflight-seed-launcher",
                 "pytest",
-                11,
+                14,
                 "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
                 "-q -p no:cacheprovider "
                 "pytests/scripts/sumeragi_v2_seed_matrix_test.py::"
@@ -737,6 +989,12 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
                 "test_mocked_seed_matrix_rejects_ambiguous_test_summary "
                 "pytests/scripts/sumeragi_v2_seed_matrix_test.py::"
                 "test_mocked_seed_matrix_preserves_cargo_failure_through_tee "
+                "pytests/scripts/sumeragi_v2_seed_matrix_test.py::"
+                "test_mocked_seed_matrix_rejects_bundle_tampering_before_completion "
+                "pytests/scripts/sumeragi_v2_seed_matrix_test.py::"
+                "test_mocked_seed_matrix_rejects_symlinked_marker_temp_without_completion "
+                "pytests/scripts/sumeragi_v2_seed_matrix_test.py::"
+                "test_mocked_seed_matrix_marker_durability_failure_is_not_terminal "
                 "pytests/scripts/sumeragi_v2_seed_matrix_test.py::"
                 "test_mocked_seed_matrix_rejects_parent_source_manifest_mismatch "
                 "pytests/scripts/sumeragi_v2_seed_matrix_test.py::"
@@ -783,9 +1041,12 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
             (
                 "preflight-release-receipt",
                 "pytest",
-                221,
+                316,
                 "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
-                "-q -p no:cacheprovider pytests/scripts/sumeragi_v2_release_receipt_test.py",
+                "-q -p no:cacheprovider "
+                "pytests/scripts/sumeragi_v2_release_receipt_test.py "
+                "pytests/scripts/sumeragi_v2_prebuilt_bundle_test.py "
+                "pytests/scripts/sumeragi_v2_prebuilt_bundle_shell_test.py",
             ),
             (
                 "preflight-multilane-scaling",
@@ -816,9 +1077,27 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
             (
                 "preflight-taira-soak",
                 "pytest",
-                39,
+                42,
                 "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
-                "-q -p no:cacheprovider pytests/scripts/taira_v2_soak_test.py "
+                "-q -p no:cacheprovider "
+                "pytests/scripts/taira_v2_soak_test.py::"
+                "test_launcher_pins_complete_profile_and_runs_exactly_one_test "
+                "pytests/scripts/taira_v2_soak_test.py::"
+                "test_launcher_rejects_zero_test_inventory "
+                "pytests/scripts/taira_v2_soak_test.py::"
+                "test_launcher_rejects_zero_test_execution_output "
+                "pytests/scripts/taira_v2_soak_test.py::"
+                "test_launcher_rejects_bundle_tampering_before_completion "
+                "pytests/scripts/taira_v2_soak_test.py::"
+                "test_launcher_rejects_symlinked_marker_temp_without_completion "
+                "pytests/scripts/taira_v2_soak_test.py::"
+                "test_launcher_marker_durability_failure_is_not_terminal "
+                "pytests/scripts/taira_v2_soak_test.py::"
+                "test_launcher_rejects_profile_override_arguments_before_cargo "
+                "pytests/scripts/taira_v2_soak_test.py::"
+                "test_launcher_rejects_a_concurrent_source_bound_soak "
+                "pytests/scripts/taira_v2_soak_test.py::"
+                "test_launcher_does_not_promote_provisional_evidence_when_validation_fails "
                 "pytests/scripts/taira_v2_soak_evidence_test.py",
             ),
         )
@@ -882,24 +1161,27 @@ class DirectoryContract:
     ctime_ns: int
 
 
+def _snapshot_contract(snapshot: EvidenceSnapshot) -> PathContract:
+    """Discard retained bytes while preserving the exact opened-file identity."""
+
+    return PathContract(
+        path=snapshot.path,
+        sha256=snapshot.sha256,
+        device=snapshot.device,
+        inode=snapshot.inode,
+        mode=snapshot.mode,
+        owner=snapshot.owner,
+        nlink=snapshot.nlink,
+        size=snapshot.size,
+        mtime_ns=snapshot.mtime_ns,
+        ctime_ns=snapshot.ctime_ns,
+    )
+
+
 def _canonical_json(value: Any) -> bytes:
     return (
         json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n"
     ).encode("utf-8")
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        while chunk := source.read(1024 * 1024):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _regular_file(path: Path, name: str) -> Path:
-    if not path.is_file() or path.is_symlink():
-        raise ReceiptError(f"{name} is not a regular file: {path}")
-    return path.resolve(strict=True)
 
 
 def _require_digest(value: str, name: str) -> str:
@@ -1034,7 +1316,8 @@ def _read_evidence_snapshot(
     allowed_owners: set[int] | None = None,
     require_single_link: bool = True,
     executable: bool = False,
-) -> EvidenceSnapshot:
+    retain_bytes: bool = True,
+) -> EvidenceSnapshot | PathContract:
     """Capture one bounded regular file with closed pathname semantics."""
 
     if not path.is_absolute() or Path(os.path.abspath(path)) != path:
@@ -1073,7 +1356,8 @@ def _read_evidence_snapshot(
             or opened.st_nlink != before.st_nlink
         ):
             raise ReceiptError(f"{name} changed while it was opened")
-        chunks: list[bytes] = []
+        chunks: list[bytes] | None = [] if retain_bytes else None
+        digest = hashlib.sha256()
         total = 0
         while True:
             chunk = os.read(
@@ -1081,7 +1365,9 @@ def _read_evidence_snapshot(
             )
             if not chunk:
                 break
-            chunks.append(chunk)
+            digest.update(chunk)
+            if chunks is not None:
+                chunks.append(chunk)
             total += len(chunk)
             if total > maximum_bytes:
                 raise ReceiptError(f"{name} exceeds its closed size limit")
@@ -1098,6 +1384,20 @@ def _read_evidence_snapshot(
         )
         if any(getattr(after, field) != getattr(opened, field) for field in fields):
             raise ReceiptError(f"{name} changed while it was read")
+        if chunks is None:
+            return PathContract(
+                path=path,
+                sha256=digest.hexdigest(),
+                device=opened.st_dev,
+                inode=opened.st_ino,
+                mode=stat.S_IMODE(opened.st_mode),
+                owner=opened.st_uid,
+                nlink=opened.st_nlink,
+                size=opened.st_size,
+                mtime_ns=opened.st_mtime_ns,
+                ctime_ns=opened.st_ctime_ns,
+            )
+        assert chunks is not None
         return EvidenceSnapshot(
             path=path,
             data=b"".join(chunks),
@@ -1112,6 +1412,94 @@ def _read_evidence_snapshot(
         )
     finally:
         os.close(descriptor)
+
+
+def _bounded_evidence_snapshot(
+    path: Path,
+    name: str,
+    *,
+    maximum_bytes: int,
+    expected_mode: int | None = None,
+    allowed_owners: set[int] | None = None,
+    require_single_link: bool = True,
+    executable: bool = False,
+) -> EvidenceSnapshot:
+    """Capture one bounded evidence file and retain the exact validated bytes."""
+
+    try:
+        snapshot = _read_evidence_snapshot(
+            path,
+            name,
+            maximum_bytes=maximum_bytes,
+            expected_mode=expected_mode,
+            allowed_owners=allowed_owners,
+            require_single_link=require_single_link,
+            executable=executable,
+        )
+    except ReceiptError as error:
+        if str(error) == f"{name} is unavailable":
+            raise ReceiptError(f"{name} is not a regular file: {path}") from error
+        raise
+    if not isinstance(snapshot, EvidenceSnapshot):
+        raise AssertionError("retained evidence snapshot unexpectedly omitted bytes")
+    return snapshot
+
+
+def _bounded_path_contract(
+    path: Path,
+    name: str,
+    *,
+    maximum_bytes: int,
+    expected_mode: int | None = None,
+    allowed_owners: set[int] | None = None,
+    require_single_link: bool = True,
+    executable: bool = False,
+) -> PathContract:
+    """Hash one bounded evidence file without retaining its full contents."""
+
+    contract = _read_evidence_snapshot(
+        path,
+        name,
+        maximum_bytes=maximum_bytes,
+        expected_mode=expected_mode,
+        allowed_owners=allowed_owners,
+        require_single_link=require_single_link,
+        executable=executable,
+        retain_bytes=False,
+    )
+    if not isinstance(contract, PathContract):
+        raise AssertionError("streamed evidence snapshot unexpectedly retained bytes")
+    return contract
+
+
+def _decode_lf_text(snapshot: EvidenceSnapshot, name: str) -> str:
+    """Decode one exact, bounded, NUL-free LF-only text snapshot."""
+
+    data = snapshot.data
+    if not data.endswith(b"\n") or b"\r" in data or b"\0" in data:
+        raise ReceiptError(f"{name} is not canonical LF-only text")
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ReceiptError(f"{name} is not UTF-8") from error
+
+
+def _tsv_fields_from_snapshot(
+    snapshot: EvidenceSnapshot, name: str
+) -> dict[str, str]:
+    text = _decode_lf_text(snapshot, name)
+    fields: dict[str, str] = {}
+    for line in text[:-1].split("\n"):
+        parts = line.split("\t")
+        if (
+            len(parts) != 2
+            or not parts[0]
+            or parts[0] in fields
+            or "\n" in parts[1]
+        ):
+            raise ReceiptError(f"{name} contains malformed or duplicate fields")
+        fields[parts[0]] = parts[1]
+    return fields
 
 
 def _release_root(path: Path) -> Path:
@@ -1557,76 +1945,335 @@ def _abort_replay(process: subprocess.Popen[bytes]) -> None:
         pass
 
 
+def _execution_contract(
+    value: EvidenceSnapshot | PathContract,
+) -> PathContract:
+    return value if isinstance(value, PathContract) else _snapshot_contract(value)
+
+
+def _signature_archive_path_contract(archive: dict[str, Any]) -> PathContract:
+    return PathContract(
+        path=archive["path"],
+        sha256=hashlib.sha256(archive["data"]).hexdigest(),
+        device=archive["device"],
+        inode=archive["inode"],
+        mode=archive["mode"],
+        owner=archive["owner"],
+        nlink=archive["nlink"],
+        size=archive["size"],
+        mtime_ns=archive["mtime_ns"],
+        ctime_ns=archive["ctime_ns"],
+    )
+
+
+def _capture_execution_inputs(
+    contracts: tuple[PathContract, ...],
+) -> tuple[list[int], list[DirectoryContract]]:
+    descriptors: list[int] = []
+    directories: dict[Path, DirectoryContract] = {}
+    try:
+        for index, expected in enumerate(contracts):
+            current = _capture_path_contract(
+                expected.path,
+                f"execution input {index}",
+                expected_sha256=expected.sha256,
+                expected_mode=expected.mode,
+                expected_owner=expected.owner,
+                expected_nlink=expected.nlink,
+                expected_size=expected.size,
+            )
+            if current != expected or (index == 0 and current.mode & 0o111 == 0):
+                raise ReceiptError(
+                    f"execution input {index} changed before process creation"
+                )
+            flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+            if hasattr(os, "O_NOFOLLOW"):
+                flags |= os.O_NOFOLLOW
+            descriptor = os.open(expected.path, flags)
+            descriptors.append(descriptor)
+            opened = os.fstat(descriptor)
+            if (
+                (opened.st_dev, opened.st_ino)
+                != (expected.device, expected.inode)
+                or stat.S_IMODE(opened.st_mode) != expected.mode
+                or opened.st_uid != expected.owner
+                or opened.st_nlink != expected.nlink
+                or opened.st_size != expected.size
+                or opened.st_mtime_ns != expected.mtime_ns
+                or opened.st_ctime_ns != expected.ctime_ns
+            ):
+                raise ReceiptError(
+                    f"execution input {index} changed while pinned"
+                )
+            ancestors = (
+                expected.path.parent,
+                *tuple(expected.path.parent.parents)[:3],
+            )
+            for ancestor in ancestors:
+                ancestor_metadata = ancestor.lstat()
+                if (
+                    ancestor_metadata.st_uid not in {0, os.geteuid()}
+                    or stat.S_IMODE(ancestor_metadata.st_mode) & 0o022
+                ):
+                    break
+                directories.setdefault(
+                    ancestor,
+                    _capture_directory_contract(
+                        ancestor,
+                        f"execution input {index} ancestor",
+                    ),
+                )
+    except BaseException:
+        for descriptor in descriptors:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        raise
+    return descriptors, list(directories.values())
+
+
+def _revalidate_execution_inputs(
+    contracts: tuple[PathContract, ...],
+    descriptors: list[int],
+    directories: list[DirectoryContract],
+) -> None:
+    for index, (expected, descriptor) in enumerate(zip(contracts, descriptors)):
+        held = os.fstat(descriptor)
+        if (
+            (held.st_dev, held.st_ino) != (expected.device, expected.inode)
+            or stat.S_IMODE(held.st_mode) != expected.mode
+            or held.st_uid != expected.owner
+            or held.st_nlink != expected.nlink
+            or held.st_size != expected.size
+            or held.st_mtime_ns != expected.mtime_ns
+            or held.st_ctime_ns != expected.ctime_ns
+        ):
+            raise ReceiptError(f"execution input {index} changed while pinned")
+        current = _capture_path_contract(
+            expected.path,
+            f"execution input {index}",
+            expected_sha256=expected.sha256,
+            expected_mode=expected.mode,
+            expected_owner=expected.owner,
+            expected_nlink=expected.nlink,
+            expected_size=expected.size,
+        )
+        if current != expected:
+            raise ReceiptError(
+                f"execution input {index} changed during process execution"
+            )
+    for index, expected in enumerate(directories):
+        current = _capture_directory_contract(
+            expected.path, f"execution input ancestor {index}"
+        )
+        if current != expected:
+            raise ReceiptError(
+                f"execution input ancestor {index} changed during process execution"
+            )
+
+
 def _run_bounded_replay(
     executable: Path,
     arguments: list[str],
     *,
     cwd: Path,
     environment: dict[str, str],
+    name: str = "archived Git replay",
+    maximum_output_bytes: int = _MAX_REPLAY_OUTPUT_BYTES,
+    executable_contract: EvidenceSnapshot | PathContract | None = None,
+    watched_contracts: tuple[EvidenceSnapshot | PathContract, ...] = (),
+    stdin_data: bytes | None = None,
 ) -> tuple[int, bytes, bytes]:
-    try:
-        process = subprocess.Popen(
-            (str(executable), *arguments),
-            cwd=cwd,
-            env=environment,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            close_fds=True,
-            start_new_session=True,
+    if executable_contract is None:
+        executable_contract = _bounded_path_contract(
+            executable,
+            f"{name} executable",
+            maximum_bytes=_MAX_TOOL_BYTES,
+            allowed_owners={0, os.geteuid()},
+            require_single_link=False,
+            executable=True,
         )
-    except OSError as error:
-        raise ReceiptError("archived Git replay could not be started") from error
-    assert process.stdout is not None and process.stderr is not None
-    selector = selectors.DefaultSelector()
-    streams = {
-        process.stdout.fileno(): ("stdout", process.stdout),
-        process.stderr.fileno(): ("stderr", process.stderr),
-    }
-    buffers = {"stdout": bytearray(), "stderr": bytearray()}
-    for descriptor, item in streams.items():
-        os.set_blocking(descriptor, False)
-        selector.register(descriptor, selectors.EVENT_READ, item)
-    deadline = time.monotonic() + _REPLAY_TIMEOUT_SECONDS
+    normalized_contracts: list[PathContract] = [
+        _execution_contract(executable_contract),
+        *(_execution_contract(item) for item in watched_contracts),
+    ]
+    by_path: dict[Path, PathContract] = {}
+    for contract in normalized_contracts:
+        previous = by_path.get(contract.path)
+        if previous is not None and previous != contract:
+            raise ReceiptError(f"{name} has conflicting execution input contracts")
+        by_path[contract.path] = contract
+    contracts = tuple(by_path.values())
+    if contracts[0].path != executable:
+        raise ReceiptError(f"{name} executable path does not match its contract")
+    descriptors, directory_contracts = _capture_execution_inputs(contracts)
     try:
-        while selector.get_map():
+        try:
+            process = subprocess.Popen(
+                (str(executable), *arguments),
+                cwd=cwd,
+                env=environment,
+                stdin=(
+                    subprocess.PIPE
+                    if stdin_data is not None
+                    else subprocess.DEVNULL
+                ),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                close_fds=True,
+                start_new_session=True,
+            )
+        except OSError as error:
+            raise ReceiptError(f"{name} could not be started") from error
+        assert process.stdout is not None and process.stderr is not None
+        selector = selectors.DefaultSelector()
+        streams = {
+            process.stdout.fileno(): ("stdout", process.stdout),
+            process.stderr.fileno(): ("stderr", process.stderr),
+        }
+        buffers = {"stdout": bytearray(), "stderr": bytearray()}
+        for descriptor, item in streams.items():
+            os.set_blocking(descriptor, False)
+            selector.register(descriptor, selectors.EVENT_READ, item)
+        stdin_offset = 0
+        if process.stdin is not None:
+            os.set_blocking(process.stdin.fileno(), False)
+            if stdin_data:
+                selector.register(
+                    process.stdin.fileno(),
+                    selectors.EVENT_WRITE,
+                    ("stdin", process.stdin),
+                )
+            else:
+                process.stdin.close()
+        deadline = time.monotonic() + _REPLAY_TIMEOUT_SECONDS
+        try:
+            while selector.get_map():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    _abort_replay(process)
+                    raise ReceiptError(f"{name} exceeded its timeout")
+                for key, _ in selector.select(min(remaining, 0.25)):
+                    stream_name, stream = key.data
+                    if stream_name == "stdin":
+                        assert stdin_data is not None
+                        try:
+                            written = os.write(
+                                key.fd,
+                                stdin_data[
+                                    stdin_offset : stdin_offset + 64 * 1024
+                                ],
+                            )
+                        except BlockingIOError:
+                            continue
+                        except BrokenPipeError:
+                            selector.unregister(key.fd)
+                            stream.close()
+                            continue
+                        if written <= 0:
+                            _abort_replay(process)
+                            raise ReceiptError(
+                                f"{name} stdin write made no progress"
+                            )
+                        stdin_offset += written
+                        if stdin_offset == len(stdin_data):
+                            selector.unregister(key.fd)
+                            stream.close()
+                        continue
+                    try:
+                        chunk = os.read(key.fd, 64 * 1024)
+                    except BlockingIOError:
+                        continue
+                    if not chunk:
+                        selector.unregister(key.fd)
+                        stream.close()
+                        continue
+                    buffers[stream_name].extend(chunk)
+                    if (
+                        sum(len(value) for value in buffers.values())
+                        > maximum_output_bytes
+                    ):
+                        _abort_replay(process)
+                        raise ReceiptError(
+                            f"{name} output exceeds its closed limit"
+                        )
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 _abort_replay(process)
-                raise ReceiptError("archived Git replay exceeded its timeout")
-            for key, _ in selector.select(min(remaining, 0.25)):
-                stream_name, stream = key.data
-                try:
-                    chunk = os.read(key.fd, 64 * 1024)
-                except BlockingIOError:
-                    continue
-                if not chunk:
-                    selector.unregister(key.fd)
+                raise ReceiptError(f"{name} exceeded its timeout")
+            try:
+                status = process.wait(timeout=remaining)
+            except subprocess.TimeoutExpired as error:
+                _abort_replay(process)
+                raise ReceiptError(f"{name} exceeded its timeout") from error
+        except BaseException:
+            if process.poll() is None:
+                _abort_replay(process)
+            raise
+        finally:
+            selector.close()
+            for stream in (process.stdin, process.stdout, process.stderr):
+                if stream is not None and not stream.closed:
                     stream.close()
-                    continue
-                buffers[stream_name].extend(chunk)
-                if sum(len(value) for value in buffers.values()) > _MAX_REPLAY_OUTPUT_BYTES:
-                    _abort_replay(process)
-                    raise ReceiptError("archived Git replay output exceeds its closed limit")
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            _abort_replay(process)
-            raise ReceiptError("archived Git replay exceeded its timeout")
-        try:
-            status = process.wait(timeout=remaining)
-        except subprocess.TimeoutExpired as error:
-            _abort_replay(process)
-            raise ReceiptError("archived Git replay exceeded its timeout") from error
-    except BaseException:
-        if process.poll() is None:
-            _abort_replay(process)
-        raise
+        _revalidate_execution_inputs(
+            contracts, descriptors, directory_contracts
+        )
+        return status, bytes(buffers["stdout"]), bytes(buffers["stderr"])
     finally:
-        selector.close()
-        for stream in (process.stdout, process.stderr):
-            if not stream.closed:
-                stream.close()
-    return status, bytes(buffers["stdout"]), bytes(buffers["stderr"])
+        for descriptor in descriptors:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+
+def _run_bounded_python_validator(
+    checker: Path,
+    arguments: list[str],
+    *,
+    cwd: Path,
+    environment: dict[str, str],
+    name: str,
+    maximum_output_bytes: int = _MAX_REPLAY_OUTPUT_BYTES,
+) -> tuple[int, bytes, bytes]:
+    checker_snapshot = _bounded_evidence_snapshot(
+        checker,
+        f"{name} source",
+        maximum_bytes=_MAX_HELPER_BYTES,
+        allowed_owners={os.geteuid()},
+        require_single_link=True,
+    )
+    interpreter = Path(sys.executable).resolve(strict=True)
+    interpreter_contract = _bounded_path_contract(
+        interpreter,
+        f"{name} Python interpreter",
+        maximum_bytes=_MAX_TOOL_BYTES,
+        allowed_owners={0, os.geteuid()},
+        require_single_link=False,
+        executable=True,
+    )
+    loader = (
+        "import os,sys\n"
+        "path=sys.argv[1]\n"
+        "source=sys.stdin.buffer.read()\n"
+        "sys.argv=[path,*sys.argv[2:]]\n"
+        "sys.path[0]=os.path.dirname(path)\n"
+        "scope={'__name__':'__main__','__file__':path,"
+        "'__package__':None,'__cached__':None}\n"
+        "exec(compile(source,path,'exec'),scope,scope)\n"
+    )
+    return _run_bounded_replay(
+        interpreter,
+        ["-I", "-S", "-c", loader, str(checker), *arguments],
+        cwd=cwd,
+        environment=environment,
+        name=name,
+        maximum_output_bytes=maximum_output_bytes,
+        executable_contract=interpreter_contract,
+        watched_contracts=(checker_snapshot,),
+        stdin_data=checker_snapshot.data,
+    )
 
 
 def _run_required_replay(
@@ -1636,9 +2283,15 @@ def _run_required_replay(
     root: Path,
     environment: dict[str, str],
     name: str,
+    executable_contract: EvidenceSnapshot | PathContract,
 ) -> tuple[bytes, bytes]:
     status, stdout, stderr = _run_bounded_replay(
-        git, arguments, cwd=root, environment=environment
+        git,
+        arguments,
+        cwd=root,
+        environment=environment,
+        name=f"archived Git {name}",
+        executable_contract=executable_contract,
     )
     if status != 0:
         raise ReceiptError(f"archived Git rejected {name}")
@@ -1693,7 +2346,7 @@ def _validate_tool_metadata(
 
 def _validate_signature_evidence(
     *,
-    candidate_identity_path: Path,
+    candidate_snapshot: EvidenceSnapshot,
     candidate: dict[str, Any],
     release_root_path: Path,
     signature_attestation_path: Path,
@@ -1752,16 +2405,18 @@ def _validate_signature_evidence(
     _validate_allowed_signers_policy(archives["ssh_allowed_signers"]["data"])
     if archive_digests["cargo_lock"] != candidate["cargo_lock_sha256"]:
         raise ReceiptError("archived Cargo.lock does not match the candidate identity")
-    root_lock = _regular_file(root / "Cargo.lock", "release-root Cargo.lock")
+    root_lock = _bounded_evidence_snapshot(
+        root / "Cargo.lock",
+        "release-root Cargo.lock",
+        maximum_bytes=_MAX_LOCK_BYTES,
+    )
     if (
-        root_lock.stat().st_size != len(archives["cargo_lock"]["data"])
-        or _sha256(root_lock) != archive_digests["cargo_lock"]
+        root_lock.size != len(archives["cargo_lock"]["data"])
+        or root_lock.sha256 != archive_digests["cargo_lock"]
     ):
         raise ReceiptError("release-root Cargo.lock does not match its archive")
 
-    candidate_path = _regular_file(candidate_identity_path, "candidate identity")
-    candidate_bytes = candidate_path.read_bytes()
-    if candidate_bytes != _canonical_json(candidate):
+    if candidate_snapshot.data != _canonical_json(candidate):
         raise ReceiptError("candidate identity bytes are not canonical")
     attestation = _decode_canonical_json(
         archives["attestation"]["data"], "release signature attestation"
@@ -1784,7 +2439,7 @@ def _validate_signature_evidence(
     if (
         attestation["release_identity"] != candidate
         or attestation["release_identity_sha256"]
-        != hashlib.sha256(candidate_bytes).hexdigest()
+        != candidate_snapshot.sha256
     ):
         raise ReceiptError("release signature attestation is not bound to exact candidate bytes")
 
@@ -2076,6 +2731,7 @@ def _validate_signature_evidence(
     raw_commit = archives["raw_commit"]["data"]
     _validate_raw_commit(raw_commit, candidate)
     git = archives["git"]["path"]
+    git_contract = _signature_archive_path_contract(archives["git"])
     actual_config = _signature_config(
         str(archives["ssh_keygen"]["path"]),
         str(archives["ssh_allowed_signers"]["path"]),
@@ -2089,6 +2745,7 @@ def _validate_signature_evidence(
             root=root,
             environment=expected_environment,
             name=name,
+            executable_contract=git_contract,
         )
         if (
             stderr
@@ -2127,6 +2784,7 @@ def _validate_signature_evidence(
         root=root,
         environment=expected_environment,
         name="immutable raw commit",
+        executable_contract=git_contract,
     )
     if replay_raw_stderr or replay_raw != raw_commit:
         raise ReceiptError("archived Git raw commit replay does not match its archive")
@@ -2135,6 +2793,7 @@ def _validate_signature_evidence(
         [*actual_config, "verify-commit", "--raw", candidate["head_commit"]],
         cwd=root,
         environment=expected_environment,
+        executable_contract=git_contract,
     )
     if verify_status != 0:
         raise ReceiptError("archived Git cryptographic signature replay failed")
@@ -2150,6 +2809,7 @@ def _validate_signature_evidence(
         root=root,
         environment=expected_environment,
         name="signature metadata replay",
+        executable_contract=git_contract,
     )
     if replay_show_stderr:
         raise ReceiptError("archived Git signature metadata replay wrote stderr")
@@ -2187,11 +2847,18 @@ def _validate_signature_evidence(
             expected_mode=archive["mode"],
             maximum_bytes=archive["maximum_bytes"],
         )
-        if (
-            (current["device"], current["inode"], current["owner"])
-            != (archive["device"], archive["inode"], archive["owner"])
-            or current["data"] != archive["data"]
-        ):
+        stable_fields = (
+            "device",
+            "inode",
+            "mode",
+            "owner",
+            "nlink",
+            "size",
+            "mtime_ns",
+            "ctime_ns",
+            "data",
+        )
+        if any(current[field] != archive[field] for field in stable_fields):
             raise ReceiptError(f"release {label} archive changed during replay")
     final_directory = directory.lstat()
     first_archive = archives["attestation"]
@@ -2268,7 +2935,9 @@ def _private_evidence_directory(path: Path, name: str) -> tuple[Path, os.stat_re
     return path, metadata
 
 
-def _snapshot_receipt_artifact(snapshot: EvidenceSnapshot) -> dict[str, Any]:
+def _snapshot_receipt_artifact(
+    snapshot: EvidenceSnapshot | PathContract,
+) -> dict[str, Any]:
     return {
         "path": str(snapshot.path),
         "sha256": snapshot.sha256,
@@ -2631,7 +3300,7 @@ def _validate_bootstrap_evidence(
     runner_path: Path,
     release_root_path: Path,
     candidate: dict[str, Any],
-    candidate_identity_path: Path,
+    candidate_snapshot: EvidenceSnapshot,
     sealed: dict[str, Any],
     expected_signer_fingerprint: str,
     signature_archives: dict[str, dict[str, Any]],
@@ -2699,8 +3368,7 @@ def _validate_bootstrap_evidence(
     )
     if bootstrap_identity != candidate or identity_snapshot.data != _canonical_json(candidate):
         raise ReceiptError("bootstrap candidate identity differs from release candidate")
-    current_candidate_path = _regular_file(candidate_identity_path, "candidate identity")
-    if identity_snapshot.data != current_candidate_path.read_bytes():
+    if identity_snapshot.data != candidate_snapshot.data:
         raise ReceiptError("bootstrap and current candidate identity bytes differ")
 
     marker = _decode_canonical_json(marker_snapshot.data, "bootstrap completion marker")
@@ -2894,7 +3562,8 @@ def _validate_bootstrap_evidence(
     ):
         raise ReceiptError("bootstrap candidate Cargo.lock differs from authenticated archive")
 
-    bootstrap_git = snapshots["trusted_git"].path
+    bootstrap_git_snapshot = snapshots["trusted_git"]
+    bootstrap_git = bootstrap_git_snapshot.path
     bootstrap_git_environment = _closed_replay_environment(directory)
 
     def bootstrap_git_line(arguments: list[str], name: str) -> str:
@@ -2904,6 +3573,7 @@ def _validate_bootstrap_evidence(
             root=candidate_root,
             environment=bootstrap_git_environment,
             name=f"bootstrap candidate {name}",
+            executable_contract=bootstrap_git_snapshot,
         )
         if (
             stderr
@@ -2942,6 +3612,7 @@ def _validate_bootstrap_evidence(
         root=candidate_root,
         environment=bootstrap_git_environment,
         name="bootstrap candidate raw commit",
+        executable_contract=bootstrap_git_snapshot,
     )
     if candidate_raw_stderr or candidate_raw != identity_snapshots["raw_commit"].data:
         raise ReceiptError("bootstrap candidate raw commit differs from authenticated archive")
@@ -3062,7 +3733,8 @@ def _validate_bootstrap_evidence(
         or set(runner_tools) != set(manifest_tools)
     ):
         raise ReceiptError("bootstrap runner tool inventory is not exact")
-    runner_tool_sources: dict[str, EvidenceSnapshot] = {}
+    runner_tool_sources: dict[str, PathContract] = {}
+    runner_tool_total_bytes = 0
     for name in sorted(manifest_tools):
         if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]*", name) is None or name in {
             "bash",
@@ -3103,7 +3775,7 @@ def _validate_bootstrap_evidence(
         source_mode = _octal_mode(
             marker_record["source_mode"], f"bootstrap runner tool {name} source mode"
         )
-        source = _read_evidence_snapshot(
+        source = _bounded_path_contract(
             Path(source_path),
             f"bootstrap runner tool source {name}",
             maximum_bytes=_MAX_TOOL_BYTES,
@@ -3112,6 +3784,11 @@ def _validate_bootstrap_evidence(
             require_single_link=False,
             executable=True,
         )
+        runner_tool_total_bytes += source.size
+        if runner_tool_total_bytes > _MAX_RUNNER_TOOL_TOTAL_BYTES:
+            raise ReceiptError(
+                "bootstrap runner tools exceed their aggregate byte limit"
+            )
         if source.mode & 0o022:
             raise ReceiptError(f"bootstrap runner tool {name} source is writable")
         for ancestor in (source.path.parent, *source.path.parent.parents):
@@ -3325,13 +4002,15 @@ def _validate_bootstrap_evidence(
     return authentication, bootstrap_evidence
 
 
-def _load_identity(path: Path, name: str) -> dict[str, Any]:
-    path = _regular_file(path, name)
-    try:
-        data = path.read_bytes()
-    except OSError as error:
-        raise ReceiptError(f"{name} could not be read") from error
-    value = _decode_canonical_json(data, name)
+def _load_identity(
+    path: Path, name: str
+) -> tuple[EvidenceSnapshot, dict[str, Any]]:
+    snapshot = _bounded_evidence_snapshot(
+        path,
+        name,
+        maximum_bytes=_MAX_SIGNATURE_JSON_BYTES,
+    )
+    value = _decode_canonical_json(snapshot.data, name)
     if not isinstance(value, dict) or set(value) != _IDENTITY_KEYS:
         raise ReceiptError(f"{name} fields do not match the release identity schema")
     if type(value.get("schema_version")) is not int or value["schema_version"] != 1:
@@ -3351,22 +4030,21 @@ def _load_identity(path: Path, name: str) -> dict[str, Any]:
             raise ReceiptError(f"{name}.{field} is not a lowercase SHA-256 digest")
     if value["head_tree"] != value["index_tree"]:
         raise ReceiptError(f"{name} does not describe one clean Git tree")
-    return value
+    return snapshot, value
 
 
-def _load_tsv(path: Path, name: str) -> tuple[Path, dict[str, str]]:
-    path = _regular_file(path, name)
-    fields: dict[str, str] = {}
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except UnicodeDecodeError as error:
-        raise ReceiptError(f"{name} is not UTF-8") from error
-    for line in lines:
-        parts = line.split("\t")
-        if len(parts) != 2 or not parts[0] or parts[0] in fields:
-            raise ReceiptError(f"{name} contains malformed or duplicate fields")
-        fields[parts[0]] = parts[1]
-    return path, fields
+def _load_tsv(
+    path: Path,
+    name: str,
+    *,
+    maximum_bytes: int = _MAX_RELEASE_TSV_BYTES,
+) -> tuple[EvidenceSnapshot, dict[str, str]]:
+    snapshot = _bounded_evidence_snapshot(
+        path,
+        name,
+        maximum_bytes=maximum_bytes,
+    )
+    return snapshot, _tsv_fields_from_snapshot(snapshot, name)
 
 
 def _require_fields(fields: dict[str, str], expected: set[str], name: str) -> None:
@@ -3374,18 +4052,14 @@ def _require_fields(fields: dict[str, str], expected: set[str], name: str) -> No
         raise ReceiptError(f"{name} fields do not match its completion schema")
 
 
-def _artifact(path: Path) -> dict[str, str]:
-    path = path.resolve(strict=True)
-    return {"path": str(path), "sha256": _sha256(path)}
+def _artifact(snapshot: EvidenceSnapshot | PathContract) -> dict[str, str]:
+    return {"path": str(snapshot.path), "sha256": snapshot.sha256}
 
 
 def _validate_multilane_apalache_evidence(
-    path: Path, sealed_source_manifest: str
+    snapshot: EvidenceSnapshot, sealed_source_manifest: str
 ) -> None:
-    try:
-        data = path.read_bytes()
-    except OSError as error:
-        raise ReceiptError("formal multilane Apalache evidence is unreadable") from error
+    data = snapshot.data
     if (
         len(data) > _MAX_SCALING_JSON_BYTES
         or not data.endswith(b"\n")
@@ -3432,28 +4106,125 @@ def _validate_multilane_apalache_evidence(
             )
 
 
+def _validate_formal_snapshot_replays(
+    *,
+    snapshots: dict[str, EvidenceSnapshot],
+    checker: Path,
+    checker_environment: dict[str, str],
+    repo_root: Path,
+) -> None:
+    """Run retained formal validators over private copies of captured bytes."""
+
+    replay_keys = (
+        "ledger",
+        "evidence",
+        "verus_evidence",
+        "verus_log",
+        "cross_tool_evidence",
+    )
+    with tempfile.TemporaryDirectory(
+        prefix="sumeragi-v2-formal-snapshot-replay-"
+    ) as temporary:
+        replay_root = Path(temporary).resolve(strict=True)
+        replay_paths: dict[str, Path] = {}
+        for key in replay_keys:
+            snapshot = snapshots[key]
+            destination = replay_root / snapshot.path.name
+            try:
+                destination.write_bytes(snapshot.data)
+                destination.chmod(0o400)
+            except OSError as error:
+                raise ReceiptError(
+                    "formal snapshot replay could not materialize captured evidence"
+                ) from error
+            replay_paths[key] = destination
+
+        cross_tool_status, cross_tool_stdout, _ = _run_bounded_python_validator(
+            checker,
+            [
+                "--ledger",
+                str(replay_paths["ledger"]),
+                "--print-cross-tool-obligations",
+            ],
+            cwd=repo_root,
+            environment=checker_environment,
+            name="archived formal cross-tool validator",
+        )
+        if cross_tool_status != 0:
+            raise ReceiptError(
+                "archived formal ledger has an invalid cross-tool evidence requirement"
+            )
+        if not cross_tool_stdout.strip():
+            raise ReceiptError(
+                "archived formal release ledger does not require cross-tool evidence"
+            )
+
+        verus_checker = (
+            repo_root / "scripts" / "formal" / "sumeragi_v2_verus_evidence.py"
+        )
+        verus_status, _, _ = _run_bounded_python_validator(
+            verus_checker,
+            [
+                "validate",
+                "--root",
+                str(repo_root),
+                "--evidence",
+                str(replay_paths["verus_evidence"]),
+                "--log",
+                str(replay_paths["verus_log"]),
+            ],
+            cwd=repo_root,
+            environment=checker_environment,
+            name="archived formal Verus validator",
+        )
+        if verus_status != 0:
+            raise ReceiptError("archived formal Verus evidence failed validation")
+
+        status, _, _ = _run_bounded_python_validator(
+            checker,
+            [
+                "--ledger",
+                str(replay_paths["ledger"]),
+                "--release",
+                "--evidence",
+                str(replay_paths["evidence"]),
+                "--verus-evidence",
+                str(replay_paths["verus_evidence"]),
+                "--verus-log",
+                str(replay_paths["verus_log"]),
+                "--cross-tool-evidence",
+                str(replay_paths["cross_tool_evidence"]),
+            ],
+            cwd=repo_root,
+            environment=checker_environment,
+            name="archived formal release validator",
+        )
+        if status != 0:
+            raise ReceiptError(
+                "archived formal ledger/evidence failed release validation"
+            )
+
+
 def _formal_artifacts(
-    completion_path: Path,
+    completion: EvidenceSnapshot,
     fields: dict[str, str],
     sealed: dict[str, Any],
     checker_environment: dict[str, str],
     repo_root: Path,
 ) -> tuple[
-    Path,
-    Path,
-    Path,
-    Path,
-    Path,
-    Path,
-    Path,
-    Path,
-    Path,
-    Path,
-    Path,
+    PathContract,
+    PathContract,
+    PathContract,
+    PathContract,
+    PathContract,
+    PathContract,
+    PathContract,
+    PathContract,
+    PathContract,
+    PathContract,
+    PathContract,
 ]:
-    ledger = _regular_file(
-        completion_path.with_name("proof_coverage.json"), "formal proof ledger"
-    )
+    completion_path = completion.path
     checker = repo_root / "scripts" / "formal" / "check_sumeragi_v2_proof_ledger.py"
     expected_completion_fields = {
         "schema_version",
@@ -3488,77 +4259,112 @@ def _formal_artifacts(
     if any(fields.get(name) != value for name, value in expected.items()):
         raise ReceiptError("formal completion is not bound to the release identity")
 
-    gate_log = _regular_file(
-        completion_path.with_name("formal-gate.log"), "formal gate log"
-    )
-    evidence = _regular_file(
-        completion_path.with_name("proof_evidence.json"), "formal proof evidence"
-    )
-    verus_evidence = _regular_file(
-        completion_path.with_name("verus_evidence.json"),
-        "formal Verus evidence",
-    )
-    verus_log = _regular_file(
-        completion_path.with_name("verus.log"), "formal Verus log"
-    )
-    multilane_apalache_evidence = _regular_file(
-        completion_path.with_name("multilane_apalache_evidence.tsv"),
-        "formal multilane Apalache evidence",
-    )
-    cross_tool_evidence = _regular_file(
-        completion_path.with_name("cross_tool_evidence.json"),
-        "formal cross-tool evidence",
-    )
-    harness_lock = _regular_file(
-        completion_path.with_name("harness-Cargo.lock"), "formal harness lock"
-    )
-    toolchain_path = _regular_file(
-        completion_path.with_name("formal-toolchain.tsv"), "formal toolchain"
-    )
-    tlaps_resource_jsonl = _regular_file(
-        completion_path.with_name("tlaps_resource.jsonl"), "TLAPS resource samples"
-    )
-    tlaps_resource_summary = _regular_file(
-        completion_path.with_name("tlaps_resource_summary.json"),
-        "TLAPS resource summary",
-    )
-    for artifact, digest_field, name in (
-        (gate_log, "formal_gate_log_sha256", "formal gate log"),
-        (ledger, "proof_coverage_sha256", "formal proof ledger"),
-        (evidence, "proof_evidence_sha256", "formal proof evidence"),
-        (verus_evidence, "verus_evidence_sha256", "formal Verus evidence"),
-        (verus_log, "verus_log_sha256", "formal Verus log"),
+    artifact_specs = (
         (
-            multilane_apalache_evidence,
+            "gate_log",
+            completion_path.with_name("formal-gate.log"),
+            "formal_gate_log_sha256",
+            "formal gate log",
+            _MAX_RELEASE_TEXT_BYTES,
+        ),
+        (
+            "ledger",
+            completion_path.with_name("proof_coverage.json"),
+            "proof_coverage_sha256",
+            "formal proof ledger",
+            _MAX_RELEASE_JSON_BYTES,
+        ),
+        (
+            "evidence",
+            completion_path.with_name("proof_evidence.json"),
+            "proof_evidence_sha256",
+            "formal proof evidence",
+            _MAX_RELEASE_JSON_BYTES,
+        ),
+        (
+            "verus_evidence",
+            completion_path.with_name("verus_evidence.json"),
+            "verus_evidence_sha256",
+            "formal Verus evidence",
+            _MAX_RELEASE_JSON_BYTES,
+        ),
+        (
+            "verus_log",
+            completion_path.with_name("verus.log"),
+            "verus_log_sha256",
+            "formal Verus log",
+            _MAX_RELEASE_TEXT_BYTES,
+        ),
+        (
+            "multilane_apalache_evidence",
+            completion_path.with_name("multilane_apalache_evidence.tsv"),
             "multilane_apalache_evidence_sha256",
             "formal multilane Apalache evidence",
+            _MAX_RELEASE_TSV_BYTES,
         ),
         (
-            cross_tool_evidence,
+            "cross_tool_evidence",
+            completion_path.with_name("cross_tool_evidence.json"),
             "cross_tool_evidence_sha256",
             "formal cross-tool evidence",
+            _MAX_RELEASE_JSON_BYTES,
         ),
-        (harness_lock, "harness_cargo_lock_sha256", "formal harness lock"),
-        (toolchain_path, "formal_toolchain_sha256", "formal toolchain"),
         (
-            tlaps_resource_jsonl,
+            "harness_lock",
+            completion_path.with_name("harness-Cargo.lock"),
+            "harness_cargo_lock_sha256",
+            "formal harness lock",
+            _MAX_LOCK_BYTES,
+        ),
+        (
+            "toolchain",
+            completion_path.with_name("formal-toolchain.tsv"),
+            "formal_toolchain_sha256",
+            "formal toolchain",
+            _MAX_RELEASE_TSV_BYTES,
+        ),
+        (
+            "tlaps_resource_jsonl",
+            completion_path.with_name("tlaps_resource.jsonl"),
             "tlaps_resource_jsonl_sha256",
             "TLAPS resource samples",
+            _MAX_RELEASE_TEXT_BYTES,
         ),
         (
-            tlaps_resource_summary,
+            "tlaps_resource_summary",
+            completion_path.with_name("tlaps_resource_summary.json"),
             "tlaps_resource_summary_sha256",
             "TLAPS resource summary",
+            _MAX_RELEASE_JSON_BYTES,
         ),
-    ):
-        if _sha256(artifact) != fields[digest_field]:
+    )
+    snapshots: dict[str, EvidenceSnapshot] = {}
+    for key, path, digest_field, name, maximum_bytes in artifact_specs:
+        snapshot = _bounded_evidence_snapshot(
+            path,
+            name,
+            maximum_bytes=maximum_bytes,
+        )
+        if snapshot.sha256 != fields[digest_field]:
             raise ReceiptError(f"{name} digest mismatch")
+        snapshots[key] = snapshot
+    gate_log = snapshots["gate_log"]
+    ledger = snapshots["ledger"]
+    evidence = snapshots["evidence"]
+    verus_evidence = snapshots["verus_evidence"]
+    verus_log = snapshots["verus_log"]
+    multilane_apalache_evidence = snapshots["multilane_apalache_evidence"]
+    cross_tool_evidence = snapshots["cross_tool_evidence"]
+    harness_lock = snapshots["harness_lock"]
+    toolchain_snapshot = snapshots["toolchain"]
+    tlaps_resource_jsonl = snapshots["tlaps_resource_jsonl"]
+    tlaps_resource_summary = snapshots["tlaps_resource_summary"]
     _validate_multilane_apalache_evidence(
         multilane_apalache_evidence,
         sealed["workspace_source_manifest_sha256"],
     )
     resource_summary = _decode_canonical_json(
-        tlaps_resource_summary.read_bytes(), "TLAPS resource summary"
+        tlaps_resource_summary.data, "TLAPS resource summary"
     )
     if (
         resource_summary.get("schema_version") != 1
@@ -3575,30 +4381,9 @@ def _formal_artifacts(
         raise ReceiptError("TLAPS resource summary is not a successful bounded release run")
     if fields["harness_cargo_lock_sha256"] != _HARNESS_LOCK_SHA256:
         raise ReceiptError("formal harness lock is not the pinned dependency graph")
-    cross_tool_result = subprocess.run(
-        [
-            sys.executable,
-            str(checker),
-            "--ledger",
-            str(ledger),
-            "--print-cross-tool-obligations",
-        ],
-        cwd=repo_root,
-        check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        env=checker_environment,
+    toolchain = _tsv_fields_from_snapshot(
+        toolchain_snapshot, "formal toolchain"
     )
-    if cross_tool_result.returncode != 0:
-        raise ReceiptError(
-            "archived formal ledger has an invalid cross-tool evidence requirement"
-        )
-    if not cross_tool_result.stdout.strip():
-        raise ReceiptError(
-            "archived formal release ledger does not require cross-tool evidence"
-        )
-    toolchain_path, toolchain = _load_tsv(toolchain_path, "formal toolchain")
     _require_fields(
         toolchain,
         {
@@ -3628,87 +4413,61 @@ def _formal_artifacts(
         raw_path = Path(toolchain[f"{tool}_path"])
         if not raw_path.is_absolute():
             raise ReceiptError(f"formal {tool} path is not absolute")
-        tool_path = _regular_file(raw_path, f"formal {tool} tool")
+        tool_snapshot = _bounded_evidence_snapshot(
+            raw_path,
+            f"formal {tool} tool",
+            maximum_bytes=_MAX_TOOL_BYTES,
+            require_single_link=False,
+        )
         digest = toolchain[f"{tool}_sha256"]
-        if not _DIGEST_RE.fullmatch(digest) or _sha256(tool_path) != digest:
+        if not _DIGEST_RE.fullmatch(digest) or tool_snapshot.sha256 != digest:
             raise ReceiptError(f"formal {tool} tool digest mismatch")
-    try:
-        log_lines = gate_log.read_text(encoding="utf-8").splitlines()
-    except UnicodeDecodeError as error:
-        raise ReceiptError("formal gate log is not UTF-8") from error
+    log_lines = _decode_lf_text(gate_log, "formal gate log").splitlines()
     if (
         not log_lines
         or log_lines[-1] != _FORMAL_FINAL_MARKER
         or log_lines.count(_FORMAL_FINAL_MARKER) != 1
     ):
         raise ReceiptError("formal gate log lacks its one exact final success marker")
-
-    verus_checker = (
-        repo_root / "scripts" / "formal" / "sumeragi_v2_verus_evidence.py"
+    _validate_formal_snapshot_replays(
+        snapshots=snapshots,
+        checker=checker,
+        checker_environment=checker_environment,
+        repo_root=repo_root,
     )
-    verus_result = subprocess.run(
-        [
-            sys.executable,
-            str(verus_checker),
-            "validate",
-            "--root",
-            str(repo_root),
-            "--evidence",
-            str(verus_evidence),
-            "--log",
-            str(verus_log),
-        ],
-        cwd=repo_root,
-        check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        env=checker_environment,
-    )
-    if verus_result.returncode != 0:
-        raise ReceiptError("archived formal Verus evidence failed validation")
-    checker_args = [
-        sys.executable,
-        str(checker),
-        "--ledger",
-        str(ledger),
-        "--release",
-        "--evidence",
-        str(evidence),
-        "--verus-evidence",
-        str(verus_evidence),
-        "--verus-log",
-        str(verus_log),
-        "--cross-tool-evidence",
-        str(cross_tool_evidence),
-    ]
-    result = subprocess.run(
-        checker_args,
-        cwd=repo_root,
-        check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        env=checker_environment,
-    )
-    if result.returncode != 0:
-        raise ReceiptError("archived formal ledger/evidence failed release validation")
     return (
-        gate_log,
-        ledger,
-        evidence,
-        verus_evidence,
-        verus_log,
-        multilane_apalache_evidence,
-        cross_tool_evidence,
-        harness_lock,
-        toolchain_path,
-        tlaps_resource_jsonl,
-        tlaps_resource_summary,
+        _snapshot_contract(gate_log),
+        _snapshot_contract(ledger),
+        _snapshot_contract(evidence),
+        _snapshot_contract(verus_evidence),
+        _snapshot_contract(verus_log),
+        _snapshot_contract(multilane_apalache_evidence),
+        _snapshot_contract(cross_tool_evidence),
+        _snapshot_contract(harness_lock),
+        _snapshot_contract(toolchain_snapshot),
+        _snapshot_contract(tlaps_resource_jsonl),
+        _snapshot_contract(tlaps_resource_summary),
     )
 
 
 def _test_count_from_log(lines: list[str], kind: str, name: str) -> int:
+    if kind == "cargo-focus":
+        running = [line for line in lines if line == "running 1 test"]
+        results = [
+            line
+            for line in lines
+            if re.fullmatch(
+                r"test result: ok\. 1 passed; 0 failed; 0 ignored; "
+                r"0 measured; [0-9]+ filtered out; finished in .+",
+                line,
+            )
+            is not None
+        ]
+        if not running or len(running) != len(results):
+            raise ReceiptError(
+                f"{name} has an ambiguous Cargo transcript for focused tests"
+            )
+        return len(results)
     if kind.startswith("cargo-"):
         running = [
             match
@@ -3778,12 +4537,394 @@ def _test_count_from_log(lines: list[str], kind: str, name: str) -> int:
     raise ReceiptError(f"{name} has unknown leg kind {kind}")
 
 
-def _corridor_artifacts(
-    completion_path: Path,
+def _prebuilt_directory(path: Path, name: str) -> Path:
+    if not path.is_absolute() or Path(os.path.abspath(path)) != path:
+        raise ReceiptError(f"{name} path must be absolute and normalized")
+    try:
+        resolved = path.resolve(strict=True)
+        metadata = path.lstat()
+    except OSError as error:
+        raise ReceiptError(f"{name} is unavailable") from error
+    if (
+        resolved != path
+        or stat.S_ISLNK(metadata.st_mode)
+        or not stat.S_ISDIR(metadata.st_mode)
+        or stat.S_IMODE(metadata.st_mode) != 0o500
+        or metadata.st_uid != os.geteuid()
+    ):
+        raise ReceiptError(
+            f"{name} must be an owner-owned resolved non-symlink directory "
+            "with exact mode 0500"
+        )
+    return path
+
+
+def _prebuilt_workspace_target(repo_root: Path) -> Path:
+    alias = repo_root / "target"
+    try:
+        alias_metadata = alias.lstat()
+        resolved = alias.resolve(strict=True)
+        resolved_metadata = resolved.lstat()
+    except (OSError, RuntimeError) as error:
+        raise ReceiptError("release workspace target authority is unavailable") from error
+    if (
+        not (stat.S_ISDIR(alias_metadata.st_mode) or stat.S_ISLNK(alias_metadata.st_mode))
+        or Path(os.path.abspath(resolved)) != resolved
+        or resolved.resolve(strict=True) != resolved
+        or stat.S_ISLNK(resolved_metadata.st_mode)
+        or not stat.S_ISDIR(resolved_metadata.st_mode)
+        or resolved_metadata.st_uid != os.geteuid()
+        or (not stat.S_ISLNK(alias_metadata.st_mode) and resolved != alias)
+    ):
+        raise ReceiptError(
+            "release workspace target authority must resolve to one owner-owned real directory"
+        )
+    return resolved
+
+
+def _prebuilt_directory_inventory(
+    path: Path, expected_names: set[str], name: str
+) -> None:
+    names: list[str] = []
+    try:
+        with os.scandir(path) as iterator:
+            for entry in iterator:
+                if len(names) >= len(expected_names):
+                    raise ReceiptError(
+                        f"{name} contains more entries than its exact closed inventory"
+                    )
+                if (
+                    _SCALING_SAFE_PATH_COMPONENT_RE.fullmatch(entry.name) is None
+                    and entry.name != _PREBUILT_MANIFEST_NAME
+                ):
+                    raise ReceiptError(f"{name} does not have its exact closed inventory")
+                names.append(entry.name)
+    except OSError as error:
+        raise ReceiptError(f"{name} cannot be enumerated") from error
+    if len(names) != len(set(names)) or set(names) != expected_names:
+        raise ReceiptError(f"{name} does not have its exact closed inventory")
+
+
+def _prebuilt_version_transcripts(
+    *,
+    bundle_dir: Path,
+    fields: dict[str, str],
+    corridor_fields: dict[str, str],
+) -> dict[str, dict[str, Any]]:
+    tool_specs = (
+        (
+            "cargo",
+            Path(corridor_fields["cargo_path"]),
+            ["--version"],
+            fields["cargo_version_sha256"],
+        ),
+        (
+            "rustc",
+            Path(corridor_fields["rustc_path"]),
+            ["-vV"],
+            fields["rustc_version_sha256"],
+        ),
+    )
+    results: dict[str, dict[str, Any]] = {}
+    environment = _closed_replay_environment(bundle_dir)
+    for tool, executable, arguments, expected_digest in tool_specs:
+        tool_label = "Cargo" if tool == "cargo" else tool
+        contract = _capture_path_contract(
+            executable,
+            f"authenticated corridor {tool} tool",
+            expected_sha256=corridor_fields[f"{tool}_sha256"],
+            expected_owner=os.geteuid(),
+            expected_nlink=1,
+        )
+        if contract.mode & 0o111 == 0:
+            raise ReceiptError(f"authenticated corridor {tool} tool is not executable")
+        status, stdout, stderr = _run_bounded_replay(
+            executable,
+            arguments,
+            cwd=bundle_dir,
+            environment=environment,
+            name=f"authenticated {tool} version probe",
+            maximum_output_bytes=_MAX_PREBUILT_VERSION_TRANSCRIPT_BYTES,
+            executable_contract=contract,
+        )
+        if status != 0 or stderr or not stdout.endswith(b"\n"):
+            raise ReceiptError(
+                f"authenticated {tool} version probe did not produce exact stdout"
+            )
+        if b"\r" in stdout or b"\0" in stdout:
+            raise ReceiptError(
+                f"authenticated {tool} version probe output is not LF-only text"
+            )
+        observed_digest = hashlib.sha256(stdout).hexdigest()
+        if observed_digest != expected_digest:
+            raise ReceiptError(
+                f"prebuilt manifest {tool_label} version digest does not match "
+                "the authenticated tool"
+            )
+        try:
+            lines = stdout.decode("utf-8").splitlines()
+        except UnicodeDecodeError as error:
+            raise ReceiptError(
+                f"authenticated {tool} version probe output is not UTF-8"
+            ) from error
+        if tool == "cargo":
+            if lines != [corridor_fields["cargo_version"]]:
+                raise ReceiptError(
+                    "authenticated Cargo version probe disagrees with corridor"
+                )
+        else:
+            version = re.fullmatch(
+                r"rustc ([0-9]+\.[0-9]+\.[0-9]+) "
+                r"\(([0-9a-f]{7,40}) ([0-9]{4}-[0-9]{2}-[0-9]{2})\)",
+                corridor_fields["rustc_version"],
+            )
+            expected_keys = (
+                "binary",
+                "commit-hash",
+                "commit-date",
+                "host",
+                "release",
+                "LLVM version",
+            )
+            parsed: dict[str, str] = {}
+            if (
+                version is None
+                or not lines
+                or lines[0] != corridor_fields["rustc_version"]
+            ):
+                raise ReceiptError(
+                    "authenticated rustc version probe has the wrong version line"
+                )
+            for line in lines[1:]:
+                key, separator, value = line.partition(": ")
+                if not separator or key in parsed or not value:
+                    raise ReceiptError(
+                        "authenticated rustc version probe is not exact rustc -vV output"
+                    )
+                parsed[key] = value
+            if (
+                tuple(parsed) != expected_keys
+                or parsed["binary"] != "rustc"
+                or re.fullmatch(r"[0-9a-f]{40}", parsed["commit-hash"]) is None
+                or not parsed["commit-hash"].startswith(version.group(2))
+                or parsed["commit-date"] != version.group(3)
+                or parsed["host"] != fields["host_triple"]
+                or parsed["release"] != version.group(1)
+                or re.fullmatch(
+                    r"[0-9]+\.[0-9]+(?:\.[0-9]+)?",
+                    parsed["LLVM version"],
+                )
+                is None
+            ):
+                raise ReceiptError(
+                    "authenticated rustc version probe is not exact rustc -vV output"
+                )
+        after = _capture_path_contract(
+            executable,
+            f"authenticated corridor {tool} tool after version probe",
+            expected_sha256=contract.sha256,
+            expected_mode=contract.mode,
+            expected_owner=contract.owner,
+            expected_nlink=contract.nlink,
+            expected_size=contract.size,
+        )
+        if after != contract:
+            raise ReceiptError(
+                f"authenticated corridor {tool} tool changed during version probe"
+            )
+        results[tool] = {
+            "argv": [str(executable), *arguments],
+            "sha256": observed_digest,
+            "size_bytes": len(stdout),
+        }
+    return results
+
+
+def _prebuilt_binary_bundle(
+    *,
+    manifest_path: Path,
+    expected_manifest_sha256: str,
     fields: dict[str, str],
     sealed: dict[str, Any],
     repo_root: Path,
-) -> tuple[Path, Path, list[Path]]:
+) -> dict[str, Any]:
+    expected_manifest_sha256 = _require_digest(
+        expected_manifest_sha256, "prebuilt binary manifest digest"
+    )
+    if manifest_path.name != _PREBUILT_MANIFEST_NAME:
+        raise ReceiptError("prebuilt binary manifest has the wrong filename")
+    workspace_target = _prebuilt_workspace_target(repo_root)
+    expected_programs = (
+        workspace_target
+        / "sumeragi-v2-release"
+        / sealed["workspace_source_manifest_sha256"]
+        / "programs"
+    )
+    bundle_dir = manifest_path.parent
+    if (
+        bundle_dir.parent != expected_programs
+        or _PREBUILT_INVOCATION_RE.fullmatch(bundle_dir.name) is None
+    ):
+        raise ReceiptError(
+            "prebuilt binary manifest is outside its exact source-bound "
+            "invocation bundle"
+        )
+    for path, name in (
+        (bundle_dir, "prebuilt invocation bundle"),
+        (bundle_dir / "release", "prebuilt release directory"),
+        (bundle_dir / "message-control", "prebuilt message-control directory"),
+        (
+            bundle_dir / "message-control" / "release",
+            "prebuilt message-control release directory",
+        ),
+    ):
+        _prebuilt_directory(path, name)
+    _prebuilt_directory_inventory(
+        bundle_dir,
+        {_PREBUILT_MANIFEST_NAME, "release", "message-control"},
+        "prebuilt invocation bundle",
+    )
+    _prebuilt_directory_inventory(
+        bundle_dir / "release",
+        {"iroha3d", "iroha", "kagami"},
+        "prebuilt release directory",
+    )
+    _prebuilt_directory_inventory(
+        bundle_dir / "message-control",
+        {"release"},
+        "prebuilt message-control directory",
+    )
+    _prebuilt_directory_inventory(
+        bundle_dir / "message-control" / "release",
+        {"iroha3d"},
+        "prebuilt message-control release directory",
+    )
+
+    manifest = _read_evidence_snapshot(
+        manifest_path,
+        "prebuilt binary manifest",
+        maximum_bytes=_MAX_PREBUILT_MANIFEST_BYTES,
+        expected_mode=0o400,
+        allowed_owners={os.geteuid()},
+    )
+    if manifest.sha256 != expected_manifest_sha256:
+        raise ReceiptError(
+            "prebuilt binary manifest does not match its externally carried digest"
+        )
+    rows = _decode_g12_tsv(manifest, "prebuilt binary manifest")
+    if (
+        len(rows) != len(_PREBUILT_MANIFEST_FIELDS)
+        or tuple(row[0] for row in rows) != _PREBUILT_MANIFEST_FIELDS
+        or any(len(row) != 2 for row in rows)
+    ):
+        raise ReceiptError(
+            "prebuilt binary manifest does not contain its exact ordered 25 fields"
+        )
+    manifest_fields = {row[0]: row[1] for row in rows}
+    canonical_data = "".join(
+        f"{name}\t{manifest_fields[name]}\n"
+        for name in _PREBUILT_MANIFEST_FIELDS
+    ).encode("utf-8")
+    if manifest.data != canonical_data:
+        raise ReceiptError("prebuilt binary manifest TSV is not canonical")
+    if (
+        manifest_fields["schema_version"] != "2"
+        or manifest_fields["source_manifest_sha256"]
+        != sealed["workspace_source_manifest_sha256"]
+        or manifest_fields["cargo_lock_sha256"] != sealed["cargo_lock_sha256"]
+        or manifest_fields["profile"] != "release"
+        or manifest_fields["bundle_dir"] != str(bundle_dir)
+        or _PREBUILT_TRIPLE_RE.fullmatch(manifest_fields["host_triple"]) is None
+        or manifest_fields["target_triple"] != manifest_fields["host_triple"]
+    ):
+        raise ReceiptError(
+            "prebuilt binary manifest is not bound to the exact release identity"
+        )
+    for name in ("cargo_version_sha256", "rustc_version_sha256"):
+        _require_digest(manifest_fields[name], f"prebuilt manifest {name}")
+    cargo_lock = _read_evidence_snapshot(
+        repo_root / "Cargo.lock",
+        "retained release Cargo.lock",
+        maximum_bytes=_MAX_LOCK_BYTES,
+        allowed_owners={os.geteuid()},
+    )
+    if cargo_lock.sha256 != manifest_fields["cargo_lock_sha256"]:
+        raise ReceiptError(
+            "prebuilt binary manifest Cargo.lock digest does not match retained source"
+        )
+
+    binaries: list[dict[str, Any]] = []
+    for prefix, relative in _PREBUILT_BINARY_SPECS:
+        size_text = manifest_fields[f"{prefix}_size_bytes"]
+        if (
+            re.fullmatch(r"[1-9][0-9]*", size_text) is None
+            or int(size_text) > _MAX_PREBUILT_BINARY_BYTES
+            or manifest_fields[f"{prefix}_relative_path"] != relative
+            or manifest_fields[f"{prefix}_mode_octal"] != "0500"
+        ):
+            raise ReceiptError(
+                f"prebuilt manifest {prefix} metadata is not exact and bounded"
+            )
+        digest = _require_digest(
+            manifest_fields[f"{prefix}_sha256"],
+            f"prebuilt manifest {prefix} digest",
+        )
+        pure_relative = PurePosixPath(relative)
+        binary = _read_evidence_snapshot(
+            bundle_dir.joinpath(*pure_relative.parts),
+            f"prebuilt {prefix} binary",
+            maximum_bytes=_MAX_PREBUILT_BINARY_BYTES,
+            expected_mode=0o500,
+            allowed_owners={os.geteuid()},
+            executable=True,
+            retain_bytes=False,
+        )
+        if binary.sha256 != digest or binary.size != int(size_text):
+            raise ReceiptError(
+                f"prebuilt {prefix} binary identity does not match manifest"
+            )
+        binaries.append(
+            {
+                "role": prefix,
+                "relative_path": relative,
+                **_snapshot_receipt_artifact(binary),
+            }
+        )
+
+    return {
+        "schema_version": 2,
+        "manifest": _snapshot_receipt_artifact(manifest),
+        "source_manifest_sha256": manifest_fields["source_manifest_sha256"],
+        "cargo_lock_sha256": manifest_fields["cargo_lock_sha256"],
+        "cargo_version_sha256": manifest_fields["cargo_version_sha256"],
+        "rustc_version_sha256": manifest_fields["rustc_version_sha256"],
+        "host_triple": manifest_fields["host_triple"],
+        "target_triple": manifest_fields["target_triple"],
+        "profile": manifest_fields["profile"],
+        "bundle_dir": str(bundle_dir),
+        "version_transcripts": _prebuilt_version_transcripts(
+            bundle_dir=bundle_dir,
+            fields=manifest_fields,
+            corridor_fields=fields,
+        ),
+        "binaries": binaries,
+    }
+
+
+def _corridor_artifacts(
+    completion: EvidenceSnapshot,
+    fields: dict[str, str],
+    sealed: dict[str, Any],
+    repo_root: Path,
+    bootstrap_runner_tools: dict[str, Any],
+) -> tuple[
+    PathContract,
+    PathContract,
+    PathContract,
+    list[PathContract],
+    dict[str, Any],
+]:
+    completion_path = completion.path
     _require_fields(
         fields,
         {
@@ -3794,8 +4935,11 @@ def _corridor_artifacts(
             "cargo_lock_sha256",
             "leg_count",
             "production_required_test_count",
+            "g_unit_expected_test_count",
+            "g_unit_passed_test_count",
             "summary_sha256",
             "production_required_tests_sha256",
+            "g_unit_inventory_sha256",
             "java_path",
             "java_sha256",
             "cargo_path",
@@ -3822,6 +4966,8 @@ def _corridor_artifacts(
             "native_amx_grouped_negative_control_count",
             "tlc_profile",
             "tlaps_threads",
+            "prebuilt_manifest_path",
+            "prebuilt_manifest_sha256",
         },
         "corridor completion",
     )
@@ -3833,6 +4979,8 @@ def _corridor_artifacts(
         "cargo_lock_sha256": sealed["cargo_lock_sha256"],
         "leg_count": str(len(_corridor_legs())),
         "production_required_test_count": str(_PRODUCTION_TEST_COUNT),
+        "g_unit_expected_test_count": str(_G_UNIT_TEST_COUNT),
+        "g_unit_passed_test_count": str(_G_UNIT_TEST_COUNT),
         "native_amx_grouped_negative_control_count": str(
             _NATIVE_AMX_GROUPED_NEGATIVE_CONTROL_COUNT
         ),
@@ -3847,6 +4995,16 @@ def _corridor_artifacts(
         != "rustc 1.93.1 (01f6ddf75 2026-02-11)"
     ):
         raise ReceiptError("corridor Rust tools do not match rust-toolchain.toml")
+    for tool in ("cargo", "rustc"):
+        runner_record = bootstrap_runner_tools.get(tool)
+        if (
+            not isinstance(runner_record, dict)
+            or fields[f"{tool}_path"] != runner_record.get("source_path")
+            or fields[f"{tool}_sha256"] != runner_record.get("sha256")
+        ):
+            raise ReceiptError(
+                f"corridor {tool} is not the authenticated bootstrap runner tool"
+            )
     for tool in (
         "java",
         "cargo",
@@ -3860,9 +5018,14 @@ def _corridor_artifacts(
         tool_path = Path(fields[f"{tool}_path"])
         if not tool_path.is_absolute():
             raise ReceiptError(f"corridor {tool} path is not absolute")
-        tool_path = _regular_file(tool_path, f"corridor {tool} tool")
+        tool_contract = _bounded_path_contract(
+            tool_path,
+            f"corridor {tool} tool",
+            maximum_bytes=_MAX_TOOL_BYTES,
+            require_single_link=False,
+        )
         digest = fields[f"{tool}_sha256"]
-        if not _DIGEST_RE.fullmatch(digest) or _sha256(tool_path) != digest:
+        if not _DIGEST_RE.fullmatch(digest) or tool_contract.sha256 != digest:
             raise ReceiptError(f"corridor {tool} tool digest mismatch")
     if not fields["swift_version"].strip():
         raise ReceiptError("corridor Swift tool version is blank")
@@ -3877,21 +5040,24 @@ def _corridor_artifacts(
         config = cargo_home / config_name
         if config.exists() or config.is_symlink():
             raise ReceiptError("corridor Cargo home contains external configuration")
-    repo_cargo_config = _regular_file(
-        repo_root / ".cargo" / "config.toml", "repository Cargo config"
+    repo_cargo_config = _bounded_path_contract(
+        repo_root / ".cargo" / "config.toml",
+        "repository Cargo config",
+        maximum_bytes=_MAX_POLICY_BYTES,
     )
     if (
         not _DIGEST_RE.fullmatch(fields["repo_cargo_config_sha256"])
-        or _sha256(repo_cargo_config) != fields["repo_cargo_config_sha256"]
+        or repo_cargo_config.sha256 != fields["repo_cargo_config_sha256"]
     ):
         raise ReceiptError("repository Cargo config digest mismatch")
-    grouped_fixture = _regular_file(
+    grouped_fixture = _bounded_path_contract(
         repo_root / _NATIVE_AMX_GROUPED_FIXTURE,
         "grouped Native AMX V2 fixture",
+        maximum_bytes=_MAX_LOCALNET_MANIFEST_BYTES,
     )
     if (
         not _DIGEST_RE.fullmatch(fields["native_amx_grouped_fixture_sha256"])
-        or _sha256(grouped_fixture)
+        or grouped_fixture.sha256
         != fields["native_amx_grouped_fixture_sha256"]
     ):
         raise ReceiptError("grouped Native AMX V2 fixture digest mismatch")
@@ -3907,24 +5073,51 @@ def _corridor_artifacts(
             "grouped Native AMX V2 suite-source manifest digest mismatch"
         )
 
-    summary = _regular_file(completion_path.with_name("summary.tsv"), "corridor summary")
-    required_path = _regular_file(
+    release_runner = _bounded_evidence_snapshot(
+        repo_root / "scripts" / "run_sumeragi_v2_release_gates.sh",
+        "release runner inventory",
+        maximum_bytes=_MAX_POLICY_BYTES,
+        require_single_link=False,
+    )
+    summary = _bounded_evidence_snapshot(
+        completion_path.with_name("summary.tsv"),
+        "corridor summary",
+        maximum_bytes=_MAX_RELEASE_TSV_BYTES,
+    )
+    required_snapshot = _bounded_evidence_snapshot(
         completion_path.with_name("production-required-tests.tsv"),
         "corridor production inventory",
+        maximum_bytes=_MAX_RELEASE_TSV_BYTES,
     )
-    if _sha256(summary) != fields["summary_sha256"]:
+    g_unit_snapshot = _bounded_evidence_snapshot(
+        completion_path.with_name("g-unit-required-tests.tsv"),
+        "corridor G-UNIT inventory",
+        maximum_bytes=_MAX_RELEASE_TSV_BYTES,
+    )
+    if summary.sha256 != fields["summary_sha256"]:
         raise ReceiptError("corridor summary digest mismatch")
-    if _sha256(required_path) != fields["production_required_tests_sha256"]:
+    if required_snapshot.sha256 != fields["production_required_tests_sha256"]:
         raise ReceiptError("corridor production inventory digest mismatch")
+    if g_unit_snapshot.sha256 != fields["g_unit_inventory_sha256"]:
+        raise ReceiptError("corridor G-UNIT inventory digest mismatch")
 
     try:
-        with required_path.open(encoding="utf-8", newline="") as source:
-            reader = csv.DictReader(source, delimiter="\t")
-            if tuple(reader.fieldnames or ()) != ("module", "test"):
-                raise ReceiptError("corridor production inventory fields are not canonical")
-            required_rows = list(reader)
-    except UnicodeDecodeError as error:
-        raise ReceiptError("corridor production inventory is not UTF-8") from error
+        reader = csv.DictReader(
+            io.StringIO(
+                _decode_lf_text(
+                    required_snapshot, "corridor production inventory"
+                ),
+                newline="",
+            ),
+            delimiter="\t",
+        )
+        if tuple(reader.fieldnames or ()) != ("module", "test"):
+            raise ReceiptError("corridor production inventory fields are not canonical")
+        required_rows = list(reader)
+    except csv.Error as error:
+        raise ReceiptError(
+            "corridor production inventory is malformed TSV"
+        ) from error
     if len(required_rows) != _PRODUCTION_TEST_COUNT:
         raise ReceiptError(
             "corridor production inventory must contain exactly "
@@ -3933,7 +5126,7 @@ def _corridor_artifacts(
     required_names = [row.get("test", "") for row in required_rows]
     if len(set(required_names)) != _PRODUCTION_TEST_COUNT:
         raise ReceiptError("corridor production inventory contains duplicate tests")
-    if required_names != _canonical_production_tests(repo_root):
+    if required_names != _canonical_production_tests(repo_root, release_runner):
         raise ReceiptError("corridor production inventory is not the canonical release list")
     module_counts = {module: count for _, module, count in _PRODUCTION_MODULES}
     required_by_module: dict[str, list[str]] = {module: [] for module in module_counts}
@@ -3952,18 +5145,65 @@ def _corridor_artifacts(
         raise ReceiptError("corridor production inventory module counts are not exact")
 
     try:
-        with summary.open(encoding="utf-8", newline="") as source:
-            reader = csv.DictReader(source, delimiter="\t")
-            if tuple(reader.fieldnames or ()) != _CORRIDOR_SUMMARY_FIELDS:
-                raise ReceiptError("corridor summary fields are not canonical")
-            rows = list(reader)
-    except UnicodeDecodeError as error:
-        raise ReceiptError("corridor summary is not UTF-8") from error
+        reader = csv.DictReader(
+            io.StringIO(
+                _decode_lf_text(g_unit_snapshot, "corridor G-UNIT inventory"),
+                newline="",
+            ),
+            delimiter="\t",
+        )
+        if tuple(reader.fieldnames or ()) != ("leg_id", "crate", "test"):
+            raise ReceiptError("corridor G-UNIT inventory fields are not canonical")
+        g_unit_rows = list(reader)
+    except csv.Error as error:
+        raise ReceiptError("corridor G-UNIT inventory is malformed TSV") from error
+    canonical_g_unit_rows = _canonical_g_unit_rows(repo_root, release_runner)
+    if len(g_unit_rows) != _G_UNIT_TEST_COUNT:
+        raise ReceiptError(
+            f"corridor G-UNIT inventory must contain exactly "
+            f"{_G_UNIT_TEST_COUNT} tests"
+        )
+    for index, (row, expected_row) in enumerate(
+        zip(g_unit_rows, canonical_g_unit_rows)
+    ):
+        expected_leg, expected_package, expected_test = expected_row
+        if (
+            None in row
+            or set(row) != {"leg_id", "crate", "test"}
+            or row
+            != {
+                "leg_id": expected_leg,
+                "crate": expected_package,
+                "test": expected_test,
+            }
+        ):
+            raise ReceiptError(
+                f"corridor G-UNIT inventory row {index} is not canonical"
+            )
+
+    try:
+        reader = csv.DictReader(
+            io.StringIO(
+                _decode_lf_text(summary, "corridor summary"),
+                newline="",
+            ),
+            delimiter="\t",
+        )
+        if tuple(reader.fieldnames or ()) != _CORRIDOR_SUMMARY_FIELDS:
+            raise ReceiptError("corridor summary fields are not canonical")
+        rows = list(reader)
+    except csv.Error as error:
+        raise ReceiptError("corridor summary is malformed TSV") from error
     expected_legs = _corridor_legs()
     if len(rows) != len(expected_legs):
         raise ReceiptError("corridor summary must contain every exact release leg")
-    logs: list[Path] = []
+    logs: list[PathContract] = []
     module_for_leg = {leg_id: module for leg_id, module, _ in _PRODUCTION_MODULES}
+    g_unit_tests_by_leg: dict[str, list[str]] = {
+        leg_id: [] for _, leg_id, _, _, _ in _G_UNIT_GROUPS
+    }
+    for leg_id, _, test in canonical_g_unit_rows:
+        g_unit_tests_by_leg[leg_id].append(test)
     exact_cargo_tests: dict[str, tuple[str, ...]] = {
         "status-rust": (_DATA_STATUS_TEST,),
         "lane-certificate-rust": (_DATA_LANE_CERTIFICATE_TEST,),
@@ -3998,13 +5238,14 @@ def _corridor_artifacts(
         digest = row.get("log_sha256", "")
         if not _DIGEST_RE.fullmatch(digest):
             raise ReceiptError(f"corridor summary row {index} has an invalid log digest")
-        log = _regular_file(completion_path.parent / expected_log, f"corridor log {index}")
-        if _sha256(log) != digest:
+        log = _bounded_evidence_snapshot(
+            completion_path.parent / expected_log,
+            f"corridor log {index}",
+            maximum_bytes=_MAX_RELEASE_TEXT_BYTES,
+        )
+        if log.sha256 != digest:
             raise ReceiptError(f"corridor log {index} digest mismatch")
-        try:
-            lines = log.read_text(encoding="utf-8").splitlines()
-        except UnicodeDecodeError as error:
-            raise ReceiptError(f"corridor log {index} is not UTF-8") from error
+        lines = _decode_lf_text(log, f"corridor log {index}").splitlines()
         observed = _test_count_from_log(lines, kind, f"corridor log {index}")
         if row.get("observed_test_count") != str(observed):
             raise ReceiptError(f"corridor summary row {index} has the wrong observed count")
@@ -4019,6 +5260,27 @@ def _corridor_artifacts(
                     )
         elif observed != required_count:
             raise ReceiptError(f"corridor leg {leg_id} has the wrong passing count")
+        if kind == "cargo-focus":
+            expected_tests = g_unit_tests_by_leg.get(leg_id)
+            if expected_tests is None or len(expected_tests) != required_count:
+                raise ReceiptError(
+                    f"corridor G-UNIT leg {leg_id} has no exact inventory binding"
+                )
+            passing_tests = [
+                match.group(1)
+                for line in lines
+                if (
+                    match := re.fullmatch(
+                        r"test ([A-Za-z0-9_]+(?:::[A-Za-z0-9_]+)*) \.\.\. ok",
+                        line,
+                    )
+                )
+            ]
+            if passing_tests != expected_tests:
+                raise ReceiptError(
+                    f"corridor G-UNIT leg {leg_id} lacks one required "
+                    "passing test or contains an unexpected result"
+                )
         if kind == "cargo-exact":
             for test in exact_cargo_tests[leg_id]:
                 if lines.count(f"test {test} ... ok") != 1:
@@ -4049,25 +5311,61 @@ def _corridor_artifacts(
                     f"corridor grouped Native AMX V2 {surface} leg is not "
                     "bound to the exact fixture and suite sources"
                 )
-        logs.append(log)
-    return summary, required_path, logs
+        logs.append(_snapshot_contract(log))
+    manifest_path = Path(fields["prebuilt_manifest_path"])
+    prebuilt_bundle = _prebuilt_binary_bundle(
+        manifest_path=manifest_path,
+        expected_manifest_sha256=fields["prebuilt_manifest_sha256"],
+        fields=fields,
+        sealed=sealed,
+        repo_root=repo_root,
+    )
+    return (
+        _snapshot_contract(summary),
+        _snapshot_contract(required_snapshot),
+        _snapshot_contract(g_unit_snapshot),
+        logs,
+        prebuilt_bundle,
+    )
 
 
-def _seed_run_logs(seed_path: Path, summary: Path, manifest: str) -> list[Path]:
+def _seed_run_logs(
+    seed_completion: EvidenceSnapshot,
+    summary: EvidenceSnapshot,
+    manifest: str,
+    repo_root: Path,
+    prebuilt_bundle_dir: Path,
+    prebuilt_manifest_sha256: str,
+) -> list[PathContract]:
+    seed_path = seed_completion.path
     try:
-        with summary.open(encoding="utf-8", newline="") as source:
-            reader = csv.DictReader(source, delimiter="\t")
-            if tuple(reader.fieldnames or ()) != _SEED_SUMMARY_FIELDS:
-                raise ReceiptError("seed summary fields are not canonical")
-            rows = list(reader)
-    except UnicodeDecodeError as error:
-        raise ReceiptError("seed summary is not UTF-8") from error
+        reader = csv.DictReader(
+            io.StringIO(
+                _decode_lf_text(summary, "seed summary"),
+                newline="",
+            ),
+            delimiter="\t",
+        )
+        if tuple(reader.fieldnames or ()) != _SEED_SUMMARY_FIELDS:
+            raise ReceiptError("seed summary fields are not canonical")
+        rows = list(reader)
+    except csv.Error as error:
+        raise ReceiptError("seed summary is malformed TSV") from error
     if len(rows) != _SEED_RUN_COUNT:
         raise ReceiptError(
             f"seed summary must contain exactly {_SEED_RUN_COUNT} run rows"
         )
 
     run_logs = []
+    source_bound_root = repo_root / "target" / "sumeragi-v2-release" / manifest
+    cargo_target_dir = source_bound_root / "test-suite"
+    program_target_dir = prebuilt_bundle_dir
+    irohad = program_target_dir / "release" / "iroha3d"
+    message_control_irohad = (
+        program_target_dir / "message-control" / "release" / "iroha3d"
+    )
+    iroha = program_target_dir / "release" / "iroha"
+    kagami = program_target_dir / "release" / "kagami"
     for index, row in enumerate(rows):
         if None in row or set(row) != set(_SEED_SUMMARY_FIELDS):
             raise ReceiptError(f"seed summary row {index} has extra or missing columns")
@@ -4079,11 +5377,21 @@ def _seed_run_logs(seed_path: Path, summary: Path, manifest: str) -> list[Path]:
         output = f"runs/run-{index:03d}.log"
         localnet = f"localnets/run-{index:03d}"
         expected_command = (
+            f"CARGO_TARGET_DIR={cargo_target_dir} "
+            f"IROHA_TEST_TARGET_DIR={program_target_dir} "
             f"IROHA_RELEASE_SOURCE_MANIFEST_SHA256={manifest} "
+            f"IROHA_RELEASE_PREBUILT_MANIFEST_SHA256={prebuilt_manifest_sha256} "
+            f"TEST_NETWORK_BIN_IROHAD={irohad} "
+            f"TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL={message_control_irohad} "
+            f"TEST_NETWORK_BIN_IROHA={iroha} "
+            f"KAGAMI_BIN={kagami} "
+            "CARGO_NET_OFFLINE=true "
             "IROHA_TEST_REQUIRE_NETWORK=1 "
             "IROHA_TEST_NETWORK_START_ATTEMPTS=1 "
-            "IROHA_TEST_SKIP_BUILD=0 "
-            "IROHA_TEST_ALLOW_REENTRANT_BUILD=1 "
+            "IROHA_TEST_SKIP_BUILD=1 "
+            "IROHA_TEST_ALLOW_REENTRANT_BUILD=0 "
+            "IROHA_TEST_BUILD_PROFILE=release "
+            "PROFILE=release "
             "IROHA_TEST_BUILD_TIMEOUT_MS=3600 "
             "IROHA_TEST_PROCESS_TIMEOUT_MS=300 "
             "IROHA_TEST_NETWORK_PERMIT_WAIT_TIMEOUT=300 "
@@ -4091,7 +5399,7 @@ def _seed_run_logs(seed_path: Path, summary: Path, manifest: str) -> list[Path]:
             "TEST_NETWORK_TMP_DIR=${SEED_MATRIX_EVIDENCE_DIRECTORY}/"
             f"{localnet} "
             "IROHA_TEST_NETWORK_KEEP_DIRS=1 "
-            "cargo test --locked -p integration_tests --test "
+            "cargo test --locked --offline -p integration_tests --test "
             "sumeragi_v2_runner_isolated "
             f"sumeragi_v2_runner::{scenario} -- --exact --nocapture "
             "--test-threads=1"
@@ -4112,13 +5420,14 @@ def _seed_run_logs(seed_path: Path, summary: Path, manifest: str) -> list[Path]:
         digest = row.get("run_log_sha256")
         if not isinstance(digest, str) or not _DIGEST_RE.fullmatch(digest):
             raise ReceiptError(f"seed summary row {index} has an invalid log digest")
-        run_log = _regular_file(seed_path.parent / output, f"seed run log {index}")
-        if _sha256(run_log) != digest:
+        run_log = _bounded_evidence_snapshot(
+            seed_path.parent / output,
+            f"seed run log {index}",
+            maximum_bytes=_MAX_RELEASE_TEXT_BYTES,
+        )
+        if run_log.sha256 != digest:
             raise ReceiptError(f"seed run log {index} digest mismatch")
-        try:
-            lines = run_log.read_text(encoding="utf-8").splitlines()
-        except UnicodeDecodeError as error:
-            raise ReceiptError(f"seed run log {index} is not UTF-8") from error
+        lines = _decode_lf_text(run_log, f"seed run log {index}").splitlines()
         running = [
             line for line in lines if re.fullmatch(r"running [0-9]+ tests?", line)
         ]
@@ -4151,25 +5460,22 @@ def _seed_run_logs(seed_path: Path, summary: Path, manifest: str) -> list[Path]:
             raise ReceiptError(
                 f"seed run log {index} does not prove its one exact passing scenario"
             )
-        run_logs.append(run_log)
+        run_logs.append(_snapshot_contract(run_log))
     return run_logs
 
 
 def _seed_localnet_manifests(
-    seed_path: Path, fields: dict[str, str]
-) -> tuple[Path, list[Path]]:
+    seed_completion: EvidenceSnapshot, fields: dict[str, str]
+) -> tuple[PathContract, list[PathContract]]:
+    seed_path = seed_completion.path
     if (
         fields["localnet_manifest_count"] != str(_SEED_RUN_COUNT)
         or fields["localnet_manifests_path"] != "localnet-manifests.tsv"
         or not _DIGEST_RE.fullmatch(fields["localnet_manifests_sha256"])
     ):
         raise ReceiptError("seed completion has an invalid localnet manifest binding")
-    index_path = _regular_file(
+    index_snapshot = _bounded_evidence_snapshot(
         seed_path.parent / fields["localnet_manifests_path"],
-        "seed localnet manifest index",
-    )
-    index_snapshot = _read_evidence_snapshot(
-        index_path,
         "seed localnet manifest index",
         maximum_bytes=_MAX_LOCALNET_MANIFEST_INDEX_BYTES,
     )
@@ -4222,7 +5528,7 @@ def _seed_localnet_manifests(
     if index_snapshot.data != canonical_index:
         raise ReceiptError("seed localnet manifest index bytes are not canonical")
 
-    manifests: list[Path] = []
+    manifests: list[PathContract] = []
     for index, localnet, relative_manifest, digest in records:
         manifest_candidate = seed_path.parent / relative_manifest
         try:
@@ -4233,12 +5539,8 @@ def _seed_localnet_manifests(
             ) from error
         if resolved_manifest != manifest_candidate:
             raise ReceiptError(f"seed localnet manifest {index} escaped its archive")
-        manifest_path = _regular_file(
+        snapshot = _bounded_evidence_snapshot(
             manifest_candidate,
-            f"seed localnet manifest {index}",
-        )
-        snapshot = _read_evidence_snapshot(
-            manifest_path,
             f"seed localnet manifest {index}",
             maximum_bytes=_MAX_LOCALNET_MANIFEST_BYTES,
         )
@@ -4254,8 +5556,8 @@ def _seed_localnet_manifests(
             raise ReceiptError(
                 f"seed localnet manifest {index} does not match retained content"
             )
-        manifests.append(manifest_path)
-    return index_path, manifests
+        manifests.append(_snapshot_contract(snapshot))
+    return _snapshot_contract(index_snapshot), manifests
 
 
 def _scan_scaling_bundle(
@@ -4695,12 +5997,11 @@ def _validate_scaling_evidence(
             )
         retained_tooling.append((role, source_path, retained_tool))
 
-    retained_validator = _regular_file(
+    retained_validator = (
         repo_root
         / "scripts"
         / "nexus"
-        / "validate_multilane_scaling_evidence.py",
-        "retained scaling evidence validator",
+        / "validate_multilane_scaling_evidence.py"
     )
     retained_contract = _capture_path_contract(
         retained_validator,
@@ -4722,46 +6023,35 @@ def _validate_scaling_evidence(
 
     with tempfile.TemporaryDirectory(prefix="sumeragi-v2-scaling-replay-") as temporary:
         replay_report = Path(temporary).resolve(strict=True) / "validation_report.json"
-        try:
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    "-I",
-                    "-S",
-                    str(retained_validator),
-                    str(manifest_path),
-                    "--expected-source-revision",
-                    sealed["head_commit"],
-                    "--expected-workspace-source-sha256",
-                    sealed["workspace_source_manifest_sha256"],
-                    "--expected-validator-sha256",
-                    retained_contract.sha256,
-                    "--expected-trial-harness-sha256",
-                    expected_trial_harness_sha256,
-                    "--expected-configuration-sha256",
-                    expected_configuration_sha256,
-                    "--expected-irohad-sha256",
-                    expected_irohad_sha256,
-                    "--expected-iroha-cli-sha256",
-                    expected_iroha_cli_sha256,
-                    "--expected-repository-root",
-                    str(repo_root),
-                    "--report",
-                    str(replay_report),
-                    "--quiet",
-                ],
-                cwd=repo_root,
-                check=False,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                env=checker_environment,
-                timeout=_REPLAY_TIMEOUT_SECONDS,
-            )
-        except subprocess.TimeoutExpired as error:
-            raise ReceiptError(
-                "retained scaling evidence validator timed out"
-            ) from error
-        if result.returncode != 0:
+        status, _, _ = _run_bounded_python_validator(
+            retained_validator,
+            [
+                str(manifest_path),
+                "--expected-source-revision",
+                sealed["head_commit"],
+                "--expected-workspace-source-sha256",
+                sealed["workspace_source_manifest_sha256"],
+                "--expected-validator-sha256",
+                retained_contract.sha256,
+                "--expected-trial-harness-sha256",
+                expected_trial_harness_sha256,
+                "--expected-configuration-sha256",
+                expected_configuration_sha256,
+                "--expected-irohad-sha256",
+                expected_irohad_sha256,
+                "--expected-iroha-cli-sha256",
+                expected_iroha_cli_sha256,
+                "--expected-repository-root",
+                str(repo_root),
+                "--report",
+                str(replay_report),
+                "--quiet",
+            ],
+            cwd=repo_root,
+            environment=checker_environment,
+            name="retained scaling evidence validator",
+        )
+        if status != 0:
             raise ReceiptError(
                 "scaling evidence bundle failed retained-validator revalidation"
             )
@@ -4952,11 +6242,154 @@ def _require_g12_directory_inventory(
         )
 
 
+def _validate_g4p_log(snapshot: EvidenceSnapshot, name: str, test: str) -> None:
+    data = snapshot.data
+    if not data.endswith(b"\n") or b"\r" in data or b"\0" in data:
+        raise ReceiptError(f"{name} is not terminal-LF, LF-only output")
+    try:
+        lines = data.decode("utf-8").splitlines()
+    except UnicodeDecodeError as error:
+        raise ReceiptError(f"{name} is not UTF-8") from error
+    results = [line for line in lines if line.startswith("test result:")]
+    native_marker_count = lines.count(_G4P_NATIVE_AMX_GROUPED_PRUNING_MARKER)
+    expected_native_marker_count = int(test == _G4P_RELEASE_TESTS[3][1])
+    release_marker_count = int(
+        test in (_G4P_RELEASE_TESTS[0][1], _G4P_RELEASE_TESTS[3][1])
+    )
+    if (
+        lines.count("running 1 test") != 1
+        or lines.count(f"test {test} ... ok") != 1
+        or lines.count(f"[multilane-release-gate] started: {test}")
+        != release_marker_count
+        or lines.count(f"[multilane-release-gate] completed: {test}")
+        != release_marker_count
+        or native_marker_count != expected_native_marker_count
+        or any("developer opt-out" in line for line in lines)
+        or len(results) != 1
+        or re.fullmatch(
+            r"test result: ok\. 1 passed; 0 failed; 0 ignored; 0 measured; "
+            r"[0-9]+ filtered out; finished in .+",
+            results[0],
+        )
+        is None
+    ):
+        raise ReceiptError(
+            f"{name} does not prove one exact passing mandatory G-4P test"
+        )
+
+
+def _validate_g4p_evidence(
+    *,
+    completion_path: Path,
+    sealed: dict[str, Any],
+    prebuilt_manifest_sha256: str,
+) -> dict[str, Any]:
+    completion = _read_g12_snapshot(
+        completion_path,
+        "G-4P completion",
+        maximum_bytes=_MAX_G4P_TSV_BYTES,
+    )
+    completion_fields = _g12_completion_fields(completion, "G-4P completion")
+    expected_fields = {
+        "schema_version",
+        "mode",
+        "head_commit",
+        "head_tree",
+        "source_manifest_sha256",
+        "cargo_lock_sha256",
+        "prebuilt_manifest_sha256",
+        "expected_runs",
+        "passed_runs",
+        "failed_runs",
+        "skipped_runs",
+        "native_grouped_pruning_evidence",
+        "runs_sha256",
+    }
+    if set(completion_fields) != expected_fields:
+        raise ReceiptError("G-4P completion fields are not canonical")
+    expected_identity = {
+        "schema_version": "1",
+        "mode": "mandatory-four-peer-multilane-release",
+        "head_commit": sealed["head_commit"],
+        "head_tree": sealed["head_tree"],
+        "source_manifest_sha256": sealed["workspace_source_manifest_sha256"],
+        "cargo_lock_sha256": sealed["cargo_lock_sha256"],
+        "prebuilt_manifest_sha256": prebuilt_manifest_sha256,
+        "expected_runs": "4",
+        "passed_runs": "4",
+        "failed_runs": "0",
+        "skipped_runs": "0",
+        "native_grouped_pruning_evidence": "passed",
+    }
+    if any(
+        completion_fields.get(field) != value
+        for field, value in expected_identity.items()
+    ):
+        raise ReceiptError(
+            "G-4P completion is not exact passing release-bound accounting"
+        )
+    _require_digest(completion_fields["runs_sha256"], "G-4P run summary digest")
+
+    summary = _read_g12_snapshot(
+        completion.path.with_name("runs.tsv"),
+        "G-4P run summary",
+        maximum_bytes=_MAX_G4P_TSV_BYTES,
+    )
+    if summary.sha256 != completion_fields["runs_sha256"]:
+        raise ReceiptError("G-4P run summary digest mismatch")
+    rows = _decode_g12_tsv(
+        summary,
+        "G-4P run summary",
+        expected_header=("target", "test", "status", "log_sha256", "log"),
+    )
+    if len(rows) != len(_G4P_RELEASE_TESTS) + 1:
+        raise ReceiptError("G-4P run summary must contain exactly four runs")
+
+    logs: list[EvidenceSnapshot] = []
+    expected_names = {"COMPLETED.tsv", "runs.tsv"}
+    for index, ((target, test), row) in enumerate(
+        zip(_G4P_RELEASE_TESTS, rows[1:])
+    ):
+        expected_log = f"run-{index:02d}-{target}.log"
+        if (
+            len(row) != 5
+            or tuple(row[:3]) != (target, test, "passed")
+            or _DIGEST_RE.fullmatch(row[3]) is None
+            or row[4] != expected_log
+        ):
+            raise ReceiptError(f"G-4P run summary row {index} is not canonical")
+        log = _read_g12_snapshot(
+            completion.path.with_name(expected_log),
+            f"G-4P run log {index}",
+            maximum_bytes=_MAX_G4P_LOG_BYTES,
+        )
+        if log.sha256 != row[3]:
+            raise ReceiptError(f"G-4P run log {index} digest mismatch")
+        _validate_g4p_log(log, f"G-4P run log {index}", test)
+        logs.append(log)
+        expected_names.add(expected_log)
+    _require_g12_directory_inventory(
+        completion.path.parent,
+        expected_names,
+        "G-4P evidence",
+    )
+
+    return {
+        "schema_version": 1,
+        "completion": _snapshot_receipt_artifact(completion),
+        "run_summary": _snapshot_receipt_artifact(summary),
+        "run_logs": [
+            _snapshot_receipt_artifact(snapshot) for snapshot in logs
+        ],
+    }
+
+
 def _validate_g12_evidence(
     *,
     seed_completion_path: Path,
     fault_soak_completion_path: Path,
     sealed: dict[str, Any],
+    prebuilt_manifest_sha256: str,
 ) -> dict[str, Any]:
     seed_completion = _read_g12_snapshot(
         seed_completion_path,
@@ -4973,6 +6406,7 @@ def _validate_g12_evidence(
         "head_tree",
         "source_manifest_sha256",
         "cargo_lock_sha256",
+        "prebuilt_manifest_sha256",
         "expected_runs",
         "passed_runs",
         "failed_runs",
@@ -4988,6 +6422,7 @@ def _validate_g12_evidence(
         "head_tree": sealed["head_tree"],
         "source_manifest_sha256": sealed["workspace_source_manifest_sha256"],
         "cargo_lock_sha256": sealed["cargo_lock_sha256"],
+        "prebuilt_manifest_sha256": prebuilt_manifest_sha256,
         "expected_runs": "10",
         "passed_runs": "10",
         "failed_runs": "0",
@@ -5070,6 +6505,7 @@ def _validate_g12_evidence(
         "head_tree",
         "source_manifest_sha256",
         "cargo_lock_sha256",
+        "prebuilt_manifest_sha256",
         "seed",
         "duration_seconds",
         "expected_runs",
@@ -5087,6 +6523,7 @@ def _validate_g12_evidence(
         "head_tree": sealed["head_tree"],
         "source_manifest_sha256": sealed["workspace_source_manifest_sha256"],
         "cargo_lock_sha256": sealed["cargo_lock_sha256"],
+        "prebuilt_manifest_sha256": prebuilt_manifest_sha256,
         "seed": f"{_G12_SEED_PREFIX}00",
         "duration_seconds": "7200",
         "expected_runs": "1",
@@ -5158,6 +6595,7 @@ def build_receipt(
     seed_completion_path: Path,
     chaos_completion_path: Path,
     taira_completion_path: Path,
+    g4p_completion_path: Path,
     g12_seed_completion_path: Path,
     g12_fault_soak_completion_path: Path,
     scaling_evidence_manifest_path: Path,
@@ -5167,7 +6605,7 @@ def build_receipt(
     expected_scaling_iroha_cli_sha256: str,
     repository_root_path: Path,
     runner_logs_sealed: bool = False,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], PathContract, PathContract]:
     """Validate every completion artifact and return one aggregate receipt."""
 
     repo_root = repository_root_path.resolve(strict=True)
@@ -5182,8 +6620,12 @@ def build_receipt(
         raise ReceiptError(
             "repository root must be the exact retained sealed release root"
         )
-    candidate = _load_identity(candidate_identity_path, "candidate identity")
-    sealed = _load_identity(sealed_identity_path, "sealed identity")
+    candidate_snapshot, candidate = _load_identity(
+        candidate_identity_path, "candidate identity"
+    )
+    sealed_snapshot, sealed = _load_identity(
+        sealed_identity_path, "sealed identity"
+    )
     for field in ("head_commit", "head_tree", "index_tree", "cargo_lock_sha256"):
         if candidate[field] != sealed[field]:
             raise ReceiptError(f"candidate and sealed identity disagree on {field}")
@@ -5211,7 +6653,7 @@ def build_receipt(
     )
 
     release_authentication, signature_archives = _validate_signature_evidence(
-        candidate_identity_path=candidate_identity_path,
+        candidate_snapshot=candidate_snapshot,
         candidate=candidate,
         release_root_path=release_root_path,
         signature_attestation_path=signature_attestation_path,
@@ -5239,7 +6681,7 @@ def build_receipt(
         runner_path=bootstrap_runner_path,
         release_root_path=release_root_path,
         candidate=candidate,
-        candidate_identity_path=candidate_identity_path,
+        candidate_snapshot=candidate_snapshot,
         sealed=sealed,
         expected_signer_fingerprint=expected_signer_fingerprint,
         signature_archives=signature_archives,
@@ -5283,17 +6725,33 @@ def build_receipt(
         expected_irohad_sha256=expected_scaling_irohad_sha256,
         expected_iroha_cli_sha256=expected_scaling_iroha_cli_sha256,
     )
+    corridor_path, corridor_completion = _load_tsv(
+        corridor_completion_path, "corridor completion"
+    )
+    (
+        corridor_summary,
+        corridor_required,
+        corridor_g_unit_inventory,
+        corridor_logs,
+        prebuilt_binary_bundle,
+    ) = _corridor_artifacts(
+        corridor_path,
+        corridor_completion,
+        sealed,
+        repo_root,
+        bootstrap_authentication["runner"]["tools"],
+    )
+    prebuilt_manifest_sha256 = prebuilt_binary_bundle["manifest"]["sha256"]
+    g4p_evidence = _validate_g4p_evidence(
+        completion_path=g4p_completion_path,
+        sealed=sealed,
+        prebuilt_manifest_sha256=prebuilt_manifest_sha256,
+    )
     g12_evidence = _validate_g12_evidence(
         seed_completion_path=g12_seed_completion_path,
         fault_soak_completion_path=g12_fault_soak_completion_path,
         sealed=sealed,
-    )
-
-    corridor_path, corridor_completion = _load_tsv(
-        corridor_completion_path, "corridor completion"
-    )
-    corridor_summary, corridor_required, corridor_logs = _corridor_artifacts(
-        corridor_path, corridor_completion, sealed, repo_root
+        prebuilt_manifest_sha256=prebuilt_manifest_sha256,
     )
 
     formal_path, formal_completion = _load_tsv(
@@ -5332,6 +6790,7 @@ def build_receipt(
             "head_tree",
             "source_manifest_sha256",
             "cargo_lock_sha256",
+            "prebuilt_manifest_sha256",
             "completed_runs",
             "expected_runs",
             "summary_sha256",
@@ -5346,17 +6805,31 @@ def build_receipt(
         or seed["head_tree"] != sealed["head_tree"]
         or seed["source_manifest_sha256"] != manifest
         or seed["cargo_lock_sha256"] != sealed["cargo_lock_sha256"]
+        or seed["prebuilt_manifest_sha256"] != prebuilt_manifest_sha256
         or seed["completed_runs"] != str(_SEED_RUN_COUNT)
         or seed["expected_runs"] != str(_SEED_RUN_COUNT)
     ):
         raise ReceiptError("seed completion does not describe the exact release matrix")
-    seed_summary = _regular_file(seed_path.with_name("summary.tsv"), "seed summary")
-    if _sha256(seed_summary) != seed["summary_sha256"]:
+    seed_summary = _bounded_evidence_snapshot(
+        seed_path.path.with_name("summary.tsv"),
+        "seed summary",
+        maximum_bytes=_MAX_RELEASE_TSV_BYTES,
+    )
+    if seed_summary.sha256 != seed["summary_sha256"]:
         raise ReceiptError("seed completion summary digest mismatch")
-    seed_run_logs = _seed_run_logs(seed_path, seed_summary, manifest)
+    seed_run_logs = _seed_run_logs(
+        seed_path,
+        seed_summary,
+        manifest,
+        repo_root,
+        Path(prebuilt_binary_bundle["bundle_dir"]),
+        prebuilt_manifest_sha256,
+    )
     seed_localnet_manifest_index, seed_localnet_manifests = (
         _seed_localnet_manifests(seed_path, seed)
     )
+    seed_summary_contract = _snapshot_contract(seed_summary)
+    del seed_summary
 
     chaos_path, chaos = _load_tsv(chaos_completion_path, "chaos completion")
     _require_fields(
@@ -5382,13 +6855,14 @@ def build_receipt(
         raise ReceiptError(
             "chaos completion does not match the exact release identity and reducer schedule"
         )
-    chaos_log = _regular_file(chaos_path.with_name("chaos-100k.log"), "chaos log")
-    if _sha256(chaos_log) != chaos["log_sha256"]:
+    chaos_log = _bounded_evidence_snapshot(
+        chaos_path.path.with_name("chaos-100k.log"),
+        "chaos log",
+        maximum_bytes=_MAX_RELEASE_TEXT_BYTES,
+    )
+    if chaos_log.sha256 != chaos["log_sha256"]:
         raise ReceiptError("chaos completion log digest mismatch")
-    try:
-        chaos_lines = chaos_log.read_text(encoding="utf-8").splitlines()
-    except UnicodeDecodeError as error:
-        raise ReceiptError("chaos log is not UTF-8") from error
+    chaos_lines = _decode_lf_text(chaos_log, "chaos log").splitlines()
     chaos_results = [line for line in chaos_lines if line.startswith("test result:")]
     chaos_test_prefix = (
         "test accelerated_100_000_block_chaos_preserves_chain_prefix ... "
@@ -5409,6 +6883,8 @@ def build_receipt(
         raise ReceiptError(
             "chaos log does not prove its one exact passing release test"
         )
+    chaos_log_contract = _snapshot_contract(chaos_log)
+    del chaos_log
 
     taira_path, taira = _load_tsv(taira_completion_path, "Taira completion")
     _require_fields(
@@ -5419,6 +6895,7 @@ def build_receipt(
             "head_tree",
             "source_manifest_sha256",
             "cargo_lock_sha256",
+            "prebuilt_manifest_sha256",
             "evidence_sha256",
             "log_sha256",
         },
@@ -5430,22 +6907,24 @@ def build_receipt(
         or taira["head_tree"] != sealed["head_tree"]
         or taira["source_manifest_sha256"] != manifest
         or taira["cargo_lock_sha256"] != sealed["cargo_lock_sha256"]
+        or taira["prebuilt_manifest_sha256"] != prebuilt_manifest_sha256
     ):
         raise ReceiptError("Taira completion is not bound to the exact release identity")
-    taira_evidence = _regular_file(
-        taira_path.with_name("taira_v2_24h_soak.json"), "Taira evidence"
+    taira_evidence = _bounded_evidence_snapshot(
+        taira_path.path.with_name("taira_v2_24h_soak.json"),
+        "Taira evidence",
+        maximum_bytes=_MAX_RELEASE_JSON_BYTES,
     )
-    if _sha256(taira_evidence) != taira["evidence_sha256"]:
+    if taira_evidence.sha256 != taira["evidence_sha256"]:
         raise ReceiptError("Taira completion evidence digest mismatch")
-    taira_log = _regular_file(
-        taira_path.with_name("taira-v2-24h.log"), "Taira run log"
+    taira_log = _bounded_evidence_snapshot(
+        taira_path.path.with_name("taira-v2-24h.log"),
+        "Taira run log",
+        maximum_bytes=_MAX_RELEASE_TEXT_BYTES,
     )
-    if _sha256(taira_log) != taira["log_sha256"]:
+    if taira_log.sha256 != taira["log_sha256"]:
         raise ReceiptError("Taira completion log digest mismatch")
-    try:
-        taira_lines = taira_log.read_text(encoding="utf-8").splitlines()
-    except UnicodeDecodeError as error:
-        raise ReceiptError("Taira run log is not UTF-8") from error
+    taira_lines = _decode_lf_text(taira_log, "Taira run log").splitlines()
     taira_results = [line for line in taira_lines if line.startswith("test result:")]
     if (
         taira_lines.count("running 1 test") != 1
@@ -5464,29 +6943,41 @@ def build_receipt(
     ):
         raise ReceiptError("Taira log does not prove its one exact passing soak")
     taira_checker = repo_root / "scripts" / "check_taira_v2_soak_evidence.py"
-    taira_result = subprocess.run(
-        [
-            sys.executable,
-            str(taira_checker),
-            str(taira_evidence),
-            "--source-manifest",
-            manifest,
-            "--build-root",
-            str(repo_root / "target" / "sumeragi-v2-release" / manifest),
-            "--repo-root",
-            str(repo_root),
-        ],
-        cwd=repo_root,
-        check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        env=checker_environment,
-    )
-    if taira_result.returncode != 0:
-        raise ReceiptError("archived Taira evidence failed release validation")
+    with tempfile.TemporaryDirectory(
+        prefix="sumeragi-v2-taira-snapshot-replay-"
+    ) as temporary:
+        replay_evidence = (
+            Path(temporary).resolve(strict=True) / taira_evidence.path.name
+        )
+        try:
+            replay_evidence.write_bytes(taira_evidence.data)
+            replay_evidence.chmod(0o400)
+        except OSError as error:
+            raise ReceiptError(
+                "Taira snapshot replay could not materialize captured evidence"
+            ) from error
+        taira_status, _, _ = _run_bounded_python_validator(
+            taira_checker,
+            [
+                str(replay_evidence),
+                "--source-manifest",
+                manifest,
+                "--build-root",
+                str(repo_root / "target" / "sumeragi-v2-release" / manifest),
+                "--repo-root",
+                str(repo_root),
+            ],
+            cwd=repo_root,
+            environment=checker_environment,
+            name="archived Taira evidence validator",
+        )
+        if taira_status != 0:
+            raise ReceiptError("archived Taira evidence failed release validation")
+    taira_evidence_contract = _snapshot_contract(taira_evidence)
+    taira_log_contract = _snapshot_contract(taira_log)
+    del taira_evidence, taira_log
 
-    return {
+    receipt = {
         "schema_version": 1,
         "protocol": "sumeragi-v2",
         "result": "release-complete",
@@ -5522,7 +7013,11 @@ def build_receipt(
             "corridor_completion": _artifact(corridor_path),
             "corridor_summary": _artifact(corridor_summary),
             "corridor_production_inventory": _artifact(corridor_required),
+            "g_unit_focused_test_inventory": _artifact(
+                corridor_g_unit_inventory
+            ),
             "corridor_logs": [_artifact(path) for path in corridor_logs],
+            "prebuilt_binary_bundle": prebuilt_binary_bundle,
             "formal_completion": _artifact(formal_path),
             "formal_gate_log": _artifact(formal_log),
             "formal_proof_coverage": _artifact(formal_ledger),
@@ -5538,7 +7033,7 @@ def build_receipt(
             "formal_tlaps_resource_jsonl": _artifact(formal_tlaps_resource_jsonl),
             "formal_tlaps_resource_summary": _artifact(formal_tlaps_resource_summary),
             "seed_matrix_completion": _artifact(seed_path),
-            "seed_matrix_summary": _artifact(seed_summary),
+            "seed_matrix_summary": _artifact(seed_summary_contract),
             "seed_matrix_run_logs": [_artifact(path) for path in seed_run_logs],
             "seed_matrix_localnet_manifest_index": _artifact(
                 seed_localnet_manifest_index
@@ -5547,16 +7042,22 @@ def build_receipt(
                 _artifact(path) for path in seed_localnet_manifests
             ],
             "chaos_completion": _artifact(chaos_path),
-            "chaos_log": _artifact(chaos_log),
+            "chaos_log": _artifact(chaos_log_contract),
             "taira_completion": _artifact(taira_path),
-            "taira_evidence": _artifact(taira_evidence),
-            "taira_run_log": _artifact(taira_log),
+            "taira_evidence": _artifact(taira_evidence_contract),
+            "taira_run_log": _artifact(taira_log_contract),
             "multilane_scaling_bundle": scaling_bundle,
             "multilane_scaling_retained_validator": retained_scaling_validator,
             "multilane_scaling_trust_anchors": scaling_trust_anchors,
+            "g4p_multilane": g4p_evidence,
             "g12_cross_dataspace": g12_evidence,
         },
     }
+    return (
+        receipt,
+        _snapshot_contract(candidate_snapshot),
+        _snapshot_contract(sealed_snapshot),
+    )
 
 
 def _iter_artifact_records(value: Any) -> Any:
@@ -5669,28 +7170,28 @@ def _capture_path_contract(
 def _snapshot_receipt_inputs(
     receipt: dict[str, Any],
     *,
-    candidate_identity_path: Path,
-    sealed_identity_path: Path,
+    candidate_identity: PathContract,
+    sealed_identity: PathContract,
 ) -> list[PathContract | DirectoryContract]:
     records = list(_iter_artifact_records(receipt["authentication"])) + list(
         _iter_artifact_records(receipt["evidence"])
     )
-    records.extend(
-        (
-            {
-                "path": str(_regular_file(candidate_identity_path, "candidate identity")),
-                "sha256": _sha256(candidate_identity_path),
-                "owner_uid": os.geteuid(),
-                "nlink": 1,
-            },
-            {
-                "path": str(_regular_file(sealed_identity_path, "sealed identity")),
-                "sha256": _sha256(sealed_identity_path),
-                "owner_uid": os.geteuid(),
-                "nlink": 1,
-            },
+    for name, expected in (
+        ("candidate identity", candidate_identity),
+        ("sealed identity", sealed_identity),
+    ):
+        contract = _capture_path_contract(
+            expected.path,
+            name,
+            expected_sha256=expected.sha256,
+            expected_mode=expected.mode,
+            expected_owner=expected.owner,
+            expected_nlink=expected.nlink,
+            expected_size=expected.size,
         )
-    )
+        if contract != expected:
+            raise ReceiptError(f"{name} changed after semantic validation")
+        records.append(_path_contract_artifact(contract))
     by_path: dict[Path, dict[str, Any]] = {}
     for record in records:
         path = Path(record["path"])
@@ -5764,6 +7265,86 @@ def _snapshot_receipt_inputs(
             "scaling evidence bundle inventory changed before receipt publication"
         )
 
+    prebuilt_bundle = receipt["evidence"].get("prebuilt_binary_bundle")
+    if (
+        not isinstance(prebuilt_bundle, dict)
+        or prebuilt_bundle.get("schema_version") != 2
+        or not isinstance(prebuilt_bundle.get("bundle_dir"), str)
+        or not isinstance(prebuilt_bundle.get("manifest"), dict)
+        or not isinstance(prebuilt_bundle.get("binaries"), list)
+    ):
+        raise ReceiptError("aggregate receipt lacks its prebuilt binary bundle")
+    prebuilt_root = Path(prebuilt_bundle["bundle_dir"])
+    prebuilt_manifest = prebuilt_bundle["manifest"]
+    prebuilt_binaries = prebuilt_bundle["binaries"]
+    if prebuilt_manifest.get("path") != str(prebuilt_root / _PREBUILT_MANIFEST_NAME):
+        raise ReceiptError("aggregate receipt prebuilt manifest path is malformed")
+    expected_binary_paths = [
+        (prefix, relative, prebuilt_root.joinpath(*PurePosixPath(relative).parts))
+        for prefix, relative in _PREBUILT_BINARY_SPECS
+    ]
+    if len(prebuilt_binaries) != len(expected_binary_paths):
+        raise ReceiptError("aggregate receipt prebuilt binary inventory is incomplete")
+    for index, (record, (prefix, relative, path)) in enumerate(
+        zip(prebuilt_binaries, expected_binary_paths)
+    ):
+        if (
+            not isinstance(record, dict)
+            or record.get("role") != prefix
+            or record.get("relative_path") != relative
+            or record.get("path") != str(path)
+        ):
+            raise ReceiptError(
+                f"aggregate receipt prebuilt binary {index} path is malformed"
+            )
+    prebuilt_directories = {
+        prebuilt_root,
+        prebuilt_root / "release",
+        prebuilt_root / "message-control",
+        prebuilt_root / "message-control" / "release",
+    }
+    for path, name in (
+        (prebuilt_root, "aggregate prebuilt invocation bundle"),
+        (prebuilt_root / "release", "aggregate prebuilt release directory"),
+        (
+            prebuilt_root / "message-control",
+            "aggregate prebuilt message-control directory",
+        ),
+        (
+            prebuilt_root / "message-control" / "release",
+            "aggregate prebuilt message-control release directory",
+        ),
+    ):
+        _prebuilt_directory(path, name)
+    _prebuilt_directory_inventory(
+        prebuilt_root,
+        {_PREBUILT_MANIFEST_NAME, "release", "message-control"},
+        "aggregate prebuilt invocation bundle",
+    )
+    _prebuilt_directory_inventory(
+        prebuilt_root / "release",
+        {"iroha3d", "iroha", "kagami"},
+        "aggregate prebuilt release directory",
+    )
+    _prebuilt_directory_inventory(
+        prebuilt_root / "message-control",
+        {"release"},
+        "aggregate prebuilt message-control directory",
+    )
+    _prebuilt_directory_inventory(
+        prebuilt_root / "message-control" / "release",
+        {"iroha3d"},
+        "aggregate prebuilt message-control release directory",
+    )
+
+    g4p = receipt["evidence"].get("g4p_multilane")
+    if not isinstance(g4p, dict) or g4p.get("schema_version") != 1:
+        raise ReceiptError("aggregate receipt lacks its G-4P evidence")
+    try:
+        g4p_root = Path(g4p["completion"]["path"]).parent
+    except (KeyError, TypeError) as error:
+        raise ReceiptError("aggregate receipt G-4P evidence is malformed") from error
+
     g12 = receipt["evidence"].get("g12_cross_dataspace")
     if not isinstance(g12, dict):
         raise ReceiptError("aggregate receipt lacks its G-12P evidence")
@@ -5772,6 +7353,96 @@ def _snapshot_receipt_inputs(
         g12_soak_root = Path(g12["fault_soak_completion"]["path"]).parent
     except (KeyError, TypeError) as error:
         raise ReceiptError("aggregate receipt G-12P evidence is malformed") from error
+
+    evidence = receipt["evidence"]
+    durability_families = (
+        (
+            "corridor",
+            "corridor_completion",
+            (
+                "corridor_completion",
+                "corridor_summary",
+                "corridor_production_inventory",
+                "g_unit_focused_test_inventory",
+                "corridor_logs",
+            ),
+        ),
+        (
+            "formal",
+            "formal_completion",
+            (
+                "formal_completion",
+                "formal_gate_log",
+                "formal_proof_coverage",
+                "formal_proof_evidence",
+                "formal_verus_evidence",
+                "formal_verus_log",
+                "formal_multilane_apalache_evidence",
+                "formal_cross_tool_evidence",
+                "formal_harness_lock",
+                "formal_toolchain",
+                "formal_tlaps_resource_jsonl",
+                "formal_tlaps_resource_summary",
+            ),
+        ),
+        (
+            "seed",
+            "seed_matrix_completion",
+            (
+                "seed_matrix_completion",
+                "seed_matrix_summary",
+                "seed_matrix_run_logs",
+                "seed_matrix_localnet_manifest_index",
+                "seed_matrix_localnet_manifests",
+            ),
+        ),
+        (
+            "chaos",
+            "chaos_completion",
+            ("chaos_completion", "chaos_log"),
+        ),
+        (
+            "Taira",
+            "taira_completion",
+            ("taira_completion", "taira_evidence", "taira_run_log"),
+        ),
+    )
+    family_roots: set[Path] = set()
+    family_directories: set[Path] = set()
+    for family, completion_key, member_keys in durability_families:
+        completion_record = evidence.get(completion_key)
+        if (
+            not isinstance(completion_record, dict)
+            or not isinstance(completion_record.get("path"), str)
+        ):
+            raise ReceiptError(
+                f"aggregate receipt {family} completion path is malformed"
+            )
+        root = Path(completion_record["path"]).parent
+        family_roots.add(root)
+        family_directories.add(root)
+        for member_key in member_keys:
+            member = evidence.get(member_key)
+            if member is None:
+                raise ReceiptError(
+                    f"aggregate receipt {family} durability inventory is incomplete"
+                )
+            records = list(_iter_artifact_records(member))
+            if not records:
+                raise ReceiptError(
+                    f"aggregate receipt {family} durability inventory is malformed"
+                )
+            for record in records:
+                parent = Path(record["path"]).parent
+                if parent != root and root not in parent.parents:
+                    raise ReceiptError(
+                        f"aggregate receipt {family} artifact escaped its evidence root"
+                    )
+                while True:
+                    family_directories.add(parent)
+                    if parent == root:
+                        break
+                    parent = parent.parent
 
     snapshots: list[PathContract | DirectoryContract] = []
     inodes: dict[tuple[int, int], Path] = {}
@@ -5806,12 +7477,16 @@ def _snapshot_receipt_inputs(
     directory_paths = {
         evidence_root,
         scaling_root,
+        g4p_root,
         g12_seed_root,
         g12_soak_root,
         Path(receipt["authentication"]["bootstrap"]["candidate_root"]),
         Path(receipt["authentication"]["bootstrap"]["runner"]["tool_directory"]),
         Path(receipt["authentication"]["release_identity"]["release_root"]),
     }
+    directory_paths.update(family_roots)
+    directory_paths.update(family_directories)
+    directory_paths.update(prebuilt_directories)
     directory_paths.update(
         scaling_root.joinpath(*PurePosixPath(relative).parts)
         for relative in scaling_directories_raw
@@ -6170,7 +7845,10 @@ def _publish_terminal_receipt(
             raise ReceiptError("terminal receipt publication failed closed") from error
         raise
     finally:
-        os.close(directory_fd)
+        try:
+            os.close(directory_fd)
+        except OSError:
+            pass
 
 
 def main() -> int:
@@ -6206,6 +7884,7 @@ def main() -> int:
     parser.add_argument("--seed-completion", type=Path, required=True)
     parser.add_argument("--chaos-completion", type=Path, required=True)
     parser.add_argument("--taira-completion", type=Path, required=True)
+    parser.add_argument("--g4p-completion", type=Path, required=True)
     parser.add_argument("--g12-seed-completion", type=Path, required=True)
     parser.add_argument("--g12-fault-soak-completion", type=Path, required=True)
     parser.add_argument("--scaling-evidence-manifest", type=Path, required=True)
@@ -6226,7 +7905,7 @@ def main() -> int:
     )
     args = parser.parse_args()
     try:
-        receipt = build_receipt(
+        receipt, candidate_identity, sealed_identity = build_receipt(
             candidate_identity_path=args.candidate_identity,
             sealed_identity_path=args.sealed_identity,
             release_root_path=args.release_root,
@@ -6258,6 +7937,7 @@ def main() -> int:
             seed_completion_path=args.seed_completion,
             chaos_completion_path=args.chaos_completion,
             taira_completion_path=args.taira_completion,
+            g4p_completion_path=args.g4p_completion,
             g12_seed_completion_path=args.g12_seed_completion,
             g12_fault_soak_completion_path=args.g12_fault_soak_completion,
             scaling_evidence_manifest_path=args.scaling_evidence_manifest,
@@ -6278,8 +7958,8 @@ def main() -> int:
         )
         snapshots = _snapshot_receipt_inputs(
             receipt,
-            candidate_identity_path=args.candidate_identity,
-            sealed_identity_path=args.sealed_identity,
+            candidate_identity=candidate_identity,
+            sealed_identity=sealed_identity,
         )
         expected_output = (
             args.bootstrap_evidence_dir
@@ -6308,21 +7988,12 @@ def main() -> int:
                     snapshots, ignored_directories=mutable_directory
                 ),
             )
-            final_snapshots = _snapshot_receipt_inputs(
-                receipt,
-                candidate_identity_path=args.candidate_identity,
-                sealed_identity_path=args.sealed_identity,
-            )
-            final_snapshots.append(
-                _existing_receipt_contract(args.output, receipt_bytes)
-            )
-            _fsync_receipt_inputs(final_snapshots)
     except (OSError, ReceiptError) as error:
         print(f"Sumeragi v2 release receipt error: {error}", file=sys.stderr)
         return 1
     action = "verified" if args.verify_existing else "published"
     print(
-        f"Sumeragi v2 aggregate release receipt {action}: {args.output.resolve()}"
+        f"Sumeragi v2 aggregate release receipt {action}: {args.output}"
     )
     return 0
 

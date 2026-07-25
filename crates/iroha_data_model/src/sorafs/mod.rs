@@ -40,6 +40,9 @@ pub mod pop_registry;
 /// Finalized chain-authoritative PDP and PoTR outcome projections.
 pub mod proof_ledger;
 
+/// Chain-authoritative PoR, provider-dispute, and stream-token reputation journal.
+pub mod reputation;
+
 /// Storage deal contracts, micropayment tickets, and settlement ledgers.
 pub mod deal;
 
@@ -135,23 +138,25 @@ pub mod prelude {
             ModerationOutcomeRecordV1, ModerationPanelSelectionV1,
             ModerationPoPRegistrySnapshotError, ModerationPoPRegistrySnapshotV1,
             ModerationRevealRecordV1, ModerationSortitionError, ModerationVoteCountsV1,
-            REPAIR_LEDGER_APPEAL_ID_DOMAIN_V1, REPAIR_LEDGER_IDEMPOTENCY_DOMAIN_V1,
-            REPAIR_LEDGER_MAX_APPEAL_REASON_BYTES_V1, REPAIR_LEDGER_MAX_IDEMPOTENCY_KEY_BYTES_V1,
-            REPAIR_LEDGER_MAX_LEASE_MS_V1, REPAIR_LEDGER_MAX_RECEIPTS_V1,
-            REPAIR_LEDGER_MIN_LEASE_MS_V1, REPAIR_LEDGER_TASK_ID_DOMAIN_V1,
-            REPAIR_LEDGER_TASK_VERSION_V1, REPAIR_QUERY_MAX_EVENT_PAGE_BYTES_V1,
-            REPAIR_QUERY_MAX_ITEMS_V1, REPAIR_QUERY_MAX_TASK_PAGE_BYTES_V1,
-            RepairFinalizedCursorV1, RepairFinalizedEventCursorV1, RepairFinalizedEventPageV1,
-            RepairFinalizedEventV1, RepairFinalizedStatusV1, RepairFinalizedTaskV1,
-            RepairLedgerActionReceiptV1, RepairLedgerAppealRecordV1, RepairLedgerCompletedV1,
-            RepairLedgerEscalatedV1, RepairLedgerFailedV1, RepairLedgerLeaseV1,
-            RepairLedgerSlashRecordV1, RepairLedgerStatusV1, RepairLedgerTaskPageV1,
-            RepairLedgerTaskV1, RepairLedgerTerminalKindV1, RepairLedgerTerminalOutcomeV1,
+            REPAIR_LEDGER_ACTION_DIGEST_DOMAIN_V1, REPAIR_LEDGER_APPEAL_ID_DOMAIN_V1,
+            REPAIR_LEDGER_IDEMPOTENCY_DOMAIN_V1, REPAIR_LEDGER_MAX_APPEAL_REASON_BYTES_V1,
+            REPAIR_LEDGER_MAX_CANONICAL_PAYLOAD_BYTES_V1,
+            REPAIR_LEDGER_MAX_IDEMPOTENCY_KEY_BYTES_V1, REPAIR_LEDGER_MAX_LEASE_MS_V1,
+            REPAIR_LEDGER_MAX_RECEIPTS_V1, REPAIR_LEDGER_MIN_LEASE_MS_V1,
+            REPAIR_LEDGER_TASK_ID_DOMAIN_V1, REPAIR_LEDGER_TASK_VERSION_V1,
+            REPAIR_QUERY_MAX_EVENT_PAGE_BYTES_V1, REPAIR_QUERY_MAX_ITEMS_V1,
+            REPAIR_QUERY_MAX_TASK_PAGE_BYTES_V1, RepairFinalizedCursorV1,
+            RepairFinalizedEventCursorV1, RepairFinalizedEventPageV1, RepairFinalizedEventV1,
+            RepairFinalizedStatusV1, RepairFinalizedTaskV1, RepairLedgerActionReceiptV1,
+            RepairLedgerAppealRecordV1, RepairLedgerCompletedV1, RepairLedgerEscalatedV1,
+            RepairLedgerFailedV1, RepairLedgerLeaseV1, RepairLedgerSlashRecordV1,
+            RepairLedgerStatusV1, RepairLedgerTaskPageV1, RepairLedgerTaskV1,
+            RepairLedgerTerminalKindV1, RepairLedgerTerminalOutcomeV1,
             sorafs_moderation_panel_roster_hash_v1, sorafs_moderation_pop_challenge_v1,
             sorafs_moderation_pop_verifier_context_v1, sorafs_moderation_select_panel_v1,
             sorafs_moderation_sortition_digest_v1, sorafs_moderation_sortition_seed_v1,
-            sorafs_repair_appeal_id_v1, sorafs_repair_idempotency_digest_v1,
-            sorafs_repair_task_id_v1,
+            sorafs_repair_action_digest_v1, sorafs_repair_appeal_id_v1,
+            sorafs_repair_idempotency_digest_v1, sorafs_repair_task_id_v1,
         },
         orderbook::{
             ORDERBOOK_ADMISSION_POLICY_DIGEST_DOMAIN_V1, ORDERBOOK_ADMISSION_POLICY_VERSION_V1,
@@ -169,7 +174,8 @@ pub mod prelude {
         pin_registry::{
             ChunkerProfileHandle, ManifestAliasBinding, ManifestAliasId, ManifestAliasRecord,
             ManifestDigest, ManifestRootCid, ManifestRootCidError, ManifestRootCidErrorKind,
-            PinManifestRecord, PinPolicy, PinStatus, ReplicationOrderId, ReplicationOrderRecord,
+            PinManifestFinalizedCursorV1, PinManifestFinalizedRecordV1, PinManifestRecord,
+            PinPolicy, PinStatus, ReplicationOrderId, ReplicationOrderRecord,
             ReplicationOrderStatus, StorageClass,
         },
         pop_registry::{
@@ -206,6 +212,27 @@ pub mod prelude {
             ProofOutcomeProjectionV1, ProofOutcomeRecordV1, ProofOutcomeSignerPolicyRecordV1,
             ProofOutcomeSignerPolicyV1,
         },
+        reputation::{
+            PorTerminalExcludedKindV1, PorTerminalFailureKindV1, PorTerminalOutcomeV1,
+            PorTerminalStatusV1, ProviderDisputeEventV1, ProviderDisputeKindV1,
+            ProviderDisputeResolutionV1, ProviderDisputeStatusV1,
+            REPUTATION_JOURNAL_AUTHORITY_POLICY_DIGEST_DOMAIN_V1,
+            REPUTATION_JOURNAL_AUTHORITY_POLICY_VERSION_V1,
+            REPUTATION_JOURNAL_DISPUTE_SOURCE_ID_DOMAIN_V1, REPUTATION_JOURNAL_ENTRY_VERSION_V1,
+            REPUTATION_JOURNAL_EVENT_ID_DOMAIN_V1, REPUTATION_JOURNAL_MAX_ENTRY_BYTES_V1,
+            REPUTATION_JOURNAL_MAX_TEXT_BYTES_V1, REPUTATION_JOURNAL_POR_SOURCE_ID_DOMAIN_V1,
+            REPUTATION_JOURNAL_QUERY_MAX_EVENT_PAGE_BYTES_V1,
+            REPUTATION_JOURNAL_QUERY_MAX_ITEMS_V1, REPUTATION_JOURNAL_TOKEN_SOURCE_ID_DOMAIN_V1,
+            ReputationJournalAuthorityPolicyRecordV1, ReputationJournalAuthorityPolicyV1,
+            ReputationJournalCommittedEventRecordV1, ReputationJournalEntryV1,
+            ReputationJournalEventIdV1, ReputationJournalFinalizedCursorV1,
+            ReputationJournalFinalizedEventCursorV1, ReputationJournalFinalizedEventPageV1,
+            ReputationJournalFinalizedEventV1, ReputationJournalPayloadV1,
+            ReputationJournalSourceHeadV1, ReputationJournalSourceIdV1,
+            ReputationJournalSourceKindV1, ReputationJournalValidationError,
+            StreamTokenExcludedKindV1, StreamTokenValidationOutcomeV1,
+            StreamTokenValidationStatusV1, StreamTokenViolationKindV1,
+        },
         reserve::{
             ClassRentRate, ReserveDuration, ReserveLedgerProjection, ReserveLifecycleProjection,
             ReserveLifecycleStage, ReservePolicyError, ReservePolicyV1, ReserveQuote, ReserveTier,
@@ -215,13 +242,15 @@ pub mod prelude {
             MODERATION_LEDGER_BLOCK_VERSION_V1, MODERATION_LEDGER_ENTRY_VERSION_V1,
             MODERATION_LEDGER_PROOF_VERSION_V1, MODERATION_LEDGER_PUBLICATION_VERSION_V1,
             MODERATION_PRIVACY_AGGREGATE_VERSION_V1, MODERATION_PRIVACY_DELTA_PPB_MAX,
-            MODERATION_PRIVACY_PARAMETERS_VERSION_V1, ModerationLedgerBlockV1,
+            MODERATION_PRIVACY_PARAMETERS_VERSION_V1,
+            MODERATION_PRIVACY_RANDOMNESS_COMMITMENT_METADATA_KEY_V1, ModerationLedgerBlockV1,
             ModerationLedgerCyclePublicationV1, ModerationLedgerEntryKindV1,
             ModerationLedgerEntryV1, ModerationLedgerMetadataV1, ModerationLedgerProofNodeV1,
             ModerationLedgerProofSideV1, ModerationLedgerProofV1,
             ModerationPrivacyAggregateMetricV1, ModerationPrivacyAggregateV1,
-            ModerationPrivacyModeV1, ModerationPrivacyParametersV1,
-            PROOF_TOKEN_ISSUANCE_VERSION_V1, ProofTokenIssuanceV1, TransparencyLedgerError,
+            ModerationPrivacyModeV1, ModerationPrivacyNoiseSourceV1, ModerationPrivacyParametersV1,
+            ModerationPrivacyThresholdPrfCommitmentV1, PROOF_TOKEN_ISSUANCE_VERSION_V1,
+            ProofTokenIssuanceV1, TransparencyLedgerError,
         },
     };
 }

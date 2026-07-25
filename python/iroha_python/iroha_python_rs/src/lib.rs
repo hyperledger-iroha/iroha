@@ -129,7 +129,7 @@ use pyo3::{
 use rand_core_06::OsRng as OsRng06;
 use sorafs_car::{
     CarBuildPlan, CarChunk, FilePlan,
-    fetch_plan::chunk_fetch_specs_from_json,
+    fetch_plan::chunk_fetch_plan_from_json,
     gateway::{GatewayFetchConfig, GatewayProviderInput},
     multi_fetch::{
         AttemptError, AttemptFailure, CapabilityMismatch, ChunkResponse, ChunkVerificationError,
@@ -155,6 +155,7 @@ use sorafs_manifest::{
     },
     reference_ffi::{
         SORAFS_REFERENCE_FFI_MAX_INPUT_BYTES_V1, SORAFS_REFERENCE_FFI_MAX_LABEL_BYTES_V1,
+        SORAFS_REFERENCE_GOVERNANCE_DAG_CID_BYTES_V1,
         SORAFS_REFERENCE_GOVERNANCE_DAG_MAX_BLOCKS_V1,
     },
     sign_orderbook_payload_bytes_ed25519_v1, validate_governance_dag_block_bytes,
@@ -3492,8 +3493,10 @@ fn sorafs_multi_fetch_local_py(
 
     let plan_value: json::Value = json::from_str(plan_json)
         .map_err(|err| PyValueError::new_err(format!("failed to parse plan JSON: {err}")))?;
-    let chunk_specs = chunk_fetch_specs_from_json(&plan_value)
+    let parsed_plan = chunk_fetch_plan_from_json(&plan_value)
         .map_err(|err| PyValueError::new_err(format!("invalid chunk fetch plan: {err}")))?;
+    let plan_payload_digest = parsed_plan.payload_digest;
+    let chunk_specs = parsed_plan.chunk_fetch_specs;
     if chunk_specs.is_empty() {
         return Err(PyValueError::new_err(
             "chunk fetch plan must contain at least one chunk",
@@ -3516,7 +3519,7 @@ fn sorafs_multi_fetch_local_py(
 
     let plan = CarBuildPlan {
         chunk_profile,
-        payload_digest: blake3_hash(&[]),
+        payload_digest: blake3::Hash::from_bytes(plan_payload_digest),
         content_length,
         chunks: chunk_specs
             .iter()
@@ -3870,6 +3873,11 @@ fn sorafs_multi_fetch_local_py(
     .map_err(|err| sorafs_multi_fetch_error(py, err))?;
 
     let payload_bytes = outcome.assemble_payload();
+    if blake3_hash(&payload_bytes) != plan.payload_digest {
+        return Err(PyValueError::new_err(
+            "assembled payload digest does not match canonical chunk fetch plan",
+        ));
+    }
     let result = PyDict::new(py);
     result.set_item("chunk_count", outcome.chunks.len())?;
     result.set_item("payload", PyBytes::new(py, &payload_bytes))?;
@@ -3959,8 +3967,10 @@ fn sorafs_gateway_fetch_py(
 
     let plan_value: json::Value = json::from_str(plan_json)
         .map_err(|err| PyValueError::new_err(format!("failed to parse plan JSON: {err}")))?;
-    let mut chunk_specs = chunk_fetch_specs_from_json(&plan_value)
+    let parsed_plan = chunk_fetch_plan_from_json(&plan_value)
         .map_err(|err| PyValueError::new_err(format!("invalid chunk fetch plan: {err}")))?;
+    let plan_payload_digest = parsed_plan.payload_digest;
+    let mut chunk_specs = parsed_plan.chunk_fetch_specs;
     if chunk_specs.is_empty() {
         return Err(PyValueError::new_err(
             "chunk fetch plan must contain at least one chunk",
@@ -3992,7 +4002,7 @@ fn sorafs_gateway_fetch_py(
 
     let plan = CarBuildPlan {
         chunk_profile: descriptor.profile,
-        payload_digest: blake3_hash(&[]),
+        payload_digest: blake3::Hash::from_bytes(plan_payload_digest),
         content_length,
         chunks: chunk_specs
             .iter()
@@ -4289,6 +4299,11 @@ fn sorafs_gateway_fetch_py(
     let policy_report = &session.policy_report;
 
     let payload_bytes = outcome.assemble_payload();
+    if blake3_hash(&payload_bytes) != plan.payload_digest {
+        return Err(PyValueError::new_err(
+            "assembled payload digest does not match canonical chunk fetch plan",
+        ));
+    }
     let result = PyDict::new(py);
     result.set_item("manifest_id_hex", manifest_id)?;
     result.set_item("chunker_handle", chunker_handle_trimmed)?;
@@ -4596,23 +4611,29 @@ fn validate_sorafs_reference_aggregate_bytes_py(
     Ok(())
 }
 
+fn validate_sorafs_reference_governance_cid_py<'a>(
+    cid: Option<&'a [u8]>,
+    context: &str,
+) -> PyResult<Option<&'a [u8]>> {
+    let Some(cid) = cid else {
+        return Ok(None);
+    };
+    let exact_bytes = SORAFS_REFERENCE_GOVERNANCE_DAG_CID_BYTES_V1 as usize;
+    if cid.len() != exact_bytes {
+        return Err(PyValueError::new_err(format!(
+            "{context} must contain exactly {exact_bytes} bytes"
+        )));
+    }
+    Ok(Some(cid))
+}
+
 fn parse_sorafs_orderbook_payload_kind(kind: &str) -> PyResult<OrderbookValidationPayloadKindV1> {
-    let normalized = kind.trim().to_ascii_lowercase().replace('_', "-");
-    match normalized.as_str() {
-        "order" | "order-request" | "request" | "orderbook-order-request" => {
-            Ok(OrderbookValidationPayloadKindV1::OrderRequest)
-        }
-        "cancel" | "order-cancel" | "orderbook-order-cancel" => {
-            Ok(OrderbookValidationPayloadKindV1::OrderCancel)
-        }
-        "trade" | "trade-event" | "orderbook-trade-event" => {
-            Ok(OrderbookValidationPayloadKindV1::TradeEvent)
-        }
-        "channel" | "settlement-channel" => Ok(OrderbookValidationPayloadKindV1::SettlementChannel),
-        "receipt" | "settlement-receipt" => Ok(OrderbookValidationPayloadKindV1::SettlementReceipt),
-        "snapshot" | "runtime-snapshot" | "orderbook-runtime-snapshot" => {
-            Ok(OrderbookValidationPayloadKindV1::RuntimeSnapshot)
-        }
+    match kind {
+        "order-request" => Ok(OrderbookValidationPayloadKindV1::OrderRequest),
+        "order-cancel" => Ok(OrderbookValidationPayloadKindV1::OrderCancel),
+        "trade-event" => Ok(OrderbookValidationPayloadKindV1::TradeEvent),
+        "settlement-channel" => Ok(OrderbookValidationPayloadKindV1::SettlementChannel),
+        "settlement-receipt" => Ok(OrderbookValidationPayloadKindV1::SettlementReceipt),
         _ => Err(PyValueError::new_err(format!(
             "unsupported SoraFS orderbook payload kind `{kind}`"
         ))),
@@ -4620,8 +4641,7 @@ fn parse_sorafs_orderbook_payload_kind(kind: &str) -> PyResult<OrderbookValidati
 }
 
 fn parse_sorafs_orderbook_side_py(side: &str) -> PyResult<OrderSideV1> {
-    let normalized = side.trim().to_ascii_lowercase();
-    match normalized.as_str() {
+    match side {
         "bid" => Ok(OrderSideV1::Bid),
         "ask" => Ok(OrderSideV1::Ask),
         _ => Err(PyValueError::new_err(format!(
@@ -4631,8 +4651,7 @@ fn parse_sorafs_orderbook_side_py(side: &str) -> PyResult<OrderSideV1> {
 }
 
 fn parse_sorafs_orderbook_tier_py(tier: &str) -> PyResult<OrderTierV1> {
-    let normalized = tier.trim().to_ascii_lowercase();
-    match normalized.as_str() {
+    match tier {
         "hot" => Ok(OrderTierV1::Hot),
         "warm" => Ok(OrderTierV1::Warm),
         "archive" => Ok(OrderTierV1::Archive),
@@ -4643,9 +4662,8 @@ fn parse_sorafs_orderbook_tier_py(tier: &str) -> PyResult<OrderTierV1> {
 }
 
 fn parse_sorafs_orderbook_cancel_reason_py(reason: &str) -> PyResult<OrderCancelReasonV1> {
-    let normalized = reason.trim().to_ascii_lowercase().replace('_', "-");
-    match normalized.as_str() {
-        "owner-requested" | "owner" | "requested" => Ok(OrderCancelReasonV1::OwnerRequested),
+    match reason {
+        "owner_requested" => Ok(OrderCancelReasonV1::OwnerRequested),
         "expired" => Ok(OrderCancelReasonV1::Expired),
         "governance" => Ok(OrderCancelReasonV1::Governance),
         "replaced" => Ok(OrderCancelReasonV1::Replaced),
@@ -4725,11 +4743,10 @@ enum SorafsPdpPayloadKind {
 }
 
 fn parse_sorafs_pdp_payload_kind(kind: &str) -> PyResult<SorafsPdpPayloadKind> {
-    let normalized = kind.trim().to_ascii_lowercase().replace('_', "-");
-    match normalized.as_str() {
-        "commitment" | "pdp-commitment" => Ok(SorafsPdpPayloadKind::Commitment),
-        "challenge" | "pdp-challenge" => Ok(SorafsPdpPayloadKind::Challenge),
-        "proof" | "pdp-proof" => Ok(SorafsPdpPayloadKind::Proof),
+    match kind {
+        "commitment" => Ok(SorafsPdpPayloadKind::Commitment),
+        "challenge" => Ok(SorafsPdpPayloadKind::Challenge),
+        "proof" => Ok(SorafsPdpPayloadKind::Proof),
         _ => Err(PyValueError::new_err(format!(
             "unsupported SoraFS PDP payload kind `{kind}`"
         ))),
@@ -4792,6 +4809,7 @@ fn sorafs_build_signed_orderbook_order_request_py(
     quantity_gib: &str,
     remaining_gib: Option<&str>,
     owner_account: &[u8],
+    provider_id: &[u8],
     expiry_unix: &str,
     nonce: &str,
     maker_fee_bps: u32,
@@ -4812,8 +4830,20 @@ fn sorafs_build_signed_orderbook_order_request_py(
             hex::encode(expected_order_id)
         )));
     }
+    let side = parse_sorafs_orderbook_side_py(side)?;
+    let provider_id = if provider_id.is_empty() {
+        None
+    } else {
+        let provider_id = sorafs_fixed32_from_bytes_py(provider_id, "provider_id")?;
+        if provider_id == [0; 32] {
+            return Err(PyValueError::new_err(
+                "provider_id must not be all zero",
+            ));
+        }
+        Some(provider_id)
+    };
     let fields = OrderbookOrderRequestFieldsV1 {
-        side: parse_sorafs_orderbook_side_py(side)?,
+        side,
         tier: parse_sorafs_orderbook_tier_py(tier)?,
         price_per_gib: parse_sorafs_xor_quantity_text_py(price_per_gib, "price_per_gib")?,
         quantity_gib,
@@ -4822,6 +4852,7 @@ fn sorafs_build_signed_orderbook_order_request_py(
             None => quantity_gib,
         },
         owner_account: owner_account.to_vec(),
+        provider_id,
         expiry_unix: parse_sorafs_decimal_u64_text_py(expiry_unix, "expiry_unix")?,
         nonce,
         maker_fee_bps: parse_sorafs_fee_bps_py(maker_fee_bps, "maker_fee_bps")?,
@@ -4996,6 +5027,8 @@ fn sorafs_validate_governance_dag_block_json_py(
     generated_at_unix: u64,
 ) -> PyResult<String> {
     validate_sorafs_reference_label_py(label, "label")?;
+    let expected_block_cid =
+        validate_sorafs_reference_governance_cid_py(expected_block_cid, "expected_block_cid")?;
     validate_sorafs_reference_aggregate_bytes_py(
         "governance DAG block validation",
         [
@@ -5004,7 +5037,6 @@ fn sorafs_validate_governance_dag_block_json_py(
             expected_block_cid.map_or(0, <[u8]>::len),
         ],
     )?;
-    let expected_block_cid = expected_block_cid.filter(|cid| !cid.is_empty());
     let outcome = validate_governance_dag_block_bytes(
         norito_bytes,
         label.to_owned(),
@@ -5061,37 +5093,46 @@ mod sorafs_reference_validation_py_tests {
     use super::*;
 
     #[test]
-    fn parse_sorafs_orderbook_payload_kind_accepts_sdk_aliases() {
+    fn parse_sorafs_orderbook_payload_kind_requires_exact_v1_name() {
         assert!(matches!(
-            parse_sorafs_orderbook_payload_kind("orderbook_order_request"),
+            parse_sorafs_orderbook_payload_kind("order-request"),
             Ok(OrderbookValidationPayloadKindV1::OrderRequest)
         ));
         assert!(matches!(
             parse_sorafs_orderbook_payload_kind("settlement-receipt"),
             Ok(OrderbookValidationPayloadKindV1::SettlementReceipt)
         ));
-        assert!(matches!(
-            parse_sorafs_orderbook_payload_kind("runtime_snapshot"),
-            Ok(OrderbookValidationPayloadKindV1::RuntimeSnapshot)
-        ));
-        assert!(parse_sorafs_orderbook_payload_kind("bad-kind").is_err());
+        for retired in [
+            "order",
+            "order_request",
+            " ORDER-REQUEST",
+            "request",
+            "runtime-snapshot",
+        ] {
+            assert!(parse_sorafs_orderbook_payload_kind(retired).is_err());
+        }
+        assert!(parse_sorafs_orderbook_side_py("Bid").is_err());
+        assert!(parse_sorafs_orderbook_tier_py(" hot").is_err());
+        assert!(parse_sorafs_orderbook_cancel_reason_py("owner-requested").is_err());
     }
 
     #[test]
-    fn parse_sorafs_pdp_payload_kind_accepts_sdk_aliases() {
+    fn parse_sorafs_pdp_payload_kind_requires_exact_v1_name() {
         assert_eq!(
-            parse_sorafs_pdp_payload_kind("pdp_commitment").expect("commitment alias"),
+            parse_sorafs_pdp_payload_kind("commitment").expect("commitment"),
             SorafsPdpPayloadKind::Commitment
         );
         assert_eq!(
-            parse_sorafs_pdp_payload_kind("challenge").expect("challenge alias"),
+            parse_sorafs_pdp_payload_kind("challenge").expect("challenge"),
             SorafsPdpPayloadKind::Challenge
         );
         assert_eq!(
-            parse_sorafs_pdp_payload_kind("pdp-proof").expect("proof alias"),
+            parse_sorafs_pdp_payload_kind("proof").expect("proof"),
             SorafsPdpPayloadKind::Proof
         );
-        assert!(parse_sorafs_pdp_payload_kind("bad-kind").is_err());
+        for retired in ["pdp-commitment", "pdp_challenge", " PROOF", "Proof"] {
+            assert!(parse_sorafs_pdp_payload_kind(retired).is_err());
+        }
     }
 
     #[test]
@@ -5110,6 +5151,19 @@ mod sorafs_reference_validation_py_tests {
             validate_sorafs_reference_aggregate_bytes_py("governance DAG", [maximum_input, 1])
                 .is_err()
         );
+
+        assert!(validate_sorafs_reference_governance_cid_py(None, "expected CID").is_ok());
+        let exact_cid = [0_u8; SORAFS_REFERENCE_GOVERNANCE_DAG_CID_BYTES_V1 as usize];
+        assert!(
+            validate_sorafs_reference_governance_cid_py(Some(&exact_cid), "expected CID").is_ok()
+        );
+        for invalid_length in [0, exact_cid.len() - 1, exact_cid.len() + 1] {
+            let invalid = vec![0_u8; invalid_length];
+            assert!(
+                validate_sorafs_reference_governance_cid_py(Some(&invalid), "expected CID")
+                    .is_err()
+            );
+        }
     }
 
     #[test]
@@ -12165,8 +12219,7 @@ mod tests {
         let plan =
             CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
         let plan_json =
-            sorafs_car::fetch_plan::chunk_fetch_specs_to_string(&plan.chunk_fetch_specs())
-                .expect("serialise plan");
+            sorafs_car::fetch_plan::chunk_fetch_plan_to_string(&plan).expect("serialise plan");
         let providers = vec![PyGatewayProviderSpec {
             name: "alpha".to_string(),
             provider_id_hex: "55".repeat(32),
@@ -12544,8 +12597,7 @@ mod tests {
         let plan =
             CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
         let plan_json =
-            sorafs_car::fetch_plan::chunk_fetch_specs_to_string(&plan.chunk_fetch_specs())
-                .expect("serialise plan");
+            sorafs_car::fetch_plan::chunk_fetch_plan_to_string(&plan).expect("serialise plan");
 
         let providers = vec![
             PyLocalProviderSpec {
@@ -12660,8 +12712,7 @@ mod tests {
         let plan =
             CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
         let plan_json =
-            sorafs_car::fetch_plan::chunk_fetch_specs_to_string(&plan.chunk_fetch_specs())
-                .expect("serialise plan");
+            sorafs_car::fetch_plan::chunk_fetch_plan_to_string(&plan).expect("serialise plan");
 
         let providers = vec![
             PyLocalProviderSpec {
@@ -12826,8 +12877,7 @@ mod tests {
         let plan =
             CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
         let plan_json =
-            sorafs_car::fetch_plan::chunk_fetch_specs_to_string(&plan.chunk_fetch_specs())
-                .expect("serialise plan");
+            sorafs_car::fetch_plan::chunk_fetch_plan_to_string(&plan).expect("serialise plan");
         let chunk_count = plan.chunk_fetch_specs().len() as u64;
 
         let providers = vec![

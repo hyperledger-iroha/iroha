@@ -14,7 +14,7 @@ translator: machine-google-reviewed
 
 ለመጨረሻ ጊዜ የታደሰው በ`python3 scripts/inventory_env_toggles.py --json docs/source/agents/env_var_inventory.json --md docs/source/agents/env_var_inventory.md`_
 
-ጠቅላላ ዋቢዎች፡ **505** · ልዩ ተለዋዋጮች፡ **137**
+ጠቅላላ ዋቢዎች፡ **502** · ልዩ ተለዋዋጮች፡ **137**
 
 ## የድርጊት_መታወቂያ_TOKEN_ጥያቄ_TOKEN (ምርት፡ 1)
 
@@ -265,9 +265,6 @@ translator: machine-google-reviewed
 - ሙከራ፡ ሳጥኖች/sorafs_manifest/tests/por_fixtures.rs:11 — `env!("CARGO_MANIFEST_DIR"),`
 - ሙከራ፡ ሳጥኖች/sorafs_manifest/tests/አቅራቢ_admission_fixtures.rs:12 — `cmd.current_dir(env!("CARGO_MANIFEST_DIR"))`
 - ሙከራ፡ ሳጥኖች/sorafs_manifest/tests/replication_order_fixtures.rs:8 — `env!("CARGO_MANIFEST_DIR"),`
-- ፕሮድ፡ crates/sorafs_node/src/bin/sorafs_gateway.rs:55 — `PathBuf::from(env!("CARGO_MANIFEST_DIR"))`
-- ፕሮድ፡ crates/sorafs_node/src/bin/sorafs_gateway.rs:59 — `PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/sorafs_gateway/1.0.0")`
-ሙከራ: ሳጥኖች/sorafs_node/src/gateway.rs:2006 — `PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/sorafs_gateway/1.0.0");`
 - ሙከራ: ሳጥኖች/sorafs_node/tests/cli.rs:122 — `let base = Path::new(env!("CARGO_MANIFEST_DIR"))`
 - ሙከራ፡ crates/sorafs_node/tests/gateway.rs:14 — `PathBuf::from(env!("CARGO_MANIFEST_DIR"))`
 - ሙከራ፡ crates/sorafs_node/tests/gateway.rs:30 — `let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))`

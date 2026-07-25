@@ -14,7 +14,7 @@ translator: machine-google-reviewed
 
 _آخر تحديث عبر `python3 scripts/inventory_env_toggles.py --json docs/source/agents/env_var_inventory.json --md docs/source/agents/env_var_inventory.md`_
 
-إجمالي المراجع: **505** · المتغيرات الفريدة: **137**
+إجمالي المراجع: **502** · المتغيرات الفريدة: **137**
 
 ## ACTIONS_ID_TOKEN_REQUEST_TOKEN (المنتج: 1)
 
@@ -265,9 +265,6 @@ _آخر تحديث عبر `python3 scripts/inventory_env_toggles.py --json docs/
 - الاختبار: الصناديق/sorafs_manifest/tests/por_fixtures.rs:11 — `env!("CARGO_MANIFEST_DIR"),`
 - الاختبار: الصناديق/sorafs_manifest/tests/provider_admission_fixtures.rs:12 — `cmd.current_dir(env!("CARGO_MANIFEST_DIR"))`
 - الاختبار: الصناديق/sorafs_manifest/tests/replication_order_fixtures.rs:8 - `env!("CARGO_MANIFEST_DIR"),`
-- المنتج: صناديق/sorafs_node/src/bin/sorafs_gateway.rs:55 — `PathBuf::from(env!("CARGO_MANIFEST_DIR"))`
-- المنتج: صناديق/sorafs_node/src/bin/sorafs_gateway.rs:59 — `PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/sorafs_gateway/1.0.0")`
-- الاختبار: صناديق/sorafs_node/src/gateway.rs:2006 — `PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/sorafs_gateway/1.0.0");`
 - الاختبار: الصناديق/sorafs_node/tests/cli.rs:122 — `let base = Path::new(env!("CARGO_MANIFEST_DIR"))`
 - الاختبار: صناديق/sorafs_node/tests/gateway.rs:14 - `PathBuf::from(env!("CARGO_MANIFEST_DIR"))`
 - الاختبار: صناديق/sorafs_node/tests/gateway.rs:30 — `let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))`

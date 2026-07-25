@@ -33,6 +33,12 @@ fn manifest_digest_consistent_with_chunker_fixture() {
         .dag_codec(sorafs_manifest::DagCodecId(0x71))
         .chunking_from_profile(ChunkProfile::DEFAULT, BLAKE3_256_MULTIHASH_CODE)
         .chunk_digest_sha3_256([0xAC; 32])
+        // Exact canonical PoR root for `sample_input()` and the asserted chunk geometry above.
+        .por_root([
+            0xb6, 0x2a, 0x1d, 0x56, 0xbe, 0xcc, 0x49, 0x5f, 0x94, 0xe9, 0xfb, 0xac, 0xb2, 0xaf,
+            0xc7, 0xb9, 0x37, 0x40, 0x12, 0xec, 0xe2, 0xbf, 0x11, 0xc1, 0xf3, 0x75, 0x5b, 0xa2,
+            0xb3, 0x91, 0x97, 0x31,
+        ])
         .content_length(input.len() as u64)
         .car_digest([0x42; 32])
         .car_size(1_111_111)

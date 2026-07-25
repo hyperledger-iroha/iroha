@@ -96,12 +96,15 @@ cargo run -p sorafs_car --bin sorafs_manifest_builder \
 - `--json-out=path` writes the JSON report to disk (exactly the same payload that
   is printed to stdout). Pass `--json-out=-` to stream the report directly to stdout
   without creating a temporary file.
-- `--chunk-fetch-plan-out=path` emits the ordered chunk fetch specifications
-  (index, offset, length, BLAKE3 digest) derived from the manifest’s CAR plan so
-  orchestrators can schedule multi-source downloads without re-reading the payload.
-- `--plan=chunk_fetch_specs.json|-` imports a previously generated chunk fetch plan
-  (for example from CI or a dry-run) and verifies that every chunk’s index, offset,
-  length, and digest still match the bytes on disk before proceeding.
+- `--chunk-fetch-plan-out=path` emits the strict
+  `sorafs.chunk_fetch_plan.v1` object. It binds the ordered chunk specifications
+  (index, offset, length, BLAKE3 digest) to the non-zero whole-payload BLAKE3
+  digest so orchestrators can schedule multi-source downloads without
+  re-reading the payload.
+- `--plan=chunk_fetch_plan.json|-` imports that canonical envelope (for example
+  from CI or a dry-run) and verifies its whole-payload binding plus every
+  chunk’s index, offset, length, and digest against the bytes on disk. Retired
+  standalone arrays are rejected.
 - `--por-json-out=path` emits the Proof-of-Retrievability tree (chunks → segments →
   leaves) as JSON for sampling auditors.
 - `--por-proof=chunk:segment:leaf` materialises a PoR proof for the requested leaf;
@@ -117,13 +120,16 @@ cargo run -p sorafs_car --bin sorafs_manifest_builder \
   plus the exact raw public key and raw 64-byte external signature. The
   production tool has no private-key or inline key/signature option.
 
-The tool prints a JSON report (chunk digests, manifest snapshot with alias/metadata
+The tool prints a versioned `sorafs.manifest_builder_report.v1` JSON report
+(chunk digests, manifest snapshot with alias/metadata
 details, CAR root/codec, payload + archive digests, raw CAR CID) and
 writes the Norito bytes to `docs.manifest` when `--manifest-out` is provided.
 When `--car-out` is supplied, a CARv2 file (with MultihashIndexSorted index) is
 written and its size and digest appear in the report. The same report now carries
-`chunk_fetch_specs`: an ordered list of chunk indices/offsets/lengths/digests that
-multi-source downloaders can feed directly into the SoraFS fetch orchestrator.
+`chunk_fetch_specs`: an ordered list of chunk indices/offsets/lengths/digests.
+This array is an embedded typed field of the versioned report, not a standalone
+interchange plan; multi-source downloaders use the separately emitted strict
+V1 envelope.
 
 To inspect the registered chunker profiles (and their IDs), run:
 

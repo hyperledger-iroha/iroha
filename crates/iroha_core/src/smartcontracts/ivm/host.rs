@@ -159,6 +159,7 @@ const OPAQUE_SYSTEM_CONTRACT_STATE_PREFIXES: &[&str] = &[
     "merge_execution_batch_applied_",
     "merge_execution_lane_applied_",
     "merge_lane_frontier_v1_",
+    "queue_plan_admission_v2_",
     "nexus_fee_receipt_settled_",
     "nexus_fee_settlement_settled_",
     "sealed_tx_commitment_",
@@ -26928,6 +26929,7 @@ seiyaku DurableOwner {
             "merge_execution_lane_applied_1_2_3_deadbeef",
             "merge_lane_frontier_v1",
             "merge_lane_frontier_v1_1_2_deadbeef",
+            "queue_plan_admission_v2_deadbeef_cafebabe",
             "nexus_fee_receipt_settled_deadbeef",
             "nexus_fee_settlement_settled_1_2_3_deadbeef",
             "sealed_tx_commitment_deadbeef",
@@ -26958,6 +26960,7 @@ seiyaku DurableOwner {
         for key in [
             "scatter/counter",
             "merge_lane_frontier_v1x",
+            "queue_plan_admission_v2x",
             "offline_device_attestation_policyx",
             "kagemusha_online_registration_v1x",
             "kagemusha_online_registration_v2x",
@@ -26970,6 +26973,71 @@ seiyaku DurableOwner {
                 "delimiter-aware matching must not reserve similarly named user state"
             );
         }
+    }
+
+    #[test]
+    fn state_syscalls_cannot_forge_delete_or_disclose_queue_plan_admission_marker() {
+        crate::test_alias::ensure();
+        let marker: Name = format!(
+            "queue_plan_admission_v2_{}_{}",
+            "ab".repeat(Hash::LENGTH),
+            "cd".repeat(Hash::LENGTH)
+        )
+        .parse()
+        .expect("QueuePlan admission marker key");
+        let authority: AccountId = fixture_account("alice");
+        let contract = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            178,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive adversarial contract");
+        let mut host = CoreHost::new(authority);
+        host.set_contract_runtime_context(Some(ContractRuntimeExecutionContext {
+            contract_subject: contract.subject_id(),
+            contract_address: contract,
+            contract_alias: Some(
+                "adversarial::queue_plan_registry"
+                    .parse()
+                    .expect("contract alias"),
+            ),
+            entrypoint: "attack".to_owned(),
+        }));
+        let mut vm = IVM::new(10_000);
+        let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&marker));
+        let forged = norito::to_bytes(&999_u64).expect("encode forged marker fixture");
+        let value_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &forged);
+
+        vm.set_register(10, path_ptr);
+        vm.set_register(11, value_ptr);
+        assert_eq!(
+            host.syscall(ivm_sys::SYSCALL_STATE_SET, &mut vm),
+            Err(ivm::VMError::PermissionDenied),
+            "STATE_SET must reject a QueuePlan registry marker before contract scoping"
+        );
+        vm.set_register(10, path_ptr);
+        assert_eq!(
+            host.syscall(ivm_sys::SYSCALL_STATE_DEL, &mut vm),
+            Err(ivm::VMError::PermissionDenied),
+            "STATE_DEL must not create a QueuePlan registry tombstone"
+        );
+        for syscall in [
+            ivm_sys::SYSCALL_STATE_GET,
+            ivm_sys::SYSCALL_STATE_HAS,
+            ivm_sys::SYSCALL_STATE_LEN,
+        ] {
+            vm.set_register(10, path_ptr);
+            assert_eq!(
+                host.syscall(syscall, &mut vm),
+                Err(ivm::VMError::PermissionDenied),
+                "QueuePlan registry markers must remain opaque"
+            );
+        }
+        assert!(
+            host.durable_state_overlay.is_empty(),
+            "rejected QueuePlan registry access must not retain a raw or scoped write"
+        );
     }
 
     #[test]

@@ -18,8 +18,7 @@ use norito::json::{Map, Value};
 use crate::utils;
 
 pub(crate) const TOOL_EFFECT_EXTENSION: &str = "x-iroha-tool-effect";
-const SORACLOUD_HF_DEPLOY_CONTRACT_EXTENSION: &str =
-    "x-iroha-soracloud-hf-deploy-contract";
+const SORACLOUD_HF_DEPLOY_CONTRACT_EXTENSION: &str = "x-iroha-soracloud-hf-deploy-contract";
 const SORACLOUD_HF_DEPLOY_CONTRACT_V1: &str = "cap-bound-local-signing-v1";
 
 fn license_section() -> Value {
@@ -5575,6 +5574,112 @@ fn canonical_request_auth_header_parameters() -> Vec<Value> {
     ]
 }
 
+fn gateway_compliance_get_operation(
+    summary: &str,
+    description: &str,
+    mut parameters: Vec<Value>,
+) -> Map {
+    parameters.extend(canonical_request_auth_header_parameters());
+    let mut methods = json_get_operation(
+        "SoraFS",
+        summary,
+        description,
+        "#/components/schemas/JsonValue",
+        parameters,
+    );
+    if let Some(Value::Object(operation)) = methods.get_mut("get")
+        && let Some(Value::Object(responses)) = operation.get_mut("responses")
+    {
+        responses.insert(
+            "401".into(),
+            json_response(
+                "Canonical account-signature authentication is missing or invalid.",
+                schema_ref("JsonValue"),
+            ),
+        );
+        responses.insert(
+            "403".into(),
+            json_response(
+                "The authenticated account does not hold the governed gateway compliance operator role.",
+                schema_ref("JsonValue"),
+            ),
+        );
+        responses.insert(
+            "503".into(),
+            json_response(
+                "The configured durable controller or runtime feed transport is unavailable.",
+                schema_ref("JsonValue"),
+            ),
+        );
+    }
+    methods
+}
+
+fn gateway_compliance_post_operation(
+    summary: &str,
+    description: &str,
+    request_body: bool,
+    success_status: &str,
+) -> Map {
+    let mut methods = json_post_operation_with_success_status(
+        "SoraFS",
+        summary,
+        description,
+        "#/components/schemas/JsonValue",
+        "#/components/schemas/JsonValue",
+        canonical_request_auth_header_parameters(),
+        success_status,
+    );
+    if let Some(Value::Object(operation)) = methods.get_mut("post") {
+        if !request_body {
+            operation.remove("requestBody");
+        } else if let Some(Value::Object(body)) = operation.get_mut("requestBody") {
+            body.insert(
+                "description".into(),
+                Value::String(
+                    "Exact canonical Norito JSON bytes. Alternate whitespace, field order, media types, and compatibility aliases are rejected."
+                        .to_owned(),
+                ),
+            );
+        }
+        if let Some(Value::Object(responses)) = operation.get_mut("responses") {
+            for (status, description) in [
+                (
+                    "400",
+                    "The request body or canonical JSON representation is invalid.",
+                ),
+                (
+                    "401",
+                    "Canonical account-signature authentication is missing or invalid.",
+                ),
+                (
+                    "403",
+                    "The authenticated account lacks the governed role or a catalog signature is not trusted.",
+                ),
+                (
+                    "409",
+                    "The requested transition conflicts with durable controller state.",
+                ),
+                ("413", "The request exceeds a governed V1 resource bound."),
+                (
+                    "422",
+                    "The signed payload is invalid for the active compliance policy.",
+                ),
+                (
+                    "503",
+                    "The durable gateway compliance controller is unavailable.",
+                ),
+            ] {
+                responses.insert(
+                    status.into(),
+                    json_response(description, schema_ref("JsonValue")),
+                );
+            }
+        }
+    }
+    methods
+}
+
 fn operator_signature_header_parameters() -> Vec<Value> {
     vec![
         string_header_param(
@@ -6011,6 +6116,61 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
+        "/v1/sorafs/gateway/compliance/feeds/{feed_id}".to_owned(),
+        Value::Object(gateway_compliance_get_operation(
+            "Fetch one authenticated compliance feed.",
+            "Resolve, fetch, trust-pin, decompress, decode, normalize, and return one configured bounded feed through the runtime-injected transport. This operation does not sign, stage, or promote a catalog.",
+            vec![string_path_param(
+                "feed_id",
+                "Canonical configured gateway compliance feed identifier.",
+            )],
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/gateway/compliance/status".to_owned(),
+        Value::Object(gateway_compliance_get_operation(
+            "Fetch durable gateway compliance status.",
+            "Return the payload-safe durable controller checkpoint, including the staged candidate, signed gateway acknowledgements, serving and last-known-good catalogs, predecessor-chain head, and bounded history.",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/gateway/compliance/stage".to_owned(),
+        Value::Object(gateway_compliance_post_operation(
+            "Stage a signed compliance catalog.",
+            "Verify and durably stage one exact canonical threshold-signed, predecessor-bound catalog. Identical replay is idempotent; same-sequence substitution fails closed.",
+            true,
+            "202",
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/gateway/compliance/acknowledge".to_owned(),
+        Value::Object(gateway_compliance_post_operation(
+            "Acknowledge a staged compliance catalog.",
+            "Verify and durably record one exact canonical signed regional-gateway acknowledgement for the currently staged catalog. Gateway identity equivocation fails closed.",
+            true,
+            "202",
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/gateway/compliance/promote".to_owned(),
+        Value::Object(gateway_compliance_post_operation(
+            "Promote the staged compliance catalog.",
+            "Atomically promote the staged catalog only after the configured distinct regional-gateway acknowledgement quorum. The canonical signed request body must be empty.",
+            false,
+            "200",
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/gateway/compliance/rollback".to_owned(),
+        Value::Object(gateway_compliance_post_operation(
+            "Roll back to the last-known-good compliance catalog.",
+            "Verify the exact threshold-signed rollback authorization and atomically move the serving pointer to the last-known-good catalog without rewriting the signed predecessor-chain head.",
+            true,
+            "200",
+        )),
+    );
+    paths.insert(
         "/v1/sorafs/appeals/pricing/config".to_owned(),
         Value::Object(json_get_operation(
             "SoraFS",
@@ -6348,22 +6508,18 @@ fn sorafs_paths() -> Map {
     );
     let mut moderation_ballots = json_get_operation(
         "SoraFS",
-        "List local moderation ballots.",
-        "List locally announced SoraFS moderation ballot records, including announcement context, accepted commits, reveals, and finalized tallies. The ballots array is bounded by `limit` and capped at 500 records while the full local count remains visible.",
+        "List finalized moderation cases.",
+        "Reconcile and list authoritative SoraFS moderation case projections from one finalized-chain snapshot. The cases array is bounded by `limit` and capped at 500 records; the response carries the shared finalized height and block hash.",
         "#/components/schemas/JsonValue",
         vec![integer_query_param(
             "limit",
-            "Maximum number of ballot records to return (default 50, max 500).",
+            "Maximum number of finalized case projections to return (default 50, max 500).",
             Some("uint64"),
         )],
     );
-    if let Some(Value::Object(post_operation)) = json_post_operation(
-        "SoraFS",
-        "Announce a local moderation ballot.",
-        "Announce a local SoraFS moderation ballot and derive the panel roster hash when omitted. The request requires canonical app authentication plus a deposit_confirmation object that Torii confirms against the runtime native asset-lock ledger before the ballot is admitted; the admitted record stores the confirmed deposit fingerprint, including evidence hashes.",
-        "#/components/schemas/JsonValue",
-        "#/components/schemas/JsonValue",
-        Vec::new(),
+    if let Some(Value::Object(post_operation)) = sorafs_moderation_signed_transaction_operation(
+        "Submit an authoritative moderation appeal intake.",
+        "Submit a caller-signed transaction containing exactly one `SubmitSorafsModerationAppeal` instruction. The transaction chain and signature must be exact, the authority must equal the appellant, and the native ledger validates the bounded intake and escrow digest before commitment. Torii never rebuilds or signs this caller action.",
     )
     .remove("post")
     {
@@ -6377,8 +6533,8 @@ fn sorafs_paths() -> Map {
         "/v1/sorafs/moderation/ballots/{case_id}/{round_id}".to_owned(),
         Value::Object(json_get_operation(
             "SoraFS",
-            "Fetch a local moderation ballot.",
-            "Fetch one locally announced SoraFS moderation ballot record by case id and round id. Embedded commits and reveals are bounded by `limit` and capped at 500 entries while total counts remain visible.",
+            "Fetch a finalized moderation case.",
+            "Reconcile and fetch one authoritative SoraFS moderation case projection by case id and round id from finalized chain state. The response carries the finalized height and block hash and fails closed when the projection reader is unavailable.",
             "#/components/schemas/JsonValue",
             vec![
                 string_path_param("case_id", "Moderation or appeal case identifier."),
@@ -6395,8 +6551,8 @@ fn sorafs_paths() -> Map {
         "/v1/sorafs/moderation/ballots/{case_id}/{round_id}/no-show-plan".to_owned(),
         Value::Object(json_get_operation(
             "SoraFS",
-            "Fetch a local moderation ballot no-show plan.",
-            "Fetch the payload-free local no-show penalty plan for a closed SoraFS moderation ballot. The route uses server-side network time, rejects open reveal windows and unresolved or accepted challenges, and returns only counts, juror identifiers, and the penalty-plan digest.",
+            "Fetch finalized moderation no-shows.",
+            "Fetch the payload-free no-show records committed atomically with an authoritative SoraFS moderation outcome. The route rejects non-finalized cases and never derives a competing process-local penalty plan.",
             "#/components/schemas/JsonValue",
             vec![
                 string_path_param("case_id", "Moderation or appeal case identifier."),
@@ -6405,66 +6561,74 @@ fn sorafs_paths() -> Map {
         )),
     );
     paths.insert(
+        "/v1/sorafs/moderation/ballots/eligibility".to_owned(),
+        Value::Object(sorafs_moderation_signed_transaction_operation(
+            "Register moderation juror eligibility.",
+            "Submit a caller-signed transaction containing exactly one `RegisterSorafsModerationJurorEligibility` instruction. The canonical private PoP proof is bounded and validated before ingress; only its ledger-authorized eligibility result is retained.",
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/moderation/ballots/sortition".to_owned(),
+        Value::Object(sorafs_moderation_signed_transaction_operation(
+            "Finalize moderation panel sortition.",
+            "Submit a governed-signed transaction containing exactly one `FinalizeSorafsModerationSortition` instruction. Native execution recomputes the predecessor-bound deterministic draw and rejects stale, biased, or unauthorized proposals.",
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/moderation/ballots/assignments/accept".to_owned(),
+        Value::Object(sorafs_moderation_signed_transaction_operation(
+            "Accept a moderation juror assignment.",
+            "Submit a caller-signed transaction containing exactly one `AcceptSorafsModerationJurorAssignment` instruction. The transaction authority is the accepting juror and the native ledger binds acceptance to the exact sortition digest.",
+        )),
+    );
+    paths.insert(
+        "/v1/sorafs/moderation/ballots/activate".to_owned(),
+        Value::Object(sorafs_moderation_signed_transaction_operation(
+            "Activate a moderation case.",
+            "Submit a governed-signed transaction containing exactly one `ActivateSorafsModerationCase` instruction. Native execution applies deterministic no-show failover and opens the committed deadlines atomically.",
+        )),
+    );
+    paths.insert(
         "/v1/sorafs/moderation/ballots/commits".to_owned(),
-        Value::Object(json_post_operation(
-            "SoraFS",
+        Value::Object(sorafs_moderation_signed_transaction_operation(
             "Submit a moderation ballot commitment.",
-            "Submit a base64 Norito SoraFsModerationBallotCommitV1 payload. The canonical request signer must match the canonical juror account id in the commitment.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
+            "Submit a caller-signed transaction containing exactly one `SubmitSorafsModerationCommit` instruction. The embedded canonical Norito commitment is bounded, its caller timestamp is zero, and its juror account must exactly equal the transaction authority.",
         )),
     );
     paths.insert(
         "/v1/sorafs/moderation/ballots/challenges".to_owned(),
-        Value::Object(json_post_operation(
-            "SoraFS",
-            "Raise a local moderation ballot challenge.",
-            "Raise a payload-free local SoraFS moderation ballot challenge during the post-commit challenge window. The canonical request signer must match challenger_id, the evidence digest must be a non-zero 32-byte hex value, and pending or accepted challenges block local reveal and tally progress.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
+        Value::Object(sorafs_moderation_signed_transaction_operation(
+            "Raise an authoritative moderation challenge.",
+            "Submit a caller-signed transaction containing exactly one `RaiseSorafsModerationChallenge` instruction. The transaction authority is the challenger; native validation enforces the bounded payload-free reason, non-zero evidence digest, target rules, window, and replay identity.",
         )),
     );
     paths.insert(
         "/v1/sorafs/moderation/ballots/challenges/resolve".to_owned(),
-        Value::Object(json_post_operation(
-            "SoraFS",
-            "Resolve a local moderation ballot challenge.",
-            "Resolve a local SoraFS moderation ballot challenge before reveal progress. The canonical request signer must match resolved_by; rejected challenges unblock local reveal and tally progress, while accepted challenges keep the ballot blocked for higher-level dispute handling.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
+        Value::Object(sorafs_moderation_signed_transaction_operation(
+            "Resolve an authoritative moderation challenge.",
+            "Submit a governed-signed transaction containing exactly one `ResolveSorafsModerationChallenge` instruction. The native ledger enforces governed authority and accepts only a bounded existing challenge decision; Torii never synthesizes a resolver identity.",
         )),
     );
     paths.insert(
         "/v1/sorafs/moderation/ballots/reveals".to_owned(),
-        Value::Object(json_post_operation(
-            "SoraFS",
+        Value::Object(sorafs_moderation_signed_transaction_operation(
             "Submit a moderation ballot reveal.",
-            "Submit a base64 Norito SoraFsModerationBallotRevealV1 payload. The canonical request signer must match the canonical juror account id in the reveal.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
+            "Submit a caller-signed transaction containing exactly one `SubmitSorafsModerationReveal` instruction. The embedded canonical Norito reveal is bounded, its caller timestamp is zero, and its juror account must exactly equal the transaction authority.",
         )),
     );
     paths.insert(
         "/v1/sorafs/moderation/ballots/tally".to_owned(),
-        Value::Object(json_post_operation(
-            "SoraFS",
+        Value::Object(sorafs_moderation_signed_transaction_operation(
             "Submit authoritative moderation finalization.",
-            "Submit the native FinalizeSorafsModerationCase instruction through the configured durable transaction orchestrator. Pending requests return 202; finalized replays return the committed case projection. The route fails closed when finalized-chain orchestration is unavailable and never mutates the local ballot runtime.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
+            "Submit a governed-signed transaction containing exactly one `FinalizeSorafsModerationCase` instruction. The native ledger enforces the finalizer authority and atomically records the single terminal outcome and no-shows; Torii never signs this request for the caller.",
         )),
     );
     paths.insert(
         "/v1/sorafs/moderation/ballots/events".to_owned(),
         Value::Object(json_get_operation(
             "SoraFS",
-            "Fetch local moderation ballot events.",
-            "Fetch sequenced local SoraFS moderation ballot lifecycle and challenge events with optional since and limit filters and ETag cache validation.",
+            "Fetch finalized moderation events.",
+            "Reconcile and fetch typed committed SoraFS moderation lifecycle events from one finalized snapshot with optional exclusive sequence and limit filters, finalized cursor metadata, continuation state, and ETag cache validation. Future cursors and cursors older than the retained finalized suffix fail closed.",
             "#/components/schemas/JsonValue",
             vec![
                 integer_query_param("since", "Return events with sequence greater than this value.", Some("uint64")),
@@ -6582,21 +6746,7 @@ fn sorafs_paths() -> Map {
         Value::Object(json_post_operation(
             "SoraFS",
             "Build a reviewed-quarantine appeal finance handoff.",
-            "For a reviewed local SFM-4a quarantine record, compute a baseline appeal pricing quote, derive a quote-bound appeal finance deposit request, bind it to deterministic quarantine evidence, and return the native OpenAssetLock instruction ready for payer signing. The request requires X-Iroha canonical app authentication from the payer_account.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            vec![string_path_param(
-                "quarantine_id_hex",
-                "16-byte local quarantine id encoded as hexadecimal.",
-            )],
-        )),
-    );
-    paths.insert(
-        "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/appeal-ballot".to_owned(),
-        Value::Object(json_post_operation(
-            "SoraFS",
-            "Announce a reviewed-quarantine appeal ballot.",
-            "For a reviewed local SFM-4a quarantine record, verify a confirmed appeal-finance asset-lock deposit, require that its evidence hashes include the deterministic quarantine handoff hash, and announce the local moderation ballot. The request requires X-Iroha canonical app authentication from an account that can see the confirmed deposit.",
+            "For a reviewed local SFM-4a quarantine record, compute the governed appeal price and return a native OpenAssetLock instruction for an exact caller-supplied case, round, panel size, idempotency key, and canonical evidence-bundle digest. The escrow carries exactly that evidence digest so the confirmed lock can be bound by a canonical native ModerationAppealIntakeV1; no case, round, policy, roster, or timing fields are inferred.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             vec![string_path_param(
@@ -6609,8 +6759,8 @@ fn sorafs_paths() -> Map {
         "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/operator-panel".to_owned(),
         Value::Object(json_get_operation(
             "SoraFS",
-            "Read a local moderation quarantine operator-panel workflow view.",
-            "Return one role-gated local SFM-4a quarantine operator-panel read model with the quarantine record, encrypted object metadata status, matching local appeal ballots, operator routes, and bounded next-action hints. The endpoint does not return quarantined payload bytes and requires X-Iroha canonical app authentication from an account assigned the sorafs_moderation_operator role.",
+            "Read a finalized moderation quarantine operator-panel workflow view.",
+            "Return one role-gated SFM-4a quarantine operator view with local encrypted-object metadata and matching appeal/case projections reconciled from one finalized-chain snapshot. The response includes the finalized height and block hash, never reads process-local ballot state, and fails closed when the authoritative projection is unavailable.",
             "#/components/schemas/JsonValue",
             vec![
                 string_path_param(
@@ -6926,9 +7076,9 @@ fn sorafs_paths() -> Map {
         Value::Object(json_post_operation(
             "SoraFS",
             "Register paid pin manifest.",
-            "Submit a SoraFS manifest registration transaction. The request must include `content_length`; optional `manifest_b64` carries a Norito `ManifestV1` for full Torii-side validation and is required when governance requires council signatures. Execution collects the public pin fee and records the committed fee receipt on-chain.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
+            "Submit a SoraFS manifest registration transaction. `manifest_payload` is the sole metadata source: Torii requires exact canonical padded base64 of canonical Norito `ManifestV1` bytes, validates the decoded manifest, and derives the manifest digest, chunker identity, content length, pin policy, and fee inputs from those bytes. Retired duplicate summary fields and legacy `manifest_b64` are rejected. Execution collects the public pin fee and records the committed fee receipt on-chain.",
+            "#/components/schemas/SorafsPinRegisterRequestV1",
+            "#/components/schemas/SorafsPinRegisterResponseV1",
             Vec::new(),
         )),
     );
@@ -6936,15 +7086,21 @@ fn sorafs_paths() -> Map {
         "/v1/sorafs/pin/{digest_hex}".to_owned(),
         Value::Object(json_get_operation(
             "SoraFS",
-            "Fetch a pin manifest.",
-            "Fetch a pin manifest by digest. Embedded alias and replication-order arrays are bounded by `limit` (default 50, max 500) while count fields preserve the full matching totals.",
-            "#/components/schemas/JsonValue",
+            "Fetch a finalized pin manifest.",
+            "Return the exact native Norito JSON `PinManifestFinalizedRecordV1` for one manifest digest. The response contains the finalized block cursor and chain-authoritative `PinManifestRecord`, including its PoR root, content length, and lifecycle status. The optional expected finalized height and block hash must be supplied together; a stale anchor returns 409. The retired projection `limit`, attestation, alias-list, and replication-order fields are not accepted or returned.",
+            "#/components/schemas/PinManifestFinalizedRecordV1",
             vec![
                 string_path_param("digest_hex", "Pin manifest digest (hex)."),
-                integer_query_param(
-                    "limit",
-                    "Optional alias and replication-order readback limit.",
+                bounded_integer_query_param(
+                    "expected_finalized_height",
+                    "Optional non-zero finalized block height. Must be supplied together with expected_finalized_block_hash_hex.",
                     Some("uint64"),
+                    1,
+                    None,
+                ),
+                canonical_nonzero_digest_query_param(
+                    "expected_finalized_block_hash_hex",
+                    "Optional canonical lowercase finalized block hash. Must be supplied together with expected_finalized_height.",
                 ),
             ],
         )),
@@ -7145,17 +7301,6 @@ fn sorafs_paths() -> Map {
             methods.insert("get".to_owned(), Value::Object(operation));
             methods
         }),
-    );
-    paths.insert(
-        "/v1/sorafs/storage/por-sample".to_owned(),
-        Value::Object(json_post_operation(
-            "SoraFS",
-            "Request a PoR sample.",
-            "Request a proof-of-replication sample from this node's configured provider identity. The JSON `count` field must be between 1 and 500; the returned `samples` array is also capped by the stored manifest leaf count.",
-            "#/components/schemas/SorafsStoragePorSampleRequestV1",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
     );
     paths.insert(
         "/v1/sorafs/proof/stream".to_owned(),
@@ -9804,6 +9949,21 @@ fn signed_transaction_submission_operation() -> Map {
 }
 
 fn sorafs_repair_signed_transaction_operation(summary: &str, description: &str) -> Map {
+    let mut methods = signed_transaction_submission_operation();
+    let operation = methods
+        .get_mut("post")
+        .and_then(Value::as_object_mut)
+        .expect("signed transaction submission operation contains POST");
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("SoraFS".to_owned())]),
+    );
+    operation.insert("summary".into(), Value::String(summary.to_owned()));
+    operation.insert("description".into(), Value::String(description.to_owned()));
+    methods
+}
+
+fn sorafs_moderation_signed_transaction_operation(summary: &str, description: &str) -> Map {
     let mut methods = signed_transaction_submission_operation();
     let operation = methods
         .get_mut("post")
@@ -16500,42 +16660,6 @@ fn insert_vpn_schemas(schemas: &mut Map) {
 
 fn insert_sorafs_proof_stream_schemas(schemas: &mut Map) {
     schemas.insert(
-        "SorafsStoragePorSampleRequestV1".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["manifest_id_hex", "provider_id_hex", "count"],
-            "additionalProperties": false,
-            "properties": {
-                "manifest_id_hex": {
-                    "type": "string",
-                    "minLength": 1,
-                    "description": "Stored manifest identifier or manifest CID accepted by this node."
-                },
-                "provider_id_hex": {
-                    "type": "string",
-                    "minLength": 64,
-                    "maxLength": 64,
-                    "pattern": "^[0-9a-f]{64}$",
-                    "description": "Canonical lowercase provider identifier. It must exactly match this node's configured capacity-declaration provider."
-                },
-                "count": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "minimum": 1,
-                    "maximum": 500
-                },
-                "seed": {
-                    "type": "integer",
-                    "format": "uint64",
-                    "minimum": 0,
-                    "maximum": (u64::MAX),
-                    "description": "Optional deterministic sample seed. Omit when absent; null is invalid."
-                }
-            },
-            "description": "Closed provider-bound PoR sampling request. A missing provider binding returns 503 and a mismatch returns 403."
-        }),
-    );
-    schemas.insert(
         "SorafsProofStreamPorRequestV1".to_owned(),
         norito::json!({
             "type": "object",
@@ -16544,6 +16668,8 @@ fn insert_sorafs_proof_stream_schemas(schemas: &mut Map) {
                 "provider_id_hex",
                 "proof_kind",
                 "sample_count",
+                "expected_finalized_height",
+                "expected_finalized_block_hash_hex",
                 "nonce_b64"
             ],
             "additionalProperties": false,
@@ -16571,6 +16697,20 @@ fn insert_sorafs_proof_stream_schemas(schemas: &mut Map) {
                     "minimum": 0,
                     "maximum": (u64::MAX)
                 },
+                "expected_finalized_height": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "maximum": (u64::MAX),
+                    "description": "Required finalized height authorizing the manifest projection."
+                },
+                "expected_finalized_block_hash_hex": {
+                    "type": "string",
+                    "minLength": 64,
+                    "maxLength": 64,
+                    "pattern": "^(?!0{64}$)[0-9a-f]{64}$",
+                    "description": "Required canonical finalized block hash paired with expected_finalized_height."
+                },
                 "nonce_b64": {
                     "type": "string",
                     "minLength": 24,
@@ -16584,7 +16724,7 @@ fn insert_sorafs_proof_stream_schemas(schemas: &mut Map) {
                     "description": "Optional canonical tier hint. Omit when absent; null is invalid."
                 }
             },
-            "description": "Canonical PoR request. PDP challenge, PoTR deadline, and orchestrator job fields are not part of this closed object."
+            "description": "Canonical PoR request bound to the finalized pin-manifest cursor. PDP challenge, PoTR deadline, and orchestrator job fields are not part of this closed object."
         }),
     );
     schemas.insert(
@@ -16599,6 +16739,10 @@ fn insert_sorafs_proof_stream_schemas(schemas: &mut Map) {
                 "nonce_b64"
             ],
             "additionalProperties": false,
+            "dependentRequired": {
+                "expected_finalized_height": ["expected_finalized_block_hash_hex"],
+                "expected_finalized_block_hash_hex": ["expected_finalized_height"]
+            },
             "properties": {
                 "manifest_digest_hex": {
                     "type": "string",
@@ -16616,6 +16760,20 @@ fn insert_sorafs_proof_stream_schemas(schemas: &mut Map) {
                     "pattern": "^(?!0{64}$)[0-9a-f]{64}$",
                     "description": "Existing non-zero governed challenge identifier. Client-selected sampling fields are forbidden."
                 },
+                "expected_finalized_height": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "maximum": (u64::MAX),
+                    "description": "Optional finalized height; when present it must be paired with expected_finalized_block_hash_hex."
+                },
+                "expected_finalized_block_hash_hex": {
+                    "type": "string",
+                    "minLength": 64,
+                    "maxLength": 64,
+                    "pattern": "^(?!0{64}$)[0-9a-f]{64}$",
+                    "description": "Optional canonical finalized block hash paired with expected_finalized_height."
+                },
                 "nonce_b64": {
                     "type": "string",
                     "minLength": 24,
@@ -16629,7 +16787,7 @@ fn insert_sorafs_proof_stream_schemas(schemas: &mut Map) {
                     "description": "Optional canonical tier hint. Omit when absent; null is invalid."
                 }
             },
-            "description": "Canonical PDP request bound to an already governed challenge. sample_count, sample_seed, deadline_ms, and orchestrator_job_id_hex are not accepted."
+            "description": "Canonical PDP request bound to an already governed challenge. A finalized cursor may be supplied only as a complete height/hash pair. sample_count, sample_seed, deadline_ms, and orchestrator_job_id_hex are not accepted."
         }),
     );
     schemas.insert(
@@ -16645,6 +16803,10 @@ fn insert_sorafs_proof_stream_schemas(schemas: &mut Map) {
                 "orchestrator_job_id_hex"
             ],
             "additionalProperties": false,
+            "dependentRequired": {
+                "expected_finalized_height": ["expected_finalized_block_hash_hex"],
+                "expected_finalized_block_hash_hex": ["expected_finalized_height"]
+            },
             "properties": {
                 "manifest_digest_hex": {
                     "type": "string",
@@ -16662,6 +16824,20 @@ fn insert_sorafs_proof_stream_schemas(schemas: &mut Map) {
                     "format": "uint32",
                     "minimum": 1,
                     "maximum": (u32::MAX)
+                },
+                "expected_finalized_height": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "maximum": (u64::MAX),
+                    "description": "Optional finalized height; when present it must be paired with expected_finalized_block_hash_hex."
+                },
+                "expected_finalized_block_hash_hex": {
+                    "type": "string",
+                    "minLength": 64,
+                    "maxLength": 64,
+                    "pattern": "^(?!0{64}$)[0-9a-f]{64}$",
+                    "description": "Optional canonical finalized block hash paired with expected_finalized_height."
                 },
                 "nonce_b64": {
                     "type": "string",
@@ -16681,7 +16857,7 @@ fn insert_sorafs_proof_stream_schemas(schemas: &mut Map) {
                     "description": "Optional canonical tier hint. Omit when absent; null is invalid."
                 }
             },
-            "description": "Canonical PoTR request. The required orchestrator job id derives the chain-authoritative request-scope identity with the manifest and provider. PDP challenge and client-selected sample fields are not part of this closed object."
+            "description": "Canonical PoTR request. The required orchestrator job id derives the chain-authoritative request-scope identity with the manifest and provider. A finalized cursor may be supplied only as a complete height/hash pair. PDP challenge and client-selected sample fields are not part of this closed object."
         }),
     );
     schemas.insert(
@@ -16701,6 +16877,7 @@ fn insert_sorafs_proof_stream_schemas(schemas: &mut Map) {
             "type": "object",
             "required": [
                 "payload_len",
+                "chunk_count",
                 "chunk_index",
                 "chunk_offset",
                 "chunk_length",
@@ -16717,7 +16894,7 @@ fn insert_sorafs_proof_stream_schemas(schemas: &mut Map) {
                 "leaf_digest_hex",
                 "segment_leaves_hex",
                 "chunk_segments_hex",
-                "chunk_roots_hex"
+                "chunk_merkle_path_hex"
             ],
             "additionalProperties": false,
             "properties": {
@@ -16727,11 +16904,17 @@ fn insert_sorafs_proof_stream_schemas(schemas: &mut Map) {
                     "minimum": 1,
                     "maximum": (u64::MAX)
                 },
+                "chunk_count": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "maximum": 4_194_304
+                },
                 "chunk_index": {
                     "type": "integer",
                     "format": "uint32",
                     "minimum": 0,
-                    "maximum": 2047
+                    "maximum": 4_194_303
                 },
                 "chunk_offset": {
                     "type": "integer",
@@ -16834,10 +17017,10 @@ fn insert_sorafs_proof_stream_schemas(schemas: &mut Map) {
                         "pattern": "^[0-9a-f]{64}$"
                     }
                 },
-                "chunk_roots_hex": {
+                "chunk_merkle_path_hex": {
                     "type": "array",
-                    "minItems": 1,
-                    "maxItems": 2048,
+                    "minItems": 0,
+                    "maxItems": 22,
                     "items": {
                         "type": "string",
                         "minLength": 64,
@@ -17374,6 +17557,505 @@ fn subscription_schemas(schemas: &mut Map) {
     );
 }
 
+fn insert_sorafs_pin_register_schemas(schemas: &mut Map) {
+    let manifest_max_decoded_bytes = sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES;
+    let manifest_max_base64_bytes = manifest_max_decoded_bytes.div_ceil(3) * 4;
+    let alias_proof_max_decoded_bytes = 1024_usize * 1024;
+    let alias_proof_max_base64_bytes = alias_proof_max_decoded_bytes.div_ceil(3) * 4;
+    let canonical_base64_pattern =
+        "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/][AQgw]==|[A-Za-z0-9+/]{2}[AEIMQUYcgkosw048]=)?$";
+
+    schemas.insert(
+        "SorafsPinSuccessorDigestV1".to_owned(),
+        norito::json!({
+            "type": "string",
+            "minLength": 64,
+            "maxLength": 64,
+            "pattern": "^(?!0{64}$)[0-9a-f]{64}$",
+            "description": "Exact canonical lowercase hexadecimal encoding of a nonzero 32-byte predecessor manifest digest."
+        }),
+    );
+    schemas.insert(
+        "SorafsPinAliasV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["namespace", "name", "proof_base64"],
+            "additionalProperties": false,
+            "properties": {
+                "namespace": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[a-z0-9._-]{1,128}$",
+                    "description": "Exact lowercase ASCII alias namespace."
+                },
+                "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[a-z0-9._-]{1,128}$",
+                    "description": "Exact lowercase ASCII alias name."
+                },
+                "proof_base64": {
+                    "type": "string",
+                    "minLength": 4,
+                    "maxLength": alias_proof_max_base64_bytes,
+                    "pattern": canonical_base64_pattern,
+                    "contentEncoding": "base64",
+                    "x-iroha-runtime-validation": {
+                        "maximumDecodedBytes": alias_proof_max_decoded_bytes,
+                        "requireByteIdenticalCanonicalReencode": true
+                    },
+                    "description": "Exact canonical RFC 4648 standard padded base64 encoding of 1 byte through 1 MiB of opaque alias-proof bytes."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "SorafsPinRegisterRequestV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["authority", "private_key", "manifest_payload", "submitted_epoch"],
+            "additionalProperties": false,
+            "properties": {
+                "authority": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Exact canonical domainless I105 account identifier authorizing the transaction. Native multisig identifiers remain bounded by Torii's request-body limit rather than an arbitrary string ceiling."
+                },
+                "private_key": {
+                    "type": "string",
+                    "minLength": 4,
+                    "pattern": "^(?:[a-z][a-z0-9_-]*:)?[0-9A-Fa-f]+$",
+                    "description": "Canonical exposed private-key multihash accepted by Iroha's key parser. Treat this runtime-only value as secret."
+                },
+                "manifest_payload": {
+                    "type": "string",
+                    "minLength": 4,
+                    "maxLength": manifest_max_base64_bytes,
+                    "pattern": canonical_base64_pattern,
+                    "contentEncoding": "base64",
+                    "contentMediaType": "application/x-norito",
+                    "x-iroha-runtime-validation": {
+                        "decodedType": "sorafs_manifest::ManifestV1",
+                        "maximumDecodedBytes": manifest_max_decoded_bytes,
+                        "requireByteIdenticalCanonicalReencode": true,
+                        "requireValidatedManifest": true
+                    },
+                    "description": "Sole manifest metadata source: exact canonical padded base64 of 1 byte through 512 KiB of canonical Norito ManifestV1 bytes."
+                },
+                "submitted_epoch": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "maximum": (u64::MAX)
+                },
+                "alias": {
+                    "oneOf": [
+                        { "$ref": "#/components/schemas/SorafsPinAliasV1" },
+                        { "type": "null" }
+                    ],
+                    "description": "Optional alias binding. Omission and explicit null both mean no alias."
+                },
+                "successor_of_hex": {
+                    "oneOf": [
+                        { "$ref": "#/components/schemas/SorafsPinSuccessorDigestV1" },
+                        { "type": "null" }
+                    ],
+                    "description": "Optional predecessor manifest digest. Omission and explicit null both mean no predecessor."
+                }
+            },
+            "description": "Closed first-release pin-registration request. Torii derives every manifest summary and pricing input from manifest_payload; legacy manifest_b64 and duplicate summary fields are not accepted."
+        }),
+    );
+    schemas.insert(
+        "SorafsPinRegisterResponseV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "manifest_digest_hex",
+                "chunker_handle",
+                "submitted_epoch",
+                "content_length",
+                "pin_fee",
+                "pin_fee_asset_id",
+                "pin_fee_treasury_account_id",
+                "alias",
+                "successor_of_hex"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "manifest_digest_hex": {
+                    "type": "string",
+                    "minLength": 64,
+                    "maxLength": 64,
+                    "pattern": "^[0-9a-f]{64}$"
+                },
+                "chunker_handle": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 386,
+                    "pattern": "^[a-z0-9._-]+\\.[a-z0-9._-]+@[0-9]+\\.[0-9]+\\.[0-9]+$",
+                    "description": "Canonical validated chunker identity in namespace.name@semver form."
+                },
+                "submitted_epoch": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "maximum": (u64::MAX)
+                },
+                "content_length": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "maximum": (u64::MAX)
+                },
+                "pin_fee": { "$ref": "#/components/schemas/Quantity" },
+                "pin_fee_asset_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Canonical asset-definition identifier used to collect the public pin fee."
+                },
+                "pin_fee_treasury_account_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Canonical domainless I105 treasury account receiving the public pin fee."
+                },
+                "alias": {
+                    "oneOf": [
+                        { "$ref": "#/components/schemas/SorafsPinAliasV1" },
+                        { "type": "null" }
+                    ]
+                },
+                "successor_of_hex": {
+                    "oneOf": [
+                        { "$ref": "#/components/schemas/SorafsPinSuccessorDigestV1" },
+                        { "type": "null" }
+                    ]
+                }
+            }
+        }),
+    );
+}
+
+fn insert_sorafs_pin_manifest_readback_schemas(schemas: &mut Map) {
+    let manifest_root_cid_length =
+        u64::try_from(iroha_data_model::sorafs::pin_registry::MANIFEST_ROOT_CID_LENGTH)
+            .expect("manifest root CID length must fit in an OpenAPI uint64");
+    let canonical_base64_pattern =
+        "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/][AQgw]==|[A-Za-z0-9+/]{2}[AEIMQUYcgkosw048]=)?$";
+
+    schemas.insert(
+        "PinManifestBytes32V1".to_owned(),
+        norito::json!({
+            "type": "array",
+            "minItems": 32,
+            "maxItems": 32,
+            "items": {
+                "type": "integer",
+                "format": "uint8",
+                "minimum": 0,
+                "maximum": 255
+            },
+            "description": "Exact native Norito JSON representation of one 32-byte value."
+        }),
+    );
+    schemas.insert(
+        "PinManifestRootCidV1".to_owned(),
+        norito::json!({
+            "type": "array",
+            "minItems": manifest_root_cid_length,
+            "maxItems": manifest_root_cid_length,
+            "items": {
+                "type": "integer",
+                "format": "uint8",
+                "minimum": 0,
+                "maximum": 255
+            },
+            "description": "Exact native Norito JSON byte-array representation of the canonical first-release manifest root CID."
+        }),
+    );
+    schemas.insert(
+        "ChunkerProfileHandle".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["profile_id", "namespace", "name", "semver", "multihash_code"],
+            "additionalProperties": false,
+            "properties": {
+                "profile_id": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0,
+                    "maximum": (u32::MAX)
+                },
+                "namespace": { "type": "string" },
+                "name": { "type": "string" },
+                "semver": { "type": "string" },
+                "multihash_code": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "maximum": (u64::MAX)
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "PinManifestStorageClass".to_owned(),
+        norito::json!({
+            "oneOf": [
+                {
+                    "type": "object",
+                    "required": ["type", "value"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "type": { "type": "string", "const": "Hot" },
+                        "value": { "type": "null" }
+                    }
+                },
+                {
+                    "type": "object",
+                    "required": ["type", "value"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "type": { "type": "string", "const": "Warm" },
+                        "value": { "type": "null" }
+                    }
+                },
+                {
+                    "type": "object",
+                    "required": ["type", "value"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "type": { "type": "string", "const": "Cold" },
+                        "value": { "type": "null" }
+                    }
+                }
+            ],
+            "description": "Exact externally tagged native Norito JSON representation of `StorageClass`."
+        }),
+    );
+    schemas.insert(
+        "PinPolicy".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["min_replicas", "storage_class", "retention_epoch"],
+            "additionalProperties": false,
+            "properties": {
+                "min_replicas": {
+                    "type": "integer",
+                    "format": "uint16",
+                    "minimum": 0,
+                    "maximum": (u16::MAX)
+                },
+                "storage_class": { "$ref": "#/components/schemas/PinManifestStorageClass" },
+                "retention_epoch": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "maximum": (u64::MAX)
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "ManifestAliasBinding".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["name", "namespace", "proof"],
+            "additionalProperties": false,
+            "properties": {
+                "name": { "type": "string" },
+                "namespace": { "type": "string" },
+                "proof": {
+                    "type": "string",
+                    "pattern": canonical_base64_pattern,
+                    "contentEncoding": "base64",
+                    "description": "Canonical RFC 4648 standard padded base64 emitted by native Norito JSON."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "PinStatus".to_owned(),
+        norito::json!({
+            "oneOf": [
+                {
+                    "type": "object",
+                    "required": ["status", "value"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "status": { "type": "string", "const": "Pending" },
+                        "value": { "type": "null" }
+                    }
+                },
+                {
+                    "type": "object",
+                    "required": ["status", "value"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "status": { "type": "string", "const": "Approved" },
+                        "value": {
+                            "type": "integer",
+                            "format": "uint64",
+                            "minimum": 0,
+                            "maximum": (u64::MAX)
+                        }
+                    }
+                },
+                {
+                    "type": "object",
+                    "required": ["status", "value"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "status": { "type": "string", "const": "Retired" },
+                        "value": {
+                            "type": "integer",
+                            "format": "uint64",
+                            "minimum": 0,
+                            "maximum": (u64::MAX)
+                        }
+                    }
+                }
+            ],
+            "description": "Exact externally tagged native Norito JSON representation of `PinStatus`."
+        }),
+    );
+    schemas.insert(
+        "PinFeePayment".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "paid_by",
+                "fee_asset_id",
+                "treasury_account_id",
+                "amount"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "paid_by": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Canonical domainless I105 account identifier."
+                },
+                "fee_asset_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Canonical asset-definition identifier."
+                },
+                "treasury_account_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Canonical domainless I105 account identifier."
+                },
+                "amount": { "$ref": "#/components/schemas/Quantity" }
+            }
+        }),
+    );
+    schemas.insert(
+        "PinManifestRecord".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "digest",
+                "root_cid",
+                "chunker",
+                "chunk_digest_sha3_256",
+                "por_root",
+                "content_length",
+                "policy",
+                "submitted_by",
+                "submitted_epoch",
+                "alias",
+                "metadata",
+                "status",
+                "council_envelope_digest"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "digest": { "$ref": "#/components/schemas/ManifestDigest" },
+                "root_cid": { "$ref": "#/components/schemas/PinManifestRootCidV1" },
+                "chunker": { "$ref": "#/components/schemas/ChunkerProfileHandle" },
+                "chunk_digest_sha3_256": { "$ref": "#/components/schemas/PinManifestBytes32V1" },
+                "por_root": { "$ref": "#/components/schemas/PinManifestBytes32V1" },
+                "content_length": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "maximum": (u64::MAX)
+                },
+                "policy": { "$ref": "#/components/schemas/PinPolicy" },
+                "submitted_by": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Canonical domainless I105 account identifier."
+                },
+                "submitted_epoch": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "maximum": (u64::MAX)
+                },
+                "alias": {
+                    "oneOf": [
+                        { "$ref": "#/components/schemas/ManifestAliasBinding" },
+                        { "type": "null" }
+                    ]
+                },
+                "successor_of": { "$ref": "#/components/schemas/ManifestDigest" },
+                "metadata": {
+                    "type": "object",
+                    "additionalProperties": { "$ref": "#/components/schemas/JsonValue" },
+                    "description": "Native Iroha metadata map."
+                },
+                "status": { "$ref": "#/components/schemas/PinStatus" },
+                "retirement_reason": { "type": "string" },
+                "council_envelope_digest": {
+                    "oneOf": [
+                        { "$ref": "#/components/schemas/PinManifestBytes32V1" },
+                        { "type": "null" }
+                    ]
+                },
+                "pin_fee_payment": { "$ref": "#/components/schemas/PinFeePayment" }
+            },
+            "description": "Exact native Norito JSON `PinManifestRecord`; optional fields omitted by the native codec are not projection summaries."
+        }),
+    );
+    schemas.insert(
+        "PinManifestFinalizedCursorV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["height", "block_hash"],
+            "additionalProperties": false,
+            "properties": {
+                "height": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "maximum": (u64::MAX)
+                },
+                "block_hash": { "$ref": "#/components/schemas/PinManifestBytes32V1" }
+            },
+            "description": "Finalized block anchor from the same immutable state view as the manifest."
+        }),
+    );
+    schemas.insert(
+        "PinManifestFinalizedRecordV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["finalized_cursor", "manifest"],
+            "additionalProperties": false,
+            "properties": {
+                "finalized_cursor": {
+                    "$ref": "#/components/schemas/PinManifestFinalizedCursorV1"
+                },
+                "manifest": { "$ref": "#/components/schemas/PinManifestRecord" }
+            },
+            "description": "Exact native Norito JSON response for one chain-authoritative pin manifest at one finalized block."
+        }),
+    );
+}
+
 fn openapi_schemas() -> Map {
     let max_sumeragi_validators =
         u64::try_from(iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT)
@@ -17502,6 +18184,8 @@ fn openapi_schemas() -> Map {
     );
     insert_vpn_schemas(&mut schemas);
     insert_sorafs_proof_stream_schemas(&mut schemas);
+    insert_sorafs_pin_register_schemas(&mut schemas);
+    insert_sorafs_pin_manifest_readback_schemas(&mut schemas);
     schemas.insert(
         "PositiveXorQuantity".to_owned(),
         norito::json!({
@@ -18656,18 +19340,20 @@ fn openapi_schemas() -> Map {
                 "payload_ownership_hash": { "$ref": "#/components/schemas/Hash" },
                 "rbc_instance_hash": { "$ref": "#/components/schemas/Hash" },
                 "accepted_candidate_indices": {
-                    "type": "array", "minItems": 1,
+                    "type": "array", "minItems": 1, "maxItems": 4_096,
+                    "uniqueItems": true,
                     "items": { "type": "integer", "format": "uint64", "minimum": 0 }
                 },
                 "accepted_transaction_hashes": {
-                    "type": "array", "minItems": 1,
+                    "type": "array", "minItems": 1, "maxItems": 4_096,
+                    "uniqueItems": true,
                     "items": { "$ref": "#/components/schemas/Hash" }
                 },
                 "validator_set_hash_version": { "type": "integer", "format": "uint16", "enum": [1] },
                 "validator_set_hash": { "$ref": "#/components/schemas/Hash" },
                 "validator_set": {
                     "type": "array", "minItems": 1, "maxItems": 128, "uniqueItems": true,
-                    "items": { "type": "string" }
+                    "items": { "$ref": "#/components/schemas/SumeragiV2BlsValidatorId" }
                 },
                 "validator_count": { "type": "integer", "format": "uint32", "minimum": 1, "maximum": 128 },
                 "min_quorum": { "type": "integer", "format": "uint32", "minimum": 1, "maximum": 128 },
@@ -18758,17 +19444,14 @@ fn openapi_schemas() -> Map {
                     "minItems": 1,
                     "maxItems": 128,
                     "uniqueItems": true,
-                    "items": { "type": "string" },
+                    "items": { "$ref": "#/components/schemas/SumeragiV2BlsValidatorId" },
                     "description": "Ordered validator ids used to assemble the QC."
                 },
                 "validator_set_pops": {
                     "type": "array",
                     "minItems": 1,
                     "maxItems": 128,
-                    "items": {
-                        "type": "array", "minItems": 96, "maxItems": 96,
-                        "items": { "type": "integer", "minimum": 0, "maximum": 255 }
-                    },
+                    "items": { "$ref": "#/components/schemas/SumeragiV2BlsProof" },
                     "description": "Historical compressed 96-byte BLS proofs of possession aligned with validator_set."
                 },
                 "signers_bitmap": {
@@ -18778,11 +19461,66 @@ fn openapi_schemas() -> Map {
                     "items": { "type": "integer", "minimum": 0, "maximum": 255 }
                 },
                 "bls_aggregate_signature": {
-                    "type": "array", "minItems": 96, "maxItems": 96,
-                    "items": { "type": "integer", "minimum": 0, "maximum": 255 },
-                    "description": "Compressed 96-byte BLS12-381 aggregate signature."
+                    "$ref": "#/components/schemas/SumeragiV2BlsProof"
                 }
             }
+        }),
+    );
+    schemas.insert(
+        "NativeAmxParticipantSettlementReceipt".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["source_id", "local_amount", "xor_due", "xor_after_haircut", "xor_variance", "timestamp_ms"],
+            "additionalProperties": false,
+            "properties": {
+                "source_id": {
+                    "type": "string",
+                    "pattern": "^[0-9A-F]{64}$",
+                    "description": "Ordered Native AMX participant source id as canonical uppercase 32-byte Norito JSON hex."
+                },
+                "local_amount": { "const": "0" },
+                "xor_due": { "const": "0" },
+                "xor_after_haircut": { "const": "0" },
+                "xor_variance": { "const": "0" },
+                "timestamp_ms": { "type": "integer", "format": "uint64", "minimum": 1 }
+            },
+            "description": "One zero-effect source member in a grouped control-only Native AMX participant settlement."
+        }),
+    );
+    schemas.insert(
+        "NativeAmxParticipantSettlementCommitment".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["block_height", "lane_id", "lane_incarnation", "dataspace_id", "tx_count", "total_local_amount", "total_xor_due", "total_xor_after_haircut", "total_xor_variance", "swap_metadata", "receipts", "nexus_fee_receipts", "native_amx_receipts"],
+            "additionalProperties": false,
+            "properties": {
+                "block_height": { "type": "integer", "format": "uint64", "minimum": 1 },
+                "lane_id": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 4_294_967_295_u64 },
+                "lane_incarnation": { "$ref": "#/components/schemas/Hash" },
+                "dataspace_id": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "tx_count": { "type": "integer", "format": "uint64", "minimum": 1, "maximum": 4_096 },
+                "total_local_amount": { "const": "0" },
+                "total_xor_due": { "const": "0" },
+                "total_xor_after_haircut": { "const": "0" },
+                "total_xor_variance": { "const": "0" },
+                "swap_metadata": { "type": "null" },
+                "receipts": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 4_096,
+                    "uniqueItems": true,
+                    "items": { "$ref": "#/components/schemas/NativeAmxParticipantSettlementReceipt" }
+                },
+                "nexus_fee_receipts": {
+                    "type": "array",
+                    "maxItems": 0
+                },
+                "native_amx_receipts": {
+                    "type": "array",
+                    "maxItems": 0
+                }
+            },
+            "description": "Exact bounded zero-effect participant settlement. Group ordering, timestamp equality, current-source membership, and tx_count equality require semantic validation."
         }),
     );
     schemas.insert(
@@ -18795,7 +19533,7 @@ fn openapi_schemas() -> Map {
                 "lane_id": { "type": "integer", "format": "uint32", "minimum": 0, "maximum": 4_294_967_295_u64 },
                 "dataspace_id": { "type": "integer", "format": "uint64", "minimum": 0 },
                 "participant_proposal": { "$ref": "#/components/schemas/NativeAmxParticipantLaneBlockProposal" },
-                "participant_settlement": { "$ref": "#/components/schemas/LaneSettlementCommitment" },
+                "participant_settlement": { "$ref": "#/components/schemas/NativeAmxParticipantSettlementCommitment" },
                 "participant_settlement_hash": { "$ref": "#/components/schemas/Hash" },
                 "prepare_qc": { "$ref": "#/components/schemas/NativeAmxAttestationQc" },
                 "commit_qc": { "$ref": "#/components/schemas/NativeAmxAttestationQc" }
@@ -18868,6 +19606,7 @@ fn openapi_schemas() -> Map {
                 },
                 "native_amx_receipts": {
                     "type": "array",
+                    "maxItems": 4_096,
                     "uniqueItems": true,
                     "items": { "$ref": "#/components/schemas/NativeAmxReceipt" }
                 }
@@ -26125,6 +26864,451 @@ mod tests {
     }
 
     #[test]
+    fn sorafs_pin_register_openapi_is_closed_and_manifest_authoritative() {
+        const CANONICAL_BASE64_PATTERN: &str =
+            "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/][AQgw]==|[A-Za-z0-9+/]{2}[AEIMQUYcgkosw048]=)?$";
+        const RETIRED_REQUEST_FIELDS: [&str; 10] = [
+            "chunker_profile_id",
+            "chunker_namespace",
+            "chunker_name",
+            "chunker_semver",
+            "chunker_multihash_code",
+            "pin_policy",
+            "manifest_digest_hex",
+            "manifest_b64",
+            "chunk_digest_sha3_256_hex",
+            "content_length",
+        ];
+
+        let document = generate_spec();
+        let operation = openapi_operation(&document, "/v1/sorafs/pin/register", "post");
+        assert_eq!(
+            operation_request_schema_ref(operation, "/v1/sorafs/pin/register"),
+            "#/components/schemas/SorafsPinRegisterRequestV1"
+        );
+        assert_eq!(
+            operation_response_schema_ref(operation, "200", "/v1/sorafs/pin/register"),
+            "#/components/schemas/SorafsPinRegisterResponseV1"
+        );
+        let description = operation
+            .get("description")
+            .and_then(Value::as_str)
+            .expect("pin-register operation description");
+        assert!(
+            description.contains("`manifest_payload` is the sole metadata source")
+                && description.contains("derives")
+                && description.contains("Retired duplicate summary fields"),
+            "pin-register operation must document manifest-authoritative derivation"
+        );
+
+        let schemas = component_schemas(&document);
+        assert_strict_object_schema(
+            schemas,
+            "SorafsPinRegisterRequestV1",
+            &[
+                "authority",
+                "private_key",
+                "manifest_payload",
+                "submitted_epoch",
+            ],
+            &["alias", "successor_of_hex"],
+        );
+        assert_strict_object_schema(
+            schemas,
+            "SorafsPinAliasV1",
+            &["namespace", "name", "proof_base64"],
+            &[],
+        );
+        assert_strict_object_schema(
+            schemas,
+            "SorafsPinRegisterResponseV1",
+            &[
+                "manifest_digest_hex",
+                "chunker_handle",
+                "submitted_epoch",
+                "content_length",
+                "pin_fee",
+                "pin_fee_asset_id",
+                "pin_fee_treasury_account_id",
+                "alias",
+                "successor_of_hex",
+            ],
+            &[],
+        );
+
+        let request_properties = component_properties(schemas, "SorafsPinRegisterRequestV1");
+        for retired in RETIRED_REQUEST_FIELDS {
+            assert!(
+                !request_properties.contains_key(retired),
+                "retired pin-register request field `{retired}` must remain absent"
+            );
+        }
+        assert_eq!(
+            nullable_property_ref(schemas, "SorafsPinRegisterRequestV1", "alias"),
+            "#/components/schemas/SorafsPinAliasV1"
+        );
+        assert_eq!(
+            nullable_property_ref(schemas, "SorafsPinRegisterRequestV1", "successor_of_hex"),
+            "#/components/schemas/SorafsPinSuccessorDigestV1"
+        );
+        assert_eq!(
+            nullable_property_ref(schemas, "SorafsPinRegisterResponseV1", "alias"),
+            "#/components/schemas/SorafsPinAliasV1"
+        );
+        assert_eq!(
+            nullable_property_ref(schemas, "SorafsPinRegisterResponseV1", "successor_of_hex"),
+            "#/components/schemas/SorafsPinSuccessorDigestV1"
+        );
+        assert_eq!(
+            property_ref(schemas, "SorafsPinRegisterResponseV1", "pin_fee"),
+            "#/components/schemas/Quantity"
+        );
+
+        let authority = request_properties
+            .get("authority")
+            .and_then(Value::as_object)
+            .expect("authority schema");
+        assert!(
+            !authority.contains_key("maxLength"),
+            "native multisig AccountIds must remain bounded by the route body limit, not an arbitrary string ceiling"
+        );
+        let private_key = request_properties
+            .get("private_key")
+            .and_then(Value::as_object)
+            .expect("private_key schema");
+        assert_eq!(
+            private_key.get("pattern").and_then(Value::as_str),
+            Some("^(?:[a-z][a-z0-9_-]*:)?[0-9A-Fa-f]+$")
+        );
+
+        let manifest_payload = request_properties
+            .get("manifest_payload")
+            .and_then(Value::as_object)
+            .expect("manifest_payload schema");
+        assert_eq!(
+            manifest_payload.get("minLength").and_then(Value::as_u64),
+            Some(4)
+        );
+        assert_eq!(
+            manifest_payload.get("maxLength").and_then(Value::as_u64),
+            Some(
+                u64::try_from(sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES.div_ceil(3) * 4)
+                    .expect("manifest base64 bound fits u64")
+            )
+        );
+        assert_eq!(
+            manifest_payload.get("pattern").and_then(Value::as_str),
+            Some(CANONICAL_BASE64_PATTERN)
+        );
+        assert_eq!(
+            manifest_payload
+                .get("contentEncoding")
+                .and_then(Value::as_str),
+            Some("base64")
+        );
+        assert_eq!(
+            manifest_payload
+                .get("x-iroha-runtime-validation")
+                .and_then(Value::as_object)
+                .and_then(|validation| validation.get("maximumDecodedBytes"))
+                .and_then(Value::as_u64),
+            Some(
+                u64::try_from(sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES)
+                    .expect("manifest decoded bound fits u64")
+            )
+        );
+        let manifest_validation = manifest_payload
+            .get("x-iroha-runtime-validation")
+            .and_then(Value::as_object)
+            .expect("manifest runtime validation");
+        assert_eq!(
+            manifest_validation
+                .get("requireByteIdenticalCanonicalReencode")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            manifest_validation
+                .get("requireValidatedManifest")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+
+        let alias_properties = component_properties(schemas, "SorafsPinAliasV1");
+        for segment in ["namespace", "name"] {
+            let schema = alias_properties
+                .get(segment)
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("alias {segment} schema"));
+            assert_eq!(schema.get("minLength").and_then(Value::as_u64), Some(1));
+            assert_eq!(schema.get("maxLength").and_then(Value::as_u64), Some(128));
+            assert_eq!(
+                schema.get("pattern").and_then(Value::as_str),
+                Some("^[a-z0-9._-]{1,128}$")
+            );
+        }
+        let alias_proof = alias_properties
+            .get("proof_base64")
+            .and_then(Value::as_object)
+            .expect("alias proof schema");
+        assert_eq!(
+            alias_proof.get("minLength").and_then(Value::as_u64),
+            Some(4)
+        );
+        assert_eq!(
+            alias_proof.get("maxLength").and_then(Value::as_u64),
+            Some(1_398_104)
+        );
+        assert_eq!(
+            alias_proof.get("pattern").and_then(Value::as_str),
+            Some(CANONICAL_BASE64_PATTERN)
+        );
+        assert_eq!(
+            alias_proof.get("contentEncoding").and_then(Value::as_str),
+            Some("base64")
+        );
+        assert_eq!(
+            alias_proof
+                .get("x-iroha-runtime-validation")
+                .and_then(Value::as_object)
+                .and_then(|validation| validation.get("maximumDecodedBytes"))
+                .and_then(Value::as_u64),
+            Some(1_048_576)
+        );
+        assert_eq!(
+            alias_proof
+                .get("x-iroha-runtime-validation")
+                .and_then(Value::as_object)
+                .and_then(|validation| { validation.get("requireByteIdenticalCanonicalReencode") })
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+
+        let successor = schemas
+            .get("SorafsPinSuccessorDigestV1")
+            .and_then(Value::as_object)
+            .expect("successor digest schema");
+        assert_eq!(successor.get("minLength").and_then(Value::as_u64), Some(64));
+        assert_eq!(successor.get("maxLength").and_then(Value::as_u64), Some(64));
+        assert_eq!(
+            successor.get("pattern").and_then(Value::as_str),
+            Some("^(?!0{64}$)[0-9a-f]{64}$")
+        );
+    }
+
+    #[test]
+    fn sorafs_pin_manifest_openapi_is_finalized_native_readback() {
+        const PATH: &str = "/v1/sorafs/pin/{digest_hex}";
+        const RETIRED_TOP_LEVEL_FIELDS: [&str; 10] = [
+            "limit",
+            "attestation",
+            "aliases",
+            "alias_count",
+            "aliases_returned",
+            "aliases_truncated",
+            "replication_orders",
+            "replication_order_count",
+            "replication_orders_returned",
+            "replication_orders_truncated",
+        ];
+
+        let document = generate_spec();
+        let operation = openapi_operation(&document, PATH, "get");
+        assert_eq!(
+            operation_response_schema_ref(operation, "200", PATH),
+            "#/components/schemas/PinManifestFinalizedRecordV1"
+        );
+        let description = operation
+            .get("description")
+            .and_then(Value::as_str)
+            .expect("pin-manifest operation description");
+        assert!(
+            description.contains("exact native Norito JSON `PinManifestFinalizedRecordV1`")
+                && description.contains("must be supplied together")
+                && description.contains("stale anchor returns 409")
+                && description.contains("retired projection `limit`"),
+            "pin-manifest operation must document finalized native readback and paired-anchor semantics"
+        );
+
+        let parameters = operation
+            .get("parameters")
+            .and_then(Value::as_array)
+            .expect("pin-manifest parameters");
+        assert_eq!(parameters.len(), 3);
+        assert_eq!(
+            parameters
+                .iter()
+                .filter_map(|parameter| parameter.get("name").and_then(Value::as_str))
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                "digest_hex",
+                "expected_finalized_height",
+                "expected_finalized_block_hash_hex",
+            ])
+        );
+        assert!(
+            parameters
+                .iter()
+                .all(|parameter| parameter.get("name").and_then(Value::as_str) != Some("limit")),
+            "the retired projection limit must not remain in the operation"
+        );
+
+        let height = parameters
+            .iter()
+            .find(|parameter| {
+                parameter.get("name").and_then(Value::as_str) == Some("expected_finalized_height")
+            })
+            .and_then(Value::as_object)
+            .expect("expected finalized height parameter");
+        assert_eq!(height.get("in").and_then(Value::as_str), Some("query"));
+        assert_eq!(height.get("required").and_then(Value::as_bool), Some(false));
+        assert_eq!(
+            height
+                .get("schema")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("minimum"))
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+
+        let block_hash = parameters
+            .iter()
+            .find(|parameter| {
+                parameter.get("name").and_then(Value::as_str)
+                    == Some("expected_finalized_block_hash_hex")
+            })
+            .and_then(Value::as_object)
+            .expect("expected finalized block hash parameter");
+        assert_eq!(block_hash.get("in").and_then(Value::as_str), Some("query"));
+        assert_eq!(
+            block_hash.get("required").and_then(Value::as_bool),
+            Some(false)
+        );
+        let block_hash_schema = block_hash
+            .get("schema")
+            .and_then(Value::as_object)
+            .expect("expected finalized block hash schema");
+        assert_eq!(
+            block_hash_schema.get("minLength").and_then(Value::as_u64),
+            Some(64)
+        );
+        assert_eq!(
+            block_hash_schema.get("maxLength").and_then(Value::as_u64),
+            Some(64)
+        );
+        assert_eq!(
+            block_hash_schema.get("pattern").and_then(Value::as_str),
+            Some("^(?!0{64}$)[0-9a-f]{64}$")
+        );
+
+        let schemas = component_schemas(&document);
+        assert_strict_object_schema(
+            schemas,
+            "PinManifestFinalizedRecordV1",
+            &["finalized_cursor", "manifest"],
+            &[],
+        );
+        assert_strict_object_schema(
+            schemas,
+            "PinManifestFinalizedCursorV1",
+            &["height", "block_hash"],
+            &[],
+        );
+        assert_strict_object_schema(
+            schemas,
+            "PinManifestRecord",
+            &[
+                "digest",
+                "root_cid",
+                "chunker",
+                "chunk_digest_sha3_256",
+                "por_root",
+                "content_length",
+                "policy",
+                "submitted_by",
+                "submitted_epoch",
+                "alias",
+                "metadata",
+                "status",
+                "council_envelope_digest",
+            ],
+            &["successor_of", "retirement_reason", "pin_fee_payment"],
+        );
+        assert_eq!(
+            property_ref(schemas, "PinManifestFinalizedRecordV1", "finalized_cursor"),
+            "#/components/schemas/PinManifestFinalizedCursorV1"
+        );
+        assert_eq!(
+            property_ref(schemas, "PinManifestFinalizedRecordV1", "manifest"),
+            "#/components/schemas/PinManifestRecord"
+        );
+        assert_eq!(
+            property_ref(schemas, "PinManifestRecord", "por_root"),
+            "#/components/schemas/PinManifestBytes32V1"
+        );
+        assert_eq!(
+            property_ref(schemas, "PinManifestRecord", "status"),
+            "#/components/schemas/PinStatus"
+        );
+        assert_eq!(
+            nullable_property_ref(schemas, "PinManifestRecord", "alias"),
+            "#/components/schemas/ManifestAliasBinding"
+        );
+        assert_eq!(
+            nullable_property_ref(schemas, "PinManifestRecord", "council_envelope_digest"),
+            "#/components/schemas/PinManifestBytes32V1"
+        );
+
+        let content_length = component_properties(schemas, "PinManifestRecord")
+            .get("content_length")
+            .and_then(Value::as_object)
+            .expect("native manifest content length schema");
+        assert_eq!(
+            content_length.get("type").and_then(Value::as_str),
+            Some("integer")
+        );
+        assert_eq!(
+            content_length.get("format").and_then(Value::as_str),
+            Some("uint64")
+        );
+
+        let response_properties = component_properties(schemas, "PinManifestFinalizedRecordV1");
+        for retired in RETIRED_TOP_LEVEL_FIELDS {
+            assert!(
+                !response_properties.contains_key(retired),
+                "retired pin-manifest projection field `{retired}` must remain absent"
+            );
+        }
+        let bytes32 = schemas
+            .get("PinManifestBytes32V1")
+            .and_then(Value::as_object)
+            .expect("pin-manifest bytes32 schema");
+        assert_eq!(bytes32.get("minItems").and_then(Value::as_u64), Some(32));
+        assert_eq!(bytes32.get("maxItems").and_then(Value::as_u64), Some(32));
+        let statuses = schemas
+            .get("PinStatus")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("oneOf"))
+            .and_then(Value::as_array)
+            .expect("native pin status variants");
+        assert_eq!(
+            statuses
+                .iter()
+                .filter_map(|variant| {
+                    variant
+                        .get("properties")
+                        .and_then(Value::as_object)
+                        .and_then(|properties| properties.get("status"))
+                        .and_then(Value::as_object)
+                        .and_then(|status| status.get("const"))
+                        .and_then(Value::as_str)
+                })
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["Pending", "Approved", "Retired"])
+        );
+    }
+
+    #[test]
     fn proof_stream_openapi_matches_the_closed_canonical_envelope() {
         let document = generate_spec();
         let operation = openapi_operation(&document, "/v1/sorafs/proof/stream", "post");
@@ -26160,40 +27344,17 @@ mod tests {
         );
 
         let schemas = component_schemas(&document);
-        let storage_por_operation =
-            openapi_operation(&document, "/v1/sorafs/storage/por-sample", "post");
-        assert_eq!(
-            operation_request_schema_ref(storage_por_operation, "/v1/sorafs/storage/por-sample"),
-            "#/components/schemas/SorafsStoragePorSampleRequestV1"
-        );
-        let storage_por_request = schemas
-            .get("SorafsStoragePorSampleRequestV1")
-            .and_then(Value::as_object)
-            .expect("provider-bound storage PoR request schema");
-        assert_eq!(
-            storage_por_request
-                .get("additionalProperties")
-                .and_then(Value::as_bool),
-            Some(false)
+        assert!(
+            document
+                .get("paths")
+                .and_then(Value::as_object)
+                .and_then(|paths| paths.get("/v1/sorafs/storage/por-sample"))
+                .is_none(),
+            "the unauthenticated local PoR sampling route must remain retired"
         );
         assert!(
-            storage_por_request
-                .get("required")
-                .and_then(Value::as_array)
-                .expect("storage PoR required fields")
-                .iter()
-                .any(|field| field.as_str() == Some("provider_id_hex")),
-            "storage PoR requests must bind the configured provider"
-        );
-        assert_eq!(
-            storage_por_request
-                .get("properties")
-                .and_then(Value::as_object)
-                .and_then(|properties| properties.get("provider_id_hex"))
-                .and_then(Value::as_object)
-                .and_then(|provider| provider.get("pattern"))
-                .and_then(Value::as_str),
-            Some("^[0-9a-f]{64}$")
+            !schemas.contains_key("SorafsStoragePorSampleRequestV1"),
+            "the retired route's request schema must not remain in generated OpenAPI"
         );
         let aggregate = schemas
             .get("SorafsProofStreamHttpRequestV1")
@@ -26279,6 +27440,49 @@ mod tests {
                 .get("properties")
                 .and_then(Value::as_object)
                 .expect("proof request properties");
+            for field in [
+                "expected_finalized_height",
+                "expected_finalized_block_hash_hex",
+            ] {
+                assert!(
+                    properties.contains_key(field),
+                    "{name} must publish the finalized cursor field {field}"
+                );
+            }
+            if kind == "por" {
+                for field in [
+                    "expected_finalized_height",
+                    "expected_finalized_block_hash_hex",
+                ] {
+                    assert!(
+                        required
+                            .iter()
+                            .any(|required| required.as_str() == Some(field)),
+                        "PoR must require finalized cursor field {field}"
+                    );
+                }
+            } else {
+                let dependencies = schema
+                    .get("dependentRequired")
+                    .and_then(Value::as_object)
+                    .unwrap_or_else(|| panic!("{name} finalized cursor dependencies"));
+                assert_eq!(
+                    dependencies
+                        .get("expected_finalized_height")
+                        .and_then(Value::as_array)
+                        .and_then(|fields| fields.first())
+                        .and_then(Value::as_str),
+                    Some("expected_finalized_block_hash_hex")
+                );
+                assert_eq!(
+                    dependencies
+                        .get("expected_finalized_block_hash_hex")
+                        .and_then(Value::as_array)
+                        .and_then(|fields| fields.first())
+                        .and_then(Value::as_str),
+                    Some("expected_finalized_height")
+                );
+            }
             assert_eq!(
                 properties
                     .get("proof_kind")
@@ -26306,6 +27510,22 @@ mod tests {
                     .and_then(|nonce| nonce.get("pattern"))
                     .and_then(Value::as_str),
                 Some("^(?!A{22}==$)[A-Za-z0-9+/]{21}[AQgw]==$")
+            );
+            assert_eq!(
+                properties
+                    .get("expected_finalized_height")
+                    .and_then(Value::as_object)
+                    .and_then(|height| height.get("minimum"))
+                    .and_then(Value::as_u64),
+                Some(1)
+            );
+            assert_eq!(
+                properties
+                    .get("expected_finalized_block_hash_hex")
+                    .and_then(Value::as_object)
+                    .and_then(|hash| hash.get("pattern"))
+                    .and_then(Value::as_str),
+                Some("^(?!0{64}$)[0-9a-f]{64}$")
             );
         }
 
@@ -26343,6 +27563,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             [
                 "payload_len",
+                "chunk_count",
                 "chunk_index",
                 "chunk_offset",
                 "chunk_length",
@@ -26359,7 +27580,7 @@ mod tests {
                 "leaf_digest_hex",
                 "segment_leaves_hex",
                 "chunk_segments_hex",
-                "chunk_roots_hex",
+                "chunk_merkle_path_hex",
             ]
         );
         let proof_properties = por_proof
@@ -26395,7 +27616,8 @@ mod tests {
             Some(8_192)
         );
         for (field, maximum) in [
-            ("chunk_index", 2_047),
+            ("chunk_count", 4_194_304),
+            ("chunk_index", 4_194_303),
             ("chunk_length", 4_194_304),
             ("segment_index", 63),
             ("segment_length", 65_536),
@@ -26412,11 +27634,7 @@ mod tests {
                 "{field} must publish the self-verifying runtime bound"
             );
         }
-        for (field, maximum) in [
-            ("segment_leaves_hex", 16),
-            ("chunk_segments_hex", 64),
-            ("chunk_roots_hex", 2_048),
-        ] {
+        for (field, maximum) in [("segment_leaves_hex", 16), ("chunk_segments_hex", 64)] {
             let array = proof_properties
                 .get(field)
                 .and_then(Value::as_object)
@@ -26441,6 +27659,12 @@ mod tests {
                 "{field} entries must use canonical lowercase digest hex"
             );
         }
+        let chunk_path = proof_properties
+            .get("chunk_merkle_path_hex")
+            .and_then(Value::as_object)
+            .expect("chunk Merkle path schema");
+        assert_eq!(chunk_path.get("minItems").and_then(Value::as_u64), Some(0));
+        assert_eq!(chunk_path.get("maxItems").and_then(Value::as_u64), Some(22));
 
         let item = schemas
             .get("SorafsProofStreamItemV1")
@@ -29435,6 +30659,10 @@ mod tests {
         assert!(
             paths.contains_key("/v1/sorafs/moderation/ballots/{case_id}/{round_id}/no-show-plan")
         );
+        assert!(paths.contains_key("/v1/sorafs/moderation/ballots/eligibility"));
+        assert!(paths.contains_key("/v1/sorafs/moderation/ballots/sortition"));
+        assert!(paths.contains_key("/v1/sorafs/moderation/ballots/assignments/accept"));
+        assert!(paths.contains_key("/v1/sorafs/moderation/ballots/activate"));
         assert!(paths.contains_key("/v1/sorafs/moderation/ballots/commits"));
         assert!(paths.contains_key("/v1/sorafs/moderation/ballots/challenges"));
         assert!(paths.contains_key("/v1/sorafs/moderation/ballots/challenges/resolve"));
@@ -29452,10 +30680,6 @@ mod tests {
             paths.contains_key(
                 "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/appeal-handoff"
             )
-        );
-        assert!(
-            paths
-                .contains_key("/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/appeal-ballot")
         );
         assert!(
             paths.contains_key(
@@ -32856,6 +34080,8 @@ mod tests {
             "NexusFeeReceipt",
             "NativeAmxReceipt",
             "NativeAmxLegRecord",
+            "NativeAmxParticipantSettlementCommitment",
+            "NativeAmxParticipantSettlementReceipt",
             "NativeAmxAttestationQc",
             "NativeAmxAttestationBody",
             "NativeAmxPhase",
@@ -34382,6 +35608,14 @@ mod tests {
         );
         assert_eq!(
             commitment_properties
+                .get("native_amx_receipts")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("maxItems"))
+                .and_then(Value::as_u64),
+            Some(4_096)
+        );
+        assert_eq!(
+            commitment_properties
                 .get("nexus_fee_receipts")
                 .and_then(Value::as_object)
                 .and_then(|schema| schema.get("items"))
@@ -34489,7 +35723,7 @@ mod tests {
             ),
             (
                 "participant_settlement",
-                "#/components/schemas/LaneSettlementCommitment",
+                "#/components/schemas/NativeAmxParticipantSettlementCommitment",
             ),
             ("participant_settlement_hash", "#/components/schemas/Hash"),
         ] {
@@ -34503,6 +35737,73 @@ mod tests {
                 "{field} should reference its exact participant-finality schema"
             );
         }
+        let participant_settlement = schemas
+            .get("NativeAmxParticipantSettlementCommitment")
+            .and_then(Value::as_object)
+            .expect("Native AMX participant settlement schema");
+        assert_eq!(
+            participant_settlement
+                .get("additionalProperties")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        let participant_settlement_properties = participant_settlement
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("Native AMX participant settlement properties");
+        for field in [
+            "total_local_amount",
+            "total_xor_due",
+            "total_xor_after_haircut",
+            "total_xor_variance",
+        ] {
+            assert_eq!(
+                participant_settlement_properties
+                    .get(field)
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("const"))
+                    .and_then(Value::as_str),
+                Some("0"),
+                "participant settlement {field} must be zero"
+            );
+        }
+        for field in ["nexus_fee_receipts", "native_amx_receipts"] {
+            assert_eq!(
+                participant_settlement_properties
+                    .get(field)
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("maxItems"))
+                    .and_then(Value::as_u64),
+                Some(0),
+                "participant settlement {field} must be empty"
+            );
+        }
+        let participant_receipts = participant_settlement_properties
+            .get("receipts")
+            .and_then(Value::as_object)
+            .expect("Native AMX participant receipts schema");
+        assert_eq!(
+            participant_receipts.get("minItems").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            participant_receipts.get("maxItems").and_then(Value::as_u64),
+            Some(4_096)
+        );
+        assert_eq!(
+            participant_receipts
+                .get("uniqueItems")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            participant_receipts
+                .get("items")
+                .and_then(Value::as_object)
+                .and_then(|items| items.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/NativeAmxParticipantSettlementReceipt")
+        );
         for qc_field in ["prepare_qc", "commit_qc"] {
             assert_eq!(
                 leg_properties
@@ -34545,6 +35846,14 @@ mod tests {
             validator_set.get("uniqueItems").and_then(Value::as_bool),
             Some(true)
         );
+        assert_eq!(
+            validator_set
+                .get("items")
+                .and_then(Value::as_object)
+                .and_then(|items| items.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/SumeragiV2BlsValidatorId")
+        );
         let validator_set_pops = qc_properties
             .get("validator_set_pops")
             .and_then(Value::as_object)
@@ -34561,9 +35870,9 @@ mod tests {
             validator_set_pops
                 .get("items")
                 .and_then(Value::as_object)
-                .and_then(|items| items.get("minItems"))
-                .and_then(Value::as_u64),
-            Some(96)
+                .and_then(|items| items.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/SumeragiV2BlsProof")
         );
         assert_eq!(
             qc_properties
@@ -34585,10 +35894,32 @@ mod tests {
             qc_properties
                 .get("bls_aggregate_signature")
                 .and_then(Value::as_object)
-                .and_then(|schema| schema.get("maxItems"))
-                .and_then(Value::as_u64),
-            Some(96)
+                .and_then(|schema| schema.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/SumeragiV2BlsProof")
         );
+
+        let descriptor_properties = schemas
+            .get("NativeAmxParticipantLaneBlockDescriptor")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("properties"))
+            .and_then(Value::as_object)
+            .expect("Native AMX participant descriptor properties");
+        for field in ["accepted_candidate_indices", "accepted_transaction_hashes"] {
+            let accepted = descriptor_properties
+                .get(field)
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("Native AMX descriptor {field} schema"));
+            assert_eq!(accepted.get("minItems").and_then(Value::as_u64), Some(1));
+            assert_eq!(
+                accepted.get("maxItems").and_then(Value::as_u64),
+                Some(4_096)
+            );
+            assert_eq!(
+                accepted.get("uniqueItems").and_then(Value::as_bool),
+                Some(true)
+            );
+        }
 
         let body_schema = schemas
             .get("NativeAmxAttestationBody")

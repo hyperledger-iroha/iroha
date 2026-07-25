@@ -65,6 +65,12 @@ HEDGING_FIXTURE_GENERATOR_RS = (
 )
 POP_CREDENTIALS_RS = REPO_ROOT / "crates" / "sorafs_manifest" / "src" / "pop_credentials.rs"
 SORAFS_NODE_LIB_RS = REPO_ROOT / "crates" / "sorafs_node" / "src" / "lib.rs"
+SORAFS_NODE_MODERATION_RS = (
+    REPO_ROOT / "crates" / "sorafs_node" / "src" / "moderation.rs"
+)
+SORAFS_MODERATION_ORCHESTRATOR_RS = (
+    REPO_ROOT / "crates" / "sorafs_node" / "src" / "moderation_orchestrator.rs"
+)
 SORAFS_ORCHESTRATOR_LIB_RS = (
     REPO_ROOT / "crates" / "sorafs_orchestrator" / "src" / "lib.rs"
 )
@@ -110,6 +116,14 @@ SORAFS_VALIDATE_CLI_TEST_RS = (
 IROHA_CLIENT_RS = REPO_ROOT / "crates" / "iroha" / "src" / "client.rs"
 TORII_LIB_RS = REPO_ROOT / "crates" / "iroha_torii" / "src" / "lib.rs"
 TORII_SORAFS_API_RS = REPO_ROOT / "crates" / "iroha_torii" / "src" / "sorafs" / "api.rs"
+TORII_SORAFS_GATEWAY_COMPLIANCE_API_RS = (
+    REPO_ROOT
+    / "crates"
+    / "iroha_torii"
+    / "src"
+    / "sorafs"
+    / "gateway_compliance_api.rs"
+)
 TORII_SORAFS_POP_API_RS = (
     REPO_ROOT / "crates" / "iroha_torii" / "src" / "sorafs" / "pop_api.rs"
 )
@@ -15158,7 +15172,7 @@ def test_sorafs_node_plan_docs_track_current_storage_routes() -> None:
         "/v1/sorafs/storage/chunk/{manifest_id}/{chunk_digest}",
         "/v1/sorafs/storage/peers",
         "/v1/sorafs/storage/state",
-        "/v1/sorafs/storage/por-sample",
+        "/v1/sorafs/proof/stream",
     )
     unsupported_routes = (
         "/v1/sorafs/storage/por-challenge",
@@ -15174,6 +15188,7 @@ def test_sorafs_node_plan_docs_track_current_storage_routes() -> None:
         "/sorafs/chunks/",
         "/sorafs/por/sample",
         "/sorafs/telemetry",
+        "/v1/sorafs/storage/por-sample",
         "/v1/sorafs/storage/por/sample",
         "/v1/sorafs/storage/por-challenge",
         "/v1/sorafs/storage/por-proof",
@@ -15209,8 +15224,9 @@ def test_sorafs_node_plan_docs_track_current_storage_routes() -> None:
     assert missing_openapi == []
     assert (
         'const TELEMETRY_ENDPOINT_POR_SAMPLE: &str = "/v1/sorafs/storage/por-sample";'
-        in torii_sorafs_api
+        not in torii_sorafs_api
     )
+    assert '"/v1/sorafs/storage/por-sample".to_owned()' not in openapi
     assert '"/v1/sorafs/storage/por/sample"' not in torii_sorafs_api
 
 
@@ -15224,9 +15240,12 @@ def test_sorafs_node_storage_docs_track_current_readback_routes() -> None:
         "/v1/sorafs/storage/manifest/{manifest_id_hex}",
         "/v1/sorafs/storage/plan/{manifest_id_hex}",
     )
+    # Localized files marked `needs-translation` are traceable stubs. Their
+    # freshness is enforced by the source-hash tests below; implementation
+    # route assertions belong to the two canonical English documents.
     docs = (
-        *sorted(SORAFS_NODE_STORAGE.parent.glob("sorafs_node_storage*.md")),
-        *sorted(SORAFS_NODE_PORTAL_DIR.glob("node-storage*.md")),
+        SORAFS_NODE_STORAGE,
+        SORAFS_NODE_PORTAL_DIR / "node-storage.md",
     )
     missing_routes: dict[str, list[str]] = {}
     stale: dict[str, list[str]] = {}
@@ -16977,7 +16996,6 @@ def test_ai_prescreen_deployed_workflow_surface_matcher_has_negative_controls() 
         "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/review",
         "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/release",
         "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/appeal-handoff",
-        "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/appeal-ballot",
         "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/operator-panel",
         "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/juror-notifications",
         "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/commit-reveal-status",
@@ -17030,7 +17048,6 @@ def test_ai_prescreen_deployed_workflow_surface_matcher_has_negative_controls() 
         "moderation quarantine review",
         "moderation quarantine release",
         "moderation quarantine appeal-handoff",
-        "moderation quarantine appeal-ballot",
         "moderation quarantine operator-panel",
         "moderation quarantine bridge-plan",
         "moderation quarantine operator-serve",
@@ -17122,22 +17139,23 @@ def test_moderation_panel_parent_services_stay_open_in_docs() -> None:
     normalized = re.sub(r"\s+", " ", source)
 
     required_open = (
-        "The consensus path now ships authoritative appeal intake and deterministic PoP-gated panel formation.",
-        "It does not yet ship the deployed moderation service facade, production panel orchestrator, secure evidence viewer, juror portal workflow, or reviewed deployment evidence described in the original plan.",
+        "The process-local sorafs_node ballot runtime, checkpoint, event stream, and caller-fed projection have been deleted.",
+        "Torii transports exact signed native instructions and serves only reconciled finalized-chain projections.",
+        "The repository still lacks reviewed reference-deployment evidence for the complete moderation service, evidence viewer, juror notification/portal workflow, downstream settlement/publication, and four-validator recovery scenarios.",
         "The production service still needs deployed integrations that bind:",
         "evidence access attestation",
         "decision publication and appeal cache updates.",
-        "Do not document `sorafs moderation jury-accept`, `sorafs moderation open-case`, or similar portal commands as shipped until the corresponding service and CLI handlers exist.",
-        "Build and deploy the production appeal/panel transaction submitter, retry and reconciliation worker, ballot orchestrator, challenge monitor, juror notification/portal workflow, and scheduled no-show settlement handoff around the authoritative intake, sortition, and commit/reveal ledger described by `docs/source/sorafs_commit_reveal_plan.md`.",
+        "Do not document",
+        "similar portal commands as shipped until the corresponding service and CLI handlers exist.",
+        "Build and deploy the production appeal/panel transaction submitter, retry and reconciliation worker, ballot orchestrator, challenge monitor, juror notification/portal workflow, and scheduled no-show settlement handoff",
         "Connect panel outcomes to gateway compliance caches, transparency publication, settlement reconciliation, and reputation scoring.",
-        "Promote local Governance DAG moderation event publication into the durable contract-backed and public IPFS/IPNS decision trail.",
+        "Connect committed native moderation events to the durable Governance DAG and public IPFS/IPNS decision trail.",
         "Capture reviewed, payload-free deployed evidence for appeal intake, sortition roster, evidence viewer, operator workflow, juror notification, commit/reveal, decision publication, settlement integration, transparency/reputation handoff, panel metrics, end-to-end panel simulation, and governance approval that passes the SFM-4b rollout evidence gate.",
         "Use the rollout gate after the deployed moderation appeal service, panel sortition, evidence viewer, operator workflow, juror notification transport, commit/reveal voting path, decision publication, settlement handoff, transparency/reputation handoff, metrics, end-to-end panel simulation, and governance packet have produced reviewed, payload-free JSON evidence",
     )
     missing = [phrase for phrase in required_open if phrase not in normalized]
 
     assert missing == []
-
 
 def test_moderation_panel_docs_keep_rollout_contract_markers() -> None:
     required_current = (
@@ -17905,7 +17923,6 @@ def test_moderation_panel_parent_surface_matcher_has_negative_controls() -> None
         "/v1/sorafs/moderation/quarantine",
         "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/operator-panel",
         "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/appeal-handoff",
-        "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/appeal-ballot",
     )
     shipped_local_route_candidates = (
         "/v1/sorafs/moderation/appeals/intake-canary",
@@ -17930,7 +17947,6 @@ def test_moderation_panel_parent_surface_matcher_has_negative_controls() -> None
         "executor-canary",
         "moderation quarantine operator-panel",
         "moderation quarantine appeal-handoff",
-        "moderation quarantine appeal-ballot",
         "moderation panel service-canary",
         "moderation panel decision-canary",
         "moderation portal-canary",
@@ -18000,15 +18016,18 @@ def test_reputation_live_ingest_publisher_services_stay_open_in_docs() -> None:
     normalized = re.sub(r"\s+", " ", source)
 
     required_open = (
-        "Remaining rollout work is deploying the live ingest/publisher service and archiving production evidence that passes the rollout evidence gate, not the local scoring, proof, API, CLI, SDK, dashboard, or verifier foundations.",
-        "Metrics ingest pipeline (`reputation_ingest`) | Streams PoR/PDP/PoTR verdicts, settlement logs, disputes, token violations from Governance DAG + telemetry exporters. | Validates payload signatures, persists raw events.",
+        "SFM-3 has two local foundations: the deterministic reputation V1 snapshot/proof core and a native committed input journal.",
+        "This is source implementation, not a readiness claim.",
+        "The existing local Torii snapshot publication/read APIs still serve the `sorafs_node` snapshot checkpoint; they are not the production committed-journal projection.",
+        "Capacity-dispute registration appends `Opened` atomically with the canonical dispute record, and `ResolveSorafsCapacityDispute` atomically updates that record and appends the exact revision-two `Resolved` event.",
+        "Metrics ingest pipeline (`reputation_ingest`) | Consumes fixed-view pages from `FindSorafsReputationJournalEvents` and, once wired, the remaining typed committed proof/repair/orderbook/reserve sources. | Persists only rebuildable projections plus a durable finalized cursor/outbox. PoR, stream-token, and capacity-dispute journal producers exist in native core; the broader producer and service wiring remains open.",
         "Scoring engine (`reputation_engine`) | Aggregates metrics, runs scoring algorithm (EigenTrust-style), applies policy penalties, generates snapshots. | Runs hourly; writes outputs to database + object storage.",
         "Snapshot publisher (`reputation_publisher`) | Builds Merkle tree, updates Governance DAG, pushes snapshots to IPFS/S3, broadcasts Torii events. | Weekly full snapshot + daily incremental diff.",
         "API gateway (`sorafs_reputation_api`) | Exposes REST/GraphQL endpoints, WebSocket updates, CLI hooks. | Deployed regionally; uses caching with ETag.",
-        "Implement ingestion (DAG listeners) and data schema; deploy staging environment drawing from test governance DAG.",
-        "Build scoring engine and snapshot publisher; verify results with synthetic data.",
+        "Complete source validation for the native journal, then add authenticated Torii transaction/query projections, OpenAPI entries, and SDK builders.",
+        "Build the durable finalized-cursor ingest/reconciliation service. Its local database is rebuildable, its outbox is retry-safe, and it emits deterministic signing material while threshold signing remains external.",
         "Production rollout:",
-        "Deploy the live ingest/publisher service against production proof, dispute, settlement, and reserve/rent event sources.",
+        "Complete integrated source validation; expose authenticated Torii/OpenAPI and SDK journal transaction/query surfaces; connect every governed committed producer; and deploy the durable finalized-cursor ingest/reconciliation/outbox service plus externally signed publisher.",
         "Capture live run evidence for snapshot freshness, ingest lag, low-score handling, SSE/WebSocket event delivery, and routing/incentive consumption",
         "Publish governance-approved weights with the governed `weights_digest_hex` carried by publish/latest rollout evidence, then archive the first production snapshot `.to`/JSON artifacts and proof replay evidence.",
         "Exercise rollback/stale-snapshot procedures before routing or incentives rely",
@@ -18016,6 +18035,36 @@ def test_reputation_live_ingest_publisher_services_stay_open_in_docs() -> None:
     missing = [phrase for phrase in required_open if phrase not in normalized]
 
     assert missing == []
+
+
+def test_capacity_marketplace_docs_keep_authoritative_dispute_boundary() -> None:
+    marketplace = read(
+        DOCS_SOURCE_DIR / "sorafs" / "storage_capacity_marketplace.md"
+    )
+    validation = read(
+        DOCS_SOURCE_DIR
+        / "sorafs"
+        / "reports"
+        / "capacity_marketplace_validation.md"
+    )
+    combined = re.sub(r"\s+", " ", f"{marketplace}\n{validation}")
+
+    required = (
+        "Proof-failure telemetry drives only the configured penalty and alert path; it never creates or signs a capacity dispute.",
+        "Registration stores the pending dispute and appends its chain-authoritative reputation-journal `Opened` event atomically.",
+        "`ResolveSorafsCapacityDispute` later updates the same record and appends the exact predecessor-bound revision-two `Resolved` event atomically.",
+        "`record_capacity_telemetry_does_not_mutate_capacity_disputes`",
+        "`proof_failure_telemetry_replay_is_deterministic`",
+        "`capacity_dispute_resolution_is_atomic_terminal_and_replay_safe`",
+    )
+    stale = (
+        "capacity_dispute_replay_is_deterministic",
+        "Proof failure governance evidence is now emitted automatically.",
+        "Proof-failure telemetry replayed twice produces identical ledger, credit, and dispute snapshots",
+    )
+
+    assert [phrase for phrase in required if phrase not in combined] == []
+    assert [phrase for phrase in stale if phrase in combined] == []
 
 
 def test_reputation_docs_keep_rollout_contract_markers() -> None:
@@ -18794,7 +18843,10 @@ def test_por_docs_keep_rollout_contract_markers() -> None:
     )
     missing_current: dict[str, list[str]] = {}
 
-    for path in sorted(DOCS_SOURCE_DIR.glob("sorafs_por_plan*.md")):
+    # Semantic rollout assertions belong to the canonical source. Localized
+    # mirrors may be traceable `needs-translation` stubs after that source
+    # changes; the metadata guards separately reject stale completed mirrors.
+    for path in (SORAFS_POR_PLAN,):
         normalized = re.sub(r"\s+", " ", read(path))
         missing = [phrase for phrase in required_current if phrase not in normalized]
         if missing:
@@ -19058,7 +19110,9 @@ def test_por_validator_docs_keep_rollout_contract_markers() -> None:
     )
     missing_current: dict[str, list[str]] = {}
 
-    for path in sorted(DOCS_SOURCE_DIR.glob("sorafs_por_validator_plan*.md")):
+    # See `test_por_docs_keep_rollout_contract_markers`: translated stubs are
+    # intentionally metadata-checked instead of being treated as authorities.
+    for path in (SORAFS_POR_VALIDATOR_PLAN,):
         normalized = re.sub(r"\s+", " ", read(path))
         missing = [phrase for phrase in required_current if phrase not in normalized]
         if missing:
@@ -19249,7 +19303,7 @@ def test_por_live_deployment_surface_matcher_has_negative_controls() -> None:
         "/v1/sorafs/por/report/{iso_week}",
         "/v1/sorafs/capacity/por-proof",
         "/v1/sorafs/capacity/por-verdict",
-        "/v1/sorafs/storage/por-sample",
+        "/v1/sorafs/proof/stream",
     )
     shipped_local_route_candidates = (
         "/v1/sorafs/por/live-deployment-canary",
@@ -19813,20 +19867,23 @@ def test_unshipped_potr_live_rollout_surface_is_not_exposed() -> None:
     assert exposed == {}
 
 
-def test_repair_chain_authority_and_live_evidence_work_stay_open_in_docs() -> None:
+def test_repair_chain_authority_is_closed_and_live_evidence_stays_open_in_docs() -> None:
     source = read(SORAFS_REPAIR_PLAN)
     normalized = re.sub(r"\s+", " ", source)
 
     required_open = (
-        "Remaining SF-8b implementation work is to submit every auditor/worker transition as a native transaction, reconcile finalized task and event queries, rebuild daemon state solely from committed history, and delete the authoritative local mutation path.",
-        "Use the rollout gate only after the native finalized-chain cutover and after the deployed auditor roster, SF-9 coordinator, PoR/PoTR failure capture, signed auditor API, repair worker lifecycle, committed repair event streams, governance handoff, observability, and governance packet have produced reviewed, payload-free JSON evidence:",
+        "Every command route accepts exactly one caller-signed `SignedTransaction` containing the route-specific native repair instruction and forwards it through strict durable transaction ingress. Reads return finalized ledger projections; obsolete local status-by-manifest, SSE, and WebSocket authority routes are not shipped.",
+        "The former local `RepairManager`, `FileRepairStore`, repair checkpoint, mutation/event history, scheduler, and compatibility APIs have been deleted.",
+        "The storage executor accepts only a fully validated native task read at an exact finalized cursor and requires the current lease owner, generation, revision, provider binding, and expiry before any storage I/O.",
+        "GC and reconciliation consume one complete, bounded task projection collected from a single immutable finalized query view; a truncated, drifting, malformed, or unbound projection fails closed.",
+        "Use the rollout gate only after exact-live-lease execution and restart reconciliation have been proved in the reviewed deployment",
         "The checker recognizes `sorafs.repair.*` SF-8b rollout schemas for auditor roster, failure capture, signed auditor API, worker lifecycle, event streams, governance handoff, observability, and governance approval evidence.",
         "raw PoR/PoTR evidence, raw repair payloads, signed auditor requests, response bodies, signed transactions, secrets, and ledgers are absent",
         "matches a valid auditor-roster artifact, and worker lifecycle / event stream / governance handoff artifacts carry an `evidence_bundle_digest_hex` that matches a valid PoR/PoTR failure-capture artifact",
         "governance approval artifacts carry a `handoff_digest_hex` that matches a valid governance handoff artifact",
         "The SF-8b rollout evidence gate, collection planner, operator argfile templates, and focused tests are implemented for payload-free deployed evidence review",
-        "Remaining implementation work is the finalized-chain cutover: replace `FileRepairStore` mutations and local event streams with native repair transactions and committed task/event projections, then prove cross-peer exactly-once execution and restart reconciliation.",
-        "Remaining rollout work after that cutover is genuine operator evidence for a production PoR/PoTR failure, repair, escalation, and governance handoff, followed by the SF-8b rollout evidence gate.",
+        "The competing local repair authority and GC/reconciliation checkpoint dependencies are removed.",
+        "Remaining rollout work is genuine four-validator evidence for a production PoR/PoTR failure, one cross-peer lease and terminal outcome, escalation/appeal, restart reconciliation, and governance handoff, followed by the SF-8b rollout evidence gate.",
     )
     missing = [phrase for phrase in required_open if phrase not in normalized]
 
@@ -19841,6 +19898,8 @@ def test_repair_docs_keep_rollout_contract_markers() -> None:
         "Failure-capture artifacts must also keep `failure_source_count` equal to the unique canonical `failure_sources` inventory, keep `failure_event_count` equal to the unique canonical `failure_events[].name` inventory, require reviewed `repair-failure-event-*` labels without non-production markers, require reviewed failure events to cover both PoR and PoTR sources, and reject duplicate or unknown source entries plus duplicate event entries.",
         "Signed auditor API, worker lifecycle, and event stream artifacts also bind `route_count` to the unique canonical `routes[].name` inventory and reject duplicate or unknown route entries before promotion can report ready.",
         "Signed auditor API, worker lifecycle, and event stream artifacts must also keep `route_count` equal to the unique canonical `routes[].name` inventory and reject duplicate or unknown route entries.",
+        "The closed route/status map requires `202 Accepted` for report, slash, appeal, claim, heartbeat, complete, and fail commands, and `200 OK` for status, task list, single-task, and committed-event queries.",
+        "Worker lifecycle artifacts require `status_count`, bind it to the unique canonical `statuses_observed` inventory, reject missing, inflated, duplicate, or unknown lifecycle-status evidence, and require finalized task projection, exact live lease execution, durable transaction forwarding, restart reconciliation, and a single terminal outcome.",
         "Observability artifacts also bind `metric_count` to the unique canonical `metrics` inventory, require the reviewed repair metrics, and reject duplicate or unknown metric labels before promotion can report ready.",
         "Repair payload-safety artifacts must explicitly set `raw_roster_included`, `raw_evidence_included`, `response_bodies_included`, `raw_repair_payloads_included`, `raw_ledger_included`, and `critical_alerts_firing` to `false` before promotion can report ready.",
         "The summary exports the sorted reviewed `metrics` inventory plus `metric_count_values`, and the aggregate production-readiness gate requires those fields to match the observability artifact fingerprint before final promotion can report ready.",
@@ -19848,15 +19907,9 @@ def test_repair_docs_keep_rollout_contract_markers() -> None:
         "Aggregate promotion also rechecks the lane-proven repair digest relationships: roster-bound artifact fingerprints must match `valid_roster_digests`, failure-bound artifact fingerprints must match `valid_failure_bundle_digests`, handoff-bound artifact fingerprints must match `valid_handoff_digests`, and policy-bound artifact fingerprints must match `valid_policy_digests` before final promotion can report ready.",
         "Its collection planner exposes those exact required payload fields through `--dry-run` and validates the schema-closed collection plan, required kinds, thresholds, external evidence map, evidence contract, and command steps before touching live repair services.",
     )
-    missing_current: dict[str, list[str]] = {}
-
-    for path in sorted(DOCS_SOURCE_DIR.glob("sorafs_repair_plan*.md")):
-        normalized = re.sub(r"\s+", " ", read(path))
-        missing = [phrase for phrase in required_current if phrase not in normalized]
-        if missing:
-            missing_current[str(path.relative_to(REPO_ROOT))] = missing
-
-    assert missing_current == {}
+    normalized = re.sub(r"\s+", " ", read(SORAFS_REPAIR_PLAN))
+    missing_current = [phrase for phrase in required_current if phrase not in normalized]
+    assert missing_current == []
     checker = read(SCRIPTS_DIR / "check_sorafs_repair_rollout_evidence.py")
     aggregate_checker = read(SCRIPTS_DIR / "check_sorafs_production_readiness.py")
     checker_test = read(
@@ -19976,6 +20029,12 @@ def test_repair_docs_keep_rollout_contract_markers() -> None:
     assert "test_route_body_hash_is_required_for_route_artifacts" in checker_test
     assert "test_route_latency_is_required_for_route_artifacts" in checker_test
     assert 'path=f"routes[{index}].body_blake3_hex"' in checker
+    assert "REQUIRED_ROUTE_STATUS_CODES" in checker
+    assert "finalized_task_projection_verified" in checker
+    assert "exact_live_lease_execution_verified" in checker
+    assert "durable_transaction_forwarding_verified" in checker
+    assert "restart_reconciliation_verified" in checker
+    assert "single_terminal_outcome_verified" in checker
     assert '"metric_count_values": sorted(metric_counts)' in checker
     assert '"metrics": sorted(metric_names)' in checker
     assert "def require_single_active_digest(" in checker
@@ -20487,18 +20546,10 @@ def test_reference_sdk_docs_do_not_reopen_implemented_guides() -> None:
         "Implemented: the operator, metrics, and binding-generation guides "
         "below cover the local release helper"
     )
-    stale: list[str] = []
-    missing_current: list[str] = []
+    normalized = re.sub(r"\s+", " ", read(SORAFS_REFERENCE_SDK_PLAN))
 
-    for path in sorted(DOCS_SOURCE_DIR.glob("sorafs_reference_sdk_plan*.md")):
-        normalized = re.sub(r"\s+", " ", read(path))
-        if stale_phrase in normalized:
-            stale.append(str(path.relative_to(REPO_ROOT)))
-        if current_phrase not in normalized:
-            missing_current.append(str(path.relative_to(REPO_ROOT)))
-
-    assert stale == []
-    assert missing_current == []
+    assert stale_phrase not in normalized
+    assert current_phrase in normalized
 
 
 def test_reference_sdk_release_canary_builder_is_checked_in() -> None:
@@ -20804,8 +20855,7 @@ def test_pdp_provider_protocol_and_chain_repair_boundary_are_documented() -> Non
         "does not read the provider protocol's local scheduler state",
         "exact `(pdp, challenge_id)` lookup in the finalized native proof-outcome ledger",
         "one terminal row with complete commit provenance.",
-        "authorized retry-safe `SubmitSorafsProofOutcome` transaction forwarder",
-        "the finalized proof-stream query does not populate that state.",
+        "Canonical terminal archives also use the authorized retry-safe `SubmitSorafsProofOutcome` transaction forwarder and reconcile the committed record.",
         "Finalized PDP proof-outcome state is keyed by the exact governed challenge ID.",
         "`outcome_identity_hex` equal to `challenge_id_hex`",
         "the terminal outcome digest",
@@ -20819,7 +20869,7 @@ def test_pdp_provider_protocol_and_chain_repair_boundary_are_documented() -> Non
     required_open = (
         "Torii ships the authenticated `/v1/sorafs/pdp/challenge`, `/next`, `/proof`, `/status`, and `/export` protocol family.",
         "`/v1/sorafs/proof/stream` also accepts `pdp` only when the caller supplies the existing non-zero governed challenge ID; it rejects client-selected PDP sample counts and seeds.",
-        "This protocol is not production-ready while rejected or expired challenges still converge on the process-local repair coordinator.",
+        "Rejected or expired challenges now use the fail-closed exact-chain durable native repair-transaction handoff, and storage execution is gated by the exact finalized task cursor, revision, lease owner, generation, and expiry.",
         "The PDP rollout evidence gate requires payload-free provider-transport, proof-generation, validator-replay, governance/repair, observability, and governance-approval artifacts before reporting `ready`",
         "`/v1/sorafs/proof/stream` requires `challenge_id_hex` for PDP, rejects absent/zero IDs and client-controlled sampling fields",
         "The local V1 protocol gates are shipped:",
@@ -20828,14 +20878,15 @@ def test_pdp_provider_protocol_and_chain_repair_boundary_are_documented() -> Non
         "Provider signature verification over canonical PDP proof bytes with admission-controlled key material.",
         "Governance DAG archival for accepted proofs and failure reports.",
         "An explicit repair-handoff boundary for `pdp_failure` events.",
-        "drive the sixth item through the finalized native repair ledger rather than `FileRepairStore` or another process-local scheduler",
+        "The sixth item and terminal archive now use durable signed native transaction forwarders with exact finalized reconciliation.",
         "Do not document the unshipped `sorafs pdp ...` commands as operator-ready until they exist in the CLI and have focused tests.",
         "Required before production enablement:",
         "`sorafs_node::StorageBackend` persists the commitment and bounded retained tree, rehydrates them on restart, and generates exact challenge witnesses while holding the manifest read lease.",
         "Integration and adversarial tests cover restart parity, corrupted chunks, short/mutating reads, symlink and hard-link replacement, out-of-range/duplicate samples, and eviction races.",
-        "Replace the local repair coordinator target with finalized native repair transactions, committed task/event queries, durable retry reconciliation, and cross-peer exactly-once tests.",
+        "The former public `RepairManager` and filesystem repair authority have been deleted, and GC/reconciliation now consume one complete bounded native task projection from a single immutable finalized view.",
+        "SF-13 remains open because cross-peer exactly-once repair has not yet been proved and genuine multi-provider transport, restart, key-rotation, metrics, archive, and repair evidence remains external rollout work.",
         "Remaining production gates:",
-        "Cut PDP terminal repair handoff over to the finalized native repair ledger and delete the local-authority path.",
+        "Prove the finalized native handoff across peer and process restarts. The deleted local manager/checkpoint format has no production compatibility branch.",
         "Ship dedicated operator CLI commands and complete cross-SDK validation parity.",
     )
     missing = [
@@ -21796,30 +21847,34 @@ def test_orderbook_docs_distinguish_shipped_native_ledger_from_remaining_service
     normalized = re.sub(r"\s+", " ", source)
 
     required_current = (
-        "ships an authoritative native ledger foundation",
+        "The authoritative native ledger now owns policy",
         "SetSorafsOrderbookPolicy",
         "SubmitSorafsOrderbookOrder",
         "CancelSorafsOrderbookOrder",
+        "MatchSorafsOrderbook",
+        "MaintainSorafsOrderbook",
         "RecordSorafsOrderbookSettlementReceipt",
-        "atomically debits a pre-funded native lock",
+        "partitions funded buyer custody atomically",
+        "expires orders/channels and refunds custody",
+        "settles the native lock atomically",
+        "exact matcher and settlement accounts",
         "Typed signed-query variants expose the active policy",
         "Page sizes are restricted to `1..=500`",
-        "Deterministic fill matching and automatic channel/lock creation and funding are not shipped.",
-        "durable off-chain matcher service",
-        "daemonized streaming-settlement service",
-        "contract-backed authenticated orderbook streams",
-        "daemonized matcher service and contract submission are not shipped",
-        "Automatic lock creation/funding/refund/expiry integration and a durable receipt daemon are not shipped",
-        "contract forwarding and durable streams are not shipped",
-        "live dashboard wiring and rollout evidence are not shipped",
-        "Remaining: implement deterministic authoritative matching/fill and automatic settlement-channel lock creation/funding/refund/expiry",
-        "durable matcher and daemonized settlement services",
-        "durable matcher-backed WebSocket/SSE streams",
+        "finalized-chain typed projections",
+        "SSE and WebSocket event streams poll only the finalized typed event journal",
+        "No residual book mirror",
+        "bounded fail-closed finalized observability",
+        "No local book, provider-id label, or mirror-divergence gauge exists.",
+        "finality reconciliation",
+        "Live Prometheus scrape freshness, alert installation/routing, and reviewed production evidence remain deployment obligations.",
+        "Remaining: validate and deploy the supervised worker with a runtime PKCS#11/HSM signer",
+        "deletion of the mirror-local book/config/checkpoint/outbox",
     )
     missing = [phrase for phrase in required_current if phrase not in normalized]
 
     assert missing == []
     assert "does not ship an on-chain SoraFS orderbook contract" not in normalized
+    assert "Deterministic fill matching and automatic channel/lock creation and funding are not shipped." not in normalized
     assert "durable receipt daemon and escrow custody mutation are not shipped" not in normalized
 
 
@@ -21833,8 +21888,10 @@ def test_orderbook_docs_keep_rollout_contract_markers() -> None:
         "API gateway artifacts also bind `route_count` to the unique canonical `routes[].name` inventory and reject duplicate or unknown route entries before promotion can report ready, and require every route response to carry a lowercase `body_blake3_hex` digest.",
         "Event-stream artifacts also bind `stream_count` to the unique canonical `streams[].name` inventory and reject duplicate or unknown stream entries before promotion can report ready.",
         "They also require artifact IDs to start with a reviewed SDK language prefix and at least one distinct SDK release artifact per reviewed SDK language before promotion can report ready.",
-        "Orderbook payload-safety artifacts must explicitly set `raw_contract_state_included`, `divergence_detected`, `raw_snapshot_included`, `raw_receipts_included`, `response_bodies_included`, `debug_artifacts`, `critical_alerts_firing`, `contract_mirror_divergence`, and `raw_ledger_included` to `false` before promotion can report ready.",
+        "Matcher evidence must affirm finalized-cursor replay, committed state reconciliation, and absence of a local book authority.",
+        "Orderbook payload-safety artifacts must explicitly set `raw_contract_state_included`, `raw_receipts_included`, `response_bodies_included`, `debug_artifacts`, `critical_alerts_firing`, and `raw_ledger_included` to `false` before promotion can report ready.",
         "Observability artifacts also bind `metric_count` to the unique canonical `metrics` inventory, require the reviewed orderbook metrics set, and reject duplicate or unknown metric labels before promotion can report ready.",
+        "They require a successful scrape no more than 120 seconds old, a ready non-zero-height finalized projection whose finalized timestamp is not newer than the scrape or more than 120 seconds behind it, and zero projection failures during the reviewed collection window.",
         "rejects SDK release canaries with fewer than one distinct artifact per reviewed SDK language or artifact IDs outside the reviewed SDK language prefixes",
         "rejects malformed or non-production `--accepted-order`, `--matched-order`, `--open-channel`, `--settled-receipt`, and `--peer` inventory labels before writing any canary JSON",
         "rejects duplicate or unknown closed-set `--verified-claim`, `--route`, `--stream`, `--language`, `--metric`, and `--source` inputs before writing any canary JSON",
@@ -21842,12 +21899,17 @@ def test_orderbook_docs_keep_rollout_contract_markers() -> None:
         "Aggregate promotion also rechecks the lane-proven orderbook digest relationships: contract-bound artifact fingerprints must match `valid_contract_digests`, and policy-bound artifact fingerprints must match `valid_policy_digests` before final promotion can report ready.",
         "Promotion summaries must expose exactly one active contract digest and exactly one active policy digest; mixed valid contract or policy anchors fail closed before binding checks can satisfy final promotion.",
         "Reconciliation artifacts also bind `peer_count` and `source_count` to the unique canonical `peers[].name` and `sources[].name` inventories, require peer labels to use reviewed lowercase `orderbook-peer-*` labels without non-production markers, and reject duplicate peer entries plus duplicate or unknown source entries before promotion can report ready.",
-        "collection planner with dry-run evidence-contract export",
+        "The closed source inventory names the finalized ledger, matcher worker, Torii finalized projection, settlement worker, and Governance DAG; no process-local mirror is recognized.",
+        "reviewed evidence collection planner/runner",
         "The runner validates the schema-closed collection-plan envelope before printing dry-run JSON or executing the verifier.",
     )
     missing_current: dict[str, list[str]] = {}
 
-    for path in sorted(DOCS_SOURCE_DIR.glob("sorafs_orderbook_plan*.md")):
+    # Localized mirrors can intentionally be traceable `needs-translation`
+    # stubs after the canonical contract changes. Semantic contract assertions
+    # belong to the authoritative source; metadata tests below prevent stale
+    # completed translations from masquerading as current.
+    for path in (SORAFS_ORDERBOOK_PLAN,):
         normalized = re.sub(r"\s+", " ", read(path))
         missing = [phrase for phrase in required_current if phrase not in normalized]
         if missing:
@@ -21947,16 +22009,23 @@ def test_orderbook_docs_keep_rollout_contract_markers() -> None:
     ) in checker
     for field in (
         "raw_contract_state_included",
-        "divergence_detected",
-        "raw_snapshot_included",
         "raw_receipts_included",
         "response_bodies_included",
         "debug_artifacts",
         "critical_alerts_firing",
-        "contract_mirror_divergence",
         "raw_ledger_included",
     ):
         assert f'require_false(payload, "{field}", errors)' in checker
+    assert 'require_bool_true(payload, "finalized_projection_ready", errors)' in checker
+    assert 'require_zero_count(payload, "finalized_projection_failure_delta", errors)' in checker
+    assert '"metrics_scraped_at_unix"' in checker
+    assert '"finalized_projection_timestamp_seconds"' in checker
+    assert 'require_bool_true(payload, "finalized_cursor_replay_verified", errors)' in checker
+    assert (
+        'require_bool_true(payload, "committed_state_reconciliation_verified", errors)'
+        in checker
+    )
+    assert 'require_bool_true(payload, "local_book_authority_absent", errors)' in checker
     assert "test_payload_safety_flags_are_required" in checker_test
     assert (
         "test_all_contract_bound_artifacts_reject_contract_surface_mismatch"
@@ -22134,7 +22203,7 @@ def test_orderbook_canary_builder_is_checked_in() -> None:
     assert "write_payload_atomic" in builder
     assert "must not be a symlink" in builder
     assert "raw_contract_state_included" in builder
-    assert "raw_snapshot_included" in builder
+    assert "local_book_authority_absent" in builder
     assert "raw_receipts_included" in builder
     assert "rejected_invalid_orders" in builder
     assert "settlement_backlog_channels" in builder
@@ -22282,6 +22351,45 @@ def test_orderbook_canary_builder_is_checked_in() -> None:
     assert "build_sorafs_orderbook_canary.py" in docs
     assert "payload-free SFM-2 orderbook canary builder" in docs
     assert "--route-body-blake3-hex" in docs
+
+
+def test_orderbook_observability_assets_use_finalized_bounded_metric_contract() -> None:
+    dashboard = read(
+        DASHBOARDS_DIR / "grafana" / "sorafs_orderbook_observability.json"
+    )
+    alerts = read(DASHBOARDS_DIR / "alerts" / "sorafs_orderbook_rules.yml")
+    alert_tests = read(
+        DASHBOARDS_DIR / "alerts" / "tests" / "sorafs_orderbook_rules.test.yml"
+    )
+    source = "\n".join((dashboard, alerts, alert_tests))
+
+    required_metrics = (
+        "torii_sorafs_orderbook_finalized_events_total",
+        "torii_sorafs_orderbook_open_depth_gib",
+        "torii_sorafs_orderbook_matcher_lag_seconds",
+        "torii_sorafs_orderbook_settlement_backlog",
+        "torii_sorafs_orderbook_oldest_settlement_age_seconds",
+        "torii_sorafs_orderbook_escrow_runway_seconds",
+        "torii_sorafs_orderbook_finalized_projection_ready",
+        "torii_sorafs_orderbook_finalized_projection_height",
+        "torii_sorafs_orderbook_finalized_projection_timestamp_seconds",
+        "torii_sorafs_orderbook_finalized_projection_failures_total",
+        "torii_sorafs_orderbook_book_revision",
+        "torii_sorafs_orderbook_matcher_scan_book_revision",
+        "torii_sorafs_orderbook_api_requests_total",
+    )
+    stale_metrics = (
+        "torii_sorafs_orderbook_orders_total",
+        "torii_sorafs_orderbook_depth_gib",
+        "torii_sorafs_orderbook_match_lag_seconds",
+        "torii_sorafs_orderbook_contract_mirror_divergence",
+        "torii_sorafs_orderbook_api_error_ratio",
+    )
+
+    assert all(metric in source for metric in required_metrics)
+    assert all(metric not in source for metric in stale_metrics)
+    assert "provider_id" not in source
+    assert 'outcome="error"' in source
 
 
 UNSHIPPED_ORDERBOOK_SERVICE_ROUTE_PATTERNS = (
@@ -23384,57 +23492,47 @@ def test_commit_reveal_production_services_stay_unshipped_in_docs() -> None:
     source = read(SORAFS_COMMIT_REVEAL_PLAN)
     normalized = re.sub(r"\s+", " ", source)
 
-    required_unshipped = (
-        "Accepted local ballot state, durable local challenge records, and event backlog are persisted as a validated Norito checkpoint when storage is enabled",
-        "`NodeHandle` now also derives deterministic payload-free no-show penalty plans for closed ballots, separates missing commits from committed no-shows, and binds the plan to a stable digest without mutating ballot state. Torii exposes that plan through the payload-free local `GET /v1/sorafs/moderation/ballots/{case_id}/{round_id}/no-show-plan` readback route, using server-side network time and returning only counts, juror identifiers, and the digest.",
-        "repository now ships local ballot CLI/client readback, signed commit/reveal/challenge-resolution/tally submission, and payload-free executor automation for the local Torii API. It does not yet ship the contract-backed ballot orchestrator, production challenge monitor/dispute service, public juror portal, or deployed production service needed to run appeal-panel ballots end to end.",
-        "`iroha_data_model::sorafs::moderation_ledger` defines the first-release `ModerationLedgerPolicyV1`, immutable case specifications and policy snapshots, canonical commitment/reveal records, payload-free challenge and resolution records, terminal decision/contested/quorum-failure/challenged outcomes, distinct missing-commit and unrevealed-commit no-show records, and constant-time ledger counters.",
-            "Typed `FindSorafsModeration*` queries expose the active policy, appeal, permissioned juror-eligibility summary, case, commitment, reveal, challenge, outcome, no-show, and ledger status through Iroha's existing generic Torii query API.",
-        "ballot lifecycle and challenge submit/resolve events can also be materialized into the SoraFS Governance DAG filesystem publisher and optional signed runtime DAG",
-        "persists successful local ballot transitions, challenge submissions/resolutions, and the sequenced local event backlog to `moderation-ballots/ballots-snapshot.to` as a validated Norito checkpoint and rejects duplicate, mismatched, out-of-window, missing-commit, unresolved or accepted-challenge-with-reveal/tally, bad-tally, insufficient-quorum, non-contiguous-event, missing/duplicated/mutated challenge-event, or event/state-mismatch snapshots",
-        "`moderation_ballot_no_show_plan`, which refuses open reveal windows and unresolved or accepted challenges, separates missing-commit and unrevealed-commit jurors, and emits a stable payload-free penalty-plan digest without mutating state or publishing events.",
-        "Torii exposes local moderation ballot endpoints for announcement, list/get, no-show plan readback, commit, challenge submission, challenge resolution, reveal, tally, and event backlog under `/v1/sorafs/moderation/ballots*`.",
-        "Ballot event readback now includes `challenge_submitted` and `challenge_resolved` entries with `challenge_count` and the payload-free challenge record",
-        "`iroha::client` and `iroha sorafs moderation ballots list|get|no-show-plan|events|commit|reveal|tally` wrap the local readback and signed committee lifecycle endpoints",
-        "`iroha sorafs moderation ballots execute|executor-bundle|executor-canary` provide local payload-free commit/reveal executor automation",
-        "That gate blocks deployed promotion evidence; it does not replace the missing production orchestration, service deployment, and public rollout evidence.",
-        "Build the production orchestrator around the persisted local ballot lifecycle store, local challenge records, event backlog, and local no-show penalty plans as replay-checked operational projections of the authoritative ledger. Add retries, scheduled no-show dispatch/settlement handoff, production challenge monitor/dispute workflows, and durable contested-outcome workflows.",
-        "Promote the shipped local CLI/client bridge and executor automation into audited juror-facing deployment workflows, including challenge evidence export, portal UX, and public operations runbooks.",
-        "Bind local Governance DAG lifecycle and challenge/dispute publication to the authoritative ledger outcome and promote it into public IPFS/IPNS rollout evidence.",
-        "Collect a passing payload-free `commit_reveal` canary through the SFM-4b rollout evidence gate after the durable service exists.",
-        "Until then, do not document `sorafs-juror`, portal-only commands, or deployed ballot service commands as shipped.",
+    required_current = (
+        "The obsolete process-local sorafs_node ballot runtime, checkpoint, mutation API, event backlog, and caller-fed finalized projection have been deleted.",
+        "Torii's version-one moderation routes now accept exact signed native instructions and return reconciled finalized-chain projections.",
+        "The durable orchestrator submits transactions and rebuilds its operational state from committed events; it does not become a second source of truth.",
+        "iroha_data_model::sorafs::moderation_ledger",
+        "ModerationLedgerPolicyV1",
+        "FindSorafsModeration",
+        "Deploy and supervise the durable finalized-chain orchestrator",
+        "Connect committed moderation events and outcomes to public Governance DAG publication, gateway compliance, settlement, transparency, and reputation.",
+        "Add reviewed four-peer deployed simulations",
+        "Collect a passing payload-free commit_reveal canary through the SFM-4b rollout evidence gate after the deployed service has produced genuine evidence.",
+        "add deployed service and end-to-end suites with genuine runtime evidence.",
     )
-    missing = [phrase for phrase in required_unshipped if phrase not in normalized]
+    forbidden_stale = (
+        "ModerationBallotRuntime",
+        "moderation-ballots/ballots-snapshot.to",
+        "persisted local ballot lifecycle store",
+        "local no-show penalty plans",
+        "local moderation ballot endpoints",
+        "tallied local ballot events",
+    )
+    missing = [phrase for phrase in required_current if phrase not in normalized]
+    stale = [phrase for phrase in forbidden_stale if phrase in normalized]
 
     assert missing == []
+    assert stale == []
 
-
-def test_commit_reveal_docs_do_not_reopen_shipped_local_cli_bridge() -> None:
+def test_commit_reveal_docs_do_not_reopen_process_local_ballot_authority() -> None:
     stale_phrases = (
-        "contract-backed durable ballot orchestrator",
-        "Event backlog replay remains out of scope for this checkpoint",
-        "durable ballot orchestrator, juror CLI, challenge monitor",
-        "Persist or contract-back the local ballot lifecycle store and add the production orchestrator",
-        "Provide juror-facing CLI or portal commands for listing ballots, committing",
-        "Until then, do not document `sorafs-juror` or SoraFS ballot service commands as shipped.",
+        "sorafs_node::ModerationBallotRuntime",
+        "moderation-ballots/ballots-snapshot.to",
+        "sequenced local event backlog",
+        "local ballot lifecycle store",
+        "local moderation ballot endpoints",
+        "tallied local ballot events",
     )
     required_current = (
-        "Accepted local ballot state, durable local challenge records, and event backlog are persisted as a validated Norito checkpoint when storage is enabled",
-        "`NodeHandle` now also derives deterministic payload-free no-show penalty plans for closed ballots",
-        "`GET /v1/sorafs/moderation/ballots/{case_id}/{round_id}/no-show-plan` readback route, using server-side network time and returning only counts, juror identifiers, and the digest",
-        "repository now ships local ballot CLI/client readback, signed commit/reveal/challenge-resolution/tally submission, and payload-free executor automation for the local Torii API.",
-        "contract-backed ballot orchestrator, production challenge monitor/dispute service, public juror portal, or deployed production service",
-        "persists successful local ballot transitions, challenge submissions/resolutions, and the sequenced local event backlog to `moderation-ballots/ballots-snapshot.to` as a validated Norito checkpoint",
-        "missing/duplicated/mutated challenge-event",
-        "`moderation_ballot_no_show_plan`, which refuses open reveal windows and unresolved or accepted challenges",
-        "Torii exposes local moderation ballot endpoints for announcement, list/get, no-show plan readback, commit, challenge submission, challenge resolution, reveal, tally, and event backlog under `/v1/sorafs/moderation/ballots*`.",
-        "Ballot event readback now includes `challenge_submitted` and `challenge_resolved` entries with `challenge_count` and the payload-free challenge record",
-        "Restored nodes replay the local event backlog through Torii readback endpoints",
-        "`iroha::client` and `iroha sorafs moderation ballots list|get|no-show-plan|events|commit|reveal|tally` wrap the local readback and signed committee lifecycle endpoints",
-        "`iroha sorafs moderation ballots execute|executor-bundle|executor-canary` provide local payload-free commit/reveal executor automation",
-        "Build the production orchestrator around the persisted local ballot lifecycle store, local challenge records, event backlog, and local no-show penalty plans",
-        "Promote the shipped local CLI/client bridge and executor automation into audited juror-facing deployment workflows",
-        "Until then, do not document `sorafs-juror`, portal-only commands, or deployed ballot service commands as shipped.",
+        "sorafs_node no longer owns ballot, appeal, scheduler, checkpoint, or event-stream authority",
+        "Every mutation route accepts one exact signed native moderation instruction",
+        "Every list, detail, no-show, and event response is rebuilt from a reconciled finalized-chain snapshot",
+        "No moderation transition or readback falls back to a process-local ballot database",
     )
     stale: dict[str, list[str]] = {}
     missing: dict[str, list[str]] = {}
@@ -23454,252 +23552,55 @@ def test_commit_reveal_docs_do_not_reopen_shipped_local_cli_bridge() -> None:
     assert missing == {}
 
 
-def test_commit_reveal_node_handle_runtime_regressions_are_pinned() -> None:
-    source = read(SORAFS_NODE_LIB_RS)
-
-    def rust_test_block(function_name: str) -> str:
-        marker = f"fn {function_name}()"
-        start = source.find(marker)
-        assert start >= 0, function_name
-        next_test = source.find("\n    #[test]", start + len(marker))
-        return source[start:] if next_test == -1 else source[start:next_test]
-
-    invalid_attempts = rust_test_block(
-        "node_handle_moderation_ballot_rejects_invalid_attempts_without_events"
-    )
-    no_show = rust_test_block(
-        "node_handle_moderation_ballot_rejects_no_show_quorum_without_tally_event"
-    )
-    no_show_plan = rust_test_block(
-        "node_handle_moderation_ballot_no_show_plan_tracks_missing_and_unrevealed_jurors"
-    )
-    no_show_plan_challenges = rust_test_block(
-        "node_handle_moderation_ballot_no_show_plan_blocks_on_challenges"
-    )
-    no_show_plan_tallied = rust_test_block(
-        "node_handle_moderation_ballot_no_show_plan_is_stable_after_successful_tally"
-    )
-    early_full_panel = rust_test_block(
-        "node_handle_moderation_ballot_allows_early_full_panel_tally_once"
-    )
-    checkpoint = rust_test_block(
-        "node_handle_moderation_ballot_checkpoint_persists_and_reloads_snapshot"
-    )
-    restore_rejects = rust_test_block(
-        "node_handle_moderation_ballot_restore_rejects_corrupt_snapshot"
-    )
-    startup_rejects = rust_test_block(
-        "node_handle_moderation_ballot_checkpoint_rejects_corrupt_startup_snapshot"
-    )
-    corrupt_events = rust_test_block(
-        "node_handle_moderation_ballot_restore_rejects_corrupt_event_backlog"
-    )
-    corrupt_challenge_events = rust_test_block(
-        "node_handle_moderation_ballot_restore_rejects_corrupt_challenge_events"
-    )
-    challenge_governance_events = rust_test_block(
-        "node_handle_moderation_ballot_publishes_challenge_governance_events"
-    )
-    challenge_rejected = rust_test_block(
-        "node_handle_moderation_ballot_challenge_blocks_until_rejected_and_reloads"
-    )
-    challenge_accepted = rust_test_block(
-        "node_handle_moderation_ballot_accepted_challenge_blocks_reveal_and_tally"
-    )
-    challenge_adversarial = rust_test_block(
-        "node_handle_moderation_ballot_rejects_adversarial_challenges"
-    )
-
-    invalid_attempt_requirements = (
-        "CommitWindowClosed",
-        "IneligibleJuror",
-        "RevealWindowNotOpen",
-        "MissingCommit",
-        "RevealWindowClosed",
-        "latest_moderation_ballot_event_sequence",
-        "assert!(record.tally.is_none())",
-    )
-    no_show_requirements = (
-        "TallyWindowOpen",
-        "QuorumNotMet",
-        "reveals: 1",
-        "ModerationBallotEventKind::BallotTallied",
-        "assert!(record.tally.is_none())",
-    )
-    no_show_plan_requirements = (
-        "moderation_ballot_no_show_plan",
-        "TallyWindowOpen",
-        "QuorumNotMet",
-        "missing_commit_juror_ids",
-        "unrevealed_committed_juror_ids",
-        "no_show_juror_ids",
-        "penalty_plan_digest",
-        "latest_moderation_ballot_event_sequence(), Some(4)",
-        "ModerationBallotEventKind::BallotTallied",
-    )
-    no_show_plan_challenge_requirements = (
-        "moderation_ballot_no_show_plan",
-        "ChallengePending",
-        "ModerationBallotChallengeDecision::Accepted",
-        "ChallengeAccepted",
-    )
-    no_show_plan_tallied_requirements = (
-        "moderation_ballot_no_show_plan",
-        "tally with one no-show",
-        "assert!(first.quorum_met)",
-        "assert!(first.tally_finalized)",
-        "assert_eq!(first.no_show_juror_ids, vec![\"juror-c\".to_owned()])",
-        "assert_eq!(first.penalty_plan_digest, second.penalty_plan_digest)",
-        "assert_ne!(first.generated_at_unix_ms, second.generated_at_unix_ms)",
-    )
-    early_full_panel_requirements = (
-        "early tally after full panel reveals",
-        "AlreadyTallied",
-        "votes_total, 3",
-        "Some(SoraFsModerationVoteChoice::Uphold)",
-        "assert_eq!(handle.latest_moderation_ballot_event_sequence(), Some(8))",
-    )
-    checkpoint_requirements = (
-        "moderation_ballot_checkpoint_path",
-        "norito::decode_from_bytes",
-        "checkpoint.events.len(), 6",
-        "export_moderation_ballot_snapshot",
-        "assert_eq!(restored.latest_moderation_ballot_event_sequence(), Some(6))",
-        "moderation_ballot_events_since(Some(4), 10)",
-        "AlreadyTallied",
-    )
-    restore_rejects_requirements = (
-        "restore_moderation_ballot_snapshot",
+def test_commit_reveal_process_local_node_authority_is_absent() -> None:
+    node = read(SORAFS_NODE_LIB_RS)
+    moderation = read(SORAFS_NODE_MODERATION_RS)
+    combined = node + "\n" + moderation
+    forbidden = (
+        "ModerationBallotRuntime",
         "ModerationBallotSnapshot",
-        "commits: vec![commit.clone(), commit]",
-        "ModerationBallotRuntimeError::InvalidSnapshot",
-        "ModerationBallotSnapshot::default()",
-    )
-    startup_rejects_requirements = (
+        "ModerationBallotAnnouncement",
+        "ModerationBallotEventKind",
+        "local_moderation_panel_roster_hash",
         "moderation_ballot_checkpoint_path",
-        "norito::to_bytes(&corrupt)",
-        "NodeHandle::new(cfg)",
-        "export_moderation_ballot_snapshot",
-        "ModerationBallotSnapshot::default()",
-    )
-    corrupt_events_requirements = (
-        "export_moderation_ballot_snapshot",
-        "corrupt.events[2].committed_count = 99",
-        "restore_moderation_ballot_snapshot(corrupt)",
-        "ModerationBallotRuntimeError::InvalidSnapshot",
-        "latest_moderation_ballot_event_sequence(), None",
-    )
-    corrupt_challenge_events_requirements = (
-        "node_handle_moderation_ballot_restore_rejects_corrupt_challenge_events",
-        "missing_events.events.truncate(2)",
-        "resolve_before_submit",
-        "mutated_resolution.events[3]",
-        "ModerationBallotEventKind::ChallengeSubmitted",
-        "ModerationBallotEventKind::ChallengeResolved",
-        "ModerationBallotRuntimeError::InvalidSnapshot",
-    )
-    challenge_governance_events_requirements = (
-        "node_handle_moderation_ballot_publishes_challenge_governance_events",
-        "SoraFsModerationBallotGovernanceEventKindV1::ChallengeSubmitted",
-        "SoraFsModerationBallotGovernanceEventKindV1::ChallengeResolved",
-        "challenge_count, 1",
-        "submitted challenge validates",
-        "resolved challenge validates",
-    )
-    challenge_rejected_requirements = (
+        "moderation_checkpoint_path",
+        "moderation_ballot_events_since",
+        "subscribe_moderation_ballot_events",
+        "announce_moderation_ballot",
+        "submit_moderation_ballot_commit",
         "submit_moderation_ballot_challenge",
-        "ModerationBallotEventKind::ChallengeSubmitted",
-        "ModerationBallotEventKind::ChallengeResolved",
-        "checkpoint.events.len(), 5",
-        "ChallengePending",
         "resolve_moderation_ballot_challenge",
-        "ModerationBallotChallengeDecision::Rejected",
-        "checkpoint.ballots[0].challenges.len(), 1",
-        "tally after rejected challenge",
+        "submit_moderation_ballot_reveal",
+        "tally_moderation_ballot",
+        "rebuild_finalized_moderation_projection",
+        "ModerationFinalizedChainProjectionV1",
+        "ModerationFinalizedChainSnapshotV1",
     )
-    challenge_accepted_requirements = (
-        "ModerationBallotChallengeDecision::Accepted",
-        "ChallengeAccepted",
-        "assert!(record.reveals.is_empty())",
-    )
-    challenge_adversarial_requirements = (
-        "ChallengeWindowNotOpen",
-        "ChallengeWindowClosed",
-        "MissingChallengeTarget",
-        "MissingChallengeEvidence",
-        "DuplicateChallenge",
-        "UnknownChallenge",
-        "BlankChallengeResolutionNote",
-        "InvalidChallengeResolutionTimestamp",
-        "ChallengeAlreadyResolved",
-        "pending-with-reveal",
-        "ModerationBallotChallengeRecord",
-    )
+    assert [symbol for symbol in forbidden if symbol in combined] == []
 
-    assert [
-        item for item in invalid_attempt_requirements if item not in invalid_attempts
-    ] == []
-    assert [item for item in no_show_requirements if item not in no_show] == []
-    assert [
-        item for item in no_show_plan_requirements if item not in no_show_plan
-    ] == []
-    assert [
-        item
-        for item in no_show_plan_challenge_requirements
-        if item not in no_show_plan_challenges
-    ] == []
-    assert [
-        item
-        for item in no_show_plan_tallied_requirements
-        if item not in no_show_plan_tallied
-    ] == []
-    assert [
-        item for item in early_full_panel_requirements if item not in early_full_panel
-    ] == []
-    assert [item for item in checkpoint_requirements if item not in checkpoint] == []
-    assert [
-        item for item in restore_rejects_requirements if item not in restore_rejects
-    ] == []
-    assert [
-        item for item in startup_rejects_requirements if item not in startup_rejects
-    ] == []
-    assert [
-        item for item in corrupt_events_requirements if item not in corrupt_events
-    ] == []
-    assert [
-        item
-        for item in corrupt_challenge_events_requirements
-        if item not in corrupt_challenge_events
-    ] == []
-    assert [
-        item
-        for item in challenge_governance_events_requirements
-        if item not in challenge_governance_events
-    ] == []
-    assert [
-        item for item in challenge_rejected_requirements if item not in challenge_rejected
-    ] == []
-    assert [
-        item for item in challenge_accepted_requirements if item not in challenge_accepted
-    ] == []
-    assert [
-        item
-        for item in challenge_adversarial_requirements
-        if item not in challenge_adversarial
-    ] == []
-
+    api = read(TORII_SORAFS_API_RS)
+    required_native = (
+        "submit_moderation_signed_transaction",
+        "ModerationCommandRouteV1::SubmitAppeal",
+        "ModerationCommandRouteV1::RegisterEligibility",
+        "ModerationCommandRouteV1::FinalizeSortition",
+        "ModerationCommandRouteV1::AcceptAssignment",
+        "ModerationCommandRouteV1::ActivateCase",
+        "ModerationCommandRouteV1::SubmitCommit",
+        "ModerationCommandRouteV1::RaiseChallenge",
+        "ModerationCommandRouteV1::ResolveChallenge",
+        "ModerationCommandRouteV1::SubmitReveal",
+        "ModerationCommandRouteV1::FinalizeCase",
+        "reconciled_moderation_snapshot",
+        'json_entry("source", Value::from("finalized_chain"))',
+    )
+    assert [marker for marker in required_native if marker not in api] == []
 
 def test_commit_reveal_torii_no_show_plan_readback_regressions_are_pinned() -> None:
     source = read(TORII_SORAFS_API_RS)
     openapi = read(TORII_OPENAPI_RS)
     router = read(TORII_LIB_RS)
-
-    def rust_test_block(function_name: str) -> str:
-        marker = f"async fn {function_name}()"
-        start = source.find(marker)
-        assert start >= 0, function_name
-        next_test = source.find("\n    #[tokio::test]", start + len(marker))
-        return source[start:] if next_test == -1 else source[start:next_test]
+    orchestrator = read(SORAFS_MODERATION_ORCHESTRATOR_RS)
 
     handler_start = source.find(
         "pub(crate) async fn handle_get_sorafs_moderation_ballot_no_show_plan"
@@ -23707,51 +23608,153 @@ def test_commit_reveal_torii_no_show_plan_readback_regressions_are_pinned() -> N
     assert handler_start >= 0
     next_handler = source.find("\npub(crate) async fn", handler_start + 1)
     handler = source[handler_start:] if next_handler == -1 else source[handler_start:next_handler]
-    serializer_start = source.find("fn moderation_ballot_no_show_plan_json")
-    assert serializer_start >= 0
-    next_serializer = source.find("\nfn ", serializer_start + 1)
-    serializer = (
-        source[serializer_start:]
-        if next_serializer == -1
-        else source[serializer_start:next_serializer]
+
+    reconciler_start = source.find("fn reconciled_moderation_snapshot")
+    assert reconciler_start >= 0
+    events_start = source.find(
+        "pub(crate) async fn handle_get_sorafs_moderation_ballot_events",
+        reconciler_start,
     )
-    positive = rust_test_block(
-        "moderation_ballot_no_show_plan_endpoint_reports_closed_payload_free_plan"
+    assert events_start >= 0
+    reconciler = source[reconciler_start:events_start]
+    etag_start = source.find("fn moderation_finalized_events_etag", events_start)
+    assert etag_start >= 0
+    events = source[events_start:etag_start]
+    etag_end = source.find("\npub(crate) async fn", etag_start)
+    assert etag_end >= 0
+    etag = source[etag_start:etag_end]
+
+    error_mapper_start = source.find("fn moderation_orchestrator_error_response")
+    assert error_mapper_start >= 0
+    error_mapper_end = source.find("\nfn ", error_mapper_start + 1)
+    assert error_mapper_end >= 0
+    error_mapper = source[error_mapper_start:error_mapper_end]
+
+    submit_start = orchestrator.find("    pub fn submit(")
+    assert submit_start >= 0
+    submit_end = orchestrator.find(
+        "    /// Run deterministic deadline maintenance", submit_start
     )
-    pending_challenge = rust_test_block(
-        "moderation_ballot_no_show_plan_endpoint_blocks_pending_challenge"
+    assert submit_end >= 0
+    submit = orchestrator[submit_start:submit_end]
+    authority_start = orchestrator.find("fn validate_finalized_action_authority")
+    assert authority_start >= 0
+    authority_end = orchestrator.find("\nfn action_effect", authority_start)
+    assert authority_end >= 0
+    authority = orchestrator[authority_start:authority_end]
+
+    no_show_openapi_start = openapi.find(
+        '"/v1/sorafs/moderation/ballots/{case_id}/{round_id}/no-show-plan".to_owned()'
     )
+    assert no_show_openapi_start >= 0
+    no_show_openapi_end = openapi.find(
+        '"/v1/sorafs/moderation/ballots/commits".to_owned()',
+        no_show_openapi_start,
+    )
+    assert no_show_openapi_end >= 0
+    no_show_openapi = openapi[no_show_openapi_start:no_show_openapi_end]
+    events_openapi_start = openapi.find(
+        '"/v1/sorafs/moderation/ballots/events".to_owned()'
+    )
+    assert events_openapi_start >= 0
+    events_openapi_end = openapi.find(
+        '"/v1/sorafs/moderation/model-registry".to_owned()',
+        events_openapi_start,
+    )
+    assert events_openapi_end >= 0
+    events_openapi = openapi[events_openapi_start:events_openapi_end]
     route = "/v1/sorafs/moderation/ballots/{case_id}/{round_id}/no-show-plan"
 
     handler_requirements = (
+        "reconciled_moderation_snapshot(&state)",
+        "snapshot.case(&case_id, &round_id)",
+        "if case.outcome.is_none()",
+        "StatusCode::CONFLICT",
+        "authoritative SoraFS moderation no-shows are unavailable before finalization",
+        "sorafs.moderation.finalized_no_shows.v1",
+        'Value::from("finalized_chain")',
+        "snapshot.finalized_height",
+        "snapshot.finalized_block_hash",
+        ".no_shows",
+    )
+    retired_local_requirements = (
         "iroha_network_time_now_ms()",
-        "moderation_ballot_no_show_plan(&case_id, &round_id, now_unix_ms)",
-        "moderation_ballot_no_show_plan_json(&plan)",
-        "moderation_ballot_runtime_error_response(err)",
+        "moderation_ballot_no_show_plan(&case_id, &round_id",
+        "moderation_ballot_no_show_plan_json",
+        "moderation_ballot_runtime_error_response",
     )
-    serializer_requirements = (
-        "sorafs.moderation.ballot.no_show_plan.v1",
-        "missing_commit_juror_ids",
-        "unrevealed_committed_juror_ids",
-        "no_show_juror_ids",
-        "penalty_plan_digest_hex",
+    reconciler_requirements = (
+        "state.sorafs_moderation_orchestrator.as_ref()",
+        "StatusCode::SERVICE_UNAVAILABLE",
+        "orchestrator.reconcile()",
+        "moderation_orchestrator_error_response(error)",
+        "orchestrator.snapshot()",
+        "finalized SoraFS moderation projection is unavailable",
     )
-    positive_requirements = (
-        "StatusCode::PRECONDITION_FAILED",
-        "StatusCode::OK",
-        "commitment_blake2b_256_hex",
-        "nonce_b64",
-        "accepted_commit",
-        "accepted_reveal",
-        "latest_moderation_ballot_event_sequence()",
-        "Some(2)",
+    event_requirements = (
+        "let tip_sequence = snapshot.events.last().map_or(0",
+        "let since = query.since.unwrap_or(0)",
+        "if since > tip_sequence",
+        "StatusCode::BAD_REQUEST",
+        "minimum_after_sequence",
+        "StatusCode::CONFLICT",
+        ".filter(|event| event.sequence > since)",
+        "moderation_finalized_events_etag(",
+        "reputation_not_modified_response(&headers, &etag)",
+        "let next_after = events.last().map(|event| event.cursor())",
+        "sorafs.moderation.finalized_events.v1",
+        'Value::from("finalized_chain")',
+        '"tip_sequence"',
+        '"has_more"',
+        '"next_after"',
+        "reputation_json_response(",
     )
-    challenge_requirements = (
-        "post_moderation_challenge",
-        "StatusCode::PRECONDITION_FAILED",
-        "pending",
-        "latest_moderation_ballot_event_sequence()",
-        "Some(3)",
+    etag_requirements = (
+        "sorafs.moderation.finalized-events-etag.v1",
+        "finalized_height.to_le_bytes()",
+        "finalized_block_hash",
+        "after_sequence.to_le_bytes()",
+        "tip_sequence.to_le_bytes()",
+    )
+    error_requirements = (
+        "ModerationOrchestratorError::InvalidAction(_)",
+        "StatusCode::BAD_REQUEST",
+        "ModerationOrchestratorError::AuthorityMismatch { .. }",
+        "StatusCode::FORBIDDEN",
+        "ModerationOrchestratorError::FinalizedReaderUnavailable",
+        "StatusCode::SERVICE_UNAVAILABLE",
+    )
+    authority_requirements = (
+        "ModerationNativeActionV1::FinalizeSortition(_)",
+        ".map(|record| &record.activated_by)",
+        "ModerationNativeActionV1::ActivateCase(value)",
+        "ModerationNativeActionV1::ResolveChallenge(value)",
+        "ModerationNativeActionV1::FinalizeCase(value)",
+        ".map(|selection| &selection.selected_by)",
+        "require_exact_authority(authenticated, expected, action.label())",
+    )
+    negative_test_requirements = (
+        "finalize_sortition_rejects_non_policy_authority_without_mutation",
+        "selection_governed_actions_reject_non_selected_authority_without_mutation",
+        "historical_operation_replay_precedes_rotated_finalized_authority",
+        "assert_eq!(submitter.calls(), 0)",
+        "assert!(state.operations.is_empty())",
+        "assert!(state.outbox.is_empty())",
+        "assert!(state.dead_letters.is_empty())",
+    )
+    no_show_openapi_requirements = (
+        "Fetch finalized moderation no-shows.",
+        "committed atomically with an authoritative SoraFS moderation outcome",
+        "rejects non-finalized cases",
+        "never derives a competing process-local penalty plan",
+    )
+    events_openapi_requirements = (
+        "Fetch finalized moderation events.",
+        "typed committed SoraFS moderation lifecycle events",
+        "finalized cursor metadata",
+        "ETag cache validation",
+        "Future cursors",
+        "retained finalized suffix fail closed",
     )
 
     assert (
@@ -23760,9 +23763,23 @@ def test_commit_reveal_torii_no_show_plan_readback_regressions_are_pinned() -> N
     )
     assert f'"{route}".to_owned()' in openapi
     assert [item for item in handler_requirements if item not in handler] == []
-    assert [item for item in serializer_requirements if item not in serializer] == []
-    assert [item for item in positive_requirements if item not in positive] == []
-    assert [item for item in challenge_requirements if item not in pending_challenge] == []
+    assert [item for item in retired_local_requirements if item in handler] == []
+    assert [item for item in reconciler_requirements if item not in reconciler] == []
+    assert [item for item in event_requirements if item not in events] == []
+    assert [item for item in etag_requirements if item not in etag] == []
+    assert [item for item in error_requirements if item not in error_mapper] == []
+    assert [item for item in authority_requirements if item not in authority] == []
+    assert [item for item in negative_test_requirements if item not in orchestrator] == []
+    replay_position = submit.find("if let Some(existing)")
+    authority_position = submit.find("validate_finalized_action_authority(")
+    action_effect_position = submit.find("match action_effect(")
+    assert 0 <= replay_position < authority_position < action_effect_position
+    assert [
+        item for item in no_show_openapi_requirements if item not in no_show_openapi
+    ] == []
+    assert [
+        item for item in events_openapi_requirements if item not in events_openapi
+    ] == []
 
 
 def test_commit_reveal_client_cli_no_show_readback_regressions_are_pinned() -> None:
@@ -23793,6 +23810,47 @@ def test_commit_reveal_client_cli_no_show_readback_regressions_are_pinned() -> N
     assert route_suffix in cli
     assert [item for item in client_requirements if item not in client] == []
     assert [item for item in cli_requirements if item not in cli] == []
+
+
+def test_commit_reveal_client_cli_use_only_native_transaction_mutations() -> None:
+    client = read(IROHA_CLIENT_RS)
+    cli = read(IROHA_CLI_SORAFS_RS)
+    combined = client + "\n" + cli
+
+    required_client = (
+        "pub enum SorafsModerationCommandRoute",
+        "try_build_sorafs_moderation_transaction",
+        "post_sorafs_moderation_transaction",
+        '.header("Content-Type", APPLICATION_NORITO)',
+        "TransactionResponseHandler::handle(&response)",
+    )
+    required_cli = (
+        "SubmitSorafsModerationCommit::new(payload)",
+        "SubmitSorafsModerationReveal::new(payload)",
+        "FinalizeSorafsModerationCase::new(",
+        "committed_at_unix_ms must be zero",
+        "revealed_at_unix_ms must be zero",
+        "juror_id must equal the configured transaction authority",
+        "MODERATION_NATIVE_ACTION_INPUT_MAX_BYTES_V1",
+        "MODERATION_COORDINATION_STATUS_MAX_BYTES_V1",
+        "read_bounded_moderation_file",
+        '"transaction_hash_hex"',
+        '"caller-signed-native-transaction"',
+    )
+    forbidden_compatibility = (
+        "SorafsModerationBallotTallyRequest",
+        "sorafs_moderation_ballot_commit_body",
+        "sorafs_moderation_ballot_reveal_body",
+        "sorafs_moderation_ballot_tally_body",
+        "post_sorafs_moderation_quarantine_appeal_ballot_json",
+        "ModerationQuarantineAppealBallotArgs",
+        "appeal-ballot",
+        "ballot-tally",
+    )
+
+    assert [marker for marker in required_client if marker not in client] == []
+    assert [marker for marker in required_cli if marker not in cli] == []
+    assert [marker for marker in forbidden_compatibility if marker in combined] == []
 
 
 UNSHIPPED_COMMIT_REVEAL_SERVICE_ROUTE_PATTERNS = (
@@ -24133,11 +24191,17 @@ def test_appeal_finance_docs_do_not_reopen_shipped_local_runtime_status() -> Non
     stale_phrases = (
         "summary: SFM-4b2 implementation status for appeal quote, settlement, and disbursement helpers plus the remaining escrow and service gates.",
         "reported, and `scripts/run_sorafs_appeal_finance_rollout_evidence.py` provides the matching reviewed evidence collection planner/runner.",
+        "Torii's local moderation ballot announcement API now performs the deposit confirmation gate before admitting a ballot",
+        "its moderation settlement worker replays and subscribes to local tallied ballot events",
+        "It replays the local moderation event backlog, subscribes to live `BallotTallied` events",
+        "It also rescans tallied local ballots on `worker_scan_interval_ms`",
     )
     current_phrases = (
         "configured-signer settlement submitter that queues the next pending native",
-        "Torii's local moderation ballot announcement API now performs the deposit confirmation gate before admitting a ballot",
-        "its moderation settlement worker replays and subscribes to local tallied ballot events",
+        "Finalized moderation outcomes now produce typed payload-free terminal settlement handoffs through a durable idempotent runtime boundary",
+        "Moderation intake and outcomes come only from committed native moderation state.",
+        "The finalized-chain orchestrator supplies stable terminal settlement handoffs to the runtime-injected durable boundary",
+        "Appeal intake is an exact caller-signed `SubmitSorafsModerationAppeal` transaction",
         "The checker also exports its required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`",
         "`evidence_contract` map for the selected required kinds",
         "Pricing-config `config_version` values must use a canonical lowercase `appeal-finance-config-name-vN` label without non-production markers",
@@ -25006,15 +25070,8 @@ def test_transparency_docs_keep_rollout_contract_markers() -> None:
         "emits `valid_publication_bindings` so aggregate promotion can prove every ready cycle digest came from a source-bound publication. Aggregate promotion also rechecks source-bound artifact fingerprints against `valid_source_batch_digests` and cycle-bound artifact fingerprints against `valid_cycle_digests` before final promotion can report ready.",
         "The transparency gate fail-closes when more than one valid source batch, publication cycle, or publication binding anchor appears, and clears the mixed `valid_source_batch_digests`, `valid_cycle_digests`, or `valid_publication_bindings` set before aggregate promotion can report ready.",
     )
-    missing_current: dict[str, list[str]] = {}
-
-    for path in sorted(DOCS_SOURCE_DIR.glob("sorafs_transparency_plan*.md")):
-        normalized = re.sub(r"\s+", " ", read(path))
-        missing = [phrase for phrase in required_current if phrase not in normalized]
-        if missing:
-            missing_current[str(path.relative_to(REPO_ROOT))] = missing
-
-    assert missing_current == {}
+    normalized = re.sub(r"\s+", " ", read(SORAFS_TRANSPARENCY_PLAN))
+    assert [phrase for phrase in required_current if phrase not in normalized] == []
     checker = read(SCRIPTS_DIR / "check_sorafs_transparency_rollout_evidence.py")
     checker_test = read(
         SCRIPTS_DIR / "tests" / "check_sorafs_transparency_rollout_evidence_test.py"
@@ -25206,22 +25263,10 @@ def test_transparency_docs_do_not_reopen_shipped_local_ledger_layer() -> None:
         "local source-entry cycle builder, local node publication to filesystem/CAR",
         "Local Torii readback for published cycles, entry proofs, proof-token issuance indexes, explorer snapshots, and proof-token verification is shipped",
     )
-    stale: dict[str, list[str]] = {}
-    missing: dict[str, list[str]] = {}
+    normalized = re.sub(r"\s+", " ", read(SORAFS_TRANSPARENCY_PLAN))
 
-    for path in sorted(DOCS_SOURCE_DIR.glob("sorafs_transparency_plan*.md")):
-        normalized = re.sub(r"\s+", " ", read(path))
-        matched_stale = [phrase for phrase in stale_phrases if phrase in normalized]
-        missing_current = [
-            phrase for phrase in required_current if phrase not in normalized
-        ]
-        if matched_stale:
-            stale[str(path.relative_to(REPO_ROOT))] = matched_stale
-        if missing_current:
-            missing[str(path.relative_to(REPO_ROOT))] = missing_current
-
-    assert stale == {}
-    assert missing == {}
+    assert [phrase for phrase in stale_phrases if phrase in normalized] == []
+    assert [phrase for phrase in required_current if phrase not in normalized] == []
 
 
 def test_transparency_deployed_surface_matcher_has_negative_controls() -> None:
@@ -25368,9 +25413,14 @@ def test_gateway_compliance_controller_runtime_state_is_honest_in_docs() -> None
         "`iroha_config` now carries the non-secret controller policy",
         "Torii accepts runtime-injected ACME and authenticated feed transports",
         "This controller/runtime integration ships locally.",
-        "Real authenticated feed and ACME adapters, authenticated stage/acknowledge/promote/rollback/status routes, live gateway-policy cutover, finalized accepted-appeal and legal/safety-hold producers, and deployment across two independently administered regional gateways remain open.",
+        "Torii now exposes six canonical, account-signed, governed-operator routes",
+        "Live SoraFS content serving evaluates the promoted catalog",
+        "Enabling the governed controller also rejects every obsolete unsigned denylist path, catalog, pack, and jurisdiction bootstrap source",
+        "Real authenticated feed and ACME adapters for the standard daemon",
+        "finalized accepted-appeal and legal/safety-hold catalog producers",
+        "deployment across two independently administered regional gateways remain open.",
         "The local SFM-4c transparency ledger builder and readback surface are shipped, but deployed publication, public-explorer, and two-gateway evidence remain open.",
-        "Configuration, runtime dependency transfer, fail-closed startup checks, and durable controller construction already ship locally and must not be reopened as missing work.",
+        "Configuration, runtime dependency transfer, fail-closed startup checks, durable controller construction, authenticated control routes, live serving enforcement, and unsigned-bootstrap mutual exclusion already ship locally and must not be reopened as missing work.",
         "Connect finalized accepted-appeal outcomes and legal/safety-hold producers to signed catalog construction and cache invalidation.",
         "Wire deployed GAR receipts, proof-token indexes, and moderation events through the shipped local SFM-4c transparency source-entry and publication paths, then capture deployed publication evidence.",
         "Capture staged multi-gateway rollout artifacts that satisfy the SFM-4 evidence gate before promoting gateway compliance changes to production.",
@@ -25381,6 +25431,10 @@ def test_gateway_compliance_controller_runtime_state_is_honest_in_docs() -> None
         "Ship the always-on compliance controller daemon",
         "missing deployed controller daemon",
         "the daemon itself still needs production deployment",
+        "authenticated stage/acknowledge/promote/rollback/status routes, live gateway-policy cutover",
+        "The startup bootstrap catalog remains active until the live-policy cutover is completed.",
+        "expose authenticated stage/acknowledge/promote/rollback/status APIs",
+        "Remove the startup-only unsigned local catalog/bootstrap path after the controller cutover",
     )
     missing = [phrase for phrase in required_current if phrase not in normalized]
     stale = [phrase for phrase in stale_claims if phrase in normalized]
@@ -25398,14 +25452,21 @@ def test_gateway_compliance_docs_keep_shipped_runtime_and_transparency_state() -
         "Ship the always-on compliance controller daemon",
         "missing deployed controller daemon",
         "the daemon itself still needs production deployment",
+        "authenticated stage/acknowledge/promote/rollback/status routes, live gateway-policy cutover",
+        "The startup bootstrap catalog remains active until the live-policy cutover is completed.",
+        "expose authenticated stage/acknowledge/promote/rollback/status APIs",
+        "Remove the startup-only unsigned local catalog/bootstrap path after the controller cutover",
     )
     required_current = (
         "`iroha_config` now carries the non-secret controller policy",
         "Torii accepts runtime-injected ACME and authenticated feed transports",
         "This controller/runtime integration ships locally.",
-        "Real authenticated feed and ACME adapters",
-        "finalized accepted-appeal and legal/safety-hold producers",
-        "two independently administered regional gateways remain open",
+        "Torii now exposes six canonical, account-signed, governed-operator routes",
+        "Live SoraFS content serving evaluates the promoted catalog",
+        "Enabling the governed controller also rejects every obsolete unsigned denylist path, catalog, pack, and jurisdiction bootstrap source",
+        "Real authenticated feed and ACME adapters for the standard daemon",
+        "finalized accepted-appeal and legal/safety-hold catalog producers",
+        "deployment across two independently administered regional gateways remain open.",
         "The local SFM-4c transparency ledger builder and readback surface are shipped, but deployed publication, public-explorer, and two-gateway evidence remain open.",
         "Wire deployed GAR receipts, proof-token indexes, and moderation events through the shipped local SFM-4c transparency source-entry and publication paths, then capture deployed publication evidence.",
     )
@@ -25803,10 +25864,110 @@ def test_gateway_compliance_canary_builder_is_checked_in() -> None:
     assert "--kind enforcement_probe" in enforcement_example
     assert "--route-body-blake3-hex" in enforcement_example
     assert "--kind observability" in observability_example
-    assert "--metric sorafs_gateway_policy_denials_total" in observability_example
+    for metric_name in (
+        "torii_sorafs_gateway_compliance_requests_total",
+        "torii_sorafs_gateway_compliance_serving_decisions_total",
+        "torii_sorafs_gateway_compliance_failures_total",
+        "torii_sorafs_gateway_compliance_serving_catalog_sequence",
+        "torii_sorafs_gateway_compliance_serving_catalog_valid_until_seconds",
+        "torii_sorafs_gateway_compliance_ready",
+    ):
+        assert f"--metric {metric_name}" in observability_example
     assert "build_sorafs_gateway_compliance_canary.py" in docs
     assert "payload-free full-surface canary builder" in docs
     assert "--route-body-blake3-hex" in docs
+
+
+def test_gateway_compliance_observability_uses_emitted_bounded_metrics() -> None:
+    metrics_source = read(TELEMETRY_METRICS_RS)
+    serving_source = read(TORII_SORAFS_API_RS)
+    checker = read(SCRIPTS_DIR / "check_sorafs_gateway_compliance_rollout_evidence.py")
+    example = read(
+        SCRIPTS_DIR
+        / "examples"
+        / "sorafs_gateway_compliance_observability_canary.args.example"
+    )
+    dashboard = read(
+        DASHBOARDS_DIR / "grafana" / "sorafs_gateway_compliance.json"
+    )
+    alerts = read(
+        DASHBOARDS_DIR / "alerts" / "sorafs_gateway_compliance_rules.yml"
+    )
+    alert_tests = read(
+        DASHBOARDS_DIR
+        / "alerts"
+        / "tests"
+        / "sorafs_gateway_compliance_rules.test.yml"
+    )
+    docs = read(SORAFS_GATEWAY_COMPLIANCE_PLAN)
+
+    metric_names = (
+        "torii_sorafs_gateway_compliance_requests_total",
+        "torii_sorafs_gateway_compliance_serving_decisions_total",
+        "torii_sorafs_gateway_compliance_failures_total",
+        "torii_sorafs_gateway_compliance_serving_catalog_sequence",
+        "torii_sorafs_gateway_compliance_serving_catalog_valid_until_seconds",
+        "torii_sorafs_gateway_compliance_ready",
+    )
+    for metric_name in metric_names:
+        assert f'"{metric_name}"' in metrics_source
+        assert f'"{metric_name}"' in checker
+        assert f"--metric {metric_name}" in example
+        assert metric_name in dashboard
+        assert metric_name in docs
+
+    for metric_name in (
+        "torii_sorafs_gateway_compliance_requests_total",
+        "torii_sorafs_gateway_compliance_failures_total",
+        "torii_sorafs_gateway_compliance_serving_catalog_sequence",
+        "torii_sorafs_gateway_compliance_serving_catalog_valid_until_seconds",
+        "torii_sorafs_gateway_compliance_ready",
+    ):
+        assert metric_name in alerts
+        assert metric_name in alert_tests
+
+    for legacy_name in (
+        "sorafs_gateway_policy_denials_total",
+        "sorafs_gateway_denylist_reload_total",
+        "sorafs_gateway_denylist_reload_latency_ms",
+        "sorafs_gateway_honey_audit_failures_total",
+        "sorafs_gateway_compliance_override_total",
+    ):
+        assert legacy_name not in checker
+        assert legacy_name not in example
+        assert legacy_name not in docs
+
+    assert "SORAFS_GATEWAY_COMPLIANCE_OPERATION_LABELS" in metrics_source
+    assert "SORAFS_GATEWAY_COMPLIANCE_REQUEST_OUTCOME_LABELS" in metrics_source
+    assert "SORAFS_GATEWAY_COMPLIANCE_SUBJECT_KIND_LABELS" in metrics_source
+    assert "SORAFS_GATEWAY_COMPLIANCE_DECISION_SOURCE_LABELS" in metrics_source
+    assert "SORAFS_GATEWAY_COMPLIANCE_FAILURE_SURFACE_LABELS" in metrics_source
+    assert "SORAFS_GATEWAY_COMPLIANCE_FAILURE_CLASS_LABELS" in metrics_source
+    assert "attacker-controlled" in metrics_source
+    metric_constructor = metrics_source[
+        metrics_source.index(
+            "let torii_sorafs_gateway_compliance_requests_total"
+        ) : metrics_source.index(
+            "let torii_sorafs_hedging_xor_usd_reference_price_micro_usd"
+        )
+    ]
+    for forbidden_label in (
+        '"provider_id"',
+        '"manifest"',
+        '"manifest_digest"',
+        '"cid"',
+        '"rule_id"',
+        '"feed_id"',
+        '"subject"',
+    ):
+        assert forbidden_label not in metric_constructor
+    assert (
+        "record_sorafs_gateway_compliance_serving_decision(" in serving_source
+    )
+    assert "record_sorafs_gateway_compliance_failure(\"serving\", class)" in serving_source
+    assert "mark_sorafs_gateway_compliance_unready()" in serving_source
+    assert "gateway_compliance_subject_kind_label(kind)" in serving_source
+    assert "gateway_compliance_serving_error_class(&error)" in serving_source
 
 
 UNSHIPPED_GATEWAY_COMPLIANCE_ROUTE_PATTERNS = (
@@ -25819,6 +25980,15 @@ UNSHIPPED_GATEWAY_COMPLIANCE_ROUTE_PATTERNS = (
     "/v1/sorafs/gateway/compliance/acknowledgements",
     "/v1/sorafs/gateway/compliance/history",
     "/v1/sorafs/gateway/compliance/promotion",
+)
+
+SHIPPED_GATEWAY_COMPLIANCE_ROUTES = (
+    "/v1/sorafs/gateway/compliance/feeds/{feed_id}",
+    "/v1/sorafs/gateway/compliance/status",
+    "/v1/sorafs/gateway/compliance/stage",
+    "/v1/sorafs/gateway/compliance/acknowledge",
+    "/v1/sorafs/gateway/compliance/promote",
+    "/v1/sorafs/gateway/compliance/rollback",
 )
 
 UNSHIPPED_GATEWAY_COMPLIANCE_CLI_SUBCOMMANDS = (
@@ -25973,6 +26143,41 @@ def test_unshipped_gateway_compliance_service_surface_is_not_exposed() -> None:
             exposed[str(path.relative_to(REPO_ROOT))] = matched
 
     assert exposed == {}
+
+
+def test_gateway_compliance_control_surface_is_single_canonical_authenticated_family() -> None:
+    route_catalog = read(TORII_ROUTE_CATALOG_RS)
+    torii = read(TORII_LIB_RS)
+    openapi = read(TORII_OPENAPI_RS)
+    control = read(TORII_SORAFS_GATEWAY_COMPLIANCE_API_RS)
+    serving = read(TORII_SORAFS_API_RS)
+
+    for route in SHIPPED_GATEWAY_COMPLIANCE_ROUTES:
+        assert f'"{route}"' in route_catalog
+        assert f'"{route}"' in openapi
+
+    required_handlers = (
+        "handle_get_sorafs_gateway_compliance_feed",
+        "handle_get_sorafs_gateway_compliance_status",
+        "handle_post_sorafs_gateway_compliance_stage",
+        "handle_post_sorafs_gateway_compliance_acknowledge",
+        "handle_post_sorafs_gateway_compliance_promote",
+        "handle_post_sorafs_gateway_compliance_rollback",
+    )
+    for handler in required_handlers:
+        assert handler in torii
+        assert handler in control
+
+    assert control.count("verify_canonical_request(") == 1
+    assert "sorafs_gateway_compliance_operator" in control
+    assert "require_exact_canonical_json" in control
+    assert "MAX_GATEWAY_COMPLIANCE_CATALOG_BYTES_V1" in control
+    assert "current_unix_second()" in control
+    assert "evaluate_serving(kind, subject, observed_at_unix)" in serving
+    assert "GatewayComplianceSubjectKindV1::ManifestDigest" in serving
+    assert "GatewayComplianceSubjectKindV1::Cid" in serving
+    assert "GatewayComplianceSubjectKindV1::Provider" in serving
+    assert "gateway_compliance_unavailable_response()" in serving
 
 
 def test_gateway_load_rollout_evidence_work_stays_open_in_docs() -> None:
@@ -27411,90 +27616,60 @@ def test_sorafs_production_readiness_aggregate_covers_every_lane_checker() -> No
     )
 
 
-def test_reserve_rent_live_control_plane_stays_open_in_docs() -> None:
+def test_reserve_rent_chain_authoritative_contract_stays_open_until_evidence() -> None:
     source = read(SORAFS_RESERVE_RENT_PLAN)
     normalized = re.sub(r"\s+", " ", source)
 
-    required_open = (
-        "The production reserve/rent control plane is still incomplete.",
-        "Signed local movement routes now authenticate and record transfer intents, but they do not submit reserve transfers or verify chain finality.",
-        "live chain submission, automatic finality polling, and live account mutation for credit lines are still target service work.",
-        "Broader governance source-entry effects beyond current provider denylist projection and live scheduler canary evidence remain target downstream work.",
-        "live account mutation for local credit-line state",
-        "broader downstream compliance application evidence for governance source entries",
-        "staged provider bake evidence, including live scheduled lifecycle canaries",
-        "Remaining: live chain custody submission and automatic finality polling for signed movement intents, live account mutation for local credit-line state, broader downstream compliance application evidence for governance source entries, and staged provider bake evidence, including live scheduled lifecycle canaries, that passes the rollout gate.",
+    required_contract = (
+        "SoraFS V1 treats the native reserve ledger as the only authority",
+        "they do not own an independent reserve balance or lifecycle state",
+        "the supervised Torii reserve worker",
+        "Pre-release reserve state encoded without the V1 settlement anchor is not compatible.",
+        "Validator or Torii wall clocks never participate.",
+        "The former process-local reserve lifecycle scheduler, lifecycle/movement routes, local reserve checkpoint, and CLI adapters are removed from the V1 surface.",
+        "Production consumers use finalized typed queries",
+        "Reputation, orderbook, compliance, and transparency consumers must use these committed projections",
+        "The reserve lane is release-ready only when these tests, the full workspace and SDK gates, the four-validator deployment exercise, security review, disaster recovery rehearsal, and signed aggregate readiness evidence all pass.",
     )
-    missing = [phrase for phrase in required_open if phrase not in normalized]
+    missing = [phrase for phrase in required_contract if phrase not in normalized]
 
     assert missing == []
 
 
-def test_reserve_rent_docs_do_not_reopen_shipped_local_control_plane() -> None:
+def test_reserve_rent_docs_do_not_reopen_process_local_authority() -> None:
     stale_phrases = (
         "The production reserve/rent control plane is still outstanding.",
         "no Torii REST surface for reserve lifecycle management",
         "no shipped CLI for provider status",
         "Remaining: reserve lifecycle service, signed Torii routes",
         "runtime reserve movement/authentication, persisted lifecycle-stage automation",
-    )
-    current_phrases = (
         "Signed local movement routes now authenticate and record transfer intents",
         "now a local authenticated appeal/policy handoff surface",
-        "config-backed scheduler can drive the same advancement path",
-        "signed reserve top-up/withdrawal/status/movement/custody/credit-line/appeal/policy CLI commands",
-        "Remaining: live chain custody submission and automatic finality polling for signed movement intents",
+        "live account mutation for local credit-line state",
     )
-    stale: dict[str, list[str]] = {}
-    missing_current: dict[str, list[str]] = {}
+    current_phrases = (
+        "native reserve ledger as the only authority",
+        "native reserve ISIs for policy activation, provider registration, movement request/decision, rent charge, lifecycle advancement, credit draw/repayment, and appeal submission/decision",
+        "finalized, typed policy/provider/movement/appeal/event queries",
+        "there is no second reserve record format",
+    )
+    normalized = re.sub(r"\s+", " ", read(SORAFS_RESERVE_RENT_PLAN))
 
-    for path in sorted(DOCS_SOURCE_DIR.glob("sorafs_reserve_rent_plan*.md")):
-        normalized = re.sub(r"\s+", " ", read(path))
-        matched_stale = [phrase for phrase in stale_phrases if phrase in normalized]
-        if matched_stale:
-            stale[str(path.relative_to(REPO_ROOT))] = matched_stale
-        missing = [phrase for phrase in current_phrases if phrase not in normalized]
-        if missing:
-            missing_current[str(path.relative_to(REPO_ROOT))] = missing
-
-    assert stale == {}
-    assert missing_current == {}
+    assert [phrase for phrase in stale_phrases if phrase in normalized] == []
+    assert [phrase for phrase in current_phrases if phrase not in normalized] == []
 
 
 def test_reserve_rent_docs_keep_rollout_contract_markers() -> None:
     required_current = (
-        "The checker exports its required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`",
-        "the collection planner dry-run JSON includes the checker-backed `evidence_contract` map for selected required kinds",
-        "provider-bake artifacts prove the config-backed reserve lifecycle scheduler canary ran recently enough before bake completion",
-        "provider-bake artifacts require `bake_id` to match a reviewed lowercase `reserve-bake-*` label and `providers[].name` entries to use reviewed lowercase `provider-*` labels without non-production markers, require `rent_cycles[].name`, `top_up_cycles[].name`, `appeal_cycles[].name`, and `scheduled_lifecycle_canary_ticks[].name` to use reviewed lowercase `reserve-rent-cycle-*`, `reserve-top-up-cycle-*`, `reserve-appeal-cycle-*`, and `reserve-lifecycle-tick-*` labels without non-production markers, bind `provider_count`, `rent_cycle_count`, `top_up_cycle_count`, `appeal_cycle_count`, and `scheduled_lifecycle_canary_tick_count` to unique canonical provider/cycle/tick inventories, and reject duplicate provider-bake entries before promotion can report ready",
-        "provider-bake artifacts bind `provider_count`, `rent_cycle_count`, `top_up_cycle_count`, `appeal_cycle_count`, and `scheduled_lifecycle_canary_tick_count` to unique canonical provider/cycle/tick inventories, require `providers[].name` entries to use reviewed lowercase `provider-*` labels without non-production markers, require `rent_cycles[].name`, `top_up_cycles[].name`, `appeal_cycles[].name`, and `scheduled_lifecycle_canary_ticks[].name` to use reviewed lowercase `reserve-rent-cycle-*`, `reserve-top-up-cycle-*`, `reserve-appeal-cycle-*`, and `reserve-lifecycle-tick-*` labels without non-production markers, and reject duplicate provider-bake entries before promotion can report ready",
-        "quote-matrix artifacts bind `scenario_count` and `passed_scenario_count` to the product of unique `storage_classes`, `tiers`, and `durations` inventories and reject duplicate or unknown dimension entries before promotion can report ready",
-        "ledger-digest artifacts bind `ledger_count` and `instruction_count` to the unique canonical `ledgers[].name` and `instructions[].name` inventories using reviewed `reserve-ledger-*` and `reserve-instruction-*` labels without non-production markers, and reject duplicate ledger/instruction entries before promotion can report ready",
-        "lifecycle-service artifacts bind `persisted_stage_count` to the unique canonical `persisted_stages[].name` inventory using reviewed `reserve-lifecycle-stage-*` labels without non-production markers, and reject duplicate persisted-stage entries before promotion can report ready",
-        "lifecycle-service and signed-route artifacts bind `route_count` to the unique canonical `routes[].name` inventories and reject duplicate or unknown route entries before promotion can report ready, and require every route response to carry a lowercase `body_blake3_hex` digest",
-        "reserve-movement artifacts bind `movement_count` to the unique canonical `movements[].action` inventory and reject duplicate or unknown movement-action entries before promotion can report ready",
-        "Reserve-rent payload-safety artifacts must explicitly set `policy_payload_included`, `quote_payloads_included`, `raw_ledger_included`, `raw_transfer_instructions_included`, `response_bodies_included`, `raw_transfer_included`, `raw_instruction_included`, `appeal_payloads_included`, `critical_alerts_firing`, and `payloads_included` to `false` before promotion can report ready.",
-        "Appeal-policy artifacts bind `appeal_probe_count` to the unique canonical `appeal_probes[].name` inventory and reject duplicate appeal-probe entries or unknown probe names before promotion can report ready",
-        "credit-line artifacts bind `credit_line_mutation_count` to unique canonical `credit_line_mutations[].name` and `accrual_cycle_count` to unique canonical `accrual_cycles[].name` inventories and reject duplicate or unknown credit-line entries before promotion can report ready",
-        "metrics artifacts bind `metric_count` to the unique canonical `metrics` inventory and reject duplicate or unknown metrics before promotion can report ready",
-        "The summary exports the sorted reviewed `metrics` inventory plus `metric_count_values`, and the aggregate production-readiness gate requires those fields to match the metrics/alert artifact fingerprint before final promotion can report ready.",
-        "The reserve-rent gate fail-closes when more than one valid policy, policy/matrix, or policy/matrix/ledger anchor appears, and clears the mixed `valid_policy_digests`, `valid_policy_matrix_bindings`, or `valid_policy_matrix_ledger_bindings` set before aggregate promotion can report ready.",
-        "The aggregate production-readiness gate also preserves the full policy/matrix/ledger chain: policies in `valid_policy_matrix_bindings` must appear in `valid_policy_digests`, ledger binding policy/matrix pairs must appear in `valid_policy_matrix_bindings`, and provider-bake policy/matrix/ledger tuples must appear in `valid_policy_matrix_ledger_bindings` before final promotion can report ready. It also rechecks policy-bound, matrix-bound, and ledger-bound artifact fingerprints against `valid_policy_digests`, `valid_policy_matrix_bindings`, and `valid_policy_matrix_ledger_bindings`.",
-        "Governance approval artifacts must carry the accepted provider-bake `bake_id`, and the rollout gate plus aggregate production-readiness gate reject governance approval evidence whose `bake_id` does not match a valid provider-bake artifact before final promotion can report ready.",
-        "Reserve-movement artifacts prove live chain submission coverage, submitted transaction-hash readback, automatic finality polling",
-        "governance approval artifacts prove source-entry publication, downstream compliance application, consumer coverage",
-        "governance approval artifacts also bind `downstream_compliance_consumer_count` to the unique canonical `downstream_compliance_consumers[].name` inventory using reviewed `reserve-compliance-consumer-*` labels without non-production markers, and reject duplicate downstream-compliance consumer entries before promotion can report ready",
-        "The runner validates the schema-closed collection-plan envelope before printing dry-run JSON or executing the verifier.",
+        "`scripts/build_sorafs_reserve_rent_canary.py` builds the payload-free evidence envelopes consumed by the reserve rollout checker.",
+        "It is evidence tooling only: it cannot create, replace, or attest native ledger state",
+        "production promotion must use observations collected from the reviewed deployment.",
+        "Reserve/rent promotion evidence must cover:",
+        "exact applied/rejected/absent transaction observation",
+        "corrupt signed bytes, digest mismatch, missing/duplicate Kura entrypoints, and stale finalized cursors",
     )
-    missing_current: dict[str, list[str]] = {}
-
-    for path in sorted(DOCS_SOURCE_DIR.glob("sorafs_reserve_rent_plan*.md")):
-        normalized = re.sub(r"\s+", " ", read(path))
-        missing = [phrase for phrase in required_current if phrase not in normalized]
-        if missing:
-            missing_current[str(path.relative_to(REPO_ROOT))] = missing
-
-    assert missing_current == {}
+    normalized = re.sub(r"\s+", " ", read(SORAFS_RESERVE_RENT_PLAN))
+    assert [phrase for phrase in required_current if phrase not in normalized] == []
     checker = read(SCRIPTS_DIR / "check_sorafs_reserve_rent_rollout_evidence.py")
     aggregate_checker = read(SCRIPTS_DIR / "check_sorafs_production_readiness.py")
     checker_test = read(
@@ -27938,7 +28113,7 @@ def test_reserve_rent_canary_builder_is_checked_in() -> None:
         / "examples"
         / "sorafs_reserve_rent_governance_approval_canary.args.example"
     )
-    docs = read(SORAFS_RESERVE_RENT_PLAN)
+    docs = re.sub(r"\s+", " ", read(SORAFS_RESERVE_RENT_PLAN))
 
     assert "CANARY_KINDS = tuple(KIND_BY_NAME)" in builder
     assert "TRUE_CLAIMS" in builder
@@ -28123,13 +28298,9 @@ def test_reserve_rent_canary_builder_is_checked_in() -> None:
     assert "--credit-line-mutation\nmanual_approval_tier" in credit_line_example
     assert "--accrual-cycle\ncredit_shortfall" in credit_line_example
     assert "build_sorafs_reserve_rent_canary.py" in docs
-    assert "payload-free SFM-6 reserve/rent canary builder" in docs
-    assert "--route-body-blake3-hex" in docs
-    assert "Ledger-digest `--ledger-ref` and" in docs
-    assert "`--instruction-ref` inputs must use reviewed `reserve-ledger-*`" in docs
-    assert "Lifecycle-service `--persisted-stage` inputs must use reviewed" in docs
-    assert "Provider-bake `--scheduled-lifecycle-canary-tick` inputs must use reviewed" in docs
-    assert "sorafs_reserve_rent_governance_approval_canary.args.example" in docs
+    assert "payload-free evidence envelopes consumed by the reserve rollout checker" in docs
+    assert "It is evidence tooling only" in docs
+    assert "cannot create, replace, or attest native ledger state" in docs
 
 
 UNSHIPPED_RESERVE_RENT_LIVE_ROUTE_PATTERNS = (
@@ -28194,22 +28365,22 @@ def unshipped_reserve_rent_live_cli_matches(source: str) -> list[str]:
 
 def test_reserve_rent_live_control_plane_surface_matcher_has_negative_controls() -> None:
     shipped_local_routes = (
-        "/v1/sorafs/reserve/lifecycle",
-        "/v1/sorafs/reserve/lifecycle/providers/{provider_id_hex}",
-        "/v1/sorafs/reserve/lifecycle/policy",
-        "/v1/sorafs/reserve/lifecycle/advance",
-        "/v1/sorafs/reserve/lifecycle/events",
-        "/v1/sorafs/reserve/lifecycle/events/stream",
-        "/v1/sorafs/reserve/lifecycle/events/ws",
+        "/v1/sorafs/reserve/policy",
+        "/v1/sorafs/reserve/providers",
+        "/v1/sorafs/reserve/providers/{provider_id_hex}",
         "/v1/sorafs/reserve/top-up",
         "/v1/sorafs/reserve/withdraw",
         "/v1/sorafs/reserve/movements",
-        "/v1/sorafs/reserve/movements/{movement_id_hex}/custody",
-        "/v1/sorafs/reserve/balances/{provider_id_hex}",
-        "/v1/sorafs/reserve/credit-lines",
-        "/v1/sorafs/reserve/credit-lines/providers/{provider_id_hex}",
+        "/v1/sorafs/reserve/movements/{movement_id_hex}",
+        "/v1/sorafs/reserve/movements/{movement_id_hex}/decision",
+        "/v1/sorafs/reserve/credit/draw",
+        "/v1/sorafs/reserve/credit/repay",
         "/v1/sorafs/reserve/appeals",
+        "/v1/sorafs/reserve/appeals/{appeal_id_hex}",
         "/v1/sorafs/reserve/appeals/{appeal_id_hex}/decision",
+        "/v1/sorafs/reserve/events",
+        "/v1/sorafs/reserve/events/stream",
+        "/v1/sorafs/reserve/events/ws",
     )
     shipped_local_route_candidates = (
         "/v1/sorafs/reserve/live-custody-submit-canary",
@@ -28221,31 +28392,11 @@ def test_reserve_rent_live_control_plane_surface_matcher_has_negative_controls()
     )
     shipped_local_subcommands = (
         "lifecycle",
-        "top-up",
-        "withdraw",
-        "movements",
-        "status",
-        "custody",
-        "credit-lines",
-        "credit-status",
-        "appeal-submit",
-        "appeals",
-        "appeal-decide",
-        "policy-update",
-        "policy",
         "reserve-rent-canary",
         "reserve-live-submit-canary",
         "reserve-finality-poller-canary",
         "reserve-provider-bake-live-canary",
         "reserve lifecycle",
-        "reserve top-up",
-        "reserve withdraw",
-        "reserve movements",
-        "reserve credit-lines",
-        "reserve credit-status",
-        "reserve appeal-submit",
-        "reserve appeal-decide",
-        "reserve policy-update",
         "reserve provider-bake-live-canary",
         "reserve provider-bake live-canary",
         "reserve promote-canary",
@@ -28713,9 +28864,11 @@ def test_pdp_and_potr_proof_streams_use_exact_finalized_chain_projections() -> N
     pdp_dispatch = re.sub(r"\s+", " ", api[pdp_dispatch_start:pdp_dispatch_end])
     assert ".expect(\"validation guarantees challenge id for PDP\")" in pdp_dispatch
     assert (
-        "FindSorafsProofOutcome::new(ProofOutcomeKindV1::Pdp, challenge_id, None)"
+        "FindSorafsProofOutcome::new( ProofOutcomeKindV1::Pdp, challenge_id, expected_finalized_cursor, )"
         in pdp_dispatch
     )
+    assert "ProofOutcomeFinalizedCursorV1" in pdp_dispatch
+    assert "validated finalized cursor is complete" in pdp_dispatch
     assert "query.execute(&state.state.query_view())" in pdp_dispatch
     assert (
         "render_finalized_proof_stream_response(&state, &finalized, &request)"
@@ -28735,9 +28888,11 @@ def test_pdp_and_potr_proof_streams_use_exact_finalized_chain_projections() -> N
         in potr_dispatch
     )
     assert (
-        "FindSorafsProofOutcome::new(ProofOutcomeKindV1::Potr, identity_digest, None)"
+        "FindSorafsProofOutcome::new( ProofOutcomeKindV1::Potr, identity_digest, expected_finalized_cursor, )"
         in potr_dispatch
     )
+    assert "ProofOutcomeFinalizedCursorV1" in potr_dispatch
+    assert "validated finalized cursor is complete" in potr_dispatch
     assert "query.execute(&state.state.query_view())" in potr_dispatch
     assert (
         "render_finalized_proof_stream_response(&state, &finalized, &request)"
@@ -28852,3 +29007,80 @@ def test_sorafs_localized_plan_mirrors_match_source_hashes() -> None:
             mismatches[relative_path] = f"unsupported translation status {status}"
 
     assert mismatches == {}
+
+
+def test_sorafs_cli_proof_stream_uses_authenticated_native_pin_projection() -> None:
+    cli = read(SORAFS_CLI_RS)
+    command_start = cli.index("fn proof_stream(raw_args: Vec<String>)")
+    command_end = cli.index("\nfn write_proof_stream_evidence(", command_start)
+    command = cli[command_start:command_end]
+    endpoint_start = cli.index("fn proof_stream_endpoint(")
+    endpoint_end = cli.index("\nfn proof_stream_pin_manifest_endpoint(", endpoint_start)
+    endpoint_policy = cli[endpoint_start:endpoint_end]
+    fetch_start = cli.index("fn fetch_finalized_pin_manifest(")
+    fetch_end = cli.index("\nfn validate_finalized_pin_manifest(", fetch_start)
+    native_fetch = cli[fetch_start:fetch_end]
+    validation_start = fetch_end + 1
+    validation_end = cli.index("\nfn payload_free_proof_stream_event(", validation_start)
+    validation = cli[validation_start:validation_end]
+    event_start = validation_end + 1
+    event_end = cli.index("\nfn proof_stream(raw_args: Vec<String>)", event_start)
+    event_projection = cli[event_start:event_end]
+
+    assert 'const PROOF_STREAM_ROUTE_V1: &str = "/v1/sorafs/proof/stream";' in cli
+    assert 'const PIN_MANIFEST_ROUTE_PREFIX_V1: &str = "/v1/sorafs/pin/";' in cli
+    assert 'parsed.scheme() != "https"' in endpoint_policy
+    for rejected_component in (
+        "parsed.username().is_empty()",
+        "parsed.password().is_some()",
+        "parsed.query().is_some()",
+        "parsed.fragment().is_some()",
+    ):
+        assert rejected_component in endpoint_policy
+    assert "raw != canonical_endpoint" in endpoint_policy
+    assert "raw != canonical_origin && raw != canonical_origin_with_slash" in endpoint_policy
+    assert ".https_only(true)" in cli
+    assert ".redirect(RedirectPolicy::none())" in cli
+    assert ".no_proxy()" in cli
+    assert native_fetch.count(".bearer_auth(bearer_token)") == 1
+    assert command.count(".bearer_auth(&bearer_token)") == 1
+    assert "fetch_finalized_pin_manifest(" in command
+    assert "validate_finalized_pin_manifest(" in command
+    assert "PinStatus::Approved(_)" in validation
+    for manifest_binding in (
+        "record.digest.as_bytes() != local_manifest_digest",
+        "record.root_cid.as_bytes().as_slice() != local_manifest.root_cid.as_slice()",
+        "record.chunker != chunker_handle_from_profile(&local_manifest.chunking)",
+        "record.chunk_digest_sha3_256 != local_manifest.chunk_digest_sha3_256",
+        "record.por_root != local_manifest.por_root",
+        "record.content_length != local_manifest.content_length",
+        "record.policy != convert_pin_policy(&local_manifest.pin_policy)",
+        "finalized.finalized_cursor.height == 0",
+        ".finalized_cursor\n        .block_hash",
+    ):
+        assert manifest_binding in validation
+    assert "MAX_PROOF_STREAM_SAMPLE_COUNT" in command
+    assert "read_file_bounded(&manifest_path, manifest_byte_limit, \"manifest\")" in command
+    assert "expected_finalized_height: Some(validated_pin.finalized_height)" in command
+    assert (
+        "expected_finalized_block_hash: Some(validated_pin.finalized_block_hash)"
+        in command
+    )
+    assert "ProofStreamNdjsonReader::new(reader, &verification_context)" in command
+    assert "payload_free_proof_stream_event(&item)" in command
+    assert "item.to_json()" not in command
+    for secret_payload in (
+        '"proof"',
+        '"leaf_bytes_hex"',
+        '"receipt_b64"',
+        '"trace_id"',
+        '"nonce_b64"',
+        '"authorization"',
+        '"credential"',
+    ):
+        assert secret_payload not in event_projection
+    assert '"--stream-token" =>' not in command
+    assert '"--max-failures" =>' not in command
+    assert "sorafs_cli/stream/v2" not in command
+    assert "redacted_endpoint(&endpoint)" in command
+    assert "&manifest_bytes," in command

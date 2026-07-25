@@ -49,7 +49,8 @@ use iroha_core::sumeragi::consensus::{
     NPOS_TAG, PERMISSIONED_TAG, PROTO_VERSION, compute_consensus_fingerprint_from_params,
 };
 use iroha_crypto::{
-    Algorithm, ExposedPrivateKey, Hash as CryptoHash, KeyPair, PrivateKey, PublicKey,
+    Algorithm, ExposedPrivateKey, Hash as CryptoHash, KeyPair, PrivateKey, PublicKey, sha256,
+    sha256_reader_bounded,
 };
 use iroha_data_model::{
     ChainId,
@@ -957,6 +958,14 @@ struct ProgramSpec {
 }
 
 impl Program {
+    const fn release_prebuilt_binary(self) -> ReleasePrebuiltBinary {
+        match self {
+            Self::Irohad => ReleasePrebuiltBinary::Irohad,
+            Self::IrohadMessageControl => ReleasePrebuiltBinary::IrohadMessageControl,
+            Self::Iroha => ReleasePrebuiltBinary::Iroha,
+        }
+    }
+
     fn spec(&self) -> ProgramSpec {
         match self {
             Self::Irohad => ProgramSpec {
@@ -1014,13 +1023,89 @@ const BUILD_CACHE_DIR: &str = ".iroha_test_network";
 const BUILD_STAMP_VERSION: u32 = 3;
 const IROHA_TEST_TARGET_DIR_ENV: &str = "IROHA_TEST_TARGET_DIR";
 const IROHA_TEST_BUILD_PROFILE_ENV: &str = "IROHA_TEST_BUILD_PROFILE";
+const IROHA_TEST_SKIP_BUILD_ENV: &str = "IROHA_TEST_SKIP_BUILD";
+const IROHA_TEST_ALLOW_REENTRANT_BUILD_ENV: &str = "IROHA_TEST_ALLOW_REENTRANT_BUILD";
+const IROHA_RELEASE_SOURCE_MANIFEST_SHA256_ENV: &str = "IROHA_RELEASE_SOURCE_MANIFEST_SHA256";
+const IROHA_RELEASE_PREBUILT_MANIFEST_SHA256_ENV: &str = "IROHA_RELEASE_PREBUILT_MANIFEST_SHA256";
+const IROHA_RELEASE_CARGO_LOCK_SHA256_ENV: &str = "IROHA_RELEASE_CARGO_LOCK_SHA256";
 const IROHA_TEST_TARGET_SUBDIR: &str = "iroha-test-network";
+const SUMERAGI_V2_RELEASE_TARGET_SUBDIR: &str = "sumeragi-v2-release";
+const SUMERAGI_V2_RELEASE_PROGRAMS_SUBDIR: &str = "programs";
+const SUMERAGI_V2_RELEASE_INVOCATION_PREFIX: &str = "invocation.";
+const SUMERAGI_V2_PREBUILT_MANIFEST: &str = ".sumeragi-v2-prebuilt-binaries.tsv";
+const SUMERAGI_V2_PREBUILT_MANIFEST_SCHEMA_VERSION: &str = "2";
+const MAX_SUMERAGI_V2_PREBUILT_MANIFEST_BYTES: u64 = 32 * 1024;
+const MAX_SUMERAGI_V2_PREBUILT_BINARY_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+const MAX_WORKSPACE_CARGO_LOCK_BYTES: u64 = 16 * 1024 * 1024;
+const RELEASE_BINARY_MODE_OCTAL: &str = "0500";
+const RELEASE_BINARY_MODE: u32 = 0o500;
+const RELEASE_MANIFEST_MODE: u32 = 0o400;
 
 #[derive(Debug, Clone)]
 struct BuildStamp {
     fingerprint: u64,
     profile: String,
     binary: PathBuf,
+}
+
+/// One executable covered by the source-bound release prebuild manifest.
+#[doc(hidden)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum ReleasePrebuiltBinary {
+    Irohad,
+    IrohadMessageControl,
+    Iroha,
+    Kagami,
+}
+
+impl ReleasePrebuiltBinary {
+    const ALL: [Self; 4] = [
+        Self::Irohad,
+        Self::IrohadMessageControl,
+        Self::Iroha,
+        Self::Kagami,
+    ];
+
+    const fn manifest_prefix(self) -> &'static str {
+        match self {
+            Self::Irohad => "irohad",
+            Self::IrohadMessageControl => "irohad_message_control",
+            Self::Iroha => "iroha",
+            Self::Kagami => "kagami",
+        }
+    }
+
+    const fn relative_path(self) -> &'static str {
+        match self {
+            Self::Irohad => "release/iroha3d",
+            Self::IrohadMessageControl => "message-control/release/iroha3d",
+            Self::Iroha => "release/iroha",
+            Self::Kagami => "release/kagami",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ReleaseBinaryAttestation {
+    kind: ReleasePrebuiltBinary,
+    sha256: String,
+    size_bytes: u64,
+}
+
+#[derive(Debug, Clone)]
+struct ReleaseProgramContract {
+    configured_target_dir: PathBuf,
+    canonical_target_dir: PathBuf,
+    binaries: [ReleaseBinaryAttestation; 4],
+}
+
+impl ReleaseProgramContract {
+    fn binary(&self, kind: ReleasePrebuiltBinary) -> &ReleaseBinaryAttestation {
+        self.binaries
+            .iter()
+            .find(|entry| entry.kind == kind)
+            .expect("release manifest contains every fixed binary kind")
+    }
 }
 
 fn resolve_target_dir_path(repo: &Path, raw: &str) -> PathBuf {
@@ -1041,6 +1126,680 @@ fn resolve_target_dir(repo: &Path) -> PathBuf {
         return resolve_target_dir_path(repo, &path).join(IROHA_TEST_TARGET_SUBDIR);
     }
     repo.join("target").join(IROHA_TEST_TARGET_SUBDIR)
+}
+
+fn is_lowercase_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn lowercase_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        encoded.push(char::from(HEX[usize::from(byte >> 4)]));
+        encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    encoded
+}
+
+fn exact_env_value(key: &str) -> color_eyre::Result<Option<String>> {
+    match std::env::var(key) {
+        Ok(value) => Ok(Some(value)),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(std::env::VarError::NotUnicode(_)) => Err(eyre!("{key} must contain valid Unicode")),
+    }
+}
+
+#[cfg(unix)]
+fn validate_published_mode_and_links(
+    metadata: &fs::Metadata,
+    expected_mode: u32,
+    label: &str,
+) -> color_eyre::Result<()> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    if metadata.mode() & 0o7777 != expected_mode {
+        return Err(eyre!(
+            "{label} must have exact mode {expected_mode:04o}; got {:04o}",
+            metadata.mode() & 0o7777
+        ));
+    }
+    if metadata.nlink() != 1 {
+        return Err(eyre!(
+            "{label} must have exactly one hard link; got {}",
+            metadata.nlink()
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn validate_published_mode_and_links(
+    _metadata: &fs::Metadata,
+    _expected_mode: u32,
+    _label: &str,
+) -> color_eyre::Result<()> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn validate_published_directory_mode(
+    metadata: &fs::Metadata,
+    expected_mode: u32,
+    label: &str,
+) -> color_eyre::Result<()> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    if metadata.mode() & 0o7777 != expected_mode {
+        return Err(eyre!(
+            "{label} must have exact mode {expected_mode:04o}; got {:04o}",
+            metadata.mode() & 0o7777
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn validate_published_directory_mode(
+    _metadata: &fs::Metadata,
+    _expected_mode: u32,
+    _label: &str,
+) -> color_eyre::Result<()> {
+    Ok(())
+}
+
+fn published_regular_file_metadata(
+    path: &Path,
+    expected_mode: u32,
+    label: &str,
+) -> color_eyre::Result<fs::Metadata> {
+    let metadata = fs::symlink_metadata(path)
+        .wrap_err_with(|| eyre!("failed to inspect {label} {}", path.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(eyre!(
+            "{label} {} must be a regular, non-symlink file",
+            path.display()
+        ));
+    }
+    validate_published_mode_and_links(&metadata, expected_mode, label)?;
+    Ok(metadata)
+}
+
+fn published_directory_metadata(
+    path: &Path,
+    expected_mode: u32,
+    label: &str,
+) -> color_eyre::Result<fs::Metadata> {
+    let metadata = fs::symlink_metadata(path)
+        .wrap_err_with(|| eyre!("failed to inspect {label} {}", path.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(eyre!(
+            "{label} {} must be a directory, not a symlink",
+            path.display()
+        ));
+    }
+    validate_published_directory_mode(&metadata, expected_mode, label)?;
+    Ok(metadata)
+}
+
+#[cfg(unix)]
+fn same_file_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+
+    left.dev() == right.dev()
+        && left.ino() == right.ino()
+        && left.len() == right.len()
+        && left.mtime() == right.mtime()
+        && left.mtime_nsec() == right.mtime_nsec()
+        && left.ctime() == right.ctime()
+        && left.ctime_nsec() == right.ctime_nsec()
+}
+
+#[cfg(not(unix))]
+fn same_file_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    left.len() == right.len() && left.modified().ok() == right.modified().ok()
+}
+
+fn read_release_manifest(path: &Path) -> color_eyre::Result<Vec<u8>> {
+    let before =
+        published_regular_file_metadata(path, RELEASE_MANIFEST_MODE, "release prebuilt manifest")?;
+    if before.len() > MAX_SUMERAGI_V2_PREBUILT_MANIFEST_BYTES {
+        return Err(eyre!(
+            "release prebuilt manifest exceeds {} byte limit",
+            MAX_SUMERAGI_V2_PREBUILT_MANIFEST_BYTES
+        ));
+    }
+    let mut file = fs::File::open(path).wrap_err_with(|| {
+        eyre!(
+            "failed to open release prebuilt manifest {}",
+            path.display()
+        )
+    })?;
+    let opened = file
+        .metadata()
+        .wrap_err("failed to inspect opened release prebuilt manifest")?;
+    if !same_file_identity(&before, &opened) {
+        return Err(eyre!(
+            "release prebuilt manifest changed while it was being opened"
+        ));
+    }
+    let capacity = usize::try_from(before.len())
+        .unwrap_or(usize::MAX)
+        .min(MAX_SUMERAGI_V2_PREBUILT_MANIFEST_BYTES as usize);
+    let mut bytes = Vec::with_capacity(capacity);
+    file.by_ref()
+        .take(MAX_SUMERAGI_V2_PREBUILT_MANIFEST_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .wrap_err("failed to read release prebuilt manifest")?;
+    if bytes.len() as u64 > MAX_SUMERAGI_V2_PREBUILT_MANIFEST_BYTES {
+        return Err(eyre!(
+            "release prebuilt manifest exceeds {} byte limit",
+            MAX_SUMERAGI_V2_PREBUILT_MANIFEST_BYTES
+        ));
+    }
+    let after =
+        published_regular_file_metadata(path, RELEASE_MANIFEST_MODE, "release prebuilt manifest")?;
+    if !same_file_identity(&opened, &after) {
+        return Err(eyre!(
+            "release prebuilt manifest changed while it was being read"
+        ));
+    }
+    Ok(bytes)
+}
+
+fn hash_workspace_cargo_lock(repo: &Path) -> color_eyre::Result<String> {
+    let path = repo.join("Cargo.lock");
+    let metadata = fs::symlink_metadata(&path)
+        .wrap_err_with(|| eyre!("failed to inspect workspace Cargo.lock {}", path.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(eyre!(
+            "workspace Cargo.lock {} must be a regular, non-symlink file",
+            path.display()
+        ));
+    }
+    let file = fs::File::open(&path)
+        .wrap_err_with(|| eyre!("failed to open workspace Cargo.lock {}", path.display()))?;
+    let (digest, size) = sha256_reader_bounded(file, MAX_WORKSPACE_CARGO_LOCK_BYTES)
+        .wrap_err("failed to hash bounded workspace Cargo.lock")?;
+    if size != metadata.len() {
+        return Err(eyre!("workspace Cargo.lock changed while it was hashed"));
+    }
+    Ok(lowercase_hex(&digest))
+}
+
+fn parse_canonical_size(value: &str, label: &str) -> color_eyre::Result<u64> {
+    if value.is_empty()
+        || (value.len() > 1 && value.starts_with('0'))
+        || !value.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return Err(eyre!(
+            "{label} must be a canonical unsigned decimal integer"
+        ));
+    }
+    value
+        .parse::<u64>()
+        .wrap_err_with(|| eyre!("{label} does not fit u64"))
+}
+
+fn validate_target_triple(value: &str, label: &str) -> color_eyre::Result<()> {
+    if value.is_empty()
+        || value.len() > 128
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+    {
+        return Err(eyre!("{label} is not a bounded canonical target triple"));
+    }
+    Ok(())
+}
+
+fn parse_release_prebuilt_manifest(
+    bytes: &[u8],
+    source_manifest_sha256: &str,
+    configured_target: &Path,
+    repo: &Path,
+) -> color_eyre::Result<[ReleaseBinaryAttestation; 4]> {
+    const KEYS: [&str; 25] = [
+        "schema_version",
+        "source_manifest_sha256",
+        "cargo_lock_sha256",
+        "cargo_version_sha256",
+        "rustc_version_sha256",
+        "host_triple",
+        "target_triple",
+        "profile",
+        "bundle_dir",
+        "irohad_relative_path",
+        "irohad_sha256",
+        "irohad_size_bytes",
+        "irohad_mode_octal",
+        "irohad_message_control_relative_path",
+        "irohad_message_control_sha256",
+        "irohad_message_control_size_bytes",
+        "irohad_message_control_mode_octal",
+        "iroha_relative_path",
+        "iroha_sha256",
+        "iroha_size_bytes",
+        "iroha_mode_octal",
+        "kagami_relative_path",
+        "kagami_sha256",
+        "kagami_size_bytes",
+        "kagami_mode_octal",
+    ];
+    const FIELD_COUNT: usize = 25;
+    const BASE_FIELD_COUNT: usize = 9;
+
+    let text = std::str::from_utf8(bytes)
+        .wrap_err("release prebuilt manifest must contain valid UTF-8")?;
+    if !text.ends_with('\n') || text.contains('\r') || text.contains('\0') {
+        return Err(eyre!(
+            "release prebuilt manifest must use canonical LF-terminated TSV"
+        ));
+    }
+    let lines = text.strip_suffix('\n').expect("checked suffix");
+    let rows = lines.split('\n').collect::<Vec<_>>();
+    if rows.len() != FIELD_COUNT {
+        return Err(eyre!(
+            "release prebuilt manifest must contain exactly {FIELD_COUNT} fields; got {}",
+            rows.len()
+        ));
+    }
+
+    let mut values = Vec::with_capacity(FIELD_COUNT);
+    for (index, (row, expected_key)) in rows.iter().zip(KEYS).enumerate() {
+        let mut fields = row.split('\t');
+        let key = fields.next().expect("split always yields key");
+        let value = fields
+            .next()
+            .ok_or_else(|| eyre!("release prebuilt manifest row {} is not TSV", index + 1))?;
+        if fields.next().is_some() || key != expected_key || value.is_empty() {
+            return Err(eyre!(
+                "release prebuilt manifest row {} must be the unique non-empty `{expected_key}` \
+                 field",
+                index + 1
+            ));
+        }
+        values.push(value);
+    }
+
+    if values[0] != SUMERAGI_V2_PREBUILT_MANIFEST_SCHEMA_VERSION {
+        return Err(eyre!(
+            "unsupported release prebuilt manifest schema version {}",
+            values[0]
+        ));
+    }
+    if values[1] != source_manifest_sha256 {
+        return Err(eyre!(
+            "release prebuilt manifest source digest does not match inherited release identity"
+        ));
+    }
+    for (value, label) in [
+        (values[2], "release manifest Cargo.lock digest"),
+        (values[3], "release manifest Cargo version digest"),
+        (values[4], "release manifest rustc version digest"),
+    ] {
+        if !is_lowercase_sha256(value) {
+            return Err(eyre!("{label} must be a lowercase SHA-256 digest"));
+        }
+    }
+    let current_lock_sha256 = hash_workspace_cargo_lock(repo)?;
+    if values[2] != current_lock_sha256 {
+        return Err(eyre!(
+            "release prebuilt manifest Cargo.lock digest does not match the current workspace"
+        ));
+    }
+    if let Some(inherited_lock) = exact_env_value(IROHA_RELEASE_CARGO_LOCK_SHA256_ENV)? {
+        if !is_lowercase_sha256(&inherited_lock) || values[2] != inherited_lock {
+            return Err(eyre!(
+                "release prebuilt manifest Cargo.lock digest does not match \
+                 {IROHA_RELEASE_CARGO_LOCK_SHA256_ENV}"
+            ));
+        }
+    }
+    validate_target_triple(values[5], "release manifest host triple")?;
+    validate_target_triple(values[6], "release manifest target triple")?;
+    if values[7] != "release" {
+        return Err(eyre!(
+            "release prebuilt manifest profile must be exactly `release`"
+        ));
+    }
+    for env_key in [IROHA_TEST_BUILD_PROFILE_ENV, "PROFILE"] {
+        if let Some(profile) = exact_env_value(env_key)?
+            && profile != "release"
+        {
+            return Err(eyre!(
+                "release binary resolution requires {env_key}=release; got {profile:?}"
+            ));
+        }
+    }
+    let configured_target_text = configured_target.to_str().ok_or_else(|| {
+        eyre!("release invocation bundle path must contain valid Unicode for manifest binding")
+    })?;
+    if values[8] != configured_target_text {
+        return Err(eyre!(
+            "release prebuilt manifest bundle_dir does not match {IROHA_TEST_TARGET_DIR_ENV}"
+        ));
+    }
+
+    let mut binaries = Vec::with_capacity(ReleasePrebuiltBinary::ALL.len());
+    for (ordinal, kind) in ReleasePrebuiltBinary::ALL.into_iter().enumerate() {
+        let base = BASE_FIELD_COUNT + ordinal * 4;
+        if values[base] != kind.relative_path() {
+            return Err(eyre!(
+                "release prebuilt manifest `{}` path must be exactly `{}`",
+                kind.manifest_prefix(),
+                kind.relative_path()
+            ));
+        }
+        if !is_lowercase_sha256(values[base + 1]) {
+            return Err(eyre!(
+                "release prebuilt manifest `{}` digest must be lowercase SHA-256",
+                kind.manifest_prefix()
+            ));
+        }
+        let size_bytes = parse_canonical_size(
+            values[base + 2],
+            &format!(
+                "release prebuilt manifest `{}` size",
+                kind.manifest_prefix()
+            ),
+        )?;
+        if size_bytes == 0 || size_bytes > MAX_SUMERAGI_V2_PREBUILT_BINARY_BYTES {
+            return Err(eyre!(
+                "release prebuilt manifest `{}` size must be within 1..={}",
+                kind.manifest_prefix(),
+                MAX_SUMERAGI_V2_PREBUILT_BINARY_BYTES
+            ));
+        }
+        if values[base + 3] != RELEASE_BINARY_MODE_OCTAL {
+            return Err(eyre!(
+                "release prebuilt manifest `{}` mode must be exactly {RELEASE_BINARY_MODE_OCTAL}",
+                kind.manifest_prefix()
+            ));
+        }
+        binaries.push(ReleaseBinaryAttestation {
+            kind,
+            sha256: values[base + 1].to_owned(),
+            size_bytes,
+        });
+    }
+    binaries.try_into().map_err(|_| {
+        eyre!("release prebuilt manifest must contain exactly four executable attestations")
+    })
+}
+
+fn release_program_contract(repo: &Path) -> color_eyre::Result<Option<ReleaseProgramContract>> {
+    let source_manifest_sha256 = exact_env_value(IROHA_RELEASE_SOURCE_MANIFEST_SHA256_ENV)?;
+    let prebuilt_manifest_sha256 = exact_env_value(IROHA_RELEASE_PREBUILT_MANIFEST_SHA256_ENV)?;
+    let Some(source_manifest_sha256) = source_manifest_sha256 else {
+        if prebuilt_manifest_sha256.is_some() {
+            return Err(eyre!(
+                "{IROHA_RELEASE_PREBUILT_MANIFEST_SHA256_ENV} requires \
+                 {IROHA_RELEASE_SOURCE_MANIFEST_SHA256_ENV}"
+            ));
+        }
+        return Ok(None);
+    };
+    if !is_lowercase_sha256(&source_manifest_sha256) {
+        return Err(eyre!(
+            "{IROHA_RELEASE_SOURCE_MANIFEST_SHA256_ENV} must be a lowercase SHA-256 digest"
+        ));
+    }
+    let prebuilt_manifest_sha256 = prebuilt_manifest_sha256.ok_or_else(|| {
+        eyre!(
+            "release binary resolution requires inherited \
+             {IROHA_RELEASE_PREBUILT_MANIFEST_SHA256_ENV}"
+        )
+    })?;
+    if !is_lowercase_sha256(&prebuilt_manifest_sha256) {
+        return Err(eyre!(
+            "{IROHA_RELEASE_PREBUILT_MANIFEST_SHA256_ENV} must be a lowercase SHA-256 digest"
+        ));
+    }
+    if exact_env_value(IROHA_TEST_SKIP_BUILD_ENV)?.as_deref() != Some("1") {
+        return Err(eyre!(
+            "release binary resolution requires {IROHA_TEST_SKIP_BUILD_ENV}=1 after the \
+             top-level prebuild"
+        ));
+    }
+    match exact_env_value(IROHA_TEST_ALLOW_REENTRANT_BUILD_ENV)?.as_deref() {
+        Some("0") => {}
+        _ => {
+            return Err(eyre!(
+                "release binary resolution requires the top-level runner to set the explicit \
+                 {IROHA_TEST_ALLOW_REENTRANT_BUILD_ENV}=0 no-reentrant-build contract"
+            ));
+        }
+    }
+
+    let configured_target_raw = exact_env_value(IROHA_TEST_TARGET_DIR_ENV)?.ok_or_else(|| {
+        eyre!(
+            "release binary resolution requires {IROHA_TEST_TARGET_DIR_ENV} to select the \
+             manifest-addressed top-level prebuild"
+        )
+    })?;
+    let configured_target = PathBuf::from(&configured_target_raw);
+    if !configured_target.is_absolute() {
+        return Err(eyre!(
+            "release binary resolution requires an absolute {IROHA_TEST_TARGET_DIR_ENV}"
+        ));
+    }
+    let expected_programs_root = repo
+        .join("target")
+        .join(SUMERAGI_V2_RELEASE_TARGET_SUBDIR)
+        .join(&source_manifest_sha256)
+        .join(SUMERAGI_V2_RELEASE_PROGRAMS_SUBDIR);
+    if configured_target.parent() != Some(expected_programs_root.as_path()) {
+        return Err(eyre!(
+            "{IROHA_TEST_TARGET_DIR_ENV} must be an immediate private invocation bundle under {}; \
+             got {}",
+            expected_programs_root.display(),
+            configured_target.display()
+        ));
+    }
+    let _invocation_suffix = configured_target
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(|name| name.strip_prefix(SUMERAGI_V2_RELEASE_INVOCATION_PREFIX))
+        .filter(|suffix| {
+            !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_alphanumeric())
+        })
+        .ok_or_else(|| {
+            eyre!(
+                "{IROHA_TEST_TARGET_DIR_ENV} private bundle name must be `{}` followed by a \
+                 non-empty ASCII alphanumeric token",
+                SUMERAGI_V2_RELEASE_INVOCATION_PREFIX
+            )
+        })?;
+    published_directory_metadata(
+        &configured_target,
+        RELEASE_BINARY_MODE,
+        "release invocation bundle",
+    )?;
+    let canonical_target_dir = configured_target.canonicalize().wrap_err_with(|| {
+        eyre!(
+            "release program target {} is missing; prebuild all corridor binaries at the \
+             top level before setting {IROHA_TEST_SKIP_BUILD_ENV}=1",
+            configured_target.display()
+        )
+    })?;
+    let canonical_expected_programs_root =
+        expected_programs_root.canonicalize().wrap_err_with(|| {
+            eyre!(
+                "failed to canonicalize manifest-addressed release programs root {}",
+                expected_programs_root.display()
+            )
+        })?;
+    if canonical_target_dir.parent() != Some(canonical_expected_programs_root.as_path()) {
+        return Err(eyre!(
+            "{IROHA_TEST_TARGET_DIR_ENV} resolves outside the manifest-addressed release target"
+        ));
+    }
+    let manifest_path = configured_target.join(SUMERAGI_V2_PREBUILT_MANIFEST);
+    let manifest_bytes = read_release_manifest(&manifest_path)?;
+    let observed_manifest_sha256 = lowercase_hex(&sha256(&manifest_bytes));
+    if observed_manifest_sha256 != prebuilt_manifest_sha256 {
+        return Err(eyre!(
+            "release prebuilt manifest digest does not match inherited \
+             {IROHA_RELEASE_PREBUILT_MANIFEST_SHA256_ENV}"
+        ));
+    }
+    let binaries = parse_release_prebuilt_manifest(
+        &manifest_bytes,
+        &source_manifest_sha256,
+        &configured_target,
+        repo,
+    )?;
+
+    Ok(Some(ReleaseProgramContract {
+        configured_target_dir: configured_target,
+        canonical_target_dir,
+        binaries,
+    }))
+}
+
+fn validate_release_program_candidate(
+    contract: &ReleaseProgramContract,
+    kind: ReleasePrebuiltBinary,
+    candidate: impl AsRef<Path>,
+) -> color_eyre::Result<PathBuf> {
+    let attestation = contract.binary(kind);
+    let expected = contract.configured_target_dir.join(kind.relative_path());
+    let expected_canonical = expected.canonicalize().wrap_err_with(|| {
+        eyre!(
+            "release `{}` binary {} is missing",
+            kind.manifest_prefix(),
+            expected.display()
+        )
+    })?;
+    let candidate = candidate.as_ref();
+    let candidate_canonical = candidate.canonicalize().wrap_err_with(|| {
+        eyre!(
+            "failed to canonicalize release `{}` binary {}",
+            kind.manifest_prefix(),
+            candidate.display()
+        )
+    })?;
+    if candidate_canonical != expected_canonical {
+        return Err(eyre!(
+            "release `{}` binary path must be exactly {}; got {}",
+            kind.manifest_prefix(),
+            expected.display(),
+            candidate.display()
+        ));
+    }
+
+    let mut component_path = contract.configured_target_dir.clone();
+    let relative = Path::new(kind.relative_path());
+    let component_count = relative.components().count();
+    for (index, component) in relative.components().enumerate() {
+        let Component::Normal(component) = component else {
+            return Err(eyre!(
+                "release `{}` manifest path is not canonical",
+                kind.manifest_prefix()
+            ));
+        };
+        component_path.push(component);
+        if index + 1 < component_count {
+            published_directory_metadata(
+                &component_path,
+                RELEASE_BINARY_MODE,
+                "release binary parent directory",
+            )?;
+        }
+    }
+    let before =
+        published_regular_file_metadata(&expected, RELEASE_BINARY_MODE, kind.manifest_prefix())?;
+    if before.len() != attestation.size_bytes {
+        return Err(eyre!(
+            "release `{}` binary size mismatch: expected {}, got {}",
+            kind.manifest_prefix(),
+            attestation.size_bytes,
+            before.len()
+        ));
+    }
+    let file = fs::File::open(&expected).wrap_err_with(|| {
+        eyre!(
+            "failed to open release `{}` binary {}",
+            kind.manifest_prefix(),
+            expected.display()
+        )
+    })?;
+    let opened = file.metadata().wrap_err_with(|| {
+        eyre!(
+            "failed to inspect opened release `{}` binary",
+            kind.manifest_prefix()
+        )
+    })?;
+    if !same_file_identity(&before, &opened) {
+        return Err(eyre!(
+            "release `{}` binary changed while it was being opened",
+            kind.manifest_prefix()
+        ));
+    }
+    let (digest, size) = sha256_reader_bounded(file, MAX_SUMERAGI_V2_PREBUILT_BINARY_BYTES)
+        .wrap_err_with(|| {
+            eyre!(
+                "failed to hash bounded release `{}` binary",
+                kind.manifest_prefix()
+            )
+        })?;
+    let after =
+        published_regular_file_metadata(&expected, RELEASE_BINARY_MODE, kind.manifest_prefix())?;
+    if size != attestation.size_bytes || !same_file_identity(&opened, &after) {
+        return Err(eyre!(
+            "release `{}` binary changed while it was being hashed",
+            kind.manifest_prefix()
+        ));
+    }
+    if lowercase_hex(&digest) != attestation.sha256 {
+        return Err(eyre!(
+            "release `{}` binary SHA-256 does not match the prebuilt manifest",
+            kind.manifest_prefix()
+        ));
+    }
+    if !candidate_canonical.starts_with(&contract.canonical_target_dir) {
+        return Err(eyre!(
+            "release `{}` binary escaped the private invocation bundle",
+            kind.manifest_prefix()
+        ));
+    }
+    Ok(candidate_canonical)
+}
+
+/// Resolve and independently verify one binary from an active release prebuild contract.
+///
+/// `Ok(None)` means no source-bound release contract is active.
+#[doc(hidden)]
+pub fn resolve_release_prebuilt_binary(
+    kind: ReleasePrebuiltBinary,
+) -> color_eyre::Result<Option<PathBuf>> {
+    let Some(contract) = release_program_contract(&repo_root())? else {
+        return Ok(None);
+    };
+    validate_release_program_candidate(
+        &contract,
+        kind,
+        contract.configured_target_dir.join(kind.relative_path()),
+    )
+    .map(Some)
+}
+
+/// Revalidate a previously resolved release binary against fresh manifest and file evidence.
+///
+/// `Ok(None)` means no source-bound release contract is active.
+#[doc(hidden)]
+pub fn revalidate_release_prebuilt_binary(
+    kind: ReleasePrebuiltBinary,
+    candidate: impl AsRef<Path>,
+) -> color_eyre::Result<Option<PathBuf>> {
+    let Some(contract) = release_program_contract(&repo_root())? else {
+        return Ok(None);
+    };
+    validate_release_program_candidate(&contract, kind, candidate).map(Some)
 }
 
 fn profile_hint_from_exe_path(current_exe: &Path) -> Option<String> {
@@ -1648,6 +2407,58 @@ fn build_env_overrides() -> [(&'static str, &'static str); 2] {
     ]
 }
 
+fn cargo_or_rustc_processes(process_table: &[u8]) -> Vec<String> {
+    String::from_utf8_lossy(process_table)
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let pid = fields.next()?;
+            let elapsed = fields.next()?;
+            let executable = fields.next()?;
+            let executable_name = Path::new(executable).file_name()?.to_string_lossy();
+            matches!(
+                executable_name.as_ref(),
+                "cargo" | "cargo.exe" | "rustc" | "rustc.exe"
+            )
+            .then(|| format!("pid={pid},etime={elapsed},program={executable}"))
+        })
+        .collect()
+}
+
+fn ensure_child_cargo_quiescent(cargo_program: &str) -> color_eyre::Result<()> {
+    let cargo_program_name = Path::new(cargo_program)
+        .file_name()
+        .map(|name| name.to_string_lossy());
+    if cfg!(test)
+        && !cargo_program_name
+            .as_deref()
+            .is_some_and(|name| matches!(name, "cargo" | "cargo.exe"))
+    {
+        // Unit tests use a non-Cargo fixture script to validate command construction and retries.
+        return Ok(());
+    }
+
+    let output = std::process::Command::new("ps")
+        .args(["-axo", "pid,etime,command"])
+        .output()
+        .wrap_err("failed to run exact Cargo/rustc process quiescence check")?;
+    if !output.status.success() {
+        return Err(eyre!(
+            "`ps -axo pid,etime,command` failed before child Cargo invocation: {:?}",
+            output.status.code()
+        ));
+    }
+    let active = cargo_or_rustc_processes(&output.stdout);
+    if !active.is_empty() {
+        return Err(eyre!(
+            "refusing child Cargo invocation while Cargo/rustc is active; prebuild at the top \
+             level instead: {}",
+            active.join("; ")
+        ));
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)] // Helper aggregates build context parameters.
 fn ensure_binary_fresh(
     repo: &Path,
@@ -1685,10 +2496,10 @@ fn ensure_binary_fresh(
 
     if needs_build && !allow_build {
         return Err(eyre!(
-            "cannot build `{name}` (pkg `{pkg}`) while another Cargo invocation is running; \
-             build it ahead of time with `cargo build --locked -p {pkg}` or rerun with \
-             IROHA_TEST_SKIP_BUILD=1 to reuse an existing binary, \
-             or set IROHA_TEST_ALLOW_REENTRANT_BUILD=1 to force a rebuild; target_dir={}",
+            "cannot build `{name}` (pkg `{pkg}`) because automatic child builds are disabled; \
+             build it ahead of time with `cargo build --locked --offline -p {pkg}` and rerun \
+             with {IROHA_TEST_SKIP_BUILD_ENV}=1 and \
+             {IROHA_TEST_ALLOW_REENTRANT_BUILD_ENV}=0; target_dir={}",
             target_dir.display()
         ));
     }
@@ -1708,7 +2519,12 @@ fn ensure_binary_fresh(
             attempt = attempt.saturating_add(1);
 
             let mut command = std::process::Command::new(&cargo_program);
-            command.arg("build").arg("--locked").arg("-p").arg(pkg);
+            command
+                .arg("build")
+                .arg("--locked")
+                .arg("--offline")
+                .arg("-p")
+                .arg(pkg);
             match profile {
                 "debug" => {}
                 "release" => {
@@ -1726,6 +2542,7 @@ fn ensure_binary_fresh(
                 command.env(key, value);
             }
             command.current_dir(repo);
+            ensure_child_cargo_quiescent(&cargo_program)?;
             let output = command_output_with_timeout(&mut command, build_command_timeout_env())
                 .wrap_err("failed to invoke cargo to build binary")?;
             if output.status.success() {
@@ -1778,13 +2595,17 @@ fn ensure_binary_fresh(
     Ok(())
 }
 
-fn allow_reentrant_build(running_under_cargo: bool) -> bool {
+fn allow_reentrant_build(running_under_cargo: bool, release_corridor: bool) -> bool {
+    if release_corridor {
+        return false;
+    }
     if !running_under_cargo {
         return true;
     }
-    // Reentrant builds use a namespaced target dir (`.../iroha-test-network`) so they don't
-    // contend with the outer Cargo invocation's build lock. Keep an opt-out for debugging.
-    bool_env_override("IROHA_TEST_ALLOW_REENTRANT_BUILD").unwrap_or(true)
+    // A test launched by Cargo reuses a top-level prebuild by default. Keep an explicit
+    // developer opt-in for the legacy path, but its immediate process guard still refuses to
+    // start a child while the outer Cargo/rustc process is active.
+    bool_env_override(IROHA_TEST_ALLOW_REENTRANT_BUILD_ENV).unwrap_or(false)
 }
 
 const fn must_validate_binary_freshness(
@@ -1816,8 +2637,12 @@ impl Program {
     /// - `CARGO_BIN_EXE_*` if Cargo provided a direct path to the built binary
     /// - Common target locations (debug/release) under the repo root (defaulting to
     ///   `target/iroha-test-network`, or under `IROHA_TEST_TARGET_DIR` / `CARGO_TARGET_DIR` when set)
-    /// - Rebuilds with `cargo build --locked -p <pkg>` when the cached fingerprint disagrees with
-    ///   the current workspace state (skipped when `IROHA_TEST_SKIP_BUILD=1`).
+    /// - Rebuilds with `cargo build --locked --offline -p <pkg>` when the cached fingerprint
+    ///   disagrees with the current workspace state (skipped when `IROHA_TEST_SKIP_BUILD=1`).
+    ///
+    /// A source-manifest-bound release corridor is lookup-only: it requires the top-level runner
+    /// to prebuild into the manifest-addressed release target, skip child builds, and explicitly
+    /// disable reentrant Cargo.
     ///
     /// # Errors
     /// If the path is not found (and build did not help).
@@ -1837,6 +2662,9 @@ impl Program {
             build_args,
             isolated_target_subdir,
         } = self.spec();
+        let repo = repo_root();
+        let release_contract = release_program_contract(&repo)?;
+        let release_binary = self.release_prebuilt_binary();
 
         // 1) Explicit override
         if let Ok(path) = std::env::var(env) {
@@ -1844,50 +2672,56 @@ impl Program {
             let candidate = if raw.is_absolute() {
                 raw
             } else {
-                repo_root().join(raw)
+                repo.join(raw)
             };
-            return candidate
+            let candidate = candidate
                 .canonicalize()
                 .wrap_err_with(|| eyre!("Used path from {env}: {path}"))
                 .wrap_err_with(|| {
                     eyre!("Could not resolve path of `{name}` program. Have you built it?")
-                });
+                })?;
+            return match release_contract.as_ref() {
+                Some(contract) => {
+                    { validate_release_program_candidate(contract, release_binary, candidate) }
+                        .wrap_err_with(|| {
+                            eyre!(
+                                "{env} must equal the exact manifest-attested release binary path"
+                            )
+                        })
+                }
+                None => Ok(candidate),
+            };
         }
 
         // Fast path via cache (only when no override is present)
-        match self {
-            Program::Irohad => {
-                if let Some(path) = cached_binary_if_present(&IROHAD_BIN) {
-                    return Ok(path);
+        let cached = match self {
+            Program::Irohad => cached_binary_if_present(&IROHAD_BIN),
+            Program::IrohadMessageControl => cached_binary_if_present(&IROHAD_MESSAGE_CONTROL_BIN),
+            Program::Iroha => cached_binary_if_present(&IROHA_BIN),
+        };
+        if let Some(path) = cached {
+            return match release_contract.as_ref() {
+                Some(contract) => {
+                    validate_release_program_candidate(contract, release_binary, path)
                 }
-            }
-            Program::IrohadMessageControl => {
-                if let Some(path) = cached_binary_if_present(&IROHAD_MESSAGE_CONTROL_BIN) {
-                    return Ok(path);
-                }
-            }
-            Program::Iroha => {
-                if let Some(path) = cached_binary_if_present(&IROHA_BIN) {
-                    return Ok(path);
-                }
-            }
+                None => Ok(path),
+            };
         }
 
-        let repo = repo_root();
         let bin = bin_name(name);
 
         // 2) Prefer paths Cargo already built (`CARGO_BIN_EXE_*`) but still allow rebuilds
         let cargo_bin_env = format!("CARGO_BIN_EXE_{name}");
-        let cargo_bin_candidate = isolated_target_subdir
-            .is_none()
+        let allow_ambient_candidates =
+            release_contract.is_none() && isolated_target_subdir.is_none();
+        let cargo_bin_candidate = allow_ambient_candidates
             .then(|| {
                 std::env::var(&cargo_bin_env)
                     .ok()
                     .and_then(|p| PathBuf::from(p).canonicalize().ok())
             })
             .flatten();
-        let colocated_candidate = isolated_target_subdir
-            .is_none()
+        let colocated_candidate = allow_ambient_candidates
             .then(|| current_exe_colocated_binary(&bin))
             .flatten();
 
@@ -1915,7 +2749,7 @@ impl Program {
         push_candidate(target_dir.join(format!("debug/{bin}")));
         push_candidate(target_dir.join(format!("release/{bin}")));
 
-        if isolated_target_subdir.is_none() {
+        if release_contract.is_none() && isolated_target_subdir.is_none() {
             let default_target = repo.join("target");
             push_candidate(default_target.join(format!("{profile}/{bin}")));
             push_candidate(default_target.join(format!("debug/{bin}")));
@@ -1929,13 +2763,19 @@ impl Program {
         //    We default to building to avoid using stale binaries across source changes.
         //    Set IROHA_TEST_SKIP_BUILD=1 to skip attempting a build.
         let skip_build = skip_build_override.unwrap_or_else(|| {
-            std::env::var("IROHA_TEST_SKIP_BUILD")
+            std::env::var(IROHA_TEST_SKIP_BUILD_ENV)
                 .ok()
                 .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
                 .unwrap_or(false)
         });
+        if release_contract.is_some() && !skip_build {
+            return Err(eyre!(
+                "release binary resolution cannot override {IROHA_TEST_SKIP_BUILD_ENV}=1"
+            ));
+        }
         let running_under_cargo = std::env::var_os("CARGO").is_some();
-        let allow_reentrant = allow_reentrant_build(running_under_cargo);
+        let allow_reentrant =
+            allow_reentrant_build(running_under_cargo, release_contract.is_some());
         let validate_freshness =
             must_validate_binary_freshness(skip_build, running_under_cargo, allow_reentrant);
         if !skip_build && !validate_freshness {
@@ -1983,6 +2823,12 @@ impl Program {
             )
         };
         if let Some(found) = post_build_candidates {
+            let found = match release_contract.as_ref() {
+                Some(contract) => {
+                    validate_release_program_candidate(contract, release_binary, found)?
+                }
+                None => found,
+            };
             match self {
                 Program::Irohad => {
                     let _ = IROHAD_BIN.set(found.clone());
@@ -2007,7 +2853,8 @@ impl Program {
             "Could not resolve path of `{name}` program. Have you built it?\n\
                Tried: {candidates_txt}\n  \
                Solutions:\n  \
-               1. Run `cargo build --locked -p {pkg}`\n  \
+               1. Run `cargo build --locked --offline -p {pkg}` in the guarded top-level \
+                  prebuild\n  \
                2. Provide a different path via `{env}` env var"
         ))
     }
@@ -7121,6 +7968,9 @@ impl NetworkPeer {
         let use_sora_profile = config_requires_sora_profile(&config_layers);
 
         let irohad = self.program.resolve_async().await?;
+        let irohad =
+            revalidate_release_prebuilt_binary(self.program.release_prebuilt_binary(), &irohad)?
+                .unwrap_or(irohad);
         let make_irohad_command = |binary: &Path| {
             let mut cmd = tokio::process::Command::new(binary);
             strip_config_env_overrides(&mut cmd);
@@ -7155,6 +8005,11 @@ impl NetworkPeer {
                 let refreshed = spawn_blocking(move || program.resolve_force_build())
                     .await
                     .wrap_err("failed to join blocking task while refreshing `irohad` path")??;
+                let refreshed = revalidate_release_prebuilt_binary(
+                    program.release_prebuilt_binary(),
+                    &refreshed,
+                )?
+                .unwrap_or(refreshed);
                 make_irohad_command(&refreshed).spawn().wrap_err_with(|| {
                     eyre!(
                         "failed to spawn `irohad` after refreshing binary path: {}",
@@ -11284,6 +12139,8 @@ mod tests {
         let temp = tempdir().expect("temporary workspace");
         let root = temp.path();
 
+        let _clear_release = EnvVarGuard::cleared(IROHA_RELEASE_SOURCE_MANIFEST_SHA256_ENV);
+        let _clear_prebuilt = EnvVarGuard::cleared(IROHA_RELEASE_PREBUILT_MANIFEST_SHA256_ENV);
         let _clear_test = EnvVarGuard::cleared(IROHA_TEST_TARGET_DIR_ENV);
         let _clear_cargo = EnvVarGuard::cleared("CARGO_TARGET_DIR");
         assert_eq!(
@@ -11299,6 +12156,374 @@ mod tests {
 
         let _test_guard = EnvVarRestore::set(IROHA_TEST_TARGET_DIR_ENV, "test-target");
         assert_eq!(resolve_target_dir(root), root.join("test-target"));
+    }
+
+    struct ReleasePrebuiltFixture {
+        _temp: tempfile::TempDir,
+        repo: PathBuf,
+        source_manifest_sha256: String,
+        cargo_lock_sha256: String,
+        target: PathBuf,
+        manifest: PathBuf,
+        manifest_sha256: String,
+    }
+
+    impl Drop for ReleasePrebuiltFixture {
+        fn drop(&mut self) {
+            for directory in [
+                self.target.join("message-control/release"),
+                self.target.join("message-control"),
+                self.target.join("release"),
+                self.target.clone(),
+            ] {
+                set_mode(&directory, 0o700);
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    fn set_mode(path: &Path, mode: u32) {
+        fs::set_permissions(path, fs::Permissions::from_mode(mode))
+            .unwrap_or_else(|err| panic!("set mode {mode:04o} on {}: {err}", path.display()));
+    }
+
+    #[cfg(not(unix))]
+    fn set_mode(_path: &Path, _mode: u32) {}
+
+    fn release_manifest_text(
+        source_manifest_sha256: &str,
+        cargo_lock_sha256: &str,
+        target: &Path,
+    ) -> String {
+        let mut rows = vec![
+            ("schema_version".to_owned(), "2".to_owned()),
+            (
+                "source_manifest_sha256".to_owned(),
+                source_manifest_sha256.to_owned(),
+            ),
+            ("cargo_lock_sha256".to_owned(), cargo_lock_sha256.to_owned()),
+            ("cargo_version_sha256".to_owned(), "c".repeat(64)),
+            ("rustc_version_sha256".to_owned(), "d".repeat(64)),
+            ("host_triple".to_owned(), "test-host".to_owned()),
+            ("target_triple".to_owned(), "test-target".to_owned()),
+            ("profile".to_owned(), "release".to_owned()),
+            (
+                "bundle_dir".to_owned(),
+                target
+                    .to_str()
+                    .expect("fixture target must be Unicode")
+                    .to_owned(),
+            ),
+        ];
+        for kind in ReleasePrebuiltBinary::ALL {
+            let path = target.join(kind.relative_path());
+            let bytes = fs::read(&path).expect("read fixture release binary");
+            let prefix = kind.manifest_prefix();
+            rows.extend([
+                (
+                    format!("{prefix}_relative_path"),
+                    kind.relative_path().to_owned(),
+                ),
+                (format!("{prefix}_sha256"), lowercase_hex(&sha256(&bytes))),
+                (format!("{prefix}_size_bytes"), bytes.len().to_string()),
+                (
+                    format!("{prefix}_mode_octal"),
+                    RELEASE_BINARY_MODE_OCTAL.to_owned(),
+                ),
+            ]);
+        }
+        let mut text = String::new();
+        for (key, value) in rows {
+            text.push_str(&key);
+            text.push('\t');
+            text.push_str(&value);
+            text.push('\n');
+        }
+        text
+    }
+
+    fn create_release_prebuilt_fixture() -> ReleasePrebuiltFixture {
+        let temp = tempdir().expect("temporary release workspace");
+        let repo = temp.path().join("repo");
+        fs::create_dir_all(&repo).expect("create release workspace");
+        let cargo_lock = repo.join("Cargo.lock");
+        fs::write(&cargo_lock, b"release-lock-v1\n").expect("write Cargo.lock");
+        let cargo_lock_sha256 = lowercase_hex(&sha256(b"release-lock-v1\n"));
+        let source_manifest_sha256 = "a".repeat(64);
+        let target = repo
+            .join("target")
+            .join(SUMERAGI_V2_RELEASE_TARGET_SUBDIR)
+            .join(&source_manifest_sha256)
+            .join(SUMERAGI_V2_RELEASE_PROGRAMS_SUBDIR)
+            .join("invocation.A1b2C3");
+        for kind in ReleasePrebuiltBinary::ALL {
+            let path = target.join(kind.relative_path());
+            fs::create_dir_all(path.parent().expect("binary parent"))
+                .expect("create binary parent");
+            fs::write(
+                &path,
+                format!("{} release executable\n", kind.manifest_prefix()),
+            )
+            .expect("write release binary");
+            set_mode(&path, RELEASE_BINARY_MODE);
+        }
+        let manifest = target.join(SUMERAGI_V2_PREBUILT_MANIFEST);
+        let manifest_text =
+            release_manifest_text(&source_manifest_sha256, &cargo_lock_sha256, &target);
+        fs::write(&manifest, &manifest_text).expect("write prebuilt manifest");
+        set_mode(&manifest, RELEASE_MANIFEST_MODE);
+        for directory in [
+            target.join("message-control/release"),
+            target.join("message-control"),
+            target.join("release"),
+            target.clone(),
+        ] {
+            set_mode(&directory, RELEASE_BINARY_MODE);
+        }
+        let manifest_sha256 = lowercase_hex(&sha256(manifest_text.as_bytes()));
+        ReleasePrebuiltFixture {
+            _temp: temp,
+            repo,
+            source_manifest_sha256,
+            cargo_lock_sha256,
+            target,
+            manifest,
+            manifest_sha256,
+        }
+    }
+
+    fn release_prebuilt_env(
+        fixture: &ReleasePrebuiltFixture,
+        manifest_sha256: &str,
+        reentrant: &str,
+    ) -> Vec<EnvVarRestore> {
+        vec![
+            EnvVarRestore::set(
+                IROHA_RELEASE_SOURCE_MANIFEST_SHA256_ENV,
+                &fixture.source_manifest_sha256,
+            ),
+            EnvVarRestore::set(IROHA_RELEASE_PREBUILT_MANIFEST_SHA256_ENV, manifest_sha256),
+            EnvVarRestore::set(
+                IROHA_RELEASE_CARGO_LOCK_SHA256_ENV,
+                &fixture.cargo_lock_sha256,
+            ),
+            EnvVarRestore::set(IROHA_TEST_TARGET_DIR_ENV, fixture.target.as_os_str()),
+            EnvVarRestore::set(IROHA_TEST_SKIP_BUILD_ENV, "1"),
+            EnvVarRestore::set(IROHA_TEST_ALLOW_REENTRANT_BUILD_ENV, reentrant),
+            EnvVarRestore::set(IROHA_TEST_BUILD_PROFILE_ENV, "release"),
+            EnvVarRestore::set("PROFILE", "release"),
+        ]
+    }
+
+    fn rewrite_release_manifest(fixture: &ReleasePrebuiltFixture, from: &str, to: &str) -> String {
+        let text = fs::read_to_string(&fixture.manifest).expect("read release manifest");
+        let updated = text.replacen(from, to, 1);
+        assert_ne!(updated, text, "fixture manifest replacement must apply");
+        set_mode(&fixture.manifest, 0o600);
+        fs::write(&fixture.manifest, &updated).expect("rewrite release manifest");
+        set_mode(&fixture.manifest, RELEASE_MANIFEST_MODE);
+        lowercase_hex(&sha256(updated.as_bytes()))
+    }
+
+    #[test]
+    fn release_prebuilt_manifest_and_all_program_paths_validate_exactly() {
+        let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
+        let fixture = create_release_prebuilt_fixture();
+        let _env = release_prebuilt_env(&fixture, &fixture.manifest_sha256, "0");
+        let contract = release_program_contract(&fixture.repo)
+            .expect("validate release contract")
+            .expect("release contract active");
+
+        for kind in ReleasePrebuiltBinary::ALL {
+            let expected = fixture.target.join(kind.relative_path());
+            assert_eq!(
+                validate_release_program_candidate(&contract, kind, &expected)
+                    .expect("validate exact release candidate"),
+                expected.canonicalize().expect("canonical candidate")
+            );
+        }
+        let escaped = fixture.repo.join("escaped");
+        fs::write(&escaped, b"irohad release executable\n").expect("write escaped candidate");
+        set_mode(&escaped, RELEASE_BINARY_MODE);
+        assert!(
+            validate_release_program_candidate(&contract, ReleasePrebuiltBinary::Irohad, escaped)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn release_prebuilt_manifest_rejects_forged_external_digest() {
+        let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
+        let fixture = create_release_prebuilt_fixture();
+        let _env = release_prebuilt_env(&fixture, &"f".repeat(64), "0");
+
+        let err =
+            release_program_contract(&fixture.repo).expect_err("forged manifest digest must fail");
+        assert!(err.to_string().contains("manifest digest"));
+    }
+
+    #[test]
+    fn release_source_contract_requires_inherited_prebuilt_manifest_digest() {
+        let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
+        let fixture = create_release_prebuilt_fixture();
+        let _source = EnvVarRestore::set(
+            IROHA_RELEASE_SOURCE_MANIFEST_SHA256_ENV,
+            &fixture.source_manifest_sha256,
+        );
+        let _prebuilt = EnvVarGuard::cleared(IROHA_RELEASE_PREBUILT_MANIFEST_SHA256_ENV);
+
+        let err = release_program_contract(&fixture.repo)
+            .expect_err("source-bound release contract requires manifest anchor");
+        assert!(
+            err.to_string()
+                .contains(IROHA_RELEASE_PREBUILT_MANIFEST_SHA256_ENV)
+        );
+    }
+
+    #[test]
+    fn release_prebuilt_manifest_rejects_wrong_binary_path_and_hash() {
+        let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
+
+        let path_fixture = create_release_prebuilt_fixture();
+        let path_manifest_sha256 = rewrite_release_manifest(
+            &path_fixture,
+            "irohad_relative_path\trelease/iroha3d",
+            "irohad_relative_path\trelease/not-iroha3d",
+        );
+        {
+            let _env = release_prebuilt_env(&path_fixture, &path_manifest_sha256, "0");
+            assert!(
+                release_program_contract(&path_fixture.repo).is_err(),
+                "non-exact binary path must fail manifest parsing"
+            );
+        }
+
+        let hash_fixture = create_release_prebuilt_fixture();
+        let original = fs::read_to_string(&hash_fixture.manifest).expect("read manifest");
+        let irohad_hash = original
+            .lines()
+            .find_map(|line| line.strip_prefix("irohad_sha256\t"))
+            .expect("irohad digest field");
+        let hash_manifest_sha256 = rewrite_release_manifest(
+            &hash_fixture,
+            &format!("irohad_sha256\t{irohad_hash}"),
+            &format!("irohad_sha256\t{}", "0".repeat(64)),
+        );
+        let _env = release_prebuilt_env(&hash_fixture, &hash_manifest_sha256, "0");
+        let contract = release_program_contract(&hash_fixture.repo)
+            .expect("parse hash-forged manifest")
+            .expect("release contract active");
+        assert!(
+            validate_release_program_candidate(
+                &contract,
+                ReleasePrebuiltBinary::Irohad,
+                hash_fixture.target.join("release/iroha3d")
+            )
+            .is_err(),
+            "forged binary digest must fail independent hashing"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn release_prebuilt_binary_rejects_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
+        let fixture = create_release_prebuilt_fixture();
+        let _env = release_prebuilt_env(&fixture, &fixture.manifest_sha256, "0");
+        let contract = release_program_contract(&fixture.repo)
+            .expect("parse release manifest")
+            .expect("release contract active");
+        let binary = fixture.target.join("release/iroha3d");
+        let replacement = fixture.repo.join("replacement-iroha3d");
+        fs::write(&replacement, b"irohad release executable\n").expect("write replacement");
+        set_mode(&replacement, RELEASE_BINARY_MODE);
+        let parent = binary.parent().expect("binary parent");
+        set_mode(parent, 0o700);
+        fs::remove_file(&binary).expect("remove original binary");
+        symlink(&replacement, &binary).expect("install symlink");
+        set_mode(parent, RELEASE_BINARY_MODE);
+
+        assert!(
+            validate_release_program_candidate(&contract, ReleasePrebuiltBinary::Irohad, &binary)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn release_prebuilt_binary_revalidates_mutation_after_initial_resolution() {
+        let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
+        let fixture = create_release_prebuilt_fixture();
+        let _env = release_prebuilt_env(&fixture, &fixture.manifest_sha256, "0");
+        let contract = release_program_contract(&fixture.repo)
+            .expect("parse release manifest")
+            .expect("release contract active");
+        let binary = fixture.target.join("release/iroha3d");
+        validate_release_program_candidate(&contract, ReleasePrebuiltBinary::Irohad, &binary)
+            .expect("initial resolution");
+
+        set_mode(&binary, 0o700);
+        fs::write(&binary, b"mutated release executable\n").expect("mutate cached binary");
+        set_mode(&binary, RELEASE_BINARY_MODE);
+        assert!(
+            validate_release_program_candidate(&contract, ReleasePrebuiltBinary::Irohad, &binary)
+                .is_err(),
+            "fresh verification must reject mutation after an earlier cached resolution"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn release_prebuilt_binary_rejects_mode_drift_and_hard_links() {
+        let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
+
+        let mode_fixture = create_release_prebuilt_fixture();
+        let binary = mode_fixture.target.join("release/iroha3d");
+        set_mode(&binary, 0o700);
+        {
+            let _env = release_prebuilt_env(&mode_fixture, &mode_fixture.manifest_sha256, "0");
+            let contract = release_program_contract(&mode_fixture.repo)
+                .expect("parse release manifest")
+                .expect("release contract active");
+            assert!(
+                validate_release_program_candidate(
+                    &contract,
+                    ReleasePrebuiltBinary::Irohad,
+                    &binary
+                )
+                .is_err(),
+                "mode drift must fail"
+            );
+        }
+
+        let link_fixture = create_release_prebuilt_fixture();
+        let binary = link_fixture.target.join("release/iroha3d");
+        let extra_link = link_fixture.repo.join("iroha3d-hard-link");
+        fs::hard_link(&binary, &extra_link).expect("create adversarial hard link");
+        let _env = release_prebuilt_env(&link_fixture, &link_fixture.manifest_sha256, "0");
+        let contract = release_program_contract(&link_fixture.repo)
+            .expect("parse release manifest")
+            .expect("release contract active");
+        assert!(
+            validate_release_program_candidate(&contract, ReleasePrebuiltBinary::Irohad, &binary)
+                .is_err(),
+            "multiple hard links must fail"
+        );
+    }
+
+    #[test]
+    fn release_prebuilt_contract_rejects_reentrant_one() {
+        let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
+        let fixture = create_release_prebuilt_fixture();
+        let _env = release_prebuilt_env(&fixture, &fixture.manifest_sha256, "1");
+
+        let err =
+            release_program_contract(&fixture.repo).expect_err("reentrant=1 must be rejected");
+        assert!(
+            err.to_string()
+                .contains(IROHA_TEST_ALLOW_REENTRANT_BUILD_ENV)
+        );
     }
 
     #[test]
@@ -11445,8 +12670,8 @@ exit 0
         );
         assert_eq!(
             first_log.trim(),
-            "build --locked -p dummy_pkg",
-            "test-network child builds must preserve the workspace lockfile"
+            "build --locked --offline -p dummy_pkg",
+            "test-network child builds must preserve the workspace lockfile and stay offline"
         );
 
         ensure_binary_fresh(
@@ -11720,6 +12945,16 @@ exit 0
             err.to_string().contains("cannot build `dummy`"),
             "unexpected error: {err}"
         );
+        assert_eq!(
+            cargo_or_rustc_processes(
+                b"  PID ELAPSED COMMAND\n  17 00:02 /opt/rust/bin/cargo test\n  18 00:01 \
+                  /opt/rust/bin/rustc --crate-name demo\n  19 00:01 /bin/sh build.sh\n"
+            ),
+            vec![
+                "pid=17,etime=00:02,program=/opt/rust/bin/cargo".to_owned(),
+                "pid=18,etime=00:01,program=/opt/rust/bin/rustc".to_owned(),
+            ]
+        );
     }
 
     #[test]
@@ -11789,11 +13024,14 @@ exit 0
     }
 
     #[test]
-    fn reentrant_builds_enabled_under_cargo_by_default() {
+    fn reentrant_builds_disabled_under_cargo_by_default() {
         let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
-        let _override_guard = EnvVarGuard::cleared("IROHA_TEST_ALLOW_REENTRANT_BUILD");
+        let _override_guard = EnvVarGuard::cleared(IROHA_TEST_ALLOW_REENTRANT_BUILD_ENV);
 
-        assert!(allow_reentrant_build(true));
+        assert!(!allow_reentrant_build(true, false));
+        assert!(allow_reentrant_build(false, false));
+        assert!(!allow_reentrant_build(true, true));
+        assert!(!allow_reentrant_build(false, true));
     }
 
     #[test]
@@ -11807,28 +13045,30 @@ exit 0
     #[test]
     fn reentrant_builds_can_be_enabled_via_env() {
         let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
-        let _override_guard = EnvVarGuard::cleared("IROHA_TEST_ALLOW_REENTRANT_BUILD");
-        set_env_var("IROHA_TEST_ALLOW_REENTRANT_BUILD", "true");
+        let _override_guard = EnvVarGuard::cleared(IROHA_TEST_ALLOW_REENTRANT_BUILD_ENV);
+        set_env_var(IROHA_TEST_ALLOW_REENTRANT_BUILD_ENV, "true");
 
-        assert!(allow_reentrant_build(true));
+        assert!(allow_reentrant_build(true, false));
+        assert!(!allow_reentrant_build(true, true));
     }
 
     #[test]
     fn reentrant_builds_can_be_enabled_via_numeric_env() {
         let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
-        let _override_guard = EnvVarGuard::cleared("IROHA_TEST_ALLOW_REENTRANT_BUILD");
-        set_env_var("IROHA_TEST_ALLOW_REENTRANT_BUILD", "1");
+        let _override_guard = EnvVarGuard::cleared(IROHA_TEST_ALLOW_REENTRANT_BUILD_ENV);
+        set_env_var(IROHA_TEST_ALLOW_REENTRANT_BUILD_ENV, "1");
 
-        assert!(allow_reentrant_build(true));
+        assert!(allow_reentrant_build(true, false));
+        assert!(!allow_reentrant_build(true, true));
     }
 
     #[test]
     fn reentrant_builds_can_be_disabled_via_env() {
         let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
-        let _override_guard = EnvVarGuard::cleared("IROHA_TEST_ALLOW_REENTRANT_BUILD");
-        set_env_var("IROHA_TEST_ALLOW_REENTRANT_BUILD", "false");
+        let _override_guard = EnvVarGuard::cleared(IROHA_TEST_ALLOW_REENTRANT_BUILD_ENV);
+        set_env_var(IROHA_TEST_ALLOW_REENTRANT_BUILD_ENV, "false");
 
-        assert!(!allow_reentrant_build(true));
+        assert!(!allow_reentrant_build(true, false));
     }
 
     #[test]
@@ -13373,7 +14613,8 @@ exit 0
         // locate `defaults/executor.to` and the harness will fall back to a
         // minimal in-memory genesis. This test ensures that even with fallback
         // the peer starts and commits the genesis block.
-        remove_env_var("IROHA_TEST_SKIP_BUILD"); // allow building if needed
+        // The binary was resolved above. Keep a release runner's lookup-only,
+        // source-manifest-bound program contract intact for the actual startup.
         let network = build_with_isolated_permit_async(builder).await;
         let net = tokio::time::timeout(Duration::from_secs(90), network.start_all())
             .await
@@ -14081,6 +15322,8 @@ exit 0
     #[test]
     fn program_resolve_uses_env_override_without_build() {
         let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
+        let _clear_release = EnvVarGuard::cleared(IROHA_RELEASE_SOURCE_MANIFEST_SHA256_ENV);
+        let _clear_prebuilt = EnvVarGuard::cleared(IROHA_RELEASE_PREBUILT_MANIFEST_SHA256_ENV);
         // Point TEST_NETWORK_BIN_IROHA to a dummy file under repo root
         let repo = repo_root();
         let rel = PathBuf::from("target/test-bin-dummy/iroha-cli-dummy");
@@ -14110,6 +15353,8 @@ exit 0
     #[tokio::test]
     async fn program_resolve_async_honors_env_override() {
         let _guard = lock_env_guard_async(&PROGRAM_BIN_ENV_GUARD).await;
+        let _clear_release = EnvVarGuard::cleared(IROHA_RELEASE_SOURCE_MANIFEST_SHA256_ENV);
+        let _clear_prebuilt = EnvVarGuard::cleared(IROHA_RELEASE_PREBUILT_MANIFEST_SHA256_ENV);
         let repo = repo_root();
         let rel = PathBuf::from("target/test-bin-dummy/iroha-cli-dummy-async");
         let abs = repo.join(&rel);

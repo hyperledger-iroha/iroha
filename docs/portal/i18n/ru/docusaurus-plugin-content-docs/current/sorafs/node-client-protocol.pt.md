@@ -127,10 +127,12 @@ SDK через `sorafs_orchestrator`):
 ## Помощники CLI и REST- `iroha app sorafs pin list|show`, `alias list` и `replication list` связаны с операционной системой
   конечные точки REST выполняют регистрацию контактов и импортируют Norito JSON грубо с блоками
   аттестация для аудиторских доказательств.
-- `iroha app sorafs storage pin` и `torii /v1/sorafs/pin/register` aceitam манифестирует
-  Norito или JSON с доказательствами псевдонимов и дополнительными преемниками; доказательства
-  geram `400`, доказательства устарели, retornam `503` com `Warning: 110`, электронные доказательства истекли
-  реторнам `412`.
+- `torii /v1/sorafs/pin/register` принимает закрытый JSON-запрос V1.
+  `manifest_payload` должен быть точным каноническим padded-base64 от байтов
+  канонического Norito `ManifestV1`. Torii выводит digest, chunker, content
+  length, pin policy и fee inputs только из декодированного manifest и отклоняет
+  выведенные из обращения дублирующие summary fields. `alias` и ненулевой
+  predecessor `successor_of_hex` остаются опциональными.
 - Конечные точки REST (`/v1/sorafs/pin`, `/v1/sorafs/aliases`, `/v1/sorafs/replication`)
   включить estruturas de attestation для клиентов, проверяющих данные против них
   последние заголовки блоков до начала игры.

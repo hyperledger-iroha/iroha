@@ -274,10 +274,13 @@ pub struct DaIngestReceipt {
   የ `policy_source` እሴቶችን በማስረጃ ቅርቅቦች ውስጥ ትርጉም ያለው እንዲሆን ለማድረግ ሕብረቁምፊዎች። ተመልከት
   `crates/iroha_cli/src/commands/da.rs` ለክፍለ ትዕዛዝ እና `docs/source/da/rent_policy.md`
   ለፖሊሲው እቅድ።【crates/iroha_cli/src/commands/da.rs:1】【docs/source/da/ rent_policy.md:1】
-- የፒን መዝገብ እኩልነት አሁን ወደ ኤስዲኬዎች ይዘልቃል፡ `ToriiClient.registerSorafsPinManifest(...)` በ
-  ጃቫ ስክሪፕት ኤስዲኬ በ `iroha app sorafs pin register` ጥቅም ላይ የዋለውን ትክክለኛ የክፍያ ጭነት ይገነባል ፣
-  ወደ ከመለጠፍዎ በፊት chunker ሜታዳታ፣ የፒን ፖሊሲዎች፣ ተለዋጭ ማስረጃዎች እና ተተኪ መፍጨት
-  `/v1/sorafs/pin/register`. ይህ CI ቦቶች እና አውቶሜሽን ሲደርሱ ወደ CLI እንዳይደርሱ ያደርጋል
+- የፒን መዝገብ እኩልነት አሁን ወደ SDKs ይዘልቃል፡
+  `ToriiClient.registerSorafsPinManifest(...)` በ `manifest_payload` ውስጥ
+  ትክክለኛውን canonical padded-base64 `ManifestV1` የያዘ የተዘጋ JSON V1
+  request ይገነባል። Torii digest፣ chunker፣ content length፣ pin policy እና
+  fee inputs ከdecoded manifest ብቻ ያመነጫል እና duplicate summaries ውድቅ
+  ያደርጋል፤ optional alias እና nonzero predecessor ይቀራሉ። ይህ CI ቦቶች
+  እና አውቶሜሽን `/v1/sorafs/pin/register` ሲጠቀሙ ወደ CLI እንዳይደርሱ ያደርጋል
   አንጸባራቂ ምዝገባዎችን መቅዳት እና ረዳቱ ከTyScript/README ሽፋን ጋር ወደ DA-8 ይልካል
   "ማስገባት/ማግኘት/አረጋግጥ" የመሳሪያ አሰራር ከ Rust/Swift ጎን ለጎን በJS ላይ ሙሉ በሙሉ ረክቷል።【javascript/iroha_js/src/toriiClient.js:1045】【javascript/iroha_js/test/toriiClient.test.js:788】
 - `iroha app da prove-availability` ሁሉንም ከላይ ያሉትን ሰንሰለቶች ያሰራል፡ የማከማቻ ትኬት ይወስዳል፣ ያውርዳል

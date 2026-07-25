@@ -42479,14 +42479,15 @@ mod tests {
             .expect("canonical root CID"),
             chunker,
             [0xA7; 32],
+            [0xA6; 32],
+            content_length,
             policy,
             ALICE_ID.clone(),
             1,
             None,
             None,
             Metadata::default(),
-        )
-        .with_content_length(content_length);
+        );
         match status {
             PinStatus::Pending => {}
             PinStatus::Approved(epoch) => {

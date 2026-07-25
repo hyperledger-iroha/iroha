@@ -4,28 +4,86 @@ evaluation_interval: 1m
 tests:
   - interval: 1m
     input_series:
-      - series: 'torii_sorafs_orderbook_match_lag_seconds{cluster="local",tier="hot"}'
+      - series: 'torii_sorafs_orderbook_finalized_projection_ready{cluster="unavailable"}'
+        values: '0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0'
+      - series: 'torii_sorafs_orderbook_finalized_projection_timestamp_seconds{cluster="unavailable"}'
+        values: '1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
+      - series: 'torii_sorafs_orderbook_finalized_projection_ready{cluster="local"}'
+        values: '1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
+      - series: 'torii_sorafs_orderbook_finalized_projection_timestamp_seconds{cluster="local"}'
+        values: '1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000'
+      - series: 'torii_sorafs_orderbook_finalized_projection_ready{cluster="stale"}'
+        values: '1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
+      - series: 'torii_sorafs_orderbook_finalized_projection_timestamp_seconds{cluster="stale"}'
+        values: '1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
+      - series: 'torii_sorafs_orderbook_finalized_projection_ready{cluster="skew",instance="a"}'
+        values: '1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
+      - series: 'torii_sorafs_orderbook_finalized_projection_ready{cluster="skew",instance="b"}'
+        values: '1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
+      - series: 'torii_sorafs_orderbook_finalized_projection_timestamp_seconds{cluster="skew",instance="a"}'
+        values: '1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000'
+      - series: 'torii_sorafs_orderbook_finalized_projection_timestamp_seconds{cluster="skew",instance="b"}'
+        values: '1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000'
+      - series: 'torii_sorafs_orderbook_finalized_projection_height{cluster="skew",instance="a"}'
+        values: '10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10'
+      - series: 'torii_sorafs_orderbook_finalized_projection_height{cluster="skew",instance="b"}'
+        values: '20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20'
+      - series: 'torii_sorafs_orderbook_finalized_projection_failures_total{cluster="local",reason="projection_mismatch"}'
+        values: '0+1x19'
+      - series: 'torii_sorafs_orderbook_matcher_lag_seconds{cluster="local"}'
         values: '3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3'
       - series: 'torii_sorafs_orderbook_settlement_backlog{cluster="local"}'
         values: '120 120 120 120 120 120 120 120 120 120 120 120 120 120 120 120 120 120 120 120'
       - series: 'torii_sorafs_orderbook_oldest_settlement_age_seconds{cluster="local"}'
         values: '1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000'
-      - series: 'torii_sorafs_orderbook_contract_mirror_divergence{cluster="local"}'
-        values: '1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
-      - series: 'torii_sorafs_orderbook_api_error_ratio{route="/v1/sorafs/orderbook/orders"}'
-        values: '0.08 0.08 0.08 0.08 0.08 0.08 0.08 0.08 0.08 0.08 0.08 0.08 0.08 0.08 0.08 0.08 0.08 0.08 0.08 0.08'
-      - series: 'torii_sorafs_orderbook_escrow_runway_seconds{provider="provider-a"}'
+      - series: 'torii_sorafs_orderbook_api_requests_total{cluster="local",route="orders",outcome="error"}'
+        values: '0+10x19'
+      - series: 'torii_sorafs_orderbook_api_requests_total{cluster="local",route="orders",outcome="success"}'
+        values: '0+90x19'
+      - series: 'torii_sorafs_orderbook_escrow_runway_seconds{cluster="local"}'
         values: '3600 3600 3600 3600 3600 3600 3600 3600 3600 3600 3600 3600 3600 3600 3600 3600 3600 3600 3600 3600'
     alert_rule_test:
-      - alertname: SoraFSOrderbookMatchingLagHigh
-        eval_time: 5m
+      - alertname: SoraFSOrderbookFinalizedProjectionUnavailable
+        eval_time: 3m
         exp_alerts: []
+      - alertname: SoraFSOrderbookFinalizedProjectionUnavailable
+        eval_time: 7m
+        exp_alerts:
+          - exp_labels:
+              cluster: unavailable
+              severity: critical
+            exp_annotations:
+              summary: "SoraFS finalized orderbook projection is unavailable"
+      - alertname: SoraFSOrderbookFinalizedProjectionStale
+        eval_time: 9m
+        exp_alerts:
+          - exp_labels:
+              cluster: stale
+              severity: critical
+            exp_annotations:
+              summary: "SoraFS finalized orderbook projection is stale"
+      - alertname: SoraFSOrderbookFinalizedProjectionFailure
+        eval_time: 7m
+        exp_alerts:
+          - exp_labels:
+              cluster: local
+              reason: projection_mismatch
+              severity: warning
+            exp_annotations:
+              summary: "SoraFS finalized orderbook projection failed"
+      - alertname: SoraFSOrderbookFinalizedProjectionSkew
+        eval_time: 7m
+        exp_alerts:
+          - exp_labels:
+              cluster: skew
+              severity: warning
+            exp_annotations:
+              summary: "SoraFS finalized orderbook projections are skewed"
       - alertname: SoraFSOrderbookMatchingLagHigh
         eval_time: 12m
         exp_alerts:
           - exp_labels:
               cluster: local
-              tier: hot
               severity: warning
             exp_annotations:
               summary: "SoraFS orderbook matching lag is high"
@@ -37,19 +95,12 @@ tests:
               severity: warning
             exp_annotations:
               summary: "SoraFS settlement backlog is high"
-      - alertname: SoraFSOrderbookContractMirrorDivergence
-        eval_time: 7m
-        exp_alerts:
-          - exp_labels:
-              cluster: local
-              severity: critical
-            exp_annotations:
-              summary: "SoraFS orderbook mirror diverged from contract state"
       - alertname: SoraFSOrderbookApiErrorRatioHigh
         eval_time: 7m
         exp_alerts:
           - exp_labels:
-              route: /v1/sorafs/orderbook/orders
+              cluster: local
+              route: orders
               severity: warning
             exp_annotations:
               summary: "SoraFS orderbook API error ratio is high"
@@ -57,32 +108,51 @@ tests:
         eval_time: 17m
         exp_alerts:
           - exp_labels:
-              provider: provider-a
+              cluster: local
               severity: critical
             exp_annotations:
               summary: "SoraFS orderbook escrow runway below one day"
   - interval: 1m
     input_series:
-      - series: 'torii_sorafs_orderbook_match_lag_seconds{cluster="local",tier="hot"}'
+      - series: 'torii_sorafs_orderbook_finalized_projection_ready{cluster="local"}'
+        values: '1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
+      - series: 'torii_sorafs_orderbook_finalized_projection_timestamp_seconds{cluster="local"}'
+        values: '1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000 1000'
+      - series: 'torii_sorafs_orderbook_finalized_projection_height{cluster="local",instance="a"}'
+        values: '42 42 42 42 42 42 42 42 42 42 42 42 42 42 42 42 42 42'
+      - series: 'torii_sorafs_orderbook_finalized_projection_height{cluster="local",instance="b"}'
+        values: '42 42 42 42 42 42 42 42 42 42 42 42 42 42 42 42 42 42'
+      - series: 'torii_sorafs_orderbook_finalized_projection_failures_total{cluster="local",reason="query_failed"}'
+        values: '0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0'
+      - series: 'torii_sorafs_orderbook_matcher_lag_seconds{cluster="local"}'
         values: '1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
       - series: 'torii_sorafs_orderbook_settlement_backlog{cluster="local"}'
-        values: '10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10'
-      - series: 'torii_sorafs_orderbook_oldest_settlement_age_seconds{cluster="local"}'
-        values: '60 60 60 60 60 60 60 60 60 60 60 60 60 60 60 60 60 60'
-      - series: 'torii_sorafs_orderbook_contract_mirror_divergence{cluster="local"}'
         values: '0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0'
-      - series: 'torii_sorafs_orderbook_api_error_ratio{route="/v1/sorafs/orderbook/orders"}'
-        values: '0.01 0.01 0.01 0.01 0.01 0.01 0.01 0.01 0.01 0.01 0.01 0.01 0.01 0.01 0.01 0.01 0.01 0.01'
-      - series: 'torii_sorafs_orderbook_escrow_runway_seconds{provider="provider-a"}'
-        values: '172800 172800 172800 172800 172800 172800 172800 172800 172800 172800 172800 172800 172800 172800 172800 172800 172800 172800'
+      - series: 'torii_sorafs_orderbook_oldest_settlement_age_seconds{cluster="local"}'
+        values: '60 60 60 60 60 60 60 60 60 60 60 60 60 60 60 60'
+      - series: 'torii_sorafs_orderbook_api_requests_total{cluster="local",route="orders",outcome="error"}'
+        values: '0+1x17'
+      - series: 'torii_sorafs_orderbook_api_requests_total{cluster="local",route="orders",outcome="success"}'
+        values: '0+99x17'
+      - series: 'torii_sorafs_orderbook_escrow_runway_seconds{cluster="local"}'
+        values: '0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0'
     alert_rule_test:
+      - alertname: SoraFSOrderbookFinalizedProjectionUnavailable
+        eval_time: 17m
+        exp_alerts: []
+      - alertname: SoraFSOrderbookFinalizedProjectionStale
+        eval_time: 17m
+        exp_alerts: []
+      - alertname: SoraFSOrderbookFinalizedProjectionFailure
+        eval_time: 17m
+        exp_alerts: []
+      - alertname: SoraFSOrderbookFinalizedProjectionSkew
+        eval_time: 17m
+        exp_alerts: []
       - alertname: SoraFSOrderbookMatchingLagHigh
         eval_time: 17m
         exp_alerts: []
       - alertname: SoraFSOrderbookSettlementBacklogHigh
-        eval_time: 17m
-        exp_alerts: []
-      - alertname: SoraFSOrderbookContractMirrorDivergence
         eval_time: 17m
         exp_alerts: []
       - alertname: SoraFSOrderbookApiErrorRatioHigh

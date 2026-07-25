@@ -25,8 +25,28 @@ const SETTLEMENT_RECEIPT_FIXTURE = new URL(
   "../../../fixtures/sorafs_manifest/orderbook/settlement_receipt_v1.to",
   import.meta.url,
 );
-const RUNTIME_SNAPSHOT_FIXTURE = new URL(
-  "../../../fixtures/sorafs_manifest/orderbook/runtime_snapshot_v1.to",
+const TRADE_EVENT_FIXTURE = new URL(
+  "../../../fixtures/sorafs_manifest/orderbook/trade_event_v1.to",
+  import.meta.url,
+);
+const ORDER_REQUEST_OUTCOME_FIXTURE = new URL(
+  "../../../fixtures/sorafs_manifest/orderbook/order_request_validation_outcome_v1.json",
+  import.meta.url,
+);
+const ORDER_REQUEST_BAD_SIGNATURE_FIXTURE = new URL(
+  "../../../fixtures/sorafs_manifest/orderbook/negative/order_request_bad_signature_v1.to",
+  import.meta.url,
+);
+const ORDER_REQUEST_BAD_SIGNATURE_OUTCOME_FIXTURE = new URL(
+  "../../../fixtures/sorafs_manifest/orderbook/negative/order_request_bad_signature_validation_outcome_v1.json",
+  import.meta.url,
+);
+const ORDER_REQUEST_TRAILING_BYTES_FIXTURE = new URL(
+  "../../../fixtures/sorafs_manifest/orderbook/negative/order_request_trailing_bytes_v1.to",
+  import.meta.url,
+);
+const ORDER_REQUEST_TRAILING_BYTES_OUTCOME_FIXTURE = new URL(
+  "../../../fixtures/sorafs_manifest/orderbook/negative/order_request_trailing_bytes_validation_outcome_v1.json",
   import.meta.url,
 );
 const ORDERBOOK_PRIVATE_KEY = Buffer.alloc(32, 0xb7);
@@ -38,38 +58,46 @@ function fixed32(byte) {
   return Buffer.alloc(32, byte);
 }
 
+function canonicalOutcomeJson(outcome) {
+  return `${JSON.stringify(outcome, null, 2)}\n`;
+}
+
 test("validateOrderbookPayload accepts canonical order request fixture", () => {
   const outcome = validateOrderbookPayload(
-    "order",
+    SORAFS_ORDERBOOK_PAYLOAD_KINDS.ORDER_REQUEST,
     readFileSync(ORDER_REQUEST_FIXTURE),
     {
-      label: "fixtures/sorafs_manifest/orderbook/order_request_v1.to",
-      generatedAtUnix: 1_700_000_123,
+      label: "order_request_v1.to",
+      generatedAtUnix: 123,
     },
   );
 
-  assert.equal(outcome.status, "Ok");
-  assert.equal(outcome.code, "SFS-OK-000");
-  assert.equal(outcome.category, "validation");
-  assert.equal(outcome.generated_at, 1_700_000_123);
-  assert.equal(outcome.inputs[0]?.kind, "orderbook_order_request");
   assert.equal(
-    outcome.inputs[0]?.path,
-    "fixtures/sorafs_manifest/orderbook/order_request_v1.to",
+    canonicalOutcomeJson(outcome),
+    readFileSync(ORDER_REQUEST_OUTCOME_FIXTURE, "utf8"),
   );
 });
 
-test("validateOrderbookPayload accepts runtime snapshot fixture", () => {
-  const outcome = validateOrderbookPayload(
-    SORAFS_ORDERBOOK_PAYLOAD_KINDS.RUNTIME_SNAPSHOT,
-    readFileSync(RUNTIME_SNAPSHOT_FIXTURE),
-    { generated_at: 1_700_000_456 },
-  );
-
-  assert.equal(outcome.status, "Ok");
-  assert.equal(outcome.code, "SFS-OK-000");
-  assert.equal(outcome.inputs[0]?.kind, "orderbook_runtime_snapshot");
-  assert.equal(outcome.generated_at, 1_700_000_456);
+test("validateOrderbookPayload matches signature and noncanonical outcome fixtures", () => {
+  for (const [payload, label, expected] of [
+    [
+      ORDER_REQUEST_BAD_SIGNATURE_FIXTURE,
+      "order_request_bad_signature_v1.to",
+      ORDER_REQUEST_BAD_SIGNATURE_OUTCOME_FIXTURE,
+    ],
+    [
+      ORDER_REQUEST_TRAILING_BYTES_FIXTURE,
+      "order_request_trailing_bytes_v1.to",
+      ORDER_REQUEST_TRAILING_BYTES_OUTCOME_FIXTURE,
+    ],
+  ]) {
+    const outcome = validateOrderbookPayload(
+      SORAFS_ORDERBOOK_PAYLOAD_KINDS.ORDER_REQUEST,
+      readFileSync(payload),
+      { label, generatedAtUnix: 123 },
+    );
+    assert.equal(canonicalOutcomeJson(outcome), readFileSync(expected, "utf8"));
+  }
 });
 
 test("validateOrderbookPayload reports malformed payloads as reference outcomes", () => {
@@ -83,11 +111,23 @@ test("validateOrderbookPayload reports malformed payloads as reference outcomes"
   assert.equal(outcome.inputs[0]?.kind, "settlement_receipt");
 });
 
-test("validateOrderbookPayload rejects unknown kinds before native validation", () => {
-  assert.throws(
-    () => validateOrderbookPayload("bad-kind", Buffer.alloc(8)),
-    /unsupported SoraFS orderbook payload kind/i,
-  );
+test("validateOrderbookPayload rejects unknown and retired kind aliases", () => {
+  for (const kind of [
+    "bad-kind",
+    "order",
+    "request",
+    "order_request",
+    "orderbook-order-request",
+    "ORDER-REQUEST",
+    " order-request ",
+    "runtime-snapshot",
+  ]) {
+    assert.throws(
+      () => validateOrderbookPayload(kind, Buffer.alloc(8)),
+      /unsupported SoraFS orderbook payload kind/i,
+      kind,
+    );
+  }
 });
 
 test("validateOrderbookPayload rejects unsafe generated timestamps", () => {
@@ -100,9 +140,9 @@ test("validateOrderbookPayload rejects unsafe generated timestamps", () => {
   );
 });
 
-test("signOrderbookPayload signs mutable orderbook fixture payloads", () => {
+test("signOrderbookPayload deterministically reproduces signed fixtures", () => {
   const cases = [
-    ["order", ORDER_REQUEST_FIXTURE, "orderbook_order_request"],
+    ["order-request", ORDER_REQUEST_FIXTURE, "orderbook_order_request"],
     ["order-cancel", ORDER_CANCEL_FIXTURE, "orderbook_order_cancel"],
     ["settlement-receipt", SETTLEMENT_RECEIPT_FIXTURE, "settlement_receipt"],
   ];
@@ -111,7 +151,7 @@ test("signOrderbookPayload signs mutable orderbook fixture payloads", () => {
     const unsigned = readFileSync(fixture);
     const signed = signOrderbookPayload(kind, unsigned, ORDERBOOK_PRIVATE_KEY);
     assert.ok(Buffer.isBuffer(signed));
-    assert.notDeepStrictEqual(signed, unsigned);
+    assert.deepStrictEqual(signed, unsigned);
 
     const outcome = validateOrderbookPayload(kind, signed, {
       generatedAtUnix: 1_700_000_999,
@@ -125,8 +165,8 @@ test("signOrderbookPayload rejects non-signable orderbook payload kinds", () => 
   assert.throws(
     () =>
       signOrderbookPayload(
-        "runtime-snapshot",
-        readFileSync(RUNTIME_SNAPSHOT_FIXTURE),
+        "trade-event",
+        readFileSync(TRADE_EVENT_FIXTURE),
         ORDERBOOK_PRIVATE_KEY,
       ),
     /cannot be signed/i,
@@ -169,11 +209,50 @@ test("field-level orderbook builders emit valid signed payloads", () => {
     "Ok",
   );
 
+  const ask = buildSignedOrderbookOrderRequest(
+    {
+      side: "ask",
+      tier: "hot",
+      pricePerGib: "1.25",
+      quantityGib: "4",
+      ownerAccount: ORDERBOOK_OWNER_ACCOUNT,
+      providerId: fixed32(0x72),
+      expiryUnix: "1700010000",
+      nonce: "8",
+      makerFeeBps: "25",
+      takerFeeBps: "30",
+    },
+    ORDERBOOK_PRIVATE_KEY,
+  );
+  assert.notDeepEqual(ask, order);
+  assert.equal(
+    validateOrderbookPayload("order-request", ask, {
+      generatedAtUnix: 1_700_000_999,
+    }).status,
+    "Ok",
+  );
+  const askOtherProvider = buildSignedOrderbookOrderRequest(
+    {
+      side: "ask",
+      tier: "hot",
+      pricePerGib: "1.25",
+      quantityGib: "4",
+      ownerAccount: ORDERBOOK_OWNER_ACCOUNT,
+      providerId: fixed32(0x73),
+      expiryUnix: "1700010000",
+      nonce: "8",
+      makerFeeBps: "25",
+      takerFeeBps: "30",
+    },
+    ORDERBOOK_PRIVATE_KEY,
+  );
+  assert.notDeepEqual(askOtherProvider, ask);
+
   const cancel = buildSignedOrderbookOrderCancel(
     {
-      order_id: orderId,
-      owner_account: ORDERBOOK_OWNER_ACCOUNT,
-      reason: "owner_requested",
+      orderId,
+      ownerAccount: ORDERBOOK_OWNER_ACCOUNT,
+      reason: "owner-requested",
       nonce: 8n,
     },
     ORDERBOOK_PRIVATE_KEY,
@@ -244,7 +323,7 @@ test("orderbook builders accept owner accounts at the V1 byte ceiling", () => {
     {
       orderId,
       ownerAccount,
-      reason: "owner_requested",
+      reason: "owner-requested",
       nonce: 10,
     },
     ORDERBOOK_PRIVATE_KEY,
@@ -283,7 +362,7 @@ test("orderbook owner-account byte ceiling rejects adversarial oversized inputs"
         {
           orderId: fixed32(0x45),
           ownerAccount,
-          reason: "owner_requested",
+          reason: "owner-requested",
           nonce: 10,
         },
         ORDERBOOK_PRIVATE_KEY,
@@ -311,6 +390,43 @@ test("field-level orderbook builder rejects noncanonical supplied order ids", ()
         ORDERBOOK_PRIVATE_KEY,
       ),
     /canonical owner-and-nonce derivation/i,
+  );
+});
+
+test("field-level orderbook builder enforces exact provider binding", () => {
+  const common = {
+    tier: "hot",
+    pricePerGib: "1",
+    quantityGib: "1",
+    ownerAccount: ORDERBOOK_OWNER_ACCOUNT,
+    expiryUnix: "1700010000",
+    nonce: "17",
+    makerFeeBps: 0,
+    takerFeeBps: 0,
+  };
+  assert.throws(
+    () =>
+      buildSignedOrderbookOrderRequest(
+        { ...common, side: "bid", providerId: fixed32(0x72) },
+        ORDERBOOK_PRIVATE_KEY,
+      ),
+    /absent or empty for bid/i,
+  );
+  assert.throws(
+    () =>
+      buildSignedOrderbookOrderRequest(
+        { ...common, side: "ask" },
+        ORDERBOOK_PRIVATE_KEY,
+      ),
+    /exactly 32 bytes for ask/i,
+  );
+  assert.throws(
+    () =>
+      buildSignedOrderbookOrderRequest(
+        { ...common, side: "ask", providerId: Buffer.alloc(32) },
+        ORDERBOOK_PRIVATE_KEY,
+      ),
+    /must not be all zero/i,
   );
 });
 
@@ -406,7 +522,7 @@ test("field-level orderbook builders require canonical scale-9 XOR quantities", 
   );
 });
 
-test("field-level orderbook builders reject duplicate exact aliases", () => {
+test("field-level orderbook builders reject retired field-name aliases", () => {
   assert.throws(
     () =>
       buildSignedOrderbookOrderRequest(
@@ -424,6 +540,42 @@ test("field-level orderbook builders reject duplicate exact aliases", () => {
         },
         ORDERBOOK_PRIVATE_KEY,
       ),
-    /exactly once/i,
+    /retired/i,
+  );
+});
+
+test("field-level orderbook builders reject noncanonical selectors", () => {
+  const common = {
+    tier: "hot",
+    pricePerGib: "1",
+    quantityGib: "12",
+    ownerAccount: ORDERBOOK_OWNER_ACCOUNT,
+    expiryUnix: "1700010000",
+    nonce: "7",
+    makerFeeBps: "25",
+    takerFeeBps: "30",
+  };
+  for (const side of ["Bid", " bid", "BID"]) {
+    assert.throws(
+      () =>
+        buildSignedOrderbookOrderRequest(
+          { ...common, side },
+          ORDERBOOK_PRIVATE_KEY,
+        ),
+      /canonical V1 selector/i,
+    );
+  }
+  assert.throws(
+    () =>
+      buildSignedOrderbookOrderCancel(
+        {
+          orderId: fixed32(0x45),
+          ownerAccount: ORDERBOOK_OWNER_ACCOUNT,
+          reason: "owner_requested",
+          nonce: 10,
+        },
+        ORDERBOOK_PRIVATE_KEY,
+      ),
+    /canonical V1 selector/i,
   );
 });

@@ -11,14 +11,239 @@ use norito::{
     decode_from_bytes,
     json::{Map, Value, from_slice},
 };
-use sorafs_manifest::{PotrReceiptV1, PotrStatus};
+use sorafs_manifest::{
+    PotrReceiptV1, PotrStatus, ProofStreamRequestV1, potr_request_scope_digest_v1,
+};
 
-use crate::{PorProof, por_json::proof_from_value};
+use crate::{PorProof, PorSampleIndices, por_json::proof_from_value};
+
+const PROOF_STREAM_REQUEST_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.proof-stream.request-digest.v1\0";
+const POR_REQUEST_SAMPLE_SEED_DOMAIN_V1: &[u8] = b"sorafs.proof-stream.por-sample-seed.v1\0";
 
 /// Canonical proof flavour shared with the request schema.
 pub use sorafs_manifest::ProofStreamKind as ProofKind;
 /// Canonical storage tier shared with the request schema.
 pub use sorafs_manifest::ProofStreamTier as ProofTier;
+
+/// Return the canonical digest of every field in an exact proof-stream request.
+///
+/// Optional fields use an explicit presence byte before their fixed-width value. This transcript
+/// is independent of host layout and binds the client nonce as well as every proof-specific
+/// selector.
+pub fn proof_stream_request_digest_v1(request: &ProofStreamRequestV1) -> Result<[u8; 32], String> {
+    request
+        .validate()
+        .map_err(|error| format!("invalid proof-stream request digest input: {error}"))?;
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(PROOF_STREAM_REQUEST_DIGEST_DOMAIN_V1);
+    hasher.update(&request.manifest_digest);
+    hasher.update(&request.provider_id);
+    hasher.update(&[match request.proof_kind {
+        ProofKind::Por => 0,
+        ProofKind::Pdp => 1,
+        ProofKind::Potr => 2,
+    }]);
+    update_optional_fixed(&mut hasher, request.challenge_id.as_ref());
+    update_optional_u32(&mut hasher, request.sample_count);
+    update_optional_u32(&mut hasher, request.deadline_ms);
+    update_optional_u64(&mut hasher, request.sample_seed);
+    update_optional_u64(&mut hasher, request.expected_finalized_height);
+    update_optional_fixed(&mut hasher, request.expected_finalized_block_hash.as_ref());
+    hasher.update(&request.nonce);
+    update_optional_fixed(&mut hasher, request.orchestrator_job_id.as_ref());
+    match request.tier {
+        None => hasher.update(&[0]),
+        Some(tier) => hasher.update(&[
+            1,
+            match tier {
+                ProofTier::Hot => 0,
+                ProofTier::Warm => 1,
+                ProofTier::Archive => 2,
+            },
+        ]),
+    };
+    Ok(hasher.finalize().into())
+}
+
+fn update_optional_fixed<const N: usize>(hasher: &mut blake3::Hasher, value: Option<&[u8; N]>) {
+    match value {
+        Some(value) => {
+            hasher.update(&[1]);
+            hasher.update(value);
+        }
+        None => {
+            hasher.update(&[0]);
+        }
+    }
+}
+
+fn update_optional_u32(hasher: &mut blake3::Hasher, value: Option<u32>) {
+    match value {
+        Some(value) => {
+            hasher.update(&[1]);
+            hasher.update(&value.to_le_bytes());
+        }
+        None => {
+            hasher.update(&[0]);
+        }
+    }
+}
+
+fn update_optional_u64(hasher: &mut blake3::Hasher, value: Option<u64>) {
+    match value {
+        Some(value) => {
+            hasher.update(&[1]);
+            hasher.update(&value.to_le_bytes());
+        }
+        None => {
+            hasher.update(&[0]);
+        }
+    }
+}
+
+/// Derive the canonical PoR schedule seed from the exact request and authenticated root.
+pub fn por_request_sample_seed_v1(
+    request: &ProofStreamRequestV1,
+    trusted_por_root: &[u8; 32],
+) -> Result<u64, String> {
+    if request.proof_kind != ProofKind::Por {
+        return Err("PoR sample seed derivation requires `proof_kind=por`".to_string());
+    }
+    if trusted_por_root == &[0; 32] {
+        return Err("PoR sample seed derivation requires a non-zero trusted root".to_string());
+    }
+    let request_digest = proof_stream_request_digest_v1(request)?;
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(POR_REQUEST_SAMPLE_SEED_DOMAIN_V1);
+    hasher.update(trusted_por_root);
+    hasher.update(&request_digest);
+    let digest = hasher.finalize();
+    let mut seed = [0u8; 8];
+    seed.copy_from_slice(&digest.as_bytes()[..8]);
+    Ok(u64::from_le_bytes(seed))
+}
+
+/// Closed verification scope for one exact proof-stream request.
+///
+/// A PoR scope cannot be constructed without an authenticated root, while
+/// PDP and PoTR scopes reject roots because their authority comes from the
+/// committed outcome and signed receipt respectively.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ProofStreamVerificationContext {
+    request: ProofStreamRequestV1,
+    request_digest: [u8; 32],
+    trusted_por_root: Option<[u8; 32]>,
+    por_sample_seed: Option<u64>,
+}
+
+impl ProofStreamVerificationContext {
+    /// Validate and bind an exact proof-stream request to its trust anchor.
+    pub fn new(
+        request: ProofStreamRequestV1,
+        trusted_por_root: Option<[u8; 32]>,
+    ) -> Result<Self, String> {
+        request
+            .validate()
+            .map_err(|error| format!("invalid proof-stream verification request: {error}"))?;
+        let request_digest = proof_stream_request_digest_v1(&request)?;
+        let por_sample_seed = match request.proof_kind {
+            ProofKind::Por => {
+                let root = trusted_por_root
+                    .ok_or_else(|| "PoR verification requires `trusted_por_root`".to_string())?;
+                if root == [0; 32] {
+                    return Err("PoR `trusted_por_root` must be non-zero".to_string());
+                }
+                Some(por_request_sample_seed_v1(&request, &root)?)
+            }
+            ProofKind::Pdp | ProofKind::Potr => {
+                if trusted_por_root.is_some() {
+                    return Err(
+                        "`trusted_por_root` is forbidden for PDP and PoTR verification".to_string(),
+                    );
+                }
+                None
+            }
+        };
+        Ok(Self {
+            request,
+            request_digest,
+            trusted_por_root,
+            por_sample_seed,
+        })
+    }
+
+    /// Return the exact validated request bound to this scope.
+    #[must_use]
+    pub const fn request(&self) -> &ProofStreamRequestV1 {
+        &self.request
+    }
+
+    /// Return the canonical digest binding every field of the validated request.
+    #[must_use]
+    pub const fn request_digest(&self) -> &[u8; 32] {
+        &self.request_digest
+    }
+
+    /// Return the authenticated PoR root, if this is a PoR scope.
+    #[must_use]
+    pub const fn trusted_por_root(&self) -> Option<&[u8; 32]> {
+        self.trusted_por_root.as_ref()
+    }
+
+    /// Return the request-and-root-bound deterministic PoR sample seed.
+    #[must_use]
+    pub const fn por_sample_seed(&self) -> Option<u64> {
+        self.por_sample_seed
+    }
+
+    /// Return the complete finalized-block cursor expected by this request, when supplied.
+    #[must_use]
+    pub const fn expected_finalized_cursor(&self) -> Option<(u64, [u8; 32])> {
+        match (
+            self.request.expected_finalized_height,
+            self.request.expected_finalized_block_hash,
+        ) {
+            (Some(height), Some(hash)) => Some((height, hash)),
+            (Some(_), None) | (None, Some(_)) | (None, None) => None,
+        }
+    }
+
+    fn validate_item_scope(
+        &self,
+        manifest_digest_hex: &str,
+        provider_id_hex: &str,
+        proof_kind: ProofKind,
+    ) -> Result<(), String> {
+        if manifest_digest_hex != hex::encode(self.request.manifest_digest) {
+            return Err(
+                "proof stream item manifest does not match the verification request".to_string(),
+            );
+        }
+        if provider_id_hex != hex::encode(self.request.provider_id) {
+            return Err(
+                "proof stream item provider does not match the verification request".to_string(),
+            );
+        }
+        if proof_kind != self.request.proof_kind {
+            return Err(
+                "proof stream item kind does not match the verification request".to_string(),
+            );
+        }
+        Ok(())
+    }
+
+    pub(crate) fn item_limit(&self) -> usize {
+        match self.request.proof_kind {
+            ProofKind::Por => usize::try_from(
+                self.request
+                    .sample_count
+                    .expect("validated PoR request has a sample count"),
+            )
+            .expect("u32 sample count must fit in usize"),
+            ProofKind::Pdp | ProofKind::Potr => 1,
+        }
+    }
+}
 
 /// Verification status reported for a streaming item.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -54,9 +279,17 @@ impl VerificationStatus {
     }
 }
 
-/// Streaming item reported by the gateway.
+/// Verified streaming item reported by the gateway.
+///
+/// Instances can only be constructed through request-bound item verification. A complete PoR
+/// response must additionally pass [`ProofStreamSequenceVerifier`] so selection order and exact
+/// cardinality are authenticated.
 #[derive(Clone, Debug)]
 pub struct ProofStreamItem {
+    /// Exact request digest under which this item was authenticated.
+    verification_request_digest: [u8; 32],
+    /// Canonical request digest echoed by the response.
+    request_digest_hex: String,
     /// Manifest digest (hex).
     manifest_digest_hex: String,
     /// Provider identifier (hex).
@@ -86,7 +319,7 @@ pub struct ProofStreamItem {
     /// Configured deadline in milliseconds (PoTR).
     deadline_ms: Option<u32>,
     /// Flat sample index (PoR).
-    sample_index: Option<u32>,
+    sample_index: Option<u64>,
     /// Chunk index (PoR).
     chunk_index: Option<u32>,
     /// Segment index (PoR).
@@ -188,6 +421,12 @@ fn decode_canonical_potr_receipt(raw: &str) -> Result<PotrReceiptV1, String> {
 }
 
 impl ProofStreamItem {
+    /// Return the canonical digest of the exact request authorized for this item.
+    #[must_use]
+    pub fn request_digest_hex(&self) -> &str {
+        &self.request_digest_hex
+    }
+
     /// Return the canonical manifest digest encoding.
     #[must_use]
     pub fn manifest_digest_hex(&self) -> &str {
@@ -274,7 +513,7 @@ impl ProofStreamItem {
 
     /// Return the flat sample index when this is a PoR row.
     #[must_use]
-    pub const fn sample_index(&self) -> Option<u32> {
+    pub const fn sample_index(&self) -> Option<u64> {
         self.sample_index
     }
 
@@ -326,8 +565,14 @@ impl ProofStreamItem {
         self.recorded_at_ms
     }
 
-    /// Parses an item from a Norito JSON value.
-    pub fn from_json(value: &Value) -> Result<Self, String> {
+    /// Parse and authenticate one item from a Norito JSON value.
+    ///
+    /// This verifies the item against the request and trust anchor but cannot prove its ordinal in
+    /// the response. Feed accepted items to [`ProofStreamSequenceVerifier`] in transport order.
+    pub fn from_json(
+        value: &Value,
+        context: &ProofStreamVerificationContext,
+    ) -> Result<Self, String> {
         let obj = value
             .as_object()
             .ok_or_else(|| "proof stream item must be a JSON object".to_string())?;
@@ -346,6 +591,7 @@ impl ProofStreamItem {
         }
 
         const CANONICAL_FIELDS: &[&str] = &[
+            "request_digest_hex",
             "manifest_digest_hex",
             "provider_id_hex",
             "outcome_identity_hex",
@@ -392,6 +638,13 @@ impl ProofStreamItem {
             None => return Err("proof stream item missing `result` field".to_string()),
         };
 
+        let request_digest_hex = match obj.get("request_digest_hex") {
+            Some(Value::String(digest)) => {
+                canonical_nonzero_hex::<32>(digest, "request_digest_hex")?
+            }
+            Some(_) => return Err("`request_digest_hex` must be a string".to_string()),
+            None => return Err("proof stream item missing `request_digest_hex` field".to_string()),
+        };
         let manifest_digest_hex = match obj.get("manifest_digest_hex") {
             Some(Value::String(digest)) => {
                 canonical_nonzero_hex::<32>(digest, "manifest_digest_hex")?
@@ -408,6 +661,7 @@ impl ProofStreamItem {
             Some(_) => return Err("`provider_id_hex` must be a string".to_string()),
             None => return Err("proof stream item missing `provider_id_hex` field".to_string()),
         };
+        context.validate_item_scope(&manifest_digest_hex, &provider_id_hex, proof_kind)?;
         let outcome_identity_hex = match obj.get("outcome_identity_hex") {
             Some(Value::String(identity)) => Some(canonical_nonzero_hex::<32>(
                 identity,
@@ -450,6 +704,22 @@ impl ProofStreamItem {
             }
             None => None,
         };
+        if let Some(expected_height) = context.request.expected_finalized_height {
+            let expected_hash = hex::encode(
+                context
+                    .request
+                    .expected_finalized_block_hash
+                    .expect("validated finalized cursor is complete"),
+            );
+            if finalized_block_height != Some(expected_height)
+                || finalized_block_hash_hex.as_deref() != Some(expected_hash.as_str())
+            {
+                return Err(
+                    "proof stream item finalized cursor does not match the verification request"
+                        .to_string(),
+                );
+            }
+        }
         let committed_at_ms = optional_u64_field(obj, "committed_at_ms")?;
         let challenge_id_hex = match obj.get("challenge_id_hex") {
             Some(Value::String(challenge)) => {
@@ -478,7 +748,7 @@ impl ProofStreamItem {
 
         let latency_ms = optional_u32_field(obj, "latency_ms")?;
         let deadline_ms = optional_u32_field(obj, "deadline_ms")?;
-        let sample_index = optional_u32_field(obj, "leaf_index_flat")?;
+        let sample_index = optional_u64_field(obj, "leaf_index_flat")?;
         let chunk_index = optional_u32_field(obj, "chunk_index")?;
         let segment_index = optional_u32_field(obj, "segment_index")?;
         let leaf_index = optional_u32_field(obj, "leaf_index")?;
@@ -533,6 +803,12 @@ impl ProofStreamItem {
                 let proof = por_proof
                     .as_ref()
                     .expect("PoR required-field check guarantees a proof");
+                if sample_index != Some(proof.leaf_index_flat) {
+                    return Err(
+                        "PoR flat sample index does not match the authenticated proof witness"
+                            .to_string(),
+                    );
+                }
                 let projected_indices = (
                     u32::try_from(proof.chunk_index).ok(),
                     u32::try_from(proof.segment_index).ok(),
@@ -543,9 +819,24 @@ impl ProofStreamItem {
                         "PoR item indices do not match the canonical proof witness".to_string()
                     );
                 }
-                let derived_root = crate::hash_root(proof.payload_len, &proof.chunk_roots);
-                if !proof.verify(&derived_root) {
+                if !proof.is_internally_consistent() {
                     return Err("PoR item contains an internally invalid proof witness".to_string());
+                }
+                let trusted_root = context
+                    .trusted_por_root
+                    .as_ref()
+                    .expect("validated PoR context has a trusted root");
+                if !proof.verify(trusted_root) {
+                    return Err(
+                        "PoR item proof does not match the trusted manifest root".to_string()
+                    );
+                }
+                if context
+                    .request
+                    .tier
+                    .is_some_and(|expected| tier != Some(expected))
+                {
+                    return Err("PoR item tier does not match the verification request".to_string());
                 }
                 if challenge_id_hex.is_some()
                     || deadline_ms.is_some()
@@ -555,8 +846,6 @@ impl ProofStreamItem {
                     || outcome_identity_hex.is_some()
                     || outcome_digest_hex.is_some()
                     || admission_envelope_digest_hex.is_some()
-                    || finalized_block_height.is_some()
-                    || finalized_block_hash_hex.is_some()
                     || committed_at_ms.is_some()
                 {
                     return Err(
@@ -569,6 +858,17 @@ impl ProofStreamItem {
                 let challenge = challenge_id_hex
                     .as_ref()
                     .ok_or_else(|| "PDP item requires `challenge_id_hex`".to_string())?;
+                let expected_challenge = hex::encode(
+                    context
+                        .request
+                        .challenge_id
+                        .expect("validated PDP request has a challenge id"),
+                );
+                if challenge != &expected_challenge {
+                    return Err(
+                        "PDP item challenge does not match the verification request".to_string()
+                    );
+                }
                 if outcome_identity_hex.as_ref() != Some(challenge) {
                     return Err(
                         "PDP committed outcome identity must equal its challenge id".to_string()
@@ -616,6 +916,13 @@ impl ProofStreamItem {
                 {
                     return Err("PDP item contains fields reserved for PoR or PoTR".to_string());
                 }
+                if context
+                    .request
+                    .tier
+                    .is_some_and(|expected| tier != Some(expected))
+                {
+                    return Err("PDP item tier does not match the verification request".to_string());
+                }
             }
             ProofKind::Potr => {
                 if challenge_id_hex.is_some()
@@ -630,6 +937,22 @@ impl ProofStreamItem {
                 let receipt = potr_receipt
                     .as_ref()
                     .ok_or_else(|| "PoTR item requires final signed `receipt_b64`".to_string())?;
+                let expected_request_id = context
+                    .request
+                    .orchestrator_job_id
+                    .expect("validated PoTR request has an orchestrator job id");
+                let expected_identity = hex::encode(potr_request_scope_digest_v1(
+                    context.request.manifest_digest,
+                    context.request.provider_id,
+                    expected_request_id,
+                ));
+                if receipt.request_id != Some(expected_request_id)
+                    || outcome_identity_hex.as_deref() != Some(expected_identity.as_str())
+                {
+                    return Err(
+                        "PoTR item identity does not match the verification request".to_string()
+                    );
+                }
                 let receipt_identity =
                     hex::encode(receipt.request_scope_digest().map_err(|error| {
                         format!("failed to scope signed PoTR receipt: {error}")
@@ -666,6 +989,11 @@ impl ProofStreamItem {
                         "PoTR JSON projection timing does not match the signed receipt".to_string(),
                     );
                 }
+                if deadline_ms != context.request.deadline_ms {
+                    return Err(
+                        "PoTR item deadline does not match the verification request".to_string()
+                    );
+                }
                 if committed_at_ms.is_some_and(|committed| receipt.recorded_at_ms > committed) {
                     return Err(
                         "PoTR signed receipt was recorded after its committing block".to_string(),
@@ -679,6 +1007,15 @@ impl ProofStreamItem {
                 if tier.map(ProofTier::as_str) != Some(receipt_tier) {
                     return Err(
                         "PoTR JSON projection tier does not match the signed receipt".to_string(),
+                    );
+                }
+                if context
+                    .request
+                    .tier
+                    .is_some_and(|expected| tier != Some(expected))
+                {
+                    return Err(
+                        "PoTR item tier does not match the verification request".to_string()
                     );
                 }
                 let receipt_trace = receipt.trace_id.map(hex::encode);
@@ -711,7 +1048,16 @@ impl ProofStreamItem {
             }
         }
 
+        if request_digest_hex != hex::encode(context.request_digest) {
+            return Err(
+                "proof stream item request digest does not match the verification request"
+                    .to_string(),
+            );
+        }
+
         Ok(Self {
+            verification_request_digest: context.request_digest,
+            request_digest_hex,
             manifest_digest_hex,
             provider_id_hex,
             outcome_identity_hex,
@@ -738,17 +1084,24 @@ impl ProofStreamItem {
         })
     }
 
-    /// Parses an NDJSON line emitted by the gateway.
-    pub fn from_ndjson(bytes: &[u8]) -> Result<Self, String> {
+    /// Parse and authenticate one NDJSON line emitted by the gateway.
+    pub fn from_ndjson(
+        bytes: &[u8],
+        context: &ProofStreamVerificationContext,
+    ) -> Result<Self, String> {
         let value: Value = from_slice(bytes)
             .map_err(|err| format!("failed to parse proof stream item JSON: {err}"))?;
-        Self::from_json(&value)
+        Self::from_json(&value, context)
     }
 
     /// Serialises the item into a JSON value suitable for summaries.
     #[must_use]
     pub fn to_json(&self) -> Value {
         let mut map = Map::new();
+        map.insert(
+            "request_digest_hex".into(),
+            Value::from(self.request_digest_hex.clone()),
+        );
         map.insert(
             "manifest_digest_hex".into(),
             Value::from(self.manifest_digest_hex.clone()),
@@ -793,7 +1146,7 @@ impl ProofStreamItem {
             map.insert("deadline_ms".into(), Value::from(deadline as u64));
         }
         if let Some(index) = self.sample_index {
-            map.insert("leaf_index_flat".into(), Value::from(index as u64));
+            map.insert("leaf_index_flat".into(), Value::from(index));
         }
         if let Some(index) = self.chunk_index {
             map.insert("chunk_index".into(), Value::from(index as u64));
@@ -826,6 +1179,200 @@ impl ProofStreamItem {
         }
         Value::Object(map)
     }
+}
+
+/// Incremental verifier for the exact cardinality and ordering of one proof-stream response.
+///
+/// PoR schedules are derived from the full request, authenticated root, and proof-committed leaf
+/// population. The verifier rejects duplicates, reordering, truncation, and extra rows. PDP and
+/// PoTR responses are required to contain exactly one committed terminal row.
+#[derive(Debug)]
+pub struct ProofStreamSequenceVerifier {
+    context: ProofStreamVerificationContext,
+    item_count: usize,
+    expected_item_count: Option<usize>,
+    por_payload_len: Option<u64>,
+    por_chunk_count: Option<u64>,
+    por_leaf_count: Option<u64>,
+    por_schedule: Option<PorSampleIndices>,
+    finished: bool,
+}
+
+impl ProofStreamSequenceVerifier {
+    /// Start verifying a response in the supplied closed request scope.
+    #[must_use]
+    pub fn new(context: &ProofStreamVerificationContext) -> Self {
+        let expected_item_count = match context.request.proof_kind {
+            ProofKind::Por => None,
+            ProofKind::Pdp | ProofKind::Potr => Some(1),
+        };
+        Self {
+            context: *context,
+            item_count: 0,
+            expected_item_count,
+            por_payload_len: None,
+            por_chunk_count: None,
+            por_leaf_count: None,
+            por_schedule: None,
+            finished: false,
+        }
+    }
+
+    /// Authenticate the next item and its exact position in the response sequence.
+    pub fn verify_item(&mut self, item: &ProofStreamItem) -> Result<(), String> {
+        if self.finished {
+            return Err("proof stream sequence has already been finalized".to_string());
+        }
+        self.context.validate_item_scope(
+            item.manifest_digest_hex(),
+            item.provider_id_hex(),
+            item.proof_kind(),
+        )?;
+        if item.verification_request_digest != self.context.request_digest {
+            return Err(
+                "proof stream item was not authenticated under this exact request".to_string(),
+            );
+        }
+        if self.item_count >= self.context.item_limit() {
+            return Err(format!(
+                "proof stream contains more than {} request-authorized items",
+                self.context.item_limit()
+            ));
+        }
+
+        match self.context.request.proof_kind {
+            ProofKind::Por => {
+                let proof = item
+                    .por_proof()
+                    .ok_or_else(|| "PoR sequence item is missing its proof witness".to_string())?;
+                let sample_index = item.sample_index().ok_or_else(|| {
+                    "PoR sequence item is missing its flat sample index".to_string()
+                })?;
+                if sample_index != proof.leaf_index_flat {
+                    return Err(
+                        "PoR sequence sample index disagrees with the authenticated proof"
+                            .to_string(),
+                    );
+                }
+                let trusted_root = self
+                    .context
+                    .trusted_por_root
+                    .as_ref()
+                    .expect("validated PoR context has a trusted root");
+                if !proof.verify(trusted_root) {
+                    return Err(
+                        "PoR sequence proof does not match the trusted manifest root".to_string(),
+                    );
+                }
+                if let Some(leaf_count) = self.por_leaf_count {
+                    if proof.payload_len != self.por_payload_len.expect("PoR geometry initialized")
+                        || proof.chunk_count
+                            != self.por_chunk_count.expect("PoR geometry initialized")
+                        || proof.leaf_count != leaf_count
+                    {
+                        return Err("PoR sequence items disagree on authenticated root geometry"
+                            .to_string());
+                    }
+                } else {
+                    let requested = usize::try_from(
+                        self.context
+                            .request
+                            .sample_count
+                            .expect("validated PoR request has a sample count"),
+                    )
+                    .expect("u32 PoR sample count must fit usize");
+                    let schedule = PorSampleIndices::new(
+                        proof.leaf_count,
+                        requested,
+                        self.context
+                            .por_sample_seed
+                            .expect("validated PoR context has a sample seed"),
+                    )
+                    .map_err(|error| {
+                        format!("failed to build bounded PoR sample schedule: {error}")
+                    })?;
+                    self.expected_item_count = Some(schedule.sample_count());
+                    self.por_payload_len = Some(proof.payload_len);
+                    self.por_chunk_count = Some(proof.chunk_count);
+                    self.por_leaf_count = Some(proof.leaf_count);
+                    self.por_schedule = Some(schedule);
+                }
+                let expected = self
+                    .por_schedule
+                    .as_mut()
+                    .expect("PoR schedule initialized from first proof")
+                    .next()
+                    .ok_or_else(|| {
+                        "PoR response contains more rows than its authenticated leaf population"
+                            .to_string()
+                    })?;
+                if sample_index != expected {
+                    return Err(format!(
+                        "PoR sample at position {} has index {sample_index}, expected {expected}",
+                        self.item_count
+                    ));
+                }
+            }
+            ProofKind::Pdp | ProofKind::Potr => {
+                if self.item_count != 0 {
+                    return Err(
+                        "PDP and PoTR responses must contain exactly one terminal row".to_string(),
+                    );
+                }
+            }
+        }
+        self.item_count += 1;
+        Ok(())
+    }
+
+    /// Finalize the response and reject an empty or truncated sequence.
+    pub fn finish(&mut self) -> Result<(), String> {
+        if self.finished {
+            return Err("proof stream sequence has already been finalized".to_string());
+        }
+        self.finished = true;
+        let expected = self.expected_item_count.ok_or_else(|| {
+            "PoR response ended before its authenticated leaf population was supplied".to_string()
+        })?;
+        if self.item_count != expected {
+            return Err(format!(
+                "proof stream ended after {} items; expected exactly {expected}",
+                self.item_count
+            ));
+        }
+        if self
+            .por_schedule
+            .as_ref()
+            .is_some_and(|schedule| schedule.len() != 0)
+        {
+            return Err("PoR response ended before the deterministic sample schedule".to_string());
+        }
+        Ok(())
+    }
+
+    /// Return the number of authenticated rows consumed so far.
+    #[must_use]
+    pub fn item_count(&self) -> usize {
+        self.item_count
+    }
+
+    /// Return the exact expected response cardinality once it is known.
+    #[must_use]
+    pub fn expected_item_count(&self) -> Option<usize> {
+        self.expected_item_count
+    }
+}
+
+/// Verify a complete in-memory proof-stream sequence in one closed request scope.
+pub fn verify_proof_stream_sequence(
+    context: &ProofStreamVerificationContext,
+    items: &[ProofStreamItem],
+) -> Result<(), String> {
+    let mut verifier = ProofStreamSequenceVerifier::new(context);
+    for item in items {
+        verifier.verify_item(item)?;
+    }
+    verifier.finish()
 }
 
 /// Aggregated metrics derived from a proof stream.
@@ -997,7 +1544,7 @@ impl ProofStreamSummary {
 mod tests {
     use super::*;
 
-    fn canonical_por_sample() -> (usize, PorProof) {
+    fn canonical_por_sample() -> (usize, PorProof, [u8; 32]) {
         let payload = (0_u16..512)
             .map(|value| u8::try_from(value % 251).expect("fixture byte"))
             .collect::<Vec<_>>();
@@ -1005,28 +1552,78 @@ mod tests {
         store
             .ingest_bytes(&payload)
             .expect("ingest canonical PoR fixture payload");
-        store
-            .sample_leaves(1, 7, &payload)
+        let trusted_root = *store.por_tree().root();
+        let seed = por_request_sample_seed_v1(&canonical_por_request(), &trusted_root)
+            .expect("derive canonical request-bound PoR seed");
+        let (flat_index, proof) = store
+            .sample_leaves(1, seed, &payload)
             .expect("sample canonical PoR fixture")
             .into_iter()
             .next()
-            .expect("one canonical PoR sample")
+            .expect("one canonical PoR sample");
+        (flat_index, proof, trusted_root)
     }
 
     fn canonical_item_map() -> Map {
-        let (flat_index, proof) = canonical_por_sample();
+        let (flat_index, proof, _) = canonical_por_sample();
         let mut map = crate::por_json::sample_to_map(flat_index, &proof);
+        map.insert(
+            "request_digest_hex".into(),
+            Value::from(hex::encode(
+                proof_stream_request_digest_v1(&canonical_por_request())
+                    .expect("digest canonical PoR request"),
+            )),
+        );
         map.insert("manifest_digest_hex".into(), Value::from("aa".repeat(32)));
         map.insert("provider_id_hex".into(), Value::from("bb".repeat(32)));
         map.insert("proof_kind".into(), Value::from("por"));
         map.insert("result".into(), Value::from("success"));
         map.insert("latency_ms".into(), Value::from(42));
+        map.insert("finalized_block_height".into(), Value::from(17_u64));
+        map.insert(
+            "finalized_block_hash_hex".into(),
+            Value::from("66".repeat(32)),
+        );
         map
+    }
+
+    fn canonical_por_request() -> ProofStreamRequestV1 {
+        ProofStreamRequestV1 {
+            manifest_digest: [0xaa; 32],
+            provider_id: [0xbb; 32],
+            proof_kind: ProofKind::Por,
+            challenge_id: None,
+            sample_count: Some(1),
+            deadline_ms: None,
+            sample_seed: Some(7),
+            expected_finalized_height: Some(17),
+            expected_finalized_block_hash: Some([0x66; 32]),
+            nonce: [0x01; 16],
+            orchestrator_job_id: None,
+            tier: None,
+        }
+    }
+
+    fn canonical_por_context() -> ProofStreamVerificationContext {
+        let (_, _, trusted_root) = canonical_por_sample();
+        ProofStreamVerificationContext::new(canonical_por_request(), Some(trusted_root))
+            .expect("canonical PoR verification context")
+    }
+
+    fn verify_por_item(value: &Value) -> Result<ProofStreamItem, String> {
+        ProofStreamItem::from_json(value, &canonical_por_context())
     }
 
     fn canonical_pdp_item_map() -> Map {
         let challenge_id = "11".repeat(32);
         let mut map = Map::new();
+        map.insert(
+            "request_digest_hex".into(),
+            Value::from(hex::encode(
+                proof_stream_request_digest_v1(&canonical_pdp_request())
+                    .expect("digest canonical PDP request"),
+            )),
+        );
         map.insert("manifest_digest_hex".into(), Value::from("22".repeat(32)));
         map.insert("provider_id_hex".into(), Value::from("33".repeat(32)));
         map.insert(
@@ -1051,6 +1648,49 @@ mod tests {
         map
     }
 
+    fn canonical_pdp_request() -> ProofStreamRequestV1 {
+        ProofStreamRequestV1 {
+            manifest_digest: [0x22; 32],
+            provider_id: [0x33; 32],
+            proof_kind: ProofKind::Pdp,
+            challenge_id: Some([0x11; 32]),
+            sample_count: None,
+            deadline_ms: None,
+            sample_seed: None,
+            expected_finalized_height: None,
+            expected_finalized_block_hash: None,
+            nonce: [0x02; 16],
+            orchestrator_job_id: None,
+            tier: None,
+        }
+    }
+
+    fn canonical_pdp_context() -> ProofStreamVerificationContext {
+        ProofStreamVerificationContext::new(canonical_pdp_request(), None)
+            .expect("canonical PDP verification context")
+    }
+
+    fn verify_pdp_item(value: &Value) -> Result<ProofStreamItem, String> {
+        ProofStreamItem::from_json(value, &canonical_pdp_context())
+    }
+
+    fn canonical_potr_request(receipt: &PotrReceiptV1) -> ProofStreamRequestV1 {
+        ProofStreamRequestV1 {
+            manifest_digest: receipt.manifest_digest,
+            provider_id: receipt.provider_id,
+            proof_kind: ProofKind::Potr,
+            challenge_id: None,
+            sample_count: None,
+            deadline_ms: Some(receipt.deadline_ms),
+            sample_seed: None,
+            expected_finalized_height: None,
+            expected_finalized_block_hash: None,
+            nonce: [0x03; 16],
+            orchestrator_job_id: receipt.request_id,
+            tier: Some(receipt.tier),
+        }
+    }
+
     fn canonical_potr_item_map() -> (Map, PotrReceiptV1) {
         let canonical_receipt =
             include_bytes!("../../../fixtures/sorafs_manifest/potr/receipt_v1.to");
@@ -1073,6 +1713,13 @@ mod tests {
             .expect("digest canonical signed PoTR fixture");
 
         let mut map = Map::new();
+        map.insert(
+            "request_digest_hex".into(),
+            Value::from(hex::encode(
+                proof_stream_request_digest_v1(&canonical_potr_request(&receipt))
+                    .expect("digest canonical PoTR request"),
+            )),
+        );
         map.insert(
             "manifest_digest_hex".into(),
             Value::from(hex::encode(receipt.manifest_digest)),
@@ -1125,6 +1772,17 @@ mod tests {
         (map, receipt)
     }
 
+    fn canonical_potr_context() -> ProofStreamVerificationContext {
+        let (_, receipt) = canonical_potr_item_map();
+        let request = canonical_potr_request(&receipt);
+        ProofStreamVerificationContext::new(request, None)
+            .expect("canonical PoTR verification context")
+    }
+
+    fn verify_potr_item(value: &Value) -> Result<ProofStreamItem, String> {
+        ProofStreamItem::from_json(value, &canonical_potr_context())
+    }
+
     #[test]
     fn item_parses_from_ndjson() {
         let manifest_digest_hex = "aa".repeat(32);
@@ -1136,10 +1794,11 @@ mod tests {
             .expect("canonical flat sample index");
         let line =
             norito::json::to_string(&Value::Object(map)).expect("serialize canonical PoR item");
-        let item = ProofStreamItem::from_ndjson(line.as_bytes()).expect("parse item");
+        let item = ProofStreamItem::from_ndjson(line.as_bytes(), &canonical_por_context())
+            .expect("parse item");
         assert_eq!(item.manifest_digest_hex, manifest_digest_hex);
         assert_eq!(item.provider_id_hex, provider_id_hex);
-        assert_eq!(item.sample_index, Some(expected_sample_index as u32));
+        assert_eq!(item.sample_index, Some(expected_sample_index));
         assert!(matches!(item.status, VerificationStatus::Success));
         assert!(item.por_proof.is_some());
         assert_eq!(item.deadline_ms, None);
@@ -1147,11 +1806,259 @@ mod tests {
     }
 
     #[test]
+    fn verification_context_requires_por_root_and_rejects_it_for_other_kinds() {
+        let (_, _, trusted_root) = canonical_por_sample();
+        let missing = ProofStreamVerificationContext::new(canonical_por_request(), None)
+            .expect_err("PoR context without a trusted root must fail closed");
+        assert!(missing.contains("requires `trusted_por_root`"));
+
+        let zero = ProofStreamVerificationContext::new(canonical_por_request(), Some([0; 32]))
+            .expect_err("zero PoR root must fail closed");
+        assert!(zero.contains("must be non-zero"));
+
+        for request in [canonical_pdp_request(), *canonical_potr_context().request()] {
+            let error = ProofStreamVerificationContext::new(request, Some(trusted_root))
+                .expect_err("non-PoR context must reject a PoR root");
+            assert!(error.contains("forbidden for PDP and PoTR"));
+        }
+    }
+
+    #[test]
+    fn por_schedule_seed_binds_every_authorized_request_selector_and_root() {
+        let request = canonical_por_request();
+        assert_eq!(
+            hex::encode(
+                proof_stream_request_digest_v1(&request)
+                    .expect("digest canonical PoR request transcript")
+            ),
+            "baf1317f27a411ef2c55fb3e13e741b4bfdc7cfd4558f7dce6273ea0a4ce3645"
+        );
+        let (_, _, trusted_root) = canonical_por_sample();
+        assert_eq!(
+            hex::encode(trusted_root),
+            "aa2114dab221b93b2aa79135e8dfe91229ce2a9e048c5db481e25ba176ec358f"
+        );
+        let canonical = por_request_sample_seed_v1(&request, &trusted_root)
+            .expect("derive canonical PoR schedule seed");
+        assert_eq!(canonical, 16_793_141_760_839_058_161);
+
+        let mut variants = Vec::new();
+        let mut changed = request;
+        changed.manifest_digest[0] ^= 0x01;
+        variants.push(changed);
+        let mut changed = request;
+        changed.provider_id[0] ^= 0x01;
+        variants.push(changed);
+        let mut changed = request;
+        changed.sample_count = Some(2);
+        variants.push(changed);
+        let mut changed = request;
+        changed.sample_seed = Some(8);
+        variants.push(changed);
+        let mut changed = request;
+        changed.expected_finalized_height = Some(18);
+        variants.push(changed);
+        let mut changed = request;
+        changed.expected_finalized_block_hash = Some([0x67; 32]);
+        variants.push(changed);
+        let mut changed = request;
+        changed.nonce[0] ^= 0x01;
+        variants.push(changed);
+        let mut changed = request;
+        changed.tier = Some(ProofTier::Warm);
+        variants.push(changed);
+
+        for changed in variants {
+            let seed = por_request_sample_seed_v1(&changed, &trusted_root)
+                .expect("changed PoR request remains valid");
+            assert_ne!(seed, canonical);
+        }
+
+        let mut changed_root = trusted_root;
+        changed_root[0] ^= 0x01;
+        assert_ne!(
+            por_request_sample_seed_v1(&request, &changed_root)
+                .expect("changed non-zero root remains structurally valid"),
+            canonical
+        );
+    }
+
+    #[test]
+    fn request_digest_binds_pdp_and_potr_specific_fields() {
+        let pdp = canonical_pdp_request();
+        let pdp_digest =
+            proof_stream_request_digest_v1(&pdp).expect("digest canonical PDP request");
+        let mut changed_pdp = pdp;
+        changed_pdp.challenge_id = Some([0x12; 32]);
+        assert_ne!(
+            proof_stream_request_digest_v1(&changed_pdp)
+                .expect("changed PDP challenge remains valid"),
+            pdp_digest
+        );
+
+        let (_, receipt) = canonical_potr_item_map();
+        let potr = canonical_potr_request(&receipt);
+        let potr_digest =
+            proof_stream_request_digest_v1(&potr).expect("digest canonical PoTR request");
+        let mut changed_deadline = potr;
+        changed_deadline.deadline_ms = Some(
+            changed_deadline
+                .deadline_ms
+                .expect("PoTR deadline")
+                .saturating_add(1),
+        );
+        assert_ne!(
+            proof_stream_request_digest_v1(&changed_deadline)
+                .expect("changed PoTR deadline remains valid"),
+            potr_digest
+        );
+        let mut changed_job = potr;
+        let mut job = changed_job.orchestrator_job_id.expect("PoTR job id");
+        job[0] ^= 0x01;
+        changed_job.orchestrator_job_id = Some(job);
+        assert_ne!(
+            proof_stream_request_digest_v1(&changed_job).expect("changed PoTR job remains valid"),
+            potr_digest
+        );
+    }
+
+    #[test]
+    fn item_rejects_internally_valid_por_proof_under_attacker_root() {
+        let (_, _, trusted_root) = canonical_por_sample();
+        let attacker_root = [0x99; 32];
+        assert_ne!(attacker_root, trusted_root);
+        let context =
+            ProofStreamVerificationContext::new(canonical_por_request(), Some(attacker_root))
+                .expect("non-zero attacker root is structurally valid context");
+
+        let error = ProofStreamItem::from_json(&Value::Object(canonical_item_map()), &context)
+            .expect_err("proof valid only under its own root must fail closed");
+        assert!(error.contains("trusted manifest root"));
+    }
+
+    #[test]
+    fn por_item_requires_the_request_finalized_cursor() {
+        for field in ["finalized_block_height", "finalized_block_hash_hex"] {
+            let mut missing = canonical_item_map();
+            missing.remove(field);
+            let error = verify_por_item(&Value::Object(missing))
+                .expect_err("missing PoR finalized cursor component must fail closed");
+            assert!(error.contains("finalized cursor"));
+        }
+
+        let mut stale = canonical_item_map();
+        stale.insert("finalized_block_height".into(), Value::from(16_u64));
+        let error = verify_por_item(&Value::Object(stale))
+            .expect_err("stale PoR finalized height must fail closed");
+        assert!(error.contains("finalized cursor"));
+    }
+
+    #[test]
+    fn item_requires_the_exact_request_digest() {
+        let mut missing = canonical_item_map();
+        missing.remove("request_digest_hex");
+        let error = verify_por_item(&Value::Object(missing))
+            .expect_err("missing request digest must fail closed");
+        assert!(error.contains("missing `request_digest_hex`"));
+
+        let mut replay = canonical_item_map();
+        replay.insert("request_digest_hex".into(), Value::from("99".repeat(32)));
+        let error = verify_por_item(&Value::Object(replay))
+            .expect_err("row from a different request must fail closed");
+        assert!(error.contains("request digest does not match"));
+    }
+
+    #[test]
+    fn item_rejects_manifest_provider_kind_and_request_identity_mismatches() {
+        let (_, _, trusted_root) = canonical_por_sample();
+        let canonical_por = canonical_item_map();
+
+        let mut wrong_manifest = canonical_por_request();
+        wrong_manifest.manifest_digest = [0xab; 32];
+        let context = ProofStreamVerificationContext::new(wrong_manifest, Some(trusted_root))
+            .expect("wrong-manifest request is structurally valid");
+        let error = ProofStreamItem::from_json(&Value::Object(canonical_por.clone()), &context)
+            .expect_err("manifest mismatch must fail closed");
+        assert!(error.contains("manifest does not match"));
+
+        let mut wrong_provider = canonical_por_request();
+        wrong_provider.provider_id = [0xbc; 32];
+        let context = ProofStreamVerificationContext::new(wrong_provider, Some(trusted_root))
+            .expect("wrong-provider request is structurally valid");
+        let error = ProofStreamItem::from_json(&Value::Object(canonical_por.clone()), &context)
+            .expect_err("provider mismatch must fail closed");
+        assert!(error.contains("provider does not match"));
+
+        let wrong_kind = ProofStreamRequestV1 {
+            manifest_digest: [0xaa; 32],
+            provider_id: [0xbb; 32],
+            proof_kind: ProofKind::Pdp,
+            challenge_id: Some([0x12; 32]),
+            sample_count: None,
+            deadline_ms: None,
+            sample_seed: None,
+            expected_finalized_height: None,
+            expected_finalized_block_hash: None,
+            nonce: [0x05; 16],
+            orchestrator_job_id: None,
+            tier: None,
+        };
+        let context = ProofStreamVerificationContext::new(wrong_kind, None)
+            .expect("wrong-kind request is structurally valid");
+        let error = ProofStreamItem::from_json(&Value::Object(canonical_por), &context)
+            .expect_err("proof-kind mismatch must fail closed");
+        assert!(error.contains("kind does not match"));
+
+        let mut wrong_challenge = canonical_pdp_request();
+        wrong_challenge.challenge_id = Some([0x12; 32]);
+        let context = ProofStreamVerificationContext::new(wrong_challenge, None)
+            .expect("wrong-challenge request is structurally valid");
+        let error = ProofStreamItem::from_json(&Value::Object(canonical_pdp_item_map()), &context)
+            .expect_err("PDP challenge mismatch must fail closed");
+        assert!(error.contains("challenge does not match"));
+
+        let (potr_map, receipt) = canonical_potr_item_map();
+        let mut wrong_job = *canonical_potr_context().request();
+        let canonical_job = receipt.request_id.expect("fixture request id");
+        let mut alternate_job = canonical_job;
+        alternate_job[0] ^= 0xff;
+        wrong_job.orchestrator_job_id = Some(alternate_job);
+        let context = ProofStreamVerificationContext::new(wrong_job, None)
+            .expect("wrong-job request is structurally valid");
+        let error = ProofStreamItem::from_json(&Value::Object(potr_map), &context)
+            .expect_err("PoTR request identity mismatch must fail closed");
+        assert!(error.contains("identity does not match"));
+    }
+
+    #[test]
+    fn rejected_item_cannot_mutate_metrics() {
+        let (_, _, trusted_root) = canonical_por_sample();
+        let mut attacker_root = trusted_root;
+        attacker_root[0] ^= 0xff;
+        let context =
+            ProofStreamVerificationContext::new(canonical_por_request(), Some(attacker_root))
+                .expect("non-zero attacker root is structurally valid context");
+        let mut metrics = ProofStreamMetrics::default();
+        let before = metrics.to_json();
+
+        match ProofStreamItem::from_json(&Value::Object(canonical_item_map()), &context) {
+            Ok(item) => {
+                metrics.record(&item);
+                panic!("attacker-root item unexpectedly verified");
+            }
+            Err(error) => assert!(error.contains("trusted manifest root")),
+        }
+        assert_eq!(metrics.to_json(), before);
+        assert_eq!(metrics.item_total, 0);
+        assert_eq!(metrics.success_total, 0);
+        assert_eq!(metrics.failure_total, 0);
+    }
+
+    #[test]
     fn item_rejects_u32_field_overflow_instead_of_wrapping() {
         for field in [
             "latency_ms",
             "deadline_ms",
-            "leaf_index_flat",
             "chunk_index",
             "segment_index",
             "leaf_index",
@@ -1159,7 +2066,7 @@ mod tests {
             let mut map = canonical_item_map();
             map.insert(field.into(), Value::from(u64::from(u32::MAX) + 1));
 
-            let error = ProofStreamItem::from_json(&Value::Object(map))
+            let error = verify_por_item(&Value::Object(map))
                 .expect_err("overflowing u32 field must be rejected");
             assert!(
                 error.contains(field) && error.contains("must fit in u32"),
@@ -1173,7 +2080,7 @@ mod tests {
         let mut map = canonical_item_map();
         map.insert("latency_ms".into(), Value::from(u32::MAX));
 
-        let item = ProofStreamItem::from_json(&Value::Object(map))
+        let item = verify_por_item(&Value::Object(map))
             .expect("u32::MAX latency must remain representable");
         assert_eq!(item.latency_ms, Some(u32::MAX));
     }
@@ -1183,7 +2090,7 @@ mod tests {
         let mut map = canonical_item_map();
         map.insert("latency_ms".into(), Value::from("42"));
 
-        let error = ProofStreamItem::from_json(&Value::Object(map))
+        let error = verify_por_item(&Value::Object(map))
             .expect_err("present non-integer bounded field must be rejected");
         assert!(error.contains("`latency_ms` must be an unsigned 32-bit integer"));
     }
@@ -1192,7 +2099,7 @@ mod tests {
     fn item_rejects_unknown_fields_and_explicit_null_optionals() {
         let mut map = canonical_item_map();
         map.insert("manifest_cid_hex".into(), Value::from("aa".repeat(32)));
-        let error = ProofStreamItem::from_json(&Value::Object(map))
+        let error = verify_por_item(&Value::Object(map))
             .expect_err("unknown response fields must fail closed");
         assert!(error.contains("unknown field `manifest_cid_hex`"));
 
@@ -1219,7 +2126,7 @@ mod tests {
         ] {
             let mut map = canonical_item_map();
             map.insert(field.into(), Value::Null);
-            let error = ProofStreamItem::from_json(&Value::Object(map))
+            let error = verify_por_item(&Value::Object(map))
                 .expect_err("optional fields must be omitted instead of encoded as null");
             assert!(
                 error.contains(field) || field == "proof",
@@ -1243,7 +2150,7 @@ mod tests {
         ] {
             let mut map = canonical_item_map();
             map.insert(field.into(), Value::from(7));
-            let error = ProofStreamItem::from_json(&Value::Object(map))
+            let error = verify_por_item(&Value::Object(map))
                 .expect_err("present optional text fields must be strings");
             assert!(
                 error.contains(field),
@@ -1256,13 +2163,13 @@ mod tests {
     fn item_requires_failure_reason_exactly_for_failed_results() {
         let mut failed = canonical_item_map();
         failed.insert("result".into(), Value::from("failure"));
-        let error = ProofStreamItem::from_json(&Value::Object(failed))
+        let error = verify_por_item(&Value::Object(failed))
             .expect_err("failed item without a reason must fail closed");
         assert!(error.contains("requires `failure_reason`"));
 
         let mut success = canonical_item_map();
         success.insert("failure_reason".into(), Value::from("provider_error"));
-        let error = ProofStreamItem::from_json(&Value::Object(success))
+        let error = verify_por_item(&Value::Object(success))
             .expect_err("successful item must not carry a failure reason");
         assert!(error.contains("must omit `failure_reason`"));
     }
@@ -1277,7 +2184,7 @@ mod tests {
         ] {
             let mut map = canonical_item_map();
             map.insert(retired.into(), Value::from("retired"));
-            let error = ProofStreamItem::from_json(&Value::Object(map))
+            let error = verify_por_item(&Value::Object(map))
                 .expect_err("retired response alias must fail closed");
             assert!(error.contains("retired field") && error.contains(retired));
         }
@@ -1285,7 +2192,7 @@ mod tests {
         for invalid_result in ["ok", "passed", "pending", "SUCCESS", " success"] {
             let mut map = canonical_item_map();
             map.insert("result".into(), Value::from(invalid_result));
-            let error = ProofStreamItem::from_json(&Value::Object(map))
+            let error = verify_por_item(&Value::Object(map))
                 .expect_err("noncanonical result must fail closed");
             assert!(error.contains("unsupported proof result"));
         }
@@ -1300,7 +2207,7 @@ mod tests {
                 .and_then(Value::as_u64)
                 .expect("canonical proof index");
             wrong_index.insert(field.into(), Value::from(current + 1));
-            let error = ProofStreamItem::from_json(&Value::Object(wrong_index))
+            let error = verify_por_item(&Value::Object(wrong_index))
                 .expect_err("outer PoR index contradiction must fail closed");
             assert!(error.contains("indices do not match"));
         }
@@ -1320,14 +2227,14 @@ mod tests {
             format!("00{}", &leaf_bytes[2..])
         };
         proof.insert("leaf_bytes_hex".into(), Value::from(replacement));
-        let error = ProofStreamItem::from_json(&Value::Object(wrong_witness))
+        let error = verify_por_item(&Value::Object(wrong_witness))
             .expect_err("internally invalid PoR witness must fail closed");
         assert!(error.contains("internally invalid proof witness"));
     }
 
     #[test]
     fn item_accepts_only_terminal_chain_backed_pdp_projection() {
-        let failed = ProofStreamItem::from_json(&Value::Object(canonical_pdp_item_map()))
+        let failed = verify_pdp_item(&Value::Object(canonical_pdp_item_map()))
             .expect("canonical committed PDP failure");
         assert_eq!(failed.proof_kind, ProofKind::Pdp);
         assert_eq!(failed.status, VerificationStatus::Failure);
@@ -1336,13 +2243,13 @@ mod tests {
             failed.outcome_identity_hex.as_deref(),
             failed.challenge_id_hex.as_deref()
         );
-        ProofStreamItem::from_json(&failed.to_json()).expect("PDP JSON roundtrip");
+        verify_pdp_item(&failed.to_json()).expect("PDP JSON roundtrip");
 
         let mut accepted = canonical_pdp_item_map();
         accepted.insert("result".into(), Value::from("success"));
         accepted.remove("failure_reason");
-        let accepted = ProofStreamItem::from_json(&Value::Object(accepted))
-            .expect("canonical committed PDP success");
+        let accepted =
+            verify_pdp_item(&Value::Object(accepted)).expect("canonical committed PDP success");
         assert_eq!(accepted.status, VerificationStatus::Success);
 
         for reason in [
@@ -1354,7 +2261,7 @@ mod tests {
         ] {
             let mut invalid = canonical_pdp_item_map();
             invalid.insert("failure_reason".into(), Value::from(reason));
-            let error = ProofStreamItem::from_json(&Value::Object(invalid))
+            let error = verify_pdp_item(&Value::Object(invalid))
                 .expect_err("non-ledger PDP terminal reason must fail closed");
             assert!(
                 error.contains("canonical committed terminal status")
@@ -1377,7 +2284,7 @@ mod tests {
         ] {
             let mut invalid = canonical_pdp_item_map();
             invalid.remove(required);
-            let error = ProofStreamItem::from_json(&Value::Object(invalid))
+            let error = verify_pdp_item(&Value::Object(invalid))
                 .expect_err("incomplete PDP provenance must fail closed");
             assert!(
                 error.contains("PDP") || error.contains(required),
@@ -1387,14 +2294,14 @@ mod tests {
 
         let mut wrong_identity = canonical_pdp_item_map();
         wrong_identity.insert("outcome_identity_hex".into(), Value::from("99".repeat(32)));
-        let error = ProofStreamItem::from_json(&Value::Object(wrong_identity))
+        let error = verify_pdp_item(&Value::Object(wrong_identity))
             .expect_err("PDP challenge/outcome identity mismatch must fail closed");
         assert!(error.contains("identity must equal"));
 
         for field in ["finalized_block_height", "committed_at_ms"] {
             let mut zero = canonical_pdp_item_map();
             zero.insert(field.into(), Value::from(0_u64));
-            let error = ProofStreamItem::from_json(&Value::Object(zero))
+            let error = verify_pdp_item(&Value::Object(zero))
                 .expect_err("zero finalized provenance must fail closed");
             assert!(error.contains("complete committed-outcome provenance"));
         }
@@ -1403,8 +2310,8 @@ mod tests {
     #[test]
     fn item_accepts_exact_chain_backed_signed_potr_projection() {
         let (map, receipt) = canonical_potr_item_map();
-        let item = ProofStreamItem::from_json(&Value::Object(map))
-            .expect("canonical committed PoTR projection");
+        let item =
+            verify_potr_item(&Value::Object(map)).expect("canonical committed PoTR projection");
         assert_eq!(item.proof_kind, ProofKind::Potr);
         assert_eq!(item.status, VerificationStatus::Success);
         assert_eq!(item.potr_receipt.as_ref(), Some(&receipt));
@@ -1419,7 +2326,7 @@ mod tests {
                 .as_str()
             )
         );
-        ProofStreamItem::from_json(&item.to_json()).expect("PoTR JSON roundtrip");
+        verify_potr_item(&item.to_json()).expect("PoTR JSON roundtrip");
     }
 
     #[test]
@@ -1442,10 +2349,10 @@ mod tests {
         for (field, value) in cases {
             let mut invalid = canonical.clone();
             invalid.insert(field.into(), value);
-            let error = ProofStreamItem::from_json(&Value::Object(invalid))
+            let error = verify_potr_item(&Value::Object(invalid))
                 .expect_err("signed PoTR contradiction must fail closed");
             assert!(
-                error.contains("PoTR"),
+                error.contains("PoTR") || error.contains("verification request"),
                 "unexpected error for `{field}`: {error}"
             );
         }
@@ -1453,7 +2360,7 @@ mod tests {
         let mut wrong_status = canonical.clone();
         wrong_status.insert("result".into(), Value::from("failure"));
         wrong_status.insert("failure_reason".into(), Value::from("gateway_error"));
-        let error = ProofStreamItem::from_json(&Value::Object(wrong_status))
+        let error = verify_potr_item(&Value::Object(wrong_status))
             .expect_err("signed receipt status contradiction must fail closed");
         assert!(error.contains("result does not match"));
 
@@ -1462,7 +2369,7 @@ mod tests {
             "committed_at_ms".into(),
             Value::from(receipt.recorded_at_ms - 1),
         );
-        let error = ProofStreamItem::from_json(&Value::Object(impossible_commit))
+        let error = verify_potr_item(&Value::Object(impossible_commit))
             .expect_err("receipt recorded after commit must fail closed");
         assert!(error.contains("after its committing block"));
     }
@@ -1481,7 +2388,7 @@ mod tests {
         ] {
             let mut invalid = canonical.clone();
             invalid.remove(required);
-            let error = ProofStreamItem::from_json(&Value::Object(invalid))
+            let error = verify_potr_item(&Value::Object(invalid))
                 .expect_err("incomplete PoTR provenance must fail closed");
             assert!(
                 error.contains("PoTR"),
@@ -1499,7 +2406,7 @@ mod tests {
             "receipt_b64".into(),
             Value::from(encoded.trim_end_matches('=')),
         );
-        let error = ProofStreamItem::from_json(&Value::Object(unpadded))
+        let error = verify_potr_item(&Value::Object(unpadded))
             .expect_err("noncanonical receipt base64 must fail closed");
         assert!(error.contains("receipt_b64"));
 
@@ -1517,7 +2424,7 @@ mod tests {
             "receipt_b64".into(),
             Value::from(BASE64_STANDARD.encode(receipt_bytes)),
         );
-        let error = ProofStreamItem::from_json(&Value::Object(noncanonical_norito))
+        let error = verify_potr_item(&Value::Object(noncanonical_norito))
             .expect_err("noncanonical Norito receipt bytes must fail closed");
         assert!(
             error.contains("receipt") || error.contains("decode"),
@@ -1529,9 +2436,9 @@ mod tests {
     fn metrics_collect_failure_breakdown() {
         let mut por = canonical_item_map();
         por.insert("latency_ms".into(), Value::from(10_u64));
-        let por = ProofStreamItem::from_json(&Value::Object(por))
-            .expect("canonical successful PoR metrics fixture");
-        let pdp = ProofStreamItem::from_json(&Value::Object(canonical_pdp_item_map()))
+        let por =
+            verify_por_item(&Value::Object(por)).expect("canonical successful PoR metrics fixture");
+        let pdp = verify_pdp_item(&Value::Object(canonical_pdp_item_map()))
             .expect("canonical failed PDP metrics fixture");
 
         let mut metrics = ProofStreamMetrics::default();

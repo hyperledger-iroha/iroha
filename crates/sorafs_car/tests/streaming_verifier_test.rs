@@ -1,7 +1,7 @@
 //! Integration tests for the SoraFS CAR streaming verifier.
 
 use sorafs_car::{
-    CarBuildPlan, compute_chunk_plan_digest_sha3,
+    CarBuildPlan, compute_chunk_plan_digest_sha3, compute_por_root,
     sorafs_chunker::ChunkProfile,
     streaming_verifier::{StreamingCarVerifier, StreamingVerifierConfig},
     verifier::CarVerifyError,
@@ -25,7 +25,11 @@ fn sample_payload() -> Vec<u8> {
     payload
 }
 
-fn build_manifest(plan: &CarBuildPlan, stats: &sorafs_car::CarWriteStats) -> ManifestV1 {
+fn build_manifest(
+    payload: &[u8],
+    plan: &CarBuildPlan,
+    stats: &sorafs_car::CarWriteStats,
+) -> ManifestV1 {
     let mut car_digest = [0u8; 32];
     car_digest.copy_from_slice(stats.car_archive_digest.as_bytes());
     ManifestBuilder::new()
@@ -33,6 +37,7 @@ fn build_manifest(plan: &CarBuildPlan, stats: &sorafs_car::CarWriteStats) -> Man
         .dag_codec(DagCodecId(stats.dag_codec))
         .chunking_from_profile(plan.chunk_profile, BLAKE3_256_MULTIHASH_CODE)
         .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
+        .por_root(compute_por_root(payload, plan).expect("derive canonical fixture PoR root"))
         .content_length(plan.content_length)
         .car_digest(car_digest)
         .car_size(stats.car_size)
@@ -55,7 +60,7 @@ fn build_valid_car() -> (Vec<u8>, ManifestV1) {
         .expect("writer")
         .write_to(&mut car_bytes)
         .expect("write car");
-    let manifest = build_manifest(&plan, &stats);
+    let manifest = build_manifest(&payload, &plan, &stats);
     (car_bytes, manifest)
 }
 
@@ -114,7 +119,7 @@ fn streaming_verifier_consumes_valid_car() {
         .expect("writer")
         .write_to(&mut car_bytes)
         .expect("write car");
-    let manifest = build_manifest(&plan, &stats);
+    let manifest = build_manifest(&payload, &plan, &stats);
 
     let mut verifier = StreamingCarVerifier::new(manifest, StreamingVerifierConfig::default());
 
@@ -173,7 +178,7 @@ fn streaming_verifier_detects_corruption() {
         .expect("writer")
         .write_to(&mut car_bytes)
         .expect("write car");
-    let manifest = build_manifest(&plan, &stats);
+    let manifest = build_manifest(&payload, &plan, &stats);
 
     let mut verifier = StreamingCarVerifier::new(manifest, StreamingVerifierConfig::default());
 
@@ -204,7 +209,7 @@ fn streaming_verifier_rejects_root_mismatch() {
         .expect("writer")
         .write_to(&mut car_bytes)
         .expect("write car");
-    let mut manifest = build_manifest(&plan, &stats);
+    let mut manifest = build_manifest(&payload, &plan, &stats);
     manifest.root_cid = vec![0u8; manifest.root_cid.len()];
 
     let mut verifier = StreamingCarVerifier::new(manifest, StreamingVerifierConfig::default());
@@ -222,7 +227,7 @@ fn streaming_verifier_rejects_car_size_mismatch() {
         .expect("writer")
         .write_to(&mut car_bytes)
         .expect("write car");
-    let mut manifest = build_manifest(&plan, &stats);
+    let mut manifest = build_manifest(&payload, &plan, &stats);
     manifest.car_size += 1;
 
     let mut verifier = StreamingCarVerifier::new(manifest, StreamingVerifierConfig::default());
@@ -250,7 +255,7 @@ fn streaming_verifier_rejects_content_length_mismatch() {
         .expect("writer")
         .write_to(&mut car_bytes)
         .expect("write car");
-    let mut manifest = build_manifest(&plan, &stats);
+    let mut manifest = build_manifest(&payload, &plan, &stats);
     manifest.content_length = manifest.content_length.saturating_add(1);
 
     let mut verifier = StreamingCarVerifier::new(manifest, StreamingVerifierConfig::default());
@@ -278,7 +283,7 @@ fn streaming_verifier_enforces_chunk_size_limit() {
         .expect("writer")
         .write_to(&mut car_bytes)
         .expect("write car");
-    let manifest = build_manifest(&plan, &stats);
+    let manifest = build_manifest(&payload, &plan, &stats);
 
     let config = StreamingVerifierConfig { max_chunk_size: 1 };
     let mut verifier = StreamingCarVerifier::new(manifest, config);
@@ -353,7 +358,7 @@ fn streaming_verifier_bounds_dag_section_buffering() {
         .expect("writer")
         .write_to(&mut car_bytes)
         .expect("write car");
-    let manifest = build_manifest(&plan, &stats);
+    let manifest = build_manifest(&payload, &plan, &stats);
 
     let config = StreamingVerifierConfig { max_chunk_size: 1 };
     let mut verifier = StreamingCarVerifier::new(manifest, config);

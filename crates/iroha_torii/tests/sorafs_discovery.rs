@@ -58,8 +58,7 @@ use iroha_data_model::{
 use iroha_futures::supervisor::Child;
 use iroha_primitives::json::Json;
 use iroha_torii::{
-    MaybeTelemetry, OnlinePeersProvider, PinPolicyDto, PinPolicyStorageClassDto,
-    RegisterPinManifestDto, Torii,
+    MaybeTelemetry, OnlinePeersProvider, RegisterPinManifestDto, Torii,
     sorafs::{
         AdmissionCheckError, AdmissionRegistry, AliasCachePolicyExt,
         api::StorageStateResponseDto,
@@ -74,7 +73,8 @@ use iroha_torii::{
 use mv::storage::StorageReadOnly;
 use norito::{decode_from_bytes, json, to_bytes};
 use sorafs_car::{
-    CarBuildPlan, ChunkStore, compute_chunk_plan_digest_sha3, por_json::proof_from_value,
+    CarBuildPlan, ChunkStore, compute_chunk_plan_digest_sha3, compute_por_root,
+    por_json::proof_from_value,
 };
 use sorafs_manifest::provider_advert::ProviderCapabilitySoranetPqV1;
 use sorafs_manifest::{
@@ -1782,6 +1782,7 @@ where
         .dag_codec(DagCodecId(MANIFEST_DAG_CODEC))
         .chunking_from_registry(ProfileId(descriptor.id.0))
         .chunk_digest_sha3_256([0xCD; 32])
+        .por_root([0xCE; 32])
         .content_length(1_024)
         .car_digest([0xAA; 32])
         .car_size(4_096)
@@ -1795,22 +1796,8 @@ where
     let mut request = RegisterPinManifestDto {
         authority,
         private_key: dm::ExposedPrivateKey(key_pair.private_key().clone()),
-        chunker_profile_id: descriptor.id.0,
-        chunker_namespace: descriptor.namespace.to_owned(),
-        chunker_name: descriptor.name.to_owned(),
-        chunker_semver: descriptor.semver.to_owned(),
-        chunker_multihash_code: descriptor.multihash_code,
-        pin_policy: PinPolicyDto {
-            min_replicas: manifest.pin_policy.min_replicas,
-            storage_class: PinPolicyStorageClassDto::Hot,
-            retention_epoch: manifest.pin_policy.retention_epoch,
-        },
-        manifest_digest_hex: manifest_digest_hex.clone(),
-        manifest_b64: Some(
-            BASE64_STANDARD.encode(manifest.encode().expect("encode canonical manifest")),
-        ),
-        chunk_digest_sha3_256_hex: hex::encode(manifest.chunk_digest_sha3_256),
-        content_length: manifest.content_length,
+        manifest_payload: BASE64_STANDARD
+            .encode(manifest.encode().expect("encode canonical manifest")),
         submitted_epoch,
         alias: None,
         successor_of_hex: None,
@@ -1827,20 +1814,32 @@ fn mutate_manifest_request_payload(
     tweak: impl FnOnce(&mut ManifestV1),
 ) {
     let bytes = BASE64_STANDARD
-        .decode(
-            request
-                .manifest_b64
-                .as_deref()
-                .expect("manifest fixture includes canonical payload")
-                .as_bytes(),
-        )
+        .decode(request.manifest_payload.as_bytes())
         .expect("decode manifest fixture payload");
     let mut manifest = sorafs_manifest::decode_manifest_v1_canonical(&bytes)
         .expect("decode canonical manifest fixture");
     tweak(&mut manifest);
     manifest.governance.council_signatures.clear();
-    request.manifest_b64 =
-        Some(BASE64_STANDARD.encode(manifest.encode().expect("encode mutated manifest fixture")));
+    request.manifest_payload =
+        BASE64_STANDARD.encode(manifest.encode().expect("encode mutated manifest fixture"));
+}
+
+fn assert_sorafs_pin_error(body: &[u8], expected_code: &str, expected_message: &str) {
+    let envelope: json::Value =
+        json::from_slice(body).expect("pin registration error must be canonical JSON");
+    assert_eq!(
+        envelope.get("code").and_then(json::Value::as_str),
+        Some(expected_code),
+        "pin registration error must expose the stable code; got {envelope:?}"
+    );
+    let message = envelope
+        .get("message")
+        .and_then(json::Value::as_str)
+        .unwrap_or_else(|| panic!("pin registration error must include a message: {envelope:?}"));
+    assert!(
+        message.contains(expected_message),
+        "pin registration error message must contain {expected_message:?}; got {message:?}"
+    );
 }
 
 fn create_manifest_setup(harness: &ToriiHarness, next_height: &mut u64) -> ManifestSetup {
@@ -1872,6 +1871,7 @@ fn create_manifest_setup_with_seed(
         .dag_codec(DagCodecId(MANIFEST_DAG_CODEC))
         .chunking_from_registry(ProfileId(descriptor.id.0))
         .chunk_digest_sha3_256([seed.wrapping_add(0x33); 32])
+        .por_root([seed.max(1); 32])
         .content_length(1_024)
         .car_digest([seed.wrapping_add(31); 32])
         .car_size(4_096)
@@ -2029,14 +2029,15 @@ fn seed_paid_pin_record_for_storage_manifest(
         ManifestRootCid::try_from_slice(&manifest.root_cid).expect("canonical manifest root CID"),
         chunker_handle_for_manifest(manifest),
         compute_chunk_plan_digest_sha3(&plan.chunks),
+        manifest.por_root,
+        plan.content_length,
         policy,
         authority.account.clone(),
         5,
         None,
         None,
         Metadata::default(),
-    )
-    .with_content_length(plan.content_length);
+    );
     record.record_pin_fee_payment(PinFeePayment {
         paid_by: authority.account.clone(),
         fee_asset_id: harness.state.gov.sorafs_pin_fee_asset_id.clone(),
@@ -2555,6 +2556,7 @@ async fn sorafs_storage_endpoints_round_trip() {
             BLAKE3_256_MULTIHASH_CODE,
         )
         .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
+        .por_root(compute_por_root(payload, &plan).expect("derive canonical fixture PoR root"))
         .content_length(payload.len() as u64)
         .car_digest(blake3::hash(payload).into())
         .car_size(payload.len() as u64)
@@ -2683,56 +2685,23 @@ async fn sorafs_storage_endpoints_round_trip() {
         .expect("fetch payload");
     assert_eq!(fetched_payload.as_slice(), payload);
 
-    let por_body = {
-        let mut map = json::Map::new();
-        map.insert(
-            "manifest_id_hex".to_owned(),
-            json::Value::from(manifest_id.clone()),
-        );
-        map.insert("count".to_owned(), json::Value::from(2u64));
-        map.insert("seed".to_owned(), json::Value::from(7u64));
-        json::Value::Object(map)
-    };
-    let por_request = Request::builder()
-        .method("POST")
-        .uri("/v1/sorafs/storage/por-sample")
-        .header("content-type", "application/json")
-        .body(Body::from(
-            json::to_vec(&por_body).expect("serialize por request"),
-        ))
-        .expect("por request");
-    let mut por_request = por_request;
-    por_request
-        .extensions_mut()
-        .insert(ConnectInfo::<SocketAddr>(SocketAddr::from((
-            [127, 0, 0, 1],
-            0,
-        ))));
-    let por_response = app
+    let retired_sample_response = app
         .clone()
-        .oneshot(por_request)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/sorafs/storage/por-sample")
+                .header("content-type", "application/json")
+                .body(Body::from("{}"))
+                .expect("retired PoR sample request"),
+        )
         .await
-        .expect("por response");
-    let por_status = por_response.status();
-    let por_bytes = BodyExt::collect(por_response.into_body())
-        .await
-        .expect("collect por body")
-        .to_bytes();
-    assert!(
-        por_status == StatusCode::OK,
-        "por sample failed: {por_status} body={}",
-        String::from_utf8_lossy(&por_bytes)
+        .expect("retired PoR sample response");
+    assert_eq!(
+        retired_sample_response.status(),
+        StatusCode::NOT_FOUND,
+        "the unauthenticated local PoR sampling route must not be mounted"
     );
-    let por_value: json::Value = json::from_slice(&por_bytes).expect("decode por response");
-    let por_samples = por_value
-        .get("samples")
-        .and_then(json::Value::as_array)
-        .expect("samples array");
-    assert!(
-        !por_samples.is_empty(),
-        "por-sample endpoint should return at least one sample"
-    );
-    let por_sample_count = por_samples.len() as u64;
 
     let mut chunk_store = ChunkStore::new();
     chunk_store.ingest_bytes(payload).expect("ingest payload");
@@ -2830,8 +2799,8 @@ async fn sorafs_storage_endpoints_round_trip() {
     assert!(state.fetch_bytes_per_sec > 0);
     assert_eq!(state.por_inflight, 0);
     assert!(
-        state.por_samples_success_total >= por_sample_count,
-        "expected scheduler to record at least {por_sample_count} successful samples"
+        state.por_samples_success_total >= proof_items as u64,
+        "expected scheduler to record at least {proof_items} successful proof-stream samples"
     );
     assert_eq!(state.por_samples_failed_total, 0);
     assert_eq!(state.fetch_utilisation_bps, 0);
@@ -2877,6 +2846,9 @@ async fn sorafs_storage_pin_uses_configured_torii_body_limit() {
             BLAKE3_256_MULTIHASH_CODE,
         )
         .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
+        .por_root(
+            compute_por_root(&payload, &plan).expect("derive canonical large-fixture PoR root"),
+        )
         .content_length(payload.len() as u64)
         .car_digest(blake3::hash(&payload).into())
         .car_size(payload.len() as u64)
@@ -2999,7 +2971,7 @@ async fn sorafs_pin_register_route_accepts_manifest() {
 }
 
 #[tokio::test]
-async fn sorafs_pin_register_route_derives_canonical_chunker_handle() {
+async fn sorafs_pin_register_route_decodes_exact_canonical_manifest_payload() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.transport.norito_rpc.enabled = true;
     cfg.torii.transport.norito_rpc.stage = actual_cfg::NoritoRpcStage::Ga;
@@ -3015,6 +2987,16 @@ async fn sorafs_pin_register_route_derives_canonical_chunker_handle() {
         descriptor.namespace, descriptor.name, descriptor.semver
     );
     let fixture = manifest_request_fixture(9, |_| {});
+    let manifest_bytes = BASE64_STANDARD
+        .decode(fixture.request.manifest_payload.as_bytes())
+        .expect("fixture manifest payload must be canonical padded base64");
+    let manifest = sorafs_manifest::decode_manifest_v1_canonical(&manifest_bytes)
+        .expect("fixture manifest payload must use the canonical ManifestV1 encoding");
+    assert_eq!(
+        manifest.encode().expect("re-encode canonical manifest"),
+        manifest_bytes,
+        "canonical ManifestV1 decode must preserve the exact submitted bytes"
+    );
     let mut next_height = 1;
     ensure_authority_registered(
         &harness,
@@ -3070,7 +3052,7 @@ async fn sorafs_pin_register_route_derives_canonical_chunker_handle() {
 }
 
 #[tokio::test]
-async fn sorafs_pin_register_rejects_chunker_descriptor_mismatch() {
+async fn sorafs_pin_register_rejects_unknown_chunker_in_canonical_manifest() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.sorafs_storage.enabled = true;
     let temp_dir = tempdir().expect("storage temp dir");
@@ -3100,10 +3082,10 @@ async fn sorafs_pin_register_rejects_chunker_descriptor_mismatch() {
         .await
         .expect("collect body")
         .to_bytes();
-    let message = String::from_utf8_lossy(&body);
-    assert!(
-        message.contains("chunker descriptor mismatch") && message.contains("field name"),
-        "error message should mention chunker name mismatch: {message}"
+    assert_sorafs_pin_error(
+        &body,
+        "sorafs_pin_manifest_payload_invalid",
+        "chunker descriptor mismatch",
     );
 }
 
@@ -3138,10 +3120,10 @@ async fn sorafs_pin_register_rejects_invalid_pin_policy() {
         .await
         .expect("collect body")
         .to_bytes();
-    let message = String::from_utf8_lossy(&body);
-    assert!(
-        message.contains("pin policy requires at least") && message.contains("replicas"),
-        "error message should mention invalid pin policy: {message}"
+    assert_sorafs_pin_error(
+        &body,
+        "sorafs_pin_manifest_payload_invalid",
+        "pin policy requires at least",
     );
 }
 
@@ -3179,10 +3161,10 @@ async fn sorafs_pin_register_rejects_invalid_alias_proof() {
         .await
         .expect("collect body")
         .to_bytes();
-    let message = String::from_utf8_lossy(&body);
-    assert!(
-        message.contains("invalid base64"),
-        "error message should mention base64 decoding failure: {message}"
+    assert_sorafs_pin_error(
+        &body,
+        "sorafs_pin_alias_proof_base64_invalid",
+        "invalid base64",
     );
 }
 
@@ -3216,6 +3198,63 @@ async fn sorafs_pin_register_rejects_invalid_json_body() {
         message.contains("invalid JSON body"),
         "error message should mention JSON decoding failure: {message}"
     );
+}
+
+#[tokio::test]
+async fn sorafs_pin_register_route_rejects_retired_request_fields() {
+    let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
+    cfg.torii.sorafs_storage.enabled = true;
+    let temp_dir = tempdir().expect("storage temp dir");
+    cfg.torii.sorafs_storage.data_dir = storage_temp_data_dir(&temp_dir);
+    let harness = build_torii_harness(&cfg);
+    let app = harness.app.clone();
+    let fixture = manifest_request_fixture(6, |_| {});
+    let canonical =
+        norito::json::to_value(&fixture.request).expect("serialize canonical request value");
+
+    for retired in [
+        "manifest_b64",
+        "manifest_digest_hex",
+        "chunker_profile_id",
+        "pin_policy",
+        "chunk_digest_sha3_256_hex",
+        "content_length",
+        "fee_payment",
+        "gas_asset_id",
+    ] {
+        let mut request_value = canonical.clone();
+        request_value
+            .as_object_mut()
+            .expect("request value is an object")
+            .insert(retired.to_owned(), json::Value::Null);
+        let payload = norito::json::to_vec(&request_value).expect("encode adversarial request");
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/sorafs/pin/register")
+                    .header("content-type", "application/json")
+                    .body(Body::from(payload))
+                    .expect("build request"),
+            )
+            .await
+            .expect("router responds");
+        assert_eq!(
+            response.status(),
+            StatusCode::BAD_REQUEST,
+            "retired field `{retired}` must fail closed"
+        );
+        let body = BodyExt::collect(response.into_body())
+            .await
+            .expect("collect response")
+            .to_bytes();
+        let message = String::from_utf8_lossy(&body);
+        assert!(
+            message.contains("unknown field") && message.contains(retired),
+            "retired field `{retired}` must be identified: {message}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -3338,10 +3377,10 @@ async fn sorafs_pin_register_rejects_malformed_successor_hex() {
         .await
         .expect("collect body")
         .to_bytes();
-    let message = String::from_utf8_lossy(&body);
-    assert!(
-        message.contains("successor_of_hex"),
-        "error message should mention successor digest parsing: {message}"
+    assert_sorafs_pin_error(
+        &body,
+        "sorafs_pin_successor_digest_invalid",
+        "successor_of_hex",
     );
 }
 
@@ -3355,7 +3394,7 @@ async fn sorafs_pin_register_rejects_malformed_manifest_payload_base64() {
     let app = harness.app.clone();
 
     let fixture = manifest_request_fixture(6, |req| {
-        req.manifest_b64 = Some("%not-base64%".into());
+        req.manifest_payload = "%not-base64%".into();
     });
 
     let payload = norito::json::to_vec(&fixture.request).expect("serialize request");
@@ -3376,10 +3415,10 @@ async fn sorafs_pin_register_rejects_malformed_manifest_payload_base64() {
         .await
         .expect("collect body")
         .to_bytes();
-    let message = String::from_utf8_lossy(&body);
-    assert!(
-        message.contains("manifest_b64") && message.contains("base64"),
-        "error message should mention manifest payload base64 parsing: {message}"
+    assert_sorafs_pin_error(
+        &body,
+        "sorafs_pin_manifest_payload_base64_invalid",
+        "manifest_payload",
     );
 }
 
@@ -3415,10 +3454,10 @@ async fn sorafs_pin_register_rejects_inert_embedded_chunk_digest() {
         .await
         .expect("collect body")
         .to_bytes();
-    let message = String::from_utf8_lossy(&body);
-    assert!(
-        message.contains("chunk-plan SHA3-256 digest must not be zero"),
-        "error message should mention inert embedded chunk digest: {message}"
+    assert_sorafs_pin_error(
+        &body,
+        "sorafs_pin_manifest_payload_invalid",
+        "chunk-plan SHA3-256 digest must not be zero",
     );
 }
 

@@ -15,7 +15,7 @@ mod js_host_parity {
         JsTransportHint, JsU64,
     };
     use sorafs_car::{
-        fetch_plan::{chunk_fetch_specs_to_json, chunk_fetch_specs_to_string},
+        fetch_plan::{chunk_fetch_plan_to_string, try_chunk_fetch_plan_to_json},
         fixtures::MultiPeerFixture,
         local_fetch::{
             self, LocalFetchOptions, LocalFetchScoreboardEntry, LocalProviderInput,
@@ -289,9 +289,8 @@ mod js_host_parity {
         let tempdir = tempdir().expect("tempdir");
 
         let plan = fixture.plan();
-        let plan_json = chunk_fetch_specs_to_json(&plan);
-        let plan_specs = plan.chunk_fetch_specs();
-        let plan_json_string = chunk_fetch_specs_to_string(&plan_specs).expect("plan json string");
+        let plan_json = try_chunk_fetch_plan_to_json(&plan).expect("canonical plan JSON");
+        let plan_json_string = chunk_fetch_plan_to_string(&plan).expect("canonical plan string");
 
         let mut local_inputs = Vec::new();
         let mut js_inputs = Vec::new();

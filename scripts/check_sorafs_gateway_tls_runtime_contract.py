@@ -107,13 +107,19 @@ def check_contract(root: Path) -> list[str]:
         "crates/iroha_torii/src/lib.rs",
         failures,
     )
-    if any(source is None for source in (controller, module, acme, xtask, torii)):
+    irohad = _read(
+        root_identity,
+        "crates/irohad/src/main.rs",
+        failures,
+    )
+    if any(source is None for source in (controller, module, acme, xtask, torii, irohad)):
         return failures
     assert controller is not None
     assert module is not None
     assert acme is not None
     assert xtask is not None
     assert torii is not None
+    assert irohad is not None
 
     test_boundary = controller.find("#[cfg(test)]")
     production_controller = (
@@ -153,6 +159,26 @@ def check_contract(root: Path) -> list[str]:
         not in torii
     ):
         failures.append("torii:missing-enabled-without-client-startup-failure")
+    for marker, failure in (
+        (
+            "pub fn with_sorafs_gateway_acme_client(",
+            "irohad:missing-runtime-acme-injection",
+        ),
+        (
+            "runtime_deps.with_sorafs_gateway_acme_client(client)",
+            "irohad:missing-acme-forwarding",
+        ),
+        (
+            "pub fn with_sorafs_gateway_compliance_feed_transport(",
+            "irohad:missing-runtime-compliance-transport-injection",
+        ),
+        (
+            "runtime_deps.with_sorafs_gateway_compliance_feed_transport(transport)",
+            "irohad:missing-compliance-transport-forwarding",
+        ),
+    ):
+        if marker not in irohad:
+            failures.append(failure)
 
     canonical_relative = "docs/source/sorafs_gateway_tls_automation.md"
     canonical_path = root_identity / canonical_relative

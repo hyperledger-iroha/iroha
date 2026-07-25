@@ -122,7 +122,11 @@ test("generateDaProofSummary normalizes native output for JS callers", () => {
   assert.equal(typeof proof.payload_len, "bigint");
   assert.deepEqual(proof.segment_leaves_hex, rawSummary.proofs[0].segment_leaves_hex);
   assert.deepEqual(proof.chunk_segments_hex, rawSummary.proofs[0].chunk_segments_hex);
-  assert.deepEqual(proof.chunk_roots_hex, rawSummary.proofs[0].chunk_roots_hex);
+  assert.equal(proof.chunk_count, Number(rawSummary.proofs[0].chunk_count));
+  assert.deepEqual(
+    proof.chunk_merkle_path_hex,
+    rawSummary.proofs[0].chunk_merkle_path_hex,
+  );
   assert.equal(proof.verified, true);
 });
 
@@ -231,7 +235,8 @@ function createNativeProofSummary() {
         leaf_bytes_b64: leafBytesB64,
         segment_leaves_hex: ["22".repeat(32)],
         chunk_segments_hex: ["33".repeat(32)],
-        chunk_roots_hex: ["44".repeat(32)],
+        chunk_count: 2n,
+        chunk_merkle_path_hex: ["44".repeat(32)],
         verified: true,
       },
     ],

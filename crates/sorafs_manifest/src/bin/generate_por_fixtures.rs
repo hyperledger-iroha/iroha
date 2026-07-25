@@ -8,10 +8,10 @@ use std::{
 
 use ed25519_dalek::{Signer as _, SigningKey};
 use hex::encode;
-use iroha_crypto::{Algorithm, KeyPair, Signature};
+use iroha_crypto::{Algorithm, KeyPair, Signature, sha256};
 use norito::{
     core::NoritoSerialize,
-    json::{Map, Value, to_string_pretty},
+    json::{Map, Value, parse_value, to_string, to_string_pretty},
 };
 use sorafs_manifest::{
     CapacityMetadataEntry, GOVERNANCE_DAG_BLOCK_VERSION_V1, GOVERNANCE_DAG_HEAD_VERSION_V1,
@@ -33,6 +33,63 @@ use sorafs_manifest::{
     validate_governance_dag_head_chain_bytes,
 };
 use soranet_pq::{HedgedRngSeed, MlDsaSuite, deterministic_chacha20_rng, sign_mldsa};
+
+const GOVERNANCE_FIXTURE_SIGNING_SEED: [u8; 32] = [0xC7; 32];
+const GOVERNANCE_SDK_INVENTORY_SCHEMA: &str =
+    "sorafs.reference_sdk.governance_fixture_inventory.v1";
+const GOVERNANCE_SDK_INVENTORY_SCOPE: &str = "governance_sdk_subset";
+const GOVERNANCE_FIXTURE_PUBLIC_KEY_HEX: &str =
+    "d5af25e204ad03d0a26e236996404f1be51a60948bcc026cd084a83690b756d3";
+const GOVERNANCE_FIXTURE_PUBLIC_KEY_FINGERPRINT_SHA256: &str =
+    "1a09a6a1b85cec77787ba6ce26f18500a2434865cee04d79c69a481888f52fff";
+
+#[derive(Clone, norito::JsonSerialize)]
+struct GovernanceSdkPayloadInventoryEntryV1 {
+    path: String,
+    kind: String,
+    encoding: String,
+    signature_expectation: String,
+    byte_length: u64,
+    sha256: String,
+}
+
+#[derive(Clone, norito::JsonSerialize)]
+struct GovernanceSdkOutcomeInventoryEntryV1 {
+    path: String,
+    scenario: String,
+    status: String,
+    code: String,
+    byte_length: u64,
+    sha256: String,
+}
+
+#[derive(Clone, norito::JsonSerialize)]
+struct GovernanceSdkUnsignedInventoryV1 {
+    schema: String,
+    scope: String,
+    signing_domain: String,
+    payloads: Vec<GovernanceSdkPayloadInventoryEntryV1>,
+    outcomes: Vec<GovernanceSdkOutcomeInventoryEntryV1>,
+}
+
+#[derive(norito::JsonSerialize)]
+struct GovernanceSdkInventorySignatureV1 {
+    algorithm: String,
+    key_usage: String,
+    public_key_hex: String,
+    public_key_fingerprint_sha256: String,
+    signature_hex: String,
+}
+
+#[derive(norito::JsonSerialize)]
+struct GovernanceSdkFixtureInventoryV1 {
+    schema: String,
+    scope: String,
+    signing_domain: String,
+    payloads: Vec<GovernanceSdkPayloadInventoryEntryV1>,
+    outcomes: Vec<GovernanceSdkOutcomeInventoryEntryV1>,
+    signature: GovernanceSdkInventorySignatureV1,
+}
 
 fn main() -> Result<(), Box<dyn Error>> {
     let por_dir = PathBuf::from("fixtures/sorafs_manifest/por");
@@ -287,6 +344,30 @@ fn main() -> Result<(), Box<dyn Error>> {
         .enumerate()
         .map(|(index, bytes)| (bytes.as_slice(), format!("dag_block_{index}_v1.to")))
         .collect::<Vec<_>>();
+    let outcome = sorafs_manifest::validate_governance_dag_block_bytes(
+        &block_bytes[0],
+        "dag_block_0_v1.to",
+        None,
+        123,
+    );
+    write_expected_success_validation_outcome(
+        &gov_dir.join("dag_block_validation_outcome_v1.json"),
+        &outcome,
+    )?;
+
+    let expected_mismatch_cid = [0x7F; 32];
+    let outcome = sorafs_manifest::validate_governance_dag_block_bytes(
+        &block_bytes[0],
+        "governance-dag-block.to",
+        Some(&expected_mismatch_cid),
+        123,
+    );
+    write_expected_validation_outcome(
+        &gov_dir.join("dag_block_cid_mismatch_validation_outcome_v1.json"),
+        &outcome,
+        "SFS-GOV-004",
+    )?;
+
     let outcome =
         validate_governance_dag_head_chain_bytes(&head_bytes, "dag_head_v1.to", &block_inputs, 123);
     if !outcome.is_ok() {
@@ -399,6 +480,30 @@ fn main() -> Result<(), Box<dyn Error>> {
         &outcome,
         "SFS-NORITO-001",
     )?;
+
+    let reordered_inputs = [
+        (
+            block_bytes[1].as_slice(),
+            "governance-dag-block-0.to".to_owned(),
+        ),
+        (
+            block_bytes[0].as_slice(),
+            "governance-dag-block-1.to".to_owned(),
+        ),
+    ];
+    let outcome = validate_governance_dag_head_chain_bytes(
+        &head_bytes,
+        "governance-dag-head.to",
+        &reordered_inputs,
+        123,
+    );
+    write_expected_validation_outcome(
+        &gov_dir.join("dag_head_reordered_validation_outcome_v1.json"),
+        &outcome,
+        "SFS-GOV-006",
+    )?;
+
+    write_governance_sdk_fixture_inventory(&gov_dir)?;
 
     Ok(())
 }
@@ -513,7 +618,7 @@ fn governance_dag_node(
         payload,
         publisher_signature: empty_governance_ed25519_signature(),
     };
-    let signing_key = SigningKey::from_bytes(&[0xC7; 32]);
+    let signing_key = SigningKey::from_bytes(&GOVERNANCE_FIXTURE_SIGNING_SEED);
     let signature = signing_key.sign(&node.signature_payload_bytes()?);
     node.publisher_signature = GovernanceLogSignatureV1 {
         algorithm: GovernanceSignatureAlgorithm::Ed25519,
@@ -549,7 +654,7 @@ fn governance_dag_block(
         node,
         block_signature: empty_governance_ed25519_signature(),
     };
-    let signing_key = SigningKey::from_bytes(&[0xC7; 32]);
+    let signing_key = SigningKey::from_bytes(&GOVERNANCE_FIXTURE_SIGNING_SEED);
     let signature = signing_key.sign(&block.signature_payload_bytes()?);
     block.block_signature = GovernanceLogSignatureV1 {
         algorithm: GovernanceSignatureAlgorithm::Ed25519,
@@ -576,7 +681,7 @@ fn governance_dag_head(
         checkpoint_cid: None,
         head_signature: empty_governance_ed25519_signature(),
     };
-    let signing_key = SigningKey::from_bytes(&[0xC7; 32]);
+    let signing_key = SigningKey::from_bytes(&GOVERNANCE_FIXTURE_SIGNING_SEED);
     let signature = signing_key.sign(&head.signature_payload_bytes()?);
     head.head_signature = GovernanceLogSignatureV1 {
         algorithm: GovernanceSignatureAlgorithm::Ed25519,
@@ -602,6 +707,21 @@ where
     Ok(())
 }
 
+fn write_expected_success_validation_outcome(
+    path: &Path,
+    outcome: &sorafs_manifest::ValidationOutcomeV1,
+) -> Result<(), Box<dyn Error>> {
+    if !outcome.is_ok() || outcome.code != "SFS-OK-000" {
+        return Err(format!(
+            "generated positive governance DAG fixture returned {}, expected SFS-OK-000",
+            outcome.code
+        )
+        .into());
+    }
+    fs::write(path, format!("{}\n", to_string_pretty(outcome)?))?;
+    Ok(())
+}
+
 fn write_expected_validation_outcome(
     path: &Path,
     outcome: &sorafs_manifest::ValidationOutcomeV1,
@@ -616,6 +736,222 @@ fn write_expected_validation_outcome(
     }
     fs::write(path, format!("{}\n", to_string_pretty(outcome)?))?;
     Ok(())
+}
+
+fn write_governance_sdk_fixture_inventory(gov_dir: &Path) -> Result<(), Box<dyn Error>> {
+    const PAYLOAD_SPECS: [(&str, &str, &str, &str); 17] = [
+        (
+            "dag_block_0_v1.json",
+            "governance_dag_block",
+            "json",
+            "valid",
+        ),
+        (
+            "dag_block_0_v1.to",
+            "governance_dag_block",
+            "norito",
+            "valid",
+        ),
+        (
+            "dag_block_1_bad_predecessor_v1.json",
+            "governance_dag_block",
+            "json",
+            "valid",
+        ),
+        (
+            "dag_block_1_bad_predecessor_v1.to",
+            "governance_dag_block",
+            "norito",
+            "valid",
+        ),
+        (
+            "dag_block_1_v1.json",
+            "governance_dag_block",
+            "json",
+            "valid",
+        ),
+        (
+            "dag_block_1_v1.to",
+            "governance_dag_block",
+            "norito",
+            "valid",
+        ),
+        (
+            "dag_block_bad_signature_v1.json",
+            "governance_dag_block",
+            "json",
+            "invalid_signature",
+        ),
+        (
+            "dag_block_bad_signature_v1.to",
+            "governance_dag_block",
+            "norito",
+            "invalid_signature",
+        ),
+        (
+            "dag_block_trailing_bytes_v1.to",
+            "governance_dag_block",
+            "norito",
+            "noncanonical_trailing_bytes",
+        ),
+        (
+            "dag_head_bad_predecessor_v1.json",
+            "governance_dag_head",
+            "json",
+            "valid",
+        ),
+        (
+            "dag_head_bad_predecessor_v1.to",
+            "governance_dag_head",
+            "norito",
+            "valid",
+        ),
+        (
+            "dag_head_bad_signature_v1.json",
+            "governance_dag_head",
+            "json",
+            "invalid_signature",
+        ),
+        (
+            "dag_head_bad_signature_v1.to",
+            "governance_dag_head",
+            "norito",
+            "invalid_signature",
+        ),
+        ("dag_head_v1.json", "governance_dag_head", "json", "valid"),
+        ("dag_head_v1.to", "governance_dag_head", "norito", "valid"),
+        ("node_v1.json", "governance_log_node", "json", "valid"),
+        ("node_v1.to", "governance_log_node", "norito", "valid"),
+    ];
+    const OUTCOME_SPECS: [(&str, &str, &str, &str); 8] = [
+        (
+            "dag_block_bad_signature_validation_outcome_v1.json",
+            "block_bad_signature",
+            "Error",
+            "SFS-SIG-006",
+        ),
+        (
+            "dag_block_cid_mismatch_validation_outcome_v1.json",
+            "block_expected_cid_mismatch",
+            "Error",
+            "SFS-GOV-004",
+        ),
+        (
+            "dag_block_trailing_bytes_validation_outcome_v1.json",
+            "block_noncanonical_trailing_bytes",
+            "Error",
+            "SFS-NORITO-001",
+        ),
+        (
+            "dag_block_validation_outcome_v1.json",
+            "block_valid",
+            "Ok",
+            "SFS-OK-000",
+        ),
+        (
+            "dag_head_bad_predecessor_validation_outcome_v1.json",
+            "head_bad_predecessor",
+            "Error",
+            "SFS-GOV-006",
+        ),
+        (
+            "dag_head_bad_signature_validation_outcome_v1.json",
+            "head_bad_signature",
+            "Error",
+            "SFS-SIG-007",
+        ),
+        (
+            "dag_head_reordered_validation_outcome_v1.json",
+            "head_reordered_blocks",
+            "Error",
+            "SFS-GOV-006",
+        ),
+        (
+            "dag_head_validation_outcome_v1.json",
+            "head_valid",
+            "Ok",
+            "SFS-OK-000",
+        ),
+    ];
+
+    let mut payloads = Vec::with_capacity(PAYLOAD_SPECS.len());
+    for (path, kind, encoding, signature_expectation) in PAYLOAD_SPECS {
+        let (byte_length, digest) = governance_sdk_fixture_binding(&gov_dir.join(path))?;
+        payloads.push(GovernanceSdkPayloadInventoryEntryV1 {
+            path: path.to_owned(),
+            kind: kind.to_owned(),
+            encoding: encoding.to_owned(),
+            signature_expectation: signature_expectation.to_owned(),
+            byte_length,
+            sha256: digest,
+        });
+    }
+
+    let mut outcomes = Vec::with_capacity(OUTCOME_SPECS.len());
+    for (path, scenario, status, code) in OUTCOME_SPECS {
+        let (byte_length, digest) = governance_sdk_fixture_binding(&gov_dir.join(path))?;
+        outcomes.push(GovernanceSdkOutcomeInventoryEntryV1 {
+            path: path.to_owned(),
+            scenario: scenario.to_owned(),
+            status: status.to_owned(),
+            code: code.to_owned(),
+            byte_length,
+            sha256: digest,
+        });
+    }
+
+    let unsigned = GovernanceSdkUnsignedInventoryV1 {
+        schema: GOVERNANCE_SDK_INVENTORY_SCHEMA.to_owned(),
+        scope: GOVERNANCE_SDK_INVENTORY_SCOPE.to_owned(),
+        signing_domain: GOVERNANCE_SDK_INVENTORY_SCHEMA.to_owned(),
+        payloads: payloads.clone(),
+        outcomes: outcomes.clone(),
+    };
+    let unsigned_value = parse_value(&to_string(&unsigned)?)?;
+    let canonical_unsigned = to_string(&unsigned_value)?;
+    let mut signing_payload =
+        Vec::with_capacity(GOVERNANCE_SDK_INVENTORY_SCHEMA.len() + 1 + canonical_unsigned.len());
+    signing_payload.extend_from_slice(GOVERNANCE_SDK_INVENTORY_SCHEMA.as_bytes());
+    signing_payload.push(0);
+    signing_payload.extend_from_slice(canonical_unsigned.as_bytes());
+
+    // This seed is checked-in fixture material only. Production release keys
+    // remain runtime-only and never pass through this generator.
+    let signing_key = SigningKey::from_bytes(&GOVERNANCE_FIXTURE_SIGNING_SEED);
+    let public_key = signing_key.verifying_key().to_bytes();
+    let public_key_hex = encode(public_key);
+    let public_key_fingerprint_sha256 = encode(sha256(public_key));
+    if public_key_hex != GOVERNANCE_FIXTURE_PUBLIC_KEY_HEX
+        || public_key_fingerprint_sha256 != GOVERNANCE_FIXTURE_PUBLIC_KEY_FINGERPRINT_SHA256
+    {
+        return Err("Governance DAG fixture key identity changed unexpectedly".into());
+    }
+    let signature_hex = encode(signing_key.sign(&signing_payload).to_bytes());
+
+    let inventory = GovernanceSdkFixtureInventoryV1 {
+        schema: GOVERNANCE_SDK_INVENTORY_SCHEMA.to_owned(),
+        scope: GOVERNANCE_SDK_INVENTORY_SCOPE.to_owned(),
+        signing_domain: GOVERNANCE_SDK_INVENTORY_SCHEMA.to_owned(),
+        payloads,
+        outcomes,
+        signature: GovernanceSdkInventorySignatureV1 {
+            algorithm: "ed25519".to_owned(),
+            key_usage: "test_only_governance_fixture".to_owned(),
+            public_key_hex,
+            public_key_fingerprint_sha256,
+            signature_hex,
+        },
+    };
+    fs::write(
+        gov_dir.join("sdk_validation_inventory_v1.json"),
+        format!("{}\n", to_string_pretty(&inventory)?),
+    )?;
+    Ok(())
+}
+
+fn governance_sdk_fixture_binding(path: &Path) -> Result<(u64, String), Box<dyn Error>> {
+    let bytes = fs::read(path)?;
+    Ok((u64::try_from(bytes.len())?, encode(sha256(&bytes))))
 }
 
 fn challenge_json(challenge: &PorChallengeV1) -> Value {

@@ -4,7 +4,7 @@ direction: rtl
 source: docs/source/sorafs_ai_prescreen_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 2d77da68f1807bc7a678f374c7022fd34ed7f5a8338c64cebd43f7cf96040ec2
+source_hash: e03fe0e0df92a288512769710ac2f0739440dc514e604ad5da913b33cabdd9f2
 source_last_modified: "2026-07-06T20:15:01.175288+00:00"
 translation_last_reviewed: 2026-07-05
 source_mtime: "2026-07-06T20:15:01.175288+00:00"
@@ -17,13 +17,14 @@ source_mtime: "2026-07-06T20:15:01.175288+00:00"
 SFM-4a defines deterministic AI pre-screening before public SoraFS gateway
 publication. The repository currently ships the reproducibility, corpus, local
 model-registry admission/checkpointing, local deterministic screening-result
-and moderation-ballot evidence checkpointing, quarantine review/release
-evidence checkpointing, local encrypted quarantine object-store/API/CLI
+and quarantine evidence checkpointing, quarantine review/release evidence
+checkpointing, local encrypted quarantine object-store/API/CLI
 and operator-panel read-model foundation with a
 `sorafs_moderation_operator` role gate,
-reviewed-quarantine appeal finance handoff and appeal-ballot API/CLI tooling,
+reviewed-quarantine appeal finance handoff tooling,
+finalized-chain moderation projections and orchestration,
 payload-free bridge planning from the operator-panel read model,
-local operator workflow service readback and signed mutation forwarding,
+local operator workflow service readback and quarantine mutation forwarding,
 local browser operator UI,
 local payload-free juror notification planning,
 local payload-free juror notification delivery manifests,
@@ -269,21 +270,23 @@ Implemented locally:
   protects
   `GET /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/operator-panel?limit=N`,
   which bundles the quarantine record, encrypted-object metadata status,
-  matching local appeal ballots, operator routes, and next-action hints without
-  returning payload bytes.
+  matching finalized-chain appeal/case projections, operator routes, and
+  next-action hints without returning payload bytes.
 - `iroha sorafs moderation screening submit --input screening-result.json`
   submits deterministic local runner output through the signed Torii screening
   admission endpoint, while `iroha sorafs moderation screening list --limit N`
   prints bounded local screening-record readback JSON.
-- `sorafs_node::NodeHandle` maintains the local moderation ballot lifecycle for
-  appeal cases, accepts governance-event-producing commit/reveal/tally payloads
-  bound to `SoraFsModerationBallotContextV1`, and exposes bounded ballot and
-  ballot-event readback.
+- Native moderation ISIs, queries, and committed events are the sole authority
+  for appeal, eligibility, sortition, assignment, activation, commit,
+  challenge, reveal, finalization, and no-show state. The finalized-chain
+  orchestrator reconciles those projections, submits governed maintenance
+  transactions, and delivers terminal settlement/publication work through
+  durable idempotent boundaries.
 - `iroha::client` and `iroha sorafs moderation ballots
-  list|get|events|commit|reveal|tally` wrap the local ballot readback and
-  signed committee lifecycle endpoints. Commit and reveal commands validate
-  JSON or Norito payloads against the data-model validators, then submit the
-  canonical Norito bytes to Torii.
+  list|get|events|commit|reveal|tally` read finalized chain projections and
+  typed committed events or submit exact caller-signed, one-instruction native
+  transactions. Commit and reveal commands reject caller timestamps and juror
+  identities that do not match the transaction authority.
 - `iroha::client` and `iroha sorafs transparency
   cycles|explorer|tokens|source-entry` wrap the local transparency readback
   and signed source-entry ingest endpoints. Operator tooling can list
@@ -307,16 +310,10 @@ Implemented locally:
   --input appeal-handoff.json` wraps that local handoff endpoint. The command
   validates the 16-byte quarantine id, rejects empty payload files,
   canonicalizes JSON before signing, and prints the handoff response.
-- Torii also exposes canonical-authenticated
-  `POST /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/appeal-ballot`
-  to verify a confirmed appeal-finance asset-lock deposit, require the
-  deterministic reviewed-quarantine handoff evidence hash, and announce the
-  existing local moderation ballot. Pending/released quarantine records and
-  deposits missing the handoff evidence hash fail closed.
-- `iroha sorafs moderation quarantine appeal-ballot --quarantine-id HEX
-  --input appeal-ballot.json` wraps that local bridge endpoint. The command
-  validates the 16-byte quarantine id, rejects empty payload files,
-  canonicalizes JSON before signing, and prints the announced ballot response.
+- After the payer submits the handoff's native `OpenAssetLock` instruction and
+  ledger confirmation is available, appeal intake uses an exact
+  caller-signed `SubmitSorafsModerationAppeal` transaction. No quarantine-local
+  compatibility endpoint or command is retained.
 - `iroha sorafs moderation quarantine list|review|release` wraps the local
   quarantine readback and transition endpoints. Review and release commands use
   canonical Iroha request signing, validate 16-byte quarantine ids, default the
@@ -331,8 +328,9 @@ Implemented locally:
   `iroha sorafs moderation quarantine bridge-plan --quarantine-id HEX
   [--limit N]` reads the same operator-panel view and emits a
   `sorafs.moderation.quarantine.bridge_plan.v1` JSON plan with ordered
-  handoff, ballot, tally, and transparency CLI actions while rejecting any
-  response that unexpectedly contains payload bytes.
+  handoff, native moderation transaction, finalized-read, and transparency CLI
+  actions while rejecting any response that unexpectedly contains payload
+  bytes.
   `iroha sorafs moderation quarantine operator-serve
   [--listen HOST:PORT] [--limit N] [--max-body-bytes N]` runs a local
   payload-free HTTP operator workflow service with health/status,
@@ -342,7 +340,7 @@ Implemented locally:
   upstream operator-panel JSON unexpectedly includes `payload_b64`. The same
   service also exposes a payload-free juror notification plan route that derives
   per-juror commit/reveal status, signing accounts, Torii routes, and CLI
-  command templates from the operator-panel ballot view without embedding
+  command templates from finalized-chain case projections without embedding
   private commit or reveal payloads. A companion payload-free juror notification
   delivery manifest route emits deterministic operator-managed delivery records
   with dedup keys, subjects, message bodies, signed Torii routes, and CLI
@@ -363,13 +361,11 @@ Implemented locally:
   missing commit/reveal jurors, next actions, and tally-ready request templates
   without embedding private juror payloads. It also
   exposes POST forwarding routes for
-  review, release,
-  appeal-handoff, appeal-ballot, and ballot-tally requests; those routes require
-  JSON bodies, reject `payload_b64`, canonicalize appeal payloads before
-  forwarding, and use the configured CLI account as the default review/release
-  actor when omitted. Ballot-tally forwarding accepts explicit
-  `case_id`/`round_id` fields or derives the first ballot reference from the
-  payload-free operator-panel view.
+  review, release, and appeal-handoff requests; those routes require JSON
+  bodies, reject `payload_b64`, canonicalize appeal payloads before forwarding,
+  and use the configured CLI account as the default review/release actor when
+  omitted. Native moderation actions are never synthesized from operator
+  service JSON.
   `iroha sorafs moderation quarantine operator-canary --operator-url URL
   --quarantine-id HEX [--limit N] [--out PATH]` probes deployed operator
   workflow health/status, browser UI, operator-panel, bridge-plan, juror-plan,
@@ -423,7 +419,7 @@ The production service remains a staged rollout target:
 | AI runner | Executes approved models deterministically and emits model scores. | Deterministic local `run-local` CLI, bounded `runner-serve` HTTP mode, production unary `runner-grpc-serve` gRPC service, supervised HTTP runner bundle, and `runner-canary` rollout evidence tooling emit/operate Torii-compatible screening results. |
 | Committee orchestrator | Aggregates model outputs and yields `pass`, `quarantine`, or `escalate`. | Threshold schema, calibration report, local screening-result admission, local `committee-run` quorum aggregation, locked-manifest `committee-serve` HTTP aggregation, supervised committee bundle generation, `committee-canary` rollout evidence tooling, local moderation-ballot lifecycle/readback, and client/CLI ballot tooling exist. |
 | Quarantine store | Stores flagged content and metadata under moderation access controls. | Local quarantine evidence records, encrypted local payload envelopes, role-gated object store/read, operator-panel read model, review/release API transitions, local CLI queue/review/release/operator-panel commands, and local HTTP operator workflow service with payload-free readback, juror notification planning and delivery manifests, commit/reveal coordination status, a browser operator UI, operator workflow canary evidence tooling, and signed review/release forwarding exist. |
-| Moderation bridge | Hands escalations to appeal and transparency workflows. | Reviewed-quarantine appeal handoff and confirmed-deposit appeal-ballot API/CLI, operator-service POST forwarding for appeal handoff/ballot/tally, local juror notification planning, delivery manifests, outbox/webhook delivery CLI automation, and transport canary tooling, local commit/reveal coordination status, local commit/reveal executor CLI automation plus supervised executor job bundle generation and executor canary evidence tooling, appeal pricing/deposit/readback client/CLI tooling, and transparency readback/source-entry client/CLI tooling exist; captured deployed juror notification transport service rollout evidence and deployed executor job rollout evidence remain live rollout gates. |
+| Moderation bridge | Hands escalations to appeal and transparency workflows. | Reviewed-quarantine appeal handoff, finalized-chain moderation projections/orchestration, caller-signed native moderation submission, juror notification planning, delivery manifests, outbox/webhook delivery CLI automation and transport canary tooling, commit/reveal coordination, supervised executor tooling, appeal pricing/deposit readback, and transparency readback/source-entry tooling exist; durable production boundary deployment and live rollout evidence remain gates. |
 
 ## Data Model
 
@@ -689,9 +685,11 @@ iroha sorafs appeals finance weekly-rollups --limit 25
 iroha sorafs appeals finance settlement-receipts --limit 25
 ```
 
-The ballot commands operate on the local Torii moderation ballot lifecycle.
-Commit and reveal payloads can be JSON or Norito, but are always validated and
-submitted as canonical Norito bytes. The `registry-serve` command exposes the
+The moderation ballot commands read finalized-chain projections and committed
+events. Commit and reveal payloads can be JSON or Norito, but are validated,
+embedded in the matching native instruction, signed by the configured
+transaction authority, and submitted as a versioned Norito
+`SignedTransaction`. The `registry-serve` command exposes the
 model-registry admission and bounded snapshot surface as a standalone persistent
 HTTP service backed by a Norito checkpoint; admission requests use base64
 canonical Norito manifests and remain payload-free. The `runner-serve` command exposes the
@@ -718,7 +716,8 @@ Review/release and object store/read calls must be signed by an account
 assigned the `sorafs_moderation_operator` role. The operator-panel command
 reads the local payload-free workflow view for one quarantine record, and the
 bridge-plan command converts that view into deterministic next CLI actions for
-handoff, ballot, tally, and transparency automation. The operator-serve command
+handoff, caller-signed native moderation, finalized readback, and transparency
+automation. The operator-serve command
 serves a browser operator UI at `/` and
 `/v1/sorafs/moderation/operator-panel/ui`, exposes the same payload-free
 operator-panel and bridge-plan views over a local HTTP service for operator
@@ -727,17 +726,15 @@ reveal readiness with signed Torii routes and CLI command templates, adds a
 payload-free juror-notifications view that emits deterministic delivery records
 for operator-managed mail/webhook/scheduler dispatch, adds a payload-free
 commit-reveal-status view that reports quorum readiness, missing jurors, and
-tally-ready request templates, and forwards signed review, release,
-appeal-handoff, appeal-ballot, and
-ballot-tally POSTs to Torii after rejecting payload bytes. Ballot-tally
-POSTs can carry explicit `case_id`/`round_id` fields or derive the first ballot
-reference from the payload-free operator-panel view before submitting the signed
-tally request. `iroha sorafs moderation ballots execute --status PATH
+tally-ready native-transaction templates, and forwards only signed local
+quarantine review, release, and appeal-handoff POSTs after rejecting payload
+bytes. It has no JSON mutation route for appeal intake, commit, reveal, or
+finalization. `iroha sorafs moderation ballots execute --status PATH
 [--commit-payload PATH...] [--reveal-payload PATH...] [--submit-tally]` reads
 the payload-free coordination status, validates local commit/reveal payload
-files against the pending juror lists, submits only pending signed
-commit/reveal/tally requests through Torii, and emits response status/body
-hashes without printing private reveal payload internals. `iroha sorafs
+files against the pending juror lists and configured signer identity, submits
+only pending caller-signed native transactions through Torii, and emits
+transaction hashes without printing private reveal payload internals. `iroha sorafs
 moderation ballots executor-bundle --status PATH --bundle-out DIR
 [--commit-payload PATH...] [--reveal-payload PATH...] [--submit-tally]` now
 generates a payload-free scheduled executor job bundle with `executor.env`,
@@ -757,14 +754,14 @@ operator-panel, bridge-plan, juror-plan, juror-notifications, and
 commit-reveal-status routes for expected schemas and payload-free responses.
 The quarantine appeal-handoff command operates on reviewed local quarantine
 records and returns a quote-bound deposit request plus native asset-lock
-instruction. The quarantine appeal-ballot command verifies a confirmed
-handoff-bound deposit and announces the existing local moderation ballot. The
-appeal pricing and finance commands operate on the local Torii appeal handoff
-surface. Pricing quote, handoff, appeal-ballot, and finance mutation commands
-read JSON payload files, reject empty payloads, and re-encode JSON canonically
-before submission; finance mutation, deposit readback, handoff, and
-appeal-ballot calls use canonical Iroha request signing. These commands do not
-replace the planned automated moderation bridge.
+instruction. Once the deposit is committed, appeal intake is an exact
+caller-signed native moderation transaction; no JSON compatibility bridge is
+available. The appeal pricing and finance commands operate on the Torii appeal
+handoff surface. Pricing quote, handoff, and finance mutation commands read
+JSON payload files, reject empty payloads, and re-encode JSON canonically
+before submission; finance mutation, deposit readback, and handoff calls use
+canonical Iroha request signing. These commands do not replace the
+finalized-chain moderation orchestrator or its durable downstream boundaries.
 
 ## Observability
 
@@ -809,9 +806,9 @@ live governance-evidence rollout and production quarantine workflow.
   install/run the generated commit/reveal executor job bundles, run the shipped
   executor canary against captured payload-free execution summaries, and publish
   transparency entries from the
-  shipped reviewed-quarantine appeal handoff, appeal-ballot, local juror-plan,
-  local juror-notifications delivery/canary, commit-reveal-status, and ballots
-  executor paths.
+  shipped reviewed-quarantine appeal handoff, finalized moderation events,
+  juror-plan, juror-notifications delivery/canary, commit-reveal-status, and
+  caller-signed native executor paths.
 - Wire live quarantine/escalation producers into the shipped Governance DAG and
   transparency source-entry tooling.
 - Add end-to-end tests covering ingest, quarantine, review, release, appeal, and
@@ -848,20 +845,16 @@ Completed local foundations:
   admission and bounded readback.
 - Provide local client and CLI commands for model-registry admission/readback,
   including canonical Norito conversion from JSON or Norito manifest input.
-- Provide local client and CLI commands for moderation ballot list/get/events
-  readback plus signed commit/reveal/tally submission, including canonical
-  Norito conversion from JSON or Norito ballot payload input.
-- Provide local operator-service signed ballot-tally forwarding from explicit
-  `case_id`/`round_id` input or the first payload-free operator-panel ballot
-  reference.
+- Provide client and CLI commands for finalized moderation case/event readback
+  plus exact caller-signed native commit/reveal/finalization transactions,
+  including canonical Norito conversion from JSON or Norito payload input.
 - Provide local client and CLI commands for appeal pricing quote/config/status,
   asset-lock deposit create/confirm/get/settle/reconcile/submit-settlement,
   and bounded finance report, weekly-rollup, and settlement-receipt readback.
 - Provide local Torii, client, and CLI reviewed-quarantine appeal handoff that
   derives quote-bound deposit requests and native asset-lock instructions.
-- Provide local Torii, client, and CLI reviewed-quarantine appeal-ballot bridge
-  tooling that carries handoff-bound confirmed deposits into local ballot
-  announcements.
+- Require handoff-bound confirmed deposits to enter moderation only through
+  caller-signed `SubmitSorafsModerationAppeal` transactions.
 - Persist deterministic local screening-result and pending-quarantine evidence
   snapshots, with Torii admission/readback endpoints for screening results and
   quarantine records.
@@ -876,16 +869,18 @@ Completed local foundations:
 - Provide local CLI commands for quarantine queue listing, review, release, and
   encrypted object store/readback.
 - Provide local Torii, client, and CLI operator-panel readback that bundles a
-  quarantine record, encrypted-object metadata status, matching local ballots,
-  operator routes, and next-action hints without payload bytes.
+  quarantine record, encrypted-object metadata status, matching finalized
+  moderation cases, operator routes, and next-action hints without payload
+  bytes.
 - Provide local CLI bridge planning from the operator-panel read model into
-  ordered payload-free handoff, ballot, tally, and transparency actions.
+  ordered payload-free handoff, native moderation, finalized readback, and
+  transparency actions.
 - Provide local payload-free HTTP operator workflow service routes for health,
   operator-panel readback, and bridge-plan generation backed by the signed
   Torii operator-panel view.
 - Provide local payload-free juror notification planning from the operator-panel
-  ballot view into per-juror commit/reveal status, signed Torii routes, and CLI
-  command templates.
+  finalized-case view into per-juror commit/reveal status, native Torii routes,
+  and CLI command templates.
 - Provide local payload-free juror notification delivery manifests with
   deterministic dedup keys and operator-managed dispatch records for external
   mail/webhook/scheduler transports.
@@ -897,8 +892,8 @@ Completed local foundations:
   readiness, missing-juror lists, and tally-ready request templates.
 - Provide local commit/reveal executor CLI automation that consumes the
   payload-free coordination status, submits only pending local commit/reveal
-  payload files, can submit ready tally requests, and emits payload-free
-  response hashes.
+  payload files as caller-signed native transactions, can submit governed
+  finalization transactions, and emits payload-free transaction hashes.
 - Provide local supervised commit/reveal executor job bundle generation with
   `executor.env`, executable `run.sh`, systemd service/timer files, launchd
   plist, README, and payload-free metadata without copying private payload
@@ -908,9 +903,10 @@ Completed local foundations:
   without archiving private payload files or response bodies.
 - Provide local browser operator UI routes backed by the payload-free operator
   workflow service.
-- Provide local operator workflow service POST forwarding for signed review,
-  release, appeal-handoff, appeal-ballot, and ballot-tally requests, with JSON
-  body validation and payload-byte rejection.
+- Provide local operator workflow service POST forwarding for signed
+  quarantine review, release, and appeal-handoff requests, with JSON body
+  validation and payload-byte rejection. Native moderation actions are
+  caller-signed transactions, never operator-service JSON mutations.
 - Provide local operator workflow canary evidence tooling that probes deployed
   health/status, browser UI, operator-panel, bridge-plan, juror-plan,
   juror-notifications, and commit-reveal-status routes without archiving
@@ -1030,13 +1026,14 @@ evidence tooling, local committee aggregation CLI, local committee aggregation
 HTTP service, supervised committee bundle generation, HTTP committee canary
 rollout evidence tooling,
 model-registry admission/checkpoint foundation, standalone persistent
-model-registry HTTP service, Torii registry endpoints, local moderation ballot
-lifecycle/readback/client/CLI foundation, local screening/quarantine evidence
+model-registry HTTP service, Torii registry endpoints, finalized-chain
+moderation projection/orchestrator and caller-signed client/CLI foundation,
+local screening/quarantine evidence
 checkpointing, readback, and review/release API transitions, honey-audit tool,
 local encrypted quarantine object-store/API/CLI foundation, local quarantine CLI
 commands, local quarantine operator role gate, local appeal
 pricing/deposit/readback client/CLI bridge, local
-reviewed-quarantine appeal handoff and appeal-ballot API/CLI, local
+reviewed-quarantine appeal handoff and native appeal intake, local
 operator-panel read model, local bridge-plan CLI, local payload-free operator
 workflow service, local signed operator workflow mutation forwarding, local
 payload-free juror notification planning, local payload-free juror notification

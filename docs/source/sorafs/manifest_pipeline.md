@@ -147,29 +147,32 @@ to stdout without creating temporary files.
 
 Use `--chunk-fetch-plan-out=path` to persist the ordered chunk fetch specification
 (chunk index, payload offset, length, BLAKE3 digest) that accompanies the manifest
-plan. Multi-source clients can feed the resulting JSON directly into the SoraFS
-fetch orchestrator without re-reading the source payload. The JSON report printed
-by the CLI also includes this array under `chunk_fetch_specs`.
+plan. The resulting standalone JSON is a strict
+`sorafs.chunk_fetch_plan.v1` object that also commits the non-zero BLAKE3 digest
+of the complete payload. Multi-source clients can feed it directly into the
+SoraFS fetch orchestrator without re-reading the source payload. The versioned
+manifest-builder report also embeds the ordered array under
+`chunk_fetch_specs`; that field is not a standalone interchange format.
 Both the `chunking` section and `manifest` object expose `profile_aliases`
 
 When re-running the stub (for example in CI or a release pipeline) you can pass
-`--plan=chunk_fetch_specs.json` or `--plan=-` to import the previously generated
-specification. The CLI verifies that each chunk’s index, offset, length, and BLAKE3
-digest still match the freshly derived CAR plan before ingestion continues, which
-guards against stale or tampered plans.
+`--plan=chunk_fetch_plan.json` or `--plan=-` to import the previously generated
+envelope. The CLI verifies its whole-payload binding and each chunk’s index,
+offset, length, and BLAKE3 digest against the freshly derived CAR plan before
+ingestion continues. Retired bare arrays are rejected.
 
 ### Local orchestration smoke-test
 
 The `sorafs_car` crate now ships `sorafs-fetch`, a developer CLI that consumes the
-`chunk_fetch_specs` array and simulates multi-provider retrieval from local files.
-Point it at the JSON emitted by `--chunk-fetch-plan-out`, provide one or more
+strict payload-bound V1 envelope and simulates multi-provider retrieval from
+local files. Point it at the JSON emitted by `--chunk-fetch-plan-out`, provide one or more
 provider payload paths (optionally with `#N` to increase concurrency), and it will
 verify chunks, reassemble the payload, and print a JSON report summarising provider
 success/failure counts and per-chunk receipts:
 
 ```
 cargo run -p sorafs_car --bin sorafs_fetch -- \
-  --plan=chunk_fetch_specs.json \
+  --plan=chunk_fetch_plan.json \
   --provider=alpha=./providers/alpha.bin \
   --provider=beta=./providers/beta.bin#4@3 \
   --output=assembled.bin \
@@ -186,7 +189,7 @@ When you need to hit a live Torii gateway instead of local files, swap the
 
 ```
 sorafs-fetch \
-  --plan=chunk_fetch_specs.json \
+  --plan=chunk_fetch_plan.json \
   --gateway-provider=name=gw-a,provider-id=<hex>,gateway-key=<ed25519-public-key-hex>,base-url=https://gw-a.example/,stream-token=<base64> \
   --gateway-manifest-id=<manifest_id_hex> \
   --gateway-chunker-handle=sorafs.sf1@1.0.0 \

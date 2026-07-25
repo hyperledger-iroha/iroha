@@ -76,18 +76,5 @@
     "request_fixture": "C6/request.json",
     "response_fixture": "C6/response.json",
     "gateway_fixture": "C6/gateway.json"
-  },
-  {
-    "id": "C7",
-    "description": "Proof tampering refusal",
-    "status": 422,
-    "error": "proof_mismatch",
-    "reason": "proof sample does not match gateway tree",
-    "details": {
-      "section": "proof.chunks[0]"
-    },
-    "request_fixture": "C7/request.json",
-    "response_fixture": "C7/response.json",
-    "gateway_fixture": "C7/gateway.json"
   }
 ]

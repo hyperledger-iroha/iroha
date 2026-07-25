@@ -150,29 +150,39 @@ can reference the same policy JSON used during planning.
 
 ### 5.1 Monitoring Deck
 
-Pin the following dashboards (JSON available under `docs/source/`):
-- `grafana_sorafs_gateway_load_tests.json` – latency, refusal rate, throughput.
-- `grafana_sorafs_gateway_direct_mode.json` – host mapping status, denylist hits.
-- `grafana_sorafs_gateway_tokens.json` – active tokens, issuance/denial counts.
+Pin the checked-in dashboards under `dashboards/grafana/`:
+- `sorafs_gateway_observability.json` – latency, refusal rate, throughput, and proofs.
+- `sorafs_gateway_conformance.json` – fixture and replay conformance.
+- `sorafs_gateway_compliance.json` – governed control outcomes, serving
+  decisions, bounded failure classes, catalog sequence/expiry, and readiness.
 
 Recommended alerts:
-- `torii_sorafs_chunk_range_requests_total{result="5xx"}` over 1% for 5 minutes.
+- `torii_sorafs_chunk_range_requests_total{status=~"5.."}` over 1% for 5 minutes.
 - `torii_sorafs_stream_token_denials_total{reason="rate_limited"}` > 10/min.
-- `gateway_policy_denials_total{reason="admission_unavailable"}` > 0.
+- `torii_sorafs_gateway_compliance_ready < 1` for 5 minutes.
+- any increase in
+  `torii_sorafs_gateway_compliance_failures_total{surface="serving"}`.
+- less than 15 minutes remaining in
+  `torii_sorafs_gateway_compliance_serving_catalog_valid_until_seconds`.
 
 ### 5.2 Common Incidents & Playbooks
 
 | Incident | Detection | Immediate Action | Follow-up |
 |----------|-----------|------------------|-----------|
 | Stream token exhaustion | Alert: `rate_limited` denials | Issue a token with `max_streams` no greater than the configured ceiling; adjust orchestrator concurrency. | Review client budget; update `torii.sorafs_gateway.stream_tokens.default_max_streams` through the controlled configuration rollout if the ceiling is too low. |
-| GAR mismatch / provider not admitted | Policy denial metric spikes | Verify admission registry sync; run `iroha_cli app sorafs direct-mode status`. | Re-sign manifest/envelope; document in governance log. |
+| GAR mismatch / provider not admitted | Refusal metric spikes | Verify admission registry sync; run `iroha_cli app sorafs direct-mode status`. | Re-sign manifest/envelope; document in governance log. |
 | TLS automation failure | `X-Sora-TLS-State` transitions to `degraded` | Trigger manual ACME renewal (`sorafs-gateway tls renew`); fall back to stored cert. | File incident report with cert timeline. |
-| Denylist hit / governance takedown | `gateway_policy_denials_total{reason="denylisted"}` | Confirm request metadata, inform governance, block offending provider/alias. | Update denylist documentation; retain logs for compliance. |
+| Governed compliance denial | `torii_sorafs_gateway_compliance_serving_decisions_total{disposition="deny"}` | Inspect only the bounded `subject_kind` and `source` dimensions, confirm catalog sequence/expiry, and notify governance. | Reconcile the signed catalog or accepted appeal; retain payload-free audit evidence. |
 
 ### 5.3 Log & Audit Requirements
 
-- Retain stream-token issuance logs (JSON body + headers) for ≥90 days.
-- Forward policy violations to SIEM with context: manifest ID, provider alias, reason code.
+- Retain payload-free stream-token issuance outcomes and stable reason codes for
+  the governed retention period; never retain token bodies, authorization
+  headers, holder material, or signing material.
+- Forward policy violations to SIEM using bounded subject-kind, disposition,
+  decision-source, and status fields. Manifest IDs, provider IDs, CIDs, URLs,
+  rule/feed identities, and request/response bodies must not enter logs or
+  metric labels.
 - Store Grafana snapshots for go/no-go decisions in the release ticket.
 
 ### 5.4 Key Rotation

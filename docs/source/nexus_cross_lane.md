@@ -173,8 +173,9 @@ retirement is refused when the candidate:
 - has a certified lane block without a matching global application receipt;
 - has an unrepaired application marker;
 - has an unapplied or unverifiable Native participant control, including a
-  receipt whose finality, manifest proof, index, checkpoint, or application
-  block no longer revalidates;
+  per-height receipt whose exact finality, per-height manifest proof,
+  descriptor-bound latest pointer, checkpoint, or application block no longer
+  revalidates;
 - has no exact globally carried drain certificate, or its replicated frontier
   differs from the certified frontier;
 - is outside the managed range, manually owned, malformed, or non-default; or
@@ -197,12 +198,17 @@ On successful retirement, lane-scoped DA cursors and commitments, pin intents,
 verified relays, merge history indexes, queue/session state, public validator
 and economic rows, emergency overrides, AXT replay data, and application
 markers are reset at the same incarnation boundary. Native participant
-receipts, application manifests/proofs, and route/incarnation latest indexes
-are included in disk accounting, archive validation, retirement, purge, and
-recreation allowlists. Malformed, oversized, temporary, unexpected,
-non-regular, or symlinked evidence fails closed. Old files remain historical
-proof material only where policy requires them; they cannot authorize or route
-new work.
+receipts and application manifests/proofs are immutable, versioned per-height
+files; their route/incarnation latest value is a separate descriptor-bound,
+replaceable derived pointer. All three are included in disk accounting,
+archive validation, retirement, purge, and recreation allowlists. The archive
+scanner enforces the configured retained-record count and existing shared
+Native sidecar aggregate-byte budget and requires the exact
+finality/manifest/receipt/latest-pointer join. Obsolete dense data/index
+layouts and malformed, oversized, ambiguous temporary, unexpected,
+non-regular, hardlinked, or symlinked evidence fail closed. Old files remain
+historical proof material only where policy requires them; they cannot
+authorize or route new work.
 
 Consensus-owned smart-contract-state namespaces are not writable through
 generic IVM state syscalls. Merge application/frontier markers, Nexus fee
@@ -294,13 +300,29 @@ expected post-state hash invalidates the complete candidate.
 The global execution commitment also carries the canonical Native application
 manifest root. Per-route leaves and Merkle proofs bind the active incarnation,
 predecessor, proposal, settlement, ordered sources/results, and application
-block. Kura publishes finality and the manifest before exact receipts and the
-route/incarnation latest index, and advances the participant frontier only
-after all of that evidence is durable. Startup repairs a missing suffix
-idempotently under the sidecar publication guard. After body pruning, a
-QC-authenticated manifest proof is sufficient; legacy hash-only evidence
-remains blocked unless authenticated storage or QC signers recover the
-canonical executed wire.
+block. For each participant height, Kura publishes one immutable versioned
+manifest file and then one immutable versioned receipt file with create-new,
+no-clobber promotion and exact durable readback. It then replaces the
+descriptor-bound route/incarnation latest pointer with the exact receipt
+identity and advances the participant frontier only after that complete
+finality/manifest/receipt/latest-pointer join is durable. Startup reconstructs
+the pointer from the bounded standalone files; steady-state lookup does not
+reverse-scan history.
+
+The standalone manifest and receipt histories share the configured Kura
+sidecar-retention count and the existing Native sidecar aggregate-byte budget,
+with at most one bounded transient publication slot. Pair compaction first
+fsyncs a versioned prune intent bound to lane, dataspace, incarnation, and
+every `(kind, participant height, artifact hash)` removal. Restart recovers a
+temporary-only intent, a stable intent before unlink, every individual
+manifest/receipt unlink stage, a fully unlinked pair, and identical stable plus
+temporary intent files idempotently; it never prunes the exact latest pair.
+Valid lone publication temporaries are promoted, byte-identical duplicates
+are removed, and malformed, conflicting, oversized, unexpected, legacy-dense,
+non-regular, hardlinked, or symlinked material is rejected before mutation.
+After body pruning, a QC-authenticated manifest proof is sufficient; legacy
+hash-only evidence remains blocked unless authenticated storage or QC signers
+recover the canonical executed wire.
 
 ## Compact carrier, recovery, and proofs
 
@@ -390,8 +412,10 @@ failure:
 - negative tests for wrong leader/round/parent/roster, equivocation, duplicate
   signatures, lost signing locks, malformed/corrupt chunks, oversized counts,
   stale/future lanes, forged/under-quorum drain certificates, post-close work,
-  same-carrier retirement, delayed pre-close work loss, unsafe retirement, and
-  every durable crash boundary;
+  same-carrier retirement, delayed pre-close work loss, unsafe retirement,
+  Native retained-count and aggregate-byte overflow, malformed or oversized
+  publication temporaries, legacy dense evidence, and every Native
+  temporary/stable/partial-unlink prune crash boundary;
 - four-peer localnet autoscale expansion/contraction, repeated cycles, a
   full intent/certificate/later-retirement cycle, a certified elastic-lane merge
   with one offline/missing-sidecar peer, WSV/query proof convergence, and

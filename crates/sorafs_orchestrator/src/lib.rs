@@ -67,6 +67,7 @@ pub mod incentives;
 pub mod moderation_provenance;
 pub mod moderation_runner;
 pub mod proxy;
+pub mod routing_authority;
 pub mod soranet;
 pub mod taikai_cache;
 pub mod treasury;

@@ -46,6 +46,13 @@ pub mod staking;
 pub use relay::*;
 pub use staking::*;
 
+/// Consensus-wide maximum number of simultaneously active execution lanes.
+///
+/// This is a protocol admission bound shared by lifecycle catalogs, merge
+/// execution, Native AMX manifests, and diagnostics. Sparse lane identifiers
+/// may exceed this number; only the number of active catalog entries is bounded.
+pub const MAX_ACTIVE_EXECUTION_LANES: usize = 1_024;
+
 /// Declarative lane lifecycle changes (additions and retirements).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct LaneLifecyclePlan {
@@ -1419,13 +1426,20 @@ impl LaneCatalog {
     ///
     /// # Errors
     /// Returns a [`LaneCatalogError`] when lane metadata violates alias uniqueness, identifier
-    /// uniqueness, or exceeds the configured lane count.
+    /// uniqueness, exceeds the configured lane count, or exceeds the consensus-wide active-lane
+    /// bound.
     pub fn new(
         lane_count: NonZeroU32,
         mut lanes: Vec<LaneConfig>,
     ) -> Result<Self, LaneCatalogError> {
         if lanes.is_empty() {
             return Err(LaneCatalogError::EmptyCatalog);
+        }
+        if lanes.len() > MAX_ACTIVE_EXECUTION_LANES {
+            return Err(LaneCatalogError::ActiveLaneBoundExceeded {
+                actual: lanes.len(),
+                maximum: MAX_ACTIVE_EXECUTION_LANES,
+            });
         }
         let mut seen_ids = BTreeSet::new();
         let mut seen_aliases = BTreeSet::new();
@@ -1482,7 +1496,7 @@ impl LaneCatalog {
     /// # Errors
     /// Returns a [`LaneCatalogError`] when additions or retirements are duplicated, retirements
     /// reference unknown lanes, or the resulting catalog is invalid (empty, duplicate
-    /// identifiers/aliases, or out-of-bounds ids).
+    /// identifiers/aliases, out-of-bounds ids, or too many active entries).
     pub fn apply_lifecycle(&self, plan: &LaneLifecyclePlan) -> Result<Self, LaneCatalogError> {
         let mut retire_set = BTreeSet::new();
         for retire_id in &plan.retire {
@@ -1558,6 +1572,14 @@ pub enum LaneCatalogError {
     /// Lifecycle plan would leave the catalog empty.
     #[error("lane catalog cannot be empty")]
     EmptyCatalog,
+    /// Catalog contains more simultaneously active lanes than consensus can represent.
+    #[error("lane catalog has {actual} active entries, exceeding the consensus maximum {maximum}")]
+    ActiveLaneBoundExceeded {
+        /// Number of active entries supplied.
+        actual: usize,
+        /// Consensus-wide active-entry maximum.
+        maximum: usize,
+    },
     /// Lane identifier outside the configured lane count.
     #[error("lane {lane} exceeds configured lane count {lane_count}")]
     LaneOutOfBounds {
@@ -1839,6 +1861,57 @@ mod tests {
             LaneCatalogError::LaneOutOfBounds { lane, lane_count: 2 }
                 if lane.as_u32() == 5
         ));
+    }
+
+    #[test]
+    fn lane_catalog_rejects_active_entries_above_consensus_bound() {
+        let lanes = (0..MAX_ACTIVE_EXECUTION_LANES)
+            .map(|index| LaneConfig {
+                id: LaneId::new(u32::try_from(index).expect("lane index fits u32")),
+                alias: format!("lane-{index}"),
+                ..LaneConfig::default()
+            })
+            .collect::<Vec<_>>();
+        let boundary_count =
+            NonZeroU32::new(u32::try_from(MAX_ACTIVE_EXECUTION_LANES).expect("bound fits u32"))
+                .expect("active-lane bound is non-zero");
+        let catalog = LaneCatalog::new(boundary_count, lanes.clone())
+            .expect("the exact active-lane protocol bound is admissible");
+
+        let overflow_id =
+            LaneId::new(u32::try_from(MAX_ACTIVE_EXECUTION_LANES).expect("bound fits u32"));
+        let overflow = LaneConfig {
+            id: overflow_id,
+            alias: "overflow".to_owned(),
+            ..LaneConfig::default()
+        };
+        let overflow_count = NonZeroU32::new(
+            u32::try_from(MAX_ACTIVE_EXECUTION_LANES + 1).expect("bound plus one fits u32"),
+        )
+        .expect("bound plus one is non-zero");
+        let mut oversized = lanes;
+        oversized.push(overflow.clone());
+        assert_eq!(
+            LaneCatalog::new(overflow_count, oversized),
+            Err(LaneCatalogError::ActiveLaneBoundExceeded {
+                actual: MAX_ACTIVE_EXECUTION_LANES + 1,
+                maximum: MAX_ACTIVE_EXECUTION_LANES,
+            })
+        );
+
+        let lifecycle_error = catalog
+            .apply_lifecycle(&LaneLifecyclePlan {
+                additions: vec![overflow],
+                retire: Vec::new(),
+            })
+            .expect_err("lifecycle admission must reject an unrepresentable active catalog");
+        assert_eq!(
+            lifecycle_error,
+            LaneCatalogError::ActiveLaneBoundExceeded {
+                actual: MAX_ACTIVE_EXECUTION_LANES + 1,
+                maximum: MAX_ACTIVE_EXECUTION_LANES,
+            }
+        );
     }
 
     #[test]

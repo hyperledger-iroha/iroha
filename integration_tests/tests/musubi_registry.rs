@@ -375,6 +375,7 @@ fn build_source_archive_plan(
         .dag_codec(DagCodecId(stats.dag_codec))
         .chunking_from_registry(descriptor.id)
         .chunk_digest_sha3_256(chunk_digest_sha3_256)
+        .por_root(sorafs_car::compute_por_root(&payload, &plan)?)
         .content_length(plan.content_length)
         .car_digest(archive_hash)
         .car_size(stats.car_size)

@@ -16323,6 +16323,8 @@ mod tests {
     struct RemoteManifestFixture {
         manifest_digest: ManifestDigest,
         manifest_root_cid: ManifestRootCid,
+        chunk_digest_sha3_256: [u8; 32],
+        por_root: [u8; 32],
         order_id: ReplicationOrderId,
         issued_epoch: u64,
         canonical_order: Vec<u8>,
@@ -16510,6 +16512,8 @@ mod tests {
         Ok(RemoteManifestFixture {
             manifest_digest,
             manifest_root_cid,
+            chunk_digest_sha3_256: manifest.chunk_digest_sha3_256,
+            por_root: manifest.por_root,
             order_id,
             issued_epoch: u64::from(order_seed),
             canonical_order,
@@ -17033,15 +17037,16 @@ mod tests {
                     fixture.manifest_digest,
                     fixture.manifest_root_cid.clone(),
                     fixed_chunker_handle(),
-                    [0; 32],
+                    fixture.chunk_digest_sha3_256,
+                    fixture.por_root,
+                    content_length,
                     policy,
                     (*ALICE_ID).clone(),
                     fixture.issued_epoch,
                     None,
                     None,
                     Metadata::default(),
-                )
-                .with_content_length(content_length);
+                );
                 record.record_pin_fee_payment(PinFeePayment {
                     paid_by: (*ALICE_ID).clone(),
                     fee_asset_id: state.gov.sorafs_pin_fee_asset_id.clone(),
@@ -17634,6 +17639,7 @@ mod tests {
     ) -> Result<(CarBuildPlan, sorafs_manifest::ManifestV1)> {
         let plan = CarBuildPlan::single_file(payload)?;
         let digest = blake3::hash(payload);
+        let por_root = sorafs_car::compute_por_root(payload, &plan)?;
         let manifest = ManifestBuilder::new()
             .root_cid(sorafs_manifest::canonical_manifest_root_cid(
                 *digest.as_bytes(),
@@ -17641,6 +17647,7 @@ mod tests {
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(ChunkProfile::DEFAULT, BLAKE3_256_MULTIHASH_CODE)
             .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
+            .por_root(por_root)
             .content_length(plan.content_length)
             .car_digest(digest.into())
             .car_size(plan.content_length)
@@ -17675,10 +17682,11 @@ mod tests {
         let mut block = state.block(header);
         let mut pin_manifests = block.world.pin_manifests_mut_for_testing().transaction();
         for manifest in manifests {
+            let canonical_manifest = manifest.load_manifest()?;
             let digest = ManifestDigest::new(*manifest.manifest_digest());
             let policy = PinPolicy::default();
             let submitted_epoch = 1;
-            let content_length = manifest.content_length();
+            let content_length = canonical_manifest.content_length;
             let amount = pricing
                 .public_pin_fee(
                     policy.storage_class,
@@ -17698,15 +17706,16 @@ mod tests {
                     semver: "1.0.0".to_owned(),
                     multihash_code: BLAKE3_256_MULTIHASH_CODE,
                 },
-                [0; 32],
+                canonical_manifest.chunk_digest_sha3_256,
+                canonical_manifest.por_root,
+                content_length,
                 policy,
                 (*ALICE_ID).clone(),
                 submitted_epoch,
                 None,
                 None,
                 Metadata::default(),
-            )
-            .with_content_length(content_length);
+            );
             record.record_pin_fee_payment(PinFeePayment {
                 paid_by: (*ALICE_ID).clone(),
                 fee_asset_id: state.gov.sorafs_pin_fee_asset_id.clone(),

@@ -274,10 +274,14 @@ pub struct DaIngestReceipt {
   証拠バンドル内で `policy_source` 値を意味のあるものに保つための文字列。参照
   サブコマンドの場合は `crates/iroha_cli/src/commands/da.rs`、`docs/source/da/rent_policy.md`
   ポリシースキーマの場合。【crates/iroha_cli/src/commands/da.rs:1】【docs/source/da/rent_policy.md:1】
-- ピン レジストリ パリティが SDK に拡張されるようになりました: `ToriiClient.registerSorafsPinManifest(...)`
-  JavaScript SDK は、`iroha app sorafs pin register` によって使用される正確なペイロードを構築し、正規化を適用します
-  POST 前のチャンカー メタデータ、ピン ポリシー、エイリアス プルーフ、および後続ダイジェスト
-  `/v1/sorafs/pin/register`。これにより、CI ボットとオートメーションが CLI にシェルアウトすることがなくなります。
+- Pin registry の同等性は SDK にも拡張されています。
+  `ToriiClient.registerSorafsPinManifest(...)` は `manifest_payload` に正確な
+  canonical padded-base64 `ManifestV1` を含む閉じた JSON V1 リクエストを
+  構築します。Torii は digest、chunker、content length、pin policy、fee
+  input を decoded manifest のみから導出し、duplicate summary を拒否します。
+  optional alias と nonzero predecessor は維持されます。これにより
+  `/v1/sorafs/pin/register` の利用時に CI ボットや自動化が CLI を呼び出す
+  必要がなくなります。
   マニフェストの登録を記録し、ヘルパーには TypeScript/README が同梱されているため、DA-8 の
   「submit/get/prove」ツールの同等性は、Rust/Swift と並んで JS 上で完全に満たされています。【javascript/iroha_js/src/toriiClient.js:1045】【javascript/iroha_js/test/toriiClient.test.js:788】
 - `iroha app da prove-availability` は上記すべてをチェーンします。ストレージ チケットを取得し、

@@ -5,7 +5,7 @@ set -euo pipefail
 # creating a lockfile in the production workspace. The copied authoritative
 # reducer keeps the verification package's source-link relationship intact.
 if (($# == 0)); then
-  echo "usage: $0 [--fetch|--unit|--fast-network|--model-replay|--chaos-100k|<command> [argument ...]]" >&2
+  echo "usage: $0 [--fetch|--unit|--fast-network|--model-replay|--chaos-100k|--verus|--clippy]" >&2
   exit 2
 fi
 
@@ -20,6 +20,36 @@ hash_file() {
   else
     shasum -a 256 "$1" | awk '{print $1}'
   fi
+}
+
+wait_for_external_cargo() {
+  local active_compilers
+  while true; do
+    ps -axo pid,etime,command
+    active_compilers="$(
+      ps -axo pid=,command= | awk '
+        {
+          executable = $2
+          sub(/^.*\//, "", executable)
+          if (executable == "cargo" || executable == "rustc") {
+            print
+          }
+        }
+      '
+    )"
+    if [[ -z "$active_compilers" ]]; then
+      return
+    fi
+    printf '%s\n' \
+      "waiting for active Cargo/rustc processes before formal-harness command:" \
+      "$active_compilers" >&2
+    sleep 10
+  done
+}
+
+run_cargo() {
+  wait_for_external_cargo
+  command cargo "$@"
 }
 
 if [[ ! -f "$HARNESS_LOCK" || -L "$HARNESS_LOCK" \
@@ -86,7 +116,7 @@ case "$1" in
     fi
     # Populate a cold Cargo home from the checksum-pinned standalone lock.
     # All verification/test modes remain offline and consume this exact graph.
-    cargo fetch --locked
+    run_cargo fetch --locked
     ;;
   --unit)
     if (($# != 1)); then
@@ -94,7 +124,7 @@ case "$1" in
       exit 2
     fi
     unit_test_list="$(
-      cargo test --locked --offline -p iroha_sumeragi_core \
+      run_cargo test --locked --offline -p iroha_sumeragi_core \
         --lib -- --list
     )"
     listed_unit_tests=()
@@ -107,7 +137,7 @@ case "$1" in
       exit 1
     fi
     unit_ignored_test_list="$(
-      cargo test --locked --offline -p iroha_sumeragi_core \
+      run_cargo test --locked --offline -p iroha_sumeragi_core \
         --lib -- --list --ignored
     )"
     listed_ignored_unit_tests=()
@@ -119,7 +149,7 @@ case "$1" in
       echo "reducer unit gate requires all 118 tests to be runnable" >&2
       exit 1
     fi
-    cargo test --locked --offline -p iroha_sumeragi_core \
+    run_cargo test --locked --offline -p iroha_sumeragi_core \
       --lib -- --test-threads=1
     ;;
   --fast-network)
@@ -140,7 +170,7 @@ case "$1" in
     )
     ignored_test="accelerated_100_000_block_chaos_preserves_chain_prefix"
     network_test_list="$(
-      cargo test --locked --offline -p iroha_sumeragi_core \
+      run_cargo test --locked --offline -p iroha_sumeragi_core \
         --test network_simulation -- --list
     )"
     listed_tests=()
@@ -166,7 +196,7 @@ case "$1" in
       fi
     done
     ignored_test_list="$(
-      cargo test --locked --offline -p iroha_sumeragi_core \
+      run_cargo test --locked --offline -p iroha_sumeragi_core \
         --test network_simulation -- --list --ignored
     )"
     listed_ignored_tests=()
@@ -180,7 +210,7 @@ case "$1" in
       exit 1
     fi
     for test_name in "${required_tests[@]}"; do
-      cargo test --locked --offline -p iroha_sumeragi_core \
+      run_cargo test --locked --offline -p iroha_sumeragi_core \
         --test network_simulation "$test_name" \
         -- --exact --test-threads=1
     done
@@ -192,7 +222,7 @@ case "$1" in
     fi
     readonly ignored_test="accelerated_100_000_block_chaos_preserves_chain_prefix"
     ignored_test_list="$(
-      cargo test --locked --offline -p iroha_sumeragi_core \
+      run_cargo test --locked --offline -p iroha_sumeragi_core \
         --test network_simulation -- --list --ignored
     )"
     ignored_count="$(grep -Fxc "${ignored_test}: test" <<<"${ignored_test_list}" || true)"
@@ -200,7 +230,7 @@ case "$1" in
       echo "expected exactly one ignored chaos test named ${ignored_test}; found ${ignored_count}" >&2
       exit 1
     fi
-    cargo test --locked --offline -p iroha_sumeragi_core \
+    run_cargo test --locked --offline -p iroha_sumeragi_core \
       --test network_simulation \
       "$ignored_test" \
       -- --exact --ignored --nocapture
@@ -221,7 +251,7 @@ case "$1" in
       timeout_equivocation_with_different_full_high_qcs_is_reported
     )
     model_replay_test_list="$(
-      cargo test --locked --offline -p iroha_sumeragi_core \
+      run_cargo test --locked --offline -p iroha_sumeragi_core \
         --test model_trace_replay -- --list
     )"
     listed_replay_tests=()
@@ -247,7 +277,7 @@ case "$1" in
       fi
     done
     replay_ignored_test_list="$(
-      cargo test --locked --offline -p iroha_sumeragi_core \
+      run_cargo test --locked --offline -p iroha_sumeragi_core \
         --test model_trace_replay -- --list --ignored
     )"
     listed_ignored_replay_tests=()
@@ -259,22 +289,33 @@ case "$1" in
       echo "model-replay gate requires all eight tests to be runnable" >&2
       exit 1
     fi
-    cargo test --locked --offline -p iroha_sumeragi_core \
+    run_cargo test --locked --offline -p iroha_sumeragi_core \
       --test model_trace_replay -- --test-threads=1
+    ;;
+  --verus)
+    if (($# != 1)); then
+      echo "--verus accepts no additional arguments" >&2
+      exit 2
+    fi
+    run_cargo verus verify --locked --offline -p iroha_sumeragi_core --features verus \
+      --fwd-verus-args-to roots -- \
+      --rlimit 60 \
+      --expand-errors \
+      --no-cheating
+    ;;
+  --clippy)
+    if (($# != 1)); then
+      echo "--clippy accepts no additional arguments" >&2
+      exit 2
+    fi
+    run_cargo clippy --locked --offline -p iroha_sumeragi_core --lib -- -D warnings
     ;;
   --*)
     echo "unknown harness mode: $1" >&2
     exit 2
     ;;
   *)
-    if [[ "$1" == cargo ]]; then
-      command_line=" $* "
-      if [[ "$command_line" != *" --locked "* \
-        || "$command_line" != *" --offline "* ]]; then
-        echo "custom Cargo harness commands require --locked --offline" >&2
-        exit 2
-      fi
-    fi
-    "$@"
+    echo "positional harness commands are unsupported; select one fixed mode" >&2
+    exit 2
     ;;
 esac

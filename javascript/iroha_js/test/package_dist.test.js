@@ -542,6 +542,10 @@ test("package Nexus browser defaults build, finalize, and submit the shared cano
       gasLimit: nexusFixture.transfer_input.fee_payment.value.gas_limit,
     },
     metadata: nexusFixture.transfer_input.metadata,
+    feePayment: {
+      payer: nexusFixture.transfer_input.fee_payment.payer,
+      chargeLimits: nexusFixture.transfer_input.fee_payment.value.charge_limits,
+    },
   });
   const receipt = await client.finalizeAndSubmit(
     draft.signable,

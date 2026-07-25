@@ -11,10 +11,11 @@
 --peer orderbook-peer-01
 --peer orderbook-peer-02
 --peer orderbook-peer-03
---source contract
---source matcher
---source torii-mirror
---source settlement-service
+--source finalized-ledger
+--source matcher-worker
+--source torii-finalized-projection
+--source settlement-worker
 --source governance-dag
---verified-claim contract_mirror_reconciliation_passed
+--verified-claim finalized_projection_reconciliation_passed
+--verified-claim replica_finalized_state_equal
 --verified-claim evidence_dag_published

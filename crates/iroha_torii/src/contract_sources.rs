@@ -26,7 +26,7 @@ use iroha_data_model::{
 };
 use ivm::analysis::ProgramAnalysis;
 use mv::storage::StorageReadOnly;
-use sorafs_car::{CarBuildPlan, CarWriter, compute_chunk_plan_digest_sha3};
+use sorafs_car::{CarBuildPlan, CarWriter, compute_chunk_plan_digest_sha3, compute_por_root};
 use sorafs_chunker::ChunkProfile;
 use sorafs_manifest::{BLAKE3_256_MULTIHASH_CODE, DagCodecId, ManifestBuilder, PinPolicy};
 
@@ -1094,17 +1094,21 @@ fn build_sorafs_manifest(
         .ok_or_else(|| conversion_error("failed to derive SoraFS CAR root CID"))?;
     let mut car_digest = [0u8; 32];
     car_digest.copy_from_slice(stats.car_archive_digest.as_bytes());
-    let manifest = ManifestBuilder::new()
-        .root_cid(root_cid)
-        .dag_codec(DagCodecId(stats.dag_codec))
-        .chunking_from_profile(plan.chunk_profile, BLAKE3_256_MULTIHASH_CODE)
-        .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
-        .content_length(plan.content_length)
-        .car_digest(car_digest)
-        .car_size(stats.car_size)
-        .pin_policy(PinPolicy::default())
-        .build()
-        .map_err(|err| conversion_error(format!("failed to build SoraFS manifest: {err}")))?;
+    let manifest =
+        ManifestBuilder::new()
+            .root_cid(root_cid)
+            .dag_codec(DagCodecId(stats.dag_codec))
+            .chunking_from_profile(plan.chunk_profile, BLAKE3_256_MULTIHASH_CODE)
+            .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
+            .por_root(compute_por_root(payload, &plan).map_err(|err| {
+                conversion_error(format!("failed to derive SoraFS PoR root: {err}"))
+            })?)
+            .content_length(plan.content_length)
+            .car_digest(car_digest)
+            .car_size(stats.car_size)
+            .pin_policy(PinPolicy::default())
+            .build()
+            .map_err(|err| conversion_error(format!("failed to build SoraFS manifest: {err}")))?;
     Ok((plan, manifest))
 }
 

@@ -31,7 +31,7 @@ use thiserror::Error;
 
 use crate::{
     json_macros::{JsonDeserialize, JsonSerialize},
-    queue::{LaneQueueReservationKeyV1, RouteLegRole, RoutingPlan},
+    queue::{LaneQueueReservationKeyV2, RouteLegRole, RoutingPlan},
     tx::AcceptedTransaction,
 };
 
@@ -115,7 +115,7 @@ pub struct LaneExecutablePayloadV1 {
     pub entrypoints: Vec<TransactionEntrypoint>,
     /// Exact queue reservation identities in entrypoint order. Every payload
     /// binds one reservation per entrypoint.
-    pub reservation_keys: Vec<LaneQueueReservationKeyV1>,
+    pub reservation_keys: Vec<LaneQueueReservationKeyV2>,
     /// Full coordinator/participant routing plans in entrypoint order.
     pub routing_plans: Vec<RoutingPlan>,
     /// Native AMX certificates aligned exactly with entrypoints and routing plans.
@@ -154,7 +154,7 @@ struct LaneExecutablePayloadPreimage {
     min_quorum: u32,
     qc_mode_tag: String,
     entrypoints: Vec<TransactionEntrypoint>,
-    reservation_keys: Vec<LaneQueueReservationKeyV1>,
+    reservation_keys: Vec<LaneQueueReservationKeyV2>,
     routing_plans: Vec<RoutingPlan>,
     native_amx_receipts: Vec<Option<NativeAmxReceipt>>,
 }
@@ -711,7 +711,7 @@ impl LaneExecutablePayloadV1 {
         epoch: u64,
         origin_proposal: LaneBlockProposalV1,
         entrypoints: Vec<TransactionEntrypoint>,
-        reservation_keys: Vec<LaneQueueReservationKeyV1>,
+        reservation_keys: Vec<LaneQueueReservationKeyV2>,
         routing_plans: Vec<RoutingPlan>,
         native_amx_receipts: Vec<Option<NativeAmxReceipt>>,
         producer: PeerId,
@@ -1397,7 +1397,7 @@ pub(crate) fn compute_lane_executable_payload_hash(
     epoch: u64,
     origin_proposal: &LaneBlockProposalV1,
     entrypoints: &[TransactionEntrypoint],
-    reservation_keys: &[LaneQueueReservationKeyV1],
+    reservation_keys: &[LaneQueueReservationKeyV2],
     routing_plans: &[RoutingPlan],
     native_amx_receipts: &[Option<NativeAmxReceipt>],
 ) -> Result<Hash, LaneAutonomousArtifactError> {
@@ -1443,7 +1443,7 @@ fn validate_lane_executable_payload_body(
     origin_proposal: &LaneBlockProposalV1,
     entrypoint_hashes: &[Hash],
     entrypoints: &[TransactionEntrypoint],
-    reservation_keys: &[LaneQueueReservationKeyV1],
+    reservation_keys: &[LaneQueueReservationKeyV2],
     routing_plans: &[RoutingPlan],
     native_amx_receipts: &[Option<NativeAmxReceipt>],
     payload_hash: Hash,
@@ -6089,10 +6089,13 @@ mod tests {
             proposal.descriptor.lane_id,
             proposal.descriptor.dataspace_id,
         ));
-        let reservation = LaneQueueReservationKeyV1 {
-            version: LaneQueueReservationKeyV1::VERSION,
+        let reservation = LaneQueueReservationKeyV2 {
+            version: LaneQueueReservationKeyV2::VERSION,
             signed_transaction_hash: accepted.hash(),
             entrypoint_hash: entrypoint.hash(),
+            queue_plan_admission_binding_hash: Hash::new(
+                b"lane-consensus-queue-plan-admission-binding",
+            ),
             routing_plan_digest: routing_plan.digest(),
             coordinator_leg: routing_plan.coordinator_leg(),
             lane_id: proposal.descriptor.lane_id,
@@ -6871,7 +6874,7 @@ mod tests {
         );
         let mut unsupported_reservation_version = payload.clone();
         unsupported_reservation_version.reservation_keys[0].version =
-            LaneQueueReservationKeyV1::VERSION + 1;
+            LaneQueueReservationKeyV2::VERSION + 1;
         assert_eq!(
             unsupported_reservation_version.validate(chain_id_hash, epoch),
             Err(LaneAutonomousArtifactError::ReservationMismatch)

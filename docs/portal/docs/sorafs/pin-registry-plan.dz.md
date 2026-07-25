@@ -43,49 +43,67 @@ SF-4 གིས་ པིན་ཐོ་བཀོད་ཀྱི་གན་ར�
 
 | སྒྲིག་བཀོད་ | འགྲེལ་བཤད་ | ཕིལཌ་ |
 |---------------------------|-------------|
-| `PinRecordV1` | ཀེར་ནིག་གསལ་སྟོན་ཐོ་འགོད། | `manifest_cid`, `chunk_plan_digest`, `por_root`, `profile_handle`, `approved_at`, `retention_epoch`, `pin_policy`, I18NI0000032X, `governance_envelope_hash`. |
+| `PinManifestRecord` | Chain-authoritative manifest lifecycle entry. The envelope digest and exact 36-byte CIDv1/dag-cbor/BLAKE3-256 content root are distinct commitments. | `digest`, `root_cid`, `chunker`, `chunk_digest_sha3_256`, `por_root`, `content_length`, `policy`, `submitted_by`, `submitted_epoch`, `alias`, `successor_of`, `metadata`, `status`, `retirement_reason`, `council_envelope_digest`, `pin_fee_payment`. |
+| `PinManifestFinalizedRecordV1` | Immutable read result binding one native manifest record to the finalized block used for the query. | `finalized_cursor` (`height`, `block_hash`), `manifest`. |
 | I18NI0000034X | སབ་ཁྲ་ཚུ་ -> གསལ་སྟོན་སི་ཨའི་ཌི་། | `alias`, `manifest_cid`, I18NI000000003X, I18NI0000000038X. |
 | I18NI0000039X | བྱིན་མི་ཚུ་གིས་ གསལ་སྟོན་འབད་ནི་ལུ་ བཀོད་རྒྱ། | `manifest_cid`, I18NI0000000042X, I18NI000000043X, `deadline`, `deadline`, `policy_hash`. |
 | I18NI0000046X | མཁོ་སྤྲོད་འབད་མི་ངོས་ལེན་འབད་ནི། | I18NI000000047X, `provider_id`, I18NI000000049X, I18NI000000000500X, I18NI00000000500, I18NI000000051X. |
 | I18NI0000002X | གཞུང་སྐྱོང་སྲིད་བྱུས་པར་བཀོད། | I18NI000000053X, `max_retention_epochs`, Norito, I18NI000000066X. |
 
-ལག་ལེན་འཐབ་ནིའི་གཞི་བསྟུན་: འདི་གི་དོན་ལུ་ `crates/sorafs_manifest/src/pin_registry.rs` ལུ་བལྟ།
-དྲན་ཐོ་ Norito ལས་འཆར་དང་ བདེན་དཔྱད་ཀྱི་གྲོགས་རམ་པ་ དྲན་ཐོ་འདི་ཚུ་ལུ་རྒྱབ་སྐྱོར་འབད་མི་ གྲོགས་རམ་ཚུ། བདེན་དཔང་།
-གསལ་སྟོན་ལག་ཆ་(ཆུ་གཞིའི་ཐོ་བཀོད་འཚོལ་ཞིབ་ སྲིད་བྱུས་སྒོ་སྒྲིག་པིན་ ) དེ་འབདཝ་ལས་
-གན་རྒྱ་ Torii གདོང་ཁེབས་དང་ CLI གི་འགྱུར་ལྡོག་འདྲ་མཚུངས་ཡོད།
+Implementation reference: the authoritative manifest lifecycle and finalized
+read schemas live in `crates/iroha_data_model/src/sorafs/pin_registry.rs`.
+Supporting alias, replication, and policy envelopes live in
+`crates/sorafs_manifest/src/pin_registry.rs`. Consensus admission derives and
+validates the stored commitments; Torii and operator tooling consume the exact
+native finalized record rather than maintaining a second pin-record format.
 
-ལས་འགན་ཚུ།
-- `crates/sorafs_manifest/src/pin_registry.rs` ནང་ Norito གི་ལས་རིམ་མཇུག་བསྡུ།
-- གསང་གྲངས་ (Rust + གཞན་ SDKs) འདི་ Norito མེཀ་རོ་ཚུ་ལག་ལེན་འཐབ་ཐོག་ལས་ བཏོན་གཏང་།
-- འཆར་གཞིའི་ས་ཆ་དུས་མཐུན་ (`sorafs_architecture_rfc.md`) ཚར་ཅིག་ས་ཆ་.
+Status:
+- The native `PinManifestRecord` and `PinManifestFinalizedRecordV1` are the V1
+  manifest-registry surface used by core, Torii, fixtures, and reference
+  validators.
+- Rust code generation uses Norito derives; SDK parity follows the normal guard
+  lanes whenever the native schema changes.
+- Architecture, manifest-pipeline, CLI, OpenAPI, status, and roadmap documents
+  describe the shared validation path and endpoint behavior.
 
-## གན་འཛིན་ལག་ལེན།
+## Contract Implementation
 
-| ལས་ཀ་ | ཇོ་བདག་(ཚུ་) | དྲན་ཐོ། |
-|-------|---------------|-|-------------------------------------------
-| ཐོ་བཀོད་གསོག་འཇོག་ (sled/sqlite/off-chain) ཡང་ན་ གན་ཡིག་ སརཊ་ གན་རྒྱ་ཚད་གཞི་ལག་ལེན་འཐབ། | Core Infra / ཁག་འབག་སྡེ་ཚན། | གཏན་འབེབས་ཀྱི་ཧ་ཤིང་བྱིན། ཆུ་ནང་ལུ་འཕྱོ་བའི་ས་ཚིགས་འདི་སྤང་། |
-| འཛུལ་ཞུགས་ཀྱི་སྐུགས་: `submit_manifest`, I18NI000000061X, I18NI0000000062X, I18NI000000063X, I18NI0000000064X, `evict_manifest`. | ཀོར་ཨིན་ཕ་ར་ | བདེན་དཔྱད་འཆར་གཞི་ལས་ `ManifestValidator` ལྕི་བ། ད་ལྟོ་ `RegisterPinManifest` (Torii DTO surfacing) དང་ I18NI000000068X འདི་ རིམ་མཐུན་དུས་མཐུན་བཟོ་ནིའི་དོན་ལུ་ འཆར་གཞི་བརྩམས་ཏེ་ཡོདཔ་ཨིན། |
-| རྒྱལ་ཁབ་ཀྱི་འགྱུར་བ་ཚུ་: རིམ་འབྱུང་འདི་ བསྟར་སྤྱོད་འབད་ནི། (མནར་གཅོད་ A -> ཁ) བཀག་འཛིན་གྱི་དུས་སྐབས་དང་ གཞན་དང་མ་འདྲ་བའི་ཁྱད་པར་ཚུ། | གཞུང་སྐྱོང་ཚོགས་སྡེ་ / Core Infra | ད་ལྟ་ `crates/iroha_core/src/smartcontracts/isi/sorafs.rs` ནང་ ཁྱད་པར་ཅན་དང་ བཀག་འཛིན་ཚད་གཞི་ དེ་ལས་ དགོངས་ཞུའི་ཆ་འཇོག་/དགོངས་ཞུའི་བརྟག་དཔྱད་ཚུ་ ཡོདཔ་ཨིན། སྣ་མང་ཧོབ་རིམ་འབྱུང་བརྟག་དཔྱད་དང་ འདྲ་བཤུས་དེབ་བདག་འཛིན་འཐབ་ནི་འདི་ ཁ་ཕྱེ་སྟེ་ཡོདཔ་ཨིན། |
-| རིམ་སྒྲིག་ཚད་གཞི་ཚུ་: རིམ་སྒྲིག་/གཞུང་སྐྱོང་གནས་སྟངས་ལས་ མངོན་གསལ་ I18NI0000070X; གཞུང་སྐྱོང་ལས་རིམ་ཚུ་བརྒྱུད་དེ་ དུས་མཐུན་འབད་བཅུགཔ་ཨིན། | གཞུང་སྐྱོང་ལྷན་ཚོགས། | སྲིད་བྱུས་དུས་མཐུན་བཟོ་ནིའི་དོན་ལུ་ སི་ཨེལ་ཨའི་བྱིན། |
-| བྱུང་ལས་ཐོན་རླུང་: Norito འདི་ ཊེ་ལི་མི་ཊི་གི་དོན་ལུ་ ཕྱིར་བཏོན་འབདཝ་ཨིན། | བལྟ་རྟོག་འབད་ཚུགསཔ་ | བྱུང་ལས་འཆར་གཞི་ + ནང་བྲིས ངེས་འཛིན་འབད། |
+| Task | Owner(s) | Notes |
+|------|----------|-------|
+| Registry storage and smart-contract state. | Core Infra / Smart Contract Team | Implemented in Iroha world state (`pin_manifests`, `manifest_aliases`, `replication_orders`) with deterministic Norito payload hashing and integer-only policy arithmetic. |
+| Entry points: `RegisterPinManifest`, `ApprovePinManifest`, `RetirePinManifest`, `BindManifestAlias`, `IssueReplicationOrder`, `CompleteReplicationOrder`, `ExpireReplicationOrder`. | Core Infra | Registration carries the complete canonical manifest, resource-bounds and validates it in consensus, and derives all stored commitments. Core execution also validates aliases, council envelopes, governance permissions, canonical replication payloads, completion, and deadline-bound expiration. |
+| State transitions: enforce succession (manifest A -> B), retention epochs, alias uniqueness, and replication status changes. | Governance Council / Core Infra | `ensure_successor_chain` enforces approved, non-retired, acyclic multi-hop lineage; alias uniqueness, retention, and replication issue/complete bookkeeping are covered by unit tests. |
+| Governed parameters: load `ManifestPolicyV1` from config/governance state. | Governance Council | Runtime config maps pin-policy constraints into the shared validator. Live policy-change ceremonies are rollout governance evidence, not missing local contract code. |
+| Registry telemetry and audit surface. | Observability | Torii exports registry metrics and attested REST snapshots. Additional signed event archives can be layered over those snapshots if governance requires them. |
 
-བརྟག་དཔྱད།
-- ཐོ་བཀོད་ས་ཚིགས་རེ་རེའི་དོན་ལུ་ ཡུ་ནིཊི་བརྟག་དཔྱད།
-- རིམ་འབྱུང་རྒྱུན་རིམ་གྱི་ རྒྱུ་དངོས་བརྟག་དཔྱད།(འཁོར་རིམ་མེད།
-- གང་བྱུང་གསལ་སྟོན་ཚུ་ (མཐའ་མཚམས་) བཟོ་བཏོན་ཐོག་ལས་ ཕཱཛ་བདེན་དཔྱད་འབད་ནི།
+Coverage:
+- Unit tests cover registration, approval, retirement, alias binding, replication
+  order issue/complete, permissions, duplicate rejection, and side-effect-free
+  failure paths.
+- Successor tests cover self references, unknown/pending/retired predecessors,
+  cycle closure, and malformed existing predecessor cycles.
+- `ci/check_sorafs_fixtures.sh` regenerates chunker, provider-admission, and pin
+  registry fixtures and runs the parity checks that keep the canonical schema
+  surface stable.
 
-## ཞབས་ཏོག་ཕེཌ་ (Torii/SDK མཉམ་བསྡོམས།)
+## Service Facade (Torii/SDK Integration)
 
-| ཆ་ཤས་ | ལས་ཀ་ | ཇོ་བདག་(ཚུ་) |
-|-------------------------------------|
-| I18NT0000019X ཞབས་ཏོག་ | ཕྱིར་ཐོན་ I18NI000000000074X (ཡན་ལག་), `/v1/sorafs/pin/{cid}` (ལྟ་ཞིབ) I18NI000000076X (ཐོ་ཡིག་/བཱའིན་ཌི) I18NI0000000077X (གོ་རིམ་/ཐོབ་ཐང་)། ཤོག་ལེབ་ + ཚགས་མ་བྱིན། | ཡོངས་འབྲེལ་ TL / Core Infra |
-| ཉེས་འཛུགས་ | ལན་འདེབས་ནང་ ཐོ་བཀོད་མཐོ་ཚད་/ཧ་ཤི་ཚུ་ བཙུགས་དགོ། ཁ་སྐོང་ I18NT0000009X ཨེསི་ཌི་ཀེ་ཨེསི་གིས་ བཀོལ་སྤྱོད་འབད་མི་ གསལ་སྟོན་གྱི་ བཀོད་སྒྲིག་། | ཀོར་ཨིན་ཕ་ར་ |
-| CLI | I18NI0000000000078X རྒྱ་བསྐྱེད་ ཡང་ན་ `sorafs_pin` དང་ I18NI00000080000X, `alias bind`, I18NI000000082X, I18NI000000083X, I18NI0000083X. | ལག་ཆས་ WG |
-| ཨེསི་ཌི་ཀེ་ | མཁོ་སྤྲོད་འབད་མི་བཱའིན་ཌིང་ཚུ་ (Rust/Go/TS) ལས་ Norito ལས་འཆར་ལས་ བཏོན་གཏང་། མཉམ་བསྡོམས་བརྟག་དཔྱད་ཚུ་ཁ་སྐོང་འབད། | SDK སྡེ་ཚན་ |
+| Component | Task | Owner(s) |
+|-----------|------|----------|
+| Torii Service | Ships `/v1/sorafs/pin`, `/v1/sorafs/pin/{digest_hex}`, `/v1/sorafs/aliases`, and `/v1/sorafs/replication`. The manifest-detail route returns exact native `PinManifestFinalizedRecordV1` JSON and accepts only the optional paired expected finalized height/hash precondition; pagination and filters remain on list routes. | Networking TL / Core Infra |
+| Finality binding | Listing responses retain their listing attestation. A manifest-detail response carries the native `finalized_cursor` beside the authoritative `PinManifestRecord`; a stale requested cursor fails with HTTP 409. | Core Infra |
+| CLI | `iroha app sorafs pin register`, `pin list`, `pin show`, `alias list`, and `replication list` wrap the REST and ISI surfaces for operator audits. | Tooling WG |
+| SDK | Rust request builders and the JavaScript, Python, Swift, and C# guard lanes mirror the manifest payload and pin-register validation surface. | SDK Teams |
 
-བཀོལ་སྤྱོད་ཚུ།
-- ཇི་ཨི་ཊི་མཇུག་སྣོད་ཚུ་གི་དོན་ལུ་ འདྲ་མཛོད་བང་རིམ་/ཨེ་ཊི་ཇི་ཁ་སྐོང་འབད།
-- ཚད་གཞི་ཚད་འཛིན་འབད་ / auth འདི་ Torii སྲིད་བྱུས་དང་མཐུན་སྒྲིག་འབད།
+Operations:
+- List endpoints use attested snapshots, deterministic pagination, and the cache
+  behavior documented in the alias policy where alias proofs are involved.
+- `GET /v1/sorafs/pin/{digest_hex}` returns only `finalized_cursor` and the
+  native `manifest`. The retired `limit`, attestation, embedded alias/order
+  arrays, counts, and truncation fields are absent; callers use
+  `/v1/sorafs/aliases` and `/v1/sorafs/replication` for bounded list queries.
+- Mutating operations go through ISI/governance permissions; REST handling keeps
+  the same Torii auth and resource-guard model as the surrounding SoraFS APIs.
 
 ## བཅོས་མ་དང་སི་ཨའི།
 
@@ -135,9 +153,8 @@ SF-4 གིས་ པིན་ཐོ་བཀོད་ཀྱི་གན་ར�
 ཡར་རྒྱས་འགྱོ་བའི་སྐབས་ལུ་ SF-4 གི་འོག་ལུ་ཡོད་པའི་ ལམ་སབ་ཁྲ་གི་ཞིབ་དཔྱད་ཐོ་ཡིག་རེ་རེ་གིས་ འཆར་གཞི་འདི་ གཞི་བསྟུན་འབད་དགོ།
 ད་ལྟོ་ REST གི་གདོང་ཕྱོགས་འདི་གིས་ ཐོ་བཀོད་ཀྱི་མཇུག་བསྡུའི་བདེན་ཁུངས་ཚུ་ བདེན་ཁུངས་བཀལ་ཡོདཔ་ཨིན།
 
-- `GET /v1/sorafs/pin` དང་ `GET /v1/sorafs/pin/{digest}` དང་བཅས་པའི་མངོན་རྟགས་
-  alias binds དང་འདྲ་དཔེ་གི་བཀའ་རྒྱ་ དེ་ལས་ བདེན་ཁུངས་བཀལ་བའི་དངོས་པོ་འདི་ འདི་ལས་ཐོབ་ཡོདཔ་ཨིན།
-  སྡེབ་ཚན་གསརཔ་ ཧེཤ་.
+- `GET /v1/sorafs/pin` returns the attested manifest catalogue.
+- `GET /v1/sorafs/pin/{digest_hex}` returns exact `PinManifestFinalizedRecordV1` JSON with `finalized_cursor.height`, `finalized_cursor.block_hash`, and native `manifest`.
 - `GET /v1/sorafs/aliases` དང་ `GET /v1/sorafs/replication` ཤུགས་ལྡན་ཕྱིར་སྟོན་འབདཝ་ཨིན།
   alias ཐོ་གཞུང་དང་ འདྲ་དཔེ་བཀོད་པའི་གོ་རིམ་འདི་ རྟག་བརྟན་གྱི་ ཤོག་ལེབ་དང་ དང་།
   གནས་ཚད་ཚགས་མ་ཚུ།

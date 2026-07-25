@@ -49,7 +49,10 @@ PROFILE="debug"
 RUN_SCOPE="case"
 NATIVE_AMX_ITERATIONS=""
 readonly NATIVE_AMX_FAULT_SOAK_TEST="native_amx_rotating_validator_fault_soak_preserves_independent_participant_qcs"
+readonly NATIVE_AMX_GROUPED_PRUNING_MARKER="[multilane-release-native-evidence] grouped_sources=2 durable_manifest=passed body_eviction_recovery=passed authenticated_remote_recovery=passed exact_once=passed"
 readonly AUTOSCALE_FOUR_PEER_RELEASE_TEST="nexus::autoscale_localnet::nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_artifacts"
+readonly AUTOSCALE_RESTART_FOUR_PEER_RELEASE_TEST="nexus::autoscale_localnet::nexus_autoscale_certified_merge_recovers_missing_sidecar_after_restart"
+readonly AUTOSCALE_DRAIN_FOUR_PEER_RELEASE_TEST="nexus::autoscale_localnet::nexus_autoscale_two_phase_drain_closes_certifies_then_retires_after_restart"
 readonly CROSS_DATASPACE_CASE_TEST="nexus::cross_dataspace_localnet::cross_dataspace_atomic_swap_is_all_or_nothing"
 readonly CROSS_DATASPACE_FAULT_SOAK_TEST="nexus::cross_dataspace_localnet::cross_dataspace_two_hour_fault_soak_preserves_multilane_application"
 readonly CROSS_DATASPACE_SEED_PREFIX="nexus-cross-dataspace-v1-seed-"
@@ -222,7 +225,7 @@ if [[ "$RUN_SCOPE" == "multilane-four-peer" && "$PROFILE" != "release" ]]; then
 fi
 for extra in ${EXTRA_ENV[@]+"${EXTRA_ENV[@]}"}; do
   case "${extra%%=*}" in
-    IROHA_TEST_NETWORK_BASE_SEED|IROHA_NEXUS_CROSS_REQUIRE_SEED|IROHA_NEXUS_CROSS_FAULT_SOAK_DURATION_SECS|IROHA_MULTILANE_RELEASE_MODE|IROHA_RUN_IGNORED)
+    IROHA_TEST_NETWORK_BASE_SEED|IROHA_NEXUS_CROSS_REQUIRE_SEED|IROHA_NEXUS_CROSS_FAULT_SOAK_DURATION_SECS|IROHA_MULTILANE_RELEASE_MODE|IROHA_RUN_IGNORED|IROHA_RELEASE_PREBUILT_MANIFEST_SHA256)
       echo "--env may not override reserved cross-dataspace evidence control ${extra%%=*}" >&2
       exit 2
       ;;
@@ -235,19 +238,22 @@ release_head_commit="${IROHA_RELEASE_HEAD_COMMIT:-}"
 release_head_tree="${IROHA_RELEASE_HEAD_TREE:-}"
 release_source_manifest_sha256="${IROHA_RELEASE_SOURCE_MANIFEST_SHA256:-}"
 release_cargo_lock_sha256="${IROHA_RELEASE_CARGO_LOCK_SHA256:-}"
+release_prebuilt_manifest_sha256="${IROHA_RELEASE_PREBUILT_MANIFEST_SHA256:-}"
 if [[ "$PROFILE" == "release" \
   && "$RUN_SCOPE" != "nexus" \
   && "$RUN_SCOPE" != "native-amx" ]]; then
   if [[ ! "$release_head_commit" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ \
     || ! "$release_head_tree" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ \
     || ! "$release_source_manifest_sha256" =~ ^[0-9a-f]{64}$ \
-    || ! "$release_cargo_lock_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+    || ! "$release_cargo_lock_sha256" =~ ^[0-9a-f]{64}$ \
+    || ! "$release_prebuilt_manifest_sha256" =~ ^[0-9a-f]{64}$ ]]; then
     echo "--release cross-dataspace evidence requires exact parent release identity exports" >&2
     exit 2
   fi
 fi
 readonly release_head_commit release_head_tree
 readonly release_source_manifest_sha256 release_cargo_lock_sha256
+readonly release_prebuilt_manifest_sha256
 cargo_runner=(cargo)
 if [[ "$USE_CARGO_FAST" == true ]]; then
   cargo_fast_script="${repo_root}/scripts/cargo_fast.sh"
@@ -367,16 +373,24 @@ publish_completion_path() {
 validate_multilane_release_markers() {
   local test_name="$1"
   local log_path="$2"
-  if [[ "$(grep -Fxc -- "[multilane-release-gate] started: ${test_name}" "$log_path" || true)" != 1 ]]; then
-    echo "${test_name} did not enter mandatory multilane release mode" >&2
-    return 1
-  fi
-  if [[ "$(grep -Fxc -- "[multilane-release-gate] completed: ${test_name}" "$log_path" || true)" != 1 ]]; then
-    echo "${test_name} did not complete mandatory multilane release mode" >&2
-    return 1
+  if [[ "$test_name" == "$AUTOSCALE_FOUR_PEER_RELEASE_TEST" \
+    || "$test_name" == "$NATIVE_AMX_FAULT_SOAK_TEST" ]]; then
+    if [[ "$(grep -Fxc -- "[multilane-release-gate] started: ${test_name}" "$log_path" || true)" != 1 ]]; then
+      echo "${test_name} did not enter mandatory multilane release mode" >&2
+      return 1
+    fi
+    if [[ "$(grep -Fxc -- "[multilane-release-gate] completed: ${test_name}" "$log_path" || true)" != 1 ]]; then
+      echo "${test_name} did not complete mandatory multilane release mode" >&2
+      return 1
+    fi
   fi
   if grep -Fq -- "developer opt-out" "$log_path"; then
     echo "${test_name} reported a forbidden developer opt-out in release mode" >&2
+    return 1
+  fi
+  if [[ "$test_name" == "$NATIVE_AMX_FAULT_SOAK_TEST" ]] \
+    && [[ "$(grep -Fxc -- "$NATIVE_AMX_GROUPED_PRUNING_MARKER" "$log_path" || true)" != 1 ]]; then
+    echo "${test_name} did not prove one exact grouped Native AMX durable/pruning recovery" >&2
     return 1
   fi
 }
@@ -405,8 +419,8 @@ if [[ "$RUN_SCOPE" == "nexus" ]]; then
     --
     "${TEST_ARGS[@]}"
   )
-  wait_for_cargo_idle
   echo "Command: ${ENV_VARS[*]} ${CMD[*]}"
+  wait_for_cargo_idle
   env "${ENV_VARS[@]}" "${CMD[@]}"
   exit
 fi
@@ -419,9 +433,12 @@ if [[ "$RUN_SCOPE" == "native-amx" ]]; then
     --
     --list
   )
-  wait_for_cargo_idle
-  native_amx_test_list="$(env "${ENV_VARS[@]}" "${LIST_CMD[@]}")"
+  native_amx_test_list="$(
+    wait_for_cargo_idle
+    env "${ENV_VARS[@]}" "${LIST_CMD[@]}"
+  )"
   native_amx_ignored_test_list="$(
+    wait_for_cargo_idle
     env "${ENV_VARS[@]}" "${LIST_CMD[@]}" --ignored
   )"
   if ! grep -Fqx -- "${NATIVE_AMX_FAULT_SOAK_TEST}: test" \
@@ -451,9 +468,9 @@ if [[ "$RUN_SCOPE" == "native-amx" ]]; then
     return "$status"
   }
   trap cleanup_native_amx_run_log EXIT
-  wait_for_cargo_idle
   echo "Command: ${ENV_VARS[*]} ${CMD[*]}"
   set +e
+  wait_for_cargo_idle
   env "${ENV_VARS[@]}" IROHA_RUN_IGNORED=1 "${CMD[@]}" 2>&1 | tee "$NATIVE_AMX_RUN_LOG"
   native_amx_pipeline_status=("${PIPESTATUS[@]}")
   set -e
@@ -490,14 +507,17 @@ if [[ "$RUN_SCOPE" == "multilane-four-peer" ]]; then
   printf '%s\n' $'target\ttest\tstatus\tlog_sha256\tlog' >"$runs_path"
   release_specs=(
     "nexus_and_streaming|${AUTOSCALE_FOUR_PEER_RELEASE_TEST}"
+    "nexus_and_streaming|${AUTOSCALE_RESTART_FOUR_PEER_RELEASE_TEST}"
+    "nexus_and_streaming|${AUTOSCALE_DRAIN_FOUR_PEER_RELEASE_TEST}"
     "native_amx_routing|${NATIVE_AMX_FAULT_SOAK_TEST}"
   )
-  if ((${#release_specs[@]} != 2)); then
-    echo "expected exactly two mandatory four-peer multilane release tests" >&2
+  if ((${#release_specs[@]} != 4)); then
+    echo "expected exactly four mandatory four-peer multilane release tests" >&2
     exit 1
   fi
   passed_runs=0
-  for spec in "${release_specs[@]}"; do
+  for release_run_index in "${!release_specs[@]}"; do
+    spec="${release_specs[$release_run_index]}"
     IFS='|' read -r target test_name <<<"$spec"
     LIST_CMD=(
       "${CARGO_TEST_CMD[@]}"
@@ -506,9 +526,14 @@ if [[ "$RUN_SCOPE" == "multilane-four-peer" ]]; then
       --
       --list
     )
-    wait_for_cargo_idle
-    test_list="$(env "${ENV_VARS[@]}" "${LIST_CMD[@]}")"
-    ignored_test_list="$(env "${ENV_VARS[@]}" "${LIST_CMD[@]}" --ignored)"
+    test_list="$(
+      wait_for_cargo_idle
+      env "${ENV_VARS[@]}" "${LIST_CMD[@]}"
+    )"
+    ignored_test_list="$(
+      wait_for_cargo_idle
+      env "${ENV_VARS[@]}" "${LIST_CMD[@]}" --ignored
+    )"
     if [[ "$(grep -Fxc -- "${test_name}: test" <<<"$test_list" || true)" != 1 ]]; then
       echo "missing or renamed mandatory multilane release test: ${test_name}" >&2
       exit 1
@@ -518,7 +543,8 @@ if [[ "$RUN_SCOPE" == "multilane-four-peer" ]]; then
       exit 1
     fi
 
-    run_log="${evidence_run_dir}/${target}.log"
+    printf -v run_log '%s/run-%02d-%s.log' \
+      "$evidence_run_dir" "$release_run_index" "$target"
     CMD=(
       "${CARGO_TEST_CMD[@]}"
       -p integration_tests
@@ -529,9 +555,9 @@ if [[ "$RUN_SCOPE" == "multilane-four-peer" ]]; then
       --show-output
       "${TEST_ARGS[@]}"
     )
-    wait_for_cargo_idle
     echo "Command: ${ENV_VARS[*]} IROHA_MULTILANE_RELEASE_MODE=1 ${CMD[*]}"
     set +e
+    wait_for_cargo_idle
     env "${ENV_VARS[@]}" IROHA_MULTILANE_RELEASE_MODE=1 "${CMD[@]}" \
       2>&1 | tee "$run_log"
     run_pipeline_status=("${PIPESTATUS[@]}")
@@ -547,8 +573,8 @@ if [[ "$RUN_SCOPE" == "multilane-four-peer" ]]; then
       >>"$runs_path"
     ((passed_runs += 1))
   done
-  if ((passed_runs != 2)); then
-    echo "mandatory multilane four-peer release gates passed ${passed_runs}/2" >&2
+  if ((passed_runs != 4)); then
+    echo "mandatory multilane four-peer release gates passed ${passed_runs}/4" >&2
     exit 1
   fi
   completion_path="${evidence_run_dir}/COMPLETED.tsv"
@@ -560,17 +586,19 @@ if [[ "$RUN_SCOPE" == "multilane-four-peer" ]]; then
     head_tree "$release_head_tree" \
     source_manifest_sha256 "$release_source_manifest_sha256" \
     cargo_lock_sha256 "$release_cargo_lock_sha256" \
-    expected_runs 2 \
+    prebuilt_manifest_sha256 "$release_prebuilt_manifest_sha256" \
+    expected_runs 4 \
     passed_runs "$passed_runs" \
     failed_runs 0 \
     skipped_runs 0 \
+    native_grouped_pruning_evidence passed \
     runs_sha256 "$(sha256_file "$runs_path")" \
     >"$completion_tmp"
   mv -- "$completion_tmp" "$completion_path"
   publish_completion_path \
     "$completion_path" \
     "$multilane_completion_pointer"
-  echo "[nexus-cross-swap] mandatory four-peer multilane release gates passed 2/2; completion=${completion_path}"
+  echo "[nexus-cross-swap] mandatory four-peer multilane release gates passed 4/4; completion=${completion_path}"
   exit
 fi
 
@@ -584,8 +612,10 @@ LIST_CMD=(
 if [[ "$RUN_SCOPE" == "cross-fault-soak" ]]; then
   LIST_CMD+=("--ignored")
 fi
-wait_for_cargo_idle
-cross_test_list="$(env "${ENV_VARS[@]}" "${LIST_CMD[@]}")"
+cross_test_list="$(
+  wait_for_cargo_idle
+  env "${ENV_VARS[@]}" "${LIST_CMD[@]}"
+)"
 if [[ "$RUN_SCOPE" == "case" ]]; then
   required_cross_test="$CROSS_DATASPACE_CASE_TEST"
 else
@@ -618,9 +648,9 @@ if [[ "$RUN_SCOPE" == "case" ]]; then
       --exact
       "${TEST_ARGS[@]}"
     )
-    wait_for_cargo_idle
     echo "Command: ${RUN_ENV[*]} ${CMD[*]}"
     set +e
+    wait_for_cargo_idle
     env "${RUN_ENV[@]}" "${CMD[@]}" 2>&1 | tee "$run_log"
     run_pipeline_status=("${PIPESTATUS[@]}")
     set -e
@@ -647,6 +677,7 @@ if [[ "$RUN_SCOPE" == "case" ]]; then
     head_tree "$release_head_tree" \
     source_manifest_sha256 "$release_source_manifest_sha256" \
     cargo_lock_sha256 "$release_cargo_lock_sha256" \
+    prebuilt_manifest_sha256 "$release_prebuilt_manifest_sha256" \
     expected_runs "$CROSS_DATASPACE_SEED_COUNT" \
     passed_runs "$passed_runs" \
     failed_runs 0 \
@@ -677,9 +708,9 @@ CMD=(
   --ignored
   "${TEST_ARGS[@]}"
 )
-wait_for_cargo_idle
 echo "Command: ${RUN_ENV[*]} ${CMD[*]}"
 set +e
+wait_for_cargo_idle
 env "${RUN_ENV[@]}" "${CMD[@]}" 2>&1 | tee "$run_log"
 fault_soak_pipeline_status=("${PIPESTATUS[@]}")
 set -e
@@ -697,6 +728,7 @@ printf '%s\t%s\n' \
   head_tree "$release_head_tree" \
   source_manifest_sha256 "$release_source_manifest_sha256" \
   cargo_lock_sha256 "$release_cargo_lock_sha256" \
+  prebuilt_manifest_sha256 "$release_prebuilt_manifest_sha256" \
   seed "$CROSS_DATASPACE_SEED" \
   duration_seconds "$CROSS_DATASPACE_FAULT_SOAK_DURATION" \
   expected_runs 1 \

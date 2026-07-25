@@ -6,13 +6,7 @@
 //! replication orders remain the sole authority, while adverts only supply
 //! current peer connectivity metadata.
 
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
-};
+use std::collections::{BTreeMap, BTreeSet};
 
 use axum::{
     body::Body,
@@ -26,25 +20,22 @@ use axum::{
     },
     response::Response,
 };
-use iroha_core::state::{State as CoreState, StateReadOnly, WorldReadOnly};
-use iroha_data_model::sorafs::pin_registry::{
-    ManifestDigest, ManifestRootCid, PinManifestRecord, PinStatus, ReplicationOrderId,
-    ReplicationOrderRecord, ReplicationOrderStatus,
-};
+use iroha_core::state::{StateReadOnly, StateView, WorldReadOnly};
+use iroha_data_model::sorafs::pin_registry::ManifestRootCid;
 use iroha_logger::{debug, warn};
 use mv::storage::StorageReadOnly;
-use norito::{
-    core::DecodeLimits,
-    json::{self, Map, Value},
-};
-use sorafs_manifest::{
-    AdvertEndpoint, EndpointKind, ProviderAdvertV1, TransportProtocol,
-    capacity::{MAX_CAPACITY_METADATA_VALUE_BYTES, ReplicationOrderV1},
+use norito::json::{self, Map, Value};
+use sorafs_manifest::{AdvertEndpoint, EndpointKind, ProviderAdvertV1, TransportProtocol};
+use sorafs_orchestrator::routing_authority::{
+    FinalizedStateIdentityV1, RoutingAuthorityError, RoutingAuthoritySource,
+    build_routing_authority_projection,
 };
 use time::{Month, OffsetDateTime, Weekday};
 use url::{Host as UrlHost, Url};
 
 use crate::{SharedAppState, sorafs::ProviderAdvertCache};
+
+pub(crate) use sorafs_orchestrator::routing_authority::RoutingAuthorityCache;
 
 const JSON_RESULT_LIMIT: usize = 100;
 const NDJSON_RESULT_LIMIT: usize = 1_024;
@@ -55,10 +46,6 @@ const MAX_FILTER_TERMS: usize = 32;
 const MAX_FILTER_TERM_BYTES: usize = 63;
 const MAX_ACCEPT_BYTES: usize = 1_024;
 const MAX_ACCEPT_RANGES: usize = 32;
-const MAX_AUTHORITY_MANIFESTS: usize = 65_536;
-const MAX_AUTHORITY_ORDERS: usize = 65_536;
-const MAX_AUTHORITY_PROVIDER_REFS: usize = 262_144;
-const MAX_REPLICATION_ORDER_PAYLOAD_BYTES: usize = 1024 * 1024;
 const MAX_ADVERT_ENDPOINTS: usize = 32;
 const MAX_ENDPOINT_BYTES: usize = 512;
 const POSITIVE_CACHE_TTL_SECS: u64 = 300;
@@ -72,14 +59,6 @@ const PROTOCOL_TORII_HTTP_RANGE: &str = "transport-sorafs-http-range";
 const PROTOCOL_QUIC_STREAM: &str = "transport-sorafs-quic-stream";
 const PROTOCOL_SORANET_RELAY: &str = "transport-sorafs-soranet-relay";
 const PROTOCOL_VENDOR: &str = "transport-sorafs-vendor";
-
-const REPLICATION_ORDER_DECODE_LIMITS: DecodeLimits = DecodeLimits::new(
-    MAX_CAPACITY_METADATA_VALUE_BYTES,
-    MAX_REPLICATION_ORDER_PAYLOAD_BYTES,
-    65_536,
-    MAX_REPLICATION_ORDER_PAYLOAD_BYTES * 4,
-    32,
-);
 
 /// Serve `GET /routing/v1/providers/{cid}`.
 pub(crate) async fn handle_get_routing_providers(
@@ -103,14 +82,14 @@ pub(crate) async fn handle_get_routing_providers(
     let now = unix_now_secs();
     let (authority, cache_outcome) = state
         .sorafs_routing_authority_cache
-        .get_or_rebuild(&state.state)
+        .get_or_rebuild(|| CommittedRoutingAuthoritySource::new(state.state.view()))
         .await;
     state
         .telemetry
         .with_metrics(|metrics| metrics.inc_sorafs_routing_authority_cache(cache_outcome.label()));
     let authority = match authority {
         Ok(value) => value,
-        Err(error) => return routing_error_response(error),
+        Err(error) => return routing_error_response(map_authority_error(error)),
     };
     let Some(cache) = state.sorafs_cache() else {
         return routing_error_response(RoutingError::DiscoveryUnavailable);
@@ -120,8 +99,7 @@ pub(crate) async fn handle_get_routing_providers(
     let cache_guard = tokio::sync::RwLockWriteGuard::downgrade(cache_guard);
 
     let provider_ids = authority
-        .by_content
-        .get(&content_cid)
+        .providers_for_content(&content_cid)
         .cloned()
         .unwrap_or_default();
     let peers = match resolve_authorized_peers(&provider_ids, &cache_guard, now, &filters) {
@@ -161,14 +139,14 @@ pub(crate) async fn handle_get_routing_peers(
     let now = unix_now_secs();
     let (authority, cache_outcome) = state
         .sorafs_routing_authority_cache
-        .get_or_rebuild(&state.state)
+        .get_or_rebuild(|| CommittedRoutingAuthoritySource::new(state.state.view()))
         .await;
     state
         .telemetry
         .with_metrics(|metrics| metrics.inc_sorafs_routing_authority_cache(cache_outcome.label()));
     let authority = match authority {
         Ok(value) => value,
-        Err(error) => return routing_error_response(error),
+        Err(error) => return routing_error_response(map_authority_error(error)),
     };
     let Some(cache) = state.sorafs_cache() else {
         return routing_error_response(RoutingError::DiscoveryUnavailable);
@@ -178,7 +156,7 @@ pub(crate) async fn handle_get_routing_peers(
     let cache_guard = tokio::sync::RwLockWriteGuard::downgrade(cache_guard);
 
     let mut peers =
-        match resolve_authorized_peers(&authority.all_providers, &cache_guard, now, &filters) {
+        match resolve_authorized_peers(authority.all_providers(), &cache_guard, now, &filters) {
             Ok(value) => value,
             Err(error) => return routing_error_response(error),
         };
@@ -192,6 +170,52 @@ pub(crate) async fn handle_get_routing_peers(
         "served admission-bound delegated-routing result"
     );
     routing_success_response("Peers", peers, representation, now)
+}
+
+struct CommittedRoutingAuthoritySource<'state> {
+    state_view: StateView<'state>,
+}
+
+impl<'state> CommittedRoutingAuthoritySource<'state> {
+    fn new(state_view: StateView<'state>) -> Self {
+        Self { state_view }
+    }
+}
+
+impl RoutingAuthoritySource for CommittedRoutingAuthoritySource<'_> {
+    fn finalized_identity(&self) -> Result<FinalizedStateIdentityV1, RoutingAuthorityError> {
+        let height = u64::try_from(self.state_view.height())
+            .map_err(|_| RoutingAuthorityError::InvalidFinalizedIdentity)?;
+        let block_hash = self
+            .state_view
+            .latest_block_hash()
+            .map(|hash| *hash.as_ref());
+        FinalizedStateIdentityV1::new(height, block_hash)
+    }
+
+    fn build_projection(
+        &self,
+        identity: FinalizedStateIdentityV1,
+    ) -> Result<
+        sorafs_orchestrator::routing_authority::RoutingAuthorityProjection,
+        RoutingAuthorityError,
+    > {
+        build_routing_authority_projection(
+            identity,
+            self.state_view.world().pin_manifests().iter(),
+            self.state_view.world().replication_orders().iter(),
+        )
+    }
+}
+
+const fn map_authority_error(error: RoutingAuthorityError) -> RoutingError {
+    match error {
+        RoutingAuthorityError::CapacityExceeded => RoutingError::AuthorityCapacityExceeded,
+        RoutingAuthorityError::InvalidFinalizedIdentity
+        | RoutingAuthorityError::StaleFinalizedIdentity
+        | RoutingAuthorityError::FinalizedFork
+        | RoutingAuthorityError::Corrupt => RoutingError::AuthorityCorrupt,
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -425,228 +449,6 @@ fn multiaddr_protocol_components(address: &str) -> BTreeSet<&str> {
         }
     }
     result
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct AuthorityIndex {
-    by_content: BTreeMap<ManifestRootCid, BTreeSet<[u8; 32]>>,
-    all_providers: BTreeSet<[u8; 32]>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct RoutingAuthorityIdentity {
-    committed_height: u64,
-    latest_block_hash: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-struct CachedAuthorityIndex {
-    identity: RoutingAuthorityIdentity,
-    result: Result<Arc<AuthorityIndex>, RoutingError>,
-}
-
-/// Bounded single-flight cache for the SFM-1 committed authority join.
-///
-/// Exactly one entry is retained and its identity includes both finalized
-/// height and block hash, so a same-height fork cannot reuse another
-/// projection. Rebuilds execute while holding the cache mutex and derive the
-/// identity and index from the same point-in-time state view.
-#[derive(Debug, Default)]
-pub(crate) struct RoutingAuthorityCache {
-    cached: tokio::sync::Mutex<Option<CachedAuthorityIndex>>,
-    hits: AtomicU64,
-    rebuilds: AtomicU64,
-    rebuild_failures: AtomicU64,
-}
-
-#[cfg(test)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-struct RoutingAuthorityCacheMetrics {
-    hits: u64,
-    rebuilds: u64,
-    rebuild_failures: u64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RoutingAuthorityCacheOutcome {
-    Hit,
-    Rebuild,
-    RebuildFailure,
-}
-
-impl RoutingAuthorityCacheOutcome {
-    const fn label(self) -> &'static str {
-        match self {
-            Self::Hit => "hit",
-            Self::Rebuild => "rebuild",
-            Self::RebuildFailure => "rebuild_failure",
-        }
-    }
-}
-
-impl RoutingAuthorityCache {
-    async fn get_or_rebuild(
-        &self,
-        state: &CoreState,
-    ) -> (
-        Result<Arc<AuthorityIndex>, RoutingError>,
-        RoutingAuthorityCacheOutcome,
-    ) {
-        let mut cached = self.cached.lock().await;
-        let state_view = state.view();
-        let committed_height = u64::try_from(state_view.height()).unwrap_or(u64::MAX);
-        let identity = RoutingAuthorityIdentity {
-            committed_height,
-            latest_block_hash: state_view.latest_block_hash().map(|hash| hash.to_string()),
-        };
-        if let Some(entry) = cached.as_ref()
-            && entry.identity == identity
-        {
-            self.hits.fetch_add(1, Ordering::Relaxed);
-            return (entry.result.clone(), RoutingAuthorityCacheOutcome::Hit);
-        }
-
-        self.rebuilds.fetch_add(1, Ordering::Relaxed);
-        let result = build_authority_index(
-            state_view.world().pin_manifests().iter(),
-            state_view.world().replication_orders().iter(),
-            committed_height,
-        )
-        .map(Arc::new);
-        let outcome = if result.is_err() {
-            self.rebuild_failures.fetch_add(1, Ordering::Relaxed);
-            RoutingAuthorityCacheOutcome::RebuildFailure
-        } else {
-            RoutingAuthorityCacheOutcome::Rebuild
-        };
-        *cached = Some(CachedAuthorityIndex {
-            identity,
-            result: result.clone(),
-        });
-        (result, outcome)
-    }
-
-    #[cfg(test)]
-    fn metrics(&self) -> RoutingAuthorityCacheMetrics {
-        RoutingAuthorityCacheMetrics {
-            hits: self.hits.load(Ordering::Relaxed),
-            rebuilds: self.rebuilds.load(Ordering::Relaxed),
-            rebuild_failures: self.rebuild_failures.load(Ordering::Relaxed),
-        }
-    }
-}
-
-fn build_authority_index<'a, M, O>(
-    manifests: M,
-    orders: O,
-    current_epoch: u64,
-) -> Result<AuthorityIndex, RoutingError>
-where
-    M: IntoIterator<Item = (&'a ManifestDigest, &'a PinManifestRecord)>,
-    O: IntoIterator<Item = (&'a ReplicationOrderId, &'a ReplicationOrderRecord)>,
-{
-    let mut all_manifests = BTreeMap::new();
-    let mut active_manifests = BTreeMap::new();
-    let mut manifest_count = 0usize;
-    for (digest, record) in manifests {
-        manifest_count = manifest_count.saturating_add(1);
-        if manifest_count > MAX_AUTHORITY_MANIFESTS {
-            return Err(RoutingError::AuthorityCapacityExceeded);
-        }
-        if digest != &record.digest {
-            return Err(RoutingError::AuthorityCorrupt);
-        }
-        if all_manifests.insert(*digest, record).is_some() {
-            return Err(RoutingError::AuthorityCorrupt);
-        }
-        if matches!(record.status, PinStatus::Approved(epoch) if epoch <= current_epoch) {
-            active_manifests.insert(*digest, record);
-        }
-    }
-
-    let mut result = AuthorityIndex::default();
-    let mut order_count = 0usize;
-    let mut provider_refs = 0usize;
-    let mut seen_orders = BTreeSet::new();
-    for (order_id, record) in orders {
-        order_count = order_count.saturating_add(1);
-        if order_count > MAX_AUTHORITY_ORDERS {
-            return Err(RoutingError::AuthorityCapacityExceeded);
-        }
-        if order_id != &record.order_id {
-            return Err(RoutingError::AuthorityCorrupt);
-        }
-        if !seen_orders.insert(*order_id) {
-            return Err(RoutingError::AuthorityCorrupt);
-        }
-        let ReplicationOrderStatus::Completed(completed_epoch) = record.status else {
-            continue;
-        };
-        if completed_epoch < record.issued_epoch
-            || completed_epoch > record.deadline_epoch
-            || completed_epoch > current_epoch
-            || record.issued_epoch > current_epoch
-        {
-            return Err(RoutingError::AuthorityCorrupt);
-        }
-        let Some(manifest) = all_manifests.get(&record.manifest_digest) else {
-            return Err(RoutingError::AuthorityCorrupt);
-        };
-        let Some(active_manifest) = active_manifests.get(&record.manifest_digest) else {
-            // Retired and not-yet-approved manifests remain auditable but must
-            // never leak routes from historical completed orders.
-            continue;
-        };
-        if manifest.root_cid != record.manifest_root_cid
-            || active_manifest.root_cid != record.manifest_root_cid
-        {
-            return Err(RoutingError::AuthorityCorrupt);
-        }
-        let payload = decode_canonical_order(record)?;
-        if payload.chunking_profile != active_manifest.chunker.to_handle() {
-            return Err(RoutingError::AuthorityCorrupt);
-        }
-        provider_refs = provider_refs.saturating_add(payload.assignments.len());
-        if provider_refs > MAX_AUTHORITY_PROVIDER_REFS {
-            return Err(RoutingError::AuthorityCapacityExceeded);
-        }
-        let providers = result
-            .by_content
-            .entry(record.manifest_root_cid)
-            .or_default();
-        for assignment in payload.assignments {
-            providers.insert(assignment.provider_id);
-            result.all_providers.insert(assignment.provider_id);
-        }
-    }
-    Ok(result)
-}
-
-fn decode_canonical_order(
-    record: &ReplicationOrderRecord,
-) -> Result<ReplicationOrderV1, RoutingError> {
-    if record.canonical_order.is_empty()
-        || record.canonical_order.len() > MAX_REPLICATION_ORDER_PAYLOAD_BYTES
-    {
-        return Err(RoutingError::AuthorityCorrupt);
-    }
-    let payload: ReplicationOrderV1 = norito::decode_from_bytes_with_limits(
-        &record.canonical_order,
-        REPLICATION_ORDER_DECODE_LIMITS,
-    )
-    .map_err(|_| RoutingError::AuthorityCorrupt)?;
-    payload
-        .validate()
-        .map_err(|_| RoutingError::AuthorityCorrupt)?;
-    let canonical = norito::to_bytes(&payload).map_err(|_| RoutingError::AuthorityCorrupt)?;
-    if canonical != record.canonical_order
-        || payload.order_id != *record.order_id.as_bytes()
-        || payload.manifest_digest != *record.manifest_digest.as_bytes()
-        || payload.manifest_cid.as_slice() != record.manifest_root_cid.as_bytes()
-    {
-        return Err(RoutingError::AuthorityCorrupt);
-    }
-    Ok(payload)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1536,16 +1338,10 @@ mod tests {
 
     use axum::http::header;
     use http_body_util::BodyExt as _;
-    use iroha_data_model::{
-        metadata::Metadata,
-        sorafs::pin_registry::{ChunkerProfileHandle, PinPolicy, StorageClass},
-    };
-    use iroha_test_samples::ALICE_ID;
     use sorafs_manifest::{
         AdvertSignature, AvailabilityTier, CapabilityTlv, CapabilityType, PathDiversityPolicy,
         ProviderAdvertBodyV1, ProviderCapabilityRangeV1, QosHints, RendezvousTopic,
         SignatureAlgorithm, StreamBudgetV1, TransportHintV1,
-        capacity::{REPLICATION_ORDER_VERSION_V1, ReplicationAssignmentV1, ReplicationOrderSlaV1},
     };
 
     use super::*;
@@ -1554,126 +1350,6 @@ mod tests {
 
     fn sample_cid(seed: u8) -> ManifestRootCid {
         ManifestRootCid::from_blake3_digest([seed.max(1); 32]).expect("canonical root CID")
-    }
-
-    fn sample_digest(seed: u8) -> ManifestDigest {
-        ManifestDigest::new([seed.max(1); 32])
-    }
-
-    fn sample_chunker() -> ChunkerProfileHandle {
-        ChunkerProfileHandle {
-            profile_id: 1,
-            namespace: "sorafs".to_owned(),
-            name: "sf1".to_owned(),
-            semver: "1.0.0".to_owned(),
-            multihash_code: 0x1f,
-        }
-    }
-
-    fn sample_manifest(seed: u8, status: PinStatus) -> (ManifestDigest, PinManifestRecord) {
-        let digest = sample_digest(seed);
-        let mut record = PinManifestRecord::new(
-            digest,
-            sample_cid(seed.wrapping_add(1)),
-            sample_chunker(),
-            [seed.wrapping_add(2).max(1); 32],
-            PinPolicy {
-                min_replicas: 1,
-                storage_class: StorageClass::Hot,
-                retention_epoch: 1_000,
-            },
-            ALICE_ID.clone(),
-            1,
-            None,
-            None,
-            Metadata::default(),
-        );
-        record.status = status;
-        (digest, record)
-    }
-
-    fn sample_order(
-        seed: u8,
-        manifest: &(ManifestDigest, PinManifestRecord),
-        providers: &[[u8; 32]],
-        status: ReplicationOrderStatus,
-    ) -> (ReplicationOrderId, ReplicationOrderRecord) {
-        let order_id = ReplicationOrderId::new([seed.max(1); 32]);
-        let assignments = providers
-            .iter()
-            .copied()
-            .map(|provider_id| ReplicationAssignmentV1 {
-                provider_id,
-                slice_gib: 1,
-                lane: None,
-            })
-            .collect::<Vec<_>>();
-        let payload = ReplicationOrderV1 {
-            version: REPLICATION_ORDER_VERSION_V1,
-            order_id: *order_id.as_bytes(),
-            manifest_cid: manifest.1.root_cid.as_bytes().to_vec(),
-            manifest_digest: *manifest.0.as_bytes(),
-            chunking_profile: manifest.1.chunker.to_handle(),
-            target_replicas: 1,
-            assignments,
-            issued_at: NOW.saturating_sub(100),
-            deadline_at: NOW.saturating_add(100),
-            sla: ReplicationOrderSlaV1 {
-                ingest_deadline_secs: 100,
-                min_availability_percent_milli: 99_000,
-                min_por_success_percent_milli: 98_000,
-            },
-            metadata: Vec::new(),
-        };
-        payload.validate().expect("valid test replication order");
-        let record = ReplicationOrderRecord {
-            order_id,
-            manifest_digest: manifest.0,
-            manifest_root_cid: manifest.1.root_cid,
-            issued_by: ALICE_ID.clone(),
-            issued_epoch: 5,
-            deadline_epoch: 20,
-            canonical_order: norito::to_bytes(&payload).expect("encode replication order"),
-            status,
-        };
-        (order_id, record)
-    }
-
-    fn build_test_index(
-        manifests: &[(ManifestDigest, PinManifestRecord)],
-        orders: &[(ReplicationOrderId, ReplicationOrderRecord)],
-        current_epoch: u64,
-    ) -> Result<AuthorityIndex, RoutingError> {
-        build_authority_index(
-            manifests.iter().map(|(id, record)| (id, record)),
-            orders.iter().map(|(id, record)| (id, record)),
-            current_epoch,
-        )
-    }
-
-    #[tokio::test]
-    async fn authority_cache_reuses_one_byte_identical_committed_projection() {
-        let app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world(
-            iroha_core::state::World::default(),
-        );
-        let cache = Arc::clone(&app.sorafs_routing_authority_cache);
-
-        let (first, first_outcome) = cache.get_or_rebuild(&app.state).await;
-        let (second, second_outcome) = cache.get_or_rebuild(&app.state).await;
-        let first = first.expect("empty committed authority builds");
-        let second = second.expect("identical committed authority is cached");
-
-        assert_eq!(first_outcome, RoutingAuthorityCacheOutcome::Rebuild);
-        assert_eq!(second_outcome, RoutingAuthorityCacheOutcome::Hit);
-        assert!(Arc::ptr_eq(&first, &second));
-        assert_eq!(
-            cache.metrics(),
-            RoutingAuthorityCacheMetrics {
-                hits: 1,
-                rebuilds: 1,
-                rebuild_failures: 0,
-            }
-        );
     }
 
     fn sample_advert(
@@ -2016,110 +1692,6 @@ mod tests {
         assert_eq!(
             negotiate_representation(&headers),
             Err(RoutingError::InvalidAccept)
-        );
-    }
-
-    #[test]
-    fn only_approved_manifests_with_completed_orders_publish_authority() {
-        let provider = [0x44; 32];
-        let approved = sample_manifest(1, PinStatus::Approved(3));
-        let completed = sample_order(
-            7,
-            &approved,
-            &[provider],
-            ReplicationOrderStatus::Completed(8),
-        );
-        let index = build_test_index(&[approved.clone()], &[completed.clone()], 10).unwrap();
-        assert_eq!(
-            index.by_content.get(&approved.1.root_cid),
-            Some(&BTreeSet::from([provider]))
-        );
-
-        for status in [
-            ReplicationOrderStatus::Pending,
-            ReplicationOrderStatus::Expired(9),
-        ] {
-            let order = sample_order(8, &approved, &[provider], status);
-            assert!(
-                build_test_index(&[approved.clone()], &[order], 10)
-                    .unwrap()
-                    .all_providers
-                    .is_empty()
-            );
-        }
-        for status in [
-            PinStatus::Pending,
-            PinStatus::Retired(9),
-            PinStatus::Approved(11),
-        ] {
-            let manifest = sample_manifest(2, status);
-            let order = sample_order(
-                9,
-                &manifest,
-                &[provider],
-                ReplicationOrderStatus::Completed(8),
-            );
-            assert!(
-                build_test_index(&[manifest], &[order], 10)
-                    .unwrap()
-                    .all_providers
-                    .is_empty()
-            );
-        }
-    }
-
-    #[test]
-    fn authority_rejects_future_completion_replay_and_record_payload_equivocation() {
-        let manifest = sample_manifest(3, PinStatus::Approved(1));
-        let provider = [0x55; 32];
-        let future = sample_order(
-            10,
-            &manifest,
-            &[provider],
-            ReplicationOrderStatus::Completed(11),
-        );
-        assert_eq!(
-            build_test_index(&[manifest.clone()], &[future], 10),
-            Err(RoutingError::AuthorityCorrupt)
-        );
-
-        let mut corrupt = sample_order(
-            11,
-            &manifest,
-            &[provider],
-            ReplicationOrderStatus::Completed(8),
-        );
-        corrupt.1.canonical_order.push(0);
-        assert_eq!(
-            build_test_index(&[manifest.clone()], &[corrupt], 10),
-            Err(RoutingError::AuthorityCorrupt)
-        );
-
-        let valid = sample_order(
-            12,
-            &manifest,
-            &[provider],
-            ReplicationOrderStatus::Completed(8),
-        );
-        assert_eq!(
-            build_test_index(&[manifest], &[valid.clone(), valid], 10),
-            Err(RoutingError::AuthorityCorrupt)
-        );
-    }
-
-    #[test]
-    fn authority_rejects_oversized_order_before_decode() {
-        let manifest = sample_manifest(4, PinStatus::Approved(1));
-        let mut order = sample_order(
-            13,
-            &manifest,
-            &[[0x66; 32]],
-            ReplicationOrderStatus::Completed(8),
-        );
-        order.1.canonical_order = vec![0; MAX_REPLICATION_ORDER_PAYLOAD_BYTES + 1];
-        assert_eq!(
-            build_test_index(&[manifest], &[order], 10),
-            Err(RoutingError::AuthorityCorrupt)
         );
     }
 

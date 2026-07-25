@@ -17760,15 +17760,16 @@ mod tests {
                 semver: "1.0.0".to_string(),
                 multihash_code: 0x1e,
             },
-            [0xA7; 32],
+            manifest.chunk_digest_sha3_256,
+            manifest.por_root,
+            content_length,
             policy,
             ALICE_ID.clone(),
             1,
             None,
             None,
             Metadata::default(),
-        )
-        .with_content_length(content_length);
+        );
         match status {
             PinStatus::Pending => {}
             PinStatus::Approved(epoch) => record.approve(epoch, None),

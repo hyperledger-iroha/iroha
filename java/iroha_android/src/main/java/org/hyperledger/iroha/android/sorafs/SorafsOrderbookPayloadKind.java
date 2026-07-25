@@ -6,8 +6,7 @@ public enum SorafsOrderbookPayloadKind {
   ORDER_CANCEL(2, "order-cancel.to", true),
   TRADE_EVENT(3, "trade-event.to", false),
   SETTLEMENT_CHANNEL(4, "settlement-channel.to", false),
-  SETTLEMENT_RECEIPT(5, "settlement-receipt.to", true),
-  RUNTIME_SNAPSHOT(6, "orderbook-runtime-snapshot.to", false);
+  SETTLEMENT_RECEIPT(5, "settlement-receipt.to", true);
 
   private final int bridgeCode;
   private final String defaultLabel;

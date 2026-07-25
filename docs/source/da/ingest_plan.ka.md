@@ -274,10 +274,13 @@ pub struct DaIngestReceipt {
   სტრიქონები, რათა შეინარჩუნოს `policy_source` მნიშვნელობები მტკიცებულების პაკეტებში. იხ
   `crates/iroha_cli/src/commands/da.rs` ქვებრძანებისთვის და `docs/source/da/rent_policy.md`
   პოლიტიკის სქემისთვის.【crates/iroha_cli/src/commands/da.rs:1】【docs/source/da/rent_policy.md:1】
-- პინის რეესტრის პარიტეტი ახლა ვრცელდება SDK-ებზე: `ToriiClient.registerSorafsPinManifest(...)`
-  JavaScript SDK აშენებს `iroha app sorafs pin register`-ის მიერ გამოყენებულ ზუსტ დატვირთვას, ახორციელებს კანონიკურ
-  chunker-ის მეტამონაცემები, პინის წესები, ალიასის მტკიცებულებები და შემდგომი დაიჯესტები POST-ში
-  `/v1/sorafs/pin/register`. ეს აფერხებს CI ბოტებს და ავტომატიზაციას CLI-ზე დაბომბვისგან
+- Pin registry-ის პარიტეტი ახლა SDK-ებზეც ვრცელდება:
+  `ToriiClient.registerSorafsPinManifest(...)` ქმნის დახურულ JSON V1 მოთხოვნას,
+  რომლის `manifest_payload` შეიცავს ზუსტ canonical padded-base64 `ManifestV1`-ს.
+  Torii digest-ს, chunker-ს, content length-ს, pin policy-სა და fee input-ებს
+  მხოლოდ decoded manifest-იდან გამოითვლის და duplicate summary-ებს უარყოფს;
+  optional alias და nonzero predecessor შენარჩუნებულია. ამის გამო CI ბოტებსა
+  და ავტომატიზაციას `/v1/sorafs/pin/register`-ის გამოყენებისას CLI აღარ სჭირდება
   ჩაწერს მანიფესტის რეგისტრაციებს და დამხმარე იგზავნება TypeScript/README დაფარვით, ასე რომ DA-8
   "submit/get/prove" ხელსაწყოების პარიტეტი სრულად დაკმაყოფილებულია JS-ზე Rust/Swift-თან ერთად.【javascript/iroha_js/src/toriiClient.js:1045】【javascript/iroha_js/test/toriiClient.test.js:788
 - `iroha app da prove-availability` აკავშირებს ყველა ჩამოთვლილს: იღებს შენახვის ბილეთს, ჩამოტვირთავს

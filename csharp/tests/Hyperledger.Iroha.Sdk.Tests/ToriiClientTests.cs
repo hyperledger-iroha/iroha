@@ -9049,13 +9049,23 @@ public sealed class ToriiClientTests
             Assert.Equal("ed25519:deadbeef", root.GetProperty("private_key").GetString());
             Assert.Equal(manifestBase64, root.GetProperty("manifest_payload").GetString());
             Assert.Equal((ulong)42, root.GetProperty("submitted_epoch").GetUInt64());
-            Assert.Equal("xor#universal", root.GetProperty("gas_asset_id").GetString());
             Assert.Equal("docs", root.GetProperty("alias").GetProperty("namespace").GetString());
             Assert.Equal("main", root.GetProperty("alias").GetProperty("name").GetString());
             Assert.Equal(aliasProof, root.GetProperty("alias").GetProperty("proof_base64").GetString());
             Assert.Equal(successorHex, root.GetProperty("successor_of_hex").GetString());
+            Assert.Equal(
+                [
+                    "authority",
+                    "private_key",
+                    "manifest_payload",
+                    "submitted_epoch",
+                    "alias",
+                    "successor_of_hex",
+                ],
+                root.EnumerateObject().Select(static property => property.Name));
             foreach (var retired in new[]
             {
+                "fee_payment", "feePayment", "gas_asset_id", "gasAssetId",
                 "chunker", "chunker_profile_id", "chunker_namespace", "chunker_name",
                 "chunker_semver", "chunker_multihash_code", "pin_policy",
                 "manifest_digest_hex", "manifest_b64", "chunk_digest_sha3_256_hex",

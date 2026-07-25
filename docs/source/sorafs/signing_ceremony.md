@@ -65,12 +65,16 @@ offline process and how developers interact with it.
 
   ```
   sorafs-fetch \
-    --plan=fixtures/chunk_fetch_specs.json \
+    --plan=fixtures/chunk_fetch_plan.json \
     --gateway-provider=name=staging,provider-id=<hex>,gateway-key=<ed25519-public-key-hex>,base-url=https://gw-stage.example/,stream-token=<base64> \
     --gateway-manifest-id=<manifest_id_hex> \
     --gateway-chunker-handle=sorafs.sf1@1.0.0 \
     --json-out=reports/staging_gateway.json
   ```
+
+  The plan file must be the strict payload-bound
+  `sorafs.chunk_fetch_plan.v1` object. A copied report field or retired bare
+  array is rejected.
 
 - Local CI no longer requires a `signer.json` roster. Instead,
   `ci/check_sorafs_fixtures.sh` compares the repository state with the latest

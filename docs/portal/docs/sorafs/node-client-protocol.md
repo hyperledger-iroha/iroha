@@ -116,20 +116,26 @@ Common errors raised to operators/SDKs:
 - `iroha app sorafs pin list|show`, `alias list`, and `replication list` wrap the
   pin-registry REST endpoints and print raw Norito JSON with attestation blocks
   for audit evidence.
-- `iroha app sorafs storage pin` and `torii /v1/sorafs/pin/register` accept Norito
-  or JSON manifests plus optional alias proofs and successors; malformed proofs
-  raise `400`, stale proofs surface `503` with `Warning: 110`, and
-  hard-expired proofs return `412`.
-- `iroha app sorafs repair list` mirrors repair queue filters, while
-  `repair claim|complete|fail|escalate` submit signed worker actions or slash
-  proposals to Torii. Slash proposals may include a governance approval summary
-  (approve/reject/abstain vote counts plus approved_at/finalized_at
-  timestamps); when present it must satisfy quorum and dispute/appeal windows,
-  otherwise the proposal stays in dispute until votes resolve at the deadline.
-- Repair listings and worker queue selection are ordered by SLA deadline, failure severity, and provider backlog with deterministic tie-breakers (queued time, manifest digest, ticket id).
-- Repair status responses include an `events` array containing base64 Norito
-  `RepairTaskEventV1` entries ordered by occurrence for audit trails; the list
-  is capped to the most recent transitions.
+- `torii /v1/sorafs/pin/register` accepts the closed JSON V1 request.
+  `manifest_payload` must be exact canonical padded base64 of canonical Norito
+  `ManifestV1` bytes. Torii derives the digest, chunker, content length, pin
+  policy, and fee inputs solely from the decoded manifest and rejects retired
+  duplicate summary fields. `alias` and a nonzero `successor_of_hex`
+  predecessor remain optional.
+- `iroha app sorafs repair list` reads the finalized task page, or one task with
+  `--ticket-id`; exact finalized height/block-hash anchors and the immutable
+  task-id cursor keep a multi-page scan on one committed view.
+- `repair claim|renew|complete|fail|escalate` constructs one route-matching
+  native instruction, signs the containing Iroha transaction with the CLI
+  authority, and submits the exact bytes to strict durable ingress. Command
+  routes return `202 Accepted`; the CLI prints the transaction hash and callers
+  reconcile the finalized task/event projection before acting.
+- Native execution enforces expected revision, exact live lease generation,
+  provider-scoped authority, idempotency, and one terminal outcome. No local
+  queue or embedded event array is authoritative.
+- Report, slash, appeal, claim, heartbeat, complete, and fail command routes
+  return `202 Accepted`; finalized status, task-list, single-task, and
+  committed-event queries return `200 OK`.
 - `iroha app sorafs gc inspect|dry-run --data-dir=/var/lib/sorafs` emits read-only
   retention reports from the local manifest store for audit evidence.
 - REST endpoints (`/v1/sorafs/pin`, `/v1/sorafs/aliases`,

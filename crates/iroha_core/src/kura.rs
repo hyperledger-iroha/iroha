@@ -27,13 +27,20 @@ use iroha_config::{
     parameters::{
         actual::{
             Fastpq as FastpqConfig, Kura as Config, LaneConfig, LaneConfigEntry,
-            SnapshotBootstrapPolicy,
+            SnapshotBootstrapPolicy, SumeragiV2RuntimeLimits,
         },
         defaults::{
             kura::{
                 BLOCK_SYNC_ROSTER_RETENTION, BLOCKS_IN_MEMORY, EVICTION_REQUIRED_REPLICAS,
                 FSYNC_INTERVAL, MAX_DISK_USAGE_BYTES, MERGE_LEDGER_CACHE_CAPACITY,
                 ROSTER_SIDECAR_RETENTION,
+            },
+            sumeragi::{
+                V2_PENDING_CERTIFIED_MERGE_ENTRY_CAPACITY,
+                V2_PENDING_CERTIFIED_MERGE_ENTRY_CAPACITY_MAX, V2_PENDING_CONTROL_SIDECAR_BYTES,
+                V2_PENDING_CONTROL_SIDECAR_BYTES_MAX, V2_PENDING_CONTROL_SIDECAR_BYTES_MIN,
+                V2_PENDING_QUEUE_PLAN_ADMISSION_CAPACITY,
+                V2_PENDING_QUEUE_PLAN_ADMISSION_CAPACITY_MAX,
             },
             zk::fastpq as FASTPQ_DEFAULTS,
         },
@@ -104,7 +111,7 @@ use crate::sumeragi::stake_snapshot::CommitStakeSnapshot;
 use crate::{
     block::CommittedBlock,
     commit_roster_journal::{CommitRosterJournal, CommitRosterJournalError},
-    queue::{LaneQueueReservationKeyV1, RoutingPlan},
+    queue::{LaneQueueReservationKeyV2, RoutingPlan},
     sumeragi::output_guard::ConsensusOutputGuard,
 };
 use iroha_data_model::merge::MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES;
@@ -232,6 +239,61 @@ struct BoundProgressNamespace {
     index_path: PathBuf,
     /// Bound directories in durability order: immediate parent through Kura root.
     directories: Vec<BoundProgressDirectory>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NativeAmxEvidenceKind {
+    Manifest,
+    Receipt,
+}
+
+impl NativeAmxEvidenceKind {
+    const fn prefix(self) -> &'static str {
+        match self {
+            Self::Manifest => NATIVE_AMX_APPLICATION_MANIFEST_FILE_PREFIX,
+            Self::Receipt => NATIVE_AMX_PARTICIPANT_RECEIPT_FILE_PREFIX,
+        }
+    }
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Manifest => NativeAmxParticipantApplicationManifestArtifactV1::FORMAT_LABEL,
+            Self::Receipt => NativeAmxParticipantApplicationReceiptArtifact::FORMAT_LABEL,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct NativeAmxEvidenceFile {
+    kind: NativeAmxEvidenceKind,
+    participant_height: u64,
+    path: PathBuf,
+    metadata: StableSidecarMetadata,
+}
+
+#[derive(Debug, Default)]
+struct NativeAmxEvidenceInventory {
+    manifests: BTreeMap<u64, NativeAmxEvidenceFile>,
+    receipts: BTreeMap<u64, NativeAmxEvidenceFile>,
+    temporary: Option<NativeAmxEvidenceFile>,
+    manifest_stable_bytes: u64,
+    receipt_stable_bytes: u64,
+}
+
+impl NativeAmxEvidenceInventory {
+    fn stable(&self, kind: NativeAmxEvidenceKind) -> &BTreeMap<u64, NativeAmxEvidenceFile> {
+        match kind {
+            NativeAmxEvidenceKind::Manifest => &self.manifests,
+            NativeAmxEvidenceKind::Receipt => &self.receipts,
+        }
+    }
+
+    fn stable_bytes(&self, kind: NativeAmxEvidenceKind) -> u64 {
+        match kind {
+            NativeAmxEvidenceKind::Manifest => self.manifest_stable_bytes,
+            NativeAmxEvidenceKind::Receipt => self.receipt_stable_bytes,
+        }
+    }
 }
 
 impl BoundProgressNamespace {
@@ -807,18 +869,31 @@ const LATEST_CERTIFIED_LANE_BLOCK_FRONTIER_BUILD_FILE: &str = "latest_certified_
 const LATEST_CERTIFIED_LANE_BLOCK_FRONTIER_VERSION: u16 = 1;
 const LATEST_CERTIFIED_LANE_BLOCK_FRONTIER_DIGEST_DOMAIN: &[u8] =
     b"iroha:kura:latest-certified-lane-block-frontier:v1\0";
-const AUTONOMOUS_LANE_BLOCKS_DATA_FILE: &str = "autonomous_blocks.norito";
-const AUTONOMOUS_LANE_BLOCKS_INDEX_FILE: &str = "autonomous_blocks.index";
-const AUTONOMOUS_LANE_BLOCK_VIEW_STATE_PREFIX: &str = "autonomous_view";
 const AUTONOMOUS_LANE_BLOCK_ATTEMPT_PREFIX: &str = "autonomous_attempt_v1";
 const AUTONOMOUS_LANE_BLOCK_ATTEMPT_VIEW_PREFIX: &str = "autonomous_attempt_view_v1";
 const AUTONOMOUS_LANE_BLOCK_LATEST_ATTEMPT_PREFIX: &str = "autonomous_latest_attempt_v1";
 const AUTONOMOUS_LANE_ROUTE_LATEST_ATTEMPT_FILE: &str = "autonomous_route_latest_attempt_v1.norito";
+#[cfg(test)]
+const OBSOLETE_AUTONOMOUS_LANE_BLOCKS_DATA_FILE: &str = "autonomous_blocks.norito";
+#[cfg(test)]
+const OBSOLETE_AUTONOMOUS_LANE_BLOCKS_INDEX_FILE: &str = "autonomous_blocks.index";
 const AUTONOMOUS_LANE_BLOCK_LATEST_ATTEMPT_MAX_BYTES: usize = 4 * 1024;
+const MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES: usize = 65_536;
 const AUTONOMOUS_LANE_BLOCK_VIEW_STATE_MAX_BYTES: usize =
     MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES;
 const AUTONOMOUS_LANE_ENTRYPOINT_CLAIMS_DIR_PREFIX: &str = "autonomous_entrypoint_claims";
 const AUTONOMOUS_LANE_ENTRYPOINT_CLAIM_MAX_BYTES: usize = 4 * 1024;
+/// Fixed first-release aggregate bound for autonomous lane-attempt artifacts.
+///
+/// Pending carrier control sidecars have separately configurable geometry;
+/// autonomous attempt retention keeps the reviewed release-default exposure.
+const AUTONOMOUS_LANE_ARTIFACT_AGGREGATE_BYTES: usize = V2_PENDING_CONTROL_SIDECAR_BYTES.get();
+/// Bound the durable replay-claim namespace by the existing aggregate
+/// pre-carrier sidecar budget. Both main ABA tombstones and crash-staged temp
+/// claims consume one slot, so even a namespace filled with maximum-sized
+/// claims remains within that established disk-exposure ceiling.
+const MAX_AUTONOMOUS_LANE_CLAIM_FILES: usize =
+    V2_PENDING_CONTROL_SIDECAR_BYTES.get() / AUTONOMOUS_LANE_ENTRYPOINT_CLAIM_MAX_BYTES;
 const CONSENSUS_SIDECAR_MATCH_SCAN_BUDGET: usize = 64;
 const LANE_BLOCK_EXECUTION_INPUTS_DATA_FILE: &str = "execution_inputs.norito";
 const LANE_BLOCK_EXECUTION_INPUTS_INDEX_FILE: &str = "execution_inputs.index";
@@ -828,13 +903,19 @@ const LANE_BLOCK_APPLICATION_RECEIPTS_DATA_FILE: &str = "application_receipts.no
 const LANE_BLOCK_APPLICATION_RECEIPTS_INDEX_FILE: &str = "application_receipts.index";
 const LANE_MERGE_APPLICATION_FRONTIER_FILE: &str = "merge_application_frontier_v1.norito";
 const LANE_MERGE_APPLICATION_FRONTIER_MAX_BYTES: usize = 8 * 1024;
-const NATIVE_AMX_PARTICIPANT_RECEIPTS_DATA_FILE: &str = "native_amx_participant_receipts.norito";
-const NATIVE_AMX_PARTICIPANT_RECEIPTS_INDEX_FILE: &str = "native_amx_participant_receipts.index";
-const NATIVE_AMX_APPLICATION_MANIFESTS_DATA_FILE: &str = "native_amx_application_manifests.norito";
-const NATIVE_AMX_APPLICATION_MANIFESTS_INDEX_FILE: &str = "native_amx_application_manifests.index";
+const NATIVE_AMX_APPLICATION_MANIFEST_FILE_PREFIX: &str = "native_amx_manifest_v1_";
+const NATIVE_AMX_PARTICIPANT_RECEIPT_FILE_PREFIX: &str = "native_amx_receipt_v1_";
+const NATIVE_AMX_EVIDENCE_FILE_SUFFIX: &str = ".norito";
+const NATIVE_AMX_EVIDENCE_TEMP_FILE_SUFFIX: &str = ".norito.tmp";
+const NATIVE_AMX_EVIDENCE_HEIGHT_DIGITS: usize = 20;
+const NATIVE_AMX_EVIDENCE_PRUNE_INTENT_FILE: &str = "native_amx_evidence_prune_intent_v1.norito";
+const NATIVE_AMX_EVIDENCE_PRUNE_INTENT_TEMP_FILE: &str =
+    "native_amx_evidence_prune_intent_v1.norito.tmp";
 const NATIVE_AMX_APPLICATION_MANIFEST_MAX_PROOF_HEIGHT: usize = 10;
 const NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_FILE: &str =
     "native_amx_participant_receipts.latest_v1.norito";
+const NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_TEMP_FILE: &str =
+    "native_amx_participant_receipts.latest_v1.norito.tmp";
 const NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_MAX_BYTES: usize = 4 * 1024;
 const PIPELINE_SIDECARS_DATA_FILE: &str = "sidecars.norito";
 const PIPELINE_SIDECARS_INDEX_FILE: &str = "sidecars.index";
@@ -868,9 +949,9 @@ const MAX_CANONICAL_ASSOCIATION_STAGE_BYTES: u64 =
     STRICT_INIT_MAX_BLOCK_BYTES + MAX_MERGE_LEDGER_ENTRY_BYTES as u64 + 1024 * 1024;
 const EVICTED_BLOCK_START: u64 = u64::MAX;
 const PENDING_MERGE_ENTRIES_DIR: &str = "pending_merge_entries";
-const MAX_PENDING_CERTIFIED_MERGE_ENTRIES: usize = 1_024;
-/// Aggregate bound for uncommitted certified merge sidecars.
-const MAX_PENDING_CERTIFIED_MERGE_BYTES: usize = 256 * 1024 * 1024;
+const PENDING_QUEUE_PLAN_ADMISSIONS_DIR: &str = "pending_queue_plan_admissions";
+pub(crate) const MAX_PENDING_QUEUE_PLAN_ADMISSION_CERTIFICATE_BYTES: usize =
+    iroha_data_model::merge::MAX_MERGE_QUEUE_PLAN_ADMISSION_BYTES;
 /// Aggregate payload-byte bound for one retained Native AMX manifest or
 /// receipt sidecar file.
 ///
@@ -880,7 +961,7 @@ const MAX_PENDING_CERTIFIED_MERGE_BYTES: usize = 256 * 1024 * 1024;
 /// retains the newest payload, so the current WSV/drain frontier remains
 /// revalidatable even when unusually large receipts reduce historical depth.
 const MAX_NATIVE_AMX_PARTICIPANT_EVIDENCE_FILE_BYTES: u64 =
-    MAX_PENDING_CERTIFIED_MERGE_BYTES as u64;
+    V2_PENDING_CONTROL_SIDECAR_BYTES.get() as u64;
 /// Startup allowance for one fsynced Native evidence append whose window
 /// compaction did not finish before a crash.
 ///
@@ -983,8 +1064,90 @@ fn configured_primary_open_identity_swap_boundary(path: &Path) -> Result<()> {
     Ok(())
 }
 
-const fn pending_merge_bytes_within_limit(bytes: usize) -> bool {
-    bytes <= MAX_PENDING_CERTIFIED_MERGE_BYTES
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PendingControlSidecarLimits {
+    certified_merge_entries: usize,
+    queue_plan_admissions: usize,
+    aggregate_bytes: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PendingCertifiedMergeVisitOutcome {
+    Complete,
+    VisitorStopped,
+    ScanLimitExceeded,
+}
+
+/// Result of a bounded, filtered pending certified-merge evidence scan.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum PendingCertifiedMergeEvidenceScan {
+    /// The complete bounded inventory was scanned; these hashes matched.
+    Complete(Vec<HashOf<MergeLedgerEntry>>),
+    /// The stable inventory exceeded the caller's scan limit before decoding.
+    LimitExceeded,
+}
+
+impl Default for PendingControlSidecarLimits {
+    fn default() -> Self {
+        Self {
+            certified_merge_entries: V2_PENDING_CERTIFIED_MERGE_ENTRY_CAPACITY.get(),
+            queue_plan_admissions: V2_PENDING_QUEUE_PLAN_ADMISSION_CAPACITY.get(),
+            aggregate_bytes: V2_PENDING_CONTROL_SIDECAR_BYTES.get(),
+        }
+    }
+}
+
+impl PendingControlSidecarLimits {
+    fn from_config(config: &SumeragiV2RuntimeLimits, store_root: &Path) -> Result<Self> {
+        let limits = Self {
+            certified_merge_entries: config.pending_certified_merge_entry_capacity.get(),
+            queue_plan_admissions: config.pending_queue_plan_admission_capacity.get(),
+            aggregate_bytes: config.pending_control_sidecar_bytes.get(),
+        };
+        if limits.certified_merge_entries > V2_PENDING_CERTIFIED_MERGE_ENTRY_CAPACITY_MAX {
+            return Err(Self::invalid_config(
+                store_root,
+                "sumeragi.limits.pending_certified_merge_entry_capacity exceeds its hard maximum",
+            ));
+        }
+        if limits.queue_plan_admissions > V2_PENDING_QUEUE_PLAN_ADMISSION_CAPACITY_MAX {
+            return Err(Self::invalid_config(
+                store_root,
+                "sumeragi.limits.pending_queue_plan_admission_capacity exceeds its hard maximum",
+            ));
+        }
+        if limits.aggregate_bytes < V2_PENDING_CONTROL_SIDECAR_BYTES_MIN
+            || limits.aggregate_bytes > V2_PENDING_CONTROL_SIDECAR_BYTES_MAX
+        {
+            return Err(Self::invalid_config(
+                store_root,
+                "sumeragi.limits.pending_control_sidecar_bytes is outside its hard bounds",
+            ));
+        }
+        Ok(limits)
+    }
+
+    fn invalid_config(store_root: &Path, message: &'static str) -> Error {
+        Error::IO(
+            std::io::Error::new(ErrorKind::InvalidInput, message),
+            store_root.to_path_buf(),
+        )
+    }
+
+    const fn merge_bytes_within_limit(self, bytes: usize) -> bool {
+        bytes <= self.aggregate_bytes
+    }
+
+    const fn combined_bytes_within_limit(
+        self,
+        pending_merge_bytes: usize,
+        pending_queue_plan_admission_bytes: usize,
+    ) -> bool {
+        match pending_merge_bytes.checked_add(pending_queue_plan_admission_bytes) {
+            Some(total) => total <= self.aggregate_bytes,
+            None => false,
+        }
+    }
 }
 
 #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
@@ -1169,6 +1332,11 @@ pub struct Kura {
     block_sync_roster_retention: NonZeroUsize,
     /// Number of recent roster sidecars retained alongside the block store.
     roster_sidecar_retention: NonZeroUsize,
+    /// Fingerprint-bound limits for pre-carrier certified merge and QueuePlan evidence.
+    pending_control_sidecar_limits: PendingControlSidecarLimits,
+    /// Exact maximum encoded Native AMX pair-prune journal for the configured
+    /// retained-history window.
+    native_amx_evidence_prune_intent_max_bytes: usize,
     /// On-disk merge-ledger log and in-memory cache.
     merge_log: Mutex<MergeLedgerLog>,
     /// Durably persisted legacy roster projection for rollback auditing only.
@@ -3378,7 +3546,14 @@ impl Kura {
     pub fn new(config: &Config, lane_config: &LaneConfig) -> Result<(Arc<Self>, BlockCount)> {
         #[cfg(not(test))]
         Self::validate_unauthenticated_fresh_store(config, lane_config)?;
-        Self::new_inner(config, lane_config, None, None, false)
+        Self::new_inner(
+            config,
+            lane_config,
+            None,
+            None,
+            false,
+            PendingControlSidecarLimits::default(),
+        )
     }
 
     #[cfg(not(test))]
@@ -3458,6 +3633,7 @@ impl Kura {
             configured_lane_catalog,
             None,
             false,
+            PendingControlSidecarLimits::default(),
         )
     }
 
@@ -3473,12 +3649,43 @@ impl Kura {
         configured_lane_catalog: &LaneCatalog,
         bootstrap_policy: &SnapshotBootstrapPolicy,
     ) -> Result<(Arc<Self>, BlockCount)> {
+        Self::new_with_configured_lane_catalog_and_snapshot_bootstrap_and_sumeragi_limits(
+            config,
+            lane_config,
+            configured_lane_catalog,
+            bootstrap_policy,
+            &SumeragiV2RuntimeLimits::default(),
+        )
+    }
+
+    /// Initialize authenticated Kura with exact fingerprint-bound Sumeragi v2
+    /// pending-control persistence limits.
+    ///
+    /// This is the production constructor. It validates the limits before any
+    /// Kura-owned path is created or opened, then applies them to crash
+    /// recovery and every subsequent pending-sidecar operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when snapshot policy, lane geometry, or pending-control
+    /// limits are invalid, or when authenticated Kura startup fails.
+    pub fn new_with_configured_lane_catalog_and_snapshot_bootstrap_and_sumeragi_limits(
+        config: &Config,
+        lane_config: &LaneConfig,
+        configured_lane_catalog: &LaneCatalog,
+        bootstrap_policy: &SnapshotBootstrapPolicy,
+        sumeragi_limits: &SumeragiV2RuntimeLimits,
+    ) -> Result<(Arc<Self>, BlockCount)> {
         bootstrap_policy.validate().map_err(|message| {
             Error::IO(
                 std::io::Error::new(ErrorKind::InvalidInput, message),
                 config.store_dir.resolve_relative_path(),
             )
         })?;
+        let pending_control_sidecar_limits = PendingControlSidecarLimits::from_config(
+            sumeragi_limits,
+            &config.store_dir.resolve_relative_path(),
+        )?;
         let provisional_hash_only_prefix = bootstrap_policy
             .enabled
             .then_some(bootstrap_policy.audited_height)
@@ -3491,6 +3698,7 @@ impl Kura {
             configured_lane_catalog,
             provisional_hash_only_prefix,
             !bootstrap_policy.enabled,
+            pending_control_sidecar_limits,
         )
     }
 
@@ -3500,6 +3708,7 @@ impl Kura {
         configured_lane_catalog: &LaneCatalog,
         provisional_hash_only_prefix: Option<usize>,
         discover_signed_lineage_marker: bool,
+        pending_control_sidecar_limits: PendingControlSidecarLimits,
     ) -> Result<(Arc<Self>, BlockCount)> {
         let authenticated_lane_config = LaneConfig::from_catalog(configured_lane_catalog);
         let Some(configured_primary) = authenticated_lane_config.entries().first() else {
@@ -3537,6 +3746,7 @@ impl Kura {
             )),
             provisional_hash_only_prefix,
             discover_signed_lineage_marker,
+            pending_control_sidecar_limits,
         )
     }
 
@@ -3680,11 +3890,16 @@ impl Kura {
         configured_catalog_hash: Option<Hash>,
         provisional_hash_only_prefix: Option<usize>,
         discover_signed_lineage_marker: bool,
+        pending_control_sidecar_limits: PendingControlSidecarLimits,
     ) -> Result<(Arc<Self>, BlockCount)> {
         let configured_store_dir = config.store_dir.resolve_relative_path();
         if configured_store_dir.as_os_str().is_empty() {
             return Err(Error::EmptyStoreRoot);
         }
+        let native_amx_evidence_prune_intent_max_bytes =
+            Self::native_amx_evidence_prune_intent_max_bytes_for_retention(
+                config.roster_sidecar_retention,
+            )?;
         create_dir_all_with_context(&configured_store_dir)?;
         // Resolve aliases once, before taking the lock, and use the same stable
         // absolute root for every subsequent Kura path.
@@ -4082,6 +4297,8 @@ impl Kura {
             blocks_in_memory: config.blocks_in_memory,
             block_sync_roster_retention: roster_retention,
             roster_sidecar_retention,
+            pending_control_sidecar_limits,
+            native_amx_evidence_prune_intent_max_bytes,
             merge_log: Mutex::new(merge_log),
             roster_log: Arc::new(RwLock::new(roster_log)),
             telemetry: OnceLock::new(),
@@ -4299,6 +4516,11 @@ impl Kura {
             .expect("create configured test lane merge ledger");
         }
         let roster_log_path = Self::roster_log_path(&store_root);
+        let native_amx_evidence_prune_intent_max_bytes =
+            Self::native_amx_evidence_prune_intent_max_bytes_for_retention(
+                ROSTER_SIDECAR_RETENTION,
+            )
+            .expect("default Native AMX prune-intent bound is valid");
         Arc::new(Self {
             _store_root_lock_file: None,
             block_store: Mutex::new(block_store),
@@ -4360,6 +4582,8 @@ impl Kura {
             blocks_in_memory,
             block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
             roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
+            pending_control_sidecar_limits: PendingControlSidecarLimits::default(),
+            native_amx_evidence_prune_intent_max_bytes,
             merge_log: Mutex::new(merge_log),
             roster_log: Arc::new(RwLock::new(CommitRosterJournal::new(
                 roster_log_path,
@@ -5854,6 +6078,66 @@ impl Kura {
         self.roster_sidecar_retention
     }
 
+    fn native_amx_evidence_prune_intent_max_entries(retention: NonZeroUsize) -> Result<usize> {
+        retention
+            .get()
+            .checked_add(1)
+            .and_then(|count| count.checked_mul(2))
+            .ok_or_else(|| {
+                Error::PruneIntentConflict(
+                    "configured Native AMX evidence prune-intent entry bound overflowed".to_owned(),
+                )
+            })
+    }
+
+    fn native_amx_evidence_prune_intent_max_bytes_for_retention(
+        retention: NonZeroUsize,
+    ) -> Result<usize> {
+        let max_entries = Self::native_amx_evidence_prune_intent_max_entries(retention)?;
+        let shared_budget = usize::try_from(MAX_NATIVE_AMX_PARTICIPANT_EVIDENCE_FILE_BYTES)?;
+        let allocation_bytes = max_entries
+            .checked_mul(std::mem::size_of::<NativeAmxEvidencePruneEntryV1>())
+            .ok_or_else(|| {
+                Error::PruneIntentConflict(
+                    "configured Native AMX evidence prune-intent allocation overflowed".to_owned(),
+                )
+            })?;
+        if allocation_bytes > shared_budget {
+            return Err(Error::PruneIntentConflict(
+                "configured Native AMX evidence retention requires a prune journal larger than the shared sidecar budget"
+                    .to_owned(),
+            ));
+        }
+
+        let maximum_entry = NativeAmxEvidencePruneEntryV1 {
+            kind: NativeAmxEvidencePruneIntentV1::RECEIPT_KIND,
+            participant_height: u64::MAX,
+            artifact_hash: Hash::prehashed([u8::MAX; Hash::LENGTH]),
+        };
+        let mut entries = Vec::new();
+        entries.try_reserve_exact(max_entries)?;
+        entries.resize(max_entries, maximum_entry);
+        let maximum_intent = NativeAmxEvidencePruneIntentV1 {
+            version: NativeAmxEvidencePruneIntentV1::VERSION,
+            lane_id: LaneId::new(u32::MAX),
+            dataspace_id: DataSpaceId::new(u64::MAX),
+            lane_incarnation: Hash::prehashed([u8::MAX; Hash::LENGTH]),
+            entries,
+        };
+        let encoded_len = norito::to_bytes(&maximum_intent)?.len();
+        if encoded_len == 0 || encoded_len > shared_budget {
+            return Err(Error::PruneIntentConflict(
+                "configured Native AMX evidence retention encodes a prune journal larger than the shared sidecar budget"
+                    .to_owned(),
+            ));
+        }
+        Ok(encoded_len)
+    }
+
+    fn native_amx_evidence_prune_intent_max_bytes(&self) -> usize {
+        self.native_amx_evidence_prune_intent_max_bytes
+    }
+
     fn lane_storage_entries_from_config(
         lane_config: &LaneConfig,
     ) -> BTreeMap<LaneId, LaneConfigEntry> {
@@ -6902,6 +7186,27 @@ impl Kura {
 
     #[cfg(all(not(unix), not(windows)))]
     fn sidecar_is_single_link(_metadata: &std::fs::Metadata) -> bool {
+        false
+    }
+
+    #[cfg(unix)]
+    fn sidecar_has_link_count(metadata: &std::fs::Metadata, expected: u64) -> bool {
+        use std::os::unix::fs::MetadataExt as _;
+
+        metadata.nlink() == expected
+    }
+
+    #[cfg(windows)]
+    fn sidecar_has_link_count(metadata: &std::fs::Metadata, expected: u64) -> bool {
+        use std::os::windows::fs::MetadataExt as _;
+
+        u32::try_from(expected)
+            .ok()
+            .is_some_and(|expected| metadata.number_of_links() == Some(expected))
+    }
+
+    #[cfg(all(not(unix), not(windows)))]
+    fn sidecar_has_link_count(_metadata: &std::fs::Metadata, _expected: u64) -> bool {
         false
     }
 
@@ -9447,6 +9752,735 @@ impl Kura {
         )
     }
 
+    fn validate_pending_merge_hash_text(path: &Path, hash_text: &str) -> Result<()> {
+        let decoded_hash = hex::decode(hash_text).map_err(|_| {
+            Self::invalid_pending_merge_entry_error(
+                path.to_path_buf(),
+                "pending merge filename is not a canonical hash",
+            )
+        })?;
+        if decoded_hash.len() != Hash::LENGTH || hex::encode(&decoded_hash) != hash_text {
+            return Err(Self::invalid_pending_merge_entry_error(
+                path.to_path_buf(),
+                "pending merge filename is not a canonical lowercase hash",
+            ));
+        }
+        Ok(())
+    }
+
+    fn ensure_pending_merge_entry_dir_unlocked(&self) -> Result<()> {
+        let directory = self.pending_merge_entry_dir();
+        match std::fs::symlink_metadata(&directory) {
+            Ok(_) => {
+                self.canonical_sidecar_directory(&directory)?
+                    .ok_or_else(|| {
+                        Self::invalid_pending_merge_entry_error(
+                            directory.clone(),
+                            "pending merge directory disappeared",
+                        )
+                    })?;
+            }
+            Err(error) if error.kind() == ErrorKind::NotFound => {
+                std::fs::create_dir(&directory)
+                    .map_err(|error| Error::MkDir(error, directory.clone()))?;
+                sync_dir(&self.store_root)
+                    .map_err(|error| Error::IO(error, self.store_root.clone()))?;
+                sync_dir(&directory).map_err(|error| Error::IO(error, directory.clone()))?;
+                self.canonical_sidecar_directory(&directory)?
+                    .ok_or_else(|| {
+                        Self::invalid_pending_merge_entry_error(
+                            directory.clone(),
+                            "new pending merge directory disappeared",
+                        )
+                    })?;
+            }
+            Err(error) => return Err(Error::IO(error, directory)),
+        }
+        Ok(())
+    }
+
+    fn create_exclusive_pending_merge_temp(&self, path: &Path) -> Result<std::fs::File> {
+        let directory = self.pending_merge_entry_dir();
+        if path.parent() != Some(directory.as_path()) {
+            return Err(Self::invalid_pending_merge_entry_error(
+                path.to_path_buf(),
+                "pending merge temporary is outside its direct directory",
+            ));
+        }
+        let (_, directory_before) =
+            self.canonical_sidecar_directory(&directory)?
+                .ok_or_else(|| {
+                    Self::invalid_pending_merge_entry_error(
+                        directory.clone(),
+                        "pending merge directory does not exist",
+                    )
+                })?;
+        let file_name = path.file_name().ok_or_else(|| {
+            Self::invalid_pending_merge_entry_error(
+                path.to_path_buf(),
+                "pending merge temporary has no filename",
+            )
+        })?;
+
+        #[cfg(unix)]
+        let file = {
+            use std::os::unix::fs::OpenOptionsExt as _;
+
+            let mut directory_options = std::fs::OpenOptions::new();
+            directory_options.read(true).custom_flags(
+                (rustix::fs::OFlags::DIRECTORY
+                    | rustix::fs::OFlags::NOFOLLOW
+                    | rustix::fs::OFlags::CLOEXEC)
+                    .bits() as i32,
+            );
+            let opened_directory = directory_options
+                .open(&directory)
+                .map_err(|error| Error::IO(error, directory.clone()))?;
+            let opened_directory_metadata = opened_directory
+                .metadata()
+                .map_err(|error| Error::IO(error, directory.clone()))?;
+            if !opened_directory_metadata.is_dir()
+                || !Self::sidecar_metadata_same_object(
+                    &directory_before,
+                    &opened_directory_metadata,
+                )
+            {
+                return Err(Self::invalid_pending_merge_entry_error(
+                    directory.clone(),
+                    "pending merge directory changed while binding it",
+                ));
+            }
+            std::fs::File::from(
+                rustix::fs::openat(
+                    &opened_directory,
+                    file_name,
+                    rustix::fs::OFlags::WRONLY
+                        | rustix::fs::OFlags::CREATE
+                        | rustix::fs::OFlags::EXCL
+                        | rustix::fs::OFlags::NOFOLLOW
+                        | rustix::fs::OFlags::CLOEXEC,
+                    rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+                )
+                .map_err(std::io::Error::from)
+                .map_err(|error| Error::IO(error, path.to_path_buf()))?,
+            )
+        };
+
+        #[cfg(not(unix))]
+        let file = {
+            let mut options = std::fs::OpenOptions::new();
+            options.create_new(true).write(true);
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::OpenOptionsExt as _;
+
+                const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+                options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+            }
+            options
+                .open(path)
+                .map_err(|error| Error::IO(error, path.to_path_buf()))?
+        };
+
+        let opened = file
+            .metadata()
+            .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+        let path_metadata = std::fs::symlink_metadata(path)
+            .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+        let (_, directory_after) =
+            self.canonical_sidecar_directory(&directory)?
+                .ok_or_else(|| {
+                    Self::invalid_pending_merge_entry_error(
+                        directory.clone(),
+                        "pending merge directory disappeared while creating a temporary",
+                    )
+                })?;
+        if !opened.is_file()
+            || path_metadata.file_type().is_symlink()
+            || !path_metadata.file_type().is_file()
+            || !Self::sidecar_is_single_link(&opened)
+            || !Self::sidecar_is_single_link(&path_metadata)
+            || !Self::sidecar_metadata_same_object(&opened, &path_metadata)
+            || !Self::sidecar_metadata_same_object(&directory_before, &directory_after)
+        {
+            return Err(Self::invalid_pending_merge_entry_error(
+                path.to_path_buf(),
+                "pending merge temporary identity changed during creation",
+            ));
+        }
+        Ok(file)
+    }
+
+    fn pending_queue_plan_admission_dir(&self) -> PathBuf {
+        self.store_root.join(PENDING_QUEUE_PLAN_ADMISSIONS_DIR)
+    }
+
+    fn pending_queue_plan_admission_path(&self, hash: Hash) -> PathBuf {
+        self.pending_queue_plan_admission_dir()
+            .join(format!("{}.norito", hex::encode(hash.as_ref())))
+    }
+
+    fn invalid_pending_queue_plan_admission_error(
+        path: PathBuf,
+        message: impl Into<String>,
+    ) -> Error {
+        Error::IO(
+            std::io::Error::new(ErrorKind::InvalidData, message.into()),
+            path,
+        )
+    }
+
+    fn validate_pending_queue_plan_admission_hash_text(path: &Path, hash_text: &str) -> Result<()> {
+        let decoded_hash = hex::decode(hash_text).map_err(|_| {
+            Self::invalid_pending_queue_plan_admission_error(
+                path.to_path_buf(),
+                "pending QueuePlan admission filename is not a canonical hash",
+            )
+        })?;
+        if decoded_hash.len() != Hash::LENGTH || hex::encode(&decoded_hash) != hash_text {
+            return Err(Self::invalid_pending_queue_plan_admission_error(
+                path.to_path_buf(),
+                "pending QueuePlan admission filename is not a canonical lowercase hash",
+            ));
+        }
+        Ok(())
+    }
+
+    fn pending_queue_plan_admission_paths_unlocked(&self) -> Result<(Vec<PathBuf>, usize)> {
+        let directory = self.pending_queue_plan_admission_dir();
+        let read_dir = match std::fs::read_dir(&directory) {
+            Ok(read_dir) => read_dir,
+            Err(err) if err.kind() == ErrorKind::NotFound => return Ok((Vec::new(), 0)),
+            Err(err) => return Err(Error::IO(err, directory)),
+        };
+        let mut paths = Vec::new();
+        let mut total_bytes = 0usize;
+        for entry in read_dir {
+            if paths.len() == self.pending_control_sidecar_limits.queue_plan_admissions {
+                return Err(Self::invalid_pending_queue_plan_admission_error(
+                    directory,
+                    "pending QueuePlan admission certificate count exceeds the hard limit",
+                ));
+            }
+            let entry = entry.map_err(|err| Error::IO(err, directory.clone()))?;
+            let path = entry.path();
+            let Some(file_name) = entry.file_name().to_str().map(str::to_owned) else {
+                return Err(Self::invalid_pending_queue_plan_admission_error(
+                    path,
+                    "pending QueuePlan admission directory contains a non-UTF-8 entry",
+                ));
+            };
+            let Some(hash_text) = file_name.strip_suffix(".norito") else {
+                return Err(Self::invalid_pending_queue_plan_admission_error(
+                    path,
+                    "pending QueuePlan admission directory contains an unexpected entry",
+                ));
+            };
+            Self::validate_pending_queue_plan_admission_hash_text(&path, hash_text)?;
+            let metadata =
+                std::fs::symlink_metadata(&path).map_err(|err| Error::IO(err, path.clone()))?;
+            if metadata.file_type().is_symlink()
+                || !metadata.file_type().is_file()
+                || !Self::sidecar_is_single_link(&metadata)
+            {
+                return Err(Self::invalid_pending_queue_plan_admission_error(
+                    path,
+                    "pending QueuePlan admission entry is not a single-link regular no-follow file",
+                ));
+            }
+            let file_bytes = usize::try_from(metadata.len())?;
+            if file_bytes == 0 || file_bytes > MAX_PENDING_QUEUE_PLAN_ADMISSION_CERTIFICATE_BYTES {
+                return Err(Self::invalid_pending_queue_plan_admission_error(
+                    path,
+                    "pending QueuePlan admission certificate violates its hard byte limit",
+                ));
+            }
+            total_bytes = total_bytes.checked_add(file_bytes).ok_or_else(|| {
+                Self::invalid_pending_queue_plan_admission_error(
+                    directory.clone(),
+                    "pending QueuePlan admission certificate byte count overflow",
+                )
+            })?;
+            if !self
+                .pending_control_sidecar_limits
+                .merge_bytes_within_limit(total_bytes)
+            {
+                return Err(Self::invalid_pending_queue_plan_admission_error(
+                    directory,
+                    "pending QueuePlan admission bytes exceed the aggregate hard limit",
+                ));
+            }
+            paths.push(path);
+        }
+        paths.sort();
+        Ok((paths, total_bytes))
+    }
+
+    fn ensure_pending_queue_plan_admission_dir_unlocked(&self) -> Result<()> {
+        let directory = self.pending_queue_plan_admission_dir();
+        match std::fs::symlink_metadata(&directory) {
+            Ok(_) => {
+                self.canonical_sidecar_directory(&directory)?
+                    .ok_or_else(|| {
+                        Self::invalid_pending_queue_plan_admission_error(
+                            directory.clone(),
+                            "pending QueuePlan admission directory disappeared",
+                        )
+                    })?;
+            }
+            Err(error) if error.kind() == ErrorKind::NotFound => {
+                std::fs::create_dir(&directory)
+                    .map_err(|error| Error::MkDir(error, directory.clone()))?;
+                sync_dir(&self.store_root)
+                    .map_err(|error| Error::IO(error, self.store_root.clone()))?;
+                sync_dir(&directory).map_err(|error| Error::IO(error, directory.clone()))?;
+                self.canonical_sidecar_directory(&directory)?
+                    .ok_or_else(|| {
+                        Self::invalid_pending_queue_plan_admission_error(
+                            directory.clone(),
+                            "new pending QueuePlan admission directory disappeared",
+                        )
+                    })?;
+            }
+            Err(error) => return Err(Error::IO(error, directory)),
+        }
+        Ok(())
+    }
+
+    fn create_exclusive_pending_queue_plan_admission_temp(
+        &self,
+        path: &Path,
+    ) -> Result<std::fs::File> {
+        let directory = self.pending_queue_plan_admission_dir();
+        if path.parent() != Some(directory.as_path()) {
+            return Err(Self::invalid_pending_queue_plan_admission_error(
+                path.to_path_buf(),
+                "pending QueuePlan admission temporary is outside its direct directory",
+            ));
+        }
+        let (_, directory_before) =
+            self.canonical_sidecar_directory(&directory)?
+                .ok_or_else(|| {
+                    Self::invalid_pending_queue_plan_admission_error(
+                        directory.clone(),
+                        "pending QueuePlan admission directory does not exist",
+                    )
+                })?;
+        let file_name = path.file_name().ok_or_else(|| {
+            Self::invalid_pending_queue_plan_admission_error(
+                path.to_path_buf(),
+                "pending QueuePlan admission temporary has no filename",
+            )
+        })?;
+
+        #[cfg(unix)]
+        let file = {
+            use std::os::unix::fs::OpenOptionsExt as _;
+
+            let mut directory_options = std::fs::OpenOptions::new();
+            directory_options.read(true).custom_flags(
+                (rustix::fs::OFlags::DIRECTORY
+                    | rustix::fs::OFlags::NOFOLLOW
+                    | rustix::fs::OFlags::CLOEXEC)
+                    .bits() as i32,
+            );
+            let opened_directory = directory_options
+                .open(&directory)
+                .map_err(|error| Error::IO(error, directory.clone()))?;
+            let opened_directory_metadata = opened_directory
+                .metadata()
+                .map_err(|error| Error::IO(error, directory.clone()))?;
+            if !opened_directory_metadata.is_dir()
+                || !Self::sidecar_metadata_same_object(
+                    &directory_before,
+                    &opened_directory_metadata,
+                )
+            {
+                return Err(Self::invalid_pending_queue_plan_admission_error(
+                    directory.clone(),
+                    "pending QueuePlan admission directory changed while binding it",
+                ));
+            }
+            std::fs::File::from(
+                rustix::fs::openat(
+                    &opened_directory,
+                    file_name,
+                    rustix::fs::OFlags::WRONLY
+                        | rustix::fs::OFlags::CREATE
+                        | rustix::fs::OFlags::EXCL
+                        | rustix::fs::OFlags::NOFOLLOW
+                        | rustix::fs::OFlags::CLOEXEC,
+                    rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+                )
+                .map_err(std::io::Error::from)
+                .map_err(|error| Error::IO(error, path.to_path_buf()))?,
+            )
+        };
+
+        #[cfg(not(unix))]
+        let file = {
+            let mut options = std::fs::OpenOptions::new();
+            options.create_new(true).write(true);
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::OpenOptionsExt as _;
+
+                const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+                options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+            }
+            options
+                .open(path)
+                .map_err(|error| Error::IO(error, path.to_path_buf()))?
+        };
+
+        let opened = file
+            .metadata()
+            .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+        let path_metadata = std::fs::symlink_metadata(path)
+            .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+        let (_, directory_after) = self.canonical_sidecar_directory(&directory)?.ok_or_else(
+            || {
+                Self::invalid_pending_queue_plan_admission_error(
+                    directory.clone(),
+                    "pending QueuePlan admission directory disappeared while creating a temporary",
+                )
+            },
+        )?;
+        if !opened.is_file()
+            || path_metadata.file_type().is_symlink()
+            || !path_metadata.file_type().is_file()
+            || !Self::sidecar_is_single_link(&opened)
+            || !Self::sidecar_is_single_link(&path_metadata)
+            || !Self::sidecar_metadata_same_object(&opened, &path_metadata)
+            || !Self::sidecar_metadata_same_object(&directory_before, &directory_after)
+        {
+            return Err(Self::invalid_pending_queue_plan_admission_error(
+                path.to_path_buf(),
+                "pending QueuePlan admission temporary identity changed during creation",
+            ));
+        }
+        Ok(file)
+    }
+
+    fn read_pending_queue_plan_admission_path(
+        &self,
+        path: &Path,
+        expected_hash: Option<Hash>,
+    ) -> Result<Option<(Hash, Vec<u8>)>> {
+        let Some(bytes) = self.read_regular_sidecar_bytes(
+            path,
+            &self.pending_queue_plan_admission_dir(),
+            MAX_PENDING_QUEUE_PLAN_ADMISSION_CERTIFICATE_BYTES,
+        )?
+        else {
+            return Ok(None);
+        };
+        if bytes.is_empty() {
+            return Err(Self::invalid_pending_queue_plan_admission_error(
+                path.to_path_buf(),
+                "pending QueuePlan admission certificate is empty",
+            ));
+        }
+        let hash = Hash::new(&bytes);
+        if expected_hash.is_some_and(|expected| expected != hash)
+            || self.pending_queue_plan_admission_path(hash) != path
+        {
+            return Err(Self::invalid_pending_queue_plan_admission_error(
+                path.to_path_buf(),
+                "pending QueuePlan admission certificate path/hash mismatch",
+            ));
+        }
+        Ok(Some((hash, bytes)))
+    }
+
+    fn validate_pending_queue_plan_admission_temp_bytes(
+        &self,
+        path: &Path,
+        hash_text: &str,
+        bytes: &[u8],
+    ) -> Result<Hash> {
+        if bytes.is_empty() || bytes.len() > MAX_PENDING_QUEUE_PLAN_ADMISSION_CERTIFICATE_BYTES {
+            return Err(Self::invalid_pending_queue_plan_admission_error(
+                path.to_path_buf(),
+                "pending QueuePlan admission temporary violates its hard byte limit",
+            ));
+        }
+        let hash = Hash::new(bytes);
+        if hex::encode(hash.as_ref()) != hash_text {
+            return Err(Self::invalid_pending_queue_plan_admission_error(
+                path.to_path_buf(),
+                "pending QueuePlan admission temporary bytes do not match their hash path",
+            ));
+        }
+        Ok(hash)
+    }
+
+    fn pending_control_recovery_directory_bytes_unlocked(
+        &self,
+        directory: &Path,
+        max_stable_count: usize,
+        max_file_bytes: usize,
+        queue_plan_admission: bool,
+    ) -> Result<usize> {
+        #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+        enum RecoveryFileIdentity {
+            #[cfg(unix)]
+            Unix { device: u64, inode: u64 },
+            #[cfg(windows)]
+            Windows { volume: u32, index: u64 },
+            #[cfg(not(unix))]
+            Synthetic(usize),
+        }
+
+        struct RecoveryRecord {
+            path: PathBuf,
+            hash_text: String,
+            is_temporary: bool,
+            metadata: std::fs::Metadata,
+            identity: RecoveryFileIdentity,
+        }
+
+        struct RecoveryAliases {
+            first: usize,
+            second: Option<usize>,
+            count: usize,
+        }
+
+        let invalid = |path: PathBuf, message: String| {
+            if queue_plan_admission {
+                Self::invalid_pending_queue_plan_admission_error(path, message)
+            } else {
+                Self::invalid_pending_merge_entry_error(path, message)
+            }
+        };
+        let (_, directory_before) =
+            self.canonical_sidecar_directory(directory)?
+                .ok_or_else(|| {
+                    invalid(
+                        directory.to_path_buf(),
+                        "pending control recovery directory does not exist".to_owned(),
+                    )
+                })?;
+        let read_dir = std::fs::read_dir(directory)
+            .map_err(|error| Error::IO(error, directory.to_path_buf()))?;
+        let mut records: Vec<RecoveryRecord> = Vec::new();
+        let mut stable_count = 0usize;
+        let mut temporary_count = 0usize;
+        let mut unique_bytes = 0usize;
+        let mut aliases_by_identity = BTreeMap::<RecoveryFileIdentity, RecoveryAliases>::new();
+        for entry in read_dir {
+            if records.len() == max_stable_count.saturating_add(1) {
+                return Err(invalid(
+                    directory.to_path_buf(),
+                    "pending control recovery entry count exceeds its hard limit".to_owned(),
+                ));
+            }
+            let entry = entry.map_err(|error| Error::IO(error, directory.to_path_buf()))?;
+            let path = entry.path();
+            let file_name = entry
+                .file_name()
+                .to_str()
+                .map(str::to_owned)
+                .ok_or_else(|| {
+                    invalid(
+                        path.clone(),
+                        "pending control recovery directory contains a non-UTF-8 entry".to_owned(),
+                    )
+                })?;
+            let (hash_text, is_temporary) = if let Some(hash_text) =
+                file_name.strip_suffix(".norito.tmp")
+            {
+                temporary_count = temporary_count.saturating_add(1);
+                if temporary_count > 1 {
+                    return Err(invalid(
+                        directory.to_path_buf(),
+                        "pending control recovery directory contains multiple temporaries"
+                            .to_owned(),
+                    ));
+                }
+                (hash_text, true)
+            } else if let Some(hash_text) = file_name.strip_suffix(".norito") {
+                stable_count = stable_count.saturating_add(1);
+                if stable_count > max_stable_count {
+                    return Err(invalid(
+                        directory.to_path_buf(),
+                        "pending control recovery stable entry count exceeds its hard limit"
+                            .to_owned(),
+                    ));
+                }
+                (hash_text, false)
+            } else {
+                return Err(invalid(
+                    path,
+                    "pending control recovery directory contains an unexpected entry".to_owned(),
+                ));
+            };
+            if queue_plan_admission {
+                Self::validate_pending_queue_plan_admission_hash_text(&path, hash_text)?;
+            } else {
+                Self::validate_pending_merge_hash_text(&path, hash_text)?;
+            }
+            let metadata =
+                std::fs::symlink_metadata(&path).map_err(|error| Error::IO(error, path.clone()))?;
+            if metadata.file_type().is_symlink()
+                || !metadata.file_type().is_file()
+                || (!Self::sidecar_has_link_count(&metadata, 1)
+                    && !Self::sidecar_has_link_count(&metadata, 2))
+            {
+                return Err(invalid(
+                    path,
+                    "pending control recovery entry is not a one- or two-link regular no-follow file"
+                        .to_owned(),
+                ));
+            }
+            let file_bytes = usize::try_from(metadata.len())?;
+            if file_bytes == 0 || file_bytes > max_file_bytes {
+                return Err(invalid(
+                    path,
+                    "pending control recovery entry violates its per-file byte limit".to_owned(),
+                ));
+            }
+            #[cfg(unix)]
+            let identity = {
+                use std::os::unix::fs::MetadataExt as _;
+
+                RecoveryFileIdentity::Unix {
+                    device: metadata.dev(),
+                    inode: metadata.ino(),
+                }
+            };
+            #[cfg(windows)]
+            let identity = {
+                use std::os::windows::fs::MetadataExt as _;
+
+                match (metadata.volume_serial_number(), metadata.file_index()) {
+                    (Some(volume), Some(index)) => RecoveryFileIdentity::Windows { volume, index },
+                    // Match `sidecar_metadata_same_object`: missing Windows identity
+                    // components never establish aliasing, so a two-link record
+                    // remains fail-closed during the pair check below.
+                    _ => RecoveryFileIdentity::Synthetic(records.len()),
+                }
+            };
+            #[cfg(all(not(unix), not(windows)))]
+            let identity = RecoveryFileIdentity::Synthetic(records.len());
+            let record_index = records.len();
+            // The previous all-prior-record metadata scan made configured
+            // maximum inventories quadratic. One ordered identity group keeps
+            // byte de-duplication and exact alias validation O(n log n).
+            match aliases_by_identity.entry(identity) {
+                std::collections::btree_map::Entry::Vacant(slot) => {
+                    unique_bytes = unique_bytes.checked_add(file_bytes).ok_or_else(|| {
+                        invalid(
+                            directory.to_path_buf(),
+                            "pending control recovery byte count overflow".to_owned(),
+                        )
+                    })?;
+                    if !self
+                        .pending_control_sidecar_limits
+                        .merge_bytes_within_limit(unique_bytes)
+                    {
+                        return Err(invalid(
+                            directory.to_path_buf(),
+                            "pending control recovery bytes exceed their aggregate hard limit"
+                                .to_owned(),
+                        ));
+                    }
+                    slot.insert(RecoveryAliases {
+                        first: record_index,
+                        second: None,
+                        count: 1,
+                    });
+                }
+                std::collections::btree_map::Entry::Occupied(mut slot) => {
+                    let aliases = slot.get_mut();
+                    aliases.count = aliases.count.saturating_add(1);
+                    if aliases.second.is_none() {
+                        aliases.second = Some(record_index);
+                    }
+                }
+            }
+            records.push(RecoveryRecord {
+                path,
+                hash_text: hash_text.to_owned(),
+                is_temporary,
+                metadata,
+                identity,
+            });
+        }
+
+        for record in &records {
+            if !Self::sidecar_has_link_count(&record.metadata, 2) {
+                continue;
+            }
+            let Some(aliases) = aliases_by_identity.get(&record.identity) else {
+                return Err(invalid(
+                    record.path.clone(),
+                    "pending control recovery hard links are not one exact temporary/target pair"
+                        .to_owned(),
+                ));
+            };
+            let Some(second) = aliases.second.filter(|_| aliases.count == 2) else {
+                return Err(invalid(
+                    record.path.clone(),
+                    "pending control recovery hard links are not one exact temporary/target pair"
+                        .to_owned(),
+                ));
+            };
+            let left = &records[aliases.first];
+            let right = &records[second];
+            if left.is_temporary == right.is_temporary || left.hash_text != right.hash_text {
+                return Err(invalid(
+                    record.path.clone(),
+                    "pending control recovery hard links are not one exact temporary/target pair"
+                        .to_owned(),
+                ));
+            }
+        }
+        let (_, directory_after) =
+            self.canonical_sidecar_directory(directory)?
+                .ok_or_else(|| {
+                    invalid(
+                        directory.to_path_buf(),
+                        "pending control recovery directory disappeared during inventory"
+                            .to_owned(),
+                    )
+                })?;
+        if !Self::sidecar_directory_metadata_unchanged(&directory_before, &directory_after) {
+            return Err(invalid(
+                directory.to_path_buf(),
+                "pending control recovery directory changed during inventory".to_owned(),
+            ));
+        }
+        Ok(unique_bytes)
+    }
+
+    fn preflight_pending_control_recovery_unlocked(&self) -> Result<(usize, usize)> {
+        self.ensure_pending_merge_entry_dir_unlocked()?;
+        self.ensure_pending_queue_plan_admission_dir_unlocked()?;
+        let merge_bytes = self.pending_control_recovery_directory_bytes_unlocked(
+            &self.pending_merge_entry_dir(),
+            self.pending_control_sidecar_limits.certified_merge_entries,
+            MAX_MERGE_LEDGER_ENTRY_BYTES,
+            false,
+        )?;
+        let admission_bytes = self.pending_control_recovery_directory_bytes_unlocked(
+            &self.pending_queue_plan_admission_dir(),
+            self.pending_control_sidecar_limits.queue_plan_admissions,
+            MAX_PENDING_QUEUE_PLAN_ADMISSION_CERTIFICATE_BYTES,
+            true,
+        )?;
+        if !self
+            .pending_control_sidecar_limits
+            .combined_bytes_within_limit(merge_bytes, admission_bytes)
+        {
+            return Err(Self::invalid_pending_merge_entry_error(
+                self.store_root.clone(),
+                "pending merge and QueuePlan admission recovery bytes exceed their shared hard limit",
+            ));
+        }
+        Ok((merge_bytes, admission_bytes))
+    }
+
     fn pending_merge_entry_paths_unlocked(&self) -> Result<(Vec<PathBuf>, usize)> {
         let directory = self.pending_merge_entry_dir();
         let read_dir = match std::fs::read_dir(&directory) {
@@ -9457,7 +10491,7 @@ impl Kura {
         let mut paths = Vec::new();
         let mut total_bytes = 0usize;
         for entry in read_dir {
-            if paths.len() == MAX_PENDING_CERTIFIED_MERGE_ENTRIES {
+            if paths.len() == self.pending_control_sidecar_limits.certified_merge_entries {
                 return Err(Self::invalid_pending_merge_entry_error(
                     directory,
                     "pending certified merge entry count exceeds the hard limit",
@@ -9477,24 +10511,16 @@ impl Kura {
                     "pending merge directory contains an unexpected non-Norito entry",
                 ));
             };
-            let decoded_hash = hex::decode(hash_text).map_err(|_| {
-                Self::invalid_pending_merge_entry_error(
-                    path.clone(),
-                    "pending merge sidecar filename is not a canonical hash",
-                )
-            })?;
-            if decoded_hash.len() != Hash::LENGTH || hex::encode(&decoded_hash) != hash_text {
-                return Err(Self::invalid_pending_merge_entry_error(
-                    path,
-                    "pending merge sidecar filename is not a canonical lowercase hash",
-                ));
-            }
+            Self::validate_pending_merge_hash_text(&path, hash_text)?;
             let metadata =
                 std::fs::symlink_metadata(&path).map_err(|err| Error::IO(err, path.clone()))?;
-            if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+            if metadata.file_type().is_symlink()
+                || !metadata.file_type().is_file()
+                || !Self::sidecar_is_single_link(&metadata)
+            {
                 return Err(Self::invalid_pending_merge_entry_error(
                     path,
-                    "pending merge directory entry is not a regular no-follow file",
+                    "pending merge directory entry is not a single-link regular no-follow file",
                 ));
             }
             let file_bytes = usize::try_from(metadata.len())?;
@@ -9504,7 +10530,10 @@ impl Kura {
                     "pending certified merge byte count overflow",
                 )
             })?;
-            if !pending_merge_bytes_within_limit(total_bytes) {
+            if !self
+                .pending_control_sidecar_limits
+                .merge_bytes_within_limit(total_bytes)
+            {
                 return Err(Self::invalid_pending_merge_entry_error(
                     directory,
                     "pending certified merge bytes exceed the aggregate hard limit",
@@ -9519,8 +10548,20 @@ impl Kura {
     fn validate_pending_merge_entries_on_startup(&self) -> Result<()> {
         let _guard = self.sidecar_lock.lock();
         self.reconcile_pending_merge_temp_files_unlocked()?;
-        let (paths, _) = self.pending_merge_entry_paths_unlocked()?;
-        for path in paths {
+        self.reconcile_pending_queue_plan_admission_temp_files_unlocked()?;
+        let (merge_paths, merge_bytes) = self.pending_merge_entry_paths_unlocked()?;
+        let (admission_paths, admission_bytes) =
+            self.pending_queue_plan_admission_paths_unlocked()?;
+        if !self
+            .pending_control_sidecar_limits
+            .combined_bytes_within_limit(merge_bytes, admission_bytes)
+        {
+            return Err(Self::invalid_pending_queue_plan_admission_error(
+                self.store_root.clone(),
+                "pending merge and QueuePlan admission sidecars exceed their shared hard byte limit",
+            ));
+        }
+        for path in merge_paths {
             let _ = self
                 .read_pending_merge_entry_path(&path, None)?
                 .ok_or_else(|| {
@@ -9530,45 +10571,95 @@ impl Kura {
                     )
                 })?;
         }
+        for path in admission_paths {
+            let _ = self
+                .read_pending_queue_plan_admission_path(&path, None)?
+                .ok_or_else(|| {
+                    Self::invalid_pending_queue_plan_admission_error(
+                        path,
+                        "pending QueuePlan admission sidecar disappeared during startup validation",
+                    )
+                })?;
+        }
         Ok(())
     }
 
     fn reconcile_pending_merge_temp_files_unlocked(&self) -> Result<()> {
+        let _ = self.preflight_pending_control_recovery_unlocked()?;
         let directory = self.pending_merge_entry_dir();
         let read_dir = match std::fs::read_dir(&directory) {
             Ok(read_dir) => read_dir,
-            Err(err) if err.kind() == ErrorKind::NotFound => return Ok(()),
             Err(err) => return Err(Error::IO(err, directory)),
         };
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
         let mut scanned = 0usize;
+        let mut stable_count = 0usize;
         let mut total_bytes = 0usize;
+        let mut path_bytes_before = 0u64;
         let mut temp_paths = Vec::new();
         #[cfg(unix)]
         let mut seen_inodes = BTreeSet::new();
+        #[cfg(windows)]
+        let mut seen_file_ids = BTreeSet::new();
         for entry in read_dir {
             scanned = scanned.saturating_add(1);
-            if scanned > MAX_PENDING_CERTIFIED_MERGE_ENTRIES {
+            if scanned
+                > self
+                    .pending_control_sidecar_limits
+                    .certified_merge_entries
+                    .saturating_add(1)
+            {
                 return Err(Self::invalid_pending_merge_entry_error(
                     directory,
-                    "pending merge directory entry count exceeds the hard limit",
+                    "pending merge directory entry count exceeds the crash-recovery limit",
                 ));
             }
             let entry = entry.map_err(|err| Error::IO(err, directory.clone()))?;
             let path = entry.path();
             let metadata =
                 std::fs::symlink_metadata(&path).map_err(|err| Error::IO(err, path.clone()))?;
-            if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+            if metadata.file_type().is_symlink()
+                || !metadata.file_type().is_file()
+                || (!Self::sidecar_has_link_count(&metadata, 1)
+                    && !Self::sidecar_has_link_count(&metadata, 2))
+            {
                 return Err(Self::invalid_pending_merge_entry_error(
                     path,
-                    "pending merge directory entry is not a regular no-follow file",
+                    "pending merge recovery entry is not a one- or two-link regular no-follow file",
                 ));
             }
+            path_bytes_before = path_bytes_before
+                .checked_add(metadata.len())
+                .ok_or_else(|| {
+                    Self::invalid_pending_merge_entry_error(
+                        directory.clone(),
+                        "pending merge recovery path-byte count overflow",
+                    )
+                })?;
             #[cfg(unix)]
             let count_file_bytes = {
                 use std::os::unix::fs::MetadataExt as _;
                 seen_inodes.insert((metadata.dev(), metadata.ino()))
             };
-            #[cfg(not(unix))]
+            #[cfg(windows)]
+            let count_file_bytes = {
+                use std::os::windows::fs::MetadataExt as _;
+
+                let volume = metadata.volume_serial_number().ok_or_else(|| {
+                    Self::invalid_pending_merge_entry_error(
+                        path.clone(),
+                        "pending merge recovery entry has no volume identity",
+                    )
+                })?;
+                let index = metadata.file_index().ok_or_else(|| {
+                    Self::invalid_pending_merge_entry_error(
+                        path.clone(),
+                        "pending merge recovery entry has no file identity",
+                    )
+                })?;
+                seen_file_ids.insert((volume, index))
+            };
+            #[cfg(all(not(unix), not(windows)))]
             let count_file_bytes = true;
             if count_file_bytes {
                 total_bytes = total_bytes
@@ -9580,7 +10671,10 @@ impl Kura {
                         )
                     })?;
             }
-            if !pending_merge_bytes_within_limit(total_bytes) {
+            if !self
+                .pending_control_sidecar_limits
+                .merge_bytes_within_limit(total_bytes)
+            {
                 return Err(Self::invalid_pending_merge_entry_error(
                     directory,
                     "pending merge directory bytes exceed the aggregate hard limit",
@@ -9592,31 +10686,86 @@ impl Kura {
                     "pending merge directory contains a non-UTF-8 entry",
                 ));
             };
-            if file_name.ends_with(".norito") {
+            if let Some(hash_text) = file_name.strip_suffix(".norito.tmp") {
+                Self::validate_pending_merge_hash_text(&path, hash_text)?;
+                temp_paths.push((path, hash_text.to_owned()));
+                if temp_paths.len() > 1 {
+                    return Err(Self::invalid_pending_merge_entry_error(
+                        directory,
+                        "pending merge directory contains multiple temporaries",
+                    ));
+                }
                 continue;
             }
-            let Some(hash_text) = file_name.strip_suffix(".norito.tmp") else {
+            let Some(hash_text) = file_name.strip_suffix(".norito") else {
                 return Err(Self::invalid_pending_merge_entry_error(
                     path,
-                    "pending merge directory contains an unexpected temporary entry",
+                    "pending merge directory contains an unexpected recovery entry",
                 ));
             };
-            let decoded_hash = hex::decode(hash_text).map_err(|_| {
-                Self::invalid_pending_merge_entry_error(
-                    path.clone(),
-                    "pending merge temporary filename is not a canonical hash",
-                )
-            })?;
-            if decoded_hash.len() != Hash::LENGTH || hex::encode(&decoded_hash) != hash_text {
+            Self::validate_pending_merge_hash_text(&path, hash_text)?;
+            stable_count = stable_count.saturating_add(1);
+            if stable_count > self.pending_control_sidecar_limits.certified_merge_entries {
                 return Err(Self::invalid_pending_merge_entry_error(
-                    path,
-                    "pending merge temporary filename is not a canonical lowercase hash",
+                    directory,
+                    "pending certified merge entry count exceeds the hard limit",
                 ));
             }
-            temp_paths.push((path, hash_text.to_owned()));
+            continue;
         }
-
         for (temp_path, hash_text) in temp_paths {
+            let temp_metadata = std::fs::symlink_metadata(&temp_path)
+                .map_err(|err| Error::IO(err, temp_path.clone()))?;
+            let target_path = directory.join(format!("{hash_text}.norito"));
+            let target_metadata = match std::fs::symlink_metadata(&target_path) {
+                Ok(metadata) => Some(metadata),
+                Err(err) if err.kind() == ErrorKind::NotFound => None,
+                Err(err) => return Err(Error::IO(err, target_path.clone())),
+            };
+            if let Some(target_metadata) = target_metadata.as_ref() {
+                if target_metadata.file_type().is_symlink()
+                    || !target_metadata.file_type().is_file()
+                {
+                    return Err(Self::invalid_pending_merge_entry_error(
+                        target_path,
+                        "pending merge recovery target is not a regular no-follow file",
+                    ));
+                }
+                if Self::sidecar_metadata_same_object(&temp_metadata, target_metadata) {
+                    if !Self::sidecar_has_link_count(&temp_metadata, 2)
+                        || !Self::sidecar_has_link_count(target_metadata, 2)
+                    {
+                        return Err(Self::invalid_pending_merge_entry_error(
+                            temp_path,
+                            "pending merge recovery pair has an unexpected hard-link count",
+                        ));
+                    }
+                    // A crash after `hard_link` legitimately leaves both
+                    // names attached to the same two-link inode. Remove the
+                    // temporary first so the ordinary single-link reader can
+                    // authenticate the stable path without weakening its
+                    // invariant.
+                    std::fs::remove_file(&temp_path)
+                        .map_err(|err| Error::IO(err, temp_path.clone()))?;
+                    sync_dir(&directory).map_err(|err| Error::IO(err, directory.clone()))?;
+                    let _ = self
+                        .read_pending_merge_entry_path(&target_path, None)?
+                        .ok_or_else(|| {
+                            Self::invalid_pending_merge_entry_error(
+                                target_path,
+                                "published pending merge target disappeared during recovery",
+                            )
+                        })?;
+                    continue;
+                } else if !Self::sidecar_is_single_link(&temp_metadata)
+                    || !Self::sidecar_is_single_link(target_metadata)
+                {
+                    return Err(Self::invalid_pending_merge_entry_error(
+                        temp_path,
+                        "conflicting pending merge recovery paths are not single-link files",
+                    ));
+                }
+            }
             let bytes = self
                 .read_regular_sidecar_bytes(&temp_path, &directory, MAX_MERGE_LEDGER_ENTRY_BYTES)?
                 .ok_or_else(|| {
@@ -9642,13 +10791,13 @@ impl Kura {
             }
             if entry.canonical_bytes() != bytes
                 || hex::encode(entry.canonical_hash().as_ref()) != hash_text
+                || self.pending_merge_entry_path(entry.canonical_hash()) != target_path
             {
                 return Err(Self::invalid_pending_merge_entry_error(
                     temp_path,
                     "pending merge temporary bytes do not match their canonical hash path",
                 ));
             }
-            let target_path = self.pending_merge_entry_path(entry.canonical_hash());
             if let Some(existing) =
                 self.read_pending_merge_entry_path(&target_path, Some(entry.canonical_hash()))?
             {
@@ -9663,8 +10812,40 @@ impl Kura {
                 sync_dir(&directory).map_err(|err| Error::IO(err, directory.clone()))?;
                 continue;
             }
+            if target_metadata.is_some() {
+                return Err(Self::invalid_pending_merge_entry_error(
+                    target_path,
+                    "pending merge recovery target disappeared during validation",
+                ));
+            }
+            if stable_count == self.pending_control_sidecar_limits.certified_merge_entries {
+                return Err(Self::invalid_pending_merge_entry_error(
+                    directory,
+                    "unpublished pending merge temporary exceeds the entry-count hard limit",
+                ));
+            }
+            if !Self::sidecar_is_single_link(&temp_metadata) {
+                return Err(Self::invalid_pending_merge_entry_error(
+                    temp_path,
+                    "unpublished pending merge temporary is not a single-link file",
+                ));
+            }
+            std::fs::File::open(&temp_path)
+                .and_then(|file| file.sync_all())
+                .map_err(|err| Error::IO(err, temp_path.clone()))?;
+            sync_dir(&directory).map_err(|err| Error::IO(err, directory.clone()))?;
             std::fs::hard_link(&temp_path, &target_path)
                 .map_err(|err| Error::IO(err, target_path.clone()))?;
+            let target_metadata = std::fs::symlink_metadata(&target_path)
+                .map_err(|err| Error::IO(err, target_path.clone()))?;
+            if !Self::sidecar_metadata_same_object(&temp_metadata, &target_metadata)
+                || !Self::sidecar_has_link_count(&target_metadata, 2)
+            {
+                return Err(Self::invalid_pending_merge_entry_error(
+                    target_path,
+                    "published pending merge target does not bind its durable temporary",
+                ));
+            }
             std::fs::File::open(&target_path)
                 .and_then(|file| file.sync_all())
                 .map_err(|err| Error::IO(err, target_path.clone()))?;
@@ -9672,6 +10853,310 @@ impl Kura {
             std::fs::remove_file(&temp_path).map_err(|err| Error::IO(err, temp_path.clone()))?;
             sync_dir(&directory).map_err(|err| Error::IO(err, directory.clone()))?;
         }
+        let (_, path_bytes_after) = self.pending_merge_entry_paths_unlocked()?;
+        self.update_disk_usage_delta(path_bytes_before, u64::try_from(path_bytes_after)?);
+        accounting_mutation.finish();
+        Ok(())
+    }
+
+    fn reconcile_pending_queue_plan_admission_temp_files_unlocked(&self) -> Result<()> {
+        let _ = self.preflight_pending_control_recovery_unlocked()?;
+        let directory = self.pending_queue_plan_admission_dir();
+        let read_dir = match std::fs::read_dir(&directory) {
+            Ok(read_dir) => read_dir,
+            Err(err) => return Err(Error::IO(err, directory)),
+        };
+        // Recovery may unlink a crash-staged temporary after its stable hard
+        // link is already visible. The usage scanners account directory
+        // entries, so that unlink removes one full path's byte contribution
+        // even though the underlying inode remains. Publish the exact
+        // before/after delta here: callers may otherwise complete an
+        // idempotent retry without performing any later write whose accounting
+        // could repair the stale cache.
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        let mut scanned = 0usize;
+        let mut stable_count = 0usize;
+        let mut total_bytes = 0usize;
+        let mut path_bytes_before = 0u64;
+        let mut temp_paths = Vec::new();
+        #[cfg(unix)]
+        let mut seen_inodes = BTreeSet::new();
+        #[cfg(windows)]
+        let mut seen_file_ids = BTreeSet::new();
+        for entry in read_dir {
+            scanned = scanned.saturating_add(1);
+            if scanned
+                > self
+                    .pending_control_sidecar_limits
+                    .queue_plan_admissions
+                    .saturating_add(1)
+            {
+                return Err(Self::invalid_pending_queue_plan_admission_error(
+                    directory,
+                    "pending QueuePlan admission directory entry count exceeds the crash-recovery limit",
+                ));
+            }
+            let entry = entry.map_err(|err| Error::IO(err, directory.clone()))?;
+            let path = entry.path();
+            let metadata =
+                std::fs::symlink_metadata(&path).map_err(|err| Error::IO(err, path.clone()))?;
+            if metadata.file_type().is_symlink()
+                || !metadata.file_type().is_file()
+                || (!Self::sidecar_has_link_count(&metadata, 1)
+                    && !Self::sidecar_has_link_count(&metadata, 2))
+            {
+                return Err(Self::invalid_pending_queue_plan_admission_error(
+                    path,
+                    "pending QueuePlan admission recovery entry is not a one- or two-link regular no-follow file",
+                ));
+            }
+            let file_bytes = usize::try_from(metadata.len())?;
+            path_bytes_before = path_bytes_before
+                .checked_add(metadata.len())
+                .ok_or_else(|| {
+                    Self::invalid_pending_queue_plan_admission_error(
+                        directory.clone(),
+                        "pending QueuePlan admission recovery path-byte count overflow",
+                    )
+                })?;
+            if file_bytes == 0 || file_bytes > MAX_PENDING_QUEUE_PLAN_ADMISSION_CERTIFICATE_BYTES {
+                return Err(Self::invalid_pending_queue_plan_admission_error(
+                    path,
+                    "pending QueuePlan admission recovery entry violates its hard byte limit",
+                ));
+            }
+            #[cfg(unix)]
+            let count_file_bytes = {
+                use std::os::unix::fs::MetadataExt as _;
+
+                seen_inodes.insert((metadata.dev(), metadata.ino()))
+            };
+            #[cfg(windows)]
+            let count_file_bytes = {
+                use std::os::windows::fs::MetadataExt as _;
+
+                let volume = metadata.volume_serial_number().ok_or_else(|| {
+                    Self::invalid_pending_queue_plan_admission_error(
+                        path.clone(),
+                        "pending QueuePlan admission recovery entry has no volume identity",
+                    )
+                })?;
+                let index = metadata.file_index().ok_or_else(|| {
+                    Self::invalid_pending_queue_plan_admission_error(
+                        path.clone(),
+                        "pending QueuePlan admission recovery entry has no file identity",
+                    )
+                })?;
+                seen_file_ids.insert((volume, index))
+            };
+            #[cfg(all(not(unix), not(windows)))]
+            let count_file_bytes = true;
+            if count_file_bytes {
+                total_bytes = total_bytes.checked_add(file_bytes).ok_or_else(|| {
+                    Self::invalid_pending_queue_plan_admission_error(
+                        directory.clone(),
+                        "pending QueuePlan admission recovery byte count overflow",
+                    )
+                })?;
+            }
+            if !self
+                .pending_control_sidecar_limits
+                .merge_bytes_within_limit(total_bytes)
+            {
+                return Err(Self::invalid_pending_queue_plan_admission_error(
+                    directory,
+                    "pending QueuePlan admission recovery bytes exceed the aggregate hard limit",
+                ));
+            }
+
+            let Some(file_name) = entry.file_name().to_str().map(str::to_owned) else {
+                return Err(Self::invalid_pending_queue_plan_admission_error(
+                    path,
+                    "pending QueuePlan admission directory contains a non-UTF-8 recovery entry",
+                ));
+            };
+            if let Some(hash_text) = file_name.strip_suffix(".norito.tmp") {
+                Self::validate_pending_queue_plan_admission_hash_text(&path, hash_text)?;
+                temp_paths.push((path, hash_text.to_owned()));
+                if temp_paths.len() > 1 {
+                    return Err(Self::invalid_pending_queue_plan_admission_error(
+                        directory,
+                        "pending QueuePlan admission directory contains multiple temporaries",
+                    ));
+                }
+                continue;
+            }
+            let Some(hash_text) = file_name.strip_suffix(".norito") else {
+                return Err(Self::invalid_pending_queue_plan_admission_error(
+                    path,
+                    "pending QueuePlan admission directory contains an unexpected recovery entry",
+                ));
+            };
+            Self::validate_pending_queue_plan_admission_hash_text(&path, hash_text)?;
+            stable_count = stable_count.saturating_add(1);
+            if stable_count > self.pending_control_sidecar_limits.queue_plan_admissions {
+                return Err(Self::invalid_pending_queue_plan_admission_error(
+                    directory,
+                    "pending QueuePlan admission certificate count exceeds the hard limit",
+                ));
+            }
+        }
+        for (temp_path, hash_text) in temp_paths {
+            let target_path = directory.join(format!("{hash_text}.norito"));
+            let temp_metadata = std::fs::symlink_metadata(&temp_path)
+                .map_err(|err| Error::IO(err, temp_path.clone()))?;
+            let target_metadata = match std::fs::symlink_metadata(&target_path) {
+                Ok(metadata) => Some(metadata),
+                Err(err) if err.kind() == ErrorKind::NotFound => None,
+                Err(err) => return Err(Error::IO(err, target_path.clone())),
+            };
+
+            if let Some(target_metadata) = target_metadata {
+                if target_metadata.file_type().is_symlink()
+                    || !target_metadata.file_type().is_file()
+                {
+                    return Err(Self::invalid_pending_queue_plan_admission_error(
+                        target_path,
+                        "pending QueuePlan admission recovery target is not a regular no-follow file",
+                    ));
+                }
+                if Self::sidecar_metadata_same_object(&temp_metadata, &target_metadata) {
+                    if !Self::sidecar_has_link_count(&temp_metadata, 2)
+                        || !Self::sidecar_has_link_count(&target_metadata, 2)
+                    {
+                        return Err(Self::invalid_pending_queue_plan_admission_error(
+                            temp_path,
+                            "pending QueuePlan admission recovery pair has an unexpected hard-link count",
+                        ));
+                    }
+                    std::fs::remove_file(&temp_path)
+                        .map_err(|err| Error::IO(err, temp_path.clone()))?;
+                    sync_dir(&directory).map_err(|err| Error::IO(err, directory.clone()))?;
+                    let expected_hash = self
+                        .read_pending_queue_plan_admission_path(&target_path, None)?
+                        .ok_or_else(|| {
+                            Self::invalid_pending_queue_plan_admission_error(
+                                target_path.clone(),
+                                "published QueuePlan admission target disappeared during recovery",
+                            )
+                        })?
+                        .0;
+                    if hex::encode(expected_hash.as_ref()) != hash_text {
+                        return Err(Self::invalid_pending_queue_plan_admission_error(
+                            target_path,
+                            "published QueuePlan admission target bytes do not match their hash path",
+                        ));
+                    }
+                    continue;
+                }
+                if !Self::sidecar_is_single_link(&temp_metadata)
+                    || !Self::sidecar_is_single_link(&target_metadata)
+                {
+                    return Err(Self::invalid_pending_queue_plan_admission_error(
+                        temp_path,
+                        "conflicting QueuePlan admission recovery paths are not single-link files",
+                    ));
+                }
+                let temp_bytes = self
+                    .read_regular_sidecar_bytes(
+                        &temp_path,
+                        &directory,
+                        MAX_PENDING_QUEUE_PLAN_ADMISSION_CERTIFICATE_BYTES,
+                    )?
+                    .ok_or_else(|| {
+                        Self::invalid_pending_queue_plan_admission_error(
+                            temp_path.clone(),
+                            "pending QueuePlan admission temporary disappeared during recovery",
+                        )
+                    })?;
+                let expected_hash = self.validate_pending_queue_plan_admission_temp_bytes(
+                    &temp_path,
+                    &hash_text,
+                    &temp_bytes,
+                )?;
+                let (_, target_bytes) = self
+                    .read_pending_queue_plan_admission_path(&target_path, Some(expected_hash))?
+                    .ok_or_else(|| {
+                        Self::invalid_pending_queue_plan_admission_error(
+                            target_path.clone(),
+                            "published QueuePlan admission target disappeared during recovery",
+                        )
+                    })?;
+                if target_bytes != temp_bytes {
+                    return Err(Self::invalid_pending_queue_plan_admission_error(
+                        temp_path,
+                        "pending QueuePlan admission temporary conflicts with its published target",
+                    ));
+                }
+                std::fs::remove_file(&temp_path)
+                    .map_err(|err| Error::IO(err, temp_path.clone()))?;
+                sync_dir(&directory).map_err(|err| Error::IO(err, directory.clone()))?;
+                continue;
+            }
+
+            if stable_count == self.pending_control_sidecar_limits.queue_plan_admissions {
+                return Err(Self::invalid_pending_queue_plan_admission_error(
+                    directory,
+                    "unpublished pending QueuePlan admission temporary exceeds the certificate-count hard limit",
+                ));
+            }
+            if !Self::sidecar_is_single_link(&temp_metadata) {
+                return Err(Self::invalid_pending_queue_plan_admission_error(
+                    temp_path,
+                    "unpublished QueuePlan admission temporary is not a single-link file",
+                ));
+            }
+            let temp_bytes = self
+                .read_regular_sidecar_bytes(
+                    &temp_path,
+                    &directory,
+                    MAX_PENDING_QUEUE_PLAN_ADMISSION_CERTIFICATE_BYTES,
+                )?
+                .ok_or_else(|| {
+                    Self::invalid_pending_queue_plan_admission_error(
+                        temp_path.clone(),
+                        "pending QueuePlan admission temporary disappeared during recovery",
+                    )
+                })?;
+            let expected_hash = self.validate_pending_queue_plan_admission_temp_bytes(
+                &temp_path,
+                &hash_text,
+                &temp_bytes,
+            )?;
+            std::fs::File::open(&temp_path)
+                .and_then(|file| file.sync_all())
+                .map_err(|err| Error::IO(err, temp_path.clone()))?;
+            sync_dir(&directory).map_err(|err| Error::IO(err, directory.clone()))?;
+            std::fs::hard_link(&temp_path, &target_path)
+                .map_err(|err| Error::IO(err, target_path.clone()))?;
+            let target_metadata = std::fs::symlink_metadata(&target_path)
+                .map_err(|err| Error::IO(err, target_path.clone()))?;
+            if !Self::sidecar_metadata_same_object(&temp_metadata, &target_metadata)
+                || !Self::sidecar_has_link_count(&target_metadata, 2)
+            {
+                return Err(Self::invalid_pending_queue_plan_admission_error(
+                    target_path,
+                    "published QueuePlan admission target does not bind its durable temporary",
+                ));
+            }
+            std::fs::File::open(&target_path)
+                .and_then(|file| file.sync_all())
+                .map_err(|err| Error::IO(err, target_path.clone()))?;
+            sync_dir(&directory).map_err(|err| Error::IO(err, directory.clone()))?;
+            std::fs::remove_file(&temp_path).map_err(|err| Error::IO(err, temp_path.clone()))?;
+            sync_dir(&directory).map_err(|err| Error::IO(err, directory.clone()))?;
+            let _ = self
+                .read_pending_queue_plan_admission_path(&target_path, Some(expected_hash))?
+                .ok_or_else(|| {
+                    Self::invalid_pending_queue_plan_admission_error(
+                        target_path,
+                        "published QueuePlan admission target disappeared after recovery",
+                    )
+                })?;
+        }
+        let (_, path_bytes_after) = self.pending_queue_plan_admission_paths_unlocked()?;
+        self.update_disk_usage_delta(path_bytes_before, u64::try_from(path_bytes_after)?);
+        accounting_mutation.finish();
         Ok(())
     }
 
@@ -9841,18 +11326,15 @@ impl Kura {
         let path = self.pending_merge_entry_path(hash);
         let directory = self.pending_merge_entry_dir();
         let _guard = self.sidecar_lock.lock();
-        std::fs::create_dir_all(&directory).map_err(|err| Error::MkDir(err, directory.clone()))?;
+        self.ensure_pending_merge_entry_dir_unlocked()?;
         let accounting_mutation = self.begin_total_disk_usage_mutation();
         self.reconcile_pending_merge_temp_files_unlocked()?;
+        self.reconcile_pending_queue_plan_admission_temp_files_unlocked()?;
         let temp_path = path.with_extension("norito.tmp");
-        if let Err(err) = std::fs::remove_file(&temp_path)
-            && err.kind() != ErrorKind::NotFound
-        {
-            return Err(Error::IO(err, temp_path));
-        }
         let (paths, pending_bytes) = self.pending_merge_entry_paths_unlocked()?;
         if let Some(existing) = self.read_pending_merge_entry_path(&path, Some(hash))? {
             if existing == *entry {
+                accounting_mutation.finish();
                 return Ok(hash);
             }
             return Err(Self::invalid_pending_merge_entry_error(
@@ -9860,37 +11342,406 @@ impl Kura {
                 "hash-addressed pending merge sidecar conflicts with existing bytes",
             ));
         }
-        if paths.len() == MAX_PENDING_CERTIFIED_MERGE_ENTRIES {
+        if paths.len() == self.pending_control_sidecar_limits.certified_merge_entries {
             return Err(Self::invalid_pending_merge_entry_error(
                 directory,
                 "pending certified merge entry count exceeds the hard limit",
             ));
         }
-        if pending_bytes
-            .checked_add(bytes.len())
-            .is_none_or(|total| !pending_merge_bytes_within_limit(total))
-        {
+        let (_, admission_bytes) = self.pending_queue_plan_admission_paths_unlocked()?;
+        if pending_bytes.checked_add(bytes.len()).is_none_or(|total| {
+            !self
+                .pending_control_sidecar_limits
+                .combined_bytes_within_limit(total, admission_bytes)
+        }) {
             return Err(Self::invalid_pending_merge_entry_error(
                 directory,
-                "pending certified merge bytes exceed the aggregate hard limit",
+                "pending merge and QueuePlan admission bytes exceed their shared hard limit",
             ));
         }
+
+        let mut temp = self.create_exclusive_pending_merge_temp(&temp_path)?;
+        temp.write_all(&bytes)
+            .map_err(|error| Error::IO(error, temp_path.clone()))?;
+        temp.flush()
+            .map_err(|error| Error::IO(error, temp_path.clone()))?;
+        temp.sync_all()
+            .map_err(|error| Error::IO(error, temp_path.clone()))?;
+        let opened_after_write = temp
+            .metadata()
+            .map_err(|error| Error::IO(error, temp_path.clone()))?;
+        let path_after_write = std::fs::symlink_metadata(&temp_path)
+            .map_err(|error| Error::IO(error, temp_path.clone()))?;
+        if !opened_after_write.is_file()
+            || path_after_write.file_type().is_symlink()
+            || !path_after_write.file_type().is_file()
+            || !Self::sidecar_is_single_link(&opened_after_write)
+            || !Self::sidecar_is_single_link(&path_after_write)
+            || !Self::sidecar_metadata_same_object(&opened_after_write, &path_after_write)
+            || opened_after_write.len() != u64::try_from(bytes.len())?
         {
-            let mut temp = std::fs::OpenOptions::new()
-                .create_new(true)
-                .write(true)
-                .open(&temp_path)
-                .map_err(|err| Error::IO(err, temp_path.clone()))?;
-            temp.write_all(&bytes)
-                .map_err(|err| Error::IO(err, temp_path.clone()))?;
-            temp.sync_all()
-                .map_err(|err| Error::IO(err, temp_path.clone()))?;
+            return Err(Self::invalid_pending_merge_entry_error(
+                temp_path,
+                "pending merge temporary changed while writing",
+            ));
         }
-        std::fs::rename(&temp_path, &path).map_err(|err| Error::IO(err, path.clone()))?;
-        sync_dir(&directory).map_err(|err| Error::IO(err, directory))?;
+        sync_dir(&directory).map_err(|error| Error::IO(error, directory.clone()))?;
+        if let Err(error) = std::fs::hard_link(&temp_path, &path) {
+            let remove_result = std::fs::remove_file(&temp_path);
+            let sync_result = sync_dir(&directory);
+            if let Err(remove_error) = remove_result {
+                return Err(Error::IO(remove_error, temp_path));
+            }
+            if let Err(sync_error) = sync_result {
+                return Err(Error::IO(sync_error, directory));
+            }
+            return Err(Error::IO(error, path));
+        }
+        let target_metadata =
+            std::fs::symlink_metadata(&path).map_err(|error| Error::IO(error, path.clone()))?;
+        if target_metadata.file_type().is_symlink()
+            || !target_metadata.file_type().is_file()
+            || !Self::sidecar_metadata_same_object(&opened_after_write, &target_metadata)
+            || !Self::sidecar_has_link_count(&target_metadata, 2)
+        {
+            return Err(Self::invalid_pending_merge_entry_error(
+                path,
+                "published pending merge target does not bind its durable temporary",
+            ));
+        }
+        let target = std::fs::File::open(&path).map_err(|error| Error::IO(error, path.clone()))?;
+        let opened_target = target
+            .metadata()
+            .map_err(|error| Error::IO(error, path.clone()))?;
+        if !Self::sidecar_metadata_same_object(&target_metadata, &opened_target)
+            || !Self::sidecar_has_link_count(&opened_target, 2)
+        {
+            return Err(Self::invalid_pending_merge_entry_error(
+                path,
+                "published pending merge target changed while opening",
+            ));
+        }
+        target
+            .sync_all()
+            .map_err(|error| Error::IO(error, path.clone()))?;
+        sync_dir(&directory).map_err(|error| Error::IO(error, directory.clone()))?;
+        std::fs::remove_file(&temp_path).map_err(|error| Error::IO(error, temp_path.clone()))?;
+        sync_dir(&directory).map_err(|error| Error::IO(error, directory.clone()))?;
+        let persisted = self
+            .read_pending_merge_entry_path(&path, Some(hash))?
+            .ok_or_else(|| {
+                Self::invalid_pending_merge_entry_error(
+                    path.clone(),
+                    "published pending merge entry disappeared",
+                )
+            })?;
+        if persisted != *entry {
+            return Err(Self::invalid_pending_merge_entry_error(
+                path,
+                "published pending merge entry differs from its durable input",
+            ));
+        }
         self.add_disk_usage_bytes(u64::try_from(bytes.len())?);
         accounting_mutation.finish();
         Ok(hash)
+    }
+
+    /// Persist exact canonical QueuePlan admission certificate bytes before
+    /// they become eligible for a global carrier.
+    ///
+    /// Kura deliberately treats the versioned certificate as opaque bytes: the
+    /// admission layer owns Norito decoding and semantic validation, while this
+    /// store preserves those exact bytes under their content hash. Empty,
+    /// oversized, aliased, or non-canonical filesystem identities fail closed.
+    ///
+    /// # Errors
+    /// Returns an error when the certificate or pending-control store exceeds
+    /// its bounds, or when durable no-clobber publication cannot complete.
+    pub fn persist_pending_queue_plan_admission_certificate(
+        &self,
+        canonical_certificate_bytes: &[u8],
+    ) -> Result<Hash> {
+        self.ensure_prune_recovery_not_required()?;
+        self.durable_mutation_authorized()?;
+        if canonical_certificate_bytes.is_empty()
+            || canonical_certificate_bytes.len()
+                > MAX_PENDING_QUEUE_PLAN_ADMISSION_CERTIFICATE_BYTES
+        {
+            return Err(Self::invalid_pending_queue_plan_admission_error(
+                self.pending_queue_plan_admission_dir(),
+                "pending QueuePlan admission certificate violates its hard byte limit",
+            ));
+        }
+        let hash = Hash::new(canonical_certificate_bytes);
+        let path = self.pending_queue_plan_admission_path(hash);
+        let temp_path = path.with_extension("norito.tmp");
+        let directory = self.pending_queue_plan_admission_dir();
+        let _guard = self.sidecar_lock.lock();
+        self.ensure_pending_queue_plan_admission_dir_unlocked()?;
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        self.reconcile_pending_merge_temp_files_unlocked()?;
+        self.reconcile_pending_queue_plan_admission_temp_files_unlocked()?;
+
+        if let Some((_, existing)) =
+            self.read_pending_queue_plan_admission_path(&path, Some(hash))?
+        {
+            if existing == canonical_certificate_bytes {
+                accounting_mutation.finish();
+                return Ok(hash);
+            }
+            return Err(Self::invalid_pending_queue_plan_admission_error(
+                path,
+                "hash-addressed QueuePlan admission sidecar conflicts with existing bytes",
+            ));
+        }
+        let (paths, admission_bytes) = self.pending_queue_plan_admission_paths_unlocked()?;
+        if paths.len() == self.pending_control_sidecar_limits.queue_plan_admissions {
+            return Err(Self::invalid_pending_queue_plan_admission_error(
+                directory,
+                "pending QueuePlan admission certificate count exceeds the hard limit",
+            ));
+        }
+        let (_, merge_bytes) = self.pending_merge_entry_paths_unlocked()?;
+        if admission_bytes
+            .checked_add(canonical_certificate_bytes.len())
+            .is_none_or(|total| {
+                !self
+                    .pending_control_sidecar_limits
+                    .combined_bytes_within_limit(merge_bytes, total)
+            })
+        {
+            return Err(Self::invalid_pending_queue_plan_admission_error(
+                directory,
+                "pending merge and QueuePlan admission bytes exceed their shared hard limit",
+            ));
+        }
+
+        let mut temp = self.create_exclusive_pending_queue_plan_admission_temp(&temp_path)?;
+        temp.write_all(canonical_certificate_bytes)
+            .map_err(|error| Error::IO(error, temp_path.clone()))?;
+        temp.flush()
+            .map_err(|error| Error::IO(error, temp_path.clone()))?;
+        temp.sync_all()
+            .map_err(|error| Error::IO(error, temp_path.clone()))?;
+        let opened_after_write = temp
+            .metadata()
+            .map_err(|error| Error::IO(error, temp_path.clone()))?;
+        let path_after_write = std::fs::symlink_metadata(&temp_path)
+            .map_err(|error| Error::IO(error, temp_path.clone()))?;
+        if !opened_after_write.is_file()
+            || path_after_write.file_type().is_symlink()
+            || !path_after_write.file_type().is_file()
+            || !Self::sidecar_is_single_link(&opened_after_write)
+            || !Self::sidecar_is_single_link(&path_after_write)
+            || !Self::sidecar_metadata_same_object(&opened_after_write, &path_after_write)
+            || opened_after_write.len() != u64::try_from(canonical_certificate_bytes.len())?
+        {
+            return Err(Self::invalid_pending_queue_plan_admission_error(
+                temp_path,
+                "pending QueuePlan admission temporary changed while writing",
+            ));
+        }
+        sync_dir(&directory).map_err(|error| Error::IO(error, directory.clone()))?;
+        if let Err(error) = std::fs::hard_link(&temp_path, &path) {
+            let remove_result = std::fs::remove_file(&temp_path);
+            let sync_result = sync_dir(&directory);
+            if let Err(remove_error) = remove_result {
+                return Err(Error::IO(remove_error, temp_path));
+            }
+            if let Err(sync_error) = sync_result {
+                return Err(Error::IO(sync_error, directory));
+            }
+            return Err(Error::IO(error, path));
+        }
+        let target_metadata =
+            std::fs::symlink_metadata(&path).map_err(|error| Error::IO(error, path.clone()))?;
+        if target_metadata.file_type().is_symlink()
+            || !target_metadata.file_type().is_file()
+            || !Self::sidecar_metadata_same_object(&opened_after_write, &target_metadata)
+            || !Self::sidecar_has_link_count(&target_metadata, 2)
+        {
+            return Err(Self::invalid_pending_queue_plan_admission_error(
+                path,
+                "published QueuePlan admission target does not bind its durable temporary",
+            ));
+        }
+        let target = std::fs::File::open(&path).map_err(|error| Error::IO(error, path.clone()))?;
+        let opened_target = target
+            .metadata()
+            .map_err(|error| Error::IO(error, path.clone()))?;
+        if !Self::sidecar_metadata_same_object(&target_metadata, &opened_target)
+            || !Self::sidecar_has_link_count(&opened_target, 2)
+        {
+            return Err(Self::invalid_pending_queue_plan_admission_error(
+                path,
+                "published QueuePlan admission target changed while opening",
+            ));
+        }
+        target
+            .sync_all()
+            .map_err(|error| Error::IO(error, path.clone()))?;
+        sync_dir(&directory).map_err(|error| Error::IO(error, directory.clone()))?;
+        std::fs::remove_file(&temp_path).map_err(|error| Error::IO(error, temp_path.clone()))?;
+        sync_dir(&directory).map_err(|error| Error::IO(error, directory.clone()))?;
+        let (_, persisted) = self
+            .read_pending_queue_plan_admission_path(&path, Some(hash))?
+            .ok_or_else(|| {
+                Self::invalid_pending_queue_plan_admission_error(
+                    path.clone(),
+                    "published QueuePlan admission certificate disappeared",
+                )
+            })?;
+        if persisted != canonical_certificate_bytes {
+            return Err(Self::invalid_pending_queue_plan_admission_error(
+                path,
+                "published QueuePlan admission certificate differs from its durable input",
+            ));
+        }
+        self.add_disk_usage_bytes(u64::try_from(canonical_certificate_bytes.len())?);
+        accounting_mutation.finish();
+        Ok(hash)
+    }
+
+    /// Resolve one exact pending QueuePlan admission certificate by its byte hash.
+    #[cfg(test)]
+    pub(crate) fn pending_queue_plan_admission_certificate(
+        &self,
+        hash: Hash,
+    ) -> Result<Option<Vec<u8>>> {
+        self.ensure_prune_recovery_not_required()?;
+        let certificate = {
+            let _guard = self.sidecar_lock.lock();
+            self.ensure_prune_recovery_not_required()?;
+            let (_, merge_bytes) = self.pending_merge_entry_paths_unlocked()?;
+            let (_, admission_bytes) = self.pending_queue_plan_admission_paths_unlocked()?;
+            if !self
+                .pending_control_sidecar_limits
+                .combined_bytes_within_limit(merge_bytes, admission_bytes)
+            {
+                return Err(Self::invalid_pending_queue_plan_admission_error(
+                    self.store_root.clone(),
+                    "pending merge and QueuePlan admission sidecars exceed their shared hard byte limit",
+                ));
+            }
+            self.read_pending_queue_plan_admission_path(
+                &self.pending_queue_plan_admission_path(hash),
+                Some(hash),
+            )?
+            .map(|(_, bytes)| bytes)
+        };
+        self.ensure_prune_recovery_not_required()?;
+        Ok(certificate)
+    }
+
+    /// Return every pending QueuePlan admission certificate in byte-hash order.
+    #[cfg(test)]
+    pub(crate) fn pending_queue_plan_admission_certificates(&self) -> Result<Vec<(Hash, Vec<u8>)>> {
+        self.pending_queue_plan_admission_certificates_bounded(
+            self.pending_control_sidecar_limits.queue_plan_admissions,
+        )
+    }
+
+    /// Return at most `limit` pending QueuePlan admission certificates in
+    /// deterministic byte-hash order.
+    pub(crate) fn pending_queue_plan_admission_certificates_bounded(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<(Hash, Vec<u8>)>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        self.ensure_prune_recovery_not_required()?;
+        let certificates = {
+            let _guard = self.sidecar_lock.lock();
+            self.ensure_prune_recovery_not_required()?;
+            let (_, merge_bytes) = self.pending_merge_entry_paths_unlocked()?;
+            let (paths, admission_bytes) = self.pending_queue_plan_admission_paths_unlocked()?;
+            if !self
+                .pending_control_sidecar_limits
+                .combined_bytes_within_limit(merge_bytes, admission_bytes)
+            {
+                return Err(Self::invalid_pending_queue_plan_admission_error(
+                    self.store_root.clone(),
+                    "pending merge and QueuePlan admission sidecars exceed their shared hard byte limit",
+                ));
+            }
+            let bounded = limit.min(self.pending_control_sidecar_limits.queue_plan_admissions);
+            let mut certificates = Vec::with_capacity(paths.len().min(bounded));
+            for path in paths.into_iter().take(bounded) {
+                let Some(certificate) = self.read_pending_queue_plan_admission_path(&path, None)?
+                else {
+                    continue;
+                };
+                certificates.push(certificate);
+            }
+            certificates
+        };
+        self.ensure_prune_recovery_not_required()?;
+        Ok(certificates)
+    }
+
+    /// Fingerprint-bound QueuePlan admission capacity used by bounded callers.
+    #[must_use]
+    pub(crate) const fn pending_queue_plan_admission_capacity(&self) -> usize {
+        self.pending_control_sidecar_limits.queue_plan_admissions
+    }
+
+    /// Remove pending QueuePlan admission certificates rejected by `retain`.
+    ///
+    /// This is the byte-oriented cleanup hook used by the admission layer for
+    /// stale round/incarnation evidence; Kura does not interpret the payload.
+    #[cfg(test)]
+    pub(crate) fn retain_pending_queue_plan_admission_certificates(
+        &self,
+        mut retain: impl FnMut(Hash, &[u8]) -> bool,
+    ) -> Result<usize> {
+        self.ensure_prune_recovery_not_required()?;
+        self.durable_mutation_authorized()?;
+        let _guard = self.sidecar_lock.lock();
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        self.reconcile_pending_queue_plan_admission_temp_files_unlocked()?;
+        let directory = self.pending_queue_plan_admission_dir();
+        let (paths, _) = self.pending_queue_plan_admission_paths_unlocked()?;
+        let mut removed = 0usize;
+        let mut removed_bytes = 0u64;
+        for path in paths {
+            let Some((hash, bytes)) = self.read_pending_queue_plan_admission_path(&path, None)?
+            else {
+                continue;
+            };
+            if retain(hash, &bytes) {
+                continue;
+            }
+            removed_bytes = removed_bytes.saturating_add(u64::try_from(bytes.len())?);
+            std::fs::remove_file(&path).map_err(|error| Error::IO(error, path))?;
+            removed = removed.saturating_add(1);
+        }
+        if removed > 0 {
+            sync_dir(&directory).map_err(|error| Error::IO(error, directory))?;
+            self.sub_disk_usage_bytes(removed_bytes);
+        }
+        accounting_mutation.finish();
+        Ok(removed)
+    }
+
+    /// Remove one pending QueuePlan admission certificate after canonical
+    /// carrier commitment or explicit stale-certificate rejection.
+    pub(crate) fn remove_pending_queue_plan_admission_certificate(&self, hash: Hash) -> Result<()> {
+        self.ensure_prune_recovery_not_required()?;
+        self.durable_mutation_authorized()?;
+        let path = self.pending_queue_plan_admission_path(hash);
+        let directory = self.pending_queue_plan_admission_dir();
+        let _guard = self.sidecar_lock.lock();
+        let Some((_, bytes)) = self.read_pending_queue_plan_admission_path(&path, Some(hash))?
+        else {
+            return Ok(());
+        };
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        std::fs::remove_file(&path).map_err(|error| Error::IO(error, path))?;
+        sync_dir(&directory).map_err(|error| Error::IO(error, directory))?;
+        self.sub_disk_usage_bytes(u64::try_from(bytes.len())?);
+        accounting_mutation.finish();
+        Ok(())
     }
 
     /// Resolve an exact merge entry from the pending sidecar store or the
@@ -9929,15 +11780,18 @@ impl Kura {
     pub(crate) fn pending_certified_merge_entries(
         &self,
     ) -> Result<Vec<(HashOf<MergeLedgerEntry>, MergeLedgerEntry)>> {
-        self.pending_certified_merge_entries_bounded(MAX_PENDING_CERTIFIED_MERGE_ENTRIES)
+        self.pending_certified_merge_entries_bounded(
+            self.pending_control_sidecar_limits.certified_merge_entries,
+        )
     }
 
     /// Return at most `limit` deterministic pending merge sidecars.
     ///
     /// Directory shape and aggregate metadata remain fail-closed under the
-    /// protocol hard limits, while only the selected canonical files are
-    /// decoded and cloned. This keeps operator diagnostics proportional to
-    /// their response budget instead of the larger pending-sidecar budget.
+    /// protocol hard limits. Files are decoded one at a time until `limit`
+    /// uncommitted entries have been selected, and only those selected entries
+    /// are retained. This prevents committed sidecars that sort first from
+    /// under-filling the bounded result.
     pub(crate) fn pending_certified_merge_entries_bounded(
         &self,
         limit: usize,
@@ -9945,40 +11799,103 @@ impl Kura {
         if limit == 0 {
             return Ok(Vec::new());
         }
-        self.ensure_prune_recovery_not_required()?;
-        let entries = {
-            let _guard = self.sidecar_lock.lock();
-            self.ensure_prune_recovery_not_required()?;
-            let (paths, _) = self.pending_merge_entry_paths_unlocked()?;
-            let bounded = limit.min(MAX_PENDING_CERTIFIED_MERGE_ENTRIES);
-            let mut entries = Vec::with_capacity(paths.len().min(bounded));
-            for path in paths.into_iter().take(bounded) {
-                let Some(entry) = self.read_pending_merge_entry_path(&path, None)? else {
-                    continue;
-                };
-                entries.push((entry.canonical_hash(), entry));
-            }
-            entries
-        };
-        self.ensure_prune_recovery_not_required()?;
-        let mut merge_log = self.merge_log.lock();
-        self.ensure_prune_recovery_not_required()?;
-        let mut entries = entries
-            .into_iter()
-            .filter(|(hash, _)| !merge_log.contains_hash(*hash))
-            .collect::<Vec<_>>();
-        drop(merge_log);
+        let bounded = limit.min(self.pending_control_sidecar_limits.certified_merge_entries);
+        let mut entries = Vec::with_capacity(bounded);
+        let _ = self.visit_pending_certified_merge_entries(
+            self.pending_control_sidecar_limits.certified_merge_entries,
+            |hash, entry| {
+                entries.push((hash, entry.clone()));
+                entries.len() == bounded
+            },
+        )?;
         entries.sort_by_key(|(hash, entry)| (entry.epoch_id, *hash));
         self.ensure_prune_recovery_not_required()?;
         Ok(entries)
+    }
+
+    /// Return deterministic hashes for matching uncommitted pending merge evidence.
+    ///
+    /// At most `evidence_scan_limit` sidecars are decoded, one at a time. The
+    /// predicate runs without a Kura lock, and selected entries are represented
+    /// only by their hashes so callers can resolve, validate, and discard each
+    /// large entry independently. [`PendingCertifiedMergeEvidenceScan::LimitExceeded`]
+    /// is returned when the stable pending inventory exceeds the scan limit; no
+    /// entry bytes are decoded in that case.
+    pub(crate) fn pending_certified_merge_entry_hashes_matching_bounded(
+        &self,
+        evidence_scan_limit: usize,
+        mut selected: impl FnMut(&MergeLedgerEntry) -> bool,
+    ) -> Result<PendingCertifiedMergeEvidenceScan> {
+        let mut matches = Vec::new();
+        let outcome =
+            self.visit_pending_certified_merge_entries(evidence_scan_limit, |hash, entry| {
+                if selected(entry) {
+                    matches.push((entry.epoch_id, hash));
+                }
+                false
+            })?;
+        if outcome == PendingCertifiedMergeVisitOutcome::ScanLimitExceeded {
+            return Ok(PendingCertifiedMergeEvidenceScan::LimitExceeded);
+        }
+        matches.sort_unstable_by_key(|(epoch_id, hash)| (*epoch_id, *hash));
+        Ok(PendingCertifiedMergeEvidenceScan::Complete(
+            matches.into_iter().map(|(_, hash)| hash).collect(),
+        ))
+    }
+
+    fn visit_pending_certified_merge_entries(
+        &self,
+        evidence_scan_limit: usize,
+        mut visitor: impl FnMut(HashOf<MergeLedgerEntry>, &MergeLedgerEntry) -> bool,
+    ) -> Result<PendingCertifiedMergeVisitOutcome> {
+        self.ensure_prune_recovery_not_required()?;
+        let paths = {
+            let _guard = self.sidecar_lock.lock();
+            self.ensure_prune_recovery_not_required()?;
+            let (paths, _) = self.pending_merge_entry_paths_unlocked()?;
+            paths
+        };
+        let evidence_scan_limit =
+            evidence_scan_limit.min(self.pending_control_sidecar_limits.certified_merge_entries);
+        if paths.len() > evidence_scan_limit {
+            return Ok(PendingCertifiedMergeVisitOutcome::ScanLimitExceeded);
+        }
+
+        for path in paths {
+            let entry = {
+                let _guard = self.sidecar_lock.lock();
+                self.ensure_prune_recovery_not_required()?;
+                self.read_pending_merge_entry_path(&path, None)?
+            };
+            let Some(entry) = entry else {
+                continue;
+            };
+            let hash = entry.canonical_hash();
+            self.ensure_prune_recovery_not_required()?;
+            let committed = {
+                let mut merge_log = self.merge_log.lock();
+                self.ensure_prune_recovery_not_required()?;
+                merge_log.contains_hash(hash)
+            };
+            if committed {
+                continue;
+            }
+            if visitor(hash, &entry) {
+                self.ensure_prune_recovery_not_required()?;
+                return Ok(PendingCertifiedMergeVisitOutcome::VisitorStopped);
+            }
+        }
+        self.ensure_prune_recovery_not_required()?;
+        Ok(PendingCertifiedMergeVisitOutcome::Complete)
     }
 
     /// Return whether an uncommitted certified merge sidecar still carries
     /// work for one exact active lane incarnation.
     ///
     /// The underlying scan is bounded by the pending-entry count and byte
-    /// limits. Malformed autonomous routing bytes, misaligned Native receipts,
-    /// or a matching route without one unique historical active-lane binding
+    /// limits, decodes one entry at a time, and stops at the first blocker.
+    /// Malformed autonomous routing bytes, misaligned Native receipts, or a
+    /// matching route without one unique historical active-lane binding
     /// conservatively count as work, so drain certification never treats
     /// unverifiable evidence as empty. A certificate-only entry is the closure
     /// carrier itself and owns no lane work; counting it here would make its own
@@ -9989,10 +11906,9 @@ impl Kura {
         dataspace_id: DataSpaceId,
         lane_incarnation: Hash,
     ) -> Result<bool> {
-        Ok(self
-            .pending_certified_merge_entries()?
-            .into_iter()
-            .any(|(_, entry)| {
+        let outcome = self.visit_pending_certified_merge_entries(
+            self.pending_control_sidecar_limits.certified_merge_entries,
+            |_, entry| {
                 entry.lane_snapshots.iter().any(|snapshot| {
                     snapshot.lane_id == lane_id
                         && snapshot.dataspace_id == dataspace_id
@@ -10103,7 +12019,9 @@ impl Kura {
                                 })
                     })
                 })
-            }))
+            },
+        )?;
+        Ok(outcome != PendingCertifiedMergeVisitOutcome::Complete)
     }
 
     /// Select the next pending certified entry deterministically by
@@ -10363,7 +12281,7 @@ impl Kura {
     pub(crate) fn committed_merge_queue_reservations(
         &self,
         requested: &BTreeSet<HashOf<SignedTransaction>>,
-    ) -> Result<BTreeMap<HashOf<SignedTransaction>, LaneQueueReservationKeyV1>> {
+    ) -> Result<BTreeMap<HashOf<SignedTransaction>, LaneQueueReservationKeyV2>> {
         self.ensure_prune_recovery_not_required()?;
         self.ensure_canonical_storage_not_poisoned()?;
         self.merge_log.lock().validate_indexed_file_length()?;
@@ -17305,9 +19223,9 @@ impl Kura {
             .saturating_add(carrier_bytes))
     }
 
-    fn block_required_bytes_for_budget(block: &SignedBlock, _limit: u64) -> Result<u64> {
+    fn block_required_bytes_for_budget(&self, block: &SignedBlock, _limit: u64) -> Result<u64> {
         let required = Self::block_required_bytes(block)?;
-        Ok(required.saturating_add(Self::lane_artifact_required_bytes_for_block(block)?))
+        Ok(required.saturating_add(self.lane_artifact_required_bytes_for_block(block)?))
     }
 
     fn sidecar_bytes(store_dir: &Path) -> Result<u64> {
@@ -17592,6 +19510,9 @@ impl Kura {
         used = used.saturating_add(Self::directory_tree_file_bytes(
             &self.store_root.join(PENDING_MERGE_ENTRIES_DIR),
         )?);
+        used = used.saturating_add(Self::directory_tree_file_bytes(
+            &self.store_root.join(PENDING_QUEUE_PLAN_ADMISSIONS_DIR),
+        )?);
         let roster_journal = CommitRosterJournal::journal_path(&self.store_root);
         used = used.saturating_add(Self::directory_tree_file_bytes(&roster_journal)?);
         for journal_name in [
@@ -17635,6 +19556,9 @@ impl Kura {
         )?);
         used = used.saturating_add(Self::directory_tree_file_bytes(
             &self.store_root.join(PENDING_MERGE_ENTRIES_DIR),
+        )?);
+        used = used.saturating_add(Self::directory_tree_file_bytes(
+            &self.store_root.join(PENDING_QUEUE_PLAN_ADMISSIONS_DIR),
         )?);
         let roster_journal = CommitRosterJournal::journal_path(&self.store_root);
         used = used.saturating_add(Self::directory_tree_file_bytes(&roster_journal)?);
@@ -17836,10 +19760,9 @@ impl Kura {
 
         let mut pending_bytes = 0u64;
         for block in pending_blocks {
-            pending_bytes = pending_bytes.saturating_add(Self::block_required_bytes_for_budget(
-                &block,
-                self.max_disk_usage_bytes,
-            )?);
+            pending_bytes = pending_bytes.saturating_add(
+                self.block_required_bytes_for_budget(&block, self.max_disk_usage_bytes)?,
+            );
         }
         Ok(pending_bytes)
     }
@@ -17909,7 +19832,7 @@ impl Kura {
         let (persisted_count, unindexed_bytes) = self.persisted_count_and_unindexed_bytes()?;
 
         let limit = self.max_disk_usage_bytes;
-        let block_required = Self::block_required_bytes_for_budget(block, limit)?;
+        let block_required = self.block_required_bytes_for_budget(block, limit)?;
         let mut used = self.disk_usage.load(Ordering::Relaxed);
         let pending_bytes = self.pending_block_bytes(persisted_count, unindexed_bytes)?;
         let mut budget_used = used.saturating_add(pending_bytes);
@@ -17985,8 +19908,8 @@ impl Kura {
         };
 
         let limit = self.max_disk_usage_bytes;
-        let new_bytes = Self::block_required_bytes_for_budget(block, limit)?;
-        let old_bytes = Self::block_required_bytes_for_budget(&old_block, limit)?;
+        let new_bytes = self.block_required_bytes_for_budget(block, limit)?;
+        let old_bytes = self.block_required_bytes_for_budget(&old_block, limit)?;
         let (persisted_count, unindexed_bytes) = self.persisted_count_and_unindexed_bytes()?;
         let pending_raw = self.pending_block_bytes_raw(persisted_count)?;
         let top_is_pending = block_count > persisted_count;
@@ -18454,271 +20377,1271 @@ impl Kura {
         Ok(Some(layout))
     }
 
-    fn validate_indexed_sidecar_storage_bound(
-        data_path: &Path,
-        index_path: &Path,
-        max_entries: u64,
-        kind: &'static str,
-    ) -> Result<()> {
-        let max_data_len = max_entries
-            .checked_mul(STRICT_INIT_MAX_BLOCK_BYTES)
+    fn parse_native_amx_evidence_path(
+        path: &Path,
+    ) -> Result<Option<(NativeAmxEvidenceKind, u64, bool)>> {
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
             .ok_or_else(|| {
-                Error::PruneIntentConflict(format!(
-                    "{kind} startup aggregate data byte bound overflows"
-                ))
-            })?
-            .min(MAX_NATIVE_AMX_PARTICIPANT_EVIDENCE_STARTUP_BYTES);
-        match std::fs::symlink_metadata(data_path) {
-            Ok(metadata) => {
-                if metadata.file_type().is_symlink()
-                    || !metadata.file_type().is_file()
-                    || !Self::sidecar_is_single_link(&metadata)
-                {
-                    return Err(Error::PruneIntentConflict(format!(
-                        "{kind} data is not a single-link regular no-follow file"
-                    )));
-                }
-                if metadata.len() > max_data_len {
-                    return Err(Error::PruneIntentConflict(format!(
-                        "{kind} data exceeds the bounded startup aggregate byte budget"
-                    )));
-                }
+                Self::invalid_lane_artifact_error(
+                    path.to_path_buf(),
+                    "Native AMX evidence has a non-UTF-8 or missing file name",
+                )
+            })?;
+        if matches!(
+            name,
+            NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_FILE
+                | NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_TEMP_FILE
+                | NATIVE_AMX_EVIDENCE_PRUNE_INTENT_FILE
+                | NATIVE_AMX_EVIDENCE_PRUNE_INTENT_TEMP_FILE
+        ) {
+            return Ok(None);
+        }
+        for kind in [
+            NativeAmxEvidenceKind::Manifest,
+            NativeAmxEvidenceKind::Receipt,
+        ] {
+            let Some(suffix) = name.strip_prefix(kind.prefix()) else {
+                continue;
+            };
+            let (height_text, temporary) =
+                if let Some(height) = suffix.strip_suffix(NATIVE_AMX_EVIDENCE_TEMP_FILE_SUFFIX) {
+                    (height, true)
+                } else if let Some(height) = suffix.strip_suffix(NATIVE_AMX_EVIDENCE_FILE_SUFFIX) {
+                    (height, false)
+                } else {
+                    return Err(Self::invalid_lane_artifact_error(
+                        path.to_path_buf(),
+                        format!("{} has a non-canonical suffix", kind.label()),
+                    ));
+                };
+            if height_text.len() != NATIVE_AMX_EVIDENCE_HEIGHT_DIGITS
+                || !height_text.bytes().all(|byte| byte.is_ascii_digit())
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    path.to_path_buf(),
+                    format!("{} has a non-canonical height component", kind.label()),
+                ));
             }
-            Err(error) if error.kind() == ErrorKind::NotFound => {}
-            Err(error) => return Err(Error::IO(error, data_path.to_path_buf())),
+            let participant_height = height_text.parse::<u64>().map_err(|error| {
+                Self::invalid_lane_artifact_error(
+                    path.to_path_buf(),
+                    format!("{} height does not fit u64: {error}", kind.label()),
+                )
+            })?;
+            if participant_height == 0
+                || Self::native_amx_evidence_file_name(kind, participant_height)
+                    != name.strip_suffix(".tmp").unwrap_or(name)
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    path.to_path_buf(),
+                    format!("{} file name is not canonical", kind.label()),
+                ));
+            }
+            return Ok(Some((kind, participant_height, temporary)));
+        }
+        if name.starts_with("native_amx_") {
+            return Err(Self::invalid_lane_artifact_error(
+                path.to_path_buf(),
+                "unexpected or legacy Native AMX evidence artifact",
+            ));
+        }
+        Ok(None)
+    }
+
+    fn inventory_native_amx_evidence_files_locked(
+        &self,
+        namespace: &BoundProgressNamespace,
+        allow_transient: bool,
+    ) -> Result<NativeAmxEvidenceInventory> {
+        if !Self::progress_mutation_namespace_unchanged(namespace) {
+            return Err(Self::invalid_lane_artifact_error(
+                namespace.data_path.clone(),
+                "Native AMX evidence namespace changed before inventory",
+            ));
+        }
+        let directory = namespace.data_path.parent().ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                namespace.data_path.clone(),
+                "Native AMX evidence namespace has no directory",
+            )
+        })?;
+        let mut inventory = NativeAmxEvidenceInventory::default();
+        let entries = std::fs::read_dir(directory)
+            .map_err(|error| Error::IO(error, directory.to_path_buf()))?;
+        for entry in entries {
+            let entry = entry.map_err(|error| Error::IO(error, directory.to_path_buf()))?;
+            let path = entry.path();
+            let Some((kind, participant_height, temporary)) =
+                Self::parse_native_amx_evidence_path(&path)?
+            else {
+                continue;
+            };
+            let metadata = Self::regular_sidecar_metadata_for(&self.store_root, &path, directory)?
+                .ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        path.clone(),
+                        "Native AMX evidence disappeared during bounded inventory",
+                    )
+                })?;
+            let len = metadata.file.len();
+            if len == 0 || len > STRICT_INIT_MAX_BLOCK_BYTES {
+                return Err(Self::invalid_lane_artifact_error(
+                    path,
+                    format!(
+                        "{} has an empty or oversized standalone payload",
+                        kind.label()
+                    ),
+                ));
+            }
+            let file = NativeAmxEvidenceFile {
+                kind,
+                participant_height,
+                path: path.clone(),
+                metadata,
+            };
+            if temporary {
+                if inventory.temporary.replace(file).is_some() {
+                    return Err(Self::invalid_lane_artifact_error(
+                        directory.to_path_buf(),
+                        "Native AMX evidence retains more than one publication temporary",
+                    ));
+                }
+                continue;
+            }
+            let (stable, aggregate) = match kind {
+                NativeAmxEvidenceKind::Manifest => (
+                    &mut inventory.manifests,
+                    &mut inventory.manifest_stable_bytes,
+                ),
+                NativeAmxEvidenceKind::Receipt => {
+                    (&mut inventory.receipts, &mut inventory.receipt_stable_bytes)
+                }
+            };
+            if stable.insert(participant_height, file).is_some() {
+                return Err(Self::invalid_lane_artifact_error(
+                    path,
+                    format!(
+                        "{} repeats participant height {participant_height}",
+                        kind.label()
+                    ),
+                ));
+            }
+            *aggregate = aggregate.checked_add(len).ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    directory.to_path_buf(),
+                    format!("{} aggregate byte count overflowed", kind.label()),
+                )
+            })?;
         }
 
-        let index_len = match std::fs::symlink_metadata(index_path) {
-            Ok(metadata) => {
-                if metadata.file_type().is_symlink()
-                    || !metadata.file_type().is_file()
-                    || !Self::sidecar_is_single_link(&metadata)
-                {
-                    return Err(Error::PruneIntentConflict(format!(
-                        "{kind} index is not a single-link regular no-follow file"
-                    )));
-                }
-                metadata.len()
-            }
-            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
-            Err(error) => return Err(Error::IO(error, index_path.to_path_buf())),
-        };
-        let max_index_len = INDEXED_SIDECAR_BASE_HEADER_SIZE_U64
-            .checked_add(
-                max_entries
-                    .checked_mul(PIPELINE_INDEX_ENTRY_SIZE_U64)
-                    .ok_or_else(|| {
-                        Error::PruneIntentConflict(format!(
-                            "{kind} startup index entry bound overflows"
-                        ))
-                    })?,
-            )
+        let stable_entry_limit = self
+            .native_amx_participant_evidence_retention()
+            .get()
+            .checked_add(usize::from(allow_transient))
             .ok_or_else(|| {
-                Error::PruneIntentConflict(format!("{kind} startup index byte bound overflows"))
+                Self::invalid_lane_artifact_error(
+                    directory.to_path_buf(),
+                    "Native AMX evidence entry bound overflowed",
+                )
             })?;
-        if index_len > max_index_len {
-            return Err(Error::PruneIntentConflict(format!(
-                "{kind} index exceeds the bounded startup entry budget"
-            )));
+        let aggregate_limit = if allow_transient {
+            MAX_NATIVE_AMX_PARTICIPANT_EVIDENCE_STARTUP_BYTES
+        } else {
+            MAX_NATIVE_AMX_PARTICIPANT_EVIDENCE_FILE_BYTES
+        };
+        for kind in [
+            NativeAmxEvidenceKind::Manifest,
+            NativeAmxEvidenceKind::Receipt,
+        ] {
+            let temporary_count = usize::from(
+                inventory
+                    .temporary
+                    .as_ref()
+                    .is_some_and(|file| file.kind == kind),
+            );
+            if inventory
+                .stable(kind)
+                .len()
+                .checked_add(temporary_count)
+                .is_none_or(|count| count > stable_entry_limit)
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    directory.to_path_buf(),
+                    format!("{} exceeds its retained record bound", kind.label()),
+                ));
+            }
+            let temporary_bytes = inventory
+                .temporary
+                .as_ref()
+                .filter(|file| file.kind == kind)
+                .map_or(0, |file| file.metadata.file.len());
+            if inventory
+                .stable_bytes(kind)
+                .checked_add(temporary_bytes)
+                .is_none_or(|bytes| bytes > aggregate_limit)
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    directory.to_path_buf(),
+                    format!("{} exceeds its aggregate byte bound", kind.label()),
+                ));
+            }
         }
-        let mut index = Self::open_direct_sidecar_file_in_namespace(index_path, false, false, None)
-            .map_err(|error| Error::IO(error, index_path.to_path_buf()))?;
-        let layout = SidecarIndexLayout::read_from(&mut index, index_len).map_err(|reason| {
-            Error::PruneIntentConflict(format!("{kind} index layout is malformed: {reason}"))
+        if !allow_transient && inventory.temporary.is_some() {
+            return Err(Self::invalid_lane_artifact_error(
+                directory.to_path_buf(),
+                "Native AMX evidence retains an unresolved publication temporary",
+            ));
+        }
+        for file in inventory
+            .manifests
+            .values()
+            .chain(inventory.receipts.values())
+            .chain(inventory.temporary.iter())
+        {
+            let current =
+                Self::regular_sidecar_metadata_for(&self.store_root, &file.path, directory)?
+                    .ok_or_else(|| {
+                        Self::invalid_lane_artifact_error(
+                            file.path.clone(),
+                            "Native AMX evidence disappeared after bounded inventory",
+                        )
+                    })?;
+            if !Self::stable_sidecar_metadata_unchanged(&file.metadata, &current) {
+                return Err(Self::invalid_lane_artifact_error(
+                    file.path.clone(),
+                    "Native AMX evidence changed during bounded inventory",
+                ));
+            }
+        }
+        if !Self::progress_mutation_namespace_unchanged(namespace) {
+            return Err(Self::invalid_lane_artifact_error(
+                directory.to_path_buf(),
+                "Native AMX evidence namespace changed during inventory",
+            ));
+        }
+        Ok(inventory)
+    }
+
+    fn read_native_amx_evidence_file_bytes_locked(
+        &self,
+        namespace: &BoundProgressNamespace,
+        file: &NativeAmxEvidenceFile,
+    ) -> Result<Vec<u8>> {
+        let mut opened = Self::open_bound_progress_file(namespace, &file.path, &file.metadata)?;
+        let expected_len = usize::try_from(file.metadata.file.len())?;
+        let mut bytes = Vec::with_capacity(expected_len);
+        std::io::Read::by_ref(&mut opened)
+            .take(STRICT_INIT_MAX_BLOCK_BYTES.saturating_add(1))
+            .read_to_end(&mut bytes)
+            .map_err(|error| Error::IO(error, file.path.clone()))?;
+        if bytes.len() != expected_len || bytes.is_empty() {
+            return Err(Self::invalid_lane_artifact_error(
+                file.path.clone(),
+                format!("{} changed length while reading", file.kind.label()),
+            ));
+        }
+        let directory = file.path.parent().ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                file.path.clone(),
+                "Native AMX evidence path has no directory",
+            )
         })?;
-        if layout.entry_count > max_entries {
-            return Err(Error::PruneIntentConflict(format!(
-                "{kind} index exceeds the bounded startup entry budget"
-            )));
+        let current = Self::regular_sidecar_metadata_for(&self.store_root, &file.path, directory)?
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    file.path.clone(),
+                    "Native AMX evidence disappeared while reading",
+                )
+            })?;
+        if !Self::stable_sidecar_metadata_unchanged(&file.metadata, &current)
+            || !Self::progress_mutation_namespace_unchanged(namespace)
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                file.path.clone(),
+                "Native AMX evidence identity changed while reading",
+            ));
+        }
+        Ok(bytes)
+    }
+
+    fn decode_native_amx_manifest_file_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        namespace: &BoundProgressNamespace,
+        file: &NativeAmxEvidenceFile,
+    ) -> Result<NativeAmxParticipantApplicationManifestArtifactV1> {
+        if file.kind != NativeAmxEvidenceKind::Manifest {
+            return Err(Self::invalid_lane_artifact_error(
+                file.path.clone(),
+                "Native AMX manifest reader received another artifact kind",
+            ));
+        }
+        let bytes = self.read_native_amx_evidence_file_bytes_locked(namespace, file)?;
+        let artifact =
+            norito::decode_from_bytes::<NativeAmxParticipantApplicationManifestArtifactV1>(&bytes)
+                .map_err(|error| {
+                    Self::invalid_lane_artifact_error(
+                        file.path.clone(),
+                        format!("Native AMX manifest failed exact Norito decode: {error}"),
+                    )
+                })?;
+        if artifact.encode_framed()? != bytes
+            || Self::validate_native_amx_participant_application_manifest_artifact(&artifact)
+                .is_err()
+            || artifact.leaf.lane_id != entry.lane_id
+            || artifact.leaf.dataspace_id != entry.dataspace_id
+            || artifact.leaf.participant_height != file.participant_height
+            || self
+                .require_active_lane_incarnation(
+                    entry,
+                    artifact.leaf.lane_incarnation,
+                    artifact.leaf.application_block_height,
+                )
+                .is_err()
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                file.path.clone(),
+                "Native AMX manifest is non-canonical or targets another active route",
+            ));
+        }
+        Ok(artifact)
+    }
+
+    fn decode_native_amx_receipt_file_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        namespace: &BoundProgressNamespace,
+        file: &NativeAmxEvidenceFile,
+    ) -> Result<NativeAmxParticipantApplicationReceiptArtifact> {
+        let artifact =
+            self.decode_structural_native_amx_receipt_file_locked(entry, namespace, file)?;
+        if self
+            .require_active_lane_artifact(entry, &artifact.participant_proposal.descriptor)
+            .is_err()
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                file.path.clone(),
+                "Native AMX receipt targets an inactive lane incarnation",
+            ));
+        }
+        Ok(artifact)
+    }
+
+    fn decode_structural_native_amx_receipt_file_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        namespace: &BoundProgressNamespace,
+        file: &NativeAmxEvidenceFile,
+    ) -> Result<NativeAmxParticipantApplicationReceiptArtifact> {
+        if file.kind != NativeAmxEvidenceKind::Receipt {
+            return Err(Self::invalid_lane_artifact_error(
+                file.path.clone(),
+                "Native AMX receipt reader received another artifact kind",
+            ));
+        }
+        let bytes = self.read_native_amx_evidence_file_bytes_locked(namespace, file)?;
+        let artifact =
+            norito::decode_from_bytes::<NativeAmxParticipantApplicationReceiptArtifact>(&bytes)
+                .map_err(|error| {
+                    Self::invalid_lane_artifact_error(
+                        file.path.clone(),
+                        format!("Native AMX receipt failed exact Norito decode: {error}"),
+                    )
+                })?;
+        let descriptor = &artifact.participant_proposal.descriptor;
+        if artifact.encode_framed()? != bytes
+            || Self::validate_native_amx_participant_application_receipt_artifact(&artifact)
+                .is_err()
+            || descriptor.lane_id != entry.lane_id
+            || descriptor.dataspace_id != entry.dataspace_id
+            || descriptor.lane_block_height != file.participant_height
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                file.path.clone(),
+                "Native AMX receipt is non-canonical or targets another storage route",
+            ));
+        }
+        Ok(artifact)
+    }
+
+    fn validate_native_amx_evidence_file_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        namespace: &BoundProgressNamespace,
+        file: &NativeAmxEvidenceFile,
+    ) -> Result<()> {
+        match file.kind {
+            NativeAmxEvidenceKind::Manifest => {
+                self.decode_native_amx_manifest_file_locked(entry, namespace, file)?;
+            }
+            NativeAmxEvidenceKind::Receipt => {
+                self.decode_native_amx_receipt_file_locked(entry, namespace, file)?;
+            }
         }
         Ok(())
     }
 
-    fn indexed_sidecar_payload_heights_bounded(
-        index_path: &Path,
-        max_entries: u64,
-        kind: &'static str,
-    ) -> Result<BTreeSet<u64>> {
-        let mut index =
-            match Self::open_direct_sidecar_file_in_namespace(index_path, false, false, None) {
-                Ok(index) => index,
-                Err(error) if error.kind() == ErrorKind::NotFound => return Ok(BTreeSet::new()),
-                Err(error) => return Err(Error::IO(error, index_path.to_path_buf())),
+    fn sync_native_amx_evidence_namespace(
+        &self,
+        namespace: &BoundProgressNamespace,
+        kind: &str,
+    ) -> Result<()> {
+        for (index, directory) in namespace.directories.iter().enumerate() {
+            let result = if index == 0 {
+                sync_indexed_sidecar_dir_handle(&directory.file)
+            } else {
+                sync_progress_sidecar_ancestor_dir_handle(&directory.file)
             };
-        let index_len = index
-            .metadata()
-            .map_err(|error| Error::IO(error, index_path.to_path_buf()))?
-            .len();
-        let layout = SidecarIndexLayout::read_from(&mut index, index_len).map_err(|reason| {
-            Error::PruneIntentConflict(format!("{kind} index layout is malformed: {reason}"))
-        })?;
-        if layout.aligned_len != index_len || layout.entry_count > max_entries {
-            return Err(Error::PruneIntentConflict(format!(
-                "{kind} index changed after bounded startup validation"
-            )));
-        }
-        index
-            .seek(SeekFrom::Start(layout.entries_offset))
-            .map_err(|error| Error::IO(error, index_path.to_path_buf()))?;
-        let mut heights = BTreeSet::new();
-        let mut encoded = [0_u8; PIPELINE_INDEX_ENTRY_SIZE];
-        for relative in 0..layout.entry_count {
-            index
-                .read_exact(&mut encoded)
-                .map_err(|error| Error::IO(error, index_path.to_path_buf()))?;
-            if SidecarIndexEntry::from_bytes(encoded).len == 0 {
-                continue;
+            if let Err(error) = result {
+                iroha_logger::warn!(
+                    ?error,
+                    path = ?directory.expected_path,
+                    kind,
+                    "failed to sync descriptor-bound Native AMX evidence namespace"
+                );
+                return Err(Self::invalid_lane_artifact_error(
+                    namespace.data_path.clone(),
+                    format!("{kind} directory durability sync failed"),
+                ));
             }
-            let height = layout.base_height.checked_add(relative).ok_or_else(|| {
-                Error::PruneIntentConflict(format!("{kind} indexed height overflows"))
-            })?;
-            heights.insert(height);
         }
-        Ok(heights)
+        // Standalone evidence publication and pair pruning necessarily change
+        // the immediate directory timestamps. Retain the descriptor-bound
+        // directory-object invariant without applying the indexed-pair
+        // helper's pre-mutation timestamp snapshot after the mutation.
+        if !Self::progress_mutation_namespace_unchanged(namespace) {
+            return Err(Self::invalid_lane_artifact_error(
+                namespace.data_path.clone(),
+                format!("{kind} directory durability sync failed"),
+            ));
+        }
+        Ok(())
     }
 
-    /// Resolve only mechanically attributable generic indexed-sidecar crash
-    /// residue before Native startup evidence is interpreted.
-    ///
-    /// The generic writer makes the data append durable before publishing its
-    /// index entry, and retention rewrites use the temporary index as their
-    /// commit marker. Therefore an unindexed data suffix may be truncated and a
-    /// complete bounded rewrite may be promoted without interpreting any
-    /// Native payload. Malformed ranges, incomplete authoritative pairs, and
-    /// unsafe paths remain hard failures in the strict validator that follows.
-    fn recover_native_amx_indexed_sidecar_startup_residue(
-        data_path: &Path,
-        index_path: &Path,
-        max_entries: u64,
-        kind: &'static str,
-    ) -> Result<()> {
-        Self::validate_indexed_sidecar_storage_bound(data_path, index_path, max_entries, kind)?;
-
-        let temp_data_path = data_path.with_extension("norito.tmp");
-        let temp_index_path = index_path.with_extension("index.tmp");
-        let path_exists_safely = |path: &Path| -> Result<bool> {
-            match std::fs::symlink_metadata(path) {
-                Ok(metadata) => {
-                    if metadata.file_type().is_symlink()
-                        || !metadata.file_type().is_file()
-                        || !Self::sidecar_is_single_link(&metadata)
-                    {
-                        return Err(Error::PruneIntentConflict(format!(
-                            "{kind} startup recovery artifact is not a single-link regular no-follow file"
-                        )));
-                    }
-                    Ok(true)
-                }
-                Err(error) if error.kind() == ErrorKind::NotFound => Ok(false),
-                Err(error) => Err(Error::IO(error, path.to_path_buf())),
-            }
+    fn recover_native_amx_evidence_publication_temp_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        namespace: &BoundProgressNamespace,
+    ) -> Result<NativeAmxEvidenceInventory> {
+        let inventory = self.inventory_native_amx_evidence_files_locked(namespace, true)?;
+        let Some(temporary) = inventory.temporary.as_ref() else {
+            return Ok(inventory);
         };
-        let temp_data_exists = path_exists_safely(&temp_data_path)?;
-        let temp_index_exists = path_exists_safely(&temp_index_path)?;
-        if temp_index_exists {
-            let recovery_data_path = if temp_data_exists {
-                &temp_data_path
-            } else {
-                data_path
-            };
-            Self::validate_indexed_sidecar_storage_bound(
-                recovery_data_path,
-                &temp_index_path,
-                max_entries,
+        self.validate_native_amx_evidence_file_locked(entry, namespace, temporary)?;
+        let final_path = temporary
+            .path
+            .parent()
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    temporary.path.clone(),
+                    "Native AMX evidence temporary has no directory",
+                )
+            })?
+            .join(Self::native_amx_evidence_file_name(
+                temporary.kind,
+                temporary.participant_height,
+            ));
+        if let Some(stable) = inventory
+            .stable(temporary.kind)
+            .get(&temporary.participant_height)
+        {
+            self.validate_native_amx_evidence_file_locked(entry, namespace, stable)?;
+            let temporary_bytes =
+                self.read_native_amx_evidence_file_bytes_locked(namespace, temporary)?;
+            let stable_bytes =
+                self.read_native_amx_evidence_file_bytes_locked(namespace, stable)?;
+            if temporary_bytes != stable_bytes {
+                return Err(Self::invalid_lane_artifact_error(
+                    temporary.path.clone(),
+                    format!(
+                        "{} temporary conflicts with its durable same-height artifact",
+                        temporary.kind.label()
+                    ),
+                ));
+            }
+            Self::remove_bound_progress_temp_if_present(namespace, &temporary.path)
+                .map_err(|error| Error::IO(error, temporary.path.clone()))?;
+            self.sync_native_amx_evidence_namespace(namespace, temporary.kind.label())?;
+        } else {
+            let temporary_file =
+                Self::open_bound_progress_file(namespace, &temporary.path, &temporary.metadata)?;
+            Self::promote_bound_progress_temp_noreplace(
+                namespace,
+                &temporary.path,
+                &final_path,
+                &temporary_file,
+            )
+            .map_err(|error| Error::IO(error.source, final_path.clone()))?;
+            self.sync_native_amx_evidence_namespace(namespace, temporary.kind.label())?;
+        }
+        let recovered = self.inventory_native_amx_evidence_files_locked(namespace, true)?;
+        if recovered.temporary.is_some()
+            || !recovered
+                .stable(temporary.kind)
+                .contains_key(&temporary.participant_height)
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                final_path,
+                "Native AMX evidence temporary recovery did not publish exactly one stable artifact",
+            ));
+        }
+        Ok(recovered)
+    }
+
+    fn read_bound_regular_file_bytes_locked(
+        &self,
+        namespace: &BoundProgressNamespace,
+        path: &Path,
+        max_bytes: usize,
+        kind: &str,
+    ) -> Result<Option<Vec<u8>>> {
+        let directory = path.parent().ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                path.to_path_buf(),
+                format!("{kind} path has no directory"),
+            )
+        })?;
+        let Some(metadata) = Self::regular_sidecar_metadata_for(&self.store_root, path, directory)?
+        else {
+            if !Self::progress_mutation_namespace_unchanged(namespace) {
+                return Err(Self::invalid_lane_artifact_error(
+                    path.to_path_buf(),
+                    format!("{kind} namespace changed while proving absence"),
+                ));
+            }
+            return Ok(None);
+        };
+        let len = usize::try_from(metadata.file.len())?;
+        if len == 0 || len > max_bytes {
+            return Err(Self::invalid_lane_artifact_error(
+                path.to_path_buf(),
+                format!("{kind} has an empty or oversized payload"),
+            ));
+        }
+        let mut file = Self::open_bound_progress_file(namespace, path, &metadata)?;
+        let mut bytes = Vec::with_capacity(len);
+        std::io::Read::by_ref(&mut file)
+            .take(u64::try_from(max_bytes)?.saturating_add(1))
+            .read_to_end(&mut bytes)
+            .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+        let current = Self::regular_sidecar_metadata_for(&self.store_root, path, directory)?
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    path.to_path_buf(),
+                    format!("{kind} disappeared while reading"),
+                )
+            })?;
+        if bytes.len() != len
+            || !Self::stable_sidecar_metadata_unchanged(&metadata, &current)
+            || !Self::progress_mutation_namespace_unchanged(namespace)
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                path.to_path_buf(),
+                format!("{kind} changed while reading"),
+            ));
+        }
+        Ok(Some(bytes))
+    }
+
+    fn publish_bound_noclobber_file_locked(
+        &self,
+        namespace: &BoundProgressNamespace,
+        path: &Path,
+        temp_path: &Path,
+        bytes: &[u8],
+        kind: &str,
+    ) -> Result<bool> {
+        self.durable_mutation_authorized()?;
+        if path.parent() != namespace.data_path.parent()
+            || temp_path.parent() != namespace.data_path.parent()
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                path.to_path_buf(),
+                format!("{kind} publication escapes its descriptor-bound directory"),
+            ));
+        }
+        if self
+            .read_bound_regular_file_bytes_locked(namespace, path, bytes.len().max(1), kind)?
+            .is_some()
+        {
+            return Ok(false);
+        }
+        match std::fs::symlink_metadata(temp_path) {
+            Ok(_) => {
+                return Err(Self::invalid_lane_artifact_error(
+                    temp_path.to_path_buf(),
+                    format!("{kind} publication found an unresolved temporary"),
+                ));
+            }
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => return Err(Error::IO(error, temp_path.to_path_buf())),
+        }
+        let mut temporary = Self::create_new_bound_progress_temp(namespace, temp_path)
+            .map_err(|error| Error::IO(error, temp_path.to_path_buf()))?;
+        if let Err(error) = temporary
+            .write_all(bytes)
+            .and_then(|_| temporary.flush())
+            .and_then(|_| temporary.sync_all())
+        {
+            drop(temporary);
+            let _ = Self::remove_bound_progress_temp_if_present(namespace, temp_path);
+            let _ = Self::sync_bound_progress_intent_directories(namespace);
+            return Err(Error::IO(error, temp_path.to_path_buf()));
+        }
+        if let Err(error) =
+            Self::promote_bound_progress_temp_noreplace(namespace, temp_path, path, &temporary)
+        {
+            drop(temporary);
+            if !error.published {
+                let _ = Self::remove_bound_progress_temp_if_present(namespace, temp_path);
+                let _ = Self::sync_bound_progress_intent_directories(namespace);
+            }
+            return Err(Error::IO(error.source, path.to_path_buf()));
+        }
+        self.sync_native_amx_evidence_namespace(namespace, kind)?;
+        let persisted = self
+            .read_bound_regular_file_bytes_locked(namespace, path, bytes.len().max(1), kind)?
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    path.to_path_buf(),
+                    format!("{kind} disappeared after publication"),
+                )
+            })?;
+        if persisted != bytes {
+            return Err(Self::invalid_lane_artifact_error(
+                path.to_path_buf(),
+                format!("{kind} changed during publication"),
+            ));
+        }
+        Ok(true)
+    }
+
+    fn publish_native_amx_evidence_file_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        namespace: &BoundProgressNamespace,
+        kind: NativeAmxEvidenceKind,
+        participant_height: u64,
+        bytes: &[u8],
+    ) -> Result<bool> {
+        if participant_height == 0
+            || bytes.is_empty()
+            || u64::try_from(bytes.len())? > STRICT_INIT_MAX_BLOCK_BYTES
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                namespace.data_path.clone(),
+                format!("{} publication has invalid height or size", kind.label()),
+            ));
+        }
+        let inventory =
+            self.recover_native_amx_evidence_publication_temp_locked(entry, namespace)?;
+        if let Some(existing) = inventory.stable(kind).get(&participant_height) {
+            self.validate_native_amx_evidence_file_locked(entry, namespace, existing)?;
+            let existing_bytes =
+                self.read_native_amx_evidence_file_bytes_locked(namespace, existing)?;
+            if existing_bytes == bytes {
+                return Ok(false);
+            }
+            return Err(Self::invalid_lane_artifact_error(
+                existing.path.clone(),
+                format!(
+                    "{} conflicts with different same-height durable evidence",
+                    kind.label()
+                ),
+            ));
+        }
+        let stable_limit = self.native_amx_participant_evidence_retention().get();
+        if inventory.stable(kind).len() > stable_limit
+            || inventory.stable_bytes(kind) > MAX_NATIVE_AMX_PARTICIPANT_EVIDENCE_FILE_BYTES
+            || inventory
+                .stable_bytes(kind)
+                .checked_add(u64::try_from(bytes.len())?)
+                .is_none_or(|total| total > MAX_NATIVE_AMX_PARTICIPANT_EVIDENCE_STARTUP_BYTES)
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                namespace.data_path.clone(),
+                format!(
+                    "{} cannot reserve one bounded publication slot",
+                    kind.label()
+                ),
+            ));
+        }
+        let path = namespace
+            .data_path
+            .parent()
+            .expect("bound Native AMX namespace has an immediate directory")
+            .join(Self::native_amx_evidence_file_name(
                 kind,
-            )?;
-            if !Self::recover_indexed_sidecar_artifacts(data_path, index_path, kind) {
+                participant_height,
+            ));
+        let temp_path = path.with_extension("norito.tmp");
+        let wrote = self.publish_bound_noclobber_file_locked(
+            namespace,
+            &path,
+            &temp_path,
+            bytes,
+            kind.label(),
+        )?;
+        if !wrote {
+            return Err(Self::invalid_lane_artifact_error(
+                path,
+                format!("{} appeared concurrently during publication", kind.label()),
+            ));
+        }
+        let published = self.inventory_native_amx_evidence_files_locked(namespace, true)?;
+        let file = published
+            .stable(kind)
+            .get(&participant_height)
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    namespace.data_path.clone(),
+                    format!("{} disappeared after publication", kind.label()),
+                )
+            })?;
+        self.validate_native_amx_evidence_file_locked(entry, namespace, file)?;
+        if self.read_native_amx_evidence_file_bytes_locked(namespace, file)? != bytes {
+            return Err(Self::invalid_lane_artifact_error(
+                file.path.clone(),
+                format!("{} differs after durable publication", kind.label()),
+            ));
+        }
+        Ok(true)
+    }
+
+    fn native_amx_evidence_special_file_bytes_locked(
+        &self,
+        namespace: &BoundProgressNamespace,
+    ) -> Result<u64> {
+        let directory = namespace.data_path.parent().ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                namespace.data_path.clone(),
+                "Native AMX evidence namespace has no directory",
+            )
+        })?;
+        let mut total = 0_u64;
+        let prune_intent_max_bytes = self.native_amx_evidence_prune_intent_max_bytes();
+        for (name, max_bytes, kind) in [
+            (
+                NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_FILE,
+                NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_MAX_BYTES,
+                "Native AMX latest index",
+            ),
+            (
+                NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_TEMP_FILE,
+                NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_MAX_BYTES,
+                "Native AMX latest-index temporary",
+            ),
+            (
+                NATIVE_AMX_EVIDENCE_PRUNE_INTENT_FILE,
+                prune_intent_max_bytes,
+                "Native AMX evidence prune intent",
+            ),
+            (
+                NATIVE_AMX_EVIDENCE_PRUNE_INTENT_TEMP_FILE,
+                prune_intent_max_bytes,
+                "Native AMX evidence prune-intent temporary",
+            ),
+        ] {
+            let path = directory.join(name);
+            let Some(metadata) =
+                Self::regular_sidecar_metadata_for(&self.store_root, &path, directory)?
+            else {
+                continue;
+            };
+            if metadata.file.len() == 0
+                || usize::try_from(metadata.file.len()).map_or(true, |len| len > max_bytes)
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    path,
+                    format!("{kind} has an empty or oversized payload"),
+                ));
+            }
+            total = total.checked_add(metadata.file.len()).ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    directory.to_path_buf(),
+                    "Native AMX special-file byte accounting overflowed",
+                )
+            })?;
+        }
+        Ok(total)
+    }
+
+    fn native_amx_evidence_tracked_bytes_locked(
+        &self,
+        namespace: &BoundProgressNamespace,
+    ) -> Result<u64> {
+        let inventory = self.inventory_native_amx_evidence_files_locked(namespace, true)?;
+        let temporary_bytes = inventory
+            .temporary
+            .as_ref()
+            .map_or(0, |file| file.metadata.file.len());
+        let special_bytes = self.native_amx_evidence_special_file_bytes_locked(namespace)?;
+        inventory
+            .manifest_stable_bytes
+            .checked_add(inventory.receipt_stable_bytes)
+            .and_then(|bytes| bytes.checked_add(temporary_bytes))
+            .and_then(|bytes| bytes.checked_add(special_bytes))
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    namespace.data_path.clone(),
+                    "Native AMX evidence byte accounting overflowed",
+                )
+            })
+    }
+
+    fn native_amx_evidence_prune_entry_kind(
+        entry: &NativeAmxEvidencePruneEntryV1,
+    ) -> Result<NativeAmxEvidenceKind> {
+        match entry.kind {
+            NativeAmxEvidencePruneIntentV1::MANIFEST_KIND => Ok(NativeAmxEvidenceKind::Manifest),
+            NativeAmxEvidencePruneIntentV1::RECEIPT_KIND => Ok(NativeAmxEvidenceKind::Receipt),
+            _ => Err(Error::PruneIntentConflict(
+                "Native AMX evidence prune intent contains an unknown artifact kind".to_owned(),
+            )),
+        }
+    }
+
+    fn validate_native_amx_evidence_prune_intent_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        namespace: &BoundProgressNamespace,
+        intent: &NativeAmxEvidencePruneIntentV1,
+    ) -> Result<()> {
+        let (active_incarnation, _) = self.active_lane_incarnation_marker(entry)?;
+        let max_entries = Self::native_amx_evidence_prune_intent_max_entries(
+            self.native_amx_participant_evidence_retention(),
+        )?;
+        if intent.version != NativeAmxEvidencePruneIntentV1::VERSION
+            || intent.lane_id != entry.lane_id
+            || intent.dataspace_id != entry.dataspace_id
+            || intent.lane_incarnation != active_incarnation
+            || intent.entries.is_empty()
+            || intent.entries.len() > max_entries
+        {
+            return Err(Error::PruneIntentConflict(
+                "Native AMX evidence prune intent has a stale route, incarnation, version, or size"
+                    .to_owned(),
+            ));
+        }
+        let inventory = self.inventory_native_amx_evidence_files_locked(namespace, true)?;
+        let latest_path = Self::native_amx_participant_receipt_latest_index_path_for_entry(
+            entry,
+            &self.store_root,
+        );
+        let latest = self.decode_bound_native_amx_participant_receipt_latest_index_locked(
+            entry,
+            &latest_path,
+            namespace,
+        )?;
+        let mut previous = None;
+        let mut grouped = BTreeMap::<u64, BTreeSet<u8>>::new();
+        for removal in &intent.entries {
+            let kind = Self::native_amx_evidence_prune_entry_kind(removal)?;
+            if removal.participant_height == 0
+                || removal.artifact_hash.as_ref().iter().all(|byte| *byte == 0)
+                || latest
+                    .as_ref()
+                    .is_some_and(|latest| latest.lane_block_height == removal.participant_height)
+            {
+                return Err(Error::PruneIntentConflict(
+                    "Native AMX evidence prune intent targets a zero or latest identity".to_owned(),
+                ));
+            }
+            let key = (removal.participant_height, removal.kind);
+            if previous.is_some_and(|previous| previous >= key) {
+                return Err(Error::PruneIntentConflict(
+                    "Native AMX evidence prune intent entries are not strictly ordered".to_owned(),
+                ));
+            }
+            previous = Some(key);
+            if !grouped
+                .entry(removal.participant_height)
+                .or_default()
+                .insert(removal.kind)
+            {
+                return Err(Error::PruneIntentConflict(
+                    "Native AMX evidence prune intent repeats an artifact".to_owned(),
+                ));
+            }
+            if let Some(file) = inventory.stable(kind).get(&removal.participant_height) {
+                self.validate_native_amx_evidence_file_locked(entry, namespace, file)?;
+                let bytes = self.read_native_amx_evidence_file_bytes_locked(namespace, file)?;
+                if Hash::new(bytes) != removal.artifact_hash {
+                    return Err(Error::PruneIntentConflict(format!(
+                        "{} prune hash does not match height {}",
+                        kind.label(),
+                        removal.participant_height
+                    )));
+                }
+            }
+        }
+        let expected_kinds = BTreeSet::from([
+            NativeAmxEvidencePruneIntentV1::MANIFEST_KIND,
+            NativeAmxEvidencePruneIntentV1::RECEIPT_KIND,
+        ]);
+        if grouped.values().any(|kinds| kinds != &expected_kinds) {
+            return Err(Error::PruneIntentConflict(
+                "Native AMX evidence prune intent does not delete complete manifest/receipt pairs"
+                    .to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn decode_native_amx_evidence_prune_intent_bytes(
+        path: &Path,
+        bytes: &[u8],
+    ) -> Result<NativeAmxEvidencePruneIntentV1> {
+        let intent = norito::decode_from_bytes::<NativeAmxEvidencePruneIntentV1>(bytes).map_err(
+            |error| {
+                Self::invalid_lane_artifact_error(
+                    path.to_path_buf(),
+                    format!("Native AMX evidence prune intent failed exact decode: {error}"),
+                )
+            },
+        )?;
+        if norito::to_bytes(&intent)? != bytes {
+            return Err(Self::invalid_lane_artifact_error(
+                path.to_path_buf(),
+                "Native AMX evidence prune intent is not canonical Norito",
+            ));
+        }
+        Ok(intent)
+    }
+
+    fn recover_native_amx_evidence_prune_intent_publication_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        namespace: &BoundProgressNamespace,
+    ) -> Result<()> {
+        let directory = namespace.data_path.parent().ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                namespace.data_path.clone(),
+                "Native AMX evidence namespace has no directory",
+            )
+        })?;
+        let path = directory.join(NATIVE_AMX_EVIDENCE_PRUNE_INTENT_FILE);
+        let temp_path = directory.join(NATIVE_AMX_EVIDENCE_PRUNE_INTENT_TEMP_FILE);
+        let prune_intent_max_bytes = self.native_amx_evidence_prune_intent_max_bytes();
+        let Some(temp_bytes) = self.read_bound_regular_file_bytes_locked(
+            namespace,
+            &temp_path,
+            prune_intent_max_bytes,
+            "Native AMX evidence prune-intent temporary",
+        )?
+        else {
+            return Ok(());
+        };
+        let temporary =
+            Self::decode_native_amx_evidence_prune_intent_bytes(&temp_path, &temp_bytes)?;
+        self.validate_native_amx_evidence_prune_intent_locked(entry, namespace, &temporary)?;
+        if let Some(stable_bytes) = self.read_bound_regular_file_bytes_locked(
+            namespace,
+            &path,
+            prune_intent_max_bytes,
+            "Native AMX evidence prune intent",
+        )? {
+            if stable_bytes != temp_bytes {
+                return Err(Error::PruneIntentConflict(
+                    "Native AMX evidence prune-intent temporary conflicts with the stable intent"
+                        .to_owned(),
+                ));
+            }
+            Self::remove_bound_progress_temp_if_present(namespace, &temp_path)
+                .map_err(|error| Error::IO(error, temp_path.clone()))?;
+            return self
+                .sync_native_amx_evidence_namespace(namespace, "Native AMX evidence prune intent");
+        }
+        let directory = temp_path.parent().expect("temporary path has a parent");
+        let metadata = Self::regular_sidecar_metadata_for(&self.store_root, &temp_path, directory)?
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    temp_path.clone(),
+                    "Native AMX evidence prune-intent temporary disappeared",
+                )
+            })?;
+        let temporary_file = Self::open_bound_progress_file(namespace, &temp_path, &metadata)?;
+        Self::promote_bound_progress_temp_noreplace(namespace, &temp_path, &path, &temporary_file)
+            .map_err(|error| Error::IO(error.source, path.clone()))?;
+        self.sync_native_amx_evidence_namespace(namespace, "Native AMX evidence prune intent")
+    }
+
+    fn complete_native_amx_evidence_prune_intent_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        namespace: &BoundProgressNamespace,
+    ) -> Result<bool> {
+        self.recover_native_amx_evidence_prune_intent_publication_locked(entry, namespace)?;
+        let directory = namespace.data_path.parent().ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                namespace.data_path.clone(),
+                "Native AMX evidence namespace has no directory",
+            )
+        })?;
+        let path = directory.join(NATIVE_AMX_EVIDENCE_PRUNE_INTENT_FILE);
+        let prune_intent_max_bytes = self.native_amx_evidence_prune_intent_max_bytes();
+        let Some(bytes) = self.read_bound_regular_file_bytes_locked(
+            namespace,
+            &path,
+            prune_intent_max_bytes,
+            "Native AMX evidence prune intent",
+        )?
+        else {
+            return Ok(false);
+        };
+        let intent = Self::decode_native_amx_evidence_prune_intent_bytes(&path, &bytes)?;
+        self.validate_native_amx_evidence_prune_intent_locked(entry, namespace, &intent)?;
+        for removal in &intent.entries {
+            let kind = Self::native_amx_evidence_prune_entry_kind(removal)?;
+            let artifact_path = directory.join(Self::native_amx_evidence_file_name(
+                kind,
+                removal.participant_height,
+            ));
+            let Some(artifact_bytes) = self.read_bound_regular_file_bytes_locked(
+                namespace,
+                &artifact_path,
+                usize::try_from(STRICT_INIT_MAX_BLOCK_BYTES)?,
+                kind.label(),
+            )?
+            else {
+                continue;
+            };
+            if Hash::new(artifact_bytes) != removal.artifact_hash {
                 return Err(Error::PruneIntentConflict(format!(
-                    "{kind} bounded startup rewrite recovery failed"
+                    "{} changed before prune completion at height {}",
+                    kind.label(),
+                    removal.participant_height
                 )));
             }
-        } else if temp_data_exists {
-            // The temporary index is the rewrite commit marker. A lone data
-            // temporary is unpublished and is therefore safe to discard.
-            std::fs::remove_file(&temp_data_path)
-                .map_err(|error| Error::IO(error, temp_data_path.clone()))?;
-            if let Some(parent) = temp_data_path.parent() {
-                sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
-            }
+            Self::remove_bound_progress_temp_if_present(namespace, &artifact_path)
+                .map_err(|error| Error::IO(error, artifact_path.clone()))?;
         }
-        if path_exists_safely(&temp_data_path)? || path_exists_safely(&temp_index_path)? {
-            return Err(Error::PruneIntentConflict(format!(
-                "{kind} startup recovery left an unresolved temporary artifact"
-            )));
+        self.sync_native_amx_evidence_namespace(namespace, "Native AMX evidence pair pruning")?;
+        Self::remove_bound_progress_temp_if_present(namespace, &path)
+            .map_err(|error| Error::IO(error, path.clone()))?;
+        self.sync_native_amx_evidence_namespace(namespace, "Native AMX evidence prune intent")?;
+        Ok(true)
+    }
+
+    fn plan_native_amx_evidence_pair_prune_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        namespace: &BoundProgressNamespace,
+        inventory: &NativeAmxEvidenceInventory,
+    ) -> Result<Vec<NativeAmxEvidencePruneEntryV1>> {
+        for file in inventory
+            .manifests
+            .values()
+            .chain(inventory.receipts.values())
+        {
+            self.validate_native_amx_evidence_file_locked(entry, namespace, file)?;
+        }
+        let manifest_heights = inventory.manifests.keys().copied().collect::<BTreeSet<_>>();
+        let receipt_heights = inventory.receipts.keys().copied().collect::<BTreeSet<_>>();
+        let manifest_only = manifest_heights
+            .difference(&receipt_heights)
+            .copied()
+            .collect::<Vec<_>>();
+        let receipt_only = receipt_heights
+            .difference(&manifest_heights)
+            .copied()
+            .collect::<Vec<_>>();
+        let latest_receipt_height = receipt_heights.last().copied();
+        if manifest_only.len().saturating_add(receipt_only.len()) > 1
+            || manifest_only.first().is_some_and(|height| {
+                Some(*height) != manifest_heights.last().copied()
+                    || latest_receipt_height.is_some_and(|latest| *height <= latest)
+            })
+            || receipt_only
+                .first()
+                .is_some_and(|height| Some(*height) != latest_receipt_height)
+        {
+            return Err(Error::PruneIntentConflict(
+                "Native AMX evidence histories contain an older or ambiguous publication gap"
+                    .to_owned(),
+            ));
         }
 
-        Self::validate_indexed_sidecar_storage_bound(data_path, index_path, max_entries, kind)?;
-        let data_exists = path_exists_safely(data_path)?;
-        let index_exists = path_exists_safely(index_path)?;
-        if index_exists && !data_exists {
-            let mut index =
-                Self::open_direct_sidecar_file_in_namespace(index_path, false, false, None)
-                    .map_err(|error| Error::IO(error, index_path.to_path_buf()))?;
-            let index_len = index
-                .metadata()
-                .map_err(|error| Error::IO(error, index_path.to_path_buf()))?
-                .len();
-            let layout =
-                SidecarIndexLayout::read_from(&mut index, index_len).map_err(|reason| {
-                    Error::PruneIntentConflict(format!(
-                        "{kind} index-only startup residue is malformed: {reason}"
-                    ))
-                })?;
-            if layout.aligned_len == index_len && layout.entry_count == 0 {
-                drop(index);
-                std::fs::remove_file(index_path)
-                    .map_err(|error| Error::IO(error, index_path.to_path_buf()))?;
-                if let Some(parent) = index_path.parent() {
-                    sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
-                }
-                return Ok(());
-            }
-            // A non-empty index without its payload is not mechanically
-            // recoverable. Leave it intact for strict pair validation below.
-            return Ok(());
-        }
-        if !data_exists || !index_exists {
-            return Ok(());
-        }
-
-        let data = Self::open_direct_sidecar_file_in_namespace(data_path, false, false, None)
-            .map_err(|error| Error::IO(error, data_path.to_path_buf()))?;
-        let mut index = Self::open_direct_sidecar_file_in_namespace(index_path, false, false, None)
-            .map_err(|error| Error::IO(error, index_path.to_path_buf()))?;
-        let index_len = index
-            .metadata()
-            .map_err(|error| Error::IO(error, index_path.to_path_buf()))?
-            .len();
-        let layout = SidecarIndexLayout::read_from(&mut index, index_len).map_err(|reason| {
-            Error::PruneIntentConflict(format!(
-                "{kind} startup index residue is malformed: {reason}"
-            ))
+        let retention = self.native_amx_participant_evidence_retention().get();
+        let mut kept_manifest_count = manifest_only.len();
+        let mut kept_receipt_count = receipt_only.len();
+        let mut kept_manifest_bytes = manifest_only.iter().try_fold(0_u64, |total, height| {
+            total
+                .checked_add(
+                    inventory
+                        .manifests
+                        .get(height)
+                        .expect("manifest-only height exists")
+                        .metadata
+                        .file
+                        .len(),
+                )
+                .ok_or_else(|| {
+                    Error::PruneIntentConflict(
+                        "Native AMX manifest retention byte count overflowed".to_owned(),
+                    )
+                })
         })?;
-        if layout.entry_count > max_entries {
-            return Err(Error::PruneIntentConflict(format!(
-                "{kind} startup index exceeds its bounded recovery entry budget"
-            )));
+        let mut kept_receipt_bytes = receipt_only.iter().try_fold(0_u64, |total, height| {
+            total
+                .checked_add(
+                    inventory
+                        .receipts
+                        .get(height)
+                        .expect("receipt-only height exists")
+                        .metadata
+                        .file
+                        .len(),
+                )
+                .ok_or_else(|| {
+                    Error::PruneIntentConflict(
+                        "Native AMX receipt retention byte count overflowed".to_owned(),
+                    )
+                })
+        })?;
+        if kept_manifest_count > retention
+            || kept_receipt_count > retention
+            || kept_manifest_bytes > MAX_NATIVE_AMX_PARTICIPANT_EVIDENCE_FILE_BYTES
+            || kept_receipt_bytes > MAX_NATIVE_AMX_PARTICIPANT_EVIDENCE_FILE_BYTES
+        {
+            return Err(Error::PruneIntentConflict(
+                "Native AMX unmatched evidence alone exceeds the retained budget".to_owned(),
+            ));
         }
-        if layout.aligned_len != index_len {
-            index
-                .set_len(layout.aligned_len)
-                .map_err(|error| Error::IO(error, index_path.to_path_buf()))?;
-            sync_indexed_sidecar_index(&index)
-                .map_err(|error| Error::IO(error, index_path.to_path_buf()))?;
+        let complete = manifest_heights
+            .intersection(&receipt_heights)
+            .copied()
+            .collect::<BTreeSet<_>>();
+        let mut kept_complete = BTreeSet::new();
+        let mut stopped = false;
+        for height in complete.iter().rev() {
+            let manifest_len = inventory
+                .manifests
+                .get(height)
+                .expect("complete manifest height exists")
+                .metadata
+                .file
+                .len();
+            let receipt_len = inventory
+                .receipts
+                .get(height)
+                .expect("complete receipt height exists")
+                .metadata
+                .file
+                .len();
+            let fits = !stopped
+                && kept_manifest_count < retention
+                && kept_receipt_count < retention
+                && kept_manifest_bytes
+                    .checked_add(manifest_len)
+                    .is_some_and(|bytes| bytes <= MAX_NATIVE_AMX_PARTICIPANT_EVIDENCE_FILE_BYTES)
+                && kept_receipt_bytes
+                    .checked_add(receipt_len)
+                    .is_some_and(|bytes| bytes <= MAX_NATIVE_AMX_PARTICIPANT_EVIDENCE_FILE_BYTES);
+            if !fits {
+                stopped = true;
+                continue;
+            }
+            kept_complete.insert(*height);
+            kept_manifest_count += 1;
+            kept_receipt_count += 1;
+            kept_manifest_bytes += manifest_len;
+            kept_receipt_bytes += receipt_len;
         }
-        if !Self::repair_unindexed_sidecar_tail(
-            &data, &mut index, layout, data_path, index_path, kind,
-        ) {
-            return Err(Error::PruneIntentConflict(format!(
-                "{kind} has unsafe or ambiguous append residue"
-            )));
+        let latest_path = Self::native_amx_participant_receipt_latest_index_path_for_entry(
+            entry,
+            &self.store_root,
+        );
+        if let Some(latest) = self.decode_bound_native_amx_participant_receipt_latest_index_locked(
+            entry,
+            &latest_path,
+            namespace,
+        )? && complete.contains(&latest.lane_block_height)
+            && !kept_complete.contains(&latest.lane_block_height)
+        {
+            return Err(Error::PruneIntentConflict(
+                "Native AMX retained budget cannot preserve the indexed latest evidence".to_owned(),
+            ));
         }
-        if !Self::sync_indexed_sidecar_barriers(data_path, index_path, kind) {
-            return Err(Error::PruneIntentConflict(format!(
-                "{kind} startup append-residue durability barrier failed"
-            )));
+
+        let mut removals = Vec::new();
+        for height in complete.difference(&kept_complete) {
+            for (kind, encoded_kind) in [
+                (
+                    NativeAmxEvidenceKind::Manifest,
+                    NativeAmxEvidencePruneIntentV1::MANIFEST_KIND,
+                ),
+                (
+                    NativeAmxEvidenceKind::Receipt,
+                    NativeAmxEvidencePruneIntentV1::RECEIPT_KIND,
+                ),
+            ] {
+                let file = inventory
+                    .stable(kind)
+                    .get(height)
+                    .expect("complete Native AMX evidence height exists");
+                let bytes = self.read_native_amx_evidence_file_bytes_locked(namespace, file)?;
+                removals.push(NativeAmxEvidencePruneEntryV1 {
+                    kind: encoded_kind,
+                    participant_height: *height,
+                    artifact_hash: Hash::new(bytes),
+                });
+            }
         }
-        Self::validate_indexed_sidecar_storage_bound(data_path, index_path, max_entries, kind)
+        Ok(removals)
+    }
+
+    fn prune_native_amx_evidence_pairs_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        namespace: &BoundProgressNamespace,
+    ) -> Result<()> {
+        self.complete_native_amx_evidence_prune_intent_locked(entry, namespace)?;
+        let inventory =
+            self.recover_native_amx_evidence_publication_temp_locked(entry, namespace)?;
+        let removals =
+            self.plan_native_amx_evidence_pair_prune_locked(entry, namespace, &inventory)?;
+        if removals.is_empty() {
+            self.inventory_native_amx_evidence_files_locked(namespace, false)?;
+            return Ok(());
+        }
+        let (lane_incarnation, _) = self.active_lane_incarnation_marker(entry)?;
+        let intent = NativeAmxEvidencePruneIntentV1 {
+            version: NativeAmxEvidencePruneIntentV1::VERSION,
+            lane_id: entry.lane_id,
+            dataspace_id: entry.dataspace_id,
+            lane_incarnation,
+            entries: removals,
+        };
+        self.validate_native_amx_evidence_prune_intent_locked(entry, namespace, &intent)?;
+        let bytes = norito::to_bytes(&intent)?;
+        if bytes.is_empty() || bytes.len() > self.native_amx_evidence_prune_intent_max_bytes() {
+            return Err(Error::PruneIntentConflict(
+                "Native AMX evidence prune intent exceeds its hard byte limit".to_owned(),
+            ));
+        }
+        let directory = namespace
+            .data_path
+            .parent()
+            .expect("bound Native AMX namespace has an immediate directory");
+        let path = directory.join(NATIVE_AMX_EVIDENCE_PRUNE_INTENT_FILE);
+        let temp_path = directory.join(NATIVE_AMX_EVIDENCE_PRUNE_INTENT_TEMP_FILE);
+        if !self.publish_bound_noclobber_file_locked(
+            namespace,
+            &path,
+            &temp_path,
+            &bytes,
+            "Native AMX evidence prune intent",
+        )? {
+            return Err(Error::PruneIntentConflict(
+                "Native AMX evidence prune intent appeared concurrently".to_owned(),
+            ));
+        }
+        self.complete_native_amx_evidence_prune_intent_locked(entry, namespace)?;
+        self.inventory_native_amx_evidence_files_locked(namespace, false)?;
+        Ok(())
     }
 
     fn rename_prune_sidecar_temp(
@@ -20367,7 +23290,7 @@ impl Kura {
     /// sidecar cannot be removed.
     pub fn remove_evicted_block_sidecar_for_testing(&self, height: NonZeroUsize) -> Result<()> {
         let index = u64::try_from(height.get().saturating_sub(1))?;
-        {
+        let accounting_mutation = {
             let mut store = self.block_store.lock();
             let block_index = store.read_block_index(index)?;
             if !block_index.is_evicted() {
@@ -20380,8 +23303,23 @@ impl Kura {
                     path,
                 ));
             }
-            store.remove_da_block_file(u64::try_from(height.get())?)?;
-        }
+            let height = u64::try_from(height.get())?;
+            let path = store.da_block_path(height);
+            let before_bytes = Self::file_len_or_zero(&path)?;
+            if before_bytes == 0 {
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::NotFound,
+                        "cannot remove an absent evicted-block DA sidecar",
+                    ),
+                    path,
+                ));
+            }
+            let accounting_mutation = self.begin_total_disk_usage_mutation();
+            store.remove_da_block_file(height)?;
+            self.update_total_disk_usage_delta(before_bytes, 0);
+            accounting_mutation
+        };
         if let Some((_, cached)) = self
             .block_data
             .lock()
@@ -20389,6 +23327,109 @@ impl Kura {
         {
             *cached = None;
         }
+        accounting_mutation.finish();
+        Ok(())
+    }
+
+    /// Remove only the newest exact Native AMX application manifest record.
+    ///
+    /// This test-only hook creates the crash shape where a durable receipt and
+    /// latest-route pointer outlive their QC-authenticated manifest. Combined
+    /// with an evicted remote-only carrier, startup repair must fetch the
+    /// canonical body from a CommitQC signer before it can recreate the exact
+    /// manifest and revalidate the receipt.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the route/incarnation/application identity does
+    /// not match the active newest manifest or the standalone removal fails.
+    pub fn remove_latest_native_amx_participant_manifest_for_testing(
+        &self,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_incarnation: Hash,
+        participant_height: u64,
+        application_block_hash: HashOf<BlockHeader>,
+    ) -> Result<()> {
+        if participant_height == 0 {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "cannot remove a zero-height Native AMX manifest",
+            ));
+        }
+
+        let _prune_guard = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        let entry = self.lane_storage_entry(lane_id)?;
+        if entry.dataspace_id != dataspace_id {
+            return Err(Self::invalid_lane_artifact_error(
+                entry.blocks_dir(&self.store_root),
+                "Native AMX manifest removal targets another dataspace",
+            ));
+        }
+        let (active_incarnation, _) = self.active_lane_incarnation_marker(&entry)?;
+        if active_incarnation != lane_incarnation {
+            return Err(Self::invalid_lane_artifact_error(
+                entry.blocks_dir(&self.store_root),
+                "Native AMX manifest removal targets an inactive lane incarnation",
+            ));
+        }
+        let _sidecar_guard = self.sidecar_lock.lock();
+        let namespace = self.native_amx_evidence_namespace_for_entry(&entry)?;
+        self.complete_native_amx_evidence_prune_intent_locked(&entry, &namespace)?;
+        self.recover_native_amx_evidence_publication_temp_locked(&entry, &namespace)?;
+        let inventory = self.inventory_native_amx_evidence_files_locked(&namespace, false)?;
+        let path = Self::native_amx_application_manifest_path_for_entry(
+            &entry,
+            &self.store_root,
+            participant_height,
+        );
+        let artifact = self
+            .read_native_amx_participant_application_manifest_from_paths_locked(
+                &entry,
+                participant_height,
+                &path,
+                &namespace,
+            )
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    path.clone(),
+                    "exact Native AMX manifest to remove is unavailable",
+                )
+            })?;
+        let leaf = &artifact.leaf;
+        if leaf.lane_incarnation != lane_incarnation
+            || leaf.application_block_hash != application_block_hash
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                path,
+                "Native AMX manifest removal identity mismatch",
+            ));
+        }
+        if inventory
+            .manifests
+            .last_key_value()
+            .map(|(height, _)| *height)
+            != Some(participant_height)
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                path,
+                "Native AMX manifest removal is restricted to the newest record",
+            ));
+        }
+
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        let before_bytes = self.native_amx_evidence_tracked_bytes_locked(&namespace)?;
+        Self::remove_bound_progress_temp_if_present(&namespace, &path)
+            .map_err(|error| Error::IO(error, path.clone()))?;
+        self.sync_native_amx_evidence_namespace(
+            &namespace,
+            NativeAmxParticipantApplicationManifestArtifactV1::FORMAT_LABEL,
+        )?;
+        let after_bytes = self.native_amx_evidence_tracked_bytes_locked(&namespace)?;
+        self.update_disk_usage_delta(before_bytes, after_bytes);
+        accounting_mutation.finish();
         Ok(())
     }
 }
@@ -21820,8 +24861,6 @@ pub(crate) struct AutonomousLaneBlockArtifact {
 }
 
 impl AutonomousLaneBlockArtifact {
-    const FORMAT_LABEL: &'static str = "lane.autonomous_block";
-
     fn new(executable_payload: LaneExecutablePayloadV1) -> Self {
         Self {
             format: AutonomousLaneBlockArtifactFormat::Current,
@@ -21845,12 +24884,11 @@ impl AutonomousLaneBlockArtifact {
 
 /// Authenticated pointer to the latest attempt at one lane-local height.
 ///
-/// The legacy autonomous sidecar remains the immutable first attempt. A later
-/// global proposal height may reuse that lane-local height only after the
-/// prior attempt is durably retired and its Queue release is complete. Each
-/// successor is stored under its proposal-height namespace and this pointer is
-/// published last, so a crash can expose either the old or new complete
-/// attempt but never a payload paired with another attempt's retirement.
+/// Every attempt, including the first, is immutable in its versioned
+/// proposal-height namespace. A later global proposal height may reuse that
+/// lane-local height only after the prior attempt is durably retired and its
+/// Queue release is complete. This pointer is published last and reconstructed
+/// from the bounded attempt inventory at startup.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct AutonomousLaneBlockLatestAttemptV1 {
@@ -22055,7 +25093,7 @@ pub(crate) struct AutonomousLaneSlotRetirementV1 {
     origin_descriptor_hash: Hash,
     origin_proposal_hash: Hash,
     executable_payload_hash: Hash,
-    reservation_keys: Vec<crate::queue::LaneQueueReservationKeyV1>,
+    reservation_keys: Vec<crate::queue::LaneQueueReservationKeyV2>,
 }
 
 impl AutonomousLaneSlotRetirementV1 {
@@ -22089,7 +25127,7 @@ impl AutonomousLaneSlotRetirementV1 {
 
     /// Exact FIFO-ordered reservations released after this record is durable.
     #[must_use]
-    pub(crate) fn reservation_keys(&self) -> &[crate::queue::LaneQueueReservationKeyV1] {
+    pub(crate) fn reservation_keys(&self) -> &[crate::queue::LaneQueueReservationKeyV2] {
         &self.reservation_keys
     }
 
@@ -22104,9 +25142,9 @@ impl AutonomousLaneSlotRetirementV1 {
     /// Build the exact Queue-side ordered barrier for this durable retirement.
     pub(crate) fn queue_release_barrier(
         &self,
-    ) -> Result<crate::queue::LaneQueueReservationReleaseBarrierV2> {
-        Ok(crate::queue::LaneQueueReservationReleaseBarrierV2 {
-            version: crate::queue::LaneQueueReservationReleaseBarrierV2::VERSION,
+    ) -> Result<crate::queue::LaneQueueReservationReleaseBarrierV3> {
+        Ok(crate::queue::LaneQueueReservationReleaseBarrierV3 {
+            version: crate::queue::LaneQueueReservationReleaseBarrierV3::VERSION,
             chain_id_hash: self.chain_id_hash,
             epoch: self.epoch,
             lane_id: self.lane_id,
@@ -22365,16 +25403,21 @@ enum IndexedSidecarRewrite {
     /// This is reserved for evidence whose configured retention is also its
     /// hard startup scan bound. Generic pipeline sidecars retain their
     /// historical zero slots for compatibility.
-    RetainNewestWindow {
-        retention: NonZeroUsize,
-    },
+    #[cfg(test)]
+    RetainNewestWindow { retention: NonZeroUsize },
     /// Discard only the authenticated terminal prefix while retaining a
     /// configured diagnostic window and every later (possibly pending) slot.
     RetainAfterTerminalFrontier {
         terminal_height: u64,
         retention: NonZeroUsize,
     },
-    TruncateToHeight(u64),
+    TruncateToHeight {
+        height: u64,
+        /// Require every retained index entry to be structurally valid instead
+        /// of replacing malformed entries with empty slots. Test-only crash
+        /// shaping enables this to preserve prior forensic evidence exactly.
+        strict_retained: bool,
+    },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -22568,7 +25611,7 @@ pub struct RecoveredLaneBlockPayload {
     /// Accepted entrypoints in lane descriptor order.
     pub entrypoints: Vec<TransactionEntrypoint>,
     /// Exact durable queue reservation identities in entrypoint order.
-    pub reservation_keys: Vec<LaneQueueReservationKeyV1>,
+    pub reservation_keys: Vec<LaneQueueReservationKeyV2>,
     /// Complete routing plans in entrypoint order.
     pub routing_plans: Vec<RoutingPlan>,
     /// Producer-authenticated native-AMX receipts in entrypoint order.
@@ -22604,7 +25647,7 @@ pub struct LaneBlockExecutionInputArtifact {
     /// Accepted entrypoints in lane descriptor order.
     pub entrypoints: Vec<TransactionEntrypoint>,
     /// Exact durable queue reservation identities in entrypoint order.
-    pub reservation_keys: Vec<LaneQueueReservationKeyV1>,
+    pub reservation_keys: Vec<LaneQueueReservationKeyV2>,
     /// Complete routing plans in entrypoint order.
     pub routing_plans: Vec<RoutingPlan>,
     /// Producer-authenticated native-AMX receipts in entrypoint order.
@@ -22884,6 +25927,30 @@ impl NativeAmxParticipantApplicationManifestArtifactV1 {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
+#[norito(deny_unknown_fields)]
+struct NativeAmxEvidencePruneEntryV1 {
+    kind: u8,
+    participant_height: u64,
+    artifact_hash: Hash,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[norito(deny_unknown_fields)]
+struct NativeAmxEvidencePruneIntentV1 {
+    version: u8,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    lane_incarnation: Hash,
+    entries: Vec<NativeAmxEvidencePruneEntryV1>,
+}
+
+impl NativeAmxEvidencePruneIntentV1 {
+    const VERSION: u8 = 1;
+    const MANIFEST_KIND: u8 = 1;
+    const RECEIPT_KIND: u8 = 2;
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct NativeAmxParticipantApplicationReceiptArtifact {
@@ -22921,9 +25988,10 @@ pub(crate) struct NativeAmxParticipantApplicationReceiptArtifact {
 
 /// Bounded route/incarnation pointer to the latest Native AMX application receipt.
 ///
-/// The append-only receipt pair remains authoritative. This independently
-/// versioned index is rebuilt from that pair during startup and allows
-/// consensus/drain readers to avoid reverse history scans.
+/// The immutable per-height manifest and receipt files remain authoritative.
+/// This independently versioned derived pointer is rebuilt from that
+/// standalone evidence set during startup and lets consensus/drain readers
+/// avoid reverse history scans.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct NativeAmxParticipantReceiptLatestIndexV1 {
@@ -22939,15 +26007,16 @@ struct NativeAmxParticipantReceiptLatestIndexV1 {
     receipt_digest: Hash,
 }
 
-/// Startup-only classification for the highest Native AMX participant receipt.
+/// Startup-only classification for a retained Native AMX participant receipt.
 ///
 /// Runtime readers never accept either pending state: they continue to require
 /// the complete manifest/finality/checkpoint/commit-manifest join. Startup may
-/// rebuild the bounded latest pointer for `PendingTipMetadata` solely so the
-/// interrupted canonical tip can reach the runner's local apply-recovery
-/// pipeline. A missing manifest is weaker: its structurally valid receipt is
-/// retained for exact comparison during repair, but never promoted to the
-/// derived latest pointer until the QC-authenticated manifest is restored.
+/// admit `PendingTipMetadata` only for the highest receipt at the interrupted
+/// canonical tip. A missing manifest is weaker and is admitted only for that
+/// same highest receipt: its structurally valid bytes are retained for exact
+/// comparison during repair, but never promoted to the derived latest pointer
+/// until the QC-authenticated manifest is restored. Every older retained
+/// receipt must already have the complete durable evidence join.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NativeAmxParticipantReceiptStartupEvidence {
     DurablyApplied,
@@ -23356,27 +26425,6 @@ impl Kura {
         )
     }
 
-    fn autonomous_lane_block_paths_for_entry(
-        entry: &LaneConfigEntry,
-        store_root: &Path,
-    ) -> (PathBuf, PathBuf) {
-        let dir = Self::lane_artifact_dir(&entry.blocks_dir(store_root));
-        (
-            dir.join(AUTONOMOUS_LANE_BLOCKS_DATA_FILE),
-            dir.join(AUTONOMOUS_LANE_BLOCKS_INDEX_FILE),
-        )
-    }
-
-    fn autonomous_lane_block_view_state_path_for_entry(
-        entry: &LaneConfigEntry,
-        store_root: &Path,
-        lane_block_height: u64,
-    ) -> PathBuf {
-        Self::lane_artifact_dir(&entry.blocks_dir(store_root)).join(format!(
-            "{AUTONOMOUS_LANE_BLOCK_VIEW_STATE_PREFIX}_{lane_block_height:020}.norito"
-        ))
-    }
-
     fn autonomous_lane_block_attempt_path_for_entry(
         entry: &LaneConfigEntry,
         store_root: &Path,
@@ -23386,6 +26434,131 @@ impl Kura {
         Self::lane_artifact_dir(&entry.blocks_dir(store_root)).join(format!(
             "{AUTONOMOUS_LANE_BLOCK_ATTEMPT_PREFIX}_{lane_block_height:020}_{proposal_height:020}.norito"
         ))
+    }
+
+    fn autonomous_two_height_coordinates(name: &str, prefix: &str) -> Option<(u64, u64)> {
+        let raw = name
+            .strip_prefix(prefix)?
+            .strip_prefix('_')?
+            .strip_suffix(".norito")?;
+        let (lane_block_height, proposal_height) = raw.split_once('_')?;
+        let lane_block_height = lane_block_height.parse::<u64>().ok()?;
+        let proposal_height = proposal_height.parse::<u64>().ok()?;
+        (lane_block_height != 0
+            && proposal_height != 0
+            && name == format!("{prefix}_{lane_block_height:020}_{proposal_height:020}.norito"))
+        .then_some((lane_block_height, proposal_height))
+    }
+
+    fn autonomous_lane_block_attempt_coordinates(name: &str) -> Option<(u64, u64)> {
+        Self::autonomous_two_height_coordinates(name, AUTONOMOUS_LANE_BLOCK_ATTEMPT_PREFIX)
+    }
+
+    fn autonomous_one_height_coordinate(name: &str, prefix: &str) -> Option<u64> {
+        let raw = name
+            .strip_prefix(prefix)?
+            .strip_prefix('_')?
+            .strip_suffix(".norito")?;
+        let height = raw.parse::<u64>().ok()?;
+        (height != 0 && name == format!("{prefix}_{height:020}.norito")).then_some(height)
+    }
+
+    fn autonomous_lane_attempt_inventory_counts_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        target_lane_block_height: u64,
+    ) -> Result<(usize, usize, u64)> {
+        let directory = Self::lane_artifact_dir(&entry.blocks_dir(&self.store_root));
+        let entries = match std::fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok((0, 0, 0)),
+            Err(error) => return Err(Error::IO(error, directory)),
+        };
+        let mut related_files = 0_usize;
+        let mut attempts_at_height = 0_usize;
+        let mut related_bytes = 0_u64;
+        for directory_entry in entries {
+            let directory_entry =
+                directory_entry.map_err(|error| Error::IO(error, directory.clone()))?;
+            let path = directory_entry.path();
+            let name = directory_entry.file_name().into_string().map_err(|_| {
+                Self::invalid_lane_artifact_error(
+                    path.clone(),
+                    "autonomous attempt inventory contains a non-UTF-8 artifact",
+                )
+            })?;
+            if name.starts_with(".kura-sidecar-") {
+                return Err(Self::invalid_lane_artifact_error(
+                    path,
+                    "autonomous attempt inventory requires startup cleanup of an atomic temporary artifact",
+                ));
+            }
+            if !name.starts_with("autonomous_") {
+                continue;
+            }
+            let metadata =
+                std::fs::symlink_metadata(&path).map_err(|error| Error::IO(error, path.clone()))?;
+            if metadata.file_type().is_symlink()
+                || !metadata.file_type().is_file()
+                || !Self::sidecar_is_single_link(&metadata)
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    path,
+                    "autonomous attempt inventory contains a non-regular, linked, or symlinked artifact",
+                ));
+            }
+            related_files = related_files.checked_add(1).ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    directory.clone(),
+                    "autonomous attempt inventory count overflows",
+                )
+            })?;
+            if related_files > MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES {
+                return Err(Self::invalid_lane_artifact_error(
+                    directory,
+                    "autonomous attempt inventory exceeds its hard file-count limit",
+                ));
+            }
+            related_bytes = related_bytes.checked_add(metadata.len()).ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    directory.clone(),
+                    "autonomous attempt inventory byte count overflows",
+                )
+            })?;
+            if related_bytes > AUTONOMOUS_LANE_ARTIFACT_AGGREGATE_BYTES as u64 {
+                return Err(Self::invalid_lane_artifact_error(
+                    directory,
+                    "autonomous attempt inventory exceeds the shared sidecar aggregate byte budget",
+                ));
+            }
+            if let Some((lane_block_height, _)) =
+                Self::autonomous_lane_block_attempt_coordinates(&name)
+            {
+                if lane_block_height == target_lane_block_height {
+                    attempts_at_height = attempts_at_height.saturating_add(1);
+                }
+                continue;
+            }
+            if Self::autonomous_two_height_coordinates(
+                &name,
+                AUTONOMOUS_LANE_BLOCK_ATTEMPT_VIEW_PREFIX,
+            )
+            .is_some()
+                || Self::autonomous_one_height_coordinate(
+                    &name,
+                    AUTONOMOUS_LANE_BLOCK_LATEST_ATTEMPT_PREFIX,
+                )
+                .is_some()
+                || name == AUTONOMOUS_LANE_ROUTE_LATEST_ATTEMPT_FILE
+            {
+                continue;
+            }
+            return Err(Self::invalid_lane_artifact_error(
+                path,
+                "unexpected or obsolete autonomous persistence artifact",
+            ));
+        }
+        Ok((related_files, attempts_at_height, related_bytes))
     }
 
     fn autonomous_lane_block_attempt_view_state_path_for_entry(
@@ -23492,26 +26665,50 @@ impl Kura {
         )
     }
 
-    fn native_amx_participant_receipt_paths_for_entry(
-        entry: &LaneConfigEntry,
-        store_root: &Path,
-    ) -> (PathBuf, PathBuf) {
-        let dir = Self::lane_artifact_dir(&entry.blocks_dir(store_root));
-        (
-            dir.join(NATIVE_AMX_PARTICIPANT_RECEIPTS_DATA_FILE),
-            dir.join(NATIVE_AMX_PARTICIPANT_RECEIPTS_INDEX_FILE),
+    fn native_amx_evidence_file_name(
+        kind: NativeAmxEvidenceKind,
+        participant_height: u64,
+    ) -> String {
+        format!(
+            "{}{participant_height:0width$}{}",
+            kind.prefix(),
+            NATIVE_AMX_EVIDENCE_FILE_SUFFIX,
+            width = NATIVE_AMX_EVIDENCE_HEIGHT_DIGITS,
         )
     }
 
-    fn native_amx_application_manifest_paths_for_entry(
+    fn native_amx_participant_receipt_path_for_entry(
         entry: &LaneConfigEntry,
         store_root: &Path,
-    ) -> (PathBuf, PathBuf) {
-        let dir = Self::lane_artifact_dir(&entry.blocks_dir(store_root));
-        (
-            dir.join(NATIVE_AMX_APPLICATION_MANIFESTS_DATA_FILE),
-            dir.join(NATIVE_AMX_APPLICATION_MANIFESTS_INDEX_FILE),
+        participant_height: u64,
+    ) -> PathBuf {
+        Self::lane_artifact_dir(&entry.blocks_dir(store_root)).join(
+            Self::native_amx_evidence_file_name(NativeAmxEvidenceKind::Receipt, participant_height),
         )
+    }
+
+    fn native_amx_application_manifest_path_for_entry(
+        entry: &LaneConfigEntry,
+        store_root: &Path,
+        participant_height: u64,
+    ) -> PathBuf {
+        Self::lane_artifact_dir(&entry.blocks_dir(store_root)).join(
+            Self::native_amx_evidence_file_name(
+                NativeAmxEvidenceKind::Manifest,
+                participant_height,
+            ),
+        )
+    }
+
+    fn native_amx_evidence_namespace_for_entry(
+        &self,
+        entry: &LaneConfigEntry,
+    ) -> Result<BoundProgressNamespace> {
+        let anchor_manifest =
+            Self::native_amx_application_manifest_path_for_entry(entry, &self.store_root, 1);
+        let anchor_receipt =
+            Self::native_amx_participant_receipt_path_for_entry(entry, &self.store_root, 1);
+        self.open_bound_progress_namespace(&anchor_manifest, &anchor_receipt)
     }
 
     fn native_amx_participant_receipt_latest_index_path_for_entry(
@@ -24161,6 +27358,14 @@ impl Kura {
         Ok(())
     }
 
+    const fn maximum_index_growth_for_unresolved_sidecar_write(height: u64) -> u64 {
+        if height <= SidecarIndexLayout::LEGACY_BASE_HEIGHT {
+            PIPELINE_INDEX_ENTRY_SIZE_U64
+        } else {
+            (MAX_INDEXED_SIDECAR_GAP_ENTRIES + 1) * PIPELINE_INDEX_ENTRY_SIZE_U64
+        }
+    }
+
     fn decode_native_amx_participant_receipt_latest_index(
         &self,
         entry: &LaneConfigEntry,
@@ -24193,15 +27398,28 @@ impl Kura {
         else {
             return Ok(None);
         };
-        let latest = norito::decode_from_bytes::<NativeAmxParticipantReceiptLatestIndexV1>(&bytes)
+        Self::decode_native_amx_participant_receipt_latest_index_bytes_for_route(
+            lane_id,
+            dataspace_id,
+            path,
+            &bytes,
+        )
+        .map(Some)
+    }
+
+    fn decode_native_amx_participant_receipt_latest_index_bytes_for_route(
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        path: &Path,
+        bytes: &[u8],
+    ) -> Result<NativeAmxParticipantReceiptLatestIndexV1> {
+        let latest = norito::decode_from_bytes::<NativeAmxParticipantReceiptLatestIndexV1>(bytes)
             .map_err(|error| {
-                Self::invalid_lane_artifact_error(
-                    path.to_path_buf(),
-                    format!(
-                        "Native AMX participant latest index failed exact Norito decode: {error}"
-                    ),
-                )
-            })?;
+            Self::invalid_lane_artifact_error(
+                path.to_path_buf(),
+                format!("Native AMX participant latest index failed exact Norito decode: {error}"),
+            )
+        })?;
         let canonical = norito::to_bytes(&latest)?;
         Self::validate_native_amx_participant_receipt_latest_index(&latest).map_err(|message| {
             Self::invalid_lane_artifact_error(path.to_path_buf(), message.to_owned())
@@ -24212,7 +27430,130 @@ impl Kura {
                 "Native AMX participant latest index is non-canonical or targets another route",
             ));
         }
-        Ok(Some(latest))
+        Ok(latest)
+    }
+
+    fn decode_bound_native_amx_participant_receipt_latest_index_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        path: &Path,
+        namespace: &BoundProgressNamespace,
+    ) -> Result<Option<NativeAmxParticipantReceiptLatestIndexV1>> {
+        let Some(bytes) = self.read_bound_regular_file_bytes_locked(
+            namespace,
+            path,
+            NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_MAX_BYTES,
+            "Native AMX participant latest index",
+        )?
+        else {
+            return Ok(None);
+        };
+        Self::decode_native_amx_participant_receipt_latest_index_bytes_for_route(
+            entry.lane_id,
+            entry.dataspace_id,
+            path,
+            &bytes,
+        )
+        .map(Some)
+    }
+
+    fn discard_native_amx_latest_index_temp_locked(
+        &self,
+        namespace: &BoundProgressNamespace,
+    ) -> Result<bool> {
+        let directory = namespace
+            .data_path
+            .parent()
+            .expect("bound Native AMX namespace has an immediate directory");
+        let temp_path = directory.join(NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_TEMP_FILE);
+        if self
+            .read_bound_regular_file_bytes_locked(
+                namespace,
+                &temp_path,
+                NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_MAX_BYTES,
+                "Native AMX participant latest-index temporary",
+            )?
+            .is_none()
+        {
+            return Ok(false);
+        }
+        Self::remove_bound_progress_temp_if_present(namespace, &temp_path)
+            .map_err(|error| Error::IO(error, temp_path.clone()))?;
+        self.sync_native_amx_evidence_namespace(
+            namespace,
+            "Native AMX participant latest-index temporary",
+        )?;
+        Ok(true)
+    }
+
+    fn replace_bound_native_amx_latest_index_locked(
+        &self,
+        namespace: &BoundProgressNamespace,
+        path: &Path,
+        bytes: &[u8],
+    ) -> Result<()> {
+        self.durable_mutation_authorized()?;
+        let directory = namespace
+            .data_path
+            .parent()
+            .expect("bound Native AMX namespace has an immediate directory");
+        if path.parent() != Some(directory) {
+            return Err(Self::invalid_lane_artifact_error(
+                path.to_path_buf(),
+                "Native AMX latest-index path escapes its bound namespace",
+            ));
+        }
+        let _ = self.read_bound_regular_file_bytes_locked(
+            namespace,
+            path,
+            NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_MAX_BYTES,
+            "Native AMX participant latest index",
+        )?;
+        self.discard_native_amx_latest_index_temp_locked(namespace)?;
+        let temp_path = directory.join(NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_TEMP_FILE);
+        let mut temporary = Self::create_new_bound_progress_temp(namespace, &temp_path)
+            .map_err(|error| Error::IO(error, temp_path.clone()))?;
+        if let Err(error) = temporary
+            .write_all(bytes)
+            .and_then(|_| temporary.flush())
+            .and_then(|_| temporary.sync_all())
+        {
+            drop(temporary);
+            let _ = Self::remove_bound_progress_temp_if_present(namespace, &temp_path);
+            let _ = Self::sync_bound_progress_intent_directories(namespace);
+            return Err(Error::IO(error, temp_path));
+        }
+        if let Err(error) =
+            Self::promote_bound_progress_temp(namespace, &temp_path, path, &temporary)
+        {
+            drop(temporary);
+            if !error.published {
+                let _ = Self::remove_bound_progress_temp_if_present(namespace, &temp_path);
+                let _ = Self::sync_bound_progress_intent_directories(namespace);
+            }
+            return Err(Error::IO(error.source, path.to_path_buf()));
+        }
+        self.sync_native_amx_evidence_namespace(namespace, "Native AMX participant latest index")?;
+        let persisted = self
+            .read_bound_regular_file_bytes_locked(
+                namespace,
+                path,
+                NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_MAX_BYTES,
+                "Native AMX participant latest index",
+            )?
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    path.to_path_buf(),
+                    "Native AMX participant latest index disappeared after publication",
+                )
+            })?;
+        if persisted != bytes {
+            return Err(Self::invalid_lane_artifact_error(
+                path.to_path_buf(),
+                "Native AMX participant latest index changed during bound publication",
+            ));
+        }
+        Ok(())
     }
 
     fn persist_native_amx_participant_receipt_latest_index_locked(
@@ -24220,6 +27561,7 @@ impl Kura {
         entry: &LaneConfigEntry,
         artifact: &NativeAmxParticipantApplicationReceiptArtifact,
         path: &Path,
+        namespace: &BoundProgressNamespace,
     ) -> Result<()> {
         let latest = NativeAmxParticipantReceiptLatestIndexV1::from_receipt(artifact)?;
         Self::validate_native_amx_participant_receipt_latest_index(&latest).map_err(|message| {
@@ -24239,9 +27581,11 @@ impl Kura {
                 "Native AMX participant latest index exceeds its hard byte limit",
             ));
         }
-        self.write_atomic_synced_replace(path, &bytes)?;
+        self.replace_bound_native_amx_latest_index_locked(namespace, path, &bytes)?;
         let persisted = self
-            .decode_native_amx_participant_receipt_latest_index(entry, path)?
+            .decode_bound_native_amx_participant_receipt_latest_index_locked(
+                entry, path, namespace,
+            )?
             .ok_or_else(|| {
                 Self::invalid_lane_artifact_error(
                     path.to_path_buf(),
@@ -24280,7 +27624,7 @@ impl Kura {
         Ok(signers)
     }
 
-    fn lane_artifact_required_bytes_for_block(block: &SignedBlock) -> Result<u64> {
+    fn lane_artifact_required_bytes_for_block(&self, block: &SignedBlock) -> Result<u64> {
         let block_hash = block.hash();
         let mut total = 0u64;
         if let Some(bundle) = block.execution_context() {
@@ -24291,9 +27635,11 @@ impl Kura {
             {
                 let artifact = LaneBlockArtifact::new(block_hash, ownership.clone());
                 let encoded_len = u64::try_from(artifact.encode_framed()?.len())?;
-                total = total
-                    .saturating_add(encoded_len)
-                    .saturating_add(PIPELINE_INDEX_ENTRY_SIZE_U64);
+                total = total.saturating_add(encoded_len).saturating_add(
+                    Self::maximum_index_growth_for_unresolved_sidecar_write(
+                        ownership.lane_block_height,
+                    ),
+                );
             }
         }
 
@@ -24301,13 +27647,14 @@ impl Kura {
             crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block(block)
                 .map_err(|error| {
                     Self::invalid_lane_artifact_error(
-                        PathBuf::from(NATIVE_AMX_APPLICATION_MANIFESTS_DATA_FILE),
+                        PathBuf::from(NATIVE_AMX_APPLICATION_MANIFEST_FILE_PREFIX),
                         format!("cannot account Native AMX application manifest: {error}"),
                     )
                 })?;
         let placeholder_finality_hash = HashOf::from_untyped_unchecked(Hash::new(
             b"Native AMX application disk-accounting finality placeholder",
         ));
+        let mut native_prune_intent_routes = BTreeSet::new();
         for (index, entry) in native_manifest.entries().iter().enumerate() {
             let leaf_index = u32::try_from(index)?;
             let manifest_artifact = NativeAmxParticipantApplicationManifestArtifactV1 {
@@ -24316,7 +27663,7 @@ impl Kura {
                 leaf_index,
                 proof: native_manifest.proof(leaf_index).ok_or_else(|| {
                     Self::invalid_lane_artifact_error(
-                        PathBuf::from(NATIVE_AMX_APPLICATION_MANIFESTS_DATA_FILE),
+                        PathBuf::from(NATIVE_AMX_APPLICATION_MANIFEST_FILE_PREFIX),
                         "cannot account missing Native AMX manifest proof",
                     )
                 })?,
@@ -24339,10 +27686,17 @@ impl Kura {
             )?;
             total = total
                 .saturating_add(manifest_len)
-                .saturating_add(PIPELINE_INDEX_ENTRY_SIZE_U64)
                 .saturating_add(receipt_len)
-                .saturating_add(PIPELINE_INDEX_ENTRY_SIZE_U64)
                 .saturating_add(latest_len);
+            if native_prune_intent_routes.insert((
+                entry.leaf.lane_id,
+                entry.leaf.dataspace_id,
+                entry.leaf.lane_incarnation,
+            )) {
+                total = total.saturating_add(u64::try_from(
+                    self.native_amx_evidence_prune_intent_max_bytes(),
+                )?);
+            }
         }
         Ok(total)
     }
@@ -25621,20 +28975,20 @@ impl Kura {
         std::fs::create_dir_all(&dir).map_err(|err| Error::MkDir(err, dir.clone()))?;
 
         let _guard = self.sidecar_lock.lock();
-        let (autonomous_data_path, autonomous_index_path) =
-            Self::autonomous_lane_block_paths_for_entry(&entry, &self.store_root);
         if let Some(autonomous) = self
             .read_current_autonomous_lane_block_record_self_context_locked(
                 &entry,
                 lane_block_height,
-                &autonomous_data_path,
-                &autonomous_index_path,
                 true,
             )?
         {
             if autonomous.artifact.executable_payload.origin_proposal != artifact.proposal {
                 return Err(Self::invalid_lane_artifact_error(
-                    autonomous_data_path,
+                    Self::autonomous_lane_block_latest_attempt_path_for_entry(
+                        &entry,
+                        &self.store_root,
+                        lane_block_height,
+                    ),
                     "certification proposal conflicts with the durable autonomous lane slot",
                 ));
             }
@@ -27034,6 +30388,47 @@ impl Kura {
         std::fs::create_dir_all(parent)
             .map_err(|error| Error::MkDir(error, parent.to_path_buf()))?;
         let artifact_bytes = artifact.encode_framed()?;
+        if self
+            .regular_sidecar_metadata(&artifact_path, parent)?
+            .is_none()
+        {
+            let (related_files, attempts_at_height, related_bytes) = self
+                .autonomous_lane_attempt_inventory_counts_locked(
+                    entry,
+                    descriptor.lane_block_height,
+                )?;
+            if attempts_at_height >= self.roster_sidecar_retention.get() {
+                return Err(Self::invalid_lane_artifact_error(
+                    artifact_path,
+                    "autonomous proposal-height attempts exceed the configured sidecar retention bound",
+                ));
+            }
+            if related_files.saturating_add(4) > MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES {
+                return Err(Self::invalid_lane_artifact_error(
+                    artifact_path,
+                    "autonomous attempt publication would exceed the hard namespace file-count limit",
+                ));
+            }
+            let state_bytes = norito::to_bytes(state).map_err(Error::NoritoFrame)?;
+            let pointer_bytes =
+                norito::to_bytes(&AutonomousLaneBlockLatestAttemptV1::from_payload(payload))
+                    .map_err(Error::NoritoFrame)?;
+            let projected_bytes = u64::try_from(
+                artifact_bytes
+                    .len()
+                    .saturating_add(state_bytes.len())
+                    .saturating_add(pointer_bytes.len().saturating_mul(2)),
+            )
+            .unwrap_or(u64::MAX);
+            if related_bytes.saturating_add(projected_bytes)
+                > AUTONOMOUS_LANE_ARTIFACT_AGGREGATE_BYTES as u64
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    artifact_path,
+                    "autonomous attempt publication would exceed the shared sidecar aggregate byte budget",
+                ));
+            }
+        }
         let artifact_before = Self::file_len_or_zero(&artifact_path)?;
         let accounting_mutation = self.begin_total_disk_usage_mutation();
         let wrote = self.write_atomic_synced_noclobber(&artifact_path, &artifact_bytes)?;
@@ -27221,8 +30616,11 @@ impl Kura {
     ) -> std::result::Result<AutonomousLaneEntrypointClaimV3, &'static str> {
         let metadata = std::fs::symlink_metadata(path)
             .map_err(|_| "failed to inspect autonomous entrypoint claim")?;
-        if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
-            return Err("autonomous entrypoint claim is not a regular no-follow file");
+        if metadata.file_type().is_symlink()
+            || !metadata.file_type().is_file()
+            || !Self::sidecar_is_single_link(&metadata)
+        {
+            return Err("autonomous entrypoint claim is not a single-link regular no-follow file");
         }
         if metadata.len()
             > u64::try_from(AUTONOMOUS_LANE_ENTRYPOINT_CLAIM_MAX_BYTES).unwrap_or(u64::MAX)
@@ -27272,17 +30670,127 @@ impl Kura {
     fn autonomous_lane_entrypoint_claim_file_exists(path: &Path) -> Result<bool> {
         match std::fs::symlink_metadata(path) {
             Ok(metadata)
-                if metadata.file_type().is_symlink() || !metadata.file_type().is_file() =>
+                if metadata.file_type().is_symlink()
+                    || !metadata.file_type().is_file()
+                    || !Self::sidecar_is_single_link(&metadata) =>
             {
                 Err(Self::invalid_lane_artifact_error(
                     path.to_path_buf(),
-                    "autonomous entrypoint claim is not a regular no-follow file",
+                    "autonomous entrypoint claim is not a single-link regular no-follow file",
                 ))
             }
             Ok(_) => Ok(true),
             Err(error) if error.kind() == ErrorKind::NotFound => Ok(false),
             Err(error) => Err(Error::IO(error, path.to_path_buf())),
         }
+    }
+
+    /// Inspect the complete claim namespace without mutating it.
+    ///
+    /// Main and crash-staged temp claims each consume one inventory slot.
+    /// Runtime admission and startup recovery deliberately share this walk so
+    /// neither path can admit an artifact the other path would ignore.
+    fn inspect_autonomous_lane_entrypoint_claim_inventory(
+        &self,
+        max_files: usize,
+    ) -> Result<usize> {
+        let blocks_root = self.store_root.join("blocks");
+        let shard_entries = match std::fs::read_dir(&blocks_root) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(0),
+            Err(error) => return Err(Error::IO(error, blocks_root)),
+        };
+        let mut files_seen = 0_usize;
+        for shard_entry in shard_entries {
+            let shard_entry = shard_entry.map_err(|error| Error::IO(error, blocks_root.clone()))?;
+            let shard_path = shard_entry.path();
+            let shard_name = shard_entry.file_name().into_string().map_err(|_| {
+                Self::invalid_lane_artifact_error(
+                    shard_path.clone(),
+                    "autonomous claim shard has a non-UTF-8 name",
+                )
+            })?;
+            if !shard_name.starts_with(AUTONOMOUS_LANE_ENTRYPOINT_CLAIMS_DIR_PREFIX) {
+                continue;
+            }
+            let shard = shard_name
+                .strip_prefix(AUTONOMOUS_LANE_ENTRYPOINT_CLAIMS_DIR_PREFIX)
+                .and_then(|suffix| suffix.strip_prefix('_'))
+                .ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        shard_path.clone(),
+                        "autonomous claim shard name is non-canonical",
+                    )
+                })?;
+            if shard.len() != 2
+                || !shard
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    shard_path,
+                    "autonomous claim shard name is non-canonical",
+                ));
+            }
+            let shard_metadata = std::fs::symlink_metadata(&shard_path)
+                .map_err(|error| Error::IO(error, shard_path.clone()))?;
+            if shard_metadata.file_type().is_symlink() || !shard_metadata.file_type().is_dir() {
+                return Err(Self::invalid_lane_artifact_error(
+                    shard_path,
+                    "autonomous claim shard is not a regular no-follow directory",
+                ));
+            }
+            let claim_entries = std::fs::read_dir(&shard_path)
+                .map_err(|error| Error::IO(error, shard_path.clone()))?;
+            for claim_entry in claim_entries {
+                let claim_entry =
+                    claim_entry.map_err(|error| Error::IO(error, shard_path.clone()))?;
+                let path = claim_entry.path();
+                let name = claim_entry.file_name().into_string().map_err(|_| {
+                    Self::invalid_lane_artifact_error(
+                        path.clone(),
+                        "autonomous claim file has a non-UTF-8 name",
+                    )
+                })?;
+                files_seen = files_seen.checked_add(1).ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        blocks_root.clone(),
+                        "autonomous claim inventory count overflows",
+                    )
+                })?;
+                if files_seen > max_files {
+                    return Err(Self::invalid_lane_artifact_error(
+                        blocks_root.clone(),
+                        "autonomous claim inventory exceeds its hard file-count limit",
+                    ));
+                }
+                let (claim_path, is_temp) = if name.ends_with(".norito.tmp") {
+                    (path.with_extension(""), true)
+                } else if name.ends_with(".norito") {
+                    (path.clone(), false)
+                } else {
+                    return Err(Self::invalid_lane_artifact_error(
+                        path,
+                        "autonomous claim shard contains an unexpected artifact",
+                    ));
+                };
+                let claim = Self::decode_autonomous_lane_entrypoint_claim(&path)
+                    .map_err(|message| Self::invalid_lane_artifact_error(path.clone(), message))?;
+                if is_temp && !matches!(claim.state, AutonomousLaneEntrypointClaimStateV3::Active) {
+                    return Err(Self::invalid_lane_artifact_error(
+                        path,
+                        "autonomous claim temp is not an active staged owner",
+                    ));
+                }
+                if !self.autonomous_lane_entrypoint_claim_path_matches(&claim, &claim_path) {
+                    return Err(Self::invalid_lane_artifact_error(
+                        path,
+                        "autonomous claim file has a mismatched hash path",
+                    ));
+                }
+            }
+        }
+        Ok(files_seen)
     }
 
     fn autonomous_lane_entrypoint_claim_is_superseded_by_active_recreation_locked(
@@ -27357,17 +30865,13 @@ impl Kura {
         {
             return false;
         }
-        let (data_path, index_path) =
-            Self::autonomous_lane_block_paths_for_entry(&entry, &self.store_root);
         // The exact current attempt is pointer-resolved. Any malformed or
         // in-progress durable state remains conservatively occupied; only a
         // proven absence lets a staged claim be discarded.
-        match self.read_autonomous_lane_block_record_from_paths_locked(
+        match self.read_autonomous_lane_block_record_locked(
             &entry,
             claim.lane_id,
             claim.lane_block_height,
-            &data_path,
-            &index_path,
             claim.chain_id_hash,
             claim.epoch,
             false,
@@ -27376,6 +30880,186 @@ impl Kura {
             Ok(None) => false,
             Err(_) => true,
         }
+    }
+
+    fn reconcile_autonomous_lane_entrypoint_claim_temps_on_startup_locked(&self) -> Result<()> {
+        self.reconcile_autonomous_lane_entrypoint_claim_temps_on_startup_with_limit_locked(
+            MAX_AUTONOMOUS_LANE_CLAIM_FILES,
+        )
+    }
+
+    fn reconcile_autonomous_lane_entrypoint_claim_temps_on_startup_with_limit_locked(
+        &self,
+        max_files: usize,
+    ) -> Result<()> {
+        // Complete this read-only pass before promoting or removing any crash
+        // temp. Oversized or unsafe inventories therefore fail without a
+        // partially reconciled prefix.
+        self.inspect_autonomous_lane_entrypoint_claim_inventory(max_files)?;
+        let blocks_root = self.store_root.join("blocks");
+        let shard_entries = match std::fs::read_dir(&blocks_root) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(Error::IO(error, blocks_root)),
+        };
+        let mut files_seen = 0_usize;
+        for shard_entry in shard_entries {
+            let shard_entry = shard_entry.map_err(|error| Error::IO(error, blocks_root.clone()))?;
+            let shard_path = shard_entry.path();
+            let shard_name = shard_entry.file_name().into_string().map_err(|_| {
+                Self::invalid_lane_artifact_error(
+                    shard_path.clone(),
+                    "autonomous claim shard has a non-UTF-8 name",
+                )
+            })?;
+            let Some(shard) = shard_name.strip_prefix(AUTONOMOUS_LANE_ENTRYPOINT_CLAIMS_DIR_PREFIX)
+            else {
+                continue;
+            };
+            let Some(shard) = shard.strip_prefix('_') else {
+                continue;
+            };
+            if shard.len() != 2
+                || !shard
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    shard_path,
+                    "autonomous claim shard name is non-canonical",
+                ));
+            }
+            let shard_metadata = std::fs::symlink_metadata(&shard_path)
+                .map_err(|error| Error::IO(error, shard_path.clone()))?;
+            if shard_metadata.file_type().is_symlink() || !shard_metadata.file_type().is_dir() {
+                return Err(Self::invalid_lane_artifact_error(
+                    shard_path,
+                    "autonomous claim shard is not a regular no-follow directory",
+                ));
+            }
+            let claim_entries = std::fs::read_dir(&shard_path)
+                .map_err(|error| Error::IO(error, shard_path.clone()))?;
+            let mut shard_mutated = false;
+            for claim_entry in claim_entries {
+                let claim_entry =
+                    claim_entry.map_err(|error| Error::IO(error, shard_path.clone()))?;
+                let path = claim_entry.path();
+                let name = claim_entry.file_name().into_string().map_err(|_| {
+                    Self::invalid_lane_artifact_error(
+                        path.clone(),
+                        "autonomous claim file has a non-UTF-8 name",
+                    )
+                })?;
+                files_seen = files_seen.checked_add(1).ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        blocks_root.clone(),
+                        "autonomous claim startup inventory count overflows",
+                    )
+                })?;
+                if files_seen > max_files {
+                    return Err(Self::invalid_lane_artifact_error(
+                        blocks_root,
+                        "autonomous claim startup inventory exceeds its hard file-count limit",
+                    ));
+                }
+                if name.ends_with(".norito") {
+                    let claim = Self::decode_autonomous_lane_entrypoint_claim(&path).map_err(
+                        |message| Self::invalid_lane_artifact_error(path.clone(), message),
+                    )?;
+                    if !self.autonomous_lane_entrypoint_claim_path_matches(&claim, &path) {
+                        return Err(Self::invalid_lane_artifact_error(
+                            path,
+                            "autonomous claim main file has a mismatched hash path",
+                        ));
+                    }
+                    continue;
+                }
+                if !name.ends_with(".norito.tmp") {
+                    return Err(Self::invalid_lane_artifact_error(
+                        path,
+                        "autonomous claim shard contains an unexpected artifact",
+                    ));
+                }
+                let pending = Self::decode_autonomous_lane_entrypoint_claim(&path)
+                    .map_err(|message| Self::invalid_lane_artifact_error(path.clone(), message))?;
+                if !matches!(pending.state, AutonomousLaneEntrypointClaimStateV3::Active) {
+                    return Err(Self::invalid_lane_artifact_error(
+                        path,
+                        "autonomous claim temp is not an active staged owner",
+                    ));
+                }
+                let main_path = path.with_extension("");
+                if !self.autonomous_lane_entrypoint_claim_path_matches(&pending, &main_path) {
+                    return Err(Self::invalid_lane_artifact_error(
+                        path,
+                        "autonomous claim temp has a mismatched hash path",
+                    ));
+                }
+                let existing = if Self::autonomous_lane_entrypoint_claim_file_exists(&main_path)? {
+                    let existing = Self::decode_autonomous_lane_entrypoint_claim(&main_path)
+                        .map_err(|message| {
+                            Self::invalid_lane_artifact_error(main_path.clone(), message)
+                        })?;
+                    if !self.autonomous_lane_entrypoint_claim_path_matches(&existing, &main_path) {
+                        return Err(Self::invalid_lane_artifact_error(
+                            main_path,
+                            "autonomous claim main file has a mismatched hash path",
+                        ));
+                    }
+                    Some(existing)
+                } else {
+                    None
+                };
+                if existing.as_ref() == Some(&pending) {
+                    self.remove_autonomous_lane_entrypoint_claim_file(&path)?;
+                    shard_mutated = true;
+                    continue;
+                }
+                let target_is_durable =
+                    self.autonomous_lane_claim_target_may_be_durable_locked(&pending);
+                if target_is_durable {
+                    if existing.as_ref().is_some_and(|claim| {
+                        !matches!(
+                            claim.state,
+                            AutonomousLaneEntrypointClaimStateV3::Released(_)
+                        )
+                    }) {
+                        return Err(Self::invalid_lane_artifact_error(
+                            main_path,
+                            "durable autonomous claim temp conflicts with a live main owner",
+                        ));
+                    }
+                    let replaced_bytes = if existing.is_some() {
+                        Self::file_len_or_zero(&main_path)?
+                    } else {
+                        0
+                    };
+                    Self::promote_autonomous_lane_entrypoint_claim_temp(&path, &main_path)?;
+                    if replaced_bytes > 0 {
+                        self.sub_disk_usage_bytes(replaced_bytes);
+                    }
+                    shard_mutated = true;
+                } else {
+                    if existing.as_ref().is_some_and(|claim| {
+                        !matches!(
+                            claim.state,
+                            AutonomousLaneEntrypointClaimStateV3::Released(_)
+                        )
+                    }) {
+                        return Err(Self::invalid_lane_artifact_error(
+                            main_path,
+                            "orphan autonomous claim temp conflicts with a live main owner",
+                        ));
+                    }
+                    self.remove_autonomous_lane_entrypoint_claim_file(&path)?;
+                    shard_mutated = true;
+                }
+            }
+            if shard_mutated {
+                sync_dir(&shard_path).map_err(|error| Error::IO(error, shard_path))?;
+            }
+        }
+        Ok(())
     }
 
     fn remove_autonomous_lane_entrypoint_claim_file(&self, path: &Path) -> Result<()> {
@@ -27393,10 +31077,165 @@ impl Kura {
         Ok(())
     }
 
+    /// Validate the complete live namespace and projected crash-staging peak
+    /// before claim preparation mutates any file.
+    fn preflight_autonomous_lane_entrypoint_claims_locked(
+        &self,
+        payload: &LaneExecutablePayloadV1,
+        max_files: usize,
+    ) -> Result<()> {
+        let mut projected_files =
+            self.inspect_autonomous_lane_entrypoint_claim_inventory(max_files)?;
+        let mut unique_paths = BTreeSet::new();
+        for entrypoint_hash in &payload.entrypoint_hashes {
+            let incoming = AutonomousLaneEntrypointClaimV3::new(payload, *entrypoint_hash);
+            let path = Self::autonomous_lane_entrypoint_claim_path(
+                &self.store_root,
+                &incoming.chain_id_hash,
+                &incoming.entrypoint_hash,
+            );
+            if !unique_paths.insert(path.clone()) {
+                return Err(Self::invalid_lane_artifact_error(
+                    path,
+                    "autonomous payload repeats an entrypoint claim path",
+                ));
+            }
+            let temp_path = Self::autonomous_lane_entrypoint_claim_temp_path(&path);
+            let existing = if Self::autonomous_lane_entrypoint_claim_file_exists(&path)? {
+                let existing = Self::decode_autonomous_lane_entrypoint_claim(&path)
+                    .map_err(|message| Self::invalid_lane_artifact_error(path.clone(), message))?;
+                if !self.autonomous_lane_entrypoint_claim_path_matches(&existing, &path) {
+                    return Err(Self::invalid_lane_artifact_error(
+                        path,
+                        "autonomous entrypoint claim has a mismatched hash path",
+                    ));
+                }
+                Some(existing)
+            } else {
+                None
+            };
+            let pending = if Self::autonomous_lane_entrypoint_claim_file_exists(&temp_path)? {
+                let pending = Self::decode_autonomous_lane_entrypoint_claim(&temp_path).map_err(
+                    |message| Self::invalid_lane_artifact_error(temp_path.clone(), message),
+                )?;
+                if !self.autonomous_lane_entrypoint_claim_path_matches(&pending, &path)
+                    || !matches!(pending.state, AutonomousLaneEntrypointClaimStateV3::Active)
+                {
+                    return Err(Self::invalid_lane_artifact_error(
+                        temp_path,
+                        "autonomous entrypoint temp claim has a mismatched or released identity",
+                    ));
+                }
+                Some(pending)
+            } else {
+                None
+            };
+
+            if existing
+                .as_ref()
+                .is_some_and(|claim| claim.active_for_payload(payload))
+            {
+                if let Some(pending) = pending {
+                    if self.autonomous_lane_claim_target_may_be_durable_locked(&pending)
+                        && !pending.active_for_payload(payload)
+                    {
+                        return Err(Self::invalid_lane_artifact_error(
+                            temp_path,
+                            "durable autonomous entrypoint temp conflicts with the exact main owner",
+                        ));
+                    }
+                    projected_files = projected_files.checked_sub(1).ok_or_else(|| {
+                        Self::invalid_lane_artifact_error(
+                            path.clone(),
+                            "autonomous claim inventory projection underflows",
+                        )
+                    })?;
+                }
+                continue;
+            }
+            if existing
+                .as_ref()
+                .is_some_and(|claim| claim.owns_payload(payload))
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    path,
+                    "autonomous entrypoint belongs to a durably retired lane payload",
+                ));
+            }
+            if existing.as_ref().is_some_and(|claim| {
+                !matches!(
+                    claim.state,
+                    AutonomousLaneEntrypointClaimStateV3::Released(_)
+                )
+            }) {
+                return Err(Self::invalid_lane_artifact_error(
+                    path,
+                    "autonomous entrypoint is already claimed by another lane payload",
+                ));
+            }
+
+            if let Some(pending) = pending {
+                if self.autonomous_lane_claim_target_may_be_durable_locked(&pending) {
+                    if !pending.active_for_payload(payload) {
+                        return Err(Self::invalid_lane_artifact_error(
+                            path,
+                            "autonomous entrypoint is already claimed by another lane payload",
+                        ));
+                    }
+                    if existing.is_some() {
+                        projected_files = projected_files.checked_sub(1).ok_or_else(|| {
+                            Self::invalid_lane_artifact_error(
+                                path.clone(),
+                                "autonomous claim inventory projection underflows",
+                            )
+                        })?;
+                    }
+                    continue;
+                }
+                // The orphan temp is removed before the exact replacement is
+                // staged, so this path does not raise the inventory peak.
+            } else {
+                projected_files = projected_files.checked_add(1).ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        path.clone(),
+                        "autonomous claim inventory projection overflows",
+                    )
+                })?;
+                if projected_files > max_files {
+                    return Err(Self::invalid_lane_artifact_error(
+                        self.store_root.join("blocks"),
+                        "autonomous claim staging would exceed its hard file-count limit",
+                    ));
+                }
+            }
+
+            let bytes = norito::to_bytes(&incoming).map_err(Error::NoritoFrame)?;
+            if bytes.is_empty() || bytes.len() > AUTONOMOUS_LANE_ENTRYPOINT_CLAIM_MAX_BYTES {
+                return Err(Self::invalid_lane_artifact_error(
+                    path,
+                    "autonomous entrypoint claim exceeds hard byte limit",
+                ));
+            }
+        }
+        Ok(())
+    }
+
     fn prepare_autonomous_lane_entrypoint_claims_locked(
         &self,
         payload: &LaneExecutablePayloadV1,
     ) -> Result<Vec<(PathBuf, AutonomousLaneEntrypointClaimV3)>> {
+        self.prepare_autonomous_lane_entrypoint_claims_with_limit_locked(
+            payload,
+            MAX_AUTONOMOUS_LANE_CLAIM_FILES,
+        )
+    }
+
+    fn prepare_autonomous_lane_entrypoint_claims_with_limit_locked(
+        &self,
+        payload: &LaneExecutablePayloadV1,
+        max_files: usize,
+    ) -> Result<Vec<(PathBuf, AutonomousLaneEntrypointClaimV3)>> {
+        self.preflight_autonomous_lane_entrypoint_claims_locked(payload, max_files)?;
         let accounting_mutation = self.begin_total_disk_usage_mutation();
         let mut staged = Vec::with_capacity(payload.entrypoint_hashes.len());
         let mut staged_dirs = BTreeSet::new();
@@ -27747,8 +31586,6 @@ impl Kura {
         entry: &LaneConfigEntry,
         payload: &LaneExecutablePayloadV1,
         retirement: &AutonomousLaneSlotRetirementV1,
-        data_path: &Path,
-        index_path: &Path,
     ) -> Result<()> {
         let retirement_hash = retirement.digest()?;
         let descriptor = &payload.origin_proposal.descriptor;
@@ -27791,13 +31628,11 @@ impl Kura {
                 ));
             }
             let newer = self
-                .read_autonomous_lane_block_attempt_record_from_paths_locked(
+                .read_autonomous_lane_block_attempt_record_locked(
                     entry,
                     existing.lane_id,
                     existing.lane_block_height,
                     existing.proposal_height,
-                    data_path,
-                    index_path,
                     existing.chain_id_hash,
                     existing.epoch,
                     false,
@@ -27851,17 +31686,16 @@ impl Kura {
         let descriptor = &payload.origin_proposal.descriptor;
         let entry = self.lane_storage_entry(descriptor.lane_id)?;
         self.require_active_lane_artifact(&entry, descriptor)?;
-        let (data_path, index_path) =
-            Self::autonomous_lane_block_paths_for_entry(&entry, &self.store_root);
-        let view_state_path = Self::autonomous_lane_block_view_state_path_for_entry(
+        let attempt_path = Self::autonomous_lane_block_attempt_path_for_entry(
             &entry,
             &self.store_root,
             descriptor.lane_block_height,
+            descriptor.proposal_height,
         );
-        let Some(dir) = data_path.parent().map(Path::to_path_buf) else {
+        let Some(dir) = attempt_path.parent().map(Path::to_path_buf) else {
             return Err(Self::invalid_lane_artifact_error(
-                data_path,
-                "autonomous lane block path has no parent directory",
+                attempt_path,
+                "autonomous lane attempt path has no parent directory",
             ));
         };
         std::fs::create_dir_all(&dir).map_err(|err| Error::MkDir(err, dir))?;
@@ -27871,8 +31705,6 @@ impl Kura {
             .read_current_autonomous_lane_block_record_self_context_locked(
                 &entry,
                 descriptor.lane_block_height,
-                &data_path,
-                &index_path,
                 true,
             )?
         {
@@ -27904,7 +31736,7 @@ impl Kura {
                     .attach_global_hint_exact(hint, expected_chain_id_hash, expected_epoch)
                     .map_err(|error| {
                         Self::invalid_lane_artifact_error(
-                            data_path.clone(),
+                            attempt_path.clone(),
                             format!(
                                 "autonomous lane carrier-hint promotion is not byte exact: {error}"
                             ),
@@ -27912,7 +31744,7 @@ impl Kura {
                     })?;
                 if promoted != *payload {
                     return Err(Self::invalid_lane_artifact_error(
-                        data_path,
+                        attempt_path,
                         "autonomous lane carrier-hint promotion changed authenticated payload bytes",
                     ));
                 }
@@ -27947,7 +31779,7 @@ impl Kura {
                     || payload.epoch < existing_payload.epoch
                 {
                     return Err(Self::invalid_lane_artifact_error(
-                        data_path,
+                        attempt_path,
                         "autonomous lane-height successor does not extend the released proposal-height attempt",
                     ));
                 }
@@ -27971,58 +31803,24 @@ impl Kura {
                 return Ok(());
             }
             return Err(Self::invalid_lane_artifact_error(
-                data_path,
+                attempt_path,
                 "conflicting autonomous lane payload already owns the active incarnation height",
             ));
         }
 
-        let view_state_parent = view_state_path.parent().ok_or_else(|| {
-            Self::invalid_lane_artifact_error(
-                view_state_path.clone(),
-                "autonomous lane view state path has no parent",
-            )
-        })?;
-        let view_state_temp_path =
-            Self::autonomous_lane_block_view_state_temp_path(&view_state_path);
-        let stale_view = self.regular_sidecar_metadata(&view_state_path, view_state_parent)?;
-        let stale_view_temp =
-            self.regular_sidecar_metadata(&view_state_temp_path, view_state_parent)?;
-        let stale_view_bytes = stale_view
-            .as_ref()
-            .map_or(0, |metadata| metadata.file.len())
-            .saturating_add(
-                stale_view_temp
-                    .as_ref()
-                    .map_or(0, |metadata| metadata.file.len()),
-            );
         let staged_claims = self.prepare_autonomous_lane_entrypoint_claims_locked(payload)?;
-        self.write_autonomous_lane_block_artifact_locked(
-            &AutonomousLaneBlockArtifact::new(payload.clone()),
-            &data_path,
-            &index_path,
+        let attempt = AutonomousLaneBlockArtifact::new(payload.clone());
+        let state = AutonomousLaneBlockViewState::from_artifact(&attempt);
+        let pointer = self.write_autonomous_lane_block_attempt_locked(
+            &entry,
+            &attempt,
+            &state,
             expected_chain_id_hash,
             expected_epoch,
         )?;
+        self.publish_autonomous_lane_block_latest_attempt_locked(&entry, &pointer)?;
         self.finalize_autonomous_lane_entrypoint_claims_locked(&staged_claims)?;
-        let accounting_mutation = self.begin_total_disk_usage_mutation();
-        for (stale_path, metadata) in [
-            (view_state_path.clone(), stale_view),
-            (view_state_temp_path, stale_view_temp),
-        ] {
-            if metadata.is_some() {
-                std::fs::remove_file(&stale_path).map_err(|error| Error::IO(error, stale_path))?;
-            }
-        }
-        if stale_view_bytes > 0 {
-            sync_dir(view_state_parent)
-                .map_err(|error| Error::IO(error, view_state_parent.to_path_buf()))?;
-            self.sub_disk_usage_bytes(stale_view_bytes);
-        }
-        accounting_mutation.finish();
-        self.publish_autonomous_lane_route_latest_attempt_locked(
-            &entry,
-            &AutonomousLaneBlockLatestAttemptV1::from_payload(payload),
-        )?;
+        self.publish_autonomous_lane_route_latest_attempt_locked(&entry, &pointer)?;
         Ok(())
     }
 
@@ -28051,8 +31849,11 @@ impl Kura {
             ));
         }
         let entry = self.lane_storage_entry(retirement.lane_id)?;
-        let (data_path, index_path) =
-            Self::autonomous_lane_block_paths_for_entry(&entry, &self.store_root);
+        let slot_path = Self::autonomous_lane_block_latest_attempt_path_for_entry(
+            &entry,
+            &self.store_root,
+            retirement.lane_block_height,
+        );
         let (certified_data_path, certified_index_path) =
             Self::certified_lane_block_paths_for_entry(&entry, &self.store_root);
         let _guard = self.sidecar_lock.lock();
@@ -28060,29 +31861,24 @@ impl Kura {
             .read_current_autonomous_lane_block_record_self_context_locked(
                 &entry,
                 retirement.lane_block_height,
-                &data_path,
-                &index_path,
                 true,
             )?
             .ok_or_else(|| {
                 Self::invalid_lane_artifact_error(
-                    data_path.clone(),
+                    slot_path.clone(),
                     "missing autonomous executable payload for slot retirement",
                 )
             })?;
         if !retirement.matches_payload(&record.artifact.executable_payload) {
-            let Some(historical) = self
-                .read_autonomous_lane_block_attempt_record_from_paths_locked(
-                    &entry,
-                    retirement.lane_id,
-                    retirement.lane_block_height,
-                    retirement.proposal_height,
-                    &data_path,
-                    &index_path,
-                    expected_chain_id_hash,
-                    expected_epoch,
-                    true,
-                )?
+            let Some(historical) = self.read_autonomous_lane_block_attempt_record_locked(
+                &entry,
+                retirement.lane_id,
+                retirement.lane_block_height,
+                retirement.proposal_height,
+                expected_chain_id_hash,
+                expected_epoch,
+                true,
+            )?
             else {
                 return Err(Self::invalid_lane_artifact_error(
                     record.view_state_path,
@@ -28101,8 +31897,6 @@ impl Kura {
                 &entry,
                 &historical.artifact.executable_payload,
                 retirement,
-                &data_path,
-                &index_path,
             )?;
             return Ok(retirement.clone());
         }
@@ -28159,7 +31953,7 @@ impl Kura {
     pub(crate) fn finalize_autonomous_lane_slot_release(
         &self,
         retirement: &AutonomousLaneSlotRetirementV1,
-        queue_barrier: &crate::queue::LaneQueueReservationReleaseBarrierV2,
+        queue_barrier: &crate::queue::LaneQueueReservationReleaseBarrierV3,
         expected_chain_id_hash: Hash,
         expected_epoch: u64,
     ) -> Result<()> {
@@ -28178,24 +31972,25 @@ impl Kura {
             ));
         }
         let entry = self.lane_storage_entry(retirement.lane_id)?;
-        let (data_path, index_path) =
-            Self::autonomous_lane_block_paths_for_entry(&entry, &self.store_root);
+        let slot_path = Self::autonomous_lane_block_latest_attempt_path_for_entry(
+            &entry,
+            &self.store_root,
+            retirement.lane_block_height,
+        );
         let _guard = self.sidecar_lock.lock();
         let record = self
-            .read_autonomous_lane_block_attempt_record_from_paths_locked(
+            .read_autonomous_lane_block_attempt_record_locked(
                 &entry,
                 retirement.lane_id,
                 retirement.lane_block_height,
                 retirement.proposal_height,
-                &data_path,
-                &index_path,
                 expected_chain_id_hash,
                 expected_epoch,
                 true,
             )?
             .ok_or_else(|| {
                 Self::invalid_lane_artifact_error(
-                    data_path.clone(),
+                    slot_path,
                     "missing autonomous executable payload for claim release",
                 )
             })?;
@@ -28211,8 +32006,6 @@ impl Kura {
             .read_current_autonomous_lane_block_record_self_context_locked(
                 &entry,
                 retirement.lane_block_height,
-                &data_path,
-                &index_path,
                 true,
             )?
             .ok_or_else(|| {
@@ -28231,8 +32024,6 @@ impl Kura {
                 &entry,
                 &record.artifact.executable_payload,
                 retirement,
-                &data_path,
-                &index_path,
             )
         }
     }
@@ -28252,16 +32043,12 @@ impl Kura {
         self.ensure_prune_recovery_not_required()?;
         let _geometry_guard = self.lane_geometry_lock.lock();
         let entry = self.lane_storage_entry(lane_id)?;
-        let (data_path, index_path) =
-            Self::autonomous_lane_block_paths_for_entry(&entry, &self.store_root);
         let _guard = self.sidecar_lock.lock();
         Ok(self
-            .read_autonomous_lane_block_record_from_paths_locked(
+            .read_autonomous_lane_block_record_locked(
                 &entry,
                 lane_id,
                 lane_block_height,
-                &data_path,
-                &index_path,
                 expected_chain_id_hash,
                 expected_epoch,
                 true,
@@ -28289,23 +32076,24 @@ impl Kura {
         self.durable_mutation_authorized()?;
         let _geometry_guard = self.lane_geometry_lock.lock();
         let entry = self.lane_storage_entry(lane_id)?;
-        let (data_path, index_path) =
-            Self::autonomous_lane_block_paths_for_entry(&entry, &self.store_root);
+        let slot_path = Self::autonomous_lane_block_latest_attempt_path_for_entry(
+            &entry,
+            &self.store_root,
+            lane_block_height,
+        );
         let _guard = self.sidecar_lock.lock();
         let record = self
-            .read_autonomous_lane_block_record_from_paths_locked(
+            .read_autonomous_lane_block_record_locked(
                 &entry,
                 lane_id,
                 lane_block_height,
-                &data_path,
-                &index_path,
                 expected_chain_id_hash,
                 expected_epoch,
                 true,
             )?
             .ok_or_else(|| {
                 Self::invalid_lane_artifact_error(
-                    data_path.clone(),
+                    slot_path.clone(),
                     "missing autonomous executable payload for availability certificate",
                 )
             })?;
@@ -28324,7 +32112,7 @@ impl Kura {
         )
         .map_err(|err| {
             Self::invalid_lane_artifact_error(
-                data_path.clone(),
+                slot_path.clone(),
                 format!("invalid autonomous lane availability certificate: {err}"),
             )
         })?;
@@ -28333,7 +32121,7 @@ impl Kura {
                 return Ok(());
             }
             return Err(Self::invalid_lane_artifact_error(
-                data_path,
+                slot_path,
                 "conflicting autonomous lane origin availability certificate",
             ));
         }
@@ -28387,7 +32175,7 @@ impl Kura {
     /// recreated incarnation, or different provisional owner must be released.
     pub(crate) fn autonomous_lane_payload_matches_reservation(
         &self,
-        key: &crate::queue::LaneQueueReservationKeyV1,
+        key: &crate::queue::LaneQueueReservationKeyV2,
         expected_chain_id_hash: Hash,
         expected_epoch: u64,
     ) -> bool {
@@ -28419,7 +32207,7 @@ impl Kura {
     /// identity conflict, not an orphan proof, and therefore fails closed.
     pub(crate) fn autonomous_lane_retirement_matching_reservation(
         &self,
-        key: &crate::queue::LaneQueueReservationKeyV1,
+        key: &crate::queue::LaneQueueReservationKeyV2,
         expected_chain_id_hash: Hash,
         expected_epoch: u64,
     ) -> Result<Option<AutonomousLaneSlotRetirementV1>> {
@@ -28429,17 +32217,13 @@ impl Kura {
         let Some(entry) = self.lane_storage_entries.lock().get(&key.lane_id).cloned() else {
             return Ok(None);
         };
-        let (data_path, index_path) =
-            Self::autonomous_lane_block_paths_for_entry(&entry, &self.store_root);
         let _guard = self.sidecar_lock.lock();
         let Some(retirement) = self
-            .read_autonomous_lane_block_attempt_record_from_paths_locked(
+            .read_autonomous_lane_block_attempt_record_locked(
                 &entry,
                 key.lane_id,
                 key.lane_block_height,
                 key.proposal_height,
-                &data_path,
-                &index_path,
                 expected_chain_id_hash,
                 expected_epoch,
                 true,
@@ -28472,23 +32256,24 @@ impl Kura {
         self.durable_mutation_authorized()?;
         let _geometry_guard = self.lane_geometry_lock.lock();
         let entry = self.lane_storage_entry(lane_id)?;
-        let (data_path, index_path) =
-            Self::autonomous_lane_block_paths_for_entry(&entry, &self.store_root);
+        let slot_path = Self::autonomous_lane_block_latest_attempt_path_for_entry(
+            &entry,
+            &self.store_root,
+            lane_block_height,
+        );
         let _guard = self.sidecar_lock.lock();
         let record = self
-            .read_autonomous_lane_block_record_from_paths_locked(
+            .read_autonomous_lane_block_record_locked(
                 &entry,
                 lane_id,
                 lane_block_height,
-                &data_path,
-                &index_path,
                 expected_chain_id_hash,
                 expected_epoch,
                 true,
             )?
             .ok_or_else(|| {
                 Self::invalid_lane_artifact_error(
-                    data_path.clone(),
+                    slot_path.clone(),
                     "missing autonomous executable payload for NewView certificate",
                 )
             })?;
@@ -28504,14 +32289,14 @@ impl Kura {
             expected_chain_id_hash,
             expected_epoch,
         )
-        .map_err(|message| Self::invalid_lane_artifact_error(data_path.clone(), message))?;
+        .map_err(|message| Self::invalid_lane_artifact_error(slot_path.clone(), message))?;
         let target = crate::lane_consensus::retarget_lane_block_proposal_view(
             &current,
             durable_certificate.certificate.body.target_view,
         )
         .map_err(|err| {
             Self::invalid_lane_artifact_error(
-                data_path.clone(),
+                slot_path.clone(),
                 format!("invalid autonomous lane NewView target: {err}"),
             )
         })?;
@@ -28525,7 +32310,7 @@ impl Kura {
         )
         .map_err(|err| {
             Self::invalid_lane_artifact_error(
-                data_path.clone(),
+                slot_path.clone(),
                 format!("invalid autonomous lane NewView certificate: {err}"),
             )
         })?;
@@ -28547,7 +32332,7 @@ impl Kura {
             let compacted_bytes = norito::to_bytes(&artifact).map_err(Error::NoritoFrame)?;
             if compacted_bytes.len() > MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES {
                 return Err(Self::invalid_lane_artifact_error(
-                    data_path,
+                    slot_path,
                     "compacted autonomous lane view checkpoint exceeds the merge source byte limit",
                 ));
             }
@@ -28593,18 +32378,14 @@ impl Kura {
         expected_epoch: u64,
     ) -> Option<AutonomousLaneBlockArtifact> {
         let entry = self.lane_storage_entry(lane_id).ok()?;
-        let (data_path, index_path) =
-            Self::autonomous_lane_block_paths_for_entry(&entry, &self.store_root);
         let _guard = self.sidecar_lock.lock();
         if self.prune_recovery_is_required() {
             return None;
         }
-        self.read_autonomous_lane_block_artifact_from_paths_locked(
+        self.read_autonomous_lane_block_artifact_locked(
             &entry,
             lane_id,
             lane_block_height,
-            &data_path,
-            &index_path,
             expected_chain_id_hash,
             expected_epoch,
             true,
@@ -28670,8 +32451,8 @@ impl Kura {
 
     /// Explicitly reconstruct the bounded route/incarnation latest pointers.
     ///
-    /// This is the only autonomous path that scans the historical height
-    /// index. It runs during startup or restored-geometry activation before
+    /// This is the only autonomous path that scans the versioned attempt
+    /// namespace. It runs during startup or restored-geometry activation before
     /// consensus can hydrate work. Runtime hydration subsequently performs one
     /// exact pointer lookup per configured route.
     fn rebuild_autonomous_lane_route_latest_attempt_indexes_on_startup(&self) -> Result<()> {
@@ -28687,73 +32468,472 @@ impl Kura {
             .collect::<Vec<_>>();
         let _sidecar_guard = self.sidecar_lock.lock();
         for entry in entries {
-            let (data_path, index_path) =
-                Self::autonomous_lane_block_paths_for_entry(&entry, &self.store_root);
-            if !data_path.exists() && !index_path.exists() {
-                let route_path = Self::autonomous_lane_route_latest_attempt_path_for_entry(
-                    &entry,
-                    &self.store_root,
-                );
-                if self
-                    .regular_sidecar_metadata(
-                        &route_path,
-                        route_path.parent().ok_or_else(|| {
-                            Self::invalid_lane_artifact_error(
-                                route_path.clone(),
-                                "autonomous route-latest pointer has no parent",
-                            )
-                        })?,
-                    )?
-                    .is_some()
+            let directory = Self::lane_artifact_dir(&entry.blocks_dir(&self.store_root));
+            match std::fs::symlink_metadata(&directory) {
+                Ok(_) => {}
+                Err(error) if error.kind() == ErrorKind::NotFound => continue,
+                Err(error) => return Err(Error::IO(error, directory)),
+            }
+            let namespace = self.native_amx_evidence_namespace_for_entry(&entry)?;
+            let directory_entries = match std::fs::read_dir(&directory) {
+                Ok(entries) => entries,
+                Err(error) if error.kind() == ErrorKind::NotFound => continue,
+                Err(error) => return Err(Error::IO(error, directory)),
+            };
+            let mut preflight_files = 0_usize;
+            let mut preflight_bytes = 0_u64;
+            let mut temporary_paths = Vec::new();
+            for directory_entry in directory_entries {
+                let directory_entry =
+                    directory_entry.map_err(|error| Error::IO(error, directory.clone()))?;
+                let path = directory_entry.path();
+                let name = directory_entry.file_name().into_string().map_err(|_| {
+                    Self::invalid_lane_artifact_error(
+                        path.clone(),
+                        "autonomous startup inventory contains a non-UTF-8 artifact",
+                    )
+                })?;
+                let is_temporary = name.starts_with(".kura-sidecar-");
+                if !is_temporary && !name.starts_with("autonomous_") {
+                    continue;
+                }
+                let metadata = std::fs::symlink_metadata(&path)
+                    .map_err(|error| Error::IO(error, path.clone()))?;
+                if metadata.file_type().is_symlink()
+                    || !metadata.file_type().is_file()
+                    || !Self::sidecar_is_single_link(&metadata)
                 {
                     return Err(Self::invalid_lane_artifact_error(
-                        route_path,
-                        "autonomous route-latest pointer exists without lane payload history",
+                        path,
+                        "autonomous startup inventory contains a non-regular, linked, or symlinked artifact",
                     ));
                 }
-                continue;
+                preflight_files = preflight_files.checked_add(1).ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        directory.clone(),
+                        "autonomous startup inventory count overflows",
+                    )
+                })?;
+                if preflight_files > MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES {
+                    return Err(Self::invalid_lane_artifact_error(
+                        directory,
+                        "autonomous startup inventory exceeds its hard file-count limit",
+                    ));
+                }
+                if is_temporary
+                    && metadata.len() > MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES as u64
+                {
+                    return Err(Self::invalid_lane_artifact_error(
+                        path,
+                        "autonomous startup temporary exceeds the sidecar byte limit",
+                    ));
+                }
+                preflight_bytes = preflight_bytes.checked_add(metadata.len()).ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        directory.clone(),
+                        "autonomous startup inventory byte count overflows",
+                    )
+                })?;
+                if preflight_bytes > AUTONOMOUS_LANE_ARTIFACT_AGGREGATE_BYTES as u64 {
+                    return Err(Self::invalid_lane_artifact_error(
+                        directory,
+                        "autonomous startup inventory exceeds the shared sidecar aggregate byte budget",
+                    ));
+                }
+                if is_temporary {
+                    temporary_paths.push((path, metadata));
+                }
             }
-            if !Self::recover_indexed_sidecar_artifacts(
-                &data_path,
-                &index_path,
-                AutonomousLaneBlockArtifact::FORMAT_LABEL,
-            ) {
+            if !Self::progress_mutation_namespace_unchanged(&namespace) {
                 return Err(Self::invalid_lane_artifact_error(
-                    data_path,
-                    "failed to recover autonomous payload history before latest-index rebuild",
+                    directory,
+                    "autonomous startup inventory directory changed during bounded preflight",
                 ));
             }
-            let Some(heights) = Self::indexed_sidecar_height_range(
-                &index_path,
-                AutonomousLaneBlockArtifact::FORMAT_LABEL,
-            ) else {
-                if self
-                    .read_autonomous_lane_route_latest_attempt_locked(&entry)?
-                    .is_some()
-                {
+            let directory_entries = std::fs::read_dir(&directory)
+                .map_err(|error| Error::IO(error, directory.clone()))?;
+            let mut attempts = BTreeMap::<
+                u64,
+                Vec<(
+                    AutonomousLaneBlockLatestAttemptV1,
+                    AutonomousLaneBlockDurableRecord,
+                )>,
+            >::new();
+            let mut attempt_identities = BTreeSet::<(u64, u64)>::new();
+            let mut view_identities = BTreeSet::<(u64, u64)>::new();
+            let mut pointer_heights = BTreeSet::<u64>::new();
+            let mut route_pointer_present = false;
+            let mut inventory_files = 0_usize;
+            let mut inventory_bytes = 0_u64;
+            for directory_entry in directory_entries {
+                let directory_entry =
+                    directory_entry.map_err(|error| Error::IO(error, directory.clone()))?;
+                let path = directory_entry.path();
+                let name = directory_entry.file_name().into_string().map_err(|_| {
+                    Self::invalid_lane_artifact_error(
+                        path.clone(),
+                        "autonomous startup inventory contains a non-UTF-8 artifact",
+                    )
+                })?;
+                if name.starts_with(".kura-sidecar-") {
+                    continue;
+                }
+                let related = name.starts_with("autonomous_");
+                if !related {
+                    continue;
+                }
+                inventory_files = inventory_files.checked_add(1).ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        directory.clone(),
+                        "autonomous startup inventory count overflows",
+                    )
+                })?;
+                if inventory_files > MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES {
                     return Err(Self::invalid_lane_artifact_error(
-                        index_path,
-                        "autonomous route-latest pointer exists beside empty payload history",
+                        directory,
+                        "autonomous startup inventory exceeds its hard file-count limit",
                     ));
                 }
-                continue;
-            };
-            let mut latest: Option<AutonomousLaneBlockLatestAttemptV1> = None;
-            for lane_block_height in heights {
-                let Some(record) = self
-                    .read_current_autonomous_lane_block_record_self_context_locked(
-                        &entry,
-                        lane_block_height,
-                        &data_path,
-                        &index_path,
-                        false,
-                    )?
-                else {
+                let metadata = std::fs::symlink_metadata(&path)
+                    .map_err(|error| Error::IO(error, path.clone()))?;
+                if metadata.file_type().is_symlink()
+                    || !metadata.file_type().is_file()
+                    || !Self::sidecar_is_single_link(&metadata)
+                {
+                    return Err(Self::invalid_lane_artifact_error(
+                        path,
+                        "autonomous attempt inventory contains a non-regular, linked, or symlinked artifact",
+                    ));
+                }
+                inventory_bytes = inventory_bytes.checked_add(metadata.len()).ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        directory.clone(),
+                        "autonomous startup inventory byte count overflows",
+                    )
+                })?;
+                if inventory_bytes > AUTONOMOUS_LANE_ARTIFACT_AGGREGATE_BYTES as u64 {
+                    return Err(Self::invalid_lane_artifact_error(
+                        directory,
+                        "autonomous startup inventory exceeds the shared sidecar aggregate byte budget",
+                    ));
+                }
+                if let Some((lane_block_height, proposal_height)) =
+                    Self::autonomous_lane_block_attempt_coordinates(&name)
+                {
+                    let bytes = self
+                        .read_regular_sidecar_bytes(
+                            &path,
+                            &directory,
+                            MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES,
+                        )?
+                        .ok_or_else(|| {
+                            Self::invalid_lane_artifact_error(
+                                path.clone(),
+                                "autonomous attempt disappeared during startup reconstruction",
+                            )
+                        })?;
+                    let artifact = norito::decode_from_bytes::<AutonomousLaneBlockArtifact>(&bytes)
+                        .map_err(Error::NoritoFrame)?;
+                    if artifact.encode_framed().map_err(Error::NoritoFrame)? != bytes {
+                        return Err(Self::invalid_lane_artifact_error(
+                            path,
+                            "autonomous attempt is not canonical framed Norito",
+                        ));
+                    }
+                    let pointer = AutonomousLaneBlockLatestAttemptV1::from_payload(
+                        &artifact.executable_payload,
+                    );
+                    if pointer.lane_id != entry.lane_id
+                        || pointer.dataspace_id != entry.dataspace_id
+                        || pointer.lane_block_height != lane_block_height
+                        || pointer.proposal_height != proposal_height
+                    {
+                        return Err(Self::invalid_lane_artifact_error(
+                            path,
+                            "autonomous attempt identity does not match its versioned namespace",
+                        ));
+                    }
+                    let record = self
+                        .read_autonomous_lane_block_attempt_record_locked(
+                            &entry,
+                            pointer.lane_id,
+                            pointer.lane_block_height,
+                            pointer.proposal_height,
+                            pointer.chain_id_hash,
+                            pointer.epoch,
+                            true,
+                        )?
+                        .ok_or_else(|| {
+                            Self::invalid_lane_artifact_error(
+                                path.clone(),
+                                "autonomous attempt disappeared after bounded validation",
+                            )
+                        })?;
+                    let view_parent = record.view_state_path.parent().ok_or_else(|| {
+                        Self::invalid_lane_artifact_error(
+                            record.view_state_path.clone(),
+                            "autonomous attempt view path has no parent",
+                        )
+                    })?;
+                    if self
+                        .regular_sidecar_metadata(&record.view_state_path, view_parent)?
+                        .is_none()
+                    {
+                        if self
+                            .read_autonomous_lane_block_latest_attempt_locked(
+                                &entry,
+                                pointer.lane_block_height,
+                            )?
+                            .as_ref()
+                            == Some(&pointer)
+                            || self
+                                .read_autonomous_lane_route_latest_attempt_locked(&entry)?
+                                .as_ref()
+                                == Some(&pointer)
+                        {
+                            return Err(Self::invalid_lane_artifact_error(
+                                record.view_state_path,
+                                "autonomous attempt view disappeared after its exact latest pointer became durable",
+                            ));
+                        }
+                        for entrypoint_hash in &record.artifact.executable_payload.entrypoint_hashes
+                        {
+                            let claim_path = Self::autonomous_lane_entrypoint_claim_path(
+                                &self.store_root,
+                                &pointer.chain_id_hash,
+                                entrypoint_hash,
+                            );
+                            if !Self::autonomous_lane_entrypoint_claim_file_exists(&claim_path)? {
+                                continue;
+                            }
+                            let claim = Self::decode_autonomous_lane_entrypoint_claim(&claim_path)
+                                .map_err(|message| {
+                                    Self::invalid_lane_artifact_error(claim_path.clone(), message)
+                                })?;
+                            if !self
+                                .autonomous_lane_entrypoint_claim_path_matches(&claim, &claim_path)
+                                || !matches!(
+                                    claim.state,
+                                    AutonomousLaneEntrypointClaimStateV3::Released(_)
+                                )
+                                || claim.owns_payload(&record.artifact.executable_payload)
+                            {
+                                return Err(Self::invalid_lane_artifact_error(
+                                    record.view_state_path,
+                                    "autonomous attempt view is missing after exact claim ownership progressed",
+                                ));
+                            }
+                        }
+                        let state = AutonomousLaneBlockViewState::from_artifact(&record.artifact);
+                        self.write_autonomous_lane_block_view_state_record_locked(
+                            &record.artifact.executable_payload,
+                            &state,
+                            &record.view_state_path,
+                            pointer.chain_id_hash,
+                            pointer.epoch,
+                        )?;
+                    }
+                    attempt_identities.insert((lane_block_height, proposal_height));
+                    let attempts_at_height = attempts.entry(lane_block_height).or_default();
+                    attempts_at_height.push((pointer, record));
+                    if attempts_at_height.len() > self.roster_sidecar_retention.get() {
+                        return Err(Self::invalid_lane_artifact_error(
+                            path,
+                            "autonomous proposal-height attempts exceed the configured sidecar retention bound",
+                        ));
+                    }
                     continue;
-                };
-                let pointer = AutonomousLaneBlockLatestAttemptV1::from_payload(
-                    &record.artifact.executable_payload,
-                );
+                }
+                if let Some(identity) = Self::autonomous_two_height_coordinates(
+                    &name,
+                    AUTONOMOUS_LANE_BLOCK_ATTEMPT_VIEW_PREFIX,
+                ) {
+                    view_identities.insert(identity);
+                    continue;
+                }
+                if let Some(height) = Self::autonomous_one_height_coordinate(
+                    &name,
+                    AUTONOMOUS_LANE_BLOCK_LATEST_ATTEMPT_PREFIX,
+                ) {
+                    pointer_heights.insert(height);
+                    continue;
+                }
+                if name == AUTONOMOUS_LANE_ROUTE_LATEST_ATTEMPT_FILE {
+                    route_pointer_present = true;
+                    continue;
+                }
+                return Err(Self::invalid_lane_artifact_error(
+                    path,
+                    "unexpected or obsolete autonomous persistence artifact",
+                ));
+            }
+            if !view_identities.is_subset(&attempt_identities) {
+                return Err(Self::invalid_lane_artifact_error(
+                    directory,
+                    "autonomous view state exists without its exact immutable attempt",
+                ));
+            }
+            if pointer_heights
+                .iter()
+                .any(|height| !attempts.contains_key(height))
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    directory,
+                    "autonomous latest-attempt pointer exists without payload attempts at its lane height",
+                ));
+            }
+            if attempts.is_empty() && route_pointer_present {
+                return Err(Self::invalid_lane_artifact_error(
+                    Self::autonomous_lane_route_latest_attempt_path_for_entry(
+                        &entry,
+                        &self.store_root,
+                    ),
+                    "autonomous route-latest pointer exists without payload attempts",
+                ));
+            }
+            for attempts_at_height in attempts.values_mut() {
+                attempts_at_height.sort_by_key(|(pointer, _)| pointer.proposal_height);
+                for adjacent in attempts_at_height.windows(2) {
+                    let (previous_pointer, previous_record) = &adjacent[0];
+                    let (successor_pointer, successor_record) = &adjacent[1];
+                    let previous = &previous_record
+                        .artifact
+                        .executable_payload
+                        .origin_proposal
+                        .descriptor;
+                    let successor = &successor_record
+                        .artifact
+                        .executable_payload
+                        .origin_proposal
+                        .descriptor;
+                    if previous_record.retirement.is_none()
+                        || successor_pointer.proposal_height <= previous_pointer.proposal_height
+                        || successor.lane_id != previous.lane_id
+                        || successor.dataspace_id != previous.dataspace_id
+                        || successor.lane_incarnation != previous.lane_incarnation
+                        || successor.lane_block_height != previous.lane_block_height
+                        || successor.previous_lane_block_height
+                            != previous.previous_lane_block_height
+                        || successor.previous_lane_block_descriptor_hash
+                            != previous.previous_lane_block_descriptor_hash
+                        || successor_pointer.chain_id_hash != previous_pointer.chain_id_hash
+                        || successor_pointer.epoch < previous_pointer.epoch
+                    {
+                        return Err(Self::invalid_lane_artifact_error(
+                            Self::autonomous_lane_block_attempt_path_for_entry(
+                                &entry,
+                                &self.store_root,
+                                successor_pointer.lane_block_height,
+                                successor_pointer.proposal_height,
+                            ),
+                            "autonomous proposal-height attempts are not a retired, monotonic successor chain",
+                        ));
+                    }
+                }
+            }
+            if !temporary_paths.is_empty() {
+                if !Self::progress_mutation_namespace_unchanged(&namespace) {
+                    return Err(Self::invalid_lane_artifact_error(
+                        directory,
+                        "autonomous startup inventory directory changed before temporary cleanup",
+                    ));
+                }
+                let accounting_mutation = self.begin_total_disk_usage_mutation();
+                let mut removed_bytes = 0_u64;
+                for (path, expected_metadata) in &temporary_paths {
+                    let current = std::fs::symlink_metadata(path)
+                        .map_err(|error| Error::IO(error, path.clone()))?;
+                    if !Self::sidecar_file_metadata_unchanged(expected_metadata, &current) {
+                        return Err(Self::invalid_lane_artifact_error(
+                            path.clone(),
+                            "autonomous startup temporary changed after bounded preflight",
+                        ));
+                    }
+                    removed_bytes = removed_bytes.checked_add(current.len()).ok_or_else(|| {
+                        Self::invalid_lane_artifact_error(
+                            directory.clone(),
+                            "autonomous startup temporary byte count overflows",
+                        )
+                    })?;
+                    Self::remove_bound_progress_temp_if_present(&namespace, path)
+                        .map_err(|error| Error::IO(error, path.clone()))?;
+                }
+                if !Self::sync_bound_progress_mutation_directories(
+                    &namespace,
+                    "autonomous startup temporary cleanup",
+                ) {
+                    return Err(Self::invalid_lane_artifact_error(
+                        directory,
+                        "autonomous startup temporary cleanup lost its bound directory",
+                    ));
+                }
+                for directory_entry in std::fs::read_dir(&directory)
+                    .map_err(|error| Error::IO(error, directory.clone()))?
+                {
+                    let directory_entry =
+                        directory_entry.map_err(|error| Error::IO(error, directory.clone()))?;
+                    if directory_entry
+                        .file_name()
+                        .to_str()
+                        .is_some_and(|name| name.starts_with(".kura-sidecar-"))
+                    {
+                        return Err(Self::invalid_lane_artifact_error(
+                            directory_entry.path(),
+                            "autonomous startup temporary cleanup left crash residue",
+                        ));
+                    }
+                }
+                self.sub_disk_usage_bytes(removed_bytes);
+                accounting_mutation.finish();
+            }
+            if attempts.is_empty() {
+                continue;
+            }
+            let mut latest: Option<AutonomousLaneBlockLatestAttemptV1> = None;
+            for (lane_block_height, attempts_at_height) in &mut attempts {
+                attempts_at_height.sort_by_key(|(pointer, _)| pointer.proposal_height);
+                for adjacent in attempts_at_height.windows(2) {
+                    let (previous_pointer, previous_record) = &adjacent[0];
+                    let (successor_pointer, successor_record) = &adjacent[1];
+                    let previous = &previous_record
+                        .artifact
+                        .executable_payload
+                        .origin_proposal
+                        .descriptor;
+                    let successor = &successor_record
+                        .artifact
+                        .executable_payload
+                        .origin_proposal
+                        .descriptor;
+                    if previous_record.retirement.is_none()
+                        || successor_pointer.proposal_height <= previous_pointer.proposal_height
+                        || successor.lane_id != previous.lane_id
+                        || successor.dataspace_id != previous.dataspace_id
+                        || successor.lane_incarnation != previous.lane_incarnation
+                        || successor.lane_block_height != previous.lane_block_height
+                        || successor.previous_lane_block_height
+                            != previous.previous_lane_block_height
+                        || successor.previous_lane_block_descriptor_hash
+                            != previous.previous_lane_block_descriptor_hash
+                        || successor_pointer.chain_id_hash != previous_pointer.chain_id_hash
+                        || successor_pointer.epoch < previous_pointer.epoch
+                    {
+                        return Err(Self::invalid_lane_artifact_error(
+                            Self::autonomous_lane_block_attempt_path_for_entry(
+                                &entry,
+                                &self.store_root,
+                                successor_pointer.lane_block_height,
+                                successor_pointer.proposal_height,
+                            ),
+                            "autonomous proposal-height attempts are not a retired, monotonic successor chain",
+                        ));
+                    }
+                }
+                let pointer = attempts_at_height
+                    .last()
+                    .map(|(pointer, _)| pointer.clone())
+                    .expect("non-empty attempt group");
+                self.publish_autonomous_lane_block_latest_attempt_locked(&entry, &pointer)?;
                 if let Some(current) = latest.as_ref()
                     && (pointer.chain_id_hash != current.chain_id_hash
                         || pointer.lane_id != current.lane_id
@@ -28763,8 +32943,12 @@ impl Kura {
                         || pointer.epoch < current.epoch)
                 {
                     return Err(Self::invalid_lane_artifact_error(
-                        data_path,
-                        "autonomous payload history regresses its active route or global context",
+                        Self::autonomous_lane_block_latest_attempt_path_for_entry(
+                            &entry,
+                            &self.store_root,
+                            *lane_block_height,
+                        ),
+                        "autonomous attempt namespace regresses its active route or global context",
                     ));
                 }
                 if latest.as_ref().is_none_or(|current| {
@@ -28774,9 +32958,7 @@ impl Kura {
                     latest = Some(pointer);
                 }
             }
-            let Some(latest) = latest else {
-                continue;
-            };
+            let latest = latest.expect("non-empty autonomous attempt inventory");
             let frontier_path =
                 Self::lane_merge_application_frontier_path_for_entry(&entry, &self.store_root);
             if self
@@ -28790,6 +32972,7 @@ impl Kura {
             }
             self.publish_autonomous_lane_route_latest_attempt_locked(&entry, &latest)?;
         }
+        self.reconcile_autonomous_lane_entrypoint_claim_temps_on_startup_locked()?;
         Ok(())
     }
 
@@ -28863,7 +33046,10 @@ impl Kura {
                 self.publish_lane_merge_application_frontier_locked(&entry, &receipt)?
             };
             if let Some(frontier) = frontier {
-                self.compact_lane_histories_through_merge_frontier_locked(&entry, &frontier)?;
+                while !self
+                    .compact_lane_histories_through_merge_frontier_locked(&entry, &frontier)?
+                {
+                }
             }
         }
         Ok(())
@@ -28901,8 +33087,6 @@ impl Kura {
             .collect::<Vec<_>>();
         let mut recovered = Vec::new();
         for (lane_id, entry) in entries {
-            let (data_path, index_path) =
-                Self::autonomous_lane_block_paths_for_entry(&entry, &self.store_root);
             let candidate = {
                 let _guard = self.sidecar_lock.lock();
                 if self.prune_recovery_is_required() {
@@ -28922,13 +33106,11 @@ impl Kura {
                 if self.prune_recovery_is_required() {
                     return Err(Error::PruneRecoveryRequired);
                 }
-                self.read_autonomous_lane_block_attempt_record_from_paths_locked(
+                self.read_autonomous_lane_block_attempt_record_locked(
                     &entry,
                     lane_id,
                     pointer.lane_block_height,
                     pointer.proposal_height,
-                    &data_path,
-                    &index_path,
                     expected_chain_id_hash,
                     expected_epoch,
                     false,
@@ -28982,24 +33164,19 @@ impl Kura {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn read_autonomous_lane_block_artifact_from_paths_locked(
+    fn read_autonomous_lane_block_artifact_locked(
         &self,
         entry: &LaneConfigEntry,
         lane_id: LaneId,
         lane_block_height: u64,
-        data_path: &Path,
-        index_path: &Path,
         expected_chain_id_hash: Hash,
         expected_epoch: u64,
         recover: bool,
     ) -> Option<AutonomousLaneBlockArtifact> {
-        match self.read_autonomous_lane_block_record_from_paths_locked(
+        match self.read_autonomous_lane_block_record_locked(
             entry,
             lane_id,
             lane_block_height,
-            data_path,
-            index_path,
             expected_chain_id_hash,
             expected_epoch,
             recover,
@@ -29026,14 +33203,11 @@ impl Kura {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn read_autonomous_lane_block_record_from_paths_locked(
+    fn read_autonomous_lane_block_record_locked(
         &self,
         entry: &LaneConfigEntry,
         lane_id: LaneId,
         lane_block_height: u64,
-        data_path: &Path,
-        index_path: &Path,
         expected_chain_id_hash: Hash,
         expected_epoch: u64,
         recover: bool,
@@ -29043,7 +33217,11 @@ impl Kura {
         {
             if pointer.lane_id != lane_id {
                 return Err(Self::invalid_lane_artifact_error(
-                    data_path.to_path_buf(),
+                    Self::autonomous_lane_block_latest_attempt_path_for_entry(
+                        entry,
+                        &self.store_root,
+                        lane_block_height,
+                    ),
                     "autonomous lane latest attempt belongs to a different lane",
                 ));
             }
@@ -29057,104 +33235,16 @@ impl Kura {
                 )
                 .map(Some);
         }
-        self.read_legacy_autonomous_lane_block_record_from_paths_locked(
-            entry,
-            lane_id,
-            lane_block_height,
-            data_path,
-            index_path,
-            expected_chain_id_hash,
-            expected_epoch,
-            recover,
-        )
+        Ok(None)
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn read_legacy_autonomous_lane_block_record_from_paths_locked(
-        &self,
-        entry: &LaneConfigEntry,
-        lane_id: LaneId,
-        lane_block_height: u64,
-        data_path: &Path,
-        index_path: &Path,
-        expected_chain_id_hash: Hash,
-        expected_epoch: u64,
-        recover: bool,
-    ) -> Result<Option<AutonomousLaneBlockDurableRecord>> {
-        let Some(mut artifact) = Self::read_indexed_sidecar_from_paths_with_recovery(
-            lane_block_height,
-            data_path,
-            index_path,
-            norito::decode_from_bytes::<AutonomousLaneBlockArtifact>,
-            AutonomousLaneBlockArtifact::FORMAT_LABEL,
-            recover,
-        ) else {
-            return Ok(None);
-        };
-        let descriptor = &artifact.executable_payload.origin_proposal.descriptor;
-        if descriptor.lane_id != lane_id
-            || descriptor.dataspace_id != entry.dataspace_id
-            || descriptor.lane_block_height != lane_block_height
-        {
-            return Err(Self::invalid_lane_artifact_error(
-                data_path.to_path_buf(),
-                "autonomous lane block identity does not match its indexed lane-height slot",
-            ));
-        }
-        let (active_incarnation, activation_height) = self.active_lane_incarnation_marker(entry)?;
-        if descriptor.lane_incarnation != active_incarnation
-            || descriptor.proposal_height <= activation_height
-        {
-            // The active geometry marker is the authority for a reused
-            // lane-height slot. A structurally valid legacy payload from a
-            // retired incarnation is absent from the active view so the
-            // recreated lane can publish into that indexed slot.
-            return Ok(None);
-        }
-        let parent = data_path.parent().ok_or_else(|| {
-            Self::invalid_lane_artifact_error(
-                data_path.to_path_buf(),
-                "autonomous lane block data path has no parent",
-            )
-        })?;
-        let view_state_path = parent.join(format!(
-            "{AUTONOMOUS_LANE_BLOCK_VIEW_STATE_PREFIX}_{lane_block_height:020}.norito"
-        ));
-        let retirement = match self.read_autonomous_lane_block_view_state_locked(
-            &artifact.executable_payload,
-            &view_state_path,
-            recover,
-        )? {
-            Some(state) => {
-                artifact.availability_certificate = state.availability_certificate;
-                artifact.view_checkpoint = state.checkpoint;
-                artifact.new_view_certificates = state.certificates;
-                state.retirement
-            }
-            None => None,
-        };
-        Self::validate_autonomous_lane_block_artifact(
-            &artifact,
-            expected_chain_id_hash,
-            expected_epoch,
-        )
-        .map_err(|message| Self::invalid_lane_artifact_error(data_path.to_path_buf(), message))?;
-        Ok(Some(AutonomousLaneBlockDurableRecord {
-            artifact,
-            retirement,
-            view_state_path,
-        }))
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn read_autonomous_lane_block_attempt_record_from_paths_locked(
+    fn read_autonomous_lane_block_attempt_record_locked(
         &self,
         entry: &LaneConfigEntry,
         lane_id: LaneId,
         lane_block_height: u64,
         proposal_height: u64,
-        data_path: &Path,
-        index_path: &Path,
         expected_chain_id_hash: Hash,
         expected_epoch: u64,
         recover: bool,
@@ -29216,36 +33306,13 @@ impl Kura {
                 )
                 .map(Some);
         }
-        let legacy = self.read_legacy_autonomous_lane_block_record_from_paths_locked(
-            entry,
-            lane_id,
-            lane_block_height,
-            data_path,
-            index_path,
-            expected_chain_id_hash,
-            expected_epoch,
-            recover,
-        )?;
-        if legacy.as_ref().is_some_and(|record| {
-            record
-                .artifact
-                .executable_payload
-                .origin_proposal
-                .descriptor
-                .proposal_height
-                != proposal_height
-        }) {
-            return Ok(None);
-        }
-        Ok(legacy)
+        Ok(None)
     }
 
     fn read_current_autonomous_lane_block_record_self_context_locked(
         &self,
         entry: &LaneConfigEntry,
         lane_block_height: u64,
-        data_path: &Path,
-        index_path: &Path,
         recover: bool,
     ) -> Result<Option<AutonomousLaneBlockDurableRecord>> {
         if let Some(pointer) =
@@ -29261,69 +33328,7 @@ impl Kura {
                 )
                 .map(Some);
         }
-        let Some(artifact) = Self::read_indexed_sidecar_from_paths_with_recovery(
-            lane_block_height,
-            data_path,
-            index_path,
-            norito::decode_from_bytes::<AutonomousLaneBlockArtifact>,
-            AutonomousLaneBlockArtifact::FORMAT_LABEL,
-            recover,
-        ) else {
-            return Ok(None);
-        };
-        self.read_legacy_autonomous_lane_block_record_from_paths_locked(
-            entry,
-            entry.lane_id,
-            lane_block_height,
-            data_path,
-            index_path,
-            artifact.executable_payload.chain_id_hash,
-            artifact.executable_payload.epoch,
-            recover,
-        )
-    }
-
-    fn write_autonomous_lane_block_artifact_locked(
-        &self,
-        artifact: &AutonomousLaneBlockArtifact,
-        data_path: &Path,
-        index_path: &Path,
-        expected_chain_id_hash: Hash,
-        expected_epoch: u64,
-    ) -> Result<()> {
-        self.durable_mutation_authorized()?;
-        let current = Self::validate_autonomous_lane_block_artifact(
-            artifact,
-            expected_chain_id_hash,
-            expected_epoch,
-        )
-        .map_err(|message| Self::invalid_lane_artifact_error(data_path.to_path_buf(), message))?;
-        let lane_block_height = current.descriptor.lane_block_height;
-        let before_bytes = Self::sidecar_tracked_bytes(data_path, index_path, None).ok();
-        let payload = artifact.encode_framed()?;
-        let accounting_mutation = self.begin_total_disk_usage_mutation();
-        if !Self::append_indexed_sidecar(
-            data_path,
-            index_path,
-            lane_block_height,
-            &payload,
-            AutonomousLaneBlockArtifact::FORMAT_LABEL,
-            self.sidecar_fsync_mode(),
-            None,
-            SidecarIndexOrigin::FirstWrite,
-        ) {
-            return Err(Error::IO(
-                std::io::Error::other("failed to persist autonomous lane block"),
-                data_path.to_path_buf(),
-            ));
-        }
-        if let Some(before_bytes) = before_bytes
-            && let Ok(after_bytes) = Self::sidecar_tracked_bytes(data_path, index_path, None)
-        {
-            self.update_disk_usage_delta(before_bytes, after_bytes);
-            accounting_mutation.finish();
-        }
-        Ok(())
+        Ok(None)
     }
 
     fn recover_lane_block_execution_input_source(
@@ -30312,8 +34317,8 @@ impl Kura {
 
     /// Persist QC-authenticated Native AMX participant manifests and receipts.
     ///
-    /// The distinct manifest data/index pairs are published for every route
-    /// before any receipt/latest-index pair. This operation never executes a
+    /// Each route's standalone manifest is published before its standalone
+    /// receipt and the derived latest pointer. This operation never executes a
     /// transaction and is idempotent at every artifact boundary.
     pub(crate) fn persist_native_amx_participant_application_evidence(
         &self,
@@ -30457,107 +34462,42 @@ impl Kura {
             leaf.lane_incarnation,
             leaf.application_block_height,
         )?;
-        let (data_path, index_path) =
-            Self::native_amx_application_manifest_paths_for_entry(&entry, &self.store_root);
-        let Some(dir) = data_path.parent().map(Path::to_path_buf) else {
-            return Err(Self::invalid_lane_artifact_error(
-                data_path,
-                "Native AMX participant manifest path has no parent directory",
-            ));
-        };
+        let dir = Self::lane_artifact_dir(&entry.blocks_dir(&self.store_root));
         std::fs::create_dir_all(&dir).map_err(|error| Error::MkDir(error, dir.clone()))?;
         let _sidecar_guard = self.sidecar_lock.lock();
+        let namespace = self.native_amx_evidence_namespace_for_entry(&entry)?;
         let accounting_mutation = self.begin_total_disk_usage_mutation();
-        let before_bytes = Self::sidecar_tracked_bytes(&data_path, &index_path, None).ok();
-        if let Some(existing) = self
-            .read_native_amx_participant_application_manifest_from_paths_locked(
-                &entry,
-                leaf.participant_height,
-                &data_path,
-                &index_path,
-                true,
-            )
-        {
-            if existing == *artifact {
-                if !Self::prune_indexed_sidecars_to_retention_window(
-                    &data_path,
-                    &index_path,
-                    self.native_amx_participant_evidence_retention(),
-                    NativeAmxParticipantApplicationManifestArtifactV1::FORMAT_LABEL,
-                ) {
-                    return Err(Error::IO(
-                        std::io::Error::other(
-                            "failed to compact existing Native AMX participant application manifest retention window",
-                        ),
-                        data_path,
-                    ));
-                }
-                if let Some(before_bytes) = before_bytes
-                    && let Ok(after_bytes) =
-                        Self::sidecar_tracked_bytes(&data_path, &index_path, None)
-                {
-                    self.update_disk_usage_delta(before_bytes, after_bytes);
-                    accounting_mutation.finish();
-                }
-                return Ok(());
-            }
-            return Err(Self::invalid_lane_artifact_error(
-                data_path,
-                format!(
-                    "Native AMX participant manifest already has different evidence for lane {} dataspace {} incarnation {} height {}",
-                    leaf.lane_id.as_u32(),
-                    leaf.dataspace_id.as_u64(),
-                    leaf.lane_incarnation,
-                    leaf.participant_height,
-                ),
-            ));
-        }
+        let before_bytes = self.native_amx_evidence_tracked_bytes_locked(&namespace)?;
+        self.complete_native_amx_evidence_prune_intent_locked(&entry, &namespace)?;
+        self.recover_native_amx_evidence_publication_temp_locked(&entry, &namespace)?;
+        self.discard_native_amx_latest_index_temp_locked(&namespace)?;
         let payload = artifact.encode_framed()?;
         if u64::try_from(payload.len()).map_or(true, |len| len > STRICT_INIT_MAX_BLOCK_BYTES) {
             return Err(Self::invalid_lane_artifact_error(
-                data_path,
-                "Native AMX participant manifest exceeds the strict indexed-sidecar payload budget",
+                Self::native_amx_application_manifest_path_for_entry(
+                    &entry,
+                    &self.store_root,
+                    leaf.participant_height,
+                ),
+                "Native AMX participant manifest exceeds the standalone payload budget",
             ));
         }
-        // Native evidence is a publication barrier, not a best-effort pipeline
-        // sidecar: the later receipt/latest pointer and WSV frontier may only
-        // become visible after this exact manifest pair is durable.
-        if !Self::append_indexed_sidecar(
-            &data_path,
-            &index_path,
+        self.publish_native_amx_evidence_file_locked(
+            &entry,
+            &namespace,
+            NativeAmxEvidenceKind::Manifest,
             leaf.participant_height,
             &payload,
-            NativeAmxParticipantApplicationManifestArtifactV1::FORMAT_LABEL,
-            FsyncMode::Always,
-            None,
-            SidecarIndexOrigin::FirstWrite,
-        ) {
-            return Err(Error::IO(
-                std::io::Error::other(
-                    "failed to persist Native AMX participant application manifest",
-                ),
-                data_path,
+        )?;
+        if !Self::progress_mutation_namespace_unchanged(&namespace) {
+            return Err(Self::invalid_lane_artifact_error(
+                dir,
+                "Native AMX manifest directory changed during durable publication",
             ));
         }
-        if !Self::prune_indexed_sidecars_to_retention_window(
-            &data_path,
-            &index_path,
-            self.native_amx_participant_evidence_retention(),
-            NativeAmxParticipantApplicationManifestArtifactV1::FORMAT_LABEL,
-        ) {
-            return Err(Error::IO(
-                std::io::Error::other(
-                    "failed to compact Native AMX participant application manifest retention window",
-                ),
-                data_path,
-            ));
-        }
-        if let Some(before_bytes) = before_bytes
-            && let Ok(after_bytes) = Self::sidecar_tracked_bytes(&data_path, &index_path, None)
-        {
-            self.update_disk_usage_delta(before_bytes, after_bytes);
-            accounting_mutation.finish();
-        }
+        let after_bytes = self.native_amx_evidence_tracked_bytes_locked(&namespace)?;
+        self.update_disk_usage_delta(before_bytes, after_bytes);
+        accounting_mutation.finish();
         Ok(())
     }
 
@@ -30565,73 +34505,31 @@ impl Kura {
         &self,
         entry: &LaneConfigEntry,
         lane_block_height: u64,
-        data_path: &Path,
-        index_path: &Path,
-        recover: bool,
+        path: &Path,
+        namespace: &BoundProgressNamespace,
     ) -> Option<NativeAmxParticipantApplicationManifestArtifactV1> {
-        Self::read_indexed_sidecar_from_paths_with_recovery(
-            lane_block_height,
-            data_path,
-            index_path,
-            norito::decode_from_bytes::<NativeAmxParticipantApplicationManifestArtifactV1>,
-            NativeAmxParticipantApplicationManifestArtifactV1::FORMAT_LABEL,
-            recover,
-        )
-        .and_then(|artifact| {
-            let leaf = &artifact.leaf;
-            if leaf.lane_id != entry.lane_id
-                || leaf.dataspace_id != entry.dataspace_id
-                || leaf.participant_height != lane_block_height
-                || self
-                    .require_active_lane_incarnation(
-                        entry,
-                        leaf.lane_incarnation,
-                        leaf.application_block_height,
-                    )
-                    .is_err()
-                || Self::validate_native_amx_participant_application_manifest_artifact(&artifact)
-                    .is_err()
-            {
+        let directory = path.parent()?;
+        let metadata =
+            Self::regular_sidecar_metadata_for(&self.store_root, path, directory).ok()??;
+        let file = NativeAmxEvidenceFile {
+            kind: NativeAmxEvidenceKind::Manifest,
+            participant_height: lane_block_height,
+            path: path.to_path_buf(),
+            metadata,
+        };
+        match self.decode_native_amx_manifest_file_locked(entry, namespace, &file) {
+            Ok(artifact) => Some(artifact),
+            Err(error) => {
                 iroha_logger::warn!(
+                    ?error,
                     lane = %entry.lane_id.as_u32(),
                     dataspace = entry.dataspace_id.as_u64(),
                     lane_block_height,
-                    "Native AMX participant manifest identity, marker, or proof mismatch"
+                    "Native AMX participant manifest identity, marker, proof, or file mismatch"
                 );
-                return None;
+                None
             }
-            Some(artifact)
-        })
-    }
-
-    fn read_native_amx_participant_application_manifest_from_bound_locked(
-        &self,
-        lane_id: LaneId,
-        lane_block_height: u64,
-        bound: &mut BoundProgressSidecar,
-    ) -> Option<NativeAmxParticipantApplicationManifestArtifactV1> {
-        let artifact = Self::read_indexed_sidecar_from_open_files(
-            lane_block_height,
-            &mut bound.data,
-            &mut bound.index,
-            &bound.namespace.data_path,
-            &bound.namespace.index_path,
-            norito::decode_from_bytes::<NativeAmxParticipantApplicationManifestArtifactV1>,
-            NativeAmxParticipantApplicationManifestArtifactV1::FORMAT_LABEL,
-        )?;
-        if artifact.leaf.lane_id != lane_id
-            || artifact.leaf.participant_height != lane_block_height
-            || Self::validate_native_amx_participant_application_manifest_artifact(&artifact)
-                .is_err()
-        {
-            iroha_logger::warn!(
-                lane = %lane_id.as_u32(),
-                lane_block_height,
-                "durability-attested Native AMX participant manifest identity or proof mismatch"
-            );
-            return None;
         }
-        Some(artifact)
     }
 
     fn native_amx_participant_application_receipt_matches_available_evidence_under_prune_guard(
@@ -30650,16 +34548,21 @@ impl Kura {
         if entry.dataspace_id != descriptor.dataspace_id {
             return false;
         }
-        let (data_path, index_path) =
-            Self::native_amx_application_manifest_paths_for_entry(&entry, &self.store_root);
         let _sidecar_guard = self.sidecar_lock.lock();
+        let Ok(namespace) = self.native_amx_evidence_namespace_for_entry(&entry) else {
+            return false;
+        };
+        let path = Self::native_amx_application_manifest_path_for_entry(
+            &entry,
+            &self.store_root,
+            descriptor.lane_block_height,
+        );
         let Some(manifest_artifact) = self
             .read_native_amx_participant_application_manifest_from_paths_locked(
                 &entry,
                 descriptor.lane_block_height,
-                &data_path,
-                &index_path,
-                true,
+                &path,
+                &namespace,
             )
         else {
             return false;
@@ -30793,124 +34696,83 @@ impl Kura {
         let _geometry_guard = self.lane_geometry_lock.lock();
         let entry = self.lane_storage_entry(lane_id)?;
         self.require_active_lane_artifact(&entry, descriptor)?;
-        let (data_path, index_path) =
-            Self::native_amx_participant_receipt_paths_for_entry(&entry, &self.store_root);
         let latest_index_path = Self::native_amx_participant_receipt_latest_index_path_for_entry(
             &entry,
             &self.store_root,
         );
-        let Some(dir) = data_path.parent().map(Path::to_path_buf) else {
-            return Err(Self::invalid_lane_artifact_error(
-                data_path,
-                "Native AMX participant receipt path has no parent directory",
-            ));
-        };
+        let dir = Self::lane_artifact_dir(&entry.blocks_dir(&self.store_root));
         std::fs::create_dir_all(&dir).map_err(|err| Error::MkDir(err, dir.clone()))?;
         let _guard = self.sidecar_lock.lock();
+        let namespace = self.native_amx_evidence_namespace_for_entry(&entry)?;
         let accounting_mutation = self.begin_total_disk_usage_mutation();
-        let before_bytes =
-            Self::sidecar_tracked_bytes(&data_path, &index_path, Some(&latest_index_path)).ok();
-        if let Some(existing) = self
-            .read_native_amx_participant_application_receipt_from_paths_locked(
+        let before_bytes = self.native_amx_evidence_tracked_bytes_locked(&namespace)?;
+        self.complete_native_amx_evidence_prune_intent_locked(&entry, &namespace)?;
+        self.recover_native_amx_evidence_publication_temp_locked(&entry, &namespace)?;
+        self.discard_native_amx_latest_index_temp_locked(&namespace)?;
+        let manifest_path = Self::native_amx_application_manifest_path_for_entry(
+            &entry,
+            &self.store_root,
+            lane_block_height,
+        );
+        let durable_manifest = self
+            .read_native_amx_participant_application_manifest_from_paths_locked(
                 &entry,
                 lane_block_height,
-                &data_path,
-                &index_path,
-                true,
+                &manifest_path,
+                &namespace,
             )
-        {
-            if existing == *artifact {
-                if !Self::prune_indexed_sidecars_to_retention_window(
-                    &data_path,
-                    &index_path,
-                    self.native_amx_participant_evidence_retention(),
-                    NativeAmxParticipantApplicationReceiptArtifact::FORMAT_LABEL,
-                ) {
-                    return Err(Error::IO(
-                        std::io::Error::other(
-                            "failed to compact existing Native AMX participant receipt retention window",
-                        ),
-                        data_path,
-                    ));
-                }
-                self.persist_native_amx_participant_receipt_latest_index_locked(
-                    &entry,
-                    artifact,
-                    &latest_index_path,
-                )?;
-                if let Some(before_bytes) = before_bytes
-                    && let Ok(after_bytes) = Self::sidecar_tracked_bytes(
-                        &data_path,
-                        &index_path,
-                        Some(&latest_index_path),
-                    )
-                {
-                    self.update_disk_usage_delta(before_bytes, after_bytes);
-                    accounting_mutation.finish();
-                }
-                return Ok(());
-            }
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    manifest_path.clone(),
+                    "Native AMX receipt publication requires its exact durable manifest",
+                )
+            })?;
+        if durable_manifest != *manifest_artifact {
             return Err(Self::invalid_lane_artifact_error(
-                data_path,
-                format!(
-                    "Native AMX participant receipt already has different evidence for lane {} dataspace {} incarnation {} height {}",
-                    lane_id.as_u32(),
-                    descriptor.dataspace_id.as_u64(),
-                    descriptor.lane_incarnation,
-                    lane_block_height,
-                ),
+                manifest_path,
+                "Native AMX receipt publication manifest differs from durable evidence",
             ));
         }
         let payload = artifact.encode_framed()?;
         if u64::try_from(payload.len()).map_or(true, |len| len > STRICT_INIT_MAX_BLOCK_BYTES) {
             return Err(Self::invalid_lane_artifact_error(
-                data_path,
-                "Native AMX participant receipt exceeds the strict indexed-sidecar payload budget",
+                Self::native_amx_participant_receipt_path_for_entry(
+                    &entry,
+                    &self.store_root,
+                    lane_block_height,
+                ),
+                "Native AMX participant receipt exceeds the standalone payload budget",
             ));
         }
-        // The latest pointer is synchronously replaced below. Force the
-        // authoritative receipt pair to disk first even when ordinary Kura
-        // sidecars use the default batched fsync policy.
-        if !Self::append_indexed_sidecar(
-            &data_path,
-            &index_path,
+        self.publish_native_amx_evidence_file_locked(
+            &entry,
+            &namespace,
+            NativeAmxEvidenceKind::Receipt,
             lane_block_height,
             &payload,
-            NativeAmxParticipantApplicationReceiptArtifact::FORMAT_LABEL,
-            FsyncMode::Always,
-            None,
-            SidecarIndexOrigin::FirstWrite,
-        ) {
-            return Err(Error::IO(
-                std::io::Error::other("failed to persist Native AMX participant receipt"),
-                data_path,
-            ));
-        }
-        if !Self::prune_indexed_sidecars_to_retention_window(
-            &data_path,
-            &index_path,
-            self.native_amx_participant_evidence_retention(),
-            NativeAmxParticipantApplicationReceiptArtifact::FORMAT_LABEL,
-        ) {
-            return Err(Error::IO(
-                std::io::Error::other(
-                    "failed to compact Native AMX participant receipt retention window",
-                ),
-                data_path,
+        )?;
+        if !Self::progress_mutation_namespace_unchanged(&namespace) {
+            return Err(Self::invalid_lane_artifact_error(
+                dir,
+                "Native AMX receipt directory changed during durable publication",
             ));
         }
         self.persist_native_amx_participant_receipt_latest_index_locked(
             &entry,
             artifact,
             &latest_index_path,
+            &namespace,
         )?;
-        if let Some(before_bytes) = before_bytes
-            && let Ok(after_bytes) =
-                Self::sidecar_tracked_bytes(&data_path, &index_path, Some(&latest_index_path))
-        {
-            self.update_disk_usage_delta(before_bytes, after_bytes);
-            accounting_mutation.finish();
+        if !Self::progress_mutation_namespace_unchanged(&namespace) {
+            return Err(Self::invalid_lane_artifact_error(
+                latest_index_path,
+                "Native AMX receipt namespace changed during latest-index publication",
+            ));
         }
+        self.prune_native_amx_evidence_pairs_locked(&entry, &namespace)?;
+        let after_bytes = self.native_amx_evidence_tracked_bytes_locked(&namespace)?;
+        self.update_disk_usage_delta(before_bytes, after_bytes);
+        accounting_mutation.finish();
         Ok(())
     }
 
@@ -30918,70 +34780,31 @@ impl Kura {
         &self,
         entry: &LaneConfigEntry,
         lane_block_height: u64,
-        data_path: &Path,
-        index_path: &Path,
-        recover: bool,
+        path: &Path,
+        namespace: &BoundProgressNamespace,
     ) -> Option<NativeAmxParticipantApplicationReceiptArtifact> {
-        Self::read_indexed_sidecar_from_paths_with_recovery(
-            lane_block_height,
-            data_path,
-            index_path,
-            norito::decode_from_bytes::<NativeAmxParticipantApplicationReceiptArtifact>,
-            NativeAmxParticipantApplicationReceiptArtifact::FORMAT_LABEL,
-            recover,
-        )
-        .and_then(|artifact| {
-            let descriptor = &artifact.participant_proposal.descriptor;
-            if descriptor.lane_id != entry.lane_id
-                || descriptor.dataspace_id != entry.dataspace_id
-                || descriptor.lane_block_height != lane_block_height
-                || self
-                    .require_active_lane_artifact(entry, descriptor)
-                    .is_err()
-                || Self::validate_native_amx_participant_application_receipt_artifact(&artifact)
-                    .is_err()
-            {
+        let directory = path.parent()?;
+        let metadata =
+            Self::regular_sidecar_metadata_for(&self.store_root, path, directory).ok()??;
+        let file = NativeAmxEvidenceFile {
+            kind: NativeAmxEvidenceKind::Receipt,
+            participant_height: lane_block_height,
+            path: path.to_path_buf(),
+            metadata,
+        };
+        match self.decode_native_amx_receipt_file_locked(entry, namespace, &file) {
+            Ok(artifact) => Some(artifact),
+            Err(error) => {
                 iroha_logger::warn!(
+                    ?error,
                     lane = %entry.lane_id.as_u32(),
                     dataspace = entry.dataspace_id.as_u64(),
                     lane_block_height,
-                    "Native AMX participant receipt identity, marker, or structure mismatch"
+                    "Native AMX participant receipt identity, marker, structure, or file mismatch"
                 );
-                return None;
+                None
             }
-            Some(artifact)
-        })
-    }
-
-    fn read_native_amx_participant_application_receipt_from_bound_locked(
-        &self,
-        lane_id: LaneId,
-        lane_block_height: u64,
-        bound: &mut BoundProgressSidecar,
-    ) -> Option<NativeAmxParticipantApplicationReceiptArtifact> {
-        let artifact = Self::read_indexed_sidecar_from_open_files(
-            lane_block_height,
-            &mut bound.data,
-            &mut bound.index,
-            &bound.namespace.data_path,
-            &bound.namespace.index_path,
-            norito::decode_from_bytes::<NativeAmxParticipantApplicationReceiptArtifact>,
-            NativeAmxParticipantApplicationReceiptArtifact::FORMAT_LABEL,
-        )?;
-        let descriptor = &artifact.participant_proposal.descriptor;
-        if descriptor.lane_id != lane_id
-            || descriptor.lane_block_height != lane_block_height
-            || Self::validate_native_amx_participant_application_receipt_artifact(&artifact)
-                .is_err()
-        {
-            iroha_logger::warn!(
-                lane = %lane_id.as_u32(),
-                lane_block_height,
-                "durability-attested Native AMX participant receipt identity or structure mismatch"
-            );
-            return None;
         }
-        Some(artifact)
     }
 
     /// Read structurally valid durable participant-control evidence at an exact route height.
@@ -31008,30 +34831,27 @@ impl Kura {
         if entry.dataspace_id != dataspace_id {
             return None;
         }
-        let (data_path, index_path) =
-            Self::native_amx_participant_receipt_paths_for_entry(&entry, &self.store_root);
         let _guard = self.sidecar_lock.lock();
         if self.prune_recovery_is_required() {
             return None;
         }
-        let artifact = Self::read_indexed_sidecar_from_paths_with_recovery(
+        let namespace = self.native_amx_evidence_namespace_for_entry(&entry).ok()?;
+        let path = Self::native_amx_participant_receipt_path_for_entry(
+            &entry,
+            &self.store_root,
             lane_block_height,
-            &data_path,
-            &index_path,
-            norito::decode_from_bytes::<NativeAmxParticipantApplicationReceiptArtifact>,
-            NativeAmxParticipantApplicationReceiptArtifact::FORMAT_LABEL,
-            false,
-        )?;
-        if Self::validate_native_amx_participant_application_receipt_artifact(&artifact).is_err() {
-            iroha_logger::warn!(
-                lane = %lane_id.as_u32(),
-                dataspace = dataspace_id.as_u64(),
-                lane_block_height,
-                "structural Native AMX participant receipt shape mismatch"
-            );
-            return None;
-        }
-        Some(artifact)
+        );
+        let directory = path.parent()?;
+        let metadata =
+            Self::regular_sidecar_metadata_for(&self.store_root, &path, directory).ok()??;
+        let file = NativeAmxEvidenceFile {
+            kind: NativeAmxEvidenceKind::Receipt,
+            participant_height: lane_block_height,
+            path,
+            metadata,
+        };
+        self.decode_structural_native_amx_receipt_file_locked(&entry, &namespace, &file)
+            .ok()
     }
 
     /// Read exact durable participant-control application evidence.
@@ -31047,29 +34867,32 @@ impl Kura {
         if self.prune_recovery_is_required() {
             return None;
         }
-        let read_structural = |recover| {
+        let read_structural = || {
             let _geometry_guard = self.lane_geometry_lock.lock();
             let entry = self.lane_storage_entry(lane_id).ok()?;
             if entry.dataspace_id != dataspace_id {
                 return None;
             }
-            let (data_path, index_path) =
-                Self::native_amx_participant_receipt_paths_for_entry(&entry, &self.store_root);
             let _guard = self.sidecar_lock.lock();
             if self.prune_recovery_is_required() {
                 return None;
             }
+            let namespace = self.native_amx_evidence_namespace_for_entry(&entry).ok()?;
+            let path = Self::native_amx_participant_receipt_path_for_entry(
+                &entry,
+                &self.store_root,
+                lane_block_height,
+            );
             let artifact = self.read_native_amx_participant_application_receipt_from_paths_locked(
                 &entry,
                 lane_block_height,
-                &data_path,
-                &index_path,
-                recover,
+                &path,
+                &namespace,
             )?;
             (artifact.participant_proposal.descriptor.lane_incarnation == lane_incarnation)
                 .then_some(artifact)
         };
-        let artifact = read_structural(true)?;
+        let artifact = read_structural()?;
         if !self
             .native_amx_participant_application_receipt_matches_available_evidence_under_prune_guard(
                 &artifact,
@@ -31077,8 +34900,7 @@ impl Kura {
         {
             return None;
         }
-        (read_structural(false)? == artifact && !self.prune_recovery_is_required())
-            .then_some(artifact)
+        (read_structural()? == artifact && !self.prune_recovery_is_required()).then_some(artifact)
     }
 
     /// Revalidate and project the exact durable evidence identity used by a
@@ -31107,8 +34929,6 @@ impl Kura {
         if entry.dataspace_id != descriptor.dataspace_id {
             return None;
         }
-        let (manifest_data_path, manifest_index_path) =
-            Self::native_amx_application_manifest_paths_for_entry(&entry, &self.store_root);
         let latest_index_path = Self::native_amx_participant_receipt_latest_index_path_for_entry(
             &entry,
             &self.store_root,
@@ -31117,15 +34937,24 @@ impl Kura {
         if self.prune_recovery_is_required() {
             return None;
         }
+        let namespace = self.native_amx_evidence_namespace_for_entry(&entry).ok()?;
+        let manifest_path = Self::native_amx_application_manifest_path_for_entry(
+            &entry,
+            &self.store_root,
+            descriptor.lane_block_height,
+        );
         let manifest = self.read_native_amx_participant_application_manifest_from_paths_locked(
             &entry,
             descriptor.lane_block_height,
-            &manifest_data_path,
-            &manifest_index_path,
-            false,
+            &manifest_path,
+            &namespace,
         )?;
         let latest = self
-            .decode_native_amx_participant_receipt_latest_index(&entry, &latest_index_path)
+            .decode_bound_native_amx_participant_receipt_latest_index_locked(
+                &entry,
+                &latest_index_path,
+                &namespace,
+            )
             .ok()
             .flatten()?;
         if manifest.leaf.lane_incarnation != descriptor.lane_incarnation
@@ -31178,8 +35007,6 @@ impl Kura {
         if entry.dataspace_id != dataspace_id {
             return None;
         }
-        let (data_path, index_path) =
-            Self::native_amx_participant_receipt_paths_for_entry(&entry, &self.store_root);
         let latest_index_path = Self::native_amx_participant_receipt_latest_index_path_for_entry(
             &entry,
             &self.store_root,
@@ -31189,9 +35016,12 @@ impl Kura {
             if self.prune_recovery_is_required() {
                 return None;
             }
-            let latest = match self
-                .decode_native_amx_participant_receipt_latest_index(&entry, &latest_index_path)
-            {
+            let namespace = self.native_amx_evidence_namespace_for_entry(&entry).ok()?;
+            let latest = match self.decode_bound_native_amx_participant_receipt_latest_index_locked(
+                &entry,
+                &latest_index_path,
+                &namespace,
+            ) {
                 Ok(Some(latest)) => latest,
                 Ok(None) => return None,
                 Err(error) => {
@@ -31207,12 +35037,16 @@ impl Kura {
             if latest.lane_incarnation != lane_incarnation {
                 return None;
             }
+            let path = Self::native_amx_participant_receipt_path_for_entry(
+                &entry,
+                &self.store_root,
+                latest.lane_block_height,
+            );
             let artifact = self.read_native_amx_participant_application_receipt_from_paths_locked(
                 &entry,
                 latest.lane_block_height,
-                &data_path,
-                &index_path,
-                false,
+                &path,
+                &namespace,
             )?;
             if !latest.matches_receipt(&artifact) {
                 iroha_logger::warn!(
@@ -31240,8 +35074,6 @@ impl Kura {
             if entry.dataspace_id != dataspace_id {
                 return None;
             }
-            let (data_path, index_path) =
-                Self::native_amx_participant_receipt_paths_for_entry(&entry, &self.store_root);
             let latest_index_path =
                 Self::native_amx_participant_receipt_latest_index_path_for_entry(
                     &entry,
@@ -31251,20 +35083,29 @@ impl Kura {
             if self.prune_recovery_is_required() {
                 return None;
             }
+            let namespace = self.native_amx_evidence_namespace_for_entry(&entry).ok()?;
             let confirmed_latest = self
-                .decode_native_amx_participant_receipt_latest_index(&entry, &latest_index_path)
+                .decode_bound_native_amx_participant_receipt_latest_index_locked(
+                    &entry,
+                    &latest_index_path,
+                    &namespace,
+                )
                 .ok()
                 .flatten()?;
             if confirmed_latest != latest {
                 return None;
             }
+            let path = Self::native_amx_participant_receipt_path_for_entry(
+                &entry,
+                &self.store_root,
+                latest.lane_block_height,
+            );
             let confirmed = self
                 .read_native_amx_participant_application_receipt_from_paths_locked(
                     &entry,
                     latest.lane_block_height,
-                    &data_path,
-                    &index_path,
-                    false,
+                    &path,
+                    &namespace,
                 )?;
             latest.matches_receipt(&confirmed).then_some(confirmed)?
         };
@@ -31309,14 +35150,13 @@ impl Kura {
         &self,
         entry: &LaneConfigEntry,
         receipt: &NativeAmxParticipantApplicationReceiptArtifact,
-        manifest_data_path: &Path,
-        manifest_index_path: &Path,
+        namespace: &BoundProgressNamespace,
         manifest_payload_heights: &BTreeSet<u64>,
         exact_durable_tip: u64,
     ) -> Result<NativeAmxParticipantReceiptStartupEvidence> {
-        let invalid = |message| {
+        let invalid = |message: &str| {
             Self::invalid_lane_artifact_error(
-                manifest_data_path.to_path_buf(),
+                namespace.data_path.clone(),
                 format!("Native AMX participant startup evidence {message}"),
             )
         };
@@ -31324,12 +35164,16 @@ impl Kura {
         if descriptor.lane_id != entry.lane_id || descriptor.dataspace_id != entry.dataspace_id {
             return Err(invalid("targets another active route"));
         }
+        let manifest_path = Self::native_amx_application_manifest_path_for_entry(
+            entry,
+            &self.store_root,
+            descriptor.lane_block_height,
+        );
         let manifest = self.read_native_amx_participant_application_manifest_from_paths_locked(
             entry,
             descriptor.lane_block_height,
-            manifest_data_path,
-            manifest_index_path,
-            false,
+            &manifest_path,
+            namespace,
         );
         let Some(manifest) = manifest else {
             if manifest_payload_heights.contains(&descriptor.lane_block_height) {
@@ -31363,10 +35207,16 @@ impl Kura {
             ));
         }
 
-        let checkpoint =
-            self.wsv_checkpoint_under_sidecar_guard(receipt.application_block_height)?;
-        let commit_manifest =
-            self.commit_manifest_under_sidecar_guard(receipt.application_block_height)?;
+        let checkpoint = self
+            .wsv_checkpoint_under_sidecar_guard(receipt.application_block_height)
+            .map_err(|error| invalid(&format!("has an unreadable WSV checkpoint: {error:?}")))?;
+        let commit_manifest = self
+            .commit_manifest_under_sidecar_guard(receipt.application_block_height)
+            .map_err(|error| {
+                invalid(&format!(
+                    "has an unreadable or missing published commit manifest: {error:?}"
+                ))
+            })?;
         match (checkpoint, commit_manifest) {
             (Some(_), Some(_))
                 if self
@@ -31401,17 +35251,20 @@ impl Kura {
 
     /// Reconstruct every active lane's bounded Native AMX latest-receipt index.
     ///
-    /// This is an explicit startup operation. Only the highest structurally
-    /// valid receipt whose exact manifest, finality, canonical block, and
-    /// result-bearing wire identities all revalidate may become the
-    /// route/incarnation pointer. Complete post-apply metadata is normally
-    /// required; the sole exact durable tip may instead have no metadata or
-    /// only an unbound WSV checkpoint while its local apply is recovered.
-    /// Mechanically attributable append/rewrite residue is repaired before
-    /// interpretation. Every below-tip metadata gap, malformed or conflicting
-    /// evidence, and unsafe authoritative sidecar path still fails closed.
-    /// Structurally valid missing manifest/receipt publication is left pending
-    /// for State-driven reconstruction from the authenticated carrier.
+    /// This is an explicit startup operation. Every retained receipt and
+    /// manifest is decoded and revalidated against its active route,
+    /// incarnation, finality, canonical block, and result-bearing wire before
+    /// the highest receipt may become the route/incarnation pointer. Complete
+    /// post-apply metadata is normally required; the sole highest receipt at
+    /// the exact durable tip may instead have no metadata or only an unbound
+    /// WSV checkpoint while its local apply is recovered. Mechanically
+    /// attributable standalone publication and pair-prune residue is repaired
+    /// before interpretation.
+    /// Every older or ambiguous publication gap, below-tip metadata gap,
+    /// malformed or conflicting evidence, and unsafe authoritative sidecar
+    /// path fails closed. At most one highest-frontier manifest/receipt gap is
+    /// left pending for State-driven reconstruction from the authenticated
+    /// carrier.
     pub(crate) fn rebuild_native_amx_participant_receipt_latest_indexes_on_startup(
         &self,
     ) -> Result<usize> {
@@ -31432,199 +35285,150 @@ impl Kura {
         let mut rebuilt = 0_usize;
 
         for entry in entries {
-            let (data_path, index_path) =
-                Self::native_amx_participant_receipt_paths_for_entry(&entry, &self.store_root);
-            let (manifest_data_path, manifest_index_path) =
-                Self::native_amx_application_manifest_paths_for_entry(&entry, &self.store_root);
+            let evidence_directory = Self::lane_artifact_dir(&entry.blocks_dir(&self.store_root));
+            match std::fs::symlink_metadata(&evidence_directory) {
+                Ok(_) => {}
+                Err(error) if error.kind() == ErrorKind::NotFound => continue,
+                Err(error) => return Err(Error::IO(error, evidence_directory)),
+            }
+            let namespace = self.native_amx_evidence_namespace_for_entry(&entry)?;
             let latest_index_path =
                 Self::native_amx_participant_receipt_latest_index_path_for_entry(
                     &entry,
                     &self.store_root,
                 );
-            let before_bytes =
-                Self::sidecar_tracked_bytes(&data_path, &index_path, Some(&latest_index_path))?;
-            let native_history_entry_bound =
-                u64::try_from(self.native_amx_participant_evidence_retention().get())?
-                    .saturating_add(1);
-
-            for path in [
-                &data_path,
-                &index_path,
-                &manifest_data_path,
-                &manifest_index_path,
-                &latest_index_path,
-            ] {
-                let metadata = match std::fs::symlink_metadata(path) {
-                    Ok(metadata) => metadata,
-                    Err(error) if error.kind() == ErrorKind::NotFound => continue,
-                    Err(error) => return Err(Error::IO(error, path.to_path_buf())),
-                };
-                if metadata.file_type().is_symlink()
-                    || !metadata.file_type().is_file()
-                    || !Self::sidecar_is_single_link(&metadata)
+            if latest_index_path.parent() != Some(evidence_directory.as_path())
+                || !Self::progress_mutation_namespace_unchanged(&namespace)
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    evidence_directory,
+                    "Native AMX startup evidence does not share one descriptor-bound directory",
+                ));
+            }
+            for directory_entry in std::fs::read_dir(&evidence_directory)
+                .map_err(|error| Error::IO(error, evidence_directory.clone()))?
+            {
+                let directory_entry = directory_entry
+                    .map_err(|error| Error::IO(error, evidence_directory.clone()))?;
+                if directory_entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".kura-sidecar-")
                 {
                     return Err(Self::invalid_lane_artifact_error(
-                        path.to_path_buf(),
-                        "Native AMX participant receipt index recovery found a symlinked, non-regular, or multi-link artifact",
+                        directory_entry.path(),
+                        "Native AMX startup reconstruction found an unresolved atomic temporary",
                     ));
                 }
             }
-
-            Self::recover_native_amx_indexed_sidecar_startup_residue(
-                &data_path,
-                &index_path,
-                native_history_entry_bound,
-                NativeAmxParticipantApplicationReceiptArtifact::FORMAT_LABEL,
-            )?;
-            Self::recover_native_amx_indexed_sidecar_startup_residue(
-                &manifest_data_path,
-                &manifest_index_path,
-                native_history_entry_bound,
-                NativeAmxParticipantApplicationManifestArtifactV1::FORMAT_LABEL,
-            )?;
-            let unexpected_latest_temporary = latest_index_path.with_extension("norito.tmp");
-            match std::fs::symlink_metadata(&unexpected_latest_temporary) {
-                Ok(_) => {
-                    return Err(Self::invalid_lane_artifact_error(
-                        unexpected_latest_temporary,
-                        "Native AMX latest-index reconstruction found an unexpected temporary pointer artifact",
-                    ));
-                }
-                Err(error) if error.kind() == ErrorKind::NotFound => {}
-                Err(error) => return Err(Error::IO(error, unexpected_latest_temporary)),
-            }
-            if let Some(directory) = latest_index_path.parent() {
-                let directory_entries = match std::fs::read_dir(directory) {
-                    Ok(entries) => Some(entries),
-                    Err(error) if error.kind() == ErrorKind::NotFound => None,
-                    Err(error) => return Err(Error::IO(error, directory.to_path_buf())),
-                };
-                if let Some(directory_entries) = directory_entries {
-                    for directory_entry in directory_entries {
-                        let directory_entry = directory_entry
-                            .map_err(|error| Error::IO(error, directory.to_path_buf()))?;
-                        if directory_entry
-                            .file_name()
-                            .to_string_lossy()
-                            .starts_with(".kura-sidecar-")
-                        {
-                            return Err(Self::invalid_lane_artifact_error(
-                                directory_entry.path(),
-                                "Native AMX latest-index reconstruction found an unresolved atomic temporary artifact",
-                            ));
-                        }
-                    }
-                }
-            }
-
-            Self::validate_indexed_sidecar_storage_bound(
-                &data_path,
-                &index_path,
-                native_history_entry_bound,
-                NativeAmxParticipantApplicationReceiptArtifact::FORMAT_LABEL,
-            )?;
-            Self::validate_indexed_sidecar_storage_bound(
-                &manifest_data_path,
-                &manifest_index_path,
-                native_history_entry_bound,
-                NativeAmxParticipantApplicationManifestArtifactV1::FORMAT_LABEL,
-            )?;
-            let _receipt_layout = Self::validate_indexed_sidecar_pair(
-                &data_path,
-                &index_path,
-                u64::MAX,
-                NativeAmxParticipantApplicationReceiptArtifact::FORMAT_LABEL,
-                true,
-                true,
-            )?;
-            let _manifest_layout = Self::validate_indexed_sidecar_pair(
-                &manifest_data_path,
-                &manifest_index_path,
-                u64::MAX,
-                NativeAmxParticipantApplicationManifestArtifactV1::FORMAT_LABEL,
-                true,
-                true,
-            )?;
-            let receipt_payload_heights = Self::indexed_sidecar_payload_heights_bounded(
-                &index_path,
-                native_history_entry_bound,
-                NativeAmxParticipantApplicationReceiptArtifact::FORMAT_LABEL,
-            )?;
-            let manifest_payload_heights = Self::indexed_sidecar_payload_heights_bounded(
-                &manifest_index_path,
-                native_history_entry_bound,
-                NativeAmxParticipantApplicationManifestArtifactV1::FORMAT_LABEL,
-            )?;
+            let before_bytes = self.native_amx_evidence_tracked_bytes_locked(&namespace)?;
+            self.complete_native_amx_evidence_prune_intent_locked(&entry, &namespace)?;
+            self.recover_native_amx_evidence_publication_temp_locked(&entry, &namespace)?;
+            self.discard_native_amx_latest_index_temp_locked(&namespace)?;
+            let inventory = self.inventory_native_amx_evidence_files_locked(&namespace, true)?;
+            let receipt_payload_heights =
+                inventory.receipts.keys().copied().collect::<BTreeSet<_>>();
+            let manifest_payload_heights =
+                inventory.manifests.keys().copied().collect::<BTreeSet<_>>();
             let latest_height = receipt_payload_heights.last().copied();
-            let expected_receipt = latest_height
-                .map(|lane_block_height| {
-                    self.read_native_amx_participant_application_receipt_from_paths_locked(
-                        &entry,
-                        lane_block_height,
-                        &data_path,
-                        &index_path,
-                        false,
-                    )
-                    .ok_or_else(|| {
-                        Self::invalid_lane_artifact_error(
-                            data_path.clone(),
-                            "Native AMX participant receipt pair has no valid highest payload",
-                        )
-                    })
-                })
-                .transpose()?;
-            let expected_startup_evidence = expected_receipt
-                .as_ref()
-                .map(|receipt| {
-                    self.classify_native_amx_latest_receipt_evidence_under_startup_guards(
-                        &entry,
-                        receipt,
-                        &manifest_data_path,
-                        &manifest_index_path,
-                        &manifest_payload_heights,
-                        exact_durable_tip,
-                    )
-                })
-                .transpose()?;
-            let expected_can_publish = !matches!(
-                expected_startup_evidence,
-                Some(NativeAmxParticipantReceiptStartupEvidence::PendingManifestRepair)
-            );
-
-            if let Some(manifest_height) = manifest_payload_heights.last().copied()
-                && latest_height.is_none_or(|receipt_height| manifest_height > receipt_height)
-            {
-                let manifest = self
-                    .read_native_amx_participant_application_manifest_from_paths_locked(
-                        &entry,
-                        manifest_height,
-                        &manifest_data_path,
-                        &manifest_index_path,
-                        false,
-                    )
-                    .ok_or_else(|| {
-                        Self::invalid_lane_artifact_error(
-                            manifest_data_path.clone(),
-                            "Native AMX participant manifest-only startup evidence is malformed or identity-conflicting",
-                        )
-                    })?;
+            for manifest_height in &manifest_payload_heights {
+                let file = inventory
+                    .manifests
+                    .get(manifest_height)
+                    .expect("inventoried Native AMX manifest height exists");
+                let manifest =
+                    self.decode_native_amx_manifest_file_locked(&entry, &namespace, file)?;
                 if !self
                     .native_amx_participant_application_manifest_matches_available_finality_under_prune_and_canonical_guards(
                         &manifest,
                     )
                 {
                     return Err(Self::invalid_lane_artifact_error(
-                        manifest_data_path.clone(),
-                        "Native AMX participant manifest-only startup evidence conflicts with authenticated finality",
+                        file.path.clone(),
+                        format!(
+                            "Native AMX participant manifest at retained height {manifest_height} conflicts with authenticated finality"
+                        ),
                     ));
                 }
             }
+
+            let mut validated_receipts = BTreeMap::new();
+            let mut startup_evidence = BTreeMap::new();
+            for receipt_height in &receipt_payload_heights {
+                let file = inventory
+                    .receipts
+                    .get(receipt_height)
+                    .expect("inventoried Native AMX receipt height exists");
+                let receipt =
+                    self.decode_native_amx_receipt_file_locked(&entry, &namespace, file)?;
+                let evidence = self
+                    .classify_native_amx_latest_receipt_evidence_under_startup_guards(
+                        &entry,
+                        &receipt,
+                        &namespace,
+                        &manifest_payload_heights,
+                        exact_durable_tip,
+                    )?;
+                if evidence != NativeAmxParticipantReceiptStartupEvidence::DurablyApplied
+                    && Some(*receipt_height) != latest_height
+                {
+                    return Err(Self::invalid_lane_artifact_error(
+                        file.path.clone(),
+                        format!(
+                            "older Native AMX participant receipt at retained height {receipt_height} has an unrecoverable partial evidence join"
+                        ),
+                    ));
+                }
+                validated_receipts.insert(*receipt_height, receipt);
+                startup_evidence.insert(*receipt_height, evidence);
+            }
+
+            let receipt_without_manifest = receipt_payload_heights
+                .difference(&manifest_payload_heights)
+                .copied()
+                .collect::<Vec<_>>();
+            let manifest_without_receipt = manifest_payload_heights
+                .difference(&receipt_payload_heights)
+                .copied()
+                .collect::<Vec<_>>();
+            if receipt_without_manifest.len() > 1
+                || receipt_without_manifest
+                    .first()
+                    .is_some_and(|height| Some(*height) != latest_height)
+                || manifest_without_receipt.len() > 1
+                || manifest_without_receipt.first().is_some_and(|height| {
+                    Some(*height) != manifest_payload_heights.last().copied()
+                        || latest_height.is_some_and(|receipt_height| *height <= receipt_height)
+                })
+                || receipt_without_manifest
+                    .len()
+                    .saturating_add(manifest_without_receipt.len())
+                    > 1
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    evidence_directory.clone(),
+                    "Native AMX retained receipt/manifest histories contain an older or ambiguous partial publication gap",
+                ));
+            }
+
+            let expected_receipt = latest_height
+                .and_then(|height| validated_receipts.get(&height))
+                .cloned();
+            let expected_startup_evidence =
+                latest_height.and_then(|height| startup_evidence.get(&height).copied());
+            let expected_can_publish = !matches!(
+                expected_startup_evidence,
+                Some(NativeAmxParticipantReceiptStartupEvidence::PendingManifestRepair)
+            );
             let expected = expected_receipt
                 .as_ref()
                 .map(NativeAmxParticipantReceiptLatestIndexV1::from_receipt)
                 .transpose()?;
-            let current = self
-                .decode_native_amx_participant_receipt_latest_index(&entry, &latest_index_path)?;
+            let current = self.decode_bound_native_amx_participant_receipt_latest_index_locked(
+                &entry,
+                &latest_index_path,
+                &namespace,
+            )?;
             if let Some(current) = current {
                 let canonical_height = usize::try_from(current.application_block_height)
                     .ok()
@@ -31656,20 +35460,15 @@ impl Kura {
                             "Native AMX derived latest pointer is awaiting authoritative receipt repair"
                         );
                     } else {
-                        let current_receipt = self
-                            .read_native_amx_participant_application_receipt_from_paths_locked(
-                                &entry,
-                                current.lane_block_height,
-                                &data_path,
-                                &index_path,
-                                false,
-                            )
-                            .ok_or_else(|| {
-                                Self::invalid_lane_artifact_error(
-                                    data_path.clone(),
-                                    "Native AMX participant receipt referenced by the latest pointer is malformed",
-                                )
-                            })?;
+                        let current_file = inventory
+                            .receipts
+                            .get(&current.lane_block_height)
+                            .expect("retained current Native AMX receipt exists");
+                        let current_receipt = self.decode_native_amx_receipt_file_locked(
+                            &entry,
+                            &namespace,
+                            current_file,
+                        )?;
                         if !current.matches_receipt(&current_receipt)
                             || current.lane_block_height >= expected.lane_block_height
                         {
@@ -31681,8 +35480,7 @@ impl Kura {
                         self.classify_native_amx_latest_receipt_evidence_under_startup_guards(
                             &entry,
                             &current_receipt,
-                            &manifest_data_path,
-                            &manifest_index_path,
+                            &namespace,
                             &manifest_payload_heights,
                             exact_durable_tip,
                         )
@@ -31695,7 +35493,7 @@ impl Kura {
                         if expected_can_publish {
                             let receipt = expected_receipt.as_ref().ok_or_else(|| {
                                 Self::invalid_lane_artifact_error(
-                                    data_path.clone(),
+                                    evidence_directory.clone(),
                                     "Native AMX participant highest receipt disappeared during startup reconstruction",
                                 )
                             })?;
@@ -31703,6 +35501,7 @@ impl Kura {
                                 &entry,
                                 receipt,
                                 &latest_index_path,
+                                &namespace,
                             )?;
                             rebuilt = rebuilt.saturating_add(1);
                         }
@@ -31711,7 +35510,7 @@ impl Kura {
                 (Some(expected), None) if expected_can_publish => {
                     let receipt = expected_receipt.as_ref().ok_or_else(|| {
                         Self::invalid_lane_artifact_error(
-                            data_path.clone(),
+                            evidence_directory.clone(),
                             "Native AMX participant highest receipt disappeared during startup reconstruction",
                         )
                     })?;
@@ -31720,6 +35519,7 @@ impl Kura {
                         &entry,
                         receipt,
                         &latest_index_path,
+                        &namespace,
                     )?;
                     rebuilt = rebuilt.saturating_add(1);
                 }
@@ -31741,38 +35541,16 @@ impl Kura {
                 }
             }
 
-            // Compact only after every retained authoritative identity has
-            // passed startup validation. Malformed or conflicting evidence
-            // therefore remains intact when startup fails closed.
-            for (bounded_data_path, bounded_index_path, bounded_kind) in [
-                (
-                    &data_path,
-                    &index_path,
-                    NativeAmxParticipantApplicationReceiptArtifact::FORMAT_LABEL,
-                ),
-                (
-                    &manifest_data_path,
-                    &manifest_index_path,
-                    NativeAmxParticipantApplicationManifestArtifactV1::FORMAT_LABEL,
-                ),
-            ] {
-                if bounded_data_path.exists()
-                    && bounded_index_path.exists()
-                    && !Self::prune_indexed_sidecars_to_retention_window(
-                        bounded_data_path,
-                        bounded_index_path,
-                        self.native_amx_participant_evidence_retention(),
-                        bounded_kind,
-                    )
-                {
-                    return Err(Self::invalid_lane_artifact_error(
-                        bounded_index_path.to_path_buf(),
-                        format!("{bounded_kind} startup retention-window compaction failed"),
-                    ));
-                }
+            if !Self::progress_mutation_namespace_unchanged(&namespace) {
+                return Err(Self::invalid_lane_artifact_error(
+                    evidence_directory.clone(),
+                    "Native AMX startup evidence namespace changed during reconstruction",
+                ));
             }
-            let after_bytes =
-                Self::sidecar_tracked_bytes(&data_path, &index_path, Some(&latest_index_path))?;
+            // Prune only after every retained artifact and its authenticated
+            // evidence join passed the immutable startup scan above.
+            self.prune_native_amx_evidence_pairs_locked(&entry, &namespace)?;
+            let after_bytes = self.native_amx_evidence_tracked_bytes_locked(&namespace)?;
             self.update_disk_usage_delta(before_bytes, after_bytes);
         }
         accounting_mutation.finish();
@@ -32824,31 +36602,18 @@ impl Kura {
     }
 
     fn autonomous_auxiliary_lane_height(name: &str) -> Option<u64> {
-        fn one_height(name: &str, prefix: &str) -> Option<u64> {
-            let raw = name
-                .strip_prefix(prefix)?
-                .strip_prefix('_')?
-                .strip_suffix(".norito")?;
-            let height = raw.parse::<u64>().ok()?;
-            (height != 0 && name == format!("{prefix}_{height:020}.norito")).then_some(height)
-        }
-        fn two_heights(name: &str, prefix: &str) -> Option<u64> {
-            let raw = name
-                .strip_prefix(prefix)?
-                .strip_prefix('_')?
-                .strip_suffix(".norito")?;
-            let (lane_height, proposal_height) = raw.split_once('_')?;
-            let lane_height = lane_height.parse::<u64>().ok()?;
-            let proposal_height = proposal_height.parse::<u64>().ok()?;
-            (lane_height != 0
-                && proposal_height != 0
-                && name == format!("{prefix}_{lane_height:020}_{proposal_height:020}.norito"))
-            .then_some(lane_height)
-        }
-        one_height(name, AUTONOMOUS_LANE_BLOCK_VIEW_STATE_PREFIX)
-            .or_else(|| one_height(name, AUTONOMOUS_LANE_BLOCK_LATEST_ATTEMPT_PREFIX))
-            .or_else(|| two_heights(name, AUTONOMOUS_LANE_BLOCK_ATTEMPT_PREFIX))
-            .or_else(|| two_heights(name, AUTONOMOUS_LANE_BLOCK_ATTEMPT_VIEW_PREFIX))
+        Self::autonomous_one_height_coordinate(name, AUTONOMOUS_LANE_BLOCK_LATEST_ATTEMPT_PREFIX)
+            .or_else(|| {
+                Self::autonomous_two_height_coordinates(name, AUTONOMOUS_LANE_BLOCK_ATTEMPT_PREFIX)
+                    .map(|(lane_height, _)| lane_height)
+            })
+            .or_else(|| {
+                Self::autonomous_two_height_coordinates(
+                    name,
+                    AUTONOMOUS_LANE_BLOCK_ATTEMPT_VIEW_PREFIX,
+                )
+                .map(|(lane_height, _)| lane_height)
+            })
     }
 
     fn remove_terminal_autonomous_auxiliary_files_locked(
@@ -32962,10 +36727,6 @@ impl Kura {
             (
                 Self::lane_artifact_paths_for_entry(entry, &self.store_root),
                 LaneBlockArtifact::FORMAT_LABEL,
-            ),
-            (
-                Self::autonomous_lane_block_paths_for_entry(entry, &self.store_root),
-                AutonomousLaneBlockArtifact::FORMAT_LABEL,
             ),
             (
                 Self::lane_block_execution_input_paths_for_entry(entry, &self.store_root),
@@ -33890,8 +37651,10 @@ impl Kura {
 
     /// Return the highest valid active lane artifact accepted by `accept`.
     ///
-    /// Retired-incarnation entries do not consume the active-candidate budget,
-    /// preventing stale high lane heights from starving a recreated lane.
+    /// Every indexed height consumes one scan slot, including absent,
+    /// malformed, and retired-incarnation entries. Failing to find a valid
+    /// match inside the fixed budget fails closed instead of letting sparse or
+    /// hostile history turn this consensus lookup into an unbounded walk.
     pub(crate) fn latest_lane_block_artifact_matching<F>(
         &self,
         lane_id: LaneId,
@@ -33921,6 +37684,7 @@ impl Kura {
             let heights = Self::indexed_sidecar_height_range(&index_path, "lane block artifact")?;
             heights
                 .rev()
+                .take(CONSENSUS_SIDECAR_MATCH_SCAN_BUDGET)
                 .filter_map(|lane_block_height| {
                     self.read_active_lane_block_artifact_from_paths_locked(
                         &entry,
@@ -33930,7 +37694,6 @@ impl Kura {
                         false,
                     )
                 })
-                .take(CONSENSUS_SIDECAR_MATCH_SCAN_BUDGET)
                 .collect::<Vec<_>>()
         };
         drop(_geometry_guard);
@@ -38704,6 +42467,7 @@ impl Kura {
         )
     }
 
+    #[cfg(test)]
     fn prune_indexed_sidecars_to_retention_window(
         data_path: &Path,
         index_path: &Path,
@@ -38763,7 +42527,10 @@ impl Kura {
         Self::rewrite_indexed_sidecars(
             data_path,
             index_path,
-            IndexedSidecarRewrite::TruncateToHeight(height),
+            IndexedSidecarRewrite::TruncateToHeight {
+                height,
+                strict_retained: false,
+            },
             kind,
         )
     }
@@ -38803,6 +42570,14 @@ impl Kura {
                 return false;
             }
         };
+        let strict_retained_rewrite = matches!(
+            rewrite,
+            IndexedSidecarRewrite::RetainAfterTerminalFrontier { .. }
+                | IndexedSidecarRewrite::TruncateToHeight {
+                    strict_retained: true,
+                    ..
+                }
+        );
         if index_len != layout.aligned_len {
             iroha_logger::warn!(
                 len = index_len,
@@ -38811,11 +42586,18 @@ impl Kura {
                 kind,
                 "sidecar index length misaligned; ignoring trailing bytes"
             );
+            if strict_retained_rewrite {
+                return false;
+            }
         }
         let total_entries = layout.entry_count;
-        let terminal_prefix_rewrite = matches!(
+        let compacted_prefix_rewrite = matches!(
             rewrite,
             IndexedSidecarRewrite::RetainAfterTerminalFrontier { .. }
+                | IndexedSidecarRewrite::TruncateToHeight {
+                    strict_retained: true,
+                    ..
+                }
         );
         let (
             mut keep_from,
@@ -38844,6 +42626,7 @@ impl Kura {
                     None,
                 )
             }
+            #[cfg(test)]
             IndexedSidecarRewrite::RetainNewestWindow { retention } => {
                 let retention_u64 = retention.get() as u64;
                 let source_start = total_entries.saturating_sub(retention_u64);
@@ -38900,7 +42683,10 @@ impl Kura {
                     None,
                 )
             }
-            IndexedSidecarRewrite::TruncateToHeight(height) => {
+            IndexedSidecarRewrite::TruncateToHeight {
+                height,
+                strict_retained,
+            } => {
                 let output_entries = height
                     .checked_sub(layout.base_height)
                     .and_then(|relative| relative.checked_add(1))
@@ -38915,13 +42701,17 @@ impl Kura {
                     output_entries,
                     layout.base_height,
                     None,
-                    "rollback truncation",
+                    if strict_retained {
+                        "strict rollback truncation"
+                    } else {
+                        "rollback truncation"
+                    },
                     None,
                 )
             }
         };
 
-        let entries_to_read = if terminal_prefix_rewrite {
+        let entries_to_read = if compacted_prefix_rewrite {
             output_entries
         } else {
             total_entries
@@ -38939,7 +42729,7 @@ impl Kura {
                 return false;
             }
         };
-        let vector_base = if terminal_prefix_rewrite {
+        let vector_base = if compacted_prefix_rewrite {
             source_start
         } else {
             0
@@ -39039,10 +42829,11 @@ impl Kura {
                 return false;
             }
         };
-        if terminal_prefix_rewrite {
+        if strict_retained_rewrite {
             let skip =
                 usize::try_from(source_start.saturating_sub(vector_base)).unwrap_or(usize::MAX);
             let take = usize::try_from(output_entries).unwrap_or(usize::MAX);
+            let mut prior_payload_end = None;
             for entry in entries.iter().skip(skip).take(take) {
                 if entry.len == 0 {
                     continue;
@@ -39064,6 +42855,17 @@ impl Kura {
                     );
                     return false;
                 }
+                if prior_payload_end.is_some_and(|prior_end| entry.offset < prior_end) {
+                    iroha_logger::warn!(
+                        offset = entry.offset,
+                        ?prior_payload_end,
+                        ?index_path,
+                        kind,
+                        "refusing strict compaction with overlapping or out-of-order retained sidecar entries"
+                    );
+                    return false;
+                }
+                prior_payload_end = entry.offset.checked_add(entry.len);
             }
         }
 
@@ -39141,7 +42943,7 @@ impl Kura {
                     kind,
                     "sidecar payload length exceeds limit during prune; dropping entry"
                 );
-                if terminal_prefix_rewrite {
+                if strict_retained_rewrite {
                     iroha_logger::warn!(
                         ?index_path,
                         kind,
@@ -39168,7 +42970,7 @@ impl Kura {
                     kind,
                     "sidecar payload length exceeds usize during prune; dropping entry"
                 );
-                if terminal_prefix_rewrite {
+                if strict_retained_rewrite {
                     iroha_logger::warn!(
                         ?index_path,
                         kind,
@@ -39196,7 +42998,7 @@ impl Kura {
                     kind,
                     "sidecar payload range overflow during prune; dropping entry"
                 );
-                if terminal_prefix_rewrite {
+                if strict_retained_rewrite {
                     iroha_logger::warn!(
                         ?index_path,
                         kind,
@@ -39223,7 +43025,7 @@ impl Kura {
                     kind,
                     "sidecar payload past data file during prune; dropping entry"
                 );
-                if terminal_prefix_rewrite {
+                if strict_retained_rewrite {
                     iroha_logger::warn!(
                         ?index_path,
                         kind,
@@ -39473,16 +43275,16 @@ impl Kura {
             }
         }
 
-        let retained = if matches!(rewrite, IndexedSidecarRewrite::RetainNewestWindow { .. }) {
-            output_entries
-        } else {
-            output_entries
+        let retained = match rewrite {
+            #[cfg(test)]
+            IndexedSidecarRewrite::RetainNewestWindow { .. } => output_entries,
+            _ => output_entries
                 .saturating_sub(keep_from)
                 .saturating_add(u64::from(pinned_height.is_some_and(|height| {
                     height
                         .checked_sub(layout.base_height)
                         .is_some_and(|relative| relative < output_entries && relative < keep_from)
-                })))
+                }))),
         };
         let pruned = total_entries.saturating_sub(retained);
         iroha_logger::debug!(
@@ -44133,6 +47935,7 @@ impl<T> AddErrContextExt<T> for Result<T, std::io::Error> {
 mod tests {
     use std::{
         borrow::Cow,
+        cell::Cell,
         collections::BTreeMap,
         fs,
         io::{Read, Seek, SeekFrom, Write},
@@ -44850,7 +48653,7 @@ mod tests {
     ) -> (
         MergeLedgerEntry,
         HashOf<SignedTransaction>,
-        LaneQueueReservationKeyV1,
+        LaneQueueReservationKeyV2,
     ) {
         let entrypoint =
             offline_top_up_entrypoint_for_index([salt; 32], [salt.saturating_add(1); 32]);
@@ -44869,10 +48672,14 @@ mod tests {
             descriptor.lane_id,
             descriptor.dataspace_id,
         ));
-        let reservation = LaneQueueReservationKeyV1 {
-            version: LaneQueueReservationKeyV1::VERSION,
+        let reservation = LaneQueueReservationKeyV2 {
+            version: LaneQueueReservationKeyV2::VERSION,
             signed_transaction_hash: transaction_hash,
             entrypoint_hash: entrypoint.hash(),
+            queue_plan_admission_binding_hash: Hash::new_from_chunks(&[
+                b"kura-queue-plan-admission-binding",
+                &[salt],
+            ]),
             routing_plan_digest: routing_plan.digest(),
             coordinator_leg: routing_plan.coordinator_leg(),
             lane_id: descriptor.lane_id,
@@ -44897,7 +48704,7 @@ mod tests {
         salt: u8,
     ) -> (
         HashOf<SignedTransaction>,
-        LaneQueueReservationKeyV1,
+        LaneQueueReservationKeyV2,
         MergeLedgerFrameIndex,
     ) {
         let mut blocks = DummyBlocks::new();
@@ -49358,6 +53165,144 @@ mod tests {
         kura_config_for_path(dir.path(), blocks_in_memory)
     }
 
+    fn open_configured_kura_with_pending_limits(
+        config: &KuraConfig,
+        limits: &SumeragiV2RuntimeLimits,
+    ) -> Result<(Arc<Kura>, BlockCount)> {
+        let configured = LaneCatalog::default();
+        let lane_config = RuntimeLaneConfig::from_catalog(&configured);
+        Kura::new_with_configured_lane_catalog_and_snapshot_bootstrap_and_sumeragi_limits(
+            config,
+            &lane_config,
+            &configured,
+            &SnapshotBootstrapPolicy::default(),
+            limits,
+        )
+    }
+
+    #[test]
+    fn configured_pending_control_limits_fail_before_store_creation() {
+        let temp = TempDir::new().expect("temporary parent");
+        let store_root = temp.path().join("kura");
+        let config = kura_config_for_path(&store_root, BLOCKS_IN_MEMORY);
+        let mut limits = SumeragiV2RuntimeLimits::default();
+        limits.pending_certified_merge_entry_capacity =
+            NonZeroUsize::new(V2_PENDING_CERTIFIED_MERGE_ENTRY_CAPACITY_MAX.saturating_add(1))
+                .expect("non-zero invalid limit");
+
+        let error = open_configured_kura_with_pending_limits(&config, &limits)
+            .expect_err("out-of-range pending control limit must fail closed");
+        assert!(matches!(
+            error,
+            Error::IO(ref source, ref path)
+                if source.kind() == ErrorKind::InvalidInput
+                    && source
+                        .to_string()
+                        .contains("pending_certified_merge_entry_capacity")
+                    && path == &store_root
+        ));
+        assert!(
+            !store_root.exists(),
+            "invalid Sumeragi limits must be rejected before Kura creates its root"
+        );
+    }
+
+    #[test]
+    fn configured_pending_control_count_limits_gate_live_admission() {
+        let temp = TempDir::new().expect("temporary Kura root");
+        let config = kura_config_for_dir(&temp, BLOCKS_IN_MEMORY);
+        let mut limits = SumeragiV2RuntimeLimits::default();
+        limits.pending_certified_merge_entry_capacity =
+            NonZeroUsize::new(1).expect("non-zero merge capacity");
+        limits.pending_queue_plan_admission_capacity =
+            NonZeroUsize::new(1).expect("non-zero QueuePlan capacity");
+        let (kura, _) = open_configured_kura_with_pending_limits(&config, &limits)
+            .expect("open configured Kura");
+
+        assert_eq!(
+            kura.pending_control_sidecar_limits,
+            PendingControlSidecarLimits {
+                certified_merge_entries: 1,
+                queue_plan_admissions: 1,
+                aggregate_bytes: V2_PENDING_CONTROL_SIDECAR_BYTES.get(),
+            }
+        );
+        kura.persist_pending_certified_merge_entry(&sample_merge_entry(1))
+            .expect("persist first configured merge sidecar");
+        assert!(
+            kura.persist_pending_certified_merge_entry(&sample_merge_entry(2))
+                .is_err(),
+            "configured merge capacity must reject the second identity"
+        );
+        kura.persist_pending_queue_plan_admission_certificate(b"configured-queue-plan-one")
+            .expect("persist first configured QueuePlan sidecar");
+        assert!(
+            kura.persist_pending_queue_plan_admission_certificate(b"configured-queue-plan-two")
+                .is_err(),
+            "configured QueuePlan capacity must reject the second identity"
+        );
+    }
+
+    #[test]
+    fn configured_pending_control_count_limit_rejects_oversized_startup_inventory() {
+        let temp = TempDir::new().expect("temporary Kura root");
+        let config = kura_config_for_dir(&temp, BLOCKS_IN_MEMORY);
+        let mut initial_limits = SumeragiV2RuntimeLimits::default();
+        initial_limits.pending_certified_merge_entry_capacity =
+            NonZeroUsize::new(2).expect("non-zero initial merge capacity");
+        let (kura, _) = open_configured_kura_with_pending_limits(&config, &initial_limits)
+            .expect("open initial configured Kura");
+        kura.persist_pending_certified_merge_entry(&sample_merge_entry(1))
+            .expect("persist first pending merge identity");
+        kura.persist_pending_certified_merge_entry(&sample_merge_entry(2))
+            .expect("persist second pending merge identity");
+        drop(kura);
+
+        let mut tightened_limits = initial_limits;
+        tightened_limits.pending_certified_merge_entry_capacity =
+            NonZeroUsize::new(1).expect("non-zero tightened merge capacity");
+        assert!(
+            open_configured_kura_with_pending_limits(&config, &tightened_limits).is_err(),
+            "startup must reject durable pending inventory above the configured capacity"
+        );
+    }
+
+    #[test]
+    fn configured_pending_control_shared_bytes_reject_oversized_startup_inventory() {
+        let temp = TempDir::new().expect("temporary Kura root");
+        let config = kura_config_for_dir(&temp, BLOCKS_IN_MEMORY);
+        let mut limits = SumeragiV2RuntimeLimits::default();
+        limits.pending_queue_plan_admission_capacity =
+            NonZeroUsize::new(32).expect("non-zero QueuePlan capacity");
+        limits.pending_control_sidecar_bytes =
+            NonZeroUsize::new(V2_PENDING_CONTROL_SIDECAR_BYTES_MIN)
+                .expect("non-zero shared byte minimum");
+        let (kura, _) = open_configured_kura_with_pending_limits(&config, &limits)
+            .expect("open configured Kura");
+        let directory = kura.pending_queue_plan_admission_dir();
+        drop(kura);
+
+        let file_bytes = u64::try_from(MAX_PENDING_QUEUE_PLAN_ADMISSION_CERTIFICATE_BYTES)
+            .expect("QueuePlan per-file cap fits u64");
+        let file_count = V2_PENDING_CONTROL_SIDECAR_BYTES_MIN
+            .checked_div(MAX_PENDING_QUEUE_PLAN_ADMISSION_CERTIFICATE_BYTES)
+            .expect("non-zero QueuePlan per-file cap")
+            .saturating_add(1);
+        assert!(file_count < limits.pending_queue_plan_admission_capacity.get());
+        for index in 0..file_count {
+            let hash = Hash::new(format!("configured-shared-byte-limit-{index}"));
+            fs::File::create(directory.join(format!("{}.norito", hex::encode(hash.as_ref()))))
+                .expect("create sparse pending QueuePlan sidecar")
+                .set_len(file_bytes)
+                .expect("size sparse pending QueuePlan sidecar");
+        }
+
+        assert!(
+            open_configured_kura_with_pending_limits(&config, &limits).is_err(),
+            "startup must reject combined pending-control bytes above the configured shared limit"
+        );
+    }
+
     #[cfg(unix)]
     fn copy_regular_test_tree(source: &Path, destination: &Path) {
         let metadata = fs::symlink_metadata(source).expect("source tree metadata");
@@ -50087,6 +54032,7 @@ mod tests {
             activation_root: Hash::new(b"kura-merge-test-activation-root"),
             lane_snapshots,
             execution_batch: None,
+            queue_plan_admissions: Vec::new(),
             lane_drain_certificates: Vec::new(),
             global_state_root,
             merge_qc: MergeQuorumCertificate::new(
@@ -50223,7 +54169,181 @@ mod tests {
 
     #[test]
     fn pending_certified_merge_sidecar_is_scoped_to_exact_carrier_round() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+
+            let symlinked = Kura::blank_kura_for_testing();
+            let outside = TempDir::new().expect("create external pending merge directory");
+            let external_entry = sample_merge_entry(100);
+            let external_hash = external_entry.canonical_hash();
+            let external_temp = outside.path().join(format!(
+                "{}.norito.tmp",
+                hex::encode(external_hash.as_ref())
+            ));
+            fs::write(&external_temp, external_entry.canonical_bytes())
+                .expect("stage external pending merge temporary");
+            symlink(outside.path(), symlinked.pending_merge_entry_dir())
+                .expect("replace pending merge directory with a symlink");
+            assert!(
+                symlinked
+                    .validate_pending_merge_entries_on_startup()
+                    .is_err(),
+                "startup must reject a symlinked pending merge directory before recovery"
+            );
+            assert!(
+                external_temp.is_file(),
+                "startup rejection must not mutate the symlink target"
+            );
+        }
+
+        {
+            let malformed_inventory = Kura::blank_kura_for_testing();
+            let directory = malformed_inventory.pending_merge_entry_dir();
+            fs::create_dir(&directory).expect("create malformed pending merge inventory");
+            let recovery_entry = sample_merge_entry(102);
+            let recovery_hash = recovery_entry.canonical_hash();
+            let temp_path = malformed_inventory
+                .pending_merge_entry_path(recovery_hash)
+                .with_extension("norito.tmp");
+            fs::write(&temp_path, recovery_entry.canonical_bytes())
+                .expect("stage valid pending merge temporary");
+            fs::write(directory.join("ABC.norito"), b"malformed stable filename")
+                .expect("stage malformed stable pending merge name");
+            assert!(
+                malformed_inventory
+                    .validate_pending_merge_entries_on_startup()
+                    .is_err(),
+                "recovery must validate the complete stable inventory before publication"
+            );
+            assert!(temp_path.is_file());
+            assert!(
+                !malformed_inventory
+                    .pending_merge_entry_path(recovery_hash)
+                    .exists(),
+                "invalid stable inventory must leave an unpublished temporary unpublished"
+            );
+        }
+
+        {
+            let unpublished = Kura::blank_kura_for_testing();
+            let directory = unpublished.pending_merge_entry_dir();
+            fs::create_dir(&directory).expect("create unpublished pending merge directory");
+            let recovery_entry = sample_merge_entry(105);
+            let recovery_hash = recovery_entry.canonical_hash();
+            let target_path = unpublished.pending_merge_entry_path(recovery_hash);
+            let temp_path = target_path.with_extension("norito.tmp");
+            fs::write(&temp_path, recovery_entry.canonical_bytes())
+                .expect("stage unpublished pending merge temporary");
+            sync_dir(&directory).expect("sync unpublished pending merge directory");
+            unpublished
+                .validate_pending_merge_entries_on_startup()
+                .expect("publish lone pending merge temporary");
+            assert!(!temp_path.exists());
+            assert_eq!(
+                unpublished
+                    .read_pending_merge_entry_path(&target_path, Some(recovery_hash))
+                    .expect("read recovered pending merge entry"),
+                Some(recovery_entry)
+            );
+        }
+
+        {
+            let no_clobber = Kura::blank_kura_for_testing();
+            let entry = sample_merge_entry(103);
+            let path = no_clobber.pending_merge_entry_path(entry.canonical_hash());
+            fs::create_dir(no_clobber.pending_merge_entry_dir())
+                .expect("create no-clobber pending merge directory");
+            let sentinel = b"attacker-controlled pending merge target";
+            fs::write(&path, sentinel).expect("stage conflicting pending merge target");
+            assert!(
+                no_clobber
+                    .persist_pending_certified_merge_entry(&entry)
+                    .is_err(),
+                "a conflicting hash-addressed target must fail closed"
+            );
+            assert_eq!(
+                fs::read(path).expect("read preserved pending merge target"),
+                sentinel,
+                "durable publication must never clobber an existing target"
+            );
+        }
+
+        {
+            let saturated = Kura::blank_kura_for_testing();
+            let merge_directory = saturated.pending_merge_entry_dir();
+            let admission_directory = saturated.pending_queue_plan_admission_dir();
+            fs::create_dir(&merge_directory).expect("create pending merge saturation directory");
+            fs::create_dir(&admission_directory).expect("create admission saturation directory");
+            let recovery_entry = sample_merge_entry(104);
+            let recovery_hash = recovery_entry.canonical_hash();
+            let target_path = saturated.pending_merge_entry_path(recovery_hash);
+            let temp_path = target_path.with_extension("norito.tmp");
+            fs::write(&temp_path, recovery_entry.canonical_bytes())
+                .expect("stage pending merge temporary above the shared cap");
+            let one_mebibyte = u64::try_from(MAX_PENDING_QUEUE_PLAN_ADMISSION_CERTIFICATE_BYTES)
+                .expect("admission byte limit fits u64");
+            let saturation_files = saturated.pending_control_sidecar_limits.aggregate_bytes
+                / MAX_PENDING_QUEUE_PLAN_ADMISSION_CERTIFICATE_BYTES;
+            for index in 0..saturation_files {
+                let hash = Hash::new(format!("shared-cap-admission-{index}"));
+                let path = saturated.pending_queue_plan_admission_path(hash);
+                let file = fs::File::create(path).expect("create sparse admission saturation file");
+                file.set_len(one_mebibyte)
+                    .expect("size sparse admission saturation file");
+            }
+            assert!(
+                saturated
+                    .validate_pending_merge_entries_on_startup()
+                    .is_err(),
+                "merge recovery must enforce the shared pending-control byte cap before publication"
+            );
+            assert!(temp_path.is_file());
+            assert!(!target_path.exists());
+        }
+
         let kura = Kura::blank_kura_for_testing();
+        #[cfg(any(unix, windows))]
+        {
+            let recovery_entry = sample_merge_entry(101);
+            let recovery_bytes = recovery_entry.canonical_bytes();
+            let recovery_hash = recovery_entry.canonical_hash();
+            let directory = kura.pending_merge_entry_dir();
+            fs::create_dir(&directory).expect("create pending merge recovery directory");
+            let target_path = kura.pending_merge_entry_path(recovery_hash);
+            let temp_path = target_path.with_extension("norito.tmp");
+            fs::write(&temp_path, &recovery_bytes).expect("write durable pending merge temporary");
+            fs::hard_link(&temp_path, &target_path)
+                .expect("publish pending merge recovery hard link");
+            sync_dir(&directory).expect("sync pending merge recovery directory");
+            let staged_total = kura
+                .refresh_disk_usage_bytes()
+                .expect("cache hard-linked pending merge recovery bytes");
+
+            kura.validate_pending_merge_entries_on_startup()
+                .expect("finish hard-linked pending merge publication");
+            assert!(!temp_path.exists());
+            assert!(target_path.is_file());
+            assert!(Kura::sidecar_is_single_link(
+                &fs::symlink_metadata(&target_path)
+                    .expect("read recovered pending merge target metadata")
+            ));
+            let path_bytes = u64::try_from(recovery_bytes.len()).expect("fixture length fits u64");
+            assert_eq!(
+                kura.disk_usage_bytes()
+                    .expect("read published pending merge recovery accounting"),
+                staged_total.saturating_sub(path_bytes),
+                "startup recovery must publish the crash-temporary removal delta"
+            );
+            kura.remove_pending_certified_merge_entry(recovery_hash)
+                .expect("remove recovered pending merge fixture");
+            assert_eq!(
+                kura.disk_usage_bytes()
+                    .expect("read pending merge accounting after fixture removal"),
+                staged_total.saturating_sub(path_bytes.saturating_mul(2))
+            );
+        }
+
         let mut entry = sample_merge_entry(1);
         let carrier_parent =
             HashOf::from_untyped_unchecked(Hash::new(b"exact pending merge carrier parent"));
@@ -50525,6 +54645,103 @@ mod tests {
     }
 
     #[test]
+    fn pending_certified_merge_work_stops_before_later_malformed_entry() {
+        let kura = Kura::blank_kura_for_testing();
+        let entry = sample_merge_entry(1);
+        let snapshot = entry
+            .lane_snapshots
+            .first()
+            .expect("sample merge entry has one lane snapshot");
+        let entry_hash = kura
+            .persist_pending_certified_merge_entry(&entry)
+            .expect("persist blocking pending merge entry");
+        let malformed_path = kura
+            .pending_merge_entry_dir()
+            .join(format!("{}.norito", "ff".repeat(Hash::LENGTH)));
+        assert!(
+            malformed_path > kura.pending_merge_entry_path(entry_hash),
+            "malformed fixture must sort after the blocking sidecar"
+        );
+        fs::write(&malformed_path, b"malformed pending merge entry")
+            .expect("write later malformed pending merge fixture");
+
+        assert!(
+            kura.pending_certified_merge_work_for_lane(
+                snapshot.lane_id,
+                snapshot.dataspace_id,
+                snapshot.lane_incarnation,
+            )
+            .expect("the first matching entry short-circuits the drain scan"),
+            "the exact lane snapshot must block drain"
+        );
+        assert!(
+            kura.pending_certified_merge_work_for_lane(
+                LaneId::new(snapshot.lane_id.as_u32().saturating_add(1)),
+                snapshot.dataspace_id,
+                snapshot.lane_incarnation,
+            )
+            .is_err(),
+            "without an earlier blocker the later malformed entry must still fail closed"
+        );
+    }
+
+    #[test]
+    fn bounded_pending_merge_hash_scan_filters_orders_and_reports_overflow() {
+        let kura = Kura::blank_kura_for_testing();
+        let entries = [
+            sample_merge_entry(3),
+            sample_merge_entry(1),
+            sample_merge_entry(2),
+        ];
+        for entry in &entries {
+            kura.persist_pending_certified_merge_entry(entry)
+                .expect("persist bounded pending scan fixture");
+        }
+
+        let predicate_calls = Cell::new(0usize);
+        let PendingCertifiedMergeEvidenceScan::Complete(hashes) = kura
+            .pending_certified_merge_entry_hashes_matching_bounded(3, |entry| {
+                predicate_calls.set(predicate_calls.get().saturating_add(1));
+                entry.epoch_id % 2 == 1
+            })
+            .expect("scan the complete bounded pending inventory")
+        else {
+            panic!("the complete bounded inventory must not overflow");
+        };
+        assert_eq!(predicate_calls.get(), 3);
+        assert_eq!(
+            hashes,
+            vec![entries[1].canonical_hash(), entries[0].canonical_hash()],
+            "matching hashes must retain canonical epoch/hash order"
+        );
+
+        fs::write(
+            kura.pending_merge_entry_path(entries[2].canonical_hash()),
+            b"malformed bounded pending scan fixture",
+        )
+        .expect("corrupt an entry beyond the smaller scan limit");
+        predicate_calls.set(0);
+        assert_eq!(
+            kura.pending_certified_merge_entry_hashes_matching_bounded(2, |_| {
+                predicate_calls.set(predicate_calls.get().saturating_add(1));
+                true
+            })
+            .expect("report bounded pending scan overflow"),
+            PendingCertifiedMergeEvidenceScan::LimitExceeded,
+        );
+        assert_eq!(
+            predicate_calls.get(),
+            0,
+            "overflow must be reported before any large entry is decoded"
+        );
+        assert!(
+            kura.pending_certified_merge_entry_hashes_matching_bounded(3, |_| true)
+                .is_err(),
+            "a complete scan must still fail closed on malformed evidence"
+        );
+    }
+
+    #[test]
     fn late_stale_pending_merge_sidecar_does_not_evict_current_round() {
         let kura = Kura::blank_kura_for_testing();
         let carrier_parent =
@@ -50594,6 +54811,36 @@ mod tests {
     }
 
     #[test]
+    fn bounded_pending_merge_selection_skips_committed_prefix_without_underfill() {
+        let kura = Kura::blank_kura_for_testing();
+        let mut left = sample_merge_entry(1);
+        left.lane_catalog_hash = Hash::new(b"bounded pending merge left");
+        let mut right = sample_merge_entry(1);
+        right.lane_catalog_hash = Hash::new(b"bounded pending merge right");
+        let (committed, pending) = if left.canonical_hash() < right.canonical_hash() {
+            (left, right)
+        } else {
+            (right, left)
+        };
+        let committed_hash = kura
+            .persist_pending_certified_merge_entry(&committed)
+            .expect("persist sidecar that sorts first");
+        let pending_hash = kura
+            .persist_pending_certified_merge_entry(&pending)
+            .expect("persist uncommitted sidecar that sorts second");
+        assert!(committed_hash < pending_hash);
+        kura.append_merge_entry(&committed)
+            .expect("commit the lexicographic sidecar prefix");
+
+        assert_eq!(
+            kura.pending_certified_merge_entries_bounded(1)
+                .expect("select one uncommitted pending entry"),
+            vec![(pending_hash, pending)],
+            "committed sidecars must not consume the bounded result budget"
+        );
+    }
+
+    #[test]
     fn locked_and_finalized_carrier_cleanup_preserves_only_authorized_sidecars() {
         let kura = Kura::blank_kura_for_testing();
         let parent = HashOf::from_untyped_unchecked(Hash::new(b"cleanup carrier parent"));
@@ -50638,6 +54885,504 @@ mod tests {
                 .expect("read future sidecars"),
             vec![(future.canonical_hash(), future)]
         );
+    }
+
+    #[test]
+    fn pending_queue_plan_admission_store_is_exact_bounded_and_deterministic() {
+        let kura = Kura::blank_kura_for_testing();
+        let first = b"queue-plan-admission-v2:first".to_vec();
+        let second = b"queue-plan-admission-v2:second".to_vec();
+        let first_hash = kura
+            .persist_pending_queue_plan_admission_certificate(&first)
+            .expect("persist first admission certificate");
+        let second_hash = kura
+            .persist_pending_queue_plan_admission_certificate(&second)
+            .expect("persist second admission certificate");
+        assert_ne!(first_hash, second_hash);
+        assert_eq!(
+            kura.persist_pending_queue_plan_admission_certificate(&first)
+                .expect("idempotently persist exact certificate"),
+            first_hash
+        );
+        assert_eq!(
+            kura.pending_queue_plan_admission_certificate(first_hash)
+                .expect("read exact admission certificate"),
+            Some(first.clone())
+        );
+
+        let mut expected = vec![(first_hash, first), (second_hash, second)];
+        expected.sort_by_key(|(hash, _)| *hash);
+        assert_eq!(
+            kura.pending_queue_plan_admission_certificates()
+                .expect("read pending admission certificates"),
+            expected
+        );
+        assert_eq!(
+            kura.pending_queue_plan_admission_certificates_bounded(1)
+                .expect("read bounded admission certificates"),
+            expected[..1]
+        );
+        assert!(
+            kura.pending_queue_plan_admission_certificates_bounded(0)
+                .expect("zero admission diagnostic budget")
+                .is_empty()
+        );
+
+        assert_eq!(
+            kura.retain_pending_queue_plan_admission_certificates(|hash, _| hash == second_hash)
+                .expect("retain one exact admission certificate"),
+            1
+        );
+        let retained = expected
+            .iter()
+            .find(|(hash, _)| *hash == second_hash)
+            .expect("second certificate remains in expected set")
+            .clone();
+        assert_eq!(
+            kura.pending_queue_plan_admission_certificates()
+                .expect("read retained admission certificate"),
+            vec![retained]
+        );
+        kura.remove_pending_queue_plan_admission_certificate(second_hash)
+            .expect("remove committed admission certificate");
+        assert!(
+            kura.pending_queue_plan_admission_certificates()
+                .expect("read empty admission store")
+                .is_empty()
+        );
+        kura.remove_pending_queue_plan_admission_certificate(second_hash)
+            .expect("idempotently remove absent admission certificate");
+    }
+
+    #[test]
+    fn pending_queue_plan_admission_store_rejects_empty_and_oversized_bytes() {
+        let kura = Kura::blank_kura_for_testing();
+        assert!(
+            kura.persist_pending_queue_plan_admission_certificate(&[])
+                .is_err()
+        );
+        let oversized = vec![0xA5; MAX_PENDING_QUEUE_PLAN_ADMISSION_CERTIFICATE_BYTES + 1];
+        assert!(
+            kura.persist_pending_queue_plan_admission_certificate(&oversized)
+                .is_err()
+        );
+        assert!(
+            !kura.pending_queue_plan_admission_dir().exists(),
+            "rejected bytes must not create the admission store"
+        );
+    }
+
+    #[test]
+    fn pending_queue_plan_admission_bytes_participate_in_exact_disk_accounting() {
+        let kura = Kura::blank_kura_for_testing();
+        let baseline_enforced = kura
+            .kura_disk_usage_bytes()
+            .expect("measure baseline enforced bytes");
+        let baseline_total = kura
+            .kura_total_disk_usage_bytes()
+            .expect("measure baseline total bytes");
+        let bytes = b"queue-plan-admission-v2:disk-accounting".to_vec();
+        let hash = kura
+            .persist_pending_queue_plan_admission_certificate(&bytes)
+            .expect("persist accounted admission certificate");
+        let expected_delta = u64::try_from(bytes.len()).expect("fixture length fits u64");
+        assert_eq!(
+            kura.kura_disk_usage_bytes()
+                .expect("measure enforced bytes with admission certificate"),
+            baseline_enforced.saturating_add(expected_delta)
+        );
+        assert_eq!(
+            kura.kura_total_disk_usage_bytes()
+                .expect("measure total bytes with admission certificate"),
+            baseline_total.saturating_add(expected_delta)
+        );
+
+        kura.remove_pending_queue_plan_admission_certificate(hash)
+            .expect("remove accounted admission certificate");
+        assert_eq!(
+            kura.kura_disk_usage_bytes()
+                .expect("measure enforced bytes after removal"),
+            baseline_enforced
+        );
+        assert_eq!(
+            kura.kura_total_disk_usage_bytes()
+                .expect("measure total bytes after removal"),
+            baseline_total
+        );
+    }
+
+    #[test]
+    fn pending_queue_plan_admission_startup_recovers_unpublished_temporary() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+
+            let symlinked = Kura::blank_kura_for_testing();
+            let outside = TempDir::new().expect("create external admission directory");
+            let external_bytes = b"queue-plan-admission-v2:external-crash-temp";
+            let external_hash = Hash::new(external_bytes);
+            let external_temp = outside.path().join(format!(
+                "{}.norito.tmp",
+                hex::encode(external_hash.as_ref())
+            ));
+            fs::write(&external_temp, external_bytes).expect("stage external admission temporary");
+            symlink(outside.path(), symlinked.pending_queue_plan_admission_dir())
+                .expect("replace admission directory with a symlink");
+            assert!(
+                symlinked
+                    .validate_pending_merge_entries_on_startup()
+                    .is_err(),
+                "startup must reject a symlinked admission directory before recovery"
+            );
+            assert!(
+                external_temp.is_file(),
+                "startup rejection must not mutate the admission symlink target"
+            );
+        }
+
+        let kura = Kura::blank_kura_for_testing();
+        let bytes = b"queue-plan-admission-v2:recover-unpublished".to_vec();
+        let hash = Hash::new(&bytes);
+        let directory = kura.pending_queue_plan_admission_dir();
+        fs::create_dir(&directory).expect("create admission recovery directory");
+        let temp_path = kura
+            .pending_queue_plan_admission_path(hash)
+            .with_extension("norito.tmp");
+        fs::write(&temp_path, &bytes).expect("write durable admission temporary");
+        fs::File::open(&temp_path)
+            .expect("open admission temporary")
+            .sync_all()
+            .expect("sync admission temporary");
+        sync_dir(&directory).expect("sync admission recovery directory");
+
+        kura.validate_pending_merge_entries_on_startup()
+            .expect("recover unpublished admission temporary");
+        assert!(!temp_path.exists());
+        assert_eq!(
+            kura.pending_queue_plan_admission_certificate(hash)
+                .expect("read recovered admission certificate"),
+            Some(bytes)
+        );
+
+        let simultaneous = Kura::blank_kura_for_testing();
+        let simultaneous_merge_directory = simultaneous.pending_merge_entry_dir();
+        let simultaneous_admission_directory = simultaneous.pending_queue_plan_admission_dir();
+        fs::create_dir(&simultaneous_merge_directory)
+            .expect("create simultaneous merge recovery directory");
+        fs::create_dir(&simultaneous_admission_directory)
+            .expect("create simultaneous admission recovery directory");
+        let simultaneous_entry = sample_merge_entry(106);
+        let simultaneous_entry_hash = simultaneous_entry.canonical_hash();
+        let simultaneous_merge_target =
+            simultaneous.pending_merge_entry_path(simultaneous_entry_hash);
+        let simultaneous_merge_temp = simultaneous_merge_target.with_extension("norito.tmp");
+        fs::write(
+            &simultaneous_merge_temp,
+            simultaneous_entry.canonical_bytes(),
+        )
+        .expect("stage simultaneous pending merge temporary");
+        let simultaneous_admission_bytes =
+            b"queue-plan-admission-v2:simultaneous-crash-temp".to_vec();
+        let simultaneous_admission_hash = Hash::new(&simultaneous_admission_bytes);
+        let simultaneous_admission_target =
+            simultaneous.pending_queue_plan_admission_path(simultaneous_admission_hash);
+        let simultaneous_admission_temp =
+            simultaneous_admission_target.with_extension("norito.tmp");
+        fs::write(&simultaneous_admission_temp, &simultaneous_admission_bytes)
+            .expect("stage simultaneous admission temporary");
+        simultaneous
+            .validate_pending_merge_entries_on_startup()
+            .expect("recover one crash temporary in each pending-control namespace");
+        assert!(!simultaneous_merge_temp.exists());
+        assert!(!simultaneous_admission_temp.exists());
+        assert_eq!(
+            simultaneous
+                .read_pending_merge_entry_path(
+                    &simultaneous_merge_target,
+                    Some(simultaneous_entry_hash),
+                )
+                .expect("read simultaneously recovered pending merge entry"),
+            Some(simultaneous_entry)
+        );
+        assert_eq!(
+            simultaneous
+                .pending_queue_plan_admission_certificate(simultaneous_admission_hash)
+                .expect("read simultaneously recovered admission certificate"),
+            Some(simultaneous_admission_bytes)
+        );
+
+        let saturated = Kura::blank_kura_for_testing();
+        let saturated_directory = saturated.pending_queue_plan_admission_dir();
+        fs::create_dir(&saturated_directory)
+            .expect("create saturated admission recovery directory");
+        let mut removable_path = None;
+        for index in 0..saturated
+            .pending_control_sidecar_limits
+            .queue_plan_admissions
+        {
+            let stable_bytes = format!("queue-plan-admission-v2:saturated:{index}").into_bytes();
+            let stable_hash = Hash::new(&stable_bytes);
+            let stable_path = saturated.pending_queue_plan_admission_path(stable_hash);
+            fs::write(&stable_path, stable_bytes).expect("write saturated admission certificate");
+            removable_path.get_or_insert(stable_path);
+        }
+        let overflow_bytes = b"queue-plan-admission-v2:saturated:overflow".to_vec();
+        let overflow_hash = Hash::new(&overflow_bytes);
+        let overflow_target = saturated.pending_queue_plan_admission_path(overflow_hash);
+        let overflow_temp = overflow_target.with_extension("norito.tmp");
+        fs::write(&overflow_temp, &overflow_bytes)
+            .expect("write saturated unpublished admission temporary");
+        sync_dir(&saturated_directory).expect("sync saturated admission recovery directory");
+
+        assert!(
+            saturated
+                .validate_pending_merge_entries_on_startup()
+                .is_err(),
+            "recovery must not publish a 1,025th stable admission certificate"
+        );
+        assert!(overflow_temp.is_file());
+        assert!(!overflow_target.exists());
+
+        fs::remove_file(removable_path.expect("one saturated certificate path"))
+            .expect("free one stable admission slot");
+        sync_dir(&saturated_directory).expect("sync freed admission recovery slot");
+        saturated
+            .validate_pending_merge_entries_on_startup()
+            .expect("recover unpublished admission temporary after one slot is free");
+        assert!(!overflow_temp.exists());
+        assert_eq!(
+            saturated
+                .pending_queue_plan_admission_certificate(overflow_hash)
+                .expect("read capacity-bound recovered admission certificate"),
+            Some(overflow_bytes)
+        );
+        assert_eq!(
+            saturated
+                .pending_queue_plan_admission_certificates()
+                .expect("read exact saturated admission store")
+                .len(),
+            saturated
+                .pending_control_sidecar_limits
+                .queue_plan_admissions
+        );
+
+        let shared_saturated = Kura::blank_kura_for_testing();
+        let merge_directory = shared_saturated.pending_merge_entry_dir();
+        let admission_directory = shared_saturated.pending_queue_plan_admission_dir();
+        fs::create_dir(&merge_directory).expect("create shared-cap merge directory");
+        fs::create_dir(&admission_directory).expect("create shared-cap admission directory");
+        let merge_file_bytes =
+            u64::try_from(MAX_MERGE_LEDGER_ENTRY_BYTES).expect("merge byte limit fits u64");
+        let merge_saturation_files = shared_saturated
+            .pending_control_sidecar_limits
+            .aggregate_bytes
+            / MAX_MERGE_LEDGER_ENTRY_BYTES;
+        for index in 0..merge_saturation_files {
+            let hash = HashOf::<MergeLedgerEntry>::from_untyped_unchecked(Hash::new(format!(
+                "shared-cap-merge-{index}"
+            )));
+            let file = fs::File::create(shared_saturated.pending_merge_entry_path(hash))
+                .expect("create sparse merge saturation file");
+            file.set_len(merge_file_bytes)
+                .expect("size sparse merge saturation file");
+        }
+        let overflow_bytes = b"queue-plan-admission-v2:shared-cap-overflow".to_vec();
+        let overflow_hash = Hash::new(&overflow_bytes);
+        let overflow_target = shared_saturated.pending_queue_plan_admission_path(overflow_hash);
+        let overflow_temp = overflow_target.with_extension("norito.tmp");
+        fs::write(&overflow_temp, overflow_bytes)
+            .expect("stage admission temporary above the shared cap");
+        assert!(
+            shared_saturated
+                .validate_pending_merge_entries_on_startup()
+                .is_err(),
+            "admission recovery must enforce the shared pending-control byte cap before publication"
+        );
+        assert!(overflow_temp.is_file());
+        assert!(!overflow_target.exists());
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn pending_queue_plan_admission_startup_completes_hard_link_publication() {
+        let kura = Kura::blank_kura_for_testing();
+        let bytes = b"queue-plan-admission-v2:recover-linked".to_vec();
+        let hash = Hash::new(&bytes);
+        let directory = kura.pending_queue_plan_admission_dir();
+        fs::create_dir(&directory).expect("create admission recovery directory");
+        let target_path = kura.pending_queue_plan_admission_path(hash);
+        let temp_path = target_path.with_extension("norito.tmp");
+        fs::write(&temp_path, &bytes).expect("write durable admission temporary");
+        fs::hard_link(&temp_path, &target_path).expect("publish admission hard link");
+        sync_dir(&directory).expect("sync linked admission recovery directory");
+        let staged_enforced = kura
+            .refresh_disk_usage_bytes()
+            .expect("cache hard-linked admission recovery bytes");
+        let staged_total = kura
+            .disk_usage_bytes()
+            .expect("read cached hard-linked admission recovery bytes");
+
+        assert_eq!(
+            kura.persist_pending_queue_plan_admission_certificate(&bytes)
+                .expect("idempotent retry must finish linked admission publication"),
+            hash
+        );
+        assert!(!temp_path.exists());
+        assert!(target_path.is_file());
+        let path_bytes = u64::try_from(bytes.len()).expect("fixture length fits u64");
+        assert_eq!(
+            kura.pending_queue_plan_admission_certificate(hash)
+                .expect("read recovered linked certificate"),
+            Some(bytes)
+        );
+        assert!(Kura::sidecar_is_single_link(
+            &fs::symlink_metadata(&target_path).expect("read recovered target metadata")
+        ));
+        let recovered_enforced = kura
+            .kura_disk_usage_bytes()
+            .expect("scan recovered admission bytes");
+        let recovered_total = kura
+            .kura_total_disk_usage_bytes()
+            .expect("scan total recovered admission bytes");
+        assert_eq!(
+            recovered_enforced,
+            staged_enforced.saturating_sub(path_bytes)
+        );
+        assert_eq!(recovered_total, staged_total.saturating_sub(path_bytes));
+        assert_eq!(
+            kura.disk_usage_bytes()
+                .expect("read published recovered admission accounting"),
+            recovered_total,
+            "idempotent retry must publish the crash-temporary removal delta"
+        );
+    }
+
+    #[test]
+    fn pending_queue_plan_admission_survives_retired_purge_and_process_reopen() {
+        let directory = TempDir::new().expect("temporary Kura root");
+        let config = kura_config_for_dir(&directory, BLOCKS_IN_MEMORY);
+        let lane_config = RuntimeLaneConfig::default();
+        let (kura, _) = Kura::new(&config, &lane_config).expect("initialize Kura");
+        let bytes = b"queue-plan-admission-v2:survive-purge-and-reopen".to_vec();
+        let hash = kura
+            .persist_pending_queue_plan_admission_certificate(&bytes)
+            .expect("persist admission certificate before purge");
+
+        let retired_root = directory.path().join("retired");
+        let retired_blocks = lane_config.primary().blocks_dir(&retired_root);
+        fs::create_dir_all(&retired_blocks).expect("create disposable retired blocks");
+        fs::write(retired_blocks.join(DATA_FILE_NAME), b"disposable")
+            .expect("write disposable retired block bytes");
+        assert!(
+            kura.purge_retired_segments()
+                .expect("purge unrelated retired storage")
+        );
+        assert_eq!(
+            kura.pending_queue_plan_admission_certificate(hash)
+                .expect("read admission certificate after purge"),
+            Some(bytes.clone())
+        );
+        drop(kura);
+
+        let (reopened, _) = Kura::new(&config, &lane_config)
+            .expect("reopen with durable pending admission certificate");
+        assert_eq!(
+            reopened
+                .pending_queue_plan_admission_certificate(hash)
+                .expect("read admission certificate after process reopen"),
+            Some(bytes)
+        );
+    }
+
+    #[test]
+    fn pending_queue_plan_admission_startup_rejects_conflicting_publication_without_deletion() {
+        let kura = Kura::blank_kura_for_testing();
+        let temp_bytes = b"queue-plan-admission-v2:conflict-temp";
+        let target_bytes = b"queue-plan-admission-v2:conflict-target";
+        let hash = Hash::new(temp_bytes);
+        let directory = kura.pending_queue_plan_admission_dir();
+        fs::create_dir(&directory).expect("create admission recovery directory");
+        let target_path = kura.pending_queue_plan_admission_path(hash);
+        let temp_path = target_path.with_extension("norito.tmp");
+        fs::write(&temp_path, temp_bytes).expect("write conflicting admission temporary");
+        fs::write(&target_path, target_bytes).expect("write conflicting admission target");
+        sync_dir(&directory).expect("sync conflicting admission recovery directory");
+
+        assert!(
+            kura.validate_pending_merge_entries_on_startup().is_err(),
+            "conflicting publication identities must fail closed"
+        );
+        assert_eq!(
+            fs::read(&temp_path).expect("conflicting temporary remains"),
+            temp_bytes
+        );
+        assert_eq!(
+            fs::read(&target_path).expect("conflicting target remains"),
+            target_bytes
+        );
+    }
+
+    #[test]
+    fn pending_queue_plan_admission_startup_rejects_oversized_artifact() {
+        let kura = Kura::blank_kura_for_testing();
+        let bytes = b"queue-plan-admission-v2:oversized-path-identity";
+        let hash = Hash::new(bytes);
+        let directory = kura.pending_queue_plan_admission_dir();
+        fs::create_dir(&directory).expect("create oversized admission directory");
+        let path = kura.pending_queue_plan_admission_path(hash);
+        let file = fs::File::create(&path).expect("create oversized admission artifact");
+        file.set_len(
+            u64::try_from(MAX_PENDING_QUEUE_PLAN_ADMISSION_CERTIFICATE_BYTES)
+                .expect("certificate limit fits u64")
+                .saturating_add(1),
+        )
+        .expect("materialize oversized admission artifact");
+        file.sync_all().expect("sync oversized admission artifact");
+        sync_dir(&directory).expect("sync oversized admission directory");
+
+        assert!(
+            kura.validate_pending_merge_entries_on_startup().is_err(),
+            "oversized admission artifact must fail closed at startup"
+        );
+        assert_eq!(
+            fs::metadata(&path)
+                .expect("oversized admission artifact remains")
+                .len(),
+            u64::try_from(MAX_PENDING_QUEUE_PLAN_ADMISSION_CERTIFICATE_BYTES)
+                .expect("certificate limit fits u64")
+                .saturating_add(1)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pending_queue_plan_admission_store_rejects_symlink_and_unexpected_artifacts() {
+        use std::os::unix::fs::symlink;
+
+        for unexpected in ["symlink", "unexpected"] {
+            let kura = Kura::blank_kura_for_testing();
+            let directory = kura.pending_queue_plan_admission_dir();
+            fs::create_dir(&directory).expect("create malformed admission directory");
+            match unexpected {
+                "symlink" => {
+                    let bytes = b"queue-plan-admission-v2:symlink";
+                    let target = kura.store_root().join("outside-admission.norito");
+                    fs::write(&target, bytes).expect("write symlink target");
+                    let hash = Hash::new(bytes);
+                    symlink(&target, kura.pending_queue_plan_admission_path(hash))
+                        .expect("create admission symlink");
+                }
+                "unexpected" => {
+                    fs::write(directory.join("surprise.txt"), b"unexpected")
+                        .expect("write unexpected admission artifact");
+                }
+                _ => unreachable!("fixed malformed artifact table"),
+            }
+            assert!(
+                kura.pending_queue_plan_admission_certificates().is_err(),
+                "{unexpected} admission artifact must fail closed"
+            );
+        }
     }
 
     #[test]
@@ -51808,15 +56553,33 @@ mod tests {
 
         let directory = kura.pending_merge_entry_dir();
         std::fs::create_dir_all(&directory).expect("create pending sidecar directory");
-        for index in 0..MAX_PENDING_CERTIFIED_MERGE_ENTRIES {
+        #[cfg(any(unix, windows))]
+        let mut crash_published_path = None;
+        for index in 0..kura.pending_control_sidecar_limits.certified_merge_entries {
             let mut pending = sample_merge_entry(200);
             pending.global_state_root = Hash::new(index.to_le_bytes());
             pending.merge_qc.message_digest = Hash::new(index.to_be_bytes());
-            std::fs::write(
-                kura.pending_merge_entry_path(pending.canonical_hash()),
-                pending.canonical_bytes(),
-            )
-            .expect("seed a valid unrelated pending sidecar");
+            let path = kura.pending_merge_entry_path(pending.canonical_hash());
+            std::fs::write(&path, pending.canonical_bytes())
+                .expect("seed a valid unrelated pending sidecar");
+            #[cfg(any(unix, windows))]
+            if index == 0 {
+                crash_published_path = Some(path);
+            }
+        }
+        #[cfg(any(unix, windows))]
+        {
+            let target_path = crash_published_path.expect("capture a pending sidecar path");
+            let temp_path = target_path.with_extension("norito.tmp");
+            std::fs::hard_link(&target_path, &temp_path)
+                .expect("stage a crash-published pending merge hard link at capacity");
+            sync_dir(&directory).expect("sync crash-published pending merge fixture");
+            kura.validate_pending_merge_entries_on_startup()
+                .expect("recover the one extra hard-link path at logical capacity");
+            assert!(
+                !temp_path.exists(),
+                "recovery must remove only the crash temporary"
+            );
         }
         let mut overflow = sample_merge_entry(201);
         overflow.global_state_root = Hash::new(b"pending-capacity-overflow");
@@ -52705,10 +57468,12 @@ mod tests {
             .expect("default lane is configured");
         kura.install_lane_incarnation_marker_for_test(lane_entry, ownership.lane_incarnation, 0)
             .expect("install default lane marker");
-        let small_bytes =
-            Kura::block_required_bytes_for_budget(&small_block, u64::MAX).expect("small bytes");
-        let large_bytes =
-            Kura::block_required_bytes_for_budget(&large_block, u64::MAX).expect("large bytes");
+        let small_bytes = kura
+            .block_required_bytes_for_budget(&small_block, u64::MAX)
+            .expect("small bytes");
+        let large_bytes = kura
+            .block_required_bytes_for_budget(&large_block, u64::MAX)
+            .expect("large bytes");
         assert!(
             large_bytes > small_bytes,
             "expected large block to be larger"
@@ -52791,6 +57556,155 @@ mod tests {
             .store_block(block)
             .expect_err("sidecar bytes should exceed budget");
         assert!(matches!(err, Error::StorageBudgetExceeded { .. }));
+
+        let native_temp_dir = TempDir::new().expect("create Native AMX budget temp dir");
+        let mut native_cfg = kura_config_for_dir(&native_temp_dir, BLOCKS_IN_MEMORY);
+        native_cfg.roster_sidecar_retention = nonzero!(2_usize);
+        let (mut native_kura, _) =
+            Kura::new(&native_cfg, &RuntimeLaneConfig::default()).expect("initialize Native Kura");
+        let configured_prune_bound =
+            Kura::native_amx_evidence_prune_intent_max_bytes_for_retention(
+                native_cfg.roster_sidecar_retention,
+            )
+            .expect("configured Native AMX prune bound");
+        assert_eq!(
+            native_kura.native_amx_evidence_prune_intent_max_bytes(),
+            configured_prune_bound
+        );
+        assert!(
+            configured_prune_bound
+                < Kura::native_amx_evidence_prune_intent_max_bytes_for_retention(
+                    ROSTER_SIDECAR_RETENTION,
+                )
+                .expect("default Native AMX prune bound"),
+            "the prune-journal hard limit must derive from configured retention"
+        );
+
+        let native_block = crate::sumeragi::exec::result_bearing_native_manifest_block_for_tests();
+        assert!(
+            native_block
+                .execution_context()
+                .is_none_or(|context| context.lane_payload_ownerships.is_empty()),
+            "Native accounting fixture must isolate standalone evidence bytes"
+        );
+        let native_manifest =
+            crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block(
+                &native_block,
+            )
+            .expect("construct Native AMX accounting manifest");
+        let placeholder_finality_hash = HashOf::from_untyped_unchecked(Hash::new(
+            b"Native AMX application disk-accounting finality placeholder",
+        ));
+        let mut exact_evidence_bytes = 0_u64;
+        let mut unique_routes = BTreeSet::new();
+        for (index, entry) in native_manifest.entries().iter().enumerate() {
+            let leaf_index = u32::try_from(index).expect("fixture leaf index fits u32");
+            let manifest_artifact = NativeAmxParticipantApplicationManifestArtifactV1 {
+                version: NativeAmxParticipantApplicationManifestArtifactV1::VERSION,
+                leaf: entry.leaf.clone(),
+                leaf_index,
+                proof: native_manifest
+                    .proof(leaf_index)
+                    .expect("fixture manifest proof"),
+                manifest_root: native_manifest.root(),
+                manifest_leaf_count: native_manifest.count(),
+                finality_artifact_hash: placeholder_finality_hash,
+            };
+            let receipt = NativeAmxParticipantApplicationReceiptArtifact::new(
+                entry,
+                HashOf::new(&manifest_artifact),
+                placeholder_finality_hash,
+            );
+            let latest = NativeAmxParticipantReceiptLatestIndexV1::from_receipt(&receipt)
+                .expect("fixture latest index");
+            exact_evidence_bytes = exact_evidence_bytes
+                .checked_add(
+                    u64::try_from(
+                        manifest_artifact
+                            .encode_framed()
+                            .expect("encode fixture manifest")
+                            .len(),
+                    )
+                    .expect("manifest length fits u64"),
+                )
+                .and_then(|bytes| {
+                    bytes.checked_add(
+                        u64::try_from(
+                            receipt
+                                .encode_framed()
+                                .expect("encode fixture receipt")
+                                .len(),
+                        )
+                        .expect("receipt length fits u64"),
+                    )
+                })
+                .and_then(|bytes| {
+                    bytes.checked_add(
+                        u64::try_from(
+                            norito::to_bytes(&latest)
+                                .expect("encode fixture latest index")
+                                .len(),
+                        )
+                        .expect("latest length fits u64"),
+                    )
+                })
+                .expect("fixture evidence accounting does not overflow");
+            unique_routes.insert((
+                entry.leaf.lane_id,
+                entry.leaf.dataspace_id,
+                entry.leaf.lane_incarnation,
+            ));
+        }
+        assert!(
+            unique_routes.len() > 1,
+            "fixture must cover multiple routes"
+        );
+        let expected_native_artifacts = exact_evidence_bytes
+            .checked_add(
+                u64::try_from(configured_prune_bound)
+                    .expect("configured prune bound fits u64")
+                    .checked_mul(u64::try_from(unique_routes.len()).expect("route count fits u64"))
+                    .expect("prune reservation does not overflow"),
+            )
+            .expect("Native artifact accounting does not overflow");
+        assert_eq!(
+            native_kura
+                .lane_artifact_required_bytes_for_block(&native_block)
+                .expect("account Native artifacts"),
+            expected_native_artifacts,
+            "each unique Native route must reserve exactly one configured prune journal"
+        );
+
+        let native_required = native_kura
+            .block_required_bytes_for_budget(&native_block, u64::MAX)
+            .expect("account complete Native block");
+        let native_used = native_kura
+            .refresh_disk_usage_bytes()
+            .expect("measure Native Kura baseline");
+        let exact_limit = native_used
+            .checked_add(native_required)
+            .expect("exact Native storage budget fits u64");
+        Arc::get_mut(&mut native_kura)
+            .expect("exclusive Native Kura before budget check")
+            .max_disk_usage_bytes = exact_limit;
+        native_kura
+            .check_storage_budget(&native_block, None)
+            .expect("exact Native evidence budget must admit the block");
+
+        Arc::get_mut(&mut native_kura)
+            .expect("exclusive Native Kura before negative budget check")
+            .max_disk_usage_bytes = exact_limit - 1;
+        let err = native_kura
+            .check_storage_budget(&native_block, None)
+            .expect_err("one byte below exact Native evidence budget must reject");
+        assert!(matches!(
+            err,
+            Error::StorageBudgetExceeded {
+                limit,
+                required,
+                ..
+            } if limit == exact_limit - 1 && required == exact_limit
+        ));
     }
 
     #[test]
@@ -55860,9 +60774,15 @@ mod tests {
             Kura::new(&config, &RuntimeLaneConfig::default()),
             Err(Error::InvalidSnapshotBootstrapMarker { .. })
         ));
-        let (reopened, count) =
-            Kura::new_inner(&config, &RuntimeLaneConfig::default(), None, Some(5), false)
-                .expect("open hash-only history provisionally for signed-lineage reauthentication");
+        let (reopened, count) = Kura::new_inner(
+            &config,
+            &RuntimeLaneConfig::default(),
+            None,
+            Some(5),
+            false,
+            PendingControlSidecarLimits::default(),
+        )
+        .expect("open hash-only history provisionally for signed-lineage reauthentication");
         assert_eq!(count.0, 5);
         assert!(reopened.provisional_snapshot_bootstrap_pending());
         assert_eq!(
@@ -57094,6 +62014,20 @@ mod tests {
             Some(BlockBodyStatus::Cached)
         );
         assert!(kura.block_payload_available_by_hash(block_hash));
+        let total_before = kura
+            .refresh_total_disk_usage_bytes()
+            .expect("cache total bytes before inline-sidecar rejection");
+        assert!(
+            kura.remove_evicted_block_sidecar_for_testing(nonzero!(1_usize))
+                .is_err(),
+            "the remote-only test hook must reject a still-inline body"
+        );
+        assert_eq!(
+            kura.refresh_total_disk_usage_bytes()
+                .expect("scan total bytes after inline-sidecar rejection"),
+            total_before,
+            "rejected test-hook removal must not perturb disk accounting"
+        );
     }
 
     #[test]
@@ -57110,11 +62044,37 @@ mod tests {
                 .expect("evict canonical block body")
                 >= payload_len
         );
+        let da_path = kura.block_store.lock().da_block_path(2);
+        let da_bytes = fs::metadata(&da_path)
+            .expect("evicted canonical DA sidecar metadata")
+            .len();
+        let total_with_da = kura
+            .refresh_total_disk_usage_bytes()
+            .expect("cache total usage with the evicted DA sidecar");
         kura.remove_evicted_block_sidecar_for_testing(height)
             .expect("make canonical body remote-only");
-        let da_path = kura.block_store.lock().da_block_path(2);
         assert!(!da_path.exists());
         assert!(kura.get_block(height).is_none());
+        let total_without_da = kura
+            .kura_total_disk_usage_bytes()
+            .expect("scan total usage after remote-only test shaping");
+        assert_eq!(total_without_da, total_with_da.saturating_sub(da_bytes));
+        assert_eq!(
+            kura.disk_usage_bytes()
+                .expect("read cached total usage after DA-sidecar removal"),
+            total_without_da,
+            "the test hook must publish the exact DA removal delta"
+        );
+        assert!(
+            kura.remove_evicted_block_sidecar_for_testing(height)
+                .is_err(),
+            "the remote-only test hook must reject an already absent DA sidecar"
+        );
+        assert_eq!(
+            kura.refresh_total_disk_usage_bytes()
+                .expect("scan total usage after absent-sidecar rejection"),
+            total_without_da
+        );
 
         let mut substituted = canonical.as_ref().clone();
         let substitute_key =
@@ -59149,10 +64109,13 @@ mod tests {
             proposal.descriptor.lane_id,
             proposal.descriptor.dataspace_id,
         ));
-        let reservation = LaneQueueReservationKeyV1 {
-            version: LaneQueueReservationKeyV1::VERSION,
+        let reservation = LaneQueueReservationKeyV2 {
+            version: LaneQueueReservationKeyV2::VERSION,
             signed_transaction_hash: accepted.hash(),
             entrypoint_hash: entrypoint.hash(),
+            queue_plan_admission_binding_hash: Hash::new(
+                b"kura-autonomous-view-queue-plan-admission-binding",
+            ),
             routing_plan_digest: routing_plan.digest(),
             coordinator_leg: routing_plan.coordinator_leg(),
             lane_id: proposal.descriptor.lane_id,
@@ -59177,6 +64140,39 @@ mod tests {
         )
         .expect("autonomous payload");
         (chain_id_hash, epoch, payload)
+    }
+
+    fn write_autonomous_claim_inventory_fixture(
+        store_root: &Path,
+        payload: &LaneExecutablePayloadV1,
+        entrypoint_hash: Hash,
+        staged: bool,
+    ) -> PathBuf {
+        let mut claim = AutonomousLaneEntrypointClaimV3::new(payload, entrypoint_hash);
+        if !staged {
+            claim.state = AutonomousLaneEntrypointClaimStateV3::Released(Hash::new_from_chunks(&[
+                b"iroha:kura:test-claim-inventory-retirement:v1\0",
+                entrypoint_hash.as_ref(),
+            ]));
+        }
+        let path = Kura::autonomous_lane_entrypoint_claim_path(
+            store_root,
+            &claim.chain_id_hash,
+            &claim.entrypoint_hash,
+        );
+        let path = if staged {
+            Kura::autonomous_lane_entrypoint_claim_temp_path(&path)
+        } else {
+            path
+        };
+        fs::create_dir_all(path.parent().expect("claim fixture parent"))
+            .expect("create claim fixture shard");
+        fs::write(
+            &path,
+            norito::to_bytes(&claim).expect("encode claim fixture"),
+        )
+        .expect("write claim fixture");
+        path
     }
 
     fn install_autonomous_lane_marker_for_kura(
@@ -59239,13 +64235,18 @@ mod tests {
             .entrypoints
             .iter()
             .zip(&routing_plans)
-            .map(|(entrypoint, routing_plan)| {
+            .enumerate()
+            .map(|(index, (entrypoint, routing_plan))| {
                 let accepted =
                     AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(entrypoint.clone()));
-                LaneQueueReservationKeyV1 {
-                    version: LaneQueueReservationKeyV1::VERSION,
+                LaneQueueReservationKeyV2 {
+                    version: LaneQueueReservationKeyV2::VERSION,
                     signed_transaction_hash: accepted.hash(),
                     entrypoint_hash: entrypoint.hash(),
+                    queue_plan_admission_binding_hash: Hash::new_from_chunks(&[
+                        b"kura-autonomous-bundle-queue-plan-admission-binding",
+                        &u64::try_from(index).unwrap_or(u64::MAX).to_le_bytes(),
+                    ]),
                     routing_plan_digest: routing_plan.digest(),
                     coordinator_leg: routing_plan.coordinator_leg(),
                     lane_id: proposal.descriptor.lane_id,
@@ -59692,8 +64693,12 @@ mod tests {
             Some(&deliver),
             "failed replacement attempts must leave the first origin READY QC unchanged",
         );
-        let view_path =
-            Kura::autonomous_lane_block_view_state_path_for_entry(lane_entry, temp_dir.path(), 1);
+        let view_path = Kura::autonomous_lane_block_attempt_view_state_path_for_entry(
+            lane_entry,
+            temp_dir.path(),
+            1,
+            payload.origin_proposal.descriptor.proposal_height,
+        );
         fs::write(&view_path, [0xFF, 0x00, 0xAA]).expect("corrupt availability state");
         assert!(
             !reopened.autonomous_lane_payload_availability_delivered(
@@ -59947,6 +64952,181 @@ mod tests {
     }
 
     #[test]
+    fn autonomous_claim_runtime_inventory_enforces_boundary_without_partial_staging() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
+        let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let (_, _, payload) =
+            autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, &signer);
+        let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
+        let first_filler = write_autonomous_claim_inventory_fixture(
+            temp_dir.path(),
+            &payload,
+            Hash::new(b"claim-inventory-first-filler"),
+            false,
+        );
+        let first_filler_bytes = fs::read(&first_filler).expect("read first filler");
+        let target_path = Kura::autonomous_lane_entrypoint_claim_path(
+            temp_dir.path(),
+            &payload.chain_id_hash,
+            &payload.entrypoint_hashes[0],
+        );
+        let target_temp = Kura::autonomous_lane_entrypoint_claim_temp_path(&target_path);
+
+        let _guard = kura.sidecar_lock.lock();
+        let staged = kura
+            .prepare_autonomous_lane_entrypoint_claims_with_limit_locked(&payload, 2)
+            .expect("one free inventory slot admits one crash-staged claim");
+        assert_eq!(staged.len(), 1);
+        assert!(
+            target_temp.is_file(),
+            "the exact boundary must include the staged temp"
+        );
+        assert_eq!(
+            kura.inspect_autonomous_lane_entrypoint_claim_inventory(2)
+                .expect("inspect exact boundary"),
+            2,
+        );
+
+        fs::remove_file(&target_temp).expect("remove first boundary-stage fixture");
+        let second_filler = write_autonomous_claim_inventory_fixture(
+            temp_dir.path(),
+            &payload,
+            Hash::new(b"claim-inventory-second-filler"),
+            false,
+        );
+        let second_filler_bytes = fs::read(&second_filler).expect("read second filler");
+        assert!(
+            kura.prepare_autonomous_lane_entrypoint_claims_with_limit_locked(&payload, 2)
+                .is_err(),
+            "a full live inventory must reject staging before creating any file",
+        );
+        assert!(!target_path.exists());
+        assert!(!target_temp.exists());
+        assert_eq!(
+            fs::read(&first_filler).expect("first filler remains"),
+            first_filler_bytes,
+        );
+        assert_eq!(
+            fs::read(&second_filler).expect("second filler remains"),
+            second_filler_bytes,
+        );
+    }
+
+    #[test]
+    fn autonomous_claim_startup_inventory_bound_fails_before_temp_reconciliation() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
+        let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let (_, _, payload) =
+            autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, &signer);
+        let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
+        let main = write_autonomous_claim_inventory_fixture(
+            temp_dir.path(),
+            &payload,
+            Hash::new(b"claim-startup-bound-main"),
+            false,
+        );
+        let orphan_temp = write_autonomous_claim_inventory_fixture(
+            temp_dir.path(),
+            &payload,
+            Hash::new(b"claim-startup-bound-orphan"),
+            true,
+        );
+        let main_bytes = fs::read(&main).expect("read main claim");
+        let orphan_bytes = fs::read(&orphan_temp).expect("read orphan temp");
+
+        let _guard = kura.sidecar_lock.lock();
+        assert!(
+            kura.reconcile_autonomous_lane_entrypoint_claim_temps_on_startup_with_limit_locked(1)
+                .is_err(),
+            "startup must reject an oversized main-plus-temp inventory",
+        );
+        assert_eq!(
+            fs::read(&main).expect("main survives rejected startup reconciliation"),
+            main_bytes,
+        );
+        assert_eq!(
+            fs::read(&orphan_temp).expect("temp survives rejected startup reconciliation"),
+            orphan_bytes,
+            "the read-only inventory pass must reject before cleaning a prefix",
+        );
+        kura.reconcile_autonomous_lane_entrypoint_claim_temps_on_startup_with_limit_locked(2)
+            .expect("the exact startup boundary is admitted");
+        assert!(main.is_file());
+        assert!(
+            !orphan_temp.exists(),
+            "bounded startup reconciliation removes the proven orphan"
+        );
+        assert_eq!(
+            kura.inspect_autonomous_lane_entrypoint_claim_inventory(1)
+                .expect("one stable main remains"),
+            1,
+        );
+    }
+
+    #[test]
+    fn autonomous_claim_inventory_rejects_unexpected_artifacts_before_any_cleanup_or_stage() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
+        let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let (_, _, payload) =
+            autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, &signer);
+        let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
+        let orphan_temp = write_autonomous_claim_inventory_fixture(
+            temp_dir.path(),
+            &payload,
+            Hash::new(b"claim-unexpected-orphan"),
+            true,
+        );
+        let orphan_bytes = fs::read(&orphan_temp).expect("read orphan temp");
+        let unexpected = orphan_temp
+            .parent()
+            .expect("claim shard")
+            .join("unexpected.claim.backup");
+        fs::write(&unexpected, b"not a claim").expect("write unexpected claim artifact");
+        let target_path = Kura::autonomous_lane_entrypoint_claim_path(
+            temp_dir.path(),
+            &payload.chain_id_hash,
+            &payload.entrypoint_hashes[0],
+        );
+        let target_temp = Kura::autonomous_lane_entrypoint_claim_temp_path(&target_path);
+
+        {
+            let _guard = kura.sidecar_lock.lock();
+            assert!(
+                kura.prepare_autonomous_lane_entrypoint_claims_with_limit_locked(&payload, 8)
+                    .is_err(),
+                "live preparation must fail closed on an unexpected namespace artifact",
+            );
+            assert!(
+                kura.reconcile_autonomous_lane_entrypoint_claim_temps_on_startup_with_limit_locked(
+                    8,
+                )
+                .is_err(),
+                "startup reconciliation must share the same fail-closed inventory",
+            );
+        }
+        assert!(!target_path.exists());
+        assert!(!target_temp.exists());
+        assert_eq!(
+            fs::read(&orphan_temp).expect("orphan remains before rejected cleanup"),
+            orphan_bytes,
+        );
+        drop(kura);
+        assert!(
+            Kura::new(&config, &lane_config).is_err(),
+            "a real restart must reject the unexpected claim artifact",
+        );
+    }
+
+    #[test]
     fn autonomous_entrypoint_claim_rejects_legacy_and_unknown_states() {
         #[derive(Encode)]
         struct LegacyClaimV2 {
@@ -60135,8 +65315,12 @@ mod tests {
         kura.persist_autonomous_lane_slot_retirement(&retirement, chain_id_hash, epoch)
             .expect("persist retirement");
 
-        let view_path =
-            Kura::autonomous_lane_block_view_state_path_for_entry(lane_entry, temp_dir.path(), 1);
+        let view_path = Kura::autonomous_lane_block_attempt_view_state_path_for_entry(
+            lane_entry,
+            temp_dir.path(),
+            1,
+            payload.origin_proposal.descriptor.proposal_height,
+        );
         let temp_path = Kura::autonomous_lane_block_view_state_temp_path(&view_path);
         let valid_bytes = fs::read(&view_path).expect("read canonical retirement");
         fs::rename(&view_path, &temp_path).expect("stage retirement rename crash");
@@ -60378,8 +65562,12 @@ mod tests {
             .expect("advance fixture view");
             certificate_prefix.push(durable);
         }
-        let view_path =
-            Kura::autonomous_lane_block_view_state_path_for_entry(lane_entry, temp_dir.path(), 1);
+        let view_path = Kura::autonomous_lane_block_attempt_view_state_path_for_entry(
+            lane_entry,
+            temp_dir.path(),
+            1,
+            payload.origin_proposal.descriptor.proposal_height,
+        );
         {
             let _guard = kura.sidecar_lock.lock();
             kura.write_autonomous_lane_block_view_state_locked(
@@ -60561,6 +65749,203 @@ mod tests {
                 .expect("first carrier remains current")
                 .0,
             first,
+        );
+    }
+
+    #[test]
+    fn autonomous_first_attempt_uses_only_versioned_files_and_repairs_missing_pointers() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
+        let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let (chain_id_hash, epoch, payload) =
+            autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, &signer);
+        let proposal_height = payload.origin_proposal.descriptor.proposal_height;
+        let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
+        install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
+        kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch)
+            .expect("persist first versioned attempt");
+
+        let artifact_dir = Kura::lane_artifact_dir(&lane.blocks_dir(temp_dir.path()));
+        let attempt_path = Kura::autonomous_lane_block_attempt_path_for_entry(
+            lane,
+            temp_dir.path(),
+            1,
+            proposal_height,
+        );
+        let view_path = Kura::autonomous_lane_block_attempt_view_state_path_for_entry(
+            lane,
+            temp_dir.path(),
+            1,
+            proposal_height,
+        );
+        let height_pointer =
+            Kura::autonomous_lane_block_latest_attempt_path_for_entry(lane, temp_dir.path(), 1);
+        let route_pointer =
+            Kura::autonomous_lane_route_latest_attempt_path_for_entry(lane, temp_dir.path());
+        assert!(attempt_path.is_file());
+        assert!(view_path.is_file());
+        assert!(height_pointer.is_file());
+        assert!(route_pointer.is_file());
+        assert!(
+            !artifact_dir
+                .join(OBSOLETE_AUTONOMOUS_LANE_BLOCKS_DATA_FILE)
+                .exists()
+                && !artifact_dir
+                    .join(OBSOLETE_AUTONOMOUS_LANE_BLOCKS_INDEX_FILE)
+                    .exists(),
+            "the coordinated first release must never emit the deleted indexed layout",
+        );
+
+        fs::remove_file(&view_path).expect("model crash before initial view publication");
+        fs::remove_file(&height_pointer).expect("model crash before height-pointer publication");
+        fs::remove_file(&route_pointer).expect("model crash before route-pointer publication");
+        let staged_claims = payload
+            .entrypoint_hashes
+            .iter()
+            .map(|entrypoint_hash| {
+                let claim = Kura::autonomous_lane_entrypoint_claim_path(
+                    temp_dir.path(),
+                    &chain_id_hash,
+                    entrypoint_hash,
+                );
+                let staged = Kura::autonomous_lane_entrypoint_claim_temp_path(&claim);
+                fs::rename(&claim, &staged)
+                    .expect("model crash after staging claim but before claim promotion");
+                (claim, staged)
+            })
+            .collect::<Vec<_>>();
+        let atomic_temp = artifact_dir.join(".kura-sidecar-crash-residue");
+        fs::write(&atomic_temp, b"unpublished atomic write")
+            .expect("stage pre-rename atomic crash residue");
+        drop(kura);
+
+        let (reopened, _) = Kura::new(&config, &lane_config)
+            .expect("startup reconstructs the exact immutable attempt");
+        assert!(!atomic_temp.exists());
+        assert!(view_path.is_file());
+        assert!(height_pointer.is_file());
+        assert!(route_pointer.is_file());
+        for (claim, staged) in staged_claims {
+            assert!(claim.is_file());
+            assert!(!staged.exists());
+        }
+        assert_eq!(
+            reopened
+                .current_autonomous_lane_payload(lane.lane_id, 1, chain_id_hash, epoch)
+                .expect("reconstructed first attempt")
+                .0,
+            payload,
+        );
+    }
+
+    #[test]
+    fn autonomous_startup_rejects_a_view_removed_after_pointer_publication() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
+        let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let (chain_id_hash, epoch, payload) =
+            autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, &signer);
+        let proposal_height = payload.origin_proposal.descriptor.proposal_height;
+        let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
+        install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
+        kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch)
+            .expect("persist complete attempt");
+        let view_path = Kura::autonomous_lane_block_attempt_view_state_path_for_entry(
+            lane,
+            temp_dir.path(),
+            1,
+            proposal_height,
+        );
+        fs::remove_file(view_path).expect("remove view after pointer and claim publication");
+        drop(kura);
+
+        assert!(
+            Kura::new(&config, &lane_config).is_err(),
+            "startup must not reconstruct a view whose later durability boundaries prove it once existed",
+        );
+    }
+
+    #[test]
+    fn autonomous_startup_rejects_an_unretired_same_height_orphan_successor() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
+        let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let (chain_id_hash, epoch, first) =
+            autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, &signer);
+        let successor = repropose_autonomous_lane_payload_for_kura(
+            &first,
+            first
+                .origin_proposal
+                .descriptor
+                .proposal_height
+                .saturating_add(1),
+            &signer,
+        );
+        let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
+        install_autonomous_lane_marker_for_kura(&kura, &lane_config, &first);
+        kura.persist_lane_executable_payload(&first, chain_id_hash, epoch)
+            .expect("persist active first attempt");
+        {
+            let _guard = kura.sidecar_lock.lock();
+            let artifact = AutonomousLaneBlockArtifact::new(successor);
+            let state = AutonomousLaneBlockViewState::from_artifact(&artifact);
+            kura.write_autonomous_lane_block_attempt_locked(
+                lane,
+                &artifact,
+                &state,
+                chain_id_hash,
+                epoch,
+            )
+            .expect("stage a crash-orphaned successor attempt");
+        }
+        drop(kura);
+
+        assert!(
+            Kura::new(&config, &lane_config).is_err(),
+            "startup must not select a successor until the prior attempt is durably retired",
+        );
+    }
+
+    #[test]
+    fn autonomous_startup_rejects_an_aggregate_oversized_attempt_namespace() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
+        let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
+        let artifact_dir = Kura::lane_artifact_dir(&lane.blocks_dir(temp_dir.path()));
+        fs::create_dir_all(&artifact_dir).expect("create lane artifact directory");
+        drop(kura);
+
+        let file_len = u64::try_from(MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES)
+            .expect("autonomous source limit fits u64");
+        let file_count = AUTONOMOUS_LANE_ARTIFACT_AGGREGATE_BYTES
+            .checked_div(MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES)
+            .expect("non-zero autonomous source limit")
+            .saturating_add(1);
+        assert!(file_count < MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES);
+        for index in 0..file_count {
+            let lane_block_height = u64::try_from(index)
+                .expect("bounded test index fits u64")
+                .saturating_add(1);
+            let path = artifact_dir.join(format!(
+                "{AUTONOMOUS_LANE_BLOCK_ATTEMPT_VIEW_PREFIX}_{lane_block_height:020}_{lane_block_height:020}.norito"
+            ));
+            fs::File::create(path)
+                .expect("create sparse autonomous view")
+                .set_len(file_len)
+                .expect("extend sparse autonomous view");
+        }
+
+        assert!(
+            Kura::new(&config, &lane_config).is_err(),
+            "startup must reject a namespace whose individually bounded files exceed the aggregate byte budget",
         );
     }
 
@@ -60856,25 +66241,109 @@ mod tests {
 
         let claim_temp = Kura::autonomous_lane_entrypoint_claim_temp_path(&claim_path);
         fs::rename(&claim_path, &claim_temp).expect("simulate claim promotion crash");
-        reopened
-            .persist_lane_executable_payload(&payload, chain_id_hash, epoch)
-            .expect("exact indexed payload recovers its pending claim");
+        drop(reopened);
+        let (recovered, _) =
+            Kura::new(&config, &lane_config).expect("startup promotes the exact durable owner");
         assert!(claim_path.is_file());
         assert!(!claim_temp.exists());
         assert!(
-            reopened
+            recovered
                 .persist_lane_executable_payload(&cross_lane, chain_id_hash, epoch)
                 .is_err(),
             "recovered claim must reject a delayed conflicting lane payload"
         );
 
+        let orphan_entrypoint_hash = Hash::new(b"orphan-startup-entrypoint-claim");
+        let orphan_claim =
+            AutonomousLaneEntrypointClaimV3::new(&later_height, orphan_entrypoint_hash);
+        let orphan_path = Kura::autonomous_lane_entrypoint_claim_path(
+            temp_dir.path(),
+            &chain_id_hash,
+            &orphan_entrypoint_hash,
+        );
+        let orphan_temp = Kura::autonomous_lane_entrypoint_claim_temp_path(&orphan_path);
+        fs::create_dir_all(orphan_path.parent().expect("orphan claim parent"))
+            .expect("create orphan claim shard");
+        fs::write(
+            &orphan_temp,
+            norito::to_bytes(&orphan_claim).expect("encode orphan staged claim"),
+        )
+        .expect("stage claim whose payload never became durable");
+        drop(recovered);
+        let (recovered, _) =
+            Kura::new(&config, &lane_config).expect("startup discards an unpublished claim temp");
+        assert!(!orphan_path.exists());
+        assert!(!orphan_temp.exists());
+
         fs::write(&claim_path, [0xFF, 0x00, 0xAA]).expect("corrupt claim");
         assert!(
-            reopened
+            recovered
                 .persist_lane_executable_payload(&payload, chain_id_hash, epoch)
                 .is_err(),
             "a present malformed claim must fail closed"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn autonomous_claim_startup_rejects_symlinks_and_multiple_links_without_following_them() {
+        use std::os::unix::fs::symlink;
+
+        for corruption in ["symlink", "hardlink"] {
+            let temp_dir = TempDir::new().expect("temp dir");
+            let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+            let lane_config = two_lane_runtime_config();
+            let lane = lane_config.entry(LaneId::new(1)).expect("lane one");
+            let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+            let (chain_id_hash, epoch, payload) =
+                autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, &signer);
+            let (kura, _) = Kura::new(&config, &lane_config).expect("Kura");
+            install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
+            kura.persist_lane_executable_payload(&payload, chain_id_hash, epoch)
+                .expect("persist payload and claim");
+            let claim_path = Kura::autonomous_lane_entrypoint_claim_path(
+                temp_dir.path(),
+                &chain_id_hash,
+                &payload.entrypoint_hashes[0],
+            );
+            let original = fs::read(&claim_path).expect("read durable claim");
+            let outside = temp_dir.path().join(format!("{corruption}-claim-sentinel"));
+            match corruption {
+                "symlink" => {
+                    fs::write(&outside, &original).expect("write outside claim sentinel");
+                    fs::remove_file(&claim_path).expect("remove canonical claim");
+                    symlink(&outside, &claim_path).expect("install claim symlink");
+                }
+                "hardlink" => {
+                    fs::hard_link(&claim_path, &outside).expect("install second claim link");
+                }
+                _ => unreachable!("enumerated corruption"),
+            }
+            let claim_temp = Kura::autonomous_lane_entrypoint_claim_temp_path(&claim_path);
+            {
+                let _guard = kura.sidecar_lock.lock();
+                assert!(
+                    kura.prepare_autonomous_lane_entrypoint_claims_with_limit_locked(&payload, 8)
+                        .is_err(),
+                    "{corruption} claim must fail live inventory preflight closed",
+                );
+            }
+            assert!(
+                !claim_temp.exists(),
+                "failed live preflight must not stage a replacement claim",
+            );
+            drop(kura);
+
+            assert!(
+                Kura::new(&config, &lane_config).is_err(),
+                "{corruption} claim must fail startup closed",
+            );
+            assert_eq!(
+                fs::read(&outside).expect("outside claim sentinel remains readable"),
+                original,
+                "claim validation must not mutate an external link target",
+            );
+        }
     }
 
     #[test]
@@ -61193,7 +66662,66 @@ mod tests {
     }
 
     #[test]
-    fn lane_block_artifact_recreation_repairs_canonical_slot_without_scan_starvation() {
+    fn latest_lane_block_artifact_scan_counts_sparse_and_malformed_slots_exactly() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = two_lane_runtime_config();
+        let lane_id = LaneId::from(1);
+        let lane_entry = lane_config.entry(lane_id).expect("lane entry");
+        let block = dummy_block_with_lane_payload_ownership(lane_id, lane_entry.dataspace_id, 1);
+        let (kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
+        kura.store_block(block)
+            .expect("store canonical lane artifact");
+        let active = kura
+            .read_lane_block_artifact(lane_id, 1)
+            .expect("read canonical lane artifact");
+        let malformed_high = active
+            .encode_framed()
+            .expect("encode mismatched-height lane artifact");
+        let (data_path, index_path) =
+            Kura::lane_artifact_paths_for_entry(lane_entry, temp_dir.path());
+        let boundary_height =
+            u64::try_from(CONSENSUS_SIDECAR_MATCH_SCAN_BUDGET).expect("scan budget fits u64");
+
+        assert!(Kura::append_indexed_sidecar(
+            &data_path,
+            &index_path,
+            boundary_height,
+            &malformed_high,
+            "lane block artifact",
+            FsyncMode::Batched,
+            None,
+            SidecarIndexOrigin::FirstWrite,
+        ));
+        assert_eq!(
+            kura.latest_lane_block_artifact(lane_id),
+            Some(active.clone()),
+            "one malformed slot, every absent gap, and the active slot fit exactly in the budget",
+        );
+
+        assert!(Kura::append_indexed_sidecar(
+            &data_path,
+            &index_path,
+            boundary_height.saturating_add(1),
+            &malformed_high,
+            "lane block artifact",
+            FsyncMode::Batched,
+            None,
+            SidecarIndexOrigin::FirstWrite,
+        ));
+        assert!(
+            kura.latest_lane_block_artifact(lane_id).is_none(),
+            "the same valid match one slot beyond the budget must fail closed",
+        );
+        assert_eq!(
+            kura.read_lane_block_artifact(lane_id, 1),
+            Some(active),
+            "bounded latest lookup must not mutate the canonical low slot",
+        );
+    }
+
+    #[test]
+    fn lane_block_artifact_recreation_repairs_canonical_slot_and_bounds_retired_history_scan() {
         let temp_dir = TempDir::new().expect("create temp dir");
         let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
         let lane_config = two_lane_runtime_config();
@@ -61369,7 +66897,7 @@ mod tests {
 
         for stale_height in 2..=u64::try_from(CONSENSUS_SIDECAR_MATCH_SCAN_BUDGET)
             .expect("scan budget fits u64")
-            + 2
+            .saturating_add(1)
         {
             let mut stale_ownership = first_artifact.ownership.clone();
             rebind_lane_payload_ownership_for_kura(
@@ -61391,10 +66919,9 @@ mod tests {
                 SidecarIndexOrigin::FirstWrite,
             ));
         }
-        assert_eq!(
-            kura.latest_lane_block_artifact(lane_id),
-            Some(second_artifact.clone()),
-            "retired high entries must not starve the active latest scan"
+        assert!(
+            kura.latest_lane_block_artifact(lane_id).is_none(),
+            "sixty-four retired high entries must consume the complete bounded scan",
         );
         assert_eq!(
             kura.lane_block_artifacts_snapshot(),
@@ -61439,9 +66966,9 @@ mod tests {
             reopened.read_lane_block_artifact(lane_id, lane_block_height),
             Some(second_artifact.clone())
         );
-        assert_eq!(
-            reopened.latest_lane_block_artifact(lane_id),
-            Some(second_artifact.clone())
+        assert!(
+            reopened.latest_lane_block_artifact(lane_id).is_none(),
+            "restart must preserve the same bounded fail-closed lookup",
         );
         assert_eq!(
             reopened.lane_block_artifacts_snapshot(),
@@ -62758,7 +68285,7 @@ mod tests {
 
         let mut unsupported_reservation_version = input;
         unsupported_reservation_version.reservation_keys[0].version =
-            LaneQueueReservationKeyV1::VERSION + 1;
+            LaneQueueReservationKeyV2::VERSION + 1;
         assert_eq!(
             Kura::validate_lane_block_execution_input_artifact(&unsupported_reservation_version),
             Err("autonomous execution input reservation key is invalid")
@@ -67225,12 +72752,8 @@ mod tests {
     #[test]
     fn native_amx_retention_window_advances_base_and_bounds_index() {
         let temp_dir = TempDir::new().expect("temporary sidecar directory");
-        let data_path = temp_dir
-            .path()
-            .join(NATIVE_AMX_PARTICIPANT_RECEIPTS_DATA_FILE);
-        let index_path = temp_dir
-            .path()
-            .join(NATIVE_AMX_PARTICIPANT_RECEIPTS_INDEX_FILE);
+        let data_path = temp_dir.path().join("bounded-history-dummy.norito");
+        let index_path = temp_dir.path().join("bounded-history-dummy.index");
         let retention = NonZeroUsize::new(2).expect("non-zero Native evidence retention");
 
         for height in 41_u64..=44 {
@@ -67290,6 +72813,33 @@ mod tests {
                     "dummy Native AMX evidence",
                 ),
                 Some(DummySidecar { height }),
+            );
+        }
+
+        let sparse_height = 44_u64
+            .checked_add(MAX_INDEXED_SIDECAR_GAP_ENTRIES)
+            .and_then(|height| height.checked_add(1))
+            .expect("focused Native sparse height");
+        for kind in [
+            NativeAmxEvidenceKind::Manifest,
+            NativeAmxEvidenceKind::Receipt,
+        ] {
+            let path = PathBuf::from(Kura::native_amx_evidence_file_name(kind, sparse_height));
+            assert_eq!(
+                Kura::parse_native_amx_evidence_path(&path)
+                    .expect("parse canonical sparse Native evidence path"),
+                Some((kind, sparse_height, false)),
+                "Native standalone evidence must not allocate dense placeholders across a gap larger than 4,096 heights"
+            );
+            assert_eq!(
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .expect("canonical sparse Native filename")
+                    .len(),
+                kind.prefix().len()
+                    + NATIVE_AMX_EVIDENCE_HEIGHT_DIGITS
+                    + NATIVE_AMX_EVIDENCE_FILE_SUFFIX.len(),
+                "Native sparse storage cost must be independent of the participant-height gap"
             );
         }
     }
@@ -67424,7 +72974,12 @@ mod tests {
         std::fs::create_dir_all(&artifact_dir).expect("create lane artifact directory");
         let paths = (1_u64..=3)
             .map(|height| {
-                Kura::autonomous_lane_block_view_state_path_for_entry(lane, temp_dir.path(), height)
+                Kura::autonomous_lane_block_attempt_view_state_path_for_entry(
+                    lane,
+                    temp_dir.path(),
+                    height,
+                    height,
+                )
             })
             .collect::<Vec<_>>();
         for path in &paths {
@@ -67541,80 +73096,132 @@ mod tests {
         kura: &Kura,
         entry: &LaneConfigEntry,
     ) -> NativeAmxParticipantApplicationReceiptArtifact {
+        install_native_amx_evidence_fixture_heights(kura, entry, &[1])
+            .into_iter()
+            .next()
+            .expect("one Native AMX evidence fixture")
+    }
+
+    fn install_native_amx_evidence_fixture_heights(
+        kura: &Kura,
+        entry: &LaneConfigEntry,
+        participant_heights: &[u64],
+    ) -> Vec<NativeAmxParticipantApplicationReceiptArtifact> {
+        assert!(
+            !participant_heights.is_empty()
+                && participant_heights.iter().all(|height| *height > 0)
+                && participant_heights.windows(2).all(|pair| pair[0] < pair[1]),
+            "Native AMX evidence fixture heights must be non-zero and strictly ordered"
+        );
         let block = store_dummy_block_arcs(kura, 1)
             .into_iter()
             .next()
             .expect("one durable application block");
-        let (session, _) =
-            sample_committed_lane_block_session_for_kura(entry.lane_id, entry.dataspace_id, 1);
-        let proposal = session.proposal;
-        kura.install_lane_incarnation_marker_for_test(
-            entry,
-            proposal.descriptor.lane_incarnation,
-            0,
-        )
-        .expect("install active Native AMX participant incarnation");
-
-        let source_id = [0x5A; Hash::LENGTH];
-        let result = TransactionResult(TransactionResultInner::Ok(DataTriggerSequence::new()));
-        let entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
-            proposal.descriptor.accepted_transaction_hashes[0],
-        );
-        let settlement = LaneBlockCommitment {
-            block_height: proposal.descriptor.lane_block_height,
-            lane_id: proposal.descriptor.lane_id,
-            lane_incarnation: proposal.descriptor.lane_incarnation,
-            dataspace_id: proposal.descriptor.dataspace_id,
-            tx_count: 1,
-            total_local_amount: "0".parse().expect("zero quantity"),
-            total_xor_due: "0".parse().expect("zero quantity"),
-            total_xor_after_haircut: "0".parse().expect("zero quantity"),
-            total_xor_variance: "0".parse().expect("zero quantity"),
-            swap_metadata: None,
-            receipts: vec![iroha_data_model::block::consensus::LaneSettlementReceipt {
-                source_id,
-                local_amount: "0".parse().expect("zero quantity"),
-                xor_due: "0".parse().expect("zero quantity"),
-                xor_after_haircut: "0".parse().expect("zero quantity"),
-                xor_variance: "0".parse().expect("zero quantity"),
-                timestamp_ms: 1,
-            }],
-            nexus_fee_receipts: Vec::new(),
-            native_amx_receipts: Vec::new(),
-        };
-        let settlement_hash = iroha_data_model::nexus::compute_settlement_hash(&settlement)
-            .expect("hash Native AMX fixture settlement");
+        let application_block_height = block.header().height().get();
         let executed_block_wire_hash = block
             .executed_block_wire_hash()
             .expect("hash exact result-bearing application block wire");
-        let leaf = NativeAmxApplicationManifestLeafV1 {
-            version: iroha_data_model::block::consensus_v2::NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
-            lane_id: proposal.descriptor.lane_id,
-            dataspace_id: proposal.descriptor.dataspace_id,
-            lane_incarnation: proposal.descriptor.lane_incarnation,
-            participant_height: proposal.descriptor.lane_block_height,
-            participant_view: proposal.descriptor.lane_block_view,
-            predecessor_height: proposal.descriptor.previous_lane_block_height,
-            predecessor_descriptor_hash: proposal.descriptor.previous_lane_block_descriptor_hash,
-            descriptor_hash: proposal.descriptor.descriptor_hash,
-            proposal_hash: proposal.proposal_hash,
-            settlement_hash,
-            members: vec![
-                iroha_data_model::block::consensus_v2::NativeAmxApplicationManifestMemberV1 {
-                    entrypoint_index: proposal.descriptor.accepted_candidate_indices[0],
+        let mut proposals = Vec::with_capacity(participant_heights.len());
+        let mut settlements = Vec::with_capacity(participant_heights.len());
+        let mut source_ids = Vec::with_capacity(participant_heights.len());
+        let mut results = Vec::with_capacity(participant_heights.len());
+        let mut entrypoint_hashes = Vec::with_capacity(participant_heights.len());
+        let mut leaves = Vec::with_capacity(participant_heights.len());
+
+        for participant_height in participant_heights.iter().copied() {
+            let (session, _) = sample_committed_lane_block_session_for_kura(
+                entry.lane_id,
+                entry.dataspace_id,
+                participant_height,
+            );
+            let mut proposal = session.proposal;
+            proposal.descriptor.proposal_height = application_block_height;
+            proposal.descriptor.descriptor_hash = proposal.descriptor.computed_descriptor_hash();
+            proposal.proposal_hash = proposal.computed_proposal_hash();
+            crate::lane_consensus::validate_lane_block_proposal(&proposal)
+                .expect("canonical multi-height Native AMX fixture proposal");
+
+            let mut source_id = [0x5A; Hash::LENGTH];
+            source_id[..u64::BITS as usize / u8::BITS as usize]
+                .copy_from_slice(&participant_height.to_le_bytes());
+            let result = TransactionResult(TransactionResultInner::Ok(DataTriggerSequence::new()));
+            let entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
+                proposal.descriptor.accepted_transaction_hashes[0],
+            );
+            let settlement = LaneBlockCommitment {
+                block_height: proposal.descriptor.lane_block_height,
+                lane_id: proposal.descriptor.lane_id,
+                lane_incarnation: proposal.descriptor.lane_incarnation,
+                dataspace_id: proposal.descriptor.dataspace_id,
+                tx_count: 1,
+                total_local_amount: "0".parse().expect("zero quantity"),
+                total_xor_due: "0".parse().expect("zero quantity"),
+                total_xor_after_haircut: "0".parse().expect("zero quantity"),
+                total_xor_variance: "0".parse().expect("zero quantity"),
+                swap_metadata: None,
+                receipts: vec![iroha_data_model::block::consensus::LaneSettlementReceipt {
                     source_id,
-                    entrypoint_hash,
-                    result_hash: result.hash(),
-                },
-            ],
-            application_block_height: 1,
-            application_block_hash: block.hash(),
-            executed_block_wire_hash,
-        };
-        leaf.validate()
-            .expect("canonical Native AMX fixture manifest leaf");
-        let tree = [HashOf::new(&leaf)].into_iter().collect::<MerkleTree<_>>();
-        let manifest_root = tree.root().map(Hash::from).expect("one-leaf manifest root");
+                    local_amount: "0".parse().expect("zero quantity"),
+                    xor_due: "0".parse().expect("zero quantity"),
+                    xor_after_haircut: "0".parse().expect("zero quantity"),
+                    xor_variance: "0".parse().expect("zero quantity"),
+                    timestamp_ms: application_block_height,
+                }],
+                nexus_fee_receipts: Vec::new(),
+                native_amx_receipts: Vec::new(),
+            };
+            let settlement_hash = iroha_data_model::nexus::compute_settlement_hash(&settlement)
+                .expect("hash Native AMX fixture settlement");
+            let leaf = NativeAmxApplicationManifestLeafV1 {
+                version:
+                    iroha_data_model::block::consensus_v2::NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
+                lane_id: proposal.descriptor.lane_id,
+                dataspace_id: proposal.descriptor.dataspace_id,
+                lane_incarnation: proposal.descriptor.lane_incarnation,
+                participant_height: proposal.descriptor.lane_block_height,
+                participant_view: proposal.descriptor.lane_block_view,
+                predecessor_height: proposal.descriptor.previous_lane_block_height,
+                predecessor_descriptor_hash: proposal
+                    .descriptor
+                    .previous_lane_block_descriptor_hash,
+                descriptor_hash: proposal.descriptor.descriptor_hash,
+                proposal_hash: proposal.proposal_hash,
+                settlement_hash,
+                members: vec![
+                    iroha_data_model::block::consensus_v2::NativeAmxApplicationManifestMemberV1 {
+                        entrypoint_index: proposal.descriptor.accepted_candidate_indices[0],
+                        source_id,
+                        entrypoint_hash,
+                        result_hash: result.hash(),
+                    },
+                ],
+                application_block_height,
+                application_block_hash: block.hash(),
+                executed_block_wire_hash,
+            };
+            leaf.validate()
+                .expect("canonical Native AMX fixture manifest leaf");
+            proposals.push(proposal);
+            settlements.push(settlement);
+            source_ids.push(source_id);
+            results.push(result);
+            entrypoint_hashes.push(entrypoint_hash);
+            leaves.push(leaf);
+        }
+        let lane_incarnation = proposals
+            .first()
+            .expect("non-empty Native AMX fixture proposals")
+            .descriptor
+            .lane_incarnation;
+        kura.install_lane_incarnation_marker_for_test(entry, lane_incarnation, 0)
+            .expect("install active Native AMX participant incarnation");
+
+        let tree = leaves.iter().map(HashOf::new).collect::<MerkleTree<_>>();
+        let manifest_root = tree
+            .root()
+            .map(Hash::from)
+            .expect("non-empty Native AMX fixture manifest root");
+        let manifest_leaf_count = u32::try_from(leaves.len()).expect("fixture leaf count fits u32");
         let execution_commitment = ExecutionCommitment::new_with_native_amx_application_manifest(
             Hash::new(b"Native AMX latest-index parent state"),
             Hash::new(b"Native AMX latest-index post state"),
@@ -67623,7 +73230,7 @@ mod tests {
             0,
             iroha_data_model::block::consensus_v2::NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
             manifest_root,
-            1,
+            manifest_leaf_count,
             executed_block_wire_hash,
         )
         .expect("canonical Native AMX execution commitment");
@@ -67634,72 +73241,104 @@ mod tests {
             .expect("persist exact Native AMX finality");
 
         let checkpoint_hash = Hash::new(b"Native AMX latest-index WSV checkpoint");
-        kura.store_wsv_checkpoint(1, block.hash(), checkpoint_hash)
+        kura.store_wsv_checkpoint(application_block_height, block.hash(), checkpoint_hash)
             .expect("persist Native AMX WSV checkpoint");
-        let commit_manifest =
-            CommitManifest::new(1, block.hash(), None, None, checkpoint_hash, None)
-                .with_authenticated_v2_commit_authority(&finality);
+        let commit_manifest = CommitManifest::new(
+            application_block_height,
+            block.hash(),
+            None,
+            None,
+            checkpoint_hash,
+            None,
+        )
+        .with_authenticated_v2_commit_authority(&finality);
         kura.store_commit_manifest(commit_manifest)
             .expect("persist authenticated Native AMX commit manifest");
 
         let finality_artifact_hash = HashOf::new(&finality);
-        let manifest_artifact = NativeAmxParticipantApplicationManifestArtifactV1 {
-            version: NativeAmxParticipantApplicationManifestArtifactV1::VERSION,
-            leaf,
-            leaf_index: 0,
-            proof: tree.get_proof(0).expect("one-leaf manifest proof"),
-            manifest_root,
-            manifest_leaf_count: 1,
-            finality_artifact_hash,
-        };
-        Kura::validate_native_amx_participant_application_manifest_artifact(&manifest_artifact)
-            .expect("valid Native AMX manifest sidecar");
-        let receipt = NativeAmxParticipantApplicationReceiptArtifact {
-            version: NativeAmxParticipantApplicationReceiptArtifact::VERSION,
-            participant_proposal: proposal,
-            participant_settlement: settlement,
-            participant_settlement_hash: settlement_hash,
-            application_block_height: 1,
-            application_block_hash: block.hash(),
-            executed_block_wire_hash,
-            finality_artifact_hash,
-            manifest_artifact_hash: HashOf::new(&manifest_artifact),
-            source_ids: vec![source_id],
-            entrypoint_indices: vec![0],
-            entrypoint_hashes: vec![entrypoint_hash],
-            result_hashes: vec![result.hash()],
-            results: vec![result],
-        };
-        Kura::validate_native_amx_participant_application_receipt_artifact(&receipt)
-            .expect("valid Native AMX receipt sidecar");
+        let mut receipts = Vec::with_capacity(leaves.len());
+        for (index, (((leaf, proposal), settlement), (source_id, (result, entrypoint_hash)))) in
+            leaves
+                .into_iter()
+                .zip(proposals)
+                .zip(settlements)
+                .zip(
+                    source_ids
+                        .into_iter()
+                        .zip(results.into_iter().zip(entrypoint_hashes)),
+                )
+                .enumerate()
+        {
+            let leaf_index = u32::try_from(index).expect("fixture leaf index fits u32");
+            let participant_height = leaf.participant_height;
+            let settlement_hash = leaf.settlement_hash;
+            let manifest_artifact = NativeAmxParticipantApplicationManifestArtifactV1 {
+                version: NativeAmxParticipantApplicationManifestArtifactV1::VERSION,
+                leaf,
+                leaf_index,
+                proof: tree
+                    .get_proof(leaf_index)
+                    .expect("Native AMX fixture manifest proof"),
+                manifest_root,
+                manifest_leaf_count,
+                finality_artifact_hash,
+            };
+            Kura::validate_native_amx_participant_application_manifest_artifact(&manifest_artifact)
+                .expect("valid Native AMX manifest sidecar");
+            let receipt = NativeAmxParticipantApplicationReceiptArtifact {
+                version: NativeAmxParticipantApplicationReceiptArtifact::VERSION,
+                participant_proposal: proposal,
+                participant_settlement: settlement,
+                participant_settlement_hash: settlement_hash,
+                application_block_height,
+                application_block_hash: block.hash(),
+                executed_block_wire_hash,
+                finality_artifact_hash,
+                manifest_artifact_hash: HashOf::new(&manifest_artifact),
+                source_ids: vec![source_id],
+                entrypoint_indices: vec![0],
+                entrypoint_hashes: vec![entrypoint_hash],
+                result_hashes: vec![result.hash()],
+                results: vec![result],
+            };
+            Kura::validate_native_amx_participant_application_receipt_artifact(&receipt)
+                .expect("valid Native AMX receipt sidecar");
 
-        let (manifest_data_path, manifest_index_path) =
-            Kura::native_amx_application_manifest_paths_for_entry(entry, &kura.store_root);
-        assert!(Kura::append_indexed_sidecar(
-            &manifest_data_path,
-            &manifest_index_path,
-            1,
-            &manifest_artifact
-                .encode_framed()
-                .expect("encode Native AMX manifest"),
-            NativeAmxParticipantApplicationManifestArtifactV1::FORMAT_LABEL,
-            FsyncMode::Always,
-            Some(kura.native_amx_participant_evidence_retention()),
-            SidecarIndexOrigin::FirstWrite,
-        ));
-        let (receipt_data_path, receipt_index_path) =
-            Kura::native_amx_participant_receipt_paths_for_entry(entry, &kura.store_root);
-        assert!(Kura::append_indexed_sidecar(
-            &receipt_data_path,
-            &receipt_index_path,
-            1,
-            &receipt.encode_framed().expect("encode Native AMX receipt"),
-            NativeAmxParticipantApplicationReceiptArtifact::FORMAT_LABEL,
-            FsyncMode::Always,
-            Some(kura.native_amx_participant_evidence_retention()),
-            SidecarIndexOrigin::FirstWrite,
-        ));
-        receipt
+            let manifest_path = Kura::native_amx_application_manifest_path_for_entry(
+                entry,
+                &kura.store_root,
+                participant_height,
+            );
+            let receipt_path = Kura::native_amx_participant_receipt_path_for_entry(
+                entry,
+                &kura.store_root,
+                participant_height,
+            );
+            fs::write(
+                &manifest_path,
+                manifest_artifact
+                    .encode_framed()
+                    .expect("encode Native AMX manifest"),
+            )
+            .expect("persist standalone Native AMX manifest");
+            fs::write(
+                &receipt_path,
+                receipt.encode_framed().expect("encode Native AMX receipt"),
+            )
+            .expect("persist standalone Native AMX receipt");
+            std::fs::File::open(&manifest_path)
+                .expect("open standalone Native AMX manifest")
+                .sync_all()
+                .expect("sync standalone Native AMX manifest");
+            std::fs::File::open(&receipt_path)
+                .expect("open standalone Native AMX receipt")
+                .sync_all()
+                .expect("sync standalone Native AMX receipt");
+            receipts.push(receipt);
+        }
+        sync_dir(Kura::lane_artifact_dir(&entry.blocks_dir(&kura.store_root)).as_path())
+            .expect("sync Native AMX fixture evidence directory");
+        receipts
     }
 
     #[test]
@@ -67736,6 +73375,43 @@ mod tests {
                 "unexpected startup error: {error}"
             );
         }
+
+        for corrupt_kind in ["older manifest", "older receipt"] {
+            let temp_dir = TempDir::new().expect("temporary Kura directory");
+            let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+            let lane_config = RuntimeLaneConfig::default();
+            let (kura, _) = Kura::new(&config, &lane_config).expect("initialize Kura");
+            let entry = kura
+                .lane_storage_entry(LaneId::SINGLE)
+                .expect("primary lane storage entry");
+            let corrupt_path = match corrupt_kind {
+                "older manifest" => Kura::native_amx_application_manifest_path_for_entry(
+                    &entry,
+                    &kura.store_root,
+                    2,
+                ),
+                "older receipt" => {
+                    Kura::native_amx_participant_receipt_path_for_entry(&entry, &kura.store_root, 2)
+                }
+                _ => unreachable!(),
+            };
+            fs::write(&corrupt_path, [0xA5]).expect("stage malformed standalone Native evidence");
+            let _latest = install_native_amx_latest_index_evidence_fixture(&kura, &entry);
+
+            let error = kura
+                .rebuild_native_amx_participant_receipt_latest_indexes_on_startup()
+                .expect_err("startup must decode every retained Native evidence payload");
+            assert!(
+                error.to_string().contains("decode")
+                    || error.to_string().contains("non-canonical")
+                    || error.to_string().contains("another active route"),
+                "unexpected {corrupt_kind} history error: {error}"
+            );
+            assert!(
+                corrupt_path.exists(),
+                "fail-closed validation must retain the corrupt older evidence for forensics"
+            );
+        }
     }
 
     #[test]
@@ -67750,34 +73426,172 @@ mod tests {
             let entry = kura
                 .lane_storage_entry(LaneId::SINGLE)
                 .expect("primary lane storage entry");
-            let (data_path, index_path) = match artifact_kind {
-                "manifest" => {
-                    Kura::native_amx_application_manifest_paths_for_entry(&entry, &kura.store_root)
-                }
+            let store_root = kura.store_root.clone();
+            let artifact_path = |height| match artifact_kind {
+                "manifest" => Kura::native_amx_application_manifest_path_for_entry(
+                    &entry,
+                    &store_root,
+                    height,
+                ),
                 "receipt" => {
-                    Kura::native_amx_participant_receipt_paths_for_entry(&entry, &kura.store_root)
+                    Kura::native_amx_participant_receipt_path_for_entry(&entry, &store_root, height)
                 }
                 _ => unreachable!(),
             };
+            let hostile_entries = config.roster_sidecar_retention.get().saturating_add(2);
+            for height in 1..=hostile_entries {
+                fs::write(
+                    artifact_path(u64::try_from(height).expect("hostile height fits u64")),
+                    [0xA5],
+                )
+                .expect("stage excess standalone Native record");
+            }
             drop(kura);
 
-            fs::write(&data_path, []).expect("stage empty hostile Native data file");
-            let hostile_entries = config.roster_sidecar_retention.get().saturating_add(2);
-            fs::write(
-                &index_path,
-                vec![0_u8; hostile_entries.saturating_mul(PIPELINE_INDEX_ENTRY_SIZE)],
-            )
-            .expect("stage oversized aligned Native append index");
-
             let error = match Kura::new(&config, &lane_config) {
-                Ok(_) => panic!("startup must reject an oversized {artifact_kind} append index"),
+                Ok(_) => panic!("startup must reject excess {artifact_kind} records"),
                 Err(error) => error,
             };
             assert!(
-                error.to_string().contains("bounded startup entry budget"),
+                error.to_string().contains("retained record bound"),
                 "unexpected {artifact_kind} startup bound error: {error}"
             );
         }
+
+        let temp_dir = TempDir::new().expect("bounded Native compaction Kura directory");
+        let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        config.roster_sidecar_retention =
+            NonZeroUsize::new(2).expect("small Native compaction retention");
+        let lane_config = RuntimeLaneConfig::default();
+        let (kura, _) =
+            Kura::new(&config, &lane_config).expect("initialize bounded Native compaction Kura");
+        let entry = kura
+            .lane_storage_entry(LaneId::SINGLE)
+            .expect("bounded Native compaction primary lane entry");
+        let receipts = install_native_amx_evidence_fixture_heights(&kura, &entry, &[1, 2, 3]);
+        let newest = receipts.last().expect("newest Native compaction receipt");
+        let latest_path = Kura::native_amx_participant_receipt_latest_index_path_for_entry(
+            &entry,
+            &kura.store_root,
+        );
+        let oldest_manifest =
+            Kura::native_amx_application_manifest_path_for_entry(&entry, &kura.store_root, 1);
+        let oldest_receipt =
+            Kura::native_amx_participant_receipt_path_for_entry(&entry, &kura.store_root, 1);
+        drop(kura);
+
+        let (reopened, _) = Kura::new(&config, &lane_config)
+            .expect("retention plus one fully valid pair must compact at startup");
+        let reopened_entry = reopened
+            .lane_storage_entry(LaneId::SINGLE)
+            .expect("reopened bounded Native compaction lane entry");
+        assert!(
+            !oldest_manifest.exists() && !oldest_receipt.exists(),
+            "startup compaction must remove the oldest complete pair"
+        );
+        for retained_height in [2_u64, 3] {
+            assert!(
+                Kura::native_amx_application_manifest_path_for_entry(
+                    &reopened_entry,
+                    &reopened.store_root,
+                    retained_height,
+                )
+                .exists()
+                    && Kura::native_amx_participant_receipt_path_for_entry(
+                        &reopened_entry,
+                        &reopened.store_root,
+                        retained_height,
+                    )
+                    .exists(),
+                "startup compaction must retain complete height {retained_height} evidence"
+            );
+        }
+        let latest = reopened
+            .decode_native_amx_participant_receipt_latest_index(&reopened_entry, &latest_path)
+            .expect("decode rebuilt Native compaction latest pointer")
+            .expect("rebuilt Native compaction latest pointer exists");
+        assert!(
+            latest.matches_receipt(newest) && latest.lane_block_height == 3,
+            "startup compaction must preserve and point to the exact newest receipt"
+        );
+        assert_eq!(
+            reopened
+                .disk_usage_bytes()
+                .expect("read cached disk accounting after Native compaction"),
+            reopened
+                .kura_total_disk_usage_bytes()
+                .expect("scan exact disk accounting after Native compaction"),
+            "Native compaction must reconcile cached and exact disk accounting"
+        );
+        let latest_bytes =
+            fs::read(&latest_path).expect("read compacted Native latest-pointer bytes");
+        let retained_bytes = [2_u64, 3]
+            .into_iter()
+            .flat_map(|height| {
+                [
+                    Kura::native_amx_application_manifest_path_for_entry(
+                        &reopened_entry,
+                        &reopened.store_root,
+                        height,
+                    ),
+                    Kura::native_amx_participant_receipt_path_for_entry(
+                        &reopened_entry,
+                        &reopened.store_root,
+                        height,
+                    ),
+                ]
+            })
+            .map(|path| fs::read(path).expect("read retained Native compaction evidence"))
+            .collect::<Vec<_>>();
+        let exact_usage = reopened
+            .kura_total_disk_usage_bytes()
+            .expect("scan exact Native compaction usage before idempotent reopen");
+        drop(reopened);
+
+        let (reopened_again, _) = Kura::new(&config, &lane_config)
+            .expect("Native compaction startup repair must be idempotent");
+        let reopened_again_entry = reopened_again
+            .lane_storage_entry(LaneId::SINGLE)
+            .expect("twice-reopened bounded Native compaction lane entry");
+        assert_eq!(
+            fs::read(&latest_path).expect("reread compacted Native latest pointer"),
+            latest_bytes,
+            "idempotent startup must preserve the exact latest-pointer bytes"
+        );
+        let retained_bytes_after = [2_u64, 3]
+            .into_iter()
+            .flat_map(|height| {
+                [
+                    Kura::native_amx_application_manifest_path_for_entry(
+                        &reopened_again_entry,
+                        &reopened_again.store_root,
+                        height,
+                    ),
+                    Kura::native_amx_participant_receipt_path_for_entry(
+                        &reopened_again_entry,
+                        &reopened_again.store_root,
+                        height,
+                    ),
+                ]
+            })
+            .map(|path| fs::read(path).expect("reread retained Native compaction evidence"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            retained_bytes_after, retained_bytes,
+            "idempotent startup must preserve every retained Native evidence byte"
+        );
+        assert_eq!(
+            reopened_again
+                .disk_usage_bytes()
+                .expect("read cached usage after idempotent Native reopen"),
+            exact_usage
+        );
+        assert_eq!(
+            reopened_again
+                .kura_total_disk_usage_bytes()
+                .expect("scan exact usage after idempotent Native reopen"),
+            exact_usage
+        );
     }
 
     #[test]
@@ -67792,43 +73606,37 @@ mod tests {
             let entry = kura
                 .lane_storage_entry(LaneId::SINGLE)
                 .expect("primary lane storage entry");
-            let (data_path, _) = match artifact_kind {
-                "manifest" => {
-                    Kura::native_amx_application_manifest_paths_for_entry(&entry, &kura.store_root)
-                }
+            let store_root = kura.store_root.clone();
+            let artifact_path = |height| match artifact_kind {
+                "manifest" => Kura::native_amx_application_manifest_path_for_entry(
+                    &entry,
+                    &store_root,
+                    height,
+                ),
                 "receipt" => {
-                    Kura::native_amx_participant_receipt_paths_for_entry(&entry, &kura.store_root)
+                    Kura::native_amx_participant_receipt_path_for_entry(&entry, &store_root, height)
                 }
                 _ => unreachable!(),
             };
             drop(kura);
 
-            let max_entries = u64::try_from(config.roster_sidecar_retention.get())
-                .expect("retention fits u64")
-                .saturating_add(1);
-            let configured_entry_budget = max_entries
-                .checked_mul(STRICT_INIT_MAX_BLOCK_BYTES)
-                .expect("configured entry budget");
-            assert!(
-                configured_entry_budget > MAX_NATIVE_AMX_PARTICIPANT_EVIDENCE_STARTUP_BYTES,
-                "the focused test must exercise the tighter aggregate startup sidecar budget"
-            );
-            let hostile_len = MAX_NATIVE_AMX_PARTICIPANT_EVIDENCE_STARTUP_BYTES
-                .checked_add(1)
-                .expect("test aggregate byte bound");
-            fs::File::create(&data_path)
-                .expect("create sparse hostile Native data file")
-                .set_len(hostile_len)
-                .expect("size sparse hostile Native data file");
+            for (height, hostile_len) in [
+                (1, STRICT_INIT_MAX_BLOCK_BYTES),
+                (2, STRICT_INIT_MAX_BLOCK_BYTES),
+                (3, 1),
+            ] {
+                fs::File::create(artifact_path(height))
+                    .expect("create sparse hostile Native evidence file")
+                    .set_len(hostile_len)
+                    .expect("size sparse hostile Native evidence file");
+            }
 
             let error = match Kura::new(&config, &lane_config) {
                 Ok(_) => panic!("startup must reject oversized {artifact_kind} aggregate data"),
                 Err(error) => error,
             };
             assert!(
-                error
-                    .to_string()
-                    .contains("bounded startup aggregate byte budget"),
+                error.to_string().contains("aggregate byte bound"),
                 "unexpected {artifact_kind} aggregate bound error: {error}"
             );
         }
@@ -67845,40 +73653,325 @@ mod tests {
                 .lane_storage_entry(LaneId::SINGLE)
                 .expect("primary lane storage entry");
             let _receipt = install_native_amx_latest_index_evidence_fixture(&kura, &entry);
-            let (data_path, _) = match artifact_kind {
-                "manifest" => {
-                    Kura::native_amx_application_manifest_paths_for_entry(&entry, &kura.store_root)
-                }
+            let data_path = match artifact_kind {
+                "manifest" => Kura::native_amx_application_manifest_path_for_entry(
+                    &entry,
+                    &kura.store_root,
+                    1,
+                ),
                 "receipt" => {
-                    Kura::native_amx_participant_receipt_paths_for_entry(&entry, &kura.store_root)
+                    Kura::native_amx_participant_receipt_path_for_entry(&entry, &kura.store_root, 1)
                 }
                 _ => unreachable!(),
             };
-            let indexed_len = fs::metadata(&data_path)
-                .expect("Native evidence data metadata")
-                .len();
+            let stable_bytes = fs::read(&data_path).expect("read stable Native evidence");
+            let temp_path = data_path.with_extension("norito.tmp");
+            fs::write(&temp_path, &stable_bytes)
+                .expect("stage same-height Native publication temporary");
+            std::fs::File::open(&temp_path)
+                .expect("open Native publication temporary")
+                .sync_all()
+                .expect("sync Native publication temporary");
             drop(kura);
 
-            let mut data = fs::OpenOptions::new()
-                .append(true)
-                .open(&data_path)
-                .expect("open Native evidence data for crash residue");
-            data.write_all(b"durable payload written before its index entry")
-                .expect("append unindexed crash residue");
-            data.sync_data().expect("sync unindexed crash residue");
-            drop(data);
-            assert!(fs::metadata(&data_path).expect("residue metadata").len() > indexed_len);
-
             let (_reopened, _) = Kura::new(&config, &lane_config)
-                .expect("startup must mechanically recover an unindexed append tail");
+                .expect("startup must mechanically recover a duplicate publication temporary");
             assert_eq!(
-                fs::metadata(&data_path)
-                    .expect("repaired Native evidence data metadata")
-                    .len(),
-                indexed_len,
-                "{artifact_kind} startup repair must truncate only the unindexed suffix"
+                fs::read(&data_path).expect("read recovered Native evidence"),
+                stable_bytes,
+                "{artifact_kind} startup repair must preserve exact stable bytes"
+            );
+            assert!(
+                !temp_path.exists(),
+                "{artifact_kind} startup repair must remove the exact duplicate temporary"
             );
         }
+
+        for crash_stage in [
+            "temp-only",
+            "stable-before-delete",
+            "after-manifest-unlink",
+            "after-both-unlinks",
+            "stable-plus-identical-temp",
+        ] {
+            let temp_dir = TempDir::new().expect("Native prune-journal crash Kura directory");
+            let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+            config.roster_sidecar_retention =
+                NonZeroUsize::new(2).expect("small Native prune-journal retention");
+            let lane_config = RuntimeLaneConfig::default();
+            let (kura, _) =
+                Kura::new(&config, &lane_config).expect("initialize Native prune-journal Kura");
+            let entry = kura
+                .lane_storage_entry(LaneId::SINGLE)
+                .expect("Native prune-journal primary lane entry");
+            let receipts = install_native_amx_evidence_fixture_heights(&kura, &entry, &[1, 2, 3]);
+            let newest = receipts
+                .last()
+                .expect("newest Native prune-journal receipt");
+            let latest = NativeAmxParticipantReceiptLatestIndexV1::from_receipt(newest)
+                .expect("construct Native prune-journal latest pointer");
+            let latest_path = Kura::native_amx_participant_receipt_latest_index_path_for_entry(
+                &entry,
+                &kura.store_root,
+            );
+            let latest_bytes =
+                norito::to_bytes(&latest).expect("encode Native prune-journal latest pointer");
+            fs::write(&latest_path, &latest_bytes)
+                .expect("persist Native prune-journal latest pointer");
+            std::fs::File::open(&latest_path)
+                .expect("open Native prune-journal latest pointer")
+                .sync_all()
+                .expect("sync Native prune-journal latest pointer");
+
+            let manifest_path =
+                Kura::native_amx_application_manifest_path_for_entry(&entry, &kura.store_root, 1);
+            let receipt_path =
+                Kura::native_amx_participant_receipt_path_for_entry(&entry, &kura.store_root, 1);
+            let intent = NativeAmxEvidencePruneIntentV1 {
+                version: NativeAmxEvidencePruneIntentV1::VERSION,
+                lane_id: entry.lane_id,
+                dataspace_id: entry.dataspace_id,
+                lane_incarnation: latest.lane_incarnation,
+                entries: vec![
+                    NativeAmxEvidencePruneEntryV1 {
+                        kind: NativeAmxEvidencePruneIntentV1::MANIFEST_KIND,
+                        participant_height: 1,
+                        artifact_hash: Hash::new(
+                            fs::read(&manifest_path)
+                                .expect("read oldest Native manifest before crash staging"),
+                        ),
+                    },
+                    NativeAmxEvidencePruneEntryV1 {
+                        kind: NativeAmxEvidencePruneIntentV1::RECEIPT_KIND,
+                        participant_height: 1,
+                        artifact_hash: Hash::new(
+                            fs::read(&receipt_path)
+                                .expect("read oldest Native receipt before crash staging"),
+                        ),
+                    },
+                ],
+            };
+            let intent_bytes =
+                norito::to_bytes(&intent).expect("encode Native prune-journal intent");
+            let evidence_directory = manifest_path
+                .parent()
+                .expect("Native prune-journal evidence directory");
+            let intent_path = evidence_directory.join(NATIVE_AMX_EVIDENCE_PRUNE_INTENT_FILE);
+            let intent_temp_path =
+                evidence_directory.join(NATIVE_AMX_EVIDENCE_PRUNE_INTENT_TEMP_FILE);
+            match crash_stage {
+                "temp-only" => {
+                    fs::write(&intent_temp_path, &intent_bytes)
+                        .expect("stage temporary-only Native prune intent");
+                    std::fs::File::open(&intent_temp_path)
+                        .expect("open temporary-only Native prune intent")
+                        .sync_all()
+                        .expect("sync temporary-only Native prune intent");
+                }
+                "stable-before-delete" => {
+                    fs::write(&intent_path, &intent_bytes)
+                        .expect("stage stable Native prune intent before deletion");
+                    std::fs::File::open(&intent_path)
+                        .expect("open stable Native prune intent before deletion")
+                        .sync_all()
+                        .expect("sync stable Native prune intent before deletion");
+                }
+                "after-manifest-unlink" => {
+                    fs::write(&intent_path, &intent_bytes)
+                        .expect("stage stable Native prune intent before manifest unlink");
+                    std::fs::File::open(&intent_path)
+                        .expect("open stable Native prune intent before manifest unlink")
+                        .sync_all()
+                        .expect("sync stable Native prune intent before manifest unlink");
+                    fs::remove_file(&manifest_path)
+                        .expect("stage crash after Native manifest unlink");
+                }
+                "after-both-unlinks" => {
+                    fs::write(&intent_path, &intent_bytes)
+                        .expect("stage stable Native prune intent before pair unlink");
+                    std::fs::File::open(&intent_path)
+                        .expect("open stable Native prune intent before pair unlink")
+                        .sync_all()
+                        .expect("sync stable Native prune intent before pair unlink");
+                    fs::remove_file(&manifest_path)
+                        .expect("stage crash after Native manifest unlink");
+                    fs::remove_file(&receipt_path)
+                        .expect("stage crash after Native receipt unlink");
+                }
+                "stable-plus-identical-temp" => {
+                    fs::write(&intent_path, &intent_bytes)
+                        .expect("stage stable Native prune intent");
+                    fs::write(&intent_temp_path, &intent_bytes)
+                        .expect("stage identical Native prune-intent temporary");
+                    std::fs::File::open(&intent_path)
+                        .expect("open stable Native prune intent")
+                        .sync_all()
+                        .expect("sync stable Native prune intent");
+                    std::fs::File::open(&intent_temp_path)
+                        .expect("open identical Native prune-intent temporary")
+                        .sync_all()
+                        .expect("sync identical Native prune-intent temporary");
+                }
+                _ => unreachable!("fixed Native prune-journal crash matrix"),
+            }
+            sync_dir(evidence_directory).expect("sync staged Native prune-journal crash boundary");
+            drop(kura);
+
+            let (reopened, _) = Kura::new(&config, &lane_config)
+                .unwrap_or_else(|error| panic!("{crash_stage} recovery failed: {error}"));
+            let reopened_entry = reopened
+                .lane_storage_entry(LaneId::SINGLE)
+                .expect("reopened Native prune-journal lane entry");
+            assert!(
+                !manifest_path.exists()
+                    && !receipt_path.exists()
+                    && !intent_path.exists()
+                    && !intent_temp_path.exists(),
+                "{crash_stage} recovery must finish the exact pair deletion and clear its journal"
+            );
+            for retained_height in [2_u64, 3] {
+                assert!(
+                    Kura::native_amx_application_manifest_path_for_entry(
+                        &reopened_entry,
+                        &reopened.store_root,
+                        retained_height,
+                    )
+                    .exists()
+                        && Kura::native_amx_participant_receipt_path_for_entry(
+                            &reopened_entry,
+                            &reopened.store_root,
+                            retained_height,
+                        )
+                        .exists(),
+                    "{crash_stage} recovery must retain complete height {retained_height} evidence"
+                );
+            }
+            assert_eq!(
+                fs::read(&latest_path).expect("read recovered Native latest pointer"),
+                latest_bytes,
+                "{crash_stage} recovery must preserve the exact latest pointer"
+            );
+            let decoded_latest = reopened
+                .decode_native_amx_participant_receipt_latest_index(&reopened_entry, &latest_path)
+                .expect("decode recovered Native latest pointer")
+                .expect("recovered Native latest pointer exists");
+            assert!(
+                decoded_latest.matches_receipt(newest) && decoded_latest.lane_block_height == 3,
+                "{crash_stage} recovery must keep the exact newest receipt protected"
+            );
+            let exact_usage = reopened
+                .kura_total_disk_usage_bytes()
+                .expect("scan exact usage after Native prune-journal recovery");
+            assert_eq!(
+                reopened
+                    .disk_usage_bytes()
+                    .expect("read cached usage after Native prune-journal recovery"),
+                exact_usage,
+                "{crash_stage} recovery must reconcile exact disk accounting"
+            );
+            drop(reopened);
+
+            let (reopened_again, _) = Kura::new(&config, &lane_config)
+                .unwrap_or_else(|error| panic!("{crash_stage} idempotent reopen failed: {error}"));
+            assert_eq!(
+                reopened_again
+                    .disk_usage_bytes()
+                    .expect("read cached usage after idempotent prune-journal reopen"),
+                exact_usage,
+                "{crash_stage} second reopen must not change disk accounting"
+            );
+            assert_eq!(
+                reopened_again
+                    .kura_total_disk_usage_bytes()
+                    .expect("scan exact usage after idempotent prune-journal reopen"),
+                exact_usage
+            );
+            assert_eq!(
+                fs::read(&latest_path).expect("reread recovered Native latest pointer"),
+                latest_bytes,
+                "{crash_stage} second reopen must be byte-idempotent"
+            );
+        }
+
+        let temp_dir = TempDir::new().expect("latest-protected Native prune Kura directory");
+        let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        config.roster_sidecar_retention =
+            NonZeroUsize::new(2).expect("latest-protected Native prune retention");
+        let lane_config = RuntimeLaneConfig::default();
+        let (kura, _) = Kura::new(&config, &lane_config)
+            .expect("initialize latest-protected Native prune Kura");
+        let entry = kura
+            .lane_storage_entry(LaneId::SINGLE)
+            .expect("latest-protected Native prune lane entry");
+        let receipts = install_native_amx_evidence_fixture_heights(&kura, &entry, &[1, 2]);
+        let newest = receipts.last().expect("latest-protected Native receipt");
+        let latest = NativeAmxParticipantReceiptLatestIndexV1::from_receipt(newest)
+            .expect("construct latest-protected Native pointer");
+        let latest_path = Kura::native_amx_participant_receipt_latest_index_path_for_entry(
+            &entry,
+            &kura.store_root,
+        );
+        fs::write(
+            &latest_path,
+            norito::to_bytes(&latest).expect("encode latest-protected Native pointer"),
+        )
+        .expect("persist latest-protected Native pointer");
+        let newest_manifest =
+            Kura::native_amx_application_manifest_path_for_entry(&entry, &kura.store_root, 2);
+        let newest_receipt =
+            Kura::native_amx_participant_receipt_path_for_entry(&entry, &kura.store_root, 2);
+        let protected_manifest_bytes =
+            fs::read(&newest_manifest).expect("read protected latest Native manifest");
+        let protected_receipt_bytes =
+            fs::read(&newest_receipt).expect("read protected latest Native receipt");
+        let hostile = NativeAmxEvidencePruneIntentV1 {
+            version: NativeAmxEvidencePruneIntentV1::VERSION,
+            lane_id: entry.lane_id,
+            dataspace_id: entry.dataspace_id,
+            lane_incarnation: latest.lane_incarnation,
+            entries: vec![
+                NativeAmxEvidencePruneEntryV1 {
+                    kind: NativeAmxEvidencePruneIntentV1::MANIFEST_KIND,
+                    participant_height: 2,
+                    artifact_hash: Hash::new(&protected_manifest_bytes),
+                },
+                NativeAmxEvidencePruneEntryV1 {
+                    kind: NativeAmxEvidencePruneIntentV1::RECEIPT_KIND,
+                    participant_height: 2,
+                    artifact_hash: Hash::new(&protected_receipt_bytes),
+                },
+            ],
+        };
+        let hostile_path = newest_manifest
+            .parent()
+            .expect("latest-protected Native evidence directory")
+            .join(NATIVE_AMX_EVIDENCE_PRUNE_INTENT_FILE);
+        fs::write(
+            &hostile_path,
+            norito::to_bytes(&hostile).expect("encode latest-targeting Native prune intent"),
+        )
+        .expect("stage latest-targeting Native prune intent");
+        drop(kura);
+        let error = match Kura::new(&config, &lane_config) {
+            Ok(_) => panic!("startup must reject a prune intent targeting the derived latest"),
+            Err(error) => error,
+        };
+        assert!(
+            error.to_string().contains("latest identity"),
+            "unexpected latest-targeting Native prune-intent error: {error}"
+        );
+        assert_eq!(
+            fs::read(&newest_manifest).expect("reread protected latest Native manifest"),
+            protected_manifest_bytes
+        );
+        assert_eq!(
+            fs::read(&newest_receipt).expect("reread protected latest Native receipt"),
+            protected_receipt_bytes
+        );
+        assert!(
+            hostile_path.exists(),
+            "fail-closed startup must retain a latest-targeting prune intent for forensics"
+        );
     }
 
     #[test]
@@ -67898,17 +73991,122 @@ mod tests {
                 &entry,
                 &kura.store_root,
             );
-            let (missing_data_path, missing_index_path) = match missing_kind {
-                "manifest" => {
-                    Kura::native_amx_application_manifest_paths_for_entry(&entry, &kura.store_root)
-                }
+            let missing_data_path = match missing_kind {
+                "manifest" => Kura::native_amx_application_manifest_path_for_entry(
+                    &entry,
+                    &kura.store_root,
+                    1,
+                ),
                 "receipt" => {
-                    Kura::native_amx_participant_receipt_paths_for_entry(&entry, &kura.store_root)
+                    Kura::native_amx_participant_receipt_path_for_entry(&entry, &kura.store_root, 1)
                 }
                 _ => unreachable!(),
             };
-            fs::remove_file(&missing_data_path).expect("remove interrupted Native data file");
-            fs::remove_file(&missing_index_path).expect("remove interrupted Native index file");
+            if missing_kind == "manifest" {
+                let descriptor = &receipt.participant_proposal.descriptor;
+                let manifest_data_before =
+                    fs::read(&missing_data_path).expect("read canonical Native manifest data");
+                let enforced_before = kura
+                    .refresh_disk_usage_bytes()
+                    .expect("refresh disk accounting before manifest crash");
+                let total_before = kura
+                    .disk_usage_bytes()
+                    .expect("read total disk accounting before manifest crash");
+
+                for result in [
+                    kura.remove_latest_native_amx_participant_manifest_for_testing(
+                        descriptor.lane_id,
+                        descriptor.dataspace_id,
+                        descriptor.lane_incarnation,
+                        0,
+                        receipt.application_block_hash,
+                    ),
+                    kura.remove_latest_native_amx_participant_manifest_for_testing(
+                        descriptor.lane_id,
+                        DataSpaceId::new(descriptor.dataspace_id.as_u64().saturating_add(1)),
+                        descriptor.lane_incarnation,
+                        descriptor.lane_block_height,
+                        receipt.application_block_hash,
+                    ),
+                    kura.remove_latest_native_amx_participant_manifest_for_testing(
+                        descriptor.lane_id,
+                        descriptor.dataspace_id,
+                        Hash::new(b"inactive Native AMX manifest test incarnation"),
+                        descriptor.lane_block_height,
+                        receipt.application_block_hash,
+                    ),
+                    kura.remove_latest_native_amx_participant_manifest_for_testing(
+                        descriptor.lane_id,
+                        descriptor.dataspace_id,
+                        descriptor.lane_incarnation,
+                        descriptor.lane_block_height.saturating_add(1),
+                        receipt.application_block_hash,
+                    ),
+                    kura.remove_latest_native_amx_participant_manifest_for_testing(
+                        descriptor.lane_id,
+                        descriptor.dataspace_id,
+                        descriptor.lane_incarnation,
+                        descriptor.lane_block_height,
+                        HashOf::from_untyped_unchecked(Hash::new(
+                            b"wrong Native AMX application block",
+                        )),
+                    ),
+                ] {
+                    assert!(
+                        result.is_err(),
+                        "manifest crash hook must reject every inexact identity"
+                    );
+                    assert_eq!(
+                        fs::read(&missing_data_path)
+                            .expect("reread Native manifest data after rejection"),
+                        manifest_data_before
+                    );
+                    assert_eq!(
+                        kura.kura_disk_usage_bytes()
+                            .expect("scan enforced usage after rejection"),
+                        enforced_before
+                    );
+                    assert_eq!(
+                        kura.kura_total_disk_usage_bytes()
+                            .expect("scan total usage after rejection"),
+                        total_before
+                    );
+                    assert_eq!(
+                        kura.disk_usage_bytes()
+                            .expect("read cached total usage after rejection"),
+                        total_before
+                    );
+                }
+
+                kura.remove_latest_native_amx_participant_manifest_for_testing(
+                    descriptor.lane_id,
+                    descriptor.dataspace_id,
+                    descriptor.lane_incarnation,
+                    descriptor.lane_block_height,
+                    receipt.application_block_hash,
+                )
+                .expect("create exact latest-manifest crash shape");
+                assert!(
+                    !missing_data_path.exists(),
+                    "exact standalone manifest removal must remove only its canonical file"
+                );
+                let enforced_after = kura
+                    .kura_disk_usage_bytes()
+                    .expect("scan enforced usage after exact manifest removal");
+                let total_after = kura
+                    .kura_total_disk_usage_bytes()
+                    .expect("scan total usage after exact manifest removal");
+                assert!(enforced_after < enforced_before);
+                assert!(total_after < total_before);
+                assert_eq!(
+                    kura.disk_usage_bytes()
+                        .expect("read cached total usage after exact manifest removal"),
+                    total_after
+                );
+            } else {
+                fs::remove_file(&missing_data_path)
+                    .expect("remove interrupted standalone Native receipt");
+            }
             drop(kura);
 
             let (reopened, _) = Kura::new(&config, &lane_config)
@@ -67935,6 +74133,115 @@ mod tests {
                 "repair-pending {missing_kind} must never satisfy strict runtime evidence"
             );
         }
+
+        // Exercise the two identities that a one-record fixture cannot cover:
+        // an otherwise exact but non-newest record, and a newest record whose
+        // retained prefix has a malformed index entry. Neither rejection may
+        // rewrite forensic evidence.
+        let temp_dir = TempDir::new().expect("temporary strict-removal Kura directory");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = RuntimeLaneConfig::default();
+        let (kura, _) = Kura::new(&config, &lane_config).expect("initialize strict-removal Kura");
+        let entry = kura
+            .lane_storage_entry(LaneId::SINGLE)
+            .expect("strict-removal primary lane storage entry");
+        let receipt = install_native_amx_latest_index_evidence_fixture(&kura, &entry);
+        let descriptor = &receipt.participant_proposal.descriptor;
+        let namespace = kura
+            .native_amx_evidence_namespace_for_entry(&entry)
+            .expect("bind strict-removal Native evidence namespace");
+        let manifest_data_path = Kura::native_amx_application_manifest_path_for_entry(
+            &entry,
+            &kura.store_root,
+            descriptor.lane_block_height,
+        );
+        let first = kura
+            .read_native_amx_participant_application_manifest_from_paths_locked(
+                &entry,
+                descriptor.lane_block_height,
+                &manifest_data_path,
+                &namespace,
+            )
+            .expect("read first strict-removal manifest");
+        let mut second = first.clone();
+        second.leaf.participant_height = descriptor.lane_block_height.saturating_add(1);
+        second.leaf.participant_view = descriptor.lane_block_view.saturating_add(1);
+        second.leaf.predecessor_height = descriptor.lane_block_height;
+        second.leaf.predecessor_descriptor_hash = Some(first.leaf.descriptor_hash);
+        second.leaf.descriptor_hash = Hash::new(b"second strict-removal manifest descriptor");
+        second.leaf.proposal_hash = Hash::new(b"second strict-removal manifest proposal");
+        let tree = [HashOf::new(&second.leaf)]
+            .into_iter()
+            .collect::<MerkleTree<_>>();
+        second.leaf_index = 0;
+        second.proof = tree.get_proof(0).expect("one-leaf second manifest proof");
+        second.manifest_root = tree.root().map(Hash::from).expect("second manifest root");
+        second.manifest_leaf_count = 1;
+        Kura::validate_native_amx_participant_application_manifest_artifact(&second)
+            .expect("valid second strict-removal manifest");
+        let second_manifest_path = Kura::native_amx_application_manifest_path_for_entry(
+            &entry,
+            &kura.store_root,
+            second.leaf.participant_height,
+        );
+        fs::write(
+            &second_manifest_path,
+            second
+                .encode_framed()
+                .expect("encode second strict-removal manifest"),
+        )
+        .expect("persist second standalone strict-removal manifest");
+
+        let two_record_data =
+            fs::read(&manifest_data_path).expect("read two-record strict-removal data");
+        let second_record_data =
+            fs::read(&second_manifest_path).expect("read second strict-removal data");
+        assert!(
+            kura.remove_latest_native_amx_participant_manifest_for_testing(
+                descriptor.lane_id,
+                descriptor.dataspace_id,
+                descriptor.lane_incarnation,
+                descriptor.lane_block_height,
+                receipt.application_block_hash,
+            )
+            .is_err(),
+            "an exact older manifest must not be removed while a newer record exists"
+        );
+        assert_eq!(
+            fs::read(&manifest_data_path).expect("reread data after non-newest rejection"),
+            two_record_data
+        );
+        assert_eq!(
+            fs::read(&second_manifest_path).expect("reread second data after rejection"),
+            second_record_data
+        );
+
+        let mut malformed_record = second_record_data.clone();
+        malformed_record.push(0xA5);
+        fs::write(&second_manifest_path, &malformed_record)
+            .expect("forge non-canonical newest standalone manifest");
+        assert!(
+            kura.remove_latest_native_amx_participant_manifest_for_testing(
+                descriptor.lane_id,
+                descriptor.dataspace_id,
+                descriptor.lane_incarnation,
+                second.leaf.participant_height,
+                second.leaf.application_block_hash,
+            )
+            .is_err(),
+            "newest removal must fail closed when any retained index entry is malformed"
+        );
+        assert_eq!(
+            fs::read(&manifest_data_path).expect("reread data after strict rejection"),
+            two_record_data
+        );
+        assert_eq!(
+            fs::read(&second_manifest_path)
+                .expect("reread malformed standalone manifest after strict rejection"),
+            malformed_record
+        );
+        assert!(!manifest_data_path.with_extension("norito.tmp").exists());
+        assert!(!second_manifest_path.with_extension("norito.tmp").exists());
     }
 
     #[test]
@@ -67947,15 +74254,17 @@ mod tests {
             .lane_storage_entry(LaneId::SINGLE)
             .expect("primary lane storage entry");
         let _receipt = install_native_amx_latest_index_evidence_fixture(&kura, &entry);
-        let (manifest_data_path, manifest_index_path) =
-            Kura::native_amx_application_manifest_paths_for_entry(&entry, &kura.store_root);
+        let manifest_data_path =
+            Kura::native_amx_application_manifest_path_for_entry(&entry, &kura.store_root, 1);
+        let namespace = kura
+            .native_amx_evidence_namespace_for_entry(&entry)
+            .expect("bind proof-invalid Native evidence namespace");
         let mut manifest = kura
             .read_native_amx_participant_application_manifest_from_paths_locked(
                 &entry,
                 1,
                 &manifest_data_path,
-                &manifest_index_path,
-                false,
+                &namespace,
             )
             .expect("read valid Native manifest fixture");
         manifest.manifest_root = Hash::new(b"forged startup Native manifest root");
@@ -68071,6 +74380,8 @@ mod tests {
             Some(receipt.clone()),
             "diagnostics must read an exact structural sidecar without relying on the derived latest index"
         );
+        kura.refresh_disk_usage_bytes()
+            .expect("initialize exact Native evidence disk accounting");
 
         assert_eq!(
             kura.rebuild_native_amx_participant_receipt_latest_indexes_on_startup()
@@ -68087,6 +74398,18 @@ mod tests {
                 .expect("repeat latest-index rebuild"),
             0,
             "reconstruction must be idempotent"
+        );
+        assert_eq!(
+            kura.disk_usage.load(Ordering::Relaxed),
+            kura.kura_disk_usage_bytes()
+                .expect("scan enforced bytes after Native rebuild"),
+            "Native rebuild must publish the receipt, manifest, and latest-pointer delta"
+        );
+        assert_eq!(
+            kura.disk_usage_total.load(Ordering::Relaxed),
+            kura.kura_total_disk_usage_bytes()
+                .expect("scan total bytes after Native rebuild"),
+            "Native rebuild must keep total accounting exact without a later rescan"
         );
     }
 
@@ -68138,8 +74461,8 @@ mod tests {
         );
 
         let (_temp_dir, kura, entry, receipt) = fixture();
-        let (manifest_data_path, _) =
-            Kura::native_amx_application_manifest_paths_for_entry(&entry, &kura.store_root);
+        let manifest_data_path =
+            Kura::native_amx_application_manifest_path_for_entry(&entry, &kura.store_root, 1);
         fs::remove_file(&manifest_data_path).expect("remove Native AMX manifest data");
         assert_eq!(
             kura.native_amx_participant_application_drain_evidence(&receipt),
@@ -68314,18 +74637,131 @@ mod tests {
         let entry = kura
             .lane_storage_entry(LaneId::SINGLE)
             .expect("primary lane storage entry");
-        let (data_path, _) =
-            Kura::native_amx_participant_receipt_paths_for_entry(&entry, &kura.store_root);
+        let _receipt = install_native_amx_latest_index_evidence_fixture(&kura, &entry);
+        let data_path =
+            Kura::native_amx_participant_receipt_path_for_entry(&entry, &kura.store_root, 1);
         let temporary = data_path.with_extension("norito.tmp");
-        fs::write(&temporary, b"incomplete receipt append").expect("stage unresolved temp");
+        let exact_bytes = fs::read(&data_path).expect("read standalone Native receipt");
+        fs::remove_file(&data_path).expect("stage crash before receipt promotion");
+        fs::write(&temporary, &exact_bytes).expect("stage exact receipt publication temporary");
         drop(kura);
 
         let (_reopened, _) = Kura::new(&config, &lane_config)
-            .expect("a lone unpublished rewrite data temp is mechanically recoverable");
+            .expect("an exact lone publication temporary is mechanically recoverable");
         assert!(
             !temporary.exists(),
-            "startup must durably discard the unpublished rewrite data temp"
+            "startup must consume the exact publication temporary"
         );
+        assert_eq!(
+            fs::read(&data_path).expect("read recovered standalone Native receipt"),
+            exact_bytes,
+            "startup must promote the exact receipt bytes without rewriting them"
+        );
+
+        let malformed_temp_dir = TempDir::new().expect("malformed temporary Kura directory");
+        let malformed_config = kura_config_for_dir(&malformed_temp_dir, BLOCKS_IN_MEMORY);
+        let (malformed_kura, _) = Kura::new(&malformed_config, &lane_config)
+            .expect("initialize malformed temporary Kura");
+        let malformed_entry = malformed_kura
+            .lane_storage_entry(LaneId::SINGLE)
+            .expect("malformed temporary primary lane entry");
+        let malformed_path = Kura::native_amx_participant_receipt_path_for_entry(
+            &malformed_entry,
+            &malformed_kura.store_root,
+            1,
+        )
+        .with_extension("norito.tmp");
+        fs::write(&malformed_path, b"incomplete receipt append")
+            .expect("stage malformed Native publication temporary");
+        drop(malformed_kura);
+        let error = match Kura::new(&malformed_config, &lane_config) {
+            Ok(_) => panic!("startup must reject a malformed Native publication temporary"),
+            Err(error) => error,
+        };
+        assert!(
+            error.to_string().contains("decode")
+                || error.to_string().contains("non-canonical")
+                || error.to_string().contains("another active route"),
+            "unexpected malformed Native temporary error: {error}"
+        );
+        assert!(
+            malformed_path.exists(),
+            "fail-closed startup must retain malformed temporary evidence for forensics"
+        );
+
+        for artifact_kind in ["manifest", "receipt"] {
+            let oversized_temp_dir =
+                TempDir::new().expect("oversized publication temporary Kura directory");
+            let oversized_config = kura_config_for_dir(&oversized_temp_dir, BLOCKS_IN_MEMORY);
+            let (oversized_kura, _) = Kura::new(&oversized_config, &lane_config)
+                .expect("initialize oversized publication temporary Kura");
+            let oversized_entry = oversized_kura
+                .lane_storage_entry(LaneId::SINGLE)
+                .expect("oversized publication temporary primary lane entry");
+            let stable_path = match artifact_kind {
+                "manifest" => Kura::native_amx_application_manifest_path_for_entry(
+                    &oversized_entry,
+                    &oversized_kura.store_root,
+                    1,
+                ),
+                "receipt" => Kura::native_amx_participant_receipt_path_for_entry(
+                    &oversized_entry,
+                    &oversized_kura.store_root,
+                    1,
+                ),
+                _ => unreachable!("fixed Native AMX artifact-kind matrix"),
+            };
+            let temporary = stable_path.with_extension("norito.tmp");
+            assert!(
+                !stable_path.exists(),
+                "oversized {artifact_kind} temporary fixture must begin without stable evidence"
+            );
+            let oversized_len = STRICT_INIT_MAX_BLOCK_BYTES.saturating_add(1);
+            fs::File::create(&temporary)
+                .expect("create sparse oversized Native publication temporary")
+                .set_len(oversized_len)
+                .expect("size sparse oversized Native publication temporary");
+            let evidence_directory = temporary
+                .parent()
+                .expect("oversized Native temporary has an evidence directory");
+            let metadata_before = Kura::regular_sidecar_metadata_for(
+                &oversized_kura.store_root,
+                &temporary,
+                evidence_directory,
+            )
+            .expect("inspect sparse oversized Native publication temporary")
+            .expect("sparse oversized Native publication temporary exists");
+            let store_root = oversized_kura.store_root.clone();
+            drop(oversized_kura);
+
+            let error = match Kura::new(&oversized_config, &lane_config) {
+                Ok(_) => {
+                    panic!("startup must reject oversized canonical {artifact_kind} temporary")
+                }
+                Err(error) => error,
+            };
+            assert!(
+                error.to_string().contains("oversized") || error.to_string().contains("byte bound"),
+                "unexpected oversized {artifact_kind} temporary error: {error}"
+            );
+            let metadata_after =
+                Kura::regular_sidecar_metadata_for(&store_root, &temporary, evidence_directory)
+                    .expect("reinspect sparse oversized Native publication temporary")
+                    .expect("fail-closed startup retains oversized Native temporary");
+            assert!(
+                Kura::stable_sidecar_metadata_unchanged(&metadata_before, &metadata_after),
+                "startup must reject an oversized {artifact_kind} temporary before mutating it"
+            );
+            assert_eq!(
+                metadata_after.file.len(),
+                oversized_len,
+                "oversized {artifact_kind} temporary must retain its exact sparse length"
+            );
+            assert!(
+                !stable_path.exists(),
+                "oversized {artifact_kind} temporary must never be promoted to stable evidence"
+            );
+        }
     }
 
     #[test]
@@ -68392,9 +74828,134 @@ mod tests {
         assert!(
             error.to_string().contains("symlinked")
                 || error.to_string().contains("non-regular")
-                || error.to_string().contains("multi-link"),
+                || error.to_string().contains("multi-link")
+                || error.to_string().contains("single-link regular file"),
             "unexpected startup error: {error}"
         );
+
+        let snapshot_regular_inventory = |directory: &Path| {
+            let mut inventory = BTreeMap::new();
+            for entry in fs::read_dir(directory)
+                .expect("read Native AMX evidence inventory")
+                .collect::<std::io::Result<Vec<_>>>()
+                .expect("collect Native AMX evidence inventory")
+            {
+                let file_type = entry
+                    .file_type()
+                    .expect("inspect Native AMX evidence inventory entry");
+                assert!(
+                    file_type.is_file() && !file_type.is_symlink(),
+                    "Native AMX publication fixture inventory must contain only regular files"
+                );
+                let file_name = entry
+                    .file_name()
+                    .into_string()
+                    .expect("Native AMX publication fixture uses UTF-8 names");
+                let previous = inventory.insert(
+                    file_name,
+                    fs::read(entry.path()).expect("read Native AMX evidence inventory entry"),
+                );
+                assert!(
+                    previous.is_none(),
+                    "Native AMX publication fixture inventory names are unique"
+                );
+            }
+            inventory
+        };
+
+        for artifact_kind in ["manifest", "receipt"] {
+            let temp_dir = TempDir::new().expect("symlinked Native publication Kura directory");
+            let external_dir =
+                TempDir::new().expect("external symlinked Native publication directory");
+            let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+            let lane_config = RuntimeLaneConfig::default();
+            let (kura, _) =
+                Kura::new(&config, &lane_config).expect("initialize Native publication Kura");
+            let entry = kura
+                .lane_storage_entry(LaneId::SINGLE)
+                .expect("Native publication primary lane storage entry");
+            let receipt = install_native_amx_latest_index_evidence_fixture(&kura, &entry);
+            let manifest_path =
+                Kura::native_amx_application_manifest_path_for_entry(&entry, &kura.store_root, 1);
+            let receipt_path =
+                Kura::native_amx_participant_receipt_path_for_entry(&entry, &kura.store_root, 1);
+            let namespace = kura
+                .native_amx_evidence_namespace_for_entry(&entry)
+                .expect("bind Native publication evidence namespace");
+            let manifest = kura
+                .read_native_amx_participant_application_manifest_from_paths_locked(
+                    &entry,
+                    1,
+                    &manifest_path,
+                    &namespace,
+                )
+                .expect("decode Native publication manifest fixture");
+            drop(namespace);
+
+            let evidence_directory = Kura::lane_artifact_dir(&entry.blocks_dir(&kura.store_root));
+            let displaced_directory = temp_dir
+                .path()
+                .join(format!("displaced-{artifact_kind}-lane-artifacts"));
+            let original_inventory = snapshot_regular_inventory(&evidence_directory);
+            let omitted_name = match artifact_kind {
+                "manifest" => manifest_path
+                    .file_name()
+                    .expect("manifest path has a file name"),
+                "receipt" => receipt_path
+                    .file_name()
+                    .expect("receipt path has a file name"),
+                _ => unreachable!("fixed Native AMX artifact-kind matrix"),
+            };
+            for (file_name, bytes) in &original_inventory {
+                if Path::new(file_name).as_os_str() != omitted_name {
+                    fs::write(external_dir.path().join(file_name), bytes)
+                        .expect("copy prerequisite Native evidence into external inventory");
+                }
+            }
+            fs::write(
+                external_dir.path().join("attacker-sentinel"),
+                b"external Native AMX publication sentinel",
+            )
+            .expect("write external Native AMX publication sentinel");
+            let external_inventory_before = snapshot_regular_inventory(external_dir.path());
+
+            fs::rename(&evidence_directory, &displaced_directory)
+                .expect("displace original Native AMX evidence directory");
+            symlink(external_dir.path(), &evidence_directory)
+                .expect("replace Native AMX evidence directory with a symlink");
+
+            let _publication_guard = kura.prune_lock.lock();
+            let error = match artifact_kind {
+                "manifest" => kura
+                    .write_native_amx_participant_application_manifest_artifact_under_publication_guard(
+                        &manifest,
+                    )
+                    .expect_err("manifest publication must reject a symlinked evidence directory"),
+                "receipt" => kura
+                    .write_native_amx_participant_application_receipt_artifact_under_publication_guard(
+                        &receipt,
+                        &manifest,
+                    )
+                    .expect_err("receipt publication must reject a symlinked evidence directory"),
+                _ => unreachable!("fixed Native AMX artifact-kind matrix"),
+            };
+            assert!(
+                error.to_string().contains("directory")
+                    || error.to_string().contains("symlink")
+                    || error.to_string().contains("canonical"),
+                "unexpected symlinked {artifact_kind} publication error: {error}"
+            );
+            assert_eq!(
+                snapshot_regular_inventory(external_dir.path()),
+                external_inventory_before,
+                "{artifact_kind} publication must not mutate the external sentinel or inventory"
+            );
+            assert_eq!(
+                snapshot_regular_inventory(&displaced_directory),
+                original_inventory,
+                "{artifact_kind} publication must preserve displaced evidence byte-exact"
+            );
+        }
     }
 
     #[test]
@@ -72136,6 +78697,7 @@ mod tests {
                 None,
                 Some(2),
                 false,
+                PendingControlSidecarLimits::default(),
             )
             .expect("durable audited prefix opens only for signed-lineage reauthentication");
             assert_eq!(reopened_count, 2);
@@ -72492,9 +79054,15 @@ mod tests {
                     3
                 );
             }
-            let (reopened, BlockCount(count)) =
-                Kura::new_inner(&config, &lane_config, None, Some(3), false)
-                    .expect("provisional restart resolves the authenticated marker outcome");
+            let (reopened, BlockCount(count)) = Kura::new_inner(
+                &config,
+                &lane_config,
+                None,
+                Some(3),
+                false,
+                PendingControlSidecarLimits::default(),
+            )
+            .expect("provisional restart resolves the authenticated marker outcome");
             assert_eq!(count, 3);
             assert_eq!(
                 reopened.block_hash_at_height(nonzero!(3_usize)),
@@ -72533,9 +79101,15 @@ mod tests {
                 Kura::new(&config, &lane_config),
                 Err(Error::InvalidSnapshotBootstrapMarker { .. })
             ));
-            let (reopened, BlockCount(count)) =
-                Kura::new_inner(&config, &lane_config, None, Some(3), false)
-                    .expect("open verified hash-only suffix provisionally");
+            let (reopened, BlockCount(count)) = Kura::new_inner(
+                &config,
+                &lane_config,
+                None,
+                Some(3),
+                false,
+                PendingControlSidecarLimits::default(),
+            )
+            .expect("open verified hash-only suffix provisionally");
             assert_eq!(
                 count, 3,
                 "provisional restart {restart} must retain the verified suffix"
@@ -72608,8 +79182,15 @@ mod tests {
             Kura::new(&config, &lane_config),
             Err(Error::InvalidSnapshotBootstrapMarker { .. })
         ));
-        let provisional_error = Kura::new_inner(&config, &lane_config, None, Some(3), false)
-            .expect_err("provisional startup must reject the mismatched hash digest");
+        let provisional_error = Kura::new_inner(
+            &config,
+            &lane_config,
+            None,
+            Some(3),
+            false,
+            PendingControlSidecarLimits::default(),
+        )
+        .expect_err("provisional startup must reject the mismatched hash digest");
         assert!(matches!(
             provisional_error,
             Error::InvalidSnapshotBootstrapMarker { ref reason, .. }
@@ -72654,8 +79235,15 @@ mod tests {
             Kura::new(&config, &lane_config),
             Err(Error::InvalidSnapshotBootstrapMarker { .. })
         ));
-        let provisional_error = Kura::new_inner(&config, &lane_config, None, Some(3), false)
-            .expect_err("provisional startup must reject malformed marker bytes");
+        let provisional_error = Kura::new_inner(
+            &config,
+            &lane_config,
+            None,
+            Some(3),
+            false,
+            PendingControlSidecarLimits::default(),
+        )
+        .expect_err("provisional startup must reject malformed marker bytes");
         assert!(matches!(
             provisional_error,
             Error::InvalidSnapshotBootstrapMarker { ref reason, .. }

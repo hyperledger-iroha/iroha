@@ -127,10 +127,12 @@ Erros comuns apresentados em operadores/SDKs:
 ## Ajudantes de CLI e REST- `iroha app sorafs pin list|show`, `alias list` e `replication list` envolvimento dos
   endpoints REST do pin-registry e imprimem Norito JSON bruto com blocos de
   atestado para evidências de auditoria.
-- `iroha app sorafs storage pin` e `torii /v1/sorafs/pin/register` aceitam manifestos
-  Norito ou JSON com alias provas e sucessores questionários; provas malformadas
-  geram `400`, provas obsoletas retornam `503` com `Warning: 110`, e provas expiradas
-  retornam `412`.
+- `torii /v1/sorafs/pin/register` aceita a requisicao JSON V1 fechada.
+  `manifest_payload` deve ser o base64 canonico com padding exato dos bytes
+  Norito `ManifestV1` canonicos. Torii deriva o digest, chunker, comprimento do
+  conteudo, politica de pin e entradas de taxa somente do manifest decodificado,
+  e rejeita os campos de resumo duplicados retirados. `alias` e um predecessor
+  `successor_of_hex` nao zero continuam opcionais.
 - Terminais REST (`/v1/sorafs/pin`, `/v1/sorafs/aliases`, `/v1/sorafs/replication`)
   incluem estruturas de atestação para que os clientes verifiquem dados contra os
   últimos cabeçalhos de bloco antes de agir.

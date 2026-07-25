@@ -239,12 +239,14 @@ final class ToriiDaClientTests: XCTestCase {
                 "chunker_handle": "sorafs.chunker@1.0.0"
             ],
             "chunk_plan": [
-                [
+                "schema": "sorafs.chunk_fetch_plan.v1",
+                "payload_digest_blake3_hex": String(repeating: "3", count: 64),
+                "chunk_fetch_specs": [[
                     "chunk_index": 0,
                     "offset": 0,
                     "length": 8,
-                    "provider": "p1"
-                ]
+                    "digest_blake3": String(repeating: "22", count: 32)
+                ]]
             ]
         ]
         let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])

@@ -415,26 +415,44 @@ its hash, avoiding a receipt-to-settlement hash cycle.
 One shared participant-application predicate is used by block validation,
 Kura, State frontiers, recovery, diagnostics, drain, and retirement. A
 coordinator leg on the same route is not a separate participant application
-and produces no marker, receipt, index row, diagnostic row, or drain blocker.
+and produces no marker, receipt, latest-pointer update, diagnostic row, or
+drain blocker.
 
 The globally finalized execution commitment contains a canonical Native application manifest root.
 Each route/incarnation leaf binds the predecessor, proposal, settlement, ordered source/result
-membership, and canonical application-block identity; Kura retains the leaf and Merkle proof with
-the idempotent participant application receipt. Publication makes participant finality and the
-manifest durable first, then writes the exact receipt and route/incarnation-keyed latest index, and
-only then advances the replicated participant frontier. The canonical executed wire remains
-available until that evidence is durable. After body pruning, validation uses the
+membership, and canonical application-block identity. Kura retains each leaf and Merkle proof in
+one immutable versioned manifest file named by participant height, and stores the matching
+idempotent application receipt in a separate immutable versioned per-height file. Publication
+creates and fsyncs a temporary, promotes without clobbering an existing stable identity, syncs the
+descriptor-bound directory, and rereads the exact bytes. It makes participant finality and the
+manifest durable first, then the receipt, then replaces the route/incarnation-bound exact-latest
+pointer, and only then advances the replicated participant frontier. The canonical executed wire
+remains available until that evidence is durable. After body pruning, validation uses the
 QC-authenticated manifest root and proof; old hash-only evidence remains blocked unless the
 canonical wire is recovered from authenticated storage or QC signers.
 
-A crash after global application but before the receipt or index leaves the old frontier blocked.
-Startup repair revalidates the block, checkpoint, finality, manifest root/proof, and exact group
-under the sidecar publication guard, then idempotently completes the missing sidecars without
-executing the transaction again. Startup also reconstructs the bounded latest index explicitly;
-steady-state lookup does not reverse-scan history. Lane draining, retirement, archive, purge, disk
-accounting, and same-ID recreation all recognize the receipt, manifest, and index artifacts. An
-unapplied or unverifiable participant slot remains live work, so autoscaling cannot destroy its
-storage generation or admit the next incarnation early.
+The standalone manifest and receipt histories use the configured Kura sidecar-retention count and
+the existing shared Native sidecar aggregate-byte budget, with one bounded transient publication
+slot. Compaction first fsyncs a versioned prune intent bound to lane, dataspace, incarnation, and
+every `(artifact kind, participant height, artifact hash)` removal. Restart completes a
+temporary-only or stable intent, resumes after each individual manifest/receipt unlink and after
+the complete pair unlink, and reconciles identical stable plus temporary intents idempotently. The
+exact pair named by the latest pointer cannot be pruned.
+
+A crash after global application but before the receipt or latest pointer leaves the old frontier
+blocked. Startup repair revalidates the block, checkpoint, finality, manifest root/proof, and exact
+group under the sidecar publication guard, then idempotently completes the missing standalone
+files without executing the transaction again. A valid lone publication temporary is promoted and
+a byte-identical duplicate beside a stable file is removed; malformed, conflicting, or oversized
+temporaries fail closed. Startup reconstructs the bounded exact-latest pointer explicitly;
+steady-state lookup does not reverse-scan history. Obsolete dense Native data/index layouts and
+unexpected, malformed, oversized, non-regular, hardlinked, or symlinked artifacts are rejected
+before mutation.
+
+Lane draining, retirement, archive, purge, disk accounting, and same-ID recreation all require the
+same exact finality/manifest/receipt/latest-pointer join for the active incarnation. An unapplied or
+unverifiable participant slot remains live work, so autoscaling cannot destroy its storage
+generation or admit the next incarnation early.
 
 A fresh lane height always starts at lane view zero, independently of the winning global proposal
 view. Before a global body is locked, the deterministic height-rotated author for each active route

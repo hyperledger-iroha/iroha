@@ -1025,6 +1025,11 @@ fn preflight_singular_source_materialization(
                 charge(owner, &mut remaining)?;
             }
         }
+        SingularQueryBox::FindSorafsPinManifest(query) => {
+            if let Some(manifest) = world.pin_manifests().get(&query.digest) {
+                charge(manifest, &mut remaining)?;
+            }
+        }
         SingularQueryBox::FindSorafsOrderbookPolicy(_)
         | SingularQueryBox::FindSorafsOrderbookOrderById(_)
         | SingularQueryBox::FindSorafsOrderbookCancellationByOrderId(_)
@@ -1043,6 +1048,9 @@ fn preflight_singular_source_materialization(
         | SingularQueryBox::FindSorafsReserveProviderById(_)
         | SingularQueryBox::FindSorafsReserveMovementById(_)
         | SingularQueryBox::FindSorafsReserveAppealById(_)
+        | SingularQueryBox::FindSorafsReserveProviders(_)
+        | SingularQueryBox::FindSorafsReserveMovements(_)
+        | SingularQueryBox::FindSorafsReserveAppeals(_)
         | SingularQueryBox::FindSorafsReserveEvents(_) => {
             return Err(reject_unbounded("SoraFS reserve query"));
         }
@@ -1064,6 +1072,9 @@ fn preflight_singular_source_materialization(
         SingularQueryBox::FindSorafsProofOutcome(_)
         | SingularQueryBox::FindSorafsProofOutcomeEvents(_) => {
             return Err(reject_unbounded("SoraFS proof-outcome query"));
+        }
+        SingularQueryBox::FindSorafsReputationJournalEvents(_) => {
+            return Err(reject_unbounded("SoraFS reputation-journal query"));
         }
         SingularQueryBox::FindSorafsModerationPolicy(_)
         | SingularQueryBox::FindSorafsModerationAppeal(_)
@@ -1208,6 +1219,9 @@ impl ExecuteSingularQuery for SingularQueryBox {
             SingularQueryBox::FindSorafsProviderOwner(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
+            SingularQueryBox::FindSorafsPinManifest(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
             SingularQueryBox::FindSorafsOrderbookPolicy(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
@@ -1256,6 +1270,15 @@ impl ExecuteSingularQuery for SingularQueryBox {
             SingularQueryBox::FindSorafsReserveAppealById(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
+            SingularQueryBox::FindSorafsReserveProviders(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindSorafsReserveMovements(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindSorafsReserveAppeals(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
             SingularQueryBox::FindSorafsReserveEvents(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
@@ -1296,6 +1319,9 @@ impl ExecuteSingularQuery for SingularQueryBox {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
             SingularQueryBox::FindSorafsProofOutcomeEvents(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindSorafsReputationJournalEvents(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
             SingularQueryBox::FindSorafsModerationPolicy(q) => {
@@ -7088,6 +7114,51 @@ mod tests {
                 &dispatch_error,
                 Error::Conversion(message)
                     if message.contains("require at least one committed block")
+            ),
+            "unexpected dispatch error: {dispatch_error}"
+        );
+    }
+
+    #[test]
+    fn reputation_journal_query_is_dispatched_but_metered_ivm_fails_closed() {
+        let state = State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let query = || {
+            SingularQueryBox::FindSorafsReputationJournalEvents(
+                iroha_data_model::query::sorafs::prelude::FindSorafsReputationJournalEvents {
+                    expected_finalized_cursor: None,
+                    after: None,
+                    limit: 1,
+                },
+            )
+        };
+        let view = state.view();
+
+        let preflight_error = preflight_singular_source_materialization(
+            &query(),
+            &view,
+            Some(QueryExecutionBudget::from_weighted_limit(1_000_000, 1, 1)),
+        )
+        .expect_err("metered IVM query must reject decode-heavy materialization");
+        assert!(
+            matches!(
+                &preflight_error,
+                Error::Conversion(message)
+                    if message.contains("SoraFS reputation-journal query")
+            ),
+            "unexpected preflight error: {preflight_error}"
+        );
+
+        let dispatch_error = ExecuteSingularQuery::execute(query(), &view)
+            .expect_err("empty test state has no finalized anchor");
+        assert!(
+            matches!(
+                &dispatch_error,
+                Error::Conversion(message)
+                    if message.contains("latest finalized Kura block")
             ),
             "unexpected dispatch error: {dispatch_error}"
         );

@@ -162,21 +162,16 @@ storage_pin_window_secs = 3600
 
 [sorafs.repair]
 enabled = false
-# state_dir = "./storage/sorafs/repair"
 claim_ttl_secs = 900
 heartbeat_interval_secs = 60
 max_attempts = 3
 worker_concurrency = 4
-backoff_initial_secs = 5
-backoff_max_secs = 60
 
 [sorafs.gc]
 enabled = false
-# state_dir = "./storage/sorafs/gc"
 interval_secs = 900
 max_deletions_per_run = 500
 retention_grace_secs = 86400
-pre_admission_sweep = true
 
 [soracloud_runtime]
 production_mode = true

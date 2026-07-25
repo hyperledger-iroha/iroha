@@ -58,10 +58,9 @@ const WORKER_WAKE_CHANNEL_CAP: usize = 1;
 // ceiling aligned with the formal ingress refinement and the maximal fixture
 // below; the production byte reserve is intentionally much larger.
 const MAX_VALID_TIMEOUT_VOTE_WIRE_BYTES: usize = 4 * 1024;
-// Every admitted lane-local message must fit the independently reviewed source
-// bundle from which it is reconstructed. This gives the shared ingress one
-// finite byte witness for proposals, payload completions, view changes, QCs,
-// and the atomic proposal+PrepareQC+CommitQC recovery certificate.
+// Lane-owned completions fit the independently reviewed source bundle from
+// which they are reconstructed. Canonical historical-body recovery is instead
+// charged to the configured global transport-completion partition below.
 const MAX_LANE_PROGRESS_MESSAGE_WIRE_BYTES: usize = MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES;
 const MAX_LANE_COMPLETION_MESSAGE_WIRE_BYTES: usize = MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES;
 const _: () = assert!(TIMEOUT_VOTE_RESERVE_BYTES >= MAX_VALID_TIMEOUT_VOTE_WIRE_BYTES);
@@ -3276,10 +3275,23 @@ impl FairV2Ingress {
             message if message.is_lane_local() => {
                 let encoded = Arc::<[u8]>::from(message.encode());
                 let encoded_len = encoded.len();
-                let lane_limit = if class == FairV2IngressClass::TransportCompletion {
-                    MAX_LANE_COMPLETION_MESSAGE_WIRE_BYTES
-                } else {
-                    MAX_LANE_PROGRESS_MESSAGE_WIRE_BYTES
+                let lane_limit = match message {
+                    // Canonical carrier recovery is bounded by the same
+                    // configured completion partition and ConsensusPayload
+                    // frame as certified global bodies. It is not an
+                    // autonomous lane source bundle.
+                    BlockMessage::LaneHistoricalRecoveryResponse(response)
+                        if matches!(
+                            &response.payload,
+                            self::message::LaneHistoricalRecoveryPayloadV1::CanonicalBlock { .. }
+                        ) =>
+                    {
+                        self.transport_completion_byte_reserve
+                    }
+                    _ if class == FairV2IngressClass::TransportCompletion => {
+                        MAX_LANE_COMPLETION_MESSAGE_WIRE_BYTES
+                    }
+                    _ => MAX_LANE_PROGRESS_MESSAGE_WIRE_BYTES,
                 };
                 if encoded_len > lane_limit {
                     return Err(FairV2IngressPushError::Rejected(inbound));
@@ -3967,6 +3979,25 @@ impl SumeragiHandle {
         let _ = self.wake.try_send(());
     }
 
+    /// Wake the serialized v2 owner after a QueuePlan admission certificate
+    /// has been durably published in Kura.
+    ///
+    /// The certificate itself is never transferred through an in-memory
+    /// channel: the runner re-reads bounded, hash-addressed Kura evidence when
+    /// constructing the next canonical carrier. A saturated wake channel is
+    /// already an equivalent outstanding notification.
+    #[must_use]
+    pub fn notify_pending_queue_plan_admission(&self) -> bool {
+        let Some(_permit) = self.output_guard.acquire() else {
+            return false;
+        };
+        if !self.ingress_ready.load(Ordering::Acquire) {
+            return false;
+        }
+        self.wake();
+        true
+    }
+
     /// Try to transfer one exact normalized block envelope to the serialized owner.
     pub fn try_incoming_block_message_owned(
         &self,
@@ -4456,6 +4487,7 @@ impl SumeragiStartArgs {
             wake_rx,
             shutdown_signal,
             consensus_frame_byte_capacity,
+            block_sync_frame_byte_capacity,
         };
 
         let child = launch_sumeragi_thread(
@@ -4521,6 +4553,7 @@ struct SumeragiWorker {
     wake_rx: mpsc::Receiver<()>,
     shutdown_signal: ShutdownSignal,
     consensus_frame_byte_capacity: usize,
+    block_sync_frame_byte_capacity: usize,
 }
 
 #[cfg(test)]

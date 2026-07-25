@@ -19,7 +19,7 @@ public final class SorafsReferenceValidatorsTests {
     rejectsGeneratedAtBeforeNativeDispatch();
     rejectsBlankLabelBeforeNativeDispatch();
     boundsGovernanceDagInputsBeforeNativeDispatch();
-    rejectsRuntimeSnapshotSigningBeforeNativeDispatch();
+    rejectsNonSignableOrderbookPayloadBeforeNativeDispatch();
     rejectsBadSigningKeyBeforeNativeDispatch();
     rejectsInvalidOrderIdDerivationInputsBeforeNativeDispatch();
     rejectsOversizedOrderbookOwnerAccountsBeforeNativeDispatch();
@@ -27,6 +27,7 @@ public final class SorafsReferenceValidatorsTests {
     rejectsOrderbookSettlementReceiptFieldsBeforeNativeDispatch();
     rejectsNoncanonicalXorQuantitiesBeforeNativeDispatch();
     validatesOrderbookFixtureWhenNativeBridgeIsAvailable();
+    validatesEveryPdpOutcomeFixtureWhenNativeBridgeIsAvailable();
     validatesGovernanceDagFixturesAndNegativeVectorsWhenNativeBridgeIsAvailable();
     signsOrderbookFixtureWhenNativeBridgeIsAvailable();
     derivesCanonicalOrderIdWhenNativeBridgeIsAvailable();
@@ -35,9 +36,12 @@ public final class SorafsReferenceValidatorsTests {
 
   private static void exposesBridgeSelectors() {
     assert SorafsOrderbookPayloadKind.ORDER_REQUEST.bridgeCode() == 1;
-    assert SorafsOrderbookPayloadKind.RUNTIME_SNAPSHOT.bridgeCode() == 6;
+    for (final SorafsOrderbookPayloadKind kind : SorafsOrderbookPayloadKind.values()) {
+      assert kind.bridgeCode() != 6;
+      assert !"orderbook-runtime-snapshot.to".equals(kind.defaultLabel());
+    }
     assert SorafsOrderbookPayloadKind.ORDER_REQUEST.isUserSignedPayload();
-    assert !SorafsOrderbookPayloadKind.RUNTIME_SNAPSHOT.isUserSignedPayload();
+    assert !SorafsOrderbookPayloadKind.TRADE_EVENT.isUserSignedPayload();
     assert SorafsPdpPayloadKind.COMMITMENT.bridgeCode() == 1;
     assert SorafsPdpPayloadKind.PROOF.bridgeCode() == 3;
     assert SorafsPopPayloadKind.CREDENTIAL.bridgeCode() == 1;
@@ -120,6 +124,16 @@ public final class SorafsReferenceValidatorsTests {
     }
     assert oversizedLabelThrew : "oversized governance DAG labels must be rejected";
 
+    boolean controlLabelThrew = false;
+    try {
+      SorafsReferenceValidators.validateGovernanceDagBlockJson(
+          new byte[0], "bad\u0001label", null, 1L);
+    } catch (final IllegalArgumentException ex) {
+      controlLabelThrew =
+          ex.getMessage() != null && ex.getMessage().contains("control characters");
+    }
+    assert controlLabelThrew : "governance DAG labels with controls must be rejected";
+
     for (final int invalidLength : new int[] {0, 31, 33}) {
       boolean invalidExpectedCidThrew = false;
       try {
@@ -133,15 +147,15 @@ public final class SorafsReferenceValidatorsTests {
     }
   }
 
-  private static void rejectsRuntimeSnapshotSigningBeforeNativeDispatch() {
+  private static void rejectsNonSignableOrderbookPayloadBeforeNativeDispatch() {
     boolean threw = false;
     try {
       SorafsReferenceValidators.signOrderbookPayload(
-          SorafsOrderbookPayloadKind.RUNTIME_SNAPSHOT, new byte[0], repeatedKey(0xB7));
+          SorafsOrderbookPayloadKind.TRADE_EVENT, new byte[0], repeatedKey(0xB7));
     } catch (final IllegalArgumentException ex) {
       threw = ex.getMessage() != null && ex.getMessage().contains("cannot be signed");
     }
-    assert threw : "runtime snapshots should be rejected before native dispatch";
+    assert threw : "non-signable payloads should be rejected before native dispatch";
   }
 
   private static void rejectsBadSigningKeyBeforeNativeDispatch() {
@@ -194,6 +208,7 @@ public final class SorafsReferenceValidatorsTests {
           "1",
           1L,
           oversized,
+          new byte[0],
           1L,
           7L,
           0,
@@ -228,6 +243,7 @@ public final class SorafsReferenceValidatorsTests {
           "42",
           7L,
           new byte[] {1},
+          new byte[0],
           123L,
           1L,
           0,
@@ -294,14 +310,115 @@ public final class SorafsReferenceValidatorsTests {
         fixture("sorafs_manifest", "orderbook", "order_request_v1.to");
     final String json =
         SorafsReferenceValidators.validateOrderbookPayloadJson(
-            SorafsOrderbookPayloadKind.ORDER_REQUEST, payload, null, 123L);
-    assert json.contains("\"status\": \"Ok\"") : json;
-    assert json.contains("\"code\": \"SFS-OK-000\"") : json;
+            SorafsOrderbookPayloadKind.ORDER_REQUEST,
+            payload,
+            "order_request_v1.to",
+            123L);
+    assert fixtureText(
+            "sorafs_manifest",
+            "orderbook",
+            "order_request_validation_outcome_v1.json")
+        .equals(json) : json;
+
+    for (final String name :
+        new String[] {"order_request_bad_signature", "order_request_trailing_bytes"}) {
+      final String outcome =
+          SorafsReferenceValidators.validateOrderbookPayloadJson(
+              SorafsOrderbookPayloadKind.ORDER_REQUEST,
+              fixture(
+                  "sorafs_manifest",
+                  "orderbook",
+                  "negative",
+                  name + "_v1.to"),
+              name + "_v1.to",
+              123L);
+      assert fixtureText(
+              "sorafs_manifest",
+              "orderbook",
+              "negative",
+              name + "_validation_outcome_v1.json")
+          .equals(outcome) : name + ": " + outcome;
+    }
+  }
+
+  private static void validatesEveryPdpOutcomeFixtureWhenNativeBridgeIsAvailable()
+      throws IOException {
+    if (!SorafsReferenceValidators.isNativeAvailable()) {
+      return;
+    }
+    final byte[] commitment =
+        fixture("sorafs_manifest", "pdp", "commitment_v1.to");
+    final byte[] challenge =
+        fixture("sorafs_manifest", "pdp", "challenge_v1.to");
+    final byte[] proof =
+        fixture("sorafs_manifest", "pdp", "proof_v1.to");
+    final String bundle =
+        SorafsReferenceValidators.validatePdpBundleJson(
+            commitment,
+            challenge,
+            proof,
+            "commitment_v1.to",
+            "challenge_v1.to",
+            "proof_v1.to",
+            123L);
+    assert fixtureText(
+            "sorafs_manifest",
+            "pdp",
+            "bundle_validation_outcome_v1.json")
+        .equals(bundle) : bundle;
+
+    final String[] singleNames = {
+      "duplicate_hot_leaf_challenge", "missing_signature_proof"
+    };
+    final SorafsPdpPayloadKind[] singleKinds = {
+      SorafsPdpPayloadKind.CHALLENGE, SorafsPdpPayloadKind.PROOF
+    };
+    for (int index = 0; index < singleNames.length; index++) {
+      final String name = singleNames[index];
+      final String outcome =
+          SorafsReferenceValidators.validatePdpPayloadJson(
+              singleKinds[index],
+              fixture("sorafs_manifest", "pdp", "negative", name + "_v1.to"),
+              name + "_v1.to",
+              123L);
+      assertPdpOutcome(name, outcome);
+    }
+
+    for (final String name :
+        new String[] {"late_proof", "wrong_manifest_proof", "wrong_provider_proof"}) {
+      final String outcome =
+          SorafsReferenceValidators.validatePdpChallengeProofJson(
+              challenge,
+              fixture("sorafs_manifest", "pdp", "negative", name + "_v1.to"),
+              "challenge_v1.to",
+              name + "_v1.to",
+              123L);
+      assertPdpOutcome(name, outcome);
+    }
+
+    for (final String name :
+        new String[] {
+          "missing_hot_leaf_path_proof",
+          "missing_segment_path_proof",
+          "wrong_path_proof"
+        }) {
+      final String outcome =
+          SorafsReferenceValidators.validatePdpBundleJson(
+              commitment,
+              challenge,
+              fixture("sorafs_manifest", "pdp", "negative", name + "_v1.to"),
+              "commitment_v1.to",
+              "challenge_v1.to",
+              name + "_v1.to",
+              123L);
+      assertPdpOutcome(name, outcome);
+    }
   }
 
   private static void validatesGovernanceDagFixturesAndNegativeVectorsWhenNativeBridgeIsAvailable()
       throws IOException {
     if (!SorafsReferenceValidators.isNativeAvailable()) {
+      requireGovernanceDagNativeBridge();
       return;
     }
     final byte[] first =
@@ -313,16 +430,27 @@ public final class SorafsReferenceValidatorsTests {
 
     final String blockOutcome =
         SorafsReferenceValidators.validateGovernanceDagBlockJson(
-            first, null, null, 123L);
-    assert blockOutcome.contains("\"status\": \"Ok\"") : blockOutcome;
+            first, "dag_block_0_v1.to", null, 123L);
+    assert new String(
+            fixture(
+                "sorafs_manifest",
+                "governance",
+                "dag_block_validation_outcome_v1.json"),
+            StandardCharsets.UTF_8)
+        .equals(blockOutcome) : blockOutcome;
 
     final byte[] wrongCid = new byte[32];
     java.util.Arrays.fill(wrongCid, (byte) 0x7F);
     final String cidMismatch =
         SorafsReferenceValidators.validateGovernanceDagBlockJson(
             first, null, wrongCid, 123L);
-    assert cidMismatch.contains("\"status\": \"Error\"") : cidMismatch;
-    assert cidMismatch.contains("\"code\": \"SFS-GOV-004\"") : cidMismatch;
+    assert new String(
+            fixture(
+                "sorafs_manifest",
+                "governance",
+                "dag_block_cid_mismatch_validation_outcome_v1.json"),
+            StandardCharsets.UTF_8)
+        .equals(cidMismatch) : cidMismatch;
 
     final String headOutcome =
         SorafsReferenceValidators.validateGovernanceDagHeadChainJson(
@@ -331,7 +459,6 @@ public final class SorafsReferenceValidatorsTests {
             "dag_head_v1.to",
             new String[] {"dag_block_0_v1.to", "dag_block_1_v1.to"},
             123L);
-    assert headOutcome.contains("\"status\": \"Ok\"") : headOutcome;
     final String goldenOutcome =
         new String(
             fixture(
@@ -344,7 +471,13 @@ public final class SorafsReferenceValidatorsTests {
     final String reordered =
         SorafsReferenceValidators.validateGovernanceDagHeadChainJson(
             head, new byte[][] {second, first}, null, null, 123L);
-    assert reordered.contains("\"status\": \"Error\"") : reordered;
+    assert new String(
+            fixture(
+                "sorafs_manifest",
+                "governance",
+                "dag_head_reordered_validation_outcome_v1.json"),
+            StandardCharsets.UTF_8)
+        .equals(reordered) : reordered;
 
     final String blockSignatureOutcome =
         SorafsReferenceValidators.validateGovernanceDagBlockJson(
@@ -426,6 +559,13 @@ public final class SorafsReferenceValidatorsTests {
         .equals(predecessorOutcome) : predecessorOutcome;
   }
 
+  private static void requireGovernanceDagNativeBridge() {
+    if ("1".equals(System.getenv("IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION"))) {
+      throw new AssertionError(
+          "ABI-21 connect_norito_bridge with Governance DAG symbols is required.");
+    }
+  }
+
   private static void signsOrderbookFixtureWhenNativeBridgeIsAvailable() throws IOException {
     if (!SorafsReferenceValidators.isNativeAvailable()) {
       return;
@@ -466,6 +606,7 @@ public final class SorafsReferenceValidatorsTests {
             "1",
             1L,
             maximumOwner,
+            new byte[0],
             1_800_000_000L,
             9L,
             0,
@@ -496,6 +637,7 @@ public final class SorafsReferenceValidatorsTests {
             MAX_SCALED_XOR,
             64L,
             owner,
+            new byte[0],
             1_800_000_000L,
             7L,
             10,
@@ -506,6 +648,64 @@ public final class SorafsReferenceValidatorsTests {
             SorafsOrderbookPayloadKind.ORDER_REQUEST, signed, null, 123L);
     assert outcome.contains("\"status\": \"Ok\"") : outcome;
 
+    final byte[] ask =
+        SorafsReferenceValidators.buildSignedOrderbookOrderRequest(
+            SorafsOrderbookSide.ASK,
+            SorafsOrderbookTier.HOT,
+            "1.25",
+            4L,
+            owner,
+            repeated(0x72),
+            1_800_000_000L,
+            8L,
+            10,
+            15,
+            repeatedKey(0xB7));
+    final String askOutcome =
+        SorafsReferenceValidators.validateOrderbookPayloadJson(
+            SorafsOrderbookPayloadKind.ORDER_REQUEST, ask, null, 123L);
+    assert askOutcome.contains("\"status\": \"Ok\"") : askOutcome;
+
+    boolean bidProviderThrew = false;
+    try {
+      SorafsReferenceValidators.buildSignedOrderbookOrderRequest(
+          SorafsOrderbookSide.BID,
+          SorafsOrderbookTier.HOT,
+          "1",
+          1L,
+          owner,
+          repeated(0x72),
+          1_800_000_000L,
+          17L,
+          0,
+          0,
+          repeatedKey(0xB7));
+    } catch (final IllegalArgumentException error) {
+      bidProviderThrew =
+          error.getMessage() != null && error.getMessage().contains("absent or empty");
+    }
+    assert bidProviderThrew : "bid provider binding must be rejected";
+
+    boolean askProviderThrew = false;
+    try {
+      SorafsReferenceValidators.buildSignedOrderbookOrderRequest(
+          SorafsOrderbookSide.ASK,
+          SorafsOrderbookTier.HOT,
+          "1",
+          1L,
+          owner,
+          new byte[0],
+          1_800_000_000L,
+          17L,
+          0,
+          0,
+          repeatedKey(0xB7));
+    } catch (final IllegalArgumentException error) {
+      askProviderThrew =
+          error.getMessage() != null && error.getMessage().contains("providerId");
+    }
+    assert askProviderThrew : "ask without exact provider binding must be rejected";
+
     boolean threw = false;
     try {
       SorafsReferenceValidators.buildSignedOrderbookOrderRequest(
@@ -515,6 +715,7 @@ public final class SorafsReferenceValidatorsTests {
           "0.000000001",
           64L,
           owner,
+          new byte[0],
           1_800_000_000L,
           7L,
           10,
@@ -553,6 +754,21 @@ public final class SorafsReferenceValidatorsTests {
       output[index * 2 + 1] = alphabet[value & 0x0F];
     }
     return new String(output);
+  }
+
+  private static void assertPdpOutcome(final String name, final String actual)
+      throws IOException {
+    final String expected =
+        fixtureText(
+            "sorafs_manifest",
+            "pdp",
+            "negative",
+            name + "_validation_outcome_v1.json");
+    assert expected.equals(actual) : name + ": " + actual;
+  }
+
+  private static String fixtureText(final String... parts) throws IOException {
+    return new String(fixture(parts), StandardCharsets.UTF_8);
   }
 
   private static byte[] fixture(final String... parts) throws IOException {

@@ -1,7 +1,8 @@
 use super::*;
 use crate::sorafs::{
     capacity::{
-        CapacityDeclarationRecord, CapacityDisputeRecord, CapacityTelemetryRecord, ProviderId,
+        CapacityDeclarationRecord, CapacityDisputeId, CapacityDisputeOutcome,
+        CapacityDisputeRecord, CapacityTelemetryRecord, ProviderId,
     },
     moderation_ledger::{
         ModerationAppealIntakeV1, ModerationChallengeDecisionV1, ModerationChallengeKindV1,
@@ -12,6 +13,7 @@ use crate::sorafs::{
     pop_registry::PopIssuerPolicyV1,
     pricing::{PricingScheduleRecord, ProviderCreditRecord},
     proof_ledger::ProofOutcomeSignerPolicyV1,
+    reputation::{ReputationJournalAuthorityPolicyV1, ReputationJournalEntryV1},
     reserve::{
         ReserveAuthorityPolicyV1, ReserveLifecycleStage, ReserveMovementKindV1,
         ReserveProviderTermsV1,
@@ -375,6 +377,11 @@ isi! {
         /// Pending movement identifier.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub movement_id: [u8; 32],
+        /// Provider account revision expected by the decision.
+        pub expected_provider_revision: u64,
+        /// Exact active reserve policy digest expected by the decision service.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub policy_digest: [u8; 32],
         /// Whether governance approves the movement.
         pub approve: bool,
         /// Bounded governance rationale.
@@ -486,6 +493,11 @@ isi! {
         /// Pending appeal identifier.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub appeal_id: [u8; 32],
+        /// Provider account revision expected by the decision.
+        pub expected_provider_revision: u64,
+        /// Exact active reserve policy digest expected by the decision service.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub policy_digest: [u8; 32],
         /// Whether governance accepts and applies the requested stage.
         pub accept: bool,
         /// Bounded governance rationale.
@@ -817,6 +829,56 @@ isi! {
 }
 
 impl crate::seal::Instruction for SubmitSorafsProofOutcome {}
+
+isi! {
+    /// Activate the next governed recorder-policy revision for the reputation journal.
+    pub struct SetSorafsReputationJournalAuthorityPolicy {
+        /// Strict predecessor-linked recorder policy.
+        pub policy: ReputationJournalAuthorityPolicyV1,
+    }
+}
+
+impl crate::seal::Instruction for SetSorafsReputationJournalAuthorityPolicy {}
+
+isi! {
+    /// Commit one terminal native PoR projection to the global reputation journal.
+    pub struct AppendSorafsPorReputationJournalEntry {
+        /// Canonical policy-bound, content-addressed PoR journal entry.
+        pub entry: ReputationJournalEntryV1,
+    }
+}
+
+impl crate::seal::Instruction for AppendSorafsPorReputationJournalEntry {}
+
+isi! {
+    /// Commit one regional-gateway stream-token result to the global reputation journal.
+    pub struct AppendSorafsStreamTokenReputationJournalEntry {
+        /// Canonical policy-bound, content-addressed stream-token journal entry.
+        pub entry: ReputationJournalEntryV1,
+    }
+}
+
+impl crate::seal::Instruction for AppendSorafsStreamTokenReputationJournalEntry {}
+
+isi! {
+    /// Resolve one pending authoritative capacity dispute and append its terminal journal revision.
+    pub struct ResolveSorafsCapacityDispute {
+        /// Existing authoritative capacity-dispute identity.
+        pub dispute_id: CapacityDisputeId,
+        /// Exact active reputation recorder-policy digest expected by the decision.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub expected_authority_policy_digest: [u8; 32],
+        /// Governance outcome applied exactly once.
+        pub outcome: CapacityDisputeOutcome,
+        /// Digest of the canonical decision evidence or signed envelope.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub decision_digest: [u8; 32],
+        /// Optional bounded canonical governance rationale.
+        pub rationale: Option<String>,
+    }
+}
+
+impl crate::seal::Instruction for ResolveSorafsCapacityDispute {}
 
 isi! {
     /// Activate the next authoritative `SoraFS` moderation-ledger policy revision.
@@ -1265,9 +1327,17 @@ impl RequestSorafsReserveMovement {
 impl DecideSorafsReserveMovement {
     /// Construct a terminal reserve movement decision.
     #[must_use]
-    pub fn new(movement_id: [u8; 32], approve: bool, rationale: String) -> Self {
+    pub fn new(
+        movement_id: [u8; 32],
+        expected_provider_revision: u64,
+        policy_digest: [u8; 32],
+        approve: bool,
+        rationale: String,
+    ) -> Self {
         Self {
             movement_id,
+            expected_provider_revision,
+            policy_digest,
             approve,
             rationale,
         }
@@ -1374,9 +1444,17 @@ impl SubmitSorafsReserveAppeal {
 impl DecideSorafsReserveAppeal {
     /// Construct a terminal reserve appeal decision.
     #[must_use]
-    pub fn new(appeal_id: [u8; 32], accept: bool, rationale: String) -> Self {
+    pub fn new(
+        appeal_id: [u8; 32],
+        expected_provider_revision: u64,
+        policy_digest: [u8; 32],
+        accept: bool,
+        rationale: String,
+    ) -> Self {
         Self {
             appeal_id,
+            expected_provider_revision,
+            policy_digest,
             accept,
             rationale,
         }
@@ -1443,6 +1521,50 @@ impl SubmitSorafsProofOutcome {
     #[must_use]
     pub fn new(submission: SorafsProofOutcomeSubmissionV1) -> Self {
         Self { submission }
+    }
+}
+
+impl SetSorafsReputationJournalAuthorityPolicy {
+    /// Construct a governed reputation recorder-policy activation.
+    #[must_use]
+    pub fn new(policy: ReputationJournalAuthorityPolicyV1) -> Self {
+        Self { policy }
+    }
+}
+
+impl AppendSorafsPorReputationJournalEntry {
+    /// Construct a canonical PoR reputation-journal append.
+    #[must_use]
+    pub fn new(entry: ReputationJournalEntryV1) -> Self {
+        Self { entry }
+    }
+}
+
+impl AppendSorafsStreamTokenReputationJournalEntry {
+    /// Construct a canonical stream-token reputation-journal append.
+    #[must_use]
+    pub fn new(entry: ReputationJournalEntryV1) -> Self {
+        Self { entry }
+    }
+}
+
+impl ResolveSorafsCapacityDispute {
+    /// Construct a governed, predecessor-bound capacity-dispute resolution.
+    #[must_use]
+    pub fn new(
+        dispute_id: CapacityDisputeId,
+        expected_authority_policy_digest: [u8; 32],
+        outcome: CapacityDisputeOutcome,
+        decision_digest: [u8; 32],
+        rationale: Option<String>,
+    ) -> Self {
+        Self {
+            dispute_id,
+            expected_authority_policy_digest,
+            outcome,
+            decision_digest,
+            rationale,
+        }
     }
 }
 
@@ -1770,6 +1892,8 @@ impl_sorafs_decode_from_slice!(RequestSorafsReserveMovement {
 
 impl_sorafs_decode_from_slice!(DecideSorafsReserveMovement {
     movement_id: [u8; 32],
+    expected_provider_revision: u64,
+    policy_digest: [u8; 32],
     approve: bool,
     rationale: String,
 });
@@ -1814,6 +1938,8 @@ impl_sorafs_decode_from_slice!(SubmitSorafsReserveAppeal {
 
 impl_sorafs_decode_from_slice!(DecideSorafsReserveAppeal {
     appeal_id: [u8; 32],
+    expected_provider_revision: u64,
+    policy_digest: [u8; 32],
     accept: bool,
     rationale: String,
 });
@@ -1843,6 +1969,26 @@ impl_sorafs_decode_from_slice!(SetSorafsProofOutcomeSignerPolicy {
 
 impl_sorafs_decode_from_slice!(SubmitSorafsProofOutcome {
     submission: SorafsProofOutcomeSubmissionV1,
+});
+
+impl_sorafs_decode_from_slice!(SetSorafsReputationJournalAuthorityPolicy {
+    policy: ReputationJournalAuthorityPolicyV1,
+});
+
+impl_sorafs_decode_from_slice!(AppendSorafsPorReputationJournalEntry {
+    entry: ReputationJournalEntryV1,
+});
+
+impl_sorafs_decode_from_slice!(AppendSorafsStreamTokenReputationJournalEntry {
+    entry: ReputationJournalEntryV1,
+});
+
+impl_sorafs_decode_from_slice!(ResolveSorafsCapacityDispute {
+    dispute_id: CapacityDisputeId,
+    expected_authority_policy_digest: [u8; 32],
+    outcome: CapacityDisputeOutcome,
+    decision_digest: [u8; 32],
+    rationale: Option<String>,
 });
 
 impl_sorafs_decode_from_slice!(SetSorafsModerationPolicy {
@@ -1916,7 +2062,13 @@ mod tests {
     use norito::core::DecodeFromSlice;
 
     use super::*;
-    use crate::sorafs::capacity::{CapacityDisputeEvidence, CapacityDisputeId};
+    use crate::sorafs::{
+        capacity::{CapacityDisputeEvidence, CapacityDisputeId},
+        reputation::{
+            PorTerminalOutcomeV1, PorTerminalStatusV1, ReputationJournalPayloadV1,
+            StreamTokenValidationOutcomeV1, StreamTokenValidationStatusV1,
+        },
+    };
 
     fn owner() -> AccountId {
         AccountId::new(
@@ -2020,12 +2172,77 @@ mod tests {
         )
     }
 
+    fn reputation_policy() -> ReputationJournalAuthorityPolicyV1 {
+        ReputationJournalAuthorityPolicyV1 {
+            version:
+                crate::sorafs::reputation::REPUTATION_JOURNAL_AUTHORITY_POLICY_VERSION_V1,
+            revision: 1,
+            predecessor_policy_digest: None,
+            por_recorder_authority: owner(),
+            dispute_recorder_authority: owner(),
+            token_recorder_authority: owner(),
+        }
+    }
+
+    fn por_reputation_entry() -> ReputationJournalEntryV1 {
+        let policy = reputation_policy();
+        ReputationJournalEntryV1::try_new(
+            provider(0x39),
+            policy.canonical_digest().expect("reputation policy digest"),
+            owner(),
+            1_700_000_001_700,
+            None,
+            ReputationJournalPayloadV1::PorTerminal(PorTerminalOutcomeV1 {
+                challenge_id: [0x81; 32],
+                manifest_digest: [0x82; 32],
+                epoch_id: 9,
+                drand_round: 11,
+                forced: false,
+                sample_count: 8,
+                failed_samples: 0,
+                issued_at_unix_ms: 1_700_000_000_000,
+                deadline_at_unix_ms: 1_700_000_001_500,
+                responded_at_unix_ms: Some(1_700_000_001_400),
+                decided_at_unix_ms: 1_700_000_001_700,
+                proof_digest: Some([0x83; 32]),
+                repair_task_id: None,
+                verifier_latency_ms: Some(7),
+                status: PorTerminalStatusV1::Verified,
+            }),
+        )
+        .expect("canonical PoR reputation entry")
+    }
+
+    fn token_reputation_entry() -> ReputationJournalEntryV1 {
+        let policy = reputation_policy();
+        ReputationJournalEntryV1::try_new(
+            provider(0x3A),
+            policy.canonical_digest().expect("reputation policy digest"),
+            owner(),
+            1_700_000_002_000,
+            None,
+            ReputationJournalPayloadV1::StreamTokenValidation(
+                StreamTokenValidationOutcomeV1 {
+                    validation_id: [0x84; 32],
+                    request_digest: [0x85; 32],
+                    token_body_digest: Some([0x86; 32]),
+                    token_key_version: Some(1),
+                    validated_at_unix_ms: 1_700_000_002_000,
+                    status: StreamTokenValidationStatusV1::Accepted,
+                },
+            ),
+        )
+        .expect("canonical stream-token reputation entry")
+    }
+
     fn orderbook_policy() -> OrderbookAdmissionPolicyV1 {
         OrderbookAdmissionPolicyV1 {
             version: crate::sorafs::orderbook::ORDERBOOK_ADMISSION_POLICY_VERSION_V1,
             revision: 1,
             predecessor_policy_digest: None,
             market_id: [0xA5; 32],
+            matcher_authority: owner(),
+            settlement_authority: owner(),
             paused: false,
             min_order_gib: 1,
             max_order_gib: 1_024,
@@ -2057,6 +2274,8 @@ mod tests {
                     .parse()
                     .expect("treasury public key"),
             ),
+            operations_authority: owner(),
+            decision_authority: owner(),
             grace_period_days: 7,
             default_after_days: 30,
             max_provider_debt: XorQuantity::try_from_micro(1_000_000_000)
@@ -2064,6 +2283,30 @@ mod tests {
             max_pending_movements_per_provider: 4,
             max_open_appeals_per_provider: 2,
         }
+    }
+
+    #[test]
+    fn reserve_policy_digest_commits_service_authorities() {
+        let policy = reserve_policy();
+        let baseline = policy.digest().expect("baseline reserve policy digest");
+
+        let mut operations_rotated = policy.clone();
+        operations_rotated.operations_authority = policy.treasury_account.clone();
+        assert_ne!(
+            operations_rotated
+                .digest()
+                .expect("operations-authority digest"),
+            baseline
+        );
+
+        let mut decision_rotated = policy;
+        decision_rotated.decision_authority = decision_rotated.treasury_account.clone();
+        assert_ne!(
+            decision_rotated
+                .digest()
+                .expect("decision-authority digest"),
+            baseline
+        );
     }
 
     fn reserve_terms() -> ReserveProviderTermsV1 {
@@ -2350,6 +2593,8 @@ mod tests {
         ));
         assert_slice_roundtrip(DecideSorafsReserveMovement::new(
             [0x57; 32],
+            2,
+            [0x56; 32],
             true,
             "approved".to_owned(),
         ));
@@ -2388,6 +2633,8 @@ mod tests {
         ));
         assert_slice_roundtrip(DecideSorafsReserveAppeal::new(
             [0x58; 32],
+            7,
+            [0x56; 32],
             false,
             "evidence insufficient".to_owned(),
         ));
@@ -2444,6 +2691,24 @@ mod tests {
                 receipt_payload: vec![0x76, 0x77],
                 admission_envelope_digest: [0x78; 32],
             }),
+        ));
+        assert_slice_roundtrip(SetSorafsReputationJournalAuthorityPolicy::new(
+            reputation_policy(),
+        ));
+        assert_slice_roundtrip(AppendSorafsPorReputationJournalEntry::new(
+            por_reputation_entry(),
+        ));
+        assert_slice_roundtrip(AppendSorafsStreamTokenReputationJournalEntry::new(
+            token_reputation_entry(),
+        ));
+        assert_slice_roundtrip(ResolveSorafsCapacityDispute::new(
+            CapacityDisputeId::new([0xD1; 32]),
+            reputation_policy()
+                .canonical_digest()
+                .expect("reputation policy digest"),
+            CapacityDisputeOutcome::Upheld,
+            [0x87; 32],
+            Some("governance decision".to_owned()),
         ));
         assert_slice_roundtrip(SetSorafsModerationPolicy::new(moderation_policy()));
         assert_slice_roundtrip(SubmitSorafsModerationAppeal::new(moderation_appeal_intake()));
@@ -2588,7 +2853,13 @@ mod tests {
         );
         assert_registry_decodes(
             &registry,
-            DecideSorafsReserveMovement::new([0x57; 32], true, "approved".to_owned()),
+            DecideSorafsReserveMovement::new(
+                [0x57; 32],
+                2,
+                [0x56; 32],
+                true,
+                "approved".to_owned(),
+            ),
         );
         assert_registry_decodes(
             &registry,
@@ -2630,7 +2901,13 @@ mod tests {
         );
         assert_registry_decodes(
             &registry,
-            DecideSorafsReserveAppeal::new([0x58; 32], false, "evidence insufficient".to_owned()),
+            DecideSorafsReserveAppeal::new(
+                [0x58; 32],
+                7,
+                [0x56; 32],
+                false,
+                "evidence insufficient".to_owned(),
+            ),
         );
         assert_registry_decodes(
             &registry,
@@ -2677,6 +2954,30 @@ mod tests {
                     admission_envelope_digest: [0x78; 32],
                 },
             )),
+        );
+        assert_registry_decodes(
+            &registry,
+            SetSorafsReputationJournalAuthorityPolicy::new(reputation_policy()),
+        );
+        assert_registry_decodes(
+            &registry,
+            AppendSorafsPorReputationJournalEntry::new(por_reputation_entry()),
+        );
+        assert_registry_decodes(
+            &registry,
+            AppendSorafsStreamTokenReputationJournalEntry::new(token_reputation_entry()),
+        );
+        assert_registry_decodes(
+            &registry,
+            ResolveSorafsCapacityDispute::new(
+                CapacityDisputeId::new([0xD1; 32]),
+                reputation_policy()
+                    .canonical_digest()
+                    .expect("reputation policy digest"),
+                CapacityDisputeOutcome::Upheld,
+                [0x87; 32],
+                Some("governance decision".to_owned()),
+            ),
         );
         assert_registry_decodes(
             &registry,

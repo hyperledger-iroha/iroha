@@ -8,19 +8,25 @@ use std::{
     },
 };
 
-use iroha_data_model::metadata::Metadata;
+use iroha_data_model::{metadata::Metadata, sorafs::moderation_ledger::sorafs_repair_task_id_v1};
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
 use norito::json::Value as JsonValue;
 use rand::{RngCore, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use sorafs_car::PorMerkleTree;
-use sorafs_manifest::por::{
-    AuditOutcomeV1, AuditVerdictV1, PorChallengeV1, PorChallengeValidationError, PorProofV1,
-    PorProofValidationError, derive_challenge_id, derive_challenge_seed,
+use sorafs_manifest::{
+    por::{
+        AuditOutcomeV1, AuditVerdictV1, PorChallengeV1, PorChallengeValidationError, PorProofV1,
+        PorProofValidationError, derive_challenge_id, derive_challenge_seed,
+    },
+    repair::{
+        REPAIR_EVIDENCE_VERSION_V1, REPAIR_REPORT_VERSION_V1, RepairCauseV1, RepairEvidenceV1,
+        RepairPorFailureCauseV1, RepairReportV1, RepairTicketId,
+    },
 };
 use thiserror::Error;
 
-use crate::{repair::RepairStoreError, store::StoredManifest};
+use crate::store::StoredManifest;
 
 const SMALL_LEAF_MAX_LEN: u32 = 4 * 1024;
 const GIB: u64 = 1_073_741_824;
@@ -33,6 +39,114 @@ const SAMPLE_MULTIPLIER_DEFAULT_KEY: &str = "default";
 const DEFAULT_SAMPLE_MULTIPLIER: u16 = 1;
 const MAX_SAMPLE_MULTIPLIER: u16 = 4;
 const DEFAULT_TRACKER_ENTRY_LIMIT: usize = 65_536;
+
+/// Domain separator for a failed PoR challenge's exactly-once repair source.
+pub const POR_REPAIR_SOURCE_ID_DOMAIN_V1: &[u8] = b"sorafs.por.repair-source.v1";
+
+/// Derive the cross-peer repair source identity for one PoR challenge.
+#[must_use]
+pub fn por_repair_source_identity_v1(challenge_id: [u8; 32]) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(POR_REPAIR_SOURCE_ID_DOMAIN_V1);
+    hasher.update(&challenge_id);
+    *hasher.finalize().as_bytes()
+}
+
+/// Payload-free canonical material needed to enqueue a failed PoR repair.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PorFailedRepairIntentV1 {
+    /// Manifest affected by the failed proof.
+    pub manifest_digest: [u8; 32],
+    /// Provider responsible for the failed proof.
+    pub provider_id: [u8; 32],
+    /// Challenge whose terminal failed verdict originated the repair.
+    pub challenge_id: [u8; 32],
+    /// Number of samples that failed verification.
+    pub failed_samples: u16,
+    /// Canonical proof digest, when the provider submitted a proof.
+    pub proof_digest: Option<[u8; 32]>,
+    /// Final auditor decision timestamp.
+    pub decided_at_unix: u64,
+}
+
+impl PorFailedRepairIntentV1 {
+    fn validate(self) -> Result<(), PorRepairHandoffError> {
+        if self.manifest_digest == [0; 32]
+            || self.provider_id == [0; 32]
+            || self.challenge_id == [0; 32]
+            || self.failed_samples == 0
+            || self.decided_at_unix == 0
+        {
+            return Err(PorRepairHandoffError(
+                "failed PoR repair intent contains a zero-valued required field".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Return the deterministic exactly-once source identity.
+    #[must_use]
+    pub fn source_identity(self) -> [u8; 32] {
+        por_repair_source_identity_v1(self.challenge_id)
+    }
+
+    /// Return the chain-authoritative repair task identity.
+    #[must_use]
+    pub fn repair_task_id(self) -> [u8; 32] {
+        sorafs_repair_task_id_v1(self.source_identity())
+    }
+}
+
+/// Build the canonical payload-free repair report for a failed PoR verdict.
+///
+/// The caller supplies the runtime transaction authority; process-local
+/// history identifiers, verdict reasons, signatures, and metadata are never
+/// copied into the chain payload.
+pub fn canonical_por_failure_repair_report_v1(
+    intent: PorFailedRepairIntentV1,
+    runtime_authority: &str,
+) -> Result<RepairReportV1, PorRepairHandoffError> {
+    intent.validate()?;
+    let report = RepairReportV1 {
+        version: REPAIR_REPORT_VERSION_V1,
+        ticket_id: RepairTicketId(format!("POR-{}", hex::encode_upper(intent.challenge_id))),
+        auditor_account: runtime_authority.to_owned(),
+        submitted_at_unix: intent.decided_at_unix,
+        evidence: RepairEvidenceV1 {
+            version: REPAIR_EVIDENCE_VERSION_V1,
+            manifest_digest: intent.manifest_digest,
+            provider_id: intent.provider_id,
+            por_history_id: None,
+            cause: RepairCauseV1::PorFailure(RepairPorFailureCauseV1 {
+                challenge_id: intent.challenge_id,
+                failed_samples: intent.failed_samples,
+                proof_digest: intent.proof_digest,
+            }),
+            evidence_json: None,
+            notes: None,
+        },
+        notes: None,
+    };
+    report
+        .validate()
+        .map_err(|error| PorRepairHandoffError(error.to_string()))?;
+    Ok(report)
+}
+
+/// Payload-free failure returned by the native PoR repair handoff.
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+#[error("PoR repair handoff failed: {0}")]
+pub struct PorRepairHandoffError(pub String);
+
+/// Durable native repair handoff required before a failed PoR verdict commits.
+pub trait PorRepairHandoff: Send + Sync + std::fmt::Debug {
+    /// Enqueue the canonical failed-PoR report exactly once and return its
+    /// chain-authoritative task identity.
+    fn enqueue_failed_por_repair(
+        &self,
+        intent: &PorFailedRepairIntentV1,
+    ) -> Result<[u8; 32], PorRepairHandoffError>;
+}
 
 /// Randomness bundle sourced for a PoR epoch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -511,7 +625,7 @@ pub fn build_por_challenge_for_manifest(
 }
 
 /// Statistics extracted from an audit verdict.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct PorVerdictStats {
     /// Number of successful samples recorded by the verdict.
     pub success_samples: u64,
@@ -582,10 +696,18 @@ struct ChallengeState {
     proof_submitted_at: Option<u64>,
 }
 
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
+struct FinalizedChallengeStateV1 {
+    state: ChallengeState,
+    verdict: AuditVerdictV1,
+    stats: PorVerdictStats,
+    repair_task_id: Option<[u8; 32]>,
+}
+
 #[derive(Debug)]
 struct PorTrackerState {
     pending: HashMap<[u8; 32], ChallengeState>,
-    finalized: HashMap<[u8; 32], PorChallengeV1>,
+    finalized: HashMap<[u8; 32], FinalizedChallengeStateV1>,
     entry_limit: usize,
 }
 
@@ -603,7 +725,14 @@ impl Default for PorTrackerState {
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 pub(crate) struct PorTrackerCheckpointV1 {
     pending: Vec<ChallengeState>,
-    finalized: Vec<PorChallengeV1>,
+    finalized: Vec<FinalizedChallengeStateV1>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PorVerdictTransitionV1 {
+    pub(crate) stats: PorVerdictStats,
+    pub(crate) repair_task_id: Option<[u8; 32]>,
+    pub(crate) newly_finalized: bool,
 }
 
 /// Tracks the lifecycle of PoR challenges, proofs, and verdicts.
@@ -654,7 +783,7 @@ impl PorTracker {
         }
         let mut state = self.inner.write().expect("por tracker poisoned");
         if let Some(finalized) = state.finalized.get(&challenge.challenge_id) {
-            return if finalized == challenge {
+            return if finalized.state.challenge == *challenge {
                 Ok(())
             } else {
                 Err(PorTrackerError::ChallengeConflict)
@@ -789,23 +918,28 @@ impl PorTracker {
         trusted_auditor_keys: &[Vec<u8>],
         auditor_threshold: usize,
     ) -> Result<PorVerdictStats, PorTrackerError> {
-        self.record_verdict_with(verdict, trusted_auditor_keys, auditor_threshold, |_| Ok(()))
-            .map(|(stats, ())| stats)
+        self.record_verdict_with(verdict, trusted_auditor_keys, auditor_threshold, |intent| {
+            Ok(intent.repair_task_id())
+        })
+        .map(|transition| transition.stats)
     }
 
-    /// Finalise a challenge only after `before_commit` succeeds.
+    /// Finalise a challenge only after any required native repair handoff succeeds.
     ///
     /// The tracker write lock remains held while the callback runs. This makes
     /// the in-memory state transition atomic with a fallible durable side
-    /// effect such as repair-history persistence: callback failures leave the
-    /// challenge and proof available for a safe retry.
-    pub(crate) fn record_verdict_with<T>(
+    /// effect such as native repair admission: callback failures leave the
+    /// challenge and proof available for a safe retry. Exact terminal replays
+    /// return the retained task identity without invoking the handoff again.
+    pub(crate) fn record_verdict_with(
         &self,
         verdict: &AuditVerdictV1,
         trusted_auditor_keys: &[Vec<u8>],
         auditor_threshold: usize,
-        before_commit: impl FnOnce(PorVerdictStats) -> Result<T, RepairStoreError>,
-    ) -> Result<(PorVerdictStats, T), PorTrackerError> {
+        enqueue_failed_repair: impl FnOnce(
+            &PorFailedRepairIntentV1,
+        ) -> Result<[u8; 32], PorRepairHandoffError>,
+    ) -> Result<PorVerdictTransitionV1, PorTrackerError> {
         verdict
             .validate()
             .map_err(PorTrackerError::VerdictInvalid)?;
@@ -813,6 +947,16 @@ impl PorTracker {
             .verify_signatures_with_policy(trusted_auditor_keys, auditor_threshold)
             .map_err(PorTrackerError::VerdictSignatureInvalid)?;
         let mut tracker = self.inner.write().expect("por tracker poisoned");
+        if let Some(finalized) = tracker.finalized.get(&verdict.challenge_id) {
+            if finalized.verdict != *verdict {
+                return Err(PorTrackerError::VerdictConflict);
+            }
+            return Ok(PorVerdictTransitionV1 {
+                stats: finalized.stats,
+                repair_task_id: finalized.repair_task_id,
+                newly_finalized: false,
+            });
+        }
         let state = tracker
             .pending
             .get(&verdict.challenge_id)
@@ -823,15 +967,44 @@ impl PorTracker {
                 limit: tracker.entry_limit,
             });
         }
-        let callback_value = before_commit(stats)?;
+        let repair_task_id = if verdict.outcome == AuditOutcomeV1::Failed {
+            let failed_samples = u16::try_from(stats.failed_samples)
+                .map_err(|_| PorTrackerError::InvalidFailedSampleCount)?;
+            let intent = PorFailedRepairIntentV1 {
+                manifest_digest: verdict.manifest_digest,
+                provider_id: verdict.provider_id,
+                challenge_id: verdict.challenge_id,
+                failed_samples,
+                proof_digest: verdict.proof_digest,
+                decided_at_unix: verdict.decided_at,
+            };
+            intent.validate().map_err(PorTrackerError::RepairHandoff)?;
+            let task_id = enqueue_failed_repair(&intent).map_err(PorTrackerError::RepairHandoff)?;
+            if task_id != intent.repair_task_id() {
+                return Err(PorTrackerError::RepairTaskIdMismatch);
+            }
+            Some(task_id)
+        } else {
+            None
+        };
         let finalized = tracker
             .pending
             .remove(&verdict.challenge_id)
             .expect("validated PoR challenge must remain while write lock is held");
-        tracker
-            .finalized
-            .insert(verdict.challenge_id, finalized.challenge);
-        Ok((stats, callback_value))
+        tracker.finalized.insert(
+            verdict.challenge_id,
+            FinalizedChallengeStateV1 {
+                state: finalized,
+                verdict: verdict.clone(),
+                stats,
+                repair_task_id,
+            },
+        );
+        Ok(PorVerdictTransitionV1 {
+            stats,
+            repair_task_id,
+            newly_finalized: true,
+        })
     }
 
     /// Export pending and finalized challenge state in deterministic order.
@@ -840,7 +1013,7 @@ impl PorTracker {
         let mut pending = tracker.pending.values().cloned().collect::<Vec<_>>();
         pending.sort_by_key(|state| state.challenge.challenge_id);
         let mut finalized = tracker.finalized.values().cloned().collect::<Vec<_>>();
-        finalized.sort_by_key(|challenge| challenge.challenge_id);
+        finalized.sort_by_key(|state| state.state.challenge.challenge_id);
         PorTrackerCheckpointV1 { pending, finalized }
     }
 
@@ -896,18 +1069,62 @@ impl PorTracker {
         }
         let mut finalized = HashMap::with_capacity(checkpoint.finalized.len());
         let mut previous_finalized_id = None;
-        for challenge in checkpoint.finalized {
-            challenge
+        for finalized_state in checkpoint.finalized {
+            finalized_state
+                .state
+                .challenge
                 .validate()
                 .map_err(PorTrackerError::ChallengeInvalid)?;
-            let challenge_id = challenge.challenge_id;
+            if finalized_state.state.proof_digest.is_some()
+                != finalized_state.state.proof_submitted_at.is_some()
+            {
+                return Err(PorTrackerError::InvalidCheckpoint(
+                    "finalized proof digest and timestamp must both be present or absent"
+                        .to_owned(),
+                ));
+            }
+            if let Some(submitted_at) = finalized_state.state.proof_submitted_at
+                && (submitted_at < finalized_state.state.challenge.issued_at
+                    || submitted_at > finalized_state.state.challenge.deadline_at)
+            {
+                return Err(PorTrackerError::InvalidCheckpoint(
+                    "finalized proof timestamp falls outside its challenge window".to_owned(),
+                ));
+            }
+            finalized_state
+                .verdict
+                .validate()
+                .map_err(PorTrackerError::VerdictInvalid)?;
+            finalized_state
+                .verdict
+                .verify_signatures()
+                .map_err(PorTrackerError::VerdictSignatureInvalid)?;
+            let expected_stats =
+                validate_verdict_transition(&finalized_state.state, &finalized_state.verdict)?;
+            if finalized_state.stats != expected_stats {
+                return Err(PorTrackerError::InvalidCheckpoint(
+                    "finalized verdict statistics do not match the retained challenge".to_owned(),
+                ));
+            }
+            let expected_task_id = (finalized_state.verdict.outcome == AuditOutcomeV1::Failed)
+                .then(|| {
+                    sorafs_repair_task_id_v1(por_repair_source_identity_v1(
+                        finalized_state.verdict.challenge_id,
+                    ))
+                });
+            if finalized_state.repair_task_id != expected_task_id {
+                return Err(PorTrackerError::InvalidCheckpoint(
+                    "finalized verdict repair task identity is inconsistent".to_owned(),
+                ));
+            }
+            let challenge_id = finalized_state.state.challenge.challenge_id;
             if previous_finalized_id.is_some_and(|previous| previous >= challenge_id) {
                 return Err(PorTrackerError::InvalidCheckpoint(
                     "finalized challenges must be strictly ordered by challenge id".to_owned(),
                 ));
             }
             previous_finalized_id = Some(challenge_id);
-            if finalized.insert(challenge_id, challenge).is_some() {
+            if finalized.insert(challenge_id, finalized_state).is_some() {
                 return Err(PorTrackerError::InvalidCheckpoint(
                     "duplicate finalized challenge id".to_owned(),
                 ));
@@ -1012,6 +1229,11 @@ fn validate_verdict_transition(
         state.challenge.provider_id,
         PorTrackerError::MismatchProvider,
     )?;
+    ensure_match(
+        verdict.challenge_id,
+        state.challenge.challenge_id,
+        PorTrackerError::MismatchChallenge,
+    )?;
     if verdict.decided_at < state.challenge.issued_at {
         return Err(PorTrackerError::VerdictBeforeChallenge {
             decided_at: verdict.decided_at,
@@ -1105,12 +1327,18 @@ pub enum PorTrackerError {
     /// Challenge id is unknown to the tracker.
     #[error("unknown challenge id")]
     UnknownChallenge,
+    /// A terminal verdict replay differs from the verdict already retained.
+    #[error("challenge was already finalized by a different verdict")]
+    VerdictConflict,
     /// Proof references a different manifest digest.
     #[error("proof manifest digest does not match recorded challenge")]
     MismatchManifest,
     /// Proof references a different provider id.
     #[error("proof provider id does not match recorded challenge")]
     MismatchProvider,
+    /// Verdict references a different challenge id.
+    #[error("verdict challenge id does not match recorded challenge")]
+    MismatchChallenge,
     /// Proof sample count differs from the challenge.
     #[error("proof sample count mismatch (expected {expected}, actual {actual})")]
     SampleCountMismatch {
@@ -1165,9 +1393,15 @@ pub enum PorTrackerError {
         /// Proof submission timestamp.
         submitted_at: u64,
     },
-    /// Repair store failed while recording PoR failure history.
+    /// Failed-sample count could not be represented by the canonical repair schema.
+    #[error("failed PoR sample count exceeds the canonical repair schema")]
+    InvalidFailedSampleCount,
+    /// Durable native repair admission failed.
     #[error(transparent)]
-    RepairStore(#[from] RepairStoreError),
+    RepairHandoff(#[from] PorRepairHandoffError),
+    /// The handoff returned an identifier other than the deterministic native task id.
+    #[error("PoR repair handoff returned a mismatched native task id")]
+    RepairTaskIdMismatch,
 }
 
 #[cfg(test)]
@@ -1670,6 +1904,30 @@ mod tests {
     }
 
     #[test]
+    fn tracker_checkpoint_rejects_forged_finalized_verdict_signature() {
+        let source = PorTracker::default();
+        let challenge = sample_challenge();
+        let proof = sample_proof(&challenge);
+        source.record_challenge(&challenge).unwrap();
+        source.record_proof(&proof, &sample_provider_key()).unwrap();
+        source
+            .record_verdict(
+                &sample_verdict(&challenge, proof.proof_digest()),
+                &sample_auditor_keys(),
+                1,
+            )
+            .unwrap();
+
+        let mut checkpoint = source.checkpoint();
+        checkpoint.finalized[0].verdict.auditor_signatures[0].signature[0] ^= 1;
+        let restored = PorTracker::default();
+        assert!(matches!(
+            restored.restore_checkpoint(checkpoint),
+            Err(PorTrackerError::VerdictSignatureInvalid(_))
+        ));
+    }
+
+    #[test]
     fn tracker_handles_failure_verdict() {
         let tracker = PorTracker::default();
         let mut challenge = sample_challenge();
@@ -1692,6 +1950,34 @@ mod tests {
                 failed_samples: 1
             }
         );
+    }
+
+    #[test]
+    fn successful_and_repaired_verdicts_never_invoke_repair_handoff() {
+        for (index, outcome) in [AuditOutcomeV1::Success, AuditOutcomeV1::Repaired]
+            .into_iter()
+            .enumerate()
+        {
+            let tracker = PorTracker::default();
+            let challenge = next_challenge(&sample_challenge(), index as u64);
+            let proof = sample_proof(&challenge);
+            tracker.record_challenge(&challenge).unwrap();
+            tracker
+                .record_proof(&proof, &sample_provider_key())
+                .unwrap();
+            let mut verdict = sample_verdict(&challenge, proof.proof_digest());
+            verdict.outcome = outcome;
+            verdict.failure_reason = (outcome == AuditOutcomeV1::Repaired)
+                .then(|| "repair verification succeeded".to_owned());
+            resign_sample_verdict(&mut verdict);
+
+            let transition = tracker
+                .record_verdict_with(&verdict, &sample_auditor_keys(), 1, |_| {
+                    panic!("non-failed verdict must not invoke repair handoff")
+                })
+                .expect("non-failed terminal verdict");
+            assert_eq!(transition.repair_task_id, None);
+        }
     }
 
     #[test]
@@ -1866,16 +2152,19 @@ mod tests {
         tracker
             .record_proof(&proof, &sample_provider_key())
             .unwrap();
-        let verdict = sample_verdict(&challenge, proof.proof_digest());
+        let mut verdict = sample_verdict(&challenge, proof.proof_digest());
+        verdict.outcome = AuditOutcomeV1::Failed;
+        verdict.failure_reason = Some("proof verification failed".to_owned());
+        resign_sample_verdict(&mut verdict);
 
         let error = tracker
             .record_verdict_with(&verdict, &sample_auditor_keys(), 1, |_| {
-                Err::<(), _>(RepairStoreError::Other(
-                    "injected durable-store failure".to_owned(),
+                Err(PorRepairHandoffError(
+                    "injected durable-handoff failure".to_owned(),
                 ))
             })
             .expect_err("injected callback failure must abort transition");
-        assert!(matches!(error, PorTrackerError::RepairStore(_)));
+        assert!(matches!(error, PorTrackerError::RepairHandoff(_)));
         assert!(tracker.contains_challenge(&challenge.challenge_id));
         assert_eq!(
             tracker.proof_digest(&challenge.challenge_id),
@@ -1885,5 +2174,105 @@ mod tests {
         tracker
             .record_verdict(&verdict, &sample_auditor_keys(), 1)
             .expect("verdict must succeed after durable store recovers");
+    }
+
+    #[test]
+    fn failed_verdict_exact_replay_reuses_native_task_without_handoff() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let tracker = PorTracker::default();
+        let challenge = sample_challenge();
+        tracker.record_challenge(&challenge).unwrap();
+        let mut verdict = sample_verdict(&challenge, [0x11; 32]);
+        verdict.outcome = AuditOutcomeV1::Failed;
+        verdict.proof_digest = None;
+        verdict.failure_reason = Some("provider missed the challenge".to_owned());
+        resign_sample_verdict(&mut verdict);
+        let handoff_calls = AtomicUsize::new(0);
+
+        let first = tracker
+            .record_verdict_with(&verdict, &sample_auditor_keys(), 1, |intent| {
+                handoff_calls.fetch_add(1, Ordering::Relaxed);
+                Ok(intent.repair_task_id())
+            })
+            .expect("initial failed verdict");
+        let replay = tracker
+            .record_verdict_with(&verdict, &sample_auditor_keys(), 1, |_| {
+                panic!("exact replay must not call the durable handoff")
+            })
+            .expect("exact failed verdict replay");
+
+        assert!(first.newly_finalized);
+        assert!(!replay.newly_finalized);
+        assert_eq!(replay.repair_task_id, first.repair_task_id);
+        assert_eq!(handoff_calls.load(Ordering::Relaxed), 1);
+
+        let mut conflicting = verdict.clone();
+        conflicting.failure_reason = Some("different terminal reason".to_owned());
+        resign_sample_verdict(&mut conflicting);
+        assert!(matches!(
+            tracker.record_verdict_with(&conflicting, &sample_auditor_keys(), 1, |_| panic!(
+                "conflicting replay must not call the handoff"
+            ),),
+            Err(PorTrackerError::VerdictConflict)
+        ));
+    }
+
+    #[test]
+    fn failed_verdict_rejects_mismatched_handoff_task_id() {
+        let tracker = PorTracker::default();
+        let challenge = sample_challenge();
+        tracker.record_challenge(&challenge).unwrap();
+        let mut verdict = sample_verdict(&challenge, [0x11; 32]);
+        verdict.outcome = AuditOutcomeV1::Failed;
+        verdict.proof_digest = None;
+        verdict.failure_reason = Some("provider missed the challenge".to_owned());
+        resign_sample_verdict(&mut verdict);
+
+        assert!(matches!(
+            tracker.record_verdict_with(&verdict, &sample_auditor_keys(), 1, |_| Ok([0xFF; 32])),
+            Err(PorTrackerError::RepairTaskIdMismatch)
+        ));
+        assert!(tracker.contains_challenge(&challenge.challenge_id));
+    }
+
+    #[test]
+    fn por_repair_source_and_report_are_canonical_and_payload_free() {
+        let intent = PorFailedRepairIntentV1 {
+            manifest_digest: [0x11; 32],
+            provider_id: [0x22; 32],
+            challenge_id: [0x33; 32],
+            failed_samples: 7,
+            proof_digest: Some([0x44; 32]),
+            decided_at_unix: 1_700_000_400,
+        };
+        let report = canonical_por_failure_repair_report_v1(intent, "repair@sora")
+            .expect("canonical failed PoR repair report");
+
+        assert_eq!(
+            report.ticket_id.0,
+            format!("POR-{}", hex::encode_upper(intent.challenge_id))
+        );
+        assert_eq!(report.auditor_account, "repair@sora");
+        assert_eq!(report.evidence.por_history_id, None);
+        assert_eq!(report.evidence.evidence_json, None);
+        assert_eq!(report.evidence.notes, None);
+        assert_eq!(report.notes, None);
+        assert!(matches!(
+            report.evidence.cause,
+            RepairCauseV1::PorFailure(RepairPorFailureCauseV1 {
+                challenge_id,
+                failed_samples: 7,
+                proof_digest: Some(proof_digest),
+            }) if challenge_id == intent.challenge_id && proof_digest == [0x44; 32]
+        ));
+        assert_eq!(
+            intent.repair_task_id(),
+            sorafs_repair_task_id_v1(por_repair_source_identity_v1(intent.challenge_id))
+        );
+        assert_ne!(
+            por_repair_source_identity_v1(intent.challenge_id),
+            por_repair_source_identity_v1([0x34; 32])
+        );
     }
 }

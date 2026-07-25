@@ -85,6 +85,7 @@ pub fn generate_bundle() -> FixtureBundle {
         .dag_codec(DagCodecId(stats.dag_codec))
         .chunking_from_profile(plan.chunk_profile, chunker_registry::DEFAULT_MULTIHASH_CODE)
         .chunk_digest_sha3_256(chunk_digest_sha3_256)
+        .por_root(*summary.chunk_store.por_tree().root())
         .content_length(plan.content_length)
         .car_digest(car_digest)
         .car_size(stats.car_size)
@@ -319,7 +320,6 @@ fn scenarios_json_value() -> Value {
             428,
             "refusal",
         ),
-        ("B3", "Corrupted PoR proof refusal", 422, "refusal"),
         (
             "B4",
             "Corrupted CAR payload (digest mismatch)",

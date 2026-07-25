@@ -67,6 +67,7 @@ __all__ = [
     "ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1",
     "SORAFS_ORDERBOOK_PAYLOAD_KINDS",
     "SORAFS_PDP_PAYLOAD_KINDS",
+    "SORAFS_GOVERNANCE_DAG_CID_BYTES_V1",
     "SORAFS_GOVERNANCE_DAG_MAX_BLOCKS_V1",
     "SORAFS_REFERENCE_MAX_INPUT_BYTES_V1",
     "SORAFS_REFERENCE_MAX_LABEL_BYTES_V1",
@@ -548,7 +549,6 @@ SORAFS_ORDERBOOK_PAYLOAD_KINDS: Mapping[str, str] = MappingProxyType(
         "TRADE_EVENT": "trade-event",
         "SETTLEMENT_CHANNEL": "settlement-channel",
         "SETTLEMENT_RECEIPT": "settlement-receipt",
-        "RUNTIME_SNAPSHOT": "runtime-snapshot",
     }
 )
 SORAFS_PDP_PAYLOAD_KINDS: Mapping[str, str] = MappingProxyType(
@@ -558,40 +558,17 @@ SORAFS_PDP_PAYLOAD_KINDS: Mapping[str, str] = MappingProxyType(
         "PROOF": "proof",
     }
 )
+SORAFS_GOVERNANCE_DAG_CID_BYTES_V1 = 32
 SORAFS_GOVERNANCE_DAG_MAX_BLOCKS_V1 = 64
 SORAFS_REFERENCE_MAX_INPUT_BYTES_V1 = 67_108_864
 SORAFS_REFERENCE_MAX_LABEL_BYTES_V1 = 1_024
 
-_ORDERBOOK_KIND_ALIASES: Mapping[str, str] = MappingProxyType(
-    {
-        "order": SORAFS_ORDERBOOK_PAYLOAD_KINDS["ORDER_REQUEST"],
-        "order-request": SORAFS_ORDERBOOK_PAYLOAD_KINDS["ORDER_REQUEST"],
-        "orderbook-order-request": SORAFS_ORDERBOOK_PAYLOAD_KINDS["ORDER_REQUEST"],
-        "request": SORAFS_ORDERBOOK_PAYLOAD_KINDS["ORDER_REQUEST"],
-        "cancel": SORAFS_ORDERBOOK_PAYLOAD_KINDS["ORDER_CANCEL"],
-        "order-cancel": SORAFS_ORDERBOOK_PAYLOAD_KINDS["ORDER_CANCEL"],
-        "orderbook-order-cancel": SORAFS_ORDERBOOK_PAYLOAD_KINDS["ORDER_CANCEL"],
-        "trade": SORAFS_ORDERBOOK_PAYLOAD_KINDS["TRADE_EVENT"],
-        "trade-event": SORAFS_ORDERBOOK_PAYLOAD_KINDS["TRADE_EVENT"],
-        "orderbook-trade-event": SORAFS_ORDERBOOK_PAYLOAD_KINDS["TRADE_EVENT"],
-        "channel": SORAFS_ORDERBOOK_PAYLOAD_KINDS["SETTLEMENT_CHANNEL"],
-        "settlement-channel": SORAFS_ORDERBOOK_PAYLOAD_KINDS["SETTLEMENT_CHANNEL"],
-        "receipt": SORAFS_ORDERBOOK_PAYLOAD_KINDS["SETTLEMENT_RECEIPT"],
-        "settlement-receipt": SORAFS_ORDERBOOK_PAYLOAD_KINDS["SETTLEMENT_RECEIPT"],
-        "snapshot": SORAFS_ORDERBOOK_PAYLOAD_KINDS["RUNTIME_SNAPSHOT"],
-        "runtime-snapshot": SORAFS_ORDERBOOK_PAYLOAD_KINDS["RUNTIME_SNAPSHOT"],
-        "orderbook-runtime-snapshot": SORAFS_ORDERBOOK_PAYLOAD_KINDS["RUNTIME_SNAPSHOT"],
-    }
-)
-_PDP_KIND_ALIASES: Mapping[str, str] = MappingProxyType(
-    {
-        "commitment": SORAFS_PDP_PAYLOAD_KINDS["COMMITMENT"],
-        "pdp-commitment": SORAFS_PDP_PAYLOAD_KINDS["COMMITMENT"],
-        "challenge": SORAFS_PDP_PAYLOAD_KINDS["CHALLENGE"],
-        "pdp-challenge": SORAFS_PDP_PAYLOAD_KINDS["CHALLENGE"],
-        "proof": SORAFS_PDP_PAYLOAD_KINDS["PROOF"],
-        "pdp-proof": SORAFS_PDP_PAYLOAD_KINDS["PROOF"],
-    }
+_ORDERBOOK_PAYLOAD_KIND_VALUES = frozenset(SORAFS_ORDERBOOK_PAYLOAD_KINDS.values())
+_PDP_PAYLOAD_KIND_VALUES = frozenset(SORAFS_PDP_PAYLOAD_KINDS.values())
+_ORDERBOOK_SIDE_VALUES = frozenset(("bid", "ask"))
+_ORDERBOOK_TIER_VALUES = frozenset(("hot", "warm", "archive"))
+_ORDERBOOK_CANCEL_REASON_VALUES = frozenset(
+    ("owner_requested", "expired", "governance", "replaced")
 )
 _U64_MAX = (1 << 64) - 1
 _XOR_QUANTITY_MAX_TEXT_LENGTH = 155
@@ -640,13 +617,6 @@ def _required_field(mapping: Mapping[str, Any], field: str, *keys: str) -> Any:
     raise TypeError(f"{field} is required")
 
 
-def _required_unique_field(mapping: Mapping[str, Any], field: str, *keys: str) -> Any:
-    present = [key for key in keys if key in mapping]
-    if len(present) > 1:
-        raise TypeError(f"{field} must be supplied exactly once")
-    return _required_field(mapping, field, *keys)
-
-
 def _optional_field(mapping: Mapping[str, Any], *keys: str) -> Any:
     for key in keys:
         if key in mapping:
@@ -689,7 +659,7 @@ def _xor_quantity_text(value: Any, field: str, *, positive: bool = False) -> str
 def _reject_retired_orderbook_fields(fields: Mapping[str, Any], names: Sequence[str]) -> None:
     for name in names:
         if name in fields:
-            raise TypeError(f"{name} is retired; use unit-neutral XOR quantity fields")
+            raise TypeError(f"{name} is retired from the canonical V1 SDK surface")
 
 
 def _fixed32_field(mapping: Mapping[str, Any], field: str, *keys: str) -> bytes:
@@ -711,22 +681,26 @@ def _orderbook_fee_bps(value: Any, field: str) -> int:
     return fee
 
 
-def _normalize_reference_kind(kind: str, aliases: Mapping[str, str], label: str) -> str:
+def _normalize_reference_kind(kind: str, canonical: frozenset[str], label: str) -> str:
     if not isinstance(kind, str):
         raise TypeError("kind must be a string")
-    normalized = kind.strip().lower().replace("_", "-")
-    canonical = aliases.get(normalized)
-    if canonical is None:
+    if kind not in canonical:
         raise ValueError(f"unsupported SoraFS {label} payload kind: {kind}")
-    return canonical
+    return kind
 
 
 def _normalize_orderbook_payload_kind(kind: str) -> str:
-    return _normalize_reference_kind(kind, _ORDERBOOK_KIND_ALIASES, "orderbook")
+    return _normalize_reference_kind(kind, _ORDERBOOK_PAYLOAD_KIND_VALUES, "orderbook")
 
 
 def _normalize_pdp_payload_kind(kind: str) -> str:
-    return _normalize_reference_kind(kind, _PDP_KIND_ALIASES, "PDP")
+    return _normalize_reference_kind(kind, _PDP_PAYLOAD_KIND_VALUES, "PDP")
+
+
+def _canonical_orderbook_selector(value: Any, allowed: frozenset[str], field: str) -> str:
+    if type(value) is not str or value not in allowed:
+        raise ValueError(f"{field} is not a canonical V1 selector")
+    return value
 
 
 def _normalize_generated_at_unix(value: Optional[int]) -> int:
@@ -847,36 +821,60 @@ def build_signed_orderbook_order_request(
     _reject_retired_orderbook_fields(
         fields,
         (
+            "orderId",
+            "pricePerGib",
+            "quantityGib",
+            "remainingGib",
+            "ownerAccount",
+            "providerId",
+            "expiryUnix",
+            "makerFeeBps",
+            "takerFeeBps",
             "price_per_gib_micro_xor",
             "pricePerGibMicroXor",
             "price_per_gib_micro",
             "pricePerGibMicro",
         ),
     )
+    side = _canonical_orderbook_selector(
+        _required_field(fields, "side", "side"), _ORDERBOOK_SIDE_VALUES, "side"
+    )
+    tier = _canonical_orderbook_selector(
+        _required_field(fields, "tier", "tier"), _ORDERBOOK_TIER_VALUES, "tier"
+    )
     quantity_gib = _decimal_integer_text(
-        _required_field(fields, "quantity_gib", "quantity_gib", "quantityGib"),
+        _required_field(fields, "quantity_gib", "quantity_gib"),
         "quantity_gib",
         positive=True,
     )
-    remaining_gib = _optional_field(fields, "remaining_gib", "remainingGib")
-    owner_account = _bytes_field(fields, "owner_account", "owner_account", "ownerAccount")
+    remaining_gib = _optional_field(fields, "remaining_gib")
+    owner_account = _bytes_field(fields, "owner_account", "owner_account")
+    provider_value = _optional_field(fields, "provider_id")
+    provider_id = (
+        b""
+        if provider_value is _MISSING
+        else _bytes_payload(provider_value, "provider_id")
+    )
+    if side == "bid":
+        if provider_id:
+            raise ValueError("provider_id must be absent or empty for bid orders")
+    else:
+        if len(provider_id) != 32:
+            raise ValueError("provider_id must be exactly 32 bytes for ask orders")
+        if provider_id == bytes(32):
+            raise ValueError("provider_id must not be all zero")
     nonce = _decimal_integer_text(
         _required_field(fields, "nonce", "nonce"),
         "nonce",
         positive=True,
     )
     price_per_gib = _xor_quantity_text(
-        _required_unique_field(
-            fields,
-            "price_per_gib",
-            "price_per_gib",
-            "pricePerGib",
-        ),
+        _required_field(fields, "price_per_gib", "price_per_gib"),
         "price_per_gib",
         positive=True,
     )
     order_id = derive_orderbook_order_id(owner_account, nonce)
-    supplied_order_id = _optional_field(fields, "order_id", "orderId")
+    supplied_order_id = _optional_field(fields, "order_id")
     if supplied_order_id is not _MISSING:
         supplied = _bytes_payload(supplied_order_id, "order_id")
         if len(supplied) != 32 or supplied != order_id:
@@ -887,26 +885,27 @@ def build_signed_orderbook_order_request(
     return bytes(
         _crypto.sorafs_build_signed_orderbook_order_request(
             order_id,
-            str(_required_field(fields, "side", "side")),
-            str(_required_field(fields, "tier", "tier")),
+            side,
+            tier,
             price_per_gib,
             quantity_gib,
             None
             if remaining_gib is _MISSING
             else _decimal_integer_text(remaining_gib, "remaining_gib", positive=True),
             owner_account,
+            provider_id,
             _decimal_integer_text(
-                _required_field(fields, "expiry_unix", "expiry_unix", "expiryUnix"),
+                _required_field(fields, "expiry_unix", "expiry_unix"),
                 "expiry_unix",
                 positive=True,
             ),
             nonce,
             _orderbook_fee_bps(
-                _required_field(fields, "maker_fee_bps", "maker_fee_bps", "makerFeeBps"),
+                _required_field(fields, "maker_fee_bps", "maker_fee_bps"),
                 "maker_fee_bps",
             ),
             _orderbook_fee_bps(
-                _required_field(fields, "taker_fee_bps", "taker_fee_bps", "takerFeeBps"),
+                _required_field(fields, "taker_fee_bps", "taker_fee_bps"),
                 "taker_fee_bps",
             ),
             _bytes_payload(private_key, "private_key"),
@@ -922,11 +921,17 @@ def build_signed_orderbook_order_cancel(
 
     if not isinstance(fields, Mapping):
         raise TypeError("fields must be a mapping")
+    _reject_retired_orderbook_fields(fields, ("orderId", "ownerAccount"))
+    reason = _canonical_orderbook_selector(
+        _required_field(fields, "reason", "reason"),
+        _ORDERBOOK_CANCEL_REASON_VALUES,
+        "reason",
+    )
     return bytes(
         _crypto.sorafs_build_signed_orderbook_order_cancel(
-            _fixed32_field(fields, "order_id", "order_id", "orderId"),
-            _bytes_field(fields, "owner_account", "owner_account", "ownerAccount"),
-            str(_required_field(fields, "reason", "reason")),
+            _fixed32_field(fields, "order_id", "order_id"),
+            _bytes_field(fields, "owner_account", "owner_account"),
+            reason,
             _decimal_integer_text(
                 _required_field(fields, "nonce", "nonce"),
                 "nonce",
@@ -948,6 +953,17 @@ def build_signed_orderbook_settlement_receipt(
     _reject_retired_orderbook_fields(
         fields,
         (
+            "receiptId",
+            "channelId",
+            "tradeId",
+            "rangeStart",
+            "rangeEnd",
+            "chunkHash",
+            "bytesDelivered",
+            "xorDebited",
+            "providerCredit",
+            "feeAmount",
+            "issuedAtUnix",
             "xor_debited_micro_xor",
             "xorDebitedMicroXor",
             "xor_debited_micro",
@@ -963,37 +979,35 @@ def build_signed_orderbook_settlement_receipt(
         ),
     )
     xor_debited = _xor_quantity_text(
-        _required_unique_field(fields, "xor_debited", "xor_debited", "xorDebited"),
+        _required_field(fields, "xor_debited", "xor_debited"),
         "xor_debited",
         positive=True,
     )
     provider_credit = _xor_quantity_text(
-        _required_unique_field(
-            fields, "provider_credit", "provider_credit", "providerCredit"
-        ),
+        _required_field(fields, "provider_credit", "provider_credit"),
         "provider_credit",
     )
     fee_amount = _xor_quantity_text(
-        _required_unique_field(fields, "fee_amount", "fee_amount", "feeAmount"),
+        _required_field(fields, "fee_amount", "fee_amount"),
         "fee_amount",
     )
     return bytes(
         _crypto.sorafs_build_signed_orderbook_settlement_receipt(
-            _fixed32_field(fields, "receipt_id", "receipt_id", "receiptId"),
-            _fixed32_field(fields, "channel_id", "channel_id", "channelId"),
-            _fixed32_field(fields, "trade_id", "trade_id", "tradeId"),
+            _fixed32_field(fields, "receipt_id", "receipt_id"),
+            _fixed32_field(fields, "channel_id", "channel_id"),
+            _fixed32_field(fields, "trade_id", "trade_id"),
             _decimal_integer_text(
-                _required_field(fields, "range_start", "range_start", "rangeStart"),
+                _required_field(fields, "range_start", "range_start"),
                 "range_start",
             ),
             _decimal_integer_text(
-                _required_field(fields, "range_end", "range_end", "rangeEnd"),
+                _required_field(fields, "range_end", "range_end"),
                 "range_end",
                 positive=True,
             ),
-            _fixed32_field(fields, "chunk_hash", "chunk_hash", "chunkHash"),
+            _fixed32_field(fields, "chunk_hash", "chunk_hash"),
             _decimal_integer_text(
-                _required_field(fields, "bytes_delivered", "bytes_delivered", "bytesDelivered"),
+                _required_field(fields, "bytes_delivered", "bytes_delivered"),
                 "bytes_delivered",
                 positive=True,
             ),
@@ -1001,7 +1015,7 @@ def build_signed_orderbook_settlement_receipt(
             provider_credit,
             fee_amount,
             _decimal_integer_text(
-                _required_field(fields, "issued_at_unix", "issued_at_unix", "issuedAtUnix"),
+                _required_field(fields, "issued_at_unix", "issued_at_unix"),
                 "issued_at_unix",
                 positive=True,
             ),
@@ -1118,6 +1132,14 @@ def validate_governance_dag_block(
         if expected_block_cid is None
         else _bytes_payload(expected_block_cid, "expected_block_cid")
     )
+    if (
+        expected_cid is not None
+        and len(expected_cid) != SORAFS_GOVERNANCE_DAG_CID_BYTES_V1
+    ):
+        raise ValueError(
+            "expected_block_cid must contain exactly "
+            f"{SORAFS_GOVERNANCE_DAG_CID_BYTES_V1} bytes"
+        )
     _governance_reference_aggregate_bytes(
         "governance DAG block validation",
         len(payload_bytes),
@@ -1601,8 +1623,9 @@ def multi_fetch_local(
     Parameters
     ----------
     plan:
-        JSON string (or mapping/path) describing the chunk fetch plan emitted by
-        `sorafs_manifest_builder`.
+        JSON string (or mapping/path) containing the payload-bound
+        ``sorafs.chunk_fetch_plan.v1`` envelope emitted by
+        ``sorafs_manifest_builder``. Retired bare-array plans are rejected.
     providers:
         Iterable of :class:`SorafsLocalProviderSpec` definitions. Each entry points at a local
         payload file (tests reuse the shared fixture bundle).

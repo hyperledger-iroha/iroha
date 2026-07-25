@@ -33,6 +33,10 @@ pub const RESERVE_MAX_REASON_BYTES_V1: usize = 2_048;
 pub const RESERVE_MAX_PENDING_MOVEMENTS_V1: u32 = 256;
 /// Hard ceiling for open reserve appeals per provider.
 pub const RESERVE_MAX_OPEN_APPEALS_V1: u32 = 16;
+/// Consensus-visible first-release reserve-rent billing period (30 days).
+pub const RESERVE_RENT_BILLING_PERIOD_SECONDS_V1: u64 = 30 * 86_400;
+/// Maximum whole billing periods settled by one native rent instruction.
+pub const RESERVE_RENT_MAX_BILLING_PERIODS_V1: u16 = 12;
 /// Hard ceiling for one page of finalized reserve-ledger events.
 pub const RESERVE_QUERY_MAX_ITEMS_V1: u32 = 128;
 /// Hard ceiling for one encoded finalized reserve-ledger event page.
@@ -458,6 +462,16 @@ pub enum ReservePolicyError {
     /// Arithmetic overflow while computing the quote.
     #[error("reserve computation overflowed")]
     Overflow,
+    /// A finalized timestamp predates the authoritative rent-settlement anchor.
+    #[error(
+        "reserve rent timestamp {observed_at_unix} predates charged-through anchor {rent_charged_through_unix}"
+    )]
+    RentTimestampRollback {
+        /// Finalized block timestamp supplied to the computation.
+        observed_at_unix: u64,
+        /// Last fully settled rent boundary retained by the ledger.
+        rent_charged_through_unix: u64,
+    },
     /// Amount cannot be projected to the legacy micro-XOR adapter exactly.
     #[error("reserve amount has precision below one micro-XOR")]
     InexactAmountPrecision,
@@ -694,6 +708,12 @@ pub struct ReserveAuthorityPolicyV1 {
     pub custody_account: AccountId,
     /// Governance treasury receiving rent and credit repayments.
     pub treasury_account: AccountId,
+    /// Exact service account authorized to register reserve partitions and
+    /// administer deterministic rent, lifecycle, and credit transitions.
+    pub operations_authority: AccountId,
+    /// Exact service account authorized to decide pending reserve movements
+    /// and lifecycle appeals.
+    pub decision_authority: AccountId,
     /// Grace period before delinquency.
     pub grace_period_days: u16,
     /// Default threshold after the due date.
@@ -885,6 +905,8 @@ pub struct ReserveProviderAccountV1 {
     pub pending_movements: u32,
     /// Open appeal count.
     pub open_appeals: u32,
+    /// Last fully settled consensus rent boundary.
+    pub rent_charged_through_unix: u64,
     /// Last whole-day interest accrual anchor.
     pub interest_accrued_at_unix: u64,
     /// Block timestamp of the latest mutation.
@@ -892,6 +914,46 @@ pub struct ReserveProviderAccountV1 {
 }
 
 impl ReserveProviderAccountV1 {
+    /// Return the number of whole rent periods due at a finalized block time.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ReservePolicyError::RentTimestampRollback`] when the
+    /// finalized block time predates the authoritative rent anchor.
+    pub fn rent_periods_due_at(
+        &self,
+        observed_at_unix: u64,
+    ) -> Result<u64, ReservePolicyError> {
+        let elapsed = observed_at_unix
+            .checked_sub(self.rent_charged_through_unix)
+            .ok_or(ReservePolicyError::RentTimestampRollback {
+                observed_at_unix,
+                rent_charged_through_unix: self.rent_charged_through_unix,
+            })?;
+        Ok(elapsed / RESERVE_RENT_BILLING_PERIOD_SECONDS_V1)
+    }
+
+    /// Return deterministic whole days since the first unsettled rent boundary.
+    ///
+    /// The exact boundary is day zero. Values beyond the native lifecycle
+    /// representation saturate at [`u16::MAX`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a finalized timestamp rollback or anchor overflow.
+    pub fn rent_days_past_due_at(
+        &self,
+        observed_at_unix: u64,
+    ) -> Result<u16, ReservePolicyError> {
+        self.rent_periods_due_at(observed_at_unix)?;
+        let first_unsettled_boundary = self
+            .rent_charged_through_unix
+            .checked_add(RESERVE_RENT_BILLING_PERIOD_SECONDS_V1)
+            .ok_or(ReservePolicyError::Overflow)?;
+        let elapsed_overdue = observed_at_unix.saturating_sub(first_unsettled_boundary);
+        Ok(u16::try_from(elapsed_overdue / 86_400).unwrap_or(u16::MAX))
+    }
+
     /// Return principal plus accrued interest.
     ///
     /// # Errors
@@ -1126,6 +1188,56 @@ pub struct ReserveFinalizedEventPageV1 {
     pub has_more: bool,
     /// Exclusive continuation cursor, present only when `has_more` is true.
     pub next_after: Option<ReserveFinalizedEventCursorV1>,
+}
+
+/// Finalized, exclusive-provider-id page of authoritative reserve accounts.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+pub struct ReserveProviderAccountPageV1 {
+    /// Finalized state anchor shared by every account in the page.
+    pub finalized_cursor: ReserveFinalizedCursorV1,
+    /// Accounts ordered by immutable provider identifier.
+    pub accounts: Vec<ReserveProviderAccountV1>,
+    /// Whether at least one later provider account exists at this anchor.
+    pub has_more: bool,
+    /// Exclusive provider-id continuation, present only when `has_more` is true.
+    pub next_after: Option<ProviderId>,
+}
+
+/// Finalized, exclusive-movement-id page of authoritative reserve movements.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+pub struct ReserveMovementPageV1 {
+    /// Finalized state anchor shared by every movement in the page.
+    pub finalized_cursor: ReserveFinalizedCursorV1,
+    /// Movement records ordered by immutable movement identifier.
+    pub movements: Vec<ReserveMovementRecordV1>,
+    /// Whether at least one later movement exists at this anchor.
+    pub has_more: bool,
+    /// Exclusive movement-id continuation, present only when `has_more` is true.
+    #[cfg_attr(
+        feature = "json",
+        norito(with = "crate::json_helpers::fixed_bytes::option")
+    )]
+    pub next_after: Option<[u8; 32]>,
+}
+
+/// Finalized, exclusive-appeal-id page of authoritative reserve appeals.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+pub struct ReserveAppealPageV1 {
+    /// Finalized state anchor shared by every appeal in the page.
+    pub finalized_cursor: ReserveFinalizedCursorV1,
+    /// Appeal records ordered by immutable appeal identifier.
+    pub appeals: Vec<ReserveAppealRecordV1>,
+    /// Whether at least one later appeal exists at this anchor.
+    pub has_more: bool,
+    /// Exclusive appeal-id continuation, present only when `has_more` is true.
+    #[cfg_attr(
+        feature = "json",
+        norito(with = "crate::json_helpers::fixed_bytes::option")
+    )]
+    pub next_after: Option<[u8; 32]>,
 }
 
 fn validate_ratio(value: u32, field: ReserveRatioField) -> Result<(), ReservePolicyError> {
@@ -1558,9 +1670,59 @@ mod tests {
             days_past_due: 0,
             pending_movements: 0,
             open_appeals: 0,
+            rent_charged_through_unix: 86_400,
             interest_accrued_at_unix: 86_400,
             updated_at_unix: 86_400,
         }
+    }
+
+    #[test]
+    fn rent_due_periods_use_only_the_consensus_anchor_and_reject_time_rollback() {
+        let account = reserve_account();
+        assert_eq!(
+            account
+                .rent_periods_due_at(account.rent_charged_through_unix)
+                .expect("anchor is current"),
+            0
+        );
+        assert_eq!(
+            account
+                .rent_periods_due_at(
+                    account.rent_charged_through_unix
+                        + RESERVE_RENT_BILLING_PERIOD_SECONDS_V1
+                        + RESERVE_RENT_BILLING_PERIOD_SECONDS_V1 / 2,
+                )
+                .expect("one whole period is due"),
+            1
+        );
+        assert_eq!(
+            account
+                .rent_days_past_due_at(
+                    account.rent_charged_through_unix
+                        + RESERVE_RENT_BILLING_PERIOD_SECONDS_V1,
+                )
+                .expect("the exact rent boundary is valid"),
+            0
+        );
+        assert_eq!(
+            account
+                .rent_days_past_due_at(
+                    account.rent_charged_through_unix
+                        + RESERVE_RENT_BILLING_PERIOD_SECONDS_V1
+                        + 15 * 86_400,
+                )
+                .expect("whole overdue days are deterministic"),
+            15
+        );
+        assert_eq!(
+            account
+                .rent_periods_due_at(account.rent_charged_through_unix - 1)
+                .expect_err("a finalized timestamp cannot roll the rent anchor back"),
+            ReservePolicyError::RentTimestampRollback {
+                observed_at_unix: account.rent_charged_through_unix - 1,
+                rent_charged_through_unix: account.rent_charged_through_unix,
+            }
+        );
     }
 
     #[test]
@@ -1623,6 +1785,7 @@ mod tests {
                 operation_id: Some([0x41; 32]),
                 policy_digest: [0x51; 32],
                 provider_revision: 9,
+                resulting_lifecycle_stage: Some(ReserveLifecycleStage::Active),
                 authority: reserve_account().terms.provider_account,
                 occurred_at_unix_ms: 12_345,
             },
@@ -1659,5 +1822,87 @@ mod tests {
                 .expect("decode finalized reserve event page JSON");
             assert_eq!(decoded, page);
         }
+    }
+
+    #[test]
+    fn finalized_reserve_record_pages_round_trip_canonically() {
+        let finalized_cursor = ReserveFinalizedCursorV1 {
+            height: 9,
+            block_hash: [0x91; 32],
+        };
+        let account = reserve_account();
+        let provider_id = account.terms.provider_id;
+        let provider_account = account.terms.provider_account.clone();
+        let movement = ReserveMovementRecordV1 {
+            movement_id: [0x51; 32],
+            provider_id,
+            kind: ReserveMovementKindV1::TopUp,
+            amount: XorQuantity::try_from_micro(2_000_000).expect("movement amount fixture"),
+            requested_by: provider_account.clone(),
+            expected_provider_revision: 1,
+            policy_digest: [0x41; 32],
+            status: ReserveMovementStatusV1::Pending,
+            requested_at_unix: 86_401,
+            decided_by: None,
+            decided_at_unix: None,
+            rationale: None,
+        };
+        let appeal = ReserveAppealRecordV1 {
+            appeal_id: [0x61; 32],
+            provider_id,
+            submitted_by: provider_account,
+            requested_stage: ReserveLifecycleStage::Active,
+            reason: "canonical appeal fixture".to_owned(),
+            evidence_digest: Some([0x71; 32]),
+            expected_provider_revision: 2,
+            status: ReserveAppealStatusV1::Pending,
+            submitted_at_unix: 86_402,
+            decided_by: None,
+            decided_at_unix: None,
+            rationale: None,
+        };
+        let provider_page = ReserveProviderAccountPageV1 {
+            finalized_cursor,
+            accounts: vec![account],
+            has_more: true,
+            next_after: Some(provider_id),
+        };
+        let movement_page = ReserveMovementPageV1 {
+            finalized_cursor,
+            movements: vec![movement],
+            has_more: true,
+            next_after: Some([0x51; 32]),
+        };
+        let appeal_page = ReserveAppealPageV1 {
+            finalized_cursor,
+            appeals: vec![appeal],
+            has_more: true,
+            next_after: Some([0x61; 32]),
+        };
+
+        macro_rules! assert_page_round_trip {
+            ($page:expr, $ty:ty) => {{
+                let encoded = norito::to_bytes(&$page).expect("encode canonical reserve page");
+                let decoded: $ty =
+                    norito::decode_from_bytes(&encoded).expect("decode canonical reserve page");
+                assert_eq!(decoded, $page);
+                assert_eq!(
+                    norito::to_bytes(&decoded).expect("re-encode canonical reserve page"),
+                    encoded
+                );
+                #[cfg(feature = "json")]
+                {
+                    let encoded =
+                        norito::json::to_vec(&$page).expect("encode canonical reserve page JSON");
+                    let decoded: $ty = norito::json::from_slice(&encoded)
+                        .expect("decode canonical reserve page JSON");
+                    assert_eq!(decoded, $page);
+                }
+            }};
+        }
+
+        assert_page_round_trip!(provider_page, ReserveProviderAccountPageV1);
+        assert_page_round_trip!(movement_page, ReserveMovementPageV1);
+        assert_page_round_trip!(appeal_page, ReserveAppealPageV1);
     }
 }

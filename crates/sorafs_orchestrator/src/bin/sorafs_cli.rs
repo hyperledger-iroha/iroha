@@ -41,8 +41,8 @@ use iroha_data_model::{
             ModerationSignedScreeningResultV1, ModerationThresholdsV1, ModerationTrustPolicyV1,
         },
         pin_registry::{
-            ChunkerProfileHandle, PinPolicy as RegistryPinPolicy,
-            StorageClass as RegistryStorageClass,
+            ChunkerProfileHandle, PinManifestFinalizedRecordV1, PinPolicy as RegistryPinPolicy,
+            PinStatus, StorageClass as RegistryStorageClass,
         },
     },
     taikai::{
@@ -62,6 +62,7 @@ use reqwest::{
     StatusCode,
     blocking::Client as HttpClient,
     header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_TYPE},
+    redirect::Policy as RedirectPolicy,
 };
 #[cfg(test)]
 use rust_decimal::Decimal;
@@ -70,11 +71,14 @@ use sorafs_car::{
     CarBuildPlan, CarChunk, CarStreamingWriter, CarVerifier, CarWriteError, ChunkFetchSpec,
     FileEntry, FilePlan, StoredChunk,
     chunker_registry::{self, ChunkerProfileDescriptor},
-    fetch_plan::{chunk_fetch_specs_from_json, chunk_fetch_specs_to_string},
+    compute_por_root,
+    fetch_plan::{chunk_fetch_plan_from_json, chunk_fetch_plan_to_string},
     gateway::{GatewayFetchConfig, GatewayFetchContext, GatewayProviderInput},
     multi_fetch::{ProviderMetadata, RangeCapability, StreamBudget},
     policy::{PolicyEvidenceValidator, run_honey_probe},
-    proof_stream::{ProofKind, ProofStreamItem, ProofStreamMetrics, ProofStreamSummary, ProofTier},
+    proof_stream::{
+        ProofKind, ProofStreamItem, ProofStreamMetrics, ProofStreamVerificationContext, ProofTier,
+    },
     proof_stream_transport::ProofStreamNdjsonReader,
     scoreboard::{Eligibility, TelemetrySnapshot},
     taikai::{BundleRequest, BundleSummary, bundle_segment, load_extra_metadata},
@@ -86,11 +90,12 @@ use sorafs_manifest::reputation::signed::{
 use sorafs_manifest::{
     ChunkingProfileV1, DagCodecId, GOVERNANCE_DAG_BLOCK_VERSION_V1, GOVERNANCE_DAG_HEAD_VERSION_V1,
     GovernanceDagBlockV1, GovernanceDagHeadV1, GovernanceLogNodeV1, GovernanceLogPayloadV1,
-    GovernanceLogSignatureV1, GovernanceSignatureAlgorithm, MANIFEST_DAG_CODEC, ManifestBuildError,
-    ManifestBuilder, ManifestV1, PinPolicy, PorChallengeOutcome, PorChallengeStatusV1,
-    PorReportIsoWeek, PorWeeklyReportV1, ProofStreamHttpRequestV1, ProofStreamRequestV1,
-    ReputationMerkleProofV1, ReputationSnapshotV1, SignedReputationSnapshotV1, StorageClass,
-    ValidationOutcomeV1, chunker_registry as manifest_chunker_registry,
+    GovernanceLogSignatureV1, GovernanceSignatureAlgorithm, MANIFEST_DAG_CODEC,
+    MAX_MANIFEST_ENCODED_BYTES, MAX_PROOF_STREAM_SAMPLE_COUNT, ManifestBuildError, ManifestBuilder,
+    ManifestV1, PinPolicy, PorChallengeOutcome, PorChallengeStatusV1, PorReportIsoWeek,
+    PorWeeklyReportV1, ProofStreamHttpRequestV1, ProofStreamRequestV1, ReputationMerkleProofV1,
+    ReputationSnapshotV1, SignedReputationSnapshotV1, StorageClass, ValidationOutcomeV1,
+    chunker_registry as manifest_chunker_registry, decode_manifest_v1_canonical,
     governance_dag_block_cid_v1, validate_governance_dag_head_against_chain_v1,
     validate_governance_log_node_bytes,
 };
@@ -1180,6 +1185,8 @@ fn build_deploy_artifacts(
     let car_file = open_output_file(car_path)?;
     let mut writer = BufWriter::new(car_file);
     let mut payload_reader = payload_cursor;
+    let por_root = compute_por_root(payload_reader.get_ref(), &plan)
+        .map_err(|err| format!("failed to derive payload PoR root: {err}"))?;
     let stats = CarStreamingWriter::new(&plan)
         .write_from_reader(&mut payload_reader, &mut writer)
         .map_err(format_car_error)?;
@@ -1190,11 +1197,19 @@ fn build_deploy_artifacts(
     let plan_specs = plan
         .try_chunk_fetch_specs()
         .map_err(|err| format!("failed to derive chunk fetch plan: {err}"))?;
-    let plan_json = chunk_fetch_specs_to_string(&plan_specs)
+    let plan_json = chunk_fetch_plan_to_string(&plan)
         .map_err(|err| format!("failed to render chunk plan JSON: {err}"))?;
     write_text(plan_path, plan_json.as_bytes())?;
 
-    let pack_summary = render_summary(&input_summary, descriptor, handle, &plan, &stats, car_path);
+    let pack_summary = render_summary(
+        &input_summary,
+        descriptor,
+        handle,
+        &plan,
+        &stats,
+        por_root,
+        car_path,
+    );
     let pack_rendered = to_string_pretty(&pack_summary)
         .map_err(|err| format!("failed to render pack summary JSON: {err}"))?;
     write_text(pack_summary_path, pack_rendered.as_bytes())?;
@@ -1216,6 +1231,7 @@ fn build_deploy_artifacts(
         .dag_codec(DagCodecId(MANIFEST_DAG_CODEC))
         .chunking_profile(chunking_profile)
         .chunk_digest_sha3_256(chunk_digest_sha3)
+        .por_root(por_root)
         .content_length(plan.content_length)
         .car_digest(car_digest)
         .car_size(stats.car_size)
@@ -2635,16 +2651,18 @@ fn build_from_directory(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn emit_car_and_artifacts<R: io::Read>(
+fn emit_car_and_artifacts(
     input: InputSummary,
     descriptor: &ChunkerProfileDescriptor,
     handle: &str,
     mut plan: CarBuildPlan,
-    mut payload: R,
+    mut payload: Cursor<Vec<u8>>,
     car_out: &Path,
     plan_out: Option<&PathBuf>,
     summary_out: Option<&PathBuf>,
 ) -> Result<(), String> {
+    let por_root = compute_por_root(payload.get_ref(), &plan)
+        .map_err(|err| format!("failed to derive payload PoR root: {err}"))?;
     let car_file = open_output_file(car_out)?;
     let mut writer = BufWriter::new(car_file);
     let stats = CarStreamingWriter::new(&plan)
@@ -2659,12 +2677,12 @@ fn emit_car_and_artifacts<R: io::Read>(
     }
 
     if let Some(plan_path) = plan_out {
-        let spec_json = chunk_fetch_specs_to_string(&plan.chunk_fetch_specs())
+        let spec_json = chunk_fetch_plan_to_string(&plan)
             .map_err(|err| format!("failed to render chunk plan: {err}"))?;
         write_text(plan_path, spec_json.as_bytes())?;
     }
 
-    let summary = render_summary(&input, descriptor, handle, &plan, &stats, car_out);
+    let summary = render_summary(&input, descriptor, handle, &plan, &stats, por_root, car_out);
     let rendered =
         to_string_pretty(&summary).map_err(|err| format!("failed to render summary: {err}"))?;
     println!("{rendered}");
@@ -2684,6 +2702,7 @@ fn render_summary(
     handle: &str,
     plan: &CarBuildPlan,
     stats: &sorafs_car::CarWriteStats,
+    por_root: [u8; 32],
     car_path: &Path,
 ) -> Value {
     let mut obj = Map::new();
@@ -2717,6 +2736,7 @@ fn render_summary(
             &plan.chunk_fetch_specs(),
         ))),
     );
+    obj.insert("por_root_hex".into(), Value::from(hex_encode(por_root)));
     obj.insert(
         "car_cid_hex".into(),
         Value::from(hex_encode(&stats.car_cid)),
@@ -2920,7 +2940,7 @@ fn usage() -> String {
   sorafs_cli storage prepare --manifest=PATH --payload=PATH --payload-out=PATH --files-out=PATH [--summary-out=PATH]
   sorafs_cli storage pin --manifest=PATH --payload=PATH --torii-url=URL [--summary-out=PATH] [--response-out=PATH]
   sorafs_cli fetch --plan=PATH --manifest-id=HEX [--chunker-handle=HANDLE] [--manifest-envelope=BASE64] [--manifest-report=PATH|-] [--manifest-cid=HEX] [--client-id=ID] [--telemetry-region=REGION] [--rollout-phase=canary|ramp|default] [--transport-policy=soranet-first|soranet-strict|direct-only] [--transport-policy-override=soranet-first|soranet-strict|direct-only] [--anonymity-policy=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--anonymity-policy-override=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--write-mode=read-only|upload-pq-only] [--scoreboard-out=PATH] [--scoreboard-now=UNIX_SECS] [--telemetry-source-label=LABEL] [--profile=hot|warm|cold] [--orchestrator-config=PATH] [--taikai-cache-config=PATH] [--output=PATH] [--json-out=PATH] [--local-proxy-mode=bridge|metadata-only] [--local-proxy-norito-spool=PATH] [--max-peers=N] [--retry-budget=N] [--expected-cache-version=VERSION] [--moderation-key-b64=BASE64] --provider name=ALIAS,provider-id=HEX,gateway-key=HEX,base-url=URL,stream-token=BASE64 [...]
-  sorafs_cli proof stream --manifest=PATH (--torii-url=URL | --gateway-url=URL) --provider-id-hex=HEX32 [--proof-kind=por|pdp|potr] [--challenge-id-hex=HEX32] [--samples=N] [--sample-seed=SEED] [--deadline-ms=N] [--tier=hot|warm|archive] [--nonce-b64=BASE64] [--orchestrator-job-id-hex=HEX16] [--stream-token=TOKEN] [--bearer-token-env=VAR] [--por-root-hex=HEX32] [--summary-out=PATH] [--governance-evidence-dir=DIR] [--emit-events=true|false] [--max-failures=N] [--max-verification-failures=N]
+  sorafs_cli proof stream --manifest=PATH (--torii-url=HTTPS_ORIGIN | --gateway-url=HTTPS_URL) --provider-id-hex=HEX32 --bearer-token-env=VAR [--proof-kind=por|pdp|potr] [--challenge-id-hex=HEX32] [--samples=N] [--sample-seed=SEED] [--deadline-ms=N] [--tier=hot|warm|archive] [--nonce-b64=BASE64] [--orchestrator-job-id-hex=HEX16] [--summary-out=PATH] [--governance-evidence-dir=DIR] [--emit-events=true|false]
   sorafs_cli proof verify --manifest=PATH --car=PATH [--chunk-plan=PATH] [--summary-out=PATH]
   sorafs_cli reputation publish --torii-url=URL --snapshot=SIGNED_ENVELOPE.to [--summary-out=PATH]
   sorafs_cli reputation snapshot --torii-url=URL [--output=PATH] [--summary-out=PATH]
@@ -15381,6 +15401,12 @@ fn manifest_build(raw_args: Vec<String>) -> Result<(), String> {
         .ok_or_else(|| "summary missing `chunk_digest_sha3_256_hex`".to_string())?;
     let chunk_digest = parse_digest_hex(chunk_digest_hex)
         .map_err(|err| format!("invalid `chunk_digest_sha3_256_hex` in summary: {err}"))?;
+    let por_root_hex = summary_obj
+        .get("por_root_hex")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "summary missing `por_root_hex`".to_string())?;
+    let por_root = parse_digest_hex(por_root_hex)
+        .map_err(|err| format!("invalid `por_root_hex` in summary: {err}"))?;
 
     let root_cids = summary_obj
         .get("root_cids_hex")
@@ -15405,6 +15431,7 @@ fn manifest_build(raw_args: Vec<String>) -> Result<(), String> {
         .dag_codec(DagCodecId(MANIFEST_DAG_CODEC))
         .chunking_profile(chunking_profile)
         .chunk_digest_sha3_256(chunk_digest)
+        .por_root(por_root)
         .content_length(content_length)
         .car_digest(car_digest)
         .car_size(car_size)
@@ -15694,8 +15721,9 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
     let plan_specs = if let Some(source) = chunk_plan_source {
         let value = source.read()?;
         Some(
-            chunk_fetch_specs_from_json(&value)
-                .map_err(|err| format!("failed to parse chunk plan JSON: {err}"))?,
+            chunk_fetch_plan_from_json(&value)
+                .map_err(|err| format!("failed to parse chunk plan JSON: {err}"))?
+                .chunk_fetch_specs,
         )
     } else {
         None
@@ -16361,8 +16389,9 @@ fn manifest_proposal(raw_args: Vec<String>) -> Result<(), String> {
     let plan_specs = if let Some(source) = chunk_plan_source {
         let value = source.read()?;
         Some(
-            chunk_fetch_specs_from_json(&value)
-                .map_err(|err| format!("failed to parse chunk plan JSON: {err}"))?,
+            chunk_fetch_plan_from_json(&value)
+                .map_err(|err| format!("failed to parse chunk plan JSON: {err}"))?
+                .chunk_fetch_specs,
         )
     } else {
         None
@@ -17077,6 +17106,358 @@ fn reputation_verify(raw_args: Vec<String>) -> Result<(), String> {
     Ok(())
 }
 
+const PROOF_STREAM_ROUTE_V1: &str = "/v1/sorafs/proof/stream";
+const PIN_MANIFEST_ROUTE_PREFIX_V1: &str = "/v1/sorafs/pin/";
+const PIN_MANIFEST_RESPONSE_MAX_BYTES: u64 = 1024 * 1024;
+const PROOF_STREAM_HTTP_TIMEOUT: Duration = Duration::from_secs(120);
+const PROOF_STREAM_HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const PROOF_STREAM_BEARER_TOKEN_MAX_BYTES: usize = 8 * 1024;
+
+#[derive(Clone, Copy)]
+struct ValidatedPinManifestV1 {
+    finalized_height: u64,
+    finalized_block_hash: [u8; 32],
+    por_root: [u8; 32],
+}
+
+fn proof_stream_endpoint(
+    torii_url: Option<&str>,
+    gateway_url: Option<&str>,
+) -> Result<Url, String> {
+    let (flag, raw, exact_stream_path) = match (torii_url, gateway_url) {
+        (Some(_), Some(_)) => {
+            return Err("`--torii-url` cannot be combined with `--gateway-url`".to_string());
+        }
+        (Some(raw), None) => ("--torii-url", raw, false),
+        (None, Some(raw)) => ("--gateway-url", raw, true),
+        (None, None) => {
+            return Err(
+                "missing required `--torii-url=URL` (or `--gateway-url=URL`) for `sorafs_cli proof stream`"
+                    .to_string(),
+            );
+        }
+    };
+    if raw.is_empty() {
+        return Err(format!("`{flag}` must not be empty"));
+    }
+    if raw.trim() != raw {
+        return Err(format!("`{flag}` must not contain surrounding whitespace"));
+    }
+    let mut parsed = Url::parse(raw).map_err(|_| format!("invalid `{flag}` URL"))?;
+    if parsed.scheme() != "https" {
+        return Err(format!("`{flag}` must use HTTPS"));
+    }
+    if parsed.host_str().is_none() {
+        return Err(format!("`{flag}` must include a host"));
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err(format!("`{flag}` must not include URL userinfo"));
+    }
+    if parsed.query().is_some() {
+        return Err(format!("`{flag}` must not include a query"));
+    }
+    if parsed.fragment().is_some() {
+        return Err(format!("`{flag}` must not include a fragment"));
+    }
+    if parsed.port() == Some(0) {
+        return Err(format!("`{flag}` must not use port zero"));
+    }
+    let canonical_origin = parsed.origin().ascii_serialization();
+    if exact_stream_path {
+        let canonical_endpoint = format!("{canonical_origin}{PROOF_STREAM_ROUTE_V1}");
+        if parsed.path() != PROOF_STREAM_ROUTE_V1 || raw != canonical_endpoint {
+            return Err(format!(
+                "`--gateway-url` must be the exact canonical HTTPS origin plus `{PROOF_STREAM_ROUTE_V1}`"
+            ));
+        }
+    } else {
+        let canonical_origin_with_slash = format!("{canonical_origin}/");
+        if parsed.path() != "/" || (raw != canonical_origin && raw != canonical_origin_with_slash) {
+            return Err(
+                "`--torii-url` must be an exact canonical bare HTTPS origin without a path prefix"
+                    .to_string(),
+            );
+        }
+        parsed.set_path(PROOF_STREAM_ROUTE_V1);
+    }
+    Ok(parsed)
+}
+
+fn proof_stream_pin_manifest_endpoint(stream_endpoint: &Url, manifest_digest_hex: &str) -> Url {
+    let mut endpoint = stream_endpoint.clone();
+    endpoint.set_path(&format!(
+        "{PIN_MANIFEST_ROUTE_PREFIX_V1}{manifest_digest_hex}"
+    ));
+    endpoint
+}
+
+fn redacted_endpoint(endpoint: &Url) -> String {
+    format!(
+        "{}{}",
+        endpoint.origin().ascii_serialization(),
+        endpoint.path()
+    )
+}
+
+fn is_canonical_proof_stream_bearer_token(token: &str) -> bool {
+    if token.is_empty()
+        || token.len() > PROOF_STREAM_BEARER_TOKEN_MAX_BYTES
+        || token.trim() != token
+    {
+        return false;
+    }
+    let mut saw_padding = false;
+    let mut saw_token_byte = false;
+    for byte in token.bytes() {
+        if byte == b'=' {
+            saw_padding = true;
+            continue;
+        }
+        if saw_padding
+            || !matches!(
+                byte,
+                b'A'..=b'Z'
+                    | b'a'..=b'z'
+                    | b'0'..=b'9'
+                    | b'-'
+                    | b'.'
+                    | b'_'
+                    | b'~'
+                    | b'+'
+                    | b'/'
+            )
+        {
+            return false;
+        }
+        saw_token_byte = true;
+    }
+    saw_token_byte
+}
+
+fn proof_stream_bearer_token_from_env(env_name: &str) -> Result<String, String> {
+    let name_bytes = env_name.as_bytes();
+    if name_bytes.is_empty()
+        || !matches!(name_bytes[0], b'A'..=b'Z' | b'_')
+        || !name_bytes
+            .iter()
+            .all(|byte| matches!(byte, b'A'..=b'Z' | b'0'..=b'9' | b'_'))
+    {
+        return Err(
+            "`--bearer-token-env` must name an uppercase ASCII environment variable".to_string(),
+        );
+    }
+    let token = env::var(env_name).map_err(|_| {
+        format!("failed to read bearer token from environment variable `{env_name}`")
+    })?;
+    if !is_canonical_proof_stream_bearer_token(&token) {
+        return Err(format!(
+            "environment variable `{env_name}` is not a canonical bearer token"
+        ));
+    }
+    Ok(token)
+}
+
+fn proof_stream_http_client() -> Result<HttpClient, String> {
+    HttpClient::builder()
+        .https_only(true)
+        .connect_timeout(PROOF_STREAM_HTTP_CONNECT_TIMEOUT)
+        .timeout(PROOF_STREAM_HTTP_TIMEOUT)
+        .redirect(RedirectPolicy::none())
+        .referer(false)
+        .no_proxy()
+        .no_gzip()
+        .no_brotli()
+        .no_deflate()
+        .no_zstd()
+        .pool_max_idle_per_host(1)
+        .build()
+        .map_err(|error| format!("failed to construct hardened proof-stream HTTP client: {error}"))
+}
+
+fn fetch_finalized_pin_manifest(
+    client: &HttpClient,
+    endpoint: &Url,
+    bearer_token: &str,
+) -> Result<PinManifestFinalizedRecordV1, String> {
+    let endpoint_label = redacted_endpoint(endpoint);
+    let response = client
+        .get(endpoint.clone())
+        .bearer_auth(bearer_token)
+        .header("Accept", "application/json")
+        .header(ACCEPT_ENCODING, "identity")
+        .send()
+        .map_err(|_| format!("failed to fetch finalized pin manifest from `{endpoint_label}`"))?;
+    if response.status() != StatusCode::OK {
+        return Err(format!(
+            "finalized pin-manifest endpoint `{endpoint_label}` returned {}",
+            response.status()
+        ));
+    }
+    let content_type = response
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok());
+    if content_type != Some("application/json") {
+        return Err(
+            "finalized pin-manifest endpoint returned a noncanonical Content-Type; expected `application/json`"
+                .to_string(),
+        );
+    }
+    let content_encoding = response
+        .headers()
+        .get(CONTENT_ENCODING)
+        .map(|value| value.to_str())
+        .transpose()
+        .map_err(|_| {
+            "finalized pin-manifest endpoint returned a non-ASCII Content-Encoding".to_string()
+        })?;
+    if !matches!(content_encoding, None | Some("identity")) {
+        return Err(
+            "finalized pin-manifest endpoint ignored `Accept-Encoding: identity`".to_string(),
+        );
+    }
+    if response
+        .content_length()
+        .is_some_and(|length| length > PIN_MANIFEST_RESPONSE_MAX_BYTES)
+    {
+        return Err("finalized pin-manifest response exceeds the size limit".to_string());
+    }
+    let mut body = Vec::new();
+    response
+        .take(PIN_MANIFEST_RESPONSE_MAX_BYTES + 1)
+        .read_to_end(&mut body)
+        .map_err(|_| "failed to read finalized pin-manifest response".to_string())?;
+    if body.len() as u64 > PIN_MANIFEST_RESPONSE_MAX_BYTES {
+        return Err("finalized pin-manifest response exceeds the size limit".to_string());
+    }
+    from_slice(&body)
+        .map_err(|_| "failed to decode finalized native pin-manifest record".to_string())
+}
+
+fn validate_finalized_pin_manifest(
+    local_manifest: &ManifestV1,
+    local_manifest_digest: &[u8; 32],
+    finalized: &PinManifestFinalizedRecordV1,
+) -> Result<ValidatedPinManifestV1, String> {
+    let record = &finalized.manifest;
+    if !matches!(record.status, PinStatus::Approved(_)) {
+        return Err("pin manifest is not in the chain-authoritative Approved state".to_string());
+    }
+    if record.digest.as_bytes() != local_manifest_digest {
+        return Err("pin-manifest digest does not match the local canonical manifest".to_string());
+    }
+    if record.root_cid.as_bytes().as_slice() != local_manifest.root_cid.as_slice() {
+        return Err(
+            "pin-manifest root CID does not match the local canonical manifest".to_string(),
+        );
+    }
+    if record.chunker != chunker_handle_from_profile(&local_manifest.chunking) {
+        return Err("pin-manifest chunker does not match the local canonical manifest".to_string());
+    }
+    if record.chunk_digest_sha3_256 != local_manifest.chunk_digest_sha3_256 {
+        return Err(
+            "pin-manifest chunk-plan digest does not match the local canonical manifest"
+                .to_string(),
+        );
+    }
+    if record.por_root != local_manifest.por_root {
+        return Err(
+            "pin-manifest PoR root does not match the local canonical manifest".to_string(),
+        );
+    }
+    if record.content_length != local_manifest.content_length {
+        return Err(
+            "pin-manifest content length does not match the local canonical manifest".to_string(),
+        );
+    }
+    if record.policy != convert_pin_policy(&local_manifest.pin_policy) {
+        return Err("pin-manifest policy does not match the local canonical manifest".to_string());
+    }
+    if finalized.finalized_cursor.height == 0 {
+        return Err("pin-manifest finalized cursor height must be non-zero".to_string());
+    }
+    if finalized
+        .finalized_cursor
+        .block_hash
+        .iter()
+        .all(|byte| *byte == 0)
+    {
+        return Err("pin-manifest finalized cursor hash must be non-zero".to_string());
+    }
+    Ok(ValidatedPinManifestV1 {
+        finalized_height: finalized.finalized_cursor.height,
+        finalized_block_hash: finalized.finalized_cursor.block_hash,
+        por_root: record.por_root,
+    })
+}
+
+fn payload_free_proof_stream_event(item: &ProofStreamItem) -> Value {
+    let mut map = Map::new();
+    map.insert(
+        "request_digest_hex".into(),
+        Value::from(item.request_digest_hex()),
+    );
+    map.insert(
+        "manifest_digest_hex".into(),
+        Value::from(item.manifest_digest_hex()),
+    );
+    map.insert(
+        "provider_id_hex".into(),
+        Value::from(item.provider_id_hex()),
+    );
+    map.insert("proof_kind".into(), Value::from(item.proof_kind().as_str()));
+    map.insert("result".into(), Value::from(item.status().as_str()));
+    if let Some(value) = item.outcome_identity_hex() {
+        map.insert("outcome_identity_hex".into(), Value::from(value));
+    }
+    if let Some(value) = item.outcome_digest_hex() {
+        map.insert("outcome_digest_hex".into(), Value::from(value));
+    }
+    if let Some(value) = item.admission_envelope_digest_hex() {
+        map.insert("admission_envelope_digest_hex".into(), Value::from(value));
+    }
+    if let Some(value) = item.finalized_block_height() {
+        map.insert("finalized_block_height".into(), Value::from(value));
+    }
+    if let Some(value) = item.finalized_block_hash_hex() {
+        map.insert("finalized_block_hash_hex".into(), Value::from(value));
+    }
+    if let Some(value) = item.committed_at_ms() {
+        map.insert("committed_at_ms".into(), Value::from(value));
+    }
+    if let Some(value) = item.challenge_id_hex() {
+        map.insert("challenge_id_hex".into(), Value::from(value));
+    }
+    if let Some(value) = item.failure_reason() {
+        map.insert("failure_reason".into(), Value::from(value));
+    }
+    if let Some(value) = item.latency_ms() {
+        map.insert("latency_ms".into(), Value::from(u64::from(value)));
+    }
+    if let Some(value) = item.deadline_ms() {
+        map.insert("deadline_ms".into(), Value::from(u64::from(value)));
+    }
+    if let Some(value) = item.sample_index() {
+        map.insert("leaf_index_flat".into(), Value::from(value));
+    }
+    if let Some(value) = item.chunk_index() {
+        map.insert("chunk_index".into(), Value::from(u64::from(value)));
+    }
+    if let Some(value) = item.segment_index() {
+        map.insert("segment_index".into(), Value::from(u64::from(value)));
+    }
+    if let Some(value) = item.leaf_index() {
+        map.insert("leaf_index".into(), Value::from(u64::from(value)));
+    }
+    if let Some(value) = item.tier() {
+        map.insert("tier".into(), Value::from(value.as_str()));
+    }
+    if let Some(value) = item.recorded_at_ms() {
+        map.insert("recorded_at_ms".into(), Value::from(value));
+    }
+    Value::Object(map)
+}
+
 fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
     let mut manifest_path: Option<PathBuf> = None;
     let mut torii_url: Option<String> = None;
@@ -17090,14 +17471,10 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
     let mut tier_arg: Option<String> = None;
     let mut nonce_b64: Option<String> = None;
     let mut orchestrator_job_id_hex: Option<String> = None;
-    let mut stream_token: Option<String> = None;
     let mut bearer_token_env: Option<String> = None;
     let mut summary_out: Option<PathBuf> = None;
     let mut evidence_dir: Option<PathBuf> = None;
-    let mut por_root_hex: Option<String> = None;
     let mut emit_events = false;
-    let mut max_failures: Option<u64> = None;
-    let mut max_verification_failures: Option<u64> = None;
     let mut seen_options = BTreeSet::new();
 
     for arg in raw_args {
@@ -17117,44 +17494,33 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
             "--proof-kind" => proof_kind_arg = Some(value.to_string()),
             "--challenge-id-hex" => challenge_id_hex = Some(value.to_string()),
             "--samples" => {
-                let parsed: u32 = value
-                    .parse()
-                    .map_err(|err| format!("invalid `--samples` value: {err}"))?;
-                samples = Some(parsed);
+                samples = Some(parse_u32_arg(
+                    "--samples",
+                    value,
+                    "sorafs_cli proof stream",
+                )?);
             }
             "--sample-seed" => {
-                let parsed: u64 = value
-                    .parse()
-                    .map_err(|err| format!("invalid `--sample-seed` value: {err}"))?;
-                sample_seed = Some(parsed);
+                sample_seed = Some(parse_u64_arg(
+                    "--sample-seed",
+                    value,
+                    "sorafs_cli proof stream",
+                )?);
             }
             "--deadline-ms" => {
-                let parsed: u32 = value
-                    .parse()
-                    .map_err(|err| format!("invalid `--deadline-ms` value: {err}"))?;
-                deadline_ms = Some(parsed);
+                deadline_ms = Some(parse_u32_arg(
+                    "--deadline-ms",
+                    value,
+                    "sorafs_cli proof stream",
+                )?);
             }
             "--tier" => tier_arg = Some(value.to_string()),
             "--nonce-b64" => nonce_b64 = Some(value.to_string()),
             "--orchestrator-job-id-hex" => orchestrator_job_id_hex = Some(value.to_string()),
-            "--stream-token" => stream_token = Some(value.to_string()),
             "--bearer-token-env" => bearer_token_env = Some(value.to_string()),
             "--summary-out" => summary_out = Some(PathBuf::from(value)),
             "--governance-evidence-dir" => evidence_dir = Some(PathBuf::from(value)),
-            "--por-root-hex" => por_root_hex = Some(value.to_string()),
             "--emit-events" => emit_events = parse_bool_flag(value, "--emit-events")?,
-            "--max-failures" => {
-                let parsed: u64 = value
-                    .parse()
-                    .map_err(|err| format!("invalid `--max-failures` value: {err}"))?;
-                max_failures = Some(parsed);
-            }
-            "--max-verification-failures" => {
-                let parsed: u64 = value
-                    .parse()
-                    .map_err(|err| format!("invalid `--max-verification-failures` value: {err}"))?;
-                max_verification_failures = Some(parsed);
-            }
             _ => {
                 return Err(format!(
                     "unrecognised option `{key}` for `sorafs_cli proof stream`"
@@ -17166,28 +17532,7 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
     let manifest_path = manifest_path.ok_or_else(|| {
         "missing required `--manifest=PATH` for `sorafs_cli proof stream`".to_string()
     })?;
-    if torii_url.is_some() && endpoint_url.is_some() {
-        return Err("`--torii-url` cannot be combined with `--gateway-url`".to_string());
-    }
-
-    let endpoint = if let Some(endpoint_raw) = endpoint_url {
-        if endpoint_raw.is_empty() {
-            return Err("`--gateway-url` must not be empty".to_string());
-        }
-        if endpoint_raw.trim() != endpoint_raw {
-            return Err("`--gateway-url` must not contain surrounding whitespace".to_string());
-        }
-        Url::parse(&endpoint_raw)
-            .map_err(|err| format!("invalid `--gateway-url` value `{endpoint_raw}`: {err}"))?
-    } else {
-        let torii = torii_url.ok_or_else(|| {
-            "missing required `--torii-url=URL` (or `--gateway-url=URL`) for `sorafs_cli proof stream`".to_string()
-        })?;
-        Url::parse(&torii)
-            .map_err(|err| format!("invalid `--torii-url` value `{torii}`: {err}"))?
-            .join("v1/sorafs/proof/stream")
-            .map_err(|err| format!("failed to resolve proof stream endpoint: {err}"))?
-    };
+    let endpoint = proof_stream_endpoint(torii_url.as_deref(), endpoint_url.as_deref())?;
 
     let provider_id = if let Some(raw_hex) = provider_id_hex {
         let bytes = parse_digest_hex(&raw_hex)
@@ -17244,6 +17589,11 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
             let count = samples.unwrap_or(32);
             if count == 0 {
                 return Err("`--samples` must be greater than zero".to_string());
+            }
+            if count > MAX_PROOF_STREAM_SAMPLE_COUNT {
+                return Err(format!(
+                    "`--samples` must not exceed {MAX_PROOF_STREAM_SAMPLE_COUNT}"
+                ));
             }
             (None, Some(count), None)
         }
@@ -17312,19 +17662,37 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
         );
     }
 
-    let manifest_bytes = fs::read(&manifest_path).map_err(|err| {
-        format!(
-            "failed to read manifest `{}`: {err}",
-            manifest_path.display()
-        )
-    })?;
-    let manifest: ManifestV1 = decode_from_bytes(&manifest_bytes)
-        .map_err(|err| format!("failed to decode manifest: {err}"))?;
+    let manifest_byte_limit = u64::try_from(MAX_MANIFEST_ENCODED_BYTES)
+        .map_err(|_| "manifest byte limit does not fit u64".to_string())?;
+    let manifest_bytes = read_file_bounded(&manifest_path, manifest_byte_limit, "manifest")?;
+    let manifest = decode_manifest_v1_canonical(&manifest_bytes)
+        .map_err(|err| format!("failed to decode exact canonical manifest: {err}"))?;
+    if matches!(proof_kind, ProofKind::Por) && manifest.por_root == [0; 32] {
+        return Err(
+            "PoR proof streaming requires a non-zero `por_root` in the canonical manifest"
+                .to_string(),
+        );
+    }
     let manifest_digest = manifest
         .digest()
         .map_err(|err| format!("failed to compute manifest digest: {err}"))?;
     let manifest_digest_hex = hex_encode(manifest_digest.as_bytes());
     let manifest_cid_hex = hex_encode(&manifest.root_cid);
+    let bearer_token_env = bearer_token_env.ok_or_else(|| {
+        "missing required `--bearer-token-env=VAR` for authenticated `sorafs_cli proof stream`"
+            .to_string()
+    })?;
+    let bearer_token = proof_stream_bearer_token_from_env(&bearer_token_env)?;
+    let client = proof_stream_http_client()?;
+    let pin_manifest_endpoint = proof_stream_pin_manifest_endpoint(&endpoint, &manifest_digest_hex);
+    let finalized_pin =
+        fetch_finalized_pin_manifest(&client, &pin_manifest_endpoint, &bearer_token)?;
+    let validated_pin =
+        validate_finalized_pin_manifest(&manifest, manifest_digest.as_bytes(), &finalized_pin)?;
+    let trusted_por_root = match proof_kind {
+        ProofKind::Por => Some(validated_pin.por_root),
+        ProofKind::Pdp | ProofKind::Potr => None,
+    };
 
     let nonce = if let Some(encoded) = nonce_b64 {
         decode_nonce_b64(&encoded)?
@@ -17352,6 +17720,8 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
         sample_count,
         deadline_ms,
         sample_seed,
+        expected_finalized_height: Some(validated_pin.finalized_height),
+        expected_finalized_block_hash: Some(validated_pin.finalized_block_hash),
         nonce,
         orchestrator_job_id: orchestrator_job_id_hex
             .as_deref()
@@ -17359,33 +17729,19 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
             .transpose()?,
         tier,
     };
+    let verification_context = ProofStreamVerificationContext::new(request_model, trusted_por_root)
+        .map_err(|error| format!("invalid proof stream verification context: {error}"))?;
     let request = ProofStreamHttpRequestV1::new(request_model)
         .map_err(|error| format!("invalid proof stream request: {error}"))?;
     let request_body = to_vec(&request)
         .map_err(|error| format!("failed to encode canonical proof stream request: {error}"))?;
 
-    let client = HttpClient::builder()
-        .build()
-        .map_err(|err| format!("failed to construct HTTP client: {err}"))?;
-    let mut builder = client
+    let builder = client
         .post(endpoint.clone())
+        .bearer_auth(&bearer_token)
         .header(CONTENT_TYPE, "application/json")
         .header("Accept", "application/x-ndjson")
-        .header(ACCEPT_ENCODING, "identity")
-        .header("Sora-Stream-Client", "sorafs_cli/stream/v2");
-
-    if let Some(token) = stream_token.as_ref() {
-        builder = builder.header("Sora-Stream-Token", token);
-    }
-    if let Some(env_var) = bearer_token_env.as_ref() {
-        let value = env::var(env_var)
-            .map_err(|err| format!("failed to read bearer token from `{env_var}`: {err}"))?;
-        let trimmed = value.trim();
-        if trimmed.is_empty() {
-            return Err(format!("environment variable `{env_var}` is empty"));
-        }
-        builder = builder.header("Authorization", format!("Bearer {trimmed}"));
-    }
+        .header(ACCEPT_ENCODING, "identity");
 
     let response = builder
         .body(request_body)
@@ -17417,132 +17773,33 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
         );
     }
 
-    let expected_root = por_root_hex
-        .as_deref()
-        .map(|hex| parse_digest_hex(hex).map_err(|err| format!("invalid `--por-root-hex`: {err}")))
-        .transpose()?;
-    let mut verification_attempts: u64 = 0;
-    let mut verification_failures: u64 = 0;
-
     let reader = BufReader::new(response);
     let mut metrics = ProofStreamMetrics::default();
-    let mut failure_samples: Vec<ProofStreamItem> = Vec::new();
-    let mut verification_failure_samples: Vec<Value> = Vec::new();
-    const FAILURE_SAMPLE_LIMIT: usize = 5;
+    let mut pending_events = Vec::new();
 
-    for item in ProofStreamNdjsonReader::new(reader) {
+    for item in ProofStreamNdjsonReader::new(reader, &verification_context) {
         let item =
             item.map_err(|err| format!("gateway returned an invalid proof stream: {err}"))?;
-        if item.manifest_digest_hex() != manifest_digest_hex.as_str() {
-            return Err("proof stream item manifest digest does not match the request".to_string());
-        }
-        if item.provider_id_hex() != provider_id.as_str() {
-            return Err("proof stream item provider id does not match the request".to_string());
-        }
-        if item.proof_kind() != proof_kind {
-            return Err(format!(
-                "proof stream item kind `{}` does not match requested `{}`",
-                item.proof_kind().as_str(),
-                proof_kind.as_str()
-            ));
-        }
-        match proof_kind {
-            ProofKind::Por => {
-                if item.challenge_id_hex().is_some() || item.deadline_ms().is_some() {
-                    return Err(
-                        "PoR proof stream item contains fields reserved for PDP or PoTR"
-                            .to_string(),
-                    );
-                }
-            }
-            ProofKind::Pdp => {
-                if item.challenge_id_hex() != challenge_id_hex.as_deref() {
-                    return Err(
-                        "PDP proof stream item challenge id does not match the request".to_string(),
-                    );
-                }
-                if item.deadline_ms().is_some() {
-                    return Err("PDP proof stream item contains a PoTR deadline".to_string());
-                }
-            }
-            ProofKind::Potr => {
-                if item.challenge_id_hex().is_some() {
-                    return Err("PoTR proof stream item contains a PDP challenge id".to_string());
-                }
-                if item.deadline_ms() != deadline_ms {
-                    return Err(
-                        "PoTR proof stream item deadline does not match the request".to_string()
-                    );
-                }
-                let response_request_id = item
-                    .potr_receipt()
-                    .and_then(|receipt| receipt.request_id)
-                    .map(hex_encode);
-                if response_request_id.as_deref() != orchestrator_job_id_hex.as_deref() {
-                    return Err(
-                        "PoTR signed receipt request id does not match the requested orchestrator job"
-                            .to_string(),
-                    );
-                }
-            }
-        }
-        let local_verification_failed = if let Some(root) = expected_root.as_ref()
-            && matches!(item.proof_kind(), ProofKind::Por)
-        {
-            verification_attempts += 1;
-            let verified = item.por_proof().is_some_and(|proof| proof.verify(root));
-            if verified {
-                false
-            } else {
-                verification_failures += 1;
-                if verification_failure_samples.len() < FAILURE_SAMPLE_LIMIT {
-                    let mut sample = Map::new();
-                    sample.insert(
-                        "manifest_digest_hex".into(),
-                        Value::from(item.manifest_digest_hex()),
-                    );
-                    sample.insert(
-                        "provider_id_hex".into(),
-                        Value::from(item.provider_id_hex()),
-                    );
-                    sample.insert("expected_root_hex".into(), Value::from(hex_encode(root)));
-                    sample.insert("reason".into(), Value::from("local_verification_failed"));
-                    if let Some(index) = item.sample_index() {
-                        sample.insert("leaf_index_flat".into(), Value::from(u64::from(index)));
-                    }
-                    if let Some(index) = item.chunk_index() {
-                        sample.insert("chunk_index".into(), Value::from(u64::from(index)));
-                    }
-                    if let Some(index) = item.segment_index() {
-                        sample.insert("segment_index".into(), Value::from(u64::from(index)));
-                    }
-                    if let Some(index) = item.leaf_index() {
-                        sample.insert("leaf_index".into(), Value::from(u64::from(index)));
-                    }
-                    verification_failure_samples.push(Value::Object(sample));
-                }
-                true
-            }
-        } else {
-            false
-        };
         metrics.record(&item);
-        if item.status().is_failure() && failure_samples.len() < FAILURE_SAMPLE_LIMIT {
-            failure_samples.push(item.clone());
-        }
-        if emit_events && !local_verification_failed {
-            let event = norito::json::to_string(&item.to_json())
+        if emit_events {
+            let event = norito::json::to_string(&payload_free_proof_stream_event(&item))
                 .map_err(|err| format!("failed to encode proof stream event: {err}"))?;
-            println!("{event}");
+            pending_events.push(event);
         }
     }
     if metrics.item_total == 0 {
         return Err("gateway returned an empty proof stream".to_string());
     }
+    if metrics.failure_total != 0 {
+        return Err(format!(
+            "proof stream reported {} gateway failures; V1 promotion evidence requires zero",
+            metrics.failure_total
+        ));
+    }
 
-    let summary = ProofStreamSummary::new(metrics.clone(), failure_samples.clone());
     let mut summary_map = Map::new();
-    summary_map.insert("endpoint".into(), Value::from(endpoint.as_str()));
+    let endpoint_label = redacted_endpoint(&endpoint);
+    summary_map.insert("endpoint".into(), Value::from(endpoint_label.clone()));
     summary_map.insert(
         "manifest_path".into(),
         Value::from(manifest_path.display().to_string()),
@@ -17557,6 +17814,18 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
     );
     summary_map.insert("provider_id_hex".into(), Value::from(provider_id.clone()));
     summary_map.insert("proof_kind".into(), Value::from(proof_kind.as_str()));
+    summary_map.insert(
+        "request_digest_hex".into(),
+        Value::from(hex_encode(verification_context.request_digest())),
+    );
+    summary_map.insert(
+        "finalized_block_height".into(),
+        Value::from(validated_pin.finalized_height),
+    );
+    summary_map.insert(
+        "finalized_block_hash_hex".into(),
+        Value::from(hex_encode(validated_pin.finalized_block_hash)),
+    );
     if let Some(challenge_id) = challenge_id_hex {
         summary_map.insert(
             "requested_challenge_id_hex".into(),
@@ -17588,53 +17857,29 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
         );
     }
     summary_map.insert(
-        "nonce_b64".into(),
-        Value::from(BASE64_STANDARD.encode(nonce)),
+        "nonce_digest_hex".into(),
+        Value::from(hex_encode(blake3_hash(&nonce).as_bytes())),
     );
-    summary_map.insert("metrics".into(), summary.metrics.to_json());
-    let failure_budget = max_failures.unwrap_or(0);
-    summary_map.insert("allowed_failure_budget".into(), Value::from(failure_budget));
-    let verification_budget = max_verification_failures.unwrap_or(0);
-    summary_map.insert(
-        "allowed_verification_failure_budget".into(),
-        Value::from(verification_budget),
-    );
-    if let Some(root) = expected_root.as_ref() {
+    summary_map.insert("metrics".into(), metrics.to_json());
+    if let Some(root) = trusted_por_root.as_ref() {
         summary_map.insert(
             "verification_root_hex".into(),
             Value::from(hex_encode(root)),
         );
-        summary_map.insert(
-            "verification_total".into(),
-            Value::from(verification_attempts),
-        );
+        summary_map.insert("verification_total".into(), Value::from(metrics.item_total));
         summary_map.insert(
             "verification_successes".into(),
-            Value::from(verification_attempts.saturating_sub(verification_failures)),
+            Value::from(metrics.item_total),
         );
-        summary_map.insert(
-            "verification_failures".into(),
-            Value::from(verification_failures),
-        );
-        if !verification_failure_samples.is_empty() {
-            summary_map.insert(
-                "verification_failure_samples".into(),
-                Value::Array(verification_failure_samples),
-            );
-        }
-    }
-    if !failure_samples.is_empty() {
-        let sample_json = failure_samples
-            .iter()
-            .take(FAILURE_SAMPLE_LIMIT)
-            .map(ProofStreamItem::to_json)
-            .collect::<Vec<_>>();
-        summary_map.insert("failure_samples".into(), Value::Array(sample_json));
+        summary_map.insert("verification_failures".into(), Value::from(0_u64));
     }
 
     let summary_value = Value::Object(summary_map);
     let rendered = to_string_pretty(&summary_value)
         .map_err(|err| format!("failed to render proof stream summary: {err}"))?;
+    for event in pending_events {
+        println!("{event}");
+    }
     println!("{rendered}");
     if let Some(path) = summary_out {
         write_text(&path, rendered.as_bytes())?;
@@ -17643,22 +17888,11 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
         write_proof_stream_evidence(
             &dir,
             &manifest_path,
+            &manifest_bytes,
             &manifest_digest_hex,
             &rendered,
-            endpoint.as_str(),
+            &endpoint_label,
         )?;
-    }
-
-    if summary.metrics.failure_total > failure_budget {
-        return Err(format!(
-            "proof stream reported {} gateway failures which exceeds the allowed maximum ({failure_budget})",
-            summary.metrics.failure_total
-        ));
-    }
-    if verification_failures > verification_budget {
-        return Err(format!(
-            "proof stream encountered {verification_failures} local verification failures which exceeds the allowed maximum ({verification_budget})"
-        ));
     }
 
     Ok(())
@@ -17667,6 +17901,7 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
 fn write_proof_stream_evidence(
     dir: &Path,
     manifest_path: &Path,
+    manifest_bytes: &[u8],
     manifest_digest_hex: &str,
     summary_json: &str,
     endpoint: &str,
@@ -17682,13 +17917,7 @@ fn write_proof_stream_evidence(
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "manifest.norito".to_string());
     let manifest_copy_path = dir.join(&manifest_copy_name);
-    fs::copy(manifest_path, &manifest_copy_path).map_err(|err| {
-        format!(
-            "failed to copy manifest `{}` into governance evidence directory `{}`: {err}",
-            manifest_path.display(),
-            dir.display()
-        )
-    })?;
+    write_bytes(&manifest_copy_path, manifest_bytes)?;
 
     let captured_at_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -19944,7 +20173,7 @@ fn write_governance_dag_car_archive(
     }
 
     if let Some(plan_path) = car_plan_out {
-        let plan_json = chunk_fetch_specs_to_string(&plan.chunk_fetch_specs())
+        let plan_json = chunk_fetch_plan_to_string(&plan)
             .map_err(|err| format!("failed to render governance DAG CAR chunk plan: {err}"))?;
         write_text(plan_path, plan_json.as_bytes())?;
     }
@@ -21316,7 +21545,14 @@ mod tests {
 
     use ed25519_dalek::{Signer, SigningKey};
     use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_data_model::{
+        metadata::Metadata,
+        sorafs::pin_registry::{
+            ManifestDigest, ManifestRootCid, PinManifestFinalizedCursorV1, PinManifestRecord,
+        },
+    };
     use norito::json::Map;
+    use sorafs_car::{ChunkStore, por_json::sample_to_map};
     use sorafs_manifest::{
         GovernanceProofs, PinPolicy as ManifestPinPolicy, REPUTATION_PROVIDER_INPUT_VERSION_V1,
         REPUTATION_PROVIDER_METRICS_VERSION_V1, REPUTATION_SCORING_EVIDENCE_VERSION_V1,
@@ -21337,6 +21573,7 @@ mod tests {
             .dag_codec(DagCodecId(MANIFEST_DAG_CODEC))
             .chunking_profile(ChunkingProfileV1::from_descriptor(descriptor))
             .chunk_digest_sha3_256([0xCD; 32])
+            .por_root([0xCE; 32])
             .content_length(1_024)
             .car_digest([0xAB; 32])
             .car_size(2_048)
@@ -21360,6 +21597,287 @@ mod tests {
 
     fn fixture_account(seed: u8) -> AccountId {
         AccountId::new(fixture_keypair(seed).public_key().clone())
+    }
+
+    fn finalized_pin_for_manifest(manifest: &ManifestV1) -> PinManifestFinalizedRecordV1 {
+        let digest = manifest.digest().expect("manifest digest");
+        let mut record = PinManifestRecord::new(
+            ManifestDigest::new(*digest.as_bytes()),
+            ManifestRootCid::try_from_slice(manifest.root_cid.as_slice())
+                .expect("canonical manifest CID"),
+            chunker_handle_from_profile(&manifest.chunking),
+            manifest.chunk_digest_sha3_256,
+            manifest.por_root,
+            manifest.content_length,
+            convert_pin_policy(&manifest.pin_policy),
+            fixture_account(0x71),
+            4,
+            None,
+            None,
+            Metadata::default(),
+        );
+        record.status = PinStatus::Approved(5);
+        PinManifestFinalizedRecordV1 {
+            finalized_cursor: PinManifestFinalizedCursorV1 {
+                height: 17,
+                block_hash: [0x66; 32],
+            },
+            manifest: record,
+        }
+    }
+
+    #[test]
+    fn proof_stream_endpoint_policy_requires_one_exact_https_origin() {
+        let endpoint = proof_stream_endpoint(Some("https://torii.sora.example"), None)
+            .expect("bare HTTPS Torii origin");
+        assert_eq!(
+            endpoint.as_str(),
+            "https://torii.sora.example/v1/sorafs/proof/stream"
+        );
+        assert_eq!(
+            redacted_endpoint(&endpoint),
+            "https://torii.sora.example/v1/sorafs/proof/stream"
+        );
+        let pin = proof_stream_pin_manifest_endpoint(&endpoint, &"ab".repeat(32));
+        assert_eq!(
+            pin.as_str(),
+            format!(
+                "https://torii.sora.example/v1/sorafs/pin/{}",
+                "ab".repeat(32)
+            )
+        );
+
+        let direct = proof_stream_endpoint(
+            None,
+            Some("https://regional.sora.example/v1/sorafs/proof/stream"),
+        )
+        .expect("exact HTTPS gateway route");
+        assert_eq!(
+            direct,
+            endpoint_with_host(&endpoint, "regional.sora.example")
+        );
+
+        for (torii, gateway) in [
+            (Some("http://torii.sora.example"), None),
+            (Some("https://user@torii.sora.example"), None),
+            (Some("https://torii.sora.example?token=secret"), None),
+            (Some("https://torii.sora.example#fragment"), None),
+            (Some("https://torii.sora.example/prefix"), None),
+            (Some("https://torii.sora.example/."), None),
+            (None, Some("https://regional.sora.example/v1/proof/stream")),
+            (
+                None,
+                Some("https://regional.sora.example/v1/sorafs/tmp/../proof/stream"),
+            ),
+        ] {
+            assert!(
+                proof_stream_endpoint(torii, gateway).is_err(),
+                "unsafe endpoint must fail: torii={torii:?} gateway={gateway:?}"
+            );
+        }
+        assert!(
+            proof_stream_endpoint(
+                Some("https://torii.sora.example"),
+                Some("https://regional.sora.example/v1/sorafs/proof/stream")
+            )
+            .is_err()
+        );
+    }
+
+    fn endpoint_with_host(endpoint: &Url, host: &str) -> Url {
+        let mut expected = endpoint.clone();
+        expected.set_host(Some(host)).expect("replace fixture host");
+        expected
+    }
+
+    #[test]
+    fn proof_stream_bearer_token_syntax_is_bounded_and_header_safe() {
+        for valid in [
+            "opaque-token_1",
+            "eyJhbGciOiJFZERTQSJ9.payload.signature",
+            "YWJjZA==",
+        ] {
+            assert!(is_canonical_proof_stream_bearer_token(valid));
+        }
+        for invalid in [
+            "",
+            "=",
+            " token",
+            "token ",
+            "to ken",
+            "token\nsecret",
+            "YW=Jj",
+            "token:secret",
+        ] {
+            assert!(!is_canonical_proof_stream_bearer_token(invalid));
+        }
+        assert!(!is_canonical_proof_stream_bearer_token(
+            &"a".repeat(PROOF_STREAM_BEARER_TOKEN_MAX_BYTES + 1)
+        ));
+    }
+
+    #[test]
+    fn finalized_pin_validation_binds_every_manifest_commitment_and_cursor() {
+        let manifest = sample_manifest();
+        let digest = manifest.digest().expect("manifest digest");
+        let finalized = finalized_pin_for_manifest(&manifest);
+        let validated = validate_finalized_pin_manifest(&manifest, digest.as_bytes(), &finalized)
+            .expect("matching approved finalized pin");
+        assert_eq!(validated.finalized_height, 17);
+        assert_eq!(validated.finalized_block_hash, [0x66; 32]);
+        assert_eq!(validated.por_root, manifest.por_root);
+
+        let mut pending = finalized.clone();
+        pending.manifest.status = PinStatus::Pending;
+        assert!(
+            validate_finalized_pin_manifest(&manifest, digest.as_bytes(), &pending)
+                .expect_err("pending record must fail")
+                .contains("Approved")
+        );
+
+        let mut wrong_digest = finalized.clone();
+        wrong_digest.manifest.digest = ManifestDigest::new([0xA1; 32]);
+        assert!(
+            validate_finalized_pin_manifest(&manifest, digest.as_bytes(), &wrong_digest).is_err()
+        );
+        let mut wrong_cid = finalized.clone();
+        wrong_cid.manifest.root_cid =
+            ManifestRootCid::from_blake3_digest([0xA2; 32]).expect("alternate canonical CID");
+        assert!(validate_finalized_pin_manifest(&manifest, digest.as_bytes(), &wrong_cid).is_err());
+        let mut wrong_chunker = finalized.clone();
+        wrong_chunker.manifest.chunker.semver = "9.9.9".to_string();
+        assert!(
+            validate_finalized_pin_manifest(&manifest, digest.as_bytes(), &wrong_chunker).is_err()
+        );
+        let mut wrong_chunk_plan = finalized.clone();
+        wrong_chunk_plan.manifest.chunk_digest_sha3_256 = [0xA4; 32];
+        assert!(
+            validate_finalized_pin_manifest(&manifest, digest.as_bytes(), &wrong_chunk_plan)
+                .is_err()
+        );
+        let mut wrong_root = finalized.clone();
+        wrong_root.manifest.por_root = [0xA3; 32];
+        assert!(
+            validate_finalized_pin_manifest(&manifest, digest.as_bytes(), &wrong_root).is_err()
+        );
+        let mut wrong_length = finalized.clone();
+        wrong_length.manifest.content_length += 1;
+        assert!(
+            validate_finalized_pin_manifest(&manifest, digest.as_bytes(), &wrong_length).is_err()
+        );
+        let mut wrong_policy = finalized.clone();
+        wrong_policy.manifest.policy.min_replicas += 1;
+        assert!(
+            validate_finalized_pin_manifest(&manifest, digest.as_bytes(), &wrong_policy).is_err()
+        );
+        let mut zero_height = finalized.clone();
+        zero_height.finalized_cursor.height = 0;
+        assert!(
+            validate_finalized_pin_manifest(&manifest, digest.as_bytes(), &zero_height).is_err()
+        );
+        let mut zero_hash = finalized;
+        zero_hash.finalized_cursor.block_hash = [0; 32];
+        assert!(validate_finalized_pin_manifest(&manifest, digest.as_bytes(), &zero_hash).is_err());
+    }
+
+    #[test]
+    fn proof_stream_events_are_request_bound_and_payload_free_after_eof() {
+        let payload = (0_u16..512)
+            .map(|value| u8::try_from(value % 251).expect("fixture byte"))
+            .collect::<Vec<_>>();
+        let mut store = ChunkStore::new();
+        store.ingest_bytes(&payload).expect("ingest PoR fixture");
+        let root = *store.por_tree().root();
+        let request = ProofStreamRequestV1 {
+            manifest_digest: [0x11; 32],
+            provider_id: [0x22; 32],
+            proof_kind: ProofKind::Por,
+            challenge_id: None,
+            sample_count: Some(1),
+            deadline_ms: None,
+            sample_seed: Some(7),
+            expected_finalized_height: Some(17),
+            expected_finalized_block_hash: Some([0x66; 32]),
+            nonce: [0x33; 16],
+            orchestrator_job_id: None,
+            tier: None,
+        };
+        let context =
+            ProofStreamVerificationContext::new(request, Some(root)).expect("verification context");
+        let (flat_index, proof) = store
+            .sample_leaves(
+                1,
+                context
+                    .por_sample_seed()
+                    .expect("request-bound PoR sample seed"),
+                &payload,
+            )
+            .expect("sample PoR fixture")
+            .into_iter()
+            .next()
+            .expect("one sample");
+        let mut item = sample_to_map(flat_index, &proof);
+        item.insert(
+            "request_digest_hex".into(),
+            Value::from(hex_encode(context.request_digest())),
+        );
+        item.insert(
+            "manifest_digest_hex".into(),
+            Value::from(hex_encode(request.manifest_digest)),
+        );
+        item.insert(
+            "provider_id_hex".into(),
+            Value::from(hex_encode(request.provider_id)),
+        );
+        item.insert(
+            "finalized_block_height".into(),
+            Value::from(request.expected_finalized_height.expect("finalized height")),
+        );
+        item.insert(
+            "finalized_block_hash_hex".into(),
+            Value::from(hex_encode(
+                request
+                    .expected_finalized_block_hash
+                    .expect("finalized hash"),
+            )),
+        );
+        item.insert("proof_kind".into(), Value::from("por"));
+        item.insert("result".into(), Value::from("success"));
+        item.insert("latency_ms".into(), Value::from(40_u64));
+        let ndjson = format!(
+            "{}\n",
+            norito::json::to_string(&Value::Object(item)).expect("encode PoR item")
+        );
+        let items = ProofStreamNdjsonReader::new(Cursor::new(ndjson.as_bytes()), &context)
+            .collect::<Result<Vec<_>, _>>()
+            .expect("request-bound stream verifies through EOF");
+        assert_eq!(items.len(), 1);
+        assert!(items[0].to_json().get("proof").is_some());
+
+        let projection = payload_free_proof_stream_event(&items[0]);
+        let object = projection.as_object().expect("event projection object");
+        let expected_request_digest = hex_encode(context.request_digest());
+        assert_eq!(
+            object.get("request_digest_hex").and_then(Value::as_str),
+            Some(expected_request_digest.as_str())
+        );
+        for forbidden in [
+            "proof",
+            "leaf_bytes_hex",
+            "segment_leaves_hex",
+            "chunk_segments_hex",
+            "chunk_merkle_path_hex",
+            "receipt_b64",
+            "trace_id",
+            "nonce_b64",
+            "authorization",
+            "credential",
+        ] {
+            assert!(
+                !object.contains_key(forbidden),
+                "payload-free event leaked `{forbidden}`"
+            );
+        }
     }
 
     #[test]
@@ -22070,8 +22588,10 @@ fn build_plan_from_specs(
     plan_json: &Value,
     chunker_handle_hint: Option<&str>,
 ) -> Result<PlanWithHandle, String> {
-    let mut chunk_specs = chunk_fetch_specs_from_json(plan_json)
-        .map_err(|err| format!("failed to parse chunk fetch specs: {err}"))?;
+    let parsed_plan = chunk_fetch_plan_from_json(plan_json)
+        .map_err(|err| format!("failed to parse canonical chunk fetch plan: {err}"))?;
+    let payload_digest = blake3::Hash::from_bytes(parsed_plan.payload_digest);
+    let mut chunk_specs = parsed_plan.chunk_fetch_specs;
     if chunk_specs.is_empty() {
         return Err("chunk fetch plan contained no entries".into());
     }
@@ -22117,7 +22637,7 @@ fn build_plan_from_specs(
 
     let plan = CarBuildPlan {
         chunk_profile,
-        payload_digest: blake3_hash(&[]),
+        payload_digest,
         content_length,
         chunks: chunk_specs
             .iter()

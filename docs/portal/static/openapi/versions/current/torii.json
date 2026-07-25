@@ -4635,6 +4635,7 @@
             "items": {
               "$ref": "#/components/schemas/NativeAmxReceipt"
             },
+            "maxItems": 4096,
             "type": "array",
             "uniqueItems": true
           },
@@ -5866,15 +5867,7 @@
         "additionalProperties": false,
         "properties": {
           "bls_aggregate_signature": {
-            "description": "Compressed 96-byte BLS12-381 aggregate signature.",
-            "items": {
-              "maximum": 255,
-              "minimum": 0,
-              "type": "integer"
-            },
-            "maxItems": 96,
-            "minItems": 96,
-            "type": "array"
+            "$ref": "#/components/schemas/SumeragiV2BlsProof"
           },
           "body": {
             "$ref": "#/components/schemas/NativeAmxAttestationBody"
@@ -5892,7 +5885,7 @@
           "validator_set": {
             "description": "Ordered validator ids used to assemble the QC.",
             "items": {
-              "type": "string"
+              "$ref": "#/components/schemas/SumeragiV2BlsValidatorId"
             },
             "maxItems": 128,
             "minItems": 1,
@@ -5912,14 +5905,7 @@
           "validator_set_pops": {
             "description": "Historical compressed 96-byte BLS proofs of possession aligned with validator_set.",
             "items": {
-              "items": {
-                "maximum": 255,
-                "minimum": 0,
-                "type": "integer"
-              },
-              "maxItems": 96,
-              "minItems": 96,
-              "type": "array"
+              "$ref": "#/components/schemas/SumeragiV2BlsProof"
             },
             "maxItems": 128,
             "minItems": 1,
@@ -5958,7 +5944,7 @@
             "$ref": "#/components/schemas/NativeAmxParticipantLaneBlockProposal"
           },
           "participant_settlement": {
-            "$ref": "#/components/schemas/LaneSettlementCommitment"
+            "$ref": "#/components/schemas/NativeAmxParticipantSettlementCommitment"
           },
           "participant_settlement_hash": {
             "$ref": "#/components/schemas/Hash"
@@ -5987,15 +5973,19 @@
               "minimum": 0,
               "type": "integer"
             },
+            "maxItems": 4096,
             "minItems": 1,
-            "type": "array"
+            "type": "array",
+            "uniqueItems": true
           },
           "accepted_transaction_hashes": {
             "items": {
               "$ref": "#/components/schemas/Hash"
             },
+            "maxItems": 4096,
             "minItems": 1,
-            "type": "array"
+            "type": "array",
+            "uniqueItems": true
           },
           "dataspace_id": {
             "format": "uint64",
@@ -6071,7 +6061,7 @@
           },
           "validator_set": {
             "items": {
-              "type": "string"
+              "$ref": "#/components/schemas/SumeragiV2BlsValidatorId"
             },
             "maxItems": 128,
             "minItems": 1,
@@ -6126,6 +6116,122 @@
         "required": [
           "descriptor",
           "proposal_hash"
+        ],
+        "type": "object"
+      },
+      "NativeAmxParticipantSettlementCommitment": {
+        "additionalProperties": false,
+        "description": "Exact bounded zero-effect participant settlement. Group ordering, timestamp equality, current-source membership, and tx_count equality require semantic validation.",
+        "properties": {
+          "block_height": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "dataspace_id": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lane_id": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lane_incarnation": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "native_amx_receipts": {
+            "maxItems": 0,
+            "type": "array"
+          },
+          "nexus_fee_receipts": {
+            "maxItems": 0,
+            "type": "array"
+          },
+          "receipts": {
+            "items": {
+              "$ref": "#/components/schemas/NativeAmxParticipantSettlementReceipt"
+            },
+            "maxItems": 4096,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "swap_metadata": {
+            "type": "null"
+          },
+          "total_local_amount": {
+            "const": "0"
+          },
+          "total_xor_after_haircut": {
+            "const": "0"
+          },
+          "total_xor_due": {
+            "const": "0"
+          },
+          "total_xor_variance": {
+            "const": "0"
+          },
+          "tx_count": {
+            "format": "uint64",
+            "maximum": 4096,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "block_height",
+          "lane_id",
+          "lane_incarnation",
+          "dataspace_id",
+          "tx_count",
+          "total_local_amount",
+          "total_xor_due",
+          "total_xor_after_haircut",
+          "total_xor_variance",
+          "swap_metadata",
+          "receipts",
+          "nexus_fee_receipts",
+          "native_amx_receipts"
+        ],
+        "type": "object"
+      },
+      "NativeAmxParticipantSettlementReceipt": {
+        "additionalProperties": false,
+        "description": "One zero-effect source member in a grouped control-only Native AMX participant settlement.",
+        "properties": {
+          "local_amount": {
+            "const": "0"
+          },
+          "source_id": {
+            "description": "Ordered Native AMX participant source id as canonical uppercase 32-byte Norito JSON hex.",
+            "pattern": "^[0-9A-F]{64}$",
+            "type": "string"
+          },
+          "timestamp_ms": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "xor_after_haircut": {
+            "const": "0"
+          },
+          "xor_due": {
+            "const": "0"
+          },
+          "xor_variance": {
+            "const": "0"
+          }
+        },
+        "required": [
+          "source_id",
+          "local_amount",
+          "xor_due",
+          "xor_after_haircut",
+          "xor_variance",
+          "timestamp_ms"
         ],
         "type": "object"
       },

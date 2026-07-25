@@ -24,21 +24,26 @@ and operational requirements.
 
 | Struct | Description | Fields |
 |--------|-------------|--------|
-| `PinRecordV1` | Canonical manifest entry; `manifest_cid` is the exact 36-byte CIDv1/dag-cbor/BLAKE3-256 content root, not the digest of the manifest envelope. | `manifest_cid`, `chunk_plan_digest`, `por_root`, `profile_handle`, `approved_at`, `retention_epoch`, `pin_policy`, `successor_of`, `governance_envelope_hash`. |
+| `PinManifestRecord` | Chain-authoritative manifest lifecycle entry. The envelope digest and exact 36-byte CIDv1/dag-cbor/BLAKE3-256 content root are distinct commitments. | `digest`, `root_cid`, `chunker`, `chunk_digest_sha3_256`, `por_root`, `content_length`, `policy`, `submitted_by`, `submitted_epoch`, `alias`, `successor_of`, `metadata`, `status`, `retirement_reason`, `council_envelope_digest`, `pin_fee_payment`. |
+| `PinManifestFinalizedRecordV1` | Immutable read result binding one native manifest record to the finalized block used for the query. | `finalized_cursor`, `manifest`. |
 | `AliasBindingV1` | Maps alias -> manifest CID. | `alias`, `manifest_cid`, `bound_at`, `expiry_epoch`. |
 | `ReplicationOrderV1` | Instruction for providers to pin manifest. | `order_id`, `manifest_cid`, `providers`, `redundancy`, `deadline`, `policy_hash`. |
 | `ReplicationReceiptV1` | Provider acknowledgement. | `order_id`, `provider_id`, `status`, `timestamp`, `por_sample_digest`. |
 | `ManifestPolicyV1` | Governance policy snapshot. | `min_replicas`, `max_retention_epochs`, `allowed_profiles`, `pin_fee_basis_points`. |
 
-Implementation reference: see `crates/sorafs_manifest/src/pin_registry.rs` for the
-Rust Norito schemas and validation helpers backing these records. Validation
-mirrors the manifest tooling (chunker registry lookup, pin policy gating) so the
-contract, Torii facades, and CLI share identical invariants.
+Implementation reference: the authoritative manifest lifecycle and finalized
+read schemas live in
+`crates/iroha_data_model/src/sorafs/pin_registry.rs`. Supporting alias,
+replication, and policy envelopes live in
+`crates/sorafs_manifest/src/pin_registry.rs`. Consensus admission derives and
+validates the stored commitments; Torii and operator tooling consume the exact
+native finalized record rather than maintaining a second pin-record format.
 
 Status:
-- Norito schemas in `crates/sorafs_manifest/src/pin_registry.rs` are the
-  first-release schema surface used by core, Torii, fixtures, and reference
-  validators.
+- The native `PinManifestRecord` and `PinManifestFinalizedRecordV1` are the
+  first-release manifest registry surface used by core, Torii, fixtures, and
+  reference validators. The obsolete pre-release `PinRecordV1` format is
+  removed.
 - Rust code generation is handled through Norito derives; SDK parity now follows
   the normal SDK guard lanes whenever the schema changes.
 - Architecture, migration, manifest-pipeline, CLI, OpenAPI, status, and roadmap
@@ -68,19 +73,18 @@ Coverage:
 
 | Component | Task | Owner(s) |
 |-----------|------|----------|
-| Torii Service | Ships `/v1/sorafs/pin`, `/v1/sorafs/pin/{digest}`, `/v1/sorafs/aliases`, and `/v1/sorafs/replication` listing/lookup endpoints with deterministic pagination and filters. Manifest detail readback bounds embedded alias and replication-order arrays with `limit` (default 50, max 500) while preserving full count and truncation metadata. | Networking TL / Core Infra |
-| Attestation | Listing and detail responses include the attestation object derived from the latest block hash. | Core Infra |
+| Torii Service | Ships `/v1/sorafs/pin`, `/v1/sorafs/pin/{digest_hex}`, `/v1/sorafs/aliases`, and `/v1/sorafs/replication`. The manifest-detail route returns exact native `PinManifestFinalizedRecordV1` JSON and accepts only the optional paired expected finalized height/hash precondition; pagination and filters remain on list routes. | Networking TL / Core Infra |
+| Finality binding | Listing responses retain their listing attestation. A manifest-detail response carries the native `finalized_cursor` beside the authoritative `PinManifestRecord`; a stale requested cursor fails with HTTP 409. | Core Infra |
 | CLI | `iroha app sorafs pin register`, `pin list`, `pin show`, `alias list`, and `replication list` wrap the REST and ISI surfaces for operator audits. | Tooling WG |
 | SDK | Rust request builders and the JavaScript, Python, Swift, and C# guard lanes mirror the manifest payload and pin-register validation surface. | SDK Teams |
 
 Operations:
-- GET endpoints use attested snapshots, deterministic pagination, and the cache
+- List endpoints use attested snapshots, deterministic pagination, and the cache
   behavior documented in the alias policy where alias proofs are involved.
-- `GET /v1/sorafs/pin/{digest}` exposes `alias_count`,
-  `returned_alias_count`, `replication_order_count`,
-  `returned_replication_order_count`, `limit`, and truncation flags so operator
-  probes can page heavy manifests through the list endpoints without requiring a
-  large detail response.
+- `GET /v1/sorafs/pin/{digest_hex}` returns only `finalized_cursor` and the
+  native `manifest`. The retired `limit`, attestation, embedded alias/order
+  arrays, counts, and truncation fields are absent; callers use
+  `/v1/sorafs/aliases` and `/v1/sorafs/replication` for bounded list queries.
 - Mutating operations go through ISI/governance permissions; REST handling keeps
   the same Torii auth and resource-guard model as the surrounding SoraFS APIs.
 
@@ -147,11 +151,13 @@ Dashboards:
    handoff, and operator-specific policy-change transcripts.
 
 Each roadmap checklist item under SF-4 should reference this plan when progress is made.
-The REST façade now ships with attested listing endpoints:
+The REST façade now ships with attested list endpoints and finalized native
+manifest readback:
 
-- `GET /v1/sorafs/pin` and `GET /v1/sorafs/pin/{digest}` return manifests with
-  alias bindings, replication orders, and an attestation object derived from the
-  latest block hash.
+- `GET /v1/sorafs/pin` returns the attested manifest catalogue.
+- `GET /v1/sorafs/pin/{digest_hex}` returns exact
+  `PinManifestFinalizedRecordV1` JSON with the finalized cursor and native
+  manifest record.
 - `GET /v1/sorafs/aliases` and `GET /v1/sorafs/replication` expose the active
   alias catalogue and replication order backlog with consistent pagination and
   status filters.

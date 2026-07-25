@@ -1,9 +1,9 @@
 //! Deterministic reconciliation snapshots for repair and GC state.
 
 use blake3::hash;
+use iroha_data_model::sorafs::moderation_ledger::{RepairFinalizedCursorV1, RepairLedgerTaskV1};
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
 use sorafs_manifest::deal::XorQuantity;
-use sorafs_manifest::repair::RepairTaskStateV1;
 use sorafs_manifest::retention::RetentionSourceV1;
 
 use crate::store::ChunkRefcountEntry;
@@ -13,15 +13,8 @@ pub(crate) const RECONCILIATION_SNAPSHOT_VERSION_V1: u8 = 1;
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 pub(crate) struct RepairReconciliationSnapshot {
     pub(crate) version: u8,
-    pub(crate) tasks: Vec<RepairReconciliationEntry>,
-}
-
-#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
-pub(crate) struct RepairReconciliationEntry {
-    pub(crate) ticket_id: String,
-    pub(crate) manifest_digest: [u8; 32],
-    pub(crate) provider_id: [u8; 32],
-    pub(crate) state: RepairTaskStateV1,
+    pub(crate) finalized_cursor: RepairFinalizedCursorV1,
+    pub(crate) tasks: Vec<RepairLedgerTaskV1>,
 }
 
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]

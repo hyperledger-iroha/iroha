@@ -274,10 +274,13 @@ pub struct DaIngestReceipt {
   سلاسل للحفاظ على قيم `policy_source` ذات معنى في حزم الأدلة. انظر
   `crates/iroha_cli/src/commands/da.rs` للأمر الفرعي و`docs/source/da/rent_policy.md`
   لمخطط السياسة.[crates/iroha_cli/src/commands/da.rs:1] 【docs/source/da/rent_policy.md:1】
-- يمتد تكافؤ التسجيل Pin الآن إلى SDKs: `ToriiClient.registerSorafsPinManifest(...)` في
-  تقوم JavaScript SDK بإنشاء الحمولة الدقيقة المستخدمة بواسطة `iroha app sorafs pin register`، مما يفرض القواعد الأساسية
-  البيانات التعريفية للمقطع، وسياسات الدبوس، وإثباتات الأسماء المستعارة، والملخصات اللاحقة قبل النشر إلى
-  `/v1/sorafs/pin/register`. يؤدي هذا إلى منع روبوتات CI والأتمتة من الوصول إلى واجهة سطر الأوامر (CLI) عندما
+- يمتد تكافؤ سجل Pin الآن إلى SDKs: ينشئ
+  `ToriiClient.registerSorafsPinManifest(...)` طلب JSON V1 المغلق مع
+  `ManifestV1` الدقيق بترميز canonical padded-base64 في `manifest_payload`.
+  يشتق Torii الـ digest والـ chunker وطول المحتوى وسياسة pin ومدخلات الرسوم
+  حصريًا من الـ manifest المفكوك ويرفض الملخصات المكررة؛ ويبقى الـ alias والسلف
+  غير الصفري اختياريين. يمنع هذا روبوتات CI والأتمتة من استدعاء CLI عند استخدام
+  `/v1/sorafs/pin/register` من أجل
   تسجيل تسجيلات البيان، ويأتي المساعد مزودًا بتغطية TypeScript/README لذا فإن DA-8
   يتم تحقيق تكافؤ الأدوات "إرسال/حصول/إثبات" بشكل كامل على JS جنبًا إلى جنب مع Rust/Swift.
 - يقوم `iroha app da prove-availability` بربط كل ما سبق: فهو يأخذ تذكرة تخزين، ويقوم بتنزيل

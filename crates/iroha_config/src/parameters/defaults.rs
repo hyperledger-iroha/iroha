@@ -1374,16 +1374,92 @@ pub mod sorafs {
             }
         }
 
-        /// SoraFS orderbook admission defaults.
-        pub mod orderbook {
-            /// Minimum accepted order quantity in GiB.
-            pub const MIN_ORDER_GIB: u64 = 1;
-            /// Accepted XOR price tick per GiB.
-            pub fn price_tick() -> iroha_primitives::numeric::Quantity {
-                "0.001"
-                    .parse()
-                    .expect("default SoraFS orderbook price tick")
-            }
+        /// Durable native orderbook transaction worker defaults.
+        pub mod orderbook_worker {
+            use std::num::{NonZeroU32, NonZeroU64};
+
+            use iroha_config_base::util::Bytes;
+            use nonzero_ext::nonzero;
+
+            /// New orderbook-work generation is opt-in; durable drain is unconditional.
+            pub const ENABLED: bool = false;
+            /// Finalized-state scan cadence.
+            pub const SCAN_INTERVAL_MS: NonZeroU64 = nonzero!(1_000_u64);
+            /// Maximum fills requested by one native match transaction.
+            pub const MATCH_BATCH_LIMIT: NonZeroU32 = nonzero!(64_u32);
+            /// Maximum expiries/closures requested by one native maintenance transaction.
+            pub const MAINTENANCE_BATCH_LIMIT: NonZeroU32 = nonzero!(128_u32);
+            /// Maximum pending semantic operations retained durably.
+            pub const MAX_PENDING: NonZeroU32 = nonzero!(4_096_u32);
+            /// Maximum finalized idempotency tombstones retained durably.
+            pub const MAX_COMPLETED: NonZeroU32 = nonzero!(65_536_u32);
+            /// Maximum terminal dead letters retained durably.
+            pub const MAX_DEAD_LETTERS: NonZeroU32 = nonzero!(4_096_u32);
+            /// Maximum signing/submission attempts for one semantic operation.
+            pub const MAX_ATTEMPTS: NonZeroU32 = nonzero!(8_u32);
+            /// Maximum canonical durable checkpoint size.
+            pub const CHECKPOINT_MAX_BYTES: Bytes<u64> = Bytes(64 * 1024 * 1024);
+
+            /// Minimum supported finalized-state scan cadence.
+            pub const SCAN_INTERVAL_MIN_MS: u64 = 100;
+            /// Maximum supported finalized-state scan cadence.
+            pub const SCAN_INTERVAL_MAX_MS: u64 = 60_000;
+            /// Hard ceiling for pending semantic operations.
+            pub const MAX_PENDING_LIMIT: u32 = 65_536;
+            /// Hard ceiling for finalized idempotency tombstones.
+            pub const MAX_COMPLETED_LIMIT: u32 = 262_144;
+            /// Hard ceiling for terminal dead letters.
+            pub const MAX_DEAD_LETTERS_LIMIT: u32 = 65_536;
+            /// Hard ceiling for attempts under one semantic identity.
+            pub const MAX_ATTEMPTS_LIMIT: u32 = 64;
+            /// Smallest checkpoint able to retain one maximum V1 transaction plus metadata.
+            pub const CHECKPOINT_MIN_BYTES: u64 = 4 * 1024 * 1024;
+            /// Hard ceiling for one canonical durable checkpoint.
+            pub const CHECKPOINT_MAX_BYTES_LIMIT: u64 = 512 * 1024 * 1024;
+        }
+
+        /// Durable native reserve/rent transaction worker defaults.
+        pub mod reserve_worker {
+            use std::num::{NonZeroU32, NonZeroU64};
+
+            use iroha_config_base::util::Bytes;
+            use nonzero_ext::nonzero;
+
+            /// The supervised worker is opt-in until runtime signers are injected.
+            pub const ENABLED: bool = false;
+            /// Finalized-state scan cadence.
+            pub const SCAN_INTERVAL_MS: NonZeroU64 = nonzero!(1_000_u64);
+            /// Maximum durable operations inspected in one fair scan.
+            pub const SCAN_BATCH_LIMIT: NonZeroU32 = nonzero!(128_u32);
+            /// Maximum pending semantic operations retained durably.
+            pub const MAX_PENDING: NonZeroU32 = nonzero!(4_096_u32);
+            /// Maximum finalized idempotency tombstones retained durably.
+            pub const MAX_COMPLETED: NonZeroU32 = nonzero!(65_536_u32);
+            /// Maximum terminal dead letters retained durably.
+            pub const MAX_DEAD_LETTERS: NonZeroU32 = nonzero!(4_096_u32);
+            /// Maximum signing/submission attempts for one semantic operation.
+            pub const MAX_ATTEMPTS: NonZeroU32 = nonzero!(8_u32);
+            /// Maximum canonical durable checkpoint size.
+            pub const CHECKPOINT_MAX_BYTES: Bytes<u64> = Bytes(64 * 1024 * 1024);
+
+            /// Minimum supported finalized-state scan cadence.
+            pub const SCAN_INTERVAL_MIN_MS: u64 = 100;
+            /// Maximum supported finalized-state scan cadence.
+            pub const SCAN_INTERVAL_MAX_MS: u64 = 60_000;
+            /// Hard ceiling for operations inspected in one scan.
+            pub const SCAN_BATCH_LIMIT_MAX: u32 = 1_000;
+            /// Hard ceiling for pending semantic operations.
+            pub const MAX_PENDING_LIMIT: u32 = 65_536;
+            /// Hard ceiling for finalized idempotency tombstones.
+            pub const MAX_COMPLETED_LIMIT: u32 = 262_144;
+            /// Hard ceiling for terminal dead letters.
+            pub const MAX_DEAD_LETTERS_LIMIT: u32 = 65_536;
+            /// Hard ceiling for attempts under one semantic identity.
+            pub const MAX_ATTEMPTS_LIMIT: u32 = 64;
+            /// Smallest checkpoint able to retain one maximum V1 transaction plus metadata.
+            pub const CHECKPOINT_MIN_BYTES: u64 = 4 * 1024 * 1024;
+            /// Hard ceiling for one canonical durable checkpoint.
+            pub const CHECKPOINT_MAX_BYTES_LIMIT: u64 = 512 * 1024 * 1024;
         }
 
         /// Privacy aggregate scheduler defaults.
@@ -1392,6 +1468,9 @@ pub mod sorafs {
             pub const ENABLED: bool = false;
             /// Default privacy aggregate cycle width (seconds).
             pub const CYCLE_SECONDS: u64 = 7 * 24 * 60 * 60;
+            /// Governed first cycle start. Disabled by default; production must
+            /// set a nonzero cycle-aligned Unix timestamp before enabling.
+            pub const FIRST_CYCLE_START_UNIX: u64 = 0;
             /// Default delay after a cycle closes before publication (seconds).
             pub const PUBLISH_DELAY_SECONDS: u64 = 60 * 60;
             /// Public aggregate identifier prefix.
@@ -1413,6 +1492,12 @@ pub mod sorafs {
             /// Maximum publications retained under one composition-budget policy.
             pub const COMPOSITION_BUDGET_MAX_PUBLICATIONS: u64 = 52;
 
+            /// Stable governed query identity. Production enables the
+            /// scheduler only after setting a reviewed nonzero digest.
+            pub fn query_id_hex() -> Option<String> {
+                None
+            }
+
             /// Governed privacy-policy digest. Production enables the scheduler
             /// only after setting this to a reviewed 32-byte lowercase hex value.
             pub fn policy_digest_hex() -> Option<String> {
@@ -1428,16 +1513,6 @@ pub mod sorafs {
             pub const CYCLE_SECONDS: u64 = 24 * 60 * 60;
             /// Default delay after a cycle closes before publication (seconds).
             pub const PUBLISH_DELAY_SECONDS: u64 = 60 * 60;
-        }
-
-        /// Reserve lifecycle scheduler defaults.
-        pub mod reserve_lifecycle {
-            /// Enable config-backed SFM-6 reserve lifecycle advancement.
-            pub const ENABLED: bool = false;
-            /// Default reserve lifecycle scheduler cadence (seconds).
-            pub const INTERVAL_SECONDS: u64 = 60 * 60;
-            /// Default delay before the first reserve lifecycle scheduler tick (seconds).
-            pub const INITIAL_DELAY_SECONDS: u64 = 0;
         }
 
         /// Stream token issuance defaults.
@@ -1463,36 +1538,22 @@ pub mod sorafs {
         }
     }
 
-    /// Defaults for the SoraFS repair scheduler configuration.
+    /// Defaults for native SoraFS repair workers and transaction forwarding.
     pub mod repair {
-        use std::path::PathBuf;
-
-        /// Enable the repair scheduler (disabled by default).
+        /// Enable native repair processing (disabled by default).
         pub const ENABLED: bool = false;
-        /// Optional directory for durable repair state.
-        pub fn state_dir() -> Option<PathBuf> {
-            None
-        }
-        /// Default claim lease TTL for repair tickets (seconds).
+        /// Default native claim lease duration (seconds).
         pub const CLAIM_TTL_SECS: u64 = 15 * 60;
-        /// Heartbeat interval/TTL for active repair claims (seconds).
+        /// Native claim renewal lead time (seconds).
         pub const HEARTBEAT_INTERVAL_SECS: u64 = 60;
-        /// Maximum number of repair attempts before escalation.
+        /// Maximum transaction forwarding attempts before dead-lettering.
         pub const MAX_ATTEMPTS: u32 = 3;
-        /// Concurrent repair workers per node.
+        /// Hard ceiling for transaction forwarding attempts under one repair operation.
+        pub const MAX_ATTEMPTS_LIMIT: u32 = 64;
+        /// Concurrent native repair executions per node.
         pub const WORKER_CONCURRENCY: usize = 4;
-        /// Initial retry backoff for repair workers (seconds).
-        pub const BACKOFF_INITIAL_SECS: u64 = 5;
-        /// Maximum retry backoff for repair workers (seconds).
-        pub const BACKOFF_MAX_SECS: u64 = 60;
-        /// Default slash penalty for scheduler-generated repair proposals.
-        pub fn default_slash_penalty() -> iroha_primitives::numeric::XorQuantity {
-            "1".parse().expect("default SoraFS repair slash penalty")
-        }
-        /// Per-auditor signed report/slash request rate (tokens/sec). `None` disables.
-        pub const AUDITOR_RATE_PER_SEC: Option<u32> = Some(4);
-        /// Per-auditor signed report/slash request burst (tokens). `None` disables.
-        pub const AUDITOR_BURST: Option<u32> = Some(16);
+        /// Hard ceiling for concurrent native repair executions per node.
+        pub const WORKER_CONCURRENCY_LIMIT: usize = 64;
     }
 
     /// Defaults for the SoraFS GC scheduler configuration.
@@ -1511,8 +1572,6 @@ pub mod sorafs {
         pub const MAX_DELETIONS_PER_RUN: u32 = 500;
         /// Grace window for retention expiry (seconds).
         pub const RETENTION_GRACE_SECS: u64 = 24 * 60 * 60;
-        /// Attempt a GC sweep before rejecting new pins when storage is full.
-        pub const PRE_ADMISSION_SWEEP: bool = true;
     }
 
     /// Defaults for the Proof-of-Retrievability coordinator runtime.
@@ -3279,10 +3338,15 @@ pub mod zk {
 
 /// Sumeragi (consensus) defaults
 pub mod sumeragi {
-    use std::num::NonZeroUsize;
+    use std::{
+        num::{NonZeroU32, NonZeroU64, NonZeroUsize},
+        time::Duration,
+    };
 
     use iroha_crypto::Algorithm;
-    use iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT;
+    use iroha_data_model::{
+        block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT, merge::MAX_MERGE_LEDGER_ENTRY_BYTES,
+    };
     use nonzero_ext::nonzero;
 
     /// Consensus wire/state-machine protocol version required by this release.
@@ -3364,6 +3428,135 @@ pub mod sumeragi {
     pub const V2_EXACT_OUTPUT_CLASS_COUNT: usize = 3;
     /// Ready-body byte budget relative to the per-body bound.
     pub const READY_BODY_BYTE_MULTIPLIER: u64 = 2;
+
+    /// Authenticated merge-QC identities retained by one height-local adapter.
+    pub const V2_AUTHENTICATED_MERGE_QC_CAPACITY: NonZeroUsize = nonzero!(64_usize);
+    /// Protocol implementation ceiling for authenticated merge-QC cache entries.
+    pub const V2_AUTHENTICATED_MERGE_QC_CAPACITY_MAX: usize = 4_096;
+    /// Bytes reserved around a merge-leader candidate body in its consensus frame.
+    pub const V2_MERGE_LEADER_BODY_FRAME_HEADROOM_BYTES: NonZeroUsize = nonzero!(1024_usize * 1024);
+    /// Absolute implementation ceiling for merge-leader frame headroom.
+    pub const V2_MERGE_LEADER_BODY_FRAME_HEADROOM_BYTES_MAX: usize = 64 * 1024 * 1024;
+    /// Bytes reserved around autonomous payload envelopes in the canonical carrier.
+    pub const V2_AUTONOMOUS_CARRIER_HEADROOM_BYTES: NonZeroUsize = nonzero!(1024_usize * 1024);
+    /// Absolute implementation ceiling for autonomous carrier headroom.
+    pub const V2_AUTONOMOUS_CARRIER_HEADROOM_BYTES_MAX: usize = 64 * 1024 * 1024;
+    /// Cadence for retrying durable autonomous queue reservation.
+    pub const V2_AUTONOMOUS_PRODUCER_RECHECK: Duration = Duration::from_millis(100);
+    /// Longest admitted autonomous producer recheck cadence.
+    pub const V2_AUTONOMOUS_PRODUCER_RECHECK_MAX_MS: u64 = 60_000;
+    /// Consecutive identical recovery waits before the stage is reported stuck.
+    pub const V2_HISTORICAL_RECOVERY_STUCK_ATTEMPTS: NonZeroU32 = nonzero!(32_u32);
+    /// Attempts spent in each exponential historical-recovery retry tier.
+    pub const V2_HISTORICAL_RECOVERY_RETRY_TIER_ATTEMPTS: NonZeroU32 = nonzero!(4_u32);
+    /// Highest exponential historical-recovery retry tier.
+    pub const V2_HISTORICAL_RECOVERY_MAX_RETRY_TIER: NonZeroU32 = nonzero!(6_u32);
+    /// Absolute implementation ceiling for attempt-count recovery thresholds.
+    pub const V2_HISTORICAL_RECOVERY_ATTEMPTS_MAX: u32 = 1_048_576;
+    /// Highest retry tier representable by the `u32` exponential multiplier.
+    pub const V2_HISTORICAL_RECOVERY_RETRY_TIER_MAX: u32 = 31;
+    /// Sidecar chunks transferred during one bounded adapter service turn.
+    pub const V2_SIDECAR_SERVICE_BURST: NonZeroUsize = nonzero!(8_usize);
+    /// Absolute implementation ceiling for one sidecar service burst.
+    pub const V2_SIDECAR_SERVICE_BURST_MAX: usize = 4_096;
+    /// Concurrent certified merge-sidecar assemblies retained globally.
+    pub const V2_MERGE_SIDECAR_INBOUND_SESSION_CAPACITY: NonZeroUsize = nonzero!(32_usize);
+    /// Hard ceiling for concurrent certified merge-sidecar assemblies.
+    pub const V2_MERGE_SIDECAR_INBOUND_SESSION_CAPACITY_MAX: usize = 4_096;
+    /// Concurrent certified merge-sidecar assemblies admitted from one peer.
+    pub const V2_MERGE_SIDECAR_INBOUND_SESSIONS_PER_PEER: NonZeroUsize = nonzero!(4_usize);
+    /// Hard ceiling for per-peer certified merge-sidecar assemblies.
+    pub const V2_MERGE_SIDECAR_INBOUND_SESSIONS_PER_PEER_MAX: usize = 4_096;
+    /// Global reserved-byte ceiling for incomplete certified merge sidecars.
+    pub const V2_MERGE_SIDECAR_INBOUND_ASSEMBLY_BYTES: NonZeroUsize =
+        nonzero!(64_usize * 1024 * 1024);
+    /// Hard ceiling for globally reserved incomplete sidecar bytes.
+    pub const V2_MERGE_SIDECAR_INBOUND_ASSEMBLY_BYTES_MAX: usize = 1024 * 1024 * 1024;
+    /// Per-peer reserved-byte ceiling for incomplete certified merge sidecars.
+    pub const V2_MERGE_SIDECAR_INBOUND_ASSEMBLY_BYTES_PER_PEER: NonZeroUsize =
+        nonzero!(32_usize * 1024 * 1024);
+    /// Hard ceiling for per-peer reserved incomplete sidecar bytes.
+    pub const V2_MERGE_SIDECAR_INBOUND_ASSEMBLY_BYTES_PER_PEER_MAX: usize = 1024 * 1024 * 1024;
+    /// Minimum byte corridor retaining one decided and one ordinary full entry.
+    pub const V2_MERGE_SIDECAR_INBOUND_ASSEMBLY_BYTES_MIN: usize = 2 * MAX_MERGE_LEDGER_ENTRY_BYTES;
+    /// Deferred global blocks waiting for exact certified sidecars.
+    pub const V2_MERGE_SIDECAR_DEFERRED_BLOCK_CAPACITY: NonZeroUsize = nonzero!(128_usize);
+    /// Hard ceiling for deferred global blocks.
+    pub const V2_MERGE_SIDECAR_DEFERRED_BLOCK_CAPACITY_MAX: usize = 65_536;
+    /// Maximum future carrier-height distance admitted for deferred sidecars.
+    pub const V2_MERGE_SIDECAR_FUTURE_BLOCK_DISTANCE: NonZeroU64 = nonzero!(64_u64);
+    /// Hard ceiling for future carrier-height distance.
+    pub const V2_MERGE_SIDECAR_FUTURE_BLOCK_DISTANCE_MAX: u64 = 1_048_576;
+    /// Base timeout before retrying an incomplete certified sidecar request.
+    pub const V2_MERGE_SIDECAR_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+    /// Longest admitted certified sidecar request timeout.
+    pub const V2_MERGE_SIDECAR_REQUEST_TIMEOUT_MAX_MS: u64 = 300_000;
+    /// Concurrent response sessions retained for one authenticated source.
+    pub const V2_MERGE_SIDECAR_OUTBOUND_SESSIONS_PER_SOURCE: NonZeroUsize = nonzero!(2_usize);
+    /// Hard ceiling for response sessions retained per source.
+    pub const V2_MERGE_SIDECAR_OUTBOUND_SESSIONS_PER_SOURCE_MAX: usize = 4_096;
+    /// Response bytes retained for one authenticated source.
+    pub const V2_MERGE_SIDECAR_OUTBOUND_BYTES_PER_SOURCE: NonZeroUsize =
+        nonzero!(16_usize * 1024 * 1024);
+    /// Hard ceiling for retained response bytes per source.
+    pub const V2_MERGE_SIDECAR_OUTBOUND_BYTES_PER_SOURCE_MAX: usize = 1024 * 1024 * 1024;
+    /// Minimum response-byte corridor able to serve one protocol-sized entry.
+    pub const V2_MERGE_SIDECAR_OUTBOUND_BYTES_PER_SOURCE_MIN: usize = MAX_MERGE_LEDGER_ENTRY_BYTES;
+    /// Idempotency request gates retained for one authenticated source.
+    pub const V2_MERGE_SIDECAR_SERVER_REQUEST_GATES_PER_SOURCE: NonZeroUsize = nonzero!(4_usize);
+    /// Hard ceiling for request gates retained per source.
+    pub const V2_MERGE_SIDECAR_SERVER_REQUEST_GATES_PER_SOURCE_MAX: usize = 4_096;
+    /// Lifetime of a completed/rejected server request gate.
+    pub const V2_MERGE_SIDECAR_SERVER_REQUEST_GATE_TTL: Duration = Duration::from_secs(10);
+    /// Longest admitted server request-gate lifetime.
+    pub const V2_MERGE_SIDECAR_SERVER_REQUEST_GATE_TTL_MAX_MS: u64 = 300_000;
+    /// Certified merge entries retained in Kura before canonical carrier commitment.
+    pub const V2_PENDING_CERTIFIED_MERGE_ENTRY_CAPACITY: NonZeroUsize = nonzero!(1_024_usize);
+    /// Hard ceiling for pending certified merge entries retained by Kura.
+    pub const V2_PENDING_CERTIFIED_MERGE_ENTRY_CAPACITY_MAX: usize = 65_536;
+    /// QueuePlan admission certificates retained before canonical carrier commitment.
+    pub const V2_PENDING_QUEUE_PLAN_ADMISSION_CAPACITY: NonZeroUsize = nonzero!(1_024_usize);
+    /// Hard ceiling for pending QueuePlan admission certificates retained by Kura.
+    pub const V2_PENDING_QUEUE_PLAN_ADMISSION_CAPACITY_MAX: usize = 65_536;
+    /// Shared aggregate bytes retained by both pending Kura control-sidecar stores.
+    pub const V2_PENDING_CONTROL_SIDECAR_BYTES: NonZeroUsize = nonzero!(256_usize * 1024 * 1024);
+    /// Hard ceiling for the shared pending Kura control-sidecar byte budget.
+    pub const V2_PENDING_CONTROL_SIDECAR_BYTES_MAX: usize = 2 * 1024 * 1024 * 1024;
+    /// Minimum shared budget able to retain one protocol-sized certified merge entry.
+    pub const V2_PENDING_CONTROL_SIDECAR_BYTES_MIN: usize = MAX_MERGE_LEDGER_ENTRY_BYTES;
+    /// Durable merge-signing decisions retained before committed-frontier GC.
+    pub const V2_MERGE_SIGNING_GUARD_RECORD_CAPACITY: NonZeroUsize = nonzero!(1_024_usize);
+    /// Hard ceiling for durable merge-signing decisions.
+    pub const V2_MERGE_SIGNING_GUARD_RECORD_CAPACITY_MAX: usize = 1_048_576;
+    /// Framing, high-water, and atomic-replacement headroom retained beside one decision.
+    pub const V2_MERGE_SIGNING_GUARD_METADATA_HEADROOM_BYTES: usize = 64 * 1024;
+    /// Runtime byte ceiling for one canonical merge-signing decision.
+    pub const V2_MERGE_SIGNING_GUARD_RECORD_BYTES: NonZeroUsize =
+        nonzero!(16_usize * 1024 * 1024 + V2_MERGE_SIGNING_GUARD_METADATA_HEADROOM_BYTES);
+    /// Hard ceiling for one merge-signing decision artifact.
+    pub const V2_MERGE_SIGNING_GUARD_RECORD_BYTES_MAX: usize = 64 * 1024 * 1024;
+    /// Minimum record ceiling covering one maximum entry plus framing.
+    pub const V2_MERGE_SIGNING_GUARD_RECORD_BYTES_MIN: usize =
+        MAX_MERGE_LEDGER_ENTRY_BYTES + V2_MERGE_SIGNING_GUARD_METADATA_HEADROOM_BYTES;
+    /// Aggregate bytes retained in the merge-signing journal.
+    pub const V2_MERGE_SIGNING_GUARD_TOTAL_BYTES: NonZeroUsize = nonzero!(256_usize * 1024 * 1024);
+    /// Hard ceiling for the aggregate merge-signing journal.
+    pub const V2_MERGE_SIGNING_GUARD_TOTAL_BYTES_MAX: usize = 2 * 1024 * 1024 * 1024;
+    /// Minimum aggregate budget covering one maximum record and atomic metadata.
+    pub const V2_MERGE_SIGNING_GUARD_TOTAL_BYTES_MIN: usize =
+        V2_MERGE_SIGNING_GUARD_RECORD_BYTES_MIN + V2_MERGE_SIGNING_GUARD_METADATA_HEADROOM_BYTES;
+    /// Durable Native AMX signing decisions retained at one height.
+    pub const V2_NATIVE_AMX_SIGNING_GUARD_RECORD_CAPACITY: NonZeroUsize = nonzero!(524_288_usize);
+    /// Absolute implementation ceiling for durable Native AMX signing decisions.
+    pub const V2_NATIVE_AMX_SIGNING_GUARD_RECORD_CAPACITY_MAX: usize = 1_048_576;
+    /// Runtime byte ceiling for one canonical Native AMX signing record.
+    pub const V2_NATIVE_AMX_SIGNING_GUARD_RECORD_BYTES: NonZeroUsize = nonzero!(16_usize * 1024);
+    /// Absolute implementation ceiling for one canonical Native AMX signing record.
+    pub const V2_NATIVE_AMX_SIGNING_GUARD_RECORD_BYTES_MAX: usize = 16 * 1024;
+    /// Runtime byte ceiling for the Native AMX signing chain anchor.
+    pub const V2_NATIVE_AMX_SIGNING_GUARD_ANCHOR_BYTES: NonZeroUsize = nonzero!(4_usize * 1024);
+    /// Absolute implementation ceiling for the Native AMX signing chain anchor.
+    pub const V2_NATIVE_AMX_SIGNING_GUARD_ANCHOR_BYTES_MAX: usize = 4 * 1024;
 
     /// Minimum lead time between publishing and activating a consensus key.
     pub const KEY_ACTIVATION_LEAD_BLOCKS: u64 = 1;
@@ -3689,6 +3882,10 @@ pub mod governance {
         pub const MAX_RETENTION_EPOCH: Option<u64> = None;
         /// Permissionless public pins do not require council signatures by default.
         pub const REQUIRE_COUNCIL_SIGNATURES: bool = false;
+        /// Default distinct trusted approval-signature quorum.
+        pub const APPROVAL_QUORUM: u16 = 1;
+        /// Hard ceiling for governed SoraFS pin-approval signers.
+        pub const MAX_APPROVAL_SIGNERS: usize = 64;
     }
 
     /// Default SoraFS public pin fee configuration.
@@ -3734,22 +3931,6 @@ pub mod governance {
         pub const MAX_PDP_FAILURES: u32 = 0;
         /// Maximum PoTR SLA breaches tolerated within a telemetry window before forcing a strike (0 = none).
         pub const MAX_POTR_BREACHES: u32 = 0;
-    }
-
-    /// Default SoraFS repair escalation governance policy.
-    pub mod sorafs_repair_escalation {
-        /// Minimum approval ratio required for escalation/slash decisions (basis points).
-        pub const QUORUM_BPS: u16 = 6_667;
-        /// Minimum number of distinct voters required to resolve a decision.
-        pub const MINIMUM_VOTERS: u32 = 3;
-        /// Dispute window in seconds after escalation before governance finalizes.
-        pub const DISPUTE_WINDOW_SECS: u64 = 24 * 60 * 60;
-        /// Appeal window in seconds after approval before a decision is final.
-        pub const APPEAL_WINDOW_SECS: u64 = 7 * 24 * 60 * 60;
-        /// Maximum slash penalty allowed for repair escalation proposals.
-        pub fn max_penalty() -> iroha_primitives::numeric::XorQuantity {
-            crate::parameters::defaults::sorafs::repair::default_slash_penalty()
-        }
     }
 
     /// Default authentication and validation policy for SoraFS telemetry.

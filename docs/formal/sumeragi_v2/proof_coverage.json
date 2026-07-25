@@ -348,7 +348,7 @@
     },
     {
       "id": "native-application-evidence-production-refinement",
-      "requirement": "Production Native AMX participant evidence refines the bounded finality-plus-manifest, exact-sidecar, replicated-frontier, proof-preserving pruning, and same-route control-only model. The source-binding gate and TLC mutation corpus constrain this mapping but do not prove it.",
+      "requirement": "Production Native AMX participant evidence refines the bounded finality-to-immutable-per-height-manifest-to-immutable-per-height-receipt-to-descriptor-bound-exact-latest-pointer-to-replicated-frontier order, QC-authenticated proof validation after body pruning, recoverable versioned route/incarnation/artifact-hash-bound pair-prune intents across every partial-unlink crash boundary, and same-route control-only model. The source-binding gate and TLC mutation corpus constrain this mapping but do not prove it.",
       "module": "SumeragiV2NativeApplicationEvidence",
       "symbol": "NativeApplicationEvidenceProductionRefinementObligation",
       "status": "specified_unproved"

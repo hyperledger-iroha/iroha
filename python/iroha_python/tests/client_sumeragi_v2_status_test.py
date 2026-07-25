@@ -299,6 +299,7 @@ def test_status_parses_authoritative_reducer_state() -> None:
 def test_diagnostics_parse_separately_from_authoritative_status() -> None:
     diagnostics = SumeragiDiagnosticsSnapshot.from_payload(_healthy_diagnostics())
 
+    assert SumeragiDiagnosticsSnapshot is not SumeragiStatusSnapshot
     assert diagnostics.tx_queue_depth == 3
     assert diagnostics.pipeline_execution.tx_vertices_total == 1
     assert diagnostics.native_amx_participant_applications[0].state == "durably_applied"
@@ -307,6 +308,48 @@ def test_diagnostics_parse_separately_from_authoritative_status() -> None:
     status["lane_settlement_commitments"] = []
     with pytest.raises(RuntimeError, match="unknown field lane_settlement_commitments"):
         SumeragiStatusSnapshot.from_payload(status)
+
+    missing_autonomous = _healthy_diagnostics()
+    del missing_autonomous["autonomous_lane_executions"]
+    with pytest.raises(
+        RuntimeError,
+        match="missing required field autonomous_lane_executions",
+    ):
+        SumeragiDiagnosticsSnapshot.from_payload(missing_autonomous)
+
+
+def test_typed_endpoint_methods_reject_swapped_sumeragi_payloads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, str, tuple[int, ...]]] = []
+    payloads = {
+        "/v1/sumeragi/status": _healthy_diagnostics(),
+        "/v1/sumeragi/diagnostics": _healthy_status(),
+    }
+    client = ToriiClient("http://node.test", max_retries=0)
+
+    def request_json(
+        method: str,
+        path: str,
+        *,
+        expected_status: tuple[int, ...],
+    ) -> object:
+        calls.append((method, path, expected_status))
+        return payloads[path]
+
+    monkeypatch.setattr(client, "request_json", request_json)
+
+    with pytest.raises(RuntimeError, match="sumeragi status contains unknown field"):
+        client.get_sumeragi_status_typed()
+    with pytest.raises(
+        RuntimeError, match="sumeragi diagnostics contains unknown field"
+    ):
+        client.get_sumeragi_diagnostics_typed()
+
+    assert calls == [
+        ("GET", "/v1/sumeragi/status", (200,)),
+        ("GET", "/v1/sumeragi/diagnostics", (200,)),
+    ]
 
 
 def test_qc_reference_preserves_execution_commitment() -> None:

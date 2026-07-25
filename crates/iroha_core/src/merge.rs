@@ -8,7 +8,7 @@ use iroha_data_model::{
     block::BlockHeader,
     da::commitment::DaProofScheme,
     merge::{
-        LaneDrainCertificateV1, MERGE_LEDGER_ENTRY_VERSION_V1, MergeExecutionBatch,
+        LaneDrainCertificateV1, MERGE_LEDGER_ENTRY_VERSION_V2, MergeExecutionBatch,
         MergeLaneBinding, MergeLaneExecution, MergeLaneSnapshot, MergeLedgerEntry,
         MergeQuorumCertificate,
     },
@@ -22,7 +22,7 @@ use norito::codec::{Decode, Encode};
 /// Domain separator applied to the merge-hint reduction payloads.
 const MERGE_REDUCE_DOMAIN_TAG: &[u8] = b"iroha:merge:reduce:v1\0";
 /// Domain separator applied to merge-committee signature payloads.
-const MERGE_QC_DOMAIN_TAG: &[u8] = b"iroha:merge:qc:v1\0";
+const MERGE_QC_DOMAIN_TAG: &[u8] = b"iroha:merge:qc:v2\0";
 /// Domain separator for the chain identity embedded into durable merge QCs.
 const MERGE_CHAIN_ID_DOMAIN_TAG: &[u8] = b"iroha:merge:chain-id:v1\0";
 /// Domain separator for exact lane-incarnation activation commitments.
@@ -41,7 +41,7 @@ const MERGE_EXECUTION_IDENTITY_DOMAIN_TAG: &[u8] = b"iroha:merge:execution-ident
 const MERGE_POST_STATE_DOMAIN_TAG: &[u8] = b"iroha:merge:post-state:v1\0";
 /// Domain separator for a complete merge execution batch.
 const MERGE_EXECUTION_BATCH_DOMAIN_TAG: &[u8] = b"iroha:merge:execution-batch:v1\0";
-const MERGE_CANDIDATE_BODY_DOMAIN_TAG: &[u8] = b"iroha:merge:candidate-body:v1\0";
+const MERGE_CANDIDATE_BODY_DOMAIN_TAG: &[u8] = b"iroha:merge:candidate-body:v2\0";
 
 /// Merge-ledger entry data required for signature payloads.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
@@ -71,13 +71,15 @@ pub struct MergeLedgerCandidate {
     pub execution_batch: Option<MergeExecutionBatch>,
     /// Lane-committee drain certificates globally ordered by this candidate.
     pub lane_drain_certificates: Vec<LaneDrainCertificateV1>,
+    /// Exact canonical queue-plan admission certificate bytes in source order.
+    pub queue_plan_admissions: Vec<Vec<u8>>,
     /// Deterministic reduction of `merge_hint_roots` across all lanes.
     pub global_state_root: Hash,
 }
 
 impl MergeLedgerCandidate {
     /// Current supported candidate/entry layout.
-    pub const VERSION: u8 = MERGE_LEDGER_ENTRY_VERSION_V1;
+    pub const VERSION: u8 = MERGE_LEDGER_ENTRY_VERSION_V2;
 
     /// Return whether this candidate advertises the current first-release layout.
     #[must_use]
@@ -135,6 +137,7 @@ impl MergeLedgerCandidate {
             lane_snapshots: self.lane_snapshots,
             execution_batch: self.execution_batch,
             lane_drain_certificates: self.lane_drain_certificates,
+            queue_plan_admissions: self.queue_plan_admissions,
             global_state_root: self.global_state_root,
             merge_qc,
         }
@@ -156,6 +159,7 @@ impl From<&MergeLedgerEntry> for MergeLedgerCandidate {
             lane_snapshots: entry.lane_snapshots.clone(),
             execution_batch: entry.execution_batch.clone(),
             lane_drain_certificates: entry.lane_drain_certificates.clone(),
+            queue_plan_admissions: entry.queue_plan_admissions.clone(),
             global_state_root: entry.global_state_root,
         }
     }
@@ -209,6 +213,7 @@ struct MergeLedgerSignPayload {
     lane_snapshots: Vec<MergeLaneSnapshot>,
     execution_batch: Option<MergeExecutionBatch>,
     lane_drain_certificates: Vec<LaneDrainCertificateV1>,
+    queue_plan_admissions: Vec<Vec<u8>>,
     global_state_root: Hash,
 }
 
@@ -236,6 +241,7 @@ pub fn merge_qc_message_digest(
         lane_snapshots: candidate.lane_snapshots.clone(),
         execution_batch: candidate.execution_batch.clone(),
         lane_drain_certificates: candidate.lane_drain_certificates.clone(),
+        queue_plan_admissions: candidate.queue_plan_admissions.clone(),
         global_state_root: candidate.global_state_root,
     };
     let payload_bytes = payload.encode();
@@ -797,6 +803,7 @@ mod tests {
             }],
             execution_batch: None,
             lane_drain_certificates: Vec::new(),
+            queue_plan_admissions: Vec::new(),
             global_state_root: Hash::new(b"global"),
         };
         let chain_id: ChainId = "nexus-merge".parse().expect("chain id parses");
@@ -811,6 +818,17 @@ mod tests {
             digest_a,
             merge_qc_message_digest(&chain_id, &other_version, 1, validator_set_hash),
             "the entry layout version must be bound into the merge QC signature payload"
+        );
+
+        let mut with_queue_plan_admission = candidate.clone();
+        with_queue_plan_admission.queue_plan_admissions = vec![
+            norito::to_bytes(&Hash::new(b"queue-plan-admission"))
+                .expect("opaque admission fixture encodes"),
+        ];
+        assert_ne!(
+            digest_a,
+            merge_qc_message_digest(&chain_id, &with_queue_plan_admission, 1, validator_set_hash,),
+            "exact queue-plan admission bytes must be bound into the merge QC signature payload"
         );
 
         let drain_keypair = KeyPair::try_from_seed(

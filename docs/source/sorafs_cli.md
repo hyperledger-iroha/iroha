@@ -16,11 +16,9 @@ local testing and CI.
   bytecode artefacts.
 - `car pack` — produce a CAR archive, chunk-fetch plan, and JSON summary for CI.
 - `manifest build` — translate the CAR summary into a Norito manifest.
-- `manifest submit` — POST manifests (and optional alias proofs) to Torii,
-  recomputing the chunk digest from a plan when provided; when the dedicated
-  `/v1/sorafs/pin/register` route is unavailable, the CLI falls back to a
-  signed `/v1/pipeline/transactions` submit automatically and waits for a terminal pipeline
-  status so queued-but-rejected publishes do not look successful.
+- `manifest submit` — POST the canonical `ManifestV1` payload (and an optional
+  alias proof) to Torii's dedicated `/v1/sorafs/pin/register` route and wait for
+  the registration response.
 - `proof verify` — validate CAR responses against a manifest and emit the
   PoR-ready digests required for registry admission.
 
@@ -88,12 +86,6 @@ release-authenticity evidence.
 
 Key behaviours:
 
-- Transaction fallback confirmation: when `manifest submit` has to use the
-  generic `/v1/pipeline/transactions` endpoint, it polls `/v1/pipeline/transactions/status`
-  until the transaction reaches `Committed`/`Applied` or fails with
-  `Rejected`/`Expired`. Rejections surface the explorer message when Torii
-  exposes `/v1/explorer/transactions/{hash}`.
-
 - `--chunker-handle` defaults to `sorafs.sf1@1.0.0`. Pass an explicit handle to
   switch chunking profiles once the registry grows additional entries.
 - The manifest builder reads the JSON emitted by `car pack`, applies optional
@@ -102,8 +94,10 @@ Key behaviours:
 - The CLI writes a pretty-printed summary to STDOUT and, when `--summary-out`
   is supplied, mirrors the same JSON to disk. Downstream automation can diff the
   summary or extract digests/TLV metadata without parsing the CAR file directly.
-- Plans are rendered via `chunk_fetch_specs_to_string`, so the resulting JSON
-  matches the format consumed by the multi-source orchestrator.
+- Plans use the strict `sorafs.chunk_fetch_plan.v1` envelope, which binds the
+  ordered chunk specifications to the non-zero BLAKE3 digest of the complete
+  payload. The multi-source orchestrator rejects bare arrays, missing bindings,
+  and substituted payloads.
 - `manifest submit` recomputes the chunk SHA3 digest when a plan is provided,
   validates alias inputs, and forwards Ed25519 keys via the Norito
   `ExposedPrivateKey` wrapper just like the Torii Rust client.
@@ -174,9 +168,6 @@ cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   digest, chunk-plan commitment, chunker, content length, and pin policy only
   from those bytes before queueing the transaction; retired parallel summary
   fields are rejected.
-- If `<torii-url>/v1/sorafs/pin/register` is not routed on the target node, the
-  CLI automatically derives `chain_id` from the read-side registry endpoints and
-  submits the same `RegisterPinManifest` instruction through `/v1/pipeline/transactions`.
 - Non-success HTTP responses bubble up as errors with the original body so CI
   can halt on policy violations.
 
@@ -199,38 +190,44 @@ and CAR digests so CI pipelines can pin the proof bundle before hitting Torii.
 ```bash
 cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   proof stream \
-  --manifest artifacts/manifest.to \
-  --torii-url https://torii.local \
-  --provider-id-hex 00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff \
+  --manifest=artifacts/manifest.to \
+  --torii-url=https://torii.example \
+  --provider-id-hex=00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff \
+  --bearer-token-env=SORAFS_PROOF_BEARER_TOKEN \
   --samples=32 \
   --sample-seed=7 \
-  --por-root-hex ba5eba11ba5eba11ba5eba11ba5eba11ba5eba11ba5eba11ba5eba11ba5eba11 \
   --emit-events=false \
-  --summary-out artifacts/proof_stream_summary.json \
-  --governance-evidence-dir artifacts/proof_stream_evidence
+  --summary-out=artifacts/proof_stream_summary.json \
+  --governance-evidence-dir=artifacts/proof_stream_evidence
 ```
 
-`proof stream` replays each proof item as NDJSON (unless suppressed with
-`--emit-events=false`) and emits an aggregate summary that tracks success,
-failure, latency, and—when `--por-root-hex` is provided—local verification
-results. Requests address manifests by `manifest_digest_hex` (BLAKE3-256 of the
-canonical manifest) so proof streams remain deterministic across gateways.
-PoR `--samples` defaults to `32` and must stay in `1..=500`; Torii rejects
-oversized proof-stream requests before manifest lookup. The summary JSON
-mirrors the Torii Prometheus metrics that the gateway
-exports (`torii_sorafs_proof_stream_events_total`,
-`torii_sorafs_proof_stream_latency_ms`, and
-`torii_sorafs_proof_stream_inflight`) and feeds the example Grafana dashboard in
-`docs/examples/sorafs_proof_streaming_dashboard.json`. See
-`docs/source/sorafs_proof_streaming.md` for a deeper dive and monitoring tips.
-The CLI now exits with an error when the stream reports any failures or when
-local PoR verification rejects a proof; pass `--max-failures` and/or
-`--max-verification-failures` to allow a bounded number of faults during
-rehearsals.
+Set `SORAFS_PROOF_BEARER_TOKEN` in the process environment or a runtime secret
+injector; never place the token itself in argv. `proof stream` accepts only a
+bare HTTPS Torii origin or the exact HTTPS
+`/v1/sorafs/proof/stream` gateway URL. HTTP, URL userinfo, query strings,
+fragments, redirects, and the retired `--stream-token` form fail closed.
+
+Before POSTing, the CLI uses the same origin and bearer credential to read the
+exact native `GET /v1/sorafs/pin/{digest_hex}` projection. The record must be
+`Approved`; its digest, root CID, chunker, chunk-plan digest, PoR root, content
+length, and policy must match the exact canonical local manifest. Its finalized
+height and block hash must both be non-zero. The CLI binds that cursor into
+`ProofStreamRequestV1`, derives PoR sampling from the complete request and the
+ledger-authoritative root, verifies every row's request digest and cursor, and
+consumes the exact ordered sequence through EOF before publishing output.
+
+PoR `--samples` defaults to `32` and must stay in `1..=500`. Any failure,
+duplicate, reordered, truncated, extra, forged, or mismatched row rejects the
+whole command; V1 has no failure-budget override. When `--emit-events=true`,
+events are payload-free projections containing only digests, identifiers,
+indices, finalized anchors, result, and timing. Witness bytes, Merkle proof
+payloads, signed receipts, nonces, and credentials are never emitted. The final
+summary includes the request digest, finalized cursor, and a digest of the
+nonce, and its endpoint field contains only the HTTPS origin and path.
 
 When `--governance-evidence-dir` is supplied the CLI writes the rendered summary
 JSON, a copy of the manifest, and `metadata.json` (captured timestamp, CLI
-version, Torii endpoint, and manifest digest) into the specified directory so
+version, redacted Torii origin/path, and manifest digest) into the specified directory so
 release packets and governance reviews can archive verifiable proof-stream
 evidence without re-running the command.
 

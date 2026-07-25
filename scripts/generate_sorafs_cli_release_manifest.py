@@ -28,6 +28,18 @@ TARGETS = (
     "aarch64-apple-darwin",
     "x86_64-pc-windows-msvc",
 )
+TARGET_BINARY_SUFFIXES = {
+    target: ".exe" if target == "x86_64-pc-windows-msvc" else ""
+    for target in TARGETS
+}
+COMMON_TARGET_FILES = (
+    "version-map.toml",
+    "ROLLBACK-YANK.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "sorafs-release.spdx.json",
+    "sorafs-release-vulnerabilities.sarif",
+)
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 VERSION_RE = re.compile(r"[0-9A-Za-z][0-9A-Za-z.+-]{0,127}")
 COMMIT_RE = re.compile(r"[0-9a-f]{40}")
@@ -37,6 +49,52 @@ REF_RE = re.compile(r"refs/(?:heads|tags)/[A-Za-z0-9._/-]{1,240}")
 
 class ManifestError(RuntimeError):
     """Raised when a release candidate or manifest violates the contract."""
+
+
+def required_candidate_payload_paths(version: str, target: str) -> set[str]:
+    """Return the schema-closed release payload required for one native target."""
+
+    suffix = TARGET_BINARY_SUFFIXES[target]
+    validator_package = f"sorafs-validate-{version}-{target}"
+    cli_package = f"sorafs-cli-{version}-{target}"
+    return {
+        f"sorafs_cli{suffix}",
+        f"sorafs_fetch{suffix}",
+        f"sorafs-validate{suffix}",
+        "sorafs_cli.help.txt",
+        "sorafs_fetch.help.txt",
+        "sorafs-validate.help.txt",
+        "version-map.toml",
+        "ROLLBACK-YANK.md",
+        "CHANGELOG.md",
+        "LICENSE",
+        f"reference-validator/{validator_package}.sha256",
+        f"reference-validator/{validator_package}.tar.gz",
+        f"reference-validator/{validator_package}.tar.gz.sha256",
+        f"reference-validator/{validator_package}.manifest.json",
+        f"reference-validator/{validator_package}.manifest.json.sha256",
+        (
+            f"reference-validator/{validator_package}/"
+            f"sorafs-validate{suffix}"
+        ),
+        f"reference-validator/{validator_package}/HELP.txt",
+        (
+            f"reference-validator/{validator_package}/include/"
+            "sorafs_reference.h"
+        ),
+        f"reference-validator/{validator_package}/smoke.advert.json",
+        f"reference-validator/{validator_package}/smoke.bundle.json",
+        f"platform-archive/{cli_package}.tar.gz",
+        f"platform-archive/{cli_package}.tar.gz.sha256",
+        f"platform-archive/{cli_package}.manifest.json",
+        f"platform-archive/{cli_package}.manifest.json.sha256",
+        "platform-archive/candidate-package-first.json",
+        "platform-archive/candidate-package-replay.json",
+        "sorafs-release.spdx.json",
+        "sorafs-release-vulnerabilities.sarif",
+        f"sorafs-cli-{target}.spdx.json",
+        f"sorafs-cli-{target}-vulnerabilities.sarif",
+    }
 
 
 def _validate_metadata(version: str, commit: str, repository: str, ref: str) -> None:
@@ -291,6 +349,7 @@ def build_manifest(
         )
 
     entries: list[dict[str, object]] = []
+    common_target_digests: dict[str, str] | None = None
     for target in TARGETS:
         directory_name = f"sorafs-cli-{version}-{target}"
         candidate_dir = artifacts_dir / directory_name
@@ -298,6 +357,16 @@ def build_manifest(
         relative_files = {
             path.relative_to(candidate_dir).as_posix(): path for path in files
         }
+        expected_files = required_candidate_payload_paths(version, target) | {
+            "SHA256SUMS"
+        }
+        if set(relative_files) != expected_files:
+            missing = sorted(expected_files - set(relative_files))
+            unexpected = sorted(set(relative_files) - expected_files)
+            raise ManifestError(
+                f"candidate file inventory mismatch for {target} "
+                f"(missing={missing}, unexpected={unexpected})"
+            )
         checksum_path = relative_files.get("SHA256SUMS")
         if checksum_path is None:
             raise ManifestError(f"candidate for {target} is missing SHA256SUMS")
@@ -322,11 +391,32 @@ def build_manifest(
                 path,
                 f"candidate file {directory_name}/{relative}",
             )
+            if size == 0:
+                raise ManifestError(
+                    f"candidate file {directory_name}/{relative} must not be empty"
+                )
             file_hashes[relative] = (digest, size)
             if relative != "SHA256SUMS" and declared[relative] != digest:
                 raise ManifestError(
                     f"SHA256SUMS digest mismatch for {directory_name}/{relative}"
                 )
+        observed_common_digests = {
+            relative: file_hashes[relative][0]
+            for relative in COMMON_TARGET_FILES
+        }
+        if common_target_digests is None:
+            common_target_digests = observed_common_digests
+        elif observed_common_digests != common_target_digests:
+            drifted = sorted(
+                relative
+                for relative in COMMON_TARGET_FILES
+                if observed_common_digests[relative]
+                != common_target_digests[relative]
+            )
+            raise ManifestError(
+                "release-wide files differ across native candidates: "
+                + ", ".join(drifted)
+            )
         for relative in sorted(file_hashes):
             digest, size = file_hashes[relative]
             entries.append(

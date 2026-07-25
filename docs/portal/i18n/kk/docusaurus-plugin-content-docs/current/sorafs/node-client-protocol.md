@@ -126,10 +126,12 @@ SF-6 көп көзді алу қосылғанда (`sorafs_fetch` арқылы 
 - `iroha app sorafs pin list|show`, `alias list` және `replication list`
   PIN-тізілімі REST соңғы нүктелері және сертификаттау блоктары бар Norito өңделмеген JSON басып шығару
   аудиторлық дәлелдер үшін.
-- `iroha app sorafs storage pin` және `torii /v1/sorafs/pin/register` Norito қабылдайды
-  немесе JSON манифесттері және қосымша бүркеншік аттың дәлелдері мен мұрагерлері; дұрыс емес дәлелдемелер
-  `400` көтеріңіз, ескірген беті `503` `Warning: 110` арқылы және
-  мерзімі өткен дәлелдер `412` қайтарады.
+- `torii /v1/sorafs/pin/register` жабық JSON V1 сұрауын қабылдайды.
+  `manifest_payload` canonical Norito `ManifestV1` байттарының дәл canonical
+  padding-і бар base64 нұсқасы болуы керек. Torii digest, chunker, content
+  length, pin policy және fee input мәндерін тек decoded manifest-тен шығарады
+  және қолданыстан шығарылған duplicate summary өрістерін қабылдамайды. `alias`
+  пен нөлдік емес `successor_of_hex` predecessor әлі де міндетті емес.
 - `iroha app sorafs repair list` айна кезек сүзгілерін жөндеу, ал
   `repair claim|complete|fail|escalate` қол қойылған жұмысшы әрекеттерін немесе қиғаш сызықты жіберу
   Torii ұсыныстары. Slash ұсыныстары басқаруды мақұлдау қысқаша мазмұнын қамтуы мүмкін

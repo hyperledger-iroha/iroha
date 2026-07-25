@@ -43,49 +43,67 @@ va operatsion talablar.
 
 | Struktura | Tavsif | Maydonlar |
 |--------|-------------|--------|
-| `PinRecordV1` | Kanonik manifest yozuvi. | `manifest_cid`, `chunk_plan_digest`, `por_root`, `profile_handle`, `approved_at`, `retention_epoch`, I18NI000000030X, I18NI0000103102, I18NI0000108102 `governance_envelope_hash`. |
+| `PinManifestRecord` | Chain-authoritative manifest lifecycle entry. The envelope digest and exact 36-byte CIDv1/dag-cbor/BLAKE3-256 content root are distinct commitments. | `digest`, `root_cid`, `chunker`, `chunk_digest_sha3_256`, `por_root`, `content_length`, `policy`, `submitted_by`, `submitted_epoch`, `alias`, `successor_of`, `metadata`, `status`, `retirement_reason`, `council_envelope_digest`, `pin_fee_payment`. |
+| `PinManifestFinalizedRecordV1` | Immutable read result binding one native manifest record to the finalized block used for the query. | `finalized_cursor` (`height`, `block_hash`), `manifest`. |
 | `AliasBindingV1` | Xaritalar taxallus -> manifest CID. | `alias`, `manifest_cid`, `bound_at`, `expiry_epoch`. |
 | `ReplicationOrderV1` | Manifestni pin qilish bo'yicha provayderlar uchun ko'rsatma. | `order_id`, `manifest_cid`, `providers`, `redundancy`, `deadline`, `policy_hash`. |
 | `ReplicationReceiptV1` | Provayderni tasdiqlash. | `order_id`, `provider_id`, `status`, `timestamp`, `por_sample_digest`. |
 | `ManifestPolicyV1` | Boshqaruv siyosatining surati. | `min_replicas`, `max_retention_epochs`, `allowed_profiles`, `pin_fee_basis_points`. |
 
-Amalga oshirish uchun ma'lumotnoma: uchun `crates/sorafs_manifest/src/pin_registry.rs` ga qarang
-Rust Norito sxemalari va ushbu yozuvlarni qo'llab-quvvatlaydigan tekshirish yordamchilari. Tasdiqlash
-manifest vositalarini aks ettiradi (chunker registrini qidirish, pin siyosati gating) shuning uchun
-kontrakt, Torii jabhalari va CLI bir xil o'zgarmasliklarga ega.
+Implementation reference: the authoritative manifest lifecycle and finalized
+read schemas live in `crates/iroha_data_model/src/sorafs/pin_registry.rs`.
+Supporting alias, replication, and policy envelopes live in
+`crates/sorafs_manifest/src/pin_registry.rs`. Consensus admission derives and
+validates the stored commitments; Torii and operator tooling consume the exact
+native finalized record rather than maintaining a second pin-record format.
 
-Vazifalar:
-- `crates/sorafs_manifest/src/pin_registry.rs` da Norito sxemalarini yakunlang.
-- Norito makroslari yordamida kod yarating (Rust + boshqa SDK).
-- Sxemalar tushgandan keyin hujjatlarni yangilang (`sorafs_architecture_rfc.md`).
+Status:
+- The native `PinManifestRecord` and `PinManifestFinalizedRecordV1` are the V1
+  manifest-registry surface used by core, Torii, fixtures, and reference
+  validators.
+- Rust code generation uses Norito derives; SDK parity follows the normal guard
+  lanes whenever the native schema changes.
+- Architecture, manifest-pipeline, CLI, OpenAPI, status, and roadmap documents
+  describe the shared validation path and endpoint behavior.
 
-## Shartnomani amalga oshirish
+## Contract Implementation
 
-| Vazifa | Ega(lar)i | Eslatmalar |
+| Task | Owner(s) | Notes |
 |------|----------|-------|
-| Ro'yxatga olish kitobini saqlash (sled/sqlite/off-chain) yoki aqlli kontrakt modulini amalga oshiring. | Asosiy Infra / Aqlli shartnoma jamoasi | Deterministik xeshni ta'minlang, suzuvchi nuqtadan qoching. |
-| Kirish nuqtalari: `submit_manifest`, `approve_manifest`, `bind_alias`, `issue_replication_order`, `complete_replication`, `evict_manifest`. | Yadro infra | Tekshirish rejasidan `ManifestValidator` dan foydalaning. Taxallusni ulash endi `RegisterPinManifest` (Torii DTO sirti) orqali o'tadi, `bind_alias` esa ketma-ket yangilanishlar uchun rejalashtirilgan. |
-| Holat o'tishlari: ketma-ketlikni ta'minlash (manifest A -> B), saqlash davrlari, taxallusning o'ziga xosligi. | Boshqaruv Kengashi / Asosiy Infra | Taxallusning o'ziga xosligi, saqlash cheklovlari va avvalgi tasdiqlash/pensiya tekshiruvlari endi `crates/iroha_core/src/smartcontracts/isi/sorafs.rs` da mavjud; multi-hop ketma-ketligini aniqlash va replikatsiya buxgalteriya hisobi ochiq qoladi. |
-| Boshqariladigan parametrlar: konfiguratsiya/boshqaruv holatidan `ManifestPolicyV1` yuklash; boshqaruv tadbirlari orqali yangilanishlarga ruxsat berish. | Boshqaruv Kengashi | Siyosat yangilanishlari uchun CLI taqdim eting. |
-| Hodisa emissiyasi: telemetriya uchun Norito hodisalarini chiqaradi (`ManifestApproved`, `ReplicationOrderIssued`, `AliasBound`). | Kuzatish mumkinligi | Voqealar sxemasini + jurnalga yozishni aniqlang. |
+| Registry storage and smart-contract state. | Core Infra / Smart Contract Team | Implemented in Iroha world state (`pin_manifests`, `manifest_aliases`, `replication_orders`) with deterministic Norito payload hashing and integer-only policy arithmetic. |
+| Entry points: `RegisterPinManifest`, `ApprovePinManifest`, `RetirePinManifest`, `BindManifestAlias`, `IssueReplicationOrder`, `CompleteReplicationOrder`, `ExpireReplicationOrder`. | Core Infra | Registration carries the complete canonical manifest, resource-bounds and validates it in consensus, and derives all stored commitments. Core execution also validates aliases, council envelopes, governance permissions, canonical replication payloads, completion, and deadline-bound expiration. |
+| State transitions: enforce succession (manifest A -> B), retention epochs, alias uniqueness, and replication status changes. | Governance Council / Core Infra | `ensure_successor_chain` enforces approved, non-retired, acyclic multi-hop lineage; alias uniqueness, retention, and replication issue/complete bookkeeping are covered by unit tests. |
+| Governed parameters: load `ManifestPolicyV1` from config/governance state. | Governance Council | Runtime config maps pin-policy constraints into the shared validator. Live policy-change ceremonies are rollout governance evidence, not missing local contract code. |
+| Registry telemetry and audit surface. | Observability | Torii exports registry metrics and attested REST snapshots. Additional signed event archives can be layered over those snapshots if governance requires them. |
 
-Sinov:
-- Har bir kirish nuqtasi uchun birlik testlari (ijobiy + rad etish).
-- ketma-ketlik zanjiri uchun xossa testlari (sikllar, monotonik davrlar yo'q).
-- Tasodifiy manifestlarni (chegaralangan) yaratish orqali noaniqlikni tekshirish.
+Coverage:
+- Unit tests cover registration, approval, retirement, alias binding, replication
+  order issue/complete, permissions, duplicate rejection, and side-effect-free
+  failure paths.
+- Successor tests cover self references, unknown/pending/retired predecessors,
+  cycle closure, and malformed existing predecessor cycles.
+- `ci/check_sorafs_fixtures.sh` regenerates chunker, provider-admission, and pin
+  registry fixtures and runs the parity checks that keep the canonical schema
+  surface stable.
 
-## Xizmat fasad (Torii/SDK integratsiyasi)
+## Service Facade (Torii/SDK Integration)
 
-| Komponent | Vazifa | Ega(lar)i |
-|----------|------|----------|
-| Torii Xizmat | `/v1/sorafs/pin` (yuborish), `/v1/sorafs/pin/{cid}` (qidiruv), `/v1/sorafs/aliases` (roʻyxat/bogʻlash), `/v1/sorafs/replication` (buyurtmalar/kvitansiyalarni) oching. Sahifalar + filtrlashni ta'minlang. | Networking TL / Core Infra |
-| Attestatsiya | Javoblarga registr balandligi/xeshini qo'shing; SDK tomonidan iste'mol qilinadigan Norito attestatsiya tuzilmasini qo'shing. | Yadro infra |
-| CLI | `sorafs_manifest_builder` yoki yangi `sorafs_pin` CLI ni `pin submit`, `alias bind`, `order issue`, `registry export` bilan kengaytiring. | Asboblar WG |
-| SDK | Norito sxemasidan mijoz ulanishlarini (Rust/Go/TS) yaratish; integratsiya testlarini qo'shing. | SDK jamoalari |
+| Component | Task | Owner(s) |
+|-----------|------|----------|
+| Torii Service | Ships `/v1/sorafs/pin`, `/v1/sorafs/pin/{digest_hex}`, `/v1/sorafs/aliases`, and `/v1/sorafs/replication`. The manifest-detail route returns exact native `PinManifestFinalizedRecordV1` JSON and accepts only the optional paired expected finalized height/hash precondition; pagination and filters remain on list routes. | Networking TL / Core Infra |
+| Finality binding | Listing responses retain their listing attestation. A manifest-detail response carries the native `finalized_cursor` beside the authoritative `PinManifestRecord`; a stale requested cursor fails with HTTP 409. | Core Infra |
+| CLI | `iroha app sorafs pin register`, `pin list`, `pin show`, `alias list`, and `replication list` wrap the REST and ISI surfaces for operator audits. | Tooling WG |
+| SDK | Rust request builders and the JavaScript, Python, Swift, and C# guard lanes mirror the manifest payload and pin-register validation surface. | SDK Teams |
 
-Operatsiyalar:
-- GET so'nggi nuqtalari uchun keshlash qatlami/ETag qo'shing.
-- Torii siyosatiga mos keladigan tezlikni cheklash / autentifikatsiyani taqdim eting.
+Operations:
+- List endpoints use attested snapshots, deterministic pagination, and the cache
+  behavior documented in the alias policy where alias proofs are involved.
+- `GET /v1/sorafs/pin/{digest_hex}` returns only `finalized_cursor` and the
+  native `manifest`. The retired `limit`, attestation, embedded alias/order
+  arrays, counts, and truncation fields are absent; callers use
+  `/v1/sorafs/aliases` and `/v1/sorafs/replication` for bounded list queries.
+- Mutating operations go through ISI/governance permissions; REST handling keeps
+  the same Torii auth and resource-guard model as the surrounding SoraFS APIs.
 
 ## Armatura va CI
 
@@ -135,9 +153,8 @@ Boshqaruv paneli:
 SF-4 ostidagi yo'l xaritasi nazorat ro'yxatining har bir bandi taraqqiyotga erishilganda ushbu rejaga havola qilishi kerak.
 REST jabhasi endi tasdiqlangan ro'yxatning so'nggi nuqtalari bilan jo'natiladi:
 
-- `GET /v1/sorafs/pin` va `GET /v1/sorafs/pin/{digest}` qaytish manifestlari bilan
-  taxallus bog'lashlari, replikatsiya buyurtmalari va attestatsiya ob'ektidan olingan
-  oxirgi blok xeshi.
+- `GET /v1/sorafs/pin` returns the attested manifest catalogue.
+- `GET /v1/sorafs/pin/{digest_hex}` returns exact `PinManifestFinalizedRecordV1` JSON with `finalized_cursor.height`, `finalized_cursor.block_hash`, and native `manifest`.
 - `GET /v1/sorafs/aliases` va `GET /v1/sorafs/replication` faol moddalarni ochib beradi.
   taxallus katalogi va izchil sahifalash bilan replikatsiya tartibi to'plami va
   holat filtrlari.

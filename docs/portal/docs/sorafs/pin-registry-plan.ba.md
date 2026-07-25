@@ -43,49 +43,67 @@ SF-4 тапшыра Pin Registry килешеп һәм ярҙам хеҙмәтт
 
 | Струк | Тасуирлама | Яландар |
 |-------|-------------|--------|
-| `PinRecordV1` | Канонлы манифест яҙмаһы. | I18NI000000025X, `chunk_plan_digest`, `por_root`, I18NI000000028X, `approved_at` X, I18NI00000000030, I18NI000000031X, `successor_of`, I18NI000000033X. |
+| `PinManifestRecord` | Chain-authoritative manifest lifecycle entry. The envelope digest and exact 36-byte CIDv1/dag-cbor/BLAKE3-256 content root are distinct commitments. | `digest`, `root_cid`, `chunker`, `chunk_digest_sha3_256`, `por_root`, `content_length`, `policy`, `submitted_by`, `submitted_epoch`, `alias`, `successor_of`, `metadata`, `status`, `retirement_reason`, `council_envelope_digest`, `pin_fee_payment`. |
+| `PinManifestFinalizedRecordV1` | Immutable read result binding one native manifest record to the finalized block used for the query. | `finalized_cursor` (`height`, `block_hash`), `manifest`. |
 | `AliasBindingV1` | Карталар псевдоним -> асыҡ CID. | I18NI000000035X, I18NI000000036X, `bound_at`, I18NI000000038X. |
 | `ReplicationOrderV1` | Инструкция өсөн провайдерҙар өсөн пенсорный манифест. | I18NI000000040X, `manifest_cid`, I18NI000000042X, `redundancy`, `deadline`, I18NI000000000045X. |
 | `ReplicationReceiptV1` | Провайдер таныу. | I18NI000000047X, I18NI000000048X, I18NI000000049X X, `timestamp`, `por_sample_digest`. |
 | `ManifestPolicyV1` | Идара итеү сәйәсәте снимок. | `min_replicas`, `max_retention_epochs`, `allowed_profiles`, `pin_fee_basis_points`. |
 
-Ғәмәлгә ашырыу һылтанмаһы: ҡарағыҙ I18NI000000057X өсөн
-Rust I18NT000000005X схемалары һәм валидация ярҙамсылары был яҙмаларҙы яҡлай. Валидация
-көҙгөләй асыҡ инструменталь (chunker реестр эҙләү, булавка сәйәсәт ҡапҡаһы) шулай итеп
-контракт, I18NT000000016X фасадтары, һәм CLI өлөшө бер үк инварианттар.
+Implementation reference: the authoritative manifest lifecycle and finalized
+read schemas live in `crates/iroha_data_model/src/sorafs/pin_registry.rs`.
+Supporting alias, replication, and policy envelopes live in
+`crates/sorafs_manifest/src/pin_registry.rs`. Consensus admission derives and
+validates the stored commitments; Torii and operator tooling consume the exact
+native finalized record rather than maintaining a second pin-record format.
 
-Бурыстар:
-- I18NI0000000058X-та I18NT000000006X схемалары.
-- I18NT000000007X макрос ҡулланып, кодты генерациялау (Раст + башҡа SDKs).
-- Яңыртыу документтары (I18NI000000059X) бер тапҡыр схемалар ере.
+Status:
+- The native `PinManifestRecord` and `PinManifestFinalizedRecordV1` are the V1
+  manifest-registry surface used by core, Torii, fixtures, and reference
+  validators.
+- Rust code generation uses Norito derives; SDK parity follows the normal guard
+  lanes whenever the native schema changes.
+- Architecture, manifest-pipeline, CLI, OpenAPI, status, and roadmap documents
+  describe the shared validation path and endpoint behavior.
 
-## Контракт тормошҡа ашырыу
+## Contract Implementation
 
-| Эш | Хужа(тар) | Иҫкәрмәләр |
+| Task | Owner(s) | Notes |
 |------|----------|-------|
-| Ҡабул итеү реестры һаҡлау (саңғы/клит/өҫтөндә-сылбыр) йәки аҡыллы килешеп модуль. | Ядро Инфра / Аҡыллы килешәү командаһы | Детерминистик хешинг бирегеҙ, йөҙөү нөктәһенән ҡасығыҙ. |
-| 18NI00000000061X, I18NI000000000062X, I18NI0000000063X, I18NI0000000064X, `evict_manifest`. | Ядро Инфра | Һөйләшеү I18NI000000066X валидация планынан. псевдоним хәҙер `RegisterPinManifest` аша аға (I18NT00000000017X DTO өҫтөнлөгө), шул уҡ ваҡытта бағышланған I18NI0000000068X эҙмә-эҙлекле яңыртыу өсөн планлаштырылған булып ҡала. |
-| Дәүләт күсеүҙәре: эҙмә-эҙлеклелекте үтәү (төшөү А -> Б), һаҡлау эпохалары, псевдонимдар үҙенсәлекле. | Идара итеү советы / Ядро инфра | псевдоним үҙенсәлеге, һаҡлау сиктәре, һәм алдан раҫлау/пенсия тикшерелеүҙәре хәҙер йәшәй I18NI000000069X X; күп-хоп эҙмә-эҙлекле асыҡлау һәм репликация бухгалтерия асыҡ ҡала. |
-| Идаралы параметрҙар: йөк I18NI000000070X конфиг/идара итеү хәленән; идара итеү саралары аша яңыртыуҙарҙы рөхсәт итә. | Идара итеү советы | Сәйәсәт яңыртыуҙары өсөн CLI бирергә. |
-| Ваҡиға эмиссияһы: телеметрия өсөн Norito саралары (`ManifestApproved`, `ReplicationOrderIssued`, `AliasBound`). | Күҙәтеүсән | Ваҡиға схемаһын билдәләү + логин. |
+| Registry storage and smart-contract state. | Core Infra / Smart Contract Team | Implemented in Iroha world state (`pin_manifests`, `manifest_aliases`, `replication_orders`) with deterministic Norito payload hashing and integer-only policy arithmetic. |
+| Entry points: `RegisterPinManifest`, `ApprovePinManifest`, `RetirePinManifest`, `BindManifestAlias`, `IssueReplicationOrder`, `CompleteReplicationOrder`, `ExpireReplicationOrder`. | Core Infra | Registration carries the complete canonical manifest, resource-bounds and validates it in consensus, and derives all stored commitments. Core execution also validates aliases, council envelopes, governance permissions, canonical replication payloads, completion, and deadline-bound expiration. |
+| State transitions: enforce succession (manifest A -> B), retention epochs, alias uniqueness, and replication status changes. | Governance Council / Core Infra | `ensure_successor_chain` enforces approved, non-retired, acyclic multi-hop lineage; alias uniqueness, retention, and replication issue/complete bookkeeping are covered by unit tests. |
+| Governed parameters: load `ManifestPolicyV1` from config/governance state. | Governance Council | Runtime config maps pin-policy constraints into the shared validator. Live policy-change ceremonies are rollout governance evidence, not missing local contract code. |
+| Registry telemetry and audit surface. | Observability | Torii exports registry metrics and attested REST snapshots. Additional signed event archives can be layered over those snapshots if governance requires them. |
 
-Һынау:
-- Һәр инеү нөктәһе өсөн берәмек һынауҙары (ыңғай + кире ҡағыу).
-- Вариҫлыҡ сылбырына мөлкәт һынауҙары (циклдар юҡ, монотонлы эпохалар).
-- осраҡлы манифесттар генерациялау юлы менән Fuzz раҫлау (сикләнгән).
+Coverage:
+- Unit tests cover registration, approval, retirement, alias binding, replication
+  order issue/complete, permissions, duplicate rejection, and side-effect-free
+  failure paths.
+- Successor tests cover self references, unknown/pending/retired predecessors,
+  cycle closure, and malformed existing predecessor cycles.
+- `ci/check_sorafs_fixtures.sh` regenerates chunker, provider-admission, and pin
+  registry fixtures and runs the parity checks that keep the canonical schema
+  surface stable.
 
-## Хеҙмәтләндереүҙең фасады (I18NT00000000018X/SDK интеграцияһы)
+## Service Facade (Torii/SDK Integration)
 
-| Компонент | Эш | Хужа(тар) |
-|---------|-------|----------|
-| I18NT000000019X хеҙмәте | `/v1/sorafs/pin` (баҫма), I18NI000000075X (ҡарап), I18NI000000076X (исемлеге/бәйләнеш), ​​I18NI0000077X (заказ/квитанциялар). Ярлыҡ + фильтрация тәьмин итеү. | Селтәрле ТЛ / Ядро Инфра |
-| Аттестация | Яуаптарҙа реестр бейеклеге/хэш индереү; өҫтәү I18NT0000000009X аттестация структур ҡулланыу SDKs. | Ядро Инфра |
-| CLI | I18NI0000078X йәки яңы I18NI0000000079X CLI менән I18NI000000080X, `alias bind`, `order issue`, `registry export`. | Ҡолғау WG |
-| SDK | Клиент бәйләүҙәрен генерациялау (Раст/Го/ТС) I18NT000000010X схемаһы; интеграция һынауҙары өҫтәү. | SDK командалары |
+| Component | Task | Owner(s) |
+|-----------|------|----------|
+| Torii Service | Ships `/v1/sorafs/pin`, `/v1/sorafs/pin/{digest_hex}`, `/v1/sorafs/aliases`, and `/v1/sorafs/replication`. The manifest-detail route returns exact native `PinManifestFinalizedRecordV1` JSON and accepts only the optional paired expected finalized height/hash precondition; pagination and filters remain on list routes. | Networking TL / Core Infra |
+| Finality binding | Listing responses retain their listing attestation. A manifest-detail response carries the native `finalized_cursor` beside the authoritative `PinManifestRecord`; a stale requested cursor fails with HTTP 409. | Core Infra |
+| CLI | `iroha app sorafs pin register`, `pin list`, `pin show`, `alias list`, and `replication list` wrap the REST and ISI surfaces for operator audits. | Tooling WG |
+| SDK | Rust request builders and the JavaScript, Python, Swift, and C# guard lanes mirror the manifest payload and pin-register validation surface. | SDK Teams |
 
-Операциялар:
-- GET ос нөктәләре өсөн кэшлау ҡатламы/ETag өҫтәгеҙ.
-- ставкаһын сикләү / auth тура килә I18NT0000000020X сәйәсәте.
+Operations:
+- List endpoints use attested snapshots, deterministic pagination, and the cache
+  behavior documented in the alias policy where alias proofs are involved.
+- `GET /v1/sorafs/pin/{digest_hex}` returns only `finalized_cursor` and the
+  native `manifest`. The retired `limit`, attestation, embedded alias/order
+  arrays, counts, and truncation fields are absent; callers use
+  `/v1/sorafs/aliases` and `/v1/sorafs/replication` for bounded list queries.
+- Mutating operations go through ISI/governance permissions; REST handling keeps
+  the same Torii auth and resource-guard model as the surrounding SoraFS APIs.
 
 ## Фикстуралар & CI
 

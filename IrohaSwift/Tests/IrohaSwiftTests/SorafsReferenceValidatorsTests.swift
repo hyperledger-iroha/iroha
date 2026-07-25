@@ -1,7 +1,13 @@
+import Foundation
 import XCTest
 @testable import IrohaSwift
 
 final class SorafsReferenceValidatorsTests: XCTestCase {
+    private static let nativeValidationRequiredEnvironment =
+        "IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION"
+    private static let nativeValidationRequiredMessage =
+        "ABI-21 connect_norito_bridge with Governance DAG symbols is required."
+
     private let maxScaledXor =
         "6703903964971298549787012499102923063739682910296196688861780721860882015" +
         "036773488400937149083451713845015929093243025426876941405973284973216824" +
@@ -9,9 +15,9 @@ final class SorafsReferenceValidatorsTests: XCTestCase {
 
     func testBridgeSelectors() {
         XCTAssertEqual(SorafsOrderbookPayloadKind.orderRequest.rawValue, 1)
-        XCTAssertEqual(SorafsOrderbookPayloadKind.runtimeSnapshot.rawValue, 6)
+        XCTAssertNil(SorafsOrderbookPayloadKind(rawValue: 6))
         XCTAssertTrue(SorafsOrderbookPayloadKind.orderRequest.isUserSignedPayload)
-        XCTAssertFalse(SorafsOrderbookPayloadKind.runtimeSnapshot.isUserSignedPayload)
+        XCTAssertFalse(SorafsOrderbookPayloadKind.tradeEvent.isUserSignedPayload)
         XCTAssertEqual(SorafsPdpPayloadKind.commitment.rawValue, 1)
         XCTAssertEqual(SorafsPdpPayloadKind.proof.rawValue, 3)
         XCTAssertEqual(SorafsPopPayloadKind.credential.rawValue, 1)
@@ -150,6 +156,19 @@ final class SorafsReferenceValidatorsTests: XCTestCase {
             )
         }
 
+        XCTAssertThrowsError(
+            try SorafsReferenceValidators.validateGovernanceDagBlockJSON(
+                payload: Data(),
+                label: "bad\u{1}label",
+                generatedAtUnix: 1
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? SorafsReferenceValidationError,
+                .invalidLabel("label must not contain control characters")
+            )
+        }
+
         for invalidLength in [0, 31, 33] {
             XCTAssertThrowsError(
                 try SorafsReferenceValidators.validateGovernanceDagBlockJSON(
@@ -168,17 +187,17 @@ final class SorafsReferenceValidatorsTests: XCTestCase {
         }
     }
 
-    func testRejectsRuntimeSnapshotSigningBeforeNativeDispatch() {
+    func testRejectsNonSignableOrderbookPayloadBeforeNativeDispatch() {
         XCTAssertThrowsError(
             try SorafsReferenceValidators.signOrderbookPayload(
-                kind: .runtimeSnapshot,
+                kind: .tradeEvent,
                 payload: Data(),
                 privateKey: Data(repeating: 0xB7, count: 32)
             )
         ) { error in
             XCTAssertEqual(
                 error as? SorafsReferenceValidationError,
-                .unsupportedOrderbookPayloadKind(.runtimeSnapshot)
+                .unsupportedOrderbookPayloadKind(.tradeEvent)
             )
         }
     }
@@ -367,34 +386,184 @@ final class SorafsReferenceValidatorsTests: XCTestCase {
         let json = try SorafsReferenceValidators.validateOrderbookPayloadJSON(
             kind: .orderRequest,
             payload: payload,
+            label: "order_request_v1.to",
             generatedAtUnix: 123
         )
-        XCTAssertTrue(json.contains("\"status\": \"Ok\""), json)
-        XCTAssertTrue(json.contains("\"code\": \"SFS-OK-000\""), json)
+        XCTAssertEqual(
+            json,
+            String(
+                decoding: try fixture(
+                    "sorafs_manifest/orderbook/order_request_validation_outcome_v1.json"
+                ),
+                as: UTF8.self
+            )
+        )
+
+        for name in [
+            "order_request_bad_signature",
+            "order_request_trailing_bytes"
+        ] {
+            let outcome = try SorafsReferenceValidators.validateOrderbookPayloadJSON(
+                kind: .orderRequest,
+                payload: try fixture(
+                    "sorafs_manifest/orderbook/negative/\(name)_v1.to"
+                ),
+                label: "\(name)_v1.to",
+                generatedAtUnix: 123
+            )
+            XCTAssertEqual(
+                outcome,
+                String(
+                    decoding: try fixture(
+                        "sorafs_manifest/orderbook/negative/"
+                            + "\(name)_validation_outcome_v1.json"
+                    ),
+                    as: UTF8.self
+                ),
+                name
+            )
+        }
+    }
+
+    func testValidatesAllPdpOutcomeFixturesWhenNativeBridgeIsAvailable() throws {
+        try XCTSkipIf(!SorafsReferenceValidators.isNativeAvailable, "SoraFS reference bridge unavailable")
+        let commitment = try fixture("sorafs_manifest/pdp/commitment_v1.to")
+        let challenge = try fixture("sorafs_manifest/pdp/challenge_v1.to")
+        let proof = try fixture("sorafs_manifest/pdp/proof_v1.to")
+        let bundle = try SorafsReferenceValidators.validatePdpBundleJSON(
+            commitment: commitment,
+            challenge: challenge,
+            proof: proof,
+            commitmentLabel: "commitment_v1.to",
+            challengeLabel: "challenge_v1.to",
+            proofLabel: "proof_v1.to",
+            generatedAtUnix: 123
+        )
+        XCTAssertEqual(
+            bundle,
+            String(
+                decoding: try fixture(
+                    "sorafs_manifest/pdp/bundle_validation_outcome_v1.json"
+                ),
+                as: UTF8.self
+            )
+        )
+
+        for (name, kind) in [
+            ("duplicate_hot_leaf_challenge", SorafsPdpPayloadKind.challenge),
+            ("missing_signature_proof", SorafsPdpPayloadKind.proof)
+        ] {
+            let outcome = try SorafsReferenceValidators.validatePdpPayloadJSON(
+                kind: kind,
+                payload: try fixture("sorafs_manifest/pdp/negative/\(name)_v1.to"),
+                label: "\(name)_v1.to",
+                generatedAtUnix: 123
+            )
+            XCTAssertEqual(
+                outcome,
+                String(
+                    decoding: try fixture(
+                        "sorafs_manifest/pdp/negative/"
+                            + "\(name)_validation_outcome_v1.json"
+                    ),
+                    as: UTF8.self
+                ),
+                name
+            )
+        }
+
+        for name in [
+            "late_proof",
+            "wrong_manifest_proof",
+            "wrong_provider_proof"
+        ] {
+            let outcome = try SorafsReferenceValidators.validatePdpChallengeProofJSON(
+                challenge: challenge,
+                proof: try fixture("sorafs_manifest/pdp/negative/\(name)_v1.to"),
+                challengeLabel: "challenge_v1.to",
+                proofLabel: "\(name)_v1.to",
+                generatedAtUnix: 123
+            )
+            XCTAssertEqual(
+                outcome,
+                String(
+                    decoding: try fixture(
+                        "sorafs_manifest/pdp/negative/"
+                            + "\(name)_validation_outcome_v1.json"
+                    ),
+                    as: UTF8.self
+                ),
+                name
+            )
+        }
+
+        for name in [
+            "missing_hot_leaf_path_proof",
+            "missing_segment_path_proof",
+            "wrong_path_proof"
+        ] {
+            let outcome = try SorafsReferenceValidators.validatePdpBundleJSON(
+                commitment: commitment,
+                challenge: challenge,
+                proof: try fixture("sorafs_manifest/pdp/negative/\(name)_v1.to"),
+                commitmentLabel: "commitment_v1.to",
+                challengeLabel: "challenge_v1.to",
+                proofLabel: "\(name)_v1.to",
+                generatedAtUnix: 123
+            )
+            XCTAssertEqual(
+                outcome,
+                String(
+                    decoding: try fixture(
+                        "sorafs_manifest/pdp/negative/"
+                            + "\(name)_validation_outcome_v1.json"
+                    ),
+                    as: UTF8.self
+                ),
+                name
+            )
+        }
     }
 
     func testValidatesGovernanceDagFixturesAndNegativeVectorsWhenNativeBridgeIsAvailable() throws {
-        try XCTSkipIf(
-            !SorafsReferenceValidators.isGovernanceDagNativeAvailable,
-            "SoraFS governance DAG reference bridge unavailable"
-        )
+        guard try requireGovernanceDagNativeBridge() else {
+            return
+        }
         let first = try fixture("sorafs_manifest/governance/dag_block_0_v1.to")
         let second = try fixture("sorafs_manifest/governance/dag_block_1_v1.to")
         let head = try fixture("sorafs_manifest/governance/dag_head_v1.to")
 
         let blockOutcome = try SorafsReferenceValidators.validateGovernanceDagBlockJSON(
             payload: first,
+            label: "dag_block_0_v1.to",
             generatedAtUnix: 123
         )
-        XCTAssertTrue(blockOutcome.contains("\"status\": \"Ok\""), blockOutcome)
+        XCTAssertEqual(
+            blockOutcome,
+            String(
+                decoding: try fixture(
+                    "sorafs_manifest/governance/"
+                        + "dag_block_validation_outcome_v1.json"
+                ),
+                as: UTF8.self
+            )
+        )
 
         let cidMismatch = try SorafsReferenceValidators.validateGovernanceDagBlockJSON(
             payload: first,
             expectedBlockCid: Data(repeating: 0x7F, count: 32),
             generatedAtUnix: 123
         )
-        XCTAssertTrue(cidMismatch.contains("\"status\": \"Error\""), cidMismatch)
-        XCTAssertTrue(cidMismatch.contains("\"code\": \"SFS-GOV-004\""), cidMismatch)
+        XCTAssertEqual(
+            cidMismatch,
+            String(
+                decoding: try fixture(
+                    "sorafs_manifest/governance/"
+                        + "dag_block_cid_mismatch_validation_outcome_v1.json"
+                ),
+                as: UTF8.self
+            )
+        )
 
         let headOutcome = try SorafsReferenceValidators.validateGovernanceDagHeadChainJSON(
             head: head,
@@ -411,7 +580,6 @@ final class SorafsReferenceValidatorsTests: XCTestCase {
             headLabel: "dag_head_v1.to",
             generatedAtUnix: 123
         )
-        XCTAssertTrue(headOutcome.contains("\"status\": \"Ok\""), headOutcome)
         let goldenOutcome = String(
             decoding: try fixture(
                 "sorafs_manifest/governance/dag_head_validation_outcome_v1.json"
@@ -428,7 +596,16 @@ final class SorafsReferenceValidatorsTests: XCTestCase {
             ],
             generatedAtUnix: 123
         )
-        XCTAssertTrue(reordered.contains("\"status\": \"Error\""), reordered)
+        XCTAssertEqual(
+            reordered,
+            String(
+                decoding: try fixture(
+                    "sorafs_manifest/governance/"
+                        + "dag_head_reordered_validation_outcome_v1.json"
+                ),
+                as: UTF8.self
+            )
+        )
 
         let blockSignatureOutcome =
             try SorafsReferenceValidators.validateGovernanceDagBlockJSON(
@@ -528,6 +705,19 @@ final class SorafsReferenceValidatorsTests: XCTestCase {
                 as: UTF8.self
             )
         )
+    }
+
+    private func requireGovernanceDagNativeBridge() throws -> Bool {
+        guard !SorafsReferenceValidators.isGovernanceDagNativeAvailable else {
+            return true
+        }
+        if ProcessInfo.processInfo.environment[
+            Self.nativeValidationRequiredEnvironment
+        ] == "1" {
+            XCTFail(Self.nativeValidationRequiredMessage)
+            return false
+        }
+        throw XCTSkip("SoraFS governance DAG reference bridge unavailable")
     }
 
     func testSignsOrderbookFixtureWhenNativeBridgeIsAvailable() throws {
@@ -633,6 +823,78 @@ final class SorafsReferenceValidatorsTests: XCTestCase {
             generatedAtUnix: 123
         )
         XCTAssertTrue(outcome.contains("\"status\": \"Ok\""), outcome)
+
+        let askFields = SorafsSignedOrderbookOrderRequestFields(
+            side: .ask,
+            tier: .hot,
+            pricePerGib: "1.25",
+            quantityGib: 4,
+            ownerAccount: owner,
+            providerId: Data(repeating: 0x72, count: 32),
+            expiryUnix: 1_800_000_000,
+            nonce: 8,
+            makerFeeBps: 10,
+            takerFeeBps: 15
+        )
+        let ask = try SorafsReferenceValidators.buildSignedOrderbookOrderRequest(
+            askFields,
+            privateKey: Data(repeating: 0xB7, count: 32)
+        )
+        let askOutcome = try SorafsReferenceValidators.validateOrderbookPayloadJSON(
+            kind: .orderRequest,
+            payload: ask,
+            generatedAtUnix: 123
+        )
+        XCTAssertTrue(askOutcome.contains("\"status\": \"Ok\""), askOutcome)
+
+        XCTAssertThrowsError(
+            try SorafsReferenceValidators.buildSignedOrderbookOrderRequest(
+                SorafsSignedOrderbookOrderRequestFields(
+                    side: .bid,
+                    tier: .hot,
+                    pricePerGib: "1",
+                    quantityGib: 1,
+                    ownerAccount: owner,
+                    providerId: Data(repeating: 0x72, count: 32),
+                    expiryUnix: 1_800_000_000,
+                    nonce: 17,
+                    makerFeeBps: 0,
+                    takerFeeBps: 0
+                ),
+                privateKey: Data(repeating: 0xB7, count: 32)
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? SorafsReferenceValidationError,
+                .invalidOrderbookField(
+                    "providerId must be absent or empty for bid orders"
+                )
+            )
+        }
+
+        XCTAssertThrowsError(
+            try SorafsReferenceValidators.buildSignedOrderbookOrderRequest(
+                SorafsSignedOrderbookOrderRequestFields(
+                    side: .ask,
+                    tier: .hot,
+                    pricePerGib: "1",
+                    quantityGib: 1,
+                    ownerAccount: owner,
+                    expiryUnix: 1_800_000_000,
+                    nonce: 17,
+                    makerFeeBps: 0,
+                    takerFeeBps: 0
+                ),
+                privateKey: Data(repeating: 0xB7, count: 32)
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? SorafsReferenceValidationError,
+                .invalidOrderbookField(
+                    "providerId must be exactly 32 bytes for ask orders"
+                )
+            )
+        }
 
         let mismatchedFields = SorafsSignedOrderbookOrderRequestFields(
             orderId: Data(repeating: 0x11, count: 32),

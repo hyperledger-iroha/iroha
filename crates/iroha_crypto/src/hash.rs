@@ -64,6 +64,45 @@ pub fn sha256(bytes: impl AsRef<[u8]>) -> [u8; Hash::LENGTH] {
     Sha256::digest(bytes.as_ref()).into()
 }
 
+/// Compute raw SHA-256 bytes from a reader without buffering the complete input.
+///
+/// The reader is rejected after at most one buffer beyond `max_bytes`. This makes
+/// the helper suitable for hashing attacker-influenced persisted artifacts while
+/// retaining a hard input-size bound.
+#[cfg(not(feature = "ffi_import"))]
+pub fn sha256_reader_bounded(
+    mut reader: impl std::io::Read,
+    max_bytes: u64,
+) -> std::io::Result<([u8; Hash::LENGTH], u64)> {
+    const BUFFER_BYTES: usize = 64 * 1024;
+
+    let mut hasher = Sha256::new();
+    let mut total = 0_u64;
+    let mut buffer = [0_u8; BUFFER_BYTES];
+    loop {
+        let read = reader.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        total = total
+            .checked_add(u64::try_from(read).expect("read length fits u64"))
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "SHA-256 input size overflow",
+                )
+            })?;
+        if total > max_bytes {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("SHA-256 input exceeds {max_bytes} byte limit"),
+            ));
+        }
+        Digest::update(&mut hasher, &buffer[..read]);
+    }
+    Ok((hasher.finalize().into(), total))
+}
+
 /// Compute raw Keccak-256 bytes without Iroha hash marker semantics.
 #[cfg(not(feature = "ffi_import"))]
 #[must_use]
@@ -490,6 +529,23 @@ mod tests {
             sha256(b"abc"),
             hex_literal::hex!("BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61F20015AD")
         );
+    }
+
+    #[test]
+    fn bounded_streaming_sha256_matches_contiguous_digest() {
+        let bytes = vec![0x5a; 3 * 64 * 1024 + 17];
+        let (digest, size) =
+            sha256_reader_bounded(bytes.as_slice(), bytes.len() as u64).expect("bounded hash");
+
+        assert_eq!(digest, sha256(&bytes));
+        assert_eq!(size, bytes.len() as u64);
+    }
+
+    #[test]
+    fn bounded_streaming_sha256_rejects_oversized_input() {
+        let err = sha256_reader_bounded(&b"oversized"[..], 8).expect_err("input exceeds limit");
+
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     }
 
     #[test]

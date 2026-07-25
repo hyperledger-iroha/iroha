@@ -14,7 +14,7 @@ translator: machine-google-reviewed
 
 _Хамгийн сүүлд `python3 scripts/inventory_env_toggles.py --json docs/source/agents/env_var_inventory.json --md docs/source/agents/env_var_inventory.md`-ээр шинэчилсэн
 
-Нийт лавлагаа: **505** · Өвөрмөц хувьсагч: **137**
+Нийт лавлагаа: **502** · Өвөрмөц хувьсагч: **137**
 
 ## ҮЙЛ АЖИЛЛАГААНЫ_ДУГААР_ТОКЕН_ХҮСЭЛТ_ТОКЕН (бүтээгдэхүүн: 1)
 
@@ -265,9 +265,6 @@ _Хамгийн сүүлд `python3 scripts/inventory_env_toggles.py --json docs
 - тест: crates/sorafs_manifest/tests/por_fixtures.rs:11 — `env!("CARGO_MANIFEST_DIR"),`
 - тест: crates/sorafs_manifest/tests/provider_admission_fixtures.rs:12 — `cmd.current_dir(env!("CARGO_MANIFEST_DIR"))`
 - тест: crates/sorafs_manifest/tests/replication_order_fixtures.rs:8 — `env!("CARGO_MANIFEST_DIR"),`
-- бүтээгдэхүүн: crates/sorafs_node/src/bin/sorafs_gateway.rs:55 — `PathBuf::from(env!("CARGO_MANIFEST_DIR"))`
-- бүтээгдэхүүн: crates/sorafs_node/src/bin/sorafs_gateway.rs:59 — `PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/sorafs_gateway/1.0.0")`
-- тест: crates/sorafs_node/src/gateway.rs:2006 — `PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/sorafs_gateway/1.0.0");`
 - тест: crates/sorafs_node/tests/cli.rs:122 — `let base = Path::new(env!("CARGO_MANIFEST_DIR"))`
 - тест: crates/sorafs_node/tests/gateway.rs:14 — `PathBuf::from(env!("CARGO_MANIFEST_DIR"))`
 - тест: crates/sorafs_node/tests/gateway.rs:30 — `let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))`

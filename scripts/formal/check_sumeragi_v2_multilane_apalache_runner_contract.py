@@ -73,6 +73,18 @@ def main() -> int:
     )
     _must_reject(
         source,
+        "NativeLegacyDenseRejectedInvariant, NativePruneJournalInvariant",
+        "NativeLegacyDenseRejectedInvariant",
+        "Native prune-journal invariant removal",
+    )
+    _must_reject(
+        source,
+        "multilane_queue_plan_admission_registry_fixed.cfg \\\n  8 \\",
+        "multilane_queue_plan_admission_registry_fixed.cfg \\\n  7 \\",
+        "queue-plan admission bound reduction",
+    )
+    _must_reject(
+        source,
         'grep -Fc "The outcome is: NoError"',
         'grep -Fc "The outcome is:"',
         "weakened outcome marker",
@@ -82,7 +94,7 @@ def main() -> int:
         raise AssertionError("runner contract accepted a length override")
 
     print(
-        "Sumeragi v2 multilane Apalache runner contract passed 8 "
+        "Sumeragi v2 multilane Apalache runner contract passed 10 "
         "fail-closed negative controls"
     )
     return 0

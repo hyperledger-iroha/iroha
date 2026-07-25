@@ -14,7 +14,7 @@ translator: machine-google-reviewed
 
 _མཐའ་མཇུག་ `python3 scripts/inventory_env_toggles.py --json docs/source/agents/env_var_inventory.json --md docs/source/agents/env_var_inventory.md`_ བརྒྱུད་དེ་ གསར་བསྐྲུན་འབད་ཡོདཔ།
 
-ཡོངས་བསྡོམས་གཞི་བསྟུན་ཚུ་: **505** · ཁྱད་པར་ཅན་གྱི་འགྱུར་ཅན་: **137**
+ཡོངས་བསྡོམས་གཞི་བསྟུན་ཚུ་: **502** · ཁྱད་པར་ཅན་གྱི་འགྱུར་ཅན་: **137**
 
 ## ACTIONS_ID_TOKEN_REQUEST_TOKEN (prod: 1).
 
@@ -265,9 +265,6 @@ _མཐའ་མཇུག་ `python3 scripts/inventory_env_toggles.py --json do
 - བརྟག་དཔྱད།: ཀེརེཊསི་/སོ་རཕ་ས_མནར་གཅོད་/བརྟག་དཔྱད་/པོར_ཕིགསི་ཅར། 11 — `env!("CARGO_MANIFEST_DIR"),`
 - བརྟག་དཔྱད།: ཀེརེཊསི་/སོ་རཕ་སི་_མན་ཆད་/བརྟག་དཔྱད་/མཁོ་སྤྲོད་_འཛུལ་ཞུགས་_ཕིག་ཅུ། 12 — `cmd.current_dir(env!("CARGO_MANIFEST_DIR"))`
 - བརྟག་དཔྱད།: ཀེརེཊསི་/སོ་རཕ་སི་_མནར་གཅོད་/བརྟག་དཔྱད་/འདྲ་དཔེ་_བཀའ་རྒྱ་_ཕིག་ཅུ།:8 — `env!("CARGO_MANIFEST_DIR"),`
-- པྲོཌ་: ཀེརེཊསི་/སོ་རཕ་ས_ནོཌི་/ཨེསི་ཨར་སི/སོ་རཕ་ས_གེ་ཊི་_གེ་ཊི་ཝེ་.s:55 — `PathBuf::from(env!("CARGO_MANIFEST_DIR"))`
-- པྲོཌ་: ཀེརེཊསི་/སོ་རཕ་ས_ནོཌི་/ཨེསི་ཨར་སི/སོ་རཕ་_གེ་ཊི་_གེ་ཊི་ཝེ་.s:༥༩ — `PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/sorafs_gateway/1.0.0")`
-- བརྟག་དཔྱད།: ཀེརེཊསི་/སོ་རཕ་ས_ནོཌི་/སི་ཨར་སི/གཱེཊ་ལམ་.༢༠༠༦ — I༡༨NI00000185X
 - བརྟག་དཔྱད།: ཀྲེ་ཊི།
 - བརྟག་དཔྱད།: ཀེརེཊསི་/སོ་རཕ་ས_ནོཌི་/བརྟག་དཔྱད།/སྒོ་ལམ།: 14 — `PathBuf::from(env!("CARGO_MANIFEST_DIR"))`
 - བརྟག་དཔྱད།: ཀེརེཊསི་/སོ་རཕ་ས_ནོཌི་/བརྟག་དཔྱད།/སྒོ་ལམ།:༣༠ — I༡༨NI00000188X

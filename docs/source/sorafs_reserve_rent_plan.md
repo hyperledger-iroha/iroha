@@ -1,776 +1,269 @@
 ---
-title: Reserve+Rent & Lifecycle Policy
-summary: SFM-6 implementation status for reserve underwriting payloads, quote/ledger helpers, dashboard digest wiring, and remaining reserve-service rollout.
+title: SoraFS Reserve+Rent V1
+summary: Canonical chain-authoritative reserve, rent, credit, lifecycle, and appeal contract for SoraFS V1.
 ---
 
-# Reserve+Rent & Lifecycle Policy
+# SoraFS Reserve+Rent V1
 
-## Status
-SFM-6 is partially implemented in this workspace. The shared data model ships
-`ReservePolicyV1`, `ReserveQuote`, `ReserveLedgerProjection`,
-`ReserveLifecycleStage`, and `ReserveLifecycleProjection` in
-`crates/iroha_data_model/src/sorafs/reserve.rs`; the CLI exposes deterministic
-`iroha app sorafs reserve quote`, `iroha app sorafs reserve ledger`,
-`iroha app sorafs reserve lifecycle`, and signed local movement/readback
-commands; `cargo xtask sorafs-reserve-matrix` emits quote matrices; and
-`scripts/telemetry/reserve_ledger_digest.py` feeds the reserve economics
-dashboards and Alertmanager rules. `scripts/check_sorafs_reserve_rent_rollout_evidence.py`
-now provides the fail-closed rollout evidence gate for staged SFM-6 promotion
-packets, and `scripts/run_sorafs_reserve_rent_rollout_evidence.py` provides the
-matching reviewed evidence collection planner/runner. The checker exports its
-required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`, and the
-collection planner dry-run JSON includes the checker-backed `evidence_contract`
-map for selected required kinds. `sorafs_node` now also
-ships a local reserve lifecycle and movement runtime that stores provider
-summaries, derives ledger and lifecycle projections from the shared quote math,
-keeps sequenced lifecycle events for replay, and records idempotent local
-top-up/withdrawal movement intents with provider balances and custody status
-evidence. Accepted lifecycle updates now also record local credit-line state
-for the provider, including automatic draw, remaining capacity, shortfall,
-accrued interest, and governance/manual-approval flags. Torii exposes that
-runtime through canonical-request-authenticated reserve lifecycle routes for
-signed provider updates, provider/snapshot/event readback, live lifecycle event
-SSE/WebSocket streams, and signed reserve top-up, withdrawal, movement history,
-provider-balance, movement custody-status, and private credit-line readback
-routes. Rejected custody evidence now recomputes the local movement ledger so
-rejected top-ups are no longer spendable, rejected withdrawals restore the
-previous balance, and retroactive rejections fail closed when they would make
-later withdrawals underflow. The movement ledger now also keeps a separate
-chain-confirmed reserve balance projection: intent-recorded and submitted
-movements affect the local balance, confirmed custody movements affect the
-confirmed balance, and confirmed withdrawals fail closed unless prior
-confirmed reserve funds cover them. It also exposes signed local reserve appeal
-submission/decision routes and signed lifecycle-policy window update/readback
-routes, with matching operator CLI commands for appeal and policy handoff.
-Accepted effective lifecycle-policy windows now drive later local lifecycle
-projections, and provider/event readback exposes the grace/default windows plus
-the applied policy id that produced the projection. Already-effective policy
-updates now also reproject retained provider summaries whose lifecycle
-observation falls under the new policy, append policy-driven lifecycle replay
-events, refresh local credit-line state, and re-run reserve gateway compliance
-sync for affected providers. Accepted appeal decisions with a requested stage
-now emit a local lifecycle override event, update the provider summary and
-credit-line state, and expose the applied appeal id in readback and
-transparency entries.
-The local runtime can now also deterministically advance retained provider
-summaries to an operator-supplied observation timestamp by whole elapsed days,
-append time-advance lifecycle replay events, refresh local credit-line state,
-and re-run reserve gateway compliance sync through the signed
-`/v1/sorafs/reserve/lifecycle/advance` route. Torii can now run the same
-advancement path from a shutdown-aware config-backed scheduler under
-`torii.sorafs.storage.reserve_lifecycle`, with explicit cadence and initial
-delay settings.
-Accepted reserve lifecycle, movement, appeal, and lifecycle-policy records now also derive
-privacy-safe local transparency/governance source entries for publication
-cycles without exposing provider accounts, appeal reasons, or policy authority
-accounts in clear text. Local reserve lifecycle stages can now publish
-reserve-adjusted reputation snapshots through the existing reputation pipeline,
-including accepted-appeal stage overrides and prior reputation score smoothing.
-The local orderbook admission path now also consumes reserve lifecycle
-provider summaries for ask orders and rejects defaulted providers whose
-projection disables adverts, while accepted appeal overrides that move the
-provider out of default restore ask admission.
-Signed Torii reserve lifecycle and appeal-decision routes now also sync the
-current reserve lifecycle summary into the gateway compliance denylist when a
-provider enters or leaves the advert-disabled default state, using
-reserve-scoped source metadata so static/operator denylist entries are not
-overwritten or removed. Signed movement custody updates now also project
-rejected reserve custody evidence into the same provider denylist under a
-separate reserve-scoped source, and later accepted reserve appeals clear that
-reserve-owned movement entry when no higher-priority lifecycle default remains.
-The local runtime now also exports Torii reserve
-runtime metrics for lifecycle-stage counts, credit-line usage, defaults,
-appeal backlog, movement custody state, chain-reconciled movement state, and
-reserve service request/rate-limit counters.
+## Release contract
 
-The production reserve/rent control plane is still incomplete. Signed local
-movement routes now authenticate and record transfer intents, but they do not
-submit reserve transfers or verify chain finality. Operators can now attach
-submitted, confirmed, or rejected transaction evidence to the local movement
-ledger, rejected custody evidence now reconciles the local balance view, and
-confirmed custody evidence now updates a separate chain-confirmed balance view.
-Lifecycle updates now materialize local credit-line draw/accrual state, but
-live chain submission, automatic finality polling, and live account mutation
-for credit lines are still target service work. There is
-now a local authenticated appeal/policy handoff surface, local accepted-appeal
-lifecycle overrides, local governance source-entry handoff, and reserve
-lifecycle default-state plus rejected movement-custody application to the
-gateway compliance denylist, plus local already-effective lifecycle-policy
-reprojection into provider denylist state. Local signed lifecycle advancement
-is available for operator-driven time progression, and the opt-in
-config-backed scheduler can drive the same advancement path on a production
-cadence. Broader governance source-entry effects beyond current provider
-denylist projection and live scheduler canary evidence remain target downstream
-work.
+SoraFS V1 treats the native reserve ledger as the only authority for provider
+underwriting, custody, rent settlement, credit, lifecycle state, and appeals.
+Torii and `sorafs_node` may retain durable delivery state and rebuildable
+projections, but they do not own an independent reserve balance or lifecycle
+state.
 
-## Goals & Scope
-- Track the implemented financial policy for provider reserves and recurring rent.
-- Keep quote/ledger/lifecycle automation, dashboard inputs, and governance evidence aligned with the shared `ReservePolicyV1` schema.
-- Identify the remaining service work required for lifecycle stages, reserve movements, appeals, credit lines, and governance policy changes.
+The canonical implementation consists of:
 
-## Policy Model
-- Key variables:
-  - `monthly_rent = base_rate_tier * capacity_gib * duration_factor`
-  - `reserve_requirement = underwriting_ratio * monthly_rent`
-  - `effective_rent = monthly_rent - min(reserve_balance / underwriting_ratio, monthly_rent)`
-  - Reserve top-up threshold = 0.8 × reserve requirement.
-- Tier base rates (governance adjustable): hot 12 XOR/GiB-month, warm 6, archive 2.
-- Duration factors: monthly 1.0, quarterly 0.9, annual 0.75.
-- Underwriting ratios default: Tier A 2.0, Tier B 3.0, Tier C 4.5.
-- Credit line caps are encoded in the tier policy: Tier A 2x monthly rent, Tier B 1x, Tier C manual approval.
-- APR parameters are encoded per tier (3%, 6%, none). The local lifecycle projection applies capped automatic credit draws for eligible tiers, prorates APR after the configured grace window, and marks manual-approval tiers as requiring operator action instead of inventing an automatic cap.
-- Implemented local lifecycle stages:
-  - Stage `Active`: provider reserve is current.
-  - Stage `Warning`: restrict new manifests.
-  - `Grace`: auto-draw credit line.
-  - `Delinquent`: penalty APR plus governance notification.
-  - `Default`: disable adverts and flag the account for target runtime slashing from reserve and then credit line.
-- `ReserveQuote::lifecycle_projection(days_past_due, grace_period_days, default_after_days)` rejects invalid grace/default windows, computes credit draw and remaining credit availability, reports credit shortfall and accrued interest, and enters `Default` when rent cannot be covered or the default threshold is exceeded.
-- Manual appeals and lifecycle-policy updates are implemented as local
-  authenticated service records for provider/operator handoff. Applying those
-  records to live governance execution and downstream policy remains target
-  integration work.
+- `ReserveAuthorityPolicyV1` and `ReserveAuthorityPolicyRecordV1`;
+- `ReserveProviderAccountV1`, including its compare-and-set revision and
+  `rent_charged_through_unix` settlement anchor;
+- native reserve ISIs for policy activation, provider registration, movement
+  request/decision, rent charge, lifecycle advancement, credit draw/repayment,
+  and appeal submission/decision;
+- finalized, typed policy/provider/movement/appeal/event queries;
+- the durable reserve transaction forwarder; and
+- the supervised Torii reserve worker, which derives work from one immutable
+  finalized ledger view, signs through an injected runtime/HSM boundary, and
+  submits only through strict Torii transaction ingress.
 
-## APIs & Services
-- Implemented payloads:
-  - `ReservePolicyV1` stores storage-class rates, duration factors, tier underwriting ratios, credit caps, APR values, and the top-up threshold.
-  - `ReserveQuote` stores the deterministic quote result for a storage class, tier, duration, capacity, and reserve balance.
-  - `ReserveLedgerProjection` derives `rent_due`, reserve shortfall, top-up shortfall, and underwriting/top-up booleans from a quote.
-  - `ReserveLifecycleProjection` derives lifecycle stage, credit draw, credit shortfall, accrued interest, total remaining due, and service restriction flags from a quote and explicit lifecycle windows.
-- Implemented CLI commands:
-  - `iroha app sorafs reserve quote --storage-class <hot|warm|cold> --tier <tier-a|tier-b|tier-c> --duration <monthly|quarterly|annual> --gib <capacity>` computes deterministic rent/reserve breakdowns (monthly rent, reserve requirement, top-up threshold, credit line cap) using the embedded policy or JSON/Norito overrides. Quotes are emitted as JSON and can be persisted via `--quote-out`. The CLI reuses the shared `ReservePolicyV1` schema so economics dashboards and SDKs can reference the same Norito payloads without reimplementing the formulas. The JSON payload includes a `ledger_projection` object with:
-    - `rent_due` — XOR due for the billing period after applying reserve offsets.
-    - `reserve_shortfall` — reserve delta required to satisfy underwriting.
-    - `top_up_shortfall` — amount needed to clear the top-up alert threshold.
-    - `meets_underwriting` / `needs_top_up_alert` — booleans used by dashboards and admission ISIs to trigger policy transitions.
-  - `iroha app sorafs reserve ledger --quote <path> --provider-account <id> --treasury-account <id> --reserve-account <id> --asset-definition 61CtjvNd9T3THAR65GsMVHr82Bjc` converts a saved quote into the concrete XOR transfers required for rent settlement and reserve top-ups. The helper reads the `ledger_projection` block, echoes the micro-XOR totals, and emits an `instructions` array containing Norito-encoded `Transfer` ISIs that can be piped into automation or stored alongside governance evidence.
-  - `iroha app sorafs reserve lifecycle --quote <path> --days-past-due <days> --grace-days <days> --default-after-days <days>` converts a saved quote into a deterministic lifecycle snapshot. The JSON output includes the stage label, rent/reserve/top-up amounts, automatic credit draw, remaining credit availability, credit shortfall, accrued interest, remaining due after credit, and booleans for manifest restriction, advert disablement, governance notification, and manual credit approval.
-  - `iroha app sorafs reserve top-up --provider-id-hex <hex> --provider-account <id> --reserve-account <id> --asset-definition <aid> --amount <xor> --idempotency-key <key>` builds the signed reserve movement JSON, converts decimal XOR to micro-XOR, canonicalizes the provider/reserve account ids, and submits the top-up intent to the Torii route above.
-  - `iroha app sorafs reserve withdraw --provider-id-hex <hex> --provider-account <id> --reserve-account <id> --asset-definition <aid> --amount <xor> --idempotency-key <key>` submits the matching signed local withdrawal intent.
-  - `iroha app sorafs reserve movements --since <seq> --limit <n>` lists the signed caller's visible local movement history.
-  - `iroha app sorafs reserve status --provider-id-hex <hex>` fetches the signed caller's visible local provider balance status.
-  - `iroha app sorafs reserve custody --movement-id-hex <hex> --status <submitted|confirmed|rejected> --tx-hash-hex <hex>` signs a local custody-status update for a recorded movement and binds the movement to chain transaction evidence.
-  - `iroha app sorafs reserve credit-lines --limit <n>` lists the signed caller's visible local credit-line states derived from accepted lifecycle updates.
-  - `iroha app sorafs reserve credit-status --provider-id-hex <hex>` fetches one signed visible provider credit-line state.
-  - `iroha app sorafs reserve appeal-submit --provider-id-hex <hex> --provider-account <id> --reason <text> --idempotency-key <key> [--requested-stage <stage>] [--evidence-digest-hex <hex>]` submits a signed local provider appeal record.
-  - `iroha app sorafs reserve appeals --limit <n>` lists the signed caller's visible local appeal records.
-  - `iroha app sorafs reserve appeal-decide --appeal-id-hex <hex> --status <accepted|rejected> --decision-account <id> --rationale <text>` attaches a signed terminal decision to a local reserve appeal.
-  - `iroha app sorafs reserve policy-update --authority-account <id> --grace-days <days> --default-after-days <days> --effective-at-unix <seconds> --reason <text> --idempotency-key <key>` submits a signed local lifecycle-policy window update and rejects invalid grace/default windows.
-  - `iroha app sorafs reserve policy --limit <n>` fetches signed local lifecycle-policy readback, including the latest accepted policy record.
-- Implemented Torii routes:
-  - `POST /v1/sorafs/reserve/lifecycle` accepts a Norito JSON `ReserveQuote`
-    lifecycle update, verifies the canonical request signer against the
-    canonical `provider_account`, stores the provider summary locally, and
-    returns the accepted sequenced event plus the derived provider projection.
-  - `GET /v1/sorafs/reserve/lifecycle` returns the bounded local provider and
-    event snapshot.
-  - `GET /v1/sorafs/reserve/lifecycle/providers/{provider_id_hex}` returns one
-    provider's latest local summary.
-  - `GET /v1/sorafs/reserve/credit-lines` returns private, authenticated local
-    credit-line states visible only to the signed provider account.
-  - `GET /v1/sorafs/reserve/credit-lines/providers/{provider_id_hex}` returns
-    one private, authenticated provider credit-line state with rent due,
-    automatic draw, remaining capacity, shortfall, interest, total due, and
-    governance/manual approval flags.
-  - `GET /v1/sorafs/reserve/lifecycle/events` returns bounded replay events with
-    ETag support, while `/events/stream` and `/events/ws` stream the replay
-    backlog plus live reserve lifecycle updates.
-  - `POST /v1/sorafs/reserve/top-up` and
-    `POST /v1/sorafs/reserve/withdraw` accept signed provider movement
-    requests, verify the canonical request signer against the canonical
-    `provider_account`, record an idempotent local movement, update the
-    provider's local reserve balance, and return the recorded movement plus a
-    transfer intent that clients must still submit through the production
-    transaction path.
-  - `GET /v1/sorafs/reserve/movements` returns private, authenticated,
-    ETagged movement history visible only to the signed provider or reserve
-    account in each record.
-  - `POST /v1/sorafs/reserve/movements/{movement_id_hex}/custody` lets the
-    signed provider or reserve account attach submitted, confirmed, or rejected
-    transaction evidence to a recorded local movement. The route preserves
-    terminal custody states and rejects attempts to replace an existing
-    transaction hash.
-  - `GET /v1/sorafs/reserve/balances/{provider_id_hex}` returns the private
-    local balance for a provider when the canonical request signer is that
-    provider account or the reserve account.
-  - `POST /v1/sorafs/reserve/appeals` accepts signed provider appeal records,
-    verifies the signer against `provider_account`, derives a deterministic
-    appeal id from the idempotency material, and returns the local appeal
-    record. Replays of the same signed material are idempotent.
-  - `GET /v1/sorafs/reserve/appeals` returns private, authenticated appeal
-    records visible to the signed provider account and, after a decision, the
-    signed decision account.
-  - `POST /v1/sorafs/reserve/appeals/{appeal_id_hex}/decision` lets the signed
-    decision account attach an accepted or rejected terminal decision to an
-    open local appeal.
-  - `POST /v1/sorafs/reserve/lifecycle/policy` accepts signed lifecycle-policy
-    window updates, verifies the signer against `authority_account`, rejects
-    invalid grace/default windows, and stores the sequenced local policy record.
-    Later lifecycle updates whose observation time is at or after a stored
-    policy's effective time use the latest effective local policy windows for
-    projection and readback.
-  - `GET /v1/sorafs/reserve/lifecycle/policy` returns signed local lifecycle
-    policy readback with the latest accepted policy record.
-  - `POST /v1/sorafs/reserve/lifecycle/advance` accepts a signed authority
-    request, advances retained provider summaries to `observed_at_unix` by
-    whole elapsed days, applies effective lifecycle policy and accepted appeal
-    overrides at that timestamp, refreshes local credit-line state, emits
-    sequenced lifecycle events, and re-runs reserve gateway compliance sync for
-    affected providers.
-  - `torii.sorafs.storage.reserve_lifecycle.enabled` starts a local
-    shutdown-aware scheduler that invokes the same lifecycle advancement path
-    without a self-HTTP call. `interval_seconds` controls the cadence, and
-    `initial_delay_seconds` delays the first tick.
-- Target service/API work:
-  - Extend signed top-up/withdrawal intents plus local custody-status handoff
-    into live chain custody submission, automatic finality polling, and local
-    credit-line state applied to live account state. The local runtime already
-    reconciles provider balances when a movement is explicitly marked rejected.
-  - Record live canary evidence proving the configured lifecycle scheduler
-    advances defaulting providers and preserves provider-bake gate freshness.
-  - Apply broader governance source entries to downstream compliance policy
-    consumers beyond the current provider denylist projection. Local reserve
-    lifecycle stages already feed reserve-adjusted reputation snapshots,
-    defaulted provider advert disablement is enforced for local orderbook ask
-    admission, and Torii reserve routes sync default/appeal lifecycle,
-    signed lifecycle advancement, already-effective lifecycle-policy
-    reprojection, and rejected custody movement changes into the gateway
-    compliance denylist.
+Pre-release reserve state encoded without the V1 settlement anchor is not
+compatible. Development deployments must discard and reseed that state; there
+is no legacy decoder or state migration.
 
-## Integration Points
-- **Billing**: implemented quote/ledger/lifecycle helpers and signed local movement routes produce deterministic rent, reserve transfer, movement, local and chain-confirmed balance, lifecycle/credit snapshots, and local credit-line state for settlement automation.
-- **Telemetry**: ledger digest output feeds the reserve economics dashboard,
-  capacity dashboard, and reserve Alertmanager rules. The Torii metrics
-  registry also exports local reserve lifecycle-stage, credit-line, default,
-  appeal-backlog, custody, chain-reconciliation, service-request, and
-  service-rate-limit metrics for the signed reserve runtime.
-- **Governance evidence**: quote, ledger, Markdown digest, Prometheus textfile, and matrix artifacts can be attached to economics reports.
-- **Appeals and lifecycle policy**: signed local appeal and policy records now
-  support provider/operator handoff, effective local lifecycle-policy
-  projection, already-effective policy reprojection for retained provider
-  summaries, signed whole-day lifecycle advancement, accepted local
-  appeal-decision lifecycle overrides, and privacy-safe local governance source
-  entries. Accepted lifecycle, appeal, policy, lifecycle-advance routes, and
-  scheduled lifecycle ticks now also update reserve-derived gateway compliance
-  provider denylist entries, and accepted appeal decisions can clear
-  reserve-owned movement custody entries; broader downstream compliance effects
-  for governance source entries remain target integrations.
-- **Reputation, orderbook, compliance, and automatic lifecycle policy**:
-  reputation snapshots can now consume local reserve lifecycle stages and
-  accepted appeal overrides, and local orderbook ask admission now enforces
-  reserve lifecycle advert disablement for defaulted providers. Torii also
-  syncs advert-disabled reserve lifecycle state and rejected custody movements
-  into the gateway compliance provider denylist while preserving non-reserve
-  denylist entries, and already-effective lifecycle-policy updates reproject
-  retained provider summaries into the same provider denylist projection.
-  Signed lifecycle advancement feeds the same provider summaries, replay
-  events, credit-line refresh, and compliance/orderbook behavior, and the
-  config-backed scheduler invokes that same local path; live custody/credit
-  mutation, live scheduler canary evidence, and broader downstream compliance
-  governance source-entry effects remain target integrations.
+## Deterministic economics
 
-## Observability
-- Implemented ledger-digest metrics come from the textfile:
-  - `sorafs_reserve_ledger_rent_due_xor`
-  - `sorafs_reserve_ledger_reserve_shortfall_xor`
-  - `sorafs_reserve_ledger_top_up_shortfall_xor`
-  - `sorafs_reserve_ledger_requires_top_up`
-  - `sorafs_reserve_ledger_meets_underwriting`
-  - `sorafs_reserve_ledger_instruction_total`
-  - `sorafs_reserve_ledger_transfer_xor`
-- Implemented runtime metrics come from `iroha_telemetry` and are refreshed by
-  the local signed reserve runtime after accepted lifecycle, movement,
-  custody, appeal, decision, lifecycle-policy, lifecycle-advance records, and
-  scheduled lifecycle ticks:
-  - `torii_sorafs_reserve_lifecycle_stage_providers`
-  - `torii_sorafs_reserve_credit_draw_micro_xor`
-  - `torii_sorafs_reserve_credit_shortfall_micro_xor`
-  - `torii_sorafs_reserve_accrued_interest_micro_xor`
-  - `torii_sorafs_reserve_defaulted_providers`
-  - `torii_sorafs_reserve_appeal_backlog`
-  - `torii_sorafs_reserve_custody_movements`
-  - `torii_sorafs_reserve_chain_reconciled_movements`
-  - `torii_sorafs_reserve_service_requests_total`
-  - `torii_sorafs_reserve_service_rate_limit_total`
-- Implemented dashboards:
-  - `dashboards/grafana/sorafs_reserve_economics.json` includes ledger
-    economics plus runtime lifecycle-stage, credit exposure, default/appeal,
-    custody/reconciliation, service request, and rate-limit panels.
-  - runtime reserve defaults, appeal backlog, reconciliation, and rate-limit
-    panels are mirrored in `dashboards/grafana/sorafs_capacity_health.json`.
-- Implemented alerts in `dashboards/alerts/sorafs_capacity_rules.yml` cover
-  ledger top-up requirements, underwriting breaches, missing transfer feeds,
-  rent/top-up transfer drift, runtime defaults, uncovered credit shortfall,
-  appeal backlog, rejected chain reconciliation, and reserve service
-  rate-limit events.
-- Remaining observability work is integration coverage that proves
-  chain-finality reconciliation and live credit-line mutation update those
-  metrics from production services, plus staged provider-bake evidence that the
-  dashboard and alert canaries pass against live runtime scrapes.
+All amounts use exact `XorQuantity` arithmetic. The governed economics policy
+defines storage-class rent, commitment-duration factors, underwriting ratios,
+credit caps, APR, and the reserve top-up threshold.
 
-## Security & Governance
-- Current quote/ledger/lifecycle helpers are local/offline tooling. They render deterministic JSON/Norito-backed artifacts and transfer instructions, but they do not submit reserve custody transfers on their own.
-- Signed top-up/withdrawal routes authenticate the provider request and record
-  the local movement ledger plus transfer intent. Signed custody-status routes
-  let the provider or reserve account attach local submitted/confirmed/rejected
-  transaction evidence without allowing terminal status reversal or transaction
-  hash replacement. Rejected custody evidence rewinds the local balance ledger
-  before it is published through readback, and confirmed custody evidence
-  advances a separate chain-confirmed balance projection that rejects confirmed
-  withdrawals without confirmed reserve funds. The matching CLI commands call
-  those signed routes, while production chain custody submission and automatic
-  finality polling remain target work.
-- Signed credit-line readback routes expose local credit draw/accrual state
-  derived from accepted lifecycle updates to the provider account only. They do
-  not yet mutate live account balances or credit-line assets.
-- Signed appeal routes record provider appeals and terminal accepted/rejected
-  decisions locally. Signed lifecycle-policy routes record grace/default window
-  updates locally, and effective policies are applied to later local lifecycle
-  projections. Accepted appeal decisions with a requested stage now apply a
-  local lifecycle override to provider summaries, credit-line state, and
-  lifecycle event replay without changing the deterministic financial amounts.
-  The signed lifecycle-advance route applies whole-day elapsed time from the
-  retained provider observation to an operator-supplied timestamp, uses the
-  effective local policy and accepted appeal override at that timestamp, and
-  emits deterministic replay events without relying on wall-clock drift inside
-  the calculation. The config-backed scheduler invokes the same local
-  advancement method at the configured cadence; zero or delayed cadence values
-  are normalized through configuration parsing rather than environment toggles.
-  Local reserve lifecycle stages can also be published into reserve-adjusted
-  reputation snapshots, using prior reputation metrics and score when a matching
-  provider already exists and neutral proof metrics for reserve-only providers.
-  These records are authenticated and replay-safe; defaulted providers whose
-  current lifecycle projection disables adverts are rejected from local
-  orderbook ask admission and are synced into the gateway compliance denylist.
-  Rejected reserve custody movements are also synced into a reserve-scoped
-  provider denylist entry, and later accepted appeal decisions clear that
-  movement-derived entry when no lifecycle default still applies. Static and
-  operator denylist entries are never overwritten or removed by these reserve
-  projections. Already-effective lifecycle-policy updates reproject retained
-  provider summaries and refresh the same provider denylist projection. Broader
-  governance compliance policy effects remain target work.
-  The local node now converts lifecycle,
-  movement, appeal, and lifecycle-policy records into transparency source entries with
-  deterministic payload digests and private-field digests for governance
-  publication cycles; lifecycle entries include the effective grace/default
-  windows, applied policy id, and applied appeal id used for the projection.
+The canonical quote is:
 
-## Testing & Rollout
-- Implemented test coverage:
-  - `crates/iroha_data_model/src/sorafs/reserve.rs` covers deterministic rent/reserve calculation and ledger projection behavior.
-  - `crates/iroha_data_model/src/sorafs/reserve.rs` covers lifecycle projection warnings, grace credit draws, post-grace interest accrual, uncovered-rent defaulting, and invalid lifecycle windows.
-  - `crates/iroha_cli/src/commands/sorafs.rs` and
-    `crates/iroha_cli/tests/cli_smoke.rs` cover reserve quote JSON output,
-    reserve ledger transfer instruction emission, reserve lifecycle credit-draw
-    projection output, signed movement request JSON construction, zero-amount
-    rejection, custody-status request JSON construction, invalid custody hash
-    rejection, appeal submission/decision request JSON construction,
-    lifecycle-policy request JSON construction and invalid-window rejection,
-    and compiled command-tree help for the movement/status/custody/credit-line/
-    appeal/policy commands.
-  - `crates/iroha/src/client.rs` covers signed reserve top-up/withdrawal client
-    requests, signed custody-status client requests, private signed
-    movement/status/credit-line/appeal/policy readback, appeal-decision client
-    requests, provider-id, movement-id, and appeal-id normalization, and
-    empty-payload/bad-id rejection.
-  - `crates/sorafs_node/src/reserve.rs` and `crates/sorafs_node/src/lib.rs`
-    cover local reserve lifecycle summaries/events plus idempotent
-    top-up/withdrawal movement recording, duplicate replay, withdrawal
-    underflow rejection, custody-status transition/transaction-hash guards,
-    rejected-movement balance reconciliation, confirmed-balance projection and
-    confirmed-withdrawal underflow rejection, lifecycle-derived credit-line
-    state, effective lifecycle-policy window application, local appeals,
-    terminal appeal decisions, accepted appeal-decision lifecycle overrides,
-    reserve-adjusted reputation snapshot publication, lifecycle-policy updates,
-    whole-day lifecycle time advancement, provider balances, snapshots, and
-    subscriptions. `crates/sorafs_node/src/transparency.rs` covers local
-    reserve lifecycle, movement, appeal, and lifecycle-policy transparency
-    source-entry adapters, including private-field digesting and invalid source
-    rejection.
-  - `crates/iroha_telemetry/src/metrics.rs` covers reserve runtime metric
-    export for lifecycle-stage counts, credit-line usage, defaulted providers,
-    appeal backlog, custody and chain-reconciled movement counts, service
-    requests, and service rate-limit counters.
-  - `crates/iroha_torii/src/sorafs/api.rs` covers signed reserve lifecycle
-    route authentication, signer/account mismatch rejection, invalid lifecycle
-    window mapping, provider readback, bounded snapshots, event replay, and
-    ETag emission, plus signed reserve top-up/withdrawal authentication,
-    signer/account mismatch rejection, underflow mapping, private movement
-    history, custody-status submission/readback, confirmed balance readback,
-    unknown custody movement rejection, private credit-line readback,
-    private balance readback,
-    appeal submission/private readback/decision/missing-appeal handling,
-    accepted appeal-decision lifecycle override readback, reserve lifecycle and
-    rejected movement-custody gateway compliance denylist sync,
-    already-effective lifecycle-policy provider reprojection and compliance
-    sync, signed lifecycle advancement and compliance sync, scheduler tick
-    advancement and compliance sync,
-    lifecycle-policy submission/readback/invalid-window handling, and
-    transfer-intent JSON.
-  - `crates/iroha_config/src/parameters/user.rs` and
-    `crates/sorafs_node/src/config.rs` cover parsed/clamped reserve lifecycle
-    scheduler configuration and disabled-scheduler omission from the runtime
-    wrapper.
-  - `xtask/src/sorafs.rs` covers the reserve matrix report, including ledger projection output.
-  - Alert rule tests under `dashboards/alerts/tests/` cover the reserve ledger
-    alert paths and runtime reserve default, credit shortfall, appeal backlog,
-    chain-rejection, and service-rate-limit alert paths.
-  - `scripts/tests/check_sorafs_reserve_rent_rollout_evidence_test.py` covers
-    complete staged evidence, response-file arguments, missing signed routes,
-    stale ledger digests, payload leakage, missing ledger/runtime metrics,
-    unsigned/wrong-account probes, missing policy/matrix ledger bindings,
-    mismatched ledger tuples,
-    ledger-bound subset gates without anchors, failed provider bakes, explicit
-    unknown schemas, ignored unknown directory artifacts in subset mode, invalid
-    recognized optional artifacts in subset mode, and unknown required evidence
-    kinds.
-  - `scripts/tests/run_sorafs_reserve_rent_rollout_evidence_test.py` covers the
-    collection planner's complete dry-run command plan, response-file parsing,
-    split-token response files, missing required evidence, missing file checks,
-    subset gates, and unknown required evidence kinds.
-- Remaining rollout work:
-  1. Wire signed top-up/withdrawal intents and local custody-status evidence
-     into live chain custody submission, automatic finality polling, and live
-     account mutation for local credit-line state.
-  2. Apply broader governance source entries to downstream compliance policy
-     beyond the current lifecycle/policy/rejected-custody provider denylist
-     projection.
-  3. Add integration tests for chain-reconciled reserve movement, runtime
-     credit-line mutation/accrual, downstream governance source-entry
-     application to broader compliance policy, lifecycle-policy enforcement,
-     accepted appeal-decision lifecycle overrides in service flows,
-     reserve-adjusted reputation publication, local orderbook reserve-lifecycle
-     ask admission, and runtime metrics fed by those live service paths.
-  4. Run a staged provider bake before production rollout and attach payload-free
-     signed-route, ledger digest, movement, credit-line, appeal, metrics, provider
-     bake, and governance evidence bound to the same policy/matrix/ledger tuple
-     and passing the SFM-6 rollout gate.
+- `monthly_rent = class_rate × capacity_gib × duration_factor`;
+- `reserve_requirement = underwriting_ratio × monthly_rent`;
+- `reserve_offset = min(reserve_balance ÷ underwriting_ratio, monthly_rent)`;
+- `effective_rent = monthly_rent - reserve_offset`; and
+- `top_up_threshold = reserve_requirement × top_up_threshold_bps`.
 
-## Automation & Dashboards
+Consensus execution and worker generation use only integer/fixed-point
+operations. Validator or Torii wall clocks never participate.
 
-### Rollout Evidence Gate
+## Rent anchor and billing cadence
 
-Use the rollout gate after the reserve lifecycle service, signed route canaries,
-reserve movement probes, credit-line accrual checks, appeal policy probes,
-metrics, provider bake, and governance packet have produced reviewed,
-payload-free JSON evidence:
+V1 has one consensus-visible billing period:
 
-```bash
-python3 scripts/check_sorafs_reserve_rent_rollout_evidence.py \
-  @scripts/examples/sorafs_reserve_rent_rollout_evidence.args.example
-```
+`RESERVE_RENT_BILLING_PERIOD_SECONDS_V1 = 30 × 86,400`.
 
-For staged collections with reviewed evidence paths, prefer the planner so the
-verifier command, summary path, thresholds, and current required payload-free
-field contract are reproducible:
+Registration initializes `rent_charged_through_unix` to the registering block's
+timestamp. Whole periods due at finalized time `T` are:
 
-```bash
-python3 scripts/run_sorafs_reserve_rent_rollout_evidence.py \
-  @scripts/examples/sorafs_reserve_rent_rollout_collection.args.example \
-  --dry-run
-```
+`floor((T - rent_charged_through_unix) / billing_period_seconds)`.
 
-When an operator has reviewed the underlying production facts, use
-`scripts/build_sorafs_reserve_rent_canary.py` as the payload-free SFM-6 reserve/rent canary builder
-for the individual evidence artifacts consumed by the gate. The builder covers
-every current evidence kind, requires explicit
-`--verified-claim` input for positive safety claims, complete lifecycle route,
-signed route, reserve-movement action, quote-matrix, and metrics coverage where
-applicable, explicit `--route-body-blake3-hex` evidence for lifecycle-service
-and signed-route canaries, binds quote-matrix `--scenario-count` to the reviewed
-storage-class/tier/duration product, complete credit-line mutation/accrual
-coverage, complete appeal-policy probe coverage, complete provider-bake
-provider/cycle coverage, shared policy/matrix/ledger digest bindings, and
-integer-unit threshold-bounded lag/latency facts. Builder-reviewed fixed
-inventories are closed sets, so duplicate or unsupported storage classes, tiers, durations,
-routes, movement actions, appeal probes, credit-line names, accrual-cycle names,
-or metrics fail before evidence is written. provider-bake artifacts require
-`bake_id` to match a reviewed lowercase `reserve-bake-*` label and
-`providers[].name` entries to use reviewed lowercase `provider-*` labels
-without non-production markers, require `rent_cycles[].name`,
-`top_up_cycles[].name`, `appeal_cycles[].name`, and
-`scheduled_lifecycle_canary_ticks[].name` to use reviewed lowercase
-`reserve-rent-cycle-*`, `reserve-top-up-cycle-*`,
-`reserve-appeal-cycle-*`, and `reserve-lifecycle-tick-*` labels without
-non-production markers, bind `provider_count`, `rent_cycle_count`,
-`top_up_cycle_count`, `appeal_cycle_count`, and
-`scheduled_lifecycle_canary_tick_count` to unique canonical provider/cycle/tick
-inventories, and
-reject duplicate provider-bake entries before promotion can report ready.
-Provider-bake `--bake-id` labels must match the same production shape enforced
-by the gate, provider inputs must use reviewed `provider-*` labels without
-non-production markers, and `--rent-cycle`, `--top-up-cycle`, and
-`--appeal-cycle` inputs must use the matching reserve cycle label families and
-stay duplicate-free before evidence is written. Provider-bake `--scheduled-lifecycle-canary-tick` inputs must use reviewed
-`reserve-lifecycle-tick-*` labels, match
-`--scheduled-lifecycle-canary-tick-count`, avoid non-production markers, and stay
-duplicate-free before evidence is written. Ledger-digest `--ledger-ref` and
-`--instruction-ref` inputs must use reviewed `reserve-ledger-*` and
-`reserve-instruction-*` labels, match `--ledger-count`/`--instruction-count`,
-avoid non-production markers, and stay duplicate-free before evidence is
-written. Lifecycle-service `--persisted-stage` inputs must use reviewed
-`reserve-lifecycle-stage-*` labels, match `--persisted-stage-count`, avoid
-non-production markers, and stay duplicate-free before evidence is written.
-Reserve-rent payload-safety artifacts must explicitly set
-`policy_payload_included`, `quote_payloads_included`, `raw_ledger_included`,
-`raw_transfer_instructions_included`, `response_bodies_included`,
-`raw_transfer_included`, `raw_instruction_included`,
-`appeal_payloads_included`, `critical_alerts_firing`, and
-`payloads_included` to `false` before promotion can report ready. The builder
-prevalidates the generated artifact with
-`check_sorafs_reserve_rent_rollout_evidence.py`, and writes the JSON atomically
-without following output symlinks. Valid provider-bake artifacts surface the
-reviewed `policy_digest_hex`, `matrix_digest_hex`, `ledger_digest_hex`,
-`scheduled_lifecycle_canary_last_tick_at_unix`,
-`scheduled_lifecycle_canary_tick_count`, and
-`scheduled_lifecycle_canary_defaulted_provider_count` inside
-`valid_provider_bakes`, so the final production-readiness gate can validate the
-staged bake against the same policy/matrix/ledger tuple and scheduler canary
-metadata that the rollout checker accepted. The reserve-rent gate fail-closes when more than one valid policy, policy/matrix, or policy/matrix/ledger anchor appears, and clears the mixed `valid_policy_digests`, `valid_policy_matrix_bindings`, or `valid_policy_matrix_ledger_bindings` set before aggregate promotion can report ready. The aggregate production-readiness gate also preserves the full policy/matrix/ledger chain: policies in
-`valid_policy_matrix_bindings` must appear in `valid_policy_digests`, ledger
-binding policy/matrix pairs must appear in `valid_policy_matrix_bindings`, and
-provider-bake policy/matrix/ledger tuples must appear in
-`valid_policy_matrix_ledger_bindings` before final promotion can report ready.
-It also rechecks policy-bound, matrix-bound, and ledger-bound artifact
-fingerprints against `valid_policy_digests`, `valid_policy_matrix_bindings`, and
-`valid_policy_matrix_ledger_bindings`.
-Governance approval artifacts must carry the accepted provider-bake `bake_id`,
-and the rollout gate plus aggregate production-readiness gate reject governance
-approval evidence whose `bake_id` does not match a valid provider-bake artifact
-before final promotion can report ready.
-Example argfiles are checked in for
-the policy-config anchor, route-bearing canaries, reserve movement, appeal
-policy, credit-line, provider-bake, and governance-approval evidence:
+A timestamp before the anchor is invalid. One `ChargeSorafsReserveRent`
+instruction may settle from 1 through
+`RESERVE_RENT_MAX_BILLING_PERIODS_V1` (12) whole periods and may never advance
+past its executing block timestamp. Backlog beyond 12 periods remains due for a
+later compare-and-set transaction.
 
-```bash
-python3 scripts/build_sorafs_reserve_rent_canary.py \
-  @scripts/examples/sorafs_reserve_rent_policy_config_canary.args.example
+The native charge:
 
-python3 scripts/build_sorafs_reserve_rent_canary.py \
-  @scripts/examples/sorafs_reserve_rent_lifecycle_service_canary.args.example
+1. verifies the exact operations authority, active policy digest, provider
+   revision, monotonic provider timestamp, and number of due periods;
+2. derives rent from the governed policy and authoritative reserve partition;
+3. performs the provider-to-treasury transfer atomically when rent is non-zero;
+4. advances the settlement anchor only in the successful provider after-state;
+5. resets overdue days and derives the current `Active` or `Warning` stage;
+6. increments the provider revision; and
+7. emits the committed `RentCharged` event.
 
-python3 scripts/build_sorafs_reserve_rent_canary.py \
-  @scripts/examples/sorafs_reserve_rent_signed_routes_canary.args.example
+A zero-rent period still executes `ChargeRent` and advances the anchor; it does
+not generate a transfer and cannot be converted into lifecycle aging.
 
-python3 scripts/build_sorafs_reserve_rent_canary.py \
-  @scripts/examples/sorafs_reserve_rent_reserve_movement_canary.args.example
+## Lifecycle derivation
 
-python3 scripts/build_sorafs_reserve_rent_canary.py \
-  @scripts/examples/sorafs_reserve_rent_appeal_policy_canary.args.example
+Lifecycle days are derived from the first unsettled boundary, not from
+`updated_at_unix`:
 
-python3 scripts/build_sorafs_reserve_rent_canary.py \
-  @scripts/examples/sorafs_reserve_rent_credit_line_canary.args.example
+`max(0, floor((T - (rent_charged_through_unix + billing_period_seconds)) / 86,400))`.
 
-python3 scripts/build_sorafs_reserve_rent_canary.py \
-  @scripts/examples/sorafs_reserve_rent_provider_bake_canary.args.example
+The exact due boundary is day zero. The native representation saturates only at
+`u16::MAX`.
 
-python3 scripts/build_sorafs_reserve_rent_canary.py \
-  @scripts/examples/sorafs_reserve_rent_governance_approval_canary.args.example
-```
+`AdvanceSorafsReserveLifecycle` rejects:
 
-The checker recognizes `sorafs.reserve.*` SFM-6 rollout schemas for policy
-configuration, quote matrix, ledger digest, lifecycle service, signed routes,
-reserve movements, credit-line accrual, appeal policy, metrics/alerts, provider
-bake, and governance approval. It reports `ready` only when every required kind
-is present, every recognized artifact is valid, raw ledgers/quotes/transfers,
-signed transactions, response bodies, and secrets are absent, ledger/provider
-bake timestamps are fresh, every lifecycle and signed-route response carries a
-lowercase `body_blake3_hex` digest, and lifecycle lag and signed-route latency
-are integer-unit evidence under the configured thresholds, provider-bake artifacts
-prove the config-backed reserve lifecycle scheduler canary ran recently enough before bake completion,
-advanced defaulting providers, synced gateway compliance, and preserved
-orderbook rejection, provider-bake artifacts bind `provider_count`,
-`rent_cycle_count`, `top_up_cycle_count`, `appeal_cycle_count`, and
-`scheduled_lifecycle_canary_tick_count` to unique canonical provider/cycle/tick
-inventories, require `providers[].name` entries to use
-reviewed lowercase `provider-*` labels without non-production markers, require
-`rent_cycles[].name`, `top_up_cycles[].name`, `appeal_cycles[].name`, and
-`scheduled_lifecycle_canary_ticks[].name` to use reviewed lowercase
-`reserve-rent-cycle-*`, `reserve-top-up-cycle-*`, `reserve-appeal-cycle-*`, and
-`reserve-lifecycle-tick-*` labels without non-production markers, and reject
-duplicate provider-bake entries before promotion can report ready,
-quote-matrix artifacts bind `scenario_count` and
-`passed_scenario_count` to the product of unique `storage_classes`, `tiers`, and
-`durations` inventories and reject duplicate or unknown dimension entries
-before promotion can report ready, ledger-digest artifacts bind `ledger_count`
-and `instruction_count` to the unique canonical `ledgers[].name` and
-`instructions[].name` inventories using reviewed `reserve-ledger-*` and
-`reserve-instruction-*` labels without non-production markers, and reject
-duplicate ledger/instruction entries before promotion can report ready, lifecycle-service artifacts bind `persisted_stage_count` to the unique canonical `persisted_stages[].name` inventory using reviewed `reserve-lifecycle-stage-*` labels without non-production markers, and reject duplicate persisted-stage entries before promotion can report ready, lifecycle-service and signed-route artifacts bind
-`route_count` to the unique canonical `routes[].name` inventories and reject
-duplicate or unknown route entries before promotion can report ready, and require
-every route response to carry a lowercase `body_blake3_hex` digest;
-reserve-movement
-artifacts bind `movement_count` to the unique canonical `movements[].action`
-inventory and reject duplicate or unknown movement-action entries before
-promotion can report ready. Reserve-movement artifacts must explicitly set
-`raw_transfer_included` and `raw_instruction_included` to `false` before
-promotion can report ready. Appeal-policy artifacts bind `appeal_probe_count` to the unique
-canonical `appeal_probes[].name` inventory and reject duplicate appeal-probe
-entries or unknown probe names before promotion can report ready, credit-line artifacts bind
-`credit_line_mutation_count` to unique canonical
-`credit_line_mutations[].name` and `accrual_cycle_count` to unique canonical
-`accrual_cycles[].name` inventories and reject duplicate or unknown credit-line
-entries before promotion can report ready, metrics artifacts bind
-`metric_count` to the unique canonical `metrics` inventory and reject duplicate
-or unknown metrics before promotion can report ready. Metrics artifacts must
-explicitly set `critical_alerts_firing` and `response_bodies_included` to
-`false` before promotion can report ready. The summary exports the
-sorted reviewed `metrics` inventory plus `metric_count_values`, and the
-aggregate production-readiness gate requires those fields to match the
-metrics/alert artifact fingerprint before final promotion can report ready.
-Reserve-movement artifacts prove live
-chain submission coverage, submitted transaction-hash readback, automatic
-finality polling,
-confirmed-status polling, timeout rejection, submitted, confirmed, and
-rejected custody evidence plus confirmed-balance readback and
-confirmed-withdrawal underflow rejection, credit-line artifacts prove live
-account-state mutation/readback, accrual posting, manual-approval tier
-non-mutation, and account-state reconciliation, governance approval artifacts
-prove source-entry publication, downstream compliance application, consumer
-coverage, handoff verification, and non-reserve compliance-entry preservation;
-governance approval artifacts must carry the accepted provider-bake `bake_id`
-and match it to a valid provider-bake artifact before final promotion can report
-ready;
-governance approval artifacts also bind `downstream_compliance_consumer_count`
-to the unique canonical `downstream_compliance_consumers[].name` inventory
-using reviewed `reserve-compliance-consumer-*` labels without non-production
-markers, and reject duplicate downstream-compliance consumer entries before
-promotion can report ready,
-the quote matrix binds to a valid policy
-`policy_digest_hex`, the ledger binds to that policy/matrix tuple, and
-lifecycle, route, movement, credit-line, appeal, metrics, provider-bake, and
-governance artifacts all carry the same payload-free
-`policy_digest_hex`/`matrix_digest_hex`/`ledger_digest_hex` tuple. The reserve-rent gate fail-closes when more than one valid policy, policy/matrix, or policy/matrix/ledger anchor appears, and clears the mixed `valid_policy_digests`, `valid_policy_matrix_bindings`, or `valid_policy_matrix_ledger_bindings` set before aggregate promotion can report ready. The aggregate production-readiness gate also preserves that chain by requiring
-policies in `valid_policy_matrix_bindings` to appear in `valid_policy_digests`,
-ledger binding policy/matrix pairs to appear in `valid_policy_matrix_bindings`,
-and provider-bake policy/matrix/ledger tuples to appear in
-`valid_policy_matrix_ledger_bindings` before final promotion can report ready.
-It also rechecks policy-bound, matrix-bound, and ledger-bound artifact
-fingerprints against `valid_policy_digests`, `valid_policy_matrix_bindings`, and
-`valid_policy_matrix_ledger_bindings`.
-The governance packet must also be bound to `iroha_config`. Tuple binding failures
-are recorded on the offending artifact before required-kind validity is
-computed, so the JSON summary matches the fail-closed rollout decision. The
-collection planner's dry-run JSON also includes the checker-backed `evidence_contract` map so
-operators can inspect the exact required fields for each requested evidence
-kind before collecting or submitting live artifacts.
+- a supplied day count different from the anchor-derived value;
+- a block timestamp before the provider's latest mutation;
+- a transition that changes neither day count nor lifecycle stage; and
+- lifecycle aging when at least one rent period is due and one whole
+  `effective_rent` is affordable from the provider's exact governed-asset
+  balance.
 
-### Quote Matrix Generator
+The last rule also covers zero effective rent. A funded provider must settle
+through `ChargeRent`, preventing a faulty or compromised worker from defaulting
+an account that can pay.
 
-Run `cargo xtask sorafs-reserve-matrix` to emit a deterministic JSON matrix of
-rent/reserve quotes covering the requested storage classes, tiers, durations,
-and capacity bands. The task loads `ReservePolicyV1` (either from the embedded
-defaults or the supplied `--policy-json`/`--policy-norito` override), applies
-the underwriting ratios documented above, and records both the raw micro-XOR
-amounts and the policy metadata so dashboards can assert provenance.
+Day-zero lifecycle convergence remains valid. A reserve top-up, withdrawal,
+credit change, or policy rotation can change `Active`/`Warning` even before the
+first rent boundary; the worker emits an exact day-zero lifecycle instruction
+only when the authoritative stage differs.
 
-```bash
-cargo xtask sorafs-reserve-matrix \
-  --capacity 10 --capacity 100 --capacity 1000 \
-  --storage-class hot --storage-class warm \
-  --tier tier-a --tier tier-b \
-  --duration monthly --duration annual \
-  --reserve-balance 250.5 \
-  --out artifacts/sorafs_reserve/matrix.json
-```
+## Supervised worker
 
-Use `--label <text>` to tag the generated artefact (useful when comparing
-dashboards or governance submissions) and `--reserve-balance <XOR>` to model
-effective rent when an operator already maintains a reserve. The JSON output
-includes `policy_sha256`, `policy_version`, and `reserve_balance_micro_xor`
-fields alongside per-combination quotes so automation and analytics tooling can
-trace every data point back to the exact policy used. Each quote entry also
-contains a `ledger_projection` block (matching the CLI output) so dashboards,
-reserve auditors, and ledger ISIs can render rent/reserve deltas without
-recomputing underwriting math.
+The Torii worker reads all generation inputs from one immutable finalized view:
 
-### Reserve Ledger Digest & Dashboard Wiring
+- the finalized height, block hash, and signed block timestamp;
+- the active policy and digest;
+- a bounded, provider-ID-ordered account page;
+- each provider's authoritative reserve partition; and
+- the exact balance of the governed asset held by that provider.
 
-Field teams asked for a deterministic way to embed `iroha app sorafs reserve ledger`
-output inside dashboards and governance packets. The workflow below turns the
-CLI JSON into a reusable digest and keeps the telemetry panels in sync with the
-ledger projection that triggered the payment.
+For every provider it:
 
-1. **Generate the ledger projection JSON.**
-   ```bash
-   iroha app sorafs reserve ledger \
-     --quote artifacts/sorafs_reserve/quotes/provider-alpha-apr.json \
-     --provider-account <i105-account-id> \
-     --treasury-account <i105-account-id> \
-     --reserve-account <i105-account-id> \
-     --asset-definition 61CtjvNd9T3THAR65GsMVHr82Bjc \
-     > artifacts/sorafs_reserve/ledger/provider-alpha-apr.json
-   ```
-2. **Normalise the values with the new helper.**
-   ```bash
-   python3 scripts/telemetry/reserve_ledger_digest.py \
-     --ledger artifacts/sorafs_reserve/ledger/provider-alpha-apr.json \
-     --label provider-alpha-apr \
-     --out-json artifacts/sorafs_reserve/ledger/provider-alpha-apr.digest.json \
-     --out-md docs/source/sorafs/reports/provider-alpha-apr-ledger.md \
-     --out-prom artifacts/sorafs_reserve/ledger/provider-alpha-apr.prom
-   ```
-   `scripts/telemetry/reserve_ledger_digest.py` validates the canonical exact
-   XOR strings without a micro-XOR projection, preserving all nine fractional
-   digits and values wider than `u128`. It records whether underwriting
-   thresholds were satisfied and hashes the execution timestamp. The helper
-   also captures the **transfer feed**
-   (`transfers` block) so rent and reserve top-ups appear alongside the projected
-   ledger deltas, and `instruction_count` proves the CLI emitted both transfers.
-   The script accepts multiple `--ledger` paths (plus per-ledger `--label`
-   overrides) and can emit NDJSON batches via `--ndjson-out`, letting economics
-   automation ingest an entire rent cycle without bespoke glue. The Markdown
-   and JSON digests slot directly into governance packets while the JSON
-   artefact can be ingested by automation or replayed in dashboards. The
-   `--out-prom` flag writes a Prometheus textfile snapshot (`sorafs_reserve_ledger_*`
-   metrics, including `sorafs_reserve_ledger_transfer_xor` +
-   `sorafs_reserve_ledger_instruction_total`) so any node exporter with the
-   textfile collector enabled can surface the latest ledger requirements to
-   Grafana and Alertmanager without bespoke exporters; batched runs append every
-   ledger to the same textfile so Alertmanager rewires as soon as treasury
-   stages a new reserve transfer.
-3. **Attach the digest to telemetry.** Publish the `--out-prom` textfile through
-   the node exporter textfile collector and keep the JSON digest under
-   `artifacts/sorafs_reserve/ledger/<provider>/` so the observability jobs that
-   refresh `dashboards/grafana/sorafs_capacity_health.json` and the
-   reserve-focused board in `dashboards/grafana/sorafs_reserve_economics.json`
-   can locate the latest projection before each rent cycle.
-4. **Update the runbook evidence block.** Drop the Markdown digest next to the
-   weekly economics report (`docs/source/sorafs/reports/`) and link it from the
-   rent burn-down so reviewers see the exact ledger inputs that produced the
-   transfers.
+1. computes whole due periods from the settlement anchor;
+2. caps the candidate charge at 12 periods;
+3. selects the largest whole-period batch affordable by the exact balance;
+4. emits `ChargeRent` when at least one period is affordable;
+5. otherwise derives lifecycle days and stage; and
+6. emits `AdvanceLifecycle` only when day count or stage differs.
 
-### Metrics, Dashboards, and Alerts
+Generation is deterministic across replicas. The operation identity includes
+the active policy and provider revision, so same-tip replay is idempotent and a
+policy rotation produces new governed semantics. Concurrent submissions are
+resolved by the native provider revision; only one stale-revision competitor
+can commit.
 
-Reserve telemetry now hinges on the DA counters emitted by Torii
-(`crates/iroha_telemetry/src/metrics.rs`). The table below calls out the panels
-and alert packs that consume those metrics so operators know which evidence to
-collect after running the ledger helper.
+`[sorafs.storage.reserve_worker].enabled` controls generation only. Durable
+outbox drain and finalized reconciliation always start, including while
+generation or SoraFS storage is disabled. Scan cadence, page size, queue bounds,
+attempt bounds, and checkpoint bounds come from `iroha_config`.
 
-| Metric | Grafana panel / dashboard | Alert / Runbook hook | Notes |
-|--------|--------------------------|----------------------|-------|
-| `torii_da_rent_base_micro_total` | “DA Rent Distribution (XOR/hour)” in `dashboards/grafana/sorafs_capacity_health.json` | Include in the weekly rent digest; panel traces how much rent was invoiced as XOR. |
-| `torii_da_protocol_reserve_micro_total` | Same dashboard/panel (`refId=B`) | Feed into `dashboards/alerts/sorafs_capacity_rules.yml` via the `SoraFSCapacityPressure` context; rising reserve flows drive early warnings when underwriting falls behind. |
-| `torii_da_provider_reward_micro_total` | “DA Rent Distribution” (`refId=C`) | Record spurts inside the economics status note so treasury can correlate payouts with ledger digests. |
-| `torii_da_pdp_bonus_micro_total` / `torii_da_potr_bonus_micro_total` | “DA Bonus Accrual (XOR/hour)” panel in `dashboards/grafana/sorafs_capacity_health.json` | Reference in the PDP/PoTR compliance runbook; attach Alertmanager output when bonuses exceed policy. |
-| `torii_da_rent_gib_months_total` | Capacity Usage widgets (same dashboard) | Pair with the ledger digest to show how many GiB·months were invoiced alongside the XOR amounts. |
-| `sorafs_reserve_ledger_*` (rent/top-up/underwriting gauges) | “Reserve Snapshot (XOR)” + “Top-up Required” in `dashboards/grafana/sorafs_reserve_economics.json` (mirrored cards remain on the capacity board for historical context) | `SoraFSReserveLedgerTopUpRequired` and `SoraFSReserveLedgerUnderwritingBreach` inside `dashboards/alerts/sorafs_capacity_rules.yml` fire when the CLI projects a top-up or an underwriting failure. |
-| `sorafs_reserve_ledger_transfer_xor`, `sorafs_reserve_ledger_instruction_total` | “Transfers by Kind”, “Latest Transfer Breakdown”, the coverage cards in `dashboards/grafana/sorafs_reserve_economics.json`, and the mirrored transfer coverage stats on the capacity board (`dashboards/grafana/sorafs_capacity_health.json`) | `SoraFSReserveLedgerInstructionMissing`, `SoraFSReserveLedgerRentTransferMissing`, `SoraFSReserveLedgerTopUpTransferMissing`, `SoraFSReserveTransferRentMismatch`, and `SoraFSReserveTransferTopUpMismatch` in `dashboards/alerts/sorafs_capacity_rules.yml` cover missing/zeroed or mismatched transfer feeds whenever rent/top-up is required. |
+The former process-local reserve lifecycle scheduler, lifecycle/movement
+routes, local reserve checkpoint, and CLI adapters are removed from the V1
+surface. Test fixtures submit the same native instructions used in production;
+there is no second reserve record format that can feed admission, settlement,
+reputation, or compliance decisions.
 
-Whenever the counters or dashboards change, re-run
-`python3 scripts/telemetry/reserve_ledger_digest.py --ledger <...> --print` (or
-point `--ndjson-out` / `--out-prom` at the automation directories) and attach
-the refreshed digest to the rent burn-in evidence bundle. This keeps the
-dashboards, alert packs, and governance packets aligned with the latest ledger
-projection without re-deriving the math by hand. The transfer feed plus coverage
-cards make it obvious when rent/reserve instructions drift from the ledger
-projection, and the new alerts fire as soon as a digest omits the required rent
-or reserve top-up transfers.
+## Torii and client boundary
 
-## Rollout Status
-- Done: deterministic policy formulas, JSON/Norito payloads, quote/ledger/lifecycle CLI helpers, signed reserve top-up/withdrawal/status/movement/custody/credit-line/appeal/policy CLI commands, local lifecycle/credit projection, local accepted-appeal lifecycle overrides, already-effective lifecycle-policy provider reprojection, signed local lifecycle advancement, config-backed reserve lifecycle scheduler automation, reserve-adjusted reputation snapshot publication, local orderbook reserve-lifecycle ask admission, reserve lifecycle, lifecycle-policy, and rejected movement-custody gateway compliance denylist sync, local `sorafs_node` provider-summary, lifecycle-event, credit-line, appeal, lifecycle-policy, and movement-ledger runtime with separate local and chain-confirmed balance projections, signed Torii lifecycle, local movement/readback, custody-status, credit-line, appeal, lifecycle-policy, and lifecycle-advance routes, matrix generation, ledger digest conversion, dashboards, alert rules, fail-closed rollout evidence gate with scheduled lifecycle canary provider-bake checks, live chain submission/finality-poll reserve-movement evidence checks, custody/finality reserve-movement checks, live credit-line account-state evidence checks, downstream governance compliance evidence checks, and dry-run evidence-contract export, collection planner, operator argfile templates, and focused tests for those local paths.
-- Remaining: live chain custody submission and automatic finality polling for signed movement intents, live account mutation for local credit-line state, broader downstream compliance application evidence for governance source entries, and staged provider bake evidence, including live scheduled lifecycle canaries, that passes the rollout gate.
+Reserve mutations accept one exact caller-signed `SignedTransaction` encoded as
+versioned Norito. The transaction must contain exactly one route-matching
+native instruction, use the active chain ID and governed authority, carry the
+exact five-minute V1 TTL, and omit nonce, metadata, attachments, and
+compatibility payloads. Torii binds provider revision and policy digest against
+one immutable ledger view before strict durable ingress.
 
-The runner validates the schema-closed collection-plan envelope before printing dry-run JSON or executing the verifier.
-It also rejects malformed nested required-kind, threshold, external-evidence, and checker-backed evidence-contract shapes before live SFM-6 rollout evidence can be submitted.
+The V1 HTTP surface is:
+
+- `POST /v1/sorafs/reserve/top-up` and `/withdraw`;
+- `POST /v1/sorafs/reserve/movements/{movement_id_hex}/decision`;
+- `POST /v1/sorafs/reserve/credit/draw` and `/credit/repay`;
+- `POST /v1/sorafs/reserve/appeals` and
+  `/appeals/{appeal_id_hex}/decision`;
+- authenticated finalized reads under `/policy`, `/providers`, `/movements`,
+  `/appeals`, and `/events`; and
+- committed event streaming under `/events/stream` and `/events/ws`.
+
+There is no lifecycle update/advance route, custody callback route, balance
+alias, credit-line alias, local JSON mutation body, or fallback endpoint. The
+Rust client submits the same signed transaction bytes and exposes finalized
+exclusive-cursor filters; operators construct governance-only policy,
+registration, rent, and lifecycle instructions through the normal transaction
+tooling or the supervised worker.
+
+## Durable signing, submission, and reconciliation
+
+Generated operations enter the bounded reserve transaction forwarder before
+signing. A signing attempt is consumed atomically; restart recovery changes a
+stranded signer claim back to ready without refunding the attempt.
+
+The signer boundary receives only the exact fee-quoted `TransactionPayload`.
+It must return a transaction with the governed authority, active chain ID, and
+single expected native reserve instruction. Production injects a
+PKCS#11/HSM-backed signer; file keys and environment overrides are
+test/development-only.
+
+Canonical signed bytes are persisted before submission. Their retained digest
+is BLAKE3 over those exact bytes. Submission uses strict durable Torii routing;
+relayers are never accepted as substitute signers.
+
+Reconciliation reads one finalized view and verifies:
+
+- the current semantic provider/policy state;
+- the transaction index;
+- the exact Kura block at the indexed height and hash; and
+- exactly one matching external transaction entrypoint and its committed
+  applied/rejected result.
+
+Queued, approved, committed, or applied local pipeline evidence suppresses an
+unsafe absence retry. Exact application, semantic application, rejection,
+authoritative absence, retry exhaustion, and conflict use durable transitions
+or bounded dead letters. The pending cursor is circular, so a small scan batch
+cannot strand older deferred entries.
+
+## Native query surface
+
+Production consumers use finalized typed queries:
+
+- `FindSorafsReservePolicy`;
+- `FindSorafsReserveProviderById` and `FindSorafsReserveProviders`;
+- `FindSorafsReserveMovementById` and `FindSorafsReserveMovements`;
+- `FindSorafsReserveAppealById` and `FindSorafsReserveAppeals`; and
+- `FindSorafsReserveEvents`.
+
+Paged queries are exclusive-cursor, bounded, canonically encoded, and tied to a
+`ReserveFinalizedCursorV1`. A supplied cursor must match the immutable view.
+Reputation, orderbook, compliance, and transparency consumers must use these
+committed projections rather than local reserve summaries.
+
+## Finalized telemetry projection
+
+Reserve dashboards are no longer fed by a `sorafs_node` runtime snapshot. The
+supervised Torii worker rebuilds movement and appeal totals from the contiguous
+typed finalized event journal, then scans current provider accounts in the same
+immutable finalized view. It publishes only after journal-derived pending
+movement and appeal totals exactly match the committed per-provider counters.
+Until that check succeeds, or after any query/cursor/arithmetic/capacity error,
+`torii_sorafs_reserve_finalized_projection_ready` is zero and no partial
+economic gauges replace the last complete projection.
+
+Provider credit metrics are aggregated by the five fixed lifecycle stages;
+movement metrics use the three fixed native statuses. Provider IDs, movement
+IDs, appeal IDs, account IDs, and payload material are never metric labels.
+Each complete publication exposes its finalized height, while failed refreshes
+increment a payload-free counter. Event catch-up is bounded to 1,024 records per
+scan and the current provider scan fails closed above the explicit 4,096-record
+V1 telemetry capacity instead of publishing a truncated view.
+
+## Required validation evidence
+
+`scripts/build_sorafs_reserve_rent_canary.py` builds the payload-free evidence
+envelopes consumed by the reserve rollout checker. It is evidence tooling only:
+it cannot create, replace, or attest native ledger state, and production
+promotion must use observations collected from the reviewed deployment.
+
+Reserve/rent promotion evidence must cover:
+
+- due-period and timestamp rollback bounds;
+- the 12-period cap and multi-batch catch-up;
+- largest-affordable partial batches and exact-balance settlement;
+- zero-rent anchor advancement;
+- insufficient-funds and failed-transfer rollback;
+- lifecycle exact-boundary, day-zero convergence, and no-op suppression;
+- funded-provider lifecycle rejection;
+- active-policy rotation and stale-revision concurrency;
+- finalized-event catch-up, cursor-gap/underflow rejection, atomic page replay,
+  provider-counter reconciliation, bounded labels, and projection capacity;
+- a fresh metrics scrape digest with projection readiness equal to one, a
+  positive represented finalized height, and zero refresh failures over the
+  preceding five minutes;
+- restart during signing/submission and retry exhaustion;
+- exact applied/rejected/absent transaction observation;
+- corrupt signed bytes, digest mismatch, missing/duplicate Kura entrypoints, and
+  stale finalized cursors; and
+- circular scan behavior with a batch size of one.
+
+The reserve lane is release-ready only when these tests, the full workspace and
+SDK gates, the four-validator deployment exercise, security review, disaster
+recovery rehearsal, and signed aggregate readiness evidence all pass. This
+document describes the V1 contract; it does not substitute for those promotion
+artifacts.

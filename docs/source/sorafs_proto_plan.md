@@ -25,7 +25,7 @@ live release evidence and SDK distribution hygiene, not defining a separate
 | PoR / audit | `por.rs` | `PorChallengeV1`, `PorProofV1`, `AuditVerdictV1` |
 | PDP | `pdp.rs` | PDP commitment/challenge/proof descriptors and validators |
 | PoTR | `potr.rs` | `PotrProbeV1`, `PotrReceiptV1`, `PotrVerdictV1` |
-| Repair | `repair.rs` | repair tasks, evidence, reports, policies, approvals, auditor requests, worker signatures, events |
+| Repair | `repair.rs` | bounded repair evidence, reports, reference task records, slash proposals, policies, approvals, and publication/audit events; native repair instructions and typed committed events are defined in `iroha_data_model` |
 | Reputation | `reputation.rs` | reputation weights, provider inputs, snapshots, events, Merkle proofs |
 | Governance DAG | `governance.rs` | `GovernanceLogNodeV1`, payload variants, publisher signatures |
 | Reference validation | `reference.rs`, `reference_ffi.rs` | `ValidationOutcomeV1`, byte validators, C ABI facade |

@@ -5,8 +5,8 @@
 use std::collections::BTreeSet;
 
 use crate::{
-    ChunkingProfileV1, GovernanceProofs, MANIFEST_VERSION_V1, ManifestV1, PinPolicy, ProfileId,
-    StorageClass, chunker_registry,
+    ChunkingProfileV1, EMPTY_POR_ROOT_V1, GovernanceProofs, MANIFEST_VERSION_V1, ManifestV1,
+    PinPolicy, ProfileId, StorageClass, chunker_registry,
 };
 
 /// Maximum canonical Norito manifest size admitted by first-release nodes.
@@ -163,6 +163,10 @@ pub enum ManifestValidationError {
     InertRootCidDigest,
     #[error("manifest chunk-plan SHA3-256 digest must not be zero")]
     InertChunkDigest,
+    #[error("non-empty manifest content requires a non-zero PoR root")]
+    InertPorRoot,
+    #[error("empty manifest content requires the canonical zero PoR root")]
+    NonCanonicalEmptyPorRoot,
     #[error("manifest DAG codec must be non-zero")]
     InvalidDagCodec,
     #[error("unsupported manifest DAG codec {found:#x}; expected dag-cbor {expected:#x}")]
@@ -423,6 +427,14 @@ fn validate_manifest_geometry(manifest: &ManifestV1) -> Result<(), ManifestValid
     )?;
     if manifest.chunk_digest_sha3_256.iter().all(|byte| *byte == 0) {
         return Err(ManifestValidationError::InertChunkDigest);
+    }
+    match (
+        manifest.content_length == 0,
+        manifest.por_root == EMPTY_POR_ROOT_V1,
+    ) {
+        (false, true) => return Err(ManifestValidationError::InertPorRoot),
+        (true, false) => return Err(ManifestValidationError::NonCanonicalEmptyPorRoot),
+        (false, false) | (true, true) => {}
     }
     if manifest.car_digest.iter().all(|byte| *byte == 0) {
         return Err(ManifestValidationError::InertCarDigest);
@@ -747,6 +759,7 @@ mod tests {
             .dag_codec(crate::DagCodecId(chunker_registry::MANIFEST_DAG_CODEC))
             .chunking_from_registry(chunker_registry::default_descriptor().id)
             .chunk_digest_sha3_256([0xAC; 32])
+            .por_root([0xAD; 32])
             .content_length(1_048_576)
             .car_digest([0xAB; 32])
             .car_size(1_100_000)
@@ -1141,6 +1154,25 @@ mod tests {
             validate_manifest(&zero_chunk_digest, &default_constraints()),
             Err(ManifestValidationError::InertChunkDigest)
         ));
+
+        let mut zero_por_root = manifest_with_defaults();
+        zero_por_root.por_root = EMPTY_POR_ROOT_V1;
+        assert!(matches!(
+            validate_manifest(&zero_por_root, &default_constraints()),
+            Err(ManifestValidationError::InertPorRoot)
+        ));
+
+        let mut noncanonical_empty_por_root = manifest_with_defaults();
+        noncanonical_empty_por_root.content_length = 0;
+        assert!(matches!(
+            validate_manifest(&noncanonical_empty_por_root, &default_constraints()),
+            Err(ManifestValidationError::NonCanonicalEmptyPorRoot)
+        ));
+
+        let mut canonical_empty_por_root = manifest_with_defaults();
+        canonical_empty_por_root.content_length = 0;
+        canonical_empty_por_root.por_root = EMPTY_POR_ROOT_V1;
+        assert!(validate_manifest_geometry(&canonical_empty_por_root).is_ok());
 
         let mut zero_car_digest = manifest_with_defaults();
         zero_car_digest.car_digest.fill(0);

@@ -6,8 +6,7 @@ use crate::{PorChunkTree, PorLeaf, PorMerkleTree, PorProof, PorSegment};
 
 const POR_PROOF_MAX_SEGMENT_LEAVES: usize = crate::POR_SEGMENT_SIZE / crate::POR_LEAF_SIZE;
 const POR_PROOF_MAX_CHUNK_SEGMENTS: usize =
-    (4 * 1024 * 1024_usize).div_ceil(crate::POR_SEGMENT_SIZE);
-const POR_PROOF_MAX_CHUNK_ROOTS: usize = 2_048;
+    (crate::CHUNK_STORE_MAX_CHUNK_BYTES as usize).div_ceil(crate::POR_SEGMENT_SIZE);
 
 /// Convert the full PoR tree into a Norito JSON value (root → chunks → segments → leaves).
 #[must_use]
@@ -18,6 +17,7 @@ pub fn tree_to_value(tree: &PorMerkleTree) -> Value {
         "chunk_count".into(),
         Value::from(tree.chunks().len() as u64),
     );
+    root.insert("leaf_count".into(), Value::from(tree.leaf_count_u64()));
 
     let mut chunk_entries = Vec::with_capacity(tree.chunks().len());
     for chunk in tree.chunks() {
@@ -33,6 +33,9 @@ pub fn tree_to_value(tree: &PorMerkleTree) -> Value {
 pub fn proof_to_map(proof: &PorProof) -> Map {
     let mut map = Map::new();
     map.insert("payload_len".into(), Value::from(proof.payload_len));
+    map.insert("chunk_count".into(), Value::from(proof.chunk_count));
+    map.insert("leaf_count".into(), Value::from(proof.leaf_count));
+    map.insert("leaf_index_flat".into(), Value::from(proof.leaf_index_flat));
     map.insert("chunk_index".into(), Value::from(proof.chunk_index as u64));
     map.insert("chunk_offset".into(), Value::from(proof.chunk_offset));
     map.insert(
@@ -92,10 +95,10 @@ pub fn proof_to_map(proof: &PorProof) -> Map {
         ),
     );
     map.insert(
-        "chunk_roots_hex".into(),
+        "chunk_merkle_path_hex".into(),
         Value::Array(
             proof
-                .chunk_roots
+                .chunk_merkle_path
                 .iter()
                 .map(|digest| Value::from(to_hex(digest)))
                 .collect(),
@@ -117,6 +120,9 @@ pub fn proof_from_value(value: &Value) -> Result<PorProof, String> {
         .ok_or_else(|| "expected PoR proof JSON object".to_string())?;
     const FIELDS: &[&str] = &[
         "payload_len",
+        "chunk_count",
+        "leaf_count",
+        "leaf_index_flat",
         "chunk_index",
         "chunk_offset",
         "chunk_length",
@@ -133,15 +139,47 @@ pub fn proof_from_value(value: &Value) -> Result<PorProof, String> {
         "leaf_digest_hex",
         "segment_leaves_hex",
         "chunk_segments_hex",
-        "chunk_roots_hex",
+        "chunk_merkle_path_hex",
     ];
     if let Some(field) = obj.keys().find(|field| !FIELDS.contains(&field.as_str())) {
         return Err(format!("unknown field `{field}` in canonical PoR proof"));
     }
     let payload_len = expect_u64(obj, "payload_len")?;
+    let chunk_count = expect_u64(obj, "chunk_count")?;
+    if chunk_count == 0 || chunk_count > crate::CAR_PLAN_MAX_CHUNKS as u64 {
+        return Err(format!(
+            "chunk_count is outside 1..={}",
+            crate::CAR_PLAN_MAX_CHUNKS
+        ));
+    }
+    let leaf_count = expect_u64(obj, "leaf_count")?;
+    let minimum_leaf_count = payload_len.div_ceil(
+        u64::try_from(crate::POR_LEAF_SIZE)
+            .map_err(|_| "canonical PoR leaf size exceeds u64".to_string())?,
+    );
+    if payload_len == 0
+        || leaf_count < minimum_leaf_count
+        || leaf_count < chunk_count
+        || leaf_count > payload_len
+    {
+        return Err("leaf_count is inconsistent with canonical PoR geometry".to_string());
+    }
+    let leaf_index_flat = expect_u64(obj, "leaf_index_flat")?;
+    if leaf_index_flat >= leaf_count {
+        return Err("leaf_index_flat must be less than leaf_count".to_string());
+    }
     let chunk_index = expect_usize(obj, "chunk_index")?;
+    if chunk_index as u64 >= chunk_count {
+        return Err("chunk_index must be less than chunk_count".to_string());
+    }
     let chunk_offset = expect_u64(obj, "chunk_offset")?;
     let chunk_length = expect_u32(obj, "chunk_length")?;
+    if chunk_length == 0 || chunk_length > crate::CHUNK_STORE_MAX_CHUNK_BYTES {
+        return Err(format!(
+            "chunk_length is outside 1..={}",
+            crate::CHUNK_STORE_MAX_CHUNK_BYTES
+        ));
+    }
     let chunk_digest = expect_digest(obj, "chunk_digest_hex")?;
     let chunk_root = expect_digest(obj, "chunk_root_hex")?;
     let segment_index = expect_usize(obj, "segment_index")?;
@@ -161,10 +199,25 @@ pub fn proof_from_value(value: &Value) -> Result<PorProof, String> {
         expect_digest_array(obj, "segment_leaves_hex", POR_PROOF_MAX_SEGMENT_LEAVES)?;
     let chunk_segments =
         expect_digest_array(obj, "chunk_segments_hex", POR_PROOF_MAX_CHUNK_SEGMENTS)?;
-    let chunk_roots = expect_digest_array(obj, "chunk_roots_hex", POR_PROOF_MAX_CHUNK_ROOTS)?;
+    let chunk_merkle_path = expect_digest_array(
+        obj,
+        "chunk_merkle_path_hex",
+        crate::POR_CHUNK_MERKLE_MAX_DEPTH,
+    )?;
+    let chunk_count_usize =
+        usize::try_from(chunk_count).map_err(|_| "chunk_count exceeds host width".to_string())?;
+    let expected_chunk_path_depth = crate::chunk_merkle_depth(chunk_count_usize);
+    if chunk_merkle_path.len() != expected_chunk_path_depth {
+        return Err(format!(
+            "chunk_merkle_path_hex must contain exactly {expected_chunk_path_depth} digests"
+        ));
+    }
 
     Ok(PorProof {
         payload_len,
+        chunk_count,
+        leaf_count,
+        leaf_index_flat,
         chunk_index,
         chunk_offset,
         chunk_length,
@@ -181,7 +234,7 @@ pub fn proof_from_value(value: &Value) -> Result<PorProof, String> {
         leaf_digest,
         segment_leaves,
         chunk_segments,
-        chunk_roots,
+        chunk_merkle_path,
     })
 }
 
@@ -189,7 +242,10 @@ pub fn proof_from_value(value: &Value) -> Result<PorProof, String> {
 #[must_use]
 pub fn sample_to_map(flat_index: usize, proof: &PorProof) -> Map {
     let mut map = Map::new();
-    map.insert("leaf_index_flat".into(), Value::from(flat_index as u64));
+    let flat_index =
+        u64::try_from(flat_index).expect("host PoR sample index must fit the u64 proof format");
+    debug_assert_eq!(flat_index, proof.leaf_index_flat);
+    map.insert("leaf_index_flat".into(), Value::from(flat_index));
     map.insert("chunk_index".into(), Value::from(proof.chunk_index as u64));
     map.insert(
         "segment_index".into(),
@@ -242,15 +298,6 @@ fn parse_proof_index(value: &str, label: &str) -> Result<usize, String> {
         .map_err(|err| format!("invalid {label} in --por-proof: {err}"))
 }
 
-/// SplitMix64 PRNG helper used for deterministic sampling.
-#[must_use]
-pub fn splitmix64(state: u64) -> u64 {
-    let mut z = state.wrapping_add(0x9e3779b97f4a7c15);
-    z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94d049bb133111eb);
-    z ^ (z >> 31)
-}
-
 fn chunk_to_map(chunk: &PorChunkTree) -> Map {
     let mut obj = Map::new();
     obj.insert("chunk_index".into(), Value::from(chunk.chunk_index as u64));
@@ -286,6 +333,7 @@ fn segment_to_map(segment: &PorSegment) -> Map {
 
 fn leaf_to_map(leaf: &PorLeaf) -> Map {
     let mut obj = Map::new();
+    obj.insert("leaf_index_flat".into(), Value::from(leaf.flat_index));
     obj.insert("offset".into(), Value::from(leaf.offset));
     obj.insert("length".into(), Value::from(leaf.length as u64));
     obj.insert("digest_hex".into(), Value::from(to_hex(&leaf.digest)));
@@ -340,13 +388,13 @@ fn expect_digest_array(map: &Map, key: &str, maximum: usize) -> Result<Vec<[u8; 
 }
 
 fn parse_digest_hex(hex: &str) -> Result<[u8; 32], String> {
-    let bytes = hex_to_vec(hex)?;
-    if bytes.len() != 32 {
+    if hex.len() != 64 {
         return Err(format!(
-            "expected 32-byte digest, found {} bytes",
-            bytes.len()
+            "expected 64 hexadecimal characters for a 32-byte digest, found {}",
+            hex.len()
         ));
     }
+    let bytes = hex_to_vec(hex)?;
     let mut digest = [0u8; 32];
     digest.copy_from_slice(&bytes);
     Ok(digest)
@@ -415,8 +463,7 @@ mod tests {
     fn proof_json_is_closed_canonical_and_self_verifying() {
         let value = canonical_proof_value();
         let proof = proof_from_value(&value).expect("parse canonical PoR proof");
-        let root = crate::hash_root(proof.payload_len, &proof.chunk_roots);
-        assert!(proof.verify(&root));
+        assert!(proof.is_internally_consistent());
 
         let mut unknown = value.as_object().expect("proof object").clone();
         unknown.insert("payload".into(), Value::from("retired"));
@@ -424,6 +471,15 @@ mod tests {
             proof_from_value(&Value::Object(unknown))
                 .expect_err("unknown nested proof field must fail")
                 .contains("unknown field")
+        );
+
+        let mut retired_roots = value.as_object().expect("proof object").clone();
+        retired_roots.insert("chunk_roots_hex".into(), Value::Array(Vec::new()));
+        let error = proof_from_value(&Value::Object(retired_roots))
+            .expect_err("retired full chunk-root inventory must fail closed");
+        assert!(
+            error.contains("unknown field") && error.contains("chunk_roots_hex"),
+            "unexpected retired chunk-root error: {error}"
         );
 
         let mut uppercase = value.as_object().expect("proof object").clone();
@@ -453,10 +509,60 @@ mod tests {
                 .contains("leaf bound")
         );
 
+        let mut chunk_count_bomb = canonical.clone();
+        chunk_count_bomb.insert(
+            "chunk_count".into(),
+            Value::from(crate::CAR_PLAN_MAX_CHUNKS as u64 + 1),
+        );
+        assert!(
+            proof_from_value(&Value::Object(chunk_count_bomb))
+                .expect_err("oversized chunk count must fail")
+                .contains("chunk_count is outside")
+        );
+
+        let mut zero_leaf_count = canonical.clone();
+        zero_leaf_count.insert("leaf_count".into(), Value::from(0_u64));
+        assert!(
+            proof_from_value(&Value::Object(zero_leaf_count))
+                .expect_err("zero leaf population must fail")
+                .contains("canonical PoR geometry")
+        );
+
+        let mut out_of_range_flat_index = canonical.clone();
+        let leaf_count = canonical
+            .get("leaf_count")
+            .and_then(Value::as_u64)
+            .expect("canonical leaf count");
+        out_of_range_flat_index.insert("leaf_index_flat".into(), Value::from(leaf_count));
+        assert!(
+            proof_from_value(&Value::Object(out_of_range_flat_index))
+                .expect_err("out-of-range flat leaf index must fail")
+                .contains("less than leaf_count")
+        );
+
+        let mut oversized_chunk = canonical.clone();
+        oversized_chunk.insert(
+            "chunk_length".into(),
+            Value::from(u64::from(crate::CHUNK_STORE_MAX_CHUNK_BYTES) + 1),
+        );
+        assert!(
+            proof_from_value(&Value::Object(oversized_chunk))
+                .expect_err("oversized chunk must fail")
+                .contains("chunk_length is outside")
+        );
+
+        let mut digest_string_bomb = canonical.clone();
+        digest_string_bomb.insert("chunk_digest_hex".into(), Value::from("aa".repeat(4_096)));
+        assert!(
+            proof_from_value(&Value::Object(digest_string_bomb))
+                .expect_err("oversized digest string must fail before decoding")
+                .contains("expected 64 hexadecimal characters")
+        );
+
         for (field, maximum) in [
             ("segment_leaves_hex", POR_PROOF_MAX_SEGMENT_LEAVES),
             ("chunk_segments_hex", POR_PROOF_MAX_CHUNK_SEGMENTS),
-            ("chunk_roots_hex", POR_PROOF_MAX_CHUNK_ROOTS),
+            ("chunk_merkle_path_hex", crate::POR_CHUNK_MERKLE_MAX_DEPTH),
         ] {
             let mut bomb = canonical.clone();
             bomb.insert(

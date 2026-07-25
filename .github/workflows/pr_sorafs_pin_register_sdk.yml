@@ -19,6 +19,10 @@ on:
       - "csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiJsonSerializerContext.cs"
       - "csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs"
       - "csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj"
+      - "crates/iroha/src/client.rs"
+      - "crates/iroha_torii/src/openapi.rs"
+      - "crates/iroha_torii/src/routing.rs"
+      - "crates/iroha_torii/tests/sorafs_discovery.rs"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/RegisterPinManifestInstruction.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sorafs/SorafsRegisterPinManifestBuilderTests.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/testing/SimpleJson.java"
@@ -169,6 +173,17 @@ jobs:
           bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-js-source-endpoint
           bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-js-adversarial-test
           bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-python-adversarial-test
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-rust-client-dual-manifest-source
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-rust-client-manifest-b64-wire
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-rust-client-manifest-bound
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-rust-client-canonical-decode
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-rust-client-retired-helper
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-torii-retired-manifest-b64
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-torii-retired-summary-field
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-torii-manifest-bound
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-torii-canonical-decode
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-torii-retired-helper
+          bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-python-fee-payment-field
           bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-swift-contract-test
           bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-swift-retired-request-field
           bash ci/check_sorafs_pin_register_sdk_guard.sh --negative-control-csharp-malformed-response-test

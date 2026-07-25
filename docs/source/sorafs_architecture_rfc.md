@@ -209,7 +209,9 @@ flowchart LR
    1. Streams the payload through `ChunkProfile::DEFAULT`.
    2. Uses `CarBuildPlan` + `CarStreamingWriter` to emit deterministic CAR payload/index files.
    3. Calls `ManifestBuilder` to materialise the `ManifestV1` Norito record, governance envelope, and optional JSON reports.
-   4. Optionally exports chunk fetch plans (`--chunk-fetch-plan-out`) for `sorafs_fetch`.
+   4. Optionally exports the strict payload-bound
+      `sorafs.chunk_fetch_plan.v1` object (`--chunk-fetch-plan-out`) for
+      `sorafs_fetch`. Standalone bare arrays are not a V1 wire format.
 
    ```bash
   cargo run -p sorafs_car --bin sorafs_manifest_builder -- docs/book \

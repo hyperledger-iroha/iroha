@@ -120,9 +120,10 @@ adverts:
   key `profile.sample_multiplier` (integer `1-4`). The value may be a single
   number/string or an object with per-profile overrides, e.g.
   `{"default":2,"sorafs.sf2@1.0.0":3}`.
-  Manual Torii `/v1/sorafs/storage/por-sample` probes reject `count` values
-  outside `1..=500` before manifest lookup, then cap returned samples by the
-  stored manifest leaf count.
+  The unauthenticated local `/v1/sorafs/storage/por-sample` probe is retired.
+  Manual production probes use authenticated `POST /v1/sorafs/proof/stream`;
+  PoR `sample_count` is limited to `1..=500`, and Torii requires an approved
+  finalized pin record before sampling and verifying against its committed root.
 - `pdp_sample_window`: maximum number of distinct PDP segments admitted in one
   governed challenge. Configuration parsing rejects zero and values above the
   protocol ceiling of 500 before the storage worker starts.
@@ -233,8 +234,8 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
 - `ingest` expects a Norito-encoded manifest `.to` file plus the matching payload
   bytes. It reconstructs the chunk plan from the manifest’s chunking profile,
   enforces digest parity, persists chunk files, and optionally emits a
-  `chunk_fetch_specs` JSON blob so downstream tooling can sanity-check the
-  layout.
+  strict `sorafs.chunk_fetch_plan.v1` JSON object so downstream tooling can
+  verify both the whole-payload BLAKE3 binding and the chunk layout.
 - `export` accepts a manifest ID and writes the stored manifest/payload to disk
   (with optional plan JSON) so fixtures remain reproducible across environments.
 
@@ -252,8 +253,9 @@ payloads round-trip cleanly alongside the Torii APIs.【crates/sorafs_node/tests
 >   bounds the returned `files` metadata array (max 500) while preserving
 >   `file_count`/`returned_file_count`/`truncated_files`; omitting `limit`
 >   returns the complete file list for remote cache compatibility.【crates/iroha_torii/src/sorafs/api.rs:1207】
-> - `GET /v1/sorafs/storage/plan/{manifest_id}` — returns the deterministic
->   chunk plan JSON (`chunk_fetch_specs`) for downstream tooling. The `files`,
+> - `GET /v1/sorafs/storage/plan/{manifest_id}` — returns a bounded diagnostic
+>   projection of deterministic chunk metadata for downstream inspection; it is
+>   not a standalone fetch-plan input. The `files`,
 >   `chunk_digests_blake3`, and `chunks` arrays are bounded by `limit` (default
 >   50, max 500), with full count/returned count/truncation metadata for
 >   inventory probes.【crates/iroha_torii/src/sorafs/api.rs:1259】
@@ -278,8 +280,8 @@ payloads round-trip cleanly alongside the Torii APIs.【crates/sorafs_node/tests
    all rebuilt PDP trees against the configured aggregate memory budget.
    - Restore bounded auxiliary runtime state from
      `runtime-state/auxiliary-snapshot.to`. The checkpoint retains PoR penalty
-     high-water state, replay sequences, reputation snapshots, reserve
-     lifecycle/custody records, deal balances and ticket replay IDs, capacity
+     high-water state, replay sequences, reputation snapshots, deal balances
+     and ticket replay IDs, capacity
      declarations and outstanding reservations, unpublished
      transparency/privacy inputs, and processed publication cycles. Capacity
      restore recomputes per-profile/lane allocations and rebuilds metering
@@ -291,12 +293,14 @@ payloads round-trip cleanly alongside the Torii APIs.【crates/sorafs_node/tests
      exhaustion, or a pre-rename checkpoint error restores both in-memory
      snapshots and returns an explicit error. Live broadcast, transparency,
      and Governance DAG publication occur only after that checkpoint commits.
-   - Restore `repair/repair_state.to` under the same configured entry and byte
-     ceilings. Repair tasks, PoR failure history, and auditor nonce high-water
-     marks are authoritative: corrupt, oversize, symlinked, or duplicate-filled
-     snapshots stop startup. The node never archives a corrupt store and starts
-     with an empty replacement, and it refuses new records at the ceiling
-     rather than evicting replay or audit state.
+   - Rebuild repair work from the finalized native task and typed-event
+     projections at one exact height/block-hash anchor. Storage execution is
+     permitted only for the reconciled live lease owner, generation, revision,
+     provider binding, and expiry. The retired `repair/repair_state.to`,
+     `FileRepairStore`, and local `RepairManager` have no loader or migration
+     path. GC and reconciliation first prove one complete bounded task
+     projection from a single immutable finalized query view. No local
+     checkpoint can create, lease, complete, fail, escalate, or appeal a task.
    - Register the SoraFS gateway routes (Norito JSON POST/GET endpoints for pin,
      fetch, PoR sample, telemetry).
    - Spawn the PoR sampling worker and quota monitor.
@@ -371,12 +375,18 @@ The persisted storage boundary is fail-closed in v1:
   data after the new index is authoritative, and removes stale staging or
   unindexed ingest directories. Unknown transaction names and symlinked
   transaction directories fail startup instead of being traversed;
-- atomic index and metadata replacement syncs both the file and its parent
-  directory after rename, so a reported commit survives a host crash rather
-  than depending on an unflushed directory entry. If rename succeeds but the
-  directory sync fails, the backend records the uncertain commit, refuses all
-  subsequent reads and mutations, and requires restart recovery; it never
-  guesses whether the old or new state is authoritative;
+- atomic index and metadata replacement pins the opened parent identity before
+  publication, renames only beneath that stable identity (`/proc/self/fd` on
+  Linux and the volume/file-id namespace on macOS), and syncs both the file and
+  parent directory. Linux fails startup if the required procfs descriptor
+  namespace is unavailable; macOS opens with all-component no-follow
+  semantics. A bounded per-target publication lock keeps rename,
+  post-commit identity verification, and directory sync indivisible across
+  local writers while allowing temporary-file writes to proceed concurrently.
+  If rename succeeds but identity verification or directory sync fails, the
+  backend records the uncertain commit, refuses all subsequent reads and
+  mutations, and requires restart recovery; it never guesses whether the old
+  or new state is authoritative;
 - metadata updates are copy-on-write in memory and on disk. A failure before
   rename leaves the live descriptor unchanged, while an uncertain post-rename
   result installs the committed descriptor and immediately fail-stops the

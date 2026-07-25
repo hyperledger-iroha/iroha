@@ -19,21 +19,32 @@ allowlists, public-address validation, DNS revalidation, SPKI pins, redirect,
 size, time, and decompression limits.
 
 `iroha_config` now carries the non-secret controller policy, feed allowlists and
-pins, resource bounds, checkpoint path, and governed signer identities. Torii
-accepts runtime-injected ACME and authenticated feed transports, transfers them
-through `ToriiRuntimeDeps`, constructs the durable controller from the exact
-resolved configuration, and fails closed when an enabled runtime dependency is
-absent or mismatched. This controller/runtime integration ships locally.
+pins, resource bounds, checkpoint path, governed signer identities, and the
+canonical region and gateway deployment identities. Torii accepts
+runtime-injected ACME and authenticated feed transports, transfers them through
+`IrohaRuntimeDeps` and `ToriiRuntimeDeps`, constructs the durable controller
+from the exact resolved configuration, retains it in `AppState`, and fails
+closed when an enabled runtime dependency is absent or mismatched. This
+controller/runtime integration ships locally.
 
-Real authenticated feed and ACME adapters, authenticated
-stage/acknowledge/promote/rollback/status routes, live gateway-policy cutover,
-finalized accepted-appeal and legal/safety-hold producers, and deployment across
-two independently administered regional gateways remain open. The startup
-bootstrap catalog remains active until the live-policy cutover is completed.
-The local SFM-4c transparency ledger builder and readback surface are shipped,
-but deployed publication, public-explorer, and two-gateway evidence remain
-open. Accordingly the lane remains open: local source and synthetic-test
-coverage are not deployment evidence and cannot mark gateway compliance ready.
+Torii now exposes six canonical, account-signed, governed-operator routes:
+authenticated feed fetch and durable status reads plus canonical-Norito-JSON
+stage, acknowledgement, promotion, and rollback mutations. Live SoraFS content
+serving evaluates the promoted catalog for manifest digest, canonical CID, and
+provider subjects across global, configured-region, and configured-gateway
+scopes. Missing, stale, or poisoned serving state fails closed. Enabling the
+governed controller also rejects every obsolete unsigned denylist path,
+catalog, pack, and jurisdiction bootstrap source, so no configured local
+authority can compete with the signed durable catalog.
+
+Real authenticated feed and ACME adapters for the standard daemon, finalized
+accepted-appeal and legal/safety-hold catalog producers, independently audited
+threshold-signing integration, and deployment across two independently
+administered regional gateways remain open. The local SFM-4c transparency
+ledger builder and readback surface are shipped, but deployed publication,
+public-explorer, and two-gateway evidence remain open. Accordingly the lane
+remains open: local source and synthetic-test coverage are not deployment
+evidence and cannot mark gateway compliance ready.
 
 ## Shipped Foundations
 
@@ -59,11 +70,36 @@ coverage are not deployment evidence and cannot mark gateway compliance ready.
 - `iroha_config` defines the complete non-secret compliance policy and validates
   canonical signer, revocation, feed, host, SPKI-pin, resource, freshness, and
   history bounds before producing the runtime configuration.
-- `ToriiRuntimeDeps` accepts runtime-owned ACME and authenticated feed-transport
-  implementations. Torii maps every resolved field into the ACME/controller
-  runtime, constructs the durable controller, rejects dependencies injected
-  while their feature is disabled, and refuses startup when an enabled
-  dependency is missing.
+- `IrohaRuntimeDeps` and `ToriiRuntimeDeps` accept runtime-owned ACME and
+  authenticated feed-transport implementations. The standard daemon forwards
+  those runtime-only dependencies without putting credentials in
+  `iroha_config`. Torii maps every resolved field into the ACME/controller
+  runtime, constructs the durable controller, retains the controller and
+  transport in `AppState`, rejects dependencies injected while their feature is
+  disabled, and refuses startup when an enabled dependency is missing.
+- The control surface provides authenticated
+  `GET /v1/sorafs/gateway/compliance/feeds/{feed_id}` and
+  `GET /v1/sorafs/gateway/compliance/status` reads plus
+  `POST /v1/sorafs/gateway/compliance/stage`,
+  `POST /v1/sorafs/gateway/compliance/acknowledge`,
+  `POST /v1/sorafs/gateway/compliance/promote`, and
+  `POST /v1/sorafs/gateway/compliance/rollback` mutations. Every route requires
+  canonical X-Iroha account-request authentication and the governed
+  `sorafs_gateway_compliance_operator` role. Mutation bodies are bounded exact
+  canonical Norito JSON; freshness uses server time, and the controller
+  revalidates catalog, acknowledgement, and rollback signatures before
+  committing durable state.
+- Live range serving evaluates the promoted signed catalog for the request's
+  manifest digest, canonical lowercase base32 CID, and provider id. Evaluation
+  applies global, configured-region, and configured-gateway rules in one
+  precedence pass (`legal/safety hold > accepted appeal > baseline`), returns a
+  no-store denial without the matched subject, and returns service unavailable
+  when governed serving state cannot be trusted.
+- Controller configuration requires a canonical region identity and a gateway
+  identity naming one active, non-revoked configured gateway signer. The same
+  configuration parser and the Torii construction boundary reject all legacy
+  unsigned denylist bootstrap sources whenever the governed controller is
+  enabled.
 - `GatewayPolicy` evaluates manifest-envelope requirements, provider admission,
   denylist hits, rate limits, GAR CDN policy, TTL overrides, purge tags,
   moderation slugs, rate ceilings, geofences, and legal holds.
@@ -146,6 +182,21 @@ coverage are not deployment evidence and cannot mark gateway compliance ready.
   `metrics` inventory, require the reviewed gateway compliance metrics
   inventory, and reject duplicate or unknown metric entries before promotion can
   report ready.
+  The reviewed inventory names the emitted
+  `torii_sorafs_gateway_compliance_requests_total`,
+  `torii_sorafs_gateway_compliance_serving_decisions_total`,
+  `torii_sorafs_gateway_compliance_failures_total`,
+  `torii_sorafs_gateway_compliance_serving_catalog_sequence`,
+  `torii_sorafs_gateway_compliance_serving_catalog_valid_until_seconds`, and
+  `torii_sorafs_gateway_compliance_ready` families. Request, decision, and
+  failure dimensions use closed label vocabularies; provider, CID, manifest,
+  rule, feed, and payload values are never labels. The
+  `dashboards/grafana/sorafs_gateway_compliance.json` dashboard and
+  `dashboards/alerts/sorafs_gateway_compliance_rules.yml` rules cover control
+  outcomes, serving decisions, bounded failure classes, serving-catalog
+  sequence skew, expiry, and fail-closed readiness. The checked-in Prometheus
+  rule tests exercise both firing and healthy cases. Legacy placeholder metric
+  names cannot satisfy promotion evidence.
   The summary exports the sorted reviewed `metrics` inventory plus
   `metric_count_values`, and the aggregate production-readiness gate requires
   those fields to match the observability artifact fingerprint before final
@@ -291,11 +342,11 @@ reviewed deployment evidence across every gateway-compliance rollout kind so
 count equality, `iroha_config` binding, payload-free inclusion flags,
 observability metric inventory binding, and checker prevalidation stay
 consistent with the promotion gate. The payload-free full-surface canary builder
-does not replace real authenticated feed and ACME adapters, authenticated
-controller control routes, finalized appeal/hold producers, a live honey-audit
-target, transparency publication hooks, governance approval packets, or
-two-gateway deployment; it only standardizes reviewed promotion evidence once
-those boundaries produce deployment facts.
+does not replace real authenticated feed and ACME adapters, finalized
+appeal/hold catalog producers, a live honey-audit target, transparency
+publication hooks, governance approval packets, or two-gateway deployment; it
+only standardizes reviewed promotion evidence once those boundaries produce
+deployment facts.
 Gateway compliance payload-safety artifacts must explicitly set
 `raw_feeds_included`, `feed_payloads_included`, `raw_toggle_payloads_included`,
 `raw_catalog_included`, `raw_probe_responses_included`,
@@ -321,13 +372,12 @@ parsing response strings.
 ## Remaining Production Gates
 
 - Resolve `V1-BLOCK-GATEWAY-CONTROLLER-RUNTIME-01`: supply independently audited
-  real authenticated feed-transport and ACME adapters, expose authenticated
-  stage/acknowledge/promote/rollback/status APIs, and make live gateway policy
-  consume the serving controller snapshot. Configuration, runtime dependency
-  transfer, fail-closed startup checks, and durable controller construction
-  already ship locally and must not be reopened as missing work.
-- Remove the startup-only unsigned local catalog/bootstrap path after the
-  controller cutover so it cannot compete with the signed durable catalog.
+  real authenticated feed-transport and ACME adapters for the standard daemon
+  and its supervised reference-deployment packaging. Configuration, runtime
+  dependency transfer, fail-closed startup checks, durable controller
+  construction, authenticated control routes, live serving enforcement, and
+  unsigned-bootstrap mutual exclusion already ship locally and must not be
+  reopened as missing work.
 - Connect finalized accepted-appeal outcomes and legal/safety-hold producers to
   signed catalog construction and cache invalidation. The core models and
   enforces these records, but no finalized-chain producer currently submits

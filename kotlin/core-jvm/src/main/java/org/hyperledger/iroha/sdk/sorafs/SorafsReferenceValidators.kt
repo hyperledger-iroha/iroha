@@ -14,7 +14,6 @@ enum class SorafsOrderbookPayloadKind(
     TRADE_EVENT(3, "trade-event.to", false),
     SETTLEMENT_CHANNEL(4, "settlement-channel.to", false),
     SETTLEMENT_RECEIPT(5, "settlement-receipt.to", true),
-    RUNTIME_SNAPSHOT(6, "orderbook-runtime-snapshot.to", false),
 }
 
 /** PDP payload kind accepted by the Rust-backed SoraFS reference validator. */
@@ -301,6 +300,7 @@ class SorafsReferenceValidators private constructor() {
             pricePerGib: String,
             quantityGib: Long,
             ownerAccount: ByteArray,
+            providerId: ByteArray?,
             expiryUnix: Long,
             nonce: Long,
             makerFeeBps: Int,
@@ -315,6 +315,7 @@ class SorafsReferenceValidators private constructor() {
                 pricePerGib,
                 quantityGib,
                 ownerAccount,
+                providerId,
                 expiryUnix,
                 nonce,
                 makerFeeBps,
@@ -332,6 +333,7 @@ class SorafsReferenceValidators private constructor() {
             pricePerGib: String,
             quantityGib: Long,
             ownerAccount: ByteArray,
+            providerId: ByteArray?,
             expiryUnix: Long,
             nonce: Long,
             makerFeeBps: Int,
@@ -341,6 +343,7 @@ class SorafsReferenceValidators private constructor() {
         ): ByteArray {
             val orderIdBytes = requireFixed32(orderId, "orderId")
             val ownerBytes = requireNonEmptyBytes(ownerAccount, "ownerAccount")
+            val providerBytes = requireProviderId(side, providerId)
             val priceBytes = xorQuantityBytes(pricePerGib, "pricePerGib", positive = true)
             requirePositive(quantityGib, "quantityGib")
             requirePositive(remainingGib, "remainingGib")
@@ -364,6 +367,7 @@ class SorafsReferenceValidators private constructor() {
                         quantityGib,
                         remainingGib,
                         ownerBytes,
+                        providerBytes,
                         expiryUnix,
                         nonce,
                         makerFee,
@@ -593,6 +597,25 @@ class SorafsReferenceValidators private constructor() {
             return bytes.copyOf()
         }
 
+        private fun requireProviderId(
+            side: SorafsOrderbookSide,
+            providerId: ByteArray?,
+        ): ByteArray {
+            if (side == SorafsOrderbookSide.BID) {
+                require(providerId == null || providerId.isEmpty()) {
+                    "providerId must be absent or empty for bid orders"
+                }
+                return ByteArray(0)
+            }
+            require(providerId != null && providerId.size == 32) {
+                "providerId must be exactly 32 bytes for ask orders"
+            }
+            require(providerId.any { it.toInt() != 0 }) {
+                "providerId must not be all zero"
+            }
+            return providerId.copyOf()
+        }
+
         private fun requireNonEmptyBytes(bytes: ByteArray, field: String): ByteArray {
             require(bytes.isNotEmpty()) { "$field must not be empty" }
             require(bytes.size <= ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1) {
@@ -632,7 +655,9 @@ class SorafsReferenceValidators private constructor() {
             val value = label ?: fallback
             require(value.isNotBlank()) { "label must not be blank" }
             require(value.trim() == value) { "label must not contain surrounding whitespace" }
-            require(value.indexOf('\u0000') < 0) { "label must not contain NUL" }
+            require(value.none(Char::isISOControl)) {
+                "label must not contain control characters"
+            }
             val bytes = value.toByteArray(StandardCharsets.UTF_8)
             require(bytes.size <= REFERENCE_MAX_LABEL_BYTES_V1) {
                 "label must be at most $REFERENCE_MAX_LABEL_BYTES_V1 UTF-8 bytes"
@@ -750,6 +775,7 @@ class SorafsReferenceValidators private constructor() {
             quantityGib: Long,
             remainingGib: Long,
             ownerAccount: ByteArray,
+            providerId: ByteArray,
             expiryUnix: Long,
             nonce: Long,
             makerFeeBps: Int,

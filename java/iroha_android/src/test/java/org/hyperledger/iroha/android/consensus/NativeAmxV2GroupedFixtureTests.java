@@ -4,7 +4,9 @@
 package org.hyperledger.iroha.android.consensus;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertThrows;
+import static org.junit.Assert.assertTrue;
 
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
@@ -43,6 +45,22 @@ public final class NativeAmxV2GroupedFixtureTests {
     assertEquals(2L, group.transactionCount());
     final List<Object> sourceOrder = array(golden, "ordered_source_ids");
     final List<String> actualSources = new ArrayList<>();
+    final NativeAmxV2Models.Leg firstLeg = group.receipts().get(0).legs().get(0);
+    assertEquals(
+        "hash:33F884E54077B6570826E5DB30B64CEA24B8B559C057F152848E4D1DE7FE8041#6EF8",
+        firstLeg.participantProposal().descriptor().validatorSetHash().value());
+    assertEquals(
+        "hash:568077DEBB5ECE0F6655571DBD81F8B8935CA5FB064F6B74864B4F58F3CB1A33#E6A5",
+        firstLeg.participantProposal().descriptor().descriptorHash().value());
+    assertEquals(
+        "hash:AAC0F352914C21699F3F8D571196C9A5DFCAA9EF1272A7DEFA7FFD35A93C21AD#8B3F",
+        firstLeg.participantProposal().proposalHash().value());
+    assertEquals(
+        "hash:48238EDD90CB56277753360B4815696675EFB7D883F2A7B5954C3578C329B8FD#C72C",
+        firstLeg.participantSettlementHash().value());
+    assertTrue(
+        NativeAmxV2Models.isCanonicalBlsNormalPeerId(
+            firstLeg.participantProposal().descriptor().validatorSet().get(0)));
     for (final NativeAmxV2Models.Receipt receipt : group.receipts()) {
       actualSources.add(receipt.sourceId().value());
       assertEquals(2, receipt.legs().size());
@@ -89,7 +107,25 @@ public final class NativeAmxV2GroupedFixtureTests {
   @Test
   public void rustOwnedNegativeCorpusIsConsumable() throws Exception {
     final Map<String, Object> canonical = fixture();
-    for (final Object controlValue : array(canonical, "negative_controls")) {
+    final List<Object> controls = array(canonical, "negative_controls");
+    final Set<String> identifiers = new HashSet<>();
+    for (final Object controlValue : controls) {
+      identifiers.add(string(object(controlValue), "id"));
+    }
+    assertTrue(
+        identifiers.containsAll(
+            java.util.Arrays.asList(
+                "coherent_forged_validator_set_hash",
+                "coherent_stale_descriptor_hash",
+                "coherent_stale_proposal_hash",
+                "coherent_stale_settlement_hash",
+                "non_canonical_validator_peer_id")));
+    assertFalse(
+        NativeAmxV2Models.isCanonicalBlsNormalPeerId(
+            "ea0130"
+                + "000000000000000000000000000000000000000000000000"
+                + "000000000000000000000000000000000000000000000000"));
+    for (final Object controlValue : controls) {
       final Map<String, Object> document = fixture();
       final Map<String, Object> control = object(controlValue);
       final String identifier = string(control, "id");
@@ -117,24 +153,6 @@ public final class NativeAmxV2GroupedFixtureTests {
   @Test
   public void mixedRoleParticipantExposesDeferredAnchorValidation() throws Exception {
     final Map<String, Object> document = fixture();
-    final String descriptorPath =
-        "/golden/receipt_group/native_amx_receipts/0/legs/1/"
-            + "participant_proposal/descriptor";
-    final Map<String, Object> descriptor = object(resolve(document, descriptorPath));
-    final List<Object> hashes = array(descriptor, "accepted_transaction_hashes");
-    final List<Object> indices = array(descriptor, "accepted_candidate_indices");
-    final List<Object> deferredHashes = new ArrayList<>();
-    deferredHashes.add(hashes.get(1));
-    final List<Object> deferredIndices = new ArrayList<>();
-    deferredIndices.add(indices.get(1));
-    assign(
-        document,
-        descriptorPath + "/accepted_transaction_hashes",
-        deferredHashes);
-    assign(
-        document,
-        descriptorPath + "/accepted_candidate_indices",
-        deferredIndices);
     final NativeAmxV2Models.ReceiptGroup group =
         NativeAmxV2Models.parseReceiptGroup(
             object(object(document, "golden"), "receipt_group"));
@@ -144,7 +162,15 @@ public final class NativeAmxV2GroupedFixtureTests {
         remote = leg;
       }
     }
-    assertEquals(true, remote != null && remote.requiresMixedRoleAnchorValidation());
+    assertTrue(remote != null);
+    assertFalse(
+        NativeAmxV2Models.requiresMixedRoleAnchorValidation(
+            remote.participantProposal().descriptor(),
+            remote.prepareQc().body().transactionEntrypointHash().value()));
+    assertTrue(
+        NativeAmxV2Models.requiresMixedRoleAnchorValidation(
+            remote.participantProposal().descriptor(),
+            "hash:07BAE6F998F2D195BD9481ADDFB26789F771FDD7F6BB476A9C3157F70FB85AB7#9781"));
   }
 
   @Test

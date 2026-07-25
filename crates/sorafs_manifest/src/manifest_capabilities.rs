@@ -184,6 +184,7 @@ mod tests {
                 aliases: vec!["sf1".into()],
             })
             .chunk_digest_sha3_256([0xAC; 32])
+            .por_root([0xAD; 32])
             .content_length(1_048_576)
             .car_digest([0xAA; 32])
             .car_size(1_090_000)

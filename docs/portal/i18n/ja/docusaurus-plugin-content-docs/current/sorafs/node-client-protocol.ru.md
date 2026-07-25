@@ -128,10 +128,12 @@ SDK `sorafs_orchestrator`):1. **Собрать входные данные** —
 - `iroha app sorafs pin list|show`、`alias list`、`replication list` оборачивают
   pin-registry REST エンドポイントと認証 Norito JSON 認証
   для аудиторских доказательств。
-- `iroha app sorafs storage pin` および `torii /v1/sorafs/pin/register` および Norito
-  JSON マニフェストは、別名証明と後継者を表します。不正な証明
-  `400`、古いプルーフ、`503` と `Warning: 110`、完全に期限切れのプルーフ
-  `412`。
+- `torii /v1/sorafs/pin/register` は閉じた JSON V1 リクエストを受け付けます。
+  `manifest_payload` は canonical Norito `ManifestV1` バイトを正確に canonical
+  padded base64 化したものでなければなりません。Torii は digest、chunker、
+  content length、pin policy、fee input をデコード済み manifest のみから導出し、
+  廃止済みの重複 summary フィールドを拒否します。`alias` とゼロでない
+  `successor_of_hex` predecessor は引き続き任意です。
 - REST エンドポイント (`/v1/sorafs/pin`、`/v1/sorafs/aliases`、
   `/v1/sorafs/replication`) 認証、認証、認証、認証
   ブロック ヘッダーを確認できます。

@@ -8,17 +8,20 @@
 #![allow(unexpected_cfgs)]
 
 use std::{
-    collections::{BTreeMap, BTreeSet, HashSet},
+    collections::{BTreeMap, BTreeSet},
     fs::{self, File},
+    hash::{DefaultHasher, Hash as StdHash, Hasher},
     io::{self, Read, Write},
     path::{Path, PathBuf},
     sync::{
-        Arc, Mutex, RwLock,
+        Arc, LazyLock, Mutex, MutexGuard, RwLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(any(target_os = "linux", target_os = "android"))]
+use std::os::fd::AsRawFd;
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 
@@ -31,11 +34,11 @@ use norito::{
 };
 use sorafs_car::{
     self, CarBuildPlan, CarChunk, ChunkStore, ChunkStoreError, DirectoryPublicationStatus,
-    FilePlan, PayloadSource, PorMerkleTree, PorProof, TaikaiSegmentHint,
+    FilePlan, PayloadSource, PorMerkleTree, PorProof, PorSampleIndices, TaikaiSegmentHint,
 };
 use sorafs_chunker::ChunkProfile;
 use sorafs_manifest::{
-    MANIFEST_VERSION_V1, ManifestV1,
+    MANIFEST_VERSION_V1, MAX_PROOF_STREAM_SAMPLE_COUNT, ManifestV1,
     pdp::{
         PDP_MAX_SEGMENT_SAMPLES_V1, PdpCommitmentV1, PdpCommitmentValidationError,
         PdpMerkleReadError, PdpMerkleTreeError, PdpMerkleTreeV1, PdpProofLeafV1, PdpSampleV1,
@@ -60,6 +63,9 @@ const MAX_STORAGE_INDEX_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_MANIFEST_METADATA_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_MANIFEST_BYTES: u64 = 16 * 1024 * 1024;
 static ATOMIC_WRITE_COUNTER: AtomicU64 = AtomicU64::new(0);
+const ATOMIC_PUBLICATION_LOCK_SHARDS: usize = 64;
+static ATOMIC_PUBLICATION_LOCKS: LazyLock<[Mutex<()>; ATOMIC_PUBLICATION_LOCK_SHARDS]> =
+    LazyLock::new(|| std::array::from_fn(|_| Mutex::new(())));
 static GC_TRASH_COUNTER: AtomicU64 = AtomicU64::new(0);
 static INGEST_STAGING_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -162,7 +168,7 @@ pub enum StorageError {
         /// Stable invariant rejected before persistence.
         reason: String,
     },
-    /// An atomic replacement reached rename but its parent directory could not be synced.
+    /// An atomic replacement reached rename but post-commit verification or sync failed.
     #[error("storage durability is uncertain for {path}: {reason}")]
     DurabilityUncertain {
         /// Replaced artifact whose directory entry could not be confirmed durable.
@@ -219,6 +225,17 @@ pub enum StorageError {
     /// Chunk profile present in the manifest does not match the ingestion plan.
     #[error("chunk profile mismatch between manifest and plan")]
     ChunkProfileMismatch,
+    /// Rebuilt provider PoR root does not match the canonical manifest commitment.
+    #[error("provider PoR root does not match the manifest commitment")]
+    PorRootMismatch,
+    /// Requested PoR sample count exceeds the proof-stream protocol ceiling.
+    #[error("PoR sample count {requested} exceeds the v1 maximum {maximum}")]
+    PorSampleCountTooLarge {
+        /// Number of samples requested by the caller.
+        requested: usize,
+        /// Maximum sample count accepted by the v1 protocol.
+        maximum: u32,
+    },
     /// Failed to rebuild the PoR tree from persisted chunk data.
     #[error("failed to build PoR tree: {0}")]
     ChunkStore(#[from] ChunkStoreError),
@@ -829,6 +846,7 @@ impl StoredManifest {
             || manifest.root_cid != self.manifest_cid
             || manifest.content_length != self.content_length
             || canonical_profile_handle(&manifest) != self.chunk_profile_handle
+            || manifest.por_root != *self.por_tree.root()
         {
             return Err(corrupt_storage_state(
                 path,
@@ -2013,7 +2031,7 @@ fn validate_persisted_manifest(
         ));
     }
 
-    validate_persisted_por(entry, record, metadata_path)?;
+    validate_persisted_por(entry, record, manifest, metadata_path)?;
     validate_persisted_pdp(
         entry,
         record,
@@ -2084,6 +2102,7 @@ fn validate_persisted_retention(
 fn validate_persisted_por(
     entry: &ManifestIndexEntry,
     record: &StoredManifestRecord,
+    manifest: &ManifestV1,
     metadata_path: &Path,
 ) -> Result<(), StorageError> {
     let commitment = &record.por_commitment;
@@ -2103,6 +2122,12 @@ fn validate_persisted_por(
         return Err(corrupt_storage_state(
             metadata_path,
             "PoR commitment digest does not match the storage index",
+        ));
+    }
+    if commitment.root != manifest.por_root {
+        return Err(corrupt_storage_state(
+            metadata_path,
+            "persisted PoR root does not match the canonical manifest commitment",
         ));
     }
     if commitment.payload_len != record.content_length
@@ -3171,6 +3196,7 @@ impl StorageBackend {
             por_tree,
             pdp_tree,
         } = self.ingest_payload(plan, reader, &chunks_dir)?;
+        ensure_manifest_por_root(manifest, &por_tree)?;
 
         if let Some(roles) = chunk_roles {
             let expected = chunk_records.len();
@@ -3430,6 +3456,125 @@ impl StorageBackend {
             .cloned()
     }
 
+    /// Run work while holding the manifest lifecycle read lease.
+    ///
+    /// The state read lock is retained until the lifecycle lease has been
+    /// acquired, so eviction cannot remove the manifest between lookup and
+    /// lease acquisition. The lifecycle lease remains held for the complete
+    /// callback and blocks eviction while repair validates or reads chunk
+    /// paths.
+    pub(crate) fn with_manifest_io<T>(
+        &self,
+        manifest_id: &str,
+        work: impl FnOnce(&StoredManifest) -> T,
+    ) -> Result<T, StorageError> {
+        self.ensure_durability_healthy()?;
+        let state = self.state.read().expect("storage state poisoned");
+        let manifest =
+            state
+                .manifests
+                .get(manifest_id)
+                .ok_or_else(|| StorageError::ManifestNotFound {
+                    manifest_id: manifest_id.to_owned(),
+                })?;
+        let io_lock = Arc::clone(&manifest.io_lock);
+        let io_guard = io_lock
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.ensure_durability_healthy()?;
+        let manifest = manifest.try_clone_runtime()?;
+        drop(state);
+        let result = work(&manifest);
+        drop(io_guard);
+        Ok(result)
+    }
+
+    /// Run work for the digest-selected manifest under its lifecycle read lease.
+    ///
+    /// `Ok(None)` is exact proof that the digest was absent while holding the
+    /// storage state read lock. Once present, the manifest cannot be evicted
+    /// until the callback returns.
+    pub(crate) fn with_manifest_io_by_digest<T>(
+        &self,
+        digest: &[u8; 32],
+        work: impl FnOnce(&StoredManifest) -> T,
+    ) -> Result<Option<T>, StorageError> {
+        self.ensure_durability_healthy()?;
+        let state = self.state.read().expect("storage state poisoned");
+        let Some(manifest) = state
+            .manifests
+            .values()
+            .find(|manifest| manifest.manifest_digest == *digest)
+        else {
+            return Ok(None);
+        };
+        let io_lock = Arc::clone(&manifest.io_lock);
+        let io_guard = io_lock
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.ensure_durability_healthy()?;
+        let manifest = manifest.try_clone_runtime()?;
+        drop(state);
+        let result = work(&manifest);
+        drop(io_guard);
+        Ok(Some(result))
+    }
+
+    /// Atomically replace one chunk during lifecycle-leased repair.
+    ///
+    /// Callers must hold the owning manifest's lifecycle lease for the complete
+    /// repair operation. A failure after rename poisons storage durability and
+    /// is returned instead of being converted into a successful terminal
+    /// repair outcome.
+    pub(crate) fn replace_chunk_for_repair(
+        &self,
+        manifest: &StoredManifest,
+        chunk: &ChunkFileRecord,
+        bytes: &[u8],
+    ) -> Result<(), StorageError> {
+        self.replace_chunk_for_repair_with_directory_sync(
+            manifest,
+            chunk,
+            bytes,
+            AtomicParentDirectory::sync,
+        )
+    }
+
+    fn replace_chunk_for_repair_with_directory_sync<F>(
+        &self,
+        manifest: &StoredManifest,
+        chunk: &ChunkFileRecord,
+        bytes: &[u8],
+        sync_parent: F,
+    ) -> Result<(), StorageError>
+    where
+        F: FnOnce(&AtomicParentDirectory) -> io::Result<()>,
+    {
+        self.ensure_durability_healthy()?;
+        let chunk_index = manifest
+            .chunk_files
+            .iter()
+            .position(|candidate| candidate == chunk)
+            .ok_or_else(|| {
+                corrupt_storage_state(
+                    manifest.manifest_path(),
+                    "repair chunk is not bound to the lifecycle-leased manifest",
+                )
+            })?;
+        if bytes.len() != chunk.length as usize || blake3::hash(bytes).as_bytes() != &chunk.digest {
+            return Err(StorageError::ChunkDigestMismatch { chunk_index });
+        }
+        match write_atomic_with_directory_sync(&chunk.path, bytes, sync_parent) {
+            Ok(()) => {}
+            Err(error @ AtomicWriteError::DurabilityUncertain { .. }) => {
+                self.fail_stop_durability(&error);
+                return Err(error.into_storage_error());
+            }
+            Err(AtomicWriteError::BeforeCommit(error)) => return Err(StorageError::Io(error)),
+        }
+        self.ensure_durability_healthy()
+    }
+
     fn with_manifest_for_access<T, F>(&self, manifest_id: &str, work: F) -> Result<T, StorageError>
     where
         F: FnOnce(&StoredManifest) -> Result<T, StorageError>,
@@ -3671,6 +3816,15 @@ impl StorageBackend {
         seed: u64,
     ) -> Result<Vec<(usize, PorProof)>, StorageError> {
         self.ensure_durability_healthy()?;
+        if count
+            > usize::try_from(MAX_PROOF_STREAM_SAMPLE_COUNT)
+                .expect("u32 PoR sample ceiling must fit usize")
+        {
+            return Err(StorageError::PorSampleCountTooLarge {
+                requested: count,
+                maximum: MAX_PROOF_STREAM_SAMPLE_COUNT,
+            });
+        }
         if count == 0 {
             if self.manifest(manifest_id).is_none() {
                 return Err(StorageError::ManifestNotFound {
@@ -3688,14 +3842,6 @@ impl StorageBackend {
             }
 
             let target = count.min(total);
-            let mut rng_state = seed;
-            let mut seen = HashSet::new();
-            seen.try_reserve(target).map_err(|_| {
-                StorageError::ChunkStore(ChunkStoreError::AllocationFailed {
-                    context: "PoR sampled leaf set",
-                    requested: target,
-                })
-            })?;
             let mut samples = Vec::new();
             samples.try_reserve_exact(target).map_err(|_| {
                 StorageError::ChunkStore(ChunkStoreError::AllocationFailed {
@@ -3704,23 +3850,30 @@ impl StorageBackend {
                 })
             })?;
 
-            while samples.len() < target {
-                rng_state = splitmix64(rng_state);
-                let leaf_index = (rng_state as usize) % total;
-                if !seen.insert(leaf_index) {
-                    continue;
-                }
-                let Some((chunk_idx, segment_idx, leaf_idx)) = por_tree.leaf_path(leaf_index)
-                else {
-                    continue;
-                };
+            for flat_index in PorSampleIndices::new(por_tree.leaf_count_u64(), target, seed)
+                .map_err(StorageError::ChunkStore)?
+            {
+                let leaf_index = usize::try_from(flat_index).map_err(|_| {
+                    StorageError::ChunkStore(ChunkStoreError::PorCountOverflow {
+                        context: "PoR sampled leaf index host width",
+                    })
+                })?;
+                let (chunk_idx, segment_idx, leaf_idx) =
+                    por_tree.leaf_path(leaf_index).ok_or_else(|| {
+                        StorageError::ChunkStore(ChunkStoreError::PorInvariant {
+                            context: "canonical PoR sample leaf path",
+                        })
+                    })?;
                 let mut payload = ManifestPayload::new(manifest);
                 let proof = por_tree
                     .prove_leaf_with(chunk_idx, segment_idx, leaf_idx, &mut payload)
                     .map_err(StorageError::ChunkStore)?;
-                if let Some(proof) = proof {
-                    samples.push((leaf_index, proof));
-                }
+                let proof = proof.ok_or_else(|| {
+                    StorageError::ChunkStore(ChunkStoreError::PorInvariant {
+                        context: "canonical PoR sample proof path",
+                    })
+                })?;
+                samples.push((leaf_index, proof));
             }
 
             Ok(samples)
@@ -4292,6 +4445,16 @@ fn ensure_chunk_profile_match(
     Ok(())
 }
 
+fn ensure_manifest_por_root(
+    manifest: &ManifestV1,
+    por_tree: &PorMerkleTree,
+) -> Result<(), StorageError> {
+    if manifest.por_root != *por_tree.root() {
+        return Err(StorageError::PorRootMismatch);
+    }
+    Ok(())
+}
+
 fn unix_timestamp() -> Result<u64, StorageError> {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -4333,7 +4496,9 @@ fn prepare_ingest_staging_directory(path: &Path) -> io::Result<()> {
 enum AtomicWriteError {
     #[error("atomic replacement failed before commit: {0}")]
     BeforeCommit(#[source] io::Error),
-    #[error("atomic replacement of {path} was renamed but directory sync failed: {source}")]
+    #[error(
+        "atomic replacement of {path} was renamed but post-commit verification or directory sync failed: {source}"
+    )]
     DurabilityUncertain {
         path: PathBuf,
         #[source]
@@ -4348,7 +4513,7 @@ impl AtomicWriteError {
             Self::DurabilityUncertain { path, source } => io::Error::new(
                 source.kind(),
                 format!(
-                    "atomic replacement of {} was renamed but directory sync failed: {source}",
+                    "atomic replacement of {} was renamed but post-commit verification or directory sync failed: {source}",
                     path.display()
                 ),
             ),
@@ -4371,7 +4536,7 @@ pub(crate) fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
 }
 
 fn write_atomic_classified(path: &Path, data: &[u8]) -> Result<(), AtomicWriteError> {
-    write_atomic_with_directory_sync(path, data, sync_directory)
+    write_atomic_with_directory_sync(path, data, AtomicParentDirectory::sync)
 }
 
 fn write_atomic_with_directory_sync<F>(
@@ -4380,7 +4545,7 @@ fn write_atomic_with_directory_sync<F>(
     sync_parent: F,
 ) -> Result<(), AtomicWriteError>
 where
-    F: FnOnce(&Path) -> io::Result<()>,
+    F: FnOnce(&AtomicParentDirectory) -> io::Result<()>,
 {
     let parent = path.parent().ok_or_else(|| {
         AtomicWriteError::BeforeCommit(io::Error::other("missing parent directory"))
@@ -4396,27 +4561,402 @@ where
         ))
     })?;
     validate_atomic_output_path(path).map_err(AtomicWriteError::BeforeCommit)?;
+    let parent_directory =
+        AtomicParentDirectory::open(parent).map_err(AtomicWriteError::BeforeCommit)?;
     let tmp = atomic_temp_path(path);
+    let mut cleanup_identity = None;
 
     let write_result = (|| -> Result<(), AtomicWriteError> {
         let mut file = open_atomic_temp_file(&tmp).map_err(AtomicWriteError::BeforeCommit)?;
+        cleanup_identity = Some(file.metadata().map_err(AtomicWriteError::BeforeCommit)?);
         file.write_all(data)
             .map_err(AtomicWriteError::BeforeCommit)?;
         file.sync_all().map_err(AtomicWriteError::BeforeCommit)?;
-        drop(file);
+        let synced_metadata = file.metadata().map_err(AtomicWriteError::BeforeCommit)?;
+        validate_atomic_open_file_identity(
+            &tmp,
+            &file,
+            &synced_metadata,
+            data.len(),
+            "atomic temporary",
+        )
+        .map_err(AtomicWriteError::BeforeCommit)?;
+        let _publication_guard = parent_directory
+            .lock_publication(path)
+            .map_err(AtomicWriteError::BeforeCommit)?;
+        parent_directory
+            .verify_path_identity()
+            .map_err(AtomicWriteError::BeforeCommit)?;
         validate_atomic_output_path(path).map_err(AtomicWriteError::BeforeCommit)?;
-        fs::rename(&tmp, path).map_err(AtomicWriteError::BeforeCommit)?;
-        sync_parent(parent).map_err(|source| AtomicWriteError::DurabilityUncertain {
-            path: path.to_path_buf(),
-            source,
-        })?;
+        validate_atomic_open_file_identity(
+            &tmp,
+            &file,
+            &synced_metadata,
+            data.len(),
+            "atomic temporary",
+        )
+        .map_err(AtomicWriteError::BeforeCommit)?;
+        parent_directory
+            .rename_entry(&tmp, path)
+            .map_err(AtomicWriteError::BeforeCommit)?;
+
+        let mut post_commit_error = None;
+        retain_first_io_error(
+            &mut post_commit_error,
+            parent_directory.verify_path_identity(),
+        );
+        let published_metadata =
+            match validate_atomic_published_file_identity(path, &file, data.len()) {
+                Ok(metadata) => Some(metadata),
+                Err(error) => {
+                    if post_commit_error.is_none() {
+                        post_commit_error = Some(error);
+                    }
+                    None
+                }
+            };
+        retain_first_io_error(&mut post_commit_error, sync_parent(&parent_directory));
+        retain_first_io_error(
+            &mut post_commit_error,
+            parent_directory.verify_path_identity(),
+        );
+        let final_identity = match published_metadata.as_ref() {
+            Some(stable) => validate_atomic_open_file_identity(
+                path,
+                &file,
+                stable,
+                data.len(),
+                "published atomic replacement",
+            ),
+            None => validate_atomic_published_file_identity(path, &file, data.len()).map(drop),
+        };
+        retain_first_io_error(&mut post_commit_error, final_identity);
+        if let Some(source) = post_commit_error {
+            return Err(AtomicWriteError::DurabilityUncertain {
+                path: path.to_path_buf(),
+                source,
+            });
+        }
         Ok(())
     })();
 
     if write_result.is_err() {
-        let _ = fs::remove_file(&tmp);
+        if let Some(identity) = cleanup_identity.as_ref() {
+            remove_atomic_temp_if_owned(&tmp, identity);
+        }
     }
     write_result
+}
+
+fn retain_first_io_error(first: &mut Option<io::Error>, result: io::Result<()>) {
+    if let Err(error) = result
+        && first.is_none()
+    {
+        *first = Some(error);
+    }
+}
+
+struct AtomicParentDirectory {
+    path: PathBuf,
+    identity: fs::Metadata,
+    #[cfg(unix)]
+    handle: File,
+    #[cfg(unix)]
+    anchor: PathBuf,
+}
+
+impl AtomicParentDirectory {
+    fn open(path: &Path) -> io::Result<Self> {
+        validate_atomic_parent_ancestry(path)?;
+        #[cfg(unix)]
+        {
+            let expected = fs::symlink_metadata(path)?;
+            validate_atomic_parent_metadata(path, &expected)?;
+            let mut options = fs::OpenOptions::new();
+            options.read(true);
+            set_atomic_parent_open_flags(&mut options);
+            let handle = options.open(path).map_err(|error| {
+                io::Error::new(
+                    error.kind(),
+                    format!(
+                        "failed to open atomic output parent `{}`: {error}",
+                        path.display()
+                    ),
+                )
+            })?;
+            let identity = handle.metadata()?;
+            let linked = fs::symlink_metadata(path)?;
+            validate_atomic_parent_metadata(path, &identity)?;
+            validate_atomic_parent_metadata(path, &linked)?;
+            if !metadata_identifies_same_file(&expected, &identity)
+                || !metadata_identifies_same_file(&expected, &linked)
+            {
+                return Err(io::Error::other(format!(
+                    "atomic output parent `{}` changed while opening",
+                    path.display()
+                )));
+            }
+            let anchor = atomic_parent_anchor(&handle, &identity)?;
+            validate_atomic_parent_anchor(&anchor, &identity)?;
+            Ok(Self {
+                path: path.to_path_buf(),
+                identity,
+                handle,
+                anchor,
+            })
+        }
+        #[cfg(not(unix))]
+        {
+            let identity = fs::symlink_metadata(path)?;
+            validate_atomic_parent_metadata(path, &identity)?;
+            Ok(Self {
+                path: path.to_path_buf(),
+                identity,
+            })
+        }
+    }
+
+    fn verify_path_identity(&self) -> io::Result<()> {
+        validate_atomic_parent_ancestry(&self.path)?;
+        let linked = fs::symlink_metadata(&self.path)?;
+        validate_atomic_parent_metadata(&self.path, &linked)?;
+        if !metadata_identifies_same_file(&self.identity, &linked) {
+            return Err(io::Error::other(format!(
+                "atomic output parent `{}` changed during replacement",
+                self.path.display()
+            )));
+        }
+        #[cfg(unix)]
+        {
+            let opened = self.handle.metadata()?;
+            validate_atomic_parent_metadata(&self.path, &opened)?;
+            if !metadata_identifies_same_file(&self.identity, &opened) {
+                return Err(io::Error::other(format!(
+                    "atomic output parent handle `{}` changed during replacement",
+                    self.path.display()
+                )));
+            }
+            validate_atomic_parent_anchor(&self.anchor, &self.identity)?;
+        }
+        Ok(())
+    }
+
+    fn sync(&self) -> io::Result<()> {
+        #[cfg(unix)]
+        {
+            self.handle.sync_all()
+        }
+        #[cfg(not(unix))]
+        {
+            sync_directory(&self.path)
+        }
+    }
+
+    fn lock_publication(&self, output: &Path) -> io::Result<MutexGuard<'static, ()>> {
+        if output.parent() != Some(self.path.as_path()) {
+            return Err(io::Error::other(
+                "atomic publication target must belong to the pinned output parent",
+            ));
+        }
+        let mut hasher = DefaultHasher::new();
+        #[cfg(unix)]
+        {
+            self.identity.dev().hash(&mut hasher);
+            self.identity.ino().hash(&mut hasher);
+        }
+        #[cfg(not(unix))]
+        self.path.hash(&mut hasher);
+        output
+            .file_name()
+            .ok_or_else(|| io::Error::other("atomic publication target has no file name"))?
+            .hash(&mut hasher);
+        let shard = usize::try_from(hasher.finish())
+            .unwrap_or(usize::MAX)
+            .wrapping_rem(ATOMIC_PUBLICATION_LOCK_SHARDS);
+        ATOMIC_PUBLICATION_LOCKS[shard]
+            .lock()
+            .map_err(|_| io::Error::other("atomic publication lock is poisoned"))
+    }
+
+    fn rename_entry(&self, from: &Path, to: &Path) -> io::Result<()> {
+        if from.parent() != Some(self.path.as_path()) || to.parent() != Some(self.path.as_path()) {
+            return Err(io::Error::other(
+                "atomic rename entries must share the pinned output parent",
+            ));
+        }
+        #[cfg(unix)]
+        {
+            let from_name = atomic_entry_name(from)?;
+            let to_name = atomic_entry_name(to)?;
+            validate_atomic_parent_anchor(&self.anchor, &self.identity)?;
+            fs::rename(self.anchor.join(from_name), self.anchor.join(to_name))
+        }
+        #[cfg(not(unix))]
+        {
+            fs::rename(from, to)
+        }
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn atomic_parent_anchor(handle: &File, _identity: &fs::Metadata) -> io::Result<PathBuf> {
+    // `/proc/self/fd` follows the live descriptor rather than the mutable path
+    // used to open it. Production Linux deployments therefore fail closed at
+    // startup when procfs is unavailable instead of falling back to a racy
+    // path-based replacement.
+    Ok(Path::new("/proc/self/fd").join(handle.as_raw_fd().to_string()))
+}
+
+#[cfg(target_os = "macos")]
+fn atomic_parent_anchor(_handle: &File, identity: &fs::Metadata) -> io::Result<PathBuf> {
+    // macOS exposes a volume/file-id namespace whose directory identity
+    // survives renames while the opened handle keeps the inode alive.
+    Ok(Path::new("/.vol")
+        .join(identity.dev().to_string())
+        .join(identity.ino().to_string()))
+}
+
+#[cfg(all(
+    unix,
+    not(any(target_os = "linux", target_os = "android", target_os = "macos"))
+))]
+fn atomic_parent_anchor(_handle: &File, _identity: &fs::Metadata) -> io::Result<PathBuf> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "atomic storage replacement requires a stable directory anchor on this platform",
+    ))
+}
+
+#[cfg(unix)]
+fn validate_atomic_parent_anchor(anchor: &Path, identity: &fs::Metadata) -> io::Result<()> {
+    let anchored = fs::metadata(anchor).map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!(
+                "failed to resolve pinned atomic output parent `{}`: {error}",
+                anchor.display()
+            ),
+        )
+    })?;
+    validate_atomic_parent_metadata(anchor, &anchored)?;
+    if !metadata_identifies_same_file(identity, &anchored) {
+        return Err(io::Error::other(format!(
+            "pinned atomic output parent anchor `{}` changed identity",
+            anchor.display()
+        )));
+    }
+    Ok(())
+}
+
+fn validate_atomic_parent_metadata(path: &Path, metadata: &fs::Metadata) -> io::Result<()> {
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(io::Error::other(format!(
+            "atomic output parent `{}` must be a real directory",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn atomic_entry_name(path: &Path) -> io::Result<&std::ffi::OsStr> {
+    path.file_name()
+        .ok_or_else(|| io::Error::other("atomic rename entry has no file name"))
+}
+
+fn validate_atomic_open_file_identity(
+    path: &Path,
+    file: &File,
+    stable: &fs::Metadata,
+    expected_len: usize,
+    label: &str,
+) -> io::Result<()> {
+    let opened = file.metadata()?;
+    let linked = fs::symlink_metadata(path)?;
+    if !opened.is_file() || linked.file_type().is_symlink() || !linked.is_file() {
+        return Err(io::Error::other(format!(
+            "{label} `{}` must be a regular non-symlink file",
+            path.display()
+        )));
+    }
+    let expected_len = u64::try_from(expected_len)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "atomic payload is too large"))?;
+    if opened.len() != expected_len || linked.len() != expected_len {
+        return Err(io::Error::other(format!(
+            "{label} `{}` changed length before commit",
+            path.display()
+        )));
+    }
+    #[cfg(unix)]
+    if opened.nlink() != 1 || linked.nlink() != 1 {
+        return Err(io::Error::other(format!(
+            "{label} `{}` must have exactly one hard link",
+            path.display()
+        )));
+    }
+    if !metadata_stable_during_read(stable, &opened)
+        || !metadata_stable_during_read(&opened, &linked)
+    {
+        return Err(io::Error::other(format!(
+            "{label} `{}` changed identity or metadata before commit",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+fn validate_atomic_published_file_identity(
+    path: &Path,
+    file: &File,
+    expected_len: usize,
+) -> io::Result<fs::Metadata> {
+    let opened = file.metadata()?;
+    let linked = fs::symlink_metadata(path)?;
+    if !opened.is_file() || linked.file_type().is_symlink() || !linked.is_file() {
+        return Err(io::Error::other(format!(
+            "published atomic replacement `{}` must be a regular non-symlink file",
+            path.display()
+        )));
+    }
+    let expected_len = u64::try_from(expected_len)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "atomic payload is too large"))?;
+    if opened.len() != expected_len || linked.len() != expected_len {
+        return Err(io::Error::other(format!(
+            "published atomic replacement `{}` changed length after commit",
+            path.display()
+        )));
+    }
+    #[cfg(unix)]
+    if opened.nlink() != 1 || linked.nlink() != 1 {
+        return Err(io::Error::other(format!(
+            "published atomic replacement `{}` must have exactly one hard link",
+            path.display()
+        )));
+    }
+    if !metadata_identifies_same_file(&opened, &linked) {
+        return Err(io::Error::other(format!(
+            "published atomic replacement `{}` does not match the committed inode",
+            path.display()
+        )));
+    }
+    Ok(opened)
+}
+
+fn remove_atomic_temp_if_owned(path: &Path, identity: &fs::Metadata) {
+    let Ok(linked) = fs::symlink_metadata(path) else {
+        return;
+    };
+    if linked.file_type().is_symlink()
+        || !linked.is_file()
+        || !metadata_identifies_same_file(identity, &linked)
+    {
+        return;
+    }
+    #[cfg(unix)]
+    if linked.nlink() != 1 {
+        return;
+    }
+    let _ = fs::remove_file(path);
 }
 
 fn atomic_temp_path(path: &Path) -> PathBuf {
@@ -4479,35 +5019,40 @@ fn validate_atomic_output_path(path: &Path) -> io::Result<()> {
     }
 
     if let Some(parent) = path.parent() {
-        for ancestor in std::iter::once(parent).chain(parent.ancestors().skip(1)) {
-            if ancestor.as_os_str().is_empty() {
-                continue;
+        validate_atomic_parent_ancestry(parent)?;
+    }
+    Ok(())
+}
+
+fn validate_atomic_parent_ancestry(parent: &Path) -> io::Result<()> {
+    for ancestor in std::iter::once(parent).chain(parent.ancestors().skip(1)) {
+        if ancestor.as_os_str().is_empty() {
+            continue;
+        }
+        match fs::symlink_metadata(ancestor) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() {
+                    return Err(io::Error::other(format!(
+                        "output parent `{}` must not be a symlink",
+                        ancestor.display()
+                    )));
+                }
+                if !metadata.is_dir() {
+                    return Err(io::Error::other(format!(
+                        "output parent `{}` must be a directory",
+                        ancestor.display()
+                    )));
+                }
             }
-            match fs::symlink_metadata(ancestor) {
-                Ok(metadata) => {
-                    if metadata.file_type().is_symlink() {
-                        return Err(io::Error::other(format!(
-                            "output parent `{}` must not be a symlink",
-                            ancestor.display()
-                        )));
-                    }
-                    if !metadata.is_dir() {
-                        return Err(io::Error::other(format!(
-                            "output parent `{}` must be a directory",
-                            ancestor.display()
-                        )));
-                    }
-                }
-                Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-                Err(err) => {
-                    return Err(io::Error::new(
-                        err.kind(),
-                        format!(
-                            "failed to inspect output parent `{}`: {err}",
-                            ancestor.display()
-                        ),
-                    ));
-                }
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => {
+                return Err(io::Error::new(
+                    err.kind(),
+                    format!(
+                        "failed to inspect output parent `{}`: {err}",
+                        ancestor.display()
+                    ),
+                ));
             }
         }
     }
@@ -4517,6 +5062,11 @@ fn validate_atomic_output_path(path: &Path) -> io::Result<()> {
 #[cfg(unix)]
 fn set_no_follow_flag(options: &mut fs::OpenOptions) {
     options.custom_flags(platform_no_follow_flag());
+}
+
+#[cfg(unix)]
+fn set_atomic_parent_open_flags(options: &mut fs::OpenOptions) {
+    options.custom_flags(platform_no_follow_flag() | platform_directory_only_flag());
 }
 
 #[cfg(not(unix))]
@@ -4531,7 +5081,6 @@ fn platform_no_follow_flag() -> i32 {
     unix,
     not(any(target_os = "linux", target_os = "android")),
     any(
-        target_os = "macos",
         target_os = "ios",
         target_os = "freebsd",
         target_os = "openbsd",
@@ -4541,6 +5090,13 @@ fn platform_no_follow_flag() -> i32 {
 ))]
 fn platform_no_follow_flag() -> i32 {
     0x100
+}
+
+#[cfg(target_os = "macos")]
+fn platform_no_follow_flag() -> i32 {
+    // Unlike O_NOFOLLOW, O_NOFOLLOW_ANY rejects a symlink in every path
+    // component during the open syscall and closes the validation/open race.
+    0x2000_0000
 }
 
 #[cfg(all(
@@ -4557,6 +5113,24 @@ fn platform_no_follow_flag() -> i32 {
     ))
 ))]
 fn platform_no_follow_flag() -> i32 {
+    0
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn platform_directory_only_flag() -> i32 {
+    0o200000
+}
+
+#[cfg(target_os = "macos")]
+fn platform_directory_only_flag() -> i32 {
+    0x0010_0000
+}
+
+#[cfg(all(
+    unix,
+    not(any(target_os = "linux", target_os = "android", target_os = "macos"))
+))]
+fn platform_directory_only_flag() -> i32 {
     0
 }
 
@@ -4753,6 +5327,15 @@ fn read_verified_chunk(
     Ok(bytes)
 }
 
+/// Read one complete chunk through the same no-follow, single-link, stable
+/// inode/metadata, exact-length, and digest checks used by normal payload and
+/// PDP witness reads.
+pub(crate) fn read_verified_chunk_file(
+    record: &ChunkFileRecord,
+) -> Result<Vec<u8>, ChunkStoreError> {
+    read_verified_chunk(record, 0)
+}
+
 #[cfg(test)]
 fn pause_chunk_read_for_test(path: &Path) -> Result<(), ChunkStoreError> {
     let hook = {
@@ -4812,14 +5395,6 @@ fn invalid_chunk_file(record: &ChunkFileRecord, reason: &str) -> ChunkStoreError
     ))
 }
 
-fn splitmix64(mut state: u64) -> u64 {
-    state = state.wrapping_add(0x9e3779b97f4a7c15);
-    let mut z = state;
-    z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94d049bb133111eb);
-    z ^ (z >> 31)
-}
-
 #[cfg(test)]
 mod tests {
     use std::{
@@ -4862,8 +5437,21 @@ mod tests {
         CarBuildPlan::single_file(bytes)
     }
 
-    fn manifest_builder_for_plan(plan: &CarBuildPlan) -> ManifestBuilder {
-        ManifestBuilder::new().chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
+    fn manifest_builder_for_plan(payload: &[u8], plan: &CarBuildPlan) -> ManifestBuilder {
+        let heap_limit = plan
+            .validate()
+            .expect("valid manifest fixture plan")
+            .estimated_ingest_heap_bytes()
+            .max(1);
+        let mut chunk_store =
+            ChunkStore::with_profile_and_heap_limit(plan.chunk_profile, heap_limit)
+                .expect("bounded manifest fixture chunk store");
+        chunk_store
+            .ingest_plan(payload, plan)
+            .expect("manifest fixture payload matches plan");
+        ManifestBuilder::new()
+            .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
+            .por_root(*chunk_store.por_tree().root())
     }
 
     fn empty_file_plan() -> CarBuildPlan {
@@ -4884,7 +5472,7 @@ mod tests {
     }
 
     fn test_manifest(payload: &[u8], plan: &CarBuildPlan, root_byte: u8) -> ManifestV1 {
-        manifest_builder_for_plan(plan)
+        manifest_builder_for_plan(payload, plan)
             .root_cid(vec![root_byte; 8])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -5275,7 +5863,7 @@ mod tests {
         let payload = b"Hello deterministic SoraFS!";
         let plan = single_file_plan(payload).expect("plan");
 
-        let manifest = manifest_builder_for_plan(&plan)
+        let manifest = manifest_builder_for_plan(payload, &plan)
             .root_cid(vec![0x01, 0x02, 0x03])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -5323,6 +5911,52 @@ mod tests {
     }
 
     #[test]
+    fn ingest_rejects_manifest_por_root_mismatch_without_publication() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let backend = StorageBackend::new(temp_config(&temp_dir)).expect("backend init");
+        let payload = b"manifest PoR commitments must bind the provider payload";
+        let plan = single_file_plan(payload).expect("plan");
+        let mut manifest = test_manifest(payload, &plan, 0x91);
+        manifest.por_root[0] ^= 0x80;
+        let manifest_id = hex::encode(
+            manifest
+                .digest()
+                .expect("mismatched manifest digest")
+                .as_bytes(),
+        );
+
+        let mut reader = payload.as_slice();
+        let error = backend
+            .ingest_manifest(&manifest, &plan, &mut reader)
+            .expect_err("mismatched PoR commitment must fail closed");
+
+        assert!(matches!(&error, StorageError::PorRootMismatch));
+        assert_eq!(
+            error.to_string(),
+            "provider PoR root does not match the manifest commitment"
+        );
+        assert_eq!(backend.manifest_count(), 0);
+        assert_eq!(backend.total_bytes(), 0);
+        assert_eq!(backend.pdp_tree_memory_bytes(), 0);
+        assert_eq!(backend.reserved_pdp_tree_memory_bytes(), 0);
+        assert!(backend.manifest(&manifest_id).is_none());
+        assert!(!backend.manifests_dir.join(manifest_id).exists());
+        assert!(
+            fs::read_dir(&backend.manifests_dir)
+                .expect("read manifests directory")
+                .next()
+                .is_none(),
+            "a rejected manifest must not publish a manifest directory"
+        );
+        let state = backend.state.read().expect("storage state");
+        assert!(state.index.entries.is_empty());
+        assert!(state.inflight_manifests.is_empty());
+        assert_eq!(state.reserved_bytes, 0);
+        drop(state);
+        assert_staging_empty(&backend);
+    }
+
+    #[test]
     fn ingest_manifest_preserves_directory_file_layout() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let backend = StorageBackend::new(temp_config(&temp_dir)).expect("backend init");
@@ -5341,7 +5975,7 @@ mod tests {
             CarBuildPlan::from_files_with_profile(files, sorafs_chunker::ChunkProfile::DEFAULT)
                 .expect("directory plan");
 
-        let manifest = manifest_builder_for_plan(&plan)
+        let manifest = manifest_builder_for_plan(&payload, &plan)
             .root_cid(vec![0x42; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -5397,7 +6031,7 @@ mod tests {
         let payload = b"this payload is definitely longer than sixteen bytes";
         let plan = single_file_plan(payload).expect("plan");
 
-        let manifest = manifest_builder_for_plan(&plan)
+        let manifest = manifest_builder_for_plan(payload, &plan)
             .root_cid(vec![0x0A, 0x0B])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -5431,7 +6065,7 @@ mod tests {
         let payload = b"The five boxing wizards jump quickly";
         let plan = single_file_plan(payload).expect("plan");
 
-        let manifest = manifest_builder_for_plan(&plan)
+        let manifest = manifest_builder_for_plan(payload, &plan)
             .root_cid(vec![0xAB; 32])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -5464,7 +6098,7 @@ mod tests {
         let payload = vec![0xAA; 64 * 3];
         let plan = single_file_plan(&payload).expect("plan");
 
-        let manifest = manifest_builder_for_plan(&plan)
+        let manifest = manifest_builder_for_plan(&payload, &plan)
             .root_cid(vec![0x44; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -5502,7 +6136,7 @@ mod tests {
 
         let payload = b"stripe layout payload";
         let plan = single_file_plan(payload).expect("plan");
-        let manifest = manifest_builder_for_plan(&plan)
+        let manifest = manifest_builder_for_plan(payload, &plan)
             .root_cid(vec![0xAA, 0xBB])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -5564,7 +6198,7 @@ mod tests {
 
         let payload = b"role length check";
         let plan = single_file_plan(payload).expect("plan");
-        let manifest = manifest_builder_for_plan(&plan)
+        let manifest = manifest_builder_for_plan(payload, &plan)
             .root_cid(vec![0xFF, 0xEE])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -5681,7 +6315,7 @@ mod tests {
         let payload = vec![0xBB; 128];
         let plan = single_file_plan(&payload).expect("plan");
 
-        let manifest = manifest_builder_for_plan(&plan)
+        let manifest = manifest_builder_for_plan(&payload, &plan)
             .root_cid(vec![0x55; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -5715,7 +6349,7 @@ mod tests {
         let payload = b"manifest payload round trip bytes";
         let plan = single_file_plan(payload).expect("plan");
 
-        let manifest = manifest_builder_for_plan(&plan)
+        let manifest = manifest_builder_for_plan(payload, &plan)
             .root_cid(vec![0x77; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -5749,7 +6383,7 @@ mod tests {
         let mut policy = PinPolicy::default();
         policy.retention_epoch = 200;
 
-        let manifest = manifest_builder_for_plan(&plan)
+        let manifest = manifest_builder_for_plan(payload, &plan)
             .root_cid(vec![0xFA, 0xCE])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -5867,7 +6501,7 @@ mod tests {
 
         let payload = b"last access persistence";
         let plan = single_file_plan(payload).expect("plan");
-        let manifest = manifest_builder_for_plan(&plan)
+        let manifest = manifest_builder_for_plan(payload, &plan)
             .root_cid(vec![0x11, 0x22])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -5910,7 +6544,7 @@ mod tests {
 
         let payload = b"payload for eviction";
         let plan = single_file_plan(payload).expect("plan");
-        let manifest = manifest_builder_for_plan(&plan)
+        let manifest = manifest_builder_for_plan(payload, &plan)
             .root_cid(vec![0x10, 0x20, 0x30])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -6052,7 +6686,7 @@ mod tests {
         let payload = vec![0xCC; 96];
         let plan = single_file_plan(&payload).expect("plan");
 
-        let manifest = manifest_builder_for_plan(&plan)
+        let manifest = manifest_builder_for_plan(&payload, &plan)
             .root_cid(vec![0x99; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -6105,10 +6739,12 @@ mod tests {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let backend = StorageBackend::new(temp_config(&temp_dir)).expect("backend init");
 
-        let payload = b"SoraFS deterministic sampling data for PoR";
-        let plan = single_file_plan(payload).expect("plan");
+        let payload = (0..(sorafs_car::POR_LEAF_SIZE * 4 + 17))
+            .map(|index| u8::try_from(index % 251).expect("fixture byte"))
+            .collect::<Vec<_>>();
+        let plan = single_file_plan(&payload).expect("plan");
 
-        let manifest = manifest_builder_for_plan(&plan)
+        let manifest = manifest_builder_for_plan(&payload, &plan)
             .root_cid(vec![0xCD; 16])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -6116,28 +6752,62 @@ mod tests {
                 sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
             )
             .content_length(plan.content_length)
-            .car_digest(blake3::hash(payload).into())
+            .car_digest(blake3::hash(&payload).into())
             .car_size(plan.content_length)
             .pin_policy(PinPolicy::default())
             .build()
             .expect("manifest");
 
-        let mut reader = &payload[..];
+        let mut reader = payload.as_slice();
         let manifest_id = backend
             .ingest_manifest(&manifest, &plan, &mut reader)
             .expect("ingest");
 
-        let samples = backend
-            .sample_por(&manifest_id, 4, 42)
-            .expect("PoR samples");
         let stored = backend.manifest(&manifest_id).expect("stored manifest");
+        let leaf_count = stored.por_tree().leaf_count_u64();
+        let collision_seed = (0u64..)
+            .find(|seed| {
+                let first = sorafs_car::splitmix64(*seed);
+                let second = sorafs_car::splitmix64(first);
+                first % leaf_count == second % leaf_count
+            })
+            .expect("bounded fixture has a SplitMix reduction collision");
+        let expected_indices = PorSampleIndices::new(leaf_count, 4, collision_seed)
+            .expect("build shared canonical sample schedule")
+            .map(|index| usize::try_from(index).expect("fixture index fits usize"))
+            .collect::<Vec<_>>();
+        let samples = backend
+            .sample_por(&manifest_id, 4, collision_seed)
+            .expect("PoR samples");
         let expected = stored.por_tree().leaf_count().min(4);
         assert_eq!(samples.len(), expected);
+        assert_eq!(
+            samples.iter().map(|(index, _)| *index).collect::<Vec<_>>(),
+            expected_indices,
+            "provider storage sampling must use the shared collision schedule"
+        );
         let root = *stored.por_tree().root();
 
         for (_idx, proof) in samples {
             assert!(proof.verify(&root));
         }
+    }
+
+    #[test]
+    fn sample_por_rejects_unbounded_sample_count() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let backend = StorageBackend::new(temp_config(&temp_dir)).expect("backend init");
+        let requested = usize::try_from(MAX_PROOF_STREAM_SAMPLE_COUNT)
+            .expect("u32 PoR sample ceiling must fit usize")
+            + 1;
+
+        assert!(matches!(
+            backend.sample_por("missing-manifest", requested, 7),
+            Err(StorageError::PorSampleCountTooLarge {
+                requested: found,
+                maximum: MAX_PROOF_STREAM_SAMPLE_COUNT,
+            }) if found == requested
+        ));
     }
 
     #[test]
@@ -6148,7 +6818,7 @@ mod tests {
         let payload = b"deterministic chunk access";
         let plan = single_file_plan(payload).expect("plan");
 
-        let manifest = manifest_builder_for_plan(&plan)
+        let manifest = manifest_builder_for_plan(payload, &plan)
             .root_cid(vec![0xEE; 8])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -6185,7 +6855,7 @@ mod tests {
         let payload = b"missing chunk digests";
         let plan = single_file_plan(payload).expect("plan");
 
-        let manifest = manifest_builder_for_plan(&plan)
+        let manifest = manifest_builder_for_plan(payload, &plan)
             .root_cid(vec![0xAA; 4])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -6226,7 +6896,7 @@ mod tests {
         let payload = b"stream chunk payload";
         let plan = single_file_plan(payload).expect("plan");
 
-        let manifest = manifest_builder_for_plan(&plan)
+        let manifest = manifest_builder_for_plan(payload, &plan)
             .root_cid(vec![0xBB; 6])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -6556,6 +7226,38 @@ mod tests {
                 ),
                 "tampering case {case} must fail closed"
             );
+        }
+    }
+
+    #[test]
+    fn restart_rejects_persisted_por_root_not_bound_to_manifest() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let payload = b"persisted PoR roots remain bound across provider restart";
+        let (config, backend, manifest_id) = ingest_test_payload(&temp_dir, payload, 0xE9);
+        let mut tampered_commitment_digest = None;
+        rewrite_manifest_record(&backend, &manifest_id, |record| {
+            record.por_commitment.root[0] ^= 0x40;
+            tampered_commitment_digest = Some(
+                record
+                    .por_commitment
+                    .digest()
+                    .expect("tampered PoR commitment digest"),
+            );
+        });
+        rewrite_manifest_index(&backend, |index| {
+            index.entries[0].por_commitment_digest =
+                tampered_commitment_digest.expect("tampered commitment digest recorded");
+        });
+        drop(backend);
+
+        let error = StorageBackend::new(config)
+            .expect_err("restart must reject a persisted PoR root detached from its manifest");
+        match error {
+            StorageError::CorruptStorageState { reason, .. } => assert_eq!(
+                reason,
+                "persisted PoR root does not match the canonical manifest commitment"
+            ),
+            other => panic!("unexpected restart error: {other:?}"),
         }
     }
 
@@ -7055,7 +7757,7 @@ mod tests {
 
         let payload = b"Persistent storage test payload";
         let plan = single_file_plan(payload).expect("plan");
-        let manifest = manifest_builder_for_plan(&plan)
+        let manifest = manifest_builder_for_plan(payload, &plan)
             .root_cid(vec![0xEF; 8])
             .dag_codec(DagCodecId(0x71))
             .chunking_from_profile(
@@ -7371,6 +8073,124 @@ mod tests {
         assert!(leftovers.is_empty(), "temporary file must not remain");
     }
 
+    #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
+    #[test]
+    fn pinned_atomic_parent_rename_cannot_be_redirected_by_path_swap() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let root = canonical_temp_path(&temp_dir);
+        let parent = root.join("live");
+        let moved_parent = root.join("moved");
+        let redirect = root.join("redirect");
+        fs::create_dir(&parent).expect("create live parent");
+        fs::create_dir(&redirect).expect("create redirect parent");
+        let temporary = parent.join("index.tmp");
+        let destination = parent.join("index");
+        fs::write(&temporary, b"pinned").expect("write pinned temporary");
+        let pinned = AtomicParentDirectory::open(&parent).expect("pin live parent");
+
+        fs::rename(&parent, &moved_parent).expect("move pinned parent");
+        std::os::unix::fs::symlink(&redirect, &parent).expect("redirect live parent path");
+        assert!(
+            pinned.verify_path_identity().is_err(),
+            "path identity change must be detected"
+        );
+        pinned
+            .rename_entry(&temporary, &destination)
+            .expect("descriptor-relative rename remains inside pinned directory");
+
+        assert_eq!(
+            fs::read(moved_parent.join("index")).expect("read pinned destination"),
+            b"pinned"
+        );
+        assert!(
+            !redirect.join("index").exists(),
+            "swapped path must not receive the committed entry"
+        );
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
+    #[test]
+    fn post_rename_parent_path_swap_is_durability_uncertain_not_precommit() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let root = canonical_temp_path(&temp_dir);
+        let parent = root.join("live");
+        let moved_parent = root.join("moved");
+        let redirect = root.join("redirect");
+        fs::create_dir(&parent).expect("create live parent");
+        fs::create_dir(&redirect).expect("create redirect parent");
+        let target = parent.join("index");
+        fs::write(&target, b"old").expect("seed target");
+
+        let error = write_atomic_with_directory_sync(&target, b"new", |pinned| {
+            fs::rename(&parent, &moved_parent)?;
+            std::os::unix::fs::symlink(&redirect, &parent)?;
+            pinned.sync()
+        })
+        .expect_err("post-rename parent identity loss must be uncertain");
+
+        assert!(matches!(
+            error,
+            AtomicWriteError::DurabilityUncertain { .. }
+        ));
+        assert_eq!(
+            fs::read(moved_parent.join("index")).expect("read committed replacement"),
+            b"new"
+        );
+        assert!(
+            !redirect.join("index").exists(),
+            "swapped parent must not receive the replacement"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_temp_commit_validation_rejects_path_replacement_and_hardlinks() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let root = canonical_temp_path(&temp_dir);
+        let temporary = root.join("index.tmp");
+        let displaced = root.join("index.displaced");
+        let mut file = open_atomic_temp_file(&temporary).expect("open atomic temporary");
+        file.write_all(b"stable").expect("write temporary");
+        file.sync_all().expect("sync temporary");
+        let stable = file.metadata().expect("capture stable temporary identity");
+        validate_atomic_open_file_identity(
+            &temporary,
+            &file,
+            &stable,
+            b"stable".len(),
+            "atomic temporary",
+        )
+        .expect("stable temporary is accepted");
+
+        fs::hard_link(&temporary, root.join("index.alias")).expect("hard-link temporary");
+        assert!(
+            validate_atomic_open_file_identity(
+                &temporary,
+                &file,
+                &stable,
+                b"stable".len(),
+                "atomic temporary",
+            )
+            .is_err(),
+            "a second hard link must invalidate the temporary"
+        );
+        fs::remove_file(root.join("index.alias")).expect("remove hard-link alias");
+
+        fs::rename(&temporary, &displaced).expect("displace opened temporary");
+        fs::write(&temporary, b"stable").expect("replace temporary path with same-size inode");
+        assert!(
+            validate_atomic_open_file_identity(
+                &temporary,
+                &file,
+                &stable,
+                b"stable".len(),
+                "atomic temporary",
+            )
+            .is_err(),
+            "same-size path replacement must not retain trusted identity"
+        );
+    }
+
     #[test]
     fn uncertain_commit_fail_stops_subsequent_storage_operations() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -7392,6 +8212,34 @@ mod tests {
         let mut reader = &payload[..];
         assert!(matches!(
             backend.ingest_manifest(&manifest, &plan, &mut reader),
+            Err(StorageError::DurabilityPoisoned { .. })
+        ));
+    }
+
+    #[test]
+    fn repair_replacement_fail_stops_after_post_rename_sync_failure() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let payload = b"repair replacement durability payload";
+        let (_config, backend, manifest_id) = ingest_test_payload(&temp_dir, payload, 0xD5);
+
+        let replacement = backend
+            .with_manifest_io(&manifest_id, |manifest| {
+                let chunk = manifest.chunk(0).expect("repair chunk").clone();
+                backend.replace_chunk_for_repair_with_directory_sync(
+                    manifest,
+                    &chunk,
+                    payload,
+                    |_| Err(io::Error::other("injected repair directory sync failure")),
+                )
+            })
+            .expect("acquire repair lifecycle lease");
+
+        assert!(matches!(
+            replacement,
+            Err(StorageError::DurabilityUncertain { .. })
+        ));
+        assert!(matches!(
+            backend.ensure_durability_healthy(),
             Err(StorageError::DurabilityPoisoned { .. })
         ));
     }

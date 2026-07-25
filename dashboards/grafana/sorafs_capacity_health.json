@@ -666,7 +666,7 @@
     },
     {
       "type": "timeseries",
-      "title": "Reserve Runtime Defaults and Appeals",
+      "title": "Reserve Finalized Projection",
       "id": 27,
       "datasource": "$datasource",
       "targets": [
@@ -679,6 +679,16 @@
           "expr": "torii_sorafs_reserve_appeal_backlog",
           "legendFormat": "open appeals",
           "refId": "B"
+        },
+        {
+          "expr": "torii_sorafs_reserve_finalized_projection_ready",
+          "legendFormat": "projection ready",
+          "refId": "C"
+        },
+        {
+          "expr": "torii_sorafs_reserve_finalized_projection_height",
+          "legendFormat": "finalized height",
+          "refId": "D"
         }
       ],
       "fieldConfig": {
@@ -688,11 +698,11 @@
         },
         "overrides": []
       },
-      "description": "Local reserve runtime defaults and open appeal backlog. Non-zero defaults and sustained appeal backlog are covered by reserve runtime alerts."
+      "description": "Finalized reserve defaults, open appeals, readiness, and represented block height. Promotion consumers must require projection ready=1."
     },
     {
       "type": "timeseries",
-      "title": "Reserve Runtime Chain Reconciliation",
+      "title": "Reserve Finalized Movement Reconciliation",
       "id": 28,
       "datasource": "$datasource",
       "targets": [
@@ -714,11 +724,11 @@
         },
         "overrides": []
       },
-      "description": "Terminal reserve movement reconciliation counts alongside the local custody ledger."
+      "description": "Terminal and pending reserve movement counts rebuilt from the finalized typed event journal."
     },
     {
       "type": "timeseries",
-      "title": "Reserve Runtime Rate Limits / 5m",
+      "title": "Reserve API Rate Limits / 5m",
       "id": 29,
       "datasource": "$datasource",
       "targets": [
