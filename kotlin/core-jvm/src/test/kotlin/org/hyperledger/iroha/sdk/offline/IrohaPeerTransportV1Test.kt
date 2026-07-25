@@ -252,8 +252,8 @@ class IrohaPeerTransportV1Test {
         assertEquals(0x0102, wrapped.canonicalPayload.schemaVersion)
         assertContentEquals(archive, wrapped.canonicalPayload.bytes)
         assertContentEquals(archive, IrohaPeerKagemushaAdapterV1.decode(wrapped).archive())
-        assertEquals(12_306, archive.size)
-        assertEquals(12_390, wrapped.encode().size)
+        assertEquals(12_363, archive.size)
+        assertEquals(12_447, wrapped.encode().size)
 
         val tooSmall = IrohaPeerWireLimitsV1(
             maximumCanonicalBytes = 32 * 1024,

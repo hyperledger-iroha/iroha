@@ -21,9 +21,9 @@ use iroha_core::{
 };
 use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, PrivateKey};
 use iroha_data_model::{
-    asset::AssetDefinitionAlias, block::consensus_v2::ConsensusMode as WireConsensusMode,
-    da::commitment::DaProofPolicyBundle, isi::RegisterPublicLaneValidator,
-    parameter::system::SumeragiConsensusMode, prelude::*,
+    account::address::ChainDiscriminantGuard, asset::AssetDefinitionAlias,
+    block::consensus_v2::ConsensusMode as WireConsensusMode, da::commitment::DaProofPolicyBundle,
+    isi::RegisterPublicLaneValidator, parameter::system::SumeragiConsensusMode, prelude::*,
 };
 use iroha_genesis::{GenesisBlock, GenesisBuilder, GenesisTopologyEntry, RawGenesisTransaction};
 use iroha_primitives::time::TimeSource;
@@ -469,6 +469,9 @@ fn staged_sumeragi_v2_context_hash_on_bounded_stack(
     da_proof_policies: Option<&DaProofPolicyBundle>,
     confidential_policy_hash: [u8; 32],
 ) -> Result<iroha_crypto::Hash, color_eyre::eyre::Error> {
+    // This worker is a new thread, so it does not inherit the caller's
+    // thread-local I105 discriminant.
+    let _chain_discriminant = staged_genesis_chain_discriminant(genesis);
     let consensus_mode = match genesis.consensus_mode() {
         SumeragiConsensusMode::Permissioned => WireConsensusMode::Permissioned,
         SumeragiConsensusMode::Npos => WireConsensusMode::Npos,
@@ -516,7 +519,7 @@ fn staged_sumeragi_v2_context_hash_on_bounded_stack(
     );
     match config {
         Some(config) => {
-            state.set_pipeline(config.pipeline.clone());
+            state.set_pipeline(staged_genesis_pipeline(config.pipeline.clone()));
             state
                 .set_zk(config.zk.clone())
                 .map_err(|error| eyre!("invalid ZK config for staged genesis: {error}"))?;
@@ -534,7 +537,7 @@ fn staged_sumeragi_v2_context_hash_on_bounded_stack(
             state.set_crypto(config.crypto.clone());
         }
         None => {
-            state.set_pipeline(actual::Pipeline::default());
+            state.set_pipeline(staged_genesis_pipeline(actual::Pipeline::default()));
             state
                 .set_nexus(actual::Nexus::default())
                 .map_err(|error| eyre!("invalid default Nexus config: {error}"))?;
@@ -564,15 +567,7 @@ fn staged_sumeragi_v2_context_hash_on_bounded_stack(
     };
     state.install_lane_compliance_engine(lane_compliance);
     let lane_manifests = if nexus.enabled {
-        let registry = LaneManifestRegistry::from_config(
-            &nexus.lane_catalog,
-            &nexus.governance,
-            &nexus.registry,
-        );
-        registry
-            .validate_active_coverage()
-            .map_err(|error| eyre!("invalid lane manifest registry for staged genesis: {error}"))?;
-        registry
+        staged_lane_manifest_registry(genesis, &nexus)?
     } else {
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance)
     };
@@ -618,6 +613,33 @@ fn staged_sumeragi_v2_context_hash_on_bounded_stack(
     let hash = iroha_core::sumeragi::staged_genesis_nexus_amx_context_hash(&staged);
     drop(staged);
     Ok(hash)
+}
+
+fn staged_genesis_chain_discriminant(genesis: &RawGenesisTransaction) -> ChainDiscriminantGuard {
+    ChainDiscriminantGuard::enter(genesis.chain_discriminant())
+}
+
+fn staged_lane_manifest_registry(
+    genesis: &RawGenesisTransaction,
+    nexus: &actual::Nexus,
+) -> Result<LaneManifestRegistry, color_eyre::eyre::Error> {
+    // Genesis construction can enter additional I105 scopes. Reassert the manifest
+    // discriminant at the exact filesystem-parse boundary so validator accounts
+    // cannot fall back to the process-global SORA prefix.
+    let _chain_discriminant = staged_genesis_chain_discriminant(genesis);
+    let registry =
+        LaneManifestRegistry::from_config(&nexus.lane_catalog, &nexus.governance, &nexus.registry);
+    registry
+        .validate_active_coverage()
+        .map_err(|error| eyre!("invalid lane manifest registry for staged genesis: {error}"))?;
+    Ok(registry)
+}
+
+fn staged_genesis_pipeline(mut pipeline: actual::Pipeline) -> actual::Pipeline {
+    // Keep offline genesis execution on the guarded staging worker so nested
+    // account parsing cannot fall back to the process-global discriminant.
+    pipeline.workers = 1;
+    pipeline
 }
 
 fn should_auto_bootstrap_npos_validators(
@@ -994,6 +1016,7 @@ mod tests {
             SetParameter, asset_alias::SetAssetDefinitionAlias, mint_burn::MintBox,
             register::RegisterBox, staking::RegisterPublicLaneValidator,
         },
+        nexus::{LaneCatalog, LaneConfig},
         parameter::{
             Parameter,
             system::{
@@ -2738,6 +2761,62 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let mut writer = BufWriter::new(Vec::new());
         args.run(&mut writer)
             .expect("permissioned genesis should be allowed on Iroha3");
+    }
+
+    #[test]
+    fn staged_manifest_registry_reenters_genesis_discriminant() {
+        let discriminant = crate::genesis::profile::TAIRA_CHAIN_DISCRIMINANT;
+        let genesis = RawGenesisTransaction::from_path(minimal_genesis_file())
+            .expect("parse minimal genesis")
+            .with_chain_discriminant(discriminant);
+        let directory = tempfile::tempdir().expect("manifest directory");
+        fs::write(
+            directory.path().join("governance.manifest.json"),
+            r#"{
+                "lane": "governance",
+                "governance": "parliament",
+                "version": 1,
+                "validators": [{
+                    "validator": "testﾜヰ8ｽuimdh9FﾂｦUｸﾈbﾕﾆヱMUYｴGｷﾙｹﾐRヱbﾐｷwﾄ6ﾃdDLPQﾋW496uﾙﾜFpﾈtHd4Hﾙﾎ45M1L5",
+                    "peer_id": "ea0130999C999F728B0829387F4E93732EE0479F911DE0CE1E9409C8CEA66CF99376F57DB2E709892648F222D9F4E90DB29B84"
+                }],
+                "quorum": 1
+            }"#,
+        )
+        .expect("write Taira manifest");
+        let lane_catalog = LaneCatalog::new(
+            std::num::NonZeroU32::new(1).expect("non-zero lane count"),
+            vec![LaneConfig {
+                id: LaneId::SINGLE,
+                alias: "governance".to_owned(),
+                governance: Some("parliament".to_owned()),
+                ..LaneConfig::default()
+            }],
+        )
+        .expect("governance lane catalog");
+        let mut governance = actual::GovernanceCatalog::default();
+        governance
+            .modules
+            .insert("parliament".to_owned(), actual::GovernanceModule::default());
+        let nexus = actual::Nexus {
+            enabled: true,
+            lane_catalog: lane_catalog.clone(),
+            configured_lane_catalog: lane_catalog,
+            governance,
+            registry: actual::LaneRegistry {
+                manifest_directory: Some(directory.path().to_path_buf()),
+                cache_directory: Some(directory.path().to_path_buf()),
+                ..actual::LaneRegistry::default()
+            },
+            ..actual::Nexus::default()
+        };
+
+        let _wrong_discriminant = ChainDiscriminantGuard::enter(discriminant.wrapping_add(1));
+        let registry = staged_lane_manifest_registry(&genesis, &nexus)
+            .expect("staged registry must re-enter the genesis discriminant");
+        registry
+            .validate_active_coverage()
+            .expect("Taira governance manifest must remain active");
     }
 
     fn minimal_genesis_file() -> PathBuf {

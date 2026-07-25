@@ -559,7 +559,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             KagemushaRecursiveSpend.artifactManifestSchemaV4,
             "kagemusha.offline.recursive_spend.artifact_manifest.v4"
         )
-        XCTAssertEqual(KagemushaRecursiveSpend.pastaCycleProofEnvelopeVersionV4, 4)
+        XCTAssertEqual(KagemushaRecursiveSpend.pastaCycleProofEnvelopeVersionV4, 5)
         XCTAssertEqual(KagemushaRecursiveSpend.localWitnessVersionV4, 4)
         XCTAssertEqual(KagemushaRecursiveSpend.artifactRolesV4.count, 8)
         XCTAssertEqual(
@@ -611,6 +611,22 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         )
         XCTAssertThrowsError(try KagemushaRecursiveSpend.ensureProofBackendAvailableV4())
     }
+
+    #if os(macOS)
+    func testLinkedPrivacyProductionRuntimeIsFailClosedBeforeArtifactInstall() throws {
+        let capabilities = try KagemushaRecursiveSpend.nativeCapabilitiesV4()
+
+        XCTAssertEqual(capabilities.bridgeABIVersion, 21)
+        XCTAssertEqual(capabilities.proofEnvelopeVersion, 5)
+        XCTAssertFalse(capabilities.proofBackendAvailable)
+        XCTAssertEqual(
+            capabilities.missingGates,
+            ["authenticated-v4-artifact-installation"]
+        )
+        XCTAssertTrue(KagemushaRecursiveSpend.isProductionCompiledAndLinked)
+        XCTAssertFalse(KagemushaRecursiveSpend.isProductionAvailable)
+    }
+    #endif
 
     func testNativeLinkageProbeDoesNotCachePrePromotionUnavailability() throws {
         var promoted = false

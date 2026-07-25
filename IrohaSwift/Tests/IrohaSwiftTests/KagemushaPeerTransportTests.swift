@@ -166,27 +166,35 @@ final class KagemushaPeerTransportTests: XCTestCase {
         )
         let message = try IrohaPeerKagemushaAdapterV1.wrap(.receiveRequest(offer))
 
-        XCTAssertEqual(offer.noritoArchive.count, 12_306)
+        XCTAssertEqual(
+            projection.request.payload.chainID,
+            "fc56984b-2be7-431d-840e-21514d1883f0"
+        )
+        XCTAssertEqual(
+            projection.request.payload.assetDefinitionID,
+            "7ZepsJTHCVLKsrFFNZGSRGZgvBhv"
+        )
+        XCTAssertEqual(offer.noritoArchive.count, 12_363)
         XCTAssertEqual(
             sha256Hex(offer.noritoArchive),
-            "cd32b93ab3fa990f586d72416fec3540c0dde736b9f7d00197c12d5a1b85e7a2"
+            "195269dd8af46ad18cde482111ca8f55b1a7a787275e238e1307910c843d4205"
         )
-        XCTAssertEqual(projection.request.archive.count, 759)
+        XCTAssertEqual(projection.request.archive.count, 765)
         XCTAssertEqual(
             sha256Hex(projection.request.archive),
-            "9886a74736619c6edee9442a6b392ede0f7b75ffa2c9fdd958e3741ab9dcfb49"
+            "899c9b4d44630e6c0c010d04ab4b0c570c2062fba5a54e678d6a0baf0e8b02b0"
         )
-        XCTAssertEqual(projection.lineageArchive.count, 11_218)
+        XCTAssertEqual(projection.lineageArchive.count, 11_265)
         XCTAssertEqual(
             sha256Hex(projection.lineageArchive),
-            "7dcbf73a0cedde48740dd2f0b71f53c642a139c29e851c714a751807521277a5"
+            "e10be1c9f0632030a80106347dd06012adfdc01e3963c8cbf84981abc879197e"
         )
-        XCTAssertEqual(projection.publisherCheckpointEnvelope.count, 349)
+        XCTAssertEqual(projection.publisherCheckpointEnvelope.count, 353)
         XCTAssertEqual(
             sha256Hex(projection.publisherCheckpointEnvelope),
-            "92ea89c32730f161ddc61ee7eded2a032d33cc3364cfe7281cbe0bdd2149e4d3"
+            "be32a7335889e3f5220c0e14c26a6ad0ca41707a4ab958b05d7035de3767cf95"
         )
-        XCTAssertEqual(message.encoded.count, 12_390)
+        XCTAssertEqual(message.encoded.count, 12_447)
         XCTAssertEqual(
             try IrohaPeerKagemushaAdapterV1.decode(
                 IrohaPeerWireMessageV1.decode(message.encoded),

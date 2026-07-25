@@ -187,7 +187,7 @@ public enum KagemushaRecursiveSpend {
     public static let pastaCycleBackendV4 = "halo2/ipa-pasta-cycle-compact-v5"
     public static let pastaCycleTranscriptV4 =
         "kagemusha-pasta-cycle-poseidon-compact-v5"
-    public static let pastaCycleProofEnvelopeVersionV4: UInt16 = 4
+    public static let pastaCycleProofEnvelopeVersionV4: UInt16 = 5
     public static let stepEqCircuitIDV4 =
         "kagemusha-recursive-spend-step-eq-compact-layout-v5"
     public static let stepEpCircuitIDV4 =

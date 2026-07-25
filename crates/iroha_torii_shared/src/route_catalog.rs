@@ -3855,7 +3855,7 @@ pub mod application_api {
         SORACLOUD_MODEL_UPLOAD_STATUS_GET => app_sdk_get("application.soracloud_model_upload_status_get", "/v1/soracloud/model/upload/status");
         SORACLOUD_MODEL_UPLOAD_PRIVATE_EXECUTE_POST => app_post("application.soracloud_model_upload_private_execute_post", "/v1/soracloud/model/upload/private/execute");
         SORACLOUD_MODEL_UPLOAD_PRIVATE_RECEIPTS_GET => app_get("application.soracloud_model_upload_private_receipts_get", "/v1/soracloud/model/upload/private/receipts");
-        SORACLOUD_HF_DEPLOY_POST => app_sdk_post("application.soracloud_hf_deploy_post", "/v1/soracloud/hf/deploy");
+        SORACLOUD_HF_DEPLOY_POST => app_post("application.soracloud_hf_deploy_post", "/v1/soracloud/hf/deploy");
         SORACLOUD_HF_STATUS_GET => app_sdk_get("application.soracloud_hf_status_get", "/v1/soracloud/hf/status");
         SORACLOUD_HF_LEASE_LEAVE_POST => app_sdk_post("application.soracloud_hf_lease_leave_post", "/v1/soracloud/hf/lease/leave");
         SORACLOUD_HF_LEASE_RENEW_POST => app_sdk_post("application.soracloud_hf_lease_renew_post", "/v1/soracloud/hf/lease/renew");

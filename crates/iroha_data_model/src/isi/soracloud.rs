@@ -462,6 +462,12 @@ pub struct JoinSoracloudHfSharedLease {
     /// Canonical HF resource profile derived by the control plane.
     #[norito(default)]
     pub resource_profile: Option<SoraHfResourceProfileV1>,
+    /// Exact first-release upper bound for the compute reservation charge.
+    ///
+    /// The transaction signer reviews this value together with the derived
+    /// resource profile. Consensus rejects a join whose effective compute
+    /// charge would exceed this bound.
+    pub max_compute_reservation_fee: Quantity,
     /// Provenance attestation over the join payload.
     pub provenance: ManifestProvenance,
 }
@@ -1615,6 +1621,7 @@ impl_soracloud_decode_from_slice!(JoinSoracloudHfSharedLease {
     lease_asset_definition_id: AssetDefinitionId,
     base_fee: Quantity,
     resource_profile: Option<SoraHfResourceProfileV1>,
+    max_compute_reservation_fee: Quantity,
     provenance: ManifestProvenance,
 });
 

@@ -185,6 +185,7 @@ export {
   noritoDecodeBlockProofs,
   noritoEncodeInstruction,
   noritoDecodeInstruction,
+  inspectSubscriptionTriggerAction,
   noritoEncodePrivacyProofEnvelope,
   noritoDecodePrivacyProofEnvelope,
   noritoEncodeContractManifestSignaturePayload,

@@ -188,9 +188,85 @@ PY
   esac
 }
 
+test_android_strip_invocation_contract() {
+  local build_file="$SCRIPT_DIR/../kotlin/client-android/build.gradle.kts"
+  local probe_root="$TMP_DIR/android-strip-invocation"
+  local fake_objcopy="$probe_root/llvm-objcopy"
+  local fake_strip="$probe_root/llvm-strip"
+  local resolved_strip
+  local arm_library="$probe_root/arm64-v8a/libconnect_norito_bridge.so"
+  local x86_library="$probe_root/x86_64/libconnect_norito_bridge.so"
+  local rejected_library="$probe_root/reject-library.so"
+  local library
+
+  grep -Fq 'fun canonicalStripCommands(' "$build_file" \
+    || fail "Android native build must centralize canonical strip commands"
+  grep -Fq 'return libraryPaths.map { libraryPath ->' "$build_file" \
+    || fail "Android native build must create one strip command per ABI path"
+  grep -Fq ').forEach { stripCommand ->' "$build_file" \
+    || fail "Android native build must execute canonical strip commands independently"
+  grep -Fq 'commandLine(*stripCommand.toTypedArray())' "$build_file" \
+    || fail "Android native build must execute only one canonical strip command at a time"
+  if grep -Fq '*outputLibraries.map { it.absolutePath }.toTypedArray()' "$build_file"; then
+    fail "Android native build must not batch ABI libraries as llvm-objcopy positionals"
+  fi
+
+  mkdir -p "$(dirname "$arm_library")" "$(dirname "$x86_library")"
+  cat >"$fake_objcopy" <<'SH'
+#!/bin/sh
+set -eu
+if [ "$#" -ne 2 ] || [ "$1" != "--strip-unneeded" ]; then
+  exit 64
+fi
+case "$2" in
+  *reject*)
+    exit 65
+    ;;
+esac
+printf 'stripped\n' >>"$2"
+SH
+  chmod 0700 "$fake_objcopy"
+  ln -s llvm-objcopy "$fake_strip"
+  resolved_strip="$(
+    "$TEST_PYTHON_BINARY" -I -c \
+      'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
+      "$fake_strip"
+  )"
+  [[ "$resolved_strip" -ef "$fake_objcopy" ]] \
+    || fail "fake llvm-strip launcher did not resolve to authenticated llvm-objcopy"
+
+  printf 'arm64-v8a-original\n' >"$arm_library"
+  printf 'x86_64-original\n' >"$x86_library"
+  for library in "$arm_library" "$x86_library"; do
+    "$resolved_strip" --strip-unneeded "$library" \
+      || fail "independent Android strip invocation rejected ${library##*/}"
+  done
+  [[ "$(<"$arm_library")" == $'arm64-v8a-original\nstripped' ]] \
+    || fail "independent Android stripping skipped or cross-overwrote arm64-v8a"
+  [[ "$(<"$x86_library")" == $'x86_64-original\nstripped' ]] \
+    || fail "independent Android stripping skipped or cross-overwrote x86_64"
+
+  if "$resolved_strip" --strip-unneeded "$arm_library" "$x86_library"; then
+    fail "strip regression fixture accepted a multi-positional ABI batch"
+  fi
+  printf 'must-remain\n' >"$rejected_library"
+  if "$resolved_strip" --strip-unneeded "$rejected_library"; then
+    fail "strip regression fixture accepted an adversarial rejected ABI"
+  fi
+  [[ "$(<"$rejected_library")" == "must-remain" ]] \
+    || fail "failed Android strip invocation mutated a rejected ABI library"
+}
+
+if [[ "${MOBILE_SDK_ANDROID_STRIP_INVOCATION_TEST_ONLY:-0}" == "1" ]]; then
+  test_android_strip_invocation_contract
+  echo "[mobile-sdk-artifacts-test] Android strip invocation contract passed"
+  exit 0
+fi
+
 if [[ "${MOBILE_SDK_SKIP_SOURCE_SEAL_SELF_TEST:-0}" != "1" ]]; then
   test_build_source_seal
   test_hermetic_command_environment
+  test_android_strip_invocation_contract
 fi
 
 make_aar() {
