@@ -2440,6 +2440,7 @@ fn release_barriers_overlap(
         .any(|key| barrier_contains_signed_hash(right, key))
 }
 
+#[cfg(test)]
 fn encode_frame(frame: &LaneQueueReservationJournalFrameV5) -> io::Result<Vec<u8>> {
     encode_frame_with_limit(frame, u64::from(u32::MAX))
 }
@@ -2499,6 +2500,7 @@ fn bootstrap_frame() -> LaneQueueReservationJournalFrameV5 {
     }
 }
 
+#[cfg(test)]
 fn minimum_bootstrap_frame_bytes() -> io::Result<u64> {
     u64::try_from(encode_frame(&bootstrap_frame())?.len())
         .map_err(|_| invalid_input("lane reservation bootstrap frame exceeds u64"))
@@ -2524,6 +2526,7 @@ fn frame_checksum(version: &[u8; 2], len: &[u8; 4], len_guard: &[u8; 4], payload
     ])
 }
 
+#[cfg(test)]
 fn encode_compacted_journal(
     snapshot: Option<&LaneQueueReservationJournalFrameV5>,
 ) -> io::Result<Vec<u8>> {
@@ -3347,13 +3350,6 @@ fn lock_regular_journal(path: &Path, file: &File) -> io::Result<()> {
     }
     verify_open_regular_path(path, file)?;
     Ok(())
-}
-
-fn open_regular_read_write(path: &Path) -> io::Result<File> {
-    validate_regular_path(path)?;
-    let file = OpenOptions::new().read(true).write(true).open(path)?;
-    verify_open_regular_path(path, &file)?;
-    Ok(file)
 }
 
 fn open_regular_read(path: &Path) -> io::Result<File> {

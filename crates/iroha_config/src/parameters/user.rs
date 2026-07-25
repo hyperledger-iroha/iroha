@@ -5887,9 +5887,6 @@ pub struct SumeragiV2RuntimeLimits {
     /// Idempotency request gates retained for one authenticated source.
     #[config(default = "defaults::sumeragi::V2_MERGE_SIDECAR_SERVER_REQUEST_GATES_PER_SOURCE")]
     pub merge_sidecar_server_request_gates_per_source: NonZeroUsize,
-    /// Lifetime of a completed/rejected server request gate.
-    #[config(default = "defaults::sumeragi::V2_MERGE_SIDECAR_SERVER_REQUEST_GATE_TTL.into()")]
-    pub merge_sidecar_server_request_gate_ttl_ms: DurationMs,
     /// Certified merge entries retained in Kura before canonical carrier commitment.
     #[config(default = "defaults::sumeragi::V2_PENDING_CERTIFIED_MERGE_ENTRY_CAPACITY")]
     pub pending_certified_merge_entry_capacity: NonZeroUsize,
@@ -6262,9 +6259,6 @@ impl Sumeragi {
                     .merge_sidecar_outbound_bytes_per_source,
                 merge_sidecar_server_request_gates_per_source: limits
                     .merge_sidecar_server_request_gates_per_source,
-                merge_sidecar_server_request_gate_ttl: limits
-                    .merge_sidecar_server_request_gate_ttl_ms
-                    .0,
                 pending_certified_merge_entry_capacity: limits
                     .pending_certified_merge_entry_capacity,
                 pending_queue_plan_admission_capacity: limits.pending_queue_plan_admission_capacity,

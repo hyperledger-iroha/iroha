@@ -629,7 +629,9 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
                 _ => T::Other,
             },
             NetworkMessage::CertifiedMergeSidecar(message) => match message.as_ref() {
-                CertifiedMergeSidecarMessage::Request(_) => T::Consensus,
+                CertifiedMergeSidecarMessage::Request(_)
+                | CertifiedMergeSidecarMessage::Close(_)
+                | CertifiedMergeSidecarMessage::CloseAck(_) => T::Consensus,
                 CertifiedMergeSidecarMessage::Chunk(_) => T::ConsensusChunk,
             },
             NetworkMessage::LaneRelay(_)
@@ -1609,6 +1611,7 @@ mod tests {
 
         use crate::merge_sidecar::{
             CERTIFIED_MERGE_SIDECAR_VERSION_V1, CertifiedMergeSidecarChunkV1,
+            CertifiedMergeSidecarCloseAckV1, CertifiedMergeSidecarCloseV1,
             CertifiedMergeSidecarMessage, CertifiedMergeSidecarRequestV1,
         };
 
@@ -1639,6 +1642,8 @@ mod tests {
         );
         let request = CertifiedMergeSidecarRequestV1 {
             version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
+            semantic_sequence: 1,
+            closed_through: 0,
             request_id: Hash::new(b"merge-sidecar-request"),
             entry_hash,
             encoded_len: 3,
@@ -1667,8 +1672,50 @@ mod tests {
                 if message.as_ref() == &CertifiedMergeSidecarMessage::Request(request.clone())
         ));
 
+        let mut close = CertifiedMergeSidecarCloseV1 {
+            version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
+            closed_through: request.semantic_sequence,
+            close_id: Hash::prehashed([0; Hash::LENGTH]),
+            requester: requester.clone(),
+            responder: responder.clone(),
+        };
+        close.close_id = close.canonical_close_id();
+        let close_message = NetworkMessage::CertifiedMergeSidecar(Arc::new(
+            CertifiedMergeSidecarMessage::Close(close.clone()),
+        ));
+        assert_eq!(close_message.topic(), NetworkTopic::Consensus);
+        let encoded = norito::to_bytes(&close_message).expect("encode sidecar close");
+        let decoded =
+            norito::decode_from_bytes::<NetworkMessage>(&encoded).expect("decode sidecar close");
+        assert!(matches!(
+            decoded,
+            NetworkMessage::CertifiedMergeSidecar(message)
+                if message.as_ref() == &CertifiedMergeSidecarMessage::Close(close.clone())
+        ));
+
+        let close_ack = CertifiedMergeSidecarCloseAckV1 {
+            version: close.version,
+            closed_through: close.closed_through,
+            close_id: close.close_id,
+            requester: requester.clone(),
+            responder: responder.clone(),
+        };
+        let close_ack_message = NetworkMessage::CertifiedMergeSidecar(Arc::new(
+            CertifiedMergeSidecarMessage::CloseAck(close_ack.clone()),
+        ));
+        assert_eq!(close_ack_message.topic(), NetworkTopic::Consensus);
+        let encoded = norito::to_bytes(&close_ack_message).expect("encode sidecar close ACK");
+        let decoded = norito::decode_from_bytes::<NetworkMessage>(&encoded)
+            .expect("decode sidecar close ACK");
+        assert!(matches!(
+            decoded,
+            NetworkMessage::CertifiedMergeSidecar(message)
+                if message.as_ref() == &CertifiedMergeSidecarMessage::CloseAck(close_ack)
+        ));
+
         let chunk = CertifiedMergeSidecarChunkV1 {
             version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
+            semantic_sequence: request.semantic_sequence,
             request_id: request.request_id,
             entry_hash,
             encoded_len: 3,

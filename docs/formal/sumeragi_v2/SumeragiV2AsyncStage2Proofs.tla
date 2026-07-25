@@ -353,21 +353,21 @@ PROOF
       BY <1>1, <2>3, ExpandENABLED, IsaT(180)
          DEF Stage2BusyKernelInvariant,
              Stage2BusyCompletionGuards,
-             BusyCompletionCandidates, CommandExecutionEnabled,
+             BusyCompletionCandidates, CommandExecutionReady,
              ExecuteRegularCommand, RegularCoreCommand,
              PersistProposal, AsyncAuxVars, vars
     <2>4. CASE witness.kind = "PersistPrepare"
       BY <1>1, <2>4, ExpandENABLED, IsaT(180)
          DEF Stage2BusyKernelInvariant,
              Stage2BusyCompletionGuards,
-             BusyCompletionCandidates, CommandExecutionEnabled,
+             BusyCompletionCandidates, CommandExecutionReady,
              ExecuteRegularCommand, RegularCoreCommand,
              PersistPrepare, AsyncAuxVars, vars
     <2>5. CASE witness.kind = "PersistLockCommit"
       BY <1>1, <2>5, ExpandENABLED, IsaT(180)
          DEF Stage2BusyKernelInvariant,
              Stage2BusyCompletionGuards,
-             BusyCompletionCandidates, CommandExecutionEnabled,
+             BusyCompletionCandidates, CommandExecutionReady,
              ExecuteRegularCommand, RegularCoreCommand,
              PersistLockCommit, AsyncStrongTypeInvariant,
              StrongInductiveInvariant, Safety,
@@ -377,12 +377,12 @@ PROOF
       BY <1>1, <2>6, ExpandENABLED, IsaT(180)
          DEF Stage2BusyKernelInvariant,
              Stage2BusyCompletionGuards,
-             BusyCompletionCandidates, CommandExecutionEnabled,
+             BusyCompletionCandidates, CommandExecutionReady,
              ExecuteRegularCommand, RegularCoreCommand,
              PersistTimeout, AsyncAuxVars, vars
     <2>7. CASE witness.kind = "PersistInstallTC"
       BY <1>1, <2>7, ExpandENABLED, IsaT(240)
-         DEF BusyCompletionCandidates, CommandExecutionEnabled,
+         DEF BusyCompletionCandidates, CommandExecutionReady,
              ExecutePersistInstall, PersistInstallTC,
              PersistInstalledControlAfterInstall,
              ActiveLockedCommitSignRequestsAfterInstall,
@@ -394,12 +394,12 @@ PROOF
              AsyncAuxVars, vars
     <2>8. CASE witness.kind = "PersistObservePrepare"
       BY <1>1, <2>8, ExpandENABLED, IsaT(180)
-         DEF BusyCompletionCandidates, CommandExecutionEnabled,
+         DEF BusyCompletionCandidates, CommandExecutionReady,
              ExecuteRegularCommand, RegularCoreCommand,
              PersistObservePrepare, AsyncAuxVars, vars
     <2>9. CASE witness.kind = "PersistDecision"
       BY <1>1, <2>9, ExpandENABLED, IsaT(180)
-         DEF BusyCompletionCandidates, CommandExecutionEnabled,
+         DEF BusyCompletionCandidates, CommandExecutionReady,
              ExecutePersistDecision, PersistDecision,
              PersistDecisionControl, AsyncAuxVars, vars
     <2>10. CASE witness.kind = "SignProposal"
@@ -407,7 +407,7 @@ PROOF
          ProposalOutboxIsRetainable, ExpandENABLED, IsaT(240)
          DEF Stage2BusyKernelInvariant,
              Stage2BusyCompletionGuards,
-             BusyCompletionCandidates, CommandExecutionEnabled,
+             BusyCompletionCandidates, CommandExecutionReady,
              ExecuteSignProposal, CompleteProposalSignature,
              PublishControlAndEphemeralItems,
              RetainableControlBatch, AsyncStrongTypeInvariant,
@@ -418,7 +418,7 @@ PROOF
          VoteOutboxIsRetainable, ExpandENABLED, IsaT(240)
          DEF Stage2BusyKernelInvariant,
              Stage2BusyCompletionGuards,
-             BusyCompletionCandidates, CommandExecutionEnabled,
+             BusyCompletionCandidates, CommandExecutionReady,
              ExecuteSignVote, CompleteVoteSignature,
              PublishControlItems, RetainableControlBatch,
              AsyncStrongTypeInvariant, StrongInductiveInvariant,
@@ -429,13 +429,13 @@ PROOF
          TimeoutOutboxIsRetainable, ExpandENABLED, IsaT(240)
          DEF Stage2BusyKernelInvariant,
              Stage2BusyCompletionGuards,
-             BusyCompletionCandidates, CommandExecutionEnabled,
+             BusyCompletionCandidates, CommandExecutionReady,
              ExecuteSignTimeout, CompleteTimeoutSignature,
              PublishControlItems, RetainableControlBatch,
              AsyncStrongTypeInvariant, StrongInductiveInvariant,
              Safety, TimeoutSigningRequiresIntent,
              AsyncAuxVars, vars
-    <2>13. CommandExecutionEnabled(witness)
+    <2>13. CommandExecutionReady(witness)
       BY <2>2, <2>3, <2>4, <2>5, <2>6, <2>7, <2>8,
          <2>9, <2>10, <2>11, <2>12
          DEF Stage2TwoStepCompletionKinds,
@@ -819,7 +819,7 @@ BY BusyPhaseOwnerPartitionObligation,
        AllPendingRequests, QueuedCandidates, DeferredCandidates,
        CausalCandidates, TrackedWorkCandidates,
        CandidateConsumerCurrent, CommandDispatchable,
-       CommandExecutionEnabled, RunNode, RunNodeWork,
+       CommandExecutionReady, RunNode, RunNodeWork,
        LocalAdmissionStep, AdmitProducerCompletion,
        AdmitCausalHead, IngressDrainStep, SerializedRuntimeStep,
        RuntimeStep, FifoRuntimeStep, DeferredDrainStep,

@@ -17058,9 +17058,7 @@ function parseSumeragiLivenessStatus(value, context, active) {
       item.proposal_round,
       `${itemContext}.proposal_round`,
     );
-    validateSumeragiProposalRound(proposalRound, round, itemContext, {
-      requireEqual: phase === "prepare",
-    });
+    validateSumeragiProposalRound(proposalRound, round, itemContext);
     return Object.freeze({
       round,
       proposal_round: proposalRound,
@@ -17177,9 +17175,7 @@ function parseSumeragiLivenessStatus(value, context, active) {
         ? null
         : boundRound(item.proposal_round, `${itemContext}.proposal_round`);
       if (proposalRound !== null) {
-        validateSumeragiProposalRound(proposalRound, round, itemContext, {
-          requireEqual: ["proposal", "prepare_vote", "prepare_qc"].includes(kind.kind),
-        });
+        validateSumeragiProposalRound(proposalRound, round, itemContext);
       }
       return Object.freeze({
         kind,
@@ -17619,23 +17615,15 @@ function parseSumeragiRound(value, context) {
   });
 }
 
-function validateSumeragiProposalRound(
-  proposalRound,
-  round,
-  context,
-  { requireEqual = false } = {},
-) {
+function validateSumeragiProposalRound(proposalRound, round, context) {
   if (
     proposalRound.context_id[0] !== round.context_id[0] ||
     proposalRound.height !== round.height
   ) {
     throw new TypeError(`${context}.proposal_round must match round context and height`);
   }
-  if (proposalRound.view > round.view) {
-    throw new RangeError(`${context}.proposal_round.view must not exceed round.view`);
-  }
-  if (requireEqual && proposalRound.view !== round.view) {
-    throw new TypeError(`${context}.proposal_round must equal round for prepare`);
+  if (proposalRound.view !== round.view) {
+    throw new TypeError(`${context}.proposal_round must equal round`);
   }
 }
 
@@ -17752,9 +17740,7 @@ function parseSumeragiQcReference(value, context) {
     ["prepare", "commit"],
     `${context}.phase`,
   );
-  validateSumeragiProposalRound(proposalRound, round, context, {
-    requireEqual: phase.phase === "prepare",
-  });
+  validateSumeragiProposalRound(proposalRound, round, context);
   return Object.freeze({
     round,
     proposal_round: proposalRound,

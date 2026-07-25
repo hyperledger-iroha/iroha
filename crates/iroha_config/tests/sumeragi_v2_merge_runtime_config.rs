@@ -36,7 +36,6 @@ merge_sidecar_request_timeout_ms = 2300
 merge_sidecar_outbound_sessions_per_source = 5
 merge_sidecar_outbound_bytes_per_source = 20000000
 merge_sidecar_server_request_gates_per_source = 7
-merge_sidecar_server_request_gate_ttl_ms = 2900
 pending_certified_merge_entry_capacity = 37
 pending_queue_plan_admission_capacity = 41
 pending_control_sidecar_bytes = 30000000
@@ -73,10 +72,6 @@ merge_signing_guard_total_bytes = 18000000
         limits.merge_sidecar_server_request_gates_per_source.get(),
         7
     );
-    assert_eq!(
-        limits.merge_sidecar_server_request_gate_ttl,
-        Duration::from_millis(2_900)
-    );
     assert_eq!(limits.pending_certified_merge_entry_capacity.get(), 37);
     assert_eq!(limits.pending_queue_plan_admission_capacity.get(), 41);
     assert_eq!(limits.pending_control_sidecar_bytes.get(), 30_000_000);
@@ -107,7 +102,6 @@ merge_sidecar_request_timeout_ms = 1
 merge_sidecar_outbound_sessions_per_source = 1
 merge_sidecar_outbound_bytes_per_source = {outbound_bytes}
 merge_sidecar_server_request_gates_per_source = 1
-merge_sidecar_server_request_gate_ttl_ms = 1
 pending_certified_merge_entry_capacity = 1
 pending_queue_plan_admission_capacity = 1
 pending_control_sidecar_bytes = {pending_control_bytes}
@@ -143,10 +137,6 @@ merge_signing_guard_total_bytes = {total_bytes}
     assert_eq!(
         limits.merge_sidecar_server_request_gates_per_source.get(),
         1
-    );
-    assert_eq!(
-        limits.merge_sidecar_server_request_gate_ttl,
-        Duration::from_millis(1)
     );
     assert_eq!(limits.pending_certified_merge_entry_capacity.get(), 1);
     assert_eq!(limits.pending_queue_plan_admission_capacity.get(), 1);

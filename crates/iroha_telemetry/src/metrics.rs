@@ -24,7 +24,7 @@ use iroha_config::{
     },
 };
 use iroha_data_model::{
-    block::consensus::PERMISSIONED_TAG,
+    block::consensus_v2::PERMISSIONED_TAG,
     da::types::DaRentQuote,
     prelude::Quantity,
     soranet::privacy_metrics::{

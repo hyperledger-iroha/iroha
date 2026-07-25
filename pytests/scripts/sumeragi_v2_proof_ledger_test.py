@@ -502,11 +502,10 @@ def test_repository_ledger_pins_exact_current_proof_debt_and_dependencies() -> N
         "effective-lock-body-acquisition-production-refinement",
         "progress-witness-preservation",
         "progress-witness-production-refinement",
-        "protected-service-rank",
         "post-gst-deadlock-freedom",
         "post-gst-starvation-freedom",
         "timeout-view-liveness",
-        "locked-body-reproposal-liveness",
+        "locked-body-reproposal",
         "rotating-leader-liveness",
         "application-liveness",
         "successor-activation-starvation-freedom",
@@ -515,7 +514,6 @@ def test_repository_ledger_pins_exact_current_proof_debt_and_dependencies() -> N
         "height-liveness",
     )
     assert module.PROOF_STATUS_DEPENDENCIES == {
-        "timeout-protection": ("historical-tc-lock-commit",),
         "effective-lock-body-acquisition-production-refinement": (
             "effective-lock-body-acquisition-model",
         ),
@@ -576,7 +574,7 @@ def test_repository_ledger_pins_exact_current_proof_debt_and_dependencies() -> N
             "post-gst-deadlock-freedom",
             "post-gst-starvation-freedom",
         ),
-        "locked-body-reproposal-liveness": (
+        "locked-body-reproposal": (
             "effective-lock-body-acquisition-model",
             "effective-lock-body-acquisition-production-refinement",
             "async-fair-action-refinement",
@@ -591,7 +589,7 @@ def test_repository_ledger_pins_exact_current_proof_debt_and_dependencies() -> N
             "progress-witness-preservation",
             "post-gst-starvation-freedom",
             "timeout-view-liveness",
-            "locked-body-reproposal-liveness",
+            "locked-body-reproposal",
         ),
         "application-liveness": (
             "async-fair-action-refinement",
@@ -644,7 +642,7 @@ def test_every_declared_proof_dependency_fails_closed_on_early_promotion() -> No
         "protected-service-rank",
         "post-gst-starvation-freedom",
         "timeout-view-liveness",
-        "locked-body-reproposal-liveness",
+        "locked-body-reproposal",
         "rotating-leader-liveness",
         "application-liveness",
     ),
@@ -664,82 +662,6 @@ def test_fairness_consuming_proof_cannot_precede_action_refinement(
         f"proof obligation {dependent_id} cannot be tlaps_proved before "
         "prerequisite async-fair-action-refinement is tlaps_proved"
     ) in errors
-
-
-def test_historical_tc_lock_commit_exception_is_exact_and_wal_backed() -> None:
-    module = load_checker()
-    core_source = (module.FORMAL_DIR / "SumeragiV2Core.tla").read_text()
-    async_source = (module.FORMAL_DIR / "SumeragiV2AsyncNetwork.tla").read_text()
-
-    historical_source = module._top_level_operator_body(
-        core_source, "HistoricalLockedPrepareSource"
-    )
-    historical = module._top_level_operator_body(
-        core_source, "HistoricalLockedPrepareForCommit"
-    )
-    provenance = module._top_level_operator_body(
-        core_source, "HistoricalLockedPrepareRecoveryProvenance"
-    )
-    assert historical_source is not None
-    assert historical is not None
-    assert provenance is not None
-    source_body = " ".join(historical_source[0].split())
-    historical_body = " ".join(historical[0].split())
-    for required in (
-        "qc \\in prepareQCs",
-        "qc.view < nodeView[node]",
-        "qc.view = lockRank[node]",
-        "qc.subject = lockSubject[node]",
-    ):
-        assert required in source_body
-    assert "InstalledTcSelectsPrepareFor(node, qc)" in " ".join(
-        provenance[0].split()
-    )
-    assert "ExactLockedCommitIntents(node, qc.view, qc.subject) = {}" in (
-        historical_body
-    )
-    assert "NoHigherPrepareOriginKnown(node, qc)" in historical_body
-
-    origin_fence = module._top_level_operator_body(
-        core_source, "NoHigherPrepareOriginKnown"
-    )
-    assert origin_fence is not None
-    origin_body = " ".join(origin_fence[0].split())
-    assert "vote \\in prepareIntents" in origin_body
-    assert "vote.view > qc.view" in origin_body
-    assert "highestRank[node] > qc.view" in origin_body
-    assert "vote.subject" not in origin_body
-    assert "highestSubject" not in origin_body
-
-    begin = module._top_level_operator_body(core_source, "BeginLockCommit")
-    persist = module._top_level_operator_body(core_source, "PersistLockCommit")
-    assert begin is not None
-    assert persist is not None
-    begin_body = " ".join(begin[0].split())
-    persist_body = " ".join(persist[0].split())
-    assert "CurrentOpenPrepareForCommit(node, qc)" in begin_body
-    assert "HistoricalLockedPrepareForCommit(node, qc)" in begin_body
-    assert "pendingLockCommit' = pendingLockCommit \\cup {request}" in begin_body
-    assert "commitIntents' = commitIntents \\cup {request.vote}" in persist_body
-    assert "signVotes' = signVotes \\cup {signRequest}" in persist_body
-
-    successors = module._top_level_operator_body(async_source, "CommandSuccessors")
-    assert successors is not None
-    assert re.search(
-        r'command\.kind = "ValidateBody"\s*->\s*'
-        r'<<[^>]*CausalCandidate\("Progress", "BeginLockCommit", command\)',
-        async_source,
-        re.DOTALL,
-    )
-
-    by_id = {
-        obligation["id"]: obligation
-        for obligation in module.load_ledger()["obligations"]
-    }
-    assert by_id["historical-tc-lock-commit"]["status"] == "specified_unproved"
-    assert by_id["timeout-protection"]["status"] == "specified_unproved"
-
-
 def test_historical_timeout_authorization_is_derived_not_duplicated(
     tmp_path: Path,
 ) -> None:
@@ -3991,7 +3913,7 @@ def test_first_release_type_and_height_debt_targets_are_pinned() -> None:
 
     expected_status = {
         "timeout-wire-authorization": "tlaps_proved",
-        "historical-tc-lock-commit": "tlaps_proved",
+        "same-round-lock-and-commit-authorization": "tlaps_proved",
         "effective-lock-body-acquisition-model": "tlaps_proved",
         "effective-lock-body-acquisition-production-refinement": (
             "specified_unproved"
@@ -4023,7 +3945,7 @@ def test_first_release_type_and_height_debt_targets_are_pinned() -> None:
     height["module"] = "SumeragiV2Proofs"
     errors = module._proof_obligation_architecture_errors(drifted, {})
     assert any(
-        "proof obligation height-liveness must use SumeragiV2ChainEpochRefinement"
+        "proof obligation height-liveness must use SumeragiV2ChainLivenessProofs"
         in error
         for error in errors
     )
@@ -4108,36 +4030,17 @@ def test_audited_progress_and_rank_leaves_are_tlaps_proved() -> None:
     obligations = ledger["obligations"]
     by_id = {obligation["id"]: obligation for obligation in obligations}
 
-    assert len(obligations) == 57
+    assert len(obligations) == 54
     assert sum(
         obligation["status"] == "tlaps_proved"
         for obligation in obligations
-    ) == 33
+    ) == 34
     assert sum(
         obligation["status"] == "specified_unproved"
         for obligation in obligations
-    ) == 17
+    ) == 13
     assert by_id["async-runner-scheduler-preservation"]["status"] == "tlaps_proved"
     assert by_id["async-type-invariant"]["status"] == "tlaps_proved"
-    multilane_debt = {
-        "autoscale-lifecycle-production-refinement": (
-            "SumeragiV2AutoscaleLifecycle",
-            "AutoscaleLifecycleProductionRefinementObligation",
-        ),
-        "native-application-evidence-production-refinement": (
-            "SumeragiV2NativeApplicationEvidence",
-            "NativeApplicationEvidenceProductionRefinementObligation",
-        ),
-        "autonomous-reservation-carrier-production-refinement": (
-            "SumeragiV2AutonomousReservationCarrier",
-            "AutonomousReservationCarrierProductionRefinementObligation",
-        ),
-    }
-    for obligation_id, (formal_module, symbol) in multilane_debt.items():
-        obligation = by_id[obligation_id]
-        assert obligation["module"] == formal_module
-        assert obligation["symbol"] == symbol
-        assert obligation["status"] == "specified_unproved"
     expected = {
         "async-progress-ownership-invariant": (
             "AsyncSpecAlwaysProgressOwnershipInvariant",
@@ -4154,6 +4057,10 @@ def test_audited_progress_and_rank_leaves_are_tlaps_proved() -> None:
         "protected-service-rank-stage5-consensus-fifo": (
             "ProtectedStage5RankProgressFromFairFifo",
             "Consensus-I/O FIFO position",
+        ),
+        "protected-service-rank": (
+            "ProtectedServiceRankProgressObligation",
+            "strict temporal proof",
         ),
     }
     for obligation_id, (symbol, requirement_fragment) in expected.items():
@@ -5324,7 +5231,7 @@ def test_post_decision_timeout_mutation_source_seal_covers_exact_corpus(
         tmp_path, module
     )
 
-    assert len(module.POST_DECISION_TIMEOUT_MUTATION_FORMAL_ARTIFACTS) == 10
+    assert len(module.POST_DECISION_TIMEOUT_MUTATION_FORMAL_ARTIFACTS) == 11
     assert (
         sum(
             name.endswith(".tla")
@@ -5337,9 +5244,9 @@ def test_post_decision_timeout_mutation_source_seal_covers_exact_corpus(
             name.endswith(".cfg")
             for name in module.POST_DECISION_TIMEOUT_MUTATION_FORMAL_ARTIFACTS
         )
-        == 9
+        == 10
     )
-    assert len(module.POST_DECISION_TIMEOUT_MUTATION_SHA256) == 11
+    assert len(module.POST_DECISION_TIMEOUT_MUTATION_SHA256) == 12
     assert module._post_decision_timeout_mutation_source_fidelity_errors(
         formal_dir, repo_root
     ) == []
@@ -5389,7 +5296,7 @@ def test_post_decision_timeout_mutation_source_seal_rejects_missing_extra_and_sy
     repo_root, formal_dir = copy_post_decision_timeout_mutation_fixture(
         tmp_path, module
     )
-    missing = formal_dir / "post_decision_form_tc_guard_bug.cfg"
+    missing = formal_dir / "post_decision_complete_timeout_guard_bug.cfg"
     missing.unlink()
     errors = module._post_decision_timeout_mutation_source_fidelity_errors(
         formal_dir, repo_root
@@ -5429,7 +5336,7 @@ def test_post_decision_timeout_mutation_source_seal_rejects_missing_extra_and_sy
 def copy_certified_response_registration_fixture(
     tmp_path: Path, module
 ) -> tuple[Path, Path]:
-    """Copy the exact seven-file corpus and its production TLA+ seam."""
+    """Copy the exact nine-file corpus and its production TLA+ seam."""
 
     repo_root = tmp_path / "repo"
     formal_dir = repo_root / "docs" / "formal" / "sumeragi_v2"
@@ -5470,7 +5377,7 @@ def test_certified_response_registration_source_seal_covers_exact_corpus(
         tmp_path, module
     )
 
-    assert len(module.CERTIFIED_RESPONSE_REGISTRATION_FORMAL_ARTIFACTS) == 6
+    assert len(module.CERTIFIED_RESPONSE_REGISTRATION_FORMAL_ARTIFACTS) == 8
     assert (
         sum(
             name.endswith(".tla")
@@ -5483,9 +5390,9 @@ def test_certified_response_registration_source_seal_covers_exact_corpus(
             name.endswith(".cfg")
             for name in module.CERTIFIED_RESPONSE_REGISTRATION_FORMAL_ARTIFACTS
         )
-        == 5
+        == 7
     )
-    assert len(module.CERTIFIED_RESPONSE_REGISTRATION_SHA256) == 7
+    assert len(module.CERTIFIED_RESPONSE_REGISTRATION_SHA256) == 9
     assert (
         "_certified_response_registration_mutation_source_fidelity_errors"
         in module.validate_ledger.__code__.co_names
@@ -5717,7 +5624,7 @@ def test_certified_response_registration_runner_rejects_semantic_drift(
         ),
         (
             source.replace("run_case restart-fixed", "run_case duplicate-fixed", 1),
-            "must execute exactly five sealed cases in order",
+            "must execute exactly seven sealed cases in order",
         ),
         (
             source.replace(
@@ -5725,7 +5632,7 @@ def test_certified_response_registration_runner_rejects_semantic_drift(
                 "12 states generated, 11 distinct states found",
                 1,
             ),
-            "must report exactly 36 generated states",
+            "must report exactly 45 generated states",
         ),
     )
     for mutated_source, expected_error in mutations:
@@ -5805,7 +5712,8 @@ def test_certified_response_registration_source_fidelity_rejects_guard_and_order
         )
     )
     assert any(
-        "must require one exact live matching certified request" in error
+        "must require an authenticated sent occurrence, one exact "
+        "live request hash, and its frozen certificate binding" in error
         for error in errors
     ), errors
 
@@ -5837,8 +5745,10 @@ def test_certified_response_registration_source_fidelity_rejects_guard_and_order
     wrong_identity = mutate_tla_operator(
         source,
         "MatchingCertifiedRequests",
-        "request.envelope.subject = response.envelope.subject",
-        "request.envelope.subject # response.envelope.subject",
+        "AsyncCertifiedRequestHash(request) =\n"
+        "          response.envelope.requestHash",
+        "AsyncCertifiedRequestHash(request) #\n"
+        "          response.envelope.requestHash",
     )
     async_path.write_text(wrong_identity, encoding="utf-8")
     errors = (
@@ -5847,7 +5757,7 @@ def test_certified_response_registration_source_fidelity_rejects_guard_and_order
         )
     )
     assert any(
-        "must retain exact outstanding-request identity" in error
+        "must retain exact outstanding signed-request-hash identity" in error
         for error in errors
     ), errors
 
@@ -6131,6 +6041,27 @@ def test_successor_production_source_is_bound() -> None:
             "recover_active_height complete-tip authority omits production refinement tokens",
         ),
         (
+            "crates/iroha_core/src/sumeragi/v2.rs",
+            "    fn register_parent_qc(",
+            "if !reference.same_commit_decision(frozen) {",
+            "if false {",
+            "WireRegistry::register_parent_qc omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2.rs",
+            "    fn justification_to_core(",
+            ".map(|certificate| self.register_parent_qc(certificate))",
+            ".map(|certificate| self.qc_reference_to_core(&certificate.as_ref()))",
+            "WireRegistry::justification_to_core omits production refinement tokens",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2.rs",
+            "fn verify_proposal_justification_authority(",
+            "(Some(certificate), Some(parent_verification)) => verify_quorum_certificate(",
+            "(Some(_), Some(_)) => Ok(",
+            "verify_proposal_justification_authority omits production refinement tokens",
+        ),
+        (
             "crates/iroha_core/src/sumeragi/v2_block_sync.rs",
             "fn build_historical_body_response(",
             "binary_search(&responder)",
@@ -6312,23 +6243,23 @@ def test_locked_body_reproposal_source_fidelity_rejects_formal_and_production_mu
             .transpose()?;""",
             "let locked_subject = None;",
             "runner directive must project",
-        ),
-        (
-            "runner_fresh_fallback",
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "schedule_local_proposal",
-            "if directive.locked_subject().is_some() {",
-            "if directive.locked_subject().is_none() {",
-            "locked directive must never fall through",
-        ),
-        (
-            "runner_subject_mismatch",
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "submit_exact_body",
-            ".is_some_and(|locked| locked != subject)",
-            ".is_some_and(|locked| locked == subject)",
-            "exact-body submission must reject",
-        ),
+            ),
+            (
+                "runner_fresh_fallback",
+                "crates/iroha_core/src/sumeragi/v2_runner.rs",
+                "schedule_local_proposal",
+                "if directive.locked_body().is_some() {",
+                "if directive.locked_body().is_none() {",
+                "locked directive must never fall through",
+            ),
+            (
+                "runner_subject_mismatch",
+                "crates/iroha_core/src/sumeragi/v2_runner.rs",
+                "encode_exact_local_body",
+                "locked_subject.is_some_and(|locked| locked != subject)",
+                "locked_subject.is_some_and(|locked| locked == subject)",
+                "subject differs from the durable lock",
+            ),
         (
             "runner_disconnected_admission",
             "crates/iroha_core/src/sumeragi/v2_runner.rs",
@@ -6353,6 +6284,46 @@ def test_locked_body_reproposal_source_fidelity_rejects_formal_and_production_mu
             formal_dir, repo_root
         )
         assert any(error_fragment in error for error in errors), errors
+
+
+def test_canonical_sidecar_request_identity_excludes_stream_metadata() -> None:
+    module = load_checker()
+
+    assert module._canonical_sidecar_request_identity_errors(ROOT_DIR) == []
+
+
+@pytest.mark.parametrize("stream_metadata", ("semantic_sequence", "closed_through"))
+def test_canonical_sidecar_request_identity_rejects_hashed_stream_metadata(
+    tmp_path: Path,
+    stream_metadata: str,
+) -> None:
+    module = load_checker()
+    relative = Path("crates/iroha_core/src/merge_sidecar.rs")
+    path = tmp_path / relative
+    path.parent.mkdir(parents=True)
+    shutil.copy2(ROOT_DIR / relative, path)
+    source = path.read_text(encoding="utf-8")
+    marker = "pub fn canonical_request_id(&self) -> Hash"
+    item_start = source.index(marker)
+    insertion = source.index("self.reference_digest.as_ref(),", item_start)
+    mutated_chunk = (
+        f"&self.{stream_metadata}.to_le_bytes(),\n"
+        "            self.reference_digest.as_ref(),"
+    )
+    path.write_text(
+        source[:insertion]
+        + mutated_chunk
+        + source[insertion + len("self.reference_digest.as_ref(),") :],
+        encoding="utf-8",
+    )
+
+    errors = module._canonical_sidecar_request_identity_errors(tmp_path)
+
+    assert any(
+        "canonical semantic request identity must exclude semantic sequence "
+        "and close floor" in error
+        for error in errors
+    ), errors
 
 
 def test_exact_output_production_source_is_bound() -> None:
@@ -7300,10 +7271,17 @@ def test_exact_output_production_source_is_bound() -> None:
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
-            "pub(crate) fn with_reply_source_capacity(",
+            "pub(crate) fn with_limits(",
             "reply_source_capacity,\n            outbound_session_capacity,",
             "reply_source_capacity,\n            outbound_session_capacity: 0,",
             "sidecar source geometry must reject zero and install every checked corridor bound",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn release_authorized_server_request_attempts(",
+            "matches!(attempt.cursor, ServerResponseCursor::Pending(_));",
+            "false;",
+            "transiently rejected response work must release materialization authority",
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
@@ -7317,11 +7295,11 @@ def test_exact_output_production_source_is_bound() -> None:
             "if admitted_attempts.is_empty() && capacity_rejected_attempts.is_empty()",
             "Self::park_authorized_server_request_attempts(gate, now);",
             "let _ = (gate, now);",
-            "every rejected, capacity-partitioned, or materialized response must park source history",
+            "only completed-race or successfully materialized response work may consume",
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
-            "fn retire_inactive_outbound_attempts(",
+            "fn park_inactive_outbound_attempts(",
             "gate_attempt.cursor = ServerResponseCursor::Pending(resume_chunk);",
             "let _ = resume_chunk;",
             "merge-sidecar source-isolated production seam",
@@ -7335,10 +7313,33 @@ def test_exact_output_production_source_is_bound() -> None:
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
-            "pub(crate) fn acknowledge_outbound_chunk(",
-            "attempt.queued = true;\n                self.outbound_order.push_back((key, source));",
+            "fn apply_reliable_flush_application(",
+            "attempt.queued = true;\n            transport\n"
+            "                .outbound_order\n"
+            "                .push_back((plan.gate.key.clone(), plan.gate.source.clone()));",
             "let _ = &attempt.queued;",
             "merge-sidecar source-isolated production seam",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "pub(crate) fn drain_outbound_chunks_durable(",
+            "self.persist_lifecycle_state()?;",
+            "let _ = &lifecycle_changed;",
+            "production sidecar drainage must durably publish every changed pending identity",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "#[cfg(test)]\n    fn drain_outbound_chunks(",
+            "#[cfg(test)]",
+            "#[cfg(any())]",
+            "raw non-durable sidecar drainage must remain exactly #[cfg(test)]",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
+            "fn persist(&self, snapshot: &MergeSidecarLifecycleSnapshotV1)",
+            "file.sync_all()",
+            "file.flush()",
+            "lifecycle publication must create and fsync one exclusive temporary file",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
@@ -7586,17 +7587,17 @@ def test_exact_output_production_source_mutations_fail_closed(
 
 def test_proofless_release_theorems_require_exact_explicit_debt() -> None:
     module = load_checker()
-    source = r"""---- MODULE SumeragiV2AsyncLivenessProofs ----
+    source = r"""---- MODULE SumeragiV2AsyncTemporalClosureProofs ----
 THEOREM Complete == TRUE
 BY PTL
 THEOREM Pending == TRUE
 =============================================================================
 """
-    sources = {"SumeragiV2AsyncLivenessProofs": source}
+    sources = {"SumeragiV2AsyncTemporalClosureProofs": source}
     obligations = [
         {
             "id": "pending",
-            "module": "SumeragiV2AsyncLivenessProofs",
+            "module": "SumeragiV2AsyncTemporalClosureProofs",
             "symbol": "Pending",
             "status": "specified_unproved",
         }
@@ -7614,38 +7615,39 @@ THEOREM Pending == TRUE
     errors = module._proofless_release_theorem_errors(falsely_proved, sources)
     assert any("must be ledgered specified_unproved" in error for error in errors)
 
-    indented = r"""---- MODULE SumeragiV2AsyncLivenessProofs ----
+    indented = r"""---- MODULE SumeragiV2AsyncTemporalClosureProofs ----
   THEOREM IndentedPending == TRUE
 =============================================================================
 """
     indented_obligation = [
         {
             "id": "indented-pending",
-            "module": "SumeragiV2AsyncLivenessProofs",
+            "module": "SumeragiV2AsyncTemporalClosureProofs",
             "symbol": "IndentedPending",
             "status": "specified_unproved",
         }
     ]
     assert (
         module._proofless_release_theorem_errors(
-            indented_obligation, {"SumeragiV2AsyncLivenessProofs": indented}
+            indented_obligation,
+            {"SumeragiV2AsyncTemporalClosureProofs": indented},
         )
         == []
     )
     errors = module._proofless_release_theorem_errors(
-        [], {"SumeragiV2AsyncLivenessProofs": indented}
+        [], {"SumeragiV2AsyncTemporalClosureProofs": indented}
     )
     assert any(
         "IndentedPending must have exactly one ledger entry" in error
         for error in errors
     )
 
-    local = r"""---- MODULE SumeragiV2AsyncLivenessProofs ----
+    local = r"""---- MODULE SumeragiV2AsyncTemporalClosureProofs ----
 LOCAL THEOREM LocalPending == TRUE
 =============================================================================
 """
     errors = module._proofless_release_theorem_errors(
-        [], {"SumeragiV2AsyncLivenessProofs": local}
+        [], {"SumeragiV2AsyncTemporalClosureProofs": local}
     )
     assert any(
         "LocalPending must have exactly one ledger entry" in error
@@ -12148,12 +12150,16 @@ def test_async_source_fidelity_pins_exact_outer_frame_helpers(
 def local_runner_service_fixture(tmp_path: Path, module) -> Path:
     """Copy the exact formal and Rust sources owned by the runner contract."""
 
-    return copy_async_source_fidelity_fixture(
+    formal_dir = copy_async_source_fidelity_fixture(
         tmp_path,
         module,
         "SumeragiV2AsyncNetwork.tla",
-        "SumeragiV2AsyncLivenessProofs.tla",
     )
+    (formal_dir / "SumeragiV2AsyncLivenessProofs.tla").write_text(
+        module._async_liveness_source(module.FORMAL_DIR),
+        encoding="utf-8",
+    )
+    return formal_dir
 
 
 def test_local_runner_service_contract_source_fidelity_is_current(
@@ -12224,7 +12230,7 @@ def test_local_runner_service_contract_rejects_broadened_trust_boundary(
         (
             "SumeragiV2AsyncNetwork.tla",
             "AsyncTickEnabled",
-            "     /\\ \\A node \\in LocalRunnerServiceOwners:\n",
+            "     /\\ \\A node \\in AsyncTimedServiceNodes:\n",
             "     /\\ \\A node \\in AsyncCurrentResponsiveVoters:\n",
             "AsyncTickEnabled must project each independent local runner contract",
         ),
@@ -12268,7 +12274,8 @@ def test_local_runner_service_contract_rejects_disconnected_deadlock_obligation(
             source,
             "DeadlockFreedomObligation",
             "    DeadlockFreedomWithLocalWorkProperty(AsyncSpecAt(initialContext),\n"
-            "      AsyncTerminatingLocalWorkDecreaseStep)\n",
+            "      ENABLED PostGstProductiveStepWith(\n"
+            "        AsyncTerminatingLocalWorkDecreaseStep))\n",
             "    DeadlockFreedomProperty(AsyncSpecAt(initialContext))\n",
         ),
         encoding="utf-8",
@@ -13745,6 +13752,7 @@ ChainEpochTlcInvariant == TypeInvariant /\\ ChainEpochInvariant
         "asyncSentItems",
         "asyncRetainedControl",
         "asyncActiveRequests",
+        "asyncCertifiedResponseClaim",
         "asyncTransport",
         "asyncIngressLanes",
         "asyncIngressReady",
@@ -13853,7 +13861,7 @@ ChainEpochTlcInvariant == TypeInvariant /\\ ChainEpochInvariant
         "IndexedAsyncStateShape ==\n"
         "  /\\ Len(indexedAsyncState[initialContext]) = 3\n"
         "  /\\ Len(indexedAsyncState[initialContext][1]) = 46\n"
-        "  /\\ Len(indexedAsyncState[initialContext][2]) = 35\n"
+        "  /\\ Len(indexedAsyncState[initialContext][2]) = 36\n"
         "  /\\ Len(indexedAsyncState[initialContext][3]) = 5\n"
         "THEOREM IndexedInstanceVariablesAreExact ==\n"
         "  IndexedAsyncStateShape\n"
@@ -13993,8 +14001,8 @@ def test_chain_indexed_scheduler_mapping_tracks_async_scheduler_tuple(
             1,
         )
         .replace(
+            "Len(indexedAsyncState[initialContext][2]) = 36",
             "Len(indexedAsyncState[initialContext][2]) = 35",
-            "Len(indexedAsyncState[initialContext][2]) = 34",
             1,
         )
         .replace(
@@ -14196,8 +14204,8 @@ def test_chain_indexed_scheduler_mapping_tracks_async_scheduler_tuple(
 
     async_path.write_text(
         async_source.replace(
-            "AsyncAllVars == <<vars, AsyncSchedulerVars, AsyncRecoveryVars>>",
-            "AsyncAllVars == <<vars, AsyncSchedulerVars>>",
+            "AsyncAllVars == <<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars>>",
+            "AsyncAllVars == <<gst, vars, AsyncSchedulerVars>>",
             1,
         ),
         encoding="utf-8",
@@ -17550,7 +17558,7 @@ def test_nightly_chaos_cold_cache_prefetch_is_pinned_and_fail_closed(
         (
             "  peer::shared_byte_budget_tests::frame_retention_coalesces_each_distinct_source_owner_without_reaccounting\n",
             "",
-            "must contain exactly 515 tests",
+            "must contain exactly 585 tests",
         ),
         (
             "  peer::shared_byte_budget_tests::frame_retention_coalesces_each_distinct_source_owner_without_reaccounting\n",
@@ -17558,15 +17566,15 @@ def test_nightly_chaos_cold_cache_prefetch_is_pinned_and_fail_closed(
             "production liveness inventory repeats tests",
         ),
         (
-            "readonly expected_production_liveness_test_count=515",
-            "readonly expected_production_liveness_test_count=514",
-            "production liveness source count must be sealed as 515",
+            "readonly expected_production_liveness_test_count=585",
+            "readonly expected_production_liveness_test_count=584",
+            "production liveness source count must be sealed as 585",
         ),
         (
-            "  block::consensus_v2::finality::tests::header_binding_requires_exact_origin_but_allows_later_certification\n"
-            "  block::consensus_v2::finality::tests::genesis_header_binding_accepts_a_later_first_proposal_origin\n",
-            "  block::consensus_v2::finality::tests::genesis_header_binding_accepts_a_later_first_proposal_origin\n"
-            "  block::consensus_v2::finality::tests::header_binding_requires_exact_origin_but_allows_later_certification\n",
+            "  zk::kagemusha_finality::tests::aggregate_signature_authenticates_proposal_origin\n"
+            "  block::consensus_v2::finality::tests::header_binding_allows_unchanged_reproposal_but_rejects_earlier_decision_round\n",
+            "  block::consensus_v2::finality::tests::header_binding_allows_unchanged_reproposal_but_rejects_earlier_decision_round\n"
+            "  zk::kagemusha_finality::tests::aggregate_signature_authenticates_proposal_origin\n",
             "canonical module/test inventory SHA-256",
         ),
         (
@@ -17610,6 +17618,8 @@ def test_production_release_inventory_rejects_name_count_and_feature_mutants(
         Path("docs/formal/sumeragi_v2/README.md"),
         Path("docs/formal/sumeragi_v2/PROOF.md"),
         Path("docs/source/sumeragi_v2_liveness.md"),
+        Path("scripts/bootstrap_sumeragi_v2_release.py"),
+        Path("scripts/validate_sumeragi_v2_release_bootstrap.py"),
         Path("crates/iroha_data_model/src/block/consensus_v2/finality.rs"),
         Path("integration_tests/tests/sumeragi_v2_runner.rs"),
         Path("crates/iroha_core/src/sumeragi/v2.rs"),
@@ -17639,6 +17649,8 @@ def test_production_release_inventory_seals_later_genesis_proposal_origin(
         Path("docs/formal/sumeragi_v2/README.md"),
         Path("docs/formal/sumeragi_v2/PROOF.md"),
         Path("docs/source/sumeragi_v2_liveness.md"),
+        Path("scripts/bootstrap_sumeragi_v2_release.py"),
+        Path("scripts/validate_sumeragi_v2_release_bootstrap.py"),
         Path("crates/iroha_data_model/src/block/consensus_v2/finality.rs"),
         Path("integration_tests/tests/sumeragi_v2_runner.rs"),
         Path("crates/iroha_core/src/sumeragi/v2.rs"),
@@ -17661,10 +17673,10 @@ def test_production_release_inventory_seals_later_genesis_proposal_origin(
         / "finality.rs"
     )
     source = finality_path.read_text(encoding="utf-8")
-    exact_call = "artifact_bound_to_header(0, 3, 5)"
+    exact_call = "artifact_bound_to_header(3, 5)"
     assert source.count(exact_call) == 1
     finality_path.write_text(
-        source.replace(exact_call, "artifact_bound_to_header(0, 2, 5)", 1),
+        source.replace(exact_call, "artifact_bound_to_header(4, 5)", 1),
         encoding="utf-8",
     )
 
@@ -17688,6 +17700,8 @@ def test_production_release_inventory_seals_contention_tolerant_restart_deadline
         Path("docs/formal/sumeragi_v2/README.md"),
         Path("docs/formal/sumeragi_v2/PROOF.md"),
         Path("docs/source/sumeragi_v2_liveness.md"),
+        Path("scripts/bootstrap_sumeragi_v2_release.py"),
+        Path("scripts/validate_sumeragi_v2_release_bootstrap.py"),
         Path("crates/iroha_data_model/src/block/consensus_v2/finality.rs"),
         Path("integration_tests/tests/sumeragi_v2_runner.rs"),
         Path("crates/iroha_core/src/sumeragi/v2.rs"),
@@ -17733,6 +17747,8 @@ def test_production_release_inventory_seals_successor_parent_binding(
         Path("docs/formal/sumeragi_v2/README.md"),
         Path("docs/formal/sumeragi_v2/PROOF.md"),
         Path("docs/source/sumeragi_v2_liveness.md"),
+        Path("scripts/bootstrap_sumeragi_v2_release.py"),
+        Path("scripts/validate_sumeragi_v2_release_bootstrap.py"),
         Path("crates/iroha_data_model/src/block/consensus_v2/finality.rs"),
         Path("integration_tests/tests/sumeragi_v2_runner.rs"),
         Path("crates/iroha_core/src/sumeragi/v2.rs"),
@@ -17778,16 +17794,27 @@ def test_production_release_inventory_seals_successor_parent_binding(
     ("relative", "old", "new"),
     (
         (
+            Path("docs/formal/sumeragi_v2/README.md"),
+            "inventory to 585 tests across 39 modules. Together with the source-sealed\n"
+            "command and tooling legs, the pre-network corridor contains 82 legs.",
+            "inventory to 585 tests across 39 modules. Together with the source-sealed\n"
+            "command and tooling legs, the pre-network corridor contains 81 legs.",
+        ),
+        (
             Path("docs/formal/sumeragi_v2/PROOF.md"),
-            "yielding the current 515-test, 38-module, 78-leg\ninventory",
-            "yielding the current 515-test, 38-module, 77-leg\ninventory",
+            "current\n"
+            "585-test, 39-module inventory. The complete source-sealed pre-network corridor\n"
+            "contains 82 legs",
+            "current\n"
+            "585-test, 39-module inventory. The complete source-sealed pre-network corridor\n"
+            "contains 81 legs",
         ),
         (
             Path("docs/source/sumeragi_v2_liveness.md"),
-            "receipt binds the 78 pre-network corridor legs and\n"
-            "their exact 515-test inventory",
-            "receipt binds the 77 pre-network corridor legs and\n"
-            "their exact 515-test inventory",
+            "current source-bound\n"
+            "inventory to 585 exact tests across 39 modules and 82 pre-network legs.",
+            "current source-bound\n"
+            "inventory to 585 exact tests across 39 modules and 81 pre-network legs.",
         ),
     ),
 )
@@ -17804,6 +17831,8 @@ def test_production_release_inventory_rejects_stale_liveness_corridor_claim(
         Path("docs/formal/sumeragi_v2/README.md"),
         Path("docs/formal/sumeragi_v2/PROOF.md"),
         Path("docs/source/sumeragi_v2_liveness.md"),
+        Path("scripts/bootstrap_sumeragi_v2_release.py"),
+        Path("scripts/validate_sumeragi_v2_release_bootstrap.py"),
         Path("crates/iroha_data_model/src/block/consensus_v2/finality.rs"),
         Path("integration_tests/tests/sumeragi_v2_runner.rs"),
         Path("crates/iroha_core/src/sumeragi/v2.rs"),
@@ -17833,27 +17862,33 @@ def test_production_release_inventory_rejects_stale_liveness_corridor_claim(
     (
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
-            "_PRODUCTION_TEST_COUNT = 515",
-            "_PRODUCTION_TEST_COUNT = 514",
-            "production test count must equal the exact shell inventory count 515",
+            "_PRODUCTION_TEST_COUNT = 585",
+            "_PRODUCTION_TEST_COUNT = 584",
+            "production test count must equal the exact shell inventory count 585",
         ),
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
-            '("production-merge-sidecar", "merge_sidecar::tests", 30),',
-            '("production-merge-sidecar", "merge_sidecar::tests", 29),',
+            '("production-merge-sidecar", "merge_sidecar::tests", 41),',
+            '("production-merge-sidecar", "merge_sidecar::tests", 40),',
             "production module receipt tuple must equal the exact shell",
         ),
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
-            '("production-v2-worker", "sumeragi::v2_worker::tests", 53),',
-            '("production-v2-worker", "sumeragi::v2_worker::tests", 52),',
+            '("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 34),',
+            '("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 33),',
+            "production module receipt tuple must equal the exact shell",
+        ),
+        (
+            Path("scripts/write_sumeragi_v2_release_receipt.py"),
+            '("production-v2-worker", "sumeragi::v2_worker::tests", 60),',
+            '("production-v2-worker", "sumeragi::v2_worker::tests", 59),',
             "production module receipt tuple must equal the exact shell",
         ),
         (
             Path("scripts/run_sumeragi_v2_release_gates.sh"),
-            "  readonly expected_corridor_leg_count=78",
-            "  readonly expected_corridor_leg_count=77",
-            "sealed at 78 legs",
+            "  readonly expected_corridor_leg_count=82",
+            "  readonly expected_corridor_leg_count=81",
+            "sealed at 82 legs",
         ),
         (
             Path("scripts/run_sumeragi_v2_release_gates.sh"),
@@ -17881,6 +17916,8 @@ def test_production_release_inventory_rejects_receipt_and_command_drift(
         Path("docs/formal/sumeragi_v2/README.md"),
         Path("docs/formal/sumeragi_v2/PROOF.md"),
         Path("docs/source/sumeragi_v2_liveness.md"),
+        Path("scripts/bootstrap_sumeragi_v2_release.py"),
+        Path("scripts/validate_sumeragi_v2_release_bootstrap.py"),
         Path("crates/iroha_data_model/src/block/consensus_v2/finality.rs"),
         Path("integration_tests/tests/sumeragi_v2_runner.rs"),
         Path("crates/iroha_core/src/sumeragi/v2.rs"),
@@ -18158,6 +18195,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         in error
         for error in errors
     ), errors
+    release_fidelity_path.write_text(canonical_release, encoding="utf-8")
 
     runner_path = ROOT_DIR / "scripts" / "run_sumeragi_v2_release_gates.sh"
     bash = Path(shutil.which("bash") or "").resolve(strict=True)
@@ -18267,7 +18305,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
 
     retirement_item = module.rust_items(
         canonical_lane_geometry,
-        "ensure_first_release_lane_retirement_admissible_locked",
+        "ensure_first_release_lane_retirement_admissible_with_certified_locked",
     )
     assert len(retirement_item) == 1
     retirement_item_source = retirement_item[0].source
@@ -18284,7 +18322,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     def mutate_fixed_progress_pairs(old: str, new: str) -> None:
         assert canonical_fixed_pairs.count(old) == 1, old
         mutate_lane_geometry_item(
-            "ensure_first_release_lane_retirement_admissible_locked",
+            "ensure_first_release_lane_retirement_admissible_with_certified_locked",
             canonical_fixed_pairs,
             canonical_fixed_pairs.replace(old, new, 1),
         )
@@ -18323,7 +18361,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
 
     lane_geometry_mutations = (
         (
-            "ensure_first_release_lane_retirement_admissible_locked",
+            "ensure_first_release_lane_retirement_admissible_with_certified_locked",
             "    &fixed_progress_pairs,\n",
             "    &fixed_progress_pairs[..4],\n",
             "all fixed retirement progress pairs must recover before the "
@@ -18374,7 +18412,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
             "per-height names",
         ),
         (
-            "ensure_first_release_lane_retirement_admissible_locked",
+            "ensure_first_release_lane_retirement_admissible_with_certified_locked",
             """            if !native_amx_retained_windows_are_complete(
                 &native_manifest_heights,
                 &native_receipt_heights,
@@ -18385,14 +18423,14 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
             "live Native AMX evidence must form a complete retained suffix",
         ),
         (
-            "ensure_first_release_lane_retirement_admissible_locked",
+            "ensure_first_release_lane_retirement_admissible_with_certified_locked",
             "match native_receipt_heights.last().copied() {",
             "match native_receipt_heights.first().copied() {",
             "live Native AMX latest lookup must select the highest retained "
             "receipt",
         ),
         (
-            "ensure_first_release_lane_retirement_admissible_locked",
+            "ensure_first_release_lane_retirement_admissible_with_certified_locked",
             "manifest.leaf.lane_id != entry.lane_id",
             "manifest.leaf.lane_id == entry.lane_id",
             "live Native AMX manifests must join the active route, incarnation, "
@@ -18406,7 +18444,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
             "and canonical finality",
         ),
         (
-            "ensure_first_release_lane_retirement_admissible_locked",
+            "ensure_first_release_lane_retirement_admissible_with_certified_locked",
             """                return Err(Error::IO(
                     std::io::Error::new(
                         ErrorKind::InvalidData,
@@ -18421,7 +18459,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
             "artifact after the complete allowlist",
         ),
         (
-            "ensure_first_release_lane_retirement_admissible_locked",
+            "ensure_first_release_lane_retirement_admissible_with_certified_locked",
             """                if Self::parse_native_amx_evidence_path(&path)?.is_some() {
                     continue;
                 }
@@ -18795,19 +18833,22 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
             for test_name in (
                 "exact_active_delivery_retry_preserves_decreasing_chunk_rank",
                 "alternate_source_progress_and_reconnect_preserve_independent_cursors",
-                "equal_ordinal_different_tenure_alternate_source_is_rejected_atomically",
-                "inactive_source_teardown_releases_budget_and_reconnect_resumes_cursor",
+                "reused_actor_ordinals_under_different_tenures_are_rejected_atomically",
+                "inactive_source_parking_retains_budget_and_reconnect_reuses_shared_bytes",
                 "later_delivery_preserves_the_current_source_cursor",
                 "later_delivery_while_chunk_is_in_flight_waits_for_flush_before_next_emit",
                 "late_old_exact_item_receipt_completes_reconnected_attempt_once",
                 "later_delivery_updates_pending_work_without_losing_materialized_output",
                 "reconnect_during_materialization_keeps_old_authorization_but_emits_new_tenure",
-                "conflicting_server_request_id_reuse_is_rejected_before_materialization",
+                "equal_sequence_with_different_semantic_identity_is_rejected_before_materialization",
                 "failed_materialization_releases_rate_gate_for_exact_retry",
                 "response_materialization_requires_and_consumes_its_exact_admission_gate",
                 "inactive_reply_route_is_rejected_before_server_gate_admission",
                 "completed_source_later_and_reconnect_stay_terminal_while_sibling_progresses",
-                "exact_delivery_retry_rematerializes_after_rate_gate_expiry",
+                "exact_delivery_retry_stays_terminal_beyond_retired_ttl_horizon",
+                "request_stream_close_floor_advances_only_over_a_contiguous_terminal_prefix",
+                "authenticated_close_floor_retires_covered_output_and_rejects_replay_or_regression",
+                "rejected_request_does_not_consume_server_stream_state",
                 "completed_source_does_not_block_a_new_alternate_source",
                 "configured_route_source_capacity_bounds_semantic_attempts",
                 "configured_source_geometry_reserves_more_than_eight_independent_attempts",
@@ -18818,7 +18859,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
                 "route_retirement_between_admission_and_enqueue_releases_all_response_reservations",
                 "saturated_materializer_does_not_erase_same_request_alternate_session",
                 "saturated_materializer_does_not_erase_same_request_alternate_bytes",
-                "partitioned_materialization_preserves_rejected_source_resume_cursor",
+                "parked_source_retains_capacity_and_cursor_while_alternate_source_progresses",
                 "sidecar_flush_refinement_advances_only_exact_source_chunk",
             )
         ),
@@ -18890,7 +18931,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
                 "closed_sidecar_source_reconnect_retries_current_item_while_sibling_backpressures",
                 "closed_sidecar_reconnect_is_capacity_checked_then_retries_current_item",
                 "later_delivery_cannot_requeue_pending_or_unapplied_sidecar_flush_but_other_attempts_progress",
-                "mixed_source_retry_retains_terminal_flush_target_without_resetting_live_siblings",
+                    "mixed_source_retry_retains_pending_flush_target_without_resetting_live_siblings",
                 "inactive_reply_target_tombstone_rejects_cross_source_equal_ordinal_collision",
                 "owned_reply_history_merge_retries_candidate_retirement_after_prune",
                 "newly_observed_alternate_hub_starts_at_zero_without_resetting_parked_source",
@@ -18958,8 +18999,13 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
             "test_control_hold_release_preserves_live_route_and_retires_canceled_reentry",
             irohad_main_source,
         ),
+        (
+            "network_relay_tests::",
+            "certified_merge_sidecar_control_uses_critical_bucket",
+            irohad_main_source,
+        ),
     )
-    assert len(route_completion_inventory_additions) == 114
+    assert len(route_completion_inventory_additions) == 118
     source_geometry_inventory_additions = (
         (
             "sumeragi::authoritative_runtime_gate_tests::",
@@ -19105,14 +19151,19 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         ),
     )
     assert len(latest_h_geometry_and_daemon_inventory_additions) == 12
-    production_inventory_additions = (
-        new_production_inventory_additions
-        + macro_step_production_inventory_additions
-        + latest_production_inventory_additions
-        + route_completion_inventory_additions
-        + source_geometry_inventory_additions
-        + route_lifecycle_inventory_additions
-        + latest_h_geometry_and_daemon_inventory_additions
+    production_inventory_additions = tuple(
+        item
+        for item in (
+            new_production_inventory_additions
+            + macro_step_production_inventory_additions
+            + latest_production_inventory_additions
+            + route_completion_inventory_additions
+            + source_geometry_inventory_additions
+            + route_lifecycle_inventory_additions
+            + latest_h_geometry_and_daemon_inventory_additions
+        )
+        if f"{item[0]}{item[1]}"
+        not in module._PRODUCTION_LIVENESS_RETIRED_REGRESSIONS
     )
     for _, test_name, source in production_inventory_additions:
         assert source.count(f"fn {test_name}(") == 1
@@ -19240,10 +19291,10 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
             )
         )
     )
-    assert len(production_inventory) == 515
-    assert len(set(production_inventory)) == 515
-    assert "readonly expected_production_liveness_test_count=515" in release_source
-    assert "_PRODUCTION_TEST_COUNT = 515" in receipt_source
+    assert len(production_inventory) == 585
+    assert len(set(production_inventory)) == 585
+    assert "readonly expected_production_liveness_test_count=585" in release_source
+    assert "_PRODUCTION_TEST_COUNT = 585" in receipt_source
     receipt_spec = importlib.util.spec_from_file_location(
         "sumeragi_v2_release_receipt_inventory",
         ROOT_DIR / "scripts" / "write_sumeragi_v2_release_receipt.py",
@@ -19253,7 +19304,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     receipt_module = importlib.util.module_from_spec(receipt_spec)
     sys.modules[receipt_spec.name] = receipt_module
     receipt_spec.loader.exec_module(receipt_module)
-    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 515
+    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 585
     assert (
         receipt_module._PRODUCTION_MODULES
         == module._PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS
@@ -19261,7 +19312,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     assert (
         len(receipt_module._corridor_legs())
         == module._PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT
-        == 78
+        == 82
     )
     assert receipt_module._production_module_command(
         "parameters::actual::tests"
@@ -19335,17 +19386,17 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         "tests::relay_fairness::"
         "real_inner_ingress_retry_preserves_a_copies_and_bounds_b_service_rank",
         "block::consensus_v2::finality::tests::"
-        "genesis_header_binding_accepts_a_later_first_proposal_origin",
-        "sumeragi_v2_runner::prepare_qc_split_tests::"
-        "restart_scenario_uses_a_contention_tolerant_view_zero_deadline",
+        "header_binding_allows_unchanged_reproposal_but_rejects_earlier_decision_round",
+        "sumeragi::v2_core::tests::"
+        "future_prepare_qc_is_transactionally_ignored_without_retransmit_ownership",
         "sumeragi::v2::tests::"
-        "successor_core_context_preserves_the_parent_certificate_binding",
+        "successor_context_requires_the_durable_cryptographic_parent",
         "sumeragi::v2_lane_work::tests::"
-        "decided_lane_ownership_blocks_rollover_until_its_session_is_durable",
+        "late_old_sidecar_flush_removes_only_reconnected_source_retry",
         "sumeragi::v2_recovery::tests::"
-        "finality_complete_tip_with_incomplete_lane_completion_reopens_same_height",
+        "finalized_tip_derives_one_idempotent_successor_context",
         "sumeragi::v2_runner::tests::"
-        "terminal_ingress_discards_commit_discovery_and_losing_current_body_requests",
+        "exact_locked_body_is_reencoded_at_the_reproposal_round_without_byte_drift",
     ):
         assert required_test in production_inventory
     assert (
@@ -19412,8 +19463,8 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
             )
         )
     )
-    assert len(production_modules) == 38
-    assert len(set(production_modules)) == 38
+    assert len(production_modules) == 39
+    assert len(set(production_modules)) == 39
     assert "kura::tests" in production_modules
     assert "kura::lane_geometry::tests" in production_modules
     assert "sumeragi::authoritative_runtime_gate_tests" in production_modules
@@ -19760,8 +19811,8 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         "--lib -- --test-threads=1", unit_ignored_inventory
     )
     assert unit_branch < unit_inventory < unit_ignored_inventory < unit_run
-    assert "expected exactly 118 Sumeragi v2 reducer unit tests" in harness_source
-    assert "reducer unit gate requires all 118 tests to be runnable" in harness_source
+    assert "expected exactly 137 Sumeragi v2 reducer unit tests" in harness_source
+    assert "reducer unit gate requires all 137 tests to be runnable" in harness_source
 
     replay_branch = harness_source.index("--model-replay)")
     replay_inventory = harness_source.index("model_replay_test_list=", replay_branch)
@@ -21088,7 +21139,6 @@ MERGE_RUNTIME_PROJECTED_FIELDS = (
     "merge_sidecar_outbound_sessions_per_source",
     "merge_sidecar_outbound_bytes_per_source",
     "merge_sidecar_server_request_gates_per_source",
-    "merge_sidecar_server_request_gate_ttl_ms",
     "pending_certified_merge_entry_capacity",
     "pending_queue_plan_admission_capacity",
     "pending_control_sidecar_bytes",
@@ -21106,7 +21156,7 @@ def test_merge_runtime_config_v6_inventory_is_static_and_current() -> None:
         projected_field
         for projected_field, *_rest in module.MERGE_RUNTIME_CONFIG_FIELDS
     ) == MERGE_RUNTIME_PROJECTED_FIELDS
-    assert len(module.MERGE_RUNTIME_CONFIG_FIELDS) == 17
+    assert len(module.MERGE_RUNTIME_CONFIG_FIELDS) == 16
     assert (
         checker_source.count(
             '"pub const SUMERAGI_V2_CONFIG_FORMAT_VERSION: u16 = 6;"'
@@ -21123,6 +21173,65 @@ def test_merge_runtime_config_v6_source_binding_accepts_repository() -> None:
     module = load_checker()
 
     assert module._merge_runtime_config_production_source_fidelity_errors() == []
+
+
+@pytest.mark.parametrize(
+    ("relative", "injected"),
+    (
+        (
+            Path("crates/iroha_config/src/parameters/actual.rs"),
+            "\nfn retired_ttl_config_mutant() {\n"
+            "    let merge_sidecar_server_request_gate_ttl_ms = 1_u64;\n"
+            "    drop(merge_sidecar_server_request_gate_ttl_ms);\n"
+            "}\n",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
+            "\nfn retired_ttl_runner_mutant() {\n"
+            "    let merge_sidecar_server_request_gate_ttl = "
+            "core::time::Duration::from_secs(1);\n"
+            "    drop(merge_sidecar_server_request_gate_ttl);\n"
+            "}\n",
+        ),
+        (
+            Path("crates/iroha_core/src/merge_sidecar.rs"),
+            "\nconst SERVER_REQUEST_GATE_TTL: u64 = 1;\n",
+        ),
+    ),
+)
+def test_merge_runtime_config_v6_rejects_reintroduced_wall_clock_gate_ttl(
+    tmp_path: Path,
+    relative: Path,
+    injected: str,
+) -> None:
+    repo_root = copy_merge_runtime_config_fixture(tmp_path)
+    path = repo_root / relative
+    canonical_source = path.read_text(encoding="utf-8")
+    module = load_checker()
+    assert (
+        module._retired_sidecar_gate_ttl_source_errors(
+            path,
+            canonical_source,
+            str(relative),
+        )
+        == []
+    )
+    path.write_text(
+        canonical_source + injected,
+        encoding="utf-8",
+    )
+
+    errors = module._retired_sidecar_gate_ttl_source_errors(
+        path,
+        path.read_text(encoding="utf-8"),
+        str(relative),
+    )
+
+    assert any(
+        "retired wall-clock sidecar gate TTL must remain absent from production"
+        in error
+        for error in errors
+    ), errors
 
 
 @pytest.mark.parametrize("field", MERGE_RUNTIME_PROJECTED_FIELDS)
@@ -21148,7 +21257,7 @@ def test_merge_runtime_config_v6_rejects_each_projection_field_substitution(
     errors = merge_runtime_config_errors(repo_root)
 
     assert any(
-        "shared fingerprint projection carries all 17 config-v6 merge fields"
+        "shared fingerprint projection carries all 16 config-v6 merge fields"
         in error
         for error in errors
     ), errors
@@ -21190,7 +21299,7 @@ def test_merge_runtime_config_v6_rejects_each_projection_field_substitution(
             "limits: actual::SumeragiV2RuntimeLimits {",
             ".merge_sidecar_inbound_session_capacity,",
             ".merge_sidecar_inbound_sessions_per_peer,",
-            "user parsing maps all 17 config-v6 merge fields without substitution",
+            "user parsing maps all 16 config-v6 merge fields without substitution",
         ),
         (
             "crates/iroha_config/src/parameters/actual.rs",
@@ -21499,8 +21608,10 @@ def test_transport_geometry_source_fidelity_rejects_source_owner_mutants(
         ),
         (
             "submit_progress_message_to_source",
-            "ProgressLeaseAttempt::SameRequestAlreadyOwned => return Ok(None),",
-            "ProgressLeaseAttempt::SameRequestAlreadyOwned => "
+            "ProgressLeaseAttempt::SameRequestAlreadyOwned\n"
+            "            | ProgressLeaseAttempt::CancelledMembership => return Ok(None),",
+            "ProgressLeaseAttempt::SameRequestAlreadyOwned\n"
+            "            | ProgressLeaseAttempt::CancelledMembership => "
             "return Ok(Some(NetworkActorAdmittedTicketIdentity::forged())),",
             (
                 "same-request and cancelled admission return no new ticket identity, "
@@ -23195,3 +23306,1357 @@ def test_productive_liveness_mutations_are_pinned() -> None:
     assert (formal_dir / "productive_deadlock_fixed.cfg").read_text(
         encoding="utf-8"
     ).startswith("CONSTANT ProductiveRepair = TRUE\n")
+
+
+def test_exact_local_proposal_timeout_kernel_and_verus_proofs_are_source_bound(
+    tmp_path: Path,
+) -> None:
+    """Constants, disconnected proofs, stale replay, and call bypasses fail."""
+
+    module = load_checker()
+    assert module._local_proposal_timeout_source_fidelity_errors(ROOT_DIR) == []
+    source_paths = (
+        Path("crates/iroha_core/src/sumeragi/v2_core/refinement.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_core/wal.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_core/reducer.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_core/tests.rs"),
+        Path("crates/iroha_sumeragi_core/src/verus_proofs.rs"),
+    )
+
+    def copy_fixture(case: str) -> Path:
+        repo_root = tmp_path / case
+        for relative in source_paths:
+            destination = repo_root / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(ROOT_DIR / relative, destination)
+        return repo_root
+
+    item_mutants = (
+        (
+            "constant_production_result",
+            "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+            "local_proposal_timeout_justification_is_exact",
+            "local_proposal_timeout_justification_body!(projection, zero, one, absent_evidence)",
+            "true",
+            "production exact timeout-justification kernel",
+        ),
+        (
+            "altered_concrete_projection",
+            "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+            "local_proposal_timeout_projection",
+            "proposal_timeout == durable_timeout",
+            "proposal_timeout != durable_timeout",
+            "projection builder",
+        ),
+        (
+            "wal_adapter_disconnected",
+            "crates/iroha_core/src/sumeragi/v2_core/wal.rs",
+            "is_exact_local_proposal_timeout_justification",
+            "refinement::local_proposal_timeout_justification_is_exact(",
+            "false || refinement::local_proposal_timeout_justification_is_exact(",
+            "durable-state exact timeout adapter",
+        ),
+        (
+            "stale_wal_proposal_replay",
+            "crates/iroha_core/src/sumeragi/v2_core/wal.rs",
+            "apply_in_place",
+            "&& self.is_exact_local_proposal_timeout_justification(",
+            "&& true || self.is_exact_local_proposal_timeout_justification(",
+            "ProposalIntent WAL replay gate",
+        ),
+        (
+            "live_proposal_call_removed",
+            "crates/iroha_core/src/sumeragi/v2_core/reducer.rs",
+            "on_local_proposal_ready",
+            "if !self\n"
+            "                .durable\n"
+            "                .is_exact_local_proposal_timeout_justification(",
+            "if false && !self\n"
+            "                .durable\n"
+            "                .is_exact_local_proposal_timeout_justification(",
+            "live local-proposal construction",
+        ),
+        (
+            "retransmission_call_removed",
+            "crates/iroha_core/src/sumeragi/v2_core/reducer.rs",
+            "durable_proposal_is_active",
+            "ProposalJustification::Timeout(certificate) => durable",
+            "ProposalJustification::Timeout(certificate) => true || durable",
+            "durable proposal retransmission authorization",
+        ),
+        (
+            "recovery_filter_removed",
+            "crates/iroha_core/src/sumeragi/v2_core/reducer.rs",
+            "on_resume_after_replay",
+            ".filter(|proposal| Self::durable_proposal_is_active(&self.durable, proposal))",
+            ".filter(|_| true)",
+            "WAL replay resumption filter",
+        ),
+        (
+            "verus_ensures_true",
+            "crates/iroha_sumeragi_core/src/verus_proofs.rs",
+            "verified_local_proposal_timeout_justification_is_exact",
+            "accepted == local_proposal_timeout_justification_is_exact(projection)",
+            "true",
+            "Verus executable-kernel equivalence theorem",
+        ),
+        (
+            "verus_executable_proof_disconnected",
+            "crates/iroha_sumeragi_core/src/verus_proofs.rs",
+            "verified_local_proposal_timeout_justification_is_exact",
+            "let accepted = local_proposal_timeout_justification_body!(",
+            "let accepted = true || local_proposal_timeout_justification_body!(",
+            "Verus executable-kernel equivalence theorem",
+        ),
+        (
+            "verus_latest_postcondition_weakened",
+            "crates/iroha_sumeragi_core/src/verus_proofs.rs",
+            "exact_local_proposal_timeout_justification_binds_latest_durable_tc",
+            "projection.current_view > 0,",
+            "true,",
+            "Verus latest-durable-timeout consequence theorem",
+        ),
+        (
+            "verus_wal_guard_disconnected",
+            "crates/iroha_sumeragi_core/src/verus_proofs.rs",
+            "wal_frame_admissible",
+            "&& local_proposal_timeout_justification_is_exact(",
+            "&& true || local_proposal_timeout_justification_is_exact(",
+            "Verus ProposalIntent WAL guard",
+        ),
+        (
+            "stale_recovery_regression",
+            "crates/iroha_core/src/sumeragi/v2_core/tests.rs",
+            "recovery_uses_same_round_timeout_upgrade_as_exact_local_proposal_justification",
+            "Err(ReducerError::Replay(ReplayError::InvalidProposalIntent))",
+            "Ok(_)",
+            "exact-timeout WAL recovery regression",
+        ),
+    )
+    for case, relative, item, old, new, expected in item_mutants:
+        repo_root = copy_fixture(case)
+        mutate_rust_item_source(module, repo_root / relative, item, old, new)
+        errors = module._local_proposal_timeout_source_fidelity_errors(
+            repo_root
+        )
+        assert any(expected in error for error in errors), errors
+
+    repo_root = copy_fixture("verus_wal_consequence_disconnected")
+    path = repo_root / "crates/iroha_sumeragi_core/src/verus_proofs.rs"
+    source = path.read_text(encoding="utf-8")
+    old = """if view > 0 {
+                exact_local_proposal_timeout_justification_binds_latest_durable_tc(
+                    timeout_justification,
+                );
+            }"""
+    assert source.count(old) == 1
+    path.write_text(source.replace(old, "if view > 0 {}", 1), encoding="utf-8")
+    errors = module._local_proposal_timeout_source_fidelity_errors(repo_root)
+    assert any(
+        "Verus WAL consequence must call the nontrivial latest-timeout theorem"
+        in error
+        for error in errors
+    ), errors
+
+
+def test_installed_tc_selector_proof_and_call_paths_are_source_bound(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The exact last-installed certificate, PrepareQC, and callers stay connected."""
+
+    module = load_checker()
+    assert module._installed_tc_selector_source_fidelity_errors(
+        module.FORMAL_DIR
+    ) == []
+    formal_names = (
+        "SumeragiV2Core.tla",
+        "SumeragiV2Inductive.tla",
+        "SumeragiV2AsyncNetwork.tla",
+        "SumeragiV2InstalledTcSelectorProofs.tla",
+    )
+
+    def copy_fixture(case: str) -> Path:
+        formal_dir = tmp_path / case
+        formal_dir.mkdir()
+        for name in formal_names:
+            shutil.copy2(module.FORMAL_DIR / name, formal_dir / name)
+        return formal_dir
+
+    operator_mutants = (
+        (
+            "proposal_tc_retargeted",
+            "SumeragiV2Core.tla",
+            "LocalProposalJustification",
+            "tc == lastInstalledTc[node]",
+            "tc == NoTimeoutCertificate",
+            "direct selector call path",
+        ),
+        (
+            "proposal_prepare_qc_reconstructed",
+            "SumeragiV2Core.tla",
+            "ProposalJustified",
+            "proposal.highestPrepareQc =\n"
+            "          lastInstalledTc[node].highestPrepareQc",
+            "proposal.highestPrepareQc = NoPrepareQC",
+            "full-certificate identity",
+        ),
+        (
+            "proof_selector_chooses_history",
+            "SumeragiV2InstalledTcSelectorProofs.tla",
+            "ExactSelectedInstalledTcForRound",
+            "LastInstalledTcEntry(node)",
+            "CHOOSE installed \\in installedTCs: TRUE",
+            "direct selector call path",
+        ),
+        (
+            "restart_uses_history",
+            "SumeragiV2AsyncNetwork.tla",
+            "RestartLastInstalledTCs",
+            "ELSE {lastInstalledTc[node]}",
+            "ELSE RestartInstalledTCs(node)",
+            "direct selector call path",
+        ),
+        (
+            "proof_drops_prepare_qc_identity",
+            "SumeragiV2InstalledTcSelectorProofs.tla",
+            "InstalledTcExactSelectionInvariant",
+            "lastInstalledTc[node].highestPrepareQc\n"
+            "              \\in PrepareQcOptionSet",
+            "PrepareQcRank(lastInstalledTc[node].highestPrepareQc)\n"
+            "              \\in Ranks",
+            "full-certificate identity",
+        ),
+    )
+    for case, filename, symbol, old, new, expected in operator_mutants:
+        formal_dir = copy_fixture(case)
+        path = formal_dir / filename
+        path.write_text(
+            mutate_tla_operator(
+                path.read_text(encoding="utf-8"), symbol, old, new
+            ),
+            encoding="utf-8",
+        )
+        errors = module._installed_tc_selector_source_fidelity_errors(
+            formal_dir
+        )
+        assert any(expected in error for error in errors), errors
+
+    formal_dir = copy_fixture("retired_history_selector_reintroduced")
+    core = formal_dir / "SumeragiV2Core.tla"
+    source = core.read_text(encoding="utf-8")
+    core.write_text(
+        source.replace(
+            "\nLocalProposalJustification(node) ==",
+            "\nInstalledTcAtLeastAsRecent(candidate, other) == TRUE\n\n"
+            "LocalProposalJustification(node) ==",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    errors = module._installed_tc_selector_source_fidelity_errors(formal_dir)
+    assert any(
+        "retired history/rank installed-TC selector symbols are prohibited"
+        in error
+        for error in errors
+    ), errors
+
+    formal_dir = copy_fixture("tautological_uniqueness_theorem")
+    proof = formal_dir / "SumeragiV2InstalledTcSelectorProofs.tla"
+    proof.write_text(
+        mutate_tla_theorem(
+            proof.read_text(encoding="utf-8"),
+            "ExactInstalledTcSelectorIsUnique",
+            "IN /\\ selected \\in current\n"
+            "            /\\ \\A other \\in current: other = selected\n"
+            "            /\\ selected.tc = lastInstalledTc[node]\n"
+            "            /\\ selected.tc.highestPrepareQc =\n"
+            "                 lastInstalledTc[node].highestPrepareQc",
+            "IN TRUE",
+        ),
+        encoding="utf-8",
+    )
+    errors = module._installed_tc_selector_source_fidelity_errors(formal_dir)
+    assert any(
+        "nontrivial selector uniqueness/proposal postcondition" in error
+        for error in errors
+    ), errors
+
+    formal_dir = copy_fixture("omitted_proof_module")
+    (formal_dir / "SumeragiV2InstalledTcSelectorProofs.tla").unlink()
+    errors = module._installed_tc_selector_source_fidelity_errors(formal_dir)
+    assert any("selector source must be a regular file" in error for error in errors)
+
+    monkeypatch.setattr(
+        module,
+        "RELEASE_PROOF_MODULES",
+        tuple(
+            name
+            for name in module.RELEASE_PROOF_MODULES
+            if name != "SumeragiV2InstalledTcSelectorProofs"
+        ),
+    )
+    errors = module._installed_tc_selector_source_fidelity_errors(
+        module.FORMAL_DIR
+    )
+    assert any("release proof inventory must execute" in error for error in errors)
+
+
+def test_local_runner_service_contract_rejects_split_deadlock_call_symbol(
+    tmp_path: Path,
+) -> None:
+    """Whitespace tolerance must not concatenate a malformed call symbol."""
+
+    module = load_checker()
+    formal_dir = local_runner_service_fixture(tmp_path, module)
+    path = formal_dir / "SumeragiV2AsyncLivenessProofs.tla"
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        mutate_tla_theorem(
+            source,
+            "DeadlockFreedomObligation",
+            "      ENABLED PostGstProductiveStepWith(\n"
+            "        AsyncTerminatingLocalWorkDecreaseStep))\n",
+            "      ENABLED PostGstProductiveStep With(\n"
+            "        AsyncTerminatingLocalWorkDecreaseStep))\n",
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module._local_runner_service_contract_source_fidelity_errors(
+        module.load_ledger(),
+        repo_root=tmp_path,
+        formal_dir=formal_dir,
+    )
+    assert any(
+        "DeadlockFreedomObligation must bind the exact per-validator" in error
+        for error in errors
+    ), errors
+
+    architecture_errors = module._proof_obligation_architecture_errors(
+        module.load_ledger()["obligations"],
+        {"SumeragiV2AsyncLivenessProofs": path.read_text(encoding="utf-8")},
+    )
+    assert any(
+        "DeadlockFreedomObligation must state only" in error
+        for error in architecture_errors
+    ), architecture_errors
+
+
+def test_locked_assembly_retention_mutation_is_source_bound_and_complete(
+    tmp_path: Path,
+) -> None:
+    """The Busy assembly dispatch repair and red/green pair must remain exact."""
+
+    module = load_checker()
+
+    def copy_fixture(case: str) -> tuple[Path, Path, Path, Path]:
+        repo_root = tmp_path / case
+        formal_dir = repo_root / "docs" / "formal" / "sumeragi_v2"
+        formal_dir.mkdir(parents=True)
+        for name in module._LOCKED_ASSEMBLY_RETENTION_MUTATION_SOURCE_SHA256:
+            shutil.copy2(module.FORMAL_DIR / name, formal_dir / name)
+        async_path = formal_dir / "SumeragiV2AsyncNetwork.tla"
+        shutil.copy2(
+            module.FORMAL_DIR / "SumeragiV2AsyncNetwork.tla", async_path
+        )
+        runner = (
+            repo_root
+            / "scripts"
+            / "formal"
+            / "run_sumeragi_v2_progress_mutations.sh"
+        )
+        runner.parent.mkdir(parents=True)
+        shutil.copy2(
+            ROOT_DIR
+            / "scripts"
+            / "formal"
+            / "run_sumeragi_v2_progress_mutations.sh",
+            runner,
+        )
+        return repo_root, formal_dir, async_path, runner
+
+    repo_root, formal_dir, _, _ = copy_fixture("exact")
+    assert module._locked_assembly_retention_mutation_errors(
+        formal_dir, repo_root
+    ) == []
+
+    repo_root, formal_dir, async_path, _ = copy_fixture("kernel-drift")
+    source = async_path.read_text(encoding="utf-8")
+    async_path.write_text(
+        mutate_tla_operator(
+            source,
+            "LocalAssemblyBusyDispatchAllowed",
+            '"AssembleBody"',
+            '"BeginPrepare"',
+        ),
+        encoding="utf-8",
+    )
+    errors = module._locked_assembly_retention_mutation_errors(
+        formal_dir, repo_root
+    )
+    assert any(
+        "LocalAssemblyBusyDispatchAllowed must equal the exact "
+        "locked-assembly Busy dispatch contract" in error
+        for error in errors
+    ), errors
+
+    repo_root, formal_dir, async_path, _ = copy_fixture("disconnected-kernel")
+    source = async_path.read_text(encoding="utf-8")
+    async_path.write_text(
+        mutate_tla_operator(
+            source,
+            "CommandDispatchable",
+            "\\/ LocalAssemblyBusyDispatchAllowed(command)",
+            "\\/ FALSE",
+        ),
+        encoding="utf-8",
+    )
+    errors = module._locked_assembly_retention_mutation_errors(
+        formal_dir, repo_root
+    )
+    assert any(
+        "CommandDispatchable must equal the exact locked-assembly Busy "
+        "dispatch contract" in error
+        for error in errors
+    ), errors
+
+    repo_root, formal_dir, _, _ = copy_fixture("config-drift")
+    config = formal_dir / "locked_assembly_retention_old.cfg"
+    source = config.read_text(encoding="utf-8")
+    assert source.count("AllowBusyLockedAssembly = FALSE") == 1
+    config.write_text(
+        source.replace(
+            "AllowBusyLockedAssembly = FALSE",
+            "AllowBusyLockedAssembly = TRUE",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    errors = module._locked_assembly_retention_mutation_errors(
+        formal_dir, repo_root
+    )
+    assert any("must match exact reviewed SHA-256" in error for error in errors)
+
+    runner_mutants = (
+        (
+            "wrong-status",
+            "locked_assembly_retention_fixed.cfg 0",
+            "locked_assembly_retention_fixed.cfg 12",
+            "locked-assembly-retention-fixed exactly once with status 0",
+        ),
+        (
+            "weakened-marker",
+            '"State 2: <DispatchRuntimeHead"',
+            '"State 2: <DispatchRuntimeHeadMaybe"',
+            "locked-assembly-retention-old must require exact markers",
+        ),
+    )
+    for case, old, new, expected_error in runner_mutants:
+        repo_root, formal_dir, _, runner = copy_fixture(case)
+        source = runner.read_text(encoding="utf-8")
+        assert source.count(old) == 1, old
+        runner.write_text(source.replace(old, new, 1), encoding="utf-8")
+        errors = module._locked_assembly_retention_mutation_errors(
+            formal_dir, repo_root
+        )
+        assert any(expected_error in error for error in errors), errors
+
+    repo_root, formal_dir, _, runner = copy_fixture("reordered-pair")
+    source = runner.read_text(encoding="utf-8")
+    old_start = source.index("run_case locked-assembly-retention-old")
+    fixed_start = source.index("run_case locked-assembly-retention-fixed")
+    next_start = source.index("run_case locked-body-reproposal", fixed_start)
+    old_block = source[old_start:fixed_start]
+    fixed_block = source[fixed_start:next_start]
+    runner.write_text(
+        source[:old_start] + fixed_block + old_block + source[next_start:],
+        encoding="utf-8",
+    )
+    errors = module._locked_assembly_retention_mutation_errors(
+        formal_dir, repo_root
+    )
+    assert any("must keep old-before-fixed order" in error for error in errors)
+
+
+def test_locked_body_reproposal_mutation_matrix_is_source_bound_and_complete(
+    tmp_path: Path,
+) -> None:
+    """The strict same-round red/green matrix must remain exact and runnable."""
+
+    module = load_checker()
+
+    def copy_fixture(case: str) -> tuple[Path, Path, Path]:
+        repo_root = tmp_path / case
+        formal_dir = repo_root / "docs" / "formal" / "sumeragi_v2"
+        formal_dir.mkdir(parents=True)
+        for name in module._LOCKED_BODY_REPROPOSAL_MUTATION_SOURCE_SHA256:
+            shutil.copy2(module.FORMAL_DIR / name, formal_dir / name)
+        runner = (
+            repo_root
+            / "scripts"
+            / "formal"
+            / "run_sumeragi_v2_progress_mutations.sh"
+        )
+        runner.parent.mkdir(parents=True)
+        shutil.copy2(
+            ROOT_DIR
+            / "scripts"
+            / "formal"
+            / "run_sumeragi_v2_progress_mutations.sh",
+            runner,
+        )
+        return repo_root, formal_dir, runner
+
+    repo_root, formal_dir, _ = copy_fixture("exact")
+    assert module._locked_body_reproposal_mutation_runner_errors(
+        formal_dir, repo_root
+    ) == []
+
+    repo_root, formal_dir, _ = copy_fixture("config-drift")
+    config = formal_dir / "historical_locked_recovery_fresh_commit_bug.cfg"
+    source = config.read_text(encoding="utf-8")
+    assert source.count("AllowFreshHistoricalCommitBug = TRUE") == 1
+    config.write_text(
+        source.replace(
+            "AllowFreshHistoricalCommitBug = TRUE",
+            "AllowFreshHistoricalCommitBug = FALSE",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    errors = module._locked_body_reproposal_mutation_runner_errors(
+        formal_dir, repo_root
+    )
+    assert any("must match exact reviewed SHA-256" in error for error in errors)
+
+    runner_mutants = (
+        (
+            "wrong-status",
+            "locked_body_reproposal_high_fixed.cfg 0",
+            "locked_body_reproposal_high_fixed.cfg 12",
+            "locked-body-reproposal-high-fixed exactly once with status 0",
+        ),
+        (
+            "weakened-marker",
+            '"Invariant LaterHighReproposalAccepted is violated."',
+            '"Invariant LaterHighReproposalAccepted might be violated."',
+            "locked-body-reproposal-no-high-bug must require exact markers",
+        ),
+        (
+            "missing-fresh-commit",
+            "run_case historical-locked-recovery-fresh-commit-bug \\\n"
+            "  SumeragiV2HistoricalLockedRecoveryMutation.tla \\\n"
+            "  historical_locked_recovery_fresh_commit_bug.cfg 12 \\\n"
+            '  "Invariant ExactIntentDoesNotAuthorizeFreshCommit is violated." \\\n'
+            '  "4 states generated, 3 distinct states found, 0 states left on queue."\n',
+            "",
+            "historical-locked-recovery-fresh-commit-bug exactly once with status 12",
+        ),
+    )
+    for case, old, new, expected_error in runner_mutants:
+        repo_root, formal_dir, runner = copy_fixture(case)
+        source = runner.read_text(encoding="utf-8")
+        assert source.count(old) == 1, old
+        runner.write_text(source.replace(old, new, 1), encoding="utf-8")
+        errors = module._locked_body_reproposal_mutation_runner_errors(
+            formal_dir, repo_root
+        )
+        assert any(expected_error in error for error in errors), errors
+
+
+def test_proposal_timeout_exact_regressions_reject_case_removal_mutants(
+    tmp_path: Path,
+) -> None:
+    """Omitted, invented, and alternate evidence remain pinned in both tests."""
+
+    module = load_checker()
+    source_paths = (
+        Path("crates/iroha_data_model/src/block/consensus_v2.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2.rs"),
+    )
+    test_context = (
+        ("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),
+    )
+
+    def copy_fixture(case: str) -> Path:
+        repo_root = tmp_path / case
+        for relative in source_paths:
+            destination = repo_root / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(ROOT_DIR / relative, destination)
+        return repo_root
+
+    wire_mutants = (
+        (
+            "wire_invented_rejection_neutralized",
+            """assert_eq!(
+            proposal.validate(&context),
+            Err(ValidationError::InvalidProposalJustification),
+            "a proposal cannot invent a repeated high absent from its TC"
+        );""",
+            """assert_eq!(
+            proposal.validate(&context),
+            Ok(()),
+            "a proposal cannot invent a repeated high absent from its TC"
+        );""",
+            "wire regression must reject an invented repeated PrepareQC",
+        ),
+        (
+            "wire_omitted_rejection_neutralized",
+            """assert_eq!(
+            proposal.validate(&context),
+            Err(ValidationError::InvalidProposalJustification),
+            "a proposal cannot omit the exact high selected by its TC"
+        );""",
+            """assert_eq!(
+            proposal.validate(&context),
+            Ok(()),
+            "a proposal cannot omit the exact high selected by its TC"
+        );""",
+            "wire regression must reject an omitted repeated PrepareQC",
+        ),
+        (
+            "wire_alternate_evidence_rejection_neutralized",
+            """assert_eq!(
+            proposal.validate(&context),
+            Err(ValidationError::InvalidProposalJustification),
+            "the repeated high must preserve the TC-selected full evidence"
+        );""",
+            """assert_eq!(
+            proposal.validate(&context),
+            Ok(()),
+            "the repeated high must preserve the TC-selected full evidence"
+        );""",
+            "wire regression must reject same-reference alternate PrepareQC evidence",
+        ),
+    )
+    wire_path = Path("crates/iroha_data_model/src/block/consensus_v2.rs")
+    wire_item = "timeout_proposal_accepts_only_the_selected_prepare_subject"
+    for case, old, new, expected in wire_mutants:
+        repo_root = copy_fixture(case)
+        mutate_rust_item_source_in_context(
+            module,
+            repo_root / wire_path,
+            wire_item,
+            test_context,
+            old,
+            new,
+        )
+        errors = module._proposal_timeout_exactness_source_fidelity_errors(
+            repo_root
+        )
+        assert any(expected in error for error in errors), errors
+
+    def remove_adapter_case(
+        repo_root: Path, start: str, end: str
+    ) -> None:
+        path = repo_root / "crates/iroha_core/src/sumeragi/v2.rs"
+        source = path.read_text(encoding="utf-8")
+        items = [
+            item
+            for item in module.rust_items(
+                source,
+                "locked_subject_reproposal_and_strict_higher_prepare_are_safe",
+            )
+            if item.brace_context == test_context
+        ]
+        assert len(items) == 1
+        item = items[0]
+        start_offset = item.source.index(start)
+        end_offset = item.source.index(end, start_offset)
+        mutated_item = item.source[:start_offset] + item.source[end_offset:]
+        assert source.count(item.source) == 1
+        path.write_text(
+            source.replace(item.source, mutated_item, 1), encoding="utf-8"
+        )
+
+    adapter_mutants = (
+        (
+            "adapter_omitted_rejection_removed",
+            "        let mut missing_repeated_high = prepared_proposal.clone();",
+            "        let mut invented_repeated_high = prepared_proposal.clone();",
+            "adapter regression must reject omitted evidence at safe-value admission",
+        ),
+        (
+            "adapter_invented_rejection_removed",
+            "        let mut invented_repeated_high = prepared_proposal.clone();",
+            "        let mut alternate_evidence = prepared_proposal.clone();",
+            "adapter regression must reject invented evidence at safe-value admission",
+        ),
+        (
+            "adapter_alternate_evidence_rejection_removed",
+            "        let mut alternate_evidence = prepared_proposal.clone();",
+            "        let mut equal_rank = prepared_proposal.clone();",
+            "adapter regression must reject same-reference alternate evidence at safe-value admission",
+        ),
+    )
+    for case, start, end, expected in adapter_mutants:
+        repo_root = copy_fixture(case)
+        remove_adapter_case(repo_root, start, end)
+        errors = module._proposal_timeout_exactness_source_fidelity_errors(
+            repo_root
+        )
+        assert any(expected in error for error in errors), errors
+
+
+def test_proposal_timeout_full_evidence_production_gates_are_source_bound(
+    tmp_path: Path,
+) -> None:
+    """Every production consumer must compare full repeated PrepareQC evidence."""
+
+    module = load_checker()
+    assert (
+        module._proposal_timeout_exactness_source_fidelity_errors(ROOT_DIR)
+        == []
+    )
+    source_paths = (
+        Path("crates/iroha_data_model/src/block/consensus_v2.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2.rs"),
+    )
+
+    def copy_fixture(case: str) -> Path:
+        repo_root = tmp_path / case
+        for relative in source_paths:
+            destination = repo_root / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(ROOT_DIR / relative, destination)
+        return repo_root
+
+    production_mutants = (
+        (
+            "proposal_validate_reference_only",
+            Path("crates/iroha_data_model/src/block/consensus_v2.rs"),
+            "validate",
+            (("impl", "Proposal"),),
+            "selected_highest != timeout.highest_prepare_qc.as_ref()",
+            """selected_highest.map(QuorumCertificate::as_ref)
+                    != timeout
+                        .highest_prepare_qc
+                        .as_ref()
+                        .map(QuorumCertificate::as_ref)""",
+            "Proposal::validate must compare the complete TC-selected",
+        ),
+        (
+            "wire_registry_reference_only",
+            Path("crates/iroha_core/src/sumeragi/v2.rs"),
+            "justification_to_core",
+            (("impl", "WireRegistry"),),
+            "selected != timeout.highest_prepare_qc.as_ref()",
+            """selected.map(wire::QuorumCertificate::as_ref)
+                    != timeout
+                        .highest_prepare_qc
+                        .as_ref()
+                        .map(wire::QuorumCertificate::as_ref)""",
+            "WireRegistry must reject unequal complete PrepareQC evidence",
+        ),
+        (
+            "safe_value_reference_only",
+            Path("crates/iroha_core/src/sumeragi/v2.rs"),
+            "proposal_is_safe_for_lock",
+            (),
+            "selected == highest",
+            "selected.as_ref() == highest.as_ref()",
+            "safe-value admission must compare the complete selected PrepareQC",
+        ),
+    )
+    for case, relative, item, context, old, new, expected in production_mutants:
+        repo_root = copy_fixture(case)
+        mutate_rust_item_source_in_context(
+            module,
+            repo_root / relative,
+            item,
+            context,
+            old,
+            new,
+        )
+        errors = module._proposal_timeout_exactness_source_fidelity_errors(
+            repo_root
+        )
+        assert any(expected in error for error in errors), errors
+
+
+def test_protected_service_rank_aggregate_cannot_drop_exact_leaf(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    formal_dir = copy_async_source_fidelity_fixture(
+        tmp_path,
+        module,
+        "proof_coverage.json",
+        "SumeragiV2AsyncLivenessProofs.tla",
+        "SumeragiV2LivenessProofs.tla",
+    )
+    path = formal_dir / "SumeragiV2AsyncLivenessProofs.tla"
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        mutate_tla_theorem(
+            source,
+            "ProtectedServiceRankProgressObligation",
+            "ProtectedStage6RankProgressFromFairCausalAdmissionObligation",
+            "ProtectedStage4RankProgressFromFairScheduler",
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module._async_proof_architecture_errors(formal_dir)
+
+    assert any(
+        "ProtectedServiceRankProgressObligation must retain exact "
+        "protected-rank proof dependency "
+        "'ProtectedStage6RankProgressFromFairCausalAdmissionObligation' once; "
+        "found 0"
+        in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("current_id", "retired_id", "retired_symbol"),
+    (
+        (
+            "same-round-lock-and-commit-authorization",
+            "historical-tc-lock-commit",
+            "HistoricalTcLockedCommitAuthorizationObligation",
+        ),
+        (
+            "locked-body-reproposal",
+            "locked-body-reproposal-liveness",
+            "LockedBodyReproposalProgressObligation",
+        ),
+    ),
+)
+def test_reviewed_obligation_inventory_rejects_retired_lock_mappings(
+    current_id: str,
+    retired_id: str,
+    retired_symbol: str,
+) -> None:
+    """Legacy IDs cannot reauthorize split-round Commit or vacuous liveness."""
+
+    module = load_checker()
+    ledger = copy.deepcopy(module.load_ledger())
+    obligation = next(
+        item for item in ledger["obligations"] if item["id"] == current_id
+    )
+    obligation["id"] = retired_id
+    obligation["symbol"] = retired_symbol
+    obligation["status"] = "tlaps_proved"
+
+    errors = module.validate_ledger(ledger).errors
+
+    assert any(
+        f"proof ledger is missing reviewed obligation {current_id}" in error
+        for error in errors
+    ), errors
+    assert retired_id not in module.REQUIRED_PROOF_OBLIGATION_INVENTORY
+
+
+def test_same_round_lock_and_commit_authorization_rejects_fresh_historical_commit(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    core_source = (module.FORMAL_DIR / "SumeragiV2Core.tla").read_text()
+    inductive_source = (module.FORMAL_DIR / "SumeragiV2Inductive.tla").read_text()
+
+    historical_source = module._top_level_operator_body(
+        core_source, "HistoricalLockedPrepareSource"
+    )
+    historical = module._top_level_operator_body(
+        core_source, "HistoricalLockedPrepareForCommit"
+    )
+    provenance = module._top_level_operator_body(
+        core_source, "HistoricalLockedPrepareRecoveryProvenance"
+    )
+    assert historical_source is not None
+    assert historical is not None
+    assert provenance is not None
+    source_body = " ".join(historical_source[0].split())
+    historical_body = " ".join(historical[0].split())
+    for required in (
+        "qc \\in prepareQCs",
+        "qc.view < nodeView[node]",
+        "qc.view = lockRank[node]",
+        "qc.subject = lockSubject[node]",
+    ):
+        assert required in source_body
+    assert "InstalledTcSelectsPrepareFor(node, qc)" in " ".join(
+        provenance[0].split()
+    )
+    assert historical_body == "FALSE"
+
+    begin = module._top_level_operator_body(
+        core_source, "BeginLockCommit", preserve_string_contents=True
+    )
+    persist = module._top_level_operator_body(
+        core_source, "PersistLockCommit", preserve_string_contents=True
+    )
+    assert begin is not None
+    assert persist is not None
+    begin_body = " ".join(begin[0].split())
+    persist_body = " ".join(persist[0].split())
+    assert "CurrentOpenPrepareForCommit(node, qc)" in begin_body
+    assert "HistoricalLockedPrepareForCommit(node, qc)" not in begin_body
+    assert 'Vote(context, qc.view, "Commit", qc.subject, node)' in begin_body
+    assert "pendingLockCommit' = pendingLockCommit \\cup {request}" in begin_body
+    assert "commitIntents' = commitIntents \\cup {request.vote}" in persist_body
+    assert "signVotes' = signVotes \\cup {signRequest}" in persist_body
+
+    authorization = module._top_level_operator_body(
+        inductive_source, "SameRoundLockAndCommitAuthorizationInvariant"
+    )
+    assert authorization is not None
+    authorization_body = " ".join(authorization[0].split())
+    assert "request.vote.view = nodeView[request.node]" in authorization_body
+    assert (
+        "CurrentOpenPrepareForCommit(request.node, request.qc)"
+        in authorization_body
+    )
+    assert "TimeoutVoteStrictlyProtectsCommit(timeoutVote, commitVote)" in (
+        authorization_body
+    )
+
+    by_id = {
+        obligation["id"]: obligation
+        for obligation in module.load_ledger()["obligations"]
+    }
+    assert by_id["same-round-lock-and-commit-authorization"]["status"] == (
+        "tlaps_proved"
+    )
+    assert by_id["timeout-protection"]["status"] == "tlaps_proved"
+
+    # The promoted theorem stays source-bound and non-vacuous. In particular,
+    # disconnecting the exact-current-round helper from its defining predicate
+    # is rejected independently of the complete-file seal.
+    module = load_checker()
+    assert module._same_round_strict_tla_source_fidelity_errors(
+        module.FORMAL_DIR
+    ) == []
+    mutations = (
+        (
+            "missing_current_open_dependency",
+            "SumeragiV2InductiveProofs.tla",
+            "PendingLockCommitUsesExactCurrentRound",
+            ", CurrentOpenPrepareForCommit",
+            "",
+            "PendingLockCommitUsesExactCurrentRound must retain the exact reviewed",
+            True,
+        ),
+        (
+            "disconnected_wrapper",
+            "SumeragiV2Proofs.tla",
+            "SameRoundLockAndCommitAuthorizationObligation",
+            "ReducerProvenanceImpliesSameRoundLockAndCommitAuthorization",
+            "DurableTimeoutProtectionIsDirect",
+            "SameRoundLockAndCommitAuthorizationObligation must retain the "
+            "exact reviewed",
+            True,
+        ),
+        (
+            "tautological_property",
+            "SumeragiV2Proofs.tla",
+            "SameRoundLockAndCommitAuthorizationProperty",
+            "specification => []SameRoundLockAndCommitAuthorizationInvariant",
+            "specification => []TRUE",
+            "must equal only the exact non-vacuous property",
+            False,
+        ),
+        (
+            "weakened_current_round",
+            "SumeragiV2Core.tla",
+            "CurrentOpenPrepareForCommit",
+            "qc.view = nodeView[node]",
+            "qc.view <= nodeView[node]",
+            "CurrentOpenPrepareForCommit must equal only the exact reviewed",
+            False,
+        ),
+        (
+            "disconnected_inductive_invariant",
+            "SumeragiV2Inductive.tla",
+            "SameRoundLockAndCommitAuthorizationInvariant",
+            "CurrentOpenPrepareForCommit(request.node, request.qc)",
+            "TRUE",
+            "SameRoundLockAndCommitAuthorizationInvariant must equal only the "
+            "exact reviewed",
+            False,
+        ),
+    )
+    for case, name, symbol, old, new, error_fragment, theorem in mutations:
+        formal_dir = tmp_path / case
+        formal_dir.mkdir()
+        for source_name in (
+            *module._SAME_ROUND_STRICT_TLA_SOURCE_SHA256,
+            "SumeragiV2Core.tla",
+            "SumeragiV2Inductive.tla",
+        ):
+            shutil.copy2(module.FORMAL_DIR / source_name, formal_dir / source_name)
+        path = formal_dir / name
+        source = path.read_text(encoding="utf-8")
+        mutate = mutate_tla_theorem if theorem else mutate_tla_operator
+        path.write_text(mutate(source, symbol, old, new), encoding="utf-8")
+        errors = module._same_round_strict_tla_source_fidelity_errors(formal_dir)
+        assert any(error_fragment in error for error in errors), errors
+
+
+def test_same_round_semantic_kernel_sources_and_callers_are_fail_closed(
+    tmp_path: Path,
+) -> None:
+    """Shared vote/Commit kernels cannot be bypassed in production or Verus."""
+
+    module = load_checker()
+    assert module._same_round_semantic_kernel_source_fidelity_errors(ROOT_DIR) == []
+    source_paths = tuple(
+        Path(relative)
+        for relative in module._SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256
+    )
+    mutations = (
+        (
+            "vote_signer_reintroduced",
+            Path("crates/iroha_core/src/sumeragi/v2_core/types.rs"),
+            "same_statement",
+            "vote_statement_identity_equal_body!(",
+            "self.signer == other.signer && vote_statement_identity_equal_body!(",
+            "Vote::same_statement must invoke the shared identity kernel without signer",
+        ),
+        (
+            "commit_phase_weakened",
+            Path("crates/iroha_core/src/sumeragi/v2_core/types.rs"),
+            "same_commit_decision",
+            "self.phase == Phase::Commit",
+            "self.phase == Phase::Prepare",
+            "same_commit_decision must require Commit phase",
+        ),
+        (
+            "vote_call_disconnected",
+            Path("crates/iroha_core/src/sumeragi/v2_core/reducer.rs"),
+            "on_vote",
+            "vote.same_statement(intent)",
+            "vote.signer() == intent.signer()",
+            "Commit vote admission must compare the exact signer-independent statement",
+        ),
+        (
+            "prepare_lock_veto_reintroduced",
+            Path("crates/iroha_core/src/sumeragi/v2_core/reducer.rs"),
+            "on_commit_certificate",
+            "let effect = self.start_persistence(",
+            """if self.durable.locked().is_some_and(|locked| {
+            locked.subject() != certificate.subject()
+        }) {
+            return Err(ReducerError::ConflictingDecision);
+        }
+        let effect = self.start_persistence(""",
+            "Commit admission must let the first validated CommitQC supersede any Prepare lock",
+        ),
+        (
+            "wal_prepare_lock_veto_reintroduced",
+            Path("crates/iroha_core/src/sumeragi/v2_core/wal.rs"),
+            "apply_in_place",
+            "if let Some(existing) = &self.decision {",
+            """if self.locked.as_ref().is_some_and(|locked| {
+                    locked.subject() != certificate.subject()
+                }) {
+                    return Err(ReplayError::InvalidCertificate);
+                }
+                if let Some(existing) = &self.decision {""",
+            "WAL Decision replay must let the first validated CommitQC supersede any Prepare lock",
+        ),
+        (
+            "effect_prepare_lock_veto_reintroduced",
+            Path("crates/iroha_core/src/sumeragi/v2_effects.rs"),
+            "reconcile_decision_work",
+            "match self.protected_decision {",
+            """if self
+            .protected_lock
+            .is_some_and(|(_, locked_subject)| locked_subject != decision_subject)
+        {
+            return Err(EffectExecutorError::Contract(
+                "durable Decision differs from protected lock".to_owned(),
+            ));
+        }
+        match self.protected_decision {""",
+            "effect reconciliation must let the first durable Decision supersede any protected Prepare lock",
+        ),
+        (
+            "production_gate_disconnected",
+            Path("crates/iroha_core/src/sumeragi/v2_core/refinement.rs"),
+            "accepts",
+            "accepts_facts(transition_facts(projection))",
+            "true",
+            "production commit gate must consume facts derived from the exact projection",
+        ),
+        (
+            "strict_upgrade_kernel_constant_result",
+            Path("crates/iroha_core/src/sumeragi/v2_core/refinement.rs"),
+            "strict_same_round_timeout_upgrade_is_allowed",
+            "strict_same_round_timeout_upgrade_body!(projection, zero, one)",
+            "true",
+            "the executable strict timeout-upgrade kernel must invoke the shared proof body",
+        ),
+        (
+            "strict_upgrade_lock_rank_weakened",
+            Path("crates/iroha_core/src/sumeragi/v2_core/refinement.rs"),
+            "strict_same_round_timeout_upgrade_body",
+            "projection.selected_prepare_view > projection.locked_prepare_view",
+            "projection.selected_prepare_view >= projection.locked_prepare_view",
+            "production and Verus must share one nontrivial strict same-round timeout-upgrade predicate",
+        ),
+        (
+            "enter_view_retranscribes_upgrade",
+            Path("crates/iroha_core/src/sumeragi/v2_core/refinement.rs"),
+            "enter_view_projection_gate_body",
+            "$projection.before_tag.view <= $projection.after_tag.view",
+            "$projection.before_tag.view <= timeout.view",
+            "EnterView must consume the admitted monotonic post-view instead of transcribing a second strict-upgrade predicate",
+        ),
+        (
+            "live_timeout_admission_bypasses_kernel",
+            Path("crates/iroha_core/src/sumeragi/v2_core/reducer.rs"),
+            "on_timeout_certificate",
+            """!self
+                .durable
+                .is_strict_same_round_timeout_upgrade(&certificate)""",
+            "false",
+            "live timeout-certificate admission must invoke the durable source-shared strict-upgrade adapter",
+        ),
+        (
+            "timeout_ack_classification_bypasses_kernel",
+            Path("crates/iroha_core/src/sumeragi/v2_core/reducer.rs"),
+            "on_persisted",
+            """self
+                    .durable
+                    .is_strict_same_round_timeout_upgrade(certificate)""",
+            "certificate.highest_prepare().is_some()",
+            "InstallTimeout acknowledgement must classify the exact strict same-round lock-only upgrade before applying durable state",
+        ),
+        (
+            "ack_refinement_skips_durable_apply",
+            Path("crates/iroha_core/src/sumeragi/v2_core/reducer.rs"),
+            "acknowledgement_is_exact",
+            """.apply(&self.context, self.local_validator, &pending.entry)
+            .is_err()""",
+            ".apply(&self.context, self.local_validator, &pending.entry)\n            .is_ok()",
+            "the acknowledgement refinement must re-run the source-shared durable WAL admission before accepting EnterView effects",
+        ),
+        (
+            "wal_upgrade_adapter_uses_view_only_owner",
+            Path("crates/iroha_core/src/sumeragi/v2_core/wal.rs"),
+            "is_strict_same_round_timeout_upgrade",
+            "installed.round() == certificate.round()",
+            "installed.round().view() == certificate.round().view()",
+            "the durable adapter must project exact installed-round identity into the shared strict-upgrade kernel",
+        ),
+        (
+            "wal_replay_bypasses_upgrade_kernel",
+            Path("crates/iroha_core/src/sumeragi/v2_core/wal.rs"),
+            "apply_in_place",
+            "self.is_strict_same_round_timeout_upgrade(certificate)",
+            "certificate.highest_prepare().is_some()",
+            "WAL replay must classify strict timeout upgrades only through the shared durable adapter",
+        ),
+        (
+            "verus_upgrade_kernel_disconnected",
+            Path("crates/iroha_sumeragi_core/src/verus_proofs.rs"),
+            "strict_same_round_timeout_upgrade",
+            "strict_same_round_timeout_upgrade_body!(",
+            "true || strict_same_round_timeout_upgrade_body!(",
+            "Verus must instantiate the shared strict timeout-upgrade body from its primitive WAL projection",
+        ),
+        (
+            "strict_same_round_timeout_pool_erased",
+            Path("crates/iroha_core/src/sumeragi/v2_core/reducer.rs"),
+            "on_persisted",
+            "if strict_same_round_timeout_upgrade {",
+            "if false && strict_same_round_timeout_upgrade {",
+            "strict same-round InstallTimeout must preserve only the exact current-round timeout pool and formed marker",
+        ),
+            (
+                "strict_same_round_timeout_control_dropped",
+                Path("crates/iroha_core/src/sumeragi/v2_core/reducer.rs"),
+                "on_persisted",
+                "| OutboundControlClass::TimeoutVote",
+                "| OutboundControlClass::CommitQc",
+                "active exact TimeoutVote and highest PrepareQC control owners",
+        ),
+        (
+            "same_size_timeout_pool_substitution_accepted",
+            Path("crates/iroha_core/src/sumeragi/v2_core/refinement.rs"),
+            "transition_branch_constraints_body",
+            "$facts.timeout_vote_pool_unchanged",
+            "true",
+            "the production gate must reject same-size timeout-pool substitution and advancing-view retention",
+        ),
+        (
+            "timeout_control_substitution_accepted",
+            Path("crates/iroha_core/src/sumeragi/v2_core/refinement.rs"),
+            "transition_branch_constraints_body",
+            "$facts.timeout_control_unchanged",
+            "true",
+            "the production gate must preserve exact timeout-control identity across a lock-only install and require absence after advance",
+        ),
+        (
+            "advancing_timeout_control_retention_accepted",
+            Path("crates/iroha_core/src/sumeragi/v2_core/refinement.rs"),
+            "transition_branch_constraints_body",
+            "$facts.timeout_control_after_absent",
+            "true",
+            "the production gate must preserve exact timeout-control identity across a lock-only install and require absence after advance",
+        ),
+        (
+            "timeout_control_key_projection_retargeted",
+            Path("crates/iroha_core/src/sumeragi/v2_core/reducer.rs"),
+            "transition_projection",
+            """timeout_control_before: self
+                .outbound_control
+                .get(&OutboundControlClass::TimeoutVote),""",
+            """timeout_control_before: self
+                .outbound_control
+                .get(&OutboundControlClass::CommitQc),""",
+            "the transition projection must preserve direct timeout-control key occupancy and full message identity",
+        ),
+        (
+            "verus_timeout_owner_projection_disconnected",
+            Path("crates/iroha_sumeragi_core/src/verus_proofs.rs"),
+            "verified_delta_facts_from_projection",
+            "transition_delta_facts_from_projection_body!(",
+            "transition_facts_from_components_body!(",
+            "Verus must prove the executable delta facts through the same timeout-owner projection used by production",
+        ),
+        (
+            "verus_timeout_owner_extensionality_omitted",
+            Path("crates/iroha_sumeragi_core/src/verus_proofs.rs"),
+            "production_delta_facts_equal",
+            "&& left.timeout_control_after_absent == right.timeout_control_after_absent",
+            "&& true",
+            "Verus transition-fact extensionality must include every timeout-owner delta field",
+        ),
+        (
+            "verus_same_round_timeout_pool_forced_empty",
+            Path("crates/iroha_sumeragi_core/src/verus_proofs.rs"),
+            "production_action_preserves_volatile_bounds",
+            """&& (if facts.install_view_unchanged {
+                    facts.timeout_vote_pool_unchanged
+                        && facts.volatile_after.timeout_vote_pools
+                            == facts.volatile_before.timeout_vote_pools
+                        && facts.volatile_after.timeout_vote_entries
+                            == facts.volatile_before.timeout_vote_entries
+                } else {
+                    facts.volatile_after.timeout_vote_pools == 0
+                        && facts.volatile_after.timeout_vote_entries == 0
+                })""",
+            """&& facts.volatile_after.timeout_vote_pools == 0
+                && facts.volatile_after.timeout_vote_entries == 0""",
+            "Verus volatile preservation must distinguish lock-only timeout ownership from advancing-view reset",
+        ),
+        (
+            "verus_advancing_timeout_control_retention_accepted",
+            Path("crates/iroha_sumeragi_core/src/verus_proofs.rs"),
+            "production_action_preserves_volatile_bounds",
+            """&& (if facts.install_view_unchanged {
+                    facts.timeout_control_unchanged
+                } else {
+                    facts.timeout_control_after_absent
+                })""",
+            "&& true",
+            "Verus volatile preservation must prove exact timeout control retention or advancing-view absence",
+        ),
+        (
+            "verus_vote_tautology",
+            Path("crates/iroha_sumeragi_core/src/verus_proofs.rs"),
+            "same_vote_statement",
+            "vote_statement_identity_equal_body!(",
+            "true || vote_statement_identity_equal_body!(",
+            "Verus vote identity must invoke the shared production macro",
+        ),
+    )
+    for case, relative, item, old, new, error_fragment in mutations:
+        repo_root = tmp_path / case
+        for source_path in source_paths:
+            destination = repo_root / source_path
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(ROOT_DIR / source_path, destination)
+        path = repo_root / relative
+        source = path.read_text(encoding="utf-8")
+        marker = f"macro_rules! {item} {{"
+        start = source.find(marker)
+        if start >= 0:
+            assert source.count(old) == 1, (item, old)
+            mutation = source.find(old)
+            assert mutation > start, (item, old)
+            path.write_text(
+                source[:mutation] + new + source[mutation + len(old) :],
+                encoding="utf-8",
+            )
+        else:
+            mutate_rust_item_source(module, path, item, old, new)
+        errors = module._same_round_semantic_kernel_source_fidelity_errors(
+            repo_root
+        )
+        assert any(error_fragment in error for error in errors), errors
+
+
+def test_atomic_timeout_completion_contract_rejects_split_or_stale_projection(
+    tmp_path: Path,
+) -> None:
+    """The local timeout receipt, TC formation, and readiness stay atomic."""
+
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    formal_dir.mkdir()
+    paths = {
+        name: formal_dir / name
+        for name in ("SumeragiV2Core.tla", "SumeragiV2AsyncNetwork.tla")
+    }
+    canonical = {}
+    for name, destination in paths.items():
+        source = (module.FORMAL_DIR / name).read_text(encoding="utf-8")
+        destination.write_text(source, encoding="utf-8")
+        canonical[name] = source
+
+    assert module._atomic_timeout_completion_source_fidelity_errors(formal_dir) == []
+
+    mutations = (
+        (
+            "SumeragiV2Core.tla",
+            "     /\\ vote.highestPrepareQc = highestPrepareQc[node]\n",
+            "",
+            "LocalTimeoutCompletionGuard must equal only",
+        ),
+        (
+            "SumeragiV2Core.tla",
+            "     /\\ ExactPrepareQcMatchesRef(\n"
+            "          vote.highestPrepareQc, vote.highRank, vote.highSubject)\n",
+            "     /\\ AuthenticatedHighRef(vote.highRank, vote.highSubject)\n",
+            "LocalTimeoutCompletionGuard must equal only",
+        ),
+        (
+            "SumeragiV2Core.tla",
+            "  IN /\\ LocalTimeoutCompletionGuard(request)\n",
+            "  IN /\\ TRUE\n",
+            "CompleteTimeoutSignature must invoke",
+        ),
+        (
+            "SumeragiV2Core.tla",
+            "      /\\ entry.node = node\n"
+            "      /\\ entry.vote.context = context\n"
+            "      /\\ entry.vote.view = roundView}}\n",
+            "      /\\ entry.node = node\n"
+            "      /\\ entry.vote.view = roundView}}\n",
+            "TimeoutVotesIn must equal only",
+        ),
+        (
+            "SumeragiV2AsyncNetwork.tla",
+            "CompleteTimeoutSignatureReady(request) ==\n"
+            "  LocalTimeoutCompletionGuard(request)\n",
+            "CompleteTimeoutSignatureReady(request) == TRUE\n",
+            "CompleteTimeoutSignatureReady must equal only",
+        ),
+    )
+    for name, needle, replacement, expected_error in mutations:
+        source = canonical[name]
+        assert source.count(needle) == 1, needle
+        paths[name].write_text(
+            source.replace(needle, replacement, 1), encoding="utf-8"
+        )
+        errors = module._atomic_timeout_completion_source_fidelity_errors(
+            formal_dir
+        )
+        assert any(expected_error in error for error in errors), errors
+        paths[name].write_text(source, encoding="utf-8")

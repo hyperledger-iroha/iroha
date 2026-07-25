@@ -987,11 +987,6 @@ THEOREM ReplyRetireAttemptsEffect ==
          ELSE attempt: attempt \in rrAttempts}
 BY SMTT(5) DEF RetireReplySource
 
-ReplyAttemptAfterRetire(owner, source, attempt) ==
-  IF attempt.owner = owner /\ attempt.source = source
-  THEN ReplyAttemptWithoutTicket(attempt)
-  ELSE attempt
-
 THEOREM ReplyRetireOwnedAttemptProjection ==
   \A owner \in ReplyOwners, source \in ReplySources,
      checkedOwner \in ReplyOwners,
@@ -4528,15 +4523,6 @@ PROOF
     <2> QED BY <1>1, <2>1, SMTT(10)
   <1> QED BY <1>1
 
-THEOREM ReplyFunctionalUpdatePreservesType ==
-  \A domain, codomain, mapping, key, value:
-    /\ mapping \in [domain -> codomain]
-    /\ key \in domain
-    /\ value \in codomain
-    => [mapping EXCEPT ![key] = value]
-         \in [domain -> codomain]
-BY Isa
-
 THEOREM ReplyNatIntervalSuccessor ==
   \A upper \in Nat:
     \A value \in 1..upper:
@@ -5338,7 +5324,7 @@ PROOF
          ReplyFunctionalUpdatePreservesType
   <1> QED BY <1>1
 
-THEOREM ReplyFunctionalUpdateAtKey ==
+THEOREM ReplyPipelineFunctionalUpdateAtKey ==
   \A domain, codomain, mapping, key, value:
     /\ mapping \in [domain -> codomain]
     /\ key \in domain
@@ -5982,7 +5968,7 @@ PROOF
     <2>5. rpNextTicketId'[owner] =
              rpNextTicketId[owner] + 1
       BY <1>1, <2>3, <2>4,
-         ReplyFunctionalUpdateAtKey
+         ReplyPipelineFunctionalUpdateAtKey
     <2>6. ticketedItem.ticketId <
              rpNextTicketId'[ticketedItem.owner]
       BY <2>1, <2>2, <2>5, SMT
@@ -7020,35 +7006,41 @@ PROOF
 THEOREM ReplyAdmitFlushEstablishesSelectedItemBinding ==
   \A owner \in ReplyOwners, semantic \in ReplySemantics,
      source \in ReplySources:
-    \A selected:
-      /\ selected = ReplyPipelineItemFor(owner, semantic, source)
-      /\ ReplyPipelineInductiveInvariant
-      /\ AdmitReplyPipelineItem(owner, semantic, source)
-      /\ selected.flushRequired
-      => LET admitted ==
-               ReplyPipelineItemWithPhase(selected, "Admitted")
-         IN /\ admitted \in rpItems'
-            /\ ReplyPipelineItemCoreBinding(admitted)'
-            /\ ReplyPipelineItemRouteBinding(admitted)'
-            /\ ReplyPipelineItemPhaseBinding(admitted)'
+    LET selected ==
+          ReplyPipelineItemFor(owner, semantic, source)
+        admitted ==
+          ReplyPipelineItemWithPhase(selected, "Admitted")
+    IN /\ ReplyPipelineInductiveInvariant
+       /\ AdmitReplyPipelineItem(owner, semantic, source)
+       /\ selected.flushRequired
+       => /\ admitted \in rpItems'
+          /\ ReplyPipelineItemCoreBinding(admitted)'
+          /\ ReplyPipelineItemRouteBinding(admitted)'
+          /\ ReplyPipelineItemPhaseBinding(admitted)'
 PROOF
   <1>1. ASSUME NEW owner \in ReplyOwners,
                 NEW semantic \in ReplySemantics,
                 NEW source \in ReplySources,
-                NEW selected,
-                selected =
-                  ReplyPipelineItemFor(owner, semantic, source),
-                ReplyPipelineInductiveInvariant,
-                AdmitReplyPipelineItem(owner, semantic, source),
-                selected.flushRequired
-         PROVE LET admitted ==
-                     ReplyPipelineItemWithPhase(selected, "Admitted")
+                LET selected ==
+                      ReplyPipelineItemFor(owner, semantic, source)
+                    admitted ==
+                      ReplyPipelineItemWithPhase(
+                        selected, "Admitted")
+                IN /\ ReplyPipelineInductiveInvariant
+                   /\ AdmitReplyPipelineItem(
+                        owner, semantic, source)
+                   /\ selected.flushRequired
+         PROVE LET selected ==
+                     ReplyPipelineItemFor(owner, semantic, source)
+                   admitted ==
+                     ReplyPipelineItemWithPhase(
+                       selected, "Admitted")
                IN /\ admitted \in rpItems'
                   /\ ReplyPipelineItemCoreBinding(admitted)'
                   /\ ReplyPipelineItemRouteBinding(admitted)'
                   /\ ReplyPipelineItemPhaseBinding(admitted)'
     <2> DEFINE SelectedItem ==
-          selected
+          ReplyPipelineItemFor(owner, semantic, source)
     <2> DEFINE AdmittedItem ==
           ReplyPipelineItemWithPhase(SelectedItem, "Admitted")
     <2>1a. SelectedItem \in rpItems

@@ -1164,14 +1164,6 @@ PROOF
          WellFoundedLeadsTo
   <1> QED BY <1>1
 
-ProtectedStage3RankProgressProperty(specification) ==
-  specification
-    => \A candidate \in AsyncCandidateSet, position \in Nat:
-         (gst
-           /\ ResponsiveProtectedCandidateOwned(candidate)
-           /\ CandidateServiceRank(candidate) = <<3, position>>)
-           ~> Stage3RankProgressExit(candidate, position)
-
 THEOREM ProtectedStage3RankProgressFromFairSchedulerObligation ==
   \A initialContext:
     ProtectedStage3RankProgressProperty(AsyncSpecAt(initialContext))
@@ -1211,5 +1203,9 @@ PROOF
     <2> QED BY <2>1 DEF ProtectedStage3RankProgressProperty
   <1> QED BY <1>1
 
+THEOREM FairProtectedStage3RankProgress ==
+  \A initialContext:
+    ProtectedStage3RankProgressProperty(AsyncSpecAt(initialContext))
+BY ProtectedStage3RankProgressFromFairSchedulerObligation
 
 =============================================================================

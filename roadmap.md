@@ -25159,9 +25159,12 @@ the exact runner route bridges and missing-route rejections for
 durable lane certificates and certified sidecar chunks, plus the four-gate,
 two-session, 16-MiB per-source sidecar cap and same-hub overflow isolation
 tests. The added authenticated-source limit and pre-cap alternate-route
-regressions are not covered by that historical 50/50 receipt. Outstanding
-release work for this
-slice is to execute those complete source-sealed suites, add a
+regressions are not covered by that historical 50/50 receipt. The current
+closure journals requester and responder lifecycle state under Kura, preserves
+authenticated-source budgets and cursors across restart/height rollover, and
+fail-stops request, queued-chunk, timeout, Close, and CloseAck output when that
+journal cannot advance. Outstanding release work for this slice is to execute
+those complete source-sealed suites, add a
 four-validator signed-observer slow-reader flood during view change/body
 recovery, discharge the remaining formal obligations, and run the sealed
 network, chaos, and 24-hour soak gates.
@@ -25667,7 +25670,7 @@ transport/runner closure (186/186 and 204/204), the recovery execution hierarchy
 (305/305), its strong caller and bracket (63/63), the exact type obligation
 (16/16), and the named always-strong wrapper (10/10).
 
-The 54-entry ledger contains 33 `tlaps_proved`, 14 `specified_unproved`, 6
+The 59-entry ledger contains 35 `tlaps_proved`, 17 `specified_unproved`, 6
 `trusted_contract`, and 1 `out_of_scope` entries; machine-checked completion
 remains false. Outstanding release work:
 
@@ -25687,10 +25690,12 @@ runtime premise on the final signed source.
   7,826-obligation induction and 565-obligation downstream Core receipt is
   historical evidence for the superseded transition relation and cannot
   promote the current source;
-- execute the fresh source-sealed 515-test, 38-module, 71-leg pre-network
-  corridor. Its proposal-origin additions cover strict same-round TC
+- execute the fresh source-sealed 585-test, 39-module, 82-leg pre-network
+  corridor. Its proposal-origin and per-source route-attempt additions cover
+  strict same-round TC
   upgrade/replay, exact locked-Commit recovery ownership, multi-carrier ingress,
-  and persistence failure. Its final six regressions cover canonical view-zero
+  persistence failure, and certified sidecar Close/CloseAck critical ingress.
+  Its final six regressions cover canonical view-zero
   genesis bytes first proposed in a later round, the contention-tolerant restart
   deadline, the successor's frozen predecessor CommitQC binding, Kura-first lane
   rollover, incomplete-tip recovery, and terminal ingress filtering. Inventory
@@ -25921,7 +25926,7 @@ runtime premise on the final signed source.
   integration names ran as one module-filtered leg, while the complete
   pre-network corridor had 53 legs. Fresh full discovery/serial execution and
   the clean source-sealed rerun were pending for all 477 names; the current
-  515-test target above supersedes that checkpoint. The 30-module pre-network
+  585-test target above supersedes that checkpoint. The 39-module pre-network
   production-liveness inventory includes completion
   ownership, installed destination rebind, unbound-Vote authority,
   exact-lock/consumer-epoch admission, transactional certified retirement,

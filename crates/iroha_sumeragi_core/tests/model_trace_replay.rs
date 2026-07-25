@@ -55,7 +55,6 @@ enum ModelAction {
     PersistTimeout,
     CompleteTimeoutSignature,
     DeliverTimeout,
-    FormTc,
     PersistInstallTc,
     DeliverTc,
     BeginInstallTc,
@@ -89,7 +88,6 @@ impl ModelAction {
             "PersistTimeout" => Ok(Self::PersistTimeout),
             "CompleteTimeoutSignature" => Ok(Self::CompleteTimeoutSignature),
             "DeliverTimeout" => Ok(Self::DeliverTimeout),
-            "FormTC" => Ok(Self::FormTc),
             "PersistInstallTC" => Ok(Self::PersistInstallTc),
             "DeliverTC" => Ok(Self::DeliverTc),
             "BeginInstallTC" => Ok(Self::BeginInstallTc),
@@ -201,6 +199,15 @@ fn parse_trace(input: &str) -> Result<Vec<ModelStep>, String> {
     Ok(steps)
 }
 
+fn replace_exactly_once(input: &str, anchor: &str, replacement: &str) -> String {
+    let occurrences = input.matches(anchor).count();
+    assert_eq!(
+        occurrences, 1,
+        "trace mutation anchor must occur exactly once, found {occurrences}: {anchor:?}"
+    );
+    input.replacen(anchor, replacement, 1)
+}
+
 fn required<T: Copy>(value: Option<T>, step: ModelStep, field: &str) -> Result<T, String> {
     value.ok_or_else(|| format!("step {} {:?} is missing {field}", step.number, step.action))
 }
@@ -275,6 +282,11 @@ fn validate_model_trace(steps: &[ModelStep]) -> Result<(), String> {
                 if !timeout_persisted.contains(&key) || !timeout_signed.insert(key) {
                     return Err(error("timeout signature lacks a durable unique intent"));
                 }
+                let receipts = delivered_timeouts.entry(key).or_default();
+                receipts.insert(key.0);
+                if receipts.len() >= 3 {
+                    formed_timeout_certificates.insert(key);
+                }
             }
             ModelAction::DeliverTimeout => {
                 let node = required(step.node, step, "node")?;
@@ -283,21 +295,11 @@ fn validate_model_trace(steps: &[ModelStep]) -> Result<(), String> {
                 if !timeout_signed.contains(&(peer, view)) {
                     return Err(error("timeout delivery has no signed source"));
                 }
-                delivered_timeouts
-                    .entry((node, view))
-                    .or_default()
-                    .insert(peer);
-            }
-            ModelAction::FormTc => {
-                let node = required(step.node, step, "node")?;
-                let view = required(step.view, step, "view")?;
-                if delivered_timeouts
-                    .get(&(node, view))
-                    .map_or(0, BTreeSet::len)
-                    < 3
-                    || !formed_timeout_certificates.insert((node, view))
-                {
-                    return Err(error("TC formation lacks a distinct-validator quorum"));
+                let key = (node, view);
+                let receipts = delivered_timeouts.entry(key).or_default();
+                receipts.insert(peer);
+                if receipts.len() >= 3 {
+                    formed_timeout_certificates.insert(key);
                 }
             }
             ModelAction::PersistInstallTc => {
@@ -561,10 +563,16 @@ fn validate_model_trace(steps: &[ModelStep]) -> Result<(), String> {
                 let node = required(step.node, step, "node")?;
                 let view = required(step.view, step, "view")?;
                 let subject = required(step.subject, step, "subject")?;
-                if !delivered_quorum_certificates.contains(&(node, view, Phase::Prepare, subject))
+                let prepare_qc_was_formed_locally =
+                    formed_quorum_certificates.contains(&(node, view, Phase::Prepare, subject));
+                let prepare_qc_was_delivered =
+                    delivered_quorum_certificates.contains(&(node, view, Phase::Prepare, subject));
+                if (!prepare_qc_was_formed_locally && !prepare_qc_was_delivered)
                     || !lock_begun.insert((node, view, subject))
                 {
-                    return Err(error("Commit lock lacks one delivered PrepareQC"));
+                    return Err(error(
+                        "Commit lock lacks one locally formed or delivered PrepareQC",
+                    ));
                 }
             }
             ModelAction::PersistLockCommit => {
@@ -626,6 +634,7 @@ struct ProductionReplay {
     context: HeightContext,
     nodes: Vec<ReplayNode>,
     network: Vec<Envelope>,
+    delivered_timeout_certificates: Vec<Envelope>,
     assembled: BTreeSet<(usize, ModelSubject)>,
     signatures: u64,
     backpressured: usize,
@@ -652,6 +661,7 @@ impl ProductionReplay {
             context,
             nodes,
             network: Vec::new(),
+            delivered_timeout_certificates: Vec::new(),
             assembled: BTreeSet::new(),
             signatures: 0,
             backpressured: 0,
@@ -887,6 +897,32 @@ impl ProductionReplay {
         if position != 0 {
             self.reordered_deliveries += 1;
         }
+        // The model separates authenticated TC delivery from reducer
+        // installation. Preserve that boundary so local TC formation can run
+        // while an independently delivered equal certificate waits in ingress.
+        if action == ModelAction::DeliverTc {
+            self.delivered_timeout_certificates.push(envelope);
+            return;
+        }
+        let event = network_event(&envelope.message, self.nodes[node].reducer.current_tag());
+        self.dispatch_deferred(node, DeferredEvent::AuthenticatedIngress(event));
+    }
+
+    fn begin_install_tc(&mut self, node: usize, step: ModelStep) {
+        let position = self
+            .delivered_timeout_certificates
+            .iter()
+            .position(|envelope| {
+                envelope.to == node
+                    && message_matches(&envelope.message, ModelAction::DeliverTc, None, step)
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "step {} cannot find one delivered TimeoutCertificate for node {node}",
+                    step.number
+                )
+            });
+        let envelope = self.delivered_timeout_certificates.swap_remove(position);
         let event = network_event(&envelope.message, self.nodes[node].reducer.current_tag());
         self.dispatch_deferred(node, DeferredEvent::AuthenticatedIngress(event));
     }
@@ -924,12 +960,6 @@ impl ProductionReplay {
                     matches!(message, SignableMessage::TimeoutVote(vote) if vote.round().view() == step.view.unwrap())
                 });
             }
-            ModelAction::FormTc => {
-                let node = step.node.unwrap();
-                assert!(self.has_persist(node, |record| {
-                    matches!(record, WalRecord::InstallTimeout(tc) if tc.round().view() == step.view.unwrap())
-                }));
-            }
             ModelAction::PersistInstallTc => {
                 self.acknowledge_persist(step.node.unwrap(), |record| {
                     matches!(record, WalRecord::InstallTimeout(tc) if tc.round().view() == step.view.unwrap())
@@ -937,6 +967,7 @@ impl ProductionReplay {
             }
             ModelAction::BeginInstallTc => {
                 let node = step.node.unwrap();
+                self.begin_install_tc(node, step);
                 assert!(self.has_persist(node, |record| {
                     matches!(record, WalRecord::InstallTimeout(tc) if tc.round().view() == step.view.unwrap())
                 }));
@@ -1273,7 +1304,7 @@ fn assert_every_witness_wal_prefix_recovers(replay: &ProductionReplay, subject: 
 #[test]
 fn tlc_liveness_witness_replays_against_the_production_reducer() {
     let steps = parse_trace(TRACE).expect("checked-in source-aligned trace is valid");
-    assert_eq!(steps.len(), 95);
+    assert_eq!(steps.len(), 91);
     let mut source_locks = [None; 4];
     for step in &steps {
         match step.action {
@@ -1306,7 +1337,6 @@ fn tlc_liveness_witness_replays_against_the_production_reducer() {
         ModelAction::PersistTimeout,
         ModelAction::CompleteTimeoutSignature,
         ModelAction::DeliverTimeout,
-        ModelAction::FormTc,
         ModelAction::PersistInstallTc,
         ModelAction::BeginLocalProposal,
         ModelAction::PersistProposal,
@@ -1482,21 +1512,25 @@ fn identical_commit_envelope_stutters_before_lock_and_is_admitted_after_persiste
 
 #[test]
 fn malformed_and_unsafe_normalized_traces_fail_closed() {
-    let unknown = TRACE.replacen("SetGST", "InventSafety", 1);
+    let unknown = replace_exactly_once(TRACE, "SetGST", "InventSafety");
     assert!(
         parse_trace(&unknown)
             .unwrap_err()
             .contains("unknown model action")
     );
 
-    let non_contiguous = TRACE.replacen("2\tBeginTimeout", "7\tBeginTimeout", 1);
+    let non_contiguous = replace_exactly_once(TRACE, "2\tBeginTimeout", "7\tBeginTimeout");
     assert!(
         parse_trace(&non_contiguous)
             .unwrap_err()
             .contains("non-contiguous")
     );
 
-    let wrong_leader = TRACE.replacen("40\tBeginLocalProposal\t0", "40\tBeginLocalProposal\t1", 1);
+    let wrong_leader = replace_exactly_once(
+        TRACE,
+        "32\tBeginLocalProposal\t0",
+        "32\tBeginLocalProposal\t1",
+    );
     assert!(
         parse_trace(&wrong_leader)
             .unwrap_err()
@@ -1506,10 +1540,10 @@ fn malformed_and_unsafe_normalized_traces_fail_closed() {
     // Replace the third distinct Prepare signer delivered to node zero with a
     // duplicate signer. The syntactic trace remains well formed but the model
     // validator refuses to manufacture a QC from two distinct validators.
-    let under_quorum = TRACE.replacen(
-        "71\tDeliverVote\t0\t2\t1\tPrepare\tA",
-        "71\tDeliverVote\t0\t1\t1\tPrepare\tA",
-        1,
+    let under_quorum = replace_exactly_once(
+        TRACE,
+        "68\tDeliverVote\t0\t1\t1\tPrepare\tA",
+        "68\tDeliverVote\t0\t2\t1\tPrepare\tA",
     );
     assert!(
         parse_trace(&under_quorum)
@@ -1521,48 +1555,31 @@ fn malformed_and_unsafe_normalized_traces_fail_closed() {
     // two before node two's LockAndCommit acknowledgement. The authenticated
     // packet is a safe receiver-side stutter and must not be counted toward
     // the later CommitQC.
-    let unlocked_commit = TRACE
-        .replacen(
-            "76\tBeginLockCommit\t2\t-\t1\tPrepare\tA\n\
-         77\tBeginLockCommit\t0\t-\t1\tPrepare\tA\n\
-         78\tPersistLockCommit\t2\t-\t1\tPrepare\tA\n\
-         79\tCompleteVoteSignature\t2\t-\t1\tCommit\tA\n\
-         80\tPersistLockCommit\t0\t-\t1\tPrepare\tA\n\
-         81\tCompleteVoteSignature\t0\t-\t1\tCommit\tA\n\
-         82\tDeliverQC\t1\t-\t1\tPrepare\tA\n\
-         83\tDeliverVote\t0\t2\t1\tCommit\tA\n\
-         84\tDeliverVote\t2\t0\t1\tCommit\tA",
-            "76\tBeginLockCommit\t2\t-\t1\tPrepare\tA\n\
-         77\tBeginLockCommit\t0\t-\t1\tPrepare\tA\n\
-         78\tPersistLockCommit\t0\t-\t1\tPrepare\tA\n\
-         79\tCompleteVoteSignature\t0\t-\t1\tCommit\tA\n\
-         80\tDeliverVote\t2\t0\t1\tCommit\tA\n\
-         81\tPersistLockCommit\t2\t-\t1\tPrepare\tA\n\
-         82\tDeliverQC\t1\t-\t1\tPrepare\tA\n\
-         83\tCompleteVoteSignature\t2\t-\t1\tCommit\tA\n\
-         84\tDeliverVote\t0\t2\t1\tCommit\tA",
-            1,
-        )
-        .replacen(
-            "92\tFormCommitQC\t1\t-\t1\tCommit\tA",
-            "92\tFormCommitQC\t2\t-\t1\tCommit\tA",
-            1,
-        )
-        .replacen(
-            "95\tPersistDecision\t1\t-\t1\tCommit\tA",
-            "95\tPersistDecision\t2\t-\t1\tCommit\tA",
-            1,
-        );
+    let unlocked_commit = replace_exactly_once(
+        TRACE,
+        "77\tDeliverQC\t3\t-\t1\tPrepare\tA",
+        "77\tDeliverVote\t2\t0\t1\tCommit\tA",
+    );
+    let unlocked_commit = replace_exactly_once(
+        &unlocked_commit,
+        "80\tDeliverQC\t0\t-\t1\tPrepare\tA",
+        "80\tDeliverQC\t3\t-\t1\tPrepare\tA",
+    );
+    let unlocked_commit = replace_exactly_once(
+        &unlocked_commit,
+        "84\tDeliverVote\t2\t0\t1\tCommit\tA",
+        "84\tDeliverQC\t0\t-\t1\tPrepare\tA",
+    );
     assert!(
         parse_trace(&unlocked_commit)
             .unwrap_err()
             .contains("distinct-validator phase quorum")
     );
 
-    let missing_column = TRACE.replacen(
-        "2\tBeginTimeout\t1\t-\t0\t-\t-",
-        "2\tBeginTimeout\t1\t-\t0\t-",
-        1,
+    let missing_column = replace_exactly_once(
+        TRACE,
+        "2\tBeginTimeout\t2\t-\t0\t-\t-",
+        "2\tBeginTimeout\t2\t-\t0\t-",
     );
     assert!(
         parse_trace(&missing_column)

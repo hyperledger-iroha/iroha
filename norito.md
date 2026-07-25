@@ -190,10 +190,11 @@ shares its deterministic trigger gas budget across the complete sequence.
 
 ## Sumeragi v2 Consensus Evidence Layout
 
-Sumeragi v2 votes and quorum certificates authenticate two distinct rounds:
-the round in which validators issued the vote and the immutable round in which
-the proposal body originated. The first-release canonical struct field order
-is:
+Sumeragi v2 votes and quorum certificates carry both `round` and
+`proposal_round`, but first-release validity requires them to be equal for
+every Prepare and Commit item. The duplicated authenticated fields make the
+proposal carrier explicit; they do not permit a split-round Commit. The
+canonical struct field order is:
 
 ```text
 Vote:
@@ -241,24 +242,30 @@ stage
 ```
 
 `proposal_round` is mandatory and is included in the vote signature preimage.
-For Prepare evidence it must equal `round`. For Commit evidence it must use the
-same context and height and may name an earlier view, but never a later one.
-Body requests, durable manifests, validation receipts, finality artifacts, and
-application recovery bind exactly to `proposal_round`; they must not infer it
-from a local lock or substitute the Commit certification round. The unreleased
-Vote/QC layout without this field has no decoder or compatibility fallback.
-Liveness vote-quorum rows carry the same mandatory origin. Outbound proposal,
+For both Prepare and Commit evidence it must equal `round`, including context,
+height, and view. Body requests, durable manifests, validation receipts, and
+finality artifacts bind the exact round-specific carrier. Application and
+successor-context derivation additionally use semantic decision identity:
+context, height, Commit phase, subject, and execution commitment. That
+projection ignores the reproposal/QC round, signer subset, and aggregate bytes,
+so an unchanged locked body decided after reproposal cannot fork successor
+context. The unreleased Vote/QC layout without `proposal_round` has no decoder
+or compatibility fallback. Liveness vote-quorum rows carry the same mandatory
+round. Outbound proposal,
 Prepare-vote, Commit-vote, Prepare-QC, and Commit-QC intents carry
 `Some(proposal_round)`; timeout-vote and timeout-certificate intents carry
-`None`. This status field is diagnostic, but it obeys the same context, height,
-and non-future-origin rules as the authenticated evidence it describes.
+`None`. This status field is diagnostic, but every proposal-authenticating row
+obeys the same exact-round rule as the evidence it describes. An old durable
+same-round Commit may remain visible for retransmission after timeout; a later
+intent cannot reuse its `proposal_round`.
 
 The successor [`HeightContext`](crates/iroha_data_model/src/block/consensus_v2.rs)
-identity projection also includes the complete parent `proposal_round`. It
-continues to exclude only the parent CommitQC's later certification view,
-signer subset, and aggregate signature. Consequently nodes that learned the
-same proposal through different later-view certificates derive one successor
-context, while origin-distinct parent decisions cannot alias.
+identity projection excludes the parent's `round` and `proposal_round` together
+with its signer subset and aggregate signature. It retains the parent context,
+height, Commit phase, subject, and execution commitment. Consequently nodes
+that decide an unchanged body in different reproposal rounds derive one
+successor context, while body- or execution-distinct parent decisions cannot
+alias.
 
 ## Hardware Acceleration Validation
 

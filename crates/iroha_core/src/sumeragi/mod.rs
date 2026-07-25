@@ -2313,8 +2313,9 @@ fn fair_v2_ingress_required_proposal_bytes(
         let signature_bytes = iroha_data_model::block::consensus_v2::MAX_CONSENSUS_SIGNATURE_BYTES;
         let manifest_bytes = fair_v2_ingress_required_manifest_bytes(layout)?;
 
-        // QuorumCertificate = certified Round + proposal-origin Round + phase
-        // + Subject + ExecutionCommitment + Vec<ValidatorIndex> + aggregate signature.
+        // QuorumCertificate = certified Round + its repeated strict-same-round
+        // proposal field + phase + Subject + ExecutionCommitment
+        // + Vec<ValidatorIndex> + aggregate signature.
         let signature_vector_bytes = signature_bytes.checked_add(8)?;
         let quorum_certificate_bytes =
             fair_v2_ingress_required_quorum_certificate_bytes(roster_len)?;

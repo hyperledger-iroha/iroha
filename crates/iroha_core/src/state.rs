@@ -51885,6 +51885,50 @@ mod tiered_snapshot_diff_tests {
 
     const SCCP_SNAPSHOT_CHAIN_ID: &str = iroha_sccp::SCCP_TAIRA_FINALITY_CHAIN_ID_V1;
 
+    fn authenticated_sccp_archive_kura() -> Arc<Kura> {
+        let catalog = LaneCatalog::default();
+        let lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(&catalog);
+        let config = iroha_config::parameters::actual::Kura {
+            init_mode: iroha_config::kura::InitMode::Strict,
+            // The temporary authenticated constructor replaces this path before opening Kura.
+            store_dir: iroha_config::base::WithOrigin::inline(std::path::PathBuf::new()),
+            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
+            blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
+            debug_output_new_blocks: false,
+            merge_ledger_cache_capacity:
+                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
+            fsync_mode: iroha_config::kura::FsyncMode::Batched,
+            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
+            block_sync_roster_retention:
+                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
+            roster_sidecar_retention:
+                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            eviction_required_replicas:
+                iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS,
+        };
+        let kura =
+            Kura::new_temporary_with_configured_lane_catalog(&config, &lane_config, &catalog)
+                .expect("initialize authenticated SCCP archive Kura");
+        let baseline = LaneLifecycleParameterV1::catalog_hash(&catalog);
+        let incarnations =
+            derive_static_lane_incarnations(&ChainId::from(SCCP_SNAPSHOT_CHAIN_ID), &catalog);
+        let activation_heights = BTreeMap::from([(LaneId::SINGLE, 0)]);
+        kura.establish_or_verify_configured_primary_geometry_anchor(
+            lane_config.primary(),
+            incarnations[&LaneId::SINGLE],
+            baseline,
+        )
+        .expect("anchor authenticated SCCP primary geometry");
+        kura.mark_lane_geometry_catalog_published(
+            &lane_config,
+            &incarnations,
+            &activation_heights,
+            Some(baseline),
+        )
+        .expect("publish authenticated SCCP lane geometry");
+        kura
+    }
+
     fn seed_sccp_snapshot_block_hashes(
         state: &State,
         hashes: impl IntoIterator<Item = HashOf<BlockHeader>>,
@@ -52096,7 +52140,7 @@ mod tiered_snapshot_diff_tests {
         let finality =
             iroha_sccp::decode_taira_bridge_finality_proof(&fixture.bundle.finality_proof)
                 .expect("exact completed SCCP finality fixture decodes");
-        let kura = Kura::blank_kura_for_testing();
+        let kura = authenticated_sccp_archive_kura();
         kura.persist_block_with_retained_archive_for_tests(&block)
             .expect("persist exact SCCP block and archive");
         let _receipt = kura
@@ -52156,11 +52200,23 @@ mod tiered_snapshot_diff_tests {
         let entry_hash = transaction.hash_as_entrypoint();
         let accepted =
             crate::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Owned(transaction));
+        // This fixture exercises the retained SCCP archive, not lane-consensus
+        // artifact replay. Supply the exact external routing context so the
+        // generic block-builder test helper does not fabricate lane-block
+        // height one for every member of this multi-height chain.
+        let execution_context = iroha_data_model::block::BlockExecutionContextBundle::new(vec![
+            iroha_data_model::block::ExternalExecutionContext::new(
+                entry_hash,
+                LaneId::SINGLE,
+                DataSpaceId::UNIVERSAL,
+            ),
+        ]);
         let root = iroha_sccp::commitment_merkle_root(&[projection.commitment]);
         let signer = checked_keypair();
         let mut block: SignedBlock = crate::block::BlockBuilder::new(vec![accepted])
             .chain(0, previous)
             .with_sccp_commitment_root(root)
+            .with_execution_context(Some(execution_context))
             .sign(signer.private_key())
             .unpack(|_| {})
             .into();
@@ -52207,7 +52263,7 @@ mod tiered_snapshot_diff_tests {
     fn snapshot_with_whole_sccp_height_removed(
         removed_position: usize,
     ) -> (norito::json::Value, Arc<Kura>, u64) {
-        let kura = Kura::blank_kura_for_testing();
+        let kura = authenticated_sccp_archive_kura();
         let mut previous = None;
         let mut blocks = Vec::new();
         let mut records = Vec::new();
@@ -53841,7 +53897,7 @@ mod tiered_snapshot_diff_tests {
 
     #[test]
     fn sccp_snapshot_allows_rootless_committed_height_and_nonempty_kura_suffix() {
-        let kura = Kura::blank_kura_for_testing();
+        let kura = authenticated_sccp_archive_kura();
         let rootless = rootless_retained_block(None);
         kura.persist_block_with_retained_archive_for_tests(&rootless)
             .expect("persist rootless committed block");

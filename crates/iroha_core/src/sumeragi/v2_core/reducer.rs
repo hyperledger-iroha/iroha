@@ -738,23 +738,24 @@ impl Reducer {
             known_prepare.insert(certificate.reference(), certificate.clone());
         }
         let mut outbound_control = BTreeMap::new();
-        if let Some(certificate) = durable.highest_prepare() {
-            outbound_control.insert(
-                OutboundControlClass::PrepareQc,
-                ConsensusMessageV2::QuorumCertificate(certificate.clone()),
-            );
-        }
         if let Some(certificate) = durable.decision() {
             outbound_control.insert(
                 OutboundControlClass::CommitQc,
                 ConsensusMessageV2::QuorumCertificate(certificate.clone()),
             );
-        }
-        if let Some(certificate) = durable.last_timeout() {
-            outbound_control.insert(
-                OutboundControlClass::TimeoutCertificate,
-                ConsensusMessageV2::TimeoutCertificate(certificate.clone()),
-            );
+        } else {
+            if let Some(certificate) = durable.highest_prepare() {
+                outbound_control.insert(
+                    OutboundControlClass::PrepareQc,
+                    ConsensusMessageV2::QuorumCertificate(certificate.clone()),
+                );
+            }
+            if let Some(certificate) = durable.last_timeout() {
+                outbound_control.insert(
+                    OutboundControlClass::TimeoutCertificate,
+                    ConsensusMessageV2::TimeoutCertificate(certificate.clone()),
+                );
+            }
         }
         Ok(Self {
             context,
@@ -924,7 +925,7 @@ impl Reducer {
             .map_or(BodyState::Missing, |work| work.state)
     }
 
-    /// Return the immutable proposal-origin round authenticated by a Decision.
+    /// Return the exact same-round body key authenticated by a Decision.
     fn decision_body_round(&self, decision: &QuorumCertificate) -> Round {
         decision.proposal_round()
     }
@@ -977,7 +978,11 @@ impl Reducer {
         if let Some(timeout) = self.durable.timeout_intent(round) {
             self.signature_queue
                 .push_back(SignableMessage::TimeoutVote(timeout));
-        } else if let Some(proposal) = self.durable.proposal_intent(round) {
+        } else if let Some(proposal) = self
+            .durable
+            .proposal_intent(round)
+            .filter(|proposal| Self::durable_proposal_is_active(&self.durable, proposal))
+        {
             self.signature_queue
                 .push_back(SignableMessage::Proposal(proposal.clone()));
         }
@@ -988,10 +993,11 @@ impl Reducer {
         {
             self.signature_queue.push_back(SignableMessage::Vote(vote));
         }
-        if let Some(vote) = self.durable.locked().and_then(|locked| {
-            self.durable
-                .latest_commit_intent_for_proposal(locked.round(), locked.subject())
-        }) {
+        if let Some(vote) = self
+            .durable
+            .locked()
+            .and_then(|locked| self.durable.commit_intent_for_lock(locked))
+        {
             self.signature_queue.push_back(SignableMessage::Vote(vote));
         }
         StepOutcome::applied(self.drive_signature())
@@ -1070,9 +1076,7 @@ impl Reducer {
             && self.durable.decision().is_none()
             && self.local_validator.is_some()
         {
-            let commit_intent = self
-                .durable
-                .latest_commit_intent_for_proposal(locked.round(), locked.subject());
+            let commit_intent = self.durable.commit_intent_for_lock(locked);
             let progress_witness = locked_commit_progress_witness_is_valid(
                 self.locked_commit_progress_witness_projection(locked, commit_intent),
             );
@@ -1082,15 +1086,13 @@ impl Reducer {
                 }
             } else if self.replay_resumed
                 && self.body_state(locked.round(), locked.subject()) == BodyState::Validated
-                && !self.durable.has_higher_prepare_evidence(locked.round())
                 && !progress_witness
             {
-                // Validation of a TC-promoted lock must atomically start the
-                // exact historical Commit append unless this finality view
-                // already has an acknowledged timeout. That durable timeout
-                // is a typed recovery witness: it forbids signing in the
-                // closed view while guaranteeing the exact lock can be
-                // retried after the next certified transition.
+                // A current-view validated lock must own its exact same-round
+                // Commit append. For a historical TC-promoted lock, the
+                // installed predecessor timeout is instead the typed witness
+                // which authorizes unchanged body re-proposal; it never
+                // authorizes a new Commit for the closed round.
                 return Some(ProgressWitnessViolation::LockedCommitOrphaned);
             }
         }
@@ -1138,6 +1140,7 @@ impl Reducer {
                 .is_some_and(|vote| vote.vote() == intent)
         });
         let timeout_intent = self.durable.timeout_intent(current_round);
+        let installed_timeout = self.durable.last_timeout();
         LockedCommitProgressWitnessProjection {
             context_id: Self::context_identity_projection(self.context.id()),
             current_height: current_round.height(),
@@ -1183,6 +1186,16 @@ impl Reducer {
             timeout_signer: timeout_intent
                 .as_ref()
                 .map_or_else(ValidatorId::default, |vote| vote.signer()),
+            installed_timeout_present: installed_timeout.is_some(),
+            installed_timeout_durable: installed_timeout.is_some(),
+            installed_timeout_context_id: installed_timeout
+                .map_or_else(CanonicalIdentityProjection::zero, |certificate| {
+                    Self::context_identity_projection(certificate.context_id())
+                }),
+            installed_timeout_height: installed_timeout
+                .map_or(0, |certificate| certificate.round().height()),
+            installed_timeout_view: installed_timeout
+                .map_or(0, |certificate| certificate.round().view()),
         }
     }
 
@@ -1287,6 +1300,16 @@ impl Reducer {
             validator_count: Self::cardinality(self.context.roster().len()),
             volatile_before: self.volatile_summary(),
             volatile_after: after.volatile_summary(),
+            timeout_votes_before: &self.timeout_votes,
+            timeout_votes_after: &after.timeout_votes,
+            formed_timeouts_before: &self.formed_timeouts,
+            formed_timeouts_after: &after.formed_timeouts,
+            timeout_control_before: self
+                .outbound_control
+                .get(&OutboundControlClass::TimeoutVote),
+            timeout_control_after: after
+                .outbound_control
+                .get(&OutboundControlClass::TimeoutVote),
             boundary_claimed,
             boundary_granted,
             enter_view: self.enter_view_projection(after, effects),
@@ -1415,24 +1438,44 @@ impl Reducer {
     }
 
     fn signable_is_durably_authorized(&self, message: &SignableMessage) -> bool {
+        Self::signable_is_durably_authorized_for(&self.durable, message)
+    }
+
+    fn signable_is_durably_authorized_for(
+        durable: &DurableState,
+        message: &SignableMessage,
+    ) -> bool {
         match message {
             SignableMessage::Proposal(proposal) => {
-                Self::durable_proposal_is_active(&self.durable, proposal)
+                Self::durable_proposal_is_active(durable, proposal)
             }
-            SignableMessage::Vote(vote) => Self::durable_vote_is_active(&self.durable, *vote),
+            SignableMessage::Vote(vote) => Self::durable_vote_is_active(durable, *vote),
             SignableMessage::TimeoutVote(vote) => {
-                Self::durable_timeout_vote_is_active(&self.durable, vote)
+                Self::durable_timeout_vote_is_active(durable, vote)
             }
         }
     }
 
     fn durable_proposal_is_active(durable: &DurableState, proposal: &Proposal) -> bool {
-        proposal.round() == Round::new(durable.height(), durable.current_view())
+        let exact_justification = match proposal.justification() {
+            ProposalJustification::ParentCommit(_) => proposal.round().view() == 0,
+            ProposalJustification::Timeout(certificate) => durable
+                .is_exact_local_proposal_timeout_justification(
+                    proposal.round().view(),
+                    certificate,
+                ),
+        };
+        durable.decision().is_none()
+            && proposal.round() == Round::new(durable.height(), durable.current_view())
             && durable.timeout_intent(proposal.round()).is_none()
             && durable.proposal_intent(proposal.round()) == Some(proposal)
+            && exact_justification
     }
 
     fn durable_vote_is_active(durable: &DurableState, vote: Vote) -> bool {
+        if durable.decision().is_some() {
+            return false;
+        }
         match vote.phase() {
             Phase::Prepare => {
                 vote.round() == Round::new(durable.height(), durable.current_view())
@@ -1442,14 +1485,14 @@ impl Reducer {
             Phase::Commit => durable.locked().is_some_and(|locked| {
                 locked.round() == vote.proposal_round()
                     && locked.subject() == vote.subject()
-                    && durable.latest_commit_intent_for_proposal(locked.round(), locked.subject())
-                        == Some(vote)
+                    && durable.commit_intent_for_lock(locked) == Some(vote)
             }),
         }
     }
 
     fn durable_timeout_vote_is_active(durable: &DurableState, vote: &TimeoutVote) -> bool {
-        vote.round() == Round::new(durable.height(), durable.current_view())
+        durable.decision().is_none()
+            && vote.round() == Round::new(durable.height(), durable.current_view())
             && durable.timeout_intent(vote.round()) == Some(vote.clone())
     }
 
@@ -1458,13 +1501,24 @@ impl Reducer {
         durable: &DurableState,
         message: &ConsensusMessageV2,
     ) -> bool {
+        if let Some(decision) = durable.decision() {
+            return matches!(
+                message,
+                ConsensusMessageV2::QuorumCertificate(certificate)
+                    if certificate.phase() == Phase::Commit
+                        && decision.reference() == certificate.reference()
+                        && certificate.validate(context).is_ok()
+            );
+        }
         match message {
             ConsensusMessageV2::Proposal(proposal) => {
                 Self::durable_proposal_is_active(durable, proposal.proposal())
             }
             ConsensusMessageV2::Vote(vote) => Self::durable_vote_is_active(durable, vote.vote()),
             ConsensusMessageV2::QuorumCertificate(certificate) => match certificate.phase() {
-                Phase::Prepare => certificate.validate(context).is_ok(),
+                Phase::Prepare => durable.highest_prepare().is_some_and(|highest| {
+                    highest == certificate && certificate.validate(context).is_ok()
+                }),
                 Phase::Commit => durable.decision().is_some_and(|decision| {
                     decision.reference() == certificate.reference()
                         && certificate.validate(context).is_ok()
@@ -1491,10 +1545,7 @@ impl Reducer {
         let Some(locked) = self.durable.locked() else {
             return;
         };
-        let Some(vote) = self
-            .durable
-            .latest_commit_intent_for_proposal(locked.round(), locked.subject())
-        else {
+        let Some(vote) = self.durable.commit_intent_for_lock(locked) else {
             return;
         };
         if !Self::durable_vote_is_active(&self.durable, vote) {
@@ -1752,7 +1803,22 @@ impl Reducer {
         }
         let pending = self.pending_projection();
         let local_lock = self.durable.locked();
+        let local_highest = self.durable.highest_prepare();
         let incoming_lock = pending_record_timeout.and_then(TimeoutCertificate::highest_prepare);
+        let prepare_control_slot_present_after = after
+            .outbound_control
+            .contains_key(&OutboundControlClass::PrepareQc);
+        let retained_prepare_qc_after = after
+            .outbound_control
+            .get(&OutboundControlClass::PrepareQc)
+            .and_then(|message| match message {
+                ConsensusMessageV2::QuorumCertificate(certificate)
+                    if certificate.phase() == Phase::Prepare =>
+                {
+                    Some(certificate)
+                }
+                _ => None,
+            });
         EnterViewProjection {
             active: enter_count != 0,
             context_id: Self::context_identity_projection(self.context.id()),
@@ -1785,9 +1851,30 @@ impl Reducer {
                 local_lock,
                 incoming_lock,
             ),
+            local_highest_before: self.certificate_identity_projection(
+                local_highest,
+                local_highest,
+                incoming_lock,
+            ),
+            incoming_highest_for_control: self.certificate_identity_projection(
+                incoming_lock,
+                local_highest,
+                incoming_lock,
+            ),
             durable_lock_after: self.certificate_identity_projection(
                 after.durable.locked(),
                 local_lock,
+                incoming_lock,
+            ),
+            durable_highest_after: self.certificate_identity_projection(
+                after.durable.highest_prepare(),
+                local_highest,
+                incoming_lock,
+            ),
+            prepare_control_slot_present_after,
+            retained_prepare_qc_after: self.certificate_identity_projection(
+                retained_prepare_qc_after,
+                local_highest,
                 incoming_lock,
             ),
             effect_protected_lock: self.certificate_identity_projection(
@@ -2259,7 +2346,37 @@ impl Reducer {
                     )
             }
             Continuation::Decide { certificate, .. } => {
-                self.generation == after.generation && after.durable.decision() == Some(certificate)
+                let key = (
+                    after.decision_body_round(certificate),
+                    certificate.subject(),
+                );
+                let expected_work = self.body_work.get(&key).cloned().unwrap_or(BodyWork {
+                    manifest: None,
+                    state: BodyState::Missing,
+                });
+                self.generation == after.generation
+                    && self.replay_resumed == after.replay_resumed
+                    && after.durable.decision() == Some(certificate)
+                    && after.candidate.is_none()
+                    && after.candidate_signed.is_none()
+                    && after.body_work.len() == 1
+                    && after.body_work.get(&key) == Some(&expected_work)
+                    && after.pending_prepare.is_empty()
+                    && after.known_prepare.is_empty()
+                    && after.votes.is_empty()
+                    && after.timeout_votes.is_empty()
+                    && after.formed_certificates.is_empty()
+                    && after.formed_timeouts.is_empty()
+                    && after.awaiting_signature.is_none()
+                    && after.signature_queue.is_empty()
+                    && after.outbound_control.len() == 1
+                    && matches!(
+                        after
+                            .outbound_control
+                            .get(&OutboundControlClass::CommitQc),
+                        Some(ConsensusMessageV2::QuorumCertificate(retained))
+                            if retained == certificate
+                    )
             }
         }
     }
@@ -2314,7 +2431,11 @@ impl Reducer {
         let round = Round::new(self.context.height(), self.durable.current_view());
         if let Some(timeout) = self.durable.timeout_intent(round) {
             messages.push(SignableMessage::TimeoutVote(timeout));
-        } else if let Some(proposal) = self.durable.proposal_intent(round) {
+        } else if let Some(proposal) = self
+            .durable
+            .proposal_intent(round)
+            .filter(|proposal| Self::durable_proposal_is_active(&self.durable, proposal))
+        {
             messages.push(SignableMessage::Proposal(proposal.clone()));
         }
         if self.durable.timeout_intent(round).is_none()
@@ -2324,10 +2445,11 @@ impl Reducer {
         {
             messages.push(SignableMessage::Vote(vote));
         }
-        if let Some(vote) = self.durable.locked().and_then(|locked| {
-            self.durable
-                .latest_commit_intent_for_proposal(locked.round(), locked.subject())
-        }) {
+        if let Some(vote) = self
+            .durable
+            .locked()
+            .and_then(|locked| self.durable.commit_intent_for_lock(locked))
+        {
             messages.push(SignableMessage::Vote(vote));
         }
         messages
@@ -2591,9 +2713,13 @@ impl Reducer {
             .timeout_votes
             .values()
             .fold(0usize, |total, pool| total.saturating_add(pool.len()));
-        let durable_signable_limit = 1usize
-            .saturating_add(self.durable.prepare_intents().count())
-            .saturating_add(self.durable.commit_intents().count());
+        let durable_signable_limit = if self.durable.decision().is_some() {
+            0
+        } else {
+            1usize
+                .saturating_add(self.durable.prepare_intents().count())
+                .saturating_add(self.durable.commit_intents().count())
+        };
         VolatileSummary {
             candidate_present: self.candidate.is_some(),
             body_work: Self::cardinality(self.body_work.len()),
@@ -3299,9 +3425,14 @@ impl Reducer {
                 .filter(|certificate| {
                     certificate.round().view().checked_add(1) == Some(round.view())
                 })
-                .cloned()
                 .ok_or(ReducerError::MissingPersistedTimeoutJustification)?;
-            ProposalJustification::Timeout(certificate)
+            if !self
+                .durable
+                .is_exact_local_proposal_timeout_justification(round.view(), certificate)
+            {
+                return Err(ReducerError::InvalidProposalJustification);
+            }
+            ProposalJustification::Timeout(certificate.clone())
         };
         let proposal = Proposal::new(self.context.id(), round, proposer, manifest, justification);
         match self.validate_proposal(&proposal) {
@@ -3388,7 +3519,12 @@ impl Reducer {
                 // context IDs could reject one another's view-zero proposal.
                 let same_finalized_parent = match (*parent, self.context.parent_commit()) {
                     (None, None) => true,
-                    (Some(carried), Some(frozen)) => carried.same_commit_decision(frozen),
+                    (Some(carried), Some(frozen)) => {
+                        carried.proposal_round() == carried.round()
+                            && carried.round().height().checked_add(1)
+                                == Some(self.context.height())
+                            && carried.same_commit_decision(frozen)
+                    }
                     (None, Some(_)) | (Some(_), None) => false,
                 };
                 if proposal.round().view() != 0 || !same_finalized_parent {
@@ -3402,34 +3538,36 @@ impl Reducer {
                 {
                     return Err(ReducerError::InvalidProposalJustification);
                 }
-                // A TC's high PrepareQC is control evidence, not proposal
-                // authorization. It must first cross the standalone durable
-                // InstallTimeout path so every validator installs and recovers
-                // the exact certified proposal origin. Accepting it only as a
-                // carried justification could mint a fresh current-view
-                // origin for equal block bytes on nodes that missed the QC.
-                if certificate.highest_prepare().is_some() {
+                if certificate
+                    .highest_prepare()
+                    .is_some_and(|highest| highest.subject() != proposal.manifest().subject())
+                {
                     return Err(ReducerError::UnsafeProposal);
                 }
             }
         }
-        if !self.safe_to_prepare(proposal.round(), proposal.manifest().subject()) {
+        if !self.safe_to_prepare(proposal) {
             return Err(ReducerError::UnsafeProposal);
         }
         Ok(())
     }
 
-    fn safe_to_prepare(&self, proposal_round: Round, subject: Subject) -> bool {
+    fn safe_to_prepare(&self, proposal: &Proposal) -> bool {
         let Some(locked) = self.durable.locked() else {
             return true;
         };
-        // A lock authenticates the exact proposal origin, not only the block
-        // subject. Re-proposing equal bytes in a later view creates a distinct
-        // Prepare origin and can collide with the later-finality Commit vote
-        // that the lock authorizes in that same view. Once locked, finish that
-        // exact origin directly; a TC carrying a higher PrepareQC installs that
-        // certificate as the new lock and it is committed by the same path.
-        locked.proposal_round() == proposal_round && locked.subject() == subject
+        let subject = proposal.manifest().subject();
+        if locked.subject() == subject {
+            return true;
+        }
+        let ProposalJustification::Timeout(certificate) = proposal.justification() else {
+            return false;
+        };
+        certificate.highest_prepare().is_some_and(|highest| {
+            highest.phase() == Phase::Prepare
+                && highest.subject() == subject
+                && highest.round().view() > locked.round().view()
+        })
     }
 
     fn on_body_available(&mut self, round: Round, subject: Subject) -> StepOutcome {
@@ -3502,17 +3640,6 @@ impl Reducer {
             }
             return Ok(StepOutcome::ignored(IgnoreReason::AlreadyDecided));
         }
-        // A TC can promote a PrepareQC only after its original round has
-        // closed. Once reconstruction validates that exact durable lock, it
-        // is safe and necessary to persist the local historical Commit
-        // intent. Arbitrary old-round bodies remain fenced below.
-        if let Some(locked) = self.durable.locked().cloned()
-            && locked.round() == round
-            && locked.subject() == subject
-            && self.local_validator.is_some()
-        {
-            return self.persist_commit_intent(locked);
-        }
         if round.view() != self.durable.current_view() {
             return Ok(StepOutcome::ignored(IgnoreReason::IrrelevantView));
         }
@@ -3565,14 +3692,7 @@ impl Reducer {
     ) -> Result<StepOutcome, ReducerError> {
         let proposal_round = prepare.proposal_round();
         let round = Round::new(self.context.height(), self.durable.current_view());
-        let current_round = proposal_round == round;
-        let historical_locked_round = proposal_round.view() < self.durable.current_view()
-            && self
-                .durable
-                .locked()
-                .is_some_and(|locked| locked.reference() == prepare.reference())
-            && !self.durable.has_higher_prepare_evidence(proposal_round);
-        if !current_round && !historical_locked_round {
+        if proposal_round != round {
             return Ok(StepOutcome::ignored(IgnoreReason::IrrelevantView));
         }
         if self.durable.timeout_intent(round).is_some() {
@@ -3581,10 +3701,9 @@ impl Reducer {
         let signer = self
             .local_validator
             .ok_or(ReducerError::ObserverCannotVote)?;
-        let vote = Vote::new_with_proposal_round(
+        let vote = Vote::new(
             self.context.id(),
             round,
-            proposal_round,
             Phase::Commit,
             prepare.subject(),
             signer,
@@ -3609,14 +3728,12 @@ impl Reducer {
         let vote = signed.vote();
         self.validate_vote(vote)?;
         let current_view = self.durable.current_view();
-        // A timeout clears volatile vote pools, but locally durable Commit
-        // intents are retransmitted across views. Admit Prepare votes only in
-        // the current view and Commit votes only for the exact durably
-        // installed lock. In particular, a lagging node must not create a
-        // current-round Commit pool before it has persisted that PrepareQC:
-        // its historical locked Commit pool is still a live reconstruction
-        // target, and retaining both plus the current Prepare pool would make
-        // volatile progress state outlive its durable authority.
+        // A timeout clears volatile vote pools, but an already-durable
+        // same-round Commit intent remains retransmittable. Admit Prepare
+        // votes only in the current view and Commit votes only for the exact
+        // proposal round of the durably installed lock. A later view must
+        // first re-propose the immutable body and form a new PrepareQC; it
+        // cannot relabel the old round as a current Commit round.
         let admissible = match vote.phase() {
             Phase::Prepare => vote.round().view() == current_view,
             Phase::Commit => self.durable.locked().is_some_and(|locked| {
@@ -3624,11 +3741,13 @@ impl Reducer {
                     return false;
                 }
                 let current_round = Round::new(self.context.height(), current_view);
-                self.durable
-                    .latest_commit_intent_for_proposal(locked.round(), locked.subject())
-                    .map_or(vote.round() == current_round, |intent| {
-                        vote.round() == intent.round()
-                    })
+                vote.round() == vote.proposal_round()
+                    && self
+                        .durable
+                        .commit_intent_for_lock(locked)
+                        .map_or(vote.round() == current_round, |intent| {
+                            vote.same_statement(intent)
+                        })
             }),
         };
         if !admissible {
@@ -3682,8 +3801,7 @@ impl Reducer {
         if vote.context_id() != self.context.id()
             || vote.round().height() != self.context.height()
             || vote.proposal_round().height() != self.context.height()
-            || vote.proposal_round().view() > vote.round().view()
-            || (vote.phase() == Phase::Prepare && vote.proposal_round() != vote.round())
+            || vote.proposal_round() != vote.round()
             || self.context.validator(&vote.signer()).is_none()
         {
             return Err(ReducerError::InvalidVote);
@@ -3847,19 +3965,20 @@ impl Reducer {
         formed_locally: bool,
     ) -> Result<StepOutcome, ReducerError> {
         if let Some(existing) = self.durable.decision() {
-            if existing.subject() != certificate.subject()
-                || existing.proposal_round() != certificate.proposal_round()
+            if !existing
+                .reference()
+                .same_commit_decision(certificate.reference())
             {
                 return Err(ReducerError::ConflictingDecision);
             }
             return Ok(StepOutcome::ignored(IgnoreReason::Duplicate));
         }
-        if self.durable.locked().is_some_and(|locked| {
-            locked.proposal_round() != certificate.proposal_round()
-                || locked.subject() != certificate.subject()
-        }) {
-            return Err(ReducerError::Quorum(QuorumError::InvalidProposalRound));
-        }
+        // `on_certificate` has already validated the full CommitQC. A local
+        // Prepare lock constrains this validator's future votes; it cannot
+        // veto the first quorum-authenticated decision. In particular, a
+        // higher-view quorum may legitimately decide another subject before
+        // this validator learns the superseding PrepareQC. Only an already
+        // durable, semantically different Decision conflicts.
         let effect = self.start_persistence(
             WalRecord::Decision(certificate.clone()),
             Continuation::Decide {
@@ -4109,7 +4228,9 @@ impl Reducer {
         }
         certificate.validate(&self.context)?;
         if certificate.round().view() < self.durable.current_view()
-            && !self.is_strict_same_round_timeout_upgrade(&certificate)
+            && !self
+                .durable
+                .is_strict_same_round_timeout_upgrade(&certificate)
         {
             return Ok(StepOutcome::ignored(IgnoreReason::Duplicate));
         }
@@ -4121,27 +4242,6 @@ impl Reducer {
             },
         )?;
         Ok(StepOutcome::applied(vec![effect]))
-    }
-
-    fn is_strict_same_round_timeout_upgrade(&self, certificate: &TimeoutCertificate) -> bool {
-        certificate
-            .round()
-            .view()
-            .checked_add(1)
-            .is_some_and(|next_view| next_view == self.durable.current_view())
-            && self
-                .durable
-                .last_timeout()
-                .is_some_and(|installed| installed.round() == certificate.round())
-            && certificate.highest_prepare().is_some_and(|candidate| {
-                self.durable
-                    .highest_prepare()
-                    .is_none_or(|highest| candidate.round().view() > highest.round().view())
-                    && self
-                        .durable
-                        .locked()
-                        .is_none_or(|locked| candidate.round().view() > locked.round().view())
-            })
     }
 
     fn start_persistence(
@@ -4175,6 +4275,13 @@ impl Reducer {
             });
         }
         let pending = pending.clone();
+        let strict_same_round_timeout_upgrade = matches!(
+            pending.entry.record(),
+            WalRecord::InstallTimeout(certificate)
+                if self
+                    .durable
+                    .is_strict_same_round_timeout_upgrade(certificate)
+        );
         let mut durable = self.durable.clone();
         durable.apply(&self.context, self.local_validator, &pending.entry)?;
         self.durable = durable;
@@ -4182,9 +4289,9 @@ impl Reducer {
 
         if matches!(pending.entry.record(), WalRecord::LockAndCommit { .. }) {
             let current_round = Round::new(self.context.height(), self.durable.current_view());
-            // Once a later LockAndCommit frame is durable, its finality round
-            // supersedes every older Commit pool, including pools for the same
-            // immutable proposal origin. Keeping those same-origin pools would
+            // Once a new same-round LockAndCommit frame is durable, its round
+            // supersedes every older Commit pool, including pools for an
+            // earlier proposal of the same immutable body. Keeping both would
             // allow an old Commit pool, the new Commit pool, and the current
             // Prepare pool to coexist and violate the verified two-pool bound.
             // Pruning before this WAL boundary would orphan the old lock if the
@@ -4218,9 +4325,31 @@ impl Reducer {
                 self.body_work.clear();
                 self.pending_prepare.clear();
                 self.votes.clear();
-                self.timeout_votes.clear();
                 self.formed_certificates.clear();
-                self.formed_timeouts.clear();
+                // ProposalIntent remains append-only non-equivocation
+                // evidence, but an alternate same-round TC changes the exact
+                // latest justification. Retire volatile signing ownership
+                // whose source certificate no longer matches durable state;
+                // the new generation will reject its already-issued
+                // completion tag as stale.
+                if self.awaiting_signature.as_ref().is_some_and(|message| {
+                    !Self::signable_is_durably_authorized_for(&self.durable, message)
+                }) {
+                    self.awaiting_signature = None;
+                }
+                self.signature_queue.retain(|message| {
+                    Self::signable_is_durably_authorized_for(&self.durable, message)
+                });
+                if strict_same_round_timeout_upgrade {
+                    let current_round =
+                        Round::new(self.context.height(), self.durable.current_view());
+                    self.timeout_votes
+                        .retain(|round, _| *round == current_round);
+                    self.formed_timeouts.retain(|round| *round == current_round);
+                } else {
+                    self.timeout_votes.clear();
+                    self.formed_timeouts.clear();
+                }
                 self.known_prepare.clear();
                 if let Some(highest) = self.durable.highest_prepare() {
                     self.known_prepare
@@ -4230,25 +4359,44 @@ impl Reducer {
                     self.known_prepare
                         .insert(locked.reference(), locked.clone());
                 }
+                let context = &self.context;
                 let durable = &self.durable;
                 self.outbound_control.retain(|class, message| {
                     matches!(
                         class,
-                        OutboundControlClass::CommitQc | OutboundControlClass::TimeoutCertificate
-                    ) || matches!(
-                        (class, message),
-                        (
-                            OutboundControlClass::CommitVote,
-                            ConsensusMessageV2::Vote(vote),
-                        ) if Self::durable_vote_is_active(durable, vote.vote())
-                    )
+                        OutboundControlClass::CommitVote
+                            | OutboundControlClass::PrepareQc
+                            | OutboundControlClass::CommitQc
+                            | OutboundControlClass::TimeoutVote
+                            | OutboundControlClass::TimeoutCertificate
+                    ) && Self::outbound_control_is_active(context, durable, message)
                 });
+                // A TC can carry a strictly newer PrepareQC than this node
+                // previously retained, while a TC quorum can also omit this
+                // node's exact durable high QC.  In both cases the installed
+                // view must keep one immutable, exact high-QC control owner:
+                // retain it when already present and reseed it from the WAL
+                // projection when the TC introduced it.  Periodic
+                // retransmission then disseminates the certificate
+                // independently of the one-shot TC broadcast.  Matching the
+                // full durable certificate above prevents an older or
+                // same-projection/different-evidence QC from surviving the
+                // install boundary.
+                if let Some(highest) = self.durable.highest_prepare().cloned() {
+                    self.remember_control(ConsensusMessageV2::QuorumCertificate(highest));
+                }
+                // A strict alternate TC for the preceding round changes only
+                // the lock and generation. Current-round timeout receipts and
+                // the local Timeout intent remain valid, so retain both the
+                // partial pool above and its exact already-signed control
+                // message for recipients which missed the first broadcast.
+                // A normal TC advances the view and therefore clears the pool
+                // and fails the active-control predicate, retiring the vote.
                 // Broadcast excludes the local peer, so retransmission alone
                 // cannot reconstruct this node's cleared vote pool. Queue the
-                // exact still-active durable Commit intent once for the new
-                // pool generation. A TC-promoted lock without one first
-                // reconstructs and validates its body; that completion takes
-                // the narrow historical LockAndCommit path above.
+                // exact still-active same-round Commit intent once for the new
+                // pool generation. A TC-promoted lock without one retains its
+                // exact body for unchanged re-proposal by the current leader.
                 self.queue_active_locked_commit_signature();
                 install_effects.push(Effect::EnterView {
                     tag: self.current_tag(),
@@ -4264,6 +4412,23 @@ impl Reducer {
                 certificate,
                 broadcast,
             } => {
+                let decision_key = (
+                    self.decision_body_round(&certificate),
+                    certificate.subject(),
+                );
+                self.candidate = None;
+                self.candidate_signed = None;
+                self.body_work.retain(|key, _| *key == decision_key);
+                self.pending_prepare.clear();
+                self.known_prepare.clear();
+                self.votes.clear();
+                self.timeout_votes.clear();
+                self.formed_certificates.clear();
+                self.formed_timeouts.clear();
+                self.awaiting_signature = None;
+                self.signature_queue.clear();
+                self.outbound_control.clear();
+
                 let mut decision_effects = Vec::new();
                 let message = ConsensusMessageV2::QuorumCertificate(certificate.clone());
                 self.remember_control(message.clone());
@@ -4856,7 +5021,10 @@ mod source_link_tests {
                 .highest_prepare,
             projection.enter_view.durable_timeout_after.highest_prepare,
             projection.enter_view.effect_timeout.highest_prepare,
+            projection.enter_view.incoming_highest_for_control,
             projection.enter_view.durable_lock_after,
+            projection.enter_view.durable_highest_after,
+            projection.enter_view.retained_prepare_qc_after,
             projection.enter_view.effect_protected_lock,
             projection.enter_view.following_fetch_lock,
         ] {
@@ -4913,6 +5081,25 @@ mod source_link_tests {
         missing_fetch.enter_view.following_fetch_lock.present = false;
         assert!(!refinement::accepts(missing_fetch));
 
+        let mut missing_prepare_control = projection;
+        missing_prepare_control.enter_view.retained_prepare_qc_after =
+            CertificateIdentityProjection::default();
+        assert!(!refinement::accepts(missing_prepare_control));
+
+        let mut stale_prepare_control = projection;
+        stale_prepare_control
+            .enter_view
+            .retained_prepare_qc_after
+            .subject = Reducer::subject_identity_projection(Subject::repeat(0xba));
+        assert!(!refinement::accepts(stale_prepare_control));
+
+        let mut foreign_prepare_control = projection;
+        foreign_prepare_control
+            .enter_view
+            .retained_prepare_qc_after
+            .evidence_class = CERTIFICATE_EVIDENCE_FOREIGN;
+        assert!(!refinement::accepts(foreign_prepare_control));
+
         let mut reordered_fetch = projection;
         reordered_fetch.enter_view.following_fetch_index = reordered_fetch.enter_view.enter_index;
         assert!(!refinement::accepts(reordered_fetch));
@@ -4933,6 +5120,35 @@ mod source_link_tests {
         future_local_lock.enter_view.local_lock_before.subject =
             Reducer::subject_identity_projection(subject);
         assert!(!refinement::accepts(future_local_lock));
+
+        let mut missing_control_state = after.clone();
+        missing_control_state
+            .outbound_control
+            .remove(&OutboundControlClass::PrepareQc);
+        let missing_control_projection =
+            before.transition_projection(&event, &missing_control_state, outcome.effects());
+        assert!(!refinement::accepts(missing_control_projection));
+        assert!(!before.transition_refines(&event, &missing_control_state, outcome.effects()));
+
+        let substitute = certificate(&before.context, 0, Phase::Prepare, subject, 0xbb);
+        assert_eq!(substitute.reference(), high.reference());
+        assert_ne!(substitute, high);
+        let mut substituted_control_state = after;
+        substituted_control_state.outbound_control.insert(
+            OutboundControlClass::PrepareQc,
+            ConsensusMessageV2::QuorumCertificate(substitute),
+        );
+        let substituted_control_projection =
+            before.transition_projection(&event, &substituted_control_state, outcome.effects());
+        assert_eq!(
+            substituted_control_projection
+                .enter_view
+                .retained_prepare_qc_after
+                .evidence_class,
+            CERTIFICATE_EVIDENCE_FOREIGN
+        );
+        assert!(!refinement::accepts(substituted_control_projection));
+        assert!(!before.transition_refines(&event, &substituted_control_state, outcome.effects()));
     }
 
     #[test]
@@ -4977,6 +5193,34 @@ mod source_link_tests {
         invented.enter_view.effect_protected_lock.subject =
             Reducer::subject_identity_projection(Subject::repeat(0xb5));
         assert!(!refinement::accepts(invented));
+
+        let mut invented_prepare_control_state = after;
+        invented_prepare_control_state.outbound_control.insert(
+            OutboundControlClass::PrepareQc,
+            ConsensusMessageV2::TimeoutCertificate(timeout_certificate(&before.context, 0, None)),
+        );
+        let invented_prepare_control_projection = before.transition_projection(
+            &event,
+            &invented_prepare_control_state,
+            outcome.effects(),
+        );
+        assert!(
+            invented_prepare_control_projection
+                .enter_view
+                .prepare_control_slot_present_after
+        );
+        assert!(
+            !invented_prepare_control_projection
+                .enter_view
+                .retained_prepare_qc_after
+                .present
+        );
+        assert!(!refinement::accepts(invented_prepare_control_projection));
+        assert!(!before.transition_refines(
+            &event,
+            &invented_prepare_control_state,
+            outcome.effects()
+        ));
     }
 
     #[test]
@@ -5181,8 +5425,8 @@ mod source_link_tests {
         let fresh = reducer();
         let context = fresh.context.clone();
         let subject = Subject::repeat(0xb1);
-        let proposal_round = Round::new(context.height(), 0);
         let finality_round = Round::new(context.height(), 2);
+        let proposal_round = finality_round;
         let wrong_round = Round::new(context.height(), 1);
         let decision = QuorumCertificate::new(
             CertificateRef::new_with_proposal_round(
@@ -5210,7 +5454,7 @@ mod source_link_tests {
                 WalRecord::Decision(decision.clone()),
             )],
         )
-        .expect("recover later-view Decision");
+        .expect("recover a later local-view but internally same-round Decision");
         let event = Event::RetransmitElapsed {
             tag: before.current_tag(),
         };
@@ -5268,7 +5512,7 @@ mod source_link_tests {
     }
 
     #[test]
-    fn historical_commit_cannot_cross_the_current_finality_timeout_fence() {
+    fn closed_proposal_round_cannot_create_a_new_commit_intent() {
         let fixture = reducer();
         let context = fixture.context.clone();
         let local = ValidatorId::repeat(1);
@@ -5301,14 +5545,14 @@ mod source_link_tests {
             ),
         ];
         let mut recovered = Reducer::recover(context, Some(local), Generation::new(11), entries)
-            .expect("recover current-view timeout above retained proposal origin");
+            .expect("recover current-view timeout above retained same-round Commit");
 
         let outcome = recovered
             .persist_commit_intent(prepare)
-            .expect("the timeout fence is a non-fatal liveness outcome");
+            .expect("the closed proposal round is a non-fatal liveness outcome");
         assert_eq!(
             outcome.disposition(),
-            StepDisposition::Ignored(IgnoreReason::ViewClosed)
+            StepDisposition::Ignored(IgnoreReason::IrrelevantView)
         );
         assert!(outcome.effects().is_empty());
         assert!(recovered.pending_persistence.is_none());

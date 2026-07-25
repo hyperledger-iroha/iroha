@@ -52,8 +52,8 @@ TimeoutWireMutationStep ==
 TimeoutWireTimeoutStableStep ==
   \/ \E request \in signTimeouts: CompleteTimeoutSignature(request)
   \/ \E signer \in ValidatorIds, roundView \in Views,
-       highRank \in Ranks, highSubject \in SubjectOrNone:
-       ByzantineBroadcastTimeout(signer, roundView, highRank, highSubject)
+       highestPrepare \in PrepareQcOptionSet:
+       ByzantineBroadcastTimeout(signer, roundView, highestPrepare)
   \/ \E envelope \in timeoutNetwork: DeliverTimeout(envelope)
   \/ \E node \in ValidatorIds, roundView \in Views:
        FormTC(node, roundView)
@@ -171,7 +171,8 @@ THEOREM RecoveryStableSuppliesCoreAuthorizationFrame ==
   TimeoutViewFrontierRecoveryStableStep => CoreAuthorizationFrame
 BY IsaT(60)
    DEF TimeoutViewFrontierRecoveryStableStep, CoreAuthorizationFrame,
-       FetchCertifiedBody, ApplyDecision, Restart,
+       FetchCertifiedBody, AcceptCertifiedResponseCapability,
+       InstallCertifiedBodyEffect, ApplyDecision, Restart,
        ResumeProposal, ResumeVote, ResumeTimeout, DropProposal
 
 THEOREM FrontierStableSuppliesCoreAuthorizationFrame ==
@@ -387,7 +388,8 @@ THEOREM RecoveryStableStepLeavesTimeoutWireSets ==
     => UNCHANGED <<pendingTimeout, timeoutIntents>>
 BY IsaT(60)
    DEF TimeoutViewFrontierRecoveryStableStep,
-       FetchCertifiedBody, ApplyDecision, Restart,
+       FetchCertifiedBody, AcceptCertifiedResponseCapability,
+       InstallCertifiedBodyEffect, ApplyDecision, Restart,
        ResumeProposal, ResumeVote, ResumeTimeout, DropProposal
 
 THEOREM TimeoutStableStepLeavesTimeoutWireSets ==

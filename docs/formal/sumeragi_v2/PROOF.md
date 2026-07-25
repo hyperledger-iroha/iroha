@@ -932,7 +932,7 @@ reconstruction-refinement, or starvation obligations; the added rollover and
 tip-recovery regressions remain executable evidence under
 `specified_unproved`, not a machine-checked completion claim.
 
-The current pre-network release inventory names 515 tests across thirty-eight Rust
+The current pre-network release inventory names 569 tests across thirty-nine Rust
 modules. The preceding 298-name inventory arose from the 264-name inventory by
 adding 37 positive regressions which
 comprise 10 per-target exact-output and historical/current typed-rollover tests,
@@ -987,10 +987,16 @@ aggregate signatures, finality/header geometry, compact offline QCs, and parent
 height-context identity to the signed origin.
 
 The final successor/recovery closure adds six exact regressions without adding
-a module. Six source-sealed command legs and the G-SCALE runner/validator
-preflight harden the release corridor, yielding the current 515-test, 38-module, 78-leg
-inventory. The canonical module/test TSV inventory SHA-256 is
-`ef281ddf030ca64e634581fa90197e6637f89cb10f937c2f370747fcdb8454a4`.
+a module. Crash-safe response handoff and same-delivery retry after transient
+capacity pressure add two more sidecar regressions. The per-source
+route-attempt, exact PrepareQC recovery, locked-body reproposal, runner/worker,
+sidecar, and daemon closure, plus the certified sidecar control-bucket
+regression, yields the current
+585-test, 39-module inventory. The complete source-sealed pre-network corridor
+contains 82 legs. Six source-sealed command legs and the G-SCALE
+runner/validator preflight harden that release corridor.
+The canonical module/test TSV inventory SHA-256 is
+`b6dc528ea6e07d75a243a5b4ead89c83561aa9d0a74b9ac941cdf1a744078acd`.
 The added boundaries preserve the frozen predecessor CommitQC through
 wire-to-core conversion, block rollover until the decided lane session is
 durable, reopen a globally finalized tip whose lane evidence is incomplete,
@@ -1026,13 +1032,13 @@ through an authenticated non-validator hop, and retains the capacity-negative
 boundary. It
 also adds one four-validator exact PrepareQC count-and-power quorum regression.
 The five integration names share a module-filtered leg; the pre-network corridor
-now has 78 legs, including separate exact data-model status and atomic
+now has 82 legs, including separate exact data-model status and atomic
 lane-certificate decode contracts, two `iroha_config` geometry modules, three P2P
 geometry modules, the daemon genesis module, and source-sealed command-success
 legs. Its finality, offline compact-QC, and height-context proposal-origin
 modules each use a dedicated `iroha_data_model` leg. Its `iroha_p2p` legs use
 the crate's empty default feature set; feature-gated QUIC first-packet geometry
-tests are not claimed by the thirty-eight-module, sixty-five-leg corridor. It
+tests are not claimed by the thirty-nine-module, eighty-two-leg corridor. It
 includes
 exact completion ownership, body-owner binding and
 rebind, rejection of future physical completions, durable-recovery retry to the
@@ -1052,15 +1058,16 @@ request registration can retire the old request; durable reducer
 retransmission then reconstructs the blocked Fetch and lets it acquire both
 owners atomically. The
 preceding mutable-source discovery and direct execution evidence covered the
-earlier 168-name inventory. Fresh 515-name
+earlier 168-name inventory. Fresh 569-name
 discovery/execution and the clean committed, detached, source-sealed serial
 release leg remain pending. An
 earlier exact one-attempt
 four-validator genesis rerun is green at 1/1 in 456.76 seconds. Neither
 inventory presence nor regression evidence is a machine proof.
-For the current proposal-origin source, the isolated source-shared harness
+For the preceding proposal-origin source, the isolated source-shared harness
 passed 118/118 reducer/WAL/refinement tests and all 8 model-trace replay tests;
-fast-network passed all 9 named simulations. The 2026-07-21 100,000-height
+the current harness inventories 137 runnable reducer tests and requires a fresh
+source-sealed run. Fast-network passed all 9 named simulations. The 2026-07-21 100,000-height
 permissioned/NPoS chaos run completed both 50,000-height prefixes, 400,000
 validator finalizations, and zero failures in 91.29 seconds. These mutable-tree
 results are implementation evidence only. The pinned Verus receipt predates

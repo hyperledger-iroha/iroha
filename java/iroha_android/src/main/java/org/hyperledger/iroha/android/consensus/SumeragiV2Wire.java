@@ -406,6 +406,8 @@ public final class SumeragiV2Wire {
         byte[] signature) {
       this.round = nonNull(round, "round");
       this.proposalRound = nonNull(proposalRound, "proposalRound");
+      require(this.proposalRound.equals(this.round),
+          "Prepare/Commit vote proposal round must match its round");
       this.phase = nonNull(phase, "phase");
       this.subject = nonNull(subject, "subject");
       this.executionCommitment = nonNull(executionCommitment, "executionCommitment");
@@ -462,6 +464,8 @@ public final class SumeragiV2Wire {
         ExecutionCommitment executionCommitment) {
       this.round = nonNull(round, "round");
       this.proposalRound = nonNull(proposalRound, "proposalRound");
+      require(this.proposalRound.equals(this.round),
+          "Prepare/Commit certificate reference proposal round must match its round");
       this.phase = nonNull(phase, "phase");
       this.subject = nonNull(subject, "subject");
       this.executionCommitment = nonNull(executionCommitment, "executionCommitment");
@@ -511,6 +515,8 @@ public final class SumeragiV2Wire {
         byte[] aggregateSignature) {
       this.round = nonNull(round, "round");
       this.proposalRound = nonNull(proposalRound, "proposalRound");
+      require(this.proposalRound.equals(this.round),
+          "Prepare/Commit certificate proposal round must match its round");
       this.phase = nonNull(phase, "phase");
       this.subject = nonNull(subject, "subject");
       this.executionCommitment = nonNull(executionCommitment, "executionCommitment");
@@ -1070,25 +1076,25 @@ public final class SumeragiV2Wire {
     }
   }
 
-  /** Certified body response. */
+  /** Archive-signed certified body response with a distinct frozen-QC signer citation. */
   public static final class CertifiedBodyResponse extends WireValue {
     public final Hash32 requestHash;
     public final PayloadManifest manifest;
     private final byte[] body;
-    public final long responder;
+    public final long citedResponder;
     private final byte[] signature;
 
     public CertifiedBodyResponse(
         Hash32 requestHash,
         PayloadManifest manifest,
         byte[] body,
-        long responder,
+        long citedResponder,
         byte[] signature) {
       this.requestHash = nonNull(requestHash, "requestHash");
       this.manifest = nonNull(manifest, "manifest");
       this.body = copy(body, "body");
-      requireU32(responder, "responder");
-      this.responder = responder;
+      requireU32(citedResponder, "citedResponder");
+      this.citedResponder = citedResponder;
       this.signature = copy(signature, "signature");
     }
 
@@ -1103,7 +1109,11 @@ public final class SumeragiV2Wire {
     @Override
     public byte[] encode() {
       return struct(
-          requestHash.bytes(), manifest.encode(), byteVector(body), u32(responder), byteVector(signature));
+          requestHash.bytes(),
+          manifest.encode(),
+          byteVector(body),
+          u32(citedResponder),
+          byteVector(signature));
     }
 
     static CertifiedBodyResponse decode(byte[] bytes) {
@@ -1113,7 +1123,7 @@ public final class SumeragiV2Wire {
               new Hash32(reader.field("body response request hash", SumeragiV2Wire::decodeHash)),
               reader.field("body response manifest", PayloadManifest::decode),
               reader.field("body response body", SumeragiV2Wire::decodeByteVector),
-              reader.field("body response responder", SumeragiV2Wire::decodeU32),
+              reader.field("body response cited responder", SumeragiV2Wire::decodeU32),
               reader.field("body response signature", SumeragiV2Wire::decodeByteVector));
       reader.finish("certified body response");
       return value;
@@ -1574,6 +1584,8 @@ public final class SumeragiV2Wire {
       requireU32(minSigners, "minSigners");
       this.round = nonNull(round, "round");
       this.proposalRound = nonNull(proposalRound, "proposalRound");
+      require(this.proposalRound.equals(this.round),
+          "Prepare/Commit quorum status proposal round must match its round");
       this.subject = nonNull(subject, "subject");
       this.executionCommitment = nonNull(executionCommitment, "executionCommitment");
       this.signerCount = signerCount;
@@ -1703,12 +1715,8 @@ public final class SumeragiV2Wire {
             "Outbound intent proposal round must share context and height");
         require(proposalRound.view <= round.view,
             "Outbound intent proposal round cannot be in a later view");
-        if (kind == OutboundIntentKind.PROPOSAL
-            || kind == OutboundIntentKind.PREPARE_VOTE
-            || kind == OutboundIntentKind.PREPARE_QC) {
-          require(proposalRound.equals(round),
-              "Prepare/proposal outbound intent origin must match its round");
-        }
+        require(proposalRound.equals(round),
+            "Proposal/Prepare/Commit outbound intent origin must match its round");
       }
     }
     @Override public byte[] encode() {

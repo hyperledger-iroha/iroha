@@ -743,9 +743,8 @@ impl DurableApplicationEvidence {
                 == artifact.commit_qc.aggregate_signature.as_slice()
             && self.validated_context_id() == context.id()
             && self.validated_round().height == context.height
-            // The durable body must be the exact immutable proposal origin
-            // authenticated by the CommitQC, independently of its later
-            // finality round.
+            // The durable body must be the exact same-round proposal body
+            // authenticated by the CommitQC.
             && self.validated_round() == certificate.proposal_round
             && self.validated_subject() == self.subject()
             && self.validated_manifest_hash() == self.validated_receipt().durable().manifest_hash()
@@ -1052,15 +1051,10 @@ impl V2ApplyService {
             .executed_block_wire_hash()
             .map_err(|error| V2ApplyError::CanonicalBlock(error.to_string()))?;
 
-        // Publish the post-WSV checkpoint/manifest join before finality. This
-        // order leaves every crash prefix independently recoverable: a staged
-        // checkpoint can replay the exact overlay, a published manifest binds
-        // the committed WSV, and only then may finality-derived sidecars become
-        // visible.
-        self.persist_post_apply_metadata(context, task, &artifact)
-            .map_err(|error| {
-                V2ApplyError::committed_recovery_required("post-apply metadata", &error)
-            })?;
+        // Repair or confirm the pre-WSV durable evidence boundary before any
+        // derived publication. Fresh application already crossed this boundary
+        // inside `validate_and_apply`; these calls are deliberately idempotent
+        // so restart can repair each individual artifact.
         let receipt = self
             .kura
             .store_v2_finality_artifact(&artifact)
@@ -1069,9 +1063,14 @@ impl V2ApplyService {
             })?;
 
         // The strict restart-repair path authenticates Native AMX evidence
-        // against both finality and the post-WSV Kura metadata join. Repair or
+        // against both finality and the post-WSV Kura metadata join. Publish
+        // that join first on every fresh or recovery attempt, then repair or
         // confirm the exact manifests, receipts, and latest indexes while the
         // prune guard keeps their canonical carrier stable.
+        self.persist_post_apply_metadata(context, task, &artifact)
+            .map_err(|error| {
+                V2ApplyError::committed_recovery_required("post-apply metadata", &error)
+            })?;
         self.kura
             .repair_native_amx_participant_application_evidence(committed_block.as_ref())
             .map_err(|error| {
@@ -1352,6 +1351,23 @@ impl V2ApplyService {
             {
                 return Err(V2ApplyError::InjectedCrashAfterKuraStore);
             }
+            let _ = self
+                .kura
+                .store_v2_finality_artifact(artifact)
+                .map_err(|error| {
+                    V2ApplyError::committed_recovery_required(
+                        "pre-WSV v2 finality artifact",
+                        &error,
+                    )
+                })?;
+            self.kura
+                .persist_native_amx_participant_application_evidence(committed_block.as_ref())
+                .map_err(|error| {
+                    V2ApplyError::committed_recovery_required(
+                        "pre-WSV Native AMX participant evidence",
+                        &error,
+                    )
+                })?;
         }
         let commit_topology = context
             .roster
@@ -1735,6 +1751,12 @@ mod tests {
                 LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
             );
             state.install_lane_manifests(&lane_manifests);
+            let mut commit_topology = state.commit_topology.block();
+            commit_topology.clear();
+            for validator in &context.roster {
+                commit_topology.push(validator.validator.clone());
+            }
+            commit_topology.commit();
             let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(32);
             let queue = Arc::new(Queue::from_config(
                 QueueConfig::default(),
@@ -1964,6 +1986,12 @@ mod tests {
                 LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
             );
             state.install_lane_manifests(&lane_manifests);
+            let mut commit_topology = state.commit_topology.block();
+            commit_topology.clear();
+            for validator in &self.context.roster {
+                commit_topology.push(validator.validator.clone());
+            }
+            commit_topology.commit();
             let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(32);
             let queue = Arc::new(Queue::from_config(
                 QueueConfig::default(),
@@ -3563,7 +3591,7 @@ mod tests {
     );
 
     v2_apply_test!(
-        resigned_later_view_commit_qc_applies_exact_locked_origin_body,
+        same_body_reproposal_commit_qc_applies_exact_reproposal_body,
         {
             let mut fixture = ApplyFixture::new();
             let mut keys = (1_u8..=4)
@@ -3593,7 +3621,7 @@ mod tests {
                         keys[usize::try_from(*index).expect("fixture signer index")].private_key(),
                         &preimage,
                     )
-                    .expect("sign later-view Commit vote")
+                    .expect("sign same-round reproposal Commit vote")
                     .payload()
                     .to_vec()
                 })
@@ -3601,7 +3629,7 @@ mod tests {
             certificate.aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(
                 &signatures.iter().map(Vec::as_slice).collect::<Vec<_>>(),
             )
-            .expect("aggregate later-view Commit votes");
+            .expect("aggregate same-round reproposal Commit votes");
             let later_round = certificate.round;
             let later_tag = EventTag::new(
                 fixture.context.height,
@@ -3631,7 +3659,7 @@ mod tests {
 
             fixture
                 .execute(&mut store)
-                .expect("later-view CommitQC applies the exact locked origin body");
+                .expect("reproposal CommitQC applies the exact unchanged body");
             fixture.assert_complete();
         }
     );
@@ -4068,7 +4096,22 @@ mod tests {
                 "live WSV must not advance without its durable recovery checkpoint"
             );
             assert_eq!(fixture.kura.exact_durable_blocks_count().unwrap(), 1);
-            fixture.assert_no_post_apply_sidecars();
+            assert!(
+                fixture
+                    .kura
+                    .commit_manifest(fixture.context.height)
+                    .expect("read absent manifest")
+                    .is_none()
+            );
+            assert_eq!(
+                fixture
+                    .kura
+                    .v2_finality_artifact(fixture.context.height)
+                    .expect("read pre-WSV finality")
+                    .expect("finality must precede the WSV checkpoint")
+                    .block_hash,
+                fixture.body.hash()
+            );
 
             drop(store);
             let mut reopened = fixture.reopen_body_store();
@@ -4114,6 +4157,15 @@ mod tests {
                     .expect("read absent manifest")
                     .is_none(),
                 "the pre-WSV checkpoint must remain unbound until State commits"
+            );
+            assert_eq!(
+                fixture
+                    .kura
+                    .v2_finality_artifact(1)
+                    .expect("read pre-WSV finality")
+                    .expect("finality must be durable before WSV publication")
+                    .block_hash,
+                fixture.body.hash()
             );
             let staged_state_hash = staged_checkpoint.state_hash();
             drop(first_process_store);
@@ -4165,7 +4217,7 @@ mod tests {
         }
     );
 
-    v2_apply_test!(restart_recovers_checkpoint_before_manifest_and_finality, {
+    v2_apply_test!(restart_recovers_manifest_after_pre_wsv_finality, {
         let fixture = ApplyFixture::new();
         let mut store = fixture.reopen_body_store();
         fixture.kura.fail_next_commit_manifest_write_for_tests();
@@ -4201,7 +4253,7 @@ mod tests {
                 .kura
                 .v2_finality_artifact(1)
                 .expect("read finality")
-                .is_none()
+                .is_some()
         );
 
         drop(store);
@@ -4210,7 +4262,7 @@ mod tests {
         fixture.assert_complete();
     });
 
-    v2_apply_test!(restart_recovers_metadata_written_before_finality, {
+    v2_apply_test!(restart_recovers_kura_block_before_pre_wsv_finality, {
         let fixture = ApplyFixture::new();
         let mut store = fixture.reopen_body_store();
         fixture.kura.fail_next_v2_finality_write_for_tests();
@@ -4221,25 +4273,26 @@ mod tests {
             matches!(
                 &error,
                 V2ApplyError::CommittedRecoveryRequired { stage, .. }
-                    if *stage == "v2 finality artifact"
+                    if *stage == "pre-WSV v2 finality artifact"
             ),
             "unexpected committed recovery classification: {error:?}"
         );
         assert!(error.requires_restart_recovery());
-        assert_eq!(fixture.state.committed_height(), 1);
+        assert_eq!(fixture.state.committed_height(), 0);
+        assert_eq!(fixture.kura.exact_durable_blocks_count().unwrap(), 1);
         assert!(
             fixture
                 .kura
                 .wsv_checkpoint(1)
                 .expect("read checkpoint")
-                .is_some()
+                .is_none()
         );
         assert!(
             fixture
                 .kura
                 .commit_manifest(1)
                 .expect("read manifest")
-                .is_some()
+                .is_none()
         );
         assert!(
             fixture
@@ -4251,7 +4304,9 @@ mod tests {
 
         drop(store);
         let mut reopened = fixture.reopen_body_store();
-        fixture.execute(&mut reopened).expect("complete finality");
+        fixture
+            .execute(&mut reopened)
+            .expect("complete pre-WSV finality and apply");
         fixture.assert_complete();
     });
 

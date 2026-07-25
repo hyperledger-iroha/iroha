@@ -9,7 +9,7 @@ use crate::verus_proofs::{
     EnterViewProjection, ProductionTransitionProjection, accepted_core_enter_view_has_exact_fact,
     accepted_core_enter_view_projection_selects_post_install_lock,
     production_enter_view_exact_fact, production_enter_view_preserves_locked_prepare_qc_identity,
-    production_kernel_relation,
+    production_enter_view_retains_high_prepare_qc_identity, production_kernel_relation,
 };
 use vstd::prelude::*;
 
@@ -85,6 +85,7 @@ pub closed spec fn production_enter_view_uses_post_install_effective_lock_kernel
 ) -> bool {
     effective_lock_trace_claim_body!(trace, 1u8)
         && enter_view_locked_prepare_qc_identity_body!(enter_view)
+        && enter_view_high_prepare_qc_control_identity_body!(enter_view)
 }
 
 /// Exact Verus mirror of the production body-owner trace gate.
@@ -661,6 +662,13 @@ pub proof fn production_enter_view_uses_post_install_effective_lock(
             == projection.enter_view.durable_lock_after.present,
         projection.enter_view.following_fetch_lock.present
             == projection.enter_view.durable_lock_after.present,
+        production_enter_view_retains_high_prepare_qc_identity(projection.enter_view),
+        projection.enter_view.prepare_control_slot_present_after
+            == projection.enter_view.durable_highest_after.present,
+        certificate_identity_equal_body!(
+            projection.enter_view.retained_prepare_qc_after,
+            projection.enter_view.durable_highest_after
+        ),
 {
     accepted_core_enter_view_has_exact_fact(projection);
     accepted_core_enter_view_projection_selects_post_install_lock(projection);
@@ -668,6 +676,7 @@ pub proof fn production_enter_view_uses_post_install_effective_lock(
     reveal(production_enter_view_uses_post_install_effective_lock_kernel);
     reveal(effective_lock_trace_step_is_valid);
     reveal(production_enter_view_preserves_locked_prepare_qc_identity);
+    reveal(production_enter_view_retains_high_prepare_qc_identity);
     assert(production_enter_view_uses_post_install_effective_lock_kernel(
         production_enter_view_effective_lock_trace(projection),
         projection.enter_view,

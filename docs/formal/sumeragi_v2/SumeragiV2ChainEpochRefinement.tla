@@ -951,8 +951,9 @@ remain available to RunHistoricalServer after validators advance.
 
 The nested tuple layout is exactly
 <<vars, AsyncSchedulerVars, AsyncRecoveryVars>>: 46 Core components followed
-by 35 scheduler/transport components and five responsive-node recovery
-components. The final scheduler component owns the exact historical-recovery
+by 36 scheduler/transport components and five responsive-node recovery
+components. The scheduler tuple includes the certified-response claim before
+the transport state; its final component owns the exact historical-recovery
 target set, while the final recovery component owns the exact historical-lock
 restart-authority projection. Shape predicates exclude unmodelled fields and
 make every instance projection extensional.
@@ -1074,11 +1075,12 @@ IndexedAsync(initialContext) ==
        asyncSentItems <- IndexedScheduler(initialContext, 28),
        asyncRetainedControl <- IndexedScheduler(initialContext, 29),
        asyncActiveRequests <- IndexedScheduler(initialContext, 30),
-       asyncTransport <- IndexedScheduler(initialContext, 31),
-       asyncIngressLanes <- IndexedScheduler(initialContext, 32),
-       asyncIngressReady <- IndexedScheduler(initialContext, 33),
-       asyncHeldChunks <- IndexedScheduler(initialContext, 34),
-       asyncHistoricalRecoveryTargets <- IndexedScheduler(initialContext, 35),
+       asyncCertifiedResponseClaim <- IndexedScheduler(initialContext, 31),
+       asyncTransport <- IndexedScheduler(initialContext, 32),
+       asyncIngressLanes <- IndexedScheduler(initialContext, 33),
+       asyncIngressReady <- IndexedScheduler(initialContext, 34),
+       asyncHeldChunks <- IndexedScheduler(initialContext, 35),
+       asyncHistoricalRecoveryTargets <- IndexedScheduler(initialContext, 36),
        asyncRecoveryPhase <- IndexedRecovery(initialContext, 1),
        asyncRecoveryNode <- IndexedRecovery(initialContext, 2),
        asyncRecoveryGeneration <- IndexedRecovery(initialContext, 3),
@@ -1228,11 +1230,12 @@ VerificationAsyncProof ==
        asyncSentItems <- VerificationScheduler(28),
        asyncRetainedControl <- VerificationScheduler(29),
        asyncActiveRequests <- VerificationScheduler(30),
-       asyncTransport <- VerificationScheduler(31),
-       asyncIngressLanes <- VerificationScheduler(32),
-       asyncIngressReady <- VerificationScheduler(33),
-       asyncHeldChunks <- VerificationScheduler(34),
-       asyncHistoricalRecoveryTargets <- VerificationScheduler(35),
+       asyncCertifiedResponseClaim <- VerificationScheduler(31),
+       asyncTransport <- VerificationScheduler(32),
+       asyncIngressLanes <- VerificationScheduler(33),
+       asyncIngressReady <- VerificationScheduler(34),
+       asyncHeldChunks <- VerificationScheduler(35),
+       asyncHistoricalRecoveryTargets <- VerificationScheduler(36),
        asyncRecoveryPhase <- VerificationRecovery(1),
        asyncRecoveryNode <- VerificationRecovery(2),
        asyncRecoveryGeneration <- VerificationRecovery(3),
@@ -1250,8 +1253,8 @@ IndexedAsyncStateShape ==
        /\ DOMAIN indexedAsyncState[initialContext] = 1..3
        /\ Len(indexedAsyncState[initialContext][1]) = 46
        /\ DOMAIN indexedAsyncState[initialContext][1] = 1..46
-       /\ Len(indexedAsyncState[initialContext][2]) = 35
-       /\ DOMAIN indexedAsyncState[initialContext][2] = 1..35
+       /\ Len(indexedAsyncState[initialContext][2]) = 36
+       /\ DOMAIN indexedAsyncState[initialContext][2] = 1..36
        /\ Len(indexedAsyncState[initialContext][3]) = 5
        /\ DOMAIN indexedAsyncState[initialContext][3] = 1..5
 
@@ -2736,7 +2739,7 @@ THEOREM IndexedHistoricalRecoveryTargetProjectionIsExact ==
     => \A initialContext \in AdmissibleContextRecords:
          \A node \in ValidatorIds:
            IndexedAsync(initialContext)!HistoricalRecoveryTarget(node)
-             <=> node \in IndexedScheduler(initialContext, 35)
+             <=> node \in IndexedScheduler(initialContext, 36)
 BY DEF IndexedAsync!HistoricalRecoveryTarget
 
 THEOREM VerificationHistoricalRecoveryTargetProjectionIsExact ==
@@ -2744,7 +2747,7 @@ THEOREM VerificationHistoricalRecoveryTargetProjectionIsExact ==
     /\ VerificationContext \in AdmissibleContextRecords
     => \A node \in ValidatorIds:
          VerificationAsyncProof!HistoricalRecoveryTarget(node)
-           <=> node \in VerificationScheduler(35)
+           <=> node \in VerificationScheduler(36)
 BY DEF VerificationAsyncProof!HistoricalRecoveryTarget
 
 THEOREM IndexedInitProjectsEveryAsyncInit ==

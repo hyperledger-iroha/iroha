@@ -1,6 +1,266 @@
 ---- MODULE SumeragiV2AsyncInstallRunnerProofs ----
 EXTENDS SumeragiV2AsyncRuntimeAdmissionTypeProofs
 
+THEOREM CausalCandidateFromTypedCommand ==
+  \A command, commandClass, kind:
+    /\ AsyncTypeInvariant
+    /\ AsyncCandidateTyped(command)
+    /\ commandClass \in AsyncCommandClasses
+    /\ kind \in AsyncWorkKinds
+    => /\ AsyncCandidateTyped(
+             CausalCandidate(commandClass, kind, command))
+       /\ CausalCandidate(commandClass, kind, command).node = command.node
+PROOF
+  <1>1. ASSUME NEW command, NEW commandClass, NEW kind,
+                AsyncTypeInvariant,
+                AsyncCandidateTyped(command),
+                commandClass \in AsyncCommandClasses,
+                kind \in AsyncWorkKinds
+         PROVE /\ AsyncCandidateTyped(
+                      CausalCandidate(commandClass, kind, command))
+               /\ CausalCandidate(commandClass, kind, command).node =
+                    command.node
+    <2>1. /\ context.height \in Heights
+           /\ command.node \in ValidatorIds
+           /\ command.view \in Views
+           /\ command.subject \in SubjectOrNone
+      BY <1>1 DEF AsyncTypeInvariant, TypeInvariant,
+                   AsyncCandidateTyped
+    <2>2. /\ DOMAIN CausalCandidate(commandClass, kind, command) =
+                    AsyncCandidateDomain
+           /\ CausalCandidate(commandClass, kind, command).class =
+                commandClass
+           /\ CausalCandidate(commandClass, kind, command).kind = kind
+           /\ CausalCandidate(commandClass, kind, command).node =
+                command.node
+           /\ CausalCandidate(commandClass, kind, command).height =
+                context.height
+           /\ CausalCandidate(commandClass, kind, command).view =
+                command.view
+           /\ CausalCandidate(commandClass, kind, command).subject =
+                command.subject
+           /\ CausalCandidate(commandClass, kind, command).item =
+                NoAsyncItem
+           /\ CausalCandidate(commandClass, kind, command).consumerContext =
+                command.consumerContext
+           /\ CausalCandidate(commandClass, kind, command).consumerView =
+                command.consumerView
+           /\ CausalCandidate(commandClass, kind, command).consumerGeneration =
+                command.consumerGeneration
+           /\ CausalCandidate(commandClass, kind, command).evidence =
+                command.evidence
+           /\ CausalCandidate(commandClass, kind, command).bodyIdentity =
+                command.bodyIdentity
+           /\ CausalCandidate(commandClass, kind, command).manifestIdentity =
+                command.manifestIdentity
+           /\ CausalCandidate(commandClass, kind, command).commitmentIdentity =
+                command.commitmentIdentity
+      BY DEF CausalCandidate, AsyncCandidateFrom,
+             AsyncCandidateWithIdentity, AsyncCandidateDomain
+    <2> QED BY <1>1, <2>1, <2>2, SMT
+         DEF AsyncCandidateTyped, AsyncEvidenceSet
+  <1> QED BY <1>1
+
+THEOREM NonInstallCommandSuccessorsTypedAndOwned ==
+  \A command:
+    /\ AsyncTypeInvariant
+    /\ AsyncCandidateTyped(command)
+    /\ command.kind # "PersistInstallTC"
+    => /\ AsyncQueueTyped(CommandSuccessors(command))
+       /\ AsyncCausalQueueOwnership(
+            command.node, CommandSuccessors(command))
+BY CausalCandidateFromTypedCommand, SMTT(120)
+   DEF CommandSuccessors, RetainedBodyRebindCandidate,
+       PersistDecisionRecoverySuccessor, PersistDecisionRecoveryKind,
+       PersistDecisionBody, PersistDecisionValidationHeld,
+       PersistDecisionRequest, PersistDecisionRequests,
+       AsyncCandidateAtConsumer, AsyncCandidateWithIdentity,
+       AsyncQueueTyped, AsyncCausalQueueOwnership,
+       AsyncCommandClasses, AsyncWorkKinds, AsyncReducerKinds,
+       SequenceSet
+
+THEOREM ExecutedInstallSuccessorIsTypedAndOwned ==
+  \A command:
+    /\ StrongInductiveInvariant
+    /\ AsyncTypeInvariant
+    /\ AsyncCandidateTyped(command)
+    /\ command.kind = "PersistInstallTC"
+    /\ ExecuteCommand(command)
+    => LET successor == InstallProposalSuccessor(command)
+       IN /\ AsyncCandidateTyped(successor)
+          /\ successor.node = command.node
+PROOF
+  <1>1. ASSUME NEW command,
+                StrongInductiveInvariant,
+                AsyncTypeInvariant,
+                AsyncCandidateTyped(command),
+                command.kind = "PersistInstallTC",
+                ExecuteCommand(command)
+         PROVE LET successor == InstallProposalSuccessor(command)
+               IN /\ AsyncCandidateTyped(successor)
+                  /\ successor.node = command.node
+    <2> DEFINE Successor == InstallProposalSuccessor(command)
+    <2>1. /\ TypeInvariant
+           /\ PendingCertificateWritesAuthorized
+           /\ context.height \in Heights
+           /\ command.node \in ValidatorIds
+      BY <1>1
+         DEF StrongInductiveInvariant, Safety,
+             ReducerProvenanceInvariant, AsyncTypeInvariant,
+             TypeInvariant, AsyncCandidateTyped
+    <2>2. \E request \in pendingInstallTC:
+             /\ command.node = request.node
+             /\ command.view = request.tc.view
+             /\ PersistInstallTC(request)
+      BY <1>1, Isa
+         DEF ExecuteCommand, ExecutePersistInstall
+    <2>3. PICK request \in pendingInstallTC:
+             /\ command.node = request.node
+             /\ command.view = request.tc.view
+             /\ PersistInstallTC(request)
+      BY <2>2
+    <2>4. command.view + 1 \in Views
+      BY <2>1, <2>3 DEF PendingCertificateWritesAuthorized
+    <2>5. InstallProposalSubject(command) \in SubjectOrNone
+      BY <2>1, <2>3, SMTT(60), Isa
+         DEF InstallProposalSubject, InstallRequests,
+             AsyncProposalSubject, PendingCertificateWritesAuthorized,
+             TCValid, AuthenticatedHighRef, HighRefValid,
+             TcHighRank, TcHighSubject, HighestTimeoutVote,
+             MaximalTimeoutVotes, EmptyTimeoutHigh,
+             TypeInvariant, AsyncCandidateTyped
+    <2>6. /\ context \in ContextRecords
+           /\ generation[command.node] \in Generations
+           /\ generation[command.node] < MaxGeneration
+           /\ generation[command.node] + 1 \in Generations
+           /\ command.evidence \in AsyncEvidenceSet
+      BY <1>1, <2>1, <2>3, SMT
+         DEF PersistInstallTC, TypeInvariant, AsyncCandidateTyped,
+             Generations
+    <2>7. /\ DOMAIN Successor = AsyncCandidateDomain
+           /\ Successor.class \in AsyncCommandClasses
+           /\ Successor.kind \in AsyncWorkKinds
+           /\ Successor.node = command.node
+           /\ Successor.height = context.height
+           /\ Successor.view = command.view + 1
+           /\ Successor.subject = InstallProposalSubject(command)
+           /\ Successor.item = NoAsyncItem
+      BY Isa
+         DEF Successor, InstallProposalSuccessor,
+             AsyncCandidateAtConsumer, AsyncCandidateWithIdentity,
+             AsyncCandidateDomain,
+             AsyncCommandClasses, AsyncWorkKinds, AsyncReducerKinds
+    <2> QED BY <2>1, <2>4, <2>5, <2>6, <2>7, SMT
+         DEF Successor, InstallProposalSuccessor,
+             AsyncCandidateAtConsumer, AsyncCandidateWithIdentity,
+             AsyncCandidateTyped
+  <1> QED BY <1>1
+
+THEOREM ExecutedInstallProposalSuccessorMatchesPostState ==
+  \A command:
+    /\ StrongInductiveInvariant
+    /\ AsyncTypeInvariant
+    /\ AsyncCandidateTyped(command)
+    /\ command.kind = "PersistInstallTC"
+    /\ ExecuteCommand(command)
+    => LET successor == InstallProposalSuccessor(command)
+       IN /\ successor.consumerContext = context'
+          /\ successor.consumerView = nodeView'[command.node]
+          /\ successor.consumerGeneration = generation'[command.node]
+          /\ successor.subject =
+               IF highestRank'[command.node] = NoRank
+               THEN AsyncHeartbeatSubject
+               ELSE highestSubject'[command.node]
+PROOF
+  <1>1. ASSUME NEW command,
+                StrongInductiveInvariant,
+                AsyncTypeInvariant,
+                AsyncCandidateTyped(command),
+                command.kind = "PersistInstallTC",
+                ExecuteCommand(command)
+         PROVE LET successor == InstallProposalSuccessor(command)
+               IN /\ successor.consumerContext = context'
+                  /\ successor.consumerView = nodeView'[command.node]
+                  /\ successor.consumerGeneration =
+                       generation'[command.node]
+                  /\ successor.subject =
+                       IF highestRank'[command.node] = NoRank
+                       THEN AsyncHeartbeatSubject
+                       ELSE highestSubject'[command.node]
+    <2>1. PICK request \in pendingInstallTC:
+             /\ command.node = request.node
+             /\ command.view = request.tc.view
+             /\ PersistInstallTC(request)
+      BY <1>1, Isa DEF ExecuteCommand, ExecutePersistInstall
+    <2>2. InstallRequests(command) = {request}
+      BY <1>1, <2>1, Isa
+         DEF StrongInductiveInvariant, Safety,
+             OnePendingPersistencePerNode, RequestsUniqueByNode,
+             AllPendingRequests, InstallRequests
+    <2>3. /\ context' = context
+           /\ nodeView'[command.node] = command.view + 1
+           /\ generation'[command.node] =
+                generation[command.node] + 1
+           /\ highestRank'[command.node] =
+                IF TcHighRank(request.tc) > highestRank[command.node]
+                THEN TcHighRank(request.tc)
+                ELSE highestRank[command.node]
+           /\ highestSubject'[command.node] =
+                IF TcHighRank(request.tc) > highestRank[command.node]
+                THEN TcHighSubject(request.tc)
+                ELSE highestSubject[command.node]
+      BY <2>1, Isa DEF PersistInstallTC
+    <2>4. InstallProposalSubject(command) =
+             IF highestRank'[command.node] = NoRank
+             THEN AsyncHeartbeatSubject
+             ELSE highestSubject'[command.node]
+      BY <1>1, <2>1, <2>2, <2>3, SMTT(30), Isa
+         DEF InstallProposalSubject, AsyncProposalSubject
+    <2> QED BY <2>3, <2>4, Isa
+         DEF InstallProposalSuccessor, AsyncCandidateAtConsumer,
+             AsyncCandidateWithIdentity
+  <1> QED BY <1>1
+
+THEOREM ExecutedInstallCommitSignSuccessorIsTypedAndOwned ==
+  \A command:
+    /\ StrongInductiveInvariant
+    /\ AsyncTypeInvariant
+    /\ AsyncCandidateTyped(command)
+    /\ command.kind = "PersistInstallTC"
+    /\ ExecuteCommand(command)
+    /\ InstallCommitSignRequests(command) # {}
+    => /\ AsyncCandidateTyped(InstallCommitSignSuccessor(command))
+       /\ InstallCommitSignSuccessor(command).node = command.node
+BY SMTT(120), Isa
+   DEF InstallCommitSignSuccessor, InstallCommitSignRequests,
+       ActiveLockedCommitSignRequestsAfterInstall,
+       ExactLockedCommitIntents, VoteSign, VoteSignSet,
+       AsyncCandidateAtConsumer, AsyncCandidateWithIdentity,
+       AsyncCandidateTyped, AsyncEvidenceSet,
+       AsyncCommandClasses, AsyncWorkKinds, AsyncReducerKinds,
+       StrongInductiveInvariant, Safety, TypeInvariant,
+       ExecuteCommand, ExecutePersistInstall
+
+THEOREM ExecutedInstallLockedFetchSuccessorIsTypedAndOwned ==
+  \A command:
+    /\ StrongInductiveInvariant
+    /\ AsyncTypeInvariant
+    /\ AsyncCandidateTyped(command)
+    /\ command.kind = "PersistInstallTC"
+    /\ ExecuteCommand(command)
+    /\ InstallResultingLockedPrepareQCs(command) # {}
+    => /\ AsyncCandidateTyped(InstallLockedFetchSuccessor(command))
+       /\ InstallLockedFetchSuccessor(command).node = command.node
+BY SMTT(120), Isa
+   DEF InstallLockedFetchSuccessor,
+       InstallResultingLockedPrepareQCs, InstallRequests,
+       HistoricalLockedPrepareRecoveryProvenance,
+       AsyncCandidateAtConsumer, AsyncCandidateWithIdentity,
+       AsyncCandidateTyped, AsyncEvidenceSet,
+       AsyncCommandClasses, AsyncWorkKinds, AsyncReducerKinds,
+       StrongInductiveInvariant, Safety, TypeInvariant,
+       ExecuteCommand, ExecutePersistInstall
+
 (***************************************************************************
 Every constructor emitted by a successful TC installation freezes the
 post-install consumer epoch.  The constructor is evaluated in the pre-state,
@@ -203,7 +463,9 @@ BY Isa
        InstallLockedFetchSuccessors, InstallCommitSignSuccessors,
        InstallLockedFetchSuccessor,
        InstallCommitSignSuccessor, InstallProposalSuccessor,
-       PersistDecisionFetchSuccessor,
+       PersistDecisionRecoverySuccessor, PersistDecisionRecoveryKind,
+       PersistDecisionBody, PersistDecisionValidationHeld,
+       PersistDecisionRequest,
        AsyncCandidateAtConsumer, AsyncCandidateWithIdentity,
        RetainedBodyRebindCandidate, CausalCandidate, NoItemCandidate,
        AsyncCandidate, SequenceHasUniqueValues, SequenceSet
@@ -1642,6 +1904,38 @@ BY Isa
        ExecuteCoreDelivery, ExecuteChunkDelivery,
        ExecuteRejectAuthenticatedJunk, AsyncAuxVars, vars
 
+THEOREM ExecuteCommandOnlyRetiresCertifiedResponseClaim ==
+  \A command:
+    ExecuteCommand(command)
+      => /\ asyncCertifiedResponseClaim'
+               \subseteq asyncCertifiedResponseClaim
+         /\ UNCHANGED asyncIngressLanes
+BY SMTT(90), Isa
+   DEF ExecuteCommand, ExecuteRegularCommand,
+       RetireCompletedBodyCertifiedResponseAuthority,
+       RetireNodeCertifiedResponseAuthority,
+       FilterCertifiedResponseAuthority,
+       CertifiedResponseClaimForRequests,
+       ExecuteDecisionFetch, ExecuteSignProposal, ExecuteSignVote,
+       ExecuteFormPrepareQC, ExecuteSignTimeout,
+       ExecutePersistInstall, ExecutePersistDecision,
+       ExecuteRequestCertifiedBody, ExecuteApply,
+       ExecuteCoreDelivery, ExecuteChunkDelivery,
+       ExecuteRejectAuthenticatedJunk,
+       PublishControlItems, PublishEphemeralItems,
+       PublishControlAndEphemeralItems,
+       PublishCertifiedRequests,
+       PersistInstalledControlAfterInstall, PersistDecisionControl,
+       AsyncAuxVars
+
+THEOREM ExecuteCommandPreservesClaimIngressOwnership ==
+  \A command:
+    /\ AsyncCertifiedResponseClaimIngressOwnershipInvariant
+    /\ ExecuteCommand(command)
+    => AsyncCertifiedResponseClaimIngressOwnershipInvariant'
+BY ExecuteCommandOnlyRetiresCertifiedResponseClaim,
+   CertifiedResponseClaimIngressOwnershipIsDownwardClosed
+
 THEOREM SerializedRuntimeLeavesIngress ==
   \A node \in ValidatorIds:
     SerializedRuntimeStep(node)
@@ -1651,6 +1945,28 @@ BY ExecuteCommandLeavesIngress, Isa
        DeferredTagStep, DeferredTimeoutStep, DeferredRetransmitStep,
        DirectTimeoutStep, DirectRetransmitStep, FifoRuntimeStep,
        IdleRuntimeStep, DeferCommand, DiscardCommand, AsyncAuxVars, vars
+
+THEOREM SerializedRuntimeOnlyRetiresCertifiedResponseClaim ==
+  \A node \in ValidatorIds:
+    SerializedRuntimeStep(node)
+      => asyncCertifiedResponseClaim'
+           \subseteq asyncCertifiedResponseClaim
+BY ExecuteCommandOnlyRetiresCertifiedResponseClaim,
+   SMTT(120), Isa
+   DEF SerializedRuntimeStep, RuntimeStep, DeferredDrainStep,
+       DeferredTagStep, DeferredTimeoutStep, DeferredRetransmitStep,
+       DirectTimeoutStep, DirectRetransmitStep, FifoRuntimeStep,
+       IdleRuntimeStep, DeferCommand, DiscardCommand,
+       SendNodeRetransmissions, NoSendItem, AsyncAuxVars, vars
+
+THEOREM SerializedRuntimePreservesClaimIngressOwnership ==
+  \A node \in ValidatorIds:
+    /\ AsyncCertifiedResponseClaimIngressOwnershipInvariant
+    /\ SerializedRuntimeStep(node)
+    => AsyncCertifiedResponseClaimIngressOwnershipInvariant'
+BY SerializedRuntimeLeavesIngress,
+   SerializedRuntimeOnlyRetiresCertifiedResponseClaim,
+   CertifiedResponseClaimIngressOwnershipIsDownwardClosed
 
 THEOREM SerializedRuntimePreservesIngressType ==
   \A node \in ValidatorIds:
@@ -1835,52 +2151,6 @@ PROOF
     <2> QED BY <1>1, <2>1, SMT
          DEF AsyncItemTyped, AsyncNetworkItem, AsyncNetworkKinds,
              AsyncIngressSources
-  <1> QED BY <1>1
-
-THEOREM RuntimeCurrentEpochIsTyped ==
-  TypeInvariant => CurrentEpoch \in Epochs
-PROOF
-  <1>1. ASSUME TypeInvariant
-         PROVE CurrentEpoch \in Epochs
-    <2>1. /\ ModelConfiguration
-           /\ context \in ContextRecords
-      BY <1>1 DEF TypeInvariant
-    <2>2. PICK blockHeight \in Heights:
-             \E lineage \in LineagesAt(blockHeight):
-               context = ContextRecord(blockHeight, lineage)
-      BY <2>1, Isa DEF ContextRecords
-    <2>3. PICK lineage \in LineagesAt(blockHeight):
-             context = ContextRecord(blockHeight, lineage)
-      BY <2>2
-    <2>4. /\ context.epoch = ExpectedEpoch(blockHeight)
-           /\ MaxEpoch >= ExpectedEpoch(MaxHeight)
-      BY <2>1, <2>3 DEF ContextRecord, ModelConfiguration
-    <2>5. /\ blockHeight \in Nat
-           /\ blockHeight <= MaxHeight
-           /\ MaxHeight \in Nat
-           /\ EpochLength \in Nat \ {0}
-           /\ MaxEpoch \in Nat
-      BY <2>1, <2>2, SMT
-         DEF Heights, ModelConfiguration, QuorumConfiguration
-    <2>6. ExpectedEpoch(blockHeight) \in 0..MaxEpoch
-      BY <2>4, <2>5, BoundedNaturalQuotient DEF ExpectedEpoch
-    <2> QED BY <2>4, <2>6 DEF CurrentEpoch, Epochs
-  <1> QED BY <1>1
-
-THEOREM RuntimeCurrentVotersAreFiniteValidators ==
-  TypeInvariant
-    => /\ IsFiniteSet(CurrentVoters)
-       /\ CurrentVoters \subseteq ValidatorIds
-PROOF
-  <1>1. ASSUME TypeInvariant
-         PROVE /\ IsFiniteSet(CurrentVoters)
-               /\ CurrentVoters \subseteq ValidatorIds
-    <2>1. /\ QuorumConfiguration
-           /\ CurrentEpoch \in Epochs
-      BY <1>1, RuntimeCurrentEpochIsTyped
-         DEF TypeInvariant, ModelConfiguration
-    <2> QED BY <2>1 DEF QuorumConfiguration, CurrentVoters,
-                             VotingRoster
   <1> QED BY <1>1
 
 THEOREM UniformControlBatchIsRetainable ==
@@ -2509,6 +2779,7 @@ THEOREM TypedRetentionOnlyPreservesTransportContentType ==
   /\ AsyncTransportContentTypeInvariant
   /\ AsyncRetainedControlType(asyncRetainedControl', CurrentVoters')
   /\ asyncActiveRequests' \subseteq asyncActiveRequests
+  /\ AsyncCertifiedResponseClaimInvariant'
   /\ UNCHANGED <<context, asyncSentItems,
                   asyncTransport, asyncHeldChunks>>
   => AsyncTransportContentTypeInvariant'
@@ -2517,12 +2788,14 @@ PROOF
               AsyncRetainedControlType(
                 asyncRetainedControl', CurrentVoters'),
               asyncActiveRequests' \subseteq asyncActiveRequests,
+              AsyncCertifiedResponseClaimInvariant',
               UNCHANGED <<context, asyncSentItems,
                           asyncTransport, asyncHeldChunks>>
          PROVE AsyncTransportContentTypeInvariant'
     <2>1. /\ AsyncSentItemsType(asyncSentItems)
            /\ AsyncActiveRequestsType(
                 asyncActiveRequests, asyncSentItems)
+           /\ AsyncCertifiedResponseClaimInvariant
            /\ AsyncPacketContentTypeInvariant
            /\ AsyncHeldChunksTypeInvariant
       BY <1>1, AsyncTransportHistoryTypeDecomposition
@@ -2539,7 +2812,12 @@ PROOF
                   /\ item.kind \in {"CertifiedRequest",
                                       "CommitCertificateRequest"}
         BY <1>1, <2>1 DEF AsyncActiveRequestsType
-      <3> QED BY <3>1, <3>2 DEF AsyncActiveRequestsType
+      <3>3. AsyncCertifiedRequestLogicalIndexConsistent(
+               asyncActiveRequests')
+        BY <1>1, <2>1,
+           CertifiedRequestLogicalIndexConsistencyIsDownwardClosed
+           DEF AsyncActiveRequestsType
+      <3> QED BY <3>1, <3>2, <3>3 DEF AsyncActiveRequestsType
     <2>4. /\ AsyncPacketContentTypeInvariant'
            /\ AsyncHeldChunksTypeInvariant'
       BY <1>1, <2>1
@@ -2564,6 +2842,7 @@ THEOREM PublishTypedItemsWithTypedRetentionPreservesTransportContentType ==
     /\ asyncSentItems' = asyncSentItems \cup items
     /\ asyncActiveRequests' \subseteq asyncActiveRequests
     /\ asyncTransport' = asyncTransport \cup PacketsForItems(items)
+    /\ AsyncCertifiedResponseClaimInvariant'
     /\ UNCHANGED <<context, asyncHeldChunks>>
     => AsyncTransportContentTypeInvariant'
 PROOF
@@ -2578,11 +2857,13 @@ PROOF
                 asyncActiveRequests' \subseteq asyncActiveRequests,
                 asyncTransport' =
                   asyncTransport \cup PacketsForItems(items),
+                AsyncCertifiedResponseClaimInvariant',
                 UNCHANGED <<context, asyncHeldChunks>>
          PROVE AsyncTransportContentTypeInvariant'
     <2>1. /\ AsyncSentItemsType(asyncSentItems)
            /\ AsyncActiveRequestsType(
                 asyncActiveRequests, asyncSentItems)
+           /\ AsyncCertifiedResponseClaimInvariant
            /\ AsyncPacketContentTypeInvariant
            /\ AsyncHeldChunksTypeInvariant
       BY <1>1, AsyncTransportHistoryTypeDecomposition
@@ -2599,7 +2880,12 @@ PROOF
                   /\ item.kind \in {"CertifiedRequest",
                                       "CommitCertificateRequest"}
         BY <1>1, <2>1 DEF AsyncActiveRequestsType
-      <3> QED BY <3>1, <3>2 DEF AsyncActiveRequestsType
+      <3>3. AsyncCertifiedRequestLogicalIndexConsistent(
+               asyncActiveRequests')
+        BY <1>1, <2>1,
+           CertifiedRequestLogicalIndexConsistencyIsDownwardClosed
+           DEF AsyncActiveRequestsType
+      <3> QED BY <3>1, <3>2, <3>3 DEF AsyncActiveRequestsType
     <2>4. AsyncTransportHistoryTypeInvariant'
       BY <1>1, <2>2, <2>3
          DEF AsyncTransportHistoryTypeInvariant,
@@ -2625,14 +2911,18 @@ THEOREM RememberRetainableControlPreservesTransportContentType ==
     /\ RetainableControlBatch(items, CurrentVoters)
     /\ asyncRetainedControl' =
          RememberedControl(asyncRetainedControl, items)
-    /\ UNCHANGED <<context, asyncSentItems, asyncActiveRequests,
-                    asyncTransport, asyncHeldChunks>>
+    /\ UNCHANGED
+         <<context, AsyncCertifiedResponseClaimCoreAuthorityVars,
+           asyncSentItems, asyncActiveRequests,
+           asyncCertifiedResponseClaim, asyncTransport, asyncHeldChunks>>
     => AsyncTransportContentTypeInvariant'
 BY RememberedControlPreservesRetainedType,
-   TypedRetentionOnlyPreservesTransportContentType
+   TypedRetentionOnlyPreservesTransportContentType,
+   AppendSentHistoryPreservesCertifiedResponseClaimInvariant, Isa
    DEF AsyncTransportContentTypeInvariant,
        AsyncTransportHistoryTypeInvariant,
-       AsyncRetainedControlType, CurrentVoters, CurrentEpoch
+       AsyncRetainedControlType, AsyncCertifiedRequestsIn,
+       CurrentVoters, CurrentEpoch
 
 THEOREM RememberRetainableControlOptionallyPublishes ==
   \A items, broadcast:
@@ -2649,7 +2939,9 @@ THEOREM RememberRetainableControlOptionallyPublishes ==
          IF broadcast
          THEN asyncTransport \cup PacketsForItems(items)
          ELSE asyncTransport
-    /\ UNCHANGED <<context, asyncHeldChunks>>
+    /\ UNCHANGED
+         <<context, AsyncCertifiedResponseClaimCoreAuthorityVars,
+           asyncCertifiedResponseClaim, asyncHeldChunks>>
     => AsyncTransportContentTypeInvariant'
 PROOF
   <1>1. ASSUME NEW items, NEW broadcast,
@@ -2667,7 +2959,9 @@ PROOF
                   IF broadcast
                   THEN asyncTransport \cup PacketsForItems(items)
                   ELSE asyncTransport,
-                UNCHANGED <<context, asyncHeldChunks>>
+                UNCHANGED
+                  <<context, AsyncCertifiedResponseClaimCoreAuthorityVars,
+                    asyncCertifiedResponseClaim, asyncHeldChunks>>
          PROVE AsyncTransportContentTypeInvariant'
     <2>1. AsyncRetainedControlType(
              asyncRetainedControl', CurrentVoters')
@@ -2677,11 +2971,14 @@ PROOF
              AsyncRetainedControlType, CurrentVoters, CurrentEpoch
     <2>2. CASE broadcast = TRUE
       BY <1>1, <2>1, <2>2,
+         AppendSentHistoryPreservesCertifiedResponseClaimInvariant,
          PublishTypedItemsWithTypedRetentionPreservesTransportContentType
-         DEF RetainableControlBatch
+         DEF RetainableControlBatch, AsyncCertifiedRequestsIn
     <2>3. CASE broadcast = FALSE
       BY <1>1, <2>1, <2>3,
+         AppendSentHistoryPreservesCertifiedResponseClaimInvariant,
          TypedRetentionOnlyPreservesTransportContentType
+         DEF AsyncCertifiedRequestsIn
     <2> QED BY <1>1, <2>2, <2>3
   <1> QED BY <1>1
 
@@ -2700,6 +2997,7 @@ THEOREM InstallRetainableControlOptionallyPublishes ==
          IF broadcast
          THEN asyncTransport \cup PacketsForItems(items)
          ELSE asyncTransport
+    /\ AsyncCertifiedResponseClaimInvariant'
     /\ UNCHANGED <<context, asyncHeldChunks>>
     => AsyncTransportContentTypeInvariant'
 PROOF
@@ -2718,6 +3016,7 @@ PROOF
                   IF broadcast
                   THEN asyncTransport \cup PacketsForItems(items)
                   ELSE asyncTransport,
+                AsyncCertifiedResponseClaimInvariant',
                 UNCHANGED <<context, asyncHeldChunks>>
          PROVE AsyncTransportContentTypeInvariant'
     <2>1. AsyncRetainedControlType(
@@ -2740,6 +3039,59 @@ PROOF
     <2> QED BY <1>1, <2>3, <2>4
   <1> QED BY <1>1
 
+THEOREM RememberRetainableControlWithFilteredRequestsOptionallyPublishes ==
+  \A items, broadcast:
+    /\ AsyncRuntimeScalarTypeInvariant
+    /\ AsyncTransportContentTypeInvariant
+    /\ RetainableControlBatch(items, CurrentVoters)
+    /\ broadcast \in BOOLEAN
+    /\ asyncRetainedControl' =
+         RememberedControl(asyncRetainedControl, items)
+    /\ asyncSentItems' =
+         IF broadcast THEN asyncSentItems \cup items ELSE asyncSentItems
+    /\ asyncActiveRequests' \subseteq asyncActiveRequests
+    /\ asyncTransport' =
+         IF broadcast
+         THEN asyncTransport \cup PacketsForItems(items)
+         ELSE asyncTransport
+    /\ AsyncCertifiedResponseClaimInvariant'
+    /\ UNCHANGED <<context, asyncHeldChunks>>
+    => AsyncTransportContentTypeInvariant'
+PROOF
+  <1>1. ASSUME NEW items, NEW broadcast,
+                AsyncRuntimeScalarTypeInvariant,
+                AsyncTransportContentTypeInvariant,
+                RetainableControlBatch(items, CurrentVoters),
+                broadcast \in BOOLEAN,
+                asyncRetainedControl' =
+                  RememberedControl(asyncRetainedControl, items),
+                asyncSentItems' =
+                  IF broadcast
+                  THEN asyncSentItems \cup items ELSE asyncSentItems,
+                asyncActiveRequests' \subseteq asyncActiveRequests,
+                asyncTransport' =
+                  IF broadcast
+                  THEN asyncTransport \cup PacketsForItems(items)
+                  ELSE asyncTransport,
+                AsyncCertifiedResponseClaimInvariant',
+                UNCHANGED <<context, asyncHeldChunks>>
+         PROVE AsyncTransportContentTypeInvariant'
+    <2>1. AsyncRetainedControlType(
+             asyncRetainedControl', CurrentVoters')
+      BY <1>1, RememberedControlPreservesRetainedType, Isa
+         DEF AsyncTransportContentTypeInvariant,
+             AsyncTransportHistoryTypeInvariant,
+             AsyncRetainedControlType, CurrentVoters, CurrentEpoch
+    <2>2. CASE broadcast = TRUE
+      BY <1>1, <2>1, <2>2,
+         PublishTypedItemsWithTypedRetentionPreservesTransportContentType
+         DEF RetainableControlBatch
+    <2>3. CASE broadcast = FALSE
+      BY <1>1, <2>1, <2>3,
+         TypedRetentionOnlyPreservesTransportContentType
+    <2> QED BY <1>1, <2>2, <2>3
+  <1> QED BY <1>1
+
 THEOREM PublishRetainableControlAndEphemeralPreservesTransportContentType ==
   \A controlItems, ephemeralItems:
     /\ AsyncRuntimeScalarTypeInvariant
@@ -2748,6 +3100,7 @@ THEOREM PublishRetainableControlAndEphemeralPreservesTransportContentType ==
     /\ IsFiniteSet(ephemeralItems)
     /\ \A item \in ephemeralItems: AsyncItemTyped(item)
     /\ PublishControlAndEphemeralItems(controlItems, ephemeralItems)
+    /\ AsyncCertifiedResponseClaimInvariant'
     /\ UNCHANGED <<context, asyncHeldChunks>>
     => AsyncTransportContentTypeInvariant'
 PROOF
@@ -2759,6 +3112,7 @@ PROOF
                 \A item \in ephemeralItems: AsyncItemTyped(item),
                 PublishControlAndEphemeralItems(
                   controlItems, ephemeralItems),
+                AsyncCertifiedResponseClaimInvariant',
                 UNCHANGED <<context, asyncHeldChunks>>
          PROVE AsyncTransportContentTypeInvariant'
     <2> DEFINE Items == controlItems \cup ephemeralItems
@@ -2787,6 +3141,7 @@ THEOREM PublishRetainableControlPreservesTransportContentType ==
     /\ AsyncTransportContentTypeInvariant
     /\ RetainableControlBatch(items, CurrentVoters)
     /\ PublishControlItems(items)
+    /\ AsyncCertifiedResponseClaimInvariant'
     /\ UNCHANGED <<context, asyncHeldChunks>>
     => AsyncTransportContentTypeInvariant'
 PROOF
@@ -2795,6 +3150,7 @@ PROOF
                 AsyncTransportContentTypeInvariant,
                 RetainableControlBatch(items, CurrentVoters),
                 PublishControlItems(items),
+                AsyncCertifiedResponseClaimInvariant',
                 UNCHANGED <<context, asyncHeldChunks>>
          PROVE AsyncTransportContentTypeInvariant'
     <2>1. /\ AsyncSentItemsType(asyncSentItems)
@@ -2802,6 +3158,7 @@ PROOF
                 asyncRetainedControl, CurrentVoters)
            /\ AsyncActiveRequestsType(
                 asyncActiveRequests, asyncSentItems)
+           /\ AsyncCertifiedResponseClaimInvariant
            /\ AsyncPacketContentTypeInvariant
            /\ AsyncHeldChunksTypeInvariant
       BY <1>1, AsyncTransportHistoryTypeDecomposition
@@ -2830,7 +3187,7 @@ PROOF
              asyncActiveRequests', asyncSentItems')
       BY <2>1, <2>3, Isa DEF AsyncActiveRequestsType
     <2>7. AsyncTransportHistoryTypeInvariant'
-      BY <2>4, <2>5, <2>6
+      BY <1>1, <2>4, <2>5, <2>6
          DEF AsyncTransportHistoryTypeInvariant,
              AsyncSentItemsType, AsyncRetainedControlType,
              AsyncActiveRequestsType
@@ -2857,10 +3214,15 @@ THEOREM PublishTrackedRequestsPreservesTransportContentType ==
          /\ AsyncItemTyped(item)
          /\ item.kind \in {"CertifiedRequest",
                             "CommitCertificateRequest"}
+    /\ AsyncCertifiedRequestLogicalIndexConsistent(items)
+    /\ AsyncCertifiedRequestSetsCompatible(asyncActiveRequests, items)
     /\ asyncActiveRequests' = asyncActiveRequests \cup items
     /\ asyncSentItems' = asyncSentItems \cup items
     /\ asyncTransport' = asyncTransport \cup PacketsForItems(items)
-    /\ UNCHANGED <<context, asyncRetainedControl, asyncHeldChunks>>
+    /\ UNCHANGED
+         <<context, AsyncCertifiedResponseClaimCoreAuthorityVars,
+           asyncCertifiedResponseClaim, asyncRetainedControl,
+           asyncHeldChunks>>
     => AsyncTransportContentTypeInvariant'
 PROOF
   <1>1. ASSUME NEW items,
@@ -2871,18 +3233,24 @@ PROOF
                   /\ AsyncItemTyped(item)
                   /\ item.kind \in {"CertifiedRequest",
                                      "CommitCertificateRequest"},
+                AsyncCertifiedRequestLogicalIndexConsistent(items),
+                AsyncCertifiedRequestSetsCompatible(
+                  asyncActiveRequests, items),
                 asyncActiveRequests' = asyncActiveRequests \cup items,
                 asyncSentItems' = asyncSentItems \cup items,
                 asyncTransport' =
                   asyncTransport \cup PacketsForItems(items),
-                UNCHANGED <<context, asyncRetainedControl,
-                            asyncHeldChunks>>
+                UNCHANGED
+                  <<context, AsyncCertifiedResponseClaimCoreAuthorityVars,
+                    asyncCertifiedResponseClaim, asyncRetainedControl,
+                    asyncHeldChunks>>
          PROVE AsyncTransportContentTypeInvariant'
     <2>1. /\ AsyncSentItemsType(asyncSentItems)
            /\ AsyncRetainedControlType(
                 asyncRetainedControl, CurrentVoters)
            /\ AsyncActiveRequestsType(
                 asyncActiveRequests, asyncSentItems)
+           /\ AsyncCertifiedResponseClaimInvariant
            /\ AsyncPacketContentTypeInvariant
            /\ AsyncHeldChunksTypeInvariant
       BY <1>1, AsyncTransportHistoryTypeDecomposition
@@ -2904,9 +3272,17 @@ PROOF
                   /\ item.kind \in {"CertifiedRequest",
                                       "CommitCertificateRequest"}
         BY <1>1, <2>1 DEF AsyncActiveRequestsType
-      <3> QED BY <3>1, <3>2 DEF AsyncActiveRequestsType
+      <3>3. AsyncCertifiedRequestLogicalIndexConsistent(
+               asyncActiveRequests')
+        BY <1>1, <2>1,
+           CompatibleCertifiedRequestUnionIsLogicallyConsistent
+           DEF AsyncActiveRequestsType
+      <3> QED BY <3>1, <3>2, <3>3 DEF AsyncActiveRequestsType
+    <2>4a. AsyncCertifiedResponseClaimInvariant'
+      BY <1>1, <2>1,
+         ExtendActiveRequestsPreservesCertifiedResponseClaimInvariant
     <2>5. AsyncTransportHistoryTypeInvariant'
-      BY <2>2, <2>3, <2>4
+      BY <2>2, <2>3, <2>4, <2>4a
          DEF AsyncTransportHistoryTypeInvariant,
              AsyncSentItemsType, AsyncRetainedControlType,
              AsyncActiveRequestsType
@@ -2963,19 +3339,21 @@ THEOREM AsyncBodyEnvelopeConstructorTyped ==
 BY Isa DEF AsyncBodyEnvelopeTyped, AsyncBodyEnvelope
 
 THEOREM AsyncBodyNetworkItemConstructorTyped ==
-  \A kind \in {"Chunk", "CertifiedRequest",
-                 "CommitCertificateRequest"},
+  \A kind \in {"Chunk", "CommitCertificateRequest"},
      source \in ValidatorIds:
     \A envelope:
-      AsyncBodyEnvelopeTyped(envelope)
+      /\ AsyncBodyEnvelopeTyped(envelope)
+      /\ (kind = "CommitCertificateRequest" =>
+            AsyncCommitCertificateRequestEnvelopeTyped(envelope))
         => AsyncItemTyped(AsyncNetworkItem(kind, source, envelope))
 PROOF
   <1>1. ASSUME NEW kind \in
-                  {"Chunk", "CertifiedRequest",
-                    "CommitCertificateRequest"},
+                  {"Chunk", "CommitCertificateRequest"},
                 NEW source \in ValidatorIds,
                 NEW envelope,
-                AsyncBodyEnvelopeTyped(envelope)
+                /\ AsyncBodyEnvelopeTyped(envelope)
+                /\ (kind = "CommitCertificateRequest" =>
+                      AsyncCommitCertificateRequestEnvelopeTyped(envelope))
          PROVE AsyncItemTyped(
                  AsyncNetworkItem(kind, source, envelope))
     <2>1. /\ DOMAIN AsyncNetworkItem(kind, source, envelope) =
@@ -2993,13 +3371,10 @@ PROOF
     <2>4. CASE kind = "Chunk"
       <3> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, SMT
            DEF AsyncItemTyped
-    <2>5. CASE kind = "CertifiedRequest"
+    <2>5. CASE kind = "CommitCertificateRequest"
       <3> QED BY <1>1, <2>1, <2>2, <2>3, <2>5, SMT
-           DEF AsyncItemTyped
-    <2>6. CASE kind = "CommitCertificateRequest"
-      <3> QED BY <1>1, <2>1, <2>2, <2>3, <2>6, SMT
-           DEF AsyncItemTyped
-    <2> QED BY <1>1, <2>4, <2>5, <2>6, Isa
+           DEF AsyncItemTyped, AsyncReplyRequestItemTyped
+    <2> QED BY <1>1, <2>4, <2>5, Isa
   <1> QED BY <1>1
 
 THEOREM AsyncChunkReceiptConstructorTyped ==
@@ -3161,58 +3536,49 @@ PROOF
                     /\ AsyncItemTyped(item)
                     /\ item.kind = "CertifiedRequest"
     <2>1. /\ IsFiniteSet(ValidatorIds)
-           /\ IsFiniteSet(qc.signers \ {node})
-           /\ context.height \in Heights
-           /\ AsyncChunkCount \in Nat \ {0}
-           /\ AsyncIngressCapacity \in Nat \ {0}
+           /\ IsFiniteSet(CurrentVoters)
+           /\ CurrentVoters \subseteq ValidatorIds
+           /\ qc.signers \subseteq ValidatorIds
+           /\ Responsive \subseteq ValidatorIds
+           /\ AsyncConfiguration
       BY <1>1, RuntimeValidatorIdsAreFinite,
-         QcSignerDifferenceIsFinite, SMT
+         RuntimeCurrentVotersAreFiniteValidators,
+         ResponsiveAreValidators, SMT
          DEF AsyncTypeInvariant, TypeInvariant, QcRecordSet,
-             ValidatorIds, AsyncConfiguration,
              AsyncSchedulerTypeInvariant, AsyncRuntimeTypeInvariant,
              AsyncRuntimeScalarTypeInvariant
-    <2>2. IsFiniteSet(CertifiedRequestOutbox(node, qc))
-      BY <2>1, FS_Image, Isa DEF CertifiedRequestOutbox
-    <2>3. \A item \in CertifiedRequestOutbox(node, qc):
+    <2>2. /\ CertifiedArchiveRoutes(node, qc) \subseteq ValidatorIds
+           /\ IsFiniteSet(CertifiedArchiveRoutes(node, qc))
+      BY <2>1, FS_Subset, Isa
+         DEF CertifiedArchiveRoutes, AsyncResponsiveArchiveServers,
+             AsyncArchiveServerIds
+    <2>3. IsFiniteSet(CertifiedRequestOutbox(node, qc))
+      BY <2>2, FS_Image, Isa DEF CertifiedRequestOutbox
+    <2>4. \A item \in CertifiedRequestOutbox(node, qc):
              /\ AsyncItemTyped(item)
              /\ item.kind = "CertifiedRequest"
       <3>1. ASSUME NEW item \in CertifiedRequestOutbox(node, qc)
              PROVE /\ AsyncItemTyped(item)
                    /\ item.kind = "CertifiedRequest"
-        <4>1. PICK recipient \in qc.signers \ {node}:
+        <4>1. PICK recipient \in CertifiedArchiveRoutes(node, qc):
                  item = AsyncNetworkItem(
                    "CertifiedRequest", node,
-                   AsyncBodyEnvelope(recipient, context.height,
-                                     qc.view, qc.subject,
-                                     NoAsyncChunk, 0))
+                   AsyncCertifiedRequestEnvelope(
+                     recipient, node, qc, 0))
           BY <3>1 DEF CertifiedRequestOutbox
-        <4>2. /\ recipient \in ValidatorIds
-               /\ qc.view \in Views
-               /\ qc.subject \in Subjects
-          BY <1>1, <4>1 DEF QcRecordSet
-        <4>3. NoAsyncChunk \in 0..AsyncChunkCount
-          BY <2>1, SMT DEF NoAsyncChunk
-        <4>4. 0 \in 0..(AsyncIngressCapacity - 1)
-          BY <2>1, SMT
-        <4>5. AsyncBodyEnvelopeTyped(
-                 AsyncBodyEnvelope(recipient, context.height,
-                                   qc.view, qc.subject,
-                                   NoAsyncChunk, 0))
-          BY <1>1, <2>1, <4>2, <4>3, <4>4,
-             AsyncBodyEnvelopeConstructorTyped
-        <4>6. AsyncItemTyped(
-                 AsyncNetworkItem(
-                   "CertifiedRequest", node,
-                   AsyncBodyEnvelope(recipient, context.height,
-                                     qc.view, qc.subject,
-                                     NoAsyncChunk, 0)))
-          BY <1>1, <4>5,
-             AsyncBodyNetworkItemConstructorTyped
-        <4>7. item.kind = "CertifiedRequest"
+        <4>2. recipient \in ValidatorIds
+          BY <2>2, <4>1
+        <4>3. AsyncItemTyped(item)
+          BY <1>1, <2>1, <4>1, <4>2, SMTT(60)
+             DEF AsyncItemTyped, AsyncReplyRequestItemTyped,
+                 AsyncCertifiedRequestEnvelope, AsyncNetworkItem,
+                 AsyncNetworkKinds, AsyncIngressSources,
+                 AsyncConfiguration
+        <4>4. item.kind = "CertifiedRequest"
           BY <4>1 DEF AsyncNetworkItem
-        <4> QED BY <4>1, <4>6, <4>7
+        <4> QED BY <4>3, <4>4
       <3> QED BY <3>1
-    <2> QED BY <2>2, <2>3
+    <2> QED BY <2>3, <2>4
   <1> QED BY <1>1
 
 THEOREM CommitCertificateRequestOutboxIsFiniteAndTyped ==
@@ -3271,17 +3637,24 @@ PROOF
                                    NoAsyncChunk, 0))
           BY <1>1, <2>1, <4>2, <4>3, <4>4,
              AsyncBodyEnvelopeConstructorTyped
-        <4>6. AsyncItemTyped(
+        <4>6. AsyncCommitCertificateRequestEnvelopeTyped(
+                 AsyncBodyEnvelope(server, context.height,
+                                   nodeView[node], AsyncHeartbeatSubject,
+                                   NoAsyncChunk, 0))
+          BY <4>5
+             DEF AsyncCommitCertificateRequestEnvelopeTyped,
+                 AsyncBodyEnvelope
+        <4>7. AsyncItemTyped(
                  AsyncNetworkItem(
                    "CommitCertificateRequest", node,
                    AsyncBodyEnvelope(server, context.height,
                                      nodeView[node], AsyncHeartbeatSubject,
                                      NoAsyncChunk, 0)))
-          BY <1>1, <4>5,
+          BY <1>1, <4>5, <4>6,
              AsyncBodyNetworkItemConstructorTyped
-        <4>7. item.kind = "CommitCertificateRequest"
+        <4>8. item.kind = "CommitCertificateRequest"
           BY <4>1 DEF AsyncNetworkItem
-        <4> QED BY <4>1, <4>6, <4>7
+        <4> QED BY <4>1, <4>7, <4>8
       <3> QED BY <3>1
     <2> QED BY <2>2, <2>3
   <1> QED BY <1>1
@@ -3402,13 +3775,17 @@ THEOREM SendNodeRetransmissionsPreservesTransportContentType ==
   \A node \in ValidatorIds:
     (/\ AsyncTypeInvariant
      /\ SendNodeRetransmissions(node)
-     /\ UNCHANGED <<context, asyncHeldChunks>>)
+     /\ UNCHANGED
+          <<context, AsyncCertifiedResponseClaimCoreAuthorityVars,
+            asyncHeldChunks>>)
     => AsyncTransportContentTypeInvariant'
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 /\ AsyncTypeInvariant
                 /\ SendNodeRetransmissions(node)
-                /\ UNCHANGED <<context, asyncHeldChunks>>
+                /\ UNCHANGED
+                     <<context, AsyncCertifiedResponseClaimCoreAuthorityVars,
+                       asyncHeldChunks>>
          PROVE AsyncTransportContentTypeInvariant'
     <2>1. /\ IsFiniteSet(RetryableItems(node))
            /\ \A item \in RetryableItems(node): AsyncItemTyped(item)
@@ -3473,7 +3850,7 @@ BY IsaM("blast")
        BeginObservePrepare, PersistObservePrepare,
        BeginLockCommit, PersistLockCommit, FormCommitQC,
        BeginDecision, PersistTimeout, FormTC, BeginInstallTC,
-       FetchCertifiedBody
+       AcceptCertifiedResponseCapability, InstallCertifiedBodyEffect
 
 THEOREM ExecuteApplyLeavesContext ==
   \A command:
@@ -3487,18 +3864,124 @@ BY IsaM("blast")
    DEF ExecuteCoreDelivery, DeliverProposal, DeliverVote, DeliverQC,
        DeliverTimeout, DeliverTC
 
-THEOREM ExecuteTransportStutterCommandPreservesContent ==
+THEOREM FilterCertifiedResponseAuthorityPreservesContent ==
+  /\ AsyncTransportContentTypeInvariant
+  /\ asyncActiveRequests' \subseteq asyncActiveRequests
+  /\ asyncCertifiedResponseClaim' =
+       CertifiedResponseClaimForRequests(asyncActiveRequests')
+  /\ UNCHANGED <<context, asyncSentItems, asyncRetainedControl,
+                  asyncTransport, asyncHeldChunks>>
+  => AsyncTransportContentTypeInvariant'
+PROOF
+  <1>1. ASSUME AsyncTransportContentTypeInvariant,
+                asyncActiveRequests' \subseteq asyncActiveRequests,
+                asyncCertifiedResponseClaim' =
+                  CertifiedResponseClaimForRequests(
+                    asyncActiveRequests'),
+                UNCHANGED
+                  <<context, asyncSentItems, asyncRetainedControl,
+                    asyncTransport, asyncHeldChunks>>
+         PROVE AsyncTransportContentTypeInvariant'
+    <2>1. AsyncCertifiedResponseClaimInvariant
+      BY <1>1
+         DEF AsyncTransportContentTypeInvariant,
+             AsyncTransportHistoryTypeInvariant
+    <2>2. /\ asyncSentItems' = asyncSentItems \cup {}
+           /\ IsFiniteSet({})
+           /\ \A item \in {}: AsyncItemTyped(item)
+      BY <1>1, FS_EmptySet
+    <2>3. AsyncCertifiedResponseClaimInvariant'
+      BY <1>1, <2>1, <2>2,
+         FilterActiveRequestsAndClaimPreservesInvariant
+    <2>4. AsyncRetainedControlType(
+             asyncRetainedControl', CurrentVoters')
+      BY <1>1, Isa
+         DEF AsyncTransportContentTypeInvariant,
+             AsyncTransportHistoryTypeInvariant,
+             AsyncRetainedControlType, CurrentVoters, CurrentEpoch
+    <2> QED BY <1>1, <2>3, <2>4,
+         TypedRetentionOnlyPreservesTransportContentType
+  <1> QED BY <1>1
+
+THEOREM ExecuteRegularCommandPreservesTransportContentType ==
   \A command:
     (/\ AsyncTypeInvariant
-     /\ (ExecuteRegularCommand(command)
-           \/ ExecuteApply(command)
-           \/ ExecuteRejectAuthenticatedJunk(command)))
+     /\ ExecuteRegularCommand(command))
+      => AsyncTransportContentTypeInvariant'
+PROOF
+  <1>1. ASSUME NEW command,
+                /\ AsyncTypeInvariant
+                /\ ExecuteRegularCommand(command)
+         PROVE AsyncTransportContentTypeInvariant'
+    <2>1. AsyncTransportContentTypeInvariant
+      BY <1>1
+         DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+             AsyncTransportTypeInvariant
+    <2>2. CASE command.kind \in
+                 {"FetchBody", "RebindRetainedBody"}
+      <3>1. /\ asyncActiveRequests' \subseteq asyncActiveRequests
+             /\ asyncCertifiedResponseClaim' =
+                  CertifiedResponseClaimForRequests(
+                    asyncActiveRequests')
+             /\ UNCHANGED
+                  <<context, asyncSentItems, asyncRetainedControl,
+                    asyncTransport, asyncHeldChunks>>
+        BY <1>1, <2>2, RegularCoreCommandLeavesContext, Isa
+           DEF ExecuteRegularCommand,
+               RetireCompletedBodyCertifiedResponseAuthority,
+               FilterCertifiedResponseAuthority, vars
+      <3> QED BY <2>1, <3>1,
+           FilterCertifiedResponseAuthorityPreservesContent
+    <2>3. CASE command.kind \notin
+                 {"FetchBody", "RebindRetainedBody"}
+      <3>1. UNCHANGED AsyncTransportContentTypeVars
+        BY <1>1, <2>3, RegularCoreCommandLeavesContext, Isa
+           DEF ExecuteRegularCommand, AsyncTransportContentTypeVars,
+               AsyncCertifiedResponseClaimAuthorityVars, vars
+      <3> QED BY <2>1, <3>1,
+           AsyncTransportContentTypeStutter
+    <2> QED BY <2>2, <2>3
+  <1> QED BY <1>1
+
+THEOREM ExecuteApplyPreservesTransportContentType ==
+  \A command:
+    (/\ AsyncTypeInvariant
+     /\ ExecuteApply(command))
+      => AsyncTransportContentTypeInvariant'
+PROOF
+  <1>1. ASSUME NEW command,
+                /\ AsyncTypeInvariant
+                /\ ExecuteApply(command)
+         PROVE AsyncTransportContentTypeInvariant'
+    <2>1. AsyncTransportContentTypeInvariant
+      BY <1>1
+         DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+             AsyncTransportTypeInvariant
+    <2>2. /\ asyncActiveRequests' \subseteq asyncActiveRequests
+           /\ asyncCertifiedResponseClaim' =
+                CertifiedResponseClaimForRequests(
+                  asyncActiveRequests')
+           /\ UNCHANGED
+                <<context, asyncSentItems, asyncRetainedControl,
+                  asyncTransport, asyncHeldChunks>>
+      BY <1>1, ExecuteApplyLeavesContext, Isa
+         DEF ExecuteApply, RetireNodeCertifiedResponseAuthority,
+             ActiveRequestsWithoutNode,
+             FilterCertifiedResponseAuthority, vars
+    <2> QED BY <2>1, <2>2,
+         FilterCertifiedResponseAuthorityPreservesContent
+  <1> QED BY <1>1
+
+THEOREM ExecuteRejectAuthenticatedJunkPreservesTransportContentType ==
+  \A command:
+    (/\ AsyncTypeInvariant
+     /\ ExecuteRejectAuthenticatedJunk(command))
       => AsyncTransportContentTypeInvariant'
 BY AsyncTransportContentTypeStutter,
-   RegularCoreCommandLeavesContext, ExecuteApplyLeavesContext, Isa
+   Isa
    DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
        AsyncTransportTypeInvariant, AsyncTransportContentTypeVars,
-       ExecuteRegularCommand, ExecuteApply,
+       AsyncCertifiedResponseClaimAuthorityVars,
        ExecuteRejectAuthenticatedJunk, AsyncAuxVars, vars
 
 THEOREM ExecuteSignProposalPreservesTransportContentType ==
@@ -3546,7 +4029,15 @@ PROOF
     <2>6. /\ AsyncRuntimeScalarTypeInvariant
            /\ AsyncTransportContentTypeInvariant
       BY <1>1, AsyncTypeProvidesTransportContentInputs
-    <2> QED BY <2>1, <2>3, <2>4, <2>5, <2>6,
+    <2>6a. AsyncCertifiedResponseClaimInvariant'
+      BY <1>1, <2>1, <2>6,
+         AppendSentHistoryPreservesCertifiedResponseClaimInvariant,
+         Isa
+         DEF PublishControlAndEphemeralItems,
+             AsyncTransportContentTypeInvariant,
+             AsyncTransportHistoryTypeInvariant,
+             AsyncCertifiedRequestsIn
+    <2> QED BY <2>1, <2>3, <2>4, <2>5, <2>6, <2>6a,
          PublishRetainableControlAndEphemeralPreservesTransportContentType
   <1> QED BY <1>1
 
@@ -3578,7 +4069,15 @@ PROOF
     <2>5. /\ AsyncRuntimeScalarTypeInvariant
            /\ AsyncTransportContentTypeInvariant
       BY <1>1, AsyncTypeProvidesTransportContentInputs
-    <2> QED BY <2>1, <2>3, <2>4, <2>5,
+    <2>5a. AsyncCertifiedResponseClaimInvariant'
+      BY <1>1, <2>1, <2>5,
+         AppendSentHistoryPreservesCertifiedResponseClaimInvariant,
+         Isa
+         DEF PublishControlItems,
+             AsyncTransportContentTypeInvariant,
+             AsyncTransportHistoryTypeInvariant,
+             AsyncCertifiedRequestsIn
+    <2> QED BY <2>1, <2>3, <2>4, <2>5, <2>5a,
          PublishRetainableControlPreservesTransportContentType
   <1> QED BY <1>1
 
@@ -3614,7 +4113,15 @@ PROOF
     <2>4. /\ AsyncRuntimeScalarTypeInvariant
            /\ AsyncTransportContentTypeInvariant
       BY <1>1, AsyncTypeProvidesTransportContentInputs
-    <2> QED BY <2>1, <2>2, <2>3, <2>4,
+    <2>4a. AsyncCertifiedResponseClaimInvariant'
+      BY <1>1, <2>1, <2>4,
+         AppendSentHistoryPreservesCertifiedResponseClaimInvariant,
+         Isa
+         DEF PublishControlItems,
+             AsyncTransportContentTypeInvariant,
+             AsyncTransportHistoryTypeInvariant,
+             AsyncCertifiedRequestsIn
+    <2> QED BY <2>1, <2>2, <2>3, <2>4, <2>4a,
          PublishRetainableControlPreservesTransportContentType
   <1> QED BY <1>1
 
@@ -3646,7 +4153,15 @@ PROOF
     <2>5. /\ AsyncRuntimeScalarTypeInvariant
            /\ AsyncTransportContentTypeInvariant
       BY <1>1, AsyncTypeProvidesTransportContentInputs
-    <2> QED BY <2>1, <2>3, <2>4, <2>5,
+    <2>5a. AsyncCertifiedResponseClaimInvariant'
+      BY <1>1, <2>1, <2>5,
+         AppendSentHistoryPreservesCertifiedResponseClaimInvariant,
+         Isa
+         DEF PublishControlItems,
+             AsyncTransportContentTypeInvariant,
+             AsyncTransportHistoryTypeInvariant,
+             AsyncCertifiedRequestsIn
+    <2> QED BY <2>1, <2>3, <2>4, <2>5, <2>5a,
          PublishRetainableControlPreservesTransportContentType
   <1> QED BY <1>1
 
@@ -3682,7 +4197,21 @@ PROOF
     <2>5. /\ AsyncRuntimeScalarTypeInvariant
            /\ AsyncTransportContentTypeInvariant
       BY <1>1, AsyncTypeProvidesTransportContentInputs
-    <2> QED BY <2>1, <2>2, <2>3, <2>4, <2>5,
+    <2>5a. AsyncCertifiedResponseClaimInvariant'
+      <3>1. CASE request.rebroadcast = TRUE
+        BY <1>1, <2>1, <2>5, <3>1,
+           FilterActiveRequestsAndClaimPreservesInvariant, Isa
+           DEF PersistInstalledControlAfterInstall,
+               AsyncTransportContentTypeInvariant,
+               AsyncTransportHistoryTypeInvariant
+      <3>2. CASE request.rebroadcast = FALSE
+        BY <1>1, <2>1, <2>5, <3>2,
+           FilterActiveRequestsAndClaimPreservesInvariant, Isa
+           DEF PersistInstalledControlAfterInstall,
+               AsyncTransportContentTypeInvariant,
+               AsyncTransportHistoryTypeInvariant
+      <3> QED BY <2>2, <3>1, <3>2, SMT
+    <2> QED BY <2>1, <2>2, <2>3, <2>4, <2>5, <2>5a,
          InstallRetainableControlOptionallyPublishes
          DEF PersistInstalledControlAfterInstall
   <1> QED BY <1>1
@@ -3700,6 +4229,7 @@ PROOF
     <2>1. PICK request \in pendingDecision:
              /\ PersistDecision(request)
              /\ PersistDecisionControl(
+                  request.node, request.qc,
                   QcOutbox(request.node, request.qc),
                   request.rebroadcast)
       BY <1>1 DEF ExecutePersistDecision
@@ -3718,8 +4248,22 @@ PROOF
     <2>5. /\ AsyncRuntimeScalarTypeInvariant
            /\ AsyncTransportContentTypeInvariant
       BY <1>1, AsyncTypeProvidesTransportContentInputs
-    <2> QED BY <2>1, <2>2, <2>3, <2>4, <2>5,
-         RememberRetainableControlOptionallyPublishes
+    <2>5a. AsyncCertifiedResponseClaimInvariant'
+      <3>1. CASE request.rebroadcast = TRUE
+        BY <1>1, <2>1, <2>5, <3>1,
+           FilterActiveRequestsAndClaimPreservesInvariant, Isa
+           DEF PersistDecisionControl,
+               AsyncTransportContentTypeInvariant,
+               AsyncTransportHistoryTypeInvariant
+      <3>2. CASE request.rebroadcast = FALSE
+        BY <1>1, <2>1, <2>5, <3>2,
+           FilterActiveRequestsAndClaimPreservesInvariant, Isa
+           DEF PersistDecisionControl,
+               AsyncTransportContentTypeInvariant,
+               AsyncTransportHistoryTypeInvariant
+      <3> QED BY <2>2, <3>1, <3>2, SMT
+    <2> QED BY <2>1, <2>2, <2>3, <2>4, <2>5, <2>5a,
+         RememberRetainableControlWithFilteredRequestsOptionallyPublishes
          DEF PersistDecisionControl
   <1> QED BY <1>1
 
@@ -3758,11 +4302,13 @@ PROOF
       BY <1>1, <2>1, <2>2,
          CertifiedRequestOutboxIsFiniteAndTyped
     <2>4. /\ UNCHANGED context
-           /\ UNCHANGED asyncRetainedControl
-           /\ UNCHANGED asyncHeldChunks
+           /\ UNCHANGED
+                <<AsyncCertifiedResponseClaimCoreAuthorityVars,
+                  asyncCertifiedResponseClaim, asyncRetainedControl,
+                  asyncHeldChunks>>
       BY <1>1, <2>1, Isa
          DEF ExecuteRequestCertifiedBody, PublishCertifiedRequests,
-             vars
+             AsyncCertifiedResponseClaimCoreAuthorityVars, vars
     <2>5. /\ AsyncRuntimeScalarTypeInvariant
            /\ AsyncTransportContentTypeInvariant
       BY <1>1, AsyncTypeProvidesTransportContentInputs
@@ -3795,7 +4341,7 @@ PROOF
       <3>1. UNCHANGED AsyncTransportContentTypeVars
         BY <1>1, <2>2, Isa
            DEF ExecuteDecisionFetch, AsyncTransportContentTypeVars,
-               vars
+               AsyncCertifiedResponseClaimAuthorityVars, vars
       <3> QED BY <2>1, <3>1,
                    AsyncTransportContentTypeStutter
     <2>3. CASE ~BodyHeldBy(durableBodies, command.node, context,
@@ -3820,10 +4366,13 @@ PROOF
         BY <1>1, <2>1, <3>1, <3>2,
            CertifiedRequestOutboxIsFiniteAndTyped
       <3>4. /\ UNCHANGED context
-             /\ UNCHANGED asyncRetainedControl
-             /\ UNCHANGED asyncHeldChunks
+             /\ UNCHANGED
+                  <<AsyncCertifiedResponseClaimCoreAuthorityVars,
+                    asyncCertifiedResponseClaim, asyncRetainedControl,
+                    asyncHeldChunks>>
         BY <1>1, <2>3, <3>1, Isa
-           DEF ExecuteDecisionFetch, PublishCertifiedRequests, vars
+           DEF ExecuteDecisionFetch, PublishCertifiedRequests,
+               AsyncCertifiedResponseClaimCoreAuthorityVars, vars
       <3> QED BY <2>1, <3>1, <3>3, <3>4,
                    PublishTrackedRequestsPreservesTransportContentType
                    DEF PublishCertifiedRequests
@@ -3870,18 +4419,23 @@ PROOF
                       asyncRetainedControl,
                       QcOutbox(
                         command.node, command.item.envelope.qc))
-             /\ UNCHANGED <<context, asyncSentItems,
-                              asyncActiveRequests, asyncTransport,
-                              asyncHeldChunks>>
+             /\ UNCHANGED
+                  <<context,
+                    AsyncCertifiedResponseClaimCoreAuthorityVars,
+                    asyncSentItems, asyncActiveRequests,
+                    asyncCertifiedResponseClaim, asyncTransport,
+                    asyncHeldChunks>>
         BY <1>1, <2>5, <2>6, Isa
-           DEF ExecuteCoreDelivery, vars
+           DEF ExecuteCoreDelivery,
+               AsyncCertifiedResponseClaimCoreAuthorityVars, vars
       <3> QED BY <2>1, <3>1, <3>2,
            RememberRetainableControlPreservesTransportContentType
     <2>7. CASE command.item.kind # "PrepareQC"
       <3>1. UNCHANGED AsyncTransportContentTypeVars
         BY <1>1, <2>5, <2>7, Isa
            DEF ExecuteCoreDelivery,
-               AsyncTransportContentTypeVars, vars
+               AsyncTransportContentTypeVars,
+               AsyncCertifiedResponseClaimAuthorityVars, vars
       <3> QED BY <2>1, <3>1, AsyncTransportContentTypeStutter
     <2> QED BY <2>6, <2>7
   <1> QED BY <1>1
@@ -3934,7 +4488,8 @@ PROOF
            /\ asyncHeldChunks' = asyncHeldChunks \cup {Receipt}
       BY <1>1, Isa
          DEF ExecuteChunkDelivery,
-             AsyncTransportHistoryTypeVars, Receipt, vars
+             AsyncTransportHistoryTypeVars,
+             AsyncCertifiedResponseClaimAuthorityVars, Receipt, vars
     <2>10. AsyncTransportHistoryTypeInvariant'
       BY <2>1, <2>9, AsyncTransportHistoryTypeStutter
     <2>11. AsyncPacketContentTypeInvariant'
@@ -3961,42 +4516,47 @@ PROOF
                 /\ ExecuteCommand(command)
          PROVE AsyncTransportContentTypeInvariant'
     <2>1. CASE ExecuteRegularCommand(command)
-                   \/ ExecuteApply(command)
-                   \/ ExecuteRejectAuthenticatedJunk(command)
       BY <1>1, <2>1,
-         ExecuteTransportStutterCommandPreservesContent
+         ExecuteRegularCommandPreservesTransportContentType
     <2>2. CASE ExecuteDecisionFetch(command)
       BY <1>1, <2>2,
          ExecuteDecisionFetchPreservesTransportContentType
-    <2>3. CASE ExecuteSignProposal(command)
+    <2>3. CASE ExecuteApply(command)
       BY <1>1, <2>3,
-         ExecuteSignProposalPreservesTransportContentType
-    <2>4. CASE ExecuteSignVote(command)
+         ExecuteApplyPreservesTransportContentType
+    <2>4. CASE ExecuteRejectAuthenticatedJunk(command)
       BY <1>1, <2>4,
-         ExecuteSignVotePreservesTransportContentType
-    <2>5. CASE ExecuteFormPrepareQC(command)
+         ExecuteRejectAuthenticatedJunkPreservesTransportContentType
+    <2>5. CASE ExecuteSignProposal(command)
       BY <1>1, <2>5,
-         ExecuteFormPrepareQcPreservesTransportContentType
-    <2>6. CASE ExecuteSignTimeout(command)
+         ExecuteSignProposalPreservesTransportContentType
+    <2>6. CASE ExecuteSignVote(command)
       BY <1>1, <2>6,
-         ExecuteSignTimeoutPreservesTransportContentType
-    <2>7. CASE ExecutePersistInstall(command)
+         ExecuteSignVotePreservesTransportContentType
+    <2>7. CASE ExecuteFormPrepareQC(command)
       BY <1>1, <2>7,
-         ExecutePersistInstallPreservesTransportContentType
-    <2>8. CASE ExecutePersistDecision(command)
+         ExecuteFormPrepareQcPreservesTransportContentType
+    <2>8. CASE ExecuteSignTimeout(command)
       BY <1>1, <2>8,
-         ExecutePersistDecisionPreservesTransportContentType
-    <2>9. CASE ExecuteRequestCertifiedBody(command)
+         ExecuteSignTimeoutPreservesTransportContentType
+    <2>9. CASE ExecutePersistInstall(command)
       BY <1>1, <2>9,
-         ExecuteRequestCertifiedBodyPreservesTransportContentType
-    <2>10. CASE ExecuteCoreDelivery(command)
+         ExecutePersistInstallPreservesTransportContentType
+    <2>10. CASE ExecutePersistDecision(command)
       BY <1>1, <2>10,
-         ExecuteCoreDeliveryPreservesTransportContentType
-    <2>11. CASE ExecuteChunkDelivery(command)
+         ExecutePersistDecisionPreservesTransportContentType
+    <2>11. CASE ExecuteRequestCertifiedBody(command)
       BY <1>1, <2>11,
+         ExecuteRequestCertifiedBodyPreservesTransportContentType
+    <2>12. CASE ExecuteCoreDelivery(command)
+      BY <1>1, <2>12,
+         ExecuteCoreDeliveryPreservesTransportContentType
+    <2>13. CASE ExecuteChunkDelivery(command)
+      BY <1>1, <2>13,
          ExecuteChunkDeliveryPreservesTransportContentType
     <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, <2>5,
-                <2>6, <2>7, <2>8, <2>9, <2>10, <2>11
+                <2>6, <2>7, <2>8, <2>9, <2>10, <2>11,
+                <2>12, <2>13
          DEF ExecuteCommand
   <1> QED BY <1>1
 
@@ -4022,15 +4582,26 @@ PROOF
            /\ asyncActiveRequests' = asyncActiveRequests \cup Items
            /\ asyncSentItems' = asyncSentItems \cup Items
            /\ asyncTransport' = asyncTransport \cup PacketsForItems(Items)
-           /\ UNCHANGED <<context, asyncRetainedControl,
-                          asyncHeldChunks>>
+           /\ UNCHANGED
+                <<context,
+                  AsyncCertifiedResponseClaimCoreAuthorityVars,
+                  asyncCertifiedResponseClaim, asyncRetainedControl,
+                  asyncHeldChunks>>
       BY <1>1, Isa
          DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
              AsyncRuntimeTypeInvariant, AsyncTransportTypeInvariant,
              CommitCertificateDiscoveryStepWork,
              PublishCommitCertificateRequests, Items, vars,
-             AsyncDeferredVars
-    <2> QED BY <2>1, <2>2,
+             AsyncDeferredVars,
+             AsyncCertifiedResponseClaimCoreAuthorityVars
+    <2>3. /\ AsyncCertifiedRequestLogicalIndexConsistent(Items)
+           /\ AsyncCertifiedRequestSetsCompatible(
+                asyncActiveRequests, Items)
+      BY <2>1, SMT
+         DEF AsyncCertifiedRequestLogicalIndexConsistent,
+             AsyncCertifiedRequestSetsCompatible,
+             AsyncCertifiedRequestsIn
+    <2> QED BY <2>1, <2>2, <2>3,
                  PublishTrackedRequestsPreservesTransportContentType
   <1> QED BY <1>1
 
@@ -4043,7 +4614,8 @@ BY AsyncTransportContentTypeStutter, Isa
    DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
        AsyncTransportTypeInvariant, DirectTimeoutStep,
        BeginTimeoutEnabled, BeginTimeout, AppendCausalSuccessors,
-       LeaveCausalQueues, AsyncTransportContentTypeVars, vars
+       LeaveCausalQueues, AsyncTransportContentTypeVars,
+       AsyncCertifiedResponseClaimAuthorityVars, vars
 
 THEOREM DeferredTimeoutPreservesTransportContentType ==
   \A node \in ValidatorIds:
@@ -4054,7 +4626,8 @@ BY AsyncTransportContentTypeStutter, Isa
    DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
        AsyncTransportTypeInvariant, DeferredTimeoutStep,
        BeginTimeoutEnabled, BeginTimeout, AppendCausalSuccessors,
-       LeaveCausalQueues, AsyncTransportContentTypeVars, vars
+       LeaveCausalQueues, AsyncTransportContentTypeVars,
+       AsyncCertifiedResponseClaimAuthorityVars, vars
 
 THEOREM DirectRetransmitPreservesTransportContentType ==
   \A node \in ValidatorIds:
@@ -4068,16 +4641,20 @@ PROOF
          PROVE AsyncTransportContentTypeInvariant'
     <2>1. CASE NodeIdle(node) /\ RetryableItems(node) # {}
       <3>1. /\ SendNodeRetransmissions(node)
-             /\ UNCHANGED <<context, asyncHeldChunks>>
+             /\ UNCHANGED
+                  <<context, AsyncCertifiedResponseClaimCoreAuthorityVars,
+                    asyncHeldChunks>>
         BY <1>1, <2>1, Isa
-           DEF DirectRetransmitStep, vars
+           DEF DirectRetransmitStep,
+               AsyncCertifiedResponseClaimCoreAuthorityVars, vars
       <3> QED BY <1>1, <3>1,
                    SendNodeRetransmissionsPreservesTransportContentType
     <2>2. CASE ~(NodeIdle(node) /\ RetryableItems(node) # {})
       <3>1. UNCHANGED AsyncTransportContentTypeVars
         BY <1>1, <2>2, Isa
            DEF DirectRetransmitStep, NoSendItem,
-               AsyncTransportContentTypeVars, vars
+               AsyncTransportContentTypeVars,
+               AsyncCertifiedResponseClaimAuthorityVars, vars
       <3> QED BY <1>1, <3>1, AsyncTransportContentTypeStutter
            DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
                AsyncTransportTypeInvariant
@@ -4096,16 +4673,20 @@ PROOF
          PROVE AsyncTransportContentTypeInvariant'
     <2>1. CASE RetryableItems(node) # {}
       <3>1. /\ SendNodeRetransmissions(node)
-             /\ UNCHANGED <<context, asyncHeldChunks>>
+             /\ UNCHANGED
+                  <<context, AsyncCertifiedResponseClaimCoreAuthorityVars,
+                    asyncHeldChunks>>
         BY <1>1, <2>1, Isa
-           DEF DeferredRetransmitStep, vars
+           DEF DeferredRetransmitStep,
+               AsyncCertifiedResponseClaimCoreAuthorityVars, vars
       <3> QED BY <1>1, <3>1,
                    SendNodeRetransmissionsPreservesTransportContentType
     <2>2. CASE RetryableItems(node) = {}
       <3>1. UNCHANGED AsyncTransportContentTypeVars
         BY <1>1, <2>2, Isa
            DEF DeferredRetransmitStep, NoSendItem,
-               AsyncTransportContentTypeVars, vars
+               AsyncTransportContentTypeVars,
+               AsyncCertifiedResponseClaimAuthorityVars, vars
       <3> QED BY <1>1, <3>1, AsyncTransportContentTypeStutter
            DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
                AsyncTransportTypeInvariant
@@ -4129,7 +4710,8 @@ THEOREM IdleRuntimePreservesTransportContentType ==
 BY AsyncTransportContentTypeStutter, Isa
    DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
        AsyncTransportTypeInvariant, IdleRuntimeStep,
-       LeaveCausalQueues, AsyncTransportContentTypeVars, vars,
+       LeaveCausalQueues, AsyncTransportContentTypeVars,
+       AsyncCertifiedResponseClaimAuthorityVars, vars,
        AsyncDeferredVars
 
 THEOREM AsyncStepRefinementObligation ==
@@ -4138,11 +4720,12 @@ BY DEF AsyncNext
 
 (***************************************************************************
 GST remains a genuine weak-fairness consequence across finitely many
-responsive-process generations.  Restart reconstructs one exact signature
-owner, the normal serialized runner drains that owner, and only then may
-recovery install the next durable intent.  The generation budget makes the
-number of pre-GST rearm/crash cycles finite, after which SetGST is continuously
-enabled.
+responsive-process generations.  Restart reconstructs an optional exact
+locked-body Fetch prefix together with the current signature owner.  The normal
+serialized runner drains that ordered replay, and only then may recovery install
+the next durable signature from the retained tail.  The generation budget makes
+the number of pre-GST rearm/crash cycles finite, after which SetGST is
+continuously enabled.
 ***************************************************************************)
 
 AsyncRecoveryEligibleReady ==
@@ -4295,7 +4878,8 @@ PROOF
       <3>1. UNCHANGED AsyncTransportContentTypeVars
         BY <1>1, <2>3, Isa
            DEF FifoRuntimeStep, DeferCommand, DiscardCommand,
-               Command, AsyncTransportContentTypeVars, vars
+               Command, AsyncTransportContentTypeVars,
+               AsyncCertifiedResponseClaimAuthorityVars, vars
       <3> QED BY <1>1, <3>1, AsyncTransportContentTypeStutter
            DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
                AsyncTransportTypeInvariant
@@ -4317,8 +4901,9 @@ PROOF
     <2>1. CASE ~DeferredQueueNonempty(node)
       <3>1. UNCHANGED AsyncTransportContentTypeVars
         BY <1>1, <2>1, Isa
-           DEF DeferredDrainStep, AsyncTransportContentTypeVars,
-               vars
+           DEF DeferredDrainStep, DeferredWorkServiceable,
+               AsyncTransportContentTypeVars,
+               AsyncCertifiedResponseClaimAuthorityVars, vars
       <3> QED BY <1>1, <3>1, AsyncTransportContentTypeStutter
            DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
                AsyncTransportTypeInvariant
@@ -4335,7 +4920,8 @@ PROOF
         <4>1. UNCHANGED AsyncTransportContentTypeVars
           BY <1>1, <2>2, <3>3, Isa
              DEF DeferredDrainStep, DiscardCommand,
-                 Command, AsyncTransportContentTypeVars, vars
+                 Command, AsyncTransportContentTypeVars,
+                 AsyncCertifiedResponseClaimAuthorityVars, vars
         <4> QED BY <1>1, <4>1, AsyncTransportContentTypeStutter
              DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
                  AsyncTransportTypeInvariant
@@ -4441,6 +5027,140 @@ PROOF
     <2> QED BY <1>1, <2>1, <2>2, <2>3 DEF RunNodeWork
   <1> QED BY <1>1
 
+THEOREM LocalAdmissionStepPreservesClaimIngressOwnership ==
+  \A node \in ValidatorIds:
+    /\ AsyncCertifiedResponseClaimIngressOwnershipInvariant
+    /\ LocalAdmissionStep(node)
+    => AsyncCertifiedResponseClaimIngressOwnershipInvariant'
+BY CertifiedResponseClaimIngressOwnershipStutter, Isa
+   DEF LocalAdmissionStep, AdmitProducerCompletion, AdmitCausalHead,
+       UpdateLocalAdmissionMetadata, RecordBlockedCausalDebt,
+       LeaveCausalQueues, EnqueueCandidate,
+       AsyncDeferredVars, AsyncIoVars, AsyncLocalAdmissionVars,
+       AsyncAuxVars, vars
+
+THEOREM IngressDrainStepPreservesClaimIngressOwnership ==
+  \A node \in ValidatorIds:
+    /\ AsyncTypeInvariant
+    /\ AsyncCertifiedResponseClaimIngressOwnershipInvariant
+    /\ IngressDrainStep(node)
+    => AsyncCertifiedResponseClaimIngressOwnershipInvariant'
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                AsyncTypeInvariant,
+                AsyncCertifiedResponseClaimIngressOwnershipInvariant,
+                IngressDrainStep(node)
+         PROVE AsyncCertifiedResponseClaimIngressOwnershipInvariant'
+    <2>1. CASE /\ asyncRunnerBudget[node] > 0
+                 /\ asyncIngressReady[node] # <<>>
+                 /\ DrainableIngressIndices(node) # {}
+      <3>1. DrainFairIngressSelected(node)
+        BY <1>1, <2>1 DEF IngressDrainStep
+      <3> QED BY <1>1, <3>1,
+           DrainFairIngressSelectedPreservesClaimIngressOwnership
+    <2>2. CASE ~(asyncRunnerBudget[node] > 0
+                   /\ asyncIngressReady[node] # <<>>
+                   /\ DrainableIngressIndices(node) # {})
+      BY <1>1, <2>2,
+         CertifiedResponseClaimIngressOwnershipStutter
+         DEF IngressDrainStep, AsyncDeferredVars,
+             AsyncLocalAdmissionVars, vars
+    <2> QED BY <2>1, <2>2
+  <1> QED BY <1>1
+
+THEOREM RunHistoricalServerPreservesClaimIngressOwnership ==
+  \A node \in AsyncResponsiveAppliedArchiveServers:
+    /\ AsyncTypeInvariant
+    /\ AsyncCertifiedResponseClaimIngressOwnershipInvariant
+    /\ RunHistoricalServer(node)
+    => AsyncCertifiedResponseClaimIngressOwnershipInvariant'
+PROOF
+  <1>1. ASSUME NEW node \in AsyncResponsiveAppliedArchiveServers,
+                AsyncTypeInvariant,
+                AsyncCertifiedResponseClaimIngressOwnershipInvariant,
+                RunHistoricalServer(node)
+         PROVE AsyncCertifiedResponseClaimIngressOwnershipInvariant'
+    <2>1. node \in ValidatorIds
+      BY <1>1, AsyncResponsiveAppliedArchiveServersAreValidators
+    <2>2. CASE HistoricalDrainableIngressIndices(node) # {}
+      <3>1. DrainHistoricalIngressSelected(node)
+        BY <1>1, <2>2 DEF RunHistoricalServer
+      <3> QED BY <1>1, <2>1, <3>1,
+           DrainHistoricalIngressSelectedPreservesClaimIngressOwnership
+    <2>3. CASE HistoricalDrainableIngressIndices(node) = {}
+      BY <1>1, <2>3,
+         CertifiedResponseClaimIngressOwnershipStutter
+         DEF RunHistoricalServer, HistoricalIdleStep
+    <2> QED BY <2>2, <2>3
+  <1> QED BY <1>1
+
+THEOREM RunNodeWorkPreservesClaimIngressOwnership ==
+  \A node \in ValidatorIds:
+    /\ AsyncTypeInvariant
+    /\ AsyncCertifiedResponseClaimIngressOwnershipInvariant
+    /\ RunNodeWork(node)
+    => AsyncCertifiedResponseClaimIngressOwnershipInvariant'
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                AsyncTypeInvariant,
+                AsyncCertifiedResponseClaimIngressOwnershipInvariant,
+                RunNodeWork(node)
+         PROVE AsyncCertifiedResponseClaimIngressOwnershipInvariant'
+    <2>1. CASE LocalAdmissionStep(node)
+      BY <1>1, <2>1,
+         LocalAdmissionStepPreservesClaimIngressOwnership
+    <2>2. CASE IngressDrainStep(node)
+      BY <1>1, <2>2,
+         IngressDrainStepPreservesClaimIngressOwnership
+    <2>3. CASE SerializedRuntimeStep(node)
+      BY <1>1, <2>3,
+         SerializedRuntimePreservesClaimIngressOwnership
+    <2> QED BY <1>1, <2>1, <2>2, <2>3 DEF RunNodeWork
+  <1> QED BY <1>1
+
+THEOREM AsyncRunnerStepPreservesClaimIngressOwnership ==
+  /\ AsyncTypeInvariant
+  /\ AsyncCertifiedResponseClaimIngressOwnershipInvariant
+  /\ AsyncRunnerStep
+  => AsyncCertifiedResponseClaimIngressOwnershipInvariant'
+PROOF
+  <1>1. ASSUME AsyncTypeInvariant,
+              AsyncCertifiedResponseClaimIngressOwnershipInvariant,
+              AsyncRunnerStep
+         PROVE AsyncCertifiedResponseClaimIngressOwnershipInvariant'
+    <2>1. CASE \E node \in AsyncCurrentResponsiveVoters:
+                    RunNode(node)
+      <3>1. PICK node \in AsyncCurrentResponsiveVoters:
+               RunNode(node)
+        BY <2>1
+      <3>2. node \in ValidatorIds
+        BY <1>1, <3>1
+           DEF AsyncTypeInvariant, TypeInvariant,
+               AsyncCurrentResponsiveVoters, CurrentVoters, CurrentEpoch,
+               ModelConfiguration, QuorumConfiguration, ValidatorIds
+      <3> QED BY <1>1, <3>1, <3>2,
+           RunNodeWorkPreservesClaimIngressOwnership
+           DEF RunNode
+    <2>2. CASE \E node \in asyncHistoricalRecoveryTargets:
+                    RunHistoricalRecoveryNode(node)
+      <3>1. PICK node \in asyncHistoricalRecoveryTargets:
+               RunHistoricalRecoveryNode(node)
+        BY <2>2
+      <3>2. node \in ValidatorIds
+        BY <1>1, <3>1, HistoricalRecoveryTargetsAreValidators
+      <3> QED BY <1>1, <3>1, <3>2,
+           RunNodeWorkPreservesClaimIngressOwnership
+           DEF RunHistoricalRecoveryNode
+    <2>3. CASE \E node \in AsyncResponsiveAppliedArchiveServers:
+                    RunHistoricalServer(node)
+      <3>1. PICK node \in AsyncResponsiveAppliedArchiveServers:
+               RunHistoricalServer(node)
+        BY <2>3
+      <3> QED BY <1>1, <3>1,
+           RunHistoricalServerPreservesClaimIngressOwnership
+    <2> QED BY <1>1, <2>1, <2>2, <2>3 DEF AsyncRunnerStep
+  <1> QED BY <1>1
+
 (***************************************************************************
 The runner theorem composes only concrete phase actions.  In particular, the
 serialized-runtime leaf above follows the exact command and transport
@@ -4483,9 +5203,9 @@ PROOF
         BY <3>1 DEF RunHistoricalRecoveryNode
       <3> QED BY <1>1, <3>2, <3>3,
                    RunNodeWorkPreservesSchedulerType
-    <2>3. CASE \E node \in AsyncCurrentResponsiveVoters:
+    <2>3. CASE \E node \in AsyncResponsiveAppliedArchiveServers:
                     RunHistoricalServer(node)
-      <3>1. PICK node \in AsyncCurrentResponsiveVoters:
+      <3>1. PICK node \in AsyncResponsiveAppliedArchiveServers:
                RunHistoricalServer(node)
         BY <2>3
       <3> QED BY <1>1, <3>1,

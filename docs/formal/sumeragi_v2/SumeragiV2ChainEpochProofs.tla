@@ -1,6 +1,16 @@
 ---- MODULE SumeragiV2ChainEpochProofs ----
 EXTENDS SumeragiV2ChainEpoch, TLAPS
 
+THEOREM EquivalentCommitQcsAcrossRoundsConverge ==
+  \A left, right:
+    /\ left.context.contextKey = right.context.contextKey
+    /\ left.height = right.height
+    /\ left.phase = "Commit"
+    /\ right.phase = "Commit"
+    /\ left.subject = right.subject
+    => CommitFinalityIdentity(left) = CommitFinalityIdentity(right)
+BY DEF CommitFinalityIdentity
+
 THEOREM GenesisContextIsAContextRecord ==
   ModelConfiguration => ContextRecord(0, <<>>) \in ContextRecords
 PROOF

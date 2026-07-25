@@ -1577,8 +1577,7 @@ fn has_exact_locked_commit_progress(status: &SumeragiV2Status) -> bool {
         return false;
     };
     let exact_quorum = status.liveness.commit_quorums.iter().any(|quorum| {
-        quorum.round.height == locked.proposal_round.height
-            && quorum.round.view >= locked.proposal_round.view
+        quorum.round == locked.round
             && quorum.proposal_round == locked.proposal_round
             && quorum.subject == locked.subject
             && quorum.execution_commitment == locked.execution_commitment
@@ -1589,8 +1588,7 @@ fn has_exact_locked_commit_progress(status: &SumeragiV2Status) -> bool {
         matches!(
             intent.kind,
             SumeragiV2OutboundIntentKind::CommitVote | SumeragiV2OutboundIntentKind::CommitQc
-        ) && intent.round.height == locked.proposal_round.height
-            && intent.round.view >= locked.proposal_round.view
+        ) && intent.round == locked.round
             && intent.proposal_round == Some(locked.proposal_round)
             && intent.subject == Some(locked.subject)
             && intent.execution_commitment == Some(locked.execution_commitment)
@@ -1598,9 +1596,7 @@ fn has_exact_locked_commit_progress(status: &SumeragiV2Status) -> bool {
     let exact_decision = status.last_committed_height == locked.proposal_round.height
         && status.last_commit_qc.as_ref().is_some_and(|certificate| {
             certificate.certificate.phase == GlobalPhase::Commit
-                && certificate.certificate.round.height == locked.proposal_round.height
-                && certificate.certificate.round.view >= locked.proposal_round.view
-                && certificate.certificate.proposal_round == locked.proposal_round
+                && certificate.certificate.round.height == locked.round.height
                 && certificate.certificate.subject == locked.subject
                 && certificate.certificate.execution_commitment == locked.execution_commitment
         });
@@ -1669,10 +1665,9 @@ fn classify_v2_liveness_blocker(
     // ownership and prevents fresh lock acquisition in that view. The reducer
     // may still report its pre-timeout Prepare phase while it collects the
     // timeout quorum, so phase alone is no longer the active progress path.
-    // Commit is intentionally different: an exact durable locked Commit
-    // remains active and retransmittable across both same-view timeout intent
-    // and later-view TC installation, and therefore retains an independent
-    // decision path.
+    // Commit is intentionally different: an exact durable same-round Commit
+    // remains retransmittable after later-view TC installation. It retains its
+    // old decision path while later progress requires an unchanged reproposal.
     let timeout_pool_started = status
         .liveness
         .timeout_quorums
@@ -3124,27 +3119,21 @@ mod v2_liveness_watchdog_tests {
             "an exact durable Commit remains active across its same-view timeout"
         );
 
-        let mut historical_commit = current_commit;
-        historical_commit.view = 1;
-        let historical_lock = prepare_qc(&historical_commit, 0, 0xA2);
-        historical_commit.locked_prepare_qc = Some(historical_lock);
-        historical_commit.highest_prepare_qc = Some(historical_lock);
-        let later_timeout_round = round(&historical_commit, 1);
-        historical_commit.liveness.outbound_intents[0].round = later_timeout_round;
-        historical_commit.liveness.outbound_intents[1].round = later_timeout_round;
-        historical_commit.liveness.outbound_intents[1].proposal_round =
-            Some(historical_lock.proposal_round);
-        historical_commit.liveness.outbound_intents[1].subject = Some(historical_lock.subject);
-        historical_commit.liveness.outbound_intents[1].execution_commitment =
-            Some(historical_lock.execution_commitment);
-        historical_commit.liveness.timeout_quorums[0].round = later_timeout_round;
-        historical_commit
+        let mut retained_commit = current_commit;
+        retained_commit.view = 1;
+        let retained_lock = prepare_qc(&retained_commit, 0, 0xA2);
+        retained_commit.locked_prepare_qc = Some(retained_lock);
+        retained_commit.highest_prepare_qc = Some(retained_lock);
+        let later_timeout_round = round(&retained_commit, 1);
+        retained_commit.liveness.outbound_intents[0].round = later_timeout_round;
+        retained_commit.liveness.timeout_quorums[0].round = later_timeout_round;
+        retained_commit
             .validate()
-            .expect("historical locked Commit fixture is structurally valid");
+            .expect("retained same-round Commit fixture is structurally valid");
         assert_eq!(
-            classify_v2_liveness_blocker(&historical_commit, false),
+            classify_v2_liveness_blocker(&retained_commit, false),
             SumeragiV2LivenessBlocker::CommitQuorumMissing,
-            "a later-view timeout must not hide the still-admissible historical locked Commit path"
+            "a later-view timeout must not hide the retained old-round Commit path"
         );
     }
 

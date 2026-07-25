@@ -22,8 +22,8 @@ jobs:
       - name: Cache pinned TLAPM
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
-          path: target/tlapm/toolchains/3ab43c7ff31db4ced850619d4746fa4c841a7681/x86_64-linux-gnu
-          key: sumeragi-v2-tlapm-linux-x86-64-3ab43c7ff31db4ced850619d4746fa4c841a7681
+          path: target/tlapm/toolchains/763bf3c1826d77a4cf206f43d5aa16775da1da33/x86_64-linux-gnu
+          key: sumeragi-v2-tlapm-linux-x86-64-763bf3c1826d77a4cf206f43d5aa16775da1da33
       - name: Install pinned formal tools
         run: |
           bash scripts/formal/install_sumeragi_v2_tlapm.sh

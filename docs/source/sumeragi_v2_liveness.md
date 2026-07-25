@@ -637,6 +637,16 @@ genuine old-writer flush which has not yet been applied may still complete the
 same source's retained current chunk once while a reconnect retries it; sibling
 sources keep their independent cursors and reservations.
 
+Response materialization authority is one-shot, but transient failure does not
+make a pending semantic request permanently terminal. A failed local lookup,
+loss of the current route, or outbound count/byte pressure clears the
+process-local authority and leaves that exact pending source retryable; a
+completed race or successful immutable-byte installation consumes
+retryability. Before any newly materialized chunk leaves lane work, its cursor
+and byte-free pending identity are durably journaled. Restart can therefore
+retry the same semantic source without reconstructing a route capability or
+forgetting a chunk already handed to actor output.
+
 On receive, the three safety/high/low count shares are keyed by authenticated
 `PeerId`, not by authenticated transport tenure. Retired-tenure dispatch workers
 close their senders and drain already accepted reliable work before normal teardown.
@@ -986,10 +996,17 @@ exact regressions and retires nine superseded selectors, producing the
 509-test, 38-module, 61-leg checkpoint. The final successor/recovery closure
 adds six exact regressions without adding a module. Six source-sealed format,
 legacy-codec, build, Clippy, workspace-test, and daemon-test legs plus the
-G-SCALE tooling preflight bring the current source-bound inventory to 515
-exact tests across 38 modules and 78 pre-network legs.
+G-SCALE tooling preflight produced the historical 515-test checkpoint. The
+crash-safe response handoff and same-delivery capacity-retry regressions add
+two sidecar cases. The per-source route-attempt, exact PrepareQC recovery,
+locked-body reproposal, runner/worker, sidecar, and daemon closure, plus the
+certified sidecar control-bucket regression, brings the current source-bound
+inventory to 585 exact tests across 39 modules and 82 pre-network legs.
 Its canonical module/test TSV inventory SHA-256 is
-`ef281ddf030ca64e634581fa90197e6637f89cb10f937c2f370747fcdb8454a4`.
+`b6dc528ea6e07d75a243a5b4ead89c83561aa9d0a74b9ac941cdf1a744078acd`.
+Nine of those legs execute the separate 256-test G-UNIT focus inventory; its
+canonical source-derived TSV SHA-256 is
+`f45d6752f3dc449415446abc7340a3531ed48db5e9e744bccc6c1bba0d7a8957`.
 Together, the closures bind proposal-origin reducer/deferred identity,
 equivocation evidence, aggregate signatures, finality/header geometry, compact
 offline QCs, parent height-context identity, source-scoped sidecar limits,
@@ -1028,10 +1045,19 @@ through wire-to-core conversion; its whole-item token SHA-256 is
 The extended cryptographic-parent regression now carries the same certificate
 through authenticated admission and is sealed at
 `1cb4736b2e4b499403c870cc3dd5ab8ccd361d51887efad4178ed7d39a9e0225`.
-An inactive sidecar source releases shared session and byte budget but retains an
-incomplete per-source chunk cursor across the server-gate TTL; only a terminal
-no-outbound tombstone may expire. A delayed reconnect therefore rematerializes
-shared bytes at its retained chunk rather than restarting at chunk zero.
+An inactive sidecar source retains its authenticated-source session and byte
+reservation together with its incomplete chunk cursor; neither reconnect nor a
+wall-clock TTL can erase that ownership. A delayed reconnect therefore
+rematerializes shared bytes at its retained chunk rather than restarting at
+chunk zero, while a newly authenticated alternate source starts at chunk zero.
+Completed attempts remain terminal until an authenticated cumulative Close
+retires their contiguous semantic prefix.
+The requester sequence/floor state and responder gate, source-budget, cursor,
+and pending-chunk identities are atomically journaled under the authenticated
+Kura root. Restart rebinds only a freshly authenticated process-local route;
+it never reconstructs a capability from disk. A lifecycle-journal failure
+latches the process-wide output guard before an allocated request, queued
+chunk, timeout rotation, Close, or CloseAck can publish later consensus output.
 The retained runner seam explicitly inventories
 `runner_dispatch_preserves_durable_lane_certificate_reply_routes`,
 `runner_dispatch_preserves_certified_sidecar_chunk_reply_routes`,
@@ -1040,35 +1066,40 @@ The retained runner seam explicitly inventories
 boundary retains the fixed four-gate/two-session/16-MiB source contract plus
 the same-hub fifth-gate, third-session, and byte-overflow rejections while an
 independent authenticated hub progresses. These names were already present at
-the 423-test checkpoint and remain exact release-contract entries.
+the 423-test checkpoint and remain exact release-contract entries. The durable
+requester/responder restart, cross-height source-cursor, and lifecycle
+fail-stop regressions are pinned alongside them in the current inventory.
 Daemon saturation now returns the exact occurrence to its durable remote
 source under an explicit source-release disposition; the former route-era
 "reconstruction" names are retired and no capability is synthesized.
 The current inventory retains the four-per-validator, two-per-materialized
 authenticated-non-validator, and two-anonymous owners (`4N+2H+2` total)
 capacity-negative boundary and the exact
-PrepareQC count-and-power quorum regressions. Its five integration tests run
+PrepareQC count-and-power quorum regressions. Its four integration tests run
 together under their module filter; the complete pre-network corridor now has
-78 legs, including separate exact status and atomic lane-certificate decode
-contracts, two `iroha_config` geometry modules, the two new `iroha_p2p`
+82 legs, including separate exact status and atomic lane-certificate decode
+contracts, nine G-UNIT execution-receipt legs, the source-attested Native AMX
+fixture check, two `iroha_config` geometry modules, the two new `iroha_p2p`
 geometry modules, the shared-byte-budget module, the daemon genesis module,
 plus source-sealed workspace formatting, the legacy-codec guard, workspace
 build, Clippy, workspace tests, and feature-enabled `irohad` command-success
 legs, the G-SCALE runner/validator preflight, plus three proposal-origin
-data-model module legs. The data-model modules are
+data-model module legs. Immediately before completion publication, the runner
+also revalidates the source-bound localnet binary bundle. The data-model modules are
 discovered and executed against `iroha_data_model`; they cannot fall through to
 the `iroha_core` runner.
-The current 515-test inventory is a mechanically checked
+The current 585-test inventory is a mechanically checked
 source contract, not execution evidence; the
 complete inventory must still run as one clean committed, detached,
 source-sealed release leg before it becomes release evidence.
 
-The current source-shared formal harness passed 118/118
-unit/reducer/WAL/refinement tests and 8/8 model-trace replay tests. Its
-fast-network mode passed all nine named deterministic network simulations.
-Those unsealed results do not replace the source-sealed release leg, and the
-pinned Verus receipt described by the formal documentation predates these
-proposal-origin source changes.
+The preceding source-shared formal harness passed 118/118
+unit/reducer/WAL/refinement tests and 8/8 model-trace replay tests. The current
+harness inventories 137 runnable reducer tests and still requires a fresh
+source-sealed run. The earlier fast-network mode passed all nine named
+deterministic network simulations. Those unsealed results do not replace the
+source-sealed release leg, and the pinned Verus receipt described by the formal
+documentation predates these proposal-origin source changes.
 
 The focused source-bound additions above are green. The gate names nine
 completion-ownership regressions: exact ingress/Busy-deferred
@@ -1199,12 +1230,15 @@ and real-network execution before it reduces release debt:
 bash scripts/run_sumeragi_v2_release_gates.sh --pr
 ```
 
-Before those longer scenarios, the PR gate inventories 515 exact production
-liveness tests and executes all 38 owning Rust modules serially. The
+Before those longer scenarios, the PR gate inventories 585 exact production
+liveness tests and executes all 39 owning Rust modules serially. The release
+profile additionally records nine G-UNIT legs executing a separate 256-test
+focus inventory. The
 inventory includes the reducer exact-lock and adapter consumer-epoch
-regressions, plus five lane-work tests which pin native-AMX signing-guard
-capacity at small, hard-boundary, oversized, overflow, and production-like
-adapter limits. It also pins adapter-owned successor activation, runner ingress
+regressions, plus five lane-work tests which pin the native-AMX signing guard's
+explicit runtime bound, exact hard boundary, above-bound fail-closed behavior,
+record/anchor byte ceilings, and production-like adapter limits. It also pins
+adapter-owned successor activation, runner ingress
 handoff, watchdog predecessor/successor separation, and recovery-derived
 successor identity. The worker leg also pins rejection of an unissued future
 physical acquisition and exact latest-consumer rebind across unavailable-body
@@ -1308,18 +1342,29 @@ The proposal-origin, multi-carrier, and persistence-failure closure then adds
 checkpoint across 38 modules and 61 pre-network legs. The final
 successor-parent, lane-rollover, tip-recovery, terminal-ingress, genesis-origin,
 and restart-deadline closure adds six tests without adding a module. Six
-source-sealed command legs and the G-SCALE runner/validator preflight yield the
-current 515-test inventory across 38 modules and 78 pre-network legs. The rollover slice covers
+source-sealed command legs and the G-SCALE runner/validator preflight yielded
+the historical 515-test inventory across 38 modules and 65 pre-network legs.
+The per-source route-attempt and locked-body completion adds 57 exact names,
+one owning module, and seven corridor legs. Nine G-UNIT execution legs plus the
+source-attested Native AMX fixture-check leg complete the 584-test checkpoint;
+the certified sidecar Close/CloseAck critical-bucket regression brings the
+current inventory to 585 tests across 39 modules and 82 legs. The rollover slice covers
 historical Kura CommitQC, body, and lane-certificate rereads; current global
 V2; lane proof/supersession; Native AMX; merge-share, certified-sidecar, and
 untyped fail-closed boundaries. The route slice pins semantic deduplication,
 one independent attempt per authenticated source, actor-global delivery
 ordinals, connection-tenure-bound tickets, source-owned non-regressing cursors,
-and bounded route-set capacity. A later delivery changes only its source's
-route and preserves that source's current immutable payload, cursor, FIFO age,
-and reservations. A reconnect keeps the source's FIFO identity, clears the
-retired tenure-bound ticket, and retries the source's retained current item or
-chunk through fresh tenure admission while leaving sibling-source progress
+and bounded route-set capacity. Stream sequence and cumulative-close metadata
+are excluded from the canonical semantic request identity. Completed requests
+have no wall-clock expiry: an authenticated cumulative close advances only
+over a contiguous terminal prefix and is the sole mechanism that retires the
+covered server output. Admission capacity is preflighted before either the
+close floor or server stream state can advance. A later delivery changes only
+its source's route and preserves that source's current immutable payload,
+cursor, FIFO age, and reservations. A reconnect keeps the source's FIFO
+identity, clears the retired tenure-bound ticket, and retries the source's
+retained current item or chunk through fresh tenure admission while leaving
+sibling-source progress
 untouched. A newly observed alternate source starts independently at zero.
 These newest tests pin local typed retirement, ownership, and fail-closed
 behavior; they do not claim end-to-end relay/application acknowledgement or
@@ -1566,9 +1611,10 @@ without terminal validation it cannot publish external completion.
 
 On success, the runner publishes exactly
 `release-runner/output/release/RELEASE_COMPLETED.json` beneath the bootstrap
-evidence directory. That receipt binds the 78 pre-network corridor legs and
-their exact 515-test inventory, semantic test names/counts, commands, logs, and
-resolved tool identities; the formal completion, pinned harness lock, formal
+evidence directory. That receipt binds the 82 pre-network corridor legs and
+their exact 585-test production inventory, the separate 256-test G-UNIT
+inventory, semantic test names/counts, commands, logs, source-bound localnet
+binary attestation, and resolved tool identities; the formal completion, pinned harness lock, formal
 toolchain, proof ledger/evidence/log; all 160 matrix logs; the chaos
 completion/log; and the exact-identity Taira completion/canonical JSON/full run
 log. It independently revalidates matrix, chaos, and Taira libtest markers and
