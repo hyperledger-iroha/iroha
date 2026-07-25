@@ -47,7 +47,10 @@
 --verified-claim transparency_report_exported
 --verified-claim daily_digest_published
 --verified-claim payload_redaction_verified
---verified-claim denylisted_digest_blocked
+--gateway-compliance-denial-status-code 451
+--gateway-compliance-denial-code gateway_compliance_denied
+--gateway-compliance-denial-source baseline
+--gateway-compliance-catalog-digest-hex aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 --verified-claim unauthorized_access_rejected
 --verified-claim stale_url_rejected
 --verified-claim session_replay_rejected

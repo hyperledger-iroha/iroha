@@ -7278,6 +7278,13 @@ def test_exact_output_production_source_is_bound() -> None:
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
+            "fn release_authorized_server_request_attempts(",
+            "matches!(attempt.cursor, ServerResponseCursor::Pending(_));",
+            "false;",
+            "transiently rejected response work must release materialization authority",
+        ),
+        (
+            "crates/iroha_core/src/merge_sidecar.rs",
             "fn park_authorized_server_request_attempts(",
             "for attempt in gate\n            .attempts",
             "return; for attempt in gate\n            .attempts",
@@ -7288,7 +7295,7 @@ def test_exact_output_production_source_is_bound() -> None:
             "if admitted_attempts.is_empty() && capacity_rejected_attempts.is_empty()",
             "Self::park_authorized_server_request_attempts(gate, now);",
             "let _ = (gate, now);",
-            "every rejected, capacity-partitioned, or materialized response must park source history",
+            "only completed-race or successfully materialized response work may consume",
         ),
         (
             "crates/iroha_core/src/merge_sidecar.rs",
@@ -17551,7 +17558,7 @@ def test_nightly_chaos_cold_cache_prefetch_is_pinned_and_fail_closed(
         (
             "  peer::shared_byte_budget_tests::frame_retention_coalesces_each_distinct_source_owner_without_reaccounting\n",
             "",
-            "must contain exactly 582 tests",
+            "must contain exactly 584 tests",
         ),
         (
             "  peer::shared_byte_budget_tests::frame_retention_coalesces_each_distinct_source_owner_without_reaccounting\n",
@@ -17559,9 +17566,9 @@ def test_nightly_chaos_cold_cache_prefetch_is_pinned_and_fail_closed(
             "production liveness inventory repeats tests",
         ),
         (
-            "readonly expected_production_liveness_test_count=582",
-            "readonly expected_production_liveness_test_count=581",
-            "production liveness source count must be sealed as 582",
+            "readonly expected_production_liveness_test_count=584",
+            "readonly expected_production_liveness_test_count=583",
+            "production liveness source count must be sealed as 584",
         ),
         (
             "  zk::kagemusha_finality::tests::aggregate_signature_authenticates_proposal_origin\n"
@@ -17787,16 +17794,27 @@ def test_production_release_inventory_seals_successor_parent_binding(
     ("relative", "old", "new"),
     (
         (
+            Path("docs/formal/sumeragi_v2/README.md"),
+            "inventory to 584 tests across 39 modules. Together with the source-sealed\n"
+            "command and tooling legs, the pre-network corridor contains 82 legs.",
+            "inventory to 584 tests across 39 modules. Together with the source-sealed\n"
+            "command and tooling legs, the pre-network corridor contains 81 legs.",
+        ),
+        (
             Path("docs/formal/sumeragi_v2/PROOF.md"),
-            "582-test, 39-module inventory. The complete source-sealed pre-network corridor\n"
+            "current\n"
+            "584-test, 39-module inventory. The complete source-sealed pre-network corridor\n"
             "contains 82 legs",
-            "582-test, 39-module inventory. The complete source-sealed pre-network corridor\n"
+            "current\n"
+            "584-test, 39-module inventory. The complete source-sealed pre-network corridor\n"
             "contains 81 legs",
         ),
         (
             Path("docs/source/sumeragi_v2_liveness.md"),
-            "inventory to 582 exact tests across 39 modules and 82 pre-network legs.",
-            "inventory to 582 exact tests across 39 modules and 81 pre-network legs.",
+            "current source-bound\n"
+            "inventory to 584 exact tests across 39 modules and 82 pre-network legs.",
+            "current source-bound\n"
+            "inventory to 584 exact tests across 39 modules and 81 pre-network legs.",
         ),
     ),
 )
@@ -17844,14 +17862,14 @@ def test_production_release_inventory_rejects_stale_liveness_corridor_claim(
     (
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
-            "_PRODUCTION_TEST_COUNT = 582",
-            "_PRODUCTION_TEST_COUNT = 581",
-            "production test count must equal the exact shell inventory count 582",
+            "_PRODUCTION_TEST_COUNT = 584",
+            "_PRODUCTION_TEST_COUNT = 583",
+            "production test count must equal the exact shell inventory count 584",
         ),
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
-            '("production-merge-sidecar", "merge_sidecar::tests", 39),',
-            '("production-merge-sidecar", "merge_sidecar::tests", 38),',
+            '("production-merge-sidecar", "merge_sidecar::tests", 41),',
+            '("production-merge-sidecar", "merge_sidecar::tests", 40),',
             "production module receipt tuple must equal the exact shell",
         ),
         (
@@ -19268,10 +19286,10 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
             )
         )
     )
-    assert len(production_inventory) == 582
-    assert len(set(production_inventory)) == 582
-    assert "readonly expected_production_liveness_test_count=582" in release_source
-    assert "_PRODUCTION_TEST_COUNT = 582" in receipt_source
+    assert len(production_inventory) == 584
+    assert len(set(production_inventory)) == 584
+    assert "readonly expected_production_liveness_test_count=584" in release_source
+    assert "_PRODUCTION_TEST_COUNT = 584" in receipt_source
     receipt_spec = importlib.util.spec_from_file_location(
         "sumeragi_v2_release_receipt_inventory",
         ROOT_DIR / "scripts" / "write_sumeragi_v2_release_receipt.py",
@@ -19281,7 +19299,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     receipt_module = importlib.util.module_from_spec(receipt_spec)
     sys.modules[receipt_spec.name] = receipt_module
     receipt_spec.loader.exec_module(receipt_module)
-    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 582
+    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 584
     assert (
         receipt_module._PRODUCTION_MODULES
         == module._PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS
@@ -19788,8 +19806,8 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         "--lib -- --test-threads=1", unit_ignored_inventory
     )
     assert unit_branch < unit_inventory < unit_ignored_inventory < unit_run
-    assert "expected exactly 118 Sumeragi v2 reducer unit tests" in harness_source
-    assert "reducer unit gate requires all 118 tests to be runnable" in harness_source
+    assert "expected exactly 137 Sumeragi v2 reducer unit tests" in harness_source
+    assert "reducer unit gate requires all 137 tests to be runnable" in harness_source
 
     replay_branch = harness_source.index("--model-replay)")
     replay_inventory = harness_source.index("model_replay_test_list=", replay_branch)

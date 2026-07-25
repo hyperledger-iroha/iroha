@@ -24,20 +24,23 @@ The wrapper invokes the `sorafs-gateway-attest` xtask command and falls back to
 > ACME client, DNS-provider adapter, account credential loader, or self-signed
 > fallback. `SelfSignedAcmeClient` exists only as a `cfg(test)` fixture.
 > Enabling `torii.sorafs_gateway.acme` without an audited runtime-injected
-> `AcmeClient` is a startup error. The `sorafs-gateway tls renew` compatibility
-> command fails closed and never writes certificate or private-key material.
+> `AcmeClient` is a startup error. There is no production repository renewal
+> command or stored-certificate fallback. On renewal or validation failure,
+> withdraw the affected gateway until the audited adapter has atomically
+> installed a CA-valid replacement and the controller and external probes agree.
 
 ## Quick Start Checklist
 
-1. Stage ACME credentials and GAR artefacts in the sealed
-   `sorafs_gateway_tls/` secret store (KMS or Vault) and mirror them to the
-   bastion host.
+1. Stage ACME credentials only in the runtime adapter's sealed KMS/Vault
+   namespace. Do not mirror account credentials or private keys to the bastion
+   host or readiness artifacts.
 2. Fill in `torii.sorafs_gateway.acme` configuration with DNS-01 and
    TLS-ALPN-01 challenge preferences, enable ECH if supported, and set renewal
    thresholds.
-3. Deploy the embedding that injects the reviewed runtime ACME client, then
-   enable the supervised automation unit. Do not set `acme.enabled = true`
-   before the runtime dependency is present.
+3. Deploy the embedding that injects the reviewed runtime ACME adapter. The
+   adapter owns provider transport, challenge execution, key custody, atomic
+   certificate installation, and reload coordination. Do not set
+   `acme.enabled = true` before that dependency is present.
 4. Run `scripts/sorafs_gateway_self_cert.sh` to capture a baseline attestation
    bundle and verify headers/metrics.
 5. Publish telemetry dashboards and alerts for the metrics in the **Telemetry
@@ -60,13 +63,17 @@ The wrapper invokes the `sorafs-gateway-attest` xtask command and falls back to
 
 ### Secrets & File Layout
 
-- Store ACME account material under `/etc/iroha/sorafs_gateway_tls/` with
-  ownership `iroha:iroha` and `0600` permissions.
-- Maintain a sealed backup in your KMS or Vault namespace so manual rotation can
-  recover quickly.
+- Keep ACME account material and certificate private keys inside the runtime
+  adapter's approved KMS/Vault boundary. Do not export them to a repository
+  checkout, bastion workspace, readiness bundle, or process log.
+- Maintain recovery capability through the KMS/Vault backup and independently
+  reviewed adapter procedure; a copied local certificate/key directory is not a
+  recovery path.
 - The injected ACME client owns any durable provider state. Include only its
-  reviewed, credential-safe recovery metadata in backups; Torii configuration
-  and readiness artifacts must not contain account keys or tokens.
+  reviewed, credential-safe recovery metadata in backups and require it to
+  install new certificate material atomically before reporting success. Torii
+  configuration and readiness artifacts must not contain account keys, private
+  keys, or tokens.
 - Generate SAN manifests with `cargo xtask soradns-acme-plan`; the helper
   derives the canonical wildcard + pretty-host SAN values, recommended ACME
   challenges, and DNS-01 labels for each alias. Store the output under
@@ -100,39 +107,42 @@ Add or update the following section in the Torii configuration bundle
 
 ```toml
 [torii.sorafs_gateway.acme]
+enabled = true
 account_email = "tls-ops@example.com"
 directory_url = "https://acme-v02.api.letsencrypt.org/directory"
-dns_provider = "route53"
-renewal_threshold_seconds = 2_592_000  # 30 days
-retry_backoff_seconds = 900
-retry_jitter_seconds = 120
-use_tls_alpn_challenge = true
+hostnames = ["gateway.example.com"]
+dns_provider_id = "reviewed-production-adapter"
+renewal_window = "30d"
+retry_backoff = "30m"
+retry_jitter = "5m"
 ech_enabled = true
+
+[torii.sorafs_gateway.acme.challenges]
+dns01 = true
+tls_alpn_01 = true
 ```
 
-- `dns_provider` maps to the implementation registered with
-  `acme::DnsProvider`; Route53 ships in-tree, additional providers can be added
-  without recompiling the gateway.
-- `ech_enabled = true` prompts the automation flow to generate ECH configs
-  alongside certificates; set to `false` if the upstream CDN or clients do not
-  support ECH (see the fallback playbook below).
-- `renewal_threshold_seconds` controls when the automation loop triggers a new
-  order; default remains 30 days but can be lowered for high-risk deployments.
-- The configuration parser lives in
-  `iroha_torii::sorafs::gateway::config`, and validation errors surface through
-  the Torii logs during startup.
+- `dns_provider_id` is an opaque selector consumed by the injected adapter; no
+  DNS-provider implementation ships in this repository.
+- `ech_enabled` sets the controller's expected telemetry state. ECH generation,
+  validation, installation, and rollback remain responsibilities of the
+  injected adapter.
+- `renewal_window` controls when the controller requests a new order; the
+  default is 30 days.
+- Configuration is parsed through `iroha_config`; an enabled ACME policy
+  without an injected runtime adapter fails during startup.
 
 ### Configuration Reference
 
 | Key | Default | Production expectation | Compliance tie-in |
 |-----|---------|------------------------|-------------------|
-| `torii.sorafs_gateway.acme.enabled` | `true` | Leave enabled except during incident drills. | Disabling automation must be captured in the change log with incident/ticket ID. |
+| `torii.sorafs_gateway.acme.enabled` | `false` | Enable only in a daemon embedding that injects the audited runtime adapter. | Enable/disable changes require an approved deployment record. |
 | `torii.sorafs_gateway.acme.directory_url` | Let’s Encrypt v2 | Override only when switching CA environments. | Governance requires publishing the selected CA in GAR manifests. |
-| `torii.sorafs_gateway.acme.dns_provider` | `route53` | Provide a concrete provider name registered with the automation crate. | IAM policy for the provider must be reviewed quarterly. |
-| `torii.sorafs_gateway.acme.renewal_threshold_seconds` | `2_592_000` (30 days) | Tune for risk posture (>=14 days). | Threshold adjustments require risk owner approval. |
-| `torii.sorafs_gateway.acme.retry_backoff_seconds` | `900` | Keep ≤ 900 to satisfy GAR recovery SLAs. | Backoff >900 must include a waiver in the governance log. |
-| `torii.sorafs_gateway.acme.ech_enabled` | `true` | Toggle only when the fallback playbook runs. | Every toggle must be documented with reason/evidence in the compliance tracker. |
-| `torii.sorafs_gateway.acme.telemetry_topic` | `sorafs-tls` | Optional override for log aggregation topic. | If overridden, register the new topic with observability for retention tracking. |
+| `torii.sorafs_gateway.acme.dns_provider_id` | unset | Bind the exact reviewed adapter/provider configuration. | Adapter IAM and challenge permissions require periodic review. |
+| `torii.sorafs_gateway.acme.renewal_window` | `30d` | Keep enough headroom to withdraw and recover before expiry. | Window changes require risk-owner approval. |
+| `torii.sorafs_gateway.acme.retry_backoff` | `30m` | Keep bounded and alert on repeated failure. | Overrides require an incident/change record. |
+| `torii.sorafs_gateway.acme.retry_jitter` | `5m` | Keep deterministic and bounded across replicas. | Overrides require an incident/change record. |
+| `torii.sorafs_gateway.acme.ech_enabled` | `false` | Enable only when the adapter and public edge both install and validate ECH. | Every toggle must be documented with reason/evidence. |
 
 When adjusting configuration by hand, stage the change in
 `iroha_config::actual::sorafs_gateway` (or your configuration management
@@ -141,18 +151,16 @@ self-cert bundle once the new settings deploy.
 
 ### Automation Service
 
-- Enable the systemd template unit that ships with the automation bundle:
-
-  ```bash
-  systemctl enable --now sorafs-gateway-acme@production.service
-  ```
-
-- Logs stream to the `sorafs_gateway_tls_automation` journal target. Pipe them
-  into your log aggregator and tag them with the environment for faster
-  incident triage.
-- Implementation status: `iroha_torii::sorafs::gateway::acme::AcmeAutomation`
-  provides deterministic DNS-01/TLS-ALPN-01 challenge handling, configurable
-  jitter/backoff, and renewal state persistence.
+- Package the daemon embedding and its reviewed adapter under the deployment's
+  supervisor. The repository does not ship a production adapter or a standalone
+  ACME systemd unit.
+- The in-tree controller schedules requests, applies bounded deterministic
+  retry jitter, and updates TLS telemetry. The adapter performs ACME transport,
+  challenge handling, durable provider recovery, key custody, atomic
+  installation, and service reload.
+- Route controller and adapter outcomes into payload-free operational logs.
+  Certificate bodies, private keys, account credentials, and challenge tokens
+  must never enter logs or readiness evidence.
 
 ### Verification & Attestation
 
@@ -290,12 +298,12 @@ automation pipelines promote identical headers.
 
 | Surface | Name | Description | Alert / Action |
 |---------|------|-------------|----------------|
-| Metrics | `sorafs_gateway_tls_cert_expiry_seconds` | Seconds until the active certificate expires. | Page on-call when `< 1_209_600` (14 days).
-| Metrics | `sorafs_gateway_tls_renewal_total{result}` | Renewal attempt counter labelled by `success`/`error`. | Investigate if error rate exceeds 5% in an hour.
-| Metrics | `sorafs_gateway_tls_ech_enabled` | Gauge (`0`/`1`) reflecting current ECH state. | Alert when it drops to `0` unexpectedly.
+| Metrics | `torii_sorafs_tls_cert_expiry_seconds` | Seconds until the active certificate expires. | Page on-call when `< 1_209_600` (14 days).
+| Metrics | `torii_sorafs_tls_renewal_total{result}` | Renewal attempt counter labelled by `success`/`failure`. | Investigate any failure and withdraw before the recovery window closes.
+| Metrics | `torii_sorafs_tls_ech_enabled` | Gauge (`0`/`1`) reflecting current ECH state. | Alert when it drops to `0` unexpectedly.
 | Metrics | `torii_sorafs_gar_violations_total{reason,detail}` | Policy violation counter surfaced from GAR enforcement. | Escalate to governance immediately; attach violation logs.
 | Header | `X-Sora-TLS-State` | Embedded in gateway responses (e.g., `ech-enabled;expiry=2025-06-12T12:00:00Z`). | Monitor synthetically; on `ech-disabled` or `degraded`, follow the playbooks below.
-| Logs | `journalctl -u sorafs-gateway-acme@*.service` | Renewal traces, challenge errors, and manual overrides. | Capture logs with incident tickets and during drills.
+| Logs | Deployment-owned controller/adapter supervisor | Payload-free renewal outcomes and bounded failure classes. | Capture sanitized logs with incident tickets and during drills.
 
 Expose the metrics via Prometheus/OpenTelemetry, wire dashboards for expiry and
 renewal trends, and create synthetic probes that verify the
@@ -303,24 +311,30 @@ renewal trends, and create synthetic probes that verify the
 
 ### Alert Wiring
 
-- **Expiry runway:** Alert when `sorafs_gateway_tls_cert_expiry_seconds` drops
+- **Expiry runway:** Alert when `torii_sorafs_tls_cert_expiry_seconds` drops
   below 14 days (warning) and 7 days (critical). Page the gateway on-call and
   link to the **Emergency Certificate Rotation** playbook.
 - **Renewal failures:** Trigger an incident when
-  `sorafs_gateway_tls_renewal_total{result="error"}` increases more than three
-  times in a six-hour window. Attach automation logs to the ticket.
+  `torii_sorafs_tls_renewal_total{result="failure"}` increases. Attach
+  payload-free controller and adapter logs to the ticket.
 - **GAR violations:** Route `torii_sorafs_gar_violations_total` alarms directly
   to the governance council channel so policy waivers can be granted or traffic
   can be diverted.
 - **ECH state drift:** Alert the developer experience rotation when
-  `sorafs_gateway_tls_ech_enabled` flips from `1` to `0` outside of a scheduled
+  `torii_sorafs_tls_ech_enabled` flips from `1` to `0` outside of a scheduled
   play; downstream SDKs must be notified to adjust expectations.
 
 ## GAR Policy Hooks
 
-- Gateway policy denials increment `torii_sorafs_gar_violations_total{reason,detail}` so Prometheus/Alertmanager can trigger governance-alarm playbooks automatically.
-- Torii now emits `DataEvent::Sorafs(GarViolation)` messages containing provider identifiers, denylist metadata, and rate-limit context. Subscribe via the existing SSE/webhook adapters to feed governance compliance pipelines.
-- Request logs add structured `policy_reason`, `policy_detail`, and `provider_id_hex` fields, simplifying forensic triage and audit evidence collection.
+- Gateway policy denials increment
+  `torii_sorafs_gar_violations_total{reason,detail}` with bounded labels so
+  Prometheus/Alertmanager can trigger governance playbooks.
+- Torii emits typed `DataEvent::Sorafs(GarViolation)` events for authorized
+  policy consumers. Do not copy event identifiers or request context into
+  metric labels, ordinary logs, or readiness artifacts.
+- Governed compliance decisions use their dedicated bounded telemetry and
+  promoted-catalog audit surface; TLS automation must not recreate a local
+  policy list.
 
 ## Compliance & Governance
 
@@ -357,16 +371,22 @@ with Nexus governance:
 ### Emergency Certificate Rotation
 
 **Trigger criteria**
-- `sorafs_gateway_tls_cert_expiry_seconds` < 1,209,600 (14 days).
-- `sorafs_gateway_tls_renewal_total{result="failure"}` fires twice within the renewal window.
+- `torii_sorafs_tls_cert_expiry_seconds` < 1,209,600 (14 days).
+- `torii_sorafs_tls_renewal_total{result="failure"}` fires within the renewal window.
 - `X-Sora-TLS-State` advertises `last-error=` or clients report certificate mismatch/handshake failures.
 
 **Stabilise**
 1. Page the SoraFS gateway TLS on-call and open an incident in `#sorafs-incident`.
 2. Pause configuration rollouts and record the current config commit in the incident ticket.
-3. Disable automation by setting `torii.sorafs_gateway.acme.enabled = false`, commit the change, and restart the gateway deployment.
+3. Withdraw the affected gateway from the provider-admission inventory, regional
+   load balancer, and public DNS. Do not keep it in service on a stored
+   certificate when the active chain is invalid, cannot be verified, or lacks
+   enough lifetime for the recovery window.
+4. Leave the controller enabled when its adapter is healthy enough to retry. If
+   the adapter itself is compromised, disable ACME in the controlled
+   configuration rollout while the gateway remains withdrawn.
 
-**Issue and deploy replacement bundle**
+**Issue and deploy a replacement**
 1. Capture the current state for auditing:
    ```bash
    curl -sD - https://gateway.example/status \
@@ -374,26 +394,16 @@ with Nexus governance:
    openssl s_client -connect gateway.example:443 -servername gateway.example \
      < /dev/null 2>/dev/null | openssl x509 -noout -fingerprint -sha256
    ```
-2. Use the deployment's reviewed runtime ACME client or its independently
-   controlled emergency workflow to issue a CA-valid replacement into the
-   sealed pending location. The repository command
-   `sorafs-gateway tls renew` is intentionally fail-closed and emits no bundle.
-   After the external workflow has atomically staged `fullchain.pem`,
-   `privkey.pem`, and optional `ech.json`, restart the supervised automation
-   unit:
-   ```bash
-   sudo systemctl restart sorafs-gateway-acme@production.service
-   journalctl -fu sorafs-gateway-acme@production.service
-   ```
-3. Stage the bundle in secrets and reload Torii:
-   ```bash
-   install -m 600 /var/lib/sorafs_gateway_tls/pending/fullchain.pem /etc/iroha/sorafs_gateway_tls/fullchain.pem
-   install -m 600 /var/lib/sorafs_gateway_tls/pending/privkey.pem  /etc/iroha/sorafs_gateway_tls/privkey.pem
-   install -m 640 /var/lib/sorafs_gateway_tls/pending/ech.json     /etc/iroha/sorafs_gateway_tls/ech.json
-   systemctl reload iroha-torii.service
-   ```
+2. Repair the deployment's audited runtime adapter or invoke its independently
+   controlled emergency issuance path. The adapter must validate the CA chain,
+   SAN set, key binding, expiry, and optional ECH material, install the new
+   secret atomically inside its KMS/Vault boundary, and reload the serving edge.
+   Repository tooling neither issues nor installs production certificates.
+3. Confirm the controller records exactly one successful renewal for the
+   replacement and that the adapter reports an atomic install/reload. A
+   successful order without a successful install is not recovery.
 
-**Validate and restore automation**
+**Validate and restore service**
 1. Run the self-cert harness:
    ```bash
    scripts/sorafs_gateway_self_cert.sh \
@@ -402,17 +412,24 @@ with Nexus governance:
      --out artifacts/sorafs_gateway_self_cert
    ```
 2. Confirm telemetry recovered:
-   - `sorafs_gateway_tls_cert_expiry_seconds` > 2,592,000 (30 days).
-   - `sorafs_gateway_tls_renewal_total{result="success"}` increments once.
+   - `torii_sorafs_tls_cert_expiry_seconds` > 2,592,000 (30 days).
+   - `torii_sorafs_tls_renewal_total{result="success"}` increments once.
    - `X-Sora-TLS-State` reports `ech-enabled;expiry=…;renewed-at=…` with no `last-error`.
-3. Update governance artefacts with the new fingerprint (GAR manifest + attestation bundle) and attach them to the incident ticket.
-4. Re-enable automation by setting `torii.sorafs_gateway.acme.enabled = true` and reloading Torii. Resume paused pipelines and file the post-incident report within three business days.
+3. Verify the public hostname from outside the deployment network and confirm
+   the served chain, SAN set, and fingerprint match the controller/adapter
+   evidence.
+4. Update governance artefacts with the new fingerprint (GAR manifest +
+   attestation bundle), then re-admit the gateway and restore traffic. If ACME
+   was disabled during adapter repair, re-enable it only after the runtime
+   dependency passes its readiness check.
+5. Resume paused pipelines and file the post-incident report within three
+   business days.
 
 ### ECH Fallback / Degraded Mode
 
 Use this play when CDNs or clients fail to consume ECH.
 
-1. Detect via `sorafs_gateway_tls_ech_enabled == 0`, customer incidents citing `GREASE_ECH_MISMATCH`, or governance directives.
+1. Detect via `torii_sorafs_tls_ech_enabled == 0`, customer incidents citing `GREASE_ECH_MISMATCH`, or governance directives.
 2. Disable ECH:
    ```toml
    [torii.sorafs_gateway.acme]
@@ -420,25 +437,23 @@ Use this play when CDNs or clients fail to consume ECH.
    ```
    Apply the config (or use `iroha_cli config apply`), then restart Torii. The `X-Sora-TLS-State` header should now advertise `ech-disabled`.
 3. Broadcast the downgrade to storage operators, SDK teams, and governance, including the expected review window.
-4. Monitor `sorafs_gateway_tls_renewal_total{result="failure"}` for additional TLS churn while ECH remains disabled.
-5. Once upstream services recover, restart the automation service (or invoke your ACME client manually) to produce a fresh bundle with ECH configs, rerun the self-cert harness, toggle `ech_enabled = true`, and share the updated telemetry snippets.
+4. Monitor `torii_sorafs_tls_renewal_total{result="failure"}` for additional TLS churn while ECH remains disabled.
+5. Once upstream services recover, use the reviewed runtime adapter to issue,
+   validate, atomically install, and externally probe fresh ECH material. Rerun
+   the self-cert harness, toggle `ech_enabled = true`, and share the updated
+   payload-free telemetry snippets.
 
 ### Compromised-Key Revocation
 
 Apply this playbook when private keys are exposed or the CA reports mis-issuance.
 
 1. Keep automation disabled and rotate stream-token signing keys per the operations handbook to prevent credential reuse.
-2. Revoke the current bundle with the repository wrapper (archives artifacts under `revoked/`):
-   ```bash
-   scripts/sorafs-gateway tls revoke \
-     --out /var/lib/sorafs_gateway_tls \
-     --reason keyCompromise
-   ```
-   The command moves `fullchain.pem`, `privkey.pem`, and `ech.json` into a timestamped backup and records an audit JSON file alongside them.
-3. Issue a fresh CA-valid bundle through the reviewed runtime ACME client or
-   independently controlled emergency workflow, then follow the validation
-   steps from the rotation playbook. The repository compatibility command
-   remains fail-closed.
+2. Withdraw the gateway immediately and revoke the certificate through the CA
+   using the reviewed runtime adapter or its independently controlled emergency
+   workflow. Do not archive a compromised private key as a fallback.
+3. Destroy the compromised key under the KMS/HSM erasure procedure, issue and
+   atomically install a fresh CA-valid bundle through the reviewed adapter, then
+   follow the validation steps from the rotation playbook.
 4. Publish updated GAR envelopes and `manifest_signatures.json` so downstream nodes adopt the new fingerprint.
 5. Notify the governance council and SDK teams with incident ID, revocation timestamp, and remediation instructions.
 
@@ -460,8 +475,8 @@ After every drill:
 - **Automation log shows repeated DNS-01 failures:** verify IAM permissions for
   the configured `dns_provider` and confirm TXT propagation with
   `dig _acme-challenge.gateway.example.com txt`.
-- **`X-Sora-TLS-State` missing or malformed:** ensure the Torii service was
-  reloaded after copying certificates and that
+- **`X-Sora-TLS-State` missing or malformed:** keep the gateway withdrawn,
+  verify that the runtime adapter completed its atomic install/reload, and that
   `Metrics::set_sorafs_tls_state` succeeds (check Torii logs for `warn` level
   failures).
 - **GAR violation counters increasing:** inspect the structured logs emitted in
@@ -477,6 +492,10 @@ After every drill:
   implementation, including ACME account custody, challenge adapters, DNS
   credentials, revocation, durable retry state, and certificate installation.
   No provider library or DNS adapter is selected by this repository.
+- **Serving boundary:** the in-tree controller records renewal state but does
+  not authorize continued service on a stale or invalid certificate. The
+  deployment must withdraw an affected gateway and may re-admit it only after
+  the adapter's atomic installation and independent public probes succeed.
 - **Telemetry naming alignment:** Observability approved the metric names in the
   telemetry table; durations are exposed in seconds. Review dashboards after
   upgrades to ensure schema changes are reflected.

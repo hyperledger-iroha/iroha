@@ -4,9 +4,9 @@ direction: ltr
 source: docs/portal/docs/ministry/ai-moderation-runner.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 00cf1d37cf06d24b6eb7b2acba6b5c2ec3c3fae249b5cb6055384ca19ceaefac
+source_hash: 36f29f59fd46f55712fcbab3afbcc84abba22b6e1f38f49ef8061e58a5cceff7
 source_last_modified: "2025-11-10T16:27:31.384538+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-07-25
 ---
 
 ---
@@ -135,7 +135,14 @@ struct AdversarialPerceptualVariantV1 {
 }
 ```
 
-El esquema vive en `crates/iroha_data_model/src/sorafs/moderation.rs` y se valida mediante `AdversarialCorpusManifestV1::validate()`. El manifiesto permite que el cargador de denylists del gateway pueble entradas `perceptual_family` que bloquean clusters de casi duplicados completos en lugar de bytes individuales. Un fixture ejecutable (`docs/examples/ai_moderation_perceptual_registry_202602.json`) demuestra el layout esperado y alimenta directamente la denylist de gateway de ejemplo.
+The schema lives in `crates/iroha_data_model/src/sorafs/moderation.rs` and is
+validated via `AdversarialCorpusManifestV1::validate()`. A governed compliance
+feed producer converts an approved manifest into `perceptual_family` rules that
+block entire near-duplicate clusters instead of individual bytes. The resulting
+catalog is bounded, predecessor-bound, and threshold-signed before staging; the
+runnable fixture
+(`docs/examples/ai_moderation_perceptual_registry_202602.json`) is validation
+input, not a local gateway pack.
 
 ## 5. Pipeline de ejecución
 1. Cargar `AiModerationManifestV1` desde el DAG de gobernanza. Rechazar si `runner_hash` o `runtime_version` no coinciden con el binario desplegado.
@@ -223,9 +230,13 @@ El esquema vive en `crates/iroha_data_model/src/sorafs/moderation.rs` y se valid
   acepta tanto los artefactos JSON publicados en
   `docs/examples/ai_moderation_calibration_manifest_202602.json` como la codificación Norito cruda e imprime los conteos de modelos/firmas junto con el timestamp del manifiesto al completar la validación.
 - Gateways y automatización se conectan al mismo helper para que los manifiestos de reproducibilidad puedan rechazarse de forma determinista cuando el esquema deriva, faltan digests o fallan las firmas.
-- Los bundles de corpus adversarial siguen el mismo patrón:
+- Adversarial corpus bundles follow the same pattern:
   `sorafs_cli moderation validate-corpus --manifest=PATH [--format=json|norito]`
-  analiza `AdversarialCorpusManifestV1`, aplica la versión de esquema y rechaza manifiestos que omitan familias, variantes o metadatos de huella. Las ejecuciones exitosas emiten el timestamp de emisión, la etiqueta de cohorte y los conteos de familias/variantes para que los operadores puedan fijar la evidencia antes de actualizar las entradas de denylist del gateway descritas en la Sección 4.3.
+  parses `AdversarialCorpusManifestV1`, enforces the schema version, and refuses
+  manifests that omit families, variants, or fingerprint metadata. Successful
+  runs emit the issued-at timestamp, cohort label, and the family/variant counts
+  so operators can pin the evidence before a governed producer stages the
+  corresponding catalog rules described in Section 4.3.
 
 ## 13. Pendientes abiertos
 - Las ventanas de recalibración mensual después del 2026-03-02 continúan siguiendo el procedimiento de la Sección 6; publica `ai-moderation-calibration-<YYYYMM>.md` junto con bundles actualizados de manifiesto/scorecard bajo el árbol de reportes SoraFS.

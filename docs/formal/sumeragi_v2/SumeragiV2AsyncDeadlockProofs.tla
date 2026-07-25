@@ -571,7 +571,9 @@ proves that this concrete witness is exactly the production-facing transition.
 ***************************************************************************)
 
 HistoricalLockRestartAuthorityObservedVars ==
-  <<vars, asyncCommandQueues,
+  <<context, nodeView, generation, prepareQCs, installedTCs,
+    lockRank, lockSubject, commitIntents, decisions,
+    asyncCommandQueues,
     asyncDeferredCompletionQueues, asyncDeferredProgressQueues,
     asyncDeferredNormalQueues, asyncCausalQueues, asyncOutstandingWork>>
 

@@ -22,7 +22,7 @@ use axum::{
     },
 };
 use futures::{SinkExt, StreamExt, stream};
-use iroha_core::{smartcontracts::ValidSingularQuery, state::StateReadOnly, telemetry::Telemetry};
+use iroha_core::{smartcontracts::ValidSingularQuery, state::StateReadOnly};
 use iroha_data_model::{
     account::AccountId,
     isi::{
@@ -56,6 +56,7 @@ use sorafs_node::reserve_transaction_forwarder::RESERVE_TRANSACTION_MAX_CANONICA
 
 use crate::{
     JsonBody, SharedAppState,
+    routing::MaybeTelemetry,
     utils::extractors::{ExtractAccept, JsonOrNoritoVersioned},
 };
 
@@ -75,7 +76,7 @@ enum ReserveCommandRouteV1 {
 }
 
 async fn observe_reserve_api_response<F>(
-    telemetry: Telemetry,
+    telemetry: MaybeTelemetry,
     route: &'static str,
     response: F,
 ) -> Response

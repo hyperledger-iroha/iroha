@@ -882,7 +882,7 @@ liveness. Stage-2, Stage-3, and Stage-6 remain scratch-only and have no canonica
 ledger IDs, so the checker does not encode fictitious aggregate-rank edges.
 Release mode additionally requires fresh source-bound evidence.
 
-Before network startup, the executable wrapper inventories 582 named tests
+Before network startup, the executable wrapper inventories 584 named tests
 across 39 Rust modules. The preceding 298-name inventory was produced from the
 264-name inventory by adding
 37 positive regressions: 10 bind per-target exact-output scheduling and typed
@@ -940,16 +940,18 @@ geometry, compact offline QCs, and parent height-context identity to the
 authenticated origin.
 
 The final successor/recovery closure adds six exact regressions without adding
-a module. The per-source route-attempt, exact PrepareQC recovery, locked-body
-reproposal, runner/worker, sidecar, and daemon closure brings the current
-inventory to 582 tests across 39 modules. Together with the source-sealed
+a module. Crash-safe response handoff and same-delivery retry after transient
+capacity pressure add two more sidecar regressions. The per-source
+route-attempt, exact PrepareQC recovery, locked-body reproposal, runner/worker,
+sidecar, and daemon closure brings the current
+inventory to 584 tests across 39 modules. Together with the source-sealed
 command and tooling legs, the pre-network corridor contains 82 legs. The
 G-SCALE runner/validator preflight remains part of that sealed corridor.
 The sidecar stream regressions keep sequence and cumulative-close metadata out
 of canonical semantic identity, remove wall-clock terminal expiry, and permit
 only an authenticated contiguous close floor to retire covered output.
 The canonical module/test TSV inventory SHA-256 is
-`bee1b566e237e03a4cb9dfaf5c2d7d9467d3e26a95690222c96d84147409e50a`.
+`3a714b4e395aee7f06ba0583260cc26b54fda80fc63a4b5f67c4dc491752bfc1`.
 The six boundaries preserve the predecessor CommitQC through wire-to-core
 conversion, block rollover until the decided lane session is durable, reopen a
 globally finalized tip whose lane evidence is incomplete, filter terminal
@@ -1070,7 +1072,7 @@ walk checks directories and rejects source symlink escapes, writable-output
 targets, and hard-linked regular files. Child builds and evidence bind the
 sealed manifest actually compiled. The canonical aggregate receipt additionally
 binds original HEAD/tree/`Cargo.lock`, all 82 pre-network legs and the exact
-582-test inventory, the pinned harness lock and resolved toolchain, the formal
+584-test inventory, the pinned harness lock and resolved toolchain, the formal
 ledger/evidence/log, all matrix logs, chaos log, and exact-identity soak
 evidence. Its no-clobber, file/directory-`fsync` publication has no mutable
 pointer; after success the external bootstrap independently validates it and
@@ -1258,9 +1260,10 @@ deadline, evidence, rank, or decision repair exists. These bounded checks do
 not discharge the productive release obligation.
 
 The model-trace replayer drives the exact production reducer API. For the
-current proposal-origin source, the isolated source-shared harness passed
+preceding proposal-origin source, the isolated source-shared harness passed
 118/118 reducer/WAL/refinement tests, all 8 model-trace replay tests, and all 9
-named fast-network simulations. A 2026-07-21 100,000-height chaos run completed
+named fast-network simulations. The current harness inventories 137 runnable
+reducer tests and requires a fresh source-sealed run. A 2026-07-21 100,000-height chaos run completed
 the permissioned and NPoS 50,000-height prefixes, 400,000 validator
 finalizations, and zero failures in 91.29 seconds. These are unsealed
 implementation results, not deductive evidence. The checked-in pinned Verus

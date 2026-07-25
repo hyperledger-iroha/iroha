@@ -4762,7 +4762,6 @@ impl Run for FetchArgs {
             blinded_cid_b64,
             salt_epoch,
             expected_cache_version: None,
-            moderation_token_key_b64: None,
         };
 
         let telemetry_source_label = self
@@ -4850,7 +4849,6 @@ impl Run for FetchArgs {
             policy_override,
             scoreboard: scoreboard_options,
             expected_cache_version: gateway_config.expected_cache_version.clone(),
-            moderation_token_key_b64: gateway_config.moderation_token_key_b64.clone(),
         };
 
         let client = context.client_from_config();

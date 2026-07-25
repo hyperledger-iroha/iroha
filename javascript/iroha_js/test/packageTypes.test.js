@@ -278,6 +278,71 @@ test("runtime namespace declarations expose exactly their module exports", async
   }
 });
 
+test("SoraFS gateway denial declarations expose only governed catalog evidence", () => {
+  const declarationPath = path.join(PACKAGE_ROOT, "index.d.ts");
+  const declarationText = fs.readFileSync(declarationPath, "utf8");
+  const source = ts.createSourceFile(
+    declarationPath,
+    declarationText,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  const findInterface = (name) => {
+    const declaration = source.statements.find(
+      (statement) =>
+        ts.isInterfaceDeclaration(statement) && statement.name.text === name,
+    );
+    assert.ok(declaration, `missing ${name} declaration`);
+    return declaration;
+  };
+  const propertyName = (member) => member.name?.getText(source);
+
+  const options = findInterface("SorafsGatewayFetchOptions");
+  const optionNames = options.members.map(propertyName);
+  assert.ok(optionNames.includes("cacheVersion"));
+  assert.equal(optionNames.includes("moderationTokenKey"), false);
+
+  const failure = findInterface("SorafsGatewayFetchAttemptFailure");
+  const policyBlock = failure.members.find(
+    (member) => propertyName(member) === "policyBlock",
+  );
+  assert.ok(policyBlock && ts.isPropertySignature(policyBlock));
+  assert.ok(
+    policyBlock.type && ts.isTypeLiteralNode(policyBlock.type),
+    "policyBlock must be a closed type literal",
+  );
+  assert.deepEqual(policyBlock.type.members.map(propertyName), [
+    "observedStatus",
+    "code",
+    "source",
+    "catalogDigestHex",
+  ]);
+  assert.equal(
+    policyBlock.type.members[0].type?.getText(source),
+    "451",
+    "the observed denial status must be exact",
+  );
+  assert.equal(
+    policyBlock.type.members[1].type?.getText(source),
+    '"gateway_compliance_denied"',
+    "the denial code must be exact",
+  );
+  for (const removed of [
+    "canonicalStatus",
+    "cacheVersion",
+    "denylistVersion",
+    "proofTokenPresent",
+    "message",
+  ]) {
+    assert.equal(
+      policyBlock.type.members.some((member) => propertyName(member) === removed),
+      false,
+      `removed denial field ${removed} must stay absent`,
+    );
+  }
+});
+
 test("strict NodeNext resolves the root and every public subpath from a packed layout", () => {
   const packageJson = readPackageJson();
   const { tempRoot } = createPackedLayout({ includeNodeTypes: true });

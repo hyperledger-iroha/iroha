@@ -20,6 +20,7 @@ use axum::{
     http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header::CACHE_CONTROL},
     response::{IntoResponse, Response},
 };
+use iroha_core::state::WorldReadOnly;
 use iroha_data_model::role::RoleId;
 use iroha_logger::warn;
 use norito::derive::JsonSerialize;

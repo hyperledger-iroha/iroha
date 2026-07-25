@@ -6577,6 +6577,122 @@ impl Telemetry {
         }
     }
 
+    /// Record one authenticated `SoraFS` gateway-compliance control response.
+    pub fn record_sorafs_gateway_compliance_request(&self, operation: &str, outcome: &str) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics
+                .record_sorafs_gateway_compliance_request(operation, outcome);
+        }
+    }
+
+    /// Record one `SoraFS` gateway-compliance failure.
+    pub fn record_sorafs_gateway_compliance_failure(&self, surface: &str, class: &str) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics
+                .record_sorafs_gateway_compliance_failure(surface, class);
+        }
+    }
+
+    /// Record one `SoraFS` gateway-compliance serving decision.
+    pub fn record_sorafs_gateway_compliance_serving_decision(
+        &self,
+        subject_kind: &str,
+        disposition: &str,
+        source: &str,
+    ) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics
+                .record_sorafs_gateway_compliance_serving_decision(
+                    subject_kind,
+                    disposition,
+                    source,
+                );
+        }
+    }
+
+    /// Publish one complete `SoraFS` gateway-compliance serving-catalog snapshot.
+    pub fn record_sorafs_gateway_compliance_serving_catalog(
+        &self,
+        sequence: Option<u64>,
+        valid_until_unix: Option<u64>,
+        ready: bool,
+    ) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics
+                .record_sorafs_gateway_compliance_serving_catalog(
+                    sequence,
+                    valid_until_unix,
+                    ready,
+                );
+        }
+    }
+
+    /// Mark the `SoraFS` gateway-compliance serving policy unavailable.
+    pub fn mark_sorafs_gateway_compliance_unready(&self) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics.mark_sorafs_gateway_compliance_unready();
+        }
+    }
+
+    /// Publish one complete, reconciled `SoraFS` reserve projection.
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_sorafs_reserve_finalized_projection(
+        &self,
+        finalized_height: u64,
+        lifecycle_stage_counts: [u64; 5],
+        credit_principal_micro_xor: [u128; 5],
+        credit_shortfall_micro_xor: [u128; 5],
+        accrued_interest_micro_xor: [u128; 5],
+        open_appeals: u64,
+        custody_counts: [u64; 3],
+        chain_reconciled_counts: [u64; 2],
+    ) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics.record_sorafs_reserve_finalized_projection(
+                finalized_height,
+                lifecycle_stage_counts,
+                credit_principal_micro_xor,
+                credit_shortfall_micro_xor,
+                accrued_interest_micro_xor,
+                open_appeals,
+                custody_counts,
+                chain_reconciled_counts,
+            );
+        }
+    }
+
+    /// Mark the finalized `SoraFS` reserve projection unavailable.
+    pub fn mark_sorafs_reserve_finalized_projection_unready(&self) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics
+                .mark_sorafs_reserve_finalized_projection_unready();
+        }
+    }
+
+    /// Record one failed finalized `SoraFS` reserve projection attempt.
+    pub fn record_sorafs_reserve_finalized_projection_failure(&self) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics
+                .record_sorafs_reserve_finalized_projection_failure();
+        }
+    }
+
+    /// Record one `SoraFS` reserve service request outcome.
+    pub fn record_sorafs_reserve_service_request(&self, route: &str, result: &str) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics
+                .record_sorafs_reserve_service_request(route, result);
+        }
+    }
+
+    /// Increment one `SoraFS` reserve service rate-limit counter.
+    pub fn inc_sorafs_reserve_service_rate_limit(&self, route: &str, reason: &str) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics
+                .inc_sorafs_reserve_service_rate_limit(route, reason);
+        }
+    }
+
     /// Increment the `SoraFS` dispute counter for the provided result label.
     pub fn inc_sorafs_disputes(&self, result: &'static str) {
         if self.enabled.load(Ordering::Relaxed) {
@@ -9753,6 +9869,199 @@ mod tests {
             metrics
                 .torii_sorafs_orderbook_finalized_projection_failures_total
                 .with_label_values(&["query_failed"])
+                .get(),
+            1
+        );
+    }
+
+    #[test]
+    fn direct_sorafs_gateway_compliance_metrics_record_without_actor() {
+        let metrics = Arc::new(Metrics::default());
+        let telemetry = Telemetry::new(metrics.clone(), true);
+
+        telemetry.record_sorafs_gateway_compliance_request("promote", "success");
+        telemetry.record_sorafs_gateway_compliance_serving_decision(
+            "manifest_digest",
+            "deny",
+            "legal_safety_hold",
+        );
+        telemetry.record_sorafs_gateway_compliance_failure("serving", "expired_catalog");
+        telemetry.record_sorafs_gateway_compliance_serving_catalog(
+            Some(42),
+            Some(1_800_003_600),
+            true,
+        );
+
+        assert_eq!(
+            metrics
+                .torii_sorafs_gateway_compliance_requests_total
+                .with_label_values(&["promote", "success"])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .torii_sorafs_gateway_compliance_serving_decisions_total
+                .with_label_values(&["manifest_digest", "deny", "legal_safety_hold"])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .torii_sorafs_gateway_compliance_failures_total
+                .with_label_values(&["serving", "expired_catalog"])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .torii_sorafs_gateway_compliance_serving_catalog_sequence
+                .get(),
+            42
+        );
+        assert_eq!(metrics.torii_sorafs_gateway_compliance_ready.get(), 1);
+
+        telemetry.mark_sorafs_gateway_compliance_unready();
+        assert_eq!(metrics.torii_sorafs_gateway_compliance_ready.get(), 0);
+
+        telemetry.disable();
+        telemetry.record_sorafs_gateway_compliance_request("promote", "success");
+        telemetry.record_sorafs_gateway_compliance_failure("serving", "expired_catalog");
+        telemetry.record_sorafs_gateway_compliance_serving_catalog(Some(84), None, true);
+        assert_eq!(
+            metrics
+                .torii_sorafs_gateway_compliance_requests_total
+                .with_label_values(&["promote", "success"])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .torii_sorafs_gateway_compliance_failures_total
+                .with_label_values(&["serving", "expired_catalog"])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .torii_sorafs_gateway_compliance_serving_catalog_sequence
+                .get(),
+            42
+        );
+        assert_eq!(metrics.torii_sorafs_gateway_compliance_ready.get(), 0);
+    }
+
+    #[test]
+    fn direct_sorafs_reserve_projection_records_and_fails_closed_without_actor() {
+        let metrics = Arc::new(Metrics::default());
+        let telemetry = Telemetry::new(metrics.clone(), true);
+
+        telemetry.record_sorafs_reserve_finalized_projection(
+            42,
+            [2, 0, 0, 0, 1],
+            [120_000_000, 0, 0, 0, 7_000_000],
+            [5_000_000, 0, 0, 0, 1_000_000],
+            [45_000, 0, 0, 0, 9_000],
+            3,
+            [1, 2, 1],
+            [2, 1],
+        );
+        assert_eq!(
+            metrics
+                .torii_sorafs_reserve_finalized_projection_height
+                .get(),
+            42
+        );
+        assert_eq!(
+            metrics
+                .torii_sorafs_reserve_finalized_projection_ready
+                .get(),
+            1
+        );
+        telemetry.record_sorafs_reserve_service_request("top_up", "accepted");
+        telemetry.inc_sorafs_reserve_service_rate_limit("top_up", "ingress");
+        telemetry.record_sorafs_reserve_service_request(
+            "attacker-controlled-route",
+            "attacker-controlled-result",
+        );
+        telemetry.inc_sorafs_reserve_service_rate_limit(
+            "attacker-controlled-route",
+            "attacker-controlled-reason",
+        );
+        assert_eq!(
+            metrics
+                .torii_sorafs_reserve_service_requests_total
+                .with_label_values(&["top_up", "accepted"])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .torii_sorafs_reserve_service_rate_limit_total
+                .with_label_values(&["top_up", "ingress"])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .torii_sorafs_reserve_service_requests_total
+                .with_label_values(&["unknown", "unknown"])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .torii_sorafs_reserve_service_rate_limit_total
+                .with_label_values(&["unknown", "unknown"])
+                .get(),
+            1
+        );
+
+        telemetry.record_sorafs_reserve_finalized_projection_failure();
+        assert_eq!(
+            metrics
+                .torii_sorafs_reserve_finalized_projection_ready
+                .get(),
+            0
+        );
+        assert_eq!(
+            metrics
+                .torii_sorafs_reserve_finalized_projection_failure_total
+                .get(),
+            1
+        );
+
+        telemetry.disable();
+        telemetry.record_sorafs_reserve_finalized_projection(
+            84, [0; 5], [0; 5], [0; 5], [0; 5], 0, [0; 3], [0; 2],
+        );
+        telemetry.mark_sorafs_reserve_finalized_projection_unready();
+        telemetry.record_sorafs_reserve_finalized_projection_failure();
+        telemetry.record_sorafs_reserve_service_request("top_up", "accepted");
+        telemetry.inc_sorafs_reserve_service_rate_limit("top_up", "ingress");
+        assert_eq!(
+            metrics
+                .torii_sorafs_reserve_finalized_projection_height
+                .get(),
+            42
+        );
+        assert_eq!(
+            metrics
+                .torii_sorafs_reserve_finalized_projection_failure_total
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .torii_sorafs_reserve_service_requests_total
+                .with_label_values(&["top_up", "accepted"])
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .torii_sorafs_reserve_service_rate_limit_total
+                .with_label_values(&["top_up", "ingress"])
                 .get(),
             1
         );

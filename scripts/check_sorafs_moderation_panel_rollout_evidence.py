@@ -228,6 +228,16 @@ REQUIRED_VIEWER_EXPORT_TARGETS = (
     "governance_dag",
     "transparency_ledger",
 )
+GATEWAY_COMPLIANCE_DENIAL_CODE = "gateway_compliance_denied"
+GATEWAY_COMPLIANCE_DENIAL_SOURCES = ("baseline", "legal_safety_hold")
+GATEWAY_COMPLIANCE_DENIAL_FIELDS = frozenset(
+    (
+        "status_code",
+        "code",
+        "source",
+        "catalog_digest_hex",
+    )
+)
 REQUIRED_COMMIT_REVEAL_SCENARIOS = (
     "happy_path",
     "duplicate_commit",
@@ -452,7 +462,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
         "transparency_report_exported",
         "daily_digest_published",
         "payload_redaction_verified",
-        "denylisted_digest_blocked",
+        "gateway_compliance_denial_enforced",
         "unauthorized_access_rejected",
         "stale_url_rejected",
         "session_replay_rejected",
@@ -702,6 +712,55 @@ EVIDENCE_VIEWER_DIGEST_SET_FIELDS: tuple[str, ...] = (
 )
 
 
+def require_exact_fields(
+    payload: dict[str, Any],
+    expected: frozenset[str],
+    errors: list[str],
+    *,
+    path: str,
+) -> None:
+    """Reject missing and unknown fields in a bounded canonical object."""
+
+    actual = frozenset(payload)
+    missing = sorted(expected - actual)
+    unknown = sorted(actual - expected)
+    if missing:
+        errors.append(f"{path} is missing required fields: {', '.join(missing)}")
+    if unknown:
+        errors.append(f"{path} contains unknown fields: {', '.join(unknown)}")
+
+
+def validate_gateway_compliance_denial_claim(
+    payload: dict[str, Any],
+    errors: list[str],
+) -> None:
+    """Require one exact governed-compliance denial observation."""
+
+    path = "gateway_compliance_denial_enforced"
+    claim = require_object(payload.get(path), path, errors)
+    require_exact_fields(
+        claim,
+        GATEWAY_COMPLIANCE_DENIAL_FIELDS,
+        errors,
+        path=path,
+    )
+    if claim.get("status_code") != 451:
+        errors.append(f"{path}.status_code must be exactly 451")
+    if claim.get("code") != GATEWAY_COMPLIANCE_DENIAL_CODE:
+        errors.append(
+            f"{path}.code must be exactly {GATEWAY_COMPLIANCE_DENIAL_CODE}"
+        )
+    if claim.get("source") not in GATEWAY_COMPLIANCE_DENIAL_SOURCES:
+        errors.append(f"{path}.source is not a recognized denying source")
+    require_hex(
+        claim,
+        "catalog_digest_hex",
+        HEX64_LEN,
+        errors,
+        path=f"{path}.catalog_digest_hex",
+    )
+
+
 def validate_routes(payload: dict[str, Any], errors: list[str], options: ValidationOptions) -> None:
     for index, record in require_object_array(payload, "routes", errors):
         require_bool_true(record, "passed", errors, path=f"routes[{index}].passed")
@@ -895,6 +954,12 @@ def validate_evidence_viewer(
     errors: list[str],
     options: ValidationOptions,
 ) -> None:
+    require_exact_fields(
+        payload,
+        frozenset(EVIDENCE_REQUIRED_FIELDS["evidence_viewer"]),
+        errors,
+        path="evidence_viewer",
+    )
     validate_fresh(payload, errors, options)
     require_hex(payload, "case_digest_hex", HEX64_LEN, errors)
     require_hex(payload, "roster_hash_hex", HEX64_LEN, errors)
@@ -945,7 +1010,7 @@ def validate_evidence_viewer(
     require_bool_true(payload, "transparency_report_exported", errors)
     require_bool_true(payload, "daily_digest_published", errors)
     require_bool_true(payload, "payload_redaction_verified", errors)
-    require_bool_true(payload, "denylisted_digest_blocked", errors)
+    validate_gateway_compliance_denial_claim(payload, errors)
     require_bool_true(payload, "unauthorized_access_rejected", errors)
     require_bool_true(payload, "stale_url_rejected", errors)
     require_bool_true(payload, "session_replay_rejected", errors)

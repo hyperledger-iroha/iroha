@@ -49,7 +49,8 @@ reading the approved native pin record and its finalized cursor from
 
 Clients MUST attach the Norito-signed manifest envelope (`manifest_signatures.json`)
 using `X-SoraFS-Manifest-Envelope` when requesting a full CAR to allow gateways to
-perform policy checks (GAR, PDP/PoR status).
+perform policy checks (the promoted governed-compliance catalog and PDP/PoR
+status).
 
 V1 has one production gateway implementation: Torii backed by finalized ledger
 state. The former standalone `sorafs_gateway` process and its
@@ -177,12 +178,24 @@ Gateways MUST return deterministic error codes for refusal paths:
 | Manifest not admitted / admission registry unavailable | 412  | `{ "error": "provider_not_admitted" \| "admission_unavailable" }` |
 | Missing provider identifier for admission/capability | 428    | `{ "error": "provider_id_missing" }`                     |
 | Downgrade attempt (missing headers)                  | 428    | `{ "error": "required_headers_missing" }`                |
-| Rate limit / GAR policy violation                    | 429    | `{ "error": "rate_limited", "reason": "..." }`           |
-| Denylist (provider/manifest/CID/perceptual family)   | 451    | `{ "error": "denylisted", "kind": "..." }`               |
+| Rate limit                                           | 429    | `{ "error": "rate_limited", "reason": "..." }`           |
+| Governed-compliance denial (provider/manifest/CID/URL) | 451  | `{ "error": "gateway_compliance_denied", "source": "baseline" \| "legal_safety_hold", "catalog_digest_hex": "<64-lower-hex>" }` |
+| Governed-compliance state unavailable, invalid, or stale | 503 | `{ "error": "gateway_compliance_unavailable", "message": "..." }` |
 | Internal errors                                      | 500    | `{ "error": "internal", "request_id": "..." }`           |
 
 Clients MUST treat any non-2xx response as a refusal and exclude the gateway
 from the multi-source schedule until an operator review occurs.
+
+The `451` response is derived only from the currently promoted, threshold-
+approved compliance catalog. Its `source` records whether the effective denial
+came from the baseline catalog or a legal/safety hold, and
+`catalog_digest_hex` binds the response to that catalog. Accepted appeals take
+precedence over baseline policy but not legal/safety holds. There is no
+process-local denial-list fallback. If the controller cannot evaluate against
+a fresh serving catalog—including missing controller state, an expired or
+invalid catalog, persistence conflict, or failed clock evaluation—the gateway
+MUST fail closed with `503 gateway_compliance_unavailable`. Both `451` and
+`503` responses MUST include `Cache-Control: private, no-store, max-age=0`.
 
 ### 5.1. Policy Matrix Surface (Fixtures)
 
@@ -192,7 +205,9 @@ exercise the canonical status matrix:
 - Success paths: `200` (full CAR) and `206` (aligned range replay).
 - Header/manifest enforcement: `428` for missing manifest envelopes or required
   headers (`B2`), `412` for admission failures (`B5`).
-- GAR/denylist enforcement: `451` for governance or compliance refusals (`D1`).
+- Governed-compliance enforcement: `451 gateway_compliance_denied` for a
+  catalog-bound refusal (`D1`). Production responses also carry the decision
+  `source` and `catalog_digest_hex`.
 
 Capability refusal fixtures (`fixtures/sorafs_gateway/capability_refusal`) mirror
 the same codes and are used by SDK and gateway self-certification suites to

@@ -5447,10 +5447,8 @@ pub struct SorafsGatewayFetchOptions {
     pub policy_override: PolicyOverride,
     /// Optional scoreboard controls used for adoption evidence.
     pub scoreboard: Option<SorafsGatewayScoreboardOptions>,
-    /// Expected cache/denylist version advertised by gateway responses.
+    /// Expected cache version advertised by successful gateway responses.
     pub expected_cache_version: Option<String>,
-    /// Base64-encoded moderation proof key for validating denylist tokens.
-    pub moderation_token_key_b64: Option<String>,
 }
 
 /// Scoreboard persistence and evaluation overrides for gateway fetches.
@@ -27807,7 +27805,6 @@ mod tests {
             blinded_cid_b64: None,
             salt_epoch: None,
             expected_cache_version: None,
-            moderation_token_key_b64: None,
         };
         let providers = vec![SorafsGatewayProviderInput {
             name: "provider-1".into(),
@@ -27925,7 +27922,6 @@ mod tests {
             blinded_cid_b64: None,
             salt_epoch: None,
             expected_cache_version: None,
-            moderation_token_key_b64: None,
         };
         let providers = vec![SorafsGatewayProviderInput {
             name: "provider-1".into(),
@@ -28013,7 +28009,6 @@ mod tests {
             blinded_cid_b64: None,
             salt_epoch: None,
             expected_cache_version: None,
-            moderation_token_key_b64: None,
         };
         let providers = vec![SorafsGatewayProviderInput {
             name: "provider-1".into(),
@@ -28582,7 +28577,6 @@ mod tests {
             blinded_cid_b64: Some("YmFzZQ".into()),
             salt_epoch: Some(7),
             expected_cache_version: None,
-            moderation_token_key_b64: None,
         };
 
         annotate_scoreboard_with_gateway_context(&mut metadata, &config);
@@ -28623,7 +28617,6 @@ mod tests {
             blinded_cid_b64: None,
             salt_epoch: None,
             expected_cache_version: None,
-            moderation_token_key_b64: None,
         };
 
         annotate_scoreboard_with_gateway_context(&mut metadata, &config);

@@ -421,8 +421,6 @@ gateway:\n\
       headers:\n\
         - name: sora-cache-version\n\
           required: true\n\
-        - name: sora-denylist-version\n\
-          required: true\n\
   observability:\n\
     prometheus_listener: 0.0.0.0:19092\n\
     trace_sample: 0.15\n\

@@ -18,7 +18,8 @@ from check_sorafs_gateway_compliance_rollout_evidence import (  # noqa: E402
     DEFAULT_MAX_EVIDENCE_AGE_SECS,
     DEFAULT_MAX_RELOAD_LATENCY_MS,
     DEFAULT_MAX_ROUTE_LATENCY_MS,
-    DEFAULT_MIN_DENYLIST_ENTRIES,
+    DEFAULT_MIN_CATALOG_CHANGES,
+    DEFAULT_MIN_CATALOG_ENTRIES,
     DEFAULT_MIN_GATEWAYS,
     DEFAULT_MIN_HONEY_PROBES,
     DEFAULT_REQUIRED_KINDS,
@@ -58,6 +59,7 @@ PLAN_FIELDS = frozenset(
         "verifier_summary_schema",
         "required_kinds",
         "thresholds",
+        "execution_scope",
         "external_evidence",
         "evidence_contract",
         "steps",
@@ -69,7 +71,8 @@ PLAN_REQUIRED_THRESHOLD_FIELDS = frozenset(
         "max_route_latency_ms",
         "max_reload_latency_ms",
         "min_gateways",
-        "min_denylist_entries",
+        "min_catalog_entries",
+        "min_catalog_changes",
         "min_honey_probes",
     }
 )
@@ -78,7 +81,8 @@ PLAN_POSITIVE_THRESHOLD_FIELDS = frozenset(
         "max_route_latency_ms",
         "max_reload_latency_ms",
         "min_gateways",
-        "min_denylist_entries",
+        "min_catalog_entries",
+        "min_catalog_changes",
         "min_honey_probes",
         "now_unix",
     }
@@ -96,26 +100,26 @@ class CommandPlan:
 
 
 EVIDENCE_OPTIONS_BY_KIND = {
-    "feed_promotion": "feed_promotion_evidence",
+    "catalog_promotion": "catalog_promotion_evidence",
     "controller_runtime": "controller_runtime_evidence",
     "moderation_toggle": "moderation_toggle_evidence",
     "gateway_reload": "gateway_reload_evidence",
     "enforcement_probe": "enforcement_probe_evidence",
     "honey_audit": "honey_audit_evidence",
-    "appeal_override": "appeal_override_evidence",
+    "precedence": "precedence_evidence",
     "transparency_publication": "transparency_publication_evidence",
     "observability": "observability_evidence",
     "governance_approval": "governance_approval_evidence",
 }
 
 EVIDENCE_FLAGS_BY_KIND = {
-    "feed_promotion": "--feed-promotion-evidence",
+    "catalog_promotion": "--catalog-promotion-evidence",
     "controller_runtime": "--controller-runtime-evidence",
     "moderation_toggle": "--moderation-toggle-evidence",
     "gateway_reload": "--gateway-reload-evidence",
     "enforcement_probe": "--enforcement-probe-evidence",
     "honey_audit": "--honey-audit-evidence",
-    "appeal_override": "--appeal-override-evidence",
+    "precedence": "--precedence-evidence",
     "transparency_publication": "--transparency-publication-evidence",
     "observability": "--observability-evidence",
     "governance_approval": "--governance-approval-evidence",
@@ -149,14 +153,21 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
     )
 
     for kind, paths in paths_by_kind.items():
-        errors.extend(require_existing_files(paths, EVIDENCE_FLAGS_BY_KIND[kind], seen=seen_input_files))
+        errors.extend(
+            require_existing_files(
+                paths,
+                EVIDENCE_FLAGS_BY_KIND[kind],
+                seen=seen_input_files,
+            )
+        )
 
     require_runner_positive_int(args, "now_unix", errors, allow_none=True)
     require_runner_non_negative_int(args, "max_evidence_age_secs", errors)
     require_runner_positive_int(args, "max_route_latency_ms", errors)
     require_runner_positive_int(args, "max_reload_latency_ms", errors)
     require_runner_positive_int(args, "min_gateways", errors)
-    require_runner_positive_int(args, "min_denylist_entries", errors)
+    require_runner_positive_int(args, "min_catalog_entries", errors)
+    require_runner_positive_int(args, "min_catalog_changes", errors)
     require_runner_positive_int(args, "min_honey_probes", errors)
     return errors
 
@@ -181,8 +192,10 @@ def build_command_plan(args: argparse.Namespace) -> list[CommandPlan]:
             str(args.max_reload_latency_ms),
             "--min-gateways",
             str(args.min_gateways),
-            "--min-denylist-entries",
-            str(args.min_denylist_entries),
+            "--min-catalog-entries",
+            str(args.min_catalog_entries),
+            "--min-catalog-changes",
+            str(args.min_catalog_changes),
             "--min-honey-probes",
             str(args.min_honey_probes),
         ]
@@ -200,7 +213,8 @@ def threshold_values(args: argparse.Namespace) -> dict[str, int]:
         "max_route_latency_ms": args.max_route_latency_ms,
         "max_reload_latency_ms": args.max_reload_latency_ms,
         "min_gateways": args.min_gateways,
-        "min_denylist_entries": args.min_denylist_entries,
+        "min_catalog_entries": args.min_catalog_entries,
+        "min_catalog_changes": args.min_catalog_changes,
         "min_honey_probes": args.min_honey_probes,
     }
     if args.now_unix is not None:
@@ -236,6 +250,11 @@ def plan_json(plan: Sequence[CommandPlan], args: argparse.Namespace) -> dict[str
         "verifier_summary_schema": SUMMARY_SCHEMA,
         "required_kinds": list(args.required_kinds),
         "thresholds": threshold_values(args),
+        "execution_scope": (
+            "non_production_dry_run"
+            if args.dry_run
+            else "production_verification"
+        ),
         "external_evidence": external_evidence(args),
         "evidence_contract": evidence_contract(args),
         "steps": [
@@ -256,7 +275,7 @@ def validate_plan_json(
 ) -> list[str]:
     """Validate the gateway-compliance collection-plan envelope before use."""
 
-    return validate_runner_evidence_plan(
+    errors = validate_runner_evidence_plan(
         rendered,
         plan,
         diagnostic_prefix="gateway compliance rollout runner plan",
@@ -273,6 +292,19 @@ def validate_plan_json(
         evidence_contract=evidence_contract(args),
         evidence_required_fields=EVIDENCE_REQUIRED_FIELDS,
     )
+    expected_scope = (
+        "non_production_dry_run"
+        if args.dry_run
+        else "production_verification"
+    )
+    if (
+        not isinstance(rendered, dict)
+        or rendered.get("execution_scope") != expected_scope
+    ):
+        errors.append(
+            "gateway compliance rollout runner plan execution_scope is invalid"
+        )
+    return errors
 
 
 def run_plan(plan: Sequence[CommandPlan], out_dir: Path) -> int:
@@ -306,12 +338,41 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             type=Path,
             default=[],
         )
-    parser.add_argument("--max-evidence-age-secs", type=non_negative_int_arg, default=DEFAULT_MAX_EVIDENCE_AGE_SECS)
-    parser.add_argument("--max-route-latency-ms", type=positive_int_arg, default=DEFAULT_MAX_ROUTE_LATENCY_MS)
-    parser.add_argument("--max-reload-latency-ms", type=positive_int_arg, default=DEFAULT_MAX_RELOAD_LATENCY_MS)
-    parser.add_argument("--min-gateways", type=positive_int_arg, default=DEFAULT_MIN_GATEWAYS)
-    parser.add_argument("--min-denylist-entries", type=positive_int_arg, default=DEFAULT_MIN_DENYLIST_ENTRIES)
-    parser.add_argument("--min-honey-probes", type=positive_int_arg, default=DEFAULT_MIN_HONEY_PROBES)
+    parser.add_argument(
+        "--max-evidence-age-secs",
+        type=non_negative_int_arg,
+        default=DEFAULT_MAX_EVIDENCE_AGE_SECS,
+    )
+    parser.add_argument(
+        "--max-route-latency-ms",
+        type=positive_int_arg,
+        default=DEFAULT_MAX_ROUTE_LATENCY_MS,
+    )
+    parser.add_argument(
+        "--max-reload-latency-ms",
+        type=positive_int_arg,
+        default=DEFAULT_MAX_RELOAD_LATENCY_MS,
+    )
+    parser.add_argument(
+        "--min-gateways",
+        type=positive_int_arg,
+        default=DEFAULT_MIN_GATEWAYS,
+    )
+    parser.add_argument(
+        "--min-catalog-entries",
+        type=positive_int_arg,
+        default=DEFAULT_MIN_CATALOG_ENTRIES,
+    )
+    parser.add_argument(
+        "--min-catalog-changes",
+        type=positive_int_arg,
+        default=DEFAULT_MIN_CATALOG_CHANGES,
+    )
+    parser.add_argument(
+        "--min-honey-probes",
+        type=positive_int_arg,
+        default=DEFAULT_MIN_HONEY_PROBES,
+    )
 
     try:
         expanded = expand_response_args(sys.argv[1:] if argv is None else argv, parser)

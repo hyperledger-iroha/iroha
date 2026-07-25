@@ -1144,7 +1144,8 @@ pub struct GatewayComplianceMutationResultV1 {
 
 /// Durable replay binding for one successful mutation.
 #[derive(
-    Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
+    Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
+    PartialEq, Eq,
 )]
 pub struct GatewayComplianceIdempotencyRecordV1 {
     /// Digest-form operation key.

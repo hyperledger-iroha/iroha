@@ -340,7 +340,7 @@ _CORRIDOR_SUMMARY_FIELDS = (
     "log",
     "command",
 )
-_PRODUCTION_TEST_COUNT = 582
+_PRODUCTION_TEST_COUNT = 584
 _G_UNIT_TEST_COUNT = 256
 _G_UNIT_GROUPS = (
     (
@@ -428,7 +428,7 @@ _PRODUCTION_MODULES = (
         "sumeragi::authoritative_runtime_gate_tests",
         29,
     ),
-    ("production-merge-sidecar", "merge_sidecar::tests", 39),
+    ("production-merge-sidecar", "merge_sidecar::tests", 41),
     ("production-v2-core", "sumeragi::v2_core::tests", 37),
     ("production-v2-core-refinement", "sumeragi::v2_core::refinement::tests", 17),
     ("production-v2-core-reducer", "sumeragi::v2_core::reducer::tests", 2),

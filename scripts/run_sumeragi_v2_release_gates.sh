@@ -1160,6 +1160,7 @@ required_production_liveness_tests=(
   merge_sidecar::tests::reconnect_during_materialization_keeps_old_authorization_but_emits_new_tenure
   merge_sidecar::tests::equal_sequence_with_different_semantic_identity_is_rejected_before_materialization
   merge_sidecar::tests::failed_materialization_releases_rate_gate_for_exact_retry
+  merge_sidecar::tests::transient_response_capacity_rejection_retries_on_the_same_delivery
   merge_sidecar::tests::response_materialization_requires_and_consumes_its_exact_admission_gate
   merge_sidecar::tests::inactive_reply_route_is_rejected_before_server_gate_admission
   merge_sidecar::tests::completed_source_later_and_reconnect_stay_terminal_while_sibling_progresses
@@ -1188,6 +1189,7 @@ required_production_liveness_tests=(
   merge_sidecar::tests::durable_responder_restart_preserves_same_hub_gate_budget
   merge_sidecar::tests::durable_responder_restart_allows_new_source_while_recovered_source_is_offline
   merge_sidecar::tests::durable_responder_restart_preserves_terminal_source_cursor_and_rebinds_capability
+  merge_sidecar::tests::durable_response_drain_persists_pending_identity_before_handoff
   sumeragi::v2::tests::deferred_locked_commit_delivery_tracks_generation_after_tc
   sumeragi::v2::tests::prelock_current_commit_is_readmitted_after_exact_lock_persistence
   sumeragi::v2::tests::tc_reset_readmits_exact_locked_commit_once_per_generation
@@ -1614,7 +1616,7 @@ required_production_liveness_tests=(
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_must_fit_network_geometry
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_use_effective_lane_profile_geometry
 )
-readonly expected_production_liveness_test_count=582
+readonly expected_production_liveness_test_count=584
 if (( ${#required_production_liveness_tests[@]} != expected_production_liveness_test_count )); then
   echo "expected exactly ${expected_production_liveness_test_count} production Sumeragi v2 liveness tests, found ${#required_production_liveness_tests[@]}" >&2
   exit 1
@@ -1714,7 +1716,7 @@ for required_test in "${required_production_liveness_tests[@]}"; do
 done
 
 # Keep the multilane closure-critical focused tests explicit even when they do
-# not belong to the canonical 582-test liveness inventory above. The later
+# not belong to the canonical 584-test liveness inventory above. The later
 # source-sealed workspace leg executes these non-ignored tests; this preflight
 # prevents a rename, deletion, or accidental `#[ignore]` from hiding behind
 # Cargo's successful zero-test filtering.

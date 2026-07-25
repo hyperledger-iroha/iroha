@@ -1,14 +1,5 @@
-# Reviewed observability canary inputs for the SFM-4 gateway compliance gate.
+# Canonicalize a real observability probe. No claim is synthesized.
 --kind observability
+--probe-artifact /runtime/sorafs/gateway-compliance/probes/observability.json
 --out artifacts/sorafs_gateway/observability-canary.json
---deployment-id sorafs-gateway-prod-20260701
---environment production
---generated-at-unix 1800100000
 --now-unix 1800100000
---bundle-digest-hex aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
---metric torii_sorafs_gateway_compliance_requests_total
---metric torii_sorafs_gateway_compliance_serving_decisions_total
---metric torii_sorafs_gateway_compliance_failures_total
---metric torii_sorafs_gateway_compliance_serving_catalog_sequence
---metric torii_sorafs_gateway_compliance_serving_catalog_valid_until_seconds
---metric torii_sorafs_gateway_compliance_ready

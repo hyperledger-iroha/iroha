@@ -4889,15 +4889,20 @@ impl MergeSidecarTransport {
             .get_mut(&key)
             .filter(|gate| gate.request_hash == request_hash)
         {
-            for attempt in gate
-                .attempts
-                .values_mut()
-                .filter(|attempt| attempt.materialization_authorized)
-            {
-                attempt.materialization_authorized = false;
-                attempt.authorized_materialization_route = None;
-                attempt.materialization_retryable = true;
-            }
+            Self::release_authorized_server_request_attempts(gate);
+        }
+    }
+
+    fn release_authorized_server_request_attempts(gate: &mut ServerRequestGate) {
+        for attempt in gate
+            .attempts
+            .values_mut()
+            .filter(|attempt| attempt.materialization_authorized)
+        {
+            attempt.materialization_authorized = false;
+            attempt.authorized_materialization_route = None;
+            attempt.materialization_retryable =
+                matches!(attempt.cursor, ServerResponseCursor::Pending(_));
         }
     }
 
@@ -5042,18 +5047,18 @@ impl MergeSidecarTransport {
                 .server_request_gates
                 .get_mut(&key)
                 .expect("validated server request gate remains present");
-            Self::park_authorized_server_request_attempts(gate, now);
             // A successful old-writer receipt may have completed the source
             // represented by this exact authorization while terminating local
             // materialization was in flight. That callback is a consumed
             // no-op. A still-pending authorization with no live route instead
             // lost its delivery authority and must fail closed after releasing
             // every response reservation.
-            return if exact_attempt_completed {
-                Ok(())
-            } else {
-                Err(MergeSidecarError::UnsolicitedResponse)
-            };
+            if exact_attempt_completed {
+                Self::park_authorized_server_request_attempts(gate, now);
+                return Ok(());
+            }
+            Self::release_authorized_server_request_attempts(gate);
+            return Err(MergeSidecarError::UnsolicitedResponse);
         }
         if admitted_attempts.is_empty()
             || self.global_outbound_bytes().saturating_add(response_len)
@@ -5063,7 +5068,11 @@ impl MergeSidecarTransport {
                 .server_request_gates
                 .get_mut(&key)
                 .expect("validated server request gate remains present");
-            Self::park_authorized_server_request_attempts(gate, now);
+            // Capacity pressure is transient. Release terminating lookup
+            // authority, but retain a retryable semantic gate so the exact
+            // authenticated delivery can make progress once an older response
+            // relinquishes its source reservation.
+            Self::release_authorized_server_request_attempts(gate);
             return Err(MergeSidecarError::Capacity("outbound response budget"));
         }
         let gate = self
@@ -8553,6 +8562,66 @@ mod tests {
                 .admit_server_request(&requester, &request, None, &local_peer, now)
                 .expect("the same occurrence remains admissible after failed lookup")
         );
+    }
+
+    #[test]
+    fn transient_response_capacity_rejection_retries_on_the_same_delivery() {
+        let (_, _, _, base, now) = start_session(1, 3);
+        let local_peer = base.responder.clone();
+        let hub = peer(b"capacity retry hub");
+        let mut routes = NetworkReplyRouteTestFixture::new(hub.clone());
+        let mut server = MergeSidecarTransport::new();
+
+        for index in 0..MAX_OUTBOUND_SESSIONS_PER_SOURCE {
+            let requester = peer(format!("capacity retry filler {index}").as_bytes());
+            let request = routed_server_request(
+                &base,
+                requester.clone(),
+                format!("capacity retry filler request {index}").as_bytes(),
+                1,
+            );
+            let route = routes.mint_via(requester.clone(), hub.clone());
+            assert!(
+                server
+                    .admit_server_request(&requester, &request, Some(&route), &local_peer, now,)
+                    .expect("admit one bounded filler response")
+            );
+            server
+                .enqueue_response(request, Some(route), vec![0x31], now)
+                .expect("fill the authenticated source response corridor");
+        }
+
+        let requester = peer(b"capacity retry requester");
+        let request = routed_server_request(&base, requester.clone(), b"capacity retry request", 1);
+        let route = routes.mint_via(requester.clone(), hub);
+        assert!(
+            server
+                .admit_server_request(&requester, &request, Some(&route), &local_peer, now,)
+                .expect("admit terminating lookup before exact response accounting")
+        );
+        assert!(matches!(
+            server.enqueue_response(request.clone(), Some(route.clone()), vec![0x42], now),
+            Err(MergeSidecarError::Capacity("outbound response budget"))
+        ));
+        server.cancel_unmaterialized_server_request(&requester, &request);
+        let source = ServerRequestSource::Authenticated(route.source_key());
+        let key = (requester.clone(), request.request_id);
+        assert!(
+            server.server_request_gates[&key].attempts[&source].materialization_retryable,
+            "transient capacity pressure must not require a reconnect"
+        );
+
+        let released = server.drain_outbound_chunks(1, now);
+        assert_eq!(released.len(), 1);
+        assert!(acknowledge_reply_chunk(&mut server, &released[0], now));
+        assert!(
+            server
+                .admit_server_request(&requester, &request, Some(&route), &local_peer, now,)
+                .expect("the exact delivery retries after an older response releases capacity")
+        );
+        server
+            .enqueue_response(request, Some(route), vec![0x42], now)
+            .expect("the retried response acquires the released source reservation");
     }
 
     #[test]

@@ -25,6 +25,8 @@ from check_sorafs_moderation_panel_rollout_evidence import (  # noqa: E402
     DEFAULT_MIN_PANEL_SIZE,
     DEFAULT_MIN_PEERS,
     FORBIDDEN_INVENTORY_LABEL_MARKERS,
+    GATEWAY_COMPLIANCE_DENIAL_CODE,
+    GATEWAY_COMPLIANCE_DENIAL_SOURCES,
     KIND_BY_NAME,
     REQUIRED_VIEWER_EVENT_KINDS,
     REQUIRED_VIEWER_EXPORT_TARGETS,
@@ -80,7 +82,6 @@ VERIFIED_TRUE_CLAIMS = (
     "transparency_report_exported",
     "daily_digest_published",
     "payload_redaction_verified",
-    "denylisted_digest_blocked",
     "unauthorized_access_rejected",
     "stale_url_rejected",
     "session_replay_rejected",
@@ -243,6 +244,12 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
         "access_event_kinds": args.access_event_kinds,
         "export_target_count": len(args.export_targets),
         "export_targets": args.export_targets,
+        "gateway_compliance_denial_enforced": {
+            "status_code": args.gateway_compliance_denial_status_code,
+            "code": args.gateway_compliance_denial_code,
+            "source": args.gateway_compliance_denial_source,
+            "catalog_digest_hex": args.gateway_compliance_catalog_digest_hex,
+        },
     }
     for claim in VERIFIED_TRUE_CLAIMS:
         payload[claim] = claim in args.verified_claims
@@ -277,8 +284,26 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
         ("--legal-hold-receipt-digest-hex", args.legal_hold_receipt_digest_hex),
         ("--transparency-report-digest-hex", args.transparency_report_digest_hex),
         ("--audit-digest-hex", args.audit_digest_hex),
+        (
+            "--gateway-compliance-catalog-digest-hex",
+            args.gateway_compliance_catalog_digest_hex,
+        ),
     ):
         validate_hex64(value, option=option, errors=errors)
+    if args.gateway_compliance_denial_status_code != 451:
+        errors.append(
+            "--gateway-compliance-denial-status-code must be exactly 451"
+        )
+    if args.gateway_compliance_denial_code != GATEWAY_COMPLIANCE_DENIAL_CODE:
+        errors.append(
+            "--gateway-compliance-denial-code must be exactly "
+            f"{GATEWAY_COMPLIANCE_DENIAL_CODE}"
+        )
+    if args.gateway_compliance_denial_source not in GATEWAY_COMPLIANCE_DENIAL_SOURCES:
+        errors.append(
+            "--gateway-compliance-denial-source must be one of "
+            f"{list(GATEWAY_COMPLIANCE_DENIAL_SOURCES)}"
+        )
 
     args.roles = validate_name_set(
         split_csv_values(args.role),
@@ -425,6 +450,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--access-event-kind", action="append", default=[])
     parser.add_argument("--export-target", action="append", default=[])
     parser.add_argument("--verified-claim", action="append", default=[])
+    parser.add_argument(
+        "--gateway-compliance-denial-status-code",
+        type=positive_int_arg,
+        required=True,
+    )
+    parser.add_argument("--gateway-compliance-denial-code", required=True)
+    parser.add_argument("--gateway-compliance-denial-source", required=True)
+    parser.add_argument("--gateway-compliance-catalog-digest-hex", required=True)
     for field in DIGEST_FIELDS:
         parser.add_argument(f"--{field.replace('_', '-')}", required=True)
     raw_args = sys.argv[1:] if argv is None else argv

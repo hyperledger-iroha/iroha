@@ -514,7 +514,8 @@ pub struct StoredManifestParts {
     pub stored_at_unix_secs: u64,
     /// Unix retention epoch for garbage collection (0 if not retained).
     pub retention_epoch: u64,
-    /// Retention source record (optional for legacy manifests).
+    /// Retention source record. Synthetic in-memory test manifests may omit it;
+    /// persisted V1 manifests must provide it.
     pub retention_source: Option<RetentionSourceV1>,
     /// Monotonic access counter recorded for LRU eviction ordering.
     pub last_access: u64,

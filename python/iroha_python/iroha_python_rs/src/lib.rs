@@ -3143,7 +3143,6 @@ struct PyGatewayFetchOptions {
     manifest_envelope_b64: Option<String>,
     manifest_cid_hex: Option<String>,
     expected_cache_version: Option<String>,
-    moderation_token_key_b64: Option<String>,
     client_id: Option<String>,
     telemetry_region: Option<String>,
     scoreboard_telemetry_label: Option<String>,
@@ -3294,20 +3293,9 @@ fn attempt_failure_payload(py: Python<'_>, failure: AttemptFailure) -> PyResult<
             if let Some(policy) = policy_block {
                 let policy_dict = PyDict::new(py);
                 policy_dict.set_item("observed_status", policy.observed_status.as_u16())?;
-                policy_dict.set_item("canonical_status", policy.canonical_status.as_u16())?;
-                if let Some(code) = policy.code {
-                    policy_dict.set_item("code", code)?;
-                }
-                if let Some(cache) = policy.cache_version {
-                    policy_dict.set_item("cache_version", cache)?;
-                }
-                if let Some(denylist) = policy.denylist_version {
-                    policy_dict.set_item("denylist_version", denylist)?;
-                }
-                policy_dict.set_item("proof_token_present", policy.proof_token_present)?;
-                if let Some(message) = policy.message {
-                    policy_dict.set_item("message", message)?;
-                }
+                policy_dict.set_item("code", policy.code)?;
+                policy_dict.set_item("source", policy.source)?;
+                policy_dict.set_item("catalog_digest_hex", policy.catalog_digest_hex)?;
                 payload.set_item("policy_block", policy_dict)?;
             }
         }
@@ -4045,12 +4033,6 @@ fn sorafs_gateway_fetch_py(
         .map(|value| value.trim())
         .filter(|value| !value.is_empty())
         .map(str::to_owned);
-    let moderation_token_key_b64 = options
-        .moderation_token_key_b64
-        .as_ref()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned);
     let client_id = options
         .client_id
         .as_ref()
@@ -4266,7 +4248,6 @@ fn sorafs_gateway_fetch_py(
         blinded_cid_b64: None,
         salt_epoch: None,
         expected_cache_version,
-        moderation_token_key_b64,
     };
     let metadata = build_gateway_metadata_dict(
         py,
@@ -13135,12 +13116,10 @@ mod tests {
         ensure_python();
         let evidence = PolicyBlockEvidence {
             observed_status: StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS,
-            canonical_status: StatusCode::FORBIDDEN,
-            code: Some("denylisted".to_owned()),
-            cache_version: Some("frozen".to_owned()),
-            denylist_version: None,
-            proof_token_present: true,
-            message: Some("blocked".to_owned()),
+            code: "gateway_compliance_denied".to_owned(),
+            source: "baseline".to_owned(),
+            catalog_digest_hex: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                .to_owned(),
         };
 
         Python::attach(|py| {
@@ -13170,55 +13149,47 @@ mod tests {
             );
             assert_eq!(
                 policy
-                    .get_item("canonical_status")
-                    .expect("canonical")
-                    .expect("canonical")
-                    .extract::<u16>()
-                    .expect("status code"),
-                evidence.canonical_status.as_u16()
-            );
-            assert_eq!(
-                policy
                     .get_item("code")
                     .expect("code")
                     .expect("code")
                     .extract::<String>()
                     .expect("code"),
-                "denylisted"
+                evidence.code
             );
             assert_eq!(
                 policy
-                    .get_item("cache_version")
-                    .expect("cache_version")
-                    .expect("cache_version")
+                    .get_item("source")
+                    .expect("source")
+                    .expect("source")
                     .extract::<String>()
-                    .expect("cache_version"),
-                "frozen"
-            );
-            assert!(
-                policy
-                    .get_item("denylist_version")
-                    .expect("denylist version lookup")
-                    .is_none()
+                    .expect("source"),
+                evidence.source
             );
             assert_eq!(
                 policy
-                    .get_item("proof_token_present")
-                    .expect("proof token")
-                    .expect("proof token")
-                    .extract::<bool>()
-                    .expect("bool"),
-                evidence.proof_token_present
-            );
-            assert_eq!(
-                policy
-                    .get_item("message")
-                    .expect("message")
-                    .expect("message")
+                    .get_item("catalog_digest_hex")
+                    .expect("catalog digest")
+                    .expect("catalog digest")
                     .extract::<String>()
-                    .expect("message"),
-                "blocked"
+                    .expect("catalog digest"),
+                evidence.catalog_digest_hex
             );
+            assert_eq!(policy.len(), 4);
+            for removed in [
+                "canonical_status",
+                "cache_version",
+                "denylist_version",
+                "proof_token_present",
+                "message",
+            ] {
+                assert!(
+                    policy
+                        .get_item(removed)
+                        .expect("removed field lookup")
+                        .is_none(),
+                    "removed policy evidence field `{removed}` must stay absent"
+                );
+            }
         });
     }
 

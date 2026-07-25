@@ -987,11 +987,13 @@ exact regressions and retires nine superseded selectors, producing the
 adds six exact regressions without adding a module. Six source-sealed format,
 legacy-codec, build, Clippy, workspace-test, and daemon-test legs plus the
 G-SCALE tooling preflight produced the historical 515-test checkpoint. The
-per-source route-attempt, exact PrepareQC recovery, locked-body reproposal,
-runner/worker, sidecar, and daemon closure brings the current source-bound
-inventory to 582 exact tests across 39 modules and 82 pre-network legs.
+crash-safe response handoff and same-delivery capacity-retry regressions add
+two sidecar cases. The per-source route-attempt, exact PrepareQC recovery,
+locked-body reproposal, runner/worker, sidecar, and daemon closure brings the
+current source-bound
+inventory to 584 exact tests across 39 modules and 82 pre-network legs.
 Its canonical module/test TSV inventory SHA-256 is
-`bee1b566e237e03a4cb9dfaf5c2d7d9467d3e26a95690222c96d84147409e50a`.
+`3a714b4e395aee7f06ba0583260cc26b54fda80fc63a4b5f67c4dc491752bfc1`.
 Nine of those legs execute the separate 256-test G-UNIT focus inventory; its
 canonical source-derived TSV SHA-256 is
 `f45d6752f3dc449415446abc7340a3531ed48db5e9e744bccc6c1bba0d7a8957`.
@@ -1076,17 +1078,18 @@ data-model module legs. Immediately before completion publication, the runner
 also revalidates the source-bound localnet binary bundle. The data-model modules are
 discovered and executed against `iroha_data_model`; they cannot fall through to
 the `iroha_core` runner.
-The current 582-test inventory is a mechanically checked
+The current 584-test inventory is a mechanically checked
 source contract, not execution evidence; the
 complete inventory must still run as one clean committed, detached,
 source-sealed release leg before it becomes release evidence.
 
-The current source-shared formal harness passed 118/118
-unit/reducer/WAL/refinement tests and 8/8 model-trace replay tests. Its
-fast-network mode passed all nine named deterministic network simulations.
-Those unsealed results do not replace the source-sealed release leg, and the
-pinned Verus receipt described by the formal documentation predates these
-proposal-origin source changes.
+The preceding source-shared formal harness passed 118/118
+unit/reducer/WAL/refinement tests and 8/8 model-trace replay tests. The current
+harness inventories 137 runnable reducer tests and still requires a fresh
+source-sealed run. The earlier fast-network mode passed all nine named
+deterministic network simulations. Those unsealed results do not replace the
+source-sealed release leg, and the pinned Verus receipt described by the formal
+documentation predates these proposal-origin source changes.
 
 The focused source-bound additions above are green. The gate names nine
 completion-ownership regressions: exact ingress/Busy-deferred
@@ -1217,14 +1220,15 @@ and real-network execution before it reduces release debt:
 bash scripts/run_sumeragi_v2_release_gates.sh --pr
 ```
 
-Before those longer scenarios, the PR gate inventories 582 exact production
+Before those longer scenarios, the PR gate inventories 584 exact production
 liveness tests and executes all 39 owning Rust modules serially. The release
 profile additionally records nine G-UNIT legs executing a separate 256-test
 focus inventory. The
 inventory includes the reducer exact-lock and adapter consumer-epoch
-regressions, plus five lane-work tests which pin native-AMX signing-guard
-capacity at small, hard-boundary, oversized, overflow, and production-like
-adapter limits. It also pins adapter-owned successor activation, runner ingress
+regressions, plus five lane-work tests which pin the native-AMX signing guard's
+explicit runtime bound, exact hard boundary, above-bound fail-closed behavior,
+record/anchor byte ceilings, and production-like adapter limits. It also pins
+adapter-owned successor activation, runner ingress
 handoff, watchdog predecessor/successor separation, and recovery-derived
 successor identity. The worker leg also pins rejection of an unissued future
 physical acquisition and exact latest-consumer rebind across unavailable-body
@@ -1332,7 +1336,7 @@ source-sealed command legs and the G-SCALE runner/validator preflight yielded
 the historical 515-test inventory across 38 modules and 65 pre-network legs.
 The per-source route-attempt and locked-body completion adds 57 exact names,
 one owning module, and seven corridor legs. Nine G-UNIT execution legs plus the
-source-attested Native AMX fixture-check leg complete the current 582-test,
+source-attested Native AMX fixture-check leg complete the current 584-test,
 39-module, 82-leg inventory. The rollover slice covers
 historical Kura CommitQC, body, and lane-certificate rereads; current global
 V2; lane proof/supersession; Native AMX; merge-share, certified-sidecar, and
@@ -1597,7 +1601,7 @@ without terminal validation it cannot publish external completion.
 On success, the runner publishes exactly
 `release-runner/output/release/RELEASE_COMPLETED.json` beneath the bootstrap
 evidence directory. That receipt binds the 82 pre-network corridor legs and
-their exact 582-test production inventory, the separate 256-test G-UNIT
+their exact 584-test production inventory, the separate 256-test G-UNIT
 inventory, semantic test names/counts, commands, logs, source-bound localnet
 binary attestation, and resolved tool identities; the formal completion, pinned harness lock, formal
 toolchain, proof ledger/evidence/log; all 160 matrix logs; the chaos

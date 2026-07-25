@@ -987,13 +987,15 @@ aggregate signatures, finality/header geometry, compact offline QCs, and parent
 height-context identity to the signed origin.
 
 The final successor/recovery closure adds six exact regressions without adding
-a module. The per-source route-attempt, exact PrepareQC recovery, locked-body
-reproposal, runner/worker, sidecar, and daemon closure yields the current
-582-test, 39-module inventory. The complete source-sealed pre-network corridor
+a module. Crash-safe response handoff and same-delivery retry after transient
+capacity pressure add two more sidecar regressions. The per-source
+route-attempt, exact PrepareQC recovery, locked-body reproposal, runner/worker,
+sidecar, and daemon closure yields the current
+584-test, 39-module inventory. The complete source-sealed pre-network corridor
 contains 82 legs. Six source-sealed command legs and the G-SCALE
 runner/validator preflight harden that release corridor.
 The canonical module/test TSV inventory SHA-256 is
-`bee1b566e237e03a4cb9dfaf5c2d7d9467d3e26a95690222c96d84147409e50a`.
+`3a714b4e395aee7f06ba0583260cc26b54fda80fc63a4b5f67c4dc491752bfc1`.
 The added boundaries preserve the frozen predecessor CommitQC through
 wire-to-core conversion, block rollover until the decided lane session is
 durable, reopen a globally finalized tip whose lane evidence is incomplete,
@@ -1061,9 +1063,10 @@ release leg remain pending. An
 earlier exact one-attempt
 four-validator genesis rerun is green at 1/1 in 456.76 seconds. Neither
 inventory presence nor regression evidence is a machine proof.
-For the current proposal-origin source, the isolated source-shared harness
+For the preceding proposal-origin source, the isolated source-shared harness
 passed 118/118 reducer/WAL/refinement tests and all 8 model-trace replay tests;
-fast-network passed all 9 named simulations. The 2026-07-21 100,000-height
+the current harness inventories 137 runnable reducer tests and requires a fresh
+source-sealed run. Fast-network passed all 9 named simulations. The 2026-07-21 100,000-height
 permissioned/NPoS chaos run completed both 50,000-height prefixes, 400,000
 validator finalizations, and zero failures in 91.29 seconds. These mutable-tree
 results are implementation evidence only. The pinned Verus receipt predates
