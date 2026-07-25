@@ -91,9 +91,9 @@ Las CLI se encuentran en el almacén de fragmentos y en el manifiesto de `--json
   للـ manifiesto وفحوص PoR مع المعلمات المقترحة.
 - `sorafs_manifest_chunk_store --json-out=-` — Se utiliza el almacén de fragmentos y la salida estándar
   للمقارنات الآلية.
-- `sorafs_manifest_stub --chunker-profile=<handle>` — تأكيد أن manifests وخطط CAR
+- `sorafs_manifest_builder --chunker-profile=<handle>` — تأكيد أن manifests وخطط CAR
   تتضمن المقبض المعتمد والبدائل.
-- `sorafs_manifest_stub --plan=-` — إعادة تغذية `chunk_fetch_specs` السابق للتحقق من
+- `sorafs_manifest_builder --plan=-` — إعادة تغذية `chunk_fetch_specs` السابق للتحقق من
   compensaciones/resúmenes بعد التغيير.
 
 سجّل مخرجات الأوامر (resúmenes, جذور PoR, hashes للـ manifiesto) في المقترح كي يستطيع
@@ -129,7 +129,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
   --json-out=- --por-json-out=- fixtures/sorafs_chunker/input.bin
 
 # توليد manifest + CAR والتقاط chunk fetch specs
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --chunk-fetch-plan-out=chunk_plan.json \
@@ -138,7 +138,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
   --json-out=sf2.report.json
 
 # إعادة التشغيل باستخدام خطة fetch المحفوظة (تمنع offsets القديمة)
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --plan=chunk_plan.json --json-out=-

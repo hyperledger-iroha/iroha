@@ -82,7 +82,6 @@ cd docs/portal
 
 # swap in the LKG artefacts before submission
 cp /secure/archive/lkg/portal.manifest.to artifacts/.../sorafs/portal.manifest.to
-cp /secure/archive/lkg/portal.manifest.bundle.json artifacts/.../sorafs/
 
 cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   manifest submit \
@@ -105,9 +104,9 @@ cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
 
 1. `npm run probe:portal -- --expect-release=${LKG_TAG}`.
 2. `npm run check:links`.
-3. `sorafs_cli manifest verify-signature …` and `sorafs_cli proof verify …`
-   (see the deployment guide) to confirm the re-promoted manifest still matches
-   the archived CAR.
+3. Re-run `sorafs_cli proof verify …` and verify the LKG aggregate release
+   manifest with its archived raw signature/public key through the reviewed,
+   SHA256-pinned `sorafs-validate` (see the deployment guide).
 4. `npm run probe:tryit-proxy` to ensure the Try-It staging proxy came back.
 
 ### Post-incident

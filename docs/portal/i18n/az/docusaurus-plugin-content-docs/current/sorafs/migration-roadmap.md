@@ -40,14 +40,14 @@ sinxron mühəndislik.
 |------|-----------|-------------|----------|--------|
 | Quraşdırma məşqləri | M0 | Yerli parça həzmlərini `fixtures/sorafs_chunker` ilə müqayisə edən həftəlik quru qaçışlar. `docs/source/sorafs/reports/` altında hesabat dərc edin. | Saxlama Provayderləri | `determinism-<date>.md` keçid/uğursuz matrisi ilə. |
 | İmzaların tətbiqi | M1 | İmzalar və ya sürüşmə aşkar edilərsə, `ci/check_sorafs_fixtures.sh` + `.github/workflows/sorafs-fixtures-nightly.yml` uğursuz olur. İnkişafı ləğv etmək üçün PR-ə əlavə edilmiş idarəetmədən imtina tələb olunur. | Tooling WG | CI jurnalı, imtina biletinin linki (əgər varsa). |
-| Gözləmə bayraqları | M1 | Boru kəmərləri çıxışları bağlamaq üçün açıq gözləntilərlə `sorafs_manifest_stub` çağırır: | Sənədlər CI | Gözləmə bayraqlarına istinad edən yenilənmiş skriptlər (aşağıdakı əmr blokuna baxın). |
+| Gözləmə bayraqları | M1 | Boru kəmərləri çıxışları bağlamaq üçün açıq gözləntilərlə `sorafs_manifest_builder` çağırır: | Sənədlər CI | Gözləmə bayraqlarına istinad edən yenilənmiş skriptlər (aşağıdakı əmr blokuna baxın). |
 | Reyestrdə ilk sancma | M2 | `sorafs pin propose` və `sorafs pin approve` manifest təqdimatlarını əhatə edir; CLI defolt olaraq `--require-registry`-dir. | İdarəetmə Əməliyyatları | Reyestr CLI audit jurnalı, uğursuz təkliflər üçün telemetriya. |
 | Müşahidə oluna bilən paritet | M3 | Prometheus/Grafana idarə panelləri yığın inventarları reyestr manifestlərindən ayrıldıqda xəbərdar edir; çağırış üzrə əməliyyatlara ötürülən xəbərdarlıqlar. | Müşahidə qabiliyyəti | İdarə paneli linki, xəbərdarlıq qayda identifikatorları, GameDay nəticələri. |
 
 #### Kanonik nəşriyyat əmri
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- docs/book \
   --manifest-out artifacts/docs/book/2025-11-01/docs.manifest \
   --manifest-signatures-out artifacts/docs/book/2025-11-01/docs.manifest_signatures.json \
   --car-out artifacts/docs/book/2025-11-01/docs.car \

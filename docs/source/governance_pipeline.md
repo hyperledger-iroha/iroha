@@ -6,9 +6,20 @@ This document records current runtime behavior; aspirational mechanisms in the
 constitution are not active until implemented and separately enacted.
 
 # Current state (v1)
-- Governance proposals run as: proposer → Parliament stage ballots → enactment. Referendum records remain as scheduling/audit envelopes, but SORA Parliament decisions are made by equal signed ballots from seated body members.
-- Parliament selection uses deterministic, domain-separated draws over bonded citizens; the citizenship bond is an anti-Sybil/collateral floor and does not increase draw odds above the minimum. When no persisted roster exists, Torii derives fallback rosters from the bonded citizen registry.
-- Legacy referendum voting modes remain available outside the Parliament decision path: ZK (default, requires `Active` VK with inline bytes) and Plain (quadratic weight). Parliament policy-jury decisions use equal signed citizen ballots instead of token-lock weight.
+- Validation-fee governance runs as: bonded citizen proposal → immutable
+  proposal-time seven-body Parliament approvals → PLAIN citizen referendum →
+  approved close → enactment. A citizen ballot cannot open or bypass the
+  Parliament gate.
+- Parliament selection uses deterministic, independently domain-separated
+  draws over bonded citizens; the citizenship bond is an anti-Sybil/collateral
+  floor and does not increase draw odds above the minimum. Each proposal body
+  uses `min(configured target, eligible citizens)` members, rejects only the
+  zero-candidate case, and computes quorum from the actual immutable roster.
+  The same citizen may serve in all seven bodies.
+- The first validation-fee release supports PLAIN finalization only. `h_end` is
+  inclusive; close/tally executes at `h_end + 1`, evidence is anchored to
+  `h_end`, and ballot locks must remain active through that height. Other
+  governance paths may retain ZK behavior where explicitly configured.
 - Validator misconduct is acted on via the evidence pipeline (`/v1/sumeragi/evidence*`, CLI helpers) with joint-consensus hand-offs enforced by `NextMode` + `ModeActivationHeight`.
 - Protected namespaces, runtime-upgrade hooks, and governance manifest admission are documented in `governance_api.md` and covered by telemetry (`governance_manifest_*`, `governance_protected_namespace_total`).
 

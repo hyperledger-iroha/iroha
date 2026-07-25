@@ -1,6 +1,10 @@
 //! Deterministic ACME automation harness for the SoraFS gateway.
 
-use std::time::{Duration, SystemTime};
+use std::{
+    fmt::Debug,
+    sync::Arc,
+    time::{Duration, SystemTime},
+};
 
 use blake3::Hasher;
 use thiserror::Error;
@@ -113,8 +117,11 @@ pub enum AcmeClientError {
     },
 }
 
-/// Trait implemented by ACME client backends.
-pub trait AcmeClient {
+/// Runtime-injected ACME client backend.
+///
+/// Implementations own all provider credentials and transport state. Torii does
+/// not provide a production fallback client.
+pub trait AcmeClient: Debug + Send + Sync {
     /// Place an order and return the resulting certificate bundle.
     ///
     /// # Errors
@@ -124,6 +131,18 @@ pub trait AcmeClient {
         &self,
         order: &CertificateOrder,
     ) -> Result<CertificateBundle, AcmeClientError>;
+}
+
+impl<T> AcmeClient for Arc<T>
+where
+    T: AcmeClient + ?Sized,
+{
+    fn order_certificate(
+        &self,
+        order: &CertificateOrder,
+    ) -> Result<CertificateBundle, AcmeClientError> {
+        (**self).order_certificate(order)
+    }
 }
 
 /// Errors surfaced by the automation harness.
@@ -299,19 +318,19 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
+    use std::sync::Mutex;
 
     use super::*;
 
-    #[derive(Default)]
+    #[derive(Debug, Default)]
     struct MockClient {
-        responses: RefCell<Vec<Result<CertificateBundle, AcmeClientError>>>,
+        responses: Mutex<Vec<Result<CertificateBundle, AcmeClientError>>>,
     }
 
     impl MockClient {
         fn with_responses(responses: Vec<Result<CertificateBundle, AcmeClientError>>) -> Self {
             Self {
-                responses: RefCell::new(responses),
+                responses: Mutex::new(responses),
             }
         }
     }
@@ -321,11 +340,15 @@ mod tests {
             &self,
             _order: &CertificateOrder,
         ) -> Result<CertificateBundle, AcmeClientError> {
-            self.responses.borrow_mut().pop().unwrap_or_else(|| {
-                Err(AcmeClientError::Transport {
-                    reason: "exhausted responses".to_string(),
+            self.responses
+                .lock()
+                .expect("mock response lock poisoned")
+                .pop()
+                .unwrap_or_else(|| {
+                    Err(AcmeClientError::Transport {
+                        reason: "exhausted responses".to_string(),
+                    })
                 })
-            })
         }
     }
 

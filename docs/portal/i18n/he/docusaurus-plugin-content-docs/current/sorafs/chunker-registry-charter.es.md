@@ -65,7 +65,7 @@ La carta aplica a cada entrada en `sorafs_manifest::chunker_registry` y
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+     cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - Envía un PR que contenga גופי, פרופווסטה, reporte determinismo y
@@ -101,14 +101,14 @@ La carta aplica a cada entrada en `sorafs_manifest::chunker_registry` y
 
 ## ציפיות של כלי עבודה
 
-- `sorafs_manifest_chunk_store` y `sorafs_manifest_stub` הסבר:
+- `sorafs_manifest_chunk_store` y `sorafs_manifest_builder` הסבר:
   - `--list-profiles` עבור בדיקת רישום.
   - `--promote-profile=<handle>` עבור כללי אל בלוקו דה מטאטאטוס קנוניקו בארה"ב
     al promotor un perfil.
   - `--json-out=-` עבור שידור מדווח על סטדout, יומני עדכון
     ניתנים לשחזור.
 - `ensure_charter_compliance()` se invoca al inicio en los binarios relevantes
-  (`manifest_chunk_store`, `provider_advert_stub`). Las pruebas CI deben fallar si
+  (`manifest_chunk_store`, `sorafs_provider_advert`). Las pruebas CI deben fallar si
   nuevas entradas וילן לה קארטה.
 
 ## רישום

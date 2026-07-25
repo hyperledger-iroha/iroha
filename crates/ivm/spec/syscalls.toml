@@ -1057,6 +1057,12 @@ ret = "r10=&NoritoBytes(same payload)"
 gas = "G_pointer + bytes"
 
 [[syscall]]
+number = "0x010029"
+args = "r10=&Blob(contract_address), r11=&Blob(literal entrypoint), r12=&Quantity(amount_in), r13=&Quantity(min_out)"
+ret = "r10=ptr (&Quantity)"
+gas = "G_call_contract + request bytes + return bytes + child gas"
+
+[[syscall]]
 number = "0x010200"
 args = "r10=&AccountId, r11=&AssetDefinitionId, r12=frozen:0/1"
 ret = "u64=0"

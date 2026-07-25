@@ -63,7 +63,7 @@ les livrables requis pour la première release et les déclines en pistes action
 - Les helpers partagés (`CapacityMetadataEntry`, `PricingScheduleV1`, validateurs lane/assignment/SLA) fournissent une validation déterministe des clés et un reporting d'erreur réutilisable par CI et le outillage en aval.【crates/sorafs_manifest/src/capacity.rs:230】
 - `PinProviderRegistry` expose désormais le snapshot on-chain via `/v1/sorafs/capacity/state`, en combinant déclarations de fournisseurs et entrées du fee ledger derrière un Norito JSON déterministe.【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
 - La couverture de validation exerce l'application des poignées canoniques, la détection de doublons, les bornes par voie, les gardes d'assignation de réplication et les contrôles de plage de télémétrie pour que les régressions apparaissent immédiatement en CI.【crates/sorafs_manifest/src/capacity.rs:792】
-- Tooling opérateur : `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` convertit des specs lisibles en payloads Norito canoniques, blobs base64 et résumés JSON afin que les opérateurs préparent des luminaires `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry` et des ordres de réplication avec validation locale.【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 Les luminaires de référence vivent dans `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) et sont générés via `cargo run -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order`.
+- Tooling opérateur : `sorafs_manifest_builder capacity {declaration, telemetry, replication-order}` convertit des specs lisibles en payloads Norito canoniques, blobs base64 et résumés JSON afin que les opérateurs préparent des luminaires `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry` et des ordres de réplication avec validation locale.【crates/sorafs_car/src/bin/sorafs_manifest_builder/capacity.rs:1】 Les luminaires de référence vivent dans `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) et sont générés via `cargo run -p sorafs_car --bin sorafs_manifest_builder -- capacity replication-order`.
 
 ### 2. Intégration du plan de contrôle| Tâche | Propriétaire(s) | Remarques |
 |------|----------|-------|
@@ -147,13 +147,13 @@ ci-dessous pour garder les critères d'acceptation alignés avec l'implémentati
 - Archiver le CV JSON et les hashes sous `docs/examples/sorafs_capacity_marketplace_validation/` avec les paquets de gouvernance.
 
 ### Preuve de contestation & slashing
-- Déposer des litiges via `sorafs_manifest_stub capacity dispute` (tests :
+- Déposer des litiges via `sorafs_manifest_builder capacity dispute` (tests :
   `cargo test -p sorafs_car --test capacity_cli`) pour garder des charges utiles canoniques.
 - Lancer `cargo test -p iroha_core -- capacity_dispute_replay_is_deterministic` et les suites de pénalité (`record_capacity_telemetry_penalises_persistent_under_delivery`) pour prouver que les litiges et les slashes rejouent de manière déterministe.
 - Suivre `docs/source/sorafs/dispute_revocation_runbook.md` pour la capture de preuves et l'escalade ; lier les approbations de grève au rapport de validation.
 
 ### Onboarding des prestataires et smoke tests de sortie
-- Régénérer les artefacts de déclaration/télémétrie avec `sorafs_manifest_stub capacity ...` et rejouer les tests CLI avant soumission (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`).
+- Régénérer les artefacts de déclaration/télémétrie avec `sorafs_manifest_builder capacity ...` et rejouer les tests CLI avant soumission (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`).
 - Soumettre via Torii (`/v1/sorafs/capacity/declare`) puis capturer `/v1/sorafs/capacity/state` et des captures Grafana. Suivre le flux de sortie dans `docs/source/sorafs/capacity_onboarding_runbook.md`.
 - Archiver les artefacts signés et les sorties de réconciliation dans
   `docs/examples/sorafs_capacity_marketplace_validation/`.

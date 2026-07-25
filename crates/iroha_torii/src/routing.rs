@@ -222,14 +222,9 @@ use sorafs_manifest::{
         AuditVerdictV1, PorChallengeOutcome, PorChallengeStatusV1, PorChallengeV1, PorProofV1,
         PorReportIsoWeek, PorWeeklyReportV1,
     },
-    repair::{
-        RepairReportV1, RepairSlashProposalV1, RepairTaskRecordV1, RepairTaskStatusV1,
-        RepairTicketId, RepairWorkerSignaturePayloadV1, SignedAuditorRequestPayloadV1,
-        SignedAuditorRequestV1,
-    },
     validate_chunker_handle, validate_manifest, validate_pin_policy,
 };
-use sorafs_node::{DealEngineError, DealSettlementOutcome, RepairTaskFilters, UsageOutcome};
+use sorafs_node::{DealEngineError, DealSettlementOutcome, UsageOutcome};
 
 use crate::sorafs::{
     PorCoordinatorError, PorStatusExportV1, PorStatusFilter, QuotaExceeded, SorafsAction,
@@ -13177,6 +13172,37 @@ pub(crate) fn push_accepted_transaction_for_ingress_with_routing_plan(
     accepted_tx: iroha_core::tx::AcceptedTransaction<'static>,
     routing_plan: Option<RoutingPlan>,
 ) -> Result<RoutingDecision> {
+    push_accepted_transaction_for_ingress_with_durability(
+        queue,
+        state,
+        accepted_tx,
+        routing_plan,
+        false,
+    )
+}
+
+pub(crate) fn push_accepted_transaction_for_ingress_with_routing_plan_strict_durable(
+    queue: Arc<Queue>,
+    state: Arc<CoreState>,
+    accepted_tx: iroha_core::tx::AcceptedTransaction<'static>,
+    routing_plan: RoutingPlan,
+) -> Result<RoutingDecision> {
+    push_accepted_transaction_for_ingress_with_durability(
+        queue,
+        state,
+        accepted_tx,
+        Some(routing_plan),
+        true,
+    )
+}
+
+fn push_accepted_transaction_for_ingress_with_durability(
+    queue: Arc<Queue>,
+    state: Arc<CoreState>,
+    accepted_tx: iroha_core::tx::AcceptedTransaction<'static>,
+    routing_plan: Option<RoutingPlan>,
+    strict_durable: bool,
+) -> Result<RoutingDecision> {
     let pressure = {
         let block_time = state.sumeragi_block_cadence();
         queue.refresh_pressure_budget_from_block_time(block_time)
@@ -13192,11 +13218,17 @@ pub(crate) fn push_accepted_transaction_for_ingress_with_routing_plan(
         );
     }
 
-    let result = match routing_plan {
-        Some(plan) => {
+    let result = match (routing_plan, strict_durable) {
+        (Some(plan), true) => queue.push_with_lane_with_state_and_routing_plan_strict_durable(
+            accepted_tx,
+            state.as_ref(),
+            plan,
+        ),
+        (Some(plan), false) => {
             queue.push_with_lane_with_state_and_routing_plan(accepted_tx, state.as_ref(), plan)
         }
-        None => queue.push_with_lane_with_state(accepted_tx, state.as_ref()),
+        (None, false) => queue.push_with_lane_with_state(accepted_tx, state.as_ref()),
+        (None, true) => unreachable!("strict durable ingress requires a precomputed routing plan"),
     };
 
     result
@@ -13227,24 +13259,6 @@ pub(crate) fn push_accepted_transaction_for_ingress_with_routing_plan(
                 "transaction enqueued successfully"
             );
         })
-}
-
-pub(crate) fn push_accepted_transactions_for_ingress_with_routing(
-    queue: Arc<Queue>,
-    state: Arc<CoreState>,
-    accepted: Vec<(
-        iroha_core::tx::AcceptedTransaction<'static>,
-        RoutingDecision,
-    )>,
-) -> Result<usize> {
-    push_accepted_transactions_for_ingress_with_routing_plans(
-        queue,
-        state,
-        accepted
-            .into_iter()
-            .map(|(tx, decision)| (tx, RoutingPlan::single(decision)))
-            .collect(),
-    )
 }
 
 pub(crate) fn push_accepted_transactions_for_ingress_with_routing_plans(
@@ -32313,111 +32327,6 @@ pub struct PorStatusQueryDto {
 
 #[cfg(feature = "app_api")]
 #[derive(Debug, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize)]
-/// Query parameters for listing repair task statuses.
-pub struct RepairStatusQueryDto {
-    pub status: Option<String>,
-    pub provider: Option<String>,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
-/// Request payload for claiming a repair ticket.
-pub struct RepairWorkerClaimDto {
-    /// Repair ticket identifier.
-    pub ticket_id: RepairTicketId,
-    /// Hex-encoded manifest digest (BLAKE3-256).
-    pub manifest_digest_hex: String,
-    /// Repair worker as canonical I105 or on-chain account alias.
-    pub worker_id: String,
-    /// Unix timestamp (seconds) when the claim was issued.
-    pub claimed_at_unix: u64,
-    /// Idempotency key for the claim.
-    pub idempotency_key: String,
-    /// Signature over `RepairWorkerSignaturePayloadV1`.
-    pub signature: SignatureOf<RepairWorkerSignaturePayloadV1>,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
-/// Request payload for recording a repair heartbeat.
-pub struct RepairWorkerHeartbeatDto {
-    /// Repair ticket identifier.
-    pub ticket_id: RepairTicketId,
-    /// Hex-encoded manifest digest (BLAKE3-256).
-    pub manifest_digest_hex: String,
-    /// Repair worker as canonical I105 or on-chain account alias.
-    pub worker_id: String,
-    /// Unix timestamp (seconds) when the heartbeat was recorded.
-    pub heartbeat_at_unix: u64,
-    /// Idempotency key for the heartbeat.
-    pub idempotency_key: String,
-    /// Signature over `RepairWorkerSignaturePayloadV1`.
-    pub signature: SignatureOf<RepairWorkerSignaturePayloadV1>,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
-/// Request payload for completing a repair ticket.
-pub struct RepairWorkerCompleteDto {
-    /// Repair ticket identifier.
-    pub ticket_id: RepairTicketId,
-    /// Hex-encoded manifest digest (BLAKE3-256).
-    pub manifest_digest_hex: String,
-    /// Repair worker as canonical I105 or on-chain account alias.
-    pub worker_id: String,
-    /// Unix timestamp (seconds) when remediation completed.
-    pub completed_at_unix: u64,
-    /// Optional resolution notes.
-    #[norito(default)]
-    pub resolution_notes: Option<String>,
-    /// Idempotency key for the completion request.
-    pub idempotency_key: String,
-    /// Signature over `RepairWorkerSignaturePayloadV1`.
-    pub signature: SignatureOf<RepairWorkerSignaturePayloadV1>,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
-/// Request payload for failing a repair ticket.
-pub struct RepairWorkerFailDto {
-    /// Repair ticket identifier.
-    pub ticket_id: RepairTicketId,
-    /// Hex-encoded manifest digest (BLAKE3-256).
-    pub manifest_digest_hex: String,
-    /// Repair worker as canonical I105 or on-chain account alias.
-    pub worker_id: String,
-    /// Unix timestamp (seconds) when the failure was recorded.
-    pub failed_at_unix: u64,
-    /// Failure reason.
-    pub reason: String,
-    /// Idempotency key for the failure request.
-    pub idempotency_key: String,
-    /// Signature over `RepairWorkerSignaturePayloadV1`.
-    pub signature: SignatureOf<RepairWorkerSignaturePayloadV1>,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(Debug, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize)]
 /// Query parameters for exporting PoR challenge history.
 pub struct PorExportQueryDto {
     pub start_epoch: Option<u64>,
@@ -33864,497 +33773,6 @@ pub fn handle_get_sorafs_por_report(
         .map_err(por_coordinator_error)
 }
 
-#[cfg(feature = "app_api")]
-fn ensure_canonical_repair_account_id(value: &str, field: &str) -> Result<(), Error> {
-    let trimmed = value.trim();
-    if trimmed != value {
-        return Err(conversion_error(format!(
-            "invalid {field} `{value}`: expected canonical I105 account id without surrounding whitespace"
-        )));
-    }
-    AccountId::parse_encoded(trimmed).map_err(|err| {
-        conversion_error(format!(
-            "invalid {field} `{value}`: expected canonical I105 account id ({err})"
-        ))
-    })?;
-    Ok(())
-}
-
-#[cfg(feature = "app_api")]
-fn decode_signed_repair_report_json(
-    value: &json::Value,
-) -> Result<RepairReportSubmissionV1, norito::json::Error> {
-    norito::json::from_value::<SignedAuditorRequestV1>(value.clone())
-        .map(RepairReportSubmissionV1::new)
-        .map_err(|err| {
-            norito::json::Error::Message(format!(
-                "repair report endpoint requires SignedAuditorRequestV1 envelope: {err}"
-            ))
-        })
-}
-
-#[cfg(feature = "app_api")]
-fn decode_signed_repair_slash_json(
-    value: &json::Value,
-) -> Result<RepairSlashSubmissionV1, norito::json::Error> {
-    norito::json::from_value::<SignedAuditorRequestV1>(value.clone())
-        .map(RepairSlashSubmissionV1::new)
-        .map_err(|err| {
-            norito::json::Error::Message(format!(
-                "repair slash endpoint requires SignedAuditorRequestV1 envelope: {err}"
-            ))
-        })
-}
-
-#[cfg(feature = "app_api")]
-fn decode_signed_repair_report_norito(
-    bytes: &[u8],
-) -> Result<RepairReportSubmissionV1, norito::Error> {
-    norito::decode_from_bytes::<SignedAuditorRequestV1>(bytes)
-        .map(RepairReportSubmissionV1::new)
-        .map_err(|err| {
-            norito::Error::Message(format!(
-                "repair report endpoint requires SignedAuditorRequestV1 envelope: {err}"
-            ))
-        })
-}
-
-#[cfg(feature = "app_api")]
-fn decode_signed_repair_slash_norito(
-    bytes: &[u8],
-) -> Result<RepairSlashSubmissionV1, norito::Error> {
-    norito::decode_from_bytes::<SignedAuditorRequestV1>(bytes)
-        .map(RepairSlashSubmissionV1::new)
-        .map_err(|err| {
-            norito::Error::Message(format!(
-                "repair slash endpoint requires SignedAuditorRequestV1 envelope: {err}"
-            ))
-        })
-}
-
-#[cfg(feature = "app_api")]
-fn validate_signed_auditor_request(
-    envelope: SignedAuditorRequestV1,
-) -> Result<SignedAuditorRequestPayloadV1, Error> {
-    let public_key = envelope.verify_signature().map_err(|err| {
-        conversion_error(format!("invalid signed auditor request signature: {err}"))
-    })?;
-    let parsed_account = AccountId::parse_encoded(&envelope.auditor_account).map_err(|err| {
-        conversion_error(format!(
-            "invalid signed auditor request auditor_account `{}`: expected canonical I105 account id ({err})",
-            envelope.auditor_account
-        ))
-    })?;
-    if parsed_account.canonical() != envelope.auditor_account {
-        return Err(conversion_error(format!(
-            "invalid signed auditor request auditor_account `{}`: expected canonical I105 account id",
-            envelope.auditor_account
-        )));
-    }
-    if parsed_account.account_id().try_signatory() != Some(&public_key) {
-        return Err(conversion_error(
-            "signed auditor request public key does not match auditor_account".to_string(),
-        ));
-    }
-    Ok(envelope.payload)
-}
-
-/// Request body accepted by the repair report auditor endpoint.
-#[cfg(feature = "app_api")]
-pub struct RepairReportSubmissionV1 {
-    /// Signed auditor envelope wrapping a report.
-    envelope: SignedAuditorRequestV1,
-}
-
-#[cfg(feature = "app_api")]
-impl RepairReportSubmissionV1 {
-    fn new(envelope: SignedAuditorRequestV1) -> Self {
-        Self { envelope }
-    }
-
-    /// Return the signed-envelope nonce for replay accounting.
-    pub(crate) fn signed_nonce(&self) -> (&str, u64) {
-        (&self.envelope.auditor_account, self.envelope.nonce)
-    }
-
-    /// Validate and unwrap the report payload.
-    pub(crate) fn into_report(self) -> Result<RepairReportV1, Error> {
-        match validate_signed_auditor_request(self.envelope)? {
-            SignedAuditorRequestPayloadV1::RepairReport(report) => Ok(report),
-            SignedAuditorRequestPayloadV1::SlashProposal(_) => Err(conversion_error(
-                "signed auditor request payload must be `repair_report`".to_string(),
-            )),
-        }
-    }
-}
-
-#[cfg(feature = "app_api")]
-impl norito::json::JsonDeserialize for RepairReportSubmissionV1 {
-    fn json_deserialize(
-        parser: &mut norito::json::Parser<'_>,
-    ) -> Result<Self, norito::json::Error> {
-        let value = <json::Value as norito::json::JsonDeserialize>::json_deserialize(parser)?;
-        Self::json_from_value(&value)
-    }
-
-    fn json_from_value(value: &json::Value) -> Result<Self, norito::json::Error> {
-        decode_signed_repair_report_json(value)
-    }
-}
-
-#[cfg(feature = "app_api")]
-impl crate::utils::extractors::SupportsNoritoDecode for RepairReportSubmissionV1 {
-    fn decode_norito(bytes: &[u8]) -> Result<Self, norito::Error> {
-        decode_signed_repair_report_norito(bytes)
-    }
-}
-
-/// Request body accepted by the repair slash auditor endpoint.
-#[cfg(feature = "app_api")]
-pub struct RepairSlashSubmissionV1 {
-    /// Signed auditor envelope wrapping a slash proposal.
-    envelope: SignedAuditorRequestV1,
-}
-
-#[cfg(feature = "app_api")]
-impl RepairSlashSubmissionV1 {
-    fn new(envelope: SignedAuditorRequestV1) -> Self {
-        Self { envelope }
-    }
-
-    /// Return the signed-envelope nonce for replay accounting.
-    pub(crate) fn signed_nonce(&self) -> (&str, u64) {
-        (&self.envelope.auditor_account, self.envelope.nonce)
-    }
-
-    /// Validate and unwrap the slash proposal payload.
-    pub(crate) fn into_proposal(self) -> Result<RepairSlashProposalV1, Error> {
-        match validate_signed_auditor_request(self.envelope)? {
-            SignedAuditorRequestPayloadV1::SlashProposal(proposal)
-                if proposal.approval.is_none() =>
-            {
-                Ok(proposal)
-            }
-            SignedAuditorRequestPayloadV1::SlashProposal(_) => Err(conversion_error(
-                "repair slash proposals must not embed approval summaries; governance decisions require authenticated stored votes"
-                    .to_string(),
-            )),
-            SignedAuditorRequestPayloadV1::RepairReport(_) => Err(conversion_error(
-                "signed auditor request payload must be `slash_proposal`".to_string(),
-            )),
-        }
-    }
-}
-
-#[cfg(feature = "app_api")]
-impl norito::json::JsonDeserialize for RepairSlashSubmissionV1 {
-    fn json_deserialize(
-        parser: &mut norito::json::Parser<'_>,
-    ) -> Result<Self, norito::json::Error> {
-        let value = <json::Value as norito::json::JsonDeserialize>::json_deserialize(parser)?;
-        Self::json_from_value(&value)
-    }
-
-    fn json_from_value(value: &json::Value) -> Result<Self, norito::json::Error> {
-        decode_signed_repair_slash_json(value)
-    }
-}
-
-#[cfg(feature = "app_api")]
-impl crate::utils::extractors::SupportsNoritoDecode for RepairSlashSubmissionV1 {
-    fn decode_norito(bytes: &[u8]) -> Result<Self, norito::Error> {
-        decode_signed_repair_slash_norito(bytes)
-    }
-}
-
-#[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
-pub async fn handle_post_sorafs_repair_report(
-    _telemetry: MaybeTelemetry,
-    sorafs_node: sorafs_node::NodeHandle,
-    report: RepairReportV1,
-    signed_nonce: (String, u64),
-) -> Result<impl IntoResponse, Error> {
-    ensure_canonical_repair_account_id(&report.auditor_account, "auditor_account")?;
-    let (auditor_account, nonce) = signed_nonce;
-    if auditor_account != report.auditor_account {
-        return Err(conversion_error(
-            "signed auditor nonce account does not match repair report auditor_account".to_string(),
-        ));
-    }
-    sorafs_node
-        .record_repair_auditor_nonce(&auditor_account, nonce)
-        .map_err(repair_scheduler_error)?;
-    let record = sorafs_node
-        .enqueue_repair_report(&report)
-        .map_err(repair_scheduler_error)?;
-    iroha_logger::info!(
-        ticket = %report.ticket_id,
-        provider = %hex::encode(report.evidence.provider_id),
-        manifest = %hex::encode(report.evidence.manifest_digest),
-        submitted_at = report.submitted_at_unix,
-        "queued SoraFS repair ticket"
-    );
-    let body = repair_task_record_body(&record);
-    let mut resp = Response::new(Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
-}
-
-#[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
-pub async fn handle_post_sorafs_repair_slash(
-    _telemetry: MaybeTelemetry,
-    sorafs_node: sorafs_node::NodeHandle,
-    proposal: RepairSlashProposalV1,
-    signed_nonce: (String, u64),
-) -> Result<impl IntoResponse, Error> {
-    ensure_canonical_repair_account_id(&proposal.auditor_account, "auditor_account")?;
-    let (auditor_account, nonce) = signed_nonce;
-    if auditor_account != proposal.auditor_account {
-        return Err(conversion_error(
-            "signed auditor nonce account does not match repair slash auditor_account".to_string(),
-        ));
-    }
-    sorafs_node
-        .record_repair_auditor_nonce(&auditor_account, nonce)
-        .map_err(repair_scheduler_error)?;
-    let record = sorafs_node
-        .submit_repair_slash_proposal(&proposal)
-        .map_err(repair_scheduler_error)?;
-    iroha_logger::warn!(
-        ticket = %proposal.ticket_id,
-        provider = %hex::encode(proposal.provider_id),
-        manifest = %hex::encode(proposal.manifest_digest),
-        penalty = %proposal.proposed_penalty,
-        "submitted SoraFS repair slash proposal"
-    );
-    let body = repair_task_record_body(&record);
-    let mut resp = Response::new(Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
-}
-
-#[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
-pub async fn handle_post_sorafs_repair_claim(
-    _telemetry: MaybeTelemetry,
-    sorafs_node: sorafs_node::NodeHandle,
-    NoritoJson(req): NoritoJson<RepairWorkerClaimDto>,
-) -> Result<impl IntoResponse, Error> {
-    let RepairWorkerClaimDto {
-        ticket_id,
-        manifest_digest_hex: _,
-        worker_id,
-        claimed_at_unix,
-        idempotency_key,
-        signature: _,
-    } = req;
-    ensure_canonical_repair_account_id(&worker_id, "worker_id")?;
-    let record = sorafs_node
-        .claim_repair_ticket(&ticket_id, &worker_id, claimed_at_unix, &idempotency_key)
-        .map_err(repair_scheduler_error)?;
-    let body = repair_task_record_body(&record);
-    let mut resp = Response::new(Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
-}
-
-#[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
-pub async fn handle_post_sorafs_repair_heartbeat(
-    _telemetry: MaybeTelemetry,
-    sorafs_node: sorafs_node::NodeHandle,
-    NoritoJson(req): NoritoJson<RepairWorkerHeartbeatDto>,
-) -> Result<impl IntoResponse, Error> {
-    let RepairWorkerHeartbeatDto {
-        ticket_id,
-        manifest_digest_hex: _,
-        worker_id,
-        heartbeat_at_unix,
-        idempotency_key,
-        signature: _,
-    } = req;
-    ensure_canonical_repair_account_id(&worker_id, "worker_id")?;
-    let record = sorafs_node
-        .heartbeat_repair_ticket(&ticket_id, &worker_id, heartbeat_at_unix, &idempotency_key)
-        .map_err(repair_scheduler_error)?;
-    let body = repair_task_record_body(&record);
-    let mut resp = Response::new(Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
-}
-
-#[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
-pub async fn handle_post_sorafs_repair_complete(
-    _telemetry: MaybeTelemetry,
-    sorafs_node: sorafs_node::NodeHandle,
-    NoritoJson(req): NoritoJson<RepairWorkerCompleteDto>,
-) -> Result<impl IntoResponse, Error> {
-    let RepairWorkerCompleteDto {
-        ticket_id,
-        manifest_digest_hex: _,
-        worker_id,
-        completed_at_unix,
-        resolution_notes,
-        idempotency_key,
-        signature: _,
-    } = req;
-    ensure_canonical_repair_account_id(&worker_id, "worker_id")?;
-    let record = sorafs_node
-        .complete_repair_ticket(
-            &ticket_id,
-            &worker_id,
-            completed_at_unix,
-            resolution_notes,
-            &idempotency_key,
-        )
-        .map_err(repair_scheduler_error)?;
-    let body = repair_task_record_body(&record);
-    let mut resp = Response::new(Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
-}
-
-#[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
-pub async fn handle_post_sorafs_repair_fail(
-    _telemetry: MaybeTelemetry,
-    sorafs_node: sorafs_node::NodeHandle,
-    NoritoJson(req): NoritoJson<RepairWorkerFailDto>,
-) -> Result<impl IntoResponse, Error> {
-    let RepairWorkerFailDto {
-        ticket_id,
-        manifest_digest_hex: _,
-        worker_id,
-        failed_at_unix,
-        reason,
-        idempotency_key,
-        signature: _,
-    } = req;
-    ensure_canonical_repair_account_id(&worker_id, "worker_id")?;
-    let record = sorafs_node
-        .fail_repair_ticket(
-            &ticket_id,
-            &worker_id,
-            failed_at_unix,
-            reason,
-            &idempotency_key,
-        )
-        .map_err(repair_scheduler_error)?;
-    let body = repair_task_record_body(&record);
-    let mut resp = Response::new(Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
-}
-
-#[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
-pub async fn handle_get_sorafs_repair_status(
-    sorafs_node: sorafs_node::NodeHandle,
-    axum::extract::Path(manifest_hex): axum::extract::Path<String>,
-    crate::NoritoQuery(query): crate::NoritoQuery<RepairStatusQueryDto>,
-) -> Result<impl IntoResponse, Error> {
-    let digest = parse_hex_array::<32>(&manifest_hex, "manifest_digest")?;
-    let filters = repair_filters_from_query(Some(digest), query)?;
-    let tasks: Vec<sorafs_node::RepairTaskSnapshot> = sorafs_node
-        .repair_task_snapshots(filters)
-        .map_err(repair_scheduler_error)?;
-    let body = repair_task_snapshots_body(&tasks);
-    let mut resp = Response::new(Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
-}
-
-#[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
-pub async fn handle_get_sorafs_repair_status_all(
-    sorafs_node: sorafs_node::NodeHandle,
-    crate::NoritoQuery(query): crate::NoritoQuery<RepairStatusQueryDto>,
-) -> Result<impl IntoResponse, Error> {
-    let filters = repair_filters_from_query(None, query)?;
-    let tasks: Vec<sorafs_node::RepairTaskSnapshot> = sorafs_node
-        .repair_task_snapshots(filters)
-        .map_err(repair_scheduler_error)?;
-    let body = repair_task_snapshots_body(&tasks);
-    let mut resp = Response::new(Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
-}
-
-#[cfg(feature = "app_api")]
-fn repair_task_record_body(record: &RepairTaskRecordV1) -> String {
-    let bytes = norito::to_bytes(record).unwrap_or_default();
-    let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
-    let wrapper = json_object(vec![("norito_base64", json_value(&encoded))]);
-    norito::json::to_json_pretty(&wrapper).unwrap_or_else(|_| "{}".into())
-}
-
-#[cfg(feature = "app_api")]
-fn repair_task_records_body(records: &[RepairTaskRecordV1]) -> String {
-    let entries: Vec<_> = records
-        .iter()
-        .map(|record| {
-            let bytes = norito::to_bytes(record).unwrap_or_default();
-            let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
-            json_object(vec![("norito_base64", json_value(&encoded))])
-        })
-        .collect();
-    norito::json::to_json_pretty(&json::Value::Array(entries)).unwrap_or_else(|_| "[]".into())
-}
-
-#[cfg(feature = "app_api")]
-fn repair_task_snapshots_body(snapshots: &[sorafs_node::RepairTaskSnapshot]) -> String {
-    let entries: Vec<_> = snapshots
-        .iter()
-        .map(|snapshot| {
-            let record_bytes = norito::to_bytes(&snapshot.record).unwrap_or_default();
-            let record_encoded = base64::engine::general_purpose::STANDARD.encode(record_bytes);
-            let events: Vec<_> = snapshot
-                .events
-                .iter()
-                .map(|event| {
-                    let event_bytes = norito::to_bytes(event).unwrap_or_default();
-                    let event_encoded =
-                        base64::engine::general_purpose::STANDARD.encode(event_bytes);
-                    json_object(vec![("norito_base64", json_value(&event_encoded))])
-                })
-                .collect();
-            json_object(vec![
-                ("norito_base64", json_value(&record_encoded)),
-                ("events_dropped", json_value(&snapshot.events_dropped)),
-                ("events", json::Value::Array(events)),
-            ])
-        })
-        .collect();
-    norito::json::to_json_pretty(&json::Value::Array(entries)).unwrap_or_else(|_| "[]".into())
-}
-
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
 pub async fn handle_post_sorafs_record_replication_failure(
@@ -34756,806 +34174,6 @@ fn por_coordinator_error(err: PorCoordinatorError) -> Error {
             iroha_data_model::ValidationFail::QueryFailed(QueryExecutionFail::NotFound),
         ),
         other => conversion_error(other.to_string()),
-    }
-}
-
-pub(crate) fn repair_scheduler_error(err: sorafs_node::RepairSchedulerError) -> Error {
-    let message = format!("repair scheduler error: {err}");
-    if matches!(err, sorafs_node::RepairSchedulerError::Store(_)) {
-        Error::AppServiceUnavailable {
-            code: "sorafs_repair_store_unavailable",
-            message,
-        }
-    } else {
-        conversion_error(message)
-    }
-}
-
-#[cfg(feature = "app_api")]
-fn repair_filters_from_query(
-    manifest_digest: Option<[u8; 32]>,
-    query: RepairStatusQueryDto,
-) -> Result<RepairTaskFilters, Error> {
-    let status = match query.status.as_deref() {
-        Some(label) => Some(parse_repair_status(label)?),
-        None => None,
-    };
-    let provider_id = match query.provider.as_deref() {
-        Some(value) => Some(parse_hex_array::<32>(value, "provider")?),
-        None => None,
-    };
-    Ok(RepairTaskFilters {
-        manifest_digest,
-        provider_id,
-        status,
-    })
-}
-
-#[cfg(feature = "app_api")]
-fn parse_repair_status(label: &str) -> Result<RepairTaskStatusV1, Error> {
-    let normalized = label.trim().to_ascii_lowercase();
-    let status = match normalized.as_str() {
-        "queued" => RepairTaskStatusV1::Queued,
-        "verifying" => RepairTaskStatusV1::Verifying,
-        "in_progress" | "in-progress" | "inprogress" => RepairTaskStatusV1::InProgress,
-        "completed" => RepairTaskStatusV1::Completed,
-        "failed" => RepairTaskStatusV1::Failed,
-        "escalated" => RepairTaskStatusV1::Escalated,
-        _ => {
-            return Err(conversion_error(format!(
-                "invalid repair status `{label}` (expected queued, verifying, in_progress, completed, failed, escalated)"
-            )));
-        }
-    };
-    Ok(status)
-}
-
-#[cfg(all(test, feature = "app_api"))]
-mod repair_query_tests {
-    use super::*;
-    use axum::extract::Path;
-    use axum::response::IntoResponse;
-    use http_body_util::BodyExt;
-    use iroha_crypto::{Algorithm, KeyPair, Signature};
-    use sorafs_manifest::provider_advert::SignatureAlgorithm;
-    use sorafs_manifest::repair::{
-        AuditorSignatureV1, REPAIR_EVIDENCE_VERSION_V1, REPAIR_REPORT_VERSION_V1,
-        REPAIR_SLASH_PROPOSAL_VERSION_V1, RepairCauseV1, RepairEvidenceV1, RepairManualCauseV1,
-        RepairSlashProposalV1, RepairTicketId, SIGNED_AUDITOR_REQUEST_VERSION_V1,
-        SignedAuditorRequestPayloadV1, SignedAuditorRequestV1,
-    };
-    use sorafs_node::config::StorageConfig;
-    use tokio::runtime::Runtime;
-
-    const TEST_AUDITOR_I105: &str = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
-
-    fn report(
-        ticket: &str,
-        manifest_digest: [u8; 32],
-        provider_id: [u8; 32],
-        submitted_at_unix: u64,
-    ) -> RepairReportV1 {
-        report_with_auditor(
-            ticket,
-            manifest_digest,
-            provider_id,
-            submitted_at_unix,
-            TEST_AUDITOR_I105,
-        )
-    }
-
-    fn report_with_auditor(
-        ticket: &str,
-        manifest_digest: [u8; 32],
-        provider_id: [u8; 32],
-        submitted_at_unix: u64,
-        auditor_account: &str,
-    ) -> RepairReportV1 {
-        RepairReportV1 {
-            version: REPAIR_REPORT_VERSION_V1,
-            ticket_id: RepairTicketId(ticket.to_string()),
-            auditor_account: auditor_account.into(),
-            submitted_at_unix,
-            evidence: RepairEvidenceV1 {
-                version: REPAIR_EVIDENCE_VERSION_V1,
-                manifest_digest,
-                provider_id,
-                por_history_id: None,
-                cause: RepairCauseV1::Manual(RepairManualCauseV1 {
-                    reason: "test".into(),
-                }),
-                evidence_json: None,
-                notes: None,
-            },
-            notes: None,
-        }
-    }
-
-    fn slash_proposal(
-        ticket: &str,
-        manifest_digest: [u8; 32],
-        provider_id: [u8; 32],
-        submitted_at_unix: u64,
-    ) -> RepairSlashProposalV1 {
-        slash_proposal_with_auditor(
-            ticket,
-            manifest_digest,
-            provider_id,
-            submitted_at_unix,
-            TEST_AUDITOR_I105,
-        )
-    }
-
-    fn slash_proposal_with_auditor(
-        ticket: &str,
-        manifest_digest: [u8; 32],
-        provider_id: [u8; 32],
-        submitted_at_unix: u64,
-        auditor_account: &str,
-    ) -> RepairSlashProposalV1 {
-        RepairSlashProposalV1 {
-            version: REPAIR_SLASH_PROPOSAL_VERSION_V1,
-            ticket_id: RepairTicketId(ticket.to_string()),
-            provider_id,
-            manifest_digest,
-            auditor_account: auditor_account.into(),
-            proposed_penalty: "0.000001".parse().expect("valid quantity"),
-            submitted_at_unix,
-            rationale: "missed repair SLA".into(),
-            approval: None,
-        }
-    }
-
-    fn checked_auditor_keypair() -> KeyPair {
-        KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
-            .expect("generate checked auditor fixture keypair")
-    }
-
-    fn auditor_account(key_pair: &KeyPair) -> String {
-        AccountId::new(key_pair.public_key().clone()).to_string()
-    }
-
-    fn signed_auditor_request(
-        payload: SignedAuditorRequestPayloadV1,
-        key_pair: &KeyPair,
-    ) -> SignedAuditorRequestV1 {
-        let public_key = {
-            let (algorithm, public_key) = key_pair.public_key().to_bytes();
-            assert_eq!(algorithm, Algorithm::Ed25519);
-            public_key.to_vec()
-        };
-        let auditor_account = match &payload {
-            SignedAuditorRequestPayloadV1::RepairReport(report) => report.auditor_account.clone(),
-            SignedAuditorRequestPayloadV1::SlashProposal(proposal) => {
-                proposal.auditor_account.clone()
-            }
-        };
-        let mut envelope = SignedAuditorRequestV1 {
-            version: SIGNED_AUDITOR_REQUEST_VERSION_V1,
-            auditor_account,
-            nonce: 42,
-            payload,
-            signature: AuditorSignatureV1 {
-                algorithm: SignatureAlgorithm::Ed25519,
-                public_key,
-                signature: Vec::new(),
-            },
-        };
-        let payload_bytes =
-            norito::to_bytes(&envelope.signature_payload()).expect("encode auditor payload");
-        let signature = Signature::try_new(key_pair.private_key(), &payload_bytes)
-            .expect("sign auditor payload");
-        envelope.signature.signature = signature.payload().to_vec();
-        envelope
-    }
-
-    #[test]
-    fn parse_repair_status_accepts_known_values() {
-        assert_eq!(
-            parse_repair_status("queued").unwrap(),
-            RepairTaskStatusV1::Queued
-        );
-        assert_eq!(
-            parse_repair_status("IN_PROGRESS").unwrap(),
-            RepairTaskStatusV1::InProgress
-        );
-        assert_eq!(
-            parse_repair_status("completed").unwrap(),
-            RepairTaskStatusV1::Completed
-        );
-        assert_eq!(
-            parse_repair_status("failed").unwrap(),
-            RepairTaskStatusV1::Failed
-        );
-        assert_eq!(
-            parse_repair_status("escalated").unwrap(),
-            RepairTaskStatusV1::Escalated
-        );
-    }
-
-    #[test]
-    fn repair_filters_parse_provider_and_status() {
-        let provider_id = [0x42; 32];
-        let provider_hex = format!("0x{}", hex::encode(provider_id));
-        let query = RepairStatusQueryDto {
-            status: Some("in_progress".into()),
-            provider: Some(provider_hex),
-        };
-        let filters =
-            repair_filters_from_query(Some([0x11; 32]), query).expect("parse repair filters");
-        assert_eq!(filters.manifest_digest, Some([0x11; 32]));
-        assert_eq!(filters.provider_id, Some(provider_id));
-        assert_eq!(filters.status, Some(RepairTaskStatusV1::InProgress));
-    }
-
-    #[test]
-    fn signed_repair_report_submission_json_unwraps_report() {
-        let key_pair = checked_auditor_keypair();
-        let auditor_account = auditor_account(&key_pair);
-        let report = report_with_auditor(
-            "REP-410",
-            [0x10; 32],
-            [0x22; 32],
-            1_700_000_000,
-            &auditor_account,
-        );
-        let envelope = signed_auditor_request(
-            SignedAuditorRequestPayloadV1::RepairReport(report.clone()),
-            &key_pair,
-        );
-        let json = norito::json::to_vec(&envelope).expect("encode signed report");
-        let submission: RepairReportSubmissionV1 =
-            norito::json::from_slice(&json).expect("decode signed report submission");
-        let decoded = submission.into_report().expect("unwrap signed report");
-
-        assert_eq!(decoded, report);
-    }
-
-    #[test]
-    fn raw_repair_report_submission_json_is_rejected() {
-        let report = report("REP-409", [0x09; 32], [0x21; 32], 1_699_999_900);
-        let json = norito::json::to_vec(&report).expect("encode raw repair report");
-        let err = match norito::json::from_slice::<RepairReportSubmissionV1>(&json) {
-            Ok(_) => panic!("raw repair reports must not decode as auditor submissions"),
-            Err(err) => err,
-        };
-
-        assert!(
-            err.to_string()
-                .contains("requires SignedAuditorRequestV1 envelope"),
-            "unexpected error message: {err}"
-        );
-    }
-
-    #[test]
-    fn raw_repair_report_submission_norito_is_rejected() {
-        let report = report("REP-409N", [0x0A; 32], [0x22; 32], 1_699_999_950);
-        let bytes = norito::to_bytes(&report).expect("encode raw repair report");
-        let err =
-            match <RepairReportSubmissionV1 as crate::utils::extractors::SupportsNoritoDecode>::decode_norito(&bytes) {
-                Ok(_) => panic!("raw Norito repair reports must not decode as auditor submissions"),
-                Err(err) => err,
-            };
-
-        assert!(
-            err.to_string()
-                .contains("requires SignedAuditorRequestV1 envelope"),
-            "unexpected error message: {err}"
-        );
-    }
-
-    #[test]
-    fn signed_repair_slash_submission_json_unwraps_proposal() {
-        let key_pair = checked_auditor_keypair();
-        let auditor_account = auditor_account(&key_pair);
-        let proposal = slash_proposal_with_auditor(
-            "REP-411",
-            [0x11; 32],
-            [0x23; 32],
-            1_700_000_100,
-            &auditor_account,
-        );
-        let envelope = signed_auditor_request(
-            SignedAuditorRequestPayloadV1::SlashProposal(proposal.clone()),
-            &key_pair,
-        );
-        let json = norito::json::to_vec(&envelope).expect("encode signed slash proposal");
-        let submission: RepairSlashSubmissionV1 =
-            norito::json::from_slice(&json).expect("decode signed slash submission");
-        let decoded = submission
-            .into_proposal()
-            .expect("unwrap signed slash proposal");
-
-        assert_eq!(decoded, proposal);
-    }
-
-    #[test]
-    fn signed_repair_slash_submission_rejects_embedded_approval() {
-        let key_pair = checked_auditor_keypair();
-        let auditor_account = auditor_account(&key_pair);
-        let mut proposal = slash_proposal_with_auditor(
-            "REP-411-approval",
-            [0x11; 32],
-            [0x23; 32],
-            1_700_000_100,
-            &auditor_account,
-        );
-        proposal.approval = Some(sorafs_manifest::repair::RepairEscalationApprovalV1 {
-            version: sorafs_manifest::repair::REPAIR_ESCALATION_APPROVAL_VERSION_V1,
-            approve_votes: 3,
-            reject_votes: 0,
-            abstain_votes: 0,
-            approved_at_unix: 1_700_000_200,
-            finalized_at_unix: 1_700_000_300,
-        });
-        let envelope = signed_auditor_request(
-            SignedAuditorRequestPayloadV1::SlashProposal(proposal),
-            &key_pair,
-        );
-        let error = RepairSlashSubmissionV1::new(envelope)
-            .into_proposal()
-            .expect_err("embedded approval summary must fail closed");
-
-        assert!(
-            error
-                .to_string()
-                .contains("must not embed approval summaries"),
-            "unexpected error: {error}"
-        );
-    }
-
-    #[test]
-    fn signed_repair_report_submission_rejects_slash_payload_kind() {
-        let key_pair = checked_auditor_keypair();
-        let auditor_account = auditor_account(&key_pair);
-        let proposal = slash_proposal_with_auditor(
-            "REP-412",
-            [0x12; 32],
-            [0x24; 32],
-            1_700_000_200,
-            &auditor_account,
-        );
-        let envelope = signed_auditor_request(
-            SignedAuditorRequestPayloadV1::SlashProposal(proposal.clone()),
-            &key_pair,
-        );
-        let err = RepairReportSubmissionV1::new(envelope)
-            .into_report()
-            .expect_err("slash payload must not unwrap as a repair report");
-
-        let message = match err {
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
-            )) => message,
-            other => panic!("unexpected error: {other:?}"),
-        };
-        assert!(
-            message.contains("repair_report"),
-            "unexpected error message: {message}"
-        );
-    }
-
-    #[test]
-    fn signed_repair_report_submission_rejects_bogus_signature() {
-        let key_pair = checked_auditor_keypair();
-        let auditor_account = auditor_account(&key_pair);
-        let report = report_with_auditor(
-            "REP-413",
-            [0x13; 32],
-            [0x25; 32],
-            1_700_000_300,
-            &auditor_account,
-        );
-        let mut envelope = signed_auditor_request(
-            SignedAuditorRequestPayloadV1::RepairReport(report),
-            &key_pair,
-        );
-        envelope.signature.signature.fill(0xA5);
-
-        let err = RepairReportSubmissionV1::new(envelope)
-            .into_report()
-            .expect_err("bogus auditor signature must be rejected");
-        let message = match err {
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
-            )) => message,
-            other => panic!("unexpected error: {other:?}"),
-        };
-        assert!(
-            message.contains("signature verification"),
-            "unexpected error message: {message}"
-        );
-    }
-
-    #[test]
-    fn signed_repair_report_submission_rejects_key_account_mismatch() {
-        let signing_key = checked_auditor_keypair();
-        let other_account = auditor_account(&checked_auditor_keypair());
-        let report = report_with_auditor(
-            "REP-414",
-            [0x14; 32],
-            [0x26; 32],
-            1_700_000_400,
-            &other_account,
-        );
-        let envelope = signed_auditor_request(
-            SignedAuditorRequestPayloadV1::RepairReport(report),
-            &signing_key,
-        );
-
-        let err = RepairReportSubmissionV1::new(envelope)
-            .into_report()
-            .expect_err("auditor key/account mismatch must be rejected");
-        let message = match err {
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
-            )) => message,
-            other => panic!("unexpected error: {other:?}"),
-        };
-        assert!(
-            message.contains("public key does not match auditor_account"),
-            "unexpected error message: {message}"
-        );
-    }
-
-    #[test]
-    fn repair_status_handlers_apply_filters() {
-        Runtime::new().expect("runtime").block_on(async {
-            let temp_dir = tempfile::tempdir().expect("temp dir");
-            let config = StorageConfig::builder()
-                .enabled(true)
-                .data_dir(temp_dir.path().join("storage"))
-                .build();
-            let node = sorafs_node::NodeHandle::new(config);
-            let manifest_a = [0x10; 32];
-            let manifest_b = [0x11; 32];
-            let provider_a = [0x22; 32];
-            let provider_b = [0x33; 32];
-
-            node.enqueue_repair_report(&report("REP-400", manifest_a, provider_a, 1_700_000_000))
-                .expect("enqueue report");
-            node.enqueue_repair_report(&report("REP-401", manifest_b, provider_b, 1_700_000_100))
-                .expect("enqueue report");
-
-            let query = RepairStatusQueryDto {
-                status: Some("queued".into()),
-                provider: Some(format!("0x{}", hex::encode(provider_a))),
-            };
-            let resp = handle_get_sorafs_repair_status_all(node.clone(), crate::NoritoQuery(query))
-                .await
-                .expect("global repair status");
-            let body = resp
-                .into_response()
-                .into_body()
-                .collect()
-                .await
-                .expect("body");
-            let value: norito::json::Value =
-                norito::json::from_slice(body.to_bytes().as_ref()).expect("parse json");
-            let entries = value.as_array().expect("array response");
-            assert_eq!(entries.len(), 1);
-
-            let manifest_hex = hex::encode(manifest_a);
-            let manifest_query = RepairStatusQueryDto {
-                status: Some("queued".into()),
-                provider: None,
-            };
-            let resp = handle_get_sorafs_repair_status(
-                node.clone(),
-                Path(manifest_hex),
-                crate::NoritoQuery(manifest_query),
-            )
-            .await
-            .expect("manifest repair status");
-            let body = resp
-                .into_response()
-                .into_body()
-                .collect()
-                .await
-                .expect("body");
-            let value: norito::json::Value =
-                norito::json::from_slice(body.to_bytes().as_ref()).expect("parse json");
-            let entries = value.as_array().expect("array response");
-            assert_eq!(entries.len(), 1);
-        });
-    }
-}
-
-#[cfg(all(test, feature = "app_api"))]
-mod repair_worker_tests {
-    use super::*;
-    use axum::response::IntoResponse;
-    use iroha_crypto::{KeyPair, SignatureOf};
-    use sorafs_manifest::repair::{
-        REPAIR_EVIDENCE_VERSION_V1, REPAIR_REPORT_VERSION_V1, REPAIR_WORKER_SIGNATURE_VERSION_V1,
-        RepairCauseV1, RepairEvidenceV1, RepairManualCauseV1, RepairTaskStateV1, RepairTicketId,
-        RepairWorkerActionV1, RepairWorkerSignaturePayloadV1,
-    };
-    use sorafs_node::config::StorageConfig;
-    use tokio::runtime::Runtime;
-
-    const TEST_AUDITOR_I105: &str = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
-    const TEST_WORKER_A_I105: &str = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
-    const TEST_WORKER_B_I105: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
-
-    fn report(
-        ticket: &str,
-        manifest_digest: [u8; 32],
-        provider_id: [u8; 32],
-        submitted_at_unix: u64,
-    ) -> RepairReportV1 {
-        RepairReportV1 {
-            version: REPAIR_REPORT_VERSION_V1,
-            ticket_id: RepairTicketId(ticket.to_string()),
-            auditor_account: TEST_AUDITOR_I105.into(),
-            submitted_at_unix,
-            evidence: RepairEvidenceV1 {
-                version: REPAIR_EVIDENCE_VERSION_V1,
-                manifest_digest,
-                provider_id,
-                por_history_id: None,
-                cause: RepairCauseV1::Manual(RepairManualCauseV1 {
-                    reason: "test".into(),
-                }),
-                evidence_json: None,
-                notes: None,
-            },
-            notes: None,
-        }
-    }
-
-    fn sign_worker_action(
-        keypair: &KeyPair,
-        ticket_id: &RepairTicketId,
-        manifest_digest: [u8; 32],
-        provider_id: [u8; 32],
-        worker_id: &str,
-        idempotency_key: &str,
-        action: RepairWorkerActionV1,
-    ) -> SignatureOf<RepairWorkerSignaturePayloadV1> {
-        let payload = RepairWorkerSignaturePayloadV1 {
-            version: REPAIR_WORKER_SIGNATURE_VERSION_V1,
-            ticket_id: ticket_id.clone(),
-            manifest_digest,
-            provider_id,
-            worker_id: worker_id.to_string(),
-            idempotency_key: idempotency_key.to_string(),
-            action,
-        };
-        SignatureOf::try_new(keypair.private_key(), &payload)
-            .expect("derive repair worker action fixture signature")
-    }
-
-    #[test]
-    fn repair_worker_handlers_drive_state_transitions() {
-        Runtime::new().expect("runtime").block_on(async {
-            let temp_dir = tempfile::tempdir().expect("temp dir");
-            let config = StorageConfig::builder()
-                .enabled(true)
-                .data_dir(temp_dir.path().join("storage"))
-                .build();
-            let node = sorafs_node::NodeHandle::new(config);
-            let signer = checked_routing_fixture_keypair(
-                0x74,
-                iroha_crypto::Algorithm::Ed25519,
-                "derive repair worker state transition signer fixture",
-            );
-            let report_a = report("REP-460", [0x10; 32], [0x20; 32], 1_700_500_000);
-            let report_b = report("REP-461", [0x11; 32], [0x21; 32], 1_700_500_100);
-
-            node.enqueue_repair_report(&report_a)
-                .expect("enqueue report a");
-            node.enqueue_repair_report(&report_b)
-                .expect("enqueue report b");
-
-            let claim = RepairWorkerClaimDto {
-                ticket_id: report_a.ticket_id.clone(),
-                manifest_digest_hex: hex::encode(report_a.evidence.manifest_digest),
-                worker_id: TEST_WORKER_A_I105.into(),
-                claimed_at_unix: report_a.submitted_at_unix + 10,
-                idempotency_key: "claim-a".into(),
-                signature: sign_worker_action(
-                    &signer,
-                    &report_a.ticket_id,
-                    report_a.evidence.manifest_digest,
-                    report_a.evidence.provider_id,
-                    TEST_WORKER_A_I105,
-                    "claim-a",
-                    RepairWorkerActionV1::Claim {
-                        claimed_at_unix: report_a.submitted_at_unix + 10,
-                    },
-                ),
-            };
-            let _ = handle_post_sorafs_repair_claim(
-                MaybeTelemetry::disabled(),
-                node.clone(),
-                NoritoJson(claim),
-            )
-            .await
-            .expect("claim handler")
-            .into_response();
-
-            let heartbeat = RepairWorkerHeartbeatDto {
-                ticket_id: report_a.ticket_id.clone(),
-                manifest_digest_hex: hex::encode(report_a.evidence.manifest_digest),
-                worker_id: TEST_WORKER_A_I105.into(),
-                heartbeat_at_unix: report_a.submitted_at_unix + 20,
-                idempotency_key: "heartbeat-a".into(),
-                signature: sign_worker_action(
-                    &signer,
-                    &report_a.ticket_id,
-                    report_a.evidence.manifest_digest,
-                    report_a.evidence.provider_id,
-                    TEST_WORKER_A_I105,
-                    "heartbeat-a",
-                    RepairWorkerActionV1::Heartbeat {
-                        heartbeat_at_unix: report_a.submitted_at_unix + 20,
-                    },
-                ),
-            };
-            let _ = handle_post_sorafs_repair_heartbeat(
-                MaybeTelemetry::disabled(),
-                node.clone(),
-                NoritoJson(heartbeat),
-            )
-            .await
-            .expect("heartbeat handler")
-            .into_response();
-
-            let complete = RepairWorkerCompleteDto {
-                ticket_id: report_a.ticket_id.clone(),
-                manifest_digest_hex: hex::encode(report_a.evidence.manifest_digest),
-                worker_id: TEST_WORKER_A_I105.into(),
-                completed_at_unix: report_a.submitted_at_unix + 30,
-                resolution_notes: Some("done".into()),
-                idempotency_key: "complete-a".into(),
-                signature: sign_worker_action(
-                    &signer,
-                    &report_a.ticket_id,
-                    report_a.evidence.manifest_digest,
-                    report_a.evidence.provider_id,
-                    TEST_WORKER_A_I105,
-                    "complete-a",
-                    RepairWorkerActionV1::Complete {
-                        completed_at_unix: report_a.submitted_at_unix + 30,
-                        resolution_notes: Some("done".into()),
-                    },
-                ),
-            };
-            let _ = handle_post_sorafs_repair_complete(
-                MaybeTelemetry::disabled(),
-                node.clone(),
-                NoritoJson(complete),
-            )
-            .await
-            .expect("complete handler")
-            .into_response();
-
-            let claim_b = RepairWorkerClaimDto {
-                ticket_id: report_b.ticket_id.clone(),
-                manifest_digest_hex: hex::encode(report_b.evidence.manifest_digest),
-                worker_id: TEST_WORKER_B_I105.into(),
-                claimed_at_unix: report_b.submitted_at_unix + 5,
-                idempotency_key: "claim-b".into(),
-                signature: sign_worker_action(
-                    &signer,
-                    &report_b.ticket_id,
-                    report_b.evidence.manifest_digest,
-                    report_b.evidence.provider_id,
-                    TEST_WORKER_B_I105,
-                    "claim-b",
-                    RepairWorkerActionV1::Claim {
-                        claimed_at_unix: report_b.submitted_at_unix + 5,
-                    },
-                ),
-            };
-            let _ = handle_post_sorafs_repair_claim(
-                MaybeTelemetry::disabled(),
-                node.clone(),
-                NoritoJson(claim_b),
-            )
-            .await
-            .expect("claim handler b")
-            .into_response();
-
-            let fail = RepairWorkerFailDto {
-                ticket_id: report_b.ticket_id.clone(),
-                manifest_digest_hex: hex::encode(report_b.evidence.manifest_digest),
-                worker_id: TEST_WORKER_B_I105.into(),
-                failed_at_unix: report_b.submitted_at_unix + 15,
-                reason: "retry".into(),
-                idempotency_key: "fail-b".into(),
-                signature: sign_worker_action(
-                    &signer,
-                    &report_b.ticket_id,
-                    report_b.evidence.manifest_digest,
-                    report_b.evidence.provider_id,
-                    TEST_WORKER_B_I105,
-                    "fail-b",
-                    RepairWorkerActionV1::Fail {
-                        failed_at_unix: report_b.submitted_at_unix + 15,
-                        reason: "retry".into(),
-                    },
-                ),
-            };
-            let _ = handle_post_sorafs_repair_fail(
-                MaybeTelemetry::disabled(),
-                node.clone(),
-                NoritoJson(fail),
-            )
-            .await
-            .expect("fail handler")
-            .into_response();
-
-            let tasks = node
-                .repair_tasks(RepairTaskFilters::default())
-                .expect("repair task store");
-            assert_eq!(tasks.len(), 2);
-            let mut states = tasks
-                .iter()
-                .map(|task| (task.ticket_id.0.as_str(), &task.state))
-                .collect::<Vec<_>>();
-            states.sort_by(|(left, _), (right, _)| left.cmp(right));
-            assert!(matches!(states[0].1, RepairTaskStateV1::Completed(..)));
-            assert!(matches!(states[1].1, RepairTaskStateV1::Failed(..)));
-        });
-    }
-
-    #[test]
-    fn repair_worker_handler_rejects_alias_account_id() {
-        Runtime::new().expect("runtime").block_on(async {
-            let temp_dir = tempfile::tempdir().expect("temp dir");
-            let config = StorageConfig::builder()
-                .enabled(true)
-                .data_dir(temp_dir.path().join("storage"))
-                .build();
-            let node = sorafs_node::NodeHandle::new(config);
-            let signer = checked_routing_fixture_keypair(
-                0x75,
-                iroha_crypto::Algorithm::Ed25519,
-                "derive repair worker alias rejection signer fixture",
-            );
-            let report = report("REP-462", [0x12; 32], [0x23; 32], 1_700_500_200);
-
-            node.enqueue_repair_report(&report).expect("enqueue report");
-
-            let claim = RepairWorkerClaimDto {
-                ticket_id: report.ticket_id.clone(),
-                manifest_digest_hex: hex::encode(report.evidence.manifest_digest),
-                worker_id: "worker@banka.dataspace".into(),
-                claimed_at_unix: report.submitted_at_unix + 10,
-                idempotency_key: "claim-invalid".into(),
-                signature: sign_worker_action(
-                    &signer,
-                    &report.ticket_id,
-                    report.evidence.manifest_digest,
-                    report.evidence.provider_id,
-                    "worker@banka.dataspace",
-                    "claim-invalid",
-                    RepairWorkerActionV1::Claim {
-                        claimed_at_unix: report.submitted_at_unix + 10,
-                    },
-                ),
-            };
-
-            let err = match handle_post_sorafs_repair_claim(
-                MaybeTelemetry::disabled(),
-                node,
-                NoritoJson(claim),
-            )
-            .await
-            {
-                Ok(_) => panic!("alias worker id must be rejected"),
-                Err(err) => err,
-            };
-            let crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
-            )) = err
-            else {
-                panic!("unexpected error: {err:?}");
-            };
-            assert!(message.contains("canonical I105 account id"));
-        });
     }
 }
 
@@ -55439,6 +54057,7 @@ fn sumeragi_npos_diagnostics(
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_diagnostics(
     State(state): State<std::sync::Arc<CoreState>>,
+    durable_queue: Option<std::sync::Arc<Queue>>,
     accept: Option<axum::http::HeaderValue>,
     nexus_enabled: bool,
 ) -> Result<Response> {
@@ -55457,6 +54076,34 @@ pub async fn handle_v1_sumeragi_diagnostics(
             Some(sumeragi_npos_diagnostics(&params, &reducer)?)
         }
         None => None,
+    };
+    drop(world);
+    let native_amx_participant_applications = if nexus_enabled {
+        state
+            .native_amx_participant_applications_diagnostics()
+            .map_err(|error| {
+                Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
+                    "failed to derive Native AMX participant diagnostics: {error}",
+                )))
+            })?
+    } else {
+        Vec::new()
+    };
+    let durable_lane_diagnostics = nexus_enabled
+        .then(|| state.durable_lane_diagnostics())
+        .unwrap_or_default();
+    let autonomous_lane_executions = if nexus_enabled {
+        let derived = durable_queue.as_ref().map_or_else(
+            || state.autonomous_lane_execution_diagnostics(),
+            |queue| state.autonomous_lane_execution_diagnostics_with_queue(queue),
+        );
+        derived.map_err(|error| {
+            Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
+                "failed to derive autonomous lane execution diagnostics: {error}",
+            )))
+        })?
+    } else {
+        Vec::new()
     };
 
     let lane_commitments = nexus_enabled
@@ -55541,21 +54188,13 @@ pub async fn handle_v1_sumeragi_diagnostics(
         lane_relay_envelopes: nexus_enabled
             .then_some(snapshot.lane_relay_envelopes)
             .unwrap_or_default(),
-        lane_payload_ownerships: nexus_enabled
-            .then_some(snapshot.lane_payload_ownerships)
-            .unwrap_or_default(),
-        committed_lane_blocks: nexus_enabled
-            .then(|| {
-                snapshot
-                    .committed_lane_blocks
-                    .iter()
-                    .map(committed_lane_block_wire)
-                    .collect()
-            })
-            .unwrap_or_default(),
-        lane_block_sessions: nexus_enabled
-            .then_some(snapshot.lane_block_sessions)
-            .unwrap_or_default(),
+        lane_payload_ownerships: durable_lane_diagnostics.lane_payload_ownerships,
+        committed_lane_blocks: durable_lane_diagnostics
+            .committed_lane_blocks
+            .iter()
+            .map(committed_lane_block_wire)
+            .collect(),
+        lane_block_sessions: durable_lane_diagnostics.lane_block_sessions,
         lane_governance_sealed_total: nexus_enabled
             .then_some(snapshot.lane_governance_sealed_total)
             .unwrap_or_default(),
@@ -55563,7 +54202,23 @@ pub async fn handle_v1_sumeragi_diagnostics(
             .then_some(snapshot.lane_governance_sealed_aliases)
             .unwrap_or_default(),
         lane_governance,
+        native_amx_participant_applications,
+        autonomous_lane_executions,
     };
+    diagnostics
+        .validate_native_amx_participant_applications()
+        .map_err(|reason| {
+            Error::Query(iroha_data_model::ValidationFail::InternalError(
+                reason.to_owned(),
+            ))
+        })?;
+    diagnostics
+        .validate_autonomous_lane_executions()
+        .map_err(|reason| {
+            Error::Query(iroha_data_model::ValidationFail::InternalError(
+                reason.to_owned(),
+            ))
+        })?;
     Ok(crate::utils::respond_with_format(diagnostics, format))
 }
 
@@ -83537,7 +82192,7 @@ mod tests {
             LiveQueryStore::start_test(),
         ));
         let response =
-            super::handle_v1_sumeragi_diagnostics(axum::extract::State(state), None, false)
+            super::handle_v1_sumeragi_diagnostics(axum::extract::State(state), None, None, false)
                 .await
                 .expect("diagnostics handler");
         assert_eq!(response.status(), StatusCode::OK);
@@ -83552,9 +82207,25 @@ mod tests {
         assert!(decoded.npos.is_none());
         assert!(decoded.lane_commitments.is_empty());
         assert!(decoded.lane_relay_envelopes.is_empty());
+        assert!(decoded.native_amx_participant_applications.is_empty());
+        assert!(decoded.autonomous_lane_executions.is_empty());
         let json: norito::json::Value =
             norito::json::from_slice(&body).expect("decode diagnostics JSON object");
         assert!(json.get("npos").is_none());
+        assert_eq!(
+            json.get("native_amx_participant_applications")
+                .and_then(|value| value.as_array())
+                .map(|rows| rows.len()),
+            Some(0),
+            "diagnostics expose the durable Native AMX evidence vector independently of status"
+        );
+        assert_eq!(
+            json.get("autonomous_lane_executions")
+                .and_then(|value| value.as_array())
+                .map(Vec::len),
+            Some(0),
+            "autonomous stage evidence belongs only to the diagnostics endpoint"
+        );
         for canonical in ["height", "view", "phase", "leader", "locked_prepare_qc"] {
             assert!(
                 json.get(canonical).is_none(),

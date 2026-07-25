@@ -64,11 +64,11 @@ cargo test -p sorafs_chunker streaming_backpressure_fuzz_matches_batch
 ```
 
 ## 3. ابنِ وتوقيع مانيفيستلفّ خطة الـ قطعان والكنى وتواقيع التورم في مانيفيست باستخدام
-`sorafs-manifest-stub`. يوضح الأمر أدناه الحمولة لملف واحد؛ مرّر مسار دليل الحزمة
+`sorafs-manifest-builder`. يوضح الأمر أدناه الحمولة لملف واحد؛ مرّر مسار دليل الحزمة
 شجرة (تسير CLI ترتيبًا معجميًا).
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
+cargo run -p sorafs_manifest --bin sorafs-manifest-builder -- \
   /tmp/docs.txt \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --manifest-out=/tmp/docs.manifest \

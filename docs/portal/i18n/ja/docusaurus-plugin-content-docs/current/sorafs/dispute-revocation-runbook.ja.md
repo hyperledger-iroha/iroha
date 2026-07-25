@@ -44,7 +44,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 ## 3. 紛争の提出
 
-1. `sorafs_manifest_stub capacity dispute` 用の JSON spec を作成します:
+1. `sorafs_manifest_builder capacity dispute` 用の JSON spec を作成します:
 
    ```json
    {
@@ -67,7 +67,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 2. CLI を実行します:
 
    ```bash
-   sorafs_manifest_stub capacity dispute \
+   sorafs_manifest_builder capacity dispute \
      --spec=dispute.json \
      --norito-out=dispute.to \
      --base64-out=dispute.b64 \
@@ -84,7 +84,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 1. **猶予期間:** 失効が迫っていることをプロバイダーに通知し、ポリシーで許される場合は pin されたデータの退避を許可します。
 2. **`ProviderAdmissionRevocationV1` の生成:**
-   - 承認済みの理由で `sorafs_manifest_stub provider-admission revoke` を使用します。
+   - 承認済みの理由で `sorafs_manifest_builder provider-admission revoke` を使用します。
    - 署名と失効 digest を検証します。
 3. **失効の公開:**
    - 失効リクエストを Torii に送信します。
@@ -99,7 +99,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 ## 6. 参考資料
 
-- `sorafs_manifest_stub capacity dispute --help`
+- `sorafs_manifest_builder capacity dispute --help`
 - `docs/source/sorafs/storage_capacity_marketplace.md` (紛争セクション)
 - `docs/source/sorafs/provider_admission_policy.md` (失効ワークフロー)
 - 監視ダッシュボード: `SoraFS / Capacity Providers`

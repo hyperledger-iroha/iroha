@@ -145,12 +145,12 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
 ```
 ```
 
-Le manifest stub reflète les mêmes données, ce qui est pratique pour scripter la sélection de
+Le manifest builder reflète les mêmes données, ce qui est pratique pour scripter la sélection de
 `--chunker-profile-id` dans les pipelines. Les deux CLIs de chunk store acceptent aussi la forme de handle canonique
 (`--profile=sorafs.sf1@1.0.0`) afin que les scripts de build évitent de coder en dur des IDs numériques :
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- --list-chunker-profiles
+$ cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- --list-chunker-profiles
 [
   {
     "פרופיל_מזהה": 1,
@@ -216,4 +216,4 @@ supplémentaires pour la transition mais ne doivent pas remplacer le digest cano
   דרך les tests fournis.
 * `chunker_registry::lookup_by_profile` מאשרים que les paramètres du descripteur
   כתב à `ChunkProfile::DEFAULT` pour éviter toute divergence accidentelle.
-* מוצרי מניפסטים לפי `iroha app sorafs toolkit pack` ו-`sorafs_manifest_stub` כוללים את הרשמה.
+* מוצרי מניפסטים לפי `iroha app sorafs toolkit pack` ו-`sorafs_manifest_builder` כוללים את הרשמה.

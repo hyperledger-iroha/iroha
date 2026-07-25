@@ -37,7 +37,7 @@ SoraFS آرکیٹیکچر آر ایف سی میں بیان کردہ سطح او�
 ## داخلہ بہاؤ
 
 1. ** تجویز کی تشکیل **
-   - CLI: `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission proposal ...` شامل کریں
+   - CLI: `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal ...` شامل کریں
      `ProviderAdmissionProposalV1` + تصدیقی بنڈل تیار کرنا۔
    - توثیق: مطلوبہ فیلڈز ، اسٹیک> 0 ، `profile_id` میں کیننیکل چنکر ہینڈل کی ضمانت دیں۔
 2. ** گورننس کی توثیق **
@@ -55,7 +55,7 @@ SoraFS آرکیٹیکچر آر ایف سی میں بیان کردہ سطح او�
 ## نفاذ کے کام| علاقہ | ٹاسک | مالک (زبانیں) | حیثیت |
 | ------ | -------- | ---------- | -------- |
 | اسکیم | `ProviderAdmissionProposalV1` ، `ProviderAdmissionEnvelopeV1` ، `EndpointAttestationV1` (Norito) `crates/sorafs_manifest/src/provider_admission.rs` پر سیٹ کریں۔ توثیق کے مددگاروں کے ساتھ `sorafs_manifest::provider_admission` میں نافذ کیا گیا ہے اسٹوریج / گورننس | مکمل |
-| سی ایل آئی ٹولز | `sorafs_manifest_stub` کو سب کامنڈس کے ساتھ بڑھاؤ: `provider-admission proposal` ، `provider-admission sign` ، `provider-admission verify`۔ | ٹولنگ ڈبلیو جی | مکمل |
+| سی ایل آئی ٹولز | `sorafs_manifest_builder` کو سب کامنڈس کے ساتھ بڑھاؤ: `provider-admission proposal` ، `provider-admission sign` ، `provider-admission verify`۔ | ٹولنگ ڈبلیو جی | مکمل |
 
 سی ایل آئی فلو اب انٹرمیڈیٹ سرٹیفکیٹ بنڈل (`--endpoint-attestation-intermediate`) ، مسائل کو قبول کرتا ہے
 تجویز/لفافہ کیننیکل بائٹس اور `sign`/`verify` کے دوران بورڈ کے دستخطوں کی توثیق کرتا ہے۔ آپریٹرز کر سکتے ہیں
@@ -64,7 +64,7 @@ SoraFS آرکیٹیکچر آر ایف سی میں بیان کردہ سطح او�
 
 ### سی ایل آئی حوالہ
 
-`cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission ...` کے ذریعے ہر کمانڈ پر عمل کریں۔- `proposal`
+`cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission ...` کے ذریعے ہر کمانڈ پر عمل کریں۔- `proposal`
   - مطلوبہ جھنڈے: `--provider-id=<hex32>` ، `--chunker-profile=<namespace.name@semver>` ،
     `--stake-pool-id=<hex32>` ، `--stake-amount=<amount>` ، `--advert-key=<hex32>` ،
     `--jurisdiction-code=<ISO3166-1>` ، اور کم از کم ایک `--endpoint=<kind:host>`۔
@@ -109,7 +109,7 @@ SoraFS آرکیٹیکچر آر ایف سی میں بیان کردہ سطح او�
    `--retention-epoch` میں اضافہ اور ضرورت کے مطابق حصص/اختتامی مقامات کو اپ ڈیٹ کرنا۔
 2. عمل کریں
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission \
+   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -129,7 +129,7 @@ SoraFS آرکیٹیکچر آر ایف سی میں بیان کردہ سطح او�
 #### ہنگامی منسوخی
 1. سمجھوتہ کرنے والے لفافے کی شناخت کریں اور منسوخیاں جاری کریں:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission \
+   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \

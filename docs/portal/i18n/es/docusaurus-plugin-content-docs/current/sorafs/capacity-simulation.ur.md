@@ -19,7 +19,7 @@ descripción: accesorios reproducibles, exportaciones Prometheus, tableros de in
 یہ صفحہ `docs/source/sorafs/runbooks/sorafs_capacity_simulation.md` کی آئینہ دار ہے۔ جب تک پرانا Sphinx دستاویزی مجموعہ مکمل طور پر منتقل نہیں ہو جاتا دونوں نقول کو ہم آہنگ رکھیں۔
 :::
 
-یہ رن بُک وضاحت کرتی ہے کہ SF-2c کپیسٹی مارکیٹ پلیس سمیولیشن کِٹ کیسے چلائیں اور حاصل شدہ میٹرکس کیسے دیکھیں۔ یہ `docs/examples/sorafs_capacity_simulation/` میں موجود accesorios deterministas کے ذریعے cuota مذاکرات، conmutación por error ہینڈلنگ اور remediación de corte کو de extremo a extremo y کرتی ہے۔ Cargas útiles کپیسٹی اب بھی `sorafs_manifest_stub capacity` استعمال کرتے ہیں؛ manifiesto/CAR پیکجنگ کے لیے `iroha app sorafs toolkit pack` استعمال کریں۔
+یہ رن بُک وضاحت کرتی ہے کہ SF-2c کپیسٹی مارکیٹ پلیس سمیولیشن کِٹ کیسے چلائیں اور حاصل شدہ میٹرکس کیسے دیکھیں۔ یہ `docs/examples/sorafs_capacity_simulation/` میں موجود accesorios deterministas کے ذریعے cuota مذاکرات، conmutación por error ہینڈلنگ اور remediación de corte کو de extremo a extremo y کرتی ہے۔ Cargas útiles کپیسٹی اب بھی `sorafs_manifest_builder capacity` استعمال کرتے ہیں؛ manifiesto/CAR پیکجنگ کے لیے `iroha app sorafs toolkit pack` استعمال کریں۔
 
 ## 1. CLI آرٹی فیکٹس تیار کریں
 
@@ -28,7 +28,7 @@ cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./run_cli.sh ./artifacts
 ```
 
-`run_cli.sh`, `sorafs_manifest_stub capacity` incluye cargas útiles Norito, blobs base64, cuerpos de solicitud Torii y resúmenes JSON. برائے:
+`run_cli.sh`, `sorafs_manifest_builder capacity` incluye cargas útiles Norito, blobs base64, cuerpos de solicitud Torii y resúmenes JSON. برائے:
 
 - cuota مذاکرات والے منظرنامے میں شریک تین proveedores کی declaraciones۔
 - Orden de replicación, manifiesto por etapas y proveedores de datos.

@@ -125,7 +125,7 @@ groups:
    - `iroha app sorafs providers list` ን ያሂዱ እና የታወቁት ችሎታዎች የማባዛት መስፈርቶች ጋር የሚዛመዱ መሆናቸውን ያረጋግጡ።
    - የጊቢ እና የPoR ስኬትን ለማረጋገጥ የ`torii_sorafs_capacity_*` መለኪያዎችን ያረጋግጡ።
 3. ** ማባዛትን እንደገና መድቡ ***
-   - backlog slack (`stat="avg"`) ከ5 epochs በታች ሲወርድ በ`sorafs_manifest_stub capacity replication-order` በኩል አዲስ ትዕዛዞችን ያቅርቡ (ማኒፌስት/CAR ማሸጊያ I18NI0000075X ይጠቀማል)።
+   - backlog slack (`stat="avg"`) ከ5 epochs በታች ሲወርድ በ`sorafs_manifest_builder capacity replication-order` በኩል አዲስ ትዕዛዞችን ያቅርቡ (ማኒፌስት/CAR ማሸጊያ I18NI0000075X ይጠቀማል)።
    - ተለዋጭ ስሞች የነቃ አንጸባራቂ ማሰሪያዎች ከሌሉ ለአስተዳደር ያሳውቁ (`torii_sorafs_registry_aliases_total` ሳይታሰብ ይወድቃል)።
 4. **የሰነድ ውጤት**
    - በSoraFS ኦፕሬሽኖች ምዝግብ ማስታወሻዎች በጊዜ ማህተም እና በተጎዱ አንጸባራቂ ምግቦች ውስጥ የአደጋ ማስታወሻዎችን ይመዝግቡ።

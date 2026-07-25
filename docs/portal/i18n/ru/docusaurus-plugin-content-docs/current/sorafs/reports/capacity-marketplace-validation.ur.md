@@ -63,7 +63,7 @@ cargo test -p sorafs_car --features cli --test capacity_cli
 python3 scripts/telemetry/capacity_reconcile.py --snapshot <state.json> --ledger <ledger.ndjson> --warn-only
 ```
 
-Операторы могут использовать `sorafs_manifest_stub capacity {declaration,dispute}` для адаптации полезных данных/запросов на выяснение споров и генерировать данные для создания JSON/Norito байты и билет управления, архив и архив.
+Операторы могут использовать `sorafs_manifest_builder capacity {declaration,dispute}` для адаптации полезных данных/запросов на выяснение споров и генерировать данные для создания JSON/Norito байты и билет управления, архив и архив.
 
 ## Артефакты подписания
 

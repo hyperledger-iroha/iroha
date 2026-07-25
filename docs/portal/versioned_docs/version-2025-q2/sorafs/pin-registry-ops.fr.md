@@ -116,7 +116,7 @@ groups:
    - Exécutez `iroha app sorafs providers list` et vérifiez que les fonctionnalités annoncées correspondent aux exigences de réplication.
    - Vérifiez les jauges `torii_sorafs_capacity_*` pour confirmer le succès du GiB et du PoR provisionnés.
 3. **Réaffecter la réplication**
-   - Émettre de nouvelles commandes via `sorafs_manifest_stub capacity replication-order` lorsque le retard du carnet de commandes (`stat="avg"`) tombe en dessous de 5 époques (l'emballage manifeste/CAR utilise `iroha app sorafs toolkit pack`).
+   - Émettre de nouvelles commandes via `sorafs_manifest_builder capacity replication-order` lorsque le retard du carnet de commandes (`stat="avg"`) tombe en dessous de 5 époques (l'emballage manifeste/CAR utilise `iroha app sorafs toolkit pack`).
    - Avertir la gouvernance si les alias manquent de liaisons de manifeste actives (`torii_sorafs_registry_aliases_total` tombe de manière inattendue).
 4. **Résultat du document**
    - Enregistrez les notes d'incident dans le journal des opérations SoraFS avec des horodatages et des résumés de manifeste concernés.

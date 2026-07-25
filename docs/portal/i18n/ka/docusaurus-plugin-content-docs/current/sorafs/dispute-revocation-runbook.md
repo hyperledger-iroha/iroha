@@ -36,7 +36,7 @@ translation_last_reviewed: 2026-02-07
 
 ## 3. დავის შეტანა
 
-1. შექმენით სპეციფიკაცია JSON `sorafs_manifest_stub capacity dispute`-ისთვის:
+1. შექმენით სპეციფიკაცია JSON `sorafs_manifest_builder capacity dispute`-ისთვის:
 
    ```json
    {
@@ -59,7 +59,7 @@ translation_last_reviewed: 2026-02-07
 2. გაუშვით CLI:
 
    ```bash
-   sorafs_manifest_stub capacity dispute \
+   sorafs_manifest_builder capacity dispute \
      --spec=dispute.json \
      --norito-out=dispute.to \
      --base64-out=dispute.b64 \
@@ -76,7 +76,7 @@ translation_last_reviewed: 2026-02-07
 
 1. **Grace window:** აცნობეთ პროვაიდერს მოსალოდნელი გაუქმების შესახებ; ნებადართულია ჩამაგრებული მონაცემების ევაკუაცია, როდესაც პოლიტიკა ნებადართულია.
 2. **შექმენით `ProviderAdmissionRevocationV1`:**
-   - გამოიყენეთ `sorafs_manifest_stub provider-admission revoke` დამტკიცებული მიზეზით.
+   - გამოიყენეთ `sorafs_manifest_builder provider-admission revoke` დამტკიცებული მიზეზით.
    - გადაამოწმეთ ხელმოწერები და გაუქმების დაიჯესტი.
 3. **გამოაქვეყნეთ გაუქმება:**
    - გაგზავნეთ გაუქმების მოთხოვნა Torii-ზე.
@@ -91,7 +91,7 @@ translation_last_reviewed: 2026-02-07
 
 ## 6. საცნობარო მასალები
 
-- `sorafs_manifest_stub capacity dispute --help`
+- `sorafs_manifest_builder capacity dispute --help`
 - `docs/source/sorafs/storage_capacity_marketplace.md` (დავების განყოფილება)
 - `docs/source/sorafs/provider_admission_policy.md` (გაუქმების სამუშაო პროცესი)
 - დაკვირვებადობის დაფა: `SoraFS / Capacity Providers`

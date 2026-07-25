@@ -68,11 +68,11 @@ cargo test -p sorafs_chunker streaming_backpressure_fuzz_matches_batch
 ## 3. Создайте и подпишите манифест
 
 Оберните план фрагмента, псевдонимы и подписи управления в манифест, используя
-`sorafs-manifest-stub`. Команда ниже демонстрирует однофайловую полезную нагрузку; пройти
+`sorafs-manifest-builder`. Команда ниже демонстрирует однофайловую полезную нагрузку; пройти
 путь к каталогу для упаковки дерева (CLI просматривает его лексикографически).
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
+cargo run -p sorafs_manifest --bin sorafs-manifest-builder -- \
   /tmp/docs.txt \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --manifest-out=/tmp/docs.manifest \

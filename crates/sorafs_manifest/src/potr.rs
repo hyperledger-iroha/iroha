@@ -1,14 +1,22 @@
 //! Proof-of-Timed Retrieval (PoTR) receipt schemas.
 
-use iroha_crypto::{Algorithm, PublicKey, Signature};
+use iroha_crypto::{Algorithm, KeyPair, PublicKey, Signature};
 use norito::derive::{JsonSerialize, NoritoDeserialize, NoritoSerialize};
 use soranet_pq::MlDsaSuite;
 use thiserror::Error;
 
-use crate::proof_stream::ProofStreamTier;
+use crate::{AdmissionRecord, proof_stream::ProofStreamTier};
 
 /// Current PoTR receipt schema version.
 pub const POTR_RECEIPT_VERSION_V1: u8 = 1;
+/// Domain separator prepended to canonical unsigned receipt bytes before signing.
+pub const POTR_RECEIPT_SIGNATURE_DOMAIN_V1: &[u8] = b"sorafs.potr.receipt.signature.v1\0";
+/// Domain separator used to derive the authoritative signed-receipt identity.
+pub const POTR_RECEIPT_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.potr.receipt.digest.v1\0";
+/// Domain separator used to derive the authoritative PoTR request-scope identity.
+pub const POTR_REQUEST_SCOPE_DOMAIN_V1: &[u8] = b"sorafs.potr.request-scope.v1\0";
+/// Maximum UTF-8 byte length accepted for an optional receipt note.
+pub const POTR_RECEIPT_MAX_NOTE_BYTES_V1: usize = 1_024;
 
 /// Receipt emitted after completing a timed retrieval probe.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
@@ -78,17 +86,17 @@ impl PotrSignatureV1 {
                     });
                 }
             }
-            PotrSignatureAlgorithm::Dilithium3 => {
+            PotrSignatureAlgorithm::MlDsa65 => {
                 if self.public_key.is_empty() || self.signature.is_empty() {
                     return Err(PotrReceiptValidationError::InvalidSignature {
                         context,
-                        reason: "dilithium3 signatures must include non-empty public key and signature buffers",
+                        reason: "ML-DSA-65 signatures must include non-empty public key and signature buffers",
                     });
                 }
                 if crate::inert_bytes(&self.public_key) || crate::inert_bytes(&self.signature) {
                     return Err(PotrReceiptValidationError::InvalidSignature {
                         context,
-                        reason: "dilithium3 public key and signature material must not be all zero",
+                        reason: "ML-DSA-65 public key and signature material must not be all zero",
                     });
                 }
                 let suite = MlDsaSuite::MlDsa65;
@@ -97,7 +105,7 @@ impl PotrSignatureV1 {
                 {
                     return Err(PotrReceiptValidationError::InvalidSignature {
                         context,
-                        reason: "dilithium3 signatures require ML-DSA-65 public key and signature lengths",
+                        reason: "ML-DSA-65 signatures require exact public key and signature lengths",
                     });
                 }
             }
@@ -142,7 +150,7 @@ impl PotrSignatureV1 {
                 )?;
                 Algorithm::Ed25519
             }
-            PotrSignatureAlgorithm::Dilithium3 => Algorithm::MlDsa,
+            PotrSignatureAlgorithm::MlDsa65 => Algorithm::MlDsa,
         };
         let public_key = PublicKey::from_bytes(algorithm, &self.public_key).map_err(|_| {
             PotrReceiptValidationError::InvalidSignature {
@@ -209,30 +217,38 @@ pub enum PotrSignatureAlgorithm {
     /// Ed25519 attestation (current default).
     #[norito(rename = "ed25519")]
     Ed25519 = 1,
-    /// ML-DSA (Dilithium3) attestation.
-    #[norito(rename = "dilithium3")]
-    Dilithium3 = 2,
+    /// ML-DSA-65 provider attestation.
+    #[norito(rename = "ml_dsa_65")]
+    MlDsa65 = 2,
 }
 
 impl norito::json::JsonSerialize for PotrSignatureAlgorithm {
     fn json_serialize(&self, out: &mut String) {
         let label = match self {
             PotrSignatureAlgorithm::Ed25519 => "ed25519",
-            PotrSignatureAlgorithm::Dilithium3 => "dilithium3",
+            PotrSignatureAlgorithm::MlDsa65 => "ml_dsa_65",
         };
         norito::json::write_json_string(label, out);
     }
 }
 
 impl PotrReceiptV1 {
-    fn signing_payload_bytes(&self) -> Result<Vec<u8>, PotrReceiptValidationError> {
+    /// Return the exact domain-separated bytes covered by both receipt signatures.
+    pub fn signing_payload_bytes(&self) -> Result<Vec<u8>, PotrReceiptValidationError> {
         let mut unsigned = self.clone();
         unsigned.gateway_signature = None;
         unsigned.provider_signature = None;
-        norito::to_bytes(&unsigned).map_err(|_| PotrReceiptValidationError::InvalidSignature {
-            context: "receipt",
-            reason: "failed to encode receipt for signature verification",
-        })
+        let canonical = norito::to_bytes(&unsigned).map_err(|_| {
+            PotrReceiptValidationError::InvalidSignature {
+                context: "receipt",
+                reason: "failed to encode receipt for signature verification",
+            }
+        })?;
+        let mut payload =
+            Vec::with_capacity(POTR_RECEIPT_SIGNATURE_DOMAIN_V1.len() + canonical.len());
+        payload.extend_from_slice(POTR_RECEIPT_SIGNATURE_DOMAIN_V1);
+        payload.extend_from_slice(&canonical);
+        Ok(payload)
     }
 
     /// Validates invariants required for a PoTR receipt.
@@ -250,6 +266,9 @@ impl PotrReceiptV1 {
         }
         if self.deadline_ms == 0 {
             return Err(PotrReceiptValidationError::ZeroDeadline);
+        }
+        if self.requested_at_ms == 0 || self.responded_at_ms == 0 || self.recorded_at_ms == 0 {
+            return Err(PotrReceiptValidationError::ZeroTimestamp);
         }
         if self.range_start > self.range_end {
             return Err(PotrReceiptValidationError::RangeStartExceedsEnd {
@@ -275,6 +294,13 @@ impl PotrReceiptV1 {
                 deadline_ms: self.deadline_ms,
             });
         }
+        if matches!(self.status, PotrStatus::MissedDeadline) && self.latency_ms <= self.deadline_ms
+        {
+            return Err(PotrReceiptValidationError::MissedDeadlineWithoutBreach {
+                latency_ms: self.latency_ms,
+                deadline_ms: self.deadline_ms,
+            });
+        }
         let observed_latency = self.responded_at_ms.saturating_sub(self.requested_at_ms);
         if observed_latency <= u64::from(u32::MAX) {
             let observed_ms = observed_latency as u32;
@@ -286,17 +312,133 @@ impl PotrReceiptV1 {
                 });
             }
         }
-        if self.gateway_signature.is_some() || self.provider_signature.is_some() {
-            let payload = self.signing_payload_bytes()?;
-            if let Some(signature) = self.gateway_signature.as_ref() {
-                signature.verify("gateway", &payload)?;
-            }
-            if let Some(signature) = self.provider_signature.as_ref() {
-                signature.verify("provider", &payload)?;
-            }
+        if self
+            .request_id
+            .is_none_or(|request_id| request_id.iter().all(|&byte| byte == 0))
+        {
+            return Err(PotrReceiptValidationError::MissingRequestId);
+        }
+        if self
+            .trace_id
+            .is_some_and(|trace_id| trace_id.iter().all(|&byte| byte == 0))
+        {
+            return Err(PotrReceiptValidationError::InvalidTraceId);
+        }
+        if self
+            .note
+            .as_ref()
+            .is_some_and(|note| note.len() > POTR_RECEIPT_MAX_NOTE_BYTES_V1)
+        {
+            return Err(PotrReceiptValidationError::NoteTooLong);
+        }
+        let gateway_signature = self
+            .gateway_signature
+            .as_ref()
+            .ok_or(PotrReceiptValidationError::MissingGatewaySignature)?;
+        if gateway_signature.algorithm != PotrSignatureAlgorithm::Ed25519 {
+            return Err(PotrReceiptValidationError::InvalidGatewayAlgorithm);
+        }
+        let provider_signature = self
+            .provider_signature
+            .as_ref()
+            .ok_or(PotrReceiptValidationError::MissingProviderSignature)?;
+        if provider_signature.algorithm != PotrSignatureAlgorithm::MlDsa65 {
+            return Err(PotrReceiptValidationError::InvalidProviderAlgorithm);
+        }
+        let payload = self.signing_payload_bytes()?;
+        gateway_signature.verify("gateway", &payload)?;
+        provider_signature.verify("provider", &payload)?;
+        Ok(())
+    }
+
+    /// Validate both signers against runtime-governed key material.
+    ///
+    /// Self-advertised receipt keys are never sufficient for production
+    /// acceptance. The provider key must come from a council-verified admission
+    /// capability and the gateway key must match the configured gateway trust
+    /// anchor.
+    pub fn validate_with_governed_keys(
+        &self,
+        gateway_public_key: &[u8; 32],
+        admission: &AdmissionRecord,
+    ) -> Result<(), PotrReceiptValidationError> {
+        self.validate()?;
+        if !admission.is_council_verified() {
+            return Err(PotrReceiptValidationError::UntrustedProviderAdmission);
+        }
+        if admission.provider_id() != &self.provider_id {
+            return Err(PotrReceiptValidationError::ProviderAdmissionMismatch);
+        }
+        let requested_at_unix = self.requested_at_ms / 1_000;
+        if requested_at_unix < admission.envelope().issued_at
+            || requested_at_unix > admission.envelope().retention_epoch
+        {
+            return Err(PotrReceiptValidationError::ProviderAdmissionInactive);
+        }
+        let gateway_signature = self
+            .gateway_signature
+            .as_ref()
+            .ok_or(PotrReceiptValidationError::MissingGatewaySignature)?;
+        if gateway_signature.public_key.as_slice() != gateway_public_key {
+            return Err(PotrReceiptValidationError::GatewayKeyMismatch);
+        }
+        let governed_provider_key = admission
+            .potr_mldsa_key()
+            .ok_or(PotrReceiptValidationError::ProviderKeyUnavailable)?;
+        let provider_signature = self
+            .provider_signature
+            .as_ref()
+            .ok_or(PotrReceiptValidationError::MissingProviderSignature)?;
+        if provider_signature.public_key.as_slice() != governed_provider_key {
+            return Err(PotrReceiptValidationError::ProviderKeyMismatch);
         }
         Ok(())
     }
+
+    /// Return the exact canonical bytes persisted and exported for this receipt.
+    pub fn signed_receipt_bytes(&self) -> Result<Vec<u8>, PotrReceiptValidationError> {
+        self.validate()?;
+        norito::to_bytes(self).map_err(|_| PotrReceiptValidationError::CanonicalEncoding)
+    }
+
+    /// Derive the authoritative exactly-once identity of the final signed receipt.
+    pub fn signed_receipt_digest(&self) -> Result<[u8; 32], PotrReceiptValidationError> {
+        let canonical = self.signed_receipt_bytes()?;
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(POTR_RECEIPT_DIGEST_DOMAIN_V1);
+        hasher.update(&canonical);
+        Ok(*hasher.finalize().as_bytes())
+    }
+
+    /// Return the stable request scope used to detect reordered or conflicting replay.
+    pub fn request_scope_digest(&self) -> Result<[u8; 32], PotrReceiptValidationError> {
+        let request_id = self
+            .request_id
+            .ok_or(PotrReceiptValidationError::MissingRequestId)?;
+        Ok(potr_request_scope_digest_v1(
+            self.manifest_digest,
+            self.provider_id,
+            request_id,
+        ))
+    }
+}
+
+/// Derive the authoritative exactly-once identity for one PoTR request scope.
+///
+/// Gateways can compute this identity before a receipt exists, while
+/// validators recompute the same bytes from the final signed receipt.
+#[must_use]
+pub fn potr_request_scope_digest_v1(
+    manifest_digest: [u8; 32],
+    provider_id: [u8; 32],
+    request_id: [u8; 16],
+) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(POTR_REQUEST_SCOPE_DOMAIN_V1);
+    hasher.update(&manifest_digest);
+    hasher.update(&provider_id);
+    hasher.update(&request_id);
+    *hasher.finalize().as_bytes()
 }
 
 /// Outcome classification for PoTR receipts.
@@ -327,6 +469,71 @@ impl norito::json::JsonSerialize for PotrStatus {
     }
 }
 
+/// Attach both mandatory signatures to a PoTR receipt using the v1 algorithms.
+pub fn sign_potr_receipt_v1(
+    mut receipt: PotrReceiptV1,
+    gateway_key: &KeyPair,
+    provider_key: &KeyPair,
+) -> Result<PotrReceiptV1, PotrReceiptSigningError> {
+    let (gateway_algorithm, gateway_public_key) = gateway_key
+        .public_key()
+        .try_to_bytes()
+        .map_err(|error| PotrReceiptSigningError::KeyEncoding(error.to_string()))?;
+    if gateway_algorithm != Algorithm::Ed25519 || gateway_public_key.len() != 32 {
+        return Err(PotrReceiptSigningError::GatewayAlgorithm);
+    }
+    let (provider_algorithm, provider_public_key) = provider_key
+        .public_key()
+        .try_to_bytes()
+        .map_err(|error| PotrReceiptSigningError::KeyEncoding(error.to_string()))?;
+    if provider_algorithm != Algorithm::MlDsa {
+        return Err(PotrReceiptSigningError::ProviderAlgorithm);
+    }
+    receipt.gateway_signature = None;
+    receipt.provider_signature = None;
+    let payload = receipt
+        .signing_payload_bytes()
+        .map_err(PotrReceiptSigningError::Receipt)?;
+    let gateway_signature = Signature::try_new(gateway_key.private_key(), &payload)
+        .map_err(|error| PotrReceiptSigningError::Signing(error.to_string()))?;
+    let provider_signature = Signature::try_new(provider_key.private_key(), &payload)
+        .map_err(|error| PotrReceiptSigningError::Signing(error.to_string()))?;
+    receipt.gateway_signature = Some(PotrSignatureV1 {
+        algorithm: PotrSignatureAlgorithm::Ed25519,
+        public_key: gateway_public_key.to_vec(),
+        signature: gateway_signature.payload().to_vec(),
+    });
+    receipt.provider_signature = Some(PotrSignatureV1 {
+        algorithm: PotrSignatureAlgorithm::MlDsa65,
+        public_key: provider_public_key.to_vec(),
+        signature: provider_signature.payload().to_vec(),
+    });
+    receipt
+        .validate()
+        .map_err(PotrReceiptSigningError::Receipt)?;
+    Ok(receipt)
+}
+
+/// Errors while attaching the mandatory v1 PoTR signatures.
+#[derive(Debug, Error)]
+pub enum PotrReceiptSigningError {
+    /// Gateway keys must use Ed25519.
+    #[error("PoTR gateway signing key must use Ed25519")]
+    GatewayAlgorithm,
+    /// Provider keys must use ML-DSA-65.
+    #[error("PoTR provider signing key must use ML-DSA-65")]
+    ProviderAlgorithm,
+    /// Public key encoding failed.
+    #[error("failed to encode PoTR signing key: {0}")]
+    KeyEncoding(String),
+    /// Signature generation failed.
+    #[error("failed to sign PoTR receipt: {0}")]
+    Signing(String),
+    /// The signed receipt failed canonical validation.
+    #[error("signed PoTR receipt failed validation: {0}")]
+    Receipt(#[source] PotrReceiptValidationError),
+}
+
 /// Validation errors for [`PotrReceiptV1`].
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum PotrReceiptValidationError {
@@ -338,6 +545,8 @@ pub enum PotrReceiptValidationError {
     InvalidProviderId,
     #[error("deadline must be greater than zero milliseconds")]
     ZeroDeadline,
+    #[error("PoTR receipt timestamps must be non-zero")]
+    ZeroTimestamp,
     #[error("range start {start} exceeds range end {end}")]
     RangeStartExceedsEnd { start: u64, end: u64 },
     #[error("response timestamp {responded_at_ms}ms precedes request {requested_at_ms}ms")]
@@ -352,8 +561,40 @@ pub enum PotrReceiptValidationError {
     },
     #[error("latency {latency_ms}ms exceeds success deadline {deadline_ms}ms")]
     LatencyExceedsDeadline { latency_ms: u32, deadline_ms: u32 },
+    #[error(
+        "missed-deadline receipt latency {latency_ms}ms does not exceed deadline {deadline_ms}ms"
+    )]
+    MissedDeadlineWithoutBreach { latency_ms: u32, deadline_ms: u32 },
     #[error("reported latency {latency_ms}ms diverges from observed {observed_ms}ms")]
     LatencyMismatch { latency_ms: u32, observed_ms: u64 },
+    #[error("PoTR receipt requires a non-zero request id")]
+    MissingRequestId,
+    #[error("PoTR trace id must be non-zero when present")]
+    InvalidTraceId,
+    #[error("PoTR receipt note exceeds the protocol byte limit")]
+    NoteTooLong,
+    #[error("PoTR receipt requires a gateway signature")]
+    MissingGatewaySignature,
+    #[error("PoTR gateway signature must use Ed25519")]
+    InvalidGatewayAlgorithm,
+    #[error("PoTR receipt requires a provider signature")]
+    MissingProviderSignature,
+    #[error("PoTR provider signature must use ML-DSA-65")]
+    InvalidProviderAlgorithm,
+    #[error("PoTR provider admission is not council verified")]
+    UntrustedProviderAdmission,
+    #[error("PoTR provider admission does not match the receipt")]
+    ProviderAdmissionMismatch,
+    #[error("PoTR provider admission was not active when the request was issued")]
+    ProviderAdmissionInactive,
+    #[error("PoTR gateway signer does not match the configured gateway key")]
+    GatewayKeyMismatch,
+    #[error("PoTR provider admission has no governed ML-DSA-65 capability")]
+    ProviderKeyUnavailable,
+    #[error("PoTR provider signer does not match the governed ML-DSA-65 key")]
+    ProviderKeyMismatch,
+    #[error("failed to encode the final signed PoTR receipt canonically")]
+    CanonicalEncoding,
     #[error("{context} signature invalid: {reason}")]
     InvalidSignature {
         context: &'static str,
@@ -378,7 +619,7 @@ mod tests {
         0xff, 0x7f,
     ];
 
-    fn base_receipt() -> PotrReceiptV1 {
+    fn unsigned_receipt() -> PotrReceiptV1 {
         PotrReceiptV1 {
             version: POTR_RECEIPT_VERSION_V1,
             manifest_digest: [0x11; 32],
@@ -398,6 +639,18 @@ mod tests {
             gateway_signature: None,
             provider_signature: None,
         }
+    }
+
+    fn base_receipt() -> PotrReceiptV1 {
+        let mut receipt = unsigned_receipt();
+        resign(&mut receipt);
+        receipt
+    }
+
+    fn resign(receipt: &mut PotrReceiptV1) {
+        receipt.gateway_signature =
+            Some(sign_receipt(receipt, &SigningKey::from_bytes(&[0x11; 32])));
+        receipt.provider_signature = Some(sign_receipt_mldsa(receipt, &[0x31; 32]));
     }
 
     fn sign_receipt(receipt: &PotrReceiptV1, signing_key: &SigningKey) -> PotrSignatureV1 {
@@ -422,7 +675,7 @@ mod tests {
             .expect("encode ML-DSA public key");
         assert_eq!(algorithm, Algorithm::MlDsa);
         PotrSignatureV1 {
-            algorithm: PotrSignatureAlgorithm::Dilithium3,
+            algorithm: PotrSignatureAlgorithm::MlDsa65,
             public_key: public_key.to_vec(),
             signature: signature.payload().to_vec(),
         }
@@ -461,6 +714,7 @@ mod tests {
         );
 
         receipt.status = PotrStatus::MissedDeadline;
+        resign(&mut receipt);
         assert_eq!(receipt.validate(), Ok(()));
     }
 
@@ -513,9 +767,9 @@ mod tests {
     }
 
     #[test]
-    fn gateway_signature_verifies_dilithium3() {
+    fn provider_signature_verifies_mldsa65() {
         let mut receipt = base_receipt();
-        receipt.gateway_signature = Some(sign_receipt_mldsa(&receipt, &[0x31; 32]));
+        receipt.provider_signature = Some(sign_receipt_mldsa(&receipt, &[0x32; 32]));
         assert_eq!(receipt.validate(), Ok(()));
     }
 
@@ -536,7 +790,7 @@ mod tests {
     }
 
     #[test]
-    fn gateway_signature_rejects_malformed_dilithium3_lengths() {
+    fn gateway_signature_rejects_malformed_mldsa65_lengths() {
         for label in ["short-public-key", "short-signature", "overlong-signature"] {
             let mut receipt = base_receipt();
             let mut signature = sign_receipt_mldsa(&receipt, &[0x32; 32]);
@@ -556,7 +810,7 @@ mod tests {
                 "overlong-signature" => signature.signature.push(0xA5),
                 _ => unreachable!("covered labels"),
             }
-            receipt.gateway_signature = Some(signature);
+            receipt.provider_signature = Some(signature);
 
             let Err(err) = receipt.validate() else {
                 panic!("{label} ML-DSA signature material must fail validation");
@@ -565,8 +819,8 @@ mod tests {
                 matches!(
                     &err,
                     PotrReceiptValidationError::InvalidSignature {
-                        context: "gateway",
-                        reason: "dilithium3 signatures require ML-DSA-65 public key and signature lengths",
+                        context: "provider",
+                        reason: "ML-DSA-65 signatures require exact public key and signature lengths",
                     }
                 ),
                 "{label} ML-DSA signature material produced unexpected error: {err}"
@@ -657,6 +911,60 @@ mod tests {
         assert_eq!(
             receipt.validate(),
             Err(PotrReceiptValidationError::InvalidProviderId)
+        );
+    }
+
+    #[test]
+    fn both_signatures_and_request_id_are_mandatory() {
+        let mut receipt = base_receipt();
+        receipt.gateway_signature = None;
+        assert_eq!(
+            receipt.validate(),
+            Err(PotrReceiptValidationError::MissingGatewaySignature)
+        );
+
+        let mut receipt = base_receipt();
+        receipt.provider_signature = None;
+        assert_eq!(
+            receipt.validate(),
+            Err(PotrReceiptValidationError::MissingProviderSignature)
+        );
+
+        let mut receipt = base_receipt();
+        receipt.request_id = None;
+        assert_eq!(
+            receipt.validate(),
+            Err(PotrReceiptValidationError::MissingRequestId)
+        );
+    }
+
+    #[test]
+    fn signed_digest_binds_both_signatures_and_request_scope_is_stable() {
+        let receipt = base_receipt();
+        let digest = receipt.signed_receipt_digest().expect("signed digest");
+        assert_ne!(digest, [0; 32]);
+        let scope = receipt.request_scope_digest().expect("request scope");
+        assert_eq!(
+            scope,
+            potr_request_scope_digest_v1(
+                receipt.manifest_digest,
+                receipt.provider_id,
+                receipt.request_id.expect("fixture request id"),
+            ),
+            "pre-receipt request-scope derivation must match the signed receipt"
+        );
+
+        let mut replay = receipt.clone();
+        replay.recorded_at_ms = replay.recorded_at_ms.saturating_add(1);
+        replay.gateway_signature =
+            Some(sign_receipt(&replay, &SigningKey::from_bytes(&[0x11; 32])));
+        replay.provider_signature = Some(sign_receipt_mldsa(&replay, &[0x31; 32]));
+        assert_eq!(replay.request_scope_digest().expect("request scope"), scope);
+        assert_ne!(
+            replay
+                .signed_receipt_digest()
+                .expect("changed signed digest"),
+            digest
         );
     }
 }

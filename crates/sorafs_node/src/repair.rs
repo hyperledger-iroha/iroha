@@ -9,7 +9,7 @@
 
 use std::{
     cmp::Reverse,
-    collections::{BTreeMap, HashMap, HashSet, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     fs, io,
     io::{Read, Write},
     path::{Path, PathBuf},
@@ -65,6 +65,7 @@ const DEFAULT_REPAIR_STORE_MAX_BYTES: u64 = 64 * 1024 * 1024;
 /// embedded `Vec<u8>` from turning the checkpoint byte cap into an allocation
 /// limit.
 const MAX_CANONICAL_REPAIR_SLASH_PROPOSAL_BYTES: usize = 16 * MAX_REPAIR_NOTES_BYTES;
+const REPAIR_REPORT_SOURCE_IDENTITY_DOMAIN_V1: &[u8] = b"sorafs.repair.report-source-identity.v1";
 const REPAIR_STORE_VERSION_V1: u8 = 1;
 const REPAIR_STORE_FILE_NAME: &str = "repair_state.to";
 const REPAIR_STORE_TMP_EXT: &str = "tmp";
@@ -269,6 +270,7 @@ impl RepairStoreSnapshot {
         )?;
 
         let mut tasks = BTreeMap::new();
+        let mut source_identities = BTreeSet::new();
         for task in self.tasks {
             let internal = task.into_internal(entry_limit, &escalation_policy)?;
             if internal.events.len() > entry_limit {
@@ -277,6 +279,11 @@ impl RepairStoreSnapshot {
                 )));
             }
             let key = internal.report.ticket_id.0.clone();
+            if !source_identities.insert(internal.source_identity) {
+                return Err(RepairStoreError::Other(format!(
+                    "duplicate repair source identity in checkpoint for task `{key}`"
+                )));
+            }
             if tasks.insert(key.clone(), internal).is_some() {
                 return Err(RepairStoreError::Other(format!(
                     "duplicate repair task `{key}` in checkpoint"
@@ -388,6 +395,7 @@ struct StoredAuditorNonce {
 
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 struct StoredRepairTask {
+    source_identity: [u8; 32],
     revision: u64,
     report: RepairReportV1,
     state: RepairTaskStateV1,
@@ -411,6 +419,7 @@ impl StoredRepairTask {
     fn from_internal(task: RepairTaskInternal) -> Result<Self, RepairStoreError> {
         let idempotency = StoredRepairTaskIdempotency::from_runtime(&task.idempotency)?;
         Ok(Self {
+            source_identity: task.source_identity,
             revision: task.revision,
             report: task.report,
             state: task.state,
@@ -439,6 +448,7 @@ impl StoredRepairTask {
             .idempotency
             .into_runtime(&self.report, DEFAULT_IDEMPOTENCY_CACHE_SIZE)?;
         let internal = RepairTaskInternal {
+            source_identity: self.source_identity,
             revision: self.revision,
             report: self.report,
             state: self.state,
@@ -1571,6 +1581,13 @@ impl RepairStore for FileRepairStore {
         let mut guard = self.state.write().map_err(|_| repair_store_poisoned())?;
         ensure_repair_state_healthy(&guard)?;
         let key = task.report.ticket_id.0.clone();
+        if let Some(existing) = guard
+            .tasks
+            .values()
+            .find(|existing| existing.source_identity == task.source_identity)
+        {
+            return Ok(RepairStoreInsertResult::Existing(existing.clone()));
+        }
         if let Some(existing) = guard.tasks.get(&key) {
             return Ok(RepairStoreInsertResult::Existing(existing.clone()));
         }
@@ -1624,6 +1641,11 @@ impl RepairStore for FileRepairStore {
             return Err(RepairStoreError::Conflict {
                 ticket_id: ticket_id.to_string(),
             });
+        }
+        if existing.source_identity != task.source_identity {
+            return Err(RepairStoreError::Other(format!(
+                "repair task `{ticket_id}` cannot change its source identity"
+            )));
         }
         if existing.slash_proposal_stage == Some(RepairSlashProposalStage::Submitted)
             && task.slash_proposal_stage != Some(RepairSlashProposalStage::Submitted)
@@ -2226,11 +2248,49 @@ impl RepairManager {
         Ok(self.enqueue_report_with_event(report)?.record)
     }
 
+    /// Enqueue a repair report exactly once for a stable subsystem event or
+    /// signed-receipt identity.
+    ///
+    /// An exact replay returns the original task record. Reusing the source
+    /// identity for a different canonical report fails closed even when the
+    /// conflicting report carries a different ticket identifier.
+    pub fn enqueue_repair_report_idempotent(
+        &self,
+        source_identity: [u8; 32],
+        report: RepairReportV1,
+    ) -> Result<RepairTaskRecordV1, RepairSchedulerError> {
+        Ok(self
+            .enqueue_repair_report_idempotent_with_event(source_identity, report)?
+            .record)
+    }
+
+    /// Enqueue an exactly-once subsystem report and return its local projection
+    /// update for event publication.
+    pub fn enqueue_repair_report_idempotent_with_event(
+        &self,
+        source_identity: [u8; 32],
+        report: RepairReportV1,
+    ) -> Result<RepairTaskUpdate, RepairSchedulerError> {
+        self.enqueue_report_with_source_identity_and_event(source_identity, report)
+    }
+
     /// Enqueue a repair report submitted by an auditor, returning any emitted event.
     pub fn enqueue_report_with_event(
         &self,
         report: RepairReportV1,
     ) -> Result<RepairTaskUpdate, RepairSchedulerError> {
+        let source_identity = repair_report_source_identity(&report)?;
+        self.enqueue_report_with_source_identity_and_event(source_identity, report)
+    }
+
+    fn enqueue_report_with_source_identity_and_event(
+        &self,
+        source_identity: [u8; 32],
+        report: RepairReportV1,
+    ) -> Result<RepairTaskUpdate, RepairSchedulerError> {
+        if source_identity == [0; 32] {
+            return Err(RepairSchedulerError::InvalidSourceIdentity);
+        }
         report
             .validate()
             .map_err(RepairSchedulerError::InvalidReport)?;
@@ -2265,6 +2325,7 @@ impl RepairManager {
             sla_deadline_unix: Some(sla_deadline),
         });
         let mut internal = RepairTaskInternal {
+            source_identity,
             report,
             state,
             sla_deadline_unix: Some(sla_deadline),
@@ -2297,7 +2358,15 @@ impl RepairManager {
         let (record, event) = match insert {
             RepairStoreInsertResult::Inserted(inserted) => (inserted.to_record(), event),
             RepairStoreInsertResult::Existing(existing) => {
+                if existing.source_identity == source_identity
+                    && existing.report != canonical_report
+                {
+                    return Err(RepairSchedulerError::SourceIdentityConflict { source_identity });
+                }
                 if existing.report != canonical_report {
+                    return Err(RepairSchedulerError::DuplicateTicket { ticket_id });
+                }
+                if existing.source_identity != source_identity {
                     return Err(RepairSchedulerError::DuplicateTicket { ticket_id });
                 }
                 return Ok(RepairTaskUpdate {
@@ -4232,6 +4301,9 @@ fn fail_idempotency_has_evidence(
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RepairTaskInternal {
+    /// Stable, non-zero identity of the subsystem event or signed receipt that
+    /// originated this task.
+    source_identity: [u8; 32],
     /// Monotonic revision used for compare-and-set updates.
     revision: u64,
     /// Parsed report payload.
@@ -4398,6 +4470,12 @@ impl RepairTaskInternal {
         entry_limit: usize,
         escalation_policy: &RepairEscalationPolicy,
     ) -> Result<(), RepairStoreError> {
+        if self.source_identity == [0; 32] {
+            return Err(RepairStoreError::Other(format!(
+                "repair task `{}` has a zero source identity",
+                self.report.ticket_id
+            )));
+        }
         if self.events.len() > entry_limit
             || self.idempotency.claim.entries.len() > entry_limit
             || self.idempotency.heartbeat.entries.len() > entry_limit
@@ -5364,6 +5442,26 @@ fn repair_encoding_error(payload: &str, err: impl std::fmt::Display) -> RepairSc
     )))
 }
 
+fn repair_report_source_identity(
+    report: &RepairReportV1,
+) -> Result<[u8; 32], RepairSchedulerError> {
+    let canonical = norito::to_bytes(report)
+        .map_err(|error| repair_encoding_error("report source identity", error))?;
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(REPAIR_REPORT_SOURCE_IDENTITY_DOMAIN_V1);
+    hasher.update(
+        &u64::try_from(canonical.len())
+            .map_err(|_| {
+                RepairSchedulerError::Store(RepairStoreError::Other(
+                    "repair report length does not fit u64".to_owned(),
+                ))
+            })?
+            .to_le_bytes(),
+    );
+    hasher.update(&canonical);
+    Ok(*hasher.finalize().as_bytes())
+}
+
 impl RepairManager {
     /// Returns the configured claim TTL (seconds).
     #[must_use]
@@ -5387,6 +5485,17 @@ impl Default for RepairManager {
 /// Errors returned by [`RepairManager`].
 #[derive(Debug, Error)]
 pub enum RepairSchedulerError {
+    /// The originating subsystem did not supply a usable immutable identity.
+    #[error("repair source identity must be non-zero")]
+    InvalidSourceIdentity,
+    /// One subsystem identity was replayed with a different canonical report.
+    #[error(
+        "repair source identity {source_identity:?} is already bound to a different canonical report"
+    )]
+    SourceIdentityConflict {
+        /// Conflicting subsystem event or signed-receipt digest.
+        source_identity: [u8; 32],
+    },
     /// Repair report failed validation.
     #[error("repair report invalid: {0}")]
     InvalidReport(#[source] RepairValidationError),
@@ -5709,6 +5818,8 @@ mod tests {
             sla_deadline_unix: sla_deadline,
         });
         let mut task = RepairTaskInternal {
+            source_identity: repair_report_source_identity(&report)
+                .expect("test report source identity"),
             revision: 0,
             report: report.clone(),
             state,
@@ -6201,6 +6312,44 @@ mod tests {
             manager.enqueue_report(changed_time),
             Err(RepairSchedulerError::DuplicateTicket { .. })
         ));
+    }
+
+    #[test]
+    fn subsystem_source_identity_is_exactly_once_and_conflicts_fail_closed() {
+        let (manager, _temp_dir) = manager_with_temp_dir();
+        let source_identity = [0xA5; 32];
+        let baseline = report("REP-SOURCE-ONCE", [0x16; 32], [0x26; 32], 1_700_000_041);
+        let first = manager
+            .enqueue_repair_report_idempotent(source_identity, baseline.clone())
+            .expect("first subsystem event");
+        let replay = manager
+            .enqueue_repair_report_idempotent(source_identity, baseline.clone())
+            .expect("exact subsystem event replay");
+        assert_eq!(replay, first);
+
+        let conflicting = report(
+            "REP-SOURCE-CONFLICT",
+            baseline.evidence.manifest_digest,
+            baseline.evidence.provider_id,
+            baseline.submitted_at_unix,
+        );
+        assert!(matches!(
+            manager.enqueue_repair_report_idempotent(source_identity, conflicting),
+            Err(RepairSchedulerError::SourceIdentityConflict {
+                source_identity: found,
+            }) if found == source_identity
+        ));
+        assert!(matches!(
+            manager.enqueue_repair_report_idempotent([0; 32], baseline),
+            Err(RepairSchedulerError::InvalidSourceIdentity)
+        ));
+        assert_eq!(
+            manager
+                .list_tasks(RepairTaskFilters::default())
+                .expect("list tasks")
+                .len(),
+            1
+        );
     }
 
     #[test]

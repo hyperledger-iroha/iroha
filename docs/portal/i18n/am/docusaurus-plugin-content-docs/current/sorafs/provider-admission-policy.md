@@ -41,7 +41,7 @@ translation_last_reviewed: 2026-02-07
 ## የመግቢያ የስራ ፍሰት
 
 1. ** ፕሮፖዛል መፍጠር ***
-   - CLI: `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission proposal …` ይጨምሩ
+   - CLI: `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal …` ይጨምሩ
      `ProviderAdmissionProposalV1` + የማረጋገጫ ጥቅል በማዘጋጀት ላይ።
    - ማረጋገጫ፡ አስፈላጊ የሆኑትን መስኮች፣ አክሲዮን> 0፣ ቀኖናዊ ቻንከር እጀታ በ`profile_id`።
 2. **የመንግስት ድጋፍ**
@@ -61,7 +61,7 @@ translation_last_reviewed: 2026-02-07
 | አካባቢ | ተግባር | ባለቤት(ዎች) | ሁኔታ |
 |-------------|-------|----|
 | እቅድ | `ProviderAdmissionProposalV1`፣ `ProviderAdmissionEnvelopeV1`፣ `EndpointAttestationV1` (Norito) በI18NI0000048X ይግለጹ። በI18NI0000049X ከማረጋገጫ ረዳቶች ጋር ተተግብሯል።【F:crates/sorafs_manifest/src/provider_admission.rs#L1】 | ማከማቻ / አስተዳደር | ✅ ተጠናቀቀ |
-| CLI መሳሪያ | `sorafs_manifest_stub`ን በንዑስ ትዕዛዞች ያራዝሙ፡ `provider-admission proposal`፣ `provider-admission sign`፣ `provider-admission verify`። | Tooling WG | ✅ |
+| CLI መሳሪያ | `sorafs_manifest_builder`ን በንዑስ ትዕዛዞች ያራዝሙ፡ `provider-admission proposal`፣ `provider-admission sign`፣ `provider-admission verify`። | Tooling WG | ✅ |
 
 የCLI ፍሰት አሁን መካከለኛ የምስክር ወረቀት ቅርቅቦችን (`--endpoint-attestation-intermediate`) ይቀበላል።
 ቀኖናዊ ፕሮፖዛል/የኤንቨሎፕ ባይት፣ እና የምክር ቤት ፊርማዎችን በ`sign`/`verify` ጊዜ ያረጋግጣል። ኦፕሬተሮች ይችላሉ።
@@ -109,7 +109,7 @@ translation_last_reviewed: 2026-02-07
     የምግብ መፍጫውን እና የፊርማውን ብዛት በመያዝ.
 | ማረጋገጫ | በTorii፣ ጌትዌይስ እና `sorafs-node` ጥቅም ላይ የዋለውን የጋራ አረጋጋጭ ተግብር። ክፍል + CLI ውህደት ሙከራዎችን ያቅርቡ።【F: crates/sorafs_manifest/src/provider_admission.rs#L1】【F:crates/iroha_torii/src/sorafs/admission.rs#L1】 | አውታረ መረብ TL / ማከማቻ | ✅ ተጠናቀቀ |
 | Torii ውህደት | የክር አረጋጋጭ ወደ I18NT0000017X ማስታወቂያ ማስገባት፣ ከፖሊሲ ውጪ ማስታወቂያዎችን አለመቀበል፣ ቴሌሜትሪ ልቀት። | አውታረ መረብ TL | ✅ ተጠናቀቀ | Torii አሁን የአስተዳደር ኤንቨሎፖችን (`torii.sorafs.admission_envelopes_dir`) ይጭናል፣ ወደ ውስጥ በሚገቡበት ጊዜ የምግብ መፈጨት/ፊርማ ግጥሚያዎችን ያረጋግጣል፣ እና የገጽታ መግቢያ telemetry.【F: crates/iroha_torii/src/sorafs/admission.rs#L1】【F:crates/iroha_torii/src/sorafs/discovery.rs#L1】【F:crates/iroha_torii/src/sorafs/api.rs#L1】 |
-| መታደስ | የእድሳት/የመሻሪያ እቅድ + CLI ረዳቶችን ያክሉ፣ የህይወት ኡደት መመሪያን በሰነዶች ውስጥ ያትሙ (ከዚህ በታች ያለውን runbook ይመልከቱ እና የ CLI ትዕዛዞች በ ውስጥ `provider-admission renewal`/`revoke`)【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L477】【ዶክመንቶች/ምንጭ/sorafs/አቅራቢ_መመሪያ፡120】 ማከማቻ / አስተዳደር | ✅ ተጠናቀቀ |
+| መታደስ | የእድሳት/የመሻሪያ እቅድ + CLI ረዳቶችን ያክሉ፣ የህይወት ኡደት መመሪያን በሰነዶች ውስጥ ያትሙ (ከዚህ በታች ያለውን runbook ይመልከቱ እና የ CLI ትዕዛዞች በ ውስጥ `provider-admission renewal`/`revoke`)【crates/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#L477】【ዶክመንቶች/ምንጭ/sorafs/አቅራቢ_መመሪያ፡120】 ማከማቻ / አስተዳደር | ✅ ተጠናቀቀ |
 | ቴሌሜትሪ | `provider_admission` ዳሽቦርዶችን እና ማንቂያዎችን ይግለጹ (የጠፋ እድሳት፣ የኤንቨሎፕ ጊዜ ማብቂያ)። | ታዛቢነት | 🟠 በሂደት ላይ | ቆጣሪ `torii_sorafs_admission_total{result,reason}` አለ; ዳሽቦርዶች/ማንቂያዎች በመጠባበቅ ላይ።【F: crates/iroha_telemetry/src/metrics.rs#L3798】【F:docs/source/telemetry.md#L614】 |
 ### እድሳት እና መሻር Runbook
 
@@ -117,7 +117,7 @@ translation_last_reviewed: 2026-02-07
 1. የተተኪውን ፕሮፖዛል/ማስታወቂያ ጥንድ ከ`provider-admission proposal` እና `provider-admission sign` ጋር ይገንቡ፣ `--retention-epoch` በመጨመር እና እንደአስፈላጊነቱ የአክሲዮን/የመጨረሻ ነጥቦችን ያዘምኑ።
 2. መፈጸም  
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission \
+   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -135,7 +135,7 @@ translation_last_reviewed: 2026-02-07
 #### የአደጋ መሻር
 1. የተጠለፈውን ኤንቨሎፕ ይለዩ እና መሻሪያውን ይስጡ፡-
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission \
+   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \
@@ -146,7 +146,7 @@ translation_last_reviewed: 2026-02-07
      --json-out=governance/providers/<id>/revocation.json
    ```
    CLI `ProviderAdmissionRevocationV1` ይፈርማል፣ የተቀመጠውን ፊርማ በ በኩል ያረጋግጣል
-   `verify_revocation_signatures`፣ እና የስረዛ መፍቻውን ሪፖርት ያደርጋል።【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L593】【F:crates/sorafs_manifest/src/አቅራቢ_አድሚሽን.rs#486
+   `verify_revocation_signatures`፣ እና የስረዛ መፍቻውን ሪፖርት ያደርጋል።【crates/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#L593】【F:crates/sorafs_manifest/src/አቅራቢ_አድሚሽን.rs#486
 2. ፖስታውን ከ`torii.sorafs.admission_envelopes_dir` ያስወግዱ፣ መሻሪያውን Norito/JSON ወደ መግቢያ መሸጎጫዎች ያሰራጩ እና ምክንያቱን ሃሽ በአስተዳደር ደቂቃዎች ውስጥ ይመዝግቡ።
 3. መሸጎጫዎች የተሻረውን ማስታወቂያ መጣሉን ለማረጋገጥ `torii_sorafs_admission_total{result="rejected",reason="admission_missing"}` ይመልከቱ። የተሰረዙ ቅርሶችን ወደ ኋላ መለስ ብለው ያቆዩት።
 

@@ -19,7 +19,7 @@ description: Vérifiez la simulation des composants SF-2c avec les configuration
 Cette page indique `docs/source/sorafs/runbooks/sorafs_capacity_simulation.md`. Vous pouvez obtenir des copies de synchronisation si vous souhaitez créer des documents sur Sphinx qui ne sont pas disponibles.
 :::
 
-Cet objectif consiste à effectuer des simulations sur le SF-2c et à visualiser les mesures les plus pertinentes. Lors de la vérification des paramètres de sécurité, le basculement et la correction de bout en bout sont effectués en utilisant les configurations définies dans `docs/examples/sorafs_capacity_simulation/`. Les charges utiles peuvent utiliser `sorafs_manifest_stub capacity` ; используйте `iroha app sorafs toolkit pack` для потоков упаковки manifeste/CAR.
+Cet objectif consiste à effectuer des simulations sur le SF-2c et à visualiser les mesures les plus pertinentes. Lors de la vérification des paramètres de sécurité, le basculement et la correction de bout en bout sont effectués en utilisant les configurations définies dans `docs/examples/sorafs_capacity_simulation/`. Les charges utiles peuvent utiliser `sorafs_manifest_builder capacity` ; используйте `iroha app sorafs toolkit pack` для потоков упаковки manifeste/CAR.
 
 ## 1. Générer des éléments CLI
 
@@ -28,7 +28,7 @@ cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./run_cli.sh ./artifacts
 ```
 
-`run_cli.sh` utilise `sorafs_manifest_stub capacity` pour utiliser les charges utiles Norito, base64-blob, comme Torii et les fichiers JSON pour :
+`run_cli.sh` utilise `sorafs_manifest_builder capacity` pour utiliser les charges utiles Norito, base64-blob, comme Torii et les fichiers JSON pour :
 
 - Trois déclarations de fournisseurs qui se rapportent aux scénarios passés par le bateau.
 - Il s'agit d'une expédition de réplication, qui implique des opérations de simulation par étapes.

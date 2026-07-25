@@ -94,7 +94,7 @@ builders can stay aligned with the Rust data model.
      the same table data that the roadmap called out.【scripts/android_codegen_docs.py:134】【docs/source/sdk/android/generated/instructions.md:903】
   2. ✅ Replay the shared fixture in `fixtures/sorafs_orchestrator/` via
      `scripts/android_codegen_replay_sorafs_fixture.py`. The helper calls
-     `sorafs_manifest_stub` with the multi-provider payload, stores the full
+     `sorafs_manifest_builder` with the multi-provider payload, stores the full
      manifest report under
      `target-codex/android_codegen/sorafs_manifest/multi_peer_parity_v1.json`,
      emits the tracked sample at

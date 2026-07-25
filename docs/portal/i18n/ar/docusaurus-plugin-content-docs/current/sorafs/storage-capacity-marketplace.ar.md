@@ -53,7 +53,7 @@ Sidebar_label: سوق السعة
 - ترخيص `CapacityTelemetryV1` عن اللقطات الحقبة (GiB بيعة مقابل الاستخدام، عدادات النسخ، نسبية uptime/PoR) التي تغذي توزيع التأثيرات. تحقق الحدود يبقي استخدامها ضمن الإعلانات والنسب ضمن 0-100%.【crates/sorafs_manifest/src/capacity.rs:476】
 - توفر المساعدين المشتركين (`CapacityMetadataEntry` و`PricingScheduleV1` ومقررات الممرات/المهمة/SLA) التحقق من المفاتيح حتمي وتقارير الأخطاء يمكن إعادة استخدام أدوات CI والـ downstream.
 -يُعرض `PinProviderRegistry` الآن لقطة على الشجرة عبر `/v1/sorafs/capacity/state`، جامعاً إعلانات المزودين وإدخالات رسوم دفتر الأستاذ خلف Norito JSON حتمي.[crates/iroha_torii/src/sorafs/registry.rs:17][crates/iroha_torii/src/sorafs/api.rs:64]- يغطي التحقق من صحة المقابض القياسية، وتأكيد التكرار، وحدود الحارة، تعيينات النسخ المتماثلة، وفحوصات النطاق التليميتري حتى قياس الإحالة فوراً في CI.[crates/sorafs_manifest/src/capacity.rs:792]
-- تشغيل الأدوات: I18NI00000049تحولت X المواصفات بسرعة من البشر إلى Norito الحمولة للوصول، base64 blobs وملخصات JSON حتى يبدأون من تجهيزات المعالجة لـ `/v1/sorafs/capacity/declare` و`/v1/sorafs/capacity/telemetry` وأوامر النمس المتراكم مع التحقق محلية.[crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1] هناك تركيبات مرجعية في `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) لا يمكن توليدها عبر `cargo run -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order`.
+- تشغيل الأدوات: I18NI00000049تحولت X المواصفات بسرعة من البشر إلى Norito الحمولة للوصول، base64 blobs وملخصات JSON حتى يبدأون من تجهيزات المعالجة لـ `/v1/sorafs/capacity/declare` و`/v1/sorafs/capacity/telemetry` وأوامر النمس المتراكم مع التحقق محلية.[crates/sorafs_car/src/bin/sorafs_manifest_builder/capacity.rs:1] هناك تركيبات مرجعية في `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) لا يمكن توليدها عبر `cargo run -p sorafs_car --bin sorafs_manifest_builder -- capacity replication-order`.
 
 ### 2. تحكم متكامل| | المالك (المالكون) | تعليقات |
 |------|----------|-------|
@@ -134,12 +134,12 @@ Sidebar_label: سوق السعة
   توافق حزم الحكم.
 
 ### أدلة النزاع والتقطيع
-- الخلافات عبر `sorafs_manifest_stub capacity dispute` (الاختبارات:
+- الخلافات عبر `sorafs_manifest_builder capacity dispute` (الاختبارات:
   `cargo test -p sorafs_car --test capacity_cli`) حتى الحمولات الدائمة الممتدة.
 - شغّل `cargo test -p iroha_core -- capacity_dispute_replay_is_deterministic` ومنتجع
   (`record_capacity_telemetry_penalises_persistent_under_delivery`) لإثبات أن الخلافات والشرطات المائلة تُعاد حطمياً.
 - اتبع `docs/source/sorafs/dispute_revocation_runbook.md` الأخبار والتصعيد؛ تنفيذ موافقات الإضراب في تقرير التحقق.### اختبارات دخان الدخول والخروج للمزود
-- إعادة إنشاء المصنوعات اليدوية للإعلان/التليمترية باستخدام `sorafs_manifest_stub capacity ...` وأعد تشغيل السيولة قبل CLI (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`).
+- إعادة إنشاء المصنوعات اليدوية للإعلان/التليمترية باستخدام `sorafs_manifest_builder capacity ...` وأعد تشغيل السيولة قبل CLI (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`).
 - أرسل عبر Torii (`/v1/sorafs/capacity/declare`) ثم التقط `/v1/sorafs/capacity/state` مع لقطات Grafana. اتبع مسار الخروج في `docs/source/sorafs/capacity_onboarding_runbook.md`.
 - أرشِف التحف الموقعة ومخرجات المصالحة داخل `docs/examples/sorafs_capacity_marketplace_validation/`.
 

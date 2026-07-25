@@ -64,7 +64,7 @@ cargo test -p sorafs_car --features cli --test capacity_cli
 python3 scripts/telemetry/capacity_reconcile.py --snapshot <state.json> --ledger <ledger.ndjson> --warn-only
 ```
 
-Operatorlar `sorafs_manifest_stub capacity {declaration,dispute}` bilan ishga tushirish/nizo soʻrovining foydali yuklarini qayta yaratishi va natijada olingan JSON/Norito baytlarini boshqaruv chiptasi bilan birga arxivlashi kerak.
+Operatorlar `sorafs_manifest_builder capacity {declaration,dispute}` bilan ishga tushirish/nizo soʻrovining foydali yuklarini qayta yaratishi va natijada olingan JSON/Norito baytlarini boshqaruv chiptasi bilan birga arxivlashi kerak.
 
 ## Ro'yxatdan o'tish artefaktlari
 

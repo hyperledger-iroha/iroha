@@ -67,11 +67,11 @@ cargo test -p sorafs_chunker streaming_backpressure_fuzz_matches_batch
 ## 3. Construisez et assine un manifeste
 
 Empaqueter le plan de morceaux, les alias et les assassins de gouvernance dans un manifeste
-en utilisant `sorafs-manifest-stub`. Le commandant abaixo montre une charge utile d'archive unique ; passer
+en utilisant `sorafs-manifest-builder`. Le commandant abaixo montre une charge utile d'archive unique ; passer
 un chemin de diretório pour emacotar un árvore (a CLI percorre em ordem lexicográfica).
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
+cargo run -p sorafs_manifest --bin sorafs-manifest-builder -- \
   /tmp/docs.txt \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --manifest-out=/tmp/docs.manifest \

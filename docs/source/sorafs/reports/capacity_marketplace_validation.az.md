@@ -63,7 +63,7 @@ cargo test -p sorafs_car --features cli --test capacity_cli
 python3 scripts/telemetry/capacity_reconcile.py --snapshot <state.json> --ledger <ledger.ndjson> --warn-only
 ```
 
-Operators should regenerate onboarding/dispute request payloads with `sorafs_manifest_stub capacity {declaration,dispute}` and archive the resulting JSON/Norito bytes alongside the governance ticket.
+Operators should regenerate onboarding/dispute request payloads with `sorafs_manifest_builder capacity {declaration,dispute}` and archive the resulting JSON/Norito bytes alongside the governance ticket.
 
 ## Sign-off Artefacts
 

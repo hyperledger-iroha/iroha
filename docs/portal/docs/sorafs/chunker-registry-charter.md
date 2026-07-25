@@ -52,7 +52,7 @@ SDKs). It enforces the alias and handle invariants checked by
      cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
+     cargo run -p sorafs_car --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - Submit a PR containing fixtures, proposal, determinism report, and registry
@@ -91,14 +91,14 @@ SDKs). It enforces the alias and handle invariants checked by
 
 ## Tooling Expectations
 
-- `sorafs_manifest_chunk_store` and `sorafs_manifest_stub` expose:
+- `sorafs_manifest_chunk_store` and `sorafs_manifest_builder` expose:
   - `--list-profiles` for registry inspection.
   - `--promote-profile=<handle>` to generate the canonical metadata block used
     when promoting a profile.
   - `--json-out=-` to stream reports to stdout, enabling reproducible review
     logs.
 - `ensure_charter_compliance()` is invoked at startup in relevant binaries
-  (`manifest_chunk_store`, `provider_advert_stub`). CI tests must fail if new
+  (`manifest_chunk_store`, `sorafs_provider_advert`). CI tests must fail if new
   entries violate the charter.
 
 ## Record Keeping

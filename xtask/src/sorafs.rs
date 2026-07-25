@@ -42,7 +42,7 @@ use iroha_data_model::{
         TaikaiCacheConfigV1, TaikaiCacheProfileV1, TaikaiCacheQosConfigV1, TaikaiCacheRolloutStage,
     },
 };
-use iroha_torii::sorafs::gateway::{AcmeAutomation, AcmeConfig, SelfSignedAcmeClient};
+use iroha_torii::sorafs::gateway::AcmeConfig;
 use mv::storage::StorageReadOnly;
 use norito::{
     decode_from_bytes,
@@ -1954,69 +1954,39 @@ pub fn gateway_tls_renew(
     if options.hostnames.is_empty() {
         return Err("sorafs-gateway tls renew requires at least one hostname".into());
     }
-
-    fs::create_dir_all(&options.output_dir)?;
-    let mut automation = AcmeAutomation::new(
-        AcmeConfig {
-            enabled: true,
-            hostnames: options.hostnames.clone(),
-            account_email: options.account_email.clone(),
-            directory_url: options.directory_url.clone(),
-            dns_provider_id: options.dns_provider_id.clone(),
-            ..AcmeConfig::default()
-        },
-        SelfSignedAcmeClient,
-    );
-    let bundle = automation
-        .process(SystemTime::now())
-        .map_err(|err| format!("failed to run TLS automation: {err}"))?
-        .ok_or_else(|| "TLS automation did not produce a certificate bundle".to_string())?;
-
-    let certificate_path = options.output_dir.join("fullchain.pem");
-    write_file_with_mode(
-        &certificate_path,
-        bundle.certificate_pem.as_bytes(),
-        options.force,
-        0o600,
-    )?;
-    let private_key_path = options.output_dir.join("privkey.pem");
-    write_file_with_mode(
-        &private_key_path,
-        bundle.private_key_pem.as_bytes(),
-        options.force,
-        0o600,
-    )?;
-    let ech_config_path = options.output_dir.join("ech.json");
-    let ech_contents = if let Some(config) = bundle.ech_config.as_ref() {
-        let encoded = BASE64_STD.encode(config);
-        format!("{{\"ech_config_b64\":\"{encoded}\"}}\n")
-    } else {
-        "null\n".to_string()
-    };
-    write_file_with_mode(
-        &ech_config_path,
-        ech_contents.as_bytes(),
-        options.force,
-        0o640,
-    )?;
-
-    let fingerprint_hex = compute_self_signed_fingerprint(
-        &options.hostnames,
-        options.account_email.as_deref(),
-        &options.directory_url,
-    );
-    let expiry_rfc3339 = OffsetDateTime::from(bundle.not_after)
-        .format(&Rfc3339)
-        .map_err(|err| format!("failed to format certificate expiry: {err}"))?;
-
-    Ok(GatewayTlsRenewOutcome {
-        certificate_path,
-        private_key_path,
-        ech_config_path,
-        fingerprint_hex,
-        expiry_rfc3339,
-        hostnames: options.hostnames.clone(),
-    })
+    if options
+        .account_email
+        .as_deref()
+        .is_some_and(|email| email.trim().is_empty())
+    {
+        return Err("sorafs-gateway tls renew account email cannot be empty".into());
+    }
+    let directory_url = Url::parse(&options.directory_url)
+        .map_err(|error| format!("invalid ACME directory URL: {error}"))?;
+    if !matches!(directory_url.scheme(), "http" | "https") {
+        return Err("ACME directory URL must use http or https".into());
+    }
+    if options
+        .dns_provider_id
+        .as_deref()
+        .is_some_and(|provider| provider.trim().is_empty())
+    {
+        return Err("sorafs-gateway tls renew DNS provider id cannot be empty".into());
+    }
+    if options.output_dir.as_os_str().is_empty() {
+        return Err("sorafs-gateway tls renew output directory cannot be empty".into());
+    }
+    if options.output_dir.exists() && !options.force {
+        return Err(format!(
+            "TLS output directory {} already exists; use --force to replace it",
+            options.output_dir.display()
+        )
+        .into());
+    }
+    Err(
+        "sorafs-gateway tls renew has no built-in ACME backend; enable Torii ACME only with a runtime-injected provider client"
+            .into(),
+    )
 }
 
 pub fn gateway_tls_revoke(
@@ -2626,24 +2596,6 @@ fn parse_host_array(path: &Path, array: &[JsonValue]) -> Result<Vec<String>, Str
 fn dedup_tls_hosts(hosts: &mut Vec<String>) {
     let mut seen = HashSet::new();
     hosts.retain(|host| seen.insert(host.clone()));
-}
-
-fn compute_self_signed_fingerprint(
-    hosts: &[String],
-    account_email: Option<&str>,
-    directory_url: &str,
-) -> String {
-    let mut hasher = Blake3Hasher::new();
-    for host in hosts {
-        hasher.update(host.as_bytes());
-    }
-
-    if let Some(email) = account_email {
-        hasher.update(email.as_bytes());
-    }
-    hasher.update(directory_url.as_bytes());
-
-    hex::encode(hasher.finalize().as_bytes())
 }
 
 fn canonicalize_entry(value: &JsonValue, index: usize) -> Result<CanonicalEntry, String> {
@@ -5490,6 +5442,7 @@ fn capability_label(cap: CapabilityType) -> &'static str {
         CapabilityType::QuicNoise => "quic_noise",
         CapabilityType::SoraNetHybridPq => "soranet_pq",
         CapabilityType::ChunkRangeFetch => "chunk_range_fetch",
+        CapabilityType::PotrMlDsa => "potr_mldsa",
         CapabilityType::VendorReserved => "vendor_reserved",
     }
 }
@@ -11435,7 +11388,7 @@ mod tests {
     }
 
     #[test]
-    fn tls_renew_writes_bundle() {
+    fn tls_renew_fails_without_runtime_acme_backend() {
         let temp = tempfile::tempdir().expect("create tempdir");
         let bundle_dir = temp.path().join("tls");
         let options = GatewayTlsRenewOptions {
@@ -11447,15 +11400,11 @@ mod tests {
             force: false,
         };
 
-        let outcome = gateway_tls_renew(options).expect("tls renew");
-        assert_eq!(outcome.hostnames, vec!["gw.example.com".to_string()]);
-        assert!(outcome.certificate_path.exists());
-        assert!(outcome.private_key_path.exists());
-        assert!(outcome.ech_config_path.exists());
-        let ech_contents = fs::read_to_string(outcome.ech_config_path).expect("read ech.json");
+        let err = gateway_tls_renew(options).expect_err("missing ACME backend must fail closed");
+        assert!(err.to_string().contains("runtime-injected provider client"));
         assert!(
-            ech_contents.trim() == "null" || ech_contents.contains("ech_config_b64"),
-            "unexpected ech.json contents: {ech_contents}"
+            !bundle_dir.exists(),
+            "failed renewal must not write key material"
         );
     }
 

@@ -19,7 +19,7 @@ id: 容量シミュレーション
 Эта страница зеркалирует `docs/source/sorafs/runbooks/sorafs_capacity_simulation.md`.スフィンクスは、スフィンクスを攻撃するのに役立ちます。
 :::
 
-SF-2c を使用して、SF-2c を使用してください。フェールオーバーを実行し、エンドツーエンドでスラッシュを実行することもできます。 `docs/examples/sorafs_capacity_simulation/`。ペイロードは `sorafs_manifest_stub capacity`; `iroha app sorafs toolkit pack` マニフェスト/CAR が表示されます。
+SF-2c を使用して、SF-2c を使用してください。フェールオーバーを実行し、エンドツーエンドでスラッシュを実行することもできます。 `docs/examples/sorafs_capacity_simulation/`。ペイロードは `sorafs_manifest_builder capacity`; `iroha app sorafs toolkit pack` マニフェスト/CAR が表示されます。
 
 ## 1. CLI を使用する
 
@@ -28,7 +28,7 @@ cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./run_cli.sh ./artifacts
 ```
 
-`run_cli.sh` оборачивает `sorafs_manifest_stub capacity`、чтобы выпускать Norito ペイロード、base64-блоб、тела запросов Torii およびJSON 形式:
+`run_cli.sh` оборачивает `sorafs_manifest_builder capacity`、чтобы выпускать Norito ペイロード、base64-блоб、тела запросов Torii およびJSON 形式:
 
 - Трех деклараций провайдеров, участвующих в сценарии переговоров по квотам.
 - 舞台化された作品、劇場版、劇場版、劇場版。

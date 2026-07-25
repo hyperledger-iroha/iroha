@@ -4,24 +4,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Dict, Mapping, Optional
+from typing import Any, Dict, Mapping, Optional
 
-if TYPE_CHECKING:  # pragma: no cover - typing only
-    from .tx import QuantityLike
-else:  # pragma: no cover - alias for runtime to avoid circular import
-    QuantityLike = Any
-
-
-def _normalize_quantity(value: Any) -> str:
-    from .tx import _normalize_quantity as _tx_normalize_quantity
-
-    return _tx_normalize_quantity(value)
+from ._quantity import QuantityLike, _normalize_quantity
 
 
 def _normalize_metadata(metadata: Optional[Mapping[str, Any]]) -> Optional[Mapping[str, Any]]:
     from .tx import _normalize_metadata as _tx_normalize_metadata
 
     return _tx_normalize_metadata(metadata)
+
 
 __all__ = [
     "SettlementLeg",

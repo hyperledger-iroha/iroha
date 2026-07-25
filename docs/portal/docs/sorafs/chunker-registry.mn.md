@@ -123,7 +123,7 @@ $ cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- ./docs.tar \
 Манифест stub нь ижил өгөгдлийг тусгадаг бөгөөд энэ нь дамжуулах хоолойд `--chunker-profile-id` сонголтыг скрипт хийхэд тохиромжтой. CLI-ууд хоёулаа каноник бариулын хэлбэрийг (`--profile=sorafs.sf1@1.0.0`) хүлээн авдаг тул скриптүүд нь хатуу кодлох тоон ID-аас зайлсхийх боломжтой:
 
 ```
-$ cargo run -p sorafs_car --bin sorafs_manifest_stub -- --list-chunker-profiles
+$ cargo run -p sorafs_car --bin sorafs_manifest_builder -- --list-chunker-profiles
 [
   {
     "profile_id": 1,
@@ -181,4 +181,4 @@ HTTP хэлэлцээрт найдахгүйгээр.
   өгсөн тестүүдээр дамжуулан.
 * `chunker_registry::lookup_by_profile` нь тодорхойлогч параметрүүдийг баталж байна
   санамсаргүй зөрүүг хамгаалахын тулд `ChunkProfile::DEFAULT`-тай таарна.
-* `iroha app sorafs toolkit pack` болон `sorafs_manifest_stub`-ийн гаргасан манифестууд нь бүртгэлийн мета өгөгдлийг агуулдаг.
+* `iroha app sorafs toolkit pack` болон `sorafs_manifest_builder`-ийн гаргасан манифестууд нь бүртгэлийн мета өгөгдлийг агуулдаг.

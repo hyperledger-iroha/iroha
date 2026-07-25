@@ -56,7 +56,7 @@ SDK)。 یہ エイリアス ハンドル不変条件を強制する ہے جنہ
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+     cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - 日程、提案、決定性レポート、レジストリの更新、PR の送信
@@ -93,12 +93,12 @@ SDK)。 یہ エイリアス ハンドル不変条件を強制する ہے جنہ
 
 ## 期待されるツール
 
-- `sorafs_manifest_chunk_store` は `sorafs_manifest_stub` を公開します:
+- `sorafs_manifest_chunk_store` は `sorafs_manifest_builder` を公開します:
   - レジストリ検査 `--list-profiles`。
   - プロファイルは、正規メタデータ ブロック、`--promote-profile=<handle>` をプロモートします。
   - レポート標準出力ストリーム `--json-out=-` 再現可能なレビュー ログ
 - `ensure_charter_compliance()` 関連バイナリの起動
-  (`manifest_chunk_store`、`provider_advert_stub`)。 CI テストが失敗しました
+  (`manifest_chunk_store`、`sorafs_provider_advert`)。 CI テストが失敗しました
   エントリ憲章 خلاف ورزی کریں۔
 
 ## 記録の保管

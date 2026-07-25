@@ -61,7 +61,7 @@ SDK-ներ): Այն պարտադրում է alias-ը և handle-ի կողմից �
      cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
+     cargo run -p sorafs_car --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - Ներկայացրեք PR, որը պարունակում է հարմարանքներ, առաջարկ, դետերմինիզմի զեկույց և գրանցամատյան
@@ -100,14 +100,14 @@ SDK-ներ): Այն պարտադրում է alias-ը և handle-ի կողմից �
 
 ## Գործիքների ակնկալիքներ
 
-- `sorafs_manifest_chunk_store` և `sorafs_manifest_stub` բացահայտում են.
+- `sorafs_manifest_chunk_store` և `sorafs_manifest_builder` բացահայտում են.
   - `--list-profiles` ռեեստրի ստուգման համար:
   - `--promote-profile=<handle>`՝ օգտագործված կանոնական մետատվյալների բլոկը ստեղծելու համար
     պրոֆիլը խթանելիս:
   - `--json-out=-` հաղորդումներ փոխանցելու համար stdout-ին՝ հնարավորություն տալով վերարտադրվող վերանայում
     գերաններ.
 - `ensure_charter_compliance()`-ը կանչվում է գործարկման ժամանակ համապատասխան երկուական սարքերում
-  (`manifest_chunk_store`, `provider_advert_stub`): CI թեստերը պետք է ձախողվեն, եթե նոր են
+  (`manifest_chunk_store`, `sorafs_provider_advert`): CI թեստերը պետք է ձախողվեն, եթե նոր են
   գրառումները խախտում են կանոնադրությունը.
 
 ## Գրառումների պահպանում

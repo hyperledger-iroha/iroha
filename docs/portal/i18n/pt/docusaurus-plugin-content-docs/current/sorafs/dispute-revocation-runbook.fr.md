@@ -40,7 +40,7 @@ Este runbook guia os operadores de governo na criação de litígios de capacida
 
 ## 3. Depor o litígio
 
-1. Crie uma especificação JSON para `sorafs_manifest_stub capacity dispute`:
+1. Crie uma especificação JSON para `sorafs_manifest_builder capacity dispute`:
 
    ```json
    {
@@ -63,7 +63,7 @@ Este runbook guia os operadores de governo na criação de litígios de capacida
 2. Lance a CLI:
 
    ```bash
-   sorafs_manifest_stub capacity dispute \
+   sorafs_manifest_builder capacity dispute \
      --spec=dispute.json \
      --norito-out=dispute.to \
      --base64-out=dispute.b64 \
@@ -80,7 +80,7 @@ Este runbook guia os operadores de governo na criação de litígios de capacida
 
 1. **Fenêtre de grâce :** avisa o fornecedor da revogação iminente; autorize a evacuação de dados pinglées quando a política permitir.
 2. **Générez `ProviderAdmissionRevocationV1`:**
-   - Utilize `sorafs_manifest_stub provider-admission revoke` com o motivo aprovado.
+   - Utilize `sorafs_manifest_builder provider-admission revoke` com o motivo aprovado.
    - Verifique as assinaturas e o resumo da revogação.
 3. **Publiez la révocation :**
    - Envie o pedido de revogação para Torii.
@@ -93,7 +93,7 @@ Este runbook guia os operadores de governo na criação de litígios de capacida
 
 ## 6. Documentos de referência
 
--`sorafs_manifest_stub capacity dispute --help`
+-`sorafs_manifest_builder capacity dispute --help`
 - `docs/source/sorafs/storage_capacity_marketplace.md` (seção de litígios)
 - `docs/source/sorafs/provider_admission_policy.md` (fluxo de trabalho de revogação)
 - Painel de observabilidade: `SoraFS / Capacity Providers`

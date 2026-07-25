@@ -6,16 +6,20 @@ use std::sync::Arc;
 use iroha_core::{
     block::{BlockValidationError, ValidBlock},
     da::proof_policy_bundle,
+    governance::manifest::LaneManifestRegistry,
     kura::Kura,
     prelude::*,
     query::store::LiveQueryStore,
-    state::State,
+    state::{State, StateReadOnly},
     sumeragi::network_topology::Topology,
 };
-use iroha_crypto::{Algorithm, KeyPair};
+use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_data_model::{
     ChainId, Metadata, PeerId, Registrable,
-    block::{BlockExecutionContextBundle, ExternalExecutionContext, builder::BlockBuilder},
+    block::{
+        BlockExecutionContextBundle, ExternalExecutionContext, builder::BlockBuilder,
+        consensus::SumeragiLanePayloadOwnership,
+    },
     nexus::{DataSpaceId, LaneId},
     prelude::{
         Account, AccountId, AssetDefinition, BlockHeader, Domain, DomainId, HashOf, Level, Log,
@@ -46,7 +50,12 @@ fn mk_state_with_bls_batch() -> (State, ChainId, AccountId, KeyPair) {
     let domain = Domain::new(domain_id.clone()).build(&account_id);
     let account = Account::new(account_id.clone()).build(&account_id);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
-    let mut state = State::new_for_testing(world, kura, query_handle);
+    let chain = ChainId::from("chain");
+    let mut state = State::new_with_chain_for_testing(world, kura, query_handle, chain.clone());
+    let nexus = state.nexus_snapshot();
+    state.install_lane_manifests(&Arc::new(
+        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
+    ));
     let mut pipeline = state.view().pipeline().clone();
     pipeline.signature_batch_max_bls = 4;
     state.set_pipeline(pipeline);
@@ -57,7 +66,6 @@ fn mk_state_with_bls_batch() -> (State, ChainId, AccountId, KeyPair) {
         crypto_cfg.allowed_signing.dedup();
     }
     state.set_crypto(crypto_cfg);
-    let chain = ChainId::from("chain");
     (state, chain, account_id, kp)
 }
 
@@ -107,14 +115,53 @@ fn make_tx(
     builder.sign(kp.private_key())
 }
 
-fn push_single_tx_with_context(builder: &mut BlockBuilder, tx: SignedTransaction) {
-    builder.set_execution_context(Some(BlockExecutionContextBundle::new(vec![
-        ExternalExecutionContext::new(
-            tx.hash_as_entrypoint(),
-            LaneId::SINGLE,
-            DataSpaceId::UNIVERSAL,
-        ),
-    ])));
+fn push_single_tx_with_context(
+    builder: &mut BlockBuilder,
+    tx: SignedTransaction,
+    state: &State,
+    height: std::num::NonZeroU64,
+    leader: &KeyPair,
+) {
+    let execution_context = BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
+        tx.hash_as_entrypoint(),
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+    )]);
+    let lane_incarnation = state
+        .view()
+        .lane_incarnation_at_height(LaneId::SINGLE, height.get())
+        .expect("single-lane incarnation must be active at the block height");
+    let mut ownership = SumeragiLanePayloadOwnership {
+        proposal_height: height.get(),
+        proposal_view: 0,
+        lane_id: LaneId::SINGLE,
+        dataspace_id: DataSpaceId::UNIVERSAL,
+        lane_incarnation,
+        lane_block_height: 1,
+        lane_block_view: 0,
+        subject_hash: Hash::prehashed([0; Hash::LENGTH]),
+        qc_mode_tag: "permissioned:bls-batch-pop-test".to_owned(),
+        accepted_candidate_indices: vec![0],
+        accepted_transaction_hashes: vec![Hash::from(tx.hash_as_entrypoint())],
+        previous_lane_block_height: 0,
+        previous_lane_block_descriptor_hash: None,
+        lane_block_descriptor_hash: Some(Hash::prehashed([0; Hash::LENGTH])),
+        lane_block_descriptor_validator_set: vec![PeerId::from(leader.public_key().clone())],
+        lane_block_descriptor_validator_count: 1,
+        lane_block_descriptor_min_quorum: 1,
+        payload_ownership_hash: Hash::prehashed([0; Hash::LENGTH]),
+        rbc_instance_hash: Hash::prehashed([0; Hash::LENGTH]),
+    };
+    let replay_hashes = ownership
+        .compute_replay_hashes()
+        .expect("BLS batch ownership replay hashes must compute");
+    ownership.subject_hash = replay_hashes.subject_hash;
+    ownership.payload_ownership_hash = replay_hashes.payload_ownership_hash;
+    ownership.rbc_instance_hash = replay_hashes.rbc_instance_hash;
+    ownership.lane_block_descriptor_hash = Some(replay_hashes.lane_block_descriptor_hash);
+    builder.set_execution_context(Some(
+        execution_context.with_lane_payload_ownerships(vec![ownership]),
+    ));
     builder.push_transaction(tx);
 }
 
@@ -123,9 +170,10 @@ fn bls_batch_block_validates_with_pop() {
     let (state, chain, account, kp) = mk_state_with_bls_batch();
     let (genesis_hash, peer_kp, peer) = seed_genesis(&state);
     let tx = make_tx(&chain, &account, &kp, true);
-    let header = BlockHeader::new(nonzero!(2_u64), Some(genesis_hash), None, None, 1, 0);
+    let height = nonzero!(2_u64);
+    let header = BlockHeader::new(height, Some(genesis_hash), None, None, 1, 0);
     let mut builder = BlockBuilder::new(header);
-    push_single_tx_with_context(&mut builder, tx);
+    push_single_tx_with_context(&mut builder, tx, &state, height, &peer_kp);
     let proof_policies = proof_policy_bundle(&state.view().nexus().lane_config);
     builder.set_da_proof_policies(Some(proof_policies));
     let block = builder.build_with_signature(0, peer_kp.private_key());
@@ -149,9 +197,10 @@ fn bls_batch_block_validates_without_pop_fallback() {
     let (state, chain, account, kp) = mk_state_with_bls_batch();
     let (genesis_hash, peer_kp, peer) = seed_genesis(&state);
     let tx = make_tx(&chain, &account, &kp, false);
-    let header = BlockHeader::new(nonzero!(2_u64), Some(genesis_hash), None, None, 1, 0);
+    let height = nonzero!(2_u64);
+    let header = BlockHeader::new(height, Some(genesis_hash), None, None, 1, 0);
     let mut builder = BlockBuilder::new(header);
-    push_single_tx_with_context(&mut builder, tx);
+    push_single_tx_with_context(&mut builder, tx, &state, height, &peer_kp);
     let proof_policies = proof_policy_bundle(&state.view().nexus().lane_config);
     builder.set_da_proof_policies(Some(proof_policies));
     let block = builder.build_with_signature(0, peer_kp.private_key());
@@ -176,9 +225,10 @@ fn bls_batch_block_rejects_missing_proof_policy_hash() {
     let (state, chain, account, kp) = mk_state_with_bls_batch();
     let (genesis_hash, peer_kp, peer) = seed_genesis(&state);
     let tx = make_tx(&chain, &account, &kp, true);
-    let header = BlockHeader::new(nonzero!(2_u64), Some(genesis_hash), None, None, 1, 0);
+    let height = nonzero!(2_u64);
+    let header = BlockHeader::new(height, Some(genesis_hash), None, None, 1, 0);
     let mut builder = BlockBuilder::new(header);
-    push_single_tx_with_context(&mut builder, tx);
+    push_single_tx_with_context(&mut builder, tx, &state, height, &peer_kp);
     let block = builder.build_with_signature(0, peer_kp.private_key());
 
     let mut state_block = state.block(block.header());

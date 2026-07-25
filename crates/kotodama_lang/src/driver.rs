@@ -435,6 +435,7 @@ impl BuildDriver {
         graph: &ModuleBuildGraph,
         request: LinkedSourceBuildRequest,
     ) -> Result<BuildOutcome, BuildError> {
+        let _chain_discriminant = self.session.enter_chain_discriminant();
         validate_profile(&request.profile)?;
         reject_layout_collisions(&request.layout, &request.source_name)?;
         let graph_fingerprint =
@@ -491,6 +492,7 @@ impl BuildDriver {
         graph: SourceLinkRequest,
         source_name: &str,
     ) -> Result<CompileOutput, BuildError> {
+        let _chain_discriminant = self.session.enter_chain_discriminant();
         let linked = self
             .graph
             .link(graph, self.session.linker_options())
@@ -505,6 +507,7 @@ impl BuildDriver {
         &self,
         request: SourcePackageGraphRequest,
     ) -> Result<ValidatedSourcePackageGraph, BuildError> {
+        let _chain_discriminant = self.session.enter_chain_discriminant();
         self.graph
             .validate_package(request, self.session.linker_options())
             .map_err(BuildError::SourceGraph)
@@ -521,6 +524,7 @@ impl BuildDriver {
         &self,
         graph: SourceLinkRequest,
     ) -> Result<Vec<ProjectLintWarning>, BuildError> {
+        let _chain_discriminant = self.session.enter_chain_discriminant();
         let mut scoped_sources = vec![(None, graph.root.clone())];
         for package in &graph.packages {
             scoped_sources.extend(
@@ -576,6 +580,7 @@ impl BuildDriver {
         &self,
         mut sources: Vec<SourceModuleUnit>,
     ) -> Result<Vec<ProjectLintWarning>, BuildError> {
+        let _chain_discriminant = self.session.enter_chain_discriminant();
         sources.sort_by(|left, right| left.source_name.cmp(&right.source_name));
         if sources.is_empty() {
             return Ok(Vec::new());

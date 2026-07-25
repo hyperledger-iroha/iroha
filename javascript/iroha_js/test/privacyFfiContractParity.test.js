@@ -5200,7 +5200,7 @@ test("privacy SDK guard runs wrong-operation result schema regressions", () => {
   );
   assert.match(
     workflow,
-    /privacy_csharp_sdk_tests:[\s\S]*actions\/setup-dotnet@v4[\s\S]*dotnet-version:\s+8\.0\.x[\s\S]*run:\s+ci\/check_privacy_csharp_sdk\.sh/,
+    /privacy_csharp_sdk_tests:[\s\S]*actions\/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9[\s\S]*dotnet-version:\s+8\.0\.x[\s\S]*run:\s+ci\/check_privacy_csharp_sdk\.sh/,
     "Privacy SDK workflow must run focused C# privacy tests with dotnet 8",
   );
   assert.match(
@@ -5210,17 +5210,17 @@ test("privacy SDK guard runs wrong-operation result schema regressions", () => {
   );
   assert.match(
     workflow,
-    /privacy_jvm_sdk_tests:[\s\S]*actions\/setup-java@v4[\s\S]*distribution:\s+"temurin"[\s\S]*java-version:\s+"21"[\s\S]*run:\s+ci\/check_privacy_jvm_sdk\.sh/,
+    /privacy_jvm_sdk_tests:[\s\S]*actions\/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9[\s\S]*distribution:\s+"temurin"[\s\S]*java-version:\s+"21"[\s\S]*run:\s+ci\/check_privacy_jvm_sdk\.sh/,
     "Privacy SDK workflow must run focused JVM and Java privacy tests with Java 21",
   );
   assert.match(
     workflow,
-    /privacy_javascript_sdk_tests:[\s\S]*actions\/setup-node@v4[\s\S]*node-version:\s+"20"[\s\S]*npm ci --prefix javascript\/iroha_js[\s\S]*run:\s+ci\/check_privacy_js_sdk\.sh/,
+    /privacy_javascript_sdk_tests:[\s\S]*actions\/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020[\s\S]*node-version:\s+"20"[\s\S]*npm ci --prefix javascript\/iroha_js[\s\S]*run:\s+ci\/check_privacy_js_sdk\.sh/,
     "Privacy SDK workflow must run focused JavaScript privacy tests with Node 20",
   );
   assert.match(
     workflow,
-    /privacy_python_sdk_tests:[\s\S]*actions\/setup-python@v5[\s\S]*python-version:\s+"3\.11"[\s\S]*run:\s+ci\/check_privacy_python_sdk\.sh/,
+    /privacy_python_sdk_tests:[\s\S]*actions\/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065[\s\S]*python-version:\s+"3\.11"[\s\S]*run:\s+ci\/check_privacy_python_sdk\.sh/,
     "Privacy SDK workflow must run focused Python privacy tests with Python 3.11",
   );
   assertWorkflowIncludesPaths(
@@ -5261,7 +5261,7 @@ test("privacy SDK guard runs wrong-operation result schema regressions", () => {
   );
   assert.match(
     workflow,
-    /privacy_native_bridge_tests:[\s\S]*runs-on:\s+ubuntu-latest[\s\S]*Swatinem\/rust-cache@v2[\s\S]*run:\s+cargo test -p connect_norito_bridge privacy_ --lib -- --test-threads=1/,
+    /privacy_native_bridge_tests:[\s\S]*runs-on:\s+ubuntu-latest[\s\S]*Swatinem\/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32[\s\S]*run:\s+cargo test -p connect_norito_bridge privacy_ --lib -- --test-threads=1/,
     "Privacy SDK workflow must run focused native connect_norito_bridge privacy tests",
   );
   assert.match(

@@ -38,7 +38,7 @@ descripción: SoraFS کپیسٹی تنازعات جمع کرانے، منسوخ�
    - URI de alojamiento (almacenamiento de objetos, pin SoraFS, punto final accesible Torii)
 3. گورننس depósito de recopilación de pruebas میں escritura única رسائی کے ساتھ پیکج محفوظ کریں۔## 3. تنازع جمع کرائیں
 
-1. `sorafs_manifest_stub capacity dispute` Archivo de especificación JSON:
+1. `sorafs_manifest_builder capacity dispute` Archivo de especificación JSON:
 
    ```json
    {
@@ -61,7 +61,7 @@ descripción: SoraFS کپیسٹی تنازعات جمع کرانے، منسوخ�
 2. CLI چلائیں:
 
    ```bash
-   sorafs_manifest_stub capacity dispute \
+   sorafs_manifest_builder capacity dispute \
      --spec=dispute.json \
      --norito-out=dispute.to \
      --base64-out=dispute.b64 \
@@ -78,7 +78,7 @@ descripción: SoraFS کپیسٹی تنازعات جمع کرانے، منسوخ�
 
 1. **Ventana de gracia:** پروائیڈر کو متوقع منسوخی سے آگاہ کریں؛ پالیسی اجازت دے تو datos anclados کے انخلا کی اجازت دیں۔
 2. **`ProviderAdmissionRevocationV1` Número:**
-   - منظور شدہ وجہ کے ساتھ `sorafs_manifest_stub provider-admission revoke` استعمال کریں۔
+   - منظور شدہ وجہ کے ساتھ `sorafs_manifest_builder provider-admission revoke` استعمال کریں۔
    - دستخط اور resumen de revocación ویریفائی کریں۔
 3. **منسوخی شائع کریں:**
    - منسوخی ریکوئسٹ Torii کو جمع کریں۔
@@ -93,7 +93,7 @@ descripción: SoraFS کپیسٹی تنازعات جمع کرانے، منسوخ�
 
 ## 6. حوالہ جاتی مواد
 
-- `sorafs_manifest_stub capacity dispute --help`
+- `sorafs_manifest_builder capacity dispute --help`
 - `docs/source/sorafs/storage_capacity_marketplace.md` (sección de disputas)
 - `docs/source/sorafs/provider_admission_policy.md` (flujo de trabajo de revocación)
 - Panel de observabilidad: `SoraFS / Capacity Providers`

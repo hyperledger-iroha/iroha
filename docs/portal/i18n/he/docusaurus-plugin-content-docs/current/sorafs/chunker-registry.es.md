@@ -90,8 +90,8 @@ que requiere negociación explícita del cliente (`Accept-Chunker` + `Accept-Dig
 | רכיב | Estado | Notas |
 |-----------|--------|-------|
 | `sorafs_manifest_chunk_store` | ✅ סופורטדו | תוקף ידית קנוניק + כינוי, העברת דיווחים דרך `--json-out=-` y aplica la carta del registro con `ensure_charter_compliance()`. |
-| `sorafs_manifest_stub` | ⚠️ Retirado | Constructor de manifest fuera de soporte; ארה"ב `iroha app sorafs toolkit pack` para empaquetado CAR/manifest y mantén `--plan=-` para revalidación determinista. |
-| `sorafs_provider_advert_stub` | ⚠️ Retirado | Helper de validación offline únicamente; los ספק פרסומות deben producirse por el pipeline de publicación y validarse vía `/v1/sorafs/providers`. |
+| `sorafs_manifest_builder` | ⚠️ Retirado | Constructor de manifest fuera de soporte; ארה"ב `iroha app sorafs toolkit pack` para empaquetado CAR/manifest y mantén `--plan=-` para revalidación determinista. |
+| `sorafs_provider_advert` | ✅ Production | Private-key-free two-phase external Ed25519 signing with exact raw-key, reviewed SHA-256 fingerprint, canonical payload, and strict path-identity verification. |
 | `sorafs_fetch` (מתזמר מפתח) | ✅ סופורטדו | Lee `chunk_fetch_specs`, מטענים פעילים של capacidad `range` y ensambla salida CARv2. |
 | Fixtures de SDK (Rust/Go/TS) | ✅ סופורטדו | Regeneradas vía `export_vectors`; el handle canónico aparece primero in cada list de alias y está firmado por sobres del consejo. |
 | Negociación de perfiles en gateway Torii | ✅ סופורטדו | יישום השלמה של `Accept-Chunker`, כולל כותרות `Content-Chunker` y expone el bridge CARv1 solo and solicitudes de degradation explícitas. |
@@ -147,12 +147,12 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
 ```
 ```
 
-El manifest stub refleja los mismos datos, lo que es conveniente al automatizar la selección de
+El manifest builder refleja los mismos datos, lo que es conveniente al automatizar la selección de
 `--chunker-profile-id` en pipelines. Ambos CLIs de chunk store también aceptan la forma de handle canónico
 (`--profile=sorafs.sf1@1.0.0`) para que los scripts de build puedan evitar hard-codear IDs numéricos:
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- --list-chunker-profiles
+$ cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- --list-chunker-profiles
 [
   {
     "פרופיל_מזהה": 1,
@@ -218,4 +218,4 @@ adicionales para transición pero no deben reemplazar el digest canónico.
   mediante las pruebas provistas.
 * `chunker_registry::lookup_by_profile` אfirma que los parametros del descriptor
   coinciden con `ChunkProfile::DEFAULT` para evitar divergencias accidentales.
-* Los manifests producidos por `iroha app sorafs toolkit pack` y `sorafs_manifest_stub` כולל מטא נתונים של רישום.
+* Los manifests producidos por `iroha app sorafs toolkit pack` y `sorafs_manifest_builder` כולל מטא נתונים של רישום.

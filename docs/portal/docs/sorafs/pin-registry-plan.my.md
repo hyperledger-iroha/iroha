@@ -80,7 +80,7 @@ Rust Norito schemas နှင့် validation helpers သည် ဤမှတ်
 |----------|------|----------|
 | Torii ဝန်ဆောင်မှု | `/v1/sorafs/pin` (တင်သွင်းရန်)၊ `/v1/sorafs/pin/{cid}` (ရှာဖွေမှု)၊ `/v1/sorafs/aliases` (စာရင်း/စည်း)၊ `/v1/sorafs/replication` (အော်ဒါ/ပြေစာများ) ကို ဖော်ထုတ်ပါ။ pagination + filtering ပေးပါ။ | ကွန်ရက်ချိတ်ဆက်ခြင်း TL / Core Infra |
 | သက်သေခံချက် | တုံ့ပြန်မှုများတွင် registry အမြင့်/hash ကို ထည့်သွင်းပါ။ SDKs မှအသုံးပြုသော Norito သက်သေပြတည်ဆောက်ပုံကို ထည့်ပါ။ | Core Infra |
-| CLI | `sorafs_manifest_stub` သို့မဟုတ် `sorafs_pin` CLI အသစ်ကို `pin submit`၊ `alias bind`၊ `order issue`၊ `registry export` ဖြင့် တိုးချဲ့ပါ။ | Tooling WG |
+| CLI | `sorafs_manifest_builder` သို့မဟုတ် `sorafs_pin` CLI အသစ်ကို `pin submit`၊ `alias bind`၊ `order issue`၊ `registry export` ဖြင့် တိုးချဲ့ပါ။ | Tooling WG |
 | SDK | Norito schema မှ client bindings (Rust/Go/TS) ကို ဖန်တီးပါ။ ပေါင်းစပ်စစ်ဆေးမှုများထည့်ပါ။ | SDK အဖွဲ့များ |
 
 လည်ပတ်မှုများ-

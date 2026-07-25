@@ -38,7 +38,7 @@ Sidebar_label: الدعاوى القضائية والإبطالات
 
 ## 3. إيداع الدعوى
 
-1. إنشاء مواصفات JSON لـ `sorafs_manifest_stub capacity dispute` :
+1. إنشاء مواصفات JSON لـ `sorafs_manifest_builder capacity dispute` :
 
    ```json
    {
@@ -61,7 +61,7 @@ Sidebar_label: الدعاوى القضائية والإبطالات
 2. إطلاق CLI :
 
    ```bash
-   sorafs_manifest_stub capacity dispute \
+   sorafs_manifest_builder capacity dispute \
      --spec=dispute.json \
      --norito-out=dispute.to \
      --base64-out=dispute.b64 \
@@ -76,7 +76,7 @@ Sidebar_label: الدعاوى القضائية والإبطالات
 
 ## 4. الإخلاء والإلغاء1. **نافذة الرحمة:** الإعلان عن مقدم الإلغاء الوشيك ; قم بتفويض إخلاء البيانات عند السماح بالسياسة.
 2. **جينيريز `ProviderAdmissionRevocationV1`:**
-   -استخدم `sorafs_manifest_stub provider-admission revoke` مع السبب المعتمد.
+   -استخدم `sorafs_manifest_builder provider-admission revoke` مع السبب المعتمد.
    - التحقق من التوقيعات وملخص الإبطال.
 3. **نشر الإلغاء :**
    - قم بإرجاع طلب الإلغاء إلى Torii.
@@ -91,7 +91,7 @@ Sidebar_label: الدعاوى القضائية والإبطالات
 
 ## 6. وثائق مرجعية
 
--`sorafs_manifest_stub capacity dispute --help`
+-`sorafs_manifest_builder capacity dispute --help`
 - `docs/source/sorafs/storage_capacity_marketplace.md` (قسم الدعاوى)
 - `docs/source/sorafs/provider_admission_policy.md` (سير العمل للإبطال)
 - لوحة التحكم: `SoraFS / Capacity Providers`

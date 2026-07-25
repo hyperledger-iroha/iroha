@@ -353,6 +353,14 @@ pub fn enforce_network_start_requirement<T>(
     apply_network_start_requirement(network, context, network_start_requirement()?)
 }
 
+fn handle_sandboxed_network_start<T>(context: &str, reason: &str) -> Result<Option<T>> {
+    enforce_network_start_requirement::<T>(None, context)?;
+    eprintln!(
+        "sandboxed network restriction detected while running {context}; skipping network startup ({reason})"
+    );
+    Ok(None)
+}
+
 fn network_permit_state() -> &'static Arc<NetworkPermitState> {
     static NETWORK_STATE: OnceLock<Arc<NetworkPermitState>> = OnceLock::new();
     NETWORK_STATE.get_or_init(|| Arc::new(NetworkPermitState::new()))
@@ -554,7 +562,10 @@ fn is_retryable_network_startup_error(err: &Report) -> bool {
     })
 }
 
-/// Attempt to start a blocking test network; fail when the sandbox forbids binding sockets.
+/// Attempt to start a blocking test network.
+///
+/// Sandbox socket restrictions return `None` for ordinary developer runs and fail when
+/// [`REQUIRE_NETWORK_ENV`] requires the real network scenario to execute.
 ///
 /// # Errors
 ///
@@ -570,22 +581,18 @@ pub fn start_network_blocking_or_skip(
         .with_auto_populated_trusted_peers()
         .with_min_peers(MIN_NETWORK_PEERS);
     for attempt in 1..=network_start_attempts {
-        let (network, runtime) = match panic::catch_unwind(AssertUnwindSafe(|| {
-            builder.clone().build_blocking()
-        })) {
-            Ok(tuple) => tuple,
-            Err(panic) => {
-                if let Some(reason) = panic_reason(panic.as_ref())
-                    && is_sandbox_message(&reason)
-                {
-                    eprintln!(
-                        "sandboxed network restriction detected while running {context}; skipping network startup ({reason})"
-                    );
-                    return Ok(None);
+        let (network, runtime) =
+            match panic::catch_unwind(AssertUnwindSafe(|| builder.clone().build_blocking())) {
+                Ok(tuple) => tuple,
+                Err(panic) => {
+                    if let Some(reason) = panic_reason(panic.as_ref())
+                        && is_sandbox_message(&reason)
+                    {
+                        return handle_sandboxed_network_start(context, &reason);
+                    }
+                    panic::resume_unwind(panic);
                 }
-                panic::resume_unwind(panic);
-            }
-        };
+            };
         match runtime.block_on(async { network.start_all().await }) {
             Ok(_) => {
                 runtime
@@ -653,7 +660,10 @@ pub fn build_network_blocking_or_skip(
     ))
 }
 
-/// Attempt to start an async test network; fail when the sandbox forbids binding sockets.
+/// Attempt to start an async test network.
+///
+/// Sandbox socket restrictions return `None` for ordinary developer runs and fail when
+/// [`REQUIRE_NETWORK_ENV`] requires the real network scenario to execute.
 ///
 /// # Errors
 ///
@@ -675,10 +685,7 @@ pub async fn start_network_async_or_skip(
                 if let Some(reason) = panic_reason(panic.as_ref())
                     && is_sandbox_message(&reason)
                 {
-                    eprintln!(
-                        "sandboxed network restriction detected while running {context}; skipping network startup ({reason})"
-                    );
-                    return Ok(None);
+                    return handle_sandboxed_network_start(context, &reason);
                 }
                 panic::resume_unwind(panic);
             }
@@ -1088,6 +1095,34 @@ mod tests {
         .unwrap_err();
         let message = err.to_string();
         assert!(message.contains("four_peer_acceptance"));
+        assert!(message.contains("IROHA_TEST_REQUIRE_NETWORK=1"));
+        assert!(message.contains("successful skip"));
+    }
+
+    #[test]
+    fn sandboxed_network_start_helper_preserves_optional_developer_skip() {
+        let _env_guard = lock_env_guard();
+        let _restore = EnvRestore::set(REQUIRE_NETWORK_ENV, "0");
+
+        assert_eq!(
+            handle_sandboxed_network_start::<()>("optional_network", "operation not permitted")
+                .unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn sandboxed_network_start_helper_fails_required_release_scenario() {
+        let _env_guard = lock_env_guard();
+        let _restore = EnvRestore::set(REQUIRE_NETWORK_ENV, "1");
+
+        let err = handle_sandboxed_network_start::<()>(
+            "required_multilane_network",
+            "operation not permitted",
+        )
+        .unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("required_multilane_network"));
         assert!(message.contains("IROHA_TEST_REQUIRE_NETWORK=1"));
         assert!(message.contains("successful skip"));
     }

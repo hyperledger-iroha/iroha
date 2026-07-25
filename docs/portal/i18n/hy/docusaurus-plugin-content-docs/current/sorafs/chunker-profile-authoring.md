@@ -95,9 +95,9 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
   manifest digest, PoR-ը ստուգում է առաջարկվող պարամետրերով:
 - `sorafs_manifest_chunk_store --json-out=-` – հեռարձակեք chunk-store հաշվետվությունը դեպի
   stdout ավտոմատ համեմատությունների համար:
-- `sorafs_manifest_stub --chunker-profile=<handle>` – հաստատեք մանիֆեստները և մեքենան
+- `sorafs_manifest_builder --chunker-profile=<handle>` – հաստատեք մանիֆեստները և մեքենան
   պլանները ներկառուցում են կանոնական բռնակը գումարած փոխանունները:
-- `sorafs_manifest_stub --plan=-` – վերադարձրեք նախորդ `chunk_fetch_specs`-ը
+- `sorafs_manifest_builder --plan=-` – վերադարձրեք նախորդ `chunk_fetch_specs`-ը
   ներս՝ ստուգելու փոխհատուցումները/մարսումները՝ փոփոխություններից հետո:
 
 Գրանցեք հրամանի ելքը (մարսումներ, PoR արմատներ, մանիֆեստային հեշեր) առաջարկի մեջ
@@ -138,7 +138,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
   --json-out=- --por-json-out=- fixtures/sorafs_chunker/input.bin
 
 # Generate manifest + CAR and capture chunk fetch specs
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --chunk-fetch-plan-out=chunk_plan.json \
@@ -147,7 +147,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
   --json-out=sf2.report.json
 
 # Re-run using the saved fetch plan (guards against stale offsets)
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --plan=chunk_plan.json --json-out=-

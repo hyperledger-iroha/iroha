@@ -90,7 +90,14 @@ use iroha_data_model::{
         nft::prelude::FindNftById,
         parameters::{FetchSize, Pagination, QueryParams, Sorting},
     },
-    smart_contract::{ContractAddress, ContractAlias, ContractInstance},
+    smart_contract::{
+        ContractAddress, ContractAlias, ContractInstance,
+        entrypoint::{
+            EntrypointArgumentFieldV1, EntrypointArgumentRecordV1, EntrypointArgumentSchemaV1,
+            EntrypointValueAtomV1, EntrypointValueKindV1, EntrypointValueTypeNodeV1,
+            EntrypointValueTypeV1, entrypoint_argument_schema_hash_v1,
+        },
+    },
     soracloud::{
         SoracloudHostOperationV1, SoracloudHostRequestEnvelopeV1, SoracloudHostRequestPayloadV1,
     },
@@ -6767,6 +6774,154 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             )
     }
 
+    fn quantity_entrypoint_type() -> EntrypointValueTypeV1 {
+        EntrypointValueTypeV1 {
+            nodes: vec![EntrypointValueTypeNodeV1::Leaf(
+                EntrypointValueKindV1::Quantity,
+            )],
+        }
+    }
+
+    fn quantity2_argument_schema() -> EntrypointArgumentSchemaV1 {
+        EntrypointArgumentSchemaV1 {
+            fields: vec![
+                EntrypointArgumentFieldV1 {
+                    name: "amount_in".to_owned(),
+                    ty: Self::quantity_entrypoint_type(),
+                },
+                EntrypointArgumentFieldV1 {
+                    name: "min_out".to_owned(),
+                    ty: Self::quantity_entrypoint_type(),
+                },
+            ],
+        }
+    }
+
+    fn rollback_typed_contract_call(
+        &mut self,
+        vm: &mut IVM,
+        snapshot: NestedContractCallHostSnapshot,
+        original_contract_pointer: u64,
+        gas: u64,
+        error: ivm::VMError,
+    ) -> Result<u64, ivm::VMError> {
+        // The typed syscall owns r10 until the exact return has been decoded.
+        // Restore the caller-visible register before any fallible host cleanup
+        // so no child output can survive even if rollback itself reports an
+        // invariant violation.
+        vm.set_register(10, original_contract_pointer);
+        self.finish_nested_contract_call(snapshot, NestedContractCallOutcome::Rollback)
+            .map_err(|rollback| ivm::VMError::metered(gas, rollback))?;
+        Err(ivm::VMError::metered(gas, error))
+    }
+
+    fn decode_quantity_return_envelope(payload: &[u8]) -> Result<Vec<u8>, ivm::VMError> {
+        let return_record =
+            crate::smartcontracts::ivm::return_value::decode_entrypoint_return_record(
+                &Self::quantity_entrypoint_type(),
+                payload,
+            )
+            .map_err(|_| ivm::VMError::DecodeError)?;
+        let [EntrypointValueAtomV1::Pointer(quantity_envelope)] = return_record.atoms.as_slice()
+        else {
+            return Err(ivm::VMError::DecodeError);
+        };
+        ivm::numeric_tlv::decode_quantity_bytes(quantity_envelope)?;
+        Ok(quantity_envelope.clone())
+    }
+
+    /// Execute the first production compiler-owned nested-call profile.
+    ///
+    /// The syscall accepts only two canonical `Quantity` pointers and builds
+    /// the exact declaration-ordered argument record itself. The callee's
+    /// signed manifest then authenticates that record against the selected
+    /// literal entrypoint, while the exact `Quantity` return schema is checked
+    /// before the result is published to the caller.
+    fn handle_call_contract_quantity2(&mut self, vm: &mut IVM) -> Result<u64, ivm::VMError> {
+        let amount_in = Self::decode_quantity(vm, vm.register(12))?;
+        let min_out = Self::decode_quantity(vm, vm.register(13))?;
+        let amount_in_envelope = ivm::numeric_tlv::encode_quantity(&amount_in)?;
+        let min_out_envelope = ivm::numeric_tlv::encode_quantity(&min_out)?;
+
+        let schema = Self::quantity2_argument_schema();
+        let schema_bytes = norito::to_bytes(&schema).map_err(|_| ivm::VMError::NoritoInvalid)?;
+        let record = EntrypointArgumentRecordV1 {
+            schema_hash: entrypoint_argument_schema_hash_v1(&schema_bytes),
+            atoms: vec![
+                EntrypointValueAtomV1::Pointer(amount_in_envelope),
+                EntrypointValueAtomV1::Pointer(min_out_envelope),
+            ],
+        };
+        let record_bytes = norito::to_bytes(&record).map_err(|_| ivm::VMError::NoritoInvalid)?;
+        let record_pointer = Self::alloc_norito_bytes(vm, &record_bytes)?;
+        vm.set_register(12, record_pointer);
+
+        let original_contract_pointer = vm.register(10);
+        let typed_call_snapshot = self.snapshot_nested_contract_call();
+        let call_gas = match self.handle_call_contract(vm) {
+            Ok(gas) => gas,
+            Err(error) => {
+                vm.set_register(10, original_contract_pointer);
+                self.finish_nested_contract_call(
+                    typed_call_snapshot,
+                    NestedContractCallOutcome::Rollback,
+                )?;
+                return Err(error);
+            }
+        };
+        let return_pointer = vm.register(10);
+        if return_pointer == 0 {
+            return self.rollback_typed_contract_call(
+                vm,
+                typed_call_snapshot,
+                original_contract_pointer,
+                call_gas,
+                ivm::VMError::DecodeError,
+            );
+        }
+        let return_payload =
+            match Self::decode_pointer_tlv(vm, return_pointer, PointerType::NoritoBytes) {
+                Ok(tlv) => tlv.payload.to_vec(),
+                Err(error) => {
+                    return self.rollback_typed_contract_call(
+                        vm,
+                        typed_call_snapshot,
+                        original_contract_pointer,
+                        call_gas,
+                        error,
+                    );
+                }
+            };
+        let quantity_envelope = match Self::decode_quantity_return_envelope(&return_payload) {
+            Ok(envelope) => envelope,
+            Err(error) => {
+                return self.rollback_typed_contract_call(
+                    vm,
+                    typed_call_snapshot,
+                    original_contract_pointer,
+                    call_gas,
+                    error,
+                );
+            }
+        };
+        let quantity_pointer = match vm.alloc_host_tlv(&quantity_envelope) {
+            Ok(pointer) => pointer,
+            Err(error) => {
+                return self.rollback_typed_contract_call(
+                    vm,
+                    typed_call_snapshot,
+                    original_contract_pointer,
+                    call_gas,
+                    error,
+                );
+            }
+        };
+        self.finish_nested_contract_call(typed_call_snapshot, NestedContractCallOutcome::Commit)
+            .map_err(|error| ivm::VMError::metered(call_gas, error))?;
+        vm.set_register(10, quantity_pointer);
+        Ok(call_gas)
+    }
+
     fn handle_call_contract(&mut self, vm: &mut IVM) -> Result<u64, ivm::VMError> {
         if self.nested_contract_call_depth >= MAX_NESTED_CONTRACT_CALL_DEPTH {
             return Err(ivm::VMError::metered(
@@ -10056,6 +10211,18 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 }
                 Some(ivm::host::reserve_available_syscall_gas(vm)?)
             }
+            ivm::syscalls::SYSCALL_CALL_CONTRACT_QUANTITY2 => {
+                for (register, pointer_type) in [
+                    (10, PointerType::Blob),
+                    (11, PointerType::Blob),
+                    (12, PointerType::Quantity),
+                    (13, PointerType::Quantity),
+                ] {
+                    vm.ensure_public_register(register)?;
+                    quote_tlv_payload_len_at(vm, vm.register(register), pointer_type)?;
+                }
+                Some(ivm::host::reserve_available_syscall_gas(vm)?)
+            }
             ivm::syscalls::SYSCALL_ZK_VERIFY_TRANSFER
             | ivm::syscalls::SYSCALL_ZK_VERIFY_UNSHIELD
             | ivm::syscalls::SYSCALL_ZK_VOTE_VERIFY_BALLOT
@@ -11832,6 +11999,9 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 Self::finish_direct_singular_query_payload(vm, gas_remaining, payload)
             }
             ivm::syscalls::SYSCALL_CALL_CONTRACT => self.handle_call_contract(vm),
+            ivm::syscalls::SYSCALL_CALL_CONTRACT_QUANTITY2 => {
+                self.handle_call_contract_quantity2(vm)
+            }
 
             ivm::syscalls::SYSCALL_AXT_BEGIN => self.handle_axt_begin(vm),
             ivm::syscalls::SYSCALL_AXT_TOUCH => self.handle_axt_touch(vm),
@@ -17078,6 +17248,70 @@ seiyaku AliasPayout {{
         (result, vm, durable_state_overlay)
     }
 
+    fn call_contract_quantity2_syscall(
+        state: &State,
+        outer_authority: &AccountId,
+        caller_contract: &ContractAddress,
+        callee_contract: &ContractAddress,
+        entrypoint: &str,
+        amount_in: &Numeric,
+        min_out: &Numeric,
+    ) -> (
+        Result<u64, ivm::VMError>,
+        IVM,
+        BTreeMap<Name, Option<Vec<u8>>>,
+        u64,
+    ) {
+        let view = state.view();
+        let mut host = CoreHostImpl::new(outer_authority.clone());
+        host.set_query_state(&view);
+        host.set_durable_state_snapshot_from_world(view.world());
+        host.set_contract_runtime_context(Some(ContractRuntimeExecutionContext {
+            contract_address: caller_contract.clone(),
+            contract_subject: caller_contract.subject_id(),
+            contract_alias: None,
+            entrypoint: "invoke".to_owned(),
+        }));
+        let caller_code_hash = *view
+            .world()
+            .contract_instances()
+            .get(caller_contract)
+            .expect("installed caller contract binding");
+        host.set_contract_entrypoint_authorization(Some(
+            ContractEntrypointAuthorizationSnapshot::new(
+                outer_authority.clone(),
+                "invoke".to_owned(),
+                None,
+                &crate::smartcontracts::code::BoundContractIdentity {
+                    contract_address: caller_contract.clone(),
+                    contract_alias: None,
+                    contract_alias_binding: None,
+                    code_hash: caller_code_hash,
+                },
+            ),
+        ));
+
+        let mut vm = IVM::new(1_000_000);
+        vm.load_program(&ivm::ProgramMetadata::default().encode())
+            .expect("load metadata-only program");
+        let target_ptr = store_tlv(
+            &mut vm,
+            PointerType::Blob,
+            callee_contract.as_ref().as_bytes(),
+        );
+        let entrypoint_ptr = store_tlv(&mut vm, PointerType::Blob, entrypoint.as_bytes());
+        let amount_in_ptr = store_quantity(&mut vm, amount_in);
+        let min_out_ptr = store_quantity(&mut vm, min_out);
+        vm.set_register(10, target_ptr);
+        vm.set_register(11, entrypoint_ptr);
+        vm.set_register(12, amount_in_ptr);
+        vm.set_register(13, min_out_ptr);
+
+        let result = host.syscall(ivm_sys::SYSCALL_CALL_CONTRACT_QUANTITY2, &mut vm);
+        let durable_state_overlay = host.drain_durable_state_overlay();
+        (result, vm, durable_state_overlay, target_ptr)
+    }
+
     fn call_contract_syscall_access_log(
         state: &State,
         outer_authority: &AccountId,
@@ -21342,6 +21576,224 @@ seiyaku Callee {
             ivm::numeric_tlv::decode_int_bytes(envelope).expect("decode returned Int"),
             iroha_primitives::bigint::BigInt::from_i128(42),
         );
+    }
+
+    #[test]
+    fn call_contract_quantity2_returns_exact_quantity() {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let state = contract_test_state(&authority);
+        let caller_contract = install_contract(
+            &state,
+            &authority,
+            r#"
+seiyaku Caller {
+  view fn main() -> int { return 0; }
+}
+"#,
+            0,
+        );
+        let callee_contract = install_contract(
+            &state,
+            &authority,
+            r#"
+seiyaku Callee {
+  view fn quote(quantity amount_in, quantity min_out) -> quantity {
+    return amount_in;
+  }
+}
+"#,
+            1,
+        );
+
+        let amount_in = Numeric::new(10_u32, 0);
+        let min_out = Numeric::new(7_u32, 0);
+        let (result, vm, durable_state_overlay, target_ptr) = call_contract_quantity2_syscall(
+            &state,
+            &authority,
+            &caller_contract,
+            &callee_contract,
+            "quote",
+            &amount_in,
+            &min_out,
+        );
+        assert!(result.expect("typed quantity call should succeed") > 0);
+        assert!(durable_state_overlay.is_empty());
+        assert_ne!(
+            vm.register(10),
+            target_ptr,
+            "success must publish the canonical quantity result",
+        );
+        let tlv = vm
+            .memory
+            .validate_tlv(vm.register(10))
+            .expect("returned Quantity TLV");
+        assert_eq!(tlv.type_id, PointerType::Quantity);
+        assert_eq!(
+            decode_quantity_leaf(&vm, vm.register(10)),
+            Quantity::from_canonical_numeric(amount_in).expect("fixture quantity"),
+        );
+    }
+
+    #[test]
+    fn call_contract_quantity2_rejects_wrong_argument_schema_without_output() {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let state = contract_test_state(&authority);
+        let caller_contract = install_contract(
+            &state,
+            &authority,
+            r#"
+seiyaku Caller {
+  view fn main() -> int { return 0; }
+}
+"#,
+            0,
+        );
+        let callee_contract = install_contract(
+            &state,
+            &authority,
+            r#"
+seiyaku Callee {
+  view fn quote(quantity other_amount, quantity min_out) -> quantity {
+    return other_amount;
+  }
+}
+"#,
+            1,
+        );
+
+        let (result, vm, durable_state_overlay, target_ptr) = call_contract_quantity2_syscall(
+            &state,
+            &authority,
+            &caller_contract,
+            &callee_contract,
+            "quote",
+            &Numeric::new(10_u32, 0),
+            &Numeric::new(7_u32, 0),
+        );
+        assert!(
+            result.is_err(),
+            "field-name schema mismatch must fail closed"
+        );
+        assert!(durable_state_overlay.is_empty());
+        assert_eq!(
+            vm.register(10),
+            target_ptr,
+            "failed typed call must restore r10 instead of exposing child output",
+        );
+    }
+
+    #[test]
+    fn call_contract_quantity2_rolls_back_state_on_wrong_return_schema() {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let state = contract_test_state(&authority);
+        let caller_contract = install_contract(
+            &state,
+            &authority,
+            r#"
+seiyaku Caller {
+  view fn main() -> int { return 0; }
+}
+"#,
+            0,
+        );
+        let callee_contract = install_contract(
+            &state,
+            &authority,
+            r#"
+seiyaku Callee {
+  state int counter;
+
+  hajimari() {
+    counter = 0;
+  }
+
+  kotoage fn quote(quantity amount_in, quantity min_out) -> int authorize("AssetOps") {
+    counter = 9;
+    return 1;
+  }
+}
+"#,
+            1,
+        );
+        grant_asset_ops_to_account(&state, &authority, caller_contract.subject_id());
+
+        let (result, vm, durable_state_overlay, target_ptr) = call_contract_quantity2_syscall(
+            &state,
+            &authority,
+            &caller_contract,
+            &callee_contract,
+            "quote",
+            &Numeric::new(10_u32, 0),
+            &Numeric::new(7_u32, 0),
+        );
+        let error = result.expect_err("non-Quantity return schema must fail closed");
+        assert!(matches!(error.as_unmetered(), ivm::VMError::DecodeError));
+        assert!(
+            durable_state_overlay.is_empty(),
+            "post-child return decoding failure must roll back all child writes",
+        );
+        assert_eq!(
+            vm.register(10),
+            target_ptr,
+            "failed return decoding must not publish a child result",
+        );
+    }
+
+    #[test]
+    fn call_contract_quantity2_rejects_wrong_return_schema_atom_and_pointer_type() {
+        use iroha_data_model::smart_contract::entrypoint::{
+            EntrypointReturnRecordV1, entrypoint_return_schema_hash_v1,
+        };
+
+        let quantity_schema = CoreHost::quantity_entrypoint_type();
+        let quantity_schema_hash = entrypoint_return_schema_hash_v1(
+            &norito::to_bytes(&quantity_schema).expect("encode Quantity schema"),
+        );
+        let int_schema = exact_return_type(
+            iroha_data_model::smart_contract::entrypoint::EntrypointValueKindV1::Int,
+        );
+        let int_schema_hash = entrypoint_return_schema_hash_v1(
+            &norito::to_bytes(&int_schema).expect("encode Int schema"),
+        );
+        let int_envelope =
+            ivm::numeric_tlv::encode_int(&BigInt::from_i128(1)).expect("encode Int TLV");
+        let malformed = [
+            (
+                "wrong schema",
+                EntrypointReturnRecordV1 {
+                    schema_hash: int_schema_hash,
+                    atoms: vec![EntrypointValueAtomV1::Pointer(int_envelope.clone())],
+                },
+            ),
+            (
+                "wrong atom",
+                EntrypointReturnRecordV1 {
+                    schema_hash: quantity_schema_hash,
+                    atoms: vec![EntrypointValueAtomV1::Bool(true)],
+                },
+            ),
+            (
+                "wrong pointer type",
+                EntrypointReturnRecordV1 {
+                    schema_hash: quantity_schema_hash,
+                    atoms: vec![EntrypointValueAtomV1::Pointer(int_envelope)],
+                },
+            ),
+        ];
+
+        for (label, record) in malformed {
+            let payload = norito::to_bytes(&record).expect("encode malformed return record");
+            assert!(
+                matches!(
+                    CoreHost::decode_quantity_return_envelope(&payload),
+                    Err(ivm::VMError::DecodeError)
+                ),
+                "{label} must fail closed",
+            );
+        }
     }
 
     #[test]

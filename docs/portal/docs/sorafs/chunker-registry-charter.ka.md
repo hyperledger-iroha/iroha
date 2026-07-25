@@ -61,7 +61,7 @@ SDK-ები). ის ახორციელებს შემოწმე�
      cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
+     cargo run -p sorafs_car --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - წარადგინეთ PR, რომელიც შეიცავს ინსტრუმენტებს, წინადადებას, დეტერმინიზმის მოხსენებას და რეესტრს
@@ -100,14 +100,14 @@ SDK-ები). ის ახორციელებს შემოწმე�
 
 ## ინსტრუმენტების მოლოდინები
 
-- `sorafs_manifest_chunk_store` და `sorafs_manifest_stub` ავლენს:
+- `sorafs_manifest_chunk_store` და `sorafs_manifest_builder` ავლენს:
   - `--list-profiles` რეესტრის შემოწმებისთვის.
   - `--promote-profile=<handle>` გამოყენებული კანონიკური მეტამონაცემების ბლოკის შესაქმნელად
     პროფილის პოპულარიზაციისას.
   - `--json-out=-` ანგარიშების სტრიმინგისთვის stdout-ზე, რაც საშუალებას იძლევა განმეორებადი მიმოხილვა
     მორები.
 - `ensure_charter_compliance()` გამოძახებულია გაშვებისას შესაბამის ბინარებში
-  (`manifest_chunk_store`, `provider_advert_stub`). CI ტესტები უნდა ჩავარდეს, თუ ახალია
+  (`manifest_chunk_store`, `sorafs_provider_advert`). CI ტესტები უნდა ჩავარდეს, თუ ახალია
   ჩანაწერები არღვევს წესდებას.
 
 ## ჩანაწერების წარმოება

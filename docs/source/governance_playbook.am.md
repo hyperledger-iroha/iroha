@@ -66,7 +66,7 @@ translator: machine-google-reviewed
    በሮች.
 2. አንጸባራቂ ስቶብ አረጋጋጭ በተፈረመበት ፖስታ ያሂዱ፡-
    ```
-   cargo run -p sorafs_car --bin sorafs-manifest-stub -- manifest.json \
+   cargo run -p sorafs_car --bin sorafs-manifest-builder -- manifest.json \
      --manifest-signatures-in=fixtures/sorafs_chunker/manifest_signatures.json \
      --json-out=/tmp/manifest_report.json
    ```

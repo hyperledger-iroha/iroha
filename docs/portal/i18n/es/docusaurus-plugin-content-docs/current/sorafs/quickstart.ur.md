@@ -63,12 +63,12 @@ fragmentación ہم آہنگ رہے:
 cargo test -p sorafs_chunker streaming_backpressure_fuzz_matches_batch
 ```## 3. manifiesto بنائیں اور سائن کریں
 
-plan de fragmentos, alias, firmas de gobierno کو `sorafs-manifest-stub` کے ذریعے
+plan de fragmentos, alias, firmas de gobierno کو `sorafs-manifest-builder` کے ذریعے
 manifiesto میں لپیٹیں۔ نیچے دی گئی کمانڈ carga útil de un solo archivo دکھاتی ہے؛ درخت پیک کرنے
 کے لیے ruta de directorio دیں (CLI اسے lexicográfico ترتیب میں چلتا ہے)۔
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
+cargo run -p sorafs_manifest --bin sorafs-manifest-builder -- \
   /tmp/docs.txt \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --manifest-out=/tmp/docs.manifest \

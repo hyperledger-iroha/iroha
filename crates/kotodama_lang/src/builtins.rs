@@ -341,6 +341,7 @@ pub enum Builtin {
     SubscriptionRecordUsage,
     GetAccountBalance,
     GetPublicInput,
+    ContractInvokeQuantity2,
     DebugPrint,
     DebugLog,
     Assert,
@@ -634,6 +635,7 @@ impl Builtin {
             "subscription_record_usage" => Self::SubscriptionRecordUsage,
             "get_account_balance" => Self::GetAccountBalance,
             "get_public_input" => Self::GetPublicInput,
+            "contract_invoke_quantity2" => Self::ContractInvokeQuantity2,
             "debug_print" => Self::DebugPrint,
             "debug_log" => Self::DebugLog,
             "assert" => Self::Assert,
@@ -897,6 +899,7 @@ impl Builtin {
             Self::SubscriptionRecordUsage => "subscription_record_usage",
             Self::GetAccountBalance => "get_account_balance",
             Self::GetPublicInput => "get_public_input",
+            Self::ContractInvokeQuantity2 => "contract_invoke_quantity2",
             Self::DebugPrint => "debug_print",
             Self::DebugLog => "debug_log",
             Self::Assert => "assert",
@@ -1158,6 +1161,7 @@ impl Builtin {
             Self::ContractAddress => "context::seiyaku_address",
             Self::Entrypoint => "context::kotoage",
             Self::GetPublicInput => "context::public_input",
+            Self::ContractInvokeQuantity2 => "contract::invoke",
             Self::TriggerEvent => "context::trigger_event",
             Self::StateGet => "state::get",
             Self::StateSet => "state::set",
@@ -1453,6 +1457,7 @@ impl Builtin {
             }
             Self::SubscriptionBill
             | Self::SubscriptionRecordUsage
+            | Self::ContractInvokeQuantity2
             | Self::DebugPrint
             | Self::DebugLog
             | Self::Info
@@ -1593,6 +1598,7 @@ impl Builtin {
             | Self::ZkVoteVerifyTally
             | Self::VrfEpochSeed => BuiltinAccess::LedgerRead,
             Self::RecordSccpMessage
+            | Self::ContractInvokeQuantity2
             | Self::TestInvokeEntrypoint
             | Self::TestInvokeEntrypointAs
             | Self::TestExpectRejectAs
@@ -1830,6 +1836,7 @@ impl Builtin {
             Self::SubscriptionRecordUsage => &[s::SYSCALL_SUBSCRIPTION_RECORD_USAGE],
             Self::GetAccountBalance => &[s::SYSCALL_GET_ACCOUNT_BALANCE],
             Self::GetPublicInput | Self::TriggerEvent => &[s::SYSCALL_GET_PUBLIC_INPUT],
+            Self::ContractInvokeQuantity2 => &[s::SYSCALL_CALL_CONTRACT_QUANTITY2],
             Self::DebugPrint => &[s::SYSCALL_DEBUG_PRINT],
             Self::DebugLog | Self::Info => &[s::SYSCALL_DEBUG_LOG],
             Self::Assert | Self::Require | Self::AssertEq => &[s::SYSCALL_ABORT],
@@ -2218,6 +2225,10 @@ impl Builtin {
             Self::SubscriptionBill | Self::SubscriptionRecordUsage => S::new(&[], "()"),
             Self::GetAccountBalance => S::new(&["AccountId", "AssetDefinitionId"], "quantity"),
             Self::GetPublicInput => S::new(&["Name"], "bytes"),
+            Self::ContractInvokeQuantity2 => S::new(
+                &["bytes", "string", "string", "quantity", "quantity"],
+                "quantity",
+            ),
             Self::DebugPrint => S::new(&["int"], "()"),
             Self::DebugLog => S::new(&["string"], "()"),
             Self::Assert => S::new(&["bool", "string|int?"], "()"),
@@ -2500,6 +2511,9 @@ impl Builtin {
             Self::ResolveAccountAlias => signature.with_names(&["alias"]),
             Self::GetAccountBalance => signature.with_names(&["account", "asset_definition"]),
             Self::GetPublicInput => signature.with_names(&["name"]),
+            Self::ContractInvokeQuantity2 => {
+                signature.with_names(&["contract", "entrypoint", "returns", "amount_in", "min_out"])
+            }
             Self::Assert => signature.with_names(&["condition", "message"]),
             Self::Require => signature.with_names(&["condition", "error"]),
             Self::AssertEq => signature.with_names(&["actual", "expected"]),

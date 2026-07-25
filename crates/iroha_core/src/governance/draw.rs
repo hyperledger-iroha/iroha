@@ -605,6 +605,57 @@ mod tests {
     }
 
     #[test]
+    fn one_bonded_citizen_fills_each_actual_body_and_sets_one_person_quorum() {
+        let chain_id: ChainId = "body-one-citizen-demo".into();
+        let beacon = [0x1C; 32];
+        let epoch = 17_u64;
+        let citizen = mk_account(1);
+        let cfg = Governance {
+            parliament_quorum_bps: 6_667,
+            rules_committee_size: 7,
+            agenda_council_size: 9,
+            interest_panel_size: 11,
+            review_panel_size: 13,
+            policy_jury_size: 25,
+            oversight_committee_size: 7,
+            fma_committee_size: 5,
+            parliament_alternate_size: Some(25),
+            ..Governance::default()
+        };
+
+        let bodies = derive_parliament_bodies_from_bonded_citizens(
+            &cfg,
+            &chain_id,
+            epoch,
+            &beacon,
+            [(&citizen, 10_000_u128)],
+            CouncilDerivationKind::Vrf,
+        );
+
+        for body in [
+            ParliamentBody::RulesCommittee,
+            ParliamentBody::AgendaCouncil,
+            ParliamentBody::InterestPanel,
+            ParliamentBody::ReviewPanel,
+            ParliamentBody::PolicyJury,
+            ParliamentBody::OversightCommittee,
+            ParliamentBody::FmaCommittee,
+        ] {
+            let roster = bodies.rosters.get(&body).expect("one-citizen roster");
+            assert_eq!(roster.members, [citizen.clone()]);
+            assert!(roster.alternates.is_empty());
+            assert_eq!(roster.candidate_count, 1);
+            assert_eq!(
+                crate::state::council_quorum_threshold(
+                    roster.members.len(),
+                    cfg.parliament_quorum_bps,
+                ),
+                1
+            );
+        }
+    }
+
+    #[test]
     fn body_rosters_are_independently_domain_separated() {
         let chain_id: ChainId = "body-domain-demo".into();
         let beacon = [0xC3; 32];

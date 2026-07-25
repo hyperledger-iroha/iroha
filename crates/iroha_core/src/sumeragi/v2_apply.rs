@@ -7,7 +7,12 @@
 //! the sidecar is absent; that state is completed without re-applying the
 //! block or validating it against a later state.
 
-use std::{collections::BTreeMap, num::NonZeroUsize, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    num::NonZeroUsize,
+    sync::Arc,
+    time::Duration,
+};
 
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
@@ -58,14 +63,6 @@ pub(crate) enum V2ReservationLifecycleError {
     /// The reservation journal rejected an exact retain/release/commit operation.
     #[error(transparent)]
     Queue(#[from] LaneQueueReservationError),
-    /// One transaction appears with two different committed reservation identities.
-    #[error(
-        "committed merge history binds transaction {transaction_hash} to conflicting reservations"
-    )]
-    ConflictingCommittedBinding {
-        /// Transaction with ambiguous durable ownership.
-        transaction_hash: HashOf<SignedTransaction>,
-    },
     /// Committed State retains a reservation without matching merge evidence.
     #[error("committed transaction {transaction_hash} has no exact durable merge reservation")]
     MissingCommittedBinding {
@@ -95,6 +92,18 @@ pub(crate) enum V2ReservationLifecycleError {
     CommittedMergeReferenceMismatch {
         /// Hash committed by the carrier's compact reference.
         entry_hash: HashOf<MergeLedgerEntry>,
+    },
+    /// Queue retained a release barrier whose exact Kura retirement is absent.
+    #[error("queue release barrier {retirement_hash} has no exact durable Kura retirement")]
+    MissingReleaseRetirement {
+        /// Digest of the missing retirement identity.
+        retirement_hash: Hash,
+    },
+    /// Queue and Kura disagree on a release barrier's full slot/payload binding.
+    #[error("queue release barrier {retirement_hash} conflicts with durable Kura retirement")]
+    ReleaseRetirementMismatch {
+        /// Digest of the conflicting retirement identity.
+        retirement_hash: Hash,
     },
 }
 
@@ -155,6 +164,39 @@ fn finalize_committed_block_merge_reservations(
     finalize_certified_merge_reservations(state, queue, &entry)
 }
 
+/// Execute or resume the complete crash-safe retirement/release hand-off.
+///
+/// This is the single production ordering implementation shared by live lane
+/// work and startup reconciliation:
+///
+/// 1. Kura persists the exact slot retirement and `ReleasePending` claims.
+/// 2. Queue persists the exact ordered barrier while reservations remain live.
+/// 3. Kura changes the exact claims to `Released`.
+/// 4. Queue completes ownership transfer, restores FIFO order, and forgets the
+///    replay barrier.
+pub(crate) fn retire_autonomous_lane_slot_and_release_reservations(
+    kura: &Kura,
+    queue: &Queue,
+    retirement: &crate::kura::AutonomousLaneSlotRetirementV1,
+    expected_chain_id_hash: Hash,
+    expected_epoch: u64,
+) -> Result<usize, V2ReservationLifecycleError> {
+    kura.persist_autonomous_lane_slot_retirement(
+        retirement,
+        expected_chain_id_hash,
+        expected_epoch,
+    )?;
+    let barrier = retirement.queue_release_barrier()?;
+    let _ = queue.prepare_lane_reservation_release_barrier(&barrier)?;
+    kura.finalize_autonomous_lane_slot_release(
+        retirement,
+        &barrier,
+        expected_chain_id_hash,
+        expected_epoch,
+    )?;
+    Ok(queue.finalize_lane_reservation_release_barrier(&barrier)?)
+}
+
 /// Reconcile replayed lane reservations against committed State and Kura.
 ///
 /// Committed transactions are consumed before orphan release so a crash after
@@ -166,24 +208,20 @@ pub(crate) fn reconcile_lane_reservation_ownership(
     chain_id: &ChainId,
 ) -> Result<(usize, usize), V2ReservationLifecycleError> {
     let recovered = queue.live_lane_reservations();
-    if recovered.is_empty() {
+    let recovered_release_barriers = queue.lane_reservation_release_barriers();
+    if recovered.is_empty() && recovered_release_barriers.is_empty() {
         return Ok((0, 0));
     }
 
-    let mut exact_committed = BTreeMap::new();
-    for entry in kura.merge_ledger_all_entries()? {
-        for (transaction_hash, reservation) in
-            crate::state::certified_merge_queue_reservations(&entry)?
-        {
-            if let Some(existing) = exact_committed.insert(transaction_hash, reservation)
-                && existing != reservation
-            {
-                return Err(V2ReservationLifecycleError::ConflictingCommittedBinding {
-                    transaction_hash,
-                });
-            }
-        }
-    }
+    let committed_recovered = recovered
+        .iter()
+        .filter_map(|reservation| {
+            state
+                .has_committed_transaction(reservation.signed_transaction_hash)
+                .then_some(reservation.signed_transaction_hash)
+        })
+        .collect::<BTreeSet<_>>();
+    let exact_committed = kura.committed_merge_queue_reservations(&committed_recovered)?;
 
     let mut finalized_committed = 0usize;
     for reservation in &recovered {
@@ -209,6 +247,57 @@ pub(crate) fn reconcile_lane_reservation_ownership(
     let nexus = state.nexus_snapshot();
     let world = state.world_view();
     let chain_hash = Hash::new(chain_id.clone().into_inner().as_bytes());
+    let mut retired_slots = BTreeMap::new();
+    for reservation in &remaining {
+        let epoch =
+            crate::sumeragi::epoch_for_height_from_world(&world, reservation.proposal_height);
+        let Some(retirement) =
+            kura.autonomous_lane_retirement_matching_reservation(reservation, chain_hash, epoch)?
+        else {
+            continue;
+        };
+        retired_slots
+            .entry(retirement.digest()?)
+            .or_insert((retirement, epoch));
+    }
+    for barrier in recovered_release_barriers {
+        if barrier.chain_id_hash != chain_hash {
+            return Err(V2ReservationLifecycleError::ReleaseRetirementMismatch {
+                retirement_hash: barrier.retirement_hash,
+            });
+        }
+        let retirement = kura
+            .read_autonomous_lane_slot_retirement(
+                barrier.lane_id,
+                barrier.lane_block_height,
+                chain_hash,
+                barrier.epoch,
+            )?
+            .ok_or(V2ReservationLifecycleError::MissingReleaseRetirement {
+                retirement_hash: barrier.retirement_hash,
+            })?;
+        if retirement.queue_release_barrier()? != barrier {
+            return Err(V2ReservationLifecycleError::ReleaseRetirementMismatch {
+                retirement_hash: barrier.retirement_hash,
+            });
+        }
+        retired_slots
+            .entry(retirement.digest()?)
+            .or_insert((retirement, barrier.epoch));
+    }
+    let mut released_retired = 0usize;
+    for (retirement, epoch) in retired_slots.into_values() {
+        released_retired =
+            released_retired.saturating_add(retire_autonomous_lane_slot_and_release_reservations(
+                kura,
+                queue,
+                &retirement,
+                chain_hash,
+                epoch,
+            )?);
+    }
+
+    let remaining = queue.live_lane_reservations();
     let released_orphans =
         queue.reconcile_orphaned_lane_reservations(&remaining, |reservation| {
             state.lane_incarnation_at_height(reservation.lane_id, reservation.proposal_height)
@@ -227,7 +316,10 @@ pub(crate) fn reconcile_lane_reservation_ownership(
                     ),
                 )
         })?;
-    Ok((finalized_committed, released_orphans))
+    Ok((
+        finalized_committed,
+        released_retired.saturating_add(released_orphans),
+    ))
 }
 
 fn application_typed_identity<T>(
@@ -694,6 +786,8 @@ pub(crate) struct V2ApplyService {
     validator_set_pops: Vec<Vec<u8>>,
     #[cfg(test)]
     fail_after_kura_store: std::sync::atomic::AtomicBool,
+    #[cfg(test)]
+    fail_after_wsv_checkpoint: std::sync::atomic::AtomicBool,
 }
 
 impl V2ApplyService {
@@ -784,6 +878,7 @@ impl V2ApplyService {
             })?;
         let expected = super::lane_planner::prepare_v2_lane_payload_plan(
             self.state.as_ref(),
+            self.kura.as_ref(),
             context,
             view,
             &leader.validator,
@@ -824,6 +919,8 @@ impl V2ApplyService {
             validator_set_pops,
             #[cfg(test)]
             fail_after_kura_store: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(test)]
+            fail_after_wsv_checkpoint: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -955,6 +1052,35 @@ impl V2ApplyService {
             .executed_block_wire_hash()
             .map_err(|error| V2ApplyError::CanonicalBlock(error.to_string()))?;
 
+        // Repair or confirm the pre-WSV durable evidence boundary before any
+        // derived publication. Fresh application already crossed this boundary
+        // inside `validate_and_apply`; the calls are deliberately idempotent so
+        // restart can repair each individual artifact.
+        let receipt = self
+            .kura
+            .store_v2_finality_artifact(&artifact)
+            .map_err(|error| {
+                V2ApplyError::committed_recovery_required("v2 finality artifact", &error)
+            })?;
+
+        // The strict restart-repair path authenticates Native AMX evidence
+        // against both finality and the post-WSV Kura metadata join. Publish
+        // that join first on every fresh or recovery attempt, then repair or
+        // confirm the exact manifests, receipts, and latest indexes while the
+        // prune guard keeps their canonical carrier stable.
+        self.persist_post_apply_metadata(context, task, &artifact)
+            .map_err(|error| {
+                V2ApplyError::committed_recovery_required("post-apply metadata", &error)
+            })?;
+        self.kura
+            .repair_native_amx_participant_application_evidence(committed_block.as_ref())
+            .map_err(|error| {
+                V2ApplyError::committed_recovery_required(
+                    "Native AMX participant manifest/receipt repair",
+                    &error,
+                )
+            })?;
+
         self.publish_committed_block_merge_entry(committed_block.as_ref())?;
 
         // Queue ownership is a third durable boundary after Kura and WSV. An
@@ -971,29 +1097,6 @@ impl V2ApplyService {
             V2ApplyError::committed_recovery_required("merge reservation finalization", &error)
         })?;
 
-        // This is deliberately outside `validate_and_apply`: WSV commit and
-        // the Kura checkpoint/manifest are separate durable systems. A crash
-        // after WSV commit must retry these idempotent associations even
-        // though executing the block a second time is forbidden.
-        self.persist_post_apply_metadata(context, task, &artifact)
-            .map_err(|error| {
-                V2ApplyError::committed_recovery_required("post-apply metadata", &error)
-            })?;
-
-        let receipt = self
-            .kura
-            .store_v2_finality_artifact(&artifact)
-            .map_err(|error| {
-                V2ApplyError::committed_recovery_required("v2 finality artifact", &error)
-            })?;
-        self.kura
-            .persist_native_amx_participant_application_receipts(committed_block.as_ref())
-            .map_err(|error| {
-                V2ApplyError::committed_recovery_required(
-                    "Native AMX participant receipt publication",
-                    &error,
-                )
-            })?;
         self.kura
             .promote_kagemusha_topup_finality_sidecar(&artifact, &receipt)
             .map_err(|error| {
@@ -1075,6 +1178,20 @@ impl V2ApplyService {
             .map_err(|error| {
                 V2ApplyError::committed_recovery_required("merge cache publication", &error)
             })?;
+        // The atomic State commit above is the authority that the merge batch
+        // reached WSV. Publish its exact lane-application receipts only after
+        // that check and before queue reservation finalization. The Kura
+        // writer is idempotent, so a crash at any receipt/frontier boundary is
+        // repaired by retrying this same committed carrier without replaying
+        // economic effects.
+        self.kura
+            .persist_merge_lane_block_application_receipts_from_committed_log(&entry)
+            .map_err(|error| {
+                V2ApplyError::committed_recovery_required(
+                    "merge application receipt publication",
+                    &error,
+                )
+            })?;
         let (_, event) = self
             .state
             .record_globally_committed_merge_entry(&entry, MergeLedgerPublicationMode::LiveCommit)
@@ -1143,11 +1260,12 @@ impl V2ApplyService {
         let witness = state_block
             .take_exec_witness()
             .ok_or(V2ApplyError::ExecutionCommitmentUnavailable)?;
-        let executed_block_wire_hash = valid
-            .as_ref()
-            .executed_block_wire_hash()
-            .map_err(|error| V2ApplyError::CanonicalBlock(error.to_string()))?;
-        crate::sumeragi::exec::execution_commitment_from_witness(&witness, executed_block_wire_hash)
+        let native_amx_manifest =
+            crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block(
+                valid.as_ref(),
+            )
+            .map_err(V2ApplyError::ExecutionCommitment)?;
+        crate::sumeragi::exec::execution_commitment_from_witness(&witness, &native_amx_manifest)
             .map_err(|error| V2ApplyError::ExecutionCommitment(error.to_owned()))
     }
 
@@ -1193,13 +1311,14 @@ impl V2ApplyService {
         let witness = state_block
             .take_exec_witness()
             .ok_or(V2ApplyError::ExecutionCommitmentUnavailable)?;
-        let executed_block_wire_hash = valid_block
-            .as_ref()
-            .executed_block_wire_hash()
-            .map_err(|error| V2ApplyError::CanonicalBlock(error.to_string()))?;
+        let native_amx_manifest =
+            crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block(
+                valid_block.as_ref(),
+            )
+            .map_err(V2ApplyError::ExecutionCommitment)?;
         let actual_execution_commitment = crate::sumeragi::exec::execution_commitment_from_witness(
             &witness,
-            executed_block_wire_hash,
+            &native_amx_manifest,
         )
         .map_err(|error| V2ApplyError::ExecutionCommitment(error.to_owned()))?;
         if actual_execution_commitment != expected_execution_commitment {
@@ -1233,6 +1352,9 @@ impl V2ApplyService {
             {
                 return Err(V2ApplyError::InjectedCrashAfterKuraStore);
             }
+            let _ = self.kura.store_v2_finality_artifact(artifact)?;
+            self.kura
+                .persist_native_amx_participant_application_evidence(committed_block.as_ref())?;
         }
         let commit_topology = context
             .roster
@@ -1241,6 +1363,33 @@ impl V2ApplyService {
             .collect();
         let state_events = state_block
             .apply_without_execution_with_verified_v2_finality(&committed_block, commit_topology);
+
+        // Stage the exact would-be committed WSV hash while the validated
+        // `StateBlock` overlay is still available. Kura is already durable at
+        // this point, so the checkpoint must cross its own fsync boundary
+        // before live State can advance. This closes the otherwise
+        // unrecoverable crash window where restart observes State at the Kura
+        // tip but has no authenticated hash with which to distinguish the
+        // exact committed overlay from stale or corrupted memory.
+        //
+        // The checkpoint deliberately remains unbound until
+        // `persist_post_apply_metadata` publishes the complete commit
+        // manifest. A crash before State commit replays the overlay and must
+        // reproduce this byte-identical hash; a crash after State commit can
+        // authenticate the already-applied tip directly.
+        let staged_checkpoint = crate::snapshot::canonical_staged_state_snapshot_hash(&state_block);
+        self.kura
+            .store_wsv_checkpoint(context.height, block_hash, staged_checkpoint)
+            .map_err(|error| {
+                V2ApplyError::committed_recovery_required("pre-WSV recovery checkpoint", &error)
+            })?;
+        #[cfg(test)]
+        if self
+            .fail_after_wsv_checkpoint
+            .swap(false, std::sync::atomic::Ordering::Relaxed)
+        {
+            return Err(V2ApplyError::InjectedCrashAfterWsvCheckpoint);
+        }
         state_block.commit().map_err(|error| {
             V2ApplyError::committed_recovery_required("WSV publication after Kura commit", &error)
         })?;
@@ -1286,6 +1435,12 @@ impl V2ApplyService {
     #[cfg(test)]
     fn fail_after_kura_store_for_test(&self) {
         self.fail_after_kura_store
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    #[cfg(test)]
+    fn fail_after_wsv_checkpoint_for_test(&self) {
+        self.fail_after_wsv_checkpoint
             .store(true, std::sync::atomic::Ordering::Relaxed);
     }
 }
@@ -1376,6 +1531,11 @@ pub(crate) enum V2ApplyError {
     #[cfg(test)]
     #[error("injected crash after Kura store and before WSV commit")]
     InjectedCrashAfterKuraStore,
+    /// Test-only crash boundary after the staged WSV checkpoint and before
+    /// live State publication.
+    #[cfg(test)]
+    #[error("injected crash after staged WSV checkpoint and before WSV commit")]
+    InjectedCrashAfterWsvCheckpoint,
 }
 
 impl V2ApplyError {
@@ -1393,7 +1553,7 @@ impl V2ApplyError {
             Self::Kura(error) => error.requires_restart_recovery(),
             Self::CommittedRecoveryRequired { .. } => true,
             #[cfg(test)]
-            Self::InjectedCrashAfterKuraStore => true,
+            Self::InjectedCrashAfterKuraStore | Self::InjectedCrashAfterWsvCheckpoint => true,
             _ => false,
         }
     }
@@ -1417,10 +1577,10 @@ mod tests {
     };
 
     use crate::sumeragi::v2_core::{EventTag, Generation};
-    use iroha_config::parameters::actual::Queue as QueueConfig;
+    use iroha_config::parameters::actual::{LaneConfig as RuntimeLaneConfig, Queue as QueueConfig};
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf};
     use iroha_data_model::{
-        Registrable, ValidationFail,
+        Level, Registrable, ValidationFail,
         account::Account,
         block::{
             BlockExecutionContextBundle, BlockHeader, BlockSignature, SignedBlock,
@@ -1431,7 +1591,7 @@ mod tests {
             consensus_v2 as wire,
         },
         consensus::VALIDATOR_SET_HASH_VERSION_V1,
-        isi::SetParameter,
+        isi::{Log, SetParameter},
         merge::{
             MergeExecutionBatch, MergeLaneExecution, MergeLedgerEntry, MergeQuorumCertificate,
         },
@@ -1452,6 +1612,7 @@ mod tests {
     use crate::{
         block::BlockBuilder,
         governance::manifest::LaneManifestRegistry,
+        lane_consensus::LaneExecutablePayloadV1,
         query::store::LiveQueryStore,
         queue::{LaneQueueReservationScopeV1, execution_context_for_routing_plan},
         state::{World, WorldReadOnly},
@@ -1658,6 +1819,7 @@ mod tests {
                 let entrypoint_hash = Hash::from(accepted.hash_as_entrypoint());
                 let lane_plan = super::super::lane_planner::prepare_v2_lane_payload_plan(
                     state.as_ref(),
+                    kura.as_ref(),
                     &context,
                     0,
                     &context.roster[usize::try_from(leader_index).expect("leader index")].validator,
@@ -2175,6 +2337,7 @@ mod tests {
             bitmap[index / 8] |= 1 << (index % 8);
         }
         MergeLedgerEntry {
+            version: MergeLedgerEntry::VERSION,
             epoch_id: context.epoch,
             lane_catalog_hash: Hash::new(b"v2 apply decided-sidecar catalog"),
             active_lanes: Vec::new(),
@@ -2205,14 +2368,39 @@ mod tests {
         context: &wire::HeightContext,
         entrypoint: TransactionEntrypoint,
         reservation: crate::queue::LaneQueueReservationKeyV1,
-    ) -> MergeLedgerEntry {
+    ) -> (SignedBlock, MergeLedgerEntry) {
+        let parent_key = KeyPair::try_from_seed(vec![0xC8; 32], Algorithm::BlsNormal)
+            .expect("derive execution-carrier parent signer");
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
+        let parent = BlockBuilder::new_with_time_source(Vec::new(), time_source)
+            .chain(0, None)
+            .try_sign_with_index(parent_key.private_key(), 0)
+            .expect("sign execution-carrier parent")
+            .unpack(|_| {});
+        let parent = SignedBlock::from(parent);
+        let application_block_header = BlockHeader::new(
+            NonZeroU64::new(2).expect("non-zero fixture carrier height"),
+            Some(parent.hash()),
+            None,
+            None,
+            2,
+            0,
+        );
         let entrypoint_hashes = vec![Hash::from(entrypoint.hash())];
         let results = vec![TransactionResult::from(Ok(DataTriggerSequence::default()))];
         let result_hashes = results
             .iter()
             .map(|result| Hash::from(result.hash()))
             .collect::<Vec<_>>();
-        let validator_set = Vec::<PeerId>::new();
+        let validator_set = context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect::<Vec<_>>();
+        let validator_count =
+            u32::try_from(validator_set.len()).expect("fixture validator count fits u32");
+        let min_quorum = wire::DualQuorum::count_threshold(validator_count)
+            .expect("non-empty fixture validator set has a quorum");
         let mut descriptor = LaneBlockDescriptorV1 {
             lane_id: reservation.lane_id,
             dataspace_id: reservation.dataspace_id,
@@ -2230,8 +2418,8 @@ mod tests {
             validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
             validator_set_hash: HashOf::new(&validator_set),
             validator_set: validator_set.clone(),
-            validator_count: 0,
-            min_quorum: 0,
+            validator_count,
+            min_quorum,
             qc_mode_tag: "v2-reservation-lifecycle-test".to_owned(),
             descriptor_hash: Hash::prehashed([0; Hash::LENGTH]),
         };
@@ -2242,6 +2430,8 @@ mod tests {
             payload_block_hint: None,
         };
         proposal.proposal_hash = proposal.computed_proposal_hash();
+        crate::lane_consensus::validate_lane_block_proposal(&proposal)
+            .expect("reservation fixture proposal must satisfy production ingress validation");
         let lane_qc = |phase| LaneBlockQcV1 {
             body: proposal.vote_body(phase),
             validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
@@ -2313,14 +2503,7 @@ mod tests {
             version: 1,
             base_state_height: 0,
             base_state_hash,
-            application_block_header: BlockHeader::new(
-                NonZeroU64::new(1).expect("non-zero fixture carrier"),
-                None,
-                None,
-                None,
-                1,
-                0,
-            ),
+            application_block_header: application_block_header.clone(),
             entrypoint_count: 1,
             entrypoint_merkle_root: crate::merge::merge_execution_entrypoint_merkle_root(&lanes)
                 .expect("fixture has one entrypoint"),
@@ -2341,8 +2524,13 @@ mod tests {
         let mut entry = pending_merge_entry(context, 0, b"v2 reservation fixture merge entry");
         entry.epoch_id = 1;
         entry.merge_qc.epoch_id = 1;
+        entry.merge_qc.carrier_height = application_block_header.height().get();
+        entry.merge_qc.carrier_parent_hash = application_block_header
+            .prev_block_hash()
+            .expect("non-genesis merge carrier has a parent");
+        entry.merge_qc.view = application_block_header.view_change_index();
         entry.execution_batch = Some(batch);
-        entry
+        (parent, entry)
     }
 
     fn reserve_transaction_for_test(
@@ -2383,6 +2571,139 @@ mod tests {
         (*reserved[0].key(), entrypoint)
     }
 
+    fn reserve_autonomous_crash_batch(
+        fixture: &ApplyFixture,
+        queue: &Arc<Queue>,
+        producer: &KeyPair,
+    ) -> (LaneExecutablePayloadV1, Vec<HashOf<SignedTransaction>>) {
+        let transactions = (0_u8..4)
+            .map(|index| {
+                TransactionBuilder::new(
+                    fixture.context.chain_id.clone(),
+                    fixture.service.genesis_account.clone(),
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                )
+                .with_instructions([Log::new(
+                    Level::INFO,
+                    format!("autonomous reservation crash boundary {index}"),
+                )])
+                .sign(fixture.genesis_key.private_key())
+            })
+            .collect::<Vec<_>>();
+        let expected_fifo = transactions
+            .iter()
+            .map(|transaction| transaction.hash())
+            .collect::<Vec<_>>();
+        let entrypoints = transactions
+            .iter()
+            .take(3)
+            .cloned()
+            .map(TransactionEntrypoint::External)
+            .collect::<Vec<_>>();
+        let entrypoint_hashes = entrypoints
+            .iter()
+            .map(|entrypoint| Hash::from(entrypoint.hash()))
+            .collect::<Vec<_>>();
+        let lane_incarnation = fixture
+            .state
+            .lane_incarnation_at_height(LaneId::SINGLE, 1)
+            .expect("default lane incarnation at autonomous proposal height");
+        let validator_set = vec![PeerId::new(producer.public_key().clone())];
+        let mut descriptor = LaneBlockDescriptorV1 {
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+            lane_incarnation,
+            proposal_height: 1,
+            previous_lane_block_height: 0,
+            previous_lane_block_descriptor_hash: None,
+            lane_block_height: 1,
+            lane_block_view: 0,
+            subject_hash: Hash::new(b"v2 autonomous crash reservation subject"),
+            payload_ownership_hash: Hash::new(b"v2 autonomous crash reservation ownership"),
+            rbc_instance_hash: Hash::new(b"v2 autonomous crash reservation RBC"),
+            accepted_candidate_indices: (0_u64..3).collect(),
+            accepted_transaction_hashes: entrypoint_hashes,
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set_hash: HashOf::new(&validator_set),
+            validator_set: validator_set.clone(),
+            validator_count: 1,
+            min_quorum: 1,
+            qc_mode_tag: "permissioned:v2-autonomous-reservation-crash".to_owned(),
+            descriptor_hash: Hash::prehashed([0; Hash::LENGTH]),
+        };
+        descriptor.descriptor_hash = descriptor.computed_descriptor_hash();
+        let mut proposal = LaneBlockProposalV1 {
+            descriptor,
+            proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
+            payload_block_hint: None,
+        };
+        proposal.proposal_hash = proposal.computed_proposal_hash();
+
+        for transaction in &transactions {
+            queue
+                .push_with_lane_with_state(
+                    AcceptedTransaction::new_unchecked(Cow::Owned(transaction.clone())),
+                    fixture.state.as_ref(),
+                )
+                .expect("enqueue autonomous crash reservation transaction");
+        }
+        let scope = LaneQueueReservationScopeV1 {
+            lane_id: proposal.descriptor.lane_id,
+            dataspace_id: proposal.descriptor.dataspace_id,
+            lane_incarnation: proposal.descriptor.lane_incarnation,
+            proposal_height: proposal.descriptor.proposal_height,
+            lane_block_height: proposal.descriptor.lane_block_height,
+            lane_block_view: proposal.descriptor.lane_block_view,
+            reservation_owner_hash: Hash::new(b"v2 autonomous crash reservation owner"),
+            proposal_identity_hash: proposal.proposal_hash,
+        };
+        let reserved = queue
+            .reserve_transactions_for_lane(
+                fixture.state.as_ref(),
+                scope,
+                NonZeroUsize::new(3).expect("non-zero crash reservation count"),
+            )
+            .expect("reserve exact autonomous crash batch");
+        assert_eq!(reserved.len(), 3);
+        assert_eq!(
+            reserved
+                .iter()
+                .map(|reserved| reserved.key().signed_transaction_hash)
+                .collect::<Vec<_>>(),
+            expected_fifo[..3],
+            "fixture must reserve the original FIFO prefix"
+        );
+        let reservation_keys = reserved
+            .iter()
+            .map(|reserved| *reserved.key())
+            .collect::<Vec<_>>();
+        let routing_plans = reserved
+            .iter()
+            .map(|reserved| reserved.routing_plan().clone())
+            .collect::<Vec<_>>();
+        let chain_id_hash = Hash::new(fixture.context.chain_id.clone().into_inner().as_bytes());
+        let epoch = {
+            let world = fixture.state.world_view();
+            crate::sumeragi::epoch_for_height_from_world(
+                &world,
+                proposal.descriptor.proposal_height,
+            )
+        };
+        let payload = LaneExecutablePayloadV1::new_signed_with_reservations(
+            chain_id_hash,
+            epoch,
+            proposal,
+            entrypoints,
+            reservation_keys,
+            routing_plans,
+            vec![None; 3],
+            validator_set[0].clone(),
+            producer.private_key(),
+        )
+        .expect("build exact autonomous crash payload");
+        (payload, expected_fifo)
+    }
+
     fn body_with_merge_reference(reference: CertifiedMergeLedgerReference) -> SignedBlock {
         let key = KeyPair::try_from_seed(vec![0xC9; 32], Algorithm::BlsNormal)
             .expect("derive decided-body signer");
@@ -2395,6 +2716,47 @@ mod tests {
             .expect("sign decided body")
             .unpack(|_| {});
         SignedBlock::from(block)
+    }
+
+    fn body_with_exact_merge_execution_header(entry: &MergeLedgerEntry) -> SignedBlock {
+        let key = KeyPair::try_from_seed(vec![0xCA; 32], Algorithm::BlsNormal)
+            .expect("derive execution-carrier signer");
+        let header = entry
+            .execution_batch
+            .as_ref()
+            .expect("execution merge entry")
+            .application_block_header
+            .clone();
+        assert_eq!(
+            entry.merge_qc.carrier_height,
+            header.height().get(),
+            "execution fixture QC must bind the carrier height"
+        );
+        assert_eq!(
+            Some(entry.merge_qc.carrier_parent_hash),
+            header.prev_block_hash(),
+            "execution fixture QC must bind the carrier parent"
+        );
+        assert_eq!(
+            entry.merge_qc.view,
+            header.view_change_index(),
+            "execution fixture QC must bind the carrier view"
+        );
+        let execution_context = BlockExecutionContextBundle::new(Vec::new())
+            .with_merge_entry(CertifiedMergeLedgerReference::new(entry));
+        let mut builder = iroha_data_model::block::builder::BlockBuilder::new(header);
+        builder.set_execution_context(Some(execution_context));
+        let carrier = builder.build_with_signature(0, key.private_key());
+        assert_eq!(
+            crate::merge::merge_application_header_from_carrier(&carrier.header()),
+            entry
+                .execution_batch
+                .as_ref()
+                .expect("execution merge entry")
+                .application_block_header,
+            "signed carrier must preserve the certified application header"
+        );
+        carrier
     }
 
     macro_rules! v2_apply_test {
@@ -2476,6 +2838,80 @@ mod tests {
         assert_eq!(fixture.state.merge_ledger.snapshot().len(), 1);
     });
 
+    v2_apply_test!(
+        live_merge_publication_persists_application_receipt_before_retry,
+        {
+            let fixture = ApplyFixture::new();
+            let transaction = fixture
+                .body
+                .external_transactions()
+                .next()
+                .expect("fixture transaction")
+                .clone();
+            let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(8);
+            let queue = Queue::from_config(QueueConfig::default(), events_sender);
+            let journal_dir = tempfile::tempdir().expect("reservation journal directory");
+            queue
+                .install_lane_reservation_journal(
+                    journal_dir.path().join("lane-reservations.norito"),
+                    1024 * 1024,
+                )
+                .expect("install reservation journal");
+            let (reservation, entrypoint) =
+                reserve_transaction_for_test(fixture.state.as_ref(), &queue, transaction);
+            let (parent, entry) =
+                merge_entry_with_reservation(&fixture.context, entrypoint, reservation);
+            let carrier = body_with_exact_merge_execution_header(&entry);
+            fixture
+                .kura
+                .store_block(Arc::new(parent.clone()))
+                .expect("persist execution-carrier parent");
+            fixture
+                .kura
+                .store_block_with_merge_entry(Arc::new(carrier.clone()), &entry)
+                .expect("persist exact execution carrier and merge log");
+            fixture
+                .state
+                .seed_applied_merge_entry_for_v2_settlement_test(&entry)
+                .expect("seed exact post-commit merge state");
+            let mut block_hashes = fixture.state.block_hashes.block();
+            block_hashes.push_for_tests(parent.hash());
+            block_hashes.push_for_tests(carrier.hash());
+            block_hashes.commit_for_tests();
+            fixture
+                .state
+                .update_latest_block_header_cache_for_tests(carrier.header().clone());
+
+            fixture
+                .service
+                .publish_committed_block_merge_entry(&carrier)
+                .expect("publish live execution merge entry");
+            let receipt = fixture
+                .kura
+                .read_lane_block_application_receipt(LaneId::SINGLE, 1)
+                .expect("live post-WSV publication must persist the application receipt");
+            assert_eq!(
+                receipt.format,
+                crate::kura::LaneBlockApplicationReceiptArtifactFormat::MergeExecution
+            );
+            let receipt_hash = HashOf::new(&receipt);
+
+            fixture
+                .service
+                .publish_committed_block_merge_entry(&carrier)
+                .expect("retry exact live execution merge publication");
+            assert_eq!(
+                fixture
+                    .kura
+                    .read_lane_block_application_receipt(LaneId::SINGLE, 1)
+                    .as_ref()
+                    .map(HashOf::new),
+                Some(receipt_hash),
+                "crash retry must preserve one byte-identical receipt"
+            );
+        }
+    );
+
     v2_apply_test!(committed_merge_reservation_is_finalized_exactly_once, {
         let fixture = ApplyFixture::new();
         let transaction = fixture
@@ -2495,12 +2931,13 @@ mod tests {
             .expect("install reservation journal");
         let (reservation, entrypoint) =
             reserve_transaction_for_test(fixture.state.as_ref(), &queue, transaction);
-        let entry = merge_entry_with_reservation(&fixture.context, entrypoint, reservation);
+        let (_parent, entry) =
+            merge_entry_with_reservation(&fixture.context, entrypoint, reservation);
         fixture
             .kura
             .append_merge_entry(&entry)
             .expect("persist committed merge history fixture");
-        let carrier = body_with_merge_reference(CertifiedMergeLedgerReference::new(&entry));
+        let carrier = body_with_exact_merge_execution_header(&entry);
         fixture.state.record_direct_committed_transactions(
             [reservation.signed_transaction_hash],
             NonZeroUsize::new(1).expect("committed height"),
@@ -2549,7 +2986,8 @@ mod tests {
             .expect("install reservation journal");
         let (reservation, entrypoint) =
             reserve_transaction_for_test(fixture.state.as_ref(), &queue, transaction);
-        let mut entry = merge_entry_with_reservation(&fixture.context, entrypoint, reservation);
+        let (_parent, mut entry) =
+            merge_entry_with_reservation(&fixture.context, entrypoint, reservation);
         let encoded = &mut entry
             .execution_batch
             .as_mut()
@@ -2605,11 +3043,17 @@ mod tests {
                 .expect("install first-process reservation journal");
             let (reservation, entrypoint) =
                 reserve_transaction_for_test(fixture.state.as_ref(), &first_queue, transaction);
-            let entry = merge_entry_with_reservation(&fixture.context, entrypoint, reservation);
+            let (parent, entry) =
+                merge_entry_with_reservation(&fixture.context, entrypoint, reservation);
+            let carrier = body_with_exact_merge_execution_header(&entry);
             fixture
                 .kura
-                .append_merge_entry(&entry)
-                .expect("persist committed merge history fixture");
+                .store_block(Arc::new(parent))
+                .expect("persist execution-carrier parent");
+            fixture
+                .kura
+                .store_block_with_merge_entry(Arc::new(carrier), &entry)
+                .expect("persist committed merge carrier and exact sidecar");
             fixture.state.record_direct_committed_transactions(
                 [reservation.signed_transaction_hash],
                 NonZeroUsize::new(1).expect("committed height"),
@@ -2622,6 +3066,7 @@ mod tests {
                 .expect("replay first-process reservation journal");
             assert_eq!(replay.restored, 1);
             assert_eq!(replayed_queue.live_lane_reservations(), vec![reservation]);
+            fixture.kura.reset_merge_query_read_counters_for_test();
 
             assert_eq!(
                 reconcile_lane_reservation_ownership(
@@ -2632,6 +3077,16 @@ mod tests {
                 )
                 .expect("reconcile replayed committed reservation"),
                 (1, 0)
+            );
+            let (full_history_scans, _, indexed_lookups) =
+                fixture.kura.merge_query_read_counters_for_test();
+            assert_eq!(
+                full_history_scans, 0,
+                "startup reservation reconciliation must not materialize merge history"
+            );
+            assert_eq!(
+                indexed_lookups, 1,
+                "startup reconciliation must decode only the exact committed reservation frame"
             );
             assert!(replayed_queue.live_lane_reservations().is_empty());
             assert_eq!(
@@ -2644,6 +3099,329 @@ mod tests {
                 .expect("repeat startup reconciliation"),
                 (0, 0)
             );
+        }
+    );
+
+    v2_apply_test!(
+        autonomous_reservation_cross_store_crash_matrix_preserves_fifo_exactly_once,
+        {
+            for boundary in [
+                "kura_release_pending",
+                "queue_prepared_barrier",
+                "kura_released",
+                "queue_completion_forgotten",
+            ] {
+                let fixture = ApplyFixture::new();
+                let producer = KeyPair::try_from_seed(vec![0xB7; 32], Algorithm::BlsNormal)
+                    .expect("derive autonomous crash producer");
+                let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(32);
+                let journal_dir =
+                    tempfile::tempdir().expect("autonomous reservation crash journals");
+                let plan_path = journal_dir.path().join("queue-plans.norito");
+                let reservation_path = journal_dir.path().join("lane-reservations.norito");
+                let queue = Arc::new(Queue::from_config(
+                    QueueConfig::default(),
+                    events_sender.clone(),
+                ));
+                queue
+                    .install_plan_journal(&plan_path, 1024 * 1024, true)
+                    .expect("install autonomous crash plan journal");
+                queue
+                    .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
+                    .expect("install autonomous crash reservation journal");
+                let (payload, expected_fifo) =
+                    reserve_autonomous_crash_batch(&fixture, &queue, &producer);
+                let descriptor = &payload.origin_proposal.descriptor;
+                let lane_config = RuntimeLaneConfig::default();
+                fixture
+                    .kura
+                    .install_lane_incarnation_marker_for_test(
+                        lane_config.primary(),
+                        descriptor.lane_incarnation,
+                        0,
+                    )
+                    .expect("install autonomous crash lane marker");
+                fixture
+                    .kura
+                    .persist_lane_executable_payload(&payload, payload.chain_id_hash, payload.epoch)
+                    .expect("persist autonomous crash payload");
+                let retirement =
+                    crate::kura::AutonomousLaneSlotRetirementV1::from_payload(&payload);
+                let barrier = retirement
+                    .queue_release_barrier()
+                    .expect("build autonomous crash release barrier");
+
+                match boundary {
+                    "kura_release_pending" => {
+                        fixture
+                            .kura
+                            .persist_autonomous_lane_slot_retirement(
+                                &retirement,
+                                payload.chain_id_hash,
+                                payload.epoch,
+                            )
+                            .expect("persist Kura ReleasePending boundary");
+                    }
+                    "queue_prepared_barrier" => {
+                        fixture
+                            .kura
+                            .persist_autonomous_lane_slot_retirement(
+                                &retirement,
+                                payload.chain_id_hash,
+                                payload.epoch,
+                            )
+                            .expect("persist Kura retirement before Queue barrier");
+                        queue
+                            .prepare_lane_reservation_release_barrier(&barrier)
+                            .expect("persist Queue prepared barrier");
+                    }
+                    "kura_released" => {
+                        fixture
+                            .kura
+                            .persist_autonomous_lane_slot_retirement(
+                                &retirement,
+                                payload.chain_id_hash,
+                                payload.epoch,
+                            )
+                            .expect("persist Kura retirement before released claims");
+                        queue
+                            .prepare_lane_reservation_release_barrier(&barrier)
+                            .expect("persist Queue barrier before Kura Released");
+                        fixture
+                            .kura
+                            .finalize_autonomous_lane_slot_release(
+                                &retirement,
+                                &barrier,
+                                payload.chain_id_hash,
+                                payload.epoch,
+                            )
+                            .expect("persist Kura Released boundary");
+                    }
+                    "queue_completion_forgotten" => {
+                        assert_eq!(
+                            retire_autonomous_lane_slot_and_release_reservations(
+                                fixture.kura.as_ref(),
+                                queue.as_ref(),
+                                &retirement,
+                                payload.chain_id_hash,
+                                payload.epoch,
+                            )
+                            .expect("complete production retirement hand-off"),
+                            3
+                        );
+                    }
+                    _ => unreachable!("enumerated crash boundary"),
+                }
+                assert_eq!(
+                    fixture
+                        .kura
+                        .read_autonomous_lane_slot_retirement(
+                            descriptor.lane_id,
+                            descriptor.lane_block_height,
+                            payload.chain_id_hash,
+                            payload.epoch,
+                        )
+                        .expect("read crash-boundary retirement"),
+                    Some(retirement.clone()),
+                    "{boundary}: every crash image must retain the exact Kura retirement"
+                );
+                if boundary == "queue_completion_forgotten" {
+                    assert!(queue.live_lane_reservations().is_empty());
+                    assert!(queue.lane_reservation_release_barriers().is_empty());
+                    assert_eq!(queue.queued_len(), 4);
+                } else {
+                    assert_eq!(queue.live_lane_reservations().len(), 3);
+                    assert_eq!(queue.queued_len(), 1);
+                    assert_eq!(
+                        queue.lane_reservation_release_barriers(),
+                        if boundary == "kura_release_pending" {
+                            Vec::new()
+                        } else {
+                            vec![barrier.clone()]
+                        },
+                        "{boundary}: Queue must expose exactly its durable crash boundary"
+                    );
+                }
+                drop(queue);
+
+                let replayed_queue = Arc::new(Queue::from_config(
+                    QueueConfig::default(),
+                    events_sender.clone(),
+                ));
+                let replay = replayed_queue
+                    .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
+                    .expect("replay first crash-boundary reservation journal");
+                replayed_queue
+                    .install_plan_journal(&plan_path, 1024 * 1024, true)
+                    .expect("install first replay plan journal");
+                replayed_queue
+                    .replay_plan_journal(fixture.state.as_ref())
+                    .expect("replay first crash-boundary queue plans");
+                if boundary == "queue_completion_forgotten" {
+                    assert_eq!(replay.restored, 0);
+                    assert_eq!(replay.release_barriers, 0);
+                    assert_eq!(replay.completed_releases, 0);
+                } else {
+                    assert_eq!(replay.restored, 3);
+                    assert_eq!(
+                        replay.release_barriers,
+                        usize::from(boundary != "kura_release_pending")
+                    );
+                    assert_eq!(replay.completed_releases, 0);
+                    assert_eq!(
+                        replayed_queue.queued_len(),
+                        1,
+                        "{boundary}: replay must not make lane-owned work selectable"
+                    );
+                }
+                assert_eq!(
+                    reconcile_lane_reservation_ownership(
+                        fixture.state.as_ref(),
+                        replayed_queue.as_ref(),
+                        fixture.kura.as_ref(),
+                        &fixture.context.chain_id,
+                    )
+                    .expect("reconcile first cross-store crash image"),
+                    if boundary == "queue_completion_forgotten" {
+                        (0, 0)
+                    } else {
+                        (0, 3)
+                    },
+                    "{boundary}: reconciliation must transfer each owner exactly once"
+                );
+                assert!(replayed_queue.live_lane_reservations().is_empty());
+                assert!(
+                    replayed_queue
+                        .lane_reservation_release_barriers()
+                        .is_empty()
+                );
+                assert_eq!(
+                    replayed_queue.queued_len(),
+                    4,
+                    "{boundary}: release must restore all work without loss"
+                );
+                assert_eq!(
+                    retire_autonomous_lane_slot_and_release_reservations(
+                        fixture.kura.as_ref(),
+                        replayed_queue.as_ref(),
+                        &retirement,
+                        payload.chain_id_hash,
+                        payload.epoch,
+                    )
+                    .expect("retry complete production retirement hand-off"),
+                    0,
+                    "{boundary}: completed hand-off replay must be idempotent"
+                );
+                drop(replayed_queue);
+
+                let replayed_again = Arc::new(Queue::from_config(
+                    QueueConfig::default(),
+                    events_sender.clone(),
+                ));
+                let terminal_replay = replayed_again
+                    .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
+                    .expect("replay terminal reservation journal");
+                assert_eq!(terminal_replay.restored, 0);
+                assert_eq!(terminal_replay.release_barriers, 0);
+                assert_eq!(terminal_replay.completed_releases, 0);
+                replayed_again
+                    .install_plan_journal(&plan_path, 1024 * 1024, true)
+                    .expect("install terminal replay plan journal");
+                replayed_again
+                    .replay_plan_journal(fixture.state.as_ref())
+                    .expect("replay terminal queue plans");
+                assert_eq!(
+                    reconcile_lane_reservation_ownership(
+                        fixture.state.as_ref(),
+                        replayed_again.as_ref(),
+                        fixture.kura.as_ref(),
+                        &fixture.context.chain_id,
+                    )
+                    .expect("repeat terminal ownership reconciliation"),
+                    (0, 0),
+                    "{boundary}: a second restart must not release or commit twice"
+                );
+                assert_eq!(replayed_again.active_len(), 4);
+                assert_eq!(replayed_again.queued_len(), 4);
+                assert!(replayed_again.live_lane_reservations().is_empty());
+
+                let replacement_scope = LaneQueueReservationScopeV1 {
+                    lane_id: descriptor.lane_id,
+                    dataspace_id: descriptor.dataspace_id,
+                    lane_incarnation: fixture
+                        .state
+                        .lane_incarnation_at_height(descriptor.lane_id, 2)
+                        .expect("active incarnation for replacement proposal"),
+                    proposal_height: 2,
+                    lane_block_height: 2,
+                    lane_block_view: 0,
+                    reservation_owner_hash: Hash::new(
+                        format!("replacement owner after {boundary}").as_bytes(),
+                    ),
+                    proposal_identity_hash: Hash::new(
+                        format!("replacement proposal after {boundary}").as_bytes(),
+                    ),
+                };
+                let replacement = replayed_again
+                    .reserve_transactions_for_lane(
+                        fixture.state.as_ref(),
+                        replacement_scope,
+                        NonZeroUsize::new(1).expect("one replacement reservation"),
+                    )
+                    .expect("reserve restored FIFO head under a fresh owner");
+                assert_eq!(replacement.len(), 1);
+                assert_eq!(
+                    replacement[0].key().signed_transaction_hash,
+                    expected_fifo[0],
+                    "{boundary}: restored work must not be overtaken"
+                );
+                assert_ne!(
+                    replacement[0].key(),
+                    &barrier.ordered_keys[0],
+                    "{boundary}: replacement ownership must have a fresh exact identity"
+                );
+                let stale_barrier =
+                    replayed_again.prepare_lane_reservation_release_barrier(&barrier);
+                assert!(
+                    matches!(
+                        &stale_barrier,
+                        Err(LaneQueueReservationError::Conflict { .. })
+                    ),
+                    "{boundary}: stale release barrier must fail ABA-safe: {stale_barrier:?}"
+                );
+                assert_eq!(
+                    replayed_again.live_lane_reservations(),
+                    vec![*replacement[0].key()],
+                    "{boundary}: stale barrier must not disturb replacement ownership"
+                );
+                assert_eq!(replayed_again.active_len(), 4);
+                assert_eq!(replayed_again.queued_len(), 3);
+
+                let mut remaining = Vec::new();
+                replayed_again.get_transactions_for_block_with_state(
+                    fixture.state.as_ref(),
+                    NonZeroUsize::new(3).expect("remaining FIFO length"),
+                    &mut remaining,
+                );
+                let remaining_hashes = remaining
+                    .iter()
+                    .map(|transaction| transaction.as_ref().hash())
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    remaining_hashes,
+                    expected_fifo[1..],
+                    "{boundary}: release replay must preserve FIFO order behind the new owner"
+                );
+                let observed = std::iter::once(replacement[0].key().signed_transaction_hash)
+                    .chain(remaining_hashes)
+                    .collect::<BTreeSet<_>>();
+                assert_eq!(observed.len(), 4);
+                assert_eq!(
+                    observed,
+                    expected_fifo.iter().copied().collect(),
+                    "{boundary}: restart/release must neither lose nor duplicate ownership"
+                );
+            }
         }
     );
 
@@ -3275,24 +4053,28 @@ mod tests {
     );
 
     v2_apply_test!(
-        restart_recovers_wsv_before_checkpoint_manifest_and_finality,
+        checkpoint_write_failure_keeps_wsv_behind_durable_kura_tip,
         {
             let fixture = ApplyFixture::new();
             let mut store = fixture.reopen_body_store();
             fixture.kura.fail_next_wsv_checkpoint_write_for_tests();
             let error = fixture
                 .execute(&mut store)
-                .expect_err("checkpoint failure follows the irreversible commit boundary");
+                .expect_err("checkpoint failure follows the durable Kura boundary");
             assert!(
                 matches!(
                     &error,
                     V2ApplyError::CommittedRecoveryRequired { stage, .. }
-                        if *stage == "post-apply metadata"
+                        if *stage == "pre-WSV recovery checkpoint"
                 ),
                 "unexpected committed recovery classification: {error:?}"
             );
             assert!(error.requires_restart_recovery());
-            assert_eq!(fixture.state.committed_height(), 1);
+            assert_eq!(
+                fixture.state.committed_height(),
+                0,
+                "live WSV must not advance without its durable recovery checkpoint"
+            );
             assert_eq!(fixture.kura.exact_durable_blocks_count().unwrap(), 1);
             fixture.assert_no_post_apply_sidecars();
 
@@ -3306,32 +4088,49 @@ mod tests {
             );
             fixture
                 .execute(&mut reopened)
-                .expect("complete metadata without reapplying WSV");
+                .expect("replay the exact durable tip and publish WSV once");
             fixture.assert_complete();
         }
     );
 
     v2_apply_test!(
-        crash_after_wsv_restarts_from_last_finalized_snapshot_and_replays_exact_tip,
+        crash_after_staged_checkpoint_replays_exact_tip_without_double_apply,
         {
             let fixture = ApplyFixture::new();
             let mut first_process_store = fixture.reopen_body_store();
-            fixture.kura.fail_next_wsv_checkpoint_write_for_tests();
+            fixture.service.fail_after_wsv_checkpoint_for_test();
             let first_error = fixture
                 .service
                 .execute(&fixture.context, &mut first_process_store, &fixture.task)
-                .expect_err("inject crash after WSV commit and before checkpoint publication");
+                .expect_err("inject crash after checkpoint fsync and before WSV publication");
+            assert!(matches!(
+                &first_error,
+                V2ApplyError::InjectedCrashAfterWsvCheckpoint
+            ));
             assert!(first_error.requires_restart_recovery());
-            assert_eq!(fixture.state.committed_height(), 1);
+            assert_eq!(fixture.state.committed_height(), 0);
             assert_eq!(fixture.kura.exact_durable_blocks_count().unwrap(), 1);
-            fixture.assert_no_post_apply_sidecars();
-            let interrupted_state_hash =
-                crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref());
+            let staged_checkpoint = fixture
+                .kura
+                .wsv_checkpoint(1)
+                .expect("read staged checkpoint")
+                .expect("checkpoint must be durable before WSV publication");
+            assert!(
+                fixture
+                    .kura
+                    .commit_manifest(1)
+                    .expect("read absent manifest")
+                    .is_none(),
+                "the pre-WSV checkpoint must remain unbound until State commits"
+            );
+            let staged_state_hash = staged_checkpoint.state_hash();
             drop(first_process_store);
 
-            // Snapshot publication is gated on the complete checkpoint/manifest/finality tuple,
-            // so a process crash reloads the last finalized snapshot (height zero here), not the
-            // transient WSV that crossed only the in-memory commit boundary.
+            // Snapshot publication is gated on the complete
+            // checkpoint/manifest/finality tuple, so a process crash reloads
+            // the last finalized snapshot (height zero here). The exact
+            // durable checkpoint authenticates the overlay replay before live
+            // State can cross its commit boundary.
             let (restarted_service, restarted_state) =
                 fixture.restart_service_from_last_finalized_snapshot();
             assert_eq!(restarted_state.committed_height(), 0);
@@ -3348,8 +4147,8 @@ mod tests {
             assert_eq!(first_artifact.block_hash, fixture.body.hash());
             assert_eq!(
                 crate::snapshot::canonical_state_snapshot_hash(restarted_state.as_ref()),
-                interrupted_state_hash,
-                "recovery from the finalized snapshot must reproduce the exact interrupted WSV"
+                staged_state_hash,
+                "recovery must reproduce the exact pre-commit checkpointed WSV"
             );
 
             let durable_state_hash =

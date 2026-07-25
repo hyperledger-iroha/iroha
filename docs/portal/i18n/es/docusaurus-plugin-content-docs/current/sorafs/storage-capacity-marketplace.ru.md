@@ -60,7 +60,7 @@ Esta página está escrita `docs/source/sorafs/storage_capacity_marketplace.md`.
 - `CapacityTelemetryV1` describe instantáneas de instantáneas (desbloqueadas frente a GiB implementadas, replicaciones seleccionadas, tiempo de actividad/PoR actuales), которые питают honorarios de распределение. Gran cantidad de proveedores que utilizan la declaración de datos, y resultados - en 0-100%.【crates/sorafs_manifest/src/capacity.rs:476】
 - Общие helpers (`CapacityMetadataEntry`, `PricingScheduleV1`, validadores de carril/asignación/SLA) para determinar la clave de acceso y los informes, Estos pueden ser útiles para CI y herramientas posteriores.【crates/sorafs_manifest/src/capacity.rs:230】- `PinProviderRegistry` publica una instantánea en cadena con `/v1/sorafs/capacity/state`, muestra las declaraciones de proveedores y registra el libro de tarifas para determinar Norito JSON.【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
 - Покрытие валидации проверяет соблюдение канонических handles, обнаружение дубликатов, granisы по lane, guards назначения репликации и проверки диапазонов телеметрии, чтобы регрессии всплывали сразу в CI.【crates/sorafs_manifest/src/capacity.rs:792】
-- Herramientas del operador: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` especificaciones de conversión de datos y cargas útiles Norito, blobs base64 y resúmenes JSON, nombres de operadores подготовить accesorios `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry` y accesorios de orden de replicación con validación local. 【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 Accesorios de referencia живут в `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) y generadores desde `cargo run -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order`.
+- Herramientas del operador: `sorafs_manifest_builder capacity {declaration, telemetry, replication-order}` especificaciones de conversión de datos y cargas útiles Norito, blobs base64 y resúmenes JSON, nombres de operadores подготовить accesorios `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry` y accesorios de orden de replicación con validación local. 【crates/sorafs_car/src/bin/sorafs_manifest_builder/capacity.rs:1】 Accesorios de referencia живут в `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) y generadores desde `cargo run -p sorafs_car --bin sorafs_manifest_builder -- capacity replication-order`.
 
 ### 2. Plano de control de integración| Задача | Propietario(s) | Примечания |
 |------|----------|-------|
@@ -140,7 +140,7 @@ La hoja de ruta de Punk **SF-2c** bloquea el lanzamiento de la producción para 
   вместе с paquetes de gobernanza.
 
 ### Доказательства disputa y corte
-- Подавайте disputas через `sorafs_manifest_stub capacity dispute` (pruebas:
+- Подавайте disputas через `sorafs_manifest_builder capacity dispute` (pruebas:
   `cargo test -p sorafs_car --test capacity_cli`), estas cargas útiles están instaladas.
 - Запускайте `cargo test -p iroha_core -- capacity_dispute_replay_is_deterministic` y наборы
   штрафов (`record_capacity_telemetry_penalises_persistent_under_delivery`), чтобы доказать
@@ -149,7 +149,7 @@ La hoja de ruta de Punk **SF-2c** bloquea el lanzamiento de la producción para 
   escalas; привязывайте huelga de aprobaciones обратно в informe de validación.
 
 ### Proveedores de pruebas de humo y agua
-- Regenerar artefactos declarados/telemétricos con `sorafs_manifest_stub capacity ...` y
+- Regenerar artefactos declarados/telemétricos con `sorafs_manifest_builder capacity ...` y
   прогоняйте CLI tests перед подачей (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`).
 - Instale el dispositivo Torii (`/v1/sorafs/capacity/declare`)
   `/v1/sorafs/capacity/state` más pantallas Grafana. Следуйте flujo выхода в

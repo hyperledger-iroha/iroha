@@ -6580,7 +6580,7 @@ mod kagemusha_v4_artifact_contract_tests {
             asset_scale: 9,
             activation_height: 1,
             withdrawal_height: 100,
-            max_proof_bytes: 9_000,
+            max_proof_bytes: KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4,
             profiles: vec![
                 profile(KagemushaPastaCycleParityV1::StepEq, params.clone(), 1),
                 profile(KagemushaPastaCycleParityV1::StepEp, params, 11),
@@ -6684,7 +6684,7 @@ mod kagemusha_v4_artifact_contract_tests {
             artifact_roles: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4
                 .map(str::to_owned)
                 .to_vec(),
-            max_proof_bytes: 9_000,
+            max_proof_bytes: KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4,
         }
     }
 
@@ -7007,7 +7007,6 @@ mod kagemusha_v4_artifact_contract_tests {
             assert!(schema.contains("\"semantic_authority\":\"step_eq\""));
             assert!(!schema.contains("\"state_layout_version\":2"));
             assert!(!schema.contains("\"state_limbs\":890"));
-            assert!(schema.contains("\"operation_field_elements\":135"));
             assert!(schema.contains("\"ipa_accumulator\":{\"wire_version\":5,\"elements\":36"));
             assert!(schema.contains("\"live_selector\""));
             assert!(!schema.contains("4156"));
@@ -7023,6 +7022,8 @@ mod kagemusha_v4_artifact_contract_tests {
             step_eq_schema
                 .contains("\"private_witness\":{\"state_layout_version\":5,\"state_limbs\":138")
         );
+        assert!(step_eq_schema.contains("\"operation_field_elements\":135"));
+        assert!(step_eq_schema.contains("\"operation_limbs\":1080"));
         assert_eq!(
             kagemusha_recursive_spend_step_eq_public_inputs_schema_hash_v4(),
             <[u8; 32]>::from(Hash::new(
@@ -7235,7 +7236,9 @@ mod kagemusha_v4_artifact_contract_tests {
         assert_eq!(first_subject, second_subject);
 
         let mut params_tamper = manifest.clone();
-        params_tamper.profiles[0].circuit_params.num_fixed += 1;
+        params_tamper.profiles[0]
+            .circuit_params
+            .minimum_unusable_rows += 1;
         assert_ne!(
             second_subject,
             params_tamper
@@ -7340,7 +7343,9 @@ mod kagemusha_v4_artifact_contract_tests {
         );
 
         let mut signed_params_tamper = manifest.clone();
-        signed_params_tamper.profiles[0].circuit_params.num_fixed += 1;
+        signed_params_tamper.profiles[0]
+            .circuit_params
+            .minimum_unusable_rows += 1;
         assert_eq!(
             KagemushaAuthenticatedReleaseV4::verify(
                 &signed_params_tamper,

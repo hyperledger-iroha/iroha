@@ -75,7 +75,7 @@ Nombre del producto: `crates/sorafs_manifest/src/pin_registry.rs` Norito en Rust
 |--------|--------|------------------|
 | Módulo Torii | Aquí `/v1/sorafs/pin` (enviar), `/v1/sorafs/pin/{cid}` (búsqueda), `/v1/sorafs/aliases` (listar/enlazar), `/v1/sorafs/replication` (pedidos/recibos). توفير ترقيم + ترشيح. | Redes TL / Core Infraestructura |
 | الاتستاشن | تضمين ارتفاع/هاش registro في الاستجابات؛ Utilice Norito para instalar SDK. | Infraestructura básica |
-| CLI | Utilice `sorafs_manifest_stub` y CLI para seleccionar `sorafs_pin` o `pin submit`, `alias bind`, `order issue`, `registry export`. | Grupo de Trabajo sobre Herramientas |
+| CLI | Utilice `sorafs_manifest_builder` y CLI para seleccionar `sorafs_pin` o `pin submit`, `alias bind`, `order issue`, `registry export`. | Grupo de Trabajo sobre Herramientas |
 | SDK | Enlaces de última generación (Rust/Go/TS) desde Norito؛ اضافة اختبارات تكامل. | Equipos SDK |
 
 العمليات:

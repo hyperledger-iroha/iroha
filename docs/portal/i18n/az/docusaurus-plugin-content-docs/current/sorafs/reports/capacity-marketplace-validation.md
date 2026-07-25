@@ -62,7 +62,7 @@ cargo test -p sorafs_car --features cli --test capacity_cli
 python3 scripts/telemetry/capacity_reconcile.py --snapshot <state.json> --ledger <ledger.ndjson> --warn-only
 ```
 
-Operatorlar onboarding/mübahisə sorğusu yüklərini `sorafs_manifest_stub capacity {declaration,dispute}` ilə bərpa etməli və nəticədə JSON/Norito baytlarını idarəetmə bileti ilə birlikdə arxivləşdirməlidir.
+Operatorlar onboarding/mübahisə sorğusu yüklərini `sorafs_manifest_builder capacity {declaration,dispute}` ilə bərpa etməli və nəticədə JSON/Norito baytlarını idarəetmə bileti ilə birlikdə arxivləşdirməlidir.
 
 ## Qeydiyyatdan Çıxış Artefaktları
 

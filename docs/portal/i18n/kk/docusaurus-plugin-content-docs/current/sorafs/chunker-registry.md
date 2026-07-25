@@ -121,7 +121,7 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
 Манифест түбіртегі бірдей деректерді көрсетеді, бұл конвейерлердегі `--chunker-profile-id` таңдау сценарийін жазу кезінде ыңғайлы. Екі жинақ дүкені CLI да канондық дескриптор пішінін (`--profile=sorafs.sf1@1.0.0`) қабылдайды, сондықтан құрастыру сценарийлері қатаң кодталатын сандық идентификаторларды болдырмайды:
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- --list-chunker-profiles
+$ cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- --list-chunker-profiles
 [
   {
     "profile_id": 1,
@@ -179,4 +179,4 @@ HTTP келіссөздеріне сүйенбестен.
   берілген сынақтар арқылы.
 * `chunker_registry::lookup_by_profile` дескриптор параметрлерін бекітеді
   кездейсоқ дивергенцияны сақтау үшін `ChunkProfile::DEFAULT` сәйкестендіріңіз.
-* `iroha app sorafs toolkit pack` және `sorafs_manifest_stub` шығарған манифесттер тізілім метадеректерін қамтиды.
+* `iroha app sorafs toolkit pack` және `sorafs_manifest_builder` шығарған манифесттер тізілім метадеректерін қамтиды.

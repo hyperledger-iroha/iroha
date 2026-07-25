@@ -46,7 +46,7 @@ Inspect the registry and candidate profile metadata:
 cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- --list-profiles
 cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- \
   --promote-profile=<handle> --json-out=-
-cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_car --bin sorafs_manifest_builder -- \
   --chunker-profile=<handle> --json-out=-
 ```
 
@@ -64,7 +64,7 @@ Attach the following to the governance or PR review thread:
 - Proposal JSON and council envelope placeholder.
 - Determinism report and fixture digests.
 - Output from `--list-profiles` and `--promote-profile=<handle>`.
-- Manifest stub output showing the selected profile id, canonical handle, and
+- Manifest builder output showing the selected profile id, canonical handle, and
   aliases.
 - PoR sample output and proof verification result.
 - SDK parity notes for any generated Go, JavaScript, Python, Swift, JVM/Android,

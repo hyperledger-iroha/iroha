@@ -223,6 +223,7 @@ FOUNDATIONAL_PREREQUISITE_FIELDS = frozenset(
         "release_sequence",
         "previous_envelope_sha256",
         "prerequisites",
+        "lane_summaries",
         "signature",
     }
 )
@@ -237,6 +238,7 @@ FOUNDATIONAL_PREREQUISITE_ROW_FIELDS = frozenset(
         "evidence_generated_at_unix",
     }
 )
+FOUNDATIONAL_LANE_SUMMARY_ROW_FIELDS = frozenset({"gate", "sha256"})
 FOUNDATIONAL_PREREQUISITE_SIGNATURE_FIELDS = frozenset(
     {"algorithm", "public_key_fingerprint_sha256", "signature_hex"}
 )
@@ -256,6 +258,7 @@ AGGREGATE_FOUNDATIONAL_PREREQUISITE_ROW_FIELDS = frozenset(
         "previous_envelope_sha256",
         "signer_public_key_fingerprint_sha256",
         "evidence_anchor_sha256",
+        "lane_summary_sha256",
         "path",
         "sha256",
         "errors",
@@ -1938,6 +1941,55 @@ def validate_foundational_timestamp(
     return value
 
 
+def validate_foundational_lane_summary_rows(
+    value: Any,
+    errors: list[str],
+) -> list[dict[str, str]]:
+    """Validate the exact ordered lane-summary digests signed by the envelope."""
+
+    rows: list[dict[str, str]] = []
+    if not isinstance(value, list):
+        errors.append("foundational lane_summaries must be an array")
+        return rows
+    for index, item in enumerate(value):
+        path = f"foundational lane_summaries[{index}]"
+        row = validate_foundational_exact_fields(
+            item,
+            FOUNDATIONAL_LANE_SUMMARY_ROW_FIELDS,
+            path,
+            errors,
+        )
+        if row is None:
+            continue
+        gate = canonical_string(row.get("gate"))
+        if gate is None:
+            errors.append(f"{path}.gate must be a canonical string")
+        digest = canonical_lower_hex(row.get("sha256"), 64)
+        if digest is None:
+            errors.append(f"{path}.sha256 must be canonical lowercase SHA-256")
+        elif not any(bytes.fromhex(digest)):
+            errors.append(f"{path}.sha256 must not be zero")
+        if gate is not None and digest is not None and any(bytes.fromhex(digest)):
+            rows.append({"gate": gate, "sha256": digest})
+
+    observed_gates = [row["gate"] for row in rows]
+    expected_gates = list(DEFAULT_REQUIRED_GATES)
+    if observed_gates != expected_gates:
+        errors.append(
+            "foundational lane_summaries must match all 17 readiness lanes in canonical order"
+        )
+        if len(set(observed_gates)) != len(observed_gates):
+            errors.append("foundational lane_summaries must not contain duplicate gates")
+        if set(expected_gates) - set(observed_gates):
+            errors.append("foundational lane_summaries are missing required gates")
+        if set(observed_gates) - set(expected_gates):
+            errors.append("foundational lane_summaries contain unknown gates")
+    digests = [row["sha256"] for row in rows]
+    if len(set(digests)) != len(digests):
+        errors.append("foundational lane_summaries must use unique summary digests")
+    return rows
+
+
 def validate_foundational_prerequisite_summary(
     payload: dict[str, Any],
     options: ValidationOptions,
@@ -2128,6 +2180,11 @@ def validate_foundational_prerequisite_summary(
     if len(set(anchors)) != len(anchors):
         errors.append("foundational prerequisites must use unique evidence anchors")
 
+    lane_summary_rows = validate_foundational_lane_summary_rows(
+        payload.get("lane_summaries"),
+        errors,
+    )
+
     signature = validate_foundational_exact_fields(
         payload.get("signature"),
         FOUNDATIONAL_PREREQUISITE_SIGNATURE_FIELDS,
@@ -2215,6 +2272,7 @@ def validate_foundational_prerequisite_summary(
         "previous_envelope_sha256": previous_envelope_sha256,
         "signer_public_key_fingerprint_sha256": signer_fingerprint,
         "evidence_anchor_sha256": anchors,
+        "lane_summary_sha256": lane_summary_rows,
         "errors": errors,
     }
     return summary, errors, context
@@ -5192,6 +5250,13 @@ def validate_aggregate_foundational_prerequisite_output(
         if valid is True and len(anchors) != len(FOUNDATIONAL_PREREQUISITE_IDS):
             errors.append(f"{path} evidence anchors must cover every prerequisite")
 
+    lane_summary_rows = validate_foundational_lane_summary_rows(
+        row.get("lane_summary_sha256"),
+        errors,
+    )
+    if valid is True and len(lane_summary_rows) != len(DEFAULT_REQUIRED_GATES):
+        errors.append(f"{path} lane summary digests must cover every readiness lane")
+
     artifact_path = row.get("path")
     if canonical_string(artifact_path) is None:
         errors.append(f"{path} path must be canonical")
@@ -5714,6 +5779,51 @@ def validate_disallowed_summary_diagnostics(
         )
 
 
+def validate_foundational_lane_summary_digest_bindings(
+    foundational_prerequisites: dict[str, Any],
+    observed_summary_sha256: dict[str, str],
+    required_gates: tuple[str, ...],
+    errors: list[str],
+) -> None:
+    """Bind a full promotion run to the exact 17 supplied lane summary bytes."""
+
+    if (
+        len(required_gates) != len(DEFAULT_REQUIRED_GATES)
+        or set(required_gates) != set(DEFAULT_REQUIRED_GATES)
+    ):
+        return
+    rows = foundational_prerequisites.get("lane_summary_sha256")
+    if not isinstance(rows, list):
+        return
+    expected_by_gate = {
+        row.get("gate"): row.get("sha256")
+        for row in rows
+        if isinstance(row, dict)
+        and canonical_string(row.get("gate")) is not None
+        and canonical_lower_hex(row.get("sha256"), 64) is not None
+    }
+    row_errors = foundational_prerequisites.setdefault("errors", [])
+    if not isinstance(row_errors, list):
+        return
+    for gate_name in DEFAULT_REQUIRED_GATES:
+        observed = observed_summary_sha256.get(gate_name)
+        if observed is None:
+            continue
+        if expected_by_gate.get(gate_name) == observed:
+            continue
+        diagnostic = (
+            "foundational prerequisite lane summary binding for "
+            f"{gate_name} does not match the supplied readiness summary"
+        )
+        if diagnostic not in row_errors:
+            row_errors.append(diagnostic)
+        prefixed = f"foundational prerequisites: {diagnostic}"
+        if prefixed not in errors:
+            errors.append(prefixed)
+    if row_errors:
+        foundational_prerequisites["valid"] = False
+
+
 def build_summary(
     evidence_dirs: list[Path],
     evidence_files: list[Path],
@@ -5754,6 +5864,7 @@ def build_summary(
     duplicate_summary_count = 0
     unknown_schema_count = 0
     explicit_unrequired_count = 0
+    observed_summary_sha256: dict[str, str] = {}
 
     for path in files:
         loaded = load_evidence_json_with_sha256_or_record_error(
@@ -5828,6 +5939,7 @@ def build_summary(
             errors.append(duplicate_error)
             continue
         recognized_summaries += 1
+        observed_summary_sha256[gate.name] = digest
         gate_summary, validation_errors = validate_gate_summary(gate, payload, options)
         gate_summary["path"] = aggregate_summary_path_label(path, evidence_dirs)
         gate_summary["sha256"] = digest
@@ -5845,6 +5957,13 @@ def build_summary(
         environment = gate_summary.get("environment")
         if isinstance(deployment_id, str) and isinstance(environment, str):
             summary_contexts.add((deployment_id, environment))
+
+    validate_foundational_lane_summary_digest_bindings(
+        foundational_prerequisites,
+        observed_summary_sha256,
+        required_gates,
+        errors,
+    )
 
     for name, row in required.items():
         if row.get("present") is False:

@@ -40,13 +40,16 @@ use iroha_data_model::{
     nexus::{DataSpaceId, LaneId},
     permission,
     prelude::{
-        Account, Domain, ExposedPrivateKey, Grant, InstructionBox, Name, TransactionBuilder,
+        Account, Domain, ExposedPrivateKey, Grant, InstructionBox, Name, Register,
+        TransactionBuilder,
     },
     smart_contract::{CONTRACT_DEPLOY_NONCE_METADATA_KEY, ContractAddress},
     sorafs::pricing::PricingScheduleRecord,
 };
 use iroha_executor_data_model::permission::{
-    governance::CanEnactGovernance, smart_contract::CanRegisterSmartContractCode,
+    account::{AccountAliasPermissionScope, CanManageAccountAlias},
+    governance::CanEnactGovernance,
+    smart_contract::{CanInvokeContractEntrypoint, CanRegisterSmartContractCode},
 };
 use nonzero_ext::nonzero;
 
@@ -383,6 +386,14 @@ pub fn grant_contract_operator_permissions(state: &Arc<State>, authority: &Accou
         .execute(authority, &mut stx)
         .expect("grant CanEnactGovernance");
 
+    let alias_permission: permission::Permission = CanManageAccountAlias {
+        scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
+    }
+    .into();
+    Grant::account_permission(alias_permission, authority.clone())
+        .execute(authority, &mut stx)
+        .expect("grant universal-dataspace contract alias management");
+
     stx.apply();
     block
         .commit()
@@ -401,6 +412,28 @@ pub fn enqueue_locally_signed_contract_deployment(
     private_key: &ExposedPrivateKey,
     artifact: &[u8],
 ) -> (ContractAddress, String, String) {
+    enqueue_locally_signed_contract_deployment_with_subject_permissions(
+        state,
+        queue,
+        chain_id,
+        authority,
+        private_key,
+        artifact,
+        std::iter::empty(),
+    )
+}
+
+/// Build and enqueue a local deployment with exact permissions for its
+/// non-signable contract-subject account.
+pub fn enqueue_locally_signed_contract_deployment_with_subject_permissions(
+    state: &Arc<State>,
+    queue: &Arc<Queue>,
+    chain_id: &ChainId,
+    authority: &AccountId,
+    private_key: &ExposedPrivateKey,
+    artifact: &[u8],
+    subject_permissions: impl IntoIterator<Item = permission::Permission>,
+) -> (ContractAddress, String, String) {
     let verified = ivm::verify_contract_artifact(artifact).expect("verify contract artifact");
     let key_pair =
         KeyPair::from_private_key(private_key.0.clone()).expect("derive local deployment key pair");
@@ -409,6 +442,17 @@ pub fn enqueue_locally_signed_contract_deployment(
         authority.signatory(),
         "local deployment key must match authority"
     );
+    let hajimari_entrypoint = verified
+        .manifest
+        .entrypoints
+        .as_ref()
+        .and_then(|entrypoints| {
+            entrypoints.iter().find(|entrypoint| {
+                entrypoint.kind
+                    == iroha_data_model::smart_contract::manifest::EntryPointKind::Hajimari
+            })
+        })
+        .map(|entrypoint| entrypoint.name.clone());
     let manifest = verified
         .manifest
         .try_signed(&key_pair)
@@ -449,9 +493,13 @@ pub fn enqueue_locally_signed_contract_deployment(
     let chunk_count = u32::try_from(artifact.len().div_ceil(SMART_CONTRACT_CODE_CHUNK_BYTES))
         .expect("contract upload chunk count fits u32");
     assert_ne!(chunk_count, 0, "contract artifact must not be empty");
+    let subject_permissions = subject_permissions.into_iter().collect::<Vec<_>>();
 
-    let mut instructions =
-        Vec::with_capacity(usize::try_from(chunk_count).expect("chunk count fits usize") + 3);
+    let mut instructions = Vec::with_capacity(
+        usize::try_from(chunk_count).expect("chunk count fits usize")
+            + 5
+            + subject_permissions.len(),
+    );
     for (index, chunk) in artifact.chunks(SMART_CONTRACT_CODE_CHUNK_BYTES).enumerate() {
         instructions.push(InstructionBox::from(UploadSmartContractCodeChunk {
             code_hash: verified.code_hash,
@@ -467,6 +515,9 @@ pub fn enqueue_locally_signed_contract_deployment(
         chunk_count,
     }));
     instructions.push(InstructionBox::from(RegisterSmartContractCode { manifest }));
+    instructions.push(InstructionBox::from(Register::account(Account::new(
+        contract_address.subject_id(),
+    ))));
     instructions.push(InstructionBox::from(CommitContractDeployment {
         expected_deploy_nonce: deploy_nonce,
         contract_address: contract_address.clone(),
@@ -475,6 +526,23 @@ pub fn enqueue_locally_signed_contract_deployment(
         lease_expiry_ms: None,
         expected_previous_contract_address: None,
     }));
+    for permission in subject_permissions {
+        instructions.push(InstructionBox::from(Grant::account_permission(
+            permission,
+            contract_address.subject_id(),
+        )));
+    }
+    if let Some(entrypoint) = hajimari_entrypoint {
+        let permission: permission::Permission = CanInvokeContractEntrypoint {
+            contract: contract_address.clone(),
+            entrypoint,
+        }
+        .into();
+        instructions.push(InstructionBox::from(Grant::account_permission(
+            permission,
+            authority.clone(),
+        )));
+    }
 
     let transaction = TransactionBuilder::new(
         chain_id.clone(),

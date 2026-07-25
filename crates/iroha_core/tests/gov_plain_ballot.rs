@@ -43,7 +43,9 @@ fn plain_ballot_emits_ballot_accepted_with_weight() {
         "ref-1".to_string(),
         iroha_core::state::GovernanceReferendumRecord {
             h_start: 0,
-            h_end: 100,
+            // At H=1, the shortest ballot below expires at H=11 and must
+            // remain active through this inclusive referendum boundary.
+            h_end: 11,
             status: iroha_core::state::GovernanceReferendumStatus::Proposed,
             mode: iroha_core::state::GovernanceReferendumMode::Plain,
         },

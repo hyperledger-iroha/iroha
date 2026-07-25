@@ -128,7 +128,7 @@ groups:
    - Запустите `iroha app sorafs providers list` и убедитесь, что заявленные возможности соответствуют требованиям репликации.
    - Проверьте gauges `torii_sorafs_capacity_*`, чтобы подтвердить provisioned GiB и успех PoR.
 3. **Перераспределить репликацию**
-   - Выпустите новые заказы через `sorafs_manifest_stub capacity replication-order`, когда запас backlog (`stat="avg"`) опустится ниже 5 эпох (упаковка manifest/CAR использует `iroha app sorafs toolkit pack`).
+   - Выпустите новые заказы через `sorafs_manifest_builder capacity replication-order`, когда запас backlog (`stat="avg"`) опустится ниже 5 эпох (упаковка manifest/CAR использует `iroha app sorafs toolkit pack`).
    - Уведомите governance, если aliases не имеют активных binding manifests (неожиданное падение `torii_sorafs_registry_aliases_total`).
 4. **Задокументировать результат**
    - Запишите заметки инцидента в журнал операций SoraFS с timestamp и digest manifests.

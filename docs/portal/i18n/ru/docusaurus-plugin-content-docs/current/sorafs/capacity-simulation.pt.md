@@ -19,7 +19,7 @@ Sidebar_label: Runbook моделирования производительно
 Эта страница написана `docs/source/sorafs/runbooks/sorafs_capacity_simulation.md`. Мантенья представился как копиас синхронизадас.
 :::
 
-Этот Runbook поясняется в качестве исполнителя или комплекта моделирования рынка производительности SF-2c и визуализируется в виде результирующих показателей. Он действителен при согласовании котировок, обработке аварийного переключения и исправлении разрыва моста и моста с использованием определенных приспособлений в `docs/examples/sorafs_capacity_simulation/`. Os payloads de capacidade ainda usam `sorafs_manifest_stub capacity`; используйте `iroha app sorafs toolkit pack` для потоков упаковки манифеста/CAR.
+Этот Runbook поясняется в качестве исполнителя или комплекта моделирования рынка производительности SF-2c и визуализируется в виде результирующих показателей. Он действителен при согласовании котировок, обработке аварийного переключения и исправлении разрыва моста и моста с использованием определенных приспособлений в `docs/examples/sorafs_capacity_simulation/`. Os payloads de capacidade ainda usam `sorafs_manifest_builder capacity`; используйте `iroha app sorafs toolkit pack` для потоков упаковки манифеста/CAR.
 
 ## 1. Исправления ошибок CLI
 
@@ -28,7 +28,7 @@ cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./run_cli.sh ./artifacts
 ```
 
-`run_cli.sh` инкапсула `sorafs_manifest_stub capacity` для отправляемых полезных данных Norito, blobs base64, корпус заявки для Torii и резюме в формате JSON:
+`run_cli.sh` инкапсула `sorafs_manifest_builder capacity` для отправляемых полезных данных Norito, blobs base64, корпус заявки для Torii и резюме в формате JSON:
 
 - Тремя заявлениями об участии в плане переговоров по котировкам.
 - Укажите порядок репликации, в котором будет размещен манифест в постановке между всеми участниками.

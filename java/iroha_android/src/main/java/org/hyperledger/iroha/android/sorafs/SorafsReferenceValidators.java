@@ -7,9 +7,17 @@ import java.util.Arrays;
 /** Thin JVM/JNI wrapper around the SoraFS reference validators in {@code connect_norito_bridge}. */
 public final class SorafsReferenceValidators {
   private static final String LIBRARY_NAME = "connect_norito_bridge";
-  public static final int REQUIRED_BRIDGE_ABI_VERSION = 19;
+  public static final int REQUIRED_BRIDGE_ABI_VERSION = 21;
   /** Canonical maximum byte length for a V1 orderbook owner account. */
   public static final int ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 = 256;
+  /** Maximum complete-root or checkpoint-tail window accepted by one head validation. */
+  public static final int GOVERNANCE_DAG_MAX_BLOCKS_V1 = 64;
+  /** Canonical byte length for every Governance DAG CID. */
+  public static final int GOVERNANCE_DAG_CID_BYTES_V1 = 32;
+  /** Maximum aggregate payload, CID, and label bytes accepted by one reference call. */
+  public static final int REFERENCE_MAX_INPUT_BYTES_V1 = 67_108_864;
+  /** Maximum UTF-8 bytes accepted for one diagnostic input label. */
+  public static final int REFERENCE_MAX_LABEL_BYTES_V1 = 1_024;
   private static final boolean NATIVE_AVAILABLE = loadLibrary();
 
   private SorafsReferenceValidators() {}
@@ -21,6 +29,11 @@ public final class SorafsReferenceValidators {
 
   static boolean isBridgeAbiSupported(final int abiVersion) {
     return abiVersion >= REQUIRED_BRIDGE_ABI_VERSION;
+  }
+
+  static boolean isGovernanceDagBridgeSupported(
+      final int abiVersion, final boolean hasSymbols) {
+    return isBridgeAbiSupported(abiVersion) && hasSymbols;
   }
 
   public static String validateOrderbookPayloadJson(
@@ -108,6 +121,110 @@ public final class SorafsReferenceValidators {
             labelPayload,
             generatedAtUnix),
         "SoraFS hedging validation");
+  }
+
+  /**
+   * Validates one canonical {@code GovernanceDagBlockV1} without an external CID check.
+   *
+   * <p>The native validator always recomputes and validates the CID embedded in the block.
+   */
+  public static String validateGovernanceDagBlockJson(final byte[] noritoBytes) {
+    return validateGovernanceDagBlockJson(
+        noritoBytes, null, null, currentEpochSeconds());
+  }
+
+  /** Validates one canonical {@code GovernanceDagBlockV1}. */
+  public static String validateGovernanceDagBlockJson(
+      final byte[] noritoBytes,
+      final String label,
+      final byte[] expectedBlockCid,
+      final long generatedAtUnix) {
+    requireGeneratedAt(generatedAtUnix);
+    final byte[] payload = requireReferencePayload(noritoBytes, "noritoBytes");
+    final byte[] labelPayload = labelBytes(label, "governance-dag-block.to");
+    final byte[] expectedCid;
+    if (expectedBlockCid == null) {
+      expectedCid = new byte[0];
+    } else {
+      if (expectedBlockCid.length != GOVERNANCE_DAG_CID_BYTES_V1) {
+        throw new IllegalArgumentException(
+            "expectedBlockCid must contain exactly "
+                + GOVERNANCE_DAG_CID_BYTES_V1
+                + " bytes");
+      }
+      expectedCid = expectedBlockCid.clone();
+    }
+    requireAggregateReferenceBytes(payload.length, labelPayload.length, expectedCid.length);
+    requireNative();
+    return requireJsonOutput(
+        nativeValidateGovernanceDagBlockJson(
+            payload, labelPayload, expectedCid, generatedAtUnix),
+        "SoraFS governance DAG block validation");
+  }
+
+  /**
+   * Validates one signed {@code GovernanceDagHeadV1} against either a complete root-to-head
+   * history or its signed checkpoint-anchored tail.
+   */
+  public static String validateGovernanceDagHeadChainJson(
+      final byte[] head, final byte[][] blocks) {
+    return validateGovernanceDagHeadChainJson(
+        head, blocks, null, null, currentEpochSeconds());
+  }
+
+  /**
+   * Validates one signed {@code GovernanceDagHeadV1} against a complete root history or exact
+   * checkpoint-anchored tail.
+   *
+   * <p>When supplied, {@code blockLabels} must contain exactly one label per block.
+   */
+  public static String validateGovernanceDagHeadChainJson(
+      final byte[] head,
+      final byte[][] blocks,
+      final String headLabel,
+      final String[] blockLabels,
+      final long generatedAtUnix) {
+    requireGeneratedAt(generatedAtUnix);
+    if (blocks == null) {
+      throw new IllegalArgumentException("blocks must be provided");
+    }
+    if (blocks.length == 0 || blocks.length > GOVERNANCE_DAG_MAX_BLOCKS_V1) {
+      throw new IllegalArgumentException(
+          "blocks must contain 1.." + GOVERNANCE_DAG_MAX_BLOCKS_V1 + " entries");
+    }
+    if (blockLabels != null && blockLabels.length != blocks.length) {
+      throw new IllegalArgumentException(
+          "blockLabels must contain exactly one entry per block");
+    }
+    final byte[] headPayload = requireReferencePayload(head, "head");
+    final byte[] headLabelPayload = labelBytes(headLabel, "governance-dag-head.to");
+    final byte[][] blockPayloads = new byte[blocks.length][];
+    final byte[][] blockLabelPayloads = new byte[blocks.length][];
+    long aggregateBytes = (long) headPayload.length + headLabelPayload.length;
+    for (int index = 0; index < blocks.length; index++) {
+      blockPayloads[index] = requireReferencePayload(blocks[index], "blocks[" + index + "]");
+      blockLabelPayloads[index] =
+          labelBytes(
+              blockLabels == null ? null : blockLabels[index],
+              "governance-dag-block-" + index + ".to");
+      aggregateBytes +=
+          (long) blockPayloads[index].length + blockLabelPayloads[index].length;
+      if (aggregateBytes > REFERENCE_MAX_INPUT_BYTES_V1) {
+        throw new IllegalArgumentException(
+            "governance DAG head-chain inputs exceed "
+                + REFERENCE_MAX_INPUT_BYTES_V1
+                + " aggregate bytes");
+      }
+    }
+    requireNative();
+    return requireJsonOutput(
+        nativeValidateGovernanceDagHeadChainJson(
+            headPayload,
+            headLabelPayload,
+            blockPayloads,
+            blockLabelPayloads,
+            generatedAtUnix),
+        "SoraFS governance DAG head-chain validation");
   }
 
   public static byte[] signOrderbookPayload(
@@ -508,6 +625,26 @@ public final class SorafsReferenceValidators {
     return payload.clone();
   }
 
+  private static byte[] requireReferencePayload(final byte[] payload, final String field) {
+    final byte[] bytes = requirePayload(payload, field);
+    if (bytes.length > REFERENCE_MAX_INPUT_BYTES_V1) {
+      throw new IllegalArgumentException(
+          field + " must be at most " + REFERENCE_MAX_INPUT_BYTES_V1 + " bytes");
+    }
+    return bytes;
+  }
+
+  private static void requireAggregateReferenceBytes(final int... sizes) {
+    long aggregateBytes = 0L;
+    for (final int size : sizes) {
+      aggregateBytes += size;
+    }
+    if (aggregateBytes > REFERENCE_MAX_INPUT_BYTES_V1) {
+      throw new IllegalArgumentException(
+          "reference inputs exceed " + REFERENCE_MAX_INPUT_BYTES_V1 + " aggregate bytes");
+    }
+  }
+
   private static byte[] requirePrivateKey(final byte[] privateKey) {
     if (privateKey == null) {
       throw new IllegalArgumentException("privateKey must be provided");
@@ -612,7 +749,12 @@ public final class SorafsReferenceValidators {
     if (value.indexOf('\0') >= 0) {
       throw new IllegalArgumentException("label must not contain NUL");
     }
-    return value.getBytes(StandardCharsets.UTF_8);
+    final byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
+    if (bytes.length > REFERENCE_MAX_LABEL_BYTES_V1) {
+      throw new IllegalArgumentException(
+          "label must be at most " + REFERENCE_MAX_LABEL_BYTES_V1 + " UTF-8 bytes");
+    }
+    return bytes;
   }
 
   private static String requireJsonOutput(final byte[] output, final String context) {
@@ -642,13 +784,16 @@ public final class SorafsReferenceValidators {
   private static boolean loadLibrary() {
     try {
       System.loadLibrary(LIBRARY_NAME);
-      return isBridgeAbiSupported(nativeBridgeAbiVersion());
+      return isGovernanceDagBridgeSupported(
+          nativeBridgeAbiVersion(), nativeHasGovernanceDagSymbols());
     } catch (final UnsatisfiedLinkError | SecurityException error) {
       return false;
     }
   }
 
   private static native int nativeBridgeAbiVersion();
+
+  private static native boolean nativeHasGovernanceDagSymbols();
 
   private static native byte[] nativeValidateOrderbookPayloadJson(
       int kind, byte[] payload, byte[] label, long generatedAtUnix);
@@ -658,6 +803,16 @@ public final class SorafsReferenceValidators {
 
   private static native byte[] nativeValidateHedgingPayloadJson(
       int kind, byte[] payload, byte[] label, long generatedAtUnix);
+
+  private static native byte[] nativeValidateGovernanceDagBlockJson(
+      byte[] payload, byte[] label, byte[] expectedBlockCid, long generatedAtUnix);
+
+  private static native byte[] nativeValidateGovernanceDagHeadChainJson(
+      byte[] head,
+      byte[] headLabel,
+      byte[][] blocks,
+      byte[][] blockLabels,
+      long generatedAtUnix);
 
   private static native byte[] nativeSignOrderbookPayload(
       int kind, byte[] payload, byte[] privateKey);

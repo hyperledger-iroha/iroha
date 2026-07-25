@@ -59,7 +59,7 @@ cargo test -p sorafs_car --features cli --test capacity_cli
 python3 scripts/telemetry/capacity_reconcile.py --snapshot <state.json> --ledger <ledger.ndjson> --warn-only
 ```
 
-Operadores `sorafs_manifest_stub capacity {declaration,dispute}` cargas útiles de solicitud de incorporación/disputa generan bytes JSON/Norito ticket de gobernanza ساتھ archivo کرنا چاہیے۔
+Operadores `sorafs_manifest_builder capacity {declaration,dispute}` cargas útiles de solicitud de incorporación/disputa generan bytes JSON/Norito ticket de gobernanza ساتھ archivo کرنا چاہیے۔
 
 ## Artefactos de aprobación| Artefacto | Camino | blake2b-256 |
 |----------|------|-------------|

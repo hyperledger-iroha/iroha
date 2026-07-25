@@ -154,7 +154,7 @@ fn alias_proof_fixture_decodes() {
     assert_eq!(bundle.binding.expiry_epoch, 36);
     assert_eq!(
         bundle.binding.manifest_cid.as_slice(),
-        default_digest().as_bytes()
+        root_cid_for_manifest(default_digest()).as_bytes()
     );
     assert!(
         !bundle.council_signatures.is_empty(),
@@ -616,7 +616,7 @@ fn register_manifest_rejects_retired_successor() {
     let mut block = state.block(block_header(1));
     let mut tx = block.transaction();
     bootstrap_sorafs(&mut tx);
-    register_and_approve(&mut tx, parent, default_chunk_digest(), &council_keys);
+    register_and_approve(&mut tx, parent, chunk_digest_for_seed(0xE5), &council_keys);
     tx.apply();
     block.commit().expect("commit approved predecessor");
 
@@ -665,7 +665,7 @@ fn register_manifest_with_successor_persists_pointer() {
     let mut block = state.block(block_header(1));
     let mut tx = block.transaction();
     bootstrap_sorafs(&mut tx);
-    register_and_approve(&mut tx, parent, default_chunk_digest(), &council_keys);
+    register_and_approve(&mut tx, parent, chunk_digest_for_seed(0xE7), &council_keys);
     tx.apply();
     block.commit().expect("commit approved predecessor");
 

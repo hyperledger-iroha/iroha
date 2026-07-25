@@ -91,9 +91,9 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
   ملخص البيان والفحوصات مع الإعدادات المقترحة.
 - `sorafs_manifest_chunk_store --json-out=-` — جهاز البث le Rapport Chunk-store vers
   stdout للمقارنات التلقائية.
-- `sorafs_manifest_stub --chunker-profile=<handle>` - تأكيد البيانات والملفات
+- `sorafs_manifest_builder --chunker-profile=<handle>` - تأكيد البيانات والملفات
   خطط CAR تمنع التعامل مع Canonique et les aliases.
-- `sorafs_manifest_stub --plan=-` — أعد إدخال `chunk_fetch_specs` السابقة من أجل
+- `sorafs_manifest_builder --plan=-` — أعد إدخال `chunk_fetch_specs` السابقة من أجل
   التحقق من الإزاحات/الملخصات بعد التعديل.
 
 قم بإرسال الأوامر (الملخصات، الجذور، تجزئات البيان) في الاقتراح الموجود
@@ -132,7 +132,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
   --json-out=- --por-json-out=- fixtures/sorafs_chunker/input.bin
 
 # Générer manifest + CAR et capturer les chunk fetch specs
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --chunk-fetch-plan-out=chunk_plan.json \
@@ -141,7 +141,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
   --json-out=sf2.report.json
 
 # Relancer avec le plan de fetch sauvegardé (évite les offsets obsolètes)
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --plan=chunk_plan.json --json-out=-

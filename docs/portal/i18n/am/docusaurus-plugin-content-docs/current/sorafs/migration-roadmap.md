@@ -40,14 +40,14 @@ translation_last_reviewed: 2026-02-07
 |-------------|------------|----------|--------|
 | ቋሚ ልምምዶች | M0 | በየሳምንቱ የሚደረጉ የደረቅ ሩጫዎች የአካባቢን ቁርጥራጭ ምግቦችን ከ`fixtures/sorafs_chunker` ጋር በማነፃፀር። በ I18NI0000012X ስር ሪፖርት ያትሙ። | ማከማቻ አቅራቢዎች | `determinism-<date>.md` ማለፊያ/መክሸፍ ማትሪክስ። |
 | ፊርማዎችን ያስፈጽሙ | M1 | ፊርማ ወይም መንሸራተትን ካሳየ `ci/check_sorafs_fixtures.sh` + `.github/workflows/sorafs-fixtures-nightly.yml` አይሳካም። ልማትን መሻር ከPR ጋር የተያያዘ የአስተዳደር መሻርን ይጠይቃል። | Tooling WG | የ CI ሎግ ፣ የትኬት ማቋረጫ አገናኝ (የሚመለከተው ከሆነ)። |
-| የሚጠበቁ ባንዲራዎች | M1 | የቧንቧ መስመሮች ወደ `sorafs_manifest_stub` ይደውላሉ ውፅዓቶችን ለመሰካት በግልፅ ይጠበቃል፡ | ሰነዶች CI | የሚጠበቁ ባንዲራዎችን የሚያመለክቱ የተዘመኑ ስክሪፕቶች (ከዚህ በታች ያለውን የትእዛዝ እገዳ ይመልከቱ)። |
+| የሚጠበቁ ባንዲራዎች | M1 | የቧንቧ መስመሮች ወደ `sorafs_manifest_builder` ይደውላሉ ውፅዓቶችን ለመሰካት በግልፅ ይጠበቃል፡ | ሰነዶች CI | የሚጠበቁ ባንዲራዎችን የሚያመለክቱ የተዘመኑ ስክሪፕቶች (ከዚህ በታች ያለውን የትእዛዝ እገዳ ይመልከቱ)። |
 | መዝገብ ቤት-የመጀመሪያ መሰካት | M2 | `sorafs pin propose` እና `sorafs pin approve` ጥቅል አንጸባራቂ ማቅረቢያዎች; CLI ለ `--require-registry` ነባሪ ነው። | አስተዳደር Ops | የመመዝገቢያ CLI ኦዲት መዝገብ፣ ላልተሳካላቸው ፕሮፖዛል ቴሌሜትሪ። |
 | የታዛቢነት እኩልነት | M3 | Prometheus/Grafana ዳሽቦርዶች ቸንክ ኢንቬንቶሪዎች ከመዝገቡ ሲገለጡ ማንቂያዎች; በጥሪ ላይ ለኦፕስ የተገናኙ ማንቂያዎች። | ታዛቢነት | ዳሽቦርድ አገናኝ፣ የማንቂያ ደንብ መታወቂያዎች፣ የGameday ውጤቶች። |
 
 #### ቀኖናዊ ሕትመት ትእዛዝ
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- docs/book \
   --manifest-out artifacts/docs/book/2025-11-01/docs.manifest \
   --manifest-signatures-out artifacts/docs/book/2025-11-01/docs.manifest_signatures.json \
   --car-out artifacts/docs/book/2025-11-01/docs.car \

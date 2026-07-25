@@ -42,12 +42,12 @@ translation_last_reviewed: 2026-02-07
 |-------|-------|------------|----------|--------|
 | التكرارات دي تركيبات | م0 | تعمل عمليات التشغيل الجافة على مقارنة الأجزاء المحلية من القطع بـ `fixtures/sorafs_chunker`. نشر تقرير حول `docs/source/sorafs/reports/`. | موفرو التخزين | `determinism-<date>.md` avec مصفوفة تمرير/فشل. |
 | Exiger les التوقيعات | م1 | `ci/check_sorafs_fixtures.sh` + `.github/workflows/sorafs-fixtures-nightly.yml` يعكس التوقيعات أو البيانات المشتقة. تتطلب تجاوزات التطوير إرفاق تنازل عن الحوكمة بالعلاقات العامة. | الأدوات مجموعة العمل | سجل CI، الامتياز مقابل تذكرة التنازل (إذا كان قابلاً للتطبيق). |
-| أعلام التوقع | م1 | خطوط الأنابيب تستأنف `sorafs_manifest_stub` مع التوقعات الواضحة لتوضيح الطلعات: | مستندات CI | تشير البرامج النصية يوميًا إلى أعلام التوقع (voir bloc de commande ci-dessous). |
+| أعلام التوقع | م1 | خطوط الأنابيب تستأنف `sorafs_manifest_builder` مع التوقعات الواضحة لتوضيح الطلعات: | مستندات CI | تشير البرامج النصية يوميًا إلى أعلام التوقع (voir bloc de commande ci-dessous). |
 | تثبيت التسجيل أولاً | م2 | `sorafs pin propose` و`sorafs pin approve` يغلفان مستندات البيان؛ يستخدم CLI الافتراضي `--require-registry`. | عمليات الحوكمة | سجل تدقيق سجل CLI، قياس أسعار المقترحات عن بعد. |
 | باريت ملاحظتها | م3 | يتم تنبيه لوحات المعلومات Prometheus/Grafana عند اكتشاف قطع بيانات السجل المتباينة؛ تنبيهات الفروع على l'astreinte ops. | إمكانية الملاحظة | لوحة معلومات الامتياز ومعرفات قواعد التنبيه ونتائج GameDay. |
 
 #### الأمر بالنشر القانوني```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- docs/book \
   --manifest-out artifacts/docs/book/2025-11-01/docs.manifest \
   --manifest-signatures-out artifacts/docs/book/2025-11-01/docs.manifest_signatures.json \
   --car-out artifacts/docs/book/2025-11-01/docs.car \

@@ -19,7 +19,7 @@ Descripción: Ejecutar el kit de herramientas de simulación del mercado de capa
 Esta página espelha `docs/source/sorafs/runbooks/sorafs_capacity_simulation.md`. Mantenha ambas como copias sincronizadas.
 :::
 
-Este runbook explica cómo ejecutar el kit de simulación del mercado de capacidad SF-2c y visualizar las métricas resultantes. Ele valida a negociação de cotas, o tratamento de failover y a remediação de slashing de ponta a ponta usando os accesorios determinísticos em `docs/examples/sorafs_capacity_simulation/`. Os payloads de capacidade ainda usam `sorafs_manifest_stub capacity`; use `iroha app sorafs toolkit pack` para los flujos de empacado de manifiesto/CAR.
+Este runbook explica cómo ejecutar el kit de simulación del mercado de capacidad SF-2c y visualizar las métricas resultantes. Ele valida a negociação de cotas, o tratamento de failover y a remediação de slashing de ponta a ponta usando os accesorios determinísticos em `docs/examples/sorafs_capacity_simulation/`. Os payloads de capacidade ainda usam `sorafs_manifest_builder capacity`; use `iroha app sorafs toolkit pack` para los flujos de empacado de manifiesto/CAR.
 
 ## 1. Generar artefactos de CLI
 
@@ -28,7 +28,7 @@ cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./run_cli.sh ./artifacts
 ```
 
-`run_cli.sh` encapsula `sorafs_manifest_stub capacity` para generar cargas útiles Norito, blobs base64, cuerpos de solicitud para Torii y resúmenes JSON para:
+`run_cli.sh` encapsula `sorafs_manifest_builder capacity` para generar cargas útiles Norito, blobs base64, cuerpos de solicitud para Torii y resúmenes JSON para:
 
 - Tres declaraciones de proveedores que participan en el escenario de negociación de cotas.
 - Uma ordem de replicação que aloca o manifesto em staging entre esses provedores.

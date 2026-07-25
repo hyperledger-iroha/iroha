@@ -63,7 +63,7 @@ los entregables requeridos para la primera release y los divide en tracks accion
 - חברות עוזרות (`CapacityMetadataEntry`, `PricingScheduleV1`, validadores de lane/asignacion/SLA) הוכחו אימות תקינות המפתחות ודיווחי השגיאה לגבי CI y tooling downstream pueden reutilizar.【ארגזים/sorafs_manifest/src/capacity.rs:230】
 - `PinProviderRegistry` אזהרה להמחיש את תמונת המצב על השרשרת דרך `/v1/sorafs/capacity/state`, שילוב של הצהרות ספק וכניסות עמלות עם Norito JSON determinista.【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
 - La cobertura de validacion ejercita enforcement de handles canonicos, deteccion de duplicados, limites por lane, guardas de asignacion de replicacion y checks de rango de telemetria para que las regresiones aparezcan en CI de inmediato.【crates/sorafs_manifest.【rates/sorafs_manifest:9
-- כלי עבודה עבור מפעילים: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` convierte especificaciones readibles en payloads Norito canonicos, blobs base64 y resúmenes JSON para que los operadores readyn fixtures de `/v1/sorafs/capacity/declare` ordenes de `/v1/sorafs/capacity/declare`, replicacion con validacion local.【ארגזים/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 Los fixtures de referencia viven en `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, I100NI040 via generan) `cargo run -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order`.
+- כלי עבודה עבור מפעילים: `sorafs_manifest_builder capacity {declaration, telemetry, replication-order}` convierte especificaciones readibles en payloads Norito canonicos, blobs base64 y resúmenes JSON para que los operadores readyn fixtures de `/v1/sorafs/capacity/declare` ordenes de `/v1/sorafs/capacity/declare`, replicacion con validacion local.【ארגזים/sorafs_car/src/bin/sorafs_manifest_builder/capacity.rs:1】 Los fixtures de referencia viven en `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, I100NI040 via generan) `cargo run -p sorafs_car --bin sorafs_manifest_builder -- capacity replication-order`.
 
 ### 2. אינטגרציה של שליטה בשטח| טארא | אחראי(ים) | Notas |
 |------|----------------|------|
@@ -152,7 +152,7 @@ El item de roadmap **SF-2c** bloquea el rollout in produccion sobre evidencia co
   junto con los paquetes de gobernanza.
 
 ### Evidencia de disputa y slashing
-- Presenta disputas באמצעות `sorafs_manifest_stub capacity dispute` (בדיקות:
+- Presenta disputas באמצעות `sorafs_manifest_builder capacity dispute` (בדיקות:
   `cargo test -p sorafs_car --test capacity_cli`) para mantener מטענים canonicos.
 - Ejecuta `cargo test -p iroha_core -- capacity_dispute_replay_is_deterministic` y las suites de
   penalizacion (`record_capacity_telemetry_penalises_persistent_under_delivery`) para probar que
@@ -161,7 +161,7 @@ El item de roadmap **SF-2c** bloquea el rollout in produccion sobre evidencia co
   enlaza las aprobaciones de strikes en el reporte de validacion.
 
 ### כניסה של ספקים ויציאה מבחני עשן
-- Regenera artefactos declaracion/telemetria con `sorafs_manifest_stub capacity ...` y
+- Regenera artefactos declaracion/telemetria con `sorafs_manifest_builder capacity ...` y
   reejecuta los tests de CLI antes del submit (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`).
 - Envialos via Torii (`/v1/sorafs/capacity/declare`) y luego captura `/v1/sorafs/capacity/state` mas
   צילומי מסך של Grafana. Sigue el flujo de salida en `docs/source/sorafs/capacity_onboarding_runbook.md`.

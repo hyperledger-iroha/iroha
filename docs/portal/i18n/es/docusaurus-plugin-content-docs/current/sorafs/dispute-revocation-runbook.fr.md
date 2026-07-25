@@ -38,7 +38,7 @@ Este runbook guía a los operadores de gobierno en la creación de litigios de c
 
 ## 3. Presentar el litigio
 
-1. Cree una especificación JSON para `sorafs_manifest_stub capacity dispute`:
+1. Cree una especificación JSON para `sorafs_manifest_builder capacity dispute`:
 
    ```json
    {
@@ -61,7 +61,7 @@ Este runbook guía a los operadores de gobierno en la creación de litigios de c
 2. Lanza la CLI :
 
    ```bash
-   sorafs_manifest_stub capacity dispute \
+   sorafs_manifest_builder capacity dispute \
      --spec=dispute.json \
      --norito-out=dispute.to \
      --base64-out=dispute.b64 \
@@ -76,7 +76,7 @@ Este runbook guía a los operadores de gobierno en la creación de litigios de c
 
 ## 4. Evacuación y revocación1. **Fenêtre de grâce :** avertissez le fournisseur de la révocation imminente ; autorisez l’évacuation des données épinglées lorsque la politique le permet.
 2. **Générez `ProviderAdmissionRevocationV1` :**
-   - Utilice `sorafs_manifest_stub provider-admission revoke` con la razón aprobada.
+   - Utilice `sorafs_manifest_builder provider-admission revoke` con la razón aprobada.
    - Verifique las firmas y el resumen de revocación.
 3. **Publiez the révocation :**
    - Soumettez la solicitud de revocación a Torii.
@@ -91,7 +91,7 @@ Este runbook guía a los operadores de gobierno en la creación de litigios de c
 
 ## 6. Documentos de referencia
 
-- `sorafs_manifest_stub capacity dispute --help`
+- `sorafs_manifest_builder capacity dispute --help`
 - `docs/source/sorafs/storage_capacity_marketplace.md` (sección litigios)
 - `docs/source/sorafs/provider_admission_policy.md` (flujo de trabajo de revocación)
 - Panel de observación: `SoraFS / Capacity Providers`

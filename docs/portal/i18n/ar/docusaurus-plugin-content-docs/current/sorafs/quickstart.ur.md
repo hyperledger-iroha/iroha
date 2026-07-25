@@ -63,12 +63,12 @@ cargo run -p sorafs_chunker --bin sorafs-chunk-dump -- /tmp/docs.txt \
 cargo test -p sorafs_chunker streaming_backpressure_fuzz_matches_batch
 ```## 3. بيان الحمولة والبطاقة الائتمانية
 
-خطة القطعة والأسماء المستعارة وتوقيعات الإدارة `sorafs-manifest-stub`
+خطة القطعة والأسماء المستعارة وتوقيعات الإدارة `sorafs-manifest-builder`
 بيان واضح. لا يوجد أي شيء آخر يسمح بإدارة الحمولة النافعة ذات الملف الواحد؛ لعبة رائعة
 يوجد مسار الدليل (CLI هو تصنيف معجمي لـ چلتا).
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
+cargo run -p sorafs_manifest --bin sorafs-manifest-builder -- \
   /tmp/docs.txt \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --manifest-out=/tmp/docs.manifest \

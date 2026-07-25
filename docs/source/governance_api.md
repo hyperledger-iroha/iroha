@@ -18,6 +18,42 @@ Overview
 
 Endpoints
 
+- GET `/v1/gov/capabilities`
+  - Public, unsigned readiness projection. Returns schema
+    `iroha.governance.capabilities.v1`, version `1`, the exact chain/genesis
+    binding, current height, ABI/data-model versions, configured PLAIN voting
+    and turnout/window parameters, all seven configured Parliament body
+    targets, supported proposal kinds, and supported routes.
+  - Configured body sizes are targets, not a minimum citizen count. Each
+    proposal-time JIT roster is independently capped at the number of eligible
+    bonded citizens. A non-empty one-citizen registry therefore produces one
+    immutable member in every body and quorum `1`; zero eligible citizens fails
+    proposal creation.
+  - Every governance integer other than the fixed response `version: 1` is a
+    canonical unsigned decimal JSON string. This includes heights, windows,
+    thresholds, body targets, and quorum/count fields; clients must parse the
+    complete string before applying any bounded UI conversion.
+
+- POST `/v1/gov/citizens/draft`
+  - Strict request: `{ "version": 1, "owner": "<i105-account-id>" }`.
+  - Returns the exact configured citizenship amount and one
+    `RegisterCitizen` instruction skeleton. Unknown fields and unsupported
+    versions are rejected; the node never signs the draft.
+
+- GET `/v1/validation-fee/proposals`
+  - Lists only typed native validation-fee policy and payout-lifecycle
+    proposals.
+- GET `/v1/validation-fee/proposals/{proposal_id}?account_id=<i105-account-id>`
+  - Returns the exact proposal/referendum/snapshot, current height, per-body
+    members, alternates, quorum and decision counts for all seven bodies,
+    optional current-account decisions, the live or finalized citizen tally,
+    the ordered proposal pipeline, and current retained voter locks. All
+    integer fields in this projection are canonical unsigned decimal strings.
+- POST `/v1/validation-fee/proposals/draft`
+  - Builds exactly one native PLAIN validation-fee proposal instruction for
+    local signing. Legacy signed-policy, governance-keyset, detached-signature,
+    and ZK compatibility shapes are not accepted.
+
 - POST `/v1/gov/proposals/deploy-contract`
   - Request (JSON):
     {
@@ -87,9 +123,16 @@ Code Size Cap
     - Contract execution must call `ZK_VOTE_VERIFY_BALLOT` prior to enqueuing `SubmitBallot`; hosts enforce a one-shot latch.
 
 - POST `/v1/gov/ballots/plain`
-  - Request: { "authority": "<i105-account-id>", "chain_id": "…", "referendum_id": "r1", "owner": "<i105-account-id>", "amount": "1000", "duration_blocks": 6000, "direction": "Aye|Nay|Abstain" }
+  - Request: { "authority": "<i105-account-id>", "chain_id": "…", "referendum_id": "r1", "owner": "<i105-account-id>", "amount": "1000", "duration_blocks": "6000", "direction": "Aye|Nay|Abstain" }
   - Response: { "ok": true, "accepted": true, "tx_instructions": [{…}] }
-  - Notes: Re-votes are extend-only — a new ballot cannot reduce the existing lock’s amount or expiry. The `owner` must equal the transaction authority. Minimum duration is `conviction_step_blocks`.
+  - Notes: Re-votes are extend-only — a new ballot cannot reduce the existing
+    lock’s amount or expiry. The `owner` must equal the transaction authority.
+    Minimum duration is `conviction_step_blocks`, and the resulting lock must
+    remain active through the referendum's inclusive `h_end`.
+    Proposal-backed PLAIN voting cannot open a referendum: every required
+    proposal-time Parliament body must first reach its exact snapshot quorum,
+    after which consensus opens the referendum. Standalone PLAIN referenda
+    retain their explicit non-proposal behavior.
 
 - POST `/v1/gov/finalize`
   - Request: { "referendum_id": "r1", "proposal_id": "…64hex", "authority": "<i105-account-id>?" }
@@ -97,13 +140,23 @@ Code Size Cap
   - On-chain effect (current scaffold): enacting an approved deploy proposal inserts a minimal `ContractManifest` keyed by `code_hash` with the expected `abi_hash` and marks the proposal Enacted. If a manifest already exists for the `code_hash` with a different `abi_hash`, enactment is rejected.
   - Notes:
     - For ZK elections, contract paths must call `ZK_VOTE_VERIFY_TALLY` prior to executing `FinalizeElection`; hosts enforce a one-shot latch. `FinalizeReferendum` rejects ZK referenda until the election tally is finalized.
-    - Auto-close at `h_end` emits Approved/Rejected only for Plain referenda; ZK referenda remain closed until a finalized tally is submitted and `FinalizeReferendum` is executed.
-    - Turnout checks use approve+reject only; abstain does not count toward turnout.
+    - `h_end` is inclusive. PLAIN referenda close and tally at the start of
+      `h_end + 1`, while finalization evidence remains anchored to `h_end`.
+      Manual PLAIN finalization at or before `h_end` is rejected. ZK referenda
+      still require a finalized election tally.
+    - Turnout is `approve + reject + abstain`; abstentions count toward turnout
+      and the configured approval denominator.
 
 - POST `/v1/gov/enact`
-  - Request: { "proposal_id": "…64hex", "preimage_hash": "…64hex?", "window": { "lower": 0, "upper": 0 }?, "authority": "<i105-account-id>?" }
-  - Response: { "ok": true, "tx_instructions": [{ "wire_id": "…EnactReferendum", "payload_hex": "…" }] }
-  - Notes: Torii returns a skeleton for clients to sign and submit locally. Supplying `private_key` is rejected. The preimage is optional and currently informational.
+  - Strict request: `{ "proposal_id": "…64-lowercase-hex" }`.
+  - Response:
+    `{ "ok": true, "proposal_id": "…", "proposal_kind": {…}, "referendum_window": {"lower": H1, "upper": H2}, "tx_instructions": [{…}] }`.
+  - Notes: Torii reads an approved proposal and its exact closed referendum,
+    derives the instruction preimage fingerprint and retained window from
+    ledger state, and returns a skeleton for local signing. Caller-supplied
+    preimages, windows, authorities, private keys, and server-side submission
+    are rejected by the strict request shape. On-chain enactment must occur
+    after the approved close and rechecks both bindings.
 
 - GET `/v1/gov/proposals/{id}`
   - Path `{id}`: proposal id hex (64 chars)

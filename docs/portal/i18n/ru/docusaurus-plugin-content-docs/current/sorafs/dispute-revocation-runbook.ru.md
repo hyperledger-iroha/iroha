@@ -40,7 +40,7 @@ Sidebar_label: Ранбук споров и отзывов
 
 ## 3. Подать спор
 
-1. Создайте спецификацию JSON для `sorafs_manifest_stub capacity dispute`:
+1. Создайте спецификацию JSON для `sorafs_manifest_builder capacity dispute`:
 
    ```json
    {
@@ -63,7 +63,7 @@ Sidebar_label: Ранбук споров и отзывов
 2. Запустите CLI:
 
    ```bash
-   sorafs_manifest_stub capacity dispute \
+   sorafs_manifest_builder capacity dispute \
      --spec=dispute.json \
      --norito-out=dispute.to \
      --base64-out=dispute.b64 \
@@ -80,7 +80,7 @@ Sidebar_label: Ранбук споров и отзывов
 
 1. **Окно льгот:** уведомите провайдера о грядущем отзыве; Разрешите эвакуацию связанных данных, если это допускает политику.
 2. **Сгенерируйте `ProviderAdmissionRevocationV1`:**
-   - Используйте `sorafs_manifest_stub provider-admission revoke` с обоснованной причиной.
+   - Используйте `sorafs_manifest_builder provider-admission revoke` с обоснованной причиной.
    - Проверьте наличие и дайджест отзыва.
 3. **Опубликовать отзыв:**
    - Отправьте запрос на отзыв на Torii.
@@ -95,7 +95,7 @@ Sidebar_label: Ранбук споров и отзывов
 
 ## 6. Справочные материалы
 
-- `sorafs_manifest_stub capacity dispute --help`
+- `sorafs_manifest_builder capacity dispute --help`
 - `docs/source/sorafs/storage_capacity_marketplace.md` (раздел споров)
 - `docs/source/sorafs/provider_admission_policy.md` (отзыв о рабочем процессе)
 - Дашборд наблюдения: `SoraFS / Capacity Providers`

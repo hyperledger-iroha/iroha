@@ -97,9 +97,9 @@ cruzamentos manuais. במקרה זה, הפעל את OS CLIs de chunk-store e man
   לעכל לעשות מניפסט e בדיקות PoR com os parametros propostos.
 - `sorafs_manifest_chunk_store --json-out=-` - שידור או קשר לחנות chunk para para
   stdout para comparacoes automatizadas.
-- `sorafs_manifest_stub --chunker-profile=<handle>` - confirmar que manifests e planos CAR
+- `sorafs_manifest_builder --chunker-profile=<handle>` - confirmar que manifests e planos CAR
   אבוטום או לטפל בכינויי canonico mais.
-- `sorafs_manifest_stub --plan=-` - reenviar o `chunk_fetch_specs` קדמית
+- `sorafs_manifest_builder --plan=-` - reenviar o `chunk_fetch_specs` קדמית
   אימות מקזז/מעכל את apos a mudanca.
 
 רשום a saida dos comandos (מעכל, מעלה PoR, hashes de manifest) בהצעה
@@ -138,7 +138,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
   --json-out=- --por-json-out=- fixtures/sorafs_chunker/input.bin
 
 # Gerar manifest + CAR e capturar chunk fetch specs
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --chunk-fetch-plan-out=chunk_plan.json \
@@ -147,7 +147,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
   --json-out=sf2.report.json
 
 # Reexecutar usando o plano de fetch salvo (evita offsets obsoletos)
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --plan=chunk_plan.json --json-out=-

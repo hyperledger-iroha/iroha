@@ -56,7 +56,7 @@ SDK). یہ alias اور lidar com invariantes impor کرتی ہے جنہیں
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+     cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - Luminárias, proposta, relatório de determinismo, e atualizações de registro پر مشتمل PR enviar کریں۔
@@ -91,12 +91,12 @@ SDK). یہ alias اور lidar com invariantes impor کرتی ہے جنہیں
 
 ## Expectativas de ferramentas
 
-- `sorafs_manifest_chunk_store` e `sorafs_manifest_stub` expor o seguinte:
+- `sorafs_manifest_chunk_store` e `sorafs_manifest_builder` expor o seguinte:
   - Inspeção de registro کے لیے `--list-profiles`.
   - Promoção de perfil کرتے وقت bloco de metadados canônicos بنانے کے لیے `--promote-profile=<handle>`.
   - Relatórios کو stdout پر stream کرنے کے لیے `--json-out=-`, تاکہ logs de revisão reproduzíveis ممکن ہوں۔
 - Binários relevantes `ensure_charter_compliance()` کے startup پر چلایا جاتا ہے
-  (`manifest_chunk_store`, `provider_advert_stub`). Testes de CI falham e falham
+  (`manifest_chunk_store`, `sorafs_provider_advert`). Testes de CI falham e falham
   Carta de entradas کی خلاف ورزی کریں۔
 
 ## Manutenção de registros

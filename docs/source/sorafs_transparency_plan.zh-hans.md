@@ -4,10 +4,10 @@ direction: ltr
 source: docs/source/sorafs_transparency_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: f7638d95e4adc291dac711642874a3a7b435983aacb52035133f8631e5c6acca
-source_last_modified: "2026-07-06T20:37:18.181237+00:00"
-translation_last_reviewed: 2026-07-05
-source_mtime: "2026-07-06T20:37:18.181237+00:00"
+source_hash: 4de4e7ce9868b5d5b4307590e15929c9ab7aaeb41059948045c4b3971e551cde
+source_last_modified: "2026-07-23T21:02:13.000000+00:00"
+translation_last_reviewed: 2026-07-23
+source_mtime: "2026-07-23T21:02:13.000000+00:00"
 ---
 
 # Transparency Dashboards & Enforcement Receipts
@@ -105,45 +105,56 @@ moderation ledger publication service described by the original plan.
   differential-privacy and suppression parameters, sorted public metrics and
   metadata, a domain-separated aggregate hash, and conversion into a
   `PrivacyAggregate` transparency ledger entry.
-- `sorafs_node::NodeHandle::publish_privacy_aggregate_cycle(...)` validates
-  privacy aggregate payloads, requires them to fit within the requested cycle
-  window, sorts them deterministically, derives stable transparency entry ids,
-  builds a `ModerationLedgerCyclePublicationV1`, and publishes it through the
-  configured Governance DAG publisher.
 - `sorafs_node::NodeHandle::record_privacy_aggregate_source_event(...)` and
-  `publish_privacy_aggregate_cycle_from_source_events(...)` provide the local
-  source-event worker foundation: duplicate source-event rejection, cycle-window
-  filtering, suppression-threshold enforcement, deterministic bounded noising
-  from runtime seed material, source-payload digest binding, and handoff to the
-  existing aggregate cycle publisher.
-- `PrivacyAggregateScheduleConfig` and
-  `NodeHandle::publish_due_privacy_aggregate_cycle_from_source_events(...)`
-  provide due-cycle scheduling for the aggregate worker. The method derives
+  `publish_due_configured_privacy_aggregate_cycle_from_source_events(...)`
+  are the sole production worker path. They enforce duplicate rejection,
+  cycle-window filtering, distinct-subject suppression, per-subject clipping,
+  exact integer discrete-Laplace sampling, source-payload digest binding, and
+  atomic composition-budget/cycle/outbox persistence. Caller-supplied
+  aggregate payload and policy publication helpers exist only in unit-test
+  builds.
+- `PrivacyAggregateScheduleConfig` provides due-cycle scheduling for the
+  aggregate worker. The configured method derives
   deterministic cycle ids from due windows, catches up the oldest due
   unpublished window with retained source events before considering the latest
   due window empty, skips not-due/empty/already published/fully suppressed
   windows explicitly, and publishes each due cycle at most once per node
   runtime.
 - `iroha_config` exposes the dormant-by-default
-  `[sorafs.storage.privacy_aggregates]` scheduler knobs for enablement, cycle
-  width, and publish delay. `sorafs_node::StorageConfig` projects enabled config
-  into `PrivacyAggregateScheduleConfig`, and
+  `[sorafs.storage.privacy_aggregates]` scheduler and governed policy: cadence,
+  aggregate-id prefix, privacy mode, reduced rational epsilon, per-subject
+  contribution cap, suppression threshold, policy digest, and bounded
+  composition budget. Delta is fixed at zero. `sorafs_node::StorageConfig`
+  validates and projects that single production policy, and
   `NodeHandle::publish_due_configured_privacy_aggregate_cycle_from_source_events(...)`
-  uses that cadence while keeping privacy policy and noise seed material as
-  explicit runtime-only inputs.
+  accepts only the evaluation timestamp and predecessor block hash.
+- Differential-privacy publication requires a deployment-owned
+  `PrivacyCyclePrfProviderV1`. Node startup fails closed when the configured
+  aggregate policy requires noise and no provider is injected. For every due
+  window, including catch-up windows, the node constructs a fresh canonical
+  request bound to the governed policy digest plus the exact cycle id, start,
+  end, and due timestamps. All-zero outputs and fixed provider failure classes
+  fail closed without exposing provider diagnostics; provider shares, seeds,
+  and raw outputs never enter configuration, requests, logs, or durable state.
+  Only the domain-separated output commitment enters the public aggregate
+  metadata and source digest. The standard daemon does not ship a file- or
+  environment-backed substitute for the production threshold service.
 - Torii exposes
   `/v1/sorafs/transparency/privacy-aggregates/source-events` for
   canonical-authenticated local aggregate source-event ingestion. The handler
-  records one source event in the duplicate-checked aggregate worker for later
-  configured cycle publication and returns only event ids, digests, and counts
-  rather than raw metric values.
+  requires a private-subject digest, records one source event in the
+  duplicate-checked aggregate worker for per-subject clipping and configured
+  cycle publication, and returns only event ids, digests, and counts rather
+  than raw metric values.
 - Torii exposes
   `/v1/sorafs/transparency/privacy-aggregates/publish-due` for
   canonical-authenticated local configured aggregate publication. The handler
   evaluates the configured schedule, catches up stale due event-backed windows,
-  accepts privacy policy, optional noise seed, policy digest, previous block
-  hash, and public aggregate metadata as runtime-only request material, and
-  returns structured
+  rejects caller-supplied policy or PRF material, accepts only `now_unix` and an
+  optional previous block hash, obtains fresh hidden randomness through the
+  runtime provider, uses exact integer discrete-Laplace sampling, and atomically
+  commits the composition-budget charge, processed-cycle state, source-event
+  removal, and durable Governance DAG outbox entry. It returns structured
   published/skipped/already-published outcomes with cycle hashes when a cycle is
   published.
 - `iroha::Client` and
@@ -416,7 +427,7 @@ verify the same canonical payloads used for publication.
 | Ledger builder | Builds cycle headers, entry roots, proofs, and publisher signatures. | V1 payload/proof/publication helpers shipped in the data model; local source-entry cycle builder, local node publication to filesystem/CAR, signed runtime DAG external payloads, payload-free publication readback canary tooling, and the rollout evidence verifier are shipped; deployed anchoring and captured service rollout evidence remain open. |
 | Proof API | Serves cycle metadata, entries, inclusion proofs, proof-token issuance indexes, explorer snapshots, and token verification. | Local Torii readback for published cycles, entry proofs, proof-token issuance indexes, explorer snapshots, and proof-token verification is shipped with bounded list/explorer arrays, local verifier throttling, local browser UI route, client/CLI readback helpers, payload-free explorer canary tooling, and rollout evidence summary validation; deployed service hardening and captured public rollout evidence are not shipped. |
 | Receipt explorer | Public UI for browsing cycles and verifying entries. | Local explorer snapshot API, static Torii browser UI, CLI readback bridge, `iroha sorafs transparency explorer-canary` rollout-evidence tooling, and summary-gate validation are shipped; captured deployed public rollout evidence is not shipped. |
-| DP aggregator | Publishes SFM-4c privacy-safe moderation aggregates. | Canonical aggregate payloads, ledger-entry conversion, node-side cycle publication bridge, local source-event suppression/noise worker, config-backed due-cycle scheduler API, canonical-authenticated Torii source-event ingestion, a canonical-authenticated local publish-due trigger, client/CLI producer plus scheduler trigger tooling, privacy aggregate canary evidence tooling, and rollout evidence summary validation are shipped; captured deployed source-event producer and scheduler rollout evidence remains open. |
+| DP aggregator | Publishes SFM-4c privacy-safe moderation aggregates. | Canonical aggregate payloads, ledger-entry conversion, node-side cycle publication bridge, local source-event suppression/noise worker, config-backed due-cycle scheduler API, fail-closed runtime threshold-PRF boundary with exact per-window request binding and commitment-only publication, canonical-authenticated Torii source-event ingestion, a caller-seed-free authenticated publish-due trigger, client/CLI producer plus scheduler trigger tooling, privacy aggregate canary evidence tooling, and rollout evidence summary validation are shipped; a reviewed production threshold-service adapter remains open, and captured deployed source-event producer and scheduler rollout evidence remains open. |
 
 Document only the local `/v1/sorafs/transparency/*` readback,
 canonical-authenticated source-entry ingest, privacy aggregate source-event
@@ -445,6 +456,9 @@ shipped until the live builder, deployment, and explorer paths exist.
   client/CLI producer and scheduler trigger tooling,
   `NodeHandle::record_privacy_aggregate_source_event(...)`, and
   `publish_due_configured_privacy_aggregate_cycle_from_source_events(...)`.
+  Inject the reviewed runtime threshold-PRF service adapter on every
+  DP-enabled node; no file, environment, request, or deterministic fallback is
+  permitted.
 - Finish deployed proof API hardening and capture public receipt explorer
   rollout evidence by running the shipped `iroha sorafs transparency
   explorer-canary` tooling beyond the local token-verifier throttle, bounded

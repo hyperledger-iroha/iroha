@@ -455,11 +455,11 @@ fn activation_allows_v1_in_same_block() {
     let domain = Domain::new(domain_id.clone()).build(&account_id);
     let account = new_account_in_domain(&account_id);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
-    let state = State::new_for_testing(world, kura, query_handle);
+    let chain: ChainId = "chain".parse().unwrap();
+    let state = State::new_with_chain_for_testing(world, kura, query_handle, chain.clone());
     install_current_lane_manifest_registry(&state);
 
     let prog_current = minimal_ivm_program(1);
-    let chain: ChainId = "chain".parse().unwrap();
 
     // Block 1: grant permission and propose upgrade [2, 10)
     let header1 =

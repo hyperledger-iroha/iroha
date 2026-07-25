@@ -57,7 +57,7 @@ ces drapeaux avec `--por-proof-out` ou `--por-sample-out` pour enregistrer le JS
 - Signatures du conseil et métadonnées facultatives (par exemple, identifiants de build).
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
+cargo run -p sorafs_manifest --bin sorafs-manifest-builder -- \
   ./payload.bin \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --manifest-out=payload.manifest \

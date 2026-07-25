@@ -119,7 +119,7 @@ groups:
    - Abra `iroha app sorafs providers list` e instale-o para obter as réplicas necessárias.
    - Verifique os medidores `torii_sorafs_capacity_*`, você pode fornecer GiB provisionado e PoR suspeito.
 3. **Replicação de replicação**
-   - Выпустите новые заказы через `sorafs_manifest_stub capacity replication-order`, когда запас backlog (`stat="avg"`) опустится ниже 5 эпох (manifesto de transferência/CAR usado `iroha app sorafs toolkit pack`).
+   - Выпустите новые заказы через `sorafs_manifest_builder capacity replication-order`, когда запас backlog (`stat="avg"`) опустится ниже 5 эпох (manifesto de transferência/CAR usado `iroha app sorafs toolkit pack`).
    - Уведомите governança, если aliases не имеют активных manifestos vinculativos (неожиданное падение `torii_sorafs_registry_aliases_total`).
 4. **Resolução de compra**
    - Insira os registros na operação do diário SoraFS com carimbo de data e hora e resumo dos manifestos.

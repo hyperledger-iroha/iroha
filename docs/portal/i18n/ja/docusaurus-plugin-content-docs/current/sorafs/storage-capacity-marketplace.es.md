@@ -65,7 +65,7 @@ title: アルマセナミエント市場 SoraFS
 - ヘルパー コンパルティド (`CapacityMetadataEntry`、`PricingScheduleV1`、レーン/割り当て/SLA の検証) は、キーの検証、エラーの報告、CI の報告、ツールのダウンストリームの再利用を証明します。【crates/sorafs_manifest/src/capacity.rs:230】
 - `PinProviderRegistry` `/v1/sorafs/capacity/state` 経由でオンチェーンでスナップショットを公開、プロバイダーと料金台帳の組み合わせ宣言 Norito JSON determinista.【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
 - 正規の処理、重複の検出、レーンの制限、レプリカの割り当ての保護、テレメトリアのランゴ チェック、ラス レグレシオネス アパレスカンと CI のメディアのチェックを処理するための強制的な検証。【crates/sorafs_manifest/src/capacity.rs:792】
-- オペラドールのツール: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` ペイロードの読み取り可能な特定のアクションを表示 Norito canonicos、BLOB Base64 y resúmenes JSON para que los operadores preparen fixtures de `/v1/sorafs/capacity/declare`、`/v1/sorafs/capacity/telemetry` y ordenes deローカルの複製と検証。【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`、`order_v1.to`) は、`cargo run -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order` 経由で参照されます。
+- オペラドールのツール: `sorafs_manifest_builder capacity {declaration, telemetry, replication-order}` ペイロードの読み取り可能な特定のアクションを表示 Norito canonicos、BLOB Base64 y resúmenes JSON para que los operadores preparen fixtures de `/v1/sorafs/capacity/declare`、`/v1/sorafs/capacity/telemetry` y ordenes deローカルの複製と検証。【crates/sorafs_car/src/bin/sorafs_manifest_builder/capacity.rs:1】 `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`、`order_v1.to`) は、`cargo run -p sorafs_car --bin sorafs_manifest_builder -- capacity replication-order` 経由で参照されます。
 
 ### 2. 計画的な制御の統合
 
@@ -156,7 +156,7 @@ title: アルマセナミエント市場 SoraFS
   ジュント・コン・ロス・パケテス・デ・ゴベルナンサ。
 
 ### 論争と斬り込みの証拠
-- `sorafs_manifest_stub capacity dispute` 経由での議論の提示 (テスト:
+- `sorafs_manifest_builder capacity dispute` 経由での議論の提示 (テスト:
   `cargo test -p sorafs_car --test capacity_cli`) パラマンテナーペイロード canonicos。
 - Ejecuta `cargo test -p iroha_core -- capacity_dispute_replay_is_deterministic` とラススイート
   法廷での罰則 (`record_capacity_telemetry_penalises_persistent_under_delivery`)
@@ -165,7 +165,7 @@ title: アルマセナミエント市場 SoraFS
   ストライキの攻撃と検証の報告。
 
 ### プロバイダーのオンボーディングとスモーク テストの終了
-- 宣言/テレメトリア コン `sorafs_manifest_stub capacity ...` y の再作成
+- 宣言/テレメトリア コン `sorafs_manifest_builder capacity ...` y の再作成
   送信前に CLI をテストする必要があります (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`)。
 - Envialos via Torii (`/v1/sorafs/capacity/declare`) y luego captura `/v1/sorafs/capacity/state` mas
   Grafana のスクリーンショット。シグ エル フルホ デ サリダ en `docs/source/sorafs/capacity_onboarding_runbook.md`。

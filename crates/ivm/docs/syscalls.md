@@ -725,6 +725,7 @@ node enforces that policy unconditionally.
 | 0x10026 | DECODE_ARGUMENT_RECORD | r10=raw &NoritoBytes(EntrypointArgumentRecordV1) or prepared &NoritoBytes(record binding), r11=&NoritoBytes(EntrypointArgumentSchemaV1) | r10=ptr (&Blob(pad:u8 then [u64; word_count])) | asset:gas/G_argument_decode@ivm.core/v2 + record + schema + complete materialization |
 | 0x10027 | SYSVAR_CONTRACT_SUBJECT | - | r10=ptr (&AccountId(contract subject)) | asset:gas/G_sysvar@ivm.core/v2 + bytes |
 | 0x10028 | NORMALIZE_NORITO_BYTES | r10=&Blob or &NoritoBytes (validated public TLV) | r10=&NoritoBytes(same payload) | asset:gas/G_pointer@ivm.core/v2 + bytes |
+| 0x10029 | CALL_CONTRACT_QUANTITY2 | r10=&Blob(contract_address), r11=&Blob(literal entrypoint), r12=&Quantity(amount_in), r13=&Quantity(min_out) | r10=ptr (&Quantity) | asset:gas/G_call_contract@ivm.core/v2 + request bytes + return bytes + child gas |
 | 0x10030 | STATE_KEYS | r10=&Name(prefix), r11=offset:u64, r12=limit:u64 (0..=64) | r10=ptr (&NoritoBytes(Vec<Name>)), r11=total:u64, r12=count:u64 | asset:gas/G_state_keys@ivm.core/v2 + count + bytes |
 | 0x10031 | STATE_HAS | r10=&Name(path) | r10=present:u64 | asset:gas/G_state_has@ivm.core/v2 |
 | 0x10032 | STATE_LEN | r10=&Name(path) | r10=len:u64, r11=found:u64 | asset:gas/G_state_len@ivm.core/v2 + bytes |

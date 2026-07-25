@@ -36,7 +36,7 @@ fn write_spec(temp: &TempDir, name: &str, contents: &str) -> PathBuf {
 }
 
 fn run_capacity_command(args: impl IntoIterator<Item = String>) -> std::process::Output {
-    let mut cmd = cargo_bin_cmd!("sorafs_manifest_stub");
+    let mut cmd = cargo_bin_cmd!("sorafs_manifest_builder");
     cmd.arg("capacity");
     cmd.args(args);
     cmd.output().expect("run capacity command")
@@ -69,7 +69,7 @@ fn capacity_declaration_cli_produces_canonical_outputs() {
     let b64_out = temp.path().join("declaration.b64");
     let norito_out = temp.path().join("declaration.to");
 
-    let mut cmd = cargo_bin_cmd!("sorafs_manifest_stub");
+    let mut cmd = cargo_bin_cmd!("sorafs_manifest_builder");
     cmd.arg("capacity")
         .arg("declaration")
         .arg(format!("--spec={}", spec_path.display()))
@@ -134,7 +134,7 @@ fn capacity_declaration_cli_writes_request_payload() {
     let authority_str = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
     let private_key_str = "ed25519:deadbeefcafebabe";
 
-    let mut cmd = cargo_bin_cmd!("sorafs_manifest_stub");
+    let mut cmd = cargo_bin_cmd!("sorafs_manifest_builder");
     cmd.arg("capacity")
         .arg("declaration")
         .arg(format!("--spec={}", spec_path.display()))
@@ -186,7 +186,7 @@ fn capacity_declaration_cli_reads_private_key_from_file() {
     let private_key_str = "ed25519:filedeadbeefcafebabe";
     fs::write(&private_key_path, format!("  {private_key_str}\n")).expect("write key");
 
-    let mut cmd = cargo_bin_cmd!("sorafs_manifest_stub");
+    let mut cmd = cargo_bin_cmd!("sorafs_manifest_builder");
     cmd.arg("capacity")
         .arg("declaration")
         .arg(format!("--spec={}", spec_path.display()))
@@ -215,7 +215,7 @@ fn capacity_declaration_cli_rejects_ambiguous_private_key_sources() {
     let private_key_path = temp.path().join("capacity-private-key.txt");
     fs::write(&private_key_path, "ed25519:filekey").expect("write key");
 
-    let mut cmd = cargo_bin_cmd!("sorafs_manifest_stub");
+    let mut cmd = cargo_bin_cmd!("sorafs_manifest_builder");
     let output = cmd
         .arg("capacity")
         .arg("declaration")
@@ -245,7 +245,7 @@ fn capacity_declaration_cli_rejects_empty_private_key_file() {
     let private_key_path = temp.path().join("capacity-private-key.txt");
     fs::write(&private_key_path, "\n\t ").expect("write empty key");
 
-    let mut cmd = cargo_bin_cmd!("sorafs_manifest_stub");
+    let mut cmd = cargo_bin_cmd!("sorafs_manifest_builder");
     let output = cmd
         .arg("capacity")
         .arg("declaration")
@@ -410,7 +410,7 @@ fn capacity_telemetry_cli_produces_canonical_outputs() {
     let b64_out = temp.path().join("telemetry.b64");
     let norito_out = temp.path().join("telemetry.to");
 
-    let mut cmd = cargo_bin_cmd!("sorafs_manifest_stub");
+    let mut cmd = cargo_bin_cmd!("sorafs_manifest_builder");
     cmd.arg("capacity")
         .arg("telemetry")
         .arg(format!("--spec={}", spec_path.display()))
@@ -481,7 +481,7 @@ fn capacity_telemetry_cli_writes_request_payload() {
     let authority_str = "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76";
     let private_key_str = "ed25519:bobcafedeadfeed";
 
-    let mut cmd = cargo_bin_cmd!("sorafs_manifest_stub");
+    let mut cmd = cargo_bin_cmd!("sorafs_manifest_builder");
     cmd.arg("capacity")
         .arg("telemetry")
         .arg(format!("--spec={}", spec_path.display()))
@@ -557,7 +557,7 @@ fn capacity_replication_order_cli_produces_canonical_outputs() {
     let b64_out = temp.path().join("replication.b64");
     let norito_out = temp.path().join("replication.to");
 
-    let mut cmd = cargo_bin_cmd!("sorafs_manifest_stub");
+    let mut cmd = cargo_bin_cmd!("sorafs_manifest_builder");
     cmd.arg("capacity")
         .arg("replication-order")
         .arg(format!("--spec={}", spec_path.display()))
@@ -618,7 +618,7 @@ fn capacity_replication_order_cli_writes_request_payload() {
     fs::write(&spec_path, REPLICATION_JSON.trim_start().as_bytes()).expect("write spec");
 
     let request_out = temp.path().join("replication_request.json");
-    let mut cmd = cargo_bin_cmd!("sorafs_manifest_stub");
+    let mut cmd = cargo_bin_cmd!("sorafs_manifest_builder");
     cmd.arg("capacity")
         .arg("replication-order")
         .arg(format!("--spec={}", spec_path.display()))
@@ -641,7 +641,7 @@ fn capacity_complete_cli_writes_request_payload() {
     let temp = tempdir().expect("tempdir");
     let request_out = temp.path().join("complete_request.json");
 
-    let mut cmd = cargo_bin_cmd!("sorafs_manifest_stub");
+    let mut cmd = cargo_bin_cmd!("sorafs_manifest_builder");
     cmd.arg("capacity")
         .arg("complete")
         .arg("--order-id=4444444444444444444444444444444444444444444444444444444444444444")
@@ -700,7 +700,7 @@ fn capacity_dispute_cli_produces_canonical_outputs() {
     let b64_out = temp.path().join("dispute.b64");
     let norito_out = temp.path().join("dispute.to");
 
-    let mut cmd = cargo_bin_cmd!("sorafs_manifest_stub");
+    let mut cmd = cargo_bin_cmd!("sorafs_manifest_builder");
     cmd.arg("capacity")
         .arg("dispute")
         .arg(format!("--spec={}", spec_path.display()))
@@ -775,7 +775,7 @@ fn capacity_dispute_cli_writes_request_payload() {
     let authority_str = "council@governance";
     let private_key_str = "ed25519:cafefeed0001";
 
-    let mut cmd = cargo_bin_cmd!("sorafs_manifest_stub");
+    let mut cmd = cargo_bin_cmd!("sorafs_manifest_builder");
     cmd.arg("capacity")
         .arg("dispute")
         .arg(format!("--spec={}", spec_path.display()))

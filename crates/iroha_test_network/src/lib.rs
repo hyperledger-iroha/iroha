@@ -4888,6 +4888,7 @@ fn merge_tables(dst: &mut Table, src: &Table) {
     }
 }
 
+#[cfg(test)]
 fn trusted_peers_layer_for_parse(
     peers: &[NetworkPeer],
     auto_populate_trusted_peer_pops: bool,
@@ -4895,6 +4896,7 @@ fn trusted_peers_layer_for_parse(
     trusted_peers_layer_for_parse_with_observers(peers, &[], auto_populate_trusted_peer_pops)
 }
 
+#[cfg(test)]
 fn trusted_peers_layer_for_parse_with_observers(
     validators: &[NetworkPeer],
     observers: &[NetworkPeer],

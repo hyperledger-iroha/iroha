@@ -8,12 +8,9 @@ use std::{
 };
 
 use assert_cmd::{Command as AssertCommand, cargo::cargo_bin_cmd};
-use base64::{
-    Engine,
-    engine::general_purpose::{STANDARD as BASE64_STANDARD, URL_SAFE_NO_PAD},
-};
+use base64::{Engine, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use blake3::hash as blake3_hash;
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signer, SigningKey};
 use hex::{decode as hex_decode, encode as hex_encode};
 use httpmock::prelude::*;
 #[cfg(feature = "local-quic-proxy")]
@@ -31,30 +28,23 @@ use sorafs_car::{
     CarBuildPlan, CarWriter, ChunkStore, chunker_registry, compute_chunk_plan_digest_sha3,
     fetch_plan::{chunk_fetch_specs_from_json, chunk_fetch_specs_to_string},
     por_json::{proof_to_value, sample_to_map},
+    proof_stream_transport::MAX_PROOF_STREAM_LINE_BYTES,
 };
 use sorafs_manifest::{
     BLAKE3_256_MULTIHASH_CODE, CouncilSignature, DagCodecId, GovernanceDagBlockV1,
     GovernanceDagHeadV1, GovernanceProofs, GovernanceSignatureAlgorithm, ManifestBuilder,
-    ManifestV1, POR_CHALLENGE_STATUS_VERSION_V1, POR_WEEKLY_REPORT_VERSION_V1, PinPolicy,
-    PorChallengeOutcome, PorChallengeStatusV1, PorProviderSummaryV1, PorReportIsoWeek,
-    PorSlashingEventV1, PorWeeklyReportV1, REPUTATION_PROVIDER_INPUT_VERSION_V1,
+    ManifestV1, POR_CHALLENGE_STATUS_VERSION_V1, POR_WEEKLY_REPORT_VERSION_V1,
+    POTR_RECEIPT_VERSION_V1, PinPolicy, PorChallengeOutcome, PorChallengeStatusV1,
+    PorProviderSummaryV1, PorReportIsoWeek, PorSlashingEventV1, PorWeeklyReportV1, PotrReceiptV1,
+    PotrStatus, ProofStreamTier, REPUTATION_PROVIDER_INPUT_VERSION_V1,
     REPUTATION_PROVIDER_METRICS_VERSION_V1, REPUTATION_SCORING_EVIDENCE_VERSION_V1,
     ReputationProviderInputV1, ReputationProviderMetricsV1, ReputationReserveStageV1,
     ReputationScoringEvidenceV1, ReputationSnapshotSignatureV1, ReputationSnapshotV1,
     ReputationWeightsV1, SIGNED_REPUTATION_SNAPSHOT_VERSION_V1, SignedReputationSnapshotV1,
     StorageClass, StreamTokenBodyV1, StreamTokenV1, XorQuantity, build_reputation_snapshot,
-    validate_governance_dag_head_against_chain_v1,
+    sign_potr_receipt_v1, validate_governance_dag_head_against_chain_v1,
 };
 use tempfile::TempDir;
-
-const ED25519_SMALL_ORDER_POINT: [u8; 32] = [
-    1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-];
-
-const ED25519_NONCANONICAL_IDENTITY: [u8; 32] = [
-    0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f,
-];
 
 fn sorafs_cli_cmd() -> AssertCommand {
     cargo_bin_cmd!("sorafs_cli")
@@ -773,239 +763,78 @@ fn norito_build_rejects_removed_abi_selection() {
 }
 
 #[test]
-fn manifest_sign_emits_bundle_and_signature() {
+fn retired_manifest_authentication_commands_fail_closed_without_io_or_network() {
     let tempdir = tempdir().expect("tempdir");
-    let input_path = tempdir.path().join("payload.bin");
-    let payload: Vec<u8> = (0..512).map(|i| (i as u8).wrapping_mul(5)).collect();
-    fs::write(&input_path, &payload).expect("write payload");
+    let missing_manifest = tempdir.path().join("missing-manifest.to");
+    let missing_bundle = tempdir.path().join("missing-bundle.json");
+    let bundle_out = tempdir.path().join("retired-bundle.json");
+    let signature_out = tempdir.path().join("retired-signature.hex");
 
-    let car_path = tempdir.path().join("payload.car");
-    let plan_path = tempdir.path().join("plan.json");
+    let server = MockServer::start();
+    let oidc_probe = server.mock(|when, then| {
+        when.method(GET).path("/oidc/token");
+        then.status(200)
+            .header("content-type", "application/json")
+            .body(r#"{"value":"header.payload.signature"}"#);
+    });
 
-    let summary_path = tempdir.path().join("plan_summary.json");
-
-    sorafs_cli_cmd()
-        .arg("car")
-        .arg("pack")
-        .arg(format!("--input={}", input_path.display()))
-        .arg(format!("--car-out={}", car_path.display()))
-        .arg(format!("--plan-out={}", plan_path.display()))
-        .arg(format!("--summary-out={}", summary_path.display()))
-        .assert()
-        .success();
-
-    let manifest_path = tempdir.path().join("manifest.to");
-    let manifest_json_path = tempdir.path().join("manifest.json");
-
-    sorafs_cli_cmd()
-        .arg("manifest")
-        .arg("build")
-        .arg(format!("--summary={}", summary_path.display()))
-        .arg(format!("--manifest-out={}", manifest_path.display()))
-        .arg(format!(
-            "--manifest-json-out={}",
-            manifest_json_path.display()
-        ))
-        .arg("--pin-min-replicas=1")
-        .arg("--pin-storage-class=hot")
-        .arg("--pin-retention-epoch=1")
-        .assert()
-        .success();
-
-    let bundle_path = tempdir.path().join("manifest.bundle.json");
-    let signature_path = tempdir.path().join("manifest.sig");
-
-    let token_header = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9"; // {"alg":"RS256","typ":"JWT"}
-    let token_claims = "eyJzdWIiOiJ0ZXN0ZXIifQ"; // {"sub":"tester"}
-    let identity_token = format!("{token_header}.{token_claims}.sig");
-
-    let assert = sorafs_cli_cmd()
-        .env("SIGSTORE_ID_TOKEN", &identity_token)
+    let sign_assert = sorafs_cli_cmd()
         .current_dir(tempdir.path())
+        .env("ACTIONS_ID_TOKEN_REQUEST_URL", server.url("/oidc/token"))
+        .env("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "must-not-be-used")
         .arg("manifest")
         .arg("sign")
-        .arg(format!("--manifest={}", manifest_path.display()))
-        .arg(format!("--bundle-out={}", bundle_path.display()))
-        .arg(format!("--signature-out={}", signature_path.display()))
-        .arg(format!("--chunk-plan={}", plan_path.display()))
-        .assert()
-        .success();
-
-    let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8");
-    let summary: Value = norito::json::from_str(stdout.trim()).expect("summary json");
-    assert_eq!(
-        summary.get("identity_token_source").and_then(Value::as_str),
-        Some("env:SIGSTORE_ID_TOKEN")
-    );
-    assert!(
-        summary
-            .get("signature_hex")
-            .and_then(Value::as_str)
-            .is_some()
-    );
-
-    let bundle_bytes = fs::read(&bundle_path).expect("read bundle bytes");
-    let bundle_value: Value = from_slice(&bundle_bytes).expect("bundle json");
-    assert_eq!(
-        bundle_value
-            .get("identity")
-            .and_then(Value::as_object)
-            .and_then(|identity| identity.get("token_source"))
-            .and_then(Value::as_str),
-        Some("env:SIGSTORE_ID_TOKEN")
-    );
-
-    let signature_contents = fs::read_to_string(&signature_path).expect("read signature");
-    assert!(
-        !signature_contents.trim().is_empty(),
-        "signature should not be empty"
-    );
-
-    let token_hash = summary
-        .get("identity_token_hash_blake3_hex")
-        .and_then(Value::as_str)
-        .expect("token hash in summary");
-
-    let verify_bundle_assert = sorafs_cli_cmd()
-        .arg("manifest")
-        .arg("verify-signature")
-        .arg(format!("--manifest={}", manifest_path.display()))
-        .arg(format!("--bundle={}", bundle_path.display()))
-        .arg(format!("--summary={}", summary_path.display()))
-        .arg(format!("--expect-token-hash={token_hash}"))
-        .assert()
-        .success();
-    let verify_bundle_stdout = String::from_utf8(verify_bundle_assert.get_output().stdout.clone())
-        .expect("verify bundle stdout");
-    let verify_bundle_summary: Value =
-        norito::json::from_str(verify_bundle_stdout.trim()).expect("verify bundle summary");
-    assert_eq!(
-        verify_bundle_summary
-            .get("verification_status")
-            .and_then(Value::as_str),
-        Some("ok")
-    );
-
-    let public_key_hex = summary
-        .get("public_key_hex")
-        .and_then(Value::as_str)
-        .expect("public key hex in summary");
-
-    let verify_signature_assert = sorafs_cli_cmd()
-        .arg("manifest")
-        .arg("verify-signature")
-        .arg(format!("--manifest={}", manifest_path.display()))
-        .arg(format!("--signature={}", signature_path.display()))
-        .arg(format!("--public-key-hex={public_key_hex}"))
-        .arg(format!("--summary={}", summary_path.display()))
-        .assert()
-        .success();
-    let verify_signature_stdout =
-        String::from_utf8(verify_signature_assert.get_output().stdout.clone())
-            .expect("verify signature stdout");
-    let verify_signature_summary: Value =
-        norito::json::from_str(verify_signature_stdout.trim()).expect("verify signature summary");
-    assert_eq!(
-        verify_signature_summary
-            .get("verification_status")
-            .and_then(Value::as_str),
-        Some("ok")
-    );
-
-    let zero_signature_path = tempdir.path().join("manifest.zero.sig");
-    fs::write(&zero_signature_path, "00".repeat(64)).expect("write all-zero signature");
-    let zero_signature_assert = sorafs_cli_cmd()
-        .arg("manifest")
-        .arg("verify-signature")
-        .arg(format!("--manifest={}", manifest_path.display()))
-        .arg(format!("--signature={}", zero_signature_path.display()))
-        .arg(format!("--public-key-hex={public_key_hex}"))
+        .arg(format!("--manifest={}", missing_manifest.display()))
+        .arg(format!("--bundle-out={}", bundle_out.display()))
+        .arg(format!("--signature-out={}", signature_out.display()))
+        .arg("--identity-token-provider=github-actions")
+        .arg("--identity-token-audience=release.example")
         .assert()
         .failure();
-    let zero_signature_stderr =
-        String::from_utf8(zero_signature_assert.get_output().stderr.clone())
-            .expect("zero signature stderr");
     assert!(
-        zero_signature_stderr.contains("signature material must not be all zero"),
-        "all-zero signature must fail before backend verification: {zero_signature_stderr}"
+        sign_assert.get_output().stdout.is_empty(),
+        "retired manifest sign command must not emit stdout"
+    );
+    let sign_stderr =
+        String::from_utf8(sign_assert.get_output().stderr.clone()).expect("sign stderr utf8");
+    assert!(
+        sign_stderr.contains("Usage:"),
+        "retired manifest sign command must fail as an absent command: {sign_stderr}"
+    );
+    assert!(
+        !sign_stderr.contains("sorafs_cli manifest sign --"),
+        "usage must not advertise the retired manifest sign command: {sign_stderr}"
     );
 
-    for (label, invalid_r, expected_error) in [
-        (
-            "small-order",
-            ED25519_SMALL_ORDER_POINT,
-            "signature R is small-order",
-        ),
-        (
-            "noncanonical",
-            ED25519_NONCANONICAL_IDENTITY,
-            "signature R is not a canonical Ed25519 point",
-        ),
-    ] {
-        let invalid_signature_path = tempdir.path().join(format!("manifest.{label}-r.sig"));
-        let mut invalid_signature = hex_decode(signature_contents.trim())
-            .expect("valid signature hex should decode for invalid-R regression");
-        invalid_signature[..32].copy_from_slice(&invalid_r);
-        fs::write(&invalid_signature_path, hex_encode(&invalid_signature))
-            .expect("write invalid-R signature");
-        let invalid_signature_assert = sorafs_cli_cmd()
-            .arg("manifest")
-            .arg("verify-signature")
-            .arg(format!("--manifest={}", manifest_path.display()))
-            .arg(format!("--signature={}", invalid_signature_path.display()))
-            .arg(format!("--public-key-hex={public_key_hex}"))
-            .assert()
-            .failure();
-        let invalid_signature_stderr =
-            String::from_utf8(invalid_signature_assert.get_output().stderr.clone())
-                .expect("invalid-R signature stderr");
-        assert!(
-            invalid_signature_stderr.contains(expected_error),
-            "{label} Ed25519 signature R must fail before backend verification: {invalid_signature_stderr}"
-        );
-    }
-
-    let zero_public_key_assert = sorafs_cli_cmd()
+    let verify_assert = sorafs_cli_cmd()
+        .current_dir(tempdir.path())
         .arg("manifest")
         .arg("verify-signature")
-        .arg(format!("--manifest={}", manifest_path.display()))
-        .arg(format!("--signature={}", signature_path.display()))
-        .arg(format!("--public-key-hex={}", "00".repeat(32)))
+        .arg(format!("--manifest={}", missing_manifest.display()))
+        .arg(format!("--bundle={}", missing_bundle.display()))
         .assert()
         .failure();
-    let zero_public_key_stderr =
-        String::from_utf8(zero_public_key_assert.get_output().stderr.clone())
-            .expect("zero public key stderr");
     assert!(
-        zero_public_key_stderr.contains("public key material must not be all zero"),
-        "all-zero public key must fail before backend verification: {zero_public_key_stderr}"
+        verify_assert.get_output().stdout.is_empty(),
+        "retired manifest verify-signature command must not emit stdout"
+    );
+    let verify_stderr =
+        String::from_utf8(verify_assert.get_output().stderr.clone()).expect("verify stderr utf8");
+    assert!(
+        verify_stderr.contains("Usage:"),
+        "retired manifest verify-signature command must fail as an absent command: {verify_stderr}"
+    );
+    assert!(
+        !verify_stderr.contains("sorafs_cli manifest verify-signature --"),
+        "usage must not advertise the retired verification command: {verify_stderr}"
     );
 
-    for (label, public_key, expected_error) in [
-        (
-            "small-order-public-key",
-            ED25519_SMALL_ORDER_POINT,
-            "public key is small-order",
-        ),
-        (
-            "noncanonical-public-key",
-            ED25519_NONCANONICAL_IDENTITY,
-            "public key is not a canonical Ed25519 point",
-        ),
-    ] {
-        let public_key_assert = sorafs_cli_cmd()
-            .arg("manifest")
-            .arg("verify-signature")
-            .arg(format!("--manifest={}", manifest_path.display()))
-            .arg(format!("--signature={}", signature_path.display()))
-            .arg(format!("--public-key-hex={}", hex_encode(public_key)))
-            .assert()
-            .failure();
-        let public_key_stderr = String::from_utf8(public_key_assert.get_output().stderr.clone())
-            .expect("invalid public key stderr");
+    oidc_probe.assert_calls(0);
+    for output in [&bundle_out, &signature_out] {
         assert!(
-            public_key_stderr.contains(expected_error),
-            "{label} must fail before backend verification: {public_key_stderr}"
+            !output.exists(),
+            "retired manifest authentication command must not write {}",
+            output.display()
         );
     }
 }
@@ -3050,611 +2879,6 @@ fn proof_verify_accepts_chunk_plan_for_directory_payloads() {
 }
 
 #[test]
-fn manifest_sign_produces_bundle_and_signature() {
-    let tempdir = tempdir().expect("tempdir");
-    let input_path = tempdir.path().join("payload.bin");
-    let payload: Vec<u8> = (0..1024).map(|i| (i as u8).wrapping_mul(9)).collect();
-    fs::write(&input_path, &payload).expect("write payload");
-
-    let car_path = tempdir.path().join("payload.car");
-    let plan_path = tempdir.path().join("plan.json");
-    let pack_summary_path = tempdir.path().join("pack_summary.json");
-
-    sorafs_cli_cmd()
-        .arg("car")
-        .arg("pack")
-        .arg(format!("--input={}", input_path.display()))
-        .arg(format!("--car-out={}", car_path.display()))
-        .arg(format!("--plan-out={}", plan_path.display()))
-        .arg(format!("--summary-out={}", pack_summary_path.display()))
-        .assert()
-        .success();
-
-    let manifest_path = tempdir.path().join("manifest.to");
-    sorafs_cli_cmd()
-        .arg("manifest")
-        .arg("build")
-        .arg(format!("--summary={}", pack_summary_path.display()))
-        .arg(format!("--manifest-out={}", manifest_path.display()))
-        .assert()
-        .success();
-
-    let header = URL_SAFE_NO_PAD.encode(r#"{"alg":"RS256","typ":"JWT"}"#);
-    let payload_claims = URL_SAFE_NO_PAD.encode(
-        r#"{"iss":"https://issuer.example","sub":"unit-test","aud":"sorafs","exp":1234567890,"email":"unit@example.com"}"#,
-    );
-    let signature = URL_SAFE_NO_PAD.encode("sig");
-    let token = format!("{header}.{payload_claims}.{signature}");
-
-    let bundle_path = tempdir.path().join("manifest.bundle.json");
-    let signature_path = tempdir.path().join("manifest.sig");
-    let assert = sorafs_cli_cmd()
-        .arg("manifest")
-        .arg("sign")
-        .arg(format!("--manifest={}", manifest_path.display()))
-        .arg(format!("--bundle-out={}", bundle_path.display()))
-        .arg(format!("--signature-out={}", signature_path.display()))
-        .arg(format!("--identity-token={}", token))
-        .arg(format!("--chunk-plan={}", plan_path.display()))
-        .assert()
-        .success();
-
-    let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8");
-    let summary: Value = norito::json::from_str(stdout.trim()).expect("summary json");
-
-    let bundle_summary_path = summary
-        .get("bundle_path")
-        .and_then(Value::as_str)
-        .expect("bundle_path");
-    assert_eq!(bundle_summary_path, bundle_path.display().to_string());
-
-    let signature_summary_path = summary
-        .get("signature_path")
-        .and_then(Value::as_str)
-        .expect("signature_path");
-    assert_eq!(signature_summary_path, signature_path.display().to_string());
-
-    let chunk_plan_count = summary
-        .get("chunk_plan_chunk_count")
-        .and_then(Value::as_u64)
-        .expect("chunk plan count");
-    let plan_specs = {
-        let plan_bytes = fs::read(&plan_path).expect("read plan");
-        let plan_value: Value = from_slice(&plan_bytes).expect("plan json");
-        chunk_fetch_specs_from_json(&plan_value).expect("plan specs")
-    };
-    assert_eq!(chunk_plan_count, plan_specs.len() as u64);
-
-    let expected_chunk_digest = compute_chunk_digest_hex(&plan_path);
-    assert_eq!(
-        summary
-            .get("chunk_digest_sha3_256_hex")
-            .or_else(|| summary.get("chunk_digest_sha3_hex"))
-            .and_then(Value::as_str),
-        Some(expected_chunk_digest.as_str())
-    );
-
-    let manifest_bytes = fs::read(&manifest_path).expect("read manifest");
-    let manifest: ManifestV1 =
-        decode_from_bytes(&manifest_bytes).expect("decode manifest for summary");
-    let manifest_digest_hex = hex_encode(manifest.digest().expect("manifest digest").as_bytes());
-    assert_eq!(
-        summary
-            .get("manifest_blake3_hex")
-            .or_else(|| summary.get("manifest_digest_hex"))
-            .and_then(Value::as_str),
-        Some(manifest_digest_hex.as_str())
-    );
-
-    let public_key_hex = summary
-        .get("public_key_hex")
-        .and_then(Value::as_str)
-        .expect("public key hex");
-    assert_eq!(
-        public_key_hex.len(),
-        64,
-        "ed25519 public key should be 32 bytes"
-    );
-
-    let signature_hex = summary
-        .get("signature_hex")
-        .and_then(Value::as_str)
-        .expect("signature hex");
-    assert_eq!(
-        signature_hex.len(),
-        128,
-        "ed25519 signature should be 64 bytes"
-    );
-
-    let expected_token_hash = hex_encode(blake3_hash(token.as_bytes()).as_bytes());
-    assert_eq!(
-        summary
-            .get("identity_token_hash_blake3_hex")
-            .and_then(Value::as_str),
-        Some(expected_token_hash.as_str())
-    );
-    assert_eq!(
-        summary.get("identity_token_source").and_then(Value::as_str),
-        Some("inline")
-    );
-    assert_eq!(
-        summary.get("token_included").and_then(Value::as_bool),
-        Some(false)
-    );
-
-    let signature_contents = fs::read_to_string(&signature_path).expect("read signature file");
-    assert!(
-        signature_contents.ends_with('\n'),
-        "signature file should end with newline"
-    );
-    assert_eq!(
-        signature_contents.trim().len(),
-        128,
-        "signature file should contain hex-encoded signature"
-    );
-
-    let bundle_bytes = fs::read(&bundle_path).expect("read bundle");
-    let bundle: Value = from_slice(&bundle_bytes).expect("bundle json");
-    assert_eq!(
-        bundle.get("schema_version").and_then(Value::as_str),
-        Some("sorafs-cli-manifest-sign/v2")
-    );
-    let inline_identity = bundle
-        .get("identity")
-        .and_then(Value::as_object)
-        .expect("identity object");
-    assert_eq!(
-        inline_identity.get("token_source").and_then(Value::as_str),
-        Some("inline")
-    );
-    assert_eq!(
-        inline_identity
-            .get("token_hash_blake3_hex")
-            .and_then(Value::as_str),
-        Some(expected_token_hash.as_str())
-    );
-    assert_eq!(
-        inline_identity
-            .get("token_included")
-            .and_then(Value::as_bool),
-        Some(false)
-    );
-    assert!(
-        inline_identity.get("token").is_none(),
-        "inline signing should not persist raw tokens"
-    );
-    let claims = inline_identity
-        .get("jwt_claims")
-        .and_then(Value::as_object)
-        .expect("claims object");
-    assert_eq!(claims.get("sub").and_then(Value::as_str), Some("unit-test"));
-    assert_eq!(claims.get("aud").and_then(Value::as_str), Some("sorafs"));
-
-    let signature_info = bundle
-        .get("signature")
-        .and_then(Value::as_object)
-        .expect("signature object");
-    assert_eq!(
-        signature_info.get("public_key_hex").and_then(Value::as_str),
-        Some(public_key_hex)
-    );
-    assert_eq!(
-        signature_info.get("signature_hex").and_then(Value::as_str),
-        Some(signature_hex)
-    );
-
-    let manifest_info = bundle
-        .get("manifest")
-        .and_then(Value::as_object)
-        .expect("manifest info");
-    assert_eq!(
-        manifest_info
-            .get("manifest_blake3_hex")
-            .and_then(Value::as_str),
-        Some(manifest_digest_hex.as_str())
-    );
-    assert_eq!(
-        manifest_info
-            .get("chunk_digest_sha3_256_hex")
-            .and_then(Value::as_str),
-        Some(expected_chunk_digest.as_str())
-    );
-
-    // Repeat with env-sourced token and include-token flag
-    let env_bundle_path = tempdir.path().join("manifest.env.bundle.json");
-    let env_signature_path = tempdir.path().join("manifest.env.sig");
-    let env_var = "TEST_SORAFS_OIDC_TOKEN";
-
-    let assert = sorafs_cli_cmd()
-        .arg("manifest")
-        .arg("sign")
-        .env(env_var, token.clone())
-        .arg(format!("--manifest={}", manifest_path.display()))
-        .arg(format!("--bundle-out={}", env_bundle_path.display()))
-        .arg(format!("--signature-out={}", env_signature_path.display()))
-        .arg(format!("--identity-token-env={env_var}"))
-        .arg(format!("--chunk-plan={}", plan_path.display()))
-        .arg("--include-token=true")
-        .assert()
-        .success();
-
-    let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8");
-    let env_summary: Value = norito::json::from_str(stdout.trim()).expect("env summary json");
-    let expected_env_source = format!("env:{env_var}");
-    assert_eq!(
-        env_summary
-            .get("identity_token_source")
-            .and_then(Value::as_str),
-        Some(expected_env_source.as_str())
-    );
-    assert_eq!(
-        env_summary.get("token_included").and_then(Value::as_bool),
-        Some(true)
-    );
-    assert_eq!(
-        env_summary
-            .get("identity_token_hash_blake3_hex")
-            .and_then(Value::as_str),
-        Some(expected_token_hash.as_str())
-    );
-
-    let env_bundle_bytes = fs::read(&env_bundle_path).expect("read env bundle");
-    let env_bundle: Value = from_slice(&env_bundle_bytes).expect("env bundle json");
-    let env_identity = env_bundle
-        .get("identity")
-        .and_then(Value::as_object)
-        .expect("identity object");
-    assert_eq!(
-        env_identity.get("token_included").and_then(Value::as_bool),
-        Some(true)
-    );
-    assert_eq!(
-        env_identity.get("token").and_then(Value::as_str),
-        Some(token.as_str())
-    );
-    assert_eq!(
-        env_identity.get("token_source").and_then(Value::as_str),
-        Some(expected_env_source.as_str())
-    );
-}
-
-#[test]
-fn manifest_sign_defaults_to_sigstore_id_token_env() {
-    let tempdir = tempdir().expect("tempdir");
-    let input_path = tempdir.path().join("payload.bin");
-    let payload: Vec<u8> = (0..1536).map(|i| (i as u8).wrapping_mul(5)).collect();
-    fs::write(&input_path, &payload).expect("write payload");
-
-    let car_path = tempdir.path().join("payload.car");
-    let plan_path = tempdir.path().join("plan.json");
-    let summary_path = tempdir.path().join("summary.json");
-
-    sorafs_cli_cmd()
-        .arg("car")
-        .arg("pack")
-        .arg(format!("--input={}", input_path.display()))
-        .arg(format!("--car-out={}", car_path.display()))
-        .arg(format!("--plan-out={}", plan_path.display()))
-        .arg(format!("--summary-out={}", summary_path.display()))
-        .assert()
-        .success();
-
-    let manifest_path = tempdir.path().join("manifest.to");
-    sorafs_cli_cmd()
-        .arg("manifest")
-        .arg("build")
-        .arg(format!("--summary={}", summary_path.display()))
-        .arg(format!("--manifest-out={}", manifest_path.display()))
-        .assert()
-        .success();
-
-    let header = URL_SAFE_NO_PAD.encode(r#"{"alg":"RS256","typ":"JWT"}"#);
-    let claims = URL_SAFE_NO_PAD.encode(
-        r#"{"iss":"https://issuer.example","sub":"sigstore-test","aud":"sigstore","exp":1234567890,"email":"unit@example.com"}"#,
-    );
-    let signature = URL_SAFE_NO_PAD.encode("sig");
-    let token = format!("{header}.{claims}.{signature}");
-
-    let bundle_path = tempdir.path().join("sigstore.bundle.json");
-    let signature_path = tempdir.path().join("sigstore.sig");
-    let assert = sorafs_cli_cmd()
-        .arg("manifest")
-        .arg("sign")
-        .env("SIGSTORE_ID_TOKEN", token.clone())
-        .arg(format!("--manifest={}", manifest_path.display()))
-        .arg(format!("--bundle-out={}", bundle_path.display()))
-        .arg(format!("--signature-out={}", signature_path.display()))
-        .arg(format!("--chunk-plan={}", plan_path.display()))
-        .assert()
-        .success();
-
-    let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8");
-    let summary: Value = norito::json::from_str(stdout.trim()).expect("summary json");
-    assert_eq!(
-        summary.get("identity_token_source").and_then(Value::as_str),
-        Some("env:SIGSTORE_ID_TOKEN")
-    );
-    assert_eq!(
-        summary.get("token_included").and_then(Value::as_bool),
-        Some(false)
-    );
-    let expected_hash = hex_encode(blake3_hash(token.as_bytes()).as_bytes());
-    assert_eq!(
-        summary
-            .get("identity_token_hash_blake3_hex")
-            .and_then(Value::as_str),
-        Some(expected_hash.as_str())
-    );
-
-    let bundle_bytes = fs::read(&bundle_path).expect("read bundle");
-    let bundle: Value = from_slice(&bundle_bytes).expect("bundle json");
-    let identity = bundle
-        .get("identity")
-        .and_then(Value::as_object)
-        .expect("identity object");
-    assert_eq!(
-        identity.get("token_source").and_then(Value::as_str),
-        Some("env:SIGSTORE_ID_TOKEN")
-    );
-    assert_eq!(
-        identity
-            .get("token_hash_blake3_hex")
-            .and_then(Value::as_str),
-        Some(expected_hash.as_str())
-    );
-    assert_eq!(
-        identity.get("token_included").and_then(Value::as_bool),
-        Some(false)
-    );
-}
-
-#[test]
-fn manifest_sign_fetches_github_actions_oidc_token() {
-    let tempdir = tempdir().expect("tempdir");
-    let (manifest_path, plan_path) = prepare_manifest_artifacts(tempdir.path());
-
-    let server = MockServer::start();
-    let gha_request_token = "gha-request-token";
-    let expected_audience = "sigstore-ci";
-    let header = URL_SAFE_NO_PAD.encode(r#"{"alg":"RS256","typ":"JWT"}"#);
-    let claims = URL_SAFE_NO_PAD.encode(
-        r#"{"iss":"https://gha.example","sub":"repo","aud":"sigstore-ci","exp":1735689600}"#,
-    );
-    let signature = URL_SAFE_NO_PAD.encode("signature");
-    let expected_token = format!("{header}.{claims}.{signature}");
-    let expected_body = format!(r#"{{"value":"{}"}}"#, expected_token);
-    let auth_header = format!("Bearer {gha_request_token}");
-
-    let mock = server.mock(move |when, then| {
-        when.method(GET)
-            .path("/oidc/token")
-            .header("authorization", auth_header.clone())
-            .query_param("audience", expected_audience);
-        then.status(200)
-            .header("content-type", "application/json")
-            .body(expected_body.clone());
-    });
-
-    let bundle_path = tempdir.path().join("gha.bundle.json");
-    let signature_path = tempdir.path().join("gha.sig");
-    let assert = sorafs_cli_cmd()
-        .arg("manifest")
-        .arg("sign")
-        .env_remove("SIGSTORE_ID_TOKEN")
-        .env("ACTIONS_ID_TOKEN_REQUEST_URL", server.url("/oidc/token"))
-        .env("ACTIONS_ID_TOKEN_REQUEST_TOKEN", gha_request_token)
-        .arg(format!("--manifest={}", manifest_path.display()))
-        .arg(format!("--bundle-out={}", bundle_path.display()))
-        .arg(format!("--signature-out={}", signature_path.display()))
-        .arg(format!("--chunk-plan={}", plan_path.display()))
-        .arg("--identity-token-provider=github-actions")
-        .arg(format!("--identity-token-audience={expected_audience}"))
-        .assert()
-        .success();
-
-    mock.assert_calls(1);
-
-    let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8");
-    let summary: Value = norito::json::from_str(stdout.trim()).expect("summary json");
-    let expected_source = format!("oidc:github-actions({expected_audience})");
-    assert_eq!(
-        summary.get("identity_token_source").and_then(Value::as_str),
-        Some(expected_source.as_str())
-    );
-    assert_eq!(
-        summary.get("token_included").and_then(Value::as_bool),
-        Some(false)
-    );
-    let expected_hash = hex_encode(blake3_hash(expected_token.as_bytes()).as_bytes());
-    assert_eq!(
-        summary
-            .get("identity_token_hash_blake3_hex")
-            .and_then(Value::as_str),
-        Some(expected_hash.as_str())
-    );
-
-    let bundle_bytes = fs::read(&bundle_path).expect("read bundle");
-    let bundle: Value = from_slice(&bundle_bytes).expect("bundle json");
-    let identity = bundle
-        .get("identity")
-        .and_then(Value::as_object)
-        .expect("identity object");
-    assert_eq!(
-        identity.get("token_source").and_then(Value::as_str),
-        Some(expected_source.as_str())
-    );
-    assert_eq!(
-        identity.get("token_included").and_then(Value::as_bool),
-        Some(false)
-    );
-    assert!(
-        identity.get("token").is_none(),
-        "token should not be persisted in bundles by default"
-    );
-}
-
-#[test]
-fn manifest_sign_fetches_github_actions_oidc_token_with_explicit_audience() {
-    let tempdir = tempdir().expect("tempdir");
-    let (manifest_path, plan_path) = prepare_manifest_artifacts(tempdir.path());
-
-    let server = MockServer::start();
-    let gha_request_token = "gha-default-token";
-    let expected_audience = "sigstore";
-    let header = URL_SAFE_NO_PAD.encode(r#"{"alg":"RS256","typ":"JWT"}"#);
-    let claims = URL_SAFE_NO_PAD
-        .encode(r#"{"iss":"https://gha.example","sub":"repo","aud":"sigstore","exp":1735689600}"#);
-    let signature = URL_SAFE_NO_PAD.encode("signature");
-    let expected_token = format!("{header}.{claims}.{signature}");
-    let expected_body = format!(r#"{{"value":"{}"}}"#, expected_token);
-    let auth_header = format!("Bearer {gha_request_token}");
-
-    let mock = server.mock(move |when, then| {
-        when.method(GET)
-            .path("/oidc/token")
-            .header("authorization", auth_header.clone())
-            .query_param("audience", expected_audience);
-        then.status(200)
-            .header("content-type", "application/json")
-            .body(expected_body.clone());
-    });
-    let bundle_path = tempdir.path().join("gha-default.bundle.json");
-    let signature_path = tempdir.path().join("gha-default.sig");
-    let assert = sorafs_cli_cmd()
-        .arg("manifest")
-        .arg("sign")
-        .env_remove("SIGSTORE_ID_TOKEN")
-        .env("ACTIONS_ID_TOKEN_REQUEST_URL", server.url("/oidc/token"))
-        .env("ACTIONS_ID_TOKEN_REQUEST_TOKEN", gha_request_token)
-        .arg(format!("--manifest={}", manifest_path.display()))
-        .arg(format!("--bundle-out={}", bundle_path.display()))
-        .arg(format!("--signature-out={}", signature_path.display()))
-        .arg(format!("--chunk-plan={}", plan_path.display()))
-        .arg("--identity-token-provider=github-actions")
-        .arg(format!("--identity-token-audience={expected_audience}"))
-        .assert()
-        .success();
-
-    mock.assert();
-
-    let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8");
-    let summary: Value = norito::json::from_str(stdout.trim()).expect("summary json");
-    assert_eq!(
-        summary.get("identity_token_source").and_then(Value::as_str),
-        Some("oidc:github-actions(sigstore)")
-    );
-    assert_eq!(
-        summary.get("token_included").and_then(Value::as_bool),
-        Some(false)
-    );
-    let expected_hash = hex_encode(blake3_hash(expected_token.as_bytes()).as_bytes());
-    assert_eq!(
-        summary
-            .get("identity_token_hash_blake3_hex")
-            .and_then(Value::as_str),
-        Some(expected_hash.as_str())
-    );
-
-    let bundle_bytes = fs::read(&bundle_path).expect("read bundle");
-    let bundle: Value = from_slice(&bundle_bytes).expect("bundle json");
-    let identity = bundle
-        .get("identity")
-        .and_then(Value::as_object)
-        .expect("identity object");
-    assert_eq!(
-        identity.get("token_source").and_then(Value::as_str),
-        Some("oidc:github-actions(sigstore)")
-    );
-    assert_eq!(
-        identity
-            .get("token_hash_blake3_hex")
-            .and_then(Value::as_str),
-        Some(expected_hash.as_str())
-    );
-}
-
-#[test]
-fn manifest_sign_missing_audience_fails() {
-    let tempdir = tempdir().expect("tempdir");
-    let (manifest_path, plan_path) = prepare_manifest_artifacts(tempdir.path());
-
-    let server = MockServer::start();
-    let gha_request_token = "gha-default-token";
-
-    let _mock = server.mock(|when, then| {
-        when.method(GET).path("/oidc/token");
-        then.status(200)
-            .header("content-type", "application/json")
-            .body("{\"value\":\"token\"}");
-    });
-
-    let output = sorafs_cli_cmd()
-        .arg("manifest")
-        .arg("sign")
-        .env_remove("SIGSTORE_ID_TOKEN")
-        .env("ACTIONS_ID_TOKEN_REQUEST_URL", server.url("/oidc/token"))
-        .env("ACTIONS_ID_TOKEN_REQUEST_TOKEN", gha_request_token)
-        .arg(format!("--manifest={}", manifest_path.display()))
-        .arg(format!(
-            "--bundle-out={}",
-            tempdir.path().join("bundle.json").display()
-        ))
-        .arg(format!(
-            "--signature-out={}",
-            tempdir.path().join("bundle.sig").display()
-        ))
-        .arg(format!("--chunk-plan={}", plan_path.display()))
-        .arg("--identity-token-provider=github-actions")
-        .output()
-        .expect("command executes");
-
-    assert!(
-        !output.status.success(),
-        "command must fail when audience is omitted"
-    );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("requires --identity-token-audience"),
-        "stderr should mention missing audience, got: {stderr}"
-    );
-}
-
-#[test]
-fn manifest_sign_rejects_provider_with_explicit_token() {
-    let tempdir = tempdir().expect("tempdir");
-    let (manifest_path, plan_path) = prepare_manifest_artifacts(tempdir.path());
-
-    let bundle_path = tempdir.path().join("reject.bundle.json");
-    let signature_path = tempdir.path().join("reject.sig");
-    let header = URL_SAFE_NO_PAD.encode(r#"{"alg":"RS256"}"#);
-    let claims = URL_SAFE_NO_PAD.encode(r#"{"iss":"https://issuer","aud":"sigstore"}"#);
-    let signature = URL_SAFE_NO_PAD.encode("sig");
-    let token = format!("{header}.{claims}.{signature}");
-
-    let output = sorafs_cli_cmd()
-        .arg("manifest")
-        .arg("sign")
-        .arg(format!("--manifest={}", manifest_path.display()))
-        .arg(format!("--bundle-out={}", bundle_path.display()))
-        .arg(format!("--signature-out={}", signature_path.display()))
-        .arg(format!("--chunk-plan={}", plan_path.display()))
-        .arg(format!("--identity-token={token}"))
-        .arg("--identity-token-provider=github-actions")
-        .output()
-        .expect("command executes");
-
-    assert!(
-        !output.status.success(),
-        "command should fail when provider and explicit token are combined"
-    );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("identity token provider flags cannot be combined"),
-        "stderr should mention provider/token exclusivity"
-    );
-}
-
-#[test]
 fn proof_stream_consumes_ndjson_and_reports_metrics() {
     use httpmock::Method::POST;
 
@@ -3665,36 +2889,25 @@ fn proof_stream_consumes_ndjson_and_reports_metrics() {
     let manifest: ManifestV1 =
         decode_from_bytes(&manifest_bytes).expect("decode manifest for digest");
     let manifest_digest_hex = hex_encode(manifest.digest().expect("manifest digest").as_bytes());
+    let provider_id_hex = "11".repeat(32);
 
-    let success_item = norito::json!({
-        "manifest_digest_hex": manifest_digest_hex,
-        "proof_kind": "por",
-        "verification_status": "success",
-        "latency_ms": 42,
-        "sample_index": 0,
-        "chunk_index": 0
-    });
-    let failure_item = norito::json!({
-        "manifest_digest_hex": manifest_digest_hex,
-        "proof_kind": "por",
-        "verification_status": "failure",
-        "latency_ms": 75,
-        "sample_index": 1,
-        "chunk_index": 1,
-        "failure_reason": "invalid_proof"
-    });
+    let success_item = canonical_por_stream_item(&manifest_digest_hex, &provider_id_hex, 42, 7);
+    let second_success_item =
+        canonical_por_stream_item(&manifest_digest_hex, &provider_id_hex, 75, 8);
     let success_line = String::from_utf8(to_vec(&success_item).expect("success json encode"))
         .expect("success json utf8");
-    let failure_line = String::from_utf8(to_vec(&failure_item).expect("failure json encode"))
-        .expect("failure json utf8");
-    let response_body = format!("{success_line}\n{failure_line}\n");
+    let second_success_line =
+        String::from_utf8(to_vec(&second_success_item).expect("second success json encode"))
+            .expect("second success json utf8");
+    let response_body = format!("{success_line}\n{second_success_line}\n");
 
     let server = MockServer::start();
     let mock = server.mock(move |when, then| {
         when.method(POST)
             .path("/v1/proof/stream")
             .header("content-type", "application/json")
-            .header("accept", "application/x-ndjson");
+            .header("accept", "application/x-ndjson")
+            .header("accept-encoding", "identity");
         then.status(200)
             .header("content-type", "application/x-ndjson")
             .body(response_body.clone());
@@ -3706,9 +2919,10 @@ fn proof_stream_consumes_ndjson_and_reports_metrics() {
         .arg("stream")
         .arg(format!("--manifest={}", manifest_path.display()))
         .arg(format!("--gateway-url={}", server.url("/v1/proof/stream")))
-        .arg("--provider-id=provider-1")
+        .arg(format!("--provider-id-hex={provider_id_hex}"))
         .arg("--samples=2")
         .arg("--emit-events=false")
+        .arg("--max-failures=1")
         .arg(format!("--summary-out={}", summary_path.display()))
         .assert()
         .success();
@@ -3724,81 +2938,36 @@ fn proof_stream_consumes_ndjson_and_reports_metrics() {
     assert_eq!(metrics.get("item_total").and_then(Value::as_u64), Some(2));
     assert_eq!(
         metrics.get("success_total").and_then(Value::as_u64),
-        Some(1)
+        Some(2)
     );
     assert_eq!(
         metrics.get("failure_total").and_then(Value::as_u64),
-        Some(1)
+        Some(0)
     );
     let reason_counts = metrics
         .get("failure_by_reason")
         .and_then(Value::as_object)
         .expect("failure map");
-    assert_eq!(
-        reason_counts.get("invalid_proof").and_then(Value::as_u64),
-        Some(1)
-    );
-
-    let samples = summary
-        .get("failure_samples")
-        .and_then(Value::as_array)
-        .expect("failure samples array");
-    assert_eq!(samples.len(), 1);
-    assert_eq!(
-        samples[0].get("failure_reason").and_then(Value::as_str),
-        Some("invalid_proof")
-    );
-}
-
-#[test]
-fn manifest_sign_rejects_audience_without_provider() {
-    let tempdir = tempdir().expect("tempdir");
-    let (manifest_path, plan_path) = prepare_manifest_artifacts(tempdir.path());
-
-    let output = sorafs_cli_cmd()
-        .arg("manifest")
-        .arg("sign")
-        .env("SIGSTORE_ID_TOKEN", "stub.token.value")
-        .arg(format!("--manifest={}", manifest_path.display()))
-        .arg(format!(
-            "--bundle-out={}",
-            tempdir.path().join("bundle.json").display()
-        ))
-        .arg(format!(
-            "--signature-out={}",
-            tempdir.path().join("signature.txt").display()
-        ))
-        .arg(format!("--chunk-plan={}", plan_path.display()))
-        .arg("--identity-token-audience=custom")
-        .output()
-        .expect("command executes");
-
-    assert!(
-        !output.status.success(),
-        "command should fail when audience is supplied without a provider"
-    );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("requires `--identity-token-provider`"),
-        "stderr should mention provider requirement"
-    );
+    assert!(reason_counts.is_empty());
+    assert!(summary.get("failure_samples").is_none());
 }
 
 #[test]
 fn proof_stream_consumes_ndjson_and_summarises_output() {
     let tempdir = tempdir().expect("tempdir");
     let (manifest_path, _plan_path) = prepare_manifest_artifacts(tempdir.path());
-
-    let ndjson = r#"{"verification_status":"success","latency_ms":42}
-{"verification_status":"failure","failure_reason":"invalid_proof","latency_ms":105}
-"#;
+    let manifest_hex = manifest_digest_hex(&manifest_path).expect("manifest digest");
+    let provider_id_hex = "22".repeat(32);
+    let first_line = canonical_por_stream_line(&manifest_hex, &provider_id_hex, 42, 9);
+    let second_line = canonical_por_stream_line(&manifest_hex, &provider_id_hex, 105, 10);
+    let ndjson = format!("{first_line}\n{second_line}\n");
 
     let server = MockServer::start();
-    let mock = server.mock(|when, then| {
+    let mock = server.mock(move |when, then| {
         when.method(POST).path("/proof/stream");
         then.status(200)
             .header("content-type", "application/x-ndjson")
-            .body(ndjson);
+            .body(ndjson.clone());
     });
 
     let endpoint = server.url("/proof/stream");
@@ -3807,8 +2976,9 @@ fn proof_stream_consumes_ndjson_and_summarises_output() {
         .arg("proof")
         .arg("stream")
         .arg(format!("--manifest={}", manifest_path.display()))
-        .arg(format!("--endpoint={endpoint}"))
-        .arg("--provider-id=provider-1")
+        .arg(format!("--gateway-url={endpoint}"))
+        .arg(format!("--provider-id-hex={provider_id_hex}"))
+        .arg("--max-failures=1")
         .arg("--summary-out=".to_string() + summary_path.to_str().expect("utf8 path"))
         .assert()
         .success();
@@ -3822,29 +2992,36 @@ fn proof_stream_consumes_ndjson_and_summarises_output() {
         Some("por")
     );
     assert_eq!(
-        summary.get("provider_id").and_then(Value::as_str),
-        Some("provider-1")
+        summary.get("provider_id_hex").and_then(Value::as_str),
+        Some(provider_id_hex.as_str())
     );
-    assert_eq!(summary.get("total_items").and_then(Value::as_u64), Some(2));
+    assert!(summary.get("provider_id").is_none());
+    let metrics = summary
+        .get("metrics")
+        .and_then(Value::as_object)
+        .expect("canonical metrics object");
+    assert_eq!(metrics.get("item_total").and_then(Value::as_u64), Some(2));
     assert_eq!(
-        summary.get("success_count").and_then(Value::as_u64),
-        Some(1)
+        metrics.get("success_total").and_then(Value::as_u64),
+        Some(2)
     );
     assert_eq!(
-        summary.get("failure_count").and_then(Value::as_u64),
-        Some(1)
+        metrics.get("failure_total").and_then(Value::as_u64),
+        Some(0)
     );
     let failure_breakdown = summary
-        .get("failure_breakdown")
+        .get("metrics")
+        .and_then(Value::as_object)
+        .and_then(|metrics| metrics.get("failure_by_reason"))
         .and_then(Value::as_object)
         .expect("failure breakdown object");
-    assert_eq!(
-        failure_breakdown
-            .get("invalid_proof")
-            .and_then(Value::as_u64),
-        Some(1)
-    );
-    if let Some(avg) = summary.get("average_latency_ms").and_then(Value::as_f64) {
+    assert!(failure_breakdown.is_empty());
+    if let Some(avg) = metrics
+        .get("latency_ms")
+        .and_then(Value::as_object)
+        .and_then(|latency| latency.get("average_ms"))
+        .and_then(Value::as_f64)
+    {
         assert!(
             (avg - 73.5).abs() < f64::EPSILON,
             "average latency mismatch"
@@ -3852,14 +3029,169 @@ fn proof_stream_consumes_ndjson_and_summarises_output() {
     } else {
         panic!("missing average latency");
     }
+    for retired_alias in [
+        "torii_url",
+        "total_items",
+        "success_count",
+        "failure_count",
+        "failure_breakdown",
+        "average_latency_ms",
+    ] {
+        assert!(summary.get(retired_alias).is_none());
+    }
 
     let summary_disk = fs::read_to_string(&summary_path).expect("summary file");
     let summary_disk_json: Value =
         norito::json::from_str(summary_disk.trim()).expect("summary file json");
     assert_eq!(
-        summary_disk_json.get("total_items").and_then(Value::as_u64),
+        summary_disk_json
+            .get("metrics")
+            .and_then(Value::as_object)
+            .and_then(|metrics| metrics.get("item_total"))
+            .and_then(Value::as_u64),
         Some(2)
     );
+}
+
+#[test]
+fn proof_stream_transport_boundary_is_bounded_canonical_and_payload_free() {
+    let tempdir = tempdir().expect("tempdir");
+    let (manifest_path, _plan_path) = prepare_manifest_artifacts(tempdir.path());
+    let manifest_hex = manifest_digest_hex(&manifest_path).expect("manifest digest");
+    let provider_id_hex = "24".repeat(32);
+    let valid_line = canonical_por_stream_line(&manifest_hex, &provider_id_hex, 42, 11);
+    let server = MockServer::start();
+
+    let empty = server.mock(|when, then| {
+        when.method(POST).path("/proof/empty");
+        then.status(200)
+            .header("content-type", "application/x-ndjson")
+            .body("");
+    });
+    let missing_newline_line = valid_line.clone();
+    let missing_newline = server.mock(move |when, then| {
+        when.method(POST).path("/proof/missing-newline");
+        then.status(200)
+            .header("content-type", "application/x-ndjson")
+            .body(missing_newline_line.clone());
+    });
+    let blank = server.mock(|when, then| {
+        when.method(POST).path("/proof/blank");
+        then.status(200)
+            .header("content-type", "application/x-ndjson")
+            .body("\n");
+    });
+    let encoded_line = format!("{valid_line}\n");
+    let encoded = server.mock(move |when, then| {
+        when.method(POST).path("/proof/encoded");
+        then.status(200)
+            .header("content-type", "application/x-ndjson")
+            .header("content-encoding", "gzip")
+            .body(encoded_line.clone());
+    });
+    let oversized_body = format!("{}\n", "x".repeat(MAX_PROOF_STREAM_LINE_BYTES + 1));
+    let oversized = server.mock(move |when, then| {
+        when.method(POST).path("/proof/oversized");
+        then.status(200)
+            .header("content-type", "application/x-ndjson")
+            .body(oversized_body.clone());
+    });
+    let secret = "private-proof-body-must-not-appear";
+    let failed = server.mock(move |when, then| {
+        when.method(POST).path("/proof/failed");
+        then.status(503)
+            .header("content-type", "text/plain")
+            .body(secret);
+    });
+    let never = server.mock(|when, then| {
+        when.method(POST).path("/proof/never");
+        then.status(500);
+    });
+
+    let run = |path: &str| {
+        sorafs_cli_cmd()
+            .arg("proof")
+            .arg("stream")
+            .arg(format!("--manifest={}", manifest_path.display()))
+            .arg(format!("--gateway-url={}", server.url(path)))
+            .arg(format!("--provider-id-hex={provider_id_hex}"))
+            .output()
+            .expect("proof stream command executes")
+    };
+
+    let empty_output = run("/proof/empty");
+    assert!(!empty_output.status.success());
+    assert!(
+        String::from_utf8_lossy(&empty_output.stderr).contains("empty proof stream"),
+        "unexpected empty-stream error: {}",
+        String::from_utf8_lossy(&empty_output.stderr)
+    );
+    empty.assert_calls(1);
+
+    let missing_output = run("/proof/missing-newline");
+    assert!(!missing_output.status.success());
+    assert!(
+        String::from_utf8_lossy(&missing_output.stderr).contains("missing its final newline"),
+        "unexpected missing-newline error: {}",
+        String::from_utf8_lossy(&missing_output.stderr)
+    );
+    missing_newline.assert_calls(1);
+
+    let blank_output = run("/proof/blank");
+    assert!(!blank_output.status.success());
+    assert!(
+        String::from_utf8_lossy(&blank_output.stderr).contains("noncanonical"),
+        "unexpected blank-line error: {}",
+        String::from_utf8_lossy(&blank_output.stderr)
+    );
+    blank.assert_calls(1);
+
+    let encoded_output = run("/proof/encoded");
+    assert!(!encoded_output.status.success());
+    assert!(
+        String::from_utf8_lossy(&encoded_output.stderr)
+            .contains("ignored `Accept-Encoding: identity`"),
+        "unexpected content-encoding error: {}",
+        String::from_utf8_lossy(&encoded_output.stderr)
+    );
+    encoded.assert_calls(1);
+
+    let oversized_output = run("/proof/oversized");
+    assert!(!oversized_output.status.success());
+    assert!(
+        String::from_utf8_lossy(&oversized_output.stderr).contains("line bound"),
+        "unexpected oversized-record error: {}",
+        String::from_utf8_lossy(&oversized_output.stderr)
+    );
+    oversized.assert_calls(1);
+
+    let failed_output = run("/proof/failed");
+    assert!(!failed_output.status.success());
+    let failed_stderr = String::from_utf8_lossy(&failed_output.stderr);
+    assert!(failed_stderr.contains("503"));
+    assert!(
+        !failed_stderr.contains(secret),
+        "proof response payload leaked into stderr: {failed_stderr}"
+    );
+    failed.assert_calls(1);
+
+    let duplicate_output = sorafs_cli_cmd()
+        .arg("proof")
+        .arg("stream")
+        .arg(format!("--manifest={}", manifest_path.display()))
+        .arg(format!("--gateway-url={}", server.url("/proof/never")))
+        .arg(format!("--gateway-url={}", server.url("/proof/never")))
+        .arg(format!("--provider-id-hex={provider_id_hex}"))
+        .output()
+        .expect("duplicate-option command executes");
+    assert!(!duplicate_output.status.success());
+    assert!(
+        String::from_utf8_lossy(&duplicate_output.stderr)
+            .contains("duplicate option `--gateway-url`"),
+        "unexpected duplicate-option error: {}",
+        String::from_utf8_lossy(&duplicate_output.stderr)
+    );
+    never.assert_calls(0);
 }
 
 fn governance_fixture_root() -> PathBuf {
@@ -4988,7 +4320,6 @@ fn ci_sample_fixtures_are_consistent() {
     let payload_digest = blake3_hash(&payload);
     let payload_digest_hex = hex_encode(payload_digest.as_bytes());
 
-    let chunk_plan_path_rel = base_rel.join("chunk_plan.json");
     let chunk_plan_path = base.join("chunk_plan.json");
     let chunk_plan_bytes = fs::read(&chunk_plan_path).expect("read chunk plan");
     let chunk_plan_value: Value =
@@ -5125,148 +4456,19 @@ fn ci_sample_fixtures_are_consistent() {
         "manifest.json pin policy should mirror Norito manifest"
     );
 
-    let bundle_bytes = fs::read(base.join("manifest.bundle.json")).expect("read bundle");
-    let bundle_value: Value = from_slice(&bundle_bytes).expect("manifest bundle json should parse");
-    let bundle_manifest = bundle_value
-        .get("manifest")
-        .and_then(Value::as_object)
-        .expect("bundle manifest object");
-    assert_eq!(
-        bundle_manifest
-            .get("manifest_blake3_hex")
-            .and_then(Value::as_str),
-        Some(manifest_digest_hex.as_str()),
-        "bundle should embed manifest digest"
-    );
-    assert_eq!(
-        bundle_manifest
-            .get("chunk_digest_sha3_256_hex")
-            .and_then(Value::as_str),
-        Some(chunk_digest_sha3_hex.as_str()),
-        "bundle chunk digest should match computed SHA3 digest"
-    );
-    assert_eq!(
-        bundle_manifest
-            .get("chunk_plan_source")
-            .and_then(Value::as_str)
-            .expect("bundle chunk plan path"),
-        chunk_plan_path_rel.display().to_string(),
-        "bundle should reference chunk plan path"
-    );
-
-    let bundle_signature = bundle_value
-        .get("signature")
-        .and_then(Value::as_object)
-        .expect("bundle signature object");
-    let signature_hex = bundle_signature
-        .get("signature_hex")
-        .and_then(Value::as_str)
-        .expect("signature hex present");
-    let signature_bytes_vec =
-        hex_decode(signature_hex).expect("signature hex should decode into bytes");
-    let signature_bytes: [u8; 64] = signature_bytes_vec
-        .as_slice()
-        .try_into()
-        .expect("signature must be 64 bytes");
-    let _checked_signature = iroha_crypto::ed25519_parse_signature(&signature_bytes)
-        .expect("generated manifest signature must pass checked Ed25519 admission");
-    let signature = Signature::from_bytes(&signature_bytes);
-
-    let public_key_hex = bundle_signature
-        .get("public_key_hex")
-        .and_then(Value::as_str)
-        .expect("public key hex present");
-    let public_key_bytes_vec =
-        hex_decode(public_key_hex).expect("public key hex should decode into bytes");
-    let public_key_bytes: [u8; 32] = public_key_bytes_vec
-        .as_slice()
-        .try_into()
-        .expect("public key must be 32 bytes");
-    let verifying_key =
-        VerifyingKey::from_bytes(&public_key_bytes).expect("verifying key should parse");
-    verifying_key
-        .verify(manifest_digest.as_bytes(), &signature)
-        .expect("fixture signature should verify against manifest digest");
-
-    let signature_file =
-        fs::read_to_string(base.join("manifest.sig")).expect("read detached signature");
-    assert_eq!(
-        signature_file.trim(),
-        signature_hex,
-        "detached signature must match bundle signature"
-    );
-
-    let sign_summary_bytes =
-        fs::read(base.join("manifest.sign.summary.json")).expect("read sign summary");
-    let sign_summary: Value =
-        from_slice(&sign_summary_bytes).expect("sign summary json should parse");
-    assert_eq!(
-        sign_summary
-            .get("chunk_digest_sha3_256_hex")
-            .and_then(Value::as_str),
-        Some(chunk_digest_sha3_hex.as_str()),
-        "sign summary should carry chunk digest"
-    );
-    assert_eq!(
-        sign_summary
-            .get("identity_token_hash_blake3_hex")
-            .and_then(Value::as_str),
-        bundle_value
-            .get("identity")
-            .and_then(Value::as_object)
-            .and_then(|obj| obj.get("token_hash_blake3_hex"))
-            .and_then(Value::as_str),
-        "sign summary and bundle should agree on token hash"
-    );
-    assert_eq!(
-        sign_summary
-            .get("manifest_blake3_hex")
-            .and_then(Value::as_str),
-        Some(manifest_digest_hex.as_str()),
-        "sign summary should echo manifest digest"
-    );
-    assert_eq!(
-        sign_summary
-            .get("bundle_path")
-            .and_then(Value::as_str)
-            .expect("bundle path present"),
-        base_rel.join("manifest.bundle.json").display().to_string(),
-        "sign summary should point to bundle path"
-    );
-
-    let verify_summary_bytes =
-        fs::read(base.join("manifest.verify.summary.json")).expect("read verify summary");
-    let verify_summary: Value =
-        from_slice(&verify_summary_bytes).expect("verify summary json should parse");
-    assert_eq!(
-        verify_summary
-            .get("verification_status")
-            .and_then(Value::as_str),
-        Some("ok"),
-        "verify summary should report success"
-    );
-    assert_eq!(
-        verify_summary
-            .get("manifest_blake3_hex")
-            .and_then(Value::as_str),
-        Some(manifest_digest_hex.as_str()),
-        "verify summary should echo manifest digest"
-    );
-    assert_eq!(
-        verify_summary
-            .get("chunk_digest_sha3_256_hex")
-            .and_then(Value::as_str),
-        Some(chunk_digest_sha3_hex.as_str()),
-        "verify summary should report chunk digest"
-    );
-    assert_eq!(
-        verify_summary
-            .get("bundle_path")
-            .and_then(Value::as_str)
-            .expect("verify bundle path present"),
-        base_rel.join("manifest.bundle.json").display().to_string(),
-        "verify summary should point to bundle"
-    );
+    for retired_artifact in [
+        "manifest.bundle.json",
+        "manifest.sig",
+        "manifest.sign.summary.json",
+        "manifest.verify.summary.json",
+    ] {
+        let retired_path = base.join(retired_artifact);
+        assert!(
+            !retired_path.exists(),
+            "retired CLI authentication artifact must remain absent: {}",
+            retired_path.display()
+        );
+    }
 
     let proof_bytes = fs::read(base.join("proof.json")).expect("read proof summary");
     let proof_value: Value = from_slice(&proof_bytes).expect("proof summary json should parse");
@@ -5390,21 +4592,252 @@ fn manifest_digest_hex(path: &Path) -> Result<String, Box<dyn std::error::Error>
     Ok(hex_encode(digest.as_bytes()))
 }
 
+fn canonical_por_stream_item(
+    manifest_digest_hex: &str,
+    provider_id_hex: &str,
+    latency_ms: u32,
+    sample_seed: u64,
+) -> Value {
+    let payload = (0_u16..512)
+        .map(|value| u8::try_from(value % 251).expect("fixture byte"))
+        .collect::<Vec<_>>();
+    let mut store = ChunkStore::new();
+    store
+        .ingest_bytes(&payload)
+        .expect("ingest canonical PoR stream fixture");
+    let (flat_index, proof) = store
+        .sample_leaves(1, sample_seed, &payload)
+        .expect("sample canonical PoR stream fixture")
+        .into_iter()
+        .next()
+        .expect("one canonical PoR stream sample");
+    let mut map = sample_to_map(flat_index, &proof);
+    map.insert(
+        "manifest_digest_hex".into(),
+        Value::from(manifest_digest_hex),
+    );
+    map.insert("provider_id_hex".into(), Value::from(provider_id_hex));
+    map.insert("proof_kind".into(), Value::from("por"));
+    map.insert("result".into(), Value::from("success"));
+    map.insert("latency_ms".into(), Value::from(u64::from(latency_ms)));
+    Value::Object(map)
+}
+
+fn canonical_por_stream_line(
+    manifest_digest_hex: &str,
+    provider_id_hex: &str,
+    latency_ms: u32,
+    sample_seed: u64,
+) -> String {
+    norito::json::to_string(&canonical_por_stream_item(
+        manifest_digest_hex,
+        provider_id_hex,
+        latency_ms,
+        sample_seed,
+    ))
+    .expect("encode canonical PoR stream fixture")
+}
+
+fn assert_local_por_verification_failure_summary(
+    stdout: &[u8],
+    manifest_digest_hex: &str,
+    provider_id_hex: &str,
+    expected_root_hex: &str,
+) {
+    let rendered = std::str::from_utf8(stdout).expect("proof-stream stdout utf8");
+    let summary: Value = norito::json::from_str(rendered.trim()).expect(
+        "local verification failure must suppress the canonical event and emit one summary",
+    );
+    let metrics = summary
+        .get("metrics")
+        .and_then(Value::as_object)
+        .expect("gateway outcome metrics");
+    assert_eq!(metrics.get("item_total").and_then(Value::as_u64), Some(1));
+    assert_eq!(
+        metrics.get("success_total").and_then(Value::as_u64),
+        Some(1),
+        "the canonical gateway outcome remains a success"
+    );
+    assert_eq!(
+        metrics.get("failure_total").and_then(Value::as_u64),
+        Some(0),
+        "local root mismatches are not gateway failure rows"
+    );
+    assert_eq!(
+        summary.get("verification_total").and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        summary
+            .get("verification_successes")
+            .and_then(Value::as_u64),
+        Some(0)
+    );
+    assert_eq!(
+        summary.get("verification_failures").and_then(Value::as_u64),
+        Some(1)
+    );
+    assert!(
+        summary.get("failure_samples").is_none(),
+        "canonical failure_samples must never contain a successful PoR row"
+    );
+
+    let samples = summary
+        .get("verification_failure_samples")
+        .and_then(Value::as_array)
+        .expect("out-of-band local verification samples");
+    assert_eq!(samples.len(), 1);
+    let sample = samples[0]
+        .as_object()
+        .expect("local verification sample object");
+    assert_eq!(
+        sample.get("manifest_digest_hex").and_then(Value::as_str),
+        Some(manifest_digest_hex)
+    );
+    assert_eq!(
+        sample.get("provider_id_hex").and_then(Value::as_str),
+        Some(provider_id_hex)
+    );
+    assert_eq!(
+        sample.get("expected_root_hex").and_then(Value::as_str),
+        Some(expected_root_hex)
+    );
+    assert_eq!(
+        sample.get("reason").and_then(Value::as_str),
+        Some("local_verification_failed")
+    );
+    for index in [
+        "leaf_index_flat",
+        "chunk_index",
+        "segment_index",
+        "leaf_index",
+    ] {
+        assert!(
+            sample.get(index).and_then(Value::as_u64).is_some(),
+            "local verification sample must identify `{index}`"
+        );
+    }
+    for canonical_row_field in ["result", "failure_reason", "proof"] {
+        assert!(
+            !sample.contains_key(canonical_row_field),
+            "out-of-band verification sample must not masquerade as a canonical row"
+        );
+    }
+}
+
+fn signed_potr_receipt_b64(
+    manifest_digest_hex: &str,
+    provider_id_hex: &str,
+    deadline_ms: u32,
+    latency_ms: u32,
+    status: PotrStatus,
+    request_tag: u8,
+    trace_id: Option<[u8; 16]>,
+) -> String {
+    let manifest_digest: [u8; 32] = hex_decode(manifest_digest_hex)
+        .expect("fixture manifest hex")
+        .try_into()
+        .expect("fixture manifest digest length");
+    let provider_id: [u8; 32] = hex_decode(provider_id_hex)
+        .expect("fixture provider hex")
+        .try_into()
+        .expect("fixture provider id length");
+    let requested_at_ms = 1_700_000_000_000_u64 + u64::from(request_tag) * 1_000_000;
+    let responded_at_ms = requested_at_ms + u64::from(latency_ms);
+    let receipt = PotrReceiptV1 {
+        version: POTR_RECEIPT_VERSION_V1,
+        manifest_digest,
+        provider_id,
+        tier: ProofStreamTier::Hot,
+        deadline_ms,
+        latency_ms,
+        status,
+        requested_at_ms,
+        responded_at_ms,
+        recorded_at_ms: responded_at_ms + 5,
+        range_start: 0,
+        range_end: 4_194_303,
+        request_id: Some([request_tag; 16]),
+        trace_id,
+        note: None,
+        gateway_signature: None,
+        provider_signature: None,
+    };
+    let gateway_key =
+        KeyPair::try_from_seed(vec![0x91; 32], Algorithm::Ed25519).expect("fixture gateway key");
+    let provider_key =
+        KeyPair::try_from_seed(vec![0x92; 32], Algorithm::MlDsa).expect("fixture provider key");
+    let signed = sign_potr_receipt_v1(receipt, &gateway_key, &provider_key)
+        .expect("sign canonical fixture PoTR receipt");
+    BASE64_STANDARD.encode(to_bytes(&signed).expect("encode signed fixture PoTR receipt"))
+}
+
+fn committed_proof_provenance_fragment(
+    outcome_identity_hex: &str,
+    outcome_digest_hex: &str,
+    committed_at_ms: u64,
+) -> String {
+    format!(
+        concat!(
+            "\"outcome_identity_hex\":\"{outcome_identity_hex}\",",
+            "\"outcome_digest_hex\":\"{outcome_digest_hex}\",",
+            "\"admission_envelope_digest_hex\":\"{}\",",
+            "\"finalized_block_height\":17,",
+            "\"finalized_block_hash_hex\":\"{}\",",
+            "\"committed_at_ms\":{committed_at_ms}"
+        ),
+        "ad".repeat(32),
+        "fe".repeat(32),
+    )
+}
+
+fn signed_potr_receipt_provenance(receipt_b64: &str) -> (String, String, u64) {
+    let bytes = BASE64_STANDARD
+        .decode(receipt_b64)
+        .expect("decode signed fixture PoTR receipt");
+    let receipt: PotrReceiptV1 =
+        decode_from_bytes(&bytes).expect("decode signed fixture PoTR receipt");
+    (
+        hex_encode(
+            receipt
+                .request_scope_digest()
+                .expect("derive fixture request scope"),
+        ),
+        hex_encode(
+            receipt
+                .signed_receipt_digest()
+                .expect("digest signed fixture receipt"),
+        ),
+        receipt.recorded_at_ms.saturating_add(5),
+    )
+}
+
 #[test]
-fn proof_stream_pdp_requests_use_samples() -> Result<(), Box<dyn std::error::Error>> {
+fn proof_stream_pdp_requests_bind_governed_challenge() -> Result<(), Box<dyn std::error::Error>> {
     let tempdir = tempdir()?;
     let manifest_path = write_proof_stream_manifest(tempdir.path(), "stream_pdp_manifest.to");
+    let manifest_hex = manifest_digest_hex(&manifest_path)?;
     let provider_id_hex = hex_encode([0x11u8; 32]);
+    let challenge_id_hex = hex_encode([0x12u8; 32]);
+    let provenance = committed_proof_provenance_fragment(
+        &challenge_id_hex,
+        &hex_encode([0x13; 32]),
+        1_700_000_000_000,
+    );
+    let response_body = format!(
+        "{{\"manifest_digest_hex\":\"{manifest_hex}\",\"provider_id_hex\":\"{provider_id_hex}\",{provenance},\"challenge_id_hex\":\"{challenge_id_hex}\",\"proof_kind\":\"pdp\",\"result\":\"success\"}}\n"
+    );
+    let challenge_request_fragment = format!("\"challenge_id_hex\":\"{challenge_id_hex}\"");
 
     let server = MockServer::start();
-    let expected_samples: u32 = 16;
-    let mock = server.mock(|when, then| {
+    let mock = server.mock(move |when, then| {
         when.method(POST)
             .path("/v1/sorafs/proof/stream")
-            .header("Content-Type", "application/json");
+            .header("Content-Type", "application/json")
+            .body_includes(challenge_request_fragment.clone());
         then.status(200)
             .header("Content-Type", "application/x-ndjson")
-            .body("{\"proof_kind\":\"pdp\",\"result\":\"success\"}\n");
+            .body(response_body.clone());
     });
 
     let assert = sorafs_cli_cmd()
@@ -5414,7 +4847,7 @@ fn proof_stream_pdp_requests_use_samples() -> Result<(), Box<dyn std::error::Err
         .arg(format!("--torii-url={}", server.base_url()))
         .arg(format!("--provider-id-hex={provider_id_hex}"))
         .arg("--proof-kind=pdp")
-        .arg(format!("--samples={expected_samples}"))
+        .arg(format!("--challenge-id-hex={challenge_id_hex}"))
         .assert()
         .success();
 
@@ -5434,9 +4867,15 @@ fn proof_stream_pdp_requests_use_samples() -> Result<(), Box<dyn std::error::Err
     );
     assert_eq!(
         summary
+            .get("requested_challenge_id_hex")
+            .and_then(Value::as_str),
+        Some(challenge_id_hex.as_str())
+    );
+    assert!(
+        summary
             .get("requested_sample_count")
-            .and_then(Value::as_u64),
-        Some(expected_samples as u64)
+            .and_then(Value::as_u64)
+            .is_none()
     );
     assert!(
         summary
@@ -5449,22 +4888,199 @@ fn proof_stream_pdp_requests_use_samples() -> Result<(), Box<dyn std::error::Err
 }
 
 #[test]
+fn proof_stream_pdp_rejects_missing_challenge_and_client_sampling()
+-> Result<(), Box<dyn std::error::Error>> {
+    let tempdir = tempdir()?;
+    let manifest_path =
+        write_proof_stream_manifest(tempdir.path(), "stream_pdp_invalid_manifest.to");
+    let provider_id_hex = hex_encode([0x13u8; 32]);
+
+    let missing = sorafs_cli_cmd()
+        .arg("proof")
+        .arg("stream")
+        .arg(format!("--manifest={}", manifest_path.display()))
+        .arg("--torii-url=https://example.invalid")
+        .arg(format!("--provider-id-hex={provider_id_hex}"))
+        .arg("--proof-kind=pdp")
+        .assert()
+        .failure();
+    assert!(
+        String::from_utf8_lossy(&missing.get_output().stderr)
+            .contains("`--challenge-id-hex=HEX32` is required")
+    );
+
+    let sampled = sorafs_cli_cmd()
+        .arg("proof")
+        .arg("stream")
+        .arg(format!("--manifest={}", manifest_path.display()))
+        .arg("--torii-url=https://example.invalid")
+        .arg(format!("--provider-id-hex={provider_id_hex}"))
+        .arg("--proof-kind=pdp")
+        .arg(format!("--challenge-id-hex={}", hex_encode([0x14u8; 32])))
+        .arg("--samples=1")
+        .assert()
+        .failure();
+    assert!(
+        String::from_utf8_lossy(&sampled.get_output().stderr)
+            .contains("sampling is fixed by the governed challenge")
+    );
+
+    let legacy_provider = sorafs_cli_cmd()
+        .arg("proof")
+        .arg("stream")
+        .arg(format!("--manifest={}", manifest_path.display()))
+        .arg("--torii-url=https://example.invalid")
+        .arg("--provider-id=legacy-provider")
+        .arg("--proof-kind=pdp")
+        .arg(format!("--challenge-id-hex={}", hex_encode([0x15u8; 32])))
+        .assert()
+        .failure();
+    assert!(
+        String::from_utf8_lossy(&legacy_provider.get_output().stderr)
+            .contains("unrecognised option `--provider-id`")
+    );
+
+    let legacy_endpoint = sorafs_cli_cmd()
+        .arg("proof")
+        .arg("stream")
+        .arg(format!("--manifest={}", manifest_path.display()))
+        .arg("--endpoint=https://example.invalid/v1/sorafs/proof/stream")
+        .arg(format!("--provider-id-hex={provider_id_hex}"))
+        .arg("--proof-kind=pdp")
+        .arg(format!("--challenge-id-hex={}", hex_encode([0x15u8; 32])))
+        .assert()
+        .failure();
+    assert!(
+        String::from_utf8_lossy(&legacy_endpoint.get_output().stderr)
+            .contains("unrecognised option `--endpoint`")
+    );
+
+    for invalid_provider_id in [
+        "13".repeat(31),
+        "ab".repeat(32).to_ascii_uppercase(),
+        format!(" {}", "13".repeat(32)),
+        format!("{} ", "13".repeat(32)),
+    ] {
+        let rejected = sorafs_cli_cmd()
+            .arg("proof")
+            .arg("stream")
+            .arg(format!("--manifest={}", manifest_path.display()))
+            .arg("--torii-url=https://example.invalid")
+            .arg(format!("--provider-id-hex={invalid_provider_id}"))
+            .arg("--proof-kind=pdp")
+            .arg(format!("--challenge-id-hex={}", hex_encode([0x15u8; 32])))
+            .assert()
+            .failure();
+        assert!(
+            String::from_utf8_lossy(&rejected.get_output().stderr)
+                .contains("invalid `--provider-id-hex`")
+                || String::from_utf8_lossy(&rejected.get_output().stderr)
+                    .contains("must be exact 64-character lowercase hexadecimal")
+        );
+    }
+
+    for (invalid_challenge_id, expected_error) in [
+        ("00".repeat(32), "must be non-zero"),
+        (
+            "cd".repeat(32).to_ascii_uppercase(),
+            "invalid `--challenge-id-hex`",
+        ),
+        (
+            format!(" {}", "15".repeat(32)),
+            "invalid `--challenge-id-hex`",
+        ),
+        (
+            format!("{} ", "15".repeat(32)),
+            "invalid `--challenge-id-hex`",
+        ),
+    ] {
+        let rejected = sorafs_cli_cmd()
+            .arg("proof")
+            .arg("stream")
+            .arg(format!("--manifest={}", manifest_path.display()))
+            .arg("--torii-url=https://example.invalid")
+            .arg(format!("--provider-id-hex={provider_id_hex}"))
+            .arg("--proof-kind=pdp")
+            .arg(format!("--challenge-id-hex={invalid_challenge_id}"))
+            .assert()
+            .failure();
+        assert!(
+            String::from_utf8_lossy(&rejected.get_output().stderr).contains(expected_error),
+            "expected `{expected_error}` for challenge `{invalid_challenge_id}`, got: {}",
+            String::from_utf8_lossy(&rejected.get_output().stderr)
+        );
+    }
+
+    for (option, value) in [("--proof-kind", " pdp"), ("--tier", " hot")] {
+        let mut command = sorafs_cli_cmd();
+        command
+            .arg("proof")
+            .arg("stream")
+            .arg(format!("--manifest={}", manifest_path.display()))
+            .arg("--torii-url=https://example.invalid")
+            .arg(format!("--provider-id-hex={provider_id_hex}"));
+        if option != "--proof-kind" {
+            command.arg("--proof-kind=pdp");
+        }
+        let rejected = command
+            .arg(format!("--challenge-id-hex={}", hex_encode([0x15u8; 32])))
+            .arg(format!("{option}={value}"))
+            .assert()
+            .failure();
+        assert!(
+            String::from_utf8_lossy(&rejected.get_output().stderr).contains("unsupported proof"),
+            "expected canonical-label rejection for `{option}={value}`"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn proof_stream_potr_requests_require_deadline() -> Result<(), Box<dyn std::error::Error>> {
     let tempdir = tempdir()?;
     let manifest_path = write_proof_stream_manifest(tempdir.path(), "stream_potr_manifest.to");
+    let manifest_hex = manifest_digest_hex(&manifest_path)?;
     let provider_id_hex = hex_encode([0x22u8; 32]);
     let deadline_ms: u32 = 45_000;
+    let latency_ms: u32 = 120;
+    let request_tag: u8 = 1;
+    let request_id_hex = hex_encode([request_tag; 16]);
+    let receipt_b64 = signed_potr_receipt_b64(
+        &manifest_hex,
+        &provider_id_hex,
+        deadline_ms,
+        latency_ms,
+        PotrStatus::Success,
+        request_tag,
+        None,
+    );
+    let recorded_at_ms =
+        1_700_000_000_000_u64 + u64::from(request_tag) * 1_000_000 + u64::from(latency_ms) + 5;
+    let (outcome_identity_hex, outcome_digest_hex, committed_at_ms) =
+        signed_potr_receipt_provenance(&receipt_b64);
+    let provenance = committed_proof_provenance_fragment(
+        &outcome_identity_hex,
+        &outcome_digest_hex,
+        committed_at_ms,
+    );
+    let response_body = format!(
+        "{{\"manifest_digest_hex\":\"{manifest_hex}\",\"provider_id_hex\":\"{provider_id_hex}\",{provenance},\"proof_kind\":\"potr\",\"result\":\"success\",\"latency_ms\":{latency_ms},\"deadline_ms\":{deadline_ms},\"tier\":\"hot\",\"recorded_at_ms\":{recorded_at_ms},\"receipt_b64\":\"{receipt_b64}\"}}\n"
+    );
 
     let server = MockServer::start();
-    let mock = server.mock(|when, then| {
+    let request_id_hex_for_mock = request_id_hex.clone();
+    let mock = server.mock(move |when, then| {
         when.method(POST)
             .path("/v1/sorafs/proof/stream")
             .header("Content-Type", "application/json")
             .body_includes("\"proof_kind\":\"potr\"")
-            .body_includes(format!("\"deadline_ms\":{}", deadline_ms));
+            .body_includes(format!("\"deadline_ms\":{}", deadline_ms))
+            .body_includes(format!(
+                "\"orchestrator_job_id_hex\":\"{request_id_hex_for_mock}\""
+            ));
         then.status(200)
             .header("Content-Type", "application/x-ndjson")
-            .body("{\"proof_kind\":\"potr\",\"result\":\"success\",\"latency_ms\":120}\n");
+            .body(response_body.clone());
     });
 
     let assert = sorafs_cli_cmd()
@@ -5475,6 +5091,7 @@ fn proof_stream_potr_requests_require_deadline() -> Result<(), Box<dyn std::erro
         .arg(format!("--provider-id-hex={provider_id_hex}"))
         .arg("--proof-kind=potr")
         .arg(format!("--deadline-ms={deadline_ms}"))
+        .arg(format!("--orchestrator-job-id-hex={request_id_hex}"))
         .assert()
         .success();
 
@@ -5492,8 +5109,14 @@ fn proof_stream_potr_requests_require_deadline() -> Result<(), Box<dyn std::erro
         .get("latency_ms")
         .and_then(Value::as_object)
         .expect("latency object");
-    assert_eq!(latency.get("min_ms").and_then(Value::as_u64), Some(120));
-    assert_eq!(latency.get("max_ms").and_then(Value::as_u64), Some(120));
+    assert_eq!(
+        latency.get("min_ms").and_then(Value::as_u64),
+        Some(u64::from(latency_ms))
+    );
+    assert_eq!(
+        latency.get("max_ms").and_then(Value::as_u64),
+        Some(u64::from(latency_ms))
+    );
     assert!(
         summary
             .get("requested_sample_count")
@@ -5512,18 +5135,26 @@ fn proof_stream_potr_requests_require_deadline() -> Result<(), Box<dyn std::erro
 fn proof_stream_fails_when_gateway_reports_failure() -> Result<(), Box<dyn std::error::Error>> {
     let tempdir = tempdir()?;
     let manifest_path = write_proof_stream_manifest(tempdir.path(), "stream_failure_manifest.to");
+    let manifest_hex = manifest_digest_hex(&manifest_path)?;
     let provider_id_hex = hex_encode([0x33u8; 32]);
+    let challenge_id_hex = hex_encode([0x34u8; 32]);
+    let provenance = committed_proof_provenance_fragment(
+        &challenge_id_hex,
+        &hex_encode([0x35; 32]),
+        1_700_000_000_000,
+    );
+    let response_body = format!(
+        "{{\"manifest_digest_hex\":\"{manifest_hex}\",\"provider_id_hex\":\"{provider_id_hex}\",{provenance},\"challenge_id_hex\":\"{challenge_id_hex}\",\"proof_kind\":\"pdp\",\"result\":\"failure\",\"failure_reason\":\"storage_unavailable\"}}\n"
+    );
 
     let server = MockServer::start();
-    let mock = server.mock(|when, then| {
+    let mock = server.mock(move |when, then| {
         when.method(POST)
             .path("/v1/sorafs/proof/stream")
             .header("Content-Type", "application/json");
         then.status(200)
             .header("Content-Type", "application/x-ndjson")
-            .body(
-                "{\"proof_kind\":\"pdp\",\"result\":\"failure\",\"failure_reason\":\"timeout\"}\n",
-            );
+            .body(response_body.clone());
     });
 
     let assert = sorafs_cli_cmd()
@@ -5533,6 +5164,7 @@ fn proof_stream_fails_when_gateway_reports_failure() -> Result<(), Box<dyn std::
         .arg(format!("--torii-url={}", server.base_url()))
         .arg(format!("--provider-id-hex={provider_id_hex}"))
         .arg("--proof-kind=pdp")
+        .arg(format!("--challenge-id-hex={challenge_id_hex}"))
         .assert()
         .failure();
 
@@ -5549,18 +5181,26 @@ fn proof_stream_fails_when_gateway_reports_failure() -> Result<(), Box<dyn std::
 fn proof_stream_respects_max_failures_override() -> Result<(), Box<dyn std::error::Error>> {
     let tempdir = tempdir()?;
     let manifest_path = write_proof_stream_manifest(tempdir.path(), "stream_failure_budget.to");
+    let manifest_hex = manifest_digest_hex(&manifest_path)?;
     let provider_id_hex = hex_encode([0x44u8; 32]);
+    let challenge_id_hex = hex_encode([0x45u8; 32]);
+    let provenance = committed_proof_provenance_fragment(
+        &challenge_id_hex,
+        &hex_encode([0x46; 32]),
+        1_700_000_000_000,
+    );
+    let response_body = format!(
+        "{{\"manifest_digest_hex\":\"{manifest_hex}\",\"provider_id_hex\":\"{provider_id_hex}\",{provenance},\"challenge_id_hex\":\"{challenge_id_hex}\",\"proof_kind\":\"pdp\",\"result\":\"failure\",\"failure_reason\":\"storage_unavailable\"}}\n"
+    );
 
     let server = MockServer::start();
-    let mock = server.mock(|when, then| {
+    let mock = server.mock(move |when, then| {
         when.method(POST)
             .path("/v1/sorafs/proof/stream")
             .header("Content-Type", "application/json");
         then.status(200)
             .header("Content-Type", "application/x-ndjson")
-            .body(
-                "{\"proof_kind\":\"pdp\",\"result\":\"failure\",\"failure_reason\":\"timeout\"}\n",
-            );
+            .body(response_body.clone());
     });
 
     sorafs_cli_cmd()
@@ -5570,6 +5210,7 @@ fn proof_stream_respects_max_failures_override() -> Result<(), Box<dyn std::erro
         .arg(format!("--torii-url={}", server.base_url()))
         .arg(format!("--provider-id-hex={provider_id_hex}"))
         .arg("--proof-kind=pdp")
+        .arg(format!("--challenge-id-hex={challenge_id_hex}"))
         .arg("--max-failures=1")
         .assert()
         .success();
@@ -5582,17 +5223,22 @@ fn proof_stream_verification_failures_trigger_exit() -> Result<(), Box<dyn std::
     let tempdir = tempdir()?;
     let manifest_path =
         write_proof_stream_manifest(tempdir.path(), "stream_verification_manifest.to");
+    let manifest_hex = manifest_digest_hex(&manifest_path)?;
     let provider_id_hex = hex_encode([0x55u8; 32]);
     let root_hex = hex_encode([0xAAu8; 32]);
+    let response_body = format!(
+        "{}\n",
+        canonical_por_stream_line(&manifest_hex, &provider_id_hex, 42, 12)
+    );
 
     let server = MockServer::start();
-    let mock = server.mock(|when, then| {
+    let mock = server.mock(move |when, then| {
         when.method(POST)
             .path("/v1/sorafs/proof/stream")
             .header("Content-Type", "application/json");
         then.status(200)
             .header("Content-Type", "application/x-ndjson")
-            .body("{\"proof_kind\":\"por\",\"result\":\"success\",\"latency_ms\":42}\n");
+            .body(response_body.clone());
     });
 
     let assert = sorafs_cli_cmd()
@@ -5602,8 +5248,15 @@ fn proof_stream_verification_failures_trigger_exit() -> Result<(), Box<dyn std::
         .arg(format!("--torii-url={}", server.base_url()))
         .arg(format!("--provider-id-hex={provider_id_hex}"))
         .arg(format!("--por-root-hex={root_hex}"))
+        .arg("--emit-events=true")
         .assert()
         .failure();
+    assert_local_por_verification_failure_summary(
+        &assert.get_output().stdout,
+        &manifest_hex,
+        &provider_id_hex,
+        &root_hex,
+    );
     let stderr = String::from_utf8(assert.get_output().stderr.clone())?;
     assert!(
         stderr.contains("local verification failures"),
@@ -5618,20 +5271,25 @@ fn proof_stream_verification_budget_allows_overrides() -> Result<(), Box<dyn std
     let tempdir = tempdir()?;
     let manifest_path =
         write_proof_stream_manifest(tempdir.path(), "stream_verification_budget.to");
+    let manifest_hex = manifest_digest_hex(&manifest_path)?;
     let provider_id_hex = hex_encode([0x66u8; 32]);
     let root_hex = hex_encode([0xBBu8; 32]);
+    let response_body = format!(
+        "{}\n",
+        canonical_por_stream_line(&manifest_hex, &provider_id_hex, 37, 13)
+    );
 
     let server = MockServer::start();
-    let mock = server.mock(|when, then| {
+    let mock = server.mock(move |when, then| {
         when.method(POST)
             .path("/v1/sorafs/proof/stream")
             .header("Content-Type", "application/json");
         then.status(200)
             .header("Content-Type", "application/x-ndjson")
-            .body("{\"proof_kind\":\"por\",\"result\":\"success\",\"latency_ms\":37}\n");
+            .body(response_body.clone());
     });
 
-    sorafs_cli_cmd()
+    let assert = sorafs_cli_cmd()
         .arg("proof")
         .arg("stream")
         .arg(format!("--manifest={}", manifest_path.display()))
@@ -5639,8 +5297,15 @@ fn proof_stream_verification_budget_allows_overrides() -> Result<(), Box<dyn std
         .arg(format!("--provider-id-hex={provider_id_hex}"))
         .arg(format!("--por-root-hex={root_hex}"))
         .arg("--max-verification-failures=1")
+        .arg("--emit-events=true")
         .assert()
         .success();
+    assert_local_por_verification_failure_summary(
+        &assert.get_output().stdout,
+        &manifest_hex,
+        &provider_id_hex,
+        &root_hex,
+    );
     mock.assert();
     Ok(())
 }
@@ -5653,13 +5318,32 @@ fn proof_stream_potr_stream_summary_includes_failure_reason()
         write_proof_stream_manifest(tempdir.path(), "stream_potr_summary_manifest.to");
     let provider_id_hex = hex_encode([0x22u8; 32]);
     let manifest_hex = manifest_digest_hex(&manifest_path)?;
-
-    let success_line = format!(
-        "{{\"manifest_digest_hex\":\"{manifest_hex}\",\"provider_id_hex\":\"{provider_id_hex}\",\"proof_kind\":\"potr\",\"result\":\"success\",\"latency_ms\":45000,\"deadline_ms\":90000,\"tier\":\"hot\",\"recorded_at_ms\":1700000000000,\"trace_id\":\"{trace_hex}\"}}",
-        trace_hex = hex_encode([0x44u8; 16])
+    let failure_latency_ms = 120_000;
+    let failure_tag: u8 = 3;
+    let request_id_hex = hex_encode([failure_tag; 16]);
+    let failure_receipt_b64 = signed_potr_receipt_b64(
+        &manifest_hex,
+        &provider_id_hex,
+        90_000,
+        failure_latency_ms,
+        PotrStatus::MissedDeadline,
+        failure_tag,
+        None,
     );
+    let failure_recorded_at_ms = 1_700_000_000_000_u64
+        + u64::from(failure_tag) * 1_000_000
+        + u64::from(failure_latency_ms)
+        + 5;
+    let (outcome_identity_hex, outcome_digest_hex, committed_at_ms) =
+        signed_potr_receipt_provenance(&failure_receipt_b64);
+    let provenance = committed_proof_provenance_fragment(
+        &outcome_identity_hex,
+        &outcome_digest_hex,
+        committed_at_ms,
+    );
+
     let failure_line = format!(
-        "{{\"manifest_digest_hex\":\"{manifest_hex}\",\"provider_id_hex\":\"{provider_id_hex}\",\"proof_kind\":\"potr\",\"result\":\"failure\",\"failure_reason\":\"missed_deadline\",\"latency_ms\":120000,\"deadline_ms\":90000,\"tier\":\"hot\",\"recorded_at_ms\":1700000500000}}"
+        "{{\"manifest_digest_hex\":\"{manifest_hex}\",\"provider_id_hex\":\"{provider_id_hex}\",{provenance},\"proof_kind\":\"potr\",\"result\":\"failure\",\"failure_reason\":\"missed_deadline\",\"latency_ms\":{failure_latency_ms},\"deadline_ms\":90000,\"tier\":\"hot\",\"recorded_at_ms\":{failure_recorded_at_ms},\"receipt_b64\":\"{failure_receipt_b64}\"}}"
     );
 
     let server = MockServer::start();
@@ -5667,10 +5351,11 @@ fn proof_stream_potr_stream_summary_includes_failure_reason()
         when.method(POST)
             .path("/v1/sorafs/proof/stream")
             .header("Content-Type", "application/json")
-            .body_includes("\"proof_kind\":\"potr\"");
+            .body_includes("\"proof_kind\":\"potr\"")
+            .body_includes(format!("\"orchestrator_job_id_hex\":\"{request_id_hex}\""));
         then.status(200)
             .header("Content-Type", "application/x-ndjson")
-            .body(format!("{success_line}\n{failure_line}\n"));
+            .body(format!("{failure_line}\n"));
     });
 
     let assert = sorafs_cli_cmd()
@@ -5681,6 +5366,8 @@ fn proof_stream_potr_stream_summary_includes_failure_reason()
         .arg(format!("--provider-id-hex={provider_id_hex}"))
         .arg("--proof-kind=potr")
         .arg("--deadline-ms=90000")
+        .arg(format!("--orchestrator-job-id-hex={request_id_hex}"))
+        .arg("--max-failures=1")
         .assert()
         .success();
 
@@ -5692,7 +5379,7 @@ fn proof_stream_potr_stream_summary_includes_failure_reason()
         .expect("metrics object");
     assert_eq!(
         metrics.get("success_total").and_then(Value::as_u64),
-        Some(1),
+        Some(0),
         "success count"
     );
     assert_eq!(
@@ -5746,6 +5433,33 @@ fn proof_stream_potr_without_deadline_errors() -> Result<(), Box<dyn std::error:
     assert!(
         stderr.contains("`--deadline-ms` is required"),
         "stderr should mention missing deadline, got: {stderr}"
+    );
+    Ok(())
+}
+
+#[test]
+fn proof_stream_potr_without_request_scope_job_id_errors() -> Result<(), Box<dyn std::error::Error>>
+{
+    let tempdir = tempdir()?;
+    let manifest_path =
+        write_proof_stream_manifest(tempdir.path(), "stream_potr_missing_job_id.to");
+    let provider_id_hex = hex_encode([0x33u8; 32]);
+
+    let assert = sorafs_cli_cmd()
+        .arg("proof")
+        .arg("stream")
+        .arg(format!("--manifest={}", manifest_path.display()))
+        .arg("--torii-url=http://example.com/")
+        .arg(format!("--provider-id-hex={provider_id_hex}"))
+        .arg("--proof-kind=potr")
+        .arg("--deadline-ms=90000")
+        .assert()
+        .failure();
+
+    let stderr = String::from_utf8(assert.get_output().stderr.clone())?;
+    assert!(
+        stderr.contains("`--orchestrator-job-id-hex=HEX16` is required"),
+        "stderr should mention missing request-scope job id, got: {stderr}"
     );
     Ok(())
 }

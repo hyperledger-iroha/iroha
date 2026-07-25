@@ -545,6 +545,18 @@ pub const SYSCALL_SYSVAR_CONTRACT_SUBJECT: u32 = 0x01_0027;
 /// Ret: r10 = a fresh host-owned `&NoritoBytes` TLV with the identical payload.
 /// Null, malformed, disallowed, and non-bytes pointer types are rejected.
 pub const SYSCALL_NORMALIZE_NORITO_BYTES: u32 = 0x01_0028;
+/// Invoke a deployed ABI-v1 contract through the first production typed
+/// nested-call profile.
+///
+/// This profile is deliberately closed over the exact public schema
+/// `{amount_in: quantity, min_out: quantity} -> quantity`. The compiler owns
+/// the field names and return type; source can select only the dynamic contract
+/// address and a literal entrypoint.
+///
+/// Args: `r10 = &Blob(contract_address)`, `r11 = &Blob(entrypoint)`,
+/// `r12 = &Quantity(amount_in)`, `r13 = &Quantity(min_out)`.
+/// Ret: `r10 = &Quantity`.
+pub const SYSCALL_CALL_CONTRACT_QUANTITY2: u32 = 0x01_0029;
 /// Decode a complete schema-bound public argument record.
 ///
 /// Args: r10 = `&NoritoBytes(EntrypointArgumentRecordV1)` for raw hosts, or
@@ -821,6 +833,7 @@ pub const GENERIC_PROGRAM_DENIED_SYSCALLS_V1: &[u32] = &[
     SYSCALL_SYSVAR_CONTRACT_ADDRESS,
     SYSCALL_SYSVAR_ENTRYPOINT,
     SYSCALL_SYSVAR_CONTRACT_SUBJECT,
+    SYSCALL_CALL_CONTRACT_QUANTITY2,
     SYSCALL_STATE_KEYS,
     SYSCALL_STATE_HAS,
     SYSCALL_STATE_LEN,
@@ -1001,6 +1014,7 @@ pub const fn registered_syscall_access(number: u32) -> Option<SyscallAccess> {
         number,
         SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION
             | SYSCALL_CALL_CONTRACT
+            | SYSCALL_CALL_CONTRACT_QUANTITY2
             | SYSCALL_CREATE_NFTS_FOR_ALL_USERS
             | SYSCALL_SET_SMARTCONTRACT_EXECUTION_DEPTH
             | SYSCALL_COMMIT_OUTPUT
@@ -1356,6 +1370,7 @@ pub fn syscalls_for_policy(policy: crate::SyscallPolicy) -> &'static [u32] {
             SYSCALL_SYSVAR_ENTRYPOINT,
             SYSCALL_NORMALIZE_NORITO_BYTES,
             SYSCALL_DECODE_ARGUMENT_RECORD,
+            SYSCALL_CALL_CONTRACT_QUANTITY2,
             SYSCALL_SUBSCRIPTION_BILL,
             SYSCALL_SUBSCRIPTION_RECORD_USAGE,
             SYSCALL_RESOLVE_ACCOUNT_ALIAS,
@@ -1588,6 +1603,7 @@ pub fn syscall_name(number: u32) -> Option<&'static str> {
         SYSCALL_SYSVAR_ENTRYPOINT => "SYSVAR_ENTRYPOINT",
         SYSCALL_NORMALIZE_NORITO_BYTES => "NORMALIZE_NORITO_BYTES",
         SYSCALL_DECODE_ARGUMENT_RECORD => "DECODE_ARGUMENT_RECORD",
+        SYSCALL_CALL_CONTRACT_QUANTITY2 => "CALL_CONTRACT_QUANTITY2",
         SYSCALL_INT_FROM_I64 => "INT_FROM_I64",
         SYSCALL_INT_FROM_U64 => "INT_FROM_U64",
         SYSCALL_INT_TRY_TO_I64 => "INT_TRY_TO_I64",
@@ -1778,6 +1794,7 @@ pub fn render_abi_hashes_markdown_table() -> String {
 
 const ABI_V1_SURFACE_DOMAIN: &[u8] = b"IVM_ABI_V1_FULL_SURFACE\0";
 const ABI_SURFACE_DESCRIPTOR_FORMAT_VERSION: u16 = 8;
+const ABI_V1_NORITO_ENCODE_FLAGS: u8 = norito::core::header_flags::COMPACT_LEN;
 const PROGRAM_HEADER_LAYOUT_V1: &str = "49-bytes:magic[4]=IVM\\0;version_major:u8;version_minor:u8;mode:u8;vector_length:u8;max_cycles:u64le;abi_version:u8;abi_hash[32]=Iroha-Hash-v1(canonical-ABI-descriptor-for-abi_version;Blake2b-256-with-final-byte-LSB-set-to-1);abi-hash-validated-before-prefix-or-instruction-decode";
 const NUMERIC_MANTISSA_BITS_V1: u16 = 512;
 const DECIMAL_MAX_SCALE_V1: u8 = 28;
@@ -3410,6 +3427,7 @@ fn embedded_state_type_surface_v1() -> Result<Vec<AbiEmbeddedStateTypeSurface>, 
         .into_iter()
         .map(|(name, value, layout)| {
             let tag = value.wire_tag();
+            let _flags = norito::core::DecodeFlagsGuard::enter(ABI_V1_NORITO_ENCODE_FLAGS);
             let canonical_sample_frame =
                 norito::to_bytes(&value).map_err(|_| AbiSurfaceError::SurfaceTooLarge)?;
             Ok(AbiEmbeddedStateTypeSurface {
@@ -3602,7 +3620,7 @@ fn typed_state_value_surface_v1() -> Result<AbiTypedStateValueSurface, AbiSurfac
             .map_err(|_| AbiSurfaceError::SurfaceTooLarge)?,
         norito_version_major: norito::core::VERSION_MAJOR,
         norito_version_minor: norito::core::VERSION_MINOR,
-        norito_default_encode_flags: norito::core::default_encode_flags(),
+        norito_default_encode_flags: ABI_V1_NORITO_ENCODE_FLAGS,
         enum_discriminant_layout: "explicit-u32-little-endian-codec-index-followed-by-variant-fields-in-declaration-order",
         schema_hash_domain: STATE_VALUE_SCHEMA_HASH_DOMAIN_V1,
         schema_hash_algorithm: "iroha_crypto::Hash::new(schema-hash-domain||exact-canonical-Norito-schema-frame)",
@@ -3911,6 +3929,7 @@ mod tests {
                 SYSCALL_SYSVAR_CONTRACT_ADDRESS,
                 SYSCALL_SYSVAR_ENTRYPOINT,
                 SYSCALL_SYSVAR_CONTRACT_SUBJECT,
+                SYSCALL_CALL_CONTRACT_QUANTITY2,
                 SYSCALL_STATE_KEYS,
                 SYSCALL_STATE_HAS,
                 SYSCALL_STATE_LEN,
@@ -3975,6 +3994,10 @@ mod tests {
         );
         assert_eq!(
             syscall_access(SYSCALL_CALL_CONTRACT),
+            SyscallAccess::Dynamic
+        );
+        assert_eq!(
+            syscall_access(SYSCALL_CALL_CONTRACT_QUANTITY2),
             SyscallAccess::Dynamic
         );
         assert_eq!(syscall_access(SYSCALL_SHA256_HASH), SyscallAccess::None);
@@ -4087,6 +4110,17 @@ mod tests {
             1,
             "Iroha Hash v1 must set the final-byte marker bit"
         );
+    }
+
+    #[test]
+    fn abi_descriptor_ignores_ambient_norito_layout_flags() {
+        let canonical = build_abi_surface_descriptor(crate::SyscallPolicy::AbiV1)
+            .expect("build canonical ABI descriptor");
+        let _ambient = norito::core::DecodeFlagsGuard::enter(0);
+        let under_noncanonical_ambient = build_abi_surface_descriptor(crate::SyscallPolicy::AbiV1)
+            .expect("build ABI descriptor under alternate ambient flags");
+
+        assert_eq!(under_noncanonical_ambient, canonical);
     }
 
     #[test]
@@ -4260,7 +4294,12 @@ mod tests {
         assert_eq!(typed.norito_version_minor, norito::core::VERSION_MINOR);
         assert_eq!(
             typed.norito_default_encode_flags,
-            norito::core::default_encode_flags()
+            ABI_V1_NORITO_ENCODE_FLAGS
+        );
+        assert_eq!(
+            ABI_V1_NORITO_ENCODE_FLAGS,
+            norito::core::default_encode_flags(),
+            "Norito's workspace default must remain aligned with the pinned ABI-v1 layout"
         );
         assert_eq!(typed.schema_hash_domain, STATE_VALUE_SCHEMA_HASH_DOMAIN_V1);
         assert_eq!(

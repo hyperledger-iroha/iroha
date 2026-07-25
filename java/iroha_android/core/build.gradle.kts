@@ -51,6 +51,12 @@ tasks.withType<Test>().configureEach {
         rootProject.layout.projectDirectory
             .dir("..")
             .dir("..")
+            .file("fixtures/sumeragi_v2/native_amx_v2_grouped.json"),
+    )
+    inputs.file(
+        rootProject.layout.projectDirectory
+            .dir("..")
+            .dir("..")
             .file("fixtures/numeric_v1_golden.json"),
     )
     inputs.file(

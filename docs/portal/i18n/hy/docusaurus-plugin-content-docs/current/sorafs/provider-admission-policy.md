@@ -41,7 +41,7 @@ translation_last_reviewed: 2026-02-07
 ## Ընդունելության աշխատանքային հոսք
 
 1. **Առաջարկի ստեղծում**
-   - CLI՝ ավելացնել `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission proposal …`
+   - CLI՝ ավելացնել `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal …`
      արտադրում է `ProviderAdmissionProposalV1` + ատեստավորման փաթեթ:
    - Վավերացում. ապահովել պահանջվող դաշտերը, խաղադրույքը > 0, կանոնական բլոկների բռնակ `profile_id`-ում:
 2. **Կառավարման հաստատում**
@@ -61,7 +61,7 @@ translation_last_reviewed: 2026-02-07
 | Տարածք | Առաջադրանք | Սեփականատեր(ներ) | Կարգավիճակը |
 |------|------|----------|--------|
 | Սխեման | Սահմանեք `ProviderAdmissionProposalV1`, `ProviderAdmissionEnvelopeV1`, `EndpointAttestationV1` (Norito) `crates/sorafs_manifest/src/provider_admission.rs`-ի ներքո: Իրականացված է `sorafs_manifest::provider_admission`-ում՝ վավերացման օգնականներով։【F:crates/sorafs_manifest/src/provider_admission.rs#L1】 | Պահպանում / Կառավարում | ✅ Ավարտված |
-| CLI գործիքավորում | Ընդլայնել `sorafs_manifest_stub` ենթահրամաններով՝ `provider-admission proposal`, `provider-admission sign`, `provider-admission verify`: | Գործիքավորում WG | ✅ |
+| CLI գործիքավորում | Ընդլայնել `sorafs_manifest_builder` ենթահրամաններով՝ `provider-admission proposal`, `provider-admission sign`, `provider-admission verify`: | Գործիքավորում WG | ✅ |
 
 CLI հոսքն այժմ ընդունում է միջանկյալ վկայականների փաթեթներ (`--endpoint-attestation-intermediate`), արտանետում
 կանոնական առաջարկ/ծրար բայթեր և վավերացնում է խորհրդի ստորագրությունները `sign`/`verify`-ի ժամանակ: Օպերատորները կարող են
@@ -70,7 +70,7 @@ CLI հոսքն այժմ ընդունում է միջանկյալ վկայակա�
 
 ### CLI հղում
 
-Գործարկեք յուրաքանչյուր հրաման `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission …`-ի միջոցով:
+Գործարկեք յուրաքանչյուր հրաման `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission …`-ի միջոցով:
 
 - `proposal`
   - Պահանջվող դրոշներ՝ `--provider-id=<hex32>`, `--chunker-profile=<namespace.name@semver>`,
@@ -109,7 +109,7 @@ CLI հոսքն այժմ ընդունում է միջանկյալ վկայակա�
     ֆիքսելով ամփոփումը և ստորագրությունների քանակը:
 | Ստուգում | Իրականացնել համօգտագործվող ստուգիչ, որն օգտագործվում է Torii-ի, gateways-ի և `sorafs-node`-ի կողմից: Տրամադրել միավոր + CLI ինտեգրման թեստեր։【F:crates/sorafs_manifest/src/provider_admission.rs#L1】【F:crates/iroha_torii/src/sorafs/admission.rs#L1】 | Ցանցային TL / Պահպանում | ✅ Ավարտված |
 | Torii ինտեգրում | Թելերի ստուգիչը Torii գովազդի ներթափանցման մեջ, մերժեք քաղաքականությանը չհամապատասխանող գովազդները, հեռարձակեք հեռաչափությունը: | Ցանցային TL | ✅ Ավարտված | Torii-ն այժմ բեռնում է կառավարման ծրարները (`torii.sorafs.admission_envelopes_dir`), ստուգում է մարսողության/ստորագրության համընկնումները կուլ տալու ընթացքում և մակերեսների ընդունումը հեռաչափություն.【F:crates/iroha_torii/src/sorafs/admission.rs#L1】【F:crates/iroha_torii/src/sorafs/discovery.rs#L1】【F:crates/iroha_torii/src/sorafs/api.rs |
-| Նորացում | Ավելացրեք նորացման/չեղարկման սխեմա + CLI օգնականներ, հրապարակեք կյանքի ցիկլի ուղեցույցը փաստաթղթերում (տե՛ս ստորև բերված runbook և CLI հրամանները `provider-admission renewal`/`revoke`).【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L477】【docs/source/sorafs/provider_admission_policy:120m | Պահպանում / Կառավարում | ✅ Ավարտված |
+| Նորացում | Ավելացրեք նորացման/չեղարկման սխեմա + CLI օգնականներ, հրապարակեք կյանքի ցիկլի ուղեցույցը փաստաթղթերում (տե՛ս ստորև բերված runbook և CLI հրամանները `provider-admission renewal`/`revoke`).【crates/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#L477】【docs/source/sorafs/provider_admission_policy:120m | Պահպանում / Կառավարում | ✅ Ավարտված |
 | Հեռաչափություն | Սահմանեք `provider_admission` վահանակները և հիշեցումները (բացակայում է նորացումը, ծրարի ժամկետի ավարտը): | Դիտորդականություն | Ընթացքի մեջ է | `torii_sorafs_admission_total{result,reason}` հաշվիչ գոյություն ունի; վահանակներ/նախազգուշացումներ առկախ։【F:crates/iroha_telemetry/src/metrics.rs#L3798】【F:docs/source/telemetry.md#L614】 |
 ### Վերականգնման և չեղյալ հայտարարման գրքույկ
 
@@ -117,7 +117,7 @@ CLI հոսքն այժմ ընդունում է միջանկյալ վկայակա�
 1. Կառուցեք իրավահաջորդի առաջարկի/գովազդի զույգը `provider-admission proposal`-ի և `provider-admission sign`-ի հետ՝ ավելացնելով `--retention-epoch`-ը և թարմացնելով ցցերի/վերջնական կետերը, ըստ անհրաժեշտության:
 2. Կատարել  
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission \
+   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -127,7 +127,7 @@ CLI հոսքն այժմ ընդունում է միջանկյալ վկայակա�
    ```
    Հրամանը վավերացնում է անփոփոխ հնարավորությունների/պրոֆիլի դաշտերը միջոցով
    `AdmissionRecord::apply_renewal`, արտանետում է `ProviderAdmissionRenewalV1` և տպում է բովանդակություն
-   կառավարման մատյան.【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L477】【F:crates/sorafs_manifest/src/provider_admission.rs#L422】
+   կառավարման մատյան.【crates/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#L477】【F:crates/sorafs_manifest/src/provider_admission.rs#L422】
 3. Փոխարինեք նախորդ ծրարը `torii.sorafs.admission_envelopes_dir`-ում, կատարեք Norito/JSON թարմացումը կառավարման պահոցում և ավելացրեք թարմացման հեշ + պահպանման դարաշրջանը `docs/source/sorafs/migration_ledger.md`-ին:
 4. Տեղեկացրեք օպերատորներին, որ նոր ծրարն ակտիվ է, և վերահսկեք `torii_sorafs_admission_total{result="accepted",reason="stored"}`՝ ընդունումը հաստատելու համար:
 5. Վերականգնեք և գործարկեք կանոնական սարքերը `cargo run -p sorafs_car --bin provider_admission_fixtures --features cli`-ի միջոցով; CI (`ci/check_sorafs_fixtures.sh`) հաստատում է, որ Norito ելքերը մնում են կայուն:
@@ -135,7 +135,7 @@ CLI հոսքն այժմ ընդունում է միջանկյալ վկայակա�
 #### Արտակարգ իրավիճակի չեղարկում
 1. Բացահայտեք վնասված ծրարը և չեղարկեք.
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission \
+   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \
@@ -146,7 +146,7 @@ CLI հոսքն այժմ ընդունում է միջանկյալ վկայակա�
      --json-out=governance/providers/<id>/revocation.json
    ```
    CLI-ն ստորագրում է `ProviderAdmissionRevocationV1`-ը, ստուգում է ստորագրությունը
-   `verify_revocation_signatures`, և հաղորդում է չեղյալ համարվող ամփոփագիրը:【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L593】【F:crates/sorafs_manifest/src/provider_8】4】4】4
+   `verify_revocation_signatures`, և հաղորդում է չեղյալ համարվող ամփոփագիրը:【crates/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#L593】【F:crates/sorafs_manifest/src/provider_8】4】4】4
 2. Հեռացրեք ծրարը `torii.sorafs.admission_envelopes_dir`-ից, տարածեք Norito/JSON չեղյալ հայտարարումը մուտքի քեշերում և գրանցեք պատճառի հեշը կառավարման արձանագրության մեջ:
 3. Դիտեք `torii_sorafs_admission_total{result="rejected",reason="admission_missing"}`՝ հաստատելու համար, որ քեշերը թողնում են չեղյալ հայտարարված գովազդը; չեղյալ համարվող արտեֆակտները պահել միջադեպերի հետահայաց ակնարկներում:
 

@@ -1,0 +1,16 @@
+# Third-party dependencies for source-tree SDK tests on Python 3.12.
+#
+# `iroha-norito` and `iroha-torii-client` are imported from their sibling
+# source trees in tests/conftest.py, so they intentionally do not appear here.
+# Keep these ranges aligned with the three local pyproject.toml files.
+#
+# Regenerate from the repository root with Python 3.12 and pip-tools 7.6.0:
+#   python3.12 -m piptools compile --generate-hashes --resolver=backtracking \
+#     --strip-extras --output-file python/iroha_python/requirements-ci.lock \
+#     python/iroha_python/requirements-ci.in
+
+blake3==1.0.9
+maturin==1.14.1
+pytest==8.4.2
+requests==2.32.5
+urllib3==1.26.20

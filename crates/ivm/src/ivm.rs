@@ -1324,11 +1324,6 @@ impl PreparedProgram {
     fn contains_pc(&self, pc: u64) -> bool {
         self.op_at(pc).is_some()
     }
-
-    #[cfg(test)]
-    pub(crate) fn shares_ops(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.ops, &other.ops)
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

@@ -67,11 +67,11 @@ cargo test -p sorafs_chunker streaming_backpressure_fuzz_matches_batch
 ## 3. Создание манифеста
 
 Соберите фрагменты плана, псевдонимы и ассинатуры управления в манифесте.
-usando `sorafs-manifest-stub`. O comando abaixo Mostra um payload de arquivo unico; прошло
+usando `sorafs-manifest-builder`. O comando abaixo Mostra um payload de arquivo unico; прошло
 um caminho de diretório para empacotar uma arvore (CLI percorre em ordem lexicográfica).
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
+cargo run -p sorafs_manifest --bin sorafs-manifest-builder -- \
   /tmp/docs.txt \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --manifest-out=/tmp/docs.manifest \

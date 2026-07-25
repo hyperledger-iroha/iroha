@@ -2,10 +2,11 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! identical outcomes (events and final state), preserving determinism.
 
-use std::borrow::Cow;
+use std::{borrow::Cow, sync::Arc};
 
 use iroha_core::{
     block::{BlockBuilder, ValidBlock},
+    governance::manifest::LaneManifestRegistry,
     state::{StateReadOnly, WorldReadOnly},
 };
 use iroha_data_model::prelude::*;
@@ -15,6 +16,7 @@ mod snapshots;
 
 fn run_with_workers(
     workers: usize,
+    chain_id: &ChainId,
     txs: Vec<SignedTransaction>,
     alice_id: &AccountId,
     bob_id: &AccountId,
@@ -35,7 +37,12 @@ fn run_with_workers(
     let world = iroha_core::state::World::with([domain], [acc_a, acc_b], [ad]);
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query = iroha_core::query::store::LiveQueryStore::start_test();
-    let mut state = iroha_core::state::State::new_for_testing(world, kura, query);
+    let mut state =
+        iroha_core::state::State::new_with_chain_for_testing(world, kura, query, chain_id.clone());
+    let nexus = state.nexus_snapshot();
+    state.install_lane_manifests(&Arc::new(
+        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
+    ));
     // Configure overlay parallelism and fixed worker pool size
     let mut cfg = state.view().pipeline().clone();
     cfg.parallel_overlay = true;
@@ -128,8 +135,8 @@ fn overlay_parallel_workers_parity() {
     ];
 
     // Run with workers=0 (Rayon default) and workers=2
-    let (json0, state0) = run_with_workers(0, txs.clone(), &alice_id, &bob_id);
-    let (json2, state2) = run_with_workers(2, txs, &alice_id, &bob_id);
+    let (json0, state0) = run_with_workers(0, &chain_id, txs.clone(), &alice_id, &bob_id);
+    let (json2, state2) = run_with_workers(2, &chain_id, txs, &alice_id, &bob_id);
 
     // Compare event JSON and balances
     assert_eq!(

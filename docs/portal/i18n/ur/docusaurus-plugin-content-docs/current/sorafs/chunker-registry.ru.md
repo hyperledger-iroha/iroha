@@ -142,13 +142,13 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
 ```
 ```
 
-Manifest stub отражает те же данные, что удобно при скриптинге выбора `--chunker-profile-id`
+Manifest builder отражает те же данные, что удобно при скриптинге выбора `--chunker-profile-id`
 в пайплайнах. Оба chunk store CLI также принимают канонический формат handle
 (`--profile=sorafs.sf1@1.0.0`), поэтому build-скрипты могут избежать жесткого
 хардкода числовых ID:
 
 ```
-$ کارگو رن -پی sorafs_manifest-bin sorafs_manifest_stub--list-chunker-profiles
+$ کارگو رن -پی sorafs_manifest-bin sorafs_manifest_builder--list-chunker-profiles
 کے بعد کے کے لئے کے آیا کے آیا کے آیا کے آیا کے آیا کے آیا کے آیا کے آیا کے آیا کے آیا کے آیا ، کے آیا کے ایل کے کے لئے کے یا.
   {
     "پروفائل_ آئی ڈی": 1 ،
@@ -214,4 +214,4 @@ CARV1+SHA-2 برآمدی راستہ محفوظ ہے:
   فراہم کردہ ٹیسٹوں کے ذریعے۔
 * `chunker_registry::lookup_by_profile` اس بات کی تصدیق کرتا ہے کہ وضاحتی پیرامیٹرز
   حادثاتی تغیر سے بچانے کے لئے `ChunkProfile::DEFAULT` سے میچ کریں۔
-* `iroha app sorafs toolkit pack` اور `sorafs_manifest_stub` کے ذریعہ تیار کردہ منشور میں رجسٹری میٹا ڈیٹا شامل ہے۔
+* `iroha app sorafs toolkit pack` اور `sorafs_manifest_builder` کے ذریعہ تیار کردہ منشور میں رجسٹری میٹا ڈیٹا شامل ہے۔

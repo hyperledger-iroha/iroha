@@ -86,8 +86,8 @@ composants principaux. "Bridge" se réfère au véhicule CARv1 + SHA-256
 qui nécessite une négociation explicite du client (`Accept-Chunker` + `Accept-Digest`).| Composants | État | Notes |
 |-----------|--------|-------|
 | `sorafs_manifest_chunk_store` | ✅ Supporté | Validez la poignée canonique + alias, transmettez les rapports via `--json-out=-` et appliquez la carte du registre avec `ensure_charter_compliance()`. |
-| `sorafs_manifest_stub` | ⚠️ Retraité | Constructeur de manifeste hors support ; usa `iroha app sorafs toolkit pack` para empaquetado CAR/manifest y mantén `--plan=-` para revalidación determinista. |
-| `sorafs_provider_advert_stub` | ⚠️ Retraité | Aide à la validation hors ligne uniquement ; Les annonces du fournisseur doivent être produites par le pipeline de publication et validées via `/v1/sorafs/providers`. |
+| `sorafs_manifest_builder` | ⚠️ Retraité | Constructeur de manifeste hors support ; usa `iroha app sorafs toolkit pack` para empaquetado CAR/manifest y mantén `--plan=-` para revalidación determinista. |
+| `sorafs_provider_advert` | ✅ Production | Private-key-free two-phase external Ed25519 signing with exact raw-key, reviewed SHA-256 fingerprint, canonical payload, and strict path-identity verification. |
 | `sorafs_fetch` (orchestrateur développeur) | ✅ Supporté | Lee `chunk_fetch_specs`, contient des charges utiles de capacité `range` et un ensemble de sortie CARv2. |
 | Montages du SDK (Rust/Go/TS) | ✅ Supporté | Régénérées via `export_vectors` ; Le manche canonique apparaît d’abord sur chaque liste d’alias et est confirmé par le conseiller. |
 | Négociation de profils et passerelle Torii | ✅ Supporté | Implémentez la grammaire complète de `Accept-Chunker`, y compris les en-têtes `Content-Chunker` et exposez le pont CARv1 uniquement dans les demandes de rétrogradation explicites. |
@@ -141,12 +141,12 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
 ```
 ```
 
-El manifest stub refleja los mismos datos, lo que es conveniente al automatizar la selección de
+El manifest builder refleja los mismos datos, lo que es conveniente al automatizar la selección de
 `--chunker-profile-id` en pipelines. Ambos CLIs de chunk store también aceptan la forma de handle canónico
 (`--profile=sorafs.sf1@1.0.0`) para que los scripts de build puedan evitar hard-codear IDs numéricos:
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- --list-chunker-profiles
+$ cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- --list-chunker-profiles
 [
   {
     "ID_profil": 1,
@@ -210,4 +210,4 @@ ajouts pour la transition mais il ne faut pas remplacer le résumé canonique.
   mediante las pruebas provistas.
 * `chunker_registry::lookup_by_profile` confirme les paramètres du descripteur
   coïncide avec `ChunkProfile::DEFAULT` pour éviter les divergences accidentelles.
-* Les manifestes produits par `iroha app sorafs toolkit pack` et `sorafs_manifest_stub` incluent les métadonnées du registre.
+* Les manifestes produits par `iroha app sorafs toolkit pack` et `sorafs_manifest_builder` incluent les métadonnées du registre.

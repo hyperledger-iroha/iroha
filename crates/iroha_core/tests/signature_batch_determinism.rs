@@ -13,9 +13,12 @@ use iroha_core::{
     state::{State, StateReadOnly},
     tx::AcceptTransactionFail as AF,
 };
-use iroha_crypto::{Algorithm, HashOf, KeyPair, PrivateKey, SignatureOf};
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PrivateKey, SignatureOf};
 use iroha_data_model::{
-    block::{BlockExecutionContextBundle, ExternalExecutionContext, builder::BlockBuilder},
+    block::{
+        BlockExecutionContextBundle, ExternalExecutionContext, builder::BlockBuilder,
+        consensus::SumeragiLanePayloadOwnership,
+    },
     nexus::{DataSpaceId, LaneId},
     prelude::*,
 };
@@ -34,9 +37,8 @@ fn setup_world_with_account(algo: Algorithm) -> (State, AccountId, ChainId, KeyP
     let domain = Domain::new(domain_id.clone()).build(&account_id);
     let account = Account::new(account_id.clone()).build(&account_id);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
-    let mut state = State::new_for_testing(world, kura, query_handle);
     let chain = ChainId::from("chain");
-    state.chain_id = chain.clone();
+    let state = State::new_with_chain_for_testing(world, kura, query_handle, chain.clone());
     let mut crypto_cfg = iroha_config::parameters::actual::Crypto::default();
     if !crypto_cfg.allowed_signing.contains(&algo) {
         crypto_cfg.allowed_signing.push(algo);
@@ -112,6 +114,7 @@ fn shuffle<T: Clone>(rng: &mut Lcg, v: &[T]) -> Vec<T> {
 }
 
 fn mk_block_with_permuted_txs(
+    state: &State,
     txs: Vec<SignedTransaction>,
     height: std::num::NonZeroU64,
     prev_block_hash: Option<HashOf<BlockHeader>>,
@@ -136,6 +139,46 @@ fn mk_block_with_permuted_txs(
             })
             .collect(),
     );
+    let lane_incarnation = state
+        .view()
+        .lane_incarnation_at_height(LaneId::SINGLE, height.get())
+        .expect("single-lane incarnation must be active at the block height");
+    let accepted_candidate_indices = (0..txs.len())
+        .map(|index| u64::try_from(index).expect("test transaction index fits u64"))
+        .collect::<Vec<_>>();
+    let accepted_transaction_hashes = txs
+        .iter()
+        .map(|tx| Hash::from(tx.hash_as_entrypoint()))
+        .collect::<Vec<_>>();
+    let mut ownership = SumeragiLanePayloadOwnership {
+        proposal_height: height.get(),
+        proposal_view: 0,
+        lane_id: LaneId::SINGLE,
+        dataspace_id: DataSpaceId::UNIVERSAL,
+        lane_incarnation,
+        lane_block_height: 1,
+        lane_block_view: 0,
+        subject_hash: Hash::prehashed([0; Hash::LENGTH]),
+        qc_mode_tag: "permissioned:signature-batch-test".to_owned(),
+        accepted_candidate_indices,
+        accepted_transaction_hashes,
+        previous_lane_block_height: 0,
+        previous_lane_block_descriptor_hash: None,
+        lane_block_descriptor_hash: Some(Hash::prehashed([0; Hash::LENGTH])),
+        lane_block_descriptor_validator_set: vec![PeerId::from(leader.public_key().clone())],
+        lane_block_descriptor_validator_count: 1,
+        lane_block_descriptor_min_quorum: 1,
+        payload_ownership_hash: Hash::prehashed([0; Hash::LENGTH]),
+        rbc_instance_hash: Hash::prehashed([0; Hash::LENGTH]),
+    };
+    let replay_hashes = ownership
+        .compute_replay_hashes()
+        .expect("signature batch ownership replay hashes must compute");
+    ownership.subject_hash = replay_hashes.subject_hash;
+    ownership.payload_ownership_hash = replay_hashes.payload_ownership_hash;
+    ownership.rbc_instance_hash = replay_hashes.rbc_instance_hash;
+    ownership.lane_block_descriptor_hash = Some(replay_hashes.lane_block_descriptor_hash);
+    let execution_context = execution_context.with_lane_payload_ownerships(vec![ownership]);
     let mut builder = BlockBuilder::new(header);
     builder.set_da_proof_policies(Some(proof_policy_bundle.clone()));
     builder.set_execution_context(Some(execution_context));
@@ -230,6 +273,7 @@ fn ed25519_batch_permutation_finds_same_bad_sig() {
     for _ in 0..32 {
         let perm = shuffle(&mut rng, &baseline);
         let block = mk_block_with_permuted_txs(
+            &state,
             perm,
             height,
             Some(genesis_hash),
@@ -288,6 +332,7 @@ fn secp256k1_batch_permutation_finds_same_bad_sig() {
     for _ in 0..32 {
         let perm = shuffle(&mut rng, &baseline);
         let block = mk_block_with_permuted_txs(
+            &state,
             perm,
             height,
             Some(genesis_hash),
@@ -332,6 +377,7 @@ fn bls_multimessage_batch_passes() {
     let txs = vec![mk("m1"), mk("m2"), mk("m3"), mk("m4"), mk("m5")];
 
     let block = mk_block_with_permuted_txs(
+        &state,
         txs,
         height,
         Some(genesis_hash),
@@ -380,6 +426,7 @@ fn bls_multimessage_batch_finds_same_bad_sig() {
     for _ in 0..32 {
         let perm = shuffle(&mut rng, &baseline);
         let block = mk_block_with_permuted_txs(
+            &state,
             perm,
             height,
             Some(genesis_hash),
@@ -440,6 +487,7 @@ fn bls_batch_permutation_finds_same_bad_sig() {
     for _ in 0..16 {
         let perm = shuffle(&mut rng, &baseline);
         let block = mk_block_with_permuted_txs(
+            &state,
             perm,
             height,
             Some(genesis_hash),

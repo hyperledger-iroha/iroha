@@ -1,4 +1,4 @@
-//! Generates PoR, PoTR, repair, and governance log fixtures.
+//! Generates PoR, PoTR, repair, and governance DAG fixtures.
 
 use std::{
     error::Error,
@@ -8,17 +8,21 @@ use std::{
 
 use ed25519_dalek::{Signer as _, SigningKey};
 use hex::encode;
+use iroha_crypto::{Algorithm, KeyPair, Signature};
 use norito::{
     core::NoritoSerialize,
     json::{Map, Value, to_string_pretty},
 };
 use sorafs_manifest::{
-    CapacityMetadataEntry, POTR_RECEIPT_VERSION_V1, PotrReceiptV1, PotrStatus, ProofStreamTier,
-    REPAIR_TASK_VERSION_V1, RepairTaskRecordV1, RepairTaskStateV1, RepairTicketId,
+    CapacityMetadataEntry, GOVERNANCE_DAG_BLOCK_VERSION_V1, GOVERNANCE_DAG_HEAD_VERSION_V1,
+    GovernanceDagBlockV1, GovernanceDagHeadV1, POTR_RECEIPT_VERSION_V1, PotrReceiptV1,
+    PotrSignatureAlgorithm, PotrSignatureV1, PotrStatus, ProofStreamTier, REPAIR_TASK_VERSION_V1,
+    RepairTaskRecordV1, RepairTaskStateV1, RepairTicketId,
     governance::{
         GOVERNANCE_LOG_VERSION_V1, GovernanceLogNodeV1, GovernanceLogPayloadV1,
         GovernanceLogSignatureV1, GovernanceSignatureAlgorithm,
     },
+    governance_dag_block_cid_v1, governance_log_node_cid_v1,
     por::{
         AUDIT_VERDICT_VERSION_V1, AuditOutcomeV1, AuditVerdictV1, POR_CHALLENGE_VERSION_V1,
         POR_PROOF_VERSION_V1, PorChallengeV1, PorProofSampleV1, PorProofV1, derive_challenge_id,
@@ -26,6 +30,7 @@ use sorafs_manifest::{
     },
     provider_advert::{AdvertSignature, SignatureAlgorithm},
     repair::QueuedRepairStateV1,
+    validate_governance_dag_head_chain_bytes,
 };
 use soranet_pq::{HedgedRngSeed, MlDsaSuite, deterministic_chacha20_rng, sign_mldsa};
 
@@ -187,7 +192,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         gateway_signature: None,
         provider_signature: None,
     };
-    potr_receipt.validate()?;
+    let gateway_key = KeyPair::try_from_seed(vec![0x11; 32], Algorithm::Ed25519)?;
+    let provider_key = KeyPair::try_from_seed(vec![0x31; 32], Algorithm::MlDsa)?;
+    let potr_receipt = sign_potr_receipt_fixture_v1(potr_receipt, &gateway_key, &provider_key)?;
     write_norito_pair(
         &potr_dir.join("receipt_v1"),
         &potr_receipt,
@@ -219,8 +226,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Governance node sample (wrap proof).
     let mut node = GovernanceLogNodeV1 {
         version: GOVERNANCE_LOG_VERSION_V1,
-        node_cid: b"bafygovernancelognode".to_vec(),
-        prev_cid: Some(b"bafygovernancelognodeprev".to_vec()),
+        node_cid: Vec::new(),
+        prev_cid: Some([0xA4; 32].to_vec()),
         timestamp: 1_700_000_700,
         publisher_peer_id: b"12D3KooWGovernancePublisher".to_vec(),
         payload: GovernanceLogPayloadV1::PorProof(proof.clone()),
@@ -230,6 +237,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             signature: Vec::new(),
         },
     };
+    node.node_cid = governance_log_node_cid_v1(
+        node.prev_cid.as_deref(),
+        node.timestamp,
+        &node.publisher_peer_id,
+        &node.payload,
+    )?;
     sign_governance_log_node_mldsa(&mut node, b"sorafs-fixture-governance-mldsa-v1")?;
     node.validate()?;
     node.verify_publisher_signature()?;
@@ -238,6 +251,153 @@ fn main() -> Result<(), Box<dyn Error>> {
         &gov_dir.join("node_v1"),
         &node,
         governance_node_json(&node, proof_digest),
+    )?;
+
+    let first_dag_node = governance_dag_node(proof.clone(), None, 1_700_000_790)?;
+    let second_dag_node =
+        governance_dag_node(proof, Some(first_dag_node.node_cid.clone()), 1_700_000_850)?;
+    let first_block = governance_dag_block(first_dag_node, None, 0, 1_700_000_800)?;
+    let second_block = governance_dag_block(
+        second_dag_node.clone(),
+        Some(first_block.block_cid.clone()),
+        1,
+        1_700_000_860,
+    )?;
+    let blocks = [first_block, second_block];
+    let head = governance_dag_head(&blocks)?;
+    for (index, block) in blocks.iter().enumerate() {
+        write_norito_pair(
+            &gov_dir.join(format!("dag_block_{index}_v1")),
+            block,
+            governance_dag_block_json(block),
+        )?;
+    }
+    write_norito_pair(
+        &gov_dir.join("dag_head_v1"),
+        &head,
+        governance_dag_head_json(&head),
+    )?;
+    let head_bytes = norito::to_bytes(&head)?;
+    let block_bytes = blocks
+        .iter()
+        .map(norito::to_bytes)
+        .collect::<Result<Vec<_>, _>>()?;
+    let block_inputs = block_bytes
+        .iter()
+        .enumerate()
+        .map(|(index, bytes)| (bytes.as_slice(), format!("dag_block_{index}_v1.to")))
+        .collect::<Vec<_>>();
+    let outcome =
+        validate_governance_dag_head_chain_bytes(&head_bytes, "dag_head_v1.to", &block_inputs, 123);
+    if !outcome.is_ok() {
+        return Err(
+            format!("generated governance DAG fixture failed validation: {outcome:?}").into(),
+        );
+    }
+    fs::write(
+        gov_dir.join("dag_head_validation_outcome_v1.json"),
+        format!("{}\n", to_string_pretty(&outcome)?),
+    )?;
+
+    let mut bad_block_signature = blocks[0].clone();
+    *bad_block_signature
+        .block_signature
+        .signature
+        .first_mut()
+        .ok_or("governance DAG fixture block signature must not be empty")? ^= 1;
+    write_norito_pair(
+        &gov_dir.join("dag_block_bad_signature_v1"),
+        &bad_block_signature,
+        governance_dag_block_json(&bad_block_signature),
+    )?;
+    let bad_block_signature_bytes = norito::to_bytes(&bad_block_signature)?;
+    let outcome = sorafs_manifest::validate_governance_dag_block_bytes(
+        &bad_block_signature_bytes,
+        "dag_block_bad_signature_v1.to",
+        None,
+        123,
+    );
+    write_expected_validation_outcome(
+        &gov_dir.join("dag_block_bad_signature_validation_outcome_v1.json"),
+        &outcome,
+        "SFS-SIG-006",
+    )?;
+
+    let mut bad_head_signature = head.clone();
+    *bad_head_signature
+        .head_signature
+        .signature
+        .first_mut()
+        .ok_or("governance DAG fixture head signature must not be empty")? ^= 1;
+    write_norito_pair(
+        &gov_dir.join("dag_head_bad_signature_v1"),
+        &bad_head_signature,
+        governance_dag_head_json(&bad_head_signature),
+    )?;
+    let bad_head_signature_bytes = norito::to_bytes(&bad_head_signature)?;
+    let outcome = validate_governance_dag_head_chain_bytes(
+        &bad_head_signature_bytes,
+        "dag_head_bad_signature_v1.to",
+        &block_inputs,
+        123,
+    );
+    write_expected_validation_outcome(
+        &gov_dir.join("dag_head_bad_signature_validation_outcome_v1.json"),
+        &outcome,
+        "SFS-SIG-007",
+    )?;
+
+    let bad_predecessor_block =
+        governance_dag_block(second_dag_node, Some(vec![0xDD; 32]), 1, 1_700_000_860)?;
+    let bad_predecessor_blocks = [blocks[0].clone(), bad_predecessor_block.clone()];
+    let bad_predecessor_head = governance_dag_head(&bad_predecessor_blocks)?;
+    write_norito_pair(
+        &gov_dir.join("dag_block_1_bad_predecessor_v1"),
+        &bad_predecessor_block,
+        governance_dag_block_json(&bad_predecessor_block),
+    )?;
+    write_norito_pair(
+        &gov_dir.join("dag_head_bad_predecessor_v1"),
+        &bad_predecessor_head,
+        governance_dag_head_json(&bad_predecessor_head),
+    )?;
+    let bad_predecessor_head_bytes = norito::to_bytes(&bad_predecessor_head)?;
+    let bad_predecessor_block_bytes = norito::to_bytes(&bad_predecessor_block)?;
+    let bad_predecessor_inputs = [
+        (block_bytes[0].as_slice(), "dag_block_0_v1.to".to_owned()),
+        (
+            bad_predecessor_block_bytes.as_slice(),
+            "dag_block_1_bad_predecessor_v1.to".to_owned(),
+        ),
+    ];
+    let outcome = validate_governance_dag_head_chain_bytes(
+        &bad_predecessor_head_bytes,
+        "dag_head_bad_predecessor_v1.to",
+        &bad_predecessor_inputs,
+        123,
+    );
+    write_expected_validation_outcome(
+        &gov_dir.join("dag_head_bad_predecessor_validation_outcome_v1.json"),
+        &outcome,
+        "SFS-GOV-006",
+    )?;
+
+    let mut trailing_block_bytes = block_bytes[0].clone();
+    trailing_block_bytes.push(0);
+    fs::write(
+        gov_dir.join("dag_block_trailing_bytes_v1.to"),
+        &trailing_block_bytes,
+    )?;
+    let outcome = sorafs_manifest::validate_governance_dag_block_bytes(
+        &trailing_block_bytes,
+        "dag_block_trailing_bytes_v1.to",
+        None,
+        123,
+    );
+    write_expected_validation_outcome(
+        &gov_dir.join("dag_block_trailing_bytes_validation_outcome_v1.json"),
+        &outcome,
+        "SFS-NORITO-001",
     )?;
 
     Ok(())
@@ -275,6 +435,158 @@ fn sign_governance_log_node_mldsa(
     Ok(())
 }
 
+fn sign_potr_receipt_fixture_v1(
+    mut receipt: PotrReceiptV1,
+    gateway_key: &KeyPair,
+    provider_key: &KeyPair,
+) -> Result<PotrReceiptV1, Box<dyn Error>> {
+    // Production ML-DSA signing intentionally draws fresh entropy. Fixtures use
+    // a domain-separated deterministic stream so regeneration is byte-identical.
+    let (gateway_algorithm, gateway_public_key) = gateway_key.public_key().try_to_bytes()?;
+    if gateway_algorithm != Algorithm::Ed25519 {
+        return Err("PoTR fixture gateway key must use Ed25519".into());
+    }
+    let gateway_public_key = gateway_public_key.to_vec();
+
+    let (provider_algorithm, provider_public_key) = provider_key.public_key().try_to_bytes()?;
+    if provider_algorithm != Algorithm::MlDsa {
+        return Err("PoTR fixture provider key must use ML-DSA-65".into());
+    }
+    let provider_public_key = provider_public_key.to_vec();
+    let (provider_private_algorithm, provider_private_key) = provider_key.private_key().to_bytes();
+    if provider_private_algorithm != Algorithm::MlDsa {
+        return Err("PoTR fixture provider private key must use ML-DSA-65".into());
+    }
+
+    receipt.gateway_signature = None;
+    receipt.provider_signature = None;
+    let payload = receipt.signing_payload_bytes()?;
+    let gateway_signature = Signature::try_new(gateway_key.private_key(), &payload)?;
+    let mut provider_signing_rng = deterministic_chacha20_rng(
+        HedgedRngSeed::from_entropy(*blake3::hash(b"sorafs-fixture-potr-mldsa-sign-v1").as_bytes()),
+        b"sorafs-fixture-potr-mldsa-sign-v1",
+    );
+    let provider_signature = sign_mldsa(
+        MlDsaSuite::MlDsa65,
+        &provider_private_key,
+        &[],
+        &payload,
+        &mut provider_signing_rng,
+    )?;
+    receipt.gateway_signature = Some(PotrSignatureV1 {
+        algorithm: PotrSignatureAlgorithm::Ed25519,
+        public_key: gateway_public_key,
+        signature: gateway_signature.payload().to_vec(),
+    });
+    receipt.provider_signature = Some(PotrSignatureV1 {
+        algorithm: PotrSignatureAlgorithm::MlDsa65,
+        public_key: provider_public_key,
+        signature: provider_signature.as_bytes().to_vec(),
+    });
+    receipt.validate()?;
+    Ok(receipt)
+}
+
+fn empty_governance_ed25519_signature() -> GovernanceLogSignatureV1 {
+    GovernanceLogSignatureV1 {
+        algorithm: GovernanceSignatureAlgorithm::Ed25519,
+        public_key: Vec::new(),
+        signature: Vec::new(),
+    }
+}
+
+fn governance_dag_node(
+    proof: PorProofV1,
+    prev_cid: Option<Vec<u8>>,
+    timestamp: u64,
+) -> Result<GovernanceLogNodeV1, Box<dyn Error>> {
+    let publisher_peer_id = b"12D3KooWGovernanceDagPublisher".to_vec();
+    let payload = GovernanceLogPayloadV1::PorProof(proof);
+    let node_cid =
+        governance_log_node_cid_v1(prev_cid.as_deref(), timestamp, &publisher_peer_id, &payload)?;
+    let mut node = GovernanceLogNodeV1 {
+        version: GOVERNANCE_LOG_VERSION_V1,
+        node_cid,
+        prev_cid,
+        timestamp,
+        publisher_peer_id,
+        payload,
+        publisher_signature: empty_governance_ed25519_signature(),
+    };
+    let signing_key = SigningKey::from_bytes(&[0xC7; 32]);
+    let signature = signing_key.sign(&node.signature_payload_bytes()?);
+    node.publisher_signature = GovernanceLogSignatureV1 {
+        algorithm: GovernanceSignatureAlgorithm::Ed25519,
+        public_key: signing_key.verifying_key().to_bytes().to_vec(),
+        signature: signature.to_bytes().to_vec(),
+    };
+    node.validate()?;
+    node.verify_publisher_signature()?;
+    Ok(node)
+}
+
+fn governance_dag_block(
+    node: GovernanceLogNodeV1,
+    prev_block_cid: Option<Vec<u8>>,
+    sequence: u64,
+    timestamp: u64,
+) -> Result<GovernanceDagBlockV1, Box<dyn Error>> {
+    let publisher_peer_id = b"12D3KooWGovernanceDagPublisher".to_vec();
+    let block_cid = governance_dag_block_cid_v1(
+        prev_block_cid.as_deref(),
+        sequence,
+        timestamp,
+        &publisher_peer_id,
+        &node,
+    )?;
+    let mut block = GovernanceDagBlockV1 {
+        version: GOVERNANCE_DAG_BLOCK_VERSION_V1,
+        block_cid,
+        prev_block_cid,
+        sequence,
+        timestamp,
+        publisher_peer_id,
+        node,
+        block_signature: empty_governance_ed25519_signature(),
+    };
+    let signing_key = SigningKey::from_bytes(&[0xC7; 32]);
+    let signature = signing_key.sign(&block.signature_payload_bytes()?);
+    block.block_signature = GovernanceLogSignatureV1 {
+        algorithm: GovernanceSignatureAlgorithm::Ed25519,
+        public_key: signing_key.verifying_key().to_bytes().to_vec(),
+        signature: signature.to_bytes().to_vec(),
+    };
+    block.validate()?;
+    Ok(block)
+}
+
+fn governance_dag_head(
+    blocks: &[GovernanceDagBlockV1],
+) -> Result<GovernanceDagHeadV1, Box<dyn Error>> {
+    let mut head = GovernanceDagHeadV1 {
+        version: GOVERNANCE_DAG_HEAD_VERSION_V1,
+        head_block_cid: blocks
+            .last()
+            .ok_or("governance DAG fixture chain must not be empty")?
+            .block_cid
+            .clone(),
+        block_count: u64::try_from(blocks.len())?,
+        generated_at: 1_700_001_000,
+        publisher_peer_id: b"12D3KooWGovernanceDagPublisher".to_vec(),
+        checkpoint_cid: None,
+        head_signature: empty_governance_ed25519_signature(),
+    };
+    let signing_key = SigningKey::from_bytes(&[0xC7; 32]);
+    let signature = signing_key.sign(&head.signature_payload_bytes()?);
+    head.head_signature = GovernanceLogSignatureV1 {
+        algorithm: GovernanceSignatureAlgorithm::Ed25519,
+        public_key: signing_key.verifying_key().to_bytes().to_vec(),
+        signature: signature.to_bytes().to_vec(),
+    };
+    head.validate()?;
+    Ok(head)
+}
+
 fn write_norito_pair<T>(
     base_path: &Path,
     value: &T,
@@ -287,6 +599,22 @@ where
     fs::write(base_path.with_extension("to"), &bytes)?;
     let json = to_string_pretty(&json_value)?;
     fs::write(base_path.with_extension("json"), json)?;
+    Ok(())
+}
+
+fn write_expected_validation_outcome(
+    path: &Path,
+    outcome: &sorafs_manifest::ValidationOutcomeV1,
+    expected_code: &str,
+) -> Result<(), Box<dyn Error>> {
+    if outcome.is_ok() || outcome.code != expected_code {
+        return Err(format!(
+            "generated negative governance DAG fixture returned {}, expected {expected_code}",
+            outcome.code
+        )
+        .into());
+    }
+    fs::write(path, format!("{}\n", to_string_pretty(outcome)?))?;
     Ok(())
 }
 
@@ -698,15 +1026,12 @@ fn potr_status(status: PotrStatus) -> &'static str {
 fn governance_node_json(node: &GovernanceLogNodeV1, proof_digest: [u8; 32]) -> Value {
     let mut map = Map::new();
     map.insert("version".into(), Value::from(node.version));
+    map.insert("node_cid_hex".into(), Value::from(encode(&node.node_cid)));
     map.insert(
-        "node_cid".into(),
-        Value::from(String::from_utf8_lossy(&node.node_cid).into_owned()),
-    );
-    map.insert(
-        "prev_cid".into(),
+        "prev_cid_hex".into(),
         node.prev_cid
             .as_ref()
-            .map(|cid| Value::from(String::from_utf8_lossy(cid).into_owned()))
+            .map(|cid| Value::from(encode(cid)))
             .unwrap_or(Value::Null),
     );
     map.insert("timestamp".into(), Value::from(node.timestamp));
@@ -733,6 +1058,105 @@ fn governance_node_json(node: &GovernanceLogNodeV1, proof_digest: [u8; 32]) -> V
     map.insert(
         "embedded_proof_digest_hex".into(),
         Value::from(encode(proof_digest)),
+    );
+    Value::Object(map)
+}
+
+fn governance_dag_block_json(block: &GovernanceDagBlockV1) -> Value {
+    let mut map = Map::new();
+    map.insert("version".into(), Value::from(block.version));
+    map.insert(
+        "block_cid_hex".into(),
+        Value::from(encode(&block.block_cid)),
+    );
+    map.insert(
+        "prev_block_cid_hex".into(),
+        block
+            .prev_block_cid
+            .as_ref()
+            .map(|cid| Value::from(encode(cid)))
+            .unwrap_or(Value::Null),
+    );
+    map.insert("sequence".into(), Value::from(block.sequence));
+    map.insert("timestamp".into(), Value::from(block.timestamp));
+    map.insert(
+        "publisher_peer_id".into(),
+        Value::from(String::from_utf8_lossy(&block.publisher_peer_id).into_owned()),
+    );
+    map.insert(
+        "node_cid_hex".into(),
+        Value::from(encode(&block.node.node_cid)),
+    );
+    map.insert(
+        "node_prev_cid_hex".into(),
+        block
+            .node
+            .prev_cid
+            .as_ref()
+            .map(|cid| Value::from(encode(cid)))
+            .unwrap_or(Value::Null),
+    );
+    map.insert("node_timestamp".into(), Value::from(block.node.timestamp));
+    map.insert(
+        "node_publisher_peer_id".into(),
+        Value::from(String::from_utf8_lossy(&block.node.publisher_peer_id).into_owned()),
+    );
+    let node_signature_algorithm = match block.node.publisher_signature.algorithm {
+        GovernanceSignatureAlgorithm::Ed25519 => "ed25519",
+        GovernanceSignatureAlgorithm::Dilithium3 => "dilithium3",
+    };
+    map.insert(
+        "node_signature_algorithm".into(),
+        Value::from(node_signature_algorithm),
+    );
+    map.insert(
+        "node_signature_public_key_hex".into(),
+        Value::from(encode(&block.node.publisher_signature.public_key)),
+    );
+    map.insert(
+        "node_signature_hex".into(),
+        Value::from(encode(&block.node.publisher_signature.signature)),
+    );
+    map.insert("signature_algorithm".into(), Value::from("ed25519"));
+    map.insert(
+        "signature_public_key_hex".into(),
+        Value::from(encode(&block.block_signature.public_key)),
+    );
+    map.insert(
+        "signature_hex".into(),
+        Value::from(encode(&block.block_signature.signature)),
+    );
+    Value::Object(map)
+}
+
+fn governance_dag_head_json(head: &GovernanceDagHeadV1) -> Value {
+    let mut map = Map::new();
+    map.insert("version".into(), Value::from(head.version));
+    map.insert(
+        "head_block_cid_hex".into(),
+        Value::from(encode(&head.head_block_cid)),
+    );
+    map.insert("block_count".into(), Value::from(head.block_count));
+    map.insert("generated_at".into(), Value::from(head.generated_at));
+    map.insert(
+        "publisher_peer_id".into(),
+        Value::from(String::from_utf8_lossy(&head.publisher_peer_id).into_owned()),
+    );
+    map.insert(
+        "checkpoint_cid_hex".into(),
+        head.checkpoint_cid
+            .as_ref()
+            .map(|cid| Value::from(encode(cid)))
+            .unwrap_or(Value::Null),
+    );
+    map.insert("signature_algorithm".into(), Value::from("ed25519"));
+    map.insert(
+        "signature_public_key_hex".into(),
+        Value::from(encode(&head.head_signature.public_key)),
+    );
+    map.insert(
+        "signature_hex".into(),
+        Value::from(encode(&head.head_signature.signature)),
     );
     Value::Object(map)
 }

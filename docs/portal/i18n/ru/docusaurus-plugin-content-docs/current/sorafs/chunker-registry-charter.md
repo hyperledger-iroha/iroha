@@ -56,7 +56,7 @@ SDKs). Она фиксирует инварианты alias и handle, пров�
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+     cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - Отправляет PR, содержащий fixtures, предложение, отчет о детерминизме и
@@ -94,14 +94,14 @@ SDKs). Она фиксирует инварианты alias и handle, пров�
 
 ## Ожидания от tooling
 
-- `sorafs_manifest_chunk_store` и `sorafs_manifest_stub` предоставляют:
+- `sorafs_manifest_chunk_store` и `sorafs_manifest_builder` предоставляют:
   - `--list-profiles` для инспекции реестра.
   - `--promote-profile=<handle>` для генерации канонического блока метаданных,
     используемого при продвижении профиля.
   - `--json-out=-` для стриминга отчетов в stdout, обеспечивая воспроизводимые
     логи ревью.
 - `ensure_charter_compliance()` вызывается при запуске релевантных бинарников
-  (`manifest_chunk_store`, `provider_advert_stub`). CI тесты должны падать, если
+  (`manifest_chunk_store`, `sorafs_provider_advert`). CI тесты должны падать, если
   новые записи нарушают хартию.
 
 ## Документирование

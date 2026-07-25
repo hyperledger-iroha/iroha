@@ -65,7 +65,7 @@ SF-2c のロードマップ、市場、プロバイダーの決定
 - ヘルパー (`CapacityMetadataEntry`、`PricingScheduleV1`、レーン/割り当て/SLA) をサポートするヘルパーовибок、которые могут переиспользовать CI およびダウンストリーム ツール。【crates/sorafs_manifest/src/capacity.rs:230】
 - `PinProviderRegistry` オンチェーン スナップショット через `/v1/sorafs/capacity/state`、プロバイダーと料金台帳を表示します。 Norito JSON.【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
 - ハンドル、ハンドル、レーン、ガードрепликации и проверки диапазонов телеметрии, чтобы регрессии всплывали сразу в CI.【crates/sorafs_manifest/src/capacity.rs:792】
-- オペレーター ツール: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` の仕様と Norito ペイロード、base64 BLOB および JSON サマリー、説明могли подготовить フィクスチャ `/v1/sorafs/capacity/declare`、`/v1/sorafs/capacity/telemetry` およびレプリケーション順序フィクスチャ с локальной валидацией.【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 リファレンスフィクスチャーは `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`、`order_v1.to`) と `cargo run -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order` です。
+- オペレーター ツール: `sorafs_manifest_builder capacity {declaration, telemetry, replication-order}` の仕様と Norito ペイロード、base64 BLOB および JSON サマリー、説明могли подготовить フィクスチャ `/v1/sorafs/capacity/declare`、`/v1/sorafs/capacity/telemetry` およびレプリケーション順序フィクスチャ с локальной валидацией.【crates/sorafs_car/src/bin/sorafs_manifest_builder/capacity.rs:1】 リファレンスフィクスチャーは `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`、`order_v1.to`) と `cargo run -p sorafs_car --bin sorafs_manifest_builder -- capacity replication-order` です。
 
 ### 2. コントロール プレーン
 
@@ -155,7 +155,7 @@ SF-2c のロードマップ、市場、プロバイダーの決定
   ガバナンス パケットです。
 
 ### 争いと斬り合い
-- 紛争 `sorafs_manifest_stub capacity dispute` (テスト:
+- 紛争 `sorafs_manifest_builder capacity dispute` (テスト:
   `cargo test -p sorafs_car --test capacity_cli`)、ペイロードが表示されます。
 - `cargo test -p iroha_core -- capacity_dispute_replay_is_deterministic` または наборы
   втрафов (`record_capacity_telemetry_penalises_persistent_under_delivery`)、чтобы доказать
@@ -164,7 +164,7 @@ SF-2c のロードマップ、市場、プロバイダーの決定
   эскалации;承認ストライキと検証レポート。
 
 ### Смоук-тесты онбординга および выхода プロバイダー
-- Регенерируйте アーティファクト деклараций/телеметрии через `sorafs_manifest_stub capacity ...` и
+- Регенерируйте アーティファクト деклараций/телеметрии через `sorafs_manifest_builder capacity ...` и
   CLI テストは (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`) をテストします。
 - Отправляйте через Torii (`/v1/sorafs/capacity/declare`), затем фиксируйте
   `/v1/sorafs/capacity/state` は Grafana です。 Следуйте flow выхода в

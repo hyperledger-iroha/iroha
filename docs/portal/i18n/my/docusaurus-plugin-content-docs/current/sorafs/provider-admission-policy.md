@@ -41,7 +41,7 @@ SoraFS Architecture RFC တွင် အကွပ်ပြပြီး ကျန
 ## ဝင်ခွင့်အလုပ်အသွားအလာ
 
 1. **အဆိုပြုချက် ဖန်တီးခြင်း**
-   - CLI: `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission proposal …` ထည့်ပါ။
+   - CLI: `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal …` ထည့်ပါ။
      `ProviderAdmissionProposalV1` + သက်သေအတွဲကို ထုတ်လုပ်သည်။
    - အတည်ပြုခြင်း- `profile_id` တွင် လိုအပ်သော အကွက်များ၊ လောင်းကြေး > 0၊ canonical chunker လက်ကိုင်ကို သေချာပါစေ။
 2. **အုပ်ချုပ်မှု ထောက်ခံချက်**
@@ -61,7 +61,7 @@ SoraFS Architecture RFC တွင် အကွပ်ပြပြီး ကျန
 | ဧရိယာ | တာဝန် | ပိုင်ရှင်(များ) | အဆင့်အတန်း |
 |------|------|----------------|--------|
 | Schema | `ProviderAdmissionProposalV1`၊ `ProviderAdmissionEnvelopeV1`၊ `EndpointAttestationV1` (I18NT0000001X) ကို `crates/sorafs_manifest/src/provider_admission.rs` အောက်တွင် သတ်မှတ်ပါ။ `sorafs_manifest::provider_admission` တွင် အတည်ပြုပေးသော အကူအညီများဖြင့် အကောင်အထည်ဖော်ထားသည်။【F:crates/sorafs_manifest/src/provider_admission.rs#L1】 | သိမ်းဆည်း/အုပ်ချုပ်မှု | ✅ ပြီးစီး |
-| CLI tooling | `sorafs_manifest_stub` ကို ကွန်မန်းခွဲများဖြင့် တိုးချဲ့ပါ- `provider-admission proposal`, `provider-admission sign`, `provider-admission verify`။ | Tooling WG | ✅ |
+| CLI tooling | `sorafs_manifest_builder` ကို ကွန်မန်းခွဲများဖြင့် တိုးချဲ့ပါ- `provider-admission proposal`, `provider-admission sign`, `provider-admission verify`။ | Tooling WG | ✅ |
 
 ယခု CLI စီးဆင်းမှုသည် အလယ်အလတ်လက်မှတ်အစုအဝေးများ (`--endpoint-attestation-intermediate`) ကို လက်ခံသည်
 Canonical proposal/ envelope bytes နှင့် `sign`/`verify` ကာလအတွင်း ကောင်စီ၏ လက်မှတ်များကို သက်သေပြပါသည်။ အော်ပရေတာတွေ လုပ်နိုင်ပါတယ်။
@@ -70,7 +70,7 @@ Canonical proposal/ envelope bytes နှင့် `sign`/`verify` ကာလအ�
 
 ### CLI အကိုးအကား
 
-`cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission …` မှတဆင့် command တစ်ခုစီကို run ပါ။
+`cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission …` မှတဆင့် command တစ်ခုစီကို run ပါ။
 
 - `proposal`
   - လိုအပ်သောအလံများ- `--provider-id=<hex32>`၊ `--chunker-profile=<namespace.name@semver>`၊
@@ -109,7 +109,7 @@ Canonical proposal/ envelope bytes နှင့် `sign`/`verify` ကာလအ�
     အချေအတင်နှင့် လက်မှတ်အရေအတွက်ကို ဖမ်းယူခြင်း။
 | အတည်ပြုခြင်း | Torii၊ ဂိတ်ဝေးများနှင့် `sorafs-node` အသုံးပြုထားသော မျှဝေထားသော အတည်ပြုစနစ်ကို အကောင်အထည်ဖော်ပါ။ ယူနစ် + CLI ပေါင်းစပ်စမ်းသပ်မှုများကို ပံ့ပိုးပေးပါသည်။【F:crates/sorafs_manifest/src/provider_admission.rs#L1】【F:crates/iroha_torii/src/sorafs/admission.rs#L1】 | ကွန်ရက်ချိတ်ဆက်ခြင်း TL / Storage | ✅ ပြီးစီး |
 | Torii ပေါင်းစပ်မှု | Torii တွင် ကြော်ငြာထည့်သွင်းခြင်း၊ မူဝါဒပြင်ပကြော်ငြာများကို ငြင်းပယ်ခြင်း၊ တယ်လီမီတာထုတ်ခြင်း | ကွန်ရက်ချိတ်ဆက်ခြင်း TL | ✅ ပြီးစီး | ယခု Torii သည် အုပ်ချုပ်မှုစာအိတ်များ (`torii.sorafs.admission_envelopes_dir`) ကို စားသုံးနေစဉ်အတွင်း အချေအတင်/လက်မှတ် ကိုက်ညီမှုများကို စစ်ဆေးပြီး မျက်နှာပြင်များ ဝင်ခွင့်ပေးသည် telemetry
-| သက်တမ်းတိုး | သက်တမ်းတိုးခြင်း/ပြန်လည်ရုတ်သိမ်းခြင်းအစီအစဉ် + CLI အထောက်အကူများထည့်ပါ၊ မှတ်တမ်းစာအုပ်တွင် ဘဝသံသရာလမ်းညွှန်ကို ထုတ်ဝေပါ (အောက်ပါစာအုပ်နှင့် CLI ညွှန်ကြားချက်များတွင် ကြည့်ပါ `provider-admission renewal`/`revoke`)။【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L477】【docs/source/sorafs/provider_admission_policy.md:120】 | သိမ်းဆည်း/အုပ်ချုပ်မှု | ✅ ပြီးစီး |
+| သက်တမ်းတိုး | သက်တမ်းတိုးခြင်း/ပြန်လည်ရုတ်သိမ်းခြင်းအစီအစဉ် + CLI အထောက်အကူများထည့်ပါ၊ မှတ်တမ်းစာအုပ်တွင် ဘဝသံသရာလမ်းညွှန်ကို ထုတ်ဝေပါ (အောက်ပါစာအုပ်နှင့် CLI ညွှန်ကြားချက်များတွင် ကြည့်ပါ `provider-admission renewal`/`revoke`)။【crates/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#L477】【docs/source/sorafs/provider_admission_policy.md:120】 | သိမ်းဆည်း/အုပ်ချုပ်မှု | ✅ ပြီးစီး |
 | Telemetry | `provider_admission` ဒိုင်ခွက်များနှင့် သတိပေးချက်များ (သက်တမ်းတိုးခြင်း၊ စာအိတ်သက်တမ်းကုန်ဆုံးခြင်း) ကို သတ်မှတ်ပါ။ | မြင်နိုင်စွမ်း | 🟠 လုပ်ဆောင်နေဆဲ | ကောင်တာ `torii_sorafs_admission_total{result,reason}` ရှိပြီး၊ dashboards/alerts ဆိုင်းငံ့ထားသည်။【F:crates/iroha_telemetry/src/metrics.rs#L3798】【F:docs/source/telemetry.md#L614】 |
 ### သက်တမ်းတိုးခြင်းနှင့် ရုတ်သိမ်းခြင်းဆိုင်ရာ စာအုပ်
 
@@ -117,7 +117,7 @@ Canonical proposal/ envelope bytes နှင့် `sign`/`verify` ကာလအ�
 1. `provider-admission proposal` နှင့် `provider-admission sign` ဖြင့် ဆက်ခံမည့် အဆိုပြုချက်/ကြော်ငြာအတွဲကို တည်ဆောက်ပါ၊ `--retention-epoch` ကို တိုးမြှင့်ပြီး လိုအပ်သလို လောင်းကြေး/အဆုံးမှတ်များကို အပ်ဒိတ်လုပ်ပါ။
 2. အကောင်အထည်ဖော်ပါ။  
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission \
+   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -127,7 +127,7 @@ Canonical proposal/ envelope bytes နှင့် `sign`/`verify` ကာလအ�
    ```
    အမိန့်သည် မပြောင်းလဲနိုင်သော စွမ်းရည်/ပရိုဖိုင် အကွက်များမှတစ်ဆင့် မှန်ကန်ကြောင်း အတည်ပြုသည်။
    `AdmissionRecord::apply_renewal`၊ `ProviderAdmissionRenewalV1` ကို ထုတ်လွှတ်ပြီး အချေအတင်များကို ပရင့်ထုတ်သည်
-   အုပ်ချုပ်မှုမှတ်တမ်း။【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L477】【F:crates/sorafs_manifest/src/provider_admission.rs#L422】
+   အုပ်ချုပ်မှုမှတ်တမ်း။【crates/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#L477】【F:crates/sorafs_manifest/src/provider_admission.rs#L422】
 3. `torii.sorafs.admission_envelopes_dir` ရှိ ယခင်စာအိတ်ကို အစားထိုးပါ၊ သက်တမ်းတိုးခြင်း Norito/JSON ကို အုပ်ချုပ်မှုသိုလှောင်ရာသို့ အပ်နှံပြီး သက်တမ်းတိုး hash + retention အပိုင်းကို `docs/source/sorafs/migration_ledger.md` သို့ ပေါင်းထည့်ပါ။
 4. စာအိတ်အသစ်သည် တိုက်ရိုက်လွှင့်နေပြီး `torii_sorafs_admission_total{result="accepted",reason="stored"}` ကို ထည့်သွင်းအတည်ပြုရန် အော်ပရေတာများအား အကြောင်းကြားပါ။
 5. `cargo run -p sorafs_car --bin provider_admission_fixtures --features cli` မှတစ်ဆင့် canonical fixtures များကို ပြန်လည်ထုတ်ပေးပြီး ကတိပြုပါ။ CI (`ci/check_sorafs_fixtures.sh`) သည် Norito အထွက်များ တည်ငြိမ်နေစေရန် အတည်ပြုသည်။
@@ -135,7 +135,7 @@ Canonical proposal/ envelope bytes နှင့် `sign`/`verify` ကာလအ�
 #### အရေးပေါ်ရုတ်သိမ်းခြင်း။
 1. အပေးအယူခံရသော စာအိတ်ကို ဖော်ထုတ်ပြီး ပြန်လည်ရုတ်သိမ်းကြောင်း ထုတ်ပြန်ပါ-
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission \
+   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \
@@ -146,7 +146,7 @@ Canonical proposal/ envelope bytes နှင့် `sign`/`verify` ကာလအ�
      --json-out=governance/providers/<id>/revocation.json
    ```
    CLI သည် `ProviderAdmissionRevocationV1` ကို ဆိုင်းဘုတ်တပ်ပြီး သတ်မှတ်လက်မှတ်ကို အတည်ပြုသည် ။
-   `verify_revocation_signatures`၊ နှင့် ပြန်လည်ရုပ်သိမ်းခြင်းဆိုင်ရာ အစီရင်ခံတင်ပြပါသည်။ 【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L593】【F:crates/sorafs_manifest/src/provider_admission.rs#L486】
+   `verify_revocation_signatures`၊ နှင့် ပြန်လည်ရုပ်သိမ်းခြင်းဆိုင်ရာ အစီရင်ခံတင်ပြပါသည်။ 【crates/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#L593】【F:crates/sorafs_manifest/src/provider_admission.rs#L486】
 2. `torii.sorafs.admission_envelopes_dir` မှ စာအိတ်ကို ဖယ်ရှားပါ၊ ရုပ်သိမ်းခြင်း Norito/JSON ကို ဝင်ခွင့် ကက်ရှ်များသို့ ဖြန့်ဝေပြီး အကြောင်းပြချက် hash ကို အုပ်ချုပ်မှု မိနစ်များတွင် မှတ်တမ်းတင်ပါ။
 3. ရုတ်သိမ်းထားသော ကြော်ငြာကို ကက်ရှ်များ ချပေးကြောင်း အတည်ပြုရန် `torii_sorafs_admission_total{result="rejected",reason="admission_missing"}` ကို ကြည့်ရှုပါ။ ရုပ်သိမ်းခြင်းဆိုင်ရာ ပစ္စည်းများကို အဖြစ်အပျက် နောက်ကြောင်းပြန်တွင် သိမ်းဆည်းပါ။
 

@@ -68,11 +68,11 @@ cargo test -p sorafs_chunker streaming_backpressure_fuzz_matches_batch
 ## 3. قم بإنشاء بيان وتوقيعه
 
 قم بتغليف خطة القطعة والأسماء المستعارة وتوقيعات الإدارة في بيان باستخدام
-`sorafs-manifest-stub`. يعرض الأمر أدناه حمولة ملف واحد؛ تمرير
+`sorafs-manifest-builder`. يعرض الأمر أدناه حمولة ملف واحد؛ تمرير
 مسار دليل لحزم شجرة (تقوم واجهة سطر الأوامر (CLI) بتوجيهها بشكل معجمي).
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
+cargo run -p sorafs_manifest --bin sorafs-manifest-builder -- \
   /tmp/docs.txt \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --manifest-out=/tmp/docs.manifest \

@@ -65,7 +65,7 @@ SF-2C روڈ میپ نے ایک منظم مارکیٹ پلیس متعارف کر
 - جنرل مددگار (`CapacityMetadataEntry` ، `PricingScheduleV1` ، لین/اسائنمنٹ/SLA توثیق کرنے والے) ڈٹرمینسٹک کلیدی جانچ پڑتال اور غلطی کی اطلاع دہندگی فراہم کرتے ہیں جو CI اور بہاو ٹولنگ کے ذریعہ دوبارہ استعمال کیا جاسکتا ہے۔
 - `PinProviderRegistry` اب `/v1/sorafs/capacity/state` کے ذریعے آن چین سنیپ شاٹ شائع کرتا ہے ، جو فراہم کنندہ کے اعلامیہ اور فیس لیجر اندراجات کو امتزاج Norito کے پیچھے جوڑتا ہے۔ JSON. 【کریٹس/اروہ_ٹوری/ایس آر سی/سورافس/رجسٹری۔
 - توثیق کی کوریج کیننیکل ہینڈلز ، ڈپلیکیٹ کا پتہ لگانے ، لین کی حدود ، نقل کی منزل کے محافظوں اور ٹیلی میٹری رینج کی جانچ پڑتال کے ساتھ تعمیل چیک کرتی ہے تاکہ سی آئی میں فوری طور پر رجعتیں پاپ ہوجائیں۔
-- آپریٹر ٹولنگ: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` انسانی پڑھنے کے قابل چشمیوں کو کیننیکل Norito پے لوڈ ، بیس 64 بلبس اور JSON خلاصے میں تبدیل کرتا ہے تاکہ آپریٹرز فکسچر `/v1/sorafs/capacity/declare` ، `/v1/sorafs/capacity/telemetry` اور مقامی سے نقل تیار کرنے کے آرڈر فکسچر کو تیار کرسکیں۔ توثیق### 2. کنٹرول ہوائی جہاز کا انضمام
+- آپریٹر ٹولنگ: `sorafs_manifest_builder capacity {declaration, telemetry, replication-order}` انسانی پڑھنے کے قابل چشمیوں کو کیننیکل Norito پے لوڈ ، بیس 64 بلبس اور JSON خلاصے میں تبدیل کرتا ہے تاکہ آپریٹرز فکسچر `/v1/sorafs/capacity/declare` ، `/v1/sorafs/capacity/telemetry` اور مقامی سے نقل تیار کرنے کے آرڈر فکسچر کو تیار کرسکیں۔ توثیق### 2. کنٹرول ہوائی جہاز کا انضمام
 
 | مسئلہ | مالک (زبانیں) | نوٹ |
 | ----------- | --------- | ------- |
@@ -153,7 +153,7 @@ SF-2C روڈ میپ نے ایک منظم مارکیٹ پلیس متعارف کر
   گورننس پیکٹ کے ساتھ۔
 
 ### تنازعہ اور کمی کا ثبوت
-- `sorafs_manifest_stub capacity dispute` کے ذریعے تنازعات جمع کروائیں (ٹیسٹ:
+- `sorafs_manifest_builder capacity dispute` کے ذریعے تنازعات جمع کروائیں (ٹیسٹ:
   `cargo test -p sorafs_car --test capacity_cli`) تاکہ پے لوڈز کیننیکل رہیں۔
 - `cargo test -p iroha_core -- capacity_dispute_replay_is_deterministic` اور سیٹ چلائیں
   جرمانے (`record_capacity_telemetry_penalises_persistent_under_delivery`) ثابت کرنے کے لئے
@@ -162,7 +162,7 @@ SF-2C روڈ میپ نے ایک منظم مارکیٹ پلیس متعارف کر
   اضافے ؛ لنک منظوری توثیق کی رپورٹ پر دوبارہ ہڑتال کریں۔
 
 ### جہاز پر سوار ہونے اور باہر جانے والے فراہم کرنے والوں کے لئے دھواں ٹیسٹ
-- `sorafs_manifest_stub capacity ...` کے ذریعے نمونے/ٹیلی میٹری کو دوبارہ تخلیق کریں
+- `sorafs_manifest_builder capacity ...` کے ذریعے نمونے/ٹیلی میٹری کو دوبارہ تخلیق کریں
   جمع کروانے سے پہلے CLI ٹیسٹ چلائیں (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`)۔
 - Torii (`/v1/sorafs/capacity/declare`) کے ذریعے بھیجیں ، پھر ارتکاب کریں
   `/v1/sorafs/capacity/state` پلس اسکرین شاٹس Grafana۔ خارجی بہاؤ کی پیروی کریں

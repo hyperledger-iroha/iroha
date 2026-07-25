@@ -29,7 +29,7 @@ This runbook guides governance operators through filing SoraFS capacity disputes
 
 ## 3. File the Dispute
 
-1. Create a spec JSON for `sorafs_manifest_stub capacity dispute`:
+1. Create a spec JSON for `sorafs_manifest_builder capacity dispute`:
 
    ```json
    {
@@ -52,7 +52,7 @@ This runbook guides governance operators through filing SoraFS capacity disputes
 2. Run the CLI:
 
    ```bash
-   sorafs_manifest_stub capacity dispute \
+   sorafs_manifest_builder capacity dispute \
      --spec=dispute.json \
      --norito-out=dispute.to \
      --base64-out=dispute.b64 \
@@ -69,7 +69,7 @@ This runbook guides governance operators through filing SoraFS capacity disputes
 
 1. **Grace window:** notify the provider of impending revocation; allow evacuation of pinned data when policy permits.
 2. **Generate `ProviderAdmissionRevocationV1`:**
-   - Use `sorafs_manifest_stub provider-admission revoke` with the approved reason.
+   - Use `sorafs_manifest_builder provider-admission revoke` with the approved reason.
    - Verify signatures and the revocation digest.
 3. **Publish revocation:**
    - Submit the revocation request to Torii.
@@ -84,7 +84,7 @@ This runbook guides governance operators through filing SoraFS capacity disputes
 
 ## 6. Reference Materials
 
-- `sorafs_manifest_stub capacity dispute --help`
+- `sorafs_manifest_builder capacity dispute --help`
 - `docs/source/sorafs/storage_capacity_marketplace.md` (dispute section)
 - `docs/source/sorafs/provider_admission_policy.md` (revocation workflow)
 - Observability dashboard: `SoraFS / Capacity Providers`

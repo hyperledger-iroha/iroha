@@ -2,7 +2,10 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    sync::{Arc, RwLock},
+    sync::{
+        Arc, RwLock,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 use iroha_data_model::metadata::Metadata;
@@ -12,8 +15,8 @@ use rand::{RngCore, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use sorafs_car::PorMerkleTree;
 use sorafs_manifest::por::{
-    AuditOutcomeV1, AuditVerdictV1, PorChallengeV1, PorProofV1, PorProofValidationError,
-    derive_challenge_id, derive_challenge_seed,
+    AuditOutcomeV1, AuditVerdictV1, PorChallengeV1, PorChallengeValidationError, PorProofV1,
+    PorProofValidationError, derive_challenge_id, derive_challenge_seed,
 };
 use thiserror::Error;
 
@@ -516,6 +519,62 @@ pub struct PorVerdictStats {
     pub failed_samples: u64,
 }
 
+/// Runtime counters for challenge randomness and accepted-proof latency.
+///
+/// The counters are process-local telemetry and deliberately do not participate
+/// in replay-protection checkpoints. Durable challenge/proof state remains the
+/// source of truth after restart.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PorProtocolMetricsSnapshot {
+    /// Distinct valid challenges admitted by this process.
+    pub challenges_total: u64,
+    /// Distinct challenges carrying a provider VRF output and proof.
+    pub vrf_challenges: u64,
+    /// Distinct forced challenges admitted without a provider VRF.
+    pub forced_challenges: u64,
+    /// Challenge seed and challenge-id bindings successfully validated.
+    pub seed_bindings_validated: u64,
+    /// Challenge submissions rejected for an invalid seed or challenge-id binding.
+    pub seed_binding_failures: u64,
+    /// Distinct provider proofs accepted by this process.
+    pub proofs_accepted: u64,
+    /// Number of accepted proof-latency observations.
+    pub proof_latency_samples: u64,
+    /// Sum of accepted proof latency in milliseconds.
+    pub proof_latency_total_ms: u64,
+    /// Maximum accepted proof latency in milliseconds.
+    pub proof_latency_max_ms: u64,
+}
+
+#[derive(Debug, Default)]
+struct PorProtocolMetrics {
+    challenges_total: AtomicU64,
+    vrf_challenges: AtomicU64,
+    forced_challenges: AtomicU64,
+    seed_bindings_validated: AtomicU64,
+    seed_binding_failures: AtomicU64,
+    proofs_accepted: AtomicU64,
+    proof_latency_samples: AtomicU64,
+    proof_latency_total_ms: AtomicU64,
+    proof_latency_max_ms: AtomicU64,
+}
+
+impl PorProtocolMetrics {
+    fn snapshot(&self) -> PorProtocolMetricsSnapshot {
+        PorProtocolMetricsSnapshot {
+            challenges_total: self.challenges_total.load(Ordering::Relaxed),
+            vrf_challenges: self.vrf_challenges.load(Ordering::Relaxed),
+            forced_challenges: self.forced_challenges.load(Ordering::Relaxed),
+            seed_bindings_validated: self.seed_bindings_validated.load(Ordering::Relaxed),
+            seed_binding_failures: self.seed_binding_failures.load(Ordering::Relaxed),
+            proofs_accepted: self.proofs_accepted.load(Ordering::Relaxed),
+            proof_latency_samples: self.proof_latency_samples.load(Ordering::Relaxed),
+            proof_latency_total_ms: self.proof_latency_total_ms.load(Ordering::Relaxed),
+            proof_latency_max_ms: self.proof_latency_max_ms.load(Ordering::Relaxed),
+        }
+    }
+}
+
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 struct ChallengeState {
     challenge: PorChallengeV1,
@@ -548,9 +607,19 @@ pub(crate) struct PorTrackerCheckpointV1 {
 }
 
 /// Tracks the lifecycle of PoR challenges, proofs, and verdicts.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct PorTracker {
     inner: Arc<RwLock<PorTrackerState>>,
+    metrics: Arc<PorProtocolMetrics>,
+}
+
+impl Default for PorTracker {
+    fn default() -> Self {
+        Self {
+            inner: Arc::new(RwLock::new(PorTrackerState::default())),
+            metrics: Arc::new(PorProtocolMetrics::default()),
+        }
+    }
 }
 
 impl PorTracker {
@@ -562,6 +631,7 @@ impl PorTracker {
                 entry_limit: entry_limit.max(1),
                 ..PorTrackerState::default()
             })),
+            metrics: Arc::new(PorProtocolMetrics::default()),
         }
     }
 
@@ -570,9 +640,18 @@ impl PorTracker {
         &self,
         challenge: &PorChallengeV1,
     ) -> Result<(), PorTrackerError> {
-        challenge
-            .validate()
-            .map_err(PorTrackerError::ChallengeInvalid)?;
+        if let Err(error) = challenge.validate() {
+            if matches!(
+                error,
+                PorChallengeValidationError::SeedMismatch
+                    | PorChallengeValidationError::ChallengeIdMismatch
+            ) {
+                self.metrics
+                    .seed_binding_failures
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            return Err(PorTrackerError::ChallengeInvalid(error));
+        }
         let mut state = self.inner.write().expect("por tracker poisoned");
         if let Some(finalized) = state.finalized.get(&challenge.challenge_id) {
             return if finalized == challenge {
@@ -596,6 +675,23 @@ impl PorTracker {
                     proof_digest: None,
                     proof_submitted_at: None,
                 });
+                self.metrics
+                    .challenges_total
+                    .fetch_add(1, Ordering::Relaxed);
+                self.metrics
+                    .seed_bindings_validated
+                    .fetch_add(1, Ordering::Relaxed);
+                if challenge.forced {
+                    self.metrics
+                        .forced_challenges
+                        .fetch_add(1, Ordering::Relaxed);
+                } else {
+                    debug_assert!(
+                        challenge.vrf_output.is_some() && challenge.vrf_proof.is_some(),
+                        "validated non-forced PoR challenge must carry a VRF bundle"
+                    );
+                    self.metrics.vrf_challenges.fetch_add(1, Ordering::Relaxed);
+                }
                 Ok(())
             }
             std::collections::hash_map::Entry::Occupied(occupied) => {
@@ -662,7 +758,27 @@ impl PorTracker {
         }
         state.proof_digest = Some(proof.proof_digest());
         state.proof_submitted_at = Some(proof.submitted_at);
+        let latency_ms = proof
+            .submitted_at
+            .saturating_sub(state.challenge.issued_at)
+            .saturating_mul(1_000);
+        self.metrics.proofs_accepted.fetch_add(1, Ordering::Relaxed);
+        self.metrics
+            .proof_latency_samples
+            .fetch_add(1, Ordering::Relaxed);
+        self.metrics
+            .proof_latency_total_ms
+            .fetch_add(latency_ms, Ordering::Relaxed);
+        self.metrics
+            .proof_latency_max_ms
+            .fetch_max(latency_ms, Ordering::Relaxed);
         Ok(())
+    }
+
+    /// Return the current process-local PoR protocol telemetry snapshot.
+    #[must_use]
+    pub fn protocol_metrics(&self) -> PorProtocolMetricsSnapshot {
+        self.metrics.snapshot()
     }
 
     /// Finalise a challenge using an audit verdict.
@@ -1376,6 +1492,69 @@ mod tests {
             PorVerdictStats {
                 success_samples: 2,
                 failed_samples: 0
+            }
+        );
+    }
+
+    #[test]
+    fn tracker_reports_vrf_seed_and_proof_latency_metrics_without_replay_inflation() {
+        let tracker = PorTracker::default();
+        let challenge = sample_challenge();
+        tracker.record_challenge(&challenge).unwrap();
+        tracker
+            .record_challenge(&challenge)
+            .expect("exact challenge replay is idempotent");
+        let proof = sample_proof(&challenge);
+        tracker
+            .record_proof(&proof, &sample_provider_key())
+            .expect("record proof");
+        assert!(matches!(
+            tracker.record_proof(&proof, &sample_provider_key()),
+            Err(PorTrackerError::DuplicateProof)
+        ));
+
+        let mut forced = next_challenge(&challenge, 1);
+        forced.forced = true;
+        forced.vrf_output = None;
+        forced.vrf_proof = None;
+        forced.seed = derive_challenge_seed(
+            &forced.drand_randomness,
+            None,
+            &forced.manifest_digest,
+            forced.epoch_id,
+        );
+        forced.challenge_id = derive_challenge_id(
+            &forced.seed,
+            &forced.manifest_digest,
+            &forced.provider_id,
+            forced.epoch_id,
+            forced.drand_round,
+        );
+        tracker
+            .record_challenge(&forced)
+            .expect("record forced challenge");
+
+        let mut invalid_seed = next_challenge(&forced, 1);
+        invalid_seed.seed[0] ^= 1;
+        assert!(matches!(
+            tracker.record_challenge(&invalid_seed),
+            Err(PorTrackerError::ChallengeInvalid(
+                PorChallengeValidationError::SeedMismatch
+            ))
+        ));
+
+        assert_eq!(
+            tracker.protocol_metrics(),
+            PorProtocolMetricsSnapshot {
+                challenges_total: 2,
+                vrf_challenges: 1,
+                forced_challenges: 1,
+                seed_bindings_validated: 2,
+                seed_binding_failures: 1,
+                proofs_accepted: 1,
+                proof_latency_samples: 1,
+                proof_latency_total_ms: 100_000,
+                proof_latency_max_ms: 100_000,
             }
         );
     }

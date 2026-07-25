@@ -65,7 +65,7 @@ SDK). Impone as invariantes de alias e identificadores verificados por
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+     cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - Envie um PR que contenha jogos, propuesta, relatório de determinismo e
@@ -101,14 +101,14 @@ SDK). Impone as invariantes de alias e identificadores verificados por
 
 ## Expectativas de ferramentas
 
-- `sorafs_manifest_chunk_store` e `sorafs_manifest_stub` exposição:
+- `sorafs_manifest_chunk_store` e `sorafs_manifest_builder` exposição:
   - `--list-profiles` para inspeção de registro.
   - `--promote-profile=<handle>` para gerar o bloco de metadados canônicos usados
     para promover um perfil.
   - `--json-out=-` para transmitir relatórios para stdout, habilitando logs de revisão
     reprodutíveis.
 - `ensure_charter_compliance()` invoca o início nos binários relevantes
-  (`manifest_chunk_store`, `provider_advert_stub`). As tentativas de CI devem falhar
+  (`manifest_chunk_store`, `sorafs_provider_advert`). As tentativas de CI devem falhar
   novas entradas violam a carta.
 
 ## Registro

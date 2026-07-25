@@ -119,7 +119,7 @@ groups:
    - `iroha app sorafs providers list` چلائیں اور تصدیق کریں کہ اشتہاری صلاحیتیں نقل کی ضروریات کو پورا کرتی ہیں۔
    - فراہمی شدہ GIB اور POR کامیابی کی تصدیق کے لئے `torii_sorafs_capacity_*` گیجز چیک کریں۔
 3. ** دوبارہ نقل کی اصلاح **
-   - `sorafs_manifest_stub capacity replication-order` کے ذریعے نئے آرڈر جاری کریں جب بیکلاگ سلیک (`stat="avg"`) 5 عہدوں سے نیچے گرتا ہے (مینی فیسٹ/کار پیکیجنگ `iroha app sorafs toolkit pack` استعمال کرتا ہے)۔
+   - `sorafs_manifest_builder capacity replication-order` کے ذریعے نئے آرڈر جاری کریں جب بیکلاگ سلیک (`stat="avg"`) 5 عہدوں سے نیچے گرتا ہے (مینی فیسٹ/کار پیکیجنگ `iroha app sorafs toolkit pack` استعمال کرتا ہے)۔
    - گورننس کو مطلع کریں اگر عرفی ناموں کے پاس فعال مینی فیسٹ پابندی نہیں ہے (`torii_sorafs_registry_aliases_total` میں غیر متوقع قطرے)۔
 4. ** دستاویز کا نتیجہ **
    - SoraFS آپریشنز میں ریکارڈ واقعے کے نوٹس متاثرہ ٹائم اسٹیمپ اور ظاہر ہضموں کے ساتھ لاگ ان۔

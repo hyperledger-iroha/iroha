@@ -120,10 +120,10 @@ and will transparently truncate when the request exceeds the available leaves:
 $ ကုန်တင်ကုန်ချ -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
     --por-sample=8 --por-sample-seed=0xfeedface --por-sample-out=por.samples.json
 
-Manifest stub သည် ပိုက်လိုင်းများတွင် `--chunker-profile-id` ရွေးချယ်မှုကို ဇာတ်ညွှန်းရေးသားရာတွင် အဆင်ပြေသည့် တူညီသောဒေတာကို ထင်ဟပ်စေသည်။ အတုံးလိုက်စတိုးဆိုင် CLI နှစ်ခုလုံးသည် canonical handle form (`--profile=sorafs.sf1@1.0.0`) ကိုလည်း လက်ခံသောကြောင့် script များသည် hard-coding ဂဏန်း ID များကို ရှောင်ရှားနိုင်သည်-
+Manifest builder သည် ပိုက်လိုင်းများတွင် `--chunker-profile-id` ရွေးချယ်မှုကို ဇာတ်ညွှန်းရေးသားရာတွင် အဆင်ပြေသည့် တူညီသောဒေတာကို ထင်ဟပ်စေသည်။ အတုံးလိုက်စတိုးဆိုင် CLI နှစ်ခုလုံးသည် canonical handle form (`--profile=sorafs.sf1@1.0.0`) ကိုလည်း လက်ခံသောကြောင့် script များသည် hard-coding ဂဏန်း ID များကို ရှောင်ရှားနိုင်သည်-
 
 ```
-$ cargo run -p sorafs_car --bin sorafs_manifest_stub -- --list-chunker-profiles
+$ cargo run -p sorafs_car --bin sorafs_manifest_builder -- --list-chunker-profiles
 [
   {
     "profile_id": 1,
@@ -181,4 +181,4 @@ HTTP ညှိနှိုင်းမှုကို အားမကိုး�
   ပေးထားသော စမ်းသပ်မှုများမှတဆင့်
 * `chunker_registry::lookup_by_profile` သည် descriptor parameters များကို အခိုင်အမာဖော်ပြထားသည်။
   မတော်တဆ ကွဲလွဲမှုကို ကာကွယ်ရန် `ChunkProfile::DEFAULT` ကို ယှဉ်ပြိုင်ပါ။
-* `iroha app sorafs toolkit pack` နှင့် `sorafs_manifest_stub` မှထုတ်လုပ်သော Manifest များတွင် registry metadata ပါဝင်သည်။
+* `iroha app sorafs toolkit pack` နှင့် `sorafs_manifest_builder` မှထုတ်လုပ်သော Manifest များတွင် registry metadata ပါဝင်သည်။

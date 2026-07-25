@@ -60,7 +60,8 @@ fn unknown_syscall_number_rejected_during_ivm_admission() {
     let domain = Domain::new(domain_id.clone()).build(&account_id);
     let account = Account::new(account_id.clone()).build(&account_id);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
-    let state = State::new_for_testing(world, kura, query_handle);
+    let chain: ChainId = "chain".parse().unwrap();
+    let state = State::new_with_chain_for_testing(world, kura, query_handle, chain.clone());
     install_current_lane_manifest_registry(&state);
 
     // Build a tiny program with an unknown syscall followed by HALT.
@@ -85,7 +86,6 @@ fn unknown_syscall_number_rejected_during_ivm_admission() {
     // Submit the program; admission should fail before execution due to the unknown syscall.
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
-    let chain: ChainId = "chain".parse().unwrap();
     let tx = TransactionBuilder::new(
         chain.clone(),
         account_id.clone(),

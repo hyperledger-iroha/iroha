@@ -35,19 +35,23 @@ use iroha_p2p::{
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
 
-use crate::sumeragi::v2_core::{
-    CanonicalIdentityProjection, IDENTITY_DOMAIN_PAYLOAD, IDENTITY_DOMAIN_PEER,
-    IDENTITY_DOMAIN_PROCESS_LOCAL, IDENTITY_KIND_MERGE_ENTRY, IDENTITY_KIND_NETWORK_RESPONSE,
-    IDENTITY_KIND_PEER, IDENTITY_KIND_REFERENCE_DIGEST, IDENTITY_KIND_REPLY_DELIVERY_ROUTE,
-    IDENTITY_KIND_REPLY_PAYLOAD, IDENTITY_KIND_REPLY_SOURCE_KEY,
-    IDENTITY_KIND_REPLY_WRITER_OCCURRENCE, IDENTITY_KIND_SIDECAR_CHUNK,
-    IDENTITY_KIND_SIDECAR_PAYLOAD, IDENTITY_KIND_SIDECAR_REQUEST, IDENTITY_KIND_SIDECAR_RESPONSE,
-    IDENTITY_KIND_SIDECAR_SHARED_TRANSFER_STATE, IDENTITY_KIND_SIDECAR_SIBLING_STATE,
-    IDENTITY_KIND_SIDECAR_TARGET_GATE_STATE, IDENTITY_KIND_SIDECAR_TARGET_OUTBOUND_STATE,
-    ProductionReliableFlushApplicationProjection, ProductionReliableFlushTraceProjection,
-    production_reliable_flush_application_refines_source_lane_kernel,
-    production_reliable_flush_trace_refines_outbound_ownership_kernel,
-    production_reliable_flush_two_phase_link_kernel,
+use crate::{
+    merge::MergeLedgerCandidate,
+    sumeragi::v2_core::{
+        CanonicalIdentityProjection, IDENTITY_DOMAIN_PAYLOAD, IDENTITY_DOMAIN_PEER,
+        IDENTITY_DOMAIN_PROCESS_LOCAL, IDENTITY_KIND_MERGE_ENTRY, IDENTITY_KIND_NETWORK_RESPONSE,
+        IDENTITY_KIND_PEER, IDENTITY_KIND_REFERENCE_DIGEST, IDENTITY_KIND_REPLY_DELIVERY_ROUTE,
+        IDENTITY_KIND_REPLY_PAYLOAD, IDENTITY_KIND_REPLY_SOURCE_KEY,
+        IDENTITY_KIND_REPLY_WRITER_OCCURRENCE, IDENTITY_KIND_SIDECAR_CHUNK,
+        IDENTITY_KIND_SIDECAR_PAYLOAD, IDENTITY_KIND_SIDECAR_REQUEST,
+        IDENTITY_KIND_SIDECAR_RESPONSE, IDENTITY_KIND_SIDECAR_SHARED_TRANSFER_STATE,
+        IDENTITY_KIND_SIDECAR_SIBLING_STATE, IDENTITY_KIND_SIDECAR_TARGET_GATE_STATE,
+        IDENTITY_KIND_SIDECAR_TARGET_OUTBOUND_STATE, ProductionReliableFlushApplicationProjection,
+        ProductionReliableFlushTraceProjection,
+        production_reliable_flush_application_refines_source_lane_kernel,
+        production_reliable_flush_trace_refines_outbound_ownership_kernel,
+        production_reliable_flush_two_phase_link_kernel,
+    },
 };
 
 /// Current certified merge-sidecar transfer protocol version.
@@ -60,7 +64,7 @@ pub const MAX_CERTIFIED_MERGE_CHUNKS: usize =
 
 const REFERENCE_DIGEST_DOMAIN: &[u8] = b"iroha:merge:sidecar-reference:v1\0";
 const REQUEST_ID_DOMAIN: &[u8] = b"iroha:merge:sidecar-request:v1\0";
-const SIGNING_CONTEXT_DOMAIN: &[u8] = b"iroha:merge:signing-context:v1\0";
+const SIGNING_CONTEXT_DOMAIN: &[u8] = b"iroha:merge:signing-context:v2\0";
 
 const MAX_INBOUND_SESSIONS: usize = 32;
 const MAX_INBOUND_SESSIONS_PER_PEER: usize = 4;
@@ -89,14 +93,21 @@ const RELIABLE_FLUSH_TARGET_GATE_DIGEST_DOMAIN: &[u8] =
 const RELIABLE_FLUSH_TARGET_OUTBOUND_DIGEST_DOMAIN: &[u8] =
     b"iroha:merge-sidecar:reliable-flush-target-outbound:v1\0";
 
-const SIGNING_GUARD_VERSION: u8 = 1;
-const SIGNING_GUARD_DIR: &str = "merge-signing-guard-v1";
+const SIGNING_GUARD_VERSION: u8 = 2;
+const SIGNING_GUARD_DIR: &str = "merge-signing-guard-v2";
+const LEGACY_SIGNING_GUARD_DIRS: &[&str] = &["merge-signing-guard-v1"];
 const SIGNING_GUARD_RECORD_EXT: &str = "norito";
 const SIGNING_GUARD_TEMP_EXT: &str = "norito.tmp";
 const SIGNING_GUARD_HIGH_WATER_FILE: &str = "committed-high-water.norito";
 const SIGNING_GUARD_HIGH_WATER_TEMP: &str = "committed-high-water.norito.tmp";
-const MAX_SIGNING_GUARD_RECORDS: usize = 4_096;
-const MAX_SIGNING_GUARD_RECORD_BYTES: usize = 4 * 1024;
+const MAX_SIGNING_GUARD_RECORDS: usize = 1_024;
+const SIGNING_GUARD_RECORD_HEADROOM_BYTES: usize = 64 * 1024;
+const MAX_SIGNING_GUARD_RECORD_BYTES: usize =
+    MAX_MERGE_LEDGER_ENTRY_BYTES + SIGNING_GUARD_RECORD_HEADROOM_BYTES;
+// Mirror the existing aggregate pending certified-merge sidecar budget. This
+// prevents successive views from turning exact pre-QC recovery into unbounded
+// disk retention before the committed high-water can advance.
+const MAX_SIGNING_GUARD_TOTAL_BYTES: usize = 256 * 1024 * 1024;
 
 fn retry_timeout(base: Duration, attempts: u32) -> Duration {
     let backoff_shift = attempts.saturating_sub(1).min(4);
@@ -573,6 +584,12 @@ pub fn decode_certified_merge_sidecar(
     }
     let entry = norito::decode_from_bytes::<MergeLedgerEntry>(bytes)
         .map_err(|error| MergeSidecarError::Decode(error.to_string()))?;
+    if !entry.has_current_version() {
+        return Err(MergeSidecarError::Decode(format!(
+            "unsupported merge ledger entry version {}",
+            entry.version
+        )));
+    }
     if entry.canonical_bytes() != bytes {
         return Err(MergeSidecarError::NonCanonicalEncoding);
     }
@@ -3895,14 +3912,19 @@ pub(crate) struct MergeSigningContextV1 {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-struct MergeSigningGuardRecordV1 {
+#[norito(deny_unknown_fields)]
+struct MergeSigningGuardRecordV2 {
     version: u8,
     context: MergeSigningContextV1,
     message_digest: Hash,
+    candidate_hash: Hash,
+    candidate_encoded_len: u64,
+    candidate_bytes: Vec<u8>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-struct MergeSigningHighWaterV1 {
+#[norito(deny_unknown_fields)]
+struct MergeSigningHighWaterV2 {
     version: u8,
     committed_epoch: u64,
     committed_carrier_height: u64,
@@ -3943,11 +3965,16 @@ impl MergeSigningGuard {
         committed_epoch: u64,
         committed_carrier_height: u64,
     ) -> Result<Self, MergeSidecarError> {
+        Self::reject_legacy_journals(store_root)?;
         let directory = store_root.join(SIGNING_GUARD_DIR);
         ensure_regular_directory(&directory)?;
+        // The first record is not crash-safe unless the directory entry itself
+        // is durable in the Kura root before any signature can be emitted.
+        sync_directory(store_root)?;
+        Self::guard_directory_bytes(&directory)?;
         Self::reconcile_temps(&directory)?;
         let durable_high_water =
-            Self::read_high_water(&directory)?.unwrap_or(MergeSigningHighWaterV1 {
+            Self::read_high_water(&directory)?.unwrap_or(MergeSigningHighWaterV2 {
                 version: SIGNING_GUARD_VERSION,
                 committed_epoch: 0,
                 committed_carrier_height: 0,
@@ -3970,6 +3997,31 @@ impl MergeSigningGuard {
         Ok(guard)
     }
 
+    fn reject_legacy_journals(store_root: &Path) -> Result<(), MergeSidecarError> {
+        for legacy in LEGACY_SIGNING_GUARD_DIRS {
+            let path = store_root.join(legacy);
+            match fs::symlink_metadata(&path) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(MergeSidecarError::SigningGuard(error.to_string()));
+                }
+                Ok(metadata) if metadata.file_type().is_symlink() => {
+                    return Err(MergeSidecarError::SigningGuard(format!(
+                        "unsafe legacy merge-signing journal {}",
+                        path.display()
+                    )));
+                }
+                Ok(_) => {
+                    return Err(MergeSidecarError::SigningGuard(format!(
+                        "legacy merge-signing journal {} requires authenticated candidate-body recovery",
+                        path.display()
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn high_water_path(directory: &Path) -> PathBuf {
         directory.join(SIGNING_GUARD_HIGH_WATER_FILE)
     }
@@ -3978,7 +4030,55 @@ impl MergeSigningGuard {
         directory.join(SIGNING_GUARD_HIGH_WATER_TEMP)
     }
 
-    fn decode_high_water(path: &Path) -> Result<MergeSigningHighWaterV1, MergeSidecarError> {
+    fn remove_regular_temp_if_present(
+        path: &Path,
+        artifact: &str,
+    ) -> Result<(), MergeSidecarError> {
+        let metadata = match fs::symlink_metadata(path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(MergeSidecarError::SigningGuard(error.to_string())),
+        };
+        if metadata.file_type().is_symlink()
+            || !metadata.file_type().is_file()
+            || metadata.len() > MAX_SIGNING_GUARD_RECORD_BYTES as u64
+        {
+            return Err(MergeSidecarError::SigningGuard(format!(
+                "unsafe {artifact} signing-guard temp {}",
+                path.display()
+            )));
+        }
+        fs::remove_file(path).map_err(|error| MergeSidecarError::SigningGuard(error.to_string()))
+    }
+
+    fn guard_directory_bytes(directory: &Path) -> Result<usize, MergeSidecarError> {
+        let mut total = 0_usize;
+        for item in fs::read_dir(directory)
+            .map_err(|error| MergeSidecarError::SigningGuard(error.to_string()))?
+        {
+            let item = item.map_err(|error| MergeSidecarError::SigningGuard(error.to_string()))?;
+            let metadata = fs::symlink_metadata(item.path())
+                .map_err(|error| MergeSidecarError::SigningGuard(error.to_string()))?;
+            let bytes = usize::try_from(metadata.len()).map_err(|_| {
+                MergeSidecarError::SigningGuard(
+                    "signing-guard artifact length is not representable".to_owned(),
+                )
+            })?;
+            total = total.checked_add(bytes).ok_or_else(|| {
+                MergeSidecarError::SigningGuard(
+                    "signing-guard aggregate byte count overflowed".to_owned(),
+                )
+            })?;
+            if total > MAX_SIGNING_GUARD_TOTAL_BYTES {
+                return Err(MergeSidecarError::SigningGuard(
+                    "signing-guard aggregate bytes exceed hard limit".to_owned(),
+                ));
+            }
+        }
+        Ok(total)
+    }
+
+    fn decode_high_water(path: &Path) -> Result<MergeSigningHighWaterV2, MergeSidecarError> {
         let metadata = fs::symlink_metadata(path)
             .map_err(|error| MergeSidecarError::SigningGuard(error.to_string()))?;
         if metadata.file_type().is_symlink()
@@ -3992,7 +4092,7 @@ impl MergeSigningGuard {
         }
         let bytes =
             fs::read(path).map_err(|error| MergeSidecarError::SigningGuard(error.to_string()))?;
-        let high_water = norito::decode_from_bytes::<MergeSigningHighWaterV1>(&bytes)
+        let high_water = norito::decode_from_bytes::<MergeSigningHighWaterV2>(&bytes)
             .map_err(|error| MergeSidecarError::SigningGuard(error.to_string()))?;
         let canonical = norito::to_bytes(&high_water)
             .map_err(|error| MergeSidecarError::SigningGuard(error.to_string()))?;
@@ -4006,7 +4106,7 @@ impl MergeSigningGuard {
 
     fn read_high_water(
         directory: &Path,
-    ) -> Result<Option<MergeSigningHighWaterV1>, MergeSidecarError> {
+    ) -> Result<Option<MergeSigningHighWaterV2>, MergeSidecarError> {
         let path = Self::high_water_path(directory);
         if !path.exists() {
             return Ok(None);
@@ -4015,25 +4115,14 @@ impl MergeSigningGuard {
     }
 
     fn reconcile_temps(directory: &Path) -> Result<(), MergeSidecarError> {
+        Self::guard_directory_bytes(directory)?;
         let high_water_temp = Self::high_water_temp_path(directory);
-        if high_water_temp.exists() {
-            let metadata = fs::symlink_metadata(&high_water_temp)
-                .map_err(|error| MergeSidecarError::SigningGuard(error.to_string()))?;
-            if metadata.file_type().is_symlink()
-                || !metadata.file_type().is_file()
-                || metadata.len() > MAX_SIGNING_GUARD_RECORD_BYTES as u64
-            {
-                return Err(MergeSidecarError::SigningGuard(
-                    "unsafe signing-guard high-water temp".to_owned(),
-                ));
-            }
-            // The canonical committed epoch supplied by Kura/state is the
-            // authority on restart. A temp may be partial at any pre-rename
-            // crash boundary, so it is always safe to discard before
-            // re-publishing the canonical high-water.
-            fs::remove_file(&high_water_temp)
-                .map_err(|error| MergeSidecarError::SigningGuard(error.to_string()))?;
-        }
+        // The canonical committed epoch supplied by Kura/state is the
+        // authority on restart. A bounded regular temp may be partial at any
+        // pre-rename crash boundary, so it is safe to discard before
+        // re-publishing the canonical high-water. Symlinks and other artifact
+        // types remain fail-closed.
+        Self::remove_regular_temp_if_present(&high_water_temp, "high-water")?;
 
         for item in fs::read_dir(directory)
             .map_err(|error| MergeSidecarError::SigningGuard(error.to_string()))?
@@ -4056,7 +4145,10 @@ impl MergeSigningGuard {
             }
             let metadata = fs::symlink_metadata(&path)
                 .map_err(|error| MergeSidecarError::SigningGuard(error.to_string()))?;
-            if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+            if metadata.file_type().is_symlink()
+                || !metadata.file_type().is_file()
+                || metadata.len() > MAX_SIGNING_GUARD_RECORD_BYTES as u64
+            {
                 return Err(MergeSidecarError::SigningGuard(
                     "unsafe signing-guard record temp".to_owned(),
                 ));
@@ -4093,7 +4185,42 @@ impl MergeSigningGuard {
         ))
     }
 
-    fn read_record(path: &Path) -> Result<MergeSigningGuardRecordV1, MergeSidecarError> {
+    fn decode_record_candidate(
+        record: &MergeSigningGuardRecordV2,
+    ) -> Result<MergeLedgerCandidate, MergeSidecarError> {
+        let encoded_len = usize::try_from(record.candidate_encoded_len).map_err(|_| {
+            MergeSidecarError::SigningGuard(
+                "merge-signing candidate length is not representable".to_owned(),
+            )
+        })?;
+        if encoded_len == 0
+            || encoded_len > MAX_MERGE_LEDGER_ENTRY_BYTES
+            || record.candidate_bytes.len() != encoded_len
+        {
+            return Err(MergeSidecarError::SigningGuard(
+                "merge-signing candidate exceeds or differs from its exact byte bound".to_owned(),
+            ));
+        }
+        let candidate = norito::decode_from_bytes::<MergeLedgerCandidate>(&record.candidate_bytes)
+            .map_err(|error| MergeSidecarError::SigningGuard(error.to_string()))?;
+        let canonical = candidate.canonical_bytes();
+        if !candidate.has_current_version()
+            || canonical != record.candidate_bytes
+            || candidate.canonical_hash() != record.candidate_hash
+            || candidate.epoch_id != record.context.epoch_id
+            || candidate.view != record.context.view
+            || candidate.carrier_height != record.context.carrier_height
+            || candidate.carrier_parent_hash != record.context.parent_hash
+        {
+            return Err(MergeSidecarError::SigningGuard(
+                "merge-signing candidate is non-canonical or differs from its durable context"
+                    .to_owned(),
+            ));
+        }
+        Ok(candidate)
+    }
+
+    fn read_record(path: &Path) -> Result<MergeSigningGuardRecordV2, MergeSidecarError> {
         let metadata = fs::symlink_metadata(path)
             .map_err(|error| MergeSidecarError::SigningGuard(error.to_string()))?;
         if metadata.file_type().is_symlink()
@@ -4112,7 +4239,7 @@ impl MergeSigningGuard {
         let mut bytes = Vec::with_capacity(metadata.len() as usize);
         file.read_to_end(&mut bytes)
             .map_err(|error| MergeSidecarError::SigningGuard(error.to_string()))?;
-        let record = norito::decode_from_bytes::<MergeSigningGuardRecordV1>(&bytes)
+        let record = norito::decode_from_bytes::<MergeSigningGuardRecordV2>(&bytes)
             .map_err(|error| MergeSidecarError::SigningGuard(error.to_string()))?;
         let canonical = norito::to_bytes(&record)
             .map_err(|error| MergeSidecarError::SigningGuard(error.to_string()))?;
@@ -4121,11 +4248,13 @@ impl MergeSigningGuard {
                 "non-canonical or unsupported signing-guard record".to_owned(),
             ));
         }
+        Self::decode_record_candidate(&record)?;
         Ok(record)
     }
 
     fn validate_all(&self) -> Result<(), MergeSidecarError> {
         let mut count = 0_usize;
+        let mut total_bytes = 0_usize;
         for item in fs::read_dir(&self.directory)
             .map_err(|error| MergeSidecarError::SigningGuard(error.to_string()))?
         {
@@ -4152,6 +4281,23 @@ impl MergeSigningGuard {
                     "unknown file in signing-guard directory: {}",
                     path.display()
                 )));
+            }
+            let metadata = fs::symlink_metadata(&path)
+                .map_err(|error| MergeSidecarError::SigningGuard(error.to_string()))?;
+            let record_bytes = usize::try_from(metadata.len()).map_err(|_| {
+                MergeSidecarError::SigningGuard(
+                    "signing-guard record length is not representable".to_owned(),
+                )
+            })?;
+            total_bytes = total_bytes.checked_add(record_bytes).ok_or_else(|| {
+                MergeSidecarError::SigningGuard(
+                    "signing-guard aggregate byte count overflowed".to_owned(),
+                )
+            })?;
+            if total_bytes > MAX_SIGNING_GUARD_TOTAL_BYTES {
+                return Err(MergeSidecarError::SigningGuard(
+                    "signing-guard aggregate bytes exceed hard limit".to_owned(),
+                ));
             }
             count = count.saturating_add(1);
             if count > MAX_SIGNING_GUARD_RECORDS {
@@ -4199,7 +4345,7 @@ impl MergeSigningGuard {
         if committed_epoch > self.committed_epoch
             || committed_carrier_height > self.committed_carrier_height
         {
-            let record = MergeSigningHighWaterV1 {
+            let record = MergeSigningHighWaterV2 {
                 version: SIGNING_GUARD_VERSION,
                 committed_epoch,
                 committed_carrier_height,
@@ -4207,12 +4353,17 @@ impl MergeSigningGuard {
             let bytes = norito::to_bytes(&record)
                 .map_err(|error| MergeSidecarError::SigningGuard(error.to_string()))?;
             let temp = Self::high_water_temp_path(&self.directory);
-            if let Err(error) = fs::remove_file(&temp)
-                && error.kind() != std::io::ErrorKind::NotFound
+            Self::remove_regular_temp_if_present(&temp, "high-water")?;
             {
-                return Err(MergeSidecarError::SigningGuard(error.to_string()));
-            }
-            {
+                let total_bytes = Self::guard_directory_bytes(&self.directory)?;
+                if total_bytes
+                    .checked_add(bytes.len())
+                    .is_none_or(|total| total > MAX_SIGNING_GUARD_TOTAL_BYTES)
+                {
+                    return Err(MergeSidecarError::SigningGuard(
+                        "signing-guard aggregate bytes reached hard limit".to_owned(),
+                    ));
+                }
                 let mut file = OpenOptions::new()
                     .create_new(true)
                     .write(true)
@@ -4285,52 +4436,78 @@ impl MergeSigningGuard {
         Ok(Some(record.message_digest))
     }
 
-    /// Durably authorize one digest, returning an error for a conflicting digest.
+    /// Recover the exact candidate bytes and decoded body durably paired with a digest.
+    pub(crate) fn authorized_candidate(
+        &self,
+        context: &MergeSigningContextV1,
+    ) -> Result<Option<(Hash, MergeLedgerCandidate, Vec<u8>)>, MergeSidecarError> {
+        if context.epoch_id <= self.committed_epoch
+            || context.carrier_height <= self.committed_carrier_height
+        {
+            return Ok(None);
+        }
+        let path = self.record_path(context);
+        if !path.exists() {
+            return Ok(None);
+        }
+        let record = Self::read_record(&path)?;
+        if &record.context != context {
+            return Err(MergeSidecarError::SigningGuard(
+                "signing-guard record context/path mismatch".to_owned(),
+            ));
+        }
+        let candidate = Self::decode_record_candidate(&record)?;
+        Ok(Some((
+            record.message_digest,
+            candidate,
+            record.candidate_bytes,
+        )))
+    }
+
+    /// Durably authorize one exact candidate and digest, returning an error for
+    /// any conflicting body, digest, or context.
     pub(crate) fn authorize(
         &self,
         context: MergeSigningContextV1,
         message_digest: Hash,
+        candidate: &MergeLedgerCandidate,
     ) -> Result<(), MergeSidecarError> {
         if context.epoch_id <= self.committed_epoch
             || context.carrier_height <= self.committed_carrier_height
         {
             return Err(MergeSidecarError::LocalSigningEquivocation);
         }
-        let path = self.record_path(&context);
-        if path.exists() {
-            let existing = Self::read_record(&path)?;
-            return if existing.context == context && existing.message_digest == message_digest {
-                Ok(())
-            } else {
-                Err(MergeSidecarError::LocalSigningEquivocation)
-            };
-        }
-        let mut count = 0_usize;
-        for item in fs::read_dir(&self.directory)
-            .map_err(|error| MergeSidecarError::SigningGuard(error.to_string()))?
+        if !candidate.has_current_version()
+            || candidate.epoch_id != context.epoch_id
+            || candidate.view != context.view
+            || candidate.carrier_height != context.carrier_height
+            || candidate.carrier_parent_hash != context.parent_hash
         {
-            let item = item.map_err(|error| MergeSidecarError::SigningGuard(error.to_string()))?;
-            if item
-                .file_name()
-                .to_string_lossy()
-                .ends_with(&format!(".{SIGNING_GUARD_RECORD_EXT}"))
-            {
-                count = count.saturating_add(1);
-                if count >= MAX_SIGNING_GUARD_RECORDS {
-                    break;
-                }
-            }
+            return Err(MergeSidecarError::LocalSigningEquivocation);
         }
-        if count >= MAX_SIGNING_GUARD_RECORDS {
+        let candidate_bytes = candidate.canonical_bytes();
+        if candidate_bytes.is_empty() || candidate_bytes.len() > MAX_MERGE_LEDGER_ENTRY_BYTES {
             return Err(MergeSidecarError::SigningGuard(
-                "signing-guard record count reached hard limit".to_owned(),
+                "merge-signing candidate exceeds the shared full-entry byte limit".to_owned(),
             ));
         }
-        let record = MergeSigningGuardRecordV1 {
+        let candidate_encoded_len = u64::try_from(candidate_bytes.len()).map_err(|_| {
+            MergeSidecarError::SigningGuard(
+                "merge-signing candidate length is not representable".to_owned(),
+            )
+        })?;
+        let candidate_hash = candidate.canonical_hash();
+        let record = MergeSigningGuardRecordV2 {
             version: SIGNING_GUARD_VERSION,
             context,
             message_digest,
+            candidate_hash,
+            candidate_encoded_len,
+            candidate_bytes,
         };
+        // Re-run the same canonical decoder used during startup before any
+        // bytes become eligible for publication.
+        Self::decode_record_candidate(&record)?;
         let bytes = norito::to_bytes(&record)
             .map_err(|error| MergeSidecarError::SigningGuard(error.to_string()))?;
         if bytes.len() > MAX_SIGNING_GUARD_RECORD_BYTES {
@@ -4338,12 +4515,60 @@ impl MergeSigningGuard {
                 "signing-guard record exceeds hard byte limit".to_owned(),
             ));
         }
-        let temp = path.with_extension("norito.tmp");
-        if let Err(error) = fs::remove_file(&temp)
-            && error.kind() != std::io::ErrorKind::NotFound
-        {
-            return Err(MergeSidecarError::SigningGuard(error.to_string()));
+        let path = self.record_path(&record.context);
+        if path.exists() {
+            let existing = Self::read_record(&path)?;
+            return if existing == record {
+                Ok(())
+            } else {
+                Err(MergeSidecarError::LocalSigningEquivocation)
+            };
         }
+        let mut count = 0_usize;
+        let total_bytes = Self::guard_directory_bytes(&self.directory)?;
+        for item in fs::read_dir(&self.directory)
+            .map_err(|error| MergeSidecarError::SigningGuard(error.to_string()))?
+        {
+            let item = item.map_err(|error| MergeSidecarError::SigningGuard(error.to_string()))?;
+            let name = item.file_name();
+            let name = name.to_string_lossy();
+            if name == SIGNING_GUARD_HIGH_WATER_FILE {
+                continue;
+            }
+            if name.ends_with(&format!(".{SIGNING_GUARD_RECORD_EXT}")) {
+                let metadata = fs::symlink_metadata(item.path())
+                    .map_err(|error| MergeSidecarError::SigningGuard(error.to_string()))?;
+                if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+                    return Err(MergeSidecarError::SigningGuard(
+                        "unsafe signing-guard record during authorization".to_owned(),
+                    ));
+                }
+                count = count.saturating_add(1);
+                if count >= MAX_SIGNING_GUARD_RECORDS {
+                    break;
+                }
+            } else {
+                return Err(MergeSidecarError::SigningGuard(format!(
+                    "unknown file in signing-guard directory: {}",
+                    item.path().display()
+                )));
+            }
+        }
+        if count >= MAX_SIGNING_GUARD_RECORDS {
+            return Err(MergeSidecarError::SigningGuard(
+                "signing-guard record count reached hard limit".to_owned(),
+            ));
+        }
+        if total_bytes
+            .checked_add(bytes.len())
+            .is_none_or(|total| total > MAX_SIGNING_GUARD_TOTAL_BYTES)
+        {
+            return Err(MergeSidecarError::SigningGuard(
+                "signing-guard aggregate bytes reached hard limit".to_owned(),
+            ));
+        }
+        let temp = path.with_extension("norito.tmp");
+        Self::remove_regular_temp_if_present(&temp, "candidate-record")?;
         {
             let mut file = OpenOptions::new()
                 .create_new(true)
@@ -4358,9 +4583,7 @@ impl MergeSigningGuard {
         if path.exists() {
             let _ = fs::remove_file(&temp);
             let existing = Self::read_record(&path)?;
-            return if existing.message_digest == record.message_digest
-                && existing.context == record.context
-            {
+            return if existing == record {
                 Ok(())
             } else {
                 Err(MergeSidecarError::LocalSigningEquivocation)
@@ -4413,6 +4636,24 @@ mod tests {
                 .public_key()
                 .clone(),
         )
+    }
+
+    fn signing_candidate(context: &MergeSigningContextV1, label: &[u8]) -> MergeLedgerCandidate {
+        MergeLedgerCandidate {
+            version: MergeLedgerCandidate::VERSION,
+            epoch_id: context.epoch_id,
+            view: context.view,
+            carrier_height: context.carrier_height,
+            carrier_parent_hash: context.parent_hash,
+            lane_catalog_hash: Hash::new_from_chunks(&[b"catalog", label]),
+            active_lanes: Vec::new(),
+            incarnation_root: Hash::new_from_chunks(&[b"incarnations", label]),
+            activation_root: Hash::new_from_chunks(&[b"activations", label]),
+            lane_snapshots: Vec::new(),
+            execution_batch: None,
+            lane_drain_certificates: Vec::new(),
+            global_state_root: Hash::new_from_chunks(&[b"state", label]),
+        }
     }
 
     fn reference(encoded_len: usize, holders: usize) -> CertifiedMergeLedgerReference {
@@ -7651,6 +7892,29 @@ mod tests {
     }
 
     #[test]
+    fn unsupported_merge_entry_version_is_rejected_before_reference_matching() {
+        let seed_reference = reference(1, 1);
+        let merge_qc = seed_reference.merge_qc.clone();
+        let context = MergeSigningContextV1 {
+            epoch_id: seed_reference.epoch_id,
+            view: merge_qc.view,
+            carrier_height: merge_qc.carrier_height,
+            parent_hash: merge_qc.carrier_parent_hash,
+            validator_set_hash: merge_qc.validator_set_hash,
+        };
+        let mut entry = signing_candidate(&context, b"unsupported-version").into_entry(merge_qc);
+        entry.version = MergeLedgerEntry::VERSION + 1;
+        let bytes = entry.canonical_bytes();
+        let reference = CertifiedMergeLedgerReference::new(&entry);
+
+        assert!(matches!(
+            decode_certified_merge_sidecar(&reference, &bytes),
+            Err(MergeSidecarError::Decode(ref message))
+                if message.contains("unsupported merge ledger entry version")
+        ));
+    }
+
+    #[test]
     fn signing_guard_is_restart_safe_and_rejects_equivocation() {
         let temp = tempfile::tempdir().expect("temp dir");
         let context = MergeSigningContextV1 {
@@ -7662,23 +7926,142 @@ mod tests {
         };
         let first = Hash::new(b"first");
         let second = Hash::new(b"second");
+        let candidate = signing_candidate(&context, b"first");
         let guard = MergeSigningGuard::open(temp.path()).expect("open guard");
         guard
-            .authorize(context.clone(), first)
+            .authorize(context.clone(), first, &candidate)
             .expect("first authorization");
         guard
-            .authorize(context.clone(), first)
+            .authorize(context.clone(), first, &candidate)
             .expect("idempotent authorization");
+        let mut unsupported_candidate = candidate.clone();
+        unsupported_candidate.version = MergeLedgerCandidate::VERSION + 1;
         assert_eq!(
-            guard.authorize(context.clone(), second),
+            guard.authorize(context.clone(), first, &unsupported_candidate),
+            Err(MergeSidecarError::LocalSigningEquivocation)
+        );
+        assert_eq!(
+            guard.authorize(context.clone(), second, &candidate),
             Err(MergeSidecarError::LocalSigningEquivocation)
         );
         drop(guard);
         let restarted = MergeSigningGuard::open(temp.path()).expect("restart guard");
+        let (recovered_digest, recovered_candidate, recovered_bytes) = restarted
+            .authorized_candidate(&context)
+            .expect("read durable candidate")
+            .expect("candidate survives restart");
+        assert_eq!(recovered_digest, first);
+        assert_eq!(recovered_candidate, candidate);
+        assert_eq!(recovered_bytes, candidate.canonical_bytes());
         assert_eq!(
-            restarted.authorize(context, second),
+            restarted.authorize(context.clone(), second, &candidate),
             Err(MergeSidecarError::LocalSigningEquivocation)
         );
+
+        let mut substituted = candidate.clone();
+        substituted.global_state_root = Hash::new(b"substituted candidate body");
+        assert_eq!(
+            restarted.authorize(context, first, &substituted),
+            Err(MergeSidecarError::LocalSigningEquivocation),
+            "equal digest cannot substitute different canonical candidate bytes"
+        );
+    }
+
+    #[test]
+    fn signing_guard_rejects_legacy_journal_without_implicit_recovery() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        fs::create_dir(temp.path().join(LEGACY_SIGNING_GUARD_DIRS[0]))
+            .expect("create legacy journal");
+        assert!(matches!(
+            MergeSigningGuard::open(temp.path()),
+            Err(MergeSidecarError::SigningGuard(message))
+                if message.contains("authenticated candidate-body recovery")
+        ));
+        assert!(!temp.path().join(SIGNING_GUARD_DIR).exists());
+    }
+
+    #[test]
+    fn signing_guard_rejects_aggregate_oversize_before_recovery_scan() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let guard = MergeSigningGuard::open(temp.path()).expect("open guard");
+        let path = guard.directory.join(format!(
+            "{}.{}",
+            Hash::new(b"oversized signing guard"),
+            SIGNING_GUARD_RECORD_EXT
+        ));
+        let file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&path)
+            .expect("create sparse oversized artifact");
+        file.set_len(
+            u64::try_from(MAX_SIGNING_GUARD_TOTAL_BYTES)
+                .expect("aggregate bound fits u64")
+                .saturating_add(1),
+        )
+        .expect("size sparse oversized artifact");
+        drop(file);
+        drop(guard);
+        assert!(matches!(
+            MergeSigningGuard::open(temp.path()),
+            Err(MergeSidecarError::SigningGuard(message))
+                if message.contains("aggregate bytes")
+        ));
+    }
+
+    #[test]
+    fn signing_guard_rejects_oversized_candidate_temp() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let guard = MergeSigningGuard::open(temp.path()).expect("open guard");
+        let path = guard.directory.join(format!(
+            "{}.{}",
+            Hash::new(b"oversized signing guard temp"),
+            SIGNING_GUARD_TEMP_EXT
+        ));
+        let file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(path)
+            .expect("create sparse oversized temp");
+        file.set_len(
+            u64::try_from(MAX_SIGNING_GUARD_RECORD_BYTES)
+                .expect("record bound fits u64")
+                .saturating_add(1),
+        )
+        .expect("size sparse oversized temp");
+        drop(file);
+        drop(guard);
+        assert!(matches!(
+            MergeSigningGuard::open(temp.path()),
+            Err(MergeSidecarError::SigningGuard(message))
+                if message.contains("unsafe signing-guard record temp")
+        ));
+    }
+
+    #[test]
+    fn signing_guard_rejects_truncated_final_record() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let context = MergeSigningContextV1 {
+            epoch_id: 5,
+            view: 3,
+            carrier_height: 11,
+            parent_hash: HashOf::from_untyped_unchecked(Hash::new(b"parent-10")),
+            validator_set_hash: HashOf::new(&vec![peer(b"validator")]),
+        };
+        let candidate = signing_candidate(&context, b"truncated final record");
+        let guard = MergeSigningGuard::open(temp.path()).expect("open guard");
+        guard
+            .authorize(context.clone(), Hash::new(b"truncated"), &candidate)
+            .expect("authorize candidate before truncation");
+        let path = guard.record_path(&context);
+        let mut bytes = fs::read(&path).expect("read exact final record");
+        bytes.truncate(bytes.len() / 2);
+        fs::write(path, bytes).expect("install truncated final record");
+        drop(guard);
+        assert!(matches!(
+            MergeSigningGuard::open(temp.path()),
+            Err(MergeSidecarError::SigningGuard(_))
+        ));
     }
 
     #[test]
@@ -7694,8 +8077,9 @@ mod tests {
                 parent_hash: HashOf::from_untyped_unchecked(Hash::new(epoch_id.to_le_bytes())),
                 validator_set_hash: roster_hash,
             };
+            let candidate = signing_candidate(&context, &epoch_id.to_le_bytes());
             guard
-                .authorize(context, Hash::new(epoch_id.to_le_bytes()))
+                .authorize(context, Hash::new(epoch_id.to_le_bytes()), &candidate)
                 .expect("authorize next epoch");
             guard
                 .advance_committed_epoch(epoch_id)
@@ -7727,8 +8111,9 @@ mod tests {
                 )),
                 validator_set_hash: roster_hash,
             };
+            let candidate = signing_candidate(&context, &carrier_height.to_le_bytes());
             guard
-                .authorize(context, Hash::new(carrier_height.to_le_bytes()))
+                .authorize(context, Hash::new(carrier_height.to_le_bytes()), &candidate)
                 .expect("authorize exact uncommitted carrier round");
             guard
                 .advance_committed_frontier(0, carrier_height)
@@ -7746,8 +8131,9 @@ mod tests {
             parent_hash: HashOf::from_untyped_unchecked(Hash::new(rounds.to_le_bytes())),
             validator_set_hash: roster_hash,
         };
+        let later_candidate = signing_candidate(&later, b"later candidate");
         restarted
-            .authorize(later, Hash::new(b"later candidate"))
+            .authorize(later, Hash::new(b"later candidate"), &later_candidate)
             .expect("same epoch/view remains signable at a new exact carrier");
     }
 
@@ -7763,9 +8149,10 @@ mod tests {
         };
         let first = Hash::new(b"first");
         let second = Hash::new(b"second");
+        let candidate = signing_candidate(&context, b"partial-temp");
         let guard = MergeSigningGuard::open(temp.path()).expect("open guard");
         guard
-            .authorize(context.clone(), first)
+            .authorize(context.clone(), first, &candidate)
             .expect("authorize final record");
         let record_temp = guard.record_path(&context).with_extension("norito.tmp");
         fs::write(&record_temp, [0xA5, 0x5A]).expect("write partial record temp");
@@ -7777,7 +8164,7 @@ mod tests {
         assert!(!record_temp.exists());
         assert!(!high_water_temp.exists());
         assert_eq!(
-            restarted.authorize(context, second),
+            restarted.authorize(context, second, &candidate),
             Err(MergeSidecarError::LocalSigningEquivocation)
         );
     }
@@ -7823,9 +8210,10 @@ mod tests {
             parent_hash: HashOf::from_untyped_unchecked(Hash::new(b"parent-1")),
             validator_set_hash: HashOf::new(&vec![peer(b"validator")]),
         };
+        let candidate = signing_candidate(&context, b"prune-boundary");
         let mut guard = MergeSigningGuard::open(temp.path()).expect("open guard");
         guard
-            .authorize(context.clone(), Hash::new(b"first"))
+            .authorize(context.clone(), Hash::new(b"first"), &candidate)
             .expect("authorize epoch");
         guard
             .advance_committed_epoch(1)
@@ -7834,7 +8222,7 @@ mod tests {
         let restarted =
             MergeSigningGuard::open_with_committed_epoch(temp.path(), 1).expect("restart guard");
         assert_eq!(
-            restarted.authorize(context, Hash::new(b"conflict")),
+            restarted.authorize(context, Hash::new(b"conflict"), &candidate),
             Err(MergeSidecarError::LocalSigningEquivocation)
         );
     }
@@ -7849,9 +8237,10 @@ mod tests {
             parent_hash: HashOf::from_untyped_unchecked(Hash::new(b"parent-1")),
             validator_set_hash: HashOf::new(&vec![peer(b"validator")]),
         };
+        let candidate = signing_candidate(&context, b"high-water-recovery");
         let mut guard = MergeSigningGuard::open(temp.path()).expect("open guard");
         guard
-            .authorize(context.clone(), Hash::new(b"first"))
+            .authorize(context.clone(), Hash::new(b"first"), &candidate)
             .expect("authorize decision");
         let record_path = guard.record_path(&context);
         let record_bytes = fs::read(&record_path).expect("capture durable decision");
@@ -7868,7 +8257,7 @@ mod tests {
             .expect("restart completes stale-record GC");
         assert!(!record_path.exists());
         assert_eq!(
-            restarted.authorize(context, Hash::new(b"conflict")),
+            restarted.authorize(context, Hash::new(b"conflict"), &candidate),
             Err(MergeSidecarError::LocalSigningEquivocation)
         );
     }

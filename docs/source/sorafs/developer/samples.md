@@ -13,13 +13,11 @@ repository without hunting through larger scripts.
 ## Shell script — end-to-end CLI pipeline
 
 `docs/examples/sorafs_cli_quickstart.sh` ties together CAR packing, manifest
-building, Sigstore signing, proof streaming, and verification. The script
+building, submission, proof streaming, and verification. The script
 expects the following environment variables:
 
 - `SORA_PAYLOAD` — path to the file or directory you want to package.
 - `SORA_OUTPUT_DIR` — directory for generated artefacts (defaults to `artifacts`).
-- `SIGSTORE_ID_TOKEN` — OIDC token (exported automatically inside GitHub/GitLab
-  pipelines).
 - `TORII_URL` — Torii endpoint for manifest submission.
 - `SORA_AUTHORITY` / `SORA_PRIVATE_KEY` — Norito account + Ed25519 private key.
 - Optional: `SORA_PROOF_ENDPOINT`, `SORA_STREAM_TOKEN`, and `SORA_PROVIDER_ID`
@@ -52,15 +50,15 @@ cargo add sorafs_car norito reqwest hex rand httpmock --dev
 Add the file to your test suite (for example under `tests/`) and invoke the
 `fetch_and_summarise` helper from integration tests or background tasks.
 
-## Manifest + bundle fixtures
+## Content-manifest fixtures
 
 `fixtures/sorafs_manifest/ci_sample/` captures the entire packaging pipeline for
 a deterministic text payload: the CAR archive, chunk plan, manifest (`.to` plus
-JSON), signature bundle, detached signature, proof summary, and the CLI output
-from `sorafs_cli manifest sign`. The fixtures use a reproducible GitHub
-Actions–style JWT and fixed `--issued-at` timestamp so hashes stay stable across
-test runs. Pair them with `docs/examples/sorafs_ci_sample/` when you need a
-ready-to-clone repository layout or moustache template for release notes.
+JSON), and proof summary. These are deterministic test inputs, not release
+signatures. Production authenticity applies to the aggregate release manifest
+through the governed Ed25519/HSM path. Pair the fixtures with
+`docs/examples/sorafs_ci_sample/` when you need a ready-to-clone repository
+layout or moustache template for release notes.
 
 ## TypeScript — manifest validation stub
 

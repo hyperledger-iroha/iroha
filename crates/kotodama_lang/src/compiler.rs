@@ -1718,6 +1718,12 @@ pub struct CompilerOptions {
     pub force_zk: bool,
     /// Maximum execution cycles to encode in the artifact header.
     pub max_cycles: u64,
+    /// Chain discriminant used to validate and lower canonical account literals.
+    ///
+    /// Capturing this in compiler policy keeps offline builds deterministic and
+    /// prevents a cached artifact accepted for one network from being reused
+    /// under another network's account-literal policy.
+    pub chain_discriminant: u16,
     /// Selects production artifact compilation or explicit local-test compilation.
     ///
     /// Production mode rejects test declarations and test-capable typed HIR;
@@ -1732,6 +1738,7 @@ impl Default for CompilerOptions {
         Self {
             force_zk: false,
             max_cycles: DEFAULT_MAX_CYCLES,
+            chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
             mode: CompilerMode::Production,
         }
     }
@@ -1750,15 +1757,15 @@ mod tests {
     use super::{
         ACCOUNT_WILDCARD_KEY, AUTHORITY_ACCOUNT_KEY, AccessHintDiagnostics, AccessSets,
         COLLECTION_ITERATION_CAP, Compiler, CompilerMode, CompilerOptions, DEFAULT_MAX_CYCLES,
-        DataKind, DeferredTransfer, GLOBAL_WILDCARD_KEY, HINT_SKIP_DYNAMIC_STATE_PATH,
-        HINT_SKIP_LITERAL_TRIGGER_SPEC_DECODE, HINT_SKIP_OPAQUE_ISI, IrAccessClass, LiteralFixups,
-        NFT_COARSE_KEY, STATE_WILDCARD_KEY, TRAMPOLINE_ISLAND_BYTES, TransferKind, WIDE_IMM_MAX,
-        checked_align_stack_frame_size, classify_ir_access, decoded_control_target, emit_addi,
-        emit_get_private_input_arguments, emit_load64, emit_parallel_register_moves,
-        emit_private_numeric_valcom_arguments, emit_store64, encode_addi, encode_jal, encode_nop,
-        patch_indexed_literal_load, patch_literal_load, pointer_type_for_kind, push_word,
-        record_isi_access, relax_control_transfers_with_trampolines, reserve_word,
-        stack_slot_offset_bytes,
+        DataKind, DeferredTransfer, GLOBAL_WILDCARD_KEY, HINT_SKIP_CONTRACT_CALL_TARGET,
+        HINT_SKIP_DYNAMIC_STATE_PATH, HINT_SKIP_LITERAL_TRIGGER_SPEC_DECODE, HINT_SKIP_OPAQUE_ISI,
+        IrAccessClass, LiteralFixups, NFT_COARSE_KEY, STATE_WILDCARD_KEY, TRAMPOLINE_ISLAND_BYTES,
+        TransferKind, WIDE_IMM_MAX, checked_align_stack_frame_size, classify_ir_access,
+        decoded_control_target, emit_addi, emit_get_private_input_arguments, emit_load64,
+        emit_parallel_register_moves, emit_private_numeric_valcom_arguments, emit_store64,
+        encode_addi, encode_jal, encode_nop, patch_indexed_literal_load, patch_literal_load,
+        pointer_type_for_kind, push_word, record_isi_access,
+        relax_control_transfers_with_trampolines, reserve_word, stack_slot_offset_bytes,
     };
     use crate::{
         ast::BinaryOp,
@@ -10306,6 +10313,87 @@ seiyaku Test {
             error.contains("K1001") || error.contains("unknown function or builtin"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn production_contract_invoke_quantity2_is_typed_and_conservative() {
+        let src = r#"
+seiyaku Test {
+  kotoage fn relay(bytes target, quantity amount, quantity minimum) -> quantity authorize("Entry") {
+    return contract::invoke(
+      contract: target,
+      entrypoint: "swap_exact_in_quote_public",
+      returns: "quantity",
+      amount_in: amount,
+      min_out: minimum
+    );
+  }
+}
+"#;
+        let (bytes, manifest) = Compiler::new()
+            .compile_source_with_manifest(src)
+            .expect("compile exact typed nested call");
+        let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
+        assert!(
+            bytes[parsed.code_offset..].chunks_exact(4).any(|chunk| {
+                let word =
+                    u32::from_le_bytes(<[u8; 4]>::try_from(chunk).expect("instruction word"));
+                instruction::wide::opcode(word) == instruction::wide::system::SYSTEM
+                    && encoding::wide::decode_syscallx(word)
+                        == ivm_abi::syscalls::SYSCALL_CALL_CONTRACT_QUANTITY2
+            }),
+            "typed nested call must emit only its production schema-bound syscall"
+        );
+        let entry = manifest
+            .entrypoints
+            .expect("entrypoints")
+            .into_iter()
+            .find(|entry| entry.name == "relay")
+            .expect("relay entrypoint");
+        assert_eq!(entry.read_keys, [GLOBAL_WILDCARD_KEY.to_owned()]);
+        assert_eq!(entry.write_keys, [GLOBAL_WILDCARD_KEY.to_owned()]);
+        assert_eq!(entry.access_hints_complete, Some(false));
+        assert_eq!(
+            entry.access_hints_skipped,
+            [HINT_SKIP_CONTRACT_CALL_TARGET.to_owned()]
+        );
+    }
+
+    #[test]
+    fn production_contract_invoke_quantity2_rejects_dynamic_schema_selectors() {
+        for (source_fragment, expected) in [
+            (
+                "entrypoint: selector, returns: \"quantity\"",
+                "E_CONTRACT_ENTRYPOINT_LITERAL",
+            ),
+            (
+                "entrypoint: \"swap_exact_in_quote_public\", returns: selector",
+                "E_CONTRACT_RETURN_SCHEMA",
+            ),
+            (
+                "entrypoint: \"swap_exact_in_quote_public\", returns: \"int\"",
+                "E_CONTRACT_RETURN_SCHEMA",
+            ),
+        ] {
+            let source = format!(
+                r#"
+seiyaku Test {{
+  kotoage fn relay(bytes target, string selector, quantity amount, quantity minimum) -> quantity authorize("Entry") {{
+    return contract::invoke(
+      contract: target,
+      {source_fragment},
+      amount_in: amount,
+      min_out: minimum
+    );
+  }}
+}}
+"#
+            );
+            let error = Compiler::new()
+                .compile_source_with_manifest(&source)
+                .expect_err("dynamic or unsupported nested-call schema must fail closed");
+            assert!(error.contains(expected), "{error}");
+        }
     }
 
     #[test]
@@ -20376,6 +20464,16 @@ fn propagate_transitive_access_hints(
                             hint_skips,
                         );
                     }
+                    ir::Instr::DirectHelperSyscall { syscall, .. }
+                        if *syscall == ivm_abi::syscalls::SYSCALL_CALL_CONTRACT_QUANTITY2 =>
+                    {
+                        mark_conservative(
+                            caller_index,
+                            HINT_SKIP_CONTRACT_CALL_TARGET,
+                            access_sets,
+                            hint_skips,
+                        );
+                    }
                     _ => {}
                 }
             }
@@ -21116,6 +21214,11 @@ fn record_isi_access(
             if record_soracloud_request_access(raw, *syscall, access_set).is_none() {
                 apply_fallback(access_set, hint_diagnostics, HINT_SKIP_OPAQUE_ISI);
             }
+        }
+        ir::Instr::DirectHelperSyscall { syscall, .. }
+            if *syscall == ivm_abi::syscalls::SYSCALL_CALL_CONTRACT_QUANTITY2 =>
+        {
+            apply_fallback(access_set, hint_diagnostics, HINT_SKIP_CONTRACT_CALL_TARGET)
         }
         ir::Instr::InvokeEntrypointAs { .. }
         | ir::Instr::InvokeEntrypointAsMulti { .. }

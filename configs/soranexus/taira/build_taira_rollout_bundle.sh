@@ -29,7 +29,7 @@ dirty source tree, and supplies reviewed build provenance to this script.
 
 The bundle contains:
   - `irohad` and `iroha` from `target/<profile>/`
-  - `sorafs_manifest_stub` and `sorafs_tx_stdin_builder` from `target/<profile>/`
+  - `sorafs_manifest_builder` and `sorafs_tx_stdin_builder` from `target/<profile>/`
   - the checked-in `configs/soranexus/taira/` operator bundle
   - `scripts/render_taira_validator_bundle.py`
   - `scripts/render_taira_edge_nginx_conf.py`
@@ -240,7 +240,7 @@ if [[ $SKIP_BUILD -ne 1 ]]; then
     --bin iroha
     --features embedded-soracloud-runtime
   )
-  sorafs_build_args=(build --locked -p sorafs_car --features cli --bin sorafs_manifest_stub --bin sorafs_tx_stdin_builder)
+  sorafs_build_args=(build --locked -p sorafs_car --features cli --bin sorafs_manifest_builder --bin sorafs_tx_stdin_builder)
   if [[ "$PROFILE" == "release" ]]; then
     core_build_args+=(--release)
     sorafs_build_args+=(--release)
@@ -256,7 +256,7 @@ if [[ "$reference_validator_source_mode" == "attested" ]]; then
   python3 "$validator_source_verifier" verify --repo "$REPO_ROOT" --bundle-dir "$validator_source_bundle"
 fi
 
-for binary in irohad iroha sorafs_manifest_stub sorafs_tx_stdin_builder; do
+for binary in irohad iroha sorafs_manifest_builder sorafs_tx_stdin_builder; do
   if [[ ! -x "${binary_dir}/${binary}" ]]; then
     echo "missing built binary: ${binary_dir}/${binary}" >&2
     echo "run without --skip-build or build the ${PROFILE} profile first" >&2
@@ -336,7 +336,7 @@ payload = {
     "binaries": [
         "bin/irohad",
         "bin/iroha",
-        "bin/sorafs_manifest_stub",
+        "bin/sorafs_manifest_builder",
         "bin/sorafs_tx_stdin_builder",
     ],
     "prebundle_checks": [

@@ -19,7 +19,7 @@ title: SoraFS کپیسٹی سمیولیشن رَن بُک
 یہ صفحہ `docs/source/sorafs/runbooks/sorafs_capacity_simulation.md` کی آئینہ دار ہے۔スフィンクス دستاویزی مجموعہ مکمل طور پر منتقل نہیں ہو جاتا دونوں نقول کو ہم آہنگうわー
 :::
 
-یہ رن بُک وضاحت کرتی ہہ کہ SF-2c کپیسٹی مارکیٹ پلیس سمیولیشن کِٹ کیسے چلائیں حاصل شدہ میٹرکس کیسے دیکھیں۔ `docs/examples/sorafs_capacity_simulation/` 決定論的フィクスチャ 割り当て クォータ フェールオーバー スラッシング修復 エンドツーエンド ویلیڈیٹありがとうございますペイロード数 `sorafs_manifest_stub capacity` ペイロード ہیں؛マニフェスト/CAR پیکجنگ کے لیے `iroha app sorafs toolkit pack` استعمال کریں۔
+یہ رن بُک وضاحت کرتی ہہ کہ SF-2c کپیسٹی مارکیٹ پلیس سمیولیشن کِٹ کیسے چلائیں حاصل شدہ میٹرکس کیسے دیکھیں۔ `docs/examples/sorafs_capacity_simulation/` 決定論的フィクスチャ 割り当て クォータ フェールオーバー スラッシング修復 エンドツーエンド ویلیڈیٹありがとうございますペイロード数 `sorafs_manifest_builder capacity` ペイロード ہیں؛マニフェスト/CAR پیکجنگ کے لیے `iroha app sorafs toolkit pack` استعمال کریں۔
 
 ## 1. CLI の فیکٹس تیار کریں
 
@@ -28,7 +28,7 @@ cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./run_cli.sh ./artifacts
 ```
 
-`run_cli.sh``sorafs_manifest_stub capacity` ペイロード Norito ペイロード Base64 BLOB Torii リクエストボディ JSON サマリー説明:
+`run_cli.sh``sorafs_manifest_builder capacity` ペイロード Norito ペイロード Base64 BLOB Torii リクエストボディ JSON サマリー説明:
 
 - クォータの制限、制限、プロバイダーの宣言、
 - レプリケーション順序とステージングされたマニフェストとプロバイダーの管理

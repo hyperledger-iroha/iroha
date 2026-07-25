@@ -61,7 +61,7 @@ translator: machine-google-reviewed
      cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
+     cargo run -p sorafs_car --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - መገልገያዎችን፣ ፕሮፖዛል፣ የውሳኔ አሰጣጥ ሪፖርት እና መዝገብ የያዘ PR አስገባ
@@ -100,14 +100,14 @@ translator: machine-google-reviewed
 
 ## የመሳሪያዎች ተስፋዎች
 
-- `sorafs_manifest_chunk_store` እና `sorafs_manifest_stub` ያጋልጣሉ፡
+- `sorafs_manifest_chunk_store` እና `sorafs_manifest_builder` ያጋልጣሉ፡
   - `--list-profiles` ለምዝገባ ፍተሻ።
   - `--promote-profile=<handle>` ጥቅም ላይ የዋለው ቀኖናዊ ሜታዳታ ብሎክ ለማመንጨት
     መገለጫ ሲያስተዋውቁ።
   - `--json-out=-` ሪፖርቶችን ወደ stdout ለማሰራጨት ፣ ሊባዛ የሚችል ግምገማን ያስችላል
     መዝገቦች.
 - `ensure_charter_compliance()` በተዛማጅ ሁለትዮሽ ውስጥ በሚነሳበት ጊዜ ተጠርቷል።
-  (`manifest_chunk_store`፣ `provider_advert_stub`)። አዲስ ከሆነ የCI ፈተናዎች መውደቅ አለባቸው
+  (`manifest_chunk_store`፣ `sorafs_provider_advert`)። አዲስ ከሆነ የCI ፈተናዎች መውደቅ አለባቸው
   ግቤቶች ቻርተሩን ይጥሳሉ.
 
 ## መዝገብ መያዝ

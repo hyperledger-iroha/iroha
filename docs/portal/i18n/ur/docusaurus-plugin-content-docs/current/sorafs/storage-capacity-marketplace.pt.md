@@ -63,7 +63,7 @@ ID: اسٹوریج صلاحیت کی مارکیٹ پلیس
 - مشترکہ مددگار (`CapacityMetadataEntry` ، `PricingScheduleV1` ، لین/انتساب/SLA توثیق کرنے والے) CI اور بہاو ٹولنگ کے ذریعہ عین مطابق کلیدی توثیق اور دوبارہ قابل استعمال غلطی کی اطلاع دہندگی فراہم کرتے ہیں۔ [کریٹس/sorafs_manifest/src/capacing.rs: 230]
 - `PinProviderRegistry` اب `/v1/sorafs/capacity/state` کے ذریعے آن چین اسنیپ شاٹ کو بے نقاب کرتا ہے ، فراہم کنندہ کے اعلامیے اور فیس لیجر اندراجات کو Norito ڈٹرمینسٹک JSON کے ذریعے جوڑتا ہے۔ .
 - توثیق کی کوریج کیننیکل ہینڈلز ، ڈپلیکیٹ کا پتہ لگانے ، فی لین کی حدود ، نقل کی تفویض گارڈز اور ٹیلی میٹری رینج چیک کو نافذ کرتی ہے تاکہ سی آئی میں فوری طور پر رجعتیں ظاہر ہوں۔ [کریٹس/sorafs_manifest/src/capacing.rs: 792]
-- آپریٹرز کے لئے ٹولنگ: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` پڑھنے کے قابل چشمیوں کو کیننیکل Norito پے لوڈ میں تبدیل کرتا ہے ، `/v1/sorafs/capacity/declare` ، `/v1/sorafs/capacity/telemetry` فکسچر اور نقل کے آرڈر کے ساتھ آپریٹرز کو تیار کرنے کے لئے بیس 64 بلبس اور JSON ڈائجسٹس کو مقامی توثیق کے ساتھ تیار کرتا ہے۔ .
+- آپریٹرز کے لئے ٹولنگ: `sorafs_manifest_builder capacity {declaration, telemetry, replication-order}` پڑھنے کے قابل چشمیوں کو کیننیکل Norito پے لوڈ میں تبدیل کرتا ہے ، `/v1/sorafs/capacity/declare` ، `/v1/sorafs/capacity/telemetry` فکسچر اور نقل کے آرڈر کے ساتھ آپریٹرز کو تیار کرنے کے لئے بیس 64 بلبس اور JSON ڈائجسٹس کو مقامی توثیق کے ساتھ تیار کرتا ہے۔ .
 
 ### 2۔ کنٹرول پلان انضمام| ٹاسک | ذمہ دار شخص (زبانیں) | نوٹ |
 | ------ | -------------------- | ------- |
@@ -152,7 +152,7 @@ ID: اسٹوریج صلاحیت کی مارکیٹ پلیس
   گورننس پیکجوں کے ساتھ۔
 
 ### تنازعہ اور کمی کا ثبوت
-- `sorafs_manifest_stub capacity dispute` کے ذریعے فائل تنازعات (ٹیسٹ:
+- `sorafs_manifest_builder capacity dispute` کے ذریعے فائل تنازعات (ٹیسٹ:
   `cargo test -p sorafs_car --test capacity_cli`) کیننیکل پے لوڈ کو برقرار رکھنے کے لئے۔
 - `cargo test -p iroha_core -- capacity_dispute_replay_is_deterministic` اور سوئٹ چلائیں
   ثابت کرنے کے لئے جرمانے (`record_capacity_telemetry_penalises_persistent_under_delivery`) کی
@@ -161,7 +161,7 @@ ID: اسٹوریج صلاحیت کی مارکیٹ پلیس
   توثیق کی رپورٹ میں ہڑتال کی منظوری سے رابطہ کریں۔
 
 ### فراہم کنندہ جہاز پر چلنے اور باہر نکلنے والے دھواں ٹیسٹ
-- `sorafs_manifest_stub capacity ...` کے ساتھ اعلان/ٹیلی میٹری نمونے کو دوبارہ تخلیق کریں اور چلائیں
+- `sorafs_manifest_builder capacity ...` کے ساتھ اعلان/ٹیلی میٹری نمونے کو دوبارہ تخلیق کریں اور چلائیں
   جمع کرانے سے پہلے CLI ٹیسٹ (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`)۔
 - Torii (`/v1/sorafs/capacity/declare`) کے ذریعے جمع کروائیں اور `/v1/sorafs/capacity/state` کو مزید گرفت میں رکھیں
   Grafana کے اسکرین شاٹس۔ `docs/source/sorafs/capacity_onboarding_runbook.md` پر آؤٹ پٹ اسٹریم پر عمل کریں۔

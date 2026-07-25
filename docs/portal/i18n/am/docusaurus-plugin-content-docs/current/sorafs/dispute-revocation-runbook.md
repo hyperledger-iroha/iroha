@@ -36,7 +36,7 @@ translation_last_reviewed: 2026-02-07
 
 ## 3. ክርክሩን ያስገቡ
 
-1. ለ`sorafs_manifest_stub capacity dispute` ልዩ JSON ይፍጠሩ፡
+1. ለ`sorafs_manifest_builder capacity dispute` ልዩ JSON ይፍጠሩ፡
 
    ```json
    {
@@ -59,7 +59,7 @@ translation_last_reviewed: 2026-02-07
 2. CLI ን ያሂዱ፡-
 
    ```bash
-   sorafs_manifest_stub capacity dispute \
+   sorafs_manifest_builder capacity dispute \
      --spec=dispute.json \
      --norito-out=dispute.to \
      --base64-out=dispute.b64 \
@@ -76,7 +76,7 @@ translation_last_reviewed: 2026-02-07
 
 1. **የጸጋ መስኮት፡** ስለሚመጣው መሻር አቅራቢውን ያሳውቁ፤ ፖሊሲ ሲፈቅድ የተሰካውን ውሂብ ለመልቀቅ ፍቀድ።
 2. ** `ProviderAdmissionRevocationV1` ፍጠር:**
-   - ከተፈቀደው ምክንያት `sorafs_manifest_stub provider-admission revoke` ይጠቀሙ።
+   - ከተፈቀደው ምክንያት `sorafs_manifest_builder provider-admission revoke` ይጠቀሙ።
    - ፊርማዎችን እና የመሻር ሂደቱን ያረጋግጡ።
 3. ** መሻርን አትም::**
    - የመሻር ጥያቄውን ለTorii ያስገቡ።
@@ -91,7 +91,7 @@ translation_last_reviewed: 2026-02-07
 
 ## 6. የማጣቀሻ እቃዎች
 
-- `sorafs_manifest_stub capacity dispute --help`
+- `sorafs_manifest_builder capacity dispute --help`
 - `docs/source/sorafs/storage_capacity_marketplace.md` (የክርክር ክፍል)
 - `docs/source/sorafs/provider_admission_policy.md` (የመሻሪያ የስራ ፍሰት)
 - ታዛቢነት ዳሽቦርድ: `SoraFS / Capacity Providers`

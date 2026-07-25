@@ -60,6 +60,17 @@ allowed_origins = [
   "https://cloudflare-ipfs.com",
   "https://w3s.link",
   "https://nftstorage.link",
+  "https://bokolo.soramitsu.io",
+  "https://cbsi-banking.soramitsu.io",
+  "https://cbsi-core.soramitsu.io",
+  "https://bokolo-pob.soramitsu.io",
+  "https://bokolo-bred.soramitsu.io",
+  "https://bokolo-anz.soramitsu.io",
+  "https://bokolo-bsp.soramitsu.io",
+  "https://bokolo-m-selen.soramitsu.io",
+  "https://bokolo-ezipei.soramitsu.io",
+  "https://bpng.soramitsu.io",
+  "https://bokolo-explorer.soramitsu.io",
 ]
 allowed_methods = ["GET", "POST", "DELETE", "OPTIONS"]
 allowed_headers = [
@@ -87,7 +98,7 @@ authority = "REPLACE_WITH_TAIRA_ONBOARDING_AUTHORITY"
 private_key_file = "REPLACE_WITH_TAIRA_ONBOARDING_PRIVATE_KEY_FILE"
 lease_term_years = 1
 additional_permissions = []
-fee_sponsor_program_id = "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A/default"
+fee_sponsor_program_id = "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A/cbsi_web"
 
 [[torii.account_onboarding.credentials]]
 id = "REPLACE_WITH_TAIRA_ONBOARDING_CREDENTIAL_ID"
@@ -112,7 +123,7 @@ pow_vrf_seed_enabled = true
 
 [sorafs.discovery]
 discovery_enabled = true
-known_capabilities = ["torii_gateway", "chunk_range_fetch"]
+known_capabilities = ["torii_gateway", "chunk_range_fetch", "potr_mldsa"]
 
 [sorafs.discovery.admission]
 envelopes_dir = "configs/soranexus/taira/sorafs_admission"
@@ -176,7 +187,7 @@ stop_grace_ms = 10000
 
 [soracloud_runtime.submission]
 fee_payer = "sponsor"
-fee_program_id = "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A/default"
+fee_program_id = "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A/cbsi_web"
 fee_program_revision = 1
 
 [soracloud_runtime.egress]
@@ -351,7 +362,7 @@ metadata = { "scheduler.teu_capacity" = "25000000" }
 alias = "universal"
 id = 0
 description = "Single-lane data space"
-fee_sponsor_program_id = "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A/default"
+fee_sponsor_program_id = "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A/cbsi_web"
 
 [[nexus.dataspace_catalog]]
 alias = "governance"
@@ -370,7 +381,7 @@ alias = "is"
 id = 6647857470246403404
 manifest_hash = "4cbd76b725ef415c000000000000000000000000000000000000000000000000"
 description = "External PoC data space"
-fee_sponsor_program_id = "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A/default"
+fee_sponsor_program_id = "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A/cbsi_web"
 
 [nexus.governance]
 default_module = "parliament"
@@ -467,7 +478,14 @@ seed_tag = "iroha:da:rotate:v1\u0000"
 latency_decay = 0.25
 
 [gov]
-plain_voting_enabled = false
+plain_voting_enabled = true
+min_bond_amount = "150"
+min_enactment_delay = 600
+window_span = 3600
+min_turnout = 1
+# The reviewed validation-fee policy enacts exactly 3,600 blocks after its
+# referendum closes. The deadline is inclusive; the following block fails closed.
+pipeline_enactment_sla_blocks = 3600
 voting_asset_id = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
 citizenship_asset_id = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
 citizenship_bond_amount = "10000"

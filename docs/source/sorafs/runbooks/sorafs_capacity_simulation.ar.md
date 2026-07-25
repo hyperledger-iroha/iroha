@@ -11,7 +11,7 @@ translation_last_reviewed: 2026-01-30
 
 # دليل تشغيل محاكاة سعة SoraFS
 
-يشرح هذا الدليل كيفية تشغيل مجموعة أدوات محاكاة سوق السعة SF-2c وعرض المقاييس الناتجة. الهدف هو التحقق من تفاوض الحصص، ومعالجة failover، ومعالجة slashing من الطرف إلى الطرف باستخدام fixtures القابلة لإعادة الإنتاج ضمن `docs/examples/sorafs_capacity_simulation/`. لا تزال payloads السعة تستخدم `sorafs_manifest_stub capacity`؛ استخدم `iroha app sorafs toolkit pack` لتدفقات تغليف manifest/CAR.
+يشرح هذا الدليل كيفية تشغيل مجموعة أدوات محاكاة سوق السعة SF-2c وعرض المقاييس الناتجة. الهدف هو التحقق من تفاوض الحصص، ومعالجة failover، ومعالجة slashing من الطرف إلى الطرف باستخدام fixtures القابلة لإعادة الإنتاج ضمن `docs/examples/sorafs_capacity_simulation/`. لا تزال payloads السعة تستخدم `sorafs_manifest_builder capacity`؛ استخدم `iroha app sorafs toolkit pack` لتدفقات تغليف manifest/CAR.
 
 ## 1. إنشاء Artifacts خاصة بالـ CLI
 
@@ -20,7 +20,7 @@ cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./run_cli.sh ./artifacts
 ```
 
-يستدعي السكربت `sorafs_manifest_stub capacity` لإخراج Norito payloads حتمية وترميزات base64 وأجسام طلبات Torii وملخصات JSON لـ:
+يستدعي السكربت `sorafs_manifest_builder capacity` لإخراج Norito payloads حتمية وترميزات base64 وأجسام طلبات Torii وملخصات JSON لـ:
 
 - ثلاث تصريحات لمزوّدين مشاركين في سيناريو تفاوض الحصص.
 - أمر نسخ يوزّع المانيفست المجهز عبر المزوّدين.

@@ -242,7 +242,7 @@ pub mod isi {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
         trigger: Trigger,
-        skip_permission_check: bool,
+        preauthorized_manifest_contract_subject: Option<&AccountId>,
     ) -> Result<(), Error> {
         let mut new_trigger = trigger;
 
@@ -258,11 +258,25 @@ pub mod isi {
                 .fuel(),
         )?;
 
-        if !skip_permission_check {
+        {
             // Enforce minimal permission: only genesis block, the trigger owner,
-            // domain owner of the trigger owner, or an account with
-            // CanRegisterTrigger{authority: <owner>} may register the trigger.
+            // domain owner of the trigger owner, an account with
+            // CanRegisterTrigger{authority: <owner>}, or the contract lifecycle
+            // path for its exact derived and already-registered subject may
+            // register the trigger.
             let owner = new_trigger.action().authority().clone();
+            let is_preauthorized_manifest_contract_subject =
+                preauthorized_manifest_contract_subject.is_some_and(|subject| subject == &owner);
+            if is_preauthorized_manifest_contract_subject {
+                state_transaction.world.account(&owner).map_err(|_| {
+                    Error::InvalidParameter(InvalidParameterError::SmartContract(
+                        format!(
+                            "contract manifest trigger authority `{owner}` must be registered before activation"
+                        )
+                        .into(),
+                    ))
+                })?;
+            }
             let is_genesis = state_transaction._curr_block.is_genesis();
             let is_owner = authority == &owner;
             let mut is_domain_owner = false;
@@ -295,7 +309,12 @@ pub mod isi {
             }
             let has_permission =
                 (!is_genesis) && state_transaction.can_register_trigger_for(authority, &owner);
-            if !(is_genesis || is_owner || is_domain_owner || has_permission) {
+            if !(is_genesis
+                || is_owner
+                || is_domain_owner
+                || has_permission
+                || is_preauthorized_manifest_contract_subject)
+            {
                 return Err(Error::InvalidParameter(
                     InvalidParameterError::SmartContract(format!(
                         "Missing CanRegisterTrigger{{authority: {owner}}} permission for {authority}"
@@ -327,6 +346,34 @@ pub mod isi {
                     "time-trigger retry policy is only supported for scheduled time triggers"
                         .into(),
                 ),
+            ));
+        }
+
+        let duplicates_enacted_payout =
+            |invocation: &iroha_data_model::transaction::executable::ContractInvocation| {
+                crate::validation_fee::is_enacted_validation_fee_payout_invocation(
+                    state_transaction,
+                    invocation,
+                )
+            };
+        let executable_duplicates_enacted_payout = match new_trigger.action().executable() {
+            Executable::ContractCall(invocation) => duplicates_enacted_payout(invocation),
+            Executable::Batch(items) => items.iter().any(|item| {
+                matches!(
+                    item,
+                    iroha_data_model::transaction::executable::ExecutableBatchItem::ContractCall(
+                        invocation
+                    )
+                        if duplicates_enacted_payout(invocation)
+                )
+            }),
+            Executable::Instructions(_) | Executable::Ivm(_) | Executable::IvmProved(_) => false,
+        };
+        if matches!(new_trigger.action().filter(), EventFilterBox::Time(_))
+            && executable_duplicates_enacted_payout
+        {
+            return Err(Error::InvariantViolation(
+                "an enacted validation-fee payout lifecycle pins its sole scheduled trigger".into(),
             ));
         }
 
@@ -437,7 +484,7 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            register_trigger_internal(authority, state_transaction, self.object().clone(), false)
+            register_trigger_internal(authority, state_transaction, self.object().clone(), None)
         }
     }
 
@@ -449,6 +496,14 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let trigger_id = self.object().clone();
+            if crate::validation_fee::is_enacted_validation_fee_payout_trigger(
+                state_transaction,
+                &trigger_id,
+            ) {
+                return Err(Error::InvariantViolation(
+                    "an enacted validation-fee payout lifecycle pins this trigger".into(),
+                ));
+            }
 
             if state_transaction.world.triggers.remove(&trigger_id) {
                 remove_trigger_associated_permissions(state_transaction, &trigger_id);
@@ -474,6 +529,14 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let id = self.destination().clone();
+            if crate::validation_fee::is_enacted_validation_fee_payout_trigger(
+                state_transaction,
+                &id,
+            ) {
+                return Err(Error::InvariantViolation(
+                    "an enacted validation-fee payout lifecycle pins this trigger".into(),
+                ));
+            }
 
             let triggers = &mut state_transaction.world.triggers;
             triggers
@@ -512,6 +575,14 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let trigger = self.destination().clone();
+            if crate::validation_fee::is_enacted_validation_fee_payout_trigger(
+                state_transaction,
+                &trigger,
+            ) {
+                return Err(Error::InvariantViolation(
+                    "an enacted validation-fee payout lifecycle pins this trigger".into(),
+                ));
+            }
             let mut removed = false;
             {
                 let triggers = &mut state_transaction.world.triggers;
@@ -555,6 +626,14 @@ pub mod isi {
                 key,
                 value,
             } = self;
+            if crate::validation_fee::is_enacted_validation_fee_payout_trigger(
+                state_transaction,
+                &trigger_id,
+            ) {
+                return Err(Error::InvariantViolation(
+                    "an enacted validation-fee payout lifecycle pins this trigger".into(),
+                ));
+            }
             ensure_metadata_key_is_not_reserved(&key)?;
             crate::smartcontracts::limits::enforce_json_size(
                 state_transaction,
@@ -591,6 +670,14 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let trigger_id = self.object().clone();
+            if crate::validation_fee::is_enacted_validation_fee_payout_trigger(
+                state_transaction,
+                &trigger_id,
+            ) {
+                return Err(Error::InvariantViolation(
+                    "an enacted validation-fee payout lifecycle pins this trigger".into(),
+                ));
+            }
             ensure_metadata_key_is_not_reserved(self.key())?;
 
             let value = state_transaction

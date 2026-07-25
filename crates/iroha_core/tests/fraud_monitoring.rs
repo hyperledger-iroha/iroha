@@ -1,12 +1,13 @@
 //! Fraud monitoring admission tests ensure configuration knobs gate transaction acceptance.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
-use std::{borrow::Cow, str::FromStr, time::Duration};
+use std::{borrow::Cow, str::FromStr, sync::Arc, time::Duration};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use iroha_config::parameters::actual::{FraudAttester, FraudMonitoring, FraudRiskBand};
 use iroha_core::{
     block::BlockBuilder,
+    governance::manifest::LaneManifestRegistry,
     kura::Kura,
     query::store::LiveQueryStore,
     smartcontracts::ivm::cache::IvmCache,
@@ -51,9 +52,12 @@ fn build_state() -> (State, ChainId, AccountId, KeyPair) {
     let account = Account::new(account_id.clone()).build(&account_id);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
 
-    let mut state = State::new_for_testing(world, kura, query_handle);
     let chain_id = ChainId::from("fraud-monitor-chain");
-    state.chain_id = chain_id.clone();
+    let state = State::new_with_chain_for_testing(world, kura, query_handle, chain_id.clone());
+    let nexus = state.nexus_snapshot();
+    state.install_lane_manifests(&Arc::new(
+        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
+    ));
 
     (state, chain_id, account_id, key_pair)
 }
@@ -390,11 +394,11 @@ fn admission_rejects_attestation_signature_mismatch() {
     let mut cursor = envelope_bytes.as_slice();
     let mut decoded: FraudAssessment =
         norito::codec::Decode::decode(&mut cursor).expect("decode envelope");
-    let signature = decoded
-        .signature
-        .as_mut()
-        .expect("signature present in envelope");
-    signature[0] ^= 0xFF;
+    decoded.signature = None;
+    let wrong_attester = checked_random_fraud_monitoring_keypair();
+    let wrong_signature = checked_signature_of(wrong_attester.private_key(), &decoded);
+    let raw_wrong_signature: Signature = wrong_signature.into();
+    decoded.signature = Some(raw_wrong_signature.payload().to_vec());
     let tampered_bytes = decoded.encode();
     let tampered_b64 = BASE64_STANDARD.encode(tampered_bytes);
     metadata.insert(envelope_key, Json::new(tampered_b64));
@@ -408,10 +412,7 @@ fn admission_rejects_attestation_signature_mismatch() {
     let err = result.expect_err("tampered signature must reject");
     match err {
         TransactionRejectionReason::Validation(ValidationFail::NotPermitted(msg)) => {
-            assert!(
-                msg.contains("signature failed verification"),
-                "unexpected message: {msg}"
-            );
+            assert_eq!(msg, "fraud assessment signature failed verification");
         }
         other => panic!("unexpected rejection reason: {other:?}"),
     }

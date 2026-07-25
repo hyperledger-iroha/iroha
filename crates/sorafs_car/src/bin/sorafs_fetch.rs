@@ -1,7 +1,7 @@
 //! Prototype CLI for exercising the multi-source chunk fetch orchestrator.
 #![allow(unexpected_cfgs)]
 //!
-//! The tool accepts a chunk fetch plan (as emitted by `sorafs_manifest_stub
+//! The tool accepts a chunk fetch plan (as emitted by `sorafs_manifest_builder
 //! --chunk-fetch-plan-out`) and a list of local provider payloads. Each provider
 //! exposes the original payload as a single file; the orchestrator reads the
 //! required byte ranges for every chunk, verifies BLAKE3 digests and lengths,
@@ -59,11 +59,12 @@ use sorafs_manifest::{
     provider_advert::ProviderCapabilitySoranetPqV1,
 };
 
-const KNOWN_CAPABILITIES: &[CapabilityType; 4] = &[
+const KNOWN_CAPABILITIES: &[CapabilityType; 5] = &[
     CapabilityType::ToriiGateway,
     CapabilityType::QuicNoise,
     CapabilityType::ChunkRangeFetch,
     CapabilityType::SoraNetHybridPq,
+    CapabilityType::PotrMlDsa,
 ];
 use std::{
     collections::{HashMap, HashSet},
@@ -1766,6 +1767,7 @@ fn capability_name(capability: CapabilityType) -> &'static str {
         CapabilityType::QuicNoise => "quic_noise",
         CapabilityType::ChunkRangeFetch => "chunk_range_fetch",
         CapabilityType::SoraNetHybridPq => "soranet_pq",
+        CapabilityType::PotrMlDsa => "potr_mldsa",
         CapabilityType::VendorReserved => "vendor_reserved",
     }
 }

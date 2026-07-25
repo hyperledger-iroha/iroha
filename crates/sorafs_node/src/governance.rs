@@ -24,12 +24,13 @@ use iroha_crypto::{Algorithm, KeyPair, PrivateKey, Signature as IrohaSignature};
 use norito::json::{self, Map as JsonMap, Value as JsonValue};
 use sorafs_car::{CarBuildPlan, CarWriter, FileEntry};
 use sorafs_manifest::{
-    GOVERNANCE_DAG_BLOCK_VERSION_V1, GOVERNANCE_DAG_HEAD_VERSION_V1, GOVERNANCE_LOG_VERSION_V1,
-    GovernanceDagBlockV1, GovernanceDagHeadV1, GovernanceExternalPayloadV1,
-    GovernanceExternalRepairSlashStageV1, GovernanceLogNodeV1, GovernanceLogPayloadV1,
-    GovernanceLogSignatureV1, GovernanceSignatureAlgorithm, ModerationLedgerCyclePublicationV1,
-    PROOF_TOKEN_ISSUANCE_VERSION_V1, ProofTokenIssuanceV1, SettlementReceiptV1,
-    SignedReputationSnapshotV1, SoraFsAppealFinanceReportV1,
+    GOVERNANCE_DAG_BLOCK_VERSION_V1, GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1,
+    GOVERNANCE_DAG_HEAD_VERSION_V1, GOVERNANCE_DAG_PUBLISHER_PEER_ID_MAX_BYTES_V1,
+    GOVERNANCE_LOG_VERSION_V1, GovernanceDagBlockV1, GovernanceDagHeadV1,
+    GovernanceExternalPayloadV1, GovernanceExternalRepairSlashStageV1, GovernanceLogNodeV1,
+    GovernanceLogPayloadV1, GovernanceLogSignatureV1, GovernanceSignatureAlgorithm,
+    ModerationLedgerCyclePublicationV1, PROOF_TOKEN_ISSUANCE_VERSION_V1, ProofTokenIssuanceV1,
+    SettlementReceiptV1, SignedReputationSnapshotV1, SoraFsAppealFinanceReportV1,
     SoraFsAppealFinanceSettlementReceiptV1, SoraFsAppealFinanceWeeklyRollupV1,
     SoraFsModerationBallotGovernanceEventV1, SorafsReconciliationReportV1,
     deal::{DealSettlementStatusV1, DealSettlementV1},
@@ -851,6 +852,11 @@ impl GovernanceRuntimeDagSigner {
             return Err(GovernancePublishError::other(
                 "governance runtime DAG publisher peer id must not be empty",
             ));
+        }
+        if publisher_peer_id.len() > GOVERNANCE_DAG_PUBLISHER_PEER_ID_MAX_BYTES_V1 {
+            return Err(GovernancePublishError::other(format!(
+                "governance runtime DAG publisher peer id exceeds {GOVERNANCE_DAG_PUBLISHER_PEER_ID_MAX_BYTES_V1} bytes"
+            )));
         }
         let keypair = KeyPair::from_private_key(private_key.clone()).map_err(|err| {
             GovernancePublishError::other(format!(
@@ -1906,7 +1912,10 @@ fn append_runtime_signed_dag_payload(
 
     let duplicate_position = blocks.iter().position(|entry| {
         entry.get("payload_kind").and_then(JsonValue::as_str) == Some(payload_kind)
-            && entry.get("encoded_blake3").and_then(JsonValue::as_str) == Some(digest_hex)
+            && entry
+                .get("source_payload_blake3")
+                .and_then(JsonValue::as_str)
+                == Some(digest_hex)
     });
     if let Some(position) = duplicate_position {
         if runtime_dag_index_entry_files_exist(root, &blocks[position]) {
@@ -1919,10 +1928,12 @@ fn append_runtime_signed_dag_payload(
     }
 
     let tip = runtime_dag_tip_from_entries(&blocks)?;
-    let sequence = tip
-        .as_ref()
-        .map(|tip| tip.sequence.saturating_add(1))
-        .unwrap_or(0);
+    let sequence = match tip.as_ref() {
+        Some(tip) => tip.sequence.checked_add(1).ok_or_else(|| {
+            GovernancePublishError::other("governance runtime DAG sequence exhausted")
+        })?,
+        None => 0,
+    };
     let timestamp = current_unix_timestamp_seconds();
     let mut node = GovernanceLogNodeV1 {
         version: GOVERNANCE_LOG_VERSION_V1,
@@ -1982,13 +1993,17 @@ fn append_runtime_signed_dag_payload(
         GovernancePublishError::other(format!("validate governance runtime DAG block: {err}"))
     })?;
 
+    let block_count = sequence.checked_add(1).ok_or_else(|| {
+        GovernancePublishError::other("governance runtime DAG block count exhausted")
+    })?;
+    let checkpoint_cid = runtime_dag_checkpoint_cid(&blocks, block_count)?;
     let mut head = GovernanceDagHeadV1 {
         version: GOVERNANCE_DAG_HEAD_VERSION_V1,
         head_block_cid: block.block_cid.clone(),
-        block_count: sequence.saturating_add(1),
+        block_count,
         generated_at: timestamp,
         publisher_peer_id: signer.publisher_peer_id.clone(),
-        checkpoint_cid: None,
+        checkpoint_cid,
         head_signature: empty_governance_ed25519_signature(),
     };
     let head_payload = head.signature_payload_bytes().map_err(|err| {
@@ -2004,6 +2019,16 @@ fn append_runtime_signed_dag_payload(
     let block_bytes = norito::to_bytes(&block).map_err(|err| {
         GovernancePublishError::other(format!("encode governance runtime DAG block: {err}"))
     })?;
+    let block_position = u64::try_from(blocks.len()).map_err(|_| {
+        GovernancePublishError::other("governance runtime DAG block position exceeds u64")
+    })?;
+    let block_encoded_len = u64::try_from(block_bytes.len()).map_err(|_| {
+        GovernancePublishError::other("governance runtime DAG block length exceeds u64")
+    })?;
+    let source_payload_len = u64::try_from(encoded_len).map_err(|_| {
+        GovernancePublishError::other("governance runtime DAG source payload length exceeds u64")
+    })?;
+    let block_digest_hex = blake3::hash(&block_bytes).to_hex().to_string();
     let block_cid_hex = hex::encode(&block.block_cid);
     let block_path = runtime_dag_block_path(root, sequence, &block_cid_hex);
     write_atomic(&block_path, &block_bytes)?;
@@ -2017,16 +2042,18 @@ fn append_runtime_signed_dag_payload(
     write_digest_sidecar(&head_path, &head_bytes)?;
 
     let mut entry = JsonMap::new();
-    entry.insert("position".into(), JsonValue::from(blocks.len() as u64));
+    entry.insert("position".into(), JsonValue::from(block_position));
     entry.insert("sequence".into(), JsonValue::from(sequence));
     entry.insert("payload_kind".into(), JsonValue::from(payload_kind));
+    entry.insert("encoded_blake3".into(), JsonValue::from(block_digest_hex));
+    entry.insert("encoded_len".into(), JsonValue::from(block_encoded_len));
     entry.insert(
-        "encoded_blake3".into(),
+        "source_payload_blake3".into(),
         JsonValue::from(digest_hex.to_owned()),
     );
     entry.insert(
-        "encoded_len".into(),
-        JsonValue::from(u64::try_from(encoded_len).unwrap_or(u64::MAX)),
+        "source_payload_len".into(),
+        JsonValue::from(source_payload_len),
     );
     entry.insert(
         "encoded_path".into(),
@@ -2181,6 +2208,43 @@ fn runtime_dag_tip_from_entries(
     }))
 }
 
+fn runtime_dag_checkpoint_cid(
+    blocks: &[JsonValue],
+    block_count: u64,
+) -> Result<Option<Vec<u8>>, GovernancePublishError> {
+    let window = u64::try_from(GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1)
+        .expect("governance DAG checkpoint window fits u64");
+    if block_count <= window {
+        return Ok(None);
+    }
+    let checkpoint_sequence = block_count.checked_sub(window).ok_or_else(|| {
+        GovernancePublishError::other(
+            "governance runtime DAG checkpoint block count is smaller than its window",
+        )
+    })?;
+    let checkpoint_position = usize::try_from(checkpoint_sequence).map_err(|_| {
+        GovernancePublishError::other(
+            "governance runtime DAG checkpoint sequence exceeds host limits",
+        )
+    })?;
+    let checkpoint_entry = blocks.get(checkpoint_position).ok_or_else(|| {
+        GovernancePublishError::other(
+            "governance runtime DAG index is missing the checkpoint window root",
+        )
+    })?;
+    let checkpoint_map = checkpoint_entry.as_object().ok_or_else(|| {
+        GovernancePublishError::other(
+            "governance runtime DAG checkpoint index entry is not an object",
+        )
+    })?;
+    if required_runtime_u64(checkpoint_map, "sequence")? != checkpoint_sequence {
+        return Err(GovernancePublishError::other(
+            "governance runtime DAG checkpoint sequence does not match its index position",
+        ));
+    }
+    required_runtime_hex(checkpoint_map, "block_cid_hex").map(Some)
+}
+
 fn rebuild_runtime_dag_index(
     root: &Path,
     signer: &GovernanceRuntimeDagSigner,
@@ -2191,27 +2255,37 @@ fn rebuild_runtime_dag_index(
     index_path: &Path,
 ) -> Result<(), GovernancePublishError> {
     let mut by_encoded_blake3 = JsonMap::new();
+    let mut by_source_payload_blake3 = JsonMap::new();
     let mut by_payload_kind = JsonMap::new();
     let mut previous_block_cid_hex: Option<String> = None;
     let mut previous_node_cid_hex: Option<String> = None;
 
     for (position, block) in blocks.iter_mut().enumerate() {
+        let position_u64 = u64::try_from(position).map_err(|_| {
+            GovernancePublishError::other("governance runtime DAG index position exceeds u64")
+        })?;
         let Some(block_map) = block.as_object_mut() else {
             return Err(GovernancePublishError::other(
                 "governance runtime DAG index block entry is not an object",
             ));
         };
-        block_map.insert("position".into(), JsonValue::from(position as u64));
+        block_map.insert("position".into(), JsonValue::from(position_u64));
         let sequence = required_runtime_u64(block_map, "sequence")?;
-        if sequence != position as u64 {
+        if sequence != position_u64 {
             return Err(GovernancePublishError::other(
                 "governance runtime DAG index sequence does not match block position",
             ));
         }
         let payload_kind = required_runtime_string(block_map, "payload_kind")?;
-        append_index_position(&mut by_payload_kind, &payload_kind, position);
+        append_runtime_index_position(&mut by_payload_kind, &payload_kind, position_u64);
         let encoded_blake3 = required_runtime_string(block_map, "encoded_blake3")?;
-        append_index_position(&mut by_encoded_blake3, &encoded_blake3, position);
+        append_runtime_index_position(&mut by_encoded_blake3, &encoded_blake3, position_u64);
+        let source_payload_blake3 = required_runtime_string(block_map, "source_payload_blake3")?;
+        append_runtime_index_position(
+            &mut by_source_payload_blake3,
+            &source_payload_blake3,
+            position_u64,
+        );
         let block_cid_hex = required_runtime_string(block_map, "block_cid_hex")?;
         let node_cid_hex = required_runtime_string(block_map, "node_cid_hex")?;
         let prev_block_cid_hex = optional_runtime_string(block_map, "prev_block_cid_hex")?;
@@ -2258,6 +2332,10 @@ fn rebuild_runtime_dag_index(
         "by_encoded_blake3".into(),
         JsonValue::Object(by_encoded_blake3),
     );
+    index.insert(
+        "by_source_payload_blake3".into(),
+        JsonValue::Object(by_source_payload_blake3),
+    );
     index.insert("by_payload_kind".into(), JsonValue::Object(by_payload_kind));
     index.insert("blocks".into(), JsonValue::Array(blocks));
 
@@ -2268,6 +2346,16 @@ fn rebuild_runtime_dag_index(
     write_digest_sidecar(index_path, body.as_bytes())?;
     record_governance_dag_head_age(head.generated_at);
     Ok(())
+}
+
+fn append_runtime_index_position(index: &mut JsonMap, key: &str, position: u64) {
+    let position = JsonValue::from(position);
+    match index.get_mut(key).and_then(JsonValue::as_array_mut) {
+        Some(positions) => positions.push(position),
+        None => {
+            index.insert(key.to_owned(), JsonValue::Array(vec![position]));
+        }
+    }
 }
 
 fn runtime_dag_index_entry_files_exist(root: &Path, entry: &JsonValue) -> bool {
@@ -2568,7 +2656,7 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
             )?;
             self.record_runtime_signed_payload(
                 "deal_settlement",
-                GovernanceLogPayloadV1::DealSettlement(settlement.clone()),
+                GovernanceLogPayloadV1::DealSettlement(Box::new(settlement.clone())),
                 &encoded_path,
                 &json_path,
                 &digest_hex,
@@ -5387,6 +5475,22 @@ mod tests {
     }
 
     #[test]
+    fn runtime_dag_signer_rejects_oversized_publisher_identity() {
+        let private_key =
+            PrivateKey::from_bytes(Algorithm::Ed25519, &[0x31; 32]).expect("test Ed25519 key");
+        let error = GovernanceRuntimeDagSigner::try_new(
+            vec![0x41; GOVERNANCE_DAG_PUBLISHER_PEER_ID_MAX_BYTES_V1 + 1],
+            private_key,
+        )
+        .expect_err("oversized governance publisher identity must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("publisher peer id exceeds 128 bytes")
+        );
+    }
+
+    #[test]
     fn runtime_dag_signer_rejects_key_inside_publisher_root() {
         let temp = tempdir().expect("tempdir");
         let key_path = temp.path().join("runtime.key");
@@ -5764,6 +5868,106 @@ mod tests {
                 );
             }
             other => panic!("unexpected seventh runtime DAG payload: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn filesystem_publisher_keeps_full_history_and_signs_checkpoint_window_with_one_identity() {
+        let temp = tempdir().expect("tempdir");
+        let publisher = signed_runtime_publisher(temp.path());
+        let (template, _) = sample_settlement();
+
+        for marker in 1_u8..=GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1 as u8 {
+            let mut settlement = template.clone();
+            settlement.deal_id = [marker; 32];
+            settlement.ledger.deal_id = settlement.deal_id;
+            settlement.ledger.snapshot_id = settlement
+                .ledger
+                .derive_snapshot_id()
+                .expect("reseal ledger snapshot");
+            settlement.settlement_id = settlement
+                .derive_settlement_id()
+                .expect("reseal settlement");
+            let encoded = norito::to_bytes(&settlement).expect("encode settlement");
+            publisher
+                .publish_deal_settlement(&settlement, &encoded)
+                .expect("publish settlement into runtime DAG");
+        }
+
+        let head_bytes = fs::read(runtime_dag_head_path(temp.path())).expect("read runtime head");
+        let head_at_window: GovernanceDagHeadV1 =
+            norito::decode_from_bytes(&head_bytes).expect("decode runtime head");
+        assert_eq!(
+            head_at_window.block_count,
+            GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1 as u64
+        );
+        assert_eq!(head_at_window.checkpoint_cid, None);
+
+        let mut settlement = template;
+        settlement.deal_id = [0xFF; 32];
+        settlement.ledger.deal_id = settlement.deal_id;
+        settlement.ledger.snapshot_id = settlement
+            .ledger
+            .derive_snapshot_id()
+            .expect("reseal ledger snapshot");
+        settlement.settlement_id = settlement
+            .derive_settlement_id()
+            .expect("reseal settlement");
+        let encoded = norito::to_bytes(&settlement).expect("encode settlement");
+        publisher
+            .publish_deal_settlement(&settlement, &encoded)
+            .expect("publish first checkpointed settlement");
+
+        let index = runtime_index(temp.path());
+        let blocks = runtime_blocks_from_index(temp.path(), &index);
+        assert_eq!(
+            blocks.len(),
+            GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1 + 1,
+            "checkpointing must not truncate the root history"
+        );
+        assert_eq!(blocks[0].sequence, 0);
+        assert_eq!(blocks[0].prev_block_cid, None);
+        assert_eq!(blocks[0].node.prev_cid, None);
+        for (position, pair) in blocks.windows(2).enumerate() {
+            assert_eq!(pair[1].sequence, (position + 1) as u64);
+            assert_eq!(pair[1].prev_block_cid, Some(pair[0].block_cid.clone()));
+            assert_eq!(pair[1].node.prev_cid, Some(pair[0].node.node_cid.clone()));
+        }
+
+        let head_bytes = fs::read(runtime_dag_head_path(temp.path())).expect("read runtime head");
+        let head: GovernanceDagHeadV1 =
+            norito::decode_from_bytes(&head_bytes).expect("decode runtime head");
+        assert_eq!(head.block_count, blocks.len() as u64);
+        assert_eq!(head.checkpoint_cid, Some(blocks[1].block_cid.clone()));
+        validate_governance_dag_head_against_chain_v1(&head, &blocks)
+            .expect("full root chain validates against checkpointed head");
+        validate_governance_dag_head_against_chain_v1(
+            &head,
+            &blocks[blocks.len() - GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1..],
+        )
+        .expect("canonical checkpoint tail validates against checkpointed head");
+
+        let governed_public_key = &head.head_signature.public_key;
+        assert_eq!(
+            head.head_signature.algorithm,
+            GovernanceSignatureAlgorithm::Ed25519
+        );
+        for block in &blocks {
+            assert_eq!(block.publisher_peer_id, head.publisher_peer_id);
+            assert_eq!(block.node.publisher_peer_id, head.publisher_peer_id);
+            assert_eq!(
+                block.block_signature.algorithm,
+                GovernanceSignatureAlgorithm::Ed25519
+            );
+            assert_eq!(
+                block.node.publisher_signature.algorithm,
+                GovernanceSignatureAlgorithm::Ed25519
+            );
+            assert_eq!(&block.block_signature.public_key, governed_public_key);
+            assert_eq!(
+                &block.node.publisher_signature.public_key,
+                governed_public_key
+            );
         }
     }
 

@@ -67,11 +67,11 @@ cargo test -p sorafs_chunker streaming_backpressure_fuzz_matches_batch
 ## 3. Создайте и создайте манифест
 
 Оберните план кусков, псевдонимы и управляющие фирмы в используемом манифесте.
-`sorafs-manifest-stub`. Командир рабочего места должен выполнить полезную нагрузку одиночного архива; паса
+`sorafs-manifest-builder`. Командир рабочего места должен выполнить полезную нагрузку одиночного архива; паса
 рута директории для вставки стрелки (CLI lo recorre en orden lexicográfico).
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
+cargo run -p sorafs_manifest --bin sorafs-manifest-builder -- \
   /tmp/docs.txt \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --manifest-out=/tmp/docs.manifest \

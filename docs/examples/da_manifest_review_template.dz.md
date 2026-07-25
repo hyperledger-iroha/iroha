@@ -28,7 +28,7 @@ translator: machine-google-reviewed
 
 ## Signature Verification
 - Manifest fetch source / storage ticket: `<hex>`
-- Verification command/output: `cargo run -p sorafs_car --bin sorafs-manifest-stub -- manifest.json --manifest-signatures-in=manifest_signatures.json` (log excerpt attached?)
+- Verification command/output: `cargo run -p sorafs_car --bin sorafs-manifest-builder -- manifest.json --manifest-signatures-in=manifest_signatures.json` (log excerpt attached?)
 - `manifest_blake3` reported by tool: `<digest>`
 - `chunk_digest_sha3_256` reported by tool: `<digest>`
 - Council signer multihashes:

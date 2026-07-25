@@ -1,13 +1,13 @@
 ---
 title: SF-6 Security Review
-summary: Findings and follow-up items from the independent assessment of keyless signing, proof streaming, and manifest submission pipelines.
+summary: Findings and follow-up items from the independent assessment of release signing, proof streaming, and manifest submission pipelines.
 ---
 
 # SF-6 Security Review
 
 **Assessment window:** 2026-02-10 → 2026-02-18
 **Review leads:** Security Engineering Guild (`@sec-eng`), Tooling Working Group (`@tooling-wg`)
-**Scope:** SoraFS CLI/SDK (`sorafs_cli`, `sorafs_car`, `sorafs_manifest`), proof streaming APIs, Torii manifest handling, Sigstore/OIDC integration, CI release hooks.
+**Scope:** SoraFS CLI/SDK (`sorafs_cli`, `sorafs_car`, `sorafs_manifest`), proof streaming APIs, Torii manifest handling, raw-Ed25519 release authentication, provenance, and CI release hooks.
 **Artifacts:**
 - CLI source and tests (`crates/sorafs_orchestrator/src/bin/sorafs_cli.rs`)
 - Torii manifest/proof handlers (`crates/iroha_torii/src/sorafs/api.rs`)
@@ -17,7 +17,7 @@ summary: Findings and follow-up items from the independent assessment of keyless
 ## Methodology
 
 1. **Threat modelling workshops** mapped attacker capabilities for developer workstations, CI systems, and Torii nodes.
-2. **Code review** focused on credential surfaces (OIDC token exchange, keyless signing), Norito manifest validation, and proof streaming back-pressure.
+2. **Code review** focused on release-key custody, signer/verifier pinning, Norito manifest validation, provenance separation, and proof streaming back-pressure.
 3. **Dynamic testing** replayed fixture manifests and simulated failure modes (token replay, manifest tampering, truncated proof streams) using the parity harness and bespoke fuzz drives.
 4. **Configuration inspection** validated `iroha_config` defaults, CLI flag handling, and release scripts to ensure deterministic, auditable runs.
 5. **Process interview** confirmed remediation flow, escalation paths, and audit evidence capture with Tooling WG release owners.
@@ -26,7 +26,7 @@ summary: Findings and follow-up items from the independent assessment of keyless
 
 | ID | Severity | Area | Finding | Resolution |
 |----|----------|------|---------|------------|
-| SF6-SR-01 | High | Keyless signing | OIDC token audience defaults were implicit in CI templates, risking cross-tenant replay. | Added explicit `--identity-token-audience` enforcement in release hooks and CI templates (`docs/source/sorafs/developer/releases.md`, `docs/examples/sorafs_ci.md`). CI now fails when the audience is omitted. |
+| SF6-SR-01 | High | Release signing | The retired CLI path derived an ephemeral key from unverified OIDC token bytes and trusted a public key carried in the same self-asserted bundle. | Removed that CLI surface and all production callers. Releases now require an external Ed25519/HSM signer, governed raw public key and reviewed fingerprint, plus a SHA256-pinned native `sorafs-validate release-manifest` verification receipt (`docs/source/sorafs/developer/releases.md`). |
 | SF6-SR-02 | Medium | Proof streaming | Back-pressure paths accepted unbounded subscriber buffers, enabling memory exhaustion. | `sorafs_cli proof stream` enforces bounded channel sizes with deterministic truncation, logging Norito summaries and aborting the stream; Torii mirror updated to bound response chunks (`crates/iroha_torii/src/sorafs/api.rs`). |
 | SF6-SR-03 | Medium | Manifest submission | CLI accepted manifests without verifying embedded chunk plans when `--plan` was absent. | `sorafs_cli manifest submit` now recomputes and compares CAR digests unless `--expect-plan-digest` is provided, rejecting mismatches and surfacing remediation hints. Tests cover success/failure cases (`crates/sorafs_orchestrator/tests/sorafs_cli.rs`). |
 | SF6-SR-04 | Low | Audit trail | Release checklist lacked a signed approval log for the security review. | Added `docs/source/sorafs/developer/releases.md` section requiring attachment of review memo hashes and sign-off ticket URL before GA. |
@@ -35,7 +35,9 @@ All high/medium findings were fixed during the review window and validated throu
 
 ## Control Validation
 
-- **Credential scope:** Default CI templates now mandate explicit audience and issuer assertions; the CLI and release helper both fail fast unless `--identity-token-audience` accompanies `--identity-token-provider`.
+- **Release authenticity:** The release helper requires the complete signer and
+  pinned-verifier tuple, rejects unsafe inputs, and fails closed on any raw
+  Ed25519 or native verification error. OIDC/cosign remains provenance only.
 - **Deterministic replay:** Updated tests cover positive/negative manifest submission flows, ensuring mismatched digests remain non-deterministic failures and are surfaced before touching the network.
 - **Proof streaming back-pressure:** Torii now streams PoR/PoTR items over bounded channels, and the CLI retains only truncated latency samples + five failure exemplars, preventing unbounded subscriber growth while keeping deterministic summaries.
 - **Observability:** Proof streaming counters (`torii_sorafs_proof_stream_*`) and CLI summaries capture abort reasons, providing operators with audit breadcrumbs.
@@ -47,7 +49,8 @@ Release managers **must** attach the following evidence when promoting a GA cand
 
 1. Hash of the latest security review memo (this document).
 2. Link to the tracked remediation ticket (e.g., `governance/tickets/SF6-SR-2026.md`).
-3. Output of `scripts/release_sorafs_cli.sh --manifest ... --bundle-out ... --signature-out ...` showing explicit audience/issuer arguments.
+3. Output of `scripts/release_sorafs_cli.sh` showing the reviewed signer
+   fingerprint, native-verifier SHA256, and successful raw-Ed25519 verification.
 4. Captured logs from the parity harness (`cargo test -p sorafs_orchestrator --test sorafs_cli proof_stream_consumes_ndjson_and_reports_metrics -- --nocapture`).
 5. Confirmation that Torii release notes include bounded proof streaming telemetry counters.
 

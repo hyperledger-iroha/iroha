@@ -63,7 +63,7 @@ birinchi reliz uchun talab qilinadi va ularni harakatga keltiradigan treklarga a
 - Birgalikda yordamchilar (`CapacityMetadataEntry`, `PricingScheduleV1`, yoʻlak/tayinlash/SLA validatorlari) CI va quyi oqim vositalari qayta ishlatilishi mumkin boʻlgan deterministik kalit tekshiruvi va xato haqida hisobot beradi.【crates/sorafs_manifest/src/capacity.rs:230】
 - `PinProviderRegistry` endi `/v1/sorafs/capacity/state` orqali provayder deklaratsiyasi va toʻlov kitobi yozuvlarini deterministik Norito orqasida birlashtirib, zanjirdagi suratni koʻrsatadi. JSON.【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
 - Validatsiya qamrovi kanonik qo'llashni amalga oshirish, dublikatlarni aniqlash, har bir qator chegaralari, replikatsiya tayinlash himoyasi va telemetriya diapazoni tekshiruvlarini o'tkazadi, shuning uchun regressiyalar darhol CIda paydo bo'ladi.【crates/sorafs_manifest/src/capacity.rs:792】
-- Operator asboblari: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` inson tomonidan o'qilishi mumkin bo'lgan spetsifikatsiyalarni kanonik Norito foydali yuklari, base64 bloblari va JSON xulosalariga aylantiradi, shuning uchun operatorlar `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry` va replikatsiya tuzatish tartibini mahalliy tartibga solishlari mumkin. validation.【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 Yoʻnaltiruvchi moslamalar `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) da ishlaydi va I00.005 orqali yaratiladi.
+- Operator asboblari: `sorafs_manifest_builder capacity {declaration, telemetry, replication-order}` inson tomonidan o'qilishi mumkin bo'lgan spetsifikatsiyalarni kanonik Norito foydali yuklari, base64 bloblari va JSON xulosalariga aylantiradi, shuning uchun operatorlar `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry` va replikatsiya tuzatish tartibini mahalliy tartibga solishlari mumkin. validation.【crates/sorafs_car/src/bin/sorafs_manifest_builder/capacity.rs:1】 Yoʻnaltiruvchi moslamalar `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) da ishlaydi va I00.005 orqali yaratiladi.
 
 ### 2. Boshqaruv tekisligi integratsiyasi
 
@@ -155,7 +155,7 @@ amalga oshirish bilan hamohang.
   boshqaruv paketlari bilan bir qatorda.
 
 ### Bahs va dalillarni kesish
-- `sorafs_manifest_stub capacity dispute` orqali nizolarni hal qiling (testlar:
+- `sorafs_manifest_builder capacity dispute` orqali nizolarni hal qiling (testlar:
   `cargo test -p sorafs_car --test capacity_cli`) shuning uchun foydali yuklar kanonik bo'lib qoladi.
 - `cargo test -p iroha_core -- capacity_dispute_replay_is_deterministic` va jarimani ishga tushiring
   suites (`record_capacity_telemetry_penalises_persistent_under_delivery`) nizolarni isbotlash va
@@ -164,7 +164,7 @@ amalga oshirish bilan hamohang.
   e'tiroz tasdiqlarini tekshirish hisobotiga qaytaring.
 
 ### Provayderni ishga tushirish va tutundan chiqish sinovlari
-- `sorafs_manifest_stub capacity ...` bilan deklaratsiya/temetriya artefaktlarini qayta tiklang va takrorlang
+- `sorafs_manifest_builder capacity ...` bilan deklaratsiya/temetriya artefaktlarini qayta tiklang va takrorlang
   topshirishdan oldin CLI sinovlari (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`).
 - Torii (`/v1/sorafs/capacity/declare`) orqali yuboring, keyin `/v1/sorafs/capacity/state` plyusni oling
   Grafana skrinshotlari. `docs/source/sorafs/capacity_onboarding_runbook.md` da chiqish oqimiga rioya qiling.

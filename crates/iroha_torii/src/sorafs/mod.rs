@@ -14,6 +14,8 @@ pub mod gc;
 pub mod hosts;
 pub mod limits;
 pub mod pin;
+#[cfg(feature = "app_api")]
+pub mod pop_api;
 pub mod por;
 pub mod quota;
 #[cfg(feature = "app_api")]

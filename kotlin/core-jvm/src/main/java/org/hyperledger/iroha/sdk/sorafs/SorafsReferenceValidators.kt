@@ -77,9 +77,17 @@ enum class SorafsOrderbookCancelReason(@JvmField val bridgeCode: Int) {
 class SorafsReferenceValidators private constructor() {
     companion object {
         private const val LIBRARY_NAME = "connect_norito_bridge"
-        const val REQUIRED_BRIDGE_ABI_VERSION: Int = 19
+        const val REQUIRED_BRIDGE_ABI_VERSION: Int = 21
         /** Canonical maximum byte length for a V1 orderbook owner account. */
         const val ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1: Int = 256
+        /** Maximum complete-root or checkpoint-tail window accepted by one head validation. */
+        const val GOVERNANCE_DAG_MAX_BLOCKS_V1: Int = 64
+        /** Canonical byte length for every Governance DAG CID. */
+        const val GOVERNANCE_DAG_CID_BYTES_V1: Int = 32
+        /** Maximum aggregate payload, CID, and label bytes accepted by one reference call. */
+        const val REFERENCE_MAX_INPUT_BYTES_V1: Int = 67_108_864
+        /** Maximum UTF-8 bytes accepted for one diagnostic input label. */
+        const val REFERENCE_MAX_LABEL_BYTES_V1: Int = 1_024
         private val nativeAvailable: Boolean = loadLibrary()
 
         @JvmStatic
@@ -87,6 +95,9 @@ class SorafsReferenceValidators private constructor() {
 
         internal fun isBridgeAbiSupported(version: Int): Boolean =
             version >= REQUIRED_BRIDGE_ABI_VERSION
+
+        internal fun isGovernanceDagBridgeSupported(version: Int, hasSymbols: Boolean): Boolean =
+            isBridgeAbiSupported(version) && hasSymbols
 
         @JvmStatic
         @JvmOverloads
@@ -154,6 +165,94 @@ class SorafsReferenceValidators private constructor() {
                     generatedAtUnix,
                 ),
                 "SoraFS hedging validation",
+            )
+        }
+
+        /**
+         * Validate one canonical `GovernanceDagBlockV1`.
+         *
+         * Passing `expectedBlockCid = null` omits the external CID equality check; the native
+         * validator still recomputes and validates the CID embedded in the block.
+         */
+        @JvmStatic
+        @JvmOverloads
+        fun validateGovernanceDagBlockJson(
+            noritoBytes: ByteArray,
+            label: String? = null,
+            expectedBlockCid: ByteArray? = null,
+            generatedAtUnix: Long = currentEpochSeconds(),
+        ): String {
+            requireGeneratedAt(generatedAtUnix)
+            val payload = boundedReferencePayload(noritoBytes, "noritoBytes")
+            val labelBytes = labelBytes(label, "governance-dag-block.to")
+            val expectedCid =
+                expectedBlockCid?.let {
+                    require(it.size == GOVERNANCE_DAG_CID_BYTES_V1) {
+                        "expectedBlockCid must contain exactly $GOVERNANCE_DAG_CID_BYTES_V1 bytes"
+                    }
+                    it.copyOf()
+                } ?: ByteArray(0)
+            requireAggregateReferenceBytes(payload.size, labelBytes.size, expectedCid.size)
+            requireNative()
+            return requireJsonOutput(
+                nativeValidateGovernanceDagBlockJson(
+                    payload,
+                    labelBytes,
+                    expectedCid,
+                    generatedAtUnix,
+                ),
+                "SoraFS governance DAG block validation",
+            )
+        }
+
+        /**
+         * Validate one signed `GovernanceDagHeadV1` against either a complete root-to-head
+         * history or its signed checkpoint-anchored tail.
+         *
+         * When supplied, `blockLabels` must contain exactly one label per block.
+         */
+        @JvmStatic
+        @JvmOverloads
+        fun validateGovernanceDagHeadChainJson(
+            head: ByteArray,
+            blocks: List<ByteArray>,
+            headLabel: String? = null,
+            blockLabels: List<String?>? = null,
+            generatedAtUnix: Long = currentEpochSeconds(),
+        ): String {
+            requireGeneratedAt(generatedAtUnix)
+            require(blocks.size in 1..GOVERNANCE_DAG_MAX_BLOCKS_V1) {
+                "blocks must contain 1..$GOVERNANCE_DAG_MAX_BLOCKS_V1 entries"
+            }
+            require(blockLabels == null || blockLabels.size == blocks.size) {
+                "blockLabels must contain exactly one entry per block"
+            }
+            val headPayload = boundedReferencePayload(head, "head")
+            val headLabelBytes = labelBytes(headLabel, "governance-dag-head.to")
+            val blockPayloads = Array(blocks.size) { index ->
+                boundedReferencePayload(blocks[index], "blocks[$index]")
+            }
+            val blockLabelPayloads = Array(blocks.size) { index ->
+                labelBytes(blockLabels?.get(index), "governance-dag-block-$index.to")
+            }
+            var aggregateBytes = headPayload.size.toLong() + headLabelBytes.size.toLong()
+            for (index in blockPayloads.indices) {
+                aggregateBytes +=
+                    blockPayloads[index].size.toLong() + blockLabelPayloads[index].size.toLong()
+                require(aggregateBytes <= REFERENCE_MAX_INPUT_BYTES_V1.toLong()) {
+                    "governance DAG head-chain inputs exceed $REFERENCE_MAX_INPUT_BYTES_V1 aggregate bytes"
+                }
+            }
+            requireNative()
+            return requireJsonOutput(
+                nativeValidateGovernanceDagHeadChainJson(
+                    headPayload,
+                    headLabelBytes,
+                    blockPayloads,
+                    blockLabelPayloads,
+                    generatedAtUnix,
+                ),
+                "SoraFS governance DAG head-chain validation",
             )
         }
 
@@ -534,7 +633,25 @@ class SorafsReferenceValidators private constructor() {
             require(value.isNotBlank()) { "label must not be blank" }
             require(value.trim() == value) { "label must not contain surrounding whitespace" }
             require(value.indexOf('\u0000') < 0) { "label must not contain NUL" }
-            return value.toByteArray(StandardCharsets.UTF_8)
+            val bytes = value.toByteArray(StandardCharsets.UTF_8)
+            require(bytes.size <= REFERENCE_MAX_LABEL_BYTES_V1) {
+                "label must be at most $REFERENCE_MAX_LABEL_BYTES_V1 UTF-8 bytes"
+            }
+            return bytes
+        }
+
+        private fun boundedReferencePayload(payload: ByteArray, field: String): ByteArray {
+            require(payload.size <= REFERENCE_MAX_INPUT_BYTES_V1) {
+                "$field must be at most $REFERENCE_MAX_INPUT_BYTES_V1 bytes"
+            }
+            return payload.copyOf()
+        }
+
+        private fun requireAggregateReferenceBytes(vararg sizes: Int) {
+            val aggregateBytes = sizes.fold(0L) { total, size -> total + size.toLong() }
+            require(aggregateBytes <= REFERENCE_MAX_INPUT_BYTES_V1.toLong()) {
+                "reference inputs exceed $REFERENCE_MAX_INPUT_BYTES_V1 aggregate bytes"
+            }
         }
 
         private fun requireJsonOutput(output: ByteArray?, context: String): String {
@@ -554,7 +671,10 @@ class SorafsReferenceValidators private constructor() {
         private fun loadLibrary(): Boolean =
             try {
                 System.loadLibrary(LIBRARY_NAME)
-                isBridgeAbiSupported(nativeBridgeAbiVersion())
+                isGovernanceDagBridgeSupported(
+                    nativeBridgeAbiVersion(),
+                    nativeHasGovernanceDagSymbols(),
+                )
             } catch (_: UnsatisfiedLinkError) {
                 false
             } catch (_: SecurityException) {
@@ -563,6 +683,9 @@ class SorafsReferenceValidators private constructor() {
 
         @JvmStatic
         private external fun nativeBridgeAbiVersion(): Int
+
+        @JvmStatic
+        private external fun nativeHasGovernanceDagSymbols(): Boolean
 
         @JvmStatic
         private external fun nativeValidateOrderbookPayloadJson(
@@ -585,6 +708,23 @@ class SorafsReferenceValidators private constructor() {
             kind: Int,
             payload: ByteArray,
             label: ByteArray,
+            generatedAtUnix: Long,
+        ): ByteArray?
+
+        @JvmStatic
+        private external fun nativeValidateGovernanceDagBlockJson(
+            payload: ByteArray,
+            label: ByteArray,
+            expectedBlockCid: ByteArray,
+            generatedAtUnix: Long,
+        ): ByteArray?
+
+        @JvmStatic
+        private external fun nativeValidateGovernanceDagHeadChainJson(
+            head: ByteArray,
+            headLabel: ByteArray,
+            blocks: Array<ByteArray>,
+            blockLabels: Array<ByteArray>,
             generatedAtUnix: Long,
         ): ByteArray?
 

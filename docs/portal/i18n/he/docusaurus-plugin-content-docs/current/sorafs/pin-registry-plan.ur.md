@@ -78,7 +78,7 @@ host-side services، fixtures، اور عملیاتی تقاضے شامل ہیں
 |------|-----|-------------|
 | שירות Torii | `/v1/sorafs/pin` (submit)، `/v1/sorafs/pin/{cid}` (lookup)، `/v1/sorafs/aliases` (list/bind)، `/v1/sorafs/replication` (orders/receipts) فراہم کریں۔ pagination + filtering مہیا کریں۔ | Networking TL / Core Infra |
 | אישור | responses میں registry height/hash شامل کریں؛ Norito attestation struct شامل کریں جسے SDKs consume کریں۔ | אינפרא ליבה |
-| CLI | `sorafs_manifest_stub` מוצר חדש `sorafs_pin` CLI דגם `pin submit`, Prometheus,000NI00X `order issue`, `registry export` ו. | Tooling WG |
+| CLI | `sorafs_manifest_builder` מוצר חדש `sorafs_pin` CLI דגם `pin submit`, Prometheus,000NI00X `order issue`, `registry export` ו. | Tooling WG |
 | SDK | Norito schema سے client bindings (Rust/Go/TS) generate کریں؛ integration tests شامل کریں۔ | צוותי SDK |
 
 פעולות:

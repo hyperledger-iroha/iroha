@@ -90,8 +90,8 @@ La tabla siguiente captura el estado de soporte para `sorafs.sf1@1.0.0` ru
 | Компонент | Эстадо | Заметки |
 |-----------|--------|-------|
 | `sorafs_manifest_chunk_store` | ✅ Сопортадо | Подтвердите канонический дескриптор + псевдоним, передавайте отчеты через `--json-out=-` и применяйте карту регистрации с `ensure_charter_compliance()`. |
-| `sorafs_manifest_stub` | ⚠️ Ретирадо | Конструктор манифеста поддержки; США `iroha app sorafs toolkit pack` для упаковки CAR/манифеста и обслуживания `--plan=-` для определенной повторной проверки. |
-| `sorafs_provider_advert_stub` | ⚠️ Ретирадо | Помощник по проверке подлинности в автономном режиме; Рекламные объявления поставщика должны производиться через конвейер публикации и проверки через `/v1/sorafs/providers`. |
+| `sorafs_manifest_builder` | ⚠️ Ретирадо | Конструктор манифеста поддержки; США `iroha app sorafs toolkit pack` для упаковки CAR/манифеста и обслуживания `--plan=-` для определенной повторной проверки. |
+| `sorafs_provider_advert` | ✅ Production | Private-key-free two-phase external Ed25519 signing with exact raw-key, reviewed SHA-256 fingerprint, canonical payload, and strict path-identity verification. |
 | `sorafs_fetch` (оркестратор разработчика) | ✅ Сопортадо | Lee `chunk_fetch_specs`, содержит полезные нагрузки `range` и набор данных CARv2. |
 | Исправления SDK (Rust/Go/TS) | ✅ Сопортадо | Регенерация через `export_vectors`; Ручка canonico появляется впервые в каждом списке псевдонимов и является фирмой для обсуждения. |
 | Согласование файлов на шлюзе Torii | ✅ Сопортадо | Реализована полная грамматика `Accept-Chunker`, включая заголовки `Content-Chunker` и экспонирование моста CARv1 в одиночку и подробные инструкции по переходу на более раннюю версию. |
@@ -147,12 +147,12 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
 ```
 ```
 
-El manifest stub refleja los mismos datos, lo que es conveniente al automatizar la selección de
+El manifest builder refleja los mismos datos, lo que es conveniente al automatizar la selección de
 `--chunker-profile-id` en pipelines. Ambos CLIs de chunk store también aceptan la forma de handle canónico
 (`--profile=sorafs.sf1@1.0.0`) para que los scripts de build puedan evitar hard-codear IDs numéricos:
 
 ```
-$ Cargo Run -p sorafs_manifest --bin sorafs_manifest_stub -- --list-chunker-profiles
+$ Cargo Run -p sorafs_manifest --bin sorafs_manifest_builder -- --list-chunker-profiles
 [
   {
     «идентификатор_профиля»: 1,
@@ -218,4 +218,4 @@ Al solicitar datos CAR, los clientes deben enviar un header `Accept-Chunker` que
   медианте лас прюбас провистас.
 * `chunker_registry::lookup_by_profile` подтверждает, что параметры дескриптора
   совпало с `ChunkProfile::DEFAULT` для устранения случайных расхождений.
-* Манифесты, созданные для `iroha app sorafs toolkit pack` и `sorafs_manifest_stub`, включают метаданные реестра.
+* Манифесты, созданные для `iroha app sorafs toolkit pack` и `sorafs_manifest_builder`, включают метаданные реестра.

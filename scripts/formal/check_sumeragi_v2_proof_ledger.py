@@ -3631,6 +3631,18 @@ REQUIRED_PROOF_OBLIGATION_INVENTORY = {
         "SumeragiV2ChainLivenessProofs",
         "HeightLivenessObligation",
     ),
+    "autoscale-lifecycle-production-refinement": (
+        "SumeragiV2AutoscaleLifecycle",
+        "AutoscaleLifecycleProductionRefinementObligation",
+    ),
+    "native-application-evidence-production-refinement": (
+        "SumeragiV2NativeApplicationEvidence",
+        "NativeApplicationEvidenceProductionRefinementObligation",
+    ),
+    "autonomous-reservation-carrier-production-refinement": (
+        "SumeragiV2AutonomousReservationCarrier",
+        "AutonomousReservationCarrierProductionRefinementObligation",
+    ),
     "cryptography": ("trusted-boundary", "cryptography"),
     "durability-system-call": ("trusted-boundary", "os-fsync"),
     "deterministic-execution": ("trusted-boundary", "deterministic-execution"),
@@ -3689,6 +3701,9 @@ REQUIRED_MODEL_MODULES = (
     *(module for module, _ in ASYNC_LIVENESS_SHARDS),
     ASYNC_LIVENESS_FACADE,
     "SumeragiV2AsyncHistoricalRecoveryLivenessProofs",
+    "SumeragiV2AutoscaleLifecycle",
+    "SumeragiV2NativeApplicationEvidence",
+    "SumeragiV2AutonomousReservationCarrier",
     "SumeragiTimeoutIngressGuardTest",
 )
 
@@ -9344,9 +9359,9 @@ def _first_json_mismatch(expected: Any, observed: Any, path: str = "$") -> str |
     if isinstance(expected, list):
         if len(expected) != len(observed):
             return path
-        for index, (expected_item, observed_item) in enumerate(
-            zip(expected, observed, strict=True)
-        ):
+        # Exact lengths were checked above; plain zip keeps this verifier
+        # compatible with the repository's Python 3.9 floor.
+        for index, (expected_item, observed_item) in enumerate(zip(expected, observed)):
             mismatch = _first_json_mismatch(
                 expected_item, observed_item, f"{path}[{index}]"
             )
@@ -32885,6 +32900,275 @@ if existing == *artifact {
     return errors
 
 
+_KURA_RETIREMENT_FIXED_PROGRESS_PAIR_CONTRACTS = (
+    (
+        "lane_data",
+        "lane_index",
+        "lane_artifact_paths_for_entry",
+        "lane retirement lane-block artifact",
+    ),
+    (
+        "autonomous_data",
+        "autonomous_index",
+        "autonomous_lane_block_paths_for_entry",
+        "lane retirement autonomous artifact",
+    ),
+    (
+        "input_data",
+        "input_index",
+        "lane_block_execution_input_paths_for_entry",
+        "lane retirement execution input",
+    ),
+    (
+        "preflight_data",
+        "preflight_index",
+        "lane_block_execution_preflight_paths_for_entry",
+        "lane retirement execution preflight",
+    ),
+    (
+        "certified_data",
+        "certified_index",
+        "certified_lane_block_paths_for_entry",
+        "lane retirement certified lane block",
+    ),
+    (
+        "receipt_data",
+        "receipt_index",
+        "lane_block_application_receipt_paths_for_entry",
+        "lane retirement application receipt",
+    ),
+    (
+        "native_manifest_data",
+        "native_manifest_index",
+        "native_amx_application_manifest_paths_for_entry",
+        "lane retirement Native AMX participant manifest",
+    ),
+    (
+        "native_receipt_data",
+        "native_receipt_index",
+        "native_amx_participant_receipt_paths_for_entry",
+        "lane retirement Native AMX participant receipt",
+    ),
+)
+
+
+def _kura_retirement_progress_production_source_fidelity_errors(
+    repo_root: Path = ROOT_DIR,
+) -> list[str]:
+    """Bind retirement recovery to every recognized durable progress pair."""
+
+    lane_geometry_path = (
+        repo_root / "crates" / "iroha_core" / "src" / "kura" / "lane_geometry.rs"
+    )
+    errors: list[str] = []
+    if not lane_geometry_path.is_file() or lane_geometry_path.is_symlink():
+        errors.append(
+            f"{lane_geometry_path}: Kura lane-retirement production source must "
+            "be a regular file"
+        )
+        return errors
+    source = lane_geometry_path.read_text(encoding="utf-8")
+
+    retirement = _require_qualified_rust_item(
+        lane_geometry_path,
+        source,
+        "Kura",
+        "ensure_first_release_lane_retirement_admissible_locked",
+        errors,
+        "production first-release lane-retirement scanner",
+    )
+    pair_count = len(_KURA_RETIREMENT_FIXED_PROGRESS_PAIR_CONTRACTS)
+    for data_name, index_name, path_builder, _kind in (
+        _KURA_RETIREMENT_FIXED_PROGRESS_PAIR_CONTRACTS
+    ):
+        _require_rust_token_sequence(
+            lane_geometry_path,
+            retirement,
+            f"""
+let ({data_name}, {index_name}) =
+    Self::{path_builder}(&entry, &self.store_root);
+""",
+            f"retirement {data_name}/{index_name} path binding",
+            errors,
+        )
+
+    _require_rust_token_sequence(
+        lane_geometry_path,
+        retirement,
+        f"""
+let fixed_progress_pairs: [(&Path, &Path, &str); {pair_count}] = [
+""",
+        "fixed retirement progress-pair declaration and bound",
+        errors,
+    )
+    _require_rust_token_sequence(
+        lane_geometry_path,
+        retirement,
+        """
+let lane_artifacts_guard = self.recover_geometry_progress_pairs_before_snapshot(
+    &lane_artifacts,
+    &fixed_progress_pairs,
+    "first-release lane retirement",
+)?;
+let artifact_snapshot = self.geometry_bound_progress_directory_snapshot(
+    &lane_artifacts_guard,
+    MAX_LANE_RETIREMENT_ARTIFACT_FILES,
+    "first-release lane retirement artifact scan",
+)?;
+""",
+        "all fixed retirement progress pairs must recover before the "
+        "immutable snapshot",
+        errors,
+    )
+
+    # Token checks intentionally ignore literals. Extract the one real array
+    # and bind its ordered identifiers and diagnostic kinds together, excluding
+    # tuple-shaped text in comments or literals via the structural mask.
+    if retirement is not None:
+        structural = mask_rust_comments_and_literals(retirement.source)
+        declaration = re.search(r"\blet\s+fixed_progress_pairs\s*:", structural)
+        array_end = (
+            -1
+            if declaration is None
+            else structural.find("];", declaration.end())
+        )
+        if declaration is None or array_end < 0:
+            errors.append(
+                f"{lane_geometry_path}:{retirement.line}: exact fixed retirement "
+                "progress-pair array must remain structurally extractable"
+            )
+        else:
+            array_source = retirement.source[declaration.start() : array_end + 2]
+            array_structural = structural[
+                declaration.start() : array_end + 2
+            ]
+            tuple_pattern = re.compile(
+                r"\(\s*&\s*([A-Za-z_][A-Za-z0-9_]*)\s*,\s*"
+                r"&\s*([A-Za-z_][A-Za-z0-9_]*)\s*,\s*"
+                r"(\"(?:\\.|[^\"\\])*\")\s*,?\s*\)"
+            )
+            observed_pairs: list[tuple[str, str, str]] = []
+            for match in tuple_pattern.finditer(array_source):
+                if array_structural[match.start()] != "(":
+                    continue
+                try:
+                    kind = json.loads(match.group(3))
+                except json.JSONDecodeError:
+                    continue
+                observed_pairs.append((match.group(1), match.group(2), kind))
+            expected_pair_membership = [
+                (data_name, index_name, kind)
+                for data_name, index_name, _path_builder, kind in (
+                    _KURA_RETIREMENT_FIXED_PROGRESS_PAIR_CONTRACTS
+                )
+            ]
+            if observed_pairs != expected_pair_membership:
+                errors.append(
+                    f"{lane_geometry_path}:{retirement.line}: fixed retirement "
+                    "progress pairs must preserve exact eight-member artifact "
+                    f"membership and order; found {observed_pairs!r}"
+                )
+
+    recovery = _require_qualified_rust_item(
+        lane_geometry_path,
+        source,
+        "Kura",
+        "recover_geometry_progress_pairs_before_snapshot",
+        errors,
+        "authenticated retirement progress-pair recovery",
+    )
+    for fragment, description in (
+        (
+            """
+for &(data_path, index_path, kind) in pairs {
+    if data_path.parent() != Some(lane_artifacts)
+        || index_path.parent() != Some(lane_artifacts)
+    {
+""",
+            "retirement recovery must visit every pair inside the "
+            "authenticated directory",
+        ),
+        (
+            """
+let pair_namespace = self.open_bound_progress_namespace(data_path, index_path)?;
+self.ensure_geometry_progress_namespace_uses_directory(
+    &pair_namespace,
+    &recovery_directory,
+    data_path,
+    index_path,
+    kind,
+)?;
+if let Err(failure) = self
+    .recover_bound_progress_sidecar_artifacts_in_namespace_classified(
+        &pair_namespace,
+        data_path,
+        index_path,
+        kind,
+    )
+""",
+            "each retirement pair must use namespace-bound classified recovery",
+        ),
+        (
+            """
+BoundProgressRecoveryFailure::RetryableIo => ErrorKind::WouldBlock,
+BoundProgressRecoveryFailure::InvalidData => ErrorKind::InvalidData,
+""",
+            "retirement recovery failure classification",
+        ),
+        (
+            """
+if !Self::progress_mutation_namespace_unchanged(&pair_namespace) {
+""",
+            "retirement recovery must reject a replaced pair namespace",
+        ),
+        (
+            """
+let refreshed_directory =
+    Self::open_bound_progress_directory(&self.store_root, lane_artifacts)?;
+if recovery_directory.expected_path != refreshed_directory.expected_path
+    || recovery_directory.canonical_path != refreshed_directory.canonical_path
+    || !Self::sidecar_metadata_same_object(
+        &recovery_directory.metadata,
+        &refreshed_directory.metadata,
+    )
+    || !self.geometry_bound_progress_directory_unchanged(&refreshed_directory)
+{
+""",
+            "retirement recovery must revalidate the directory object after "
+            "every pair",
+        ),
+        (
+            "recovery_directory = refreshed_directory;",
+            "retirement recovery must rebind the authenticated directory "
+            "after every pair",
+        ),
+        (
+            """
+let immutable_directory =
+    Self::open_bound_progress_directory(&self.store_root, lane_artifacts)?;
+if recovery_directory.expected_path != immutable_directory.expected_path
+    || recovery_directory.canonical_path != immutable_directory.canonical_path
+    || !Self::sidecar_metadata_same_object(
+        &recovery_directory.metadata,
+        &immutable_directory.metadata,
+    )
+    || !self.geometry_bound_progress_directory_unchanged(&immutable_directory)
+{
+""",
+            "retirement recovery must authenticate the final immutable "
+            "snapshot directory",
+        ),
+    ):
+        _require_rust_token_sequence(
+            lane_geometry_path,
+            recovery,
+            fragment,
+            description,
+            errors,
+        )
+    return errors
+
+
 def _successor_production_source_fidelity_errors(repo_root: Path) -> list[str]:
     """Bind indexed successor and exact-recovery actions to production order."""
 
@@ -37319,19 +37603,19 @@ def _production_liveness_release_inventory_errors(
                 f"{release_path}: production module {module} must contain exactly "
                 f"{expected_count} named tests; found {observed_count}"
             )
-    if source.splitlines().count("  readonly expected_corridor_leg_count=61") != 1:
+    if source.splitlines().count("  readonly expected_corridor_leg_count=65") != 1:
         errors.append(
             f"{release_path}: complete pre-network release corridor must remain "
-            "sealed at sixty-one legs"
+            "sealed at sixty-five legs"
         )
 
     expected_p2p_list = (
-        'production_p2p_unit_list="$(cargo test --locked -p iroha_p2p '
+        'production_p2p_unit_list="$(cargo test --locked --offline -p iroha_p2p '
         '--lib -- --list)"'
     )
     expected_p2p_ignored_list = (
         'production_p2p_ignored_unit_list="$(\n'
-        '  cargo test --locked -p iroha_p2p --lib -- --list --ignored\n'
+        '  cargo test --locked --offline -p iroha_p2p --lib -- --list --ignored\n'
         ')"'
     )
     if source.count(expected_p2p_list) != 1 or source.count(
@@ -37343,13 +37627,13 @@ def _production_liveness_release_inventory_errors(
         )
     expected_irohad_list = (
         'production_irohad_unit_list="$(\n'
-        '  cargo test --locked -p irohad --bin irohad '
+        '  cargo test --locked --offline -p irohad --bin irohad '
         '--features test-network-message-control -- --list\n'
         ')"'
     )
     expected_irohad_ignored_list = (
         'production_irohad_ignored_unit_list="$(\n'
-        '  cargo test --locked -p irohad --bin irohad '
+        '  cargo test --locked --offline -p irohad --bin irohad '
         '--features test-network-message-control -- --list --ignored\n'
         ')"'
     )
@@ -37361,12 +37645,12 @@ def _production_liveness_release_inventory_errors(
             "test-network-message-control feature"
         )
     expected_config_list = (
-        'production_config_unit_list="$(cargo test --locked -p iroha_config '
+        'production_config_unit_list="$(cargo test --locked --offline -p iroha_config '
         '--lib -- --list)"'
     )
     expected_config_ignored_list = (
         'production_config_ignored_unit_list="$(\n'
-        '  cargo test --locked -p iroha_config --lib -- --list --ignored\n'
+        '  cargo test --locked --offline -p iroha_config --lib -- --list --ignored\n'
         ')"'
     )
     if source.count(expected_config_list) != 1 or source.count(
@@ -37383,7 +37667,7 @@ def _production_liveness_release_inventory_errors(
     )
     config_module_route = (
         '  elif [[ "$module" == parameters::* ]]; then\n'
-        '    module_command="cargo test --locked -p iroha_config --lib '
+        '    module_command="cargo test --locked --offline -p iroha_config --lib '
         '${module} -- --test-threads=1"'
     )
     if source.count(config_inventory_route) != 1 or source.count(
@@ -37405,12 +37689,12 @@ def _production_liveness_release_inventory_errors(
             "finality, offline compact-QC, and context-identity modules"
         )
     expected_data_model_list = (
-        'production_data_model_unit_list="$(cargo test --locked '
+        'production_data_model_unit_list="$(cargo test --locked --offline '
         '-p iroha_data_model --lib -- --list)"'
     )
     expected_data_model_ignored_list = (
         'production_data_model_ignored_unit_list="$(\n'
-        '  cargo test --locked -p iroha_data_model --lib -- --list --ignored\n'
+        '  cargo test --locked --offline -p iroha_data_model --lib -- --list --ignored\n'
         ')"'
     )
     if source.count(expected_data_model_list) != 1 or source.count(
@@ -37423,9 +37707,9 @@ def _production_liveness_release_inventory_errors(
     for fragment in (
         'if is_production_data_model_module "$required_test_module"; then',
         'elif is_production_data_model_module "$module"; then',
-        'module_command="cargo test --locked -p iroha_data_model --lib '
+        'module_command="cargo test --locked --offline -p iroha_data_model --lib '
         '${module} -- --test-threads=1"',
-        'cargo test --locked -p iroha_data_model --lib "$module" '
+        'cargo test --locked --offline -p iroha_data_model --lib "$module" '
         '-- --test-threads=1',
     ):
         if source.count(fragment) != 1:
@@ -37436,13 +37720,28 @@ def _production_liveness_release_inventory_errors(
 
     source_sealed_commands = (
         (
-            "source-sealed-workspace-clippy",
-            "cargo clippy --workspace --all-targets -- -D warnings",
+            "source-sealed-workspace-format",
+            "cargo fmt --all -- --check",
         ),
-        ("source-sealed-workspace-tests", "cargo test --locked --workspace"),
+        (
+            "source-sealed-legacy-codec-guard",
+            "bash scripts/check_no_legacy_codec.sh",
+        ),
+        (
+            "source-sealed-workspace-build",
+            "cargo build --locked --offline --workspace",
+        ),
+        (
+            "source-sealed-workspace-clippy",
+            "cargo clippy --locked --offline --workspace --all-targets -- -D warnings",
+        ),
+        (
+            "source-sealed-workspace-tests",
+            "cargo test --locked --offline --workspace",
+        ),
         (
             "source-sealed-irohad-tests",
-            "cargo test --locked -p irohad --bin irohad "
+            "cargo test --locked --offline -p irohad --bin irohad "
             "--features test-network-message-control",
         ),
     )
@@ -37457,6 +37756,116 @@ def _production_liveness_release_inventory_errors(
             errors.append(
                 f"{release_path}: source-sealed command-success leg {leg_id} "
                 f"must execute exactly {command!r}"
+            )
+
+    scaling_release_fragments = (
+        "multilane_scaling_contract_files=(\n"
+        "  scripts/tests/validate_multilane_scaling_evidence_test.py\n"
+        "  scripts/tests/run_multilane_scaling_gate_test.py\n"
+        ")",
+        "preflight-multilane-scaling pytest 52 \\\n"
+        '  "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest '
+        '-q -p no:cacheprovider ${multilane_scaling_contract_files[*]}"',
+        'scripts/nexus/validate_multilane_scaling_evidence.py \\\n'
+        '    "$IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST" \\\n'
+        '    --report "$scaling_preflight_report" \\\n'
+        '    --expected-source-revision "$release_head_commit" \\\n'
+        '    --expected-workspace-source-sha256 "$release_source_manifest_sha256"',
+        '--expected-validator-sha256 "$(\n'
+        '      sha256_file scripts/nexus/validate_multilane_scaling_evidence.py\n'
+        '    )" \\\n'
+        '    --expected-trial-harness-sha256 \\\n'
+        '      "$IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256" \\\n'
+        '    --expected-configuration-sha256 \\\n'
+        '      "$IROHA_RELEASE_SCALING_CONFIGURATION_SHA256" \\\n'
+        '    --expected-irohad-sha256 "$IROHA_RELEASE_SCALING_IROHAD_SHA256" \\\n'
+        '    --expected-iroha-cli-sha256 "$IROHA_RELEASE_SCALING_IROHA_CLI_SHA256" \\\n'
+        '    --expected-repository-root "$repo_root" \\\n'
+        '    --quiet',
+        'IROHA_RELEASE_SCALING_CONFIGURATION_SHA256="$IROHA_RELEASE_SCALING_CONFIGURATION_SHA256" \\\n'
+        '    IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST="$release_scaling_evidence_manifest" \\\n'
+        '    IROHA_RELEASE_SCALING_IROHAD_SHA256="$IROHA_RELEASE_SCALING_IROHAD_SHA256" \\\n'
+        '    IROHA_RELEASE_SCALING_IROHA_CLI_SHA256="$IROHA_RELEASE_SCALING_IROHA_CLI_SHA256" \\\n'
+        '    IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256="$IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256"',
+        '--g12-seed-completion "$nexus_cross_completion_path" \\\n'
+        '  --g12-fault-soak-completion "$nexus_cross_soak_completion_path" \\\n'
+        '  --scaling-evidence-manifest "$IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST" \\\n'
+        '  --expected-scaling-trial-harness-sha256 \\\n'
+        '    "$IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256" \\\n'
+        '  --expected-scaling-configuration-sha256 \\\n'
+        '    "$IROHA_RELEASE_SCALING_CONFIGURATION_SHA256" \\\n'
+        '  --expected-scaling-irohad-sha256 "$IROHA_RELEASE_SCALING_IROHAD_SHA256" \\\n'
+        '  --expected-scaling-iroha-cli-sha256 "$IROHA_RELEASE_SCALING_IROHA_CLI_SHA256"',
+    )
+    for fragment in scaling_release_fragments:
+        if source.count(fragment) != 1:
+            errors.append(
+                f"{release_path}: source-bound G-SCALE/G-12P receipt corridor "
+                f"must contain exactly {fragment!r}"
+            )
+    scaling_environment = {
+        "IROHA_RELEASE_SCALING_CONFIGURATION_SHA256",
+        "IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST",
+        "IROHA_RELEASE_SCALING_IROHAD_SHA256",
+        "IROHA_RELEASE_SCALING_IROHA_CLI_SHA256",
+        "IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256",
+    }
+    environment_contracts = (
+        (
+            repo_root / "scripts" / "bootstrap_sumeragi_v2_release.py",
+            "_RUNNER_ENV_ALLOWLIST",
+        ),
+        (
+            repo_root / "scripts" / "validate_sumeragi_v2_release_bootstrap.py",
+            "_RUNNER_EXTRA_ENV",
+        ),
+    )
+    for contract_path, assignment_name in environment_contracts:
+        if not contract_path.is_file() or contract_path.is_symlink():
+            errors.append(
+                f"{contract_path}: authenticated release environment contract "
+                "must be a regular file"
+            )
+            continue
+        contract_source = contract_path.read_text(encoding="utf-8")
+        try:
+            contract_tree = ast.parse(contract_source, filename=str(contract_path))
+        except SyntaxError as error:
+            errors.append(
+                f"{contract_path}: authenticated release environment contract "
+                f"is invalid Python: {error}"
+            )
+            continue
+        assignments = [
+            statement
+            for statement in contract_tree.body
+            if isinstance(statement, ast.Assign)
+            and len(statement.targets) == 1
+            and isinstance(statement.targets[0], ast.Name)
+            and statement.targets[0].id == assignment_name
+        ]
+        if len(assignments) != 1:
+            errors.append(
+                f"{contract_path}: authenticated release environment must define "
+                f"exactly one {assignment_name}"
+            )
+            continue
+        try:
+            allowlist = ast.literal_eval(assignments[0].value)
+        except (TypeError, ValueError, SyntaxError):
+            errors.append(
+                f"{contract_path}: {assignment_name} must be a literal set"
+            )
+            continue
+        admitted_scaling = {
+            value
+            for value in allowlist
+            if isinstance(value, str) and value.startswith("IROHA_RELEASE_SCALING_")
+        }
+        if admitted_scaling != scaling_environment:
+            errors.append(
+                f"{contract_path}: authenticated release environment must admit "
+                "exactly the five source-bound G-SCALE trust inputs"
             )
 
     receipt_path = repo_root / "scripts" / "write_sumeragi_v2_release_receipt.py"
@@ -37508,7 +37917,7 @@ def _production_liveness_release_inventory_errors(
             expected_receipt_route = (
                 "if module in _DATA_MODEL_PRODUCTION_MODULES:\n"
                 "        return (\n"
-                '            "cargo test --locked -p iroha_data_model --lib "\n'
+                '            "cargo test --locked --offline -p iroha_data_model --lib "\n'
                 '            f"{module} -- --test-threads=1"\n'
                 "        )"
             )
@@ -37537,20 +37946,20 @@ def _production_liveness_release_inventory_errors(
     documentation_claims = {
         repo_root / "docs" / "formal" / "sumeragi_v2" / "README.md": (
             "inventories 515 named tests\nacross 38 Rust modules",
-            "all 61 pre-network legs and the exact\n515-test inventory",
+            "all 65 pre-network legs and the exact\n515-test inventory",
             "canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
         ),
         repo_root / "docs" / "formal" / "sumeragi_v2" / "PROOF.md": (
-            "yielding the current 515-test, 38-module, 61-leg\ninventory",
-            "pre-network corridor\nnow has 61 legs",
+            "yielding the current 515-test, 38-module, 65-leg\ninventory",
+            "pre-network corridor\nnow has 65 legs",
             "canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
         ),
         repo_root / "docs" / "source" / "sumeragi_v2_liveness.md": (
             "The current 515-test inventory is a mechanically checked\n"
             "source contract",
-            "receipt binds the 61 pre-network corridor legs and\n"
+            "receipt binds the 65 pre-network corridor legs and\n"
             "their exact 515-test inventory",
             "Its canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
@@ -37857,6 +38266,9 @@ def validate_ledger(
     errors.extend(_exact_output_production_source_fidelity_errors(ROOT_DIR))
     errors.extend(
         _kura_application_receipt_production_source_fidelity_errors(ROOT_DIR)
+    )
+    errors.extend(
+        _kura_retirement_progress_production_source_fidelity_errors(ROOT_DIR)
     )
     errors.extend(_chain_source_fidelity_errors(formal_dir))
     errors.extend(

@@ -9,8 +9,4 @@ fixtures/sorafs_manifest/ci_sample/
 ├── car_summary.json
 ├── manifest.to
 ├── manifest.json
-├── proof.json
-├── manifest.bundle.json
-├── manifest.sig
-├── manifest.sign.summary.json
-└── manifest.verify.summary.json
+└── proof.json

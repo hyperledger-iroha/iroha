@@ -54,7 +54,7 @@ JSON میں ٹکڑوں کی آرڈر شدہ آفسیٹس ، لمبائی اور 
 - کونسل کے دستخط اور اختیاری میٹا ڈیٹا (جیسے IDS تعمیر کریں)۔
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
+cargo run -p sorafs_manifest --bin sorafs-manifest-builder -- \
   ./payload.bin \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --manifest-out=payload.manifest \

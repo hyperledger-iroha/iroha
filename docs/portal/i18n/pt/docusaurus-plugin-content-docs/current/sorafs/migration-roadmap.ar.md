@@ -43,14 +43,14 @@ Você pode fazer isso em `docs/source/sorafs/migration_ledger.md`. كل تغيي
 |--------|--------|-------|------------|----------|
 | luminárias para jogos | M0 | Dry-runs أسبوعية تقارن digests المحلية للـ chunk مع `fixtures/sorafs_chunker`. Verifique o valor do `docs/source/sorafs/reports/`. | Provedores de armazenamento | `determinism-<date>.md` significa aprovação/reprovação. |
 | فرض التواقيع | M1 | `ci/check_sorafs_fixtures.sh` + `.github/workflows/sorafs-fixtures-nightly.yml` é um arquivo de arquivo e manifesto. substitui a renúncia da renúncia do PR. | GT Ferramentaria | سجل CI, رابط تذكرة renúncia (إن وجدت). |
-| Sinalizadores de expectativa | M1 | A chave `sorafs_manifest_stub` é a chave para a configuração: | Documentos CI | Você pode usar sinalizadores de expectativa (انظر كتلة الأمر أدناه). |
+| Sinalizadores de expectativa | M1 | A chave `sorafs_manifest_builder` é a chave para a configuração: | Documentos CI | Você pode usar sinalizadores de expectativa (انظر كتلة الأمر أدناه). |
 | Fixação primeiro do registro | M2 | `sorafs pin propose` e `sorafs pin approve` são arquivos do manifesto; CLI é compatível com `--require-registry`. | Operações de Governança | Para remover o registro CLI do sistema, você pode usá-lo. |
 | Observabilidade | M3 | Os itens Prometheus/Grafana devem ser armazenados em pedaços de manifestos no registro; As operações de operações são importantes. | Observabilidade | رابط لوحة, IDs قواعد التنبيه, نتائج GameDay. |
 
 #### أمر النشر القياسي
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- docs/book \
   --manifest-out artifacts/docs/book/2025-11-01/docs.manifest \
   --manifest-signatures-out artifacts/docs/book/2025-11-01/docs.manifest_signatures.json \
   --car-out artifacts/docs/book/2025-11-01/docs.car \

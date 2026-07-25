@@ -181,7 +181,7 @@ fn referendum_open_and_close_by_height() {
         assert!(has_opened_event_at_h2 || status_open_at_h2);
     }
 
-    // Block H=3: closes.
+    // Block H=3: the inclusive end height remains open.
     let header3 = BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0);
     let mut sblock3 = state.block(header3);
     let has_closed_event_at_h3 = sblock3.world.take_external_events().iter().any(|event| {
@@ -193,16 +193,41 @@ fn referendum_open_and_close_by_height() {
                     iroha_data_model::events::data::DataEvent::Governance(
                         GovernanceEvent::ReferendumClosed(_)
                     )
-                )
+            )
         )
     });
     sblock3.commit().expect("commit block at H=3");
-    let status_closed_at_h3 = state
+    let status_open_at_h3 = state
+        .view()
+        .world()
+        .governance_referenda()
+        .get(&rid)
+        .is_some_and(|record| record.status == GovernanceReferendumStatus::Open);
+    assert!(status_open_at_h3);
+    assert!(!has_closed_event_at_h3);
+
+    // Block H=4: closes at h_end + 1.
+    let header4 = BlockHeader::new(nonzero!(4_u64), None, None, None, 0, 0);
+    let mut sblock4 = state.block(header4);
+    let has_closed_event_at_h4 = sblock4.world.take_external_events().iter().any(|event| {
+        matches!(
+            event,
+            iroha_data_model::events::EventBox::Data(payload)
+                if matches!(
+                    payload.as_ref(),
+                    iroha_data_model::events::data::DataEvent::Governance(
+                        GovernanceEvent::ReferendumClosed(_)
+                    )
+                )
+        )
+    });
+    sblock4.commit().expect("commit block at H=4");
+    let status_closed_at_h4 = state
         .view()
         .world()
         .governance_referenda()
         .get(&rid)
         .is_some_and(|record| record.status == GovernanceReferendumStatus::Closed);
-    assert!(status_closed_at_h3);
-    assert!(has_closed_event_at_h3 || status_closed_at_h3);
+    assert!(status_closed_at_h4);
+    assert!(has_closed_event_at_h4 || status_closed_at_h4);
 }

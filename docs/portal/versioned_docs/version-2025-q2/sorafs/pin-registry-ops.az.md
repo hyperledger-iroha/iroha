@@ -119,7 +119,7 @@ groups:
    - `iroha app sorafs providers list`-i işə salın və reklam edilən imkanların təkrarlama tələblərinə uyğunluğunu yoxlayın.
    - Təmin edilmiş GiB və PoR müvəffəqiyyətini təsdiqləmək üçün `torii_sorafs_capacity_*` ölçü cihazlarını yoxlayın.
 3. **Replikasiyanı yenidən təyin edin**
-   - `sorafs_manifest_stub capacity replication-order` vasitəsilə yeni sifarişlər verin (`stat="avg"`) 5 dövrdən aşağı düşdükdə (manifest/CAR qablaşdırması `iroha app sorafs toolkit pack` istifadə edir).
+   - `sorafs_manifest_builder capacity replication-order` vasitəsilə yeni sifarişlər verin (`stat="avg"`) 5 dövrdən aşağı düşdükdə (manifest/CAR qablaşdırması `iroha app sorafs toolkit pack` istifadə edir).
    - Əgər ləqəblərdə aktiv manifest bağlamaları yoxdursa, idarəetməni xəbərdar edin (`torii_sorafs_registry_aliases_total` gözlənilmədən azalır).
 4. **Sənədin nəticəsi**
    - SoraFS əməliyyatlar jurnalında insident qeydlərini vaxt ştampları və təsirlənmiş manifest həzmləri ilə qeyd edin.

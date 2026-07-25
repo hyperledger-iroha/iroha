@@ -7,22 +7,107 @@ use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
     smartcontracts::Execute,
-    state::{State, World, WorldReadOnly},
+    state::{
+        GovernancePipeline, GovernanceProposalRecord, GovernanceProposalStatus,
+        GovernanceReferendumMode, GovernanceReferendumRecord, GovernanceReferendumStatus,
+        GovernanceStageApprovals, State, StateTransaction, World, WorldReadOnly,
+    },
 };
 use iroha_crypto::KeyPair;
 use iroha_data_model::{
     block::BlockHeader,
     events::data::{DataEvent, governance::GovernanceEvent},
+    governance::types::{
+        AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal, ParliamentBody,
+        ProposalKind,
+    },
     isi::{
         error::{InstructionExecutionError, MathError},
         governance::FinalizeReferendum,
     },
+    nexus::DataSpaceId,
+    smart_contract::ContractAddress,
 };
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use mv::storage::StorageReadOnly;
 
+const DEPLOY_PARLIAMENT_BODIES: [ParliamentBody; 6] = [
+    ParliamentBody::RulesCommittee,
+    ParliamentBody::AgendaCouncil,
+    ParliamentBody::InterestPanel,
+    ParliamentBody::ReviewPanel,
+    ParliamentBody::PolicyJury,
+    ParliamentBody::OversightCommittee,
+];
+
 fn checked_random_governance_threshold_keypair() -> KeyPair {
     KeyPair::try_random().expect("generate checked governance threshold keypair")
+}
+
+fn threshold_contract_address(nonce: u64) -> ContractAddress {
+    ContractAddress::derive(
+        iroha_config::parameters::defaults::common::chain_discriminant(),
+        &ALICE_ID,
+        nonce,
+        DataSpaceId::UNIVERSAL,
+    )
+    .expect("threshold proposal contract address")
+}
+
+fn seed_open_plain_referendum(
+    stx: &mut StateTransaction<'_, '_>,
+    proposal_id: [u8; 32],
+    h_start: u64,
+    h_end: u64,
+) -> String {
+    let referendum_id = hex::encode(proposal_id);
+    let referendum = GovernanceReferendumRecord {
+        h_start,
+        h_end,
+        status: GovernanceReferendumStatus::Open,
+        mode: GovernanceReferendumMode::Plain,
+    };
+    let pipeline = GovernancePipeline::seeded(h_start, Some(&referendum), &stx.gov);
+    stx.world
+        .governance_referenda_mut()
+        .insert(referendum_id.clone(), referendum);
+    stx.world.governance_proposals_mut().insert(
+        proposal_id,
+        GovernanceProposalRecord {
+            proposer: ALICE_ID.clone(),
+            kind: ProposalKind::DeployContract(DeployContractProposal {
+                contract_address: threshold_contract_address(u64::from(proposal_id[0])),
+                code_hash_hex: ContractCodeHash::from_hex_str(&hex::encode(proposal_id))
+                    .expect("code hash"),
+                abi_hash_hex: ContractAbiHash::from_hex_str(&hex::encode([0x11; 32]))
+                    .expect("ABI hash"),
+                abi_version: AbiVersion::new(1),
+                manifest_provenance: None,
+            }),
+            created_height: h_start,
+            status: GovernanceProposalStatus::Proposed,
+            pipeline,
+            parliament_snapshot: None,
+            finalization_evidence: None,
+            enacted_at_height: None,
+        },
+    );
+
+    let mut approvals = GovernanceStageApprovals::default();
+    for body in DEPLOY_PARLIAMENT_BODIES {
+        approvals
+            .ensure_stage(body, 0, 1, stx.gov.parliament_quorum_bps)
+            .record(ALICE_ID.clone());
+    }
+    assert!(
+        DEPLOY_PARLIAMENT_BODIES
+            .into_iter()
+            .all(|body| approvals.quorum_met(body, 0))
+    );
+    stx.world
+        .governance_stage_approvals_mut()
+        .insert(referendum_id.clone(), approvals);
+    referendum_id
 }
 
 #[test]
@@ -41,14 +126,15 @@ fn ratio_threshold_rejects_even_if_approve_gt_reject() {
     cfg.approval_threshold_q_den = 4;
     state.set_gov(cfg);
 
-    // Block H=1
+    // Finalization occurs after the inclusive [1, 1] voting window.
     let (_pk, _sk) = checked_random_governance_threshold_keypair().into_parts();
-    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+    let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
+    let proposal_id = [0xAB; 32];
+    let rid = seed_open_plain_referendum(&mut stx, proposal_id, 1, 1);
 
     // Locks: approve weight=2 (sqrt(4)), reject weight=1 (sqrt(1)); duration 0 → factor 1
-    let rid = "rid-threshold-1".to_string();
     let mut map = iroha_core::state::GovernanceLocksForReferendum::default();
     map.locks.insert(
         ALICE_ID.clone(),
@@ -61,11 +147,10 @@ fn ratio_threshold_rejects_even_if_approve_gt_reject() {
             duration_blocks: 0,
         },
     );
-    // A different owner id for reject; reuse ALICE_ID for brevity (key uniqueness irrelevant)
     map.locks.insert(
-        ALICE_ID.clone().clone(),
+        BOB_ID.clone(),
         iroha_core::state::GovernanceLockRecord {
-            owner: ALICE_ID.clone(),
+            owner: BOB_ID.clone(),
             amount: 1_u64.into(),
             slashed: 0_u64.into(),
             expiry_height: 100,
@@ -78,7 +163,7 @@ fn ratio_threshold_rejects_even_if_approve_gt_reject() {
     // Finalize should reject due to ratio < 75%
     let instr = FinalizeReferendum {
         referendum_id: rid.clone(),
-        proposal_id: [0xAB; 32],
+        proposal_id,
     };
     instr.execute(&ALICE_ID, &mut stx).expect("finalize ok");
     let evs = stx.world.take_external_events();
@@ -86,6 +171,31 @@ fn ratio_threshold_rejects_even_if_approve_gt_reject() {
         event.as_data_event(),
         Some(DataEvent::Governance(GovernanceEvent::ProposalRejected(_)))
     )));
+    let proposal = stx
+        .world
+        .governance_proposals()
+        .get(&proposal_id)
+        .expect("proposal remains recorded");
+    assert_eq!(proposal.status, GovernanceProposalStatus::Rejected);
+    let evidence = proposal
+        .finalization_evidence
+        .expect("rejection retains finalization evidence");
+    assert_eq!(evidence.proposal_id, proposal_id);
+    assert_eq!(evidence.referendum_id, proposal_id);
+    assert_eq!(evidence.finalized_at_height, 1);
+    assert_eq!(
+        (evidence.approve, evidence.reject, evidence.abstain),
+        (2, 1, 0)
+    );
+    assert!(!evidence.approved);
+    assert_eq!(
+        stx.world
+            .governance_referenda()
+            .get(&rid)
+            .expect("referendum remains recorded")
+            .status,
+        GovernanceReferendumStatus::Closed
+    );
 }
 
 #[test]
@@ -98,14 +208,15 @@ fn min_turnout_rejects_when_below_threshold() {
     cfg.min_turnout = 1_000;
     state.set_gov(cfg);
 
-    // Block H=1
+    // Finalization occurs after the inclusive [1, 1] voting window.
     let (_pk, _sk) = checked_random_governance_threshold_keypair().into_parts();
-    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+    let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
+    let proposal_id = [0xCD; 32];
+    let rid = seed_open_plain_referendum(&mut stx, proposal_id, 1, 1);
 
     // Minimal approve weight=1
-    let rid = "rid-threshold-2".to_string();
     let mut map = iroha_core::state::GovernanceLocksForReferendum::default();
     map.locks.insert(
         ALICE_ID.clone(),
@@ -123,7 +234,7 @@ fn min_turnout_rejects_when_below_threshold() {
     // Finalize should reject due to turnout < min_turnout
     let instr = FinalizeReferendum {
         referendum_id: rid.clone(),
-        proposal_id: [0xCD; 32],
+        proposal_id,
     };
     instr.execute(&ALICE_ID, &mut stx).expect("finalize ok");
     let evs = stx.world.take_external_events();
@@ -131,6 +242,30 @@ fn min_turnout_rejects_when_below_threshold() {
         event.as_data_event(),
         Some(DataEvent::Governance(GovernanceEvent::ProposalRejected(_)))
     )));
+    let proposal = stx
+        .world
+        .governance_proposals()
+        .get(&proposal_id)
+        .expect("proposal remains recorded");
+    assert_eq!(proposal.status, GovernanceProposalStatus::Rejected);
+    let evidence = proposal
+        .finalization_evidence
+        .expect("rejection retains finalization evidence");
+    assert_eq!(evidence.finalized_at_height, 1);
+    assert_eq!(
+        (evidence.approve, evidence.reject, evidence.abstain),
+        (1, 0, 0)
+    );
+    assert_eq!(evidence.min_turnout, 1_000);
+    assert!(!evidence.approved);
+    assert_eq!(
+        stx.world
+            .governance_referenda()
+            .get(&rid)
+            .expect("referendum remains recorded")
+            .status,
+        GovernanceReferendumStatus::Closed
+    );
 }
 
 #[test]
@@ -143,10 +278,11 @@ fn finalize_referendum_rejects_tally_overflow_without_side_effects() {
     cfg.max_conviction = u64::MAX;
     state.set_gov(cfg);
 
-    let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+    let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
-    let rid = "rid-tally-overflow".to_string();
+    let proposal_id = [0xEF; 32];
+    let rid = seed_open_plain_referendum(&mut stx, proposal_id, 1, 1);
     let mut locks = iroha_core::state::GovernanceLocksForReferendum::default();
     for owner in [ALICE_ID.clone(), BOB_ID.clone()] {
         locks.locks.insert(
@@ -165,7 +301,7 @@ fn finalize_referendum_rejects_tally_overflow_without_side_effects() {
 
     let err = FinalizeReferendum {
         referendum_id: rid.clone(),
-        proposal_id: [0xEF; 32],
+        proposal_id,
     }
     .execute(&ALICE_ID, &mut stx)
     .expect_err("overflowing tally must fail");
@@ -187,5 +323,20 @@ fn finalize_referendum_rejects_tally_overflow_without_side_effects() {
             .values()
             .all(|record| record.amount.scale() == 0
                 && record.amount.as_numeric().try_mantissa_u128() == Some(u128::MAX))
+    );
+    let proposal = stx
+        .world
+        .governance_proposals()
+        .get(&proposal_id)
+        .expect("proposal remains present");
+    assert_eq!(proposal.status, GovernanceProposalStatus::Proposed);
+    assert!(proposal.finalization_evidence.is_none());
+    assert_eq!(
+        stx.world
+            .governance_referenda()
+            .get(&rid)
+            .expect("referendum remains present")
+            .status,
+        GovernanceReferendumStatus::Open
     );
 }

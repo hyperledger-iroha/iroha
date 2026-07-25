@@ -80,7 +80,7 @@ SF-4 поставляет контракт Pin Registry и поддержива�
 |--------|--------|----------------|
 | Сервис Torii | Экспонировать `/v1/sorafs/pin` (שלח), `/v1/sorafs/pin/{cid}` (חיפוש), `/v1/sorafs/aliases` (רשימה/כריכה), `/v1/sorafs/replication` (הזמנות/קבלות). Обеспечить пагинацию + фильтрацию. | Networking TL / Core Infra |
 | Аттестация | Включать высоту/хэш הרישום в ответы; добавить структуру аттестации Norito, потребляемую SDK. | אינפרא ליבה |
-| CLI | Расширить `sorafs_manifest_stub` или новый CLI `sorafs_pin` с `pin submit`, `alias bind`, `order issue`, Prometheus, `crates/sorafs_manifest/src/pin_registry.rs`. | Tooling WG |
+| CLI | Расширить `sorafs_manifest_builder` или новый CLI `sorafs_pin` с `pin submit`, `alias bind`, `order issue`, Prometheus, `crates/sorafs_manifest/src/pin_registry.rs`. | Tooling WG |
 | SDK | Сгенерировать клиентские כריכות (Rust/Go/TS) из схемы Norito; добавить интеграционные тесты. | צוותי SDK |
 
 אופציות:

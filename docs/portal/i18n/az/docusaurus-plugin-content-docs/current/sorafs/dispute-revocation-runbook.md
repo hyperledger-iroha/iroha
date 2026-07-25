@@ -36,7 +36,7 @@ Bu runbook SoraFS tutum mübahisələrini təqdim etmək, ləğvetmələri əlaq
 
 ## 3. Mübahisəni bildirin
 
-1. `sorafs_manifest_stub capacity dispute` üçün xüsusi JSON yaradın:
+1. `sorafs_manifest_builder capacity dispute` üçün xüsusi JSON yaradın:
 
    ```json
    {
@@ -59,7 +59,7 @@ Bu runbook SoraFS tutum mübahisələrini təqdim etmək, ləğvetmələri əlaq
 2. CLI-ni işə salın:
 
    ```bash
-   sorafs_manifest_stub capacity dispute \
+   sorafs_manifest_builder capacity dispute \
      --spec=dispute.json \
      --norito-out=dispute.to \
      --base64-out=dispute.b64 \
@@ -76,7 +76,7 @@ Bu runbook SoraFS tutum mübahisələrini təqdim etmək, ləğvetmələri əlaq
 
 1. **Grace pəncərəsi:** gözlənilən ləğvetmə barədə provayderə məlumat verin; siyasət icazə verdikdə bərkidilmiş məlumatların boşaldılmasına icazə verin.
 2. **`ProviderAdmissionRevocationV1` yaradın:**
-   - Təsdiqlənmiş səbəblə `sorafs_manifest_stub provider-admission revoke` istifadə edin.
+   - Təsdiqlənmiş səbəblə `sorafs_manifest_builder provider-admission revoke` istifadə edin.
    - İmzaları və ləğvetmə jurnalını yoxlayın.
 3. **Ləğv edilməsini dərc edin:**
    - Ləğv sorğusunu Torii nömrəsinə göndərin.
@@ -91,7 +91,7 @@ Bu runbook SoraFS tutum mübahisələrini təqdim etmək, ləğvetmələri əlaq
 
 ## 6. İstinad materialları
 
-- `sorafs_manifest_stub capacity dispute --help`
+- `sorafs_manifest_builder capacity dispute --help`
 - `docs/source/sorafs/storage_capacity_marketplace.md` (mübahisə bölməsi)
 - `docs/source/sorafs/provider_admission_policy.md` (ləğv iş axını)
 - Müşahidə paneli: `SoraFS / Capacity Providers`

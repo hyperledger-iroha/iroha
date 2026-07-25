@@ -38,7 +38,7 @@ translator: machine-google-reviewed
 
 ## 3. ཡིག་ཆ།
 
-༡ `sorafs_manifest_stub capacity dispute` གི་དོན་ལུ་ JSON ཅིག་གསར་བསྐྲུན་འབད།
+༡ `sorafs_manifest_builder capacity dispute` གི་དོན་ལུ་ JSON ཅིག་གསར་བསྐྲུན་འབད།
 
    ```json
    {
@@ -69,7 +69,7 @@ translator: machine-google-reviewed
 
 1. **Grace Window:** འབྱུང་འགྱུར་གྱི་ཆ་མེད་གཏང་མི་ལུ་བརྡ་བསྐུལ་འབད། སྲིད་བྱུས་གནང་བ་འབད་བའི་སྐབས་ གནས་སྡུད་ཚུ་ བཏོན་བཏང་བཅུགཔ་ཨིན།
 ༢.
-   - ཆ་འཇོག་གྲུབ་པའི་རྒྱུ་མཚན་དང་བཅས་ `sorafs_manifest_stub provider-admission revoke` ལག་ལེན་འཐབ།
+   - ཆ་འཇོག་གྲུབ་པའི་རྒྱུ་མཚན་དང་བཅས་ `sorafs_manifest_builder provider-admission revoke` ལག་ལེན་འཐབ།
    - མཚན་རྟགས་དང་ ཆ་མེད་གཏང་ནིའི་ ཟས་བཅུད་ཚུ་ བདེན་དཔྱད་འབད།
 3. **དཔེ་སྐྲུན་གྱི་ཆ་མེད་:**
    - ཆ་མེད་བཏང་བའི་ཞུ་བ་ I18NT0000005X ལུ་ཕུལ་དགོ།
@@ -84,7 +84,7 @@ translator: machine-google-reviewed
 
 ## 6. དཔྱད་གཞིའི་དངོས་པོ།
 
-- `sorafs_manifest_stub capacity dispute --help`
+- `sorafs_manifest_builder capacity dispute --help`
 - `docs/source/sorafs/storage_capacity_marketplace.md` (རྩོད་རྙོགས་དབྱེ་ཚན་)།
 - `docs/source/sorafs/provider_admission_policy.md` (བསྐྱར་བཟོ་ལཱ་གི་རྒྱུན་རིམ།)
 - བལྟ་རྟོག་འབད་བཏུབ་པའི་ ཌེཤ་བོརཌ་: `SoraFS / Capacity Providers`

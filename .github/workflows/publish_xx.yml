@@ -24,23 +24,23 @@ jobs:
   image:
     runs-on: [self-hosted, Linux, iroha2]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - name: Login to DockerHub
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Set up Docker Buildx
         id: buildx
         if: always()
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
         with:
           version: latest
           install: true
 
       - name: Build and push default image
         if: ${{ inputs.image_type == 'xx' }}
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
         with:
           push: true
           file: Dockerfile.cross
@@ -52,7 +52,7 @@ jobs:
 
       - name: Build and push profiling image
         if: ${{ inputs.image_type == 'xx-profiling' }}
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
         with:
           push: true
           file: Dockerfile.cross

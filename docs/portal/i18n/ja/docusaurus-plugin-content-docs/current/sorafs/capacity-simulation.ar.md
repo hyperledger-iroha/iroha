@@ -19,7 +19,7 @@ id: 容量シミュレーション
 テストは `docs/source/sorafs/runbooks/sorafs_capacity_simulation.md` です。スフィンクスの正体は、スフィンクスの存在です。
 :::
 
-SF-2c を確認してください。フェイルオーバーを実行し、スラッシュを実行して、フィクスチャを実行します。 `docs/examples/sorafs_capacity_simulation/`。ペイロード数 `sorafs_manifest_stub capacity` `iroha app sorafs toolkit pack` はマニフェスト/CAR を表します。
+SF-2c を確認してください。フェイルオーバーを実行し、スラッシュを実行して、フィクスチャを実行します。 `docs/examples/sorafs_capacity_simulation/`。ペイロード数 `sorafs_manifest_builder capacity` `iroha app sorafs toolkit pack` はマニフェスト/CAR を表します。
 
 ## 1. アーティファクトの管理 CLI
 
@@ -28,7 +28,7 @@ cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./run_cli.sh ./artifacts
 ```
 
-`run_cli.sh` と `sorafs_manifest_stub capacity` の Norito ペイロードと BLOB の Base64 と Torii の JSON意味:
+`run_cli.sh` と `sorafs_manifest_builder capacity` の Norito ペイロードと BLOB の Base64 と Torii の JSON意味:
 
 - 最高のパフォーマンスを見せてください。
 - 最高のパフォーマンスを見せてください。

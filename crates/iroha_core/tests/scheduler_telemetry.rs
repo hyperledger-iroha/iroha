@@ -37,7 +37,6 @@ use iroha_data_model::{
 #[cfg(feature = "telemetry")]
 #[allow(clippy::too_many_lines)]
 fn scheduler_layer_metrics_and_utilization_populated() {
-    let chain_id = ChainId::from("chain");
     let (alice_id, _) = iroha_test_samples::gen_account_in("wonderland");
     let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
     let (carol_id, _) = iroha_test_samples::gen_account_in("wonderland");
@@ -62,6 +61,11 @@ fn scheduler_layer_metrics_and_utilization_populated() {
     let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
     let telemetry = iroha_core::telemetry::StateTelemetry::new(metrics.clone(), true);
     let state = iroha_core::state::State::with_telemetry(world, kura, query, telemetry);
+    let nexus = state.nexus_snapshot();
+    state.install_lane_manifests(&Arc::new(
+        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
+    ));
+    let chain_id = state.chain_id.clone();
 
     // Build 3 txs with trivial conflicts to force at least two layers:
     // 1) Mint to Alice (independent)

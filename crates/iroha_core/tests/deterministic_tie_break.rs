@@ -5,9 +5,12 @@
 //! execution order is a stable sort by (`call_hash`, index) regardless of the
 //! input order.
 
-use std::borrow::Cow;
+use std::{borrow::Cow, sync::Arc};
 
-use iroha_core::block::{BlockBuilder, ValidBlock};
+use iroha_core::{
+    block::{BlockBuilder, ValidBlock},
+    governance::manifest::LaneManifestRegistry,
+};
 use iroha_data_model::prelude::*;
 
 fn build_world() -> (
@@ -55,7 +58,12 @@ fn build_world() -> (
     );
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query = iroha_core::query::store::LiveQueryStore::start_test();
-    let state = iroha_core::state::State::new_for_testing(world, kura, query);
+    let state =
+        iroha_core::state::State::new_with_chain_for_testing(world, kura, query, chain_id.clone());
+    let nexus = state.nexus_snapshot();
+    state.install_lane_manifests(&Arc::new(
+        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
+    ));
     (
         state,
         chain_id,

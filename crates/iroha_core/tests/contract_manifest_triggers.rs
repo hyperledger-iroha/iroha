@@ -35,6 +35,9 @@ use iroha_data_model::{
     },
     trigger::action::Repeats,
 };
+use iroha_executor_data_model::permission::account::{
+    AccountAliasPermissionScope, CanManageAccountAlias,
+};
 use iroha_primitives::json::Json;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
@@ -174,7 +177,8 @@ fn assert_contract_trigger_metadata(
 fn activate_registers_manifest_triggers_and_deactivate_removes() {
     let (state, authority, kp) = setup_state();
     let contract_address = contract_address(&authority, 0);
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let contract_subject = contract_address.subject_id();
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
 
@@ -231,6 +235,29 @@ fn activate_registers_manifest_triggers_and_deactivate_removes() {
     RegisterSmartContractCode { manifest }
         .execute(&authority, &mut stx)
         .expect("register manifest");
+
+    let missing_subject_error = ActivateContractInstance {
+        contract_address: contract_address.clone(),
+        code_hash,
+    }
+    .execute(&authority, &mut stx)
+    .expect_err("the manifest contract-subject trigger authority must already exist");
+    assert!(
+        format!("{missing_subject_error:?}").contains("must be registered before activation"),
+        "unexpected missing contract-subject error: {missing_subject_error}"
+    );
+    assert!(
+        stx.world.triggers().ids().get(&trigger_id).is_none(),
+        "failed activation registered the manifest trigger"
+    );
+
+    Register::account(Account::new(contract_subject.clone()))
+        .execute(&authority, &mut stx)
+        .expect("register the non-signable contract-subject account");
+    assert!(
+        !stx.can_register_trigger_for(&authority, &contract_subject),
+        "the activation authority must not receive persistent trigger-registration permission"
+    );
 
     ActivateContractInstance {
         contract_address: contract_address.clone(),
@@ -301,7 +328,8 @@ fn activate_rejects_manifest_trigger_with_unauthorized_foreign_authority() {
             .clone(),
     );
     let contract_address = contract_address(&authority, 0);
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let contract_subject = contract_address.subject_id();
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
 
@@ -310,6 +338,9 @@ fn activate_rejects_manifest_trigger_with_unauthorized_foreign_authority() {
     Grant::account_permission(register_perm, authority.clone())
         .execute(&authority, &mut stx)
         .expect("grant CanRegisterSmartContractCode");
+    Register::account(Account::new(contract_subject))
+        .execute(&authority, &mut stx)
+        .expect("register the non-signable contract-subject account");
 
     let trigger_id: TriggerId = "foreign_wake".parse().expect("trigger id");
     let trigger = TriggerDescriptor {
@@ -358,7 +389,7 @@ fn activate_rejects_manifest_trigger_with_unauthorized_foreign_authority() {
     .execute(&authority, &mut stx)
     .expect_err("manifest trigger must not impersonate a foreign account");
     assert!(
-        error.to_string().contains(&format!(
+        format!("{error:?}").contains(&format!(
             "Missing CanRegisterTrigger{{authority: {foreign}}} permission"
         )),
         "unexpected foreign-authority error: {error}"
@@ -469,6 +500,9 @@ fn activate_registers_manifest_data_and_pipeline_triggers_and_deactivate_removes
     RegisterSmartContractCode { manifest }
         .execute(&authority, &mut stx)
         .expect("register manifest");
+    Register::account(Account::new(contract_address.subject_id()))
+        .execute(&authority, &mut stx)
+        .expect("register the non-signable contract-subject account");
 
     ActivateContractInstance {
         contract_address: contract_address.clone(),
@@ -572,6 +606,13 @@ fn activate_registers_cross_contract_manifest_trigger_callback() {
     Grant::account_permission(enact_perm, authority.clone())
         .execute(&authority, &mut stx)
         .expect("grant CanEnactGovernance");
+    let alias_manage_permission: permission::Permission = CanManageAccountAlias {
+        scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
+    }
+    .into();
+    Grant::account_permission(alias_manage_permission, authority.clone())
+        .execute(&authority, &mut stx)
+        .expect("grant universal-dataspace account-alias management");
 
     let target_entrypoint = EntrypointDescriptor {
         name: "run".to_string(),
@@ -591,7 +632,7 @@ fn activate_registers_cross_contract_manifest_trigger_callback() {
     let target_code_hash = target_manifest.code_hash.expect("target code hash");
     RegisterSmartContractBytes {
         code_hash: target_code_hash,
-        code: target_program.clone(),
+        code: target_program,
     }
     .execute(&authority, &mut stx)
     .expect("register target bytes");
@@ -656,9 +697,12 @@ fn activate_registers_cross_contract_manifest_trigger_callback() {
     }
     .execute(&authority, &mut stx)
     .expect("register source manifest");
+    Register::account(Account::new(source_address.subject_id()))
+        .execute(&authority, &mut stx)
+        .expect("register the non-signable source contract-subject account");
 
     ActivateContractInstance {
-        contract_address: source_address,
+        contract_address: source_address.clone(),
         code_hash: source_code_hash,
     }
     .execute(&authority, &mut stx)
@@ -691,9 +735,13 @@ fn activate_registers_cross_contract_manifest_trigger_callback() {
         action.metadata.get(&namespace_key),
         Some(&Json::from("callee"))
     );
-    let expected_bytecode_hash = HashOf::new(&IvmBytecode::from_compiled(target_program));
     match action.executable() {
-        ExecutableRef::Ivm(hash) => assert_eq!(*hash, expected_bytecode_hash),
+        ExecutableRef::ContractCall(invocation) => {
+            assert_eq!(invocation.contract_address, target_address);
+            assert_eq!(invocation.expected_code_hash, target_code_hash);
+            assert_eq!(invocation.entrypoint, "run");
+            assert_eq!(invocation.arguments, None);
+        }
         other => panic!("unexpected trigger executable: {other:?}"),
     }
 }
@@ -791,7 +839,7 @@ fn activate_registers_kotodama_compiled_manifest_triggers_from_source() {
     let source = format!(
         r#"
 seiyaku Test {{
-  kotoage fn run() authorize("Execute") {{}}
+  kotoage fn run() authorize("CanEnactGovernance") {{}}
   trigger asset_added -> run {{
     on data asset added {{
       asset_definition "{asset_definition}";
@@ -816,6 +864,9 @@ seiyaku Test {{
         .expect("compile source with manifest");
     let code_hash = ivm::contract_code_hash(&program);
     let contract_address = contract_address(&authority, 0);
+    Register::account(Account::new(contract_address.subject_id()))
+        .execute(&authority, &mut stx)
+        .expect("register the non-signable contract-subject account");
 
     RegisterSmartContractBytes {
         code_hash,

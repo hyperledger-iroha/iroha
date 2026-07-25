@@ -38,7 +38,7 @@ Ce projet assure la gouvernance des opérateurs en ce qui concerne les activité
 
 ## 3. Suivre le sport
 
-1. Téléchargez les spécifications JSON pour `sorafs_manifest_stub capacity dispute` :
+1. Téléchargez les spécifications JSON pour `sorafs_manifest_builder capacity dispute` :
 
    ```json
    {
@@ -61,7 +61,7 @@ Ce projet assure la gouvernance des opérateurs en ce qui concerne les activité
 2. Cliquez sur CLI :
 
    ```bash
-   sorafs_manifest_stub capacity dispute \
+   sorafs_manifest_builder capacity dispute \
      --spec=dispute.json \
      --norito-out=dispute.to \
      --base64-out=dispute.b64 \
@@ -76,7 +76,7 @@ Ce projet assure la gouvernance des opérateurs en ce qui concerne les activité
 
 ## 4. Évacuation et évacuation1. **Окно льготы:** уведомите провайдера о грядущем отзыве; Les mesures d'évacuation sont prises dans le cadre de ces journées, mais c'est une politique double.
 2. **Générez `ProviderAdmissionRevocationV1` :**
-   - Utilisez le `sorafs_manifest_stub provider-admission revoke` avec l'inverse.
+   - Utilisez le `sorafs_manifest_builder provider-admission revoke` avec l'inverse.
    - Проверьте подписи и digest отзыва.
 3. **Опубликуйте отзыв:**
    - Ouvrez la porte sur Torii.
@@ -91,7 +91,7 @@ Ce projet assure la gouvernance des opérateurs en ce qui concerne les activité
 
 ## 6. Matériel de nettoyage
 
--`sorafs_manifest_stub capacity dispute --help`
+-`sorafs_manifest_builder capacity dispute --help`
 - `docs/source/sorafs/storage_capacity_marketplace.md` (pour les événements)
 - `docs/source/sorafs/provider_admission_policy.md` (flux de travail supprimé)
 - Nom du tableau de bord : `SoraFS / Capacity Providers`

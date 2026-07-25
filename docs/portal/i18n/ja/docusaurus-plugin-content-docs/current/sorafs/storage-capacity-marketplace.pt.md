@@ -65,7 +65,7 @@ OS は、最初のリリースで Exigidos をリリースし、Trilhas acionave
 - ヘルパー比較 (`CapacityMetadataEntry`、`PricingScheduleV1`、レーン/アトリビューカオ/SLA の検証) ダウンストリームの CI ツールのエラー再利用レポートを実行します。 [crates/sorafs_manifest/src/capacity.rs:230]
 - `PinProviderRegistry` は、`/v1/sorafs/capacity/state` 経由でオンチェーンでスナップショットを公開し、プロバイダーとエントラダを組み合わせて、Norito JSON で料金台帳を決定します。 [crates/iroha_torii/src/sorafs/registry.rs:17] [crates/iroha_torii/src/sorafs/api.rs:64]
 - 正規の認証、重複の検出、ポーレーンの制限、レプリカの保護、CI なしでのテレメトリの範囲のチェックの有効性を確認するための強制執行。 [crates/sorafs_manifest/src/capacity.rs:792]
-- オペラドールのツール: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` ペイロードの合法的な仕様を変換 Norito canonicos、BLOB Base64 電子履歴の JSON パラメタ オペラドールが `/v1/sorafs/capacity/declare`、`/v1/sorafs/capacity/telemetry` ローカルで有効なレプリカのフィクスチャを準備します。 [crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1] `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`、`order_v1.to`) および `cargo run -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order` 経由で参照できるフィクスチャ。
+- オペラドールのツール: `sorafs_manifest_builder capacity {declaration, telemetry, replication-order}` ペイロードの合法的な仕様を変換 Norito canonicos、BLOB Base64 電子履歴の JSON パラメタ オペラドールが `/v1/sorafs/capacity/declare`、`/v1/sorafs/capacity/telemetry` ローカルで有効なレプリカのフィクスチャを準備します。 [crates/sorafs_car/src/bin/sorafs_manifest_builder/capacity.rs:1] `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`、`order_v1.to`) および `cargo run -p sorafs_car --bin sorafs_manifest_builder -- capacity replication-order` 経由で参照できるフィクスチャ。
 
 ### 2. 計画管理の統合
 
@@ -156,7 +156,7 @@ OS は、最初のリリースで Exigidos をリリースし、Trilhas acionave
   ジュント・コン・パコート・デ・ガバナンカ。
 
 ### 論争とスラッシュの証拠
-- `sorafs_manifest_stub capacity dispute` 経由で議論をアーカイブする (テスト:
+- `sorafs_manifest_builder capacity dispute` 経由で議論をアーカイブする (テスト:
   `cargo test -p sorafs_car --test capacity_cli`) パラメータ ペイロード canonicos。
 - `cargo test -p iroha_core -- capacity_dispute_replay_is_deterministic` e をスイートとして実行
   ペナリダード (`record_capacity_telemetry_penalises_persistent_under_delivery`) パラプロバール
@@ -165,7 +165,7 @@ OS は、最初のリリースで Exigidos をリリースし、Trilhas acionave
   無効な関係を検証するためのリンク。
 
 ### プロバイダーのオンボーディングと終了スモーク テスト
-- `sorafs_manifest_stub capacity ...` のデクララソン/テレメトリア コムのアートファトを再生成します。
+- `sorafs_manifest_builder capacity ...` のデクララソン/テレメトリア コムのアートファトを再生成します。
   送信前に CLI をテストします (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`)。
 - Torii (`/v1/sorafs/capacity/declare`) 経由のサブメタと `/v1/sorafs/capacity/state` のキャプチャ
   スクリーンショットは Grafana です。 Siga o fluxo de Saida em `docs/source/sorafs/capacity_onboarding_runbook.md`。

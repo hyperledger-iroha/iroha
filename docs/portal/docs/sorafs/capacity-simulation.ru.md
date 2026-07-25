@@ -20,7 +20,7 @@ description: Запуск набора симуляции рынка емкос�
 Эта страница зеркалирует `docs/source/sorafs/runbooks/sorafs_capacity_simulation.md`. Держите обе копии синхронизированными, пока устаревший набор документации Sphinx полностью не будет перенесен.
 :::
 
-Этот ранбук объясняет, как запускать набор симуляции рынка емкости SF-2c и визуализировать полученные метрики. Он проверяет переговоры по квотам, обработку failover и ремедиацию slashing end-to-end, используя детерминированные фикстуры в `docs/examples/sorafs_capacity_simulation/`. Payloads емкости по-прежнему используют `sorafs_manifest_stub capacity`; используйте `iroha app sorafs toolkit pack` для потоков упаковки manifest/CAR.
+Этот ранбук объясняет, как запускать набор симуляции рынка емкости SF-2c и визуализировать полученные метрики. Он проверяет переговоры по квотам, обработку failover и ремедиацию slashing end-to-end, используя детерминированные фикстуры в `docs/examples/sorafs_capacity_simulation/`. Payloads емкости по-прежнему используют `sorafs_manifest_builder capacity`; используйте `iroha app sorafs toolkit pack` для потоков упаковки manifest/CAR.
 
 ## 1. Сгенерировать CLI-артефакты
 
@@ -29,7 +29,7 @@ cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./run_cli.sh ./artifacts
 ```
 
-`run_cli.sh` оборачивает `sorafs_manifest_stub capacity`, чтобы выпускать Norito payloads, base64-блоб, тела запросов Torii и JSON-сводки для:
+`run_cli.sh` оборачивает `sorafs_manifest_builder capacity`, чтобы выпускать Norito payloads, base64-блоб, тела запросов Torii и JSON-сводки для:
 
 - Трех деклараций провайдеров, участвующих в сценарии переговоров по квотам.
 - Одного распоряжения о репликации, распределяющего staged‑манифест между провайдерами.

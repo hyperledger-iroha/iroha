@@ -87,7 +87,7 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
 ```
 ```
 
-Manifest stub یہی data mirror کرتا ہے، جو pipelines میں `--chunker-profile-id` selection کو script کرنے کے لیے convenient ہے۔ دونوں chunk store CLIs canonical handle form (`--profile=sorafs.sf1@1.0.0`) بھی accept کرتے ہیں تاکہ build scripts numeric IDs hard-code کرنے سے بچ سکیں:
+Manifest builder یہی data mirror کرتا ہے، جو pipelines میں `--chunker-profile-id` selection کو script کرنے کے لیے convenient ہے۔ دونوں chunk store CLIs canonical handle form (`--profile=sorafs.sf1@1.0.0`) بھی accept کرتے ہیں تاکہ build scripts numeric IDs hard-code کرنے سے بچ سکیں:
 
 ```
 ```
@@ -119,4 +119,4 @@ Perfil de puerta de enlace mutuamente compatible منتخب کرتے ہیں (pre
 
 * `sorafs.sf1@1.0.0` accesorios públicos de perfil (`fixtures/sorafs_chunker`) اور `fuzz/sorafs_chunker` کے تحت registrar corpus سے coincidencia کرتا ہے۔ Paridad de extremo a extremo Rust, Go اور Node میں دیے گئے tests سے ejercicio کی جاتی ہے۔
 * `chunker_registry::lookup_by_profile` afirmar کرتا ہے کہ parámetros del descriptor `ChunkProfile::DEFAULT` سے coincide کریں تاکہ divergencia accidental سے بچا جا سکے۔
-* `iroha app sorafs toolkit pack` اور `sorafs_manifest_stub` سے بنے manifiesta میں metadatos de registro شامل ہوتی ہے۔
+* `iroha app sorafs toolkit pack` اور `sorafs_manifest_builder` سے بنے manifiesta میں metadatos de registro شامل ہوتی ہے۔

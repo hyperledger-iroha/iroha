@@ -80,7 +80,7 @@ Rust とヘルパーは、両方の機能を備えています。 Валидац
 |----------|----------|----------|
 | Сервис Torii | Экспонировать `/v1/sorafs/pin` (送信)、`/v1/sorafs/pin/{cid}` (検索)、`/v1/sorafs/aliases` (リスト/バインド)、`/v1/sorafs/replication` (注文/受領)。 Обеспечить пагинацию + фильтрацию. |ネットワーキング TL / コア インフラ |
 | Аттестация |レジストリを参照してください。 Norito、SDK を使用してください。 |コアインフラ |
-| CLI | `sorafs_manifest_stub` および CLI `sorafs_pin`、`pin submit`、`alias bind`、`order issue`、`registry export` を参照してください。 |ツーリングWG |
+| CLI | `sorafs_manifest_builder` および CLI `sorafs_pin`、`pin submit`、`alias bind`、`order issue`、`registry export` を参照してください。 |ツーリングWG |
 | SDK | Сгенерировать клиентские バインディング (Rust/Go/TS) と Norito; добавить интеграционные тесты。 | SDK チーム |
 
 説明:

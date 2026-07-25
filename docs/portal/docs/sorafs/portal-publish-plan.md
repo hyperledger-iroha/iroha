@@ -22,9 +22,6 @@ Run the packaging helper (skip options are available for dry-runs):
 ```bash
 ./ci/package_docs_portal_sorafs.sh \
   --out artifacts/devportal/sorafs/$(date -u +%Y%m%dT%H%M%SZ) \
-  --sign \
-  --sigstore-provider=github-actions \
-  --sigstore-audience=sorafs-devportal \
   --proof
 ```
 
@@ -32,7 +29,8 @@ Run the packaging helper (skip options are available for dry-runs):
 - Add `--skip-sbom` when `syft` is unavailable (e.g., air-gapped rehearsal).
 - The script runs the portal tests, emits CAR + manifest pairs for `portal`,
   `openapi`, `portal-sbom`, and `openapi-sbom`, verifies each CAR when
-  `--proof` is set, and drops Sigstore bundles when `--sign` is set.
+  `--proof` is set, and leaves release authentication to the protected
+  aggregate-manifest signing job.
 - Output structure:
 
 ```json
@@ -47,9 +45,7 @@ Run the packaging helper (skip options are available for dry-runs):
       "car_summary": ".../portal.car.json",
       "manifest": ".../portal.manifest.to",
       "manifest_json": ".../portal.manifest.json",
-      "proof": ".../portal.proof.json",
-      "bundle": ".../portal.manifest.bundle.json",
-      "signature": ".../portal.manifest.sig"
+      "proof": ".../portal.proof.json"
     }
   ]
 }
@@ -123,15 +119,24 @@ Before exposing traffic, run:
   --report-json artifacts/sorafs_gateway_probe/docs.json
 
 scripts/sorafs_gateway_self_cert.sh \
-  --manifest "${OUT}/portal.manifest.json" \
-  --headers "${OUT}/portal.gateway.headers.txt" \
-  --output artifacts/sorafs_gateway_self_cert/docs
+  --signing-key "${GATEWAY_ATTESTATION_KEY}" \
+  --signer "${GATEWAY_ATTESTATION_ACCOUNT}" \
+  --gateway "${REGIONAL_GATEWAY_URL}" \
+  --release-manifest "${RELEASE_MANIFEST}" \
+  --release-manifest-signature "${RELEASE_MANIFEST_SIGNATURE}" \
+  --release-manifest-public-key "${RELEASE_MANIFEST_PUBLIC_KEY}" \
+  --trusted-signing-fingerprint "${TRUSTED_SIGNING_FINGERPRINT}" \
+  --release-manifest-verifier "${RELEASE_MANIFEST_VERIFIER}" \
+  --trusted-release-manifest-verifier-sha256 \
+    "${TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256}" \
+  --out artifacts/sorafs_gateway_self_cert/docs
 ```
 
 - The probe enforces GAR signature freshness, alias policy, and TLS cert
   fingerprints.
-- The self-cert harness downloads the manifest with `sorafs_fetch` and stores
-  CAR replay logs; keep the outputs for audit evidence.
+- The self-cert wrapper first authenticates the aggregate release manifest
+  through the reviewed native verifier, then runs the gateway harness. Keep
+  the verification receipt and harness outputs for audit evidence.
 - Metadata checks against `/.well-known/sorafs/manifest` and
   `/v1/sorafs/cid/{cid}` may append `?limit=N` (default 50, max 500) to bound
   the embedded `files` listing. Responses still include full `file_count`,
@@ -165,7 +170,9 @@ scripts/sorafs_gateway_self_cert.sh \
 Include the following in the release ticket or governance package:
 
 - `artifacts/devportal/sorafs/<stamp>/` (CARs, manifests, SBOMs, proofs,
-  Sigstore bundles, submit summaries).
+  package summary, and submit summaries).
+- The aggregate release manifest, raw Ed25519 signature/public key, reviewed
+  signer fingerprint, pinned native-verifier SHA256, and verification receipt.
 - Gateway probe + self-cert outputs
   (`artifacts/sorafs_gateway_probe/<stamp>/`,
   `artifacts/sorafs_gateway_self_cert/<stamp>/`).

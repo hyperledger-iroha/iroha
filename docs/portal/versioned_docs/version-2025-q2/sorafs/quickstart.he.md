@@ -68,11 +68,11 @@ cargo test -p sorafs_chunker streaming_backpressure_fuzz_matches_batch
 ## 3. בנה וחתום על מניפסט
 
 עטפו את תוכנית הנתחים, הכינויים וחתימות הממשל למניפסט באמצעות
-`sorafs-manifest-stub`. הפקודה למטה מציגה מטען של קובץ יחיד; לעבור
+`sorafs-manifest-builder`. הפקודה למטה מציגה מטען של קובץ יחיד; לעבור
 נתיב ספרייה לאריזת עץ (ה-CLI מטייל בו מבחינה לקסיקוגרפית).
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
+cargo run -p sorafs_manifest --bin sorafs-manifest-builder -- \
   /tmp/docs.txt \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --manifest-out=/tmp/docs.manifest \

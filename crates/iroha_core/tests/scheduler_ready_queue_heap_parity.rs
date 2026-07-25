@@ -1,10 +1,11 @@
 //! Ensure scheduler ready-queue heap vs per-wave sort produce identical outcomes.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
-use std::borrow::Cow;
+use std::{borrow::Cow, sync::Arc};
 
 use iroha_core::{
     block::{BlockBuilder, ValidBlock},
+    governance::manifest::LaneManifestRegistry,
     state::{StateReadOnly, WorldReadOnly},
 };
 use iroha_data_model::prelude::*;
@@ -14,6 +15,7 @@ mod snapshots;
 
 fn run_with_ready_heap(
     ready_heap: bool,
+    chain_id: &ChainId,
     txs: Vec<SignedTransaction>,
     alice_id: &AccountId,
     bob_id: &AccountId,
@@ -39,7 +41,12 @@ fn run_with_ready_heap(
     let world = iroha_core::state::World::with_assets([domain], [acc_a, acc_b], [ad], [a0, b0], []);
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query = iroha_core::query::store::LiveQueryStore::start_test();
-    let mut state = iroha_core::state::State::new_for_testing(world, kura, query);
+    let mut state =
+        iroha_core::state::State::new_with_chain_for_testing(world, kura, query, chain_id.clone());
+    let nexus = state.nexus_snapshot();
+    state.install_lane_manifests(&Arc::new(
+        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
+    ));
 
     // Configure scheduler knob
     let mut cfg = state.view().pipeline().clone();
@@ -120,8 +127,9 @@ fn scheduler_ready_queue_heap_vs_wave_sort_parity() {
         .sign(alice_keypair.private_key()),
     ];
 
-    let (json_heap, state_heap) = run_with_ready_heap(true, txs.clone(), &alice_id, &bob_id);
-    let (json_wave, state_wave) = run_with_ready_heap(false, txs, &alice_id, &bob_id);
+    let (json_heap, state_heap) =
+        run_with_ready_heap(true, &chain_id, txs.clone(), &alice_id, &bob_id);
+    let (json_wave, state_wave) = run_with_ready_heap(false, &chain_id, txs, &alice_id, &bob_id);
 
     assert_eq!(json_heap, json_wave, "event sequences must match");
     let bal = |state: &iroha_core::state::State, id: &AssetId| {

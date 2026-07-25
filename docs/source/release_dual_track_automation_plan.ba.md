@@ -2,7 +2,7 @@
 lang: ba
 direction: ltr
 source: docs/source/release_dual_track_automation_plan.md
-status: complete
+status: needs-review
 generator: scripts/sync_docs_i18n.py
 source_hash: b80dcaae8fcb8de805faa6100a5c2131070d2a0c6534ed568dcba83d0dbc1ea3
 source_last_modified: "2026-01-05T09:28:12.043530+00:00"
@@ -11,47 +11,114 @@ translation_last_reviewed: 2026-02-07
 
 # Dual-Track Release Automation Plan
 
-This document outlines the build/release automation work needed to fully support the
-Iroha 2 and Iroha 3 dual-track runbook.
+This document records the actual build and release-automation boundary for the
+Iroha 2 and Iroha 3 dual-track runbook. The generic dual-track helpers can stage
+artifacts for S3, SoraFS, SoraNet, or another reviewed URI, but they are not the
+canonical SoraFS CLI release workflow.
 
 ## Scope
-1. Changelog generation per track
-2. Artifact signing & SBOM creation
-3. Release artifact publication to S3 buckets
-4. Checklist archiving & validation reporting
+
+1. Build profile-specific binary bundles and container-image archives.
+2. Produce checksums and release manifests.
+3. Obtain and verify detached Ed25519 signatures without accepting private keys.
+4. Generate and validate publication plans.
+5. Archive SBOM, provenance, registry, and promotion evidence supplied by the
+   hosted release environment.
 
 ## Current tooling
-- `scripts/release/generate_changelog.sh` – draft script (needs per-track sections)
-- `scripts/build_release_bundle.sh` – builds `iroha2`/`iroha3` with `--profile`, emits manifests, hashes, and optional signatures when `--signing-key` is provided
-- `scripts/build_release_image.sh` – saves profile-specific Docker images with matching metadata/signature support
-- GitHub workflow: `release-artifacts.yml` (builds artifacts on demand)
 
-## Proposed changes
-### 1. Changelog automation
-- [x] Extend `generate_changelog.sh` to accept `--flavor` flag and update the corresponding section in `CHANGELOG.md`.
-- [x] Add CI job `ci/generate-changelog` to run the script and commit updates on branch cut PRs.
+- `scripts/build_release_bundle.sh` builds `iroha2`/`iroha3` binary bundles.
+- `scripts/build_release_image.sh` saves the corresponding container image.
+- `scripts/run_release_pipeline.py` coordinates changelog generation through
+  `git-cliff`, both builders, `ci/dual_profile_matrix.sh`,
+  `scripts/generate_release_manifest.py`,
+  `scripts/release_manifest_signing.py`, and `scripts/publish_plan.py`.
+- `ci/dual_profile_smoke.sh` and `ci/dual_profile_matrix.sh` provide the local
+  profile smoke and bundle-comparison gates.
+- `.github/workflows/workspace_release.yml` is the workspace release gate.
+- `.github/workflows/sorafs-cli-release.yml` is the separate canonical SoraFS
+  CLI/reference-validator release workflow. It does not invoke the generic
+  dual-track pipeline.
 
-### 2. Signing pipeline
-- [x] Pass `--signing-key` to `build_release_bundle.sh` from `release-artifacts.yml` so signatures & manifests are generated automatically alongside tarballs.
-- [x] Store signing key in Buildkite/GitHub secrets (`RELEASE_SIGNING_KEY`) with rotation policy.
+No checked-in workflow currently invokes `scripts/run_release_pipeline.py`.
+Hosted execution, artifact upload, and promotion therefore remain release-
+operator actions and must not be claimed from a local dry run.
 
-### 3. Publication
-- [x] Add step to publish artifacts to `s3://releases/iroha2/` or `s3://releases/iroha3/` based on profile.
-- [x] Upload the generated JSON manifest alongside the tarball to preserve hash/signature metadata.
+## Private-key-free Ed25519 signing contract
 
-### 4. Reporting
-- [x] Extend `release-artifacts.yml` to generate `artifact/releases/{tag}/checklist.json` and attach to GitHub release.
-- [ ] Update dashboards (future) to consume release metadata for audit trail.
+The bundle and image builders accept signing only through this complete option
+set:
 
-## Milestones
-| Milestone | Due | Owner | Status |
-|-----------|-----|-------|--------|
-| Changelog script accepts `--flavor` | Feb 15, 2026 | Release Eng | ✅ Complete (script now in `scripts/release/generate_changelog.py`; CI `ci/generate-changelog` job active) |
-| Signing + SBOM automated in workflow | Feb 28, 2026 | Release Eng | ✅ Complete (`release-artifacts.yml` passes `--signing-key` and embeds SBOM via Syft) |
-| S3 publication step live | Mar 07, 2026 | Release Eng | ✅ Complete (artifacts pushed to `s3://releases/{track}/` with manifests) |
-| Checklist artifact published | Mar 15, 2026 | Release Eng | ✅ Complete (`artifact/releases/{tag}/checklist.json` uploaded alongside release) |
+```text
+--external-signer <reviewed-executable>
+--signing-public-key <raw-32-byte-ed25519-public-key>
+--trusted-signing-fingerprint <reviewed-lowercase-sha256>
+```
 
-## Dependencies
-- Access to Release signing key (Rev 2026Q1)
-- AWS credentials with write access to releases buckets
-- Governance approval for automated changelog updates on release branches
+The pipeline also requires the aggregate verifier contract:
+
+```text
+--release-manifest-verifier <reviewed-sorafs-validate-executable>
+--trusted-release-manifest-verifier-sha256 <reviewed-lowercase-sha256>
+```
+
+The external signer receives the artifact path and a new signature-output path.
+It must use the runtime PKCS#11/HSM session to write exactly 64 raw Ed25519
+signature bytes. Private keys, PINs, bearer tokens, and provider configuration
+remain outside the repository and artifact tree.
+
+The builders pin the SHA-256 fingerprint of the exact raw public-key bytes,
+reject unsafe or replaceable signing inputs, verify the detached Ed25519
+signature before and after installation, and emit the public key as generated
+Ed25519 SPKI PEM for independent verification. The per-artifact manifest records
+`signature_algorithm=ed25519`, `public_key_format=pem-spki-ed25519`, and
+`signer_fingerprint_sha256`.
+
+After all rollout evidence has been attached, the pipeline applies the same
+external-signer contract to the final aggregate `release_manifest.json`.
+`scripts/release_manifest_signing.py` writes
+`release_manifest.json.sig` as exactly 64 raw signature bytes and
+`release_manifest.json.pub` as exactly 32 raw public-key bytes. It rejects
+malformed, unsafe, symlinked, or hardlinked inputs, pins the reviewed raw-key
+fingerprint, snapshots the exact reviewed verifier executable, checks its
+SHA-256 and identity, invokes `sorafs-validate release-manifest`, and rechecks
+the manifest, key, signature, and verifier identities after native execution.
+There is no OpenSSL, PEM, RSA, or in-process fallback for this aggregate
+contract. The publish-plan generator and validator reverify the aggregate
+signature and record its digest, `public_key_format=raw-ed25519-32`,
+fingerprint, verification mode, native-verifier path, and native-verifier
+SHA-256. Production generation and validation require the independently
+reviewed fingerprint and verifier path/digest again; neither value copied from
+the plan is a trust anchor.
+
+Unsigned local artifacts and plans are permitted only when
+`--development-allow-unsigned-publish-plan` (pipeline) or
+`--development-allow-unsigned-manifest` (publish-plan helper) is selected
+explicitly. That mode is test/development-only and cannot be promotion
+evidence.
+
+## Evidence state
+
+| Capability | Local source state | Evidence required for promotion |
+|------------|--------------------|---------------------------------|
+| Dual-profile bundle/image build | Implemented by the two builders and pipeline | Hosted Linux build and smoke records |
+| Ed25519 signature validation | Implemented for artifacts and the final aggregate manifest with negative tests | HSM/PKCS#11 ceremony, reviewed fingerprint, rotation/revocation record |
+| Checksums and manifests | Deterministic aggregate generation, signing, and publish-plan binding are implemented locally | Independent replay and signed publication inventory |
+| SBOM and vulnerability scan | Not supplied by this generic local pipeline | Hosted SBOM plus zero critical/high scanner result |
+| Provenance | Not supplied by this generic local pipeline | OIDC/cosign attestation and verification receipt |
+| Registry/S3/SoraFS publication | Publication plan generation is implemented | Authorized upload, registry, and gateway receipts |
+| Rollback/yank | Operator-controlled | Rehearsal record and retained previous signed release |
+
+The SoraFS CLI workflow supplies its own SBOM, vulnerability, provenance, and
+keyless cosign gates. Those results do not automatically certify artifacts made
+by this generic dual-track pipeline.
+
+## External dependencies
+
+- Reviewed PKCS#11/HSM Ed25519 signer wrapper and runtime-only credentials.
+- Out-of-band approval of the raw public-key fingerprint.
+- Packaged `sorafs-validate` candidate plus independent approval of its exact
+  executable path and lowercase SHA-256 digest.
+- OIDC/cosign identity and transparency-log availability for provenance.
+- Registry, bucket, or SoraFS publication authorization.
+- Hosted build, install, scan, publication, rollback, and yank receipts.

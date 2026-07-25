@@ -65,7 +65,7 @@ para obter total confiança e разбивает em trilhas acionáveis.
 - Общие helpers (`CapacityMetadataEntry`, `PricingScheduleV1`, валидаторы lane/asignment/SLA) para determinar a classe e os relatórios Portanto, você pode usar ferramentas de CI e downstream.【crates/sorafs_manifest/src/capacity.rs:230】
 - `PinProviderRegistry` é um snapshot on-chain publicado por `/v1/sorafs/capacity/state`, fornece informações de provedores e registra taxas de registro para детерминированным Norito JSON.【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
 - Покрытие валидации проверяет соблюдение канонических alças, обнаружение дубликатов, границы по lane, guardas назначения репликации и проверки диапазонов телеметрии, чтобы регрессии всплывали сразу в CI.【crates/sorafs_manifest/src/capacity.rs:792】
-- Ferramentas do operador: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` конвертирует человекочитаемые especificações em канонические Norito cargas úteis, blobs base64 e resumos JSON, operações de operação você pode obter luminárias `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry` e luminárias de pedido de replicação no local валидацией.【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 Reference fixtures encontrados em `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) e генерируются через `cargo run -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order`.### 2. Plano de controle de integração
+- Ferramentas do operador: `sorafs_manifest_builder capacity {declaration, telemetry, replication-order}` конвертирует человекочитаемые especificações em канонические Norito cargas úteis, blobs base64 e resumos JSON, operações de operação você pode obter luminárias `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry` e luminárias de pedido de replicação no local валидацией.【crates/sorafs_car/src/bin/sorafs_manifest_builder/capacity.rs:1】 Reference fixtures encontrados em `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) e генерируются через `cargo run -p sorafs_car --bin sorafs_manifest_builder -- capacity replication-order`.### 2. Plano de controle de integração
 
 | Bem | Proprietário(s) | Nomeação |
 |------|----------|-------|
@@ -153,7 +153,7 @@ entre em contato com a realidade.
   вместе с pacotes de governança.
 
 ### Disputa de Доказательства e corte
-- Disputas Подавайте через `sorafs_manifest_stub capacity dispute` (testes:
+- Disputas Подавайте через `sorafs_manifest_builder capacity dispute` (testes:
   `cargo test -p sorafs_car --test capacity_cli`), essas cargas úteis são canônicas.
 - Insira `cargo test -p iroha_core -- capacity_dispute_replay_is_deterministic` e instale-o
   штрафов (`record_capacity_telemetry_penalises_persistent_under_delivery`), чтобы доказать
@@ -162,7 +162,7 @@ entre em contato com a realidade.
   эскалации; привязывайте greve de aprovações обратно в relatório de validação.
 
 ### Provedores de serviços on-line e gratuitos
-- Регенерируйте artefatos деклараций/телеметрии через `sorafs_manifest_stub capacity ...` и
+- Регенерируйте artefatos деклараций/телеметрии через `sorafs_manifest_builder capacity ...` и
   Progоняйте testes CLI antes de serem executados (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`).
 - Отправляйте через Torii (`/v1/sorafs/capacity/declare`), фиксируйте
   `/v1/sorafs/capacity/state` mais telas Grafana. Следуйте flow выхода в

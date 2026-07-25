@@ -38,7 +38,7 @@ Il s'agit d'un produit SoraFS qui est en mesure de fournir une solution à votre
    - URI d'hébergement (stockage d'objets, broche SoraFS, point de terminaison accessible Torii)
 3. Le seau de collecte de preuves est un seau de collecte de preuves à écriture unique et un seau de collecte de preuves en écriture unique.## 3. تنازع جمع کرائیں
 
-1. `sorafs_manifest_stub capacity dispute` pour les spécifications JSON :
+1. `sorafs_manifest_builder capacity dispute` pour les spécifications JSON :
 
    ```json
    {
@@ -61,7 +61,7 @@ Il s'agit d'un produit SoraFS qui est en mesure de fournir une solution à votre
 2. CLI چلائیں :
 
    ```bash
-   sorafs_manifest_stub capacity dispute \
+   sorafs_manifest_builder capacity dispute \
      --spec=dispute.json \
      --norito-out=dispute.to \
      --base64-out=dispute.b64 \
@@ -78,7 +78,7 @@ Il s'agit d'un produit SoraFS qui est en mesure de fournir une solution à votre
 
 1. **Fenêtre de grâce :** پرووائیڈر کو متوقع منسوخی سے آگاہ کریں؛ Les données épinglées sont associées à des données épinglées.
 2. **`ProviderAdmissionRevocationV1` Article :**
-   - منظور شدہ وجہ کے ساتھ `sorafs_manifest_stub provider-admission revoke` استعمال کریں۔
+   - منظور شدہ وجہ کے ساتھ `sorafs_manifest_builder provider-admission revoke` استعمال کریں۔
    - دستخط اور résumé de révocation ویریفائی کریں۔
 3. **منسوخی شائع کریں:**
    - Le lecteur Torii est en ligne
@@ -93,7 +93,7 @@ Il s'agit d'un produit SoraFS qui est en mesure de fournir une solution à votre
 
 ## 6. حوالہ جاتی مواد
 
--`sorafs_manifest_stub capacity dispute --help`
+-`sorafs_manifest_builder capacity dispute --help`
 - `docs/source/sorafs/storage_capacity_marketplace.md` (section litige)
 - `docs/source/sorafs/provider_admission_policy.md` (workflow de révocation)
 - Tableau de bord d'observabilité : `SoraFS / Capacity Providers`

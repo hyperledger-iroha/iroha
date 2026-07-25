@@ -128,7 +128,7 @@ groups:
    - شغّل `iroha app sorafs providers list` وتاكد ان القدرات المعلن عنها تطابق متطلبات التكرار.
    - راجع gauges `torii_sorafs_capacity_*` لتاكيد GiB المجهزة ونجاح PoR.
 3. **اعادة اسناد التكرار**
-   - اصدر اوامر جديدة عبر `sorafs_manifest_stub capacity replication-order` عندما ينخفض هامش التراكم (`stat="avg"`) عن 5 ايبوكات (تغليف manifest/CAR يستخدم `iroha app sorafs toolkit pack`).
+   - اصدر اوامر جديدة عبر `sorafs_manifest_builder capacity replication-order` عندما ينخفض هامش التراكم (`stat="avg"`) عن 5 ايبوكات (تغليف manifest/CAR يستخدم `iroha app sorafs toolkit pack`).
    - اخطر الحوكمة اذا كانت aliases تفتقر لربط manifest نشط (انخفاض غير متوقع في `torii_sorafs_registry_aliases_total`).
 4. **توثيق النتيجة**
    - سجل ملاحظات الحادث في سجل عمليات SoraFS مع الطوابع الزمنية وdigests المتاثرة.

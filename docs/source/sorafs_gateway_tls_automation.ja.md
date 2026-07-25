@@ -2,9 +2,9 @@
 lang: ja
 direction: ltr
 source: docs/source/sorafs_gateway_tls_automation.md
-source_hash: e15a94ab40ca2ad0a110845c9af116ee4d020906c8daa43a04cadf99af593ad3
+source_hash: 05e173ab9ada7ad811c7c886fad2460e1f56c588862600675b330e35d7d2c0aa
 status: complete
-translation_last_reviewed: 2026-02-18
+translation_last_reviewed: 2026-07-23
 title: SoraFS ゲートウェイ TLS と ECH オペレーターガイド
 summary: SF-5b 証明書自動化の構成、テレメトリ、インシデント対応、ガバナンス要件を解説します。
 ---
@@ -19,11 +19,19 @@ outline and now focuses on day-to-day operator tasks: provisioning secrets,
 configuring ACME/ECH, understanding telemetry, meeting governance obligations,
 and executing the approved incident playbooks.
 
-The guidance assumes the gateway includes the automation controller in
-`iroha_torii::sorafs::gateway` and that the repository
+The guidance assumes the gateway embeds the generic automation controller in
+`iroha_torii::sorafs::gateway`, injects an independently audited
+`AcmeClient` implementation at runtime, and that the repository
 `scripts/sorafs_gateway_self_cert.sh` wrapper is available on the bastion host.
 The wrapper invokes the `sorafs-gateway-attest` xtask command and falls back to
 `cargo run -p xtask --bin xtask -- ...` when `cargo xtask` is not installed.
+
+> **Runtime ACME boundary (V1):** the repository does not ship a production
+> ACME client, DNS-provider adapter, account credential loader, or self-signed
+> fallback. `SelfSignedAcmeClient` exists only as a `cfg(test)` fixture.
+> Enabling `torii.sorafs_gateway.acme` without an audited runtime-injected
+> `AcmeClient` is a startup error. The `sorafs-gateway tls renew` compatibility
+> command fails closed and never writes certificate or private-key material.
 
 ## Quick Start Checklist
 
@@ -33,8 +41,9 @@ The wrapper invokes the `sorafs-gateway-attest` xtask command and falls back to
 2. Fill in `torii.sorafs_gateway.acme` configuration with DNS-01 and
    TLS-ALPN-01 challenge preferences, enable ECH if supported, and set renewal
    thresholds.
-3. Deploy or enable the `sorafs-gateway-acme@<environment>.service` unit so the
-   automation controller runs continuously.
+3. Deploy the embedding that injects the reviewed runtime ACME client, then
+   enable the supervised automation unit. Do not set `acme.enabled = true`
+   before the runtime dependency is present.
 4. Run `scripts/sorafs_gateway_self_cert.sh` to capture a baseline attestation
    bundle and verify headers/metrics.
 5. Publish telemetry dashboards and alerts for the metrics in the **Telemetry
@@ -48,7 +57,8 @@ The wrapper invokes the `sorafs-gateway-attest` xtask command and falls back to
 
 | Requirement | Why it matters |
 |-------------|----------------|
-| ACME account credentials stored in `sorafs_gateway_tls/` sealed secrets (KMS/Vault) | Required for manual orders, revocation, and renewing automation tokens. |
+| Audited runtime ACME client supplied by the deployment embedding | Required before `acme.enabled = true`; the repository has no built-in production client. |
+| ACME account credentials stored in the runtime client's sealed KMS/Vault namespace | Credentials are owned by the injected client and must not enter config, logs, or repository artifacts. |
 | Offline copy of the latest `torii.sorafs_gateway` config bundle | Lets operators patch `ech_enabled`, host lists, or retry timing without waiting on config-management pipelines. |
 | Access to governance manifests (`manifest_signatures.json`, GAR envelopes) | Needed when publishing updated certificate fingerprints or rotating canonical host mappings. |
 | Repository checkout with Cargo/xtask access on the bastion host | Provides the self-cert wrapper, `sorafs-gateway-attest`, and `sorafs-gateway-probe` checks used in verification steps. |
@@ -60,9 +70,9 @@ The wrapper invokes the `sorafs-gateway-attest` xtask command and falls back to
   ownership `iroha:iroha` and `0600` permissions.
 - Maintain a sealed backup in your KMS or Vault namespace so manual rotation can
   recover quickly.
-- The automation controller writes state to
-  `/var/lib/sorafs_gateway_tls/automation.json`; include that path in backups so
-  renewal jitter and retry windows persist across restarts.
+- The injected ACME client owns any durable provider state. Include only its
+  reviewed, credential-safe recovery metadata in backups; Torii configuration
+  and readiness artifacts must not contain account keys or tokens.
 - Generate SAN manifests with `cargo xtask soradns-acme-plan`; the helper
   derives the canonical wildcard + pretty-host SAN values, recommended ACME
   challenges, and DNS-01 labels for each alias. Store the output under
@@ -371,22 +381,17 @@ with Nexus governance:
    openssl s_client -connect gateway.example:443 -servername gateway.example \
      < /dev/null 2>/dev/null | openssl x509 -noout -fingerprint -sha256
    ```
-2. Generate a replacement bundle with the repository wrapper (writes PEM files to the pending directory):
+2. Use the deployment's reviewed runtime ACME client or its independently
+   controlled emergency workflow to issue a CA-valid replacement into the
+   sealed pending location. The repository command
+   `sorafs-gateway tls renew` is intentionally fail-closed and emits no bundle.
+   After the external workflow has atomically staged `fullchain.pem`,
+   `privkey.pem`, and optional `ech.json`, restart the supervised automation
+   unit:
    ```bash
-   scripts/sorafs-gateway tls renew \
-     --host gateway.example \
-     --out /var/lib/sorafs_gateway_tls/pending \
-     --account-email tls-ops@example.com \
-     --directory-url https://acme-v02.api.letsencrypt.org/directory \
-     --force
+   sudo systemctl restart sorafs-gateway-acme.service
+   journalctl -fu sorafs-gateway-acme.service
    ```
-   The command emits `fullchain.pem`, `privkey.pem`, and `ech.json` under the pending directory.
-   If the systemd automation unit manages renewals in your environment, restart it after running the CLI to resume background polling:
-   ```bash
-   sudo systemctl restart sorafs-gateway-acme@production.service
-   journalctl -fu sorafs-gateway-acme@production.service
-   ```
-   Production ACME clients remain available for validated accounts, but the CLI above provides the deterministic self-signed bundle required for staging drills.
 3. Stage the bundle in secrets and reload Torii:
    ```bash
    install -m 600 /var/lib/sorafs_gateway_tls/pending/fullchain.pem /etc/iroha/sorafs_gateway_tls/fullchain.pem
@@ -438,7 +443,10 @@ Apply this playbook when private keys are exposed or the CA reports mis-issuance
      --reason keyCompromise
    ```
    The command moves `fullchain.pem`, `privkey.pem`, and `ech.json` into a timestamped backup and records an audit JSON file alongside them.
-3. Issue a fresh bundle via `scripts/sorafs-gateway tls renew --out /var/lib/sorafs_gateway_tls/pending --force` (or your production ACME workflow), then follow the validation steps from the rotation playbook.
+3. Issue a fresh CA-valid bundle through the reviewed runtime ACME client or
+   independently controlled emergency workflow, then follow the validation
+   steps from the rotation playbook. The repository compatibility command
+   remains fail-closed.
 4. Publish updated GAR envelopes and `manifest_signatures.json` so downstream nodes adopt the new fingerprint.
 5. Notify the governance council and SDK teams with incident ID, revocation timestamp, and remediation instructions.
 
@@ -472,18 +480,15 @@ After every drill:
 
 ## Implementation Notes
 
-- **ACME client library:** the deployment uses
-  [`letsencrypt-rs`](https://crates.io/crates/letsencrypt-rs) for both DNS-01 and
-  TLS-ALPN-01 challenges. It integrates with the async executor already present
-  in the gateway and ships under Apache-2.0.
-- **DNS provider abstraction:** Route53 support is available by default. The
-  automation exposes a `DnsProvider` trait so teams can implement Cloudflare or
-  Google Cloud DNS providers without touching the controller. Configure the
-  provider via `acme.dns_provider = "<provider>"`.
+- **ACME client boundary:** `TlsAutomationHandle` accepts
+  `Arc<dyn AcmeClient>`. The deployment embedding must supply and audit that
+  implementation, including ACME account custody, challenge adapters, DNS
+  credentials, revocation, durable retry state, and certificate installation.
+  No provider library or DNS adapter is selected by this repository.
 - **Telemetry naming alignment:** Observability approved the metric names in the
   telemetry table; durations are exposed in seconds. Review dashboards after
   upgrades to ensure schema changes are reflected.
-- **Self-cert integration:** the TLS automation flow invokes the self-cert kit
-  after each renewal. `sorafs_gateway_tls_automation.yml` calls
-  `scripts/sorafs_gateway_self_cert.sh` before notifying operators, making
-  TLS/ECH validation part of the automated rollout.
+- **Self-cert integration:** the deployment workflow must invoke
+  `scripts/sorafs_gateway_self_cert.sh` after the injected client installs a
+  renewal and before notifying operators. Torii does not claim that an
+  unconfigured external workflow ran.

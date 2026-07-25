@@ -22,7 +22,7 @@ ensure_dir() {
 }
 
 run_capacity() {
-  (cd "${REPO_ROOT}" && cargo run -q -p sorafs_car --features cli --bin sorafs_manifest_stub -- capacity "$@")
+  (cd "${REPO_ROOT}" && cargo run -q -p sorafs_car --features cli --bin sorafs_manifest_builder -- capacity "$@")
 }
 
 ensure_dir "${ARTIFACT_DIR}/quota_negotiation"

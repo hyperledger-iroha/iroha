@@ -119,7 +119,7 @@ groups:
    - Execute `iroha app sorafs providers list` e verifique se as capacidades anunciadas correspondem às exigências de replicação.
    - Verifique os medidores `torii_sorafs_capacity_*` para confirmar os GiB provisionados e o sucesso do PoR.
 3. **Reatribuir a replicação**
-   - Executar novos pedidos via `sorafs_manifest_stub capacity replication-order` durante a margem do backlog (`stat="avg"`) desde 5 épocas (o manifesto de embalagem/CAR utiliza `iroha app sorafs toolkit pack`).
+   - Executar novos pedidos via `sorafs_manifest_builder capacity replication-order` durante a margem do backlog (`stat="avg"`) desde 5 épocas (o manifesto de embalagem/CAR utiliza `iroha app sorafs toolkit pack`).
    - Notifique o governo se os aliases não passarem pelas ligações dos atos manifestos (baisse inattendue de `torii_sorafs_registry_aliases_total`).
 4. **Documente o resultado**
    - Envie notas de incidentes para o diário de operações SoraFS com carimbos de data e hora e resumos de manifestos em questão.

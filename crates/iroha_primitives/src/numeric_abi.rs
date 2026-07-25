@@ -909,6 +909,7 @@ mod tests {
         );
     }
 
+    #[allow(clippy::too_many_lines)] // One contiguous loop pins both sides of every signed byte boundary.
     #[test]
     fn every_signed_byte_boundary_has_pinned_canonical_bytes_and_frame_length() {
         fn assert_canonical_frame(value: &BigInt, expected_mantissa: &[u8]) {

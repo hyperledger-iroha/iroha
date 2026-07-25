@@ -598,18 +598,22 @@ print(
     snapshot.leader,
 )
 print(
-    "lane artifacts",
-    len(snapshot.lane_payload_ownerships),
-    len(snapshot.committed_lane_blocks),
-    len(snapshot.lane_block_sessions),
+    "reducer liveness",
+    snapshot.liveness.generation,
+    snapshot.liveness.no_progress_age_ms,
 )
-if snapshot.safety_halt.active:
-    print("consensus safety halt:", snapshot.safety_halt.reason)
-print("transaction queue saturated:", any((
-    snapshot.operator.tx_queue.saturated_by_count,
-    snapshot.operator.tx_queue.saturated_by_bytes,
-    snapshot.operator.tx_queue.saturated_by_age,
-)))
+
+# Fetch non-authoritative operator and lane evidence separately.
+diagnostics = client.get_sumeragi_diagnostics_typed()
+print(
+    "lane artifacts",
+    len(diagnostics.lane_payload_ownerships),
+    len(diagnostics.committed_lane_blocks),
+    len(diagnostics.lane_block_sessions),
+)
+print("transaction queue saturated:", diagnostics.tx_queue_saturated)
+for application in diagnostics.native_amx_participant_applications:
+    print(application.lane_id, application.participant_height, application.state)
 
 # `get_status_snapshot_typed()` below is the generic node/operational status
 # surface. Its lane commitment and governance fields are intentionally distinct
@@ -1766,35 +1770,39 @@ The workflow now:
 
 1. Builds the wheel with `python -m build` and installs it into a fresh virtualenv for an import smoke test plus the Norito RPC parity suite.
 2. Runs `twine check` followed by a `twine upload --dry-run` call so PyPI metadata and credentials are validated ahead of time.
-3. Emits `dist/CHANGELOG_PREVIEW.md`, summarising commits since the latest tag, alongside a deterministic `SHA256SUMS` file.
-4. Generates an ephemeral RSA key to produce detached signatures (`*.sig`/`*.pub`) for the wheel so downstream automation can rehearse the provenance flow without the production key.
-5. Writes `dist/release_artifacts.json` capturing the wheel, hashes, change-log preview, and signature metadata so release automation can archive provenance data in a single artefact.
 
-Set `PYTHON_RELEASE_SIGNING_KEY=/path/to/production.pem` (or pass `--signing-key`) to reuse the real signing key instead of the ephemeral default. Use `--manifest-out <path>` if you need the manifest in a different location.
+The smoke harness accepts no signing, provenance, key, or manifest-output
+options and never produces signatures. It is deliberately limited to
+build/install/import/RPC/package-metadata checks.
 
-When running locally, set `PYTHON_RELEASE_SMOKE_KEEP_DIST=1` to preserve the artefacts under `dist/` after the smoke completes.
+Set `PYTHON_RELEASE_SMOKE_KEEP_DIST=1` to preserve the built wheel and source
+distribution under `dist/` after the smoke completes.
 
 For details on choosing between binary bundles and container images, consult `docs/source/release_artifact_selection.md`.
 
-The artefacts live under `python/iroha_python/dist/` for the duration of the run; capture them before the script exits if you need to share the preview or signatures with reviewers.
-
-The smoke bundle also signs the generated changelog preview with the same key used for the wheel. Verify it locally after the smoke run with:
+For a production release, stage the reviewed package candidates and checksums
+through the protected aggregate release workflow. Authentication happens
+outside this harness with the external Ed25519/PKCS#11-HSM signer and is
+verified with:
 
 ```bash
-PUB_PATH=$(ls python/iroha_python/dist/*.pub)
-openssl dgst -sha256 \
-  -verify "${PUB_PATH}" \
-  -signature python/iroha_python/dist/CHANGELOG_PREVIEW.md.sig \
-  python/iroha_python/dist/CHANGELOG_PREVIEW.md
+python3 scripts/release_manifest_signing.py verify \
+  --manifest release_manifest.json \
+  --signature release_manifest.json.sig \
+  --public-key release_manifest.json.pub \
+  --trusted-signing-fingerprint "$TRUSTED_SIGNING_FINGERPRINT" \
+  --release-manifest-verifier /opt/iroha/bin/sorafs-validate \
+  --trusted-release-manifest-verifier-sha256 \
+    "$TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256"
 ```
-
-`release_artifacts.json` records the changelog checksum/signature alongside the wheel so release managers can archive the evidence without extra scripting.
 
 ### Support policy & cadence (PY6-P3)
 
 - Critical security fixes ship within **48 hours** of confirmation; high-severity defects ship within **5 business days**; maintenance issues land in the next scheduled release (≤30 days).
 - Maintain at least **18 months** of overlapping LTS branches and regenerate SBOM/provenance bundles for every supported train.
-- Release packets must include the signed changelog preview (`CHANGELOG_PREVIEW.md` + `.sig`), `SHA256SUMS`, and `release_artifacts.json` produced by `scripts/release_smoke.sh` so publishing/rollback drills have reproducible evidence.
+- Release packets must include the smoke transcript, immutable package checksums,
+  and the externally authenticated aggregate-manifest tuple; the smoke harness
+  itself contributes no signature or signing key.
 - Publish changelog entries and release notes alongside the roadmap pointers to keep parity with Rust/Android/JS/Swift cadence expectations.
 
 

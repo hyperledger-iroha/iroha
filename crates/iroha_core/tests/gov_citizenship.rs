@@ -141,7 +141,9 @@ fn citizenship_gate_blocks_and_allows_governance() {
         "citizen-ref".to_string(),
         iroha_core::state::GovernanceReferendumRecord {
             h_start: 0,
-            h_end: 25,
+            // The H=1 ballot below locks through H=21; keep the referendum's
+            // inclusive end within that exact lock lifetime.
+            h_end: 21,
             status: iroha_core::state::GovernanceReferendumStatus::Proposed,
             mode: iroha_core::state::GovernanceReferendumMode::Plain,
         },

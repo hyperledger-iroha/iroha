@@ -28,7 +28,7 @@ Este directorio entrega los artefactos reproducibles para la simulacion del merc
 ./analyze.py --artifacts ./artifacts
 ```
 
-El script `run_cli.sh` invoca `sorafs_manifest_stub capacity` para construir:
+El script `run_cli.sh` invoca `sorafs_manifest_builder capacity` para construir:
 
 - Declaraciones deterministas de providers para el set de fixtures de negociacion de cuotas.
 - Un orden de replicacion que coincide con el escenario de negociacion.

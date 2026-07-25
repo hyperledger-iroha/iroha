@@ -54,7 +54,7 @@ os auditores podem solicitar conjuntos de testes deterministas. Combinar bandeir
 - Firmas do conselho e metadados opcionais (p. ej., IDs de build).
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
+cargo run -p sorafs_manifest --bin sorafs-manifest-builder -- \
   ./payload.bin \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --manifest-out=payload.manifest \

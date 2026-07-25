@@ -134,6 +134,8 @@ SORAFS_REFERENCE_EXPORTS = {
     "connect_norito_sorafs_reference_derive_orderbook_order_id",
     "connect_norito_sorafs_reference_sign_orderbook_payload",
     "connect_norito_sorafs_reference_validate_hedging_json",
+    "connect_norito_sorafs_reference_validate_governance_dag_block_json",
+    "connect_norito_sorafs_reference_validate_governance_dag_head_chain_json",
     "connect_norito_sorafs_reference_validate_orderbook_json",
     "connect_norito_sorafs_reference_validate_pdp_bundle_json",
     "connect_norito_sorafs_reference_validate_pdp_challenge_proof_json",
@@ -184,6 +186,8 @@ def canonical_rust_type(value: str) -> str:
         "c_int": "int32_t",
         "c_uchar": "uint8_t",
         "c_ulong": "unsignedlong",
+        "usize": "size_t",
+        "ConnectNoritoSorafsReferenceInput": "ConnectNoritoSorafsReferenceInput",
         "u8": "uint8_t",
         "u16": "uint16_t",
         "u32": "uint32_t",
@@ -311,6 +315,31 @@ for name, expected_parameter_count in expected_privacy_signatures.items():
         )
 exact("Rust SoraFS reference", SORAFS_REFERENCE_EXPORTS, rust_exports("connect_norito_sorafs_reference_"))
 exact("C header SoraFS reference", SORAFS_REFERENCE_EXPORTS, header_exports("connect_norito_sorafs_reference_"))
+for name, expected in {
+    "CONNECT_NORITO_SORAFS_REFERENCE_GOVERNANCE_DAG_MAX_BLOCKS_V1": "64",
+    "CONNECT_NORITO_SORAFS_REFERENCE_GOVERNANCE_DAG_CID_BYTES_V1": "32",
+    "CONNECT_NORITO_SORAFS_REFERENCE_MAX_INPUT_BYTES_V1": "67108864",
+    "CONNECT_NORITO_SORAFS_REFERENCE_MAX_LABEL_BYTES_V1": "1024",
+}.items():
+    rust_constant = re.search(
+        rf"pub\s+const\s+{name}\s*:\s*u32\s*=\s*([0-9]+)\s*;",
+        rust,
+    )
+    header_constant = re.search(rf"#define\s+{name}\s+([0-9]+)\b", header)
+    if rust_constant is None or rust_constant.group(1) != expected:
+        raise SystemExit(f"Rust SoraFS bridge constant drift: {name}")
+    if header_constant is None or header_constant.group(1) != expected:
+        raise SystemExit(f"C header SoraFS bridge constant drift: {name}")
+if re.search(
+    r"typedef\s+struct\s+ConnectNoritoSorafsReferenceInput\s*\{\s*"
+    r"const\s+uint8_t\s*\*\s*bytes_ptr\s*;\s*"
+    r"size_t\s+bytes_len\s*;\s*"
+    r"const\s+uint8_t\s*\*\s*label_ptr\s*;\s*"
+    r"size_t\s+label_len\s*;\s*"
+    r"\}\s*ConnectNoritoSorafsReferenceInput\s*;",
+    header,
+) is None:
+    raise SystemExit("C header SoraFS governance input descriptor layout drift")
 
 rust_detached = rust_exports("connect_norito_detached_transaction_") | rust_exports("connect_norito_canonical_json_")
 header_detached = header_exports("connect_norito_detached_transaction_") | header_exports("connect_norito_canonical_json_")

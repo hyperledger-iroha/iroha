@@ -74,7 +74,7 @@ Sidebar_label: Plano do Pin Registry
 |------------|-------|-----------------|
 | سيرفيكو Torii | Expor `/v1/sorafs/pin` (إرسال)، `/v1/sorafs/pin/{cid}` (بحث)، `/v1/sorafs/aliases` (قائمة/ربط)، `/v1/sorafs/replication` (الطلبات/الإيصالات). Fornecer paginacao + تصفية. | الشبكات TL / الأشعة تحت الحمراء الأساسية |
 | اتستاكاو | قم بتضمين الارتفاع/تجزئة التسجيل في الاستجابة؛ إضافة نموذج التحقق Norito لمجموعات SDK المستهلكة. | الأشعة تحت الحمراء الأساسية |
-| سطر الأوامر | المرسل `sorafs_manifest_stub` أو CLI الجديد `sorafs_pin` com `pin submit`, `alias bind`, `order issue`, `registry export`. | الأدوات مجموعة العمل |
+| سطر الأوامر | المرسل `sorafs_manifest_builder` أو CLI الجديد `sorafs_pin` com `pin submit`, `alias bind`, `order issue`, `registry export`. | الأدوات مجموعة العمل |
 | SDK | إنشاء روابط العميل (Rust/Go/TS) من المستوى Norito؛ إضافة الخصيتين التكاملية. | فرق SDK |
 
 العمليات:

@@ -816,6 +816,18 @@ pub const DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         "Choose a page limit from 1 through 64."
     ),
     explanation!(
+        "E_CONTRACT_ENTRYPOINT_LITERAL",
+        Semantic,
+        "a typed contract invocation has a dynamic or invalid entrypoint selector",
+        "Pass a string literal containing one canonical Kotodama identifier as the named entrypoint argument."
+    ),
+    explanation!(
+        "E_CONTRACT_RETURN_SCHEMA",
+        Semantic,
+        "a typed contract invocation has a dynamic or unsupported return schema",
+        "Use the exact literal returns: \"quantity\" for the V1 quantity invocation profile."
+    ),
+    explanation!(
         "E_LIST_TYPE_ARITY",
         Semantic,
         "List has an invalid number of type arguments",

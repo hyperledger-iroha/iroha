@@ -42,12 +42,12 @@ que la gouvernance et l’ingénierie des versions restent synchronisées.## Pis
 |-------|-------|-------------|---------|--------|
 | Répétitions de rencontres | M0 | Dry-runs hebdomadaires comparent les digests locaux de chunks avec `fixtures/sorafs_chunker`. Publier un rapport sous `docs/source/sorafs/reports/`. | Fournisseurs de stockage | `determinism-<date>.md` avec matrice réussite/échec. |
 | Exiger les signatures | M1 | `ci/check_sorafs_fixtures.sh` + `.github/workflows/sorafs-fixtures-nightly.yml` font écho aux signatures ou manifestes dérivés. Les overrides de dev exigent une renonciation à la gouvernance attachée au PR. | GT Outillage | Log CI, lien vers ticket de renonciation (si applicable). |
-| Indicateurs d'attente | M1 | Les pipelines appelant `sorafs_manifest_stub` avec des attentes explicites pour figer les sorties : | Documents CI | Les scripts doivent être à jour référençant les attentes flags (voir bloc de commande ci-dessous). |
+| Indicateurs d'attente | M1 | Les pipelines appelant `sorafs_manifest_builder` avec des attentes explicites pour figer les sorties : | Documents CI | Les scripts doivent être à jour référençant les attentes flags (voir bloc de commande ci-dessous). |
 | Épingler le registre en premier | M2 | `sorafs pin propose` et `sorafs pin approve` enveloppent les soumissions de manifeste; la CLI par défaut utilise `--require-registry`. | Opérations de gouvernance | Log d'audit du registre CLI, télémétrie des propositions notées. |
 | Observabilité parite | M3 | Des tableaux de bord Prometheus/Grafana alertent lorsque les inventaires de morceaux divergent des registres des manifestes ; alertes branchées sur l'astreinte ops. | Observabilité | Lien vers le tableau de bord, les identifiants des règles d'alerte, les résultats GameDay. |
 
 #### Commande canonique de publication```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- docs/book \
   --manifest-out artifacts/docs/book/2025-11-01/docs.manifest \
   --manifest-signatures-out artifacts/docs/book/2025-11-01/docs.manifest_signatures.json \
   --car-out artifacts/docs/book/2025-11-01/docs.car \

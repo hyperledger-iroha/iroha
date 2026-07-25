@@ -8,7 +8,15 @@ use iroha_core::{
     query::store::LiveQueryStore,
     state::{State, World, WorldReadOnly},
 };
-use iroha_data_model::prelude::*;
+use iroha_data_model::{
+    alias_setup::{
+        AliasDomainIntentV1, AliasIntentV1, AliasLeaseAcquisitionV1, AliasQuoteGuardV1,
+        ResolvedDomainV1,
+    },
+    isi::alias_setup::EnsureAlias,
+    nexus::DataSpaceId,
+    prelude::*,
+};
 use iroha_test_samples::gen_account_in;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
@@ -22,9 +30,19 @@ fn build_bench_state() -> (State, AccountId, AccountId) {
     let (recipient, _) = gen_account_in("wonderland");
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let domain = Domain::new(domain_id.clone()).build(&authority);
+    let genesis_domain =
+        Domain::new(DomainId::try_new("genesis", "universal").expect("valid genesis domain id"))
+            .build(&authority);
+    let bench_domain =
+        Domain::new(DomainId::try_new("bench", "universal").expect("valid bench domain id"))
+            .build(&authority);
     let authority_account = Account::new(authority.clone()).build(&authority);
     let recipient_account = Account::new(recipient.clone()).build(&recipient);
-    let world = World::with([domain], [authority_account, recipient_account], []);
+    let world = World::with(
+        [genesis_domain, domain, bench_domain],
+        [authority_account, recipient_account],
+        [],
+    );
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(world, kura, query_handle);
@@ -37,9 +55,23 @@ fn execute_register_domain_like_bench() {
     let executor = Executor::default();
     let mut block = state.block(bench_block_header());
     let mut tx = block.transaction();
-    let instr = Register::domain(Domain::new(
-        DomainId::try_new("bench", "universal").unwrap(),
-    ))
+    let domain_id = DomainId::try_new("bench", "universal").expect("valid domain id");
+    let instr = EnsureAlias::new(
+        AliasIntentV1::Domain(AliasDomainIntentV1 {
+            domain: ResolvedDomainV1::new(domain_id.clone(), DataSpaceId::UNIVERSAL),
+            owner: authority.clone(),
+        }),
+        AliasLeaseAcquisitionV1::new(1, None),
+        AliasQuoteGuardV1 {
+            expected_policy_version: 0,
+            expected_payment_asset: AssetDefinitionId::new(
+                DomainId::try_new("wonderland", "universal").expect("valid payment asset domain"),
+                "xor".parse().expect("valid payment asset name"),
+            ),
+            max_amount: 0_u64.into(),
+            valid_until_ms: 0,
+        },
+    )
     .into();
     let _ = gas::meter_instruction(&instr);
     executor
@@ -50,10 +82,9 @@ fn execute_register_domain_like_bench() {
             InstructionExecutionProfile::Bench,
         )
         .expect("bench profile execution");
-    let domain_id = DomainId::try_new("bench", "universal").expect("valid domain id");
     assert!(
         tx.world.domains().get(&domain_id).is_some(),
-        "domain registered into world state"
+        "domain remains present after exact alias lifecycle execution"
     );
     assert!(
         tx.world.accounts().get(&authority).is_some(),

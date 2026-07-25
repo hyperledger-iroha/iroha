@@ -7,13 +7,14 @@ use iroha_core::{
     query::store::LiveQueryStore,
     smartcontracts::Execute,
     state::{
-        GovernanceReferendumMode, GovernanceReferendumRecord, GovernanceReferendumStatus, State,
-        World, WorldReadOnly,
+        GovernanceProposalStatus, GovernanceReferendumMode, GovernanceReferendumRecord,
+        GovernanceReferendumStatus, GovernanceStageApprovals, State, World, WorldReadOnly,
     },
 };
 use iroha_data_model::{
     Registrable,
     domain::DomainId,
+    governance::types::ParliamentBody,
     prelude::{Account, Domain},
 };
 use mv::storage::StorageReadOnly;
@@ -85,16 +86,6 @@ fn approves_when_ratio_and_turnout_met() {
     Grant::account_permission(p1, ALICE_ID.clone())
         .execute(&ALICE_ID, &mut stx)
         .expect("grant propose");
-    let p2: Permission = CanSubmitGovernanceBallot {
-        referendum_id: "any".to_string(),
-    }
-    .into();
-    Grant::account_permission(p2.clone(), ALICE_ID.clone())
-        .execute(&ALICE_ID, &mut stx)
-        .expect("grant ballot A");
-    Grant::account_permission(p2, BOB_ID.clone())
-        .execute(&BOB_ID, &mut stx)
-        .expect("grant ballot B");
     // Propose Plain-mode referendum
     ProposeDeployContract {
         contract_address: proposal_contract_address(),
@@ -107,31 +98,72 @@ fn approves_when_ratio_and_turnout_met() {
     }
     .execute(&ALICE_ID, &mut stx)
     .expect("propose");
-    // Defer apply until after ballots and finalize
 
-    // Approve: sqrt(9)=3 by ALICE; Reject: sqrt(1)=1 by BOB; ratio=3/4 >= 1/2
-    // Discover referendum id (rid)
-    let rid = stx
-        .world
-        .governance_referenda()
-        .iter()
-        .next()
-        .map_or_else(|| "rid-threshold-pos".to_string(), |(k, _)| k.clone());
+    let proposal_id = {
+        let mut proposals = stx.world.governance_proposals().iter();
+        let proposal_id = *proposals.next().expect("proposal record").0;
+        assert!(
+            proposals.next().is_none(),
+            "fixture must create exactly one proposal"
+        );
+        proposal_id
+    };
+    let rid = hex::encode(proposal_id);
+    assert!(
+        stx.world.governance_referenda().get(&rid).is_some(),
+        "proposal must create its exact referendum"
+    );
+
+    let ballot_permission: Permission = CanSubmitGovernanceBallot {
+        referendum_id: rid.clone(),
+    }
+    .into();
+    Grant::account_permission(ballot_permission.clone(), ALICE_ID.clone())
+        .execute(&ALICE_ID, &mut stx)
+        .expect("grant ballot A");
+    Grant::account_permission(ballot_permission, BOB_ID.clone())
+        .execute(&BOB_ID, &mut stx)
+        .expect("grant ballot B");
+
+    let required_bodies = [
+        ParliamentBody::RulesCommittee,
+        ParliamentBody::AgendaCouncil,
+        ParliamentBody::InterestPanel,
+        ParliamentBody::ReviewPanel,
+        ParliamentBody::PolicyJury,
+        ParliamentBody::OversightCommittee,
+    ];
+    let mut approvals = GovernanceStageApprovals::default();
+    for body in required_bodies {
+        approvals
+            .ensure_stage(body, 0, 1, stx.gov.parliament_quorum_bps)
+            .record(ALICE_ID.clone());
+    }
+    assert!(
+        required_bodies
+            .into_iter()
+            .all(|body| approvals.quorum_met(body, 0))
+    );
+    stx.world
+        .governance_stage_approvals_mut()
+        .insert(rid.clone(), approvals);
+
+    // Model the exact post-Parliament state with a one-block inclusive voting window.
     stx.world.governance_referenda_mut().insert(
         rid.clone(),
         GovernanceReferendumRecord {
-            h_start: 0,
-            h_end: u64::MAX,
+            h_start: 1,
+            h_end: 1,
             status: GovernanceReferendumStatus::Open,
             mode: GovernanceReferendumMode::Plain,
         },
     );
-    // Cast ballots: ALICE Aye with amount 9; BOB Nay with amount 1
+    // Duration 1 gives weights 6 and 2, preserving the 3/4 approval ratio.
     CastPlainBallot {
         referendum_id: rid.clone(),
         owner: ALICE_ID.clone(),
         amount: 9_u64.into(),
-        duration_blocks: 10,
+        duration_blocks: 1,
         direction: 0,
     }
     .execute(&ALICE_ID, &mut stx)
@@ -140,21 +172,62 @@ fn approves_when_ratio_and_turnout_met() {
         referendum_id: rid.clone(),
         owner: BOB_ID.clone(),
         amount: 1_u64.into(),
-        duration_blocks: 10,
+        duration_blocks: 1,
         direction: 1,
     }
     .execute(&BOB_ID, &mut stx)
     .expect("bob ballot");
-
-    let instr = FinalizeReferendum {
-        referendum_id: rid.clone(),
-        proposal_id: [0xEF; 32],
-    };
-    instr.execute(&ALICE_ID, &mut stx).expect("finalize ok");
     stx.apply();
+    sblock.commit().expect("commit inclusive voting block");
+
+    // H=2 is the first height after the inclusive voting window.
+    let header = iroha_data_model::block::BlockHeader::new(
+        NonZeroU64::new(2).unwrap(),
+        None,
+        None,
+        None,
+        0,
+        0,
+    );
+    let mut sblock = state.block(header);
+    let mut stx = sblock.transaction();
+    FinalizeReferendum {
+        referendum_id: rid.clone(),
+        proposal_id,
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect("finalize ok");
+    stx.apply();
+
     let evs = sblock.world.take_external_events();
     assert!(evs.iter().any(|event| matches!(
         event.as_data_event(),
         Some(DataEvent::Governance(GovernanceEvent::ProposalApproved(_)))
     )));
+    let proposal = sblock
+        .world
+        .governance_proposals()
+        .get(&proposal_id)
+        .expect("proposal remains recorded");
+    assert_eq!(proposal.status, GovernanceProposalStatus::Approved);
+    let evidence = proposal
+        .finalization_evidence
+        .expect("approval retains finalization evidence");
+    assert_eq!(evidence.proposal_id, proposal_id);
+    assert_eq!(evidence.referendum_id, proposal_id);
+    assert_eq!(evidence.finalized_at_height, 1);
+    assert_eq!(
+        (evidence.approve, evidence.reject, evidence.abstain),
+        (6, 2, 0)
+    );
+    assert!(evidence.approved);
+    assert_eq!(
+        sblock
+            .world
+            .governance_referenda()
+            .get(&rid)
+            .expect("referendum remains recorded")
+            .status,
+        GovernanceReferendumStatus::Closed
+    );
 }

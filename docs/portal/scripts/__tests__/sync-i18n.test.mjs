@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   buildLocalePath,
   buildStub,
+  canonicalSourcePathForTranslation,
   isTranslationFile,
   parseRefreshPrefixes,
   shouldRefreshTranslation,
@@ -78,4 +79,16 @@ test('localized source filenames are distinguished from canonical docs', () => {
   assert.equal(isTranslationFile('registrar-api.fr.md'), true);
   assert.equal(isTranslationFile('registrar-api.zh-hans.mdx'), true);
   assert.equal(isTranslationFile('registrar-api.md'), false);
+});
+
+test('localized source copies map back to the exact canonical refresh path', () => {
+  assert.equal(
+    canonicalSourcePathForTranslation('devportal/deploy-guide.es.md'),
+    'devportal/deploy-guide.md',
+  );
+  assert.equal(
+    canonicalSourcePathForTranslation('sorafs/nested/guide.zh-hans.mdx'),
+    'sorafs/nested/guide.mdx',
+  );
+  assert.equal(canonicalSourcePathForTranslation('sorafs/guide.md'), null);
 });

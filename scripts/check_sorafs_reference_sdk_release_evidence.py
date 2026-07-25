@@ -77,23 +77,26 @@ from sorafs_response_args import (  # noqa: E402
 SUMMARY_SCHEMA = "sorafs.reference_sdk.release_evidence_gate.v1"
 MAX_EVIDENCE_BYTES = 2 * 1024 * 1024
 DEFAULT_MAX_EVIDENCE_AGE_SECS = 14 * 24 * 60 * 60
-DEFAULT_MIN_RELEASE_TARGETS = 4
-DEFAULT_MIN_DOWNSTREAM_PACKAGES = 5
+DEFAULT_MIN_RELEASE_TARGETS = 5
+DEFAULT_MIN_DOWNSTREAM_PACKAGES = 6
 DEFAULT_MAX_SMOKE_DURATION_SECS = 30 * 60
 HEX64_LEN = 64
 
-REQUIRED_RELEASE_TARGETS = (
+MANDATORY_RELEASE_TARGETS = (
     "x86_64-apple-darwin",
     "aarch64-apple-darwin",
     "x86_64-unknown-linux-gnu",
     "aarch64-unknown-linux-gnu",
 )
+ADDITIONAL_RELEASE_TARGETS = ("x86_64-pc-windows-msvc",)
+REQUIRED_RELEASE_TARGETS = MANDATORY_RELEASE_TARGETS + ADDITIONAL_RELEASE_TARGETS
 REQUIRED_DOWNSTREAM_PACKAGES = (
     "javascript",
     "python",
     "kotlin_jvm",
     "java_android",
     "swift",
+    "csharp",
 )
 RELEASE_MANIFEST_BOUND_KINDS = (
     "release_archive",

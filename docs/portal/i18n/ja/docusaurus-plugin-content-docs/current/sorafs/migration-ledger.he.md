@@ -32,7 +32,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 | マイルストーン | 有効期間 | 変更概要 | 影響チーム | アクション | 状態 |
 |---------------|---------|---------|-----------|------------|------|
-| M0 | Weeks 1–6 | Chunker fixtures を公開; pipelines が CAR + manifest バンドルをレガシー artefacts と並行して出力; 移行台帳のエントリを作成。 | Docs, DevRel, SDKs | 期待フラグ付きで `sorafs_manifest_stub` を採用し、この台帳にエントリを記録し、レガシー CDN を維持する。 | ✅ アクティブ |
+| M0 | Weeks 1–6 | Chunker fixtures を公開; pipelines が CAR + manifest バンドルをレガシー artefacts と並行して出力; 移行台帳のエントリを作成。 | Docs, DevRel, SDKs | 期待フラグ付きで `sorafs_manifest_builder` を採用し、この台帳にエントリを記録し、レガシー CDN を維持する。 | ✅ アクティブ |
 | M1 | Weeks 7–12 | CI が決定論的 fixtures を強制; alias 証明が staging で利用可能; tooling が明示的な期待フラグを公開。 | Docs, Storage, Governance | fixtures の署名を維持し、staging registry に aliases を登録し、`--car-digest/--root-cid` 強制を release チェックリストに追加する。 | ⏳ 保留 |
 | M2 | Weeks 13–20 | Registry ベースの pinning が主要経路に; レガシー artefacts は読み取り専用へ; gateways は registry 証明を優先。 | Storage, Ops, Governance | pinning を registry 経由にし、レガシー hosts を凍結し、オペレーター向け移行通知を公開する。 | ⏳ 保留 |
 | M3 | Week 21+ | alias のみアクセスを強制; observability が registry パリティを警告; レガシー CDN を廃止。 | Ops, Networking, SDKs | レガシー DNS を削除し、キャッシュ URL をローテーションし、パリティダッシュボードを監視し、SDK のデフォルトを更新する。 | ⏳ 保留 |

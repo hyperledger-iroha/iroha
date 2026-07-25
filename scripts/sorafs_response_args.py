@@ -6,6 +6,7 @@ import argparse
 import os
 import re
 import shlex
+import stat
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -31,6 +32,7 @@ ARGFILE_SYMLINK_DIAGNOSTIC = "@ARGFILE must not be a symlink"
 ARGFILE_MISSING_DIAGNOSTIC = "@ARGFILE must exist and be a file"
 ARGFILE_INSPECTION_DIAGNOSTIC = "@ARGFILE cannot be inspected"
 ARGFILE_READ_DIAGNOSTIC = "@ARGFILE cannot be read"
+ARGFILE_CHANGED_DIAGNOSTIC = "@ARGFILE changed while it was read"
 ARGFILE_RESOLUTION_DIAGNOSTIC = "@ARGFILE cannot be resolved"
 ARGFILE_RECURSION_DIAGNOSTIC = "recursive @ARGFILE reference"
 ARGFILE_UTF8_DIAGNOSTIC = "@ARGFILE must be UTF-8"
@@ -130,6 +132,74 @@ def _response_argfile_open_flags() -> int:
     )
 
 
+def _response_argfile_directory_open_flags() -> int:
+    return (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+
+
+def _response_argfile_components(path: Path) -> tuple[str, ...]:
+    absolute = path if path.is_absolute() else Path.cwd() / path
+    components = absolute.parts[1:]
+    if not components or any(
+        component in {"", ".", ".."} for component in components
+    ):
+        raise OSError("response-file path is not canonical")
+    return components
+
+
+def _open_response_argfile_parent(path: Path) -> tuple[int, str, list[int]]:
+    components = _response_argfile_components(path)
+    directory_fds: list[int] = []
+    try:
+        current_fd = os.open("/", _response_argfile_directory_open_flags())
+        directory_fds.append(current_fd)
+        for component in components[:-1]:
+            current_fd = os.open(
+                component,
+                _response_argfile_directory_open_flags(),
+                dir_fd=current_fd,
+            )
+            directory_fds.append(current_fd)
+        return current_fd, components[-1], directory_fds
+    except BaseException:
+        for directory_fd in reversed(directory_fds):
+            os.close(directory_fd)
+        raise
+
+
+def _response_argfile_path_identity_matches(
+    path: Path,
+    *,
+    expected_parent: os.stat_result,
+    expected_leaf: os.stat_result,
+) -> bool:
+    directory_fds: list[int] = []
+    try:
+        parent_fd, leaf, directory_fds = _open_response_argfile_parent(path)
+        observed_parent = os.fstat(parent_fd)
+        observed_leaf = os.stat(leaf, dir_fd=parent_fd, follow_symlinks=False)
+        return (
+            observed_parent.st_dev,
+            observed_parent.st_ino,
+            observed_leaf.st_dev,
+            observed_leaf.st_ino,
+        ) == (
+            expected_parent.st_dev,
+            expected_parent.st_ino,
+            expected_leaf.st_dev,
+            expected_leaf.st_ino,
+        )
+    except (OSError, RuntimeError):
+        return False
+    finally:
+        for directory_fd in reversed(directory_fds):
+            os.close(directory_fd)
+
+
 def _validate_response_argfile_parent_chain(path: Path) -> None:
     for parent in (path.parent, *path.parent.parents):
         try:
@@ -157,22 +227,69 @@ def _read_response_argfile_bytes(path: Path) -> bytes:
         del error
         raise ValueError(ARGFILE_INSPECTION_DIAGNOSTIC) from None
 
-    chunks: list[bytes] = []
-    size = 0
     fd = -1
+    directory_fds: list[int] = []
     try:
-        fd = os.open(path, _response_argfile_open_flags())
-        declared_size = os.fstat(fd).st_size
-        if declared_size > MAX_RESPONSE_ARGFILE_BYTES:
+        parent_fd, leaf, directory_fds = _open_response_argfile_parent(path)
+        parent_identity = os.fstat(parent_fd)
+        before_path = os.stat(leaf, dir_fd=parent_fd, follow_symlinks=False)
+        fd = os.open(
+            leaf,
+            _response_argfile_open_flags(),
+            dir_fd=parent_fd,
+        )
+        before = os.fstat(fd)
+        if not stat.S_ISREG(before.st_mode):
+            raise ValueError(ARGFILE_MISSING_DIAGNOSTIC)
+        if (before.st_dev, before.st_ino) != (
+            before_path.st_dev,
+            before_path.st_ino,
+        ):
+            raise ValueError(ARGFILE_CHANGED_DIAGNOSTIC)
+        if before.st_nlink != 1:
+            raise ValueError("@ARGFILE must not be hardlinked")
+        if before.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+            raise ValueError("@ARGFILE must not be group- or world-writable")
+        if before.st_size > MAX_RESPONSE_ARGFILE_BYTES:
             raise ValueError(f"@ARGFILE exceeds {MAX_RESPONSE_ARGFILE_BYTES} bytes")
-        handle = os.fdopen(fd, "rb")
-        fd = -1
-        with handle:
-            for chunk in iter(lambda: handle.read(RESPONSE_ARGFILE_CHUNK_BYTES), b""):
-                size += len(chunk)
-                if size > MAX_RESPONSE_ARGFILE_BYTES:
-                    raise ValueError(f"@ARGFILE exceeds {MAX_RESPONSE_ARGFILE_BYTES} bytes")
-                chunks.append(chunk)
+
+        chunks: list[bytes] = []
+        size = 0
+        while True:
+            chunk = os.read(
+                fd,
+                min(
+                    RESPONSE_ARGFILE_CHUNK_BYTES,
+                    MAX_RESPONSE_ARGFILE_BYTES + 1 - size,
+                ),
+            )
+            if not chunk:
+                break
+            size += len(chunk)
+            if size > MAX_RESPONSE_ARGFILE_BYTES:
+                raise ValueError(
+                    f"@ARGFILE exceeds {MAX_RESPONSE_ARGFILE_BYTES} bytes"
+                )
+            chunks.append(chunk)
+        after = os.fstat(fd)
+        stable_fields = (
+            "st_dev",
+            "st_ino",
+            "st_size",
+            "st_mtime_ns",
+            "st_ctime_ns",
+        )
+        if any(
+            getattr(before, field) != getattr(after, field)
+            for field in stable_fields
+        ):
+            raise ValueError(ARGFILE_CHANGED_DIAGNOSTIC)
+        if not _response_argfile_path_identity_matches(
+            path,
+            expected_parent=parent_identity,
+            expected_leaf=after,
+        ):
+            raise ValueError(ARGFILE_CHANGED_DIAGNOSTIC)
     except ValueError:
         raise
     except (OSError, RuntimeError) as error:
@@ -181,6 +298,8 @@ def _read_response_argfile_bytes(path: Path) -> bytes:
     finally:
         if fd >= 0:
             os.close(fd)
+        for directory_fd in reversed(directory_fds):
+            os.close(directory_fd)
     return b"".join(chunks)
 
 

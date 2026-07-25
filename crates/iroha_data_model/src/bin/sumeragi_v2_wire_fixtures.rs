@@ -1,8 +1,12 @@
-//! Regenerate the shared Sumeragi v2 wire fixtures.
+//! Regenerate the shared Sumeragi v2 wire and Native AMX fixtures.
 //!
 //! Run `cargo run -p iroha_data_model --bin sumeragi_v2_wire_fixtures` to
-//! refresh `fixtures/sumeragi_v2/wire_v2.tsv`. Pass `--check` to verify that
-//! the checked-in fixtures are exactly the current canonical Rust encodings.
+//! refresh `fixtures/sumeragi_v2/wire_v2.tsv` and
+//! `fixtures/sumeragi_v2/native_amx_v2_grouped.json`. Pass `--check` to verify
+//! that the checked-in fixtures are exactly the current canonical Rust
+//! encodings and JSON models.
+
+mod native_amx_grouped;
 
 use std::{collections::BTreeSet, env, error::Error, fs, path::Path};
 
@@ -514,6 +518,29 @@ fn build_rows(values: &FixtureValues) -> Result<Vec<FixtureRow>, Box<dyn Error>>
     let mut noncanonical_qc = values.prepare.clone();
     noncanonical_qc.signers = vec![1, 0, 2];
 
+    let mut native_manifest_wrong_version = values.prepare.clone();
+    native_manifest_wrong_version
+        .execution_commitment
+        .native_amx_application_manifest_version += 1;
+    let mut native_manifest_zero_count_nonempty_root = values.prepare.clone();
+    native_manifest_zero_count_nonempty_root
+        .execution_commitment
+        .native_amx_application_manifest_root =
+        Hash::new(b"non-empty Native AMX application manifest");
+    let mut native_manifest_nonzero_count_empty_root = values.prepare.clone();
+    native_manifest_nonzero_count_empty_root
+        .execution_commitment
+        .native_amx_application_manifest_count = 1;
+    let mut native_manifest_count_over_bound = values.prepare.clone();
+    native_manifest_count_over_bound
+        .execution_commitment
+        .native_amx_application_manifest_root =
+        Hash::new(b"oversized Native AMX application manifest");
+    native_manifest_count_over_bound
+        .execution_commitment
+        .native_amx_application_manifest_count =
+        iroha_data_model::block::consensus_v2::MAX_NATIVE_AMX_APPLICATION_MANIFEST_LEAVES + 1;
+
     let mut commit_vote = canonical_vote.clone();
     let ConsensusMessageV2Payload::Vote(vote) = &mut commit_vote.payload else {
         return Err("canonical vote fixture contains the wrong payload".into());
@@ -589,6 +616,38 @@ fn build_rows(values: &FixtureValues) -> Result<Vec<FixtureRow>, Box<dyn Error>>
             "noncanonical_signers",
             ConsensusMessageV2::new(ConsensusMessageV2Payload::QuorumCertificate(
                 noncanonical_qc,
+            ))
+            .encode(),
+        ),
+        FixtureRow::rejected(
+            "negative_message",
+            "execution_commitment_native_manifest_wrong_version",
+            ConsensusMessageV2::new(ConsensusMessageV2Payload::QuorumCertificate(
+                native_manifest_wrong_version,
+            ))
+            .encode(),
+        ),
+        FixtureRow::rejected(
+            "negative_message",
+            "execution_commitment_native_manifest_zero_count_nonempty_root",
+            ConsensusMessageV2::new(ConsensusMessageV2Payload::QuorumCertificate(
+                native_manifest_zero_count_nonempty_root,
+            ))
+            .encode(),
+        ),
+        FixtureRow::rejected(
+            "negative_message",
+            "execution_commitment_native_manifest_nonzero_count_empty_root",
+            ConsensusMessageV2::new(ConsensusMessageV2Payload::QuorumCertificate(
+                native_manifest_nonzero_count_empty_root,
+            ))
+            .encode(),
+        ),
+        FixtureRow::rejected(
+            "negative_message",
+            "execution_commitment_native_manifest_count_1025",
+            ConsensusMessageV2::new(ConsensusMessageV2Payload::QuorumCertificate(
+                native_manifest_count_over_bound,
             ))
             .encode(),
         ),
@@ -841,6 +900,21 @@ fn validate_rows(rows: &[FixtureRow], values: &FixtureValues) -> Result<(), Box<
         return Err("noncanonical_signers unexpectedly passed validation".into());
     }
 
+    for name in [
+        "execution_commitment_native_manifest_wrong_version",
+        "execution_commitment_native_manifest_zero_count_nonempty_root",
+        "execution_commitment_native_manifest_nonzero_count_empty_root",
+        "execution_commitment_native_manifest_count_1025",
+    ] {
+        let message = decode_message(&row(rows, "negative_message", name)?.bytes)?;
+        let ConsensusMessageV2Payload::QuorumCertificate(certificate) = message.payload else {
+            return Err(format!("{name} generated the wrong payload").into());
+        };
+        if certificate.validate(&values.context).is_ok() {
+            return Err(format!("{name} unexpectedly passed validation").into());
+        }
+    }
+
     let overlapping =
         decode_message(&row(rows, "negative_message", "overlapping_timeout_groups")?.bytes)?;
     let ConsensusMessageV2Payload::TimeoutCertificate(certificate) = overlapping.payload else {
@@ -965,5 +1039,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     let values = build_values()?;
     let rows = build_rows(&values)?;
     validate_rows(&rows, &values)?;
-    write_fixture(&render(&rows), check_only)
+    write_fixture(&render(&rows), check_only)?;
+    native_amx_grouped::write_fixture(check_only)
 }

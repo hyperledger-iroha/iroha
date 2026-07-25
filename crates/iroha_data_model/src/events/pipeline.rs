@@ -501,6 +501,7 @@ mod tests {
             native_amx_receipts: Vec::new(),
         };
         MergeLedgerEntry {
+            version: MergeLedgerEntry::VERSION,
             epoch_id: 42,
             lane_catalog_hash: Hash::new(b"pipeline-event-catalog"),
             active_lanes: vec![crate::merge::MergeLaneBinding {

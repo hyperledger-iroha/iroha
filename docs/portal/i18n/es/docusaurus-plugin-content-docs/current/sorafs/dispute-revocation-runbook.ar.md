@@ -40,7 +40,7 @@ Utilice el código `docs/source/sorafs/dispute_revocation_runbook.md`. احرص 
 
 ## 3. تقديم النزاع
 
-1. Texto JSON en `sorafs_manifest_stub capacity dispute`:
+1. Texto JSON en `sorafs_manifest_builder capacity dispute`:
 
    ```json
    {
@@ -63,7 +63,7 @@ Utilice el código `docs/source/sorafs/dispute_revocation_runbook.md`. احرص 
 2. Haga clic en CLI:
 
    ```bash
-   sorafs_manifest_stub capacity dispute \
+   sorafs_manifest_builder capacity dispute \
      --spec=dispute.json \
      --norito-out=dispute.to \
      --base64-out=dispute.b64 \
@@ -78,7 +78,7 @@ Utilice el código `docs/source/sorafs/dispute_revocation_runbook.md`. احرص 
 
 1. **نافذة السماح:** أخطر المزوّد بقرب الإلغاء؛ واسمح بإخلاء البيانات المثبتة عندما تسمح السياسة.
 2. **أنشئ `ProviderAdmissionRevocationV1`:**
-   - استخدم `sorafs_manifest_stub provider-admission revoke` مع السبب المعتمد.
+   - استخدم `sorafs_manifest_builder provider-admission revoke` مع السبب المعتمد.
    - تحقّق من التواقيع وdigest الإلغاء.
 3. **نشر الإلغاء:**
    - أرسل طلب الإلغاء إلى Torii.
@@ -93,7 +93,7 @@ Utilice el código `docs/source/sorafs/dispute_revocation_runbook.md`. احرص 
 
 ## 6. مواد مرجعية
 
-- `sorafs_manifest_stub capacity dispute --help`
+- `sorafs_manifest_builder capacity dispute --help`
 - `docs/source/sorafs/storage_capacity_marketplace.md` (قسم النزاعات)
 - `docs/source/sorafs/provider_admission_policy.md` (سير عمل الإلغاء)
 - Nombre del usuario: `SoraFS / Capacity Providers`

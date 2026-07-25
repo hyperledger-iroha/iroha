@@ -62,7 +62,7 @@ cargo test -p sorafs_car --features cli --test capacity_cli
 python3 scripts/telemetry/capacity_reconcile.py --snapshot <state.json> --ledger <ledger.ndjson> --warn-only
 ```
 
-运营商应使用 `sorafs_manifest_stub capacity {declaration,dispute}` 重新生成加入/争议请求有效负载，并将生成的 JSON/Norito 字节与治理票证一起存档。
+运营商应使用 `sorafs_manifest_builder capacity {declaration,dispute}` 重新生成加入/争议请求有效负载，并将生成的 JSON/Norito 字节与治理票证一起存档。
 
 ## 签核工件
 

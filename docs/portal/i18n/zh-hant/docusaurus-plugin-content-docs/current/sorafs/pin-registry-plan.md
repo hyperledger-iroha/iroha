@@ -78,7 +78,7 @@ Rust Norito 模式和支持這些記錄的驗證助手。驗證
 |------------|------|----------|
 | Torii 服務 |公開 `/v1/sorafs/pin`（提交）、`/v1/sorafs/pin/{cid}`（查找）、`/v1/sorafs/aliases`（列表/綁定）、`/v1/sorafs/replication`（訂單/收據）。提供分頁+過濾。 |網絡 TL/核心基礎設施 |
 |認證|在響應中包含註冊表高度/哈希值；添加 SDK 使用的 Norito 證明結構。 |核心基礎設施|
-|命令行|使用 `pin submit`、`alias bind`、`order issue`、`registry export` 擴展 `sorafs_manifest_stub` 或新的 `sorafs_pin` CLI。 |工具工作組 |
+|命令行|使用 `pin submit`、`alias bind`、`order issue`、`registry export` 擴展 `sorafs_manifest_builder` 或新的 `sorafs_pin` CLI。 |工具工作組 |
 | SDK |從 Norito 模式生成客戶端綁定 (Rust/Go/TS)；添加集成測試。 | SDK 團隊 |
 
 操作：

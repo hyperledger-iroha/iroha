@@ -19,7 +19,7 @@ Sidebar_label: کپیستٹی سمیولیشن رَن بُك
 هذه هي الصفحة `docs/source/sorafs/runbooks/sorafs_capacity_simulation.md`. عندما يتم إنشاء برانا أبو الهول بالكامل في مرحلة الانتقال، لا يمكننا أن نقول ما هو أفضل من ذلك.
 :::
 
-لقد أصبح واضحًا أن SF-2c سجل سوقي يكمل كل شيء وقد حقق علامة فارقة أخرى. يحتوي `docs/examples/sorafs_capacity_simulation/` على تركيبات حتمية موجودة تعمل على تحسين نظام الحصص وتجاوز الفشل والمعالجة المتقطعة من طرف إلى طرف. تستخدم الحمولات الصافية `sorafs_manifest_stub capacity` أيضًا؛ استخدام البيان/بيانات CAR `iroha app sorafs toolkit pack`.
+لقد أصبح واضحًا أن SF-2c سجل سوقي يكمل كل شيء وقد حقق علامة فارقة أخرى. يحتوي `docs/examples/sorafs_capacity_simulation/` على تركيبات حتمية موجودة تعمل على تحسين نظام الحصص وتجاوز الفشل والمعالجة المتقطعة من طرف إلى طرف. تستخدم الحمولات الصافية `sorafs_manifest_builder capacity` أيضًا؛ استخدام البيان/بيانات CAR `iroha app sorafs toolkit pack`.
 
 ## 1. قصة نجاح CLI
 
@@ -28,7 +28,7 @@ cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./run_cli.sh ./artifacts
 ```
 
-`run_cli.sh`، `sorafs_manifest_stub capacity` للحمولات النافعة Norito، وbase64 blobs، وهيئات الطلب Torii وملخصات JSON التالية:
+`run_cli.sh`، `sorafs_manifest_builder capacity` للحمولات النافعة Norito، وbase64 blobs، وهيئات الطلب Torii وملخصات JSON التالية:
 
 - الحصص مذاكرات وےنامنامے میں شریک تین مقدمي الإعلانات کی ۔
 - هذا أمر النسخ المتماثل الذي يقدم بيانًا منظمًا من قبل مقدمي الخدمة.

@@ -19,7 +19,7 @@ description : Exécuter la boîte à outils de simulation du marché de capacit�
 Cette page s'affiche `docs/source/sorafs/runbooks/sorafs_capacity_simulation.md`. Mantenha ambas comme copies synchronisées.
 :::
 
-Ce runbook explique comment exécuter le kit de simulation du marché de capacité SF-2c et visualiser les résultats métriques. Il valide la négociation des coûts, le traitement du basculement et la correction des coupures de pont à pont en utilisant les luminaires déterminants sur `docs/examples/sorafs_capacity_simulation/`. Les charges utiles de capacité sont également utilisées par `sorafs_manifest_stub capacity` ; utilisez `iroha app sorafs toolkit pack` pour les flux d'emballage de manifeste/CAR.
+Ce runbook explique comment exécuter le kit de simulation du marché de capacité SF-2c et visualiser les résultats métriques. Il valide la négociation des coûts, le traitement du basculement et la correction des coupures de pont à pont en utilisant les luminaires déterminants sur `docs/examples/sorafs_capacity_simulation/`. Les charges utiles de capacité sont également utilisées par `sorafs_manifest_builder capacity` ; utilisez `iroha app sorafs toolkit pack` pour les flux d'emballage de manifeste/CAR.
 
 ## 1. Gerar artefatos de CLI
 
@@ -28,7 +28,7 @@ cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./run_cli.sh ./artifacts
 ```
 
-`run_cli.sh` encapsule `sorafs_manifest_stub capacity` pour les charges utiles émettrices Norito, blobs base64, corps de demande pour Torii et résumés JSON pour :
+`run_cli.sh` encapsule `sorafs_manifest_builder capacity` pour les charges utiles émettrices Norito, blobs base64, corps de demande pour Torii et résumés JSON pour :
 
 - Trois déclarations des fournisseurs qui participent au scénario de négociation de contrats.
 - Un ordre de réplication qui place le manifeste dans la mise en scène entre ces fournisseurs.

@@ -115,12 +115,12 @@ fn unknown_syscall_is_rejected_at_admission() {
     let account = Account::new(account_id.clone()).build(&account_id);
     let world =
         iroha_core::state::World::with([domain], [account], std::iter::empty::<AssetDefinition>());
-    let state = State::new_for_testing(world, kura, query_handle);
+    let chain: ChainId = "chain".parse().expect("chain id");
+    let state = State::new_with_chain_for_testing(world, kura, query_handle, chain.clone());
     install_current_lane_manifest_registry(&state);
 
     // Program calls an unknown syscall number before halting.
     let prog = program_with_scall(unlisted_syscall_number());
-    let chain: ChainId = "chain".parse().expect("chain id");
     let tx = TransactionBuilder::new(
         chain,
         account_id.clone(),

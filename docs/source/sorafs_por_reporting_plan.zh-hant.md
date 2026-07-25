@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_por_reporting_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 0fb1bc1edf51f317ed916159a17f81af26113a28f06094dfac080241574751f2
+source_hash: eb08fdcb0089de970dc990d9ef4d8b8aa6f287c5ce92fd4f8fe7f7e1d4535352
 source_last_modified: "2026-07-10T10:11:25+00:00"
 translation_last_reviewed: 2026-06-25
 title: SoraFS PoR Validator CLI & Reporting

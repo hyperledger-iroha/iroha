@@ -4343,6 +4343,22 @@ fn sorafs_event_summary(event: &sorafs::SorafsGatewayEvent) -> (String, String) 
         sorafs::SorafsGatewayEvent::ProofHealth(alert) => {
             ("SoraFS proof health alert".to_owned(), format!("{alert:?}"))
         }
+        sorafs::SorafsGatewayEvent::RepairLedger(payload) => (
+            "SoraFS repair ledger event".to_owned(),
+            format!("{payload:?}"),
+        ),
+        sorafs::SorafsGatewayEvent::ModerationLedger(payload) => (
+            "SoraFS moderation ledger event".to_owned(),
+            format!("{payload:?}"),
+        ),
+        sorafs::SorafsGatewayEvent::OrderbookLedger(payload) => (
+            "SoraFS orderbook ledger event".to_owned(),
+            format!("{payload:?}"),
+        ),
+        sorafs::SorafsGatewayEvent::ReserveLedger(payload) => (
+            "SoraFS reserve ledger event".to_owned(),
+            format!("{payload:?}"),
+        ),
     }
 }
 

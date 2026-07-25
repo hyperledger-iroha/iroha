@@ -1112,7 +1112,7 @@ pub fn pqc_verify_batch_deterministic(
     #[cfg(not(feature = "pqc"))]
     {
         let _ = (messages, signatures, public_keys);
-        return Err(Error::BadSignature);
+        Err(Error::BadSignature)
     }
 
     #[cfg(feature = "pqc")]
@@ -4408,7 +4408,9 @@ mod tests {
     #[test]
     fn public_key_payload_ceiling_covers_feature_independent_algorithms() {
         assert_eq!(MAX_PUBLIC_KEY_PAYLOAD_BYTES, 8_258);
-        assert!(MAX_PUBLIC_KEY_PAYLOAD_BYTES >= ML_DSA_65_PUBLIC_KEY_BYTES);
+        const {
+            assert!(MAX_PUBLIC_KEY_PAYLOAD_BYTES >= ML_DSA_65_PUBLIC_KEY_BYTES);
+        }
     }
 
     #[cfg(feature = "sm")]

@@ -2,7 +2,7 @@
 lang: fr
 direction: ltr
 source: docs/source/sorafs_proof_streaming_plan.md
-status: complete
+status: needs-review
 generator: scripts/sync_docs_i18n.py
 source_hash: 26dbf6fb34366691f28094d7cded3b678d38b460c07bc57c1d0c01540d933709
 source_last_modified: "2026-06-25T16:58:37+00:00"
@@ -13,38 +13,45 @@ translation_last_reviewed: 2026-01-30
 
 ## Goals
 
-- Provide streaming APIs in CLI/SDK to request/verify PoR samples and PoTR (deadline proofs).
+- Provide streaming APIs in CLI/SDK to request PoR samples, governed PDP
+  challenge status, and PoTR deadline receipts.
 - Emit observability data for proof success/failure, latency, and provider responses.
 - Integrate with orchestrator and gateway telemetry.
 
-> **Status (Jun 2026):** `sorafs_cli proof stream` streams PoR samples, replays
-> cached PoTR receipts, writes deterministic governance-evidence bundles, and
-> fails closed on gateway or local verification failures. Torii exposes the
-> `/v1/sorafs/proof/stream` NDJSON endpoint with Prometheus counters,
-> histograms, and in-flight gauges. PDP request construction and committed
-> `fixtures/sorafs_manifest/pdp/` validator fixtures are schema-ready, but
-> Torii intentionally rejects `proof_kind=pdp` until the SF-13 provider
-> protocol, live provider signatures, and CDC commitment verification land.
+> **Status (Jul 2026):** `sorafs_cli proof stream` streams PoR samples, reads
+> the durable status of an explicit governed PDP challenge, replays cached
+> PoTR receipts, writes deterministic governance-evidence bundles, and fails
+> closed on gateway or local verification failures. Torii exposes the
+> `/v1/sorafs/proof/stream` NDJSON endpoint plus the authenticated five-route
+> PDP provider protocol with Prometheus counters, histograms, and in-flight
+> gauges. PDP sampling inputs come only from the recorded challenge; clients
+> must supply its non-zero `challenge_id` and cannot choose a sample count or
+> seed. Production promotion remains blocked on the chain-authoritative repair
+> handoff and genuine multi-provider deployment evidence.
 
 ## API Concepts
 
 - `ProofStreamRequest`:
   - `manifest_digest`
   - `provider_id`
-  - `sample_count`
+  - `challenge_id` (PDP only)
+  - `sample_count` (PoR only)
+  - `deadline_ms` (PoTR only)
   - `nonce`
 - `ProofStreamResponse` (streamed items):
   - `sample_index`, `chunk_index`, `proof`, `verification_status`, `latency_ms`.
 
 CLI commands:
 - `sorafs_cli proof stream --manifest=manifest.to --provider-id-hex=<hex32> --proof-kind=por --samples=128`
+- `sorafs_cli proof stream --manifest=manifest.to --provider-id-hex=<hex32> --proof-kind=pdp --challenge-id-hex=<hex32>`
 - `sorafs_cli proof stream --manifest=manifest.to --provider-id-hex=<hex32> --proof-kind=potr --deadline-ms=90000`
 
 Operator features:
 - `sorafs_cli proof stream` reads NDJSON, verifies PoR samples locally, and
   records a summary JSON blob for CI/governance archives.
-- Torii validates PoR/PDP `sample_count` in the shared request envelope and
-  rejects values outside `1..=500` before manifest lookup.
+- Torii bounds PoR `sample_count` to `1..=500`, requires a non-zero PDP
+  `challenge_id`, rejects PDP client-selected sampling inputs, and requires a
+  non-zero PoTR deadline before manifest lookup.
 - `--governance-evidence-dir` copies the manifest, metadata, and proof summary
   into a deterministic evidence directory.
 - `--max-failures` and `--max-verification-failures` let rehearsals tolerate a
@@ -58,7 +65,10 @@ Operator features:
 
 ## Integration Points
 
-- Gateway endpoint `POST /v1/sorafs/proof/stream` handles PoR streams and PoTR receipt replay; PDP requests return unsupported until SF-13.
+- Gateway endpoint `POST /v1/sorafs/proof/stream` handles PoR streams,
+  challenge-bound PDP status, and PoTR receipt replay. The authenticated
+  `/v1/sorafs/pdp/{challenge,next,proof,status,export}` family owns challenge
+  admission, work pickup, proof submission, status, and bounded export.
 - Orchestrator and CLI request proofs after chunk fetch and archive the summary
   alongside manifests, signatures, and CAR summaries.
 - CI pipelines can gate on the CLI summary blob when Prometheus export is not
@@ -72,7 +82,8 @@ Operator features:
       manifest_digest: Hash,
       provider_id: ProviderId,
       proof_kind: ProofKind,         // Por | Pdp | Potr
-      sample_count: Option<u32>,     // Required for PoR/PDP; 1..=500
+      challenge_id: Option<Hash>,    // Required for PDP; governed and non-zero
+      sample_count: Option<u32>,     // Required for PoR only; 1..=500
       deadline_ms: Option<u32>,      // Required for PoTR
       nonce: [u8; 16],               // Client-supplied to prevent replay
       orchestrator_job_id: Option<Uuid>,
@@ -81,9 +92,11 @@ Operator features:
   enum ProofKind { Por, Pdp, Potr }
   enum ProofTier { Hot, Warm, Archive }
   ```
-  This schema allows the orchestrator and CLI to route requests for PoR, PoTR, and PDP
-  (SF-13) without diverging code paths. PDP requests must set `proof_kind=Pdp`, `sample_count`, and
-  `tier`. PoTR requests MUST set `deadline_ms` and omit `sample_count`.
+  This schema allows the orchestrator and CLI to route requests for PoR, PoTR,
+  and PDP without divergent wire formats. PDP requests must set
+  `proof_kind=Pdp` and `challenge_id`, and must omit `sample_count`,
+  `sample_seed`, and `deadline_ms`. PoTR requests must set `deadline_ms` and
+  omit challenge and sampling fields.
 - **Streaming response items.**
   ```norito
   struct ProofStreamItemV1 {
@@ -100,8 +113,9 @@ Operator features:
   }
   ```
   - For PoTR, `sample_index` is `None` and `receipt` carries the signed deadline proof (`PotrReceiptV1`).
-  - For PDP, `receipt` references the CDC-based commitment proof defined in the PDP plan and includes the
-    `Sora-PDP-Proof` fields (commitment root, challenge salt).
+  - For PDP, the streamed item reports the durable lifecycle and terminal
+    decision for the exact recorded challenge. Canonical proof bytes enter
+    through `/v1/sorafs/pdp/proof`.
   - PoR items encode standard chunk proofs with Merkle path.
 - **Telemetry hooks.** Each streamed item feeds into the counters/histograms previously listed. PDP
   failures propagate to the SF-13 slashing pipeline via the shared `FailureReason`.

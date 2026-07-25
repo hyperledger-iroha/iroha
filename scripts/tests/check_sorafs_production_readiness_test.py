@@ -126,9 +126,16 @@ def foundational_summary(
     generated_at_unix: int = GENERATED_AT,
     deployment_id: str = DEPLOYMENT_ID,
     environment: str = ENVIRONMENT,
+    lane_summary_sha256: dict[str, str] | None = None,
 ) -> dict:
     """Return a complete signed foundational prerequisite envelope."""
 
+    lane_summary_sha256 = lane_summary_sha256 or {
+        gate_name: hashlib.sha256(
+            f"{gate_name}:reviewed-lane-summary".encode("ascii")
+        ).hexdigest()
+        for gate_name in MODULE.DEFAULT_REQUIRED_GATES
+    }
     payload = {
         "schema": MODULE.FOUNDATIONAL_PREREQUISITE_SCHEMA,
         "status": "verified",
@@ -150,6 +157,13 @@ def foundational_summary(
             }
             for prerequisite_id in MODULE.FOUNDATIONAL_PREREQUISITE_IDS
         ],
+        "lane_summaries": [
+            {
+                "gate": gate_name,
+                "sha256": lane_summary_sha256[gate_name],
+            }
+            for gate_name in MODULE.DEFAULT_REQUIRED_GATES
+        ],
         "signature": {
             "algorithm": "ed25519",
             "public_key_fingerprint_sha256": "00" * 32,
@@ -160,12 +174,43 @@ def foundational_summary(
     return payload
 
 
+def lane_summary_digests(root: Path) -> dict[str, str]:
+    """Return exact lane-summary byte digests present below one evidence root."""
+
+    digests = {
+        gate_name: hashlib.sha256(
+            f"{gate_name}:reviewed-lane-summary".encode("ascii")
+        ).hexdigest()
+        for gate_name in MODULE.DEFAULT_REQUIRED_GATES
+    }
+    for path in sorted(root.rglob("*.json")):
+        if path.name.startswith("foundational_prerequisite"):
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        gate = MODULE.SCHEMA_TO_GATE.get(payload.get("schema"))
+        if gate is not None:
+            digests[gate.name] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return digests
+
+
 def write_foundational_summary(root: Path, payload: dict | None = None) -> Path:
     """Write the signed prerequisite fixture when it is not already present."""
 
     path = root / "foundational_prerequisites.json"
     if payload is not None or not path.exists():
-        write_json(path, foundational_summary() if payload is None else payload)
+        write_json(
+            path,
+            (
+                foundational_summary(
+                    lane_summary_sha256=lane_summary_digests(root),
+                )
+                if payload is None
+                else payload
+            ),
+        )
     return path
 
 
@@ -1256,6 +1301,57 @@ def test_complete_aggregate_readiness_passes(tmp_path: Path) -> None:
     }
 
 
+def test_full_aggregate_rejects_lane_summary_bytes_swapped_after_signing(
+    tmp_path: Path,
+) -> None:
+    """The HSM envelope must bind the exact reviewed lane summary byte set."""
+
+    write_all_gates(tmp_path)
+    write_foundational_summary(tmp_path)
+    gateway_summary_path = tmp_path / "gateway_load.json"
+    gateway_summary_path.write_bytes(gateway_summary_path.read_bytes() + b"\n")
+    summary_path = tmp_path / "aggregate.json"
+
+    assert run_gate(tmp_path, "--summary-out", str(summary_path)) == 1
+    result = json.loads(summary_path.read_text(encoding="utf-8"))
+    diagnostics = "\n".join(result["errors"])
+    assert result["status"] == "blocked"
+    assert result["recognized_summary_count"] == len(MODULE.DEFAULT_REQUIRED_GATES)
+    assert (
+        "foundational prerequisite lane summary binding for gateway_load does "
+        "not match the supplied readiness summary"
+        in diagnostics
+    )
+    assert result["foundational_prerequisites"]["valid"] is False
+
+
+def test_foundational_prerequisite_schema_inventories_are_closed() -> None:
+    assert MODULE.FOUNDATIONAL_PREREQUISITE_FIELDS == {
+        "schema",
+        "status",
+        "deployment",
+        "generated_at_unix",
+        "release_sequence",
+        "previous_envelope_sha256",
+        "prerequisites",
+        "lane_summaries",
+        "signature",
+    }
+    assert MODULE.FOUNDATIONAL_PREREQUISITE_DEPLOYMENT_FIELDS == {
+        "deployment_id",
+        "environment",
+    }
+    assert MODULE.FOUNDATIONAL_PREREQUISITE_SIGNATURE_FIELDS == {
+        "algorithm",
+        "public_key_fingerprint_sha256",
+        "signature_hex",
+    }
+    assert MODULE.FOUNDATIONAL_LANE_SUMMARY_ROW_FIELDS == {
+        "gate",
+        "sha256",
+    }
+
+
 def test_foundational_prerequisites_reject_schema_set_freshness_and_context_attacks(
     tmp_path: Path,
     capsys,
@@ -1945,7 +2041,10 @@ def test_complete_lane_fixture_summaries_pass_full_aggregate_cli(
     now_unix = write_normalized_complete_lane_summaries(fixture_root, summary_root)
     write_foundational_summary(
         summary_root,
-        foundational_summary(generated_at_unix=now_unix - 1),
+        foundational_summary(
+            generated_at_unix=now_unix - 1,
+            lane_summary_sha256=lane_summary_digests(summary_root),
+        ),
     )
     summary = tmp_path / "aggregate.json"
 
@@ -15897,6 +15996,7 @@ def test_aggregate_output_field_inventories_are_schema_closed() -> None:
             "previous_envelope_sha256",
             "signer_public_key_fingerprint_sha256",
             "evidence_anchor_sha256",
+            "lane_summary_sha256",
             "path",
             "sha256",
             "errors",

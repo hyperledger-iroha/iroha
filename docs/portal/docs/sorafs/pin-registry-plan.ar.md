@@ -82,7 +82,7 @@ description: خطة تنفيذ SF-4 التي تغطي آلة الحالات لل
 |--------|--------|------------------|
 | خدمة Torii | كشف `/v1/sorafs/pin` (submit)، `/v1/sorafs/pin/{cid}` (lookup)، `/v1/sorafs/aliases` (list/bind)، `/v1/sorafs/replication` (orders/receipts). توفير ترقيم + ترشيح. | Networking TL / Core Infra |
 | الاتستاشن | تضمين ارتفاع/هاش registry في الاستجابات؛ اضافة بنية Norito للاتستاشن تستهلكها SDKs. | Core Infra |
-| CLI | توسيع `sorafs_manifest_stub` او CLI جديد `sorafs_pin` مع `pin submit`, `alias bind`, `order issue`, `registry export`. | Tooling WG |
+| CLI | توسيع `sorafs_manifest_builder` او CLI جديد `sorafs_pin` مع `pin submit`, `alias bind`, `order issue`, `registry export`. | Tooling WG |
 | SDK | توليد bindings للعميل (Rust/Go/TS) من مخطط Norito؛ اضافة اختبارات تكامل. | SDK Teams |
 
 العمليات:

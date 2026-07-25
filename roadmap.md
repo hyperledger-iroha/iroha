@@ -1,9 +1,65 @@
 # Roadmap
 
-Last updated: 2026-07-23
+Last updated: 2026-07-25
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
+
+## Sumeragi V2 production multilane release closure
+
+The production source now contains the Native evidence, autonomous execution,
+automatic lifecycle, diagnostics, SDK model, and versioned-wire paths mapped by
+[`docs/source/sumeragi_v2_multilane_closure_ledger.md`](./docs/source/sumeragi_v2_multilane_closure_ledger.md).
+The former autonomous `execution_batch.is_none()` exclusion and its in-scope
+TODO are gone; no remaining lane/autoscale/merge/Native multilane TODO was
+found. This is source implementation closure, not release completion.
+The deferred authority-paid receipt-settlement spend lease and generic Verus
+effect-to-TLA scheduler-ownership/completion-rank proof are explicitly
+classified outside the multilane closure ledger.
+
+The remaining work is evidence-driven and must stay in order:
+
+- Finish `G-UNIT` with a fresh archived run of all 113 source-bound focused
+  tests (54 core multilane tests, 35 core queue-journal tests, seven
+  `iroha_data_model` tests, 15 Torii tests, and two integration-support-library
+  tests), then complete and archive the exact Rust-owned 34-control corpus
+  replay across OpenAPI, both Python
+  surfaces, JavaScript source/distribution, Swift, Kotlin, and Java for
+  `ML-API-04`/`G-SDK`. The standalone OpenAPI replay is already fresh at
+  `4/4`; it is not the remaining SDK blocker.
+- Complete the mandatory unskipped real-network `G-4P` expansion, drain,
+  archive, recreation, Native rotation/pruning, and autonomous carrier suites.
+- Run the strict `G-12P` 10/10 deterministic-seed corridor and two-hour rotating
+  fault soak. The source-side correction and bounded stage diagnostics for the
+  former recovery-to-application stall are not a substitute for this evidence.
+- Produce the pinned-hardware `G-SCALE` five-pair one-lane versus four-lane
+  result, then run the source-sealed full workspace build, test, strict Clippy,
+  formatting, SDK, formal, and legacy-codec gates for `G-FINAL`.
+
+Fresh bounded formal support is available for source manifest
+`182a281fc46ed6d99dc010f444707dfcfaf3aae3cfe9f4b7a71d1b1090e690b9`:
+direct TLC positives, all 27 named mutations, and all three Apalache v0.52.2
+bounds passed after installing the checksum-pinned TLAPM standard library.
+`G-FORMAL` remains open until a clean aggregate release receipt archives the
+result; these bounded model checks are not deductive proof evidence.
+
+## SoraFS V1 production closure
+
+The canonical first-release implementation, validation, documentation,
+authority-removal, and rollout-evidence mapping is
+[`docs/source/sorafs/v1_closure_ledger.md`](./docs/source/sorafs/v1_closure_ledger.md).
+Repository conformance and production promotion are separate: the current
+production aggregate remains blocked with zero recognized lane summaries and
+no trusted foundational envelope. Promotion requires one reviewed production
+deployment, all 17 fresh lane summaries, the ordered nine-prerequisite signed
+envelope, deterministic aggregate replay, and retained rollback capability.
+SF-8b repair is also an active implementation blocker, not an evidence-only
+lane: `FileRepairStore` and the local repair event surface still act as the
+authority used by PDP, PoR, and PoTR failure handoff. Those four lanes remain
+open until task, lease, terminal outcome, slash, and appeal state are committed
+on-chain and every service reconciles finalized repair queries instead of
+mutating the local store.
+Taira and Minamoto mutation remains separately authorized cutover work.
 
 ## Memory-containment follow-ups
 
@@ -180,71 +236,6 @@ pins the pair bound, with defensive ceilings of 8 KiB per step and exactly
 promotion must pin measured values and pass independent review and device
 evidence.
 
-Torii readiness carries a required nullable authenticated `artifact_set` bound
-to exact roles `kagemusha_recursive_step_eq_v4_verifier_record` and
-`kagemusha_recursive_step_ep_v4_verifier_record` with circuits
-`kagemusha-recursive-spend-step-eq-compact-layout-v5` and
-`kagemusha-recursive-spend-step-ep-compact-lineage-v5`, respectively.
-A null set requires both recursive records and backend construction to be
-unavailable with exactly one `recursive_v4_registry_unavailable` or
-`recursive_v4_registry_malformed` blocker; a present set forbids both.
-`proof_backend_available` reports authenticated backend construction
-independently. `recursive_lineage_supported` additionally requires the
-authenticated artifact set and distinct active Eq/Ep records, with
-`recursive_lineage_unavailable` present exactly when that conjunction is
-false. `ready` is true only when the complete blocker set is empty.
-
-The ABI-21/V4 recursive transport and data model are the only release target.
-V2 remains only for unchanged amount, note/opening, authorization, membership,
-finality, recipient/acknowledgement, and other explicitly reused leaf
-primitives. No decoder upgrades retired V2/V3 recursive lifecycle bytes, and no
-work is planned for the retired nested-init, full-anchor peer, padded
-tag-history, duplicated peer-identity, or linear lineage-witness shapes.
-
-SCCP first-release readiness no longer carries a production diagnostic fixture
-activation path: the governance CLI has no TAIRA/TRON diagnostic bundle command,
-runtime crates no longer publish `sccp-test-fixtures` feature aliases, and
-transparent message admission requires configured production source material
-instead of accepting the local TAIRA/TRON diagnostic proof.
-
-The exact-numeric Kotodama V1 implementation and migration are complete:
-type-first declarations, signed 512-bit `int`, exact `decimal`, nominal
-non-negative `quantity`, canonical compact frames and JSON, staged logical-limb
-gas, authenticated 49-byte ABI headers, manifests, and all mapped `.to`
-artifacts now share one first-release descriptor. No retired numeric type,
-declaration order, pointer layout, quote/refund meter, old artifact, or
-compatibility migration is planned.
-
-Witness-bearing `Secret<int|decimal|quantity>` execution remains a deliberate
-fail-closed release gate. The current Halo2 `IvmExecutionBindV1` circuit binds
-public commitments but does not constrain IVM transitions, memory, syscalls,
-typed witnesses, `crypto::valcom`, effects, or gas. Production `CoreHost`
-therefore rejects `GET_PRIVATE_INPUT`, and consensus dispatch rejects every
-selector that can reach it. Release enablement requires the complete semantic
-proof statement and adversarial obligations documented in
-`crates/ivm/docs/kotodama_gap_analysis.md`; a binding-only proof, raw witness
-transport, compiler metadata, or the limited MockProver circuit cannot satisfy
-that gate.
-
-Remaining exact-numeric release work is evidence only: archive the authenticated
-Apple M1 Ultra reference calibration and slowest-supported-tier run for the
-exact release SHA, then pass full workspace build/test and strict Clippy,
-the supported-architecture parity matrix, Linux sanitizer fuzzing, and every
-platform SDK shared-fixture job. The broader IVM/Kotodama/Torii corridor still
-requires the non-skipped four-peer typed-query pagination exercise and
-controlled 5% performance gates against the canonical type-first authorized
-Kotodama grammar and separate suite/runtime artifact identities. Future ABI
-descriptor changes must regenerate the header documentation,
-every mapped `.to` golden, and the compiler manifests together. No retired
-grammar, numeric type, 17-byte deployable header, CRUD route, carrier, or
-compatibility migration is planned.
-
-Kotodama register allocation is now interval-level across ABI clobbers rather
-than selected once per function. Remaining release evidence is to run the
-focused allocator/codegen/runtime regressions and phase benchmarks after the
-shared Cargo corridor clears; no compatibility allocator or alternate ABI
-calling convention is planned.
-
 ## SORA Economic Constitution
 
 **Status:** specified design; implementation pending.
@@ -323,7 +314,7 @@ SoraFS capacity transaction-stdin generation now follows the same first-release
 operator-input contract: `sorafs_tx_stdin_builder` rejects duplicate flags,
 noncanonical epoch decimals, uppercase/prefixed/mis-sized order ids, and
 all-zero completion order ids before emitting ledger transaction JSON.
-`sorafs_manifest_stub capacity` now keeps the capacity marketplace staging
+`sorafs_manifest_builder capacity` now keeps the capacity marketplace staging
 surface on that same fail-closed boundary: declaration epoch overrides, numeric
 string fields across declaration/telemetry/replication/dispute specs, fixed and
 variable public hex fields, completion order IDs, and dispute-kind labels reject
@@ -335,14 +326,14 @@ profile ids, whitespace-padded profile handles, zero or padded PoR sample
 counts, uppercase/padded sample seeds, and noncanonical shared
 `--por-proof=chunk:segment:leaf` indices before building chunk metadata,
 persisting chunks, or emitting PoR proof artifacts.
-`sorafs_manifest_stub` top-level manifest generation now mirrors that
+`sorafs_manifest_builder` top-level manifest generation now mirrors that
 first-release operator-input contract as well: externally supplied DAG codec,
 expected CAR size, chunker profile id, replica count, retention epoch, PoR
 sample count/seed, and shared PoR proof indices reject padded, signed,
 whitespace-bearing, uppercase-hex, or overflowed forms before manifest, CAR, or
 PoR artifacts are emitted, and chunker profile handles are no longer silently
 trimmed.
-`sorafs_manifest_stub provider-admission proposal` now applies the same strict
+`sorafs_manifest_builder provider-admission proposal` now applies the same strict
 boundary to provider onboarding inputs: chunker profile handles, uppercase
 jurisdiction codes, capability payloads, stream budgets, and transport hints
 reject whitespace-padded, empty, padded numeric, uppercase-hex, and malformed
@@ -445,10 +436,12 @@ fixed provider and stake-pool identifiers must be exactly 32 lowercase hex bytes
 instead of being left-padded, and capability payloads, endpoint metadata,
 signing keys, public keys, and signatures must be lowercase even-length
 prefix-free hex before any advert/report/key output is opened.
-`sorafs_cli manifest sign` now shares that fail-closed boundary for
-`--issued-at`, rejects pre-epoch host clocks as operator-visible errors, and
-returns a normal missing-digest diagnostic if required chunk digest resolution
-regresses before bundle or signature generation.
+The release CLI now rejects the retired local manifest-authentication
+subcommands at dispatch and emits no bundle, signature, or token request.
+Content manifest construction remains unsigned; production release
+authentication is exclusively the canonical aggregate-manifest flow through
+`scripts/release_manifest_signing.py`, an external Ed25519/HSM signer, a
+governed raw public key and reviewed fingerprint, and a pinned native verifier.
 The DA reconstruction harness now keeps fixture replay inputs fail-closed too:
 text manifest files must be canonical lowercase, even-length, prefix-free,
 whitespace-free hex before Norito decoding, and `--chunk-template` renders are
@@ -668,21 +661,15 @@ proof summary digest, one valid policy digest, one valid provider-roster digest,
 and one valid repair-handoff digest before proof-summary-bound, policy-bound,
 provider-roster-bound, or repair-handoff metadata can satisfy final promotion.
 
-The following direct-WSV paragraphs describe retained compatibility and test
-machinery. The first-release Sumeragi V2 live path neither synthesizes nor signs
-autonomous lane execution batches: merge selection filters every candidate
-carrying `execution_batch`. The autonomous Kura/State payload, reservation, and
-execution helpers remain fail-closed scaffolding, while historical embedded
-batches continue to validate and replay deterministically.
-
-Re-enabling autonomous execution is outstanding work, not rollout evidence. It
-requires a reachable producer and a coordinated candidate/queue/wire/session
-design that carries one durable reservation identity from queue selection
-through availability and merge QC, canonical carrier application, and crash
-recovery. Until then, certified standalone artifacts may block unsafe
-retirement but are not executable production merge sources.
-Relay-settlement candidates remain live and are the only merge candidates
-synthesized and signed by the first-release runtime.
+The following direct-WSV paragraphs retain historical compatibility context.
+The earlier first-release scaffold neither synthesized nor signed autonomous
+lane execution batches and filtered candidates carrying `execution_batch`.
+That exclusion has since been removed: the live runner schedules autonomous
+lane work, carries one durable reservation identity through availability and
+merge certification, and applies it only through the canonical global carrier.
+Historical embedded batches continue to validate and replay deterministically.
+Relay-settlement and autonomous candidates are both live merge sources; neither
+permits a participant lane to mutate WSV independently.
 
 Nexus autoscale scale-in now preserves certified standalone lane-block
 progress. Managed retire candidates are skipped when their current
@@ -690,12 +677,11 @@ lane/dataspace has a valid certified lane-block sidecar without a matching
 application receipt, and committed lifecycle validation rechecks that invariant
 before publishing lane geometry so late certified progress cannot be destroyed
 by a staged scale-in. Production lane QCs never apply WSV effects directly.
-For live relay-settlement entries and other non-execution history, missing full
-entries are fetched from merge-QC signers with bounded authenticated chunks
-while the authoritative carrier remains pending. Embedded historical
-`execution_batch` entries validate and replay only from canonical full entries
-already durable in Kura; first-release sidecar responders do not serve that
-retired form. Kura publishes the full entry, sparse carrier record, and
+For live relay-settlement and autonomous entries, missing full entries are
+fetched from merge-QC signers with bounded authenticated chunks while the
+authoritative carrier remains pending. Generic authenticated sidecar responders
+serve the canonical bytes for either form, subject to the same request and
+committee bounds. Kura publishes the full entry, sparse carrier record, and
 canonical block through one rollback-safe boundary before State becomes
 visible. Legacy direct-preflight/marker artifacts remain
 fail-closed cleanup evidence for old stores and tests, but no production path
@@ -877,22 +863,21 @@ evidence with the final post-prune queue snapshot, keeping rollout telemetry
 accurate across that recovery transition. Startup status also merges the latest
 durable application-receipted certified sidecar per active lane with the
 in-memory pending queue, so restarted peers keep publishing applied
-committed-lane evidence for both canonical block receipts and direct execution
-receipts even when already receipted sessions are skipped by execution
-hydration.
+committed-lane evidence for canonical block receipts and historical
+direct-execution receipts even when already receipted sessions are skipped by
+execution hydration.
 The independent-lane data model, deterministic merge execution/replay,
 compact-carrier recovery, transaction inclusion proofs, and fail-closed
-validation are implemented. Autonomous local production is not a completed
-first-release path: live code does not yet carry one queue reservation identity
-through candidate selection, payload handoff, availability/NewView collection,
-Kura persistence, and global application, and drain-vote collection remains
-retired. Remaining work is that coordinated queue/candidate/wire/session
-implementation followed by a four-or-more-peer V2 Nexus corridor covering
-global view changes, exact-view merge-carrier failover, Kura-before-WSV and
-certificate-before-receipt restart boundaries, and lane retire/recreate/reset
-cycles. No direct lane-state application fallback is planned. `lane_block_view`
-remains intentionally coupled to the locked global proposal view;
-independently paced lane views are future work.
+validation are implemented. The former first-release gap in autonomous local
+production is closed in source: one queue reservation identity now survives
+candidate selection, payload handoff, availability/NewView collection, Kura
+persistence, and global application, and drain-vote collection is active.
+Release evidence is still required from the four-or-more-peer V2 Nexus
+corridor covering global view changes, exact-view merge-carrier failover,
+Kura-before-WSV and certificate-before-receipt restart boundaries, and lane
+retire/recreate/reset cycles. No direct lane-state application fallback is
+planned. `lane_block_view` remains intentionally coupled to the locked global
+proposal view; independently paced lane views are future work.
 
 Kagemusha online-to-offline top-up and redemption now use the typed V2 wire
 requests directly at `/v1/offline/top-up` and `/v1/offline/redeem`. Torii has no
@@ -1340,7 +1325,7 @@ excluded from the first release.
 					  SoraFS CLI manifest signature verification rejects
 					  noncanonical/small-order signature `R` and public-key encodings through the
 					  central Ed25519 admission helper before
-			  Dalek verification, CAR manifest-stub and chunker vector-exporter
+			  Dalek verification, CAR `sorafs_manifest_builder` and chunker vector-exporter
 			  signature-file verification pin the same malformed `R` rejection and chunker
 			  manifest signature fixtures use checked opaque admission for
 			  council signatures, SoraFS proof-token minting parses its nonzero
@@ -3811,7 +3796,7 @@ excluded from the first release.
   all Android fixture display file labels normalized as safe relative POSIX
   paths before generated examples can preserve them,
   and Android replay validates profile handles, storage classes, and numeric
-  subprocess fields before building `sorafs_manifest_stub` arguments,
+  subprocess fields before building `sorafs_manifest_builder` arguments,
   while the hedging fixture-manifest checker rejects unsafe rendered
   `--manifest` paths before loading manifests or writing summaries,
   and hedging fixture entry names/paths reject secret-looking or unsafe
@@ -4782,26 +4767,18 @@ excluded from the first release.
 	  provider routes, `--repair-handoff-digest-hex` evidence for governance/
 	  repair handoff, and latency thresholds before writing, validates every generated
   artifact through the PDP rollout checker, and ships provider-transport and
-  proof-generation response-file examples. PDP
-  remains fail-closed in embedded Torii proof streaming until
-  provider transport, live signature/inclusion verification, regenerated
-  negative fixture artifacts, governance archival, repair handoff carrying
-  `repair_handoff_digest_hex`, and deployed
-  evidence that passes the gate land. The rollout-gate static contract now pins
-  Torii's early `BAD_REQUEST` rejection and OpenAPI reserved wording for
-  `proof_kind=pdp`, and keeps unshipped `sorafs pdp ...` operator commands
-  warning-only until provider-protocol CLI handlers exist with a boundary-aware
-  command matcher that covers nested `pdp challenge|fetch|respond|verify|status|export`
-  spellings while preserving canary/evidence/local fixture labels. The same
-  static contract now also pins PDP provider challenge/proof transport, proof
-  generation, provider signature and inclusion-witness verification, Governance
-  DAG archival, repair handoff, operator CLI, and SF-13 promotion routes or
-  subcommands as unshipped with reusable matchers, segment-aware negative
-  controls, and an explicit unversioned-versus-`/v1` route overlap guard while
-  preserving `sorafs_cli proof stream --proof-kind=pdp` for external
-  PDP-capable gateways, `sorafs-validate pdp`, PDP fixture/bundle validation,
-  reserved telemetry labels, the fail-closed rollout evidence gate, collection
-  planner, and payload-free canary evidence labels.
+  proof-generation response-file examples. The authenticated PDP challenge,
+  next-work, proof-submission, status, and terminal-export routes are shipped
+  locally, and embedded proof streaming admits `proof_kind=pdp` only for a
+  supplied challenge id. That protocol-local completion does not close SF-13:
+  proof failures and governance handoff still converge on
+  `FileRepairStore`/local repair state. Production requires committed repair
+  task submission and finalized-query reconciliation, plus deployed
+  multi-provider signature/inclusion verification, Governance DAG archival,
+  operator integration, and evidence that passes the gate. Static rollout
+  guards must preserve the shipped authenticated provider routes while keeping
+  only the remaining production service, authoritative repair, and promotion
+  surfaces unshipped.
   `docs/examples/sorafs_reference_sdk/` ships a runnable cookbook that validates
   committed fixtures, exercises advert/order/governance signing, checks
   orderbook receipt validation and bundle cross-links, and emits manifest/CAR
@@ -4818,7 +4795,7 @@ excluded from the first release.
   payloads, fetch outputs, governance DAG archives, and proof/reputation
   summaries with platform no-follow final-component flags where available,
   rejects non-regular opened outputs, and writes bytes through the opened
-  descriptor without unsafe caller-side parent pre-creation. `sorafs_manifest_stub` now applies that same checked
+  descriptor without unsafe caller-side parent pre-creation. `sorafs_manifest_builder` now applies that same checked
   descriptor contract to CAR archives, manifest bytes, JSON reports, hybrid
   envelope outputs, signature/public-key sidecars, and all capacity subcommand
   Norito/base64/JSON/request outputs, with capacity integration fixtures rooted
@@ -5048,9 +5025,13 @@ excluded from the first release.
 	  with duplicate or malformed challenge inputs, duplicate or unknown route/metric
 	  inputs, missing `--route-body-blake3-hex` evidence, and missing or malformed
 	  `--governance-archive-handoff-digest-hex` evidence rejected before
-	  canary writes. Remaining SF-9
-  work is live drand/VRF/auditor run evidence that passes this gate and
-  any operator-required governance archive handoff carried as
+	  canary writes. The PoR coordinator, bounded local readback, and
+  status/export/report protocol are locally implemented, but failure handoff
+  still targets `FileRepairStore` rather than committed repair state. SF-9 is
+  therefore not evidence-only: it requires chain-authoritative repair task
+  submission and finalized reconciliation in addition to live
+  drand/VRF/auditor run evidence and any operator-required governance archive
+  handoff carried as
   `governance_archive_handoff_digest_hex` beside the deployment-specific
   SQL/Parquet `archive_backend` in reporting/archive artifacts, with the
   aggregate production-readiness `archive_backends` and
@@ -5061,10 +5042,11 @@ excluded from the first release.
   and the lane checker has direct adversarial coverage that forges
   `seed_replay_digest_hex` on every seed-replay-bound downstream kind, so
   scheduler, validator, reporting/archive, observability, and governance
-  evidence all fail against mismatched randomness before promotion. Remaining
-  SF-9 work is not the local Torii runtime, status/export/report endpoints,
-  bounded ingestion readback, removed mutation-route coverage,
-  reference PoR validator command, or local scheduler observability. The
+  evidence all fail against mismatched randomness before promotion. The local
+  Torii coordinator, status/export/report endpoints, bounded ingestion
+  readback, reference PoR validator, and scheduler observability are
+  protocol-local foundations; they do not substitute for authoritative repair
+  convergence. The
   rollout-gate static contract now also pins live external drand/VRF/auditor
   feed deployment, production archive/warehouse handoff, proof-bundle
   inspection, and SF-9 promotion routes or subcommands as unshipped with
@@ -5139,13 +5121,16 @@ excluded from the first release.
   PQ key-roster and reputation-weight policy digests on their bound artifacts,
   so validation, proof-stream, reputation, observability, and governance
   evidence all fail against detached probe/governance anchors before promotion.
-  Remaining SF-14 work is live multi-provider receipt evidence,
-  governed provider ML-DSA key distribution, reputation weighting evidence, and
-  governance approval that passes this gate with receipt-validation artifacts
+  Local receipt capture, validation, and proof-stream replay are implemented,
+  but latency-breach repair creation still converges on
+  `FileRepairStore`/local repair state. SF-14 is not evidence-only: it requires
+  exactly-once committed repair task creation and finalized reconciliation,
+  live multi-provider receipt evidence, governed provider ML-DSA key
+  distribution, reputation weighting evidence, and governance approval that
+  passes this gate with receipt-validation artifacts
   bound to governance-approved `pq_key_roster_digest_hex` values and
   reputation artifacts bound to governance-approved
-  `reputation_weight_policy_digest_hex` values, not local receipt capture,
-  validation, or proof-stream replay. The rollout-gate static contract now also
+  `reputation_weight_policy_digest_hex` values. The rollout-gate static contract now also
   pins live multi-provider probe rollout, governed provider key-distribution,
   reputation-weight governance, SF-14 approval, and PoTR promotion routes or
   subcommands as unshipped with reusable matchers and segment-aware negative
@@ -5174,7 +5159,7 @@ excluded from the first release.
   and configured `/v1/sorafs/storage/peers` publish-discovery readback now also
   accept `limit` (default 50, max 500), preserve full configured/cache counts,
   and emit `returned_count` plus `truncated` metadata for bounded
-  inventory/readback scripts. `sorafs_provider_advert_stub` now emits advert,
+  inventory/readback scripts. `sorafs_provider_advert` now emits advert,
   public-key, signature, and JSON report files through the same no-follow
   descriptor writer used by the other release CLIs, with output leaves and
   parent chains inspected before parent creation and non-regular opened targets
@@ -5220,9 +5205,9 @@ excluded from the first release.
   report ready,
   rejects raw reports/response bodies/fixture payloads/runtime secrets, now has
   missing-field regressions proving payload-safety fields and non-applicable
-  HTTP/3 booleans must be explicitly encoded as `false`, and
-  keeps HTTP/3 load evidence explicitly scoped as deferred until a committed
-  gateway transport exists. `scripts/run_sorafs_gateway_load_rollout_evidence.py`
+  HTTP/3 booleans must be explicitly encoded as `false`, and keeps HTTP/3 load
+  evidence explicitly non-applicable to V1; any later HTTP/3 transport project
+  is separately scoped. `scripts/run_sorafs_gateway_load_rollout_evidence.py`
   emits the matching collection dry-run plan and evidence contract, and now
   validates the schema-closed collection-plan envelope plus canonical nested
   required-kind, threshold, external-evidence, checker-backed evidence-contract,
@@ -5231,8 +5216,8 @@ excluded from the first release.
   checked-in canary artifacts for each SF-5a gate kind, requires complete
   deterministic scenario and gateway metric coverage where applicable, enforces
   reviewed `gateway-load-provider-*` staging-provider inventory, reviewed
-  hardware/cache staging metadata, rejects `--http3-endpoint-committed` until a
-  reviewed SoraFS HTTP/3 gateway endpoint is committed, and generated
+  hardware/cache staging metadata, rejects `--http3-endpoint-committed` because
+  HTTP/3 is outside the V1 contract, and generated
   per-stream inventory,
   suite/staging digest bindings, and SLO threshold facts before writing,
   rejects out-of-range `--success-rate-bps` values before staging-load evidence
@@ -6096,29 +6081,28 @@ excluded from the first release.
   `ModerationPrivacyAggregateV1` plus explicit
   `ModerationPrivacyParametersV1` epsilon/delta/suppression metadata,
   deterministic aggregate hashing, sorted metric/metadata validation, and
-  conversion into `PrivacyAggregate` ledger entries. `sorafs_node` now also
-  exposes `NodeHandle::publish_privacy_aggregate_cycle(...)` to validate
-  aggregate payloads, require them to fit the target cycle window, sort them
-  deterministically, derive stable transparency entry ids, build a cycle
-  publication, and publish it through the configured Governance DAG publisher.
-  `sorafs_node` now also exposes local aggregate source-event ingestion via
-  `record_privacy_aggregate_source_event(...)` and publication from retained
-  source events via `publish_privacy_aggregate_cycle_from_source_events(...)`,
+  conversion into `PrivacyAggregate` ledger entries. `sorafs_node` exposes
+  local aggregate source-event ingestion via
+  `record_privacy_aggregate_source_event(...)` and the single production
+  publication path
+  `publish_due_configured_privacy_aggregate_cycle_from_source_events(...)`,
   including duplicate source-event rejection, cycle-window filtering,
-  suppression-threshold enforcement, deterministic bounded noising from runtime
-  seed material, source-payload digest binding, and publication through the
-  existing Governance DAG bridge. `PrivacyAggregateScheduleConfig` plus
-  `publish_due_privacy_aggregate_cycle_from_source_events(...)` now derive due
+  distinct-subject suppression, per-subject clipping, exact integer
+  discrete-Laplace sampling, source-payload digest binding, and atomic
+  composition-budget/cycle/outbox persistence. `PrivacyAggregateScheduleConfig`
+  now derives due
   publication windows, deterministic cycle ids, stale-window catch-up for the
   oldest due unpublished window with retained source events, and structured
   skip outcomes for not-due, already-published, empty, and fully suppressed
   cycles while publishing each due cycle at most once per node runtime.
-  `iroha_config` now also exposes dormant-by-default `[sorafs.storage.privacy_aggregates]`
-  enablement/cadence knobs, `sorafs_node::StorageConfig` projects enabled
-  config into the scheduler, and
+  `iroha_config` now also exposes the dormant-by-default
+  `[sorafs.storage.privacy_aggregates]` cadence, canonical rational privacy
+  policy, per-subject cap, suppression threshold, governed digest, and durable
+  composition budget. `sorafs_node::StorageConfig` projects that single
+  production policy, and
   `publish_due_configured_privacy_aggregate_cycle_from_source_events(...)`
-  runs due-cycle publication from the configured cadence while keeping privacy
-  policy and noise seed material runtime-only. Torii now also exposes
+  runs due-cycle publication while accepting only runtime threshold-PRF output
+  and predecessor hash material. Torii now also exposes
   `/v1/sorafs/transparency/privacy-aggregates/source-events` as a
   canonical-authenticated local feed boundary for privacy aggregate source
   events, routing accepted events into the duplicate-checked aggregate worker
@@ -6126,8 +6110,8 @@ excluded from the first release.
   values. Torii now also exposes
   `/v1/sorafs/transparency/privacy-aggregates/publish-due` as a
   canonical-authenticated local trigger for configured due aggregate
-  publication, with stale due event-backed window catch-up, runtime-only
-  privacy policy/noise seed inputs, and structured
+  publication, with stale due event-backed window catch-up, config-authoritative
+  privacy policy, atomic composition-budget/outbox persistence, and structured
   published/skipped/already-published outcomes. `iroha::Client` and
   `iroha sorafs transparency privacy-aggregate source-event|publish-due
 	  --payload PATH` now wrap those signed routes for producer and scheduler
@@ -7329,22 +7313,20 @@ excluded from the first release.
   block/head/CAR/checkpoint/response flags to `false`,
   validates each generated artifact through the SF-12 checker, and
   writes atomically without following output symlinks. The
-	  rollout-gate static contract pins the SF-12 plan's IPFS/IPNS, live-head,
-  public-checkpoint, runtime mirror-service, and runtime/IPFS dashboard work as
-  explicitly unshipped with reusable matchers and segment-aware negative
-  controls while preserving local dashboard/head, block/node, publish-index,
-  CAR queue, runtime signed-DAG query routes, local `sorafs_cli governance dag`
-  commands, telemetry, and payload-free canary evidence labels. It also scans
+	  rollout-gate static contract pins the shipped SF-12 service's IPFS/IPNS,
+  signed-head CAS, authenticated checkpoint recovery, bounded public mirror,
+  health, dashboard, and Prometheus boundaries while preserving local
+  dashboard/head, block/node, publish-index, CAR queue, runtime signed-DAG query
+  routes, local `sorafs_cli governance dag` commands, telemetry, and payload-free
+  canary evidence labels. It also scans
   CLI sources for nested `governance dag
   live-head|fetch-head|checkpoint-publish|ipfs-publish|ipns-publish` spellings
-  so live public operator commands cannot land accidentally while local
-  checkpoint/mirror commands remain allowed, but SF-12 still
-  needs the always-on ingest/publisher services,
-  IPFS/IPNS publication, runtime RocksDB/IPLD mirror datastore and query service,
-  live-head/public-checkpoint publication and recovery operator commands,
-  runtime/IPFS-backed dashboard API, live public IPFS/IPNS head and pin/mirror
-  metric emission, IPFS-backed tests, and staged/live publication evidence that
-  passes this gate.
+  so unreviewed operator command aliases cannot land accidentally while local
+  checkpoint/mirror commands remain allowed. SF-12 now needs supported
+  package/supervisor integration, two-instance deployment with runtime-only
+  governed credentials, public IPFS/IPNS/dashboard/alert-routing and recovery
+  evidence, and a capacity decision proving the bounded authenticated JSON
+  mirror is sufficient or selecting the optional RocksDB/IPLD backend.
   Prioritize signed service boundaries before adding public rollout evidence
   for those lanes.
 - SoraFS repair auditor submission wiring now accepts JSON or Norito
@@ -7433,9 +7415,13 @@ excluded from the first release.
   derived from the reviewed failure-source inventory, derived status and
   handoff-target counts for
   reviewed lifecycle-status and handoff-target inventories, and latency threshold
-  facts before writing. Remaining repair production work
-  is live PoR/PoTR failure, repair, escalation, and governance handoff evidence
-  with the deployed auditor roster and coordinator that passes this gate. The
+  facts before writing. Local repair routes, worker lifecycle handling, and
+  `FileRepairStore` persistence are protocol-local foundations, not production
+  authority. SF-8b first requires ledger-authoritative task identity, leases,
+  terminal outcomes, slash, and appeal state; finalized committed-event queries;
+  and transaction-submitting/reconciling workers with no independent local
+  mutation path. Live PoR/PoTR failure, repair, escalation, governance handoff,
+  deployed-auditor-roster, and coordinator evidence follows that cutover. The
   rollout-gate static contract now pins live operator-evidence capture,
   deployed auditor-roster, SF-9 coordinator runbook, production failure-capture,
   production handoff, and repair promotion routes or subcommands as unshipped
@@ -12371,14 +12357,15 @@ excluded from the first release.
 	  `503 route_unavailable`; the feature-minimal connect corridor now passes
 	  check, library tests, and all-target strict clippy with app-only proof,
 	  hosted-proxy, integration-test, binary, and bench targets gated behind
-	  their owning features. SoraFS proof streaming rejects reserved
-	  `proof_kind=pdp` as `400 Bad Request` until the SF-13 provider protocol
-	  lands; the manifest reference validator now rejects empty PDP segment and
-	  hot-leaf Merkle paths and has deterministic generator coverage for the next
-	  negative-fixture refresh, and the SF-13 rollout evidence gate now keeps
+	  their owning features. SoraFS now exposes the authenticated PDP challenge,
+	  next-work, proof-submission, status, and terminal-export protocol, and
+	  proof streaming accepts `proof_kind=pdp` only with a supplied challenge id;
+	  the manifest reference validator rejects empty PDP segment and hot-leaf
+	  Merkle paths, and the SF-13 rollout evidence gate keeps
 	  PDP promotion blocked until reviewed transport, proof-generation,
-	  validation, governance/repair, observability, and approval artifacts are
-	  present. PoR/PDP proof-stream request envelopes cap `sample_count` at
+	  validation, chain-authoritative repair reconciliation, governance archival,
+	  observability, approval, and deployment artifacts are present. PoR/PDP
+	  proof-stream request envelopes cap `sample_count` at
 	  `500` before manifest lookup. The code-only
 	  placeholder-marker sweep now
 	  leaves only intentional
@@ -12417,7 +12404,7 @@ excluded from the first release.
 	  replay helper now applies the same no-follow JSON read/write policy to
 	  generated replay artifacts with complete byte-write loops, descriptor fsync,
 	  and sanitized write-failure diagnostics, and validates payload/plan inputs
-	  before launching the manifest stub. The orchestrator
+	  before launching `sorafs_manifest_builder`. The orchestrator
 	  adoption CI gate now validates fixture/report/log
 	  inputs through no-follow descriptor opens and writes generated config plus
 		  burn-in notes through no-follow descriptors with complete byte-write loops
@@ -14015,8 +14002,8 @@ excluded from the first release.
   challenge drand beacon, PoR proof, and audit-verdict signatures, SoraFS
   orchestrator `manifest verify-signature` detached signatures and Ed25519
   public keys, SoraNet guard-directory issuer Ed25519 public keys, SoraFS
-  CAR fetch/provider-advert-stub advert signatures, and SoraFS CAR
-  manifest-stub signature-file entries, SoraFS chunker manifest-signature
+  CAR fetch/`sorafs_provider_advert` advert signatures, and SoraFS CAR
+  `sorafs_manifest_builder` signature-file entries, SoraFS chunker manifest-signature
   exporter entries, plus JDG
   simple-threshold attestation signatures, P2P handshake hello
   signatures, and peer trust-gossip signatures, plus POP-backed block aggregate
@@ -18685,15 +18672,16 @@ operator-provided rollout bundles.
   evidence, stricter committed-history quorum checks, proposal-readiness
   deferral for unapplied lane blocks, Kura sidecar recovery from local canonical
   block bodies, and lane/dataspace-preserving ownership status. The remaining
-  blocker is DvP lane-block application liveness under the 12-peer localnet:
-  route probes can still stall before committed/applied lane-block convergence,
-  with one DS lane split between executable-payload wait and canonical
-  application while the other DS lane has no committed lane-block row. The
-  default 10-iteration paired-swap soak still remains a stress/liveness refresh
-  item; the latest default run before the quorum-history hardening exited `ok`
-  with only 3/10 soak iterations passing. Older full-soak evidence remains the
-  2026-07-03 Nexus consensus metadata snapshot with a 10/10 paired-swap soak
-  and rollback verification. The
+  historical pre-fix blocker was DvP lane-block application liveness under the
+  12-peer localnet: route probes could stall before committed/applied
+  lane-block convergence, with one DS lane split between executable-payload
+  wait and canonical application while the other DS lane had no committed
+  lane-block row. The source-side recovery and bounded stage diagnostics have
+  since been corrected. A fresh strict 10/10 deterministic-seed rerun and
+  two-hour rotating-fault soak remain mandatory; the pre-fix default run that
+  exited `ok` with only 3/10 iterations is not release evidence. Older
+  full-soak evidence remains the 2026-07-03 Nexus consensus metadata snapshot
+  with a 10/10 paired-swap soak and rollback verification. The
   feature-gated
   STARK cross-dataspace localnet fixture now uses the same canonical dataspace
   catalog and has non-ignored `zk-stark` genesis pre-execution coverage, while
@@ -19370,11 +19358,13 @@ operator-provided rollout bundles.
   remaining checkpoint for this corridor is keeping the broadened strict soak
   in regression rotation while release packaging and operator runbooks
   converge.
-- Continue native AMX hardening beyond the implemented attestation data model,
-  control-plane message handling, deterministic per-leg vote cache,
-  proposer-side prepare/commit gating, 4-peer convergence proof,
-  queue-journal restart replay, and routing-plan projection with longer-running
-  soak, fault injection, and independent participant-lane finality work.
+- Continue Native AMX release evidence beyond the implemented attestation data
+  model, durable participant-application evidence, deterministic per-leg vote
+  cache, proposer-side prepare/commit gating, queue-journal restart replay, and
+  routing-plan projection. Required work is longer-running soak, fault
+  injection, validator rotation, pruning, and carrier-application evidence;
+  participant controls remain control-only and never create independent WSV
+  finality.
 - Keep SCCP bridge submission permissionless while requiring outbound message
   records to originate from verified IVM-proved overlays, route allowlists to
   be deployment-governed, and production activation to wait for all advertised
@@ -23403,135 +23393,15 @@ signed ancestor-linked solid-block header proof,
 
 ## IVM, Kotodama, and Norito
 
-**Status:** active first-release hardening.
+**Status:** implementation complete; external release evidence remains.
 
-- Keep the Iroha Virtual Machine syscall and pointer-ABI surface deterministic
-  across hardware and peers.
-- Freeze only the reset Kotodama V1 surface: one named `seiyaku`/`誓約` per
-  deployable source, typed HIR modules, explicit `kotoage fn`/`言挙げ fn`,
-  `view fn`, and private `fn` plus `hajimari`/`始まり` and `kaizen`/`改善`
-  lifecycle declarations, strict canonical types and namespaces, checked
-  arithmetic, bounded loops, `StateMap`, stable error enums, caller
-  `authorize(...)`, and ZK-only noninterfering `Secret<T>`. Retired spellings,
-  English declaration spellings, implicit helpers, raw host operations, and
-  AST prelude injection stay rejected rather than entering a compatibility
-  edition. Keep source-visible execution context, seiyaku queries, exact
-  kotoage grants, and test invocation branded with `seiyaku`/`kotoage`; do not
-  reintroduce English `contract`/`entrypoint` capability aliases.
-- Keep Rust as the sole canonical compiler behind `koto`, `iroha contract dev`,
-  Musubi, and the asynchronous Node binding. Browser clients use the explicit
-  compiler service. The content-addressed module graph, atomic publisher,
-  canonical formatter, structural CST, LSP, and human/JSON/SARIF diagnostics
-  must continue to share one grammar and compiler session.
-- Preserve typed-HIR test linking: standalone test modules are independently
-  parsed, resolved, and typed before their HIR items are linked and revalidated
-  as one suite; source ASTs are never textually merged. Keep canonical `NodeId`
-  and exact `SourceRange` side tables, multi-source diagnostic attribution,
-  byte-neutral source metadata, the normative grammar, CST recovery, formatter,
-  LSP data, and generated editor tables synchronized.
-- Preserve single-evaluation aggregate lowering: synthetic struct fields,
-  tuple/nested destructuring, and aggregate `Option` joins must project one
-  captured source value, while virtual pointer-backed fields must materialize
-  their exact typed literals before durable-state encoding. Keep mixed
-  pointer/scalar `StateMap` requests, present/absent/nested fallback side
-  effects, and malformed dynamic-pointer cases in the release regression set.
-- Keep local test suites immutable after compilation. Their return sentinel is
-  described by an exact compiler-owned sidecar interface paired with a generic
-  IVM 1.0 image that embeds no deployable `CNTR` or `DBG1`. The crate-private
-  validation profile checks the current ABI and terminal return `HALT`, and the
-  suite remains distinct from any separately prepared, ordinarily admitted
-  runtime artifact. The runner checks both compiler report hashes before
-  loading; nested runtime calls terminate through compiler-emitted entrypoint
-  wrappers rather than post-build byte mutation. Test-only selectors and
-  syscalls must never enter production admission or the ABI-v1 hash.
-- Preserve the corrected ABI-v1 artifact contract: `code_hash` covers the
-  complete canonical `.to` image, debug data is a hash-keyed sidecar, CNTR is
-  validated rather than trusted, and transitive bytecode effects/access drive
-  conservative scheduling whenever precision is incomplete.
-- Preserve exact per-key `StateMap` scheduling only for direct bytecode paths
-  that prove an authenticated canonical `Name` literal at every state syscall.
-  Same-key writes conflict while distinct proven children remain independent;
-  dynamic, helper-hidden, transitive, ambiguous, forged, and unverifiable
-  accesses retain `state:*`. Static scans use the explicit `state:Map[*]`
-  scheduler key, and CNTR hints never narrow the bytecode-derived fence by
-  themselves.
-- Keep `pipeline.ivm_max_cycles_upper_bound` mandatory and non-zero (default
-  `1_000_000`) and file-configured only. Admission and every VM execution path
-  must enforce that node policy; environment variables and consensus custom
-  parameters never override or disable it, and every artifact carries a
-  positive hash-covered cycle limit.
-- Keep public invocation arguments as one bounded, schema-hashed canonical
-  Norito record. JSON conversion belongs at Torii/CLI/SDK construction
-  boundaries; a predecode gas quote binds the signed wire lengths and the
-  validated schema's maximum aggregate allocation, signed bytes remain
-  host-owned behind a domain-separated guest binding, paid execution decodes
-  once, and a complete INPUT/owned-HEAP allocation preflight precedes
-  materialization. Signed transport rejects malformed, noncanonical,
-  oversized, schema-mismatched, or deterministically unmaterializable records.
-- Keep caller authorization uniform across direct, nested, trigger, overlay,
-  and proved execution. Protected overlays retain and live-recheck their named
-  permission before applying effects, while every grant, revoke, role binding,
-  and role-permission change shares the synthetic authorization scheduler
-  dependency.
-- Keep production private-witness dispatch fail closed while completing the
-  proof-carrying invocation statement. `Secret<int>`, `Secret<decimal>`,
-  `Secret<quantity>`, and `GET_PRIVATE_INPUT` remain local/prover/test-host
-  capabilities; ordinary consensus must reject any seiyaku selector with a
-  reachable private-input read, including helper-hidden reads, and raw witness
-  bytes must never enter signed transactions or replay. `CoreHost` quote and
-  execution must independently reject `GET_PRIVATE_INPUT` even if resolver
-  admission is bypassed. Before removing that gate, bind the seiyaku address
-  and code hash, seiyaku selector, public arguments, authority and chain, state
-  root and exact read/write sets, outputs
-  and events, gas schedule and ceiling, and circuit and verifier-key versions.
-- Maintain the exhaustive builtin registry as the source of signature, mode,
-  effect, syscall, access, gas, and lowering policy. Every new privileged
-  operation must update bytecode-derived admission, ABI-v1 hashes/goldens,
-  deterministic host behavior, docs, and adversarial tests in the same change.
-- Finish release validation for the bounded-List, exact-decimal/quantity,
-  native-JSON, and typed core-query-page corridor. The implementation, source
-  migration, canonical header refresh, mapped goldens, compiler manifests, and
-  Torii query/lookup OpenAPI synchronization are complete. Remaining work is to
-  prove one host query and one projection decode per typed request, run the
-  non-skipped four-peer pagination lane, and capture the real-base 5%
-  performance gates.
-- Hold the performance contract: sub-1% assembler padding, compact indexed
-  literals/near control flow, SSA optimization and call-aware allocation,
-  authenticated no-op builds with zero rewrites, and warm prepared execution
-  without program reparsing, opcode rewalks, or full-memory/template clones.
-  Scheduler access derivation receives the overlay's immutable prepared
-  contract; manifest/fence analysis and trigger lookup must not clone or hash
-  bytecode, parse metadata, decode instructions, or rebuild runtime templates
-  on a warm call. Keep mutable pre-execution policy metadata-only; preparation
-  owns opcode and syscall validation for the ungated ABI V1 surface.
-- Preserve canonical Norito headers and wire layouts for blocks, transactions,
-  SDK fixtures, and cross-library compatibility tests. The JavaScript pure
-  Norito fallback now covers asset-definition registration frames, and
-  Java/Kotlin columnar helpers cover optional string/u32 plus bytes+bool row
-  shapes, so remaining SDK parity work should focus on new observable wire
-  formats as they land. Norito columnar NCB views now read their `u32`
-  row-count prefix through a shared checked helper, keeping truncated row-count
-  prefixes on `Error::LengthMismatch`. Norito AoS optional string/u32 decoders
-  now reject noncanonical option discriminants instead of treating any nonzero
-  tag as `Some`. Norito streaming baseline RLE block
-  decode now reads DC differences and AC records through checked helpers so
-  truncated or overflowed cursor state returns `CodecError::TruncatedBlock`
-  before cursor advancement, and baseline chunk frame/chroma metadata now uses
-  checked fixed-width readers so truncated frame headers and chroma length
-  fields fail before payload slicing. Bundled rANS SIMD stream lane lengths now
-  use a checked prefix reader so malformed SIMD headers fail before cursor
-  advancement or lane slicing.
-
-**Next checkpoints:** archive the authenticated Numeric V1 Apple M1 Ultra
-calibration and slowest-supported-tier evidence for the candidate SHA; run the
-full workspace format/build/test and strict-Clippy gates; and require the Linux
-sanitizer, cross-architecture, and platform SDK shared-fixture workflows.
-Complete the non-skipped four-peer typed-query pagination lane, controlled-runner
-5% performance gates, and independent runtime-manifest parser cross-check.
-Retain the four-peer hidden/dynamic-access scheduler regression while finishing
-the remaining Norito wire-format evidence. Future syscall or opcode changes remain ABI version 1
-until this first release and must refresh every golden, manifest, document, and
-table together.
+- Archive immutable source, `Cargo.lock`, benchmark workload, and toolchain
+  provenance for the documented predecessor, then run the candidate and
+  predecessor on the same controlled runner. The documented predecessor lacks
+  `Cargo.lock`, and the available older lock is incompatible, so no
+  reproducible locked 5% comparison is claimed.
+- Run the C# SDK gate on a supported .NET 8 environment. `dotnet` is not
+  installed on the current host.
 
 ## Privacy, ZK, and FHE
 
@@ -25881,7 +25751,7 @@ runtime premise on the final signed source.
   7,826-obligation induction and 565-obligation downstream Core receipt is
   historical evidence for the superseded transition relation and cannot
   promote the current source;
-- execute the fresh source-sealed 515-test, 38-module, 61-leg pre-network
+- execute the fresh source-sealed 515-test, 38-module, 71-leg pre-network
   corridor. Its proposal-origin additions cover strict same-round TC
   upgrade/replay, exact locked-Commit recovery ownership, multi-carrier ingress,
   and persistence failure. Its final six regressions cover canonical view-zero

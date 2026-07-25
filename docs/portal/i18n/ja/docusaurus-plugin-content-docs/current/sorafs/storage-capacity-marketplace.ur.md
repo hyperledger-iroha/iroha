@@ -58,7 +58,7 @@ SF-2c セキュリティ セキュリティ セキュリティ プロバイダ�
 - 共有ヘルパー (`CapacityMetadataEntry`、`PricingScheduleV1`、レーン/割り当て/SLA バリデータ) 決定論的キー検証、エラー報告、ダウンストリーム ツールの再利用、CI ダウンストリーム ツールの再利用ہیں۔【crates/sorafs_manifest/src/capacity.rs:230】
 - `PinProviderRegistry` オンチェーン スナップショット `/v1/sorafs/capacity/state` 公開 Norito JSON プロバイダ宣言 手数料台帳エントリ 確定的 Norito JSON 公開پیچھے جوڑ کر۔【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
 - 検証カバレッジの正規ハンドルの強制、重複検出、レーンごとの境界、レプリケーション割り当てガード、テレメトリ範囲チェック、演習、回帰、CI の監視。 ہوں۔【crates/sorafs_manifest/src/capacity.rs:792】
-- オペレータ ツール: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` 人間が判読できる仕様、標準的な Norito ペイロード、base64 BLOB、JSON 概要、演算子 `/v1/sorafs/capacity/declare`、 `/v1/sorafs/capacity/telemetry` レプリケーション順序フィクスチャ、ローカル検証、ステージの説明【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 参照フィクスチャ `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`、`order_v1.to`) میں ہیں اور `cargo run -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order` سے 生成 ہوتی ہیں۔
+- オペレータ ツール: `sorafs_manifest_builder capacity {declaration, telemetry, replication-order}` 人間が判読できる仕様、標準的な Norito ペイロード、base64 BLOB、JSON 概要、演算子 `/v1/sorafs/capacity/declare`、 `/v1/sorafs/capacity/telemetry` レプリケーション順序フィクスチャ、ローカル検証、ステージの説明【crates/sorafs_car/src/bin/sorafs_manifest_builder/capacity.rs:1】 参照フィクスチャ `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`、`order_v1.to`) میں ہیں اور `cargo run -p sorafs_car --bin sorafs_manifest_builder -- capacity replication-order` سے 生成 ہوتی ہیں۔
 
 ### 2. コントロールプレーンの統合
 
@@ -144,14 +144,14 @@ SF-2c セキュリティ セキュリティ セキュリティ プロバイダ�
   ガバナンス パケット
 
 ### 論争と証拠の隠蔽
-- 紛争 `sorafs_manifest_stub capacity dispute` ذریعے فائل کریں (テスト:
+- 紛争 `sorafs_manifest_builder capacity dispute` ذریعے فائل کریں (テスト:
   `cargo test -p sorafs_car --test capacity_cli`) 正規ペイロードの数
 - `cargo test -p iroha_core -- capacity_dispute_replay_is_deterministic` ペナルティスイート
   (`record_capacity_telemetry_penalises_persistent_under_delivery`) 異議を唱える 決定論的なリプレイをスラッシュする
 - 証拠収集、エスカレーション `docs/source/sorafs/dispute_revocation_runbook.md` فالو کریں؛ストライキの承認と検証レポートの作成
 
 ### プロバイダーのオンボーディングと終了スモーク テスト
-- 宣言/テレメトリ アーティファクト `sorafs_manifest_stub capacity ...` 再生成 申請 提出 CLI テストの再生 (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`)۔
+- 宣言/テレメトリ アーティファクト `sorafs_manifest_builder capacity ...` 再生成 申請 提出 CLI テストの再生 (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`)۔
 - Torii (`/v1/sorafs/capacity/declare`) パスワードを送信する `/v1/sorafs/capacity/state` アドレス Grafana スクリーンショットをキャプチャする`docs/source/sorafs/capacity_onboarding_runbook.md` 終了フロー فالو کریں۔
 - 署名済みアーティファクトと調整出力 `docs/examples/sorafs_capacity_marketplace_validation/` アーカイブ
 

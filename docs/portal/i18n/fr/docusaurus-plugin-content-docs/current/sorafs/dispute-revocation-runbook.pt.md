@@ -38,7 +38,7 @@ Ce runbook guide les opérateurs de gouvernance pour l'ouverture des litiges de 
 
 ## 3. Enregistrer un litige
 
-1. Criez une spécification JSON pour `sorafs_manifest_stub capacity dispute` :
+1. Criez une spécification JSON pour `sorafs_manifest_builder capacity dispute` :
 
    ```json
    {
@@ -61,7 +61,7 @@ Ce runbook guide les opérateurs de gouvernance pour l'ouverture des litiges de 
 2. Exécutez une CLI :
 
    ```bash
-   sorafs_manifest_stub capacity dispute \
+   sorafs_manifest_builder capacity dispute \
      --spec=dispute.json \
      --norito-out=dispute.to \
      --base64-out=dispute.b64 \
@@ -76,7 +76,7 @@ Ce runbook guide les opérateurs de gouvernance pour l'ouverture des litiges de 
 
 ## 4. Évacuation et révocation1. **Janela de graca:** notifique o provenor sobre a revogacao iminente; permettez l'évacuation des données fixées lorsque la politique autorise.
 2. **Voir `ProviderAdmissionRevocationV1` :**
-   - Utilisez `sorafs_manifest_stub provider-admission revoke` avec le motif approuvé.
+   - Utilisez `sorafs_manifest_builder provider-admission revoke` avec le motif approuvé.
    - Vérifiez les assinaturas et le digest de revogacao.
 3. **Publique à revogacao :**
    - Envie d'une demande de revogacao pour Torii.
@@ -91,7 +91,7 @@ Ce runbook guide les opérateurs de gouvernance pour l'ouverture des litiges de 
 
 ## 6. Matériel de référence
 
--`sorafs_manifest_stub capacity dispute --help`
+-`sorafs_manifest_builder capacity dispute --help`
 - `docs/source/sorafs/storage_capacity_marketplace.md` (secao de contestas)
 - `docs/source/sorafs/provider_admission_policy.md` (flux de revogacao)
 - Tableau de bord d'observabilité : `SoraFS / Capacity Providers`

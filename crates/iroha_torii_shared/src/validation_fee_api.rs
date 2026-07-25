@@ -7,12 +7,13 @@ use iroha_data_model::{
     block::consensus_v2::{HeightContextId, finality::V2FinalityArtifact},
     bridge::{BridgeFinalityProof, BridgeFinalityVerifier},
     governance::types::{
-        AtWindow, GovernanceFinalizationEvidence, ParliamentBodies, ProposalKind,
+        AtWindow, GovernanceFinalizationEvidence, ParliamentBodies, ParliamentBody, ProposalKind,
         ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
     },
     isi::governance::VotingMode,
     validation_fee::{
-        ValidationFeeChargingMode, ValidationFeePolicyRegistryEntryV1,
+        ValidationFeeChargingMode, ValidationFeeGovernanceVotingModeV1,
+        ValidationFeeParliamentAuthorizationV1, ValidationFeePolicyRegistryEntryV1,
         ValidationFeePolicyRegistryV1, ValidationFeePolicySnapshotStatusV1, ValidationFeePolicyV1,
         ValidationFeePolicyWitnessProofV1, ValidationFeeTreasuryPayoutBindingV1,
     },
@@ -122,8 +123,8 @@ pub struct ValidationFeeVerifiedPolicyProjectionV1 {
     pub head_policy_version: u64,
     /// Lowercase hash of the latest enacted policy.
     pub head_policy_hash: String,
-    /// Complete policy entry effective at the evaluated height, if one exists.
-    pub current_policy: Option<ValidationFeePolicyRegistryEntryV1>,
+    /// JSON-safe complete policy/evidence projection effective at the evaluated height.
+    pub current_policy: Option<ValidationFeeVerifiedCurrentPolicyV1>,
     /// Caller-pinned checkpoint height at which local finality verification began.
     pub trusted_checkpoint_height: u64,
     /// Lowercase caller-pinned checkpoint context id.
@@ -138,6 +139,286 @@ pub struct ValidationFeeVerifiedPolicyProjectionV1 {
     pub observed_ledger_tip_height: u64,
     /// Whether another bounded proof page is required.
     pub more_available: bool,
+}
+
+/// Exact JSON-safe mobile policy shape derived only from a verified registry entry.
+#[derive(
+    Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+pub struct ValidationFeeVerifiedCurrentPolicyV1 {
+    /// Canonical decimal policy version.
+    #[norito(rename = "activePolicyVersion")]
+    pub active_policy_version: String,
+    /// Canonical lowercase Iroha policy hash.
+    #[norito(rename = "activePolicyHash")]
+    pub active_policy_hash: String,
+    /// Canonical public fee-asset definition address.
+    #[norito(rename = "feeAssetDefinitionId")]
+    pub fee_asset_definition_id: String,
+    /// Fee-asset decimal scale.
+    #[norito(rename = "feeScale")]
+    pub fee_scale: u8,
+    /// Exact fee minor units as a canonical decimal string.
+    #[norito(rename = "feeMinorUnits")]
+    pub fee_minor_units: String,
+    /// Exact charging mode.
+    #[norito(rename = "chargingMode")]
+    pub charging_mode: String,
+    /// First active height as a canonical decimal string.
+    #[norito(rename = "effectiveFromHeight")]
+    pub effective_from_height: String,
+    /// Exclusive expiry height as a canonical decimal string, when present.
+    #[norito(rename = "expiresAfterHeight")]
+    pub expires_after_height: Option<String>,
+    /// Complete policy and payout-lifecycle Parliament evidence.
+    pub parliament: ValidationFeeVerifiedParliamentV1,
+    /// Complete immutable payout binding.
+    pub payout: ValidationFeeVerifiedPayoutV1,
+}
+
+/// Complete policy and payout-lifecycle Parliament evidence.
+#[derive(
+    Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+pub struct ValidationFeeVerifiedParliamentV1 {
+    /// Authorization for the policy proposal.
+    #[norito(rename = "validationFeePolicy")]
+    pub validation_fee_policy: ValidationFeeVerifiedParliamentProposalV1,
+    /// Authorization for the exact payout-lifecycle proposal.
+    #[norito(rename = "payoutLifecycle")]
+    pub payout_lifecycle: ValidationFeeVerifiedParliamentProposalV1,
+    /// Canonical Iroha hash sealing the payout binding.
+    #[norito(rename = "payoutLifecycleSealHash")]
+    pub payout_lifecycle_seal_hash: String,
+}
+
+/// Complete JSON-safe authorization for one enacted Parliament proposal.
+#[derive(
+    Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+pub struct ValidationFeeVerifiedParliamentProposalV1 {
+    /// Exact proposal kind expected by mobile runtime configuration.
+    pub proposal_kind: String,
+    /// Raw native proposal fingerprint in canonical lowercase hexadecimal.
+    pub proposal_id: String,
+    /// Fingerprint of the exact typed proposal preimage.
+    pub payload_hash: String,
+    /// Raw Parliament roster commitment in canonical lowercase hexadecimal.
+    pub parliament_roster_root: String,
+    /// Exact referendum and enactment window.
+    pub enactment_window: ValidationFeeVerifiedEnactmentWindowV1,
+    /// Complete finalized PLAIN referendum evidence.
+    pub finalization: ValidationFeeVerifiedFinalizationV1,
+}
+
+/// JSON-safe Parliament referendum and enactment heights.
+#[derive(
+    Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+pub struct ValidationFeeVerifiedEnactmentWindowV1 {
+    /// Inclusive referendum opening height.
+    pub opens_at_height: String,
+    /// Inclusive referendum closing height.
+    pub closes_at_height: String,
+    /// Height at which the approved proposal was enacted.
+    pub enacted_at_height: String,
+}
+
+/// Complete JSON-safe deterministic PLAIN referendum result.
+#[derive(
+    Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+pub struct ValidationFeeVerifiedFinalizationV1 {
+    /// Native policy or payout-lifecycle proposal identifier.
+    pub proposal_id: String,
+    /// Native referendum identifier.
+    pub referendum_id: String,
+    /// Finalization height as a canonical decimal string.
+    pub finalized_at_height: String,
+    /// Exact first-release voting mode (`PLAIN`).
+    pub mode: String,
+    /// Final approve weight as a canonical full-range u128 decimal string.
+    pub approve: String,
+    /// Final reject weight as a canonical full-range u128 decimal string.
+    pub reject: String,
+    /// Final abstain weight as a canonical full-range u128 decimal string.
+    pub abstain: String,
+    /// Minimum turnout as a canonical full-range u128 decimal string.
+    pub min_turnout: String,
+    /// Approval threshold numerator as a canonical decimal string.
+    pub approval_threshold_numerator: String,
+    /// Approval threshold denominator as a canonical decimal string.
+    pub approval_threshold_denominator: String,
+    /// Final deterministic decision.
+    pub approved: bool,
+}
+
+/// Complete JSON-safe immutable payout binding.
+#[derive(
+    Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+pub struct ValidationFeeVerifiedPayoutV1 {
+    /// Canonical deployed contract address.
+    #[norito(rename = "contractAddress")]
+    pub contract_address: String,
+    /// Raw SHA-256 contract artifact digest in lowercase hexadecimal.
+    #[norito(rename = "codeHash")]
+    pub code_hash: String,
+    /// Exact autonomous entrypoint.
+    pub entrypoint: String,
+    /// Canonical public SBD asset-definition address.
+    #[norito(rename = "sbdAssetDefinitionId")]
+    pub sbd_asset_definition_id: String,
+    /// Canonical public XOR asset-definition address.
+    #[norito(rename = "xorAssetDefinitionId")]
+    pub xor_asset_definition_id: String,
+    /// Canonical non-signable contract treasury account.
+    #[norito(rename = "treasuryAccountId")]
+    pub treasury_account_id: String,
+    /// Canonical pool vault account.
+    #[norito(rename = "vaultAccountId")]
+    pub vault_account_id: String,
+    /// Exact SBD payout batch in fee-asset minor units.
+    #[norito(rename = "batchSbdMinorUnits")]
+    pub batch_sbd_minor_units: String,
+    /// SBD asset scale.
+    #[norito(rename = "sbdScale")]
+    pub sbd_scale: u8,
+    /// Inclusive minimum XOR output as a canonical decimal string.
+    #[norito(rename = "xorOutputMin")]
+    pub xor_output_min: String,
+    /// Inclusive maximum XOR output as a canonical decimal string.
+    #[norito(rename = "xorOutputMax")]
+    pub xor_output_max: String,
+    /// Four ordered validator payout recipients.
+    pub recipients: Vec<ValidationFeeVerifiedPayoutRecipientV1>,
+}
+
+/// One exact payout recipient; no unproved validator identity is projected.
+#[derive(
+    Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+pub struct ValidationFeeVerifiedPayoutRecipientV1 {
+    /// Canonical recipient account.
+    pub account_id: String,
+    /// Exact payout share in basis points.
+    pub share_basis_points: u16,
+}
+
+fn verified_parliament_proposal(
+    proposal_kind: &str,
+    authorization: &ValidationFeeParliamentAuthorizationV1,
+) -> Result<ValidationFeeVerifiedParliamentProposalV1, String> {
+    if authorization.proposal_id != authorization.proposal_fingerprint {
+        return Err(
+            "validation-fee Parliament proposal id differs from its typed payload hash".to_owned(),
+        );
+    }
+    if authorization.finalization.mode != ValidationFeeGovernanceVotingModeV1::Plain {
+        return Err("validation-fee Parliament projection requires PLAIN finalization".to_owned());
+    }
+    let proposal_id = hex::encode(authorization.proposal_id);
+    let finalization = authorization.finalization;
+    Ok(ValidationFeeVerifiedParliamentProposalV1 {
+        proposal_kind: proposal_kind.to_owned(),
+        proposal_id: proposal_id.clone(),
+        payload_hash: hex::encode(authorization.proposal_fingerprint),
+        parliament_roster_root: hex::encode(authorization.proposal_time_roster_root),
+        enactment_window: ValidationFeeVerifiedEnactmentWindowV1 {
+            opens_at_height: authorization.referendum_window.lower.to_string(),
+            closes_at_height: authorization.referendum_window.upper.to_string(),
+            enacted_at_height: authorization.enacted_at_height.to_string(),
+        },
+        finalization: ValidationFeeVerifiedFinalizationV1 {
+            proposal_id,
+            referendum_id: hex::encode(finalization.referendum_id),
+            finalized_at_height: finalization.finalized_at_height.to_string(),
+            mode: "PLAIN".to_owned(),
+            approve: finalization.approve.to_string(),
+            reject: finalization.reject.to_string(),
+            abstain: finalization.abstain.to_string(),
+            min_turnout: finalization.min_turnout.to_string(),
+            approval_threshold_numerator: finalization.approval_threshold_numerator.to_string(),
+            approval_threshold_denominator: finalization.approval_threshold_denominator.to_string(),
+            approved: finalization.approved,
+        },
+    })
+}
+
+fn verified_current_policy(
+    entry: &ValidationFeePolicyRegistryEntryV1,
+) -> Result<Option<ValidationFeeVerifiedCurrentPolicyV1>, String> {
+    if entry.policy.charging_mode == ValidationFeeChargingMode::Disabled {
+        return Ok(None);
+    }
+    let payout = entry
+        .policy
+        .treasury_payout_binding
+        .as_ref()
+        .ok_or_else(|| "enabled validation-fee policy has no payout binding".to_owned())?;
+    let payout_lifecycle = entry
+        .payout_lifecycle
+        .as_ref()
+        .ok_or_else(|| "enabled validation-fee policy has no payout lifecycle".to_owned())?;
+    if payout.invariant_error().is_some() || payout_lifecycle.invariant_error().is_some() {
+        return Err("enabled validation-fee payout binding or lifecycle is invalid".into());
+    }
+    let recipients = payout
+        .recipients
+        .iter()
+        .map(|recipient| ValidationFeeVerifiedPayoutRecipientV1 {
+            account_id: recipient.account_id.to_string(),
+            // The protected payout invariant fixes exactly four equal 25% shares.
+            share_basis_points: 2_500,
+        })
+        .collect();
+    Ok(Some(ValidationFeeVerifiedCurrentPolicyV1 {
+        active_policy_version: entry.policy.policy_version.to_string(),
+        active_policy_hash: hex::encode(entry.policy_hash),
+        fee_asset_definition_id: entry.policy.ds_asset_id.to_string(),
+        fee_scale: entry.policy.ds_scale,
+        // The protected enabled policy invariant fixes exactly 0.10 SBD at scale two.
+        fee_minor_units: "10".to_owned(),
+        charging_mode: "PER_QUALIFYING_TRANSFER_INSTRUCTION".to_owned(),
+        effective_from_height: entry.policy.effective_from_height.to_string(),
+        expires_after_height: entry
+            .policy
+            .expires_after_height
+            .map(|height| height.to_string()),
+        parliament: ValidationFeeVerifiedParliamentV1 {
+            validation_fee_policy: verified_parliament_proposal(
+                "ValidationFeePolicyV1",
+                &entry.parliament_authorization,
+            )?,
+            payout_lifecycle: verified_parliament_proposal(
+                "ValidationFeePayoutLifecycleV1",
+                &payout_lifecycle.parliament_authorization,
+            )?,
+            payout_lifecycle_seal_hash: hex::encode(payout_lifecycle.lifecycle_seal),
+        },
+        payout: ValidationFeeVerifiedPayoutV1 {
+            contract_address: payout.contract_address.to_string(),
+            code_hash: hex::encode(payout.code_hash),
+            entrypoint: payout.entrypoint.to_string(),
+            sbd_asset_definition_id: payout.sbd_asset_id.to_string(),
+            xor_asset_definition_id: payout.xor_asset_id.to_string(),
+            treasury_account_id: payout.treasury_account_id.to_string(),
+            vault_account_id: payout.pool_vault_account_id.to_string(),
+            // The protected lifecycle invariant fixes exactly 10 SBD at scale two.
+            batch_sbd_minor_units: "1000".to_owned(),
+            sbd_scale: entry.policy.ds_scale,
+            xor_output_min: payout.min_xor_out.to_string(),
+            xor_output_max: payout.max_xor_out.to_string(),
+            recipients,
+        },
+    }))
 }
 
 impl ValidationFeeCurrentPolicyProofV1 {
@@ -161,13 +442,13 @@ impl ValidationFeeCurrentPolicyProofV1 {
         {
             return Err("unsupported validation-fee proof version or invalid trust anchor".into());
         }
-        require_nonzero_hash(
+        require_canonical_iroha_hash(
             "trusted validation-fee checkpoint context id",
             &trusted_checkpoint_context_id,
         )?;
         let evaluated_block_hash =
             exact_lower_hex_32("evaluated_block_hash", &self.evaluated_block_hash)?;
-        require_nonzero_hash("evaluated block hash", &evaluated_block_hash)?;
+        require_canonical_iroha_hash("evaluated block hash", &evaluated_block_hash)?;
         if self.finality_chain.is_empty()
             || self.finality_chain.len() > VALIDATION_FEE_POLICY_PROOF_MAX_FINALITY_PROOFS
         {
@@ -310,9 +591,14 @@ impl ValidationFeeCurrentPolicyProofV1 {
             trusted_checkpoint_height,
             trusted_checkpoint_context_id,
         )?;
-        if bound_genesis_hash == [0; 32] || policy_chain_genesis_hash == [0; 32] {
-            return Err("validation-fee immutable binding contains a zero hash".into());
-        }
+        require_canonical_iroha_hash(
+            "validation-fee immutable binding genesis hash",
+            &bound_genesis_hash,
+        )?;
+        require_canonical_iroha_hash(
+            "validation-fee immutable binding policy-chain genesis hash",
+            &policy_chain_genesis_hash,
+        )?;
         let registry = self
             .registry
             .as_ref()
@@ -348,6 +634,11 @@ impl ValidationFeeCurrentPolicyProofV1 {
         let registry_hash = registry
             .snapshot_hash()
             .map_err(|error| format!("validation-fee registry hash failed: {error}"))?;
+        let current_policy = registry
+            .effective_entry_at_height(self.evaluated_block_height)
+            .map(verified_current_policy)
+            .transpose()?
+            .flatten();
         Ok(ValidationFeeVerifiedPolicyProjectionV1 {
             schema: VALIDATION_FEE_VERIFIED_POLICY_PROJECTION_SCHEMA_NAME.to_owned(),
             version: VALIDATION_FEE_POLICY_PROOF_VERSION_V1,
@@ -357,9 +648,7 @@ impl ValidationFeeCurrentPolicyProofV1 {
             registry_hash: hex::encode(registry_hash),
             head_policy_version: head.policy.policy_version,
             head_policy_hash: hex::encode(head.policy_hash),
-            current_policy: registry
-                .effective_entry_at_height(self.evaluated_block_height)
-                .cloned(),
+            current_policy,
             trusted_checkpoint_height,
             trusted_checkpoint_context_id: hex::encode(trusted_checkpoint_context_id),
             evaluated_block_height: self.evaluated_block_height,
@@ -428,13 +717,41 @@ pub struct ValidationFeeProposalReferendumV1 {
 #[norito(deny_unknown_fields)]
 pub struct ValidationFeeParliamentSnapshotV1 {
     /// Proposal-local sortition epoch.
-    pub selection_epoch: u64,
+    pub selection_epoch: String,
     /// Proposal-specific sortition beacon.
     pub beacon: [u8; 32],
     /// Commitment to all seven exact body rosters.
     pub roster_root: [u8; 32],
     /// Independently drawn body rosters.
     pub bodies: ParliamentBodies,
+}
+
+/// JSON-safe governance pipeline retained with a proposal.
+#[derive(
+    Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+pub struct ValidationFeeProposalPipelineV1 {
+    /// Ordered stage records.
+    pub stages: Vec<ValidationFeeProposalPipelineStageV1>,
+}
+
+/// One JSON-safe proposal pipeline stage.
+#[derive(
+    Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+pub struct ValidationFeeProposalPipelineStageV1 {
+    /// Stable governance stage name.
+    pub stage: String,
+    /// Block height at which the stage began.
+    pub started_at: String,
+    /// Inclusive stage deadline, when configured.
+    pub deadline: Option<String>,
+    /// Completion height, when completed or failed.
+    pub completed_at: Option<String>,
+    /// Stable failure description, when the stage failed.
+    pub failure: Option<String>,
 }
 
 /// One complete typed validation-fee proposal read from protected governance state.
@@ -450,9 +767,11 @@ pub struct ValidationFeeProposalRecordV1 {
     /// Exact native validation-fee proposal kind and payload.
     pub proposal_kind: ProposalKind,
     /// Height at which the proposal was created.
-    pub created_height: u64,
+    pub created_height: String,
     /// Current proposal status.
     pub status: ValidationFeeProposalStatusV1,
+    /// Exact governance pipeline with JSON-safe heights.
+    pub pipeline: ValidationFeeProposalPipelineV1,
     /// Exact retained referendum.
     pub referendum: ValidationFeeProposalReferendumV1,
     /// Proposal-time seven-body Parliament snapshot.
@@ -460,7 +779,7 @@ pub struct ValidationFeeProposalRecordV1 {
     /// Deterministic finalized tally, when finalized.
     pub finalization_evidence: Option<GovernanceFinalizationEvidence>,
     /// Height at which enactment completed.
-    pub enacted_at_height: Option<u64>,
+    pub enacted_at_height: Option<String>,
 }
 
 /// Canonically ordered list of all validation-fee proposals.
@@ -485,6 +804,115 @@ pub struct ValidationFeeProposalDetailV1 {
     pub version: u16,
     /// Exact proposal record.
     pub proposal: ValidationFeeProposalRecordV1,
+    /// Latest committed height used for this projection.
+    pub current_height: String,
+    /// Exact progress for every required proposal-local Parliament body.
+    pub body_progress: Vec<ValidationFeeParliamentBodyProgressV1>,
+    /// Live or finalized citizen tally.
+    pub tally: ValidationFeeProposalTallyV1,
+    /// Current retained citizen locks for this referendum.
+    pub locks: ValidationFeeProposalLocksV1,
+}
+
+/// Optional account selector for proposal-local Parliament decision projection.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Default,
+    JsonDeserialize,
+    JsonSerialize,
+    NoritoDeserialize,
+    NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+pub struct ValidationFeeProposalDetailQueryV1 {
+    /// Canonical account whose exact seated-body decision should be projected.
+    #[norito(default)]
+    pub account_id: Option<AccountId>,
+}
+
+/// Exact progress for one proposal-local Parliament body.
+#[derive(
+    Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+pub struct ValidationFeeParliamentBodyProgressV1 {
+    /// Parliament body.
+    pub body: ParliamentBody,
+    /// Exact immutable seated members.
+    pub members: Vec<AccountId>,
+    /// Exact immutable alternates, who are not eligible to vote.
+    pub alternates: Vec<AccountId>,
+    /// Number of approvals required for this actual roster.
+    pub required: String,
+    /// Recorded approvals.
+    pub approve: String,
+    /// Recorded rejections.
+    pub reject: String,
+    /// Recorded abstentions.
+    pub abstain: String,
+    /// Whether the approval quorum has been reached.
+    pub approval_quorum_met: bool,
+    /// Whether the rejection quorum has been reached.
+    pub rejection_quorum_met: bool,
+    /// Selected account's exact decision, encoded as `APPROVE`, `REJECT`, or `ABSTAIN`.
+    pub current_account_decision: Option<String>,
+}
+
+/// Citizen referendum tally projected from retained locks or finalization evidence.
+#[derive(
+    Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+pub struct ValidationFeeProposalTallyV1 {
+    /// Aye weight.
+    pub approve: String,
+    /// Nay weight.
+    pub reject: String,
+    /// Abstain weight.
+    pub abstain: String,
+    /// Complete turnout.
+    pub turnout: String,
+    /// Configured minimum turnout.
+    pub min_turnout: String,
+    /// Approval fraction numerator.
+    pub approval_threshold_numerator: String,
+    /// Approval fraction denominator.
+    pub approval_threshold_denominator: String,
+    /// Final decision, or `None` while the referendum is not finalized.
+    pub approved: Option<bool>,
+}
+
+/// JSON-safe retained citizen locks keyed by canonical voter account.
+#[derive(
+    Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+pub struct ValidationFeeProposalLocksV1 {
+    /// Current voter lock records.
+    pub locks: std::collections::BTreeMap<AccountId, ValidationFeeProposalLockV1>,
+}
+
+/// One exact retained citizen ballot lock.
+#[derive(
+    Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+pub struct ValidationFeeProposalLockV1 {
+    /// Canonical voter account.
+    pub owner: AccountId,
+    /// Exact locked quantity.
+    pub amount: String,
+    /// Exact accumulated slash amount.
+    pub slashed: String,
+    /// Inclusive lock expiry height.
+    pub expiry_height: String,
+    /// Canonical ballot direction (`Aye`, `Nay`, or `Abstain`).
+    pub direction: String,
+    /// Requested conviction duration in blocks.
+    pub duration_blocks: String,
 }
 
 /// Exact native validation-fee payload requested from the draft endpoint.
@@ -588,9 +1016,11 @@ fn exact_lower_hex_32(label: &str, value: &str) -> Result<[u8; 32], String> {
         .map_err(|_| format!("{label} must decode to exactly 32 bytes"))
 }
 
-fn require_nonzero_hash(label: &str, value: &[u8; 32]) -> Result<(), String> {
-    if value.iter().all(|byte| *byte == 0) {
-        return Err(format!("{label} must be non-zero"));
+fn require_canonical_iroha_hash(label: &str, value: &[u8; 32]) -> Result<(), String> {
+    if value[31] & 1 == 0 {
+        return Err(format!(
+            "{label} must carry the canonical Iroha hash marker"
+        ));
     }
     Ok(())
 }
@@ -598,15 +1028,158 @@ fn require_nonzero_hash(label: &str, value: &[u8; 32]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroha_data_model::validation_fee::{
+        ValidationFeeFinalizationEvidenceV1, ValidationFeeGovernanceWindowV1,
+    };
 
     #[test]
-    fn nonzero_hash_validation_accepts_even_ending_hashes() {
-        require_nonzero_hash("checkpoint", &[0x02; 32])
-            .expect("Iroha hashes have no parity validity bit");
+    fn iroha_hash_validation_requires_the_canonical_marker() {
+        require_canonical_iroha_hash("checkpoint", &[0x03; 32])
+            .expect("odd-ending Iroha hash is canonical");
         assert_eq!(
-            require_nonzero_hash("checkpoint", &[0; 32]),
-            Err("checkpoint must be non-zero".to_owned())
+            require_canonical_iroha_hash("checkpoint", &[0x02; 32]),
+            Err("checkpoint must carry the canonical Iroha hash marker".to_owned())
         );
+        assert_eq!(
+            require_canonical_iroha_hash("checkpoint", &[0; 32]),
+            Err("checkpoint must carry the canonical Iroha hash marker".to_owned())
+        );
+    }
+
+    #[test]
+    fn verified_parliament_projection_preserves_full_range_integers_as_strings() {
+        let proposal_id = [0x02; 32];
+        let authorization = ValidationFeeParliamentAuthorizationV1 {
+            proposal_id,
+            proposal_fingerprint: proposal_id,
+            proposal_time_roster_root: [0x04; 32],
+            referendum_window: ValidationFeeGovernanceWindowV1 {
+                lower: 1,
+                upper: u64::MAX,
+            },
+            finalization: ValidationFeeFinalizationEvidenceV1 {
+                referendum_id: proposal_id,
+                finalized_at_height: u64::MAX - 1,
+                mode: ValidationFeeGovernanceVotingModeV1::Plain,
+                approve: u128::MAX,
+                reject: 0,
+                abstain: 0,
+                min_turnout: u128::MAX,
+                approval_threshold_numerator: u64::MAX,
+                approval_threshold_denominator: u64::MAX,
+                approved: true,
+            },
+            enacted_at_height: u64::MAX,
+        };
+        let projected = verified_parliament_proposal("ValidationFeePolicyV1", &authorization)
+            .expect("project verified Parliament authorization");
+        assert_eq!(projected.proposal_id, projected.payload_hash);
+        assert_eq!(projected.finalization.approve, u128::MAX.to_string());
+        assert_eq!(
+            projected.finalization.approval_threshold_numerator,
+            u64::MAX.to_string()
+        );
+        assert_eq!(
+            projected.enactment_window.enacted_at_height,
+            u64::MAX.to_string()
+        );
+
+        let json = norito::json::to_string(&projected).expect("serialize JSON-safe projection");
+        assert!(json.contains(r#""proposal_kind":"ValidationFeePolicyV1""#));
+        assert!(json.contains(&format!(r#""approve":"{}""#, u128::MAX)));
+        assert!(json.contains(&format!(r#""approval_threshold_numerator":"{}""#, u64::MAX)));
+        assert!(!json.contains("validator_id"));
+        let roundtrip: ValidationFeeVerifiedParliamentProposalV1 =
+            norito::json::from_str(&json).expect("roundtrip JSON-safe projection");
+        assert_eq!(roundtrip, projected);
+    }
+
+    #[test]
+    fn verified_current_policy_shape_has_exact_mobile_keys_and_recipient_evidence() {
+        let proposal = ValidationFeeVerifiedParliamentProposalV1 {
+            proposal_kind: "ValidationFeePolicyV1".to_owned(),
+            proposal_id: "02".repeat(32),
+            payload_hash: "02".repeat(32),
+            parliament_roster_root: "04".repeat(32),
+            enactment_window: ValidationFeeVerifiedEnactmentWindowV1 {
+                opens_at_height: "1".to_owned(),
+                closes_at_height: "2".to_owned(),
+                enacted_at_height: "2".to_owned(),
+            },
+            finalization: ValidationFeeVerifiedFinalizationV1 {
+                proposal_id: "02".repeat(32),
+                referendum_id: "02".repeat(32),
+                finalized_at_height: "2".to_owned(),
+                mode: "PLAIN".to_owned(),
+                approve: u128::MAX.to_string(),
+                reject: "0".to_owned(),
+                abstain: "0".to_owned(),
+                min_turnout: u128::MAX.to_string(),
+                approval_threshold_numerator: "1".to_owned(),
+                approval_threshold_denominator: "2".to_owned(),
+                approved: true,
+            },
+        };
+        let current = ValidationFeeVerifiedCurrentPolicyV1 {
+            active_policy_version: "1".to_owned(),
+            active_policy_hash: "03".repeat(32),
+            fee_asset_definition_id: "asset".to_owned(),
+            fee_scale: 2,
+            fee_minor_units: "10".to_owned(),
+            charging_mode: "PER_QUALIFYING_TRANSFER_INSTRUCTION".to_owned(),
+            effective_from_height: "120961".to_owned(),
+            expires_after_height: None,
+            parliament: ValidationFeeVerifiedParliamentV1 {
+                validation_fee_policy: proposal.clone(),
+                payout_lifecycle: ValidationFeeVerifiedParliamentProposalV1 {
+                    proposal_kind: "ValidationFeePayoutLifecycleV1".to_owned(),
+                    ..proposal
+                },
+                payout_lifecycle_seal_hash: "05".repeat(32),
+            },
+            payout: ValidationFeeVerifiedPayoutV1 {
+                contract_address: "contract".to_owned(),
+                code_hash: "02".repeat(32),
+                entrypoint: "autonomous_validation_fee_tick".to_owned(),
+                sbd_asset_definition_id: "asset".to_owned(),
+                xor_asset_definition_id: "xor".to_owned(),
+                treasury_account_id: "treasury".to_owned(),
+                vault_account_id: "vault".to_owned(),
+                batch_sbd_minor_units: "1000".to_owned(),
+                sbd_scale: 2,
+                xor_output_min: "4".to_owned(),
+                xor_output_max: "100".to_owned(),
+                recipients: vec![ValidationFeeVerifiedPayoutRecipientV1 {
+                    account_id: "recipient".to_owned(),
+                    share_basis_points: 2_500,
+                }],
+            },
+        };
+        let json = norito::json::to_string(&current).expect("serialize current policy");
+        for key in [
+            "activePolicyVersion",
+            "activePolicyHash",
+            "feeAssetDefinitionId",
+            "feeScale",
+            "feeMinorUnits",
+            "chargingMode",
+            "effectiveFromHeight",
+            "expiresAfterHeight",
+            "validationFeePolicy",
+            "payoutLifecycle",
+            "payoutLifecycleSealHash",
+            "contractAddress",
+            "batchSbdMinorUnits",
+            "account_id",
+            "share_basis_points",
+        ] {
+            assert!(json.contains(&format!(r#""{key}":"#)), "missing {key}");
+        }
+        assert!(!json.contains("validator_id"));
+        assert!(!json.contains(r#""policy":"#));
+        let roundtrip: ValidationFeeVerifiedCurrentPolicyV1 =
+            norito::json::from_str(&json).expect("roundtrip current policy");
+        assert_eq!(roundtrip, current);
     }
 
     #[test]
@@ -623,5 +1196,32 @@ mod tests {
             checkpoint = next;
         }
         assert_eq!(pages, vec![(1, 64), (64, 127), (127, 190), (190, 250)]);
+    }
+
+    #[test]
+    fn governance_windows_preserve_full_u64_decimal_strings() {
+        let window: AtWindow = norito::json::from_str(
+            r#"{"lower":"9007199254740993","upper":"18446744073709551615"}"#,
+        )
+        .expect("parse exact heights beyond the JavaScript safe-integer range");
+        assert_eq!(window.lower, 9_007_199_254_740_993);
+        assert_eq!(window.upper, u64::MAX);
+        assert_eq!(
+            norito::json::to_json(&window).expect("serialize exact heights"),
+            r#"{"lower":"9007199254740993","upper":"18446744073709551615"}"#
+        );
+
+        for invalid in [
+            r#"{"lower":1,"upper":"2"}"#,
+            r#"{"lower":"01","upper":"2"}"#,
+            r#"{"lower":"+1","upper":"2"}"#,
+            r#"{"lower":"1.0","upper":"2"}"#,
+            r#"{"lower":"18446744073709551616","upper":"2"}"#,
+        ] {
+            assert!(
+                norito::json::from_str::<AtWindow>(invalid).is_err(),
+                "non-canonical governance integer must be rejected: {invalid}",
+            );
+        }
     }
 }

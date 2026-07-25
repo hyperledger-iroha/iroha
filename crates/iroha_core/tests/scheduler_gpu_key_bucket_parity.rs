@@ -3,10 +3,11 @@
 //! scheduling outcomes or final state. This toggles the knob and compares events
 //! and balances for a mixed set of transactions.
 
-use std::borrow::Cow;
+use std::{borrow::Cow, sync::Arc};
 
 use iroha_core::{
     block::{BlockBuilder, ValidBlock},
+    governance::manifest::LaneManifestRegistry,
     state::{StateReadOnly, WorldReadOnly},
 };
 use iroha_data_model::prelude::*;
@@ -16,6 +17,7 @@ mod snapshots;
 
 fn run_with_gpu_bucket(
     gpu_key_bucket: bool,
+    chain_id: &ChainId,
     txs: Vec<SignedTransaction>,
     alice_id: &AccountId,
     bob_id: &AccountId,
@@ -36,7 +38,12 @@ fn run_with_gpu_bucket(
     let world = iroha_core::state::World::with([domain], [acc_a, acc_b], [ad]);
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query = iroha_core::query::store::LiveQueryStore::start_test();
-    let mut state = iroha_core::state::State::new_for_testing(world, kura, query);
+    let mut state =
+        iroha_core::state::State::new_with_chain_for_testing(world, kura, query, chain_id.clone());
+    let nexus = state.nexus_snapshot();
+    state.install_lane_manifests(&Arc::new(
+        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
+    ));
     // Toggle GPU key-bucketing knob
     let mut cfg = state.view().pipeline().clone();
     cfg.gpu_key_bucket = gpu_key_bucket;
@@ -130,8 +137,9 @@ fn scheduler_gpu_key_bucket_parity() {
     ];
 
     // Compare with gpu_key_bucket OFF vs ON
-    let (json_off, state_off) = run_with_gpu_bucket(false, txs.clone(), &alice_id, &bob_id);
-    let (json_on, state_on) = run_with_gpu_bucket(true, txs, &alice_id, &bob_id);
+    let (json_off, state_off) =
+        run_with_gpu_bucket(false, &chain_id, txs.clone(), &alice_id, &bob_id);
+    let (json_on, state_on) = run_with_gpu_bucket(true, &chain_id, txs, &alice_id, &bob_id);
 
     assert_eq!(
         json_off, json_on,

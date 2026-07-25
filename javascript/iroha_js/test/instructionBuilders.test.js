@@ -1627,7 +1627,7 @@ test("buildProposeDeployContractInstruction normalizes hashes and window", () =>
       code_hash_hex: "aa".repeat(32),
       abi_hash_hex: Buffer.alloc(32, 0xbb).toString("hex"),
       abi_version: "1",
-      window: { lower: 10, upper: 20 },
+      window: { lower: "10", upper: "20" },
       mode: "Plain",
     },
   };
@@ -1792,14 +1792,14 @@ test("buildCastZkBallotInstruction requires complete lock hints", () => {
 });
 
 test("buildCastZkBallotInstruction rejects noncanonical owner", () => {
-  const nonCanonicalOwner = ACCOUNT_ADDRESS.toI105(0x02f2);
+  const malformedOwner = ACCOUNT_ID.replace(/^sora/u, "ｓｏｒａ");
   assert.throws(
     () =>
       buildCastZkBallotInstruction({
         electionId: "ref-5",
         proof: Buffer.from([0x06]),
         publicInputs: {
-          owner: nonCanonicalOwner,
+          owner: malformedOwner,
           amount: "250",
           duration_blocks: 12,
         },
@@ -1859,7 +1859,7 @@ test("buildEnactReferendumInstruction normalizes hashes and window defaults", ()
     EnactReferendum: {
       referendum_id: toByteArray(Buffer.alloc(32, 0x11)),
       preimage_hash: toByteArray(Buffer.alloc(32, 0xbb)),
-      at_window: { lower: 0, upper: 0 },
+      at_window: { lower: "0", upper: "0" },
     },
   };
   assert.deepEqual(instruction, expected);

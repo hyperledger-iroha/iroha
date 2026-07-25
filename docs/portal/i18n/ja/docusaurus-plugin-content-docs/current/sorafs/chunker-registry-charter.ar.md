@@ -57,7 +57,7 @@ ID: チャンカーレジストリチャーター
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+     cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - 広報番組の試合情報。
@@ -92,12 +92,12 @@ ID: チャンカーレジストリチャーター
 
 ## ツール
 
-- `sorafs_manifest_chunk_store` と `sorafs_manifest_stub` يوفّران:
+- `sorafs_manifest_chunk_store` と `sorafs_manifest_builder` يوفّران:
   - `--list-profiles` です。
   - `--promote-profile=<handle>` كتولية البيانات المعتمدة المستخدمة عند ترقية ملف.
   - `--json-out=-` は、stdout の標準出力をテストします。
 - يتم استدعاء `ensure_charter_compliance()` عند تشغيل الثنائيات ذات الصلة
-  (`manifest_chunk_store`、`provider_advert_stub`)。 يجب أن تفشل اختبارات CI إذا كانت
+  (`manifest_chunk_store`、`sorafs_provider_advert`)。 يجب أن تفشل اختبارات CI إذا كانت
   ありがとうございます。
 
 ## いいえ

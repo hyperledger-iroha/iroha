@@ -80,6 +80,23 @@ SORAFS_CHUNKER_EXPORT_VECTORS_RS = (
 SORAFS_CAR_FETCH_RS = (
     REPO_ROOT / "crates" / "sorafs_car" / "src" / "bin" / "sorafs_fetch.rs"
 )
+SORAFS_CAR_CARGO_TOML = REPO_ROOT / "crates" / "sorafs_car" / "Cargo.toml"
+SORAFS_MANIFEST_BUILDER_RS = (
+    REPO_ROOT
+    / "crates"
+    / "sorafs_car"
+    / "src"
+    / "bin"
+    / "sorafs_manifest_builder.rs"
+)
+SORAFS_PROVIDER_ADVERT_RS = (
+    REPO_ROOT
+    / "crates"
+    / "sorafs_car"
+    / "src"
+    / "bin"
+    / "sorafs_provider_advert.rs"
+)
 SORAFS_CAR_LOCAL_FETCH_RS = REPO_ROOT / "crates" / "sorafs_car" / "src" / "local_fetch.rs"
 SORAFS_REFERENCE_FFI_RS = (
     REPO_ROOT / "crates" / "sorafs_manifest" / "src" / "reference_ffi.rs"
@@ -93,12 +110,21 @@ SORAFS_VALIDATE_CLI_TEST_RS = (
 IROHA_CLIENT_RS = REPO_ROOT / "crates" / "iroha" / "src" / "client.rs"
 TORII_LIB_RS = REPO_ROOT / "crates" / "iroha_torii" / "src" / "lib.rs"
 TORII_SORAFS_API_RS = REPO_ROOT / "crates" / "iroha_torii" / "src" / "sorafs" / "api.rs"
+TORII_SORAFS_POP_API_RS = (
+    REPO_ROOT / "crates" / "iroha_torii" / "src" / "sorafs" / "pop_api.rs"
+)
 TORII_OPENAPI_RS = REPO_ROOT / "crates" / "iroha_torii" / "src" / "openapi.rs"
+TORII_ROUTE_CATALOG_RS = (
+    REPO_ROOT / "crates" / "iroha_torii_shared" / "src" / "route_catalog.rs"
+)
 IROHA_CLI_SORAFS_RS = REPO_ROOT / "crates" / "iroha_cli" / "src" / "commands" / "sorafs.rs"
 IROHA_P2P_PEER_RS = REPO_ROOT / "crates" / "iroha_p2p" / "src" / "peer.rs"
 IROHA_CORE_KISO_RS = REPO_ROOT / "crates" / "iroha_core" / "src" / "kiso.rs"
 IROHA_CONFIG_ACTUAL_RS = (
     REPO_ROOT / "crates" / "iroha_config" / "src" / "parameters" / "actual.rs"
+)
+IROHA_CONFIG_DEFAULTS_RS = (
+    REPO_ROOT / "crates" / "iroha_config" / "src" / "parameters" / "defaults.rs"
 )
 IROHA_CONFIG_USER_RS = (
     REPO_ROOT / "crates" / "iroha_config" / "src" / "parameters" / "user.rs"
@@ -744,6 +770,47 @@ def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+GENERATED_I18N_STUB_HEADER_RE = re.compile(
+    r"<!-- Auto-generated stub for [^<>\r\n]+ "
+    r"\((?P<lang>[a-z0-9-]+)\) translation\. "
+    r"Replace this content with the full translation\. -->\n\n"
+)
+
+
+def parse_localized_markdown_front_matter(
+    source: str,
+) -> tuple[dict[str, str], str, str | None]:
+    """Parse the single shallow front-matter block used by localized docs."""
+
+    delimiters = list(re.finditer(r"(?m)^---$", source))
+    if len(delimiters) != 2:
+        return {}, "", f"expected 2 front-matter delimiters, found {len(delimiters)}"
+
+    start, end = delimiters
+    prefix = source[: start.start()]
+    if start.end() >= len(source) or source[start.end()] != "\n":
+        return {}, prefix, "opening front-matter delimiter is not newline terminated"
+    if end.end() >= len(source) or source[end.end()] != "\n":
+        return {}, prefix, "closing front-matter delimiter is not newline terminated"
+
+    metadata: dict[str, str] = {}
+    metadata_text = source[start.end() + 1 : end.start()]
+    for line in metadata_text.splitlines():
+        if not line or line.lstrip().startswith("#"):
+            continue
+        if ":" not in line:
+            return {}, prefix, f"malformed front-matter line {line!r}"
+        key, value = line.split(":", 1)
+        key = key.strip()
+        if not key or key in metadata:
+            return {}, prefix, f"duplicate or empty front-matter key {key!r}"
+        metadata[key] = value.strip().strip('"').strip("'")
+
+    if not source[end.end() + 1 :].lstrip():
+        return {}, prefix, "localized document body is empty"
+    return metadata, prefix, None
+
+
 def function_source(path: Path, function_name: str) -> str:
     source_text = read(path)
     module = ast.parse(source_text)
@@ -1096,7 +1163,10 @@ def test_unshipped_matcher_helpers_have_negative_control_tests() -> None:
         if not tests
     }
 
-    assert len(helpers) == 43
+    # Governance DAG and PDP now have shipped public services, so both former
+    # route/CLI guard pairs left this inventory. PoP now has a shipped HTTP
+    # service as well, while its CLI guard intentionally remains active.
+    assert len(helpers) == 38
     assert missing_negative_controls == {}
 
 
@@ -1879,8 +1949,11 @@ def test_sorafs_soranet_handshake_admission_has_no_relaxation_path() -> None:
     assert "required: true" in user_config.split("fn parse(self) -> actual::SoranetPow", 1)[1].split(
         "/// Puzzle configuration supplied at the user level.", 1
     )[0]
-    assert "Some(actual::SoranetPuzzle" in user_config.split(
-        "fn parse(self) -> Option<actual::SoranetPuzzle>", 1
+    assert "puzzle: Some(puzzle.parse())" in user_config.split(
+        "fn parse(self) -> actual::SoranetPow", 1
+    )[1].split("/// Puzzle configuration supplied at the user level.", 1)[0]
+    assert "actual::SoranetPuzzle" in user_config.split(
+        "fn parse(self) -> actual::SoranetPuzzle", 1
     )[1].split("/// User-level configuration container for SoraNet privacy telemetry.", 1)[0]
 
     assert "SM handshake matching is mandatory" in apply_config_update
@@ -4458,16 +4531,23 @@ def test_top_level_sorafs_plan_localized_hashes_match_source() -> None:
         expected = hashlib.sha256(source.read_bytes()).hexdigest()
         for path in localized_paths:
             checked_localized += 1
-            actual = next(
-                (
-                    line.split(":", 1)[1].strip()
-                    for line in read(path).splitlines()
-                    if line.startswith("source_hash:")
-                ),
-                None,
-            )
-            if actual != expected:
-                mismatches[str(path.relative_to(REPO_ROOT))] = actual
+            metadata, _, parse_error = parse_localized_markdown_front_matter(read(path))
+            relative_path = str(path.relative_to(REPO_ROOT))
+            if parse_error is not None:
+                mismatches[relative_path] = parse_error
+                continue
+            if metadata.get("source") != str(source.relative_to(REPO_ROOT)):
+                mismatches[relative_path] = "wrong-source"
+                continue
+
+            status = metadata.get("status")
+            actual = metadata.get("source_hash")
+            if status in {"complete", "needs-translation"} and actual != expected:
+                mismatches[relative_path] = actual
+            elif status == "needs-review" and actual == expected:
+                mismatches[relative_path] = "needs-review-current"
+            elif status not in {"complete", "needs-review", "needs-translation"}:
+                mismatches[relative_path] = status
 
     assert checked_sources
     assert checked_localized
@@ -7895,7 +7975,9 @@ def test_sorafs_validate_release_packager_rejects_symlink_stage_entries() -> Non
     assert "def write_open_flags" in packager
     assert "def write_manifest_no_follow" in packager
     assert "write_sha256_sidecar()" in packager
-    assert "safe_remove_manifest_signature_output()" in packager
+    assert "validate_new_manifest_signature_output()" in packager
+    assert "snapshot_release_signing_input()" in packager
+    assert 'cd "$release_signing_snapshot_dir" && pwd -P' in packager
     assert "install_manifest_signature()" in packager
     assert "def write_all(fd, chunk)" in packager
     assert packager.count("def sync_output_parent(") >= 2
@@ -7919,10 +8001,13 @@ def test_sorafs_validate_release_packager_rejects_symlink_stage_entries() -> Non
     assert 'write_sha256_sidecar "$binary_sha_path"' in packager
     assert 'write_sha256_sidecar "$archive_sha_path"' in packager
     assert 'write_sha256_sidecar "$manifest_sha_path"' in packager
-    assert 'safe_remove_manifest_signature_output "$manifest_signature_path"' in packager
-    assert '-out "$signature_tmp_path"' in packager
+    assert '"${stage_dir}/${packaged_binary_name}" release-manifest' in packager
+    assert '--signing-seed "$manifest_signing_key"' in packager
+    assert '--signature-out "$signature_tmp_path"' in packager
+    assert '--signature "$manifest_signature_path"' in packager
+    assert "openssl" not in packager.lower()
     assert (
-        'install_manifest_signature "$signature_tmp_path" "$manifest_signature_path" "$manifest_path"'
+        '"$signature_source_path" "$manifest_signature_path" "$manifest_path"'
         in packager
     )
     assert '-out "$manifest_signature_path"' not in packager
@@ -7960,6 +8045,7 @@ def test_sorafs_validate_release_packager_rejects_symlink_stage_entries() -> Non
         "test_release_packager_writes_manifest_signature_through_hardened_path"
         in packager_test
     )
+    assert "test_release_packager_rejects_weak_ed25519_public_key" in packager_test
     assert "test_release_packager_rejects_symlinked_staged_entries" in packager_test
     assert (
         "test_release_packager_rejects_symlinked_output_parent_before_archive"
@@ -7967,6 +8053,10 @@ def test_sorafs_validate_release_packager_rejects_symlink_stage_entries() -> Non
     )
     assert (
         "test_release_packager_rejects_symlinked_manifest_signature_output"
+        in packager_test
+    )
+    assert (
+        "test_release_packager_does_not_clobber_existing_manifest_signature_output"
         in packager_test
     )
     assert (
@@ -8145,7 +8235,7 @@ def test_android_codegen_sorafs_fixture_replay_uses_no_follow_io() -> None:
         "test_test_council_signing_seed_rejects_symlink_and_existing_output"
         in replay_test
     )
-    assert "test_manifest_stub_receives_only_ephemeral_signing_key_path" in replay_test
+    assert "test_manifest_builder_receives_only_ephemeral_signing_key_path" in replay_test
     assert (
         "test_generated_manifest_requires_one_canonical_council_signature"
         in replay_test
@@ -8412,6 +8502,12 @@ def test_sorafs_docs_portal_package_summary_uses_no_follow_read() -> None:
     assert "os.fdopen(fd, \"r\", encoding=\"utf-8\")" in packager
     assert "for raw in read_summary_lines_no_follow(summary_path)" in packager
     assert "with open(summary_path" not in packager
+    assert re.search(r"\bmanifest\s+sign(?:\s|$)", packager) is None
+    assert "manifest verify-signature" not in packager
+    assert "--identity-token" not in packager
+    assert "--sigstore-" not in packager
+    assert "manifest.bundle.json" not in packager
+    assert "sign the aggregate release manifest" in packager
 
 
 def test_sorafs_docs_portal_pin_release_descriptor_uses_no_follow_io() -> None:
@@ -8440,10 +8536,21 @@ def test_sorafs_docs_portal_pin_release_descriptor_uses_no_follow_io() -> None:
     assert "target.write_text" not in pin_release
     assert ".read_text(" not in pin_release
     assert ".write_text(" not in pin_release
+    assert "manifest verify-signature" not in pin_release
+    assert "manifest sign" not in pin_release
+    assert "--identity-token" not in pin_release
+    assert "--include-token" not in pin_release
+    assert "manifest.bundle.json" not in pin_release
+    assert "external-aggregate-release-manifest" in pin_release
+    assert "scripts/release_sorafs_cli.sh" in pin_release
 
 
-def test_sorafs_shell_helpers_use_no_follow_json_reads() -> None:
+def test_sorafs_shell_helpers_use_hardened_release_and_no_follow_io() -> None:
     release_cli = read(SCRIPTS_DIR / "release_sorafs_cli.sh")
+    python_release_smoke_path = (
+        REPO_ROOT / "python" / "iroha_python" / "scripts" / "release_smoke.sh"
+    )
+    python_release_smoke = read(python_release_smoke_path)
     direct_smoke = read(SCRIPTS_DIR / "sorafs_direct_mode_smoke.sh")
     gateway_self_cert = read(SCRIPTS_DIR / "sorafs_gateway_self_cert.sh")
     gateway_probe = read(SCRIPTS_DIR / "telemetry" / "run_sorafs_gateway_probe.sh")
@@ -8451,7 +8558,7 @@ def test_sorafs_shell_helpers_use_no_follow_json_reads() -> None:
     direct_smoke_test = read(SCRIPTS_DIR / "tests" / "sorafs_direct_mode_smoke_test.py")
     gateway_probe_test = read(SCRIPTS_DIR / "tests" / "sorafs_gateway_probe_wrapper_test.py")
 
-    for script in (release_cli, direct_smoke, gateway_probe):
+    for script in (direct_smoke, gateway_probe):
         assert "def read_open_flags() -> int" in script
         assert 'getattr(os, "O_NOFOLLOW", 0)' in script
         assert "os.lstat(path)" in script
@@ -8461,22 +8568,30 @@ def test_sorafs_shell_helpers_use_no_follow_json_reads() -> None:
         assert "json.load(" in script
         assert "with open(" not in script
 
-    assert "identity_token_hash_blake3_hex" in release_cli
-    assert 'prepare_output_file_path "release bundle output"' in release_cli
-    assert 'prepare_output_file_path "release signature output"' in release_cli
-    assert 'prepare_output_file_path "sign summary"' in release_cli
-    assert 'prepare_output_file_path "verify summary"' in release_cli
+    assert "release_manifest_signing.py" in release_cli
+    assert "umask 077" in release_cli
+    assert "--external-signer" in release_cli
+    assert "--signing-public-key" in release_cli
+    assert "--trusted-signing-fingerprint" in release_cli
+    assert "--release-manifest-verifier" in release_cli
+    assert "--trusted-release-manifest-verifier-sha256" in release_cli
+    assert "manifest verify-signature" not in release_cli
+    assert re.search(r"\bmanifest\s+sign(?:\s|$)", release_cli) is None
+    assert "--identity-token" not in release_cli
+    assert "--manifest-bundle" not in release_cli
+    assert 'prepare_new_output_file_path "release signature output"' in release_cli
+    assert 'prepare_new_output_file_path "release public-key output"' in release_cli
     assert "require_option_value" in release_cli
     assert "validate_existing_file_path" in release_cli
-    assert 'validate_existing_file_path "manifest input"' in release_cli
-    assert 'validate_existing_file_path "chunk plan input"' in release_cli
-    assert 'validate_existing_file_path "chunk summary input"' in release_cli
-    assert 'validate_existing_file_path "identity token file"' in release_cli
-    assert 'validate_existing_executable_file_path "sorafs_cli binary"' in release_cli
-    assert "sign summary must not be a symlink" in release_cli
+    assert 'validate_existing_file_path "aggregate release manifest"' in release_cli
+    assert (
+        'validate_existing_executable_file_path "external Ed25519 signer"'
+        in release_cli
+    )
+    assert '"native release-manifest verifier"' in release_cli
     assert "parent must not be a symlink" in release_cli
     assert (
-        "test_release_wrapper_defaults_manifest_under_workspace_before_artifacts"
+        "test_release_wrapper_signs_and_verifies_with_pinned_native_validator"
         in release_cli_test
     )
     assert (
@@ -8484,21 +8599,92 @@ def test_sorafs_shell_helpers_use_no_follow_json_reads() -> None:
         in release_cli_test
     )
     assert (
-        "test_release_wrapper_rejects_option_shaped_output_value_before_artifacts"
+        "test_release_wrapper_requires_all_governed_signing_inputs"
         in release_cli_test
     )
     assert (
-        "test_release_wrapper_rejects_symlinked_manifest_input_before_artifacts"
+        "test_release_wrapper_rejects_removed_oidc_bundle_interface"
         in release_cli_test
     )
     assert (
-        "test_release_wrapper_rejects_chunk_summary_parent_symlink_before_artifacts"
+        "test_release_wrapper_rejects_unreviewed_signing_fingerprint"
         in release_cli_test
     )
     assert (
-        "test_release_wrapper_rejects_symlinked_identity_token_file_before_artifacts"
+        "test_release_wrapper_rejects_unreviewed_native_verifier"
         in release_cli_test
     )
+    release_script_roots = (
+        REPO_ROOT / "ci",
+        REPO_ROOT / "deploy",
+        REPO_ROOT / "docs" / "portal" / "scripts",
+        REPO_ROOT / "python",
+        SCRIPTS_DIR,
+    )
+    active_release_scripts = {
+        path
+        for root in release_script_roots
+        for pattern in ("*release*.sh", "*publish*.sh")
+        for path in root.rglob(pattern)
+        if "tests" not in path.parts
+    }
+    assert python_release_smoke_path in active_release_scripts
+    generic_openssl_signer = re.compile(
+        r"(?im)^[^\n]*\bopenssl[a-z0-9_]*\b(?:\.exe)?[^\n]*"
+        r"(?:\bgenrsa\b|\bgenpkey\b|(?:^|\s)-sign(?:=|\s|$))[^\n]*$"
+    )
+    for release_script_path in sorted(active_release_scripts):
+        assert generic_openssl_signer.search(read(release_script_path)) is None, (
+            f"generic OpenSSL/RSA signer remains in {release_script_path}"
+        )
+    for retired_smoke_marker in (
+        "openssl",
+        "cosign",
+        "sign-blob",
+        ".sigstore",
+        "--signing-key",
+        "--manifest-out",
+        "--require-sigstore",
+        "--skip-sigstore",
+        "--sigstore-token-env",
+        "--cosign-bin",
+        "PYTHON_RELEASE_SIGNING_KEY",
+        "PYTHON_RELEASE_SIGSTORE",
+        "SIGSTORE_ID_TOKEN",
+        "release_artifacts.json",
+        "CHANGELOG_PREVIEW.md",
+        "SHA256SUMS",
+    ):
+        assert retired_smoke_marker.casefold() not in python_release_smoke.casefold()
+    for smoke_marker in (
+        "python -m build",
+        'pip install "${WHEEL}"',
+        'assert hasattr(sdk, "ToriiClient")',
+        "python/iroha_python/scripts/run_norito_rpc_smoke.sh",
+        "python -m twine check",
+        "--dry-run",
+        "scripts/release_manifest_signing.py",
+    ):
+        assert smoke_marker in python_release_smoke
+    retired_smoke = subprocess.run(
+        ["bash", str(python_release_smoke_path), "--signing-key", "/run/key.pem"],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert retired_smoke.returncode == 1
+    assert retired_smoke.stdout == ""
+    assert retired_smoke.stderr == "Unknown argument: --signing-key\n"
+    for retired_fixture in (
+        "manifest.bundle.json",
+        "manifest.sig",
+        "manifest.sign.summary.json",
+        "manifest.verify.summary.json",
+    ):
+        assert not (
+            REPO_ROOT / "fixtures" / "sorafs_manifest" / "ci_sample" / retired_fixture
+        ).exists()
     assert "policy path must not be a symlink" in direct_smoke
     assert 'prepare_output_file_path "payload output"' in direct_smoke
     assert 'prepare_output_file_path "summary JSON report"' in direct_smoke
@@ -8524,7 +8710,18 @@ def test_sorafs_shell_helpers_use_no_follow_json_reads() -> None:
     assert "test_direct_mode_smoke_rejects_malformed_adoption_override_id" in direct_smoke_test
     assert "allow_adoption_skip=False" in direct_smoke_test
     assert 'prepare_output_dir_path "gateway self-cert output directory"' in gateway_self_cert
-    assert 'prepare_output_file_path "manifest verification summary"' in gateway_self_cert
+    assert "release manifest verification summary" in gateway_self_cert
+    assert "prepare_new_output_file_path" in gateway_self_cert
+    assert "release_manifest_signing.py" in gateway_self_cert
+    assert "umask 077" in gateway_self_cert
+    assert "--trusted-signing-fingerprint" in gateway_self_cert
+    assert "--release-manifest-verifier" in gateway_self_cert
+    assert "--trusted-release-manifest-verifier-sha256" in gateway_self_cert
+    assert "manifest verify-signature" not in gateway_self_cert
+    assert "--manifest-bundle" not in gateway_self_cert
+    assert "--public-key-hex" not in gateway_self_cert
+    assert '[[ -n "$gateway_target" ]] || missing+=("--gateway")' in gateway_self_cert
+    assert "defaults to harness fixture target" not in gateway_self_cert
     assert 'prepare_output_file_path "denylist diff report"' in gateway_self_cert
     assert "must not be a symlink" in gateway_self_cert
     assert "parent must not be a symlink" in gateway_self_cert
@@ -8626,10 +8823,15 @@ def test_sorafs_cli_release_gate_runs_helper_adversarial_tests() -> None:
     assert 'echo "[sorafs-release] release helper adversarial tests"' in release_gate
     assert "python3 -m pytest -q \\" in release_gate
     assert "scripts/tests/release_sorafs_cli_test.py" in release_gate
+    assert "scripts/tests/package_sorafs_cli_candidate_test.py" in release_gate
+    assert (
+        "scripts/tests/generate_sorafs_cli_release_manifest_test.py" in release_gate
+    )
     assert "scripts/tests/package_sorafs_validate_release_test.py" in release_gate
+    assert "python/iroha_python/scripts/release_smoke.sh" in release_gate
     assert (
         "scripts/tests/check_sorafs_rollout_gate_contract_test.py::"
-        "test_sorafs_shell_helpers_use_no_follow_json_reads"
+        "test_sorafs_shell_helpers_use_hardened_release_and_no_follow_io"
     ) in release_gate
     assert (
         "scripts/tests/check_sorafs_rollout_gate_contract_test.py::"
@@ -8719,9 +8921,13 @@ def test_sorafs_operator_helpers_do_not_reintroduce_plain_file_io() -> None:
     allowed_rglob = {
         SCRIPTS_DIR / "check_sorafs_hedging_fixture_manifest.py",
         SCRIPTS_DIR / "sorafs_evidence_paths.py",
+        SCRIPTS_DIR / "package_sorafs_cli_candidate.py",
         SCRIPTS_DIR / "package_sorafs_validate_release.sh",
     }
-    allowed_tarfile_open = {SCRIPTS_DIR / "package_sorafs_validate_release.sh"}
+    allowed_tarfile_open = {
+        SCRIPTS_DIR / "package_sorafs_cli_candidate.py",
+        SCRIPTS_DIR / "package_sorafs_validate_release.sh",
+    }
     offenders: list[str] = []
 
     for root in roots:
@@ -9273,9 +9479,15 @@ def test_rollout_tools_use_bounded_shared_response_file_expansion() -> None:
     assert 'ARGFILE_INSPECTION_DIAGNOSTIC = "@ARGFILE cannot be inspected"' in helper
     assert 'ARGFILE_READ_DIAGNOSTIC = "@ARGFILE cannot be read"' in helper
     assert 'ARGFILE_RESOLUTION_DIAGNOSTIC = "@ARGFILE cannot be resolved"' in helper
-    assert "os.open(path, _response_argfile_open_flags())" in helper
-    assert "os.fstat(fd).st_size" in helper
-    assert "os.fdopen(fd, \"rb\")" in helper
+    assert "def _open_response_argfile_parent(" in helper
+    assert "def _response_argfile_path_identity_matches(" in helper
+    assert "os.open(\n            leaf,\n            _response_argfile_open_flags()," in helper
+    assert "before = os.fstat(fd)" in helper
+    assert "after = os.fstat(fd)" in helper
+    assert "chunk = os.read(" in helper
+    assert "before.st_nlink != 1" in helper
+    assert "stat.S_IWGRP | stat.S_IWOTH" in helper
+    assert "ARGFILE_CHANGED_DIAGNOSTIC" in helper
     assert "os.close(fd)" in helper
     assert "must exist and be a file" in helper
     assert "@ARGFILE `{path_label}` must not be a symlink" not in helper
@@ -9300,6 +9512,8 @@ def test_rollout_tools_use_bounded_shared_response_file_expansion() -> None:
     assert "test_symlink_response_file_fails_before_read" in helper_test
     assert "test_response_file_parent_symlink_fails_before_read" in helper_test
     assert "test_response_file_read_uses_no_follow_open_flags" in helper_test
+    assert "test_response_file_parent_swap_during_read_fails_closed" in helper_test
+    assert "test_response_file_rejects_hardlinks_and_writable_inputs" in helper_test
     assert "test_response_file_non_utf8_bytes_fail_stably" in helper_test
     assert "test_response_file_stat_failure_sanitizes_malformed_error" in helper_test
     assert "test_response_file_read_failure_sanitizes_malformed_error" in helper_test
@@ -15164,18 +15378,20 @@ def test_pop_credentials_runtime_services_stay_open_in_docs() -> None:
     normalized = re.sub(r"\s+", " ", source)
 
     required_open = (
-        "SFM-4b1 now has canonical PoP credential payloads, a production cryptographic membership-proof backend, and a consensus-owned issuer/registry foundation, but it is not yet shipped as a complete SoraFS proof-of-personhood credential service.",
-        "The repository still does not contain the enrollment portal, credential issuer daemon, juror wallet, dedicated credential-registry service facade, or deployed SoraFS verifier service described by the original plan.",
-        "This checker is a rollout gate; it does not replace the missing issuer/client runtime services, dedicated registry facade, or deployed verifier integration.",
-        "Enrollment portal | Captures candidate attestations and issuer approvals. | Not shipped.",
-        "Credential issuer | Signs credentials, updates commitment roots, and publishes rollups. | Payload signatures, a local issued-credential bundle helper, bounded issuer policy, and authorised native publication ISIs are shipped; daemon and production key management are not shipped.",
-        "Credential registry | Stores commitment roots, revocation updates, and event digests. | Consensus-owned commitment/root/revocation/audit state and typed queries are shipped; a dedicated service facade and deployed multi-peer evidence are not shipped.",
-        "Juror client | Stores credentials, syncs revocations, and generates proofs. | Not shipped.",
-        "Verification service | Validates juror proofs for sortition, voting, and appeal panels. | Local Halo2/IPA prover and production verifier, native authoritative moderation-intake/sortition verification, `sorafs-validate pop`, and SDK/bridge reference gate are shipped; the deployed service facade is not shipped.",
-        "Build the credential issuer daemon and enrollment approval workflow around the native registry, including HSM/threshold key management, retry-safe transaction submission, operator observability, and disaster recovery.",
-        "Deploy the native registry on a reviewed multi-validator environment and collect restart, reconciliation, rollback-rejection, and audit-head evidence; add a dedicated Torii registry facade only if the operator/client contract requires one.",
-        "Build juror client storage, revocation sync, proof generation, and local credential rotation.",
-        "Publish operator and juror docs only after the service CLI/API and verifier paths exist.",
+        "SFM-4b1 now has canonical PoP credential payloads, a production cryptographic membership-proof backend, a consensus-owned issuer/registry foundation, a durable issuer/wallet service, and the canonical authenticated Torii V1 API, but it is not yet deployable from the standard `irohad` binary.",
+        "`crates/sorafs_node/src/pop_credentials.rs` now owns encrypted enrollment, dual-control approval, HSM-backed issuance, durable registry outbox/dead-letter and finalized reconciliation, encrypted wallet custody, witness synchronization, local proof generation, and exactly-once nullifier consumption.",
+        "`crates/iroha_torii/src/sorafs/pop_api.rs` exposes the exact 14-route V1 family for enrollment, approval, issuance, revocation, registry, wallet, proof generation, and verification.",
+        "The remaining local release blocker is `V1-BLOCK-POP-RUNTIME-01`: the standard `irohad` entrypoint does not yet construct and inject the governed production provider bundle, and the repository has no deployable shared external-runtime or sidecar adapter for those providers.",
+        "This checker is a rollout gate; it does not replace the missing standard-`irohad` external-runtime adapter, HSM/KMS integration, or deployed verifier evidence.",
+        "Enrollment portal | Captures encrypted candidate enrollment and governed approvals. | The authenticated submit/status/approval API and durable encrypted workflow are shipped; operator UI, WebAuthn enrollment ceremony, and the deployable external authenticator adapter remain open.",
+        "Credential issuer | Signs credentials, updates commitment roots, and publishes rollups. | The bounded durable service, HSM interface, strict policy binding, issuance/revocation APIs, and retry-safe outbox are shipped; standard-`irohad` HSM/KMS/provider wiring and deployment evidence remain open.",
+        "Credential registry | Stores commitment roots, revocation updates, and event digests. | Consensus-owned state, typed queries, authenticated submit/reconcile/projection APIs, cursor rollback rejection, and durable reconciliation are shipped; standard-daemon transaction/reader adapters and multi-peer evidence remain open.",
+        "Juror client | Stores credentials, syncs revocations, and generates proofs. | Encrypted KMS-wrapped wallet custody, delivery/import/acknowledgement, witness synchronization, and local proof APIs are shipped; a deployable KMS/witness adapter and operator client remain open.",
+        "Verification service | Validates juror proofs for sortition, voting, and appeal panels. | The Halo2/IPA verifier, atomic nullifier replay defense, native moderation integration, authenticated verification API, `sorafs-validate pop`, and SDK/bridge reference gate are shipped; the external runtime adapter and reviewed deployment evidence remain open.",
+        "`V1-BLOCK-POP-RUNTIME-01` blocks local completion and promotion.",
+        "Until those checks pass, operators must leave `torii.sorafs.storage.pop_credentials.enabled = false`; the intentional enabled-without-runtime startup failure must not be bypassed.",
+        "Resolve `V1-BLOCK-POP-RUNTIME-01` with the shared deployable external-runtime adapter described above; do not add a software-key, file-key, environment, or process-clock fallback.",
+        "Publish operator and juror command documentation only after the still-open CLI and shared external-runtime adapter exist.",
     )
     missing = [phrase for phrase in required_open if phrase not in normalized]
 
@@ -15608,19 +15824,91 @@ def test_pop_credentials_canary_builder_is_checked_in() -> None:
     assert "payload-free SFM-4b1 PoP credential canary builder" in docs
 
 
-UNSHIPPED_POP_CREDENTIALS_ROUTE_PATTERNS = (
-    "/v1/sorafs/pop/enrollment",
-    "/v1/sorafs/pop/enrollment-portal",
-    "/v1/sorafs/pop/issuer",
-    "/v1/sorafs/pop/credential-issuer",
-    "/v1/sorafs/pop/registry",
-    "/v1/sorafs/pop/credential-registry",
-    "/v1/sorafs/pop/juror-client",
-    "/v1/sorafs/pop/juror-wallet",
-    "/v1/sorafs/pop/proof-generator",
-    "/v1/sorafs/pop/verifier",
-    "/v1/sorafs/pop/verifier-service",
-    "/v1/sorafs/pop/promotion",
+SHIPPED_POP_CREDENTIALS_ROUTES = (
+    (
+        "POP_ENROLLMENT",
+        "/v1/sorafs/pop/enrollments",
+        "handle_post_pop_enrollment",
+        "POP_ENROLLMENT_REQUEST_MAX_BYTES_V1",
+    ),
+    (
+        "POP_ENROLLMENT_STATUS",
+        "/v1/sorafs/pop/enrollments/status",
+        "handle_post_pop_enrollment_status",
+        "POP_CONTROL_REQUEST_MAX_BYTES_V1",
+    ),
+    (
+        "POP_APPROVAL",
+        "/v1/sorafs/pop/approvals",
+        "handle_post_pop_approval",
+        "POP_CONTROL_REQUEST_MAX_BYTES_V1",
+    ),
+    (
+        "POP_ISSUE",
+        "/v1/sorafs/pop/issue",
+        "handle_post_pop_issue",
+        "POP_CONTROL_REQUEST_MAX_BYTES_V1",
+    ),
+    (
+        "POP_REVOCATION",
+        "/v1/sorafs/pop/revocations",
+        "handle_post_pop_revocation",
+        "POP_ENROLLMENT_REQUEST_MAX_BYTES_V1",
+    ),
+    (
+        "POP_REGISTRY_SUBMIT",
+        "/v1/sorafs/pop/registry/submit-next",
+        "handle_post_pop_registry_submit",
+        "POP_CONTROL_REQUEST_MAX_BYTES_V1",
+    ),
+    (
+        "POP_REGISTRY_RECONCILE",
+        "/v1/sorafs/pop/registry/reconcile-next",
+        "handle_post_pop_registry_reconcile",
+        "POP_CONTROL_REQUEST_MAX_BYTES_V1",
+    ),
+    (
+        "POP_REGISTRY_PROJECTION",
+        "/v1/sorafs/pop/registry/projection",
+        "handle_post_pop_registry_projection",
+        "POP_CONTROL_REQUEST_MAX_BYTES_V1",
+    ),
+    (
+        "POP_WALLET_DELIVERY",
+        "/v1/sorafs/pop/wallet/delivery",
+        "handle_post_pop_wallet_delivery",
+        "POP_CONTROL_REQUEST_MAX_BYTES_V1",
+    ),
+    (
+        "POP_WALLET_IMPORT",
+        "/v1/sorafs/pop/wallet/import",
+        "handle_post_pop_wallet_import",
+        "POP_CONTROL_REQUEST_MAX_BYTES_V1",
+    ),
+    (
+        "POP_WALLET_ACKNOWLEDGE",
+        "/v1/sorafs/pop/wallet/acknowledge",
+        "handle_post_pop_wallet_acknowledge",
+        "POP_CONTROL_REQUEST_MAX_BYTES_V1",
+    ),
+    (
+        "POP_WALLET_SYNCHRONIZE",
+        "/v1/sorafs/pop/wallet/synchronize",
+        "handle_post_pop_wallet_synchronize",
+        "POP_CONTROL_REQUEST_MAX_BYTES_V1",
+    ),
+    (
+        "POP_WALLET_PROVE",
+        "/v1/sorafs/pop/wallet/prove",
+        "handle_post_pop_wallet_prove",
+        "POP_CONTROL_REQUEST_MAX_BYTES_V1",
+    ),
+    (
+        "POP_VERIFY",
+        "/v1/sorafs/pop/verify",
+        "handle_post_pop_verify",
+        "POP_PROOF_REQUEST_MAX_BYTES_V1",
+    ),
 )
 
 UNSHIPPED_POP_CREDENTIALS_CLI_SUBCOMMANDS = (
@@ -15645,14 +15933,6 @@ UNSHIPPED_POP_CREDENTIALS_NESTED_CLI_COMMANDS = (
 )
 
 
-def unshipped_pop_credentials_route_matches(source: str) -> list[str]:
-    return [
-        route
-        for route in UNSHIPPED_POP_CREDENTIALS_ROUTE_PATTERNS
-        if re.search(rf"(?<![A-Za-z0-9_/-]){re.escape(route)}(?=$|[\"`/\s?}}])", source)
-    ]
-
-
 def unshipped_pop_credentials_cli_matches(source: str) -> list[str]:
     hyphenated_matches = [
         subcommand
@@ -15667,13 +15947,251 @@ def unshipped_pop_credentials_cli_matches(source: str) -> list[str]:
     return hyphenated_matches + nested_matches
 
 
-def test_pop_credentials_service_surface_matcher_has_negative_controls() -> None:
-    shipped_local_route_candidates = (
-        "/v1/sorafs/pop/issuer-bundle",
-        "/v1/sorafs/pop/registry-snapshot",
-        "/v1/sorafs/pop/verifier-canary",
-        "/v1/sorafs/pop/promotion-canary",
+def pop_credentials_production_surface_errors(
+    route_catalog: str,
+    torii: str,
+    openapi: str,
+    pop_api: str,
+    config_defaults: str,
+    config_actual: str,
+    config_user: str,
+) -> list[str]:
+    errors: list[str] = []
+    expected_routes = [route for _, route, _, _ in SHIPPED_POP_CREDENTIALS_ROUTES]
+    catalog_routes = re.findall(r'"(/v1/sorafs/pop/[^"]+)"', route_catalog)
+    openapi_routes = re.findall(r'"(/v1/sorafs/pop/[^"]+)"', openapi)
+
+    if catalog_routes != expected_routes:
+        errors.append("route catalog does not contain the exact ordered PoP V1 inventory")
+    if openapi_routes != expected_routes:
+        errors.append("OpenAPI does not contain the exact ordered PoP V1 inventory")
+
+    for descriptor, route, _, _ in SHIPPED_POP_CREDENTIALS_ROUTES:
+        descriptor_matches = re.findall(
+            rf"pub const {re.escape(descriptor)}: RouteDescriptor\s*=\s*"
+            rf"(.*?)(?=\n\s*(?:pub const|const fn))",
+            route_catalog,
+            re.S,
+        )
+        if len(descriptor_matches) != 1:
+            errors.append(f"{descriptor} must have exactly one route descriptor")
+            continue
+        descriptor_source = descriptor_matches[0]
+        if descriptor_source.count(f'"{route}"') != 1:
+            errors.append(f"{descriptor} must bind exactly {route}")
+        if (
+            descriptor_source.count(
+                ".with_authentication(AuthenticationPolicy::ProtocolHandshake)"
+            )
+            != 1
+        ):
+            errors.append(f"{descriptor} must require ProtocolHandshake")
+
+    mounted = re.findall(
+        r"pop_post!\(\s*([A-Z0-9_]+),\s*"
+        r"sorafs::pop_api::([a-z0-9_]+),\s*"
+        r"sorafs::pop_api::([A-Z0-9_]+)\s*\);",
+        torii,
+        re.S,
     )
+    expected_mounts = [
+        (descriptor, handler, body_limit)
+        for descriptor, _, handler, body_limit in SHIPPED_POP_CREDENTIALS_ROUTES
+    ]
+    if mounted != expected_mounts:
+        errors.append("Torii does not mount the exact PoP descriptor/handler/limit inventory")
+
+    for _, _, handler, _ in SHIPPED_POP_CREDENTIALS_ROUTES:
+        handler_definitions = re.findall(
+            rf"(?m)^[ \t]*(?P<visibility>pub(?:\([^)\n]+\))?[ \t]+)?"
+            rf"async[ \t]+fn[ \t]+{re.escape(handler)}[ \t]*\(",
+            pop_api,
+        )
+        if handler_definitions != ["pub(crate) "]:
+            errors.append(
+                f"{handler} must have exactly one crate-visible async handler"
+            )
+
+    required_openapi_markers = (
+        "pop_authorization_header_parameters(),",
+        '"Sora-PoP-Authorization"',
+        "PopV1 <base64url-no-pad>",
+    )
+    for marker in required_openapi_markers:
+        if marker not in openapi:
+            errors.append(f"OpenAPI is missing {marker}")
+
+    required_config_markers = (
+        (config_defaults, "pub mod pop_credentials {"),
+        (
+            config_defaults,
+            "pub const MAX_FINALIZED_TIME_SKEW_SECS: u64 = 30;",
+        ),
+        (
+            config_actual,
+            "pub pop_credentials: Option<SorafsPopCredentialService>,",
+        ),
+        (config_actual, "pub struct SorafsPopCredentialService {"),
+        (
+            config_actual,
+            "pub max_finalized_time_skew: Duration,",
+        ),
+        (config_user, "pub pop_credentials: SorafsPopCredentialService,"),
+        (
+            config_user,
+            "pub max_finalized_time_skew_secs: u64,",
+        ),
+        (
+            config_user,
+            "let pop_credentials = self.pop_credentials.parse(self.enabled, emitter);",
+        ),
+        (
+            pop_api,
+            "pub finalized_time_provider: Arc<dyn PopFinalizedTimeProviderV1>,",
+        ),
+        (
+            pop_api,
+            "validate_finalized_time_sample(",
+        ),
+        (
+            torii,
+            "torii.sorafs.storage.pop_credentials is enabled but runtime-only "
+            "enrollment/HSM/KMS/authentication dependencies were not injected",
+        ),
+        (
+            torii,
+            "a SoraFS PoP runtime was injected without enabling "
+            "torii.sorafs.storage.pop_credentials",
+        ),
+        (
+            torii,
+            "injected SoraFS PoP runtime does not match "
+            "torii.sorafs.storage.pop_credentials",
+        ),
+    )
+    for source, marker in required_config_markers:
+        if marker not in source:
+            errors.append(f"PoP config/runtime binding is missing {marker}")
+    if "SystemTime::now()" in pop_api:
+        errors.append("PoP runtime must not derive authorization time from process wall clock")
+
+    return errors
+
+
+def test_pop_credentials_production_surface_matcher_has_negative_controls() -> None:
+    route_catalog = read(TORII_ROUTE_CATALOG_RS)
+    torii = read(TORII_LIB_RS)
+    openapi = read(TORII_OPENAPI_RS)
+    pop_api = read(TORII_SORAFS_POP_API_RS)
+    config_defaults = read(IROHA_CONFIG_DEFAULTS_RS)
+    config_actual = read(IROHA_CONFIG_ACTUAL_RS)
+    config_user = read(IROHA_CONFIG_USER_RS)
+
+    def validate(
+        *,
+        catalog: str = route_catalog,
+        mounted: str = torii,
+        spec: str = openapi,
+        handlers: str = pop_api,
+        defaults: str = config_defaults,
+        actual: str = config_actual,
+        user: str = config_user,
+    ) -> list[str]:
+        return pop_credentials_production_surface_errors(
+            catalog,
+            mounted,
+            spec,
+            handlers,
+            defaults,
+            actual,
+            user,
+        )
+
+    assert validate() == []
+    assert validate(
+        catalog=route_catalog.replace(
+            '"/v1/sorafs/pop/enrollments"', '"/v1/sorafs/pop/enrollment"', 1
+        )
+    )
+    assert validate(
+        mounted=torii.replace(
+            "sorafs::pop_api::handle_post_pop_enrollment,",
+            "sorafs::pop_api::handle_post_pop_enrollment_status,",
+            1,
+        )
+    )
+    assert validate(
+        spec=openapi.replace(
+            '"/v1/sorafs/pop/verify",',
+            '"/v1/sorafs/pop/verify-extra",',
+            1,
+        )
+    )
+    assert validate(
+        handlers=pop_api.replace(
+            "pub(crate) async fn handle_post_pop_verify(",
+            "async fn handle_post_pop_verify(",
+            1,
+        )
+    )
+    assert validate(
+        handlers=pop_api.replace(
+            "pub(crate) async fn handle_post_pop_verify(",
+            "pub async fn handle_post_pop_verify(",
+            1,
+        )
+    )
+    assert validate(
+        handlers=pop_api
+        + "\npub(crate) async fn handle_post_pop_verify() {}\n"
+    )
+    assert validate(
+        handlers=pop_api.replace(
+            "pub(crate) async fn handle_post_pop_verify(",
+            "pub(crate) async fn handle_post_pop_verify_missing(",
+            1,
+        )
+    )
+    assert validate(
+        handlers=pop_api.replace(
+            "pub finalized_time_provider: Arc<dyn PopFinalizedTimeProviderV1>,",
+            "pub finalized_time_provider: (),",
+            1,
+        )
+    )
+    assert validate(
+        actual=config_actual.replace(
+            "pub pop_credentials: Option<SorafsPopCredentialService>,",
+            "pub pop_credentials: SorafsPopCredentialService,",
+            1,
+        )
+    )
+    assert validate(
+        mounted=torii.replace(
+            "torii.sorafs.storage.pop_credentials is enabled but runtime-only "
+            "enrollment/HSM/KMS/authentication dependencies were not injected",
+            "runtime missing",
+            1,
+        )
+    )
+
+
+def test_pop_credentials_production_service_exposes_exact_canonical_v1_surface() -> None:
+    assert (
+        pop_credentials_production_surface_errors(
+            read(TORII_ROUTE_CATALOG_RS),
+            read(TORII_LIB_RS),
+            read(TORII_OPENAPI_RS),
+            read(TORII_SORAFS_POP_API_RS),
+            read(IROHA_CONFIG_DEFAULTS_RS),
+            read(IROHA_CONFIG_ACTUAL_RS),
+            read(IROHA_CONFIG_USER_RS),
+        )
+        == []
+    )
+
+
+def test_pop_credentials_cli_surface_matcher_has_negative_controls() -> None:
     shipped_local_subcommands = (
         "sorafs-validate pop",
         "pop-credential",
@@ -15689,21 +16207,6 @@ def test_pop_credentials_service_surface_matcher_has_negative_controls() -> None
         "pop revoke-canary",
     )
 
-    assert unshipped_pop_credentials_route_matches(
-        '"GET /v1/sorafs/pop/issuer/status" '
-        "`/v1/sorafs/pop/verifier-service` "
-        '"/v1/sorafs/pop/promotion?deployment_id=prod"'
-    ) == [
-        "/v1/sorafs/pop/issuer",
-        "/v1/sorafs/pop/verifier-service",
-        "/v1/sorafs/pop/promotion",
-    ]
-    assert (
-        unshipped_pop_credentials_route_matches(
-            " ".join(f'"{route}"' for route in shipped_local_route_candidates)
-        )
-        == []
-    )
     assert unshipped_pop_credentials_cli_matches(
         '"pop-issuer-serve" `pop-verifier-service` "pop-promote"'
     ) == ["pop-issuer-serve", "pop-verifier-service", "pop-promote"]
@@ -15718,14 +16221,8 @@ def test_pop_credentials_service_surface_matcher_has_negative_controls() -> None
     ) == []
 
 
-def test_unshipped_pop_credentials_service_surface_is_not_exposed() -> None:
+def test_unshipped_pop_credentials_cli_surface_is_not_exposed() -> None:
     exposed: dict[str, list[str]] = {}
-
-    for path in (TORII_SORAFS_API_RS, TORII_OPENAPI_RS):
-        source = read(path)
-        matched = unshipped_pop_credentials_route_matches(source)
-        if matched:
-            exposed[str(path.relative_to(REPO_ROOT))] = matched
 
     for path in (IROHA_CLI_SORAFS_RS, SORAFS_CLI_RS):
         source = read(path)
@@ -18062,8 +18559,8 @@ def test_cli_sdk_distribution_and_live_governance_stay_open_in_docs() -> None:
 
     required_plan_open = (
         "Use `scripts/release_sorafs_cli.sh`, `ci/check_sorafs_cli_release.sh`, `scripts/sorafs_gateway_self_cert.sh`, and `cargo xtask sorafs-gateway-attest` for release and self-certification evidence.",
-        "Release signing and manifest verification are wrapped by `scripts/release_sorafs_cli.sh`; gateway self-cert evidence is wrapped by `scripts/sorafs_gateway_self_cert.sh`.",
-        "Runtime secrets such as identity tokens, private keys, and gateway bearer tokens must be supplied at execution time and not committed.",
+        "Release signing and native manifest verification are wrapped by `scripts/release_sorafs_cli.sh`; gateway self-cert evidence is wrapped by `scripts/sorafs_gateway_self_cert.sh`.",
+        "Runtime secrets such as HSM credentials, private keys, and gateway bearer tokens must be supplied at execution time and not committed.",
         "Remaining release work is signed distribution evidence and live deployment capture, not missing local command surfaces.",
         "Package registries such as Homebrew, npm, crates.io, and Go modules should be populated only from signed release cuts using the existing release scripts and fixture smoke checks.",
     )
@@ -18869,17 +19366,40 @@ def test_potr_live_rollout_and_provider_key_work_stays_open_in_docs() -> None:
     source = read(SORAFS_POTR_PLAN)
     normalized = re.sub(r"\s+", " ", source.replace("> ", ""))
 
+    required_finalized_projection = (
+        "The native `SubmitSorafsProofOutcome` instruction validates and commits an authorized final canonical receipt.",
+        "exact request-scope identity from the requested manifest, provider, and mandatory orchestrator job ID",
+        "one terminal outcome from the finalized chain view with complete commit provenance.",
+        "A captured receipt does not become queryable until an authorized transaction forwarder commits it.",
+        "A process-local pending status or cached-receipt replay path is not a valid substitute.",
+        "`BLAKE3(\"sorafs.potr.request-scope.v1\\0\" || manifest_digest || provider_id || request_id)`",
+        "`proof_kind=potr` requires `orchestrator_job_id_hex` and performs one exact finalized lookup.",
+        "`outcome_identity_hex`",
+        "`outcome_digest_hex`",
+        "`admission_envelope_digest_hex`",
+        "`finalized_block_height`",
+        "`finalized_block_hash_hex`",
+        "`committed_at_ms`",
+        "Unknown, unfinalized, or mismatched scopes return no row and never fall back to embedded history.",
+        "Production reputation scoring must consume finalized proof-outcome events",
+    )
     required_open = (
-        "SF-14 work is live multi-provider rollout evidence and PQ provider-signature key distribution, now represented by governance-bound key-roster and reputation-weight policy digests in rollout evidence, not local receipt capture, validation, or replay wiring.",
+        "Remaining SF-14 work includes production forwarding/reconciliation across that boundary, genuine live multi-provider rollout evidence",
+        "operator provisioning of the governed gateway/provider key roster and reputation-weight policy.",
         "Operators should keep SF-14 promotion fail-closed until payload-free deployment evidence passes the checked-in gate:",
-        "The checker recognizes `sorafs.potr.*` SF-14 rollout schemas for multi-provider probes, receipt validation, proof-stream replay, reputation integration, observability, and governance approval.",
+        "The checker recognizes `sorafs.potr.*` SF-14 rollout schemas for multi-provider probes, receipt validation, proof-stream finalized lookup (historically named replay in the evidence schema), reputation integration, observability, and governance approval.",
         "missing governed ML-DSA provider key evidence, non-Norito proof-stream routes, missing proof-stream filters, missing reputation-weight governance",
         "PQ key-roster digest drift between receipt validation and governance approval, reputation-weight policy digest drift between reputation integration and governance approval",
         "The collection planner exposes those exact required payload fields through `--dry-run` and validates the schema-closed collection plan, required kinds, thresholds, external evidence map, evidence contract, and command steps before contacting live PoTR services.",
-        "Future updates should track live rollout evidence, governed provider PQ keys, and reputation-weight changes that pass the SF-14 gate",
-        "proof-stream, reputation, observability, and governance artifacts bound to the same multi-provider probe receipt summary digest, plus receipt-validation and reputation artifacts bound to governance-approved PQ key-roster and reputation-weight policy digests, rather than reintroducing draft local wiring tasks.",
+        "Future updates must track the retry-safe transaction-forwarding and reconciliation path, live rollout evidence, governed provider PQ keys, and reputation-weight changes that pass the SF-14 gate",
+        "proof-stream, reputation, observability, and governance artifacts bound to the same multi-provider probe receipt summary digest.",
+        "Receipt-validation and reputation artifacts must also bind to governance-approved PQ key-roster and reputation-weight policy digests.",
     )
-    missing = [phrase for phrase in required_open if phrase not in normalized]
+    missing = [
+        phrase
+        for phrase in (*required_finalized_projection, *required_open)
+        if phrase not in normalized
+    ]
 
     assert missing == []
 
@@ -18902,6 +19422,18 @@ def test_potr_docs_keep_rollout_contract_markers() -> None:
     missing_current: dict[str, list[str]] = {}
 
     for path in sorted(DOCS_SOURCE_DIR.glob("sorafs_potr_plan*.md")):
+        if path != SORAFS_POTR_PLAN:
+            metadata, _, parse_error = parse_localized_markdown_front_matter(
+                read(path)
+            )
+            if parse_error is not None:
+                missing_current[str(path.relative_to(REPO_ROOT))] = [parse_error]
+                continue
+            if metadata.get("status") == "needs-translation":
+                # A freshly regenerated localization stub deliberately contains
+                # no canonical English rollout prose. Its generated header,
+                # metadata, and current source hash are checked below.
+                continue
         normalized = re.sub(r"\s+", " ", read(path).replace("> ", ""))
         missing = [phrase for phrase in required_current if phrase not in normalized]
         if missing:
@@ -19281,19 +19813,20 @@ def test_unshipped_potr_live_rollout_surface_is_not_exposed() -> None:
     assert exposed == {}
 
 
-def test_repair_live_operator_evidence_work_stays_open_in_docs() -> None:
+def test_repair_chain_authority_and_live_evidence_work_stay_open_in_docs() -> None:
     source = read(SORAFS_REPAIR_PLAN)
     normalized = re.sub(r"\s+", " ", source)
 
     required_open = (
-        "Remaining SF-8b work is live operator evidence: archive a production PoR/PoTR failure, repair, escalation, and governance handoff once the deployed auditor roster and SF-9 coordinator publish their runbooks.",
-        "Use the rollout gate after the deployed auditor roster, SF-9 coordinator, PoR/PoTR failure capture, signed auditor API, repair worker lifecycle, repair event streams, governance handoff, observability, and governance packet have produced reviewed, payload-free JSON evidence:",
+        "Remaining SF-8b implementation work is to submit every auditor/worker transition as a native transaction, reconcile finalized task and event queries, rebuild daemon state solely from committed history, and delete the authoritative local mutation path.",
+        "Use the rollout gate only after the native finalized-chain cutover and after the deployed auditor roster, SF-9 coordinator, PoR/PoTR failure capture, signed auditor API, repair worker lifecycle, committed repair event streams, governance handoff, observability, and governance packet have produced reviewed, payload-free JSON evidence:",
         "The checker recognizes `sorafs.repair.*` SF-8b rollout schemas for auditor roster, failure capture, signed auditor API, worker lifecycle, event streams, governance handoff, observability, and governance approval evidence.",
         "raw PoR/PoTR evidence, raw repair payloads, signed auditor requests, response bodies, signed transactions, secrets, and ledgers are absent",
         "matches a valid auditor-roster artifact, and worker lifecycle / event stream / governance handoff artifacts carry an `evidence_bundle_digest_hex` that matches a valid PoR/PoTR failure-capture artifact",
         "governance approval artifacts carry a `handoff_digest_hex` that matches a valid governance handoff artifact",
         "The SF-8b rollout evidence gate, collection planner, operator argfile templates, and focused tests are implemented for payload-free deployed evidence review",
-        "Remaining rollout work is live operator evidence: collect production PoR failure, repair, and governance handoff artifacts once the deployed auditor roster and SF-9 coordinator publish their runbooks, then pass the SF-8b rollout evidence gate.",
+        "Remaining implementation work is the finalized-chain cutover: replace `FileRepairStore` mutations and local event streams with native repair transactions and committed task/event projections, then prove cross-peer exactly-once execution and restart reconciliation.",
+        "Remaining rollout work after that cutover is genuine operator evidence for a production PoR/PoTR failure, repair, escalation, and governance handoff, followed by the SF-8b rollout evidence gate.",
     )
     missing = [phrase for phrase in required_open if phrase not in normalized]
 
@@ -19670,10 +20203,10 @@ def unshipped_repair_live_cli_matches(source: str) -> list[str]:
 def test_repair_live_operator_surface_matcher_has_negative_controls() -> None:
     shipped_local_routes = (
         "/v1/sorafs/audit/repair/status",
-        "/v1/sorafs/audit/repair/status/{manifest_hex}",
+        "/v1/sorafs/audit/repair/tasks",
+        "/v1/sorafs/audit/repair/tasks/{ticket_id}",
         "/v1/sorafs/audit/repair/events",
-        "/v1/sorafs/audit/repair/events/stream",
-        "/v1/sorafs/audit/repair/events/ws",
+        "/v1/sorafs/audit/repair/appeal",
     )
     shipped_local_route_candidates = (
         "/v1/sorafs/repair/live-operator-evidence-canary",
@@ -19788,7 +20321,7 @@ def test_reference_sdk_release_distribution_work_stays_open_in_docs() -> None:
         "The checker recognizes `sorafs.reference_sdk.*` SF-11 release schemas for release archives, signed manifests, downstream bindings, cookbook smoke, FFI/header contract, and governance approval.",
         "duplicate or unknown release-target entries",
         "`target_count` values that do not match the unique target list",
-        "missing JavaScript/Python/Kotlin/JVM/Java Android/Swift package publication evidence",
+        "missing JavaScript/Python/Kotlin/JVM/Java Android/Swift/C# package publication evidence",
         "duplicate or unknown downstream-package entries",
         "`package_count` values that do not match the unique package list",
         "Signed-manifest artifacts also fingerprint the reviewed `signature_algorithm`, the summary exports `signature_algorithms`, and the aggregate production-readiness gate requires that metadata to match the signed-manifest artifact fingerprint and stay inside the governed Ed25519 release algorithm set before final promotion can report ready.",
@@ -19799,7 +20332,7 @@ def test_reference_sdk_release_distribution_work_stays_open_in_docs() -> None:
         "Release-manifest, policy, and release-key binding failures are recorded on the offending artifact before required-kind validity is computed, so the JSON summary matches the fail-closed release decision.",
         "digests, governance approval policy and `--public-key-fingerprint-hex` inputs",
         "Run the packaging helper for the supported release targets and publish signed release manifests outside the repository using governed release keys",
-        "Ship/publish downstream SDK binding packages and release artifacts for the local JavaScript, Python, Kotlin/JVM, Java Android, and Swift wrappers",
+        "Ship/publish downstream SDK binding packages and release artifacts for the local JavaScript, Python, Kotlin/JVM, Java Android, Swift, and C# wrappers",
         "Archive live operator smoke evidence for the published `sorafs-validate` archives and cookbook replay before declaring SF-11 fully released",
     )
     missing = [phrase for phrase in required_open if phrase not in normalized]
@@ -20263,30 +20796,53 @@ def test_unshipped_reference_sdk_distribution_surface_is_not_exposed() -> None:
     assert exposed == {}
 
 
-def test_pdp_provider_protocol_work_and_storage_foundation_are_documented() -> None:
+def test_pdp_provider_protocol_and_chain_repair_boundary_are_documented() -> None:
     source = read(SORAFS_PDP_PLAN)
     normalized = re.sub(r"\s+", " ", source)
 
+    required_finalized_projection = (
+        "does not read the provider protocol's local scheduler state",
+        "exact `(pdp, challenge_id)` lookup in the finalized native proof-outcome ledger",
+        "one terminal row with complete commit provenance.",
+        "authorized retry-safe `SubmitSorafsProofOutcome` transaction forwarder",
+        "the finalized proof-stream query does not populate that state.",
+        "Finalized PDP proof-outcome state is keyed by the exact governed challenge ID.",
+        "`outcome_identity_hex` equal to `challenge_id_hex`",
+        "the terminal outcome digest",
+        "the council-verified admission envelope digest",
+        "finalized block height/hash",
+        "Only `success` or a canonical terminal `failure` is valid; `pending` and process-local-only states are not wire results.",
+        "binds the returned finalized terminal projection to the requested challenge, manifest, and provider.",
+        "Unknown or unfinalized outcomes",
+        "no request falls back to PoR sampling or an unsigned local result.",
+    )
     required_open = (
-        "The deployed provider protocol is not production-ready yet: Torii therefore rejects PDP proof-stream requests with `400 Bad Request` until signed challenge/proof transport, admission-bound live submission, governance archival, and repair handoff are wired end to end.",
+        "Torii ships the authenticated `/v1/sorafs/pdp/challenge`, `/next`, `/proof`, `/status`, and `/export` protocol family.",
+        "`/v1/sorafs/proof/stream` also accepts `pdp` only when the caller supplies the existing non-zero governed challenge ID; it rejects client-selected PDP sample counts and seeds.",
+        "This protocol is not production-ready while rejected or expired challenges still converge on the process-local repair coordinator.",
         "The PDP rollout evidence gate requires payload-free provider-transport, proof-generation, validator-replay, governance/repair, observability, and governance-approval artifacts before reporting `ready`",
-        "Torii `/v1/sorafs/proof/stream` accepts PoR and PoTR only. It parses `pdp` but returns `400 Bad Request` so clients do not mistake PoR samples for PDP provider proofs.",
-        "Do not remove the Torii fail-closed PDP guard until these local gates exist:",
-        "Provider challenge queue:",
+        "`/v1/sorafs/proof/stream` requires `challenge_id_hex` for PDP, rejects absent/zero IDs and client-controlled sampling fields",
+        "The local V1 protocol gates are shipped:",
+        "Authenticated durable challenge enqueue, next-work pickup, proof submission, status, and sequence-bounded terminal export.",
         "Deterministic proof generation from stored payloads",
-        "Provider signature verification over canonical PDP proof bytes with governance-controlled key material.",
-        "Governance DAG archival for accepted PDP proofs and PDP failure reports.",
-        "Repair pipeline handoff for `pdp_failure` events.",
+        "Provider signature verification over canonical PDP proof bytes with admission-controlled key material.",
+        "Governance DAG archival for accepted proofs and failure reports.",
+        "An explicit repair-handoff boundary for `pdp_failure` events.",
+        "drive the sixth item through the finalized native repair ledger rather than `FileRepairStore` or another process-local scheduler",
         "Do not document the unshipped `sorafs pdp ...` commands as operator-ready until they exist in the CLI and have focused tests.",
         "Required before production enablement:",
         "`sorafs_node::StorageBackend` persists the commitment and bounded retained tree, rehydrates them on restart, and generates exact challenge witnesses while holding the manifest read lease.",
         "Integration and adversarial tests cover restart parity, corrupted chunks, short/mutating reads, symlink and hard-link replacement, out-of-range/duplicate samples, and eviction races.",
-        "Torii endpoint tests for challenge issuance, proof submission, governance archival, repair handoff, and telemetry counters.",
+        "Replace the local repair coordinator target with finalized native repair transactions, committed task/event queries, durable retry reconciliation, and cross-peer exactly-once tests.",
         "Remaining production gates:",
-        "Ship operator CLI commands and SDK validators.",
-        "Update OpenAPI/portal docs and remove the Torii PDP fail-closed guard.",
+        "Cut PDP terminal repair handoff over to the finalized native repair ledger and delete the local-authority path.",
+        "Ship dedicated operator CLI commands and complete cross-SDK validation parity.",
     )
-    missing = [phrase for phrase in required_open if phrase not in normalized]
+    missing = [
+        phrase
+        for phrase in (*required_finalized_projection, *required_open)
+        if phrase not in normalized
+    ]
 
     assert missing == []
     checker = read(SCRIPTS_DIR / "check_sorafs_gateway_load_rollout_evidence.py")
@@ -20324,6 +20880,18 @@ def test_pdp_docs_keep_rollout_contract_markers() -> None:
     missing_current: dict[str, list[str]] = {}
 
     for path in sorted(DOCS_SOURCE_DIR.glob("sorafs_pdp_plan*.md")):
+        if path != SORAFS_PDP_PLAN:
+            metadata, _, parse_error = parse_localized_markdown_front_matter(
+                read(path)
+            )
+            if parse_error is not None:
+                missing_current[str(path.relative_to(REPO_ROOT))] = [parse_error]
+                continue
+            if metadata.get("status") == "needs-translation":
+                # A freshly regenerated localization stub deliberately contains
+                # no canonical English rollout prose. Its generated header,
+                # metadata, and current source hash are checked below.
+                continue
         normalized = re.sub(r"\s+", " ", read(path))
         missing = [phrase for phrase in required_current if phrase not in normalized]
         if missing:
@@ -20592,13 +21160,15 @@ def test_pdp_canary_builder_is_checked_in() -> None:
     assert "pdp-proof-02" in proof_generation_example
 
 
-UNSHIPPED_PDP_PROVIDER_ROUTE_PATTERNS = (
-    "/sorafs/pdp/challenge",
-    "/sorafs/pdp/next",
-    "/sorafs/pdp/proof",
+SHIPPED_PDP_PROVIDER_ROUTES = (
     "/v1/sorafs/pdp/challenge",
     "/v1/sorafs/pdp/next",
     "/v1/sorafs/pdp/proof",
+    "/v1/sorafs/pdp/status",
+    "/v1/sorafs/pdp/export",
+)
+
+RESERVED_PDP_PROVIDER_ROUTE_PATTERNS = (
     "/v1/sorafs/pdp/provider-transport",
     "/v1/sorafs/pdp/proof-generation",
     "/v1/sorafs/pdp/provider-signatures",
@@ -20609,7 +21179,7 @@ UNSHIPPED_PDP_PROVIDER_ROUTE_PATTERNS = (
     "/v1/sorafs/pdp/promotion",
 )
 
-UNSHIPPED_PDP_PROVIDER_CLI_SUBCOMMANDS = (
+RESERVED_PDP_PROVIDER_CLI_SUBCOMMANDS = (
     "pdp-challenge",
     "pdp-fetch",
     "pdp-respond",
@@ -20623,7 +21193,7 @@ UNSHIPPED_PDP_PROVIDER_CLI_SUBCOMMANDS = (
     "pdp-promote",
 )
 
-UNSHIPPED_PDP_PROVIDER_NESTED_CLI_COMMANDS = (
+RESERVED_PDP_PROVIDER_NESTED_CLI_COMMANDS = (
     "pdp challenge",
     "pdp fetch",
     "pdp respond",
@@ -20638,23 +21208,23 @@ UNSHIPPED_PDP_PROVIDER_NESTED_CLI_COMMANDS = (
 )
 
 
-def unshipped_pdp_provider_route_matches(source: str) -> list[str]:
+def reserved_pdp_provider_route_matches(source: str) -> list[str]:
     return [
         route
-        for route in UNSHIPPED_PDP_PROVIDER_ROUTE_PATTERNS
+        for route in RESERVED_PDP_PROVIDER_ROUTE_PATTERNS
         if re.search(rf"(?<![A-Za-z0-9_/-]){re.escape(route)}(?=$|[\"`/\s?}}])", source)
     ]
 
 
-def unshipped_pdp_provider_cli_matches(source: str) -> list[str]:
+def reserved_pdp_provider_cli_matches(source: str) -> list[str]:
     hyphenated = [
         subcommand
-        for subcommand in UNSHIPPED_PDP_PROVIDER_CLI_SUBCOMMANDS
+        for subcommand in RESERVED_PDP_PROVIDER_CLI_SUBCOMMANDS
         if f'"{subcommand}"' in source or f"`{subcommand}`" in source
     ]
     nested = [
         command
-        for command in UNSHIPPED_PDP_PROVIDER_NESTED_CLI_COMMANDS
+        for command in RESERVED_PDP_PROVIDER_NESTED_CLI_COMMANDS
         if re.search(
             rf"(?<![A-Za-z0-9_/-]){re.escape(command)}(?=$|[\"`\s])",
             source,
@@ -20663,7 +21233,7 @@ def unshipped_pdp_provider_cli_matches(source: str) -> list[str]:
     return [*hyphenated, *nested]
 
 
-def test_pdp_provider_protocol_surface_matcher_has_negative_controls() -> None:
+def test_reserved_pdp_provider_surface_matcher_has_negative_controls() -> None:
     shipped_local_routes = (
         "/v1/sorafs/proof/stream",
         "/v1/sorafs/proof/stream?proof_kind=pdp",
@@ -20688,44 +21258,39 @@ def test_pdp_provider_protocol_surface_matcher_has_negative_controls() -> None:
         "pdp-governance-archive-canary",
     )
 
-    assert unshipped_pdp_provider_route_matches(
+    assert reserved_pdp_provider_route_matches(
         '"POST /sorafs/pdp/challenge" '
         "`/v1/sorafs/pdp/proof` "
         '"/v1/sorafs/pdp/promotion?deployment_id=prod"'
     ) == [
-        "/sorafs/pdp/challenge",
-        "/v1/sorafs/pdp/proof",
         "/v1/sorafs/pdp/promotion",
     ]
     assert (
-        unshipped_pdp_provider_route_matches(
+        reserved_pdp_provider_route_matches(
             '"/v1/sorafs/pdp/challenge" "/v1/sorafs/pdp/proof"'
         )
-        == [
-            "/v1/sorafs/pdp/challenge",
-            "/v1/sorafs/pdp/proof",
-        ]
+        == []
     )
     assert (
-        unshipped_pdp_provider_route_matches(
+        reserved_pdp_provider_route_matches(
             " ".join(f'"{route}"' for route in shipped_local_routes)
         )
         == []
     )
     assert (
-        unshipped_pdp_provider_route_matches(
+        reserved_pdp_provider_route_matches(
             " ".join(f'"{route}"' for route in shipped_local_route_candidates)
         )
         == []
     )
-    assert unshipped_pdp_provider_cli_matches(
+    assert reserved_pdp_provider_cli_matches(
         '"pdp-challenge" `pdp-proof-generation` "pdp-promote"'
     ) == [
         "pdp-challenge",
         "pdp-proof-generation",
         "pdp-promote",
     ]
-    assert unshipped_pdp_provider_cli_matches(
+    assert reserved_pdp_provider_cli_matches(
         "`sorafs pdp challenge` "
         '"sorafs pdp fetch" '
         "`pdp respond` "
@@ -20740,23 +21305,38 @@ def test_pdp_provider_protocol_surface_matcher_has_negative_controls() -> None:
         "pdp status",
         "pdp export",
     ]
-    assert unshipped_pdp_provider_cli_matches(
+    assert reserved_pdp_provider_cli_matches(
         " ".join(f'"{subcommand}"' for subcommand in shipped_local_subcommands)
     ) == []
 
 
-def test_unshipped_pdp_provider_protocol_surface_is_not_exposed() -> None:
-    exposed: dict[str, list[str]] = {}
+def test_pdp_provider_protocol_exposes_only_the_canonical_v1_api_family() -> None:
+    api = read(TORII_SORAFS_API_RS)
+    openapi = read(TORII_OPENAPI_RS)
+    torii = read(TORII_LIB_RS)
 
+    for route in SHIPPED_PDP_PROVIDER_ROUTES:
+        assert f'"{route}"' in openapi
+    for handler in (
+        "handle_post_sorafs_pdp_challenge",
+        "handle_post_sorafs_pdp_next",
+        "handle_post_sorafs_pdp_proof",
+        "handle_post_sorafs_pdp_status",
+        "handle_post_sorafs_pdp_export",
+    ):
+        assert f"fn {handler}(" in api
+        assert f"sorafs::api::{handler}" in torii
+
+    exposed: dict[str, list[str]] = {}
     for path in (TORII_SORAFS_API_RS, TORII_OPENAPI_RS):
         source = read(path)
-        matched = unshipped_pdp_provider_route_matches(source)
+        matched = reserved_pdp_provider_route_matches(source)
         if matched:
             exposed[str(path.relative_to(REPO_ROOT))] = matched
 
     for path in (IROHA_CLI_SORAFS_RS, SORAFS_CLI_RS):
         source = read(path)
-        matched = unshipped_pdp_provider_cli_matches(source)
+        matched = reserved_pdp_provider_cli_matches(source)
         if matched:
             exposed[str(path.relative_to(REPO_ROOT))] = matched
 
@@ -24780,34 +25360,53 @@ def test_unshipped_transparency_deployed_service_surface_is_not_exposed() -> Non
     assert exposed == {}
 
 
-def test_gateway_compliance_controller_services_stay_unshipped_in_docs() -> None:
+def test_gateway_compliance_controller_runtime_state_is_honest_in_docs() -> None:
     source = read(SORAFS_GATEWAY_COMPLIANCE_PLAN)
     normalized = re.sub(r"\s+", " ", source)
 
-    required_unshipped = (
-        "The repository does not yet ship an always-on central compliance controller daemon, deployed moderation toggle service, deployed public receipt explorer, or full appeal-driven override workflow. The local SFM-4c transparency ledger builder and readback surface are shipped, but promotion evidence now has to prove controller runtime, moderation-toggle, deployed-publication, and multi-gateway boundaries before gateway compliance can be marked ready.",
-        "Ship the always-on compliance controller daemon that fetches external feeds, normalizes updates, signs them, distributes them to gateways, and tracks acknowledgements.",
-        "the daemon itself still needs production deployment",
-        "Persist denylist/catalog state and update history through the configured production storage path instead of relying only on local bundle ingestion.",
-        "Implement moderation toggle APIs, approval workflows, expiry handling, and operator audit trails.",
-        "the service itself still needs production deployment",
-        "Connect appeal outcomes to gateway policy overrides and cache invalidation.",
+    required_current = (
+        "`iroha_config` now carries the non-secret controller policy",
+        "Torii accepts runtime-injected ACME and authenticated feed transports",
+        "This controller/runtime integration ships locally.",
+        "Real authenticated feed and ACME adapters, authenticated stage/acknowledge/promote/rollback/status routes, live gateway-policy cutover, finalized accepted-appeal and legal/safety-hold producers, and deployment across two independently administered regional gateways remain open.",
+        "The local SFM-4c transparency ledger builder and readback surface are shipped, but deployed publication, public-explorer, and two-gateway evidence remain open.",
+        "Configuration, runtime dependency transfer, fail-closed startup checks, and durable controller construction already ship locally and must not be reopened as missing work.",
+        "Connect finalized accepted-appeal outcomes and legal/safety-hold producers to signed catalog construction and cache invalidation.",
         "Wire deployed GAR receipts, proof-token indexes, and moderation events through the shipped local SFM-4c transparency source-entry and publication paths, then capture deployed publication evidence.",
         "Capture staged multi-gateway rollout artifacts that satisfy the SFM-4 evidence gate before promoting gateway compliance changes to production.",
     )
-    missing = [phrase for phrase in required_unshipped if phrase not in normalized]
+    stale_claims = (
+        "The repository does not yet wire that controller through `iroha_config`",
+        "always-on central compliance controller daemon",
+        "Ship the always-on compliance controller daemon",
+        "missing deployed controller daemon",
+        "the daemon itself still needs production deployment",
+    )
+    missing = [phrase for phrase in required_current if phrase not in normalized]
+    stale = [phrase for phrase in stale_claims if phrase in normalized]
 
     assert missing == []
+    assert stale == []
 
 
-def test_gateway_compliance_docs_do_not_reopen_shipped_transparency_builder() -> None:
+def test_gateway_compliance_docs_keep_shipped_runtime_and_transparency_state() -> None:
     stale_phrases = (
         "SFM-4c transparency ledger builder, public receipt explorer",
         "Publish GAR receipts, proof-token indexes, and moderation events through the SFM-4c transparency ledger once that builder exists.",
+        "The repository does not yet wire that controller through `iroha_config`",
+        "always-on central compliance controller daemon",
+        "Ship the always-on compliance controller daemon",
+        "missing deployed controller daemon",
+        "the daemon itself still needs production deployment",
     )
     required_current = (
-        "The local SFM-4c transparency ledger builder and readback surface are shipped",
-        "promotion evidence now has to prove controller runtime, moderation-toggle, deployed-publication, and multi-gateway boundaries",
+        "`iroha_config` now carries the non-secret controller policy",
+        "Torii accepts runtime-injected ACME and authenticated feed transports",
+        "This controller/runtime integration ships locally.",
+        "Real authenticated feed and ACME adapters",
+        "finalized accepted-appeal and legal/safety-hold producers",
+        "two independently administered regional gateways remain open",
+        "The local SFM-4c transparency ledger builder and readback surface are shipped, but deployed publication, public-explorer, and two-gateway evidence remain open.",
         "Wire deployed GAR receipts, proof-token indexes, and moderation events through the shipped local SFM-4c transparency source-entry and publication paths, then capture deployed publication evidence.",
     )
     stale: dict[str, list[str]] = {}
@@ -25381,14 +25980,15 @@ def test_gateway_load_rollout_evidence_work_stays_open_in_docs() -> None:
     normalized = re.sub(r"\s+", " ", source)
 
     required_open = (
-        "It does not open a live HTTP/3 gateway or sleep through a wall-clock soak test",
+        "It does not open a live gateway or sleep through a wall-clock soak test",
+        "HTTP/3 is explicitly non-applicable to V1 and is not a readiness dependency.",
         "Live staging load evidence",
-        "No committed SoraFS HTTP/3 gateway endpoint is present in this checkout; add HTTP/3 scenarios only after the gateway exposes that transport.",
+        "V1 has no committed SoraFS HTTP/3 endpoint or release requirement. Any later transport work is separately scoped and cannot block or satisfy V1 readiness.",
         "Archive signed local conformance reports from `ci/check_sorafs_gateway_conformance.sh`",
         "Run a live staging load rig with the same fixture bundle",
         "Add a live-target adapter if operators need the integration test to exercise a deployed gateway instead of the fixture-backed adapter.",
-        "Add HTTP/3 scenarios only after the SoraFS gateway exposes a committed HTTP/3 endpoint and configuration surface.",
         "Record cold-cache SLO baselines after the staging hardware profile is chosen.",
+        "A later HTTP/3 transport project is outside this V1 plan.",
         "`scripts/check_sorafs_gateway_load_rollout_evidence.py` validates payload-free local conformance, live staging load, telemetry/SLO, transport-scope, and governance approval evidence before SF-5a load promotion.",
         "`scripts/run_sorafs_gateway_load_rollout_evidence.py` emits the matching collection plan and dry-run evidence contract",
         "runner validates the schema-closed collection plan, required kinds, thresholds, external evidence map, evidence contract, and command steps before dry-run output or verifier execution.",
@@ -25559,12 +26159,12 @@ def test_gateway_load_canary_builder_is_checked_in() -> None:
     assert '"iroha-gateway 1.0.0"' in staging_example
     assert "scripts/build_sorafs_gateway_load_canary.py" in plan
     assert (
-        "rejects `--http3-endpoint-committed` until a reviewed SoraFS HTTP/3 "
-        "gateway endpoint is committed"
+        "rejects `--http3-endpoint-committed` because HTTP/3 is outside the V1 "
+        "contract"
     ) in normalized_plan
     assert (
-        "rejects `--http3-endpoint-committed` until a reviewed SoraFS HTTP/3 "
-        "gateway endpoint is committed"
+        "rejects `--http3-endpoint-committed` because HTTP/3 is outside the V1 "
+        "contract"
     ) in normalized_roadmap
     assert "scripts/build_sorafs_gateway_load_canary.py" in roadmap
     assert (
@@ -27727,11 +28327,11 @@ def test_sorafs_proto_plan_documents_only_active_fixture_generators() -> None:
         name
         for name in documented_bins
         if name.startswith("generate_")
-        or name in {"provider_admission_fixtures", "sorafs_manifest_stub"}
+        or name in {"provider_admission_fixtures", "sorafs_manifest_builder"}
     ]
     expected_fixture_bins = [
         "provider_admission_fixtures",
-        "sorafs_manifest_stub",
+        "sorafs_manifest_builder",
         "generate_orderbook_fixtures",
         "generate_por_fixtures",
     ]
@@ -27746,6 +28346,134 @@ def test_sorafs_proto_plan_documents_only_active_fixture_generators() -> None:
     assert [name for name in documented_fixture_bins if name not in existing_bins] == []
     assert "Do not document retired generator names as required workflow" in source
     assert "not defining a separate\n`sora-proto` codec outside Norito" in source
+
+
+def test_sorafs_v1_builder_and_provider_advert_are_canonical_production_bins() -> None:
+    cargo_toml = read(SORAFS_CAR_CARGO_TOML)
+    assert (
+        'name = "sorafs_manifest_builder"\n'
+        'path = "src/bin/sorafs_manifest_builder.rs"'
+    ) in cargo_toml
+    assert (
+        'name = "sorafs_provider_advert"\n'
+        'path = "src/bin/sorafs_provider_advert.rs"'
+    ) in cargo_toml
+    assert SORAFS_MANIFEST_BUILDER_RS.is_file()
+    assert SORAFS_PROVIDER_ADVERT_RS.is_file()
+
+    obsolete_names = (
+        "sorafs_manifest_" + "stub",
+        "sorafs_provider_advert_" + "stub",
+        "sorafs-manifest-" + "stub",
+        "sorafs-provider-advert-" + "stub",
+    )
+    searchable_suffixes = {
+        ".json",
+        ".md",
+        ".py",
+        ".rs",
+        ".sh",
+        ".toml",
+        ".yaml",
+        ".yml",
+    }
+    offenders: dict[str, list[str]] = {}
+    for root in (
+        REPO_ROOT / ".github",
+        REPO_ROOT / "configs",
+        REPO_ROOT / "crates",
+        REPO_ROOT / "defaults",
+        REPO_ROOT / "docs",
+        REPO_ROOT / "python",
+        REPO_ROOT / "scripts",
+    ):
+        for path in root.rglob("*"):
+            if not path.is_file() or path.suffix not in searchable_suffixes:
+                continue
+            source = path.read_text(encoding="utf-8", errors="replace")
+            matched = [name for name in obsolete_names if name in source]
+            if matched:
+                offenders[str(path.relative_to(REPO_ROOT))] = matched
+    assert offenders == {}
+
+    retired_internal_markers = (
+        "SORAFS_MANIFEST_" + "STUB",
+        "run_manifest_" + "stub",
+        "manifest_" + "stub_cli",
+        "provider_advert_" + "stub",
+    )
+    retired_internal_sources = (
+        REPO_ROOT / "configs" / "soranexus" / "taira" / "check_sorafs_rollout.sh",
+        REPO_ROOT / "scripts" / "android_codegen_replay_sorafs_fixture.py",
+        REPO_ROOT
+        / "scripts"
+        / "tests"
+        / "android_codegen_replay_sorafs_fixture_test.py",
+        REPO_ROOT / "crates" / "sorafs_car",
+    )
+    stale_internal: dict[str, list[str]] = {}
+    for source_path in retired_internal_sources:
+        candidates = (
+            source_path.rglob("*") if source_path.is_dir() else (source_path,)
+        )
+        for path in candidates:
+            if not path.is_file():
+                continue
+            source = path.read_text(encoding="utf-8", errors="replace")
+            matched = [
+                marker for marker in retired_internal_markers if marker in source
+            ]
+            if matched:
+                stale_internal[str(path.relative_to(REPO_ROOT))] = matched
+    assert stale_internal == {}
+
+    provider_source = read(SORAFS_PROVIDER_ADVERT_RS).split("#[cfg(test)]", 1)[0]
+    required_contract = (
+        "--prepare",
+        "--emit",
+        "--verify",
+        "--public-key-file",
+        "--public-key-fingerprint-sha256",
+        "--signing-payload-out",
+        "--signing-payload-file",
+        "--signature-file",
+        "signature_payload_bytes",
+        "VerifyingKey::from_bytes",
+        "is_weak()",
+        "set_no_follow_flag",
+        "nlink() != 1",
+        "trusted_metadata_matches",
+        "create_new(true)",
+    )
+    missing = [marker for marker in required_contract if marker not in provider_source]
+    assert missing == []
+
+    forbidden_contract = (
+        "--signing-" + "key",
+        "--signing-" + "key-file",
+        "--public-" + "key=",
+        "--signature=",
+        "Signing" + "Key",
+    )
+    forbidden = [marker for marker in forbidden_contract if marker in provider_source]
+    assert forbidden == []
+
+
+def test_governance_publishers_must_implement_pdp_archive_publication() -> None:
+    source = read(SORAFS_NODE_LIB_RS)
+    trait_source = source.split(
+        "pub trait GovernancePublisher", 1
+    )[1].split("/// Error returned", 1)[0]
+    required_declaration = re.search(
+        r"fn publish_pdp_archive\("
+        r".*?"
+        r"\) -> Result<\(\), GovernancePublishError>;",
+        trait_source,
+        flags=re.DOTALL,
+    )
+
+    assert required_declaration is not None
+    assert "publication is not implemented by this publisher" not in trait_source
 
 
 def test_sorafs_proto_release_evidence_work_stays_open_in_docs() -> None:
@@ -27964,68 +28692,163 @@ def test_unshipped_sorafs_proto_release_surface_is_not_exposed() -> None:
     assert exposed == {}
 
 
-def test_pdp_proof_stream_remains_fail_closed_until_provider_protocol_ships() -> None:
+def test_pdp_and_potr_proof_streams_use_exact_finalized_chain_projections() -> None:
     api = read(TORII_SORAFS_API_RS)
     openapi = read(TORII_OPENAPI_RS)
 
-    precheck_start = api.index("if matches!(proof_kind, ProofStreamKind::Pdp)")
-    precheck_end = api.index("let nonce = match decode_nonce", precheck_start)
-    precheck = api[precheck_start:precheck_end]
-    assert "return json_error(" in precheck
-    assert "StatusCode::BAD_REQUEST" in precheck
-    assert "unsupported proof_kind; expected `por` or `potr`" in precheck
+    renderer_start = api.index("fn render_finalized_proof_stream_response(")
+    renderer_end = api.index(
+        "\npub(crate) async fn handle_post_sorafs_pdp_challenge(",
+        renderer_start,
+    )
+    renderer = re.sub(r"\s+", " ", api[renderer_start:renderer_end])
+    assert "outcome.manifest_digest.as_bytes() != &request.manifest_digest" in renderer
+    assert "outcome.provider_id.as_bytes() != &request.provider_id" in renderer
+    assert "request.challenge_id != Some(outcome.identity_digest)" in renderer
+    assert "receipt.request_id != Some(expected_job_id)" in renderer
+    assert "proof_outcome_request_mismatch_response(proof_kind_label)" in renderer
 
-    dispatch_start = api.index("ProofStreamKind::Pdp => json_error(")
-    dispatch_end = api.index("\n    }\n}", dispatch_start)
-    dispatch = api[dispatch_start:dispatch_end]
-    assert "StatusCode::BAD_REQUEST" in dispatch
-    assert "unsupported proof_kind; expected `por` or `potr`" in dispatch
+    pdp_dispatch_start = api.index("ProofStreamKind::Pdp => {")
+    pdp_dispatch_end = api.index("\n    }\n}", pdp_dispatch_start)
+    pdp_dispatch = re.sub(r"\s+", " ", api[pdp_dispatch_start:pdp_dispatch_end])
+    assert ".expect(\"validation guarantees challenge id for PDP\")" in pdp_dispatch
+    assert (
+        "FindSorafsProofOutcome::new(ProofOutcomeKindV1::Pdp, challenge_id, None)"
+        in pdp_dispatch
+    )
+    assert "query.execute(&state.state.query_view())" in pdp_dispatch
+    assert (
+        "render_finalized_proof_stream_response(&state, &finalized, &request)"
+        in pdp_dispatch
+    )
+    assert "challenge_status" not in pdp_dispatch
 
-    assert "`proof_kind=pdp` is reserved for future SF-13 work" in openapi
-    assert "rejected as an unsupported proof kind" in openapi
+    potr_dispatch_start = api.index("ProofStreamKind::Potr => {")
+    potr_dispatch_end = api.index("ProofStreamKind::Pdp => {", potr_dispatch_start)
+    potr_dispatch = re.sub(r"\s+", " ", api[potr_dispatch_start:potr_dispatch_end])
+    assert (
+        ".expect(\"validation guarantees orchestrator job id for PoTR\")"
+        in potr_dispatch
+    )
+    assert (
+        "potr_request_scope_digest_v1(request.manifest_digest, provider_id, job_id)"
+        in potr_dispatch
+    )
+    assert (
+        "FindSorafsProofOutcome::new(ProofOutcomeKindV1::Potr, identity_digest, None)"
+        in potr_dispatch
+    )
+    assert "query.execute(&state.state.query_view())" in potr_dispatch
+    assert (
+        "render_finalized_proof_stream_response(&state, &finalized, &request)"
+        in potr_dispatch
+    )
+
+    pdp_schema_start = openapi.index('"SorafsProofStreamPdpRequestV1".to_owned()')
+    pdp_schema_end = openapi.index(
+        '"SorafsProofStreamPotrRequestV1".to_owned()',
+        pdp_schema_start,
+    )
+    pdp_schema = openapi[pdp_schema_start:pdp_schema_end]
+    pdp_required_start = pdp_schema.index('"required": [')
+    pdp_required_end = pdp_schema.index("],", pdp_required_start)
+    pdp_required = pdp_schema[pdp_required_start:pdp_required_end]
+    assert '"challenge_id_hex"' in pdp_required
+    assert '"additionalProperties": false' in pdp_schema
+
+    potr_schema_start = pdp_schema_end
+    potr_schema_end = openapi.index(
+        '"SorafsProofStreamHttpRequestV1".to_owned()',
+        potr_schema_start,
+    )
+    potr_schema = openapi[potr_schema_start:potr_schema_end]
+    potr_required_start = potr_schema.index('"required": [')
+    potr_required_end = potr_schema.index("],", potr_required_start)
+    potr_required = potr_schema[potr_required_start:potr_required_end]
+    assert '"orchestrator_job_id_hex"' in potr_required
+    assert '"additionalProperties": false' in potr_schema
+    assert (
+        "chain-authoritative request-scope identity with the manifest and provider"
+        in potr_schema
+    )
+
+    assert "`proof_kind=pdp` is reserved for future SF-13 work" not in openapi
+    assert "rejected as an unsupported proof kind" not in openapi
 
 
 def test_sorafs_localized_plan_mirrors_have_single_front_matter_block() -> None:
-    duplicate: list[str] = []
+    malformed: dict[str, str] = {}
     localized_plan = re.compile(r"^sorafs_.+_plan\.[^.]+\.md$")
     for path in sorted(DOCS_SOURCE_DIR.glob("sorafs_*_plan.*.md")):
         if localized_plan.match(path.name) is None:
             continue
-        source = read(path)
-        if not source.startswith("---\n"):
-            duplicate.append(str(path.relative_to(REPO_ROOT)))
+        relative_path = str(path.relative_to(REPO_ROOT))
+        metadata, prefix, parse_error = parse_localized_markdown_front_matter(
+            read(path)
+        )
+        if parse_error is not None:
+            malformed[relative_path] = parse_error
             continue
-        end = source.find("\n---\n", 4)
-        if end == -1:
-            duplicate.append(str(path.relative_to(REPO_ROOT)))
-            continue
-        body = source[end + len("\n---\n") :].lstrip()
-        if body.startswith("---\n"):
-            duplicate.append(str(path.relative_to(REPO_ROOT)))
 
-    assert duplicate == []
+        status = metadata.get("status")
+        if status == "needs-translation":
+            header_match = GENERATED_I18N_STUB_HEADER_RE.fullmatch(prefix)
+            if header_match is None:
+                malformed[relative_path] = "missing canonical generated-stub header"
+            elif header_match.group("lang") != metadata.get("lang"):
+                malformed[relative_path] = "generated-stub header language mismatch"
+            elif metadata.get("generator") != "scripts/sync_docs_i18n.py":
+                malformed[relative_path] = "unexpected generated-stub generator"
+            elif metadata.get("translation_last_reviewed") != "null":
+                malformed[relative_path] = (
+                    "generated stub must not claim translation review"
+                )
+        elif status in {"complete", "needs-review"}:
+            if prefix:
+                malformed[relative_path] = (
+                    "translated mirror retains generated-stub header"
+                )
+        else:
+            malformed[relative_path] = f"unsupported translation status {status}"
+
+    assert malformed == {}
 
 
 def test_sorafs_localized_plan_mirrors_match_source_hashes() -> None:
     mismatches: dict[str, str] = {}
     localized_plan = re.compile(r"^sorafs_.+_plan\.[^.]+\.md$")
-    source_re = re.compile(r"^source: (?P<source>.+)$", re.M)
-    hash_re = re.compile(r"^source_hash: (?P<hash>[0-9a-f]{64})$", re.M)
+    hash_re = re.compile(r"[0-9a-f]{64}")
     for path in sorted(DOCS_SOURCE_DIR.glob("sorafs_*_plan.*.md")):
         if localized_plan.match(path.name) is None:
             continue
-        mirror = read(path)
-        source_match = source_re.search(mirror)
-        hash_match = hash_re.search(mirror)
-        if source_match is None or hash_match is None:
-            mismatches[str(path.relative_to(REPO_ROOT))] = "missing source metadata"
+        relative_path = str(path.relative_to(REPO_ROOT))
+        metadata, _, parse_error = parse_localized_markdown_front_matter(read(path))
+        if parse_error is not None:
+            mismatches[relative_path] = parse_error
             continue
-        source_path = REPO_ROOT / source_match.group("source")
+        source_value = metadata.get("source")
+        recorded_hash = metadata.get("source_hash")
+        status = metadata.get("status")
+        if (
+            source_value is None
+            or recorded_hash is None
+            or status is None
+            or hash_re.fullmatch(recorded_hash) is None
+        ):
+            mismatches[relative_path] = "missing or malformed source metadata"
+            continue
+        source_path = REPO_ROOT / source_value
         if not source_path.is_file():
-            mismatches[str(path.relative_to(REPO_ROOT))] = "source file missing"
+            mismatches[relative_path] = "source file missing"
             continue
-        source_hash = hashlib.sha256(read(source_path).encode("utf-8")).hexdigest()
-        if hash_match.group("hash") != source_hash:
-            mismatches[str(path.relative_to(REPO_ROOT))] = "stale source_hash"
+        source_hash = hashlib.sha256(source_path.read_bytes()).hexdigest()
+        if status in {"complete", "needs-translation"}:
+            if recorded_hash != source_hash:
+                mismatches[relative_path] = f"stale {status} mirror"
+        elif status == "needs-review":
+            if recorded_hash == source_hash:
+                mismatches[relative_path] = "needs-review mirror is not stale"
+        else:
+            mismatches[relative_path] = f"unsupported translation status {status}"
 
     assert mismatches == {}

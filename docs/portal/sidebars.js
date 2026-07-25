@@ -57,6 +57,7 @@ const sidebars = {
         'sorafs/orchestrator-tuning',
         'sorafs/developer-cli',
         'sorafs/developer-releases',
+        'sorafs/release-rollback-yank',
         'sorafs/developer-sdk-index',
         'sorafs/developer-sdk-rust',
         'sorafs/reference-sdk/errors',

@@ -11,11 +11,11 @@ import { ToriiClient } from "../src/toriiClient.js";
 const binding = Object.freeze({
   schema: "cbsi.mobile-validation-fee-ledger-binding.v1",
   chainId: "iroha3-nexus",
-  genesisHash: "11".repeat(32),
-  policyChainGenesisHash: "33".repeat(32),
+  genesisHash: "13".repeat(32),
+  policyChainGenesisHash: "35".repeat(32),
   checkpoint: Object.freeze({
     height: 100,
-    contextId: "55".repeat(32),
+    contextId: "57".repeat(32),
   }),
 });
 
@@ -33,7 +33,11 @@ function withNativeBinding(native, body) {
   }
 }
 
-test("immutable ledger binding rejects aliases and unknown trust inputs", () => {
+test("immutable ledger binding requires marked Iroha hashes and rejects aliases", () => {
+  const normalized = normalizeValidationFeeLedgerBindingV1(binding);
+  assert.equal(normalized.genesisHash, "13".repeat(32));
+  assert.equal(normalized.policyChainGenesisHash, "35".repeat(32));
+  assert.equal(normalized.checkpoint.contextId, "57".repeat(32));
   assert.throws(
     () =>
       normalizeValidationFeeLedgerBindingV1({
@@ -50,12 +54,20 @@ test("immutable ledger binding rejects aliases and unknown trust inputs", () => 
       }),
     /lowercase hexadecimal/u,
   );
+  assert.throws(
+    () =>
+      normalizeValidationFeeLedgerBindingV1({
+        ...binding,
+        genesisHash: "12".repeat(32),
+      }),
+    /canonical Iroha hash marker/u,
+  );
 });
 
 test("request encoder delegates only after strict checkpoint validation", () => {
-  const evenEndingCheckpoint = Object.freeze({
+  const checkpoint = Object.freeze({
     height: binding.checkpoint.height,
-    contextId: "02".repeat(32),
+    contextId: "03".repeat(32),
   });
   withNativeBinding(
     {
@@ -64,15 +76,31 @@ test("request encoder delegates only after strict checkpoint validation", () => 
       },
       validationFeeCurrentPolicyProofRequestV1(height, context) {
         assert.equal(height, 100n);
-        assert.deepEqual(context, Buffer.from("02".repeat(32), "hex"));
+        assert.deepEqual(context, Buffer.from("03".repeat(32), "hex"));
         return Buffer.from([1, 2, 3]);
       },
       validationFeeVerifyCurrentPolicyProofV1() {},
     },
     () => {
       assert.deepEqual(
-        encodeValidationFeeCurrentPolicyProofRequestV1(evenEndingCheckpoint),
+        encodeValidationFeeCurrentPolicyProofRequestV1(checkpoint),
         Buffer.from([1, 2, 3]),
+      );
+      assert.throws(
+        () =>
+          encodeValidationFeeCurrentPolicyProofRequestV1({
+            ...checkpoint,
+            contextId: "00".repeat(32),
+          }),
+        /must be non-zero/u,
+      );
+      assert.throws(
+        () =>
+          encodeValidationFeeCurrentPolicyProofRequestV1({
+            ...checkpoint,
+            contextId: "02".repeat(32),
+          }),
+        /canonical Iroha hash marker/u,
       );
     },
   );
@@ -85,15 +113,15 @@ test("native verified projection remains bound to the release checkpoint", () =>
     chain_id: binding.chainId,
     genesis_hash: binding.genesisHash,
     policy_chain_genesis_hash: binding.policyChainGenesisHash,
-    registry_hash: "77".repeat(32),
+    registry_hash: "79".repeat(32),
     head_policy_version: 2,
-    head_policy_hash: "99".repeat(32),
+    head_policy_hash: "9b".repeat(32),
     current_policy: null,
     trusted_checkpoint_height: 100,
     trusted_checkpoint_context_id: binding.checkpoint.contextId,
     evaluated_block_height: 127,
-    evaluated_context_id: "bc".repeat(32),
-    evaluated_block_hash: "de".repeat(32),
+    evaluated_context_id: "bd".repeat(32),
+    evaluated_block_hash: "df".repeat(32),
     observed_ledger_tip_height: 190,
     more_available: true,
   };
@@ -133,6 +161,17 @@ test("native verified projection remains bound to the release checkpoint", () =>
       assert.equal(verified.evaluated_block_height, 127n);
       assert.equal(verified.more_available, true);
       assert.equal(Object.isFrozen(verified), true);
+      projection.evaluated_block_hash = "de".repeat(32);
+      assert.throws(
+        () =>
+          verifyValidationFeeCurrentPolicyProofV1(
+            Buffer.from([9]),
+            binding,
+            binding.checkpoint,
+          ),
+        /canonical Iroha hash marker/u,
+      );
+      projection.evaluated_block_hash = "df".repeat(32);
     },
   );
 });

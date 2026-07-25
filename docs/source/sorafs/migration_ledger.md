@@ -18,6 +18,12 @@ non-secret evidence fingerprints when notable events occur so the external
 archive and aggregate summaries remain traceable without copying credentials or
 payloads into source control.
 
+The canonical row-by-row closure mapping is
+`docs/source/sorafs/v1_closure_ledger.md`. It records the implementation,
+validation, documentation, removal, and rollout-evidence owner for the nine
+foundational prerequisites and all 17 aggregate lanes without treating local
+fixtures as production proof.
+
 ## Recent Updates
 
 - 2025-11-02 — Pin Registry register ISI now enforces shared chunker/policy validation via `sorafs_manifest` helpers, keeping on-chain paths aligned with Torii checks.
@@ -28,3 +34,8 @@ payloads into source control.
   and undocumented council-minute claims are not first-release paths; current
   production readiness remains blocked until all required deployment summaries
   are present and ready.
+- 2026-07-23 — Added the canonical V1 closure ledger, corrected the aggregate
+  runner invocation to its lane-specific response-file interface, and made the
+  reviewed freshness clock an explicit runner input. The production aggregate
+  remains blocked pending a trusted foundational envelope and 17 genuine
+  deployment-bound lane summaries.

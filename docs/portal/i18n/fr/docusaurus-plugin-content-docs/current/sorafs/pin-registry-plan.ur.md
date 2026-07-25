@@ -78,7 +78,7 @@ Test :
 |------|-----|-------------|
 | Torii Service | `/v1/sorafs/pin` (soumettre)، `/v1/sorafs/pin/{cid}` (recherche)، `/v1/sorafs/aliases` (liste/liaison)، `/v1/sorafs/replication` (commandes/reçus) pagination + filtrage | Mise en réseau TL / Core Infra |
 | Attestation | réponses en hauteur/hachage du registre La structure d'attestation Norito est utilisée pour les SDK qui consomment des fichiers | Infrastructure de base |
-| CLI | `sorafs_manifest_stub` est compatible avec `sorafs_pin` CLI pour `pin submit`, `alias bind`, `order issue`, `registry export` ہو۔ | GT Outillage |
+| CLI | `sorafs_manifest_builder` est compatible avec `sorafs_pin` CLI pour `pin submit`, `alias bind`, `order issue`, `registry export` ہو۔ | GT Outillage |
 | SDK | Le schéma Norito et les liaisons client (Rust/Go/TS) génèrent des erreurs tests d'intégration | Équipes SDK |
 
 Opérations :

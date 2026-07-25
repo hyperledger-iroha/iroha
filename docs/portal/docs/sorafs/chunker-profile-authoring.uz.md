@@ -97,9 +97,9 @@ eslatmalar.
   manifest digest, PoR taklif qilingan parametrlar bilan tekshiradi.
 - `sorafs_manifest_chunk_store --json-out=-` - chunk-do'kon hisobotini oqimlash
   Avtomatlashtirilgan taqqoslash uchun stdout.
-- `sorafs_manifest_stub --chunker-profile=<handle>` - manifest va CARni tasdiqlang
+- `sorafs_manifest_builder --chunker-profile=<handle>` - manifest va CARni tasdiqlang
   rejalar kanonik tutqichni va taxalluslarni joylashtiradi.
-- `sorafs_manifest_stub --plan=-` - oldingi `chunk_fetch_specs` ni orqaga qaytaring
+- `sorafs_manifest_builder --plan=-` - oldingi `chunk_fetch_specs` ni orqaga qaytaring
   o'zgarishlardan keyingi ofsetlarni/dijestlarni tekshirish uchun.
 
 Taklifda buyruq chiqishini (dijestlar, PoR ildizlari, manifest xeshlari) yozib oling
@@ -140,7 +140,7 @@ cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- \
   --json-out=- --por-json-out=- fixtures/sorafs_chunker/input.bin
 
 # Generate manifest + CAR and capture chunk fetch specs
-cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_car --bin sorafs_manifest_builder -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --chunk-fetch-plan-out=chunk_plan.json \
@@ -149,7 +149,7 @@ cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
   --json-out=sf2.report.json
 
 # Re-run using the saved fetch plan (guards against stale offsets)
-cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_car --bin sorafs_manifest_builder -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --plan=chunk_plan.json --json-out=-

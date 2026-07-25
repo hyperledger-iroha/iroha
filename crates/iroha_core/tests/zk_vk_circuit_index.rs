@@ -147,8 +147,7 @@ fn update_rotates_circuit_version_index() {
         .expect("update vk");
     stx.apply();
 
-    let view = state.view();
-    let map = view.world().verifying_keys_by_circuit();
+    let map = block.world.verifying_keys_by_circuit();
     let key_old = (String::from("circuit_beta"), 1);
     let key_new = (String::from("circuit_beta"), 2);
     assert!(
@@ -387,7 +386,7 @@ fn register_requires_circuit_and_schema_hash() {
             InvalidParameterError::SmartContract(msg),
         )) => {
             assert!(
-                msg.contains("schema hash"),
+                msg.contains("public_inputs_schema_hash"),
                 "unexpected message for schema guard: {msg}"
             );
         }

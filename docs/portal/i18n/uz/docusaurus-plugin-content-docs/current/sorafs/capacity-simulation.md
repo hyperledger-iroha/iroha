@@ -15,7 +15,7 @@ translation_last_reviewed: 2026-02-07
 ::: Eslatma Kanonik manba
 :::
 
-Ushbu runbook SF-2c sig'imli bozor simulyatsiyasi to'plamini qanday ishga tushirish va natijada olingan ko'rsatkichlarni vizualizatsiya qilishni tushuntiradi. U `docs/examples/sorafs_capacity_simulation/` da deterministik moslamalar yordamida kvotalar bo'yicha muzokaralar, nosozliklarni qayta ishlash va tuzatishni oxirigacha tasdiqlaydi. Imkoniyatli foydali yuklar hali ham `sorafs_manifest_stub capacity` dan foydalanadi; manifest/CAR qadoqlash oqimlari uchun `iroha app sorafs toolkit pack` dan foydalaning.
+Ushbu runbook SF-2c sig'imli bozor simulyatsiyasi to'plamini qanday ishga tushirish va natijada olingan ko'rsatkichlarni vizualizatsiya qilishni tushuntiradi. U `docs/examples/sorafs_capacity_simulation/` da deterministik moslamalar yordamida kvotalar bo'yicha muzokaralar, nosozliklarni qayta ishlash va tuzatishni oxirigacha tasdiqlaydi. Imkoniyatli foydali yuklar hali ham `sorafs_manifest_builder capacity` dan foydalanadi; manifest/CAR qadoqlash oqimlari uchun `iroha app sorafs toolkit pack` dan foydalaning.
 
 ## 1. CLI artefaktlarini yarating
 
@@ -24,7 +24,7 @@ cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./run_cli.sh ./artifacts
 ```
 
-`run_cli.sh` `sorafs_manifest_stub capacity` ni oʻrab, Norito foydali yuklarni, base64 bloblarini, Torii soʻrov qismlarini va JSON xulosalarini chiqarish uchun:
+`run_cli.sh` `sorafs_manifest_builder capacity` ni oʻrab, Norito foydali yuklarni, base64 bloblarini, Torii soʻrov qismlarini va JSON xulosalarini chiqarish uchun:
 
 - Kvota bo'yicha muzokaralar stsenariysida ishtirok etuvchi uchta provayder deklaratsiyasi.
 - Ushbu provayderlar bo'ylab bosqichli manifestni taqsimlovchi takrorlash tartibi.

@@ -13,15 +13,18 @@ call engineers can exercise the same checks that Ops uses to enforce the SLO.
 
 ## Pipeline recap
 
-1. **Build and sign** – follow the [deployment guide](./deploy-guide.md) to run
-   `npm run build`, `scripts/preview_wave_preflight.sh`, and the Sigstore +
-   manifest submission steps. The preflight script emits `preflight-summary.json`
-   so every preview carries build/link/probe metadata.
+1. **Build and authenticate** – follow the [deployment guide](./deploy-guide.md)
+   to run `npm run build`, `scripts/preview_wave_preflight.sh`, content-manifest
+   submission, and the protected aggregate Ed25519/HSM release job. The
+   preflight script emits `preflight-summary.json` so every preview carries
+   build/link/probe metadata.
 2. **Pin and verify** – `sorafs_cli manifest submit`, `cargo xtask soradns-verify-binding`,
    and the DNS cutover plan provide deterministic artefacts for governance.
-3. **Archive evidence** – store the CAR summary, Sigstore bundle, alias proof,
-   probe output, and `docs_portal.json` dashboard snapshots under
-   `artifacts/sorafs/<tag>/`.
+3. **Archive evidence** – store the CAR summary, alias proof, probe output,
+   aggregate release manifest, raw Ed25519 signature/public key, reviewed
+   fingerprint, pinned-verifier receipt, and `docs_portal.json` dashboard
+   snapshots under `artifacts/sorafs/<tag>/`. Any OIDC/cosign provenance
+   attestation remains a separate, non-authoritative artifact.
 
 ## Monitoring channels
 

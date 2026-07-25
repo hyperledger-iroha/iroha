@@ -65,7 +65,7 @@ cargo test -p sorafs_car --features cli --test capacity_cli
 python3 scripts/telemetry/capacity_reconcile.py --snapshot <state.json> --ledger <ledger.ndjson> --warn-only
 ```
 
-オンボーディング/ディスピューティング コム `sorafs_manifest_stub capacity {declaration,dispute}` からのオペレーティング システムの再生成ペイロードの開発、および JSON/Norito の結果、政府のチケット管理が行われます。
+オンボーディング/ディスピューティング コム `sorafs_manifest_builder capacity {declaration,dispute}` からのオペレーティング システムの再生成ペイロードの開発、および JSON/Norito の結果、政府のチケット管理が行われます。
 
 ## アプロバカオの芸術品
 

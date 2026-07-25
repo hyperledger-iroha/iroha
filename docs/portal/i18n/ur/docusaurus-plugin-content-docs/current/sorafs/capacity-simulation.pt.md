@@ -19,7 +19,7 @@ ID: صلاحیت کی نقل
 یہ صفحہ `docs/source/sorafs/runbooks/sorafs_capacity_simulation.md` کا آئینہ دار ہے۔ دونوں کاپیاں ہم آہنگ رکھیں۔
 :::
 
-اس رن بک میں بتایا گیا ہے کہ SF-2C صلاحیت مارکیٹ پلیس تخروپن کٹ کو کیسے چلائیں اور اس کے نتیجے میں میٹرکس کا تصور کیا جائے۔ یہ کوٹہ مذاکرات ، فیل اوور ہینڈلنگ ، اور `docs/examples/sorafs_capacity_simulation/` میں ڈٹرمینسٹک فکسچر کا استعمال کرتے ہوئے اختتام سے آخر تک ختم کرنے کی توثیق کرتا ہے۔ صلاحیت کے پے لوڈ اب بھی `sorafs_manifest_stub capacity` استعمال کرتے ہیں۔ منشور/کار پیکیجنگ بہاؤ کے لئے `iroha app sorafs toolkit pack` استعمال کریں۔
+اس رن بک میں بتایا گیا ہے کہ SF-2C صلاحیت مارکیٹ پلیس تخروپن کٹ کو کیسے چلائیں اور اس کے نتیجے میں میٹرکس کا تصور کیا جائے۔ یہ کوٹہ مذاکرات ، فیل اوور ہینڈلنگ ، اور `docs/examples/sorafs_capacity_simulation/` میں ڈٹرمینسٹک فکسچر کا استعمال کرتے ہوئے اختتام سے آخر تک ختم کرنے کی توثیق کرتا ہے۔ صلاحیت کے پے لوڈ اب بھی `sorafs_manifest_builder capacity` استعمال کرتے ہیں۔ منشور/کار پیکیجنگ بہاؤ کے لئے `iroha app sorafs toolkit pack` استعمال کریں۔
 
 ## 1. CLI نمونے تیار کریں
 
@@ -28,7 +28,7 @@ cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./run_cli.sh ./artifacts
 ```
 
-`run_cli.sh` `sorafs_manifest_stub capacity` کو Norito پے لوڈ ، بیس 64 بلبس ، Torii کے لئے باڈیز کی درخواست ، اور JSON ڈائجسٹس کے لئے
+`run_cli.sh` `sorafs_manifest_builder capacity` کو Norito پے لوڈ ، بیس 64 بلبس ، Torii کے لئے باڈیز کی درخواست ، اور JSON ڈائجسٹس کے لئے
 
 - کوٹہ مذاکرات کے منظر نامے میں حصہ لینے والے فراہم کنندگان کے تین بیانات۔
 - ایک نقل کا آرڈر جو ان فراہم کنندگان کے مابین اسٹیجنگ ظاہر کرتا ہے۔

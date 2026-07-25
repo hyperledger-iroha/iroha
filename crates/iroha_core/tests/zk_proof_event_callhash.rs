@@ -2,9 +2,12 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![cfg(feature = "zk-tests")]
 
-use std::borrow::Cow;
+use std::{borrow::Cow, sync::Arc};
 
-use iroha_core::block::{BlockBuilder, ValidBlock};
+use iroha_core::{
+    block::{BlockBuilder, ValidBlock},
+    governance::manifest::LaneManifestRegistry,
+};
 use iroha_data_model::{
     events::{
         EventBox,
@@ -23,7 +26,13 @@ fn proof_event_includes_call_hash() {
     let world = iroha_core::state::World::with([domain], [acc], []);
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query = iroha_core::query::store::LiveQueryStore::start_test();
-    let state = iroha_core::state::State::new_for_testing(world, kura, query);
+    let chain_id = ChainId::from("chain");
+    let state =
+        iroha_core::state::State::new_with_chain_for_testing(world, kura, query, chain_id.clone());
+    let nexus = state.nexus_snapshot();
+    state.install_lane_manifests(&Arc::new(
+        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
+    ));
 
     // Build a tx with a VerifyProof instruction for an unsupported real backend.
     let pr = iroha_data_model::proof::ProofBox::new("groth16/bn254".into(), vec![1, 2, 3]);
@@ -34,7 +43,7 @@ fn proof_event_includes_call_hash() {
     );
     let verify = iroha_data_model::isi::zk::VerifyProof::new(attach);
     let tx = TransactionBuilder::new(
-        ChainId::from("chain"),
+        chain_id,
         authority_id.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )

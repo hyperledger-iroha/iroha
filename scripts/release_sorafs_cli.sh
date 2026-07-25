@@ -1,49 +1,49 @@
 #!/usr/bin/env bash
 set -euo pipefail
-
-abs_path() {
-  local input="$1"
-  if [[ "$input" = /* ]]; then
-    printf '%s\n' "$input"
-  else
-    local dir
-    dir="$(cd "$(dirname "$input")" && pwd)"
-    printf '%s/%s\n' "$dir" "$(basename "$input")"
-  fi
-}
+umask 077
 
 usage() {
   cat <<'USAGE'
 release_sorafs_cli.sh --manifest <path> [options]
 
-Builds the SoraFS CLI (if needed), signs the provided manifest, and verifies the
-resulting bundle with `sorafs_cli manifest verify-signature` so release jobs
-fail fast when signatures or chunk metadata drift.
+Signs a canonical aggregate SoraFS release manifest through a reviewed external
+Ed25519 signer (for example, a PKCS#11/HSM adapter), then verifies the exact
+manifest, raw public key, and 64-byte signature with a SHA256-pinned
+`sorafs-validate release-manifest` binary.
 
 Required:
-  --manifest <path>          Path to the Norito manifest (.to) slated for release.
+  --manifest <path>
+      Canonical aggregate release manifest JSON.
+  --external-signer <path>
+      Executable Ed25519 signer adapter. Its first two positional arguments are
+      MANIFEST_PATH and a new SIGNATURE_OUTPUT_PATH; it must write exactly 64
+      raw signature bytes.
+  --signing-public-key <path>
+      Exactly 32 raw bytes for the governed Ed25519 public key.
+  --trusted-signing-fingerprint <hex>
+      Reviewed SHA256 fingerprint of the raw public key (64 lowercase hex).
+  --release-manifest-verifier <path>
+      Reviewed `sorafs-validate` executable.
+  --trusted-release-manifest-verifier-sha256 <hex>
+      Reviewed SHA256 digest of that exact executable (64 lowercase hex).
 
 Optional:
-  --config <path>          Config file with key=value pairs.
-  --workspace <path>         Repository root (default: script parent/..).
-  --cli <path>               Prebuilt sorafs_cli binary to use instead of building.
-  --chunk-plan <path>        Chunk plan JSON emitted by `car pack`.
-  --chunk-summary <path>     Summary JSON emitted by `car pack`.
-  --chunk-digest-sha3 <hex>  Hex digest to cross-check when signing/verifying.
-  --bundle-out <path>        Where to write the signature bundle
-                             (default: <workspace>/artifacts/sorafs_cli_release/manifest.bundle.json).
-  --signature-out <path>     Where to write the detached signature
-                             (default: <workspace>/artifacts/sorafs_cli_release/manifest.sig).
-  --expect-token-hash <hex>  Optional BLAKE3 hash of the identity token to enforce.
-  --identity-token <jwt>     Inline OIDC token passed to `manifest sign`.
-  --identity-token-env <VAR> Environment variable holding the OIDC token.
-  --identity-token-file <p>  File containing the OIDC token.
-  --identity-token-provider <name>
-                             Provider helper (e.g., github-actions) for token retrieval.
-  --identity-token-audience <aud>
-                             Audience override when using `--identity-token-provider`.
-  --issued-at <unix>         Override the `issued_at_unix` timestamp recorded in summaries.
-  --help                     Show this help and exit.
+  --workspace <path>
+      Repository/work directory used for default outputs.
+  --signature-out <path>
+      New raw signature output (default:
+      <workspace>/artifacts/sorafs_cli_release/release_manifest.ed25519.sig).
+  --public-key-out <path>
+      New raw public-key output (default:
+      <workspace>/artifacts/sorafs_cli_release/release_manifest.ed25519.pub).
+  --verification-summary-out <path>
+      New verification receipt (default:
+      <workspace>/artifacts/sorafs_cli_release/release_manifest.verify.json).
+  --help
+      Show this help and exit.
+
+OIDC tokens and self-asserted signature bundles are not release-authenticity
+inputs. Keyless cosign is a separate provenance layer.
 USAGE
 }
 
@@ -67,7 +67,16 @@ abs_output_path() {
   fi
 }
 
-reject_symlinked_output_parent() {
+require_option_value() {
+  local option="$1"
+  local value="${2-}"
+  if [[ -z "$value" || "$value" == --* ]]; then
+    echo "error: ${option} requires a value" >&2
+    exit 1
+  fi
+}
+
+reject_symlinked_parent() {
   local label="$1"
   local target="$2"
   local parent
@@ -101,41 +110,6 @@ reject_symlinked_output_parent() {
   done
 }
 
-require_option_value() {
-  local option="$1"
-  local value="${2-}"
-  if [[ -z "$value" || "$value" == --* ]]; then
-    echo "error: ${option} requires a value" >&2
-    exit 1
-  fi
-}
-
-validate_output_file_path() {
-  local label="$1"
-  local target="$2"
-  if [[ -z "$target" ]]; then
-    echo "error: ${label} path must not be empty" >&2
-    exit 1
-  fi
-  if [[ -L "$target" ]]; then
-    echo "error: ${label} must not be a symlink: ${target}" >&2
-    exit 1
-  fi
-  if [[ -e "$target" && ! -f "$target" ]]; then
-    echo "error: ${label} must be a regular file path: ${target}" >&2
-    exit 1
-  fi
-  reject_symlinked_output_parent "$label" "$target"
-}
-
-prepare_output_file_path() {
-  local label="$1"
-  local target="$2"
-  validate_output_file_path "$label" "$target"
-  mkdir -p "$(dirname "$target")"
-  validate_output_file_path "$label" "$target"
-}
-
 validate_existing_file_path() {
   local label="$1"
   local target="$2"
@@ -147,13 +121,13 @@ validate_existing_file_path() {
     echo "error: ${label} must not be a symlink: ${target}" >&2
     exit 1
   fi
-  reject_symlinked_output_parent "$label" "$target"
+  reject_symlinked_parent "$label" "$target"
   if [[ ! -e "$target" ]]; then
-    echo "error: ${label} not found at $target" >&2
+    echo "error: ${label} not found at ${target}" >&2
     exit 1
   fi
   if [[ ! -f "$target" ]]; then
-    echo "error: ${label} must be a regular file: $target" >&2
+    echo "error: ${label} must be a regular file: ${target}" >&2
     exit 1
   fi
 }
@@ -163,27 +137,55 @@ validate_existing_executable_file_path() {
   local target="$2"
   validate_existing_file_path "$label" "$target"
   if [[ ! -x "$target" ]]; then
-    echo "error: ${label} not executable at $target" >&2
+    echo "error: ${label} not executable at ${target}" >&2
     exit 1
   fi
 }
 
-workspace="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cli_path=""
+prepare_new_output_file_path() {
+  local label="$1"
+  local target="$2"
+  if [[ -z "$target" ]]; then
+    echo "error: ${label} path must not be empty" >&2
+    exit 1
+  fi
+  if [[ -L "$target" ]]; then
+    echo "error: ${label} must not be a symlink: ${target}" >&2
+    exit 1
+  fi
+  reject_symlinked_parent "$label" "$target"
+  if [[ -e "$target" ]]; then
+    echo "error: ${label} must not already exist: ${target}" >&2
+    exit 1
+  fi
+  mkdir -p "$(dirname "$target")"
+  reject_symlinked_parent "$label" "$target"
+  if [[ -e "$target" || -L "$target" ]]; then
+    echo "error: ${label} must not already exist: ${target}" >&2
+    exit 1
+  fi
+}
+
+require_sha256() {
+  local label="$1"
+  local value="$2"
+  if [[ ! "$value" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "error: ${label} must be exactly 64 lowercase hexadecimal characters" >&2
+    exit 1
+  fi
+}
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+workspace="$(cd "${script_dir}/.." && pwd)"
 manifest_path=""
-chunk_plan_path=""
-chunk_summary_path=""
-chunk_digest_hex=""
-bundle_out=""
+external_signer=""
+signing_public_key=""
+trusted_signing_fingerprint=""
+release_manifest_verifier=""
+trusted_release_manifest_verifier_sha256=""
 signature_out=""
-expect_token_hash=""
-identity_token_inline=""
-identity_token_env=""
-identity_token_file=""
-identity_token_provider=""
-identity_token_audience=""
-issued_at_override=""
-config_path=""
+public_key_out=""
+verification_summary_out=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -192,79 +194,49 @@ while [[ $# -gt 0 ]]; do
       workspace="$(abs_path "$2")"
       shift 2
       ;;
-    --cli)
-      require_option_value "$1" "${2-}"
-      cli_path="$(abs_path "$2")"
-      shift 2
-      ;;
-    --config)
-      require_option_value "$1" "${2-}"
-      config_path="$(abs_path "$2")"
-      shift 2
-      ;;
     --manifest)
       require_option_value "$1" "${2-}"
       manifest_path="$(abs_path "$2")"
       shift 2
       ;;
-    --chunk-plan)
+    --external-signer)
       require_option_value "$1" "${2-}"
-      chunk_plan_path="$(abs_path "$2")"
+      external_signer="$(abs_path "$2")"
       shift 2
       ;;
-    --chunk-summary)
+    --signing-public-key)
       require_option_value "$1" "${2-}"
-      chunk_summary_path="$(abs_path "$2")"
+      signing_public_key="$(abs_path "$2")"
       shift 2
       ;;
-    --chunk-digest-sha3)
+    --trusted-signing-fingerprint)
       require_option_value "$1" "${2-}"
-      chunk_digest_hex="$2"
+      trusted_signing_fingerprint="$2"
       shift 2
       ;;
-    --bundle-out)
+    --release-manifest-verifier)
       require_option_value "$1" "${2-}"
-      bundle_out="$(abs_path "$2")"
+      release_manifest_verifier="$(abs_path "$2")"
+      shift 2
+      ;;
+    --trusted-release-manifest-verifier-sha256)
+      require_option_value "$1" "${2-}"
+      trusted_release_manifest_verifier_sha256="$2"
       shift 2
       ;;
     --signature-out)
       require_option_value "$1" "${2-}"
-      signature_out="$(abs_path "$2")"
+      signature_out="$(abs_output_path "$2")"
       shift 2
       ;;
-    --expect-token-hash)
+    --public-key-out)
       require_option_value "$1" "${2-}"
-      expect_token_hash="$2"
+      public_key_out="$(abs_output_path "$2")"
       shift 2
       ;;
-    --identity-token)
+    --verification-summary-out)
       require_option_value "$1" "${2-}"
-      identity_token_inline="$2"
-      shift 2
-      ;;
-    --identity-token-env)
-      require_option_value "$1" "${2-}"
-      identity_token_env="$2"
-      shift 2
-      ;;
-    --identity-token-file)
-      require_option_value "$1" "${2-}"
-      identity_token_file="$(abs_path "$2")"
-      shift 2
-      ;;
-    --identity-token-provider)
-      require_option_value "$1" "${2-}"
-      identity_token_provider="$2"
-      shift 2
-      ;;
-    --identity-token-audience)
-      require_option_value "$1" "${2-}"
-      identity_token_audience="$2"
-      shift 2
-      ;;
-    --issued-at)
-      require_option_value "$1" "${2-}"
-      issued_at_override="$2"
+      verification_summary_out="$(abs_output_path "$2")"
       shift 2
       ;;
     --help|-h)
@@ -272,214 +244,93 @@ while [[ $# -gt 0 ]]; do
       exit 0
       ;;
     *)
-      echo "unknown argument: $1" >&2
+      echo "error: unknown argument: $1" >&2
       usage >&2
       exit 1
       ;;
   esac
 done
 
-if [[ -n "$manifest_path" ]]; then
-  manifest_path="$(abs_path "$manifest_path")"
-fi
-cli_manifest=""
-cli_chunk_plan=""
-cli_chunk_summary=""
-cli_chunk_digest=""
-cli_expect_token_hash=""
-
-if [[ -n "$config_path" ]]; then
-  if [[ ! -f "$config_path" ]]; then
-    echo "error: config file not found at $config_path" >&2
-    exit 1
-  fi
-  while IFS='=' read -r raw_key raw_value; do
-    [[ -z "${raw_key// }" || "${raw_key}" =~ ^# ]] && continue
-    key="$(echo "$raw_key" | awk '{$1=$1;print}')"
-    value="$(echo "$raw_value" | awk '{$1=$1;print}')"
-    case "$key" in
-      workspace) [[ -z "$workspace" ]] && workspace="$(cd "$value" && pwd)" ;;
-      manifest) cli_manifest="$(abs_path "$value")" ;;
-      chunk_plan) cli_chunk_plan="$(abs_path "$value")" ;;
-      chunk_summary) cli_chunk_summary="$(abs_path "$value")" ;;
-      chunk_digest_sha3) cli_chunk_digest="$value" ;;
-      expect_token_hash) cli_expect_token_hash="$value" ;;
-      bundle_out) [[ -z "$bundle_out" ]] && bundle_out="$(abs_path "$value")" ;;
-      signature_out) [[ -z "$signature_out" ]] && signature_out="$(abs_path "$value")" ;;
-      cli) [[ -z "$cli_path" ]] && cli_path="$(abs_path "$value")" ;;
-      identity_token) [[ -z "$identity_token_inline" ]] && identity_token_inline="$value" ;;
-      identity_token_env) [[ -z "$identity_token_env" ]] && identity_token_env="$value" ;;
-      identity_token_file) [[ -z "$identity_token_file" ]] && identity_token_file="$(abs_path "$value")" ;;
-      identity_token_provider) [[ -z "$identity_token_provider" ]] && identity_token_provider="$value" ;;
-      identity_token_audience) [[ -z "$identity_token_audience" ]] && identity_token_audience="$value" ;;
-      *)
-        echo "warning: unknown config key '$key' in $config_path" >&2
-        ;;
-    esac
-  done < "$config_path"
-fi
-
-[[ -z "$manifest_path" && -n "$cli_manifest" ]] && manifest_path="$cli_manifest"
-[[ -z "$chunk_plan_path" && -n "$cli_chunk_plan" ]] && chunk_plan_path="$cli_chunk_plan"
-[[ -z "$chunk_summary_path" && -n "$cli_chunk_summary" ]] && chunk_summary_path="$cli_chunk_summary"
-[[ -z "$chunk_digest_hex" && -n "$cli_chunk_digest" ]] && chunk_digest_hex="$cli_chunk_digest"
-[[ -z "$expect_token_hash" && -n "$cli_expect_token_hash" ]] && expect_token_hash="$cli_expect_token_hash"
-
-# Provide fixture defaults if still unset
-if [[ -z "$manifest_path" ]]; then
-  manifest_path="${workspace}/fixtures/sorafs_manifest/ci_sample/manifest.to"
-fi
-[[ -z "$chunk_plan_path" ]] && chunk_plan_path="${workspace}/fixtures/sorafs_manifest/ci_sample/chunk_plan.json"
-[[ -z "$chunk_summary_path" ]] && chunk_summary_path="${workspace}/fixtures/sorafs_manifest/ci_sample/car_summary.json"
-[[ -z "$chunk_digest_hex" ]] && chunk_digest_hex="0236c64b664bfff906f32106789baa61e7d4d9fdb4514e173b77a77d2883946e"
-[[ -z "$expect_token_hash" ]] && expect_token_hash="7b56598bca4584a5f5631ce4e510b8c55bd9379799f231db2a3476774f45722b"
-
-validate_existing_file_path "manifest input" "$manifest_path"
-
-if [[ -n "$chunk_plan_path" ]]; then
-  validate_existing_file_path "chunk plan input" "$chunk_plan_path"
-fi
-
-if [[ -n "$chunk_summary_path" ]]; then
-  validate_existing_file_path "chunk summary input" "$chunk_summary_path"
-fi
-
-identity_flag_count=0
-[[ -n "$identity_token_inline" ]] && identity_flag_count=$((identity_flag_count + 1))
-[[ -n "$identity_token_env" ]] && identity_flag_count=$((identity_flag_count + 1))
-[[ -n "$identity_token_file" ]] && identity_flag_count=$((identity_flag_count + 1))
-[[ -n "$identity_token_provider" ]] && identity_flag_count=$((identity_flag_count + 1))
-if (( identity_flag_count > 1 )); then
-  echo "error: identity token flags are mutually exclusive" >&2
+declare -a missing=()
+[[ -n "$manifest_path" ]] || missing+=("--manifest")
+[[ -n "$external_signer" ]] || missing+=("--external-signer")
+[[ -n "$signing_public_key" ]] || missing+=("--signing-public-key")
+[[ -n "$trusted_signing_fingerprint" ]] || missing+=("--trusted-signing-fingerprint")
+[[ -n "$release_manifest_verifier" ]] || missing+=("--release-manifest-verifier")
+[[ -n "$trusted_release_manifest_verifier_sha256" ]] ||
+  missing+=("--trusted-release-manifest-verifier-sha256")
+if (( ${#missing[@]} > 0 )); then
+  echo "error: required release signing options are missing: ${missing[*]}" >&2
   exit 1
 fi
-if [[ -z "$identity_token_provider" && -n "$identity_token_audience" ]]; then
-  echo "error: --identity-token-audience requires --identity-token-provider" >&2
+
+require_sha256 "trusted signing fingerprint" "$trusted_signing_fingerprint"
+require_sha256 \
+  "trusted release-manifest verifier SHA256" \
+  "$trusted_release_manifest_verifier_sha256"
+
+validate_existing_file_path "aggregate release manifest" "$manifest_path"
+validate_existing_executable_file_path "external Ed25519 signer" "$external_signer"
+validate_existing_file_path "raw Ed25519 signing public key" "$signing_public_key"
+validate_existing_executable_file_path \
+  "native release-manifest verifier" \
+  "$release_manifest_verifier"
+
+release_manifest_signing_helper="${script_dir}/release_manifest_signing.py"
+validate_existing_file_path \
+  "release manifest signing helper" \
+  "$release_manifest_signing_helper"
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "error: python3 is required" >&2
   exit 1
-fi
-if [[ -n "$identity_token_provider" && -z "$identity_token_audience" ]]; then
-  echo "error: --identity-token-provider now requires --identity-token-audience" >&2
-  exit 1
-fi
-if [[ -n "$identity_token_file" ]]; then
-  validate_existing_file_path "identity token file" "$identity_token_file"
 fi
 
 output_root="${workspace}/artifacts/sorafs_cli_release"
-if [[ -n "$bundle_out" ]]; then
-  bundle_out="$(abs_output_path "$bundle_out")"
-  output_root="$(dirname "$bundle_out")"
-else
-  bundle_out="${output_root}/manifest.bundle.json"
-fi
-if [[ -n "$signature_out" ]]; then
-  signature_out="$(abs_output_path "$signature_out")"
-  output_root="$(dirname "$signature_out")"
-else
-  signature_out="${output_root}/manifest.sig"
-fi
-bundle_out="$(abs_output_path "$bundle_out")"
+[[ -n "$signature_out" ]] ||
+  signature_out="${output_root}/release_manifest.ed25519.sig"
+[[ -n "$public_key_out" ]] ||
+  public_key_out="${output_root}/release_manifest.ed25519.pub"
+[[ -n "$verification_summary_out" ]] ||
+  verification_summary_out="${output_root}/release_manifest.verify.json"
 signature_out="$(abs_output_path "$signature_out")"
-output_root="$(abs_output_path "$output_root")"
+public_key_out="$(abs_output_path "$public_key_out")"
+verification_summary_out="$(abs_output_path "$verification_summary_out")"
 
-sign_summary_path="${output_root}/manifest.sign.summary.json"
-verify_summary_path="${output_root}/manifest.verify.summary.json"
-prepare_output_file_path "release bundle output" "$bundle_out"
-prepare_output_file_path "release signature output" "$signature_out"
-prepare_output_file_path "sign summary" "$sign_summary_path"
-prepare_output_file_path "verify summary" "$verify_summary_path"
-
-if [[ -z "$cli_path" ]]; then
-  cli_path="${workspace}/target/release/sorafs_cli"
-  if [[ ! -x "$cli_path" ]]; then
-    echo "Building sorafs_cli (release)..."
-    (cd "$workspace" && cargo build -p sorafs_orchestrator --bin sorafs_cli --release)
-  fi
-else
-  cli_path="$(abs_path "$cli_path")"
-fi
-validate_existing_executable_file_path "sorafs_cli binary" "$cli_path"
-
-sign_cmd=("$cli_path" "manifest" "sign" "--manifest=$manifest_path" "--bundle-out=$bundle_out" "--signature-out=$signature_out")
-if [[ -n "$chunk_plan_path" ]]; then sign_cmd+=("--chunk-plan=$chunk_plan_path"); fi
-if [[ -n "$chunk_summary_path" ]]; then sign_cmd+=("--summary=$chunk_summary_path"); fi
-if [[ -n "$chunk_digest_hex" ]]; then sign_cmd+=("--chunk-digest-sha3=$chunk_digest_hex"); fi
-if [[ -n "$identity_token_inline" ]]; then sign_cmd+=("--identity-token=$identity_token_inline"); fi
-if [[ -n "$identity_token_env" ]]; then sign_cmd+=("--identity-token-env=$identity_token_env"); fi
-if [[ -n "$identity_token_file" ]]; then sign_cmd+=("--identity-token-file=$identity_token_file"); fi
-if [[ -n "$identity_token_provider" ]]; then
-  sign_cmd+=("--identity-token-provider=$identity_token_provider")
-  if [[ -n "$identity_token_audience" ]]; then
-    sign_cmd+=("--identity-token-audience=$identity_token_audience")
-  fi
-fi
-if [[ -n "$issued_at_override" ]]; then
-  sign_cmd+=("--issued-at=$issued_at_override")
+if [[ "$signature_out" == "$public_key_out" ||
+      "$signature_out" == "$verification_summary_out" ||
+      "$public_key_out" == "$verification_summary_out" ]]; then
+  echo "error: signature, public-key, and verification-summary outputs must be distinct" >&2
+  exit 1
 fi
 
-echo "Signing manifest with sorafs_cli..."
-"${sign_cmd[@]}" | tee "$sign_summary_path"
+prepare_new_output_file_path "release signature output" "$signature_out"
+prepare_new_output_file_path "release public-key output" "$public_key_out"
+prepare_new_output_file_path \
+  "release verification summary output" \
+  "$verification_summary_out"
 
-auto_token_hash=""
-if command -v python3 >/dev/null 2>&1; then
-  auto_token_hash="$(python3 - "$sign_summary_path" <<'PY' 2>/dev/null || true
-import json
-import os
-import stat
-import sys
-
-path = sys.argv[1]
-
-def read_open_flags() -> int:
-    return os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
-
-try:
-    if os.path.islink(path):
-        raise OSError("sign summary must not be a symlink")
-    path_stat = os.lstat(path)
-    if not stat.S_ISREG(path_stat.st_mode):
-        raise OSError("sign summary must be a regular file")
-    fd = os.open(path, read_open_flags())
-    try:
-        descriptor_stat = os.fstat(fd)
-        if not stat.S_ISREG(descriptor_stat.st_mode):
-            raise OSError("sign summary must be a regular file")
-        with os.fdopen(fd, "r", encoding="utf-8") as handle:
-            fd = -1
-            value = json.load(handle).get("identity_token_hash_blake3_hex")
-    finally:
-        if fd >= 0:
-            os.close(fd)
-    if isinstance(value, str):
-        print(value, end="")
-except Exception:
-    pass
-PY
+echo "Signing aggregate release manifest through the reviewed Ed25519 signer..."
+verification_json="$(
+  python3 "$release_manifest_signing_helper" sign \
+    --manifest "$manifest_path" \
+    --external-signer "$external_signer" \
+    --signing-public-key "$signing_public_key" \
+    --trusted-signing-fingerprint "$trusted_signing_fingerprint" \
+    --signature-output "$signature_out" \
+    --public-key-output "$public_key_out" \
+    --release-manifest-verifier "$release_manifest_verifier" \
+    --trusted-release-manifest-verifier-sha256 \
+      "$trusted_release_manifest_verifier_sha256"
 )"
-fi
+printf '%s\n' "$verification_json" | tee "$verification_summary_out"
 
-expected_hash="$expect_token_hash"
-if [[ -z "$expected_hash" && -n "$auto_token_hash" ]]; then
-  expected_hash="$auto_token_hash"
-fi
-
-verify_summary_source="$chunk_summary_path"
-if [[ -z "$verify_summary_source" ]]; then
-  verify_summary_source="$sign_summary_path"
-fi
-
-verify_cmd=("$cli_path" "manifest" "verify-signature" "--manifest=$manifest_path" "--bundle=$bundle_out")
-if [[ -n "$verify_summary_source" ]]; then verify_cmd+=("--summary=$verify_summary_source"); fi
-if [[ -n "$chunk_plan_path" ]]; then verify_cmd+=("--chunk-plan=$chunk_plan_path"); fi
-if [[ -n "$chunk_digest_hex" ]]; then verify_cmd+=("--chunk-digest-sha3=$chunk_digest_hex"); fi
-if [[ -n "$expected_hash" ]]; then verify_cmd+=("--expect-token-hash=$expected_hash"); fi
-
-echo "Verifying signature bundle..."
-"${verify_cmd[@]}" | tee "$verify_summary_path"
+validate_existing_file_path \
+  "release verification summary output" \
+  "$verification_summary_out"
 
 echo
-echo "Release artifacts:"
-echo "  Bundle   : $bundle_out"
-echo "  Signature: $signature_out"
-echo "  Sign log : $sign_summary_path"
-echo "  Verify log: $verify_summary_path"
+echo "Release authenticity artifacts:"
+echo "  Manifest     : $manifest_path"
+echo "  Signature    : $signature_out"
+echo "  Public key   : $public_key_out"
+echo "  Verification : $verification_summary_out"

@@ -59,7 +59,7 @@ SDK）。它強制執行別名和句柄不變量檢查
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+     cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - 提交包含固定裝置、提案、確定性報告和註冊表的 PR
@@ -98,14 +98,14 @@ SDK）。它強制執行別名和句柄不變量檢查
 
 ## 工具期望
 
-- `sorafs_manifest_chunk_store` 和 `sorafs_manifest_stub` 暴露：
+- `sorafs_manifest_chunk_store` 和 `sorafs_manifest_builder` 暴露：
   - `--list-profiles` 用於註冊檢查。
   - `--promote-profile=<handle>` 生成使用的規范元數據塊
     推廣個人資料時。
   - `--json-out=-` 將報告流式傳輸到標準輸出，從而實現可重複的審查
     日誌。
 - `ensure_charter_compliance()` 在啟動時在相關二進製文件中被調用
-  （`manifest_chunk_store`、`provider_advert_stub`）。如果是新的，CI 測試一定會失敗
+  （`manifest_chunk_store`、`sorafs_provider_advert`）。如果是新的，CI 測試一定會失敗
   條目違反了章程。
 
 ## 記錄保存

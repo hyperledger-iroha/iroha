@@ -54,7 +54,7 @@ CLIs, gateways, and SDKs. It tracks the invariants checked by
      cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
+     cargo run -p sorafs_car --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - Submit a PR containing fixtures, proposal, determinism report, and registry
@@ -92,7 +92,7 @@ CLIs, gateways, and SDKs. It tracks the invariants checked by
 
 ## Tooling Expectations
 
-- `sorafs_manifest_chunk_store` and `sorafs_manifest_stub` expose:
+- `sorafs_manifest_chunk_store` and `sorafs_manifest_builder` expose:
   - `--list-profiles` for registry inspection.
   - `--promote-profile=<handle>` to generate the canonical metadata block used
     when promoting a profile.

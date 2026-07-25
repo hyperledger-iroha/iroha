@@ -111,10 +111,10 @@ and will transparently truncate when the request exceeds the available leaves:
 $ cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- ./docs.tar \
     --por-sample=8 --por-sample-seed=0xfeedface --por-sample-out=por.samples.json
 
-The manifest stub mirrors the same data, which is convenient when scripting `--chunker-profile-id` selection in pipelines. Both chunk store CLIs also accept the canonical handle form (`--profile=sorafs.sf1@1.0.0`) so build scripts can avoid hard-coding numeric IDs:
+The manifest builder mirrors the same data, which is convenient when scripting `--chunker-profile-id` selection in pipelines. Both chunk store CLIs also accept the canonical handle form (`--profile=sorafs.sf1@1.0.0`) so build scripts can avoid hard-coding numeric IDs:
 
 ```
-$ cargo run -p sorafs_car --bin sorafs_manifest_stub -- --list-chunker-profiles
+$ cargo run -p sorafs_car --bin sorafs_manifest_builder -- --list-chunker-profiles
 [
   {
     "profile_id": 1,
@@ -172,4 +172,4 @@ without relying on HTTP negotiation.
   via the provided tests.
 * `chunker_registry::lookup_by_profile` asserts that the descriptor parameters
   match `ChunkProfile::DEFAULT` to guard accidental divergence.
-* Manifests produced by `iroha app sorafs toolkit pack` and `sorafs_manifest_stub` include the registry metadata.
+* Manifests produced by `iroha app sorafs toolkit pack` and `sorafs_manifest_builder` include the registry metadata.

@@ -10382,7 +10382,7 @@ function normalizeAtWindow(value, name) {
       `${name}.upper`,
     );
   }
-  return { lower, upper };
+  return { lower: String(lower), upper: String(upper) };
 }
 
 function normalizeVotingMode(value, name) {
@@ -12122,8 +12122,8 @@ export function buildEnactReferendumInstruction(options) {
   const source = assertPlainObject(options, "enactReferendum");
   const window =
     normalizeAtWindow(source.window ?? source.atWindow, "window") ?? {
-      lower: 0,
-      upper: 0,
+      lower: "0",
+      upper: "0",
     };
   const referendumId = normalizeFixedBytes(
     source.referendumId ?? source.referendum_id,

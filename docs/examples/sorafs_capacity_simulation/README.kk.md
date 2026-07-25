@@ -31,7 +31,7 @@ translator: machine-google-reviewed
 ./analyze.py --artifacts ./artifacts
 ```
 
-`run_cli.sh` сценарийі құру үшін `sorafs_manifest_stub capacity` шақырады:
+`run_cli.sh` сценарийі құру үшін `sorafs_manifest_builder capacity` шақырады:
 
 - Квота туралы келіссөздер жиынтығы үшін детерминистік провайдер мәлімдемелері.
 - Келіссөз сценарийіне сәйкес келетін репликация тәртібі.

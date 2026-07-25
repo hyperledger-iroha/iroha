@@ -64,9 +64,9 @@ Ko'rib chiqilayotgan baytlar Parlament konvertiga va SoraFS artefaktiga mos kela
 Ushbu dalillarni to'plash uchun mavjud vositalar:1. Torii (`iroha app da get-blob --storage-ticket <hex>`) dan manifest toʻplamini oling
    yoki shunga o'xshash SDK yordamchisi) shuning uchun hamma bir xil baytlarni xeshlaydi
    shlyuzlar.
-2. Imzolangan konvert bilan manifest stub tekshiruvchini ishga tushiring:
+2. Imzolangan konvert bilan manifest builder tekshiruvchini ishga tushiring:
    ```
-   cargo run -p sorafs_car --bin sorafs-manifest-stub -- manifest.json \
+   cargo run -p sorafs_car --bin sorafs-manifest-builder -- manifest.json \
      --manifest-signatures-in=fixtures/sorafs_chunker/manifest_signatures.json \
      --json-out=/tmp/manifest_report.json
    ```

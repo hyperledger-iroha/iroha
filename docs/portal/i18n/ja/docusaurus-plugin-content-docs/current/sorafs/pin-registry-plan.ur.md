@@ -78,7 +78,7 @@ Torii ファサード、CLI、不変条件、不変条件
 |------|-----|---------------|
 | Torii サービス | `/v1/sorafs/pin` (送信) `/v1/sorafs/pin/{cid}` (検索) `/v1/sorafs/aliases` (リスト/バインド) `/v1/sorafs/replication` (注文/受領)ページネーション + フィルタリング|ネットワーキング TL / コア インフラ |
 |証明書 |応答 レジストリの高さ/ハッシュ شامل کریں؛ Norito 構成証明構造体 SDK は、次のものを消費します。 |コアインフラ |
-| CLI | `sorafs_manifest_stub` インターフェイス `sorafs_pin` CLI インターフェイス `pin submit`、`alias bind`、`order issue`、 `registry export` ہو۔ |ツーリングWG |
+| CLI | `sorafs_manifest_builder` インターフェイス `sorafs_pin` CLI インターフェイス `pin submit`、`alias bind`、`order issue`、 `registry export` ہو۔ |ツーリングWG |
 | SDK | Norito スキーマとクライアント バインディング (Rust/Go/TS) が生成する統合テストのテスト| SDK チーム |
 
 操作:

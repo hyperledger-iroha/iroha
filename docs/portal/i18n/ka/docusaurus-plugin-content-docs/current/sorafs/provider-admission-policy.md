@@ -41,7 +41,7 @@ translation_last_reviewed: 2026-02-07
 ## მისაღები სამუშაო პროცესი
 
 1. **წინადადების შექმნა **
-   - CLI: დაამატეთ `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission proposal …`
+   - CLI: დაამატეთ `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal …`
      აწარმოებს `ProviderAdmissionProposalV1` + საატესტაციო პაკეტს.
    - ვალიდაცია: უზრუნველყოს საჭირო ველები, ფსონი > 0, კანონიკური ცუნკერის სახელური `profile_id`-ში.
 2. **მმართველობის მოწონება **
@@ -61,7 +61,7 @@ translation_last_reviewed: 2026-02-07
 | ფართობი | ამოცანა | მფლობელ(ებ)ი | სტატუსი |
 |------|------|----------|--------|
 | სქემა | განსაზღვრეთ `ProviderAdmissionProposalV1`, `ProviderAdmissionEnvelopeV1`, `EndpointAttestationV1` (Norito) `crates/sorafs_manifest/src/provider_admission.rs`-ში. დანერგილია `sorafs_manifest::provider_admission`-ში ვალიდაციის დამხმარეებით.【F:crates/sorafs_manifest/src/provider_admission.rs#L1】 | შენახვა / მმართველობა | ✅ დასრულებული |
-| CLI ხელსაწყოები | გააფართოვეთ `sorafs_manifest_stub` ქვებრძანებებით: `provider-admission proposal`, `provider-admission sign`, `provider-admission verify`. | ინსტრუმენტები WG | ✅ |
+| CLI ხელსაწყოები | გააფართოვეთ `sorafs_manifest_builder` ქვებრძანებებით: `provider-admission proposal`, `provider-admission sign`, `provider-admission verify`. | ინსტრუმენტები WG | ✅ |
 
 CLI ნაკადი ახლა იღებს სერთიფიკატების შუალედურ პაკეტებს (`--endpoint-attestation-intermediate`), ასხივებს
 კანონიკური წინადადება/კონვერტის ბაიტი და ამოწმებს საბჭოს ხელმოწერებს `sign`/`verify`-ის დროს. ოპერატორებს შეუძლიათ
@@ -70,7 +70,7 @@ CLI ნაკადი ახლა იღებს სერთიფიკა�
 
 ### CLI მითითება
 
-გაუშვით თითოეული ბრძანება `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission …`-ის საშუალებით.
+გაუშვით თითოეული ბრძანება `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission …`-ის საშუალებით.
 
 - `proposal`
   - საჭირო დროშები: `--provider-id=<hex32>`, `--chunker-profile=<namespace.name@semver>`,
@@ -109,7 +109,7 @@ CLI ნაკადი ახლა იღებს სერთიფიკა�
     დაიჯესტისა და ხელმოწერების რაოდენობის აღება.
 | გადამოწმება | Torii, კარიბჭეების და `sorafs-node`-ის მიერ გამოყენებული გაზიარებული ვერიფიკატორის დანერგვა. უზრუნველყოს ერთეული + CLI ინტეგრაციის ტესტები.【F:crates/sorafs_manifest/src/provider_admission.rs#L1】【F:crates/iroha_torii/src/sorafs/admission.rs#L1】 | ქსელის TL / შენახვა | ✅ დასრულებული |
 | Torii ინტეგრაცია | თემის დამადასტურებელი Torii რეკლამის გადაღებაში, უარი თქვით პოლიტიკის მიღმა რეკლამებზე, გამოუშვით ტელემეტრია. | ქსელის TL | ✅ დასრულებული | Torii ახლა იტვირთება მართვის კონვერტები (`torii.sorafs.admission_envelopes_dir`), ამოწმებს დაიჯესტს/ხელმოწერის შესაბამისობას გადაყლაპვისას და ზედაპირების დაშვებას ტელემეტრია.【F:crates/iroha_torii/src/sorafs/admission.rs#L1】【F:crates/iroha_torii/src/sorafs/discovery.rs#L1】【F:crates/iroha_torii/src/sorafs/api.rs
-| განახლება | დაამატეთ განახლების / გაუქმების სქემები + CLI დამხმარეები, გამოაქვეყნეთ სასიცოცხლო ციკლის სახელმძღვანელო დოკუმენტებში (იხილეთ ქვემოთ მოცემული Runbook და CLI ბრძანებები `provider-admission renewal`/`revoke`).【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L477】【docs/source/sorafs/provider_admission_policy:120m | შენახვა / მმართველობა | ✅ დასრულებული |
+| განახლება | დაამატეთ განახლების / გაუქმების სქემები + CLI დამხმარეები, გამოაქვეყნეთ სასიცოცხლო ციკლის სახელმძღვანელო დოკუმენტებში (იხილეთ ქვემოთ მოცემული Runbook და CLI ბრძანებები `provider-admission renewal`/`revoke`).【crates/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#L477】【docs/source/sorafs/provider_admission_policy:120m | შენახვა / მმართველობა | ✅ დასრულებული |
 | ტელემეტრია | განსაზღვრეთ `provider_admission` დაფები და გაფრთხილებები (გამოტოვებული განახლება, კონვერტის ვადის გასვლა). | დაკვირვებადობა | 🟠 მიმდინარეობს | მრიცხველი `torii_sorafs_admission_total{result,reason}` არსებობს; დაფები/გაფრთხილებები ელოდება.【F:crates/iroha_telemetry/src/metrics.rs#L3798】【F:docs/source/telemetry.md#L614】 |
 ### განახლება და გაუქმება Runbook
 
@@ -117,7 +117,7 @@ CLI ნაკადი ახლა იღებს სერთიფიკა�
 1. შექმენით მემკვიდრე წინადადება/რეკლამის წყვილი `provider-admission proposal`-ით და `provider-admission sign`-ით, გაზარდეთ `--retention-epoch` და განაახლეთ ფსონი/ბოლო წერტილები საჭიროებისამებრ.
 2. შეასრულეთ  
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission \
+   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -127,7 +127,7 @@ CLI ნაკადი ახლა იღებს სერთიფიკა�
    ```
    ბრძანება ამოწმებს უცვლელი შესაძლებლობების/პროფილის ველებს მეშვეობით
    `AdmissionRecord::apply_renewal`, გამოსცემს `ProviderAdmissionRenewalV1` და ბეჭდავს დაიჯესტს
-   მმართველობის ჟურნალი.【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L477】【F:crates/sorafs_manifest/src/provider_admission.rs#L422】
+   მმართველობის ჟურნალი.【crates/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#L477】【F:crates/sorafs_manifest/src/provider_admission.rs#L422】
 3. შეცვალეთ წინა კონვერტი `torii.sorafs.admission_envelopes_dir`-ში, განაახლეთ Norito/JSON მმართველობის საცავში და დაუმატეთ განახლების ჰეში + შეკავების ეპოქა `docs/source/sorafs/migration_ledger.md`-ს.
 4. შეატყობინეთ ოპერატორებს, რომ ახალი კონვერტი ცოცხალია და დააკვირდით `torii_sorafs_admission_total{result="accepted",reason="stored"}` გადაყლაპვის დასადასტურებლად.
 5. აღადგინეთ და ჩაატარეთ კანონიკური მოწყობილობები `cargo run -p sorafs_car --bin provider_admission_fixtures --features cli`-ის მეშვეობით; CI (`ci/check_sorafs_fixtures.sh`) ადასტურებს Norito გამომავლების სტაბილურობას.
@@ -135,7 +135,7 @@ CLI ნაკადი ახლა იღებს სერთიფიკა�
 #### გადაუდებელი გაუქმება
 1. დაადგინეთ კომპრომეტირებული კონვერტი და გააუქმეთ:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission \
+   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \
@@ -146,7 +146,7 @@ CLI ნაკადი ახლა იღებს სერთიფიკა�
      --json-out=governance/providers/<id>/revocation.json
    ```
    CLI ხელს აწერს `ProviderAdmissionRevocationV1`-ს, ამოწმებს ხელმოწერის კომპლექტს
-   `verify_revocation_signatures` და აცნობებს გაუქმების შეჯამებას.【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L593】【F:crates/sorafs_manifest/src/provider_admission.rs#L
+   `verify_revocation_signatures` და აცნობებს გაუქმების შეჯამებას.【crates/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#L593】【F:crates/sorafs_manifest/src/provider_admission.rs#L
 2. ამოიღეთ კონვერტი `torii.sorafs.admission_envelopes_dir`-დან, გაავრცელეთ Norito/JSON გაუქმება დაშვების ქეშებში და ჩაწერეთ მიზეზი ჰეშის მართვის ოქმებში.
 3. უყურეთ `torii_sorafs_admission_total{result="rejected",reason="admission_missing"}`, რათა დაადასტუროთ, რომ ქეშმა გააუქმა გაუქმებული რეკლამა; შეინახეთ გაუქმების არტეფაქტები ინციდენტების რეტროსპექტებში.
 

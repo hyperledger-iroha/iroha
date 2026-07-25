@@ -6,6 +6,7 @@ import importlib.util
 import json
 import stat
 import sys
+import tomllib
 from pathlib import Path
 
 
@@ -16,9 +17,166 @@ assert SPEC and SPEC.loader  # pragma: no cover
 sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
+TAIRA_CONFIG_PATH = MODULE_PATH.parents[1] / "configs/soranexus/taira/config.toml"
+TAIRA_GENESIS_PATH = MODULE_PATH.parents[1] / "configs/soranexus/taira/genesis.json"
+TAIRA_CHAIN_ID = "fc56984b-2be7-431d-840e-21514d1883f0"
+TAIRA_CHAIN_DISCRIMINANT = 369
+TAIRA_CITIZEN_ID = (
+    "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
+)
+TAIRA_GENESIS_DEPLOYER_ID = (
+    "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A"
+)
+TAIRA_FEE_SPONSOR_SELECTORS = [
+    "iroha.log",
+    "iroha.register",
+    "iroha.grant",
+    "iroha.alias.ensure",
+    "nexus::EnrollFeeSponsorBeneficiary",
+    "iroha_data_model::isi::space_directory::PublishSpaceDirectoryManifest",
+    "iroha.account.alias.primary.compare_and_set",
+    "iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk",
+    "iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload",
+    "iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode",
+    "iroha_data_model::isi::smart_contract_code::CommitContractDeployment",
+    "iroha.contract.alias.set",
+    "iroha_data_model::isi::sorafs::RegisterCapacityDeclaration",
+    "iroha.set_key_value",
+    "soracloud::HeartbeatSoracloudModelHost",
+    "soracloud::AdvertiseSoracloudInrouHost",
+    "soracloud::ReconcileSoracloudInrouPlacements",
+    "iroha_data_model::isi::soracloud::ReconcileSoracloudModelHosts",
+    "iroha_data_model::isi::soracloud::ReportSoracloudModelHostViolation",
+    "soracloud::SetSoracloudInrouReplicaRuntimeState",
+    "soracloud::ClearSoracloudInrouReplicaRuntimeState",
+    "soracloud::ReportSoracloudServiceLeaseUsage",
+]
+
 COUNCIL_KEY_1 = "ed01202152F8D19B791D24453242E15F2EAB6CB7CFFA7B6A5ED30097960E069881DB12"
 COUNCIL_KEY_2 = "ed012022FC297792F0B6FFC0BFCFDB7EDB0C0AA14E025A365EC0E342E86E3829CB74B6"
 COUNCIL_KEY_3 = "ed01206355691C178A8FF91007A7478AFB955EF7352C63E7B25703984CF78B26E21A56"
+
+
+def test_taira_governance_timing_contract_is_release_pinned() -> None:
+    config = tomllib.loads(TAIRA_CONFIG_PATH.read_text(encoding="utf-8"))
+    governance = config["gov"]
+
+    assert governance["plain_voting_enabled"] is True
+    assert governance["min_enactment_delay"] == 600
+    assert governance["window_span"] == 3_600
+    assert governance["min_turnout"] == 1
+    assert governance["pipeline_enactment_sla_blocks"] == 3_600
+    assert {
+        key: governance[key]
+        for key in (
+            "parliament_committee_size",
+            "parliament_term_blocks",
+            "parliament_min_stake",
+            "parliament_eligibility_asset_id",
+            "parliament_alternate_size",
+            "parliament_quorum_bps",
+            "rules_committee_size",
+            "agenda_council_size",
+            "interest_panel_size",
+            "review_panel_size",
+            "policy_jury_size",
+            "oversight_committee_size",
+            "fma_committee_size",
+        )
+    } == {
+        "parliament_committee_size": 21,
+        "parliament_term_blocks": 43_200,
+        "parliament_min_stake": "1",
+        "parliament_eligibility_asset_id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+        "parliament_alternate_size": 21,
+        "parliament_quorum_bps": 6_667,
+        "rules_committee_size": 7,
+        "agenda_council_size": 9,
+        "interest_panel_size": 11,
+        "review_panel_size": 13,
+        "policy_jury_size": 25,
+        "oversight_committee_size": 7,
+        "fma_committee_size": 5,
+    }
+
+
+def _genesis_instructions(payload: dict) -> list[dict]:
+    return [
+        instruction
+        for transaction in payload["transactions"]
+        for instruction in transaction.get("instructions", [])
+    ]
+
+
+def _contract_deployment_gate_projection(payload: dict) -> dict:
+    instructions = _genesis_instructions(payload)
+    sponsor_revisions = [
+        instruction["StageFeeSponsorProgramRevision"]["revision"]
+        for instruction in instructions
+        if "StageFeeSponsorProgramRevision" in instruction
+    ]
+    assert len(sponsor_revisions) == 1
+    selectors = [
+        selector
+        for rule in sponsor_revisions[0]["rules"]
+        for selector in rule["selectors"]
+    ]
+    return {
+        "chain": payload["chain"],
+        "chain_discriminant": payload["chain_discriminant"],
+        "citizens": [
+            instruction["RegisterCitizen"]
+            for instruction in instructions
+            if "RegisterCitizen" in instruction
+        ],
+        "sponsor_program_id": sponsor_revisions[0]["program_id"],
+        "selectors": selectors,
+        "code_registration_grants": [
+            instruction["Grant"]["Permission"]
+            for instruction in instructions
+            if instruction.get("Grant", {})
+            .get("Permission", {})
+            .get("object", {})
+            .get("name")
+            == "CanRegisterSmartContractCode"
+        ],
+    }
+
+
+def test_checked_in_taira_genesis_contract_deployment_gate_is_release_pinned() -> None:
+    genesis = json.loads(TAIRA_GENESIS_PATH.read_text(encoding="utf-8"))
+    projection = _contract_deployment_gate_projection(genesis)
+
+    assert projection == {
+        "chain": TAIRA_CHAIN_ID,
+        "chain_discriminant": TAIRA_CHAIN_DISCRIMINANT,
+        "citizens": [{"owner": TAIRA_CITIZEN_ID, "amount": "10000"}],
+        "sponsor_program_id": {
+            "sponsor": TAIRA_GENESIS_DEPLOYER_ID,
+            "name": "cbsi_web",
+        },
+        "selectors": [
+            {
+                "kind": "native_instruction",
+                "value": {"wire_id": wire_id},
+            }
+            for wire_id in TAIRA_FEE_SPONSOR_SELECTORS
+        ],
+        "code_registration_grants": [
+            {
+                "destination": TAIRA_GENESIS_DEPLOYER_ID,
+                "object": {"name": "CanRegisterSmartContractCode"},
+            }
+        ],
+    }
+    selector_wire_ids = [
+        selector["value"]["wire_id"] for selector in projection["selectors"]
+    ]
+    assert (
+        "iroha_data_model::isi::smart_contract_code::ActivateContractInstance"
+        not in selector_wire_ids
+    )
+    assert "iroha.custom" not in selector_wire_ids
 
 
 BASE_CONFIG = """# baseline
@@ -246,6 +404,22 @@ def test_render_bundle_injects_public_roster_into_unsigned_genesis(tmp_path: Pat
         {"peer": f"peer-{index}-public", "pop_hex": f"peer-{index}-pop"}
         for index in range(1, 5)
     ]
+    registered_validator_accounts = [
+        instruction["Register"]["Account"]
+        for transaction in rendered["transactions"]
+        for instruction in transaction.get("instructions", [])
+        if "Account" in instruction.get("Register", {})
+    ]
+    assert registered_validator_accounts == [
+        {
+            "id": f"test-validator-{index}",
+            "metadata": {
+                "purpose": "taira_validator_payout_recipient",
+                "validator_slug": f"taira-validator-{index}",
+            },
+        }
+        for index in range(1, 5)
+    ]
     assert "peer-1-private" not in (output_dir / "genesis.json").read_text(
         encoding="utf-8"
     )
@@ -254,6 +428,28 @@ def test_render_bundle_injects_public_roster_into_unsigned_genesis(tmp_path: Pat
     )
     assert "$TAIRA_GENESIS_PRIVATE_KEY" in signing_command
     assert "taira-validator-1/config.toml" in signing_command
+
+
+def test_genesis_renderer_preserves_fresh_contract_deployment_gate(
+    tmp_path: Path,
+) -> None:
+    roster_path = tmp_path / "validator_roster.toml"
+    output_dir = tmp_path / "out"
+    _write_roster(roster_path)
+    output_dir.mkdir()
+    validators = MODULE.load_roster(roster_path)
+    checked_in = json.loads(TAIRA_GENESIS_PATH.read_text(encoding="utf-8"))
+
+    rendered_path = MODULE.render_genesis_template(
+        TAIRA_GENESIS_PATH,
+        validators,
+        output_dir,
+    )
+    rendered = json.loads(rendered_path.read_text(encoding="utf-8"))
+
+    assert _contract_deployment_gate_projection(
+        rendered
+    ) == _contract_deployment_gate_projection(checked_in)
 
 
 def test_load_roster_requires_explicit_direct_torii_hostname(tmp_path: Path) -> None:

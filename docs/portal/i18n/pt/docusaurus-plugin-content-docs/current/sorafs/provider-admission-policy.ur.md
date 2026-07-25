@@ -33,7 +33,7 @@ translation_last_reviewed: 2026-02-07
 ## قبولیت کا ورک فلو
 
 1. **پروپوزل تیار کرنا**
-   -CLI: `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission proposal ...`
+   -CLI: `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal ...`
      شامل کریں جو `ProviderAdmissionProposalV1` + توثیقی pacote بنائے۔
    - ویلیڈیشن: ضروری فیلڈز, aposta> 0, اور `profile_id` میں canonical chunker handle کو یقینی بنائیں۔
 2. **گورننس کی منظوری**
@@ -50,14 +50,14 @@ translation_last_reviewed: 2026-02-07
 ## عمل درآمد کے کام| علاقہ | کام | Proprietário(s) | حالت |
 |-------|-----|----------|------|
 | اسکیمہ | `crates/sorafs_manifest/src/provider_admission.rs` کے تحت `ProviderAdmissionProposalV1`, `ProviderAdmissionEnvelopeV1`, `EndpointAttestationV1` (Norito) کی تعریف کریں۔ `sorafs_manifest::provider_admission` میں ویلیڈیشن helpers کے ساتھ نافذ کیا گیا ہے۔【F:crates/sorafs_manifest/src/provider_admission.rs#L1】 | Armazenamento / Governança | ✅ مکمل |
-| CLI Módulo | `sorafs_manifest_stub` é um dispositivo de armazenamento de dados: `provider-admission proposal`, `provider-admission sign`, `provider-admission verify`. | GT Ferramentaria | ✅ مکمل |
+| CLI Módulo | `sorafs_manifest_builder` é um dispositivo de armazenamento de dados: `provider-admission proposal`, `provider-admission sign`, `provider-admission verify`. | GT Ferramentaria | ✅ مکمل |
 
 CLI é um pacote configurável de pacotes (`--endpoint-attestation-intermediate`) que está disponível para download
 proposta canônica/bytes de envelope جاری کرتا ہے, اور `sign`/`verify` کے دوران کونسل assinaturas کو ویری فائی کرتا ہے۔ آپریٹرز corpos de anúncios براہ راست فراہم کر سکتے ہیں یا anúncios assinados دوبارہ استعمال کر سکتے ہیں, اور arquivos de assinatura O `--council-signature-public-key` é um `--council-signature-file` que é uma ferramenta de automação de automação
 
 ### CLI
 
-ہر کمانڈ کو `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission ...` کے ذریعے چلائیں۔-`proposal`
+ہر کمانڈ کو `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission ...` کے ذریعے چلائیں۔-`proposal`
   - Nome de usuário: `--provider-id=<hex32>`, `--chunker-profile=<namespace.name@semver>`,
     `--stake-pool-id=<hex32>`, `--stake-amount=<amount>`, `--advert-key=<hex32>`,
     `--jurisdiction-code=<ISO3166-1>`, اور کم از کم ایک `--endpoint=<kind:host>`۔
@@ -86,7 +86,7 @@ proposta canônica/bytes de envelope جاری کرتا ہے, اور `sign`/`veri
     `--revoked-at`/`--notes` اختیاری ہیں۔ Resumo de revogação CLI کو assinar/verificar کرتا ہے, carga útil Norito
     `--revocation-out` کے ذریعے لکھتا ہے، اور resumo e contagem de assinatura کے ساتھ JSON رپورٹ پرنٹ کرتا ہے۔
 | ویریفیکیشن | Torii, gateways, e `sorafs-node` کے لیے مشترکہ verificador نافذ کریں۔ testes de integração de unidade + CLI Rede TL / Armazenamento | ✅ مکمل |
-| Torii Máquina | verificador کو Torii میں Ads Ingest کرنے کے دوران شامل کریں, پالیسی سے باہر anúncios مسترد کریں, اور telemetria جاری کریں۔ | Rede TL | ✅ مکمل | Torii اب envelopes de governança (`torii.sorafs.admission_envelopes_dir`) لوڈ کرتا ہے, ingerir کے دوران digest/signature match کی تصدیق کرتا ہے, اور admissão telemetria ظاہر کرتا ہے。【F:crates/iroha_torii/src/sorafs/admission.rs#L1】【F:crates/iroha_torii/src/sorafs/discovery.rs#L1】【F:crates/iroha_torii/src/sorafs/api.rs#L1】 || تجدید | تجدید/منسوخی اسکیمہ + CLI helpers شامل کریں, اور guia de ciclo de vida کو docs میں شائع کریں (نیچے runbook اور `provider-admission renewal`/`revoke` CLI Cartão دیکھیں)。【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L477】【docs/source/sorafs/provider_admission_policy.md:120】 | Armazenamento / Governança | ✅ مکمل |
+| Torii Máquina | verificador کو Torii میں Ads Ingest کرنے کے دوران شامل کریں, پالیسی سے باہر anúncios مسترد کریں, اور telemetria جاری کریں۔ | Rede TL | ✅ مکمل | Torii اب envelopes de governança (`torii.sorafs.admission_envelopes_dir`) لوڈ کرتا ہے, ingerir کے دوران digest/signature match کی تصدیق کرتا ہے, اور admissão telemetria ظاہر کرتا ہے。【F:crates/iroha_torii/src/sorafs/admission.rs#L1】【F:crates/iroha_torii/src/sorafs/discovery.rs#L1】【F:crates/iroha_torii/src/sorafs/api.rs#L1】 || تجدید | تجدید/منسوخی اسکیمہ + CLI helpers شامل کریں, اور guia de ciclo de vida کو docs میں شائع کریں (نیچے runbook اور `provider-admission renewal`/`revoke` CLI Cartão دیکھیں)。【crates/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#L477】【docs/source/sorafs/provider_admission_policy.md:120】 | Armazenamento / Governança | ✅ مکمل |
 | ٹیلیمیٹری | Painéis `provider_admission` e alertas کی تعریف کریں (تجدید کی کمی, expiração do envelope)۔ | Observabilidade | 🟠 جاری | کاؤنٹر `torii_sorafs_admission_total{result,reason}` موجود ہے؛ painéis/alertas زیر التوا ہیں۔【F:crates/iroha_telemetry/src/metrics.rs#L3798】【F:docs/source/telemetry.md#L614】 |
 
 ### تجدید اور منسوخی کا رن بُک
@@ -96,7 +96,7 @@ proposta canônica/bytes de envelope جاری کرتا ہے, اور `sign`/`veri
    `--retention-epoch` بڑھائیں اور ضرورت کے مطابق stake/endpoints اپڈیٹ کریں۔
 2. Carreira
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission \
+   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -105,7 +105,7 @@ proposta canônica/bytes de envelope جاری کرتا ہے, اور `sign`/`veri
      --notes="stake top-up 2025-03"
    ```
    یہ کمانڈ `AdmissionRecord::apply_renewal` کے ذریعے capacidade/perfil فیلڈز کو غیر تبدیل شدہ ہونے کی تصدیق کرتی ہے،
-   `ProviderAdmissionRenewalV1` جاری کرتی ہے، اور گورنس لاگ کے لیے digests پرنٹ کرتی ہے۔【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L477】【F:crates/sorafs_manifest/src/provider_admission.rs#L422】
+   `ProviderAdmissionRenewalV1` جاری کرتی ہے، اور گورنس لاگ کے لیے digests پرنٹ کرتی ہے۔【crates/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#L477】【F:crates/sorafs_manifest/src/provider_admission.rs#L422】
 3. `torii.sorafs.admission_envelopes_dir` میں پچھلا envelope تبدیل کریں, renovação Norito/JSON کو گورنس ریپوزٹری میں commit کریں,
    Hash de renovação + época de retenção کو `docs/source/sorafs/migration_ledger.md` میں شامل کریں۔
 4. آپریٹرز کو بتائیں کہ نیا envelope فعال ہے اور ingerir کی تصدیق کے لیے
@@ -116,7 +116,7 @@ proposta canônica/bytes de envelope جاری کرتا ہے, اور `sign`/`veri
 #### ہنگامی منسوخی
 1. Envelope متاثرہ کی شناخت کریں اور منسوخی جاری کریں:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission \
+   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \
@@ -127,7 +127,7 @@ proposta canônica/bytes de envelope جاری کرتا ہے, اور `sign`/`veri
      --json-out=governance/providers/<id>/revocation.json
    ```
    CLI `ProviderAdmissionRevocationV1` پر دستخط کرتا ہے، `verify_revocation_signatures` کے ذریعے assinaturas کا سیٹ ویریفائی کرتا ہے،
-   Para o resumo de revogação رپورٹ کرتا ہے۔【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L593】【F:crates/sorafs_manifest/src/provider_admission.rs#L486】
+   Para o resumo de revogação رپورٹ کرتا ہے۔【crates/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#L593】【F:crates/sorafs_manifest/src/provider_admission.rs#L486】
 2. `torii.sorafs.admission_envelopes_dir` سے envelope ہٹا دیں, revogação Norito/JSON کو caches de admissão میں تقسیم کریں،
    Qual é o hash گورننس منٹس میں ریکارڈ کریں۔
 3. `torii_sorafs_admission_total{result="rejected",reason="admission_missing"}` دیکھیں تاکہ تصدیق ہو سکے کہ caches نے anúncio revogado کو drop کر دیا ہے؛

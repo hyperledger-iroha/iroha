@@ -74,7 +74,7 @@ El contrato, las formas Torii y CLI crean variantes idénticas.
 |-----------|--------|---------------|
 | Servicios Torii | Экспонировать `/v1/sorafs/pin` (enviar), `/v1/sorafs/pin/{cid}` (búsqueda), `/v1/sorafs/aliases` (lista/enlace), `/v1/sorafs/replication` (pedidos/recibos). Обеспечить пагинацию + фильтрацию. | Redes TL / Core Infraestructura |
 | Аттестация | Включать высоту/хэш registro в ответы; Agregue los certificados de estructura Norito, actualmente SDK. | Infraestructura básica |
-| CLI | Conecte `sorafs_manifest_stub` o la nueva CLI `sorafs_pin` con `pin submit`, `alias bind`, `order issue`, `registry export`. | Grupo de Trabajo sobre Herramientas |
+| CLI | Conecte `sorafs_manifest_builder` o la nueva CLI `sorafs_pin` con `pin submit`, `alias bind`, `order issue`, `registry export`. | Grupo de Trabajo sobre Herramientas |
 | SDK | Сгенерировать клиентские enlaces (Rust/Go/TS) из схемы Norito; Realice pruebas de integración. | Equipos SDK |
 
 Operaciones:

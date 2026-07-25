@@ -2,8 +2,11 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! and assert that a Pipeline Warning event is emitted during block processing.
 
+use std::sync::Arc;
+
 use iroha_config::parameters::actual::LaneConfig;
 use iroha_core::{
+    governance::manifest::LaneManifestRegistry,
     kura::{Kura, PipelineDagSnapshot, PipelineRecoverySidecar, PipelineTxSnapshot},
     query::store::LiveQueryStore,
     state::State,
@@ -56,10 +59,14 @@ fn pipeline_warning_emitted_on_dag_mismatch() {
     let acc_a = Account::new(alice_id.clone()).build(&alice_id);
     let acc_b = Account::new(bob_id.clone()).build(&alice_id);
     let world = iroha_core::state::World::with([domain], [acc_a, acc_b], [ad]);
-    let state = State::new_for_testing(world, kura.clone(), query);
+    let chain_id = ChainId::from("chain");
+    let state = State::new_with_chain_for_testing(world, kura.clone(), query, chain_id.clone());
+    let nexus = state.nexus_snapshot();
+    state.install_lane_manifests(&Arc::new(
+        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
+    ));
 
     // Build a block with two txs (independent)
-    let chain_id = ChainId::from("chain");
     let rose: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
         DomainId::try_new("wonderland", "universal").unwrap(),
         "coin".parse().unwrap(),
@@ -181,10 +188,14 @@ fn pipeline_warning_ignored_for_stale_sidecar() {
     let acc_a = Account::new(alice_id.clone()).build(&alice_id);
     let acc_b = Account::new(bob_id.clone()).build(&alice_id);
     let world = iroha_core::state::World::with([domain], [acc_a, acc_b], [ad]);
-    let state = State::new_for_testing(world, kura.clone(), query);
+    let chain_id = ChainId::from("chain");
+    let state = State::new_with_chain_for_testing(world, kura.clone(), query, chain_id.clone());
+    let nexus = state.nexus_snapshot();
+    state.install_lane_manifests(&Arc::new(
+        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
+    ));
 
     // Build a block with two txs (independent)
-    let chain_id = ChainId::from("chain");
     let rose: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
         DomainId::try_new("wonderland", "universal").unwrap(),
         "coin".parse().unwrap(),

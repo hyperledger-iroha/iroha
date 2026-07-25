@@ -82,6 +82,11 @@ case "${{FORMAL_FAKE_GATE_MODE:-pass}}" in
     printf '%s\n' 'fixture production Verus verification passed' \
       >target/formal/sumeragi_v2/verus.log
     printf '%s\n' \
+      $'schema_version\t1' \
+      $'backend\tapalache' \
+      $'result_count\t3' \
+      >target/formal/sumeragi_v2/multilane_apalache_evidence.tsv
+    printf '%s\n' \
       '{{"event":"start","memory_limit_bytes":2147483648,"sample_interval_seconds":0.25,"schema_version":1}}' \
       '{{"accounting_method":"rss","event":"sample","memory_bytes":4096,"memory_limit_bytes":2147483648,"physical_footprint_bytes":0,"process_count":1,"rss_bytes":4096,"schema_version":1}}' \
       '{{"event":"summary","exit_reason":"completed","exit_status":0,"memory_limit_bytes":2147483648,"peak_memory_bytes":4096,"sample_interval_seconds":0.25,"schema_version":1}}' \
@@ -244,6 +249,9 @@ def test_formal_launcher_publishes_complete_source_bound_archive(
         invocation / "verus_evidence.json"
     )
     assert fields["verus_log_sha256"] == _sha256(invocation / "verus.log")
+    assert fields["multilane_apalache_evidence_sha256"] == _sha256(
+        invocation / "multilane_apalache_evidence.tsv"
+    )
     assert "cross_tool_evidence_sha256" not in fields
     assert not (invocation / "cross_tool_evidence.json").exists()
     assert fields["harness_cargo_lock_sha256"] == _sha256(

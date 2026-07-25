@@ -43,14 +43,14 @@ title: "خارطة طريق ترحيل SoraFS"
 |--------|--------|-------|------------|----------|
 | تدريبات светильники | М0 | Пробные прогоны позволяют переварить фрагмент фрагмента `fixtures/sorafs_chunker`. Написано `docs/source/sorafs/reports/`. | Поставщики хранилищ | `determinism-<date>.md` определяет пройден/не пройден. |
 | فرض التواقيع | М1 | Проявляется `ci/check_sorafs_fixtures.sh` + `.github/workflows/sorafs-fixtures-nightly.yml`. отменяет отказ от отказа от التطوير تتطلب в الحوكمة مرفق بالـ PR. | Инструментальная рабочая группа | Отказ от ответственности CI, رابط تذكرة (إن وجدت). |
-| Флаги ожидания | М1 | خطوط الأنابيب تستدعي `sorafs_manifest_stub` Информационная поддержка: | Документы КИ | Установите флаги ожидания (انظر كتلة الأمر أدناه). |
+| Флаги ожидания | М1 | خطوط الأنابيب تستدعي `sorafs_manifest_builder` Информационная поддержка: | Документы КИ | Установите флаги ожидания (انظر كتلة الأمر أدناه). |
 | Закрепление сначала в реестре | М2 | `sorafs pin propose` и `sorafs pin approve` в манифесте манифеста; Интерфейс CLI установлен на `--require-registry`. | Операции по управлению | Откройте реестр CLI, откройте веб-сайт. |
 | تكافؤ наблюдаемость | М3 | Prometheus/Grafana позволяет использовать фрагменты манифестов в реестре; التنبيهات موصولة بمناوبة ops. | Наблюдаемость | Получите идентификаторы, полученные в ходе игры, на сайте GameDay. |
 
 #### أمر النشر القياسي
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- docs/book \
   --manifest-out artifacts/docs/book/2025-11-01/docs.manifest \
   --manifest-signatures-out artifacts/docs/book/2025-11-01/docs.manifest_signatures.json \
   --car-out artifacts/docs/book/2025-11-01/docs.car \

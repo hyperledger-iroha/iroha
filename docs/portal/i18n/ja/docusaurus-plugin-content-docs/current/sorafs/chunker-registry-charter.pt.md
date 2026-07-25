@@ -65,7 +65,7 @@ SDK)。エイリアスとハンドルの検証は不変です
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+     cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - PR コンテントの設備、提案、決定性の関係を羨望のまなざし
@@ -103,14 +103,14 @@ SDK)。エイリアスとハンドルの検証は不変です
 
 ## ツールへの期待
 
-- `sorafs_manifest_chunk_store` と `sorafs_manifest_stub` の説明:
+- `sorafs_manifest_chunk_store` と `sorafs_manifest_builder` の説明:
   - `--list-profiles` はレジストリを検査します。
   - `--promote-profile=<handle>` メタダドス メタ ジェラール オブ ブロコ
     アオプロムーバーウムパーフィル。
   - `--json-out=-` 標準出力の送信関連、改訂ログの閲覧
     再現です。
 - `ensure_charter_compliance()` の初期化と関連するバイナリの呼び出し
-  (`manifest_chunk_store`、`provider_advert_stub`)。 CI 開発のオスの精巣
+  (`manifest_chunk_store`、`sorafs_provider_advert`)。 CI 開発のオスの精巣
   novas entradas violarem a carta。
 
 ## レジストロ

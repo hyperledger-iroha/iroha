@@ -13,6 +13,11 @@ ROOT = Path(__file__).resolve().parents[2]
 RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "workspace_release.yml"
 PR_WORKFLOW = ROOT / ".github" / "workflows" / "pr.yml"
 PINNED_RUST = "1.93.1"
+SETUP_RUST_ACTION = (
+    "actions-rust-lang/setup-rust-toolchain@"
+    "166cdcfd11aee3cb47222f9ddb555ce30ddb9659"
+)
+RUST_CACHE_ACTION = "Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32"
 
 
 def _job_block(workflow: str, name: str) -> str:
@@ -112,7 +117,7 @@ def _validate_release_workflow(workflow: str) -> list[str]:
         for marker in exact_source_markers:
             if marker not in job:
                 errors.append(f"{job_name} must verify the exact workflow SHA: {marker}")
-        if "uses: actions-rust-lang/setup-rust-toolchain@v1" not in job:
+        if f"uses: {SETUP_RUST_ACTION}" not in job:
             errors.append(f"{job_name} must install the managed Rust toolchain")
         if f"toolchain: {PINNED_RUST}" not in job:
             errors.append(f"{job_name} must pin Rust {PINNED_RUST}")
@@ -149,7 +154,7 @@ def _validate_pr_parity(workflow: str) -> list[str]:
     if not numeric_job:
         errors.append("PR workflow is missing Numeric V1 architecture parity")
         return errors
-    if "uses: actions-rust-lang/setup-rust-toolchain@v1" not in numeric_job:
+    if f"uses: {SETUP_RUST_ACTION}" not in numeric_job:
         errors.append("PR numeric parity must install the managed Rust toolchain")
     if f"toolchain: {PINNED_RUST}" not in numeric_job:
         errors.append(f"PR numeric parity must pin Rust {PINNED_RUST}")
@@ -282,8 +287,8 @@ def test_release_workflow_guard_rejects_weakening(
         (
             lambda workflow: _replace_once(
                 workflow,
-                "          toolchain: 1.93.1\n      - uses: Swatinem/rust-cache@v2",
-                "          toolchain: stable\n      - uses: Swatinem/rust-cache@v2",
+                f"          toolchain: 1.93.1\n      - uses: {RUST_CACHE_ACTION}",
+                f"          toolchain: stable\n      - uses: {RUST_CACHE_ACTION}",
             ),
             "PR numeric parity must pin Rust 1.93.1",
         ),

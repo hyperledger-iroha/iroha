@@ -154,7 +154,8 @@ fn ivm_manifest_mismatched_abi_hash_rejected_at_admission() {
     let domain = Domain::new(domain_id.clone()).build(&account_id);
     let account = Account::new(account_id.clone()).build(&account_id);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
-    let state = State::new_for_testing(world, kura, query_handle);
+    let chain: ChainId = "chain".parse().unwrap();
+    let state = State::new_with_chain_for_testing(world, kura, query_handle, chain.clone());
     install_current_lane_manifest_registry(&state);
 
     // Prepare a minimal IVM program and its hashes
@@ -191,7 +192,6 @@ fn ivm_manifest_mismatched_abi_hash_rejected_at_admission() {
     let header2 =
         iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block2 = state.block(header2);
-    let chain: ChainId = "chain".parse().unwrap();
     let tx = TransactionBuilder::new(
         chain.clone(),
         account_id.clone(),
@@ -236,7 +236,8 @@ fn ivm_manifest_matching_abi_hash_accepted_at_admission() {
     let domain = Domain::new(domain_id.clone()).build(&account_id);
     let account = Account::new(account_id.clone()).build(&account_id);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
-    let state = State::new_for_testing(world, kura, query_handle);
+    let chain: ChainId = "chain".parse().unwrap();
+    let state = State::new_with_chain_for_testing(world, kura, query_handle, chain.clone());
     install_current_lane_manifest_registry(&state);
 
     // Prepare a minimal IVM program and its hashes
@@ -288,7 +289,6 @@ fn ivm_manifest_matching_abi_hash_accepted_at_admission() {
     let header2 =
         iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block2 = state.block(header2);
-    let chain: ChainId = "chain".parse().unwrap();
     let tx = TransactionBuilder::new(
         chain.clone(),
         account_id.clone(),
@@ -326,7 +326,8 @@ fn ivm_manifest_without_abi_hash_is_rejected_at_admission() {
     let domain = Domain::new(domain_id.clone()).build(&account_id);
     let account = Account::new(account_id.clone()).build(&account_id);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
-    let state = State::new_for_testing(world, kura, query_handle);
+    let chain: ChainId = "chain".parse().unwrap();
+    let state = State::new_with_chain_for_testing(world, kura, query_handle, chain.clone());
     install_current_lane_manifest_registry(&state);
 
     // Prepare a minimal IVM program (v1) and its hashes
@@ -359,7 +360,6 @@ fn ivm_manifest_without_abi_hash_is_rejected_at_admission() {
     let header2 =
         iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block2 = state.block(header2);
-    let chain: ChainId = "chain".parse().unwrap();
     let tx = TransactionBuilder::new(
         chain.clone(),
         account_id.clone(),
@@ -401,7 +401,8 @@ fn ivm_manifest_matching_abi_hash_v1_accepted_at_admission() {
     let domain = Domain::new(domain_id.clone()).build(&account_id);
     let account = Account::new(account_id.clone()).build(&account_id);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
-    let state = State::new_for_testing(world, kura, query_handle);
+    let chain: ChainId = "chain".parse().unwrap();
+    let state = State::new_with_chain_for_testing(world, kura, query_handle, chain.clone());
     install_current_lane_manifest_registry(&state);
 
     let (prog, manifest) = minimal_contract_artifact(1);
@@ -448,7 +449,6 @@ fn ivm_manifest_matching_abi_hash_v1_accepted_at_admission() {
     let header2 =
         iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block2 = state.block(header2);
-    let chain: ChainId = "chain".parse().unwrap();
     let tx = TransactionBuilder::new(
         chain.clone(),
         account_id.clone(),
@@ -485,7 +485,8 @@ fn ivm_manifest_unknown_syscall_rejected_before_execution() {
     let domain = Domain::new(domain_id.clone()).build(&account_id);
     let account = Account::new(account_id.clone()).build(&account_id);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
-    let state = State::new_for_testing(world, kura, query_handle);
+    let chain: ChainId = "chain".parse().unwrap();
+    let state = State::new_with_chain_for_testing(world, kura, query_handle, chain.clone());
     install_current_lane_manifest_registry(&state);
 
     let unknown_syscall = unlisted_syscall_number();
@@ -523,7 +524,6 @@ fn ivm_manifest_unknown_syscall_rejected_before_execution() {
     let header2 =
         iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block2 = state.block(header2);
-    let chain: ChainId = "chain".parse().unwrap();
     let tx = TransactionBuilder::new(
         chain.clone(),
         account_id.clone(),

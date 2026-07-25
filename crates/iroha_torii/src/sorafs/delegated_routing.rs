@@ -6,7 +6,13 @@
 //! replication orders remain the sole authority, while adverts only supply
 //! current peer connectivity metadata.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 
 use axum::{
     body::Body,
@@ -20,7 +26,7 @@ use axum::{
     },
     response::Response,
 };
-use iroha_core::state::{StateReadOnly, WorldReadOnly};
+use iroha_core::state::{State as CoreState, StateReadOnly, WorldReadOnly};
 use iroha_data_model::sorafs::pin_registry::{
     ManifestDigest, ManifestRootCid, PinManifestRecord, PinStatus, ReplicationOrderId,
     ReplicationOrderRecord, ReplicationOrderStatus,
@@ -95,8 +101,17 @@ pub(crate) async fn handle_get_routing_providers(
         Err(error) => return routing_error_response(error),
     };
     let now = unix_now_secs();
-    let current_epoch = u64::try_from(state.state.committed_height()).unwrap_or(u64::MAX);
-
+    let (authority, cache_outcome) = state
+        .sorafs_routing_authority_cache
+        .get_or_rebuild(&state.state)
+        .await;
+    state
+        .telemetry
+        .with_metrics(|metrics| metrics.inc_sorafs_routing_authority_cache(cache_outcome.label()));
+    let authority = match authority {
+        Ok(value) => value,
+        Err(error) => return routing_error_response(error),
+    };
     let Some(cache) = state.sorafs_cache() else {
         return routing_error_response(RoutingError::DiscoveryUnavailable);
     };
@@ -104,15 +119,6 @@ pub(crate) async fn handle_get_routing_providers(
     cache_guard.prune_stale(now);
     let cache_guard = tokio::sync::RwLockWriteGuard::downgrade(cache_guard);
 
-    let state_view = state.state.view();
-    let authority = match build_authority_index(
-        state_view.world().pin_manifests().iter(),
-        state_view.world().replication_orders().iter(),
-        current_epoch,
-    ) {
-        Ok(value) => value,
-        Err(error) => return routing_error_response(error),
-    };
     let provider_ids = authority
         .by_content
         .get(&content_cid)
@@ -153,8 +159,17 @@ pub(crate) async fn handle_get_routing_peers(
         Err(error) => return routing_error_response(error),
     };
     let now = unix_now_secs();
-    let current_epoch = u64::try_from(state.state.committed_height()).unwrap_or(u64::MAX);
-
+    let (authority, cache_outcome) = state
+        .sorafs_routing_authority_cache
+        .get_or_rebuild(&state.state)
+        .await;
+    state
+        .telemetry
+        .with_metrics(|metrics| metrics.inc_sorafs_routing_authority_cache(cache_outcome.label()));
+    let authority = match authority {
+        Ok(value) => value,
+        Err(error) => return routing_error_response(error),
+    };
     let Some(cache) = state.sorafs_cache() else {
         return routing_error_response(RoutingError::DiscoveryUnavailable);
     };
@@ -162,15 +177,6 @@ pub(crate) async fn handle_get_routing_peers(
     cache_guard.prune_stale(now);
     let cache_guard = tokio::sync::RwLockWriteGuard::downgrade(cache_guard);
 
-    let state_view = state.state.view();
-    let authority = match build_authority_index(
-        state_view.world().pin_manifests().iter(),
-        state_view.world().replication_orders().iter(),
-        current_epoch,
-    ) {
-        Ok(value) => value,
-        Err(error) => return routing_error_response(error),
-    };
     let mut peers =
         match resolve_authorized_peers(&authority.all_providers, &cache_guard, now, &filters) {
             Ok(value) => value,
@@ -425,6 +431,109 @@ fn multiaddr_protocol_components(address: &str) -> BTreeSet<&str> {
 struct AuthorityIndex {
     by_content: BTreeMap<ManifestRootCid, BTreeSet<[u8; 32]>>,
     all_providers: BTreeSet<[u8; 32]>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RoutingAuthorityIdentity {
+    committed_height: u64,
+    latest_block_hash: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct CachedAuthorityIndex {
+    identity: RoutingAuthorityIdentity,
+    result: Result<Arc<AuthorityIndex>, RoutingError>,
+}
+
+/// Bounded single-flight cache for the SFM-1 committed authority join.
+///
+/// Exactly one entry is retained and its identity includes both finalized
+/// height and block hash, so a same-height fork cannot reuse another
+/// projection. Rebuilds execute while holding the cache mutex and derive the
+/// identity and index from the same point-in-time state view.
+#[derive(Debug, Default)]
+pub(crate) struct RoutingAuthorityCache {
+    cached: tokio::sync::Mutex<Option<CachedAuthorityIndex>>,
+    hits: AtomicU64,
+    rebuilds: AtomicU64,
+    rebuild_failures: AtomicU64,
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct RoutingAuthorityCacheMetrics {
+    hits: u64,
+    rebuilds: u64,
+    rebuild_failures: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RoutingAuthorityCacheOutcome {
+    Hit,
+    Rebuild,
+    RebuildFailure,
+}
+
+impl RoutingAuthorityCacheOutcome {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Hit => "hit",
+            Self::Rebuild => "rebuild",
+            Self::RebuildFailure => "rebuild_failure",
+        }
+    }
+}
+
+impl RoutingAuthorityCache {
+    async fn get_or_rebuild(
+        &self,
+        state: &CoreState,
+    ) -> (
+        Result<Arc<AuthorityIndex>, RoutingError>,
+        RoutingAuthorityCacheOutcome,
+    ) {
+        let mut cached = self.cached.lock().await;
+        let state_view = state.view();
+        let committed_height = u64::try_from(state_view.height()).unwrap_or(u64::MAX);
+        let identity = RoutingAuthorityIdentity {
+            committed_height,
+            latest_block_hash: state_view.latest_block_hash().map(|hash| hash.to_string()),
+        };
+        if let Some(entry) = cached.as_ref()
+            && entry.identity == identity
+        {
+            self.hits.fetch_add(1, Ordering::Relaxed);
+            return (entry.result.clone(), RoutingAuthorityCacheOutcome::Hit);
+        }
+
+        self.rebuilds.fetch_add(1, Ordering::Relaxed);
+        let result = build_authority_index(
+            state_view.world().pin_manifests().iter(),
+            state_view.world().replication_orders().iter(),
+            committed_height,
+        )
+        .map(Arc::new);
+        let outcome = if result.is_err() {
+            self.rebuild_failures.fetch_add(1, Ordering::Relaxed);
+            RoutingAuthorityCacheOutcome::RebuildFailure
+        } else {
+            RoutingAuthorityCacheOutcome::Rebuild
+        };
+        *cached = Some(CachedAuthorityIndex {
+            identity,
+            result: result.clone(),
+        });
+        (result, outcome)
+    }
+
+    #[cfg(test)]
+    fn metrics(&self) -> RoutingAuthorityCacheMetrics {
+        RoutingAuthorityCacheMetrics {
+            hits: self.hits.load(Ordering::Relaxed),
+            rebuilds: self.rebuilds.load(Ordering::Relaxed),
+            rebuild_failures: self.rebuild_failures.load(Ordering::Relaxed),
+        }
+    }
 }
 
 fn build_authority_index<'a, M, O>(
@@ -1540,6 +1649,31 @@ mod tests {
             orders.iter().map(|(id, record)| (id, record)),
             current_epoch,
         )
+    }
+
+    #[tokio::test]
+    async fn authority_cache_reuses_one_byte_identical_committed_projection() {
+        let app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world(
+            iroha_core::state::World::default(),
+        );
+        let cache = Arc::clone(&app.sorafs_routing_authority_cache);
+
+        let (first, first_outcome) = cache.get_or_rebuild(&app.state).await;
+        let (second, second_outcome) = cache.get_or_rebuild(&app.state).await;
+        let first = first.expect("empty committed authority builds");
+        let second = second.expect("identical committed authority is cached");
+
+        assert_eq!(first_outcome, RoutingAuthorityCacheOutcome::Rebuild);
+        assert_eq!(second_outcome, RoutingAuthorityCacheOutcome::Hit);
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(
+            cache.metrics(),
+            RoutingAuthorityCacheMetrics {
+                hits: 1,
+                rebuilds: 1,
+                rebuild_failures: 0,
+            }
+        );
     }
 
     fn sample_advert(

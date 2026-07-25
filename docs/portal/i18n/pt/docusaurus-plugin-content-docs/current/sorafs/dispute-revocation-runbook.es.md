@@ -40,7 +40,7 @@ Este runbook orienta os operadores de governança para apresentar disputas de ca
 
 ## 3. Apresentar a disputa
 
-1. Crie uma especificação JSON para `sorafs_manifest_stub capacity dispute`:
+1. Crie uma especificação JSON para `sorafs_manifest_builder capacity dispute`:
 
    ```json
    {
@@ -63,7 +63,7 @@ Este runbook orienta os operadores de governança para apresentar disputas de ca
 2. Execute a CLI:
 
    ```bash
-   sorafs_manifest_stub capacity dispute \
+   sorafs_manifest_builder capacity dispute \
      --spec=dispute.json \
      --norito-out=dispute.to \
      --base64-out=dispute.b64 \
@@ -80,7 +80,7 @@ Este runbook orienta os operadores de governança para apresentar disputas de ca
 
 1. **Ventana de graça:** notificação ao provedor sobre a revogação iminente; permite a evacuação de dados fixados desde que a política o permita.
 2. **Geração `ProviderAdmissionRevocationV1`:**
-   - Usa `sorafs_manifest_stub provider-admission revoke` com razão aprovada.
+   - Usa `sorafs_manifest_builder provider-admission revoke` com razão aprovada.
    - Verifique as firmas e o resumo da revogação.
 3. **Publicar a revogação:**
    - Envie a solicitação de revogação para Torii.
@@ -93,7 +93,7 @@ Este runbook orienta os operadores de governança para apresentar disputas de ca
 
 ## 6. Materiais de referência
 
--`sorafs_manifest_stub capacity dispute --help`
+-`sorafs_manifest_builder capacity dispute --help`
 - `docs/source/sorafs/storage_capacity_marketplace.md` (seção de disputas)
 - `docs/source/sorafs/provider_admission_policy.md` (fluxo de revogação)
 - Painel de observação: `SoraFS / Capacity Providers`

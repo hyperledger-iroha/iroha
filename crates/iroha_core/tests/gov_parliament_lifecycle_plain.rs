@@ -249,6 +249,25 @@ fn sora_parliament_plain_lifecycle_with_20_citizens() {
     let proposal_id = *proposal_id;
     let referendum_id = hex::encode(proposal_id);
 
+    let bypass_error = CastPlainBallot {
+        referendum_id: referendum_id.clone(),
+        owner: citizens[0].clone(),
+        amount: BALLOT_LOCK.into(),
+        duration_blocks: 20,
+        direction: 0,
+    }
+    .execute(&citizens[0], &mut stx_1)
+    .expect_err("citizen ballot must not bypass Parliament");
+    assert!(
+        bypass_error
+            .to_string()
+            .contains("must be opened by Parliament")
+    );
+    assert!(
+        stx_1.world.governance_locks().get(&referendum_id).is_none(),
+        "rejected bypass must not create a lock"
+    );
+
     for citizen in &citizens {
         let citizen_balance = stx_1
             .world
@@ -315,6 +334,18 @@ fn sora_parliament_plain_lifecycle_with_20_citizens() {
         .expect("cast plain ballot");
     }
 
+    let early_finalize = FinalizeReferendum {
+        referendum_id: referendum_id.clone(),
+        proposal_id,
+    }
+    .execute(&proposer_id, &mut stx_1)
+    .expect_err("inclusive voting window must reject early finalization");
+    assert!(
+        early_finalize
+            .to_string()
+            .contains("inclusive voting window")
+    );
+
     stx_1.apply();
     block_1
         .commit()
@@ -332,23 +363,25 @@ fn sora_parliament_plain_lifecycle_with_20_citizens() {
         iroha_core::state::GovernanceReferendumStatus::Open
     );
 
-    let header_2 = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
-    let mut block_2 = state.block(header_2);
-    let mut stx_2 = block_2.transaction();
-
-    FinalizeReferendum {
-        referendum_id: referendum_id.clone(),
-        proposal_id,
+    for height in 2_u64..=11 {
+        state
+            .block(BlockHeader::new(
+                core::num::NonZeroU64::new(height).expect("non-zero height"),
+                None,
+                None,
+                None,
+                0,
+                0,
+            ))
+            .commit()
+            .expect("commit referendum lifecycle block");
     }
-    .execute(&proposer_id, &mut stx_2)
-    .expect("finalize referendum");
 
-    stx_2.apply();
-    block_2.commit().expect("commit finalize block");
+    let header_12 = BlockHeader::new(nonzero!(12_u64), None, None, None, 0, 0);
+    let mut block_12 = state.block(header_12);
 
-    let proposal_after_finalize = state
-        .view()
-        .world()
+    let proposal_after_finalize = block_12
+        .world
         .governance_proposals()
         .get(&proposal_id)
         .cloned()
@@ -358,31 +391,29 @@ fn sora_parliament_plain_lifecycle_with_20_citizens() {
         iroha_core::state::GovernanceProposalStatus::Approved
     ));
 
-    let referendum_window = state
-        .view()
-        .world()
+    let referendum_window = block_12
+        .world
         .governance_referenda()
         .get(&referendum_id)
         .copied()
         .expect("referendum exists before enact");
 
-    let header_3 = BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0);
-    let mut block_3 = state.block(header_3);
-    let mut stx_3 = block_3.transaction();
+    let proposal_fingerprint = proposal_after_finalize.kind.fingerprint();
+    let mut stx_12 = block_12.transaction();
 
     EnactReferendum {
         referendum_id: proposal_id,
-        preimage_hash: [0; 32],
+        preimage_hash: proposal_fingerprint,
         at_window: AtWindow {
             lower: referendum_window.h_start,
             upper: referendum_window.h_end,
         },
     }
-    .execute(&proposer_id, &mut stx_3)
+    .execute(&proposer_id, &mut stx_12)
     .expect("enact referendum");
 
-    stx_3.apply();
-    block_3.commit().expect("commit enact block");
+    stx_12.apply();
+    block_12.commit().expect("commit enact block");
 
     let proposal_after_enact = state
         .view()

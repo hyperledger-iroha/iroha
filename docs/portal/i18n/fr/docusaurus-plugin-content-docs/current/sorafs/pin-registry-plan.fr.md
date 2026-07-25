@@ -80,7 +80,7 @@ Essais :
 |---------------|------|--------------|
 | Service Torii | Exposer `/v1/sorafs/pin` (soumettre), `/v1/sorafs/pin/{cid}` (recherche), `/v1/sorafs/aliases` (liste/liaison), `/v1/sorafs/replication` (commandes/reçus). Fournir pagination + filtrage. | Mise en réseau TL / Core Infra |
 | Attestation | Inclure la hauteur/hash du registre dans les réponses ; ajouter une structure d'attestation Norito consommée par les SDK. | Infrastructure de base |
-| CLI | Étendre `sorafs_manifest_stub` ou une nouvelle CLI `sorafs_pin` avec `pin submit`, `alias bind`, `order issue`, `registry export`. | GT Outillage |
+| CLI | Étendre `sorafs_manifest_builder` ou une nouvelle CLI `sorafs_pin` avec `pin submit`, `alias bind`, `order issue`, `registry export`. | GT Outillage |
 | SDK | Générer des clients de liaisons (Rust/Go/TS) depuis le schéma Norito ; ajouter des tests d'intégration. | Équipes SDK |
 
 Opérations :

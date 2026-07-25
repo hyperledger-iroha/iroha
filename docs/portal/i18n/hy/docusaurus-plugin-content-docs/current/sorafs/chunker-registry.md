@@ -121,7 +121,7 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
 Մանիֆեստի կոճակը արտացոլում է նույն տվյալները, ինչը հարմար է խողովակաշարերում `--chunker-profile-id` ընտրությունը գրելիս: Երկու կտոր պահեստային CLI-ներն էլ ընդունում են կանոնական բռնակի ձևը (`--profile=sorafs.sf1@1.0.0`), այնպես որ կառուցվող սկրիպտները կարող են խուսափել կոշտ կոդավորման թվային ID-ներից.
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- --list-chunker-profiles
+$ cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- --list-chunker-profiles
 [
   {
     "profile_id": 1,
@@ -179,4 +179,4 @@ Accept-Chunker: sorafs.sf1;version=1.0.0
   տրամադրված թեստերի միջոցով:
 * `chunker_registry::lookup_by_profile` պնդում է, որ նկարագրիչի պարամետրերը
   համընկնում է `ChunkProfile::DEFAULT`՝ պատահական շեղումը պաշտպանելու համար:
-* `iroha app sorafs toolkit pack` և `sorafs_manifest_stub` կողմից արտադրված մանիֆեստները ներառում են ռեեստրի մետատվյալները:
+* `iroha app sorafs toolkit pack` և `sorafs_manifest_builder` կողմից արտադրված մանիֆեստները ներառում են ռեեստրի մետատվյալները:

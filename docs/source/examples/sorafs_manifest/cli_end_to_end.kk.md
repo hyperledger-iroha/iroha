@@ -14,7 +14,7 @@ translator: machine-google-reviewed
 # SoraFS CLI манифестінің соңына дейін мысалы
 
 Бұл мысал SoraFS нұсқасына құжаттама құрастыруын жариялау арқылы жүреді.
-`sorafs_manifest_stub` CLI детерминирленген кесу құрылғыларымен бірге
+`sorafs_manifest_builder` CLI детерминирленген кесу құрылғыларымен бірге
 SoraFS Architecture RFC ішінде сипатталған. Ағын манифест ұрпақты қамтиды,
 күту тексерулері, жоспарды алуды тексеру және іздеуді дәлелдеу репетициясы
 командалар CI-ге бірдей қадамдарды ендіре алады.
@@ -30,7 +30,7 @@ SoraFS Architecture RFC ішінде сипатталған. Ағын маниф
 ## 1-қадам — Манифест, CAR, қолтаңбалар және алу жоспарын жасаңыз
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- docs/book \
   --manifest-out target/sorafs/docs.manifest \
   --manifest-signatures-out target/sorafs/docs.manifest_signatures.json \
   --car-out target/sorafs/docs.car \
@@ -91,7 +91,7 @@ PIN тізілімі орналастырылғаннан кейін (көшір
 манифестті CLI арқылы жіберіңіз:
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- docs/book \
   --plan=target/sorafs/docs.fetch_plan.json \
   --manifest-out target/sorafs/docs.manifest \
   --manifest-signatures-in target/sorafs/docs.manifest_signatures.json \

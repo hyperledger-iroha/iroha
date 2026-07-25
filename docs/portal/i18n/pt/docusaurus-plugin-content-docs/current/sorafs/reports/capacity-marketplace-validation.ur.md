@@ -63,7 +63,7 @@ cargo test -p sorafs_car --features cli --test capacity_cli
 python3 scripts/telemetry/capacity_reconcile.py --snapshot <state.json> --ledger <ledger.ndjson> --warn-only
 ```
 
-Operadores کو `sorafs_manifest_stub capacity {declaration,dispute}` کے ساتھ cargas úteis de solicitação de integração/disputa دوبارہ gerar کرنے چاہئیں اور بنے ہوئے JSON/Norito bytes کو ticket de governança کے ساتھ arquivo کرنا چاہیے۔
+Operadores کو `sorafs_manifest_builder capacity {declaration,dispute}` کے ساتھ cargas úteis de solicitação de integração/disputa دوبارہ gerar کرنے چاہئیں اور بنے ہوئے JSON/Norito bytes کو ticket de governança کے ساتھ arquivo کرنا چاہیے۔
 
 ## Artefatos de aprovação
 

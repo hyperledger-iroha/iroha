@@ -54,6 +54,7 @@ def release_archive(
         "aarch64-apple-darwin",
         "x86_64-unknown-linux-gnu",
         "aarch64-unknown-linux-gnu",
+        "x86_64-pc-windows-msvc",
     ]
     if missing_target:
         targets.pop()
@@ -107,7 +108,7 @@ def downstream_bindings(
     missing_package: bool = False,
     duplicate_package: bool = False,
 ) -> dict:
-    packages = ["javascript", "python", "kotlin_jvm", "java_android", "swift"]
+    packages = ["javascript", "python", "kotlin_jvm", "java_android", "swift", "csharp"]
     if missing_package:
         packages.pop()
     if duplicate_package:
@@ -261,6 +262,9 @@ def test_bound_fixture_tables_cover_checker_bound_kind_sets() -> None:
 
 def test_fixture_inventories_cover_checker_required_sets() -> None:
     assert tuple(release_archive()["targets"]) == MODULE.REQUIRED_RELEASE_TARGETS
+    assert MODULE.REQUIRED_RELEASE_TARGETS == (
+        MODULE.MANDATORY_RELEASE_TARGETS + MODULE.ADDITIONAL_RELEASE_TARGETS
+    )
     assert tuple(downstream_bindings()["packages"]) == (
         MODULE.REQUIRED_DOWNSTREAM_PACKAGES
     )
@@ -452,7 +456,7 @@ def test_release_archive_requires_minimum_target_count(tmp_path: Path) -> None:
 def test_release_archive_target_count_must_match_unique_targets(tmp_path: Path) -> None:
     write_complete_evidence(tmp_path)
     summary = tmp_path / "summary.json"
-    write_json(tmp_path / "release-archive.json", release_archive(target_count=5))
+    write_json(tmp_path / "release-archive.json", release_archive(target_count=6))
 
     assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
 
@@ -627,7 +631,7 @@ def test_downstream_package_count_must_match_unique_packages(tmp_path: Path) -> 
     summary = tmp_path / "summary.json"
     write_json(
         tmp_path / "downstream-bindings.json",
-        downstream_bindings(package_count=6),
+        downstream_bindings(package_count=7),
     )
 
     assert run_gate(tmp_path, "--summary-out", str(summary)) == 1
@@ -657,7 +661,7 @@ def test_downstream_packages_must_not_include_unknown_values(tmp_path: Path) -> 
     write_complete_evidence(tmp_path)
     summary = tmp_path / "summary.json"
     payload = downstream_bindings()
-    payload["packages"].append("csharp")
+    payload["packages"].append("shadow-sdk-package")
     payload["package_count"] = len(payload["packages"])
     write_json(tmp_path / "downstream-bindings.json", payload)
 

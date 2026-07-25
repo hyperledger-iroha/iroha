@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import signal
 import stat
@@ -23,6 +24,40 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 BOOTSTRAP = REPO_ROOT / "scripts" / "bootstrap_sumeragi_v2_release.py"
 PYTHON = Path(sys.executable).resolve(strict=True)
 FINGERPRINT = "SHA256:" + "A" * 43
+SCALING_EVIDENCE_ENV = "IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST"
+SCALING_TRUST_ENV = (
+    "IROHA_RELEASE_SCALING_CONFIGURATION_SHA256",
+    SCALING_EVIDENCE_ENV,
+    "IROHA_RELEASE_SCALING_IROHAD_SHA256",
+    "IROHA_RELEASE_SCALING_IROHA_CLI_SHA256",
+    "IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256",
+)
+
+
+def test_scaling_evidence_trust_inputs_are_the_only_new_runner_environment_names() -> None:
+    spec = importlib.util.spec_from_file_location(
+        "sumeragi_release_bootstrap_allowlist", BOOTSTRAP
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+
+    preexisting_allowlist = {
+        "CARGO_HOME",
+        "CARGO_NET_GIT_FETCH_WITH_CLI",
+        "CARGO_NET_OFFLINE",
+        "NIX_SSL_CERT_FILE",
+        "RUSTUP_HOME",
+        "RUSTUP_TOOLCHAIN",
+        "SSL_CERT_FILE",
+    }
+    assert module._RUNNER_ENV_ALLOWLIST - preexisting_allowlist == set(
+        SCALING_TRUST_ENV
+    )
+    assert module._RUNNER_ENV_ALLOWLIST == preexisting_allowlist | set(
+        SCALING_TRUST_ENV
+    )
 
 
 def test_outer_abort_grace_exceeds_nested_tlaps_cleanup_window() -> None:
@@ -356,6 +391,7 @@ def _runner(
     action: str,
     *,
     trusted_mutation: Path | None = None,
+    observed_scaling_environment: Path | None = None,
 ) -> str:
     actions = {
         "success": ":",
@@ -660,6 +696,17 @@ PY'''
     }.get(action, ":")
     if action == "missing-receipt":
         receipt_script = ":"
+    environment_probe = ""
+    if observed_scaling_environment is not None:
+        required = "\n".join(f': "${{{name}:?}}"' for name in SCALING_TRUST_ENV)
+        values = " ".join(
+            f"{shlex.quote(name)} \"${{{name}}}\"" for name in SCALING_TRUST_ENV
+        )
+        environment_probe = (
+            f"{required}\n"
+            f"printf '%s=%s\\n' {values}"
+            f" > {shlex.quote(str(observed_scaling_environment))}"
+        )
     return f'''#!/bin/bash
 set -eu
 : "${{SUMERAGI_V2_RELEASE_BOOTSTRAP_COMPLETION:?}}"
@@ -684,6 +731,7 @@ count=0
 if test -f {launch_count}; then count=$(<{launch_count}); fi
 count=$((count + 1))
 printf '%s\n' "$count" > {launch_count}
+{environment_probe}
 {receipt_script}
 {action_script}
 {post_receipt_action}
@@ -1524,6 +1572,89 @@ def test_unapproved_runner_environment_is_rejected(release_fixture: Fixture) -> 
         [*release_fixture.arguments(), "--runner-environment", "BASH_ENV=/tmp/attack"]
     )
     _assert_never_launched(release_fixture, result)
+
+
+def test_scaling_evidence_runner_environment_is_authenticated_and_forwarded(
+    release_fixture: Fixture,
+) -> None:
+    scaling_manifest = _write(
+        release_fixture.trust / "scaling_evidence.json",
+        "{}\n",
+        0o400,
+    )
+    observed_environment = release_fixture.root / "observed-scaling-environment"
+    _write(
+        release_fixture.candidate / "scripts" / "run_sumeragi_v2_release_gates.sh",
+        _runner(
+            release_fixture.launch_count,
+            release_fixture.candidate,
+            "success",
+            observed_scaling_environment=observed_environment,
+        ),
+        0o500,
+    )
+
+    scaling_environment = {
+        "IROHA_RELEASE_SCALING_CONFIGURATION_SHA256": "a" * 64,
+        SCALING_EVIDENCE_ENV: str(scaling_manifest),
+        "IROHA_RELEASE_SCALING_IROHAD_SHA256": "b" * 64,
+        "IROHA_RELEASE_SCALING_IROHA_CLI_SHA256": "c" * 64,
+        "IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256": "d" * 64,
+    }
+    arguments = [*release_fixture.arguments()]
+    for name in SCALING_TRUST_ENV:
+        arguments.extend(
+            ["--runner-environment", f"{name}={scaling_environment[name]}"]
+        )
+    result = release_fixture.run(arguments)
+
+    assert result.returncode == 0, result.stderr
+    assert dict(
+        line.split("=", 1)
+        for line in observed_environment.read_text(encoding="utf-8").splitlines()
+    ) == scaling_environment
+    marker = json.loads(
+        (release_fixture.evidence / "BOOTSTRAP_COMPLETED.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    authenticated_environment = marker["runner"]["environment_without_self_digest"]
+    assert {
+        name: authenticated_environment[name] for name in SCALING_TRUST_ENV
+    } == scaling_environment
+    assert sorted(
+        name
+        for name in authenticated_environment
+        if name.startswith("IROHA_RELEASE_SCALING_")
+    ) == sorted(SCALING_TRUST_ENV)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST_",
+        "IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST_PATH",
+        "IROHA_RELEASE_SCALING_IROHAD_SHA256_PATH",
+        "IROHA_RELEASE_SCALING_IROHA_CLI_SHA256_",
+        "IROHA_RELEASE_SCALING_TRIAL_HARNESS_DIGEST",
+        "IROHA_RELEASE_SCALING_CONFIGURATION_SHA512",
+        "SUMERAGI_V2_RELEASE_SCALING_EVIDENCE_MANIFEST",
+    ],
+)
+def test_scaling_evidence_runner_environment_lookalikes_are_rejected(
+    release_fixture: Fixture,
+    name: str,
+) -> None:
+    result = release_fixture.run(
+        [
+            *release_fixture.arguments(),
+            "--runner-environment",
+            f"{name}=/tmp/scaling_evidence.json",
+        ]
+    )
+
+    _assert_never_launched(release_fixture, result)
+    assert "explicitly allowed NAME=VALUE" in result.stderr
 
 
 def test_candidate_runner_symlink_never_launches(release_fixture: Fixture) -> None:

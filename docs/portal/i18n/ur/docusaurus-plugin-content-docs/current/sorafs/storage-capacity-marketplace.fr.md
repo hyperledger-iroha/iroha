@@ -63,7 +63,7 @@ ID: اسٹوریج صلاحیت کی مارکیٹ پلیس
 - مشترکہ مددگار (`CapacityMetadataEntry` ، `PricingScheduleV1` ، لین/اسائنمنٹ/SLA توثیق کرنے والے) CI اور بہاو ٹولنگ کے ذریعہ عین مطابق کلیدی توثیق اور دوبارہ قابل استعمال غلطی کی اطلاع دہندگی فراہم کرتے ہیں۔
 - `PinProviderRegistry` اب `/v1/sorafs/capacity/state` کے ذریعے آن چین اسنیپ شاٹ کو بے نقاب کرتا ہے ، فراہم کنندہ کے اعلامیہ اور فیس لیجر اندراجات کو Norito JSON کے پیچھے جوڑ کر تعصب پسند۔ 【کریٹس/اروہ_ٹوری/ایس آر سی/سرفس/رجسٹری۔
 - توثیق کی کوریج کی مشقیں کیننیکل ہینڈل نفاذ ، ڈپلیکیٹ کا پتہ لگانے ، لین کی حدود ، نقل کی تفویض گارڈز ، اور ٹیلی میٹری رینج چیک تاکہ سی آئی میں فوری طور پر رجعتیں ظاہر ہوں۔
-- آپریٹر ٹولنگ: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` پڑھنے کے قابل چشمیوں کو کیننیکل Norito پے لوڈ ، بیس 64 بلبس اور JSON خلاصے میں تبدیل کرتا ہے تاکہ آپریٹرز `/v1/sorafs/capacity/declare` ، `/v1/sorafs/capacity/telemetry` فکسچر اور نقل تیار کرنے کے ساتھ تیار کرسکیں۔ لوکل۔ 【کریٹس/sorafs_car/src/bin/sorafs_manifest_stub/capaction.rs: 1】 حوالہ فکسچر `fixtures/sorafs_manifest/replication_order/` (`order_v1.json` ، Prometheus میں براہ راست رہتے ہیں۔
+- آپریٹر ٹولنگ: `sorafs_manifest_builder capacity {declaration, telemetry, replication-order}` پڑھنے کے قابل چشمیوں کو کیننیکل Norito پے لوڈ ، بیس 64 بلبس اور JSON خلاصے میں تبدیل کرتا ہے تاکہ آپریٹرز `/v1/sorafs/capacity/declare` ، `/v1/sorafs/capacity/telemetry` فکسچر اور نقل تیار کرنے کے ساتھ تیار کرسکیں۔ لوکل۔ 【کریٹس/sorafs_car/src/bin/sorafs_manifest_builder/capaction.rs: 1】 حوالہ فکسچر `fixtures/sorafs_manifest/replication_order/` (`order_v1.json` ، Prometheus میں براہ راست رہتے ہیں۔
 
 ### 2. کنٹرول پلان کا انضمام| ٹاسک | مالک (زبانیں) | نوٹ |
 | ------ | ---------- | ------- |
@@ -147,13 +147,13 @@ ID: اسٹوریج صلاحیت کی مارکیٹ پلیس
 - گورننس پیکیجز کے ساتھ `docs/examples/sorafs_capacity_marketplace_validation/` کے تحت JSON کا خلاصہ اور ہیش محفوظ کریں۔
 
 ### دلیل اور سلیشنگ کا ثبوت
-- `sorafs_manifest_stub capacity dispute` کے ذریعے فائل تنازعات (ٹیسٹ:
+- `sorafs_manifest_builder capacity dispute` کے ذریعے فائل تنازعات (ٹیسٹ:
   `cargo test -p sorafs_car --test capacity_cli`) کیننیکل پے لوڈ کو برقرار رکھنے کے لئے۔
 - `cargo test -p iroha_core -- capacity_dispute_replay_is_deterministic` اور جرمانے کی ترتیب (`record_capacity_telemetry_penalises_persistent_under_delivery`) کو چلائیں تاکہ یہ ثابت کیا جاسکے کہ تنازعات اور اس میں دوبارہ پلے کو تعی .ن سے گھٹا دیتا ہے۔
 - ثبوت کی گرفتاری اور اضافے کے لئے `docs/source/sorafs/dispute_revocation_runbook.md` پر عمل کریں۔ ہڑتال کی منظوریوں کو توثیق کی رپورٹ سے لنک کریں۔
 
 ### فراہم کنندگان اور باہر نکلنے والے دھواں ٹیسٹوں کی بورڈنگ
-- `sorafs_manifest_stub capacity ...` کے ساتھ اعلامیہ/ٹیلی میٹری نمونے دوبارہ تیار کریں اور جمع کرانے سے پہلے CLI ٹیسٹوں کو ری پلے (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`)۔
+- `sorafs_manifest_builder capacity ...` کے ساتھ اعلامیہ/ٹیلی میٹری نمونے دوبارہ تیار کریں اور جمع کرانے سے پہلے CLI ٹیسٹوں کو ری پلے (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`)۔
 - Torii (`/v1/sorafs/capacity/declare`) کے ذریعے جمع کروائیں پھر `/v1/sorafs/capacity/state` پر قبضہ کریں اور Grafana پر قبضہ کریں۔ `docs/source/sorafs/capacity_onboarding_runbook.md` میں آؤٹ پٹ اسٹریم پر عمل کریں۔
 - محفوظ شدہ دستاویزات اور مفاہمت کے نتائج پر دستخط شدہ
   `docs/examples/sorafs_capacity_marketplace_validation/`۔

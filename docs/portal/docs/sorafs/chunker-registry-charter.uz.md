@@ -61,7 +61,7 @@ SDK). U taxallusni va tekshirilgan invariantlarni ishlatadi
      cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
+     cargo run -p sorafs_car --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - Armatura, taklif, determinizm hisoboti va reestrni o'z ichiga olgan PRni yuboring
@@ -100,14 +100,14 @@ SDK). U taxallusni va tekshirilgan invariantlarni ishlatadi
 
 ## Asboblarni kutish
 
-- `sorafs_manifest_chunk_store` va `sorafs_manifest_stub`:
+- `sorafs_manifest_chunk_store` va `sorafs_manifest_builder`:
   - Ro'yxatga olish kitobini tekshirish uchun `--list-profiles`.
   - ishlatiladigan kanonik metama'lumotlar blokini yaratish uchun `--promote-profile=<handle>`
     profilni targ'ib qilishda.
   - `--json-out=-` hisobotlarni stdout-ga o'tkazish, takroriy ko'rib chiqish imkonini beradi
     jurnallar.
 - `ensure_charter_compliance()` tegishli ikkilik fayllarda ishga tushirilganda chaqiriladi
-  (`manifest_chunk_store`, `provider_advert_stub`). Agar yangi bo'lsa, CI testlari muvaffaqiyatsiz bo'lishi kerak
+  (`manifest_chunk_store`, `sorafs_provider_advert`). Agar yangi bo'lsa, CI testlari muvaffaqiyatsiz bo'lishi kerak
   yozuvlar nizomni buzadi.
 
 ## Yozuvni yuritish

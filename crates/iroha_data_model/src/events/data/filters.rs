@@ -956,6 +956,48 @@ impl super::EventFilter for SorafsGatewayEventFilter {
                     .as_ref()
                     .is_none_or(|expected| &payload.provider_id == expected)
             }
+            super::sorafs::SorafsGatewayEvent::RepairLedger(payload) => {
+                if self.policy_matcher.is_some() || self.detail_matcher.is_some() {
+                    return false;
+                }
+                let provider_ok = self
+                    .provider_matcher
+                    .as_ref()
+                    .is_none_or(|expected| &payload.provider_id == expected);
+                let manifest_ok = self
+                    .manifest_digest_matcher
+                    .as_ref()
+                    .is_none_or(|expected| &payload.manifest_digest == expected);
+                provider_ok && manifest_ok
+            }
+            super::sorafs::SorafsGatewayEvent::ModerationLedger(_) => {
+                self.provider_matcher.is_none()
+                    && self.manifest_digest_matcher.is_none()
+                    && self.policy_matcher.is_none()
+                    && self.detail_matcher.is_none()
+            }
+            super::sorafs::SorafsGatewayEvent::OrderbookLedger(payload) => {
+                if self.manifest_digest_matcher.is_some()
+                    || self.policy_matcher.is_some()
+                    || self.detail_matcher.is_some()
+                {
+                    return false;
+                }
+                self.provider_matcher
+                    .as_ref()
+                    .is_none_or(|expected| payload.provider_id.as_ref() == Some(expected))
+            }
+            super::sorafs::SorafsGatewayEvent::ReserveLedger(payload) => {
+                if self.manifest_digest_matcher.is_some()
+                    || self.policy_matcher.is_some()
+                    || self.detail_matcher.is_some()
+                {
+                    return false;
+                }
+                self.provider_matcher
+                    .as_ref()
+                    .is_none_or(|expected| payload.provider_id.as_ref() == Some(expected))
+            }
         }
     }
 }

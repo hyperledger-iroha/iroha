@@ -67,11 +67,11 @@ cargo test -p sorafs_chunker streaming_backpressure_fuzz_matches_batch
 ## 3. Construire et annoncer un manifeste
 
 Envoyez le plan de morceaux, les alias et les entreprises de gouvernement dans un manifeste d'utilisation
-`sorafs-manifest-stub`. Le commandant de bord doit afficher une charge utile d'un seul fichier ; pasa
+`sorafs-manifest-builder`. Le commandant de bord doit afficher une charge utile d'un seul fichier ; pasa
 un itinéraire de répertoire pour empaqueter un arbre (la CLI l'enregistrera dans l'ordre lexicográfico).
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
+cargo run -p sorafs_manifest --bin sorafs-manifest-builder -- \
   /tmp/docs.txt \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --manifest-out=/tmp/docs.manifest \

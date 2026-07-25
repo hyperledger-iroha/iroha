@@ -258,14 +258,16 @@ where
                 .try_reserve_exact(padded_len)
                 .map_err(|_| Error::Synthesis)?;
 
-            for (_byte_index, assigned) in job.message.iter().enumerate() {
+            for (byte_index, assigned) in job.message.iter().enumerate() {
+                #[cfg(not(test))]
+                let _ = byte_index;
                 let virtual_cell = assigned.cell.ok_or(Error::Synthesis)?;
                 let physical_cell = *physical_cells.get(&virtual_cell).ok_or(Error::Synthesis)?;
                 let byte =
                     u8::try_from(fe_to_biguint(assigned.value())).map_err(|_| Error::Synthesis)?;
                 #[cfg(test)]
                 let byte = if let Some((target_job, target_byte, xor)) = self.source_xor {
-                    if target_job == job_index && target_byte == _byte_index {
+                    if target_job == job_index && target_byte == byte_index {
                         byte ^ xor
                     } else {
                         byte

@@ -72,7 +72,7 @@ Tâches :
 |-----------|------|----------|
 | Servicio Torii | Expositor `/v1/sorafs/pin` (enviar), `/v1/sorafs/pin/{cid}` (búsqueda), `/v1/sorafs/aliases` (listar/vincular), `/v1/sorafs/replication` (pedidos/recibos). Fournir paginación + filtración. | Redes TL / Core Infraestructura |
 | Atestación | Incluir la altura/hash del registro en las respuestas; Agregue una estructura de certificación Norito proporcionada por los SDK. | Infraestructura básica |
-| CLI | Tenga en cuenta `sorafs_manifest_stub` o una nueva CLI `sorafs_pin` con `pin submit`, `alias bind`, `order issue`, `registry export`. | Grupo de Trabajo sobre Herramientas |
+| CLI | Tenga en cuenta `sorafs_manifest_builder` o una nueva CLI `sorafs_pin` con `pin submit`, `alias bind`, `order issue`, `registry export`. | Grupo de Trabajo sobre Herramientas |
 | SDK | Generar cliente de enlaces (Rust/Go/TS) después del esquema Norito; Agregar pruebas de integración. | Equipos SDK |
 
 Operaciones:

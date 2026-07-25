@@ -103,7 +103,8 @@ fn protected_namespace_requires_enacted_proposal() {
     let domain = Domain::new(domain_id.clone()).build(&authority);
     let account = Account::new(authority.clone()).build(&authority);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
-    let state = State::new_for_testing(world, kura, query);
+    let chain: ChainId = "chain".parse().unwrap();
+    let state = State::new_with_chain_for_testing(world, kura, query, chain.clone());
     state.install_lane_manifests(&std::sync::Arc::new(LaneManifestRegistry::from_config(
         &iroha_data_model::nexus::LaneCatalog::default(),
         &GovernanceCatalog::default(),
@@ -157,7 +158,6 @@ seiyaku ProtectedGate {
         "contract_entrypoint".parse().unwrap(),
         iroha_primitives::json::Json::new("ready"),
     );
-    let chain: ChainId = "chain".parse().unwrap();
     let tx = TransactionBuilder::new(
         chain.clone(),
         authority.clone(),
@@ -231,14 +231,40 @@ seiyaku ProtectedGate {
     .expect("propose");
     // Recompute the proposal id like in core and enact it
     let pid = compute_proposal_id(&contract_address, &want_code_hex, &want_abi_hex);
-    stx3.world
+    let proposal = stx3
+        .world
         .governance_proposals_mut()
         .get_mut(&pid)
-        .expect("proposal exists")
-        .status = iroha_core::state::GovernanceProposalStatus::Approved;
+        .expect("proposal exists");
+    proposal.status = iroha_core::state::GovernanceProposalStatus::Approved;
+    proposal.finalization_evidence = Some(
+        iroha_data_model::governance::types::GovernanceFinalizationEvidence {
+            proposal_id: pid,
+            referendum_id: pid,
+            finalized_at_height: 2,
+            mode: iroha_data_model::isi::governance::VotingMode::Plain,
+            approve: 1,
+            reject: 0,
+            abstain: 0,
+            min_turnout: 1,
+            approval_threshold_numerator: 1,
+            approval_threshold_denominator: 2,
+            approved: true,
+        },
+    );
+    let preimage_hash = proposal.kind.fingerprint();
+    stx3.world.governance_referenda_mut().insert(
+        hex::encode(pid),
+        iroha_core::state::GovernanceReferendumRecord {
+            h_start: 2,
+            h_end: 2,
+            status: iroha_core::state::GovernanceReferendumStatus::Closed,
+            mode: iroha_core::state::GovernanceReferendumMode::Plain,
+        },
+    );
     EnactReferendum {
         referendum_id: pid,
-        preimage_hash: [0u8; 32],
+        preimage_hash,
         at_window: iroha_data_model::governance::types::AtWindow { lower: 2, upper: 2 },
     }
     .execute(&authority, &mut stx3)

@@ -32,7 +32,7 @@ fn tempdir() -> Result<TempDir, std::io::Error> {
 }
 
 fn run_cli(args: &[String]) -> assert_cmd::assert::Assert {
-    let mut cmd = cargo_bin_cmd!("sorafs_manifest_stub");
+    let mut cmd = cargo_bin_cmd!("sorafs_manifest_builder");
     cmd.arg("capacity");
     for arg in args {
         cmd.arg(arg);

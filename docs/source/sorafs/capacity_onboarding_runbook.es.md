@@ -23,7 +23,7 @@ Sigelo para cada admision, renovacion o retiro de provider.
 | Rol | Responsabilidades | Artefactos requeridos |
 |-----|-------------------|-----------------------|
 | Provider | Redactar spec `CapacityDeclarationV1`, capturar inventario de hardware, suministrar bundles de atestacion si lo exige `docs/source/sorafs/provider_admission_policy.md`. | `specs/<provider>.json`, affidavit de hardware, lista de contactos. |
-| Storage WG reviewer | Validar schema, correr regresion CLI, cross-check de stake y metadata de perfil de chunker. | Logs de CLI, outputs `sorafs_manifest_stub`, nota de revision firmada. |
+| Storage WG reviewer | Validar schema, correr regresion CLI, cross-check de stake y metadata de perfil de chunker. | Logs de CLI, outputs `sorafs_manifest_builder`, nota de revision firmada. |
 | Governance council | Aprobar declaracion final, registrar ID de voto y rastrear hooks de override/penalty. | ID de ballot del council, link a log de incidentes. |
 | Treasury/SRE | Confirmar dashboards y entradas de cuota, archivar hashes de reconciliacion/export, verificar alertas. | Capturas Grafana, dump `/v1/sorafs/capacity/state`, log de silencio Alertmanager si se uso. |
 
@@ -46,7 +46,7 @@ lane y contacto SLA. Generar los payloads canonicos via el helper CLI:
 
 ```bash
 mkdir -p artifacts/sorafs/providers/acme
-sorafs_manifest_stub capacity declaration \
+sorafs_manifest_builder capacity declaration \
   --spec specs/providers/acme.json \
   --json-out artifacts/sorafs/providers/acme/declaration.json \
   --request-out artifacts/sorafs/providers/acme/request.json \
@@ -56,7 +56,7 @@ sorafs_manifest_stub capacity declaration \
 
 Este comando valida el schema localmente y emite cada artefacto requerido por
 `/v1/sorafs/capacity/declare`. Guardar stdout/stderr en
-`artifacts/sorafs/providers/acme/manifest_stub.log`.
+`artifacts/sorafs/providers/acme/manifest_builder.log`.
 
 ### 2. Ejecutar smoke tests de admision
 
@@ -121,7 +121,7 @@ que SRE pueda probar cobertura de telemetria.
 1. **Drenar asignaciones.** Ejecutar `iroha app sorafs replication list --status active \
    --provider-id <hex>` hasta que no queden referencias de manifiesto. Encolar
    ballots de reasignacion para stragglers antes de aprobar el retiro.
-2. **Publicar telemetria final.** Usar `sorafs_manifest_stub capacity telemetry` para
+2. **Publicar telemetria final.** Usar `sorafs_manifest_builder capacity telemetry` para
    generar el snapshot final y enviarlo via `POST /v1/sorafs/capacity/telemetry`.
    Registrar la respuesta y asegurar que la fila del provider en
    `/v1/sorafs/capacity/state` pase a `status="retiring"` o `"inactive"`.
@@ -151,7 +151,7 @@ artifacts/sorafs/providers/<provider>/
   state_record.json
   telemetry_final.json              # solo salida
   grafana_capacity_health_<ts>.png
-  manifest_stub.log
+  manifest_builder.log
   tests/capacity_cli.log
 docs/examples/sorafs_capacity_marketplace_validation/
   YYYY-MM-DD_<provider>_{onboarding,exit}_signoff.md

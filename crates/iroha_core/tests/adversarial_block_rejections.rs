@@ -5,6 +5,7 @@ use std::{borrow::Cow, num::NonZeroU64, sync::Arc};
 
 use iroha_core::{
     block::{BlockBuilder, BlockValidationError, ValidBlock},
+    governance::manifest::LaneManifestRegistry,
     kura::Kura,
     query::store::LiveQueryStore,
     smartcontracts::ivm::cache::IvmCache,
@@ -79,7 +80,12 @@ fn setup_world() -> AdversarialSetup {
     );
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let state = State::new_for_testing(world, kura, query);
+    let chain_id = ChainId::from("adversarial-block-rejections");
+    let state = State::new_with_chain_for_testing(world, kura, query, chain_id);
+    let nexus = state.nexus_snapshot();
+    state.install_lane_manifests(&Arc::new(
+        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
+    ));
     AdversarialSetup {
         state,
         alice_id,
@@ -240,6 +246,11 @@ fn block_history_tamper_rejected_without_mutation() {
             .unpack(|_| {});
     let committed_baseline = baseline_valid.commit_unchecked().unpack(|_| {});
     let committed_baseline_signed: SignedBlock = committed_baseline.clone().into();
+    assert!(
+        committed_baseline.as_ref().error(0).is_none(),
+        "baseline transaction rejected during execution: {:?}",
+        committed_baseline.as_ref().error(0)
+    );
     let _ = baseline_state_block.apply_without_execution(&committed_baseline, vec![peer.clone()]);
     baseline_state_block
         .kura()

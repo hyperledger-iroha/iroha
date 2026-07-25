@@ -52,6 +52,8 @@ pub const PDP_PROVIDER_CHECKPOINT_VERSION_V1: u8 = 1;
 pub const PDP_NEXT_CHALLENGE_VERSION_V1: u8 = 1;
 /// Default checkpoint file name below the configured SoraFS storage root.
 pub const PDP_PROVIDER_CHECKPOINT_FILE_NAME_V1: &str = "pdp-provider-state.to";
+/// Maximum records returned by one bounded PDP status export.
+pub const PDP_STATUS_EXPORT_MAX_RECORDS_V1: usize = 1_000;
 
 const HANDOFF_IDEMPOTENCY_DOMAIN_V1: &[u8] = b"sorafs.pdp.terminal-handoff.v1\0";
 const DEFAULT_MAX_PENDING: u32 = 4_096;
@@ -222,6 +224,43 @@ pub struct PdpNextChallengeV1 {
     pub enqueued_at_unix: u64,
 }
 
+/// Public lifecycle state for one retained PDP challenge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+pub enum PdpChallengeLifecycleV1 {
+    /// Awaiting an authenticated proof.
+    Pending,
+    /// Proof verdict is durable and an external handoff remains pending.
+    HandoffPending,
+    /// Governance archive and any repair handoff completed.
+    Terminal,
+}
+
+/// Compact bounded status for one retained PDP challenge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+pub struct PdpChallengeStatusV1 {
+    /// Provider queue sequence.
+    pub sequence: u64,
+    /// Challenge identity.
+    pub challenge_id: [u8; 32],
+    /// Manifest identity.
+    pub manifest_digest: [u8; 32],
+    /// Provider identity.
+    pub provider_id: [u8; 32],
+    /// Challenge epoch.
+    pub epoch_id: u64,
+    /// Provider response deadline while full challenge state is retained.
+    #[norito(default)]
+    pub response_deadline_unix: Option<u64>,
+    /// Current durable lifecycle.
+    pub lifecycle: PdpChallengeLifecycleV1,
+    /// Terminal decision, once a verdict is durable.
+    #[norito(default)]
+    pub decision: Option<PdpTerminalDecisionV1>,
+    /// Digest of a submitted canonical proof, when available.
+    #[norito(default)]
+    pub proof_digest: Option<[u8; 32]>,
+}
+
 /// Result of enqueueing a governed PDP challenge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PdpChallengeEnqueueOutcome {
@@ -388,6 +427,44 @@ impl StoredChallengeV1 {
             Self::HandoffPending(record) => record.pending.challenge_payload_digest,
             Self::Terminal(record) => record.challenge_payload_digest,
         }
+    }
+}
+
+fn stored_challenge_status(record: &StoredChallengeV1) -> PdpChallengeStatusV1 {
+    match record {
+        StoredChallengeV1::Pending(pending) => PdpChallengeStatusV1 {
+            sequence: pending.sequence,
+            challenge_id: pending.challenge.challenge_id,
+            manifest_digest: pending.challenge.manifest_digest,
+            provider_id: pending.challenge.provider_id,
+            epoch_id: pending.challenge.epoch_id,
+            response_deadline_unix: Some(pending.challenge.response_deadline_unix),
+            lifecycle: PdpChallengeLifecycleV1::Pending,
+            decision: None,
+            proof_digest: None,
+        },
+        StoredChallengeV1::HandoffPending(handoff) => PdpChallengeStatusV1 {
+            sequence: handoff.pending.sequence,
+            challenge_id: handoff.pending.challenge.challenge_id,
+            manifest_digest: handoff.pending.challenge.manifest_digest,
+            provider_id: handoff.pending.challenge.provider_id,
+            epoch_id: handoff.pending.challenge.epoch_id,
+            response_deadline_unix: Some(handoff.pending.challenge.response_deadline_unix),
+            lifecycle: PdpChallengeLifecycleV1::HandoffPending,
+            decision: Some(handoff.archive.decision),
+            proof_digest: handoff.archive.proof_digest,
+        },
+        StoredChallengeV1::Terminal(terminal) => PdpChallengeStatusV1 {
+            sequence: terminal.sequence,
+            challenge_id: terminal.challenge_id,
+            manifest_digest: terminal.manifest_digest,
+            provider_id: terminal.provider_id,
+            epoch_id: terminal.epoch_id,
+            response_deadline_unix: None,
+            lifecycle: PdpChallengeLifecycleV1::Terminal,
+            decision: Some(terminal.decision),
+            proof_digest: terminal.proof_digest,
+        },
     }
 }
 
@@ -635,15 +712,42 @@ impl PdpProviderProtocol {
         }))
     }
 
-    /// Submit exact canonical proof bytes and drive required terminal handoffs.
-    pub fn submit_proof_bytes(
+    /// Submit exact canonical proof bytes for one authenticated challenge identity.
+    ///
+    /// Malformed, cross-challenge, wrong-signer, and otherwise invalid proof
+    /// submissions all become a durable `invalid_proof` verdict and authoritative
+    /// repair handoff for the named challenge.
+    pub fn submit_proof_for_challenge_bytes(
         &self,
+        challenge_id: [u8; 32],
         proof_bytes: &[u8],
         active_admission: &AdmissionRecord,
         now_unix: u64,
         handoff: &dyn PdpTerminalHandoff,
     ) -> Result<PdpTerminalOutcomeV1, PdpProviderProtocolError> {
-        let proof = decode_canonical_proof(proof_bytes, self.policy.proof_max_bytes as usize)?;
+        if challenge_id == [0; 32] {
+            return Err(PdpProviderProtocolError::InvalidLookup);
+        }
+        {
+            let durable = self.lock_state()?;
+            if let Some(StoredChallengeV1::Pending(pending)) =
+                durable.runtime.records.get(&challenge_id)
+            {
+                validate_active_admission(pending, active_admission)?;
+            }
+        }
+        let proof = match decode_canonical_proof(proof_bytes, self.policy.proof_max_bytes as usize)
+        {
+            Ok(proof) if proof.challenge_id == challenge_id => proof,
+            Ok(_) | Err(_) => {
+                return self.reject_without_proof(
+                    challenge_id,
+                    PdpRejectionReasonV1::InvalidProof,
+                    now_unix,
+                    handoff,
+                );
+            }
+        };
         self.submit_proof(
             proof,
             proof_bytes.to_vec(),
@@ -783,6 +887,47 @@ impl PdpProviderProtocol {
         })
     }
 
+    /// Return compact status for one retained challenge identity.
+    pub fn challenge_status(
+        &self,
+        challenge_id: &[u8; 32],
+    ) -> Result<Option<PdpChallengeStatusV1>, PdpProviderProtocolError> {
+        if challenge_id == &[0; 32] {
+            return Err(PdpProviderProtocolError::InvalidLookup);
+        }
+        let durable = self.lock_state()?;
+        Ok(durable
+            .runtime
+            .records
+            .get(challenge_id)
+            .map(stored_challenge_status))
+    }
+
+    /// Export a bounded sequence-ordered page of retained challenge statuses.
+    pub fn export_statuses(
+        &self,
+        after_sequence: u64,
+        limit: usize,
+    ) -> Result<Vec<PdpChallengeStatusV1>, PdpProviderProtocolError> {
+        if limit == 0 || limit > PDP_STATUS_EXPORT_MAX_RECORDS_V1 {
+            return Err(PdpProviderProtocolError::InvalidExportLimit {
+                limit,
+                max: PDP_STATUS_EXPORT_MAX_RECORDS_V1,
+            });
+        }
+        let durable = self.lock_state()?;
+        let mut statuses = durable
+            .runtime
+            .records
+            .values()
+            .filter(|record| record.sequence() > after_sequence)
+            .map(stored_challenge_status)
+            .collect::<Vec<_>>();
+        statuses.sort_by_key(|status| status.sequence);
+        statuses.truncate(limit);
+        Ok(statuses)
+    }
+
     fn submit_proof(
         &self,
         proof: PdpProofV1,
@@ -819,12 +964,8 @@ impl PdpProviderProtocol {
 
         let pending = self.pending_record(proof.challenge_id)?;
         validate_active_admission(&pending, active_admission)?;
-        if proof.signature.public_key != pending.admitted_provider_key {
-            return Err(PdpProviderProtocolError::UnauthorizedProviderKey);
-        }
-        proof
-            .verify_signature()
-            .map_err(PdpProviderProtocolError::UnauthorizedProofSignature)?;
+        let signature_authorized = proof.signature.public_key == pending.admitted_provider_key
+            && proof.verify_signature().is_ok();
 
         let future_limit = now_unix
             .checked_add(self.policy.max_future_skew_secs)
@@ -837,6 +978,11 @@ impl PdpProviderProtocol {
         } else if proof.issued_at_unix > future_limit {
             (
                 PdpTerminalDecisionV1::Rejected(PdpRejectionReasonV1::FutureTimestamp),
+                None,
+            )
+        } else if !signature_authorized {
+            (
+                PdpTerminalDecisionV1::Rejected(PdpRejectionReasonV1::InvalidProof),
                 None,
             )
         } else {
@@ -1617,6 +1763,9 @@ fn validate_active_admission(
     if admission.provider_id() != &pending.challenge.provider_id {
         return Err(PdpProviderProtocolError::AdmissionProviderMismatch);
     }
+    if admission.envelope_digest() != &pending.admission_envelope_digest {
+        return Err(PdpProviderProtocolError::AdmissionInactive);
+    }
     if admission.advert_key() != &pending.admitted_provider_key {
         return Err(PdpProviderProtocolError::UnauthorizedProviderKey);
     }
@@ -2166,6 +2315,14 @@ pub enum PdpProviderProtocolError {
     /// Lookup fields are inert.
     #[error("PDP provider lookup requires non-zero provider and timestamp")]
     InvalidLookup,
+    /// Status export limit is zero or above the protocol cap.
+    #[error("PDP status export limit {limit} must be between 1 and {max}")]
+    InvalidExportLimit {
+        /// Requested record count.
+        limit: usize,
+        /// Protocol maximum.
+        max: usize,
+    },
     /// Oldest provider challenge must be expired through the terminal path first.
     #[error("PDP challenge {challenge_id:?} requires expiry finalization")]
     ChallengeRequiresExpiry {
@@ -2230,7 +2387,12 @@ pub enum PdpProviderProtocolError {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, sync::atomic::AtomicU64};
+    use std::{
+        collections::BTreeMap,
+        fs,
+        sync::{Arc, Barrier, atomic::AtomicU64},
+        thread,
+    };
 
     use ed25519_dalek::{Signer as _, SigningKey};
     use sorafs_manifest::{
@@ -2244,6 +2406,11 @@ mod tests {
         sign_pdp_proof_ed25519_v1, verify_pdp_bundle_v1,
     };
     use tempfile::TempDir;
+
+    use crate::{
+        NodeHandle, NodeInitError, config::StorageConfig,
+        proof_outcome_forwarder::PROOF_OUTCOME_OUTBOX_CHECKPOINT_FILE_NAME_V1,
+    };
 
     use super::*;
 
@@ -2638,7 +2805,13 @@ mod tests {
         let sink = RecordingHandoff::default();
         let proof_bytes = norito::to_bytes(&fixture.proof).expect("proof bytes");
         let accepted = protocol
-            .submit_proof_bytes(&proof_bytes, &fixture.admission, 1_100, &sink)
+            .submit_proof_for_challenge_bytes(
+                fixture.challenge.challenge_id,
+                &proof_bytes,
+                &fixture.admission,
+                1_100,
+                &sink,
+            )
             .expect("accepted proof");
         assert_eq!(accepted.decision, PdpTerminalDecisionV1::Accepted);
         assert_eq!(sink.archive_count(), 1);
@@ -2660,7 +2833,13 @@ mod tests {
         );
         assert_eq!(
             restored
-                .submit_proof_bytes(&proof_bytes, &fixture.admission, 1_101, &sink)
+                .submit_proof_for_challenge_bytes(
+                    fixture.challenge.challenge_id,
+                    &proof_bytes,
+                    &fixture.admission,
+                    1_101,
+                    &sink,
+                )
                 .expect("idempotent proof replay"),
             accepted
         );
@@ -2756,7 +2935,8 @@ mod tests {
             resign(&fixture, &mut proof);
             let sink = RecordingHandoff::default();
             let outcome = protocol
-                .submit_proof_bytes(
+                .submit_proof_for_challenge_bytes(
+                    fixture.challenge.challenge_id,
                     &norito::to_bytes(&proof).expect("proof bytes"),
                     &fixture.admission,
                     1_100,
@@ -2773,60 +2953,223 @@ mod tests {
     }
 
     #[test]
-    fn wrong_key_malformed_noncanonical_and_oversized_inputs_leave_queue_pending() {
+    fn wrong_key_malformed_noncanonical_and_oversized_inputs_converge_to_repair() {
         let mut policy = PdpProviderProtocolPolicyV1::default();
         policy.proof_max_bytes = 64 * 1024;
-        let protocol = PdpProviderProtocol::in_memory(policy).unwrap();
-        let fixture = fixture(7);
-        enqueue(&protocol, &fixture);
-        let other_key = SigningKey::from_bytes(&[0x22; 32]);
-        let forged =
-            sign_pdp_proof_ed25519_v1(fixture.proof.clone(), &other_key).expect("wrong-key proof");
+        for (offset, payload) in (0_u64..4).map(|offset| {
+            let fixture = fixture(70 + offset);
+            let payload = match offset {
+                0 => {
+                    let other_key = SigningKey::from_bytes(&[0x22; 32]);
+                    let forged = sign_pdp_proof_ed25519_v1(fixture.proof.clone(), &other_key)
+                        .expect("wrong-key proof");
+                    norito::to_bytes(&forged).unwrap()
+                }
+                1 => vec![1, 2, 3],
+                2 => {
+                    let mut trailing = norito::to_bytes(&fixture.proof).unwrap();
+                    trailing.push(0);
+                    trailing
+                }
+                3 => vec![0xAA; policy.proof_max_bytes as usize + 1],
+                _ => unreachable!(),
+            };
+            (offset, (fixture, payload))
+        }) {
+            let (fixture, payload) = payload;
+            let protocol = PdpProviderProtocol::in_memory(policy).unwrap();
+            enqueue(&protocol, &fixture);
+            let sink = RecordingHandoff::default();
+            let outcome = protocol
+                .submit_proof_for_challenge_bytes(
+                    fixture.challenge.challenge_id,
+                    &payload,
+                    &fixture.admission,
+                    1_100,
+                    &sink,
+                )
+                .unwrap_or_else(|error| panic!("case {offset} failed to converge: {error}"));
+            assert_eq!(
+                outcome.decision,
+                PdpTerminalDecisionV1::Rejected(PdpRejectionReasonV1::InvalidProof)
+            );
+            assert_eq!(sink.archive_count(), 1);
+            assert_eq!(sink.repair_count(), 1);
+        }
+    }
+
+    #[test]
+    fn explicit_challenge_identity_blocks_cross_challenge_proof_consumption() {
+        let first = fixture(80);
+        let second = fixture(81);
+        let protocol =
+            PdpProviderProtocol::in_memory(PdpProviderProtocolPolicyV1::default()).unwrap();
+        enqueue(&protocol, &first);
+        enqueue(&protocol, &second);
         let sink = RecordingHandoff::default();
-        assert!(matches!(
-            protocol.submit_proof_bytes(
-                &norito::to_bytes(&forged).unwrap(),
-                &fixture.admission,
-                1_100,
-                &sink,
-            ),
-            Err(PdpProviderProtocolError::UnauthorizedProviderKey)
-        ));
-        assert!(
-            protocol
-                .submit_proof_bytes(&[1, 2, 3], &fixture.admission, 1_100, &sink)
-                .is_err()
-        );
-        let mut trailing = norito::to_bytes(&fixture.proof).unwrap();
-        trailing.push(0);
-        assert!(
-            protocol
-                .submit_proof_bytes(&trailing, &fixture.admission, 1_100, &sink)
-                .is_err()
-        );
-        assert!(matches!(
-            protocol.submit_proof_bytes(
-                &vec![0xAA; policy.proof_max_bytes as usize + 1],
-                &fixture.admission,
-                1_100,
-                &sink,
-            ),
-            Err(PdpProviderProtocolError::PayloadTooLarge { kind: "proof", .. })
-        ));
-        assert!(
-            protocol
-                .next_challenge(PROVIDER_ID, 1_100)
-                .unwrap()
-                .is_some()
-        );
-        protocol
-            .submit_proof_bytes(
-                &norito::to_bytes(&fixture.proof).unwrap(),
-                &fixture.admission,
+
+        let first_outcome = protocol
+            .submit_proof_for_challenge_bytes(
+                first.challenge.challenge_id,
+                &norito::to_bytes(&second.proof).expect("cross-bound proof bytes"),
+                &first.admission,
                 1_100,
                 &sink,
             )
-            .expect("valid proof after rejected inputs");
+            .expect("cross-bound proof becomes authoritative failure");
+        assert_eq!(
+            first_outcome.decision,
+            PdpTerminalDecisionV1::Rejected(PdpRejectionReasonV1::InvalidProof)
+        );
+        assert_eq!(
+            protocol
+                .challenge_status(&second.challenge.challenge_id)
+                .expect("second status")
+                .expect("second retained")
+                .lifecycle,
+            PdpChallengeLifecycleV1::Pending,
+            "a proof naming the second challenge must not consume it through the first endpoint"
+        );
+
+        let second_outcome = protocol
+            .submit_proof_for_challenge_bytes(
+                second.challenge.challenge_id,
+                &norito::to_bytes(&second.proof).expect("second proof bytes"),
+                &second.admission,
+                1_100,
+                &sink,
+            )
+            .expect("second challenge remains independently completable");
+        assert_eq!(second_outcome.decision, PdpTerminalDecisionV1::Accepted);
+        assert_eq!(sink.archive_count(), 2);
+        assert_eq!(sink.repair_count(), 1);
+    }
+
+    #[test]
+    fn status_export_is_bounded_ordered_and_exposes_pending_handoff_and_terminal_states() {
+        let pending = fixture(82);
+        let failing = fixture(83);
+        let protocol =
+            PdpProviderProtocol::in_memory(PdpProviderProtocolPolicyV1::default()).unwrap();
+        enqueue(&protocol, &pending);
+        enqueue(&protocol, &failing);
+        let sink = RecordingHandoff::failing(1, 0);
+        let mut invalid = failing.proof.clone();
+        invalid.manifest_digest = [0x77; 32];
+        resign(&failing, &mut invalid);
+        assert!(matches!(
+            protocol.submit_proof_for_challenge_bytes(
+                failing.challenge.challenge_id,
+                &norito::to_bytes(&invalid).expect("invalid proof bytes"),
+                &failing.admission,
+                1_100,
+                &sink,
+            ),
+            Err(PdpProviderProtocolError::ArchiveHandoff(_))
+        ));
+
+        let statuses = protocol.export_statuses(0, 2).expect("bounded export");
+        assert_eq!(statuses.len(), 2);
+        assert!(statuses[0].sequence < statuses[1].sequence);
+        assert_eq!(statuses[0].lifecycle, PdpChallengeLifecycleV1::Pending);
+        assert_eq!(
+            statuses[1].lifecycle,
+            PdpChallengeLifecycleV1::HandoffPending
+        );
+        assert_eq!(
+            statuses[1].decision,
+            Some(PdpTerminalDecisionV1::Rejected(
+                PdpRejectionReasonV1::InvalidProof
+            ))
+        );
+        assert!(matches!(
+            protocol.export_statuses(0, 0),
+            Err(PdpProviderProtocolError::InvalidExportLimit { .. })
+        ));
+        assert!(matches!(
+            protocol.export_statuses(0, PDP_STATUS_EXPORT_MAX_RECORDS_V1 + 1),
+            Err(PdpProviderProtocolError::InvalidExportLimit { .. })
+        ));
+
+        protocol
+            .resume_handoffs(&sink, 1)
+            .expect("finish durable handoff");
+        let status = protocol
+            .challenge_status(&failing.challenge.challenge_id)
+            .expect("status lookup")
+            .expect("retained status");
+        assert_eq!(status.lifecycle, PdpChallengeLifecycleV1::Terminal);
+        assert!(status.proof_digest.is_some());
+        assert_eq!(
+            protocol
+                .export_statuses(statuses[0].sequence, 1)
+                .expect("cursor page")[0]
+                .challenge_id,
+            failing.challenge.challenge_id
+        );
+    }
+
+    #[test]
+    fn overlapping_proof_race_has_one_terminal_winner_and_one_replay_rejection() {
+        let fixture = Arc::new(fixture(84));
+        let protocol = Arc::new(
+            PdpProviderProtocol::in_memory(PdpProviderProtocolPolicyV1::default()).unwrap(),
+        );
+        enqueue(&protocol, &fixture);
+        let sink = Arc::new(RecordingHandoff::default());
+        let barrier = Arc::new(Barrier::new(2));
+        let valid_bytes = norito::to_bytes(&fixture.proof).expect("valid proof bytes");
+        let mut invalid = fixture.proof.clone();
+        invalid.manifest_digest = [0x77; 32];
+        resign(&fixture, &mut invalid);
+        let invalid_bytes = norito::to_bytes(&invalid).expect("invalid proof bytes");
+
+        let handles = [valid_bytes, invalid_bytes].map(|proof_bytes| {
+            let fixture = Arc::clone(&fixture);
+            let protocol = Arc::clone(&protocol);
+            let sink = Arc::clone(&sink);
+            let barrier = Arc::clone(&barrier);
+            thread::spawn(move || {
+                barrier.wait();
+                protocol.submit_proof_for_challenge_bytes(
+                    fixture.challenge.challenge_id,
+                    &proof_bytes,
+                    &fixture.admission,
+                    1_100,
+                    sink.as_ref(),
+                )
+            })
+        });
+        let results = handles.map(|handle| handle.join().expect("proof thread"));
+        let successes = results.iter().filter(|result| result.is_ok()).count();
+        assert_eq!(successes, 1, "exactly one overlapping proof may win");
+        assert!(
+            results
+                .iter()
+                .filter_map(|result| result.as_ref().err())
+                .all(|error| matches!(
+                    error,
+                    PdpProviderProtocolError::ConcurrentTransition
+                        | PdpProviderProtocolError::TerminalReplayConflict
+                ))
+        );
+        let terminal = protocol
+            .terminal_outcome(&fixture.challenge.challenge_id)
+            .expect("terminal lookup")
+            .expect("one terminal winner");
+        assert!(matches!(
+            terminal.decision,
+            PdpTerminalDecisionV1::Accepted
+                | PdpTerminalDecisionV1::Rejected(PdpRejectionReasonV1::InvalidProof)
+        ));
+        assert_eq!(sink.archive_count(), 1);
+        assert_eq!(
+            sink.repair_count(),
+            u64::from(matches!(
+                terminal.decision,
+                PdpTerminalDecisionV1::Rejected(_)
+            ))
+        );
     }
 
     #[test]
@@ -2837,7 +3180,8 @@ mod tests {
         enqueue(&protocol, &late);
         let sink = RecordingHandoff::default();
         let outcome = protocol
-            .submit_proof_bytes(
+            .submit_proof_for_challenge_bytes(
+                late.challenge.challenge_id,
                 &norito::to_bytes(&late.proof).unwrap(),
                 &late.admission,
                 DEADLINE + 1,
@@ -2857,7 +3201,8 @@ mod tests {
         proof.issued_at_unix = 1_010;
         resign(&future, &mut proof);
         let outcome = protocol
-            .submit_proof_bytes(
+            .submit_proof_for_challenge_bytes(
+                future.challenge.challenge_id,
                 &norito::to_bytes(&proof).unwrap(),
                 &future.admission,
                 1_001,
@@ -2915,7 +3260,8 @@ mod tests {
         resign(&fixture, &mut invalid);
         let sink = RecordingHandoff::failing(1, 1);
         assert!(matches!(
-            protocol.submit_proof_bytes(
+            protocol.submit_proof_for_challenge_bytes(
+                fixture.challenge.challenge_id,
                 &norito::to_bytes(&invalid).unwrap(),
                 &fixture.admission,
                 1_100,
@@ -2953,6 +3299,127 @@ mod tests {
     }
 
     #[test]
+    fn proof_outcome_forwarder_node_startup_resumes_pdp_handoff_exactly_once_and_fails_closed() {
+        fn persist_archive_handoff_pending(config: &StorageConfig, epoch_id: u64) -> Fixture {
+            let fixture = fixture(epoch_id);
+            let state_dir = config.data_dir().join("pdp-provider");
+            let protocol = PdpProviderProtocol::open(config.pdp_provider_policy(), &state_dir)
+                .expect("open PDP protocol");
+            enqueue(&protocol, &fixture);
+            let sink = RecordingHandoff::failing(1, 0);
+            assert!(matches!(
+                protocol.submit_proof_for_challenge_bytes(
+                    fixture.challenge.challenge_id,
+                    &norito::to_bytes(&fixture.proof).expect("encode proof"),
+                    &fixture.admission,
+                    1_100,
+                    &sink,
+                ),
+                Err(PdpProviderProtocolError::ArchiveHandoff(_))
+            ));
+            let status = protocol
+                .challenge_status(&fixture.challenge.challenge_id)
+                .expect("challenge status")
+                .expect("retained challenge");
+            assert_eq!(status.lifecycle, PdpChallengeLifecycleV1::HandoffPending);
+            assert!(
+                protocol
+                    .terminal_outcome(&fixture.challenge.challenge_id)
+                    .expect("terminal lookup")
+                    .is_none(),
+                "archive failure must not advance the durable terminal lifecycle"
+            );
+            drop(protocol);
+            fixture
+        }
+
+        let happy_dir = TempDir::new().expect("happy-path tempdir");
+        let happy_root = happy_dir.path().canonicalize().expect("canonical tempdir");
+        let happy_config = StorageConfig::builder()
+            .enabled(true)
+            .data_dir(happy_root.join("storage"))
+            .build();
+        let happy_fixture = persist_archive_handoff_pending(&happy_config, 51);
+
+        let first_restart =
+            NodeHandle::try_new(happy_config.clone()).expect("startup resumes PDP handoff");
+        let first_pending = first_restart
+            .pending_proof_outcome_deliveries(8)
+            .expect("pending proof outcomes");
+        assert_eq!(first_pending.len(), 1);
+        assert_eq!(
+            first_pending[0].identity_digest,
+            happy_fixture.challenge.challenge_id
+        );
+        assert!(
+            first_restart
+                .pdp_provider_protocol()
+                .expect("durable PDP protocol")
+                .terminal_outcome(&happy_fixture.challenge.challenge_id)
+                .expect("terminal lookup")
+                .is_some(),
+            "the PDP terminal lifecycle advances only after the proof outcome is durable"
+        );
+        let operation_id = first_pending[0].operation_id;
+        let outcome_digest = first_pending[0].outcome_digest;
+        drop(first_restart);
+
+        let second_restart =
+            NodeHandle::try_new(happy_config).expect("second startup remains idempotent");
+        let second_pending = second_restart
+            .pending_proof_outcome_deliveries(8)
+            .expect("pending proof outcomes after second restart");
+        assert_eq!(
+            second_pending.len(),
+            1,
+            "a terminal PDP handoff must enqueue one semantic operation"
+        );
+        assert_eq!(second_pending[0].operation_id, operation_id);
+        assert_eq!(second_pending[0].outcome_digest, outcome_digest);
+        drop(second_restart);
+
+        let poisoned_dir = TempDir::new().expect("poisoned-path tempdir");
+        let poisoned_root = poisoned_dir
+            .path()
+            .canonicalize()
+            .expect("canonical tempdir");
+        let poisoned_config = StorageConfig::builder()
+            .enabled(true)
+            .data_dir(poisoned_root.join("storage"))
+            .build();
+        let poisoned_fixture = persist_archive_handoff_pending(&poisoned_config, 52);
+        let outbox_dir = poisoned_config.data_dir().join("proof-outcome-forwarder");
+        fs::create_dir_all(&outbox_dir).expect("create outbox directory");
+        fs::write(
+            outbox_dir.join(PROOF_OUTCOME_OUTBOX_CHECKPOINT_FILE_NAME_V1),
+            b"poisoned proof outcome checkpoint",
+        )
+        .expect("write poisoned outbox checkpoint");
+
+        assert!(matches!(
+            NodeHandle::try_new(poisoned_config.clone()),
+            Err(NodeInitError::ProofOutcomeOutbox { .. })
+        ));
+        let restored = PdpProviderProtocol::open(
+            poisoned_config.pdp_provider_policy(),
+            &poisoned_config.data_dir().join("pdp-provider"),
+        )
+        .expect("reopen PDP protocol after failed node startup");
+        let status = restored
+            .challenge_status(&poisoned_fixture.challenge.challenge_id)
+            .expect("challenge status")
+            .expect("retained challenge");
+        assert_eq!(status.lifecycle, PdpChallengeLifecycleV1::HandoffPending);
+        assert!(
+            restored
+                .terminal_outcome(&poisoned_fixture.challenge.challenge_id)
+                .expect("terminal lookup")
+                .is_none(),
+            "untrusted outbox durability must abort startup before terminal acknowledgement"
+        );
+    }
+
+    #[test]
     fn pending_and_terminal_limits_fail_closed_until_safe_prune() {
         let mut policy = PdpProviderProtocolPolicyV1::default();
         policy.max_pending_records = 1;
@@ -2974,7 +3441,8 @@ mod tests {
         ));
         let sink = RecordingHandoff::default();
         protocol
-            .submit_proof_bytes(
+            .submit_proof_for_challenge_bytes(
+                first.challenge.challenge_id,
                 &norito::to_bytes(&first.proof).unwrap(),
                 &first.admission,
                 1_100,
@@ -2983,7 +3451,8 @@ mod tests {
             .unwrap();
         enqueue(&protocol, &second);
         assert!(matches!(
-            protocol.submit_proof_bytes(
+            protocol.submit_proof_for_challenge_bytes(
+                second.challenge.challenge_id,
                 &norito::to_bytes(&second.proof).unwrap(),
                 &second.admission,
                 1_100,
@@ -2994,7 +3463,8 @@ mod tests {
         assert_eq!(protocol.prune_terminal(1_200, 10).unwrap(), 0);
         assert_eq!(protocol.prune_terminal(1_701, 10).unwrap(), 1);
         let outcome = protocol
-            .submit_proof_bytes(
+            .submit_proof_for_challenge_bytes(
+                second.challenge.challenge_id,
                 &norito::to_bytes(&second.proof).unwrap(),
                 &second.admission,
                 1_701,

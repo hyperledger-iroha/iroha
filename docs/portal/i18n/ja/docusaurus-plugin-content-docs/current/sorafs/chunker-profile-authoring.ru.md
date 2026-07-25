@@ -97,9 +97,9 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
   マニフェスト ダイジェストと PoR の詳細。
 - `sorafs_manifest_chunk_store --json-out=-` — チャンクストアと標準出力
   автоматизированных сравнений。
-- `sorafs_manifest_stub --chunker-profile=<handle>` — マニフェストと CAR
+- `sorafs_manifest_builder --chunker-profile=<handle>` — マニフェストと CAR
   ハンドルとエイリアスを指定します。
-- `sorafs_manifest_stub --plan=-` — テスト `chunk_fetch_specs` テスト
+- `sorafs_manifest_builder --plan=-` — テスト `chunk_fetch_specs` テスト
   オフセット/ダイジェストも表示されます。
 
 説明 (ダイジェスト、PoR ルート、マニフェスト ハッシュ) の説明、説明、説明
@@ -136,7 +136,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
   --json-out=- --por-json-out=- fixtures/sorafs_chunker/input.bin
 
 # Сгенерировать manifest + CAR и сохранить chunk fetch specs
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --chunk-fetch-plan-out=chunk_plan.json \
@@ -145,7 +145,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
   --json-out=sf2.report.json
 
 # Повторно запустить с сохраненным планом fetch (защищает от устаревших offsets)
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --plan=chunk_plan.json --json-out=-

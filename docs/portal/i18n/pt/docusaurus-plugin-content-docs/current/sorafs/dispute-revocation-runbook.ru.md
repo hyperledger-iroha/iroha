@@ -40,7 +40,7 @@ Este é um conjunto de operações de governança que pode fornecer suporte para
 
 ## 3. Esporte esportivo
 
-1. Altere a especificação JSON para `sorafs_manifest_stub capacity dispute`:
+1. Altere a especificação JSON para `sorafs_manifest_builder capacity dispute`:
 
    ```json
    {
@@ -63,7 +63,7 @@ Este é um conjunto de operações de governança que pode fornecer suporte para
 2. Abra CLI:
 
    ```bash
-   sorafs_manifest_stub capacity dispute \
+   sorafs_manifest_builder capacity dispute \
      --spec=dispute.json \
      --norito-out=dispute.to \
      --base64-out=dispute.b64 \
@@ -80,7 +80,7 @@ Este é um conjunto de operações de governança que pode fornecer suporte para
 
 1. **Окно льготы:** уведомите провайдера о грядущем отзыве; разрешите эвакуацию закрепленных данных, когда это допускает политика.
 2. **Сгенерируйте `ProviderAdmissionRevocationV1`:**
-   - Use `sorafs_manifest_stub provider-admission revoke` com seu próprio fornecedor.
+   - Use `sorafs_manifest_builder provider-admission revoke` com seu próprio fornecedor.
    - Проверьте подписи и digerir отзыва.
 3. **Exibir opções:**
    - Execute a operação no Torii.
@@ -95,7 +95,7 @@ Este é um conjunto de operações de governança que pode fornecer suporte para
 
 ## 6. Materiais de expansão
 
--`sorafs_manifest_stub capacity dispute --help`
+-`sorafs_manifest_builder capacity dispute --help`
 -`docs/source/sorafs/storage_capacity_marketplace.md` (esporos)
 - `docs/source/sorafs/provider_admission_policy.md` (fluxo de trabalho definido)
 - Número de identificação: `SoraFS / Capacity Providers`

@@ -78,7 +78,7 @@ Teste:
 |------|-----|------------|
 | Serviço Torii | `/v1/sorafs/pin` (enviar), `/v1/sorafs/pin/{cid}` (pesquisa), `/v1/sorafs/aliases` (listar/vincular)، `/v1/sorafs/replication` (pedidos/recebimentos) فراہم کریں۔ paginação + filtragem مہیا کریں۔ | Rede TL / Core Infra |
 | Atestado | respostas میں altura / hash do registro شامل کریں؛ Estrutura de atestado Norito شامل کریں جسے SDKs consomem کریں۔ | Infra principal |
-| CLI | `sorafs_manifest_stub` میں توسیع یا نئی `sorafs_pin` CLI بنائیں جس میں `pin submit`, `alias bind`, `order issue`, `registry export` ہو۔ | GT Ferramentaria |
+| CLI | `sorafs_manifest_builder` میں توسیع یا نئی `sorafs_pin` CLI بنائیں جس میں `pin submit`, `alias bind`, `order issue`, `registry export` ہو۔ | GT Ferramentaria |
 | SDK | Esquema Norito سے ligações de cliente (Rust/Go/TS) geram کریں؛ testes de integração | Equipes SDK |
 
 Operações:

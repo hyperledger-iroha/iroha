@@ -7909,6 +7909,8 @@ pub struct Metrics {
     pub torii_sorafs_chunk_range_bytes_total: IntCounterVec,
     /// Count of providers advertising SoraFS range fetch capability grouped by feature.
     pub torii_sorafs_provider_range_capability_total: IntGaugeVec,
+    /// SoraFS committed routing-authority cache events grouped by bounded outcome.
+    pub torii_sorafs_routing_authority_cache_total: IntCounterVec,
     /// SoraFS range fetch throttle events grouped by reason.
     pub torii_sorafs_range_fetch_throttle_events_total: IntCounterVec,
     /// Active SoraFS range fetch streams guarded by tokens (node-wide).
@@ -13023,6 +13025,14 @@ impl Default for Metrics {
             &["feature"],
         )
         .expect("Infallible");
+        let torii_sorafs_routing_authority_cache_total = IntCounterVec::new(
+            Opts::new(
+                "torii_sorafs_routing_authority_cache_total",
+                "SoraFS committed routing-authority cache events grouped by outcome",
+            ),
+            &["outcome"],
+        )
+        .expect("Infallible");
         let torii_sorafs_range_fetch_throttle_events_total = IntCounterVec::new(
             Opts::new(
                 "torii_sorafs_range_fetch_throttle_events_total",
@@ -13114,6 +13124,7 @@ impl Default for Metrics {
         register_guarded(&registry, &torii_sorafs_chunk_range_requests_total);
         register_guarded(&registry, &torii_sorafs_chunk_range_bytes_total);
         register_guarded(&registry, &torii_sorafs_provider_range_capability_total);
+        register_guarded(&registry, &torii_sorafs_routing_authority_cache_total);
         register_guarded(&registry, &torii_sorafs_range_fetch_throttle_events_total);
         register_guarded(&registry, &torii_sorafs_range_fetch_concurrency_current);
         register_guarded(&registry, &torii_sorafs_proof_stream_inflight);
@@ -15731,6 +15742,7 @@ impl Default for Metrics {
             torii_sorafs_chunk_range_requests_total,
             torii_sorafs_chunk_range_bytes_total,
             torii_sorafs_provider_range_capability_total,
+            torii_sorafs_routing_authority_cache_total,
             torii_sorafs_range_fetch_throttle_events_total,
             torii_sorafs_range_fetch_concurrency_current,
             torii_sorafs_proof_stream_inflight,
@@ -18389,6 +18401,17 @@ impl Metrics {
             .set(count);
     }
 
+    /// Record one bounded committed routing-authority cache outcome.
+    pub fn inc_sorafs_routing_authority_cache(&self, outcome: &str) {
+        let outcome = match outcome {
+            "hit" | "rebuild" | "rebuild_failure" => outcome,
+            _ => "invalid",
+        };
+        self.torii_sorafs_routing_authority_cache_total
+            .with_label_values(&[outcome])
+            .inc();
+    }
+
     /// Record a throttle event triggered while serving range fetch requests.
     pub fn inc_sorafs_range_fetch_throttle(&self, reason: &str) {
         self.torii_sorafs_range_fetch_throttle_events_total
@@ -19606,6 +19629,25 @@ mod test {
             .with_label_values(&["providers"])
             .get();
         assert_eq!(provider_total, 2, "provider capability gauge updates");
+
+        metrics.inc_sorafs_routing_authority_cache("hit");
+        metrics.inc_sorafs_routing_authority_cache("unbounded-runtime-value");
+        assert_eq!(
+            metrics
+                .torii_sorafs_routing_authority_cache_total
+                .with_label_values(&["hit"])
+                .get(),
+            1,
+            "routing authority cache hit counter increments"
+        );
+        assert_eq!(
+            metrics
+                .torii_sorafs_routing_authority_cache_total
+                .with_label_values(&["invalid"])
+                .get(),
+            1,
+            "routing authority cache labels remain bounded"
+        );
 
         metrics.inc_sorafs_range_fetch_throttle("concurrency");
         let throttle_total = metrics

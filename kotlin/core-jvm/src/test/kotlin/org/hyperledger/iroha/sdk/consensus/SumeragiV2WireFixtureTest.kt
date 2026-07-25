@@ -293,6 +293,9 @@ class SumeragiV2WireFixtureTest {
                 base.ordinaryWritesRoot,
                 topupRoot,
                 0,
+                base.nativeAmxApplicationManifestVersion,
+                base.nativeAmxApplicationManifestRoot,
+                base.nativeAmxApplicationManifestCount,
                 base.executedBlockWireHash,
             )
         }
@@ -303,6 +306,9 @@ class SumeragiV2WireFixtureTest {
                 base.ordinaryWritesRoot,
                 null,
                 1,
+                base.nativeAmxApplicationManifestVersion,
+                base.nativeAmxApplicationManifestRoot,
+                base.nativeAmxApplicationManifestCount,
                 base.executedBlockWireHash,
             )
         }
@@ -313,6 +319,9 @@ class SumeragiV2WireFixtureTest {
                 base.ordinaryWritesRoot,
                 topupRoot,
                 SumeragiV2Wire.MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK + 1,
+                base.nativeAmxApplicationManifestVersion,
+                base.nativeAmxApplicationManifestRoot,
+                base.nativeAmxApplicationManifestCount,
                 base.executedBlockWireHash,
             )
         }
@@ -323,6 +332,9 @@ class SumeragiV2WireFixtureTest {
                 base.ordinaryWritesRoot,
                 topupRoot,
                 1,
+                base.nativeAmxApplicationManifestVersion,
+                base.nativeAmxApplicationManifestRoot,
+                base.nativeAmxApplicationManifestCount,
                 base.executedBlockWireHash,
             )
         }
@@ -338,6 +350,9 @@ class SumeragiV2WireFixtureTest {
             base.ordinaryWritesRoot,
             topupRoot,
             1,
+            base.nativeAmxApplicationManifestVersion,
+            base.nativeAmxApplicationManifestRoot,
+            base.nativeAmxApplicationManifestCount,
             base.executedBlockWireHash,
         )
         assertEquals(base.executedBlockWireHash, valid.executedBlockWireHash)
@@ -345,6 +360,76 @@ class SumeragiV2WireFixtureTest {
             valid.encode(),
             SumeragiV2Wire.ExecutionCommitment.decode(valid.encode()).encode(),
         )
+    }
+
+    @Test
+    fun `execution commitments reject noncanonical Native AMX manifest bindings`() {
+        val responseMessage = fixtureRows().single {
+            it.kind == "message" && it.name == "commit_certificate_response"
+        }
+        val responsePayload =
+            SumeragiV2Wire.ConsensusMessageV2.decodeCanonical(
+                responseMessage.hex.hexBytes(),
+            ).payload as SumeragiV2Wire.ConsensusPayload.CommitCertificateResponseMessage
+        val base = responsePayload.value.certificate.executionCommitment
+        val nonEmptyRoot = base.parentStateRoot
+
+        assertEquals(
+            SumeragiV2Wire.ExecutionCommitment.nativeAmxApplicationManifestEmptyRoot(),
+            base.nativeAmxApplicationManifestRoot,
+        )
+        assertFailsWith<IllegalArgumentException> {
+            SumeragiV2Wire.ExecutionCommitment(
+                base.parentStateRoot,
+                base.postStateRoot,
+                base.ordinaryWritesRoot,
+                null,
+                0,
+                SumeragiV2Wire.NATIVE_AMX_APPLICATION_MANIFEST_VERSION + 1,
+                base.nativeAmxApplicationManifestRoot,
+                0,
+                base.executedBlockWireHash,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SumeragiV2Wire.ExecutionCommitment(
+                base.parentStateRoot,
+                base.postStateRoot,
+                base.ordinaryWritesRoot,
+                null,
+                0,
+                SumeragiV2Wire.NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
+                nonEmptyRoot,
+                0,
+                base.executedBlockWireHash,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SumeragiV2Wire.ExecutionCommitment(
+                base.parentStateRoot,
+                base.postStateRoot,
+                base.ordinaryWritesRoot,
+                null,
+                0,
+                SumeragiV2Wire.NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
+                base.nativeAmxApplicationManifestRoot,
+                1,
+                base.executedBlockWireHash,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SumeragiV2Wire.ExecutionCommitment(
+                base.parentStateRoot,
+                base.postStateRoot,
+                base.ordinaryWritesRoot,
+                null,
+                0,
+                SumeragiV2Wire.NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
+                nonEmptyRoot,
+                SumeragiV2Wire.MAX_NATIVE_AMX_APPLICATION_MANIFEST_LEAVES + 1,
+                base.executedBlockWireHash,
+            )
+        }
     }
 
     @Test

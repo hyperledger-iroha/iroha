@@ -80,7 +80,7 @@ Torii は、CLI と同様に、同一性を維持します。
 |-----------|----------|------|
 |サービコ Torii | `/v1/sorafs/pin` (送信)、`/v1/sorafs/pin/{cid}` (検索)、`/v1/sorafs/aliases` (リスト/バインド)、`/v1/sorafs/replication` (注文/受領書) をエクスポートします。フォルネサー パギナカオ + フィルトラジェム。 |ネットワーキング TL / コア インフラ |
 |アテスタカオ |レジストリに altura/hash を含めます。 Norito の SDK を追加してください。 |コアインフラ |
-| CLI | Estender `sorafs_manifest_stub` または新しい CLI `sorafs_pin` com `pin submit`、`alias bind`、`order issue`、`registry export`。 |ツーリングWG |
+| CLI | Estender `sorafs_manifest_builder` または新しい CLI `sorafs_pin` com `pin submit`、`alias bind`、`order issue`、`registry export`。 |ツーリングWG |
 | SDK |クライアントのバインディング (Rust/Go/TS) の一部は Norito;アディショナー精巣デインテグラカオ。 | SDK チーム |
 
 オペラコ:

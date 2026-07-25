@@ -18,7 +18,8 @@ use crate::{
     PDP_COMMITMENT_MAX_CANONICAL_BYTES_V1, PDP_PROOF_MAX_CANONICAL_BYTES_V1,
     PopValidationPayloadKindV1, ProofStreamTier, RepairValidationPayloadKindV1,
     ValidationContextFieldV1, ValidationInputV1, ValidationOutcomeV1,
-    validate_fixture_bundle_payloads, validate_governance_log_node_bytes,
+    validate_fixture_bundle_payloads, validate_governance_dag_block_bytes,
+    validate_governance_dag_head_chain_bytes, validate_governance_log_node_bytes,
     validate_hedging_payload_bytes, validate_orderbook_payload_bytes, validate_pdp_challenge_bytes,
     validate_pdp_challenge_proof_bytes, validate_pdp_commitment_bytes,
     validate_pdp_commitment_challenge_bytes, validate_pdp_commitment_challenge_proof_bytes,
@@ -137,13 +138,31 @@ pub const SORAFS_REFERENCE_PROFILE_WARM: u32 = 2;
 /// FFI proof-stream profile selector for archive retrieval.
 pub const SORAFS_REFERENCE_PROFILE_ARCHIVE: u32 = 3;
 
+/// Maximum number of governance DAG blocks accepted by one head-chain FFI call.
+pub const SORAFS_REFERENCE_GOVERNANCE_DAG_MAX_BLOCKS_V1: u32 = 64;
+/// Exact byte length of every first-release Governance DAG CID.
+pub const SORAFS_REFERENCE_GOVERNANCE_DAG_CID_BYTES_V1: u32 = 32;
+/// Maximum aggregate input bytes accepted by one reference FFI call.
+pub const SORAFS_REFERENCE_FFI_MAX_INPUT_BYTES_V1: u32 = 67108864;
+/// Maximum UTF-8 label bytes accepted by one reference FFI input.
+pub const SORAFS_REFERENCE_FFI_MAX_LABEL_BYTES_V1: u32 = 1024;
+
 const CATEGORY_INTERNAL: &str = "internal";
 const SFS_FFI_ARGUMENT: &str = "SFS-FFI-001";
 const SFS_FFI_PANIC: &str = "SFS-FFI-002";
-const SORAFS_REFERENCE_FFI_MAX_INPUT_BYTES: usize = 64 * 1024 * 1024;
-const SORAFS_REFERENCE_FFI_MAX_LABEL_BYTES: usize = 1_024;
+const SORAFS_REFERENCE_FFI_MAX_INPUT_BYTES: usize =
+    SORAFS_REFERENCE_FFI_MAX_INPUT_BYTES_V1 as usize;
+const SORAFS_REFERENCE_FFI_MAX_LABEL_BYTES: usize =
+    SORAFS_REFERENCE_FFI_MAX_LABEL_BYTES_V1 as usize;
 const SORAFS_REFERENCE_FFI_MAX_BUNDLE_PAYLOADS: usize = 64;
 const SORAFS_REFERENCE_FFI_MAX_BUNDLE_TOTAL_BYTES: usize = 64 * 1024 * 1024;
+const _: () = assert!(
+    SORAFS_REFERENCE_GOVERNANCE_DAG_MAX_BLOCKS_V1 as usize
+        == crate::GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1
+);
+const _: () = assert!(
+    SORAFS_REFERENCE_GOVERNANCE_DAG_CID_BYTES_V1 as usize == crate::GOVERNANCE_DAG_CID_BYTES_V1
+);
 
 struct FfiInputScope;
 
@@ -183,6 +202,20 @@ pub struct SorafsReferenceFfiBundlePayload {
     /// Pointer to Norito payload bytes.
     pub bytes_ptr: *const u8,
     /// Length of the Norito payload in bytes.
+    pub bytes_len: usize,
+    /// Pointer to an optional UTF-8 label.
+    pub label_ptr: *const u8,
+    /// Length of the optional UTF-8 label.
+    pub label_len: usize,
+}
+
+/// Byte payload and UTF-8 label descriptor used by multi-input validators.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct SorafsReferenceFfiInput {
+    /// Pointer to payload bytes.
+    pub bytes_ptr: *const u8,
+    /// Length of the payload in bytes.
     pub bytes_len: usize,
     /// Pointer to an optional UTF-8 label.
     pub label_ptr: *const u8,
@@ -1006,20 +1039,192 @@ pub unsafe extern "C" fn sorafs_reference_validate_governance_json(
             generated_at,
         )?;
         let label = read_label(&scope, label_ptr, label_len, "governance.to", generated_at)?;
-        if expected_cid_len == 0 {
-            return Err(missing_expected_node_cid_error(generated_at));
-        }
-        let expected_cid = read_input(
+        let expected_cid = read_optional_governance_cid(
             &scope,
             expected_cid_ptr,
             expected_cid_len,
             "expected_node_cid",
             generated_at,
-        )?;
+        )?
+        .ok_or_else(|| missing_expected_node_cid_error(generated_at))?;
         Ok(validate_governance_log_node_bytes(
             input,
             label,
             Some(expected_cid),
+            generated_at,
+        ))
+    })
+}
+
+/// Validate a Norito-encoded `GovernanceDagBlockV1` and return outcome JSON.
+///
+/// An empty `expected_block_cid` omits the external CID equality check. The
+/// validator always recomputes and validates the block's canonical CID.
+///
+/// # Safety
+/// Non-null pointers must be valid for their corresponding lengths until the
+/// function returns. The returned buffer must be freed with
+/// [`sorafs_reference_free_buffer`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sorafs_reference_validate_governance_dag_block_json(
+    bytes_ptr: *const u8,
+    bytes_len: usize,
+    label_ptr: *const u8,
+    label_len: usize,
+    expected_block_cid_ptr: *const u8,
+    expected_block_cid_len: usize,
+    generated_at: u64,
+) -> SorafsReferenceFfiBuffer {
+    run_ffi(generated_at, || {
+        let scope = FfiInputScope;
+        let input = read_input(
+            &scope,
+            bytes_ptr,
+            bytes_len,
+            "governance_dag_block",
+            generated_at,
+        )?;
+        let label = read_label(
+            &scope,
+            label_ptr,
+            label_len,
+            "governance-dag-block.to",
+            generated_at,
+        )?;
+        let expected_block_cid = read_optional_governance_cid(
+            &scope,
+            expected_block_cid_ptr,
+            expected_block_cid_len,
+            "expected_block_cid",
+            generated_at,
+        )?;
+        let aggregate_input_bytes = bytes_len
+            .checked_add(label_len)
+            .and_then(|total| total.checked_add(expected_block_cid_len))
+            .ok_or_else(|| {
+                invalid_argument_error(
+                    "governance_dag_block",
+                    "aggregate payload and label length overflowed",
+                    "Pass bounded governance DAG block inputs within the exported aggregate byte limit.",
+                    generated_at,
+                )
+            })?;
+        if aggregate_input_bytes > SORAFS_REFERENCE_FFI_MAX_INPUT_BYTES {
+            return Err(input_length_error(
+                "governance_dag_block",
+                aggregate_input_bytes,
+                SORAFS_REFERENCE_FFI_MAX_INPUT_BYTES,
+                generated_at,
+            ));
+        }
+        Ok(validate_governance_dag_block_bytes(
+            input,
+            label,
+            expected_block_cid,
+            generated_at,
+        ))
+    })
+}
+
+/// Validate a signed `GovernanceDagHeadV1` against a bounded block chain.
+///
+/// `blocks_ptr` references `blocks_len` payload/label descriptors ordered from
+/// either the root-history start or the exact checkpoint-window start through
+/// the signed head block.
+///
+/// # Safety
+/// Non-null pointers must be valid for their corresponding lengths until the
+/// function returns. Descriptor pointers and every nested pointer must remain
+/// valid for the duration of the call. The returned buffer must be freed with
+/// [`sorafs_reference_free_buffer`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sorafs_reference_validate_governance_dag_head_chain_json(
+    head_ptr: *const u8,
+    head_len: usize,
+    head_label_ptr: *const u8,
+    head_label_len: usize,
+    blocks_ptr: *const SorafsReferenceFfiInput,
+    blocks_len: usize,
+    generated_at: u64,
+) -> SorafsReferenceFfiBuffer {
+    run_ffi(generated_at, || {
+        let scope = FfiInputScope;
+        let head = read_input(
+            &scope,
+            head_ptr,
+            head_len,
+            "governance_dag_head",
+            generated_at,
+        )?;
+        let head_label = read_label(
+            &scope,
+            head_label_ptr,
+            head_label_len,
+            "governance-dag-head.to",
+            generated_at,
+        )?;
+        let block_descriptors =
+            read_governance_block_descriptors(&scope, blocks_ptr, blocks_len, generated_at)?;
+
+        let mut aggregate_input_bytes = head_len.checked_add(head_label_len).ok_or_else(|| {
+            invalid_argument_error(
+                "governance_dag_head_chain",
+                "aggregate payload and label length overflowed",
+                "Pass a bounded governance DAG chain within the exported aggregate byte limit.",
+                generated_at,
+            )
+        })?;
+        if aggregate_input_bytes > SORAFS_REFERENCE_FFI_MAX_INPUT_BYTES {
+            return Err(input_length_error(
+                "governance_dag_head_chain",
+                aggregate_input_bytes,
+                SORAFS_REFERENCE_FFI_MAX_INPUT_BYTES,
+                generated_at,
+            ));
+        }
+
+        let mut blocks = Vec::with_capacity(block_descriptors.len());
+        for (index, block) in block_descriptors.iter().enumerate() {
+            aggregate_input_bytes = aggregate_input_bytes
+                .checked_add(block.bytes_len)
+                .and_then(|total| total.checked_add(block.label_len))
+                .ok_or_else(|| {
+                    invalid_argument_error(
+                        "governance_dag_head_chain",
+                        "aggregate payload and label length overflowed",
+                        "Pass a bounded governance DAG chain within the exported aggregate byte limit.",
+                        generated_at,
+                    )
+                })?;
+            if aggregate_input_bytes > SORAFS_REFERENCE_FFI_MAX_INPUT_BYTES {
+                return Err(input_length_error(
+                    "governance_dag_head_chain",
+                    aggregate_input_bytes,
+                    SORAFS_REFERENCE_FFI_MAX_INPUT_BYTES,
+                    generated_at,
+                ));
+            }
+            let bytes = read_input(
+                &scope,
+                block.bytes_ptr,
+                block.bytes_len,
+                format!("governance_dag_block_{index}"),
+                generated_at,
+            )?;
+            let label = read_label(
+                &scope,
+                block.label_ptr,
+                block.label_len,
+                format!("governance-dag-block-{index}.to"),
+                generated_at,
+            )?;
+            blocks.push((bytes, label));
+        }
+
+        Ok(validate_governance_dag_head_chain_bytes(
+            head,
+            head_label,
+            &blocks,
             generated_at,
         ))
     })
@@ -1192,6 +1397,24 @@ fn read_optional_input(
     read_input(scope, ptr, len, label, generated_at).map(Some)
 }
 
+fn read_optional_governance_cid(
+    scope: &FfiInputScope,
+    ptr: *const u8,
+    len: usize,
+    label: impl Into<String>,
+    generated_at: u64,
+) -> Result<Option<&[u8]>, ValidationOutcomeV1> {
+    if len == 0 {
+        return Ok(None);
+    }
+    let label = label.into();
+    let exact_bytes = SORAFS_REFERENCE_GOVERNANCE_DAG_CID_BYTES_V1 as usize;
+    if len != exact_bytes {
+        return Err(input_length_error(label, len, exact_bytes, generated_at));
+    }
+    read_input_bounded(scope, ptr, len, label, exact_bytes, generated_at).map(Some)
+}
+
 fn read_label(
     scope: &FfiInputScope,
     ptr: *const u8,
@@ -1271,6 +1494,52 @@ fn read_payload_descriptors(
         ));
     }
     // SAFETY: FFI callers must provide a pointer valid for `len` descriptors.
+    Ok(unsafe { slice::from_raw_parts(ptr, len) })
+}
+
+fn read_governance_block_descriptors(
+    _scope: &FfiInputScope,
+    ptr: *const SorafsReferenceFfiInput,
+    len: usize,
+    generated_at: u64,
+) -> Result<&[SorafsReferenceFfiInput], ValidationOutcomeV1> {
+    if len == 0 {
+        return Ok(&[]);
+    }
+    let maximum_blocks = SORAFS_REFERENCE_GOVERNANCE_DAG_MAX_BLOCKS_V1 as usize;
+    if len > maximum_blocks {
+        return Err(input_length_error(
+            "governance_dag_blocks",
+            len,
+            maximum_blocks,
+            generated_at,
+        ));
+    }
+    let descriptor_bytes = len
+        .checked_mul(mem::size_of::<SorafsReferenceFfiInput>())
+        .filter(|&bytes| bytes <= isize::MAX as usize)
+        .ok_or_else(|| {
+            invalid_argument_error(
+                "governance_dag_blocks",
+                "descriptor byte length exceeds the addressable slice range",
+                "Pass a bounded descriptor array using the exported governance DAG block limit.",
+                generated_at,
+            )
+        })?;
+    debug_assert!(descriptor_bytes <= isize::MAX as usize);
+    if ptr.is_null() {
+        return Err(null_pointer_error("governance_dag_blocks", generated_at));
+    }
+    if !(ptr as usize).is_multiple_of(mem::align_of::<SorafsReferenceFfiInput>()) {
+        return Err(invalid_argument_error(
+            "governance_dag_blocks",
+            "descriptor pointer is not correctly aligned",
+            "Pass a naturally aligned SorafsReferenceFfiInput array.",
+            generated_at,
+        ));
+    }
+    // SAFETY: callers must provide a pointer valid for `len` descriptors and
+    // keep all nested inputs alive for the duration of the call.
     Ok(unsafe { slice::from_raw_parts(ptr, len) })
 }
 
@@ -2008,6 +2277,199 @@ mod tests {
                 .and_then(Value::as_str)
                 .is_some_and(|message| message.contains("requires expected governance node CID")),
             "{outcome:?}"
+        );
+    }
+
+    #[test]
+    fn ffi_governance_validators_reject_noncanonical_expected_cid_lengths_before_read() {
+        let bytes = [0xA5];
+
+        // SAFETY: both calls reject the noncanonical CID length before reading
+        // the deliberately null expected-CID pointer.
+        let node_outcome = outcome_from_buffer(unsafe {
+            sorafs_reference_validate_governance_json(
+                bytes.as_ptr(),
+                bytes.len(),
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                SORAFS_REFERENCE_GOVERNANCE_DAG_CID_BYTES_V1 as usize + 1,
+                125,
+            )
+        });
+        assert_eq!(
+            node_outcome.get("code").and_then(Value::as_str),
+            Some(SFS_FFI_ARGUMENT)
+        );
+
+        // SAFETY: same as above for the optional block CID.
+        let block_outcome = outcome_from_buffer(unsafe {
+            sorafs_reference_validate_governance_dag_block_json(
+                bytes.as_ptr(),
+                bytes.len(),
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                SORAFS_REFERENCE_GOVERNANCE_DAG_CID_BYTES_V1 as usize - 1,
+                126,
+            )
+        });
+        assert_eq!(
+            block_outcome.get("code").and_then(Value::as_str),
+            Some(SFS_FFI_ARGUMENT)
+        );
+    }
+
+    #[test]
+    fn ffi_governance_dag_block_validator_returns_json_outcome() {
+        let bytes = [0xA5];
+        let label = b"governance-block.to";
+
+        // SAFETY: the pointers reference live test arrays for the duration of the call.
+        let outcome = outcome_from_buffer(unsafe {
+            sorafs_reference_validate_governance_dag_block_json(
+                bytes.as_ptr(),
+                bytes.len(),
+                label.as_ptr(),
+                label.len(),
+                std::ptr::null(),
+                0,
+                126,
+            )
+        });
+
+        assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Error"));
+        assert_eq!(
+            outcome.get("code").and_then(Value::as_str),
+            Some("SFS-NORITO-001")
+        );
+        assert_eq!(
+            outcome.get("generated_at").and_then(Value::as_u64),
+            Some(126)
+        );
+        let inputs = outcome
+            .get("inputs")
+            .and_then(Value::as_array)
+            .expect("outcome inputs");
+        assert_eq!(
+            inputs[0].get("path").and_then(Value::as_str),
+            Some("governance-block.to")
+        );
+    }
+
+    #[test]
+    fn ffi_governance_dag_head_chain_preserves_ordered_block_labels() {
+        let head = [0xA5];
+        let head_label = b"governance-head.to";
+        let block = [0x5A];
+        let block_label = b"governance-block-0.to";
+        let blocks = [SorafsReferenceFfiInput {
+            bytes_ptr: block.as_ptr(),
+            bytes_len: block.len(),
+            label_ptr: block_label.as_ptr(),
+            label_len: block_label.len(),
+        }];
+
+        // SAFETY: the descriptor and nested pointers reference live test arrays for
+        // the duration of the call.
+        let outcome = outcome_from_buffer(unsafe {
+            sorafs_reference_validate_governance_dag_head_chain_json(
+                head.as_ptr(),
+                head.len(),
+                head_label.as_ptr(),
+                head_label.len(),
+                blocks.as_ptr(),
+                blocks.len(),
+                127,
+            )
+        });
+
+        assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Error"));
+        assert_eq!(
+            outcome.get("code").and_then(Value::as_str),
+            Some("SFS-NORITO-001")
+        );
+        let inputs = outcome
+            .get("inputs")
+            .and_then(Value::as_array)
+            .expect("outcome inputs");
+        assert_eq!(inputs.len(), 2);
+        assert_eq!(
+            inputs[0].get("path").and_then(Value::as_str),
+            Some("governance-head.to")
+        );
+        assert_eq!(
+            inputs[1].get("path").and_then(Value::as_str),
+            Some("governance-block-0.to")
+        );
+    }
+
+    #[test]
+    fn ffi_governance_dag_head_chain_rejects_excess_block_descriptors() {
+        let head = [0xA5];
+
+        // SAFETY: the oversized descriptor count is rejected before the null
+        // descriptor pointer is read.
+        let outcome = outcome_from_buffer(unsafe {
+            sorafs_reference_validate_governance_dag_head_chain_json(
+                head.as_ptr(),
+                head.len(),
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                SORAFS_REFERENCE_GOVERNANCE_DAG_MAX_BLOCKS_V1 as usize + 1,
+                128,
+            )
+        });
+
+        assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Error"));
+        assert_eq!(
+            outcome.get("code").and_then(Value::as_str),
+            Some(SFS_FFI_ARGUMENT)
+        );
+    }
+
+    #[test]
+    fn ffi_governance_dag_head_chain_rejects_misaligned_descriptors() {
+        let head = [0xA5];
+        let descriptor_storage = [std::mem::MaybeUninit::<SorafsReferenceFfiInput>::uninit(); 2];
+        // SAFETY: adding one stays within the backing descriptor storage. The
+        // validator must reject the deliberately misaligned pointer before read.
+        let misaligned = unsafe {
+            descriptor_storage
+                .as_ptr()
+                .cast::<u8>()
+                .add(1)
+                .cast::<SorafsReferenceFfiInput>()
+        };
+
+        // SAFETY: the deliberately misaligned pointer is rejected before access.
+        let outcome = outcome_from_buffer(unsafe {
+            sorafs_reference_validate_governance_dag_head_chain_json(
+                head.as_ptr(),
+                head.len(),
+                std::ptr::null(),
+                0,
+                misaligned,
+                1,
+                129,
+            )
+        });
+
+        assert_eq!(outcome.get("status").and_then(Value::as_str), Some("Error"));
+        assert_eq!(
+            outcome.get("code").and_then(Value::as_str),
+            Some(SFS_FFI_ARGUMENT)
+        );
+        assert!(
+            outcome
+                .get("context")
+                .and_then(Value::as_array)
+                .is_some_and(|fields| fields.iter().any(|field| {
+                    field.get("key").and_then(Value::as_str) == Some("reason")
+                        && field.get("value").and_then(Value::as_str)
+                            == Some("descriptor pointer is not correctly aligned")
+                }))
         );
     }
 

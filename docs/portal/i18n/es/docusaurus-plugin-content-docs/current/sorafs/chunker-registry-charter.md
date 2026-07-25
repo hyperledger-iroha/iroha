@@ -58,7 +58,7 @@ SDKs). Impone las invariantes de alias y handle verificadas por
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+     cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - Envía un PR que contenga fixtures, propuesta, reporte de determinismo y
@@ -96,14 +96,14 @@ SDKs). Impone las invariantes de alias y handle verificadas por
 
 ## Expectativas de tooling
 
-- `sorafs_manifest_chunk_store` y `sorafs_manifest_stub` exponen:
+- `sorafs_manifest_chunk_store` y `sorafs_manifest_builder` exponen:
   - `--list-profiles` para inspección del registro.
   - `--promote-profile=<handle>` para generar el bloque de metadatos canónico usado
     al promover un perfil.
   - `--json-out=-` para transmitir reportes a stdout, habilitando logs de revisión
     reproducibles.
 - `ensure_charter_compliance()` se invoca al inicio en los binarios relevantes
-  (`manifest_chunk_store`, `provider_advert_stub`). Las pruebas CI deben fallar si
+  (`manifest_chunk_store`, `sorafs_provider_advert`). Las pruebas CI deben fallar si
   nuevas entradas violan la carta.
 
 ## Registro

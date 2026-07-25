@@ -74,7 +74,7 @@ SF-4 ينشر عقد التسجيل وخدمات الدعم التي يتم تق
 |-----------|-------|---------------|
 | خدمة Torii | Экспонировать `/v1/sorafs/pin` (إرسال)، `/v1/sorafs/pin/{cid}` (بحث)، `/v1/sorafs/aliases` (قائمة/ربط)، `/v1/sorafs/replication` (الطلبات/الإيصالات). قم بإلغاء ترقيم الصفحات + التصفية. | الشبكات TL / الأشعة تحت الحمراء الأساسية |
 | شهادة | قم بإلغاء تسجيل الدخول/التسجيل في الإجابات; إضافة هيكل التصديق Norito، مطلوب SDK. | الأشعة تحت الحمراء الأساسية |
-| سطر الأوامر | قم بتغيير `sorafs_manifest_stub` أو CLI الجديد `sorafs_pin` إلى `pin submit`، `alias bind`، `order issue`، `registry export`. | الأدوات مجموعة العمل |
+| سطر الأوامر | قم بتغيير `sorafs_manifest_builder` أو CLI الجديد `sorafs_pin` إلى `pin submit`، `alias bind`، `order issue`، `registry export`. | الأدوات مجموعة العمل |
 | SDK | إنشاء روابط العملاء (Rust/Go/TS) من الأنظمة Norito; إضافة اختبارات التكامل. | فرق SDK |
 
 العمليات:

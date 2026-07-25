@@ -40,7 +40,7 @@ Você pode usar o SoraFS para obter informações sobre o produto SoraFS. Faça 
 
 ## 3. تقديم النزاع
 
-1. Insira o JSON para `sorafs_manifest_stub capacity dispute`:
+1. Insira o JSON para `sorafs_manifest_builder capacity dispute`:
 
    ```json
    {
@@ -63,7 +63,7 @@ Você pode usar o SoraFS para obter informações sobre o produto SoraFS. Faça 
 2. CLI:
 
    ```bash
-   sorafs_manifest_stub capacity dispute \
+   sorafs_manifest_builder capacity dispute \
      --spec=dispute.json \
      --norito-out=dispute.to \
      --base64-out=dispute.b64 \
@@ -80,7 +80,7 @@ Você pode usar o SoraFS para obter informações sobre o produto SoraFS. Faça 
 
 1. **نافذة السماح:** أخطر المزوّد بقرب الإلغاء؛ واسمح بإخلاء البيانات المثبتة عندما تسمح السياسة.
 2. **أنشئ `ProviderAdmissionRevocationV1`:**
-   - Coloque `sorafs_manifest_stub provider-admission revoke` no lugar certo.
+   - Coloque `sorafs_manifest_builder provider-admission revoke` no lugar certo.
    - تحقّق من التواقيع e Digest الإلغاء.
 3. **نشر الإلغاء:**
    - Verifique o valor do Torii.
@@ -95,7 +95,7 @@ Você pode usar o SoraFS para obter informações sobre o produto SoraFS. Faça 
 
 ## 6. مواد مرجعية
 
--`sorafs_manifest_stub capacity dispute --help`
+-`sorafs_manifest_builder capacity dispute --help`
 - `docs/source/sorafs/storage_capacity_marketplace.md` (referência)
 - `docs/source/sorafs/provider_admission_policy.md` (سير عمل الإلغاء)
 - Nome do usuário: `SoraFS / Capacity Providers`

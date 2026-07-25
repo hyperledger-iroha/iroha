@@ -123,7 +123,7 @@ $ cars run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
 清单存根镜像相同的数据，这在管道中编写 `--chunker-profile-id` 选择脚本时很方便。两个块存储 CLI 还接受规范句柄形式 (`--profile=sorafs.sf1@1.0.0`)，因此构建脚本可以避免硬编码数字 ID：
 
 ```
-$ cargo run -p sorafs_car --bin sorafs_manifest_stub -- --list-chunker-profiles
+$ cargo run -p sorafs_car --bin sorafs_manifest_builder -- --list-chunker-profiles
 [
   {
     "profile_id": 1,
@@ -181,4 +181,4 @@ Accept-Chunker: sorafs.sf1;version=1.0.0
   通过提供的测试。
 * `chunker_registry::lookup_by_profile` 断言描述符参数
   匹配 `ChunkProfile::DEFAULT` 以防止意外发散。
-* `iroha app sorafs toolkit pack` 和 `sorafs_manifest_stub` 生成的清单包括注册表元数据。
+* `iroha app sorafs toolkit pack` 和 `sorafs_manifest_builder` 生成的清单包括注册表元数据。

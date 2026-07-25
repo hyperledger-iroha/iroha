@@ -66,11 +66,11 @@ cargo test -p sorafs_chunker streaming_backpressure_fuzz_matches_batch
 ## 3. بيان اليقظة والتضامن
 
 تظهر خطة الالتزام والأسماء المستعارة وإدارة المشاركات مع العرض
-`sorafs-manifest-stub`. قم بإظهار الأمر التالي لملف واحد للحمولة؛ اسبق الطريق
+`sorafs-manifest-builder`. قم بإظهار الأمر التالي لملف واحد للحمولة؛ اسبق الطريق
 إلى الدلائل، لتغطيه العنوان (CLI تتعهد به في ليكسيكوغرافيتسكوم).
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
+cargo run -p sorafs_manifest --bin sorafs-manifest-builder -- \
   /tmp/docs.txt \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --manifest-out=/tmp/docs.manifest \

@@ -32,7 +32,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 ## 3. تقديم النزاع
 
-1. أنشئ مواصفة JSON لـ `sorafs_manifest_stub capacity dispute`:
+1. أنشئ مواصفة JSON لـ `sorafs_manifest_builder capacity dispute`:
 
    ```json
    {
@@ -55,7 +55,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 2. شغّل CLI:
 
    ```bash
-   sorafs_manifest_stub capacity dispute \
+   sorafs_manifest_builder capacity dispute \
      --spec=dispute.json \
      --norito-out=dispute.to \
      --base64-out=dispute.b64 \
@@ -72,7 +72,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 1. **نافذة السماح:** أخطر المزوّد بقرب الإلغاء؛ واسمح بإخلاء البيانات المثبتة عندما تسمح السياسة.
 2. **أنشئ `ProviderAdmissionRevocationV1`:**
-   - استخدم `sorafs_manifest_stub provider-admission revoke` مع السبب المعتمد.
+   - استخدم `sorafs_manifest_builder provider-admission revoke` مع السبب المعتمد.
    - تحقّق من التواقيع وdigest الإلغاء.
 3. **نشر الإلغاء:**
    - أرسل طلب الإلغاء إلى Torii.
@@ -87,7 +87,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 ## 6. مواد مرجعية
 
-- `sorafs_manifest_stub capacity dispute --help`
+- `sorafs_manifest_builder capacity dispute --help`
 - `docs/source/sorafs/storage_capacity_marketplace.md` (قسم النزاعات)
 - `docs/source/sorafs/provider_admission_policy.md` (سير عمل الإلغاء)
 - لوحة المراقبة: `SoraFS / Capacity Providers`

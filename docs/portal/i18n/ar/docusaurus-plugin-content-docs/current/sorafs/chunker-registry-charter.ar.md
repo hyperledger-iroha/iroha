@@ -55,7 +55,7 @@ Sidebar_label: ميثاق السجل Chunker
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+     cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - ومعلومات العلاقات العامة تحتوي على التركيبات والمقترحات وتقرير الحتمية وتحديثات السجل.
@@ -88,12 +88,12 @@ Sidebar_label: ميثاق السجل Chunker
 
 ## أدوات التوقعات
 
-- `sorafs_manifest_chunk_store` و `sorafs_manifest_stub` يوفّران:
+- `sorafs_manifest_chunk_store` و `sorafs_manifest_builder` يوفّران:
   - `--list-profiles` لفحص السجل.
   - `--promote-profile=<handle>` كتلة البيانات المعتمدة المستعملة عند ترقية ملف.
   - `--json-out=-` لبث التقارير إلى stdout، مما يتيح مراجعة السجلات القابلة لإعادة الإنتاج.
 - يتم الاتصال بـ `ensure_charter_compliance()` عند تشغيل الثنائيات ذات الصلة
-  (`manifest_chunk_store`، `provider_advert_stub`). يجب أن تفشل السيولة CI إذا كانت
+  (`manifest_chunk_store`، `sorafs_provider_advert`). يجب أن تفشل السيولة CI إذا كانت
   الإدخالات الجديدة تتهك الميثاق.
 
 ## حفظ تسجيل

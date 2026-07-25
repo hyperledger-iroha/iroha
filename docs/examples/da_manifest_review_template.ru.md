@@ -27,7 +27,7 @@ takedown-ов или изменений удержания (roadmap DA-10). Ск
 
 ## Проверка подписей
 - Источник получения манифеста / storage тикет: `<hex>`
-- Команда/вывод проверки: `cargo run -p sorafs_car --bin sorafs-manifest-stub -- manifest.json --manifest-signatures-in=manifest_signatures.json` (приложен фрагмент лога?)
+- Команда/вывод проверки: `cargo run -p sorafs_car --bin sorafs-manifest-builder -- manifest.json --manifest-signatures-in=manifest_signatures.json` (приложен фрагмент лога?)
 - `manifest_blake3`, сообщенный инструментом: `<digest>`
 - `chunk_digest_sha3_256`, сообщенный инструментом: `<digest>`
 - Multihash-ы подписантов совета:

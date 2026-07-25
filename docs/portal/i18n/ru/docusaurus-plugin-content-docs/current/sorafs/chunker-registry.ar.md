@@ -84,8 +84,8 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profi
 Используется для CARv1 + SHA-256 в зависимости от конфигурации (`Accept-Chunker` + `Accept-Digest`).| المكون | حالة | ملاحظات |
 |--------|--------|---------|
 | `sorafs_manifest_chunk_store` | ✅ مدعوم | يتحقق من المقبض المعتمد + البدائل, ويبث التقارير عبر `--json-out=-`, ويفرض Код: `ensure_charter_compliance()`. |
-| `sorafs_manifest_stub` | ⚠️ قديم | مُنشئ قديم؛ استخدم `iroha app sorafs toolkit pack` для CAR/манифеста и `--plan=-` для проверки работоспособности. |
-| `sorafs_provider_advert_stub` | ⚠️ قديم | مساعد تحقق оффлайн فقط؛ Реклама провайдера в Интернете. |
+| `sorafs_manifest_builder` | ⚠️ قديم | مُنشئ قديم؛ استخدم `iroha app sorafs toolkit pack` для CAR/манифеста и `--plan=-` для проверки работоспособности. |
+| `sorafs_provider_advert` | ✅ Production | Private-key-free two-phase external Ed25519 signing with exact raw-key, reviewed SHA-256 fingerprint, canonical payload, and strict path-identity verification. |
 | `sorafs_fetch` (оркестратор разработчика) | ✅ مدعوم | Загрузите `chunk_fetch_specs` и установите `range` для CARv2. |
 | Исправления в SDK (Rust/Go/TS) | ✅ مدعوم | يُعاد توليدها عبر `export_vectors`; Он сказал, что О'Лэнн в фильме "Пансионат" в Нью-Йорке сказал: المجلس. |
 | Открыт шлюз Torii | ✅ مدعوم | Создан `Accept-Chunker`, установлен в `Content-Chunker`, установлен Bridge CARv1, установленный на сервере. понизить версию الصريحة. |
@@ -138,12 +138,12 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
 ```
 ```
 
-يعكس manifest stub البيانات نفسها، وهو مناسب عند برمجة اختيار `--chunker-profile-id` في
+يعكس manifest builder البيانات نفسها، وهو مناسب عند برمجة اختيار `--chunker-profile-id` في
 الـ pipelines. كما تقبل CLIs الخاصة بـ chunk store صيغة المقبض المعتمد
 (`--profile=sorafs.sf1@1.0.0`) لتجنب ترميز معرفات رقمية صلبة في سكريبتات البناء:
 
 ```
-$ Cargo Run -p sorafs_manifest --bin sorafs_manifest_stub -- --list-chunker-profiles
+$ Cargo Run -p sorafs_manifest --bin sorafs_manifest_builder -- --list-chunker-profiles
 [
   {
     «идентификатор_профиля»: 1,
@@ -206,4 +206,4 @@ ProviderAdvertBodyV1 {
   `fixtures/sorafs_chunker` Дополнительная информация
   `fuzz/sorafs_chunker`. Он был создан для работы с Rust и Go и Node.
 * Установите `chunker_registry::lookup_by_profile` для получения дополнительной информации о `ChunkProfile::DEFAULT` в режиме онлайн. عرضية.
-* В этом случае отображаются изменения для `iroha app sorafs toolkit pack` и `sorafs_manifest_stub` для `sorafs_manifest_stub`.
+* В этом случае отображаются изменения для `iroha app sorafs toolkit pack` и `sorafs_manifest_builder` для `sorafs_manifest_builder`.

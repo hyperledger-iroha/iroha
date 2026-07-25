@@ -8,7 +8,7 @@ WRITE_CONFIG="${WRITE_CONFIG:-}"
 WRITE_CONFIG_EXPLICIT=0
 WRITE_CONFIG_DEFAULT="${WRITE_CONFIG_DEFAULT:-}"
 IROHA_BIN="${IROHA_BIN:-}"
-SORAFS_MANIFEST_STUB_BIN="${SORAFS_MANIFEST_STUB_BIN:-}"
+SORAFS_MANIFEST_BUILDER_BIN="${SORAFS_MANIFEST_BUILDER_BIN:-}"
 SORAFS_TX_STDIN_BUILDER_BIN="${SORAFS_TX_STDIN_BUILDER_BIN:-}"
 ROLLOUT_CANARY_ALIAS_PREFIX="${ROLLOUT_CANARY_ALIAS_PREFIX:-taira-rollout-canary}"
 ROLLOUT_CANARY_TIME_TO_LIVE_MS="${ROLLOUT_CANARY_TIME_TO_LIVE_MS:-120000}"
@@ -27,7 +27,7 @@ SORAFS_ROLLOUT_CURL_CONNECT_TIMEOUT_SECONDS="${SORAFS_ROLLOUT_CURL_CONNECT_TIMEO
 SORAFS_ROLLOUT_CURL_MAX_TIME_SECONDS="${SORAFS_ROLLOUT_CURL_MAX_TIME_SECONDS:-20}"
 SKIP_WRITE_CANARY=0
 IROHA_RUNNER=()
-SORAFS_MANIFEST_STUB_RUNNER=()
+SORAFS_MANIFEST_BUILDER_RUNNER=()
 SORAFS_TX_STDIN_BUILDER_RUNNER=()
 CURL_RESOLVE_RULES=()
 CURL_URL_RESOLVE_ARGS=()
@@ -36,7 +36,7 @@ usage() {
   cat <<'EOF'
 Usage: check_sorafs_rollout.sh --public-root URL [--write-config PATH]
                                [--iroha-bin PATH]
-                               [--sorafs-manifest-stub-bin PATH]
+                               [--sorafs-manifest-builder-bin PATH]
                                [--sorafs-tx-stdin-builder-bin PATH]
                                [--faucet-asset-id ASSET_DEFINITION_ID]
                                [--fee-program PROGRAM_ID]
@@ -154,12 +154,12 @@ while [[ $# -gt 0 ]]; do
       IROHA_BIN="$2"
       shift 2
       ;;
-    --sorafs-manifest-stub-bin)
+    --sorafs-manifest-builder-bin)
       [[ $# -ge 2 ]] || {
-        echo "missing value for --sorafs-manifest-stub-bin" >&2
+        echo "missing value for --sorafs-manifest-builder-bin" >&2
         exit 1
       }
-      SORAFS_MANIFEST_STUB_BIN="$2"
+      SORAFS_MANIFEST_BUILDER_BIN="$2"
       shift 2
       ;;
     --sorafs-tx-stdin-builder-bin)
@@ -917,32 +917,32 @@ ensure_iroha_bin() {
   fi
 }
 
-ensure_sorafs_manifest_stub_bin() {
-  if [[ -n "$SORAFS_MANIFEST_STUB_BIN" ]]; then
-    if [[ "$SORAFS_MANIFEST_STUB_BIN" == */* ]]; then
-      [[ -x "$SORAFS_MANIFEST_STUB_BIN" ]] || {
-        echo "sorafs_manifest_stub is not executable: $SORAFS_MANIFEST_STUB_BIN" >&2
+ensure_sorafs_manifest_builder_bin() {
+  if [[ -n "$SORAFS_MANIFEST_BUILDER_BIN" ]]; then
+    if [[ "$SORAFS_MANIFEST_BUILDER_BIN" == */* ]]; then
+      [[ -x "$SORAFS_MANIFEST_BUILDER_BIN" ]] || {
+        echo "sorafs_manifest_builder is not executable: $SORAFS_MANIFEST_BUILDER_BIN" >&2
         exit 1
       }
-      SORAFS_MANIFEST_STUB_RUNNER=("$SORAFS_MANIFEST_STUB_BIN")
+      SORAFS_MANIFEST_BUILDER_RUNNER=("$SORAFS_MANIFEST_BUILDER_BIN")
       return 0
     fi
-    if command -v "$SORAFS_MANIFEST_STUB_BIN" >/dev/null 2>&1; then
-      SORAFS_MANIFEST_STUB_RUNNER=("$SORAFS_MANIFEST_STUB_BIN")
+    if command -v "$SORAFS_MANIFEST_BUILDER_BIN" >/dev/null 2>&1; then
+      SORAFS_MANIFEST_BUILDER_RUNNER=("$SORAFS_MANIFEST_BUILDER_BIN")
       return 0
     fi
-    echo "could not find sorafs_manifest_stub on PATH: $SORAFS_MANIFEST_STUB_BIN" >&2
+    echo "could not find sorafs_manifest_builder on PATH: $SORAFS_MANIFEST_BUILDER_BIN" >&2
     exit 1
   fi
 
-  if [[ -x "${REPO_ROOT}/bin/sorafs_manifest_stub" ]]; then
-    SORAFS_MANIFEST_STUB_RUNNER=("${REPO_ROOT}/bin/sorafs_manifest_stub")
-  elif [[ -x "${REPO_ROOT}/target/debug/sorafs_manifest_stub" ]]; then
-    SORAFS_MANIFEST_STUB_RUNNER=("${REPO_ROOT}/target/debug/sorafs_manifest_stub")
-  elif [[ -x "${REPO_ROOT}/target/release/sorafs_manifest_stub" ]]; then
-    SORAFS_MANIFEST_STUB_RUNNER=("${REPO_ROOT}/target/release/sorafs_manifest_stub")
+  if [[ -x "${REPO_ROOT}/bin/sorafs_manifest_builder" ]]; then
+    SORAFS_MANIFEST_BUILDER_RUNNER=("${REPO_ROOT}/bin/sorafs_manifest_builder")
+  elif [[ -x "${REPO_ROOT}/target/debug/sorafs_manifest_builder" ]]; then
+    SORAFS_MANIFEST_BUILDER_RUNNER=("${REPO_ROOT}/target/debug/sorafs_manifest_builder")
+  elif [[ -x "${REPO_ROOT}/target/release/sorafs_manifest_builder" ]]; then
+    SORAFS_MANIFEST_BUILDER_RUNNER=("${REPO_ROOT}/target/release/sorafs_manifest_builder")
   elif command -v cargo >/dev/null 2>&1; then
-    SORAFS_MANIFEST_STUB_RUNNER=(
+    SORAFS_MANIFEST_BUILDER_RUNNER=(
       cargo
       run
       --quiet
@@ -953,11 +953,11 @@ ensure_sorafs_manifest_stub_bin() {
       --features
       cli
       --bin
-      sorafs_manifest_stub
+      sorafs_manifest_builder
       --
     )
   else
-    echo "could not find sorafs_manifest_stub or cargo fallback" >&2
+    echo "could not find sorafs_manifest_builder or cargo fallback" >&2
     exit 1
   fi
 }
@@ -1224,7 +1224,7 @@ submit_capacity_canary() {
 run_write_canary() {
   local target_url="$1"
   ensure_iroha_bin
-  ensure_sorafs_manifest_stub_bin
+  ensure_sorafs_manifest_builder_bin
   ensure_sorafs_tx_stdin_builder_bin
   prepare_write_canary_config "$target_url"
 
@@ -1264,7 +1264,7 @@ run_write_canary() {
   tx_stdin_path="${work_dir}/capacity_canary.tx.stdin.json"
 
   echo "==> SoraFS capacity canary: ${target_url} (provider ${provider_id_hex})"
-  "${SORAFS_MANIFEST_STUB_RUNNER[@]}" \
+  "${SORAFS_MANIFEST_BUILDER_RUNNER[@]}" \
     capacity declaration \
     "--spec=${spec_path}" \
     "--request-out=${request_path}" \

@@ -118,7 +118,7 @@ fn should_validate_gpu_crc() -> bool {
     let call = GPU_VALIDATE_CALLS
         .fetch_add(1, Ordering::Relaxed)
         .saturating_add(1);
-    call <= GPU_VALIDATE_INITIAL_CALLS || call % GPU_VALIDATE_INTERVAL == 0
+    call <= GPU_VALIDATE_INITIAL_CALLS || call.is_multiple_of(GPU_VALIDATE_INTERVAL)
 }
 
 #[cfg(any(feature = "metal-crc64", feature = "cuda-crc64"))]
@@ -322,7 +322,7 @@ fn load_override_from_env() -> Option<GpuLib> {
                 return None;
             }
             let path = CString::new(bytes).ok()?;
-            return unsafe { load_library_unix(path.as_c_str()) }.and_then(validate_gpu_lib);
+            unsafe { load_library_unix(path.as_c_str()) }.and_then(validate_gpu_lib)
         }
 
         #[cfg(windows)]
@@ -555,7 +555,7 @@ unsafe fn resolve_symbol_unix(handle: *mut c_void, symbols: &[&[u8]]) -> Option<
     for sym in symbols {
         let ptr = unsafe { dlsym(handle, sym.as_ptr() as *const c_char) };
         if !ptr.is_null() {
-            return Some(unsafe { std::mem::transmute(ptr) });
+            return Some(unsafe { std::mem::transmute::<*mut c_void, GpuFn>(ptr) });
         }
     }
     let _ = unsafe { dlclose(handle) };

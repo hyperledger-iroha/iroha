@@ -54,7 +54,7 @@ JSON содержит ордонные смещения, длинные дета
 - Подписи совета и метадонные опции (например, идентификаторы сборки).
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
+cargo run -p sorafs_manifest --bin sorafs-manifest-builder -- \
   ./payload.bin \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --manifest-out=payload.manifest \

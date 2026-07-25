@@ -2,77 +2,163 @@
 lang: fr
 direction: ltr
 source: docs/source/release_artifact_selection.md
-status: complete
+status: needs-review
 generator: scripts/sync_docs_i18n.py
 source_hash: d3ea92fbfd7a44cd789ecf187e0edc0dcb33969d45836dd55af706424c66656b
 source_last_modified: "2025-11-02T04:40:39.806222+00:00"
 translation_last_reviewed: 2026-01-01
 ---
 
-# Selection des artefacts de release Iroha
+# Iroha Release Artifact Selection
 
-Cette note precise quels artefacts (bundles et images de conteneur) les operateurs doivent deployer pour chaque profil de release.
+This note clarifies which artifacts (bundles and container images) operators should deploy for each release profile.
 
-## Profils
+## Profiles
 
-- **iroha2 (Self-hosted networks)** - configuration a lane unique correspondant a `defaults/genesis.json` et `defaults/client.toml`.
-- **iroha3 (SORA Nexus)** - configuration Nexus multi-lane utilisant les templates `defaults/nexus/*`.
+- **iroha2 (Self-hosted networks)** — single-lane configuration matching `defaults/genesis.json` and `defaults/client.toml`.
+- **iroha3 (SORA Nexus)** — Nexus multi-lane configuration using `defaults/nexus/*` templates.
 
-## Bundles (binaires)
+## Bundles (Binaries)
 
-Les bundles sont produits via `scripts/build_release_bundle.sh` avec `--profile` defini sur `iroha2` ou `iroha3`.
+Bundles are produced via `scripts/build_release_bundle.sh` with `--profile` set to `iroha2` or `iroha3`.
 
-Chaque tarball contient:
+Each tarball contains:
 
-- `bin/` - `irohad`, `iroha` et `kagami` construits avec le profil de deploiement.
-- `config/` - configuration genesis/client specifique au profil (single vs. nexus). Les bundles Nexus incluent `config.toml` avec des parametres de lane et DA.
-- `PROFILE.toml` - metadonnees decrivant le profil, la config, la version, le commit, l OS/arch, et le set de features active.
-- Artefacts de metadonnees ecrits a cote du tarball:
+- `bin/` — `irohad`, `iroha`, and `kagami` built with the deploy profile.
+- `config/` — profile-specific genesis/client configuration (single vs. nexus). Nexus bundles include `config.toml` with lane and DA parameters.
+- `PROFILE.toml` — metadata describing profile, config, version, commit, OS/arch, and enabled feature set.
+- Metadata artefacts written alongside the tarball:
   - `<profile>-<version>-<os>.tar.zst`
   - `<profile>-<version>-<os>.tar.zst.sha256`
-  - `<profile>-<version>-<os>.tar.zst.sig` et `.pub` (quand `--signing-key` est fourni)
-  - `<profile>-<version>-manifest.json` capturant le chemin du tarball, le hash et les details de signature
+  - `<profile>-<version>-<os>.tar.zst.sig` containing a raw 64-byte Ed25519
+    signature when the complete external-signer option set is supplied
+  - `<profile>-<version>-<os>.tar.zst.pub` containing generated Ed25519 SPKI PEM
+  - `<profile>-<version>-manifest.json` capturing the tarball path, hash,
+    `signature_algorithm=ed25519`, `public_key_format=pem-spki-ed25519`, and
+    the reviewed SHA-256 fingerprint of the exact raw public-key bytes
 
-## Images de conteneur
+## Container Images
 
-Les images de conteneur sont produites via `scripts/build_release_image.sh` avec les memes arguments de profil/config.
+Container images are produced via `scripts/build_release_image.sh` with the same profile/config arguments.
 
-Sorties:
+Outputs:
 
 - `<profile>-<version>-<os>-image.tar`
 - `<profile>-<version>-<os>-image.tar.sha256`
-- Signature/cle publique optionnelle (`*.sig`/`*.pub`)
-- `<profile>-<version>-image.json` enregistrant tag, ID image, hash et metadonnees de signature
+- Ed25519 signature/public key (`*.sig`/`*.pub`) for promotable artifacts
+- `<profile>-<version>-image.json` recording tag, image ID, hash, and signature metadata
 
-## Selection du bon artefact
+## Aggregate release inventory
 
-1. Determinez la surface de deploiement:
-   - **SORA Nexus / multi-lane** -> utilisez le bundle et l image `iroha3`.
-   - **Self-hosted single-lane** -> utilisez les artefacts `iroha2`.
-   - En cas de doute, lancez `scripts/select_release_profile.py --network <alias>` ou `--chain-id <id>`; le helper associe les reseaux au bon profil via `release/network_profiles.toml`.
-2. Telechargez le tarball souhaite et les fichiers manifest associes. Validez le hash SHA256 et la signature avant decompression:
+The final release directory also contains `release_manifest.json`,
+`release_manifest.json.sig` (exactly 64 raw Ed25519 signature bytes), and
+`release_manifest.json.pub` (exactly 32 raw Ed25519 public-key bytes). The
+pipeline appends rollout evidence before signing this aggregate inventory.
+Verify it against the independently reviewed raw-key fingerprint and pinned
+native verifier before trusting its artifact paths or generating a production
+publish plan:
+
+```bash
+RELEASE_MANIFEST_VERIFIER=/opt/iroha/bin/sorafs-validate
+TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256=<reviewed-lowercase-sha256>
+
+python3 scripts/release_manifest_signing.py verify \
+  --manifest release_manifest.json \
+  --signature release_manifest.json.sig \
+  --public-key release_manifest.json.pub \
+  --trusted-signing-fingerprint "$TRUSTED_SIGNING_FINGERPRINT" \
+  --release-manifest-verifier "$RELEASE_MANIFEST_VERIFIER" \
+  --trusted-release-manifest-verifier-sha256 \
+    "$TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256"
+```
+
+The wrapper checks and snapshots the exact verifier executable, invokes
+`sorafs-validate release-manifest`, and rechecks the manifest, raw key,
+signature, verifier digest, and file identities after native execution.
+`scripts/publish_plan.py generate` also requires the signed-manifest paths,
+independently reviewed signing fingerprint, native-verifier path, and reviewed
+verifier SHA-256. Validation requires the independent fingerprint and verifier
+pins again; values recorded in the plan are metadata, not trust anchors. The
+unsigned escape hatch,
+`--development-allow-unsigned-manifest`, is test/development-only and never
+valid for promotion.
+
+## Selecting the correct artefact
+
+1. Determine the deployment surface:
+   - **SORA Nexus / multi-lane** -> use the `iroha3` bundle and image.
+   - **Self-hosted single-lane** -> use the `iroha2` artefacts.
+   - When in doubt, run `scripts/select_release_profile.py --network <alias>` or `--chain-id <id>`; the helper maps networks to the correct profile per `release/network_profiles.toml`.
+2. Download the desired tarball and accompanying checksum, signature, public
+   key, and manifest. Promoted artifacts must include all of them; unsigned
+   local builds are development-only. Validate the checksum, compare the
+   manifest's `signer_fingerprint_sha256` with the independently reviewed
+   release-ticket fingerprint, confirm the generated public key is Ed25519,
+   and verify the detached signature before unpacking:
    ```bash
+   ARTIFACT=iroha3-<version>-linux.tar.zst
+   MANIFEST=iroha3-<version>-manifest.json
+   TRUSTED_SIGNING_FINGERPRINT=<reviewed-lowercase-sha256>
+
    sha256sum -c iroha3-<version>-linux.tar.zst.sha256
-   openssl dgst -sha256 -verify iroha3-<version>-linux.tar.zst.pub        -signature iroha3-<version>-linux.tar.zst.sig        iroha3-<version>-linux.tar.zst
+   test "$(jq -r '.artifacts[0].signature_algorithm' "$MANIFEST")" = ed25519
+   test "$(jq -r '.artifacts[0].public_key_format' "$MANIFEST")" = pem-spki-ed25519
+   test "$(jq -r '.artifacts[0].signer_fingerprint_sha256' "$MANIFEST")" \
+     = "$TRUSTED_SIGNING_FINGERPRINT"
+   ACTUAL_SIGNING_FINGERPRINT="$(
+     openssl pkey -pubin -in "$ARTIFACT.pub" -outform DER |
+       python3 -c 'import hashlib,sys; d=sys.stdin.buffer.read(); p=bytes.fromhex("302a300506032b6570032100"); assert len(d)==44 and d.startswith(p); print(hashlib.sha256(d[len(p):]).hexdigest())'
+   )"
+   test "$ACTUAL_SIGNING_FINGERPRINT" = "$TRUSTED_SIGNING_FINGERPRINT"
+   openssl pkeyutl -verify -pubin -rawin \
+     -inkey "$ARTIFACT.pub" \
+     -in "$ARTIFACT" \
+     -sigfile "$ARTIFACT.sig"
    ```
-3. Extrayez le bundle (`tar --use-compress-program=zstd -xf <tar>`) et placez `bin/` dans le PATH de deploiement. Appliquez les overrides de configuration locale si necessaire.
-4. Chargez l image de conteneur avec `docker load -i <profile>-<version>-<os>-image.tar` si vous utilisez des deploiements conteneurises. Verifiez le hash/la signature comme ci-dessus avant chargement.
+   The public-key fingerprint must come from the reviewed release ticket or
+   another authenticated channel; a fingerprint copied only from the
+   downloaded manifest does not establish trust.
+3. Extract the bundle (`tar --use-compress-program=zstd -xf <tar>`) and place `bin/` in the deployment PATH. Apply local configuration overrides where necessary.
+4. Load the container image with `docker load -i <profile>-<version>-<os>-image.tar` if using containerised deployments. Verify the hash/signature as above before loading.
 
-## Checklist de configuration Nexus
+## Validator host platform
 
-- `config/config.toml` doit inclure les sections `[nexus]`, `[nexus.lane_catalog]`, `[nexus.dataspace_catalog]`, et `[nexus.da]`.
-- Confirmez que les regles de routage de lane correspondent aux attentes de governance (`nexus.routing_policy`).
-- Validez que les seuils DA (`nexus.da`) et les parametres de fusion (`nexus.fusion`) sont alignes avec les reglages approuves par le conseil.
+First-release production voting-validator artifacts target Linux. macOS arm64
+is also a source-bound Sumeragi v2 release-evidence host, but is not the
+published production deployment artifact. Windows and other non-Unix builds
+are restricted development or non-voting-observer surfaces: they do not
+implement the complete crash-safe validator-storage contract, their complete
+observer application path is not release-certified, and they must fail if
+configured as a voting validator. Compile success alone is not validator
+certification.
 
-## Checklist de configuration single-lane
+## Nexus configuration checklist
 
-- `config/config.d` (si present) ne doit contenir que des overrides single-lane, sans sections `[nexus]`.
-- Assurez-vous que `config/client.toml` reference l endpoint Torii vise et la liste des peers.
-- Genesis doit conserver les domaines/actifs canoniques pour le reseau self-hosted.
+- `config/config.toml` must include `[nexus]`, `[nexus.lane_catalog]`, `[nexus.dataspace_catalog]`, and `[nexus.da]` sections.
+- Confirm lane routing rules match governance expectations (`nexus.routing_policy`).
+- Validate DA thresholds (`nexus.da`) and fusion parameters (`nexus.fusion`) align with council-approved settings.
 
-## Reference rapide tooling
+## Single-lane configuration checklist
+
+- `config/config.d` (if present) should contain only single-lane overrides—no `[nexus]` sections.
+- Ensure `config/client.toml` references the intended Torii endpoint and peer list.
+- Genesis should retain the canonical domains/assets for the self-hosted network.
+
+## Tooling quick reference
 
 - `scripts/build_release_bundle.sh --help`
 - `scripts/build_release_image.sh --help`
+- `scripts/run_release_pipeline.py --help`
+- `scripts/release_manifest_signing.py --help`
+- `scripts/publish_plan.py --help`
 - `scripts/select_release_profile.py --list`
-- `docs/source/sora_nexus_operator_onboarding.md` - flux d onboarding de bout en bout pour les operateurs de data-space Sora Nexus une fois les artefacts selectionnes.
+- `docs/source/sora_nexus_operator_onboarding.md` — end-to-end onboarding flow for Sora Nexus data-space operators once artefacts are selected.
+
+The builders accept no private key. Reference signing requires a reviewed
+PKCS#11/HSM wrapper through `--external-signer`, a raw 32-byte Ed25519 public
+key through `--signing-public-key`, and its independently approved lowercase
+SHA-256 fingerprint through `--trusted-signing-fingerprint`. Aggregate
+production signing and publish-plan validation additionally require the
+packaged `sorafs-validate` candidate and its independently approved exact
+executable SHA-256. OIDC/cosign provenance, hosted scan results, publication
+receipts, and rollback/yank evidence remain external promotion inputs.

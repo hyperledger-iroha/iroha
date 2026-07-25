@@ -21,8 +21,8 @@ jobs:
       image: hyperledger/iroha2-ci:nightly-2025-05-08
     timeout-minutes: 360
     steps:
-      - uses: actions/checkout@v4
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
           cache-on-failure: "true"
       - name: Prepare soak artifact path
@@ -36,7 +36,7 @@ jobs:
           --test-threads 1
       - name: Upload soak artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: nexus-autoscale-soak-${{ github.run_id }}
           path: |

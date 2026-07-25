@@ -55,7 +55,7 @@ auditores possam solicitar conjuntos de testemunhas determinísticos. Combine es
 - Assinaturas do conselho e metadados opcionais (por exemplo, IDs de build).
 
 ```bash
-cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_car --bin sorafs_manifest_builder -- \
   ./payload.bin \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --manifest-out=payload.manifest \

@@ -495,6 +495,23 @@ are `status_error = 1`, `null_pointer = 1`, `malformed_norito = 2`,
 `unsupported_algorithm = 3`, `production_disabled = 4`, and
 `invalid_request = 5`; treat them as sanitized status metadata, not proof success.
 
+## Native SoraFS Reference Validation
+
+`Hyperledger.Iroha.SoraFs.SoraFsReferenceValidators` validates canonical
+`GovernanceDagBlockV1` bytes and signed `GovernanceDagHeadV1` chains through
+`connect_norito_bridge` ABI 21. `ValidateGovernanceDagBlockJson(...)` accepts an
+optional expected block CID, while `ValidateGovernanceDagHeadChainJson(...)`
+accepts at most 64 root-to-head `SoraFsGovernanceDagBlockInput` snapshots. Both
+return the native `ValidationOutcomeV1` JSON only after strict UTF-8, exact V1
+field/type, duplicate-field, version, and caller-bound `generated_at` checks.
+
+Inputs are defensively copied, labels are exact UTF-8 without padding or
+control characters and are capped at 1,024 bytes, and each call is capped at
+64 MiB aggregate input. Native output is bounded and released with
+`connect_norito_free` on success and error paths. `IsAvailable()` requires the
+ABI probe plus both Governance DAG symbols; no managed fallback reimplements
+Norito or governance signature validation.
+
 ## Live Testnet Smoke
 
 The integration project is opt-in and can target the public Taira testnet:

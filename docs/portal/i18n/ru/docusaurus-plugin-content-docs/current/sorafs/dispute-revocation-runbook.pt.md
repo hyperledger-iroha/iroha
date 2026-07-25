@@ -40,7 +40,7 @@ Sidebar_label: Сборник споров и отказов
 
 ##3. Регистратор диспута
 
-1. Введите спецификацию JSON для `sorafs_manifest_stub capacity dispute`:
+1. Введите спецификацию JSON для `sorafs_manifest_builder capacity dispute`:
 
    ```json
    {
@@ -63,7 +63,7 @@ Sidebar_label: Сборник споров и отказов
 2. Выполните CLI:
 
    ```bash
-   sorafs_manifest_stub capacity dispute \
+   sorafs_manifest_builder capacity dispute \
      --spec=dispute.json \
      --norito-out=dispute.to \
      --base64-out=dispute.b64 \
@@ -80,7 +80,7 @@ Sidebar_label: Сборник споров и отказов
 
 1. **Жанела де Граса:** уведомление о неизбежном отказе; Разрешение на эвакуацию фиксированных людей, когда разрешена политика.
 2. **Гере `ProviderAdmissionRevocationV1`:**
-   - Используйте `sorafs_manifest_stub provider-admission revoke` с одобрением мотивации.
+   - Используйте `sorafs_manifest_builder provider-admission revoke` с одобрением мотивации.
    - Verifique Assinaturas и дайджест отзыва.
 3. **Публикация отзыва:**
    - Зависть от отзывного требования для Torii.
@@ -93,7 +93,7 @@ Sidebar_label: Сборник споров и отказов
 - Определить реституцию (сокращение ставки, возврат налогов, возврат клиентов).
 - Документы об обучении; актуализировать ограничения SLA или оповещения о мониторинге, если это необходимо.
 
-## 6. Справочные материалы- `sorafs_manifest_stub capacity dispute --help`
+## 6. Справочные материалы- `sorafs_manifest_builder capacity dispute --help`
 - `docs/source/sorafs/storage_capacity_marketplace.md` (секретные споры)
 - `docs/source/sorafs/provider_admission_policy.md` (переход к возврату)
 - Панель наблюдения: `SoraFS / Capacity Providers`

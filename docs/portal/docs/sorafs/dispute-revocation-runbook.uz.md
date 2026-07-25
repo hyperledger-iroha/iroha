@@ -38,7 +38,7 @@ Ushbu runbook boshqaruv operatorlariga SoraFS sig'imiga oid nizolarni topshirish
 
 ## 3. Eʼtiroz bildiring
 
-1. `sorafs_manifest_stub capacity dispute` uchun maxsus JSON yarating:
+1. `sorafs_manifest_builder capacity dispute` uchun maxsus JSON yarating:
 
    ```json
    {
@@ -61,7 +61,7 @@ Ushbu runbook boshqaruv operatorlariga SoraFS sig'imiga oid nizolarni topshirish
 2. CLI-ni ishga tushiring:
 
    ```bash
-   sorafs_manifest_stub capacity dispute \
+   sorafs_manifest_builder capacity dispute \
      --spec=dispute.json \
      --norito-out=dispute.to \
      --base64-out=dispute.b64 \
@@ -78,7 +78,7 @@ Ushbu runbook boshqaruv operatorlariga SoraFS sig'imiga oid nizolarni topshirish
 
 1. **Foydali oyna:** provayderni kutilayotgan bekor qilish haqida xabardor qilish; siyosat ruxsat berganda qadalgan ma'lumotlarni evakuatsiya qilishga ruxsat bering.
 2. **`ProviderAdmissionRevocationV1` yarating:**
-   - Tasdiqlangan sabab bilan `sorafs_manifest_stub provider-admission revoke` dan foydalaning.
+   - Tasdiqlangan sabab bilan `sorafs_manifest_builder provider-admission revoke` dan foydalaning.
    - Imzolar va bekor qilish dayjestini tekshiring.
 3. **Bekor qilishni nashr etish:**
    - Torii ga bekor qilish so'rovini yuboring.
@@ -93,7 +93,7 @@ Ushbu runbook boshqaruv operatorlariga SoraFS sig'imiga oid nizolarni topshirish
 
 ## 6. Ma'lumotnomalar
 
-- `sorafs_manifest_stub capacity dispute --help`
+- `sorafs_manifest_builder capacity dispute --help`
 - `docs/source/sorafs/storage_capacity_marketplace.md` (nizo bo'limi)
 - `docs/source/sorafs/provider_admission_policy.md` (bekor qilish ish jarayoni)
 - Kuzatuv paneli: `SoraFS / Capacity Providers`

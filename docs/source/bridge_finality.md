@@ -129,6 +129,9 @@ the following Norito payload:
     ordinary_writes_root,
     topup_anchor_root,
     topup_anchor_count,
+    native_amx_application_manifest_version,
+    native_amx_application_manifest_root,
+    native_amx_application_manifest_count,
     executed_block_wire_hash
   }
 }
@@ -140,6 +143,9 @@ legacy encoding. The subject hash authenticates the canonical resultless
 proposal. The execution commitment separately authenticates the exact
 canonical result-bearing block, so replay cannot substitute either proposal
 bytes or deterministic execution results while preserving the other binding.
+The versioned Native AMX application-manifest root additionally authenticates
+the ordered participant-application leaves and their proofs. A zero leaf count
+must use the canonical empty root; a nonzero count must not use that root.
 
 The signer index and individual signature are not part of the same-message
 preimage. The CommitQC's strictly ordered signer list selects the BLS keys and

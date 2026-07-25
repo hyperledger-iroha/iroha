@@ -65,7 +65,7 @@ cargo test -p sorafs_car --features cli --test capacity_cli
 python3 scripts/telemetry/capacity_reconcile.py --snapshot <state.json> --ledger <ledger.ndjson> --warn-only
 ```
 
-オンボーディング/リティージ アベニュー `sorafs_manifest_stub capacity {declaration,dispute}` およびアーカイバ ファイルのバイト JSON/Norito の結果を管理するためのチケット コートを作成する操作者です。
+オンボーディング/リティージ アベニュー `sorafs_manifest_builder capacity {declaration,dispute}` およびアーカイバ ファイルのバイト JSON/Norito の結果を管理するためのチケット コートを作成する操作者です。
 
 ## 承認の成果物|アーティファクト |パス |ブレイク2b-256 |
 |----------|------|---------------|

@@ -3,10 +3,11 @@
 //! Ensures that enabling the skeleton parallel-apply path yields identical
 //! outcomes to the sequential apply path.
 
-use std::{borrow::Cow, collections::BTreeSet, time::Duration};
+use std::{borrow::Cow, collections::BTreeSet, sync::Arc, time::Duration};
 
 use iroha_core::{
     block::{BlockBuilder, ValidBlock},
+    governance::manifest::LaneManifestRegistry,
     state::{StateReadOnly, WorldReadOnly},
 };
 use iroha_data_model::prelude::*;
@@ -94,8 +95,16 @@ fn parallel_apply_matches_sequential_for_log_and_mint() {
 
     // Run sequential apply
     let world_seq = build_world();
-    let mut state_seq =
-        iroha_core::state::State::new_for_testing(world_seq, kura.clone(), query.clone());
+    let mut state_seq = iroha_core::state::State::new_with_chain_for_testing(
+        world_seq,
+        kura.clone(),
+        query.clone(),
+        chain_id.clone(),
+    );
+    let nexus = state_seq.nexus_snapshot();
+    state_seq.install_lane_manifests(&Arc::new(
+        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
+    ));
     let cfg_seq = iroha_config::parameters::actual::Pipeline {
         ivm_proved: iroha_config::parameters::actual::IvmProvedExecution {
             enabled: iroha_config::parameters::defaults::pipeline::ivm_proved::ENABLED,
@@ -173,7 +182,16 @@ fn parallel_apply_matches_sequential_for_log_and_mint() {
 
     // Run parallel-apply (skeleton path)
     let world_par = build_world();
-    let mut state_par = iroha_core::state::State::new_for_testing(world_par, kura, query);
+    let mut state_par = iroha_core::state::State::new_with_chain_for_testing(
+        world_par,
+        kura,
+        query,
+        chain_id.clone(),
+    );
+    let nexus = state_par.nexus_snapshot();
+    state_par.install_lane_manifests(&Arc::new(
+        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
+    ));
     let cfg_par = iroha_config::parameters::actual::Pipeline {
         ivm_proved: iroha_config::parameters::actual::IvmProvedExecution {
             enabled: iroha_config::parameters::defaults::pipeline::ivm_proved::ENABLED,
@@ -291,6 +309,7 @@ fn parallel_apply_matches_sequential_for_log_and_mint() {
 
 fn run_block_and_events(
     parallel_apply: bool,
+    chain_id: &ChainId,
     txs: Vec<SignedTransaction>,
     bootstrap_accounts: Vec<AccountId>,
 ) -> (
@@ -302,35 +321,40 @@ fn run_block_and_events(
     //
     // This keeps the initial world stable across apply modes and avoids relying
     // on implicit admission side effects (which can be sensitive to scheduling).
+    let fixture_owner = txs
+        .first()
+        .expect("fixture block must contain at least one transaction")
+        .authority()
+        .clone();
     let mut accounts: BTreeSet<AccountId> = bootstrap_accounts.into_iter().collect();
     for tx in &txs {
         accounts.insert(tx.authority().clone());
     }
-    let first_auth = accounts
-        .iter()
-        .next()
-        .cloned()
-        .expect("non-empty account set");
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-    let domain: Domain = Domain::new(domain_id.clone()).build(&first_auth);
+    let domain: Domain = Domain::new(domain_id.clone()).build(&fixture_owner);
     let ad_id = AssetDefinitionId::new(domain_id.clone(), "rose".parse().expect("asset name"));
     let ad: AssetDefinition = AssetDefinition::new(ad_id.clone(), NumericSpec::default())
         .with_name("rose".to_owned())
-        .build(&first_auth);
+        .build(&fixture_owner);
     let mut world_accounts: Vec<Account> = Vec::new();
     let mut assets: Vec<Asset> = Vec::new();
     for acc_id in &accounts {
-        world_accounts.push(Account::new(acc_id.clone()).build(&first_auth));
+        world_accounts.push(Account::new(acc_id.clone()).build(&fixture_owner));
         let asset_id = AssetId::new(ad.id().clone(), acc_id.clone());
-        // Ensure the first bootstrap account has a larger balance so that
-        // ordering differences in the scheduler don't affect validity.
-        let balance: u64 = if acc_id == &first_auth { 60 } else { 10 };
+        // The first input transaction authority is the canonical fixture owner;
+        // block construction may reorder transactions by call hash later.
+        let balance: u64 = if acc_id == &fixture_owner { 60 } else { 10 };
         assets.push(Asset::new(asset_id, Quantity::from(balance)));
     }
     let world = iroha_core::state::World::with_assets([domain], world_accounts, [ad], assets, []);
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query = iroha_core::query::store::LiveQueryStore::start_test();
-    let mut state = iroha_core::state::State::new_for_testing(world, kura, query);
+    let mut state =
+        iroha_core::state::State::new_with_chain_for_testing(world, kura, query, chain_id.clone());
+    let nexus = state.nexus_snapshot();
+    state.install_lane_manifests(&Arc::new(
+        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
+    ));
     let mut cfg = state.view().pipeline().clone();
     cfg.parallel_apply = parallel_apply;
     state.set_pipeline(cfg);
@@ -388,12 +412,14 @@ fn events_snapshot_mint_burn_transfer_match_between_modes() {
     // Sequential
     let (events_seq, state_seq) = run_block_and_events(
         false,
+        &chain_id,
         vec![tx_mint.clone(), tx_burn.clone(), tx_xfer.clone()],
         vec![alice_id.clone(), bob_id.clone()],
     );
     // Parallel-detached
     let (events_par, state_par) = run_block_and_events(
         true,
+        &chain_id,
         vec![tx_mint, tx_burn, tx_xfer],
         vec![alice_id.clone(), bob_id.clone()],
     );
@@ -488,11 +514,15 @@ fn events_snapshot_kv_and_nft_match_between_modes() {
     ];
 
     // Sequential
-    let (events_seq, _state_seq) =
-        run_block_and_events(false, txs.clone(), vec![alice_id.clone(), bob_id.clone()]);
+    let (events_seq, _state_seq) = run_block_and_events(
+        false,
+        &chain_id,
+        txs.clone(),
+        vec![alice_id.clone(), bob_id.clone()],
+    );
     // Parallel-detached
     let (events_par, _state_par) =
-        run_block_and_events(true, txs, vec![alice_id.clone(), bob_id.clone()]);
+        run_block_and_events(true, &chain_id, txs, vec![alice_id.clone(), bob_id.clone()]);
 
     assert_events("kv_and_nft_lifecycle", &events_seq);
     assert_events("kv_and_nft_lifecycle", &events_par);
@@ -523,10 +553,12 @@ fn events_snapshot_asset_definition_kv_match_between_modes() {
 
     let (events_seq, _) = run_block_and_events(
         false,
+        &chain_id,
         vec![tx_set.clone(), tx_rm.clone()],
         vec![alice_id.clone()],
     );
-    let (events_par, _) = run_block_and_events(true, vec![tx_set, tx_rm], vec![alice_id.clone()]);
+    let (events_par, _) =
+        run_block_and_events(true, &chain_id, vec![tx_set, tx_rm], vec![alice_id.clone()]);
     assert_events("asset_definition_kv", &events_seq);
     assert_events("asset_definition_kv", &events_par);
 }
@@ -560,12 +592,14 @@ fn owner_transfer_domain_and_asset_def_parity() {
     // Sequential
     let (events_seq, state_seq) = run_block_and_events(
         false,
+        &chain_id,
         vec![tx_dom_xfer.clone(), tx_ad_xfer.clone()],
         vec![alice_id.clone(), bob_id.clone()],
     );
     // Parallel-detached
     let (events_par, state_par) = run_block_and_events(
         true,
+        &chain_id,
         vec![tx_dom_xfer, tx_ad_xfer],
         vec![alice_id.clone(), bob_id.clone()],
     );

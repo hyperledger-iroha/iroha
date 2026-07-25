@@ -67,12 +67,12 @@ cargo test -p sorafs_chunker streaming_backpressure_fuzz_matches_batch
 ## 3. Construire et signer un manifeste
 
 Enveloppez le plan de chunks, les alias et les signatures de gouvernance dans un
-manifesté via `sorafs-manifest-stub`. La commande ci-dessous illustre une charge utile à
+manifesté via `sorafs-manifest-builder`. La commande ci-dessous illustre une charge utile à
 fichier unique ; passer un chemin de répertoire pour empaqueter un arbre (la CLI le
 parcourt en ordre lexicographique).
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
+cargo run -p sorafs_manifest --bin sorafs-manifest-builder -- \
   /tmp/docs.txt \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --manifest-out=/tmp/docs.manifest \

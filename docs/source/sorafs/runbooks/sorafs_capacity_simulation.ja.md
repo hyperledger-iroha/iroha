@@ -11,7 +11,7 @@ translation_last_reviewed: 2026-01-30
 
 # SoraFS 容量シミュレーション・ランブック
 
-このランブックは、SF-2c 容量マーケットプレイスのシミュレーションツールキットを実行し、得られたメトリクスを可視化する方法を説明します。目的は、`docs/examples/sorafs_capacity_simulation/` にある再現可能なフィクスチャを使って、クォータ交渉、フェイルオーバー処理、スラッシング是正をエンドツーエンドで検証することです。容量ペイロードは引き続き `sorafs_manifest_stub capacity` を使用します。manifest/CAR のパッケージングには `iroha app sorafs toolkit pack` を使ってください。
+このランブックは、SF-2c 容量マーケットプレイスのシミュレーションツールキットを実行し、得られたメトリクスを可視化する方法を説明します。目的は、`docs/examples/sorafs_capacity_simulation/` にある再現可能なフィクスチャを使って、クォータ交渉、フェイルオーバー処理、スラッシング是正をエンドツーエンドで検証することです。容量ペイロードは引き続き `sorafs_manifest_builder capacity` を使用します。manifest/CAR のパッケージングには `iroha app sorafs toolkit pack` を使ってください。
 
 ## 1. CLI アーティファクトを生成
 
@@ -20,7 +20,7 @@ cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./run_cli.sh ./artifacts
 ```
 
-このスクリプトは `sorafs_manifest_stub capacity` を呼び出し、決定的な Norito ペイロード、base64 エンコード、Torii リクエストボディ、JSON サマリーを生成します:
+このスクリプトは `sorafs_manifest_builder capacity` を呼び出し、決定的な Norito ペイロード、base64 エンコード、Torii リクエストボディ、JSON サマリーを生成します:
 
 - クォータ交渉シナリオに参加する 3 つのプロバイダ宣言。
 - 準備済みマニフェストをプロバイダ間に割り当てるレプリケーション注文。

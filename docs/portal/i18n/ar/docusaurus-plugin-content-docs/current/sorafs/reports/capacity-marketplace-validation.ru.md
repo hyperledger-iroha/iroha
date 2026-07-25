@@ -59,7 +59,7 @@ cargo test -p sorafs_car --features cli --test capacity_cli
 python3 scripts/telemetry/capacity_reconcile.py --snapshot <state.json> --ledger <ledger.ndjson> --warn-only
 ```
 
-يقوم المشغلون المسؤولون عن إنشاء الحمولات الصافية بالنقل/النقل عبر `sorafs_manifest_stub capacity {declaration,dispute}` وأرشفة الوصول إليها JSON/Norito بايت موجود في تذكرة الإدارة.
+يقوم المشغلون المسؤولون عن إنشاء الحمولات الصافية بالنقل/النقل عبر `sorafs_manifest_builder capacity {declaration,dispute}` وأرشفة الوصول إليها JSON/Norito بايت موجود في تذكرة الإدارة.
 
 ## تسجيل الخروج للقطع الأثرية| قطعة أثرية | المسار | بليك2ب-256 |
 |----------|------|-------------|

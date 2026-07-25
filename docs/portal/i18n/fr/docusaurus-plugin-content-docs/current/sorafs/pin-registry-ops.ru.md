@@ -125,7 +125,7 @@ groups:
    - Appuyez sur `iroha app sorafs providers list` et vérifiez que les opérations de réplication sont effectuées.
    - Vérifiez les jauges `torii_sorafs_capacity_*`, pour mettre à jour le GiB provisionné et votre PoR.
 3. **Prendre la réplique**
-   - Vous avez de nouvelles commandes pour `sorafs_manifest_stub capacity replication-order`, alors que l'arriéré (`stat="avg"`) s'ouvre depuis 5 époques (manifeste/utilisation de la voiture) `iroha app sorafs toolkit pack`).
+   - Vous avez de nouvelles commandes pour `sorafs_manifest_builder capacity replication-order`, alors que l'arriéré (`stat="avg"`) s'ouvre depuis 5 époques (manifeste/utilisation de la voiture) `iroha app sorafs toolkit pack`).
    - Vérifiez la gouvernance, si les alias n'apportent pas de manifestes de liaison actifs (pas de lien `torii_sorafs_registry_aliases_total`).
 4. **Ajouter le résultat**
    - Enregistrez les incidents dans le journal d'exploitation SoraFS avec l'horodatage et les manifestes de résumé.

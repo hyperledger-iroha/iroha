@@ -19,8 +19,6 @@ use iroha_crypto::Signature;
 use iroha_data_model::{
     DomainId,
     asset::AssetDefinitionId,
-    name::Name,
-    smart_contract::ContractAddress,
     transaction::{FeePaymentIntent, SignedTransaction},
 };
 use iroha_version::codec::DecodeVersioned as _;
@@ -29,14 +27,43 @@ use mv::storage::StorageReadOnly;
 use norito::json;
 use tower::ServiceExt as _;
 
-fn decode_stored_int(payload: &[u8]) -> i64 {
-    let tlv = ivm::pointer_abi::validate_tlv_bytes(payload).expect("stored int TLV");
-    assert_eq!(tlv.type_id, ivm::PointerType::Int);
-    iroha_primitives::numeric_abi::IntValueV1::decode_frame(tlv.payload)
-        .expect("decode stored canonical int")
-        .into_int()
-        .try_to_i64()
-        .expect("fixture int fits i64")
+fn can_modify_account_metadata(
+    account: &iroha_data_model::account::AccountId,
+) -> iroha_data_model::permission::Permission {
+    iroha_executor_data_model::permission::account::CanModifyAccountMetadata {
+        account: account.clone(),
+    }
+    .into()
+}
+
+fn can_mint_asset_definition(
+    asset_definition: &AssetDefinitionId,
+) -> iroha_data_model::permission::Permission {
+    iroha_executor_data_model::permission::asset::CanMintAssetWithDefinition {
+        asset_definition: asset_definition.clone(),
+    }
+    .into()
+}
+
+fn can_burn_asset_definition(
+    asset_definition: &AssetDefinitionId,
+) -> iroha_data_model::permission::Permission {
+    iroha_executor_data_model::permission::asset::CanBurnAssetWithDefinition {
+        asset_definition: asset_definition.clone(),
+    }
+    .into()
+}
+
+fn contract_call_noop_program() -> Vec<u8> {
+    let src = r#"
+seiyaku ContractCallNoopTest {
+
+  kotoage fn main() authorize("CanEnactGovernance") {}
+}
+"#;
+    ivm::KotodamaCompiler::new()
+        .compile_source(src)
+        .expect("compile contract call no-op test program")
 }
 
 fn contract_call_dispatch_program() -> Vec<u8> {
@@ -58,6 +85,10 @@ seiyaku ContractCallDispatchTest {{
 
   kotoage fn record_asset_by_payload(AssetDefinitionId asset_definition_id) authorize("CanEnactGovernance") {{
     call_asset = asset_definition_id;
+  }}
+
+  view fn call_state() -> (int, AssetDefinitionId) {{
+    return (call_amount, call_asset);
   }}
 }}
 "#
@@ -209,7 +240,13 @@ seiyaku ContractCallN3xLikeTest {{
                         quantity usdt_in,
                         quantity usdc_in,
                         quantity kusd_in) authorize("CanEnactGovernance") {{
-    deposit_impl(user, asset_definition_id, usdt_in, usdc_in, kusd_in);
+    deposit_impl(
+      user: user,
+      asset: asset_definition_id,
+      usdt_in: usdt_in,
+      usdc_in: usdc_in,
+      kusd_in: kusd_in
+    );
   }}
 
   kotoage fn burn_like(AccountId user,
@@ -273,17 +310,18 @@ seiyaku ContractViewBytesTest {
   state AssetDefinitionId Asset;
   state bytes Target;
 
-  fn configure_impl(AssetDefinitionId asset, bytes target) {
-    Asset = asset;
-    Target = target;
+  fn configure_impl(AssetDefinitionId asset_input, bytes target_bytes) {
+    Asset = asset_input;
+    Target = target_bytes;
   }
 
-  hajimari(AssetDefinitionId asset, bytes target) {
-    configure_impl(asset, target);
+  hajimari(AssetDefinitionId asset_input) {
+    Asset = asset_input;
+    Target = b"";
   }
 
-  kotoage fn configure(AssetDefinitionId asset, bytes target) authorize("CanEnactGovernance") {
-    configure_impl(asset, target);
+  kotoage fn configure(AssetDefinitionId asset_input, bytes target_bytes) authorize("CanEnactGovernance") {
+    configure_impl(asset_input: asset_input, target_bytes: target_bytes);
   }
 
   view fn literal() -> bytes {
@@ -315,11 +353,11 @@ seiyaku ContractViewAccountIdTest {
   }
 
   hajimari(AccountId account_id) {
-    bind_impl(account_id);
+    bind_impl(account_id: account_id);
   }
 
   kotoage fn bind(AccountId account_id) authorize("CanEnactGovernance") {
-    bind_impl(account_id);
+    bind_impl(account_id: account_id);
   }
 
   view fn literal() -> AccountId {
@@ -370,15 +408,15 @@ seiyaku ContractCallConfigureAccountMapTest {
     }
   }
 
-  kotoage fn configure(AccountId admin, AccountId inori) authorize("CanEnactGovernance") {
+  kotoage fn configure(AccountId admin_account, AccountId inori_account) authorize("CanEnactGovernance") {
     let has_admin = ConfigAccount.contains(key_admin());
     if (has_admin) {
-      require(context::authority() == ConfigAccount.get(key_admin()).unwrap_or(admin), ConfigureError::UnauthorizedExisting);
+      require(context::authority() == ConfigAccount.get(key_admin()).unwrap_or(admin_account), ConfigureError::UnauthorizedExisting);
     } else {
-      require(context::authority() == admin, ConfigureError::UnauthorizedInitial);
+      require(context::authority() == admin_account, ConfigureError::UnauthorizedInitial);
     }
-    ConfigAccount[key_admin()] = admin;
-    ConfigAccount[key_inori()] = inori;
+    ConfigAccount[key_admin()] = admin_account;
+    ConfigAccount[key_inori()] = inori_account;
     initialize_config_defaults();
   }
 
@@ -471,7 +509,7 @@ async fn run_contract_view_response(
         iroha_torii::test_utils::ContractViewOptions {
             entrypoint,
             payload,
-            gas_limit: 10_000,
+            gas_limit: 1_500_000,
         },
     );
     let req = http::Request::builder()
@@ -487,6 +525,46 @@ async fn run_contract_view_response(
         status,
         json::from_slice(&bytes).expect("decode contract view response"),
     )
+}
+
+async fn run_contract_hajimari_and_apply(
+    app: &Router,
+    state: &Arc<State>,
+    queue: &Arc<Queue>,
+    chain_id: &iroha_data_model::ChainId,
+    creds: &iroha_torii::test_utils::AuthorityCreds,
+    contract_address: &str,
+    payload: Option<&json::Value>,
+    block_height: u64,
+) {
+    let body = iroha_torii::test_utils::contract_call_request_json(
+        &creds.account,
+        &creds.private_key,
+        contract_address,
+        iroha_torii::test_utils::ContractCallOptions {
+            entrypoint: "hajimari",
+            payload,
+            gas_limit: 1_500_000,
+        },
+    );
+    let req = http::Request::builder()
+        .method("POST")
+        .uri("/v1/contracts/call")
+        .header(http::header::CONTENT_TYPE, "application/json")
+        .body(axum::body::Body::from(body))
+        .unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
+    let status = resp.status();
+    let response_body = resp.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(
+        status,
+        http::StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&response_body)
+    );
+    let applied =
+        iroha_torii::test_utils::apply_queued_in_one_block(state, queue, chain_id, block_height);
+    assert_eq!(applied, 1, "hajimari transaction must apply exactly once");
 }
 
 #[tokio::test]
@@ -522,7 +600,7 @@ async fn contracts_call_enqueues_transaction() {
         telemetry.clone(),
     );
 
-    let program = iroha_torii::test_utils::minimal_ivm_program(1);
+    let program = contract_call_noop_program();
     let (contract_address, code_hash_hex, abi_hash_hex) =
         iroha_torii::test_utils::enqueue_locally_signed_contract_deployment(
             &state,
@@ -882,7 +960,7 @@ async fn contracts_call_enqueues_transaction() {
 }
 
 #[tokio::test]
-async fn contracts_view_surfaces_source_path_in_vm_diagnostic() {
+async fn contracts_view_omits_unverified_source_path_from_vm_diagnostic() {
     if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
         eprintln!(
             "Skipping: contract call integration test gated. Set IROHA_RUN_IGNORED=1 to run."
@@ -955,13 +1033,13 @@ async fn contracts_view_surfaces_source_path_in_vm_diagnostic() {
         value.get("entrypoint").and_then(json::Value::as_str),
         Some("explode")
     );
-    assert_eq!(
+    assert!(
         value
             .get("vm_diagnostic")
             .and_then(json::Value::as_object)
             .and_then(|diag| diag.get("source_path"))
-            .and_then(json::Value::as_str),
-        Some(source_path)
+            .is_some_and(json::Value::is_null),
+        "deployable artifacts exclude compiler source maps; a verified hash-keyed sidecar is required"
     );
 }
 
@@ -1017,9 +1095,27 @@ async fn contracts_view_decodes_literal_and_persisted_bytes_returns() {
         .parse::<AssetDefinitionId>()
         .expect("asset definition id");
     let init_payload = iroha_torii::json_object(vec![
-        iroha_torii::json_entry("asset", asset_definition_id.to_string()),
-        iroha_torii::json_entry("target", "risk_vault::risk.universal"),
+        iroha_torii::json_entry("asset_input", asset_definition_id.to_string()),
+        iroha_torii::json_entry(
+            "target_bytes",
+            "0x7269736b5f7661756c743a3a7269736b2e756e6976657273616c",
+        ),
     ]);
+    let hajimari_payload = iroha_torii::json_object(vec![iroha_torii::json_entry(
+        "asset_input",
+        asset_definition_id.to_string(),
+    )]);
+    run_contract_hajimari_and_apply(
+        &app,
+        &state,
+        &queue,
+        &chain_id,
+        &creds,
+        contract_address.as_str(),
+        Some(&hajimari_payload),
+        2,
+    )
+    .await;
     let init_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
         &creds.private_key,
@@ -1039,7 +1135,7 @@ async fn contracts_view_decodes_literal_and_persisted_bytes_returns() {
     let init_resp = app.clone().oneshot(init_req).await.unwrap();
     assert_eq!(init_resp.status(), http::StatusCode::OK);
     let applied_init =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 2);
+        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 3);
     assert_eq!(applied_init, 1);
 
     let literal = run_contract_view(&app, &creds.account, &contract_address, "literal", None).await;
@@ -1115,6 +1211,21 @@ async fn contracts_call_honors_requested_entrypoint_and_payload() {
         iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
     assert_eq!(applied_deploy, 1);
 
+    let initial_asset_literal = "6qLb5RYJbzychndCXgFa9aZzjWyx";
+    let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
+    let hajimari_payload = norito::json!({ "asset_definition_id": initial_asset_literal });
+    run_contract_hajimari_and_apply(
+        &app,
+        &state,
+        &queue,
+        &chain_id,
+        &creds,
+        contract_address.as_str(),
+        Some(&hajimari_payload),
+        2,
+    )
+    .await;
+
     let payload = norito::json!({ "amount": "7" });
     let call_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
@@ -1139,17 +1250,22 @@ async fn contracts_call_honors_requested_entrypoint_and_payload() {
         iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 3);
     assert_eq!(applied_call, 1);
 
-    let state_path: Name = "call_amount".parse().expect("state path");
-    let view = state.view();
-    let stored = view
-        .world
-        .smart_contract_state()
-        .get(&state_path)
-        .expect("recorded state payload");
-    let recorded = decode_stored_int(stored);
-    assert_eq!(recorded, 7);
+    let state_after_credit = run_contract_view(
+        &app,
+        &creds.account,
+        contract_address.as_str(),
+        "call_state",
+        None,
+    )
+    .await;
+    assert_eq!(
+        state_after_credit.get("result"),
+        Some(&json::Value::Array(vec![
+            json::Value::String("7".to_owned()),
+            json::Value::String(initial_asset_literal.to_owned()),
+        ]))
+    );
 
-    let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
     let asset_payload = norito::json!({ "asset_definition_id": asset_literal });
     let asset_call_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
@@ -1174,22 +1290,20 @@ async fn contracts_call_honors_requested_entrypoint_and_payload() {
         iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 4);
     assert_eq!(applied_asset_call, 1);
 
-    let asset_state_path: Name = "call_asset".parse().expect("asset state path");
-    let asset_view = state.view();
-    let stored_asset = asset_view
-        .world
-        .smart_contract_state()
-        .get(&asset_state_path)
-        .expect("recorded asset payload");
-    let outer = ivm::pointer_abi::validate_tlv_bytes(stored_asset).expect("outer asset tlv");
-    assert_eq!(outer.type_id, ivm::PointerType::NoritoBytes);
-    let inner = ivm::pointer_abi::validate_tlv_bytes(outer.payload).expect("inner asset tlv");
-    assert_eq!(inner.type_id, ivm::PointerType::AssetDefinitionId);
-    let recorded_asset: AssetDefinitionId =
-        norito::decode_from_bytes(inner.payload).expect("decode asset payload");
+    let state_after_asset = run_contract_view(
+        &app,
+        &creds.account,
+        contract_address.as_str(),
+        "call_state",
+        None,
+    )
+    .await;
     assert_eq!(
-        recorded_asset,
-        AssetDefinitionId::parse_address_literal(asset_literal).expect("asset definition literal")
+        state_after_asset.get("result"),
+        Some(&json::Value::Array(vec![
+            json::Value::String("7".to_owned()),
+            json::Value::String(asset_literal.to_owned()),
+        ]))
     );
 }
 
@@ -1236,10 +1350,31 @@ async fn contracts_view_roundtrips_account_id_literals_and_persisted_state() {
             &creds.private_key,
             &program,
         );
+    let initial_account = contract_address.subject_id().to_string();
     let contract_address = contract_address.to_string();
     let applied_deploy =
         iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
     assert_eq!(applied_deploy, 1);
+
+    let hajimari_payload = iroha_torii::json_object(vec![iroha_torii::json_entry(
+        "account_id",
+        initial_account.clone(),
+    )]);
+    let bind_payload = iroha_torii::json_object(vec![iroha_torii::json_entry(
+        "account_id",
+        creds.account.to_string(),
+    )]);
+    run_contract_hajimari_and_apply(
+        &app,
+        &state,
+        &queue,
+        &chain_id,
+        &creds,
+        contract_address.as_str(),
+        Some(&hajimari_payload),
+        2,
+    )
+    .await;
 
     let literal = run_contract_view(&app, &creds.account, &contract_address, "literal", None).await;
     assert_eq!(
@@ -1247,10 +1382,13 @@ async fn contracts_view_roundtrips_account_id_literals_and_persisted_state() {
         Some(creds.account.to_string().as_str())
     );
 
-    let bind_payload = iroha_torii::json_object(vec![iroha_torii::json_entry(
-        "account_id",
-        creds.account.to_string(),
-    )]);
+    let initialized =
+        run_contract_view(&app, &creds.account, &contract_address, "stored", None).await;
+    assert_eq!(
+        initialized.get("result").and_then(json::Value::as_str),
+        Some(initial_account.as_str())
+    );
+
     let bind_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
         &creds.private_key,
@@ -1270,31 +1408,8 @@ async fn contracts_view_roundtrips_account_id_literals_and_persisted_state() {
     let bind_resp = app.clone().oneshot(bind_req).await.unwrap();
     assert_eq!(bind_resp.status(), http::StatusCode::OK);
     let applied_bind =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 2);
+        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 3);
     assert_eq!(applied_bind, 1);
-
-    let parsed_contract_address: ContractAddress = contract_address
-        .parse()
-        .expect("parse deployed contract address");
-    let state_scope = hex::encode(
-        iroha_crypto::Hash::new(parsed_contract_address.to_string().as_bytes()).as_ref(),
-    );
-    let stored_path: Name = format!("sc/{state_scope}/Stored")
-        .parse()
-        .expect("scoped stored path");
-    let persisted_view = state.view();
-    let stored_bytes = persisted_view
-        .world
-        .smart_contract_state()
-        .get(&stored_path)
-        .expect("persisted scoped Stored state");
-    let outer = ivm::pointer_abi::validate_tlv_bytes(stored_bytes).expect("outer stored tlv");
-    assert_eq!(outer.type_id, ivm::PointerType::NoritoBytes);
-    let inner = ivm::pointer_abi::validate_tlv_bytes(outer.payload).expect("inner stored tlv");
-    assert_eq!(inner.type_id, ivm::PointerType::AccountId);
-    let persisted: iroha_data_model::account::AccountId =
-        norito::decode_from_bytes(inner.payload).expect("decode persisted account id");
-    assert_eq!(persisted, creds.account);
 
     let stored = run_contract_view(&app, &creds.account, &contract_address, "stored", None).await;
     assert_eq!(
@@ -1314,7 +1429,7 @@ async fn contracts_view_roundtrips_account_id_literals_and_persisted_state() {
         stored_tuple.get("result"),
         Some(&json::Value::Array(vec![
             json::Value::String(creds.account.to_string()),
-            json::Value::from(1),
+            json::Value::String("1".to_owned()),
         ]))
     );
 }
@@ -1389,8 +1504,8 @@ async fn contracts_call_configure_roundtrips_account_id_map_state() {
     );
 
     let configure_payload = iroha_torii::json_object(vec![
-        iroha_torii::json_entry("admin", creds.account.to_string()),
-        iroha_torii::json_entry("inori", creds.account.to_string()),
+        iroha_torii::json_entry("admin_account", creds.account.to_string()),
+        iroha_torii::json_entry("inori_account", creds.account.to_string()),
     ]);
     let configure_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
@@ -1495,6 +1610,21 @@ async fn contracts_call_persists_declared_state_fields_across_calls() {
         iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
     assert_eq!(applied_deploy, 1);
 
+    let initial_asset_literal = "6qLb5RYJbzychndCXgFa9aZzjWyx";
+    let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
+    let hajimari_payload = norito::json!({ "asset_definition_id": initial_asset_literal });
+    run_contract_hajimari_and_apply(
+        &app,
+        &state,
+        &queue,
+        &chain_id,
+        &creds,
+        contract_address.as_str(),
+        Some(&hajimari_payload),
+        2,
+    )
+    .await;
+
     let credit_payload = norito::json!({ "amount": "7" });
     let credit_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
@@ -1519,7 +1649,6 @@ async fn contracts_call_persists_declared_state_fields_across_calls() {
         iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 3);
     assert_eq!(applied_credit, 1);
 
-    let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
     let asset_payload = norito::json!({ "asset_definition_id": asset_literal });
     let asset_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
@@ -1566,36 +1695,6 @@ async fn contracts_call_persists_declared_state_fields_across_calls() {
         Some(asset_literal),
         "unexpected declared asset from view",
     );
-
-    let call_amount_path: Name = "CallAmount".parse().expect("declared amount path");
-    let call_asset_path: Name = "CallAsset".parse().expect("declared asset path");
-
-    let view = state.view();
-
-    let stored_amount = view
-        .world
-        .smart_contract_state()
-        .get(&call_amount_path)
-        .expect("stored declared amount");
-    let declared_amount = decode_stored_int(stored_amount);
-    assert_eq!(declared_amount, 7);
-
-    let stored_asset = view
-        .world
-        .smart_contract_state()
-        .get(&call_asset_path)
-        .expect("stored declared asset");
-    let asset_outer = ivm::pointer_abi::validate_tlv_bytes(stored_asset).expect("asset tlv");
-    assert_eq!(asset_outer.type_id, ivm::PointerType::NoritoBytes);
-    let asset_inner =
-        ivm::pointer_abi::validate_tlv_bytes(asset_outer.payload).expect("inner asset tlv");
-    assert_eq!(asset_inner.type_id, ivm::PointerType::AssetDefinitionId);
-    let declared_asset: AssetDefinitionId =
-        norito::decode_from_bytes(asset_inner.payload).expect("decode declared asset");
-    assert_eq!(
-        declared_asset,
-        AssetDefinitionId::parse_address_literal(asset_literal).expect("asset definition literal")
-    );
 }
 
 #[tokio::test]
@@ -1633,19 +1732,32 @@ async fn contracts_call_persists_declared_state_after_emitting_isi() {
 
     let program = contract_call_declared_state_with_isi_program();
     let (contract_address, _, _) =
-        iroha_torii::test_utils::enqueue_locally_signed_contract_deployment(
+        iroha_torii::test_utils::enqueue_locally_signed_contract_deployment_with_subject_permissions(
             &state,
             &queue,
             &chain_id,
             &creds.account,
             &creds.private_key,
             &program,
+            [can_modify_account_metadata(&creds.account)],
         );
     let contract_address = contract_address.to_string();
 
     let applied_deploy =
         iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
     assert_eq!(applied_deploy, 1);
+
+    run_contract_hajimari_and_apply(
+        &app,
+        &state,
+        &queue,
+        &chain_id,
+        &creds,
+        contract_address.as_str(),
+        None,
+        2,
+    )
+    .await;
 
     let write_payload = norito::json!({ "amount": "7" });
     let write_body = iroha_torii::test_utils::contract_call_request_json(
@@ -1686,17 +1798,6 @@ async fn contracts_call_persists_declared_state_after_emitting_isi() {
             .expect("view int result"),
         "7"
     );
-
-    let declared_amount_path: Name = "CallAmount".parse().expect("declared amount path");
-    let view = state.view();
-
-    let stored_amount = view
-        .world
-        .smart_contract_state()
-        .get(&declared_amount_path)
-        .expect("stored declared amount");
-    let declared_amount = decode_stored_int(stored_amount);
-    assert_eq!(declared_amount, 7);
 }
 
 #[tokio::test]
@@ -1757,19 +1858,32 @@ async fn contracts_call_persists_declared_state_after_mint_asset() {
 
     let program = contract_call_declared_state_with_mint_program();
     let (contract_address, _, _) =
-        iroha_torii::test_utils::enqueue_locally_signed_contract_deployment(
+        iroha_torii::test_utils::enqueue_locally_signed_contract_deployment_with_subject_permissions(
             &state,
             &queue,
             &chain_id,
             &creds.account,
             &creds.private_key,
             &program,
+            [can_mint_asset_definition(&asset_definition_id)],
         );
     let contract_address = contract_address.to_string();
 
     let applied_deploy =
         iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
     assert_eq!(applied_deploy, 1);
+
+    run_contract_hajimari_and_apply(
+        &app,
+        &state,
+        &queue,
+        &chain_id,
+        &creds,
+        contract_address.as_str(),
+        None,
+        2,
+    )
+    .await;
 
     let write_payload = iroha_torii::json_object(vec![
         iroha_torii::json_entry("amount", "7"),
@@ -1814,17 +1928,6 @@ async fn contracts_call_persists_declared_state_after_mint_asset() {
             .expect("view int result"),
         "7"
     );
-
-    let declared_amount_path: Name = "CallAmount".parse().expect("declared amount path");
-    let view = state.view();
-
-    let stored_amount = view
-        .world
-        .smart_contract_state()
-        .get(&declared_amount_path)
-        .expect("stored declared amount");
-    let declared_amount = decode_stored_int(stored_amount);
-    assert_eq!(declared_amount, 7);
 }
 
 #[tokio::test]
@@ -1885,19 +1988,32 @@ async fn contracts_call_persists_n3x_like_state_after_mint_asset() {
 
     let program = contract_call_n3x_like_program();
     let (contract_address, _, _) =
-        iroha_torii::test_utils::enqueue_locally_signed_contract_deployment(
+        iroha_torii::test_utils::enqueue_locally_signed_contract_deployment_with_subject_permissions(
             &state,
             &queue,
             &chain_id,
             &creds.account,
             &creds.private_key,
             &program,
+            [can_mint_asset_definition(&asset_definition_id)],
         );
     let contract_address = contract_address.to_string();
 
     let applied_deploy =
         iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
     assert_eq!(applied_deploy, 1);
+
+    run_contract_hajimari_and_apply(
+        &app,
+        &state,
+        &queue,
+        &chain_id,
+        &creds,
+        contract_address.as_str(),
+        None,
+        2,
+    )
+    .await;
 
     let init_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
@@ -2029,19 +2145,35 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
 
     let program = contract_call_n3x_like_program();
     let (contract_address, _, _) =
-        iroha_torii::test_utils::enqueue_locally_signed_contract_deployment(
+        iroha_torii::test_utils::enqueue_locally_signed_contract_deployment_with_subject_permissions(
             &state,
             &queue,
             &chain_id,
             &creds.account,
             &creds.private_key,
             &program,
+            [
+                can_mint_asset_definition(&asset_definition_id),
+                can_burn_asset_definition(&asset_definition_id),
+            ],
         );
     let contract_address = contract_address.to_string();
 
     let applied_deploy =
         iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
     assert_eq!(applied_deploy, 1);
+
+    run_contract_hajimari_and_apply(
+        &app,
+        &state,
+        &queue,
+        &chain_id,
+        &creds,
+        contract_address.as_str(),
+        None,
+        2,
+    )
+    .await;
 
     let init_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,

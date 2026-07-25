@@ -121,7 +121,7 @@ $ йөк йүгерә -p sorafs_manifest --бин соралар_манифес�
 Манифест стаб көҙгө шул уҡ мәғлүмәттәрҙе, был уңайлы, ҡасан сценарий I18NI000000039X һайлау торбалар. Ике өлөшө магазин CLIs шулай уҡ канон ручка формаһын ҡабул итә (`--profile=sorafs.sf1@1.0.0`), шуға күрә төҙөү сценарийҙары ҡотолорға мөмкин ҡаты кодлау һанлы идентификаторҙар:
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- --list-chunker-profiles
+$ cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- --list-chunker-profiles
 [
   {
     "profile_id": 1,

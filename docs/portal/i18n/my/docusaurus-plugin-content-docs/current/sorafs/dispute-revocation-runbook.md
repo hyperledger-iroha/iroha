@@ -36,7 +36,7 @@ translation_last_reviewed: 2026-02-07
 
 ## 3. အငြင်းပွားမှုကို တင်သွင်းပါ။
 
-1. `sorafs_manifest_stub capacity dispute` အတွက် spec JSON ဖန်တီးပါ-
+1. `sorafs_manifest_builder capacity dispute` အတွက် spec JSON ဖန်တီးပါ-
 
    ```json
    {
@@ -59,7 +59,7 @@ translation_last_reviewed: 2026-02-07
 2. CLI ကိုဖွင့်ပါ-
 
    ```bash
-   sorafs_manifest_stub capacity dispute \
+   sorafs_manifest_builder capacity dispute \
      --spec=dispute.json \
      --norito-out=dispute.to \
      --base64-out=dispute.b64 \
@@ -76,7 +76,7 @@ translation_last_reviewed: 2026-02-07
 
 1. **Grace Window:** ပြန်လည်ရုပ်သိမ်းခါနီးတွင် ဝန်ဆောင်မှုပေးသူကို အကြောင်းကြားပါ။ မူဝါဒခွင့်ပြုသည့်အခါတွင် ပင်ထိုးထားသောဒေတာများကို ဘေးလွတ်ရာသို့ ရွှေ့ပြောင်းခွင့်ပြုပါ။
 2. **`ProviderAdmissionRevocationV1` ကို ထုတ်လုပ်ပါ-**
-   - အတည်ပြုထားသောအကြောင်းပြချက်ဖြင့် `sorafs_manifest_stub provider-admission revoke` ကိုသုံးပါ။
+   - အတည်ပြုထားသောအကြောင်းပြချက်ဖြင့် `sorafs_manifest_builder provider-admission revoke` ကိုသုံးပါ။
    - လက်မှတ်များနှင့် ရုတ်သိမ်းခြင်းဆိုင်ရာ အချက်များကို အတည်ပြုပါ။
 3. **ထုတ်ဝေမှု ရုပ်သိမ်းခြင်း-**
    - ရုပ်သိမ်းခြင်းတောင်းဆိုချက်ကို Torii သို့ ပေးပို့ပါ။
@@ -91,7 +91,7 @@ translation_last_reviewed: 2026-02-07
 
 ## 6. ရည်ညွှန်းပစ္စည်းများ
 
-- `sorafs_manifest_stub capacity dispute --help`
+- `sorafs_manifest_builder capacity dispute --help`
 - `docs/source/sorafs/storage_capacity_marketplace.md` (အငြင်းပွားမှုအပိုင်း)
 - `docs/source/sorafs/provider_admission_policy.md` (ရုတ်သိမ်းခြင်းလုပ်ငန်းအသွားအလာ)
 - မြင်နိုင်မှု ဒက်ရှ်ဘုတ်- `SoraFS / Capacity Providers`

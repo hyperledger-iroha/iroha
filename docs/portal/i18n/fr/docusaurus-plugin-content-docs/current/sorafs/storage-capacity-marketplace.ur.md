@@ -56,7 +56,7 @@ Le SF-2c est en mesure de répondre aux besoins des fournisseurs en matière de 
 - Aides partagées (`CapacityMetadataEntry`, `PricingScheduleV1`, validateurs de voie/affectation/SLA) validation de clé déterministe et rapport d'erreurs pour la réutilisation des outils CI et la réutilisation des outils en aval. ہیں۔【crates/sorafs_manifest/src/capacity.rs:230】
 - `PinProviderRegistry` pour un instantané en chaîne et `/v1/sorafs/capacity/state` pour exposer les déclarations du fournisseur et les écritures du grand livre des frais et déterministe Norito JSON pour جوڑ کر۔【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
 - Couverture de validation application canonique des poignées, détection des doublons, limites par voie, gardes d'affectation de réplication et vérifications de la plage de télémétrie et exercices de régressions et de régressions CI pour la mise en œuvre de la CI (crates/sorafs_manifest/src/capacity.rs:792)
-- Outils d'opérateur : spécifications lisibles par l'homme `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` et charges utiles canoniques Norito, blobs base64 et résumés JSON pour les opérateurs `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry` pour les appareils d'ordre de réplication et la validation locale pour l'étape de préparation 【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 Appareils de référence `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) Il s'agit d'un `cargo run -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order` qui génère des problèmes
+- Outils d'opérateur : spécifications lisibles par l'homme `sorafs_manifest_builder capacity {declaration, telemetry, replication-order}` et charges utiles canoniques Norito, blobs base64 et résumés JSON pour les opérateurs `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry` pour les appareils d'ordre de réplication et la validation locale pour l'étape de préparation 【crates/sorafs_car/src/bin/sorafs_manifest_builder/capacity.rs:1】 Appareils de référence `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) Il s'agit d'un `cargo run -p sorafs_car --bin sorafs_manifest_builder -- capacity replication-order` qui génère des problèmes
 
 ### 2. Intégration du plan de contrôle| Tâche | Propriétaire(s) | Remarques |
 |------|----------|-------|
@@ -140,14 +140,14 @@ Il s'agit de la comptabilité **SF-2c**, de la gestion des litiges et de l'inté
   paquets de gouvernance کے ساتھ۔
 
 ### Contestation et réduction des preuves
-- litiges `sorafs_manifest_stub capacity dispute` کے ذریعے فائل کریں (essais :
+- litiges `sorafs_manifest_builder capacity dispute` کے ذریعے فائل کریں (essais :
   `cargo test -p sorafs_car --test capacity_cli`) Charges utiles canoniques
 - `cargo test -p iroha_core -- capacity_dispute_replay_is_deterministic` et suites de pénalités
   (`record_capacity_telemetry_penalises_persistent_under_delivery`) Il y a des différends et des coupures de rediffusion déterministe
 - capture de preuves et escalade pour `docs/source/sorafs/dispute_revocation_runbook.md` فالو کریں؛ approbations de grève et rapport de validation
 
 ### Tests de fumée d'intégration et de sortie des fournisseurs
-- artefacts de déclaration/télémétrie comme `sorafs_manifest_stub capacity ...` ou régénération et soumission et relecture des tests CLI (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`)
+- artefacts de déclaration/télémétrie comme `sorafs_manifest_builder capacity ...` ou régénération et soumission et relecture des tests CLI (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`)
 - Torii (`/v1/sorafs/capacity/declare`) et soumettre la capture d'écran `/v1/sorafs/capacity/state` et Grafana capturer des captures d'écran. `docs/source/sorafs/capacity_onboarding_runbook.md` Flux de sortie pour le flux de sortie
 - artefacts signés et sorties de réconciliation selon `docs/examples/sorafs_capacity_marketplace_validation/` dans les archives
 

@@ -115,7 +115,7 @@ groups:
    - `iroha app sorafs providers list` تم طلب وتسجيل إعلان صلاحيت النسخ المتماثل بطلب أكثر من مليون دولار.
    - مقاييس `torii_sorafs_capacity_*` تعمل على توفير نجاح في اختبار GiB وPoR.
 3. ** النسخ المتماثل إعادة التعيين **
-   - فترة الركود المتراكمة (`stat="avg"`) 5 عصور ستستمر `sorafs_manifest_stub capacity replication-order` في تنفيذ أوامر جارية (البيان/تغليف CAR `iroha app sorafs toolkit pack` يستخدم ككرتا)).
+   - فترة الركود المتراكمة (`stat="avg"`) 5 عصور ستستمر `sorafs_manifest_builder capacity replication-order` في تنفيذ أوامر جارية (البيان/تغليف CAR `iroha app sorafs toolkit pack` يستخدم ككرتا)).
    - إذا كانت الأسماء المستعارة فعالة في الارتباطات الواضحة فلن تتمكن من الحوكمة بشكل واضح (`torii_sorafs_registry_aliases_total` ستتأخر لاحقًا).
 4. **منتجات البناء**
    - يحتوي سجل عمليات SoraFS على طوابع زمنية وملخصات واضحة بالإضافة إلى ملاحظات الحوادث في الجزء السفلي.

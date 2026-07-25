@@ -56,7 +56,7 @@ SDK). یہ псевдоним اور инварианты дескриптора
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+     cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - Светильники, предложения, отчет о детерминизме, обновления реестра и PR-отправка.
@@ -91,12 +91,12 @@ SDK). یہ псевдоним اور инварианты дескриптора
 
 ## Ожидания от инструмента
 
-- `sorafs_manifest_chunk_store` и `sorafs_manifest_stub` раскрывают следующие возможности:
+- `sorafs_manifest_chunk_store` и `sorafs_manifest_builder` раскрывают следующие возможности:
   - Проверка реестра کے لیے `--list-profiles`.
   - Профиль продвигает блок канонических метаданных بنانے کے لیے `--promote-profile=<handle>`.
   - Отчеты со стандартным выводом и потоком, а также с `--json-out=-` и воспроизводимыми журналами проверки.
 - `ensure_charter_compliance()` соответствующие двоичные файлы при запуске или запуске программы.
-  (`manifest_chunk_store`, `provider_advert_stub`). Если CI-тесты не пройдены, возможно, это не так.
+  (`manifest_chunk_store`, `sorafs_provider_advert`). Если CI-тесты не пройдены, возможно, это не так.
   نئی записи чартера کی خلاف ورزی کریں۔
 
 ## Ведение учета

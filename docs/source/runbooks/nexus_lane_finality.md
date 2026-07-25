@@ -4,6 +4,11 @@
 **Audience:** Core Consensus WG, SRE/Telemetry, Release Engineering, on-call leads.  
 **Scope:** Covers the slot-duration, DA quorum, oracle, and settlement-buffer SLOs that gate the 1 s finality promise. Use this alongside `dashboards/grafana/nexus_lanes.json` and the telemetry helpers under `scripts/telemetry/`.
 
+> **Release evidence:** This is an operational SLO runbook. It does not by
+> itself close any production multilane gate. Fresh four-peer, twelve-peer,
+> two-hour soak, pinned-hardware scaling, SDK/formal, and full-workspace release
+> artifacts remain open until their dedicated suites pass without skips.
+
 ## Dashboards
 
 - **Grafana (`dashboards/grafana/nexus_lanes.json`)** — publishes the “Nexus Lane Finality & Oracles” board. Panels track:
@@ -30,6 +35,48 @@
 | `iroha_oracle_twap_window_seconds` | Exactly 60 s ± 5 s tolerance. | Divergence means the oracle is misconfigured. |
 | `iroha_oracle_haircut_basis_points` | Matches lane liquidity tier (0/25/75 bps). | Escalate if haircuts spike unexpectedly. |
 | `iroha_settlement_buffer_xor` | Soft 25 %, hard 10 %. Force XOR-only mode below 10 %. | Panel exposes live micro-XOR debits per lane/dataspace; export before adjusting router policy. |
+
+## Lifecycle, Status, and Durable-Stage Diagnostics
+
+Capture the three Torii surfaces separately:
+
+- `/v1/nexus/lifecycle` is the lane catalog/incarnation and autoscale lifecycle
+  snapshot.
+- `/v1/sumeragi/status` is only the authoritative `SumeragiV2Status` reducer
+  snapshot.
+- `/v1/sumeragi/diagnostics` is non-authoritative operational evidence derived
+  from State and revalidated Kura artifacts. It must never be used to authorize
+  consensus or select between conflicting evidence.
+
+Interpret `native_amx_participant_applications` as follows:
+
+| State | Meaning | Operator action |
+|-------|---------|-----------------|
+| `certified_pending_carrier` | Exact participant Prepare/Commit QCs are durable; no canonical global carrier is committed yet. | Correlate the route/incarnation and grouped source count with merge selection. Do not advance or drain the lane. |
+| `committed_evidence_pending` | The carrier is committed, but finality/manifest/receipt/latest-index/application evidence is not yet complete and revalidated. | Check bounded sidecar recovery and startup repair. Treat the route as a drain blocker. |
+| `durably_applied` | The exact application block, manifest proof, receipt/index, and replicated frontier revalidate. | Confirm peers agree on the same identity; this is the only terminal Native state. |
+| `conflict` | Authenticated same-height identities disagree. | Halt retirement and escalation; preserve artifacts. Never pick a winner by arrival or filesystem order. |
+
+`autonomous_lane_executions.highest_durable_stage` is restart-stable and
+payload-free. Read the stages in this order:
+
+1. `reservations_durable`
+2. `executable_payload_durable`
+3. `payload_availability_certified`
+4. `lane_certified`
+5. `certified_bundle_durable`
+6. `merge_candidate_durable`
+7. `global_carrier_committed`
+8. `kura_wsv_application_receipt_durable`
+9. `queue_finalized`
+
+Each nonterminal stage has a matching `stuck_reason`; use it to locate the
+missing durable successor. `queue_finalized` proves the exact reservations no
+longer have unfinished ownership or crash barriers after canonical
+application. `conflict` with `evidence_conflict` is a fail-closed terminal
+diagnostic, not successful completion. Compare complete
+lane/dataspace/incarnation/proposal identities across peers; a later stage from
+another incarnation does not resolve an older row.
 
 ## Response Playbook
 
@@ -76,7 +123,7 @@
 - **CI** — wire `scripts/telemetry/check_slot_duration.py --json-out artifacts/nx18/slot_summary.json` and `scripts/telemetry/nx18_acceptance.py --json-out artifacts/nx18/nx18_acceptance.json <metrics.prom>` into the RC acceptance workflow so every release candidate ships the slot-duration summary plus the DA/oracle/buffer gate results alongside the metrics snapshot referenced above. The helper is already invoked from `ci/check_nexus_lane_smoke.sh`.  
 - **Dashboard parity** — run `scripts/telemetry/compare_dashboards.py dashboards/grafana/nexus_lanes.json <prod-export.json>` to ensure the published board matches staging/prod exports.  
 - **Trace artefacts** — during TRACE rehearsals or NX-18 chaos drills, invoke `scripts/telemetry/check_nexus_audit_outcome.py` to archive the latest `nexus.audit.outcome` payload (`docs/examples/nexus_audit_outcomes/`). Attach both the archive and Grafana screenshots to the drill log.
-- **Slot evidence bundling** — after generating the summary JSON, run `scripts/telemetry/bundle_slot_artifacts.py --metrics <prometheus.tgz-extract>/metrics.prom --summary artifacts/nx18/slot_summary.json --out-dir artifacts/nx18` so the resulting `slot_bundle_manifest.json` captures SHA-256 digests for both artefacts. Upload the directory as-is with the RC evidence bundle. The release pipeline executes this automatically (skippable via `--skip-nexus-lane-smoke`) and copies `artifacts/nx18/` into the release output.
+- **Slot evidence bundling** — after generating the summary JSON, run `scripts/telemetry/bundle_slot_artifacts.py --metrics <prometheus.tgz-extract>/metrics.prom --summary artifacts/nx18/slot_summary.json --out-dir artifacts/nx18` so the resulting `slot_bundle_manifest.json` captures SHA-256 digests for both artefacts. Upload the directory as-is with the RC evidence bundle. The release pipeline executes this automatically and copies `artifacts/nx18/` into the release output. `--skip-nexus-lane-smoke` is a development-only escape for unrelated local work; using it in a multilane release-evidence run invalidates that run and the gate must remain open.
 
 ## Maintenance Checklist
 
@@ -84,4 +131,6 @@
 - Update this runbook when new metrics (e.g., settlement buffer gauges) or alert thresholds land.  
 - Record every chaos rehearsal (slot latency, DA jitter, oracle stall, buffer depletion) with `scripts/telemetry/log_sorafs_drill.sh --log ops/drill-log.md --program NX-18 --status <status>`.
 
-Following this runbook provides the “operator dashboards/runbooks” evidence called out by NX-18 and ensures the finality SLO remains enforceable before Nexus GA.
+Following this runbook supplies the NX-18 operator-dashboard/runbook packet and
+keeps the finality SLO observable. It is not evidence that the open production
+multilane integration, soak, scaling, or final-validation gates have passed.

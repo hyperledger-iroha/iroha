@@ -4,7 +4,7 @@ This runbook explains how to exercise the SF-2c capacity marketplace simulation
 toolkit and visualise the resulting metrics. The goal is to validate quota
 negotiation, failover handling, and slashing remediation end-to-end using the
 reproducible fixtures under `docs/examples/sorafs_capacity_simulation/`.
-Capacity payloads still use `sorafs_manifest_stub capacity`; use
+Capacity payloads still use `sorafs_manifest_builder capacity`; use
 `iroha app sorafs toolkit pack` for manifest/CAR packaging flows.
 
 ## 1. Generate CLI artefacts
@@ -14,7 +14,7 @@ cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./run_cli.sh ./artifacts
 ```
 
-The script invokes `sorafs_manifest_stub capacity` to emit deterministic Norito
+The script invokes `sorafs_manifest_builder capacity` to emit deterministic Norito
 payloads, base64 encodings, Torii request bodies, and JSON summaries for:
 
 - Three provider declarations participating in the quota negotiation scenario.

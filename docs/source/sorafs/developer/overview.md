@@ -19,7 +19,7 @@ Optional helpers:
 
 - `cargo run -p sorafs_car --bin sorafs_fetch -- --help` — deterministic
   orchestrator simulator for multi-provider fetches.
-- `cargo run -p sorafs_car --bin sorafs_manifest_stub -- --help` — manifest
+- `cargo run -p sorafs_car --bin sorafs_manifest_builder -- --help` — manifest
   fixture generator used in examples and tests.
 
 ## 2. Compile Kotodama and pack a CAR archive
@@ -55,12 +55,6 @@ sorafs_cli manifest build \
   --pin-storage-class warm \
   --manifest-out artifacts/site.manifest.to \
   --manifest-json-out artifacts/site.manifest.json
-
-# Mint a Sigstore-backed signature bundle (OIDC token read from SIGSTORE_ID_TOKEN)
-sorafs_cli manifest sign \
-  --manifest artifacts/site.manifest.to \
-  --bundle-out artifacts/site.manifest.bundle.json \
-  --signature-out artifacts/site.manifest.sig
 
 # Submit the manifest to a Torii gateway
 sorafs_cli manifest submit \
@@ -104,9 +98,12 @@ templates.
 - GitHub/GitLab recipes: `docs/examples/sorafs_ci.md`
 - CI-focused CLI notes: `docs/source/sorafs_ci_templates.md`
 
-Both guides demonstrate keyless signing, manifest submission, proof verification,
-and artefact archiving. Extend the example workflows with environment-specific
-steps (stream token provisioning, alias proofs, governance approvals) as needed.
+Both guides demonstrate manifest submission, proof verification, and artefact
+archiving. Release authenticity is applied later to the aggregate release
+manifest through `scripts/release_sorafs_cli.sh`; the governed raw Ed25519 key
+and pinned native verifier are not part of the content-manifest CLI surface.
+Extend the example workflows with environment-specific steps (stream token
+provisioning, alias proofs, governance approvals) as needed.
 
 ## 6. Production considerations
 

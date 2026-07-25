@@ -15,10 +15,13 @@ pub mod gateway;
 mod governance;
 pub mod metering;
 mod moderation;
+pub mod moderation_orchestrator;
 mod orderbook;
 pub mod pdp_provider;
+pub mod pop_credentials;
 pub mod por;
 pub mod potr;
+pub mod proof_outcome_forwarder;
 mod reconciliation;
 pub mod repair;
 mod reserve;
@@ -34,8 +37,14 @@ pub use deal::{
 pub use economics::{
     EconomicsRuntimeError, GovernedPricingAdmissionOutcome, SignedHedgingFeedAdmissionOutcome,
 };
+pub use governance::FilesystemGovernancePublisher;
 pub use moderation::{
-    ModerationAppealDeposit, ModerationBallotAnnouncement, ModerationBallotChallengeDecision,
+    MODERATION_FINALIZED_CHAIN_PROJECTION_VERSION_V1,
+    MODERATION_SCREENING_ADMISSION_RECEIPT_VERSION_V1,
+    MODERATION_SCREENING_AUTHORITY_BUNDLE_VERSION_V1, ModerationAppealDeposit,
+    ModerationAuthenticatedScreeningAdmissionError, ModerationAuthenticatedScreeningEvidenceV1,
+    ModerationAuthenticatedScreeningOutcomeV1, ModerationAuthenticatedScreeningRequestV1,
+    ModerationBallotAnnouncement, ModerationBallotChallengeDecision,
     ModerationBallotChallengeInput, ModerationBallotChallengeKind, ModerationBallotChallengeRecord,
     ModerationBallotChallengeResolution, ModerationBallotCommitOutcome, ModerationBallotEvent,
     ModerationBallotEventKind, ModerationBallotNoShowPlan, ModerationBallotRecord,
@@ -46,14 +55,19 @@ pub use moderation::{
     ModerationEvidenceViewerAuditReport, ModerationEvidenceViewerAuditReportInput,
     ModerationEvidenceViewerError, ModerationEvidenceViewerSessionInput,
     ModerationEvidenceViewerSessionRecord, ModerationEvidenceViewerSnapshot,
-    ModerationModelRegistryError, ModerationModelRegistrySnapshot, ModerationQuarantineObjectError,
-    ModerationQuarantineObjectInput, ModerationQuarantineObjectPayload,
+    ModerationFinalizedCaseProjectionV1, ModerationFinalizedChainProjectionV1,
+    ModerationFinalizedChainSnapshotV1, ModerationFinalizedProjectionError,
+    ModerationModelRegistryError, ModerationModelRegistrySnapshot, ModerationQuarantineKeyWrapper,
+    ModerationQuarantineObjectError, ModerationQuarantineObjectInput,
+    ModerationQuarantineObjectPayload, ModerationQuarantineObjectRangePayload,
     ModerationQuarantineObjectRecord, ModerationQuarantineObjectSnapshot,
     ModerationQuarantineRecord, ModerationQuarantineReleaseInput, ModerationQuarantineReviewInput,
-    ModerationQuarantineState, ModerationReproRegistryRecord, ModerationScreeningError,
+    ModerationQuarantineState, ModerationReproRegistryRecord,
+    ModerationScreeningAdmissionReceiptV1, ModerationScreeningAuthenticationError,
+    ModerationScreeningAuthorityBundleV1, ModerationScreeningAuthorityV1, ModerationScreeningError,
     ModerationScreeningInput, ModerationScreeningOutcome, ModerationScreeningRecord,
     ModerationScreeningSnapshot, ModerationScreeningVerdict, ModerationVoteCounts,
-    local_moderation_panel_roster_hash,
+    local_moderation_panel_roster_hash, verify_authenticated_moderation_screening_v1,
 };
 pub use orderbook::{
     OrderbookBuyerSettlementLedgerEntry, OrderbookCancelOutcome, OrderbookEvent,
@@ -62,14 +76,26 @@ pub use orderbook::{
     local_orderbook_provider_id_for_owner_account,
 };
 pub use pdp_provider::{
-    PdpChallengeEnqueueOutcome, PdpGovernanceArchiveV1, PdpNextChallengeV1, PdpProofBuildError,
+    PDP_STATUS_EXPORT_MAX_RECORDS_V1, PdpChallengeEnqueueOutcome, PdpChallengeLifecycleV1,
+    PdpChallengeStatusV1, PdpGovernanceArchiveV1, PdpNextChallengeV1, PdpProofBuildError,
     PdpProviderProtocol, PdpProviderProtocolError, PdpProviderTelemetrySnapshot,
     PdpRejectionReasonV1, PdpTerminalDecisionV1, PdpTerminalHandoff, PdpTerminalOutcomeV1,
     build_signed_pdp_proof_v1,
 };
 pub use por::{
-    ManifestVrfBundle, ManifestVrfKey, PlannedChallenge, PorChallengePlannerError, PorRandomness,
-    PorTracker, PorTrackerError, PorVerdictStats, build_por_challenge_for_manifest,
+    ManifestVrfBundle, ManifestVrfKey, PlannedChallenge, PorChallengePlannerError,
+    PorProtocolMetricsSnapshot, PorRandomness, PorTracker, PorTrackerError, PorVerdictStats,
+    build_por_challenge_for_manifest,
+};
+pub use potr::{
+    POTR_EXPORT_MAX_RECORDS_V1, POTR_RECEIPT_MAX_CANONICAL_BYTES_V1,
+    POTR_TRACKER_CHECKPOINT_FILE_NAME_V1, PotrReceiptStatusV1, PotrRecordOutcome, PotrTrackerError,
+};
+pub use proof_outcome_forwarder::{
+    PROOF_OUTCOME_OUTBOX_DEFAULT_MAX_ATTEMPTS_V1, PROOF_OUTCOME_OUTBOX_MAX_SCAN_ITEMS_V1,
+    ProofOutcomeDeadLetterReasonV1, ProofOutcomeDeadLetterV1, ProofOutcomeDeliveryStateV1,
+    ProofOutcomeEnqueueResultV1, ProofOutcomeOutbox, ProofOutcomeOutboxError,
+    ProofOutcomeOutboxPolicyV1, ProofOutcomePendingDeliveryV1,
 };
 pub use reserve::{
     ReserveAppealDecision, ReserveAppealOutcome, ReserveAppealRecord, ReserveAppealRequest,
@@ -232,7 +258,6 @@ const MODERATION_SCREENING_DIR: &str = "moderation-screening";
 const MODERATION_SCREENING_SNAPSHOT_FILE: &str = "screening-snapshot.to";
 const MODERATION_QUARANTINE_OBJECT_STORE_DIR: &str = "moderation-quarantine-objects";
 const MODERATION_QUARANTINE_OBJECT_INDEX_FILE: &str = "object-index.to";
-const MODERATION_QUARANTINE_OBJECT_KEY_FILE: &str = "local-seal.key";
 const MODERATION_QUARANTINE_OBJECT_STORE_MAX_DEPTH: usize = 4;
 const MODERATION_EVIDENCE_VIEWER_DIR: &str = "moderation-evidence-viewer";
 const MODERATION_EVIDENCE_VIEWER_SNAPSHOT_FILE: &str = "evidence-viewer-snapshot.to";
@@ -320,14 +345,15 @@ use sorafs_manifest::reputation::signed::{
     decode_signed_reputation_snapshot,
 };
 use sorafs_manifest::{
-    AppealFinanceReconciliationSummaryV1, ManifestV1, OrderCancelV1, OrderRequestV1, OrderSideV1,
-    OrderTierV1, OrderbookRuntimeSnapshotV1, REPUTATION_PROVIDER_INPUT_VERSION_V1,
-    REPUTATION_PROVIDER_METRICS_VERSION_V1, ReconciliationValidationError,
-    ReputationProviderInputV1, ReputationProviderMetricsV1, ReputationReserveStageV1,
-    ReputationScoringEvidenceV1, ReputationSnapshotEventV1, ReputationSnapshotTrustPolicyV1,
-    ReputationSnapshotV1, ReputationWeightsV1, SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1,
-    SORAFS_RECONCILIATION_REPORT_VERSION_V1, SettlementChannelStatusV1, SettlementReceiptV1,
-    SignedReputationSnapshotV1, SoraFsAppealFinanceAccountFlowV1, SoraFsAppealFinanceJurorPayoutV1,
+    AdmissionRecord, AppealFinanceReconciliationSummaryV1, ManifestV1, OrderCancelV1,
+    OrderRequestV1, OrderSideV1, OrderTierV1, OrderbookRuntimeSnapshotV1,
+    REPUTATION_PROVIDER_INPUT_VERSION_V1, REPUTATION_PROVIDER_METRICS_VERSION_V1,
+    ReconciliationValidationError, ReputationProviderInputV1, ReputationProviderMetricsV1,
+    ReputationReserveStageV1, ReputationScoringEvidenceV1, ReputationSnapshotEventV1,
+    ReputationSnapshotTrustPolicyV1, ReputationSnapshotV1, ReputationWeightsV1,
+    SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1, SORAFS_RECONCILIATION_REPORT_VERSION_V1,
+    SettlementChannelStatusV1, SettlementReceiptV1, SignedReputationSnapshotV1,
+    SoraFsAppealFinanceAccountFlowV1, SoraFsAppealFinanceJurorPayoutV1,
     SoraFsAppealFinanceOutcomeV1, SoraFsAppealFinanceReportV1,
     SoraFsAppealFinanceSettlementReceiptV1, SoraFsAppealFinanceWeeklyRollupV1,
     SoraFsModerationBallotGovernanceEventV1, SorafsReconciliationReportV1,
@@ -335,7 +361,7 @@ use sorafs_manifest::{
     capacity::{CapacityTelemetryV1, ReplicationOrderV1},
     deal::{DealSettlementStatusV1, DealSettlementV1, XorQuantity},
     por::{AuditOutcomeV1, AuditVerdictV1, PorChallengeV1, PorProofV1},
-    potr::{PotrReceiptV1, PotrReceiptValidationError},
+    potr::PotrReceiptV1,
     proof_stream::ProofStreamTier,
     repair::{
         GC_AUDIT_BLOCKED_DEAL_ACTIVE_V1, GC_AUDIT_BLOCKED_REPAIR_ACTIVE_V1,
@@ -364,11 +390,14 @@ use thiserror::Error;
 use tokio::sync::broadcast;
 pub use transparency::{
     PrivacyAggregateCycleConfig, PrivacyAggregateCycleWindow, PrivacyAggregateScheduleConfig,
-    PrivacyAggregateSourceEvent, PrivacyAggregateSourceMetric, ProofTokenIssuanceIngestError,
-    TransparencyLedgerIngestError, TransparencyLedgerSourceEntry,
-    TransparencySourceEntryAdapterError, appeal_finance_report_source_entry,
-    appeal_finance_settlement_receipt_source_entry, gar_enforcement_receipt_source_entry,
-    moderation_ballot_governance_event_source_entry,
+    PrivacyAggregateSourceEvent, PrivacyAggregateSourceMetric, PrivacyCompositionBudgetChainV1,
+    PrivacyCompositionBudgetChargeV1, PrivacyCompositionBudgetError,
+    PrivacyCompositionBudgetLedgerV1, PrivacyCompositionBudgetPolicyV1,
+    PrivacyCyclePrfProviderErrorV1, PrivacyCyclePrfProviderV1, PrivacyCyclePrfRequestErrorV1,
+    PrivacyCyclePrfRequestV1, ProofTokenIssuanceIngestError, TransparencyLedgerIngestError,
+    TransparencyLedgerSourceEntry, TransparencySourceEntryAdapterError,
+    appeal_finance_report_source_entry, appeal_finance_settlement_receipt_source_entry,
+    gar_enforcement_receipt_source_entry, moderation_ballot_governance_event_source_entry,
     moderation_evidence_viewer_audit_report_source_entry, proof_token_issuance_from_base64,
     proof_token_issuance_from_frame, reserve_appeal_source_entry,
     reserve_lifecycle_event_source_entry, reserve_lifecycle_policy_source_entry,
@@ -383,13 +412,16 @@ use crate::{
         decode_hedging_checkpoint, decode_pricing_checkpoint, encode_hedging_checkpoint,
         encode_pricing_checkpoint,
     },
-    governance::FilesystemGovernancePublisher,
     metering::{CapacityMeter, MeteringSnapshot, ReplicationUsageSample},
     moderation::{
-        ModerationBallotRuntime, ModerationEvidenceViewerRuntime, ModerationModelRegistry,
+        MODERATION_SCREENING_AUTHORITY_BUNDLE_MAX_BYTES_V1, ModerationBallotRuntime,
+        ModerationEvidenceViewerRuntime, ModerationModelRegistry,
         ModerationQuarantineObjectEnvelopeV1, ModerationQuarantineObjectRuntime,
-        ModerationScreeningRuntime, open_moderation_quarantine_object,
-        seal_moderation_quarantine_object, validate_relative_object_path,
+        ModerationScreeningRuntime, moderation_quarantine_object_relative_path,
+        normalize_moderation_quarantine_object_input, open_moderation_quarantine_object,
+        open_moderation_quarantine_object_range, rewrap_moderation_quarantine_object,
+        seal_moderation_quarantine_object, validate_moderation_quarantine_key_wrapper,
+        validate_quarantine_object_envelope, validate_relative_object_path,
     },
     orderbook::OrderbookRuntime,
     potr::PotrTracker,
@@ -659,10 +691,6 @@ fn moderation_quarantine_object_index_path(data_dir: &Path) -> PathBuf {
     moderation_quarantine_object_store_root(data_dir).join(MODERATION_QUARANTINE_OBJECT_INDEX_FILE)
 }
 
-fn moderation_quarantine_object_key_path(data_dir: &Path) -> PathBuf {
-    moderation_quarantine_object_store_root(data_dir).join(MODERATION_QUARANTINE_OBJECT_KEY_FILE)
-}
-
 fn moderation_evidence_viewer_checkpoint_path(data_dir: &Path) -> PathBuf {
     data_dir
         .join(MODERATION_EVIDENCE_VIEWER_DIR)
@@ -807,10 +835,6 @@ impl LocalCheckpointWriteError {
             error,
             committed: true,
         }
-    }
-
-    fn kind(&self) -> ErrorKind {
-        self.error.kind()
     }
 }
 
@@ -1818,13 +1842,9 @@ pub trait GovernancePublisher: Send + Sync + std::fmt::Debug {
     /// Persist an admission-bound PDP terminal archive to the governance pipeline.
     fn publish_pdp_archive(
         &self,
-        _archive: &PdpGovernanceArchiveV1,
-        _encoded: &[u8],
-    ) -> Result<(), GovernancePublishError> {
-        Err(GovernancePublishError::other(
-            "PDP governance archive publication is not implemented by this publisher",
-        ))
-    }
+        archive: &PdpGovernanceArchiveV1,
+        encoded: &[u8],
+    ) -> Result<(), GovernancePublishError>;
     /// Persist a repair audit event to the governance pipeline.
     fn publish_repair_audit_event(
         &self,
@@ -2166,6 +2186,89 @@ pub trait RepairOrchestrator: Send + Sync + std::fmt::Debug {
     ) -> Result<Vec<RepairChunkPayload>, RepairOrchestratorError>;
 }
 
+/// Runtime-only dependencies supplied by the embedding daemon.
+///
+/// Secret-bearing providers are deliberately absent from [`StorageConfig`].
+/// This container records only opaque service handles and never formats their
+/// implementation state.
+#[derive(Clone, Default)]
+pub struct NodeRuntimeDeps {
+    moderation_quarantine_key_wrapper: Option<Arc<dyn ModerationQuarantineKeyWrapper>>,
+    privacy_cycle_prf_provider: Option<Arc<dyn PrivacyCyclePrfProviderV1>>,
+}
+
+impl std::fmt::Debug for NodeRuntimeDeps {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("NodeRuntimeDeps")
+            .field(
+                "moderation_quarantine_key_wrapper",
+                &self.moderation_quarantine_key_wrapper.is_some(),
+            )
+            .field(
+                "privacy_cycle_prf_provider",
+                &self.privacy_cycle_prf_provider.is_some(),
+            )
+            .finish()
+    }
+}
+
+impl NodeRuntimeDeps {
+    /// Attach the runtime-only PKCS#11/KMS quarantine-key wrapper.
+    #[must_use]
+    pub fn with_moderation_quarantine_key_wrapper(
+        mut self,
+        key_wrapper: Arc<dyn ModerationQuarantineKeyWrapper>,
+    ) -> Self {
+        self.moderation_quarantine_key_wrapper = Some(key_wrapper);
+        self
+    }
+
+    /// Attach the runtime-only threshold-PRF provider used by DP aggregates.
+    #[must_use]
+    pub fn with_privacy_cycle_prf_provider(
+        mut self,
+        provider: Arc<dyn PrivacyCyclePrfProviderV1>,
+    ) -> Self {
+        self.privacy_cycle_prf_provider = Some(provider);
+        self
+    }
+}
+
+#[derive(Clone)]
+struct OpaqueModerationQuarantineKeyWrapper(Arc<dyn ModerationQuarantineKeyWrapper>);
+
+impl std::fmt::Debug for OpaqueModerationQuarantineKeyWrapper {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("ModerationQuarantineKeyWrapper(<runtime-only>)")
+    }
+}
+
+impl std::ops::Deref for OpaqueModerationQuarantineKeyWrapper {
+    type Target = dyn ModerationQuarantineKeyWrapper;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref()
+    }
+}
+
+#[derive(Clone)]
+struct OpaquePrivacyCyclePrfProvider(Arc<dyn PrivacyCyclePrfProviderV1>);
+
+impl std::fmt::Debug for OpaquePrivacyCyclePrfProvider {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("PrivacyCyclePrfProviderV1(<runtime-only>)")
+    }
+}
+
+impl std::ops::Deref for OpaquePrivacyCyclePrfProvider {
+    type Target = dyn PrivacyCyclePrfProviderV1;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref()
+    }
+}
+
 /// Lightweight handle representing the embedded SoraFS storage worker.
 #[derive(Debug, Clone)]
 pub struct NodeHandle {
@@ -2178,6 +2281,7 @@ pub struct NodeHandle {
     schedulers: StorageSchedulersRuntime,
     por: PorTracker,
     potr: PotrTracker,
+    proof_outcome_outbox: ProofOutcomeOutbox,
     por_history: Arc<RwLock<HashMap<PorHistoryKey, PorHistoryEntry>>>,
     storage: Option<Arc<StorageBackend>>,
     pdp_provider: Option<PdpProviderProtocol>,
@@ -2222,25 +2326,28 @@ pub struct NodeHandle {
     moderation_model_registry: Arc<RwLock<ModerationModelRegistry>>,
     moderation_screening_checkpoint_path: Option<PathBuf>,
     moderation_screening: Arc<RwLock<ModerationScreeningRuntime>>,
+    moderation_screening_authority: Arc<RwLock<Option<ModerationScreeningAuthorityV1>>>,
     moderation_quarantine_object_root: Option<PathBuf>,
     moderation_quarantine_object_index_path: Option<PathBuf>,
-    moderation_quarantine_object_key_path: Option<PathBuf>,
+    moderation_quarantine_key_wrapper: Option<OpaqueModerationQuarantineKeyWrapper>,
     moderation_quarantine_objects: Arc<RwLock<ModerationQuarantineObjectRuntime>>,
     moderation_evidence_viewer_checkpoint_path: Option<PathBuf>,
     moderation_evidence_viewer: Arc<RwLock<ModerationEvidenceViewerRuntime>>,
     moderation_checkpoint_path: Option<PathBuf>,
     moderation: Arc<RwLock<ModerationBallotRuntime>>,
+    moderation_finalized_chain_projection: Arc<RwLock<ModerationFinalizedChainProjectionV1>>,
     moderation_events: Arc<RwLock<BoundedEventHistory<ModerationBallotEvent>>>,
     moderation_event_sender: broadcast::Sender<ModerationBallotEvent>,
     transparency_ledger_source_entries:
         Arc<RwLock<BTreeMap<String, TransparencyLedgerSourceEntry>>>,
     privacy_aggregate_source_events: Arc<RwLock<BTreeMap<String, PrivacyAggregateSourceEvent>>>,
     published_privacy_aggregate_cycles: Arc<RwLock<BTreeSet<[u8; 16]>>>,
+    privacy_composition_budget: Arc<RwLock<PrivacyCompositionBudgetLedgerV1>>,
+    privacy_cycle_prf_provider: Option<OpaquePrivacyCyclePrfProvider>,
     published_evidence_viewer_audit_cycles: Arc<RwLock<BTreeSet<[u8; 16]>>>,
 }
 
 type PorHistoryKey = ([u8; 32], [u8; 32]);
-static MODERATION_KEY_CREATE_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Debug, Default, Clone)]
 struct PorHistoryEntry {
@@ -2502,7 +2609,11 @@ fn repair_mutation_binding_digest(
 fn repair_mutation_required_outbox_slots(operation: &str) -> Option<u8> {
     match operation {
         "heartbeat_ticket" => Some(0),
-        "enqueue_report" | "mark_in_progress" | "mark_completed" | "claim_ticket"
+        "enqueue_report"
+        | "enqueue_report_idempotent"
+        | "mark_in_progress"
+        | "mark_completed"
+        | "claim_ticket"
         | "complete_ticket" => Some(1),
         "submit_slash" | "mark_failed" | "fail_ticket" | "run_watchdog" => Some(2),
         _ => None,
@@ -3391,6 +3502,54 @@ fn validate_governance_outbox_entry(
     Ok(())
 }
 
+fn insert_governance_outbox_entry(
+    outbox: &mut GovernanceOutboxRuntime,
+    kind: GovernanceOutboxKindV1,
+    payload_bytes: Vec<u8>,
+    entry_limit: usize,
+    reserved_slots: usize,
+) -> Result<(u64, bool), GovernancePublishError> {
+    let payload_digest = *blake3::hash(&payload_bytes).as_bytes();
+    if let Some(existing) = outbox.entries.values().find(|entry| {
+        entry.kind == kind
+            && entry.payload_digest == payload_digest
+            && entry.payload_bytes == payload_bytes
+    }) {
+        return Ok((existing.sequence, false));
+    }
+    let unreserved_limit = entry_limit.checked_sub(reserved_slots).ok_or_else(|| {
+        GovernancePublishError::other(format!(
+            "governance outbox reservation {reserved_slots} exceeds retention limit {entry_limit}"
+        ))
+    })?;
+    if outbox.entries.len() >= unreserved_limit {
+        return Err(GovernancePublishError::other(format!(
+            "governance outbox retention exhausted: {reserved_slots} of {entry_limit} slots are reserved for durable domain transactions"
+        )));
+    }
+    let sequence = outbox.next_sequence;
+    let next_sequence = sequence
+        .checked_add(1)
+        .ok_or_else(|| GovernancePublishError::other("governance outbox sequence exhausted"))?;
+    let entry = GovernanceOutboxEntryV1 {
+        version: GOVERNANCE_OUTBOX_VERSION_V1,
+        sequence,
+        kind,
+        payload_digest,
+        binding_digest: governance_outbox_binding_digest(
+            GOVERNANCE_OUTBOX_VERSION_V1,
+            sequence,
+            kind,
+            payload_digest,
+        ),
+        payload_bytes,
+    };
+    validate_governance_outbox_entry(&entry)?;
+    outbox.entries.insert(sequence, entry);
+    outbox.next_sequence = next_sequence;
+    Ok((sequence, true))
+}
+
 fn restore_governance_outbox(
     next_sequence: u64,
     entries: Vec<GovernanceOutboxEntryV1>,
@@ -3555,6 +3714,7 @@ struct AuxiliaryRuntimeCheckpointV1 {
     transparency_source_entries: Vec<TransparencyLedgerSourceEntry>,
     privacy_source_events: Vec<PrivacyAggregateSourceEvent>,
     published_privacy_aggregate_cycles: Vec<[u8; 16]>,
+    privacy_composition_budget: PrivacyCompositionBudgetLedgerV1,
     published_evidence_viewer_audit_cycles: Vec<[u8; 16]>,
     governance_outbox_next_sequence: u64,
     governance_outbox_entries: Vec<GovernanceOutboxEntryV1>,
@@ -3646,6 +3806,28 @@ pub enum NodeInitError {
         /// Validation or I/O diagnostic.
         message: String,
     },
+    /// The durable final signed PoTR receipt checkpoint could not be opened or validated.
+    #[error(
+        "failed to initialise SoraFS PoTR receipt checkpoint `{path}`: {message}",
+        path = path.display()
+    )]
+    Potr {
+        /// Configured storage root containing the PoTR checkpoint.
+        path: PathBuf,
+        /// Validation or I/O diagnostic.
+        message: String,
+    },
+    /// The durable proof-outcome transaction outbox could not be opened or validated.
+    #[error(
+        "failed to initialise SoraFS proof-outcome outbox `{path}`: {message}",
+        path = path.display()
+    )]
+    ProofOutcomeOutbox {
+        /// Configured storage root containing the delivery checkpoint.
+        path: PathBuf,
+        /// Validation or I/O diagnostic.
+        message: String,
+    },
     /// A durable runtime checkpoint could not be read, decoded, or validated.
     #[error(
         "failed to restore SoraFS {component} checkpoint `{path}`: {message}",
@@ -3695,6 +3877,36 @@ pub enum NodeInitError {
         /// Validation or I/O diagnostic.
         message: String,
     },
+    /// The config-pinned moderation screening authority bundle could not be
+    /// read, digest-verified, canonically decoded, or validated.
+    #[error(
+        "failed to load SoraFS moderation screening authority bundle `{path}`: {message}",
+        path = path.display()
+    )]
+    ModerationScreeningAuthorityBundle {
+        /// Configured authority bundle path, or a configuration sentinel.
+        path: PathBuf,
+        /// Validation, digest, canonical-codec, or I/O diagnostic.
+        message: String,
+    },
+    /// Authenticated screening was enabled without its runtime-only
+    /// PKCS#11/KMS quarantine-key dependency.
+    #[error(
+        "SoraFS moderation screening requires an injected runtime-only PKCS#11/KMS quarantine key wrapper"
+    )]
+    ModerationQuarantineKeyWrapperUnavailable,
+    /// The injected quarantine-key wrapper exposed an invalid public key handle.
+    #[error("failed to validate the SoraFS moderation quarantine key wrapper: {message}")]
+    ModerationQuarantineKeyWrapperInvalid {
+        /// Stable, payload-free validation detail.
+        message: String,
+    },
+    /// Differential-privacy aggregates were enabled without their runtime-only
+    /// threshold-PRF dependency.
+    #[error(
+        "SoraFS differential-privacy aggregates require an injected runtime-only threshold PRF provider"
+    )]
+    PrivacyCyclePrfProviderUnavailable,
 }
 
 impl NodeInitError {
@@ -3749,6 +3961,53 @@ fn load_hedging_feed_trust_policy(path: &Path) -> Result<HedgingFeedTrustPolicyV
         NodeInitError::HedgingFeedTrustPolicy {
             path: path.to_path_buf(),
             message: error.to_string(),
+        }
+    })
+}
+
+fn load_moderation_screening_authority_bundle(
+    path: &Path,
+    expected_digest: [u8; 32],
+    now_unix: u64,
+) -> Result<ModerationScreeningAuthorityV1, NodeInitError> {
+    let error = |message: String| NodeInitError::ModerationScreeningAuthorityBundle {
+        path: path.to_path_buf(),
+        message,
+    };
+    if !path.is_absolute() {
+        return Err(error(
+            "configured authority bundle path must be absolute".to_owned(),
+        ));
+    }
+    if expected_digest == [0; 32] {
+        return Err(error(
+            "configured authority bundle digest must be non-zero".to_owned(),
+        ));
+    }
+    let bytes = read_trust_policy_file(
+        path,
+        MODERATION_SCREENING_AUTHORITY_BUNDLE_MAX_BYTES_V1,
+        "moderation screening authority bundle",
+    )
+    .map_err(|read_error| error(read_error.to_string()))?;
+    let actual_digest = *blake3::hash(&bytes).as_bytes();
+    if actual_digest != expected_digest {
+        return Err(error(format!(
+            "bundle digest mismatch: expected {}, got {}",
+            hex::encode(expected_digest),
+            hex::encode(actual_digest)
+        )));
+    }
+    let bundle = decode_local_checkpoint_canonical::<ModerationScreeningAuthorityBundleV1>(
+        &bytes,
+        u64::try_from(MODERATION_SCREENING_AUTHORITY_BUNDLE_MAX_BYTES_V1).unwrap_or(u64::MAX),
+        4_096,
+    )
+    .map_err(error)?;
+    bundle.into_authority(now_unix).map_err(|authority_error| {
+        NodeInitError::ModerationScreeningAuthorityBundle {
+            path: path.to_path_buf(),
+            message: authority_error.to_string(),
         }
     })
 }
@@ -3841,6 +4100,13 @@ impl PdpTerminalHandoff for NodeHandle {
                 "encode PDP governance archive handoff: {error}"
             ))
         })?;
+        self.proof_outcome_outbox
+            .enqueue_pdp(archive)
+            .map_err(|error| {
+                pdp_provider::PdpExternalHandoffError(format!(
+                    "persist PDP proof-outcome delivery: {error}"
+                ))
+            })?;
         self.enqueue_governance_outbox(GovernanceOutboxKindV1::PdpArchive, bytes.clone())
             .map_err(|error| pdp_provider::PdpExternalHandoffError(error.to_string()))?;
         self.flush_governance_outbox()
@@ -3860,13 +4126,46 @@ impl PdpTerminalHandoff for NodeHandle {
         let bytes = norito::to_bytes(report).map_err(|error| {
             pdp_provider::PdpExternalHandoffError(format!("encode PDP repair handoff: {error}"))
         })?;
-        self.enqueue_repair_report(report)
+        self.enqueue_repair_report_idempotent(idempotency_key, report)
             .map_err(|error| pdp_provider::PdpExternalHandoffError(error.to_string()))?;
         Ok(pdp_handoff_receipt(
             b"repair",
             idempotency_key,
             *blake3::hash(&bytes).as_bytes(),
         ))
+    }
+}
+
+impl potr::PotrLatencyRepairHandoff for NodeHandle {
+    fn enqueue_proof_outcome(
+        &self,
+        source_identity: [u8; 32],
+        receipt: &PotrReceiptV1,
+        admission_envelope_digest: [u8; 32],
+    ) -> Result<[u8; 32], potr::PotrRepairHandoffError> {
+        if receipt.signed_receipt_digest().ok() != Some(source_identity) {
+            return Err(potr::PotrRepairHandoffError(
+                "PoTR proof-outcome source identity does not match the signed receipt".to_owned(),
+            ));
+        }
+        self.proof_outcome_outbox
+            .enqueue_potr(receipt, admission_envelope_digest)
+            .map(ProofOutcomeEnqueueResultV1::operation_id)
+            .map_err(|error| potr::PotrRepairHandoffError(error.to_string()))
+    }
+
+    fn enqueue_latency_repair(
+        &self,
+        source_identity: [u8; 32],
+        report: &RepairReportV1,
+    ) -> Result<[u8; 32], potr::PotrRepairHandoffError> {
+        self.enqueue_repair_report_idempotent(source_identity, report)
+            .map_err(|error| potr::PotrRepairHandoffError(error.to_string()))?;
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(b"sorafs.potr.repair-acceptance.v1\0");
+        hasher.update(&source_identity);
+        hasher.update(report.ticket_id.0.as_bytes());
+        Ok(*hasher.finalize().as_bytes())
     }
 }
 
@@ -3907,6 +4206,40 @@ impl NodeHandle {
         Self::try_new_with_policies(config, RepairConfig::default(), GcConfig::default())
     }
 
+    /// Construct a new handle with a runtime-only PKCS#11/KMS quarantine-key wrapper.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the wrapper exposes a non-canonical key handle or
+    /// configured durable state cannot be opened, decoded, and authenticated.
+    pub fn try_new_with_quarantine_key_wrapper(
+        config: StorageConfig,
+        key_wrapper: Arc<dyn ModerationQuarantineKeyWrapper>,
+    ) -> Result<Self, NodeInitError> {
+        Self::try_new_with_runtime_deps(
+            config,
+            NodeRuntimeDeps::default().with_moderation_quarantine_key_wrapper(key_wrapper),
+        )
+    }
+
+    /// Construct a new handle with deployment-owned runtime dependencies.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a configured service is missing its runtime
+    /// dependency or durable state cannot be trusted.
+    pub fn try_new_with_runtime_deps(
+        config: StorageConfig,
+        runtime_deps: NodeRuntimeDeps,
+    ) -> Result<Self, NodeInitError> {
+        Self::try_new_with_policies_and_runtime_deps(
+            config,
+            RepairConfig::default(),
+            GcConfig::default(),
+            runtime_deps,
+        )
+    }
+
     /// Construct a new handle with explicit repair/GC policies.
     ///
     /// # Panics
@@ -3934,6 +4267,102 @@ impl NodeHandle {
         repair_config: RepairConfig,
         gc_config: GcConfig,
     ) -> Result<Self, NodeInitError> {
+        Self::try_new_with_policies_and_runtime_deps(
+            config,
+            repair_config,
+            gc_config,
+            NodeRuntimeDeps::default(),
+        )
+    }
+
+    /// Construct a new handle with explicit policies and a runtime-only
+    /// PKCS#11/KMS quarantine-key wrapper.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the wrapper exposes a non-canonical key handle or
+    /// configured durable state cannot be opened, decoded, and authenticated.
+    pub fn try_new_with_policies_and_quarantine_key_wrapper(
+        config: StorageConfig,
+        repair_config: RepairConfig,
+        gc_config: GcConfig,
+        key_wrapper: Arc<dyn ModerationQuarantineKeyWrapper>,
+    ) -> Result<Self, NodeInitError> {
+        Self::try_new_with_policies_and_runtime_deps(
+            config,
+            repair_config,
+            gc_config,
+            NodeRuntimeDeps::default().with_moderation_quarantine_key_wrapper(key_wrapper),
+        )
+    }
+
+    /// Construct a new handle with explicit policies and deployment-owned
+    /// runtime dependencies.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a configured service is missing its runtime
+    /// dependency, a dependency exposes an invalid public handle, or durable
+    /// state cannot be trusted.
+    pub fn try_new_with_policies_and_runtime_deps(
+        config: StorageConfig,
+        repair_config: RepairConfig,
+        gc_config: GcConfig,
+        runtime_deps: NodeRuntimeDeps,
+    ) -> Result<Self, NodeInitError> {
+        let NodeRuntimeDeps {
+            moderation_quarantine_key_wrapper,
+            privacy_cycle_prf_provider,
+        } = runtime_deps;
+        let moderation_screening_authority = if config.moderation_screening_enabled() {
+            if !config.enabled() {
+                return Err(NodeInitError::ModerationScreeningAuthorityBundle {
+                    path: PathBuf::from("<iroha_config>"),
+                    message:
+                        "moderation screening requires the durable SoraFS storage worker to be enabled"
+                            .to_owned(),
+                });
+            }
+            let path = config
+                .moderation_screening_authority_bundle_path()
+                .ok_or_else(|| NodeInitError::ModerationScreeningAuthorityBundle {
+                    path: PathBuf::from("<iroha_config>"),
+                    message: "enabled moderation screening requires an authority bundle path"
+                        .to_owned(),
+                })?;
+            let expected_digest = config
+                .moderation_screening_authority_bundle_digest()
+                .ok_or_else(|| NodeInitError::ModerationScreeningAuthorityBundle {
+                    path: path.clone(),
+                    message:
+                        "enabled moderation screening requires a non-zero configured bundle digest"
+                            .to_owned(),
+                })?;
+            Some(load_moderation_screening_authority_bundle(
+                path,
+                expected_digest,
+                unix_now_secs(),
+            )?)
+        } else {
+            None
+        };
+        if config.moderation_screening_enabled() && moderation_quarantine_key_wrapper.is_none() {
+            return Err(NodeInitError::ModerationQuarantineKeyWrapperUnavailable);
+        }
+        if let Some(key_wrapper) = moderation_quarantine_key_wrapper.as_deref() {
+            validate_moderation_quarantine_key_wrapper(key_wrapper).map_err(|error| {
+                NodeInitError::ModerationQuarantineKeyWrapperInvalid {
+                    message: error.to_string(),
+                }
+            })?;
+        }
+        let privacy_cycle_prf_required = config.privacy_aggregate_schedule().is_some()
+            && config
+                .privacy_aggregate_policy()
+                .is_some_and(config::PrivacyAggregatePolicyConfig::requires_cycle_prf);
+        if privacy_cycle_prf_required && privacy_cycle_prf_provider.is_none() {
+            return Err(NodeInitError::PrivacyCyclePrfProviderUnavailable);
+        }
         let reputation_trust_policy = config
             .reputation_trust_policy_path()
             .map(|path| load_reputation_trust_policy(path))
@@ -4007,6 +4436,44 @@ impl NodeHandle {
         let smoothing = config.smoothing_config();
         let event_history_limit = config.runtime_retention().event_history_limit();
         let state_entry_limit = config.runtime_retention().state_entry_limit();
+        let potr_state_dir = config.data_dir().join("potr-receipts");
+        let potr = storage
+            .as_ref()
+            .map(|_| {
+                PotrTracker::open(
+                    &potr_state_dir,
+                    state_entry_limit,
+                    config.runtime_retention().checkpoint_max_bytes(),
+                )
+                .map_err(|error| NodeInitError::Potr {
+                    path: potr_state_dir.clone(),
+                    message: error.to_string(),
+                })
+            })
+            .transpose()?
+            .unwrap_or_default();
+        let proof_outcome_outbox_state_dir = config.data_dir().join("proof-outcome-forwarder");
+        let proof_outcome_outbox_policy = ProofOutcomeOutboxPolicyV1 {
+            max_pending: state_entry_limit,
+            max_completed: state_entry_limit,
+            max_dead_letters: state_entry_limit,
+            max_attempts: config.runtime_retention().proof_outcome_max_attempts(),
+            checkpoint_max_bytes: config.runtime_retention().checkpoint_max_bytes(),
+        };
+        let proof_outcome_outbox = if storage.is_some() {
+            ProofOutcomeOutbox::open(&proof_outcome_outbox_state_dir, proof_outcome_outbox_policy)
+                .map_err(|error| NodeInitError::ProofOutcomeOutbox {
+                path: proof_outcome_outbox_state_dir.clone(),
+                message: error.to_string(),
+            })?
+        } else {
+            ProofOutcomeOutbox::in_memory(proof_outcome_outbox_policy).map_err(|error| {
+                NodeInitError::ProofOutcomeOutbox {
+                    path: proof_outcome_outbox_state_dir.clone(),
+                    message: error.to_string(),
+                }
+            })?
+        };
         let runtime_checkpoint_initialization = if storage.is_some() {
             Some(inspect_runtime_checkpoint_initialization(
                 config.data_dir(),
@@ -4040,9 +4507,6 @@ impl NodeHandle {
         let moderation_quarantine_object_index_path = storage
             .as_ref()
             .map(|_| moderation_quarantine_object_index_path(config.data_dir()));
-        let moderation_quarantine_object_key_path = storage
-            .as_ref()
-            .map(|_| moderation_quarantine_object_key_path(config.data_dir()));
         let moderation_evidence_viewer_checkpoint_path = storage
             .as_ref()
             .map(|_| moderation_evidence_viewer_checkpoint_path(config.data_dir()));
@@ -4080,7 +4544,8 @@ impl NodeHandle {
             telemetry: Arc::new(RwLock::new(None)),
             schedulers,
             por: PorTracker::with_entry_limit(state_entry_limit),
-            potr: PotrTracker::default(),
+            potr,
+            proof_outcome_outbox,
             por_history: Arc::new(RwLock::new(HashMap::new())),
             storage,
             pdp_provider,
@@ -4134,9 +4599,11 @@ impl NodeHandle {
             moderation_screening: Arc::new(RwLock::new(
                 ModerationScreeningRuntime::with_entry_limit(state_entry_limit),
             )),
+            moderation_screening_authority: Arc::new(RwLock::new(moderation_screening_authority)),
             moderation_quarantine_object_root,
             moderation_quarantine_object_index_path,
-            moderation_quarantine_object_key_path,
+            moderation_quarantine_key_wrapper: moderation_quarantine_key_wrapper
+                .map(OpaqueModerationQuarantineKeyWrapper),
             moderation_quarantine_objects: Arc::new(RwLock::new(
                 ModerationQuarantineObjectRuntime::with_entry_limit(state_entry_limit),
             )),
@@ -4148,11 +4615,19 @@ impl NodeHandle {
             moderation: Arc::new(RwLock::new(ModerationBallotRuntime::with_entry_limit(
                 state_entry_limit,
             ))),
+            moderation_finalized_chain_projection: Arc::new(RwLock::new(
+                ModerationFinalizedChainProjectionV1::with_entry_limit(state_entry_limit),
+            )),
             moderation_events: Arc::new(RwLock::new(BoundedEventHistory::new(event_history_limit))),
             moderation_event_sender,
             transparency_ledger_source_entries: Arc::new(RwLock::new(BTreeMap::new())),
             privacy_aggregate_source_events: Arc::new(RwLock::new(BTreeMap::new())),
             published_privacy_aggregate_cycles: Arc::new(RwLock::new(BTreeSet::new())),
+            privacy_composition_budget: Arc::new(RwLock::new(
+                PrivacyCompositionBudgetLedgerV1::default(),
+            )),
+            privacy_cycle_prf_provider: privacy_cycle_prf_provider
+                .map(OpaquePrivacyCyclePrfProvider),
             published_evidence_viewer_audit_cycles: Arc::new(RwLock::new(BTreeSet::new())),
         };
 
@@ -4205,6 +4680,24 @@ impl NodeHandle {
                         err,
                     )
                 })?;
+            // Resume PDP and PoTR ledger-delivery/repair effects only after
+            // their durable protocol checkpoints, outboxes, and auxiliary
+            // state have been restored. Canonical source identities remain
+            // stable across every replay.
+            if let Some(pdp_provider) = node.pdp_provider.as_ref() {
+                pdp_provider
+                    .resume_handoffs(&node, state_entry_limit)
+                    .map_err(|error| NodeInitError::PdpProvider {
+                        path: pdp_provider_state_dir.clone(),
+                        message: error.to_string(),
+                    })?;
+            }
+            node.potr
+                .resume_terminal_handoffs(&node)
+                .map_err(|error| NodeInitError::Potr {
+                    path: potr_state_dir.clone(),
+                    message: error.to_string(),
+                })?;
             if let Some(dir) = governance_dir.clone() {
                 let publisher = FilesystemGovernancePublisher::try_new(dir.clone())
                     .map_err(|err| NodeInitError::GovernancePublisher(err.to_string()))?;
@@ -4251,6 +4744,115 @@ impl NodeHandle {
     #[must_use]
     pub fn pdp_provider_protocol(&self) -> Option<&PdpProviderProtocol> {
         self.pdp_provider.as_ref()
+    }
+
+    /// Return pending proof-outcome deliveries in stable sequence order.
+    pub fn pending_proof_outcome_deliveries(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<ProofOutcomePendingDeliveryV1>, ProofOutcomeOutboxError> {
+        self.proof_outcome_outbox.pending(limit)
+    }
+
+    /// Return payload-free terminal proof-outcome deliveries for operator reconciliation.
+    pub fn proof_outcome_dead_letters(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<ProofOutcomeDeadLetterV1>, ProofOutcomeOutboxError> {
+        self.proof_outcome_outbox.dead_letters(limit)
+    }
+
+    /// Restore one explicitly selected proof-outcome dead letter for governed replay.
+    pub fn retry_proof_outcome_dead_letter(
+        &self,
+        operation_id: [u8; 32],
+        expected_outcome_digest: [u8; 32],
+    ) -> Result<(), ProofOutcomeOutboxError> {
+        self.proof_outcome_outbox
+            .retry_dead_letter(operation_id, expected_outcome_digest)
+    }
+
+    /// Durably claim one proof outcome for isolated runtime signing.
+    pub fn claim_proof_outcome_for_signing(
+        &self,
+        operation_id: [u8; 32],
+        baseline_finalized_cursor: iroha_data_model::sorafs::proof_ledger::ProofOutcomeFinalizedCursorV1,
+    ) -> Result<ProofOutcomePendingDeliveryV1, ProofOutcomeOutboxError> {
+        self.proof_outcome_outbox
+            .claim_for_signing(operation_id, baseline_finalized_cursor)
+    }
+
+    /// Persist an exact signed proof-outcome transaction before queue exposure.
+    pub fn store_signed_proof_outcome_transaction(
+        &self,
+        operation_id: [u8; 32],
+        transaction: iroha_data_model::transaction::SignedTransaction,
+    ) -> Result<[u8; 32], ProofOutcomeOutboxError> {
+        self.proof_outcome_outbox
+            .store_signed_transaction(operation_id, transaction)
+    }
+
+    /// Release an isolated proof-outcome signing claim after signer failure.
+    pub fn release_proof_outcome_signing_claim(
+        &self,
+        operation_id: [u8; 32],
+    ) -> Result<(), ProofOutcomeOutboxError> {
+        self.proof_outcome_outbox
+            .release_signing_claim(operation_id)
+    }
+
+    /// Mark a durable signed proof-outcome transaction ambiguous before submission.
+    pub fn begin_proof_outcome_submission(
+        &self,
+        operation_id: [u8; 32],
+    ) -> Result<iroha_data_model::transaction::SignedTransaction, ProofOutcomeOutboxError> {
+        self.proof_outcome_outbox.begin_submission(operation_id)
+    }
+
+    /// Record that an exact proof-outcome transaction is pending or applied.
+    pub fn mark_proof_outcome_submitted(
+        &self,
+        operation_id: [u8; 32],
+    ) -> Result<(), ProofOutcomeOutboxError> {
+        self.proof_outcome_outbox.mark_submitted(operation_id)
+    }
+
+    /// Record a proof-outcome queue failure known to precede submission.
+    pub fn mark_proof_outcome_not_submitted(
+        &self,
+        operation_id: [u8; 32],
+    ) -> Result<(), ProofOutcomeOutboxError> {
+        self.proof_outcome_outbox.mark_not_submitted(operation_id)
+    }
+
+    /// Permit retry after finalized absence of the exact proof outcome and transaction.
+    pub fn mark_proof_outcome_finalized_absent(
+        &self,
+        operation_id: [u8; 32],
+        observed_finalized_cursor: iroha_data_model::sorafs::proof_ledger::ProofOutcomeFinalizedCursorV1,
+    ) -> Result<(), ProofOutcomeOutboxError> {
+        self.proof_outcome_outbox
+            .mark_finalized_absent(operation_id, observed_finalized_cursor)
+    }
+
+    /// Reconcile one exact finalized proof outcome.
+    pub fn mark_proof_outcome_finalized(
+        &self,
+        operation_id: [u8; 32],
+        finalized: &iroha_data_model::sorafs::proof_ledger::ProofOutcomeFinalizedRecordV1,
+    ) -> Result<(), ProofOutcomeOutboxError> {
+        self.proof_outcome_outbox
+            .mark_finalized(operation_id, finalized)
+    }
+
+    /// Dead-letter one exact rejected or expired proof-outcome transaction.
+    pub fn mark_proof_outcome_transaction_rejected(
+        &self,
+        operation_id: [u8; 32],
+        observed_finalized_cursor: iroha_data_model::sorafs::proof_ledger::ProofOutcomeFinalizedCursorV1,
+    ) -> Result<(), ProofOutcomeOutboxError> {
+        self.proof_outcome_outbox
+            .mark_transaction_rejected(operation_id, observed_finalized_cursor)
     }
 
     /// Returns a reference to the repair scheduler configuration.
@@ -4903,7 +5505,6 @@ impl NodeHandle {
         payload_bytes: Vec<u8>,
         reservation_use: GovernanceOutboxReservationUse,
     ) -> Result<(u64, bool), GovernancePublishError> {
-        let payload_digest = *blake3::hash(&payload_bytes).as_bytes();
         let repair_reserved_slots = {
             let intents = self.repair_mutation_intents.read().map_err(|_| {
                 GovernancePublishError::other("repair mutation intent lock poisoned")
@@ -4944,45 +5545,13 @@ impl NodeHandle {
             .governance_outbox
             .write()
             .map_err(|_| GovernancePublishError::other("governance outbox lock poisoned"))?;
-        if let Some(existing) = outbox.entries.values().find(|entry| {
-            entry.kind == kind
-                && entry.payload_digest == payload_digest
-                && entry.payload_bytes == payload_bytes
-        }) {
-            return Ok((existing.sequence, false));
-        }
-        let limit = self.config.runtime_retention().state_entry_limit();
-        let unreserved_limit = limit.checked_sub(reserved_slots).ok_or_else(|| {
-            GovernancePublishError::other(format!(
-                "governance outbox reservation {reserved_slots} exceeds retention limit {limit}"
-            ))
-        })?;
-        if outbox.entries.len() >= unreserved_limit {
-            return Err(GovernancePublishError::other(format!(
-                "governance outbox retention exhausted: {reserved_slots} of {limit} slots are reserved for durable domain transactions"
-            )));
-        }
-        let sequence = outbox.next_sequence;
-        let next_sequence = sequence
-            .checked_add(1)
-            .ok_or_else(|| GovernancePublishError::other("governance outbox sequence exhausted"))?;
-        let entry = GovernanceOutboxEntryV1 {
-            version: GOVERNANCE_OUTBOX_VERSION_V1,
-            sequence,
+        insert_governance_outbox_entry(
+            &mut outbox,
             kind,
-            payload_digest,
-            binding_digest: governance_outbox_binding_digest(
-                GOVERNANCE_OUTBOX_VERSION_V1,
-                sequence,
-                kind,
-                payload_digest,
-            ),
             payload_bytes,
-        };
-        validate_governance_outbox_entry(&entry)?;
-        outbox.entries.insert(sequence, entry);
-        outbox.next_sequence = next_sequence;
-        Ok((sequence, true))
+            self.config.runtime_retention().state_entry_limit(),
+            reserved_slots,
+        )
     }
 
     fn enqueue_governance_outbox(
@@ -6244,10 +6813,71 @@ impl NodeHandle {
             .unwrap_or_default()
     }
 
+    /// Return a consistent copy of the durable privacy composition-budget ledger.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the local budget lock is poisoned.
+    pub fn privacy_composition_budget_snapshot(
+        &self,
+    ) -> Result<PrivacyCompositionBudgetLedgerV1, GovernancePublishError> {
+        self.privacy_composition_budget
+            .read()
+            .map_err(|_| GovernancePublishError::other("privacy composition budget poisoned"))
+            .map(|budget| budget.clone())
+    }
+
     /// Return the config-backed privacy aggregate scheduler, when enabled.
     #[must_use]
     pub fn configured_privacy_aggregate_schedule(&self) -> Option<PrivacyAggregateScheduleConfig> {
         self.config.privacy_aggregate_schedule()
+    }
+
+    fn derive_privacy_cycle_prf_output(
+        &self,
+        config: &PrivacyAggregateCycleConfig,
+        window: PrivacyAggregateCycleWindow,
+    ) -> Result<Option<[u8; 32]>, GovernancePublishError> {
+        if config.privacy.per_subject_metric_cap.is_none() {
+            return Ok(None);
+        }
+        let policy_digest = config.policy_digest.ok_or_else(|| {
+            GovernancePublishError::other(
+                "differential-privacy cycle is missing its governed policy digest",
+            )
+        })?;
+        let request = PrivacyCyclePrfRequestV1::new(policy_digest, window).map_err(|_| {
+            GovernancePublishError::other("privacy cycle PRF request binding is invalid")
+        })?;
+        let provider = self.privacy_cycle_prf_provider.as_deref().ok_or_else(|| {
+            GovernancePublishError::other(
+                "runtime threshold PRF provider is unavailable for differential privacy",
+            )
+        })?;
+        let output = provider
+            .derive_cycle_output(&request)
+            .map_err(|error| match error {
+                PrivacyCyclePrfProviderErrorV1::Unavailable => {
+                    GovernancePublishError::other("runtime threshold PRF provider is unavailable")
+                }
+                PrivacyCyclePrfProviderErrorV1::AuthenticationFailed => {
+                    GovernancePublishError::other(
+                        "runtime threshold PRF provider authentication failed",
+                    )
+                }
+                PrivacyCyclePrfProviderErrorV1::RateLimited => {
+                    GovernancePublishError::other("runtime threshold PRF provider rate limited")
+                }
+                PrivacyCyclePrfProviderErrorV1::Internal => {
+                    GovernancePublishError::other("runtime threshold PRF provider internal failure")
+                }
+            })?;
+        if output == [0; 32] {
+            return Err(GovernancePublishError::other(
+                "runtime threshold PRF provider returned an invalid all-zero output",
+            ));
+        }
+        Ok(Some(output))
     }
 
     /// Return the config-backed evidence-viewer audit scheduler, when enabled.
@@ -6264,8 +6894,29 @@ impl NodeHandle {
     /// window, sorted deterministically by source window and aggregate id, then
     /// converted into `PrivacyAggregate` ledger entries before being published
     /// through the configured governance pipeline.
-    pub fn publish_privacy_aggregate_cycle(
+    #[cfg(test)]
+    fn publish_privacy_aggregate_cycle(
         &self,
+        cycle_id: [u8; 16],
+        cycle_start_unix: u64,
+        cycle_end_unix: u64,
+        generated_at_unix: u64,
+        previous_block_hash: Option<[u8; 32]>,
+        aggregates: Vec<ModerationPrivacyAggregateV1>,
+    ) -> Result<ModerationLedgerCyclePublicationV1, GovernancePublishError> {
+        let publication = Self::build_privacy_aggregate_publication(
+            cycle_id,
+            cycle_start_unix,
+            cycle_end_unix,
+            generated_at_unix,
+            previous_block_hash,
+            aggregates,
+        )?;
+        self.publish_transparency_ledger_publication(publication.clone())?;
+        Ok(publication)
+    }
+
+    fn build_privacy_aggregate_publication(
         cycle_id: [u8; 16],
         cycle_start_unix: u64,
         cycle_end_unix: u64,
@@ -6355,7 +7006,6 @@ impl NodeHandle {
                 "build privacy aggregate transparency publication: {err}"
             ))
         })?;
-        self.publish_transparency_ledger_publication(publication.clone())?;
         Ok(publication)
     }
 
@@ -6365,7 +7015,8 @@ impl NodeHandle {
     /// suppression/noise policy from `config`, builds aggregate payloads, and
     /// publishes the resulting transparency cycle through
     /// [`Self::publish_privacy_aggregate_cycle`].
-    pub fn publish_privacy_aggregate_cycle_from_source_events(
+    #[cfg(test)]
+    fn publish_privacy_aggregate_cycle_from_source_events(
         &self,
         cycle_id: [u8; 16],
         cycle_start_unix: u64,
@@ -6373,6 +7024,7 @@ impl NodeHandle {
         generated_at_unix: u64,
         previous_block_hash: Option<[u8; 32]>,
         config: PrivacyAggregateCycleConfig,
+        cycle_prf_output: Option<[u8; 32]>,
     ) -> Result<ModerationLedgerCyclePublicationV1, GovernancePublishError> {
         let events = self
             .privacy_aggregate_source_events
@@ -6390,6 +7042,7 @@ impl NodeHandle {
             cycle_end_unix,
             generated_at_unix,
             &config,
+            cycle_prf_output,
             &events,
         )
         .map_err(|err| {
@@ -6414,11 +7067,12 @@ impl NodeHandle {
     /// structured skip reason when no cycle is due, the latest due cycle is
     /// empty, already published, or every due event-backed cycle is fully
     /// suppressed by privacy policy.
-    pub fn publish_due_privacy_aggregate_cycle_from_source_events(
+    fn publish_due_privacy_aggregate_cycle_from_source_events(
         &self,
         now_unix: u64,
         schedule: PrivacyAggregateScheduleConfig,
         config: PrivacyAggregateCycleConfig,
+        composition_budget: Option<PrivacyCompositionBudgetPolicyV1>,
         previous_block_hash: Option<[u8; 32]>,
     ) -> Result<PrivacyAggregateScheduleOutcome, GovernancePublishError> {
         let _mutation_guard = self.runtime_mutation_lock.lock().map_err(|_| {
@@ -6492,11 +7146,13 @@ impl NodeHandle {
                     "privacy aggregate published-cycle retention exhausted (limit {state_limit})"
                 )));
             }
+            let cycle_prf_output = self.derive_privacy_cycle_prf_output(&config, window)?;
             let aggregates = match transparency::build_privacy_aggregates_from_source_events(
                 window.cycle_start_unix,
                 window.cycle_end_unix,
                 now_unix,
                 &config,
+                cycle_prf_output,
                 &events,
             ) {
                 Ok(aggregates) => aggregates,
@@ -6512,7 +7168,7 @@ impl NodeHandle {
                     )));
                 }
             };
-            let publication = self.publish_privacy_aggregate_cycle(
+            let publication = Self::build_privacy_aggregate_publication(
                 cycle_id,
                 window.cycle_start_unix,
                 window.cycle_end_unix,
@@ -6520,7 +7176,12 @@ impl NodeHandle {
                 previous_block_hash,
                 aggregates,
             )?;
-            self.commit_processed_privacy_cycle(cycle_id, window)?;
+            self.commit_published_privacy_cycle(
+                window,
+                &publication,
+                config.privacy,
+                composition_budget,
+            )?;
             return Ok(PrivacyAggregateScheduleOutcome::Published {
                 window,
                 publication,
@@ -6536,6 +7197,195 @@ impl NodeHandle {
                 cycle_id,
             })
         }
+    }
+
+    fn commit_published_privacy_cycle(
+        &self,
+        window: PrivacyAggregateCycleWindow,
+        publication: &ModerationLedgerCyclePublicationV1,
+        privacy: iroha_data_model::sorafs::transparency::ModerationPrivacyParametersV1,
+        composition_budget: Option<PrivacyCompositionBudgetPolicyV1>,
+    ) -> Result<(), GovernancePublishError> {
+        publication.validate().map_err(|err| {
+            GovernancePublishError::other(format!(
+                "invalid scheduled privacy aggregate publication: {err}"
+            ))
+        })?;
+        let cycle_id = publication.block.cycle_id;
+        if publication.block.cycle_start_unix != window.cycle_start_unix
+            || publication.block.cycle_end_unix != window.cycle_end_unix
+        {
+            return Err(GovernancePublishError::other(
+                "scheduled privacy aggregate publication window mismatch",
+            ));
+        }
+        let encoded = norito::to_bytes(publication).map_err(|err| {
+            GovernancePublishError::other(format!(
+                "encode scheduled privacy aggregate publication: {err}"
+            ))
+        })?;
+        let checkpoint_guard = self.auxiliary_checkpoint_lock.lock().map_err(|_| {
+            GovernancePublishError::other("auxiliary checkpoint transaction lock poisoned")
+        })?;
+        self.ensure_durability_healthy()
+            .map_err(GovernancePublishError::other)?;
+
+        let previous_budget = self
+            .privacy_composition_budget
+            .read()
+            .map_err(|_| GovernancePublishError::other("privacy composition budget poisoned"))?
+            .clone();
+        let previous_published = self
+            .published_privacy_aggregate_cycles
+            .read()
+            .map_err(|_| {
+                GovernancePublishError::other("privacy aggregate published-cycle index poisoned")
+            })?
+            .clone();
+        let previous_events = self
+            .privacy_aggregate_source_events
+            .read()
+            .map_err(|_| GovernancePublishError::other("privacy aggregate event index poisoned"))?
+            .clone();
+        let previous_outbox = self
+            .governance_outbox
+            .read()
+            .map_err(|_| GovernancePublishError::other("governance outbox lock poisoned"))?
+            .clone();
+
+        let mut next_budget = previous_budget.clone();
+        match (
+            privacy.epsilon_numerator,
+            privacy.epsilon_denominator,
+            composition_budget,
+        ) {
+            (Some(numerator), Some(denominator), Some(policy)) => {
+                next_budget
+                    .charge(
+                        policy,
+                        cycle_id,
+                        publication.block.generated_at_unix,
+                        numerator,
+                        denominator,
+                    )
+                    .map_err(|err| {
+                        GovernancePublishError::other(format!(
+                            "charge privacy composition budget: {err}"
+                        ))
+                    })?;
+            }
+            (None, None, _) => {}
+            (Some(_), Some(_), None) => {
+                return Err(GovernancePublishError::other(
+                    "differential-privacy publication requires a governed composition budget",
+                ));
+            }
+            _ => {
+                return Err(GovernancePublishError::other(
+                    "privacy epsilon numerator and denominator must be supplied together",
+                ));
+            }
+        }
+
+        let mut next_published = previous_published.clone();
+        if !next_published.insert(cycle_id) {
+            return Err(GovernancePublishError::other(
+                "privacy aggregate cycle was already committed",
+            ));
+        }
+        let mut next_events = previous_events.clone();
+        next_events.retain(|_, event| {
+            event.occurred_at_unix < window.cycle_start_unix
+                || event.occurred_at_unix >= window.cycle_end_unix
+        });
+        let repair_reserved_slots = {
+            let intents = self.repair_mutation_intents.read().map_err(|_| {
+                GovernancePublishError::other("repair mutation intent lock poisoned")
+            })?;
+            repair_mutation_reserved_outbox_slots(&intents)?
+        };
+        let gc_reserved_slots = {
+            let intents = self
+                .gc_eviction_intents
+                .read()
+                .map_err(|_| GovernancePublishError::other("GC eviction intent lock poisoned"))?;
+            gc_eviction_reserved_outbox_slots(&intents)?
+        };
+        let reserved_slots = repair_reserved_slots
+            .checked_add(gc_reserved_slots)
+            .ok_or_else(|| {
+                GovernancePublishError::other("governance outbox reservation count overflow")
+            })?;
+        let mut next_outbox = previous_outbox.clone();
+        insert_governance_outbox_entry(
+            &mut next_outbox,
+            GovernanceOutboxKindV1::TransparencyLedgerPublication,
+            encoded,
+            self.config.runtime_retention().state_entry_limit(),
+            reserved_slots,
+        )?;
+        self.install_privacy_publication_state(
+            next_budget,
+            next_published,
+            next_events,
+            next_outbox,
+        )?;
+        if let Err(err) = self.persist_auxiliary_runtime_checkpoint_unlocked() {
+            if err.committed {
+                return Err(GovernancePublishError::other(err.to_string()));
+            }
+            if let Err(rollback_err) = self.install_privacy_publication_state(
+                previous_budget,
+                previous_published,
+                previous_events,
+                previous_outbox,
+            ) {
+                self.mark_durability_unhealthy(format!(
+                    "privacy publication precommit failure `{err}` could not be rolled back: {rollback_err}"
+                ));
+                return Err(GovernancePublishError::other(format!(
+                    "{err}; privacy publication rollback failed: {rollback_err}"
+                )));
+            }
+            return Err(GovernancePublishError::other(err.to_string()));
+        }
+        drop(checkpoint_guard);
+        self.flush_governance_outbox()?;
+        Ok(())
+    }
+
+    fn install_privacy_publication_state(
+        &self,
+        budget: PrivacyCompositionBudgetLedgerV1,
+        published: BTreeSet<[u8; 16]>,
+        events: BTreeMap<String, PrivacyAggregateSourceEvent>,
+        outbox: GovernanceOutboxRuntime,
+    ) -> Result<(), GovernancePublishError> {
+        let mut budget_guard = self
+            .privacy_composition_budget
+            .write()
+            .map_err(|_| GovernancePublishError::other("privacy composition budget poisoned"))?;
+        let mut published_guard =
+            self.published_privacy_aggregate_cycles
+                .write()
+                .map_err(|_| {
+                    GovernancePublishError::other(
+                        "privacy aggregate published-cycle index poisoned",
+                    )
+                })?;
+        let mut events_guard = self
+            .privacy_aggregate_source_events
+            .write()
+            .map_err(|_| GovernancePublishError::other("privacy aggregate event index poisoned"))?;
+        let mut outbox_guard = self
+            .governance_outbox
+            .write()
+            .map_err(|_| GovernancePublishError::other("governance outbox lock poisoned"))?;
+        *budget_guard = budget;
+        *published_guard = published;
+        *events_guard = events;
+        *outbox_guard = outbox;
+        Ok(())
     }
 
     fn commit_processed_privacy_cycle(
@@ -6587,22 +7437,31 @@ impl NodeHandle {
 
     /// Publish the next due privacy aggregate cycle using storage configuration.
     ///
-    /// Privacy policy and runtime noise seed material remain explicit runtime
-    /// inputs; the persisted config only controls whether scheduled publication
-    /// is enabled and which cadence is used.
+    /// The complete public policy and composition budget come from
+    /// `iroha_config`; hidden cycle randomness comes exclusively from the
+    /// runtime threshold-PRF provider. Callers may supply only the evaluation
+    /// timestamp and predecessor block hash.
     pub fn publish_due_configured_privacy_aggregate_cycle_from_source_events(
         &self,
         now_unix: u64,
-        config: PrivacyAggregateCycleConfig,
         previous_block_hash: Option<[u8; 32]>,
     ) -> Result<PrivacyAggregateScheduleOutcome, GovernancePublishError> {
         let Some(schedule) = self.configured_privacy_aggregate_schedule() else {
             return Ok(PrivacyAggregateScheduleOutcome::Disabled);
         };
+        let (config, composition_budget) = {
+            let policy = self.config.privacy_aggregate_policy().ok_or_else(|| {
+                GovernancePublishError::other(
+                    "enabled privacy aggregate scheduler is missing its governed policy",
+                )
+            })?;
+            (policy.cycle_config(), policy.composition_budget())
+        };
         self.publish_due_privacy_aggregate_cycle_from_source_events(
             now_unix,
             schedule,
             config,
+            Some(composition_budget),
             previous_block_hash,
         )
     }
@@ -7543,7 +8402,203 @@ impl NodeHandle {
         Ok(())
     }
 
-    /// Record one deterministic local moderation screening result.
+    /// Install or rotate the active externally anchored screening authority.
+    ///
+    /// Reinstalling the byte-identical authority is idempotent. Policies with
+    /// an older issue timestamp, or a different digest at the same timestamp,
+    /// are rejected to prevent in-process rollback/equivocation. Operators must
+    /// reconstruct this non-secret authority from canonical `iroha_config`
+    /// inputs after every restart; it is never accepted from an HTTP request.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the authority lock is poisoned or the candidate
+    /// policy rolls back/equivocates against the active policy.
+    pub fn install_moderation_screening_authority(
+        &self,
+        authority: ModerationScreeningAuthorityV1,
+    ) -> Result<(), ModerationScreeningAuthenticationError> {
+        let mut active = self.moderation_screening_authority.write().map_err(|_| {
+            ModerationScreeningAuthenticationError::AuthorityUnavailable {
+                message: "active authority lock is poisoned".to_owned(),
+            }
+        })?;
+        if let Some(current) = active.as_ref() {
+            if authority.policy_issued_at_unix() < current.policy_issued_at_unix() {
+                return Err(ModerationScreeningAuthenticationError::PolicyRollback {
+                    active_issued_at_unix: current.policy_issued_at_unix(),
+                    candidate_issued_at_unix: authority.policy_issued_at_unix(),
+                });
+            }
+            if authority.policy_issued_at_unix() == current.policy_issued_at_unix()
+                && authority.policy_digest() != current.policy_digest()
+            {
+                return Err(ModerationScreeningAuthenticationError::PolicyEquivocation {
+                    issued_at_unix: authority.policy_issued_at_unix(),
+                });
+            }
+            if current == &authority {
+                return Ok(());
+            }
+        }
+        *active = Some(authority);
+        Ok(())
+    }
+
+    /// Return whether a validated config-authoritative screening bundle is active.
+    #[must_use]
+    pub fn has_moderation_screening_authority(&self) -> bool {
+        self.moderation_screening_authority
+            .read()
+            .is_ok_and(|authority| authority.is_some())
+    }
+
+    /// Return whether authenticated moderation screening was enabled by the
+    /// immutable node configuration used at startup.
+    #[must_use]
+    pub fn moderation_screening_enabled(&self) -> bool {
+        self.config.moderation_screening_enabled()
+    }
+
+    /// Return the reviewed digest of the authority bundle loaded at startup.
+    #[must_use]
+    pub fn moderation_screening_authority_bundle_digest(&self) -> Option<[u8; 32]> {
+        self.config.moderation_screening_authority_bundle_digest()
+    }
+
+    /// Return the active non-secret PKCS#11/KMS quarantine key handle.
+    ///
+    /// The wrapping provider and its credentials remain runtime-only.
+    #[must_use]
+    pub fn moderation_quarantine_key_id(&self) -> Option<&str> {
+        self.moderation_quarantine_key_wrapper
+            .as_deref()
+            .map(ModerationQuarantineKeyWrapper::active_key_id)
+    }
+
+    /// Return whether `candidate` is the exact runtime wrapper retained by this
+    /// node handle.
+    #[must_use]
+    pub fn uses_moderation_quarantine_key_wrapper(
+        &self,
+        candidate: &Arc<dyn ModerationQuarantineKeyWrapper>,
+    ) -> bool {
+        self.moderation_quarantine_key_wrapper
+            .as_ref()
+            .is_some_and(|active| Arc::ptr_eq(&active.0, candidate))
+    }
+
+    /// Return whether the configured privacy policy requires threshold-PRF
+    /// cycle outputs.
+    #[must_use]
+    pub fn privacy_cycle_prf_required(&self) -> bool {
+        self.config.privacy_aggregate_schedule().is_some()
+            && self
+                .config
+                .privacy_aggregate_policy()
+                .is_some_and(config::PrivacyAggregatePolicyConfig::requires_cycle_prf)
+    }
+
+    /// Return whether `candidate` is the exact runtime threshold-PRF provider
+    /// retained by this node.
+    #[must_use]
+    pub fn uses_privacy_cycle_prf_provider(
+        &self,
+        candidate: &Arc<dyn PrivacyCyclePrfProviderV1>,
+    ) -> bool {
+        self.privacy_cycle_prf_provider
+            .as_ref()
+            .is_some_and(|active| Arc::ptr_eq(&active.0, candidate))
+    }
+
+    /// Authenticate and durably record one governed moderation screening result.
+    ///
+    /// The result must be either a canonical runner-signed result under a
+    /// single-signer policy or an exact committee aggregate reconstructed from
+    /// its bounded signed member inventory. The durable snapshot atomically
+    /// binds the idempotency key, authenticated authority digest, and resulting
+    /// screening record so replay under a different key fails closed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if governance signatures, runner authorization,
+    /// subject/evidence bindings, score/verdict consistency, freshness,
+    /// revocation, committee uniqueness/quorum, or replay validation fails, or
+    /// if the authenticated projection cannot be durably committed.
+    pub fn record_authenticated_moderation_screening_result(
+        &self,
+        request: ModerationAuthenticatedScreeningRequestV1,
+        now_unix: u64,
+    ) -> Result<
+        ModerationAuthenticatedScreeningOutcomeV1,
+        ModerationAuthenticatedScreeningAdmissionError,
+    > {
+        let authority = self
+            .moderation_screening_authority
+            .read()
+            .map_err(
+                |_| ModerationScreeningAuthenticationError::AuthorityUnavailable {
+                    message: "active authority lock is poisoned".to_owned(),
+                },
+            )?
+            .clone()
+            .ok_or_else(
+                || ModerationScreeningAuthenticationError::AuthorityUnavailable {
+                    message: "no active governed manifest/policy/anchor bundle is installed"
+                        .to_owned(),
+                },
+            )?;
+        let verified = authority.verify(request, now_unix)?;
+        self.commit_authenticated_moderation_screening(verified)
+    }
+
+    fn commit_authenticated_moderation_screening(
+        &self,
+        verified: moderation::ModerationVerifiedScreeningAdmissionV1,
+    ) -> Result<
+        ModerationAuthenticatedScreeningOutcomeV1,
+        ModerationAuthenticatedScreeningAdmissionError,
+    > {
+        let _mutation_guard = self
+            .runtime_mutation_lock
+            .lock()
+            .map_err(|_| ModerationScreeningError::StateLockPoisoned)?;
+        self.ensure_durability_healthy()
+            .map_err(|message| ModerationScreeningError::Checkpoint { message })?;
+        let mut runtime = self
+            .moderation_screening
+            .write()
+            .map_err(|_| ModerationScreeningError::StateLockPoisoned)?;
+        let previous = runtime.snapshot();
+        let outcome = runtime.record_authenticated_screening(verified)?;
+        let committed = runtime.snapshot();
+        if let Err(err) = self.persist_moderation_screening_snapshot(&committed) {
+            if err.committed {
+                return Err(ModerationScreeningError::Checkpoint {
+                    message: err.to_string(),
+                }
+                .into());
+            }
+            if let Err(rollback) = runtime.restore_snapshot(previous) {
+                let message = self.record_unrecoverable_rollback(
+                    "failed to roll back authenticated moderation screening checkpoint failure",
+                    rollback,
+                );
+                return Err(ModerationScreeningError::Checkpoint { message }.into());
+            }
+            return Err(ModerationScreeningError::Checkpoint {
+                message: err.to_string(),
+            }
+            .into());
+        }
+        Ok(outcome)
+    }
+
+    /// Record one deterministic local moderation screening projection.
+    ///
+    /// This unsigned projection hook exists for tests and development tooling.
+    /// Production request handlers must use
+    /// [`Self::record_authenticated_moderation_screening_result`].
     ///
     /// `quarantine` and `escalate` verdicts also create a pending quarantine
     /// queue record. Successful updates are persisted to the local checkpoint
@@ -7553,7 +8608,8 @@ impl NodeHandle {
     ///
     /// Returns an error if the input is invalid, the screening id conflicts
     /// with existing local state, or the runtime lock is poisoned.
-    pub fn record_moderation_screening_result(
+    #[cfg(test)]
+    fn record_moderation_screening_result(
         &self,
         input: ModerationScreeningInput,
     ) -> Result<ModerationScreeningOutcome, ModerationScreeningError> {
@@ -7780,10 +8836,7 @@ impl NodeHandle {
             .moderation_quarantine_object_root
             .as_ref()
             .ok_or(ModerationQuarantineObjectError::StorageDisabled)?;
-        let key_path = self
-            .moderation_quarantine_object_key_path
-            .as_ref()
-            .ok_or(ModerationQuarantineObjectError::StorageDisabled)?;
+        let input = normalize_moderation_quarantine_object_input(input)?;
         let quarantine = self.moderation_quarantine_record_for_object(&input.quarantine_id)?;
         let payload_digest = *blake3::hash(&input.payload).as_bytes();
         if payload_digest != quarantine.subject_digest {
@@ -7793,61 +8846,36 @@ impl NodeHandle {
                 actual_digest_hex: hex::encode(payload_digest),
             });
         }
+        let key_wrapper = self
+            .moderation_quarantine_key_wrapper
+            .as_deref()
+            .ok_or(ModerationQuarantineObjectError::KeyWrapperUnavailable)?;
 
         let mut objects = self
             .moderation_quarantine_objects
             .write()
             .map_err(|_| ModerationQuarantineObjectError::StateLockPoisoned)?;
         let previous = objects.snapshot();
-        objects.ensure_insert_capacity(&input.quarantine_id)?;
-        let local_key = if previous.objects.is_empty() {
-            load_or_create_moderation_quarantine_object_key(key_path)?
-        } else {
-            load_moderation_quarantine_object_key(key_path)?
-        };
-        let (record, envelope_bytes) = seal_moderation_quarantine_object(input, local_key)?;
-        let envelope_path = self.resolve_moderation_quarantine_object_path(root, &record)?;
-        if let Some(existing) = objects.get(&record.quarantine_id) {
-            if existing != record {
-                return Err(ModerationQuarantineObjectError::ConflictingObject {
-                    quarantine_id_hex: hex::encode(record.quarantine_id),
-                });
-            }
-            let existing_bytes = read_local_checkpoint_bounded(
-                &envelope_path,
-                self.config.runtime_retention().checkpoint_max_bytes(),
-            )
-            .map_err(|err| ModerationQuarantineObjectError::Io {
-                path: envelope_path.display().to_string(),
-                message: err.to_string(),
-            })?
-            .ok_or_else(|| ModerationQuarantineObjectError::MissingObject {
-                quarantine_id_hex: hex::encode(record.quarantine_id),
-            })?;
-            let existing_envelope =
-                norito::decode_from_bytes::<ModerationQuarantineObjectEnvelopeV1>(&existing_bytes)
-                    .map_err(|err| ModerationQuarantineObjectError::Codec {
-                        message: err.to_string(),
-                    })?;
-            if norito::to_bytes(&existing_envelope).map_err(|err| {
-                ModerationQuarantineObjectError::Codec {
-                    message: err.to_string(),
-                }
-            })? != existing_bytes
-            {
-                return Err(ModerationQuarantineObjectError::AuthenticationFailed {
-                    quarantine_id_hex: hex::encode(record.quarantine_id),
-                });
-            }
+        if let Some(existing) = objects.get(&input.quarantine_id) {
+            let (_, existing_envelope, _) =
+                self.read_moderation_quarantine_object_envelope(root, &existing)?;
             let plaintext =
-                open_moderation_quarantine_object(existing_envelope, &existing, local_key)?;
-            if *blake3::hash(&plaintext).as_bytes() != existing.payload_digest {
-                return Err(ModerationQuarantineObjectError::AuthenticationFailed {
-                    quarantine_id_hex: hex::encode(record.quarantine_id),
+                open_moderation_quarantine_object(&existing_envelope, &existing, key_wrapper)?;
+            if existing.payload_digest != payload_digest
+                || existing.captured_at_unix != input.captured_at_unix
+                || existing.content_type.as_deref() != input.content_type.as_deref()
+                || existing.notes.as_deref() != input.notes.as_deref()
+                || plaintext.as_slice() != input.payload.as_slice()
+            {
+                return Err(ModerationQuarantineObjectError::ConflictingObject {
+                    quarantine_id_hex: hex::encode(input.quarantine_id),
                 });
             }
             return Ok(existing);
         }
+        objects.ensure_insert_capacity(&input.quarantine_id)?;
+        let (record, envelope_bytes) = seal_moderation_quarantine_object(input, key_wrapper)?;
+        let envelope_path = self.resolve_moderation_quarantine_object_path(root, &record)?;
         match fs::symlink_metadata(&envelope_path) {
             Ok(_) => {
                 return Err(ModerationQuarantineObjectError::ConflictingObject {
@@ -7944,10 +8972,10 @@ impl NodeHandle {
             .moderation_quarantine_object_root
             .as_ref()
             .ok_or(ModerationQuarantineObjectError::StorageDisabled)?;
-        let key_path = self
-            .moderation_quarantine_object_key_path
-            .as_ref()
-            .ok_or(ModerationQuarantineObjectError::StorageDisabled)?;
+        let key_wrapper = self
+            .moderation_quarantine_key_wrapper
+            .as_deref()
+            .ok_or(ModerationQuarantineObjectError::KeyWrapperUnavailable)?;
         let quarantine = self.moderation_quarantine_record_for_object(&quarantine_id)?;
         let record = self
             .moderation_quarantine_objects
@@ -7957,31 +8985,136 @@ impl NodeHandle {
             .ok_or_else(|| ModerationQuarantineObjectError::MissingObject {
                 quarantine_id_hex: hex::encode(quarantine_id),
             })?;
-        let envelope_path = self.resolve_moderation_quarantine_object_path(root, &record)?;
-        let envelope_bytes = read_local_checkpoint_bounded(
-            &envelope_path,
-            self.config.runtime_retention().checkpoint_max_bytes(),
-        )
-        .map_err(|err| ModerationQuarantineObjectError::Io {
-            path: envelope_path.display().to_string(),
-            message: err.to_string(),
-        })?
-        .ok_or_else(|| ModerationQuarantineObjectError::MissingObject {
-            quarantine_id_hex: hex::encode(quarantine_id),
-        })?;
-        let envelope =
-            norito::decode_from_bytes::<ModerationQuarantineObjectEnvelopeV1>(&envelope_bytes)
-                .map_err(|err| ModerationQuarantineObjectError::Codec {
-                    message: err.to_string(),
-                })?;
-        let local_key = load_moderation_quarantine_object_key(key_path)?;
-        let payload = open_moderation_quarantine_object(envelope, &record, local_key)?;
+        let (_, envelope, _) = self.read_moderation_quarantine_object_envelope(root, &record)?;
+        let payload = open_moderation_quarantine_object(&envelope, &record, key_wrapper)?;
         if *blake3::hash(&payload).as_bytes() != quarantine.subject_digest {
             return Err(ModerationQuarantineObjectError::AuthenticationFailed {
                 quarantine_id_hex: hex::encode(quarantine_id),
             });
         }
         Ok(ModerationQuarantineObjectPayload { record, payload })
+    }
+
+    /// Read and authenticate an inclusive-exclusive plaintext byte range.
+    ///
+    /// Only ciphertext chunks intersecting `start..end` are decrypted. Each
+    /// returned byte is independently authenticated against the immutable
+    /// object metadata, chunk index, offset, and length.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the range is invalid, storage or the runtime
+    /// PKCS#11/KMS wrapper is unavailable, the object is missing, or any
+    /// envelope/chunk authentication check fails.
+    pub fn read_moderation_quarantine_object_range(
+        &self,
+        quarantine_id: [u8; 16],
+        start: u64,
+        end: u64,
+    ) -> Result<ModerationQuarantineObjectRangePayload, ModerationQuarantineObjectError> {
+        let root = self
+            .moderation_quarantine_object_root
+            .as_ref()
+            .ok_or(ModerationQuarantineObjectError::StorageDisabled)?;
+        let key_wrapper = self
+            .moderation_quarantine_key_wrapper
+            .as_deref()
+            .ok_or(ModerationQuarantineObjectError::KeyWrapperUnavailable)?;
+        self.moderation_quarantine_record_for_object(&quarantine_id)?;
+        let record = self
+            .moderation_quarantine_objects
+            .read()
+            .map_err(|_| ModerationQuarantineObjectError::StateLockPoisoned)?
+            .get(&quarantine_id)
+            .ok_or_else(|| ModerationQuarantineObjectError::MissingObject {
+                quarantine_id_hex: hex::encode(quarantine_id),
+            })?;
+        let (_, envelope, _) = self.read_moderation_quarantine_object_envelope(root, &record)?;
+        let payload =
+            open_moderation_quarantine_object_range(&envelope, &record, key_wrapper, start..end)?;
+        Ok(ModerationQuarantineObjectRangePayload {
+            record,
+            start,
+            end,
+            payload,
+        })
+    }
+
+    /// Rewrap one object's DEK under the wrapper's current active key.
+    ///
+    /// The injected wrapper must remain able to unwrap the historical key
+    /// handle stored in the object envelope. Ciphertext chunks, object id, and
+    /// the durable index stay byte-identical; only the context-bound wrapped
+    /// DEK and its non-secret key handle are atomically replaced.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if storage or the runtime PKCS#11/KMS wrapper is
+    /// unavailable, the object is missing, old/new key operations fail, the
+    /// replacement cannot be authenticated, or the atomic write fails.
+    pub fn rewrap_moderation_quarantine_object_dek(
+        &self,
+        quarantine_id: [u8; 16],
+    ) -> Result<ModerationQuarantineObjectRecord, ModerationQuarantineObjectError> {
+        let _mutation_guard = self
+            .runtime_mutation_lock
+            .lock()
+            .map_err(|_| ModerationQuarantineObjectError::StateLockPoisoned)?;
+        self.ensure_durability_healthy().map_err(|message| {
+            ModerationQuarantineObjectError::Io {
+                path: "durability-state".to_owned(),
+                message,
+            }
+        })?;
+        let root = self
+            .moderation_quarantine_object_root
+            .as_ref()
+            .ok_or(ModerationQuarantineObjectError::StorageDisabled)?;
+        let key_wrapper = self
+            .moderation_quarantine_key_wrapper
+            .as_deref()
+            .ok_or(ModerationQuarantineObjectError::KeyWrapperUnavailable)?;
+        self.moderation_quarantine_record_for_object(&quarantine_id)?;
+        let record = self
+            .moderation_quarantine_objects
+            .read()
+            .map_err(|_| ModerationQuarantineObjectError::StateLockPoisoned)?
+            .get(&quarantine_id)
+            .ok_or_else(|| ModerationQuarantineObjectError::MissingObject {
+                quarantine_id_hex: hex::encode(quarantine_id),
+            })?;
+        let (envelope_path, envelope, original_bytes) =
+            self.read_moderation_quarantine_object_envelope(root, &record)?;
+        let (replacement_record, replacement_bytes) =
+            rewrap_moderation_quarantine_object(&envelope, &record, key_wrapper, key_wrapper)?;
+        if replacement_record != record {
+            return Err(ModerationQuarantineObjectError::InvalidSnapshot {
+                message: "DEK rewrap changed immutable object index metadata".to_owned(),
+            });
+        }
+        if replacement_bytes == original_bytes {
+            return Ok(record);
+        }
+        let replacement_envelope =
+            norito::decode_from_bytes::<ModerationQuarantineObjectEnvelopeV1>(&replacement_bytes)
+                .map_err(|error| ModerationQuarantineObjectError::Codec {
+                message: error.to_string(),
+            })?;
+        open_moderation_quarantine_object(&replacement_envelope, &replacement_record, key_wrapper)?;
+        self.finish_local_checkpoint_write(
+            "moderation quarantine object DEK rewrap",
+            &envelope_path,
+            write_local_checkpoint_atomic_bounded(
+                &envelope_path,
+                &replacement_bytes,
+                self.config.runtime_retention().checkpoint_max_bytes(),
+            ),
+        )
+        .map_err(|error| ModerationQuarantineObjectError::Io {
+            path: envelope_path.display().to_string(),
+            message: error.to_string(),
+        })?;
+        Ok(record)
     }
 
     /// Return a deterministic snapshot of the local quarantine object index.
@@ -8873,6 +10006,48 @@ impl NodeHandle {
             .map_or_else(|_| Vec::new(), |moderation| moderation.ballots())
     }
 
+    /// Atomically rebuild the authoritative local moderation read projection
+    /// from one complete finalized-chain snapshot.
+    ///
+    /// The snapshot is validated before the prior projection is replaced. A
+    /// fork rollback therefore removes records absent from the replacement
+    /// view instead of mixing observations from two chain anchors.
+    pub fn rebuild_finalized_moderation_projection(
+        &self,
+        snapshot: ModerationFinalizedChainSnapshotV1,
+    ) -> Result<(), ModerationFinalizedProjectionError> {
+        self.moderation_finalized_chain_projection
+            .write()
+            .map_err(|_| ModerationFinalizedProjectionError::InvalidSnapshot {
+                message: "finalized moderation projection lock is poisoned".to_owned(),
+            })?
+            .rebuild(snapshot)
+    }
+
+    /// Return the finalized chain anchor backing authoritative moderation
+    /// reads.
+    #[must_use]
+    pub fn finalized_moderation_anchor(&self) -> Option<(u64, [u8; 32])> {
+        self.moderation_finalized_chain_projection
+            .read()
+            .ok()
+            .and_then(|projection| projection.finalized_anchor())
+    }
+
+    /// Return one authoritative case/outcome pair projected from finalized
+    /// chain state.
+    #[must_use]
+    pub fn finalized_moderation_case(
+        &self,
+        case_id: &str,
+        round_id: &str,
+    ) -> Option<ModerationFinalizedCaseProjectionV1> {
+        self.moderation_finalized_chain_projection
+            .read()
+            .ok()
+            .and_then(|projection| projection.case(case_id, round_id).cloned())
+    }
+
     /// Return a deterministic local SoraFS moderation ballot snapshot.
     #[must_use]
     pub fn moderation_ballot_snapshot(&self) -> ModerationBallotSnapshot {
@@ -9548,10 +10723,6 @@ impl NodeHandle {
             .moderation_quarantine_object_index_path
             .as_ref()
             .expect("storage-backed node has a quarantine index path");
-        let key_path = self
-            .moderation_quarantine_object_key_path
-            .as_ref()
-            .expect("storage-backed node has a quarantine key path");
         let snapshot = self
             .moderation_quarantine_objects
             .read()
@@ -9563,27 +10734,15 @@ impl NodeHandle {
                 )
             })?
             .snapshot();
-        let key = match read_local_checkpoint_bounded(key_path, 32).map_err(|err| {
-            NodeInitError::checkpoint("moderation quarantine object key", key_path, err)
-        })? {
-            Some(bytes) => Some(
-                decode_moderation_quarantine_object_key(key_path, bytes).map_err(|err| {
-                    NodeInitError::checkpoint("moderation quarantine object key", key_path, err)
-                })?,
-            ),
-            None if snapshot.objects.is_empty() => None,
-            None => {
-                return Err(NodeInitError::checkpoint(
-                    "moderation quarantine object key",
-                    key_path,
-                    "sealing key is missing while indexed objects exist",
-                ));
-            }
-        };
-        let mut expected_files = BTreeSet::from([index_path.clone()]);
-        if key.is_some() {
-            expected_files.insert(key_path.clone());
+        let key_wrapper = self.moderation_quarantine_key_wrapper.as_deref();
+        if !snapshot.objects.is_empty() && key_wrapper.is_none() {
+            return Err(NodeInitError::checkpoint(
+                "moderation quarantine key wrapper",
+                root,
+                "runtime PKCS#11/KMS key wrapper is missing while indexed objects exist",
+            ));
         }
+        let mut expected_files = BTreeSet::from([index_path.clone()]);
         for record in &snapshot.objects {
             let envelope_path = self
                 .resolve_moderation_quarantine_object_path(root, record)
@@ -9633,9 +10792,9 @@ impl NodeHandle {
                 ));
             }
             let payload = open_moderation_quarantine_object(
-                envelope,
+                &envelope,
                 record,
-                key.expect("non-empty object index requires a loaded sealing key"),
+                key_wrapper.expect("non-empty object index requires a runtime key wrapper"),
             )
             .map_err(|err| {
                 NodeInitError::checkpoint(
@@ -9672,6 +10831,29 @@ impl NodeHandle {
         collect_secure_object_store_files(root, root, 0, file_limit, &mut actual_files).map_err(
             |err| NodeInitError::checkpoint("moderation quarantine object store", root, err),
         )?;
+        let orphan_files = actual_files
+            .difference(&expected_files)
+            .cloned()
+            .collect::<Vec<_>>();
+        for orphan_path in orphan_files {
+            if !self
+                .recover_unindexed_moderation_quarantine_envelope(root, &orphan_path)
+                .map_err(|error| {
+                    NodeInitError::checkpoint(
+                        "moderation quarantine object store",
+                        &orphan_path,
+                        error,
+                    )
+                })?
+            {
+                return Err(NodeInitError::checkpoint(
+                    "moderation quarantine object store",
+                    &orphan_path,
+                    "unindexed object-store file is not a canonical crash orphan",
+                ));
+            }
+            actual_files.remove(&orphan_path);
+        }
         if actual_files != expected_files {
             let unexpected = actual_files
                 .difference(&expected_files)
@@ -9922,6 +11104,11 @@ impl NodeHandle {
             .iter()
             .copied()
             .collect();
+        let privacy_composition_budget = self
+            .privacy_composition_budget
+            .read()
+            .map_err(|_| GovernancePublishError::other("privacy composition budget poisoned"))?
+            .clone();
         let published_evidence_viewer_audit_cycles = self
             .published_evidence_viewer_audit_cycles
             .read()
@@ -9956,6 +11143,7 @@ impl NodeHandle {
             transparency_source_entries,
             privacy_source_events,
             published_privacy_aggregate_cycles,
+            privacy_composition_budget,
             published_evidence_viewer_audit_cycles,
             governance_outbox_next_sequence,
             governance_outbox_entries,
@@ -10673,6 +11861,22 @@ impl NodeHandle {
             .published_privacy_aggregate_cycles
             .into_iter()
             .collect::<BTreeSet<_>>();
+        let privacy_composition_budget = checkpoint.privacy_composition_budget;
+        privacy_composition_budget.validate().map_err(|err| {
+            GovernancePublishError::other(format!(
+                "invalid privacy composition budget in auxiliary checkpoint: {err}"
+            ))
+        })?;
+        if privacy_composition_budget
+            .chains
+            .iter()
+            .flat_map(|chain| chain.charges.iter())
+            .any(|charge| !privacy_cycles.contains(&charge.cycle_id))
+        {
+            return Err(GovernancePublishError::other(
+                "privacy composition budget charge references an unpublished cycle",
+            ));
+        }
         let evidence_cycles = checkpoint
             .published_evidence_viewer_audit_cycles
             .into_iter()
@@ -10987,6 +12191,11 @@ impl NodeHandle {
             .write()
             .map_err(|_| GovernancePublishError::other("privacy cycle index poisoned"))? =
             privacy_cycles;
+        *self
+            .privacy_composition_budget
+            .write()
+            .map_err(|_| GovernancePublishError::other("privacy composition budget poisoned"))? =
+            privacy_composition_budget;
         *self
             .published_evidence_viewer_audit_cycles
             .write()
@@ -12234,6 +13443,98 @@ impl NodeHandle {
         validate_relative_object_path(&record.envelope_path)
             .map_err(|message| ModerationQuarantineObjectError::InvalidSnapshot { message })?;
         Ok(root.join(&record.envelope_path))
+    }
+
+    fn read_moderation_quarantine_object_envelope(
+        &self,
+        root: &Path,
+        record: &ModerationQuarantineObjectRecord,
+    ) -> Result<
+        (PathBuf, ModerationQuarantineObjectEnvelopeV1, Vec<u8>),
+        ModerationQuarantineObjectError,
+    > {
+        let envelope_path = self.resolve_moderation_quarantine_object_path(root, record)?;
+        let envelope_bytes = read_local_checkpoint_bounded(
+            &envelope_path,
+            self.config.runtime_retention().checkpoint_max_bytes(),
+        )
+        .map_err(|error| ModerationQuarantineObjectError::Io {
+            path: envelope_path.display().to_string(),
+            message: error.to_string(),
+        })?
+        .ok_or_else(|| ModerationQuarantineObjectError::MissingObject {
+            quarantine_id_hex: hex::encode(record.quarantine_id),
+        })?;
+        let envelope =
+            norito::decode_from_bytes::<ModerationQuarantineObjectEnvelopeV1>(&envelope_bytes)
+                .map_err(|error| ModerationQuarantineObjectError::Codec {
+                    message: error.to_string(),
+                })?;
+        let canonical = norito::to_bytes(&envelope).map_err(|error| {
+            ModerationQuarantineObjectError::Codec {
+                message: error.to_string(),
+            }
+        })?;
+        if canonical != envelope_bytes {
+            return Err(ModerationQuarantineObjectError::AuthenticationFailed {
+                quarantine_id_hex: hex::encode(record.quarantine_id),
+            });
+        }
+        Ok((envelope_path, envelope, envelope_bytes))
+    }
+
+    fn recover_unindexed_moderation_quarantine_envelope(
+        &self,
+        root: &Path,
+        path: &Path,
+    ) -> Result<bool, ModerationQuarantineObjectError> {
+        let bytes = read_local_checkpoint_bounded(
+            path,
+            self.config.runtime_retention().checkpoint_max_bytes(),
+        )
+        .map_err(|error| ModerationQuarantineObjectError::Io {
+            path: path.display().to_string(),
+            message: error.to_string(),
+        })?
+        .ok_or_else(|| ModerationQuarantineObjectError::Io {
+            path: path.display().to_string(),
+            message: "unindexed envelope disappeared during startup audit".to_owned(),
+        })?;
+        let envelope =
+            match norito::decode_from_bytes::<ModerationQuarantineObjectEnvelopeV1>(&bytes) {
+                Ok(envelope) => envelope,
+                Err(_) => return Ok(false),
+            };
+        let canonical = norito::to_bytes(&envelope).map_err(|error| {
+            ModerationQuarantineObjectError::Codec {
+                message: error.to_string(),
+            }
+        })?;
+        if canonical != bytes {
+            return Ok(false);
+        }
+        if validate_quarantine_object_envelope(&envelope).is_err() {
+            return Ok(false);
+        }
+        let expected_path = root.join(moderation_quarantine_object_relative_path(
+            envelope.quarantine_id,
+            envelope.object_id,
+        ));
+        if expected_path != path {
+            return Ok(false);
+        }
+        remove_local_checkpoint_file_durably(path).map_err(|error| {
+            ModerationQuarantineObjectError::Io {
+                path: path.display().to_string(),
+                message: format!("remove unindexed crash-recovery envelope: {error}"),
+            }
+        })?;
+        iroha_logger::warn!(
+            quarantine_id = %hex::encode(envelope.quarantine_id),
+            object_id = %hex::encode(envelope.object_id),
+            "removed unindexed moderation quarantine envelope left by an interrupted commit"
+        );
+        Ok(true)
     }
 
     fn validate_orderbook_event_checkpoint(
@@ -14436,6 +15737,32 @@ impl NodeHandle {
         Ok(update.record)
     }
 
+    /// Enqueue one subsystem-authenticated repair report with a stable source identity.
+    ///
+    /// Exact replays return the original task. Reusing `source_identity` for a
+    /// different canonical report fails closed.
+    pub fn enqueue_repair_report_idempotent(
+        &self,
+        source_identity: [u8; 32],
+        report: &RepairReportV1,
+    ) -> Result<RepairTaskRecordV1, RepairSchedulerError> {
+        let mut material = Vec::from(source_identity);
+        material.extend(norito::to_bytes(report).map_err(|err| {
+            Self::repair_durability_error(format!(
+                "encode idempotent repair report mutation: {err}"
+            ))
+        })?);
+        let update = self.run_repair_task_mutation(
+            std::slice::from_ref(&report.ticket_id),
+            "enqueue_report_idempotent",
+            &material,
+            |repair| {
+                repair.enqueue_repair_report_idempotent_with_event(source_identity, report.clone())
+            },
+        )?;
+        Ok(update.record)
+    }
+
     /// Record a signed repair auditor request nonce for replay protection.
     pub fn record_repair_auditor_nonce(
         &self,
@@ -15893,6 +17220,12 @@ impl NodeHandle {
         Ok(())
     }
 
+    /// Return process-local PoR latency, VRF, and seed-binding metrics.
+    #[must_use]
+    pub fn por_protocol_metrics(&self) -> PorProtocolMetricsSnapshot {
+        self.por.protocol_metrics()
+    }
+
     /// Record an audit verdict and update telemetry counters accordingly.
     pub fn record_por_verdict(
         &self,
@@ -16066,10 +17399,11 @@ impl NodeHandle {
     pub fn record_potr_receipt(
         &self,
         receipt: PotrReceiptV1,
-    ) -> Result<(), PotrReceiptValidationError> {
-        receipt.validate()?;
-        self.potr.record_receipt(receipt);
-        Ok(())
+        gateway_public_key: &[u8; 32],
+        admission: &AdmissionRecord,
+    ) -> Result<PotrRecordOutcome, PotrTrackerError> {
+        self.potr
+            .record_receipt(receipt, gateway_public_key, admission, self)
     }
 
     /// Retrieve PoTR receipts matching the manifest/provider filters.
@@ -16079,8 +17413,34 @@ impl NodeHandle {
         manifest_digest: &[u8; 32],
         provider_id: &[u8; 32],
         tier: Option<ProofStreamTier>,
-    ) -> Vec<PotrReceiptV1> {
+    ) -> Result<Vec<PotrReceiptV1>, PotrTrackerError> {
         self.potr.receipts_for(manifest_digest, provider_id, tier)
+    }
+
+    /// Return status for one exact final signed PoTR receipt.
+    pub fn potr_receipt_status(
+        &self,
+        receipt_digest: &[u8; 32],
+    ) -> Result<Option<PotrReceiptStatusV1>, PotrTrackerError> {
+        self.potr.status(receipt_digest)
+    }
+
+    /// Export a bounded sequence-ordered page of PoTR receipt statuses.
+    pub fn export_potr_receipt_statuses(
+        &self,
+        after_sequence: u64,
+        limit: usize,
+    ) -> Result<Vec<PotrReceiptStatusV1>, PotrTrackerError> {
+        self.potr.export_statuses(after_sequence, limit)
+    }
+
+    /// Export a bounded sequence-ordered page of exact final signed receipts.
+    pub fn export_potr_receipts(
+        &self,
+        after_sequence: u64,
+        limit: usize,
+    ) -> Result<Vec<PotrReceiptV1>, PotrTrackerError> {
+        self.potr.export_receipts(after_sequence, limit)
     }
 
     /// Returns a clone of the persistent storage backend when enabled.
@@ -16567,82 +17927,6 @@ impl NodeHandle {
     }
 }
 
-fn load_or_create_moderation_quarantine_object_key(
-    path: &Path,
-) -> Result<[u8; 32], ModerationQuarantineObjectError> {
-    let _guard =
-        MODERATION_KEY_CREATE_LOCK
-            .lock()
-            .map_err(|_| ModerationQuarantineObjectError::Io {
-                path: path.display().to_string(),
-                message: "sealing-key creation lock poisoned".to_owned(),
-            })?;
-    match read_local_checkpoint_bounded(path, 32) {
-        Ok(Some(bytes)) => decode_moderation_quarantine_object_key(path, bytes),
-        Ok(None) => create_moderation_quarantine_object_key(path),
-        Err(err) => Err(ModerationQuarantineObjectError::Io {
-            path: path.display().to_string(),
-            message: err.to_string(),
-        }),
-    }
-}
-
-fn load_moderation_quarantine_object_key(
-    path: &Path,
-) -> Result<[u8; 32], ModerationQuarantineObjectError> {
-    let bytes = read_local_checkpoint_bounded(path, 32)
-        .map_err(|err| ModerationQuarantineObjectError::Io {
-            path: path.display().to_string(),
-            message: err.to_string(),
-        })?
-        .ok_or_else(|| ModerationQuarantineObjectError::Io {
-            path: path.display().to_string(),
-            message: "sealing key does not exist".to_owned(),
-        })?;
-    decode_moderation_quarantine_object_key(path, bytes)
-}
-
-fn create_moderation_quarantine_object_key(
-    path: &Path,
-) -> Result<[u8; 32], ModerationQuarantineObjectError> {
-    let mut key = [0u8; 32];
-    let mut rng = OsRng;
-    rng.try_fill_bytes(&mut key)
-        .map_err(|err| ModerationQuarantineObjectError::Io {
-            path: path.display().to_string(),
-            message: format!("failed to generate local sealing key: {err}"),
-        })?;
-    match write_local_private_checkpoint_atomic(path, &key) {
-        Ok(()) => Ok(key),
-        // The key is already visible. A later successful object-index commit
-        // synchronizes this same directory, closing the durability window.
-        Err(err) if err.committed => Ok(key),
-        Err(err) if err.kind() == ErrorKind::AlreadyExists => {
-            load_moderation_quarantine_object_key(path)
-        }
-        Err(err) => Err(ModerationQuarantineObjectError::Io {
-            path: path.display().to_string(),
-            message: err.to_string(),
-        }),
-    }
-}
-
-fn decode_moderation_quarantine_object_key(
-    path: &Path,
-    bytes: Vec<u8>,
-) -> Result<[u8; 32], ModerationQuarantineObjectError> {
-    let key: [u8; 32] = bytes.try_into().map_err(|bytes: Vec<u8>| {
-        ModerationQuarantineObjectError::InvalidInput {
-            message: format!(
-                "local quarantine object key `{}` must be 32 bytes, found {}",
-                path.display(),
-                bytes.len()
-            ),
-        }
-    })?;
-    Ok(key)
-}
-
 fn moderation_evidence_viewer_error_from_object_error(
     err: ModerationQuarantineObjectError,
 ) -> ModerationEvidenceViewerError {
@@ -16685,6 +17969,25 @@ fn moderation_evidence_viewer_error_from_object_error(
                 message: format!("quarantine object `{quarantine_id_hex}` failed authentication"),
             }
         }
+        ModerationQuarantineObjectError::KeyWrapperUnavailable => {
+            ModerationEvidenceViewerError::InvalidInput {
+                message: "runtime PKCS#11/KMS quarantine key wrapper is unavailable".to_owned(),
+            }
+        }
+        ModerationQuarantineObjectError::KeyWrapping { key_id } => {
+            ModerationEvidenceViewerError::InvalidSnapshot {
+                message: format!("quarantine key operation failed for `{key_id}`"),
+            }
+        }
+        ModerationQuarantineObjectError::InvalidRange {
+            start,
+            end,
+            payload_len,
+        } => ModerationEvidenceViewerError::InvalidInput {
+            message: format!(
+                "quarantine object range {start}..{end} exceeds plaintext length {payload_len}"
+            ),
+        },
         ModerationQuarantineObjectError::Io { path, message } => {
             ModerationEvidenceViewerError::Io { path, message }
         }
@@ -16766,7 +18069,7 @@ mod tests {
         time::Duration,
     };
 
-    use iroha_crypto::{Algorithm, Signature as IrohaSignature, SignatureOf};
+    use iroha_crypto::{Algorithm, KeyPair, Signature as IrohaSignature, SignatureOf};
     use iroha_data_model::{
         metadata::Metadata,
         name::Name,
@@ -16779,9 +18082,11 @@ mod tests {
             moderation::{
                 ADVERSARIAL_CORPUS_VERSION_V1, AdversarialCorpusManifestV1,
                 AdversarialPerceptualFamilyV1, AdversarialPerceptualVariantV1,
-                MODERATION_REPRO_MANIFEST_VERSION_V1, ModerationModelFingerprintV1,
-                ModerationReproBodyV1, ModerationReproManifestV1, ModerationReproSignatureV1,
-                ModerationSeedMaterialV1, ModerationThresholdsV1,
+                MODERATION_REPRO_MANIFEST_VERSION_V1, MODERATION_TRUST_POLICY_VERSION_V1,
+                ModerationModelFingerprintV1, ModerationReproBodyV1, ModerationReproManifestV1,
+                ModerationReproSignatureV1, ModerationSeedMaterialV1, ModerationThresholdsV1,
+                ModerationTrustPolicyBodyV1, ModerationTrustPolicySignatureV1,
+                ModerationTrustPolicyV1, ModerationTrustedSignerV1,
                 SORAFS_MODERATION_BALLOT_COMMIT_VERSION_V1,
                 SORAFS_MODERATION_BALLOT_CONTEXT_VERSION_V1,
                 SORAFS_MODERATION_BALLOT_REVEAL_VERSION_V1, SoraFsModerationBallotCommitV1,
@@ -16889,6 +18194,177 @@ mod tests {
             .data_dir(root.join("storage"))
             .build();
         (cfg, temp_dir)
+    }
+
+    #[derive(Debug)]
+    struct TestQuarantineKeyWrapper {
+        active_key_id: String,
+        keys: BTreeMap<String, [u8; 32]>,
+    }
+
+    impl TestQuarantineKeyWrapper {
+        fn single(key_id: &str, seed: u8) -> Self {
+            Self {
+                active_key_id: key_id.to_owned(),
+                keys: BTreeMap::from([(key_id.to_owned(), [seed; 32])]),
+            }
+        }
+
+        fn rotated(old_key_id: &str, old_seed: u8, new_key_id: &str, new_seed: u8) -> Self {
+            Self {
+                active_key_id: new_key_id.to_owned(),
+                keys: BTreeMap::from([
+                    (old_key_id.to_owned(), [old_seed; 32]),
+                    (new_key_id.to_owned(), [new_seed; 32]),
+                ]),
+            }
+        }
+
+        fn wrapping_key(&self, key_id: &str) -> Result<[u8; 32], String> {
+            self.keys
+                .get(key_id)
+                .copied()
+                .ok_or_else(|| "unknown test wrapping key handle".to_owned())
+        }
+
+        fn nonce(key_id: &str, context_digest: [u8; 32], key: [u8; 32]) -> [u8; 12] {
+            let mut hasher = blake3::Hasher::new_keyed(&key);
+            hasher.update(b"sorafs.node.test-quarantine-wrapper.nonce.v1");
+            hasher.update(key_id.as_bytes());
+            hasher.update(&context_digest);
+            let mut nonce = [0_u8; 12];
+            nonce.copy_from_slice(&hasher.finalize().as_bytes()[..12]);
+            nonce
+        }
+    }
+
+    impl ModerationQuarantineKeyWrapper for TestQuarantineKeyWrapper {
+        fn active_key_id(&self) -> &str {
+            &self.active_key_id
+        }
+
+        fn wrap_dek(&self, context_digest: [u8; 32], dek: &[u8; 32]) -> Result<Vec<u8>, String> {
+            use iroha_crypto::encryption::{ChaCha20Poly1305, SymmetricEncryptor};
+
+            let key = self.wrapping_key(&self.active_key_id)?;
+            let nonce = Self::nonce(&self.active_key_id, context_digest, key);
+            SymmetricEncryptor::<ChaCha20Poly1305>::new_with_key(key)
+                .map_err(|error| error.to_string())?
+                .encrypt(nonce.as_slice(), context_digest.as_slice(), dek.as_slice())
+                .map_err(|error| error.to_string())
+        }
+
+        fn unwrap_dek(
+            &self,
+            key_id: &str,
+            context_digest: [u8; 32],
+            wrapped_dek: &[u8],
+        ) -> Result<[u8; 32], String> {
+            use iroha_crypto::encryption::{ChaCha20Poly1305, SymmetricEncryptor};
+
+            let key = self.wrapping_key(key_id)?;
+            let nonce = Self::nonce(key_id, context_digest, key);
+            SymmetricEncryptor::<ChaCha20Poly1305>::new_with_key(key)
+                .map_err(|error| error.to_string())?
+                .decrypt(nonce.as_slice(), context_digest.as_slice(), wrapped_dek)
+                .map_err(|error| error.to_string())?
+                .try_into()
+                .map_err(|_| "unwrapped test DEK is not 32 bytes".to_owned())
+        }
+    }
+
+    fn test_quarantine_key_wrapper() -> Arc<dyn ModerationQuarantineKeyWrapper> {
+        Arc::new(TestQuarantineKeyWrapper::single(
+            "kms:test/quarantine-v1",
+            0xA5,
+        ))
+    }
+
+    fn node_with_test_quarantine_key_wrapper(config: StorageConfig) -> NodeHandle {
+        NodeHandle::try_new_with_quarantine_key_wrapper(config, test_quarantine_key_wrapper())
+            .expect("initialise node with test-only quarantine key wrapper")
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    enum TestPrivacyCyclePrfMode {
+        Bound,
+        Zero,
+        Failure(PrivacyCyclePrfProviderErrorV1),
+    }
+
+    struct TestPrivacyCyclePrfProvider {
+        mode: TestPrivacyCyclePrfMode,
+        requests: Mutex<Vec<PrivacyCyclePrfRequestV1>>,
+    }
+
+    impl std::fmt::Debug for TestPrivacyCyclePrfProvider {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("TEST-PRF-VENDOR-DIAGNOSTIC-MUST-NOT-LEAK")
+        }
+    }
+
+    impl TestPrivacyCyclePrfProvider {
+        fn bound() -> Self {
+            Self {
+                mode: TestPrivacyCyclePrfMode::Bound,
+                requests: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn zero() -> Self {
+            Self {
+                mode: TestPrivacyCyclePrfMode::Zero,
+                requests: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn failing(error: PrivacyCyclePrfProviderErrorV1) -> Self {
+            Self {
+                mode: TestPrivacyCyclePrfMode::Failure(error),
+                requests: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn requests(&self) -> Vec<PrivacyCyclePrfRequestV1> {
+            self.requests.lock().expect("test PRF requests").clone()
+        }
+    }
+
+    impl PrivacyCyclePrfProviderV1 for TestPrivacyCyclePrfProvider {
+        fn derive_cycle_output(
+            &self,
+            request: &PrivacyCyclePrfRequestV1,
+        ) -> Result<[u8; 32], PrivacyCyclePrfProviderErrorV1> {
+            self.requests
+                .lock()
+                .expect("test PRF requests")
+                .push(*request);
+            match self.mode {
+                TestPrivacyCyclePrfMode::Bound => {
+                    let mut hasher = blake3::Hasher::new();
+                    hasher.update(b"sorafs.node.test-privacy-cycle-prf.v1");
+                    hasher.update(&request.binding_digest());
+                    let output = *hasher.finalize().as_bytes();
+                    debug_assert_ne!(output, [0; 32]);
+                    Ok(output)
+                }
+                TestPrivacyCyclePrfMode::Zero => Ok([0; 32]),
+                TestPrivacyCyclePrfMode::Failure(error) => Err(error),
+            }
+        }
+    }
+
+    fn test_privacy_cycle_prf_provider() -> Arc<dyn PrivacyCyclePrfProviderV1> {
+        Arc::new(TestPrivacyCyclePrfProvider::bound())
+    }
+
+    fn node_with_test_privacy_cycle_prf_provider(config: StorageConfig) -> NodeHandle {
+        NodeHandle::try_new_with_runtime_deps(
+            config,
+            NodeRuntimeDeps::default()
+                .with_privacy_cycle_prf_provider(test_privacy_cycle_prf_provider()),
+        )
+        .expect("initialise node with test-only privacy cycle PRF provider")
     }
 
     fn reputation_signing_key() -> iroha_crypto::KeyPair {
@@ -17662,6 +19138,402 @@ mod tests {
         }
     }
 
+    fn moderation_screening_authority_bundle_fixture(
+        now_unix: u64,
+        policy_issued_at_unix: u64,
+        policy_id_byte: u8,
+    ) -> ModerationScreeningAuthorityBundleV1 {
+        let manifest_key =
+            KeyPair::try_from_seed(vec![0xD1; 32], Algorithm::Ed25519).expect("manifest key");
+        let governance_key =
+            KeyPair::try_from_seed(vec![0xD2; 32], Algorithm::Ed25519).expect("governance key");
+        let runner_key =
+            KeyPair::try_from_seed(vec![0xD3; 32], Algorithm::Ed25519).expect("runner key");
+        let mut manifest_body = ModerationReproBodyV1 {
+            schema_version: MODERATION_REPRO_MANIFEST_VERSION_V1,
+            manifest_id: [0xD4; 16],
+            manifest_digest: [0; 32],
+            runner_hash: [0xD5; 32],
+            runtime_version: "sorafs-ai-runner config-authority-v1".to_owned(),
+            issued_at_unix: now_unix.saturating_sub(200),
+            seed_material: ModerationSeedMaterialV1 {
+                domain_tag: "sfm4a:config-authority".to_owned(),
+                seed_version: 1,
+                run_nonce: [0xD6; 32],
+            },
+            thresholds: ModerationThresholdsV1 {
+                quarantine: 6_000,
+                escalate: 8_500,
+            },
+            models: vec![ModerationModelFingerprintV1 {
+                model_id: [0xD7; 16],
+                artifact_path: "models/config-authority-v1.norito".to_owned(),
+                artifact_bytes: 1,
+                artifact_digest: [0xD8; 32],
+                weights_digest: [0xD9; 32],
+                engine: iroha_data_model::sorafs::moderation::ModerationModelEngineV1::DeterministicLinearV1,
+                feature_profile: iroha_data_model::sorafs::moderation::ModerationFeatureProfileV1::ByteHistogramAndBigramV1,
+                calibration_knot_count: 2,
+                max_input_bytes: 1024,
+                max_operations: 3073,
+                working_memory_bytes: 4096,
+                weight: Some(10_000),
+            }],
+            notes: None,
+        };
+        manifest_body
+            .refresh_manifest_digest()
+            .expect("manifest digest");
+        let manifest = ModerationReproManifestV1 {
+            signatures: vec![ModerationReproSignatureV1 {
+                role: "model-governance".to_owned(),
+                public_key: manifest_key.public_key().clone(),
+                signature: SignatureOf::try_new(manifest_key.private_key(), &manifest_body)
+                    .expect("manifest signature"),
+            }],
+            body: manifest_body,
+        };
+        let mut policy_body = ModerationTrustPolicyBodyV1 {
+            schema_version: MODERATION_TRUST_POLICY_VERSION_V1,
+            policy_id: [policy_id_byte; 16],
+            policy_digest: [0; 32],
+            manifest_id: manifest.body.manifest_id,
+            manifest_digest: manifest.body.manifest_digest,
+            runner_hash: manifest.body.runner_hash,
+            issued_at_unix: policy_issued_at_unix,
+            valid_from_unix: policy_issued_at_unix,
+            valid_until_unix: now_unix.saturating_add(3_600),
+            result_quorum: 1,
+            governance_quorum: 1,
+            max_result_age_secs: 600,
+            max_result_ttl_secs: 300,
+            max_clock_skew_secs: 30,
+            trusted_signers: vec![ModerationTrustedSignerV1 {
+                role: "runner".to_owned(),
+                public_key: runner_key.public_key().clone(),
+                valid_from_unix: policy_issued_at_unix,
+                valid_until_unix: now_unix.saturating_add(3_600),
+                revoked_at_unix: None,
+            }],
+            notes: None,
+        };
+        policy_body.refresh_policy_digest().expect("policy digest");
+        let policy = ModerationTrustPolicyV1 {
+            signatures: vec![ModerationTrustPolicySignatureV1 {
+                role: "governance".to_owned(),
+                public_key: governance_key.public_key().clone(),
+                signature: SignatureOf::try_new(governance_key.private_key(), &policy_body)
+                    .expect("policy signature"),
+            }],
+            body: policy_body,
+        };
+        ModerationScreeningAuthorityBundleV1 {
+            version: MODERATION_SCREENING_AUTHORITY_BUNDLE_VERSION_V1,
+            manifest,
+            policy,
+            governance_trust_anchors: vec![governance_key.public_key().clone()],
+            minimum_governance_quorum: 1,
+        }
+    }
+
+    fn write_moderation_screening_authority_bundle(
+        root: &Path,
+        bundle: &ModerationScreeningAuthorityBundleV1,
+    ) -> (PathBuf, [u8; 32]) {
+        let bytes = norito::to_bytes(bundle).expect("encode authority bundle");
+        let root = fs::canonicalize(root).expect("canonicalize authority fixture root");
+        let path = root.join("moderation-screening-authority.to");
+        fs::write(&path, &bytes).expect("write authority bundle");
+        #[cfg(unix)]
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+            .expect("secure authority bundle permissions");
+        (path, *blake3::hash(&bytes).as_bytes())
+    }
+
+    #[test]
+    fn moderation_screening_authority_loads_from_digest_pinned_config_and_rejects_rotation_attacks()
+    {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let now_unix = unix_now_secs();
+        let policy_issued_at_unix = now_unix.saturating_sub(50);
+        let bundle =
+            moderation_screening_authority_bundle_fixture(now_unix, policy_issued_at_unix, 0xE1);
+        let (path, digest) = write_moderation_screening_authority_bundle(temp_dir.path(), &bundle);
+        let storage_dir = path
+            .parent()
+            .expect("authority fixture must have a parent")
+            .join("storage");
+        let cfg = StorageConfig::builder()
+            .enabled(true)
+            .data_dir(storage_dir)
+            .moderation_screening_enabled(true)
+            .moderation_screening_authority_bundle_path(Some(path))
+            .moderation_screening_authority_bundle_digest(Some(digest))
+            .build();
+        assert!(matches!(
+            NodeHandle::try_new(cfg.clone()),
+            Err(NodeInitError::ModerationQuarantineKeyWrapperUnavailable)
+        ));
+        let key_wrapper = test_quarantine_key_wrapper();
+        let node = NodeHandle::try_new_with_quarantine_key_wrapper(cfg, Arc::clone(&key_wrapper))
+            .expect("load config-authoritative screening bundle with runtime key wrapper");
+        assert!(node.has_moderation_screening_authority());
+        assert!(node.moderation_screening_enabled());
+        assert!(node.uses_moderation_quarantine_key_wrapper(&key_wrapper));
+        assert_eq!(
+            node.moderation_quarantine_key_id(),
+            Some("kms:test/quarantine-v1")
+        );
+
+        let older = moderation_screening_authority_bundle_fixture(
+            now_unix,
+            policy_issued_at_unix.saturating_sub(1),
+            0xE0,
+        )
+        .into_authority(now_unix)
+        .expect("older authority is otherwise valid");
+        assert!(matches!(
+            node.install_moderation_screening_authority(older),
+            Err(ModerationScreeningAuthenticationError::PolicyRollback { .. })
+        ));
+
+        let equivocation =
+            moderation_screening_authority_bundle_fixture(now_unix, policy_issued_at_unix, 0xE2)
+                .into_authority(now_unix)
+                .expect("equivocating authority is otherwise valid");
+        assert!(matches!(
+            node.install_moderation_screening_authority(equivocation),
+            Err(ModerationScreeningAuthenticationError::PolicyEquivocation { .. })
+        ));
+    }
+
+    #[test]
+    fn moderation_screening_authority_startup_rejects_missing_mismatched_and_noncanonical_bundles()
+    {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let missing = StorageConfig::builder()
+            .enabled(true)
+            .data_dir(temp_dir.path().join("missing-storage"))
+            .moderation_screening_enabled(true)
+            .build();
+        assert!(matches!(
+            NodeHandle::try_new(missing),
+            Err(NodeInitError::ModerationScreeningAuthorityBundle { .. })
+        ));
+
+        let relative_path = StorageConfig::builder()
+            .enabled(true)
+            .data_dir(temp_dir.path().join("relative-path-storage"))
+            .moderation_screening_enabled(true)
+            .moderation_screening_authority_bundle_path(Some(PathBuf::from(
+                "relative-authority.to",
+            )))
+            .moderation_screening_authority_bundle_digest(Some([0xA5; 32]))
+            .build();
+        assert!(matches!(
+            NodeHandle::try_new(relative_path),
+            Err(NodeInitError::ModerationScreeningAuthorityBundle { .. })
+        ));
+
+        let now_unix = unix_now_secs();
+        let bundle = moderation_screening_authority_bundle_fixture(
+            now_unix,
+            now_unix.saturating_sub(50),
+            0xE3,
+        );
+        let (path, digest) = write_moderation_screening_authority_bundle(temp_dir.path(), &bundle);
+        let missing_digest = StorageConfig::builder()
+            .enabled(true)
+            .data_dir(temp_dir.path().join("missing-digest-storage"))
+            .moderation_screening_enabled(true)
+            .moderation_screening_authority_bundle_path(Some(path.clone()))
+            .build();
+        assert!(matches!(
+            NodeHandle::try_new(missing_digest),
+            Err(NodeInitError::ModerationScreeningAuthorityBundle { .. })
+        ));
+
+        let mismatched_digest = StorageConfig::builder()
+            .enabled(true)
+            .data_dir(temp_dir.path().join("mismatch-storage"))
+            .moderation_screening_enabled(true)
+            .moderation_screening_authority_bundle_path(Some(path.clone()))
+            .moderation_screening_authority_bundle_digest(Some([0xFF; 32]))
+            .build();
+        assert!(matches!(
+            NodeHandle::try_new(mismatched_digest),
+            Err(NodeInitError::ModerationScreeningAuthorityBundle { .. })
+        ));
+
+        let mut noncanonical = fs::read(&path).expect("read canonical bundle");
+        noncanonical.push(0);
+        fs::write(&path, &noncanonical).expect("write noncanonical bundle");
+        #[cfg(unix)]
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+            .expect("secure noncanonical bundle permissions");
+        let noncanonical_config = StorageConfig::builder()
+            .enabled(true)
+            .data_dir(temp_dir.path().join("noncanonical-storage"))
+            .moderation_screening_enabled(true)
+            .moderation_screening_authority_bundle_path(Some(path))
+            .moderation_screening_authority_bundle_digest(Some(
+                *blake3::hash(&noncanonical).as_bytes(),
+            ))
+            .build();
+        assert!(matches!(
+            NodeHandle::try_new(noncanonical_config),
+            Err(NodeInitError::ModerationScreeningAuthorityBundle { .. })
+        ));
+        assert_ne!(digest, [0; 32]);
+    }
+
+    #[test]
+    fn moderation_screening_authority_startup_bounds_oversized_and_sequence_bomb_inputs() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let temp_root = fs::canonicalize(temp_dir.path()).expect("canonicalize temp root");
+        let oversized =
+            vec![0_u8; MODERATION_SCREENING_AUTHORITY_BUNDLE_MAX_BYTES_V1.saturating_add(1)];
+        let oversized_path = temp_root.join("oversized-authority.to");
+        fs::write(&oversized_path, &oversized).expect("write oversized authority");
+        #[cfg(unix)]
+        fs::set_permissions(&oversized_path, fs::Permissions::from_mode(0o600))
+            .expect("secure oversized bundle permissions");
+        let oversized_config = StorageConfig::builder()
+            .enabled(true)
+            .data_dir(temp_root.join("oversized-storage"))
+            .moderation_screening_enabled(true)
+            .moderation_screening_authority_bundle_path(Some(oversized_path))
+            .moderation_screening_authority_bundle_digest(Some(
+                *blake3::hash(&oversized).as_bytes(),
+            ))
+            .build();
+        assert!(matches!(
+            NodeHandle::try_new(oversized_config),
+            Err(NodeInitError::ModerationScreeningAuthorityBundle { .. })
+        ));
+
+        let now_unix = unix_now_secs();
+        let mut sequence_bomb = moderation_screening_authority_bundle_fixture(
+            now_unix,
+            now_unix.saturating_sub(50),
+            0xE4,
+        );
+        sequence_bomb.governance_trust_anchors =
+            vec![sequence_bomb.governance_trust_anchors[0].clone(); 4_097];
+        let sequence_bomb_bytes = norito::to_bytes(&sequence_bomb).expect("encode sequence bomb");
+        assert!(
+            sequence_bomb_bytes.len() < MODERATION_SCREENING_AUTHORITY_BUNDLE_MAX_BYTES_V1,
+            "sequence bomb must exercise decode bounds rather than the byte cap"
+        );
+        let sequence_bomb_path = temp_root.join("sequence-bomb-authority.to");
+        fs::write(&sequence_bomb_path, &sequence_bomb_bytes).expect("write sequence bomb");
+        #[cfg(unix)]
+        fs::set_permissions(&sequence_bomb_path, fs::Permissions::from_mode(0o600))
+            .expect("secure sequence bomb permissions");
+        let sequence_bomb_config = StorageConfig::builder()
+            .enabled(true)
+            .data_dir(temp_root.join("sequence-bomb-storage"))
+            .moderation_screening_enabled(true)
+            .moderation_screening_authority_bundle_path(Some(sequence_bomb_path))
+            .moderation_screening_authority_bundle_digest(Some(
+                *blake3::hash(&sequence_bomb_bytes).as_bytes(),
+            ))
+            .build();
+        assert!(matches!(
+            NodeHandle::try_new(sequence_bomb_config),
+            Err(NodeInitError::ModerationScreeningAuthorityBundle { .. })
+        ));
+
+        let mut duplicate_anchors = moderation_screening_authority_bundle_fixture(
+            now_unix,
+            now_unix.saturating_sub(50),
+            0xE6,
+        );
+        duplicate_anchors
+            .governance_trust_anchors
+            .push(duplicate_anchors.governance_trust_anchors[0].clone());
+        let duplicate_anchor_bytes =
+            norito::to_bytes(&duplicate_anchors).expect("encode duplicate anchors");
+        let duplicate_anchor_path = temp_root.join("duplicate-anchor-authority.to");
+        fs::write(&duplicate_anchor_path, &duplicate_anchor_bytes)
+            .expect("write duplicate-anchor authority");
+        #[cfg(unix)]
+        fs::set_permissions(&duplicate_anchor_path, fs::Permissions::from_mode(0o600))
+            .expect("secure duplicate-anchor permissions");
+        let duplicate_anchor_config = StorageConfig::builder()
+            .enabled(true)
+            .data_dir(temp_root.join("duplicate-anchor-storage"))
+            .moderation_screening_enabled(true)
+            .moderation_screening_authority_bundle_path(Some(duplicate_anchor_path))
+            .moderation_screening_authority_bundle_digest(Some(
+                *blake3::hash(&duplicate_anchor_bytes).as_bytes(),
+            ))
+            .build();
+        assert!(matches!(
+            NodeHandle::try_new(duplicate_anchor_config),
+            Err(NodeInitError::ModerationScreeningAuthorityBundle { .. })
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn moderation_screening_authority_startup_rejects_symlink_and_hardlink_replacement_paths() {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let now_unix = unix_now_secs();
+        let bundle = moderation_screening_authority_bundle_fixture(
+            now_unix,
+            now_unix.saturating_sub(50),
+            0xE5,
+        );
+        let (source_path, digest) =
+            write_moderation_screening_authority_bundle(temp_dir.path(), &bundle);
+        let temp_root = source_path
+            .parent()
+            .expect("authority fixture must have a parent");
+
+        let symlink_path = temp_root.join("symlink-authority.to");
+        std::os::unix::fs::symlink(&source_path, &symlink_path).expect("create authority symlink");
+        let symlink_config = StorageConfig::builder()
+            .enabled(true)
+            .data_dir(temp_root.join("symlink-storage"))
+            .moderation_screening_enabled(true)
+            .moderation_screening_authority_bundle_path(Some(symlink_path))
+            .moderation_screening_authority_bundle_digest(Some(digest))
+            .build();
+        assert!(matches!(
+            NodeHandle::try_new(symlink_config),
+            Err(NodeInitError::ModerationScreeningAuthorityBundle { .. })
+        ));
+
+        let hardlink_path = temp_root.join("hardlink-authority.to");
+        fs::hard_link(&source_path, &hardlink_path).expect("create authority hard link");
+        let hardlink_config = StorageConfig::builder()
+            .enabled(true)
+            .data_dir(temp_root.join("hardlink-storage"))
+            .moderation_screening_enabled(true)
+            .moderation_screening_authority_bundle_path(Some(hardlink_path))
+            .moderation_screening_authority_bundle_digest(Some(digest))
+            .build();
+        assert!(matches!(
+            NodeHandle::try_new(hardlink_config),
+            Err(NodeInitError::ModerationScreeningAuthorityBundle { .. })
+        ));
+
+        let directory_path = temp_root.join("directory-authority");
+        fs::create_dir(&directory_path).expect("create non-regular authority path");
+        let directory_config = StorageConfig::builder()
+            .enabled(true)
+            .data_dir(temp_root.join("directory-storage"))
+            .moderation_screening_enabled(true)
+            .moderation_screening_authority_bundle_path(Some(directory_path))
+            .moderation_screening_authority_bundle_digest(Some(digest))
+            .build();
+        assert!(matches!(
+            NodeHandle::try_new(directory_config),
+            Err(NodeInitError::ModerationScreeningAuthorityBundle { .. })
+        ));
+    }
+
     fn adversarial_corpus_manifest_fixture() -> AdversarialCorpusManifestV1 {
         AdversarialCorpusManifestV1 {
             schema_version: ADVERSARIAL_CORPUS_VERSION_V1,
@@ -18009,13 +19881,15 @@ mod tests {
             privacy: ModerationPrivacyParametersV1 {
                 version: MODERATION_PRIVACY_PARAMETERS_VERSION_V1,
                 mode: ModerationPrivacyModeV1::DifferentialPrivacyWithSuppression,
-                epsilon_micros: Some(800_000),
-                delta_ppb: Some(10),
-                noise_scale_micros: Some(1_000_000),
+                epsilon_numerator: Some(4),
+                epsilon_denominator: Some(5),
+                delta_ppb: Some(0),
+                per_subject_metric_cap: Some(1),
                 suppression_threshold: Some(25),
                 suppressed_count: 2,
             },
             source_event_count: 128,
+            source_subject_count: 96,
             source_payload_digest: [seed.wrapping_add(1); 32],
             metrics: vec![
                 ModerationPrivacyAggregateMetricV1 {
@@ -18048,6 +19922,7 @@ mod tests {
             occurred_at_unix,
             population_label: population_label.to_string(),
             population_digest: Some([seed; 32]),
+            subject_digest: *blake3::hash(event_id.as_bytes()).as_bytes(),
             metrics: vec![
                 PrivacyAggregateSourceMetric {
                     key: "appeals_upheld".to_string(),
@@ -18118,7 +19993,7 @@ mod tests {
         }
     }
 
-    fn privacy_aggregate_cycle_config(noise_seed: Option<[u8; 32]>) -> PrivacyAggregateCycleConfig {
+    fn privacy_aggregate_cycle_config() -> PrivacyAggregateCycleConfig {
         use iroha_data_model::sorafs::transparency::{
             MODERATION_PRIVACY_PARAMETERS_VERSION_V1, ModerationLedgerMetadataV1,
             ModerationPrivacyModeV1, ModerationPrivacyParametersV1,
@@ -18129,13 +20004,13 @@ mod tests {
             privacy: ModerationPrivacyParametersV1 {
                 version: MODERATION_PRIVACY_PARAMETERS_VERSION_V1,
                 mode: ModerationPrivacyModeV1::DifferentialPrivacyWithSuppression,
-                epsilon_micros: Some(800_000),
-                delta_ppb: Some(10),
-                noise_scale_micros: Some(1_000_000),
+                epsilon_numerator: Some(4),
+                epsilon_denominator: Some(5),
+                delta_ppb: Some(0),
+                per_subject_metric_cap: Some(1),
                 suppression_threshold: Some(2),
                 suppressed_count: 0,
             },
-            noise_seed,
             policy_digest: Some([0xC0; 32]),
             metadata: vec![ModerationLedgerMetadataV1 {
                 key: "publisher".to_string(),
@@ -18149,6 +20024,35 @@ mod tests {
             cycle_seconds: 100,
             publish_delay_seconds: 10,
         }
+    }
+
+    fn privacy_composition_budget_policy() -> PrivacyCompositionBudgetPolicyV1 {
+        PrivacyCompositionBudgetPolicyV1 {
+            budget_id: [0xC0; 32],
+            epsilon_limit_numerator: 80,
+            epsilon_limit_denominator: 1,
+            max_publications: 100,
+        }
+    }
+
+    fn privacy_aggregate_policy_config() -> config::PrivacyAggregatePolicyConfig {
+        let cycle = privacy_aggregate_cycle_config();
+        config::PrivacyAggregatePolicyConfig::new(
+            cycle.aggregate_id_prefix,
+            cycle.privacy,
+            cycle.policy_digest.expect("test privacy policy digest"),
+            privacy_composition_budget_policy(),
+        )
+        .expect("test privacy aggregate policy")
+    }
+
+    fn privacy_aggregate_storage_config(root: &Path) -> StorageConfig {
+        StorageConfig::builder()
+            .enabled(true)
+            .data_dir(root.join("storage"))
+            .privacy_aggregate_schedule(Some(privacy_aggregate_schedule_config()))
+            .privacy_aggregate_policy(Some(privacy_aggregate_policy_config()))
+            .build()
     }
 
     fn appeal_finance_report_fixture() -> SoraFsAppealFinanceReportV1 {
@@ -18490,6 +20394,7 @@ mod tests {
             ModerationScreeningSnapshot {
                 screening_records: expected_records,
                 quarantine_records: vec![quarantine_outcome.quarantine.expect("quarantine")],
+                authenticated_admissions: Vec::new(),
             }
         );
     }
@@ -18549,7 +20454,7 @@ mod tests {
             ModerationScreeningVerdict::Quarantine,
         );
         screening.subject_digest = *blake3::hash(&payload).as_bytes();
-        let source = NodeHandle::new(cfg.clone());
+        let source = node_with_test_quarantine_key_wrapper(cfg.clone());
         let outcome = source
             .record_moderation_screening_result(screening)
             .expect("record quarantine result");
@@ -18561,27 +20466,27 @@ mod tests {
                 payload: payload.clone(),
                 captured_at_unix: 1_800_000_080,
                 content_type: Some("application/octet-stream".to_string()),
-                notes: Some(" sealed locally ".to_string()),
+                notes: None,
             })
             .expect("store quarantine object");
         assert_eq!(record.payload_digest, *blake3::hash(&payload).as_bytes());
         assert_eq!(record.payload_len, payload.len() as u64);
-        assert_eq!(record.notes.as_deref(), Some("sealed locally"));
-
-        #[cfg(unix)]
-        {
-            let key_path = moderation_quarantine_object_key_path(cfg.data_dir());
-            let mode = fs::metadata(&key_path)
-                .expect("read local seal key metadata")
-                .permissions()
-                .mode()
-                & 0o777;
-            assert_eq!(mode, 0o600);
-        }
+        assert_eq!(record.notes, None);
 
         let envelope_path =
             moderation_quarantine_object_store_root(cfg.data_dir()).join(&record.envelope_path);
         let envelope_bytes = fs::read(&envelope_path).expect("read encrypted envelope");
+        let envelope: crate::moderation::ModerationQuarantineObjectEnvelopeV1 =
+            norito::decode_from_bytes(&envelope_bytes).expect("decode encrypted envelope");
+        assert_eq!(envelope.wrapping_key_id, "kms:test/quarantine-v1");
+        assert!(!envelope.wrapped_dek.is_empty());
+        assert!(!envelope.chunks.is_empty());
+        assert!(
+            !moderation_quarantine_object_store_root(cfg.data_dir())
+                .join("local-seal.key")
+                .exists(),
+            "runtime wrapping keys must never be persisted in the object store"
+        );
         assert!(
             !envelope_bytes
                 .windows(payload.len())
@@ -18594,6 +20499,16 @@ mod tests {
             .expect("read quarantine object");
         assert_eq!(decrypted.record, record);
         assert_eq!(decrypted.payload, payload);
+        let replay = source
+            .store_moderation_quarantine_object(ModerationQuarantineObjectInput {
+                quarantine_id,
+                payload: decrypted.payload.clone(),
+                captured_at_unix: 1_800_000_080,
+                content_type: Some("application/octet-stream".to_owned()),
+                notes: None,
+            })
+            .expect("idempotently replay quarantine object store");
+        assert_eq!(replay, record);
 
         let index_path = moderation_quarantine_object_index_path(cfg.data_dir());
         let index_bytes = fs::read(&index_path).expect("read object index");
@@ -18602,7 +20517,7 @@ mod tests {
         assert_eq!(index.objects, vec![record.clone()]);
 
         drop(source);
-        let restored = NodeHandle::new(cfg);
+        let restored = node_with_test_quarantine_key_wrapper(cfg);
         assert_eq!(
             restored
                 .export_moderation_quarantine_object_snapshot()
@@ -18618,6 +20533,166 @@ mod tests {
     }
 
     #[test]
+    fn moderation_quarantine_range_and_dek_rewrap_survive_restart() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let payload =
+            (0..(crate::moderation::MODERATION_QUARANTINE_OBJECT_CHUNK_BYTES_V1 as usize + 8_192))
+                .map(|index| (index % 251) as u8)
+                .collect::<Vec<_>>();
+        let mut screening = moderation_screening_input_fixture(
+            "cid:bafy-object-range-rewrap",
+            ModerationScreeningVerdict::Quarantine,
+        );
+        screening.subject_digest = *blake3::hash(&payload).as_bytes();
+        let old_wrapper: Arc<dyn ModerationQuarantineKeyWrapper> = Arc::new(
+            TestQuarantineKeyWrapper::single("kms:test/quarantine-old", 0x31),
+        );
+        let source =
+            NodeHandle::try_new_with_quarantine_key_wrapper(cfg.clone(), Arc::clone(&old_wrapper))
+                .expect("initialise with old wrapping key");
+        let quarantine_id = source
+            .record_moderation_screening_result(screening)
+            .expect("record quarantine result")
+            .quarantine
+            .expect("quarantine record")
+            .quarantine_id;
+        let record = source
+            .store_moderation_quarantine_object(ModerationQuarantineObjectInput {
+                quarantine_id,
+                payload: payload.clone(),
+                captured_at_unix: 1_800_000_085,
+                content_type: Some("application/octet-stream".to_owned()),
+                notes: None,
+            })
+            .expect("store multi-chunk object");
+        let range_start =
+            u64::from(crate::moderation::MODERATION_QUARANTINE_OBJECT_CHUNK_BYTES_V1 - 1_024);
+        let range_end = range_start + 4_096;
+        let range = source
+            .read_moderation_quarantine_object_range(quarantine_id, range_start, range_end)
+            .expect("read authenticated cross-chunk range");
+        assert_eq!(range.record, record);
+        assert_eq!(range.start, range_start);
+        assert_eq!(range.end, range_end);
+        assert_eq!(
+            range.payload,
+            payload[range_start as usize..range_end as usize]
+        );
+        assert!(matches!(
+            source
+                .read_moderation_quarantine_object_range(
+                    quarantine_id,
+                    range_end,
+                    record.payload_len + 1,
+                )
+                .expect_err("out-of-bounds range rejected"),
+            ModerationQuarantineObjectError::InvalidRange { .. }
+        ));
+        drop(source);
+
+        let rotated_wrapper: Arc<dyn ModerationQuarantineKeyWrapper> =
+            Arc::new(TestQuarantineKeyWrapper::rotated(
+                "kms:test/quarantine-old",
+                0x31,
+                "kms:test/quarantine-new",
+                0x52,
+            ));
+        let rotated = NodeHandle::try_new_with_quarantine_key_wrapper(
+            cfg.clone(),
+            Arc::clone(&rotated_wrapper),
+        )
+        .expect("restart with rotation-capable wrapper");
+        let envelope_path =
+            moderation_quarantine_object_store_root(cfg.data_dir()).join(&record.envelope_path);
+        let before_bytes = fs::read(&envelope_path).expect("read pre-rotation envelope");
+        let before: crate::moderation::ModerationQuarantineObjectEnvelopeV1 =
+            norito::decode_from_bytes(&before_bytes).expect("decode pre-rotation envelope");
+        assert_eq!(before.wrapping_key_id, "kms:test/quarantine-old");
+        assert_eq!(
+            rotated
+                .rewrap_moderation_quarantine_object_dek(quarantine_id)
+                .expect("rewrap object DEK"),
+            record
+        );
+        let after_bytes = fs::read(&envelope_path).expect("read rewrapped envelope");
+        let after: crate::moderation::ModerationQuarantineObjectEnvelopeV1 =
+            norito::decode_from_bytes(&after_bytes).expect("decode rewrapped envelope");
+        assert_ne!(after_bytes, before_bytes);
+        assert_eq!(after.wrapping_key_id, "kms:test/quarantine-new");
+        assert_eq!(after.object_id, before.object_id);
+        assert_eq!(after.ciphertext_digest, before.ciphertext_digest);
+        assert_eq!(after.chunks, before.chunks);
+        assert_eq!(
+            rotated
+                .read_moderation_quarantine_object(quarantine_id)
+                .expect("read rewrapped object")
+                .payload,
+            payload
+        );
+        drop(rotated);
+
+        let new_only_wrapper: Arc<dyn ModerationQuarantineKeyWrapper> = Arc::new(
+            TestQuarantineKeyWrapper::single("kms:test/quarantine-new", 0x52),
+        );
+        let restored = NodeHandle::try_new_with_quarantine_key_wrapper(cfg, new_only_wrapper)
+            .expect("restart using only the replacement key");
+        assert_eq!(
+            restored
+                .read_moderation_quarantine_object(quarantine_id)
+                .expect("read after rewrap restart")
+                .payload,
+            payload
+        );
+    }
+
+    #[test]
+    fn moderation_quarantine_startup_recovers_canonical_unindexed_envelope() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let payload = b"crash between envelope rename and index commit".to_vec();
+        let mut screening = moderation_screening_input_fixture(
+            "cid:bafy-object-crash-orphan",
+            ModerationScreeningVerdict::Quarantine,
+        );
+        screening.subject_digest = *blake3::hash(&payload).as_bytes();
+        let source = node_with_test_quarantine_key_wrapper(cfg.clone());
+        let quarantine_id = source
+            .record_moderation_screening_result(screening)
+            .expect("record quarantine result")
+            .quarantine
+            .expect("quarantine record")
+            .quarantine_id;
+        let record = source
+            .store_moderation_quarantine_object(ModerationQuarantineObjectInput {
+                quarantine_id,
+                payload,
+                captured_at_unix: 1_800_000_086,
+                content_type: None,
+                notes: None,
+            })
+            .expect("store quarantine object");
+        let envelope_path =
+            moderation_quarantine_object_store_root(cfg.data_dir()).join(&record.envelope_path);
+        source
+            .persist_moderation_quarantine_object_index_snapshot(
+                &ModerationQuarantineObjectSnapshot::default(),
+            )
+            .expect("simulate index state before interrupted insertion");
+        drop(source);
+
+        let restored = node_with_test_quarantine_key_wrapper(cfg);
+        assert!(
+            restored
+                .moderation_quarantine_object_snapshot()
+                .objects
+                .is_empty()
+        );
+        assert!(
+            !envelope_path.exists(),
+            "startup recovery must durably remove a canonical unindexed envelope"
+        );
+    }
+
+    #[test]
     fn moderation_quarantine_object_store_rejects_digest_mismatch() {
         let (cfg, _dir) = storage_config_with_temp_dir();
         let expected_payload = b"expected quarantined bytes".to_vec();
@@ -18626,7 +20701,7 @@ mod tests {
             ModerationScreeningVerdict::Quarantine,
         );
         screening.subject_digest = *blake3::hash(&expected_payload).as_bytes();
-        let handle = NodeHandle::new(cfg);
+        let handle = node_with_test_quarantine_key_wrapper(cfg);
         let outcome = handle
             .record_moderation_screening_result(screening)
             .expect("record quarantine result");
@@ -18662,7 +20737,7 @@ mod tests {
             ModerationScreeningVerdict::Quarantine,
         );
         screening.subject_digest = *blake3::hash(&payload).as_bytes();
-        let handle = NodeHandle::new(cfg.clone());
+        let handle = node_with_test_quarantine_key_wrapper(cfg.clone());
         let outcome = handle
             .record_moderation_screening_result(screening)
             .expect("record quarantine result");
@@ -18681,7 +20756,7 @@ mod tests {
         let envelope_bytes = fs::read(&envelope_path).expect("read envelope");
         let mut envelope: crate::moderation::ModerationQuarantineObjectEnvelopeV1 =
             norito::decode_from_bytes(&envelope_bytes).expect("decode envelope");
-        envelope.ciphertext[0] ^= 0x01;
+        envelope.chunks[0].ciphertext[0] ^= 0x01;
         let tampered_bytes = norito::to_bytes(&envelope).expect("encode tampered envelope");
         fs::write(&envelope_path, tampered_bytes).expect("write tampered envelope");
 
@@ -18703,7 +20778,7 @@ mod tests {
             ModerationScreeningVerdict::Quarantine,
         );
         screening.subject_digest = *blake3::hash(&payload).as_bytes();
-        let handle = NodeHandle::new(cfg.clone());
+        let handle = node_with_test_quarantine_key_wrapper(cfg.clone());
         let quarantine_id = handle
             .record_moderation_screening_result(screening)
             .expect("record quarantine result")
@@ -18726,7 +20801,7 @@ mod tests {
         let bytes = fs::read(&envelope_path).expect("read envelope");
         let mut envelope: crate::moderation::ModerationQuarantineObjectEnvelopeV1 =
             norito::decode_from_bytes(&bytes).expect("decode envelope");
-        envelope.ciphertext[0] ^= 0x80;
+        envelope.chunks[0].ciphertext[0] ^= 0x80;
         fs::write(
             &envelope_path,
             norito::to_bytes(&envelope).expect("encode canonical tampered envelope"),
@@ -18734,7 +20809,7 @@ mod tests {
         .expect("write tampered envelope");
 
         assert!(matches!(
-            NodeHandle::try_new(cfg),
+            NodeHandle::try_new_with_quarantine_key_wrapper(cfg, test_quarantine_key_wrapper()),
             Err(NodeInitError::Checkpoint {
                 component: "moderation quarantine object envelope",
                 ..
@@ -18743,15 +20818,15 @@ mod tests {
     }
 
     #[test]
-    fn moderation_quarantine_store_rejects_missing_key_and_orphan_files_on_restart() {
+    fn moderation_quarantine_store_requires_runtime_wrapper_and_rejects_unknown_orphans() {
         let (cfg, _dir) = storage_config_with_temp_dir();
-        let payload = b"indexed quarantine object requires its original sealing key".to_vec();
+        let payload = b"indexed quarantine object requires its runtime key wrapper".to_vec();
         let mut screening = moderation_screening_input_fixture(
-            "cid:bafy-object-missing-key",
+            "cid:bafy-object-missing-wrapper",
             ModerationScreeningVerdict::Quarantine,
         );
         screening.subject_digest = *blake3::hash(&payload).as_bytes();
-        let handle = NodeHandle::new(cfg.clone());
+        let handle = node_with_test_quarantine_key_wrapper(cfg.clone());
         let quarantine_id = handle
             .record_moderation_screening_result(screening)
             .expect("record quarantine result")
@@ -18769,22 +20844,18 @@ mod tests {
             .expect("store quarantine object");
         drop(handle);
 
-        let key_path = moderation_quarantine_object_key_path(cfg.data_dir());
-        let key_bytes = fs::read(&key_path).expect("read sealing key");
-        fs::remove_file(&key_path).expect("remove sealing key");
         assert!(matches!(
             NodeHandle::try_new(cfg.clone()),
             Err(NodeInitError::Checkpoint {
-                component: "moderation quarantine object key",
+                component: "moderation quarantine key wrapper",
                 ..
             })
         ));
 
-        write_local_private_checkpoint_atomic(&key_path, &key_bytes).expect("restore sealing key");
         let orphan = moderation_quarantine_object_store_root(cfg.data_dir()).join("orphan.to");
         fs::write(&orphan, b"not indexed").expect("write orphan object");
         assert!(matches!(
-            NodeHandle::try_new(cfg),
+            NodeHandle::try_new_with_quarantine_key_wrapper(cfg, test_quarantine_key_wrapper()),
             Err(NodeInitError::Checkpoint {
                 component: "moderation quarantine object store",
                 ..
@@ -18817,7 +20888,7 @@ mod tests {
     #[test]
     fn moderation_snapshot_restore_rejects_dangling_cross_checkpoint_references() {
         let (cfg, _dir) = storage_config_with_temp_dir();
-        let handle = NodeHandle::new(cfg);
+        let handle = node_with_test_quarantine_key_wrapper(cfg);
         seed_moderation_evidence_viewer_activity(
             &handle,
             "cid:bafy-cross-checkpoint-refs",
@@ -18862,7 +20933,7 @@ mod tests {
             ModerationScreeningVerdict::Quarantine,
         );
         screening.subject_digest = *blake3::hash(&payload).as_bytes();
-        let source = NodeHandle::new(cfg.clone());
+        let source = node_with_test_quarantine_key_wrapper(cfg.clone());
         let outcome = source
             .record_moderation_screening_result(screening)
             .expect("record quarantine result");
@@ -18873,7 +20944,7 @@ mod tests {
                 payload: payload.clone(),
                 captured_at_unix: 1_800_000_090,
                 content_type: Some("application/octet-stream".to_string()),
-                notes: Some("viewer object".to_string()),
+                notes: None,
             })
             .expect("store quarantine object");
 
@@ -18911,7 +20982,7 @@ mod tests {
             "evidence viewer checkpoint must persist when storage is enabled"
         );
         drop(source);
-        let restored = NodeHandle::new(cfg);
+        let restored = node_with_test_quarantine_key_wrapper(cfg);
         let snapshot = restored
             .export_moderation_evidence_viewer_snapshot()
             .expect("export restored evidence viewer snapshot");
@@ -18928,7 +20999,7 @@ mod tests {
             ModerationScreeningVerdict::Quarantine,
         );
         screening.subject_digest = *blake3::hash(&payload).as_bytes();
-        let handle = NodeHandle::new(cfg);
+        let handle = node_with_test_quarantine_key_wrapper(cfg);
         let outcome = handle
             .record_moderation_screening_result(screening)
             .expect("record quarantine result");
@@ -18979,7 +21050,7 @@ mod tests {
             ModerationScreeningVerdict::Quarantine,
         );
         screening.subject_digest = *blake3::hash(&payload).as_bytes();
-        let handle = NodeHandle::new(cfg);
+        let handle = node_with_test_quarantine_key_wrapper(cfg);
         let outcome = handle
             .record_moderation_screening_result(screening)
             .expect("record quarantine result");
@@ -19047,7 +21118,7 @@ mod tests {
             ModerationScreeningVerdict::Quarantine,
         );
         screening.subject_digest = *blake3::hash(&payload).as_bytes();
-        let handle = NodeHandle::new(cfg);
+        let handle = node_with_test_quarantine_key_wrapper(cfg);
         let publisher = Arc::new(RecordingPublisher::default());
         let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
         handle.set_governance_publisher(trait_publisher);
@@ -19496,6 +21567,7 @@ mod tests {
             .restore_moderation_screening_snapshot(ModerationScreeningSnapshot {
                 screening_records: vec![tampered],
                 quarantine_records: Vec::new(),
+                authenticated_admissions: Vec::new(),
             })
             .expect_err("tampered digest rejected");
         assert!(matches!(
@@ -20123,7 +22195,7 @@ mod tests {
             .data_dir(base.data_dir().clone())
             .runtime_retention(RuntimeRetentionPolicy::new(2, 2, 2 * 1024 * 1024))
             .build();
-        let handle = NodeHandle::new(cfg.clone());
+        let handle = node_with_test_quarantine_key_wrapper(cfg.clone());
         let mut sessions = Vec::new();
         let mut session_inputs = Vec::new();
         for index in 0_u8..2 {
@@ -20217,7 +22289,7 @@ mod tests {
         );
         drop(handle);
 
-        let restored = NodeHandle::new(cfg);
+        let restored = node_with_test_quarantine_key_wrapper(cfg);
         assert_eq!(
             restored
                 .moderation_screening_snapshot()
@@ -25032,7 +27104,8 @@ mod tests {
                 1_800_604_800,
                 1_800_604_801,
                 None,
-                privacy_aggregate_cycle_config(Some([0x5A; 32])),
+                privacy_aggregate_cycle_config(),
+                Some([0x5A; 32]),
             )
             .expect("publish aggregate cycle from source events");
 
@@ -25063,7 +27136,7 @@ mod tests {
     }
 
     #[test]
-    fn publish_privacy_aggregate_cycle_from_source_events_requires_noise_seed() {
+    fn publish_privacy_aggregate_cycle_from_source_events_requires_cycle_prf_output() {
         let (cfg, _dir) = storage_config_with_temp_dir();
         let handle = NodeHandle::new(cfg);
         let publisher = Arc::new(RecordingPublisher::default());
@@ -25093,18 +27166,19 @@ mod tests {
                 1_800_604_800,
                 1_800_604_801,
                 None,
-                privacy_aggregate_cycle_config(None),
+                privacy_aggregate_cycle_config(),
+                None,
             )
-            .expect_err("missing noise seed rejected");
+            .expect_err("missing cycle PRF output rejected");
 
-        assert!(err.to_string().contains("runtime noise seed"));
+        assert!(err.to_string().contains("hidden cycle PRF output"));
         assert!(publisher.take().is_empty());
     }
 
     #[test]
     fn publish_due_privacy_aggregate_cycle_from_source_events_publishes_once() {
         let (cfg, _dir) = storage_config_with_temp_dir();
-        let handle = NodeHandle::new(cfg);
+        let handle = node_with_test_privacy_cycle_prf_provider(cfg);
         let publisher = Arc::new(RecordingPublisher::default());
         let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
         handle.set_governance_publisher(trait_publisher);
@@ -25122,7 +27196,8 @@ mod tests {
             .publish_due_privacy_aggregate_cycle_from_source_events(
                 211,
                 privacy_aggregate_schedule_config(),
-                privacy_aggregate_cycle_config(Some([0x5A; 32])),
+                privacy_aggregate_cycle_config(),
+                Some(privacy_composition_budget_policy()),
                 None,
             )
             .expect("publish due aggregate cycle");
@@ -25146,7 +27221,8 @@ mod tests {
             .publish_due_privacy_aggregate_cycle_from_source_events(
                 211,
                 privacy_aggregate_schedule_config(),
-                privacy_aggregate_cycle_config(Some([0x5A; 32])),
+                privacy_aggregate_cycle_config(),
+                Some(privacy_composition_budget_policy()),
                 None,
             )
             .expect("repeat due aggregate cycle");
@@ -25160,7 +27236,7 @@ mod tests {
     #[test]
     fn publish_due_privacy_aggregate_cycle_from_source_events_catches_up_stale_windows() {
         let (cfg, _dir) = storage_config_with_temp_dir();
-        let handle = NodeHandle::new(cfg);
+        let handle = node_with_test_privacy_cycle_prf_provider(cfg);
         let publisher = Arc::new(RecordingPublisher::default());
         let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
         handle.set_governance_publisher(trait_publisher);
@@ -25179,7 +27255,8 @@ mod tests {
             .publish_due_privacy_aggregate_cycle_from_source_events(
                 311,
                 privacy_aggregate_schedule_config(),
-                privacy_aggregate_cycle_config(Some([0x5A; 32])),
+                privacy_aggregate_cycle_config(),
+                Some(privacy_composition_budget_policy()),
                 None,
             )
             .expect("publish first stale aggregate cycle");
@@ -25201,7 +27278,8 @@ mod tests {
             .publish_due_privacy_aggregate_cycle_from_source_events(
                 311,
                 privacy_aggregate_schedule_config(),
-                privacy_aggregate_cycle_config(Some([0x5A; 32])),
+                privacy_aggregate_cycle_config(),
+                Some(privacy_composition_budget_policy()),
                 None,
             )
             .expect("publish latest aggregate cycle after catch-up");
@@ -25221,9 +27299,15 @@ mod tests {
     }
 
     #[test]
-    fn publish_due_privacy_aggregate_cycle_from_source_events_skips_stale_suppressed_window() {
+    fn privacy_cycle_prf_derives_distinct_requests_for_catch_up_windows() {
         let (cfg, _dir) = storage_config_with_temp_dir();
-        let handle = NodeHandle::new(cfg);
+        let provider = Arc::new(TestPrivacyCyclePrfProvider::bound());
+        let trait_provider: Arc<dyn PrivacyCyclePrfProviderV1> = provider.clone();
+        let handle = NodeHandle::try_new_with_runtime_deps(
+            cfg,
+            NodeRuntimeDeps::default().with_privacy_cycle_prf_provider(trait_provider),
+        )
+        .expect("initialise node with recording threshold PRF provider");
         let publisher = Arc::new(RecordingPublisher::default());
         let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
         handle.set_governance_publisher(trait_publisher);
@@ -25241,7 +27325,8 @@ mod tests {
             .publish_due_privacy_aggregate_cycle_from_source_events(
                 311,
                 privacy_aggregate_schedule_config(),
-                privacy_aggregate_cycle_config(Some([0x5A; 32])),
+                privacy_aggregate_cycle_config(),
+                Some(privacy_composition_budget_policy()),
                 None,
             )
             .expect("publish due aggregate cycle with stale suppressed window");
@@ -25257,6 +27342,106 @@ mod tests {
             other => panic!("expected later published outcome, got {other:?}"),
         }
         assert_eq!(publisher.take().len(), 1);
+        let requests = provider.requests();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].policy_digest(), [0xC0; 32]);
+        assert_eq!(requests[1].policy_digest(), [0xC0; 32]);
+        assert_eq!(
+            (
+                requests[0].cycle_start_unix(),
+                requests[0].cycle_end_unix(),
+                requests[0].due_at_unix(),
+            ),
+            (100, 200, 210)
+        );
+        assert_eq!(
+            (
+                requests[1].cycle_start_unix(),
+                requests[1].cycle_end_unix(),
+                requests[1].due_at_unix(),
+            ),
+            (200, 300, 310)
+        );
+        assert_ne!(requests[0].cycle_id(), requests[1].cycle_id());
+        assert_ne!(requests[0].binding_digest(), requests[1].binding_digest());
+    }
+
+    #[test]
+    fn privacy_cycle_prf_startup_requires_runtime_provider() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let root = temp_dir.path().canonicalize().expect("canonical temp dir");
+        let cfg = privacy_aggregate_storage_config(&root);
+        assert!(matches!(
+            NodeHandle::try_new(cfg),
+            Err(NodeInitError::PrivacyCyclePrfProviderUnavailable)
+        ));
+    }
+
+    #[test]
+    fn privacy_cycle_prf_rejects_zero_and_failed_outputs_without_diagnostics() {
+        for (mode, expected) in [
+            (
+                TestPrivacyCyclePrfMode::Zero,
+                "runtime threshold PRF provider returned an invalid all-zero output",
+            ),
+            (
+                TestPrivacyCyclePrfMode::Failure(PrivacyCyclePrfProviderErrorV1::Internal),
+                "runtime threshold PRF provider internal failure",
+            ),
+        ] {
+            let temp_dir = tempfile::tempdir().expect("create temp dir");
+            let root = temp_dir.path().canonicalize().expect("canonical temp dir");
+            let cfg = privacy_aggregate_storage_config(&root);
+            let provider: Arc<dyn PrivacyCyclePrfProviderV1> = Arc::new(match mode {
+                TestPrivacyCyclePrfMode::Zero => TestPrivacyCyclePrfProvider::zero(),
+                TestPrivacyCyclePrfMode::Failure(error) => {
+                    TestPrivacyCyclePrfProvider::failing(error)
+                }
+                TestPrivacyCyclePrfMode::Bound => unreachable!("bounded mode is not an error case"),
+            });
+            let handle = NodeHandle::try_new_with_runtime_deps(
+                cfg,
+                NodeRuntimeDeps::default().with_privacy_cycle_prf_provider(provider),
+            )
+            .expect("initialise node with error-injecting threshold PRF provider");
+            for event in [
+                privacy_source_event("alpha-1", "jurisdiction-a", 0xA0, 110),
+                privacy_source_event("alpha-2", "jurisdiction-a", 0xA0, 120),
+            ] {
+                handle
+                    .record_privacy_aggregate_source_event(event)
+                    .expect("record source event");
+            }
+            let error = handle
+                .publish_due_configured_privacy_aggregate_cycle_from_source_events(211, None)
+                .expect_err("invalid provider output must fail closed");
+            assert_eq!(error.to_string(), expected);
+            assert!(
+                !error
+                    .to_string()
+                    .contains("TEST-PRF-VENDOR-DIAGNOSTIC-MUST-NOT-LEAK")
+            );
+        }
+    }
+
+    #[test]
+    fn privacy_cycle_prf_debug_redacts_runtime_crypto_provider_implementations() {
+        let config = StorageConfig::builder().enabled(false).build();
+        let privacy_provider: Arc<dyn PrivacyCyclePrfProviderV1> =
+            Arc::new(TestPrivacyCyclePrfProvider::bound());
+        let quarantine_wrapper = test_quarantine_key_wrapper();
+        let node = NodeHandle::try_new_with_runtime_deps(
+            config,
+            NodeRuntimeDeps::default()
+                .with_moderation_quarantine_key_wrapper(quarantine_wrapper)
+                .with_privacy_cycle_prf_provider(privacy_provider),
+        )
+        .expect("initialise node with runtime crypto providers");
+        let debug = format!("{node:?}");
+        assert!(debug.contains("ModerationQuarantineKeyWrapper(<runtime-only>)"));
+        assert!(debug.contains("PrivacyCyclePrfProviderV1(<runtime-only>)"));
+        assert!(!debug.contains("kms:test/quarantine-v1"));
+        assert!(!debug.contains("TEST-PRF-VENDOR-DIAGNOSTIC-MUST-NOT-LEAK"));
     }
 
     #[test]
@@ -25268,8 +27453,9 @@ mod tests {
             .enabled(true)
             .data_dir(root.join("storage"))
             .privacy_aggregate_schedule(Some(schedule))
+            .privacy_aggregate_policy(Some(privacy_aggregate_policy_config()))
             .build();
-        let handle = NodeHandle::new(cfg);
+        let handle = node_with_test_privacy_cycle_prf_provider(cfg);
         assert_eq!(
             handle.configured_privacy_aggregate_schedule(),
             Some(schedule)
@@ -25287,11 +27473,7 @@ mod tests {
         }
 
         let outcome = handle
-            .publish_due_configured_privacy_aggregate_cycle_from_source_events(
-                211,
-                privacy_aggregate_cycle_config(Some([0x5A; 32])),
-                None,
-            )
+            .publish_due_configured_privacy_aggregate_cycle_from_source_events(211, None)
             .expect("publish configured aggregate cycle");
         let publication = match outcome {
             PrivacyAggregateScheduleOutcome::Published {
@@ -25306,6 +27488,85 @@ mod tests {
         };
         assert_eq!(publication.block.generated_at_unix, 211);
         assert_eq!(publisher.take().len(), 1);
+        assert_eq!(handle.privacy_aggregate_source_event_count(), 0);
+        let budget = handle
+            .privacy_composition_budget_snapshot()
+            .expect("privacy composition budget snapshot");
+        assert_eq!(budget.chains.len(), 1);
+        assert_eq!(budget.chains[0].charges.len(), 1);
+        assert_eq!(
+            budget.chains[0].charges[0].cycle_id,
+            publication.block.cycle_id
+        );
+    }
+
+    #[test]
+    fn privacy_publication_budget_state_and_outbox_restore_atomically() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let root = temp_dir.path().canonicalize().expect("canonical temp dir");
+        let schedule = privacy_aggregate_schedule_config();
+        let cfg = StorageConfig::builder()
+            .enabled(true)
+            .data_dir(root.join("storage"))
+            .privacy_aggregate_schedule(Some(schedule))
+            .privacy_aggregate_policy(Some(privacy_aggregate_policy_config()))
+            .build();
+        let source = node_with_test_privacy_cycle_prf_provider(cfg.clone());
+        for event in [
+            privacy_source_event("alpha-1", "jurisdiction-a", 0xA0, 110),
+            privacy_source_event("alpha-2", "jurisdiction-a", 0xA0, 120),
+        ] {
+            source
+                .record_privacy_aggregate_source_event(event)
+                .expect("record source event");
+        }
+
+        let published = source
+            .publish_due_configured_privacy_aggregate_cycle_from_source_events(211, None)
+            .expect("commit configured privacy cycle without publisher");
+        let cycle_id = match published {
+            PrivacyAggregateScheduleOutcome::Published { publication, .. } => {
+                publication.block.cycle_id
+            }
+            other => panic!("expected published outcome, got {other:?}"),
+        };
+        assert_eq!(source.pending_governance_publication_count(), 1);
+        assert_eq!(source.privacy_aggregate_source_event_count(), 0);
+        drop(source);
+
+        let restored = node_with_test_privacy_cycle_prf_provider(cfg);
+        assert_eq!(restored.pending_governance_publication_count(), 1);
+        assert_eq!(restored.privacy_aggregate_source_event_count(), 0);
+        let budget = restored
+            .privacy_composition_budget_snapshot()
+            .expect("restored privacy budget");
+        assert_eq!(budget.chains.len(), 1);
+        assert_eq!(budget.chains[0].charges.len(), 1);
+        assert_eq!(budget.chains[0].charges[0].cycle_id, cycle_id);
+
+        let repeated = restored
+            .publish_due_configured_privacy_aggregate_cycle_from_source_events(211, None)
+            .expect("repeat restored privacy cycle");
+        assert!(matches!(
+            repeated,
+            PrivacyAggregateScheduleOutcome::AlreadyPublished { .. }
+        ));
+        assert_eq!(
+            restored
+                .privacy_composition_budget_snapshot()
+                .expect("budget after replay")
+                .chains[0]
+                .charges
+                .len(),
+            1
+        );
+
+        let publisher = Arc::new(RecordingPublisher::default());
+        restored
+            .try_set_governance_publisher(publisher.clone())
+            .expect("replay durable privacy publication");
+        assert_eq!(publisher.take().len(), 1);
+        assert_eq!(restored.pending_governance_publication_count(), 0);
     }
 
     #[test]
@@ -25318,11 +27579,7 @@ mod tests {
         assert_eq!(handle.configured_privacy_aggregate_schedule(), None);
 
         let outcome = handle
-            .publish_due_configured_privacy_aggregate_cycle_from_source_events(
-                211,
-                privacy_aggregate_cycle_config(Some([0x5A; 32])),
-                None,
-            )
+            .publish_due_configured_privacy_aggregate_cycle_from_source_events(211, None)
             .expect("disabled configured aggregate cycle");
         assert_eq!(outcome, PrivacyAggregateScheduleOutcome::Disabled);
     }
@@ -25330,7 +27587,7 @@ mod tests {
     #[test]
     fn publish_due_privacy_aggregate_cycle_from_source_events_skips_empty_and_suppressed() {
         let (cfg, _dir) = storage_config_with_temp_dir();
-        let handle = NodeHandle::new(cfg);
+        let handle = node_with_test_privacy_cycle_prf_provider(cfg);
         let publisher = Arc::new(RecordingPublisher::default());
         let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
         handle.set_governance_publisher(trait_publisher);
@@ -25338,7 +27595,8 @@ mod tests {
             .publish_due_privacy_aggregate_cycle_from_source_events(
                 211,
                 privacy_aggregate_schedule_config(),
-                privacy_aggregate_cycle_config(Some([0x5A; 32])),
+                privacy_aggregate_cycle_config(),
+                Some(privacy_composition_budget_policy()),
                 None,
             )
             .expect("empty due aggregate cycle");
@@ -25359,7 +27617,8 @@ mod tests {
             .publish_due_privacy_aggregate_cycle_from_source_events(
                 211,
                 privacy_aggregate_schedule_config(),
-                privacy_aggregate_cycle_config(Some([0x5A; 32])),
+                privacy_aggregate_cycle_config(),
+                Some(privacy_composition_budget_policy()),
                 None,
             )
             .expect("suppressed due aggregate cycle");
@@ -26035,6 +28294,51 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[test]
+    fn idempotent_repair_report_reserves_one_publication_and_rejects_source_rebinding() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle =
+            NodeHandle::new_with_policies(cfg, enabled_repair_config(3), GcConfig::default());
+        let report = repair_report_fixture("REP-IDEMPOTENT-001", 0x71, 0x81, 1_701_100_000);
+        let source_identity = [0x91; 32];
+
+        let first = handle
+            .enqueue_repair_report_idempotent(source_identity, &report)
+            .expect("first subsystem-authenticated report commits");
+        assert_eq!(first.ticket_id, report.ticket_id);
+        assert_eq!(handle.repair_events_since(None, 10).len(), 1);
+        assert_eq!(handle.pending_governance_publication_count(), 1);
+
+        let replay = handle
+            .enqueue_repair_report_idempotent(source_identity, &report)
+            .expect("exact subsystem report replay is idempotent");
+        assert_eq!(replay.ticket_id, first.ticket_id);
+        assert_eq!(replay.state, first.state);
+        assert_eq!(
+            handle.repair_events_since(None, 10).len(),
+            1,
+            "exact replay must not append another repair event"
+        );
+        assert_eq!(
+            handle.pending_governance_publication_count(),
+            1,
+            "exact replay must not reserve or publish a second audit row"
+        );
+
+        let mut rebound = report.clone();
+        rebound.notes = Some("different canonical report for the same source".to_owned());
+        let error = handle
+            .enqueue_repair_report_idempotent(source_identity, &rebound)
+            .expect_err("source identity rebinding must fail closed");
+        assert!(
+            error.to_string().contains("idempotency")
+                || error.to_string().contains("already bound"),
+            "unexpected source-rebinding error: {error}"
+        );
+        assert_eq!(handle.repair_events_since(None, 10).len(), 1);
+        assert_eq!(handle.pending_governance_publication_count(), 1);
     }
 
     #[test]
@@ -30108,6 +32412,16 @@ mod tests {
             Ok(())
         }
 
+        fn publish_pdp_archive(
+            &self,
+            _archive: &PdpGovernanceArchiveV1,
+            encoded: &[u8],
+        ) -> Result<(), GovernancePublishError> {
+            let mut guard = self.payloads.lock().expect("publisher lock poisoned");
+            guard.push(encoded.to_vec());
+            Ok(())
+        }
+
         fn publish_repair_audit_event(
             &self,
             _event: &RepairAuditEventV1,
@@ -30245,6 +32559,16 @@ mod tests {
         fn publish_deal_settlement(
             &self,
             _settlement: &DealSettlementV1,
+            _encoded: &[u8],
+        ) -> Result<(), GovernancePublishError> {
+            let mut guard = self.attempts.lock().expect("publisher lock poisoned");
+            *guard += 1;
+            Err(GovernancePublishError::other("simulated publish failure"))
+        }
+
+        fn publish_pdp_archive(
+            &self,
+            _archive: &PdpGovernanceArchiveV1,
             _encoded: &[u8],
         ) -> Result<(), GovernancePublishError> {
             let mut guard = self.attempts.lock().expect("publisher lock poisoned");

@@ -31,7 +31,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 | المعلم | نافذة السريان | ملخص التغيير | الفرق المتأثرة | عناصر العمل | الحالة |
 |--------|---------------|--------------|----------------|-------------|--------|
-| M0 | الأسابيع 1–6 | نُشرت fixtures للـ chunker؛ تصدر pipelines حزما من CAR + manifest إلى جانب artefacts القديمة؛ تم إنشاء إدخالات السجل. | Docs, DevRel, SDKs | اعتماد `sorafs_manifest_stub` مع flags التوقع، تسجيل الإدخالات في هذا السجل، الحفاظ على الـ CDN القديم. | ✅ نشط |
+| M0 | الأسابيع 1–6 | نُشرت fixtures للـ chunker؛ تصدر pipelines حزما من CAR + manifest إلى جانب artefacts القديمة؛ تم إنشاء إدخالات السجل. | Docs, DevRel, SDKs | اعتماد `sorafs_manifest_builder` مع flags التوقع، تسجيل الإدخالات في هذا السجل، الحفاظ على الـ CDN القديم. | ✅ نشط |
 | M1 | الأسابيع 7–12 | يفرض CI fixtures حتمية؛ أدلة alias متاحة في staging؛ tooling يعرض flags توقع صريحة. | Docs, Storage, Governance | التأكد من بقاء fixtures موقعة، تسجيل aliases في سجل staging، تحديث قوائم الإصدار بإنفاذ `--car-digest/--root-cid`. | ⏳ معلّق |
 | M2 | الأسابيع 13–20 | يصبح pinning المعتمد على registry هو المسار الأساسي؛ تتحول artefacts القديمة إلى قراءة فقط؛ تفضل البوابات أدلة registry. | Storage, Ops, Governance | تمرير pinning عبر registry، تجميد hosts القديمة، نشر إشعارات ترحيل للمشغلين. | ⏳ معلّق |
 | M3 | الأسبوع 21+ | فرض وصول قائم على alias فقط؛ تنبه المراقبة إلى تكافؤ registry؛ إزالة CDN القديم. | Ops, Networking, SDKs | إزالة DNS القديم، تدوير عناوين URLs المخزنة مؤقتا، مراقبة لوحات التكافؤ، تحديث defaults الخاصة بالـ SDK. | ⏳ معلّق |

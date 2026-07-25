@@ -65,7 +65,7 @@ cargo test -p sorafs_car --features cli --test capacity_cli
 python3 scripts/telemetry/capacity_reconcile.py --snapshot <state.json> --ledger <ledger.ndjson> --warn-only
 ```
 
-ペイロード ペイロード `sorafs_manifest_stub capacity {declaration,dispute}` وأرشفة بايتات JSON/Norito は、次のとおりです。
+ペイロード ペイロード `sorafs_manifest_builder capacity {declaration,dispute}` وأرشفة بايتات JSON/Norito は、次のとおりです。
 
 ## アーティファクト
 

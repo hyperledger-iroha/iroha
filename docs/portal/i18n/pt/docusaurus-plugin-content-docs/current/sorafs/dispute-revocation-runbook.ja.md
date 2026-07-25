@@ -44,7 +44,7 @@ Este runbook guia operadores de governanca na abertura de disputas de capacidade
 
 ## 3. Registrar a disputa
 
-1. Crie um JSON spec para `sorafs_manifest_stub capacity dispute`:
+1. Crie um JSON spec para `sorafs_manifest_builder capacity dispute`:
 
    ```json
    {
@@ -67,7 +67,7 @@ Este runbook guia operadores de governanca na abertura de disputas de capacidade
 2. Execute a CLI:
 
    ```bash
-   sorafs_manifest_stub capacity dispute \
+   sorafs_manifest_builder capacity dispute \
      --spec=dispute.json \
      --norito-out=dispute.to \
      --base64-out=dispute.b64 \
@@ -84,7 +84,7 @@ Este runbook guia operadores de governanca na abertura de disputas de capacidade
 
 1. **Janela de graca:** notifique o provedor sobre a revogacao iminente; permita a evacuacao dos dados fixados quando a politica permitir.
 2. **Gere `ProviderAdmissionRevocationV1`:**
-   - Use `sorafs_manifest_stub provider-admission revoke` com o motivo aprovado.
+   - Use `sorafs_manifest_builder provider-admission revoke` com o motivo aprovado.
    - Verifique assinaturas e o digest de revogacao.
 3. **Publique a revogacao:**
    - Envie a requisicao de revogacao para Torii.
@@ -99,7 +99,7 @@ Este runbook guia operadores de governanca na abertura de disputas de capacidade
 
 ## 6. Materiais de referencia
 
-- `sorafs_manifest_stub capacity dispute --help`
+- `sorafs_manifest_builder capacity dispute --help`
 - `docs/source/sorafs/storage_capacity_marketplace.md` (secao de disputas)
 - `docs/source/sorafs/provider_admission_policy.md` (fluxo de revogacao)
 - Dashboard de observabilidade: `SoraFS / Capacity Providers`

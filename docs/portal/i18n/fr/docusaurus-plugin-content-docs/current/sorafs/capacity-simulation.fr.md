@@ -19,7 +19,7 @@ description : Exercer le kit de simulation du marché de capacité SF-2c avec de
 Cette page reflète `docs/source/sorafs/runbooks/sorafs_capacity_simulation.md`. Gardez les deux copies synchronisées jusqu'à ce que l'ensemble de la documentation Sphinx hérité soit entièrement migré.
 :::
 
-Ce runbook explique comment exécuter le kit de simulation du marché de capacité SF-2c et visualiser les métriques résultantes. Il valide la négociation de quotas, la gestion du failover et la remédiation du slashing de bout en bout à l'aide des luminaires déterministes dans `docs/examples/sorafs_capacity_simulation/`. Les charges utiles de capacité utilisent toujours `sorafs_manifest_stub capacity`; utilisez `iroha app sorafs toolkit pack` pour les flux d'empaquetage manifest/CAR.
+Ce runbook explique comment exécuter le kit de simulation du marché de capacité SF-2c et visualiser les métriques résultantes. Il valide la négociation de quotas, la gestion du failover et la remédiation du slashing de bout en bout à l'aide des luminaires déterministes dans `docs/examples/sorafs_capacity_simulation/`. Les charges utiles de capacité utilisent toujours `sorafs_manifest_builder capacity`; utilisez `iroha app sorafs toolkit pack` pour les flux d'empaquetage manifest/CAR.
 
 ## 1. Générer les artefacts CLI
 
@@ -28,7 +28,7 @@ cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./run_cli.sh ./artifacts
 ```
 
-`run_cli.sh` encapsule `sorafs_manifest_stub capacity` pour émettre des payloads Norito, des blobs base64, des corps de requête Torii et des résumés JSON pour :- Trois déclarations de fournisseurs participant au scénario de négociation de quotas.
+`run_cli.sh` encapsule `sorafs_manifest_builder capacity` pour émettre des payloads Norito, des blobs base64, des corps de requête Torii et des résumés JSON pour :- Trois déclarations de fournisseurs participant au scénario de négociation de quotas.
 - Un ordre de réplication allouant le manifeste en mise en scène entre ces fournisseurs.
 - Des instantanés de télémétrie pour la ligne de base pré‑panne, l'intervalle de panne et la récupération de basculement.
 - Un payload de litige demandant un slashing après la panne simulée.

@@ -63,7 +63,7 @@ SF-2c ճանապարհային քարտեզի կետը ներկայացնում 
 - Համօգտագործվող օգնականները (`CapacityMetadataEntry`, `PricingScheduleV1`, գիծ/հանձնարարություն/SLA վավերացնողներ) ապահովում են դետերմինիստական բանալիների վավերացում և սխալի մասին հաղորդում, որ CI և ներքևի գործիքավորումը կարող են կրկին օգտագործել:【crates/sorafs_manifest/src/capacity.rs:230
 - `PinProviderRegistry`-ն այժմ ցուցադրում է շղթայական նկարը `/v1/sorafs/capacity/state`-ի միջոցով՝ համատեղելով մատակարարի հայտարարագրերը և վճարների մատյանում գրանցումները դետերմինիստական Norito-ի հետևում JSON.【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
 - Վավերացման ծածկույթն իրականացնում է կանոնական բռնակի կիրառում, կրկնակի հայտնաբերում, յուրաքանչյուր գծի սահմաններ, կրկնօրինակման նշանակման պաշտպանիչներ և հեռաչափության տիրույթի ստուգումներ, որպեսզի ռեգրեսիաները անմիջապես հայտնվեն CI-ում:【crates/sorafs_manifest/src/capacity.rs:792】
-- Օպերատորի գործիքավորում. `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}`-ը փոխակերպում է մարդու համար ընթեռնելի բնութագրերը Norito կանոնական բեռների, base64 բլբերների և JSON ամփոփագրերի, որպեսզի օպերատորները կարողանան բեմադրել `/v1/sorafs/capacity/declare`, I18NI000000049X, վերարտադրման կարգի լոկալ հարմարանքներով, վավերացում։【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 Հղման հարմարանքները գործում են `fixtures/sorafs_manifest/replication_order/`-ում (`order_v1.json`, I18NI000000052X, `order_v1.to`) և ստեղծվում են vi30.0000000052X-ում և ստեղծվում են vi30.
+- Օպերատորի գործիքավորում. `sorafs_manifest_builder capacity {declaration, telemetry, replication-order}`-ը փոխակերպում է մարդու համար ընթեռնելի բնութագրերը Norito կանոնական բեռների, base64 բլբերների և JSON ամփոփագրերի, որպեսզի օպերատորները կարողանան բեմադրել `/v1/sorafs/capacity/declare`, I18NI000000049X, վերարտադրման կարգի լոկալ հարմարանքներով, վավերացում։【crates/sorafs_car/src/bin/sorafs_manifest_builder/capacity.rs:1】 Հղման հարմարանքները գործում են `fixtures/sorafs_manifest/replication_order/`-ում (`order_v1.json`, I18NI000000052X, `order_v1.to`) և ստեղծվում են vi30.0000000052X-ում և ստեղծվում են vi30.
 
 ### 2. Կառավարման հարթության ինտեգրում
 
@@ -155,7 +155,7 @@ SF-2c ճանապարհային քարտեզի կետը ներկայացնում 
   կառավարման փաթեթների կողքին:
 
 ### Վեճ և կրճատող ապացույցներ
-- Ներկայացրեք վեճերը `sorafs_manifest_stub capacity dispute`-ի միջոցով (թեստեր.
+- Ներկայացրեք վեճերը `sorafs_manifest_builder capacity dispute`-ի միջոցով (թեստեր.
   `cargo test -p sorafs_car --test capacity_cli`), ուստի օգտակար բեռները մնում են կանոնական:
 - Վազիր `cargo test -p iroha_core -- capacity_dispute_replay_is_deterministic` և տուգանքը
   սյուիտներ (`record_capacity_telemetry_penalises_persistent_under_delivery`) վեճերն ապացուցելու համար և
@@ -164,7 +164,7 @@ SF-2c ճանապարհային քարտեզի կետը ներկայացնում 
   Դեղերի հաստատումները նորից կապել վավերացման զեկույցին:
 
 ### Մատակարարի միացման և ծխի ելքի թեստեր
-- Վերարտադրեք հռչակագրի/հեռաչափության արտեֆակտները `sorafs_manifest_stub capacity ...`-ով և վերարտադրեք
+- Վերարտադրեք հռչակագրի/հեռաչափության արտեֆակտները `sorafs_manifest_builder capacity ...`-ով և վերարտադրեք
   CLI-ի թեստերը նախքան ներկայացնելը (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`):
 - Ներկայացրեք Torii (`/v1/sorafs/capacity/declare`) միջոցով, այնուհետև գրավեք `/v1/sorafs/capacity/state` plus
   Grafana սքրինշոթներ: Հետևեք ելքի հոսքին `docs/source/sorafs/capacity_onboarding_runbook.md`-ում:

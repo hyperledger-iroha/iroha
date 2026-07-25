@@ -91,6 +91,13 @@ export const SORAFS_PDP_PAYLOAD_KINDS = Object.freeze({
   PROOF: "proof",
 });
 
+/** Maximum ordered block count accepted by governance DAG head validation. */
+export const SORAFS_GOVERNANCE_DAG_MAX_BLOCKS_V1 = 64;
+/** Maximum aggregate bytes accepted by one governance DAG reference call. */
+export const SORAFS_REFERENCE_MAX_INPUT_BYTES_V1 = 67_108_864;
+/** Maximum UTF-8 bytes accepted by one governance DAG diagnostic label. */
+export const SORAFS_REFERENCE_MAX_LABEL_BYTES_V1 = 1_024;
+
 const PDP_KIND_ALIASES = Object.freeze({
   commitment: SORAFS_PDP_PAYLOAD_KINDS.COMMITMENT,
   "pdp-commitment": SORAFS_PDP_PAYLOAD_KINDS.COMMITMENT,
@@ -644,6 +651,64 @@ function referenceLabel(options, names, fallback) {
   return fallback;
 }
 
+function governanceReferenceLabel(value, fallback, field) {
+  const label = value === undefined || value === null ? fallback : value;
+  if (typeof label !== "string") {
+    throw new TypeError(`${field} must be a string`);
+  }
+  if (label.length === 0 || label.trim().length === 0) {
+    throw new TypeError(`${field} must not be blank`);
+  }
+  if (label.trim() !== label) {
+    throw new TypeError(`${field} must not contain surrounding whitespace`);
+  }
+  if (/[\u0000-\u001f\u007f-\u009f]/u.test(label)) {
+    throw new TypeError(`${field} must not contain control characters`);
+  }
+  if (Buffer.byteLength(label, "utf8") > SORAFS_REFERENCE_MAX_LABEL_BYTES_V1) {
+    throw new TypeError(
+      `${field} must be at most ${SORAFS_REFERENCE_MAX_LABEL_BYTES_V1} UTF-8 bytes`,
+    );
+  }
+  return label;
+}
+
+function governanceReferenceAggregateBytes(context, ...sizes) {
+  let total = 0;
+  for (const size of sizes) {
+    total += size;
+    if (total > SORAFS_REFERENCE_MAX_INPUT_BYTES_V1) {
+      throw new TypeError(
+        `${context} inputs exceed ${SORAFS_REFERENCE_MAX_INPUT_BYTES_V1} aggregate bytes`,
+      );
+    }
+  }
+}
+
+function normalizeGovernanceDagBlockInput(value, index) {
+  if (!isPlainObject(value)) {
+    throw new TypeError(`blocks[${index}] must be an object`);
+  }
+  const payload = readPayloadField(
+    value,
+    "payload",
+    "bytes",
+    "noritoBytes",
+    "norito_bytes",
+  );
+  if (payload === undefined) {
+    throw new TypeError(`blocks[${index}].payload is required`);
+  }
+  return {
+    bytes: toBuffer(payload),
+    label: governanceReferenceLabel(
+      readPayloadField(value, "label"),
+      `governance-dag-block-${index}.to`,
+      `blocks[${index}].label`,
+    ),
+  };
+}
+
 /**
  * Diagnose one Norito-encoded PDP payload with the Rust reference validator.
  * A successful result is structural-only and never authorizes production acceptance.
@@ -816,6 +881,117 @@ export function validatePdpBundle(
       generatedAtUnix,
     ),
     "PDP bundle validation",
+  );
+}
+
+/**
+ * Validate one canonical GovernanceDagBlockV1 with the Rust reference validator.
+ * @param {ArrayBufferView | ArrayBuffer | Buffer} bytes
+ * @param {{ label?: string, expectedBlockCid?: ArrayBufferView | ArrayBuffer | Buffer, expected_block_cid?: ArrayBufferView | ArrayBuffer | Buffer, generatedAtUnix?: number | bigint, generated_at?: number | bigint }} [options]
+ * @returns {Record<string, any>}
+ */
+export function validateGovernanceDagBlock(bytes, options = {}) {
+  if (!isPlainObject(options)) {
+    throw new TypeError("options must be an object");
+  }
+  const payload = toBuffer(bytes);
+  const label = governanceReferenceLabel(
+    readPayloadField(options, "label"),
+    "governance-dag-block.to",
+    "options.label",
+  );
+  const expectedValue = readPayloadField(
+    options,
+    "expectedBlockCid",
+    "expected_block_cid",
+  );
+  const expectedBlockCid =
+    expectedValue === undefined || expectedValue === null
+      ? undefined
+      : toBuffer(expectedValue);
+  governanceReferenceAggregateBytes(
+    "governance DAG block validation",
+    payload.length,
+    Buffer.byteLength(label, "utf8"),
+    expectedBlockCid?.length ?? 0,
+  );
+  const generatedAtUnix = normalizeGeneratedAtUnix(
+    readPayloadField(options, "generatedAtUnix", "generated_at"),
+  );
+  const binding = requireSorafsNativeFunction(
+    "sorafsValidateGovernanceDagBlockJson",
+    "governance DAG block validation",
+  );
+  return parseReferenceOutcomePayload(
+    binding.sorafsValidateGovernanceDagBlockJson(
+      payload,
+      label,
+      expectedBlockCid,
+      generatedAtUnix,
+    ),
+    "governance DAG block validation",
+  );
+}
+
+/**
+ * Validate a signed GovernanceDagHeadV1 against an ordered contiguous block tail.
+ * Histories up to 64 blocks use the full root-to-head sequence; longer histories
+ * use the newest checkpoint-anchored tail.
+ * @param {ArrayBufferView | ArrayBuffer | Buffer} headBytes
+ * @param {Array<{ payload?: ArrayBufferView | ArrayBuffer | Buffer, bytes?: ArrayBufferView | ArrayBuffer | Buffer, noritoBytes?: ArrayBufferView | ArrayBuffer | Buffer, norito_bytes?: ArrayBufferView | ArrayBuffer | Buffer, label?: string }>} blocks
+ * @param {{ headLabel?: string, head_label?: string, generatedAtUnix?: number | bigint, generated_at?: number | bigint }} [options]
+ * @returns {Record<string, any>}
+ */
+export function validateGovernanceDagHeadChain(
+  headBytes,
+  blocks,
+  options = {},
+) {
+  if (!Array.isArray(blocks)) {
+    throw new TypeError("blocks must be an array");
+  }
+  if (
+    blocks.length === 0 ||
+    blocks.length > SORAFS_GOVERNANCE_DAG_MAX_BLOCKS_V1
+  ) {
+    throw new TypeError(
+      `blocks must contain 1..=${SORAFS_GOVERNANCE_DAG_MAX_BLOCKS_V1} entries`,
+    );
+  }
+  if (!isPlainObject(options)) {
+    throw new TypeError("options must be an object");
+  }
+  const head = toBuffer(headBytes);
+  const headLabel = governanceReferenceLabel(
+    readPayloadField(options, "headLabel", "head_label"),
+    "governance-dag-head.to",
+    "options.headLabel",
+  );
+  const normalizedBlocks = blocks.map(normalizeGovernanceDagBlockInput);
+  governanceReferenceAggregateBytes(
+    "governance DAG head-chain validation",
+    head.length,
+    Buffer.byteLength(headLabel, "utf8"),
+    ...normalizedBlocks.flatMap((block) => [
+      block.bytes.length,
+      Buffer.byteLength(block.label, "utf8"),
+    ]),
+  );
+  const generatedAtUnix = normalizeGeneratedAtUnix(
+    readPayloadField(options, "generatedAtUnix", "generated_at"),
+  );
+  const binding = requireSorafsNativeFunction(
+    "sorafsValidateGovernanceDagHeadChainJson",
+    "governance DAG head-chain validation",
+  );
+  return parseReferenceOutcomePayload(
+    binding.sorafsValidateGovernanceDagHeadChainJson(
+      head,
+      headLabel,
+      normalizedBlocks,
+      generatedAtUnix,
+    ),
+    "governance DAG head-chain validation",
   );
 }
 

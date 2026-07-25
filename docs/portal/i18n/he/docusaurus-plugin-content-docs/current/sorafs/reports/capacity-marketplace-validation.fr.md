@@ -63,7 +63,7 @@ cargo test -p sorafs_car --features cli --test capacity_cli
 python3 scripts/telemetry/capacity_reconcile.py --snapshot <state.json> --ledger <ledger.ndjson> --warn-only
 ```
 
-המפעילים מבצעים מחדש את מטענים הדרושים ל-onboarding/litige avec `sorafs_manifest_stub capacity {declaration,dispute}` ו-archiver les bytes JSON/Norito תוצאות aux cotes du ticket de governance.
+המפעילים מבצעים מחדש את מטענים הדרושים ל-onboarding/litige avec `sorafs_manifest_builder capacity {declaration,dispute}` ו-archiver les bytes JSON/Norito תוצאות aux cotes du ticket de governance.
 
 ## חפצי אמנות בסימן
 

@@ -65,7 +65,7 @@ pour vous permettre de réaliser et de réaliser des randonnées exploitables.
 - Les assistants d'observation (`CapacityMetadataEntry`, `PricingScheduleV1`, voies de validation/affectation/SLA) permettent de déterminer la clé de vérification et le rapport sur le bloc-notes, le dossier Vous pouvez gérer les outils CI et en aval.【crates/sorafs_manifest/src/capacity.rs:230】
 - `PinProviderRegistry` permet de publier un instantané en chaîne à partir de `/v1/sorafs/capacity/state`, de consulter les fournisseurs et de consulter le registre des frais pour déterminer Norito. JSON.【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
 - Les validations d'achat fournissent des poignées canoniques, des doubles, des finitions sur la voie, des gardes pour la réplication et les vérifications. Les télémètres à diapason, qui régressent à l'intérieur de CI.【crates/sorafs_manifest/src/capacity.rs:792】
-- Outils d'opérateur : `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` convertit les spécifications techniques en charges utiles canoniques Norito, les blobs base64 et les résumés JSON, les opérateurs peuvent créer des appareils. `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry` et les appareils d'ordre de réplication avec validation locale.【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 Appareils de référence trouvés dans `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) et généré à partir de `cargo run -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order`.### 2. Plan de contrôle d'intégration
+- Outils d'opérateur : `sorafs_manifest_builder capacity {declaration, telemetry, replication-order}` convertit les spécifications techniques en charges utiles canoniques Norito, les blobs base64 et les résumés JSON, les opérateurs peuvent créer des appareils. `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry` et les appareils d'ordre de réplication avec validation locale.【crates/sorafs_car/src/bin/sorafs_manifest_builder/capacity.rs:1】 Appareils de référence trouvés dans `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) et généré à partir de `cargo run -p sorafs_car --bin sorafs_manifest_builder -- capacity replication-order`.### 2. Plan de contrôle d'intégration
 
 | Задача | Propriétaire(s) | Première |
 |------|----------|-------|
@@ -153,7 +153,7 @@ La feuille de route **SF-2c** bloque le déploiement de la production pour la fo
   вместе с paquets de gouvernance.
 
 ### Доказательства différend et slashing
-- Подавайте litiges через `sorafs_manifest_stub capacity dispute` (tests :
+- Подавайте litiges через `sorafs_manifest_builder capacity dispute` (tests :
   `cargo test -p sorafs_car --test capacity_cli`), les charges utiles sont installées sur les canons.
 - Ouvrir le `cargo test -p iroha_core -- capacity_dispute_replay_is_deterministic` et le
   штрафов (`record_capacity_telemetry_penalises_persistent_under_delivery`), que vous devez télécharger
@@ -162,7 +162,7 @@ La feuille de route **SF-2c** bloque le déploiement de la production pour la fo
   эскалации; привязывайте approbations strike обратно в rapport de validation.
 
 ### Fournisseurs de téléphones portables et de téléphones portables
-- Régénérer les déclarations/télémétries des artefacts à partir de `sorafs_manifest_stub capacity ...` et
+- Régénérer les déclarations/télémétries des artefacts à partir de `sorafs_manifest_builder capacity ...` et
   Programmez les tests CLI avant la fin (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`).
 - Sélectionnez Torii (`/v1/sorafs/capacity/declare`), puis fixez-le
   `/v1/sorafs/capacity/state` et étiquettes Grafana. Следуйте flow выхода в

@@ -18,6 +18,7 @@ public final class SorafsReferenceValidatorsTests {
     exposesBridgeSelectors();
     rejectsGeneratedAtBeforeNativeDispatch();
     rejectsBlankLabelBeforeNativeDispatch();
+    boundsGovernanceDagInputsBeforeNativeDispatch();
     rejectsRuntimeSnapshotSigningBeforeNativeDispatch();
     rejectsBadSigningKeyBeforeNativeDispatch();
     rejectsInvalidOrderIdDerivationInputsBeforeNativeDispatch();
@@ -26,6 +27,7 @@ public final class SorafsReferenceValidatorsTests {
     rejectsOrderbookSettlementReceiptFieldsBeforeNativeDispatch();
     rejectsNoncanonicalXorQuantitiesBeforeNativeDispatch();
     validatesOrderbookFixtureWhenNativeBridgeIsAvailable();
+    validatesGovernanceDagFixturesAndNegativeVectorsWhenNativeBridgeIsAvailable();
     signsOrderbookFixtureWhenNativeBridgeIsAvailable();
     derivesCanonicalOrderIdWhenNativeBridgeIsAvailable();
     System.out.println("[IrohaAndroid] SoraFS reference validator tests passed.");
@@ -46,10 +48,16 @@ public final class SorafsReferenceValidatorsTests {
     assert SorafsOrderbookSide.BID.bridgeCode() == 1;
     assert SorafsOrderbookTier.ARCHIVE.bridgeCode() == 3;
     assert SorafsOrderbookCancelReason.REPLACED.bridgeCode() == 4;
-    assert SorafsReferenceValidators.REQUIRED_BRIDGE_ABI_VERSION == 19;
-    assert !SorafsReferenceValidators.isBridgeAbiSupported(18);
-    assert SorafsReferenceValidators.isBridgeAbiSupported(19);
+    assert SorafsReferenceValidators.REQUIRED_BRIDGE_ABI_VERSION == 21;
+    assert !SorafsReferenceValidators.isBridgeAbiSupported(20);
+    assert SorafsReferenceValidators.isBridgeAbiSupported(21);
+    assert !SorafsReferenceValidators.isGovernanceDagBridgeSupported(21, false);
+    assert SorafsReferenceValidators.isGovernanceDagBridgeSupported(21, true);
     assert SorafsReferenceValidators.ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 == 256;
+    assert SorafsReferenceValidators.GOVERNANCE_DAG_MAX_BLOCKS_V1 == 64;
+    assert SorafsReferenceValidators.GOVERNANCE_DAG_CID_BYTES_V1 == 32;
+    assert SorafsReferenceValidators.REFERENCE_MAX_INPUT_BYTES_V1 == 67_108_864;
+    assert SorafsReferenceValidators.REFERENCE_MAX_LABEL_BYTES_V1 == 1_024;
   }
 
   private static void rejectsGeneratedAtBeforeNativeDispatch() {
@@ -72,6 +80,57 @@ public final class SorafsReferenceValidatorsTests {
       threw = ex.getMessage() != null && ex.getMessage().contains("label");
     }
     assert threw : "label should be validated before native dispatch";
+  }
+
+  private static void boundsGovernanceDagInputsBeforeNativeDispatch() {
+    boolean emptyChainThrew = false;
+    try {
+      SorafsReferenceValidators.validateGovernanceDagHeadChainJson(
+          new byte[0], new byte[0][], null, null, 1L);
+    } catch (final IllegalArgumentException ex) {
+      emptyChainThrew = ex.getMessage() != null && ex.getMessage().contains("1..64");
+    }
+    assert emptyChainThrew : "empty governance DAG chains must be rejected";
+
+    boolean tooManyBlocksThrew = false;
+    try {
+      SorafsReferenceValidators.validateGovernanceDagHeadChainJson(
+          new byte[0], new byte[65][], null, null, 1L);
+    } catch (final IllegalArgumentException ex) {
+      tooManyBlocksThrew = ex.getMessage() != null && ex.getMessage().contains("1..64");
+    }
+    assert tooManyBlocksThrew : "oversized governance DAG chains must be rejected";
+
+    boolean mismatchedLabelsThrew = false;
+    try {
+      SorafsReferenceValidators.validateGovernanceDagHeadChainJson(
+          new byte[0], new byte[][] {new byte[0]}, null, new String[0], 1L);
+    } catch (final IllegalArgumentException ex) {
+      mismatchedLabelsThrew =
+          ex.getMessage() != null && ex.getMessage().contains("blockLabels");
+    }
+    assert mismatchedLabelsThrew : "governance DAG block labels must align with blocks";
+
+    boolean oversizedLabelThrew = false;
+    try {
+      SorafsReferenceValidators.validateGovernanceDagBlockJson(
+          new byte[0], decimalOnes(1_025), null, 1L);
+    } catch (final IllegalArgumentException ex) {
+      oversizedLabelThrew = ex.getMessage() != null && ex.getMessage().contains("1024");
+    }
+    assert oversizedLabelThrew : "oversized governance DAG labels must be rejected";
+
+    for (final int invalidLength : new int[] {0, 31, 33}) {
+      boolean invalidExpectedCidThrew = false;
+      try {
+        SorafsReferenceValidators.validateGovernanceDagBlockJson(
+            new byte[0], null, new byte[invalidLength], 1L);
+      } catch (final IllegalArgumentException ex) {
+        invalidExpectedCidThrew =
+            ex.getMessage() != null && ex.getMessage().contains("exactly 32 bytes");
+      }
+      assert invalidExpectedCidThrew : "non-canonical expected CID lengths must be rejected";
+    }
   }
 
   private static void rejectsRuntimeSnapshotSigningBeforeNativeDispatch() {
@@ -240,6 +299,133 @@ public final class SorafsReferenceValidatorsTests {
     assert json.contains("\"code\": \"SFS-OK-000\"") : json;
   }
 
+  private static void validatesGovernanceDagFixturesAndNegativeVectorsWhenNativeBridgeIsAvailable()
+      throws IOException {
+    if (!SorafsReferenceValidators.isNativeAvailable()) {
+      return;
+    }
+    final byte[] first =
+        fixture("sorafs_manifest", "governance", "dag_block_0_v1.to");
+    final byte[] second =
+        fixture("sorafs_manifest", "governance", "dag_block_1_v1.to");
+    final byte[] head =
+        fixture("sorafs_manifest", "governance", "dag_head_v1.to");
+
+    final String blockOutcome =
+        SorafsReferenceValidators.validateGovernanceDagBlockJson(
+            first, null, null, 123L);
+    assert blockOutcome.contains("\"status\": \"Ok\"") : blockOutcome;
+
+    final byte[] wrongCid = new byte[32];
+    java.util.Arrays.fill(wrongCid, (byte) 0x7F);
+    final String cidMismatch =
+        SorafsReferenceValidators.validateGovernanceDagBlockJson(
+            first, null, wrongCid, 123L);
+    assert cidMismatch.contains("\"status\": \"Error\"") : cidMismatch;
+    assert cidMismatch.contains("\"code\": \"SFS-GOV-004\"") : cidMismatch;
+
+    final String headOutcome =
+        SorafsReferenceValidators.validateGovernanceDagHeadChainJson(
+            head,
+            new byte[][] {first, second},
+            "dag_head_v1.to",
+            new String[] {"dag_block_0_v1.to", "dag_block_1_v1.to"},
+            123L);
+    assert headOutcome.contains("\"status\": \"Ok\"") : headOutcome;
+    final String goldenOutcome =
+        new String(
+            fixture(
+                "sorafs_manifest",
+                "governance",
+                "dag_head_validation_outcome_v1.json"),
+            StandardCharsets.UTF_8);
+    assert goldenOutcome.equals(headOutcome) : headOutcome;
+
+    final String reordered =
+        SorafsReferenceValidators.validateGovernanceDagHeadChainJson(
+            head, new byte[][] {second, first}, null, null, 123L);
+    assert reordered.contains("\"status\": \"Error\"") : reordered;
+
+    final String blockSignatureOutcome =
+        SorafsReferenceValidators.validateGovernanceDagBlockJson(
+            fixture(
+                "sorafs_manifest",
+                "governance",
+                "dag_block_bad_signature_v1.to"),
+            "dag_block_bad_signature_v1.to",
+            null,
+            123L);
+    assert new String(
+            fixture(
+                "sorafs_manifest",
+                "governance",
+                "dag_block_bad_signature_validation_outcome_v1.json"),
+            StandardCharsets.UTF_8)
+        .equals(blockSignatureOutcome) : blockSignatureOutcome;
+
+    final String trailingBytesOutcome =
+        SorafsReferenceValidators.validateGovernanceDagBlockJson(
+            fixture(
+                "sorafs_manifest",
+                "governance",
+                "dag_block_trailing_bytes_v1.to"),
+            "dag_block_trailing_bytes_v1.to",
+            null,
+            123L);
+    assert new String(
+            fixture(
+                "sorafs_manifest",
+                "governance",
+                "dag_block_trailing_bytes_validation_outcome_v1.json"),
+            StandardCharsets.UTF_8)
+        .equals(trailingBytesOutcome) : trailingBytesOutcome;
+
+    final String headSignatureOutcome =
+        SorafsReferenceValidators.validateGovernanceDagHeadChainJson(
+            fixture(
+                "sorafs_manifest",
+                "governance",
+                "dag_head_bad_signature_v1.to"),
+            new byte[][] {first, second},
+            "dag_head_bad_signature_v1.to",
+            new String[] {"dag_block_0_v1.to", "dag_block_1_v1.to"},
+            123L);
+    assert new String(
+            fixture(
+                "sorafs_manifest",
+                "governance",
+                "dag_head_bad_signature_validation_outcome_v1.json"),
+            StandardCharsets.UTF_8)
+        .equals(headSignatureOutcome) : headSignatureOutcome;
+
+    final String predecessorOutcome =
+        SorafsReferenceValidators.validateGovernanceDagHeadChainJson(
+            fixture(
+                "sorafs_manifest",
+                "governance",
+                "dag_head_bad_predecessor_v1.to"),
+            new byte[][] {
+              first,
+              fixture(
+                  "sorafs_manifest",
+                  "governance",
+                  "dag_block_1_bad_predecessor_v1.to")
+            },
+            "dag_head_bad_predecessor_v1.to",
+            new String[] {
+              "dag_block_0_v1.to",
+              "dag_block_1_bad_predecessor_v1.to"
+            },
+            123L);
+    assert new String(
+            fixture(
+                "sorafs_manifest",
+                "governance",
+                "dag_head_bad_predecessor_validation_outcome_v1.json"),
+            StandardCharsets.UTF_8)
+        .equals(predecessorOutcome) : predecessorOutcome;
+  }
+
   private static void signsOrderbookFixtureWhenNativeBridgeIsAvailable() throws IOException {
     if (!SorafsReferenceValidators.isNativeAvailable()) {
       return;
@@ -379,7 +565,8 @@ public final class SorafsReferenceValidatorsTests {
         new Path[] {
           cwd.resolve(relative),
           cwd.resolve("..").resolve(relative),
-          cwd.resolve("..").resolve("..").resolve(relative)
+          cwd.resolve("..").resolve("..").resolve(relative),
+          cwd.resolve("..").resolve("..").resolve("..").resolve(relative)
         };
     for (final Path candidate : candidates) {
       final Path normalized = candidate.toAbsolutePath().normalize();

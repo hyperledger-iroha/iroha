@@ -14,7 +14,7 @@ translator: machine-google-reviewed
 #SoraFS Manifest CLI End-to-End နမူနာ
 
 ဤနမူနာသည် SoraFS ကိုအသုံးပြု၍ စာရွက်စာတမ်းတည်ဆောက်မှုကို ထုတ်ဝေခြင်းမှတဆင့် ဖြတ်သန်းပါသည်။
-`sorafs_manifest_stub` CLI သည် အဆုံးအဖြတ်ပေးသော chunking fixtures များနှင့်အတူ
+`sorafs_manifest_builder` CLI သည် အဆုံးအဖြတ်ပေးသော chunking fixtures များနှင့်အတူ
 SoraFS Architecture RFC တွင်ဖော်ပြထားသည်။ စီးဆင်းမှုသည် ထင်ရှားသော မျိုးဆက်ကို ဖုံးလွှမ်းသည်၊
 မျှော်မှန်းချက်စစ်ဆေးမှုများ၊ ထုတ်ယူမှုအစီအစဉ်ကို မှန်ကန်ကြောင်းနှင့် ပြန်လည်ရယူခြင်းဆိုင်ရာ အထောက်အထားများ ပြန်လည်အစမ်းလေ့ကျင့်မှုများ၊
 အဖွဲ့များသည် CI တွင် တူညီသောအဆင့်များကို ထည့်သွင်းနိုင်သည်။
@@ -30,7 +30,7 @@ SoraFS Architecture RFC တွင်ဖော်ပြထားသည်။ စ�
 ## အဆင့် 1 — မန်နီးဖက်စ်၊ CAR၊ လက်မှတ်များနှင့် ထုတ်ယူမှုအစီအစဉ်ကို ဖန်တီးပါ။
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- docs/book \
   --manifest-out target/sorafs/docs.manifest \
   --manifest-signatures-out target/sorafs/docs.manifest_signatures.json \
   --car-out target/sorafs/docs.car \
@@ -91,7 +91,7 @@ Pin Registry ကို အသုံးပြုပြီးသည်နှင့
 မန်နီးဖက်စ်ကို CLI မှတဆင့် တင်ပြပါ-
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- docs/book \
   --plan=target/sorafs/docs.fetch_plan.json \
   --manifest-out target/sorafs/docs.manifest \
   --manifest-signatures-in target/sorafs/docs.manifest_signatures.json \

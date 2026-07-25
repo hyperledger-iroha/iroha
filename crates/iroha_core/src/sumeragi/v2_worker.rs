@@ -67,7 +67,10 @@ use iroha_p2p::{
 
 use super::{
     FairV2IngressOwnershipEvidence,
-    message::{BlockMessage, BlockMessageWire},
+    message::{
+        BlockMessage, BlockMessageWire, LaneHistoricalRecoveryPayloadV1,
+        LaneHistoricalRecoveryRequestV1, LaneHistoricalRecoveryResponseV1,
+    },
     output_guard::{ConsensusOutputGuard, ConsensusOutputPermit},
     v2_apply::V2ApplyService,
     v2_body_store::{
@@ -87,6 +90,7 @@ use super::{
 use crate::{
     EventsSender, IrohaNetwork, NetworkMessage,
     kura::{Kura, KuraV2CommitReceipt},
+    lane_consensus::LaneDrainVoteV1,
     merge_sidecar::{
         CERTIFIED_MERGE_SIDECAR_VERSION_V1, CertifiedMergeSidecarChunkAdmission,
         CertifiedMergeSidecarChunkV1, CertifiedMergeSidecarMessage, CertifiedMergeSidecarRequestV1,
@@ -2326,10 +2330,26 @@ enum ExactOutputRolloverClaim {
         proposal_hash: Hash,
         certificate_hash: HashOf<LaneBlockCertificateV1>,
     },
+    HistoricalLaneRecoveryRequest {
+        scope: ExactOutputCreationScope,
+        target: PeerId,
+        request_hash: HashOf<LaneHistoricalRecoveryRequestV1>,
+    },
+    HistoricalLaneRecoveryResponse {
+        scope: ExactOutputCreationScope,
+        target: PeerId,
+        request_hash: HashOf<LaneHistoricalRecoveryRequestV1>,
+        response_hash: HashOf<LaneHistoricalRecoveryResponseV1>,
+    },
     NativeAmx {
         scope: ExactOutputCreationScope,
         round: wire::ConsensusRound,
         message_hash: HashOf<NativeAmxMessage>,
+    },
+    LaneDrainVote {
+        scope: ExactOutputCreationScope,
+        target: PeerId,
+        vote_hash: HashOf<LaneDrainVoteV1>,
     },
     MergeShare {
         scope: ExactOutputCreationScope,
@@ -2379,7 +2399,10 @@ impl ExactOutputRolloverClaim {
             Self::DurableCommitCertificateResponse { scope, .. }
             | Self::DurableCertifiedBodyResponse { scope, .. }
             | Self::DurableLaneCertificateResponse { scope, .. }
+            | Self::HistoricalLaneRecoveryRequest { scope, .. }
+            | Self::HistoricalLaneRecoveryResponse { scope, .. }
             | Self::NativeAmx { scope, .. }
+            | Self::LaneDrainVote { scope, .. }
             | Self::MergeShare { scope, .. }
             | Self::CertifiedSidecarRequest { scope, .. }
             | Self::CertifiedSidecarChunk { scope, .. } => Some(*scope),
@@ -2512,6 +2535,62 @@ impl ExactOutputRolloverClaim {
                 }
                 Ok(())
             }
+            Self::HistoricalLaneRecoveryRequest {
+                target,
+                request_hash,
+                ..
+            } => {
+                let [NetworkMessage::SumeragiBlock(envelope)] = messages else {
+                    return Err(
+                        "historical lane recovery request claim requires one exact message"
+                            .to_owned(),
+                    );
+                };
+                let BlockMessage::LaneHistoricalRecoveryRequest(request) = envelope.as_message()
+                else {
+                    return Err(
+                        "historical lane recovery request claim covers another block payload"
+                            .to_owned(),
+                    );
+                };
+                if peers != std::slice::from_ref(target)
+                    || HashOf::new(request.as_ref()) != *request_hash
+                {
+                    return Err(
+                        "historical lane recovery request claim changed identity".to_owned()
+                    );
+                }
+                Ok(())
+            }
+            Self::HistoricalLaneRecoveryResponse {
+                target,
+                request_hash,
+                response_hash,
+                ..
+            } => {
+                let [NetworkMessage::SumeragiBlock(envelope)] = messages else {
+                    return Err(
+                        "historical lane recovery response claim requires one exact message"
+                            .to_owned(),
+                    );
+                };
+                let BlockMessage::LaneHistoricalRecoveryResponse(response) = envelope.as_message()
+                else {
+                    return Err(
+                        "historical lane recovery response claim covers another block payload"
+                            .to_owned(),
+                    );
+                };
+                if peers != std::slice::from_ref(target)
+                    || response.request_hash != *request_hash
+                    || HashOf::new(response.as_ref()) != *response_hash
+                {
+                    return Err(
+                        "historical lane recovery response claim changed identity".to_owned()
+                    );
+                }
+                Ok(())
+            }
             Self::NativeAmx {
                 scope,
                 round,
@@ -2527,6 +2606,20 @@ impl ExactOutputRolloverClaim {
                     || HashOf::new(message.as_ref()) != *message_hash
                 {
                     return Err("Native AMX rollover claim changed semantic identity".to_owned());
+                }
+                Ok(())
+            }
+            Self::LaneDrainVote {
+                target, vote_hash, ..
+            } => {
+                let [NetworkMessage::LaneDrainVote(vote)] = messages else {
+                    return Err("lane-drain rollover claim requires one exact vote".to_owned());
+                };
+                vote.validate_ingress()
+                    .map_err(|error| format!("lane-drain rollover claim is invalid: {error}"))?;
+                if peers != std::slice::from_ref(target) || HashOf::new(vote.as_ref()) != *vote_hash
+                {
+                    return Err("lane-drain rollover claim changed semantic identity".to_owned());
                 }
                 Ok(())
             }
@@ -5592,6 +5685,124 @@ fn durable_history_source_covers(
             }
             Ok(())
         }
+        (
+            ExactOutputRolloverClaim::HistoricalLaneRecoveryResponse {
+                request_hash,
+                response_hash,
+                ..
+            },
+            BlockMessage::LaneHistoricalRecoveryResponse(response),
+        ) => {
+            if response.request_hash != *request_hash
+                || HashOf::new(response.as_ref()) != *response_hash
+            {
+                return Err(
+                    "historical lane recovery response changed its exact request binding"
+                        .to_owned(),
+                );
+            }
+            match &response.payload {
+                LaneHistoricalRecoveryPayloadV1::CanonicalBlock {
+                    block,
+                    finality_artifact,
+                } => {
+                    let height = block.header().height().get();
+                    if height > maximum_source_height {
+                        return Err(
+                            "historical canonical-body response belongs to a future height"
+                                .to_owned(),
+                        );
+                    }
+                    let source = kura
+                        .v2_finality_artifact(height)
+                        .map_err(|error| error.to_string())?
+                        .ok_or_else(|| {
+                            "historical canonical-body response lost its finality source".to_owned()
+                        })?;
+                    if &source.height_context.chain_id != source_chain_id
+                        || source != *finality_artifact
+                        || source.validate_for_header(&block.header()).is_err()
+                        || source.verify().is_err()
+                    {
+                        return Err(
+                            "historical canonical-body response differs from Kura finality"
+                                .to_owned(),
+                        );
+                    }
+                    let height = usize::try_from(height)
+                        .ok()
+                        .and_then(NonZeroUsize::new)
+                        .ok_or_else(|| {
+                            "historical canonical-body height is not representable".to_owned()
+                        })?;
+                    if kura.get_block(height).as_deref() != Some(block) {
+                        return Err(
+                            "historical canonical-body response differs from Kura body".to_owned()
+                        );
+                    }
+                    Ok(())
+                }
+                LaneHistoricalRecoveryPayloadV1::AutonomousPayload {
+                    payload,
+                    prepare_qc,
+                    commit_qc,
+                } => {
+                    let descriptor = &payload.origin_proposal.descriptor;
+                    if descriptor.proposal_height > maximum_source_height {
+                        return Err(
+                            "historical autonomous response belongs to a future height".to_owned()
+                        );
+                    }
+                    let certified = kura
+                        .read_certified_lane_block_artifact(
+                            descriptor.lane_id,
+                            descriptor.lane_block_height,
+                        )
+                        .ok_or_else(|| {
+                            "historical autonomous response lost its certified Kura source"
+                                .to_owned()
+                        })?;
+                    if certified.proposal != payload.origin_proposal
+                        || certified.prepare_qc != *prepare_qc
+                        || certified.commit_qc != *commit_qc
+                    {
+                        return Err(
+                            "historical autonomous response differs from certified Kura evidence"
+                                .to_owned(),
+                        );
+                    }
+                    let expected_epoch = payload.epoch;
+                    let (durable_payload, _) = kura
+                        .current_autonomous_lane_payload(
+                            descriptor.lane_id,
+                            descriptor.lane_block_height,
+                            payload.chain_id_hash,
+                            expected_epoch,
+                        )
+                        .ok_or_else(|| {
+                            "historical autonomous response lost its payload sidecar".to_owned()
+                        })?;
+                    let durable_availability = kura
+                        .read_autonomous_lane_block_artifact(
+                            descriptor.lane_id,
+                            descriptor.lane_block_height,
+                            payload.chain_id_hash,
+                            expected_epoch,
+                        )
+                        .and_then(|artifact| artifact.availability_certificate);
+                    if durable_payload != *payload
+                        || durable_availability
+                            .is_none_or(|certificate| certificate.certificate != *prepare_qc)
+                    {
+                        return Err(
+                            "historical autonomous response differs from its READY sidecar"
+                                .to_owned(),
+                        );
+                    }
+                    Ok(())
+                }
+            }
+        }
         _ => Err("Sumeragi v2 durable response claim changed output kind".to_owned()),
     }
 }
@@ -5616,6 +5827,7 @@ fn applied_height_reconstruction_covers(
         ExactOutputRolloverClaim::DurableCommitCertificateResponse { .. }
             | ExactOutputRolloverClaim::DurableCertifiedBodyResponse { .. }
             | ExactOutputRolloverClaim::DurableLaneCertificateResponse { .. }
+            | ExactOutputRolloverClaim::HistoricalLaneRecoveryResponse { .. }
     ) {
         return durable_history_source_covers(
             messages,
@@ -5630,7 +5842,9 @@ fn applied_height_reconstruction_covers(
     }
     if matches!(
         rollover_claim,
-        ExactOutputRolloverClaim::NativeAmx { .. }
+        ExactOutputRolloverClaim::HistoricalLaneRecoveryRequest { .. }
+            | ExactOutputRolloverClaim::NativeAmx { .. }
+            | ExactOutputRolloverClaim::LaneDrainVote { .. }
             | ExactOutputRolloverClaim::MergeShare { .. }
             | ExactOutputRolloverClaim::CertifiedSidecarRequest { .. }
             | ExactOutputRolloverClaim::CertifiedSidecarChunk { .. }
@@ -7675,7 +7889,24 @@ impl ProductionV2Services {
         let (messages, peers, routes, reply_route_history, ingress_ownership, rollover_claim) =
             match effect {
                 V2LaneWorkEffect::PostLaneBlock { peer, message } => {
-                    let rollover_claim = self.current_lane_output_rollover_claim(message)?;
+                    let rollover_claim = match message {
+                        BlockMessage::LaneHistoricalRecoveryRequest(request) => {
+                            ExactOutputRolloverClaim::HistoricalLaneRecoveryRequest {
+                                scope: self.exact_output_scope(),
+                                target: peer.clone(),
+                                request_hash: HashOf::new(request.as_ref()),
+                            }
+                        }
+                        BlockMessage::LaneHistoricalRecoveryResponse(response) => {
+                            ExactOutputRolloverClaim::HistoricalLaneRecoveryResponse {
+                                scope: self.exact_output_scope(),
+                                target: peer.clone(),
+                                request_hash: response.request_hash,
+                                response_hash: HashOf::new(response.as_ref()),
+                            }
+                        }
+                        _ => self.current_lane_output_rollover_claim(message)?,
+                    };
                     let wire = BlockMessageWire::try_preencoded(Arc::new(message.clone()))
                         .map_err(|error| error.to_string())?;
                     (
@@ -7763,6 +7994,23 @@ impl ProductionV2Services {
                             scope: self.exact_output_scope(),
                             round: body.round,
                             message_hash: HashOf::new(message),
+                        },
+                    )
+                }
+                V2LaneWorkEffect::PostLaneDrainVote { peer, vote } => {
+                    vote.validate_ingress().map_err(|error| {
+                        format!("lane-drain effect has invalid vote evidence: {error}")
+                    })?;
+                    (
+                        vec![NetworkMessage::LaneDrainVote(Box::new(vote.clone()))],
+                        vec![peer.clone()],
+                        vec![ExactTargetRoute::Topology],
+                        None,
+                        None,
+                        ExactOutputRolloverClaim::LaneDrainVote {
+                            scope: self.exact_output_scope(),
+                            target: peer.clone(),
+                            vote_hash: HashOf::new(vote),
                         },
                     )
                 }
@@ -8105,6 +8353,8 @@ impl ProductionV2Services {
                 | BlockMessage::LaneBlockVote(_)
                 | BlockMessage::LaneBlockQc(_)
                 | BlockMessage::LaneBlockCertificate(_)
+                | BlockMessage::LaneHistoricalRecoveryRequest(_)
+                | BlockMessage::LaneHistoricalRecoveryResponse(_)
         ) {
             return Err("v2 lane transport rejected a legacy global block message".to_owned());
         }
@@ -8395,6 +8645,39 @@ impl ProductionV2Services {
         }
     }
 
+    /// Send one exact durably authorized lane-drain vote to a selected peer.
+    pub(crate) fn post_lane_drain_vote(&self, peer: PeerId, vote: LaneDrainVoteV1) {
+        let output_guard = Arc::clone(&self.output_guard);
+        let Some(operation) = output_guard.begin_fail_stop_operation() else {
+            return;
+        };
+        if let Err(error) = vote.validate_ingress() {
+            iroha_logger::error!(%error, "lane-drain vote output failed validation");
+            return;
+        }
+        let rollover_claim = ExactOutputRolloverClaim::LaneDrainVote {
+            scope: self.exact_output_scope(),
+            target: peer.clone(),
+            vote_hash: HashOf::new(&vote),
+        };
+        match self.enqueue_exact_fanout_while_guarded(
+            vec![NetworkMessage::LaneDrainVote(Box::new(vote))],
+            vec![peer],
+            rollover_claim,
+            operation.permit(),
+        ) {
+            Ok(ExactFanoutOwnership::Owned) => operation.complete(),
+            Ok(ExactFanoutOwnership::SourceRetained) => {
+                iroha_logger::error!(
+                    "lane-drain vote fanout reached an unreserved outbound corridor boundary"
+                );
+            }
+            Err(error) => {
+                iroha_logger::error!(%error, "lane-drain vote output failed closed");
+            }
+        }
+    }
+
     /// Broadcast one merge signature share to every other frozen voter.
     pub(crate) fn broadcast_merge_to_voters(&self, signature: MergeCommitteeSignature) {
         let output_guard = Arc::clone(&self.output_guard);
@@ -8436,6 +8719,21 @@ impl ProductionV2Services {
             | BlockMessage::LaneBlockQc(_)
             | BlockMessage::LaneBlockCertificate(_) => {
                 self.current_lane_output_rollover_claim(&message)?
+            }
+            BlockMessage::LaneHistoricalRecoveryRequest(request) => {
+                ExactOutputRolloverClaim::HistoricalLaneRecoveryRequest {
+                    scope: self.exact_output_scope(),
+                    target: peer.clone(),
+                    request_hash: HashOf::new(request.as_ref()),
+                }
+            }
+            BlockMessage::LaneHistoricalRecoveryResponse(response) => {
+                ExactOutputRolloverClaim::HistoricalLaneRecoveryResponse {
+                    scope: self.exact_output_scope(),
+                    target: peer.clone(),
+                    request_hash: response.request_hash,
+                    response_hash: HashOf::new(response.as_ref()),
+                }
             }
             _ => return Err("guarded v2 output has no typed rollover claim".to_owned()),
         };
@@ -9168,7 +9466,10 @@ pub(super) mod tests {
             BlockHeader, BlockSignature, CertifiedMergeLedgerReference, SignedBlock,
             consensus::{CertPhase, LaneBlockQcV1, LaneBlockVoteBodyV1},
         },
-        merge::{MergeLedgerEntry, MergeQuorumCertificate},
+        consensus::VALIDATOR_SET_HASH_VERSION_V1,
+        merge::{
+            LaneDrainCertificateBodyV1, LaneDrainIntentV1, MergeLedgerEntry, MergeQuorumCertificate,
+        },
     };
     use tempfile::TempDir;
 
@@ -9560,16 +9861,58 @@ pub(super) mod tests {
 
     fn merge_share(label: &[u8]) -> MergeCommitteeSignature {
         MergeCommitteeSignature {
+            version: iroha_data_model::merge::MERGE_COMMITTEE_SIGNATURE_VERSION_V2,
             epoch_id: 7,
             view: 11,
             signer: 0,
             message_digest: Hash::new(label),
             bls_sig: vec![9; 48],
+            leader_candidate_body: None,
         }
     }
 
     fn merge_share_message(label: &[u8]) -> NetworkMessage {
         NetworkMessage::MergeCommitteeSignature(Arc::new(merge_share(label)))
+    }
+
+    fn lane_drain_vote(keypair: &KeyPair) -> LaneDrainVoteV1 {
+        let signer = PeerId::new(keypair.public_key().clone());
+        let validator_set = vec![signer.clone()];
+        LaneDrainVoteV1::new_signed(
+            LaneDrainCertificateBodyV1 {
+                version: 1,
+                intent: LaneDrainIntentV1 {
+                    version: 1,
+                    chain_id_digest: Hash::new(b"v2-worker-drain-chain"),
+                    lane_id: LaneId::new(3),
+                    dataspace_id: DataSpaceId::new(5),
+                    lane_incarnation: Hash::new(b"v2-worker-drain-incarnation"),
+                    close_global_height: 1,
+                    initial_frontier: iroha_data_model::merge::LaneDrainFrontierV1::ordinary(
+                        LaneId::new(3),
+                        DataSpaceId::new(5),
+                        Hash::new(b"v2-worker-drain-incarnation"),
+                        0,
+                        None,
+                    ),
+                    validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+                    validator_set_hash: HashOf::new(&validator_set),
+                    validator_set,
+                    validator_count: 1,
+                    min_quorum: 1,
+                },
+                final_frontier: iroha_data_model::merge::LaneDrainFrontierV1::ordinary(
+                    LaneId::new(3),
+                    DataSpaceId::new(5),
+                    Hash::new(b"v2-worker-drain-incarnation"),
+                    0,
+                    None,
+                ),
+            },
+            signer,
+            keypair.private_key(),
+        )
+        .expect("valid worker lane-drain vote")
     }
 
     fn native_amx_output(context: &wire::HeightContext, signer: PeerId) -> NativeAmxMessage {
@@ -12540,6 +12883,49 @@ pub(super) mod tests {
         let (_request, chunk) = certified_sidecar_outputs(&service.local_peer, &peer);
         service.post_certified_merge_sidecar(peer, chunk);
         assert!(service.output_guard.restart_required());
+    }
+
+    #[test]
+    fn lane_drain_vote_uses_one_authenticated_exact_output_claim() {
+        let (service, keys) = fixture();
+        let target = service.context.roster[1].validator.clone();
+        let vote = lane_drain_vote(&keys[0]);
+        let effect = V2LaneWorkEffect::PostLaneDrainVote {
+            peer: target.clone(),
+            vote: vote.clone(),
+        };
+        assert_eq!(service.can_retain_lane_work_effect(&effect), Ok(true));
+
+        service.post_lane_drain_vote(target.clone(), vote.clone());
+        let pending = service
+            .lock_pending_exact_output()
+            .expect("inspect retained lane-drain output");
+        assert_eq!(pending.fanouts.len(), 1);
+        let fanout = &pending.fanouts[0];
+        assert_eq!(fanout.semantic_peers(), vec![target.clone()]);
+        assert!(matches!(
+            fanout.messages.as_slice(),
+            [NetworkMessage::LaneDrainVote(queued)] if queued.as_ref() == &vote
+        ));
+        assert!(matches!(
+            &fanout.rollover_claim,
+            ExactOutputRolloverClaim::LaneDrainVote {
+                target: claimed_target,
+                vote_hash,
+                ..
+            } if claimed_target == &target && *vote_hash == HashOf::new(&vote)
+        ));
+        drop(pending);
+
+        let mut tampered = vote;
+        tampered.bls_signature[0] ^= 0x01;
+        let error = service
+            .can_retain_lane_work_effect(&V2LaneWorkEffect::PostLaneDrainVote {
+                peer: target,
+                vote: tampered,
+            })
+            .expect_err("tampered drain vote must fail before corridor reservation");
+        assert!(error.contains("invalid vote evidence"));
     }
 
     #[test]

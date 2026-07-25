@@ -40,7 +40,7 @@ Sidebar_label: Судебные разбирательства и отзыв Run
 
 ## 3. Отправитель судебного разбирательства
 
-1. Создайте спецификацию JSON для `sorafs_manifest_stub capacity dispute`:
+1. Создайте спецификацию JSON для `sorafs_manifest_builder capacity dispute`:
 
    ```json
    {
@@ -63,7 +63,7 @@ Sidebar_label: Судебные разбирательства и отзыв Run
 2. Ланцес ла CLI:
 
    ```bash
-   sorafs_manifest_stub capacity dispute \
+   sorafs_manifest_builder capacity dispute \
      --spec=dispute.json \
      --norito-out=dispute.to \
      --base64-out=dispute.b64 \
@@ -80,7 +80,7 @@ Sidebar_label: Судебные разбирательства и отзыв Run
 
 1. **Fenêtre de grâce:** avertissez le fournisseur de la revocation imminente; autorisez l’évacuation des données épinglées lorsque la politique le permet.
 2. **Генерес `ProviderAdmissionRevocationV1` :**
-   - Используйте `sorafs_manifest_stub provider-admission revoke` с одобрением.
+   - Используйте `sorafs_manifest_builder provider-admission revoke` с одобрением.
    - Проверьте подписи и дайджест отзыва.
 3. **Опубликовать отзыв:**
    - Сообщите запрос на отзыв по номеру Torii.
@@ -93,7 +93,7 @@ Sidebar_label: Судебные разбирательства и отзыв Run
 
 ## 6. Справочные документы
 
-- `sorafs_manifest_stub capacity dispute --help`
+- `sorafs_manifest_builder capacity dispute --help`
 - `docs/source/sorafs/storage_capacity_marketplace.md` (раздел судебные разбирательства)
 - `docs/source/sorafs/provider_admission_policy.md` (рабочий процесс отзыва)
 - Панель наблюдения: `SoraFS / Capacity Providers`

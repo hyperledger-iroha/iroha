@@ -59,7 +59,7 @@ cargo test -p sorafs_car --features cli --test capacity_cli
 python3 scripts/telemetry/capacity_reconcile.py --snapshot <state.json> --ledger <ledger.ndjson> --warn-only
 ```
 
-Los operadores deben regenerar las cargas útiles de demanda de incorporación/litigación con `sorafs_manifest_stub capacity {declaration,dispute}` y archivar los bytes JSON/Norito resultantes de las costas del ticket de gobierno.
+Los operadores deben regenerar las cargas útiles de demanda de incorporación/litigación con `sorafs_manifest_builder capacity {declaration,dispute}` y archivar los bytes JSON/Norito resultantes de las costas del ticket de gobierno.
 
 ## Artefactos de cierre de sesión| Artefacto | Camino | blake2b-256 |
 |----------|------|-------------|

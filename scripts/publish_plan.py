@@ -29,6 +29,19 @@ from typing import Dict, Iterable, List, Optional
 from urllib import request as urllib_request
 from urllib.error import HTTPError, URLError
 
+if __package__:
+    from .release_manifest_signing import (
+        MAX_MANIFEST_SIZE,
+        ReleaseManifestSignatureError,
+        verify_release_manifest,
+    )
+else:
+    from release_manifest_signing import (
+        MAX_MANIFEST_SIZE,
+        ReleaseManifestSignatureError,
+        verify_release_manifest,
+    )
+
 
 class PublishPlanError(RuntimeError):
     """Raised when plan generation or validation fails."""
@@ -90,12 +103,25 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _load_manifest(path: Path) -> Dict[str, object]:
-    with path.open("r", encoding="utf-8") as fh:
-        try:
-            manifest = json.load(fh)
-        except json.JSONDecodeError as exc:
-            raise PublishPlanError(f"Release manifest is not valid JSON: {exc}") from exc
+def _read_manifest_payload(path: Path) -> bytes:
+    try:
+        payload = path.read_bytes()
+    except OSError as exc:
+        raise PublishPlanError(f"Cannot read release manifest {path}: {exc}") from exc
+    if len(payload) > MAX_MANIFEST_SIZE:
+        raise PublishPlanError(
+            f"Release manifest exceeds the {MAX_MANIFEST_SIZE}-byte size limit"
+        )
+    return payload
+
+
+def _load_manifest_payload(payload: bytes) -> Dict[str, object]:
+    try:
+        manifest = json.loads(payload)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise PublishPlanError(f"Release manifest is not valid UTF-8 JSON: {exc}") from exc
+    if not isinstance(manifest, dict):
+        raise PublishPlanError("Release manifest root must be an object")
     if "artifacts" not in manifest or not isinstance(manifest["artifacts"], list):
         raise PublishPlanError("Release manifest is missing an 'artifacts' array")
     return manifest
@@ -105,8 +131,91 @@ def build_publish_plan(
     manifest_path: Path,
     artifacts_dir: Path,
     target_map: Dict[str, str],
+    *,
+    manifest_signature_path: Optional[Path] = None,
+    manifest_public_key_path: Optional[Path] = None,
+    trusted_signing_fingerprint: Optional[str] = None,
+    release_manifest_verifier_path: Optional[Path] = None,
+    trusted_release_manifest_verifier_sha256: Optional[str] = None,
+    development_allow_unsigned_manifest: bool = False,
 ) -> Dict[str, object]:
-    manifest = _load_manifest(manifest_path)
+    signed_values = (
+        manifest_signature_path,
+        manifest_public_key_path,
+        trusted_signing_fingerprint,
+        release_manifest_verifier_path,
+        trusted_release_manifest_verifier_sha256,
+    )
+    signed_value_count = sum(value is not None for value in signed_values)
+    if development_allow_unsigned_manifest and signed_value_count:
+        raise PublishPlanError(
+            "signed manifest inputs cannot be combined with "
+            "development_allow_unsigned_manifest"
+        )
+    if not development_allow_unsigned_manifest and signed_value_count != len(signed_values):
+        if signed_value_count:
+            raise PublishPlanError(
+                "manifest signature, raw public key, trusted fingerprint, native "
+                "verifier path, and reviewed verifier SHA256 must be supplied together"
+            )
+        raise PublishPlanError(
+            "production publish plans require a verified aggregate Ed25519 "
+            "release-manifest signature"
+        )
+
+    manifest_path = manifest_path.absolute()
+    if development_allow_unsigned_manifest:
+        manifest_payload = _read_manifest_payload(manifest_path)
+        manifest_verification = {
+            "manifest_sha256": hashlib.sha256(manifest_payload).hexdigest(),
+            "signature_algorithm": None,
+            "public_key_format": None,
+            "signer_fingerprint_sha256": None,
+            "signature_verified": False,
+            "native_verifier_protocol": None,
+            "native_verifier_path": None,
+            "native_verifier_sha256": None,
+        }
+        signature_path_value = None
+        public_key_path_value = None
+        verification_mode = "development-unsigned"
+    else:
+        assert manifest_signature_path is not None
+        assert manifest_public_key_path is not None
+        assert trusted_signing_fingerprint is not None
+        assert release_manifest_verifier_path is not None
+        assert trusted_release_manifest_verifier_sha256 is not None
+        signature_path = manifest_signature_path.absolute()
+        public_key_path = manifest_public_key_path.absolute()
+        native_verifier_path = release_manifest_verifier_path.absolute()
+        try:
+            manifest_verification = verify_release_manifest(
+                manifest_path,
+                signature_path,
+                public_key_path,
+                trusted_signing_fingerprint,
+                native_verifier_path,
+                trusted_release_manifest_verifier_sha256,
+            )
+        except ReleaseManifestSignatureError as exc:
+            raise PublishPlanError(
+                f"aggregate release-manifest signature is invalid: {exc}"
+            ) from exc
+        # Parse only bytes bound to the verified digest. A path replacement after
+        # verification therefore cannot feed unverified content into the plan.
+        manifest_payload = _read_manifest_payload(manifest_path)
+        if (
+            hashlib.sha256(manifest_payload).hexdigest()
+            != manifest_verification["manifest_sha256"]
+        ):
+            raise PublishPlanError(
+                "aggregate release manifest changed after signature verification"
+            )
+        signature_path_value = str(signature_path)
+        public_key_path_value = str(public_key_path)
+        verification_mode = "ed25519"
+
+    manifest = _load_manifest_payload(manifest_payload)
     artifacts_dir = artifacts_dir.resolve()
 
     artifacts: List[Artifact] = []
@@ -150,6 +259,23 @@ def build_publish_plan(
     plan = {
         "generated_at": _dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
         "manifest": str(manifest_path),
+        "manifest_sha256": manifest_verification["manifest_sha256"],
+        "manifest_signature": signature_path_value,
+        "manifest_public_key": public_key_path_value,
+        "manifest_signature_algorithm": manifest_verification["signature_algorithm"],
+        "manifest_public_key_format": manifest_verification["public_key_format"],
+        "manifest_signer_fingerprint_sha256": manifest_verification[
+            "signer_fingerprint_sha256"
+        ],
+        "manifest_signature_verified": manifest_verification["signature_verified"],
+        "manifest_verification_mode": verification_mode,
+        "manifest_native_verifier_protocol": manifest_verification[
+            "native_verifier_protocol"
+        ],
+        "manifest_native_verifier": manifest_verification["native_verifier_path"],
+        "manifest_native_verifier_sha256": manifest_verification[
+            "native_verifier_sha256"
+        ],
         "artifacts_dir": str(artifacts_dir),
         "target_map": target_map,
         "version": manifest.get("version"),
@@ -239,6 +365,11 @@ def validate_publish_plan(
     previous_plan_path: Optional[Path] = None,
     probe_remote: bool = False,
     probe_command: Optional[str] = None,
+    *,
+    trusted_signing_fingerprint: Optional[str] = None,
+    release_manifest_verifier_path: Optional[Path] = None,
+    trusted_release_manifest_verifier_sha256: Optional[str] = None,
+    development_allow_unsigned_manifest: bool = False,
 ) -> Dict[str, object]:
     with plan_path.open("r", encoding="utf-8") as fh:
         try:
@@ -247,9 +378,135 @@ def validate_publish_plan(
             raise PublishPlanError(f"Publish plan is not valid JSON: {exc}") from exc
 
     artifacts = plan.get("artifacts", [])
+    if not isinstance(artifacts, list):
+        raise PublishPlanError("Publish plan is missing an 'artifacts' array")
     results = []
     local_failures: List[str] = []
     remote_failures: List[str] = []
+
+    manifest_value = plan.get("manifest")
+    if not isinstance(manifest_value, str) or not manifest_value:
+        raise PublishPlanError("Publish plan is missing the aggregate manifest path")
+    manifest_path = Path(manifest_value)
+    expected_manifest_sha = plan.get("manifest_sha256")
+    if not isinstance(expected_manifest_sha, str):
+        raise PublishPlanError("Publish plan is missing the aggregate manifest SHA256")
+    verification_mode = plan.get("manifest_verification_mode")
+    if verification_mode == "ed25519":
+        if trusted_signing_fingerprint is None:
+            raise PublishPlanError(
+                "production publish-plan validation requires an independently "
+                "trusted signing fingerprint"
+            )
+        if (
+            release_manifest_verifier_path is None
+            or trusted_release_manifest_verifier_sha256 is None
+        ):
+            raise PublishPlanError(
+                "production publish-plan validation requires the pinned native "
+                "release-manifest verifier path and reviewed SHA256"
+            )
+        signature_value = plan.get("manifest_signature")
+        public_key_value = plan.get("manifest_public_key")
+        fingerprint = plan.get("manifest_signer_fingerprint_sha256")
+        if (
+            not isinstance(signature_value, str)
+            or not signature_value
+            or not isinstance(public_key_value, str)
+            or not public_key_value
+            or not isinstance(fingerprint, str)
+            or not fingerprint
+            or plan.get("manifest_signature_algorithm") != "ed25519"
+            or plan.get("manifest_public_key_format") != "raw-ed25519-32"
+            or plan.get("manifest_signature_verified") is not True
+            or plan.get("manifest_native_verifier_protocol")
+            != "sorafs-validate-release-manifest-v1"
+        ):
+            raise PublishPlanError(
+                "Publish plan has incomplete aggregate Ed25519 verification metadata"
+            )
+        if fingerprint != trusted_signing_fingerprint:
+            raise PublishPlanError(
+                "Publish plan signer fingerprint does not match the independently "
+                "trusted signing fingerprint"
+            )
+        native_verifier = release_manifest_verifier_path.absolute()
+        if plan.get("manifest_native_verifier") != str(native_verifier):
+            raise PublishPlanError(
+                "Publish plan native verifier path does not match the independently "
+                "supplied verifier path"
+            )
+        if (
+            plan.get("manifest_native_verifier_sha256")
+            != trusted_release_manifest_verifier_sha256
+        ):
+            raise PublishPlanError(
+                "Publish plan native verifier digest does not match the independently "
+                "reviewed SHA256"
+            )
+        try:
+            verification = verify_release_manifest(
+                manifest_path,
+                Path(signature_value),
+                Path(public_key_value),
+                trusted_signing_fingerprint,
+                native_verifier,
+                trusted_release_manifest_verifier_sha256,
+            )
+        except ReleaseManifestSignatureError as exc:
+            local_failures.append(
+                f"aggregate release-manifest signature verification failed: {exc}"
+            )
+        else:
+            if verification["manifest_sha256"] != expected_manifest_sha:
+                local_failures.append(
+                    "aggregate release-manifest digest no longer matches the publish plan"
+                )
+    elif verification_mode == "development-unsigned":
+        if trusted_signing_fingerprint is not None:
+            raise PublishPlanError(
+                "Development unsigned validation cannot accept a trusted signing "
+                "fingerprint"
+            )
+        if (
+            release_manifest_verifier_path is not None
+            or trusted_release_manifest_verifier_sha256 is not None
+        ):
+            raise PublishPlanError(
+                "Development unsigned validation cannot accept native verifier inputs"
+            )
+        if not development_allow_unsigned_manifest:
+            raise PublishPlanError(
+                "unsigned publish plans are test/development-only; validation requires "
+                "development_allow_unsigned_manifest"
+            )
+        if (
+            plan.get("manifest_signature") is not None
+            or plan.get("manifest_public_key") is not None
+            or plan.get("manifest_signature_algorithm") is not None
+            or plan.get("manifest_public_key_format") is not None
+            or plan.get("manifest_signer_fingerprint_sha256") is not None
+            or plan.get("manifest_signature_verified") is not False
+            or plan.get("manifest_native_verifier_protocol") is not None
+            or plan.get("manifest_native_verifier") is not None
+            or plan.get("manifest_native_verifier_sha256") is not None
+        ):
+            raise PublishPlanError(
+                "Development unsigned publish plan contains conflicting signature metadata"
+            )
+        try:
+            manifest_payload = _read_manifest_payload(manifest_path)
+        except PublishPlanError as exc:
+            local_failures.append(str(exc))
+        else:
+            if hashlib.sha256(manifest_payload).hexdigest() != expected_manifest_sha:
+                local_failures.append(
+                    "aggregate release-manifest digest no longer matches the publish plan"
+                )
+    else:
+        raise PublishPlanError(
+            "Publish plan must declare ed25519 or development-unsigned manifest verification"
+        )
 
     for entry in artifacts:
         if not isinstance(entry, dict):
@@ -367,6 +624,20 @@ def _cmd_generate(args: argparse.Namespace) -> int:
         manifest_path=Path(args.manifest),
         artifacts_dir=Path(args.artifacts_dir),
         target_map=target_map,
+        manifest_signature_path=Path(args.manifest_signature)
+        if args.manifest_signature
+        else None,
+        manifest_public_key_path=Path(args.manifest_public_key)
+        if args.manifest_public_key
+        else None,
+        trusted_signing_fingerprint=args.trusted_signing_fingerprint,
+        release_manifest_verifier_path=Path(args.release_manifest_verifier)
+        if args.release_manifest_verifier
+        else None,
+        trusted_release_manifest_verifier_sha256=(
+            args.trusted_release_manifest_verifier_sha256
+        ),
+        development_allow_unsigned_manifest=args.development_allow_unsigned_manifest,
     )
     write_plan_files(plan, Path(args.output_dir))
     return 0
@@ -378,6 +649,14 @@ def _cmd_validate(args: argparse.Namespace) -> int:
         previous_plan_path=Path(args.previous_plan) if args.previous_plan else None,
         probe_remote=args.probe_remote,
         probe_command=args.probe_command,
+        trusted_signing_fingerprint=args.trusted_signing_fingerprint,
+        release_manifest_verifier_path=Path(args.release_manifest_verifier)
+        if args.release_manifest_verifier
+        else None,
+        trusted_release_manifest_verifier_sha256=(
+            args.trusted_release_manifest_verifier_sha256
+        ),
+        development_allow_unsigned_manifest=args.development_allow_unsigned_manifest,
     )
     if args.output:
         _write_report(report, Path(args.output))
@@ -399,6 +678,34 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Publish target URI (e.g., sorafs://... or https://...). Repeat as profile=uri to target specific tracks.",
     )
     gen.add_argument("--output-dir", required=True, help="Directory to write plan files into")
+    gen.add_argument(
+        "--manifest-signature",
+        help="Raw 64-byte Ed25519 signature for the aggregate release manifest",
+    )
+    gen.add_argument(
+        "--manifest-public-key",
+        help="Raw 32-byte Ed25519 public key for the aggregate manifest",
+    )
+    gen.add_argument(
+        "--trusted-signing-fingerprint",
+        help="Reviewed lowercase SHA256 fingerprint of the raw Ed25519 public key",
+    )
+    gen.add_argument(
+        "--release-manifest-verifier",
+        help="Direct path to the reviewed sorafs-validate native verifier",
+    )
+    gen.add_argument(
+        "--trusted-release-manifest-verifier-sha256",
+        help="Reviewed lowercase SHA256 of the exact native verifier executable",
+    )
+    gen.add_argument(
+        "--development-allow-unsigned-manifest",
+        action="store_true",
+        help=(
+            "TEST/DEVELOPMENT ONLY: permit an unsigned aggregate manifest; "
+            "never use this mode for promotion"
+        ),
+    )
     gen.set_defaults(func=_cmd_generate)
 
     val = subparsers.add_parser("validate", help="Validate a publish plan (local and optional HTTP remote)")
@@ -410,6 +717,29 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Optional external probe command; use {destination} placeholder (expects JSON with size/content_length).",
     )
     val.add_argument("--output", help="Optional path to write the validation report JSON")
+    val.add_argument(
+        "--trusted-signing-fingerprint",
+        help=(
+            "Independently reviewed lowercase SHA256 fingerprint of the raw "
+            "Ed25519 public key; required for production validation"
+        ),
+    )
+    val.add_argument(
+        "--release-manifest-verifier",
+        help="Direct path to the reviewed sorafs-validate native verifier",
+    )
+    val.add_argument(
+        "--trusted-release-manifest-verifier-sha256",
+        help="Reviewed lowercase SHA256 of the exact native verifier executable",
+    )
+    val.add_argument(
+        "--development-allow-unsigned-manifest",
+        action="store_true",
+        help=(
+            "TEST/DEVELOPMENT ONLY: validate a plan explicitly marked "
+            "development-unsigned"
+        ),
+    )
     val.set_defaults(func=_cmd_validate)
     return parser
 
@@ -417,7 +747,11 @@ def _build_parser() -> argparse.ArgumentParser:
 def main(argv: Optional[List[str]] = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
-    return args.func(args)
+    try:
+        return args.func(args)
+    except PublishPlanError as exc:
+        print(f"publish plan error: {exc}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":  # pragma: no cover - exercised via CLI

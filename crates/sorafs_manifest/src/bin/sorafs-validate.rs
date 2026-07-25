@@ -7,13 +7,19 @@
 
 use std::{
     collections::BTreeSet,
-    env, fs, io,
-    path::{Path, PathBuf},
+    env,
+    fs::{self, OpenOptions},
+    io::{self, Read, Write},
+    path::{Component, Path, PathBuf},
     process::ExitCode,
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use ed25519_dalek::{Signer, SigningKey};
+#[cfg(unix)]
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
+use iroha_crypto::sha256;
 use norito::json;
 use sorafs_manifest::{
     AdvertSignature, FixtureBundlePayloadKindV1, FixtureBundlePayloadV1, GovernanceLogNodeV1,
@@ -69,9 +75,10 @@ fn run(args: impl IntoIterator<Item = String>) -> Result<ExitCode, CliError> {
         "repair" => run_repair(RepairArgs::parse(&args[1..])?),
         "bundle" => run_bundle(BundleArgs::parse(&args[1..])?),
         "governance" => run_governance(GovernanceArgs::parse(&args[1..])?),
+        "release-manifest" => run_release_manifest(ReleaseManifestArgs::parse(&args[1..])?),
         "sign" => run_sign(SignArgs::parse(&args[1..])?),
         other => Err(CliError::Config(format!(
-            "unsupported sorafs-validate command `{other}`; implemented commands: advert, admission, order, orderbook, pdp, pop, hedging, billing, por, potr, repair, bundle, governance, sign"
+            "unsupported sorafs-validate command `{other}`; implemented commands: advert, admission, order, orderbook, pdp, pop, hedging, billing, por, potr, repair, bundle, governance, release-manifest, sign"
         ))),
     }
 }
@@ -611,6 +618,136 @@ fn run_governance(args: GovernanceArgs) -> Result<ExitCode, CliError> {
         Ok(ExitCode::SUCCESS)
     } else {
         Ok(ExitCode::from(2))
+    }
+}
+
+const RELEASE_MANIFEST_MAX_BYTES: u64 = 1024 * 1024;
+
+fn run_release_manifest(args: ReleaseManifestArgs) -> Result<ExitCode, CliError> {
+    let manifest_path = args.manifest.ok_or(CliError::Config(
+        "release-manifest requires --manifest <path>".to_owned(),
+    ))?;
+    let public_key_path = args.public_key.ok_or(CliError::Config(
+        "release-manifest requires --public-key <path>".to_owned(),
+    ))?;
+    let fingerprint_text = args.public_key_fingerprint.ok_or(CliError::Config(
+        "release-manifest requires --public-key-fingerprint <hex>".to_owned(),
+    ))?;
+    let reviewed_fingerprint = parse_release_fingerprint(&fingerprint_text)?;
+
+    let manifest = read_release_input(
+        &manifest_path,
+        "release manifest",
+        RELEASE_MANIFEST_MAX_BYTES,
+        None,
+        false,
+    )?;
+    let public_key_bytes = read_release_input(
+        &public_key_path,
+        "release manifest public key",
+        32,
+        Some(32),
+        false,
+    )?;
+    let public_key: [u8; 32] = public_key_bytes
+        .try_into()
+        .expect("exact public key length checked above");
+    if public_key.iter().all(|byte| *byte == 0) {
+        return Err(CliError::Validation(
+            "release manifest public key must not be all zero".to_owned(),
+        ));
+    }
+    let actual_fingerprint = sha256(public_key);
+    if actual_fingerprint != reviewed_fingerprint {
+        return Err(CliError::Validation(
+            "release manifest public key does not match the reviewed fingerprint".to_owned(),
+        ));
+    }
+    let verifying_key = VerifyingKey::from_bytes(&public_key).map_err(|_| {
+        CliError::Validation("release manifest public key is not valid Ed25519".to_owned())
+    })?;
+    if verifying_key.is_weak() {
+        return Err(CliError::Validation(
+            "release manifest public key must not be weak or small-order".to_owned(),
+        ));
+    }
+
+    match (
+        args.signature,
+        args.signing_seed,
+        args.signature_out,
+        args.development_local_signing,
+    ) {
+        (Some(signature_path), None, None, false) => {
+            let signature_bytes = read_release_input(
+                &signature_path,
+                "release manifest signature",
+                64,
+                Some(64),
+                false,
+            )?;
+            let signature_bytes: [u8; 64] = signature_bytes
+                .try_into()
+                .expect("exact signature length checked above");
+            verify_release_signature(&verifying_key, &manifest, &signature_bytes)?;
+            println!(
+                "release manifest Ed25519 signature verified\npublic_key_fingerprint_sha256={}",
+                hex::encode(actual_fingerprint)
+            );
+            Ok(ExitCode::SUCCESS)
+        }
+        (None, Some(seed_path), Some(signature_out), true) => {
+            let seed_bytes = read_release_input(
+                &seed_path,
+                "release manifest development signing seed",
+                32,
+                Some(32),
+                true,
+            )?;
+            let seed: [u8; 32] = seed_bytes
+                .try_into()
+                .expect("exact signing seed length checked above");
+            if seed.iter().all(|byte| *byte == 0) {
+                return Err(CliError::Validation(
+                    "release manifest development signing seed must not be all zero".to_owned(),
+                ));
+            }
+            let signing_key = SigningKey::from_bytes(&seed);
+            if signing_key.verifying_key().to_bytes() != public_key {
+                return Err(CliError::Validation(
+                    "release manifest public key does not match the development signing seed"
+                        .to_owned(),
+                ));
+            }
+            let signature = signing_key.sign(&manifest).to_bytes();
+            verify_release_signature(&verifying_key, &manifest, &signature)?;
+            write_release_signature(&signature_out, &signature)?;
+            println!(
+                "release manifest Ed25519 signature created (development-only)\npublic_key_fingerprint_sha256={}",
+                hex::encode(actual_fingerprint)
+            );
+            Ok(ExitCode::SUCCESS)
+        }
+        (Some(_), _, _, true) => Err(CliError::Config(
+            "release-manifest external verification does not accept --development-local-signing"
+                .to_owned(),
+        )),
+        (Some(_), Some(_), _, _) | (Some(_), _, Some(_), _) => Err(CliError::Config(
+            "release-manifest accepts either --signature or development signing options, not both"
+                .to_owned(),
+        )),
+        (None, Some(_), Some(_), false) => Err(CliError::Config(
+            "release-manifest --signing-seed is development-only and requires --development-local-signing"
+                .to_owned(),
+        )),
+        (None, None, None, false) => Err(CliError::Config(
+            "release-manifest requires --signature <path> or the complete development-only signing option set"
+                .to_owned(),
+        )),
+        _ => Err(CliError::Config(
+            "release-manifest development signing requires --signing-seed <path>, --signature-out <path>, and --development-local-signing"
+                .to_owned(),
+        )),
     }
 }
 
@@ -2153,6 +2290,130 @@ impl GovernanceArgs {
 }
 
 #[derive(Debug, Default)]
+struct ReleaseManifestArgs {
+    manifest: Option<PathBuf>,
+    public_key: Option<PathBuf>,
+    public_key_fingerprint: Option<String>,
+    signature: Option<PathBuf>,
+    signing_seed: Option<PathBuf>,
+    signature_out: Option<PathBuf>,
+    development_local_signing: bool,
+}
+
+impl ReleaseManifestArgs {
+    fn parse(args: &[String]) -> Result<Self, CliError> {
+        let mut parsed = Self::default();
+        let mut index = 0;
+        while index < args.len() {
+            let arg = &args[index];
+            if let Some(value) = arg.strip_prefix("--manifest=") {
+                set_release_path(&mut parsed.manifest, value, "--manifest")?;
+            } else if arg == "--manifest" {
+                index += 1;
+                set_release_path(
+                    &mut parsed.manifest,
+                    require_value(args, index, "--manifest")?,
+                    "--manifest",
+                )?;
+            } else if let Some(value) = arg.strip_prefix("--public-key=") {
+                set_release_path(&mut parsed.public_key, value, "--public-key")?;
+            } else if arg == "--public-key" {
+                index += 1;
+                set_release_path(
+                    &mut parsed.public_key,
+                    require_value(args, index, "--public-key")?,
+                    "--public-key",
+                )?;
+            } else if let Some(value) = arg.strip_prefix("--public-key-fingerprint=") {
+                set_release_string(
+                    &mut parsed.public_key_fingerprint,
+                    value,
+                    "--public-key-fingerprint",
+                )?;
+            } else if arg == "--public-key-fingerprint" {
+                index += 1;
+                set_release_string(
+                    &mut parsed.public_key_fingerprint,
+                    require_value(args, index, "--public-key-fingerprint")?,
+                    "--public-key-fingerprint",
+                )?;
+            } else if let Some(value) = arg.strip_prefix("--signature=") {
+                set_release_path(&mut parsed.signature, value, "--signature")?;
+            } else if arg == "--signature" {
+                index += 1;
+                set_release_path(
+                    &mut parsed.signature,
+                    require_value(args, index, "--signature")?,
+                    "--signature",
+                )?;
+            } else if let Some(value) = arg.strip_prefix("--signing-seed=") {
+                set_release_path(&mut parsed.signing_seed, value, "--signing-seed")?;
+            } else if arg == "--signing-seed" {
+                index += 1;
+                set_release_path(
+                    &mut parsed.signing_seed,
+                    require_value(args, index, "--signing-seed")?,
+                    "--signing-seed",
+                )?;
+            } else if let Some(value) = arg.strip_prefix("--signature-out=") {
+                set_release_path(&mut parsed.signature_out, value, "--signature-out")?;
+            } else if arg == "--signature-out" {
+                index += 1;
+                set_release_path(
+                    &mut parsed.signature_out,
+                    require_value(args, index, "--signature-out")?,
+                    "--signature-out",
+                )?;
+            } else if arg == "--development-local-signing" {
+                if parsed.development_local_signing {
+                    return Err(CliError::Config(
+                        "duplicate release-manifest option `--development-local-signing`"
+                            .to_owned(),
+                    ));
+                }
+                parsed.development_local_signing = true;
+            } else {
+                return Err(CliError::Config(format!(
+                    "unknown release-manifest option `{arg}`; run `sorafs-validate --help`"
+                )));
+            }
+            index += 1;
+        }
+        Ok(parsed)
+    }
+}
+
+fn set_release_path(target: &mut Option<PathBuf>, value: &str, flag: &str) -> Result<(), CliError> {
+    if target.is_some() {
+        return Err(CliError::Config(format!(
+            "duplicate release-manifest option `{flag}`"
+        )));
+    }
+    if value.is_empty() {
+        return Err(CliError::Config(format!("{flag} requires a value")));
+    }
+    *target = Some(PathBuf::from(value));
+    Ok(())
+}
+
+fn set_release_string(
+    target: &mut Option<String>,
+    value: &str,
+    flag: &str,
+) -> Result<(), CliError> {
+    if target.is_some() {
+        return Err(CliError::Config(format!(
+            "duplicate release-manifest option `{flag}`"
+        )));
+    }
+    if value.is_empty() {
+        return Err(CliError::Config(format!("{flag} requires a value")));
+    }
+    *target = Some(value.to_owned());
+    Ok(())
+}
+
+#[derive(Debug, Default)]
 struct SignArgs {
     kind: Option<SignKind>,
     payload_kind: Option<OrderbookValidationPayloadKindV1>,
@@ -2418,6 +2679,7 @@ impl OutputFormat {
 
 #[derive(Debug)]
 enum CliError {
+    Validation(String),
     Config(String),
     Io(String),
     Internal(String),
@@ -2426,6 +2688,7 @@ enum CliError {
 impl CliError {
     fn exit_code(&self) -> u8 {
         match self {
+            CliError::Validation(_) => 2,
             CliError::Config(_) => 4,
             CliError::Io(_) => 3,
             CliError::Internal(_) => 10,
@@ -2436,9 +2699,10 @@ impl CliError {
 impl std::fmt::Display for CliError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            CliError::Config(message) | CliError::Io(message) | CliError::Internal(message) => {
-                formatter.write_str(message)
-            }
+            CliError::Validation(message)
+            | CliError::Config(message)
+            | CliError::Io(message)
+            | CliError::Internal(message) => formatter.write_str(message),
         }
     }
 }
@@ -2689,6 +2953,304 @@ fn require_canonical_seed_hex(value: &str, flag: &str) -> Result<(), CliError> {
         )));
     }
     Ok(())
+}
+
+fn parse_release_fingerprint(value: &str) -> Result<[u8; 32], CliError> {
+    let bytes = value.as_bytes();
+    if bytes.len() != 64
+        || !bytes
+            .iter()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+    {
+        return Err(CliError::Config(
+            "--public-key-fingerprint must be exactly 32 bytes of lowercase SHA-256 hex without prefixes or whitespace"
+                .to_owned(),
+        ));
+    }
+    let decoded = hex::decode(value).map_err(|_| {
+        CliError::Config("--public-key-fingerprint contains invalid hex".to_owned())
+    })?;
+    Ok(decoded
+        .try_into()
+        .expect("exact release fingerprint length checked above"))
+}
+
+fn verify_release_signature(
+    verifying_key: &VerifyingKey,
+    manifest: &[u8],
+    signature_bytes: &[u8; 64],
+) -> Result<(), CliError> {
+    if signature_bytes.iter().all(|byte| *byte == 0) {
+        return Err(CliError::Validation(
+            "release manifest signature must not be all zero".to_owned(),
+        ));
+    }
+    let signature = Signature::from_bytes(signature_bytes);
+    verifying_key
+        .verify_strict(manifest, &signature)
+        .map_err(|_| {
+            CliError::Validation(
+                "release manifest Ed25519 signature verification failed".to_owned(),
+            )
+        })
+}
+
+fn read_release_input(
+    path: &Path,
+    label: &str,
+    maximum_bytes: u64,
+    exact_bytes: Option<u64>,
+    secret: bool,
+) -> Result<Vec<u8>, CliError> {
+    let direct_path = release_direct_path(path, label)?;
+    let before = fs::symlink_metadata(&direct_path)
+        .map_err(|err| CliError::Io(format!("failed to inspect {label}: {err}")))?;
+    validate_release_metadata(label, &before, maximum_bytes, secret)?;
+
+    let mut options = OpenOptions::new();
+    options.read(true);
+    set_release_no_follow(&mut options);
+    let mut file = options
+        .open(&direct_path)
+        .map_err(|err| CliError::Io(format!("failed to open {label}: {err}")))?;
+    let opened = file
+        .metadata()
+        .map_err(|err| CliError::Io(format!("failed to inspect open {label}: {err}")))?;
+    validate_release_metadata(label, &opened, maximum_bytes, secret)?;
+    if !release_metadata_matches(&before, &opened) {
+        return Err(CliError::Validation(format!(
+            "{label} changed while being opened"
+        )));
+    }
+
+    let capacity = usize::try_from(opened.len())
+        .map_err(|_| CliError::Validation(format!("{label} exceeds host size limits")))?;
+    let mut bytes = Vec::with_capacity(capacity);
+    Read::by_ref(&mut file)
+        .take(maximum_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|err| CliError::Io(format!("failed to read {label}: {err}")))?;
+    let after = fs::symlink_metadata(&direct_path)
+        .map_err(|err| CliError::Io(format!("failed to re-inspect {label}: {err}")))?;
+    validate_release_metadata(label, &after, maximum_bytes, secret)?;
+    if bytes.len() as u64 != opened.len()
+        || !release_metadata_matches(&opened, &after)
+        || !release_metadata_matches(&before, &after)
+    {
+        return Err(CliError::Validation(format!(
+            "{label} changed while being read"
+        )));
+    }
+    if let Some(expected) = exact_bytes
+        && bytes.len() as u64 != expected
+    {
+        return Err(CliError::Validation(format!(
+            "{label} must contain exactly {expected} raw bytes"
+        )));
+    }
+    Ok(bytes)
+}
+
+fn release_direct_path(path: &Path, label: &str) -> Result<PathBuf, CliError> {
+    if path.as_os_str().is_empty()
+        || path
+            .components()
+            .any(|component| matches!(component, Component::CurDir | Component::ParentDir))
+    {
+        return Err(CliError::Validation(format!(
+            "{label} must use a non-empty direct path without `.` or `..` components"
+        )));
+    }
+    let direct_path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        env::current_dir()
+            .map_err(|err| CliError::Io(format!("failed to resolve {label} path: {err}")))?
+            .join(path)
+    };
+    if let Some(parent) = direct_path.parent() {
+        for ancestor in parent.ancestors() {
+            if ancestor.as_os_str().is_empty() {
+                continue;
+            }
+            let metadata = fs::symlink_metadata(ancestor)
+                .map_err(|err| CliError::Io(format!("failed to inspect {label} parent: {err}")))?;
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                return Err(CliError::Validation(format!(
+                    "{label} parent must be a real directory"
+                )));
+            }
+        }
+    }
+    Ok(direct_path)
+}
+
+fn validate_release_metadata(
+    label: &str,
+    metadata: &fs::Metadata,
+    maximum_bytes: u64,
+    secret: bool,
+) -> Result<(), CliError> {
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(CliError::Validation(format!(
+            "{label} must be a direct regular file"
+        )));
+    }
+    if metadata.len() == 0 || metadata.len() > maximum_bytes {
+        return Err(CliError::Validation(format!(
+            "{label} size is outside the supported range"
+        )));
+    }
+    #[cfg(unix)]
+    {
+        if metadata.nlink() != 1 {
+            return Err(CliError::Validation(format!(
+                "{label} must have exactly one hard link"
+            )));
+        }
+        let mode = metadata.permissions().mode() & 0o777;
+        if secret {
+            if !matches!(mode, 0o400 | 0o600) {
+                return Err(CliError::Validation(format!(
+                    "{label} permissions must be owner-only 0400 or 0600"
+                )));
+            }
+        } else if mode & 0o022 != 0 {
+            return Err(CliError::Validation(format!(
+                "{label} must not be group- or world-writable"
+            )));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn release_metadata_matches(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    left.dev() == right.dev()
+        && left.ino() == right.ino()
+        && left.len() == right.len()
+        && left.mtime() == right.mtime()
+        && left.mtime_nsec() == right.mtime_nsec()
+        && left.ctime() == right.ctime()
+        && left.ctime_nsec() == right.ctime_nsec()
+}
+
+#[cfg(not(unix))]
+fn release_metadata_matches(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    left.len() == right.len() && left.modified().ok() == right.modified().ok()
+}
+
+fn write_release_signature(path: &Path, signature: &[u8; 64]) -> Result<(), CliError> {
+    let direct_path = release_direct_path(path, "release manifest signature output")?;
+    match fs::symlink_metadata(&direct_path) {
+        Ok(_) => {
+            return Err(CliError::Validation(
+                "release manifest signature output must not already exist".to_owned(),
+            ));
+        }
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+        Err(err) => {
+            return Err(CliError::Io(format!(
+                "failed to inspect release manifest signature output: {err}"
+            )));
+        }
+    }
+
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    set_release_no_follow(&mut options);
+    let mut file = options.open(&direct_path).map_err(|err| {
+        CliError::Io(format!(
+            "failed to create release manifest signature output: {err}"
+        ))
+    })?;
+    file.write_all(signature).map_err(|err| {
+        CliError::Io(format!(
+            "failed to write release manifest signature output: {err}"
+        ))
+    })?;
+    file.sync_all().map_err(|err| {
+        CliError::Io(format!(
+            "failed to sync release manifest signature output: {err}"
+        ))
+    })?;
+    let opened = file.metadata().map_err(|err| {
+        CliError::Io(format!(
+            "failed to inspect release manifest signature output: {err}"
+        ))
+    })?;
+    let after = fs::symlink_metadata(&direct_path).map_err(|err| {
+        CliError::Io(format!(
+            "failed to re-inspect release manifest signature output: {err}"
+        ))
+    })?;
+    if !release_metadata_matches(&opened, &after)
+        || !after.is_file()
+        || after.len() != signature.len() as u64
+    {
+        return Err(CliError::Validation(
+            "release manifest signature output changed while being written".to_owned(),
+        ));
+    }
+    #[cfg(unix)]
+    if let Some(parent) = direct_path.parent() {
+        fs::File::open(parent)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|err| {
+                CliError::Io(format!(
+                    "failed to sync release manifest signature output directory: {err}"
+                ))
+            })?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn set_release_no_follow(options: &mut OpenOptions) {
+    options.custom_flags(release_no_follow_flag());
+}
+
+#[cfg(not(unix))]
+fn set_release_no_follow(_options: &mut OpenOptions) {}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn release_no_follow_flag() -> i32 {
+    0o400000
+}
+
+#[cfg(all(
+    unix,
+    not(any(target_os = "linux", target_os = "android")),
+    any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    )
+))]
+fn release_no_follow_flag() -> i32 {
+    0x100
+}
+
+#[cfg(all(
+    unix,
+    not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    ))
+))]
+fn release_no_follow_flag() -> i32 {
+    0
 }
 
 fn sign_provider_advert(advert: &mut ProviderAdvertV1, seed: &[u8; 32]) -> Result<(), CliError> {
@@ -3128,6 +3690,8 @@ Usage:
   sorafs-validate governance --node <path> --cid <node-cid> [--format table|json|yaml] [--telemetry-out <path>]
   sorafs-validate governance --block <path> [--cid <block-cid|hex:HEX>] [--format table|json|yaml] [--telemetry-out <path>]
   sorafs-validate governance --head <path> --block <path> [--block <path>...] [--format table|json|yaml] [--telemetry-out <path>]
+  sorafs-validate release-manifest --manifest <path> --public-key <raw-32-byte-path> --public-key-fingerprint <lowercase-sha256-hex> --signature <raw-64-byte-path>
+  sorafs-validate release-manifest --manifest <path> --public-key <raw-32-byte-path> --public-key-fingerprint <lowercase-sha256-hex> --signing-seed <raw-32-byte-path> --signature-out <path> --development-local-signing
   sorafs-validate sign --kind advert --input <advert.to> --out <signed-advert.to> (--key-hex <hex> | --key <path>) [--format table|json|yaml] [--now <unix-seconds>]
   sorafs-validate sign --kind order --input <order.to> --out <signed-order.to> (--key-hex <hex> | --key <path>) [--format table|json|yaml]
   sorafs-validate sign --kind orderbook --payload-kind order-request|order-cancel|settlement-receipt --input <payload.to> --out <signed-payload.to> (--key-hex <hex> | --key <path>) [--format table|json|yaml]
@@ -3343,16 +3907,17 @@ mod tests {
 
     #[test]
     fn governance_args_parse_reads_node_cid_format_and_generated_at() {
+        let cid = format!("hex:{}", "a5".repeat(32));
         let args = [
             "--node=governance.to".to_owned(),
-            "--cid=bafygovernancelognode".to_owned(),
+            format!("--cid={cid}"),
             "--format=json".to_owned(),
             "--telemetry-out=out.json".to_owned(),
             "--generated-at=6".to_owned(),
         ];
         let parsed = GovernanceArgs::parse(&args).expect("parse args");
         assert_eq!(parsed.node, Some(PathBuf::from("governance.to")));
-        assert_eq!(parsed.cid.as_deref(), Some("bafygovernancelognode"));
+        assert_eq!(parsed.cid.as_deref(), Some(cid.as_str()));
         assert!(matches!(parsed.format, Some(OutputFormat::Json)));
         assert_eq!(parsed.telemetry_out, Some(PathBuf::from("out.json")));
         assert_eq!(parsed.generated_at, Some(6));
@@ -3378,18 +3943,16 @@ mod tests {
     }
 
     #[test]
-    fn parse_cid_arg_bytes_accepts_hex_and_raw_cids() {
+    fn parse_cid_arg_bytes_accepts_exact_prefixed_and_bare_hex_cids() {
+        let expected = vec![0x0A; 32];
+        let hex_cid = "0a".repeat(32);
         assert_eq!(
-            parse_cid_arg_bytes("hex:0a0b").expect("parse prefixed hex"),
-            vec![0x0A, 0x0B]
+            parse_cid_arg_bytes(&format!("hex:{hex_cid}")).expect("parse prefixed hex"),
+            expected
         );
         assert_eq!(
-            parse_cid_arg_bytes("0a0b").expect("parse bare hex"),
-            vec![0x0A, 0x0B]
-        );
-        assert_eq!(
-            parse_cid_arg_bytes("bafygovernance").expect("parse raw CID"),
-            b"bafygovernance".to_vec()
+            parse_cid_arg_bytes(&hex_cid).expect("parse bare hex"),
+            expected
         );
     }
 

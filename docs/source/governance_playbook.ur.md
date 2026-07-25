@@ -66,7 +66,7 @@ translator: machine-google-reviewed
    گیٹ وے
 2. دستخط شدہ لفافے کے ساتھ مینی فیسٹ اسٹب تصدیق کنندہ چلائیں:
    ```
-   cargo run -p sorafs_car --bin sorafs-manifest-stub -- manifest.json \
+   cargo run -p sorafs_car --bin sorafs-manifest-builder -- manifest.json \
      --manifest-signatures-in=fixtures/sorafs_chunker/manifest_signatures.json \
      --json-out=/tmp/manifest_report.json
    ```

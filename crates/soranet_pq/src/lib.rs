@@ -3,14 +3,6 @@
 //! This crate exposes ML-KEM and ML-DSA helpers plus the hedged RNG and HKDF
 //! utilities needed by the `SoraNet` handshake.
 
-#![cfg_attr(
-    any(feature = "ffi-artifacts", soranet_pq_primary_package),
-    crate_type = "cdylib"
-)]
-#![cfg_attr(
-    any(feature = "ffi-artifacts", soranet_pq_primary_package),
-    crate_type = "staticlib"
-)]
 #![allow(unsafe_code)]
 #![deny(missing_docs)]
 

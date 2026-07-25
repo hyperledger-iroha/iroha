@@ -94,9 +94,9 @@ manifeste avec `--json-out=-` pour transmettre les métadonnées calculées aux 
   digest de manifest y checks PoR con los parámetros propuestos.
 - `sorafs_manifest_chunk_store --json-out=-` — transmettre le rapport de chunk-store à
   sortie standard pour comparaisons automatisées.
-- `sorafs_manifest_stub --chunker-profile=<handle>` — confirmer que les manifestes et les avions CAR
+- `sorafs_manifest_builder --chunker-profile=<handle>` — confirmer que les manifestes et les avions CAR
   embeben el handle canónico plus los alias.
-- `sorafs_manifest_stub --plan=-` — retourner à l'alimentation du `chunk_fetch_specs` précédent pour
+- `sorafs_manifest_builder --plan=-` — retourner à l'alimentation du `chunk_fetch_specs` précédent pour
   vérifier les compensations/digestes après le changement.
 
 Enregistrez la sortie de commandes (digests, racines PoR, hachages de manifeste) à la bonne adresse
@@ -135,7 +135,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
   --json-out=- --por-json-out=- fixtures/sorafs_chunker/input.bin
 
 # Generar manifest + CAR y capturar chunk fetch specs
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --chunk-fetch-plan-out=chunk_plan.json \
@@ -144,7 +144,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
   --json-out=sf2.report.json
 
 # Reejecutar usando el plan de fetch guardado (evita offsets obsoletos)
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --plan=chunk_plan.json --json-out=-

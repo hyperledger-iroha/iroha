@@ -58,6 +58,7 @@ export {
   normalizeValidationFeeLedgerBindingV1,
   verifyValidationFeeCurrentPolicyProofV1,
 } from "./validationFeeConsensus.js";
+export { computeValidationFeePolicyProposalFingerprintV1 } from "./validationFeeProposal.js";
 export { ValidationError, ValidationErrorCode } from "./validationError.js";
 export {
   ToriiClient,
@@ -568,9 +569,14 @@ export {
 export {
   decodeReplicationOrder,
   ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1,
+  SORAFS_GOVERNANCE_DAG_MAX_BLOCKS_V1,
   SORAFS_ORDERBOOK_PAYLOAD_KINDS,
   SORAFS_PDP_PAYLOAD_KINDS,
+  SORAFS_REFERENCE_MAX_INPUT_BYTES_V1,
+  SORAFS_REFERENCE_MAX_LABEL_BYTES_V1,
   SorafsGatewayFetchError,
+  validateGovernanceDagBlock,
+  validateGovernanceDagHeadChain,
   validatePdpBundle,
   validatePdpChallengeProof,
   validatePdpCommitmentChallenge,
