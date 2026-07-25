@@ -41,7 +41,7 @@ use iroha_data_model::{
             ProofOutcomeFinalizedEventV1, ProofOutcomeProjectionV1,
         },
         reputation::{
-            PorTerminalStatusV1, ProviderDisputeResolutionV1, ProviderDisputeStatusV1,
+            PorTerminalStatusV1, ProviderDisputeStatusV1,
             REPUTATION_JOURNAL_QUERY_MAX_EVENT_PAGE_BYTES_V1,
             REPUTATION_JOURNAL_QUERY_MAX_ITEMS_V1, ReputationJournalFinalizedEventPageV1,
             ReputationJournalFinalizedEventV1, ReputationJournalPayloadV1,
@@ -1888,12 +1888,11 @@ fn prepare_journal_pages(
                 ReputationJournalPayloadV1::ProviderDispute(dispute) => {
                     let transition = match &dispute.status {
                         ProviderDisputeStatusV1::Opened => ReputationDisputeSignalV1::Opened,
-                        ProviderDisputeStatusV1::Resolved(ProviderDisputeResolutionV1 {
-                            outcome,
-                            ..
-                        }) => ReputationDisputeSignalV1::Resolved {
-                            upheld: *outcome == CapacityDisputeOutcome::Upheld,
-                        },
+                        ProviderDisputeStatusV1::Resolved(resolution) => {
+                            ReputationDisputeSignalV1::Resolved {
+                                upheld: resolution.outcome == CapacityDisputeOutcome::Upheld,
+                            }
+                        }
                     };
                     ReputationSignalV1::Dispute {
                         provider_id: event.entry.provider_id,
@@ -3368,9 +3367,9 @@ mod tests {
             },
             reputation::{
                 PorTerminalOutcomeV1, ProviderDisputeEventV1, ProviderDisputeKindV1,
-                REPUTATION_JOURNAL_AUTHORITY_POLICY_VERSION_V1, ReputationJournalAuthorityPolicyV1,
-                ReputationJournalEntryV1, ReputationJournalFinalizedCursorV1,
-                StreamTokenValidationOutcomeV1,
+                ProviderDisputeResolutionV1, REPUTATION_JOURNAL_AUTHORITY_POLICY_VERSION_V1,
+                ReputationJournalAuthorityPolicyV1, ReputationJournalEntryV1,
+                ReputationJournalFinalizedCursorV1, StreamTokenValidationOutcomeV1,
             },
             reserve::{
                 ReserveDuration, ReserveFinalizedCursorV1, ReserveProviderAccountV1,

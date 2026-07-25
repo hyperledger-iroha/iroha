@@ -22,6 +22,11 @@ CLIENT_BUILD_RELATIVE_PATH = (
     Path("gradle-build") / "iroha_kotlin_sdk" / "client-android"
 )
 MAX_PROVENANCE_BYTES = 64 * 1024
+BUILD_ENVIRONMENT_SCHEMA = "iroha.mobile-native-build-environment.v1"
+ANDROID_NDK_BASE_REVISION = "28.0.12674087"
+ANDROID_NDK_SOURCE_PROPERTIES_SHA256 = (
+    "55368a3554d27b8413b75a4b2e83ea7f6b66fef4068f7a7f71cf2910c6e3357b"
+)
 
 
 class VerificationError(RuntimeError):
@@ -246,6 +251,25 @@ def strict_provenance(payload: bytes) -> dict[str, object]:
         or decoded["cargo_features"] != ["privacy-production-enabled"]
     ):
         fail("native provenance does not bind the production ABI-21 Release")
+    if decoded["android_ndk_revision"] != ANDROID_NDK_BASE_REVISION:
+        fail("native provenance Android NDK base revision is not exact")
+    build_environment = decoded["build_environment"]
+    if not isinstance(build_environment, dict):
+        fail("native provenance build environment must be an object")
+    if build_environment.get("schema") != BUILD_ENVIRONMENT_SCHEMA:
+        fail("native provenance build environment schema is not exact")
+    if (
+        build_environment.get("android_ndk_revision")
+        != ANDROID_NDK_BASE_REVISION
+        or build_environment["android_ndk_revision"]
+        != decoded["android_ndk_revision"]
+    ):
+        fail("native provenance build environment Android NDK base revision is not exact")
+    if (
+        build_environment.get("android_ndk_source_properties_sha256")
+        != ANDROID_NDK_SOURCE_PROPERTIES_SHA256
+    ):
+        fail("native provenance Android NDK source.properties digest is not exact")
     libraries = decoded["libraries"]
     if not isinstance(libraries, dict) or set(libraries) != set(ABIS):
         fail("native provenance ABI inventory is not exact")

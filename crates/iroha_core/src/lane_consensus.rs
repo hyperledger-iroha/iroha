@@ -834,11 +834,7 @@ impl LaneExecutablePayloadV1 {
         if self.origin_proposal.payload_block_hint.is_some()
             || hint.proposal_height == 0
             || hint.proposal_height != self.origin_proposal.descriptor.proposal_height
-            || hint
-                .proposal_block_hash
-                .as_ref()
-                .iter()
-                .all(|byte| *byte == 0)
+            || protocol_hash_bytes_are_zero(hint.proposal_block_hash.as_ref())
         {
             return Err(LaneAutonomousArtifactError::InvalidGlobalAnchorHint);
         }
@@ -1087,7 +1083,7 @@ fn validate_lane_payload_availability_body_shape(
     if body.version != 1
         || body.proposal_height == 0
         || body.lane_block_height == 0
-        || body.lane_incarnation.as_ref().iter().all(|byte| *byte == 0)
+        || protocol_hash_bytes_are_zero(body.lane_incarnation.as_ref())
         || body.origin_lane_block_view > body.current_lane_block_view
         || body.validator_set_hash_version != VALIDATOR_SET_HASH_VERSION_V1
         || validator_count == 0
@@ -1530,16 +1526,8 @@ fn validate_lane_executable_payload_body(
             || key.proposal_height != descriptor.proposal_height
             || key.lane_block_height != descriptor.lane_block_height
             || key.lane_block_view != descriptor.lane_block_view
-            || key
-                .reservation_owner_hash
-                .as_ref()
-                .iter()
-                .all(|byte| *byte == 0)
-            || key
-                .proposal_identity_hash
-                .as_ref()
-                .iter()
-                .all(|byte| *byte == 0)
+            || protocol_hash_bytes_are_zero(key.reservation_owner_hash.as_ref())
+            || protocol_hash_bytes_are_zero(key.proposal_identity_hash.as_ref())
             || key.coordinator_leg.role != RouteLegRole::Coordinator
             || key.coordinator_leg.route.lane_id != descriptor.lane_id
             || key.coordinator_leg.route.dataspace_id != descriptor.dataspace_id
@@ -1712,7 +1700,7 @@ fn validate_lane_block_new_view_body(
     }
     if body.proposal_height == 0
         || body.lane_block_height == 0
-        || body.lane_incarnation.as_ref().iter().all(|byte| *byte == 0)
+        || protocol_hash_bytes_are_zero(body.lane_incarnation.as_ref())
         || body.qc_mode_tag.trim().is_empty()
         || body.from_view.checked_add(1) != Some(body.target_view)
         || body.validator_set_hash_version != VALIDATOR_SET_HASH_VERSION_V1
@@ -1764,8 +1752,15 @@ impl LaneBlockNewViewVoteV1 {
     }
 }
 
+fn protocol_hash_bytes_are_zero(hash: &[u8]) -> bool {
+    // These records reserve `Hash::prehashed([0; 32])` as a sentinel, but
+    // `Hash` forces its marker bit on construction. A bytewise all-zero check
+    // therefore can never recognize the sentinel.
+    hash == Hash::prehashed([0; Hash::LENGTH]).as_ref()
+}
+
 fn hash_is_nonzero(hash: Hash) -> bool {
-    hash.as_ref().iter().any(|byte| *byte != 0)
+    !protocol_hash_bytes_are_zero(hash.as_ref())
 }
 
 fn lane_drain_frontier_shape_is_valid(
@@ -1788,7 +1783,7 @@ fn lane_drain_frontier_shape_is_valid(
     let Some(native) = frontier.native_application else {
         return Ok(());
     };
-    let typed_hash_is_nonzero = |hash: &[u8]| hash.iter().any(|byte| *byte != 0);
+    let typed_hash_is_nonzero = |hash: &[u8]| !protocol_hash_bytes_are_zero(hash);
     if native.version != 1
         || frontier.lane_block_height == 0
         || native.predecessor_height.checked_add(1) != Some(frontier.lane_block_height)
@@ -1834,11 +1829,7 @@ pub(crate) fn validate_lane_drain_intent(
         return Err(LaneDrainCertificateError::UnsupportedVersion);
     }
     if intent.close_global_height == 0
-        || intent
-            .lane_incarnation
-            .as_ref()
-            .iter()
-            .all(|byte| *byte == 0)
+        || protocol_hash_bytes_are_zero(intent.lane_incarnation.as_ref())
         || intent.validator_set_hash_version != VALIDATOR_SET_HASH_VERSION_V1
         || validator_count == 0
         || validator_count > MAX_LANE_BLOCK_VALIDATORS
@@ -2558,7 +2549,7 @@ impl LaneBlockNewViewCertificateCache {
 }
 
 /// Individual lane-local block vote before committee aggregation.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, JsonSerialize, JsonDeserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, JsonSerialize)]
 pub struct LaneBlockVoteV1 {
     /// Body signed by the lane validator.
     pub body: LaneBlockVoteBodyV1,
@@ -2568,6 +2559,43 @@ pub struct LaneBlockVoteV1 {
     pub signer: PeerId,
     /// BLS signature over [`LaneBlockVoteBodyV1::signature_preimage`].
     pub bls_signature: Vec<u8>,
+}
+
+struct RequiredLanePayloadAvailabilityVote(Option<LanePayloadAvailabilityVoteV1>);
+
+impl norito::json::JsonDeserialize for RequiredLanePayloadAvailabilityVote {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        <Option<LanePayloadAvailabilityVoteV1> as norito::json::JsonDeserialize>::json_deserialize(
+            parser,
+        )
+        .map(Self)
+    }
+}
+
+#[derive(JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+struct LaneBlockVoteJson {
+    body: LaneBlockVoteBodyV1,
+    payload_availability_vote: RequiredLanePayloadAvailabilityVote,
+    signer: PeerId,
+    bls_signature: Vec<u8>,
+}
+
+impl norito::json::JsonDeserialize for LaneBlockVoteV1 {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        let decoded =
+            <LaneBlockVoteJson as norito::json::JsonDeserialize>::json_deserialize(parser)?;
+        Ok(Self {
+            body: decoded.body,
+            payload_availability_vote: decoded.payload_availability_vote.0,
+            signer: decoded.signer,
+            bls_signature: decoded.bls_signature,
+        })
+    }
 }
 
 /// Stable key for one lane-local proposal session.
@@ -4941,11 +4969,7 @@ pub fn validate_lane_block_proposal(
     let descriptor = &proposal.descriptor;
     if descriptor.proposal_height == 0
         || descriptor.lane_block_height == 0
-        || descriptor
-            .lane_incarnation
-            .as_ref()
-            .iter()
-            .all(|byte| *byte == 0)
+        || protocol_hash_bytes_are_zero(descriptor.lane_incarnation.as_ref())
         || descriptor.qc_mode_tag.trim().is_empty()
         || descriptor.accepted_candidate_indices.is_empty()
         || descriptor.accepted_candidate_indices.len() > MAX_LANE_EXECUTABLE_ENTRYPOINTS
@@ -5277,7 +5301,7 @@ fn validate_lane_block_vote_body_shape(
     if body.phase == CertPhase::NewView
         || body.proposal_height == 0
         || body.lane_block_height == 0
-        || body.lane_incarnation.as_ref().iter().all(|byte| *byte == 0)
+        || protocol_hash_bytes_are_zero(body.lane_incarnation.as_ref())
         || body.qc_mode_tag.trim().is_empty()
         || body.accepted_candidate_indices.is_empty()
         || body.accepted_candidate_indices.len() > MAX_LANE_EXECUTABLE_ENTRYPOINTS
@@ -5817,12 +5841,18 @@ mod tests {
         forged_bodies.push(forged);
         let mut forged = certificate.clone();
         forged.body.intent.lane_id = LaneId::new(8);
+        forged.body.intent.initial_frontier.lane_id = LaneId::new(8);
+        forged.body.final_frontier.lane_id = LaneId::new(8);
         forged_bodies.push(forged);
         let mut forged = certificate.clone();
         forged.body.intent.dataspace_id = DataSpaceId::new(10);
+        forged.body.intent.initial_frontier.dataspace_id = DataSpaceId::new(10);
+        forged.body.final_frontier.dataspace_id = DataSpaceId::new(10);
         forged_bodies.push(forged);
         let mut forged = certificate.clone();
         forged.body.intent.lane_incarnation = Hash::new(b"wrong-incarnation");
+        forged.body.intent.initial_frontier.lane_incarnation = Hash::new(b"wrong-incarnation");
+        forged.body.final_frontier.lane_incarnation = Hash::new(b"wrong-incarnation");
         forged_bodies.push(forged);
         let mut forged = certificate.clone();
         forged.body.intent.close_global_height = 42;

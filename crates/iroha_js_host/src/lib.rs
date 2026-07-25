@@ -150,13 +150,14 @@ use iroha_data_model::{
         manifest::{ContractManifest, ManifestProvenance},
     },
     soracloud::{
-        SecretEnvelopeV1, encode_agent_deploy_provenance_payload,
+        SORACLOUD_XOR_SCALE, SecretEnvelopeV1, encode_agent_deploy_provenance_payload,
         encode_bundle_with_materials_provenance_payload,
         encode_hf_shared_lease_join_provenance_payload,
     },
     sorafs::pin_registry::StorageClass,
     transaction::{
-        Executable, ExecutableBatchItem, FeePaymentIntent, IvmProved, PrivateCreateKaigi,
+        Executable, ExecutableBatchItem, FeePaymentIntent, IvmBytecode, IvmProved,
+        PrivateCreateKaigi,
         PrivateEndKaigi, PrivateJoinKaigi, PrivateKaigiAction, PrivateKaigiArtifacts,
         PrivateKaigiFeeSpend, PrivateKaigiTemplate, PrivateKaigiTransaction, TransactionPayload,
         TransactionSubmissionReceipt,
@@ -1705,10 +1706,11 @@ pub fn soracloud_build_hf_deploy_request_json(
 
     let storage_class = parse_soracloud_storage_class(&storage_class)?;
     let lease_term_ms = parse_positive_u64_literal(&lease_term_ms, "lease_term_ms")?;
-    let base_fee_nanos = Quantity::from(parse_positive_u128_literal(
-        &base_fee_nanos,
-        "base_fee_nanos",
-    )?);
+    let base_fee = Quantity::from_canonical_numeric(Numeric::new(
+        parse_positive_u128_literal(&base_fee_nanos, "base_fee_nanos")?,
+        SORACLOUD_XOR_SCALE,
+    ))
+    .map_err(norito_to_napi)?;
     let lease_asset_definition_id = lease_asset_definition_id
         .trim()
         .parse::<AssetDefinitionId>()
@@ -1729,7 +1731,7 @@ pub fn soracloud_build_hf_deploy_request_json(
         storage_class,
         lease_term_ms,
         &lease_asset_definition_id,
-        &base_fee_nanos,
+        &base_fee,
     )
     .map_err(norito_to_napi)?;
     let provenance = sign_soracloud_payload(&keypair, &deploy_payload)?;
@@ -1815,8 +1817,8 @@ pub fn soracloud_build_hf_deploy_request_json(
         json::to_value(&lease_asset_definition_id).map_err(norito_to_napi)?,
     );
     payload.insert(
-        "base_fee_nanos".to_owned(),
-        json::to_value(&base_fee_nanos).map_err(norito_to_napi)?,
+        "base_fee".to_owned(),
+        json::to_value(&base_fee).map_err(norito_to_napi)?,
     );
 
     let mut root = Map::new();
@@ -1968,6 +1970,198 @@ pub fn norito_encode_instruction(json_payload: String) -> napi::Result<Buffer> {
     let instruction = instruction_from_json(&json_payload)?;
     let encoded = norito_core::to_bytes(&instruction).map_err(norito_to_napi)?;
     Ok(Buffer::from(encoded))
+}
+
+fn subscription_syscall_program_bytes(syscall: u32, max_cycles: NonZeroU64) -> Vec<u8> {
+    let opcode = u8::try_from(syscall).expect("subscription syscall opcode fits in u8");
+    let mut code = Vec::new();
+    code.extend_from_slice(
+        &ivm::encoding::wide::encode_sys(ivm::instruction::wide::system::SCALL, opcode)
+            .to_le_bytes(),
+    );
+    code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+    let mut artifact = ivm::ProgramMetadata {
+        max_cycles: max_cycles.get(),
+        ..ivm::ProgramMetadata::default()
+    }
+    .encode();
+    artifact.extend_from_slice(&code);
+    artifact
+}
+
+/// Inspect and fail closed on one subscription trigger action returned inside
+/// a Torii unsigned mutation draft.
+///
+/// The returned summary is intentionally small: this function first verifies
+/// that the full action contains only the exact first-release billing or usage
+/// syscall program, repetition policy, event filter, retry policy, and
+/// metadata shape. JavaScript then binds the trusted summary to the reviewed
+/// account, subscription, trigger, and charge time before signing.
+#[napi]
+#[allow(clippy::needless_pass_by_value)]
+pub fn inspect_subscription_trigger_action(encoded_action: String) -> napi::Result<String> {
+    use iroha_data_model::{
+        events::EventFilterBox,
+        subscription::{
+            SUBSCRIPTION_TRIGGER_REF_METADATA_KEY, SubscriptionTriggerRef,
+        },
+    };
+
+    let action: Action =
+        json::from_value(json::Value::String(encoded_action)).map_err(norito_to_napi)?;
+    let Executable::Ivm(bytecode) = action.executable() else {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "subscription trigger executable must be exact IVM bytecode",
+        ));
+    };
+    let parsed = ivm::ProgramMetadata::parse(bytecode.as_ref()).map_err(norito_to_napi)?;
+    let max_cycles = NonZeroU64::new(parsed.metadata.max_cycles).ok_or_else(|| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            "subscription trigger max_cycles must be non-zero",
+        )
+    })?;
+    let program_kind = if bytecode.as_ref()
+        == subscription_syscall_program_bytes(
+            ivm::syscalls::SYSCALL_SUBSCRIPTION_BILL,
+            max_cycles,
+        )
+    {
+        "billing"
+    } else if bytecode.as_ref()
+        == subscription_syscall_program_bytes(
+            ivm::syscalls::SYSCALL_SUBSCRIPTION_RECORD_USAGE,
+            max_cycles,
+        )
+    {
+        "usage"
+    } else {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "subscription trigger contains an unexpected IVM program",
+        ));
+    };
+
+    if action.retry_policy().is_some() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "subscription trigger retry_policy must be null",
+        ));
+    }
+
+    let mut summary = json::Map::new();
+    summary.insert(
+        "version".to_owned(),
+        json::Value::Number(json::Number::from(1_u64)),
+    );
+    summary.insert(
+        "kind".to_owned(),
+        json::Value::String(program_kind.to_owned()),
+    );
+    summary.insert(
+        "authority".to_owned(),
+        json::Value::String(account_id_to_canonical_i105(action.authority())?),
+    );
+    summary.insert(
+        "max_cycles".to_owned(),
+        json::Value::String(max_cycles.get().to_string()),
+    );
+
+    match program_kind {
+        "billing" => {
+            if action.repeats() != Repeats::Exactly(1) {
+                return Err(napi::Error::new(
+                    napi::Status::InvalidArg,
+                    "billing subscription trigger must repeat exactly once",
+                ));
+            }
+            let EventFilterBox::Time(TimeEventFilter(ExecutionTime::Schedule(schedule))) =
+                action.filter()
+            else {
+                return Err(napi::Error::new(
+                    napi::Status::InvalidArg,
+                    "billing subscription trigger must use an exact one-shot time schedule",
+                ));
+            };
+            if schedule.period_ms.is_some() {
+                return Err(napi::Error::new(
+                    napi::Status::InvalidArg,
+                    "billing subscription trigger schedule period must be null",
+                ));
+            }
+            if action.metadata().iter().len() != 1 {
+                return Err(napi::Error::new(
+                    napi::Status::InvalidArg,
+                    "billing subscription trigger metadata must contain only subscription_ref",
+                ));
+            }
+            let reference = action
+                .metadata()
+                .get(SUBSCRIPTION_TRIGGER_REF_METADATA_KEY)
+                .ok_or_else(|| {
+                    napi::Error::new(
+                        napi::Status::InvalidArg,
+                        "billing subscription trigger is missing subscription_ref metadata",
+                    )
+                })?;
+            let reference: SubscriptionTriggerRef =
+                reference.try_into_any_norito().map_err(norito_to_napi)?;
+            summary.insert(
+                "charge_at_ms".to_owned(),
+                json::Value::Number(json::Number::from(schedule.start_ms)),
+            );
+            summary.insert(
+                "subscription_id".to_owned(),
+                json::Value::String(reference.subscription_nft_id.to_string()),
+            );
+        }
+        "usage" => {
+            if action.repeats() != Repeats::Indefinitely {
+                return Err(napi::Error::new(
+                    napi::Status::InvalidArg,
+                    "usage subscription trigger must repeat indefinitely",
+                ));
+            }
+            let EventFilterBox::ExecuteTrigger(filter) = action.filter() else {
+                return Err(napi::Error::new(
+                    napi::Status::InvalidArg,
+                    "usage subscription trigger must use an execute-trigger filter",
+                ));
+            };
+            let trigger_id = filter.trigger_id().as_ref().ok_or_else(|| {
+                napi::Error::new(
+                    napi::Status::InvalidArg,
+                    "usage subscription trigger filter must bind a trigger id",
+                )
+            })?;
+            let filter_authority = filter.authority().ok_or_else(|| {
+                napi::Error::new(
+                    napi::Status::InvalidArg,
+                    "usage subscription trigger filter must bind an authority",
+                )
+            })?;
+            if filter_authority != action.authority() {
+                return Err(napi::Error::new(
+                    napi::Status::InvalidArg,
+                    "usage subscription trigger filter authority must match its action authority",
+                ));
+            }
+            if !action.metadata().is_empty() {
+                return Err(napi::Error::new(
+                    napi::Status::InvalidArg,
+                    "usage subscription trigger metadata must be empty",
+                ));
+            }
+            summary.insert(
+                "trigger_id".to_owned(),
+                json::Value::String(trigger_id.to_string()),
+            );
+        }
+        _ => unreachable!("subscription program kind is classified above"),
+    }
+
+    json::to_json(&json::Value::Object(summary)).map_err(norito_to_napi)
 }
 
 /// Decode canonical Norito bytes for an instruction back into JSON form.
@@ -8114,6 +8308,48 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
     }
     match value {
         json::Value::Object(mut map) => {
+            if let Some(payload) = map.remove("DeploySoracloudService") {
+                if !map.is_empty() {
+                    return Err(napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!(
+                            "DeploySoracloudService instruction envelope contains unexpected field(s): {}",
+                            map.keys().cloned().collect::<Vec<_>>().join(", ")
+                        ),
+                    ));
+                }
+                let instruction: iroha_data_model::isi::soracloud::DeploySoracloudService =
+                    json::from_value(payload).map_err(norito_to_napi)?;
+                return Ok(instruction.into());
+            }
+            if let Some(payload) = map.remove("DeploySoracloudAgentApartment") {
+                if !map.is_empty() {
+                    return Err(napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!(
+                            "DeploySoracloudAgentApartment instruction envelope contains unexpected field(s): {}",
+                            map.keys().cloned().collect::<Vec<_>>().join(", ")
+                        ),
+                    ));
+                }
+                let instruction: iroha_data_model::isi::soracloud::DeploySoracloudAgentApartment =
+                    json::from_value(payload).map_err(norito_to_napi)?;
+                return Ok(instruction.into());
+            }
+            if let Some(payload) = map.remove("JoinSoracloudHfSharedLease") {
+                if !map.is_empty() {
+                    return Err(napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!(
+                            "JoinSoracloudHfSharedLease instruction envelope contains unexpected field(s): {}",
+                            map.keys().cloned().collect::<Vec<_>>().join(", ")
+                        ),
+                    ));
+                }
+                let instruction: iroha_data_model::isi::soracloud::JoinSoracloudHfSharedLease =
+                    json::from_value(payload).map_err(norito_to_napi)?;
+                return Ok(instruction.into());
+            }
             if let Some(proposal_value) = map.remove("ProposeValidationFeePolicy") {
                 if !map.is_empty() {
                     return Err(napi::Error::new(
@@ -8229,8 +8465,38 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     return Ok(InstructionBox::from(register_box));
                 }
                 if let Some(trigger_value) = register_map.remove("Trigger") {
-                    let trigger: Trigger =
-                        json::from_value(trigger_value).map_err(norito_to_napi)?;
+                    let json::Value::Object(mut trigger_fields) = trigger_value else {
+                        return Err(napi::Error::new(
+                            napi::Status::InvalidArg,
+                            "Register.Trigger must be an object with exact id and action fields",
+                        ));
+                    };
+                    let trigger_id: TriggerId = json::from_value(required_value(
+                        &mut trigger_fields,
+                        "id",
+                        "Register.Trigger",
+                    )?)
+                    .map_err(norito_to_napi)?;
+                    let action: Action = json::from_value(required_value(
+                        &mut trigger_fields,
+                        "action",
+                        "Register.Trigger",
+                    )?)
+                    .map_err(norito_to_napi)?;
+                    if !trigger_fields.is_empty() {
+                        return Err(napi::Error::new(
+                            napi::Status::InvalidArg,
+                            format!(
+                                "Register.Trigger contains unexpected field(s): {}",
+                                trigger_fields
+                                    .keys()
+                                    .cloned()
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            ),
+                        ));
+                    }
+                    let trigger = Trigger::new(trigger_id, action);
                     let register_box = RegisterBox::Trigger(Register::<Trigger>::trigger(trigger));
                     return Ok(InstructionBox::from(register_box));
                 }
@@ -8881,9 +9147,36 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                         account, key, value,
                     )));
                 }
+                if let Some(json::Value::Object(mut fields)) = variants.remove("Nft") {
+                    let nft_id: NftId =
+                        json::from_value(required_value(&mut fields, "object", "SetKeyValue.Nft")?)
+                            .map_err(norito_to_napi)?;
+                    let key: Name =
+                        json::from_value(required_value(&mut fields, "key", "SetKeyValue.Nft")?)
+                            .map_err(norito_to_napi)?;
+                    let value: Json =
+                        json::from_value(required_value(&mut fields, "value", "SetKeyValue.Nft")?)
+                            .map_err(norito_to_napi)?;
+                    if !fields.is_empty() {
+                        return Err(napi::Error::new(
+                            napi::Status::InvalidArg,
+                            format!(
+                                "SetKeyValue.Nft contains unsupported fields: {}",
+                                fields.keys().cloned().collect::<Vec<_>>().join(", ")
+                            ),
+                        ));
+                    }
+                    if !variants.is_empty() {
+                        return Err(napi::Error::new(
+                            napi::Status::InvalidArg,
+                            "SetKeyValue must contain exactly one variant",
+                        ));
+                    }
+                    return Ok(InstructionBox::from(SetKeyValue::nft(nft_id, key, value)));
+                }
                 return Err(napi::Error::new(
                     napi::Status::InvalidArg,
-                    "SetKeyValue currently supports the Account variant",
+                    "SetKeyValue currently supports the Account and Nft variants",
                 ));
             }
             if let Some(json::Value::Object(mut fields)) = map.remove("RemoveRwaKeyValue") {
@@ -9793,6 +10086,39 @@ fn exact_json_object_fields(
 #[allow(clippy::too_many_lines)] // mirrors `value_to_instruction` for full roundtrips
 fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json::Value> {
     let instruction_ref: &dyn InstructionTrait = &**instruction;
+    if let Some(deploy) = instruction_ref
+        .as_any()
+        .downcast_ref::<iroha_data_model::isi::soracloud::DeploySoracloudService>(
+    ) {
+        let mut outer = json::Map::new();
+        outer.insert(
+            "DeploySoracloudService".to_owned(),
+            json::to_value(deploy).map_err(norito_to_napi)?,
+        );
+        return Ok(json::Value::Object(outer));
+    }
+    if let Some(deploy) = instruction_ref
+        .as_any()
+        .downcast_ref::<iroha_data_model::isi::soracloud::DeploySoracloudAgentApartment>(
+    ) {
+        let mut outer = json::Map::new();
+        outer.insert(
+            "DeploySoracloudAgentApartment".to_owned(),
+            json::to_value(deploy).map_err(norito_to_napi)?,
+        );
+        return Ok(json::Value::Object(outer));
+    }
+    if let Some(join) = instruction_ref
+        .as_any()
+        .downcast_ref::<iroha_data_model::isi::soracloud::JoinSoracloudHfSharedLease>(
+    ) {
+        let mut outer = json::Map::new();
+        outer.insert(
+            "JoinSoracloudHfSharedLease".to_owned(),
+            json::to_value(join).map_err(norito_to_napi)?,
+        );
+        return Ok(json::Value::Object(outer));
+    }
     if let Some(settlement) = instruction_ref
         .as_any()
         .downcast_ref::<SettlementInstructionBox>()
@@ -9843,8 +10169,17 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
                 register_map.insert("Role".to_owned(), inner);
             }
             RegisterBox::Trigger(register) => {
-                let inner = json::to_value(register.object()).map_err(norito_to_napi)?;
-                register_map.insert("Trigger".to_owned(), inner);
+                let trigger = register.object();
+                let mut inner = json::Map::new();
+                inner.insert(
+                    "id".to_owned(),
+                    json::to_value(trigger.id()).map_err(norito_to_napi)?,
+                );
+                inner.insert(
+                    "action".to_owned(),
+                    json::to_value(trigger.action()).map_err(norito_to_napi)?,
+                );
+                register_map.insert("Trigger".to_owned(), json::Value::Object(inner));
             }
             RegisterBox::Peer(register) => {
                 let inner = json::to_value(register).map_err(norito_to_napi)?;
@@ -10053,6 +10388,26 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
             );
             let mut variants = json::Map::new();
             variants.insert("Account".to_owned(), json::Value::Object(fields));
+            let mut outer = json::Map::new();
+            outer.insert("SetKeyValue".to_owned(), json::Value::Object(variants));
+            return Ok(json::Value::Object(outer));
+        }
+        if let SetKeyValueBox::Nft(set) = set_key_value {
+            let mut fields = json::Map::new();
+            fields.insert(
+                "object".to_owned(),
+                json::to_value(set.object()).map_err(norito_to_napi)?,
+            );
+            fields.insert(
+                "key".to_owned(),
+                json::to_value(set.key()).map_err(norito_to_napi)?,
+            );
+            fields.insert(
+                "value".to_owned(),
+                json::to_value(set.value()).map_err(norito_to_napi)?,
+            );
+            let mut variants = json::Map::new();
+            variants.insert("Nft".to_owned(), json::Value::Object(fields));
             let mut outer = json::Map::new();
             outer.insert("SetKeyValue".to_owned(), json::Value::Object(variants));
             return Ok(json::Value::Object(outer));
@@ -16238,6 +16593,249 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+
+    #[test]
+    fn subscription_draft_instruction_json_roundtrips() {
+        let authority = AccountId::new(
+            KeyPair::random_with_algorithm(Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        );
+        let trigger_id: TriggerId = "sub_bill_demo".parse().expect("trigger id");
+        let trigger = Trigger::new(
+            trigger_id.clone(),
+            Action::new(
+                Executable::from(Vec::<InstructionBox>::new()),
+                Repeats::Indefinitely,
+                authority,
+                TimeEventFilter::new(ExecutionTime::PreCommit),
+            ),
+        );
+        let register =
+            InstructionBox::from(RegisterBox::Trigger(Register::<Trigger>::trigger(trigger)));
+        let register_json =
+            instruction_to_json_value(&register).expect("register trigger instruction JSON");
+        let register_fields = register_json
+            .get("Register")
+            .and_then(json::Value::as_object)
+            .and_then(|value| value.get("Trigger"))
+            .and_then(json::Value::as_object)
+            .expect("register trigger fields");
+        let trigger_id_literal = trigger_id.to_string();
+        assert_eq!(
+            register_fields.get("id").and_then(json::Value::as_str),
+            Some(trigger_id_literal.as_str()),
+        );
+        let reparsed_register =
+            value_to_instruction(register_json).expect("parse register trigger instruction JSON");
+        assert_eq!(
+            InstructionTrait::dyn_encode(&*register),
+            InstructionTrait::dyn_encode(&*reparsed_register),
+        );
+
+        let nft_id: NftId = "sub_demo$subscriptions.universal"
+            .parse()
+            .expect("subscription NFT id");
+        let set = InstructionBox::from(SetKeyValue::nft(
+            nft_id.clone(),
+            "subscription".parse().expect("subscription metadata key"),
+            Json::new("active"),
+        ));
+        let set_json = instruction_to_json_value(&set).expect("set NFT value instruction JSON");
+        let set_fields = set_json
+            .get("SetKeyValue")
+            .and_then(json::Value::as_object)
+            .and_then(|value| value.get("Nft"))
+            .and_then(json::Value::as_object)
+            .expect("set NFT value fields");
+        let nft_id_literal = nft_id.to_string();
+        assert_eq!(
+            set_fields.get("object").and_then(json::Value::as_str),
+            Some(nft_id_literal.as_str()),
+        );
+        let reparsed_set =
+            value_to_instruction(set_json).expect("parse set NFT value instruction JSON");
+        assert_eq!(
+            InstructionTrait::dyn_encode(&*set),
+            InstructionTrait::dyn_encode(&*reparsed_set),
+        );
+    }
+
+    #[test]
+    fn subscription_trigger_action_inspection_binds_first_release_semantics() {
+        use iroha_data_model::{
+            events::execute_trigger::ExecuteTriggerEventFilter,
+            subscription::{
+                SUBSCRIPTION_TRIGGER_REF_METADATA_KEY, SubscriptionTriggerRef,
+            },
+        };
+
+        let authority =
+            AccountId::new(KeyPair::random_with_algorithm(Algorithm::Ed25519).public_key().clone());
+        let subscription_id: NftId = "sub_demo$subscriptions.universal"
+            .parse()
+            .expect("subscription NFT id");
+        let max_cycles = NonZeroU64::new(17).expect("positive cycle limit");
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            SUBSCRIPTION_TRIGGER_REF_METADATA_KEY
+                .parse()
+                .expect("subscription reference key"),
+            Json::new(SubscriptionTriggerRef {
+                subscription_nft_id: subscription_id.clone(),
+            }),
+        );
+        let billing_action = Action::new(
+            Executable::Ivm(IvmBytecode::from_compiled(
+                subscription_syscall_program_bytes(
+                    ivm::syscalls::SYSCALL_SUBSCRIPTION_BILL,
+                    max_cycles,
+                ),
+            )),
+            Repeats::Exactly(1),
+            authority.clone(),
+            TimeEventFilter(ExecutionTime::Schedule(TimeSchedule {
+                start_ms: 42_000,
+                period_ms: None,
+            })),
+        )
+        .with_metadata(metadata);
+        let encoded_billing = json::to_value(&billing_action)
+            .expect("billing action JSON")
+            .as_str()
+            .expect("encoded billing action")
+            .to_owned();
+        let billing_summary: json::Value = json::from_json(
+            &inspect_subscription_trigger_action(encoded_billing)
+                .expect("inspect billing subscription trigger"),
+        )
+        .expect("billing summary JSON");
+        assert_eq!(
+            billing_summary["kind"],
+            json::Value::String("billing".to_owned())
+        );
+        assert_eq!(billing_summary["charge_at_ms"].as_u64(), Some(42_000));
+        let subscription_id_literal = subscription_id.to_string();
+        assert_eq!(
+            billing_summary["subscription_id"].as_str(),
+            Some(subscription_id_literal.as_str())
+        );
+
+        let usage_trigger_id: TriggerId = "sub_usage_demo".parse().expect("usage trigger id");
+        let usage_action = Action::new(
+            Executable::Ivm(IvmBytecode::from_compiled(
+                subscription_syscall_program_bytes(
+                    ivm::syscalls::SYSCALL_SUBSCRIPTION_RECORD_USAGE,
+                    max_cycles,
+                ),
+            )),
+            Repeats::Indefinitely,
+            authority.clone(),
+            ExecuteTriggerEventFilter::new()
+                .for_trigger(usage_trigger_id.clone())
+                .under_authority(authority),
+        );
+        let encoded_usage = json::to_value(&usage_action)
+            .expect("usage action JSON")
+            .as_str()
+            .expect("encoded usage action")
+            .to_owned();
+        let usage_summary: json::Value = json::from_json(
+            &inspect_subscription_trigger_action(encoded_usage)
+                .expect("inspect usage subscription trigger"),
+        )
+        .expect("usage summary JSON");
+        assert_eq!(
+            usage_summary["kind"],
+            json::Value::String("usage".to_owned())
+        );
+        let usage_trigger_id_literal = usage_trigger_id.to_string();
+        assert_eq!(
+            usage_summary["trigger_id"].as_str(),
+            Some(usage_trigger_id_literal.as_str())
+        );
+    }
+
+    #[test]
+    fn soracloud_hf_deploy_request_uses_current_quantity_contract() {
+        let request_json = soracloud_build_hf_deploy_request_json(
+            "openai/demo-model".to_owned(),
+            Some("main".to_owned()),
+            "demo-model".to_owned(),
+            "demo_model_service".to_owned(),
+            Some("demo_agent".to_owned()),
+            "warm".to_owned(),
+            "86400000".to_owned(),
+            "4cuvDVPuLBKJyN6dPbRQhmLh68sU".to_owned(),
+            "10000".to_owned(),
+            "12".repeat(32),
+        )
+        .expect("build signed HF request");
+        let request: json::Value = json::from_json(&request_json).expect("parse signed HF request");
+        let payload = request
+            .get("payload")
+            .and_then(json::Value::as_object)
+            .expect("HF request payload");
+        assert_eq!(
+            payload.get("base_fee").and_then(json::Value::as_str),
+            Some("0.00001"),
+        );
+        assert!(!payload.contains_key("base_fee_nanos"));
+    }
+
+    #[test]
+    fn soracloud_hf_draft_instruction_json_roundtrips() {
+        let request_json = soracloud_build_hf_deploy_request_json(
+            "openai/demo-model".to_owned(),
+            Some("main".to_owned()),
+            "demo-model".to_owned(),
+            "demo_model_service".to_owned(),
+            None,
+            "warm".to_owned(),
+            "86400000".to_owned(),
+            "4cuvDVPuLBKJyN6dPbRQhmLh68sU".to_owned(),
+            "10000".to_owned(),
+            "12".repeat(32),
+        )
+        .expect("build signed HF request");
+        let request: json::Value = json::from_json(&request_json).expect("parse signed HF request");
+        let provenance: ManifestProvenance = json::from_value(
+            request
+                .get("provenance")
+                .cloned()
+                .expect("deploy provenance"),
+        )
+        .expect("decode deploy provenance");
+        let instruction = iroha_data_model::isi::soracloud::JoinSoracloudHfSharedLease {
+            repo_id: "openai/demo-model".to_owned(),
+            resolved_revision: "main".to_owned(),
+            model_name: "demo-model".to_owned(),
+            service_name: "demo_model_service".parse().expect("service name"),
+            apartment_name: None,
+            storage_class: iroha_data_model::sorafs::pin_registry::StorageClass::Warm,
+            lease_term_ms: 86_400_000,
+            lease_asset_definition_id: "4cuvDVPuLBKJyN6dPbRQhmLh68sU"
+                .parse()
+                .expect("asset definition"),
+            base_fee: "0.00001".parse().expect("base fee"),
+            resource_profile: None,
+            max_compute_reservation_fee: "0.000008"
+                .parse()
+                .expect("max compute reservation fee"),
+            provenance,
+        };
+        let boxed = InstructionBox::from(instruction);
+        let json_value = instruction_to_json_value(&boxed).expect("instruction JSON");
+        let reparsed = value_to_instruction(json_value).expect("parse instruction JSON");
+        assert_eq!(
+            InstructionTrait::id(&*boxed),
+            InstructionTrait::id(&*reparsed),
+        );
+        assert_eq!(
+            InstructionTrait::dyn_encode(&*boxed),
+            InstructionTrait::dyn_encode(&*reparsed),
+        );
+    }
 
     fn canonical_kotodama_request(source: &str) -> JsKotodamaCompileRequest {
         JsKotodamaCompileRequest {

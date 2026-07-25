@@ -200,6 +200,7 @@ use iroha_data_model::{
         encode_training_job_retry_provenance_payload, encode_training_job_start_provenance_payload,
         encode_uploaded_model_bundle_register_provenance_payload,
         encode_uploaded_model_finalize_provenance_payload,
+        hf_shared_lease_max_compute_reservation_fee_v1,
         soracloud_fhe_bootstrap_key_proof_open_verify_bounds,
         soracloud_fhe_bootstrap_key_proof_public_inputs_schema_hash_v1,
         soracloud_fhe_full_bootstrap_execution_proof_open_verify_bounds,
@@ -399,6 +400,18 @@ fn hf_host_class_reservation_fee(
             policy.reservation_fee_large.clone()
         }
     })
+}
+
+fn ensure_hf_compute_reservation_charge_within_cap(
+    charge: &Quantity,
+    max_compute_reservation_fee: &Quantity,
+) -> Result<(), InstructionExecutionError> {
+    if charge > max_compute_reservation_fee {
+        return Err(invalid_parameter(format!(
+            "HF compute reservation charge `{charge}` exceeds the reviewed maximum `{max_compute_reservation_fee}`"
+        )));
+    }
+    Ok(())
 }
 
 fn validate_model_host_capability_against_class(
@@ -12284,6 +12297,7 @@ impl Execute for isi::JoinSoracloudHfSharedLease {
             lease_asset_definition_id,
             base_fee,
             resource_profile,
+            max_compute_reservation_fee,
             provenance,
         } = self;
 
@@ -12346,6 +12360,16 @@ impl Execute for isi::JoinSoracloudHfSharedLease {
         source_record.repo_id = repo_id.clone();
         source_record.resolved_revision = resolved_revision.clone();
         let resource_profile = resolve_hf_resource_profile(&mut source_record, resource_profile)?;
+        let canonical_compute_cap = hf_shared_lease_max_compute_reservation_fee_v1(
+            &resource_profile,
+            lease_term_ms,
+        )
+        .map_err(|err| invalid_parameter(err.to_string()))?;
+        if max_compute_reservation_fee != canonical_compute_cap {
+            return Err(invalid_parameter(format!(
+                "max_compute_reservation_fee must equal the canonical V1 cap `{canonical_compute_cap}` for the reviewed resource profile and lease term"
+            )));
+        }
         source_record.updated_at_ms = now_ms;
         if source_record.status == SoraHfSourceStatusV1::Retired {
             source_record.status = SoraHfSourceStatusV1::PendingImport;
@@ -12405,6 +12429,10 @@ impl Execute for isi::JoinSoracloudHfSharedLease {
             && pool.status == SoraHfSharedLeaseStatusV1::Active
             && pool.window_expires_at_ms > now_ms
         {
+            ensure_hf_compute_reservation_charge_within_cap(
+                &Quantity::zero(),
+                &max_compute_reservation_fee,
+            )?;
             if pool.lease_asset_definition_id != lease_asset_definition_id {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "existing shared lease pool uses a different settlement asset".into(),
@@ -12479,6 +12507,10 @@ impl Execute for isi::JoinSoracloudHfSharedLease {
                 &remaining_compute_fee,
                 existing_members.len().saturating_add(1),
                 "failed to calculate the per-member HF shared-lease compute join fee",
+            )?;
+            ensure_hf_compute_reservation_charge_within_cap(
+                &join_compute_fee,
+                &max_compute_reservation_fee,
             )?;
 
             distribute_hf_join_refunds(
@@ -12592,6 +12624,10 @@ impl Execute for isi::JoinSoracloudHfSharedLease {
             now_ms,
             now_ms,
             Some(&pool_id),
+        )?;
+        ensure_hf_compute_reservation_charge_within_cap(
+            &placement.total_reservation_fee,
+            &max_compute_reservation_fee,
         )?;
         let sink_account = resolve_fee_sink_account(state_transaction)?;
         let initial_total_charge = base_fee
@@ -42865,6 +42901,65 @@ mod tests {
         }
     }
 
+    fn sample_hf_compute_reservation_cap(lease_term_ms: u64) -> Quantity {
+        hf_shared_lease_max_compute_reservation_fee_v1(
+            &sample_hf_resource_profile(),
+            lease_term_ms,
+        )
+        .expect("sample HF compute reservation cap")
+    }
+
+    #[test]
+    fn hf_compute_reservation_cap_covers_every_v1_host_tariff_and_size_bucket() {
+        let gib = 1024_u64 * 1024 * 1024;
+        let profiles = [
+            SoraHfResourceProfileV1 {
+                required_model_bytes: 2 * gib,
+                backend_family: SoraHfBackendFamilyV1::Transformers,
+                model_format: SoraHfModelFormatV1::Safetensors,
+                disk_cache_bytes_floor: 2 * gib,
+                ram_bytes_floor: 4 * gib,
+                vram_bytes_floor: 0,
+            },
+            SoraHfResourceProfileV1 {
+                required_model_bytes: 3 * gib,
+                backend_family: SoraHfBackendFamilyV1::Transformers,
+                model_format: SoraHfModelFormatV1::Safetensors,
+                disk_cache_bytes_floor: 4 * gib,
+                ram_bytes_floor: 4 * gib,
+                vram_bytes_floor: 0,
+            },
+            SoraHfResourceProfileV1 {
+                required_model_bytes: 9 * gib,
+                backend_family: SoraHfBackendFamilyV1::Transformers,
+                model_format: SoraHfModelFormatV1::Safetensors,
+                disk_cache_bytes_floor: 12 * gib,
+                ram_bytes_floor: 16 * gib,
+                vram_bytes_floor: 0,
+            },
+        ];
+
+        for profile in profiles {
+            let cap =
+                hf_shared_lease_max_compute_reservation_fee_v1(&profile, u64::MAX)
+                    .expect("canonical compute cap");
+            for policy in hf_host_class_policies() {
+                let per_host = hf_host_class_reservation_fee(policy.host_class, &profile)
+                    .expect("V1 host class tariff");
+                let total = (0..hf_adaptive_target_host_count(&profile)).try_fold(
+                    Quantity::zero(),
+                    |total, _| total.checked_add(&per_host),
+                )
+                .expect("placement tariff total");
+                assert!(
+                    total <= cap,
+                    "{total} for {} exceeds canonical cap {cap}",
+                    policy.host_class
+                );
+            }
+        }
+    }
+
     fn sample_hf_placement_record(pool_id: Hash, placement_id: Hash) -> SoraHfPlacementRecordV1 {
         SoraHfPlacementRecordV1 {
             schema_version: SORA_HF_PLACEMENT_RECORD_VERSION_V1,
@@ -44010,6 +44105,7 @@ mod tests {
             lease_asset_definition_id: lease_asset_definition_id.clone(),
             base_fee: base_fee.clone(),
             resource_profile: Some(sample_hf_resource_profile()),
+            max_compute_reservation_fee: sample_hf_compute_reservation_cap(lease_term_ms),
             provenance: hf_shared_lease_join_provenance(
                 repo_id,
                 resolved_revision,
@@ -44135,6 +44231,7 @@ mod tests {
             lease_asset_definition_id: lease_asset_definition_id.clone(),
             base_fee: base_fee.clone(),
             resource_profile: Some(sample_hf_resource_profile()),
+            max_compute_reservation_fee: sample_hf_compute_reservation_cap(lease_term_ms),
             provenance: hf_shared_lease_join_provenance(
                 repo_id,
                 resolved_revision,
@@ -44159,6 +44256,36 @@ mod tests {
             .get(&source_id)
             .expect("hf source");
         assert_eq!(source.status, SoraHfSourceStatusV1::Ready);
+        let pool_id = hf_shared_lease_pool_id(source_id, storage_class, lease_term_ms)?;
+        let member = view
+            .world()
+            .soracloud_hf_shared_lease_members()
+            .get(&(pool_id.to_string(), ALICE_ID.to_string()))
+            .expect("new-window member");
+        let placement = view
+            .world()
+            .soracloud_hf_placements()
+            .get(&pool_id)
+            .expect("new-window placement");
+        let audit_event = view
+            .world()
+            .soracloud_hf_shared_lease_audit_events()
+            .iter()
+            .max_by_key(|(sequence, _)| *sequence)
+            .map(|(_, event)| event)
+            .expect("new-window audit event");
+        let expected_total = base_fee
+            .checked_add(&member.last_compute_charge)
+            .expect("new-window total charge");
+        assert_eq!(
+            member.last_compute_charge,
+            placement.total_reservation_fee
+        );
+        assert!(
+            member.last_compute_charge
+                <= sample_hf_compute_reservation_cap(lease_term_ms)
+        );
+        assert_eq!(audit_event.charged, expected_total);
         Ok(())
     }
 
@@ -44207,6 +44334,7 @@ mod tests {
             lease_asset_definition_id: lease_asset_definition_id.clone(),
             base_fee: base_fee.clone(),
             resource_profile: Some(sample_hf_resource_profile()),
+            max_compute_reservation_fee: sample_hf_compute_reservation_cap(lease_term_ms),
             provenance: hf_shared_lease_join_provenance(
                 repo_id,
                 resolved_revision,
@@ -44378,6 +44506,7 @@ mod tests {
                 lease_asset_definition_id: lease_asset_definition_id.clone(),
                 base_fee: base_fee.clone(),
                 resource_profile: Some(sample_hf_resource_profile()),
+                max_compute_reservation_fee: sample_hf_compute_reservation_cap(lease_term_ms),
                 provenance: hf_shared_lease_join_provenance(
                     repo_id,
                     resolved_revision,
@@ -44464,6 +44593,7 @@ mod tests {
             lease_asset_definition_id: lease_asset_definition_id.clone(),
             base_fee: renewed_fee.clone(),
             resource_profile: Some(sample_hf_resource_profile()),
+            max_compute_reservation_fee: sample_hf_compute_reservation_cap(lease_term_ms),
             provenance: hf_shared_lease_join_provenance(
                 repo_id,
                 resolved_revision,
@@ -44576,6 +44706,7 @@ mod tests {
             lease_asset_definition_id: lease_asset_definition_id.clone(),
             base_fee: base_fee.clone(),
             resource_profile: Some(sample_hf_resource_profile()),
+            max_compute_reservation_fee: sample_hf_compute_reservation_cap(lease_term_ms),
             provenance: hf_shared_lease_join_provenance(
                 repo_id,
                 resolved_revision,
@@ -44596,6 +44727,81 @@ mod tests {
                 .to_string()
                 .contains("no eligible validator host advert"),
             "unexpected error: {error}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn join_hf_shared_lease_rejects_noncanonical_compute_cap_before_world_mutation()
+    -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let mut state = state_with_soracloud_permission(&kura)?;
+        state.nexus.get_mut().fees.fee_sink_account_id = ALICE_ID.to_string();
+
+        let repo_id = "openai/gpt-oss";
+        let resolved_revision = "main";
+        let model_name = "gpt-oss";
+        let service_name: iroha_data_model::name::Name = "vision_portal".parse().expect("valid");
+        let storage_class = StorageClass::Warm;
+        let lease_term_ms = 60_000_u64;
+        let base_fee: Quantity = "0.00001".parse().expect("base fee");
+        let lease_asset_definition_id = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").expect("domain"),
+            "xor".parse().expect("xor"),
+        );
+        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut stx = state_block.transaction();
+        let source_count_before = stx.world.soracloud_hf_sources.len();
+        let pool_count_before = stx.world.soracloud_hf_shared_lease_pools.len();
+        let member_count_before = stx.world.soracloud_hf_shared_lease_members.len();
+        let audit_count_before = stx.world.soracloud_hf_shared_lease_audit_events.len();
+
+        let error = isi::JoinSoracloudHfSharedLease {
+            repo_id: repo_id.to_string(),
+            resolved_revision: resolved_revision.to_string(),
+            model_name: model_name.to_string(),
+            service_name: service_name.clone(),
+            apartment_name: None,
+            storage_class,
+            lease_term_ms,
+            lease_asset_definition_id: lease_asset_definition_id.clone(),
+            base_fee: base_fee.clone(),
+            resource_profile: Some(sample_hf_resource_profile()),
+            max_compute_reservation_fee: "0.000001".parse().expect("too-low cap"),
+            provenance: hf_shared_lease_join_provenance(
+                repo_id,
+                resolved_revision,
+                model_name,
+                &service_name,
+                None,
+                storage_class,
+                lease_term_ms,
+                &lease_asset_definition_id,
+                &base_fee,
+            ),
+        }
+        .execute(&ALICE_ID, &mut stx)
+        .expect_err("noncanonical compute cap must fail");
+
+        assert!(
+            error.to_string().contains("canonical V1 cap"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(stx.world.soracloud_hf_sources.len(), source_count_before);
+        assert_eq!(
+            stx.world.soracloud_hf_shared_lease_pools.len(),
+            pool_count_before
+        );
+        assert_eq!(
+            stx.world.soracloud_hf_shared_lease_members.len(),
+            member_count_before
+        );
+        assert_eq!(
+            stx.world.soracloud_hf_shared_lease_audit_events.len(),
+            audit_count_before
         );
         Ok(())
     }
@@ -44667,6 +44873,7 @@ mod tests {
                 lease_asset_definition_id: lease_asset_definition_id.clone(),
                 base_fee: base_fee.clone(),
                 resource_profile: Some(sample_hf_resource_profile()),
+                max_compute_reservation_fee: sample_hf_compute_reservation_cap(lease_term_ms),
                 provenance: hf_shared_lease_join_provenance(
                     repo_id,
                     resolved_revision,
@@ -44730,6 +44937,7 @@ mod tests {
             lease_asset_definition_id: lease_asset_definition_id.clone(),
             base_fee: base_fee.clone(),
             resource_profile: Some(sample_hf_resource_profile()),
+            max_compute_reservation_fee: sample_hf_compute_reservation_cap(lease_term_ms),
             provenance: hf_shared_lease_join_provenance_for(
                 &BOB_KEYPAIR,
                 repo_id,
@@ -44818,6 +45026,10 @@ mod tests {
         assert_eq!(bob_member.total_compute_paid, expected_compute_join_fee);
         assert_eq!(bob_member.last_charge, expected_storage_join_fee);
         assert_eq!(bob_member.last_compute_charge, expected_compute_join_fee);
+        assert!(
+            bob_member.last_compute_charge
+                <= sample_hf_compute_reservation_cap(lease_term_ms)
+        );
         assert_eq!(
             alice_balance,
             initial_balance
@@ -44879,6 +45091,7 @@ mod tests {
             lease_asset_definition_id: lease_asset_definition_id.clone(),
             base_fee: base_fee.clone(),
             resource_profile: Some(sample_hf_resource_profile()),
+            max_compute_reservation_fee: sample_hf_compute_reservation_cap(lease_term_ms),
             provenance: hf_shared_lease_join_provenance(
                 repo_id,
                 resolved_revision,

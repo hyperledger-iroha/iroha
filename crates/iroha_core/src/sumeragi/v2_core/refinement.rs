@@ -6442,7 +6442,10 @@ mod tests {
         );
 
         let mut regressive_timeout = timeout_with_high_qc;
-        regressive_timeout.pending_after.view = regressive_timeout.owner_tag_before.view - 1;
+        // The immediately preceding timeout round may carry a strict
+        // higher-PrepareQC upgrade; two rounds behind is genuinely stale.
+        regressive_timeout.pending_after.view =
+            regressive_timeout.owner_tag_before.view.saturating_sub(2);
         regressive_timeout.effects.slot0.requested.view = regressive_timeout.pending_after.view;
         regressive_timeout.effects.slot0.granted.view = regressive_timeout.pending_after.view;
         assert!(

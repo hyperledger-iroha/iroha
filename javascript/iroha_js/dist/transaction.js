@@ -3934,6 +3934,21 @@ function normalizeWholeNumberLiteral(value, context) {
   return normalized;
 }
 
+function normalizeCanonicalNonNegativeNumericLiteral(value, context) {
+  const literal = String(value ?? "");
+  if (literal.trim() !== literal) {
+    throw new TypeError(`${context} must not contain surrounding whitespace`);
+  }
+  try {
+    return NumericV1.decodeQuantityJson(literal).toString();
+  } catch (error) {
+    if (!(error instanceof NumericV1Error)) throw error;
+    throw new TypeError(
+      `${context} must be a canonical non-negative Numeric string (${error.code})`,
+    );
+  }
+}
+
 function normalizeFixed32HexInput(value, context) {
   if (typeof value === "string") {
     if (value.trim() !== value) {
@@ -4005,7 +4020,10 @@ export function buildPrivateKaigiFeeSpend({
     ),
     toBuffer(actionHash),
     normalizeFixed32HexInput(anchorRootHex, "privateKaigiFeeSpend.anchorRootHex"),
-    normalizeWholeNumberLiteral(feeAmount, "privateKaigiFeeSpend.feeAmount"),
+    normalizeCanonicalNonNegativeNumericLiteral(
+      feeAmount,
+      "privateKaigiFeeSpend.feeAmount",
+    ),
     vk.backend,
     vk.circuitId,
     vk.bytes,

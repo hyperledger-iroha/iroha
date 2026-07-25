@@ -562,7 +562,10 @@ pub enum ProviderDisputeStatusV1 {
     /// Dispute became active at `submitted_at_unix_ms`.
     Opened,
     /// Governance committed one terminal outcome.
-    Resolved(ProviderDisputeResolutionV1),
+    Resolved(
+        /// Exact terminal decision material.
+        ProviderDisputeResolutionV1,
+    ),
 }
 
 /// Payload-free provider-dispute journal projection.
@@ -2336,6 +2339,33 @@ mod tests {
             let json = norito::json::to_string(&value).expect("encode journal JSON");
             let decoded: ReputationJournalFinalizedEventPageV1 =
                 norito::json::from_slice(json.as_bytes()).expect("decode journal JSON");
+            assert_eq!(decoded, value);
+        }
+    }
+
+    #[test]
+    fn provider_dispute_resolution_norito_and_json_round_trip() {
+        let value = ProviderDisputeStatusV1::Resolved(ProviderDisputeResolutionV1 {
+            outcome: CapacityDisputeOutcome::Upheld,
+            resolved_at_unix_ms: RECORDED_AT,
+            decision_digest: [0xD4; 32],
+            rationale: Some("governance upheld the dispute".to_owned()),
+        });
+        let bytes = norito::to_bytes(&value).expect("encode provider-dispute resolution");
+        let decoded: ProviderDisputeStatusV1 =
+            norito::decode_from_bytes(&bytes).expect("decode provider-dispute resolution");
+        assert_eq!(decoded, value);
+        assert_eq!(
+            norito::to_bytes(&decoded).expect("re-encode provider-dispute resolution"),
+            bytes
+        );
+
+        #[cfg(feature = "json")]
+        {
+            let json =
+                norito::json::to_string(&value).expect("encode provider-dispute resolution JSON");
+            let decoded: ProviderDisputeStatusV1 = norito::json::from_slice(json.as_bytes())
+                .expect("decode provider-dispute resolution JSON");
             assert_eq!(decoded, value);
         }
     }

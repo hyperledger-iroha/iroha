@@ -21,10 +21,16 @@ import org.gradle.work.DisableCachingByDefault
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.nio.ByteBuffer
+import java.nio.charset.CharacterCodingException
+import java.nio.charset.CodingErrorAction
+import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
+import java.nio.file.StandardOpenOption
+import java.nio.file.attribute.BasicFileAttributes
 import java.security.MessageDigest
 import java.util.Properties
 import javax.inject.Inject
@@ -43,7 +49,13 @@ private object NativeBridgeBuildContract {
     const val hermeticRunnerSchema = "iroha.mobile-hermetic-command.v1"
     const val pinnedRustToolchain = "1.93.1"
     const val pinnedCargoNdkVersion = "4.1.2"
-    const val pinnedAndroidNdkRevision = "28.0.12674087"
+    const val pinnedAndroidNdkBaseRevision = "28.0.12674087"
+    const val pinnedAndroidNdkRevision = "28.0.12674087-beta2"
+    const val pinnedAndroidNdkReleaseName = "r28-beta2"
+    const val pinnedAndroidNdkDescription = "Android NDK"
+    const val pinnedAndroidNdkSourcePropertiesSha256 =
+        "55368a3554d27b8413b75a4b2e83ea7f6b66fef4068f7a7f71cf2910c6e3357b"
+    const val maxAndroidNdkSourcePropertiesBytes = 4096
     val androidCargoEnvironmentAllowlist = listOf(
         "ANDROID_NDK_HOME",
         "ANDROID_NDK_ROOT",
@@ -85,6 +97,19 @@ private object NativeBridgeBuildContract {
         val androidNdkSourcePropertiesSha256: String,
     )
 
+    data class AndroidNdkIdentity(
+        val description: String,
+        val revision: String,
+        val baseRevision: String,
+        val releaseName: String,
+        val sourcePropertiesSha256: String,
+    )
+
+    fun sha256Hex(payload: ByteArray): String =
+        MessageDigest.getInstance("SHA-256").digest(payload).joinToString("") { byte ->
+            "%02x".format(byte.toInt() and 0xff)
+        }
+
     fun sha256Hex(path: java.nio.file.Path): String {
         val digest = MessageDigest.getInstance("SHA-256")
         Files.newInputStream(path, LinkOption.NOFOLLOW_LINKS).use { input ->
@@ -98,6 +123,173 @@ private object NativeBridgeBuildContract {
         return digest.digest().joinToString("") { byte ->
             "%02x".format(byte.toInt() and 0xff)
         }
+    }
+
+    fun canonicalStripCommands(
+        stripExecutablePath: Path,
+        libraries: List<File>,
+    ): List<List<String>> {
+        require(libraries.isNotEmpty()) {
+            "Canonical Android stripping requires at least one native library"
+        }
+        val libraryPaths = libraries.map { library ->
+            library.toPath().toAbsolutePath().normalize().toString()
+        }
+        require(libraryPaths.toSet().size == libraryPaths.size) {
+            "Canonical Android stripping requires distinct native library paths"
+        }
+        return libraryPaths.map { libraryPath ->
+            listOf(
+                stripExecutablePath.toString(),
+                "--strip-unneeded",
+                libraryPath,
+            )
+        }
+    }
+
+    private fun readBoundedNonSymbolicRegularFile(
+        path: Path,
+        label: String,
+        maximumBytes: Int,
+    ): ByteArray {
+        require(maximumBytes > 0) { "$label byte bound must be positive" }
+        require(!Files.isSymbolicLink(path)) {
+            "$label must be a non-symbolic regular file: $path"
+        }
+        val before = Files.readAttributes(
+            path,
+            BasicFileAttributes::class.java,
+            LinkOption.NOFOLLOW_LINKS,
+        )
+        require(before.isRegularFile) {
+            "$label must be a non-symbolic regular file: $path"
+        }
+        require(before.size() in 1..maximumBytes.toLong()) {
+            "$label must contain 1..$maximumBytes bytes"
+        }
+        val payload = Files.newByteChannel(
+            path,
+            setOf<java.nio.file.OpenOption>(
+                StandardOpenOption.READ,
+                LinkOption.NOFOLLOW_LINKS,
+            ),
+        ).use { channel ->
+            val buffer = ByteBuffer.allocate(before.size().toInt())
+            while (buffer.hasRemaining()) {
+                require(channel.read(buffer) > 0) {
+                    "$label changed while it was being authenticated"
+                }
+            }
+            require(channel.read(ByteBuffer.allocate(1)) == -1) {
+                "$label exceeded its authenticated byte size"
+            }
+            buffer.array()
+        }
+        val after = Files.readAttributes(
+            path,
+            BasicFileAttributes::class.java,
+            LinkOption.NOFOLLOW_LINKS,
+        )
+        require(
+            after.isRegularFile &&
+                before.fileKey() == after.fileKey() &&
+                before.size() == after.size() &&
+                before.lastModifiedTime() == after.lastModifiedTime() &&
+                payload.size.toLong() == before.size(),
+        ) {
+            "$label changed while it was being authenticated"
+        }
+        return payload
+    }
+
+    fun parseAndroidNdkSourceProperties(payload: ByteArray): AndroidNdkIdentity {
+        require(payload.size in 1..maxAndroidNdkSourcePropertiesBytes) {
+            "Android NDK source.properties must contain " +
+                "1..$maxAndroidNdkSourcePropertiesBytes bytes"
+        }
+        val text = try {
+            StandardCharsets.UTF_8.newDecoder()
+                .onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT)
+                .decode(ByteBuffer.wrap(payload))
+                .toString()
+        } catch (error: CharacterCodingException) {
+            throw GradleException(
+                "Android NDK source.properties must be strict UTF-8",
+                error,
+            )
+        }
+        require(text.endsWith("\n") && '\r' !in text) {
+            "Android NDK source.properties must use canonical LF-terminated lines"
+        }
+        val linesWithTerminator = text.split('\n')
+        require(linesWithTerminator.last().isEmpty()) {
+            "Android NDK source.properties must end with exactly one LF"
+        }
+        val lines = linesWithTerminator.dropLast(1)
+        require(lines.isNotEmpty() && lines.none(String::isEmpty)) {
+            "Android NDK source.properties must not contain empty lines"
+        }
+        val parsed = linkedMapOf<String, String>()
+        val canonicalLine = Regex("^([A-Za-z][A-Za-z0-9.]*) = ([ -~]+)$")
+        lines.forEach { line ->
+            val match = canonicalLine.matchEntire(line)
+                ?: throw GradleException(
+                    "Android NDK source.properties contains a malformed property line",
+                )
+            val key = match.groupValues[1]
+            require(parsed.put(key, match.groupValues[2]) == null) {
+                "Android NDK source.properties contains duplicate property $key"
+            }
+        }
+        val expected = linkedMapOf(
+            "Pkg.Desc" to pinnedAndroidNdkDescription,
+            "Pkg.Revision" to pinnedAndroidNdkRevision,
+            "Pkg.BaseRevision" to pinnedAndroidNdkBaseRevision,
+            "Pkg.ReleaseName" to pinnedAndroidNdkReleaseName,
+        )
+        require(parsed.keys.toList() == expected.keys.toList()) {
+            "Android NDK source.properties field inventory and order are not exact"
+        }
+        require(parsed == expected) {
+            "Android NDK source.properties identity values are not exact"
+        }
+        val digest = sha256Hex(payload)
+        require(digest == pinnedAndroidNdkSourcePropertiesSha256) {
+            "Android NDK source.properties digest is not exact"
+        }
+        return AndroidNdkIdentity(
+            description = parsed.getValue("Pkg.Desc"),
+            revision = parsed.getValue("Pkg.Revision"),
+            baseRevision = parsed.getValue("Pkg.BaseRevision"),
+            releaseName = parsed.getValue("Pkg.ReleaseName"),
+            sourcePropertiesSha256 = digest,
+        )
+    }
+
+    fun loadAndroidNdkIdentity(androidNdkDirectory: Path): AndroidNdkIdentity {
+        val supplied = androidNdkDirectory.toAbsolutePath().normalize()
+        require(supplied.fileName?.toString() == pinnedAndroidNdkBaseRevision) {
+            "Android native builds require exact NDK directory " +
+                pinnedAndroidNdkBaseRevision
+        }
+        require(
+            Files.isDirectory(supplied, LinkOption.NOFOLLOW_LINKS) &&
+                !Files.isSymbolicLink(supplied),
+        ) {
+            "Android NDK must be a non-symbolic directory: $supplied"
+        }
+        val canonical = supplied.toRealPath(LinkOption.NOFOLLOW_LINKS)
+        require(canonical == supplied) {
+            "Android NDK path must be canonical and must not traverse symbolic links: $supplied"
+        }
+        val sourceProperties = canonical.resolve("source.properties")
+        val payload = readBoundedNonSymbolicRegularFile(
+            sourceProperties,
+            "Android NDK source.properties",
+            maxAndroidNdkSourcePropertiesBytes,
+        )
+        return parseAndroidNdkSourceProperties(payload)
     }
 
     private fun requireExecutable(path: java.nio.file.Path, label: String): java.nio.file.Path {
@@ -254,28 +446,9 @@ private object NativeBridgeBuildContract {
             home.resolve(".cargo/bin/cargo-ndk").toPath(),
             "cargo-ndk",
         )
-        val androidNdk = androidNdkDirectory.toPath().toRealPath()
-        require(
-            Files.isDirectory(androidNdk, LinkOption.NOFOLLOW_LINKS) &&
-                !Files.isSymbolicLink(androidNdk),
-        ) {
-            "Android NDK must resolve to a non-symbolic directory: $androidNdk"
-        }
-        val sourceProperties = androidNdk.resolve("source.properties")
-        require(Files.isRegularFile(sourceProperties, LinkOption.NOFOLLOW_LINKS)) {
-            "Android NDK source.properties is unavailable: $sourceProperties"
-        }
-        val androidNdkRevision = Files.readAllLines(sourceProperties)
-            .singleOrNull { line -> line.startsWith("Pkg.Revision = ") }
-            ?.substringAfter("Pkg.Revision = ")
-            ?.trim()
-            .orEmpty()
-        require(Regex("^[0-9]+(?:\\.[0-9]+){1,3}$").matches(androidNdkRevision)) {
-            "Android NDK revision is not canonical"
-        }
-        require(androidNdkRevision == pinnedAndroidNdkRevision) {
-            "Android native builds require exact NDK $pinnedAndroidNdkRevision"
-        }
+        val suppliedAndroidNdk = androidNdkDirectory.toPath().toAbsolutePath().normalize()
+        val androidNdkIdentity = loadAndroidNdkIdentity(suppliedAndroidNdk)
+        val androidNdk = suppliedAndroidNdk.toRealPath(LinkOption.NOFOLLOW_LINKS)
 
         val cargoPath = listOf(
             cargo.parent.toString(),
@@ -412,8 +585,10 @@ private object NativeBridgeBuildContract {
             pythonVersion = pythonVersion,
             gitVersion = gitVersion,
             rustupVersion = rustupVersion,
-            androidNdkRevision = androidNdkRevision,
-            androidNdkSourcePropertiesSha256 = sha256Hex(sourceProperties),
+            // Provenance v1 intentionally carries the package/base revision.
+            androidNdkRevision = androidNdkIdentity.baseRevision,
+            androidNdkSourcePropertiesSha256 =
+                androidNdkIdentity.sourcePropertiesSha256,
         )
     }
 
@@ -1102,22 +1277,23 @@ abstract class StripNativeBridgeTask @Inject constructor(
             "Android NDK llvm-strip must resolve to an executable regular file inside " +
                 "${stripLauncher.parentFile}: $stripLauncher -> $stripExecutablePath"
         }
-        execOperations.exec {
-            setEnvironment(
-                mapOf(
-                    "HOME" to tools.home.absolutePath,
-                    "PATH" to "${stripExecutablePath.parent}:/usr/bin:/bin",
-                    "TMPDIR" to tools.temporaryDirectory.absolutePath,
-                    "LANG" to "C.UTF-8",
-                    "LC_ALL" to "C.UTF-8",
-                ),
-            )
-            commandLine(
-                stripExecutablePath.toString(),
-                "--strip-unneeded",
-                *outputLibraries.map { it.absolutePath }.toTypedArray(),
-            )
-        }.assertNormalExitValue()
+        NativeBridgeBuildContract.canonicalStripCommands(
+            stripExecutablePath,
+            outputLibraries,
+        ).forEach { stripCommand ->
+            execOperations.exec {
+                setEnvironment(
+                    mapOf(
+                        "HOME" to tools.home.absolutePath,
+                        "PATH" to "${stripExecutablePath.parent}:/usr/bin:/bin",
+                        "TMPDIR" to tools.temporaryDirectory.absolutePath,
+                        "LANG" to "C.UTF-8",
+                        "LC_ALL" to "C.UTF-8",
+                    ),
+                )
+                commandLine(*stripCommand.toTypedArray())
+            }.assertNormalExitValue()
+        }
         NativeBridgeBuildContract.requireLibraries(outputRoot)
         val rawLibrariesAfterStrip = NativeBridgeBuildContract.requireLibraries(inputRoot)
             .associateBy { library -> library.parentFile.name }
@@ -1355,6 +1531,257 @@ val requireExternalAndroidArtifactDirectory =
 val androidNdkRoot = providers.environmentVariable("ANDROID_NDK_HOME")
     .orElse(providers.environmentVariable("ANDROID_NDK_ROOT"))
     .orElse(androidComponents.sdkComponents.ndkDirectory.map { it.asFile.absolutePath })
+
+tasks.register("verifyAndroidNdkIdentityContract") {
+    group = "verification"
+    description = "Exercises the strict Android NDK package identity parser"
+    doLast {
+        val canonicalText = listOf(
+            "Pkg.Desc = Android NDK",
+            "Pkg.Revision = 28.0.12674087-beta2",
+            "Pkg.BaseRevision = 28.0.12674087",
+            "Pkg.ReleaseName = r28-beta2",
+        ).joinToString(separator = "\n", postfix = "\n")
+        val canonicalBytes = canonicalText.toByteArray(StandardCharsets.UTF_8)
+
+        fun installation(label: String, payload: ByteArray): Path {
+            val root = Files.createTempDirectory(temporaryDir.toPath(), "$label-")
+            val ndk = Files.createDirectory(
+                root.resolve(NativeBridgeBuildContract.pinnedAndroidNdkBaseRevision),
+            )
+            Files.write(
+                ndk.resolve("source.properties"),
+                payload,
+                StandardOpenOption.CREATE_NEW,
+                StandardOpenOption.WRITE,
+            )
+            return ndk
+        }
+
+        fun requireRejected(label: String, action: () -> Unit) {
+            require(runCatching(action).isFailure) {
+                "Android NDK identity self-test accepted $label"
+            }
+        }
+
+        val identity = NativeBridgeBuildContract.loadAndroidNdkIdentity(
+            installation("canonical", canonicalBytes),
+        )
+        require(
+            identity.description == NativeBridgeBuildContract.pinnedAndroidNdkDescription &&
+                identity.revision == NativeBridgeBuildContract.pinnedAndroidNdkRevision &&
+                identity.baseRevision ==
+                    NativeBridgeBuildContract.pinnedAndroidNdkBaseRevision &&
+                identity.releaseName ==
+                    NativeBridgeBuildContract.pinnedAndroidNdkReleaseName &&
+                identity.sourcePropertiesSha256 ==
+                    NativeBridgeBuildContract.pinnedAndroidNdkSourcePropertiesSha256,
+        ) {
+            "Canonical Android NDK identity did not round-trip exactly"
+        }
+
+        val malformedDocuments = linkedMapOf(
+            "duplicate property" to canonicalText.replace(
+                "Pkg.ReleaseName = r28-beta2\n",
+                "Pkg.Desc = Android NDK\nPkg.ReleaseName = r28-beta2\n",
+            ),
+            "missing property" to canonicalText.replace(
+                "Pkg.ReleaseName = r28-beta2\n",
+                "",
+            ),
+            "malformed delimiter" to canonicalText.replace(
+                "Pkg.Desc = Android NDK",
+                "Pkg.Desc=Android NDK",
+            ),
+            "extra property" to canonicalText +
+                "Pkg.Extra = forbidden\n",
+            "altered whitespace" to canonicalText.replace(
+                "Pkg.Desc = Android NDK",
+                "Pkg.Desc  = Android NDK",
+            ),
+            "altered case" to canonicalText.replace(
+                "Pkg.Desc",
+                "pkg.Desc",
+            ),
+            "altered preview suffix" to canonicalText.replace(
+                "28.0.12674087-beta2",
+                "28.0.12674087-beta3",
+            ),
+            "altered base revision" to canonicalText.replace(
+                "Pkg.BaseRevision = 28.0.12674087",
+                "Pkg.BaseRevision = 28.0.12674088",
+            ),
+            "reordered properties" to listOf(
+                "Pkg.Revision = 28.0.12674087-beta2",
+                "Pkg.Desc = Android NDK",
+                "Pkg.BaseRevision = 28.0.12674087",
+                "Pkg.ReleaseName = r28-beta2",
+            ).joinToString(separator = "\n", postfix = "\n"),
+            "CRLF lines" to canonicalText.replace("\n", "\r\n"),
+            "missing final LF" to canonicalText.removeSuffix("\n"),
+        )
+        malformedDocuments.forEach { (label, document) ->
+            requireRejected(label) {
+                NativeBridgeBuildContract.parseAndroidNdkSourceProperties(
+                    document.toByteArray(StandardCharsets.UTF_8),
+                )
+            }
+        }
+        requireRejected("non-UTF-8 bytes") {
+            NativeBridgeBuildContract.parseAndroidNdkSourceProperties(
+                byteArrayOf(0xc3.toByte(), 0x28),
+            )
+        }
+        requireRejected("oversized source.properties") {
+            NativeBridgeBuildContract.loadAndroidNdkIdentity(
+                installation(
+                    "oversized",
+                    ByteArray(
+                        NativeBridgeBuildContract.maxAndroidNdkSourcePropertiesBytes + 1,
+                    ) { 'A'.code.toByte() },
+                ),
+            )
+        }
+
+        val symlinkRoot = Files.createTempDirectory(temporaryDir.toPath(), "symlink-")
+        val symlinkNdk = Files.createDirectory(
+            symlinkRoot.resolve(
+                NativeBridgeBuildContract.pinnedAndroidNdkBaseRevision,
+            ),
+        )
+        val symlinkTarget = symlinkRoot.resolve("actual-source.properties")
+        Files.write(
+            symlinkTarget,
+            canonicalBytes,
+            StandardOpenOption.CREATE_NEW,
+            StandardOpenOption.WRITE,
+        )
+        Files.createSymbolicLink(
+            symlinkNdk.resolve("source.properties"),
+            symlinkTarget,
+        )
+        requireRejected("symbolic-link source.properties") {
+            NativeBridgeBuildContract.loadAndroidNdkIdentity(symlinkNdk)
+        }
+
+        val wrongDirectoryRoot =
+            Files.createTempDirectory(temporaryDir.toPath(), "wrong-directory-")
+        val wrongDirectory = Files.createDirectory(
+            wrongDirectoryRoot.resolve("28.0.12674087-beta2"),
+        )
+        Files.write(
+            wrongDirectory.resolve("source.properties"),
+            canonicalBytes,
+            StandardOpenOption.CREATE_NEW,
+            StandardOpenOption.WRITE,
+        )
+        requireRejected("noncanonical NDK directory name") {
+            NativeBridgeBuildContract.loadAndroidNdkIdentity(wrongDirectory)
+        }
+
+        val stripProbeRoot =
+            Files.createTempDirectory(temporaryDir.toPath(), "strip-invocation-")
+        val fakeObjcopy = stripProbeRoot.resolve("llvm-objcopy")
+        val fakeObjcopyScript = """
+            #!/bin/sh
+            set -eu
+            if [ "${'$'}#" -ne 2 ] || [ "${'$'}1" != "--strip-unneeded" ]; then
+              exit 64
+            fi
+            case "${'$'}2" in
+              *reject*)
+                exit 65
+                ;;
+            esac
+            printf 'stripped\n' >> "${'$'}2"
+        """.trimIndent() + "\n"
+        Files.write(
+            fakeObjcopy,
+            fakeObjcopyScript.toByteArray(StandardCharsets.UTF_8),
+            StandardOpenOption.CREATE_NEW,
+            StandardOpenOption.WRITE,
+        )
+        require(fakeObjcopy.toFile().setExecutable(true, true)) {
+            "Unable to make the fake llvm-objcopy executable"
+        }
+        val fakeStripLauncher = stripProbeRoot.resolve("llvm-strip")
+        Files.createSymbolicLink(fakeStripLauncher, fakeObjcopy.fileName)
+        val authenticatedStripExecutable = fakeStripLauncher.toRealPath()
+        require(authenticatedStripExecutable == fakeObjcopy.toRealPath()) {
+            "The fake llvm-strip launcher did not resolve to llvm-objcopy"
+        }
+
+        fun runStripProbe(command: List<String>): Pair<Int, String> {
+            val process = ProcessBuilder(command)
+                .directory(stripProbeRoot.toFile())
+                .redirectErrorStream(true)
+                .start()
+            val output = process.inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
+                reader.readText()
+            }
+            return process.waitFor() to output
+        }
+
+        val taggedLibraries = listOf("arm64-v8a", "x86_64").map { abi ->
+            val abiDirectory = Files.createDirectory(stripProbeRoot.resolve(abi))
+            val library = abiDirectory.resolve(NativeBridgeBuildContract.libraryName)
+            Files.write(
+                library,
+                "$abi-original\n".toByteArray(StandardCharsets.UTF_8),
+                StandardOpenOption.CREATE_NEW,
+                StandardOpenOption.WRITE,
+            )
+            library.toFile()
+        }
+        val stripCommands = NativeBridgeBuildContract.canonicalStripCommands(
+            authenticatedStripExecutable,
+            taggedLibraries,
+        )
+        require(
+            stripCommands.size == taggedLibraries.size &&
+                stripCommands.all { command ->
+                    command.size == 3 &&
+                        command[0] == authenticatedStripExecutable.toString() &&
+                        command[1] == "--strip-unneeded"
+                } &&
+                stripCommands.map { command -> command[2] }.toSet().size ==
+                    taggedLibraries.size,
+        ) {
+            "Canonical Android stripping must invoke authenticated llvm-objcopy " +
+                "once per distinct ABI library"
+        }
+        stripCommands.forEach { command ->
+            val (status, output) = runStripProbe(command)
+            require(status == 0) {
+                "Independent Android strip probe failed with status $status: $output"
+            }
+        }
+        taggedLibraries.forEach { library ->
+            val abi = library.parentFile.name
+            require(library.readText(Charsets.UTF_8) == "$abi-original\nstripped\n") {
+                "Independent Android stripping cross-overwrote or skipped $abi"
+            }
+        }
+
+        val rejectedLibrary = stripProbeRoot.resolve("reject-library.so")
+        Files.write(
+            rejectedLibrary,
+            "must-remain\n".toByteArray(StandardCharsets.UTF_8),
+            StandardOpenOption.CREATE_NEW,
+            StandardOpenOption.WRITE,
+        )
+        val rejectedCommand = NativeBridgeBuildContract.canonicalStripCommands(
+            authenticatedStripExecutable,
+            listOf(rejectedLibrary.toFile()),
+        ).single()
+        val (rejectedStatus, _) = runStripProbe(rejectedCommand)
+        require(rejectedStatus != 0 &&
+            rejectedLibrary.toFile().readText(Charsets.UTF_8) == "must-remain\n"
+        ) {
+            "Android strip probe must fail closed without mutating a rejected ABI library"
+        }
+    }
+}
 
 val compileNativeLibs = tasks.register<CompileNativeBridgeTask>("compileNativeLibs") {
     group = "native"

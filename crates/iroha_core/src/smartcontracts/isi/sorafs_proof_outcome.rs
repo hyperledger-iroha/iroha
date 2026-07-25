@@ -1873,8 +1873,14 @@ mod tests {
         expected: &str,
     ) {
         let error = result.expect_err("operation must fail closed");
+        let InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+            error,
+        )) = error
+        else {
+            panic!("unexpected instruction error: {error:?}");
+        };
         assert!(
-            error.to_string().contains(expected),
+            error.contains(expected),
             "unexpected instruction error: {error}"
         );
     }

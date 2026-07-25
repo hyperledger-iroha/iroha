@@ -24764,6 +24764,9 @@ seiyaku GovernanceLifecycle {
                 .contract_manifests
                 .insert(code_hash, manifest);
             let payload = governance_deploy_payload(&ALICE_ID, 301, code_hash, abi_hash);
+            Register::account(Account::new(payload.contract_address.subject_id()))
+                .execute(&ALICE_ID, &mut transaction)
+                .expect("register derived governance contract subject");
 
             assert!(
                 super::bind_contract_instance(&ALICE_ID, &mut transaction, &payload, code_hash)
@@ -24817,6 +24820,9 @@ seiyaku GovernanceLifecycle {
             ));
             let mut transaction = block.transaction();
             let payload = governance_deploy_payload(&ALICE_ID, 302, code_hash, abi_hash);
+            Register::account(Account::new(payload.contract_address.subject_id()))
+                .execute(&ALICE_ID, &mut transaction)
+                .expect("register derived governance contract subject");
             transaction
                 .world
                 .contract_manifests

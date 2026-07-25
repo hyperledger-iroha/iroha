@@ -12608,13 +12608,11 @@ impl Default for Metrics {
         )
         .expect("Infallible");
         for event in SORAFS_ORDERBOOK_EVENT_LABELS {
-            let _ = torii_sorafs_orderbook_finalized_events_total
-                .with_label_values(&[event]);
+            let _ = torii_sorafs_orderbook_finalized_events_total.with_label_values(&[event]);
         }
         for tier in SORAFS_ORDERBOOK_TIER_LABELS {
             for side in SORAFS_ORDERBOOK_SIDE_LABELS {
-                let _ =
-                    torii_sorafs_orderbook_open_depth_gib.with_label_values(&[tier, side]);
+                let _ = torii_sorafs_orderbook_open_depth_gib.with_label_values(&[tier, side]);
             }
         }
         for reason in SORAFS_ORDERBOOK_PROJECTION_FAILURE_LABELS {
@@ -12623,8 +12621,8 @@ impl Default for Metrics {
         }
         for route in SORAFS_ORDERBOOK_API_ROUTE_LABELS {
             for outcome in SORAFS_ORDERBOOK_API_OUTCOME_LABELS {
-                let _ = torii_sorafs_orderbook_api_requests_total
-                    .with_label_values(&[route, outcome]);
+                let _ =
+                    torii_sorafs_orderbook_api_requests_total.with_label_values(&[route, outcome]);
             }
         }
         let torii_sorafs_gateway_compliance_requests_total = IntCounterVec::new(
@@ -13004,10 +13002,7 @@ impl Default for Metrics {
             &registry,
             &torii_sorafs_orderbook_oldest_settlement_age_seconds,
         );
-        register_guarded(
-            &registry,
-            &torii_sorafs_orderbook_escrow_runway_seconds,
-        );
+        register_guarded(&registry, &torii_sorafs_orderbook_escrow_runway_seconds);
         register_guarded(
             &registry,
             &torii_sorafs_orderbook_finalized_projection_ready,
@@ -13030,18 +13025,12 @@ impl Default for Metrics {
             &torii_sorafs_orderbook_matcher_scan_book_revision,
         );
         register_guarded(&registry, &torii_sorafs_orderbook_api_requests_total);
-        register_guarded(
-            &registry,
-            &torii_sorafs_gateway_compliance_requests_total,
-        );
+        register_guarded(&registry, &torii_sorafs_gateway_compliance_requests_total);
         register_guarded(
             &registry,
             &torii_sorafs_gateway_compliance_serving_decisions_total,
         );
-        register_guarded(
-            &registry,
-            &torii_sorafs_gateway_compliance_failures_total,
-        );
+        register_guarded(&registry, &torii_sorafs_gateway_compliance_failures_total);
         register_guarded(
             &registry,
             &torii_sorafs_gateway_compliance_serving_catalog_sequence,
@@ -13070,14 +13059,8 @@ impl Default for Metrics {
         register_guarded(&registry, &torii_sorafs_reserve_appeal_backlog);
         register_guarded(&registry, &torii_sorafs_reserve_custody_movements);
         register_guarded(&registry, &torii_sorafs_reserve_chain_reconciled_movements);
-        register_guarded(
-            &registry,
-            &torii_sorafs_reserve_finalized_projection_ready,
-        );
-        register_guarded(
-            &registry,
-            &torii_sorafs_reserve_finalized_projection_height,
-        );
+        register_guarded(&registry, &torii_sorafs_reserve_finalized_projection_ready);
+        register_guarded(&registry, &torii_sorafs_reserve_finalized_projection_height);
         register_guarded(
             &registry,
             &torii_sorafs_reserve_finalized_projection_failure_total,
@@ -17444,8 +17427,7 @@ impl Metrics {
             .set(finalized_height);
         self.torii_sorafs_orderbook_finalized_projection_timestamp_seconds
             .set(finalized_timestamp_seconds);
-        self.torii_sorafs_orderbook_book_revision
-            .set(book_revision);
+        self.torii_sorafs_orderbook_book_revision.set(book_revision);
         self.torii_sorafs_orderbook_matcher_scan_book_revision
             .set(matcher_scan_book_revision);
         self.torii_sorafs_orderbook_finalized_projection_ready
@@ -17720,24 +17702,19 @@ impl Metrics {
         }
 
         self.torii_sorafs_reserve_chain_reconciled_movements.reset();
-        for (status, count) in RECONCILED_STATUSES
-            .into_iter()
-            .zip(chain_reconciled_counts)
-        {
+        for (status, count) in RECONCILED_STATUSES.into_iter().zip(chain_reconciled_counts) {
             self.torii_sorafs_reserve_chain_reconciled_movements
                 .with_label_values(&[status])
                 .set(count);
         }
         self.torii_sorafs_reserve_finalized_projection_height
             .set(finalized_height);
-        self.torii_sorafs_reserve_finalized_projection_ready
-            .set(1);
+        self.torii_sorafs_reserve_finalized_projection_ready.set(1);
     }
 
     /// Mark the finalized reserve projection unavailable without publishing partial gauges.
     pub fn mark_sorafs_reserve_finalized_projection_unready(&self) {
-        self.torii_sorafs_reserve_finalized_projection_ready
-            .set(0);
+        self.torii_sorafs_reserve_finalized_projection_ready.set(0);
     }
 
     /// Record a failed finalized reserve projection attempt.
@@ -17750,36 +17727,15 @@ impl Metrics {
     /// Record a SoraFS reserve service request outcome.
     pub fn record_sorafs_reserve_service_request(&self, route: &str, result: &str) {
         let route = match route {
-            "top_up"
-            | "withdrawal"
-            | "movement_decision"
-            | "credit_draw"
-            | "credit_repay"
-            | "appeal"
-            | "appeal_decision"
-            | "policy"
-            | "providers"
-            | "provider"
-            | "movements"
-            | "movement"
-            | "appeals"
-            | "appeal_detail"
-            | "events"
-            | "events_stream"
+            "top_up" | "withdrawal" | "movement_decision" | "credit_draw" | "credit_repay"
+            | "appeal" | "appeal_decision" | "policy" | "providers" | "provider" | "movements"
+            | "movement" | "appeals" | "appeal_detail" | "events" | "events_stream"
             | "events_ws" => route,
             _ => "unknown",
         };
         let result = match result {
-            "accepted"
-            | "ok"
-            | "bad_request"
-            | "unauthorized"
-            | "forbidden"
-            | "not_found"
-            | "conflict"
-            | "too_many_requests"
-            | "unavailable"
-            | "error" => result,
+            "accepted" | "ok" | "bad_request" | "unauthorized" | "forbidden" | "not_found"
+            | "conflict" | "too_many_requests" | "unavailable" | "error" => result,
             _ => "unknown",
         };
         self.torii_sorafs_reserve_service_requests_total
@@ -17790,22 +17746,9 @@ impl Metrics {
     /// Increment a SoraFS reserve service rate-limit counter.
     pub fn inc_sorafs_reserve_service_rate_limit(&self, route: &str, reason: &str) {
         let route = match route {
-            "top_up"
-            | "withdrawal"
-            | "movement_decision"
-            | "credit_draw"
-            | "credit_repay"
-            | "appeal"
-            | "appeal_decision"
-            | "policy"
-            | "providers"
-            | "provider"
-            | "movements"
-            | "movement"
-            | "appeals"
-            | "appeal_detail"
-            | "events"
-            | "events_stream"
+            "top_up" | "withdrawal" | "movement_decision" | "credit_draw" | "credit_repay"
+            | "appeal" | "appeal_decision" | "policy" | "providers" | "provider" | "movements"
+            | "movement" | "appeals" | "appeal_detail" | "events" | "events_stream"
             | "events_ws" => route,
             _ => "unknown",
         };
@@ -19034,8 +18977,7 @@ impl Metrics {
     /// - If the buffer produced by [`Encoder`] causes [`String::from_utf8`] to fail.
     pub fn try_to_string(&self) -> eyre::Result<String> {
         let _projection_exposition_guard = self.lock_sorafs_orderbook_projection_exposition();
-        let _gateway_compliance_exposition_guard =
-            self.lock_sorafs_gateway_compliance_exposition();
+        let _gateway_compliance_exposition_guard = self.lock_sorafs_gateway_compliance_exposition();
         let mut buffer = Vec::new();
         let encoder = prometheus::TextEncoder::new();
         let metric_families = self.registry.gather();
@@ -19055,8 +18997,7 @@ impl Metrics {
         }
 
         let _projection_exposition_guard = self.lock_sorafs_orderbook_projection_exposition();
-        let _gateway_compliance_exposition_guard =
-            self.lock_sorafs_gateway_compliance_exposition();
+        let _gateway_compliance_exposition_guard = self.lock_sorafs_gateway_compliance_exposition();
         let mut buffer = Vec::new();
         let encoder = prometheus::TextEncoder::new();
         let metric_families = self.registry.gather();
@@ -20313,14 +20254,8 @@ mod test {
             12,
             11,
         );
-        metrics.record_sorafs_orderbook_api_request(
-            "/v1/sorafs/orderbook/orders",
-            false,
-        );
-        metrics.record_sorafs_orderbook_api_request(
-            "/v1/sorafs/orderbook/orders",
-            true,
-        );
+        metrics.record_sorafs_orderbook_api_request("/v1/sorafs/orderbook/orders", false);
+        metrics.record_sorafs_orderbook_api_request("/v1/sorafs/orderbook/orders", true);
 
         assert_eq!(
             metrics
@@ -20329,12 +20264,7 @@ mod test {
                 .get(),
             3
         );
-        assert_eq!(
-            metrics
-                .torii_sorafs_orderbook_settlement_backlog
-                .get(),
-            7
-        );
+        assert_eq!(metrics.torii_sorafs_orderbook_settlement_backlog.get(), 7);
         assert_eq!(
             metrics
                 .torii_sorafs_orderbook_finalized_projection_ready
@@ -20368,6 +20298,45 @@ mod test {
             assert!(
                 exported.contains(metric_name),
                 "missing orderbook metric {metric_name} from export:\n{exported}"
+            );
+        }
+    }
+
+    #[test]
+    fn gateway_compliance_metrics_are_registered_and_exposable() {
+        let metrics = Metrics::default();
+        metrics
+            .torii_sorafs_gateway_compliance_requests_total
+            .with_label_values(&["status", "success"])
+            .inc();
+        metrics
+            .torii_sorafs_gateway_compliance_serving_decisions_total
+            .with_label_values(&["cid", "deny", "legal_safety_hold"])
+            .inc();
+        metrics
+            .torii_sorafs_gateway_compliance_failures_total
+            .with_label_values(&["serving", "expired_catalog"])
+            .inc();
+        metrics
+            .torii_sorafs_gateway_compliance_serving_catalog_sequence
+            .set(7);
+        metrics
+            .torii_sorafs_gateway_compliance_serving_catalog_valid_until_seconds
+            .set(1_800_000_000);
+        metrics.torii_sorafs_gateway_compliance_ready.set(1);
+
+        let exported = metrics.try_to_string().expect("metrics text");
+        for metric_name in [
+            "torii_sorafs_gateway_compliance_requests_total",
+            "torii_sorafs_gateway_compliance_serving_decisions_total",
+            "torii_sorafs_gateway_compliance_failures_total",
+            "torii_sorafs_gateway_compliance_serving_catalog_sequence",
+            "torii_sorafs_gateway_compliance_serving_catalog_valid_until_seconds",
+            "torii_sorafs_gateway_compliance_ready",
+        ] {
+            assert!(
+                exported.contains(metric_name),
+                "missing gateway compliance metric {metric_name} from export:\n{exported}"
             );
         }
     }
@@ -20451,10 +20420,7 @@ mod test {
                 .get(),
             1_800_003_600
         );
-        assert_eq!(
-            metrics.torii_sorafs_gateway_compliance_ready.get(),
-            1
-        );
+        assert_eq!(metrics.torii_sorafs_gateway_compliance_ready.get(), 1);
 
         let exported = metrics.try_to_string().expect("metrics text");
         for metric_name in [
@@ -20513,10 +20479,7 @@ mod test {
                 .get(),
             1
         );
-        assert_eq!(
-            metrics.torii_sorafs_gateway_compliance_ready.get(),
-            0
-        );
+        assert_eq!(metrics.torii_sorafs_gateway_compliance_ready.get(), 0);
     }
 
     #[test]

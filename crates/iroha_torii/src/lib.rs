@@ -15947,10 +15947,7 @@ async fn handler_subscriptions_create(
     let remote_ip = remote.ip();
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return routing::handle_post_v1_subscription_create(
-            app.chain_id.clone(),
-            app.queue.clone(),
             app.state.clone(),
-            app.telemetry.clone(),
             crate::utils::extractors::NoritoJson(req),
         )
         .await;
@@ -15961,10 +15958,7 @@ async fn handler_subscriptions_create(
     check_access_enforced(&app, &headers, Some(remote_ip), "v1/subscriptions", enforce).await?;
 
     routing::handle_post_v1_subscription_create(
-        app.chain_id.clone(),
-        app.queue.clone(),
         app.state.clone(),
-        app.telemetry.clone(),
         crate::utils::extractors::NoritoJson(req),
     )
     .await
@@ -16011,10 +16005,7 @@ async fn handler_subscription_pause(
     let subscription_id = parse_nft_id(&subscription_raw)?;
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return routing::handle_post_v1_subscription_pause(
-            app.chain_id.clone(),
-            app.queue.clone(),
             app.state.clone(),
-            app.telemetry.clone(),
             subscription_id,
             crate::utils::extractors::NoritoJson(req),
         )
@@ -16033,10 +16024,7 @@ async fn handler_subscription_pause(
     .await?;
 
     routing::handle_post_v1_subscription_pause(
-        app.chain_id.clone(),
-        app.queue.clone(),
         app.state.clone(),
-        app.telemetry.clone(),
         subscription_id,
         crate::utils::extractors::NoritoJson(req),
     )
@@ -16057,10 +16045,7 @@ async fn handler_subscription_resume(
     let subscription_id = parse_nft_id(&subscription_raw)?;
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return routing::handle_post_v1_subscription_resume(
-            app.chain_id.clone(),
-            app.queue.clone(),
             app.state.clone(),
-            app.telemetry.clone(),
             subscription_id,
             crate::utils::extractors::NoritoJson(req),
         )
@@ -16079,10 +16064,7 @@ async fn handler_subscription_resume(
     .await?;
 
     routing::handle_post_v1_subscription_resume(
-        app.chain_id.clone(),
-        app.queue.clone(),
         app.state.clone(),
-        app.telemetry.clone(),
         subscription_id,
         crate::utils::extractors::NoritoJson(req),
     )
@@ -16103,10 +16085,7 @@ async fn handler_subscription_cancel(
     let subscription_id = parse_nft_id(&subscription_raw)?;
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return routing::handle_post_v1_subscription_cancel(
-            app.chain_id.clone(),
-            app.queue.clone(),
             app.state.clone(),
-            app.telemetry.clone(),
             subscription_id,
             crate::utils::extractors::NoritoJson(req),
         )
@@ -16125,10 +16104,7 @@ async fn handler_subscription_cancel(
     .await?;
 
     routing::handle_post_v1_subscription_cancel(
-        app.chain_id.clone(),
-        app.queue.clone(),
         app.state.clone(),
-        app.telemetry.clone(),
         subscription_id,
         crate::utils::extractors::NoritoJson(req),
     )
@@ -16149,10 +16125,7 @@ async fn handler_subscription_keep(
     let subscription_id = parse_nft_id(&subscription_raw)?;
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return routing::handle_post_v1_subscription_keep(
-            app.chain_id.clone(),
-            app.queue.clone(),
             app.state.clone(),
-            app.telemetry.clone(),
             subscription_id,
             crate::utils::extractors::NoritoJson(req),
         )
@@ -16171,10 +16144,7 @@ async fn handler_subscription_keep(
     .await?;
 
     routing::handle_post_v1_subscription_keep(
-        app.chain_id.clone(),
-        app.queue.clone(),
         app.state.clone(),
-        app.telemetry.clone(),
         subscription_id,
         crate::utils::extractors::NoritoJson(req),
     )
@@ -16241,10 +16211,7 @@ async fn handler_subscription_charge_now(
     let subscription_id = parse_nft_id(&subscription_raw)?;
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
         return routing::handle_post_v1_subscription_charge_now(
-            app.chain_id.clone(),
-            app.queue.clone(),
             app.state.clone(),
-            app.telemetry.clone(),
             subscription_id,
             crate::utils::extractors::NoritoJson(req),
         )
@@ -16263,10 +16230,7 @@ async fn handler_subscription_charge_now(
     .await?;
 
     routing::handle_post_v1_subscription_charge_now(
-        app.chain_id.clone(),
-        app.queue.clone(),
         app.state.clone(),
-        app.telemetry.clone(),
         subscription_id,
         crate::utils::extractors::NoritoJson(req),
     )
@@ -70150,7 +70114,7 @@ pub(crate) mod tests_runtime_handlers {
             .block_cadence_ms()
             .get();
         let resp = super::handler_pipeline_preflight(
-            State(app),
+            State(app.clone()),
             HeaderMap::new(),
             crate::loopback_connect_info(),
             Some(crate::utils::extractors::ExtractAccept(
@@ -70174,6 +70138,17 @@ pub(crate) mod tests_runtime_handlers {
         assert_eq!(payload.schema_version, 1);
         assert_eq!(payload.queue.size, 0);
         assert_eq!(payload.sumeragi.block_cadence_ms, expected_block_cadence_ms);
+        assert_eq!(
+            payload.pipeline.ivm_max_cycles_upper_bound,
+            app.state
+                .pipeline_snapshot()
+                .ivm_max_cycles_upper_bound
+                .get()
+        );
+        assert_eq!(
+            payload.pipeline.ivm_admission_cycle_limit,
+            app.state.ivm_admission_cycle_limit().get()
+        );
     }
 
     #[test]
