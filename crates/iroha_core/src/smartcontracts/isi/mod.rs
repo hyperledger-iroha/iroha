@@ -89,7 +89,7 @@ fn dispatch_instruction<T: Execute + Clone + 'static>(
 }
 
 macro_rules! define_instruction_handlers {
-    ($(dispatch_instruction::<$instruction:ty>),* $(,)?) => {
+    ($(dispatch_instruction::<$instruction:ty $(,)?>),* $(,)?) => {
         const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
             $(dispatch_instruction::<$instruction>),*
         ];

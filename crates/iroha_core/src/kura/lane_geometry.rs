@@ -55,15 +55,14 @@ use super::{
     MergeLedgerCarrierRecord, NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_FILE,
     NativeAmxEvidenceKind, NativeAmxParticipantApplicationManifestArtifactV1,
     NativeAmxParticipantApplicationReceiptArtifact, RecoveredLaneBlockPayload, Result,
-    STRICT_INIT_MAX_BLOCK_BYTES, V2_PENDING_CERTIFIED_MERGE_ENTRY_CAPACITY,
-    create_dir_all_with_context, sync_dir,
+    STRICT_INIT_MAX_BLOCK_BYTES, create_dir_all_with_context, sync_dir,
 };
 #[cfg(test)]
 use super::{
     AUTONOMOUS_LANE_BLOCK_ATTEMPT_PREFIX, NATIVE_AMX_APPLICATION_MANIFEST_FILE_PREFIX,
     NATIVE_AMX_EVIDENCE_FILE_SUFFIX, NATIVE_AMX_EVIDENCE_HEIGHT_DIGITS,
     OBSOLETE_AUTONOMOUS_LANE_BLOCKS_DATA_FILE, OBSOLETE_AUTONOMOUS_LANE_BLOCKS_INDEX_FILE,
-    SidecarIndexEntry,
+    SidecarIndexEntry, V2_PENDING_CERTIFIED_MERGE_ENTRY_CAPACITY,
 };
 
 const JOURNAL_VERSION: u8 = 6;
@@ -4670,25 +4669,37 @@ impl Kura {
         Ok((manifests, receipts))
     }
 
-    /// Reject first-release lane retirement while certified canonical work
-    /// still targets the retiring incarnation.
+    /// Admit first-release lane retirement only when durable work is terminal
+    /// or is owned by the exact globally certified retiring incarnation.
     fn ensure_lane_retirement_admissible_locked(
         &self,
         retiring: &[LaneRetirementIdentity],
         certified_retirements: &BTreeSet<LaneRetirementIdentity>,
     ) -> Result<()> {
         self.validate_certified_retirements_against_geometry(retiring, certified_retirements)?;
-        self.ensure_first_release_lane_retirement_admissible_locked(retiring)
+        self.ensure_first_release_lane_retirement_admissible_with_certified_locked(
+            retiring,
+            certified_retirements,
+        )
     }
 
-    /// Apply the production first-release retirement policy.
-    ///
-    /// This is the sole retirement scanner in production and unit builds, so
-    /// geometry tests exercise the same Native-aware fail-closed policy that
-    /// guards live archive/removal.
+    /// Exercise the production retirement scanner without a certified drain.
+    #[cfg(test)]
     fn ensure_first_release_lane_retirement_admissible_locked(
         &self,
         retiring: &[LaneRetirementIdentity],
+    ) -> Result<()> {
+        self.ensure_first_release_lane_retirement_admissible_with_certified_locked(
+            retiring,
+            &BTreeSet::new(),
+        )
+    }
+
+    /// Apply the Native-aware, fail-closed first-release retirement policy.
+    fn ensure_first_release_lane_retirement_admissible_with_certified_locked(
+        &self,
+        retiring: &[LaneRetirementIdentity],
+        certified_retirements: &BTreeSet<LaneRetirementIdentity>,
     ) -> Result<()> {
         // The geometry transition owns prune -> canonical-chain -> geometry ->
         // sidecar before entering this scanner. Native AMX validation below
@@ -4769,6 +4780,9 @@ impl Kura {
         for (storage_lane_id, entry) in entries {
             let blocks_path = entry.blocks_dir(&self.store_root);
             let lane_artifacts = Self::lane_artifact_dir(&blocks_path);
+            let storage_route_is_retiring = retiring.iter().any(|identity| {
+                identity.lane_id == storage_lane_id && identity.dataspace_id == entry.dataspace_id
+            });
             if !self.validate_path_kind(&lane_artifacts, true)? {
                 let blocks_guard =
                     Self::open_bound_progress_directory(&self.store_root, &blocks_path)?;
@@ -4920,8 +4934,18 @@ impl Kura {
                         path.clone(),
                     )
                 })?;
-                if name.ends_with(".tmp") || name == LATEST_CERTIFIED_LANE_BLOCK_FRONTIER_BUILD_FILE
-                {
+                if name.ends_with(".tmp") {
+                    let message = if name.starts_with("autonomous_") {
+                        "lane retirement scan found an in-flight autonomous sidecar"
+                    } else {
+                        "lane retirement scan found an in-flight sidecar"
+                    };
+                    return Err(Error::IO(
+                        std::io::Error::new(ErrorKind::WouldBlock, message),
+                        path,
+                    ));
+                }
+                if name == LATEST_CERTIFIED_LANE_BLOCK_FRONTIER_BUILD_FILE {
                     return Err(Error::IO(
                         std::io::Error::new(
                             ErrorKind::WouldBlock,
@@ -4950,6 +4974,39 @@ impl Kura {
                 }
                 if Self::parse_native_amx_evidence_path(&path)?.is_some() {
                     continue;
+                }
+                if !storage_route_is_retiring
+                    && let Some(raw_height) = name
+                        .strip_prefix("autonomous_view_")
+                        .and_then(|suffix| suffix.strip_suffix(".norito"))
+                {
+                    let lane_block_height = raw_height.parse::<u64>().map_err(|_| {
+                        Error::IO(
+                            std::io::Error::new(
+                                ErrorKind::InvalidData,
+                                "lane retirement scan encountered a non-canonical view-state filename",
+                            ),
+                            path.clone(),
+                        )
+                    })?;
+                    if lane_block_height == 0
+                        || name != format!("autonomous_view_{lane_block_height:020}.norito")
+                    {
+                        return Err(Error::IO(
+                            std::io::Error::new(
+                                ErrorKind::InvalidData,
+                                "lane retirement scan encountered a non-canonical view-state filename",
+                            ),
+                            path,
+                        ));
+                    }
+                    return Err(Error::IO(
+                        std::io::Error::new(
+                            ErrorKind::InvalidData,
+                            "lane retirement scan found an orphan autonomous view state",
+                        ),
+                        path,
+                    ));
                 }
                 if Self::autonomous_lane_block_attempt_coordinates(name).is_some()
                     || Self::autonomous_two_height_coordinates(
@@ -5531,9 +5588,15 @@ impl Kura {
                 continue;
             }
             if lane_proposal_coordinator_targets_retirement(&artifact.proposal, &retiring) {
+                if lane_proposal_coordinator_targets_retirement(
+                    &artifact.proposal,
+                    certified_retirements,
+                ) {
+                    continue;
+                }
                 return Err(self.geometry_error(
                     ErrorKind::WouldBlock,
-                    "pending certified work targets a retiring lane incarnation",
+                    "pending certified work belongs to a retiring lane incarnation",
                 ));
             }
             if let Some((autonomous_artifact, current, retired)) = autonomous.get(identity) {
@@ -5566,7 +5629,14 @@ impl Kura {
             if *retired || receipt_applies_autonomous(identity, artifact, current) {
                 continue;
             }
+            let coordinator_has_certified_drain = lane_proposal_coordinator_targets_retirement(
+                &artifact.executable_payload.origin_proposal,
+                certified_retirements,
+            );
             if lane_payload_targets_retirement(&artifact.executable_payload, &retiring) {
+                if coordinator_has_certified_drain {
+                    continue;
+                }
                 return Err(self.geometry_error(
                     ErrorKind::WouldBlock,
                     "pending autonomous payload targets a retiring lane incarnation",
@@ -5579,6 +5649,9 @@ impl Kura {
                 .is_some()
                 && hinted_payload_targets(&artifact.executable_payload.origin_proposal)?
             {
+                if coordinator_has_certified_drain {
+                    continue;
+                }
                 return Err(self.geometry_error(
                     ErrorKind::WouldBlock,
                     "pending hinted autonomous payload targets a retiring lane incarnation",
@@ -5590,6 +5663,10 @@ impl Kura {
             if receipt_applies(identity, &input.proposal) {
                 continue;
             }
+            let coordinator_has_certified_drain = lane_proposal_coordinator_targets_retirement(
+                &input.proposal,
+                certified_retirements,
+            );
             if input.autonomous_payload_hash.is_some() {
                 let (artifact, _, _) = autonomous.get(identity).ok_or_else(|| {
                     self.geometry_error(
@@ -5598,6 +5675,9 @@ impl Kura {
                     )
                 })?;
                 if lane_payload_targets_retirement(&artifact.executable_payload, &retiring) {
+                    if coordinator_has_certified_drain {
+                        continue;
+                    }
                     return Err(self.geometry_error(
                         ErrorKind::WouldBlock,
                         "pending autonomous execution input targets a retiring lane incarnation",
@@ -5608,6 +5688,9 @@ impl Kura {
             if lane_proposal_coordinator_targets_retirement(&input.proposal, &retiring)
                 || hinted_payload_targets(&input.proposal)?
             {
+                if coordinator_has_certified_drain {
+                    continue;
+                }
                 return Err(self.geometry_error(
                     ErrorKind::WouldBlock,
                     "pending execution input targets a retiring lane incarnation",
@@ -19413,17 +19496,17 @@ mod tests {
         kura.fail_next_lane_geometry_gc_at_stage_for_test(GC_FAIL_AFTER_COMPACTION_INTENT);
         checkpoint_retired_geometry(&kura, &fixture, 20)
             .expect_err("leave a durable pending deletion intent");
-        let height = NonZeroUsize::new(20).expect("non-zero height");
-        let block_hash = kura
-            .get_durable_block_hash(height)
-            .expect("durable block hash");
         let original_state_hash = kura
             .wsv_checkpoint(20)
             .expect("read WSV checkpoint")
             .expect("WSV checkpoint exists")
             .state_hash();
-        kura.store_wsv_checkpoint(20, block_hash, Hash::new(b"forked-state"))
-            .expect("replace WSV checkpoint for adversarial test");
+        kura.overwrite_wsv_checkpoint_without_validation_for_tests(
+            20,
+            Hash::new(b"forked-state"),
+            None,
+        )
+        .expect("replace WSV checkpoint for adversarial test");
 
         kura.resume_proven_lane_geometry_archive_gc()
             .expect_err("changed WSV identity must block replayed deletion");
@@ -19436,7 +19519,7 @@ mod tests {
                 .is_empty()
         );
 
-        kura.store_wsv_checkpoint(20, block_hash, original_state_hash)
+        kura.overwrite_wsv_checkpoint_without_validation_for_tests(20, original_state_hash, None)
             .expect("restore authoritative WSV checkpoint");
         let resumed = kura
             .resume_proven_lane_geometry_archive_gc()

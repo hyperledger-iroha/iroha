@@ -41,9 +41,9 @@ use iroha_data_model::{
             ProofOutcomeFinalizedEventV1, ProofOutcomeProjectionV1,
         },
         reputation::{
+            PorTerminalStatusV1, ProviderDisputeStatusV1,
             REPUTATION_JOURNAL_QUERY_MAX_EVENT_PAGE_BYTES_V1,
-            REPUTATION_JOURNAL_QUERY_MAX_ITEMS_V1, PorTerminalStatusV1,
-            ProviderDisputeStatusV1, ReputationJournalFinalizedEventPageV1,
+            REPUTATION_JOURNAL_QUERY_MAX_ITEMS_V1, ReputationJournalFinalizedEventPageV1,
             ReputationJournalFinalizedEventV1, ReputationJournalPayloadV1,
             ReputationJournalValidationError, StreamTokenValidationStatusV1,
         },
@@ -1321,8 +1321,7 @@ struct PrepareContext<'a> {
     policy: &'a ReputationIngestPolicyV1,
     target: ReputationFinalizedIdentityV1,
     finalized_at_unix_ms: u64,
-    working_last:
-        BTreeMap<ReputationCommittedFeedV1, Option<ReputationCommittedEventIdentityV1>>,
+    working_last: BTreeMap<ReputationCommittedFeedV1, Option<ReputationCommittedEventIdentityV1>>,
     receipt_index: BTreeMap<(ReputationCommittedFeedV1, u64), EventReceiptV1>,
     block_hashes: BTreeMap<u64, [u8; 32]>,
     events: Vec<PendingEventV1>,
@@ -1340,7 +1339,12 @@ impl<'a> PrepareContext<'a> {
     ) -> Self {
         let working_last = ALL_COMMITTED_FEEDS
             .into_iter()
-            .map(|feed| (feed, checkpoint_progress_for_feed(checkpoint, feed).last_event))
+            .map(|feed| {
+                (
+                    feed,
+                    checkpoint_progress_for_feed(checkpoint, feed).last_event,
+                )
+            })
             .collect();
         let receipt_index = checkpoint
             .receipts
@@ -1386,10 +1390,7 @@ impl<'a> PrepareContext<'a> {
         }
     }
 
-    fn last(
-        &self,
-        feed: ReputationCommittedFeedV1,
-    ) -> Option<ReputationCommittedEventIdentityV1> {
+    fn last(&self, feed: ReputationCommittedFeedV1) -> Option<ReputationCommittedEventIdentityV1> {
         self.working_last.get(&feed).copied().flatten()
     }
 
@@ -1887,9 +1888,9 @@ fn prepare_journal_pages(
                 ReputationJournalPayloadV1::ProviderDispute(dispute) => {
                     let transition = match &dispute.status {
                         ProviderDisputeStatusV1::Opened => ReputationDisputeSignalV1::Opened,
-                        ProviderDisputeStatusV1::Resolved { outcome, .. } => {
+                        ProviderDisputeStatusV1::Resolved(resolution) => {
                             ReputationDisputeSignalV1::Resolved {
-                                upheld: *outcome == CapacityDisputeOutcome::Upheld,
+                                upheld: resolution.outcome == CapacityDisputeOutcome::Upheld,
                             }
                         }
                     };
@@ -1941,9 +1942,7 @@ fn prepare_journal_pages(
     ])
 }
 
-const fn map_journal_page_error(
-    error: ReputationJournalValidationError,
-) -> ReputationIngestError {
+const fn map_journal_page_error(error: ReputationJournalValidationError) -> ReputationIngestError {
     match error {
         ReputationJournalValidationError::EventSequenceGap => ReputationIngestError::EventGap,
         ReputationJournalValidationError::EventSequenceReordered
@@ -2274,8 +2273,7 @@ fn source_update(
     let existing = context.checkpoint.progress(source);
     let last_event = context.last(committed_feed_for_source(source));
     if existing.observed_through == Some(context.target) {
-        if existing.observed_at_unix_ms != finalized_at_unix_ms
-            || existing.last_event != last_event
+        if existing.observed_at_unix_ms != finalized_at_unix_ms || existing.last_event != last_event
         {
             return Err(ReputationIngestError::EventEquivocation);
         }
@@ -2522,9 +2520,7 @@ fn apply_pending_batch(
         }));
     checkpoint.receipts.sort_by_key(receipt_order_key);
     for pair in checkpoint.receipts.windows(2) {
-        if pair[0].feed == pair[1].feed
-            && pair[0].identity.sequence == pair[1].identity.sequence
-        {
+        if pair[0].feed == pair[1].feed && pair[0].identity.sequence == pair[1].identity.sequence {
             if pair[0] != pair[1] {
                 return Err(ReputationIngestError::EventEquivocation);
             }
@@ -2553,9 +2549,7 @@ fn apply_pending_batch(
     validate_checkpoint(checkpoint, policy, checkpoint.policy_digest)
 }
 
-fn receipt_order_key(
-    receipt: &EventReceiptV1,
-) -> (u64, u32, ReputationCommittedFeedV1, u64) {
+fn receipt_order_key(receipt: &EventReceiptV1) -> (u64, u32, ReputationCommittedFeedV1, u64) {
     (
         receipt.identity.block_height,
         receipt.identity.event_index,
@@ -3156,9 +3150,7 @@ fn validate_pending(
         .filter(|update| {
             matches!(
                 update.source,
-                ReputationSourceV1::Por
-                    | ReputationSourceV1::Dispute
-                    | ReputationSourceV1::Token
+                ReputationSourceV1::Por | ReputationSourceV1::Dispute | ReputationSourceV1::Token
             )
         })
         .collect::<Vec<_>>();
@@ -3226,10 +3218,7 @@ fn updates_cover_feed(
     }
 }
 
-const fn signal_matches_feed(
-    signal: ReputationSignalV1,
-    feed: ReputationCommittedFeedV1,
-) -> bool {
+const fn signal_matches_feed(signal: ReputationSignalV1, feed: ReputationCommittedFeedV1) -> bool {
     match signal {
         ReputationSignalV1::Pdp { .. } | ReputationSignalV1::Potr { .. } => {
             matches!(feed, ReputationCommittedFeedV1::Proof)
@@ -3277,8 +3266,7 @@ const fn signal_is_well_formed(signal: ReputationSignalV1) -> bool {
             latency_healthy,
             ..
         } => {
-            (!latency_healthy || success)
-                && (counts_for_provider || (!success && !latency_healthy))
+            (!latency_healthy || success) && (counts_for_provider || (!success && !latency_healthy))
         }
         ReputationSignalV1::Repair {
             terminal,
@@ -3373,14 +3361,13 @@ mod tests {
             orderbook::{OrderbookFinalizedCursorV1, OrderbookFinalizedEventCursorV1},
             pin_registry::{ManifestDigest, StorageClass},
             proof_ledger::{
-                PROOF_OUTCOME_RECORD_VERSION_V1, PdpOutcomeProjectionV1,
-                PotrOutcomeProjectionV1, ProofOutcomeEd25519AttestationV1,
-                ProofOutcomeFinalizedCursorV1, ProofOutcomeFinalizedEventCursorV1,
-                ProofOutcomeRecordV1,
+                PROOF_OUTCOME_RECORD_VERSION_V1, PdpOutcomeProjectionV1, PotrOutcomeProjectionV1,
+                ProofOutcomeEd25519AttestationV1, ProofOutcomeFinalizedCursorV1,
+                ProofOutcomeFinalizedEventCursorV1, ProofOutcomeRecordV1,
             },
             reputation::{
-                REPUTATION_JOURNAL_AUTHORITY_POLICY_VERSION_V1, PorTerminalOutcomeV1,
-                ProviderDisputeEventV1, ProviderDisputeKindV1,
+                PorTerminalOutcomeV1, ProviderDisputeEventV1, ProviderDisputeKindV1,
+                ProviderDisputeResolutionV1, REPUTATION_JOURNAL_AUTHORITY_POLICY_VERSION_V1,
                 ReputationJournalAuthorityPolicyV1, ReputationJournalEntryV1,
                 ReputationJournalFinalizedCursorV1, StreamTokenValidationOutcomeV1,
             },
@@ -3558,16 +3545,14 @@ mod tests {
             policy.token_recorder_authority,
             recorded_at_unix_ms,
             None,
-            ReputationJournalPayloadV1::StreamTokenValidation(
-                StreamTokenValidationOutcomeV1 {
-                    validation_id: [marker.max(1); 32],
-                    request_digest: [0xB2; 32],
-                    token_body_digest: Some([0xB3; 32]),
-                    token_key_version: Some(1),
-                    validated_at_unix_ms: recorded_at_unix_ms,
-                    status: StreamTokenValidationStatusV1::Accepted,
-                },
-            ),
+            ReputationJournalPayloadV1::StreamTokenValidation(StreamTokenValidationOutcomeV1 {
+                validation_id: [marker.max(1); 32],
+                request_digest: [0xB2; 32],
+                token_body_digest: Some([0xB3; 32]),
+                token_key_version: Some(1),
+                validated_at_unix_ms: recorded_at_unix_ms,
+                status: StreamTokenValidationStatusV1::Accepted,
+            }),
         )
         .expect("valid stream-token journal entry")
     }
@@ -3616,12 +3601,12 @@ mod tests {
                 kind: dispute.kind,
                 evidence_digest: dispute.evidence_digest,
                 submitted_at_unix_ms: dispute.submitted_at_unix_ms,
-                status: ProviderDisputeStatusV1::Resolved {
+                status: ProviderDisputeStatusV1::Resolved(ProviderDisputeResolutionV1 {
                     outcome,
                     resolved_at_unix_ms: recorded_at_unix_ms,
                     decision_digest: [0xC3; 32],
                     rationale: None,
-                },
+                }),
             }),
         )
         .expect("valid resolved dispute entry")
@@ -3805,10 +3790,8 @@ mod tests {
     }
 
     fn all_sources_batch(provider_id: ProviderId) -> ReputationFinalizedBatchV1 {
-        let opened_a =
-            opened_dispute_entry(provider_id, 0x61, FINALIZED_AT_MS - 1_800);
-        let opened_b =
-            opened_dispute_entry(provider_id, 0x62, FINALIZED_AT_MS - 1_600);
+        let opened_a = opened_dispute_entry(provider_id, 0x61, FINALIZED_AT_MS - 1_800);
+        let opened_b = opened_dispute_entry(provider_id, 0x62, FINALIZED_AT_MS - 1_600);
         let resolved_a = resolved_dispute_entry(
             provider_id,
             &opened_a,
@@ -3963,8 +3946,7 @@ mod tests {
         );
 
         let paged_root = TempDir::new().expect("journal paged root");
-        let paged =
-            ReputationIngestService::open(paged_root.path(), policy()).expect("open paged");
+        let paged = ReputationIngestService::open(paged_root.path(), policy()).expect("open paged");
         let first_event = journal_event(
             1,
             0,
@@ -3989,13 +3971,11 @@ mod tests {
         let conflict =
             ReputationIngestService::open(conflict_root.path(), policy()).expect("open conflict");
         conflict
-            .ingest_finalized_batch(journal_only_batch(vec![journal_page(vec![
-                journal_event(
-                    1,
-                    0,
-                    por_journal_entry(provider_id, 0x44, FINALIZED_AT_MS - 1_000),
-                ),
-            ])]))
+            .ingest_finalized_batch(journal_only_batch(vec![journal_page(vec![journal_event(
+                1,
+                0,
+                por_journal_entry(provider_id, 0x44, FINALIZED_AT_MS - 1_000),
+            )])]))
             .expect("apply journal baseline");
         assert_eq!(
             conflict
@@ -4024,10 +4004,8 @@ mod tests {
         let root = TempDir::new().expect("dispute state root");
         let service = ReputationIngestService::open(root.path(), policy()).expect("open service");
         let provider_id = provider(14);
-        let opened_a =
-            opened_dispute_entry(provider_id, 0x51, FINALIZED_AT_MS - 1_600);
-        let opened_b =
-            opened_dispute_entry(provider_id, 0x52, FINALIZED_AT_MS - 1_400);
+        let opened_a = opened_dispute_entry(provider_id, 0x51, FINALIZED_AT_MS - 1_600);
+        let opened_b = opened_dispute_entry(provider_id, 0x52, FINALIZED_AT_MS - 1_400);
         let resolved_a = resolved_dispute_entry(
             provider_id,
             &opened_a,
@@ -4061,9 +4039,9 @@ mod tests {
         }
 
         service
-            .ingest_finalized_batch(journal_only_batch(vec![journal_page(vec![
-                journal_event(4, 3, resolved_b),
-            ])]))
+            .ingest_finalized_batch(journal_only_batch(vec![journal_page(vec![journal_event(
+                4, 3, resolved_b,
+            )])]))
             .expect("resolve remaining dispute");
         let state = service.state.lock().expect("resolved state");
         let accumulator = state.checkpoint.providers.first().expect("provider");
@@ -4160,7 +4138,10 @@ mod tests {
             .ingest_finalized_batch(all_sources_batch(provider_id))
             .expect("complete every source");
         let status = ready.status().expect("ready status");
-        assert_eq!(status.missing_sources, ReputationRequiredSourceMaskV1::EMPTY);
+        assert_eq!(
+            status.missing_sources,
+            ReputationRequiredSourceMaskV1::EMPTY
+        );
         let material = ready
             .unsigned_signing_material()
             .expect("all native source material is ready");

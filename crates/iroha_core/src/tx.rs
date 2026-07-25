@@ -8877,8 +8877,10 @@ pub mod tests {
         .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
         .sign(kp.private_key());
 
+        // Height one is the fee-exempt genesis bootstrap boundary. Exercise
+        // ordinary admission so the signed PipelineGas limit is mandatory.
         let header =
-            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut ivm_cache = IvmCache::new();
         let accepted = super::AcceptedTransaction::new_unchecked(Cow::Owned(tx));

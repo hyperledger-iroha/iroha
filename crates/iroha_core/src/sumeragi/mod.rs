@@ -2293,7 +2293,7 @@ fn fair_v2_ingress_required_quorum_certificate_bytes(roster_len: usize) -> Optio
         .checked_add(53)?
         .checked_add(5)?
         .checked_add(102)?
-        .checked_add(fair_v2_ingress_framed_bytes(172)?)?
+        .checked_add(fair_v2_ingress_framed_bytes(213)?)?
         .checked_add(fair_v2_ingress_framed_bytes(signer_vector_bytes)?)?
         .checked_add(fair_v2_ingress_framed_bytes(signature_vector_bytes)?)
 }
@@ -6970,7 +6970,7 @@ mod authoritative_runtime_gate_tests {
         let required_proposal =
             super::fair_v2_ingress_required_proposal_bytes(layout, wire::MAX_VALIDATORS_PER_HEIGHT);
         assert_eq!(
-            required_proposal, 239_378,
+            required_proposal, 244_667,
             "maximal proposal wire geometry is a regression boundary"
         );
         let proposal = v2_maximum_structural_proposal_wire(layout, wire::MAX_VALIDATORS_PER_HEIGHT);
@@ -7039,7 +7039,7 @@ mod authoritative_runtime_gate_tests {
         };
         let minimal_proposal_bytes =
             super::fair_v2_ingress_required_proposal_bytes(minimal_layout, 1);
-        assert_eq!(minimal_proposal_bytes, 2_408);
+        assert_eq!(minimal_proposal_bytes, 2_490);
         assert_eq!(
             encoded_v2_len(&v2_maximum_structural_proposal_wire(minimal_layout, 1)),
             minimal_proposal_bytes,

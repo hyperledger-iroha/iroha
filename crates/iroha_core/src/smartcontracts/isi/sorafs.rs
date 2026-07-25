@@ -3107,18 +3107,25 @@ const REPAIR_TICKET_STATE_KEY_DOMAIN_V1: &[u8] = b"sorafs.repair.ticket-state-ke
 const REPAIR_STATE_MAX_BYTES_V1: usize = 256 * 1024;
 const REPAIR_QUERY_MAX_TASK_STATE_READ_BYTES_V1: usize = 16 * 1024 * 1024;
 const REPAIR_QUERY_MAX_EVENT_STATE_READ_BYTES_V1: usize = 32 * 1024 * 1024;
+// Owned Norito decoding retains the bounded archive while materializing the
+// report's nested strings and evidence. Sixteen bytes of cumulative allocation
+// per encoded byte covers that finite object graph while keeping the allocation
+// corridor independently bounded by the canonical wire-size limit.
+const REPAIR_PAYLOAD_MAX_DECODE_ALLOCATION_BYTES_V1: usize =
+    16 * REPAIR_LEDGER_MAX_CANONICAL_PAYLOAD_BYTES_V1;
+const REPAIR_STATE_MAX_DECODE_ALLOCATION_BYTES_V1: usize = 16 * REPAIR_STATE_MAX_BYTES_V1;
 const REPAIR_STATE_LIMITS_V1: DecodeLimits = DecodeLimits::new(
-    512,
+    REPAIR_LEDGER_MAX_CANONICAL_PAYLOAD_BYTES_V1,
     REPAIR_STATE_MAX_BYTES_V1,
-    4_096,
-    2 * REPAIR_STATE_MAX_BYTES_V1,
+    REPAIR_STATE_MAX_BYTES_V1,
+    REPAIR_STATE_MAX_DECODE_ALLOCATION_BYTES_V1,
     64,
 );
 const REPAIR_PAYLOAD_LIMITS_V1: DecodeLimits = DecodeLimits::new(
     256,
     REPAIR_LEDGER_MAX_CANONICAL_PAYLOAD_BYTES_V1,
     2_048,
-    2 * REPAIR_LEDGER_MAX_CANONICAL_PAYLOAD_BYTES_V1,
+    REPAIR_PAYLOAD_MAX_DECODE_ALLOCATION_BYTES_V1,
     64,
 );
 
@@ -3252,6 +3259,36 @@ where
         return Err(invalid_parameter(format!(
             "{label} is not exact canonical Norito"
         )));
+    }
+    Ok(value)
+}
+
+fn decode_stored_repair_payload<T>(
+    bytes: &[u8],
+    label: &str,
+) -> Result<T, InstructionExecutionError>
+where
+    for<'de> T: norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
+{
+    if bytes.is_empty() || bytes.len() > REPAIR_LEDGER_MAX_CANONICAL_PAYLOAD_BYTES_V1 {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "{label} payload length {} is outside 1..={REPAIR_LEDGER_MAX_CANONICAL_PAYLOAD_BYTES_V1}",
+                bytes.len()
+            )
+            .into(),
+        ));
+    }
+    let value =
+        decode_from_bytes_with_limits::<T>(bytes, REPAIR_PAYLOAD_LIMITS_V1).map_err(|error| {
+            InstructionExecutionError::InvariantViolation(
+                format!("failed to decode {label}: {error}").into(),
+            )
+        })?;
+    if encode_repair_state(&value, label)? != bytes {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!("{label} is not exact canonical Norito").into(),
+        ));
     }
     Ok(value)
 }
@@ -3427,7 +3464,7 @@ fn validate_repair_task_record(
     ticket_id: &str,
 ) -> Result<(), InstructionExecutionError> {
     let report: RepairReportV1 =
-        decode_repair_state(&task.canonical_report, "stored repair report")?;
+        decode_stored_repair_payload(&task.canonical_report, "stored repair report")?;
     report.validate().map_err(|error| {
         InstructionExecutionError::InvariantViolation(
             format!("stored repair report is invalid: {error}").into(),
@@ -4555,7 +4592,7 @@ impl Execute for iroha_data_model::isi::sorafs::ApplySorafsRepairTaskAction {
                     invalid_parameter(format!("invalid repair slash proposal: {error}"))
                 })?;
                 let report: RepairReportV1 =
-                    decode_repair_state(&task.canonical_report, "stored repair report")?;
+                    decode_stored_repair_payload(&task.canonical_report, "stored repair report")?;
                 if proposal.ticket_id.0 != task.ticket_id
                     || proposal.provider_id != task.provider_id
                     || proposal.manifest_digest != task.manifest_digest
@@ -5378,12 +5415,11 @@ mod sorafs_tests {
                 ApplySorafsRepairTaskAction, ApprovePinManifest, BindManifestAlias,
                 CompleteReplicationOrder, ExpireReplicationOrder, IssueReplicationOrder,
                 RecordCapacityTelemetry, RegisterCapacityDeclaration, RegisterCapacityDispute,
-                RegisterPinManifest, RegisterProviderOwner, RetirePinManifest,
-                SetPricingSchedule, SetSorafsReputationJournalAuthorityPolicy,
-                SorafsRepairClaimV1, SorafsRepairCompleteV1, SorafsRepairEscalateV1,
-                SorafsRepairFailV1, SorafsRepairRenewV1, SorafsRepairTaskActionV1,
-                SubmitSorafsRepairAppeal, SubmitSorafsRepairTask, UnregisterProviderOwner,
-                UpsertProviderCredit,
+                RegisterPinManifest, RegisterProviderOwner, RetirePinManifest, SetPricingSchedule,
+                SetSorafsReputationJournalAuthorityPolicy, SorafsRepairClaimV1,
+                SorafsRepairCompleteV1, SorafsRepairEscalateV1, SorafsRepairFailV1,
+                SorafsRepairRenewV1, SorafsRepairTaskActionV1, SubmitSorafsRepairAppeal,
+                SubmitSorafsRepairTask, UnregisterProviderOwner, UpsertProviderCredit,
             },
         },
         metadata::Metadata,
@@ -5407,8 +5443,7 @@ mod sorafs_tests {
                 SECONDS_PER_BILLING_MONTH, TierRate,
             },
             reputation::{
-                REPUTATION_JOURNAL_AUTHORITY_POLICY_VERSION_V1,
-                ReputationJournalAuthorityPolicyV1,
+                REPUTATION_JOURNAL_AUTHORITY_POLICY_VERSION_V1, ReputationJournalAuthorityPolicyV1,
             },
         },
     };
@@ -13988,9 +14023,10 @@ mod sorafs_tests {
         let decode_error =
             decode_repair_payload::<RepairReportV1>(&first_rejected, "repair report")
                 .expect_err("first out-of-bound canonical report fails the native decoder");
+        let decode_message = smart_contract_error_message(&decode_error);
         assert!(
-            decode_error.to_string().contains("payload length"),
-            "unexpected boundary decode error: {decode_error}"
+            decode_message.contains("payload length"),
+            "unexpected boundary decode error: {decode_error:?}"
         );
 
         let error = transact_repair(&mut state, 1, 2_000_000, |transaction| {
@@ -13998,9 +14034,10 @@ mod sorafs_tests {
                 .execute(&authority, transaction)
         })
         .expect_err("oversized canonical report must not mutate repair state");
+        let error_message = smart_contract_error_message(&error);
         assert!(
-            error.to_string().contains("payload length"),
-            "unexpected oversized report error: {error}"
+            error_message.contains("payload length"),
+            "unexpected oversized report error: {error:?}"
         );
         {
             let view = state.view();

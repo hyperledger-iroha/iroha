@@ -17,6 +17,12 @@ The deferred authority-paid receipt-settlement spend lease and generic Verus
 effect-to-TLA scheduler-ownership/completion-rank proof are explicitly
 classified outside the multilane closure ledger.
 
+A fresh 49-case `iroha_core` regression sweep is green for the reported
+Native/retirement/consensus/recovery failures, including exact deterministic
+merge-carrier header admission and adjacent SoraFS repair decoding boundaries.
+This focused repair evidence does not replace the outstanding archived
+`G-UNIT`, real-network, soak, scale, or source-sealed final gates below.
+
 The remaining work is evidence-driven and must stay in order:
 
 - Finish `G-UNIT` with a fresh archived run of all 123 source-bound focused

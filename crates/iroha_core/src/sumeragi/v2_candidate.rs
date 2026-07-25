@@ -1727,7 +1727,9 @@ mod tests {
                 DataSpaceId::new(12),
                 Hash::new(b"candidate autonomous incarnation two"),
                 3,
-                2,
+                // The authenticated origin stays at view zero; later lane
+                // views require separate NewView evidence.
+                0,
                 &second_tx,
                 51,
             ),

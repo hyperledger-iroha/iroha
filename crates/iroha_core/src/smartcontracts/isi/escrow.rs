@@ -1931,11 +1931,7 @@ impl Execute for DrawdownAssetLock {
             return Err(validation_err("escrow not found"));
         };
         ensure_asset_lock(&record)?;
-        reject_native_orderbook_lock(
-            state_transaction.world(),
-            &self.escrow_id,
-            "drawn down",
-        )?;
+        reject_native_orderbook_lock(state_transaction.world(), &self.escrow_id, "drawn down")?;
         if record.status != AssetEscrowStatus::Locked {
             return Err(validation_err("only locked asset locks can be drawn down"));
         }
@@ -2001,11 +1997,7 @@ impl Execute for CancelAssetLock {
             return Err(validation_err("escrow not found"));
         };
         ensure_asset_lock(&record)?;
-        reject_native_orderbook_lock(
-            state_transaction.world(),
-            &self.escrow_id,
-            "cancelled",
-        )?;
+        reject_native_orderbook_lock(state_transaction.world(), &self.escrow_id, "cancelled")?;
         if record.status != AssetEscrowStatus::Locked {
             return Err(validation_err("only locked asset locks can be cancelled"));
         }
@@ -2050,11 +2042,7 @@ impl Execute for ExpireAssetLock {
             return Err(validation_err("escrow not found"));
         };
         ensure_asset_lock(&record)?;
-        reject_native_orderbook_lock(
-            state_transaction.world(),
-            &self.escrow_id,
-            "expired",
-        )?;
+        reject_native_orderbook_lock(state_transaction.world(), &self.escrow_id, "expired")?;
         if record.status != AssetEscrowStatus::Locked {
             return Err(validation_err("only locked asset locks can expire"));
         }
@@ -3239,8 +3227,7 @@ mod tests {
 
     #[test]
     fn every_public_escrow_creator_common_gate_rejects_both_orderbook_namespaces() {
-        let order_lock =
-            iroha_data_model::sorafs::orderbook::orderbook_order_escrow_id([0x41; 32]);
+        let order_lock = iroha_data_model::sorafs::orderbook::orderbook_order_escrow_id([0x41; 32]);
         let channel_lock =
             iroha_data_model::sorafs::orderbook::orderbook_settlement_escrow_id([0x42; 32]);
         for reserved in [order_lock, channel_lock] {
