@@ -16290,6 +16290,13 @@ impl Metrics {
         }
     }
 
+    fn lock_sorafs_gateway_compliance_exposition(&self) -> std::sync::MutexGuard<'_, ()> {
+        match self.sorafs_gateway_compliance_exposition_lock.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        }
+    }
+
     fn prune_recent_rejection_events(events: &mut VecDeque<(u64, u64)>, now_ms: u64) {
         let cutoff_ms = now_ms.saturating_sub(REJECTION_RECENT_WINDOW_MS);
         while matches!(events.front(), Some((timestamp_ms, _)) if *timestamp_ms < cutoff_ms) {
@@ -18855,6 +18862,7 @@ impl Metrics {
     /// - If the buffer produced by [`Encoder`] causes [`String::from_utf8`] to fail.
     pub fn try_to_string(&self) -> eyre::Result<String> {
         let _projection_exposition_guard = self.lock_sorafs_orderbook_projection_exposition();
+        let _compliance_exposition_guard = self.lock_sorafs_gateway_compliance_exposition();
         let mut buffer = Vec::new();
         let encoder = prometheus::TextEncoder::new();
         let metric_families = self.registry.gather();
@@ -18874,6 +18882,7 @@ impl Metrics {
         }
 
         let _projection_exposition_guard = self.lock_sorafs_orderbook_projection_exposition();
+        let _compliance_exposition_guard = self.lock_sorafs_gateway_compliance_exposition();
         let mut buffer = Vec::new();
         let encoder = prometheus::TextEncoder::new();
         let metric_families = self.registry.gather();
