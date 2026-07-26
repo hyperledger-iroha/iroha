@@ -705,4 +705,58 @@ mod tests {
         let c = proof_monomial(32, 7);
         assert_eq!(a.multiply(b.add(c)), a.multiply(b).add(a.multiply(c)));
     }
+
+    #[test]
+    fn centered_lifts_scaling_automorphism_and_monomials_are_exact() {
+        let application = ApplicationPolynomialV1::from_centered_coefficients(
+            core::array::from_fn(|index| {
+                if index == 0 {
+                    -1
+                } else if index == 63 {
+                    7
+                } else {
+                    0
+                }
+            }),
+        );
+        assert_eq!(application.centered_coefficient(0), -1);
+        assert_eq!(application.centered_coefficient(63), 7);
+        assert_eq!(application.automorphism().automorphism(), application);
+        assert_eq!(
+            application.scale_centered(-3),
+            application
+                .multiply(ApplicationPolynomialV1::constant(
+                    APPLICATION_MODULUS_V1 - 3
+                )
+                .expect("canonical"))
+        );
+
+        let proof = ProofPolynomialV1::from_application_centered(application);
+        assert_eq!(proof.centered_coefficient(0), -1);
+        assert_eq!(proof.centered_coefficient(63), 7);
+        assert_eq!(proof.automorphism().automorphism(), proof);
+        assert_eq!(
+            proof.scale_centered(-3),
+            proof
+                .multiply(ProofPolynomialV1::constant(PROOF_MODULUS_V1 - 3).expect("canonical"))
+        );
+        let x = proof_monomial(1, 1);
+        assert_eq!(
+            x.multiply_by_monomial(63),
+            ProofPolynomialV1::constant(PROOF_MODULUS_V1 - 1).expect("minus one")
+        );
+        assert_eq!(x.multiply_by_monomial(128), x);
+    }
+
+    #[test]
+    fn zeroize_erases_every_residue() {
+        let mut application =
+            ApplicationPolynomialV1::from_centered_coefficients([7; APPLICATION_RING_DEGREE_V1]);
+        let mut proof =
+            ProofPolynomialV1::from_centered_coefficients([-9; APPLICATION_RING_DEGREE_V1]);
+        application.zeroize();
+        proof.zeroize();
+        assert!(application.is_zero());
+        assert!(proof.is_zero());
+    }
 }

@@ -21,6 +21,8 @@ use super::{
 const MATRIX_DOMAIN_V1: &[u8] = b"iroha.privacy.bootle-lantern.matrix.v1";
 const PRESENTATION_CHALLENGE_DOMAIN_V1: &[u8] =
     b"iroha.privacy.bootle-lantern.presentation-challenge.v1";
+const PRESENTATION_STAGE_DOMAIN_V1: &[u8] =
+    b"iroha.privacy.bootle-lantern.presentation-stage.v1";
 const MAX_UNIFORM_REJECTION_ATTEMPTS_V1: u32 = 4_096;
 const APPLICATION_ACCEPTANCE_LIMIT_V1: u16 = 61_445;
 const PROOF_ACCEPTANCE_LIMIT_V1: u64 = 70_931_694_131_122_923;
@@ -424,6 +426,232 @@ impl PresentationChallengeBindingV1 {
     }
 }
 
+/// Complete public prefix shared by every presentation transcript stage.
+///
+/// The canonical statement digest binds chain id, action index, transaction
+/// intent, compiled profile, verifier, schema, manifest, issuer identity,
+/// policy identity, policy epoch, issuer parameters, the committed policy
+/// digest, and disclosures.  The extra relation digest commits the exact
+/// verifier-compiled matrix and public offset, while `matrix_seed` commits the
+/// transparent CRS seed used to expand all matrices.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PresentationTranscriptV1 {
+    binding: PresentationChallengeBindingV1,
+    matrix_seed: MatrixSeedV1,
+    relation_digest: [u8; 32],
+}
+
+impl PresentationTranscriptV1 {
+    /// Construct one fully bound presentation transcript.
+    ///
+    /// # Errors
+    ///
+    /// Rejects any zero digest or a matrix seed for another parameter
+    /// manifest.
+    pub fn new(
+        binding: PresentationChallengeBindingV1,
+        matrix_seed: MatrixSeedV1,
+        relation_digest: [u8; 32],
+    ) -> Result<Self, TranscriptErrorV1> {
+        binding.validate()?;
+        if relation_digest == [0; 32] {
+            return Err(TranscriptErrorV1::ZeroDigest {
+                field: "relation_digest",
+            });
+        }
+        if binding.parameter_digest != *matrix_seed.parameter_digest() {
+            return Err(TranscriptErrorV1::MatrixParameterBindingMismatch);
+        }
+        Ok(Self {
+            binding,
+            matrix_seed,
+            relation_digest,
+        })
+    }
+
+    /// Return the final challenge binding.
+    #[must_use]
+    pub const fn binding(&self) -> PresentationChallengeBindingV1 {
+        self.binding
+    }
+
+    /// Return the transparent matrix seed.
+    #[must_use]
+    pub const fn matrix_seed(&self) -> MatrixSeedV1 {
+        self.matrix_seed
+    }
+
+    /// Return the exact compiled-relation digest.
+    #[must_use]
+    pub const fn relation_digest(&self) -> [u8; 32] {
+        self.relation_digest
+    }
+
+    /// Derive arbitrary public stage bytes with strict field framing.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an empty stage tag or a field whose length cannot be encoded.
+    pub fn derive_bytes(
+        &self,
+        stage: &[u8],
+        components: &[&[u8]],
+        output: &mut [u8],
+    ) -> Result<(), TranscriptErrorV1> {
+        if stage.is_empty() {
+            return Err(TranscriptErrorV1::EmptyStageTag);
+        }
+        let mut state = Shake256::default();
+        absorb_frame_checked(&mut state, PRESENTATION_STAGE_DOMAIN_V1)?;
+        absorb_frame_checked(&mut state, stage)?;
+        absorb_frame_checked(&mut state, &self.binding.parameter_digest)?;
+        absorb_frame_checked(&mut state, &self.binding.statement_digest)?;
+        absorb_frame_checked(
+            &mut state,
+            &self.binding.issuer_policy_record_digest,
+        )?;
+        absorb_frame_checked(&mut state, &self.binding.transaction_intent_digest)?;
+        absorb_frame_checked(&mut state, self.matrix_seed.parameter_digest())?;
+        absorb_frame_checked(&mut state, self.matrix_seed.public_parameter_seed())?;
+        absorb_frame_checked(&mut state, &self.relation_digest)?;
+        let component_count =
+            u32::try_from(components.len()).map_err(|_| TranscriptErrorV1::FieldTooLarge)?;
+        absorb_frame_checked(&mut state, &component_count.to_be_bytes())?;
+        for component in components {
+            absorb_frame_checked(&mut state, component)?;
+        }
+        let mut reader = state.finalize_xof();
+        reader.read(output);
+        Ok(())
+    }
+
+    /// Derive one ternary projection row in `{-1,0,1}^columns`.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an empty row, an oversized coordinate, or transcript framing
+    /// failure.
+    pub fn derive_ternary_row(
+        &self,
+        stage: &[u8],
+        components: &[&[u8]],
+        row: u16,
+        columns: usize,
+    ) -> Result<Vec<i8>, TranscriptErrorV1> {
+        if columns == 0 {
+            return Err(TranscriptErrorV1::EmptyProjectionRow);
+        }
+        let columns_u32 =
+            u32::try_from(columns).map_err(|_| TranscriptErrorV1::FieldTooLarge)?;
+        let mut coordinate = [0_u8; 6];
+        coordinate[..2].copy_from_slice(&row.to_be_bytes());
+        coordinate[2..].copy_from_slice(&columns_u32.to_be_bytes());
+        let mut state = Shake256::default();
+        absorb_stage_prefix(self, &mut state, stage, components)?;
+        absorb_frame_checked(&mut state, &coordinate)?;
+        let mut reader = state.finalize_xof();
+        let mut output = Vec::with_capacity(columns);
+        while output.len() < columns {
+            let mut byte = [0_u8; 1];
+            reader.read(&mut byte);
+            if byte[0] < 255 {
+                output.push(i8::try_from(byte[0] % 3).expect("ternary residue fits i8") - 1);
+            }
+        }
+        Ok(output)
+    }
+
+    /// Derive uniform proof-ring polynomials.
+    ///
+    /// # Errors
+    ///
+    /// Returns transcript framing or bounded uniform-rejection failure.
+    pub fn derive_uniform_polynomials(
+        &self,
+        stage: &[u8],
+        components: &[&[u8]],
+        count: usize,
+    ) -> Result<Vec<ProofPolynomialV1>, TranscriptErrorV1> {
+        let count_u32 = u32::try_from(count).map_err(|_| TranscriptErrorV1::FieldTooLarge)?;
+        let mut state = Shake256::default();
+        absorb_stage_prefix(self, &mut state, stage, components)?;
+        absorb_frame_checked(&mut state, &count_u32.to_be_bytes())?;
+        let mut reader = state.finalize_xof();
+        let mut output = Vec::with_capacity(count);
+        for _ in 0..count {
+            let mut coefficients = [0_u64; APPLICATION_RING_DEGREE_V1];
+            for coefficient in &mut coefficients {
+                let mut accepted = None;
+                for _ in 0..MAX_UNIFORM_REJECTION_ATTEMPTS_V1 {
+                    let mut bytes = [0_u8; 7];
+                    reader.read(&mut bytes);
+                    let mut wide = [0_u8; 8];
+                    wide[1..].copy_from_slice(&bytes);
+                    let candidate = u64::from_be_bytes(wide);
+                    if candidate < PROOF_ACCEPTANCE_LIMIT_V1 {
+                        accepted = Some(candidate % PROOF_MODULUS_V1);
+                        break;
+                    }
+                }
+                *coefficient =
+                    accepted.ok_or(TranscriptErrorV1::UniformRejectionExhausted)?;
+            }
+            output.push(
+                ProofPolynomialV1::new(coefficients)
+                    .map_err(|_| TranscriptErrorV1::InternalInvariant)?,
+            );
+        }
+        Ok(output)
+    }
+
+    /// Derive the final auto-stable challenge from this complete prefix.
+    ///
+    /// # Errors
+    ///
+    /// Rejects empty commitments or framing failure.
+    pub fn derive_final_challenge(
+        &self,
+        pre_challenge_commitments: &[u8],
+    ) -> Result<ProofPolynomialV1, TranscriptErrorV1> {
+        if pre_challenge_commitments.is_empty() {
+            return Err(TranscriptErrorV1::EmptyPreChallengeCommitments);
+        }
+        let mut prefixed = Vec::with_capacity(32 * 3 + pre_challenge_commitments.len());
+        prefixed.extend_from_slice(self.matrix_seed.parameter_digest());
+        prefixed.extend_from_slice(self.matrix_seed.public_parameter_seed());
+        prefixed.extend_from_slice(&self.relation_digest);
+        prefixed.extend_from_slice(pre_challenge_commitments);
+        derive_presentation_challenge_v1(self.binding, &prefixed)
+    }
+}
+
+fn absorb_stage_prefix(
+    transcript: &PresentationTranscriptV1,
+    state: &mut Shake256,
+    stage: &[u8],
+    components: &[&[u8]],
+) -> Result<(), TranscriptErrorV1> {
+    if stage.is_empty() {
+        return Err(TranscriptErrorV1::EmptyStageTag);
+    }
+    absorb_frame_checked(state, PRESENTATION_STAGE_DOMAIN_V1)?;
+    absorb_frame_checked(state, stage)?;
+    absorb_frame_checked(state, &transcript.binding.parameter_digest)?;
+    absorb_frame_checked(state, &transcript.binding.statement_digest)?;
+    absorb_frame_checked(state, &transcript.binding.issuer_policy_record_digest)?;
+    absorb_frame_checked(state, &transcript.binding.transaction_intent_digest)?;
+    absorb_frame_checked(state, transcript.matrix_seed.parameter_digest())?;
+    absorb_frame_checked(state, transcript.matrix_seed.public_parameter_seed())?;
+    absorb_frame_checked(state, &transcript.relation_digest)?;
+    let component_count =
+        u32::try_from(components.len()).map_err(|_| TranscriptErrorV1::FieldTooLarge)?;
+    absorb_frame_checked(state, &component_count.to_be_bytes())?;
+    for component in components {
+        absorb_frame_checked(state, component)?;
+    }
+    Ok(())
+}
+
 /// Derive the unique auto-stable 64-coefficient challenge over the proof
 /// modulus from the exact public binding and pre-challenge commitment wire.
 ///
@@ -540,6 +768,15 @@ pub enum TranscriptErrorV1 {
     /// No pre-challenge commitment bytes were supplied.
     #[error("Bootle/Lantern pre-challenge commitment wire must not be empty")]
     EmptyPreChallengeCommitments,
+    /// A presentation stage tag was empty.
+    #[error("Bootle/Lantern presentation transcript stage tag must not be empty")]
+    EmptyStageTag,
+    /// A projection row requested zero columns.
+    #[error("Bootle/Lantern ternary projection row must not be empty")]
+    EmptyProjectionRow,
+    /// The matrix seed and challenge binding selected different parameters.
+    #[error("Bootle/Lantern matrix seed does not match the presentation parameter binding")]
+    MatrixParameterBindingMismatch,
     /// An internal canonicality invariant was violated.
     #[error("Bootle/Lantern internal transcript invariant failed")]
     InternalInvariant,
@@ -560,6 +797,11 @@ mod tests {
             issuer_policy_record_digest: [0x33; 32],
             transaction_intent_digest: [0x44; 32],
         }
+    }
+
+    fn presentation_transcript() -> PresentationTranscriptV1 {
+        PresentationTranscriptV1::new(binding(), seed(), [0x95; 32])
+            .expect("fully bound transcript")
     }
 
     #[test]
@@ -827,6 +1069,110 @@ mod tests {
                 1_125_899_906_843_220,
                 1_125_899_906_843_220,
             ]
+        );
+    }
+
+    #[test]
+    fn staged_transcript_is_framed_deterministic_and_fully_bound() {
+        let transcript = presentation_transcript();
+        let mut first = [0_u8; 64];
+        let mut second = [0_u8; 64];
+        transcript
+            .derive_bytes(b"stage-a", &[b"ab", b"c"], &mut first)
+            .expect("stage");
+        transcript
+            .derive_bytes(b"stage-a", &[b"ab", b"c"], &mut second)
+            .expect("stage");
+        assert_eq!(first, second);
+        transcript
+            .derive_bytes(b"stage-a", &[b"a", b"bc"], &mut second)
+            .expect("stage");
+        assert_ne!(first, second);
+        transcript
+            .derive_bytes(b"stage-b", &[b"ab", b"c"], &mut second)
+            .expect("stage");
+        assert_ne!(first, second);
+
+        let mut changed_binding = binding();
+        changed_binding.statement_digest[0] ^= 1;
+        let changed =
+            PresentationTranscriptV1::new(changed_binding, seed(), [0x95; 32]).expect("binding");
+        changed
+            .derive_bytes(b"stage-a", &[b"ab", b"c"], &mut second)
+            .expect("stage");
+        assert_ne!(first, second);
+
+        let changed = PresentationTranscriptV1::new(binding(), seed(), [0x94; 32])
+            .expect("relation binding");
+        changed
+            .derive_bytes(b"stage-a", &[b"ab", b"c"], &mut second)
+            .expect("stage");
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn staged_uniform_and_ternary_expansion_is_canonical_and_random_access() {
+        let transcript = presentation_transcript();
+        let first = transcript
+            .derive_ternary_row(b"projection", &[b"commitment"], 17, 1_024)
+            .expect("row");
+        let second = transcript
+            .derive_ternary_row(b"projection", &[b"commitment"], 17, 1_024)
+            .expect("row");
+        assert_eq!(first, second);
+        assert!(first.iter().all(|value| (-1..=1).contains(value)));
+        assert_ne!(
+            first,
+            transcript
+                .derive_ternary_row(b"projection", &[b"commitment"], 18, 1_024)
+                .expect("row")
+        );
+
+        let polynomials = transcript
+            .derive_uniform_polynomials(b"weights", &[b"commitment"], 9)
+            .expect("uniform polynomials");
+        assert_eq!(polynomials.len(), 9);
+        assert!(polynomials.iter().all(|polynomial| {
+            polynomial
+                .coefficients()
+                .iter()
+                .all(|coefficient| *coefficient < PROOF_MODULUS_V1)
+        }));
+        assert_eq!(
+            polynomials,
+            transcript
+                .derive_uniform_polynomials(b"weights", &[b"commitment"], 9)
+                .expect("uniform polynomials")
+        );
+    }
+
+    #[test]
+    fn staged_transcript_rejects_mismatched_or_empty_inputs() {
+        assert_eq!(
+            PresentationTranscriptV1::new(
+                binding(),
+                MatrixSeedV1::new([0x12; 32], [0x72; 32]).expect("seed"),
+                [0x95; 32]
+            ),
+            Err(TranscriptErrorV1::MatrixParameterBindingMismatch)
+        );
+        assert_eq!(
+            PresentationTranscriptV1::new(binding(), seed(), [0; 32]),
+            Err(TranscriptErrorV1::ZeroDigest {
+                field: "relation_digest"
+            })
+        );
+        assert_eq!(
+            presentation_transcript().derive_bytes(b"", &[], &mut [0_u8; 1]),
+            Err(TranscriptErrorV1::EmptyStageTag)
+        );
+        assert_eq!(
+            presentation_transcript().derive_ternary_row(b"r", &[], 0, 0),
+            Err(TranscriptErrorV1::EmptyProjectionRow)
+        );
+        assert_eq!(
+            presentation_transcript().derive_final_challenge(b""),
+            Err(TranscriptErrorV1::EmptyPreChallengeCommitments)
         );
     }
 }

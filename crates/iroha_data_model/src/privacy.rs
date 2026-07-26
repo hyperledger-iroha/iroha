@@ -4143,7 +4143,7 @@ pub const ZK_AMS_PHC_VERSION_V1: u8 = 1;
 /// canonical Norito encoding. The holder proves possession of the Ristretto
 /// seed secret over the same digest in the composed admission proof. No
 /// variable-length or free-form field is admitted by this first-release type.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
