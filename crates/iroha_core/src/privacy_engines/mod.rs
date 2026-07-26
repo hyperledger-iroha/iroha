@@ -6,4 +6,5 @@
 
 pub mod anonymous_pgc;
 pub mod p256;
+pub mod vega;
 pub mod verange;

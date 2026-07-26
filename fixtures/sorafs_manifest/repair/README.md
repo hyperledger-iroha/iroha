@@ -11,7 +11,7 @@ SF-11 reference validator.
 - `negative/task_provider_unassigned_v1.*` remains structurally valid but names
   a provider outside the replication order, producing `SFS-BND-003`.
 
-Regenerate both files with:
+Regenerate the complete fixture set with:
 
 ```sh
 cargo run --locked --offline -p sorafs_manifest --bin generate_por_fixtures

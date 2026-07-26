@@ -4,10 +4,10 @@ use iroha_schema::IntoSchema;
 use mv::json::JsonKeyCodec;
 use norito::codec::{Decode, Encode};
 
+use super::capacity::ProviderId;
 #[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{account::AccountId, asset::AssetDefinitionId, metadata::Metadata};
-use super::capacity::ProviderId;
 
 /// Exact byte length of a canonical first-release manifest root CID.
 pub const MANIFEST_ROOT_CID_LENGTH: usize = sorafs_manifest::MAX_MANIFEST_ROOT_CID_BYTES;

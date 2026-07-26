@@ -35,6 +35,7 @@ mod params;
 mod poly;
 pub mod poseidon;
 mod transcript;
+pub mod vega;
 
 // Re-exports for the default (Pallas) backend.
 #[cfg(feature = "goldilocks_backend")]

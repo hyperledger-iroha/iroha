@@ -1,3 +1,5 @@
+using System;
+using System.Collections.Generic;
 using Hyperledger.Iroha.Zk;
 
 namespace Hyperledger.Iroha.Sdk.Tests;
@@ -5,32 +7,15 @@ namespace Hyperledger.Iroha.Sdk.Tests;
 public sealed class VerifyingKeyBackendTagTests
 {
     [Fact]
-    public void NoritoDiscriminantsPreserveRustOrder()
+    public void NoritoDiscriminantsMatchRustOrderExactly()
     {
-        (VerifyingKeyBackendTag Tag, uint Discriminant)[] expected =
-        [
-            (VerifyingKeyBackendTag.Halo2IpaPasta, 0),
-            (VerifyingKeyBackendTag.Halo2Bn254, 1),
-            (VerifyingKeyBackendTag.Groth16, 2),
-            (VerifyingKeyBackendTag.Stark, 3),
-            (VerifyingKeyBackendTag.Unsupported, 4),
-            (VerifyingKeyBackendTag.Halo2IpaOrchard, 5),
-            (VerifyingKeyBackendTag.Groth16Bls12377, 6),
-            (VerifyingKeyBackendTag.FcmpPlusPlusCurveTree, 7),
-            (VerifyingKeyBackendTag.LatticePcsSis, 8),
-            (VerifyingKeyBackendTag.MidenStark, 9),
-            (VerifyingKeyBackendTag.AztecPlonkishPrivateKernel, 10),
-            (VerifyingKeyBackendTag.PqMaspStarkFri, 11),
-            (VerifyingKeyBackendTag.AnonymousPgc, 12),
-            (VerifyingKeyBackendTag.VeRange, 13),
-            (VerifyingKeyBackendTag.ZkAt, 14),
-            (VerifyingKeyBackendTag.RecursiveAnonymousAdmission, 15),
-            (VerifyingKeyBackendTag.VegaExistingCredentialZk, 16),
-            (VerifyingKeyBackendTag.SilentThresholdAnoncred, 17),
-            (VerifyingKeyBackendTag.ZkX509, 18),
-            (VerifyingKeyBackendTag.SisWithHints, 19),
-        ];
+        var expected = new[]
+        {
+            (VerifyingKeyBackendTag.Halo2IpaPasta, 0U),
+            (VerifyingKeyBackendTag.Stark, 1U),
+        };
 
+        Assert.Equal(expected.Length, Enum.GetValues<VerifyingKeyBackendTag>().Length);
         foreach (var (tag, discriminant) in expected)
         {
             Assert.Equal(discriminant, tag.NoritoDiscriminant());
@@ -40,302 +25,156 @@ public sealed class VerifyingKeyBackendTagTests
 
     [Theory]
     [InlineData(VerifyingKeyBackendTag.Halo2IpaPasta, "halo2-ipa-pasta")]
-    [InlineData(VerifyingKeyBackendTag.Halo2Bn254, "halo2-bn254")]
-    [InlineData(VerifyingKeyBackendTag.Groth16, "groth16")]
     [InlineData(VerifyingKeyBackendTag.Stark, "stark")]
-    [InlineData(VerifyingKeyBackendTag.Unsupported, "unsupported")]
-    [InlineData(VerifyingKeyBackendTag.Halo2IpaOrchard, "halo2-ipa-orchard")]
-    [InlineData(VerifyingKeyBackendTag.Groth16Bls12377, "groth16-bls12-377")]
-    [InlineData(VerifyingKeyBackendTag.FcmpPlusPlusCurveTree, "fcmp-plus-plus-curve-tree")]
-    [InlineData(VerifyingKeyBackendTag.LatticePcsSis, "lattice-pcs-sis")]
-    [InlineData(VerifyingKeyBackendTag.MidenStark, "miden-stark")]
-    [InlineData(VerifyingKeyBackendTag.AztecPlonkishPrivateKernel, "aztec-plonkish-private-kernel")]
-    [InlineData(VerifyingKeyBackendTag.PqMaspStarkFri, "pq-masp-stark-fri")]
-    [InlineData(VerifyingKeyBackendTag.AnonymousPgc, "anonymous-pgc")]
-    [InlineData(VerifyingKeyBackendTag.VeRange, "verange")]
-    [InlineData(VerifyingKeyBackendTag.ZkAt, "zkat")]
-    [InlineData(VerifyingKeyBackendTag.RecursiveAnonymousAdmission, "recursive-anonymous-admission")]
-    [InlineData(VerifyingKeyBackendTag.VegaExistingCredentialZk, "vega-existing-credential-zk")]
-    [InlineData(VerifyingKeyBackendTag.SilentThresholdAnoncred, "silent-threshold-anoncred")]
-    [InlineData(VerifyingKeyBackendTag.ZkX509, "zk-x509")]
-    [InlineData(VerifyingKeyBackendTag.SisWithHints, "sis-with-hints")]
-    public void CanonicalLabelsMatchRustCatalog(VerifyingKeyBackendTag tag, string label)
+    public void CanonicalLabelsRoundTripExactly(
+        VerifyingKeyBackendTag expected,
+        string label)
     {
-        Assert.Equal(label, tag.CanonicalLabel());
-    }
-
-    [Theory]
-    [InlineData("halo2-ipa-orchard", VerifyingKeyBackendTag.Halo2IpaOrchard)]
-    [InlineData("halo2/ipa/orchard", VerifyingKeyBackendTag.Halo2IpaOrchard)]
-    [InlineData("orchard", VerifyingKeyBackendTag.Halo2IpaOrchard)]
-    [InlineData("anonymous-pgc", VerifyingKeyBackendTag.AnonymousPgc)]
-    [InlineData("anonymous-pgc-k-out-of-n", VerifyingKeyBackendTag.AnonymousPgc)]
-    [InlineData("verange-transparent-range", VerifyingKeyBackendTag.VeRange)]
-    [InlineData("zkAt policy-private authenticator", VerifyingKeyBackendTag.ZkAt)]
-    [InlineData("recursive-anonymous-admission", VerifyingKeyBackendTag.RecursiveAnonymousAdmission)]
-    [InlineData("zk-ams-recursive-admission-v0", VerifyingKeyBackendTag.RecursiveAnonymousAdmission)]
-    [InlineData("vega-existing-credential-zk", VerifyingKeyBackendTag.VegaExistingCredentialZk)]
-    [InlineData("threshold-anonymous-credentials", VerifyingKeyBackendTag.SilentThresholdAnoncred)]
-    [InlineData("silent-threshold-anoncred", VerifyingKeyBackendTag.SilentThresholdAnoncred)]
-    [InlineData("zkvm-x509-identity", VerifyingKeyBackendTag.ZkX509)]
-    [InlineData("zk-x509-onchain-identity-v0", VerifyingKeyBackendTag.ZkX509)]
-    [InlineData("sis-with-hints", VerifyingKeyBackendTag.SisWithHints)]
-    [InlineData("lattice-anonymous-credentials", VerifyingKeyBackendTag.SisWithHints)]
-    [InlineData("groth16-bls12-377", VerifyingKeyBackendTag.Groth16Bls12377)]
-    [InlineData("groth16/bls12-377", VerifyingKeyBackendTag.Groth16Bls12377)]
-    [InlineData("penumbra-masp", VerifyingKeyBackendTag.Groth16Bls12377)]
-    [InlineData("halo2/ipa/penumbra", VerifyingKeyBackendTag.Groth16Bls12377)]
-    [InlineData("halo2/ipa/masp", VerifyingKeyBackendTag.Groth16Bls12377)]
-    [InlineData("monero-fcmp++", VerifyingKeyBackendTag.FcmpPlusPlusCurveTree)]
-    [InlineData("fcmp++", VerifyingKeyBackendTag.FcmpPlusPlusCurveTree)]
-    [InlineData("fcmp-plus-plus-curve-tree", VerifyingKeyBackendTag.FcmpPlusPlusCurveTree)]
-    [InlineData("halo2/ipa/monero", VerifyingKeyBackendTag.FcmpPlusPlusCurveTree)]
-    [InlineData("halo2/ipa/curve-tree", VerifyingKeyBackendTag.FcmpPlusPlusCurveTree)]
-    [InlineData("lattice-pcs-sis", VerifyingKeyBackendTag.LatticePcsSis)]
-    [InlineData("jindo-lattice-pcs-zk", VerifyingKeyBackendTag.LatticePcsSis)]
-    [InlineData("miden-stark", VerifyingKeyBackendTag.MidenStark)]
-    [InlineData("aztec-plonkish-private-kernel", VerifyingKeyBackendTag.AztecPlonkishPrivateKernel)]
-    [InlineData("pq-masp-stark-fri", VerifyingKeyBackendTag.PqMaspStarkFri)]
-    [InlineData("post-quantum-masp", VerifyingKeyBackendTag.PqMaspStarkFri)]
-    public void PendingProductionAliasesRemainFailClosed(string label, VerifyingKeyBackendTag expected)
-    {
-        var parsed = VerifyingKeyBackendTags.FromCatalogLabel(label);
-
+        Assert.Equal(label, expected.CanonicalLabel());
+        Assert.True(VerifyingKeyBackendTags.TryFromCanonicalLabel(label, out var parsed));
         Assert.Equal(expected, parsed);
-        Assert.True(parsed.IsPendingProductionBackend());
-        Assert.True(VerifyingKeyBackendTags.IsPendingProductionBackendLabel(label));
+        Assert.Equal(expected, VerifyingKeyBackendTags.FromCanonicalLabel(label));
+        Assert.Equal(label, VerifyingKeyBackendTags.RequireCanonicalLabel(label));
+    }
+
+    [Fact]
+    public void UnknownEnumValuesCannotAcquireAStringOrWireDiscriminant()
+    {
+        var unknown = (VerifyingKeyBackendTag)2U;
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => unknown.CanonicalLabel());
+        Assert.Throws<ArgumentOutOfRangeException>(() => unknown.NoritoDiscriminant());
     }
 
     [Theory]
-    [InlineData("halo2-ipa-pasta", VerifyingKeyBackendTag.Halo2IpaPasta)]
-    [InlineData("halo2/ipa", VerifyingKeyBackendTag.Halo2IpaPasta)]
-    [InlineData("halo2/pasta/ipa/vote-bool", VerifyingKeyBackendTag.Halo2IpaPasta)]
-    [InlineData("halo2-bn254", VerifyingKeyBackendTag.Halo2Bn254)]
-    [InlineData("halo2/bn254", VerifyingKeyBackendTag.Halo2Bn254)]
-    [InlineData("groth16", VerifyingKeyBackendTag.Groth16)]
-    [InlineData("groth16/bn254", VerifyingKeyBackendTag.Groth16)]
-    [InlineData("stark", VerifyingKeyBackendTag.Stark)]
-    [InlineData("stark/fri", VerifyingKeyBackendTag.Stark)]
-    [InlineData("stark/fri/sha256-goldilocks", VerifyingKeyBackendTag.Stark)]
-    [InlineData("stark/fri/poseidon2-goldilocks", VerifyingKeyBackendTag.Stark)]
-    [InlineData("stark/fri/sha256_goldilocks.v1", VerifyingKeyBackendTag.Stark)]
-    [InlineData("unknown/privacy/backend", VerifyingKeyBackendTag.Unsupported)]
-    public void SupportedLegacyFamiliesDoNotBecomePending(string label, VerifyingKeyBackendTag expected)
+    [MemberData(nameof(NonCanonicalLabels))]
+    public void NonCanonicalAndRetiredLabelsAreRejected(string? label)
     {
-        var parsed = VerifyingKeyBackendTags.FromCatalogLabel(label);
+        Assert.False(VerifyingKeyBackendTags.TryFromCanonicalLabel(label, out _));
 
-        Assert.Equal(expected, parsed);
-        Assert.False(parsed.IsPendingProductionBackend());
+        var parseError = Assert.Throws<ArgumentException>(
+            () => VerifyingKeyBackendTags.FromCanonicalLabel(label, "proofBackend"));
+        Assert.Equal("proofBackend", parseError.ParamName);
+
+        var requireError = Assert.Throws<ArgumentException>(
+            () => VerifyingKeyBackendTags.RequireCanonicalLabel(label, "proofBackend"));
+        Assert.Equal("proofBackend", requireError.ParamName);
     }
 
-    [Theory]
-    [InlineData(null)]
-    [InlineData("")]
-    [InlineData(" ")]
-    [InlineData("\t")]
-    public void CatalogAliasesMapNullAndBlankLabelsToUnsupported(string? label)
+    public static IEnumerable<object?[]> NonCanonicalLabels()
     {
-        var parsed = VerifyingKeyBackendTags.FromCatalogLabel(label);
+        string?[] labels =
+        [
+            null,
+            "",
+            " ",
+            "\t",
+            "\n",
+            " halo2-ipa-pasta",
+            "halo2-ipa-pasta ",
+            "HALO2-IPA-PASTA",
+            "Halo2-Ipa-Pasta",
+            "halo2/ipa",
+            "halo2/pasta",
+            "halo2/bn254",
+            "groth16",
+            "groth16/bls12-377",
+            "stark ",
+            "STARK",
+            "stark/fri",
+            "stark/fri/sha256-goldilocks",
+            "stark/fri/poseidon2-goldilocks",
+            "halo2-ipa-orchard",
+            "anonymous-pgc",
+            "verange",
+            "zkat",
+            "silent-threshold-anoncred",
+            "aztec-plonkish-private-kernel",
+            "penumbra-masp",
+            "unknown",
+            "stark\0",
+            "st\u0430rk",
+            "halo2\uFF0Fipa",
+            "stark\u200B",
+        ];
 
-        Assert.Equal(VerifyingKeyBackendTag.Unsupported, parsed);
-        Assert.False(VerifyingKeyBackendTags.IsPendingProductionBackendLabel(label));
-        Assert.False(VerifyingKeyBackendTags.IsProductionVerifyBackendLabel(label));
-    }
-
-    [Theory]
-    [InlineData("halo2\uFF0Fipa")]
-    [InlineData("halo2/\u200Bipa")]
-    [InlineData("h\u0430lo2/ipa")]
-    [InlineData("stark\uFF0Ffri/sha256-goldilocks")]
-    [InlineData("stark/fri/\u200Bsha256-goldilocks")]
-    [InlineData("st\u0430rk/fri/sha256-goldilocks")]
-    public void CatalogAliasesRejectNonAsciiConfusablesBeforeCompaction(string label)
-    {
-        var parsed = VerifyingKeyBackendTags.FromCatalogLabel(label);
-
-        Assert.Equal(VerifyingKeyBackendTag.Unsupported, parsed);
-        Assert.False(VerifyingKeyBackendTags.IsPendingProductionBackendLabel(label));
-    }
-
-    [Theory]
-    [InlineData("halo2/ipa/orchard/dev-fixture")]
-    [InlineData("stark/fri/miden/claimed-production")]
-    [InlineData("anonymous-pgc-k-out-of-n-v1-production")]
-    [InlineData("sis-hints-anoncred-pq-v0-devfixture")]
-    [InlineData("groth16/bls12-377/../../prod")]
-    [InlineData("post-quantum-masp/audit-claimed")]
-    [InlineData("halo2/ipa/orchard:kzg")]
-    [InlineData("orchard:universal-srs")]
-    [InlineData("penumbra-masp:kzg")]
-    [InlineData("jindo-lattice-pcs-zk:trusted-setup")]
-    [InlineData("miden-stark:ptau")]
-    [InlineData("sis-with-hints:groth16")]
-    [InlineData("pq-masp-stark-fri:kzg")]
-    public void AdversarialPendingAliasSplicesStayUnsupported(string label)
-    {
-        var parsed = VerifyingKeyBackendTags.FromCatalogLabel(label);
-
-        Assert.Equal(VerifyingKeyBackendTag.Unsupported, parsed);
-        Assert.False(parsed.IsPendingProductionBackend());
-        Assert.False(VerifyingKeyBackendTags.IsPendingProductionBackendLabel(label));
+        foreach (var label in labels)
+        {
+            yield return [label];
+        }
     }
 
     [Theory]
     [InlineData("halo2/ipa")]
-    [InlineData("halo2/ipa:ivm-execution-v1")]
-    [InlineData("halo2/pasta/ivm-execution-v1")]
     [InlineData("halo2/pasta/kaigi-roster-v1")]
+    [InlineData("halo2/pasta/kaigi-usage-v1")]
+    [InlineData("halo2/pasta/ivm-overlay-bind")]
+    [InlineData("halo2/pasta/ivm-execution-v1")]
     [InlineData("halo2/ipa-pasta-cycle-v1")]
     [InlineData("halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3")]
+    [InlineData("halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3")]
+    [InlineData("halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4")]
     [InlineData("stark/fri")]
     [InlineData("stark/fri/sha256-goldilocks")]
     [InlineData("stark/fri/poseidon2-goldilocks")]
     [InlineData("stark/fri/sha256_goldilocks.v1")]
-    public void ProductionVerifierBackendClassifierMirrorsNativeAllowlist(string backend)
+    public void VerifierRegistryAcceptsOnlyPinnedProfiles(string label)
     {
-        Assert.True(VerifyingKeyBackendTags.IsProductionVerifyBackendLabel(backend));
-        Assert.Equal(backend, VerifyingKeyBackendTags.RequireProductionVerifyBackendLabel(backend));
+        Assert.True(VerifierBackendRegistryLabels.IsSupportedLabel(label));
+        Assert.Equal(label, VerifierBackendRegistryLabels.RequireSupportedLabel(label));
     }
 
     [Theory]
-    [InlineData("")]
-    [InlineData("unknown/privacy/backend")]
-    [InlineData("halo2/unknown-native-v1")]
-    [InlineData("halo2/ipa:unknown-native-v1")]
-    [InlineData("stark/unknown-native-v1")]
-    [InlineData("halo2/bn254")]
-    [InlineData("groth16")]
-    [InlineData("groth16/bls12-377")]
-    [InlineData("HALO2/IPA")]
-    [InlineData("stark/FRI")]
-    [InlineData("halo2/ipa::ivm-execution-v1")]
-    [InlineData("halo2//ipa")]
-    [InlineData("halo2/ipa:")]
-    [InlineData("halo2/ipa.")]
-    [InlineData("halo2/ipa/.ivm-execution-v1")]
-    [InlineData("halo2/ipa:ivm..execution-v1")]
-    [InlineData("halo2/ipa/orchard")]
-    [InlineData("halo2-ipa-orchard")]
-    [InlineData("halo2/ipa/penumbra")]
-    [InlineData("halo2/ipa/masp")]
-    [InlineData("halo2/ipa/monero")]
-    [InlineData("halo2/ipa/curve-tree")]
-    [InlineData("halo2/pasta/tiny-add")]
-    [InlineData("halo2/ipa/tiny-add")]
-    [InlineData("halo2/ipa:tiny-add")]
-    [InlineData("halo2/pasta/tiny-commit-open")]
-    [InlineData("halo2/pasta/anon-transfer-2x2")]
-    [InlineData("halo2/ipa/anon-transfer-2x2")]
-    [InlineData("halo2/ipa:anon-transfer-2x2")]
-    [InlineData("halo2/pasta/anon-transfer-2x2-merkle2")]
-    [InlineData("halo2/ipa/anon-transfer-2x2-merkle8")]
-    [InlineData("halo2/ipa:anon-transfer-2x2-merkle16")]
-    [InlineData("halo2/pasta/vote-bool-commit")]
-    [InlineData("halo2/ipa/vote-bool-commit")]
-    [InlineData("halo2/ipa:vote-bool-commit")]
-    [InlineData("halo2/pasta/vote-bool-commit-merkle2")]
-    [InlineData("halo2/ipa/vote-bool-commit-merkle8")]
-    [InlineData("halo2/ipa:vote-bool-commit-merkle16")]
-    [InlineData("halo2/pasta/asset-hidden-transfer-public-test")]
-    [InlineData("halo2/ipa/asset-hidden-transfer-public-test")]
-    [InlineData("halo2/ipa:asset-hidden-transfer-public-test")]
-    [InlineData("stark/fri/miden")]
-    [InlineData("stark/fri/miden/claimed-production")]
-    [InlineData("stark/fri/latest")]
-    [InlineData("stark/fri/attestation")]
-    [InlineData("stark/fri/contest")]
-    [InlineData("stark/fri/random-profile")]
-    [InlineData("stark/fri/sha512-goldilocks")]
-    [InlineData("stark/fri/audit-proof-v1")]
-    [InlineData("stark/fri/sha256 goldilocks")]
-    [InlineData("stark/fri/sha256+goldilocks")]
-    [InlineData("halo2/ipa+mock")]
-    [InlineData("halo2/ipa:production-ready")]
-    [InlineData("halo2/ipa:claimed-production")]
-    [InlineData("halo2/ipa:mainnet-ready")]
-    [InlineData("halo2/ipa:release-ready")]
-    [InlineData("halo2/ipa:certified-mainnet")]
-    [InlineData("halo2/ipa:third-party-audited")]
-    [InlineData("halo2/ipa/orchard:production-ready")]
-    [InlineData("orchard:mainnet-ready")]
-    [InlineData("penumbra-masp:external-security-review")]
-    [InlineData("jindo-lattice-pcs-zk:release-ready")]
-    [InlineData("miden-stark:dev-fixture")]
-    [InlineData("sis-with-hints:s-e-c-u-r-i-t-y-a-u-d-i-t-e-d")]
-    [InlineData("halo2/ipa/orchard:kzg")]
-    [InlineData("orchard:universal-srs")]
-    [InlineData("penumbra-masp:kzg")]
-    [InlineData("jindo-lattice-pcs-zk:trusted-setup")]
-    [InlineData("miden-stark:ptau")]
-    [InlineData("sis-with-hints:groth16")]
-    [InlineData("pq-masp-stark-fri:kzg")]
-    [InlineData("stark/fri/audit-signoff")]
-    [InlineData("stark/fri/externally-audited")]
-    [InlineData("stark/fri/boi-audited")]
-    [InlineData("stark/fri/external-security-review")]
-    [InlineData("stark/fri/security-review-passed")]
-    [InlineData("stark/fri/S.e.c.u.r.i.t.yReviewPassed")]
-    [InlineData("stark/fri/s-e-c-u-r-i-t-y-a-u-d-i-t-e-d")]
-    [InlineData("stark/fri/a-u-d-i-t-c-l-a-i-m")]
-    [InlineData("stark/fri/dev-fixture")]
-    [InlineData("stark/fri/d-e-v-f-i-x-t-u-r-e")]
-    [InlineData("stark/fri/dev")]
-    [InlineData("stark/fri/d-e-v")]
-    [InlineData("stark/fri/test")]
-    [InlineData("stark/fri/t-e-s-t")]
-    [InlineData("stark/fri/todo")]
-    [InlineData("stark/fri/t-o-d-o")]
-    [InlineData("stark/fri/draft-only")]
-    [InlineData("stark/fri/d-r-a-f-t")]
-    [InlineData("stark/fri/pending-audit")]
-    [InlineData("stark/fri/replace-before-mainnet")]
-    [InlineData("stark/fri/not-production-ready")]
-    [InlineData("stark/fri/placeholder")]
-    [InlineData("halo2/ipa:dev-fixture")]
-    [InlineData("halo2/ipa:dev")]
-    [InlineData("halo2/ipa:d-e-v")]
-    [InlineData("halo2/ipa:todo-proof")]
-    [InlineData("halo2/ipa:t-o-d-o-proof")]
-    [InlineData("halo2/ipa:draft-proof")]
-    [InlineData("halo2/ipa:d-r-a-f-t-proof")]
-    [InlineData("halo2/ipa:pending-audit")]
-    [InlineData("halo2/ipa:replace-before-production")]
-    [InlineData("halo2/ipa:not-for-production")]
-    [InlineData("halo2/ipa:dummy")]
-    [InlineData("halo2/ipa:f-a-k-e")]
-    [InlineData("halo2/ipa:stub")]
-    [InlineData("halo2/ipa:s-a-m-p-l-e")]
-    [InlineData("halo2/kzg")]
-    [InlineData("halo2/pasta/mock")]
-    [InlineData("halo2/pasta/debug-vote")]
-    [InlineData("mock/dev")]
-    [InlineData("kzg/powersoftau")]
-    [InlineData("../halo2/ipa")]
-    [InlineData("halo2/ ipa")]
-    [InlineData("halo2/\u00A0ipa")]
-    [InlineData("stark/fri/sha256\tgoldilocks")]
-    [InlineData(" halo2/ipa")]
-    [InlineData("halo2/ipa ")]
-    [InlineData("\thalo2/ipa")]
-    [InlineData("halo2/ipa\n")]
-    [InlineData(" stark/fri/sha256-goldilocks")]
-    [InlineData("stark/fri/sha256-goldilocks ")]
-    [InlineData("halo2\uFF0Fipa")]
-    [InlineData("halo2/\u200Bipa")]
-    [InlineData("h\u0430lo2/ipa")]
-    [InlineData("halo2/ipa\0")]
-    public void ProductionVerifierBackendClassifierRejectsUnsafeLabels(string backend)
+    [MemberData(nameof(UnsupportedRegistryLabels))]
+    public void VerifierRegistryRejectsAliasesAndRetiredProfiles(string? label)
     {
-        Assert.False(VerifyingKeyBackendTags.IsProductionVerifyBackendLabel(backend));
+        Assert.False(VerifierBackendRegistryLabels.IsSupportedLabel(label));
         var error = Assert.Throws<ArgumentException>(
-            () => VerifyingKeyBackendTags.RequireProductionVerifyBackendLabel(backend));
-        var expected = backend.Trim().Length == 0
-            ? "must not be blank"
-            : backend.Trim() == backend
-                ? backend.Any(char.IsWhiteSpace)
-                    ? "must not contain whitespace"
-                    : "unsupported production verifier backend"
-                : "surrounding whitespace";
-        Assert.Contains(expected, error.Message);
+            () => VerifierBackendRegistryLabels.RequireSupportedLabel(
+                label,
+                "registryBackend"));
+        Assert.Equal("registryBackend", error.ParamName);
+    }
+
+    public static IEnumerable<object?[]> UnsupportedRegistryLabels()
+    {
+        string?[] labels =
+        [
+            null,
+            "",
+            " ",
+            " halo2/ipa",
+            "halo2/ipa ",
+            "HALO2/IPA",
+            "halo2-ipa-pasta",
+            "halo2/pasta",
+            "halo2/pasta/ipa/ivm-execution-v1",
+            "halo2/ipa:ivm-execution-v1",
+            "halo2/ipa::ivm-execution-v1",
+            "stark",
+            "STARK/FRI",
+            "stark/fri/",
+            "stark/fri/latest",
+            "stark/fri/sha512-goldilocks",
+            "halo2/bn254",
+            "groth16",
+            "groth16/bls12-377",
+            "halo2-ipa-orchard",
+            "anonymous-pgc",
+            "verange",
+            "zkat",
+            "silent-threshold-anoncred",
+            "aztec-plonkish-private-kernel",
+            "penumbra-masp",
+            "stark/fri/sha256-goldilocks\0",
+            "st\u0430rk/fri",
+            "stark\uFF0Ffri",
+            "stark/fri/\u200Bsha256-goldilocks",
+        ];
+
+        foreach (var label in labels)
+        {
+            yield return [label];
+        }
     }
 }

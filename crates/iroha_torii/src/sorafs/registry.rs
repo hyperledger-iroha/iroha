@@ -1641,29 +1641,25 @@ impl RegistryReplicationOrder {
                 ),
             });
         }
-        let order: ReplicationOrderV1 =
-            decode_from_bytes_with_limits(
-                &record.canonical_order,
-                REPLICATION_ORDER_DECODE_LIMITS_V1,
-            )
-            .map_err(|source| {
-                PinRegistryError::DecodeReplicationOrder {
-                    order_id_hex: order_id_hex.clone(),
-                    source,
-                }
-            })?;
-        order.validate().map_err(|error| {
-            PinRegistryError::InvalidReplicationOrder {
+        let order: ReplicationOrderV1 = decode_from_bytes_with_limits(
+            &record.canonical_order,
+            REPLICATION_ORDER_DECODE_LIMITS_V1,
+        )
+        .map_err(|source| PinRegistryError::DecodeReplicationOrder {
+            order_id_hex: order_id_hex.clone(),
+            source,
+        })?;
+        order
+            .validate()
+            .map_err(|error| PinRegistryError::InvalidReplicationOrder {
                 order_id_hex: order_id_hex.clone(),
                 reason: error.to_string(),
-            }
-        })?;
-        let canonical = to_bytes(&order).map_err(|error| {
-            PinRegistryError::InvalidReplicationOrder {
+            })?;
+        let canonical =
+            to_bytes(&order).map_err(|error| PinRegistryError::InvalidReplicationOrder {
                 order_id_hex: order_id_hex.clone(),
                 reason: format!("failed to re-encode payload: {error}"),
-            }
-        })?;
+            })?;
         if canonical != record.canonical_order
             || order.order_id != *record.order_id.as_bytes()
             || order.manifest_digest != *record.manifest_digest.as_bytes()
@@ -1933,10 +1929,7 @@ fn replication_order_to_json(order: &ReplicationOrderV1) -> Result<Value, json::
                 "provider_id_hex".into(),
                 Value::String(assignment.provider_id.encode_hex::<String>()),
             );
-            assignment_json.insert(
-                "slice_gib".into(),
-                json::to_value(&assignment.slice_gib)?,
-            );
+            assignment_json.insert("slice_gib".into(), json::to_value(&assignment.slice_gib)?);
             assignment_json.insert(
                 "lane".into(),
                 assignment
@@ -1965,10 +1958,7 @@ fn replication_order_to_json(order: &ReplicationOrderV1) -> Result<Value, json::
         json::to_value(&order.sla.min_por_success_percent_milli)?,
     );
     map.insert("sla".into(), Value::Object(sla));
-    map.insert(
-        "metadata".into(),
-        json::to_value(&order.metadata)?,
-    );
+    map.insert("metadata".into(), json::to_value(&order.metadata)?);
     Ok(Value::Object(map))
 }
 
@@ -1994,9 +1984,8 @@ mod tests {
             capacity::{CapacityDeclarationRecord, CapacityFeeLedgerEntry},
             pin_registry::{
                 ChunkerProfileHandle, ManifestAliasBinding, ManifestDigest, ManifestRootCid,
-                PinManifestRecord, PinPolicy, PinStatus, ReplicationOrderId,
-                ReplicationOrderCompletionRecord, ReplicationOrderRecord,
-                ReplicationOrderStatus, StorageClass,
+                PinManifestRecord, PinPolicy, PinStatus, ReplicationOrderCompletionRecord,
+                ReplicationOrderId, ReplicationOrderRecord, ReplicationOrderStatus, StorageClass,
             },
             pricing::ProviderCreditRecord,
         },

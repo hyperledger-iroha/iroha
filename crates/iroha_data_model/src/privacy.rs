@@ -19,6 +19,9 @@ pub const PRIVACY_ROOT_PUBLICATION_DIGEST_DOMAIN_V1: &[u8] = b"iroha:privacy:roo
 /// Domain separator used to hash canonical [`PrivacyPgcAccountBootstrapV1`] payloads.
 pub const PRIVACY_PGC_ACCOUNT_BOOTSTRAP_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha:privacy:pgc-account-bootstrap:v1";
+/// Domain separator used to hash canonical Anonymous PGC bootstrap proof bytes.
+pub const PRIVACY_PGC_BOOTSTRAP_PROOF_DIGEST_DOMAIN_V1: &[u8] =
+    b"iroha:privacy:pgc-bootstrap-proof:v1";
 /// Domain separator for core's deterministic PGC account-state root derivation.
 pub const PRIVACY_PGC_ACCOUNT_STATE_ROOT_DOMAIN_V1: &[u8] =
     b"iroha:privacy:pgc-account-state-root:v1";
@@ -29,6 +32,13 @@ pub const TAIRA_PRIVACY_MAX_ACTIONS_PER_TRANSACTION_V1: u32 = 1;
 pub const TAIRA_PRIVACY_MAX_ACTIONS_PER_BLOCK_V1: u32 = 2;
 /// Maximum proof payload bytes admitted for one Taira privacy action.
 pub const TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1: u32 = 8 * 1024 * 1024;
+/// Maximum canonical bytes admitted for one Anonymous PGC bootstrap proof.
+pub const TAIRA_PRIVACY_MAX_PGC_BOOTSTRAP_PROOF_BYTES_V1: u32 = 4 * 1024 * 1024;
+/// The only account-state epoch admitted for an Anonymous PGC bootstrap.
+///
+/// Successor proofs advance this epoch by exactly one. Keeping the origin
+/// fixed prevents governance or a caller from creating ambiguous histories.
+pub const PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1: u64 = 1;
 /// Maximum encoded bytes admitted for one Taira privacy action.
 pub const TAIRA_PRIVACY_MAX_ACTION_BYTES_V1: u32 = 8 * 1024 * 1024;
 /// Maximum privacy bytes admitted in one Taira transaction.
@@ -101,6 +111,58 @@ impl PrivacyProtocolIdV1 {
         Self::IrohaIvmPrivateNoteStarkV1,
         Self::PqMaspStarkV0,
     ];
+
+    /// Exact external identifier used by SDK catalogs, governance tooling, and
+    /// the BOI Privacy Lab.
+    ///
+    /// These labels are part of the first-release contract. Callers must not
+    /// trim, case-fold, normalize, or accept aliases for them.
+    #[must_use]
+    pub const fn canonical_label(self) -> &'static str {
+        match self {
+            Self::ZkAcePqAuthorizationV0 => "zk-ace-pq-authorization-v0",
+            Self::AnonymousPgcKOutOfNV1 => "anonymous-pgc-k-out-of-n-v1",
+            Self::VeRangeTransparentRangeV1 => "verange-transparent-range-v1",
+            Self::IrohaZkAmsV1 => "iroha-zk-ams-v1",
+            Self::VegaExistingCredentialZkV0 => "vega-existing-credential-zk-v0",
+            Self::IrohaZkX509StarkP256V0 => "iroha-zk-x509-stark-p256-v0",
+            Self::IrohaJindoPolynomialCommitmentV0 => {
+                "iroha-jindo-polynomial-commitment-v0"
+            }
+            Self::IrohaBootleGenisisAcStarkV0 => "iroha-bootle-genisis-ac-stark-v0",
+            Self::OrchardHalo2ActionsV1 => "orchard-halo2-actions-v1",
+            Self::MoneroFcmpPlusPlusV1 => "monero-fcmp-plus-plus-v1",
+            Self::IrohaIvmPrivateNoteStarkV1 => "iroha-ivm-private-note-stark-v1",
+            Self::PqMaspStarkV0 => "pq-masp-stark-v0",
+        }
+    }
+
+    /// Parse one exact first-release external identifier.
+    ///
+    /// Returns `None` for aliases, retired identifiers, and non-canonical
+    /// spellings.
+    #[must_use]
+    pub const fn from_canonical_label(label: &str) -> Option<Self> {
+        match label.as_bytes() {
+            b"zk-ace-pq-authorization-v0" => Some(Self::ZkAcePqAuthorizationV0),
+            b"anonymous-pgc-k-out-of-n-v1" => Some(Self::AnonymousPgcKOutOfNV1),
+            b"verange-transparent-range-v1" => Some(Self::VeRangeTransparentRangeV1),
+            b"iroha-zk-ams-v1" => Some(Self::IrohaZkAmsV1),
+            b"vega-existing-credential-zk-v0" => Some(Self::VegaExistingCredentialZkV0),
+            b"iroha-zk-x509-stark-p256-v0" => Some(Self::IrohaZkX509StarkP256V0),
+            b"iroha-jindo-polynomial-commitment-v0" => {
+                Some(Self::IrohaJindoPolynomialCommitmentV0)
+            }
+            b"iroha-bootle-genisis-ac-stark-v0" => {
+                Some(Self::IrohaBootleGenisisAcStarkV0)
+            }
+            b"orchard-halo2-actions-v1" => Some(Self::OrchardHalo2ActionsV1),
+            b"monero-fcmp-plus-plus-v1" => Some(Self::MoneroFcmpPlusPlusV1),
+            b"iroha-ivm-private-note-stark-v1" => Some(Self::IrohaIvmPrivateNoteStarkV1),
+            b"pq-masp-stark-v0" => Some(Self::PqMaspStarkV0),
+            _ => None,
+        }
+    }
 
     /// Exact proof system required by this protocol.
     #[must_use]
@@ -319,6 +381,10 @@ define_privacy_digest!(
     PrivacyPgcAccountBootstrapDigestV1
 );
 define_privacy_digest!(
+    /// Digest of exact canonical Anonymous PGC bootstrap proof bytes.
+    PrivacyPgcBootstrapProofDigestV1
+);
+define_privacy_digest!(
     /// Fixed identifier of a governed privacy parameter set.
     PrivacyParameterIdV1
 );
@@ -351,14 +417,6 @@ define_privacy_digest!(
     PrivacyIssuerIdV1
 );
 define_privacy_digest!(
-    /// Fixed identifier of a credential schema.
-    PrivacyCredentialSchemaIdV1
-);
-define_privacy_digest!(
-    /// Fixed identifier of a governed credential predicate.
-    PrivacyPredicateIdV1
-);
-define_privacy_digest!(
     /// Digest of one canonically encoded credential attribute.
     PrivacyAttributeDigestV1
 );
@@ -371,8 +429,8 @@ define_privacy_digest!(
     PrivacySessionTranscriptDigestV1
 );
 define_privacy_digest!(
-    /// Digest of an ISO 18013-5 mobile security object.
-    PrivacyMobileSecurityObjectDigestV1
+    /// Public SHA-256 device-authentication digest `H_dev` in Vega Figure 9.
+    PrivacyVegaDeviceAuthenticationDigestV1
 );
 define_privacy_digest!(
     /// Fixed cryptographic recipient identity used by an encrypted output.
@@ -592,21 +650,6 @@ pub struct PrivacyIssuerRegistryPolicyNamespaceV1 {
     pub policy_id: PrivacyPolicyIdV1,
 }
 
-/// Issuer, credential-schema, and predicate namespace payload.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-pub struct PrivacyIssuerSchemaPredicateNamespaceV1 {
-    /// Exact credential issuer.
-    pub issuer_id: PrivacyIssuerIdV1,
-    /// Exact credential schema.
-    pub schema_id: PrivacyCredentialSchemaIdV1,
-    /// Exact governed predicate.
-    pub predicate_id: PrivacyPredicateIdV1,
-}
-
 /// Trust-anchor and certificate-policy namespace payload.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -671,8 +714,6 @@ pub enum PrivacyNamespaceScopeV1 {
     Pool(PrivacyPoolNamespaceV1),
     /// Credential issuer, admitted-identity registry, and admission policy.
     IssuerRegistryPolicy(PrivacyIssuerRegistryPolicyNamespaceV1),
-    /// Existing-credential issuer, schema, and predicate.
-    IssuerSchemaPredicate(PrivacyIssuerSchemaPredicateNamespaceV1),
     /// Certificate trust anchor and certificate policy.
     TrustAnchorPolicy(PrivacyTrustAnchorPolicyNamespaceV1),
     /// Governed polynomial-commitment parameter set.
@@ -694,10 +735,6 @@ pub enum PrivacyNamespaceComponentV1 {
     Registry,
     /// Issuer or trust-anchor identifier.
     Issuer,
-    /// Credential schema identifier.
-    Schema,
-    /// Credential predicate identifier.
-    Predicate,
     /// Governed parameter-set identifier.
     Parameter,
     /// Private IVM program identifier.
@@ -756,13 +793,9 @@ impl PrivacyNamespaceV1 {
             ),
             PrivacyStatementV1::VegaExistingCredentialZkV0(statement) => Self::new(
                 PrivacyProtocolIdV1::VegaExistingCredentialZkV0,
-                PrivacyNamespaceScopeV1::IssuerSchemaPredicate(
-                    PrivacyIssuerSchemaPredicateNamespaceV1 {
-                        issuer_id: statement.issuer_id,
-                        schema_id: statement.schema_id,
-                        predicate_id: statement.predicate_id,
-                    },
-                ),
+                PrivacyNamespaceScopeV1::Parameter(PrivacyParameterNamespaceV1 {
+                    parameter_id: statement.context.parameter_id,
+                }),
             ),
             PrivacyStatementV1::IrohaZkX509StarkP256V0(statement) => Self::new(
                 PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
@@ -847,13 +880,11 @@ impl PrivacyNamespaceV1 {
                 PrivacyProtocolIdV1::IrohaZkAmsV1,
                 PrivacyNamespaceScopeV1::IssuerRegistryPolicy(_)
             ) | (
-                PrivacyProtocolIdV1::VegaExistingCredentialZkV0,
-                PrivacyNamespaceScopeV1::IssuerSchemaPredicate(_)
-            ) | (
                 PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
                 PrivacyNamespaceScopeV1::TrustAnchorPolicy(_)
             ) | (
-                PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0,
+                PrivacyProtocolIdV1::VegaExistingCredentialZkV0
+                    | PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0,
                 PrivacyNamespaceScopeV1::Parameter(_)
             ) | (
                 PrivacyProtocolIdV1::IrohaBootleGenisisAcStarkV0,
@@ -889,20 +920,6 @@ impl PrivacyNamespaceV1 {
                 validate_namespace_component(
                     !scope.policy_id.is_zero(),
                     PrivacyNamespaceComponentV1::Policy,
-                )
-            }
-            PrivacyNamespaceScopeV1::IssuerSchemaPredicate(scope) => {
-                validate_namespace_component(
-                    !scope.issuer_id.is_zero(),
-                    PrivacyNamespaceComponentV1::Issuer,
-                )?;
-                validate_namespace_component(
-                    !scope.schema_id.is_zero(),
-                    PrivacyNamespaceComponentV1::Schema,
-                )?;
-                validate_namespace_component(
-                    !scope.predicate_id.is_zero(),
-                    PrivacyNamespaceComponentV1::Predicate,
                 )
             }
             PrivacyNamespaceScopeV1::TrustAnchorPolicy(scope) => {
@@ -994,8 +1011,6 @@ pub enum PrivacyRootManagementV1 {
 pub enum PrivacyRootRoleV1 {
     /// Mutable encrypted PGC account table.
     PgcAccountState,
-    /// Credential issuer accumulator.
-    Issuer,
     /// ZK-AMS admitted identities, seed keys, and provisioning records.
     AccountRegistry,
     /// Credential revocation accumulator.
@@ -1022,8 +1037,7 @@ impl PrivacyRootRoleV1 {
             | Self::NoteCommitmentAnchor
             | Self::OutputSet
             | Self::ProgramState => PrivacyRootManagementV1::ProofManaged,
-            Self::Issuer
-            | Self::Revocation
+            Self::Revocation
             | Self::CertificateAuthorityMembership
             | Self::CertificateRevocationNonmembership => {
                 PrivacyRootManagementV1::GovernanceManaged
@@ -1040,10 +1054,6 @@ impl PrivacyRootRoleV1 {
                 PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
                 Self::PgcAccountState
             ) | (PrivacyProtocolIdV1::IrohaZkAmsV1, Self::AccountRegistry)
-                | (
-                    PrivacyProtocolIdV1::VegaExistingCredentialZkV0,
-                    Self::Issuer | Self::Revocation
-                )
                 | (
                     PrivacyProtocolIdV1::IrohaBootleGenisisAcStarkV0,
                     Self::Revocation
@@ -1197,6 +1207,108 @@ pub enum PrivacyPgcAccountPointV1 {
     EncryptedBalanceRight,
 }
 
+/// Exact canonical native proof for an Anonymous PGC account bootstrap.
+///
+/// This proof has a dedicated wire type and a tighter first-release bound than
+/// ordinary privacy actions. The native verifier must additionally perform an
+/// exact decode and require byte-for-byte canonical re-encoding before core
+/// derives [`PrivacyPgcBootstrapProofDigestV1`] for persisted provenance.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(transparent))]
+pub struct PrivacyPgcBootstrapProofBytesV1 {
+    /// Exact native proof encoding.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    pub bytes: Vec<u8>,
+}
+
+impl PrivacyPgcBootstrapProofBytesV1 {
+    /// Construct proof bytes for subsequent native validation.
+    #[must_use]
+    pub fn new(bytes: Vec<u8>) -> Self {
+        Self { bytes }
+    }
+
+    /// Borrow the exact proof bytes.
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// Validate presence, non-degeneracy, and the fixed Taira byte cap.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an empty, all-zero, unrepresentable, or oversized payload.
+    pub fn validate(&self) -> Result<(), PrivacyPgcBootstrapProofValidationError> {
+        if self.bytes.is_empty() {
+            return Err(PrivacyPgcBootstrapProofValidationError::Empty);
+        }
+        if self.bytes.iter().all(|byte| *byte == 0) {
+            return Err(PrivacyPgcBootstrapProofValidationError::AllZero);
+        }
+        let len = u64::try_from(self.bytes.len())
+            .map_err(|_| PrivacyPgcBootstrapProofValidationError::LengthOverflow)?;
+        if len > u64::from(TAIRA_PRIVACY_MAX_PGC_BOOTSTRAP_PROOF_BYTES_V1) {
+            return Err(PrivacyPgcBootstrapProofValidationError::TooLarge {
+                bytes: len,
+                max: TAIRA_PRIVACY_MAX_PGC_BOOTSTRAP_PROOF_BYTES_V1,
+            });
+        }
+        Ok(())
+    }
+
+    /// Derive the audit digest of these exact proof bytes.
+    ///
+    /// Callers admitting a proof must invoke this only after the native
+    /// verifier has performed exact decode and byte-for-byte canonical
+    /// re-encoding. The method repeats structural validation and never accepts
+    /// a caller-supplied digest.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same failures as [`Self::validate`].
+    pub fn digest(
+        &self,
+    ) -> Result<PrivacyPgcBootstrapProofDigestV1, PrivacyPgcBootstrapProofValidationError> {
+        self.validate()?;
+        let len = u64::try_from(self.bytes.len())
+            .map_err(|_| PrivacyPgcBootstrapProofValidationError::LengthOverflow)?;
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(PRIVACY_PGC_BOOTSTRAP_PROOF_DIGEST_DOMAIN_V1);
+        hasher.update(&len.to_le_bytes());
+        hasher.update(&self.bytes);
+        Ok(PrivacyPgcBootstrapProofDigestV1::new(
+            *hasher.finalize().as_bytes(),
+        ))
+    }
+}
+
+/// Structural failure for [`PrivacyPgcBootstrapProofBytesV1`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+pub enum PrivacyPgcBootstrapProofValidationError {
+    /// Proof payload is absent.
+    #[error("PGC bootstrap proof bytes must not be empty")]
+    Empty,
+    /// Proof payload is degenerate.
+    #[error("PGC bootstrap proof bytes must not be all zero")]
+    AllZero,
+    /// Proof payload exceeds the fixed first-release cap.
+    #[error("PGC bootstrap proof uses {bytes} bytes, exceeding maximum {max}")]
+    TooLarge {
+        /// Observed byte length.
+        bytes: u64,
+        /// Fixed maximum byte length.
+        max: u32,
+    },
+    /// Platform collection length cannot be represented canonically.
+    #[error("PGC bootstrap proof length exceeds u64")]
+    LengthOverflow,
+}
+
 /// Governed bootstrap payload for a complete PGC encrypted account table.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -1208,8 +1320,11 @@ pub struct PrivacyPgcAccountBootstrapV1 {
     pub namespace: PrivacyNamespaceV1,
     /// Declared root, which core must recompute from `accounts`.
     pub initial_root: PrivacyRootV1,
-    /// Initial nonzero account-state epoch.
+    /// Canonical initial account-state epoch (exactly
+    /// [`PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1`]).
     pub initial_epoch: u64,
+    /// Exact public aggregate supply encrypted across the initial accounts.
+    pub total_supply: u32,
     /// Complete account table in strict public-key order.
     pub accounts: Vec<PrivacyPgcAccountV1>,
 }
@@ -1237,8 +1352,15 @@ impl PrivacyPgcAccountBootstrapV1 {
         if self.initial_root.is_zero() {
             return Err(PrivacyPgcAccountBootstrapValidationError::ZeroRoot);
         }
-        if self.initial_epoch == 0 {
-            return Err(PrivacyPgcAccountBootstrapValidationError::ZeroEpoch);
+        if self.initial_epoch != PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1 {
+            return Err(
+                PrivacyPgcAccountBootstrapValidationError::NonCanonicalInitialEpoch {
+                    epoch: self.initial_epoch,
+                },
+            );
+        }
+        if self.total_supply == 0 {
+            return Err(PrivacyPgcAccountBootstrapValidationError::ZeroTotalSupply);
         }
         let account_count = u32::try_from(self.accounts.len())
             .map_err(|_| PrivacyPgcAccountBootstrapValidationError::AccountLengthOverflow)?;
@@ -1313,9 +1435,15 @@ pub enum PrivacyPgcAccountBootstrapValidationError {
     /// Declared initial root is zero.
     #[error("PGC bootstrap initial root must be non-zero")]
     ZeroRoot,
-    /// Declared initial epoch is zero.
-    #[error("PGC bootstrap initial epoch must be non-zero")]
-    ZeroEpoch,
+    /// Declared initial epoch differs from the closed first-release origin.
+    #[error("PGC bootstrap initial epoch must be 1, got {epoch}")]
+    NonCanonicalInitialEpoch {
+        /// Rejected caller-provided epoch.
+        epoch: u64,
+    },
+    /// Declared aggregate supply is zero.
+    #[error("PGC bootstrap total supply must be non-zero")]
+    ZeroTotalSupply,
     /// Account count is not one of the closed profile sizes.
     #[error("PGC bootstrap account count {count} is not one of 16, 32, or 64")]
     InvalidAccountCount {
@@ -2444,8 +2572,31 @@ pub const SIS_WITH_HINTS_ATTRIBUTE_COUNT_V1: u32 = 8;
 pub const SIS_WITH_HINTS_MAX_ATTRIBUTE_BYTES_V1: u32 = 1_024;
 /// Maximum selectively disclosed attributes in one SIS-with-hints statement.
 pub const SIS_WITH_HINTS_MAX_DISCLOSED_ATTRIBUTES_V1: u32 = 8;
-/// Maximum canonical ISO 18013-5 credential-document bytes admitted by Vega.
-pub const VEGA_MAX_CREDENTIAL_DOCUMENT_BYTES_V1: u32 = 1_920;
+/// Maximum decoded ISO 18013-5 MSO payload bytes admitted by Vega.
+///
+/// This is the 1,920-byte mDL profile evaluated in Figure 9 of the Vega paper.
+/// It is deliberately distinct from the COSE `Sig_structure` bytes hashed for
+/// issuer authentication.
+pub const VEGA_MDL_MAX_MSO_PAYLOAD_BYTES_V1: u32 = 1_920;
+/// Fixed SHA-256 compression-table width for the issuer-authenticated bytes.
+pub const VEGA_MDL_ISSUER_AUTH_SHA256_STEP_COUNT_V1: u8 = 32;
+/// Maximum canonical COSE `Sig_structure` bytes that fit the fixed table.
+///
+/// A 32-block SHA-256 table holds 2,048 bytes. Canonical SHA-256 padding needs
+/// at least nine bytes, so 2,039 is the exact maximum unpadded message length.
+pub const VEGA_MDL_MAX_ISSUER_AUTH_BYTES_V1: u32 = 2_039;
+/// Maximum canonical tagged `IssuerSignedItemBytes` for `birth_date`.
+pub const VEGA_MDL_MAX_BIRTH_DATE_ITEM_BYTES_V1: u32 = 256;
+/// Fixed SHA-256 compression-table width for the birth-date signed item.
+pub const VEGA_MDL_BIRTH_DATE_SHA256_STEP_COUNT_V1: u8 = 8;
+/// Lowest trusted UTC presentation year admitted by the first release.
+pub const VEGA_MDL_MIN_PRESENTATION_YEAR_V1: u16 = 1_970;
+/// Highest trusted UTC presentation year admitted by the first release.
+pub const VEGA_MDL_MAX_PRESENTATION_YEAR_V1: u16 = 9_999;
+/// Lowest non-degenerate public age threshold admitted by the first release.
+pub const VEGA_MDL_MIN_AGE_THRESHOLD_YEARS_V1: u8 = 1;
+/// Highest public age threshold admitted by the first release.
+pub const VEGA_MDL_MAX_AGE_THRESHOLD_YEARS_V1: u8 = 150;
 /// Maximum admitted X.509 chain depth, including the leaf certificate.
 pub const ZK_X509_MAX_CHAIN_DEPTH_V1: u8 = 3;
 /// Maximum DER bytes for one X.509 certificate.
@@ -2773,11 +2924,73 @@ pub struct IrohaZkAmsStatementV1 {
 )]
 #[cfg_attr(feature = "json", norito(tag = "document", content = "value"))]
 pub enum PrivacyCredentialDocumentTypeV1 {
-    /// ISO/IEC 18013-5 mobile driving licence document.
+    /// ISO/IEC 18013-5 `org.iso.18013.5.1.mDL` document.
     Iso18013_5Mdl,
 }
 
-/// Vega ISO 18013-5 mDL predicate statement.
+/// Closed ISO/IEC 18013-5 namespace admitted by the Vega mDL-age profile.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(tag = "namespace", content = "value"))]
+pub enum PrivacyVegaMdlNamespaceV1 {
+    /// The standard mDL namespace `org.iso.18013.5.1`.
+    OrgIso18013_5_1,
+}
+
+/// Closed digest algorithm used throughout the Vega mDL-age circuit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(tag = "digest", content = "value"))]
+pub enum PrivacyVegaMdlDigestAlgorithmV1 {
+    /// SHA-256 for issuer authentication, signed-item digests, and `H_dev`.
+    Sha256,
+}
+
+/// Closed COSE signature algorithm used by issuer and device authentication.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(tag = "signature", content = "value"))]
+pub enum PrivacyVegaMdlSignatureAlgorithmV1 {
+    /// COSE algorithm `-7`: ECDSA over P-256 with SHA-256 (`ES256`).
+    CoseSign1Es256,
+}
+
+/// Gregorian UTC calendar date used as Vega Figure 9 public input `(Y, M, D)`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct PrivacyVegaMdlDateV1 {
+    /// Four-digit UTC year.
+    pub year: u16,
+    /// One-based UTC month.
+    pub month: u8,
+    /// One-based UTC day of month.
+    pub day: u8,
+}
+
+/// Vega Figure 9 ISO/IEC 18013-5 mDL-age public statement.
+///
+/// The native circuit exposes only the paper's public inputs `Q_I`, `H_dev`,
+/// `(Y, M, D)`, and `tau`. The exact document bytes, decoded MSO payload,
+/// issuer and device signatures, device public key, validity interval,
+/// birth-date `IssuerSignedItemBytes`, and every lookup hint are private
+/// engine witness values.
+///
+/// `Q_I` being a public proof input establishes only that the hidden
+/// credential was authenticated by that key. Issuer accreditation is a
+/// downstream policy decision; this reusable proof component has no ledger
+/// effect.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -2786,42 +2999,37 @@ pub enum PrivacyCredentialDocumentTypeV1 {
 pub struct VegaExistingCredentialStatementV1 {
     /// Shared chain and governed-artifact binding.
     pub context: PrivacyStatementContextV1,
-    /// Credential issuer identifier.
-    pub issuer_id: PrivacyIssuerIdV1,
-    /// Exact credential schema identifier.
-    pub schema_id: PrivacyCredentialSchemaIdV1,
-    /// Exact supported credential document family.
+    /// Exact supported credential document family and `docType`.
     pub document_type: PrivacyCredentialDocumentTypeV1,
-    /// Governed predicate identifier.
-    pub predicate_id: PrivacyPredicateIdV1,
-    /// Wallet or identity commitment to which the showing is bound.
-    pub subject_binding: PrivacyCommitmentV1,
-    /// Canonical issuer credential root.
-    pub issuer_root: PrivacyRootV1,
-    /// Epoch at which the issuer root was canonical.
-    pub issuer_root_epoch: u64,
-    /// Canonical revocation accumulator root.
-    pub revocation_root: PrivacyRootV1,
-    /// Epoch at which the revocation root was canonical.
-    pub revocation_root_epoch: u64,
-    /// Digest of the issuer-authenticated mobile security object.
-    pub mobile_security_object_digest: PrivacyMobileSecurityObjectDigestV1,
-    /// Digest of the wallet device key bound by the mobile security object.
-    pub device_key_digest: PrivacyCertificateKeyDigestV1,
-    /// Reader challenge preventing presentation replay.
+    /// Exact namespace containing the `birth_date` signed item.
+    pub namespace: PrivacyVegaMdlNamespaceV1,
+    /// Exact digest algorithm constrained by the circuit.
+    pub digest_algorithm: PrivacyVegaMdlDigestAlgorithmV1,
+    /// Exact issuer COSE authentication algorithm constrained by the circuit.
+    pub issuer_authentication_algorithm: PrivacyVegaMdlSignatureAlgorithmV1,
+    /// Exact device COSE authentication algorithm constrained by the circuit.
+    pub device_authentication_algorithm: PrivacyVegaMdlSignatureAlgorithmV1,
+    /// Public P-256 issuer key `Q_I`.
+    pub issuer_public_key: PrivacyP256PointV1,
+    /// Public device-authentication digest `H_dev`.
+    ///
+    /// The native engine recomputes this value from the canonical consensus
+    /// frame containing chain, genesis, action, all governed artifact
+    /// bindings, `Q_I`, date, threshold, challenge, and session digest before
+    /// performing any proof verification.
+    pub device_authentication_digest: PrivacyVegaDeviceAuthenticationDigestV1,
+    /// Public trusted UTC presentation date `(Y, M, D)`.
+    ///
+    /// Admission additionally requires exact equality with the UTC date
+    /// derived from the canonical block timestamp.
+    pub presentation_date: PrivacyVegaMdlDateV1,
+    /// Public minimum age threshold `tau`, in completed Gregorian years.
+    pub minimum_age_years: u8,
+    /// Fresh reader challenge incorporated into the `H_dev` consensus frame.
     pub reader_challenge: PrivacyChallengeV1,
-    /// ISO 18013-5 session transcript digest.
+    /// Digest of the canonical ISO 18013-5 session transcript incorporated
+    /// into the `H_dev` consensus frame.
     pub session_transcript_digest: PrivacySessionTranscriptDigestV1,
-    /// Canonical credential-document byte length.
-    pub credential_document_bytes: u32,
-    /// Credential issuance time as Unix seconds.
-    pub issued_unix_seconds: u64,
-    /// Credential expiration time as Unix seconds, exclusive.
-    pub expires_unix_seconds: u64,
-    /// Predicate evaluation time as Unix seconds, bound to canonical block time.
-    pub presentation_unix_seconds: u64,
-    /// Unlinkable per-policy presentation nullifier.
-    pub presentation_nullifier: PrivacyNullifierV1,
 }
 
 /// X.509 key-usage bits admitted by the first-release certificate profile.
@@ -3686,30 +3894,12 @@ fn validate_zk_ams(
 fn validate_vega(
     statement: &VegaExistingCredentialStatementV1,
 ) -> Result<(), PrivacyStatementValidationError> {
-    require_nonzero_id(statement.issuer_id.is_zero(), PrivacyTypedFieldV1::IssuerId)?;
-    require_nonzero_id(statement.schema_id.is_zero(), PrivacyTypedFieldV1::SchemaId)?;
+    if statement.issuer_public_key.is_zero() {
+        return Err(PrivacyStatementValidationError::ZeroP256Point { index: 0 });
+    }
     require_nonzero_id(
-        statement.predicate_id.is_zero(),
-        PrivacyTypedFieldV1::PredicateId,
-    )?;
-    require_commitment(statement.subject_binding, 0)?;
-    require_nonzero_id(statement.issuer_root.is_zero(), PrivacyTypedFieldV1::Root)?;
-    require_epoch(statement.issuer_root_epoch, PrivacyEpochFieldV1::Issuer)?;
-    require_nonzero_id(
-        statement.revocation_root.is_zero(),
-        PrivacyTypedFieldV1::RevocationRoot,
-    )?;
-    require_epoch(
-        statement.revocation_root_epoch,
-        PrivacyEpochFieldV1::Revocation,
-    )?;
-    require_nonzero_id(
-        statement.mobile_security_object_digest.is_zero(),
-        PrivacyTypedFieldV1::MobileSecurityObjectDigest,
-    )?;
-    require_nonzero_id(
-        statement.device_key_digest.is_zero(),
-        PrivacyTypedFieldV1::CertificateKeyDigest,
+        statement.device_authentication_digest.is_zero(),
+        PrivacyTypedFieldV1::VegaDeviceAuthenticationDigest,
     )?;
     require_nonzero_id(
         statement.reader_challenge.is_zero(),
@@ -3719,22 +3909,63 @@ fn validate_vega(
         statement.session_transcript_digest.is_zero(),
         PrivacyTypedFieldV1::SessionTranscriptDigest,
     )?;
-    if statement.credential_document_bytes == 0
-        || statement.credential_document_bytes > VEGA_MAX_CREDENTIAL_DOCUMENT_BYTES_V1
+    validate_vega_presentation_date(statement.presentation_date)?;
+    if !(VEGA_MDL_MIN_AGE_THRESHOLD_YEARS_V1..=VEGA_MDL_MAX_AGE_THRESHOLD_YEARS_V1)
+        .contains(&statement.minimum_age_years)
+    {
+        return Err(PrivacyStatementValidationError::InvalidVegaAgeThreshold {
+            years: statement.minimum_age_years,
+            min: VEGA_MDL_MIN_AGE_THRESHOLD_YEARS_V1,
+            max: VEGA_MDL_MAX_AGE_THRESHOLD_YEARS_V1,
+        });
+    }
+    Ok(())
+}
+
+fn validate_vega_presentation_date(
+    date: PrivacyVegaMdlDateV1,
+) -> Result<(), PrivacyStatementValidationError> {
+    if !(VEGA_MDL_MIN_PRESENTATION_YEAR_V1..=VEGA_MDL_MAX_PRESENTATION_YEAR_V1).contains(&date.year)
     {
         return Err(
-            PrivacyStatementValidationError::InvalidVegaCredentialDocumentSize {
-                bytes: statement.credential_document_bytes,
-                max: VEGA_MAX_CREDENTIAL_DOCUMENT_BYTES_V1,
+            PrivacyStatementValidationError::InvalidVegaPresentationYear {
+                year: date.year,
+                min: VEGA_MDL_MIN_PRESENTATION_YEAR_V1,
+                max: VEGA_MDL_MAX_PRESENTATION_YEAR_V1,
             },
         );
     }
-    validate_validity_epochs(
-        statement.issued_unix_seconds,
-        statement.expires_unix_seconds,
-        statement.presentation_unix_seconds,
+    let max_day = vega_gregorian_days_in_month(date.year, date.month).ok_or(
+        PrivacyStatementValidationError::InvalidVegaPresentationDate {
+            year: date.year,
+            month: date.month,
+            day: date.day,
+        },
     )?;
-    require_nullifier(statement.presentation_nullifier, 0)
+    if date.day == 0 || date.day > max_day {
+        return Err(
+            PrivacyStatementValidationError::InvalidVegaPresentationDate {
+                year: date.year,
+                month: date.month,
+                day: date.day,
+            },
+        );
+    }
+    Ok(())
+}
+
+fn vega_gregorian_days_in_month(year: u16, month: u8) -> Option<u8> {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => Some(31),
+        4 | 6 | 9 | 11 => Some(30),
+        2 if vega_is_gregorian_leap_year(year) => Some(29),
+        2 => Some(28),
+        _ => None,
+    }
+}
+
+fn vega_is_gregorian_leap_year(year: u16) -> bool {
+    year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400))
 }
 
 fn validate_zk_x509(
@@ -3758,7 +3989,7 @@ fn validate_zk_x509(
     )?;
     require_epoch(
         statement.ca_membership_root_epoch,
-        PrivacyEpochFieldV1::Issuer,
+        PrivacyEpochFieldV1::CertificateAuthorityMembership,
     )?;
     require_nonzero_id(
         statement.crl_nonmembership_root.is_zero(),
@@ -4770,10 +5001,6 @@ pub enum PrivacyTypedFieldV1 {
     PolicyDigest,
     /// Credential issuer identifier.
     IssuerId,
-    /// Credential schema identifier.
-    SchemaId,
-    /// Credential predicate identifier.
-    PredicateId,
     /// Commitment or accumulator root.
     Root,
     /// Credential revocation root.
@@ -4784,8 +5011,8 @@ pub enum PrivacyTypedFieldV1 {
     IssuerParameterDigest,
     /// Certificate subject-key digest.
     CertificateKeyDigest,
-    /// ISO 18013-5 mobile security object digest.
-    MobileSecurityObjectDigest,
+    /// Public Vega Figure 9 device-authentication digest `H_dev`.
+    VegaDeviceAuthenticationDigest,
     /// ISO 18013-5 reader challenge.
     ReaderChallenge,
     /// ISO 18013-5 session transcript digest.
@@ -4809,8 +5036,8 @@ pub enum PrivacyTypedFieldV1 {
 pub enum PrivacyEpochFieldV1 {
     /// Commitment-root epoch.
     Root,
-    /// Issuer-state epoch.
-    Issuer,
+    /// X.509 certificate-authority membership epoch.
+    CertificateAuthorityMembership,
     /// Revocation-state epoch.
     Revocation,
     /// Authorization epoch.
@@ -5150,13 +5377,35 @@ pub enum PrivacyStatementValidationError {
         /// Presentation or validation epoch.
         current: u64,
     },
-    /// Vega credential-document byte length is zero or exceeds the profile.
-    #[error("Vega credential document size {bytes} is outside 1..={max}")]
-    InvalidVegaCredentialDocumentSize {
-        /// Observed canonical document bytes.
-        bytes: u32,
-        /// Approved maximum.
-        max: u32,
+    /// Vega public presentation year is outside the trusted UTC domain.
+    #[error("Vega presentation year {year} is outside {min}..={max}")]
+    InvalidVegaPresentationYear {
+        /// Observed public UTC year.
+        year: u16,
+        /// Lowest admitted UTC year.
+        min: u16,
+        /// Highest admitted UTC year.
+        max: u16,
+    },
+    /// Vega public presentation date is not a Gregorian calendar date.
+    #[error("Vega presentation date {year:04}-{month:02}-{day:02} is invalid")]
+    InvalidVegaPresentationDate {
+        /// Observed public UTC year.
+        year: u16,
+        /// Observed one-based UTC month.
+        month: u8,
+        /// Observed one-based UTC day.
+        day: u8,
+    },
+    /// Vega public minimum-age threshold is outside the closed policy domain.
+    #[error("Vega minimum-age threshold {years} is outside {min}..={max}")]
+    InvalidVegaAgeThreshold {
+        /// Observed threshold in completed years.
+        years: u8,
+        /// Lowest admitted threshold.
+        min: u8,
+        /// Highest admitted threshold.
+        max: u8,
     },
     /// X.509 key usage does not authorize a signature.
     #[error("X.509 statement requires the digitalSignature key-usage bit")]
@@ -5929,24 +6178,21 @@ mod tests {
             }),
             PrivacyStatementV1::VegaExistingCredentialZkV0(VegaExistingCredentialStatementV1 {
                 context: context(),
-                issuer_id: PrivacyIssuerIdV1::new(raw(50)),
-                schema_id: PrivacyCredentialSchemaIdV1::new(raw(51)),
                 document_type: PrivacyCredentialDocumentTypeV1::Iso18013_5Mdl,
-                predicate_id: PrivacyPredicateIdV1::new(raw(52)),
-                subject_binding: commitment(53),
-                issuer_root: PrivacyRootV1::new(raw(54)),
-                issuer_root_epoch: 9,
-                revocation_root: PrivacyRootV1::new(raw(55)),
-                revocation_root_epoch: 10,
-                mobile_security_object_digest: PrivacyMobileSecurityObjectDigestV1::new(raw(56)),
-                device_key_digest: PrivacyCertificateKeyDigestV1::new(raw(57)),
+                namespace: PrivacyVegaMdlNamespaceV1::OrgIso18013_5_1,
+                digest_algorithm: PrivacyVegaMdlDigestAlgorithmV1::Sha256,
+                issuer_authentication_algorithm: PrivacyVegaMdlSignatureAlgorithmV1::CoseSign1Es256,
+                device_authentication_algorithm: PrivacyVegaMdlSignatureAlgorithmV1::CoseSign1Es256,
+                issuer_public_key: p256_point(50),
+                device_authentication_digest: PrivacyVegaDeviceAuthenticationDigestV1::new(raw(57)),
+                presentation_date: PrivacyVegaMdlDateV1 {
+                    year: 2_026,
+                    month: 7,
+                    day: 26,
+                },
+                minimum_age_years: 18,
                 reader_challenge: PrivacyChallengeV1::new(raw(58)),
                 session_transcript_digest: PrivacySessionTranscriptDigestV1::new(raw(59)),
-                credential_document_bytes: 1_024,
-                issued_unix_seconds: 10,
-                expires_unix_seconds: 20,
-                presentation_unix_seconds: 15,
-                presentation_nullifier: nullifier(60),
             }),
             PrivacyStatementV1::IrohaZkX509StarkP256V0(IrohaZkX509StarkP256StatementV1 {
                 context: context(),
@@ -6113,6 +6359,7 @@ mod tests {
             namespace: PrivacyNamespaceV1::from_statement(&statement),
             initial_root: PrivacyRootV1::new(raw(201)),
             initial_epoch: 1,
+            total_supply: 160,
             accounts: pgc_accounts(16),
         }
     }
@@ -6372,6 +6619,100 @@ mod tests {
     }
 
     #[test]
+    fn protocol_ids_have_unique_exact_external_labels() {
+        let expected = [
+            (
+                PrivacyProtocolIdV1::ZkAcePqAuthorizationV0,
+                "zk-ace-pq-authorization-v0",
+            ),
+            (
+                PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
+                "anonymous-pgc-k-out-of-n-v1",
+            ),
+            (
+                PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
+                "verange-transparent-range-v1",
+            ),
+            (PrivacyProtocolIdV1::IrohaZkAmsV1, "iroha-zk-ams-v1"),
+            (
+                PrivacyProtocolIdV1::VegaExistingCredentialZkV0,
+                "vega-existing-credential-zk-v0",
+            ),
+            (
+                PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
+                "iroha-zk-x509-stark-p256-v0",
+            ),
+            (
+                PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0,
+                "iroha-jindo-polynomial-commitment-v0",
+            ),
+            (
+                PrivacyProtocolIdV1::IrohaBootleGenisisAcStarkV0,
+                "iroha-bootle-genisis-ac-stark-v0",
+            ),
+            (
+                PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
+                "orchard-halo2-actions-v1",
+            ),
+            (
+                PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1,
+                "monero-fcmp-plus-plus-v1",
+            ),
+            (
+                PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+                "iroha-ivm-private-note-stark-v1",
+            ),
+            (PrivacyProtocolIdV1::PqMaspStarkV0, "pq-masp-stark-v0"),
+        ];
+        assert_eq!(expected.len(), PrivacyProtocolIdV1::COUNT);
+
+        for (index, (protocol, label)) in expected.into_iter().enumerate() {
+            assert_eq!(PrivacyProtocolIdV1::ALL[index], protocol);
+            assert_eq!(protocol.canonical_label(), label);
+            assert_eq!(
+                PrivacyProtocolIdV1::from_canonical_label(label),
+                Some(protocol)
+            );
+            assert!(
+                PrivacyProtocolIdV1::ALL[..index]
+                    .iter()
+                    .all(|prior| prior.canonical_label() != label),
+                "duplicate privacy protocol label {label}"
+            );
+        }
+    }
+
+    #[test]
+    fn protocol_id_parser_rejects_aliases_retired_ids_and_noncanonical_text() {
+        for label in [
+            "",
+            " ",
+            " iroha-zk-ams-v1",
+            "iroha-zk-ams-v1 ",
+            "IROHA-ZK-AMS-V1",
+            "zk-ams-recursive-admission-v0",
+            "zk-x509-onchain-identity-v0",
+            "jindo-lattice-pcs-zk-v0",
+            "sis-hints-anoncred-pq-v0",
+            "miden-stark-note-v1",
+            "pq-masp-stark-fri-v1",
+            "zkat-policy-private-auth-v1",
+            "silent-threshold-anoncred-v0",
+            "penumbra-masp-v1",
+            "aztec-private-rollup-v1",
+            "iroha-zk-ams-v1\0",
+            "iroha-zk-\u{200b}ams-v1",
+            "iroha\u{ff0f}zk-ams-v1",
+            "iroh\u{0430}-zk-ams-v1",
+        ] {
+            assert!(
+                PrivacyProtocolIdV1::from_canonical_label(label).is_none(),
+                "non-canonical protocol label {label:?} must fail"
+            );
+        }
+    }
+
+    #[test]
     fn all_protocol_mappings_and_typed_variants_are_exact() {
         let statements = sample_statements();
         assert_eq!(statements.len(), PrivacyProtocolIdV1::COUNT);
@@ -6391,6 +6732,14 @@ mod tests {
         assert_eq!(
             PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0.expected_proof_system(),
             PrivacyProofSystemIdV1::JindoPolynomialCommitment
+        );
+        assert_eq!(
+            PrivacyProtocolIdV1::IrohaZkAmsV1.expected_proof_system(),
+            PrivacyProofSystemIdV1::ZkAmsTransparentStarkPoseidon2GoldilocksMlsagsRistretto255Sha3_512
+        );
+        assert_eq!(
+            PrivacyProtocolIdV1::IrohaZkAmsV1.expected_engine(),
+            PrivacyEngineIdV1::NativeZkAmsTransparentStarkMlsagsRistretto255
         );
     }
 
@@ -6420,9 +6769,14 @@ mod tests {
         check_type!(PrivacyNullifierV1, 7);
         check_type!(PrivacyCommitmentV1, 8);
         check_type!(PrivacyPoolIdV1, 9);
+        check_type!(PrivacyZkAmsRegistryIdV1, 10);
         check_type!(PrivacyPolicyIdV1, 10);
         check_type!(PrivacyRootV1, 11);
         check_type!(PrivacyChallengeV1, 12);
+        check_type!(PrivacyZkAmsPhcHashV1, 13);
+        check_type!(PrivacyZkAmsAccumulatedInstanceDigestV1, 14);
+        check_type!(PrivacyZkAmsPaddingCrossTermDigestV1, 15);
+        check_type!(PrivacyZkAmsFinalFoldedInstanceDigestV1, 16);
     }
 
     #[test]
@@ -6457,6 +6811,38 @@ mod tests {
     }
 
     #[test]
+    fn zk_ams_envelope_requires_the_proof_variant_for_its_exact_action() {
+        let limits = PrivacyConsensusLimitsV1::taira_default();
+
+        let batch_statement = statement_for(PrivacyProtocolIdV1::IrohaZkAmsV1);
+        let mut batch_envelope = envelope(batch_statement);
+        batch_envelope
+            .validate_with_limits(&limits)
+            .expect("batch STARK proof variant");
+        batch_envelope.proof =
+            PrivacyProofV1::IrohaZkAmsV1(IrohaZkAmsProofV1::Ristretto255MlsagsProvisionAccount(
+                PrivacyProofBytesV1::new(vec![1]),
+            ));
+        assert!(matches!(
+            batch_envelope.validate_with_limits(&limits),
+            Err(PrivacyProofEnvelopeValidationError::ZkAmsActionProofMismatch)
+        ));
+
+        let provision_statement = zk_ams_provision_statement(16);
+        let mut provision_envelope = envelope(provision_statement);
+        provision_envelope
+            .validate_with_limits(&limits)
+            .expect("provisioning MLSAGS proof variant");
+        provision_envelope.proof = PrivacyProofV1::IrohaZkAmsV1(
+            IrohaZkAmsProofV1::TransparentStarkBatchAdmission(PrivacyProofBytesV1::new(vec![1])),
+        );
+        assert!(matches!(
+            provision_envelope.validate_with_limits(&limits),
+            Err(PrivacyProofEnvelopeValidationError::ZkAmsActionProofMismatch)
+        ));
+    }
+
+    #[test]
     fn p256_wire_types_are_exact_width_and_closed() {
         let point = p256_point(9);
         let encoded = point.encode();
@@ -6478,6 +6864,29 @@ mod tests {
             assert!(
                 PrivacyVeRangeBitLengthV1::decode(&mut unknown.to_le_bytes().as_slice()).is_err()
             );
+        }
+    }
+
+    #[test]
+    fn zk_ams_ristretto_wire_types_and_action_tags_are_closed() {
+        let seed_key = zk_ams_seed_key(9);
+        let encoded = seed_key.encode();
+        assert_eq!(encoded.len(), 32);
+        assert_eq!(
+            PrivacyZkAmsSeedPublicKeyV1::decode(&mut encoded.as_slice())
+                .expect("decode exact seed key"),
+            seed_key
+        );
+        assert!(PrivacyZkAmsSeedPublicKeyV1::decode(&mut [9; 31].as_slice()).is_err());
+        assert!(PrivacyZkAmsSeedPublicKeyV1::decode(&mut [9; 33].as_slice()).is_err());
+
+        let key_image = PrivacyZkAmsKeyImageV1::new(raw(10));
+        assert_eq!(key_image.encode().len(), 32);
+        assert!(PrivacyZkAmsKeyImageV1::decode(&mut key_image.encode().as_slice()).is_ok());
+
+        for unknown in [2_u32, 3, u32::MAX] {
+            assert!(PrivacyZkAmsActionV1::decode(&mut unknown.to_le_bytes().as_slice()).is_err());
+            assert!(IrohaZkAmsProofV1::decode(&mut unknown.to_le_bytes().as_slice()).is_err());
         }
     }
 
@@ -6633,7 +7042,6 @@ mod tests {
             assert_eq!(role.management(), PrivacyRootManagementV1::ProofManaged);
         }
         for role in [
-            PrivacyRootRoleV1::Issuer,
             PrivacyRootRoleV1::Revocation,
             PrivacyRootRoleV1::CertificateAuthorityMembership,
             PrivacyRootRoleV1::CertificateRevocationNonmembership,
@@ -6673,7 +7081,7 @@ mod tests {
             Err(PrivacyRootPublicationValidationError::ZeroRoot)
         ));
         invalid = publication;
-        invalid.role = PrivacyRootRoleV1::Issuer;
+        invalid.role = PrivacyRootRoleV1::Revocation;
         assert!(matches!(
             invalid.validate(),
             Err(PrivacyRootPublicationValidationError::IncompatibleRole { .. })
@@ -6707,9 +7115,29 @@ mod tests {
         let mut invalid = bootstrap.clone();
         invalid.initial_root = PrivacyRootV1::new([0; 32]);
         assert!(invalid.validate().is_err());
+        for epoch in [0, 2, u64::MAX] {
+            invalid = bootstrap.clone();
+            invalid.initial_epoch = epoch;
+            assert!(matches!(
+                invalid.validate(),
+                Err(
+                    PrivacyPgcAccountBootstrapValidationError::NonCanonicalInitialEpoch {
+                        epoch: rejected,
+                    }
+                ) if rejected == epoch
+            ));
+        }
         invalid = bootstrap.clone();
-        invalid.initial_epoch = 0;
-        assert!(invalid.validate().is_err());
+        invalid.total_supply = 0;
+        assert!(matches!(
+            invalid.validate(),
+            Err(PrivacyPgcAccountBootstrapValidationError::ZeroTotalSupply)
+        ));
+        invalid = bootstrap.clone();
+        invalid.total_supply = u32::MAX;
+        invalid
+            .validate()
+            .expect("the inclusive u32 supply boundary is canonical");
         invalid = bootstrap.clone();
         invalid.accounts.pop();
         assert!(matches!(
@@ -6736,6 +7164,39 @@ mod tests {
                 point: PrivacyPgcAccountPointV1::EncryptedBalanceRight,
                 ..
             })
+        ));
+    }
+
+    #[test]
+    fn pgc_bootstrap_proof_bytes_enforce_exact_cap_and_distinct_digest() {
+        let max = usize::try_from(TAIRA_PRIVACY_MAX_PGC_BOOTSTRAP_PROOF_BYTES_V1)
+            .expect("compiled proof cap fits usize");
+        let at_cap = PrivacyPgcBootstrapProofBytesV1::new(vec![0xA5; max]);
+        at_cap.validate().expect("exact byte cap is admitted");
+        let digest = at_cap.digest().expect("digest proof at exact cap");
+        assert!(!digest.is_zero());
+
+        let mut changed = at_cap.clone();
+        changed.bytes[max - 1] ^= 1;
+        assert_ne!(
+            changed.digest().expect("digest changed proof"),
+            digest,
+            "proof provenance must distinguish a one-byte mutation"
+        );
+        assert!(matches!(
+            PrivacyPgcBootstrapProofBytesV1::new(Vec::new()).validate(),
+            Err(PrivacyPgcBootstrapProofValidationError::Empty)
+        ));
+        assert!(matches!(
+            PrivacyPgcBootstrapProofBytesV1::new(vec![0; 32]).validate(),
+            Err(PrivacyPgcBootstrapProofValidationError::AllZero)
+        ));
+        assert!(matches!(
+            PrivacyPgcBootstrapProofBytesV1::new(vec![1; max + 1]).validate(),
+            Err(PrivacyPgcBootstrapProofValidationError::TooLarge {
+                bytes,
+                max: TAIRA_PRIVACY_MAX_PGC_BOOTSTRAP_PROOF_BYTES_V1,
+            }) if bytes == u64::from(TAIRA_PRIVACY_MAX_PGC_BOOTSTRAP_PROOF_BYTES_V1) + 1
         ));
     }
 
@@ -6943,6 +7404,10 @@ mod tests {
                 max_batch_size: 0,
                 max_ring_size: ZK_AMS_MAX_RING_SIZE_V1,
             }),
+            PrivacyProtocolActivationLimitsV1::IrohaZkAmsV1(ZkAmsActivationLimitsV1 {
+                max_batch_size: ZK_AMS_MAX_BATCH_SIZE_V1,
+                max_ring_size: 15,
+            }),
             PrivacyProtocolActivationLimitsV1::IrohaJindoPolynomialCommitmentV0(
                 JindoActivationLimitsV1 {
                     max_polynomial_count: IROHA_JINDO_MAX_POLYNOMIALS_V1 + 1,
@@ -7026,29 +7491,14 @@ mod tests {
     #[test]
     fn zk_ams_provisioning_enforces_closed_canonical_ring_and_key_image() {
         let limits = PrivacyConsensusLimitsV1::taira_default();
-        let provision = |ring_size: u8| {
-            PrivacyStatementV1::IrohaZkAmsV1(IrohaZkAmsStatementV1 {
-                context: context(),
-                issuer_id: PrivacyIssuerIdV1::new(raw(40)),
-                registry_id: PrivacyZkAmsRegistryIdV1::new(raw(41)),
-                policy_id: PrivacyPolicyIdV1::new(raw(43)),
-                action: PrivacyZkAmsActionV1::ProvisionAccount(PrivacyZkAmsProvisionAccountV1 {
-                    account_registry_root: PrivacyRootV1::new(raw(144)),
-                    account_registry_root_epoch: 10,
-                    admitted_seed_key_ring: (1..=ring_size).map(zk_ams_seed_key).collect(),
-                    account_id: account(200),
-                    key_image: PrivacyZkAmsKeyImageV1::new(raw(201)),
-                }),
-            })
-        };
         for size in [16, 32, 64] {
-            provision(size)
+            zk_ams_provision_statement(size)
                 .validate(&limits)
                 .expect("closed ZK-AMS ring size");
         }
 
         let mutate = |f: fn(&mut PrivacyZkAmsProvisionAccountV1)| {
-            let mut value = provision(16);
+            let mut value = zk_ams_provision_statement(16);
             let PrivacyStatementV1::IrohaZkAmsV1(statement) = &mut value else {
                 unreachable!()
             };
@@ -7083,6 +7533,19 @@ mod tests {
         assert!(matches!(
             mutate(|provision| provision.key_image = PrivacyZkAmsKeyImageV1::new([0; 32])),
             Err(PrivacyStatementValidationError::ZeroZkAmsKeyImage)
+        ));
+
+        let governed = PrivacyProtocolActivationLimitsV1::IrohaZkAmsV1(ZkAmsActivationLimitsV1 {
+            max_batch_size: ZK_AMS_MAX_BATCH_SIZE_V1,
+            max_ring_size: 16,
+        });
+        assert!(matches!(
+            governed.validate_statement(&zk_ams_provision_statement(32)),
+            Err(PrivacyActivationStatementLimitsError::CountExceeds {
+                field: PrivacyActivationLimitFieldV1::ZkAmsRingSize,
+                count: 32,
+                max: 16
+            })
         ));
     }
 
@@ -7186,10 +7649,69 @@ mod tests {
                 }
             )
         ));
+
+        let base = statement_for(PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0);
+        let mutate = |f: fn(&mut IrohaJindoPolynomialCommitmentStatementV1)| {
+            let mut value = base.clone();
+            let PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(statement) = &mut value else {
+                unreachable!()
+            };
+            f(statement);
+            value.validate(&limits)
+        };
+        assert!(matches!(
+            mutate(|statement| statement.regime.multilinear_variable_count = 0),
+            Err(
+                PrivacyStatementValidationError::InvalidJindoMultilinearVariableCount {
+                    count: 0,
+                    ..
+                }
+            )
+        ));
+        assert!(matches!(
+            mutate(|statement| statement.regime.field_element_bytes = 0),
+            Err(PrivacyStatementValidationError::InvalidJindoFieldElementSize { bytes: 0, .. })
+        ));
+        assert!(matches!(
+            mutate(|statement| statement.regime.lattice_commitment_bytes = 0),
+            Err(
+                PrivacyStatementValidationError::InvalidJindoLatticeCommitmentSize {
+                    index: None,
+                    bytes: 0,
+                    ..
+                }
+            )
+        ));
+        assert!(matches!(
+            mutate(|statement| statement.evaluation_queries.clear()),
+            Err(PrivacyStatementValidationError::InvalidJindoEvaluationQueryCount { count: 0, .. })
+        ));
+        assert!(matches!(
+            mutate(|statement| {
+                statement.polynomial_commitments[1] = statement.polynomial_commitments[0].clone();
+            }),
+            Err(PrivacyStatementValidationError::DuplicateJindoLatticeCommitment)
+        ));
+
+        let governed = PrivacyProtocolActivationLimitsV1::IrohaJindoPolynomialCommitmentV0(
+            JindoActivationLimitsV1 {
+                max_polynomial_count: 1,
+                max_evaluation_query_count: 1,
+                max_multilinear_variable_count: 1,
+            },
+        );
+        assert!(matches!(
+            governed.validate_statement(&base),
+            Err(PrivacyActivationStatementLimitsError::CountExceeds {
+                field: PrivacyActivationLimitFieldV1::JindoPolynomialCount,
+                count: 2,
+                max: 1
+            })
+        ));
     }
 
     #[test]
-    fn credential_profiles_reject_stale_roots_invalid_time_and_oversized_documents() {
+    fn vega_figure9_public_inputs_are_closed_and_non_degenerate() {
         let limits = PrivacyConsensusLimitsV1::taira_default();
         let vega = statement_for(PrivacyProtocolIdV1::VegaExistingCredentialZkV0);
         let mutate_vega = |f: fn(&mut VegaExistingCredentialStatementV1)| {
@@ -7200,25 +7722,130 @@ mod tests {
             f(statement);
             value.validate(&limits)
         };
-        assert!(mutate_vega(|statement| statement.issuer_root_epoch = 0).is_err());
-        assert!(mutate_vega(|statement| statement.revocation_root_epoch = 0).is_err());
         assert!(matches!(
-            mutate_vega(|statement| statement.credential_document_bytes = 0),
-            Err(PrivacyStatementValidationError::InvalidVegaCredentialDocumentSize { .. })
+            mutate_vega(|statement| statement.issuer_public_key = PrivacyP256PointV1::new([0; 33])),
+            Err(PrivacyStatementValidationError::ZeroP256Point { index: 0 })
         ));
         assert!(matches!(
             mutate_vega(|statement| {
-                statement.credential_document_bytes = VEGA_MAX_CREDENTIAL_DOCUMENT_BYTES_V1 + 1
+                statement.device_authentication_digest =
+                    PrivacyVegaDeviceAuthenticationDigestV1::new([0; 32])
             }),
-            Err(PrivacyStatementValidationError::InvalidVegaCredentialDocumentSize { .. })
+            Err(PrivacyStatementValidationError::ZeroTypedField {
+                field: PrivacyTypedFieldV1::VegaDeviceAuthenticationDigest
+            })
         ));
         assert!(matches!(
             mutate_vega(|statement| {
-                statement.presentation_unix_seconds = statement.expires_unix_seconds
+                statement.reader_challenge = PrivacyChallengeV1::new([0; 32])
             }),
-            Err(PrivacyStatementValidationError::InvalidValidityWindow { .. })
+            Err(PrivacyStatementValidationError::ZeroTypedField {
+                field: PrivacyTypedFieldV1::ReaderChallenge
+            })
         ));
+        assert!(matches!(
+            mutate_vega(|statement| {
+                statement.session_transcript_digest = PrivacySessionTranscriptDigestV1::new([0; 32])
+            }),
+            Err(PrivacyStatementValidationError::ZeroTypedField {
+                field: PrivacyTypedFieldV1::SessionTranscriptDigest
+            })
+        ));
+        for years in [0, VEGA_MDL_MAX_AGE_THRESHOLD_YEARS_V1.saturating_add(1)] {
+            let mut value = vega.clone();
+            let PrivacyStatementV1::VegaExistingCredentialZkV0(statement) = &mut value else {
+                unreachable!()
+            };
+            statement.minimum_age_years = years;
+            assert!(matches!(
+                value.validate(&limits),
+                Err(PrivacyStatementValidationError::InvalidVegaAgeThreshold { .. })
+            ));
+        }
+        assert_eq!(
+            PrivacyNamespaceV1::from_statement(&vega).scope(),
+            PrivacyNamespaceScopeV1::Parameter(PrivacyParameterNamespaceV1 {
+                parameter_id: context().parameter_id
+            })
+        );
+    }
 
+    #[test]
+    fn vega_presentation_date_is_strict_proleptic_gregorian() {
+        let limits = PrivacyConsensusLimitsV1::taira_default();
+        let vega = statement_for(PrivacyProtocolIdV1::VegaExistingCredentialZkV0);
+        let mutate_date = |date: PrivacyVegaMdlDateV1| {
+            let mut value = vega.clone();
+            let PrivacyStatementV1::VegaExistingCredentialZkV0(statement) = &mut value else {
+                unreachable!()
+            };
+            statement.presentation_date = date;
+            value.validate(&limits)
+        };
+
+        for year in [
+            VEGA_MDL_MIN_PRESENTATION_YEAR_V1 - 1,
+            VEGA_MDL_MAX_PRESENTATION_YEAR_V1 + 1,
+        ] {
+            assert!(matches!(
+                mutate_date(PrivacyVegaMdlDateV1 {
+                    year,
+                    month: 1,
+                    day: 1
+                }),
+                Err(PrivacyStatementValidationError::InvalidVegaPresentationYear { .. })
+            ));
+        }
+        for date in [
+            PrivacyVegaMdlDateV1 {
+                year: 2_026,
+                month: 0,
+                day: 1,
+            },
+            PrivacyVegaMdlDateV1 {
+                year: 2_026,
+                month: 13,
+                day: 1,
+            },
+            PrivacyVegaMdlDateV1 {
+                year: 2_026,
+                month: 4,
+                day: 31,
+            },
+            PrivacyVegaMdlDateV1 {
+                year: 2_026,
+                month: 2,
+                day: 29,
+            },
+            PrivacyVegaMdlDateV1 {
+                year: 2_000,
+                month: 2,
+                day: 30,
+            },
+            PrivacyVegaMdlDateV1 {
+                year: 2_026,
+                month: 1,
+                day: 0,
+            },
+        ] {
+            assert!(matches!(
+                mutate_date(date),
+                Err(PrivacyStatementValidationError::InvalidVegaPresentationDate { .. })
+            ));
+        }
+        assert!(
+            mutate_date(PrivacyVegaMdlDateV1 {
+                year: 2_000,
+                month: 2,
+                day: 29,
+            })
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn x509_rejects_stale_roots_invalid_usage_and_invalid_chain_sizes() {
+        let limits = PrivacyConsensusLimitsV1::taira_default();
         let x509 = statement_for(PrivacyProtocolIdV1::IrohaZkX509StarkP256V0);
         let mutate_x509 = |f: fn(&mut IrohaZkX509StarkP256StatementV1)| {
             let mut value = x509.clone();

@@ -639,6 +639,7 @@ macro_rules! build_world_block {
             runtime_upgrades: $state.runtime_upgrades.$method(),
             privacy_activations: $state.privacy_activations.$method(),
             privacy_pgc_accounts: $state.privacy_pgc_accounts.$method(),
+            privacy_pgc_pool_invariants: $state.privacy_pgc_pool_invariants.$method(),
             privacy_nullifiers: $state.privacy_nullifiers.$method(),
             privacy_commitments: $state.privacy_commitments.$method(),
             privacy_roots: $state.privacy_roots.$method(),
@@ -876,6 +877,7 @@ macro_rules! build_world_transaction {
             runtime_upgrades: $state.runtime_upgrades.transaction(),
             privacy_activations: $state.privacy_activations.transaction(),
             privacy_pgc_accounts: $state.privacy_pgc_accounts.transaction(),
+            privacy_pgc_pool_invariants: $state.privacy_pgc_pool_invariants.transaction(),
             privacy_nullifiers: $state.privacy_nullifiers.transaction(),
             privacy_commitments: $state.privacy_commitments.transaction(),
             privacy_roots: $state.privacy_roots.transaction(),
@@ -3847,6 +3849,11 @@ pub struct World {
         crate::privacy_state::PrivacyPgcAccountKeyV1,
         crate::privacy_state::PrivacyPgcAccountStateV1,
     >,
+    /// Immutable verified supply and audit binding for each Anonymous PGC pool.
+    pub(crate) privacy_pgc_pool_invariants: Storage<
+        crate::privacy_state::PrivacyPgcPoolInvariantKeyV1,
+        crate::privacy_state::PrivacyPgcPoolInvariantV1,
+    >,
     /// Scoped consumed nullifiers used for deterministic replay prevention.
     pub(crate) privacy_nullifiers: Storage<
         crate::privacy_state::PrivacyNullifierKeyV1,
@@ -4421,6 +4428,12 @@ pub struct WorldBlock<'world> {
         crate::privacy_state::PrivacyPgcAccountKeyV1,
         crate::privacy_state::PrivacyPgcAccountStateV1,
     >,
+    /// Immutable verified supply and audit binding for each Anonymous PGC pool.
+    pub(crate) privacy_pgc_pool_invariants: StorageBlock<
+        'world,
+        crate::privacy_state::PrivacyPgcPoolInvariantKeyV1,
+        crate::privacy_state::PrivacyPgcPoolInvariantV1,
+    >,
     /// Scoped consumed nullifiers used for deterministic replay prevention.
     pub(crate) privacy_nullifiers: StorageBlock<
         'world,
@@ -4821,6 +4834,7 @@ impl<'world> WorldBlock<'world> {
         collect_reverts!(self.runtime_upgrades, RuntimeUpgrade);
         collect_reverts!(self.privacy_activations, PrivacyActivation);
         collect_reverts!(self.privacy_pgc_accounts, PrivacyPgcAccount);
+        collect_reverts!(self.privacy_pgc_pool_invariants, PrivacyPgcPoolInvariant);
         collect_reverts!(self.privacy_nullifiers, PrivacyNullifier);
         collect_reverts!(self.privacy_commitments, PrivacyCommitment);
         collect_reverts!(self.privacy_roots, PrivacyRoot);
@@ -4901,6 +4915,7 @@ impl<'world> WorldBlock<'world> {
         collect_payload!(self.runtime_upgrades, RuntimeUpgrade);
         collect_payload!(self.privacy_activations, PrivacyActivation);
         collect_payload!(self.privacy_pgc_accounts, PrivacyPgcAccount);
+        collect_payload!(self.privacy_pgc_pool_invariants, PrivacyPgcPoolInvariant);
         collect_payload!(self.privacy_nullifiers, PrivacyNullifier);
         collect_payload!(self.privacy_commitments, PrivacyCommitment);
         collect_payload!(self.privacy_roots, PrivacyRoot);
@@ -5063,6 +5078,7 @@ impl<'world> WorldBlock<'world> {
             runtime_upgrades,
             privacy_activations,
             privacy_pgc_accounts,
+            privacy_pgc_pool_invariants,
             privacy_nullifiers,
             privacy_commitments,
             privacy_roots,
@@ -5470,6 +5486,13 @@ pub struct WorldTransaction<'block, 'world> {
         'world,
         crate::privacy_state::PrivacyPgcAccountKeyV1,
         crate::privacy_state::PrivacyPgcAccountStateV1,
+    >,
+    /// Immutable verified supply and audit binding for each Anonymous PGC pool.
+    pub(crate) privacy_pgc_pool_invariants: StorageTransaction<
+        'block,
+        'world,
+        crate::privacy_state::PrivacyPgcPoolInvariantKeyV1,
+        crate::privacy_state::PrivacyPgcPoolInvariantV1,
     >,
     /// Scoped consumed nullifiers used for deterministic replay prevention.
     pub(crate) privacy_nullifiers: StorageTransaction<
@@ -7073,6 +7096,12 @@ pub struct WorldView<'world> {
         'world,
         crate::privacy_state::PrivacyPgcAccountKeyV1,
         crate::privacy_state::PrivacyPgcAccountStateV1,
+    >,
+    /// Immutable verified supply and audit binding for each Anonymous PGC pool.
+    pub(crate) privacy_pgc_pool_invariants: StorageView<
+        'world,
+        crate::privacy_state::PrivacyPgcPoolInvariantKeyV1,
+        crate::privacy_state::PrivacyPgcPoolInvariantV1,
     >,
     /// Scoped consumed nullifiers used for deterministic replay prevention.
     pub(crate) privacy_nullifiers: StorageView<
@@ -19060,6 +19089,7 @@ impl World {
             runtime_upgrades: self.runtime_upgrades.view(),
             privacy_activations: self.privacy_activations.view(),
             privacy_pgc_accounts: self.privacy_pgc_accounts.view(),
+            privacy_pgc_pool_invariants: self.privacy_pgc_pool_invariants.view(),
             privacy_nullifiers: self.privacy_nullifiers.view(),
             privacy_commitments: self.privacy_commitments.view(),
             privacy_roots: self.privacy_roots.view(),
@@ -21848,6 +21878,7 @@ impl<'world> WorldBlock<'world> {
             runtime_upgrades,
             privacy_activations,
             privacy_pgc_accounts,
+            privacy_pgc_pool_invariants,
             privacy_nullifiers,
             privacy_commitments,
             privacy_roots,
@@ -21965,6 +21996,7 @@ impl<'world> WorldBlock<'world> {
         runtime_upgrades.commit();
         privacy_activations.commit();
         privacy_pgc_accounts.commit();
+        privacy_pgc_pool_invariants.commit();
         privacy_nullifiers.commit();
         privacy_commitments.commit();
         privacy_roots.commit();
@@ -23236,6 +23268,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             runtime_upgrades,
             privacy_activations,
             privacy_pgc_accounts,
+            privacy_pgc_pool_invariants,
             privacy_nullifiers,
             privacy_commitments,
             privacy_roots,
@@ -23339,6 +23372,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         runtime_upgrades.apply();
         privacy_activations.apply();
         privacy_pgc_accounts.apply();
+        privacy_pgc_pool_invariants.apply();
         privacy_nullifiers.apply();
         privacy_commitments.apply();
         privacy_roots.apply();
@@ -60490,6 +60524,33 @@ impl StateTransaction<'_, '_> {
         self.register_confidential_usage(proof_bytes, 1)
     }
 
+    /// Return the exact index required by the next privacy proof in this transaction.
+    #[must_use]
+    pub(crate) const fn next_privacy_action_index(&self) -> u32 {
+        self.privacy_actions_in_tx
+    }
+
+    /// Check whether one canonical privacy action can be reserved without
+    /// changing transaction or block accounting.
+    ///
+    /// Runtime handlers call this before invoking a native verifier so an
+    /// already-exhausted consensus budget cannot trigger expensive
+    /// cryptography.  [`Self::reserve_privacy_action`] delegates to the same
+    /// validator, preventing preflight and final reservation from drifting.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error`] under the same conditions as
+    /// [`Self::reserve_privacy_action`].
+    pub(crate) fn preflight_privacy_action(
+        &self,
+        action_index: u32,
+        encoded_action_bytes: u64,
+    ) -> Result<(), Error> {
+        self.validate_privacy_action_reservation(action_index, encoded_action_bytes)
+            .map(|_| ())
+    }
+
     /// Reserve one canonically encoded first-release privacy action.
     ///
     /// The reservation is staged in this transaction. The parent block budget
@@ -60507,6 +60568,19 @@ impl StateTransaction<'_, '_> {
         action_index: u32,
         encoded_action_bytes: u64,
     ) -> Result<(), Error> {
+        let (next_actions, next_bytes, next_block_budget) =
+            self.validate_privacy_action_reservation(action_index, encoded_action_bytes)?;
+        self.privacy_actions_in_tx = next_actions;
+        self.privacy_bytes_in_tx = next_bytes;
+        self.privacy_budget_after_block = next_block_budget;
+        Ok(())
+    }
+
+    fn validate_privacy_action_reservation(
+        &self,
+        action_index: u32,
+        encoded_action_bytes: u64,
+    ) -> Result<(u32, u64, crate::privacy::PrivacyBlockBudgetV1), Error> {
         if action_index != self.privacy_actions_in_tx {
             return Err(Error::InvalidParameter(
                 InvalidParameterError::SmartContract(
@@ -60543,7 +60617,8 @@ impl StateTransaction<'_, '_> {
             ));
         }
 
-        let mut reservation = self.privacy_budget_after_block.begin_transaction();
+        let mut next_block_budget = self.privacy_budget_after_block;
+        let mut reservation = next_block_budget.begin_transaction();
         reservation
             .reserve(0, encoded_action_bytes)
             .map_err(|error| {
@@ -60552,9 +60627,7 @@ impl StateTransaction<'_, '_> {
                 ))
             })?;
         reservation.commit();
-        self.privacy_actions_in_tx = next_actions;
-        self.privacy_bytes_in_tx = next_bytes;
-        Ok(())
+        Ok((next_actions, next_bytes, next_block_budget))
     }
 
     #[cfg(test)]
@@ -64451,6 +64524,10 @@ pub(crate) mod deserialize {
             crate::privacy_state::PrivacyPgcAccountKeyV1,
             crate::privacy_state::PrivacyPgcAccountStateV1,
         > = take_required(&mut map, "privacy_pgc_accounts")?;
+        let privacy_pgc_pool_invariants: Storage<
+            crate::privacy_state::PrivacyPgcPoolInvariantKeyV1,
+            crate::privacy_state::PrivacyPgcPoolInvariantV1,
+        > = take_required(&mut map, "privacy_pgc_pool_invariants")?;
         let privacy_nullifiers: Storage<
             crate::privacy_state::PrivacyNullifierKeyV1,
             crate::privacy_state::PrivacyStateItemRecordV1,
@@ -64470,6 +64547,7 @@ pub(crate) mod deserialize {
         crate::privacy_state::validate_privacy_persisted_state_v1(
             &privacy_activations.view(),
             &privacy_pgc_accounts.view(),
+            &privacy_pgc_pool_invariants.view(),
             &privacy_nullifiers.view(),
             &privacy_commitments.view(),
             &privacy_roots.view(),
@@ -64682,6 +64760,7 @@ pub(crate) mod deserialize {
             runtime_upgrades,
             privacy_activations,
             privacy_pgc_accounts,
+            privacy_pgc_pool_invariants,
             privacy_nullifiers,
             privacy_commitments,
             privacy_roots,
@@ -65654,34 +65733,73 @@ mod tests {
         {
             let mut transaction = block.transaction();
             assert_eq!(transaction.privacy_budget_for_testing(), (0, 0, 0, 0));
-            assert!(transaction.reserve_privacy_action(1, 64).is_err());
-            assert!(transaction.reserve_privacy_action(0, 0).is_err());
-            assert!(
-                transaction
-                    .reserve_privacy_action(0, u64::from(limits.max_action_bytes) + 1)
-                    .is_err()
+            assert_eq!(transaction.next_privacy_action_index(), 0);
+            let skipped_preflight = transaction
+                .preflight_privacy_action(1, 64)
+                .expect_err("skipped index preflight");
+            let skipped_reservation = transaction
+                .reserve_privacy_action(1, 64)
+                .expect_err("skipped index reservation");
+            assert_eq!(
+                skipped_preflight.to_string(),
+                skipped_reservation.to_string(),
+                "preflight and reservation must share the exact rejection path"
+            );
+            let zero_preflight = transaction
+                .preflight_privacy_action(0, 0)
+                .expect_err("zero-byte preflight");
+            let zero_reservation = transaction
+                .reserve_privacy_action(0, 0)
+                .expect_err("zero-byte reservation");
+            assert_eq!(zero_preflight.to_string(), zero_reservation.to_string());
+            let oversized_bytes = u64::from(limits.max_action_bytes) + 1;
+            let oversized_preflight = transaction
+                .preflight_privacy_action(0, oversized_bytes)
+                .expect_err("oversized preflight");
+            let oversized_reservation = transaction
+                .reserve_privacy_action(0, oversized_bytes)
+                .expect_err("oversized reservation");
+            assert_eq!(
+                oversized_preflight.to_string(),
+                oversized_reservation.to_string()
             );
             assert_eq!(
                 transaction.privacy_budget_for_testing(),
                 (0, 0, 0, 0),
-                "rejected reservations must not consume local or staged block budget"
+                "rejected preflights and reservations must not consume local or staged block budget"
             );
 
             transaction
+                .preflight_privacy_action(0, 64)
+                .expect("first contiguous action preflight");
+            assert_eq!(
+                transaction.privacy_budget_for_testing(),
+                (0, 0, 0, 0),
+                "successful preflight must remain non-mutating"
+            );
+            transaction
                 .reserve_privacy_action(0, 64)
-                .expect("first contiguous action");
+                .expect("unchanged state must make reservation agree with preflight");
+            assert_eq!(transaction.next_privacy_action_index(), 1);
             assert_eq!(transaction.privacy_budget_for_testing(), (1, 64, 1, 64));
-            assert!(transaction.reserve_privacy_action(0, 32).is_err());
-            assert!(transaction.reserve_privacy_action(2, 32).is_err());
+            assert!(transaction.preflight_privacy_action(0, 32).is_err());
+            assert!(transaction.preflight_privacy_action(2, 32).is_err());
+            let exhausted_preflight = transaction.preflight_privacy_action(1, 32).expect_err(
+                "the compiled first release permits one privacy action per transaction",
+            );
+            let exhausted_reservation = transaction.reserve_privacy_action(1, 32).expect_err(
+                "the compiled first release permits one privacy action per transaction",
+            );
+            assert_eq!(
+                exhausted_preflight.to_string(),
+                exhausted_reservation.to_string(),
+                "the compiled first release permits one privacy action per transaction"
+            );
             assert_eq!(
                 transaction.privacy_budget_for_testing(),
                 (1, 64, 1, 64),
-                "duplicate and skipped indexes must not consume budget"
+                "duplicate, skipped, and over-limit actions must not consume budget"
             );
-            transaction
-                .reserve_privacy_action(1, 32)
-                .expect("second contiguous action");
-            assert_eq!(transaction.privacy_budget_for_testing(), (2, 96, 2, 96));
             // Dropping the transaction exercises rollback of the entire
             // staged reservation set.
         }
@@ -65690,6 +65808,7 @@ mod tests {
 
         {
             let mut transaction = block.transaction();
+            assert_eq!(transaction.next_privacy_action_index(), 0);
             transaction
                 .reserve_privacy_action(0, 48)
                 .expect("fresh transaction restarts its action index");
@@ -65712,6 +65831,78 @@ mod tests {
         }
         assert_eq!(block.privacy_budget_in_block.actions(), 2);
         assert_eq!(block.privacy_budget_in_block.bytes(), 64);
+
+        {
+            let mut transaction = block.transaction();
+            assert_eq!(
+                transaction.privacy_budget_for_testing(),
+                (0, 0, 2, 64),
+                "the third transaction sees the complete committed block budget"
+            );
+            let exhausted_preflight = transaction
+                .preflight_privacy_action(0, 16)
+                .expect_err("the compiled first release permits two privacy actions per block");
+            assert_eq!(
+                transaction.privacy_budget_for_testing(),
+                (0, 0, 2, 64),
+                "block-limit preflight must not consume transaction or block budget"
+            );
+            let exhausted_reservation = transaction
+                .reserve_privacy_action(0, 16)
+                .expect_err("the compiled first release permits two privacy actions per block");
+            assert_eq!(
+                exhausted_preflight.to_string(),
+                exhausted_reservation.to_string(),
+                "preflight and final reservation must not diverge at the block boundary"
+            );
+            assert_eq!(
+                transaction.privacy_budget_for_testing(),
+                (0, 0, 2, 64),
+                "a block-limit rejection must not consume transaction or block budget"
+            );
+        }
+        assert_eq!(block.privacy_budget_in_block.actions(), 2);
+        assert_eq!(block.privacy_budget_in_block.bytes(), 64);
+    }
+
+    #[test]
+    fn privacy_action_budget_accepts_exact_byte_boundary_and_rejects_one_byte_over() {
+        let state = State::new(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let max = u64::from(
+            iroha_data_model::privacy::PrivacyConsensusLimitsV1::taira_default().max_action_bytes,
+        );
+        let mut transaction = block.transaction();
+
+        let overflow_preflight = transaction
+            .preflight_privacy_action(0, max + 1)
+            .expect_err("one byte above the action cap");
+        let overflow_reservation = transaction
+            .reserve_privacy_action(0, max + 1)
+            .expect_err("one byte above the action cap");
+        assert_eq!(
+            overflow_preflight.to_string(),
+            overflow_reservation.to_string()
+        );
+        assert_eq!(transaction.privacy_budget_for_testing(), (0, 0, 0, 0));
+
+        transaction
+            .preflight_privacy_action(0, max)
+            .expect("exact inclusive action-byte boundary");
+        assert_eq!(
+            transaction.privacy_budget_for_testing(),
+            (0, 0, 0, 0),
+            "boundary preflight is read-only"
+        );
+        transaction
+            .reserve_privacy_action(0, max)
+            .expect("reservation must agree with successful boundary preflight");
+        assert_eq!(transaction.privacy_budget_for_testing(), (1, max, 1, max));
     }
 
     #[test]

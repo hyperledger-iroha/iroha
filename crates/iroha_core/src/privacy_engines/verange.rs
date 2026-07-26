@@ -7,15 +7,15 @@
 //! `[0, 2^N)`.
 
 use once_cell::sync::Lazy;
-use p256::{elliptic_curve::Field, ProjectivePoint, Scalar};
+use p256::{ProjectivePoint, Scalar, elliptic_curve::Field};
 use rand_core_06::{CryptoRng, RngCore};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use super::p256::{
-    generator_digest, hash_to_curve_rfc9380, random_nonzero_scalar,
-    validate_generator_independence, CanonicalScalarV1, CompressedPointV1, P256EngineError,
-    SecretScalarV1, TranscriptBindingV1, TranscriptV1,
+    CanonicalScalarV1, CompressedPointV1, P256EngineError, SecretScalarV1, TranscriptBindingV1,
+    TranscriptV1, generator_digest, hash_to_curve_rfc9380, random_nonzero_scalar,
+    validate_generator_independence,
 };
 
 /// Closed suite identifier committed by every VeRange transcript.
