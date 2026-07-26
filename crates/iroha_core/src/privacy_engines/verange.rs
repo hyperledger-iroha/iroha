@@ -1509,6 +1509,23 @@ mod tests {
     }
 
     #[test]
+    fn closed_parameter_set_initializes_with_a_shared_digest() {
+        let bits_32 =
+            VeRangeParametersV1::for_profile(VeRangeBitLengthV1::Bits32).unwrap_or_else(|error| {
+                panic!("32-bit VeRange parameter initialization failed: {error:?}")
+            });
+        let bits_64 =
+            VeRangeParametersV1::for_profile(VeRangeBitLengthV1::Bits64).unwrap_or_else(|error| {
+                panic!("64-bit VeRange parameter initialization failed: {error:?}")
+            });
+
+        assert_eq!(bits_32.profile(), VeRangeBitLengthV1::Bits32);
+        assert_eq!(bits_64.profile(), VeRangeBitLengthV1::Bits64);
+        assert_eq!(bits_32.parameter_digest(), bits_64.parameter_digest());
+        assert_ne!(bits_32.generator_digest(), bits_64.generator_digest());
+    }
+
+    #[test]
     fn deterministic_known_answer_vector_is_stable() {
         let (statement, _, proof) = fixture(VeRangeBitLengthV1::Bits32, 0xdead_beef);
         verify(&statement, &proof).expect("proof");
@@ -1539,10 +1556,10 @@ mod tests {
                 hex::encode(proof_digest),
             ),
             (
-                "REPLACE_PARAMETER_DIGEST".to_owned(),
-                "REPLACE_GENERATOR_DIGEST_32".to_owned(),
-                "REPLACE_GENERATOR_DIGEST_64".to_owned(),
-                "REPLACE_PROOF_DIGEST".to_owned(),
+                "3d79fe744741f956cb589f45774f922b849cf93833e6a9ebdedf1f815f1b7b44".to_owned(),
+                "50115a3ba086b8d50a2d3f834b22b3a2e81dee1be85cb1fa4c3d6d25a4807c23".to_owned(),
+                "7a5a99665e13b111b38f13348de65e66664aa832cdab0183ad468cab0736be21".to_owned(),
+                "1c2827ba9eec7309c48e9833ecc3f3af195ab864f98922a988088a2adabc2804".to_owned(),
             )
         );
     }

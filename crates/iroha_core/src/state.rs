@@ -65641,6 +65641,80 @@ mod tests {
     }
 
     #[test]
+    fn privacy_action_budget_is_transactional_contiguous_and_fail_closed() {
+        let state = State::new(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let limits = iroha_data_model::privacy::PrivacyConsensusLimitsV1::taira_default();
+
+        {
+            let mut transaction = block.transaction();
+            assert_eq!(transaction.privacy_budget_for_testing(), (0, 0, 0, 0));
+            assert!(transaction.reserve_privacy_action(1, 64).is_err());
+            assert!(transaction.reserve_privacy_action(0, 0).is_err());
+            assert!(
+                transaction
+                    .reserve_privacy_action(0, u64::from(limits.max_action_bytes) + 1)
+                    .is_err()
+            );
+            assert_eq!(
+                transaction.privacy_budget_for_testing(),
+                (0, 0, 0, 0),
+                "rejected reservations must not consume local or staged block budget"
+            );
+
+            transaction
+                .reserve_privacy_action(0, 64)
+                .expect("first contiguous action");
+            assert_eq!(transaction.privacy_budget_for_testing(), (1, 64, 1, 64));
+            assert!(transaction.reserve_privacy_action(0, 32).is_err());
+            assert!(transaction.reserve_privacy_action(2, 32).is_err());
+            assert_eq!(
+                transaction.privacy_budget_for_testing(),
+                (1, 64, 1, 64),
+                "duplicate and skipped indexes must not consume budget"
+            );
+            transaction
+                .reserve_privacy_action(1, 32)
+                .expect("second contiguous action");
+            assert_eq!(transaction.privacy_budget_for_testing(), (2, 96, 2, 96));
+            // Dropping the transaction exercises rollback of the entire
+            // staged reservation set.
+        }
+        assert_eq!(block.privacy_budget_in_block.actions(), 0);
+        assert_eq!(block.privacy_budget_in_block.bytes(), 0);
+
+        {
+            let mut transaction = block.transaction();
+            transaction
+                .reserve_privacy_action(0, 48)
+                .expect("fresh transaction restarts its action index");
+            transaction.apply();
+        }
+        assert_eq!(block.privacy_budget_in_block.actions(), 1);
+        assert_eq!(block.privacy_budget_in_block.bytes(), 48);
+
+        {
+            let mut transaction = block.transaction();
+            assert_eq!(
+                transaction.privacy_budget_for_testing(),
+                (0, 0, 1, 48),
+                "a new transaction inherits committed block usage only"
+            );
+            transaction
+                .reserve_privacy_action(0, 16)
+                .expect("another transaction reserves independently");
+            transaction.apply();
+        }
+        assert_eq!(block.privacy_budget_in_block.actions(), 2);
+        assert_eq!(block.privacy_budget_in_block.bytes(), 64);
+    }
+
+    #[test]
     fn test_nexus_fixture_constructor_opens_custom_primary_without_archiving_default_segment() {
         let custom_primary = LaneConfig {
             alias: "custom-primary".to_owned(),

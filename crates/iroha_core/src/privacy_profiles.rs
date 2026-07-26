@@ -7,7 +7,7 @@
 //! bindings exactly match the proposed activation record. A protocol whose
 //! complete verifier is not compiled is rejected before it enters world state.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use iroha_data_model::privacy::{
     PrivacyAssuranceV1, PrivacyConsensusLimitsV1, PrivacyEngineIdV1, PrivacyEngineManifestDigestV1,
@@ -94,7 +94,9 @@ impl CompiledPrivacyProfileV1 {
 /// Returns [`CompiledPrivacyProfileErrorV1::EngineUnavailable`] for a protocol
 /// whose complete end-to-end verifier is not compiled, or
 /// [`CompiledPrivacyProfileErrorV1::ProfileInitializationFailed`] if fixed
-/// transparent parameters cannot be derived.
+/// transparent parameters cannot be derived, or
+/// [`CompiledPrivacyProfileErrorV1::StatementSchemaInvalid`] when the emitted
+/// schema is ambiguous or internally unresolved.
 pub fn compiled_privacy_profile_v1(
     protocol_id: PrivacyProtocolIdV1,
 ) -> Result<CompiledPrivacyProfileV1, CompiledPrivacyProfileErrorV1> {
@@ -105,7 +107,7 @@ pub fn compiled_privacy_profile_v1(
         // adversarial tests are compiled into this manifest.
         PrivacyProtocolIdV1::ZkAcePqAuthorizationV0
         | PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1
-        | PrivacyProtocolIdV1::IrohaZkAmsStarkV0
+        | PrivacyProtocolIdV1::IrohaZkAmsV1
         | PrivacyProtocolIdV1::VegaExistingCredentialZkV0
         | PrivacyProtocolIdV1::IrohaZkX509StarkP256V0
         | PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0
@@ -221,9 +223,10 @@ fn compiled_verange_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPri
         ],
     );
     let statement_schema_digest =
-        canonical_schema_digest_v1::<VeRangeTransparentRangeStatementV1>().map_err(|_| {
-            CompiledPrivacyProfileErrorV1::ProfileInitializationFailed {
+        canonical_schema_digest_v1::<VeRangeTransparentRangeStatementV1>().map_err(|source| {
+            CompiledPrivacyProfileErrorV1::StatementSchemaInvalid {
                 protocol_id: PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
+                source,
             }
         })?;
     let parameter_digest = bits_32.parameter_digest();
@@ -282,12 +285,13 @@ fn append_digest_field_v1(hash: &mut Sha256, field: &[u8]) {
 ///
 /// The `iroha_schema` map is keyed internally by Rust [`core::any::TypeId`],
 /// whose ordering is not a wire contract. This function replaces every such
-/// reference with its declared stable string identifier, rejects duplicate
-/// identifiers, sorts top-level entries by that stable identifier, and
-/// preserves field/variant order where order is part of the representation.
-/// Consequently, adding, deleting, reordering, or retyping a statement field
-/// changes the governed digest without relying on a hand-maintained schema
-/// string.
+/// reference with its declared stable string identifier, collapses only
+/// representation aliases with identical canonical metadata, rejects
+/// conflicting reuse of an identifier, sorts top-level entries by that stable
+/// identifier, and preserves field/variant order where order is part of the
+/// representation. Consequently, adding, deleting, reordering, or retyping a
+/// statement field changes the governed digest without relying on a
+/// hand-maintained schema string.
 ///
 /// # Errors
 ///
@@ -297,74 +301,89 @@ pub fn canonical_schema_digest_v1<T: IntoSchema>() -> Result<[u8; 32], Canonical
 {
     let schema = T::schema();
     let mut type_names = BTreeMap::new();
-    let mut stable_ids = BTreeSet::new();
-    let mut entries = Vec::new();
     for (rust_type_id, entry) in schema.iter() {
-        if !stable_ids.insert(entry.type_id.clone()) {
-            return Err(CanonicalSchemaDigestErrorV1::DuplicateStableTypeId);
-        }
         type_names.insert(*rust_type_id, entry.type_id.clone());
-        entries.push(entry);
     }
-    entries.sort_by(|left, right| {
-        left.type_id
-            .cmp(&right.type_id)
-            .then_with(|| left.type_name.cmp(&right.type_name))
-    });
+
+    // `iroha_schema` deliberately gives representation aliases such as
+    // `String` and `Box<str>` the same stable wire identifier. Rust `TypeId`
+    // still makes them separate map entries. Collapse aliases only after their
+    // complete canonical metadata agrees; a reused identifier with a different
+    // name or representation is an ambiguous consensus schema and must fail.
+    let mut entries = BTreeMap::<String, CanonicalSchemaEntryV1>::new();
+    for (_, entry) in schema.iter() {
+        let canonical = CanonicalSchemaEntryV1 {
+            type_name: entry.type_name.clone(),
+            metadata: canonical_schema_metadata_v1(entry, &type_names)?,
+        };
+        if let Some(existing) = entries.get(&entry.type_id) {
+            if existing != &canonical {
+                return Err(CanonicalSchemaDigestErrorV1::ConflictingStableTypeId);
+            }
+        } else {
+            entries.insert(entry.type_id.clone(), canonical);
+        }
+    }
 
     let mut hash = Sha256::new();
     hash.update(PROFILE_DIGEST_DOMAIN_V1);
     append_digest_field_v1(&mut hash, CANONICAL_SCHEMA_DIGEST_DOMAIN_V1);
     append_digest_field_v1(&mut hash, T::id().as_bytes());
     append_digest_count_v1(&mut hash, entries.len());
-    for entry in entries {
-        append_digest_field_v1(&mut hash, entry.type_id.as_bytes());
+    for (stable_id, entry) in entries {
+        append_digest_field_v1(&mut hash, stable_id.as_bytes());
         append_digest_field_v1(&mut hash, entry.type_name.as_bytes());
-        append_schema_metadata_v1(&mut hash, entry, &type_names)?;
+        append_digest_field_v1(&mut hash, &entry.metadata);
     }
     Ok(hash.finalize().into())
 }
 
-fn append_schema_metadata_v1(
-    hash: &mut Sha256,
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct CanonicalSchemaEntryV1 {
+    type_name: String,
+    metadata: Vec<u8>,
+}
+
+fn canonical_schema_metadata_v1(
     entry: &MetaMapEntry,
     type_names: &BTreeMap<core::any::TypeId, String>,
-) -> Result<(), CanonicalSchemaDigestErrorV1> {
+) -> Result<Vec<u8>, CanonicalSchemaDigestErrorV1> {
+    let mut bytes = Vec::new();
     match &entry.metadata {
         Metadata::Struct(fields) => {
-            append_digest_field_v1(hash, b"struct");
-            append_digest_count_v1(hash, fields.declarations.len());
+            append_schema_field_v1(&mut bytes, b"struct");
+            append_schema_count_v1(&mut bytes, fields.declarations.len());
             for field in &fields.declarations {
-                append_digest_field_v1(hash, field.name.as_bytes());
-                append_schema_type_reference_v1(hash, field.ty, type_names)?;
+                append_schema_field_v1(&mut bytes, field.name.as_bytes());
+                append_schema_type_reference_v1(&mut bytes, field.ty, type_names)?;
             }
         }
         Metadata::Tuple(fields) => {
-            append_digest_field_v1(hash, b"tuple");
-            append_digest_count_v1(hash, fields.types.len());
+            append_schema_field_v1(&mut bytes, b"tuple");
+            append_schema_count_v1(&mut bytes, fields.types.len());
             for field_type in &fields.types {
-                append_schema_type_reference_v1(hash, *field_type, type_names)?;
+                append_schema_type_reference_v1(&mut bytes, *field_type, type_names)?;
             }
         }
         Metadata::Enum(enum_meta) => {
-            append_digest_field_v1(hash, b"enum");
-            append_digest_count_v1(hash, enum_meta.variants.len());
+            append_schema_field_v1(&mut bytes, b"enum");
+            append_schema_count_v1(&mut bytes, enum_meta.variants.len());
             for variant in &enum_meta.variants {
-                append_digest_field_v1(hash, variant.tag.as_bytes());
-                append_digest_field_v1(hash, &[variant.discriminant]);
+                append_schema_field_v1(&mut bytes, variant.tag.as_bytes());
+                append_schema_field_v1(&mut bytes, &[variant.discriminant]);
                 match variant.ty {
                     Some(variant_type) => {
-                        append_digest_field_v1(hash, b"some");
-                        append_schema_type_reference_v1(hash, variant_type, type_names)?;
+                        append_schema_field_v1(&mut bytes, b"some");
+                        append_schema_type_reference_v1(&mut bytes, variant_type, type_names)?;
                     }
-                    None => append_digest_field_v1(hash, b"none"),
+                    None => append_schema_field_v1(&mut bytes, b"none"),
                 }
             }
         }
         Metadata::Int(mode) => {
-            append_digest_field_v1(hash, b"int");
-            append_digest_field_v1(
-                hash,
+            append_schema_field_v1(&mut bytes, b"int");
+            append_schema_field_v1(
+                &mut bytes,
                 match mode {
                     IntMode::FixedWidth => b"fixed-width",
                     IntMode::Compact => b"compact",
@@ -372,68 +391,77 @@ fn append_schema_metadata_v1(
             );
         }
         Metadata::Float(mode) => {
-            append_digest_field_v1(hash, b"float");
-            append_digest_field_v1(
-                hash,
+            append_schema_field_v1(&mut bytes, b"float");
+            append_schema_field_v1(
+                &mut bytes,
                 match mode {
                     FloatMode::Binary32 => b"binary32",
                     FloatMode::Binary64 => b"binary64",
                 },
             );
         }
-        Metadata::String => append_digest_field_v1(hash, b"string"),
-        Metadata::Bool => append_digest_field_v1(hash, b"bool"),
+        Metadata::String => append_schema_field_v1(&mut bytes, b"string"),
+        Metadata::Bool => append_schema_field_v1(&mut bytes, b"bool"),
         Metadata::FixedPoint(fixed) => {
-            append_digest_field_v1(hash, b"fixed-point");
-            append_schema_type_reference_v1(hash, fixed.base, type_names)?;
-            append_digest_field_v1(hash, &fixed.decimal_places.to_be_bytes());
+            append_schema_field_v1(&mut bytes, b"fixed-point");
+            append_schema_type_reference_v1(&mut bytes, fixed.base, type_names)?;
+            append_schema_field_v1(&mut bytes, &fixed.decimal_places.to_be_bytes());
         }
         Metadata::Array(array) => {
-            append_digest_field_v1(hash, b"array");
-            append_schema_type_reference_v1(hash, array.ty, type_names)?;
-            append_digest_field_v1(hash, &array.len.to_be_bytes());
+            append_schema_field_v1(&mut bytes, b"array");
+            append_schema_type_reference_v1(&mut bytes, array.ty, type_names)?;
+            append_schema_field_v1(&mut bytes, &array.len.to_be_bytes());
         }
         Metadata::Vec(vector) => {
-            append_digest_field_v1(hash, b"vec");
-            append_schema_type_reference_v1(hash, vector.ty, type_names)?;
+            append_schema_field_v1(&mut bytes, b"vec");
+            append_schema_type_reference_v1(&mut bytes, vector.ty, type_names)?;
         }
         Metadata::Map(map) => {
-            append_digest_field_v1(hash, b"map");
-            append_schema_type_reference_v1(hash, map.key, type_names)?;
-            append_schema_type_reference_v1(hash, map.value, type_names)?;
+            append_schema_field_v1(&mut bytes, b"map");
+            append_schema_type_reference_v1(&mut bytes, map.key, type_names)?;
+            append_schema_type_reference_v1(&mut bytes, map.value, type_names)?;
         }
         Metadata::Option(option_type) => {
-            append_digest_field_v1(hash, b"option");
-            append_schema_type_reference_v1(hash, *option_type, type_names)?;
+            append_schema_field_v1(&mut bytes, b"option");
+            append_schema_type_reference_v1(&mut bytes, *option_type, type_names)?;
         }
         Metadata::Result(result) => {
-            append_digest_field_v1(hash, b"result");
-            append_schema_type_reference_v1(hash, result.ok, type_names)?;
-            append_schema_type_reference_v1(hash, result.err, type_names)?;
+            append_schema_field_v1(&mut bytes, b"result");
+            append_schema_type_reference_v1(&mut bytes, result.ok, type_names)?;
+            append_schema_type_reference_v1(&mut bytes, result.err, type_names)?;
         }
         Metadata::Bitmap(bitmap) => {
-            append_digest_field_v1(hash, b"bitmap");
-            append_schema_type_reference_v1(hash, bitmap.repr, type_names)?;
-            append_digest_count_v1(hash, bitmap.masks.len());
+            append_schema_field_v1(&mut bytes, b"bitmap");
+            append_schema_type_reference_v1(&mut bytes, bitmap.repr, type_names)?;
+            append_schema_count_v1(&mut bytes, bitmap.masks.len());
             for mask in &bitmap.masks {
-                append_digest_field_v1(hash, mask.name.as_bytes());
-                append_digest_field_v1(hash, &mask.mask.to_be_bytes());
+                append_schema_field_v1(&mut bytes, mask.name.as_bytes());
+                append_schema_field_v1(&mut bytes, &mask.mask.to_be_bytes());
             }
         }
     }
-    Ok(())
+    Ok(bytes)
 }
 
 fn append_schema_type_reference_v1(
-    hash: &mut Sha256,
+    bytes: &mut Vec<u8>,
     rust_type_id: core::any::TypeId,
     type_names: &BTreeMap<core::any::TypeId, String>,
 ) -> Result<(), CanonicalSchemaDigestErrorV1> {
     let stable_id = type_names
         .get(&rust_type_id)
         .ok_or(CanonicalSchemaDigestErrorV1::MissingTypeReference)?;
-    append_digest_field_v1(hash, stable_id.as_bytes());
+    append_schema_field_v1(bytes, stable_id.as_bytes());
     Ok(())
+}
+
+fn append_schema_field_v1(bytes: &mut Vec<u8>, field: &[u8]) {
+    bytes.extend_from_slice(&usize_to_u64_v1(field.len()).to_be_bytes());
+    bytes.extend_from_slice(field);
+}
+
+fn append_schema_count_v1(bytes: &mut Vec<u8>, count: usize) {
+    bytes.extend_from_slice(&usize_to_u64_v1(count).to_be_bytes());
 }
 
 fn append_digest_count_v1(hash: &mut Sha256, count: usize) {
@@ -465,9 +493,9 @@ compile_error!("privacy profile digest framing supports 16-, 32-, and 64-bit poi
 /// Invalid structural schema emitted by an [`IntoSchema`] implementation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum CanonicalSchemaDigestErrorV1 {
-    /// Two distinct Rust types claimed the same stable schema identifier.
-    #[error("privacy statement schema contains a duplicate stable type identifier")]
-    DuplicateStableTypeId,
+    /// Two distinct Rust types claimed one identifier for different wire shapes.
+    #[error("privacy statement schema reuses a stable type identifier for conflicting shapes")]
+    ConflictingStableTypeId,
     /// Metadata referenced a type absent from the generated schema map.
     #[error("privacy statement schema contains an unresolved type reference")]
     MissingTypeReference,
@@ -487,6 +515,14 @@ pub enum CompiledPrivacyProfileErrorV1 {
     ProfileInitializationFailed {
         /// Protocol whose fixed parameters failed to initialize.
         protocol_id: PrivacyProtocolIdV1,
+    },
+    /// The compiled public-statement schema is ambiguous or internally broken.
+    #[error("compiled privacy statement schema is invalid for {protocol_id:?}: {source}")]
+    StatementSchemaInvalid {
+        /// Protocol whose typed schema failed canonicalization.
+        protocol_id: PrivacyProtocolIdV1,
+        /// Exact canonicalization failure.
+        source: CanonicalSchemaDigestErrorV1,
     },
 }
 
@@ -627,6 +663,104 @@ mod tests {
         }
     }
 
+    struct SchemaEquivalentAliases;
+
+    impl TypeId for SchemaEquivalentAliases {
+        fn id() -> String {
+            "privacy-test::EquivalentAliases".to_owned()
+        }
+    }
+
+    impl IntoSchema for SchemaEquivalentAliases {
+        fn type_name() -> String {
+            "EquivalentAliases".to_owned()
+        }
+
+        fn update_schema_map(map: &mut MetaMap) {
+            String::update_schema_map(map);
+            Box::<str>::update_schema_map(map);
+            map.insert::<Self>(Metadata::Struct(NamedFieldsMeta {
+                declarations: vec![
+                    Declaration {
+                        name: "owned".to_owned(),
+                        ty: core::any::TypeId::of::<String>(),
+                    },
+                    Declaration {
+                        name: "boxed".to_owned(),
+                        ty: core::any::TypeId::of::<Box<str>>(),
+                    },
+                ],
+            }));
+        }
+    }
+
+    struct SchemaConflictLeft;
+
+    impl TypeId for SchemaConflictLeft {
+        fn id() -> String {
+            "privacy-test::ConflictingAlias".to_owned()
+        }
+    }
+
+    impl IntoSchema for SchemaConflictLeft {
+        fn type_name() -> String {
+            "ConflictingAlias".to_owned()
+        }
+
+        fn update_schema_map(map: &mut MetaMap) {
+            map.insert::<Self>(Metadata::Int(IntMode::FixedWidth));
+        }
+    }
+
+    struct SchemaConflictRight;
+
+    impl TypeId for SchemaConflictRight {
+        fn id() -> String {
+            "privacy-test::ConflictingAlias".to_owned()
+        }
+    }
+
+    impl IntoSchema for SchemaConflictRight {
+        fn type_name() -> String {
+            "ConflictingAlias".to_owned()
+        }
+
+        fn update_schema_map(map: &mut MetaMap) {
+            map.insert::<Self>(Metadata::Bool);
+        }
+    }
+
+    struct SchemaConflictingAliases;
+
+    impl TypeId for SchemaConflictingAliases {
+        fn id() -> String {
+            "privacy-test::ConflictingAliases".to_owned()
+        }
+    }
+
+    impl IntoSchema for SchemaConflictingAliases {
+        fn type_name() -> String {
+            "ConflictingAliases".to_owned()
+        }
+
+        fn update_schema_map(map: &mut MetaMap) {
+            SchemaConflictLeft::update_schema_map(map);
+            SchemaConflictRight::update_schema_map(map);
+            map.insert::<Self>(Metadata::Struct(NamedFieldsMeta {
+                declarations: vec![
+                    Declaration {
+                        name: "left".to_owned(),
+                        ty: core::any::TypeId::of::<SchemaConflictLeft>(),
+                    },
+                    Declaration {
+                        name: "right".to_owned(),
+                        ty: core::any::TypeId::of::<SchemaConflictRight>(),
+                    },
+                ],
+            }));
+        }
+    }
+
     fn verange_activation() -> PrivacyProtocolActivationRecordV1 {
         compiled_privacy_profile_v1(PrivacyProtocolIdV1::VeRangeTransparentRangeV1)
             .expect("fixed VeRange parameters derive")
@@ -661,6 +795,21 @@ mod tests {
         assert_eq!(
             original,
             canonical_schema_digest_v1::<SchemaOrderAb>().expect("schema")
+        );
+    }
+
+    #[test]
+    fn structural_schema_digest_deduplicates_only_equivalent_aliases() {
+        let equivalent =
+            canonical_schema_digest_v1::<SchemaEquivalentAliases>().expect("equivalent aliases");
+        assert_ne!(equivalent, [0; 32]);
+        assert_eq!(
+            canonical_schema_digest_v1::<SchemaEquivalentAliases>().expect("equivalent aliases"),
+            equivalent
+        );
+        assert_eq!(
+            canonical_schema_digest_v1::<SchemaConflictingAliases>(),
+            Err(CanonicalSchemaDigestErrorV1::ConflictingStableTypeId)
         );
     }
 
