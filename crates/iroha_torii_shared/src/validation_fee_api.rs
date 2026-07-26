@@ -1040,7 +1040,11 @@ pub struct ValidationFeeProposalDraftResponseV1 {
     NoritoDeserialize,
     NoritoSerialize,
 )]
-#[norito(rename_all = "SCREAMING_SNAKE_CASE")]
+#[norito(
+    tag = "direction",
+    content = "value",
+    rename_all = "SCREAMING_SNAKE_CASE"
+)]
 pub enum ValidationFeePlainBallotDirectionV1 {
     /// Vote in favor of the proposal.
     Aye,

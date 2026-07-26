@@ -3189,9 +3189,6 @@ pub mod domain {
             AnyPermission::CanSetAssetTransferDailyLimit(permission) => {
                 asset_definition_matches_domain(&permission.asset_definition)
             }
-            AnyPermission::CanManageZkAceIdentityForAccount(permission) => {
-                asset_definition_matches_domain(&permission.asset)
-            }
             AnyPermission::CanRegisterNft(permission) => &permission.domain == domain_id,
             AnyPermission::CanUnregisterNft(permission) => permission.nft.domain() == domain_id,
             AnyPermission::CanTransferNft(permission) => permission.nft.domain() == domain_id,
@@ -3489,9 +3486,6 @@ pub mod account {
             AnyPermission::CanTransferAsset(permission) => permission.asset.account() == account_id,
             AnyPermission::CanModifyAssetMetadata(permission) => {
                 permission.asset.account() == account_id
-            }
-            AnyPermission::CanManageZkAceIdentityForAccount(permission) => {
-                permission.account == *account_id
             }
             AnyPermission::CanManageFeeSponsorProgram(permission) => {
                 permission.sponsor == *account_id
@@ -3809,9 +3803,6 @@ pub mod asset_definition {
             }
             AnyPermission::CanModifyAssetMetadata(permission) => {
                 permission.asset.definition() == asset_definition_id
-            }
-            AnyPermission::CanManageZkAceIdentityForAccount(permission) => {
-                &permission.asset == asset_definition_id
             }
             AnyPermission::CanSetAssetTransferFreeze(permission) => {
                 &permission.asset_definition == asset_definition_id
@@ -5315,7 +5306,6 @@ pub mod trigger {
             | AnyPermission::CanTransferAsset(_)
             | AnyPermission::CanSetAssetTransferFreeze(_)
             | AnyPermission::CanSetAssetTransferDailyLimit(_)
-            | AnyPermission::CanManageZkAceIdentityForAccount(_)
             | AnyPermission::CanSetParameters(_)
             | AnyPermission::CanManageSccpGovernance(_)
             | AnyPermission::CanProposeSccpRouteGovernance(_)

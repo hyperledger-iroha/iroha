@@ -1555,12 +1555,16 @@ mod tests {
             "9012f3ca1feff456ef7aced4c1bc95d11e314fedf93a28cd1b4fe182cb98b2fc"
         );
         assert_eq!(
-            (
-                hex::encode(air_public_digest),
-                hex::encode(air_statement_digest),
-                hex::encode(schema_hash),
-            ),
-            (String::new(), String::new(), String::new())
+            hex::encode(air_public_digest),
+            "7a258cd04b6937e68f42927193e91da221b2344623d9f4cadd1ec0b49b703691"
+        );
+        assert_eq!(
+            hex::encode(air_statement_digest),
+            "ee9306cdc6d1bdfd3866449e730c10cb561b4038f5517a85d0e2f670d38acea6"
+        );
+        assert_eq!(
+            hex::encode(schema_hash),
+            "7a0ae407a51b3f376312c81a7cd962d7f50cc8c79b5a3ca0f3df0944689ffc18"
         );
     }
 

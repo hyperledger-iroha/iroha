@@ -1292,6 +1292,15 @@ mod tests {
     }
 
     #[test]
+    fn zk_ace_remains_fail_closed_without_a_sound_compiled_profile() {
+        let protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV0;
+        assert_eq!(
+            compiled_privacy_profile_v1(protocol_id),
+            Err(CompiledPrivacyProfileErrorV1::EngineUnavailable { protocol_id })
+        );
+    }
+
+    #[test]
     fn structural_schema_digest_detects_reordering_and_retyping() {
         let original = canonical_schema_digest_v1::<SchemaOrderAb>().expect("schema");
         let reordered = canonical_schema_digest_v1::<SchemaOrderBa>().expect("schema");
