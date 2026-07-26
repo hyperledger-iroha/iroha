@@ -3,7 +3,7 @@ package org.hyperledger.iroha.sdk.core.model.instructions
 import org.hyperledger.iroha.sdk.core.model.instructions.VerifyingKeyInstructionUtils.exactNonBlank
 import org.hyperledger.iroha.sdk.core.model.instructions.VerifyingKeyInstructionUtils.exactNonEmptyString
 import org.hyperledger.iroha.sdk.core.model.instructions.VerifyingKeyInstructionUtils.parseRecord
-import org.hyperledger.iroha.sdk.core.model.instructions.VerifyingKeyInstructionUtils.productionBackend
+import org.hyperledger.iroha.sdk.core.model.instructions.VerifyingKeyInstructionUtils.verifierRegistryBackend
 import org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyRecordDescription
 
 private const val ACTION = "RegisterVerifyingKey"
@@ -21,10 +21,10 @@ class RegisterVerifyingKeyInstruction private constructor(
         name: String,
         record: VerifyingKeyRecordDescription,
     ) : this(
-        backend = productionBackend(backend),
+        backend = verifierRegistryBackend(backend),
         name = exactNonBlank(name, "name"),
         record = record,
-        arguments = buildArguments(productionBackend(backend), exactNonBlank(name, "name"), record),
+        arguments = buildArguments(verifierRegistryBackend(backend), exactNonBlank(name, "name"), record),
     )
 
     override val kind: InstructionKind get() = InstructionKind.CUSTOM
@@ -50,7 +50,7 @@ class RegisterVerifyingKeyInstruction private constructor(
 
         @JvmStatic
         fun fromArguments(arguments: Map<String, String>): RegisterVerifyingKeyInstruction {
-            val backend = arguments.productionBackend("backend")
+            val backend = arguments.verifierRegistryBackend("backend")
             val name = arguments.exactNonEmptyString("name")
             val record = arguments.parseRecord(backend)
             return RegisterVerifyingKeyInstruction(backend, name, record)
@@ -77,7 +77,7 @@ class RegisterVerifyingKeyInstruction private constructor(
         private var record: VerifyingKeyRecordDescription? = null
 
         fun setBackend(backend: String) = apply {
-            this.backend = productionBackend(backend)
+            this.backend = verifierRegistryBackend(backend)
         }
 
         fun setName(name: String) = apply {

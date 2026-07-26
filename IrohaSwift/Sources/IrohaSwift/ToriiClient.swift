@@ -11712,9 +11712,9 @@ fileprivate enum ToriiVerifyingKeyRequestValidation {
         guard trimmed == value else {
             throw ToriiClientError.invalidPayload("\(field) must not contain surrounding whitespace.")
         }
-        guard VerifyingKeyBackendTag.isProductionVerifyBackendLabel(value) else {
+        guard VerifierBackendRegistryLabels.isSupported(value) else {
             throw ToriiClientError.invalidPayload(
-                "\(field) uses unsupported production verifier backend \(value)."
+                "\(field) is not an exact supported verifier-registry label: \(value)."
             )
         }
         return value
@@ -12103,11 +12103,11 @@ fileprivate enum ToriiValidation {
                 )
             )
         }
-        guard VerifyingKeyBackendTag.isProductionVerifyBackendLabel(value) else {
+        guard VerifierBackendRegistryLabels.isSupported(value) else {
             throw DecodingError.dataCorrupted(
                 DecodingError.Context(
                     codingPath: codingPath,
-                    debugDescription: "\(field) uses unsupported production verifier backend \(value)"
+                    debugDescription: "\(field) is not an exact supported verifier-registry label: \(value)"
                 )
             )
         }

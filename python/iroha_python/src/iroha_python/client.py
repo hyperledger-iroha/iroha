@@ -164,7 +164,7 @@ from iroha_torii_client.native_amx import (
 from .address import AccountAddress, AccountAddressError, normalize_i105_discriminant
 from .connect import ConnectSessionInfo
 from .event_filter import DataEventFilter, ensure_event_filter
-from ._privacy_backends import _require_production_verify_backend_label
+from ._privacy_backends import _require_verifier_backend_registry_label_v1
 from .privacy_catalog import (
     get_privacy_algorithm_descriptors,
     privacy_capabilities as _privacy_capabilities,
@@ -360,7 +360,7 @@ def _normalize_zk_verifying_key_submission_payload(
     *,
     require_gas_schedule: bool,
 ) -> None:
-    body["backend"] = _require_production_verify_backend_label(
+    body["backend"] = _require_verifier_backend_registry_label_v1(
         body.get("backend"),
         f"{context}.backend",
     )
@@ -606,7 +606,7 @@ def _zk_ace_asset_metadata_entry(
 
 def _zk_ace_verifier_key_state(verifier_key: Union[str, Mapping[str, Any]]) -> Dict[str, str]:
     if isinstance(verifier_key, Mapping):
-        backend = _require_production_verify_backend_label(
+        backend = _require_verifier_backend_registry_label_v1(
             verifier_key.get("backend"),
             "verifier_key.backend",
         )
@@ -616,7 +616,9 @@ def _zk_ace_verifier_key_state(verifier_key: Union[str, Mapping[str, Any]]) -> D
         if ":" not in literal:
             raise ValueError("verifier_key must include a backend prefix")
         backend, name = literal.rsplit(":", 1)
-        backend = _require_production_verify_backend_label(backend, "verifier_key.backend")
+        backend = _require_verifier_backend_registry_label_v1(
+            backend, "verifier_key.backend"
+        )
         name = _require_exact_non_empty_string(name, "verifier_key.name")
     return {"backend": backend, "name": name}
 
@@ -16013,7 +16015,7 @@ class ToriiClient(_BaseToriiClient):
         return self._request(
             "GET",
             "/v1/zk/vk/"
-            f"{quote(_require_production_verify_backend_label(backend, 'backend'), safe='')}/"
+            f"{quote(_require_verifier_backend_registry_label_v1(backend, 'backend'), safe='')}/"
             f"{quote(_require_exact_non_empty_string(name, 'name'), safe='')}",
         )
 

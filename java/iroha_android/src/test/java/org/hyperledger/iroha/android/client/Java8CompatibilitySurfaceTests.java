@@ -230,14 +230,14 @@ public final class Java8CompatibilitySurfaceTests {
   @Test
   public void verifierParserAndFakeTransportJava8SurfaceRejectsDrift() throws Exception {
     assertTrue(
-        "Kagemusha Pasta-cycle backend must stay production-admissible",
-        VerifyingKeyBackendTag.isProductionVerifyBackendLabel(
-            "halo2/ipa-pasta-cycle-v1"));
+        "exact Kagemusha verifier profile must remain registry-admissible",
+        VerifyingKeyBackendTag.isVerifierBackendRegistryLabelV1(
+            "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3"));
     try {
-      VerifyingKeyBackendTag.requireProductionVerifyBackendLabel(" halo2/ipa", "backend");
-      fail("production verifier backends must reject padded labels");
+      VerifyingKeyBackendTag.requireVerifierBackendRegistryLabelV1(" halo2/ipa", "backend");
+      fail("verifier-registry labels must reject padding");
     } catch (final IllegalArgumentException expected) {
-      assertTrue(expected.getMessage().contains("surrounding whitespace"));
+      assertTrue(expected.getMessage().contains("unsupported verifier-registry label"));
     }
 
     try {

@@ -171,7 +171,7 @@ pub struct KagemushaRecursiveReadinessV4 {
     pub step_ep: KagemushaRecursiveVerifierReadinessV4,
     /// Authenticated release identity shared by both step verifiers.
     pub artifact_set: KagemushaAuthenticatedArtifactSetReadinessV4,
-    /// `None` only when the authenticated material constructs the production verifier.
+    /// `None` only when the authenticated material constructs the configured verifier.
     pub proof_backend_error: Option<String>,
 }
 
@@ -2957,10 +2957,10 @@ pub mod isi {
         backend: &str,
         backend_tag: BackendTag,
     ) -> Result<(), Error> {
-        if crate::zk::is_production_claim_backend_label(backend) {
+        if crate::zk::is_verifier_readiness_claim_label(backend) {
             return Err(labeled_invariant(
                 "verifier_key_invalid",
-                "offline transparent proofs may not use production-claim proof backends",
+                "offline transparent proofs may not use readiness-claim proof backends",
             )
             .into());
         }
@@ -2971,10 +2971,10 @@ pub mod isi {
             )
             .into());
         }
-        let expected_tag = crate::zk::production_verify_backend_tag(backend).ok_or_else(|| {
+        let expected_tag = crate::zk::verifier_backend_registry_tag_v1(backend).ok_or_else(|| {
             labeled_invariant(
                 "verifier_key_invalid",
-                "offline recursive proof backend is not admitted by the production verifier registry",
+                "offline recursive proof backend is not admitted by the native verifier registry",
             )
         })?;
         if backend_tag != expected_tag {
@@ -3005,12 +3005,13 @@ pub mod isi {
             .into());
         }
         let backend = attachment.backend.as_str();
-        let backend_tag = crate::zk::production_verify_backend_tag(backend).ok_or_else(|| {
-            labeled_invariant(
-                "verifier_key_invalid",
-                "Kagemusha proof backend is not a supported generic OpenVerify engine",
-            )
-        })?;
+        let backend_tag =
+            crate::zk::verifier_backend_registry_tag_v1(backend).ok_or_else(|| {
+                labeled_invariant(
+                    "verifier_key_invalid",
+                    "Kagemusha proof backend is not a supported generic OpenVerify engine",
+                )
+            })?;
         ensure_kagemusha_transparent_backend(backend, backend_tag)
     }
 

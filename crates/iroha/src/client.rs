@@ -4189,7 +4189,7 @@ impl ZkProofsFilter<'_> {
 
 fn validate_zk_proofs_filter(filter: &ZkProofsFilter<'_>) -> Result<()> {
     if let Some(backend) = filter.backend {
-        require_production_verify_backend_label(backend, "zk proofs filter backend")?;
+        require_verifier_backend_registry_label_v1(backend, "zk proofs filter backend")?;
     }
     Ok(())
 }
@@ -4283,7 +4283,7 @@ fn require_json_backend_field<'a>(
         .get(field)
         .and_then(norito::json::Value::as_str)
         .ok_or_else(|| eyre!("{context} must be a string"))?;
-    require_production_verify_backend_label(backend, context)
+    require_verifier_backend_registry_label_v1(backend, context)
 }
 
 fn require_json_non_empty_string_field<'a>(
@@ -4614,264 +4614,20 @@ fn validate_optional_json_backend_object(
     Ok(())
 }
 
-const ZK_PRODUCTION_BACKEND_HALO2_IPA: &str = "halo2/ipa";
-const ZK_PRODUCTION_BACKEND_STARK_FRI: &str = "stark/fri";
-
-const ZK_PRODUCTION_STARK_FRI_PROFILES: &[&str] = &[
-    "sha256-goldilocks",
-    "poseidon2-goldilocks",
-    "sha256_goldilocks.v1",
-];
-
-const ZK_PRODUCTION_NATIVE_HALO2_PASTA_BACKENDS: &[&str] = &[
-    "halo2/pasta/kaigi-roster-v1",
-    "halo2/pasta/kaigi-usage-v1",
-    "halo2/pasta/ivm-overlay-bind",
-    "halo2/pasta/ivm-execution-v1",
-    "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
-    "halo2/pasta/kagemusha-recursive-spend-step-eq-two-parent-operation-protocol-v2",
-    "halo2/pasta/kagemusha-recursive-spend-step-ep-two-parent-operation-protocol-v2",
-    "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
-    "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
-    "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
-];
-
-const DEVELOPER_ONLY_EMBEDDED_BACKEND_TOKENS: &[&str] = &["debug", "mock", "fixture", "dev"];
-const DEVELOPER_ONLY_EXACT_BACKEND_TOKENS: &[&str] =
-    &["test", "dummy", "fake", "stub", "sample", "placeholder"];
-const PRODUCTION_CLAIM_BACKEND_FRAGMENTS: &[&str] = &[
-    "productionready",
-    "productionhardened",
-    "productionenabled",
-    "productionapproved",
-    "productioncertified",
-    "productionclaim",
-    "claimedproduction",
-    "mainnetready",
-    "mainnetcomplete",
-    "mainnetclaim",
-    "claimedmainnet",
-    "mainnetcertified",
-    "mainnetapproved",
-    "mainnetrelease",
-    "auditedproduction",
-    "externallyaudited",
-    "thirdpartyaudited",
-    "boiaudited",
-    "auditedmainnet",
-    "externalaudit",
-    "auditpassed",
-    "auditapproved",
-    "auditsignoff",
-    "auditclaim",
-    "claimedaudit",
-    "securityreviewpassed",
-    "securityauditpassed",
-    "securityaudited",
-    "externalsecurityreview",
-    "certifiedproduction",
-    "certifiedmainnet",
-    "releaseready",
-    "releaseapproved",
-    "releasecertified",
-];
-
-fn require_production_verify_backend_label<'a>(backend: &'a str, context: &str) -> Result<&'a str> {
-    if backend.trim().is_empty() {
-        return Err(eyre!("{context} must be a non-empty string"));
-    }
-    if !is_production_verify_backend_label(backend) {
+fn require_verifier_backend_registry_label_v1<'a>(
+    backend: &'a str,
+    context: &str,
+) -> Result<&'a str> {
+    if !is_verifier_backend_registry_label_v1(backend) {
         return Err(eyre!(
-            "{context} uses unsupported production verifier backend `{backend}`"
+            "{context} is not an exact supported verifier-registry label: `{backend}`"
         ));
     }
     Ok(backend)
 }
 
-fn is_production_verify_backend_label(backend: &str) -> bool {
-    if backend.is_empty()
-        || backend.trim() != backend
-        || !is_portable_verify_backend_label(backend)
-        || is_production_claim_backend_label(backend)
-        || is_trusted_setup_backend_label(backend)
-        || is_developer_only_backend_label(backend)
-    {
-        return false;
-    }
-
-    backend == ZK_PRODUCTION_BACKEND_HALO2_IPA
-        || is_stark_fri_production_backend_label(backend)
-        || is_native_halo2_pasta_production_backend_label(backend)
-}
-
-fn is_portable_verify_backend_label(backend: &str) -> bool {
-    if backend.is_empty() || backend.trim() != backend {
-        return false;
-    }
-    let Some(first) = backend.as_bytes().first() else {
-        return false;
-    };
-    let Some(last) = backend.as_bytes().last() else {
-        return false;
-    };
-    if !first.is_ascii_alphanumeric() || !last.is_ascii_alphanumeric() {
-        return false;
-    }
-    if backend.as_bytes().iter().any(|&byte| {
-        !matches!(
-            byte,
-            b'a'..=b'z' | b'0'..=b'9' | b'/' | b'_' | b'.' | b':' | b'-'
-        )
-    }) {
-        return false;
-    }
-    !["//", "::", "..", "/:", ":/", "/.", "./", ":.", ".:"]
-        .iter()
-        .any(|separator| backend.contains(separator))
-}
-
-fn is_production_claim_backend_label(backend: &str) -> bool {
-    let compact = compact_privacy_backend_label(backend);
-    PRODUCTION_CLAIM_BACKEND_FRAGMENTS
-        .iter()
-        .any(|fragment| compact.contains(fragment))
-}
-
-fn is_stark_fri_production_backend_label(backend: &str) -> bool {
-    backend == ZK_PRODUCTION_BACKEND_STARK_FRI
-        || backend
-            .strip_prefix("stark/fri/")
-            .is_some_and(|profile| ZK_PRODUCTION_STARK_FRI_PROFILES.contains(&profile))
-}
-
-fn is_native_halo2_pasta_production_backend_label(backend: &str) -> bool {
-    normalize_native_halo2_pasta_backend_label(backend)
-        .as_deref()
-        .is_some_and(|normalized| ZK_PRODUCTION_NATIVE_HALO2_PASTA_BACKENDS.contains(&normalized))
-}
-
-fn normalize_native_halo2_pasta_backend_label(backend: &str) -> Option<String> {
-    if backend.is_empty() || backend.trim() != backend {
-        return None;
-    }
-    for (prefix, target_prefix) in [
-        ("halo2/pasta/ipa/", "halo2/pasta/"),
-        ("halo2/pasta/", "halo2/pasta/"),
-        ("halo2/ipa::", "halo2/pasta/"),
-        ("halo2/ipa:", "halo2/pasta/"),
-        ("halo2/ipa/", "halo2/pasta/"),
-    ] {
-        if let Some(rest) = backend.strip_prefix(prefix) {
-            return (!rest.is_empty()).then(|| format!("{target_prefix}{rest}"));
-        }
-    }
-    None
-}
-
-fn is_trusted_setup_backend_label(backend: &str) -> bool {
-    let backend = backend.to_ascii_lowercase();
-    let compact = compact_privacy_backend_label(&backend);
-    has_trusted_setup_backend_segment(&backend)
-        || [
-            "groth16",
-            "kzg",
-            "bn254",
-            "bn256",
-            "bls12381",
-            "bls12",
-            "srs",
-            "crs",
-            "ptau",
-            "ceremony",
-            "trustedsetup",
-            "structuredreferencestring",
-            "universalsrs",
-            "powersoftau",
-        ]
-        .iter()
-        .any(|token| compact.contains(token))
-        || backend == "groth16"
-        || backend.starts_with("groth16/")
-        || backend == "kzg"
-        || backend.starts_with("kzg/")
-        || backend == "bn254"
-        || backend == "bn256"
-        || backend == "bls12_381"
-        || backend == "bls12-381"
-        || backend == "halo2/bn254"
-        || backend.starts_with("halo2/bn254/")
-        || backend.contains("/bn254")
-        || backend.contains(":bn254")
-        || backend.contains("/bn256")
-        || backend.contains(":bn256")
-        || backend.contains("/bls12")
-        || backend.contains(":bls12")
-        || backend == "halo2/kzg"
-        || backend.starts_with("halo2/kzg/")
-        || backend.contains("/kzg")
-        || backend.contains(":kzg")
-}
-
-fn has_trusted_setup_backend_segment(backend: &str) -> bool {
-    const TRUSTED_SETUP_SEGMENTS: &[&str] = &[
-        "groth16",
-        "kzg",
-        "bn254",
-        "bn256",
-        "bls12",
-        "srs",
-        "crs",
-        "ptau",
-        "ceremony",
-        "powersoftau",
-    ];
-    backend
-        .split(|ch: char| !ch.is_ascii_alphanumeric())
-        .any(|segment| TRUSTED_SETUP_SEGMENTS.contains(&segment))
-}
-
-fn is_developer_only_backend_label(backend: &str) -> bool {
-    let backend = backend.to_ascii_lowercase();
-    let mut letter_run = String::new();
-    for token in backend
-        .split(|ch: char| !ch.is_ascii_alphanumeric())
-        .filter(|token| !token.is_empty())
-    {
-        if is_developer_only_direct_backend_token(token) {
-            return true;
-        }
-        if token.len() == 1 {
-            letter_run.push_str(token);
-        } else {
-            if is_developer_only_compact_backend_run(&letter_run) {
-                return true;
-            }
-            letter_run.clear();
-        }
-    }
-    is_developer_only_compact_backend_run(&letter_run)
-}
-
-fn is_developer_only_direct_backend_token(token: &str) -> bool {
-    DEVELOPER_ONLY_EMBEDDED_BACKEND_TOKENS
-        .iter()
-        .any(|reserved| token.contains(reserved))
-        || DEVELOPER_ONLY_EXACT_BACKEND_TOKENS.contains(&token)
-}
-
-fn is_developer_only_compact_backend_run(run: &str) -> bool {
-    DEVELOPER_ONLY_EMBEDDED_BACKEND_TOKENS
-        .iter()
-        .any(|reserved| run.contains(reserved))
-        || DEVELOPER_ONLY_EXACT_BACKEND_TOKENS.contains(&run)
-}
-
-fn compact_privacy_backend_label(value: &str) -> String {
-    value
-        .chars()
-        .filter(char::is_ascii_alphanumeric)
-        .map(|ch| ch.to_ascii_lowercase())
-        .collect()
+fn is_verifier_backend_registry_label_v1(backend: &str) -> bool {
+    iroha_data_model::zk::is_verifier_backend_registry_label_v1(backend)
 }
 
 fn normalize_hex32_lower(value: &str, context: &str) -> Result<String> {
@@ -7232,7 +6988,7 @@ impl Client {
                 "offline readiness response contains both {field} and a {unavailable_blocker} blocker"
             ));
         }
-        if verifier.id.backend != ZK_PRODUCTION_BACKEND_HALO2_IPA
+        if verifier.id.backend != "halo2/ipa"
             || verifier.id.name != expected_role
             || verifier.circuit_id != expected_circuit_id
         {
@@ -10247,7 +10003,7 @@ mod evidence_http_tests {
             });
             let message = err.to_string();
             assert!(
-                message.contains("unsupported production verifier backend")
+                message.contains("exact supported verifier-registry label")
                     || message.contains("must match"),
                 "unexpected verify JSON error: {message}"
             );
@@ -10277,7 +10033,7 @@ mod evidence_http_tests {
 
         assert!(
             err.to_string()
-                .contains("unsupported production verifier backend"),
+                .contains("exact supported verifier-registry label"),
             "unexpected submit-proof JSON error: {err}"
         );
         assert!(
@@ -21685,7 +21441,7 @@ impl Client {
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_zk_proof_json(&self, backend: &str, hash_hex: &str) -> Result<norito::json::Value> {
-        let backend = require_production_verify_backend_label(backend, "zk proof backend")?;
+        let backend = require_verifier_backend_registry_label_v1(backend, "zk proof backend")?;
         let hash_hex = normalize_hex32_lower(hash_hex, "zk proof hash")?;
         let url = join_torii_url_with_path_segments(
             &self.torii_url,
@@ -21945,7 +21701,8 @@ impl Client {
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_zk_vk_json(&self, backend: &str, name: &str) -> Result<norito::json::Value> {
-        let backend = require_production_verify_backend_label(backend, "zk verifying key backend")?;
+        let backend =
+            require_verifier_backend_registry_label_v1(backend, "zk verifying key backend")?;
         let name = require_non_empty_path_segment(name, "zk verifying key name")?;
         let url = join_torii_url_with_path_segments(&self.torii_url, "v1/zk/vk", &[backend, name]);
         let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
@@ -23932,9 +23689,9 @@ mod url_join_tests {
     use url::Url;
 
     use super::{
-        ZkProofsFilter, is_production_verify_backend_label, join_torii_url,
+        ZkProofsFilter, is_verifier_backend_registry_label_v1, join_torii_url,
         join_torii_url_with_path_segments, normalize_hex32_lower,
-        require_production_verify_backend_label, validate_zk_proofs_filter,
+        require_verifier_backend_registry_label_v1, validate_zk_proofs_filter,
     };
 
     #[test]
@@ -23983,25 +23740,15 @@ mod url_join_tests {
     }
 
     #[test]
-    fn zk_client_backend_guard_accepts_current_production_backends() {
-        for backend in [
-            "halo2/ipa",
-            "halo2/ipa:ivm-execution-v1",
-            "halo2/pasta/ivm-execution-v1",
-            "halo2/pasta/kaigi-roster-v1",
-            "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
-            "stark/fri",
-            "stark/fri/sha256-goldilocks",
-            "stark/fri/poseidon2-goldilocks",
-            "stark/fri/sha256_goldilocks.v1",
-        ] {
+    fn zk_client_backend_guard_accepts_exact_registry_labels() {
+        for &backend in iroha_data_model::zk::ZK_VERIFIER_BACKEND_REGISTRY_LABELS_V1 {
             assert!(
-                is_production_verify_backend_label(backend),
-                "production backend {backend} must be admitted"
+                is_verifier_backend_registry_label_v1(backend),
+                "registry label {backend} must be admitted"
             );
             assert_eq!(
-                require_production_verify_backend_label(backend, "backend")
-                    .expect("production backend"),
+                require_verifier_backend_registry_label_v1(backend, "backend")
+                    .expect("exact registry label"),
                 backend
             );
         }
@@ -24019,7 +23766,10 @@ mod url_join_tests {
             "halo2/ipa\0",
             "HALO2/IPA",
             "stark/FRI",
+            "halo2/ipa:ivm-execution-v1",
             "halo2/ipa::ivm-execution-v1",
+            "halo2/ipa/ivm-execution-v1",
+            "halo2/pasta/ipa/ivm-execution-v1",
             "halo2//ipa",
             "halo2/ipa:",
             "halo2/ipa.",
@@ -24083,13 +23833,13 @@ mod url_join_tests {
             "mock/dev",
         ] {
             assert!(
-                !is_production_verify_backend_label(backend),
+                !is_verifier_backend_registry_label_v1(backend),
                 "unsupported backend {backend:?} must stay fail-closed"
             );
-            let err = require_production_verify_backend_label(backend, "backend")
+            let err = require_verifier_backend_registry_label_v1(backend, "backend")
                 .expect_err("unsupported backend rejected");
             assert!(
-                format!("{err}").contains("unsupported production verifier backend"),
+                format!("{err}").contains("exact supported verifier-registry label"),
                 "unexpected backend error for {backend:?}: {err}"
             );
         }
@@ -24114,7 +23864,7 @@ mod url_join_tests {
             };
             let err = validate_zk_proofs_filter(&filter)
                 .expect_err("unsupported filter backend rejected");
-            assert!(format!("{err}").contains("unsupported production verifier backend"));
+            assert!(format!("{err}").contains("exact supported verifier-registry label"));
         }
     }
 

@@ -6378,9 +6378,9 @@ mod trigger {
         if backend.is_empty() {
             eyre::bail!("--data-verifying-key backend must be non-empty");
         }
-        if !iroha_core::zk::is_production_verify_backend_label(backend) {
+        if !iroha_core::zk::is_verifier_backend_registry_label_v1(backend) {
             eyre::bail!(
-                "--data-verifying-key backend uses unsupported production verifier backend `{backend}`"
+                "--data-verifying-key backend uses unsupported verifier-registry label `{backend}`"
             );
         }
 
@@ -6405,9 +6405,9 @@ mod trigger {
         if backend.is_empty() {
             eyre::bail!("--data-proof backend must be non-empty");
         }
-        if !iroha_core::zk::is_production_verify_backend_label(backend) {
+        if !iroha_core::zk::is_verifier_backend_registry_label_v1(backend) {
             eyre::bail!(
-                "--data-proof backend uses unsupported production verifier backend `{backend}`"
+                "--data-proof backend uses unsupported verifier-registry label `{backend}`"
             );
         }
 
@@ -8971,7 +8971,7 @@ mod tests {
             let message = err.to_string();
             assert!(
                 message.contains("--data-proof")
-                    || message.contains("unsupported production verifier backend")
+                    || message.contains("unsupported verifier-registry label")
                     || message.contains("invalid hex"),
                 "unexpected error for {spec:?}: {message}"
             );

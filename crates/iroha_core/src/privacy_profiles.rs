@@ -12,8 +12,8 @@ use std::collections::BTreeMap;
 use iroha_data_model::privacy::{
     ANONYMOUS_PGC_MAX_ANONYMITY_SET_SIZE_V1, ANONYMOUS_PGC_MAX_RECIPIENTS_V1,
     AnonymousPgcActivationLimitsV1, AnonymousPgcKOutOfNStatementV1,
-    PRIVACY_PGC_ACCOUNT_STATE_ROOT_DOMAIN_V1, PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1,
-    PrivacyAssuranceV1, PrivacyConsensusLimitsV1, PrivacyEngineIdV1, PrivacyEngineManifestDigestV1,
+    PRIVACY_PGC_ACCOUNT_STATE_ROOT_DOMAIN_V1, PrivacyAssuranceV1, PrivacyEngineIdV1,
+    PrivacyEngineManifestDigestV1,
     PrivacyParameterDigestV1, PrivacyParameterIdV1, PrivacyPgcAccountBootstrapV1,
     PrivacyProofSystemIdV1, PrivacyProtocolActivationLimitsV1, PrivacyProtocolActivationRecordV1,
     PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1, PrivacyStatementSchemaDigestV1,
@@ -111,8 +111,8 @@ impl CompiledPrivacyProfileV1 {
             statement_schema_digest: self.statement_schema_digest,
             engine_manifest_digest: self.engine_manifest_digest,
             lifecycle,
-            limits: PrivacyConsensusLimitsV1::taira_default(),
             protocol_limits: self.protocol_limits,
+            pending_protocol_limits_tightening: None,
             assurance: PrivacyAssuranceV1::Experimental,
         }
     }
@@ -152,7 +152,7 @@ pub fn compiled_privacy_profile_v1(
     }
 }
 
-/// Require an activation to equal the locally compiled executable profile.
+/// Require exact compiled cryptographic bindings and bounded governed policy.
 ///
 /// # Errors
 ///
@@ -184,12 +184,10 @@ pub fn validate_compiled_privacy_activation_v1(
     if activation.engine_manifest_digest != compiled.engine_manifest_digest {
         return Err(CompiledPrivacyProfileValidationErrorV1::EngineManifestDigestMismatch);
     }
-    if activation.protocol_limits != compiled.protocol_limits {
-        return Err(CompiledPrivacyProfileValidationErrorV1::ProtocolLimitsMismatch);
-    }
-    if activation.limits != PrivacyConsensusLimitsV1::taira_default() {
-        return Err(CompiledPrivacyProfileValidationErrorV1::ConsensusLimitsMismatch);
-    }
+    activation
+        .protocol_limits
+        .validate_with_ceiling(&compiled.protocol_limits)
+        .map_err(|_| CompiledPrivacyProfileValidationErrorV1::ProtocolLimitsMismatch)?;
     if activation.assurance != PrivacyAssuranceV1::Experimental {
         return Err(CompiledPrivacyProfileValidationErrorV1::AssuranceMismatch);
     }
@@ -728,12 +726,10 @@ pub enum CompiledPrivacyProfileValidationErrorV1 {
     /// Engine manifest digest differs.
     #[error("privacy activation engine manifest differs from compiled profile")]
     EngineManifestDigestMismatch,
-    /// Protocol-specific limits differ.
-    #[error("privacy activation protocol limits differ from compiled profile")]
+    /// Protocol-specific limits are invalid, target another protocol, or exceed
+    /// the compiled hard ceilings.
+    #[error("privacy activation protocol limits are outside the compiled profile ceilings")]
     ProtocolLimitsMismatch,
-    /// Chain-wide Taira limits differ.
-    #[error("privacy activation consensus limits differ from compiled Taira profile")]
-    ConsensusLimitsMismatch,
     /// The first-release assurance tag differs.
     #[error("privacy activation assurance differs from compiled testnet profile")]
     AssuranceMismatch,
@@ -741,7 +737,10 @@ pub enum CompiledPrivacyProfileValidationErrorV1 {
 
 #[cfg(test)]
 mod tests {
-    use iroha_data_model::privacy::{AnonymousPgcActivationLimitsV1, PrivacyProposedLifecycleV1};
+    use iroha_data_model::privacy::{
+        AnonymousPgcActivationLimitsV1, PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1,
+        PrivacyProposedLifecycleV1,
+    };
     use iroha_schema::{Declaration, MetaMap, NamedFieldsMeta, TypeId};
 
     use super::*;
@@ -1083,14 +1082,14 @@ mod tests {
     }
 
     #[test]
-    fn every_compiled_binding_and_limit_is_immutable() {
+    fn every_compiled_cryptographic_binding_is_immutable() {
         let valid = verange_activation();
         validate_compiled_privacy_activation_v1(&valid).expect("exact profile");
 
         let mutations: [(
             CompiledPrivacyProfileValidationErrorV1,
             fn(&mut PrivacyProtocolActivationRecordV1),
-        ); 9] = [
+        ); 7] = [
             (
                 CompiledPrivacyProfileValidationErrorV1::ProofSystemMismatch,
                 |record| record.proof_system_id = PrivacyProofSystemIdV1::StarkFriSha256Goldilocks,
@@ -1119,22 +1118,6 @@ mod tests {
                 CompiledPrivacyProfileValidationErrorV1::EngineManifestDigestMismatch,
                 |record| record.engine_manifest_digest.0[0] ^= 1,
             ),
-            (
-                CompiledPrivacyProfileValidationErrorV1::ProtocolLimitsMismatch,
-                |record| {
-                    let PrivacyProtocolActivationLimitsV1::VeRangeTransparentRangeV1(
-                        ref mut limits,
-                    ) = record.protocol_limits
-                    else {
-                        unreachable!("fixture is VeRange");
-                    };
-                    limits.max_aggregation_count -= 1;
-                },
-            ),
-            (
-                CompiledPrivacyProfileValidationErrorV1::ConsensusLimitsMismatch,
-                |record| record.limits.max_proof_bytes_per_action -= 1,
-            ),
         ];
         for (expected, mutate) in mutations {
             let mut changed = valid;
@@ -1142,6 +1125,118 @@ mod tests {
             assert_eq!(
                 validate_compiled_privacy_activation_v1(&changed),
                 Err(expected)
+            );
+        }
+    }
+
+    #[test]
+    fn compiled_validation_accepts_lower_protocol_policy_without_changing_digests() {
+        let verange_compiled =
+            compiled_privacy_profile_v1(PrivacyProtocolIdV1::VeRangeTransparentRangeV1)
+                .expect("VeRange profile");
+        let mut verange = verange_activation();
+        verange.protocol_limits = PrivacyProtocolActivationLimitsV1::VeRangeTransparentRangeV1(
+            VeRangeActivationLimitsV1 {
+                max_aggregation_count: 1,
+            },
+        );
+        validate_compiled_privacy_activation_v1(&verange).expect("lower VeRange policy");
+        assert_eq!(verange.parameter_id, verange_compiled.parameter_id);
+        assert_eq!(verange.parameter_digest, verange_compiled.parameter_digest);
+        assert_eq!(verange.verifier_digest, verange_compiled.verifier_digest);
+        assert_eq!(
+            verange.statement_schema_digest,
+            verange_compiled.statement_schema_digest
+        );
+        assert_eq!(
+            verange.engine_manifest_digest,
+            verange_compiled.engine_manifest_digest
+        );
+
+        let pgc_compiled = compiled_privacy_profile_v1(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1)
+            .expect("PGC profile");
+        let mut pgc = pgc_activation();
+        pgc.protocol_limits = PrivacyProtocolActivationLimitsV1::AnonymousPgcKOutOfNV1(
+            AnonymousPgcActivationLimitsV1 {
+                max_anonymity_set_size: 16,
+                max_recipient_count: 1,
+            },
+        );
+        validate_compiled_privacy_activation_v1(&pgc).expect("lower PGC policy");
+        assert_eq!(pgc.parameter_id, pgc_compiled.parameter_id);
+        assert_eq!(pgc.parameter_digest, pgc_compiled.parameter_digest);
+        assert_eq!(pgc.verifier_digest, pgc_compiled.verifier_digest);
+        assert_eq!(
+            pgc.statement_schema_digest,
+            pgc_compiled.statement_schema_digest
+        );
+        assert_eq!(
+            pgc.engine_manifest_digest,
+            pgc_compiled.engine_manifest_digest
+        );
+    }
+
+    #[test]
+    fn compiled_validation_rejects_protocol_limit_overflow_mismatch_and_invalid_lowering() {
+        let mut invalid = Vec::new();
+
+        let mut verange_over = verange_activation();
+        verange_over.protocol_limits = PrivacyProtocolActivationLimitsV1::VeRangeTransparentRangeV1(
+            VeRangeActivationLimitsV1 {
+                max_aggregation_count: 9,
+            },
+        );
+        invalid.push(verange_over);
+
+        let mut pgc_n_over = pgc_activation();
+        pgc_n_over.protocol_limits = PrivacyProtocolActivationLimitsV1::AnonymousPgcKOutOfNV1(
+            AnonymousPgcActivationLimitsV1 {
+                max_anonymity_set_size: 65,
+                max_recipient_count: 8,
+            },
+        );
+        invalid.push(pgc_n_over);
+
+        let mut pgc_k_over = pgc_activation();
+        pgc_k_over.protocol_limits = PrivacyProtocolActivationLimitsV1::AnonymousPgcKOutOfNV1(
+            AnonymousPgcActivationLimitsV1 {
+                max_anonymity_set_size: 64,
+                max_recipient_count: 9,
+            },
+        );
+        invalid.push(pgc_k_over);
+
+        let mut pgc_bad_closed_set = pgc_activation();
+        pgc_bad_closed_set.protocol_limits =
+            PrivacyProtocolActivationLimitsV1::AnonymousPgcKOutOfNV1(
+                AnonymousPgcActivationLimitsV1 {
+                    max_anonymity_set_size: 17,
+                    max_recipient_count: 1,
+                },
+            );
+        invalid.push(pgc_bad_closed_set);
+
+        let mut zero_verange = verange_activation();
+        zero_verange.protocol_limits = PrivacyProtocolActivationLimitsV1::VeRangeTransparentRangeV1(
+            VeRangeActivationLimitsV1 {
+                max_aggregation_count: 0,
+            },
+        );
+        invalid.push(zero_verange);
+
+        let mut wrong_variant = verange_activation();
+        wrong_variant.protocol_limits = PrivacyProtocolActivationLimitsV1::AnonymousPgcKOutOfNV1(
+            AnonymousPgcActivationLimitsV1 {
+                max_anonymity_set_size: 16,
+                max_recipient_count: 1,
+            },
+        );
+        invalid.push(wrong_variant);
+
+        for activation in invalid {
+            assert_eq!(
+                validate_compiled_privacy_activation_v1(&activation),
+                Err(CompiledPrivacyProfileValidationErrorV1::ProtocolLimitsMismatch)
             );
         }
     }
@@ -1179,7 +1274,7 @@ mod tests {
                 else {
                     unreachable!("fixture is Anonymous PGC");
                 };
-                limits.max_recipient_count -= 1;
+                limits.max_recipient_count += 1;
             },
         ];
         for mutate in mutations {

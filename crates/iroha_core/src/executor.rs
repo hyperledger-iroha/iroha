@@ -5916,9 +5916,9 @@ impl Executor {
                             "verifying key backend mismatch".to_owned(),
                         ));
                     }
-                    if crate::zk::is_production_claim_backend_label(backend.as_str()) {
+                    if crate::zk::is_verifier_readiness_claim_label(backend.as_str()) {
                         return Err(ValidationFail::NotPermitted(
-                            "production-claim proof backends are not supported".to_owned(),
+                            "readiness-claim proof backends are not supported".to_owned(),
                         ));
                     }
                     if crate::zk::is_trusted_setup_backend_label(backend.as_str()) {
@@ -5931,7 +5931,7 @@ impl Executor {
                             "developer-only proof backends are not supported".to_owned(),
                         ));
                     }
-                    if !crate::zk::is_production_verify_backend_label(backend.as_str()) {
+                    if !crate::zk::is_verifier_backend_registry_label_v1(backend.as_str()) {
                         return Err(ValidationFail::NotPermitted(
                             "unsupported proof backends are not supported".to_owned(),
                         ));
@@ -15995,7 +15995,7 @@ mod tests {
         for (idx, (backend, expected_msg)) in [
             (
                 "halo2/ipa:production-ready",
-                "production-claim proof backends",
+                "readiness-claim proof backends",
             ),
             ("halo2/ipa:kzg", "trusted-setup proof backends"),
             ("halo2/ipa:dev-fixture", "developer-only proof backends"),

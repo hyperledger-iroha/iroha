@@ -21,12 +21,30 @@ use thiserror::Error;
 
 #[path = "vega/algebra.rs"]
 mod algebra;
+#[path = "vega/circuit.rs"]
+mod circuit;
 #[path = "vega/commitment.rs"]
 mod commitment;
 #[path = "vega/curve.rs"]
 mod curve;
+#[path = "vega/date.rs"]
+mod date;
+#[path = "vega/figure9.rs"]
+mod figure9;
+#[path = "vega/figure9_layout.rs"]
+mod figure9_layout;
 #[path = "vega/hyrax.rs"]
 mod hyrax;
+#[path = "vega/nifs.rs"]
+mod nifs;
+#[path = "vega/p256.rs"]
+mod p256;
+#[path = "vega/r1cs.rs"]
+mod r1cs;
+#[path = "vega/sha256.rs"]
+mod sha256;
+#[path = "vega/spartan.rs"]
+mod spartan;
 #[path = "vega/sponge.rs"]
 mod sponge;
 #[path = "vega/sumcheck.rs"]
@@ -38,6 +56,10 @@ mod wire;
 
 pub use curve::{
     VEGA_T256_BASE_MODULUS_BE_V1, VegaCurveError, VegaT256PointV1, derive_t256_generators_v1,
+};
+pub use figure9::{
+    VEGA_MDL_FIGURE9_PUBLIC_INPUTS_V1, VegaMdlFigure9ErrorV1, VegaMdlFigure9WitnessV1,
+    validate_vega_mdl_figure9_encoding_v1, validate_vega_mdl_figure9_relation_v1,
 };
 pub use transcript::{VegaTranscriptError, VegaTranscriptV1};
 pub use wire::{VegaPointWireV1, VegaScalarWireV1, VegaWireError, validate_proof_byte_cap_v1};

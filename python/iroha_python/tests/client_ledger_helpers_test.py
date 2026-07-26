@@ -28,9 +28,10 @@ from iroha_python import (
     authority_fee_payment,
 )
 from iroha_python._privacy_backends import (
-    _is_pending_production_backend_label,
-    _is_production_verify_backend_label,
-    _require_production_verify_backend_label,
+    _VERIFIER_BACKEND_REGISTRY_LABELS_V1,
+    _is_verifier_backend_registry_label_v1,
+    _require_verifier_backend_registry_label_v1,
+    _verifier_backend_registry_tag_v1,
 )
 from iroha_python.client import ACCOUNT_ONBOARDING_TOKEN_HEADER, DATA_MODEL_VERSION
 from iroha_python.repo import (
@@ -233,60 +234,45 @@ def test_onboard_account_does_not_follow_redirect_or_accept_retired_fields() -> 
         )
 
 
-def _expected_backend_rejection_message(backend: object) -> str:
-    if not isinstance(backend, str) or not backend.strip():
-        return "non-empty string"
-    if backend.strip() != backend:
-        return "surrounding whitespace"
-    return "unsupported production verifier backend"
-
-
-def test_privacy_backend_pending_classifier_rejects_adversarial_splices() -> None:
-    for label in (
-        "halo2/ipa/penumbra",
-        "halo2/ipa/masp",
-        "halo2/ipa/monero",
-        "halo2/ipa/curve-tree",
-        "fcmp++",
-        "monero-fcmp++",
-    ):
-        assert _is_pending_production_backend_label(label)
-
-    for label in (
-        "halo2/ipa/orchard/dev-fixture",
-        "stark/fri/miden/claimed-production",
-        "anonymous-pgc-k-out-of-n-v1-production",
-        "sis-hints-anoncred-pq-v0-devfixture",
-        "groth16/bls12-377/../../prod",
-        "post-quantum-masp/audit-claimed",
-        "halo2/ipa/orchard:kzg",
-        "orchard:universal-srs",
-        "penumbra-masp:kzg",
-        "jindo-lattice-pcs-zk:trusted-setup",
-        "miden-stark:ptau",
-        "sis-with-hints:groth16",
-        "pq-masp-stark-fri:kzg",
-    ):
-        assert not _is_pending_production_backend_label(label)
-
-
-def test_privacy_backend_production_verify_classifier_parity() -> None:
-    supported = (
-        "halo2/ipa",
-        "halo2/ipa:ivm-execution-v1",
-        "halo2/pasta/ivm-execution-v1",
-        "halo2/pasta/kaigi-roster-v1",
-        "halo2/ipa-pasta-cycle-v1",
-        "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
-        "stark/fri",
-        "stark/fri/sha256-goldilocks",
-        "stark/fri/poseidon2-goldilocks",
-        "stark/fri/sha256_goldilocks.v1",
+def test_privacy_verifier_registry_is_closed_exact_and_engine_typed() -> None:
+    expected = frozenset(
+        {
+            "halo2/ipa",
+            "halo2/pasta/kaigi-roster-v1",
+            "halo2/pasta/kaigi-usage-v1",
+            "halo2/pasta/ivm-overlay-bind",
+            "halo2/pasta/ivm-execution-v1",
+            "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
+            (
+                "halo2/pasta/kagemusha-recursive-spend-step-eq-"
+                "two-parent-operation-protocol-v2"
+            ),
+            (
+                "halo2/pasta/kagemusha-recursive-spend-step-ep-"
+                "two-parent-operation-protocol-v2"
+            ),
+            "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
+            "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
+            "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
+            "stark/fri",
+            "stark/fri/sha256-goldilocks",
+            "stark/fri/poseidon2-goldilocks",
+            "stark/fri/sha256_goldilocks.v1",
+        }
     )
-    for backend in supported:
-        assert _is_production_verify_backend_label(backend), backend
-        assert _require_production_verify_backend_label(backend, "backend") == backend
+    assert len(expected) == 15
+    assert _VERIFIER_BACKEND_REGISTRY_LABELS_V1 == expected
+    for backend in expected:
+        expected_tag = "halo2-ipa-pasta" if backend.startswith("halo2/") else "stark"
+        assert _verifier_backend_registry_tag_v1(backend) == expected_tag
+        assert _is_verifier_backend_registry_label_v1(backend)
+        assert (
+            _require_verifier_backend_registry_label_v1(backend, "backend")
+            == backend
+        )
 
+
+def test_privacy_verifier_registry_rejects_aliases_retired_and_hostile_labels() -> None:
     unsupported = (
         "",
         "unknown/privacy/backend",
@@ -312,6 +298,8 @@ def test_privacy_backend_production_verify_classifier_parity() -> None:
         "halo2/ipa.",
         "halo2/ipa/.ivm-execution-v1",
         "halo2/ipa:ivm..execution-v1",
+        "halo2/pasta/ipa-pasta-cycle-v1",
+        "halo2/ipa-pasta-cycle-v1",
         "../halo2/ipa",
         "halo2/ipa/orchard",
         "halo2-ipa-orchard",
@@ -389,9 +377,36 @@ def test_privacy_backend_production_verify_classifier_parity() -> None:
         "kzg/powersoftau",
     )
     for backend in unsupported:
-        assert not _is_production_verify_backend_label(backend), backend
-        with pytest.raises(ValueError, match=_expected_backend_rejection_message(backend)):
-            _require_production_verify_backend_label(backend, "backend")
+        assert _verifier_backend_registry_tag_v1(backend) is None, backend
+        assert not _is_verifier_backend_registry_label_v1(backend), backend
+        with pytest.raises(ValueError, match="unsupported verifier-registry label"):
+            _require_verifier_backend_registry_label_v1(backend, "backend")
+    for backend in (None, b"halo2/ipa", 1, object()):
+        assert _verifier_backend_registry_tag_v1(backend) is None
+        assert not _is_verifier_backend_registry_label_v1(backend)
+        with pytest.raises(TypeError, match="must be a string"):
+            _require_verifier_backend_registry_label_v1(backend, "backend")
+
+
+def test_each_privacy_verifier_registry_label_rejects_structural_mutations() -> None:
+    for label in _VERIFIER_BACKEND_REGISTRY_LABELS_V1:
+        replacement = "y" if label.endswith("x") else "x"
+        mutations = {
+            f" {label}",
+            f"{label} ",
+            label.upper(),
+            f"{label}/",
+            f"{label}\0",
+            f"{label}\u200b",
+            label.replace("/", "//", 1),
+            f"{label[:-1]}{replacement}",
+        }
+        mutations.discard(label)
+        for mutation in mutations:
+            assert not _is_verifier_backend_registry_label_v1(mutation), (
+                mutation,
+                label,
+            )
 
 
 def zk_verifying_key_commitment(backend: str, vk_bytes: bytes) -> str:
@@ -1099,12 +1114,12 @@ def test_zk_verifying_key_helpers_detect_active_status() -> None:
     ]
 
 
-def test_zk_verifying_key_helpers_reject_unstable_stark_aliases() -> None:
+def test_zk_verifying_key_helpers_reject_labels_outside_exact_registry() -> None:
     session = FakeSession([])
     client = ToriiClient("http://torii.example", session=session, max_retries=0)
 
     for backend in ("stark/fri/latest", "stark/fri/attestation", "stark/fri/contest"):
-        with pytest.raises(ValueError, match="unsupported production verifier backend"):
+        with pytest.raises(ValueError, match="unsupported verifier-registry label"):
             client.submit_zk_verifying_key_registration(
                 {"backend": backend, "name": "vk_false_positive_guard"}
             )
@@ -1199,7 +1214,7 @@ def test_zk_verifying_key_registration_rejects_unsupported_backends_before_reque
         "halo2/ipa:s-a-m-p-l-e",
         "mock/dev",
     ):
-        with pytest.raises(ValueError, match=_expected_backend_rejection_message(backend)):
+        with pytest.raises(ValueError, match="unsupported verifier-registry label"):
             client.submit_zk_verifying_key_registration(
                 {"backend": backend, "name": "vk_transfer"}
             )
@@ -1563,9 +1578,9 @@ def test_zk_verifying_key_read_helpers_reject_unsupported_backends_before_reques
         "halo2/ipa:s-a-m-p-l-e",
         "mock/dev",
     ):
-        with pytest.raises(ValueError, match=_expected_backend_rejection_message(backend)):
+        with pytest.raises(ValueError, match="unsupported verifier-registry label"):
             client.request_zk_verifying_key(backend, "vk_transfer")
-        with pytest.raises(ValueError, match=_expected_backend_rejection_message(backend)):
+        with pytest.raises(ValueError, match="unsupported verifier-registry label"):
             client.zk_verifying_key_active(backend, "vk_transfer")
     assert session.calls == []
 
@@ -1667,13 +1682,13 @@ def test_zk_event_filters_reject_unsupported_backends_before_request() -> None:
         "halo2/ipa:s-a-m-p-l-e",
         "mock/dev",
     ):
-        with pytest.raises(ValueError, match=_expected_backend_rejection_message(backend)):
+        with pytest.raises(ValueError, match="unsupported verifier-registry label"):
             DataEventFilter.verifying_key(backend=backend, name="vk_transfer")
-        with pytest.raises(ValueError, match=_expected_backend_rejection_message(backend)):
+        with pytest.raises(ValueError, match="unsupported verifier-registry label"):
             DataEventFilter.proof(backend=backend, proof_hash_hex="a" * 64)
-        with pytest.raises(ValueError, match=_expected_backend_rejection_message(backend)):
+        with pytest.raises(ValueError, match="unsupported verifier-registry label"):
             client.stream_verifying_key_events(backend=backend, name="vk_transfer")
-        with pytest.raises(ValueError, match=_expected_backend_rejection_message(backend)):
+        with pytest.raises(ValueError, match="unsupported verifier-registry label"):
             client.stream_proof_events(backend=backend, proof_hash_hex="a" * 64)
     assert session.calls == []
 

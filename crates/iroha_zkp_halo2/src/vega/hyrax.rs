@@ -50,9 +50,8 @@ pub(super) struct InnerProductRandomness<'a> {
     pub(super) r_beta: Scalar,
 }
 
-struct InnerProductInstance<'a> {
+struct InnerProductInstance {
     comm_a: Point,
-    b_vec: &'a [Scalar],
     comm_c: Point,
 }
 
@@ -74,11 +73,7 @@ pub(super) fn prove_inner_product(
     randomness: InnerProductRandomness<'_>,
     transcript: &mut VegaTranscriptV1,
 ) -> Result<InnerProductArgument, HyraxError> {
-    let instance = InnerProductInstance {
-        comm_a,
-        b_vec,
-        comm_c,
-    };
+    let instance = InnerProductInstance { comm_a, comm_c };
     let witness = InnerProductWitness { a_vec, r_a, r_c };
     if a_vec.len() != b_vec.len()
         || randomness.d_vec.len() != b_vec.len()
@@ -136,11 +131,7 @@ pub(super) fn verify_inner_product(
     argument: &InnerProductArgument,
     transcript: &mut VegaTranscriptV1,
 ) -> Result<(), HyraxError> {
-    let instance = InnerProductInstance {
-        comm_a,
-        b_vec,
-        comm_c,
-    };
+    let instance = InnerProductInstance { comm_a, comm_c };
     if b_vec.len() != expected_size
         || argument.z_vec.len() != expected_size
         || key.generators().len() < expected_size
@@ -334,7 +325,7 @@ pub(super) fn verify_direct(
 }
 
 fn absorb_inner_product_instance(
-    instance: &InnerProductInstance<'_>,
+    instance: &InnerProductInstance,
     transcript: &mut VegaTranscriptV1,
 ) -> Result<(), HyraxError> {
     transcript.domain_separator(IPA_PROTOCOL_NAME)?;

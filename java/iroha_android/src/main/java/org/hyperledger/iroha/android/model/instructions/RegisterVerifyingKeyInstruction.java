@@ -46,7 +46,8 @@ public final class RegisterVerifyingKeyInstruction implements InstructionTemplat
   }
 
   public static RegisterVerifyingKeyInstruction fromArguments(final Map<String, String> arguments) {
-    final String backend = VerifyingKeyInstructionUtils.requireProductionBackend(arguments, "backend");
+    final String backend =
+        VerifyingKeyInstructionUtils.requireVerifierRegistryBackend(arguments, "backend");
     final String name = VerifyingKeyInstructionUtils.requireExact(arguments, "name");
     final VerifyingKeyRecordDescription record =
         VerifyingKeyInstructionUtils.parseRecord(arguments, backend);
@@ -85,7 +86,8 @@ public final class RegisterVerifyingKeyInstruction implements InstructionTemplat
     private Builder() {}
 
     public Builder setBackend(final String backend) {
-      this.backend = VerifyingKeyInstructionUtils.requireProductionBackend(backend, "backend");
+      this.backend =
+          VerifyingKeyInstructionUtils.requireVerifierRegistryBackend(backend, "backend");
       return this;
     }
 

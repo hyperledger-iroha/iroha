@@ -11,11 +11,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use iroha_data_model::privacy::{
     ANONYMOUS_PGC_ANONYMITY_SET_SIZES_V1, PRIVACY_PGC_ACCOUNT_STATE_ROOT_DOMAIN_V1,
     PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1, PrivacyActivationValidationError, PrivacyCommitmentV1,
-    PrivacyConsensusLimitsV1, PrivacyNamespaceV1, PrivacyNullifierV1, PrivacyP256CiphertextV1,
-    PrivacyP256PointV1, PrivacyPgcAccountBootstrapDigestV1, PrivacyPgcAccountV1,
-    PrivacyPgcBootstrapProofDigestV1, PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1,
-    PrivacyRootManagementV1, PrivacyRootPublicationDigestV1, PrivacyRootRoleV1, PrivacyRootV1,
-    PrivacyStatementDigestV1,
+    PrivacyConsensusPolicyV1, PrivacyNamespaceV1, PrivacyNullifierV1,
+    PrivacyP256CiphertextV1, PrivacyP256PointV1, PrivacyPgcAccountBootstrapDigestV1,
+    PrivacyPgcAccountV1, PrivacyPgcBootstrapProofDigestV1,
+    PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1, PrivacyRootManagementV1,
+    PrivacyRootPublicationDigestV1, PrivacyRootRoleV1, PrivacyRootV1, PrivacyStatementDigestV1,
 };
 use mv::storage::StorageReadOnly;
 use norito::{
@@ -25,8 +25,7 @@ use norito::{
 };
 use thiserror::Error;
 
-const PRIVACY_PGC_POOL_INVARIANT_DIGEST_DOMAIN_V1: &[u8] =
-    b"iroha:privacy:pgc-pool-invariant:v1";
+const PRIVACY_PGC_POOL_INVARIANT_DIGEST_DOMAIN_V1: &[u8] = b"iroha:privacy:pgc-pool-invariant:v1";
 
 /// Typed key for the immutable activation registered for one protocol.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
@@ -57,12 +56,12 @@ pub(crate) enum PrivacyActivationPromotionErrorV1 {
     /// A persisted activation record is structurally invalid.
     #[error(transparent)]
     InvalidActivation(Box<PrivacyInvalidActivationV1>),
-    /// A persisted activation carries non-canonical chain-wide limits.
-    #[error(transparent)]
-    ConsensusLimitsMismatch(Box<PrivacyActivationConsensusLimitsMismatchV1>),
     /// A structurally valid record does not match executable consensus code.
     #[error(transparent)]
     CompiledProfile(Box<PrivacyActivationCompiledProfileMismatchV1>),
+    /// A scheduled protocol-limit transition was not applied at its exact height.
+    #[error(transparent)]
+    MissedProtocolLimits(Box<PrivacyActivationMissedProtocolLimitsV1>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
@@ -82,16 +81,20 @@ pub(crate) struct PrivacyInvalidActivationV1 {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
-#[error("persisted privacy activation {protocol_id:?} has non-canonical consensus limits")]
-pub(crate) struct PrivacyActivationConsensusLimitsMismatchV1 {
-    protocol_id: PrivacyProtocolIdV1,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Error)]
 #[error("persisted privacy activation {protocol_id:?} is not compiled: {source}")]
 pub(crate) struct PrivacyActivationCompiledProfileMismatchV1 {
     protocol_id: PrivacyProtocolIdV1,
     source: crate::privacy_profiles::CompiledPrivacyProfileValidationErrorV1,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Error)]
+#[error(
+    "privacy activation {protocol_id:?} missed protocol-limit effective height {effective_at_height} before incoming height {incoming_height}"
+)]
+pub(crate) struct PrivacyActivationMissedProtocolLimitsV1 {
+    protocol_id: PrivacyProtocolIdV1,
+    effective_at_height: u64,
+    incoming_height: u64,
 }
 
 /// Prevalidate and plan every scheduled activation promotion due at `current_height`.
@@ -108,7 +111,7 @@ pub(crate) struct PrivacyActivationCompiledProfileMismatchV1 {
 /// chain-wide limits before returning an update.
 pub(crate) fn plan_due_privacy_activation_promotions_v1(
     activations: &impl StorageReadOnly<PrivacyActivationKeyV1, PrivacyProtocolActivationRecordV1>,
-    current_height: u64,
+    incoming_height: u64,
 ) -> Result<
     Vec<(PrivacyActivationKeyV1, PrivacyProtocolActivationRecordV1)>,
     PrivacyActivationPromotionErrorV1,
@@ -131,13 +134,6 @@ pub(crate) fn plan_due_privacy_activation_promotions_v1(
                 },
             ))
         })?;
-        if record.limits != PrivacyConsensusLimitsV1::taira_default() {
-            return Err(PrivacyActivationPromotionErrorV1::ConsensusLimitsMismatch(
-                Box::new(PrivacyActivationConsensusLimitsMismatchV1 {
-                    protocol_id: record.protocol_id,
-                }),
-            ));
-        }
         crate::privacy_profiles::validate_compiled_privacy_activation_v1(record).map_err(
             |source| {
                 PrivacyActivationPromotionErrorV1::CompiledProfile(Box::new(
@@ -149,11 +145,26 @@ pub(crate) fn plan_due_privacy_activation_promotions_v1(
             },
         )?;
 
+        let mut promoted = *record;
         let lifecycle =
-            crate::privacy::effective_privacy_lifecycle_v1(record.lifecycle, current_height);
-        if lifecycle != record.lifecycle {
-            let mut promoted = *record;
-            promoted.lifecycle = lifecycle;
+            crate::privacy::effective_privacy_lifecycle_v1(record.lifecycle, incoming_height);
+        promoted.lifecycle = lifecycle;
+        if let Some(pending) = record.pending_protocol_limits_tightening {
+            if pending.effective_at_height < incoming_height {
+                return Err(PrivacyActivationPromotionErrorV1::MissedProtocolLimits(
+                    Box::new(PrivacyActivationMissedProtocolLimitsV1 {
+                        protocol_id: record.protocol_id,
+                        effective_at_height: pending.effective_at_height,
+                        incoming_height,
+                    }),
+                ));
+            }
+            if pending.effective_at_height == incoming_height {
+                promoted.protocol_limits = pending.next_limits;
+                promoted.pending_protocol_limits_tightening = None;
+            }
+        }
+        if promoted != *record {
             promoted.validate().map_err(|source| {
                 PrivacyActivationPromotionErrorV1::InvalidActivation(Box::new(
                     PrivacyInvalidActivationV1 {
@@ -162,10 +173,60 @@ pub(crate) fn plan_due_privacy_activation_promotions_v1(
                     },
                 ))
             })?;
+            crate::privacy_profiles::validate_compiled_privacy_activation_v1(&promoted).map_err(
+                |source| {
+                    PrivacyActivationPromotionErrorV1::CompiledProfile(Box::new(
+                        PrivacyActivationCompiledProfileMismatchV1 {
+                            protocol_id: promoted.protocol_id,
+                            source,
+                        },
+                    ))
+                },
+            )?;
             promotions.push((*key, promoted));
         }
     }
     Ok(promotions)
+}
+
+/// Validate that every restored protocol-limit schedule is still future.
+///
+/// A transition effective at `E` is valid in a snapshot committed at `E - 1`
+/// and invalid once committed height `E` has already been reached.
+pub(crate) fn validate_privacy_activation_schedules_at_committed_height_v1(
+    activations: &impl StorageReadOnly<PrivacyActivationKeyV1, PrivacyProtocolActivationRecordV1>,
+    committed_height: u64,
+) -> Result<(), String> {
+    for (key, record) in activations.iter() {
+        if key.protocol_id() != record.protocol_id {
+            return Err(format!(
+                "privacy activation key protocol {:?} differs from record protocol {:?}",
+                key.protocol_id(),
+                record.protocol_id
+            ));
+        }
+        record.validate().map_err(|error| {
+            format!(
+                "persisted privacy activation {:?} is invalid: {error}",
+                record.protocol_id
+            )
+        })?;
+        if let Some(pending) = record.pending_protocol_limits_tightening {
+            if pending.scheduled_at_height > committed_height {
+                return Err(format!(
+                    "privacy activation {:?} protocol-limit scheduled-at height {} is after committed height {committed_height}",
+                    record.protocol_id, pending.scheduled_at_height
+                ));
+            }
+            if pending.effective_at_height <= committed_height {
+                return Err(format!(
+                    "privacy activation {:?} protocol-limit effective height {} is not after committed height {committed_height}",
+                    record.protocol_id, pending.effective_at_height
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Exact encrypted-account key in one Anonymous PGC pool.
@@ -586,6 +647,7 @@ pub(crate) struct PrivacyPgcPoolSnapshotV1 {
     accounts: Vec<PrivacyPgcAccountV1>,
     current_epoch: u64,
     current_root: PrivacyRootV1,
+    retention_anchor: Option<PrivacyRootRetentionAnchorV1>,
     retained_roots: Vec<(PrivacyRootKeyV1, PrivacyRootProvenanceV1)>,
 }
 
@@ -613,6 +675,11 @@ impl PrivacyPgcPoolSnapshotV1 {
     #[must_use]
     pub(crate) const fn current_root(&self) -> PrivacyRootV1 {
         self.current_root
+    }
+
+    #[must_use]
+    pub(crate) const fn retention_anchor(&self) -> Option<PrivacyRootRetentionAnchorV1> {
+        self.retention_anchor
     }
 
     /// Return trusted retained membership for the exact current head.
@@ -667,6 +734,7 @@ fn validate_pgc_retained_root_chain_v1(
     namespace: PrivacyNamespaceV1,
     invariant: PrivacyPgcPoolInvariantV1,
     retained_root_count: usize,
+    retention_anchor: Option<PrivacyRootRetentionAnchorV1>,
     history: &[(PrivacyRootKeyV1, PrivacyRootProvenanceV1)],
 ) -> Result<(), String> {
     if retained_root_count == 0 {
@@ -690,6 +758,12 @@ fn validate_pgc_retained_root_chain_v1(
             bootstrap_proof_digest,
             ..
         } => {
+            if retention_anchor.is_some() {
+                return Err(
+                    "privacy PGC retained bootstrap history has an unexpected pruned-prefix anchor"
+                        .to_owned(),
+                );
+            }
             if first_key.epoch() != PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1 {
                 return Err(format!(
                     "privacy PGC bootstrap root epoch {} is not canonical epoch {}",
@@ -708,12 +782,6 @@ fn validate_pgc_retained_root_chain_v1(
             }
         }
         PrivacyRootProvenanceV1::VerifiedPgcSuccessor { .. } => {
-            if history.len() != retained_root_count {
-                return Err(format!(
-                    "privacy PGC pruned-prefix history has {} roots but must fill retention {retained_root_count}",
-                    history.len()
-                ));
-            }
             let (parent_epoch, parent_root) = validate_pgc_successor_link_v1(
                 namespace,
                 first_key,
@@ -726,21 +794,30 @@ fn validate_pgc_retained_root_chain_v1(
                         .to_owned(),
                 );
             }
-            if first_key.epoch() == PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1 + 1
-                && (parent_epoch != PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1
-                    || parent_root != invariant.bootstrap_root())
+            let anchor = retention_anchor.ok_or_else(|| {
+                "privacy PGC pruned-prefix history has no exact retention anchor".to_owned()
+            })?;
+            if anchor.epoch().checked_add(1) != Some(first_key.epoch())
+                || parent_epoch != anchor.epoch()
+                || parent_root != anchor.root()
             {
                 return Err(
-                    "privacy PGC first successor does not consume the immutable bootstrap root"
+                    "privacy PGC first retained successor does not consume its exact pruned-prefix anchor"
+                        .to_owned(),
+                );
+            }
+            if anchor.epoch() == PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1
+                && anchor.root() != invariant.bootstrap_root()
+            {
+                return Err(
+                    "privacy PGC pruned bootstrap anchor differs from its immutable invariant"
                         .to_owned(),
                 );
             }
         }
         PrivacyRootProvenanceV1::Governance { .. }
         | PrivacyRootProvenanceV1::VerifiedProof { .. } => {
-            return Err(
-                "privacy PGC retained history begins with invalid provenance".to_owned(),
-            );
+            return Err("privacy PGC retained history begins with invalid provenance".to_owned());
         }
     }
 
@@ -763,6 +840,12 @@ fn validate_pgc_retained_root_chain_v1(
                 child_key.epoch()
             ));
         }
+    }
+    if retention_anchor.is_some() && history.len() != retained_root_count {
+        return Err(format!(
+            "privacy PGC anchored history has {} roots but must fill retention {retained_root_count}",
+            history.len()
+        ));
     }
     Ok(())
 }
@@ -853,6 +936,7 @@ pub(crate) fn load_privacy_pgc_pool_snapshot_v1(
         namespace,
         invariant,
         retained_root_count,
+        head.retention_anchor(),
         &retained_roots,
     )?;
     let latest = retained_roots
@@ -961,6 +1045,7 @@ pub(crate) fn load_privacy_pgc_pool_snapshot_v1(
         accounts,
         current_epoch: epoch,
         current_root: computed,
+        retention_anchor: head.retention_anchor(),
         retained_roots,
     })
 }
@@ -972,6 +1057,7 @@ pub(crate) fn load_privacy_pgc_pool_snapshot_v1(
 /// duplicate root epoch, missing/inconsistent head, or PGC account/root
 /// mismatch cannot enter consensus state.
 pub(crate) fn validate_privacy_persisted_state_v1(
+    policy: &PrivacyConsensusPolicyV1,
     activations: &impl StorageReadOnly<PrivacyActivationKeyV1, PrivacyProtocolActivationRecordV1>,
     pgc_accounts: &impl StorageReadOnly<PrivacyPgcAccountKeyV1, PrivacyPgcAccountStateV1>,
     pgc_pool_invariants: &impl StorageReadOnly<PrivacyPgcPoolInvariantKeyV1, PrivacyPgcPoolInvariantV1>,
@@ -980,6 +1066,9 @@ pub(crate) fn validate_privacy_persisted_state_v1(
     roots: &impl StorageReadOnly<PrivacyRootKeyV1, PrivacyRootProvenanceV1>,
     root_heads: &impl StorageReadOnly<PrivacyRootHeadKeyV1, PrivacyRootHeadRecordV1>,
 ) -> Result<(), String> {
+    policy
+        .validate()
+        .map_err(|error| format!("invalid privacy consensus policy: {error}"))?;
     plan_due_privacy_activation_promotions_v1(activations, 0)
         .map_err(|error| format!("invalid privacy activation registry: {error}"))?;
 
@@ -1038,10 +1127,14 @@ pub(crate) fn validate_privacy_persisted_state_v1(
     }
 
     for ((namespace, role), history) in &history_by_scope {
-        let activation = activations
-            .get(&PrivacyActivationKeyV1::new(namespace.protocol_id()))
-            .expect("activation existence checked while grouping roots");
-        let retained = usize::try_from(activation.limits.retained_root_count)
+        let retained_root_count = if namespace.protocol_id()
+            == PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1
+        {
+            policy.current_limits.retained_root_count
+        } else {
+            policy.admission_retained_root_count()
+        };
+        let retained = usize::try_from(retained_root_count)
             .map_err(|_| "privacy retained-root count cannot be represented".to_owned())?;
         if history.len() > retained {
             return Err(format!(
@@ -1056,60 +1149,73 @@ pub(crate) fn validate_privacy_persisted_state_v1(
                 ));
             }
         }
-        if *role == PrivacyRootRoleV1::PgcAccountState {
-            let invariant_key =
-                PrivacyPgcPoolInvariantKeyV1::new(*namespace).map_err(|error| {
-                    format!("invalid privacy PGC invariant key for root history: {error}")
-                })?;
-            let invariant = pgc_pool_invariants.get(&invariant_key).copied().ok_or_else(|| {
-                format!("PGC privacy root history for {namespace:?} has no pool invariant")
-            })?;
-            validate_pgc_retained_root_chain_v1(*namespace, invariant, retained, history)?;
-        } else {
-            match role.management() {
-            PrivacyRootManagementV1::GovernanceManaged => {
-                if history.iter().any(|(_, provenance)| {
-                    !matches!(provenance, PrivacyRootProvenanceV1::Governance { .. })
-                }) {
-                    return Err(format!(
-                        "governance-managed privacy root history for {namespace:?}/{role:?} contains non-governance provenance"
-                    ));
-                }
-            }
-            PrivacyRootManagementV1::ProofManaged => {
-                let Some((_, first_provenance)) = history.first() else {
-                    return Err("grouped privacy root history is unexpectedly empty".to_owned());
-                };
-                if !matches!(first_provenance, PrivacyRootProvenanceV1::Governance { .. }) {
-                    return Err(format!(
-                        "proof-managed privacy root history for {namespace:?}/{role:?} does not begin with governance initialization"
-                    ));
-                }
-                if history.iter().skip(1).any(|(_, provenance)| {
-                    !matches!(provenance, PrivacyRootProvenanceV1::VerifiedProof { .. })
-                }) {
-                    return Err(format!(
-                        "proof-managed privacy root history for {namespace:?}/{role:?} contains a non-proof advancement"
-                    ));
-                }
-                for adjacent in history.windows(2) {
-                    if adjacent[1].1.proof_parent()
-                        != Some((adjacent[0].0.epoch(), adjacent[0].0.root()))
-                        || adjacent[0].0.epoch().checked_add(1) != Some(adjacent[1].0.epoch())
-                    {
-                        return Err(format!(
-                            "proof-managed privacy root history for {namespace:?}/{role:?} has a gap or forged parent"
-                        ));
-                    }
-                }
-            }
-            }
-        }
         let head_key = PrivacyRootHeadKeyV1::new(*namespace, *role)
             .map_err(|error| format!("invalid privacy root-head key: {error}"))?;
         let head = root_heads.get(&head_key).ok_or_else(|| {
             format!("privacy root history for {namespace:?}/{role:?} has no current head")
         })?;
+        if *role == PrivacyRootRoleV1::PgcAccountState {
+            let invariant_key = PrivacyPgcPoolInvariantKeyV1::new(*namespace).map_err(|error| {
+                format!("invalid privacy PGC invariant key for root history: {error}")
+            })?;
+            let invariant = pgc_pool_invariants
+                .get(&invariant_key)
+                .copied()
+                .ok_or_else(|| {
+                    format!("PGC privacy root history for {namespace:?} has no pool invariant")
+                })?;
+            validate_pgc_retained_root_chain_v1(
+                *namespace,
+                invariant,
+                retained,
+                head.retention_anchor(),
+                history,
+            )?;
+        } else {
+            if head.retention_anchor().is_some() {
+                return Err(format!(
+                    "non-PGC privacy root head for {namespace:?}/{role:?} carries an unsupported retention anchor"
+                ));
+            }
+            match role.management() {
+                PrivacyRootManagementV1::GovernanceManaged => {
+                    if history.iter().any(|(_, provenance)| {
+                        !matches!(provenance, PrivacyRootProvenanceV1::Governance { .. })
+                    }) {
+                        return Err(format!(
+                            "governance-managed privacy root history for {namespace:?}/{role:?} contains non-governance provenance"
+                        ));
+                    }
+                }
+                PrivacyRootManagementV1::ProofManaged => {
+                    let Some((_, first_provenance)) = history.first() else {
+                        return Err("grouped privacy root history is unexpectedly empty".to_owned());
+                    };
+                    if !matches!(first_provenance, PrivacyRootProvenanceV1::Governance { .. }) {
+                        return Err(format!(
+                            "proof-managed privacy root history for {namespace:?}/{role:?} does not begin with governance initialization"
+                        ));
+                    }
+                    if history.iter().skip(1).any(|(_, provenance)| {
+                        !matches!(provenance, PrivacyRootProvenanceV1::VerifiedProof { .. })
+                    }) {
+                        return Err(format!(
+                            "proof-managed privacy root history for {namespace:?}/{role:?} contains a non-proof advancement"
+                        ));
+                    }
+                    for adjacent in history.windows(2) {
+                        if adjacent[1].1.proof_parent()
+                            != Some((adjacent[0].0.epoch(), adjacent[0].0.root()))
+                            || adjacent[0].0.epoch().checked_add(1) != Some(adjacent[1].0.epoch())
+                        {
+                            return Err(format!(
+                                "proof-managed privacy root history for {namespace:?}/{role:?} has a gap or forged parent"
+                            ));
+                        }
+                    }
+                }
+            }
+        }
         let latest = history.last().expect("grouped history is non-empty");
         if head.epoch() != latest.0.epoch()
             || head.root() != latest.0.root()
@@ -1706,19 +1812,6 @@ impl PrivacyRootProvenanceV1 {
         }
     }
 
-    #[must_use]
-    const fn pgc_invariant_digest(self) -> Option<PrivacyPgcPoolInvariantDigestV1> {
-        match self {
-            Self::VerifiedPgcSuccessor {
-                pool_invariant_digest,
-                ..
-            } => Some(pool_invariant_digest),
-            Self::Governance { .. }
-            | Self::VerifiedBootstrap { .. }
-            | Self::VerifiedProof { .. } => None,
-        }
-    }
-
     /// Validate restored provenance.
     ///
     /// # Errors
@@ -1746,16 +1839,14 @@ impl PrivacyRootProvenanceV1 {
                 action_index,
                 parent_epoch,
                 parent_root,
-            } => {
-                Self::verified_proof(
-                    statement_digest,
-                    admitted_at_height,
-                    action_index,
-                    parent_epoch,
-                    parent_root,
-                )
-                .map(|_| ())
-            }
+            } => Self::verified_proof(
+                statement_digest,
+                admitted_at_height,
+                action_index,
+                parent_epoch,
+                parent_root,
+            )
+            .map(|_| ()),
             Self::VerifiedPgcSuccessor {
                 statement_digest,
                 admitted_at_height,
@@ -1776,12 +1867,46 @@ impl PrivacyRootProvenanceV1 {
     }
 }
 
-/// Current canonical root and its exact typed provenance.
+/// Exact last-pruned root immediately preceding the retained history window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, Encode, Decode)]
+pub(crate) struct PrivacyRootRetentionAnchorV1 {
+    epoch: u64,
+    root: PrivacyRootV1,
+}
+
+impl PrivacyRootRetentionAnchorV1 {
+    pub(crate) fn new(epoch: u64, root: PrivacyRootV1) -> Result<Self, &'static str> {
+        if epoch == 0 {
+            return Err("privacy root retention-anchor epoch must be non-zero");
+        }
+        if root.is_zero() {
+            return Err("privacy root retention-anchor root must be non-zero");
+        }
+        Ok(Self { epoch, root })
+    }
+
+    #[must_use]
+    pub(crate) const fn epoch(self) -> u64 {
+        self.epoch
+    }
+
+    #[must_use]
+    pub(crate) const fn root(self) -> PrivacyRootV1 {
+        self.root
+    }
+
+    fn validate(self) -> Result<(), &'static str> {
+        Self::new(self.epoch, self.root).map(|_| ())
+    }
+}
+
+/// Current canonical root, its provenance, and exact retained-prefix anchor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, Encode, Decode)]
 pub(crate) struct PrivacyRootHeadRecordV1 {
     epoch: u64,
     root: PrivacyRootV1,
     provenance: PrivacyRootProvenanceV1,
+    retention_anchor: Option<PrivacyRootRetentionAnchorV1>,
 }
 
 impl PrivacyRootHeadRecordV1 {
@@ -1794,6 +1919,7 @@ impl PrivacyRootHeadRecordV1 {
         epoch: u64,
         root: PrivacyRootV1,
         provenance: PrivacyRootProvenanceV1,
+        retention_anchor: Option<PrivacyRootRetentionAnchorV1>,
     ) -> Result<Self, &'static str> {
         if epoch == 0 {
             return Err("privacy root-head epoch must be non-zero");
@@ -1802,10 +1928,17 @@ impl PrivacyRootHeadRecordV1 {
             return Err("privacy root-head root must be non-zero");
         }
         provenance.validate()?;
+        if let Some(anchor) = retention_anchor {
+            anchor.validate()?;
+            if anchor.epoch() >= epoch {
+                return Err("privacy root retention anchor must precede the current head");
+            }
+        }
         Ok(Self {
             epoch,
             root,
             provenance,
+            retention_anchor,
         })
     }
 
@@ -1827,13 +1960,25 @@ impl PrivacyRootHeadRecordV1 {
         self.provenance
     }
 
+    /// Return the exact root immediately before the retained window, if any.
+    #[must_use]
+    pub(crate) const fn retention_anchor(self) -> Option<PrivacyRootRetentionAnchorV1> {
+        self.retention_anchor
+    }
+
     /// Validate a restored head record.
     ///
     /// # Errors
     ///
     /// Rejects a zero epoch/root or malformed provenance.
     pub(crate) fn validate(self) -> Result<(), &'static str> {
-        Self::new(self.epoch, self.root, self.provenance).map(|_| ())
+        Self::new(
+            self.epoch,
+            self.root,
+            self.provenance,
+            self.retention_anchor,
+        )
+        .map(|_| ())
     }
 }
 
@@ -2005,10 +2150,11 @@ pub(crate) fn plan_privacy_root_history_update_v1(
             }
         }
 
-        let existing = roots
+        let mut existing = roots
             .range(PrivacyRootKeyV1::history_range(namespace, role))
             .map(|(key, _)| *key)
             .collect::<Vec<_>>();
+        existing.sort_unstable();
         for key in &added {
             if roots.get(key).is_some() {
                 return Err(PrivacyRootHistoryErrorV1::ExistingRoot { key: *key });
@@ -2043,6 +2189,110 @@ pub(crate) fn plan_privacy_root_history_update_v1(
         removals.extend(existing.into_iter().take(prune_count));
     }
     Ok(removals)
+}
+
+/// One atomic per-history retention-reduction plan.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PrivacyRootRetentionReductionPlanV1 {
+    pub(crate) head_key: PrivacyRootHeadKeyV1,
+    pub(crate) new_anchor: PrivacyRootRetentionAnchorV1,
+    pub(crate) removal_keys: Vec<PrivacyRootKeyV1>,
+}
+
+/// Plan exact per-history anchors and oldest roots for a retention decrease.
+///
+/// Histories remain independent by `(namespace, role)`. The function is
+/// read-only and returns keys in deterministic scope/epoch order so governance
+/// can apply the activation replacement and every prune in one transaction.
+///
+/// # Errors
+///
+/// Rejects a zero retention policy, malformed existing key, or an
+/// unrepresentable count.
+pub(crate) fn plan_privacy_root_retention_reduction_v1(
+    roots: &impl StorageReadOnly<PrivacyRootKeyV1, PrivacyRootProvenanceV1>,
+    protocol_id: PrivacyProtocolIdV1,
+    retained_root_count: u32,
+) -> Result<Vec<PrivacyRootRetentionReductionPlanV1>, PrivacyRootHistoryErrorV1> {
+    if retained_root_count == 0 {
+        return Err(PrivacyRootHistoryErrorV1::ZeroRetention);
+    }
+    let retained = usize::try_from(retained_root_count)
+        .map_err(|_| PrivacyRootHistoryErrorV1::CountOverflow)?;
+    let mut by_history =
+        BTreeMap::<(PrivacyNamespaceV1, PrivacyRootRoleV1), Vec<PrivacyRootKeyV1>>::new();
+    for (key, _) in roots.iter() {
+        key.validate()
+            .map_err(PrivacyRootHistoryErrorV1::InvalidKey)?;
+        if key.namespace().protocol_id() == protocol_id {
+            by_history
+                .entry((key.namespace(), key.role()))
+                .or_default()
+                .push(*key);
+        }
+    }
+
+    let mut plans = Vec::new();
+    for ((namespace, role), mut history) in by_history {
+        history.sort_unstable();
+        let prune_count = history.len().saturating_sub(retained);
+        if prune_count == 0 {
+            continue;
+        }
+        let removal_keys = history.into_iter().take(prune_count).collect::<Vec<_>>();
+        let last_removed = *removal_keys
+            .last()
+            .expect("positive prune count produces a last removed root");
+        let head_key = PrivacyRootHeadKeyV1::new(namespace, role)
+            .map_err(PrivacyRootHistoryErrorV1::InvalidKey)?;
+        let new_anchor =
+            PrivacyRootRetentionAnchorV1::new(last_removed.epoch(), last_removed.root())
+                .map_err(PrivacyRootHistoryErrorV1::InvalidKey)?;
+        plans.push(PrivacyRootRetentionReductionPlanV1 {
+            head_key,
+            new_anchor,
+            removal_keys,
+        });
+    }
+    Ok(plans)
+}
+
+/// Validate that every non-PGC history already satisfies a future retention cap.
+///
+/// Non-PGC histories have no typed parent anchor in the first release and
+/// therefore cannot be pruned implicitly. Governance must not schedule a
+/// chain-wide retention tightening which would orphan one of those histories.
+pub(crate) fn validate_non_pgc_privacy_root_retention_v1(
+    roots: &impl StorageReadOnly<PrivacyRootKeyV1, PrivacyRootProvenanceV1>,
+    retained_root_count: u32,
+) -> Result<(), String> {
+    if retained_root_count == 0 {
+        return Err("privacy retained-root count must be non-zero".to_owned());
+    }
+    let retained = usize::try_from(retained_root_count)
+        .map_err(|_| "privacy retained-root count cannot be represented".to_owned())?;
+    let mut counts = BTreeMap::<(PrivacyNamespaceV1, PrivacyRootRoleV1), usize>::new();
+    for (key, _) in roots.iter() {
+        key.validate()
+            .map_err(|error| format!("invalid privacy root key: {error}"))?;
+        if key.namespace().protocol_id() == PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1 {
+            continue;
+        }
+        let count = counts
+            .entry((key.namespace(), key.role()))
+            .or_default();
+        *count = count
+            .checked_add(1)
+            .ok_or_else(|| "privacy root-history count overflow".to_owned())?;
+    }
+    for ((namespace, role), count) in counts {
+        if count > retained {
+            return Err(format!(
+                "non-PGC privacy root history for {namespace:?}/{role:?} has {count} roots, exceeding scheduled retention {retained}"
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn encode_storage_key<T: Encode>(value: &T, out: &mut String) {
@@ -2230,6 +2480,7 @@ mod tests {
     impl PgcPersistedFixture {
         fn validate(&self) -> Result<(), String> {
             validate_privacy_persisted_state_v1(
+                &PrivacyConsensusPolicyV1::taira_default(),
                 &self.activations.view(),
                 &self.pgc_accounts.view(),
                 &self.pgc_pool_invariants.view(),
@@ -2258,9 +2509,175 @@ mod tests {
             self.root_heads = Storage::new();
             self.root_heads.insert(
                 self.head_key,
-                PrivacyRootHeadRecordV1::new(epoch, root, provenance)
+                PrivacyRootHeadRecordV1::new(epoch, root, provenance, None)
                     .expect("replacement root head"),
             );
+        }
+
+        fn invariant(&self) -> PrivacyPgcPoolInvariantV1 {
+            *self
+                .pgc_pool_invariants
+                .view()
+                .get(&self.invariant_key)
+                .expect("fixture pool invariant")
+        }
+
+        fn account_table(&self) -> Vec<PrivacyPgcAccountV1> {
+            self.pgc_accounts
+                .view()
+                .iter()
+                .map(|(key, state)| PrivacyPgcAccountV1 {
+                    public_key: key.public_key(),
+                    encrypted_balance: state.encrypted_balance(),
+                })
+                .collect()
+        }
+
+        fn advance_with_retention(&mut self, retained_root_count: u32) {
+            let head = *self
+                .root_heads
+                .view()
+                .get(&self.head_key)
+                .expect("fixture current head");
+            let next_epoch = head.epoch().checked_add(1).expect("fixture epoch advance");
+            let mut statement_bytes = [0xD0; 32];
+            statement_bytes[..8].copy_from_slice(&next_epoch.to_be_bytes());
+            let statement_digest = PrivacyStatementDigestV1::new(statement_bytes);
+            let account_provenance =
+                PrivacyPgcAccountProvenanceV1::verified_proof(statement_digest, next_epoch + 10, 0)
+                    .expect("successor account provenance");
+            let invariant = self.invariant();
+            let account_table = self.account_table();
+            let next_root = compute_privacy_pgc_account_state_root_v1(
+                self.namespace,
+                next_epoch,
+                invariant.total_supply(),
+                &account_table,
+            )
+            .expect("successor account root");
+            let root_provenance = PrivacyRootProvenanceV1::verified_pgc_successor(
+                statement_digest,
+                next_epoch + 10,
+                0,
+                head.epoch(),
+                head.root(),
+                invariant
+                    .digest(self.namespace)
+                    .expect("pool invariant digest"),
+            )
+            .expect("successor root provenance");
+            let next_key = PrivacyRootKeyV1::new(
+                self.namespace,
+                PrivacyRootRoleV1::PgcAccountState,
+                next_epoch,
+                next_root,
+            )
+            .expect("successor root key");
+            let removals = plan_privacy_root_history_update_v1(
+                &self.roots.view(),
+                &[next_key],
+                retained_root_count,
+            )
+            .expect("successor history plan");
+            let retention_anchor = removals
+                .last()
+                .map(|key| {
+                    PrivacyRootRetentionAnchorV1::new(key.epoch(), key.root())
+                        .expect("pruned root anchor")
+                })
+                .or(head.retention_anchor());
+
+            let retained_roots = self
+                .roots
+                .view()
+                .iter()
+                .filter(|(key, _)| !removals.contains(key))
+                .map(|(key, provenance)| (*key, *provenance))
+                .collect::<Vec<_>>();
+            self.roots = retained_roots.into_iter().collect();
+            for key in &self.account_keys {
+                let encrypted_balance = self
+                    .pgc_accounts
+                    .view()
+                    .get(key)
+                    .expect("fixture account")
+                    .encrypted_balance();
+                self.pgc_accounts.insert(
+                    *key,
+                    PrivacyPgcAccountStateV1::new(
+                        encrypted_balance,
+                        next_epoch,
+                        account_provenance,
+                    )
+                    .expect("successor account state"),
+                );
+            }
+            self.roots.insert(next_key, root_provenance);
+            self.root_heads.insert(
+                self.head_key,
+                PrivacyRootHeadRecordV1::new(
+                    next_epoch,
+                    next_root,
+                    root_provenance,
+                    retention_anchor,
+                )
+                .expect("successor head"),
+            );
+            self.root_key = next_key;
+            self.root = next_root;
+            self.provenance = root_provenance;
+        }
+
+        fn tighten_retention(&mut self, retained_root_count: u32) {
+            let head = *self
+                .root_heads
+                .view()
+                .get(&self.head_key)
+                .expect("fixture current head");
+            let plans = plan_privacy_root_retention_reduction_v1(
+                &self.roots.view(),
+                PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
+                retained_root_count,
+            )
+            .expect("retention reduction plan");
+            if plans.is_empty() {
+                return;
+            }
+            assert_eq!(plans.len(), 1);
+            let plan = &plans[0];
+            assert_eq!(plan.head_key, self.head_key);
+            let retained_roots = self
+                .roots
+                .view()
+                .iter()
+                .filter(|(key, _)| !plan.removal_keys.contains(key))
+                .map(|(key, provenance)| (*key, *provenance))
+                .collect::<Vec<_>>();
+            self.roots = retained_roots.into_iter().collect();
+            self.root_heads.insert(
+                self.head_key,
+                PrivacyRootHeadRecordV1::new(
+                    head.epoch(),
+                    head.root(),
+                    head.provenance(),
+                    Some(plan.new_anchor),
+                )
+                .expect("retention-tightened head"),
+            );
+        }
+
+        fn load_with_retention(
+            &self,
+            retained_root_count: u32,
+        ) -> Result<PrivacyPgcPoolSnapshotV1, String> {
+            load_privacy_pgc_pool_snapshot_v1(
+                self.namespace,
+                retained_root_count,
+                &self.pgc_accounts.view(),
+                &self.pgc_pool_invariants.view(),
+                &self.roots.view(),
+                &self.root_heads.view(),
+            )
         }
     }
 
@@ -2340,7 +2757,7 @@ mod tests {
         let mut root_heads = Storage::new();
         root_heads.insert(
             head_key,
-            PrivacyRootHeadRecordV1::new(epoch, root, provenance).expect("root head"),
+            PrivacyRootHeadRecordV1::new(epoch, root, provenance, None).expect("root head"),
         );
 
         PgcPersistedFixture {
@@ -2438,18 +2855,99 @@ mod tests {
     }
 
     #[test]
-    fn promotion_rejects_noncanonical_chain_limits() {
+    fn promotion_rejects_a_missed_protocol_limit_schedule() {
         let mut proposal = activation_proposal();
-        proposal.limits.max_proof_bytes_per_action -= 1;
+        let mut next_limits = proposal.protocol_limits;
+        let iroha_data_model::privacy::PrivacyProtocolActivationLimitsV1::VeRangeTransparentRangeV1(
+            ref mut limits,
+        ) = next_limits
+        else {
+            unreachable!("VeRange fixture")
+        };
+        limits.max_aggregation_count -= 1;
+        proposal.pending_protocol_limits_tightening =
+            Some(iroha_data_model::privacy::PrivacyProtocolLimitsTighteningV1 {
+                scheduled_at_height: 1_000,
+                effective_at_height: 1_300,
+                next_limits,
+            });
         let key = PrivacyActivationKeyV1::new(proposal.protocol_id);
         let mut activations = Storage::new();
         activations.insert(key, proposal);
 
         assert!(matches!(
-            plan_due_privacy_activation_promotions_v1(&activations.view(), 1_300),
-            Err(PrivacyActivationPromotionErrorV1::ConsensusLimitsMismatch(error))
+            plan_due_privacy_activation_promotions_v1(&activations.view(), 1_301),
+            Err(PrivacyActivationPromotionErrorV1::MissedProtocolLimits(error))
                 if error.protocol_id == proposal.protocol_id
+                    && error.effective_at_height == 1_300
+                    && error.incoming_height == 1_301
         ));
+    }
+
+    #[test]
+    fn protocol_limit_schedule_applies_with_lifecycle_only_at_exact_height() {
+        let mut proposal = activation_proposal();
+        let mut next_limits = proposal.protocol_limits;
+        let iroha_data_model::privacy::PrivacyProtocolActivationLimitsV1::VeRangeTransparentRangeV1(
+            ref mut limits,
+        ) = next_limits
+        else {
+            unreachable!("VeRange fixture")
+        };
+        limits.max_aggregation_count -= 1;
+        proposal.pending_protocol_limits_tightening =
+            Some(iroha_data_model::privacy::PrivacyProtocolLimitsTighteningV1 {
+                scheduled_at_height: 1_000,
+                effective_at_height: 1_300,
+                next_limits,
+            });
+        let key = PrivacyActivationKeyV1::new(proposal.protocol_id);
+        let mut activations = Storage::new();
+        activations.insert(key, proposal);
+
+        assert!(
+            plan_due_privacy_activation_promotions_v1(&activations.view(), 1_299)
+                .expect("valid pre-effective registry")
+                .is_empty()
+        );
+        let promotions = plan_due_privacy_activation_promotions_v1(&activations.view(), 1_300)
+            .expect("lifecycle and protocol limits apply atomically");
+        assert_eq!(promotions.len(), 1);
+        let promoted = promotions[0].1;
+        assert_eq!(promoted.protocol_limits, next_limits);
+        assert_eq!(promoted.pending_protocol_limits_tightening, None);
+        assert_eq!(
+            promoted.lifecycle,
+            PrivacyProtocolLifecycleV1::Active(
+                iroha_data_model::privacy::PrivacyActiveLifecycleV1 {
+                    proposed_at_height: 1_000,
+                    activated_at_height: 1_300,
+                    state_since_height: 1_300,
+                }
+            )
+        );
+
+        assert!(
+            validate_privacy_activation_schedules_at_committed_height_v1(
+                &activations.view(),
+                999
+            )
+            .expect_err("a snapshot cannot contain a future-admitted schedule")
+            .contains("scheduled-at")
+        );
+        validate_privacy_activation_schedules_at_committed_height_v1(
+            &activations.view(),
+            1_299,
+        )
+        .expect("effective E is valid in committed E-1");
+        assert!(
+            validate_privacy_activation_schedules_at_committed_height_v1(
+                &activations.view(),
+                1_300
+            )
+            .expect_err("effective E cannot remain pending in committed E")
+            .contains("not after committed height")
+        );
     }
 
     #[test]
@@ -2788,8 +3286,9 @@ mod tests {
                         PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1,
                         fixture.root,
                         wrong,
+                        None,
                     )
-                        .expect("locally valid mismatched head"),
+                    .expect("locally valid mismatched head"),
                 );
             },
             "does not equal latest history entry",
@@ -2857,7 +3356,7 @@ mod tests {
                     PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1 + 1,
                     account_provenance,
                 )
-                    .expect("proof-updated account"),
+                .expect("proof-updated account"),
             );
         }
         let successor_epoch = PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1 + 1;
@@ -2878,7 +3377,7 @@ mod tests {
         fixture.roots.insert(successor_key, root_provenance);
         fixture.root_heads.insert(
             fixture.head_key,
-            PrivacyRootHeadRecordV1::new(successor_epoch, successor_root, root_provenance)
+            PrivacyRootHeadRecordV1::new(successor_epoch, successor_root, root_provenance, None)
                 .expect("successor head"),
         );
         fixture
@@ -2910,11 +3409,314 @@ mod tests {
                         successor_epoch,
                         second_root,
                         second_bootstrap,
+                        None,
                     )
-                        .expect("second head"),
+                    .expect("second head"),
                 );
             },
             "contains a non-PGC successor",
+        );
+    }
+
+    #[test]
+    fn pgc_retention_rollover_keeps_exact_parent_linked_windows() {
+        for retained in [1_u32, 2, 3] {
+            let mut fixture = pgc_persisted_fixture();
+            for _ in 0..retained + 2 {
+                fixture.advance_with_retention(retained);
+            }
+            let snapshot = fixture
+                .load_with_retention(retained)
+                .expect("small retained window");
+            assert_eq!(
+                fixture.roots.view().iter().count(),
+                usize::try_from(retained).expect("small retention")
+            );
+            assert_eq!(snapshot.current_epoch(), u64::from(retained) + 3);
+            assert!(snapshot.retention_anchor().is_some());
+            assert_eq!(
+                snapshot.retained_current_root(),
+                Some((snapshot.current_epoch(), snapshot.current_root()))
+            );
+        }
+
+        let retained = PrivacyConsensusLimitsV1::taira_default().retained_root_count;
+        let mut fixture = pgc_persisted_fixture();
+        for _ in 1..retained {
+            fixture.advance_with_retention(retained);
+        }
+        assert_eq!(
+            fixture.roots.view().iter().count(),
+            usize::try_from(retained).expect("Taira retention")
+        );
+        assert!(
+            fixture
+                .root_heads
+                .view()
+                .get(&fixture.head_key)
+                .expect("pre-rollover head")
+                .retention_anchor()
+                .is_none(),
+            "epoch 2048 still retains the canonical bootstrap"
+        );
+
+        fixture.advance_with_retention(retained);
+        let snapshot = fixture
+            .load_with_retention(retained)
+            .expect("2048-to-2049 rollover");
+        assert_eq!(snapshot.current_epoch(), u64::from(retained) + 1);
+        let anchor = snapshot
+            .retention_anchor()
+            .expect("rollover anchor replaces pruned bootstrap");
+        assert_eq!(anchor.epoch(), PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1);
+        assert_eq!(anchor.root(), fixture.invariant().bootstrap_root());
+        assert_eq!(
+            fixture.roots.view().iter().count(),
+            usize::try_from(retained).expect("Taira retention")
+        );
+        fixture
+            .validate()
+            .expect("default-policy persisted state survives exact rollover");
+    }
+
+    #[test]
+    fn pgc_retention_lowering_is_immediate_atomic_and_restart_safe() {
+        let mut fixture = pgc_persisted_fixture();
+        for _ in 0..5 {
+            fixture.advance_with_retention(6);
+        }
+        assert_eq!(fixture.roots.view().iter().count(), 6);
+
+        let roots_before = fixture
+            .roots
+            .view()
+            .iter()
+            .map(|(key, provenance)| (*key, *provenance))
+            .collect::<Vec<_>>();
+        assert!(matches!(
+            plan_privacy_root_retention_reduction_v1(
+                &fixture.roots.view(),
+                PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
+                0,
+            ),
+            Err(PrivacyRootHistoryErrorV1::ZeroRetention)
+        ));
+        assert_eq!(
+            fixture
+                .roots
+                .view()
+                .iter()
+                .map(|(key, provenance)| (*key, *provenance))
+                .collect::<Vec<_>>(),
+            roots_before,
+            "invalid lowering plan must be read-only"
+        );
+
+        fixture.tighten_retention(3);
+        let snapshot = fixture
+            .load_with_retention(3)
+            .expect("lowered retained window");
+        assert_eq!(fixture.roots.view().iter().count(), 3);
+        assert_eq!(snapshot.current_epoch(), 6);
+        assert_eq!(
+            snapshot
+                .retention_anchor()
+                .expect("lowering anchor")
+                .epoch(),
+            3
+        );
+
+        let accounts = norito::json::to_json(&fixture.pgc_accounts).expect("encode accounts");
+        let invariants =
+            norito::json::to_json(&fixture.pgc_pool_invariants).expect("encode invariants");
+        let roots = norito::json::to_json(&fixture.roots).expect("encode roots");
+        let heads = norito::json::to_json(&fixture.root_heads).expect("encode heads");
+        fixture.pgc_accounts = norito::json::from_json(&accounts).expect("restore accounts");
+        fixture.pgc_pool_invariants =
+            norito::json::from_json(&invariants).expect("restore invariants");
+        fixture.roots = norito::json::from_json(&roots).expect("restore roots");
+        fixture.root_heads = norito::json::from_json(&heads).expect("restore heads");
+        fixture
+            .load_with_retention(3)
+            .expect("restart preserves lowered parent-linked window");
+    }
+
+    #[test]
+    fn pgc_retained_window_rejects_orphans_gaps_duplicates_reordering_and_forgery() {
+        let rolled = || {
+            let mut fixture = pgc_persisted_fixture();
+            for _ in 0..4 {
+                fixture.advance_with_retention(3);
+            }
+            fixture
+                .load_with_retention(3)
+                .expect("valid adversarial fixture");
+            fixture
+        };
+
+        let mut fixture = rolled();
+        let keys = fixture
+            .roots
+            .view()
+            .iter()
+            .map(|(key, _)| *key)
+            .collect::<Vec<_>>();
+        fixture.roots = fixture
+            .roots
+            .view()
+            .iter()
+            .filter(|(key, _)| **key != keys[1])
+            .map(|(key, provenance)| (*key, *provenance))
+            .collect();
+        assert!(
+            fixture
+                .load_with_retention(3)
+                .expect_err("orphan in retained middle")
+                .contains("gap or forged parent")
+        );
+
+        let mut fixture = rolled();
+        let (first_key, first_provenance) = fixture
+            .roots
+            .view()
+            .iter()
+            .next()
+            .map(|(key, provenance)| (*key, *provenance))
+            .expect("first retained root");
+        let duplicate_key = PrivacyRootKeyV1::new(
+            fixture.namespace,
+            PrivacyRootRoleV1::PgcAccountState,
+            first_key.epoch(),
+            PrivacyRootV1::new(nonzero(0xE1)),
+        )
+        .expect("same-epoch alternate root");
+        fixture.roots.insert(duplicate_key, first_provenance);
+        assert!(
+            fixture
+                .load_with_retention(3)
+                .expect_err("duplicate retained epoch")
+                .contains("duplicate epoch")
+        );
+
+        let mut fixture = rolled();
+        let retained = fixture
+            .roots
+            .view()
+            .iter()
+            .map(|(key, provenance)| (*key, *provenance))
+            .collect::<Vec<_>>();
+        fixture.roots.insert(retained[0].0, retained[1].1);
+        fixture.roots.insert(retained[1].0, retained[0].1);
+        assert!(
+            fixture.load_with_retention(3).is_err(),
+            "reordered provenance"
+        );
+
+        let mut fixture = rolled();
+        let (first_key, first_provenance) = fixture
+            .roots
+            .view()
+            .iter()
+            .next()
+            .map(|(key, provenance)| (*key, *provenance))
+            .expect("first retained root");
+        let PrivacyRootProvenanceV1::VerifiedPgcSuccessor {
+            statement_digest,
+            admitted_at_height,
+            action_index,
+            parent_epoch,
+            pool_invariant_digest,
+            ..
+        } = first_provenance
+        else {
+            panic!("rolled prefix starts with a PGC successor");
+        };
+        let forged_parent = PrivacyRootProvenanceV1::verified_pgc_successor(
+            statement_digest,
+            admitted_at_height,
+            action_index,
+            parent_epoch,
+            PrivacyRootV1::new(nonzero(0xE2)),
+            pool_invariant_digest,
+        )
+        .expect("locally valid forged parent");
+        fixture.roots.insert(first_key, forged_parent);
+        assert!(
+            fixture
+                .load_with_retention(3)
+                .expect_err("forged pruned-prefix parent")
+                .contains("exact pruned-prefix anchor")
+        );
+
+        for (anchor_epoch, anchor_root) in [
+            (1, PrivacyRootV1::new(nonzero(0xE3))),
+            (3, PrivacyRootV1::new(nonzero(0xE4))),
+            (2, PrivacyRootV1::new(nonzero(0xE5))),
+        ] {
+            let mut fixture = rolled();
+            let head = *fixture
+                .root_heads
+                .view()
+                .get(&fixture.head_key)
+                .expect("rolled head");
+            fixture.root_heads.insert(
+                fixture.head_key,
+                PrivacyRootHeadRecordV1::new(
+                    head.epoch(),
+                    head.root(),
+                    head.provenance(),
+                    Some(
+                        PrivacyRootRetentionAnchorV1::new(anchor_epoch, anchor_root)
+                            .expect("locally valid forged anchor"),
+                    ),
+                )
+                .expect("locally valid forged head"),
+            );
+            assert!(
+                fixture.load_with_retention(3).is_err(),
+                "stale, advanced, and wrong-root anchors must reject"
+            );
+        }
+
+        let mut fixture = pgc_persisted_fixture();
+        let head = *fixture
+            .root_heads
+            .view()
+            .get(&fixture.head_key)
+            .expect("bootstrap head");
+        fixture.root_heads.insert(
+            fixture.head_key,
+            PrivacyRootHeadRecordV1 {
+                epoch: head.epoch(),
+                root: head.root(),
+                provenance: head.provenance(),
+                retention_anchor: Some(
+                    PrivacyRootRetentionAnchorV1::new(1, fixture.root)
+                        .expect("nonzero corrupt anchor"),
+                ),
+            },
+        );
+        assert!(
+            fixture.load_with_retention(3).is_err(),
+            "anchor with bootstrap"
+        );
+
+        let mut fixture = rolled();
+        let altered = PrivacyPgcPoolInvariantV1::new(
+            fixture.invariant().total_supply(),
+            PrivacyRootV1::new(nonzero(0xE6)),
+            fixture.bootstrap_digest,
+            fixture.bootstrap_proof_digest,
+        )
+        .expect("altered immutable bootstrap root");
+        fixture
+            .pgc_pool_invariants
+            .insert(fixture.invariant_key, altered);
+        assert!(
+            fixture
+                .load_with_retention(3)
+                .expect_err("mutated immutable metadata after rollover")
+                .contains("different immutable pool invariant")
         );
     }
 
@@ -2937,6 +3739,7 @@ mod tests {
         );
 
         let error = validate_privacy_persisted_state_v1(
+            &PrivacyConsensusPolicyV1::taira_default(),
             &activations.view(),
             &pgc_accounts.view(),
             &pgc_pool_invariants.view(),

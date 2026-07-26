@@ -1098,7 +1098,7 @@ pub mod isi {
         proof: &iroha_data_model::proof::ProofBox,
     ) -> Option<ZkOpenVerifyEnvelope> {
         let backend = proof.backend.as_str();
-        if !crate::zk::is_production_verify_backend_label(backend) {
+        if !crate::zk::is_verifier_backend_registry_label_v1(backend) {
             return None;
         }
         norito::decode_from_bytes::<ZkOpenVerifyEnvelope>(&proof.bytes).ok()
@@ -1135,7 +1135,7 @@ pub mod isi {
     }
 
     fn circuit_id_matches(backend: &str, record_id: &str, env_id: &str) -> bool {
-        if crate::zk::production_verify_backend_tag(backend) == Some(BackendTag::Halo2IpaPasta) {
+        if crate::zk::verifier_backend_registry_tag_v1(backend) == Some(BackendTag::Halo2IpaPasta) {
             match (
                 normalize_halo2_circuit_id(record_id),
                 normalize_halo2_circuit_id(env_id),
@@ -1187,7 +1187,7 @@ pub mod isi {
     }
 
     fn voting_circuit_matches(backend: &str, record_circuit_id: &str, expected_id: &str) -> bool {
-        if crate::zk::production_verify_backend_tag(backend) == Some(BackendTag::Halo2IpaPasta) {
+        if crate::zk::verifier_backend_registry_tag_v1(backend) == Some(BackendTag::Halo2IpaPasta) {
             halo2_voting_circuit_matches(record_circuit_id, expected_id)
         } else if crate::zk::is_stark_fri_v1_backend(backend) {
             // Enforce canonical vote circuit roles to avoid swapping ballot/tally VKs.
@@ -1212,14 +1212,14 @@ pub mod isi {
     }
 
     fn is_no_trusted_setup_halo2_backend_id(backend: &str) -> bool {
-        crate::zk::production_verify_backend_tag(backend) == Some(BackendTag::Halo2IpaPasta)
+        crate::zk::verifier_backend_registry_tag_v1(backend) == Some(BackendTag::Halo2IpaPasta)
     }
 
-    fn ensure_production_verifying_key_backend_id(backend: &str) -> Result<(), Error> {
-        if crate::zk::is_production_claim_backend_label(backend) {
+    fn ensure_verifier_backend_registry_id_v1(backend: &str) -> Result<(), Error> {
+        if crate::zk::is_verifier_readiness_claim_label(backend) {
             return Err(InstructionExecutionError::InvalidParameter(
                 InvalidParameterError::SmartContract(
-                    "production-claim verifying key backends are not supported".into(),
+                    "readiness-claim verifying key backends are not supported".into(),
                 ),
             ));
         }
@@ -1237,7 +1237,7 @@ pub mod isi {
                 ),
             ));
         }
-        if !crate::zk::is_production_verify_backend_label(backend) {
+        if !crate::zk::is_verifier_backend_registry_label_v1(backend) {
             return Err(InstructionExecutionError::InvalidParameter(
                 InvalidParameterError::SmartContract(
                     "unsupported verifying key backends are not supported".into(),
@@ -1389,7 +1389,7 @@ pub mod isi {
                     profile.label
                 ))
             })?;
-        crate::zk_stark::validate_stark_fri_production_verifying_key_payload(
+        crate::zk_stark::validate_stark_fri_canonical_verifying_key_payload(
             &payload,
             profile.circuit_id,
             profile.label,
@@ -1398,9 +1398,9 @@ pub mod isi {
         Ok(())
     }
 
-    fn production_claim_proof_backend_error() -> Error {
+    fn readiness_claim_proof_backend_error() -> Error {
         InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-            "production-claim proof backends are not supported".into(),
+            "readiness-claim proof backends are not supported".into(),
         ))
         .into()
     }
@@ -2999,7 +2999,7 @@ pub mod isi {
                             ),
                         ));
                     }
-                    ensure_production_verifying_key_backend_id(id_backend)?;
+                    ensure_verifier_backend_registry_id_v1(id_backend)?;
                     if !is_no_trusted_setup_halo2_backend_id(id_backend) {
                         return Err(InstructionExecutionError::InvalidParameter(
                             InvalidParameterError::SmartContract(
@@ -3017,7 +3017,7 @@ pub mod isi {
                             ),
                         ));
                     }
-                    ensure_production_verifying_key_backend_id(id_backend)?;
+                    ensure_verifier_backend_registry_id_v1(id_backend)?;
                     if !crate::zk::is_stark_fri_v1_backend(id_backend) {
                         return Err(InstructionExecutionError::InvalidParameter(
                             InvalidParameterError::SmartContract(
@@ -9787,7 +9787,7 @@ pub mod isi {
                         ),
                     ));
                 }
-                ensure_production_verifying_key_backend_id(id_backend)?;
+                ensure_verifier_backend_registry_id_v1(id_backend)?;
                 if !is_no_trusted_setup_halo2_backend_id(id_backend) {
                     return Err(InstructionExecutionError::InvalidParameter(
                         InvalidParameterError::SmartContract(
@@ -9805,7 +9805,7 @@ pub mod isi {
                         ),
                     ));
                 }
-                ensure_production_verifying_key_backend_id(id_backend)?;
+                ensure_verifier_backend_registry_id_v1(id_backend)?;
                 if !crate::zk::is_stark_fri_v1_backend(id_backend) {
                     return Err(InstructionExecutionError::InvalidParameter(
                         InvalidParameterError::SmartContract(
@@ -10679,8 +10679,8 @@ pub mod isi {
                 "verifying key backend mismatch".into(),
             ));
         }
-        if crate::zk::is_production_claim_backend_label(attachment.backend.as_str()) {
-            return Err(production_claim_proof_backend_error());
+        if crate::zk::is_verifier_readiness_claim_label(attachment.backend.as_str()) {
+            return Err(readiness_claim_proof_backend_error());
         }
         if crate::zk::is_trusted_setup_backend_label(attachment.backend.as_str()) {
             return Err(InstructionExecutionError::InvalidParameter(
@@ -10696,7 +10696,7 @@ pub mod isi {
                 ),
             ));
         }
-        if !crate::zk::is_production_verify_backend_label(attachment.backend.as_str()) {
+        if !crate::zk::is_verifier_backend_registry_label_v1(attachment.backend.as_str()) {
             return Err(unsupported_proof_backend_error());
         }
         if expects_envelope && envelope_meta.is_none() {
@@ -10718,12 +10718,12 @@ pub mod isi {
     }
 
     fn open_verify_backend_tag_matches(backend: &str, tag: BackendTag) -> bool {
-        crate::zk::production_verify_backend_tag(backend).is_some_and(|expected| expected == tag)
+        crate::zk::verifier_backend_registry_tag_v1(backend).is_some_and(|expected| expected == tag)
     }
 
     fn backend_requires_open_verify_envelope(backend: &str) -> bool {
         matches!(
-            crate::zk::production_verify_backend_tag(backend),
+            crate::zk::verifier_backend_registry_tag_v1(backend),
             Some(BackendTag::Halo2IpaPasta | BackendTag::Stark)
         )
     }
@@ -25977,7 +25977,7 @@ seiyaku GovernanceLifecycle {
                 let proof_box = ProofBox::new(backend.into(), bytes.clone());
                 assert!(
                     decode_open_verify_envelope(&proof_box).is_none(),
-                    "non-production backend {backend} must not be decoded before validation"
+                    "non-registry backend {backend} must not be decoded before validation"
                 );
             }
         }
@@ -28638,7 +28638,7 @@ seiyaku GovernanceLifecycle {
             .expect_err("downgraded ZK-ACE STARK verifier must fail");
             let msg = smart_contract_instruction_error_message(err);
             assert!(
-                msg.contains("below production floor"),
+                msg.contains("below consensus floor"),
                 "unexpected downgraded verifier error: {msg}"
             );
             assert!(
@@ -34101,7 +34101,7 @@ seiyaku GovernanceLifecycle {
             "sis-with-hints",
         ];
 
-        const PRODUCTION_CLAIM_VERIFIER_LABELS: &[&str] = &[
+        const READINESS_CLAIM_VERIFIER_LABELS: &[&str] = &[
             "halo2/ipa:production-ready",
             "halo2/ipa:claimed-production",
             "halo2/ipa:mainnet-ready",
@@ -35835,9 +35835,9 @@ seiyaku GovernanceLifecycle {
                 let mut record = soracloud_fhe_stark_vk_record(profile, u32::from(profile.version));
                 let vk_box = soracloud_fhe_stark_vk_box_for_test(
                     profile,
-                    crate::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2,
-                    crate::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2,
-                    crate::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES,
+                    crate::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2,
+                    crate::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+                    crate::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES,
                 );
                 attach_soracloud_fhe_stark_vk_box(&mut record, vk_box);
 
@@ -35883,12 +35883,12 @@ seiyaku GovernanceLifecycle {
             for profile in soracloud_fhe_stark_vk_test_profiles() {
                 let id = soracloud_fhe_stark_vk_id(profile);
                 let mut record = soracloud_fhe_stark_vk_record(profile, u32::from(profile.version));
-                let weak_n_log2 = crate::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2 - 1;
+                let weak_n_log2 = crate::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2 - 1;
                 let vk_box = soracloud_fhe_stark_vk_box_for_test(
                     profile,
                     weak_n_log2,
-                    crate::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2,
-                    crate::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES,
+                    crate::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+                    crate::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES,
                 );
                 attach_soracloud_fhe_stark_vk_box(&mut record, vk_box);
 
@@ -35903,7 +35903,7 @@ seiyaku GovernanceLifecycle {
                 };
                 let msg = smart_contract_error_message(err);
                 assert!(
-                    msg.contains("below production floor"),
+                    msg.contains("below consensus floor"),
                     "unexpected msg for {}: {msg}",
                     profile.label
                 );
@@ -35939,12 +35939,12 @@ seiyaku GovernanceLifecycle {
             seed_stx.apply();
 
             let mut new_record = soracloud_fhe_stark_vk_record(profile, u32::from(profile.version));
-            let weak_n_log2 = crate::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_N_LOG2 - 1;
+            let weak_n_log2 = crate::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_N_LOG2 - 1;
             let vk_box = soracloud_fhe_stark_vk_box_for_test(
                 profile,
                 weak_n_log2,
-                crate::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_BLOWUP_LOG2,
-                crate::zk_stark::ZK_ACE_STARK_FRI_PRODUCTION_MIN_QUERIES,
+                crate::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+                crate::zk_stark::ZK_ACE_STARK_FRI_CONSENSUS_MIN_QUERIES,
             );
             attach_soracloud_fhe_stark_vk_box(&mut new_record, vk_box);
 
@@ -35960,7 +35960,7 @@ seiyaku GovernanceLifecycle {
                 .expect_err("Soracloud weak STARK verifier update must fail");
             let msg = smart_contract_error_message(err);
             assert!(
-                msg.contains("below production floor"),
+                msg.contains("below consensus floor"),
                 "unexpected msg: {msg}"
             );
         }
@@ -36170,7 +36170,7 @@ seiyaku GovernanceLifecycle {
         }
 
         #[test]
-        fn register_vk_rejects_production_claim_backend_labels() {
+        fn register_vk_rejects_readiness_claim_backend_labels() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
@@ -36189,9 +36189,9 @@ seiyaku GovernanceLifecycle {
             stx.apply();
 
             let exec = Executor::default();
-            for (idx, backend) in PRODUCTION_CLAIM_VERIFIER_LABELS.iter().copied().enumerate() {
+            for (idx, backend) in READINESS_CLAIM_VERIFIER_LABELS.iter().copied().enumerate() {
                 let mut stx = state_block.transaction();
-                let id = VerifyingKeyId::new(backend, format!("vk_production_claim_{idx}"));
+                let id = VerifyingKeyId::new(backend, format!("vk_readiness_claim_{idx}"));
                 let vk_box = VerifyingKeyBox::new(backend.into(), vec![1, 2, 3]);
                 let (record_backend, curve, schedule) =
                     unsupported_label_generic_record_profile(backend);
@@ -36216,10 +36216,10 @@ seiyaku GovernanceLifecycle {
                 .into();
                 let err = exec
                     .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
-                    .expect_err("production-claim verifier label must be rejected");
+                    .expect_err("readiness-claim verifier label must be rejected");
                 let msg = smart_contract_error_message(err);
                 assert!(
-                    msg.contains("production-claim verifying key backends"),
+                    msg.contains("readiness-claim verifying key backends"),
                     "unexpected msg for {backend}: {msg}"
                 );
                 assert!(
@@ -37778,14 +37778,14 @@ seiyaku GovernanceLifecycle {
                     BackendTag::Halo2IpaPasta,
                     "pallas",
                     "halo2_default",
-                    "production-claim verifying key backends",
+                    "readiness-claim verifying key backends",
                 ),
                 (
                     "stark/fri/security-review-passed",
                     BackendTag::Stark,
                     "goldilocks",
                     "stark_default",
-                    "production-claim verifying key backends",
+                    "readiness-claim verifying key backends",
                 ),
                 (
                     "halo2/kzg",
@@ -37862,7 +37862,7 @@ seiyaku GovernanceLifecycle {
                 let mut stx = state_block.transaction();
                 let err = exec
                     .execute_instruction(&mut stx, &ALICE_ID.clone(), upd)
-                    .expect_err("non-production verifier label must be rejected on update");
+                    .expect_err("non-registry verifier label must be rejected on update");
                 let msg = smart_contract_error_message(err);
                 assert!(
                     msg.contains(expected_msg),
@@ -38268,8 +38268,8 @@ seiyaku GovernanceLifecycle {
         }
 
         #[test]
-        fn verify_proof_rejects_production_claim_backend_labels_before_registry_lookup() {
-            for (idx, backend) in PRODUCTION_CLAIM_VERIFIER_LABELS.iter().copied().enumerate() {
+        fn verify_proof_rejects_readiness_claim_backend_labels_before_registry_lookup() {
+            for (idx, backend) in READINESS_CLAIM_VERIFIER_LABELS.iter().copied().enumerate() {
                 let kura = Kura::blank_kura_for_testing();
                 let query_handle = LiveQueryStore::start_test();
                 let state = State::new(World::default(), kura, query_handle);
@@ -38293,7 +38293,7 @@ seiyaku GovernanceLifecycle {
                 let attachment = ProofAttachment::new_ref(
                     backend.into(),
                     proof_box,
-                    VerifyingKeyId::new(backend, format!("vk_production_claim_proof_{idx}")),
+                    VerifyingKeyId::new(backend, format!("vk_readiness_claim_proof_{idx}")),
                 );
 
                 let mut stx_verify = block.transaction();
@@ -38301,12 +38301,10 @@ seiyaku GovernanceLifecycle {
                     iroha_data_model::isi::zk::VerifyProof::new(attachment).into();
                 let err = exec
                     .execute_instruction(&mut stx_verify, &ALICE_ID.clone(), verify)
-                    .expect_err(
-                        "production-claim proof backend must reject before registry lookup",
-                    );
+                    .expect_err("readiness-claim proof backend must reject before registry lookup");
                 let msg = smart_contract_error_message(err);
                 assert!(
-                    msg.contains("production-claim proof backends"),
+                    msg.contains("readiness-claim proof backends"),
                     "unexpected msg for {backend}: {msg}"
                 );
             }

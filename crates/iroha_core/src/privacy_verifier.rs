@@ -9,12 +9,12 @@
 use iroha_data_model::{
     ChainId,
     privacy::{
-        AnonymousPgcKOutOfNStatementV1, PrivacyNamespaceV1, PrivacyP256CiphertextV1,
-        PrivacyP256PointV1, PrivacyPgcAccountBootstrapDigestV1, PrivacyPgcAccountV1,
-        PrivacyPgcBootstrapProofDigestV1, PrivacyProofBytesV1, PrivacyProofEnvelopeV1,
-        PrivacyProofEnvelopeValidationError, PrivacyProofV1, PrivacyProtocolActivationRecordV1,
-        PrivacyProtocolIdV1, PrivacyRootV1, PrivacyStatementDigestV1, PrivacyStatementV1,
-        PrivacyVeRangeBitLengthV1,
+        AnonymousPgcKOutOfNStatementV1, PrivacyConsensusLimitsV1, PrivacyNamespaceV1,
+        PrivacyP256CiphertextV1, PrivacyP256PointV1, PrivacyPgcAccountBootstrapDigestV1,
+        PrivacyPgcAccountV1, PrivacyPgcBootstrapProofDigestV1, PrivacyProofBytesV1,
+        PrivacyProofEnvelopeV1, PrivacyProofEnvelopeValidationError, PrivacyProofV1,
+        PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1, PrivacyRootV1,
+        PrivacyStatementDigestV1, PrivacyStatementV1, PrivacyVeRangeBitLengthV1,
     },
 };
 use thiserror::Error;
@@ -68,6 +68,8 @@ pub(crate) struct PrivacyPgcVerificationStateV1<'a> {
 pub(crate) struct PrivacyVerificationContextV1<'a> {
     /// Exact locally stored active record selected by protocol id.
     pub(crate) activation: &'a PrivacyProtocolActivationRecordV1,
+    /// Singleton chain-wide limits effective for this incoming block.
+    pub(crate) consensus_limits: &'a PrivacyConsensusLimitsV1,
     /// Exact node-configured chain identity.
     pub(crate) chain_id: &'a ChainId,
     /// Hash of the committed genesis block.
@@ -247,7 +249,11 @@ pub(crate) fn verify_privacy_envelope_v1(
     }
 
     envelope
-        .validate_against_activation(context.activation, context.current_height)
+        .validate_against_activation(
+            context.activation,
+            context.consensus_limits,
+            context.current_height,
+        )
         .map_err(|source| {
             PrivacyVerificationErrorV1::Envelope(Box::new(PrivacyEnvelopeFailureV1 { source }))
         })?;
@@ -682,6 +688,9 @@ mod tests {
         privacy_profiles::{CompiledPrivacyProfileV1, compiled_privacy_profile_v1},
     };
 
+    const TEST_CONSENSUS_LIMITS: PrivacyConsensusLimitsV1 =
+        PrivacyConsensusLimitsV1::taira_default();
+
     struct KatRng {
         seed: [u8; 32],
         counter: u64,
@@ -1059,6 +1068,7 @@ mod tests {
         fn verification_context(&self) -> PrivacyVerificationContextV1<'_> {
             PrivacyVerificationContextV1 {
                 activation: &self.activation,
+                consensus_limits: &TEST_CONSENSUS_LIMITS,
                 chain_id: &self.chain_id,
                 genesis_hash: [0xa7; 32],
                 current_height: 10,
@@ -1098,6 +1108,7 @@ mod tests {
     ) -> PrivacyVerificationContextV1<'a> {
         PrivacyVerificationContextV1 {
             activation,
+            consensus_limits: &TEST_CONSENSUS_LIMITS,
             chain_id,
             genesis_hash: [0xA7; 32],
             current_height: 10,
