@@ -1073,7 +1073,8 @@ fn preflight_singular_source_materialization(
         | SingularQueryBox::FindSorafsProofOutcomeEvents(_) => {
             return Err(reject_unbounded("SoraFS proof-outcome query"));
         }
-        SingularQueryBox::FindSorafsReputationJournalEvents(_) => {
+        SingularQueryBox::FindSorafsReputationJournalAuthorityPolicy(_)
+        | SingularQueryBox::FindSorafsReputationJournalEvents(_) => {
             return Err(reject_unbounded("SoraFS reputation-journal query"));
         }
         SingularQueryBox::FindSorafsModerationPolicy(_)
@@ -1319,6 +1320,9 @@ impl ExecuteSingularQuery for SingularQueryBox {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
             SingularQueryBox::FindSorafsProofOutcomeEvents(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindSorafsReputationJournalAuthorityPolicy(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
             SingularQueryBox::FindSorafsReputationJournalEvents(q) => {

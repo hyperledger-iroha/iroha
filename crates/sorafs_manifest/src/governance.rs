@@ -14,7 +14,9 @@ use crate::{
     deal::{DealSettlementV1, XorQuantity},
     orderbook::SettlementReceiptV1,
     pdp::{PdpGovernanceArchiveV1, PdpGovernanceArchiveValidationError},
-    por::{AuditVerdictV1, PorChallengeV1, PorProofV1, PorReportIsoWeek},
+    por::{
+        AuditVerdictV1, PorChallengePublicationV1, PorProofV1, PorReportIsoWeek, PorWeeklyReportV1,
+    },
     reconciliation::{SORAFS_RECONCILIATION_REPORT_VERSION_V1, SorafsReconciliationReportV1},
     repair::{
         GC_AUDIT_EVENT_VERSION_V1, GcAuditEventV1, REPAIR_AUDIT_EVENT_VERSION_V1,
@@ -2251,8 +2253,8 @@ pub enum GovernanceLogPayloadV1 {
     ProviderAdvert(crate::provider_advert::ProviderAdvertV1),
     /// Replication order snapshot.
     ReplicationOrder(ReplicationOrderV1),
-    /// Proof-of-Retrievability challenge.
-    PorChallenge(PorChallengeV1),
+    /// Canonical PoR challenge publication with duplicate-sample metadata.
+    PorChallengePublication(PorChallengePublicationV1),
     /// Proof-of-Retrievability response.
     PorProof(PorProofV1),
     /// Admission-bound PDP terminal archive.
@@ -2275,6 +2277,8 @@ pub enum GovernanceLogPayloadV1 {
     OrderbookSettlementReceipt(SettlementReceiptV1),
     /// Canonical external SoraFS governance payload bytes.
     ExternalPayload(GovernanceExternalPayloadV1),
+    /// Validated PoR weekly health report.
+    PorWeeklyReport(PorWeeklyReportV1),
 }
 
 impl GovernanceLogPayloadV1 {
@@ -2289,9 +2293,6 @@ impl GovernanceLogPayloadV1 {
             GovernanceLogPayloadV1::ReplicationOrder(order) => order
                 .validate()
                 .map_err(GovernanceLogValidationError::ReplicationOrder),
-            GovernanceLogPayloadV1::PorChallenge(challenge) => challenge
-                .validate()
-                .map_err(GovernanceLogValidationError::PorChallenge),
             GovernanceLogPayloadV1::PorProof(proof) => proof
                 .validate()
                 .map_err(GovernanceLogValidationError::PorProof),
@@ -2334,6 +2335,12 @@ impl GovernanceLogPayloadV1 {
             GovernanceLogPayloadV1::ExternalPayload(payload) => payload
                 .validate()
                 .map_err(GovernanceLogValidationError::ExternalPayload),
+            GovernanceLogPayloadV1::PorChallengePublication(publication) => publication
+                .validate()
+                .map_err(GovernanceLogValidationError::PorChallengePublication),
+            GovernanceLogPayloadV1::PorWeeklyReport(report) => report
+                .validate()
+                .map_err(GovernanceLogValidationError::PorWeeklyReport),
         }
     }
 }
@@ -2983,8 +2990,6 @@ pub enum GovernanceLogValidationError {
     Advert(crate::provider_advert::AdvertValidationError),
     #[error("replication order validation failed: {0}")]
     ReplicationOrder(crate::capacity::ReplicationOrderValidationError),
-    #[error("challenge validation failed: {0}")]
-    PorChallenge(crate::por::PorChallengeValidationError),
     #[error("proof validation failed: {0}")]
     PorProof(crate::por::PorProofValidationError),
     #[error("PDP governance archive validation failed: {0}")]
@@ -3014,6 +3019,10 @@ pub enum GovernanceLogValidationError {
     OrderbookSettlementReceipt(crate::orderbook::OrderbookValidationError),
     #[error("external governance payload validation failed: {0}")]
     ExternalPayload(GovernanceExternalPayloadValidationError),
+    #[error("PoR challenge publication validation failed: {0}")]
+    PorChallengePublication(crate::por::PorChallengePublicationValidationError),
+    #[error("PoR weekly report validation failed: {0}")]
+    PorWeeklyReport(crate::por::PorWeeklyReportValidationError),
 }
 
 /// Validation errors for generic external Governance DAG payloads.
@@ -4049,6 +4058,23 @@ mod tests {
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0x7f,
     ];
+
+    #[test]
+    fn governance_payload_surface_excludes_bare_por_challenges() {
+        let compact_source: String = include_str!("governance.rs")
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect();
+        let retired_variant = ["PorChallenge", "(PorChallengeV1)"].concat();
+        assert!(
+            !compact_source.contains(&retired_variant),
+            "Governance DAG PoR challenges must use PorChallengePublicationV1"
+        );
+        assert!(
+            compact_source.contains("PorChallengePublication(PorChallengePublicationV1)"),
+            "canonical PoR challenge publication variant must remain in the Governance DAG surface"
+        );
+    }
 
     fn signed_por_proof_payload() -> GovernanceLogPayloadV1 {
         GovernanceLogPayloadV1::PorProof(crate::por::PorProofV1 {
@@ -5585,7 +5611,7 @@ mod tests {
             amount_xor: "420".parse().expect("canonical XOR quantity"),
             tx_hash_hex: "22".repeat(32),
             reconciliation_digest_hex: "33".repeat(32),
-            reconciliation_status: "pending_client_submission".to_string(),
+            reconciliation_status: "pending_forwarder_submission".to_string(),
             observed_lifecycle_status: "locked".to_string(),
             observed_remaining_xor: "420".parse().expect("canonical XOR quantity"),
             deposit_xor: "420".parse().expect("canonical XOR quantity"),

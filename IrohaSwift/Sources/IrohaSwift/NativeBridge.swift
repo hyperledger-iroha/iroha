@@ -66,6 +66,14 @@ private struct NativeSorafsReferenceInput {
     let labelLength: CUnsignedLong
 }
 
+private struct NativeSorafsReferenceBundleInput {
+    let kind: UInt32
+    let bytesPointer: UnsafePointer<UInt8>?
+    let bytesLength: CUnsignedLong
+    let labelPointer: UnsafePointer<UInt8>?
+    let labelLength: CUnsignedLong
+}
+
 enum NoritoBridgeLoader {
     enum ValidationStatus: Equatable {
         case valid(path: String, identifier: String)
@@ -95,6 +103,8 @@ enum NoritoBridgeLoader {
         "connect_norito_canonical_json_blake3_v1",
         "connect_norito_encode_account_onboarding_plan_body_v1",
         "connect_norito_alias_instruction_round_trip_v1",
+        "connect_norito_sorafs_reference_validate_bundle_json",
+        "connect_norito_sorafs_reference_validate_governance_json",
         "connect_norito_sorafs_reference_validate_governance_dag_block_json",
         "connect_norito_sorafs_reference_validate_governance_dag_head_chain_json"
     ]
@@ -1860,6 +1870,18 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UInt64,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
     ) -> Int32
+    private typealias SorafsReferenceFixtureBundleFn = @convention(c) (
+        UnsafeRawPointer?, CUnsignedLong,
+        UInt64, UInt64,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
+    ) -> Int32
+    private typealias SorafsReferenceGovernanceLogNodeFn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UInt64,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
+    ) -> Int32
     private typealias SorafsReferenceGovernanceDagBlockFn = @convention(c) (
         UnsafePointer<UInt8>?, CUnsignedLong,
         UnsafePointer<UInt8>?, CUnsignedLong,
@@ -2123,6 +2145,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var sorafsReferenceBuildOrderbookSettlementReceiptFn: SorafsReferenceOrderbookSettlementReceiptBuilderFn? = nil
     private var sorafsReferenceValidatePopPayloadFn: SorafsReferencePayloadFn? = nil
     private var sorafsReferenceValidateHedgingPayloadFn: SorafsReferencePayloadFn? = nil
+    private var sorafsReferenceValidateFixtureBundleFn: SorafsReferenceFixtureBundleFn? = nil
+    private var sorafsReferenceValidateGovernanceLogNodeFn: SorafsReferenceGovernanceLogNodeFn? = nil
     private var sorafsReferenceValidateGovernanceDagBlockFn: SorafsReferenceGovernanceDagBlockFn? = nil
     private var sorafsReferenceValidateGovernanceDagHeadChainFn: SorafsReferenceGovernanceDagHeadChainFn? = nil
     private var sorafsReferenceValidatePdpPayloadFn: SorafsReferencePayloadFn? = nil
@@ -2252,6 +2276,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private let sorafsReferenceBuildOrderbookSettlementReceiptFn: Any? = nil
     private let sorafsReferenceValidatePopPayloadFn: Any? = nil
     private let sorafsReferenceValidateHedgingPayloadFn: Any? = nil
+    private let sorafsReferenceValidateFixtureBundleFn: Any? = nil
+    private let sorafsReferenceValidateGovernanceLogNodeFn: Any? = nil
     private let sorafsReferenceValidatePdpPayloadFn: Any? = nil
     private let sorafsReferenceValidatePdpCommitmentChallengeFn: Any? = nil
     private let sorafsReferenceValidatePdpChallengeProofFn: Any? = nil
@@ -3020,6 +3046,25 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             } else {
                 self.sorafsReferenceValidateHedgingPayloadFn = nil
             }
+            if let symbol = dlsym(handle, "connect_norito_sorafs_reference_validate_bundle_json") {
+                self.sorafsReferenceValidateFixtureBundleFn = unsafeBitCast(
+                    symbol,
+                    to: SorafsReferenceFixtureBundleFn.self
+                )
+            } else {
+                self.sorafsReferenceValidateFixtureBundleFn = nil
+            }
+            if let symbol = dlsym(
+                handle,
+                "connect_norito_sorafs_reference_validate_governance_json"
+            ) {
+                self.sorafsReferenceValidateGovernanceLogNodeFn = unsafeBitCast(
+                    symbol,
+                    to: SorafsReferenceGovernanceLogNodeFn.self
+                )
+            } else {
+                self.sorafsReferenceValidateGovernanceLogNodeFn = nil
+            }
             if let symbol = dlsym(
                 handle,
                 "connect_norito_sorafs_reference_validate_governance_dag_block_json"
@@ -3240,6 +3285,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             self.sorafsReferenceBuildOrderbookSettlementReceiptFn = nil
             self.sorafsReferenceValidatePopPayloadFn = nil
             self.sorafsReferenceValidateHedgingPayloadFn = nil
+            self.sorafsReferenceValidateFixtureBundleFn = nil
+            self.sorafsReferenceValidateGovernanceLogNodeFn = nil
             self.sorafsReferenceValidatePdpPayloadFn = nil
             self.sorafsReferenceValidatePdpCommitmentChallengeFn = nil
             self.sorafsReferenceValidatePdpChallengeProofFn = nil
@@ -3544,6 +3591,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         return sorafsReferenceValidateOrderbookFn != nil
             && sorafsReferenceValidatePopPayloadFn != nil
             && sorafsReferenceValidateHedgingPayloadFn != nil
+            && sorafsReferenceValidateFixtureBundleFn != nil
+            && sorafsReferenceValidateGovernanceLogNodeFn != nil
             && sorafsReferenceValidatePdpPayloadFn != nil
             && sorafsReferenceValidatePdpCommitmentChallengeFn != nil
             && sorafsReferenceValidatePdpChallengeProofFn != nil
@@ -3567,6 +3616,24 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #if canImport(Darwin)
         guard bridgeEnabledForRuntime else { return false }
         return sorafsReferenceValidateHedgingPayloadFn != nil && freeFn != nil
+        #else
+        return false
+        #endif
+    }
+
+    public var isSorafsReferenceFixtureBundleValidationAvailable: Bool {
+        #if canImport(Darwin)
+        guard bridgeEnabledForRuntime else { return false }
+        return sorafsReferenceValidateFixtureBundleFn != nil && freeFn != nil
+        #else
+        return false
+        #endif
+    }
+
+    public var isSorafsReferenceGovernanceLogNodeValidationAvailable: Bool {
+        #if canImport(Darwin)
+        guard bridgeEnabledForRuntime else { return false }
+        return sorafsReferenceValidateGovernanceLogNodeFn != nil && freeFn != nil
         #else
         return false
         #endif
@@ -7990,6 +8057,88 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #endif
     }
 
+    func sorafsReferenceValidateFixtureBundle(
+        payloads: [(kind: UInt32, payload: Data, label: String)],
+        nowUnix: UInt64,
+        generatedAtUnix: UInt64
+    ) -> String? {
+        #if canImport(Darwin)
+        guard let function = sorafsReferenceValidateFixtureBundleFn else { return nil }
+        let payloadBytes = payloads.map(\.payload)
+        let labels = payloads.map { Data($0.label.utf8) }
+        let kinds = payloads.map(\.kind)
+        var descriptors: [NativeSorafsReferenceBundleInput] = []
+        descriptors.reserveCapacity(payloads.count)
+        var outPtr: UnsafeMutablePointer<UInt8>? = nil
+        var outLen: CUnsignedLong = 0
+        let status = withSorafsReferenceBundleInputs(
+            kinds: kinds,
+            payloads: payloadBytes,
+            labels: labels,
+            index: 0,
+            descriptors: &descriptors
+        ) { descriptorsPtr, descriptorsLen in
+            function(
+                descriptorsPtr,
+                descriptorsLen,
+                nowUnix,
+                generatedAtUnix,
+                &outPtr,
+                &outLen
+            )
+        }
+        guard status == 0 else {
+            if let outPtr {
+                if let freeFn { freeFn(outPtr) } else { Darwin.free(outPtr) }
+            }
+            return nil
+        }
+        return takeString(pointer: outPtr, length: UInt(outLen))
+        #else
+        return nil
+        #endif
+    }
+
+    func sorafsReferenceValidateGovernanceLogNode(
+        payload: Data,
+        label: String,
+        expectedNodeCid: Data,
+        generatedAtUnix: UInt64
+    ) -> String? {
+        #if canImport(Darwin)
+        guard let function = sorafsReferenceValidateGovernanceLogNodeFn,
+              let labelData = label.data(using: .utf8) else { return nil }
+        var outPtr: UnsafeMutablePointer<UInt8>? = nil
+        var outLen: CUnsignedLong = 0
+        let status = withDataPointer(payload) { payloadPtr, payloadLen in
+            withDataPointer(labelData) { labelPtr, labelLen in
+                withDataPointer(expectedNodeCid) { expectedCidPtr, expectedCidLen in
+                    function(
+                        payloadPtr,
+                        payloadLen,
+                        labelPtr,
+                        labelLen,
+                        expectedCidPtr,
+                        expectedCidLen,
+                        generatedAtUnix,
+                        &outPtr,
+                        &outLen
+                    )
+                }
+            }
+        }
+        guard status == 0 else {
+            if let outPtr {
+                if let freeFn { freeFn(outPtr) } else { Darwin.free(outPtr) }
+            }
+            return nil
+        }
+        return takeString(pointer: outPtr, length: UInt(outLen))
+        #else
+        return nil
+        #endif
+    }
+
     func sorafsReferenceValidateGovernanceDagBlock(
         payload: Data,
         label: String,
@@ -8133,6 +8282,73 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 )
                 defer { descriptors.removeLast() }
                 return withSorafsReferenceInputs(
+                    payloads: payloads,
+                    labels: labels,
+                    index: index + 1,
+                    descriptors: &descriptors,
+                    body: body
+                )
+            }
+        }
+    }
+
+    private func withSorafsReferenceBundleInputs<Result>(
+        kinds: [UInt32],
+        payloads: [Data],
+        labels: [Data],
+        index: Int,
+        descriptors: inout [NativeSorafsReferenceBundleInput],
+        body: (UnsafeRawPointer?, CUnsignedLong) -> Result
+    ) -> Result {
+        precondition(kinds.count == payloads.count && payloads.count == labels.count)
+        guard index < payloads.count else {
+            guard !descriptors.isEmpty else {
+                return body(nil, 0)
+            }
+            let wordSize = MemoryLayout<UInt>.size
+            let pointerOffset = (MemoryLayout<UInt32>.size + wordSize - 1) & ~(wordSize - 1)
+            let descriptorSize = pointerOffset + wordSize * 4
+            let rawDescriptors = UnsafeMutableRawPointer.allocate(
+                byteCount: descriptorSize * descriptors.count,
+                alignment: MemoryLayout<UInt>.alignment
+            )
+            defer { rawDescriptors.deallocate() }
+            for (descriptorIndex, descriptor) in descriptors.enumerated() {
+                let base = rawDescriptors.advanced(by: descriptorIndex * descriptorSize)
+                base.storeBytes(of: descriptor.kind, as: UInt32.self)
+                base.advanced(by: pointerOffset).storeBytes(
+                    of: descriptor.bytesPointer.map { UInt(bitPattern: $0) } ?? 0,
+                    as: UInt.self
+                )
+                base.advanced(by: pointerOffset + wordSize).storeBytes(
+                    of: UInt(descriptor.bytesLength),
+                    as: UInt.self
+                )
+                base.advanced(by: pointerOffset + wordSize * 2).storeBytes(
+                    of: descriptor.labelPointer.map { UInt(bitPattern: $0) } ?? 0,
+                    as: UInt.self
+                )
+                base.advanced(by: pointerOffset + wordSize * 3).storeBytes(
+                    of: UInt(descriptor.labelLength),
+                    as: UInt.self
+                )
+            }
+            return body(UnsafeRawPointer(rawDescriptors), CUnsignedLong(descriptors.count))
+        }
+        return withDataPointer(payloads[index]) { payloadPtr, payloadLen in
+            withDataPointer(labels[index]) { labelPtr, labelLen in
+                descriptors.append(
+                    NativeSorafsReferenceBundleInput(
+                        kind: kinds[index],
+                        bytesPointer: payloadPtr,
+                        bytesLength: payloadLen,
+                        labelPointer: labelPtr,
+                        labelLength: labelLen
+                    )
+                )
+                defer { descriptors.removeLast() }
+                return withSorafsReferenceBundleInputs(
+                    kinds: kinds,
                     payloads: payloads,
                     labels: labels,
                     index: index + 1,

@@ -9577,41 +9577,6 @@ fn sorafs_pin_epoch_window() -> Result<(u64, u64)> {
     Ok((submitted_epoch, retention_epoch))
 }
 
-fn storage_pin_missing_paid_record_is_retryable(
-    status: iroha::http::StatusCode,
-    body: &[u8],
-) -> bool {
-    status == iroha::http::StatusCode::PAYMENT_REQUIRED
-        && String::from_utf8_lossy(body).contains("has no paid pin registry record")
-}
-
-fn post_sorafs_storage_pin_after_paid_registration(
-    client: &Client,
-    manifest_bytes: &[u8],
-    payload: &[u8],
-    files: Option<&[iroha::client::SorafsStorageFileEntry<'_>]>,
-    description: &str,
-    timeout_secs: u64,
-) -> Result<iroha::http::Response<Vec<u8>>> {
-    let timeout = Duration::from_secs(timeout_secs.max(1));
-    let deadline = Instant::now() + timeout;
-    loop {
-        let response = client
-            .post_sorafs_storage_pin(manifest_bytes, payload, files)
-            .wrap_err_with(|| {
-                format!("failed to upload {description} bundle into SoraFS storage")
-            })?;
-        if !storage_pin_missing_paid_record_is_retryable(response.status(), response.body()) {
-            return Ok(response);
-        }
-        let now = Instant::now();
-        if now >= deadline {
-            return Ok(response);
-        }
-        std::thread::sleep((deadline - now).min(Duration::from_secs(2)));
-    }
-}
-
 fn publish_public_service_discovery(
     bundle: &SoraDeploymentBundleV1,
     torii_url: &str,
@@ -9720,15 +9685,6 @@ fn publish_public_service_discovery(
         .digest()
         .wrap_err("failed to compute public discovery canonical manifest digest")?;
     let manifest_digest_hex = hex::encode(manifest_digest.as_bytes());
-    let files = plan
-        .files
-        .iter()
-        .map(|file| OwnedStorageFileEntry {
-            path: file.path.clone(),
-            size: file.size,
-        })
-        .collect::<Vec<_>>();
-
     let mut client_config = soracloud_submission_config()?;
     client_config.torii_api_url = url::Url::parse(torii_url)
         .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?;
@@ -9739,8 +9695,6 @@ fn publish_public_service_discovery(
     register_sorafs_pin_manifest_and_wait(
         &client,
         iroha::client::SorafsPinRegisterArgs {
-            authority,
-            private_key: key_pair.private_key(),
             manifest_payload: &manifest_bytes,
             submitted_epoch,
             alias: None,
@@ -9750,40 +9704,7 @@ fn publish_public_service_discovery(
         "public discovery",
         timeout_secs,
     )?;
-    let borrowed_files = files
-        .iter()
-        .map(|entry| iroha::client::SorafsStorageFileEntry {
-            path: entry.path.as_slice(),
-            size: entry.size,
-        })
-        .collect::<Vec<_>>();
-    let storage_response = post_sorafs_storage_pin_after_paid_registration(
-        &client,
-        &manifest_bytes,
-        &payload,
-        Some(&borrowed_files),
-        "public discovery",
-        timeout_secs,
-    )?;
-    let status = storage_response.status();
-    let body = storage_response.body().to_vec();
-    let already_stored = storage_pin_conflict_is_already_stored(status, &body);
-    if status != iroha::http::StatusCode::OK && !already_stored {
-        return Err(eyre!(
-            "failed to upload public discovery bundle into SoraFS storage: {} {}",
-            status,
-            std::str::from_utf8(&body).unwrap_or("")
-        ));
-    }
-    let storage_value: norito::json::Value = if already_stored {
-        norito::json::Value::Null
-    } else {
-        json::from_slice(&body).wrap_err("failed to decode public discovery storage response")?
-    };
-    let manifest_id_hex = storage_value
-        .get("manifest_id_hex")
-        .and_then(norito::json::Value::as_str)
-        .map(ToOwned::to_owned);
+    let manifest_id_hex = None;
     let content_cid = encode_content_cid(&manifest.root_cid);
     let mut public_discovery_url = base_url.clone();
     public_discovery_url.set_path(&format!(
@@ -9928,15 +9849,6 @@ fn publish_app_static_site(
         .digest()
         .wrap_err("failed to compute app static site canonical manifest digest")?;
     let manifest_digest_hex = hex::encode(manifest_digest.as_bytes());
-    let files = plan
-        .files
-        .iter()
-        .map(|file| OwnedStorageFileEntry {
-            path: file.path.clone(),
-            size: file.size,
-        })
-        .collect::<Vec<_>>();
-
     let mut client_config = soracloud_submission_config()?;
     client_config.torii_api_url = url::Url::parse(torii_url)
         .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?;
@@ -9947,8 +9859,6 @@ fn publish_app_static_site(
     register_sorafs_pin_manifest_and_wait(
         &client,
         iroha::client::SorafsPinRegisterArgs {
-            authority,
-            private_key: key_pair.private_key(),
             manifest_payload: &manifest_bytes,
             submitted_epoch,
             alias: None,
@@ -9958,40 +9868,7 @@ fn publish_app_static_site(
         "app static site",
         timeout_secs,
     )?;
-    let borrowed_files = files
-        .iter()
-        .map(|entry| iroha::client::SorafsStorageFileEntry {
-            path: entry.path.as_slice(),
-            size: entry.size,
-        })
-        .collect::<Vec<_>>();
-    let storage_response = post_sorafs_storage_pin_after_paid_registration(
-        &client,
-        &manifest_bytes,
-        &payload,
-        Some(&borrowed_files),
-        "app static site",
-        timeout_secs,
-    )?;
-    let status = storage_response.status();
-    let body = storage_response.body().to_vec();
-    let already_stored = storage_pin_conflict_is_already_stored(status, &body);
-    if status != iroha::http::StatusCode::OK && !already_stored {
-        return Err(eyre!(
-            "failed to upload app static site bundle into SoraFS storage: {} {}",
-            status,
-            std::str::from_utf8(&body).unwrap_or("")
-        ));
-    }
-    let storage_value: norito::json::Value = if already_stored {
-        norito::json::Value::Null
-    } else {
-        json::from_slice(&body).wrap_err("failed to decode static site storage response")?
-    };
-    let manifest_id_hex = storage_value
-        .get("manifest_id_hex")
-        .and_then(norito::json::Value::as_str)
-        .map(ToOwned::to_owned);
+    let manifest_id_hex = None;
 
     Ok(AppStaticSitePublishOutput {
         manifest_id_hex,
@@ -10187,15 +10064,6 @@ fn publish_sorafs_directory_artifact(
         .digest()
         .wrap_err_with(|| format!("failed to compute {description} canonical manifest digest"))?;
     let manifest_digest_hex = hex::encode(manifest_digest.as_bytes());
-    let files = plan
-        .files
-        .iter()
-        .map(|file| OwnedStorageFileEntry {
-            path: file.path.clone(),
-            size: file.size,
-        })
-        .collect::<Vec<_>>();
-
     let mut client_config = soracloud_submission_config()?;
     client_config.torii_api_url = url::Url::parse(torii_url)
         .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?;
@@ -10206,8 +10074,6 @@ fn publish_sorafs_directory_artifact(
     register_sorafs_pin_manifest_and_wait(
         &client,
         iroha::client::SorafsPinRegisterArgs {
-            authority,
-            private_key: key_pair.private_key(),
             manifest_payload: &manifest_bytes,
             submitted_epoch,
             alias: None,
@@ -10217,41 +10083,7 @@ fn publish_sorafs_directory_artifact(
         description,
         timeout_secs,
     )?;
-    let borrowed_files = files
-        .iter()
-        .map(|entry| iroha::client::SorafsStorageFileEntry {
-            path: entry.path.as_slice(),
-            size: entry.size,
-        })
-        .collect::<Vec<_>>();
-    let storage_response = post_sorafs_storage_pin_after_paid_registration(
-        &client,
-        &manifest_bytes,
-        &payload,
-        Some(&borrowed_files),
-        description,
-        timeout_secs,
-    )?;
-    let status = storage_response.status();
-    let body = storage_response.body().to_vec();
-    let already_stored = storage_pin_conflict_is_already_stored(status, &body);
-    if status != iroha::http::StatusCode::OK && !already_stored {
-        return Err(eyre!(
-            "failed to upload {description} bundle into SoraFS storage: {} {}",
-            status,
-            std::str::from_utf8(&body).unwrap_or("")
-        ));
-    }
-    let storage_value: norito::json::Value = if already_stored {
-        norito::json::Value::Null
-    } else {
-        json::from_slice(&body)
-            .wrap_err_with(|| format!("failed to decode {description} storage response"))?
-    };
-    let manifest_id_hex = storage_value
-        .get("manifest_id_hex")
-        .and_then(norito::json::Value::as_str)
-        .map(ToOwned::to_owned);
+    let manifest_id_hex = None;
     let content_cid = encode_content_cid(&manifest.root_cid);
 
     Ok(PublishedSorafsDirectoryArtifact {
@@ -10343,8 +10175,6 @@ fn publish_sorafs_file_artifact(
     register_sorafs_pin_manifest_and_wait(
         &client,
         iroha::client::SorafsPinRegisterArgs {
-            authority,
-            private_key: key_pair.private_key(),
             manifest_payload: &manifest_bytes,
             submitted_epoch,
             alias: None,
@@ -10354,34 +10184,7 @@ fn publish_sorafs_file_artifact(
         description,
         timeout_secs,
     )?;
-    let storage_response = post_sorafs_storage_pin_after_paid_registration(
-        &client,
-        &manifest_bytes,
-        &payload,
-        None,
-        description,
-        timeout_secs,
-    )?;
-    let status = storage_response.status();
-    let body = storage_response.body().to_vec();
-    let already_stored = storage_pin_conflict_is_already_stored(status, &body);
-    if status != iroha::http::StatusCode::OK && !already_stored {
-        return Err(eyre!(
-            "failed to upload {description} bundle into SoraFS storage: {} {}",
-            status,
-            std::str::from_utf8(&body).unwrap_or("")
-        ));
-    }
-    let storage_value: norito::json::Value = if already_stored {
-        norito::json::Value::Null
-    } else {
-        json::from_slice(&body)
-            .wrap_err_with(|| format!("failed to decode {description} storage response"))?
-    };
-    let manifest_id_hex = storage_value
-        .get("manifest_id_hex")
-        .and_then(norito::json::Value::as_str)
-        .map(ToOwned::to_owned);
+    let manifest_id_hex = None;
     let content_cid = encode_content_cid(&manifest.root_cid);
 
     Ok(PublishedSorafsFileArtifact {
@@ -10560,11 +10363,6 @@ fn publish_inrou_guest_image_artifacts(
         .wrap_err("published Inrou guest-image artifact refs made the deployment bundle invalid")?;
 
     Ok(outputs)
-}
-
-fn storage_pin_conflict_is_already_stored(status: iroha::http::StatusCode, body: &[u8]) -> bool {
-    status == iroha::http::StatusCode::CONFLICT
-        && String::from_utf8_lossy(body).contains("already stored")
 }
 
 fn compute_chunk_digest_sha3(chunks: &[CarChunk]) -> [u8; 32] {
@@ -21029,39 +20827,7 @@ mod tests {
     }
 
     #[test]
-    fn storage_pin_conflict_helper_accepts_already_stored_only() {
-        assert!(!storage_pin_conflict_is_already_stored(
-            iroha::http::StatusCode::OK,
-            br#"{"manifest_id_hex":"abc"}"#,
-        ));
-        assert!(storage_pin_conflict_is_already_stored(
-            iroha::http::StatusCode::CONFLICT,
-            br#"{"error":"manifest abc already stored"}"#,
-        ));
-        assert!(!storage_pin_conflict_is_already_stored(
-            iroha::http::StatusCode::CONFLICT,
-            br#"{"error":"different conflict"}"#,
-        ));
-    }
-
-    #[test]
-    fn storage_pin_missing_paid_record_helper_is_narrow() {
-        assert!(storage_pin_missing_paid_record_is_retryable(
-            iroha::http::StatusCode::PAYMENT_REQUIRED,
-            br#"{"error":"manifest abc has no paid pin registry record"}"#,
-        ));
-        assert!(!storage_pin_missing_paid_record_is_retryable(
-            iroha::http::StatusCode::PAYMENT_REQUIRED,
-            br#"{"error":"manifest abc is not approved for pinning"}"#,
-        ));
-        assert!(!storage_pin_missing_paid_record_is_retryable(
-            iroha::http::StatusCode::CONFLICT,
-            br#"{"error":"manifest abc has no paid pin registry record"}"#,
-        ));
-    }
-
-    #[test]
-    fn publish_app_static_site_accepts_already_stored_conflict_and_keeps_cid_gateway_url() {
+    fn publish_app_static_site_queues_finalized_registry_ingest_and_keeps_cid_gateway_url() {
         let dir = temp_dir("publish_static_site_already_stored");
         let dist_dir = dir.join("frontend/dist");
         fs::create_dir_all(&dist_dir).expect("create dist dir");
@@ -21099,13 +20865,6 @@ mod tests {
                         .expect("encode pin register response"),
                 },
             ),
-            (
-                "/v1/sorafs/storage/pin".to_owned(),
-                MockHttpResponse {
-                    content_type: "application/json",
-                    body: br#"{"error":"manifest bafytest already stored"}"#.to_vec(),
-                },
-            ),
         ]));
 
         let key_pair = soracloud_fixture_key_pair(0x13);
@@ -21120,7 +20879,7 @@ mod tests {
             &key_pair,
             5,
         )
-        .expect("publish should accept already-stored storage conflicts");
+        .expect("publish should register finalized provider ingest");
 
         assert_eq!(publication.hostname, "travel-ops.sora");
         assert_eq!(publication.public_url, "https://travel-ops.sora/");
@@ -25316,14 +25075,6 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
                 },
             ),
             (
-                "/v1/sorafs/storage/pin".to_owned(),
-                MockHttpResponse {
-                    content_type: "application/json",
-                    body: json::to_vec(&norito::json!({ "manifest_id_hex": "disc-deploy" }))
-                        .expect("encode public discovery storage pin response"),
-                },
-            ),
-            (
                 "/v1/soracloud/deploy".to_owned(),
                 MockHttpResponse {
                     content_type: "application/json",
@@ -25420,14 +25171,6 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
                     content_type: "application/json",
                     body: json::to_vec(&norito::json!({ "ok": true }))
                         .expect("encode public discovery pin register response"),
-                },
-            ),
-            (
-                "/v1/sorafs/storage/pin".to_owned(),
-                MockHttpResponse {
-                    content_type: "application/json",
-                    body: json::to_vec(&norito::json!({ "manifest_id_hex": "disc-upgrade" }))
-                        .expect("encode public discovery storage pin response"),
                 },
             ),
             (
@@ -28847,14 +28590,6 @@ printf 'arm-initrd' > "$SCRIPT_DIR/services/live/inrou/aarch64/initrd.img"
                 },
             ),
             (
-                "/v1/sorafs/storage/pin".to_owned(),
-                MockHttpResponse {
-                    content_type: "application/json",
-                    body: json::to_vec(&norito::json!({ "manifest_id_hex": "beef" }))
-                        .expect("encode storage pin response"),
-                },
-            ),
-            (
                 "/v1/soracloud/deploy".to_owned(),
                 MockHttpResponse {
                     content_type: "application/json",
@@ -28916,14 +28651,8 @@ printf 'arm-initrd' > "$SCRIPT_DIR/services/live/inrou/aarch64/initrd.img"
             release_response
                 .published_static_site
                 .as_ref()
-                .is_some_and(|publication| publication.manifest_id_hex.as_deref() == Some("beef"))
+                .is_some_and(|publication| publication.manifest_id_hex.is_none())
         );
-        let storage_pin_requests = server
-            .requests()
-            .iter()
-            .filter(|request| request.method == "POST" && request.path == "/v1/sorafs/storage/pin")
-            .count();
-        assert_eq!(storage_pin_requests, 6);
         let deploy_requests = server
             .requests()
             .into_iter()
@@ -29028,14 +28757,6 @@ printf 'release-vault-bundle' > "$SCRIPT_DIR/services/vault/build/vault-api.to"
                 },
             ),
             (
-                "/v1/sorafs/storage/pin".to_owned(),
-                MockHttpResponse {
-                    content_type: "application/json",
-                    body: json::to_vec(&norito::json!({ "manifest_id_hex": "beef" }))
-                        .expect("encode storage pin response"),
-                },
-            ),
-            (
                 "/v1/soracloud/deploy".to_owned(),
                 MockHttpResponse {
                     content_type: "application/json",
@@ -29084,12 +28805,6 @@ printf 'release-vault-bundle' > "$SCRIPT_DIR/services/vault/build/vault-api.to"
                     .note
                     .contains("reused a prepublished Inrou guest-image artifact"))
         );
-        let storage_pin_requests = server
-            .requests()
-            .iter()
-            .filter(|request| request.method == "POST" && request.path == "/v1/sorafs/storage/pin")
-            .count();
-        assert_eq!(storage_pin_requests, 4);
     }
 
     #[test]
@@ -30739,14 +30454,6 @@ main().catch((error) => {
                 },
             ),
             (
-                "/v1/sorafs/storage/pin".to_owned(),
-                MockHttpResponse {
-                    content_type: "application/json",
-                    body: json::to_vec(&norito::json!({ "manifest_id_hex": "abcd" }))
-                        .expect("encode storage pin response"),
-                },
-            ),
-            (
                 "/v1/soracloud/deploy".to_owned(),
                 MockHttpResponse {
                     content_type: "application/json",
@@ -30858,7 +30565,7 @@ main().catch((error) => {
             .as_ref()
             .expect("root-binding app should publish a static site");
         assert_eq!(publication.public_url, "https://travel-ops.sora/");
-        assert_eq!(publication.manifest_id_hex.as_deref(), Some("abcd"));
+        assert_eq!(publication.manifest_id_hex, None);
         assert!(publication.content_cid.starts_with('b'));
         assert_eq!(
             publication.cid_gateway_url,
@@ -30870,10 +30577,6 @@ main().catch((error) => {
         assert!(server.requests().iter().any(|request| {
             request.method == "POST" && request.path == "/v1/sorafs/pin/register"
         }));
-        assert!(server.requests().iter().any(|request| {
-            request.method == "POST" && request.path == "/v1/sorafs/storage/pin"
-        }));
-
         let deploy_request = server
             .requests()
             .into_iter()
@@ -30987,14 +30690,6 @@ main().catch((error) => {
                 },
             ),
             (
-                "/v1/sorafs/storage/pin".to_owned(),
-                MockHttpResponse {
-                    content_type: "application/json",
-                    body: json::to_vec(&norito::json!({ "manifest_id_hex": "app-infra-bundle" }))
-                        .expect("encode storage pin response"),
-                },
-            ),
-            (
                 "/v1/soracloud/apps/deploy".to_owned(),
                 MockHttpResponse {
                     content_type: "application/json",
@@ -31098,14 +30793,6 @@ main().catch((error) => {
                     content_type: "application/json",
                     body: json::to_vec(&norito::json!({ "ok": true }))
                         .expect("encode pin register response"),
-                },
-            ),
-            (
-                "/v1/sorafs/storage/pin".to_owned(),
-                MockHttpResponse {
-                    content_type: "application/json",
-                    body: json::to_vec(&norito::json!({ "manifest_id_hex": "dcba" }))
-                        .expect("encode storage pin response"),
                 },
             ),
             (
@@ -31243,7 +30930,7 @@ main().catch((error) => {
             .as_ref()
             .expect("cid-only app should publish a static site");
         assert_eq!(publication.public_url, "https://travel-ops.sora/");
-        assert_eq!(publication.manifest_id_hex.as_deref(), Some("dcba"));
+        assert_eq!(publication.manifest_id_hex, None);
         assert!(publication.content_cid.starts_with('b'));
         assert_eq!(
             publication.cid_gateway_url,
@@ -31326,14 +31013,6 @@ main().catch((error) => {
                 },
             ),
             (
-                "/v1/sorafs/storage/pin".to_owned(),
-                MockHttpResponse {
-                    content_type: "application/json",
-                    body: json::to_vec(&norito::json!({ "manifest_id_hex": "fedc" }))
-                        .expect("encode storage pin response"),
-                },
-            ),
-            (
                 "/v1/soracloud/upgrade".to_owned(),
                 MockHttpResponse {
                     content_type: "application/json",
@@ -31412,7 +31091,7 @@ main().catch((error) => {
             .published_static_site
             .as_ref()
             .expect("cid-only app should publish a static site");
-        assert_eq!(publication.manifest_id_hex.as_deref(), Some("fedc"));
+        assert_eq!(publication.manifest_id_hex, None);
         assert!(publication.content_cid.starts_with('b'));
 
         let upgrade_requests = server

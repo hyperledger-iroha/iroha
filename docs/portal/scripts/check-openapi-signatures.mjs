@@ -1,23 +1,34 @@
 #!/usr/bin/env node
 // SPDX-License-Identifier: Apache-2.0
 
-import {readFile} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import path from 'node:path';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 
-import {verifyOpenApiSignature} from './lib/openapi-signature.mjs';
 import {
-  validateOpenApiGeneratorProvenance,
   validateReleaseOpenApiDocumentBytes,
 } from './lib/openapi-provenance.mjs';
+import {
+  OPENAPI_MANIFEST_VERSION,
+  parseOpenApiManifestV2Json,
+  scanJsonRejectDuplicateKeys,
+  verifyOpenApiManifestV2,
+} from './lib/openapi-manifest-v2.mjs';
+import {readOpenApiStableFile} from './lib/openapi-safe-file.mjs';
 import {isAllowedSigner, loadAllowedSigners} from './lib/openapi-signers.mjs';
+import {
+  rejectUnknownOpenApiVersionsIndexFields,
+  requireOpenApiVersionsIndexFields,
+} from './lib/openapi-versions-index.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const defaultStaticDir = path.join(__dirname, '..', 'static', 'openapi');
 const defaultVersionsFile = path.join(defaultStaticDir, 'versions.json');
 const defaultAllowedSignersFile = path.join(defaultStaticDir, 'allowed_signers.json');
+const OPENAPI_SPEC_MAX_BYTES = 64 * 1024 * 1024;
+const OPENAPI_MANIFEST_MAX_BYTES = 64 * 1024;
+const OPENAPI_VERSIONS_MAX_BYTES = 1024 * 1024;
 
 export function parseArgs(argv) {
   const options = {
@@ -107,13 +118,21 @@ export async function checkOpenApiSignatures(options = {}) {
   const allowedSigners = await loadAllowedSigners(allowedSignersFile);
   summary.allowedSignerCount = allowedSigners.size;
 
-  const manifestRaw = await readFile(versionsFile, 'utf8');
+  const manifestRaw = await readOpenApiStableFile(versionsFile, {
+    label: 'OpenAPI versions manifest',
+    maxBytes: OPENAPI_VERSIONS_MAX_BYTES,
+    encoding: 'utf8',
+  });
+  scanJsonRejectDuplicateKeys(manifestRaw, `versions manifest ${versionsFile}`);
   let manifest;
   try {
     manifest = JSON.parse(manifestRaw);
   } catch (error) {
     throw new Error(`failed to parse ${versionsFile}: ${error.message}`);
   }
+  rejectUnknownOpenApiVersionsIndexFields(manifest, {
+    label: `versions manifest ${versionsFile}`,
+  });
 
   if (!manifest || !Array.isArray(manifest.entries)) {
     throw new Error(`${versionsFile} is missing an entries array`);
@@ -206,7 +225,10 @@ export async function checkOpenApiSignatures(options = {}) {
     const specFullPath = specPath ? path.join(staticDir, specPath) : null;
     if (specFullPath) {
       try {
-        specBuffer = await readFile(specFullPath);
+        specBuffer = await readOpenApiStableFile(specFullPath, {
+          label: `OpenAPI spec ${specPath}`,
+          maxBytes: OPENAPI_SPEC_MAX_BYTES,
+        });
         validateReleaseOpenApiDocumentBytes(specBuffer, {
           label: `OpenAPI spec ${specPath}`,
         });
@@ -241,8 +263,14 @@ export async function checkOpenApiSignatures(options = {}) {
     const manifestFullPath = manifestPath ? path.join(staticDir, manifestPath) : null;
     if (manifestFullPath) {
       try {
-        const data = await readFile(manifestFullPath, 'utf8');
-        manifestJson = JSON.parse(data);
+        const data = await readOpenApiStableFile(manifestFullPath, {
+          label: `OpenAPI manifest ${manifestPath}`,
+          maxBytes: OPENAPI_MANIFEST_MAX_BYTES,
+          encoding: 'utf8',
+        });
+        manifestJson = parseOpenApiManifestV2Json(data, {
+          label: `manifest ${manifestPath}`,
+        });
       } catch (error) {
         entryIssues.push(
           `failed to load manifest ${manifestPath}: ${error.message ?? error}`,
@@ -251,7 +279,7 @@ export async function checkOpenApiSignatures(options = {}) {
     }
 
     if (manifestJson) {
-      if (manifestJson.version !== 1) {
+      if (manifestJson.version !== OPENAPI_MANIFEST_VERSION) {
         entryIssues.push('manifest unsupported version');
       }
       if (
@@ -260,14 +288,22 @@ export async function checkOpenApiSignatures(options = {}) {
       ) {
         entryIssues.push('manifest missing generated_unix_ms');
       }
-      try {
-        validateOpenApiGeneratorProvenance(manifestJson, {
-          label: 'manifest',
-          signed: manifestJson?.artifact?.signature != null,
-          requireClean: requiresSignature,
-        });
-      } catch (error) {
-        entryIssues.push(error.message ?? String(error));
+      if (specBuffer && manifestFullPath && specFullPath) {
+        try {
+          verifyOpenApiManifestV2({
+            manifest: manifestJson,
+            artifactBytes: specBuffer,
+            label: `manifest ${manifestPath}`,
+            expectedArtifactPath: path
+              .relative(path.dirname(manifestFullPath), specFullPath)
+              .split(path.sep)
+              .join('/'),
+            requireSignature: requiresSignature,
+            requireClean: requiresSignature,
+          });
+        } catch (error) {
+          entryIssues.push(error.message ?? String(error));
+        }
       }
       const artifact = manifestJson.artifact;
       if (!artifact || typeof artifact !== 'object' || Array.isArray(artifact)) {
@@ -292,9 +328,17 @@ export async function checkOpenApiSignatures(options = {}) {
         const artifactPath = normalizeArtifactPath(artifact.path);
         if (!artifactPath) {
           entryIssues.push('manifest missing or invalid artifact.path');
-        } else if (specPath && artifactPath !== specPath) {
+        } else if (
+          specFullPath &&
+          manifestFullPath &&
+          artifactPath !==
+            path
+              .relative(path.dirname(manifestFullPath), specFullPath)
+              .split(path.sep)
+              .join('/')
+        ) {
           entryIssues.push(
-            `manifest references ${artifact.path ?? '(missing)'}, expected ${specPath}`,
+            `manifest references ${artifact.path ?? '(missing)'}, expected a path relative to its containing manifest`,
           );
         }
         const manifestSha = normalizeHex(artifact.sha256_hex);
@@ -377,25 +421,6 @@ export async function checkOpenApiSignatures(options = {}) {
           ) {
             entryIssues.push('signature value mismatch between versions entry and manifest');
           }
-          if (
-            manifestSignatureAlgorithm &&
-            manifestSignaturePublicKey &&
-            manifestSignatureValue &&
-            specBuffer
-          ) {
-            try {
-              verifyOpenApiSignature({
-                algorithm: manifestSignatureAlgorithm,
-                publicKeyHex: manifestSignaturePublicKey,
-                signatureHex: manifestSignatureValue,
-                payload: specBuffer,
-              });
-            } catch (error) {
-              entryIssues.push(
-                `signature verification failed: ${error.message ?? error}`,
-              );
-            }
-          }
         }
       }
     }
@@ -425,6 +450,9 @@ export async function checkOpenApiSignatures(options = {}) {
   if (summary.issues.length > 0) {
     throw new Error(formatIssues(summary.issues));
   }
+  requireOpenApiVersionsIndexFields(manifest, {
+    label: `versions manifest ${versionsFile}`,
+  });
 
   return summary;
 }
@@ -441,13 +469,11 @@ function computeSha256Hex(buffer) {
 }
 
 function normalizeHex(value) {
-  return typeof value === 'string' ? value.toLowerCase() : null;
+  return typeof value === 'string' ? value : null;
 }
 
 function normalizeAlgorithm(value) {
-  return typeof value === 'string' && value.trim() !== ''
-    ? value.trim().toLowerCase()
-    : null;
+  return typeof value === 'string' && value !== '' ? value : null;
 }
 
 function normalizeVersions(manifest, versionsFile) {
@@ -491,18 +517,26 @@ function normalizeVersions(manifest, versionsFile) {
 }
 
 function normalizeRelative(value) {
-  if (typeof value !== 'string' || value.trim() === '') {
-    return null;
-  }
-  const normalized = value.trim().replace(/\\/g, '/');
   if (
-    path.isAbsolute(normalized) ||
-    /^[A-Za-z]:/.test(normalized) ||
-    normalized.split('/').some((segment) => segment === '..')
+    typeof value !== 'string' ||
+    value === '' ||
+    value.trim() !== value ||
+    value.includes('\\')
   ) {
     return null;
   }
-  return normalized.replace(/^\/+/, '');
+  const normalized = value;
+  const segments = normalized.split('/');
+  if (
+    path.isAbsolute(normalized) ||
+    /^[A-Za-z]:/.test(normalized) ||
+    segments.some(
+      (segment) => segment === '' || segment === '.' || segment === '..',
+    )
+  ) {
+    return null;
+  }
+  return normalized;
 }
 
 function normalizeArtifactPath(value) {

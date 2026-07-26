@@ -463,6 +463,15 @@ impl CapacityMeter {
         guard.smoothing.reset();
     }
 
+    /// Clear declaration and outstanding-order gauges after an authoritative rebuild removes the
+    /// local provider declaration.
+    pub(crate) fn clear_capacity_runtime(&self) {
+        let mut guard = self.state.write().expect("metering state poisoned");
+        guard.outstanding.clear();
+        guard.window = WindowCounters::default();
+        guard.smoothing.reset();
+    }
+
     /// Update the declared capacity counters (GiB).
     pub fn record_declared_gib(&self, declared_gib: u64) {
         let mut guard = self.state.write().expect("metering state poisoned");

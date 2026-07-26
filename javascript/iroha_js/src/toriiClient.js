@@ -4505,23 +4505,43 @@ export class ToriiClient {
   }
 
   /**
-   * Register a SoraFS manifest inside the pin registry (`POST /v1/sorafs/pin/register`).
-   * Mirrors `iroha sorafs pin register` so SDK callers can avoid shelling out to the CLI.
-   * @param {SorafsPinRegisterRequest} input
+   * Submit one caller-signed SoraFS pin-registration transaction.
+   * @param {ArrayBufferView | ArrayBuffer | Buffer} signedTransaction
+   * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<Record<string, unknown>>}
    */
-  async registerSorafsPinManifest(input = {}) {
-    const record = ensureRecord(input ?? {}, "registerSorafsPinManifest input");
-    const { signal } = normalizeSignalOption(record, "registerSorafsPinManifest");
-    const body = JSON.stringify(
-      buildSorafsPinRegisterPayload(record, "registerSorafsPinManifest"),
+  async registerSorafsPinManifest(signedTransaction, options = {}) {
+    const { signal } = normalizeSignalOnlyOption(
+      options,
+      "registerSorafsPinManifest",
+    );
+    if (
+      !Buffer.isBuffer(signedTransaction) &&
+      !ArrayBuffer.isView(signedTransaction) &&
+      !(signedTransaction instanceof ArrayBuffer)
+    ) {
+      throw new TypeError(
+        "signedTransaction must be a Buffer, ArrayBuffer, or ArrayBuffer view",
+      );
+    }
+    const rawTransaction = toBuffer(signedTransaction, "signedTransaction");
+    throwIfAborted(signal);
+    await waitForPromiseWithSignal(this._ensureDataModelValidation(), signal);
+    throwIfAborted(signal);
+    const body = toVersionedTransactionPayload(
+      rawTransaction,
+      this._nativeBinding,
     );
     const response = await this._request("POST", "/v1/sorafs/pin/register", {
-      headers: JSON_REQUEST_HEADERS,
+      headers: {
+        "Content-Type": APPLICATION_NORITO,
+        Accept: APPLICATION_JSON,
+      },
       body,
+      retryProfile: "pipeline",
       signal,
     });
-    await this._expectStatus(response, [200]);
+    await this._expectStatus(response, [202]);
     const payload = await this._maybeJson(response);
     if (!payload) {
       throw new Error("sorafs pin register endpoint returned no payload");
@@ -4530,49 +4550,17 @@ export class ToriiClient {
   }
 
   /**
-   * Register a SoraFS manifest and return a typed response.
-   * @param {SorafsPinRegisterRequest} input
+   * Submit one caller-signed SoraFS pin-registration transaction and return its admission identity.
+   * @param {ArrayBufferView | ArrayBuffer | Buffer} signedTransaction
+   * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<SorafsPinRegisterResponse>}
    */
-  async registerSorafsPinManifestTyped(input = {}) {
-    const payload = await this.registerSorafsPinManifest(input);
+  async registerSorafsPinManifestTyped(signedTransaction, options = {}) {
+    const payload = await this.registerSorafsPinManifest(
+      signedTransaction,
+      options,
+    );
     return normalizeSorafsPinRegisterResponse(payload);
-  }
-
-  /**
-   * Pin a SoraFS manifest + payload (`POST /v1/sorafs/storage/pin`).
-   * @param {{manifest: ArrayBufferView | ArrayBuffer | Buffer | string, payload: ArrayBufferView | ArrayBuffer | Buffer | string, signal?: AbortSignal}} input
-   * @returns {Promise<SorafsPinResponse>}
-   */
-  async pinSorafsManifest(input) {
-    const record = ensureRecord(input ?? {}, "pinSorafsManifest input");
-    const manifestValue =
-      record.manifest ?? record.manifest_b64 ?? record.manifestB64;
-    const payloadBytes =
-      record.payload ?? record.payload_b64 ?? record.payloadB64;
-    const manifestB64 = normalizeRequiredBase64Payload(
-      manifestValue,
-      "pinSorafsManifest.manifest",
-    );
-    const payloadB64 = normalizeRequiredBase64Payload(
-      payloadBytes,
-      "pinSorafsManifest.payload",
-    );
-    const body = JSON.stringify({
-      manifest_b64: manifestB64,
-      payload_b64: payloadB64,
-    });
-    const response = await this._request("POST", "/v1/sorafs/storage/pin", {
-      headers: JSON_REQUEST_HEADERS,
-      body,
-      signal: record.signal,
-    });
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    if (!payload) {
-      throw new Error("sorafs storage pin endpoint returned no payload");
-    }
-    return normalizeSorafsPinResponse(payload);
   }
 
   /**
@@ -5067,51 +5055,6 @@ export class ToriiClient {
       gatewayResult: session.gatewayResult,
       outputDir,
     };
-  }
-
-  /**
-   * Submit an uptime probe sample (`POST /v1/sorafs/capacity/uptime`).
-   * @param {{uptimeSecs: number, observedSecs: number, signal?: AbortSignal}} [input]
-   * @returns {Promise<SorafsUptimeObservationResponse>}
-   */
-  async submitSorafsUptimeObservation(input = {}) {
-    const normalizedInput = ensureRecord(
-      input ?? {},
-      "submitSorafsUptimeObservation input",
-    );
-    const { signal } = normalizeSignalOption(
-      normalizedInput,
-      "submitSorafsUptimeObservation",
-    );
-    const { signal: _ignored, ...record } = normalizedInput;
-    assertSupportedOptionKeys(
-      record,
-      new Set(["uptime_secs", "uptimeSecs", "observed_secs", "observedSecs"]),
-      "submitSorafsUptimeObservation input",
-    );
-    const payload = {
-      uptime_secs: ToriiClient._normalizeUnsignedInteger(
-        record.uptime_secs ?? record.uptimeSecs,
-        "submitSorafsUptimeObservation.uptimeSecs",
-        { allowZero: false },
-      ),
-      observed_secs: ToriiClient._normalizeUnsignedInteger(
-        record.observed_secs ?? record.observedSecs,
-        "submitSorafsUptimeObservation.observedSecs",
-        { allowZero: false },
-      ),
-    };
-    const response = await this._request("POST", "/v1/sorafs/capacity/uptime", {
-      headers: JSON_REQUEST_HEADERS,
-      body: JSON.stringify(payload),
-      signal,
-    });
-    await this._expectStatus(response, [200]);
-    const json = await this._maybeJson(response);
-    if (!json) {
-      throw new Error("sorafs capacity uptime endpoint returned no payload");
-    }
-    return normalizeSorafsUptimeObservationResponse(json);
   }
 
   /**
@@ -30070,111 +30013,26 @@ function normalizeSorafsReplicationReceipt(payload, context) {
   };
 }
 
-function normalizeSorafsPinResponse(payload, context = "sorafs pin response") {
-  const record = ensureRecord(payload ?? {}, context);
-  return {
-    manifest_id_hex: normalizeHex32String(
-      record.manifest_id_hex ?? "",
-      `${context}.manifest_id_hex`,
-    ),
-    payload_digest_hex: normalizeHex32String(
-      record.payload_digest_hex ?? "",
-      `${context}.payload_digest_hex`,
-    ),
-    content_length: ToriiClient._normalizeUnsignedInteger(
-      record.content_length,
-      `${context}.content_length`,
-      { allowZero: true },
-    ),
-  };
-}
-
 function normalizeSorafsPinRegisterResponse(
   payload,
   context = "sorafs pin register response",
 ) {
   const record = ensureRecord(payload ?? {}, context);
-  const manifestDigestValue = pickSorafsRegisterField(
+  assertSupportedOptionKeys(
     record,
-    ["manifest_digest_hex", "manifestDigestHex"],
-    `${context}.manifest_digest_hex`,
+    new Set(["status", "tx_hash_hex", "manifest_digest_hex"]),
+    context,
   );
-  const chunkerHandleValue = pickSorafsRegisterField(
-    record,
-    ["chunker_handle", "chunkerHandle"],
-    `${context}.chunker_handle`,
-  );
-  const submittedEpochValue = pickSorafsRegisterField(
-    record,
-    ["submitted_epoch", "submittedEpoch"],
-    `${context}.submitted_epoch`,
-  );
-  const contentLengthValue = pickSorafsRegisterField(
-    record,
-    ["content_length", "contentLength"],
-    `${context}.content_length`,
-  );
-  const pinFeeNanoValue = pickSorafsRegisterField(
-    record,
-    ["pin_fee_nano", "pinFeeNano"],
-    `${context}.pin_fee_nano`,
-  );
-  const pinFeeAssetValue = pickSorafsRegisterField(
-    record,
-    ["pin_fee_asset_id", "pinFeeAssetId"],
-    `${context}.pin_fee_asset_id`,
-  );
-  const pinFeeTreasuryValue = pickSorafsRegisterField(
-    record,
-    ["pin_fee_treasury_account_id", "pinFeeTreasuryAccountId"],
-    `${context}.pin_fee_treasury_account_id`,
-  );
-  const aliasValue =
-    record.alias === undefined || record.alias === null
-      ? null
-      : normalizeSorafsPinAliasRequest(record.alias, `${context}.alias`);
-  const successorValue = pickSorafsRegisterField(
-    record,
-    ["successor_of_hex", "successorOfHex"],
-    `${context}.successor_of_hex`,
-  );
+  if (record.status !== "submitted") {
+    throw new TypeError(`${context}.status must be submitted`);
+  }
   return {
+    status: "submitted",
+    tx_hash_hex: normalizeHex32String(record.tx_hash_hex, `${context}.tx_hash_hex`),
     manifest_digest_hex: normalizeHex32String(
-      manifestDigestValue,
+      record.manifest_digest_hex,
       `${context}.manifest_digest_hex`,
     ),
-    chunker_handle: requireNonEmptyString(
-      chunkerHandleValue,
-      `${context}.chunker_handle`,
-    ),
-    submitted_epoch: ToriiClient._normalizeUnsignedInteger(
-      submittedEpochValue,
-      `${context}.submitted_epoch`,
-      { allowZero: true },
-    ),
-    content_length: ToriiClient._normalizeUnsignedInteger(
-      contentLengthValue,
-      `${context}.content_length`,
-      { allowZero: true },
-    ),
-    pin_fee_nano: ToriiClient._normalizeUnsignedInteger(
-      pinFeeNanoValue,
-      `${context}.pin_fee_nano`,
-      { allowZero: true },
-    ),
-    pin_fee_asset_id: requireNonEmptyString(
-      pinFeeAssetValue,
-      `${context}.pin_fee_asset_id`,
-    ),
-    pin_fee_treasury_account_id: requireNonEmptyString(
-      pinFeeTreasuryValue,
-      `${context}.pin_fee_treasury_account_id`,
-    ),
-    alias: aliasValue,
-    successor_of_hex:
-      successorValue === SORAFS_REGISTER_FIELD_MISSING || successorValue === null
-        ? null
-        : normalizeHex32String(successorValue, `${context}.successor_of_hex`),
   };
 }
 
@@ -30702,146 +30560,6 @@ function normalizeSorafsManifestResponse(
       { allowZero: true },
     ),
   };
-}
-
-function buildSorafsPinRegisterPayload(record, context) {
-  assertSupportedOptionKeys(
-    record,
-    new Set([
-      "authority",
-      "private_key",
-      "manifest_payload",
-      "submitted_epoch",
-      "alias",
-      "successor_of_hex",
-      "signal",
-    ]),
-    context,
-  );
-  const authority = requireExactNonEmptyString(
-    record.authority,
-    `${context}.authority`,
-  );
-  const payload = {
-    authority: ToriiClient._normalizeAccountId(authority, `${context}.authority`),
-    private_key: requireExactTokenString(record.private_key, `${context}.private_key`),
-    manifest_payload: normalizeSorafsPinRegisterBase64(
-      record.manifest_payload,
-      `${context}.manifest_payload`,
-      SORAFS_PIN_REGISTER_MAX_MANIFEST_BYTES,
-    ),
-    submitted_epoch: ToriiClient._normalizeUnsignedInteger(
-      record.submitted_epoch,
-      `${context}.submitted_epoch`,
-      { allowZero: true },
-    ),
-  };
-  if (record.alias !== undefined && record.alias !== null) {
-    payload.alias = normalizeSorafsPinRegisterAlias(record.alias, `${context}.alias`);
-  }
-  if (record.successor_of_hex !== undefined && record.successor_of_hex !== null) {
-    const exactSuccessorHex = requireExactNonEmptyString(
-      record.successor_of_hex,
-      `${context}.successor_of_hex`,
-    );
-    const successorHex = normalizeHex32String(
-      exactSuccessorHex,
-      `${context}.successor_of_hex`,
-    );
-    if (/^0{64}$/u.test(successorHex)) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_STRING,
-        `${context}.successor_of_hex must not be zero`,
-        `${context}.successor_of_hex`,
-      );
-    }
-    payload.successor_of_hex = successorHex;
-  }
-  return payload;
-}
-
-const SORAFS_PIN_REGISTER_MAX_MANIFEST_BYTES = 512 * 1024;
-const SORAFS_PIN_REGISTER_MAX_ALIAS_PROOF_BYTES = 1024 * 1024;
-
-function normalizeSorafsPinRegisterBase64(value, context, maximumDecodedBytes) {
-  if (typeof value !== "string") {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_STRING,
-      `${context} must be a canonical padded base64 string`,
-      context,
-    );
-  }
-  const maximumEncodedBytes = Math.ceil(maximumDecodedBytes / 3) * 4;
-  if (value.length === 0 || value.length > maximumEncodedBytes) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_STRING,
-      `${context} must encode 1..=${maximumDecodedBytes} bytes`,
-      context,
-    );
-  }
-  if (value.trim() !== value || /\s/u.test(value)) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_STRING,
-      `${context} must be canonical padded base64`,
-      context,
-    );
-  }
-  let decoded;
-  try {
-    decoded = strictDecodeBase64(value);
-  } catch (error) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_STRING,
-      `${context} must be canonical padded base64`,
-      context,
-      error instanceof Error ? error : undefined,
-    );
-  }
-  if (
-    decoded.byteLength === 0 ||
-    decoded.byteLength > maximumDecodedBytes ||
-    Buffer.from(decoded).toString("base64") !== value
-  ) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_STRING,
-      `${context} must be canonical padded base64 encoding of 1..=${maximumDecodedBytes} bytes`,
-      context,
-    );
-  }
-  return value;
-}
-
-function normalizeSorafsPinRegisterAlias(value, context) {
-  const record = ensureRecord(value, context);
-  assertSupportedOptionKeys(
-    record,
-    new Set(["namespace", "name", "proof_base64"]),
-    context,
-  );
-  return {
-    namespace: normalizeSorafsPinRegisterAliasSegment(
-      record.namespace,
-      `${context}.namespace`,
-    ),
-    name: normalizeSorafsPinRegisterAliasSegment(record.name, `${context}.name`),
-    proof_base64: normalizeSorafsPinRegisterBase64(
-      record.proof_base64,
-      `${context}.proof_base64`,
-      SORAFS_PIN_REGISTER_MAX_ALIAS_PROOF_BYTES,
-    ),
-  };
-}
-
-function normalizeSorafsPinRegisterAliasSegment(value, context) {
-  const normalized = requireExactNonEmptyString(value, context);
-  if (normalized.length > 128 || !/^[a-z0-9._-]+$/u.test(normalized)) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_STRING,
-      `${context} must contain 1..=128 lowercase ASCII letters, digits, '.', '-', or '_'`,
-      context,
-    );
-  }
-  return normalized;
 }
 
 function normalizeSorafsPinAliasRequest(value, context) {
@@ -31645,26 +31363,6 @@ function normalizeUpperHex(value, name) {
     throw new TypeError(`${name} must be a hex string`);
   }
   return trimmed.toUpperCase();
-}
-
-function normalizeSorafsUptimeObservationResponse(
-  payload,
-  context = "sorafs uptime response",
-) {
-  const record = ensureRecord(payload ?? {}, context);
-  return {
-    status: requireNonEmptyString(record.status, `${context}.status`),
-    uptime_secs: ToriiClient._normalizeUnsignedInteger(
-      record.uptime_secs,
-      `${context}.uptime_secs`,
-      { allowZero: true },
-    ),
-    observed_secs: ToriiClient._normalizeUnsignedInteger(
-      record.observed_secs,
-      `${context}.observed_secs`,
-      { allowZero: true },
-    ),
-  };
 }
 
 function normalizeSorafsPorSubmissionResponse(

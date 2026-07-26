@@ -1946,6 +1946,12 @@ impl Execute for DrawdownAssetLock {
             .numeric_spec_for(&record.asset_definition)
             .map_err(Error::from)?;
         assert_numeric_spec_with(self.amount.as_numeric(), spec)?;
+        assert_numeric_spec_with(self.expected_remaining_amount.as_numeric(), spec)?;
+        if record.remaining_amount != self.expected_remaining_amount {
+            return Err(validation_err(
+                "asset lock remaining amount changed since the drawdown was prepared",
+            ));
+        }
         if self.amount > record.remaining_amount {
             return Err(validation_err("lock drawdown exceeds remaining amount"));
         }
@@ -3884,7 +3890,7 @@ mod tests {
         );
         assert_eq!(balance(&tx, &record.custody, &asset_definition), amount);
 
-        let err = DrawdownAssetLock::new(escrow_id, Quantity::from(15_u32))
+        let err = DrawdownAssetLock::new(escrow_id, Quantity::from(15_u32), Quantity::from(40_u32))
             .execute(&destination, &mut tx)
             .expect_err("destination cannot draw down when release authority is set");
         assert!(
@@ -3892,7 +3898,7 @@ mod tests {
             "unexpected error: {err}"
         );
 
-        DrawdownAssetLock::new(escrow_id, Quantity::from(15_u32))
+        DrawdownAssetLock::new(escrow_id, Quantity::from(15_u32), Quantity::from(40_u32))
             .execute(&release_authority, &mut tx)
             .expect("release authority draws down partial amount");
         let record = escrow_record(&tx, &escrow_id);
@@ -3907,7 +3913,7 @@ mod tests {
             Quantity::from(25_u32)
         );
 
-        DrawdownAssetLock::new(escrow_id, Quantity::from(25_u32))
+        DrawdownAssetLock::new(escrow_id, Quantity::from(25_u32), Quantity::from(25_u32))
             .execute(&release_authority, &mut tx)
             .expect("release authority draws down remaining amount");
         let record = escrow_record(&tx, &escrow_id);
@@ -4038,7 +4044,7 @@ mod tests {
             "native lock custody must not fall back to universal dataspace"
         );
 
-        DrawdownAssetLock::new(escrow_id, Quantity::from(40_u32))
+        DrawdownAssetLock::new(escrow_id, Quantity::from(40_u32), Quantity::from(40_u32))
             .execute(&destination, &mut tx)
             .expect("draw down restricted asset lock");
 
@@ -4091,7 +4097,7 @@ mod tests {
         )
         .execute(&source, &mut tx)
         .expect("open destination-drawn lock");
-        DrawdownAssetLock::new(escrow_id, Quantity::from(15_u32))
+        DrawdownAssetLock::new(escrow_id, Quantity::from(15_u32), Quantity::from(40_u32))
             .execute(&destination, &mut tx)
             .expect("destination draws down when no release authority is set");
 
@@ -4373,7 +4379,7 @@ mod tests {
         }
         .execute(&source, &mut tx)
         .expect("open marketplace escrow");
-        let err = DrawdownAssetLock::new(marketplace_id, Quantity::one())
+        let err = DrawdownAssetLock::new(marketplace_id, Quantity::one(), Quantity::from(10_u32))
             .execute(&destination, &mut tx)
             .expect_err("marketplace escrow cannot be drawn down as a lock");
         assert!(
@@ -4382,7 +4388,7 @@ mod tests {
         );
 
         let missing_id = fixture_escrow_id("lock-drawdown-missing");
-        let err = DrawdownAssetLock::new(missing_id, Quantity::one())
+        let err = DrawdownAssetLock::new(missing_id, Quantity::one(), Quantity::one())
             .execute(&destination, &mut tx)
             .expect_err("missing lock cannot be drawn down");
         assert!(
@@ -4401,7 +4407,7 @@ mod tests {
         .expect("open lock");
         let custody = escrow_record(&tx, &lock_id).custody;
 
-        let err = DrawdownAssetLock::new(lock_id, Quantity::zero())
+        let err = DrawdownAssetLock::new(lock_id, Quantity::zero(), Quantity::from(30_u32))
             .execute(&destination, &mut tx)
             .expect_err("zero drawdown must be rejected");
         assert!(
@@ -4414,14 +4420,14 @@ mod tests {
             err.to_string().contains("negative"),
             "unexpected error: {err}"
         );
-        let err = DrawdownAssetLock::new(lock_id, Quantity::from(31_u32))
+        let err = DrawdownAssetLock::new(lock_id, Quantity::from(31_u32), Quantity::from(30_u32))
             .execute(&destination, &mut tx)
             .expect_err("overdraw must be rejected");
         assert!(
             err.to_string().contains("exceeds remaining"),
             "unexpected error: {err}"
         );
-        let err = DrawdownAssetLock::new(lock_id, Quantity::one())
+        let err = DrawdownAssetLock::new(lock_id, Quantity::one(), Quantity::from(30_u32))
             .execute(&observer, &mut tx)
             .expect_err("observer cannot draw down destination-controlled lock");
         assert!(
@@ -4446,7 +4452,7 @@ mod tests {
             Quantity::zero()
         );
 
-        DrawdownAssetLock::new(lock_id, Quantity::from(30_u32))
+        DrawdownAssetLock::new(lock_id, Quantity::from(30_u32), Quantity::from(30_u32))
             .execute(&destination, &mut tx)
             .expect("draw down all funds");
         assert_eq!(
@@ -4454,7 +4460,7 @@ mod tests {
             AssetEscrowStatus::DrawnDown
         );
         assert!(
-            DrawdownAssetLock::new(lock_id, Quantity::one())
+            DrawdownAssetLock::new(lock_id, Quantity::one(), Quantity::zero())
                 .execute(&destination, &mut tx)
                 .is_err(),
             "closed lock cannot be drawn down again"
@@ -4528,9 +4534,10 @@ mod tests {
 
         let drawdown_custody = escrow_record(&tx, &drawdown_id).custody;
         freeze_outbound_asset_transfers(&mut tx, &source, &drawdown_custody, &asset_definition);
-        let err = DrawdownAssetLock::new(drawdown_id, Quantity::from(5_u32))
-            .execute(&destination, &mut tx)
-            .expect_err("custody freeze must block drawdown");
+        let err =
+            DrawdownAssetLock::new(drawdown_id, Quantity::from(5_u32), Quantity::from(10_u32))
+                .execute(&destination, &mut tx)
+                .expect_err("custody freeze must block drawdown");
         assert!(
             err.to_string().contains("frozen"),
             "unexpected error: {err}"
@@ -4624,9 +4631,16 @@ mod tests {
                 .is_err(),
             "destination cannot cancel source-opened lock"
         );
-        DrawdownAssetLock::new(escrow_id, Quantity::from(10_u32))
+        DrawdownAssetLock::new(escrow_id, Quantity::from(10_u32), Quantity::from(30_u32))
             .execute(&destination, &mut tx)
             .expect("destination draws down partial amount");
+        let stale = DrawdownAssetLock::new(escrow_id, Quantity::one(), Quantity::from(30_u32))
+            .execute(&destination, &mut tx)
+            .expect_err("stale drawdown precondition must fail");
+        assert!(
+            stale.to_string().contains("remaining amount changed"),
+            "unexpected error: {stale}"
+        );
         assert!(
             ExpireAssetLock::new(escrow_id)
                 .execute(&observer, &mut tx)
@@ -4634,7 +4648,7 @@ mod tests {
             "lock without deadline cannot expire"
         );
         assert!(
-            DrawdownAssetLock::new(escrow_id, Quantity::from(25_u32))
+            DrawdownAssetLock::new(escrow_id, Quantity::from(25_u32), Quantity::from(20_u32),)
                 .execute(&destination, &mut tx)
                 .is_err(),
             "cannot draw down more than remaining amount"
@@ -4644,7 +4658,7 @@ mod tests {
             .expect("source cancels remaining funds");
 
         assert!(
-            DrawdownAssetLock::new(escrow_id, Quantity::one())
+            DrawdownAssetLock::new(escrow_id, Quantity::one(), Quantity::zero())
                 .execute(&destination, &mut tx)
                 .is_err(),
             "closed lock must reject drawdown"
@@ -5549,7 +5563,7 @@ mod tests {
             "generic asset burn must not drain active native lock custody"
         );
 
-        DrawdownAssetLock::new(escrow_id, Quantity::from(40_u32))
+        DrawdownAssetLock::new(escrow_id, Quantity::from(40_u32), Quantity::from(40_u32))
             .execute(&destination, &mut tx)
             .expect("draw down lock");
         state_transaction_deposit_closed_custody_dust(

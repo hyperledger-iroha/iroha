@@ -1,22 +1,18 @@
+<!-- Auto-generated stub for Azerbaijani (az) translation. Replace this content with the full translation. -->
+
 ---
 lang: az
 direction: ltr
 source: docs/portal/static/openapi/README.md
-status: complete
+status: needs-translation
 generator: scripts/sync_docs_i18n.py
-source_hash: 8ad316fefd99c4c3b9ddbade7de59f12aa2dbe9ee256784f61ac87bb4341f04a
-source_last_modified: "2025-12-29T18:16:35.902041+00:00"
-translation_last_reviewed: 2026-02-07
-translator: machine-google-reviewed
+source_hash: 97a0d9a250d5d9cedd09453f613a61bd5b532f55592fa802983058f0b98bfa1f
+source_last_modified: "2026-07-25T18:42:25.944339+00:00"
+translation_last_reviewed: null
 ---
 
-OpenAPI imzalanması
----------------
+# Translation In Progress
 
-- Torii OpenAPI spesifikasiyası (`torii.json`) imzalanmalı və manifest `cargo xtask openapi-verify` tərəfindən təsdiqlənməlidir.
-- İcazə verilən imza açarları `allowed_signers.json`-də yaşayır; imza açarı dəyişdikdə bu faylı döndərin. `version` sahəsini `1`-də saxlayın.
-- CI (`ci/check_openapi_spec.sh`) artıq həm ən son, həm də cari xüsusiyyətlər üçün icazə siyahısını tətbiq edir. Başqa portal və ya boru kəməri imzalanmış spesifikasiyanı istehlak edərsə, sürüşmənin qarşısını almaq üçün onun doğrulama addımını eyni icazə siyahısı faylına yönəldin.
-- Açar çevrildikdən sonra yenidən imzalamaq üçün:
-  1. `allowed_signers.json`-i yeni açıq açarla yeniləyin.
-  2. Spesifikasiyanı bərpa edin/imzalayın: `NORITO_SKIP_BINDINGS_SYNC=1 cargo xtask openapi --output docs/portal/static/openapi/torii.json --sign <ed25519-key-hex-path>`.
-  3. Manifestin icazə verilən siyahıya uyğun olduğunu təsdiqləmək üçün `ci/check_openapi_spec.sh` (və ya `cargo xtask openapi-verify` əl ilə) yenidən işə salın.
+This file is a placeholder for the Azerbaijani translation of the English document. Once the translation is complete, update the `status` field in the metadata above.
+
+This stub awaits translation. Replace the placeholder body with the completed text and update the metadata status to `complete` when finished.

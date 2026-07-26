@@ -99,7 +99,7 @@ Les deux endpoints sont servis par le worker de stockage embarqué, afin que les
 2. Soumettez le manifest en base64 :
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/pin \
+   curl -X POST http://$TORII[REMOVED: provider-internal finalized-ledger ingest only] \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -161,7 +161,7 @@ Les deux endpoints sont servis par le worker de stockage embarqué, afin que les
   qui couvrent `pin_fetch_roundtrip`, `pin_survives_restart`, `pin_quota_rejection` et `por_sampling_returns_verified_proofs`.
 - Les dashboards doivent suivre :
   - `torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
-  - `torii_sorafs_storage_pin_queue_depth` et `torii_sorafs_storage_fetch_inflight`
+  - `sorafs_provider_ingest_inflight` et `torii_sorafs_storage_fetch_inflight`
   - les compteurs de succès/échec PoR exposés via `/v1/sorafs/capacity/state`
   - les tentatives de publication de settlement via `sorafs_node_deal_publish_total{result=success|failure}`
 

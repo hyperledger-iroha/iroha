@@ -5115,6 +5115,29 @@ export declare const SORAFS_PDP_PAYLOAD_KINDS: Readonly<{
   PROOF: "proof";
 }>;
 
+export declare const SORAFS_FIXTURE_BUNDLE_PAYLOAD_KINDS: Readonly<{
+  PROVIDER_ADVERT: "provider-advert";
+  PROVIDER_ADMISSION_ENVELOPE: "provider-admission-envelope";
+  REPLICATION_ORDER: "replication-order";
+  POR_CHALLENGE: "por-challenge";
+  POR_PROOF: "por-proof";
+  POTR_RECEIPT: "potr-receipt";
+  REPAIR_EVIDENCE: "repair-evidence";
+  REPAIR_REPORT: "repair-report";
+  REPAIR_TASK_RECORD: "repair-task-record";
+  REPAIR_SLASH_PROPOSAL: "repair-slash-proposal";
+  REPAIR_TASK_EVENT: "repair-task-event";
+  ORDERBOOK_ORDER_REQUEST: "orderbook-order-request";
+  ORDERBOOK_ORDER_CANCEL: "orderbook-order-cancel";
+  ORDERBOOK_TRADE_EVENT: "orderbook-trade-event";
+  ORDERBOOK_SETTLEMENT_CHANNEL: "orderbook-settlement-channel";
+  ORDERBOOK_SETTLEMENT_RECEIPT: "orderbook-settlement-receipt";
+  PDP_COMMITMENT: "pdp-commitment";
+  PDP_CHALLENGE: "pdp-challenge";
+  PDP_PROOF: "pdp-proof";
+}>;
+
+export declare const SORAFS_FIXTURE_BUNDLE_MAX_PAYLOADS_V1: 64;
 export declare const SORAFS_GOVERNANCE_DAG_MAX_BLOCKS_V1: 64;
 export declare const SORAFS_GOVERNANCE_DAG_CID_BYTES_V1: 32;
 export declare const SORAFS_REFERENCE_MAX_INPUT_BYTES_V1: 67108864;
@@ -5124,6 +5147,27 @@ export type SorafsPdpPayloadKind =
   | "commitment"
   | "challenge"
   | "proof";
+
+export type SorafsFixtureBundlePayloadKind =
+  | "provider-advert"
+  | "provider-admission-envelope"
+  | "replication-order"
+  | "por-challenge"
+  | "por-proof"
+  | "potr-receipt"
+  | "repair-evidence"
+  | "repair-report"
+  | "repair-task-record"
+  | "repair-slash-proposal"
+  | "repair-task-event"
+  | "orderbook-order-request"
+  | "orderbook-order-cancel"
+  | "orderbook-trade-event"
+  | "orderbook-settlement-channel"
+  | "orderbook-settlement-receipt"
+  | "pdp-commitment"
+  | "pdp-challenge"
+  | "pdp-proof";
 
 export interface SorafsValidationContextField {
   key: string;
@@ -5201,6 +5245,37 @@ export interface SorafsGovernanceDagBlockInput {
   label?: string;
 }
 
+export interface SorafsFixtureBundlePayloadInput {
+  kind: SorafsFixtureBundlePayloadKind;
+  bytes?: SorafsReferenceBytesInput;
+  payload?: SorafsReferenceBytesInput;
+  noritoBytes?: SorafsReferenceBytesInput;
+  norito_bytes?: SorafsReferenceBytesInput;
+  label?: string;
+}
+
+export interface SorafsFixtureBundleValidationOptions {
+  nowUnix?: number | bigint;
+  now_unix?: number | bigint;
+  generatedAtUnix?: number | bigint;
+  generated_at?: number | bigint;
+}
+
+export type SorafsGovernanceLogNodeValidationOptions = {
+  label?: string;
+  generatedAtUnix?: number | bigint;
+  generated_at?: number | bigint;
+} & (
+  | {
+      expectedNodeCid: SorafsReferenceBytesInput;
+      expected_node_cid?: never;
+    }
+  | {
+      expectedNodeCid?: never;
+      expected_node_cid: SorafsReferenceBytesInput;
+    }
+);
+
 export interface SorafsGovernanceDagBlockValidationOptions {
   label?: string;
   expectedBlockCid?: SorafsReferenceBytesInput;
@@ -5275,6 +5350,16 @@ export function validatePdpBundle(
   challengeBytes: ArrayBufferView | ArrayBuffer | Buffer,
   proofBytes: ArrayBufferView | ArrayBuffer | Buffer,
   options?: SorafsPdpPairValidationOptions,
+): SorafsValidationOutcome;
+
+export function validateFixtureBundle(
+  payloads: ReadonlyArray<SorafsFixtureBundlePayloadInput>,
+  options?: SorafsFixtureBundleValidationOptions,
+): SorafsValidationOutcome;
+
+export function validateGovernanceLogNode(
+  bytes: SorafsReferenceBytesInput,
+  options: SorafsGovernanceLogNodeValidationOptions,
 ): SorafsValidationOutcome;
 
 export function validateGovernanceDagBlock(
@@ -10222,12 +10307,6 @@ export interface ContractCodeBytesRecord {
   code_b64: string;
 }
 
-export interface SorafsPinResponse {
-  manifest_id_hex: string;
-  payload_digest_hex: string;
-  content_length: number;
-}
-
 export interface SorafsFetchResponse {
   manifest_id_hex: string;
   offset: number;
@@ -10258,12 +10337,6 @@ export interface SorafsManifestResponse {
   chunk_count: number;
   chunk_profile_handle: string;
   stored_at_unix_secs: number;
-}
-
-export interface SorafsUptimeObservationResponse {
-  status: string;
-  uptime_secs: number;
-  observed_secs: number;
 }
 
 export interface SorafsPorSubmissionResponse {
@@ -10721,38 +10794,29 @@ export interface SorafsPinListOptions {
   signal?: AbortSignal;
 }
 
-export interface SorafsPinRegisterAliasInput {
+export interface RegisterPinManifestAliasInput {
   namespace: string;
   name: string;
-  proof_base64: string;
+  proof: Buffer | ArrayBuffer | ArrayBufferView;
 }
 
-export interface SorafsPinRegisterRequest {
-  authority: string;
-  private_key: string;
-  manifest_payload: string;
-  submitted_epoch: NumericLike;
-  alias?: SorafsPinRegisterAliasInput | null;
-  successor_of_hex?: string | null;
-  signal?: AbortSignal;
+export interface RegisterPinManifestInstructionInput {
+  manifestPayload: Buffer | ArrayBuffer | ArrayBufferView;
+  submittedEpoch: NumericLike;
+  alias?: RegisterPinManifestAliasInput | null;
+  successorOf?: string | Buffer | ArrayBuffer | ArrayBufferView | null;
 }
 
-export interface SorafsPinRegisterAliasRecord {
-  namespace: string;
-  name: string;
-  proof_base64: string;
-}
+export type RegisterPinManifestTransactionInput = Omit<
+  TransactionAssemblyInput,
+  "instructions"
+> &
+  RegisterPinManifestInstructionInput;
 
 export interface SorafsPinRegisterResponse {
+  status: "submitted";
+  tx_hash_hex: string;
   manifest_digest_hex: string;
-  chunker_handle: string;
-  submitted_epoch: number;
-  content_length: number;
-  pin_fee_nano: number;
-  pin_fee_asset_id: string;
-  pin_fee_treasury_account_id: string;
-  alias: SorafsPinRegisterAliasRecord | null;
-  successor_of_hex: string | null;
 }
 
 export interface SorafsAliasRecord {
@@ -12772,16 +12836,13 @@ export declare class ToriiClient {
     options?: { headers?: Record<string, string>; signal?: AbortSignal },
   ): Promise<SorafsPinManifestResponse>;
   registerSorafsPinManifest(
-    input: SorafsPinRegisterRequest,
+    signedTransaction: Buffer | ArrayBuffer | ArrayBufferView,
+    options?: { signal?: AbortSignal },
   ): Promise<Record<string, unknown>>;
   registerSorafsPinManifestTyped(
-    input: SorafsPinRegisterRequest,
+    signedTransaction: Buffer | ArrayBuffer | ArrayBufferView,
+    options?: { signal?: AbortSignal },
   ): Promise<SorafsPinRegisterResponse>;
-  pinSorafsManifest(input: {
-    manifest: ArrayBufferView | ArrayBuffer | Buffer | string;
-    payload: ArrayBufferView | ArrayBuffer | Buffer | string;
-    signal?: AbortSignal;
-  }): Promise<SorafsPinResponse>;
   fetchSorafsPayloadRange(input: {
     manifestIdHex: string;
     offset: number | string | bigint;
@@ -12840,11 +12901,6 @@ export declare class ToriiClient {
     gatewayResult: SorafsGatewayFetchResult;
     outputDir: string;
   }>;
-  submitSorafsUptimeObservation(input: {
-    uptimeSecs: number;
-    observedSecs: number;
-    signal?: AbortSignal;
-  }): Promise<SorafsUptimeObservationResponse>;
   recordSorafsPorProof(input: {
     proof?: string | ArrayBuffer | ArrayBufferView | Buffer;
     proofB64?: string;
@@ -14129,6 +14185,35 @@ export function quoteAndSignTransaction(
   }
 >;
 
+export function buildRegisterPinManifestInstruction(
+  input: RegisterPinManifestInstructionInput,
+): {
+  RegisterPinManifest: {
+    manifest_payload: string;
+    submitted_epoch: number;
+    alias: {
+      namespace: string;
+      name: string;
+      proof: string;
+    } | null;
+    successor_of: ReadonlyArray<number> | null;
+  };
+};
+
+export function buildRegisterPinManifestTransaction(
+  client: ToriiClient,
+  input: RegisterPinManifestTransactionInput,
+  options?: {
+    canonicalAuth?: CanonicalRequestAuth;
+    signal?: AbortSignal;
+  },
+): Promise<
+  SignedTransactionResult & {
+    draft: TransactionPayloadDraftResult;
+    quote: FeeQuoteResponse;
+  }
+>;
+
 export function buildRegisterDomainTransaction(
   input: RegisterDomainInput,
 ): SignedTransactionResult;
@@ -14465,6 +14550,73 @@ export function submitTransactionEntrypoint(
     timeoutMs?: number;
   },
 ): Promise<{ hash: string; submission: unknown; status?: unknown }>;
+
+export const SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BYTES_V1: 1048576;
+
+export interface IssueReplicationOrderInstruction {
+  IssueReplicationOrder: {
+    order_id: string;
+    order_payload: string;
+    issued_epoch: number;
+    deadline_epoch: number;
+  };
+}
+
+export interface CompleteReplicationOrderInstruction {
+  CompleteReplicationOrder: {
+    order_id: string;
+    provider_id: string;
+    completion_epoch: number;
+  };
+}
+
+export interface ExpireReplicationOrderInstruction {
+  ExpireReplicationOrder: {
+    order_id: string;
+    expiration_epoch: number;
+  };
+}
+
+export interface SorafsReplicationOrderPayloadSummaryV1 {
+  orderId: string;
+  targetReplicas: number;
+  providerIds: string[];
+  issuedAt: string;
+  deadlineAt: string;
+}
+
+/**
+ * Validate a canonical, unpadded Norito `ReplicationOrderV1` archive.
+ */
+export function validateSorafsReplicationOrderPayloadV1(
+  payload: BinaryLike,
+  expectedOrderId?: string | null,
+): SorafsReplicationOrderPayloadSummaryV1;
+
+/**
+ * Build a native `IssueReplicationOrder` instruction. IDs are exact non-zero
+ * lowercase 64-hex strings and `orderPayload` is canonical standard base64.
+ */
+export function buildIssueReplicationOrderInstruction(options: {
+  orderId: string;
+  orderPayload: string;
+  issuedEpoch: NumericLike;
+  deadlineEpoch: NumericLike;
+}): IssueReplicationOrderInstruction;
+
+/**
+ * Build the provider-specific three-field completion instruction.
+ */
+export function buildCompleteReplicationOrderInstruction(options: {
+  orderId: string;
+  providerId: string;
+  completionEpoch: NumericLike;
+}): CompleteReplicationOrderInstruction;
+
+export function buildExpireReplicationOrderInstruction(options: {
+  orderId: string;
+  expirationEpoch: NumericLike;
+}): ExpireReplicationOrderInstruction;
 
 /**
  * Build a `Mint::Asset` instruction payload with deterministic quantity

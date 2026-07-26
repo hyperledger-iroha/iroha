@@ -5,8 +5,6 @@
 //! governance policy snapshots. Validation helpers ensure the records obey
 //! canonical encoding and governance constraints before they are persisted.
 
-use std::collections::HashSet;
-
 use blake3::Hasher;
 use iroha_crypto::{Algorithm, PublicKey};
 use norito::{
@@ -416,94 +414,6 @@ pub fn verify_alias_proof_bundle(
     }
 
     Ok(())
-}
-
-/// Replication order emitted by the pin registry for storage providers.
-#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
-pub struct ReplicationOrderV1 {
-    /// Governance-controlled order identifier (BLAKE3-256 digest).
-    pub order_id: [u8; 32],
-    /// Manifest CID providers must pin.
-    pub manifest_cid: Vec<u8>,
-    /// Provider identifiers targeted by the order.
-    pub providers: Vec<[u8; 32]>,
-    /// Required redundancy (minimum number of successful providers).
-    pub redundancy: u16,
-    /// Unix timestamp (seconds) when the order expires.
-    pub deadline: u64,
-    /// Governance policy digest in effect when the order was issued.
-    pub policy_hash: [u8; 32],
-}
-
-impl ReplicationOrderV1 {
-    /// Validates order structure and policy references.
-    pub fn validate(&self) -> Result<(), ReplicationOrderValidationError> {
-        if self.order_id.iter().all(|&byte| byte == 0) {
-            return Err(ReplicationOrderValidationError::InvalidOrderId);
-        }
-        if self.manifest_cid.is_empty() {
-            return Err(ReplicationOrderValidationError::EmptyManifestCid);
-        }
-        validate_first_release_manifest_cid(&self.manifest_cid)
-            .map_err(|_| ReplicationOrderValidationError::MalformedManifestCid)?;
-        if self.providers.is_empty() {
-            return Err(ReplicationOrderValidationError::MissingProviders);
-        }
-        let mut seen: HashSet<[u8; 32]> = HashSet::new();
-        for provider in &self.providers {
-            if provider.iter().all(|&byte| byte == 0) {
-                return Err(ReplicationOrderValidationError::InvalidProviderId);
-            }
-            if !seen.insert(*provider) {
-                return Err(ReplicationOrderValidationError::DuplicateProvider {
-                    provider_id: *provider,
-                });
-            }
-        }
-        if self.redundancy == 0 {
-            return Err(ReplicationOrderValidationError::ZeroRedundancy);
-        }
-        if usize::from(self.redundancy) > self.providers.len() {
-            return Err(
-                ReplicationOrderValidationError::RedundancyExceedsProviders {
-                    redundancy: self.redundancy,
-                    providers: self.providers.len() as u16,
-                },
-            );
-        }
-        if self.deadline == 0 {
-            return Err(ReplicationOrderValidationError::InvalidDeadline);
-        }
-        if self.policy_hash.iter().all(|&byte| byte == 0) {
-            return Err(ReplicationOrderValidationError::InvalidPolicyHash);
-        }
-        Ok(())
-    }
-}
-
-/// Errors produced when a [`ReplicationOrderV1`] fails validation.
-#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
-pub enum ReplicationOrderValidationError {
-    #[error("order identifier must not be zero")]
-    InvalidOrderId,
-    #[error("manifest CID must not be empty")]
-    EmptyManifestCid,
-    #[error("manifest CID is not canonical first-release CIDv1")]
-    MalformedManifestCid,
-    #[error("replication order must target at least one provider")]
-    MissingProviders,
-    #[error("provider identifier must not be zero")]
-    InvalidProviderId,
-    #[error("duplicate provider entry in replication order")]
-    DuplicateProvider { provider_id: [u8; 32] },
-    #[error("redundancy must be at least one")]
-    ZeroRedundancy,
-    #[error("redundancy target {redundancy} exceeds provider list ({providers})")]
-    RedundancyExceedsProviders { redundancy: u16, providers: u16 },
-    #[error("deadline must be a positive unix timestamp")]
-    InvalidDeadline,
-    #[error("policy hash must be non-zero")]
-    InvalidPolicyHash,
 }
 
 /// Provider acknowledgement for a replication order.
@@ -960,44 +870,6 @@ mod tests {
                 AliasBindingValidationError::AliasHasWhitespace
             )
         ));
-    }
-
-    fn sample_replication_order() -> ReplicationOrderV1 {
-        ReplicationOrderV1 {
-            order_id: [0x44; 32],
-            manifest_cid: canonical_cid(0x40),
-            providers: vec![[0x55; 32], [0x66; 32], [0x77; 32]],
-            redundancy: 2,
-            deadline: 1_700_090_000,
-            policy_hash: [0x88; 32],
-        }
-    }
-
-    #[test]
-    fn replication_order_validate() {
-        let order = sample_replication_order();
-        order.validate().expect("valid order");
-    }
-
-    #[test]
-    fn replication_order_rejects_duplicate_provider() {
-        let mut order = sample_replication_order();
-        order.providers[1] = order.providers[0];
-        let err = order.validate().unwrap_err();
-        assert!(matches!(
-            err,
-            ReplicationOrderValidationError::DuplicateProvider { .. }
-        ));
-    }
-
-    #[test]
-    fn replication_order_rejects_noncanonical_manifest_cid() {
-        let mut order = sample_replication_order();
-        order.manifest_cid[2] ^= 1;
-        assert_eq!(
-            order.validate(),
-            Err(ReplicationOrderValidationError::MalformedManifestCid)
-        );
     }
 
     #[test]

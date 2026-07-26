@@ -1779,6 +1779,35 @@ if #available(iOS 15.0, macOS 12.0, *) {
 - `NoritoRpcError` exposes the HTTP status code + textual body for non-2xx responses.
 - Regression tests live in `IrohaSwift/Tests/IrohaSwiftTests/NoritoRpcClientTests.swift`.
 
+## SoraFS replication-order instructions
+
+`SorafsReplicationInstructionBuilders` emits the exact native V1 JSON variants
+and can schema-close them again with `decode(_:)`:
+
+```swift
+let issue = try SorafsReplicationInstructionBuilders.issueReplicationOrder(
+    orderId: orderId,
+    orderPayload: replicationOrderBytes,
+    issuedEpoch: 20,
+    deadlineEpoch: 28
+)
+let complete = try SorafsReplicationInstructionBuilders.completeReplicationOrder(
+    orderId: orderId,
+    providerId: providerId,
+    completionEpoch: 27
+)
+let expire = try SorafsReplicationInstructionBuilders.expireReplicationOrder(
+    orderId: orderId,
+    expirationEpoch: 29
+)
+```
+
+IDs must be non-zero lowercase 64-hex strings. Issue validates canonical,
+bounded `ReplicationOrderV1` framing, the embedded order ID, target/provider
+assignment policy, and deadline ordering. Completion is provider-specific and
+always contains `order_id`, `provider_id`, and `completion_epoch`; missing,
+legacy, or unknown fields are rejected by the decoder.
+
 ## NoritoBridge packaging
 
 The release process for the Norito Swift bindings is documented in

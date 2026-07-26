@@ -19,6 +19,14 @@ internal object ReplicationOrderInstructionValidation {
         return value
     }
 
+    fun requireProviderId(value: String): String {
+        require(canonicalOrderIdPattern.matches(value)) {
+            "providerIdHex must contain exactly 64 lowercase hexadecimal characters"
+        }
+        require(value.any { it != '0' }) { "providerIdHex must not be the zero identifier" }
+        return value
+    }
+
     fun encodeOrderId(value: ByteArray): String {
         require(value.size == ORDER_ID_BYTES) {
             "orderId must contain exactly $ORDER_ID_BYTES bytes, found ${value.size}"

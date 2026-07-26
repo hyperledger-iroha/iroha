@@ -578,7 +578,7 @@ Operational expectations:
 - **M2 (Weeks 13–20):**
   - Hook observability exporters (Prometheus + Grafana dashboards) to storage
     nodes and gateways.
-  - Integrate preliminary deal engine skeleton so governance can schedule
+  - Integrate native orderbook and reserve/rent interfaces so governance can schedule
     replicas per storage class.
 - **M3 (Week 21+):**
   - Roll out probabilistic payments and PoR automation (handoff to SF-8/SF-9).

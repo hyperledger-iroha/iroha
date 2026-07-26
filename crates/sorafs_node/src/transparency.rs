@@ -626,14 +626,14 @@ pub fn reserve_finalized_event_source_entry(
     )?;
     validate_reserve_source_id(
         "policy_digest",
-        &record.event.policy_digest,
+        record.event.policy_digest(),
         reserve_finalized_event_source_error,
     )?;
-    let occurred_at_unix = unix_ms_to_secs(record.event.occurred_at_unix_ms)
+    let occurred_at_unix = unix_ms_to_secs(*record.event.occurred_at_unix_ms())
         .map_err(reserve_finalized_event_source_error)?;
 
     let operation_required = matches!(
-        record.event.kind,
+        *record.event.kind(),
         SorafsReserveLedgerEventKind::MovementRequested
             | SorafsReserveLedgerEventKind::MovementApproved
             | SorafsReserveLedgerEventKind::MovementRejected
@@ -641,12 +641,12 @@ pub fn reserve_finalized_event_source_entry(
             | SorafsReserveLedgerEventKind::AppealAccepted
             | SorafsReserveLedgerEventKind::AppealRejected
     );
-    match record.event.kind {
+    match *record.event.kind() {
         SorafsReserveLedgerEventKind::PolicyActivated => {
-            if record.event.provider_id.is_some()
-                || record.event.operation_id.is_some()
-                || record.event.provider_revision != 0
-                || record.event.resulting_lifecycle_stage.is_some()
+            if record.event.provider_id().is_some()
+                || record.event.operation_id().is_some()
+                || *record.event.provider_revision() != 0
+                || record.event.resulting_lifecycle_stage().is_some()
             {
                 return Err(reserve_finalized_event_source_error(
                     "policy activation must not carry provider state",
@@ -654,7 +654,7 @@ pub fn reserve_finalized_event_source_entry(
             }
         }
         _ => {
-            let provider_id = record.event.provider_id.ok_or_else(|| {
+            let provider_id = record.event.provider_id().as_ref().ok_or_else(|| {
                 reserve_finalized_event_source_error("provider transition must carry provider_id")
             })?;
             validate_reserve_source_id(
@@ -662,37 +662,38 @@ pub fn reserve_finalized_event_source_entry(
                 provider_id.as_bytes(),
                 reserve_finalized_event_source_error,
             )?;
-            if record.event.provider_revision == 0 {
+            if *record.event.provider_revision() == 0 {
                 return Err(reserve_finalized_event_source_error(
                     "provider_revision must be non-zero",
                 ));
             }
-            if record.event.resulting_lifecycle_stage.is_none() {
+            if record.event.resulting_lifecycle_stage().is_none() {
                 return Err(reserve_finalized_event_source_error(
                     "provider transition must carry resulting_lifecycle_stage",
                 ));
             }
-            if operation_required != record.event.operation_id.is_some() {
+            if operation_required != record.event.operation_id().is_some() {
                 return Err(reserve_finalized_event_source_error(
                     "operation_id presence does not match reserve transition kind",
                 ));
             }
-            if let Some(operation_id) = record.event.operation_id {
+            if let Some(operation_id) = record.event.operation_id().as_ref() {
                 validate_reserve_source_id(
                     "operation_id",
-                    &operation_id,
+                    operation_id,
                     reserve_finalized_event_source_error,
                 )?;
             }
         }
     }
 
-    let event_kind = reserve_ledger_event_kind_label(record.event.kind);
+    let event_kind = reserve_ledger_event_kind_label(*record.event.kind());
     let block_hash_hex = hex::encode(record.block_hash);
-    let policy_digest_hex = hex::encode(record.event.policy_digest);
+    let policy_digest_hex = hex::encode(record.event.policy_digest());
     let provider_id_hex = record
         .event
-        .provider_id
+        .provider_id()
+        .as_ref()
         .map(|provider_id| hex::encode(provider_id.as_bytes()));
     let subject_key = provider_id_hex
         .as_deref()
@@ -713,31 +714,31 @@ pub fn reserve_finalized_event_source_entry(
     metadata.insert("event_kind".to_string(), event_kind.to_string());
     metadata.insert(
         "occurred_at_unix_ms".to_string(),
-        record.event.occurred_at_unix_ms.to_string(),
+        record.event.occurred_at_unix_ms().to_string(),
     );
     metadata.insert("policy_digest_hex".to_string(), policy_digest_hex.clone());
     metadata.insert(
         "provider_revision".to_string(),
-        record.event.provider_revision.to_string(),
+        record.event.provider_revision().to_string(),
     );
     metadata.insert("sequence".to_string(), record.sequence.to_string());
     metadata.insert(
         "authority_account_digest_hex".to_string(),
         reserve_private_field_digest_hex(
             "authority_account",
-            record.event.authority.to_string().as_bytes(),
+            record.event.authority().to_string().as_bytes(),
         ),
     );
     if let Some(provider_id_hex) = &provider_id_hex {
         metadata.insert("provider_id_hex".to_string(), provider_id_hex.clone());
     }
-    if let Some(operation_id) = record.event.operation_id {
+    if let Some(operation_id) = record.event.operation_id().as_ref() {
         metadata.insert("operation_id_hex".to_string(), hex::encode(operation_id));
     }
-    if let Some(stage) = record.event.resulting_lifecycle_stage {
+    if let Some(stage) = record.event.resulting_lifecycle_stage().as_ref() {
         metadata.insert(
             "resulting_lifecycle_stage".to_string(),
-            reserve_lifecycle_stage_label(stage).to_string(),
+            reserve_lifecycle_stage_label(*stage).to_string(),
         );
     }
     let metadata = metadata_vec(metadata);
@@ -752,7 +753,7 @@ pub fn reserve_finalized_event_source_entry(
             record.sequence, record.block_height, block_hash_hex, record.event_index
         ),
         occurred_at_unix,
-        kind: match record.event.kind {
+        kind: match *record.event.kind() {
             SorafsReserveLedgerEventKind::AppealAccepted
             | SorafsReserveLedgerEventKind::AppealRejected => {
                 ModerationLedgerEntryKindV1::AppealOutcome
@@ -767,7 +768,7 @@ pub fn reserve_finalized_event_source_entry(
         ),
         payload_digest,
         summary_digest: source_summary_digest("reserve_finalized_event", &metadata),
-        policy_digest: Some(record.event.policy_digest),
+        policy_digest: Some(*record.event.policy_digest()),
         evidence_uris: Vec::new(),
         metadata,
     };
@@ -5242,7 +5243,8 @@ mod tests {
         let expected_provider_id = hex::encode(
             event
                 .event
-                .provider_id
+                .provider_id()
+                .as_ref()
                 .expect("provider transition")
                 .as_bytes(),
         );
@@ -5259,7 +5261,7 @@ mod tests {
             entry.kind,
             ModerationLedgerEntryKindV1::Custom("sorafs_reserve_movement_approved".to_string())
         );
-        assert_eq!(entry.policy_digest, Some(event.event.policy_digest));
+        assert_eq!(entry.policy_digest, Some(*event.event.policy_digest()));
         assert_eq!(
             entry.subject,
             format!("reserve-provider:{expected_provider_id}")
@@ -5293,7 +5295,7 @@ mod tests {
             entry
                 .metadata
                 .iter()
-                .all(|item| item.value != event.event.authority.to_string()),
+                .all(|item| item.value != event.event.authority().to_string()),
             "raw authority account must not enter public transparency metadata"
         );
         let canonical = event.encode();
@@ -5334,7 +5336,10 @@ mod tests {
         );
         assert_eq!(
             policy_entry.subject,
-            format!("reserve-policy:{}", hex::encode(policy.event.policy_digest))
+            format!(
+                "reserve-policy:{}",
+                hex::encode(policy.event.policy_digest())
+            )
         );
 
         for kind in [

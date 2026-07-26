@@ -81,7 +81,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. Манифестийг base64 кодчилолоор илгээнэ үү:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/pin \
+   curl -X POST http://$TORII[REMOVED: provider-internal finalized-ledger ingest only] \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -141,7 +141,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
   ```Үүнд `pin_fetch_roundtrip`, `pin_survives_restart`, `pin_quota_rejection`, `por_sampling_returns_verified_proofs` багтана.
 - Хяналтын самбар нь дараахь зүйлийг хянах ёстой.
   - `torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
-  - `torii_sorafs_storage_pin_queue_depth` ба `torii_sorafs_storage_fetch_inflight`
+  - `sorafs_provider_ingest_inflight` ба `torii_sorafs_storage_fetch_inflight`
   - PoR амжилт/бүтэлгүйтлийн тоолуур `/v1/sorafs/capacity/state`-ээр гарч ирэв
   - `sorafs_node_deal_publish_total{result=success|failure}`-ээр төлбөр тооцоо нийтлэх оролдлого
 

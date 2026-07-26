@@ -42,6 +42,8 @@ from typing import Dict, List, Optional, Tuple
 
 ED25519_PUBLIC_KEY_SIZE = 32
 ED25519_SIGNATURE_SIZE = 64
+ED25519_FIELD_MODULUS = (1 << 255) - 19
+ED25519_SCALAR_ORDER = (1 << 252) + 27742317777372353535851937790883648493
 MAX_MANIFEST_SIZE = 1024 * 1024
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 NATIVE_VERIFIER_PROTOCOL = "sorafs-validate-release-manifest-v1"
@@ -254,6 +256,46 @@ def _validate_sha256(value: str, label: str) -> None:
     if SHA256_RE.fullmatch(value) is None:
         raise ReleaseManifestSignatureError(
             f"{label} must be exactly 64 lowercase hexadecimal characters"
+        )
+
+
+def _validate_ed25519_public_key_encoding(raw_public_key: bytes) -> None:
+    """Reject encodings that cannot be canonical compressed Edwards points."""
+
+    if len(raw_public_key) != ED25519_PUBLIC_KEY_SIZE:
+        raise ReleaseManifestSignatureError(
+            "Ed25519 public key must contain exactly 32 raw bytes"
+        )
+    if not any(raw_public_key):
+        raise ReleaseManifestSignatureError("Ed25519 public key must not be all zero")
+    encoded_y = bytearray(raw_public_key)
+    encoded_y[-1] &= 0x7F
+    if int.from_bytes(encoded_y, "little") >= ED25519_FIELD_MODULUS:
+        raise ReleaseManifestSignatureError(
+            "Ed25519 public key has a non-canonical point encoding"
+        )
+
+
+def _validate_ed25519_signature_encoding(signature: bytes, label: str) -> None:
+    """Reject malformed Ed25519 encodings before invoking the native verifier."""
+
+    if len(signature) != ED25519_SIGNATURE_SIZE:
+        raise ReleaseManifestSignatureError(
+            f"{label} must contain exactly {ED25519_SIGNATURE_SIZE} raw bytes"
+        )
+    if not any(signature):
+        raise ReleaseManifestSignatureError(f"{label} must not be all zero")
+
+    encoded_r = bytearray(signature[:ED25519_PUBLIC_KEY_SIZE])
+    encoded_r[-1] &= 0x7F
+    if int.from_bytes(encoded_r, "little") >= ED25519_FIELD_MODULUS:
+        raise ReleaseManifestSignatureError(
+            f"{label} has a non-canonical Ed25519 R encoding"
+        )
+    scalar = int.from_bytes(signature[ED25519_PUBLIC_KEY_SIZE:], "little")
+    if scalar >= ED25519_SCALAR_ORDER:
+        raise ReleaseManifestSignatureError(
+            f"{label} has a non-canonical Ed25519 scalar"
         )
 
 
@@ -512,17 +554,16 @@ def _read_verification_inputs(
         "aggregate release-manifest signature",
         exact_size=ED25519_SIGNATURE_SIZE,
     )
-    if not any(signature):
-        raise ReleaseManifestSignatureError(
-            "aggregate release-manifest signature must not be all zero"
-        )
+    _validate_ed25519_signature_encoding(
+        signature,
+        "aggregate release-manifest signature",
+    )
     raw_public_key, public_key_identity = _stable_read(
         public_key_file,
         "aggregate release-manifest raw public key",
         exact_size=ED25519_PUBLIC_KEY_SIZE,
     )
-    if not any(raw_public_key):
-        raise ReleaseManifestSignatureError("Ed25519 public key must not be all zero")
+    _validate_ed25519_public_key_encoding(raw_public_key)
     actual_fingerprint = hashlib.sha256(raw_public_key).hexdigest()
     if actual_fingerprint != trusted_fingerprint:
         raise ReleaseManifestSignatureError(
@@ -790,8 +831,7 @@ def sign_release_manifest(
         "raw Ed25519 public key",
         exact_size=ED25519_PUBLIC_KEY_SIZE,
     )
-    if not any(raw_public_key):
-        raise ReleaseManifestSignatureError("Ed25519 public key must not be all zero")
+    _validate_ed25519_public_key_encoding(raw_public_key)
     actual_fingerprint = hashlib.sha256(raw_public_key).hexdigest()
     if actual_fingerprint != trusted_fingerprint:
         raise ReleaseManifestSignatureError(
@@ -868,10 +908,10 @@ def sign_release_manifest(
             "external aggregate Ed25519 signature",
             exact_size=ED25519_SIGNATURE_SIZE,
         )
-        if not any(signature):
-            raise ReleaseManifestSignatureError(
-                "external aggregate Ed25519 signature must not be all zero"
-            )
+        _validate_ed25519_signature_encoding(
+            signature,
+            "external aggregate Ed25519 signature",
+        )
 
         _assert_unchanged(
             manifest,

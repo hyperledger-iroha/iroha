@@ -11,45 +11,43 @@ on:
           - profiling
           - glibc
           - alpine
-          - iroha3-taira
         default: glibc
       checkout_ref:
         description: "The branch, tag or SHA to checkout"
         required: true
         type: string
         default: main
-      tag_suffix:
-        description: "Optional image tag suffix for the Taira image. Defaults to the attested source-tree digest."
-        required: false
-        type: string
-      push_latest:
-        description: "Also push the rolling `taira-latest` tags for the Taira image"
-        required: false
-        type: boolean
-        default: false
-      skip_taira_smoke:
-        description: "Skip the local Taira smoke image build before publishing"
-        required: false
-        type: boolean
-        default: false
-      validator_release_ref:
-        description: "Exact 40-character DPN API commit containing the reviewed Taira validator source bundle and lock"
-        required: true
-        type: string
 
 env:
-  DPN_VALIDATOR_LOCK_SHA256: 08c939a65668814951adbd6f09ec4589a368dc41a7daac3cb3e8a096d8679986
+  IROHA_CI_IMAGE: ${{ vars.IROHA_CI_IMAGE }}
+  IROHA_RUST_BUILDER_IMAGE: ${{ vars.IROHA_RUST_BUILDER_IMAGE }}
+  IROHA_RUNTIME_IMAGE: ${{ vars.IROHA_RUNTIME_IMAGE }}
+  IROHA_MUSL_BUILDER_IMAGE: ${{ vars.IROHA_MUSL_BUILDER_IMAGE }}
+  IROHA_MUSL_RUNTIME_IMAGE: ${{ vars.IROHA_MUSL_RUNTIME_IMAGE }}
 
 jobs:
   image:
-    if: ${{ inputs.image_type != 'iroha3-taira' }}
     runs-on: [self-hosted, Linux, iroha2]
     container:
-      image: hyperledger/iroha2-ci:nightly-2025-05-08
+      image: ${{ vars.IROHA_CI_IMAGE }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           ref: ${{ github.event.inputs.checkout_ref }}
+      - name: Validate digest-pinned Docker base images
+        run: |
+          python3 scripts/validate_release_image_bases.py \
+            --builder "$IROHA_RUST_BUILDER_IMAGE" \
+            --runtime "$IROHA_RUNTIME_IMAGE"
+          python3 scripts/validate_release_image_bases.py \
+            --builder "$IROHA_CI_IMAGE" \
+            --runtime "$IROHA_CI_IMAGE"
+      - name: Validate digest-pinned musl base images
+        if: ${{ inputs.image_type == 'alpine' }}
+        run: |
+          python3 scripts/validate_release_image_bases.py \
+            --builder "$IROHA_MUSL_BUILDER_IMAGE" \
+            --runtime "$IROHA_MUSL_RUNTIME_IMAGE"
       - name: Resolve checkout metadata
         id: checkout_meta
         shell: bash
@@ -74,7 +72,7 @@ jobs:
         if: always()
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
         with:
-          version: latest
+          version: v0.34.1
           install: true
 
       # glibc
@@ -85,6 +83,9 @@ jobs:
           push: true
           tags: docker.soramitsu.co.jp/iroha2/iroha:glibc-${{ steps.checkout_meta.outputs.sha }}
           labels: commit=${{ steps.checkout_meta.outputs.sha }}
+          build-args: |
+            "IROHA_RUST_BUILDER_IMAGE=${{ env.IROHA_RUST_BUILDER_IMAGE }}"
+            "IROHA_RUNTIME_IMAGE=${{ env.IROHA_RUNTIME_IMAGE }}"
           context: .
 
       # Profiling
@@ -109,6 +110,8 @@ jobs:
           tags: docker.soramitsu.co.jp/iroha2/iroha:profiling-${{ env.TAG }}-${{ steps.checkout_meta.outputs.sha }}
           labels: commit=${{ steps.checkout_meta.outputs.sha }}
           build-args: |
+            "IROHA_RUST_BUILDER_IMAGE=${{ env.IROHA_RUST_BUILDER_IMAGE }}"
+            "IROHA_RUNTIME_IMAGE=${{ env.IROHA_RUNTIME_IMAGE }}"
             "PROFILE=profiling"
             "RUSTFLAGS=-C force-frame-pointers=on"
             "FEATURES=profiling"
@@ -124,180 +127,7 @@ jobs:
           tags: docker.soramitsu.co.jp/iroha2/iroha:alpine-${{ steps.checkout_meta.outputs.sha }}
           labels: commit=${{ steps.checkout_meta.outputs.sha }}
           file: Dockerfile.musl
-          context: .
-
-  taira_image:
-    if: ${{ inputs.image_type == 'iroha3-taira' }}
-    runs-on: ubuntu-latest
-    container:
-      image: hyperledger/iroha2-ci:nightly-2025-05-08
-    timeout-minutes: 180
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          ref: ${{ github.event.inputs.checkout_ref }}
-
-      - name: Reconstruct reviewed DPN validator source and install lock
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          release_ref='${{ inputs.validator_release_ref }}'
-          if [[ ! "$release_ref" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "validator_release_ref must be an exact 40-character DPN commit" >&2
-            exit 1
-          fi
-          release_dir="$RUNNER_TEMP/dpn-validator-release"
-          bundle_dir="$release_dir/source-bundle"
-          rm -rf "$release_dir"
-          mkdir -p "$bundle_dir"
-          base_url="https://raw.githubusercontent.com/soramitsu/dpn-api-rust/${release_ref}"
-          curl_args=(--proto '=https' --tlsv1.2 --fail --silent --show-error --location --retry 3)
-          curl "${curl_args[@]}" --output "$release_dir/iroha_source_bundle.py" \
-            "$base_url/scripts/iroha_source_bundle.py"
-          for component in provenance.json tracked.patch untracked.tar untracked.manifest.json source.manifest.json; do
-            curl "${curl_args[@]}" --output "$bundle_dir/$component" \
-              "$base_url/ops/iroha/taira-validator-source/$component"
-          done
-          curl "${curl_args[@]}" --output Cargo.lock \
-            "$base_url/ops/iroha/taira-validator.Cargo.lock"
-          printf '%s  %s\n' "$DPN_VALIDATOR_LOCK_SHA256" Cargo.lock | sha256sum -c -
-          python3 "$release_dir/iroha_source_bundle.py" reconstruct \
-            --repo "$GITHUB_WORKSPACE" \
-            --bundle-dir "$bundle_dir"
-          source_tree_sha="$(python3 - "$bundle_dir/provenance.json" <<'PY'
-          import json
-          import sys
-
-          with open(sys.argv[1], encoding="utf-8") as stream:
-              print(json.load(stream)["source_tree_sha256"])
-          PY
-          )"
-          [[ "$source_tree_sha" =~ ^[0-9a-f]{64}$ ]]
-          echo "DPN_VALIDATOR_SOURCE_TREE_SHA256=$source_tree_sha" >>"$GITHUB_ENV"
-
-      - name: Resolve checkout metadata
-        id: checkout_meta
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "sha=$(git rev-parse HEAD)" >>"$GITHUB_OUTPUT"
-          echo "short_sha=$(git rev-parse --short=12 HEAD)" >>"$GITHUB_OUTPUT"
-
-      - name: Login to DockerHub
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Login to Soramitsu Harbor
-        id: harbor_login
-        continue-on-error: true
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
-        with:
-          registry: docker.soramitsu.co.jp
-          username: ${{ secrets.HARBOR_USERNAME }}
-          password: ${{ secrets.HARBOR_TOKEN }}
-
-      - name: Set up Docker Buildx
-        id: buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
-        with:
-          version: latest
-          install: true
-
-      - name: Resolve Taira image tags
-        id: tags
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          raw_suffix="${{ inputs.tag_suffix }}"
-          if [[ -z "$raw_suffix" ]]; then
-            raw_suffix="source-${DPN_VALIDATOR_SOURCE_TREE_SHA256:0:12}"
-          fi
-
-          suffix="$(printf '%s' "$raw_suffix" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9._-]+/-/g; s/^-+//; s/-+$//')"
-          if [[ -z "$suffix" ]]; then
-            echo "resolved tag suffix is empty" >&2
-            exit 1
-          fi
-
-          {
-            echo "dockerhub_tags<<EOF"
-            echo "hyperledger/iroha:taira-$suffix"
-            if [[ "${{ inputs.push_latest }}" == "true" ]]; then
-              echo "hyperledger/iroha:taira-latest"
-            fi
-            echo "EOF"
-            echo "harbor_tags<<EOF"
-            echo "docker.soramitsu.co.jp/iroha3/iroha:taira-$suffix"
-            if [[ "${{ inputs.push_latest }}" == "true" ]]; then
-              echo "docker.soramitsu.co.jp/iroha3/iroha:taira-latest"
-            fi
-            echo "EOF"
-          } >>"$GITHUB_OUTPUT"
-
-      - name: Build local Taira smoke image
-        if: ${{ !inputs.skip_taira_smoke }}
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
-        with:
-          context: .
-          load: true
-          tags: local/taira-validator:smoke
           build-args: |
-            "PROFILE=release"
-            "CONFIG_PROFILE=taira"
-            "FEATURES=embedded-soracloud-runtime"
-            "CARGO_BUILD_JOBS=1"
-            "BINARIES=irohad kagami"
-            "VALIDATOR_LOCK_SHA256=${{ env.DPN_VALIDATOR_LOCK_SHA256 }}"
-            "VALIDATOR_SOURCE_TREE_SHA256=${{ env.DPN_VALIDATOR_SOURCE_TREE_SHA256 }}"
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Smoke Taira image default entrypoint
-        if: ${{ !inputs.skip_taira_smoke }}
-        shell: bash
-        run: bash scripts/taira_image_smoke.sh --image local/taira-validator:smoke --timeout 120
-
-      - name: Build and push Taira validator image to Docker Hub
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
-        with:
+            "IROHA_MUSL_BUILDER_IMAGE=${{ env.IROHA_MUSL_BUILDER_IMAGE }}"
+            "IROHA_MUSL_RUNTIME_IMAGE=${{ env.IROHA_MUSL_RUNTIME_IMAGE }}"
           context: .
-          push: true
-          tags: ${{ steps.tags.outputs.dockerhub_tags }}
-          labels: |
-            commit=${{ steps.checkout_meta.outputs.sha }}
-            validator-source-tree=${{ env.DPN_VALIDATOR_SOURCE_TREE_SHA256 }}
-          build-args: |
-            "PROFILE=release"
-            "CONFIG_PROFILE=taira"
-            "FEATURES=embedded-soracloud-runtime"
-            "CARGO_BUILD_JOBS=1"
-            "BINARIES=irohad"
-            "VALIDATOR_LOCK_SHA256=${{ env.DPN_VALIDATOR_LOCK_SHA256 }}"
-            "VALIDATOR_SOURCE_TREE_SHA256=${{ env.DPN_VALIDATOR_SOURCE_TREE_SHA256 }}"
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Build and push Taira validator image to Harbor
-        if: ${{ steps.harbor_login.outcome == 'success' }}
-        continue-on-error: true
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
-        with:
-          context: .
-          push: true
-          tags: ${{ steps.tags.outputs.harbor_tags }}
-          labels: |
-            commit=${{ steps.checkout_meta.outputs.sha }}
-            validator-source-tree=${{ env.DPN_VALIDATOR_SOURCE_TREE_SHA256 }}
-          build-args: |
-            "PROFILE=release"
-            "CONFIG_PROFILE=taira"
-            "FEATURES=embedded-soracloud-runtime"
-            "CARGO_BUILD_JOBS=1"
-            "BINARIES=irohad"
-            "VALIDATOR_LOCK_SHA256=${{ env.DPN_VALIDATOR_LOCK_SHA256 }}"
-            "VALIDATOR_SOURCE_TREE_SHA256=${{ env.DPN_VALIDATOR_SOURCE_TREE_SHA256 }}"
-          cache-from: type=gha
-          cache-to: type=gha,mode=max

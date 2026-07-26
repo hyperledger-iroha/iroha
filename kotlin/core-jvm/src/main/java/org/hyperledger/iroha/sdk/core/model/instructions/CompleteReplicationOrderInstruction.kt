@@ -5,6 +5,7 @@ private const val COMPLETE_REPLICATION_ACTION = "CompleteReplicationOrder"
 /** Typed representation of the `CompleteReplicationOrder` instruction. */
 class CompleteReplicationOrderInstruction private constructor(
     val orderIdHex: String,
+    val providerIdHex: String,
     val completionEpoch: Long,
     private val _arguments: Map<String, String>,
 ) : InstructionTemplate {
@@ -13,8 +14,9 @@ class CompleteReplicationOrderInstruction private constructor(
 
     override val arguments: Map<String, String> get() = _arguments
 
-    constructor(orderIdHex: String, completionEpoch: Long) : this(
+    constructor(orderIdHex: String, providerIdHex: String, completionEpoch: Long) : this(
         orderIdHex = ReplicationOrderInstructionValidation.requireOrderId(orderIdHex),
+        providerIdHex = ReplicationOrderInstructionValidation.requireProviderId(providerIdHex),
         completionEpoch = ReplicationOrderInstructionValidation.requireEpoch(
             completionEpoch,
             "completionEpoch",
@@ -22,6 +24,7 @@ class CompleteReplicationOrderInstruction private constructor(
         _arguments = linkedMapOf(
             "action" to COMPLETE_REPLICATION_ACTION,
             "order_id_hex" to orderIdHex,
+            "provider_id_hex" to providerIdHex,
             "completion_epoch" to completionEpoch.toString(),
         ),
     )
@@ -29,11 +32,14 @@ class CompleteReplicationOrderInstruction private constructor(
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (other !is CompleteReplicationOrderInstruction) return false
-        return completionEpoch == other.completionEpoch && orderIdHex == other.orderIdHex
+        return completionEpoch == other.completionEpoch &&
+            orderIdHex == other.orderIdHex &&
+            providerIdHex == other.providerIdHex
     }
 
     override fun hashCode(): Int {
         var result = orderIdHex.hashCode()
+        result = 31 * result + providerIdHex.hashCode()
         result = 31 * result + completionEpoch.hashCode()
         return result
     }
@@ -44,10 +50,11 @@ class CompleteReplicationOrderInstruction private constructor(
             ReplicationOrderInstructionValidation.requireArguments(
                 arguments,
                 COMPLETE_REPLICATION_ACTION,
-                setOf("order_id_hex", "completion_epoch"),
+                setOf("order_id_hex", "provider_id_hex", "completion_epoch"),
             )
             return CompleteReplicationOrderInstruction(
                 require(arguments, "order_id_hex"),
+                require(arguments, "provider_id_hex"),
                 requireLong(arguments, "completion_epoch"),
             )
         }

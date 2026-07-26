@@ -61,65 +61,38 @@ def require(text, needle, label):
 source = read("IrohaSwift/Sources/IrohaSwift/ToriiClient.swift")
 tests = read("IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift")
 
-request_start = source.find("public struct ToriiSoraFsPinRegisterRequest:")
-request_end = source.find("fileprivate struct ToriiSoraFsPinRegisterWireRequest", request_start)
-if request_start < 0 or request_end < 0:
-    raise SystemExit("error: missing Swift SoraFS pin-register request declaration")
-request_source = source[request_start:request_end]
-for retired in (
-    "manifestBase64",
-    "manifestBytes",
-    "manifest_b64",
-    "chunkerProfile",
-    "chunker_profile",
-    "pinPolicy",
-    "pin_policy",
-    "contentLength",
-    "content_length",
-    "chunkDigest",
-    "chunk_digest",
-):
-    if retired in request_source:
-        raise SystemExit(
-            f"error: Swift SoraFS pin-register request exposes retired field marker: {retired}"
-        )
+if "ToriiSoraFsPinRegisterRequest" in source:
+    raise SystemExit(
+        "error: Swift SoraFS pin-register must not expose a secret-bearing request DTO"
+    )
 
 for needle, label in (
     (
-        "public func registerSoraFsPinManifest(_ requestBody: ToriiSoraFsPinRegisterRequest) async throws -> ToriiSoraFsPinRegisterResponse",
+        "public func registerSoraFsPinManifest(_ transaction: SignedTransactionEnvelope) async throws -> ToriiSoraFsPinRegisterResponse",
         "async API",
     ),
-    ("requestBody.normalized()", "request normalization before send"),
     ('path: "/v1/sorafs/pin/register"', "paid-pin endpoint"),
-    (".normalized()", "typed response normalization"),
-    ("ToriiSoraFsPinRegisterRequest", "request model"),
+    ("body: transaction.norito", "caller-signed Norito body"),
+    ('"Content-Type": "application/x-norito"', "Norito content type"),
+    ('"Accept": "application/json"', "JSON response negotiation"),
+    ("acceptedStatus: 202..<203", "HTTP 202 admission contract"),
+    ('Set(["status", "tx_hash_hex", "manifest_digest_hex"])', "closed admission response"),
     ("ToriiSoraFsPinRegisterResponse", "response model"),
-    ('case manifestPayload = "manifest_payload"', "canonical manifest payload key"),
-    ("maximumManifestBytes = 512 * 1024", "manifest payload bound"),
-    ("maximumAliasProofBytes = 1024 * 1024", "alias proof bound"),
-    ("requiredAliasSegment(", "canonical alias segment validation"),
 ):
     require(source, needle, label)
 
 for needle, label in (
     (
-        "testRegisterSoraFsPinManifestPostsNormalizedPayloadAndDecodesResponse",
-        "positive request/response test",
+        "testRegisterSoraFsPinManifestPostsOnlySignedNoritoAndReturnsAdmission",
+        "signed request/admission response test",
     ),
     (
-        "testRegisterSoraFsPinManifestRejectsMalformedInputsBeforeRequest",
-        "preflight malformed-input test",
+        "testRegisterSoraFsPinManifestRejectsPreFinalityFeeClaims",
+        "pre-finality response guard",
     ),
-    (
-        "testRegisterSoraFsPinManifestRejectsMalformedResponse",
-        "malformed response test",
-    ),
-    ("XCTAssertFalse(didSendRequest)", "fail-closed no-request assertion"),
-    ('root["manifest_payload"]', "canonical manifest payload assertion"),
-    ('String(repeating: "a", count: 129)', "oversized alias segment rejection"),
-    ("oversizedAliasProof", "oversized alias proof rejection"),
-    ('proofBase64 = "not base64!"', "malformed alias proof rejection"),
-    ('proofBase64 = Data().base64EncodedString()', "empty alias proof rejection"),
+    ('"application/x-norito"', "Norito transport assertion"),
+    ("statusCode: 202", "HTTP 202 fixture"),
+    ('"pin_fee":"1"', "non-admission field rejection fixture"),
 ):
     require(tests, needle, label)
 

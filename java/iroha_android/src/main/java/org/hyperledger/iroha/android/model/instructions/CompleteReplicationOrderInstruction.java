@@ -11,6 +11,7 @@ public final class CompleteReplicationOrderInstruction implements InstructionTem
   private static final String ACTION = "CompleteReplicationOrder";
 
   private final String orderIdHex;
+  private final String providerIdHex;
   private final long completionEpoch;
   private final Map<String, String> arguments;
 
@@ -21,6 +22,7 @@ public final class CompleteReplicationOrderInstruction implements InstructionTem
   private CompleteReplicationOrderInstruction(
       final Builder builder, final Map<String, String> canonicalArguments) {
     this.orderIdHex = builder.orderIdHex;
+    this.providerIdHex = builder.providerIdHex;
     this.completionEpoch = builder.completionEpoch;
     this.arguments =
         Collections.unmodifiableMap(
@@ -33,6 +35,10 @@ public final class CompleteReplicationOrderInstruction implements InstructionTem
 
   public long completionEpoch() {
     return completionEpoch;
+  }
+
+  public String providerIdHex() {
+    return providerIdHex;
   }
 
   @Override
@@ -48,10 +54,11 @@ public final class CompleteReplicationOrderInstruction implements InstructionTem
   public static CompleteReplicationOrderInstruction fromArguments(
       final Map<String, String> arguments) {
     ReplicationOrderInstructionValidation.requireArguments(
-        arguments, ACTION, "order_id_hex", "completion_epoch");
+        arguments, ACTION, "order_id_hex", "provider_id_hex", "completion_epoch");
     final Builder builder =
         builder()
             .setOrderIdHex(require(arguments, "order_id_hex"))
+            .setProviderIdHex(require(arguments, "provider_id_hex"))
             .setCompletionEpoch(requireLong(arguments, "completion_epoch"));
     return new CompleteReplicationOrderInstruction(builder, new LinkedHashMap<>(arguments));
   }
@@ -86,16 +93,19 @@ public final class CompleteReplicationOrderInstruction implements InstructionTem
     if (!(obj instanceof CompleteReplicationOrderInstruction other)) {
       return false;
     }
-    return completionEpoch == other.completionEpoch && Objects.equals(orderIdHex, other.orderIdHex);
+    return completionEpoch == other.completionEpoch
+        && Objects.equals(orderIdHex, other.orderIdHex)
+        && Objects.equals(providerIdHex, other.providerIdHex);
   }
 
   @Override
   public int hashCode() {
-    return Objects.hash(orderIdHex, completionEpoch);
+    return Objects.hash(orderIdHex, providerIdHex, completionEpoch);
   }
 
   public static final class Builder {
     private String orderIdHex;
+    private String providerIdHex;
     private Long completionEpoch;
 
     private Builder() {}
@@ -111,9 +121,18 @@ public final class CompleteReplicationOrderInstruction implements InstructionTem
       return this;
     }
 
+    public Builder setProviderIdHex(final String providerIdHex) {
+      this.providerIdHex =
+          ReplicationOrderInstructionValidation.requireProviderId(providerIdHex);
+      return this;
+    }
+
     public CompleteReplicationOrderInstruction build() {
       if (orderIdHex == null || orderIdHex.isEmpty()) {
         throw new IllegalStateException("orderIdHex must be provided");
+      }
+      if (providerIdHex == null || providerIdHex.isEmpty()) {
+        throw new IllegalStateException("providerIdHex must be provided");
       }
       if (completionEpoch == null) {
         throw new IllegalStateException("completionEpoch must be provided");
@@ -125,6 +144,7 @@ public final class CompleteReplicationOrderInstruction implements InstructionTem
       final Map<String, String> args = new LinkedHashMap<>();
       args.put("action", ACTION);
       args.put("order_id_hex", orderIdHex);
+      args.put("provider_id_hex", providerIdHex);
       args.put("completion_epoch", Long.toString(completionEpoch));
       return args;
     }

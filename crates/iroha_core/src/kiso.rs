@@ -998,6 +998,14 @@ mod tests {
                         ),
                         worker_max_retry_attempts:
                             iroha_config::parameters::defaults::torii::SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_MAX_RETRY_ATTEMPTS,
+                        worker_max_pending:
+                            iroha_config::parameters::defaults::torii::SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_MAX_PENDING,
+                        worker_max_completed:
+                            iroha_config::parameters::defaults::torii::SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_MAX_COMPLETED,
+                        worker_max_dead_letters:
+                            iroha_config::parameters::defaults::torii::SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_MAX_DEAD_LETTERS,
+                        worker_checkpoint_max_bytes:
+                            iroha_config::parameters::defaults::torii::SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_CHECKPOINT_MAX_BYTES,
                     },
                 transport: iroha_config::parameters::actual::ToriiTransport::default(),
                 mcp: iroha_config::parameters::actual::ToriiMcp::default(),

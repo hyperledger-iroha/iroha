@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -40,22 +41,27 @@ def parse_metadata(entries: Iterable[str]) -> Dict[str, str]:
     return metadata
 
 
-def build_manifest(records: List[Tuple[str, Path, Path]], metadata: Dict[str, str]) -> Dict[str, object]:
+def build_manifest(
+    records: List[Tuple[str, Path, Path]],
+    metadata: Dict[str, str],
+    *,
+    generated_at: str,
+) -> Dict[str, object]:
     artefacts: List[Dict[str, object]] = []
     for name, source, destination in records:
         size = destination.stat().st_size
         artefacts.append(
             {
                 "name": name,
-                "source": str(source),
-                "path": str(destination),
+                "source": source.name,
+                "path": destination.name,
                 "size_bytes": size,
                 "sha256": sha256sum(destination),
             }
         )
     manifest: Dict[str, object] = {
         "version": 1,
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": generated_at,
         "artifacts": artefacts,
     }
     if metadata:
@@ -94,6 +100,14 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
         default="slot_summary.json",
         help="Filename to use when copying the summary into --out-dir.",
     )
+    parser.add_argument(
+        "--source-date-epoch",
+        type=int,
+        help=(
+            "Stable generation epoch. Defaults to SOURCE_DATE_EPOCH when set, "
+            "otherwise the current UTC time for non-release local runs."
+        ),
+    )
     return parser.parse_args(list(argv) if argv is not None else None)
 
 
@@ -114,12 +128,26 @@ def main(argv: Iterable[str] | None = None) -> int:
     copy_artifact(summary, summary_dest)
 
     metadata = parse_metadata(args.metadata)
+    source_date_epoch = args.source_date_epoch
+    if source_date_epoch is None and os.environ.get("SOURCE_DATE_EPOCH"):
+        try:
+            source_date_epoch = int(os.environ["SOURCE_DATE_EPOCH"], 10)
+        except ValueError as exc:
+            raise SystemExit("SOURCE_DATE_EPOCH must be an integer") from exc
+    if source_date_epoch is not None and source_date_epoch < 0:
+        raise SystemExit("--source-date-epoch must be non-negative")
+    generated_at = (
+        datetime.fromtimestamp(source_date_epoch, tz=timezone.utc).isoformat()
+        if source_date_epoch is not None
+        else datetime.now(timezone.utc).isoformat()
+    )
     manifest = build_manifest(
         [
             ("metrics", metrics, metrics_dest),
             ("summary", summary, summary_dest),
         ],
         metadata,
+        generated_at=generated_at,
     )
     manifest_path = out_dir / args.manifest_name
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")

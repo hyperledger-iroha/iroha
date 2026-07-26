@@ -62,71 +62,11 @@ BUILD_PROFILE=deploy bash scripts/build_line.sh --i2
 stage('Dual Profile Artifacts') {
     node(amd64Label) {
         ws(dualProfileWorkspace) {
-            if (env.CHANGE_ID) {
-                echo 'Skipping dual profile release artifacts for PR build'
-            } else {
-                checkout scm
-                sh '''
-set -euo pipefail
-
-if ! command -v zstd >/dev/null 2>&1; then
-    echo "zstd is required to build release bundles" >&2
-    exit 1
-fi
-
-version=$(awk -F\" '/^version *=/ {print $2; exit}' Cargo.toml)
-commit=$(git rev-parse --short HEAD)
-timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-
-case "$(uname -s)" in
-    Linux) os_tag=linux ;;
-    Darwin) os_tag=mac ;;
-    CYGWIN*|MINGW*|MSYS*) os_tag=win ;;
-    *) os_tag=$(uname -s | tr '[:upper:]' '[:lower:]') ;;
-esac
-
-arch=$(uname -m)
-
-artifacts_dir=artifacts
-rm -rf "$artifacts_dir"
-mkdir -p "$artifacts_dir"
-
-./scripts/build_release_bundle.sh --profile iroha2 --config single --artifacts-dir "$artifacts_dir"
-./scripts/build_release_bundle.sh --profile iroha3 --config nexus --artifacts-dir "$artifacts_dir"
-
-./ci/dual_profile_smoke.sh "$artifacts_dir"/iroha2-*.tar.zst "$artifacts_dir"/iroha3-*.tar.zst
-python3 scripts/select_release_profile.py \
-    --emit-manifest "$artifacts_dir/network_profiles.json" \
-    --artifact "iroha2=$artifacts_dir/iroha2-${version}-${os_tag}.tar.zst" \
-    --artifact "iroha3=$artifacts_dir/iroha3-${version}-${os_tag}.tar.zst"
-
-# Build AppImages for both profiles via Nix
-nix build .#appimage_iroha2 --out-link result-iroha2
-cp -L result-iroha2 "$artifacts_dir/iroha2-${version}-${arch}.AppImage"
-
-nix build .#appimage_iroha3 --out-link result-iroha3
-cp -L result-iroha3 "$artifacts_dir/iroha3-${version}-${arch}.AppImage"
-
-rm -f result-iroha2 result-iroha3
-
-# Generate aggregate checksums for downstream release automation
-if command -v sha256sum >/dev/null 2>&1; then
-    (cd "$artifacts_dir" && sha256sum *.tar.zst *.AppImage > SHA256SUMS)
-elif command -v shasum >/dev/null 2>&1; then
-    (cd "$artifacts_dir" && shasum -a 256 *.tar.zst *.AppImage > SHA256SUMS)
-fi
-
-python3 scripts/generate_release_manifest.py \
-    --artifacts-dir "$artifacts_dir" \
-    --version "$version" \
-    --commit "$commit" \
-    --built-at "$timestamp" \
-    --os-tag "$os_tag" \
-    --arch "$arch" \
-    --output "$artifacts_dir/release_manifest.json"
-'''
-                archiveArtifacts artifacts: 'artifacts/**/*', fingerprint: true
-            }
+            echo(
+                'Jenkins does not create promotable release artifacts. Use the ' +
+                'canonical reviewed-input release workflow and ' +
+                'scripts/run_release_pipeline.py for the complete target matrix.'
+            )
         }
     }
 }

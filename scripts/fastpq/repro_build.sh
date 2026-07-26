@@ -22,15 +22,18 @@ Options:
   --features <list>       Additional cargo features (comma-separated) to append.
   --output <dir>          Output directory for artefacts & manifest
                           (default: artifacts/fastpq-repro).
+  --rust-image <ref>      Digest-pinned Rust base image. Required unless
+                          FASTPQ_RUST_IMAGE is set.
+  --cuda-image <ref>      Digest-pinned CUDA base image. Required for GPU mode
+                          unless FASTPQ_CUDA_IMAGE is set.
   --image-tag <name>      Override the docker image tag to build/use.
   --container-runtime <r> Override the container runtime (docker/podman/nerdctl).
   --skip-build-image      Skip rebuilding the container image.
   -h, --help              Show this message.
 
 Environment overrides:
-  FASTPQ_RUST_IMAGE       Base rust image (default: rust:1.88.0-slim-bookworm).
-  FASTPQ_CUDA_IMAGE       Base CUDA image for GPU builds
-                          (default: nvidia/cuda:12.2.2-devel-ubuntu22.04).
+  FASTPQ_RUST_IMAGE       Digest-pinned Rust base image.
+  FASTPQ_CUDA_IMAGE       Digest-pinned CUDA base image for GPU builds.
   FASTPQ_RUST_TOOLCHAIN   Rust toolchain version (default: 1.88.0).
   FASTPQ_CONTAINER_RUNTIME Container runtime to use (default: auto detect).
   FASTPQ_CONTAINER_RUNTIME_FALLBACKS
@@ -47,6 +50,8 @@ output_dir="artifacts/fastpq-repro"
 image_tag=""
 skip_build_image="false"
 container_runtime_cli=""
+rust_image_cli=""
+cuda_image_cli=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -68,6 +73,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --output)
       output_dir="$2"
+      shift 2
+      ;;
+    --rust-image)
+      rust_image_cli="$2"
+      shift 2
+      ;;
+    --cuda-image)
+      cuda_image_cli="$2"
       shift 2
       ;;
     --image-tag)
@@ -154,9 +167,23 @@ select_container_runtime() {
   return 1
 }
 
-rust_image="${FASTPQ_RUST_IMAGE:-rust:1.88.0-slim-bookworm}"
-cuda_image="${FASTPQ_CUDA_IMAGE:-nvidia/cuda:12.2.2-devel-ubuntu22.04}"
+rust_image="${rust_image_cli:-${FASTPQ_RUST_IMAGE:-}}"
+cuda_image="${cuda_image_cli:-${FASTPQ_CUDA_IMAGE:-}}"
 rust_toolchain="${FASTPQ_RUST_TOOLCHAIN:-1.88.0}"
+
+validate_digest_image() {
+  local label="$1"
+  local value="$2"
+  if [[ ! "${value}" =~ ^[a-z0-9][a-z0-9._:/-]{0,200}@sha256:[0-9a-f]{64}$ ]]; then
+    printf 'error: %s must be a bounded lowercase ref@sha256 digest\n' "${label}" >&2
+    return 1
+  fi
+}
+
+validate_digest_image "Rust base image" "${rust_image}"
+if [[ "${mode}" == "gpu" ]]; then
+  validate_digest_image "CUDA base image" "${cuda_image}"
+fi
 
 runtime_preference="${container_runtime_cli:-${FASTPQ_CONTAINER_RUNTIME:-auto}}"
 fallbacks_csv="${FASTPQ_CONTAINER_RUNTIME_FALLBACKS:-docker,podman,nerdctl}"
@@ -211,7 +238,7 @@ if [[ -n "${extra_features}" ]]; then
 fi
 
 bin_list_csv=$(IFS=','; echo "${bins[*]}")
-features_arg=$(IFS=','; echo "${features_list[*]}")
+features_arg=$(IFS=','; echo "${features_list[*]-}")
 
 uid_gid="$(id -u):$(id -g)"
 workspace_mount="${workspace_root}:/workspace"

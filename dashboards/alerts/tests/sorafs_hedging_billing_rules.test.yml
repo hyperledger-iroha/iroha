@@ -16,6 +16,14 @@ tests:
         values: '150 150 150 150 150 150 150 150 150 150 150 150 150 150 150 150 150 150 150 150 150 150 150 150 150 150 150 150 150 150 150 150 150 150 150 150'
       - series: 'torii_sorafs_billing_escrow_runway_seconds{cluster="local",account_type="provider"}'
         values: '3600 3600 3600 3600 3600 3600 3600 3600 3600 3600 3600 3600 3600 3600 3600 3600 3600 3600'
+      - series: 'sorafs_hedging_billing_last_tick_fresh'
+        values: '0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0'
+      - series: 'sorafs_hedging_billing_finalized_projection_ready'
+        values: '0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0'
+      - series: 'sorafs_hedging_billing_finalized_head_height'
+        values: '45 45 45 45 45 45 45 45 45 45 45 45 45 45 45 45 45 45'
+      - series: 'sorafs_hedging_billing_finalized_lag_blocks'
+        values: '3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3'
     alert_rule_test:
       - alertname: SoraFSHedgingPrimaryFeedStale
         eval_time: 5m
@@ -72,6 +80,30 @@ tests:
               severity: critical
             exp_annotations:
               summary: "SoraFS billing escrow runway below one day"
+      - alertname: SoraFSHedgingBillingLastTickStale
+        eval_time: 3m
+        exp_alerts: []
+      - alertname: SoraFSHedgingBillingLastTickStale
+        eval_time: 7m
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "SoraFS hedging/billing runtime tick is stale"
+      - alertname: SoraFSBillingFinalizedProjectionUnavailable
+        eval_time: 7m
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "SoraFS billing finalized projection is unavailable"
+      - alertname: SoraFSBillingFinalizedLagHigh
+        eval_time: 7m
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "SoraFS billing finalized projection lag is high"
   - interval: 1m
     input_series:
       - series: 'torii_sorafs_hedging_feed_lag_seconds{cluster="local",source="primary"}'
@@ -86,6 +118,14 @@ tests:
         values: '5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5 5'
       - series: 'torii_sorafs_billing_escrow_runway_seconds{cluster="local",account_type="provider"}'
         values: '172800 172800 172800 172800 172800 172800 172800 172800 172800 172800 172800 172800 172800 172800 172800 172800 172800 172800'
+      - series: 'sorafs_hedging_billing_last_tick_fresh'
+        values: '1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
+      - series: 'sorafs_hedging_billing_finalized_projection_ready'
+        values: '1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
+      - series: 'sorafs_hedging_billing_finalized_head_height'
+        values: '45 45 45 45 45 45 45 45 45 45 45 45 45 45 45 45 45 45'
+      - series: 'sorafs_hedging_billing_finalized_lag_blocks'
+        values: '2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2'
     alert_rule_test:
       - alertname: SoraFSHedgingPrimaryFeedStale
         eval_time: 17m
@@ -103,5 +143,14 @@ tests:
         eval_time: 17m
         exp_alerts: []
       - alertname: SoraFSBillingEscrowRunwayLow
+        eval_time: 17m
+        exp_alerts: []
+      - alertname: SoraFSHedgingBillingLastTickStale
+        eval_time: 17m
+        exp_alerts: []
+      - alertname: SoraFSBillingFinalizedProjectionUnavailable
+        eval_time: 17m
+        exp_alerts: []
+      - alertname: SoraFSBillingFinalizedLagHigh
         eval_time: 17m
         exp_alerts: []

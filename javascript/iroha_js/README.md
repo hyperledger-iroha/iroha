@@ -1857,40 +1857,42 @@ await torii.submitSumeragiEvidence({
 
 ## SoraFS Storage Helpers
 
-Pin registration accepts only canonical HTTP field names. The manifest must be
-canonical padded base64 whose decoded size is between 1 byte and 512 KiB;
-legacy out-of-band chunker, digest, content-length, and pin-policy fields are
-rejected before any request is sent. Torii obtains the canonical fee quote for
-the server-built registration transaction before signing it. Any payer choice
-is a typed fee intent; transaction metadata cannot select a gas asset or
-sponsor.
+Pin registration accepts only a caller-signed, versioned transaction containing
+exactly one native `RegisterPinManifest` instruction. Build and fee-quote that
+transaction locally; neither the raw private key nor any secret-bearing JSON
+request is sent to Torii. The immediate response is only an admission identity,
+not a finality, fee, custody, or pin-status receipt.
 
 ```js
-const pinResult = await torii.pinSorafsManifest({
-  manifest: fs.readFileSync("./manifest.norito"),
-  payload: fs.readFileSync("./payload.bin"),
-});
-console.log(`manifest=${pinResult.manifest_id_hex} digest=${pinResult.payload_digest_hex}`);
+const operatorId = process.env.SORAFS_OPERATOR_ID;
+const operatorKeyHex = process.env.SORAFS_OPERATOR_KEY_HEX;
+const chainId = process.env.IROHA_CHAIN_ID;
+if (!operatorId || !operatorKeyHex || !chainId) {
+  throw new Error(
+    "set SORAFS_OPERATOR_ID, SORAFS_OPERATOR_KEY_HEX, and IROHA_CHAIN_ID",
+  );
+}
 
-const registerRequest = {
-  authority: process.env.SORAFS_OPERATOR_ID ?? "sorauﾛ1PｸCｶrﾑhyﾜｴﾄhｳﾔSqP2GFGﾗヱﾐｹﾇﾏzﾍｵﾐMﾇﾖﾄksJヱRRJXVB",
-  private_key: process.env.SORAFS_OPERATOR_KEY ?? "ed25519:deadbeef",
-  manifest_payload: fs.readFileSync("./manifest.norito").toString("base64"),
-  submitted_epoch: Date.now(),
+const { signedTransaction } = await buildRegisterPinManifestTransaction(torii, {
+  chainId,
+  authority: operatorId,
+  privateKey: Buffer.from(operatorKeyHex, "hex"),
+  feePayment: { payer: "authority", chargeLimits: [] },
+  manifestPayload: fs.readFileSync("./manifest.norito"),
+  submittedEpoch: Number(process.env.SORAFS_SUBMITTED_EPOCH ?? "0"),
   alias: {
     namespace: "docs",
     name: "main",
-    proof_base64: fs.readFileSync("./artifacts/docs_alias.proof").toString("base64"),
+    proof: fs.readFileSync("./artifacts/docs_alias.proof"),
   },
-};
-const registerResponse = await torii.registerSorafsPinManifest(registerRequest);
-console.log("pin registry status:", registerResponse.status);
-
-const registerTyped = await torii.registerSorafsPinManifestTyped(registerRequest);
-console.log("registered manifest:", registerTyped.manifest_digest_hex, registerTyped.chunker_handle);
+});
+const admission = await torii.registerSorafsPinManifestTyped(signedTransaction);
+console.log(
+  `admitted transaction=${admission.tx_hash_hex} manifest=${admission.manifest_digest_hex}`,
+);
 
 const range = await torii.fetchSorafsPayloadRange({
-  manifestIdHex: pinResult.manifest_id_hex,
+  manifestIdHex: admission.manifest_digest_hex,
   offset: 0,
   length: 4096,
 });
@@ -1899,7 +1901,7 @@ const firstChunk = Buffer.from(range.data_b64, "base64");
 const storageState = await torii.getSorafsStorageState();
 console.log(`pin queue depth=${storageState.pin_queue_depth}`);
 
-const storedManifest = await torii.getSorafsManifest(pinResult.manifest_id_hex);
+const storedManifest = await torii.getSorafsManifest(admission.manifest_digest_hex);
 console.log(`profile=${storedManifest.chunk_profile_handle} chunks=${storedManifest.chunk_count}`);
 
 const daBundle = await torii.getDaManifest("0x" + "aa".repeat(32));
@@ -2108,14 +2110,13 @@ for await (const order of torii.iterateSorafsReplicationOrders({ pageSize: 25 })
 > continues to throw when the digest is absent so automation that expects a
 > manifest still fails fast.
 
-Uptime telemetry and PoR automation helpers surface the first-release production
-endpoints so SDK callers can publish uptime samples, submit authenticated
-Norito-encoded provider proofs and auditor verdicts, and retrieve coordinator
-exports. Challenge issuance is owned by the verified coordinator scheduler;
+PoR automation helpers surface the first-release production endpoints so SDK
+callers can submit authenticated Norito-encoded provider proofs and auditor
+verdicts and retrieve coordinator exports. Challenge issuance and capacity
+telemetry observations are owned by finalized ledger/coordinator workflows;
 there is no client-side challenge or manual observation API.
 
 ```js
-await torii.submitSorafsUptimeObservation({ uptimeSecs: 540, observedSecs: 600 });
 await torii.recordSorafsPorProof({ proof: porProofBytes });
 await torii.recordSorafsPorVerdict({ verdict: porVerdictBytes });
 
@@ -4035,6 +4036,41 @@ literals only; address-format hints are no longer supported.
 the Torii responses (or synthesize an empty draft when Torii replies with `204 No Content`)
 so automation always receives a `tx_instructions` array to sign without checking
 for `null`.
+
+### SoraFS replication-order instructions
+
+The V1 helpers emit the exact native Rust/Norito variants. IDs must be non-zero
+lowercase 64-hex strings, and issue payloads must be canonical base64 containing
+a bounded, canonical `ReplicationOrderV1` archive whose embedded order ID,
+target, provider assignments, and deadline are valid.
+
+```js
+import {
+  buildCompleteReplicationOrderInstruction,
+  buildExpireReplicationOrderInstruction,
+  buildIssueReplicationOrderInstruction,
+} from "@iroha/iroha-js";
+
+const issue = buildIssueReplicationOrderInstruction({
+  orderId,
+  orderPayload: replicationOrderBytes.toString("base64"),
+  issuedEpoch: 20,
+  deadlineEpoch: 28,
+});
+const complete = buildCompleteReplicationOrderInstruction({
+  orderId,
+  providerId,
+  completionEpoch: 27,
+});
+const expire = buildExpireReplicationOrderInstruction({
+  orderId,
+  expirationEpoch: 29,
+});
+```
+
+Completion is always provider-specific: the canonical shape is
+`order_id + provider_id + completion_epoch`. The retired two-field completion
+shape and unknown fields are rejected.
 
 ## Configuration
 

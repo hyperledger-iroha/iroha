@@ -92,7 +92,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. አንጸባራቂውን በbase64 ኢንኮዲንግ ያስገቡ፡-
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/pin \
+   curl -X POST http://$TORII[REMOVED: provider-internal finalized-ledger ingest only] \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -172,7 +172,7 @@ GC CLI ሆን ተብሎ ተነባቢ ብቻ ነው። የማቆያ ቀነ-ገደ
   ይህም `pin_fetch_roundtrip`, `pin_survives_restart`, `pin_quota_rejection`, እና I18NI0000043X ይሸፍናል.
 - ዳሽቦርዶች መከታተል አለባቸው:
   - `torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
-  - `torii_sorafs_storage_pin_queue_depth` እና `torii_sorafs_storage_fetch_inflight`
+  - `sorafs_provider_ingest_inflight` እና `torii_sorafs_storage_fetch_inflight`
   - የPoR ስኬት/የሽንፈት ቆጣሪዎች በ`/v1/sorafs/capacity/state` በኩል ብቅ አሉ።
   - የመቋቋሚያ ሙከራዎችን በ`sorafs_node_deal_publish_total{result=success|failure}` በኩል ያትማል
 

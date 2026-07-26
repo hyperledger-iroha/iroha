@@ -113,7 +113,7 @@ gateway נשארות מסונכרנות.【crates/iroha_torii/src/sorafs/api.rs#
 2. שלחו את ה-manifest בקידוד base64:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/pin \
+   curl -X POST http://$TORII[REMOVED: provider-internal finalized-ledger ingest only] \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -182,7 +182,7 @@ gateway נשארות מסונכרנות.【crates/iroha_torii/src/sorafs/api.rs#
   ו-`por_sampling_returns_verified_proofs`.
 - הדשבורדים צריכים לעקוב אחר:
   - `torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
-  - `torii_sorafs_storage_pin_queue_depth` ו-`torii_sorafs_storage_fetch_inflight`
+  - `sorafs_provider_ingest_inflight` ו-`torii_sorafs_storage_fetch_inflight`
   - מוני הצלחה/כשל של PoR שמוצגים דרך `/v1/sorafs/capacity/state`
   - ניסיונות פרסום settlement דרך `sorafs_node_deal_publish_total{result=success|failure}`
 

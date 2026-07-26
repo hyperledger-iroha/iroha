@@ -18,6 +18,7 @@ from sorafs_checker_preflight import (  # noqa: E402
     emit_checker_error_block,
     emit_checker_error_lines,
     emit_checker_exception,
+    record_artifact_error,
     render_and_write_checker_summary,
     validate_checker_preflight,
 )
@@ -46,6 +47,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     record_evidence_validation_errors,
     record_explicit_evidence_validation_errors,
     record_observed_evidence_value,
+    require_2xx_status,
     require_bool_true,
     require_config_backed_governance_approval,
     require_false,
@@ -53,6 +55,7 @@ from sorafs_evidence_validation import (  # noqa: E402
     require_iroha_config_binding,
     require_maximum_int,
     require_minimum_int,
+    require_object,
     require_object_array,
     require_passed_status,
     require_policy_digest,
@@ -192,7 +195,14 @@ CATALOG_BOUND_KINDS = (
     "observability",
     "governance_approval",
 )
+PREDECESSOR_BOUND_KINDS = ("controller_runtime", "gateway_reload")
 POLICY_BOUND_KINDS = ("governance_approval",)
+CATALOG_HISTORY_FINGERPRINT_FIELDS = (
+    "catalog_digest_hex",
+    "catalog_sequence",
+    "predecessor_catalog_digest_hex",
+    "predecessor_catalog_sequence",
+)
 
 SENSITIVE_KEYS = {
     "authorization",
@@ -302,6 +312,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
     "controller_runtime": COMMON_EVIDENCE_REQUIRED_FIELDS
     + (
         "predecessor_catalog_digest_hex",
+        "predecessor_catalog_sequence",
         "controller_instance_id",
         "iroha_config_bound",
         "config_source",
@@ -317,6 +328,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
     "moderation_toggle": COMMON_EVIDENCE_REQUIRED_FIELDS
     + (
         "control_api_url",
+        "control_api_status_code",
         "control_count",
         "approved_control_count",
         "controls",
@@ -332,6 +344,7 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
     "gateway_reload": COMMON_EVIDENCE_REQUIRED_FIELDS
     + (
         "predecessor_catalog_digest_hex",
+        "predecessor_catalog_sequence",
         "reload_ack_count",
         "gateway_acknowledgements",
         "max_reload_latency_ms",
@@ -344,8 +357,6 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
     ),
     "enforcement_probe": COMMON_EVIDENCE_REQUIRED_FIELDS
     + (
-        "denial_sources_observed",
-        "denial_source_count",
         "fail_closed_missing_catalog",
         "fail_closed_expired_catalog",
         "rate_limit_enforced",
@@ -356,8 +367,6 @@ EVIDENCE_REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
     + (
         "probe_count",
         "probes",
-        "attack_count",
-        "attacks_observed",
     ),
     "precedence": COMMON_EVIDENCE_REQUIRED_FIELDS
     + (
@@ -419,9 +428,10 @@ FINGERPRINT_FIELDS: tuple[str, ...] = (
     "deployment_id",
     "environment",
     "deployment_context_reviewed",
-    "evidence_scope",
     "catalog_digest_hex",
     "catalog_sequence",
+    "predecessor_catalog_digest_hex",
+    "predecessor_catalog_sequence",
     "policy_digest_hex",
     "metric_count",
     "metrics",
@@ -453,7 +463,7 @@ def reject_legacy_fields(value: Any, errors: list[str], path: str = "") -> None:
     if isinstance(value, dict):
         for key, nested in value.items():
             key_path = key if not path else f"{path}.{key}"
-            normalized = key.lower().replace("-", "_")
+            normalized = key.replace("-", "_")
             if any(fragment in normalized for fragment in LEGACY_FIELD_FRAGMENTS):
                 errors.append(f"{key_path} is a removed gateway-compliance V1 field")
             reject_legacy_fields(nested, errors, key_path)
@@ -499,17 +509,13 @@ def require_nonzero_distinct_predecessor(
     if predecessor and catalog_digest and predecessor == catalog_digest:
         errors.append("predecessor_catalog_digest_hex must differ from catalog_digest_hex")
     sequence = require_positive_int(payload, "catalog_sequence", errors)
-    predecessor_sequence = payload.get("predecessor_catalog_sequence")
-    if predecessor_sequence is not None:
-        predecessor_sequence_value = require_positive_int(
-            payload, "predecessor_catalog_sequence", errors
+    predecessor_sequence = require_positive_int(
+        payload, "predecessor_catalog_sequence", errors
+    )
+    if sequence and predecessor_sequence and predecessor_sequence + 1 != sequence:
+        errors.append(
+            "catalog_sequence must immediately follow predecessor_catalog_sequence"
         )
-        if sequence and predecessor_sequence_value + 1 != sequence:
-            errors.append(
-                "catalog_sequence must immediately follow predecessor_catalog_sequence"
-            )
-    elif sequence <= 1:
-        errors.append("catalog_sequence must identify a non-genesis promotion")
 
 
 def validate_gateway_acknowledgements(
@@ -822,6 +828,12 @@ def validate_controller_runtime(
 
 
 def validate_moderation_toggle(payload: dict[str, Any], errors: list[str]) -> None:
+    require_2xx_status(
+        payload,
+        "control_api_status_code",
+        errors,
+        path="control_api_status_code",
+    )
     require_safe_url(payload, "control_api_url", errors)
     require_minimum_int(
         payload, "control_count", len(REQUIRED_MODERATION_CONTROLS), errors
@@ -947,21 +959,6 @@ def validate_http_451_record(
 def validate_enforcement_probe(
     payload: dict[str, Any], errors: list[str], options: ValidationOptions
 ) -> None:
-    require_string_inventory_count_match(
-        payload,
-        "denial_sources_observed",
-        "denial_source_count",
-        errors,
-    )
-    require_string_coverage(
-        payload,
-        "denial_sources_observed",
-        "",
-        REQUIRED_DENIAL_SOURCES,
-        errors,
-    )
-    if set(payload.get("denial_sources_observed", [])) != set(REQUIRED_DENIAL_SOURCES):
-        errors.append("denial_sources_observed contains an unknown source")
     require_bool_true(payload, "fail_closed_missing_catalog", errors)
     require_bool_true(payload, "fail_closed_expired_catalog", errors)
     require_bool_true(payload, "rate_limit_enforced", errors)
@@ -996,6 +993,13 @@ def validate_enforcement_probe(
             errors.append(
                 f"{path}.catalog_digest_hex must match promoted catalog_digest_hex"
             )
+    observed_sources = {
+        record["source"]
+        for record in payload.get("routes", [])
+        if isinstance(record, dict) and isinstance(record.get("source"), str)
+    }
+    if observed_sources != set(REQUIRED_DENIAL_SOURCES):
+        errors.append("routes must cover exactly the required denial sources")
 
 
 def validate_honey_audit(
@@ -1013,14 +1017,6 @@ def validate_honey_audit(
         field="probe_id",
         allow_scalar_items=False,
     )
-    require_string_inventory_count_match(
-        payload, "attacks_observed", "attack_count", errors
-    )
-    require_string_coverage(
-        payload, "attacks_observed", "", REQUIRED_HONEY_ATTACKS, errors
-    )
-    if set(payload.get("attacks_observed", [])) != set(REQUIRED_HONEY_ATTACKS):
-        errors.append("attacks_observed contains an unknown attack")
     for index, record in require_object_array(payload, "probes", errors):
         path = f"probes[{index}]"
         validate_http_451_record(
@@ -1039,6 +1035,13 @@ def validate_honey_audit(
             errors.append(
                 f"{path}.catalog_digest_hex must match promoted catalog_digest_hex"
             )
+    observed_attacks = {
+        record["attack"]
+        for record in payload.get("probes", [])
+        if isinstance(record, dict) and isinstance(record.get("attack"), str)
+    }
+    if observed_attacks != set(REQUIRED_HONEY_ATTACKS):
+        errors.append("probes must cover exactly the required honey attacks")
 
 
 def validate_precedence(payload: dict[str, Any], errors: list[str]) -> None:
@@ -1096,6 +1099,7 @@ def validate_observability(payload: dict[str, Any], errors: list[str]) -> None:
     require_bool_true(payload, "dashboard_provisioned", errors)
     require_bool_true(payload, "alert_rules_installed", errors)
     require_false(payload, "critical_alerts_firing", errors)
+    require_positive_int(payload, "metric_count", errors)
     require_string_inventory_count_match(payload, "metrics", "metric_count", errors)
     require_string_coverage(payload, "metrics", "", REQUIRED_METRICS, errors)
     if set(payload.get("metrics", [])) != set(REQUIRED_METRICS):
@@ -1123,6 +1127,7 @@ def validate_kind_specific(
     *,
     require_production: bool,
 ) -> None:
+    require_object(payload, f"{kind.name} payload", errors)
     require_exact_fields(
         payload,
         EVIDENCE_REQUIRED_FIELDS[kind.name],
@@ -1204,6 +1209,85 @@ def require_single_active_digest(
     return set()
 
 
+def catalog_history_binding(
+    fingerprint: Mapping[str, Any],
+) -> tuple[str, int, str, int] | None:
+    """Return the complete catalog-history tuple from an artifact fingerprint."""
+
+    catalog_digest = fingerprint.get("catalog_digest_hex")
+    catalog_sequence = fingerprint.get("catalog_sequence")
+    predecessor_digest = fingerprint.get("predecessor_catalog_digest_hex")
+    predecessor_sequence = fingerprint.get("predecessor_catalog_sequence")
+    if (
+        not isinstance(catalog_digest, str)
+        or type(catalog_sequence) is not int
+        or not isinstance(predecessor_digest, str)
+        or type(predecessor_sequence) is not int
+    ):
+        return None
+    return (
+        catalog_digest,
+        catalog_sequence,
+        predecessor_digest,
+        predecessor_sequence,
+    )
+
+
+def require_single_active_catalog_history(
+    bindings: set[tuple[str, int, str, int]],
+    errors: list[str],
+) -> set[tuple[str, int, str, int]]:
+    """Return the one promoted catalog history or fail closed on mixed histories."""
+
+    if len(bindings) <= 1:
+        return bindings
+    errors.append(
+        "valid_catalog_history_bindings must contain exactly one active binding"
+    )
+    return set()
+
+
+def validate_catalog_history_references(
+    *,
+    required_kinds: tuple[str, ...],
+    bound_artifacts: list[tuple[str, dict[str, Any]]],
+    valid_bindings: set[tuple[str, int, str, int]],
+    errors: list[str],
+) -> None:
+    """Invalidate predecessor-bound artifacts outside the promoted history."""
+
+    if valid_bindings:
+        for kind_name, artifact in bound_artifacts:
+            if not evidence_artifact_is_valid(artifact):
+                continue
+            binding = catalog_history_binding(
+                evidence_artifact_fingerprint(artifact)
+            )
+            if binding not in valid_bindings:
+                record_artifact_error(
+                    artifact,
+                    (
+                        f"{kind_name} catalog history must match a valid "
+                        "catalog_promotion catalog history"
+                    ),
+                    errors,
+                )
+        return
+    if not set(required_kinds).intersection(PREDECESSOR_BOUND_KINDS):
+        return
+    for kind_name, artifact in bound_artifacts:
+        if not evidence_artifact_is_valid(artifact):
+            continue
+        record_artifact_error(
+            artifact,
+            (
+                f"{kind_name} catalog history requires exactly one valid "
+                "catalog_promotion catalog history"
+            ),
+            errors,
+        )
+
+
 def build_summary(
     evidence_dirs: list[Path],
     evidence_files: list[Path],
@@ -1216,7 +1300,9 @@ def build_summary(
     errors: list[str] = []
     artifacts_by_kind = init_evidence_artifact_buckets(DEFAULT_REQUIRED_KINDS)
     valid_catalog_digests: set[str] = set()
+    valid_catalog_history_bindings: set[tuple[str, int, str, int]] = set()
     catalog_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
+    predecessor_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
     valid_policy_digests: set[str] = set()
     policy_bound_artifacts: list[tuple[str, dict[str, Any]]] = []
     metric_counts: set[int] = set()
@@ -1259,17 +1345,26 @@ def build_summary(
             if kind_name == "catalog_promotion":
                 if isinstance(catalog_digest, str):
                     valid_catalog_digests.add(catalog_digest)
+                history_binding = catalog_history_binding(fingerprint)
+                if history_binding is not None:
+                    valid_catalog_history_bindings.add(history_binding)
                 policy_digest = fingerprint.get("policy_digest_hex")
                 if isinstance(policy_digest, str):
                     valid_policy_digests.add(policy_digest)
             if kind_name in CATALOG_BOUND_KINDS:
                 catalog_bound_artifacts.append((kind_name, artifact))
+            if kind_name in PREDECESSOR_BOUND_KINDS:
+                predecessor_bound_artifacts.append((kind_name, artifact))
             if kind_name in POLICY_BOUND_KINDS:
                 policy_bound_artifacts.append((kind_name, artifact))
         record_evidence_validation_errors(path, validation_errors, errors)
 
     valid_catalog_digests = require_single_active_digest(
         valid_catalog_digests, errors, label="valid_catalog_digests"
+    )
+    valid_catalog_history_bindings = require_single_active_catalog_history(
+        valid_catalog_history_bindings,
+        errors,
     )
     valid_policy_digests = require_single_active_digest(
         valid_policy_digests, errors, label="valid_policy_digests"
@@ -1289,6 +1384,12 @@ def build_summary(
             "{kind_name} catalog_digest_hex requires a valid "
             "catalog_promotion catalog_digest_hex"
         ),
+    )
+    validate_catalog_history_references(
+        required_kinds=required_kinds,
+        bound_artifacts=predecessor_bound_artifacts,
+        valid_bindings=valid_catalog_history_bindings,
+        errors=errors,
     )
     validate_bound_evidence_digest_references(
         required_kinds=required_kinds,
@@ -1331,6 +1432,20 @@ def build_summary(
         "recognized_artifact_count": count_evidence_artifacts(artifacts_by_kind),
         "recognized_artifacts": recognized_evidence_artifacts(artifacts_by_kind),
         "valid_catalog_digests": sorted(valid_catalog_digests),
+        "valid_catalog_history_bindings": [
+            {
+                "catalog_digest_hex": catalog_digest,
+                "catalog_sequence": catalog_sequence,
+                "predecessor_catalog_digest_hex": predecessor_digest,
+                "predecessor_catalog_sequence": predecessor_sequence,
+            }
+            for (
+                catalog_digest,
+                catalog_sequence,
+                predecessor_digest,
+                predecessor_sequence,
+            ) in sorted(valid_catalog_history_bindings)
+        ],
         "valid_policy_digests": sorted(valid_policy_digests),
         "metrics": sorted(metric_names),
         "metric_count_values": sorted(metric_counts),

@@ -25,10 +25,6 @@ public sealed partial class ToriiClient : IDisposable
     private const string QueryProjectionRowsetCodec = "application/x-iroha-query-shard-rowset+norito";
     private const string QueryProjectionCompression = "zstd";
     private const int QueryProjectionDefaultPartitionCount = 4096;
-    private const int SoraFsManifestPayloadMaxBytes = 512 * 1024;
-    private const int SoraFsManifestPayloadMaxBase64Chars = ((SoraFsManifestPayloadMaxBytes + 2) / 3) * 4;
-    private const int SoraFsAliasProofMaxBytes = 1024 * 1024;
-    private const int SoraFsAliasProofMaxBase64Chars = ((SoraFsAliasProofMaxBytes + 2) / 3) * 4;
     private const int SoraFsAliasTextMaxChars = 128;
     private const string InvalidUtf8ResponseBody = "<response body is not valid UTF-8>";
     private static readonly string[] QueryRowEnrichmentFields =
@@ -1431,17 +1427,72 @@ public sealed partial class ToriiClient : IDisposable
     }
 
     public async Task<ToriiSoraFsPinRegisterResponse> RegisterSoraFsPinManifestAsync(
-        ToriiSoraFsPinRegisterRequest request,
+        SignedTransactionEnvelope transaction,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(request);
-
-        var normalizedRequest = NormalizeSoraFsPinRegisterRequest(request);
-        var response = await PostAsync<ToriiSoraFsPinRegisterWireRequest, ToriiSoraFsPinRegisterResponse>(
+        ArgumentNullException.ThrowIfNull(transaction);
+        using var content = CreateBinaryContent(
+            NormalizeNonEmptyBinaryPayload(transaction.NoritoBytes, nameof(transaction)),
+            "application/x-norito");
+        using var response = await SendAsync(
+            HttpMethod.Post,
             "/v1/sorafs/pin/register",
-            normalizedRequest,
+            content: content,
+            accept: "application/json",
             cancellationToken: cancellationToken);
-        return NormalizeSoraFsPinRegisterResponse(response);
+        if (response.StatusCode != HttpStatusCode.Accepted)
+        {
+            throw new HttpRequestException(
+                $"SoraFS pin registration must return HTTP 202, got {(int)response.StatusCode}.");
+        }
+
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        using var document = await ParseJsonDocumentRejectingDuplicatePropertiesAsync(
+            stream,
+            "SoraFS pin registration response",
+            cancellationToken);
+        var root = document.RootElement;
+        if (root.ValueKind != JsonValueKind.Object)
+        {
+            throw new JsonException("SoraFS pin registration response must be an object.");
+        }
+        var fields = root.EnumerateObject().Select(property => property.Name).ToHashSet(
+            StringComparer.Ordinal);
+        if (!fields.SetEquals(["status", "tx_hash_hex", "manifest_digest_hex"]))
+        {
+            throw new JsonException(
+                "SoraFS pin registration response must contain only status, tx_hash_hex, and manifest_digest_hex.");
+        }
+
+        var status = root.GetProperty("status").GetString();
+        if (!string.Equals(status, "submitted", StringComparison.Ordinal))
+        {
+            throw new JsonException("SoraFS pin registration response status must be submitted.");
+        }
+        return new ToriiSoraFsPinRegisterResponse
+        {
+            Status = "submitted",
+            TxHashHex = RequireCanonicalLowercaseSoraFsPinDigest(root, "tx_hash_hex"),
+            ManifestDigestHex = RequireCanonicalLowercaseSoraFsPinDigest(
+                root,
+                "manifest_digest_hex"),
+        };
+    }
+
+    private static string RequireCanonicalLowercaseSoraFsPinDigest(
+        JsonElement root,
+        string field)
+    {
+        var value = root.GetProperty(field).GetString();
+        if (value is null
+            || value.Length != 64
+            || value.Any(character =>
+                character is not (>= '0' and <= '9')
+                and not (>= 'a' and <= 'f')))
+        {
+            throw new JsonException($"{field} must be exactly 64 lowercase hexadecimal characters.");
+        }
+        return value;
     }
 
     public Task<HttpResponseMessage> OpenSoraFsCidContentAsync(
@@ -2627,7 +2678,25 @@ public sealed partial class ToriiClient : IDisposable
             stream,
             DuplicatePropertyContext<TResponse>(response),
             cancellationToken);
-        var value = document.RootElement.Deserialize<TResponse>(serializerOptions);
+        if (typeof(TResponse) == typeof(ToriiContractCallResponse))
+        {
+            ToriiContractCallJson.ValidateContractCallResponseJsonShape(
+                document.RootElement,
+                "contract call response");
+        }
+        TResponse? value;
+        try
+        {
+            value = document.RootElement.Deserialize<TResponse>(serializerOptions);
+        }
+        catch (ArgumentException error)
+            when (typeof(TResponse) == typeof(ToriiContractCallResponse)
+                && error.ParamName is not null)
+        {
+            throw ToriiContractCallJson.DirectMetadataErrorToJsonException(
+                error,
+                "contract call response");
+        }
         return value ?? throw new JsonException($"Torii response for `{response.RequestMessage?.RequestUri}` deserialized to null.");
     }
 
@@ -5705,7 +5774,7 @@ public sealed partial class ToriiClient : IDisposable
     {
         if (feePayment is null)
         {
-            throw new ArgumentNullException(paramName);
+            throw new ArgumentNullException(paramName, "Fee payment is required.");
         }
         if (requireGasLimit && !feePayment.GasLimit.HasValue)
         {
@@ -6643,154 +6712,7 @@ public sealed partial class ToriiClient : IDisposable
         }
     }
 
-    private static ToriiSoraFsPinRegisterWireRequest NormalizeSoraFsPinRegisterRequest(
-        ToriiSoraFsPinRegisterRequest request)
-    {
-        return new ToriiSoraFsPinRegisterWireRequest
-        {
-            Authority = ToriiAccountFaucetPow.RequireExactAccountId(request.Authority, nameof(request.Authority)),
-            PrivateKey = NormalizeExactValue(request.PrivateKey, nameof(request.PrivateKey)),
-            ManifestPayloadBase64 = NormalizeRequiredSoraFsManifestPayload(
-                request.ManifestPayloadBase64,
-                request.ManifestBytes),
-            SubmittedEpoch = RequireSoraFsUnsigned(
-                request.SubmittedEpoch,
-                nameof(request.SubmittedEpoch),
-                allowZero: true),
-            Alias = request.Alias is null
-                ? null
-                : NormalizeSoraFsPinAlias(request.Alias, nameof(request.Alias)),
-            SuccessorOfHex = request.SuccessorOfHex is null
-                ? null
-                : NormalizeNonzeroSoraFsDigestHex(
-                    request.SuccessorOfHex,
-                    nameof(request.SuccessorOfHex)),
-        };
-    }
 
-    private static string NormalizeRequiredSoraFsManifestPayload(
-        string? manifestPayloadBase64,
-        byte[]? manifestBytes)
-    {
-        if (manifestPayloadBase64 is not null && manifestBytes is not null)
-        {
-            throw new ArgumentException(
-                "Provide either ManifestPayloadBase64 or ManifestBytes, not both.",
-                nameof(ToriiSoraFsPinRegisterRequest.ManifestPayloadBase64));
-        }
-
-        if (manifestPayloadBase64 is not null)
-        {
-            if (manifestPayloadBase64.Length > SoraFsManifestPayloadMaxBase64Chars)
-            {
-                throw new ArgumentOutOfRangeException(
-                    nameof(ToriiSoraFsPinRegisterRequest.ManifestPayloadBase64),
-                    $"Manifest payload must not exceed {SoraFsManifestPayloadMaxBytes} bytes.");
-            }
-            var canonical = NormalizeRequiredBase64(
-                manifestPayloadBase64,
-                nameof(ToriiSoraFsPinRegisterRequest.ManifestPayloadBase64));
-            var decodedLength = Convert.FromBase64String(canonical).Length;
-            if (decodedLength > SoraFsManifestPayloadMaxBytes)
-            {
-                throw new ArgumentOutOfRangeException(
-                    nameof(ToriiSoraFsPinRegisterRequest.ManifestPayloadBase64),
-                    $"Manifest payload must not exceed {SoraFsManifestPayloadMaxBytes} bytes.");
-            }
-            return canonical;
-        }
-
-        if (manifestBytes is null)
-        {
-            throw new ArgumentException(
-                "Manifest payload must be provided.",
-                nameof(ToriiSoraFsPinRegisterRequest.ManifestBytes));
-        }
-
-        if (manifestBytes.Length == 0 || manifestBytes.Length > SoraFsManifestPayloadMaxBytes)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(ToriiSoraFsPinRegisterRequest.ManifestBytes));
-        }
-
-        return Convert.ToBase64String(manifestBytes);
-    }
-
-    private static ToriiSoraFsPinRegisterResponse NormalizeSoraFsPinRegisterResponse(
-        ToriiSoraFsPinRegisterResponse response)
-    {
-        ArgumentNullException.ThrowIfNull(response);
-
-        return new ToriiSoraFsPinRegisterResponse
-        {
-            ManifestDigestHex = NormalizeSoraFsDigestHex(
-                response.ManifestDigestHex,
-                nameof(response.ManifestDigestHex)),
-            ChunkerHandle = NormalizeExactValue(
-                response.ChunkerHandle,
-                nameof(response.ChunkerHandle)),
-            SubmittedEpoch = RequireSoraFsUnsigned(
-                response.SubmittedEpoch,
-                nameof(response.SubmittedEpoch),
-                allowZero: true),
-            ContentLength = RequireSoraFsUnsigned(
-                response.ContentLength,
-                nameof(response.ContentLength),
-                allowZero: true),
-            PinFeeNano = RequireSoraFsUnsigned(
-                response.PinFeeNano,
-                nameof(response.PinFeeNano),
-                allowZero: true),
-            PinFeeAssetId = NormalizeExactValue(
-                response.PinFeeAssetId,
-                nameof(response.PinFeeAssetId)),
-            PinFeeTreasuryAccountId = ToriiAccountFaucetPow.RequireExactAccountId(
-                response.PinFeeTreasuryAccountId,
-                nameof(response.PinFeeTreasuryAccountId)),
-            Alias = response.Alias is null
-                ? null
-                : NormalizeSoraFsPinAlias(response.Alias, nameof(response.Alias)),
-            SuccessorOfHex = response.SuccessorOfHex is null
-                ? null
-                : NormalizeSoraFsDigestHex(response.SuccessorOfHex, nameof(response.SuccessorOfHex)),
-        };
-    }
-
-    private static ToriiSoraFsPinAlias NormalizeSoraFsPinAlias(
-        ToriiSoraFsPinAlias alias,
-        string paramName)
-    {
-        return new ToriiSoraFsPinAlias
-        {
-            Namespace = NormalizeSoraFsAliasText(
-                alias.Namespace,
-                $"{paramName}.{nameof(alias.Namespace)}"),
-            Name = NormalizeSoraFsAliasText(
-                alias.Name,
-                $"{paramName}.{nameof(alias.Name)}"),
-            ProofBase64 = NormalizeBoundedRequiredBase64(
-                alias.ProofBase64,
-                $"{paramName}.{nameof(alias.ProofBase64)}",
-                SoraFsAliasProofMaxBytes,
-                SoraFsAliasProofMaxBase64Chars),
-        };
-    }
-
-    private static string NormalizeSoraFsAliasText(string? value, string paramName)
-    {
-        var normalized = NormalizeExactValue(value, paramName);
-        if (normalized.Length > SoraFsAliasTextMaxChars
-            || !normalized.All(character =>
-                character is >= 'a' and <= 'z'
-                || character is >= '0' and <= '9'
-                || character is '.' or '-' or '_'))
-        {
-            throw new ArgumentOutOfRangeException(
-                paramName,
-                $"Value must contain 1..{SoraFsAliasTextMaxChars} lowercase ASCII letters, digits, '.', '-', or '_'.");
-        }
-        return normalized;
-    }
 
     private static string NormalizeSoraFsStorageClass(ToriiSoraFsStorageClass? storageClass)
     {

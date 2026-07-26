@@ -30,16 +30,17 @@ use iroha_data_model::{
 use iroha_primitives::{json::Json, numeric::Quantity};
 use mv::storage::StorageReadOnly;
 use norito::{
+    DecodeLimits,
     core::Error as NoritoDecodeError,
-    decode_from_bytes,
+    decode_from_bytes_with_limits,
     json::{self, Map, Value},
+    to_bytes,
 };
 use sorafs_manifest::{
     capacity::{
         CapacityDeclarationV1, CapacityMetadataEntry, ChunkerCommitmentV1, LaneCommitmentV1,
-        PricingScheduleV1,
+        PricingScheduleV1, ReplicationOrderV1,
     },
-    pin_registry::ReplicationOrderV1,
     provider_advert::{CapabilityType, StakePointer},
 };
 use thiserror::Error;
@@ -49,6 +50,14 @@ use crate::{routing::MaybeTelemetry, sorafs::capability_name};
 
 const METADATA_STATUS_TIMESTAMP_KEY: &str = "sorafs_status_timestamp_unix";
 const METADATA_GOVERNANCE_REFS_KEY: &str = "sorafs_governance_refs";
+const REPLICATION_ORDER_MAX_CANONICAL_BYTES_V1: usize = 256 * 1024;
+const REPLICATION_ORDER_DECODE_LIMITS_V1: DecodeLimits = DecodeLimits::new(
+    sorafs_manifest::capacity::MAX_CAPACITY_METADATA_VALUE_BYTES,
+    REPLICATION_ORDER_MAX_CANONICAL_BYTES_V1,
+    131_072,
+    REPLICATION_ORDER_MAX_CANONICAL_BYTES_V1 * 4,
+    32,
+);
 
 /// Collect a snapshot of provider declarations and fee ledger entries.
 pub(crate) fn collect_snapshot(world: &WorldView<'_>) -> Result<CapacitySnapshot, RegistryError> {
@@ -898,15 +907,14 @@ pub(crate) struct RegistryReplicationOrder {
     canonical_order_b64: String,
     order_json: Value,
     providers: Vec<String>,
-    receipts: Vec<RegistryReplicationReceipt>,
+    provider_completions: Vec<RegistryReplicationCompletion>,
 }
 
 #[derive(Debug, Clone)]
-struct RegistryReplicationReceipt {
+struct RegistryReplicationCompletion {
     provider_hex: String,
-    status_label: &'static str,
-    timestamp: u64,
-    por_sample_digest_hex: Option<String>,
+    completed_by: String,
+    completion_epoch: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -1313,6 +1321,11 @@ pub(crate) enum PinRegistryError {
         #[source]
         source: json::Error,
     },
+    #[error("invalid canonical replication order payload for {order_id_hex}: {reason}")]
+    InvalidReplicationOrder {
+        order_id_hex: String,
+        reason: String,
+    },
 }
 
 /// Collect the current pin registry snapshot (manifests, aliases, and replication orders).
@@ -1618,13 +1631,90 @@ impl RegistryReplicationOrder {
         record: &ReplicationOrderRecord,
     ) -> Result<Self, PinRegistryError> {
         let order_id_hex = order_id.as_bytes().encode_hex::<String>();
+        if record.canonical_order.is_empty()
+            || record.canonical_order.len() > REPLICATION_ORDER_MAX_CANONICAL_BYTES_V1
+        {
+            return Err(PinRegistryError::InvalidReplicationOrder {
+                order_id_hex,
+                reason: format!(
+                    "canonical payload length must be 1..={REPLICATION_ORDER_MAX_CANONICAL_BYTES_V1} bytes"
+                ),
+            });
+        }
         let order: ReplicationOrderV1 =
-            decode_from_bytes(&record.canonical_order).map_err(|source| {
+            decode_from_bytes_with_limits(
+                &record.canonical_order,
+                REPLICATION_ORDER_DECODE_LIMITS_V1,
+            )
+            .map_err(|source| {
                 PinRegistryError::DecodeReplicationOrder {
                     order_id_hex: order_id_hex.clone(),
                     source,
                 }
             })?;
+        order.validate().map_err(|error| {
+            PinRegistryError::InvalidReplicationOrder {
+                order_id_hex: order_id_hex.clone(),
+                reason: error.to_string(),
+            }
+        })?;
+        let canonical = to_bytes(&order).map_err(|error| {
+            PinRegistryError::InvalidReplicationOrder {
+                order_id_hex: order_id_hex.clone(),
+                reason: format!("failed to re-encode payload: {error}"),
+            }
+        })?;
+        if canonical != record.canonical_order
+            || order.order_id != *record.order_id.as_bytes()
+            || order.manifest_digest != *record.manifest_digest.as_bytes()
+            || order.manifest_cid.as_slice() != record.manifest_root_cid.as_bytes()
+        {
+            return Err(PinRegistryError::InvalidReplicationOrder {
+                order_id_hex,
+                reason: "payload is non-canonical or substituted from its ledger record".to_owned(),
+            });
+        }
+        let target_replicas = usize::from(order.target_replicas);
+        if record.provider_completions.len() > target_replicas {
+            return Err(PinRegistryError::InvalidReplicationOrder {
+                order_id_hex,
+                reason: "provider completion count exceeds the redundancy target".to_owned(),
+            });
+        }
+        let mut completed_providers = HashSet::new();
+        for completion in &record.provider_completions {
+            if !order
+                .assignments
+                .iter()
+                .any(|assignment| assignment.provider_id == *completion.provider_id.as_bytes())
+                || !completed_providers.insert(*completion.provider_id.as_bytes())
+                || completion.completion_epoch < record.issued_epoch
+                || completion.completion_epoch > record.deadline_epoch
+            {
+                return Err(PinRegistryError::InvalidReplicationOrder {
+                    order_id_hex,
+                    reason: "provider completion state is duplicate, unassigned, or outside the ledger epoch window".to_owned(),
+                });
+            }
+        }
+        let lifecycle_consistent = match record.status {
+            ReplicationOrderStatus::Pending | ReplicationOrderStatus::Expired(_) => {
+                record.provider_completions.len() < target_replicas
+            }
+            ReplicationOrderStatus::Completed(epoch) => {
+                record.provider_completions.len() == target_replicas
+                    && record
+                        .provider_completions
+                        .last()
+                        .is_some_and(|completion| completion.completion_epoch == epoch)
+            }
+        };
+        if !lifecycle_consistent {
+            return Err(PinRegistryError::InvalidReplicationOrder {
+                order_id_hex,
+                reason: "lifecycle is inconsistent with provider completion state".to_owned(),
+            });
+        }
         let order_json = replication_order_to_json(&order).map_err(|source| {
             PinRegistryError::SerializeReplicationOrder {
                 order_id_hex: order_id_hex.clone(),
@@ -1632,7 +1722,20 @@ impl RegistryReplicationOrder {
             }
         })?;
 
-        let providers = order.providers.iter().map(hex::encode).collect();
+        let providers = order
+            .assignments
+            .iter()
+            .map(|assignment| hex::encode(assignment.provider_id))
+            .collect();
+        let provider_completions = record
+            .provider_completions
+            .iter()
+            .map(|completion| RegistryReplicationCompletion {
+                provider_hex: hex::encode(completion.provider_id.as_bytes()),
+                completed_by: completion.completed_by.to_string(),
+                completion_epoch: completion.completion_epoch,
+            })
+            .collect();
 
         let status = match record.status {
             ReplicationOrderStatus::Pending => ReplicationOrderStatusProjection::Pending,
@@ -1655,7 +1758,7 @@ impl RegistryReplicationOrder {
             canonical_order_b64: BASE64_STD.encode(&record.canonical_order),
             order_json,
             providers,
-            receipts: Vec::new(),
+            provider_completions,
         })
     }
 
@@ -1723,12 +1826,15 @@ impl RegistryReplicationOrder {
             Value::String(self.canonical_order_b64.clone()),
         );
         map.insert("order".into(), self.order_json.clone());
-        let receipts = self
-            .receipts
+        let provider_completions = self
+            .provider_completions
             .iter()
-            .map(RegistryReplicationReceipt::to_json)
+            .map(RegistryReplicationCompletion::to_json)
             .collect::<Result<Vec<_>, _>>()?;
-        map.insert("receipts".into(), Value::Array(receipts));
+        map.insert(
+            "provider_completions".into(),
+            Value::Array(provider_completions),
+        );
         let providers = self
             .providers
             .iter()
@@ -1739,21 +1845,20 @@ impl RegistryReplicationOrder {
     }
 }
 
-impl RegistryReplicationReceipt {
+impl RegistryReplicationCompletion {
     fn to_json(&self) -> Result<Value, json::Error> {
         let mut map = Map::new();
         map.insert(
             "provider_hex".into(),
             Value::String(self.provider_hex.clone()),
         );
-        map.insert("status".into(), Value::String(self.status_label.to_owned()));
-        map.insert("timestamp".into(), json::to_value(&self.timestamp)?);
         map.insert(
-            "por_sample_digest_hex".into(),
-            self.por_sample_digest_hex
-                .as_ref()
-                .map(|hex| Value::String(hex.clone()))
-                .unwrap_or(Value::Null),
+            "completed_by".into(),
+            Value::String(self.completed_by.clone()),
+        );
+        map.insert(
+            "completion_epoch".into(),
+            json::to_value(&self.completion_epoch)?,
         );
         Ok(Value::Object(map))
     }
@@ -1798,6 +1903,7 @@ fn pin_policy_to_json(policy: &PinPolicy) -> Result<Value, json::Error> {
 
 fn replication_order_to_json(order: &ReplicationOrderV1) -> Result<Value, json::Error> {
     let mut map = Map::new();
+    map.insert("version".into(), json::to_value(&order.version)?);
     map.insert(
         "order_id_hex".into(),
         Value::String(order.order_id.encode_hex::<String>()),
@@ -1806,17 +1912,62 @@ fn replication_order_to_json(order: &ReplicationOrderV1) -> Result<Value, json::
         "manifest_cid_b64".into(),
         Value::String(BASE64_STD.encode(&order.manifest_cid)),
     );
-    let providers = order
-        .providers
-        .iter()
-        .map(|provider| Value::String(provider.encode_hex::<String>()))
-        .collect();
-    map.insert("providers".into(), Value::Array(providers));
-    map.insert("redundancy".into(), json::to_value(&order.redundancy)?);
-    map.insert("deadline".into(), json::to_value(&order.deadline)?);
     map.insert(
-        "policy_hash_hex".into(),
-        Value::String(order.policy_hash.encode_hex::<String>()),
+        "manifest_digest_hex".into(),
+        Value::String(order.manifest_digest.encode_hex::<String>()),
+    );
+    map.insert(
+        "chunking_profile".into(),
+        Value::String(order.chunking_profile.clone()),
+    );
+    map.insert(
+        "target_replicas".into(),
+        json::to_value(&order.target_replicas)?,
+    );
+    let assignments = order
+        .assignments
+        .iter()
+        .map(|assignment| {
+            let mut assignment_json = Map::new();
+            assignment_json.insert(
+                "provider_id_hex".into(),
+                Value::String(assignment.provider_id.encode_hex::<String>()),
+            );
+            assignment_json.insert(
+                "slice_gib".into(),
+                json::to_value(&assignment.slice_gib)?,
+            );
+            assignment_json.insert(
+                "lane".into(),
+                assignment
+                    .lane
+                    .as_ref()
+                    .map(|lane| Value::String(lane.clone()))
+                    .unwrap_or(Value::Null),
+            );
+            Ok(Value::Object(assignment_json))
+        })
+        .collect::<Result<Vec<_>, json::Error>>()?;
+    map.insert("assignments".into(), Value::Array(assignments));
+    map.insert("issued_at".into(), json::to_value(&order.issued_at)?);
+    map.insert("deadline_at".into(), json::to_value(&order.deadline_at)?);
+    let mut sla = Map::new();
+    sla.insert(
+        "ingest_deadline_secs".into(),
+        json::to_value(&order.sla.ingest_deadline_secs)?,
+    );
+    sla.insert(
+        "min_availability_percent_milli".into(),
+        json::to_value(&order.sla.min_availability_percent_milli)?,
+    );
+    sla.insert(
+        "min_por_success_percent_milli".into(),
+        json::to_value(&order.sla.min_por_success_percent_milli)?,
+    );
+    map.insert("sla".into(), Value::Object(sla));
+    map.insert(
+        "metadata".into(),
+        json::to_value(&order.metadata)?,
     );
     Ok(Value::Object(map))
 }
@@ -1844,7 +1995,8 @@ mod tests {
             pin_registry::{
                 ChunkerProfileHandle, ManifestAliasBinding, ManifestDigest, ManifestRootCid,
                 PinManifestRecord, PinPolicy, PinStatus, ReplicationOrderId,
-                ReplicationOrderRecord, ReplicationOrderStatus, StorageClass,
+                ReplicationOrderCompletionRecord, ReplicationOrderRecord,
+                ReplicationOrderStatus, StorageClass,
             },
             pricing::ProviderCreditRecord,
         },
@@ -1852,8 +2004,9 @@ mod tests {
     use sorafs_manifest::{
         capacity::{
             CapacityDeclarationV1, ChunkerCommitmentV1, LaneCommitmentV1, PricingScheduleV1,
+            REPLICATION_ORDER_VERSION_V1, ReplicationAssignmentV1, ReplicationOrderSlaV1,
+            ReplicationOrderV1,
         },
-        pin_registry::ReplicationOrderV1,
         provider_advert::StakePointer,
     };
 
@@ -2192,12 +2345,32 @@ mod tests {
     fn registry_replication_order_serializes_providers() {
         let manifest_root_cid = fixture_manifest_root_cid();
         let order_payload = ReplicationOrderV1 {
+            version: REPLICATION_ORDER_VERSION_V1,
             order_id: [0x11; 32],
             manifest_cid: manifest_root_cid.as_bytes().to_vec(),
-            providers: vec![[0x22; 32], [0x33; 32]],
-            redundancy: 1,
-            deadline: 1_700_000_000,
-            policy_hash: [0x44; 32],
+            manifest_digest: [0x55; 32],
+            chunking_profile: "sorafs.sf1@1.0.0".to_owned(),
+            target_replicas: 1,
+            assignments: vec![
+                ReplicationAssignmentV1 {
+                    provider_id: [0x22; 32],
+                    slice_gib: 1,
+                    lane: None,
+                },
+                ReplicationAssignmentV1 {
+                    provider_id: [0x33; 32],
+                    slice_gib: 1,
+                    lane: None,
+                },
+            ],
+            issued_at: 1_699_999_000,
+            deadline_at: 1_700_000_000,
+            sla: ReplicationOrderSlaV1 {
+                ingest_deadline_secs: 1_000,
+                min_availability_percent_milli: 99_000,
+                min_por_success_percent_milli: 98_000,
+            },
+            metadata: Vec::new(),
         };
         let canonical = norito::to_bytes(&order_payload).expect("encode order");
         let public_key: PublicKey =
@@ -2209,11 +2382,16 @@ mod tests {
             order_id: ReplicationOrderId::new(order_payload.order_id),
             manifest_digest: ManifestDigest::new([0x55; 32]),
             manifest_root_cid,
-            issued_by: issuer,
+            issued_by: issuer.clone(),
             issued_epoch: 10,
             deadline_epoch: 20,
             canonical_order: canonical.clone(),
-            status: ReplicationOrderStatus::Pending,
+            provider_completions: vec![ReplicationOrderCompletionRecord {
+                provider_id: ProviderId::new(order_payload.assignments[0].provider_id),
+                completed_by: issuer,
+                completion_epoch: 15,
+            }],
+            status: ReplicationOrderStatus::Completed(15),
         };
 
         let order = RegistryReplicationOrder::from_store(&record.order_id, &record)
@@ -2225,10 +2403,22 @@ mod tests {
             .and_then(Value::as_array)
             .expect("providers array");
         assert_eq!(providers.len(), 2);
-        let expected0 = hex::encode(order_payload.providers[0]);
-        let expected1 = hex::encode(order_payload.providers[1]);
+        let expected0 = hex::encode(order_payload.assignments[0].provider_id);
+        let expected1 = hex::encode(order_payload.assignments[1].provider_id);
         assert_eq!(providers[0].as_str(), Some(expected0.as_str()));
         assert_eq!(providers[1].as_str(), Some(expected1.as_str()));
+        let completions = object
+            .get("provider_completions")
+            .and_then(Value::as_array)
+            .expect("provider completions array");
+        assert_eq!(completions.len(), 1);
+        assert_eq!(
+            completions[0]
+                .as_object()
+                .and_then(|completion| completion.get("provider_hex"))
+                .and_then(Value::as_str),
+            Some(expected0.as_str())
+        );
         assert_eq!(
             object
                 .get("canonical_order_b64")

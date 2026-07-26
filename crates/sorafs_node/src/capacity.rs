@@ -4,10 +4,14 @@ use std::collections::HashMap;
 
 use iroha_data_model::{
     metadata::Metadata,
-    sorafs::capacity::{CapacityDeclarationRecord, ProviderId},
+    sorafs::{
+        capacity::{CapacityDeclarationRecord, ProviderId},
+        pin_registry::{ReplicationOrderRecord, ReplicationOrderStatus},
+    },
 };
 use norito::{
-    decode_from_bytes,
+    core::DecodeLimits,
+    decode_from_bytes_with_limits,
     derive::{NoritoDeserialize, NoritoSerialize},
 };
 use sorafs_manifest::capacity::{
@@ -15,6 +19,72 @@ use sorafs_manifest::capacity::{
     ReplicationOrderSlaV1, ReplicationOrderV1,
 };
 use thiserror::Error;
+
+const CAPACITY_DECLARATION_MAX_CANONICAL_BYTES_V1: usize = 256 * 1024;
+const REPLICATION_ORDER_MAX_CANONICAL_BYTES_V1: usize = 256 * 1024;
+const CAPACITY_RECONCILIATION_MAX_CANONICAL_BYTES_V1: usize = 16 * 1024 * 1024;
+const CAPACITY_DECLARATION_DECODE_LIMITS_V1: DecodeLimits = DecodeLimits::new(
+    sorafs_manifest::capacity::MAX_CAPACITY_METADATA_VALUE_BYTES,
+    CAPACITY_DECLARATION_MAX_CANONICAL_BYTES_V1,
+    131_072,
+    CAPACITY_DECLARATION_MAX_CANONICAL_BYTES_V1 * 4,
+    32,
+);
+const REPLICATION_ORDER_DECODE_LIMITS_V1: DecodeLimits = DecodeLimits::new(
+    sorafs_manifest::capacity::MAX_CAPACITY_METADATA_VALUE_BYTES,
+    REPLICATION_ORDER_MAX_CANONICAL_BYTES_V1,
+    131_072,
+    REPLICATION_ORDER_MAX_CANONICAL_BYTES_V1 * 4,
+    32,
+);
+
+/// Finalized block identity bound to a capacity runtime projection.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize,
+)]
+pub struct CapacityFinalizedCursorV1 {
+    /// Finalized block height.
+    pub height: u64,
+    /// Exact finalized block hash at `height`.
+    pub block_hash: [u8; 32],
+}
+
+/// Exact finalized-ledger binding retained for a pending provider replication order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FinalizedReplicationBindingV1 {
+    /// Replication order identifier.
+    pub order_id: [u8; 32],
+    /// Provider identity selected from the configured capacity declaration.
+    pub provider_id: [u8; 32],
+    /// Canonical manifest CID committed by the replication order.
+    pub manifest_cid: Vec<u8>,
+    /// Canonical manifest digest committed by the replication order.
+    pub manifest_digest: [u8; 32],
+    /// Canonical chunker profile handle committed by the replication order.
+    pub chunker_handle: String,
+}
+
+/// Authority mode for installing one complete finalized capacity projection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CapacityReconcileModeV1 {
+    /// Advance from an already-installed finalized identity.
+    Advance,
+    /// Explicitly replace the complete projection, including after a fork or reseed.
+    FullRebuild,
+}
+
+/// Result of reconciling the embedded provider scheduler from finalized ledger state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CapacityReconciliationOutcomeV1 {
+    /// Finalized identity installed or confirmed.
+    pub finalized_cursor: CapacityFinalizedCursorV1,
+    /// Provider identity selected by configuration.
+    pub provider_id: ProviderId,
+    /// Pending orders targeting this provider.
+    pub pending_order_count: usize,
+    /// Whether the durable runtime projection changed.
+    pub changed: bool,
+}
 
 /// Manages the active capacity declaration and replication scheduling state for a provider.
 #[derive(Debug)]
@@ -47,16 +117,28 @@ impl CapacityManager {
     }
 
     /// Record a capacity declaration captured from the registry.
+    #[cfg(test)]
     pub(crate) fn record_declaration(
         &self,
         record: &CapacityDeclarationRecord,
     ) -> Result<(), CapacityError> {
-        let declaration: CapacityDeclarationV1 =
-            decode_from_bytes(&record.declaration).map_err(CapacityError::DecodeDeclaration)?;
+        let declaration = decode_from_bytes_with_limits::<CapacityDeclarationV1>(
+            &record.declaration,
+            CAPACITY_DECLARATION_DECODE_LIMITS_V1,
+        )
+        .map_err(CapacityError::DecodeDeclaration)?;
         declaration
             .validate()
             .map_err(CapacityError::ValidateDeclaration)?;
 
+        self.install_declaration(record, declaration)
+    }
+
+    fn install_declaration(
+        &self,
+        record: &CapacityDeclarationRecord,
+        declaration: CapacityDeclarationV1,
+    ) -> Result<(), CapacityError> {
         if declaration.provider_id != record.provider_id.0 {
             return Err(CapacityError::ProviderMismatch);
         }
@@ -102,6 +184,37 @@ impl CapacityManager {
         state.snapshot()
     }
 
+    /// Return the finalized block identity installed by the ledger reconciler.
+    pub fn finalized_cursor(&self) -> Result<Option<CapacityFinalizedCursorV1>, CapacityError> {
+        self.state
+            .read()
+            .map(|state| state.finalized_cursor)
+            .map_err(|_| CapacityError::StateLockPoisoned)
+    }
+
+    /// Return the exact retained binding for one pending finalized replication order.
+    pub fn finalized_replication_binding(
+        &self,
+        order_id: [u8; 32],
+    ) -> Result<Option<FinalizedReplicationBindingV1>, CapacityError> {
+        let state = self
+            .state
+            .read()
+            .map_err(|_| CapacityError::StateLockPoisoned)?;
+        let Some(active) = state.active.as_ref() else {
+            return Ok(None);
+        };
+        Ok(active.outstanding_orders.get(&order_id).map(|allocation| {
+            FinalizedReplicationBindingV1 {
+                order_id,
+                provider_id: active.provider_id,
+                manifest_cid: allocation.manifest_cid.clone(),
+                manifest_digest: allocation.manifest_digest,
+                chunker_handle: allocation.chunker_handle.clone(),
+            }
+        }))
+    }
+
     /// Reconstruct the active registry record for restart-time telemetry seeding.
     pub(crate) fn active_declaration_record(
         &self,
@@ -121,6 +234,156 @@ impl CapacityManager {
                 active.metadata.clone(),
             )
         }))
+    }
+
+    /// Atomically replace the local scheduling projection from one finalized ledger snapshot.
+    ///
+    /// Every supplied record is bounded, decoded, structurally validated, re-encoded, and
+    /// compared with its ledger summary before any state is changed. `Advance` is monotonic and
+    /// rejects same-height hash changes; only an explicit `FullRebuild` may replace a forked or
+    /// reseeded projection.
+    pub(crate) fn reconcile_finalized(
+        &self,
+        finalized_cursor: CapacityFinalizedCursorV1,
+        mode: CapacityReconcileModeV1,
+        provider_id: ProviderId,
+        declaration: Option<&CapacityDeclarationRecord>,
+        replication_orders: &[ReplicationOrderRecord],
+    ) -> Result<CapacityReconciliationOutcomeV1, CapacityError> {
+        validate_finalized_cursor(finalized_cursor)?;
+        if replication_orders.len() > self.entry_limit {
+            return Err(CapacityError::ResourceExhausted {
+                resource: "finalized_replication_orders",
+                limit: self.entry_limit,
+            });
+        }
+
+        let declaration_bytes = declaration.map_or(0, |record| record.declaration.len());
+        if declaration_bytes > CAPACITY_DECLARATION_MAX_CANONICAL_BYTES_V1 {
+            return Err(CapacityError::FinalizedSnapshotInvalid(format!(
+                "capacity declaration payload has {declaration_bytes} bytes; maximum is {CAPACITY_DECLARATION_MAX_CANONICAL_BYTES_V1}"
+            )));
+        }
+        let order_bytes = replication_orders.iter().try_fold(0usize, |total, record| {
+            if record.canonical_order.is_empty()
+                || record.canonical_order.len() > REPLICATION_ORDER_MAX_CANONICAL_BYTES_V1
+            {
+                return Err(CapacityError::FinalizedSnapshotInvalid(format!(
+                    "replication order {:?} payload has {} bytes; expected 1..={REPLICATION_ORDER_MAX_CANONICAL_BYTES_V1}",
+                    record.order_id.as_bytes(),
+                    record.canonical_order.len()
+                )));
+            }
+            total
+                .checked_add(record.canonical_order.len())
+                .ok_or_else(|| {
+                    CapacityError::FinalizedSnapshotInvalid(
+                        "replication order payload byte total overflowed".to_owned(),
+                    )
+                })
+        })?;
+        let canonical_bytes = declaration_bytes.checked_add(order_bytes).ok_or_else(|| {
+            CapacityError::FinalizedSnapshotInvalid(
+                "capacity reconciliation payload byte total overflowed".to_owned(),
+            )
+        })?;
+        if canonical_bytes > CAPACITY_RECONCILIATION_MAX_CANONICAL_BYTES_V1 {
+            return Err(CapacityError::FinalizedSnapshotInvalid(format!(
+                "capacity reconciliation payloads total {canonical_bytes} bytes; maximum is {CAPACITY_RECONCILIATION_MAX_CANONICAL_BYTES_V1}"
+            )));
+        }
+
+        let candidate = CapacityManager::with_entry_limit(self.entry_limit);
+        if let Some(record) = declaration {
+            let declaration = validate_finalized_declaration(provider_id, record)?;
+            candidate.install_declaration(record, declaration)?;
+        }
+
+        let mut decoded_orders = Vec::new();
+        decoded_orders
+            .try_reserve_exact(replication_orders.len())
+            .map_err(|_| CapacityError::ResourceExhausted {
+                resource: "finalized_replication_orders",
+                limit: self.entry_limit,
+            })?;
+        for record in replication_orders {
+            decoded_orders.push(validate_finalized_replication_order(record)?);
+        }
+        decoded_orders.sort_by_key(|(record, _)| *record.order_id.as_bytes());
+        if decoded_orders
+            .windows(2)
+            .any(|pair| pair[0].0.order_id == pair[1].0.order_id)
+        {
+            return Err(CapacityError::FinalizedSnapshotInvalid(
+                "finalized replication-order snapshot contains duplicate identifiers".to_owned(),
+            ));
+        }
+
+        let mut pending_order_count = 0usize;
+        for (record, order) in decoded_orders {
+            if !matches!(record.status, ReplicationOrderStatus::Pending) {
+                continue;
+            }
+            let targets_provider = order
+                .assignments
+                .iter()
+                .any(|assignment| assignment.provider_id == *provider_id.as_bytes());
+            if !targets_provider {
+                continue;
+            }
+            if record.provider_completion(provider_id).is_some() {
+                continue;
+            }
+            if declaration.is_none() {
+                return Err(CapacityError::FinalizedSnapshotInvalid(format!(
+                    "pending replication order {:?} targets provider without a finalized capacity declaration",
+                    record.order_id.as_bytes()
+                )));
+            }
+            candidate.schedule_order(&order)?.ok_or_else(|| {
+                CapacityError::FinalizedSnapshotInvalid(format!(
+                    "pending replication order {:?} did not produce the expected provider assignment",
+                    record.order_id.as_bytes()
+                ))
+            })?;
+            pending_order_count = pending_order_count.checked_add(1).ok_or_else(|| {
+                CapacityError::FinalizedSnapshotInvalid(
+                    "pending provider order count overflowed".to_owned(),
+                )
+            })?;
+        }
+
+        let candidate_active = candidate.checkpoint()?.active;
+        let mut state = self
+            .state
+            .write()
+            .map_err(|_| CapacityError::StateLockPoisoned)?;
+        validate_reconciliation_transition(
+            state.finalized_cursor,
+            finalized_cursor,
+            mode,
+            state
+                .active
+                .as_ref()
+                .map(ActiveCapacity::checkpoint)
+                .as_ref(),
+            candidate_active.as_ref(),
+        )?;
+
+        let changed = state.finalized_cursor != Some(finalized_cursor)
+            || state.active.as_ref().map(ActiveCapacity::checkpoint) != candidate_active;
+        if changed {
+            state.active = candidate_active
+                .map(|active| ActiveCapacity::restore_checkpoint(active, self.entry_limit))
+                .transpose()?;
+            state.finalized_cursor = Some(finalized_cursor);
+        }
+        Ok(CapacityReconciliationOutcomeV1 {
+            finalized_cursor,
+            provider_id,
+            pending_order_count,
+            changed,
+        })
     }
 
     /// Schedule the assignments from a replication order if it targets the active provider.
@@ -161,6 +424,7 @@ impl CapacityManager {
     }
 
     /// Release the reservation for a completed replication order.
+    #[cfg(test)]
     pub(crate) fn complete_order(
         &self,
         order_id: [u8; 32],
@@ -186,6 +450,7 @@ impl CapacityManager {
             .read()
             .map_err(|_| CapacityError::StateLockPoisoned)?;
         Ok(CapacityRuntimeCheckpointV1 {
+            finalized_cursor: state.finalized_cursor,
             active: state.active.as_ref().map(ActiveCapacity::checkpoint),
         })
     }
@@ -195,6 +460,9 @@ impl CapacityManager {
         &self,
         checkpoint: CapacityRuntimeCheckpointV1,
     ) -> Result<(), CapacityError> {
+        if let Some(cursor) = checkpoint.finalized_cursor {
+            validate_finalized_cursor(cursor)?;
+        }
         let active = checkpoint
             .active
             .map(|active| ActiveCapacity::restore_checkpoint(active, self.entry_limit))
@@ -203,33 +471,175 @@ impl CapacityManager {
             .state
             .write()
             .map_err(|_| CapacityError::StateLockPoisoned)?;
+        state.finalized_cursor = checkpoint.finalized_cursor;
         state.active = active;
         Ok(())
     }
 }
 
+fn validate_finalized_cursor(cursor: CapacityFinalizedCursorV1) -> Result<(), CapacityError> {
+    if cursor.height == 0 || cursor.block_hash == [0; 32] {
+        return Err(CapacityError::FinalizedSnapshotInvalid(
+            "capacity finalized cursor requires a non-zero height and block hash".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_finalized_declaration(
+    provider_id: ProviderId,
+    record: &CapacityDeclarationRecord,
+) -> Result<CapacityDeclarationV1, CapacityError> {
+    if record.provider_id != provider_id {
+        return Err(CapacityError::FinalizedSnapshotInvalid(
+            "capacity declaration does not match the configured provider identity".to_owned(),
+        ));
+    }
+    if record.declaration.is_empty()
+        || record.declaration.len() > CAPACITY_DECLARATION_MAX_CANONICAL_BYTES_V1
+    {
+        return Err(CapacityError::FinalizedSnapshotInvalid(format!(
+            "capacity declaration payload has {} bytes; expected 1..={CAPACITY_DECLARATION_MAX_CANONICAL_BYTES_V1}",
+            record.declaration.len()
+        )));
+    }
+    let declaration = decode_from_bytes_with_limits::<CapacityDeclarationV1>(
+        &record.declaration,
+        CAPACITY_DECLARATION_DECODE_LIMITS_V1,
+    )
+    .map_err(|error| {
+        CapacityError::FinalizedSnapshotInvalid(format!(
+            "capacity declaration payload failed bounded decode: {error}"
+        ))
+    })?;
+    declaration.validate().map_err(|error| {
+        CapacityError::FinalizedSnapshotInvalid(format!(
+            "capacity declaration payload failed validation: {error}"
+        ))
+    })?;
+    let canonical = norito::to_bytes(&declaration).map_err(|error| {
+        CapacityError::FinalizedSnapshotInvalid(format!(
+            "capacity declaration payload failed canonical encoding: {error}"
+        ))
+    })?;
+    if canonical != record.declaration
+        || declaration.provider_id != *record.provider_id.as_bytes()
+        || declaration.committed_capacity_gib != record.committed_capacity_gib
+        || declaration.valid_from != record.valid_from_epoch
+        || declaration.valid_until != record.valid_until_epoch
+        || record.valid_from_epoch > record.valid_until_epoch
+    {
+        return Err(CapacityError::FinalizedSnapshotInvalid(
+            "capacity declaration payload is non-canonical or substituted from its ledger summary"
+                .to_owned(),
+        ));
+    }
+    Ok(declaration)
+}
+
+fn validate_finalized_replication_order(
+    record: &ReplicationOrderRecord,
+) -> Result<(&ReplicationOrderRecord, ReplicationOrderV1), CapacityError> {
+    if record.deadline_epoch <= record.issued_epoch {
+        return Err(CapacityError::FinalizedSnapshotInvalid(format!(
+            "replication order {:?} has a non-monotonic ledger epoch window",
+            record.order_id.as_bytes()
+        )));
+    }
+    let order = decode_from_bytes_with_limits::<ReplicationOrderV1>(
+        &record.canonical_order,
+        REPLICATION_ORDER_DECODE_LIMITS_V1,
+    )
+    .map_err(|error| {
+        CapacityError::FinalizedSnapshotInvalid(format!(
+            "replication order {:?} failed bounded decode: {error}",
+            record.order_id.as_bytes()
+        ))
+    })?;
+    order.validate().map_err(|error| {
+        CapacityError::FinalizedSnapshotInvalid(format!(
+            "replication order {:?} failed validation: {error}",
+            record.order_id.as_bytes()
+        ))
+    })?;
+    let canonical = norito::to_bytes(&order).map_err(|error| {
+        CapacityError::FinalizedSnapshotInvalid(format!(
+            "replication order {:?} failed canonical encoding: {error}",
+            record.order_id.as_bytes()
+        ))
+    })?;
+    if canonical != record.canonical_order
+        || order.order_id != *record.order_id.as_bytes()
+        || order.manifest_digest != *record.manifest_digest.as_bytes()
+        || order.manifest_cid.as_slice() != record.manifest_root_cid.as_bytes()
+    {
+        return Err(CapacityError::FinalizedSnapshotInvalid(format!(
+            "replication order {:?} is non-canonical or substituted from its ledger summary",
+            record.order_id.as_bytes()
+        )));
+    }
+    Ok((record, order))
+}
+
+fn validate_reconciliation_transition(
+    current: Option<CapacityFinalizedCursorV1>,
+    candidate: CapacityFinalizedCursorV1,
+    mode: CapacityReconcileModeV1,
+    current_active: Option<&ActiveCapacityCheckpointV1>,
+    candidate_active: Option<&ActiveCapacityCheckpointV1>,
+) -> Result<(), CapacityError> {
+    if matches!(mode, CapacityReconcileModeV1::FullRebuild) {
+        return Ok(());
+    }
+    let Some(current) = current else {
+        return Err(CapacityError::FinalizedFullRebuildRequired);
+    };
+    if candidate.height < current.height {
+        return Err(CapacityError::StaleFinalizedCursor {
+            current_height: current.height,
+            candidate_height: candidate.height,
+        });
+    }
+    if candidate.height == current.height {
+        if candidate.block_hash != current.block_hash {
+            return Err(CapacityError::FinalizedFork {
+                height: candidate.height,
+            });
+        }
+        if candidate_active != current_active {
+            return Err(CapacityError::FinalizedSnapshotChanged {
+                height: candidate.height,
+            });
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug, Default)]
 struct CapacityState {
+    finalized_cursor: Option<CapacityFinalizedCursorV1>,
     active: Option<ActiveCapacity>,
 }
 
-#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct CapacityChunkerCheckpointV1 {
     handle: String,
     committed: u64,
     allocated: u64,
 }
 
-#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct CapacityLaneCheckpointV1 {
     lane_id: String,
     max: u64,
     allocated: u64,
 }
 
-#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct CapacityOrderCheckpointV1 {
     order_id: [u8; 32],
+    manifest_cid: Vec<u8>,
+    manifest_digest: [u8; 32],
     slice_gib: u64,
     chunker_handle: String,
     lane: Option<String>,
@@ -237,7 +647,7 @@ struct CapacityOrderCheckpointV1 {
     deadline_at: u64,
 }
 
-#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ActiveCapacityCheckpointV1 {
     declaration_payload: Vec<u8>,
     provider_id: [u8; 32],
@@ -251,8 +661,9 @@ struct ActiveCapacityCheckpointV1 {
 }
 
 /// Canonical restart snapshot for capacity declarations and outstanding reservations.
-#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub(crate) struct CapacityRuntimeCheckpointV1 {
+    finalized_cursor: Option<CapacityFinalizedCursorV1>,
     active: Option<ActiveCapacityCheckpointV1>,
 }
 
@@ -339,6 +750,8 @@ impl ActiveCapacity {
             .iter()
             .map(|(order_id, allocation)| CapacityOrderCheckpointV1 {
                 order_id: *order_id,
+                manifest_cid: allocation.manifest_cid.clone(),
+                manifest_digest: allocation.manifest_digest,
                 slice_gib: allocation.slice_gib,
                 chunker_handle: allocation.chunker_handle.clone(),
                 lane: allocation.lane.clone(),
@@ -383,12 +796,15 @@ impl ActiveCapacity {
                 "capacity declaration totals or validity window are invalid".to_owned(),
             ));
         }
-        let declaration: CapacityDeclarationV1 = decode_from_bytes(&checkpoint.declaration_payload)
-            .map_err(|err| {
-                CapacityError::InvalidCheckpoint(format!(
-                    "capacity declaration payload cannot be decoded: {err}"
-                ))
-            })?;
+        let declaration = decode_from_bytes_with_limits::<CapacityDeclarationV1>(
+            &checkpoint.declaration_payload,
+            CAPACITY_DECLARATION_DECODE_LIMITS_V1,
+        )
+        .map_err(|err| {
+            CapacityError::InvalidCheckpoint(format!(
+                "capacity declaration payload cannot be bounded-decoded: {err}"
+            ))
+        })?;
         declaration.validate().map_err(|err| {
             CapacityError::InvalidCheckpoint(format!(
                 "capacity declaration payload is invalid: {err}"
@@ -487,7 +903,11 @@ impl ActiveCapacity {
         let mut allocated_by_chunker = HashMap::<String, u64>::new();
         let mut allocated_by_lane = HashMap::<String, u64>::new();
         for order in checkpoint.outstanding_orders {
-            if order.slice_gib == 0
+            if order.order_id == [0; 32]
+                || order.slice_gib == 0
+                || order.manifest_cid.is_empty()
+                || order.manifest_cid.len() > 256
+                || order.manifest_digest == [0; 32]
                 || previous_order.is_some_and(|previous| previous >= order.order_id)
                 || !chunkers.contains_key(&order.chunker_handle)
                 || order
@@ -522,6 +942,8 @@ impl ActiveCapacity {
             outstanding_orders.insert(
                 order.order_id,
                 OrderAllocation {
+                    manifest_cid: order.manifest_cid,
+                    manifest_digest: order.manifest_digest,
                     slice_gib: order.slice_gib,
                     chunker_handle: order.chunker_handle,
                     lane: order.lane,
@@ -667,6 +1089,8 @@ impl ActiveCapacity {
         self.outstanding_orders.insert(
             order.order_id,
             OrderAllocation {
+                manifest_cid: order.manifest_cid.clone(),
+                manifest_digest: order.manifest_digest,
                 slice_gib,
                 chunker_handle: order.chunking_profile.clone(),
                 lane: assignment.lane.clone(),
@@ -678,6 +1102,7 @@ impl ActiveCapacity {
         plan
     }
 
+    #[cfg(test)]
     fn complete_order(&mut self, order_id: [u8; 32]) -> Result<ReplicationRelease, CapacityError> {
         let allocation = self
             .outstanding_orders
@@ -808,6 +1233,7 @@ impl ChunkerAllocation {
         Ok(())
     }
 
+    #[cfg(test)]
     fn release(&mut self, slice_gib: u64) -> Result<(), CapacityError> {
         self.allocated = self
             .allocated
@@ -850,6 +1276,7 @@ impl LaneAllocation {
         Ok(())
     }
 
+    #[cfg(test)]
     fn release(&mut self, slice_gib: u64) -> Result<(), CapacityError> {
         self.allocated = self
             .allocated
@@ -865,6 +1292,8 @@ impl LaneAllocation {
 
 #[derive(Debug, Clone)]
 struct OrderAllocation {
+    manifest_cid: Vec<u8>,
+    manifest_digest: [u8; 32],
     slice_gib: u64,
     chunker_handle: String,
     lane: Option<String>,
@@ -1037,6 +1466,36 @@ pub enum CapacityError {
         /// Committed GiB recorded in the registry snapshot.
         record: u64,
     },
+    /// A finalized ledger snapshot was malformed, non-canonical, substituted, or unbounded.
+    #[error("invalid finalized capacity snapshot: {0}")]
+    FinalizedSnapshotInvalid(String),
+    /// The first reconciliation must explicitly install a complete snapshot.
+    #[error("capacity reconciliation requires an explicit full rebuild")]
+    FinalizedFullRebuildRequired,
+    /// An incremental reconciliation attempted to move behind the installed finalized height.
+    #[error(
+        "stale capacity finalized cursor: current height {current_height}, candidate height {candidate_height}"
+    )]
+    StaleFinalizedCursor {
+        /// Currently installed finalized height.
+        current_height: u64,
+        /// Candidate finalized height.
+        candidate_height: u64,
+    },
+    /// The block hash changed at an already-installed finalized height.
+    #[error("capacity finalized fork detected at height {height}; full rebuild required")]
+    FinalizedFork {
+        /// Conflicting finalized height.
+        height: u64,
+    },
+    /// Snapshot content changed while its finalized identity stayed the same.
+    #[error(
+        "capacity finalized snapshot changed at unchanged height {height}; full rebuild required"
+    )]
+    FinalizedSnapshotChanged {
+        /// Finalized height whose content changed.
+        height: u64,
+    },
     /// A scheduling request was made without an active declaration.
     #[error("no active capacity declaration recorded")]
     NoActiveDeclaration,
@@ -1110,7 +1569,16 @@ pub enum CapacityError {
 
 #[cfg(test)]
 mod tests {
-    use iroha_data_model::sorafs::prelude::ProviderId;
+    use iroha_data_model::{
+        account::AccountId,
+        sorafs::{
+            pin_registry::{
+                ManifestDigest, ManifestRootCid, ReplicationOrderCompletionRecord,
+                ReplicationOrderId, ReplicationOrderRecord, ReplicationOrderStatus,
+            },
+            prelude::ProviderId,
+        },
+    };
     use norito::to_bytes;
     use sorafs_manifest::capacity::{
         CAPACITY_DECLARATION_VERSION_V1, REPLICATION_ORDER_VERSION_V1, ReplicationOrderSlaV1,
@@ -1161,7 +1629,7 @@ mod tests {
         ReplicationOrderV1 {
             version: REPLICATION_ORDER_VERSION_V1,
             order_id: [0x33; 32],
-            manifest_cid: vec![0x44; 32],
+            manifest_cid: sorafs_manifest::canonical_manifest_root_cid([0x44; 32]),
             manifest_digest: [0x55; 32],
             chunking_profile: "sorafs.sf1@1.0.0".into(),
             target_replicas: 1,
@@ -1178,6 +1646,35 @@ mod tests {
                 min_por_success_percent_milli: 97000,
             },
             metadata: Vec::new(),
+        }
+    }
+
+    fn make_order_record(
+        order: &ReplicationOrderV1,
+        status: ReplicationOrderStatus,
+    ) -> ReplicationOrderRecord {
+        ReplicationOrderRecord {
+            order_id: ReplicationOrderId::new(order.order_id),
+            manifest_digest: ManifestDigest::new(order.manifest_digest),
+            manifest_root_cid: ManifestRootCid::try_from_slice(&order.manifest_cid)
+                .expect("canonical manifest root CID"),
+            issued_by: AccountId::new(
+                "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C"
+                    .parse()
+                    .expect("public key"),
+            ),
+            issued_epoch: 5,
+            deadline_epoch: 6,
+            canonical_order: to_bytes(order).expect("encode replication order"),
+            provider_completions: Vec::new(),
+            status,
+        }
+    }
+
+    fn finalized_cursor(height: u64, byte: u8) -> CapacityFinalizedCursorV1 {
+        CapacityFinalizedCursorV1 {
+            height,
+            block_hash: [byte; 32],
         }
     }
 
@@ -1402,5 +1899,171 @@ mod tests {
                 .expect_err("corrupt declaration must fail"),
             CapacityError::InvalidCheckpoint(_)
         ));
+    }
+
+    #[test]
+    fn finalized_reconciliation_is_atomic_idempotent_and_restart_safe() {
+        let (manager, record) = make_record_and_manager();
+        let order = make_order(100);
+        let order_record = make_order_record(&order, ReplicationOrderStatus::Pending);
+        let cursor = finalized_cursor(7, 0xA7);
+
+        let installed = manager
+            .reconcile_finalized(
+                cursor,
+                CapacityReconcileModeV1::FullRebuild,
+                record.provider_id,
+                Some(&record),
+                std::slice::from_ref(&order_record),
+            )
+            .expect("install finalized capacity projection");
+        assert!(installed.changed);
+        assert_eq!(installed.pending_order_count, 1);
+        assert_eq!(manager.usage_snapshot().allocated_total_gib, 100);
+
+        let duplicate = manager
+            .reconcile_finalized(
+                cursor,
+                CapacityReconcileModeV1::Advance,
+                record.provider_id,
+                Some(&record),
+                std::slice::from_ref(&order_record),
+            )
+            .expect("duplicate finalized projection is idempotent");
+        assert!(!duplicate.changed);
+
+        let checkpoint = manager.checkpoint().expect("checkpoint projection");
+        let restarted = CapacityManager::with_entry_limit(8);
+        restarted
+            .restore_checkpoint(checkpoint)
+            .expect("restore finalized projection");
+        assert_eq!(restarted.finalized_cursor().expect("cursor"), Some(cursor));
+        assert_eq!(restarted.usage_snapshot().allocated_total_gib, 100);
+        let after_restart = restarted
+            .reconcile_finalized(
+                cursor,
+                CapacityReconcileModeV1::Advance,
+                record.provider_id,
+                Some(&record),
+                &[order_record],
+            )
+            .expect("same finalized projection after restart");
+        assert!(!after_restart.changed);
+    }
+
+    #[test]
+    fn finalized_reconciliation_releases_only_the_completed_provider_assignment() {
+        let (manager, declaration) = make_record_and_manager();
+        let mut order = make_order(100);
+        order.target_replicas = 2;
+        order.assignments.push(ReplicationAssignmentV1 {
+            provider_id: [0x22; 32],
+            slice_gib: 100,
+            lane: Some("global".into()),
+        });
+        order.validate().expect("valid multi-provider order");
+
+        let mut order_record = make_order_record(&order, ReplicationOrderStatus::Pending);
+        order_record
+            .provider_completions
+            .push(ReplicationOrderCompletionRecord {
+                provider_id: declaration.provider_id,
+                completed_by: order_record.issued_by.clone(),
+                completion_epoch: 6,
+            });
+
+        let outcome = manager
+            .reconcile_finalized(
+                finalized_cursor(8, 0xA8),
+                CapacityReconcileModeV1::FullRebuild,
+                declaration.provider_id,
+                Some(&declaration),
+                &[order_record],
+            )
+            .expect("install partially completed finalized order");
+
+        assert_eq!(outcome.pending_order_count, 0);
+        assert_eq!(manager.usage_snapshot().allocated_total_gib, 0);
+    }
+
+    #[test]
+    fn finalized_reconciliation_rejects_forks_without_explicit_full_rebuild() {
+        let (manager, record) = make_record_and_manager();
+        let initial = finalized_cursor(9, 0x19);
+        manager
+            .reconcile_finalized(
+                initial,
+                CapacityReconcileModeV1::FullRebuild,
+                record.provider_id,
+                Some(&record),
+                &[],
+            )
+            .expect("install initial projection");
+
+        let fork = finalized_cursor(9, 0x29);
+        assert!(matches!(
+            manager
+                .reconcile_finalized(
+                    fork,
+                    CapacityReconcileModeV1::Advance,
+                    record.provider_id,
+                    Some(&record),
+                    &[],
+                )
+                .expect_err("same-height fork must fail closed"),
+            CapacityError::FinalizedFork { height: 9 }
+        ));
+        assert_eq!(manager.finalized_cursor().expect("cursor"), Some(initial));
+
+        let rebuilt = manager
+            .reconcile_finalized(
+                fork,
+                CapacityReconcileModeV1::FullRebuild,
+                record.provider_id,
+                Some(&record),
+                &[],
+            )
+            .expect("operator-authorized full rebuild accepts fork replacement");
+        assert!(rebuilt.changed);
+        assert_eq!(manager.finalized_cursor().expect("cursor"), Some(fork));
+
+        assert!(matches!(
+            manager
+                .reconcile_finalized(
+                    finalized_cursor(8, 0x38),
+                    CapacityReconcileModeV1::Advance,
+                    record.provider_id,
+                    Some(&record),
+                    &[],
+                )
+                .expect_err("stale cursor must fail closed"),
+            CapacityError::StaleFinalizedCursor {
+                current_height: 9,
+                candidate_height: 8
+            }
+        ));
+    }
+
+    #[test]
+    fn finalized_reconciliation_rejects_substituted_records_without_mutation() {
+        let (manager, record) = make_record_and_manager();
+        let order = make_order(100);
+        let mut substituted = make_order_record(&order, ReplicationOrderStatus::Pending);
+        substituted.manifest_digest = ManifestDigest::new([0x99; 32]);
+
+        assert!(matches!(
+            manager
+                .reconcile_finalized(
+                    finalized_cursor(11, 0x4B),
+                    CapacityReconcileModeV1::FullRebuild,
+                    record.provider_id,
+                    Some(&record),
+                    &[substituted],
+                )
+                .expect_err("substituted order summary must fail closed"),
+            CapacityError::FinalizedSnapshotInvalid(_)
+        ));
+        assert_eq!(manager.finalized_cursor().expect("cursor"), None);
+        assert!(manager.usage_snapshot().provider_id.is_none());
     }
 }

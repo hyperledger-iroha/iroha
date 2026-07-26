@@ -35,8 +35,8 @@ fn run() -> Result<(), String> {
     };
 
     match command.as_str() {
-        "capacity-declaration-request" => run_capacity_declaration_request(args),
-        "replication-order-request" => run_replication_order_request(args),
+        "capacity-declaration" => run_capacity_declaration(args),
+        "replication-order" => run_replication_order(args),
         "complete-order" => run_complete_order(args),
         "expire-order" => run_expire_order(args),
         "help" | "--help" | "-h" => {
@@ -51,32 +51,32 @@ fn usage() -> String {
     r#"usage: sorafs_tx_stdin_builder <subcommand> [options]
 
 Subcommands:
-  capacity-declaration-request  Convert a declaration request JSON into `iroha ledger transaction stdin` JSON.
-  replication-order-request     Convert a replication-order request JSON into `iroha ledger transaction stdin` JSON.
+  capacity-declaration  Convert a canonical declaration summary into `iroha ledger transaction stdin` JSON.
+  replication-order     Convert a canonical replication-order summary into `iroha ledger transaction stdin` JSON.
   complete-order                Emit a completion instruction for an existing replication order.
   expire-order                  Emit a deadline-bound expiration instruction for a pending replication order.
 
 Options:
-  capacity-declaration-request --request=<path>
-  replication-order-request --request=<path> --issued-epoch=<u64> --deadline-epoch=<u64>
-  complete-order --order-id-hex=<64-hex> --completion-epoch=<u64>
+  capacity-declaration --summary=<path>
+  replication-order --summary=<path> --issued-epoch=<u64> --deadline-epoch=<u64>
+  complete-order --order-id-hex=<64-hex> --provider-id-hex=<64-hex> --completion-epoch=<u64>
   expire-order --order-id-hex=<64-hex> --expiration-epoch=<positive-u64>
 "#
     .to_owned()
 }
 
-fn run_capacity_declaration_request(args: impl Iterator<Item = String>) -> Result<(), String> {
-    let mut request_path = None;
+fn run_capacity_declaration(args: impl Iterator<Item = String>) -> Result<(), String> {
+    let mut summary_path = None;
     for arg in args {
         let (key, value) = split_option(&arg)?;
         match key {
-            "--request" => set_once(&mut request_path, value.to_owned(), key)?,
+            "--summary" => set_once(&mut summary_path, value.to_owned(), key)?,
             _ => return Err(format!("unknown option `{key}`")),
         }
     }
 
-    let request = read_json_map(request_path.as_deref(), "declaration request")?;
-    let declaration_b64 = require_string(&request, "declaration_b64")?;
+    let summary = read_json_map(summary_path.as_deref(), "declaration summary")?;
+    let declaration_b64 = require_string(&summary, "declaration_b64")?;
     let declaration_bytes = BASE64_STD
         .decode(declaration_b64.as_bytes())
         .map_err(|err| format!("invalid base64 in `declaration_b64`: {err}"))?;
@@ -88,14 +88,14 @@ fn run_capacity_declaration_request(args: impl Iterator<Item = String>) -> Resul
 
     let canonical_bytes = to_bytes(&declaration)
         .map_err(|err| format!("failed to re-encode capacity declaration: {err}"))?;
-    let metadata = metadata_from_request(&request)?;
+    let metadata = metadata_from_summary(&summary)?;
     let record = CapacityDeclarationRecord::new(
         ProviderId::new(declaration.provider_id),
         canonical_bytes,
         declaration.committed_capacity_gib,
-        require_u64(&request, "registered_epoch")?,
-        require_u64(&request, "valid_from_epoch")?,
-        require_u64(&request, "valid_until_epoch")?,
+        require_u64(&summary, "registered_epoch")?,
+        require_u64(&summary, "valid_from_epoch")?,
+        require_u64(&summary, "valid_until_epoch")?,
         metadata,
     );
 
@@ -104,23 +104,23 @@ fn run_capacity_declaration_request(args: impl Iterator<Item = String>) -> Resul
     )))
 }
 
-fn run_replication_order_request(args: impl Iterator<Item = String>) -> Result<(), String> {
-    let mut request_path = None;
+fn run_replication_order(args: impl Iterator<Item = String>) -> Result<(), String> {
+    let mut summary_path = None;
     let mut issued_epoch = None;
     let mut deadline_epoch = None;
 
     for arg in args {
         let (key, value) = split_option(&arg)?;
         match key {
-            "--request" => set_once(&mut request_path, value.to_owned(), key)?,
+            "--summary" => set_once(&mut summary_path, value.to_owned(), key)?,
             "--issued-epoch" => set_once(&mut issued_epoch, parse_u64(value, key)?, key)?,
             "--deadline-epoch" => set_once(&mut deadline_epoch, parse_u64(value, key)?, key)?,
             _ => return Err(format!("unknown option `{key}`")),
         }
     }
 
-    let request = read_json_map(request_path.as_deref(), "replication order request")?;
-    let order_b64 = require_string(&request, "order_b64")?;
+    let summary = read_json_map(summary_path.as_deref(), "replication order summary")?;
+    let order_b64 = require_string(&summary, "replication_order_b64")?;
     let order_bytes = BASE64_STD
         .decode(order_b64.as_bytes())
         .map_err(|err| format!("invalid base64 in `order_b64`: {err}"))?;
@@ -146,12 +146,14 @@ fn run_replication_order_request(args: impl Iterator<Item = String>) -> Result<(
 
 fn run_complete_order(args: impl Iterator<Item = String>) -> Result<(), String> {
     let mut order_id_hex = None;
+    let mut provider_id_hex = None;
     let mut completion_epoch = None;
 
     for arg in args {
         let (key, value) = split_option(&arg)?;
         match key {
             "--order-id-hex" => set_once(&mut order_id_hex, value.to_owned(), key)?,
+            "--provider-id-hex" => set_once(&mut provider_id_hex, value.to_owned(), key)?,
             "--completion-epoch" => set_once(&mut completion_epoch, parse_u64(value, key)?, key)?,
             _ => return Err(format!("unknown option `{key}`")),
         }
@@ -159,11 +161,17 @@ fn run_complete_order(args: impl Iterator<Item = String>) -> Result<(), String> 
 
     let order_id_hex = order_id_hex.ok_or_else(|| "missing `--order-id-hex=<hex>`".to_owned())?;
     let order_id = parse_hex_32(&order_id_hex, "order_id_hex")?;
+    let provider_id_hex =
+        provider_id_hex.ok_or_else(|| "missing `--provider-id-hex=<hex>`".to_owned())?;
+    let provider_id = parse_hex_32(&provider_id_hex, "provider_id_hex")?;
     let completion_epoch =
         completion_epoch.ok_or_else(|| "missing `--completion-epoch=<u64>`".to_owned())?;
 
-    let instruction =
-        CompleteReplicationOrder::new(ReplicationOrderId::new(order_id), completion_epoch);
+    let instruction = CompleteReplicationOrder::new(
+        ReplicationOrderId::new(order_id),
+        ProviderId::new(provider_id),
+        completion_epoch,
+    );
 
     print_instruction_json(InstructionBox::from(instruction))
 }
@@ -217,7 +225,7 @@ fn set_once<T>(slot: &mut Option<T>, value: T, key: &str) -> Result<(), String> 
 }
 
 fn read_json_map(path: Option<&str>, label: &str) -> Result<Map, String> {
-    let path = path.ok_or_else(|| format!("missing `--request=<path>` for {label}"))?;
+    let path = path.ok_or_else(|| format!("missing `--summary=<path>` for {label}"))?;
     let bytes =
         fs::read(path).map_err(|err| format!("failed to read `{path}` for {label}: {err}"))?;
     let value: Value = json::from_slice(&bytes)
@@ -301,27 +309,19 @@ fn require_lowercase_fixed_hex(
     }
 }
 
-fn metadata_from_request(request: &Map) -> Result<Metadata, String> {
+fn metadata_from_summary(summary: &Map) -> Result<Metadata, String> {
     let mut metadata = Metadata::default();
-    let Some(entries) = request.get("metadata") else {
+    let Some(entries) = summary.get("metadata") else {
         return Ok(metadata);
     };
-    let array = entries
-        .as_array()
-        .ok_or_else(|| "`metadata` must be an array".to_owned())?;
+    let object = entries
+        .as_object()
+        .ok_or_else(|| "`metadata` must be an object".to_owned())?;
 
-    for (index, entry) in array.iter().enumerate() {
-        let object = entry
-            .as_object()
-            .ok_or_else(|| format!("metadata[{index}] must be an object"))?;
-        let key = require_string(object, "key")?;
-        let value = object
-            .get("value")
-            .cloned()
-            .ok_or_else(|| format!("metadata[{index}] is missing `value`"))?;
-        let name = Name::from_str(key)
-            .map_err(|err| format!("metadata[{index}].key `{key}` is invalid: {err}"))?;
-        metadata.insert(name, Json::new(value));
+    for (key, value) in object {
+        let name =
+            Name::from_str(key).map_err(|err| format!("metadata key `{key}` is invalid: {err}"))?;
+        metadata.insert(name, Json::new(value.clone()));
     }
 
     Ok(metadata)

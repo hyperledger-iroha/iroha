@@ -10,6 +10,10 @@ export {
 export {
   buildMintAssetInstruction,
   buildTransferAssetInstruction,
+  SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BYTES_V1,
+  buildIssueReplicationOrderInstruction,
+  buildCompleteReplicationOrderInstruction,
+  buildExpireReplicationOrderInstruction,
 } from "./instructionBuilders.js";
 
 export {
@@ -73,6 +77,7 @@ export {
   noritoEncodeMultisigProposeRequest,
   verifyBlockMerkleProof,
   verifyBlockProofs,
+  validateSorafsReplicationOrderPayloadV1,
 } from "./norito.js";
 
 export {

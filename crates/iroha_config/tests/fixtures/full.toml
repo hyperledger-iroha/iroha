@@ -56,6 +56,34 @@ max_pins = 20000
 por_sample_interval_secs = 900
 alias = "tenant.alpha"
 
+[torii.sorafs.storage.provider_ingest_runtime]
+enabled = false
+scan_interval_ms = 1000
+max_page_rows = 64
+max_pages_per_tick = 4
+max_source_jobs_per_tick = 16
+max_source_providers = 1024
+source_operation_timeout_ms = 300000
+source_lease_renew_interval_ms = 15000
+signer_timeout_ms = 30000
+ingress_timeout_ms = 30000
+completion_transaction_ttl_ms = 300000
+max_snapshot_rows = 256
+max_snapshot_bytes = 134217728
+max_finalized_lag_blocks = 2
+
+[torii.sorafs.storage.provider_ingest_runtime.outbox]
+max_active_entries = 128
+max_terminal_entries = 4096
+max_attempts = 8
+checkpoint_max_bytes = 67108864
+source_lease_ttl_ms = 60000
+retry_base_delay_ms = 1000
+retry_max_delay_ms = 300000
+terminal_retention_blocks = 100000
+max_signed_transaction_bytes = 262144
+max_status_page_size = 256
+
 [torii.sorafs.storage.adverts]
 stake_pointer = "stake.pool.default"
 availability = "warm"
@@ -91,7 +119,6 @@ topics = ["sorafs.sf1.primary:global", "sorafs.sf1.backup:eu"]
 [sorafs.quota]
 capacity_declaration_window_secs = 3600
 capacity_telemetry_window_secs = 900
-deal_telemetry_window_secs = 900
 capacity_dispute_window_secs = 1800
 por_submission_window_secs = 900
 
@@ -103,7 +130,6 @@ max_sites = 7
 [torii.sorafs.quota]
 capacity_declaration_window_secs = 3600
 capacity_telemetry_window_secs = 900
-deal_telemetry_window_secs = 900
 capacity_dispute_window_secs = 1800
 por_submission_window_secs = 900
 

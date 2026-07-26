@@ -23,7 +23,6 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
 [sorafs.quota]
 capacity_declaration_window_secs = 3600
 capacity_telemetry_window_secs = 900
-deal_telemetry_window_secs = 900
 capacity_dispute_window_secs = 1800
 por_submission_window_secs = 900
 
@@ -39,6 +38,5 @@ signature_threshold = 1
 [torii.sorafs.quota]
 capacity_declaration_window_secs = 3600
 capacity_telemetry_window_secs = 900
-deal_telemetry_window_secs = 900
 capacity_dispute_window_secs = 1800
 por_submission_window_secs = 900

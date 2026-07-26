@@ -85,25 +85,18 @@ truncation fields.
 
 Both endpoints are served by the embedded storage worker, so CLI smoke tests and gateway probes stay in sync.【crates/iroha_torii/src/sorafs/api.rs#L1207】【crates/iroha_torii/src/sorafs/api.rs#L1259】
 
-## 2. Pin → Fetch Round Trip
+## 2. Finalized Registration → Provider Ingest → Fetch
 
 1. Produce a manifest + payload bundle (for example with `iroha app sorafs toolkit pack ./payload.bin --manifest-out manifest.to --car-out payload.car --json-out manifest_report.json`).
-2. Submit the manifest with base64 encoding:
-
-   ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/pin \
-     -H 'Content-Type: application/json' \
-     -d @pin_request.json
-   ```
-
-   The request JSON must contain `manifest_b64` and `payload_b64`. A successful response returns `manifest_id_hex` and the payload digest.
-3. Fetch the pinned data:
+2. Submit the canonical caller-signed registration transaction through `POST /v1/sorafs/pin/register`, then record its finalized height and block hash. V1 has no public payload-upload route.
+3. Confirm the supervised provider worker admitted the exact finalized manifest and provider replication assignment into its durable outbox. The outbox identity binds the finalized cursor, manifest digest, provider id, and replication-order id.
+4. Fetch the provider-ingested data:
 
    ```bash
    curl -X POST http://$TORII/v1/sorafs/storage/fetch \
      -H 'Content-Type: application/json' \
      -d '{
-       "manifest_id_hex": "<hex id from pin>",
+       "manifest_id_hex": "<canonical manifest id>",
        "offset": 0,
        "length": <payload length>
      }'
@@ -113,16 +106,16 @@ Both endpoints are served by the embedded storage worker, so CLI smoke tests and
 
 ## 3. Restart Recovery Drill
 
-1. Pin at least one manifest as above.
+1. Complete one provider-outbox ingest as above.
 2. Restart the Torii process (or the entire node).
 3. Re-submit the fetch request. The payload must still be retrievable and the returned digest must match the pre-restart value.
 4. Inspect `GET /v1/sorafs/storage/state` to confirm `bytes_used` reflects the persisted manifests after the reboot.
 
-## 4. Quota Rejection Test
+## 4. Capacity Rejection Test
 
 1. Temporarily lower `torii.sorafs.storage.max_capacity_bytes` to a small value (for example the size of a single manifest).
-2. Pin one manifest; the request should succeed.
-3. Attempt to pin a second manifest of similar size. Torii must reject the request with HTTP `400` and an error message containing `storage capacity exceeded`.
+2. Let one finalized replication assignment complete through the provider outbox.
+3. Reconcile a second assignment of similar size. The provider worker must reject it before storage mutation with `storage capacity exceeded`; no HTTP request can reserve capacity or change this result.
 4. Restore the normal capacity limit when finished.
 
 ## 5. Retention / GC Inspection (Read-only)
@@ -183,7 +176,7 @@ The GC CLI is intentionally read-only. Use it to capture retention deadlines and
   which covers `pin_fetch_roundtrip`, `pin_survives_restart`, `pin_quota_rejection`, and `por_sampling_returns_verified_proofs`.
 - Dashboards should track:
   - `torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
-  - `torii_sorafs_storage_pin_queue_depth` and `torii_sorafs_storage_fetch_inflight`
+  - `sorafs_provider_ingest_inflight` and `torii_sorafs_storage_fetch_inflight`
   - PoR success/failure counters surfaced via `/v1/sorafs/capacity/state`
   - Settlement publish attempts via `sorafs_node_deal_publish_total{result=success|failure}`
 

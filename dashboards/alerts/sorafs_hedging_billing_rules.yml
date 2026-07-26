@@ -68,3 +68,36 @@ groups:
             {{ $labels.account_type }} escrow runway in cluster {{ $labels.cluster }}
             is below one day. Trigger top-up or billing throttles before
             statement settlement can no longer clear.
+      - alert: SoraFSHedgingBillingLastTickStale
+        expr: sorafs_hedging_billing_last_tick_fresh < 1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "SoraFS hedging/billing runtime tick is stale"
+          description: |
+            The committed hedging/billing runtime has not completed a successful
+            tick within its bounded freshness window for 5 minutes. Pause billing
+            publication and reconcile the supervised worker before promotion.
+      - alert: SoraFSBillingFinalizedProjectionUnavailable
+        expr: sorafs_hedging_billing_finalized_projection_ready < 1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "SoraFS billing finalized projection is unavailable"
+          description: |
+            The billing projector has not maintained an authenticated,
+            admissibly recent finalized-ledger anchor for 5 minutes. Treat
+            statements and hedge intents as stale until reconciliation succeeds.
+      - alert: SoraFSBillingFinalizedLagHigh
+        expr: sorafs_hedging_billing_finalized_lag_blocks > 2
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "SoraFS billing finalized projection lag is high"
+          description: |
+            The committed billing projection has remained more than two finalized
+            blocks behind the observed ledger head for 5 minutes. Pause dependent
+            publication and repair finalized-event ingestion before promotion.

@@ -14,13 +14,18 @@ use norito::{
     json::{Map, Value, parse_value, to_string, to_string_pretty},
 };
 use sorafs_manifest::{
-    CapacityMetadataEntry, GOVERNANCE_DAG_BLOCK_VERSION_V1, GOVERNANCE_DAG_HEAD_VERSION_V1,
-    GovernanceDagBlockV1, GovernanceDagHeadV1, POTR_RECEIPT_VERSION_V1, PotrReceiptV1,
-    PotrSignatureAlgorithm, PotrSignatureV1, PotrStatus, ProofStreamTier, REPAIR_TASK_VERSION_V1,
-    RepairTaskRecordV1, RepairTaskStateV1, RepairTicketId,
+    CapacityMetadataEntry, FixtureBundlePayloadKindV1, FixtureBundlePayloadV1,
+    GOVERNANCE_DAG_BLOCK_VERSION_V1, GOVERNANCE_DAG_HEAD_VERSION_V1, GovernanceDagBlockV1,
+    GovernanceDagHeadV1, POTR_RECEIPT_VERSION_V1, PotrReceiptV1, PotrSignatureAlgorithm,
+    PotrSignatureV1, PotrStatus, ProofStreamTier, REPAIR_TASK_VERSION_V1, RepairTaskRecordV1,
+    RepairTaskStateV1, RepairTicketId,
     governance::{
         GOVERNANCE_LOG_VERSION_V1, GovernanceLogNodeV1, GovernanceLogPayloadV1,
         GovernanceLogSignatureV1, GovernanceSignatureAlgorithm,
+        SORAFS_MODERATION_BALLOT_GOVERNANCE_EVENT_VERSION_V1,
+        SoraFsModerationBallotGovernanceEventKindV1, SoraFsModerationBallotGovernanceEventV1,
+        SoraFsModerationBallotGovernanceTallyV1, SoraFsModerationVoteChoiceV1,
+        SoraFsModerationVoteCountsV1,
     },
     governance_dag_block_cid_v1, governance_log_node_cid_v1,
     por::{
@@ -30,7 +35,8 @@ use sorafs_manifest::{
     },
     provider_advert::{AdvertSignature, SignatureAlgorithm},
     repair::QueuedRepairStateV1,
-    validate_governance_dag_head_chain_bytes,
+    validate_fixture_bundle_payloads, validate_governance_dag_head_chain_bytes,
+    validate_governance_log_node_bytes,
 };
 use soranet_pq::{HedgedRngSeed, MlDsaSuite, deterministic_chacha20_rng, sign_mldsa};
 
@@ -42,6 +48,8 @@ const GOVERNANCE_FIXTURE_PUBLIC_KEY_HEX: &str =
     "d5af25e204ad03d0a26e236996404f1be51a60948bcc026cd084a83690b756d3";
 const GOVERNANCE_FIXTURE_PUBLIC_KEY_FINGERPRINT_SHA256: &str =
     "1a09a6a1b85cec77787ba6ce26f18500a2434865cee04d79c69a481888f52fff";
+const REFERENCE_SDK_INVENTORY_SCHEMA: &str = "sorafs.reference_sdk.validation_fixture_inventory.v1";
+const REFERENCE_SDK_INVENTORY_SCOPE: &str = "sorafs_v1_release";
 
 #[derive(Clone, norito::JsonSerialize)]
 struct GovernanceSdkPayloadInventoryEntryV1 {
@@ -91,15 +99,60 @@ struct GovernanceSdkFixtureInventoryV1 {
     signature: GovernanceSdkInventorySignatureV1,
 }
 
+#[derive(Clone, norito::JsonSerialize)]
+struct ReferenceSdkPayloadInventoryEntryV1 {
+    path: String,
+    domain: String,
+    kind: String,
+    encoding: String,
+    expectation: String,
+    byte_length: u64,
+    sha256: String,
+}
+
+#[derive(Clone, norito::JsonSerialize)]
+struct ReferenceSdkOutcomeInventoryEntryV1 {
+    path: String,
+    domain: String,
+    scenario: String,
+    status: String,
+    code: String,
+    byte_length: u64,
+    sha256: String,
+}
+
+#[derive(Clone, norito::JsonSerialize)]
+struct ReferenceSdkUnsignedInventoryV1 {
+    schema: String,
+    scope: String,
+    signing_domain: String,
+    payloads: Vec<ReferenceSdkPayloadInventoryEntryV1>,
+    outcomes: Vec<ReferenceSdkOutcomeInventoryEntryV1>,
+}
+
+#[derive(norito::JsonSerialize)]
+struct ReferenceSdkFixtureInventoryV1 {
+    schema: String,
+    scope: String,
+    signing_domain: String,
+    payloads: Vec<ReferenceSdkPayloadInventoryEntryV1>,
+    outcomes: Vec<ReferenceSdkOutcomeInventoryEntryV1>,
+    signature: GovernanceSdkInventorySignatureV1,
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
-    let por_dir = PathBuf::from("fixtures/sorafs_manifest/por");
-    let potr_dir = PathBuf::from("fixtures/sorafs_manifest/potr");
-    let repair_dir = PathBuf::from("fixtures/sorafs_manifest/repair");
-    let gov_dir = PathBuf::from("fixtures/sorafs_manifest/governance");
+    let fixtures_root = PathBuf::from("fixtures/sorafs_manifest");
+    let por_dir = fixtures_root.join("por");
+    let potr_dir = fixtures_root.join("potr");
+    let repair_dir = fixtures_root.join("repair");
+    let gov_dir = fixtures_root.join("governance");
+    let moderation_dir = fixtures_root.join("moderation");
     fs::create_dir_all(&por_dir)?;
     fs::create_dir_all(&potr_dir)?;
     fs::create_dir_all(&repair_dir)?;
+    fs::create_dir_all(repair_dir.join("negative"))?;
     fs::create_dir_all(&gov_dir)?;
+    fs::create_dir_all(&moderation_dir)?;
 
     let manifest_digest = [0x42; 32];
     let provider_id = [0x10; 32];
@@ -279,6 +332,22 @@ fn main() -> Result<(), Box<dyn Error>> {
         &repair_task,
         repair_task_json(&repair_task),
     )?;
+    let mut manifest_mismatch_task = repair_task.clone();
+    manifest_mismatch_task.manifest_digest = [0x99; 32];
+    manifest_mismatch_task.validate()?;
+    write_norito_pair(
+        &repair_dir.join("negative/task_manifest_mismatch_v1"),
+        &manifest_mismatch_task,
+        repair_task_json(&manifest_mismatch_task),
+    )?;
+    let mut provider_unassigned_task = repair_task.clone();
+    provider_unassigned_task.provider_id = [0x99; 32];
+    provider_unassigned_task.validate()?;
+    write_norito_pair(
+        &repair_dir.join("negative/task_provider_unassigned_v1"),
+        &provider_unassigned_task,
+        repair_task_json(&provider_unassigned_task),
+    )?;
 
     // Governance node sample (wrap proof).
     let mut node = GovernanceLogNodeV1 {
@@ -308,6 +377,57 @@ fn main() -> Result<(), Box<dyn Error>> {
         &gov_dir.join("node_v1"),
         &node,
         governance_node_json(&node, proof_digest),
+    )?;
+
+    let moderation_event = SoraFsModerationBallotGovernanceEventV1 {
+        version: SORAFS_MODERATION_BALLOT_GOVERNANCE_EVENT_VERSION_V1,
+        sequence: 6,
+        kind: SoraFsModerationBallotGovernanceEventKindV1::BallotTallied,
+        generated_at_unix_ms: 1_700_000_750_000,
+        case_id: "case-reference-sdk-v1".to_owned(),
+        round_id: "round-reference-sdk-v1".to_owned(),
+        juror_id: None,
+        committed_count: 3,
+        revealed_count: 3,
+        challenge_count: 0,
+        tally: Some(SoraFsModerationBallotGovernanceTallyV1 {
+            case_id: "case-reference-sdk-v1".to_owned(),
+            round_id: "round-reference-sdk-v1".to_owned(),
+            counts: SoraFsModerationVoteCountsV1 {
+                uphold: 2,
+                overturn: 1,
+                modify: 0,
+                escalate: 0,
+            },
+            votes_total: 3,
+            quorum: 2,
+            winning_choice: Some(SoraFsModerationVoteChoiceV1::Uphold),
+            contested: false,
+            tallied_at_unix_ms: 1_700_000_750_000,
+        }),
+        challenge: None,
+    };
+    let moderation_node = signed_governance_node(
+        GovernanceLogPayloadV1::ModerationBallotEvent(moderation_event),
+        Some(node.node_cid.clone()),
+        1_700_000_750,
+        b"12D3KooWModerationFixturePublisher",
+    )?;
+    write_norito_pair(
+        &moderation_dir.join("governance_node_v1"),
+        &moderation_node,
+        moderation_governance_node_json(&moderation_node)?,
+    )?;
+    let moderation_node_bytes = norito::to_bytes(&moderation_node)?;
+    let moderation_outcome = validate_governance_log_node_bytes(
+        &moderation_node_bytes,
+        "moderation/governance_node_v1.to",
+        Some(moderation_node.node_cid.as_slice()),
+        1_700_001_234,
+    );
+    write_expected_success_validation_outcome(
+        &moderation_dir.join("governance_node_validation_outcome_v1.json"),
+        &moderation_outcome,
     )?;
 
     let first_dag_node = governance_dag_node(proof.clone(), None, 1_700_000_790)?;
@@ -504,6 +624,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     )?;
 
     write_governance_sdk_fixture_inventory(&gov_dir)?;
+    write_reference_sdk_bundle_outcomes(&fixtures_root)?;
+    write_reference_sdk_fixture_inventory(&fixtures_root)?;
 
     Ok(())
 }
@@ -600,13 +722,13 @@ fn empty_governance_ed25519_signature() -> GovernanceLogSignatureV1 {
     }
 }
 
-fn governance_dag_node(
-    proof: PorProofV1,
+fn signed_governance_node(
+    payload: GovernanceLogPayloadV1,
     prev_cid: Option<Vec<u8>>,
     timestamp: u64,
+    publisher_peer_id: &[u8],
 ) -> Result<GovernanceLogNodeV1, Box<dyn Error>> {
-    let publisher_peer_id = b"12D3KooWGovernanceDagPublisher".to_vec();
-    let payload = GovernanceLogPayloadV1::PorProof(proof);
+    let publisher_peer_id = publisher_peer_id.to_vec();
     let node_cid =
         governance_log_node_cid_v1(prev_cid.as_deref(), timestamp, &publisher_peer_id, &payload)?;
     let mut node = GovernanceLogNodeV1 {
@@ -628,6 +750,19 @@ fn governance_dag_node(
     node.validate()?;
     node.verify_publisher_signature()?;
     Ok(node)
+}
+
+fn governance_dag_node(
+    proof: PorProofV1,
+    prev_cid: Option<Vec<u8>>,
+    timestamp: u64,
+) -> Result<GovernanceLogNodeV1, Box<dyn Error>> {
+    signed_governance_node(
+        GovernanceLogPayloadV1::PorProof(proof),
+        prev_cid,
+        timestamp,
+        b"12D3KooWGovernanceDagPublisher",
+    )
 }
 
 fn governance_dag_block(
@@ -952,6 +1087,1058 @@ fn write_governance_sdk_fixture_inventory(gov_dir: &Path) -> Result<(), Box<dyn 
 fn governance_sdk_fixture_binding(path: &Path) -> Result<(u64, String), Box<dyn Error>> {
     let bytes = fs::read(path)?;
     Ok((u64::try_from(bytes.len())?, encode(sha256(&bytes))))
+}
+
+fn write_reference_sdk_bundle_outcomes(fixtures_root: &Path) -> Result<(), Box<dyn Error>> {
+    const GENERATED_AT: u64 = 1_700_001_234;
+    const LINKED_NOW: u64 = 1_700_000_001;
+    const ADMISSION_NOW: u64 = 300;
+    const HETEROGENEOUS_POSITIVE: &[(FixtureBundlePayloadKindV1, &str)] = &[
+        (
+            FixtureBundlePayloadKindV1::ReplicationOrder,
+            "replication_order/order_v1.to",
+        ),
+        (
+            FixtureBundlePayloadKindV1::PdpCommitment,
+            "pdp/commitment_v1.to",
+        ),
+        (
+            FixtureBundlePayloadKindV1::PdpChallenge,
+            "pdp/challenge_v1.to",
+        ),
+        (FixtureBundlePayloadKindV1::PdpProof, "pdp/proof_v1.to"),
+        (
+            FixtureBundlePayloadKindV1::PorChallenge,
+            "por/challenge_v1.to",
+        ),
+        (FixtureBundlePayloadKindV1::PorProof, "por/proof_v1.to"),
+        (
+            FixtureBundlePayloadKindV1::PotrReceipt,
+            "potr/receipt_v1.to",
+        ),
+        (
+            FixtureBundlePayloadKindV1::RepairTaskRecord,
+            "repair/task_v1.to",
+        ),
+        (
+            FixtureBundlePayloadKindV1::OrderbookOrderRequest,
+            "orderbook/order_request_v1.to",
+        ),
+        (
+            FixtureBundlePayloadKindV1::OrderbookOrderCancel,
+            "orderbook/order_cancel_v1.to",
+        ),
+        (
+            FixtureBundlePayloadKindV1::OrderbookTradeEvent,
+            "orderbook/trade_event_v1.to",
+        ),
+        (
+            FixtureBundlePayloadKindV1::OrderbookSettlementChannel,
+            "orderbook/settlement_channel_v1.to",
+        ),
+        (
+            FixtureBundlePayloadKindV1::OrderbookSettlementReceipt,
+            "orderbook/settlement_receipt_v1.to",
+        ),
+    ];
+    const ROUTING_ADMISSION_POSITIVE: &[(FixtureBundlePayloadKindV1, &str)] = &[
+        (
+            FixtureBundlePayloadKindV1::ProviderAdvert,
+            "provider_admission/advert_v1.to",
+        ),
+        (
+            FixtureBundlePayloadKindV1::ProviderAdmissionEnvelope,
+            "provider_admission/envelope_v1.to",
+        ),
+    ];
+    const ORDERBOOK_BAD_SIGNATURE_NEGATIVE: &[(FixtureBundlePayloadKindV1, &str)] = &[
+        (
+            FixtureBundlePayloadKindV1::ReplicationOrder,
+            "replication_order/order_v1.to",
+        ),
+        (
+            FixtureBundlePayloadKindV1::PorChallenge,
+            "por/challenge_v1.to",
+        ),
+        (FixtureBundlePayloadKindV1::PorProof, "por/proof_v1.to"),
+        (
+            FixtureBundlePayloadKindV1::OrderbookOrderRequest,
+            "orderbook/negative/order_request_bad_signature_v1.to",
+        ),
+    ];
+    const ORDERBOOK_TRAILING_BYTES_NEGATIVE: &[(FixtureBundlePayloadKindV1, &str)] = &[
+        (
+            FixtureBundlePayloadKindV1::ReplicationOrder,
+            "replication_order/order_v1.to",
+        ),
+        (
+            FixtureBundlePayloadKindV1::PorChallenge,
+            "por/challenge_v1.to",
+        ),
+        (FixtureBundlePayloadKindV1::PorProof, "por/proof_v1.to"),
+        (
+            FixtureBundlePayloadKindV1::OrderbookOrderRequest,
+            "orderbook/negative/order_request_trailing_bytes_v1.to",
+        ),
+    ];
+    const PDP_DUPLICATE_HOT_LEAF_NEGATIVE: &[(FixtureBundlePayloadKindV1, &str)] = &[
+        (
+            FixtureBundlePayloadKindV1::ReplicationOrder,
+            "replication_order/order_v1.to",
+        ),
+        (
+            FixtureBundlePayloadKindV1::PdpCommitment,
+            "pdp/commitment_v1.to",
+        ),
+        (
+            FixtureBundlePayloadKindV1::PdpChallenge,
+            "pdp/negative/duplicate_hot_leaf_challenge_v1.to",
+        ),
+    ];
+    const PDP_MISSING_SIGNATURE_NEGATIVE: &[(FixtureBundlePayloadKindV1, &str)] = &[
+        (
+            FixtureBundlePayloadKindV1::ReplicationOrder,
+            "replication_order/order_v1.to",
+        ),
+        (
+            FixtureBundlePayloadKindV1::PdpCommitment,
+            "pdp/commitment_v1.to",
+        ),
+        (
+            FixtureBundlePayloadKindV1::PdpChallenge,
+            "pdp/challenge_v1.to",
+        ),
+        (
+            FixtureBundlePayloadKindV1::PdpProof,
+            "pdp/negative/missing_signature_proof_v1.to",
+        ),
+    ];
+    const PDP_WRONG_PROVIDER_NEGATIVE: &[(FixtureBundlePayloadKindV1, &str)] = &[
+        (
+            FixtureBundlePayloadKindV1::ReplicationOrder,
+            "replication_order/order_v1.to",
+        ),
+        (
+            FixtureBundlePayloadKindV1::PdpCommitment,
+            "pdp/commitment_v1.to",
+        ),
+        (
+            FixtureBundlePayloadKindV1::PdpChallenge,
+            "pdp/challenge_v1.to",
+        ),
+        (
+            FixtureBundlePayloadKindV1::PdpProof,
+            "pdp/negative/wrong_provider_proof_v1.to",
+        ),
+    ];
+    const REPAIR_MANIFEST_MISMATCH_NEGATIVE: &[(FixtureBundlePayloadKindV1, &str)] = &[
+        (
+            FixtureBundlePayloadKindV1::ReplicationOrder,
+            "replication_order/order_v1.to",
+        ),
+        (
+            FixtureBundlePayloadKindV1::RepairTaskRecord,
+            "repair/negative/task_manifest_mismatch_v1.to",
+        ),
+    ];
+    const REPAIR_PROVIDER_UNASSIGNED_NEGATIVE: &[(FixtureBundlePayloadKindV1, &str)] = &[
+        (
+            FixtureBundlePayloadKindV1::ReplicationOrder,
+            "replication_order/order_v1.to",
+        ),
+        (
+            FixtureBundlePayloadKindV1::RepairTaskRecord,
+            "repair/negative/task_provider_unassigned_v1.to",
+        ),
+    ];
+
+    let output_dir = fixtures_root.join("reference_sdk");
+    fs::create_dir_all(&output_dir)?;
+    let scenarios = [
+        (
+            "bundle_heterogeneous_positive_validation_outcome_v1.json",
+            HETEROGENEOUS_POSITIVE,
+            LINKED_NOW,
+            "Ok",
+            "SFS-PDP-DIAG-000",
+        ),
+        (
+            "bundle_orderbook_bad_signature_negative_validation_outcome_v1.json",
+            ORDERBOOK_BAD_SIGNATURE_NEGATIVE,
+            LINKED_NOW,
+            "Error",
+            "SFS-BND-001",
+        ),
+        (
+            "bundle_orderbook_trailing_bytes_negative_validation_outcome_v1.json",
+            ORDERBOOK_TRAILING_BYTES_NEGATIVE,
+            LINKED_NOW,
+            "Error",
+            "SFS-BND-001",
+        ),
+        (
+            "bundle_pdp_duplicate_hot_leaf_negative_validation_outcome_v1.json",
+            PDP_DUPLICATE_HOT_LEAF_NEGATIVE,
+            LINKED_NOW,
+            "Error",
+            "SFS-BND-001",
+        ),
+        (
+            "bundle_pdp_missing_signature_negative_validation_outcome_v1.json",
+            PDP_MISSING_SIGNATURE_NEGATIVE,
+            LINKED_NOW,
+            "Error",
+            "SFS-BND-001",
+        ),
+        (
+            "bundle_pdp_wrong_provider_negative_validation_outcome_v1.json",
+            PDP_WRONG_PROVIDER_NEGATIVE,
+            LINKED_NOW,
+            "Error",
+            "SFS-BND-001",
+        ),
+        (
+            "bundle_repair_manifest_mismatch_negative_validation_outcome_v1.json",
+            REPAIR_MANIFEST_MISMATCH_NEGATIVE,
+            LINKED_NOW,
+            "Error",
+            "SFS-BND-002",
+        ),
+        (
+            "bundle_repair_provider_unassigned_negative_validation_outcome_v1.json",
+            REPAIR_PROVIDER_UNASSIGNED_NEGATIVE,
+            LINKED_NOW,
+            "Error",
+            "SFS-BND-003",
+        ),
+        (
+            "bundle_routing_admission_positive_validation_outcome_v1.json",
+            ROUTING_ADMISSION_POSITIVE,
+            ADMISSION_NOW,
+            "Ok",
+            "SFS-OK-000",
+        ),
+    ];
+    for (path, specs, now, expected_status, expected_code) in scenarios {
+        let bytes = specs
+            .iter()
+            .map(|(_, path)| fs::read(fixtures_root.join(path)))
+            .collect::<Result<Vec<_>, _>>()?;
+        let payloads = specs
+            .iter()
+            .zip(&bytes)
+            .map(|((kind, label), bytes)| {
+                FixtureBundlePayloadV1::new(*kind, (*label).to_owned(), bytes)
+            })
+            .collect::<Vec<_>>();
+        let outcome = validate_fixture_bundle_payloads(&payloads, now, GENERATED_AT);
+        if outcome.status != expected_status || outcome.code != expected_code {
+            return Err(format!(
+                "reference SDK bundle `{path}` returned {}/{}, expected {expected_status}/{expected_code}: {outcome:?}",
+                outcome.status,
+                outcome.code
+            )
+            .into());
+        }
+        fs::write(
+            output_dir.join(path),
+            format!("{}\n", to_string_pretty(&outcome)?),
+        )?;
+    }
+    Ok(())
+}
+
+fn write_reference_sdk_fixture_inventory(fixtures_root: &Path) -> Result<(), Box<dyn Error>> {
+    const PAYLOAD_SPECS: &[(&str, &str, &str, &str, &str)] = &[
+        (
+            "governance/dag_block_0_v1.json",
+            "governance_dag",
+            "governance_dag_block",
+            "json",
+            "valid",
+        ),
+        (
+            "governance/dag_block_0_v1.to",
+            "governance_dag",
+            "governance_dag_block",
+            "norito",
+            "valid",
+        ),
+        (
+            "governance/dag_block_1_bad_predecessor_v1.json",
+            "governance_dag",
+            "governance_dag_block",
+            "json",
+            "chain_invalid_predecessor",
+        ),
+        (
+            "governance/dag_block_1_bad_predecessor_v1.to",
+            "governance_dag",
+            "governance_dag_block",
+            "norito",
+            "chain_invalid_predecessor",
+        ),
+        (
+            "governance/dag_block_1_v1.json",
+            "governance_dag",
+            "governance_dag_block",
+            "json",
+            "valid",
+        ),
+        (
+            "governance/dag_block_1_v1.to",
+            "governance_dag",
+            "governance_dag_block",
+            "norito",
+            "valid",
+        ),
+        (
+            "governance/dag_block_bad_signature_v1.json",
+            "governance_dag",
+            "governance_dag_block",
+            "json",
+            "invalid_signature",
+        ),
+        (
+            "governance/dag_block_bad_signature_v1.to",
+            "governance_dag",
+            "governance_dag_block",
+            "norito",
+            "invalid_signature",
+        ),
+        (
+            "governance/dag_block_trailing_bytes_v1.to",
+            "governance_dag",
+            "governance_dag_block",
+            "norito",
+            "noncanonical_trailing_bytes",
+        ),
+        (
+            "governance/dag_head_bad_predecessor_v1.json",
+            "governance_dag",
+            "governance_dag_head",
+            "json",
+            "chain_invalid_predecessor",
+        ),
+        (
+            "governance/dag_head_bad_predecessor_v1.to",
+            "governance_dag",
+            "governance_dag_head",
+            "norito",
+            "chain_invalid_predecessor",
+        ),
+        (
+            "governance/dag_head_bad_signature_v1.json",
+            "governance_dag",
+            "governance_dag_head",
+            "json",
+            "invalid_signature",
+        ),
+        (
+            "governance/dag_head_bad_signature_v1.to",
+            "governance_dag",
+            "governance_dag_head",
+            "norito",
+            "invalid_signature",
+        ),
+        (
+            "governance/dag_head_v1.json",
+            "governance_dag",
+            "governance_dag_head",
+            "json",
+            "valid",
+        ),
+        (
+            "governance/dag_head_v1.to",
+            "governance_dag",
+            "governance_dag_head",
+            "norito",
+            "valid",
+        ),
+        (
+            "governance/node_v1.json",
+            "governance_dag",
+            "governance_log_node",
+            "json",
+            "valid",
+        ),
+        (
+            "governance/node_v1.to",
+            "governance_dag",
+            "governance_log_node",
+            "norito",
+            "valid",
+        ),
+        (
+            "moderation/governance_node_v1.json",
+            "moderation",
+            "moderation_ballot_governance_node",
+            "json",
+            "valid",
+        ),
+        (
+            "moderation/governance_node_v1.to",
+            "moderation",
+            "moderation_ballot_governance_node",
+            "norito",
+            "valid",
+        ),
+        (
+            "orderbook/negative/order_request_bad_signature_v1.json",
+            "orderbook",
+            "orderbook_order_request",
+            "json",
+            "invalid_signature",
+        ),
+        (
+            "orderbook/negative/order_request_bad_signature_v1.to",
+            "orderbook",
+            "orderbook_order_request",
+            "norito",
+            "invalid_signature",
+        ),
+        (
+            "orderbook/negative/order_request_trailing_bytes_v1.to",
+            "orderbook",
+            "orderbook_order_request",
+            "norito",
+            "noncanonical_trailing_bytes",
+        ),
+        (
+            "orderbook/order_cancel_v1.json",
+            "orderbook",
+            "orderbook_order_cancel",
+            "json",
+            "valid",
+        ),
+        (
+            "orderbook/order_cancel_v1.to",
+            "orderbook",
+            "orderbook_order_cancel",
+            "norito",
+            "valid",
+        ),
+        (
+            "orderbook/order_request_v1.json",
+            "orderbook",
+            "orderbook_order_request",
+            "json",
+            "valid",
+        ),
+        (
+            "orderbook/order_request_v1.to",
+            "orderbook",
+            "orderbook_order_request",
+            "norito",
+            "valid",
+        ),
+        (
+            "orderbook/settlement_channel_v1.json",
+            "orderbook",
+            "orderbook_settlement_channel",
+            "json",
+            "valid",
+        ),
+        (
+            "orderbook/settlement_channel_v1.to",
+            "orderbook",
+            "orderbook_settlement_channel",
+            "norito",
+            "valid",
+        ),
+        (
+            "orderbook/settlement_receipt_v1.json",
+            "orderbook",
+            "orderbook_settlement_receipt",
+            "json",
+            "valid",
+        ),
+        (
+            "orderbook/settlement_receipt_v1.to",
+            "orderbook",
+            "orderbook_settlement_receipt",
+            "norito",
+            "valid",
+        ),
+        (
+            "orderbook/trade_event_v1.json",
+            "orderbook",
+            "orderbook_trade_event",
+            "json",
+            "valid",
+        ),
+        (
+            "orderbook/trade_event_v1.to",
+            "orderbook",
+            "orderbook_trade_event",
+            "norito",
+            "valid",
+        ),
+        (
+            "pdp/challenge_v1.json",
+            "pdp",
+            "pdp_challenge",
+            "json",
+            "valid",
+        ),
+        (
+            "pdp/challenge_v1.to",
+            "pdp",
+            "pdp_challenge",
+            "norito",
+            "valid",
+        ),
+        (
+            "pdp/commitment_v1.json",
+            "pdp",
+            "pdp_commitment",
+            "json",
+            "valid",
+        ),
+        (
+            "pdp/commitment_v1.to",
+            "pdp",
+            "pdp_commitment",
+            "norito",
+            "valid",
+        ),
+        (
+            "pdp/negative/duplicate_hot_leaf_challenge_v1.json",
+            "pdp",
+            "pdp_challenge",
+            "json",
+            "invalid_duplicate_hot_leaf",
+        ),
+        (
+            "pdp/negative/duplicate_hot_leaf_challenge_v1.to",
+            "pdp",
+            "pdp_challenge",
+            "norito",
+            "invalid_duplicate_hot_leaf",
+        ),
+        (
+            "pdp/negative/late_proof_v1.json",
+            "pdp",
+            "pdp_proof",
+            "json",
+            "invalid_late_proof",
+        ),
+        (
+            "pdp/negative/late_proof_v1.to",
+            "pdp",
+            "pdp_proof",
+            "norito",
+            "invalid_late_proof",
+        ),
+        (
+            "pdp/negative/missing_hot_leaf_path_proof_v1.json",
+            "pdp",
+            "pdp_proof",
+            "json",
+            "invalid_missing_hot_leaf_path",
+        ),
+        (
+            "pdp/negative/missing_hot_leaf_path_proof_v1.to",
+            "pdp",
+            "pdp_proof",
+            "norito",
+            "invalid_missing_hot_leaf_path",
+        ),
+        (
+            "pdp/negative/missing_segment_path_proof_v1.json",
+            "pdp",
+            "pdp_proof",
+            "json",
+            "invalid_missing_segment_path",
+        ),
+        (
+            "pdp/negative/missing_segment_path_proof_v1.to",
+            "pdp",
+            "pdp_proof",
+            "norito",
+            "invalid_missing_segment_path",
+        ),
+        (
+            "pdp/negative/missing_signature_proof_v1.json",
+            "pdp",
+            "pdp_proof",
+            "json",
+            "invalid_missing_signature",
+        ),
+        (
+            "pdp/negative/missing_signature_proof_v1.to",
+            "pdp",
+            "pdp_proof",
+            "norito",
+            "invalid_missing_signature",
+        ),
+        (
+            "pdp/negative/wrong_manifest_proof_v1.json",
+            "pdp",
+            "pdp_proof",
+            "json",
+            "invalid_manifest_binding",
+        ),
+        (
+            "pdp/negative/wrong_manifest_proof_v1.to",
+            "pdp",
+            "pdp_proof",
+            "norito",
+            "invalid_manifest_binding",
+        ),
+        (
+            "pdp/negative/wrong_path_proof_v1.json",
+            "pdp",
+            "pdp_proof",
+            "json",
+            "invalid_merkle_path",
+        ),
+        (
+            "pdp/negative/wrong_path_proof_v1.to",
+            "pdp",
+            "pdp_proof",
+            "norito",
+            "invalid_merkle_path",
+        ),
+        (
+            "pdp/negative/wrong_provider_proof_v1.json",
+            "pdp",
+            "pdp_proof",
+            "json",
+            "invalid_provider_binding",
+        ),
+        (
+            "pdp/negative/wrong_provider_proof_v1.to",
+            "pdp",
+            "pdp_proof",
+            "norito",
+            "invalid_provider_binding",
+        ),
+        ("pdp/proof_v1.json", "pdp", "pdp_proof", "json", "valid"),
+        ("pdp/proof_v1.to", "pdp", "pdp_proof", "norito", "valid"),
+        (
+            "por/challenge_v1.json",
+            "por",
+            "por_challenge",
+            "json",
+            "valid",
+        ),
+        (
+            "por/challenge_v1.to",
+            "por",
+            "por_challenge",
+            "norito",
+            "valid",
+        ),
+        ("por/proof_v1.json", "por", "por_proof", "json", "valid"),
+        ("por/proof_v1.to", "por", "por_proof", "norito", "valid"),
+        (
+            "por/verdict_v1.json",
+            "por",
+            "por_audit_verdict",
+            "json",
+            "valid",
+        ),
+        (
+            "por/verdict_v1.to",
+            "por",
+            "por_audit_verdict",
+            "norito",
+            "valid",
+        ),
+        (
+            "potr/receipt_v1.json",
+            "potr",
+            "potr_receipt",
+            "json",
+            "valid",
+        ),
+        (
+            "potr/receipt_v1.to",
+            "potr",
+            "potr_receipt",
+            "norito",
+            "valid",
+        ),
+        (
+            "provider_admission/advert_v1.json",
+            "routing",
+            "provider_advert",
+            "json",
+            "valid",
+        ),
+        (
+            "provider_admission/advert_v1.to",
+            "routing",
+            "provider_advert",
+            "norito",
+            "valid",
+        ),
+        (
+            "provider_admission/envelope_v1.json",
+            "routing",
+            "provider_admission_envelope",
+            "json",
+            "valid",
+        ),
+        (
+            "provider_admission/envelope_v1.to",
+            "routing",
+            "provider_admission_envelope",
+            "norito",
+            "valid",
+        ),
+        (
+            "repair/negative/task_manifest_mismatch_v1.json",
+            "repair",
+            "repair_task_record",
+            "json",
+            "invalid_manifest_binding",
+        ),
+        (
+            "repair/negative/task_manifest_mismatch_v1.to",
+            "repair",
+            "repair_task_record",
+            "norito",
+            "invalid_manifest_binding",
+        ),
+        (
+            "repair/negative/task_provider_unassigned_v1.json",
+            "repair",
+            "repair_task_record",
+            "json",
+            "invalid_provider_assignment",
+        ),
+        (
+            "repair/negative/task_provider_unassigned_v1.to",
+            "repair",
+            "repair_task_record",
+            "norito",
+            "invalid_provider_assignment",
+        ),
+        (
+            "repair/task_v1.json",
+            "repair",
+            "repair_task_record",
+            "json",
+            "valid",
+        ),
+        (
+            "repair/task_v1.to",
+            "repair",
+            "repair_task_record",
+            "norito",
+            "valid",
+        ),
+        (
+            "replication_order/order_v1.json",
+            "routing",
+            "replication_order",
+            "json",
+            "valid",
+        ),
+        (
+            "replication_order/order_v1.to",
+            "routing",
+            "replication_order",
+            "norito",
+            "valid",
+        ),
+    ];
+    const OUTCOME_SPECS: &[(&str, &str, &str, &str, &str)] = &[
+        (
+            "governance/dag_block_bad_signature_validation_outcome_v1.json",
+            "governance_dag",
+            "block_bad_signature",
+            "Error",
+            "SFS-SIG-006",
+        ),
+        (
+            "governance/dag_block_cid_mismatch_validation_outcome_v1.json",
+            "governance_dag",
+            "block_expected_cid_mismatch",
+            "Error",
+            "SFS-GOV-004",
+        ),
+        (
+            "governance/dag_block_trailing_bytes_validation_outcome_v1.json",
+            "governance_dag",
+            "block_noncanonical_trailing_bytes",
+            "Error",
+            "SFS-NORITO-001",
+        ),
+        (
+            "governance/dag_block_validation_outcome_v1.json",
+            "governance_dag",
+            "block_valid",
+            "Ok",
+            "SFS-OK-000",
+        ),
+        (
+            "governance/dag_head_bad_predecessor_validation_outcome_v1.json",
+            "governance_dag",
+            "head_bad_predecessor",
+            "Error",
+            "SFS-GOV-006",
+        ),
+        (
+            "governance/dag_head_bad_signature_validation_outcome_v1.json",
+            "governance_dag",
+            "head_bad_signature",
+            "Error",
+            "SFS-SIG-007",
+        ),
+        (
+            "governance/dag_head_reordered_validation_outcome_v1.json",
+            "governance_dag",
+            "head_reordered_blocks",
+            "Error",
+            "SFS-GOV-006",
+        ),
+        (
+            "governance/dag_head_validation_outcome_v1.json",
+            "governance_dag",
+            "head_valid",
+            "Ok",
+            "SFS-OK-000",
+        ),
+        (
+            "moderation/governance_node_validation_outcome_v1.json",
+            "moderation",
+            "moderation_ballot_governance_node_valid",
+            "Ok",
+            "SFS-OK-000",
+        ),
+        (
+            "orderbook/negative/order_request_bad_signature_validation_outcome_v1.json",
+            "orderbook",
+            "order_request_bad_signature",
+            "Error",
+            "SFS-SIG-007",
+        ),
+        (
+            "orderbook/negative/order_request_trailing_bytes_validation_outcome_v1.json",
+            "orderbook",
+            "order_request_noncanonical_trailing_bytes",
+            "Error",
+            "SFS-NORITO-001",
+        ),
+        (
+            "orderbook/order_request_validation_outcome_v1.json",
+            "orderbook",
+            "order_request_valid",
+            "Ok",
+            "SFS-OK-000",
+        ),
+        (
+            "pdp/bundle_validation_outcome_v1.json",
+            "pdp",
+            "pdp_bundle_valid",
+            "Ok",
+            "SFS-PDP-DIAG-000",
+        ),
+        (
+            "pdp/negative/duplicate_hot_leaf_challenge_validation_outcome_v1.json",
+            "pdp",
+            "duplicate_hot_leaf_challenge",
+            "Error",
+            "SFS-PDP-001",
+        ),
+        (
+            "pdp/negative/late_proof_validation_outcome_v1.json",
+            "pdp",
+            "late_proof",
+            "Error",
+            "SFS-POL-002",
+        ),
+        (
+            "pdp/negative/missing_hot_leaf_path_proof_validation_outcome_v1.json",
+            "pdp",
+            "missing_hot_leaf_path",
+            "Error",
+            "SFS-PDP-001",
+        ),
+        (
+            "pdp/negative/missing_segment_path_proof_validation_outcome_v1.json",
+            "pdp",
+            "missing_segment_path",
+            "Error",
+            "SFS-PDP-001",
+        ),
+        (
+            "pdp/negative/missing_signature_proof_validation_outcome_v1.json",
+            "pdp",
+            "missing_proof_signature",
+            "Error",
+            "SFS-SIG-008",
+        ),
+        (
+            "pdp/negative/wrong_manifest_proof_validation_outcome_v1.json",
+            "pdp",
+            "wrong_manifest",
+            "Error",
+            "SFS-PDP-003",
+        ),
+        (
+            "pdp/negative/wrong_path_proof_validation_outcome_v1.json",
+            "pdp",
+            "wrong_merkle_path",
+            "Error",
+            "SFS-PDP-003",
+        ),
+        (
+            "pdp/negative/wrong_provider_proof_validation_outcome_v1.json",
+            "pdp",
+            "wrong_provider",
+            "Error",
+            "SFS-PDP-003",
+        ),
+        (
+            "reference_sdk/bundle_heterogeneous_positive_validation_outcome_v1.json",
+            "reference_sdk",
+            "bundle_heterogeneous_positive",
+            "Ok",
+            "SFS-PDP-DIAG-000",
+        ),
+        (
+            "reference_sdk/bundle_orderbook_bad_signature_negative_validation_outcome_v1.json",
+            "reference_sdk",
+            "bundle_orderbook_bad_signature_negative",
+            "Error",
+            "SFS-BND-001",
+        ),
+        (
+            "reference_sdk/bundle_orderbook_trailing_bytes_negative_validation_outcome_v1.json",
+            "reference_sdk",
+            "bundle_orderbook_trailing_bytes_negative",
+            "Error",
+            "SFS-BND-001",
+        ),
+        (
+            "reference_sdk/bundle_pdp_duplicate_hot_leaf_negative_validation_outcome_v1.json",
+            "reference_sdk",
+            "bundle_pdp_duplicate_hot_leaf_negative",
+            "Error",
+            "SFS-BND-001",
+        ),
+        (
+            "reference_sdk/bundle_pdp_missing_signature_negative_validation_outcome_v1.json",
+            "reference_sdk",
+            "bundle_pdp_missing_signature_negative",
+            "Error",
+            "SFS-BND-001",
+        ),
+        (
+            "reference_sdk/bundle_pdp_wrong_provider_negative_validation_outcome_v1.json",
+            "reference_sdk",
+            "bundle_pdp_wrong_provider_negative",
+            "Error",
+            "SFS-BND-001",
+        ),
+        (
+            "reference_sdk/bundle_repair_manifest_mismatch_negative_validation_outcome_v1.json",
+            "reference_sdk",
+            "bundle_repair_manifest_mismatch_negative",
+            "Error",
+            "SFS-BND-002",
+        ),
+        (
+            "reference_sdk/bundle_repair_provider_unassigned_negative_validation_outcome_v1.json",
+            "reference_sdk",
+            "bundle_repair_provider_unassigned_negative",
+            "Error",
+            "SFS-BND-003",
+        ),
+        (
+            "reference_sdk/bundle_routing_admission_positive_validation_outcome_v1.json",
+            "reference_sdk",
+            "bundle_routing_admission_positive",
+            "Ok",
+            "SFS-OK-000",
+        ),
+    ];
+
+    if PAYLOAD_SPECS.windows(2).any(|pair| pair[0].0 >= pair[1].0)
+        || OUTCOME_SPECS.windows(2).any(|pair| pair[0].0 >= pair[1].0)
+    {
+        return Err("reference SDK fixture inventory paths must be unique and sorted".into());
+    }
+
+    let mut payloads = Vec::with_capacity(PAYLOAD_SPECS.len());
+    for (path, domain, kind, encoding, expectation) in PAYLOAD_SPECS {
+        let (byte_length, digest) = governance_sdk_fixture_binding(&fixtures_root.join(path))?;
+        payloads.push(ReferenceSdkPayloadInventoryEntryV1 {
+            path: (*path).to_owned(),
+            domain: (*domain).to_owned(),
+            kind: (*kind).to_owned(),
+            encoding: (*encoding).to_owned(),
+            expectation: (*expectation).to_owned(),
+            byte_length,
+            sha256: digest,
+        });
+    }
+
+    let mut outcomes = Vec::with_capacity(OUTCOME_SPECS.len());
+    for (path, domain, scenario, status, code) in OUTCOME_SPECS {
+        let (byte_length, digest) = governance_sdk_fixture_binding(&fixtures_root.join(path))?;
+        outcomes.push(ReferenceSdkOutcomeInventoryEntryV1 {
+            path: (*path).to_owned(),
+            domain: (*domain).to_owned(),
+            scenario: (*scenario).to_owned(),
+            status: (*status).to_owned(),
+            code: (*code).to_owned(),
+            byte_length,
+            sha256: digest,
+        });
+    }
+
+    let unsigned = ReferenceSdkUnsignedInventoryV1 {
+        schema: REFERENCE_SDK_INVENTORY_SCHEMA.to_owned(),
+        scope: REFERENCE_SDK_INVENTORY_SCOPE.to_owned(),
+        signing_domain: REFERENCE_SDK_INVENTORY_SCHEMA.to_owned(),
+        payloads: payloads.clone(),
+        outcomes: outcomes.clone(),
+    };
+    let unsigned_value = parse_value(&to_string(&unsigned)?)?;
+    let canonical_unsigned = to_string(&unsigned_value)?;
+    let mut signing_payload =
+        Vec::with_capacity(REFERENCE_SDK_INVENTORY_SCHEMA.len() + 1 + canonical_unsigned.len());
+    signing_payload.extend_from_slice(REFERENCE_SDK_INVENTORY_SCHEMA.as_bytes());
+    signing_payload.push(0);
+    signing_payload.extend_from_slice(canonical_unsigned.as_bytes());
+
+    // This deterministic seed is checked-in fixture material only. Production
+    // signing keys remain runtime-only and are never accepted by this profile.
+    let signing_key = SigningKey::from_bytes(&GOVERNANCE_FIXTURE_SIGNING_SEED);
+    let public_key = signing_key.verifying_key().to_bytes();
+    let public_key_hex = encode(public_key);
+    let public_key_fingerprint_sha256 = encode(sha256(public_key));
+    if public_key_hex != GOVERNANCE_FIXTURE_PUBLIC_KEY_HEX
+        || public_key_fingerprint_sha256 != GOVERNANCE_FIXTURE_PUBLIC_KEY_FINGERPRINT_SHA256
+    {
+        return Err("reference SDK fixture key identity changed unexpectedly".into());
+    }
+    let signature_hex = encode(signing_key.sign(&signing_payload).to_bytes());
+
+    let inventory = ReferenceSdkFixtureInventoryV1 {
+        schema: REFERENCE_SDK_INVENTORY_SCHEMA.to_owned(),
+        scope: REFERENCE_SDK_INVENTORY_SCOPE.to_owned(),
+        signing_domain: REFERENCE_SDK_INVENTORY_SCHEMA.to_owned(),
+        payloads,
+        outcomes,
+        signature: GovernanceSdkInventorySignatureV1 {
+            algorithm: "ed25519".to_owned(),
+            key_usage: "test_only_reference_sdk_fixture".to_owned(),
+            public_key_hex,
+            public_key_fingerprint_sha256,
+            signature_hex,
+        },
+    };
+    fs::write(
+        fixtures_root.join("reference_sdk_validation_inventory_v1.json"),
+        format!("{}\n", to_string_pretty(&inventory)?),
+    )?;
+    Ok(())
 }
 
 fn challenge_json(challenge: &PorChallengeV1) -> Value {
@@ -1396,6 +2583,101 @@ fn governance_node_json(node: &GovernanceLogNodeV1, proof_digest: [u8; 32]) -> V
         Value::from(encode(proof_digest)),
     );
     Value::Object(map)
+}
+
+fn moderation_governance_node_json(node: &GovernanceLogNodeV1) -> Result<Value, Box<dyn Error>> {
+    let GovernanceLogPayloadV1::ModerationBallotEvent(event) = &node.payload else {
+        return Err("moderation fixture node must carry a moderation ballot event".into());
+    };
+    let mut map = Map::new();
+    map.insert("version".into(), Value::from(node.version));
+    map.insert("node_cid_hex".into(), Value::from(encode(&node.node_cid)));
+    map.insert(
+        "prev_cid_hex".into(),
+        node.prev_cid
+            .as_ref()
+            .map(|cid| Value::from(encode(cid)))
+            .unwrap_or(Value::Null),
+    );
+    map.insert("timestamp".into(), Value::from(node.timestamp));
+    map.insert(
+        "publisher_peer_id".into(),
+        Value::from(String::from_utf8_lossy(&node.publisher_peer_id).into_owned()),
+    );
+    map.insert(
+        "payload_kind".into(),
+        Value::from("moderation_ballot_event"),
+    );
+
+    let mut event_map = Map::new();
+    event_map.insert("version".into(), Value::from(event.version));
+    event_map.insert("sequence".into(), Value::from(event.sequence));
+    event_map.insert("kind".into(), Value::from(event.kind.as_str()));
+    event_map.insert(
+        "generated_at_unix_ms".into(),
+        Value::from(event.generated_at_unix_ms),
+    );
+    event_map.insert("case_id".into(), Value::from(event.case_id.clone()));
+    event_map.insert("round_id".into(), Value::from(event.round_id.clone()));
+    event_map.insert(
+        "juror_id".into(),
+        event
+            .juror_id
+            .as_ref()
+            .map(|juror_id| Value::from(juror_id.clone()))
+            .unwrap_or(Value::Null),
+    );
+    event_map.insert("committed_count".into(), Value::from(event.committed_count));
+    event_map.insert("revealed_count".into(), Value::from(event.revealed_count));
+    event_map.insert("challenge_count".into(), Value::from(event.challenge_count));
+    event_map.insert("challenge".into(), Value::Null);
+    event_map.insert(
+        "tally".into(),
+        event
+            .tally
+            .as_ref()
+            .map(|tally| {
+                let mut tally_map = Map::new();
+                tally_map.insert("case_id".into(), Value::from(tally.case_id.clone()));
+                tally_map.insert("round_id".into(), Value::from(tally.round_id.clone()));
+                let mut counts = Map::new();
+                counts.insert("uphold".into(), Value::from(tally.counts.uphold));
+                counts.insert("overturn".into(), Value::from(tally.counts.overturn));
+                counts.insert("modify".into(), Value::from(tally.counts.modify));
+                counts.insert("escalate".into(), Value::from(tally.counts.escalate));
+                tally_map.insert("counts".into(), Value::Object(counts));
+                tally_map.insert("votes_total".into(), Value::from(tally.votes_total));
+                tally_map.insert("quorum".into(), Value::from(tally.quorum));
+                tally_map.insert(
+                    "winning_choice".into(),
+                    tally
+                        .winning_choice
+                        .map(|choice| Value::from(choice.as_str()))
+                        .unwrap_or(Value::Null),
+                );
+                tally_map.insert("contested".into(), Value::from(tally.contested));
+                tally_map.insert(
+                    "tallied_at_unix_ms".into(),
+                    Value::from(tally.tallied_at_unix_ms),
+                );
+                Value::Object(tally_map)
+            })
+            .unwrap_or(Value::Null),
+    );
+    map.insert("moderation_event".into(), Value::Object(event_map));
+
+    let mut signature = Map::new();
+    signature.insert("algorithm".into(), Value::from("ed25519"));
+    signature.insert(
+        "public_key_hex".into(),
+        Value::from(encode(&node.publisher_signature.public_key)),
+    );
+    signature.insert(
+        "signature_hex".into(),
+        Value::from(encode(&node.publisher_signature.signature)),
+    );
+    map.insert("publisher_signature".into(), Value::Object(signature));
+    Ok(Value::Object(map))
 }
 
 fn governance_dag_block_json(block: &GovernanceDagBlockV1) -> Value {

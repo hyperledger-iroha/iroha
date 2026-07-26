@@ -2448,7 +2448,7 @@ def test_asset_lock_instruction_helpers_serialize_full_surface() -> None:
             expires_at_ms=1_234_567,
             evidence_hashes=["11" * 32],
         ),
-        Instruction.drawdown_asset_lock("lock-sdk-1", "2.5"),
+        Instruction.drawdown_asset_lock("lock-sdk-1", "2.5", "12.5"),
         Instruction.cancel_asset_lock("lock-sdk-1"),
         Instruction.expire_asset_lock("lock-sdk-1"),
     ]
@@ -2471,7 +2471,7 @@ def test_asset_lock_instruction_helpers_serialize_full_surface() -> None:
         expires_at_ms=1_234_567,
         evidence_hashes=("22" * 32,),
     )
-    draft.drawdown_asset_lock("lock-sdk-2", Decimal("2.500"))
+    draft.drawdown_asset_lock("lock-sdk-2", Decimal("2.500"), Decimal("12.500"))
     draft.cancel_asset_lock("lock-sdk-2")
     draft.expire_asset_lock("lock-sdk-2")
 
@@ -2545,8 +2545,17 @@ def test_asset_lock_transaction_draft_rejects_non_positive_amounts(
     )
     method = getattr(draft, method_name)
 
-    with pytest.raises(ValueError, match="amount must be positive|quantity must be a finite"):
-        method(*args, amount)
+    with pytest.raises(
+        ValueError,
+        match=(
+            "amount must be positive|expected_remaining_amount must be positive|"
+            "quantity must be a finite"
+        ),
+    ):
+        if method_name == "drawdown_asset_lock":
+            method(*args, amount, 1)
+        else:
+            method(*args, amount)
 
 
 def test_asset_lock_transaction_draft_rejects_empty_identifiers() -> None:

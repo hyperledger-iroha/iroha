@@ -146,8 +146,14 @@ const SORAFS_REFERENCE_FFI_MAX_INPUT_BYTES: usize =
     SORAFS_REFERENCE_FFI_MAX_INPUT_BYTES_V1 as usize;
 const SORAFS_REFERENCE_FFI_MAX_LABEL_BYTES: usize =
     SORAFS_REFERENCE_FFI_MAX_LABEL_BYTES_V1 as usize;
-const SORAFS_REFERENCE_FFI_MAX_BUNDLE_PAYLOADS: usize = 64;
-const SORAFS_REFERENCE_FFI_MAX_BUNDLE_TOTAL_BYTES: usize = 64 * 1024 * 1024;
+/// Maximum payload descriptor count accepted by one fixture-bundle call.
+pub const SORAFS_REFERENCE_FFI_MAX_BUNDLE_PAYLOADS_V1: u32 = 64;
+/// Maximum aggregate payload and label bytes accepted by one fixture-bundle call.
+pub const SORAFS_REFERENCE_FFI_MAX_BUNDLE_TOTAL_BYTES_V1: u32 = 64 * 1024 * 1024;
+const SORAFS_REFERENCE_FFI_MAX_BUNDLE_PAYLOADS: usize =
+    SORAFS_REFERENCE_FFI_MAX_BUNDLE_PAYLOADS_V1 as usize;
+const SORAFS_REFERENCE_FFI_MAX_BUNDLE_TOTAL_BYTES: usize =
+    SORAFS_REFERENCE_FFI_MAX_BUNDLE_TOTAL_BYTES_V1 as usize;
 const _: () = assert!(
     SORAFS_REFERENCE_GOVERNANCE_DAG_MAX_BLOCKS_V1 as usize
         == crate::GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1
@@ -1817,8 +1823,8 @@ mod tests {
         BillingLineDirectionV1, BillingLineItemKindV1, BillingStatementV1, ByteRangeV1,
         GovernanceLogNodeV1, HEDGING_PRICE_FEED_VERSION_V1, HedgingFeedStatusV1,
         HedgingPriceFeedV1, OrderbookSignatureV1, POP_CREDENTIAL_VERSION_V1,
-        PopCredentialAttributeV1, PopCredentialV1, PopEligibilityClassV1,
-        PopSignatureAlgorithmV1, PopSignatureV1, ReplicationOrderSignatureV1, ReplicationOrderV1,
+        PopCredentialAttributeV1, PopCredentialV1, PopEligibilityClassV1, PopSignatureAlgorithmV1,
+        PopSignatureV1, ReplicationOrderSignatureV1, ReplicationOrderV1,
         SETTLEMENT_RECEIPT_VERSION_V1, SIGNED_REPLICATION_ORDER_VERSION_V1, SettlementReceiptV1,
         SignatureAlgorithm, SignedReplicationOrderV1, TradeEventV1, XorQuantity,
         build_billing_line_item_v1, build_billing_statement_v1, derive_reference_price_decision_v1,

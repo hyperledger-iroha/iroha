@@ -41,7 +41,7 @@ keeps the direct metric score as an upper bound, so trust feedback can reduce a
 score but cannot override objective proof, reserve, dispute, or slashing
 penalties.
 
-Before publishing:
+Before handing material to the external threshold-signing worker:
 
 - `snapshot.validate()` must pass.
 - `snapshot_id` must be nonzero and unique for the publication period.
@@ -52,18 +52,25 @@ Before publishing:
 
 ## Governance Publication
 
-Publish the snapshot through `GovernanceLogPayloadV1::ReputationSnapshot`.
-`GovernanceLogNodeV1::validate()` revalidates the embedded snapshot, including
-provider ordering, raw metrics hashes, and Merkle root. Consumers should reject
+`sorafs_node::reputation::ReputationIngestService` consumes only finalized
+native proof, reputation-journal, repair, orderbook, and reserve projections.
+Its five physical query cursors and deterministic provider accumulators share
+one canonical restart-safe checkpoint. When every governed feed is complete at
+the release-window anchor, the service places the exact unsigned signing
+material in a bounded durable outbox. Distinct delivery failures are
+idempotent, retry-bounded, and dead-lettered; acknowledgement must bind a
+canonical `SignedReputationSnapshotV1` to the exact snapshot, scoring evidence,
+policy digest, and signing digest. The projector never holds signing keys or
+signs locally.
+
+The external threshold-signing/publication worker must verify the configured
+trust policy, publish the signed result through the Governance DAG/committed
+projection, and acknowledge the exact outbox item. Consumers must reject
 governance nodes whose payload validation fails before using any score for
 routing or incentives.
 
-Torii nodes with SoraFS storage enabled can also accept and serve the latest
-snapshot through the SoraFS-scoped reputation API:
+The SoraFS-scoped Torii reputation family is read-only:
 
-- `POST /v1/sorafs/reputation/latest`: accept a canonical
-  `ReputationSnapshotV1`, validate it, persist it through the configured
-  governance publisher, and cache it as the latest snapshot.
 - `GET /v1/sorafs/reputation/latest?limit=N`: return the latest snapshot
   summary, including the Merkle root and up to `limit` provider scores while
   preserving total provider counts.
@@ -85,23 +92,21 @@ snapshot through the SoraFS-scoped reputation API:
   publications. If a client falls behind, Torii sends an `event = "lagged"`
   frame so the client can resynchronize through the REST event list.
 
-Each accepted snapshot also records a `ReputationSnapshotEventV1` containing
-the local sequence number, snapshot id, generation timestamp, Merkle root,
-provider count, and previous snapshot id.
+The standard daemon now constructs and supervises the finalized-feed projector,
+durable journal transaction submitter, and restart reconciliation loop. Startup
+still fails closed until deployment-owned finalized-query, external
+threshold-signing, and authenticated Governance DAG adapters are injected, so
+these reads become available only from the resulting committed projection.
+There is deliberately no Torii POST or local `reputation publish` CLI fallback.
 
 Successful reputation `GET` responses include `ETag` and
 `Cache-Control: public, max-age=30, must-revalidate`. Consumers may repeat the
 same request with `If-None-Match`; Torii returns `304 Not Modified` when the
 snapshot, provider proof, weights, or event page has not changed.
 
-The node filesystem publisher writes immutable `.to` and `.json` snapshot
-artifacts under `reputation/snapshots/<snapshot_id>/` and updates
-`reputation/latest.to` plus `reputation/latest.json` pointers. Each artifact has
-a `.blake3` sidecar.
-
 ## Observability
 
-After Torii validates and accepts a reputation snapshot, it exports:
+Once the standard runtime consumes the committed projection, it exports:
 
 - `sorafs_reputation_ingest_lag_seconds`
 - `sorafs_reputation_snapshot_age_seconds`
@@ -110,10 +115,25 @@ After Torii validates and accepts a reputation snapshot, it exports:
 - `sorafs_reputation_low_score_providers`
 - `sorafs_reputation_score{provider_id}`
 - `sorafs_reputation_threshold_crossings_total{level}`
+- `sorafs_reputation_runtime_live`
+- `sorafs_reputation_runtime_ready`
+- `sorafs_reputation_runtime_dependencies_ready`
+- `sorafs_reputation_journal_transaction_submitter_ready`
+- `sorafs_reputation_runtime_finalized_height`
+- `sorafs_reputation_runtime_consecutive_failures`
+- `sorafs_reputation_runtime_material_acknowledged`
+- `sorafs_reputation_runtime_provider_count`
+- `sorafs_reputation_runtime_ticks_total{result}`
 
 The `sorafs_reputation_score{provider_id}` gauge is bounded to the top 100
 providers in the latest accepted snapshot. Providers that fall out of that set
 are removed from the exported label set.
+
+The `*_runtime_*` series are payload-free and use no provider/event labels.
+Until `V1-BLOCK-REPUTATION-RUNTIME-01` closes,
+`sorafs_reputation_journal_transaction_submitter_ready` and aggregate runtime
+readiness intentionally remain zero even if committed ingest and external
+publication complete.
 
 Import `dashboards/grafana/sorafs_reputation_health.json` for operator views of
 snapshot freshness, publisher lag, provider counts, low-score providers,
@@ -148,14 +168,9 @@ sorafs_cli reputation verify \
 Omit `--provider-id` and `--proof` to validate only the snapshot envelope,
 provider ordering, raw metrics hashes, and Merkle root.
 
-Operators can publish and inspect the latest Torii reputation view with:
+Operators can inspect the latest Torii reputation projection with:
 
 ```bash
-sorafs_cli reputation publish \
-  --torii-url=https://validator.example \
-  --snapshot=signed-reputation-envelope.to \
-  --summary-out=reputation-publish.json
-
 sorafs_cli reputation snapshot \
   --torii-url=https://validator.example \
   --output=reputation-latest.json
@@ -173,34 +188,31 @@ sorafs_cli reputation watch \
   --summary-out=reputation-events.json
 ```
 
-The publish input is a canonical `SignedReputationSnapshotV1`, including the
-full scoring evidence and threshold signatures. The target node must configure
-`sorafs.storage.reputation_trust_policy_path`; unsigned snapshots and nodes
-without an external policy are rejected. The separate `reputation verify`
-command above continues to verify an extracted raw snapshot and optional Merkle
-proof.
-
-`publish` bounded-reads canonical Norito signed-envelope bytes, validates their
-intrinsic structure and replay evidence locally, and posts their JSON
-representation to Torii. `snapshot` and `fetch` consume the
-SoraFS-scoped Torii endpoints. `watch` polls the reputation event endpoint once
-by default; pass `--max-polls=0` for continuous polling or a positive
-`--max-polls=N` for bounded repeated polls. Use `verify` for archived canonical
-snapshot and proof replay.
+Snapshot publication is not a Torii or local CLI mutation. The finalized-chain
+projector durably exposes canonical unsigned material through its bounded
+outbox; an independently administered threshold-signing worker validates and
+signs that material, then acknowledges the exact canonical envelope. Torii's
+reputation family is read-only. `snapshot` and `fetch` consume those projection
+endpoints. `watch` polls the reputation event endpoint once by default; pass
+`--max-polls=0` for continuous polling or a positive `--max-polls=N` for
+bounded repeated polls. Use `verify` for archived canonical snapshot and proof
+replay.
 
 Before promoting a deployed publisher to routing or incentive enforcement,
 collect the rollout evidence bundle with the helper:
 
 ```bash
 python3 scripts/run_sorafs_reputation_rollout_evidence.py \
-  @scripts/examples/sorafs_reputation_rollout_evidence.args.example
+  @scripts/examples/sorafs_reputation_rollout_collection.args.example
 ```
 
-Use `--dry-run` first to print the exact command plan without publishing or
-fetching anything. The helper publishes the canonical snapshot, reads the latest
-snapshot, fetches each required provider proof, replays archived proofs, watches
-bounded reputation events, and then invokes the rollout gate. Operators that
-already collected the artifacts separately can run the gate directly:
+The collection arguments must include `--publish-evidence=PATH` pointing to a
+reviewed, payload-free result from the external threshold-signing/publication
+worker. Use `--dry-run` first to print the exact read-only command plan. The
+helper reads the latest snapshot, fetches each required provider proof, replays
+archived proofs, watches bounded reputation events, and then invokes the
+rollout gate with that external publication evidence. Operators that already
+collected the artifacts separately can run the gate directly:
 
 ```bash
 python3 scripts/check_sorafs_reputation_rollout_evidence.py \

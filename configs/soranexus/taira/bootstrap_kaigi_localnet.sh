@@ -115,10 +115,7 @@ if secrets_path:
         secrets = {}
     shared = secrets.get("shared", {})
 print(cfg["torii"]["max_content_len"])
-quota = cfg.get("sorafs", {}).get("quota", {})
 block = cfg.get("sumeragi", {}).get("block", {})
-print(quota.get("storage_pin_max_events", 64))
-print(quota.get("storage_pin_window_secs", 3600))
 print(shared.get("account_onboarding_authority", ""))
 print(shared.get("account_onboarding_private_key", ""))
 print(shared.get("account_onboarding_api_token", ""))
@@ -130,22 +127,20 @@ print(block.get("max_payload_bytes", ""))
 print(block.get("proposal_queue_scan_multiplier", ""))
 PY
   )
-  if [[ "${#values[@]}" -lt 12 ]]; then
-    echo "failed to load Taira max_content_len/quota/block-budget/shared local bootstrap signer defaults from $TAIRA_PROFILE_CONFIG" >&2
+  if [[ "${#values[@]}" -lt 10 ]]; then
+    echo "failed to load Taira max_content_len/block-budget/shared local bootstrap signer defaults from $TAIRA_PROFILE_CONFIG" >&2
     exit 1
   fi
   TAIRA_TORII_MAX_CONTENT_LEN="${IROHA_TAIRA_TORII_MAX_CONTENT_LEN:-${values[0]}}"
-  TAIRA_STORAGE_PIN_MAX_EVENTS="${IROHA_TAIRA_STORAGE_PIN_MAX_EVENTS:-${values[1]}}"
-  TAIRA_STORAGE_PIN_WINDOW_SECS="${IROHA_TAIRA_STORAGE_PIN_WINDOW_SECS:-${values[2]}}"
-  TAIRA_AUTHORITY="${IROHA_TAIRA_AUTHORITY:-${values[3]}}"
-  TAIRA_AUTHORITY_PRIVATE_KEY="${IROHA_TAIRA_AUTHORITY_PRIVATE_KEY:-${values[4]}}"
-  TAIRA_ONBOARDING_API_TOKEN="${values[5]}"
-  TAIRA_ONBOARDING_CREDENTIAL_ID="${values[6]:-local-dev}"
-  TAIRA_ONBOARDING_SCOPE_DOMAIN="${values[7]}"
-  TAIRA_ONBOARDING_SCOPE_DATASPACE="${values[8]}"
-  TAIRA_BLOCK_MAX_TRANSACTIONS="${IROHA_TAIRA_BLOCK_MAX_TRANSACTIONS:-${values[9]}}"
-  TAIRA_BLOCK_MAX_PAYLOAD_BYTES="${IROHA_TAIRA_BLOCK_MAX_PAYLOAD_BYTES:-${values[10]}}"
-  TAIRA_PROPOSAL_QUEUE_SCAN_MULTIPLIER="${IROHA_TAIRA_PROPOSAL_QUEUE_SCAN_MULTIPLIER:-${values[11]}}"
+  TAIRA_AUTHORITY="${IROHA_TAIRA_AUTHORITY:-${values[1]}}"
+  TAIRA_AUTHORITY_PRIVATE_KEY="${IROHA_TAIRA_AUTHORITY_PRIVATE_KEY:-${values[2]}}"
+  TAIRA_ONBOARDING_API_TOKEN="${values[3]}"
+  TAIRA_ONBOARDING_CREDENTIAL_ID="${values[4]:-local-dev}"
+  TAIRA_ONBOARDING_SCOPE_DOMAIN="${values[5]}"
+  TAIRA_ONBOARDING_SCOPE_DATASPACE="${values[6]}"
+  TAIRA_BLOCK_MAX_TRANSACTIONS="${IROHA_TAIRA_BLOCK_MAX_TRANSACTIONS:-${values[7]}}"
+  TAIRA_BLOCK_MAX_PAYLOAD_BYTES="${IROHA_TAIRA_BLOCK_MAX_PAYLOAD_BYTES:-${values[8]}}"
+  TAIRA_PROPOSAL_QUEUE_SCAN_MULTIPLIER="${IROHA_TAIRA_PROPOSAL_QUEUE_SCAN_MULTIPLIER:-${values[9]}}"
   if [[ -z "$TAIRA_AUTHORITY" || -z "$TAIRA_AUTHORITY_PRIVATE_KEY" ]]; then
     echo "set IROHA_TAIRA_AUTHORITY and IROHA_TAIRA_AUTHORITY_PRIVATE_KEY or provide [shared] account_onboarding_* values in $TAIRA_SECRETS_FILE; local bootstrap reuses that shared signer for the served faucet too" >&2
     exit 1
@@ -211,8 +206,6 @@ patch_peer_configs_for_taira_authority() {
   TAIRA_ONBOARDING_SCOPE_DOMAIN="$TAIRA_ONBOARDING_SCOPE_DOMAIN" \
   TAIRA_ONBOARDING_SCOPE_DATASPACE="$TAIRA_ONBOARDING_SCOPE_DATASPACE" \
   TAIRA_TORII_MAX_CONTENT_LEN="$TAIRA_TORII_MAX_CONTENT_LEN" \
-  TAIRA_STORAGE_PIN_MAX_EVENTS="$TAIRA_STORAGE_PIN_MAX_EVENTS" \
-  TAIRA_STORAGE_PIN_WINDOW_SECS="$TAIRA_STORAGE_PIN_WINDOW_SECS" \
   TAIRA_BLOCK_MAX_TRANSACTIONS="${TAIRA_BLOCK_MAX_TRANSACTIONS:-}" \
   TAIRA_BLOCK_MAX_PAYLOAD_BYTES="${TAIRA_BLOCK_MAX_PAYLOAD_BYTES:-}" \
   TAIRA_PROPOSAL_QUEUE_SCAN_MULTIPLIER="${TAIRA_PROPOSAL_QUEUE_SCAN_MULTIPLIER:-}" \
@@ -235,8 +228,6 @@ credential_id = os.environ["TAIRA_ONBOARDING_CREDENTIAL_ID"]
 scope_domain = os.environ["TAIRA_ONBOARDING_SCOPE_DOMAIN"]
 scope_dataspace = os.environ["TAIRA_ONBOARDING_SCOPE_DATASPACE"]
 max_content_len = os.environ["TAIRA_TORII_MAX_CONTENT_LEN"]
-storage_pin_max_events = os.environ["TAIRA_STORAGE_PIN_MAX_EVENTS"]
-storage_pin_window_secs = os.environ["TAIRA_STORAGE_PIN_WINDOW_SECS"]
 block_budget_values = {
     "max_transactions": os.environ.get("TAIRA_BLOCK_MAX_TRANSACTIONS", "").strip(),
     "max_payload_bytes": os.environ.get("TAIRA_BLOCK_MAX_PAYLOAD_BYTES", "").strip(),
@@ -313,11 +304,6 @@ pow_adaptive_max_extra_bits = 0
 pow_vrf_seed_enabled = false
 """
 
-quota_block = f"""[sorafs.quota]
-storage_pin_max_events = {storage_pin_max_events}
-storage_pin_window_secs = {storage_pin_window_secs}
-"""
-
 site_bindings_block = f"""[sorafs.gateway.site_bindings]
 path = {json.dumps(site_bindings_file)}
 max_bytes = 1048576
@@ -334,6 +320,10 @@ def replace_or_insert(text: str, section: str, block: str) -> str:
     if anchor:
         return text[: anchor.end()] + "\n" + replacement + text[anchor.end() :]
     return text.rstrip() + "\n\n" + replacement
+
+def remove_section(text: str, section: str) -> str:
+    pattern = re.compile(rf"(?ms)^\[{re.escape(section)}\]\n.*?(?=^\[|\Z)")
+    return pattern.sub("", text)
 
 def replace_account_onboarding(text: str, block: str) -> str:
     for header in (
@@ -403,7 +393,7 @@ for path in sorted(localnet_dir.glob("peer*.toml")):
     )
     text = ensure_torii_max_content_len(text)
     text = ensure_sumeragi_block_budget(text)
-    text = replace_or_insert(text, "sorafs.quota", quota_block)
+    text = remove_section(text, "sorafs.quota")
     text = replace_or_insert(text, "sorafs.gateway.site_bindings", site_bindings_block)
     text = replace_or_insert(
         text, "soracloud_runtime.submission", soracloud_submission_block

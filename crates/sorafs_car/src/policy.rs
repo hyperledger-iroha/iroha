@@ -377,14 +377,18 @@ pub use compliance::*;
 
 #[cfg(all(feature = "manifest", test))]
 mod compliance_tests {
-    use std::{collections::HashMap, sync::Arc};
+    use std::{
+        collections::HashMap,
+        sync::Arc,
+        time::{SystemTime, UNIX_EPOCH},
+    };
 
     use base64::Engine as _;
     use blake3;
     use ed25519_dalek::SigningKey;
     use reqwest::{StatusCode, header::HeaderMap};
     use sorafs_chunker::ChunkProfile;
-    use sorafs_manifest::{StreamTokenBodyV1, StreamTokenV1};
+    use sorafs_manifest::{STREAM_TOKEN_MAX_TTL_SECS_V1, StreamTokenBodyV1, StreamTokenV1};
 
     use super::*;
     use crate::{
@@ -409,6 +413,10 @@ mod compliance_tests {
         profile: &str,
         max_streams: u16,
     ) -> StreamTokenV1 {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock after epoch")
+            .as_secs();
         StreamTokenV1::sign(
             StreamTokenBodyV1 {
                 token_id: "01J9TK3GR0XM6YQF7WQXA9Z2SF".to_string(),
@@ -420,9 +428,9 @@ mod compliance_tests {
                 },
                 profile_handle: profile.to_string(),
                 max_streams,
-                ttl_epoch: 9_999_999_999,
+                ttl_epoch: now + STREAM_TOKEN_MAX_TTL_SECS_V1,
                 rate_limit_bytes: 8 * 1024 * 1024,
-                issued_at: 1_735_000_000,
+                issued_at: now,
                 requests_per_minute: 120,
                 token_pk_version: 1,
             },
@@ -468,7 +476,7 @@ mod compliance_tests {
         let payload = sample_payload(2048);
         let plan =
             CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
-        let spec: ChunkFetchSpec = plan.chunk_fetch_specs()[0].clone();
+        let spec: ChunkFetchSpec = plan.try_chunk_fetch_specs().expect("valid CAR plan")[0].clone();
         let manifest_id_hex = hex::encode(blake3::hash(&payload).as_bytes());
         let provider_id = provider_id_hex();
         let chunker_handle = "sorafs.sf1@1.0.0".to_string();

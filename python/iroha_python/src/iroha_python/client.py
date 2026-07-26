@@ -1627,161 +1627,6 @@ def _normalize_required_base64_payload(value: Any, context: str) -> str:
     return base64.b64encode(decoded).decode("ascii")
 
 
-_SORAFS_MAX_MANIFEST_ENCODED_BYTES = 512 * 1024
-_SORAFS_MAX_MANIFEST_BASE64_BYTES = (
-    (_SORAFS_MAX_MANIFEST_ENCODED_BYTES + 2) // 3 * 4
-)
-_SORAFS_MAX_ALIAS_PROOF_BYTES = 1024 * 1024
-_SORAFS_MAX_ALIAS_PROOF_BASE64_BYTES = ((_SORAFS_MAX_ALIAS_PROOF_BYTES + 2) // 3 * 4)
-
-
-def _normalize_sorafs_manifest_payload(value: Any, context: str) -> str:
-    if isinstance(value, str) and len(value) > _SORAFS_MAX_MANIFEST_BASE64_BYTES:
-        raise ValueError(
-            f"{context} must encode at most {_SORAFS_MAX_MANIFEST_ENCODED_BYTES} bytes"
-        )
-    if isinstance(value, (bytes, bytearray, memoryview)) and len(value) > (
-        _SORAFS_MAX_MANIFEST_ENCODED_BYTES
-    ):
-        raise ValueError(
-            f"{context} must contain at most {_SORAFS_MAX_MANIFEST_ENCODED_BYTES} bytes"
-        )
-    normalized = _normalize_required_base64_payload(value, context)
-    decoded = base64.b64decode(normalized, validate=True)
-    if len(decoded) > _SORAFS_MAX_MANIFEST_ENCODED_BYTES:
-        raise ValueError(
-            f"{context} must encode at most {_SORAFS_MAX_MANIFEST_ENCODED_BYTES} bytes"
-        )
-    return normalized
-
-
-def _normalize_sorafs_alias_proof(value: Any, context: str) -> str:
-    if not isinstance(value, str):
-        raise TypeError(f"{context} must be a canonical base64 string")
-    if len(value) > _SORAFS_MAX_ALIAS_PROOF_BASE64_BYTES:
-        raise ValueError(
-            f"{context} must encode at most {_SORAFS_MAX_ALIAS_PROOF_BYTES} bytes"
-        )
-    normalized = _normalize_required_base64_payload(value, context)
-    if len(base64.b64decode(normalized, validate=True)) > _SORAFS_MAX_ALIAS_PROOF_BYTES:
-        raise ValueError(
-            f"{context} must encode at most {_SORAFS_MAX_ALIAS_PROOF_BYTES} bytes"
-        )
-    return normalized
-
-
-def _normalize_sorafs_alias_text(value: Any, context: str) -> str:
-    normalized = _require_exact_non_empty_string(value, context)
-    if len(normalized) > 128 or re.fullmatch(r"[a-z0-9._-]+", normalized) is None:
-        raise ValueError(
-            f"{context} must contain 1..128 lowercase ASCII letters, digits, '.', '-', or '_'"
-        )
-    return normalized
-
-
-def _normalize_sorafs_pin_alias_request(value: Any, context: str) -> Dict[str, str]:
-    if not isinstance(value, Mapping):
-        raise TypeError(f"{context} must be an object")
-    allowed_fields = {
-        "namespace",
-        "name",
-        "proof_base64",
-    }
-    unknown_fields = sorted(set(value) - allowed_fields)
-    if unknown_fields:
-        raise TypeError(
-            f"{context} contains unsupported fields: {', '.join(unknown_fields)}"
-        )
-    namespace_value = _first_present(value, "namespace")
-    name_value = _first_present(value, "name")
-    proof_value = _first_present(value, "proof_base64")
-    if namespace_value is _MISSING:
-        raise TypeError(f"{context}.namespace is required")
-    if name_value is _MISSING:
-        raise TypeError(f"{context}.name is required")
-    if proof_value is _MISSING:
-        raise TypeError(f"{context}.proof_base64 is required")
-    return {
-        "namespace": _normalize_sorafs_alias_text(namespace_value, f"{context}.namespace"),
-        "name": _normalize_sorafs_alias_text(name_value, f"{context}.name"),
-        "proof_base64": _normalize_sorafs_alias_proof(
-            proof_value,
-            f"{context}.proof_base64",
-        ),
-    }
-
-
-def _normalize_sorafs_pin_register_request(
-    request: Mapping[str, Any],
-    *,
-    context: str,
-) -> Dict[str, Any]:
-    if not isinstance(request, Mapping):
-        raise TypeError(f"{context} must be an object")
-    allowed_fields = {
-        "authority",
-        "private_key",
-        "manifest_payload",
-        "submitted_epoch",
-        "alias",
-        "successor_of_hex",
-    }
-    unknown_fields = sorted(set(request) - allowed_fields)
-    if unknown_fields:
-        raise TypeError(
-            f"{context} contains unsupported fields: {', '.join(unknown_fields)}"
-        )
-    credentials = {
-        "authority": _require_exact_non_empty_string(
-            request.get("authority"),
-            f"{context}.authority",
-        ),
-        "private_key": _require_exact_non_empty_string(
-            request.get("private_key"),
-            f"{context}.private_key",
-        ),
-    }
-
-    manifest_payload_value = _first_present(request, "manifest_payload")
-    submitted_epoch_value = _first_present(request, "submitted_epoch")
-    if manifest_payload_value is _MISSING:
-        raise TypeError(f"{context}.manifest_payload is required")
-    if submitted_epoch_value is _MISSING:
-        raise TypeError(f"{context}.submitted_epoch is required")
-    if not isinstance(submitted_epoch_value, int) or isinstance(submitted_epoch_value, bool):
-        raise TypeError(f"{context}.submitted_epoch must be an integer")
-
-    payload: Dict[str, Any] = {
-        **credentials,
-        "manifest_payload": _normalize_sorafs_manifest_payload(
-            manifest_payload_value,
-            f"{context}.manifest_payload",
-        ),
-        "submitted_epoch": _normalize_sorafs_unsigned_integer(
-            submitted_epoch_value,
-            f"{context}.submitted_epoch",
-            allow_zero=True,
-        ),
-    }
-
-    alias_value = _first_present(request, "alias")
-    if alias_value is not _MISSING:
-        payload["alias"] = _normalize_sorafs_pin_alias_request(
-            alias_value,
-            f"{context}.alias",
-        )
-
-    successor_value = _first_present(request, "successor_of_hex")
-    if successor_value is not _MISSING:
-        successor = _normalize_sorafs_digest_hex(
-            successor_value,
-            f"{context}.successor_of_hex",
-        )
-        if successor == "0" * 64:
-            raise ValueError(f"{context}.successor_of_hex must not be zero")
-        payload["successor_of_hex"] = successor
-
-    return payload
 
 
 def _reject_governance_public_input_key(
@@ -2183,36 +2028,12 @@ class SorafsPorVerdictResponse:
 
 
 @dataclass(frozen=True)
-class SorafsPinAlias:
-    """Alias proof metadata attached to a SoraFS pin registration."""
-
-    namespace: str
-    name: str
-    proof_base64: str
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any], context: str) -> "SorafsPinAlias":
-        alias = _normalize_sorafs_pin_alias_request(payload, context)
-        return cls(
-            namespace=alias["namespace"],
-            name=alias["name"],
-            proof_base64=alias["proof_base64"],
-        )
-
-
-@dataclass(frozen=True)
 class SorafsPinRegisterResponse:
-    """Typed response returned by `/v1/sorafs/pin/register`."""
+    """Queue-admission identity returned by `/v1/sorafs/pin/register`."""
 
+    status: str
+    tx_hash_hex: str
     manifest_digest_hex: str
-    chunker_handle: str
-    submitted_epoch: int
-    content_length: int
-    pin_fee_nano: int
-    pin_fee_asset_id: str
-    pin_fee_treasury_account_id: str
-    alias: Optional[SorafsPinAlias] = None
-    successor_of_hex: Optional[str] = None
 
     @classmethod
     def from_payload(
@@ -2220,82 +2041,26 @@ class SorafsPinRegisterResponse:
         payload: Mapping[str, Any],
         context: str,
     ) -> "SorafsPinRegisterResponse":
-        if not isinstance(payload, Mapping):
-            raise TypeError(f"{context} must be a JSON object")
-        manifest_digest_value = _first_present(
-            payload,
-            "manifest_digest_hex",
-            "manifestDigestHex",
-        )
-        chunker_handle_value = _first_present(payload, "chunker_handle", "chunkerHandle")
-        submitted_epoch_value = _first_present(payload, "submitted_epoch", "submittedEpoch")
-        content_length_value = _first_present(payload, "content_length", "contentLength")
-        pin_fee_nano_value = _first_present(payload, "pin_fee_nano", "pinFeeNano")
-        pin_fee_asset_value = _first_present(payload, "pin_fee_asset_id", "pinFeeAssetId")
-        treasury_value = _first_present(
-            payload,
-            "pin_fee_treasury_account_id",
-            "pinFeeTreasuryAccountId",
-        )
-        required = {
-            "manifest_digest_hex": manifest_digest_value,
-            "chunker_handle": chunker_handle_value,
-            "submitted_epoch": submitted_epoch_value,
-            "content_length": content_length_value,
-            "pin_fee_nano": pin_fee_nano_value,
-            "pin_fee_asset_id": pin_fee_asset_value,
-            "pin_fee_treasury_account_id": treasury_value,
-        }
-        missing = [key for key, value in required.items() if value is _MISSING]
-        if missing:
-            raise TypeError(f"{context} missing required field `{missing[0]}`")
+        required = {"status", "tx_hash_hex", "manifest_digest_hex"}
+        if not isinstance(payload, Mapping) or set(payload) != required:
+            raise TypeError(
+                f"{context} must contain only status, tx_hash_hex, and manifest_digest_hex"
+            )
+        if payload["status"] != "submitted":
+            raise ValueError(f"{context}.status must be submitted")
 
-        alias_value = _first_present(payload, "alias")
-        alias = (
-            None
-            if alias_value is _MISSING
-            else SorafsPinAlias.from_payload(alias_value, f"{context}.alias")
-        )
-        successor_value = _first_present(payload, "successor_of_hex", "successorOfHex")
-        successor = (
-            None
-            if successor_value is _MISSING
-            else _normalize_sorafs_digest_hex(successor_value, f"{context}.successor_of_hex")
-        )
+        def canonical_digest(field: str) -> str:
+            value = payload[field]
+            if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+                raise ValueError(
+                    f"{context}.{field} must be exactly 64 lowercase hexadecimal characters"
+                )
+            return value
+
         return cls(
-            manifest_digest_hex=_normalize_sorafs_digest_hex(
-                manifest_digest_value,
-                f"{context}.manifest_digest_hex",
-            ),
-            chunker_handle=_require_non_empty_string(
-                chunker_handle_value,
-                f"{context}.chunker_handle",
-            ),
-            submitted_epoch=_normalize_sorafs_unsigned_integer(
-                submitted_epoch_value,
-                f"{context}.submitted_epoch",
-                allow_zero=True,
-            ),
-            content_length=_normalize_sorafs_unsigned_integer(
-                content_length_value,
-                f"{context}.content_length",
-                allow_zero=True,
-            ),
-            pin_fee_nano=_normalize_sorafs_unsigned_integer(
-                pin_fee_nano_value,
-                f"{context}.pin_fee_nano",
-                allow_zero=True,
-            ),
-            pin_fee_asset_id=_require_non_empty_string(
-                pin_fee_asset_value,
-                f"{context}.pin_fee_asset_id",
-            ),
-            pin_fee_treasury_account_id=_require_non_empty_string(
-                treasury_value,
-                f"{context}.pin_fee_treasury_account_id",
-            ),
-            alias=alias,
-            successor_of_hex=successor,
+            status="submitted",
+            tx_hash_hex=canonical_digest("tx_hash_hex"),
+            manifest_digest_hex=canonical_digest("manifest_digest_hex"),
         )
 
 
@@ -10580,7 +10345,6 @@ __all__ = [
     "StreamingSoranetConfig",
     "SorafsPorSubmissionResponse",
     "SorafsPorVerdictResponse",
-    "SorafsPinAlias",
     "SorafsPinRegisterResponse",
     "SorafsPorIngestionProviderStatus",
     "SorafsPorIngestionStatus",
@@ -11678,44 +11442,30 @@ class ToriiClient(_BaseToriiClient):
 
     def register_sorafs_pin_manifest(
         self,
-        request: Mapping[str, Any],
-        *,
-        timeout: Optional[float] = None,
-    ) -> Mapping[str, Any]:
-        """Register a SoraFS pin manifest (`POST /v1/sorafs/pin/register`)."""
-
-        payload = _normalize_sorafs_pin_register_request(
-            request,
-            context="register_sorafs_pin_manifest",
-        )
-        response = self._request(
-            "POST",
-            "/v1/sorafs/pin/register",
-            json_body=payload,
-            headers={"Accept": "application/json"},
-            timeout=timeout,
-        )
-        self._expect_status(response, (200,))
-        body = type(self)._maybe_json(response)
-        if body is None:
-            raise RuntimeError("sorafs pin register endpoint returned no payload")
-        if not isinstance(body, Mapping):
-            raise RuntimeError("sorafs pin register endpoint returned malformed payload")
-        return body
-
-    def register_sorafs_pin_manifest_typed(
-        self,
-        request: Mapping[str, Any],
+        transaction: "SignedTransactionEnvelope",
         *,
         timeout: Optional[float] = None,
     ) -> SorafsPinRegisterResponse:
-        """Register a SoraFS pin manifest and return a typed response."""
+        """Submit one already-signed native pin-registration transaction."""
 
-        payload = self.register_sorafs_pin_manifest(request, timeout=timeout)
-        return SorafsPinRegisterResponse.from_payload(
-            payload,
-            "sorafs_pin_register",
+        payload = bytes(transaction.signed_transaction_versioned)
+        if not payload:
+            raise ValueError("transaction must contain non-empty versioned signed bytes")
+        response = self._request(
+            "POST",
+            "/v1/sorafs/pin/register",
+            data=payload,
+            headers={
+                "Content-Type": "application/x-norito",
+                "Accept": "application/json",
+            },
+            timeout=timeout,
         )
+        self._expect_status(response, (202,))
+        body = type(self)._maybe_json(response)
+        if not isinstance(body, Mapping):
+            raise RuntimeError("sorafs pin register endpoint returned malformed payload")
+        return SorafsPinRegisterResponse.from_payload(body, "sorafs_pin_register")
 
     def get_sorafs_orderbook(
         self,
@@ -14999,6 +14749,7 @@ class ToriiClient(_BaseToriiClient):
         private_key_hex: Optional[str] = None,
         escrow_id: str,
         amount: QuantityLike,
+        expected_remaining_amount: QuantityLike,
         transaction_metadata: Optional[Mapping[str, Any]] = None,
         wait: bool = True,
         timeout: Optional[float] = 30.0,
@@ -15012,7 +14763,7 @@ class ToriiClient(_BaseToriiClient):
             fee_payment=fee_payment,
             metadata=transaction_metadata,
         )
-        draft.drawdown_asset_lock(escrow_id, amount)
+        draft.drawdown_asset_lock(escrow_id, amount, expected_remaining_amount)
         return self._submit_transaction_draft_result(
             draft,
             private_key=private_key,

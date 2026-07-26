@@ -1,5 +1,9 @@
-# Canonicalize real adversarial serving probes. No claim is synthesized.
+# Exercise adversarial serving canonicalization with a non-production fixture.
 --kind honey_audit
---probe-artifact /runtime/sorafs/gateway-compliance/probes/adversarial.json
+--probe-artifact scripts/examples/fixtures/gateway_compliance/honey_audit.json
 --out artifacts/sorafs_gateway/honey-audit-canary.json
---now-unix 1800100000
+--deployment-id sorafs-gateway-release-42
+--environment production
+--generated-at-unix 1800699940
+--now-unix 1800700000
+--non-production-fixture

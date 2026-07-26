@@ -345,7 +345,11 @@ fn native_asset_lock_flow_on_multi_peer_network() -> Result<()> {
         assert!(
             destination_client
                 .submit_blocking(
-                    DrawdownAssetLock::new(trusted_lock_id, Quantity::from(1_u64)),
+                    DrawdownAssetLock::new(
+                        trusted_lock_id,
+                        Quantity::from(1_u64),
+                        Quantity::from(40_u64),
+                    ),
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None)
                 )
                 .is_err(),
@@ -353,7 +357,11 @@ fn native_asset_lock_flow_on_multi_peer_network() -> Result<()> {
         );
 
         release_authority_client.submit_blocking(
-            DrawdownAssetLock::new(trusted_lock_id, Quantity::from(15_u64)),
+            DrawdownAssetLock::new(
+                trusted_lock_id,
+                Quantity::from(15_u64),
+                Quantity::from(40_u64),
+            ),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )?;
         let destination_asset_id = AssetId::of(asset_definition_id.clone(), destination.clone());
@@ -370,6 +378,19 @@ fn native_asset_lock_flow_on_multi_peer_network() -> Result<()> {
             "release-authority partial drawdown",
         )?;
         assert_eq!(partially_drawn.remaining_amount, Quantity::from(25_u64));
+        assert!(
+            release_authority_client
+                .submit_blocking(
+                    DrawdownAssetLock::new(
+                        trusted_lock_id,
+                        Quantity::from(1_u64),
+                        Quantity::from(40_u64),
+                    ),
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                )
+                .is_err(),
+            "a stale independently submitted drawdown must not debit custody twice"
+        );
 
         client.submit_blocking(
             CancelAssetLock::new(trusted_lock_id),

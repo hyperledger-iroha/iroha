@@ -196,6 +196,7 @@ export {
   verifyBlockMerkleProof,
   verifyBlockProofs,
   validateNoritoFrame,
+  validateSorafsReplicationOrderPayloadV1,
 } from "./norito.js";
 export {
   buildGatewayRequest,
@@ -233,6 +234,8 @@ export {
   buildTransactionPayload,
   signQuotedTransactionPayload,
   quoteAndSignTransaction,
+  buildRegisterPinManifestInstruction,
+  buildRegisterPinManifestTransaction,
   buildIvmProvedTransactionPayload,
   signQuotedIvmProvedTransactionPayload,
   buildIvmProvedTransaction,
@@ -335,6 +338,10 @@ export {
   buildMintAssetInstruction,
   buildMintTriggerRepetitionsInstruction,
   buildBurnTriggerRepetitionsInstruction,
+  SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BYTES_V1,
+  buildIssueReplicationOrderInstruction,
+  buildCompleteReplicationOrderInstruction,
+  buildExpireReplicationOrderInstruction,
   buildRegisterDomainInstruction,
   buildRegisterAccountInstruction,
   buildRegisterAssetDefinitionInstruction,
@@ -569,6 +576,8 @@ export {
 } from "./sccp.js";
 export {
   decodeReplicationOrder,
+  SORAFS_FIXTURE_BUNDLE_MAX_PAYLOADS_V1,
+  SORAFS_FIXTURE_BUNDLE_PAYLOAD_KINDS,
   SORAFS_GOVERNANCE_DAG_CID_BYTES_V1,
   ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1,
   SORAFS_GOVERNANCE_DAG_MAX_BLOCKS_V1,
@@ -577,6 +586,8 @@ export {
   SORAFS_REFERENCE_MAX_INPUT_BYTES_V1,
   SORAFS_REFERENCE_MAX_LABEL_BYTES_V1,
   SorafsGatewayFetchError,
+  validateFixtureBundle,
+  validateGovernanceLogNode,
   validateGovernanceDagBlock,
   validateGovernanceDagHeadChain,
   validatePdpBundle,

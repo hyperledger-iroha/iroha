@@ -34,6 +34,8 @@ def complete_args(tmp_path: Path) -> list[str]:
         "https://torii.example",
         "--snapshot",
         str(write_payload(payload_dir / "reputation-snapshot.to")),
+        "--publish-evidence",
+        str(write_payload(payload_dir / "publish.json")),
         "--provider-id",
         "provider-a",
         "--provider-proof",
@@ -83,6 +85,7 @@ def test_dry_run_prints_complete_reputation_rollout_plan(tmp_path: Path, capsys)
     assert plan["schema"] == "sorafs.reputation.rollout_evidence_collection_plan.v1"
     assert plan["verifier_summary_schema"] == "sorafs.reputation.rollout_evidence_gate.v1"
     assert plan["external_evidence"] == {
+        "publish": args[args.index("--publish-evidence") + 1],
         "metrics": args[args.index("--metrics-evidence") + 1],
         "transport": args[args.index("--transport-evidence") + 1],
         "consumption": args[args.index("--consumption-evidence") + 1],
@@ -130,22 +133,21 @@ def test_dry_run_prints_complete_reputation_rollout_plan(tmp_path: Path, capsys)
     ]
     labels = [step["label"] for step in plan["steps"]]
     assert labels == [
-        "publish_snapshot",
         "fetch_latest_snapshot",
         "fetch_provider_provider-a",
         "verify_provider_provider-a",
         "watch_reputation_events",
         "rollout_evidence_gate",
     ]
-    publish = plan["steps"][0]["command"]
-    assert publish[:3] == ["/usr/local/bin/sorafs_cli", "reputation", "publish"]
-    assert "--torii-url=https://torii.example" in publish
-    assert any(arg.startswith("--summary-out=") for arg in publish)
-    fetch = plan["steps"][2]["command"]
+    assert all(
+        step["command"][:3] != ["/usr/local/bin/sorafs_cli", "reputation", "publish"]
+        for step in plan["steps"]
+    )
+    fetch = plan["steps"][1]["command"]
     assert "--format=json" in fetch
-    verify = plan["steps"][3]["command"]
+    verify = plan["steps"][2]["command"]
     assert "--provider-id=provider-a" in verify
-    verifier = plan["steps"][5]["command"]
+    verifier = plan["steps"][4]["command"]
     assert "check_sorafs_reputation_rollout_evidence.py" in verifier[1]
     assert "--now-unix" in verifier
     assert "1800400000" in verifier
@@ -155,6 +157,10 @@ def test_dry_run_prints_complete_reputation_rollout_plan(tmp_path: Path, capsys)
     assert "900" in verifier
     assert "--require-provider" in verifier
     assert "provider-a" in verifier
+    assert (
+        f"publish={args[args.index('--publish-evidence') + 1]}"
+        in verifier
+    )
 
 
 def test_plan_json_shape_is_validated(tmp_path: Path) -> None:
@@ -204,6 +210,7 @@ def test_plan_json_nested_shapes_are_validated(tmp_path: Path) -> None:
     rendered["external_evidence"] = {
         "metrics": "bad\npath",
         "publish": ["publish.json"],
+        "latest": "latest.json",
         "unknown_kind": "unknown.json",
         "bad\nkind": "metrics.json",
         "private_key": "runtime-only-key-material",
@@ -333,8 +340,8 @@ def test_response_file_dry_run_prints_complete_reputation_plan(
 
     assert exit_code == 0
     plan = json.loads(capsys.readouterr().out)
-    assert plan["steps"][0]["label"] == "publish_snapshot"
-    assert plan["steps"][5]["label"] == "rollout_evidence_gate"
+    assert plan["steps"][0]["label"] == "fetch_latest_snapshot"
+    assert plan["steps"][4]["label"] == "rollout_evidence_gate"
     assert "events" in plan["evidence_contract"]
 
 

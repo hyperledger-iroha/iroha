@@ -20,7 +20,7 @@ This runbook captures the branching, build, validation, and publication flow req
 - **Core Engineering Lead** — approves code freeze and validates consensus/perf gates.
 - **Ops / DevRel** — verify packaging, update operator docs, announce availability.
 - **Security Review** — approves the Ed25519 public-key fingerprint, HSM
-  ceremony, signer rotation/revocation, and artifact-signature results.
+  ceremony, signer rotation/revocation, and aggregate-manifest signature.
 
 ## Branching & Tagging Strategy
 | Step | Branch/Tag | Purpose |
@@ -44,7 +44,7 @@ This runbook captures the branching, build, validation, and publication flow req
 | D‑5 | Profile build smoke (`ci/dual_profile_smoke.sh`) | Core Lead | Build logs archived in `artifacts/smoke/`. |
 | D‑3 | Chaos/perf deltas (NPoS, Nexus) | SRE / Core | Attach metrics to release ticket. |
 | D‑2 | Final validation matrix (see below) | Release Manager | All rows pass; blockers escalated. |
-| D‑1 | HSM-sign artifacts, stage images | Security / Core | Checksums, Ed25519 signatures, and reviewed fingerprint recorded. |
+| D‑1 | HSM-sign the aggregate manifest, stage images | Security / Core | Checksums, aggregate Ed25519 signature, and reviewed fingerprint recorded. |
 | R0 | Publish artefacts, cut GitHub releases, send announcements | Ops / DevRel | Release notes merged. |
 | R+1 | Post-release retrospective + tracker updates | All | Update `status.md`, roadmap, incident log. |
 
@@ -102,20 +102,16 @@ Build the binary bundles:
 
 ```bash
 scripts/build_release_bundle.sh \
-  --profile iroha2 --config single --artifacts-dir dist \
-  --external-signer "$EXTERNAL_SIGNER" \
-  --signing-public-key "$SIGNING_PUBLIC_KEY" \
-  --trusted-signing-fingerprint "$TRUSTED_SIGNING_FINGERPRINT"
+  --profile iroha2 --config single --artifacts-dir dist
 
 scripts/build_release_bundle.sh \
-  --profile iroha3 --config nexus --artifacts-dir dist \
-  --external-signer "$EXTERNAL_SIGNER" \
-  --signing-public-key "$SIGNING_PUBLIC_KEY" \
-  --trusted-signing-fingerprint "$TRUSTED_SIGNING_FINGERPRINT"
+  --profile iroha3 --config nexus --artifacts-dir dist
 ```
 
-Use the same three signing options with `scripts/build_release_image.sh` for
-the two container-image archives.
+Use `scripts/build_release_image.sh` with the same profile/config pairs for the
+two container-image archives. Both builders reject the retired per-artifact
+signing options; the coordinator uses the signing inputs only after it has
+generated the final aggregate manifest.
 
 To run the complete local coordinator, including `git-cliff`, bundles, images,
 aggregated checksums, manifest generation, and SoraFS publication-plan
@@ -144,15 +140,14 @@ is the separate canonical SoraFS CLI/reference-validator workflow.
 - **Tarballs:** `iroha{2,3}-<version>-<os>.tar.zst` produced via deploy profile binaries + profile configs. Bundles always include `PROFILE.toml` (metadata), `config/` tree, and `bin/` executables. Compression is fixed (`zstd -19 --long=31`) for deterministic bytes.
 - **Container images:** `iroha{2,3}-<version>-<os>-image.tar` generated from the Dockerfile using the same deploy binaries. Naming does not embed the registry tag, ensuring reproducible tarball names.
 - **Hashes:** Each artifact emits `<name>.sha256`; `scripts/run_release_pipeline.py` collates them into `SHA256SUMS` and `release_manifest.json`, which downstream signing/publication systems use verbatim.
-- **Signatures:** The complete external-signer option set makes both builders
-  invoke a reviewed PKCS#11/HSM wrapper, require exactly 64 raw Ed25519
-  signature bytes, and verify them before and after exclusive installation.
-  Each per-artifact `.sig` contains the raw signature and `.pub` is generated
-  Ed25519 SPKI PEM; the per-artifact manifest records the exact raw-key SHA-256
-  fingerprint and format. After the final evidence update, the pipeline signs
-  the deterministic aggregate `release_manifest.json` through the same
-  external signer. Its `release_manifest.json.sig` is exactly 64 raw bytes and
-  `release_manifest.json.pub` is exactly 32 raw Ed25519 public-key bytes.
+- **Signatures:** Builders do not invoke signers or emit per-artifact
+  signature/key sidecars. After the final evidence update, the pipeline invokes
+  the reviewed PKCS#11/HSM wrapper once for the deterministic aggregate
+  `release_manifest.json`. Its `release_manifest.json.sig` is exactly 64
+  canonical raw Ed25519 bytes and `release_manifest.json.pub` is exactly 32 raw
+  Ed25519 public-key bytes. The pinned native verifier rejects incompatible or
+  weak keys, malformed/noncanonical signatures, unsafe permissions, links, and
+  fingerprint mismatches.
 - **Manifests:** `generate_release_manifest.py` records profile, format, path,
   and SHA256 for every bundle/AppImage encountered using stable key ordering.
   `scripts/run_release_pipeline.py` may then append an `evidence` block for
@@ -168,9 +163,9 @@ is the separate canonical SoraFS CLI/reference-validator workflow.
 
 **Build prerequisites**
 - Ensure `cargo xtask gen-version --write` has been run so version metadata matches the target tag.
-- Provision the reviewed external signer executable, raw 32-byte Ed25519 public
-  key, and independently approved lowercase SHA-256 fingerprint. Signing
-  credentials remain runtime-only in the PKCS#11/HSM session.
+- Provision the reviewed aggregate-manifest signer executable, raw 32-byte
+  Ed25519 public key, and independently approved lowercase SHA-256 fingerprint.
+  Signing credentials remain runtime-only in the PKCS#11/HSM session.
 - Provision the packaged `sorafs-validate` candidate by direct path and obtain
   independent approval of the exact executable's lowercase SHA-256 digest.
 - Use the same toolchain/container across both builds to maintain deterministic binaries.
@@ -213,16 +208,13 @@ Document approvals in the release ticket or the `release/YYYY-MM/notes.md` recor
 1. Generate tarballs/images (Build Matrix).
 2. Upload artefacts to the staging buckets (`s3://releases-staging/iroha2/`, `s3://releases-staging/iroha3/`) and container registries (`registry.sora.org/iroha2`, `registry.sora.org/iroha3`).
 3. Re-run the complete verification procedure in
-   `docs/source/release_artifact_selection.md`: check each checksum, require the
-   Ed25519 manifest fields, derive the SHA-256 fingerprint of the raw 32-byte
-   key from the downloaded SPKI PEM, compare both manifest and derived values
-   with the independently reviewed runtime fingerprint, and run
-   `openssl pkeyutl -verify -pubin -rawin` for each per-artifact signature.
-   Verify the aggregate raw-key signature separately through the pinned
-   `sorafs-validate release-manifest` contract.
+   `docs/source/release_artifact_selection.md`: verify the aggregate raw-key
+   signature through the pinned `sorafs-validate release-manifest` contract,
+   then check every artifact against the authenticated manifest and its
+   checksum sidecar.
 4. Promote from staging to the production buckets (`s3://releases/iroha2/`, `s3://releases/iroha3/`) once approval is logged.
 5. Create GitHub releases `iroha2-vX.Y.Z` / `iroha3-vX.Y.Z`, attaching:
-   - Tarballs, manifests, signatures.
+   - Tarballs, manifests, the aggregate signature, and raw public key.
    - SBOM and a vulnerability report with no critical/high findings.
    - OIDC/cosign provenance bundle and verification receipt.
    - Release notes sections linking to status/roadmap updates.
@@ -291,8 +283,9 @@ Generate and validate publish plans before any upload/promotion:
   - External state: no checked-in workflow invokes the generic coordinator;
     hosted build/upload evidence is still required.
 - **Signing and provenance evidence** — Owner: Security Review board liaison.
-  - Local state: the builders accept no private key, enforce the external
-    Ed25519 signer contract, and verify the signature and reviewed fingerprint.
+  - Local state: the builders expose no signing path; the coordinator enforces
+    the external aggregate Ed25519 signer contract and verifies the signature
+    and reviewed fingerprint through the pinned native verifier.
   - External state: attach the PKCS#11/HSM ceremony, rotation/revocation record,
     OIDC/cosign provenance, registry/publication receipts, and rollback/yank
     rehearsal before promotion.

@@ -60,7 +60,7 @@ def test_dry_run_is_explicitly_non_production(
 ) -> None:
     assert MODULE.main(base_args(tmp_path, dry_run=True)) == 0
     plan = json.loads(capsys.readouterr().out)
-    assert plan["execution_scope"] == "non_production_dry_run"
+    assert "execution_scope" not in plan
     assert plan["required_kinds"][0] == "catalog_promotion"
     assert "feed_promotion" not in plan["required_kinds"]
     assert "precedence" in plan["required_kinds"]
@@ -74,19 +74,42 @@ def test_dry_run_is_explicitly_non_production(
     )
     assert "catalog_digest_hex" in contract["required_payload_fields"]
     assert "bundle_digest_hex" not in contract["required_payload_fields"]
+    for kind in FIXTURES.MODULE.PREDECESSOR_BOUND_KINDS:
+        assert (
+            "predecessor_catalog_sequence"
+            in plan["evidence_contract"][kind]["required_payload_fields"]
+        )
+    enforcement_fields = plan["evidence_contract"]["enforcement_probe"][
+        "required_payload_fields"
+    ]
+    assert "denial_sources_observed" not in enforcement_fields
+    assert "denial_source_count" not in enforcement_fields
+    honey_fields = plan["evidence_contract"]["honey_audit"][
+        "required_payload_fields"
+    ]
+    assert "attacks_observed" not in honey_fields
+    assert "attack_count" not in honey_fields
 
 
 def test_production_runner_verifies_canonical_inputs(tmp_path: Path) -> None:
     args = base_args(tmp_path)
     parsed = MODULE.parse_args(args)
     plan = MODULE.plan_json(MODULE.build_command_plan(parsed), parsed)
-    assert plan["execution_scope"] == "production_verification"
+    assert "execution_scope" not in plan
     assert MODULE.main(args) == 0
     summary = json.loads(
         (tmp_path / "output" / "rollout-summary.json").read_text(encoding="utf-8")
     )
     assert summary["status"] == "ready"
     assert summary["valid_catalog_digests"] == [FIXTURES.CATALOG_DIGEST]
+    assert summary["valid_catalog_history_bindings"] == [
+        {
+            "catalog_digest_hex": FIXTURES.CATALOG_DIGEST,
+            "catalog_sequence": 8,
+            "predecessor_catalog_digest_hex": FIXTURES.PREDECESSOR_DIGEST,
+            "predecessor_catalog_sequence": 7,
+        }
+    ]
 
 
 def test_catalog_flags_replace_legacy_flags(tmp_path: Path) -> None:
@@ -162,7 +185,7 @@ def test_plan_validation_rejects_scope_tampering(tmp_path: Path) -> None:
     rendered = MODULE.plan_json(command_plan, args)
     rendered["execution_scope"] = "production_verification"
     errors = MODULE.validate_plan_json(rendered, command_plan, args)
-    assert any("execution_scope is invalid" in error for error in errors)
+    assert any("fields must match" in error for error in errors)
 
 
 def test_plan_validation_rejects_legacy_anchor_field(tmp_path: Path) -> None:
@@ -187,7 +210,7 @@ def test_response_file_plan_remains_non_production(
     )
     assert MODULE.main([f"@{args_file}"]) == 0
     plan = json.loads(capsys.readouterr().out)
-    assert plan["execution_scope"] == "non_production_dry_run"
+    assert "execution_scope" not in plan
 
 
 def test_duplicate_evidence_path_fails_closed(tmp_path: Path) -> None:

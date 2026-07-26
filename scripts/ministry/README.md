@@ -66,9 +66,10 @@ This directory hosts helper scripts referenced by `docs/source/ministry/transpar
   consumes the `transparency_release_action.json` emitted by the Python helper,
   encodes a canonical `TransparencyReleaseV1` Norito artefact, and drops both the
   `.to` payload and the JSON summary into the configured governance DAG directory
-  (e.g., `$GOVERNANCE_DAG_DIR/ministry/releases/<quarter>/`). Point Torii’s
-  `sorafs_por.governance_dag_dir` (or the ministry publisher) at the same path
-  so the builder/publisher pipeline can ingest the release automatically.
+  (e.g., `$GOVERNANCE_DAG_DIR/ministry/releases/<quarter>/`). Point the SoraFS
+  storage publisher's `sorafs.storage.governance_dag_dir` (or the ministry
+  publisher) at the same path so the builder/publisher pipeline can ingest the
+  release automatically.
 
 All scripts assume they are run from the workspace root (or that `cargo` can
 find the workspace through `CARGO_MANIFEST_DIR`). Use Python 3.11+ to match CI.

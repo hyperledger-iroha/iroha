@@ -153,7 +153,6 @@ const SCCP_DESTINATION_NORITO_RESPONSE_MAX_BYTES: usize =
     iroha_sccp::SCCP_GROTH16_BN254_MAX_ENCODED_ARTIFACT_BYTES_V1;
 const ACCEPT_NORITO_PREFERRED: &str = "application/x-norito, application/json;q=0.8";
 const ACCEPT_JSON_PREFERRED: &str = "application/json, application/x-norito;q=0.8";
-const SORAFS_STORAGE_PIN_REQUEST_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const SORAFS_MODERATION_TRANSACTION_TTL: Duration = Duration::from_millis(5 * 60 * 1_000);
 const HEADER_ACCOUNT: &str = "x-iroha-account";
 const HEADER_SIGNATURE: &str = "x-iroha-signature";
@@ -5413,15 +5412,6 @@ pub struct SorafsTokenOverrides {
     pub requests_per_minute: Option<u32>,
 }
 
-/// File metadata attached to a `SoraFS` storage pin request for directory payloads.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SorafsStorageFileEntry<'a> {
-    /// Relative path components within the dataset root.
-    pub path: &'a [String],
-    /// File size in bytes.
-    pub size: u64,
-}
-
 /// Optional tuning knobs applied when orchestrating `SoraFS` gateway fetches.
 #[derive(Debug, Default, Clone)]
 pub struct SorafsGatewayFetchOptions {
@@ -6493,10 +6483,6 @@ pub struct SorafsPinAlias<'a> {
 /// Arguments required to register a `SoraFS` manifest with the pin registry.
 #[derive(Clone, Copy)]
 pub struct SorafsPinRegisterArgs<'a> {
-    /// Account submitting the manifest registration request.
-    pub authority: &'a iroha_data_model::account::AccountId,
-    /// Private key used to sign the registration transaction.
-    pub private_key: &'a iroha_crypto::PrivateKey,
     /// Exact canonical Norito `ManifestV1` bytes to register.
     pub manifest_payload: &'a [u8],
     /// Epoch at which the registration was submitted.
@@ -10715,63 +10701,6 @@ mod evidence_http_tests {
     }
 
     #[test]
-    fn storage_pin_request_sets_publish_sized_timeout_headers_and_body() {
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let responder = respond_with(&store, empty_response(StatusCode::OK));
-        let file_path = vec!["sites".to_owned(), "index.html".to_owned()];
-        let files = [SorafsStorageFileEntry {
-            path: file_path.as_slice(),
-            size: 42,
-        }];
-
-        with_mock_http(responder, || {
-            let client = client_with_base_url(base_url());
-            client
-                .post_sorafs_storage_pin(b"manifest bytes", b"payload bytes", Some(&files))
-                .expect("storage pin request");
-        });
-
-        let snapshots = store.lock().expect("snapshot lock");
-        assert_eq!(snapshots.len(), 1);
-        let snapshot = &snapshots[0];
-        assert_eq!(snapshot.method, HttpMethod::POST);
-        assert_eq!(snapshot.url.path(), "/v1/sorafs/storage/pin");
-        assert_eq!(snapshot.timeout, Some(SORAFS_STORAGE_PIN_REQUEST_TIMEOUT));
-        assert!(
-            snapshot
-                .headers
-                .iter()
-                .any(|(name, value)| name.eq_ignore_ascii_case("content-type")
-                    && value == APPLICATION_JSON),
-            "content-type header missing"
-        );
-
-        let body: Value = norito::json::from_slice(&snapshot.body).expect("storage pin body JSON");
-        let manifest_b64 = base64::engine::general_purpose::STANDARD.encode(b"manifest bytes");
-        let payload_b64 = base64::engine::general_purpose::STANDARD.encode(b"payload bytes");
-        assert_eq!(
-            body.get("manifest_b64").and_then(Value::as_str),
-            Some(manifest_b64.as_str())
-        );
-        assert_eq!(
-            body.get("payload_b64").and_then(Value::as_str),
-            Some(payload_b64.as_str())
-        );
-        let files = body
-            .get("files")
-            .and_then(Value::as_array)
-            .expect("files array");
-        let first_file = files[0].as_object().expect("file entry object");
-        let path = first_file
-            .get("path")
-            .and_then(Value::as_array)
-            .expect("path array");
-        assert_eq!(path[0].as_str(), Some("sites"));
-        assert_eq!(path[1].as_str(), Some("index.html"));
-        assert_eq!(first_file.get("size").and_then(Value::as_u64), Some(42));
-    }
-
-    #[test]
     fn storage_token_request_sets_headers_and_body() {
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let responder = respond_with(&store, empty_response(StatusCode::OK));
@@ -10937,8 +10866,7 @@ mod evidence_http_tests {
     }
 
     #[test]
-    fn build_register_manifest_payload_contains_expected_fields() {
-        let (authority, key_pair) = gen_account_in("wonderland");
+    fn build_register_manifest_instruction_contains_exact_fields() {
         let descriptor = sorafs_manifest::chunker_registry::default_descriptor();
         let chunking_profile = sorafs_manifest::ChunkingProfileV1::from_descriptor(descriptor);
         let chunk_digest = [0xCD; 32];
@@ -10965,72 +10893,34 @@ mod evidence_http_tests {
             name: "docs",
             proof: alias_bytes.as_ref(),
         };
-        let expected_alias_b64 =
-            base64::engine::general_purpose::STANDARD.encode(alias_bytes.as_ref());
         let successor = [0x11; 32];
-        let successor_hex = hex::encode(successor);
         let manifest_payload = manifest.encode().expect("canonical manifest encoding");
 
-        let payload = Client::build_sorafs_pin_register_payload(SorafsPinRegisterArgs {
-            authority: &authority,
-            private_key: key_pair.private_key(),
+        let instruction = Client::build_sorafs_pin_register_instruction(SorafsPinRegisterArgs {
             manifest_payload: &manifest_payload,
             submitted_epoch: 9,
             alias: Some(alias),
             successor_of: Some(successor),
         })
-        .expect("payload build succeeds");
+        .expect("instruction build succeeds");
 
-        let obj = payload
-            .as_object()
-            .expect("payload should serialize to a map");
-
-        assert_register_wire_fields(
-            obj,
-            &[
-                "alias",
-                "authority",
-                "manifest_payload",
-                "private_key",
-                "submitted_epoch",
-                "successor_of_hex",
-            ],
-        );
-        let authority_str = authority.to_string();
+        assert_eq!(instruction.manifest_payload, manifest_payload);
+        assert_eq!(instruction.submitted_epoch, 9);
+        let alias = instruction.alias.expect("alias binding");
+        assert_eq!(alias.namespace, "sora");
+        assert_eq!(alias.name, "docs");
+        assert_eq!(alias.proof, alias_bytes);
         assert_eq!(
-            obj.get("authority").and_then(norito::json::Value::as_str),
-            Some(authority_str.as_str())
+            instruction
+                .successor_of
+                .expect("successor")
+                .as_bytes(),
+            &successor
         );
-        let expected_private_key = norito::json::to_value(
-            &iroha_data_model::prelude::ExposedPrivateKey(key_pair.private_key().clone()),
-        )
-        .expect("private key JSON");
-        assert_eq!(obj.get("private_key"), Some(&expected_private_key));
-        let expected_manifest_b64 =
-            base64::engine::general_purpose::STANDARD.encode(manifest_payload);
-        assert_eq!(
-            obj.get("manifest_payload")
-                .and_then(norito::json::Value::as_str),
-            Some(expected_manifest_b64.as_str())
-        );
-        assert_eq!(
-            obj.get("submitted_epoch")
-                .and_then(norito::json::Value::as_u64),
-            Some(9)
-        );
-
-        let alias_obj = obj
-            .get("alias")
-            .and_then(norito::json::Value::as_object)
-            .expect("alias map");
-        assert_alias_fields(alias_obj, expected_alias_b64.as_str());
-
-        assert_successor_hex(obj, successor_hex.as_str());
     }
 
     #[test]
-    fn build_register_manifest_payload_uses_exact_canonical_manifest_payload() {
-        let (authority, key_pair) = gen_account_in("wonderland");
+    fn build_register_manifest_instruction_uses_exact_canonical_manifest_payload() {
         let descriptor = sorafs_manifest::chunker_registry::default_descriptor();
         let manifest = sorafs_manifest::ManifestBuilder::new()
             .root_cid(sorafs_manifest::canonical_manifest_root_cid([0x05; 32]))
@@ -11047,43 +10937,24 @@ mod evidence_http_tests {
             .build()
             .expect("manifest build");
         let explicit_manifest_payload = manifest.encode().expect("canonical manifest encoding");
-        let payload = Client::build_sorafs_pin_register_payload(SorafsPinRegisterArgs {
-            authority: &authority,
-            private_key: key_pair.private_key(),
+        let instruction = Client::build_sorafs_pin_register_instruction(SorafsPinRegisterArgs {
             manifest_payload: &explicit_manifest_payload,
             submitted_epoch: 10,
             alias: None,
             successor_of: None,
         })
-        .expect("payload build succeeds");
-        let obj = payload.as_object().expect("payload object");
-        let explicit_manifest_b64 =
-            base64::engine::general_purpose::STANDARD.encode(explicit_manifest_payload);
-
-        assert_register_wire_fields(
-            obj,
-            &[
-                "authority",
-                "manifest_payload",
-                "private_key",
-                "submitted_epoch",
-            ],
-        );
-        assert_eq!(
-            obj.get("manifest_payload")
-                .and_then(norito::json::Value::as_str),
-            Some(explicit_manifest_b64.as_str())
-        );
+        .expect("instruction build succeeds");
+        assert_eq!(instruction.manifest_payload, explicit_manifest_payload);
+        assert_eq!(instruction.submitted_epoch, 10);
+        assert!(instruction.alias.is_none());
+        assert!(instruction.successor_of.is_none());
     }
 
     #[test]
-    fn build_register_manifest_payload_rejects_non_manifest_bytes() {
-        let (authority, key_pair) = gen_account_in("wonderland");
+    fn build_register_manifest_instruction_rejects_non_manifest_bytes() {
         let mismatched_manifest_bytes = b"not this manifest";
 
-        let err = Client::build_sorafs_pin_register_payload(SorafsPinRegisterArgs {
-            authority: &authority,
-            private_key: key_pair.private_key(),
+        let err = Client::build_sorafs_pin_register_instruction(SorafsPinRegisterArgs {
             manifest_payload: mismatched_manifest_bytes,
             submitted_epoch: 10,
             alias: None,
@@ -11099,17 +10970,14 @@ mod evidence_http_tests {
     }
 
     #[test]
-    fn build_register_manifest_payload_rejects_noncanonical_legacy_manifest_bytes() {
-        let (authority, key_pair) = gen_account_in("wonderland");
+    fn build_register_manifest_instruction_rejects_noncanonical_legacy_manifest_bytes() {
         let manifest = pin_register_test_manifest();
         let legacy_manifest_bytes = {
             let _guard = norito::core::DecodeFlagsGuard::enter(0);
             norito::to_bytes(&manifest).expect("legacy manifest fixture")
         };
 
-        let err = Client::build_sorafs_pin_register_payload(SorafsPinRegisterArgs {
-            authority: &authority,
-            private_key: key_pair.private_key(),
+        let err = Client::build_sorafs_pin_register_instruction(SorafsPinRegisterArgs {
             manifest_payload: &legacy_manifest_bytes,
             submitted_epoch: 10,
             alias: None,
@@ -11125,13 +10993,10 @@ mod evidence_http_tests {
     }
 
     #[test]
-    fn build_register_manifest_payload_rejects_oversized_manifest_before_decode() {
-        let (authority, key_pair) = gen_account_in("wonderland");
+    fn build_register_manifest_instruction_rejects_oversized_manifest_before_decode() {
         let oversized = vec![0_u8; sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES + 1];
 
-        let err = Client::build_sorafs_pin_register_payload(SorafsPinRegisterArgs {
-            authority: &authority,
-            private_key: key_pair.private_key(),
+        let err = Client::build_sorafs_pin_register_instruction(SorafsPinRegisterArgs {
             manifest_payload: &oversized,
             submitted_epoch: 10,
             alias: None,
@@ -11146,8 +11011,7 @@ mod evidence_http_tests {
     }
 
     #[test]
-    fn build_register_manifest_payload_rejects_malformed_aliases() {
-        let (authority, key_pair) = gen_account_in("wonderland");
+    fn build_register_manifest_instruction_rejects_malformed_aliases() {
         let manifest = pin_register_test_manifest();
         let manifest_payload = manifest.encode().expect("canonical manifest encoding");
         let oversized_segment = "a".repeat(SORAFS_PIN_REGISTER_MAX_ALIAS_SEGMENT_BYTES + 1);
@@ -11176,9 +11040,7 @@ mod evidence_http_tests {
         ];
 
         for alias in cases {
-            Client::build_sorafs_pin_register_payload(SorafsPinRegisterArgs {
-                authority: &authority,
-                private_key: key_pair.private_key(),
+            Client::build_sorafs_pin_register_instruction(SorafsPinRegisterArgs {
                 manifest_payload: &manifest_payload,
                 submitted_epoch: 10,
                 alias: Some(alias),
@@ -11189,14 +11051,11 @@ mod evidence_http_tests {
     }
 
     #[test]
-    fn build_register_manifest_payload_rejects_zero_successor_digest() {
-        let (authority, key_pair) = gen_account_in("wonderland");
+    fn build_register_manifest_instruction_rejects_zero_successor_digest() {
         let manifest = pin_register_test_manifest();
         let manifest_payload = manifest.encode().expect("canonical manifest encoding");
 
-        let err = Client::build_sorafs_pin_register_payload(SorafsPinRegisterArgs {
-            authority: &authority,
-            private_key: key_pair.private_key(),
+        let err = Client::build_sorafs_pin_register_instruction(SorafsPinRegisterArgs {
             manifest_payload: &manifest_payload,
             submitted_epoch: 10,
             alias: None,
@@ -11226,45 +11085,6 @@ mod evidence_http_tests {
             .pin_policy(sorafs_manifest::PinPolicy::default())
             .build()
             .expect("manifest build")
-    }
-
-    fn assert_register_wire_fields(obj: &norito::json::Map, expected: &[&str]) {
-        let actual = obj
-            .keys()
-            .map(String::as_str)
-            .collect::<std::collections::BTreeSet<_>>();
-        let expected = expected
-            .iter()
-            .copied()
-            .collect::<std::collections::BTreeSet<_>>();
-        assert_eq!(actual, expected);
-    }
-
-    fn assert_alias_fields(alias_obj: &norito::json::Map, expected_alias_b64: &str) {
-        assert_eq!(
-            alias_obj
-                .get("namespace")
-                .and_then(norito::json::Value::as_str),
-            Some("sora")
-        );
-        assert_eq!(
-            alias_obj.get("name").and_then(norito::json::Value::as_str),
-            Some("docs")
-        );
-        assert_eq!(
-            alias_obj
-                .get("proof_base64")
-                .and_then(norito::json::Value::as_str),
-            Some(expected_alias_b64)
-        );
-    }
-
-    fn assert_successor_hex(obj: &norito::json::Map, successor_hex: &str) {
-        assert_eq!(
-            obj.get("successor_of_hex")
-                .and_then(norito::json::Value::as_str),
-            Some(successor_hex)
-        );
     }
 
     #[test]
@@ -16872,26 +16692,33 @@ impl Client {
 
     /// Convenience: POST `/v1/sorafs/pin/register` to submit a manifest to the pin registry.
     ///
-    /// The exact canonical manifest payload is the sole source of manifest metadata. The method
-    /// accepts an optional alias binding and non-zero predecessor digest.
+    /// The client builds, fee-quotes, and signs exactly one native `RegisterPinManifest`
+    /// instruction locally. Torii receives only the versioned signed transaction; the client's
+    /// private key never enters the request body.
     ///
     /// # Errors
-    /// Returns an error if the manifest payload is not exact canonical Norito, request
-    /// construction or JSON serialization fails, or the HTTP call is rejected.
+    /// Returns an error if the manifest payload is not exact canonical Norito, the local
+    /// transaction cannot be quoted or signed, request construction fails, or Torii rejects it.
     pub fn post_sorafs_pin_register(
         &self,
         params: SorafsPinRegisterArgs<'_>,
     ) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, "v1/sorafs/pin/register");
-        let payload = Self::build_sorafs_pin_register_payload(params)?;
-        let body = norito::json::to_vec(&payload)?;
+        let instruction = Self::build_sorafs_pin_register_instruction(params)?;
+        let payload = self.try_build_transaction_payload_from_items(
+            [InstructionBox::from(instruction)],
+            FeePaymentIntent::authority(Vec::new(), None),
+            Metadata::default(),
+        )?;
+        let transaction = self.quote_and_sign_transaction_payload(payload)?;
         let resp = self
             .default_request(HttpMethod::POST, url)
-            .header("Content-Type", APPLICATION_JSON)
-            .body(body)
+            .header("Content-Type", APPLICATION_NORITO)
+            .header("Accept", APPLICATION_JSON)
+            .body(transaction.encode_versioned())
             .build()?;
         let resp = self.send_prepared_request(resp)?;
-        if resp.status() != StatusCode::OK {
+        if resp.status() != StatusCode::ACCEPTED {
             return Err(eyre!(
                 "Failed to register pin manifest: {} {}",
                 resp.status(),
@@ -17736,7 +17563,9 @@ impl Client {
         Ok(())
     }
 
-    fn sorafs_pin_alias_value(alias: SorafsPinAlias<'_>) -> Result<norito::json::Value> {
+    fn sorafs_pin_alias_binding(
+        alias: SorafsPinAlias<'_>,
+    ) -> Result<iroha_data_model::sorafs::pin_registry::ManifestAliasBinding> {
         Self::validate_sorafs_pin_alias_segment(alias.namespace, "alias.namespace")?;
         Self::validate_sorafs_pin_alias_segment(alias.name, "alias.name")?;
         if alias.proof.is_empty() || alias.proof.len() > SORAFS_PIN_REGISTER_MAX_ALIAS_PROOF_BYTES {
@@ -17744,19 +17573,13 @@ impl Client {
                 "alias.proof must contain 1..={SORAFS_PIN_REGISTER_MAX_ALIAS_PROOF_BYTES} bytes"
             ));
         }
-        let mut alias_map = norito::json::Map::new();
-        alias_map.insert(
-            "namespace".into(),
-            norito::json::Value::from(alias.namespace),
-        );
-        alias_map.insert("name".into(), norito::json::Value::from(alias.name));
-        alias_map.insert(
-            "proof_base64".into(),
-            norito::json::Value::from(
-                base64::engine::general_purpose::STANDARD.encode(alias.proof),
-            ),
-        );
-        Ok(norito::json::Value::from(alias_map))
+        Ok(
+            iroha_data_model::sorafs::pin_registry::ManifestAliasBinding {
+                namespace: alias.namespace.to_owned(),
+                name: alias.name.to_owned(),
+                proof: alias.proof.to_vec(),
+            },
+        )
     }
 
     fn validate_sorafs_pin_register_manifest_payload(manifest_payload: &[u8]) -> Result<()> {
@@ -17773,53 +17596,34 @@ impl Client {
         Ok(())
     }
 
-    fn build_sorafs_pin_register_payload(
+    fn build_sorafs_pin_register_instruction(
         params: SorafsPinRegisterArgs<'_>,
-    ) -> Result<norito::json::Value> {
+    ) -> Result<iroha_data_model::isi::sorafs::RegisterPinManifest> {
         let SorafsPinRegisterArgs {
-            authority,
-            private_key,
             manifest_payload,
             submitted_epoch,
             alias,
             successor_of,
         } = params;
         Self::validate_sorafs_pin_register_manifest_payload(manifest_payload)?;
-        let mut map = norito::json::Map::new();
-        map.insert(
-            "authority".into(),
-            norito::json::Value::from(authority.to_string()),
-        );
-        map.insert(
-            "private_key".into(),
-            norito::json::to_value(&iroha_data_model::prelude::ExposedPrivateKey(
-                private_key.clone(),
-            ))?,
-        );
-        map.insert(
-            "manifest_payload".into(),
-            norito::json::Value::from(
-                base64::engine::general_purpose::STANDARD.encode(manifest_payload),
-            ),
-        );
-        map.insert(
-            "submitted_epoch".into(),
-            norito::json::Value::from(submitted_epoch),
-        );
-        if let Some(alias) = alias {
-            map.insert("alias".into(), Self::sorafs_pin_alias_value(alias)?);
-        }
-        if let Some(successor) = successor_of {
+        let alias = alias.map(Self::sorafs_pin_alias_binding).transpose()?;
+        let successor_of = successor_of
+            .map(|successor| {
             if successor == [0; 32] {
                 return Err(eyre!("successor_of must not be the all-zero digest"));
             }
-            map.insert(
-                "successor_of_hex".into(),
-                norito::json::Value::from(hex::encode(successor)),
-            );
-        }
+                Ok(iroha_data_model::sorafs::pin_registry::ManifestDigest::new(
+                    successor,
+                ))
+            })
+            .transpose()?;
 
-        Ok(norito::json::Value::from(map))
+        Ok(iroha_data_model::isi::sorafs::RegisterPinManifest::new(
+            manifest_payload.to_vec(),
+            submitted_epoch,
+            alias,
+            successor_of,
+        ))
     }
 
     /// Convenience: GET `/v1/sorafs/aliases` to list manifest alias bindings.
@@ -19263,45 +19067,6 @@ impl Client {
             notes.map_or(JsonValue::Null, JsonValue::from),
         );
         Ok(norito::json::to_vec(&JsonValue::Object(map))?)
-    }
-
-    /// Convenience: POST `/v1/sorafs/storage/pin` with manifest and payload bytes.
-    ///
-    /// # Errors
-    /// Returns an error if request construction, serialization, or the HTTP call fails.
-    pub fn post_sorafs_storage_pin(
-        &self,
-        manifest_bytes: &[u8],
-        payload_bytes: &[u8],
-        files: Option<&[SorafsStorageFileEntry<'_>]>,
-    ) -> Result<Response<Vec<u8>>> {
-        let url = join_torii_url(&self.torii_url, "v1/sorafs/storage/pin");
-        let manifest_b64 = base64::engine::general_purpose::STANDARD.encode(manifest_bytes);
-        let payload_b64 = base64::engine::general_purpose::STANDARD.encode(payload_bytes);
-        let files_json = files.map(|entries| {
-            norito::json::Value::Array(
-                entries
-                    .iter()
-                    .map(|entry| {
-                        norito::json!({
-                            "path": (entry.path.to_vec()),
-                            "size": (entry.size),
-                        })
-                    })
-                    .collect(),
-            )
-        });
-        let body = norito::json::to_vec(&norito::json!({
-            "manifest_b64": (manifest_b64),
-            "payload_b64": (payload_b64),
-            "files": (files_json.unwrap_or(norito::json::Value::Null)),
-        }))?;
-        self.default_request(HttpMethod::POST, url)
-            .timeout(SORAFS_STORAGE_PIN_REQUEST_TIMEOUT)
-            .header("Content-Type", APPLICATION_JSON)
-            .body(body)
-            .build()?
-            .send()
     }
 
     /// Convenience: POST `/v1/sorafs/storage/token` to mint a stream token.

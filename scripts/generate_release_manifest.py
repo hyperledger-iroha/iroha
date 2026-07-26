@@ -1,109 +1,181 @@
 #!/usr/bin/env python3
-"""
-Produce a deterministic JSON manifest describing release artifacts for
-Iroha dual-profile builds.
+"""Generate the closed canonical aggregate release manifest."""
 
-The script expects the aggregated `SHA256SUMS` file created by the
-packaging pipeline and records hashes alongside artifact metadata so
-downstream publishing jobs can sign and upload bundles consistently.
-"""
 from __future__ import annotations
 
 import argparse
-import json
 import os
+import sys
 from pathlib import Path
-from typing import Dict, List
+
+from release_artifact_contract import (
+    RELEASE_MANIFEST_SCHEMA,
+    RELEASE_MANIFEST_SCHEMA_VERSION,
+    ReleaseArtifactError,
+    canonical_json_bytes,
+    exclusive_write_bytes,
+    format_source_date_epoch,
+    parse_artifact_spec,
+    parse_sha256sums,
+    parse_source_date_epoch,
+    scan_inventory_paths,
+    stable_hash_relative,
+    validate_release_manifest,
+)
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--artifacts-dir", required=True, help="Directory containing artifacts and SHA256SUMS")
-    parser.add_argument("--version", required=True, help="Semantic version for this release")
-    parser.add_argument("--commit", required=True, help="Short commit hash used for the build")
-    parser.add_argument("--built-at", required=True, help="UTC timestamp when artifacts were produced")
-    parser.add_argument("--os-tag", required=True, help="Operating system tag (linux, mac, win, ...)")
-    parser.add_argument("--arch", required=True, help="Architecture (e.g., x86_64, arm64)")
-    parser.add_argument("--output", required=True, help="Path to write the JSON manifest")
-    return parser.parse_args()
+    parser.add_argument(
+        "--artifacts-dir",
+        required=True,
+        help="Closed artifact root containing canonical SHA256SUMS",
+    )
+    parser.add_argument("--version", required=True)
+    parser.add_argument(
+        "--commit",
+        required=True,
+        help="Exact lowercase hexadecimal release commit",
+    )
+    parser.add_argument(
+        "--source-date-epoch",
+        required=True,
+        help="Canonical nonnegative decimal release epoch",
+    )
+    parser.add_argument("--os-tag", required=True)
+    parser.add_argument("--arch", required=True)
+    parser.add_argument(
+        "--artifact",
+        action="append",
+        required=True,
+        help=(
+            "Expected artifact as profile:target:kind:format:relative-path. "
+            "Repeat once for every non-SHA256SUMS file under --artifacts-dir."
+        ),
+    )
+    parser.add_argument("--output", required=True)
+    return parser.parse_args(argv)
 
 
-def read_sha256sums(path: Path) -> Dict[str, str]:
-    hashes: Dict[str, str] = {}
-    with path.open("r", encoding="utf-8") as fh:
-        for line in fh:
-            parts = line.strip().split()
-            if len(parts) != 2:
-                continue
-            sha, filename = parts
-            hashes[filename] = sha
-    return hashes
+def build_release_manifest(args: argparse.Namespace) -> dict[str, object]:
+    artifact_root = Path(args.artifacts_dir)
+    output = Path(args.output)
+    artifact_root_absolute = Path(os.path.abspath(artifact_root))
+    output_absolute = Path(os.path.abspath(output))
+    try:
+        output_absolute.relative_to(artifact_root_absolute)
+    except ValueError:
+        pass
+    else:
+        raise ReleaseArtifactError(
+            "release manifest output must be outside the closed artifact root"
+        )
+    for ancestor in (output_absolute.parent, *output_absolute.parent.parents):
+        try:
+            if ancestor.samefile(artifact_root_absolute):
+                raise ReleaseArtifactError(
+                    "release manifest output directory aliases the artifact root"
+                )
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            raise ReleaseArtifactError(
+                f"failed to compare release output and artifact root: {exc}"
+            ) from exc
+    descriptors = [parse_artifact_spec(raw) for raw in args.artifact]
+    expected_paths = [str(descriptor["path"]) for descriptor in descriptors]
+    if len(set(expected_paths)) != len(expected_paths):
+        raise ReleaseArtifactError("release inventory contains duplicate artifact paths")
 
+    scanned_before = scan_inventory_paths(
+        artifact_root,
+        ignored={"SHA256SUMS"},
+    )
+    if set(scanned_before) != set(expected_paths):
+        missing = sorted(set(expected_paths) - set(scanned_before))
+        extra = sorted(set(scanned_before) - set(expected_paths))
+        raise ReleaseArtifactError(
+            f"closed release inventory mismatch: missing={missing}, extra={extra}"
+        )
 
-def build_entries(
-    artifacts_dir: Path,
-    hashes: Dict[str, str],
-    version: str,
-    os_tag: str,
-    arch: str,
-) -> List[Dict[str, str]]:
-    entries: List[Dict[str, str]] = []
-    for profile in ("iroha2", "iroha3"):
-        bundle_name = f"{profile}-{version}-{os_tag}.tar.zst"
-        appimage_name = f"{profile}-{version}-{arch}.AppImage"
+    checksums = parse_sha256sums(artifact_root)
+    if set(checksums) != set(expected_paths):
+        missing = sorted(set(expected_paths) - set(checksums))
+        extra = sorted(set(checksums) - set(expected_paths))
+        raise ReleaseArtifactError(
+            f"canonical SHA256SUMS inventory mismatch: missing={missing}, extra={extra}"
+        )
 
-        bundle_path = artifacts_dir / bundle_name
-        if bundle_path.exists():
-            sha = hashes.get(bundle_name)
-            if not sha:
-                raise SystemExit(f"Missing SHA256 entry for {bundle_name}")
-            entries.append(
-                {
-                    "profile": profile,
-                    "kind": "bundle",
-                    "format": "tar.zst",
-                    "path": os.path.normpath(bundle_name),
-                    "sha256": sha,
-                }
+    rows: list[dict[str, object]] = []
+    captured_files: dict[str, object] = {}
+    for descriptor in sorted(
+        descriptors,
+        key=lambda row: (
+            str(row["path"]),
+            str(row["profile"]),
+            str(row["target"]),
+            str(row["kind"]),
+            str(row["format"]),
+        ),
+    ):
+        path = str(descriptor["path"])
+        file_info = stable_hash_relative(artifact_root, path)
+        if checksums[path] != file_info.sha256:
+            raise ReleaseArtifactError(
+                f"SHA256SUMS digest mismatch for {path}: "
+                f"listed={checksums[path]} computed={file_info.sha256}"
+            )
+        captured_files[path] = file_info
+        rows.append(
+            {
+                **descriptor,
+                "sha256": file_info.sha256,
+                "size": file_info.size,
+            }
+        )
+
+    scanned_after = scan_inventory_paths(
+        artifact_root,
+        ignored={"SHA256SUMS"},
+    )
+    if scanned_after != scanned_before:
+        raise ReleaseArtifactError(
+            "release artifact inventory changed while the manifest was generated"
+        )
+    if parse_sha256sums(artifact_root) != checksums:
+        raise ReleaseArtifactError(
+            "canonical SHA256SUMS changed while the manifest was generated"
+        )
+    for path, before in captured_files.items():
+        if stable_hash_relative(artifact_root, path) != before:
+            raise ReleaseArtifactError(
+                f"release artifact {path!r} changed while the manifest was generated"
             )
 
-        appimage_path = artifacts_dir / appimage_name
-        if appimage_path.exists():
-            sha = hashes.get(appimage_name)
-            if not sha:
-                raise SystemExit(f"Missing SHA256 entry for {appimage_name}")
-            entries.append(
-                {
-                    "profile": profile,
-                    "kind": "appimage",
-                    "format": "AppImage",
-                    "path": os.path.normpath(appimage_name),
-                    "sha256": sha,
-                }
-            )
-    return entries
+    epoch = parse_source_date_epoch(args.source_date_epoch)
+    return validate_release_manifest(
+        {
+            "schema": RELEASE_MANIFEST_SCHEMA,
+            "schema_version": RELEASE_MANIFEST_SCHEMA_VERSION,
+            "version": args.version,
+            "commit": args.commit,
+            "source_date_epoch": epoch,
+            "built_at": format_source_date_epoch(epoch),
+            "os": args.os_tag,
+            "arch": args.arch,
+            "artifacts": rows,
+        }
+    )
 
 
-def main() -> int:
-    args = parse_args()
-    artifacts_dir = Path(args.artifacts_dir)
-    sha_path = artifacts_dir / "SHA256SUMS"
-    hashes = read_sha256sums(sha_path)
-
-    manifest = {
-        "version": args.version,
-        "commit": args.commit,
-        "built_at": args.built_at,
-        "os": args.os_tag,
-        "arch": args.arch,
-        "artifacts": build_entries(artifacts_dir, hashes, args.version, args.os_tag, args.arch),
-    }
-
-    output_path = Path(args.output)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("w", encoding="utf-8") as fh:
-        json.dump(manifest, fh, indent=2, sort_keys=True)
-        fh.write("\n")
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+    try:
+        manifest = build_release_manifest(args)
+        exclusive_write_bytes(Path(args.output), canonical_json_bytes(manifest))
+    except ReleaseArtifactError as exc:
+        print(f"release manifest error: {exc}", file=sys.stderr)
+        return 1
     return 0
 
 

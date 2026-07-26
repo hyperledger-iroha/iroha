@@ -7939,6 +7939,60 @@ pub struct Metrics {
     pub sorafs_reputation_score: GaugeVec,
     /// SoraFS reputation threshold crossings by level.
     pub sorafs_reputation_threshold_crossings_total: IntCounterVec,
+    /// Whether the committed finalized-ledger reputation runtime has completed a successful poll.
+    pub sorafs_reputation_runtime_live: GenericGauge<AtomicU64>,
+    /// Whether every required committed reputation runtime path is ready.
+    pub sorafs_reputation_runtime_ready: GenericGauge<AtomicU64>,
+    /// Whether all identity-pinned external reputation adapters are healthy.
+    pub sorafs_reputation_runtime_dependencies_ready: GenericGauge<AtomicU64>,
+    /// Whether the still-required native journal transaction submitter is healthy.
+    pub sorafs_reputation_journal_transaction_submitter_ready: GenericGauge<AtomicU64>,
+    /// Latest finalized block height represented by the committed projector.
+    pub sorafs_reputation_runtime_finalized_height: GenericGauge<AtomicU64>,
+    /// Consecutive failed exact-anchor reconciliation attempts.
+    pub sorafs_reputation_runtime_consecutive_failures: GenericGauge<AtomicU64>,
+    /// Whether the exact signed result is durably acknowledged.
+    pub sorafs_reputation_runtime_material_acknowledged: GenericGauge<AtomicU64>,
+    /// Provider accumulators retained by the committed projector.
+    pub sorafs_reputation_runtime_provider_count: GenericGauge<AtomicU64>,
+    /// Supervised committed-runtime reconciliation ticks.
+    pub sorafs_reputation_runtime_ticks_total: IntCounterVec,
+    /// Whether the committed hedging/billing runtime completed a successful tick.
+    pub sorafs_hedging_billing_runtime_live: GenericGauge<AtomicU64>,
+    /// Whether the committed hedging/billing runtime is release-ready.
+    pub sorafs_hedging_billing_runtime_ready: GenericGauge<AtomicU64>,
+    /// Whether all identity-pinned hedging/billing adapters are healthy.
+    pub sorafs_hedging_billing_runtime_dependencies_ready: GenericGauge<AtomicU64>,
+    /// Whether automatic hedge execution is enabled (always zero in V1).
+    pub sorafs_hedging_billing_automatic_execution_enabled: GenericGauge<AtomicU64>,
+    /// Whether the most recent successful hedging/billing runtime tick is fresh.
+    pub sorafs_hedging_billing_last_tick_fresh: GenericGauge<AtomicU64>,
+    /// Whether the billing projection is anchored to an admissibly recent finalized head.
+    pub sorafs_hedging_billing_finalized_projection_ready: GenericGauge<AtomicU64>,
+    /// Latest finalized height projected into billing state.
+    pub sorafs_hedging_billing_finalized_height: GenericGauge<AtomicU64>,
+    /// Latest finalized ledger head observed by the hedging/billing runtime.
+    pub sorafs_hedging_billing_finalized_head_height: GenericGauge<AtomicU64>,
+    /// Finalized blocks between the observed ledger head and billing projection.
+    pub sorafs_hedging_billing_finalized_lag_blocks: GenericGauge<AtomicU64>,
+    /// First finalized billing journal sequence not yet projected.
+    pub sorafs_hedging_billing_next_event_sequence: GenericGauge<AtomicU64>,
+    /// Statements waiting for HSM/KMS signing.
+    pub sorafs_hedging_billing_ready_for_signing: GenericGauge<AtomicU64>,
+    /// Signed statements waiting for immutable publication.
+    pub sorafs_hedging_billing_ready_for_publication: GenericGauge<AtomicU64>,
+    /// Ambiguous statement publications awaiting authoritative lookup.
+    pub sorafs_hedging_billing_publication_ambiguous: GenericGauge<AtomicU64>,
+    /// Published statements waiting for acknowledgement.
+    pub sorafs_hedging_billing_published: GenericGauge<AtomicU64>,
+    /// Durably acknowledged statements.
+    pub sorafs_hedging_billing_acknowledged: GenericGauge<AtomicU64>,
+    /// Terminal billing statement delivery dead letters.
+    pub sorafs_hedging_billing_dead_letter: GenericGauge<AtomicU64>,
+    /// Generated, never-automatically-executed hedge intents.
+    pub sorafs_hedging_billing_hedge_intents: GenericGauge<AtomicU64>,
+    /// Supervised hedging/billing reconciliation ticks.
+    pub sorafs_hedging_billing_runtime_ticks_total: IntCounterVec,
     /// SoraFS reputation provider labels currently exported by the score gauge.
     pub sorafs_reputation_score_tracked_providers: Arc<RwLock<BTreeSet<String>>>,
     /// SoraFS reputation low-score state from the previous accepted snapshot.
@@ -8001,8 +8055,8 @@ pub struct Metrics {
     pub torii_sorafs_storage_bytes_used: GenericGaugeVec<AtomicU64>,
     /// Torii SoraFS storage capacity bytes per provider.
     pub torii_sorafs_storage_bytes_capacity: GenericGaugeVec<AtomicU64>,
-    /// Torii SoraFS pin queue depth per provider.
-    pub torii_sorafs_storage_pin_queue_depth: GenericGaugeVec<AtomicU64>,
+    /// Finalized-ledger SoraFS provider ingests in flight per provider.
+    pub sorafs_provider_ingest_inflight: GenericGaugeVec<AtomicU64>,
     /// Torii SoraFS fetch workers in flight per provider.
     pub torii_sorafs_storage_fetch_inflight: GenericGaugeVec<AtomicU64>,
     /// Torii SoraFS fetch throughput (bytes/sec) per provider.
@@ -12879,6 +12933,147 @@ impl Default for Metrics {
             &["level"],
         )
         .expect("Infallible");
+        let sorafs_reputation_runtime_live = GenericGauge::new(
+            "sorafs_reputation_runtime_live",
+            "Whether the committed SoraFS reputation runtime completed a successful poll",
+        )
+        .expect("Infallible");
+        let sorafs_reputation_runtime_ready = GenericGauge::new(
+            "sorafs_reputation_runtime_ready",
+            "Whether every required committed SoraFS reputation runtime path is ready",
+        )
+        .expect("Infallible");
+        let sorafs_reputation_runtime_dependencies_ready = GenericGauge::new(
+            "sorafs_reputation_runtime_dependencies_ready",
+            "Whether all identity-pinned external SoraFS reputation adapters are healthy",
+        )
+        .expect("Infallible");
+        let sorafs_reputation_journal_transaction_submitter_ready = GenericGauge::new(
+            "sorafs_reputation_journal_transaction_submitter_ready",
+            "Whether the native reputation-journal transaction submitter is healthy",
+        )
+        .expect("Infallible");
+        let sorafs_reputation_runtime_finalized_height = GenericGauge::new(
+            "sorafs_reputation_runtime_finalized_height",
+            "Latest finalized height represented by the committed SoraFS reputation runtime",
+        )
+        .expect("Infallible");
+        let sorafs_reputation_runtime_consecutive_failures = GenericGauge::new(
+            "sorafs_reputation_runtime_consecutive_failures",
+            "Consecutive failed committed SoraFS reputation reconciliation attempts",
+        )
+        .expect("Infallible");
+        let sorafs_reputation_runtime_material_acknowledged = GenericGauge::new(
+            "sorafs_reputation_runtime_material_acknowledged",
+            "Whether exact SoraFS reputation signing material has a durable acknowledgement",
+        )
+        .expect("Infallible");
+        let sorafs_reputation_runtime_provider_count = GenericGauge::new(
+            "sorafs_reputation_runtime_provider_count",
+            "Provider accumulators retained by the committed SoraFS reputation projector",
+        )
+        .expect("Infallible");
+        let sorafs_reputation_runtime_ticks_total = IntCounterVec::new(
+            Opts::new(
+                "sorafs_reputation_runtime_ticks_total",
+                "Supervised committed SoraFS reputation reconciliation ticks by result",
+            ),
+            &["result"],
+        )
+        .expect("Infallible");
+        let sorafs_hedging_billing_runtime_live = GenericGauge::new(
+            "sorafs_hedging_billing_runtime_live",
+            "Whether the committed SoraFS hedging/billing runtime completed a successful tick",
+        )
+        .expect("Infallible");
+        let sorafs_hedging_billing_runtime_ready = GenericGauge::new(
+            "sorafs_hedging_billing_runtime_ready",
+            "Whether every required committed SoraFS hedging/billing runtime path is ready",
+        )
+        .expect("Infallible");
+        let sorafs_hedging_billing_runtime_dependencies_ready = GenericGauge::new(
+            "sorafs_hedging_billing_runtime_dependencies_ready",
+            "Whether all identity-pinned SoraFS hedging/billing adapters are healthy",
+        )
+        .expect("Infallible");
+        let sorafs_hedging_billing_automatic_execution_enabled = GenericGauge::new(
+            "sorafs_hedging_billing_automatic_execution_enabled",
+            "Whether automatic SoraFS hedge execution is enabled (always zero in V1)",
+        )
+        .expect("Infallible");
+        let sorafs_hedging_billing_last_tick_fresh = GenericGauge::new(
+            "sorafs_hedging_billing_last_tick_fresh",
+            "Whether the most recent successful SoraFS hedging/billing runtime tick is fresh",
+        )
+        .expect("Infallible");
+        let sorafs_hedging_billing_finalized_projection_ready = GenericGauge::new(
+            "sorafs_hedging_billing_finalized_projection_ready",
+            "Whether the SoraFS billing projection is anchored to an admissibly recent finalized head",
+        )
+        .expect("Infallible");
+        let sorafs_hedging_billing_finalized_height = GenericGauge::new(
+            "sorafs_hedging_billing_finalized_height",
+            "Latest finalized height represented by the committed SoraFS billing projector",
+        )
+        .expect("Infallible");
+        let sorafs_hedging_billing_finalized_head_height = GenericGauge::new(
+            "sorafs_hedging_billing_finalized_head_height",
+            "Latest finalized ledger head observed by the SoraFS hedging/billing runtime",
+        )
+        .expect("Infallible");
+        let sorafs_hedging_billing_finalized_lag_blocks = GenericGauge::new(
+            "sorafs_hedging_billing_finalized_lag_blocks",
+            "Finalized blocks between the observed ledger head and SoraFS billing projection",
+        )
+        .expect("Infallible");
+        let sorafs_hedging_billing_next_event_sequence = GenericGauge::new(
+            "sorafs_hedging_billing_next_event_sequence",
+            "First finalized SoraFS billing journal sequence not yet projected",
+        )
+        .expect("Infallible");
+        let sorafs_hedging_billing_ready_for_signing = GenericGauge::new(
+            "sorafs_hedging_billing_ready_for_signing",
+            "SoraFS billing statements waiting for HSM/KMS signing",
+        )
+        .expect("Infallible");
+        let sorafs_hedging_billing_ready_for_publication = GenericGauge::new(
+            "sorafs_hedging_billing_ready_for_publication",
+            "Signed SoraFS billing statements waiting for immutable publication",
+        )
+        .expect("Infallible");
+        let sorafs_hedging_billing_publication_ambiguous = GenericGauge::new(
+            "sorafs_hedging_billing_publication_ambiguous",
+            "SoraFS billing publications awaiting authoritative reconciliation",
+        )
+        .expect("Infallible");
+        let sorafs_hedging_billing_published = GenericGauge::new(
+            "sorafs_hedging_billing_published",
+            "Published SoraFS billing statements waiting for acknowledgement",
+        )
+        .expect("Infallible");
+        let sorafs_hedging_billing_acknowledged = GenericGauge::new(
+            "sorafs_hedging_billing_acknowledged",
+            "Durably acknowledged SoraFS billing statements",
+        )
+        .expect("Infallible");
+        let sorafs_hedging_billing_dead_letter = GenericGauge::new(
+            "sorafs_hedging_billing_dead_letter",
+            "Terminal SoraFS billing statement delivery dead letters",
+        )
+        .expect("Infallible");
+        let sorafs_hedging_billing_hedge_intents = GenericGauge::new(
+            "sorafs_hedging_billing_hedge_intents",
+            "Generated SoraFS hedge intents retained without automatic execution",
+        )
+        .expect("Infallible");
+        let sorafs_hedging_billing_runtime_ticks_total = IntCounterVec::new(
+            Opts::new(
+                "sorafs_hedging_billing_runtime_ticks_total",
+                "Supervised committed SoraFS hedging/billing ticks by result",
+            ),
+            &["result"],
+        )
+        .expect("Infallible");
         let torii_sorafs_fee_projection_nanos = GaugeVec::new(
             Opts::new(
                 "torii_sorafs_fee_projection_nanos",
@@ -13074,6 +13269,45 @@ impl Default for Metrics {
         register_guarded(&registry, &sorafs_reputation_low_score_providers);
         register_guarded(&registry, &sorafs_reputation_score);
         register_guarded(&registry, &sorafs_reputation_threshold_crossings_total);
+        register_guarded(&registry, &sorafs_reputation_runtime_live);
+        register_guarded(&registry, &sorafs_reputation_runtime_ready);
+        register_guarded(&registry, &sorafs_reputation_runtime_dependencies_ready);
+        register_guarded(
+            &registry,
+            &sorafs_reputation_journal_transaction_submitter_ready,
+        );
+        register_guarded(&registry, &sorafs_reputation_runtime_finalized_height);
+        register_guarded(&registry, &sorafs_reputation_runtime_consecutive_failures);
+        register_guarded(&registry, &sorafs_reputation_runtime_material_acknowledged);
+        register_guarded(&registry, &sorafs_reputation_runtime_provider_count);
+        register_guarded(&registry, &sorafs_reputation_runtime_ticks_total);
+        register_guarded(&registry, &sorafs_hedging_billing_runtime_live);
+        register_guarded(&registry, &sorafs_hedging_billing_runtime_ready);
+        register_guarded(
+            &registry,
+            &sorafs_hedging_billing_runtime_dependencies_ready,
+        );
+        register_guarded(
+            &registry,
+            &sorafs_hedging_billing_automatic_execution_enabled,
+        );
+        register_guarded(&registry, &sorafs_hedging_billing_last_tick_fresh);
+        register_guarded(
+            &registry,
+            &sorafs_hedging_billing_finalized_projection_ready,
+        );
+        register_guarded(&registry, &sorafs_hedging_billing_finalized_height);
+        register_guarded(&registry, &sorafs_hedging_billing_finalized_head_height);
+        register_guarded(&registry, &sorafs_hedging_billing_finalized_lag_blocks);
+        register_guarded(&registry, &sorafs_hedging_billing_next_event_sequence);
+        register_guarded(&registry, &sorafs_hedging_billing_ready_for_signing);
+        register_guarded(&registry, &sorafs_hedging_billing_ready_for_publication);
+        register_guarded(&registry, &sorafs_hedging_billing_publication_ambiguous);
+        register_guarded(&registry, &sorafs_hedging_billing_published);
+        register_guarded(&registry, &sorafs_hedging_billing_acknowledged);
+        register_guarded(&registry, &sorafs_hedging_billing_dead_letter);
+        register_guarded(&registry, &sorafs_hedging_billing_hedge_intents);
+        register_guarded(&registry, &sorafs_hedging_billing_runtime_ticks_total);
         register_guarded(&registry, &torii_sorafs_fee_projection_nanos);
         register_guarded(&registry, &torii_sorafs_disputes_total);
         register_guarded(&registry, &torii_sorafs_orders_issued_total);
@@ -13214,10 +13448,10 @@ impl Default for Metrics {
             &["provider"],
         )
         .expect("Infallible");
-        let torii_sorafs_storage_pin_queue_depth = GenericGaugeVec::new(
+        let sorafs_provider_ingest_inflight = GenericGaugeVec::new(
             Opts::new(
-                "torii_sorafs_storage_pin_queue_depth",
-                "SoraFS pin queue depth per provider",
+                "sorafs_provider_ingest_inflight",
+                "Finalized-ledger SoraFS provider ingests holding storage-write admission",
             ),
             &["provider"],
         )
@@ -15977,6 +16211,33 @@ impl Default for Metrics {
             sorafs_reputation_low_score_providers,
             sorafs_reputation_score,
             sorafs_reputation_threshold_crossings_total,
+            sorafs_reputation_runtime_live,
+            sorafs_reputation_runtime_ready,
+            sorafs_reputation_runtime_dependencies_ready,
+            sorafs_reputation_journal_transaction_submitter_ready,
+            sorafs_reputation_runtime_finalized_height,
+            sorafs_reputation_runtime_consecutive_failures,
+            sorafs_reputation_runtime_material_acknowledged,
+            sorafs_reputation_runtime_provider_count,
+            sorafs_reputation_runtime_ticks_total,
+            sorafs_hedging_billing_runtime_live,
+            sorafs_hedging_billing_runtime_ready,
+            sorafs_hedging_billing_runtime_dependencies_ready,
+            sorafs_hedging_billing_automatic_execution_enabled,
+            sorafs_hedging_billing_last_tick_fresh,
+            sorafs_hedging_billing_finalized_projection_ready,
+            sorafs_hedging_billing_finalized_height,
+            sorafs_hedging_billing_finalized_head_height,
+            sorafs_hedging_billing_finalized_lag_blocks,
+            sorafs_hedging_billing_next_event_sequence,
+            sorafs_hedging_billing_ready_for_signing,
+            sorafs_hedging_billing_ready_for_publication,
+            sorafs_hedging_billing_publication_ambiguous,
+            sorafs_hedging_billing_published,
+            sorafs_hedging_billing_acknowledged,
+            sorafs_hedging_billing_dead_letter,
+            sorafs_hedging_billing_hedge_intents,
+            sorafs_hedging_billing_runtime_ticks_total,
             sorafs_reputation_score_tracked_providers: Arc::new(RwLock::new(BTreeSet::new())),
             sorafs_reputation_low_score_state: Arc::new(RwLock::new(BTreeMap::new())),
             torii_sorafs_fee_projection_nanos,
@@ -16008,7 +16269,7 @@ impl Default for Metrics {
             torii_sorafs_gc_oldest_expired_age_seconds,
             torii_sorafs_storage_bytes_used,
             torii_sorafs_storage_bytes_capacity,
-            torii_sorafs_storage_pin_queue_depth,
+            sorafs_provider_ingest_inflight,
             torii_sorafs_storage_fetch_inflight,
             torii_sorafs_storage_fetch_bytes_per_sec,
             torii_sorafs_storage_por_inflight,
@@ -17838,6 +18099,115 @@ impl Metrics {
         *tracked = next_tracked;
     }
 
+    /// Record payload-free committed reputation runtime status.
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_sorafs_reputation_runtime_status(
+        &self,
+        live: bool,
+        ready: bool,
+        external_dependencies_ready: bool,
+        journal_transaction_submitter_ready: bool,
+        latest_finalized_height: u64,
+        consecutive_failures: u64,
+        material_acknowledged: bool,
+        provider_count: u32,
+    ) {
+        self.sorafs_reputation_runtime_live.set(u64::from(live));
+        self.sorafs_reputation_runtime_ready.set(u64::from(ready));
+        self.sorafs_reputation_runtime_dependencies_ready
+            .set(u64::from(external_dependencies_ready));
+        self.sorafs_reputation_journal_transaction_submitter_ready
+            .set(u64::from(journal_transaction_submitter_ready));
+        self.sorafs_reputation_runtime_finalized_height
+            .set(latest_finalized_height);
+        self.sorafs_reputation_runtime_consecutive_failures
+            .set(consecutive_failures);
+        self.sorafs_reputation_runtime_material_acknowledged
+            .set(u64::from(material_acknowledged));
+        self.sorafs_reputation_runtime_provider_count
+            .set(u64::from(provider_count));
+    }
+
+    /// Increment one bounded committed reputation runtime tick result.
+    pub fn inc_sorafs_reputation_runtime_tick(&self, result: &str) {
+        let result = match result {
+            "success" | "failure" | "panic" => result,
+            _ => "unknown",
+        };
+        self.sorafs_reputation_runtime_ticks_total
+            .with_label_values(&[result])
+            .inc();
+    }
+
+    /// Record payload-free committed hedging/billing runtime status.
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_sorafs_hedging_billing_runtime_status(
+        &self,
+        live: bool,
+        ready: bool,
+        external_dependencies_ready: bool,
+        automatic_execution_enabled: bool,
+        last_tick_fresh: bool,
+        finalized_projection_ready: bool,
+        finalized_height: u64,
+        finalized_head_height: u64,
+        finalized_lag_blocks: u64,
+        next_event_sequence: u64,
+        ready_for_signing: u32,
+        ready_for_publication: u32,
+        publication_ambiguous: u32,
+        published: u32,
+        acknowledged: u32,
+        dead_letter: u32,
+        hedge_intents: u32,
+    ) {
+        self.sorafs_hedging_billing_runtime_live
+            .set(u64::from(live));
+        self.sorafs_hedging_billing_runtime_ready
+            .set(u64::from(ready));
+        self.sorafs_hedging_billing_runtime_dependencies_ready
+            .set(u64::from(external_dependencies_ready));
+        self.sorafs_hedging_billing_automatic_execution_enabled
+            .set(u64::from(automatic_execution_enabled));
+        self.sorafs_hedging_billing_last_tick_fresh
+            .set(u64::from(last_tick_fresh));
+        self.sorafs_hedging_billing_finalized_projection_ready
+            .set(u64::from(finalized_projection_ready));
+        self.sorafs_hedging_billing_finalized_height
+            .set(finalized_height);
+        self.sorafs_hedging_billing_finalized_head_height
+            .set(finalized_head_height);
+        self.sorafs_hedging_billing_finalized_lag_blocks
+            .set(finalized_lag_blocks);
+        self.sorafs_hedging_billing_next_event_sequence
+            .set(next_event_sequence);
+        self.sorafs_hedging_billing_ready_for_signing
+            .set(u64::from(ready_for_signing));
+        self.sorafs_hedging_billing_ready_for_publication
+            .set(u64::from(ready_for_publication));
+        self.sorafs_hedging_billing_publication_ambiguous
+            .set(u64::from(publication_ambiguous));
+        self.sorafs_hedging_billing_published
+            .set(u64::from(published));
+        self.sorafs_hedging_billing_acknowledged
+            .set(u64::from(acknowledged));
+        self.sorafs_hedging_billing_dead_letter
+            .set(u64::from(dead_letter));
+        self.sorafs_hedging_billing_hedge_intents
+            .set(u64::from(hedge_intents));
+    }
+
+    /// Increment one bounded committed hedging/billing runtime tick result.
+    pub fn inc_sorafs_hedging_billing_runtime_tick(&self, result: &str) {
+        let result = match result {
+            "success" | "failure" | "panic" => result,
+            _ => "unknown",
+        };
+        self.sorafs_hedging_billing_runtime_ticks_total
+            .with_label_values(&[result])
+            .inc();
+    }
+
     /// Record a rejected SoraFS capacity telemetry window.
     pub fn record_sorafs_capacity_telemetry_reject(&self, provider: &str, reason: &str) {
         self.torii_sorafs_capacity_telemetry_rejections_total
@@ -17958,7 +18328,7 @@ impl Metrics {
         provider: &str,
         bytes_used: u64,
         bytes_capacity: u64,
-        pin_queue_depth: u64,
+        provider_ingest_inflight: u64,
         fetch_inflight: u64,
         fetch_bytes_per_sec: u64,
         por_inflight: u64,
@@ -17971,9 +18341,9 @@ impl Metrics {
         self.torii_sorafs_storage_bytes_capacity
             .with_label_values(&[provider])
             .set(bytes_capacity);
-        self.torii_sorafs_storage_pin_queue_depth
+        self.sorafs_provider_ingest_inflight
             .with_label_values(&[provider])
-            .set(pin_queue_depth);
+            .set(provider_ingest_inflight);
         self.torii_sorafs_storage_fetch_inflight
             .with_label_values(&[provider])
             .set(fetch_inflight);
@@ -19913,6 +20283,111 @@ mod test {
             exported.contains("sorafs_reputation_score{provider_id=\"provider-000\"} 10000"),
             "bounded reputation score should be exported: {exported}"
         );
+    }
+
+    #[test]
+    fn records_committed_sorafs_reputation_runtime_metrics() {
+        let metrics = Metrics::default();
+        metrics.record_sorafs_reputation_runtime_status(true, false, true, false, 42, 3, true, 17);
+        metrics.inc_sorafs_reputation_runtime_tick("success");
+        metrics.inc_sorafs_reputation_runtime_tick("failure");
+        metrics.inc_sorafs_reputation_runtime_tick("unbounded-input");
+
+        assert_eq!(metrics.sorafs_reputation_runtime_live.get(), 1);
+        assert_eq!(metrics.sorafs_reputation_runtime_ready.get(), 0);
+        assert_eq!(
+            metrics.sorafs_reputation_runtime_dependencies_ready.get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .sorafs_reputation_journal_transaction_submitter_ready
+                .get(),
+            0
+        );
+        assert_eq!(metrics.sorafs_reputation_runtime_finalized_height.get(), 42);
+        assert_eq!(
+            metrics.sorafs_reputation_runtime_consecutive_failures.get(),
+            3
+        );
+        assert_eq!(
+            metrics
+                .sorafs_reputation_runtime_material_acknowledged
+                .get(),
+            1
+        );
+        assert_eq!(metrics.sorafs_reputation_runtime_provider_count.get(), 17);
+        for result in ["success", "failure", "unknown"] {
+            assert_eq!(
+                metrics
+                    .sorafs_reputation_runtime_ticks_total
+                    .with_label_values(&[result])
+                    .get(),
+                1
+            );
+        }
+    }
+
+    #[test]
+    fn records_committed_sorafs_hedging_billing_runtime_metrics() {
+        let metrics = Metrics::default();
+        metrics.record_sorafs_hedging_billing_runtime_status(
+            true, false, true, false, true, false, 42, 45, 3, 88, 1, 2, 3, 4, 5, 6, 7,
+        );
+        metrics.inc_sorafs_hedging_billing_runtime_tick("success");
+        metrics.inc_sorafs_hedging_billing_runtime_tick("failure");
+        metrics.inc_sorafs_hedging_billing_runtime_tick("unbounded-input");
+
+        assert_eq!(metrics.sorafs_hedging_billing_runtime_live.get(), 1);
+        assert_eq!(metrics.sorafs_hedging_billing_runtime_ready.get(), 0);
+        assert_eq!(
+            metrics
+                .sorafs_hedging_billing_runtime_dependencies_ready
+                .get(),
+            1
+        );
+        assert_eq!(
+            metrics
+                .sorafs_hedging_billing_automatic_execution_enabled
+                .get(),
+            0
+        );
+        assert_eq!(metrics.sorafs_hedging_billing_last_tick_fresh.get(), 1);
+        assert_eq!(
+            metrics
+                .sorafs_hedging_billing_finalized_projection_ready
+                .get(),
+            0
+        );
+        assert_eq!(metrics.sorafs_hedging_billing_finalized_height.get(), 42);
+        assert_eq!(
+            metrics.sorafs_hedging_billing_finalized_head_height.get(),
+            45
+        );
+        assert_eq!(metrics.sorafs_hedging_billing_finalized_lag_blocks.get(), 3);
+        assert_eq!(metrics.sorafs_hedging_billing_next_event_sequence.get(), 88);
+        assert_eq!(metrics.sorafs_hedging_billing_ready_for_signing.get(), 1);
+        assert_eq!(
+            metrics.sorafs_hedging_billing_ready_for_publication.get(),
+            2
+        );
+        assert_eq!(
+            metrics.sorafs_hedging_billing_publication_ambiguous.get(),
+            3
+        );
+        assert_eq!(metrics.sorafs_hedging_billing_published.get(), 4);
+        assert_eq!(metrics.sorafs_hedging_billing_acknowledged.get(), 5);
+        assert_eq!(metrics.sorafs_hedging_billing_dead_letter.get(), 6);
+        assert_eq!(metrics.sorafs_hedging_billing_hedge_intents.get(), 7);
+        for result in ["success", "failure", "unknown"] {
+            assert_eq!(
+                metrics
+                    .sorafs_hedging_billing_runtime_ticks_total
+                    .with_label_values(&[result])
+                    .get(),
+                1
+            );
+        }
     }
 
     #[test]

@@ -10,7 +10,8 @@ summary: SF-8b implementation status for native repair authority, signed-transac
 - Provide deterministic auditor and worker APIs for submitting caller-signed
   native transactions and tracking finalized repair state.
 - Track the validation pipeline that checks submitted evidence before tasks enter the scheduler.
-- Capture SLAs, telemetry, and governance hooks so operators, auditors, and DealEngine share a common source of truth.
+- Capture SLAs, telemetry, and governance hooks so operators, auditors, and the
+  native orderbook/reserve projections share one finalized source of truth.
 
 ## Status
 The SF-8b native ledger model and Torii command cutover are implemented. The

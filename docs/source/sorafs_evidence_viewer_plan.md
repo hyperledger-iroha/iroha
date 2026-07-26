@@ -1,156 +1,272 @@
 ---
 title: Secure Evidence Viewer & Access Logging
-summary: SFM-4b3 implementation status for secure evidence viewing; payload-free local session/access audit records, local transparency source-entry reports, and a config-backed runtime due-publication scheduler exist, but the full moderation evidence viewer service remains unshipped.
+summary: SFM-4b3 reference implementation for case-bound, WebAuthn-attested evidence viewing with rotating grants, authenticated range decryption, signed payload-free access receipts, and legal-hold-aware retention and erasure.
 ---
 
 # Secure Evidence Viewer & Access Logging
 
-## Current Status
+## Implementation Status
 
-SFM-4b3 is not yet shipped as the full browser and streaming moderation
-evidence viewer. The repository now contains quarantine-scoped, payload-free
-local session manifests and append-only access-event records for encrypted
-moderation quarantine objects plus local payload-free daily audit reports that
-record `EvidenceAccess` transparency source entries and can be published by a
-config-backed Torii runtime scheduler when enabled and a Governance DAG publisher is configured,
-alongside adjacent evidence metadata schemas, governance evidence export
-helpers, and a Taikai media validation harness. It still does not contain the
-browser viewer, streaming backend, short-lived URL signer, watermark engine,
-WebAuthn session flow, or deployed rollout evidence required for
-moderated juror evidence review. The shared SFM-4b
-moderation-panel rollout evidence gate now validates a dedicated
-`sorafs.moderation_panel.evidence_viewer_canary.v1` artifact for the viewer
-boundary, including role-scoped manifests, short-lived URLs, attested sessions,
-strict CSP/offline-mode controls, watermark metadata hashing, append-only access
-logs, anomaly events, audit digests, legal-hold binding, Governance DAG and
-transparency-ledger export coverage, and payload-free digest preimages for the
-session manifest, watermark metadata, access log, legal-hold receipt, and
-transparency report. Evidence-viewer canaries also bind `session_count` to the
-unique canonical `sessions[].name` inventory, require `attested_session_count`
-and `logged_session_count` to match the `sessions[].attested` and
-`sessions[].logged` partitions, and reject duplicate session entries before
-promotion can report ready. Evidence-viewer canaries also require explicit
-audit-log tamper rejection and watermark metadata mismatch rejection before
-promotion can report ready. It also rejects raw evidence, signed URLs, session tokens,
-response bodies, raw access logs, legal-hold receipt payloads, transparency
-report payloads, or watermark secrets.
-The moderation-panel rollout summary publishes the payload-free
-`valid_evidence_viewer_digest_sets` metadata set for SFM-4b3, and the final
-SoraFS aggregate production-readiness gate requires that set to match recognized
-`evidence_viewer` artifact fingerprints before reporting ready.
-That gate is a promotion blocker for deployed evidence; it does not replace the
-missing browser/streaming viewer service.
+The SFM-4b3 reference implementation is present in `sorafs_node` and Torii.
+It provides a case-bound evidence service, finalized-ledger authorization,
+WebAuthn challenge consumption, rotating short-lived grants, authenticated
+range decryption, an embedded no-cache viewer shell, signed hash-chained access
+receipts, and legal-hold-aware retention and erasure.
 
-## Shipped Adjacent Foundations
+This repository state does not by itself prove a production deployment. Release
+promotion still requires the reviewed payload-free evidence-viewer canary,
+multi-instance deployment evidence, security testing, and inclusion in the
+SFM-4b moderation-panel and aggregate readiness envelopes.
 
-- `sorafs_cli proof stream --governance-evidence-dir=DIR` writes proof-stream
-  summaries and metadata bundles for governance archival.
-- SoraFS repair and capacity schemas carry evidence digests, optional evidence
-  URIs, media types, and byte sizes for dispute and repair workflows.
-- `crates/sorafs_orchestrator/src/bin/taikai_viewer.rs` validates Taikai
-  segment envelopes against CAR archives and emits playback, CEK, PQ-health,
-  and alert telemetry. It is a media validation harness, not a moderation
-  evidence viewer.
-- Taikai viewer metrics and dashboards provide a useful model for stream health
-  telemetry, but they do not satisfy moderation evidence access controls.
-- `crates/sorafs_node` now stores payload-free
-  `ModerationEvidenceViewerSessionRecord` and
-  `ModerationEvidenceViewerAccessEventRecord` checkpoints for sealed moderation
-  quarantine objects. The records bind viewer account, role, purpose,
-  attestation digest, watermark metadata digest, evidence digest, legal-hold
-  metadata, event kind, request digest, and append-only sequence without
-  decrypting or returning evidence bytes.
-- Torii exposes the local audit runtime through
-  `/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/viewer-sessions` and
-  `/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/viewer-access`. These
-  operator-role-gated endpoints reject raw evidence, signed URLs, session
-  tokens, response bodies, raw access-log payloads, and watermark secrets.
-- `crates/sorafs_node` now derives payload-free
-  `ModerationEvidenceViewerAuditReport` daily reports from local session/access
-  snapshots. Reports expose only aggregate counts, timestamp bounds, event-kind
-  counts, and digest-set hashes for evidence, session manifests, access events,
-  request metadata, attestation transcripts, and watermark metadata.
-- Torii exposes the local transparency-source exporter through
-  `/v1/sorafs/moderation/viewer-audit-reports`. The operator-role-gated
-  endpoint records reports as local `EvidenceAccess` transparency source
-  entries for later ledger/Governance DAG publication and rejects raw evidence,
-  raw access logs, viewer accounts, signed URLs, runtime session tokens, and
-  response bodies.
-- Torii also exposes
-  `/v1/sorafs/moderation/viewer-audit-reports/publish-due`. The
-  operator-role-gated endpoint runs one local scheduler tick, uses the
-  configured `sorafs.storage.evidence_viewer_audits` cadence when request
-  cadence fields are omitted, derives the oldest due payload-free report window
-  from local session/access records, records the matching `EvidenceAccess`
-  source entry, publishes the matching transparency ledger cycle through the
-  configured Governance DAG publisher when present, and suppresses duplicate
-  cycle publication.
-- Torii now starts a config-backed SFM-4b3 evidence-viewer audit scheduler when
-  SoraFS storage is enabled and `sorafs.storage.evidence_viewer_audits` is
-  enabled. The background scheduler runs an immediate local tick, catches up
-  stale published windows without waiting for another full cadence, records and
-  publishes due payload-free `EvidenceAccess` cycles with the default
-  `local-daily` scope, omits request-only policy and previous-block metadata,
-  and leaves explicit operator replay available through the publish-due route.
-- `scripts/check_sorafs_moderation_panel_rollout_evidence.py` validates the
-  SFM-4b evidence-viewer canary as a payload-free deployment gate and rejects
-  missing access event coverage, long-lived segment URLs, private viewer
-  material, and incomplete watermark/access-log controls.
-- `scripts/build_sorafs_evidence_viewer_canary.py` builds the payload-free
-  `evidence_viewer` canary from reviewed deployment facts, rejects unreviewed
-  `--deployment-id` and `--environment` values before checker prevalidation,
-  requires explicit `--now-unix` freshness context so future or stale
-  `--generated-at-unix` values fail before writing,
-  requires every positive control claim explicitly, forces raw
-  evidence/session-token/signed URL/watermark-secret/body flags to `false`,
-  requires reviewed `moderation-viewer-session-*` `--viewer-session` labels
-  whose unique inventory matches `--session-count` and rejects non-production markers,
-  emits `role_count`, `security_control_count`, `access_event_kind_count`, and
-  `export_target_count` from the reviewed role/control/event/export inventories
-  before checker prevalidation, requires explicit audit-log tamper rejection and
-  watermark metadata mismatch rejection, rejects duplicate or unknown `--verified-claim`,
-  `--role`, `--security-control`, `--access-event-kind`, and `--export-target`
-  inputs before any canary JSON is written, validates the generated JSON with the
-  same SFM-4b checker contract before writing, and writes atomically. It
-  helps operators prepare reviewable canary evidence, but it still does not
-  replace the browser viewer, streaming backend, watermark engine, WebAuthn
-  session flow, or deployed transparency exporter.
+The pre-release Torii branch for the former operator-only local endpoints
+`/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/viewer-sessions` and
+`/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/viewer-access` has been
+deleted, including its request DTOs, handlers, conversions, and response
+formats. Those routes are neither mountable nor catalogued, advertised by the
+operator panel, or documented in OpenAPI.
 
-## Target Runtime Shape
+The two legacy aggregate-audit POST routes remain only as authenticated and
+operator-authorized retirement tombstones. They return HTTP `410 Gone` without
+parsing the retired request body or mutating the former local registry. There is
+no Torii evidence-viewer audit scheduler. The signed receipt checkpoint and the
+exact `(sequence, receipt_digest)` transparency projection derived from it are
+the sole audit authority.
 
-The production moderation evidence viewer still needs these services:
+## Authoritative Security Model
 
-| Component | Responsibility |
-|-----------|----------------|
-| Viewer frontend | Browser UI for jurors, auditors, and legal reviewers with strict CSP and disabled offline mode. |
-| Viewer backend | Authenticates sessions, issues short-lived segment URLs, and binds access to case and role scopes. |
-| Watermark engine | Generates per-session visual and optional audio watermarks tied to juror pseudonyms and nonces. |
-| Access logger | Local payload-free quarantine access records are implemented; frontend instrumentation and deployed service integration still need to feed them. |
-| Transparency exporter | Local payload-free daily reports now record `EvidenceAccess` source entries, the operator publish-due route can replay due ticks, and the config-backed Torii scheduler can publish due report cycles to the configured Governance DAG publisher; rollout evidence still needs to prove that deployed path. |
+Every evidence API operation that reads or changes protected state requires
+X-Iroha canonical request authentication. Torii derives the actor from the
+verified canonical account; requests cannot supply a substitute viewer account.
 
-## Required Session Flow
+The service then reads one immutable finalized state view and authorizes exactly
+one of:
 
-1. The moderation panel service issues a signed session token for a specific case,
-   evidence item, role, and viewer pseudonym.
-2. The viewer performs device/user attestation before a session key is created.
-3. The backend returns short-lived streaming URLs plus watermark metadata.
-4. The frontend records playback and viewer interaction events locally and sends
-   them to the access logger.
-5. The logger appends events to the case audit trail and exports privacy-safe
-   digests for transparency reporting. The local SoraFS node can now persist
-  payload-free session/access records for sealed quarantine objects, record
-  daily payload-free `EvidenceAccess` source entries, and publish due local
-  report cycles through the configured Torii
-  `sorafs.storage.evidence_viewer_audits` runtime scheduler and Governance DAG publisher, but it does
-  not issue streaming URLs or run the browser viewer.
+- a juror currently assigned to the exact open moderation case and round;
+- an account holding the explicit `sorafs_evidence_auditor` role; or
+- an account holding the explicit `sorafs_legal_reviewer` role.
 
-No production route should claim support for `/v1/evidence/session`,
-`/v1/evidence/manifest`, `/v1/evidence/log`, or `/v1/evidence/audit` until the
-service exists and the authorization model is enforced.
+The generic moderation operator role is insufficient. The finalized case must
+commit the same evidence digest as the encrypted quarantine object. Every
+manifest, range, and interaction access rechecks authorization and rejects
+policy rollback or object substitution.
 
-Until those routes exist, evidence-viewer rollout review must use the
-payload-free SFM-4b canary artifact rather than captured payloads or response
-bodies:
+The runtime WebAuthn boundary issues an unpredictable challenge bound to the
+case, round, object, evidence digest, actor, role, purpose digest, policy digest,
+and finalized block anchor. Session creation consumes that challenge exactly
+once and rejects assertion replay. Sessions have a hard maximum lifetime of 15
+minutes. Each successful manifest, range, or event request consumes the active
+grant and returns a replacement in the sensitive
+`X-SoraFS-Evidence-Grant` response header.
+
+Challenge values, grants, WebAuthn assertions, credential identifiers, signing
+keys, KMS credentials, and evidence bytes never enter the checkpoint or logs.
+The checkpoint stores only one-way digests, finalized anchors, bounded
+payload-free session metadata, signed payload-free receipts, legal holds,
+retention decisions, erasure commitments, and idempotency tombstones. The
+service persists a public Ed25519-signed checkpoint anchor containing the
+canonical checkpoint digest, retained receipt count, and exact receipt-chain
+head. A missing installation must durably create this signed genesis anchor
+before the service becomes available. Non-receipt state therefore cannot be
+altered independently of the receipt chain. Audit reads return the retained
+anchor without calling the signer. Secret wrapper types redact debug output and
+scrub owned buffers on drop.
+
+## Runtime Dependencies and Configuration
+
+Production behavior is configured under
+`torii.sorafs.storage.evidence_viewer`. Enabling it requires SoraFS storage and
+all of these non-secret policy values:
+
+- an absolute private checkpoint file and bounded checkpoint size;
+- session, challenge, and grant lifetimes within the 15-minute ceiling;
+- an authenticated range limit and bounded collection limits;
+- the WebAuthn relying-party id and exact canonical HTTPS origins;
+- opaque production handles for WebAuthn, grant, erasure, and Ed25519 receipt
+  signing services; and
+- the exact governed Ed25519 receipt-verification key.
+
+Torii exposes runtime injection seams whose opaque handles and public key must
+match configuration exactly. Startup fails closed for missing, partial, or
+mismatched dependencies. There is no file key, environment secret, `KeyPair`,
+or in-process production fallback. The standard launcher intentionally does not
+construct real WebAuthn, grant, HSM signer, or KMS implementations; deployment
+owners must construct and inject those runtime dependencies.
+
+The injected boundaries are:
+
+- finalized moderation authorization reader;
+- WebAuthn challenge and assertion verifier;
+- rotating-grant issuer, verifier, and revoker;
+- PKCS#11/HSM Ed25519 receipt signer; and
+- KMS or cryptographic-erasure service.
+
+Transparency publication is a separate deployment boundary. The node provides
+a bounded, signed `EvidenceViewerTransparencyProjectionV1`, but the repository
+does not yet construct or run a deployment-owned producer adapter that consumes
+it and durably advances its exact cursor.
+
+## API Surface
+
+The catalogued and OpenAPI-described active evidence family is:
+
+| Method | Route | Purpose |
+| --- | --- | --- |
+| `POST` | `/v1/evidence/session/challenge` | Authorize an exact case tuple and issue a single-use WebAuthn challenge. |
+| `POST` | `/v1/evidence/session` | Consume the challenge from the sensitive `X-SoraFS-Evidence-Challenge` header and the bounded assertion body, then issue a case-bound session plus initial rotating grant. |
+| `GET` | `/v1/evidence/manifest/{session_id_hex}` | Return the canonical payload-free manifest and append a signed access receipt. |
+| `GET` | `/v1/evidence/segment/{session_id_hex}` | Authenticate, decrypt, durably receipt, and return one bounded byte range. |
+| `POST` | `/v1/evidence/log/{session_id_hex}` | Append a signed payload-free browser interaction. |
+| `GET` | `/v1/evidence/audit` | Page one exact signed checkpoint using its required digest, an explicit page limit, and an optional exact receipt predecessor; explicit auditor or legal role required. |
+| `GET` | `/v1/evidence/status` | Read the exact signed checkpoint anchor and bounded counts before beginning or restarting audit pagination. |
+| `POST` | `/v1/evidence/legal-hold` | Place a legal hold and signed receipt. |
+| `POST` | `/v1/evidence/legal-hold/{hold_id_hex}/release` | Release a legal hold and signed receipt. |
+| `GET`, `POST` | `/v1/evidence/retention` | Read due candidates or record a signed retention decision. |
+| `POST` | `/v1/evidence/erasure` | Perform legal-hold-aware irreversible erasure and issue a signed receipt. |
+
+The only retained legacy aggregate-audit routes are authenticated retirement
+tombstones, not compatibility implementations:
+
+| Method | Route | Purpose |
+| --- | --- | --- |
+| `POST` | `/v1/sorafs/moderation/viewer-audit-reports` | Require canonical request authentication and the moderation-operator role, then return HTTP `410 Gone`; the retired body is not parsed and no local audit state is changed. |
+| `POST` | `/v1/sorafs/moderation/viewer-audit-reports/publish-due` | Require the same authentication and authorization, then return HTTP `410 Gone`; it does not run a scheduler or publish a report. |
+
+The deleted `/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/viewer-sessions`
+and
+`/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/viewer-access`
+routes are not compatibility aliases and are absent from routing, the route
+catalogue, and OpenAPI.
+
+The embedded shell is served at `/v1/evidence/viewer`, with same-origin script
+and stylesheet assets. It contains no evidence, account data, or bearer
+material and is intentionally unprojected from SDK/OpenAPI generation.
+
+JSON requests use Norito JSON decoding with unknown fields denied and bounded
+base64/hex inputs. Durable and audit responses include byte-identical canonical
+Norito envelopes. Range offsets are start-inclusive/end-exclusive and are
+bounded by configuration. Mutating or receipt-producing requests require a
+non-zero idempotency key; conflicting or replayed keys fail closed.
+
+## Receipt and Durability Contract
+
+Every session issuance, manifest access, range access, browser interaction,
+legal-hold transition, retention decision, erasure completion, and
+legal-hold-based erasure denial appends an Ed25519-signed receipt. Receipts have:
+
+- one global monotonic sequence;
+- the previous receipt digest;
+- the exact event kind and timestamp;
+- object and evidence digests;
+- actor-account and idempotency-key digests;
+- a request metadata digest; and
+- optional range bounds.
+
+Checkpoint loading requires canonical Norito re-encoding, bounded sequences,
+unique sorted identities, an unbroken receipt chain, signed record linkage, and
+valid receipt and checkpoint-envelope signatures under the configured signer
+identity. Atomic checkpoint writes use the hardened local checkpoint
+implementation, including symlink, hardlink, and replacement defenses. A
+post-rename durability ambiguity makes the service unavailable rather than
+allowing unrecorded access.
+
+The signed checkpoint is the sole durable audit record. Its signed public
+anchor binds the complete canonical checkpoint digest, receipt count, and exact
+receipt-chain head. A consumer first obtains and verifies that anchor from
+`/v1/evidence/status`, then supplies its non-zero
+`expected_checkpoint_digest_hex` on every `/v1/evidence/audit` request. The
+bounded transparency projection also requires an explicit page limit and an
+optional exact predecessor cursor containing both receipt sequence and receipt
+digest. It returns a contiguous page of signed receipts and binds the signed
+anchor, requested page limit, page, next cursor, and continuation marker in the
+projection digest and canonical Norito response.
+
+The accepted raw query forms are intentionally singular:
+
+```text
+expected_checkpoint_digest_hex=<64-lowercase-hex>&limit=<1..256>
+expected_checkpoint_digest_hex=<64-lowercase-hex>&after_sequence=<nonzero-canonical-decimal>&after_receipt_digest_hex=<64-lowercase-hex>&limit=<1..256>
+```
+
+Field reordering, percent or plus aliases, duplicate/empty/unknown fields,
+implicit limits, leading-zero numbers, uppercase hex, and partial predecessor
+pairs fail closed. If the durable checkpoint changes during pagination, Torii
+returns HTTP `409 Conflict`; the consumer must fetch and verify the new status
+anchor and explicitly restart instead of silently mixing pages. Consumers must
+durably retain the exact signed checkpoint anchor and `(sequence, digest)`
+cursor. An unknown digest, same-sequence substitution, malformed anchor,
+signature change, or local checkpoint rollback fails closed. The authenticated
+audit and status routes are read projections of the checkpoint and do not call
+the signer. Neither legacy tombstone can create or modify audit state.
+
+A signature proves anchor integrity and governed signer identity, not global
+freshness to a first-time client. Such a client cannot distinguish an older
+validly signed anchor from the latest anchor without an independently
+authenticated transparency or ledger head. Binding and publishing that
+monotonic external head remains part of the deployment-owned transparency
+producer blocker below.
+
+For a range request, decryption completes first but bytes are not returned until
+the signed access receipt and rotated grant state are durably committed. Erasure
+holds the state boundary across legal-hold evaluation and the irreversible KMS
+operation, preventing a hold/erasure race. A definite erasure followed by an
+ambiguous checkpoint result leaves the service fail-closed.
+
+## Embedded Viewer Controls
+
+The embedded viewer shell is delivered with private `no-store`/`no-cache`
+headers, same-origin isolation, no-referrer, a strict CSP, `worker-src 'none'`,
+`connect-src 'none'`, no object/media/image sources, and restrictive
+Permissions-Policy. It does not register a service worker, use Cache Storage,
+IndexedDB, local storage, download URLs, or offline persistence.
+
+The shell accepts already-authorized `ImageBitmap` frames only from its
+same-origin parent, renders them to a canvas, closes transferred frames, and
+clears the canvas on page hide. It includes a trauma warning, visible repeating
+per-session watermark, print suppression, and instrumentation for view, pause,
+download-attempt, and screenshot-attempt events. The authenticated parent is
+responsible for signing range/log requests and forwarding those interaction
+events to `/v1/evidence/log/{session_id_hex}`.
+
+## Remaining Production Blockers
+
+- Construct and inject deployment-owned WebAuthn, rotating-grant, PKCS#11/HSM
+  receipt-signer, and KMS/erasure implementations, with startup identity and
+  readiness checks.
+- Build a deployment-owned transparency producer adapter that consumes only
+  `EvidenceViewerTransparencyProjectionV1`, durably acknowledges the exact
+  signed checkpoint anchor and `(sequence, digest)` cursor, anchors a monotonic
+  public head for first-contact freshness, and reconciles publication. A
+  Torii-local scheduler is not part of this design.
+- Add durable, retry-safe notification delivery for the surrounding
+  evidence-viewer workflow, including reconciliation and dead-letter handling.
+- Replace single-process checkpoint serialization with multi-instance
+  compare-and-swap or an equivalent single-writer lease so two Torii instances
+  cannot allocate the same receipt sequence or overwrite each other's state.
+- Add bounded compaction and authenticated archive/recovery while preserving
+  receipt-chain verification and exact-cursor continuity.
+- Collect reviewed multi-instance deployment, security, recovery, and
+  payload-free promotion evidence.
+
+## Validation and Promotion
+
+The focused implementation checks are:
+
+```sh
+cargo test -p sorafs_node evidence_viewer
+cargo test -p iroha_torii evidence_viewer --features app_api
+cargo test -p iroha_torii openapi --features app_api
+cargo test -p iroha_torii_shared route_catalog
+```
+
+Release validation must additionally exercise unauthorized and operator-only
+accounts, revoked assignments, challenge/assertion/grant replay, expiry and
+rotation, wrong case/object/policy binding, malformed and oversized inputs,
+range substitution, receipt/signature/chain tampering, checkpoint corruption
+and filesystem attacks, crash points around atomic persistence, concurrent
+legal-hold/erasure requests, KMS ambiguity, viewer CSP/offline controls, and
+payload/secret log scanning.
+
+Deployment promotion remains gated by:
 
 ```sh
 python3 scripts/build_sorafs_evidence_viewer_canary.py \
@@ -160,53 +276,15 @@ python3 scripts/check_sorafs_moderation_panel_rollout_evidence.py \
   --require-kind evidence_viewer
 ```
 
-## Remaining Production Gates
+`scripts/build_sorafs_evidence_viewer_canary.py` is the payload-free `evidence_viewer` canary builder. It requires reviewed `moderation-viewer-session-*` `--viewer-session` labels, emits `role_count`,
+`security_control_count`, `access_event_kind_count`, and
+`export_target_count` from the reviewed role/control/event/export inventories
+before checker prevalidation, and rejects unreviewed `--deployment-id` and
+`--environment` values before checker prevalidation. Promotion evidence must
+include explicit audit-log tamper rejection and watermark metadata mismatch
+rejection.
 
-- Build the browser evidence viewer with role-scoped case manifests, trauma
-  warnings, watermark overlays, and deterministic rendering support.
-- Build the streaming backend, short-lived URL signer, session-key workflow, and
-  WebAuthn or equivalent attestation path.
-- Implement watermark generation and per-session watermark metadata hashing.
-- Connect the browser/streaming service to the local payload-free access logger
-  and expand deployed anomaly coverage for download attempts, screenshots,
-  session expiry, and attestation failures.
-- Add retention, erasure, and legal-hold workflows with signed receipts.
-- Operate the configured runtime scheduler in staged and production
-  deployments, and collect rollout evidence proving anonymized access reports
-  and daily audit digests reach the Governance DAG without payload leakage.
-- Make the deployed canary publish only digest evidence for session manifests,
-  watermark metadata, access logs, legal-hold receipts, and transparency
-  reports; raw access logs, legal-hold receipt bodies, and transparency report
-  payloads must never enter rollout archives.
-- Use the payload-free `evidence_viewer` canary builder for staged review
-  packets so every required role, viewer control, access-event kind, export
-  target, digest field, reviewed viewer session label, and positive control
-  claim is explicit before the SFM-4b rollout gate runs.
-- Add end-to-end security tests for unauthorized access, replay, stale URLs,
-  audit-log tampering, and watermark metadata mismatch beyond the payload-free
-  canary claims.
-- Collect a passing payload-free `evidence_viewer` canary through the SFM-4b
-  rollout evidence gate after the viewer service exists.
-
-## Validation
-
-Existing adjacent checks do not prove full evidence-viewer readiness. For now,
-use the local runtime tests for payload-free session/access audit records, the
-local report/exporter/configured scheduler and publish-due tests for payload-free `EvidenceAccess` source entries,
-the SFM-4b rollout gate for payload-free evidence-viewer promotion checks, and
-the Taikai harness only for media envelope and telemetry validation:
-
-```sh
-cargo test -p sorafs_node moderation_evidence_viewer
-cargo test -p iroha_torii moderation_evidence_viewer --features app_api
-python3 scripts/build_sorafs_evidence_viewer_canary.py \
-  @scripts/examples/sorafs_evidence_viewer_canary.args.example
-python3 scripts/check_sorafs_moderation_panel_rollout_evidence.py \
-  @scripts/examples/sorafs_moderation_panel_rollout_evidence.args.example \
-  --require-kind evidence_viewer
-cargo test -p sorafs_orchestrator taikai
-```
-
-When the full browser/streaming SFM-4b3 viewer is implemented, add dedicated
-frontend, backend, and authorization tests before removing the
-unshipped-service language from this page.
+The canary and aggregate evidence must remain payload-free. Raw evidence,
+assertions, credential identifiers, grants, signed URLs, response bodies,
+watermark secrets, legal-hold authority payloads, and transparency report
+payloads must never enter readiness artifacts.

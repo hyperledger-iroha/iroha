@@ -148,6 +148,8 @@ isi! {
 pub struct CompleteReplicationOrder {
     /// Identifier of the replication order.
     pub order_id: ReplicationOrderId,
+        /// Provider assignment whose ingestion is complete.
+        pub provider_id: ProviderId,
         /// Epoch (inclusive) when replication completed.
         pub completion_epoch: u64,
     }
@@ -843,7 +845,9 @@ impl crate::seal::Instruction for SetSorafsReputationJournalAuthorityPolicy {}
 isi! {
     /// Commit one terminal native PoR projection to the global reputation journal.
     pub struct AppendSorafsPorReputationJournalEntry {
-        /// Canonical policy-bound, content-addressed PoR journal entry.
+        /// Canonical policy-bound PoR entry carrying authenticated source time.
+        ///
+        /// Consensus stamps the authoritative recorded time during execution.
         pub entry: ReputationJournalEntryV1,
     }
 }
@@ -853,7 +857,9 @@ impl crate::seal::Instruction for AppendSorafsPorReputationJournalEntry {}
 isi! {
     /// Commit one regional-gateway stream-token result to the global reputation journal.
     pub struct AppendSorafsStreamTokenReputationJournalEntry {
-        /// Canonical policy-bound, content-addressed stream-token journal entry.
+        /// Canonical policy-bound token entry carrying authenticated source time.
+        ///
+        /// Consensus stamps the authoritative recorded time during execution.
         pub entry: ReputationJournalEntryV1,
     }
 }
@@ -1156,9 +1162,14 @@ impl IssueReplicationOrder {
 impl CompleteReplicationOrder {
     /// Create a new `CompleteReplicationOrder` instruction.
     #[must_use]
-    pub fn new(order_id: ReplicationOrderId, completion_epoch: u64) -> Self {
+    pub fn new(
+        order_id: ReplicationOrderId,
+        provider_id: ProviderId,
+        completion_epoch: u64,
+    ) -> Self {
         Self {
             order_id,
+            provider_id,
             completion_epoch,
         }
     }
@@ -1803,6 +1814,7 @@ impl_sorafs_decode_from_slice!(IssueReplicationOrder {
 
 impl_sorafs_decode_from_slice!(CompleteReplicationOrder {
     order_id: ReplicationOrderId,
+    provider_id: ProviderId,
     completion_epoch: u64,
 });
 
@@ -2181,6 +2193,7 @@ mod tests {
             por_recorder_authority: owner(),
             dispute_recorder_authority: owner(),
             token_recorder_authority: owner(),
+            max_source_age_ms: 24 * 60 * 60 * 1_000,
         }
     }
 
@@ -2549,7 +2562,11 @@ mod tests {
             70,
             90,
         ));
-        assert_slice_roundtrip(CompleteReplicationOrder::new(order_id(), 88));
+        assert_slice_roundtrip(CompleteReplicationOrder::new(
+            order_id(),
+            provider(0x35),
+            88,
+        ));
         assert_slice_roundtrip(ExpireReplicationOrder::new(order_id(), 91));
         assert_slice_roundtrip(RegisterProviderOwner::new(provider(0x35), owner()));
         assert_slice_roundtrip(UnregisterProviderOwner::new(provider(0x35)));
@@ -2801,7 +2818,10 @@ mod tests {
             &registry,
             IssueReplicationOrder::new(order_id(), vec![0x01, 0x02, 0x03], 70, 90),
         );
-        assert_registry_decodes(&registry, CompleteReplicationOrder::new(order_id(), 88));
+        assert_registry_decodes(
+            &registry,
+            CompleteReplicationOrder::new(order_id(), provider(0x35), 88),
+        );
         assert_registry_decodes(&registry, ExpireReplicationOrder::new(order_id(), 91));
         assert_registry_decodes(
             &registry,

@@ -125,13 +125,7 @@ use std::{
 use ::time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use base64::Engine;
 use blake3::hash as blake3_hash;
-use iroha_data_model::sorafs::{
-    capacity::{
-        CapacityDeclarationRecord, CapacityDisputeEvidence, CapacityDisputeId,
-        CapacityDisputeRecord, CapacityTelemetryRecord, ProviderId,
-    },
-    deal::{DealId, DealSettlementRecord, DealUsageReport, MicropaymentTicket, TicketId},
-};
+use iroha_data_model::sorafs::capacity::ProviderId;
 #[cfg(feature = "telemetry")]
 use iroha_data_model::soranet::privacy_metrics::{
     SoranetPrivacyEventV1, SoranetPrivacyPrioShareV1,
@@ -184,6 +178,19 @@ pub mod debug_match_flag {
     }
 }
 
+use crate::sorafs::{
+    PorCoordinatorError, PorStatusExportV1, PorStatusFilter, QuotaExceeded, SorafsAction,
+    SorafsQuotaEnforcer,
+};
+#[cfg(feature = "app_api")]
+use crate::{
+    explorer::{
+        ExplorerInstructionDto, ExplorerInstructionKind, ExplorerInstructionsPage, metadata_to_json,
+    },
+    filter::FieldPath,
+    utils::JsonValueBody,
+};
+use crate::{json_array, json_entry, json_object, json_value};
 use iroha_data_model as dm;
 use iroha_data_model::{
     account,
@@ -204,40 +211,17 @@ use iroha_data_model::{
     name::Name,
     query::error::QueryExecutionFail,
     soradns::{DirectoryRotationPolicyV1, RadRevokeReason},
-    sorafs::{
-        deal::{ClientId, DealProposal, DealTerms, GIB_HOURS_PER_MONTH},
-        pin_registry::StorageClass,
-    },
 };
 use sorafs_manifest::{
     ManifestV1, ManifestValidationError, PinPolicy as ManifestPinPolicy,
     PinPolicyConstraints as ManifestPinPolicyConstraints, StorageClass as ManifestStorageClass,
-    capacity::{
-        CapacityDeclarationV1, CapacityDeclarationValidationError, CapacityDisputeV1,
-        ReplicationOrderV1, ReplicationOrderValidationError,
-    },
-    deal::{DealSettlementV1, XorQuantity},
+    capacity::{CapacityDeclarationV1, CapacityDeclarationValidationError},
     por::{
         AuditVerdictV1, PorChallengeOutcome, PorChallengeStatusV1, PorChallengeV1, PorProofV1,
         PorReportIsoWeek, PorWeeklyReportV1,
     },
     validate_manifest,
 };
-use sorafs_node::{DealEngineError, DealSettlementOutcome, UsageOutcome};
-
-use crate::sorafs::{
-    PorCoordinatorError, PorStatusExportV1, PorStatusFilter, QuotaExceeded, SorafsAction,
-    SorafsQuotaEnforcer,
-};
-#[cfg(feature = "app_api")]
-use crate::{
-    explorer::{
-        ExplorerInstructionDto, ExplorerInstructionKind, ExplorerInstructionsPage, metadata_to_json,
-    },
-    filter::FieldPath,
-    utils::JsonValueBody,
-};
-use crate::{json_array, json_entry, json_object, json_value};
 
 #[allow(dead_code)]
 fn _json_helper_sanity() {
@@ -31732,41 +31716,6 @@ pub struct SubscriptionUsageResponseDto {
 
 #[cfg(feature = "app_api")]
 #[derive(
-    Clone,
-    Debug,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
-#[norito(deny_unknown_fields)]
-/// Request payload for Torii SoraFS pin registration endpoint.
-pub struct RegisterPinManifestDto {
-    /// Account authorizing the transaction.
-    pub authority: iroha_data_model::account::AccountId,
-    /// Signing key exposed for API transport.
-    pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
-    /// Exact canonical Norito `ManifestV1` payload encoded as canonical padded base64.
-    pub manifest_payload: String,
-    /// Epoch (inclusive) recorded for submission.
-    pub submitted_epoch: u64,
-    /// Optional alias binding to associate with the manifest.
-    #[norito(default)]
-    pub alias: Option<PinAliasDto>,
-    /// Optional predecessor manifest digest (hex) establishing succession.
-    #[norito(default)]
-    pub successor_of_hex: Option<String>,
-}
-
-#[cfg(feature = "app_api")]
-impl<'a> norito::core::DecodeFromSlice<'a> for RegisterPinManifestDto {
-    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        norito::core::decode_field_canonical(bytes)
-    }
-}
-
-#[cfg(feature = "app_api")]
-#[derive(
     crate::json_macros::JsonDeserialize,
     norito::derive::NoritoDeserialize,
     crate::json_macros::JsonSerialize,
@@ -31774,124 +31723,12 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RegisterPinManifestDto {
 )]
 /// Response returned after registering a manifest for pinning.
 pub struct RegisterPinManifestResponseDto {
+    /// Admission state. Always `submitted`; it does not imply finality.
+    pub status: String,
+    /// Hex-encoded hash of the exact signed transaction admitted to the queue.
+    pub tx_hash_hex: String,
     /// Canonical manifest digest (BLAKE3-256) as hex.
     pub manifest_digest_hex: String,
-    /// Canonical chunker handle (`namespace.name@semver`).
-    pub chunker_handle: String,
-    /// Epoch supplied during submission.
-    pub submitted_epoch: u64,
-    /// Total content length submitted for fee calculation.
-    pub content_length: u64,
-    /// Exact public pin fee expected by the current pricing schedule.
-    pub pin_fee: Quantity,
-    /// Asset definition used to collect the public pin fee.
-    pub pin_fee_asset_id: String,
-    /// Treasury account that receives the public pin fee.
-    pub pin_fee_treasury_account_id: String,
-    /// Alias binding that was submitted (if any).
-    #[norito(default)]
-    pub alias: Option<PinAliasDto>,
-    /// Optional predecessor manifest digest (hex) if supplied.
-    #[norito(default)]
-    pub successor_of_hex: Option<String>,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(
-    Clone,
-    Debug,
-    PartialEq,
-    Eq,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
-#[norito(deny_unknown_fields)]
-/// Alias binding payload supplied alongside manifest registration.
-pub struct PinAliasDto {
-    /// Alias namespace (e.g., `sora`).
-    pub namespace: String,
-    /// Alias name (e.g., `docs`).
-    pub name: String,
-    /// Alias proof payload encoded as base64 (opaque to Torii for now).
-    pub proof_base64: String,
-}
-
-#[cfg(feature = "app_api")]
-impl<'a> norito::core::DecodeFromSlice<'a> for PinAliasDto {
-    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        let (binding, used) = norito::core::decode_field_canonical::<
-            iroha_data_model::sorafs::pin_registry::ManifestAliasBinding,
-        >(bytes)?;
-        Ok((
-            PinAliasDto {
-                namespace: binding.namespace,
-                name: binding.name,
-                proof_base64: base64::engine::general_purpose::STANDARD.encode(binding.proof),
-            },
-            used,
-        ))
-    }
-}
-
-#[cfg(feature = "app_api")]
-const _: () = {
-    fn assert_manifest_traits<T>()
-    where
-        T: norito::json::JsonDeserializeOwned
-            + crate::utils::extractors::SupportsNoritoDecode
-            + Send,
-    {
-        let _ = core::marker::PhantomData::<T>;
-    }
-
-    fn assert_all() {
-        assert_manifest_traits::<RegisterPinManifestDto>();
-        assert_manifest_traits::<PinAliasDto>();
-    }
-
-    let _ = assert_all;
-};
-
-#[cfg(feature = "app_api")]
-#[derive(
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
-/// Request payload for Torii SoraFS capacity declaration endpoint.
-pub struct RegisterCapacityDeclarationDto {
-    /// Account authorizing the transaction.
-    pub authority: iroha_data_model::account::AccountId,
-    /// Signing key exposed for API transport.
-    pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
-    /// Canonical Norito encoding of `CapacityDeclarationV1`, base64 encoded.
-    pub declaration_b64: String,
-    /// Epoch (inclusive) when the declaration was registered.
-    pub registered_epoch: u64,
-    /// Epoch (inclusive) when the declaration becomes active.
-    pub valid_from_epoch: u64,
-    /// Epoch (inclusive) when the declaration expires.
-    pub valid_until_epoch: u64,
-    /// Optional metadata to persist alongside the declaration.
-    #[norito(default)]
-    pub metadata: Option<Vec<MetadataEntryDto>>,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-    Clone,
-)]
-/// DTO representing a single metadata entry supplied by the client.
-pub struct MetadataEntryDto {
-    pub key: String,
-    pub value: IrohaJson,
 }
 
 #[cfg(feature = "app_api")]
@@ -31920,151 +31757,6 @@ pub struct RegisterCapacityDeclarationResponseDto {
     crate::json_macros::JsonSerialize,
     norito::derive::NoritoSerialize,
 )]
-/// Request payload for scheduling a replication order.
-pub struct ScheduleReplicationOrderDto {
-    /// Canonical Norito encoding of `ReplicationOrderV1`, base64 encoded.
-    pub order_b64: String,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
-/// Request payload for completing a replication order.
-pub struct CompleteReplicationOrderDto {
-    /// Replication order identifier as hex.
-    pub order_id_hex: String,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
-/// Response payload summarising the replication completion outcome.
-pub struct CompleteReplicationOrderResponseDto {
-    /// Completion status (`completed` or `ignored`).
-    pub status: String,
-    /// Replication order identifier as hex.
-    pub order_id_hex: String,
-    /// Provider identifier as hex (when known).
-    pub provider_id_hex: Option<String>,
-    /// GiB released back into the capacity pool.
-    pub released_gib: u64,
-    /// Remaining GiB across the total commitment.
-    pub remaining_total_gib: u64,
-    /// Remaining GiB for the chunker profile.
-    pub remaining_chunker_gib: u64,
-    /// Remaining GiB within the lane, if applicable.
-    pub remaining_lane_gib: Option<u64>,
-    /// Optional lane identifier.
-    pub lane: Option<String>,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
-/// Request payload for Torii SoraFS capacity telemetry endpoint.
-pub struct RecordCapacityTelemetryDto {
-    /// Account authorizing the transaction.
-    pub authority: iroha_data_model::account::AccountId,
-    /// Signing key exposed for API transport.
-    pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
-    /// Provider identifier (hex-encoded BLAKE3-256).
-    pub provider_id_hex: String,
-    /// Start epoch (inclusive) of the telemetry window.
-    pub window_start_epoch: u64,
-    /// End epoch (inclusive) of the telemetry window.
-    pub window_end_epoch: u64,
-    /// Declared GiB during the window.
-    pub declared_gib: u64,
-    /// Effective GiB during the window (after governance deductions).
-    pub effective_gib: u64,
-    /// Utilised GiB during the window.
-    pub utilised_gib: u64,
-    /// Replication orders issued during the window.
-    pub orders_issued: u64,
-    /// Replication orders completed during the window.
-    pub orders_completed: u64,
-    /// Uptime success rate (basis points).
-    pub uptime_bps: u32,
-    /// Proof-of-retrieval success rate (basis points).
-    pub por_success_bps: u32,
-    /// Logical bytes served during the window.
-    #[norito(default)]
-    pub egress_bytes: u64,
-    /// Gateway-observed logical bytes served during the window.
-    #[norito(default)]
-    pub gateway_egress_bytes: Option<u64>,
-    /// Orchestrator-observed logical bytes served during the window.
-    #[norito(default)]
-    pub orchestrator_egress_bytes: Option<u64>,
-    /// PDP challenges issued for the window.
-    #[norito(default)]
-    pub pdp_challenges: u32,
-    /// PDP failures observed for the window.
-    #[norito(default)]
-    pub pdp_failures: u32,
-    /// PoTR windows evaluated for the window.
-    #[norito(default)]
-    pub potr_windows: u32,
-    /// PoTR SLA breaches observed for the window.
-    #[norito(default)]
-    pub potr_breaches: u32,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
-/// Request payload for Torii SoraFS capacity dispute endpoint.
-pub struct RegisterCapacityDisputeDto {
-    /// Account authorizing the dispute submission.
-    pub authority: iroha_data_model::account::AccountId,
-    /// Signing key exposed for API transport.
-    pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
-    /// Canonical base64-encoded Norito payload of `CapacityDisputeV1`.
-    pub dispute_b64: String,
-    /// Epoch (seconds) supplied for auditing purposes.
-    pub submitted_epoch: u64,
-    /// Target provider identifier (hex-encoded BLAKE3-256 digest).
-    pub provider_id_hex: String,
-    /// Complainant identifier (hex-encoded digest).
-    pub complainant_id_hex: String,
-    /// Optional replication order identifier tied to the dispute.
-    #[cfg_attr(feature = "app_api", norito(default))]
-    pub replication_order_id_hex: Option<String>,
-    /// Dispute kind as advertised by the CLI payload.
-    pub kind: String,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
-/// Response payload for the capacity dispute endpoint.
-pub struct RegisterCapacityDisputeResponseDto {
-    /// Hex-encoded dispute identifier derived from the canonical payload.
-    pub dispute_id_hex: String,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
 /// Response payload for the capacity telemetry endpoint.
 pub struct RecordCapacityTelemetryResponseDto {
     /// Provider identifier as hex.
@@ -32073,321 +31765,6 @@ pub struct RecordCapacityTelemetryResponseDto {
     pub window_start_epoch: u64,
     /// End epoch (inclusive) of the telemetry window.
     pub window_end_epoch: u64,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
-/// Micropayment ticket payload supplied when recording deal usage.
-pub struct DealUsageTicketDto {
-    /// Micropayment ticket identifier (hex-encoded BLAKE3-256).
-    pub ticket_id_hex: String,
-    /// Epoch when the ticket was issued.
-    pub issued_epoch: u64,
-    /// Storage GiB-hours attributed to the ticket.
-    pub storage_gib_hours: u64,
-    /// Egress bytes attributed to the ticket.
-    pub egress_bytes: u64,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
-/// Request payload for recording SoraFS deal usage telemetry.
-pub struct RecordDealUsageDto {
-    /// Deal identifier (hex-encoded BLAKE3-256).
-    pub deal_id_hex: String,
-    /// Epoch attributed to the usage sample.
-    pub epoch: u64,
-    /// Storage GiB-hours recorded for the sample.
-    pub storage_gib_hours: u64,
-    /// Egress bytes recorded for the sample.
-    pub egress_bytes: u64,
-    /// Micropayment tickets included with the sample.
-    #[cfg_attr(feature = "app_api", norito(default))]
-    pub tickets: Vec<DealUsageTicketDto>,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
-/// Response payload returned after recording deal usage.
-pub struct RecordDealUsageResponseDto {
-    /// Deal identifier (hex-encoded).
-    pub deal_id_hex: String,
-    /// Epoch attributed to the usage sample.
-    pub epoch: u64,
-    /// Exact deterministic charge accrued for the sample.
-    pub deterministic_charge: XorQuantity,
-    /// Exact micropayment credit generated during the sample.
-    pub micropayment_credit_generated: XorQuantity,
-    /// Exact micropayment credit applied during the sample.
-    pub micropayment_credit_applied: XorQuantity,
-    /// Exact micropayment credit carried forward.
-    pub micropayment_credit_carry: XorQuantity,
-    /// Exact outstanding balance after applying credit.
-    pub outstanding: XorQuantity,
-    /// Total tickets processed in the batch.
-    pub tickets_processed: usize,
-    /// Tickets that produced a payout.
-    pub tickets_won: usize,
-    /// Tickets discarded as duplicates.
-    pub tickets_duplicate: usize,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(
-    Clone,
-    Debug,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
-/// Request payload for funding an admitted provider's deal collateral account.
-pub struct FundProviderBondDto {
-    /// Provider identifier (hex-encoded BLAKE3-256).
-    pub provider_id_hex: String,
-    /// Positive collateral increment as a canonical exact XOR quantity.
-    pub amount: XorQuantity,
-    /// Exact next one-based funding sequence for replay protection.
-    pub funding_sequence: u64,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
-/// Provider collateral balances returned after an accepted funding request.
-pub struct FundProviderBondResponseDto {
-    /// Provider identifier (hex-encoded).
-    pub provider_id_hex: String,
-    /// Last accepted funding sequence.
-    pub funding_sequence: u64,
-    /// Total exact collateral deposited.
-    pub bond_deposited: XorQuantity,
-    /// Exact collateral currently available.
-    pub bond_available: XorQuantity,
-    /// Exact collateral locked by active deals.
-    pub bond_locked: XorQuantity,
-    /// Exact collateral irreversibly slashed.
-    pub bond_slashed: XorQuantity,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(
-    Clone,
-    Debug,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
-/// Request payload for funding a deal client's credit account.
-pub struct FundClientCreditDto {
-    /// Client identifier (hex-encoded BLAKE3-256).
-    pub client_id_hex: String,
-    /// Positive credit increment as a canonical exact XOR quantity.
-    pub amount: XorQuantity,
-    /// Exact next one-based funding sequence for replay protection.
-    pub funding_sequence: u64,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
-/// Client credit balances returned after an accepted funding request.
-pub struct FundClientCreditResponseDto {
-    /// Client identifier (hex-encoded).
-    pub client_id_hex: String,
-    /// Last accepted funding sequence.
-    pub funding_sequence: u64,
-    /// Total exact credit deposited.
-    pub credit_deposited: XorQuantity,
-    /// Exact credit currently available.
-    pub credit_balance: XorQuantity,
-    /// Exact credit consumed by settlements.
-    pub credit_debited: XorQuantity,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(
-    Clone,
-    Debug,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
-/// Request payload for opening a validated SoraFS storage deal.
-pub struct OpenDealDto {
-    /// Canonical proposal whose provider must have a current admitted advert.
-    pub proposal: DealProposal,
-    /// Epoch when the deal becomes active.
-    pub activation_epoch: u64,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
-/// Identifiers and lifecycle bounds returned after opening a deal.
-pub struct OpenDealResponseDto {
-    /// Canonical deal identifier (hex-encoded BLAKE3-256).
-    pub deal_id_hex: String,
-    /// Provider identifier (hex-encoded).
-    pub provider_id_hex: String,
-    /// Client identifier (hex-encoded).
-    pub client_id_hex: String,
-    /// Epoch when the deal was activated.
-    pub activation_epoch: u64,
-    /// First negotiated deal epoch.
-    pub start_epoch: u64,
-    /// Final negotiated deal epoch.
-    pub end_epoch: u64,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(
-    Clone,
-    Debug,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
-/// Request payload to finalise a SoraFS deal settlement window.
-pub struct SettleDealDto {
-    /// Deal identifier (hex-encoded BLAKE3-256).
-    pub deal_id_hex: String,
-    /// Epoch used to mark the settlement window end.
-    pub settlement_epoch: u64,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
-/// Response payload emitted after settling a deal window.
-pub struct SettleDealResponseDto {
-    /// Deal identifier (hex-encoded).
-    pub deal_id_hex: String,
-    /// Settlement index for the deal.
-    pub settlement_index: u64,
-    /// Epoch when the settlement was recorded.
-    pub settled_epoch: u64,
-    /// Exact deterministic charge for the window.
-    pub expected_charge: XorQuantity,
-    /// Exact micropayment credit applied.
-    pub micropayment_credit: XorQuantity,
-    /// Exact amount debited from the client.
-    pub client_credit_debit: XorQuantity,
-    /// Exact amount taken from the bond during settlement.
-    pub bond_slash: XorQuantity,
-    /// Exact outstanding amount after settlement.
-    pub outstanding: XorQuantity,
-    /// Base64-encoded Norito payload for `DealSettlementV1`.
-    pub governance_settlement_b64: String,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(
-    Clone,
-    Debug,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
-/// Request payload to cancel an idle deal at its next settlement boundary.
-pub struct CancelDealDto {
-    /// Deal identifier (hex-encoded BLAKE3-256).
-    pub deal_id_hex: String,
-    /// Exact next settlement-boundary epoch.
-    pub cancellation_epoch: u64,
-    /// Canonical non-empty operator rationale stored in the final settlement.
-    pub reason: String,
-}
-
-/// Structured result returned after processing a deal usage submission.
-#[cfg(feature = "app_api")]
-pub struct DealUsageHandlerResult {
-    /// HTTP response returned to the caller.
-    pub response: Response,
-    /// Usage report applied to the deal engine.
-    pub report: DealUsageReport,
-    /// Accounting outcome produced by the deal engine.
-    pub outcome: UsageOutcome,
-}
-
-/// Structured result returned after finalising a deal settlement window.
-#[cfg(feature = "app_api")]
-pub struct DealSettlementHandlerResult {
-    /// HTTP response returned to the caller.
-    pub response: Response,
-    /// Settlement outcome produced by the deal engine.
-    pub outcome: DealSettlementOutcome,
-    /// Norito-encoded governance payload bytes.
-    pub encoded: Vec<u8>,
-    /// Base64 form of the governance payload.
-    pub encoded_b64: String,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
-/// Request payload for recording an uptime observation.
-pub struct RecordUptimeObservationDto {
-    /// Seconds of uptime observed during the probe window.
-    pub uptime_secs: u64,
-    /// Total seconds covered by the probe window.
-    pub observed_secs: u64,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
-/// Response payload returned after recording an uptime observation.
-pub struct RecordUptimeObservationResponseDto {
-    /// Result status (`recorded`).
-    pub status: String,
-    /// Seconds of uptime recorded.
-    pub uptime_secs: u64,
-    /// Total seconds observed for the sample.
-    pub observed_secs: u64,
 }
 
 #[cfg(feature = "app_api")]
@@ -32460,36 +31837,6 @@ pub struct RecordPorSubmissionResponseDto {
 pub struct RecordPorVerdictResponseDto {
     /// Result status (`accepted`).
     pub status: String,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
-/// Request payload for marking a replication order as failed.
-pub struct RecordReplicationFailureDto {
-    /// Replication order identifier as hex.
-    pub order_id_hex: String,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
-/// Response payload summarising the recorded replication failure.
-pub struct RecordReplicationFailureResponseDto {
-    /// Result status (`recorded` or `ignored`).
-    pub status: String,
-    /// Replication order identifier as hex.
-    pub order_id_hex: String,
-    /// Whether the failure was tracked by the capacity meter.
-    pub recorded: bool,
 }
 
 #[cfg(feature = "app_api")]
@@ -32617,88 +31964,29 @@ pub async fn handle_post_sorafs_register_manifest(
     queue: Arc<Queue>,
     state: Arc<CoreState>,
     telemetry: MaybeTelemetry,
-    NoritoJson(req): NoritoJson<RegisterPinManifestDto>,
+    transaction: SignedTransaction,
 ) -> Result<impl IntoResponse> {
-    use iroha_data_model::{isi::sorafs, prelude as dm};
-
+    let register = validate_sorafs_pin_register_transaction(chain_id.as_ref(), &transaction)?;
     let manifest_constraints =
         manifest_pin_policy_constraints_from_config(&state.gov.sorafs_pin_policy);
-    let (manifest_payload, manifest, manifest_digest_bytes) =
-        decode_sorafs_pin_manifest_payload(&req.manifest_payload, &manifest_constraints)?;
-    let policy = convert_manifest_policy(&manifest.pin_policy);
-    let alias_binding = req
-        .alias
-        .as_ref()
-        .map(decode_sorafs_pin_alias_binding)
-        .transpose()?;
-    let successor_digest = req
-        .successor_of_hex
-        .as_deref()
-        .map(parse_sorafs_pin_successor_digest)
-        .transpose()?;
-
-    let isi = sorafs::RegisterPinManifest::new(
-        manifest_payload,
-        req.submitted_epoch,
-        alias_binding,
-        successor_digest,
-    );
-
-    let tx = quote_and_sign_app_api_transaction(
-        dm::TransactionBuilder::new(
-            (*chain_id).clone(),
-            req.authority.clone().into(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([dm::InstructionBox::from(isi)]),
-        &req.private_key.0,
-        queue.as_ref(),
-        state.as_ref(),
-        "/v1/sorafs/pin/register",
-    )?;
-
-    let pin_fee = state
-        .gov
-        .sorafs_pricing
-        .public_pin_fee(
-            policy.storage_class,
-            manifest.content_length,
-            policy.min_replicas,
-            req.submitted_epoch,
-            policy.retention_epoch,
-        )
-        .map_err(|error| {
-            sorafs_pin_validation_error(
-                "sorafs_pin_fee_calculation_invalid",
-                format!("public pin fee calculation failed: {error}"),
-            )
-        })?;
-    let pin_fee_asset_id = state.gov.sorafs_pin_fee_asset_id.to_string();
-    let pin_fee_treasury_account_id = state.gov.sorafs_pin_fee_treasury_account.to_string();
+    let (_, manifest_digest_bytes) =
+        decode_sorafs_pin_manifest_bytes(&register.manifest_payload, &manifest_constraints)?;
+    let tx_hash_hex = hex::encode(transaction.hash().as_ref());
 
     handle_transaction_with_metrics(
         chain_id,
         queue,
         state,
-        tx,
+        transaction,
         telemetry,
         "/v1/sorafs/pin/register",
     )
     .await?;
 
     let response = RegisterPinManifestResponseDto {
+        status: "submitted".to_owned(),
+        tx_hash_hex,
         manifest_digest_hex: hex::encode(manifest_digest_bytes),
-        chunker_handle: format!(
-            "{}.{}@{}",
-            manifest.chunking.namespace, manifest.chunking.name, manifest.chunking.semver
-        ),
-        submitted_epoch: req.submitted_epoch,
-        content_length: manifest.content_length,
-        pin_fee,
-        pin_fee_asset_id,
-        pin_fee_treasury_account_id,
-        alias: req.alias.clone(),
-        successor_of_hex: req.successor_of_hex.clone(),
     };
 
     let body = norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into());
@@ -32707,7 +31995,166 @@ pub async fn handle_post_sorafs_register_manifest(
         axum::http::header::CONTENT_TYPE,
         axum::http::HeaderValue::from_static("application/json"),
     );
+    *resp.status_mut() = axum::http::StatusCode::ACCEPTED;
     Ok(resp)
+}
+
+const SORAFS_CAPACITY_DECLARATION_PAYLOAD_MAX_BYTES: usize = 256 * 1024;
+const SORAFS_CAPACITY_DECLARATION_DECODE_LIMITS: norito::core::DecodeLimits =
+    norito::core::DecodeLimits::new(
+        sorafs_manifest::capacity::MAX_CAPACITY_METADATA_VALUE_BYTES,
+        SORAFS_CAPACITY_DECLARATION_PAYLOAD_MAX_BYTES,
+        131_072,
+        SORAFS_CAPACITY_DECLARATION_PAYLOAD_MAX_BYTES * 4,
+        32,
+    );
+
+#[cfg(feature = "app_api")]
+fn validate_sorafs_capacity_declaration_transaction<'a>(
+    chain_id: &ChainId,
+    transaction: &'a SignedTransaction,
+) -> Result<&'a iroha_data_model::isi::sorafs::RegisterCapacityDeclaration> {
+    let register = validate_single_signed_instruction::<
+        iroha_data_model::isi::sorafs::RegisterCapacityDeclaration,
+    >(
+        chain_id,
+        transaction,
+        "sorafs_capacity_declaration_transaction_chain_mismatch",
+        "sorafs_capacity_declaration_transaction_signature_invalid",
+        "sorafs_capacity_declaration_transaction_executable_invalid",
+        "sorafs_capacity_declaration_transaction_instruction_count_invalid",
+        "sorafs_capacity_declaration_transaction_instruction_invalid",
+        "capacity declaration submission",
+        "RegisterCapacityDeclaration",
+    )?;
+    let record = &register.record;
+    if record.declaration.is_empty()
+        || record.declaration.len() > SORAFS_CAPACITY_DECLARATION_PAYLOAD_MAX_BYTES
+    {
+        return Err(sorafs_pin_validation_error(
+            "sorafs_capacity_declaration_payload_size_invalid",
+            format!(
+                "RegisterCapacityDeclaration.record.declaration must contain 1..={SORAFS_CAPACITY_DECLARATION_PAYLOAD_MAX_BYTES} bytes"
+            ),
+        ));
+    }
+    let declaration = norito::decode_from_bytes_with_limits::<CapacityDeclarationV1>(
+        &record.declaration,
+        SORAFS_CAPACITY_DECLARATION_DECODE_LIMITS,
+    )
+    .map_err(|error| {
+        sorafs_pin_validation_error(
+            "sorafs_capacity_declaration_payload_decode_failed",
+            format!("invalid bounded CapacityDeclarationV1 payload: {error}"),
+        )
+    })?;
+    let canonical = norito::to_bytes(&declaration).map_err(|error| {
+        sorafs_pin_validation_error(
+            "sorafs_capacity_declaration_payload_encode_failed",
+            format!("failed to re-encode CapacityDeclarationV1 payload: {error}"),
+        )
+    })?;
+    if canonical != record.declaration {
+        return Err(sorafs_pin_validation_error(
+            "sorafs_capacity_declaration_payload_noncanonical",
+            "RegisterCapacityDeclaration.record.declaration must use canonical first-release Norito",
+        ));
+    }
+    declaration
+        .validate()
+        .map_err(capacity_declaration_validation_error)?;
+    if record.provider_id != ProviderId::new(declaration.provider_id) {
+        return Err(sorafs_pin_validation_error(
+            "sorafs_capacity_declaration_record_mismatch",
+            "capacity declaration provider_id does not match its canonical payload",
+        ));
+    }
+    if record.committed_capacity_gib != declaration.committed_capacity_gib {
+        return Err(sorafs_pin_validation_error(
+            "sorafs_capacity_declaration_record_mismatch",
+            "capacity declaration committed_capacity_gib does not match its canonical payload",
+        ));
+    }
+    if record.valid_from_epoch != declaration.valid_from
+        || record.valid_until_epoch != declaration.valid_until
+    {
+        return Err(sorafs_pin_validation_error(
+            "sorafs_capacity_declaration_record_mismatch",
+            "capacity declaration validity window does not match its canonical payload",
+        ));
+    }
+    if record.valid_from_epoch > record.valid_until_epoch {
+        return Err(sorafs_pin_validation_error(
+            "sorafs_capacity_declaration_epoch_range_invalid",
+            "capacity declaration valid_from_epoch must not exceed valid_until_epoch",
+        ));
+    }
+    Ok(register)
+}
+
+#[cfg(feature = "app_api")]
+fn validate_sorafs_capacity_telemetry_transaction<'a>(
+    chain_id: &ChainId,
+    transaction: &'a SignedTransaction,
+) -> Result<&'a iroha_data_model::isi::sorafs::RecordCapacityTelemetry> {
+    let submit = validate_single_signed_instruction::<
+        iroha_data_model::isi::sorafs::RecordCapacityTelemetry,
+    >(
+        chain_id,
+        transaction,
+        "sorafs_capacity_telemetry_transaction_chain_mismatch",
+        "sorafs_capacity_telemetry_transaction_signature_invalid",
+        "sorafs_capacity_telemetry_transaction_executable_invalid",
+        "sorafs_capacity_telemetry_transaction_instruction_count_invalid",
+        "sorafs_capacity_telemetry_transaction_instruction_invalid",
+        "capacity telemetry submission",
+        "RecordCapacityTelemetry",
+    )?;
+    let record = &submit.record;
+    let invalid =
+        |message| sorafs_pin_validation_error("sorafs_capacity_telemetry_record_invalid", message);
+    if record.window_start_epoch > record.window_end_epoch {
+        return Err(invalid(
+            "capacity telemetry window_start_epoch must not exceed window_end_epoch",
+        ));
+    }
+    if record.nonce == 0 || record.nonce != record.window_end_epoch {
+        return Err(sorafs_pin_validation_error(
+            "sorafs_capacity_telemetry_nonce_invalid",
+            "capacity telemetry nonce must equal the non-zero window_end_epoch",
+        ));
+    }
+    if record.effective_gib > record.declared_gib {
+        return Err(invalid(
+            "capacity telemetry effective_gib must not exceed declared_gib",
+        ));
+    }
+    if record.utilised_gib > record.effective_gib {
+        return Err(invalid(
+            "capacity telemetry utilised_gib must not exceed effective_gib",
+        ));
+    }
+    if record.orders_completed > record.orders_issued {
+        return Err(invalid(
+            "capacity telemetry orders_completed must not exceed orders_issued",
+        ));
+    }
+    if record.uptime_bps > 10_000 || record.por_success_bps > 10_000 {
+        return Err(invalid(
+            "capacity telemetry success rates must not exceed 10_000 basis points",
+        ));
+    }
+    if record.pdp_failures > record.pdp_challenges {
+        return Err(invalid(
+            "capacity telemetry pdp_failures must not exceed pdp_challenges",
+        ));
+    }
+    if record.potr_breaches > record.potr_windows {
+        return Err(invalid(
+            "capacity telemetry potr_breaches must not exceed potr_windows",
+        ));
+    }
+    Ok(submit)
 }
 
 #[iroha_futures::telemetry_future]
@@ -32717,88 +32164,34 @@ pub async fn handle_post_sorafs_register_capacity_declaration(
     queue: Arc<Queue>,
     state: Arc<CoreState>,
     telemetry: MaybeTelemetry,
-    sorafs_node: sorafs_node::NodeHandle,
     sorafs_limits: Arc<SorafsQuotaEnforcer>,
-    NoritoJson(req): NoritoJson<RegisterCapacityDeclarationDto>,
+    transaction: SignedTransaction,
 ) -> Result<impl IntoResponse> {
-    use iroha_data_model::{isi::sorafs, prelude as dm};
-
-    let declaration_bytes = base64::engine::general_purpose::STANDARD
-        .decode(req.declaration_b64.as_bytes())
-        .map_err(|err| conversion_error(format!("invalid base64 in `declaration_b64`: {err}")))?;
-    let declaration: CapacityDeclarationV1 = norito::decode_from_bytes(&declaration_bytes)
-        .map_err(|err| conversion_error(format!("invalid capacity declaration payload: {err}")))?;
-    declaration
-        .validate()
-        .map_err(capacity_declaration_validation_error)?;
-
-    if req.valid_from_epoch > req.valid_until_epoch {
-        return Err(conversion_error(
-            "`valid_from_epoch` must not exceed `valid_until_epoch`".to_string(),
-        ));
-    }
-
-    let metadata = metadata_from_entries(req.metadata)?;
-    let canonical_bytes = norito::to_bytes(&declaration).map_err(|err| {
-        conversion_error(format!(
-            "failed to re-encode capacity declaration payload: {err}"
-        ))
-    })?;
-    let provider_id = ProviderId::new(declaration.provider_id);
+    let register =
+        validate_sorafs_capacity_declaration_transaction(chain_id.as_ref(), &transaction)?;
+    let record = &register.record;
+    let provider_id = record.provider_id;
     if let Err(err) =
         sorafs_limits.enforce(SorafsAction::CapacityDeclaration, provider_id.as_bytes())
     {
         return Err(quota_limit_error(err));
     }
-
-    let record = CapacityDeclarationRecord::new(
-        provider_id,
-        canonical_bytes,
-        declaration.committed_capacity_gib,
-        req.registered_epoch,
-        req.valid_from_epoch,
-        req.valid_until_epoch,
-        metadata,
-    );
-
-    let record_for_node = record.clone();
-    let isi = sorafs::RegisterCapacityDeclaration { record };
-
-    let tx = quote_and_sign_app_api_transaction(
-        dm::TransactionBuilder::new(
-            (*chain_id).clone(),
-            req.authority.clone().into(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([dm::InstructionBox::from(isi)]),
-        &req.private_key.0,
-        queue.as_ref(),
-        state.as_ref(),
-        "/v1/sorafs/capacity/declare",
-    )?;
+    let response = RegisterCapacityDeclarationResponseDto {
+        provider_id_hex: hex::encode(provider_id.as_bytes()),
+        registered_epoch: record.registered_epoch,
+        valid_from_epoch: record.valid_from_epoch,
+        valid_until_epoch: record.valid_until_epoch,
+    };
 
     handle_transaction_with_metrics(
         chain_id,
         queue,
         state,
-        tx,
-        telemetry.clone(),
+        transaction,
+        telemetry,
         "/v1/sorafs/capacity/declare",
     )
     .await?;
-
-    if let Err(err) = sorafs_node.record_capacity_declaration(&record_for_node) {
-        iroha_logger::warn!(?err, "failed to update local SoraFS capacity state");
-    }
-
-    observe_sorafs_metering(&telemetry, &sorafs_node);
-
-    let response = RegisterCapacityDeclarationResponseDto {
-        provider_id_hex: hex::encode(provider_id.as_bytes()),
-        registered_epoch: req.registered_epoch,
-        valid_from_epoch: req.valid_from_epoch,
-        valid_until_epoch: req.valid_until_epoch,
-    };
 
     let body = norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into());
     let mut resp = axum::response::Response::new(axum::body::Body::from(body));
@@ -32816,779 +32209,31 @@ pub async fn handle_post_sorafs_record_capacity_telemetry(
     queue: Arc<Queue>,
     state: Arc<CoreState>,
     telemetry: MaybeTelemetry,
-    sorafs_node: sorafs_node::NodeHandle,
     sorafs_limits: Arc<SorafsQuotaEnforcer>,
-    NoritoJson(req): NoritoJson<RecordCapacityTelemetryDto>,
+    transaction: SignedTransaction,
 ) -> Result<impl IntoResponse> {
-    use iroha_data_model::{isi::sorafs, prelude as dm};
-
-    let provider_id = provider_id_from_hex(&req.provider_id_hex)?;
+    let submit = validate_sorafs_capacity_telemetry_transaction(chain_id.as_ref(), &transaction)?;
+    let record = submit.record;
+    let provider_id = record.provider_id;
     if let Err(err) = sorafs_limits.enforce(SorafsAction::CapacityTelemetry, provider_id.as_bytes())
     {
         return Err(quota_limit_error(err));
     }
-    if req.window_start_epoch > req.window_end_epoch {
-        return Err(conversion_error(
-            "`window_start_epoch` must not exceed `window_end_epoch`".to_string(),
-        ));
-    }
-    if req.effective_gib > req.declared_gib {
-        return Err(conversion_error(
-            "`effective_gib` must not exceed `declared_gib`".to_string(),
-        ));
-    }
-    if req.utilised_gib > req.effective_gib {
-        return Err(conversion_error(
-            "`utilised_gib` must not exceed `effective_gib`".to_string(),
-        ));
-    }
-    if req.orders_completed > req.orders_issued {
-        return Err(conversion_error(
-            "`orders_completed` must not exceed `orders_issued`".to_string(),
-        ));
-    }
-    if req.uptime_bps > 10_000 {
-        return Err(conversion_error(
-            "`uptime_bps` must be <= 10_000".to_string(),
-        ));
-    }
-    if req.por_success_bps > 10_000 {
-        return Err(conversion_error(
-            "`por_success_bps` must be <= 10_000".to_string(),
-        ));
-    }
-    if req.pdp_failures > req.pdp_challenges {
-        return Err(conversion_error(
-            "`pdp_failures` must not exceed `pdp_challenges`".to_string(),
-        ));
-    }
-    if req.pdp_failures > 0 && req.pdp_challenges == 0 {
-        return Err(conversion_error(
-            "`pdp_challenges` must be positive when `pdp_failures` > 0".to_string(),
-        ));
-    }
-    if req.potr_breaches > req.potr_windows {
-        return Err(conversion_error(
-            "`potr_breaches` must not exceed `potr_windows`".to_string(),
-        ));
-    }
-    if req.potr_breaches > 0 && req.potr_windows == 0 {
-        return Err(conversion_error(
-            "`potr_windows` must be positive when `potr_breaches` > 0".to_string(),
-        ));
-    }
-    let record = CapacityTelemetryRecord::new(
-        provider_id,
-        req.window_start_epoch,
-        req.window_end_epoch,
-        req.declared_gib,
-        req.effective_gib,
-        req.utilised_gib,
-        req.orders_issued,
-        req.orders_completed,
-        req.uptime_bps,
-        req.por_success_bps,
-        req.egress_bytes,
-        req.pdp_challenges,
-        req.pdp_failures,
-        req.potr_windows,
-        req.potr_breaches,
-    )
-    .with_nonce(req.window_end_epoch);
-
-    let isi = sorafs::RecordCapacityTelemetry { record };
-
-    let tx = quote_and_sign_app_api_transaction(
-        dm::TransactionBuilder::new(
-            (*chain_id).clone(),
-            req.authority.clone().into(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([dm::InstructionBox::from(isi)]),
-        &req.private_key.0,
-        queue.as_ref(),
-        state.as_ref(),
-        "/v1/sorafs/capacity/telemetry",
-    )?;
-
-    let telemetry_for_tx = telemetry.clone();
-    handle_transaction_with_metrics(
-        chain_id,
-        queue,
-        state,
-        tx,
-        telemetry_for_tx,
-        "/v1/sorafs/capacity/telemetry",
-    )
-    .await?;
-
-    telemetry.with_metrics(|tel| {
-        tel.record_sorafs_egress_reconciliation(
-            &req.provider_id_hex,
-            req.egress_bytes,
-            req.gateway_egress_bytes,
-            req.orchestrator_egress_bytes,
-        );
-    });
-
-    if sorafs_node.is_enabled() {
-        let meter = sorafs_node.capacity_meter();
-        meter.record_declared_gib(req.declared_gib);
-        meter.record_effective_gib(req.effective_gib);
-        meter.record_uptime_bps(req.uptime_bps);
-        meter.record_por_success_bps(req.por_success_bps);
-        meter.close_window(req.window_end_epoch);
-        observe_sorafs_metering(&telemetry, &sorafs_node);
-    }
-
-    iroha_logger::info!(
-        provider_id = %hex::encode(provider_id.as_bytes()),
-        window_start = req.window_start_epoch,
-        window_end = req.window_end_epoch,
-        declared_gib = req.declared_gib,
-        effective_gib = req.effective_gib,
-        utilised_gib = req.utilised_gib,
-        orders_issued = req.orders_issued,
-        orders_completed = req.orders_completed,
-        uptime_bps = req.uptime_bps,
-        por_success_bps = req.por_success_bps,
-        pdp_challenges = req.pdp_challenges,
-        pdp_failures = req.pdp_failures,
-        potr_windows = req.potr_windows,
-        potr_breaches = req.potr_breaches,
-        "recorded SoraFS capacity telemetry"
-    );
-
     let response = RecordCapacityTelemetryResponseDto {
         provider_id_hex: hex::encode(provider_id.as_bytes()),
-        window_start_epoch: req.window_start_epoch,
-        window_end_epoch: req.window_end_epoch,
+        window_start_epoch: record.window_start_epoch,
+        window_end_epoch: record.window_end_epoch,
     };
 
-    let body = norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into());
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
-}
-
-#[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
-pub async fn handle_post_sorafs_fund_provider_bond(
-    telemetry: MaybeTelemetry,
-    sorafs_node: sorafs_node::NodeHandle,
-    sorafs_limits: Arc<SorafsQuotaEnforcer>,
-    NoritoJson(req): NoritoJson<FundProviderBondDto>,
-) -> Result<Response> {
-    let provider_id_bytes = parse_hex_array::<32>(&req.provider_id_hex, "provider_id_hex")?;
-    if let Err(err) = sorafs_limits.enforce(SorafsAction::DealTelemetry, &provider_id_bytes) {
-        return Err(quota_limit_error(err));
-    }
-    let provider_id = ProviderId::new(provider_id_bytes);
-    let snapshot = sorafs_node
-        .fund_provider_bond_sequenced(provider_id, req.amount.clone(), req.funding_sequence)
-        .map_err(deal_engine_error)?;
-
-    telemetry.with_metrics(|tel| tel.inc_torii_sorafs_admission("deal_provider_funding", "ok"));
-    iroha_logger::info!(
-        provider_id = %hex::encode(provider_id_bytes),
-        funding_sequence = snapshot.funding_sequence,
-        amount = %req.amount,
-        bond_available = %snapshot.bond_available,
-        "funded SoraFS deal provider collateral"
-    );
-
-    let response = FundProviderBondResponseDto {
-        provider_id_hex: hex::encode(provider_id_bytes),
-        funding_sequence: snapshot.funding_sequence,
-        bond_deposited: snapshot.bond_deposited,
-        bond_available: snapshot.bond_available,
-        bond_locked: snapshot.bond_locked,
-        bond_slashed: snapshot.bond_slashed,
-    };
-    let body = norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into());
-    let mut resp = Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
-}
-
-#[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
-pub async fn handle_post_sorafs_fund_client_credit(
-    telemetry: MaybeTelemetry,
-    sorafs_node: sorafs_node::NodeHandle,
-    sorafs_limits: Arc<SorafsQuotaEnforcer>,
-    NoritoJson(req): NoritoJson<FundClientCreditDto>,
-) -> Result<Response> {
-    let client_id_bytes = parse_hex_array::<32>(&req.client_id_hex, "client_id_hex")?;
-    if let Err(err) = sorafs_limits.enforce(SorafsAction::DealTelemetry, &client_id_bytes) {
-        return Err(quota_limit_error(err));
-    }
-    let client_id = ClientId::new(client_id_bytes);
-    let snapshot = sorafs_node
-        .fund_client_credit_sequenced(client_id, req.amount.clone(), req.funding_sequence)
-        .map_err(deal_engine_error)?;
-
-    telemetry.with_metrics(|tel| tel.inc_torii_sorafs_admission("deal_client_funding", "ok"));
-    iroha_logger::info!(
-        client_id = %hex::encode(client_id_bytes),
-        funding_sequence = snapshot.funding_sequence,
-        amount = %req.amount,
-        credit_balance = %snapshot.credit_balance,
-        "funded SoraFS deal client credit"
-    );
-
-    let response = FundClientCreditResponseDto {
-        client_id_hex: hex::encode(client_id_bytes),
-        funding_sequence: snapshot.funding_sequence,
-        credit_deposited: snapshot.credit_deposited,
-        credit_balance: snapshot.credit_balance,
-        credit_debited: snapshot.credit_debited,
-    };
-    let body = norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into());
-    let mut resp = Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
-}
-
-#[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
-pub async fn handle_post_sorafs_open_deal(
-    telemetry: MaybeTelemetry,
-    sorafs_node: sorafs_node::NodeHandle,
-    sorafs_limits: Arc<SorafsQuotaEnforcer>,
-    NoritoJson(req): NoritoJson<OpenDealDto>,
-) -> Result<Response> {
-    let provider_id_bytes = *req.proposal.provider_id.as_bytes();
-    if let Err(err) = sorafs_limits.enforce(SorafsAction::DealTelemetry, &provider_id_bytes) {
-        return Err(quota_limit_error(err));
-    }
-    let record = sorafs_node
-        .open_deal(req.proposal, req.activation_epoch)
-        .map_err(deal_engine_error)?;
-
-    telemetry.with_metrics(|tel| tel.inc_torii_sorafs_admission("deal_open", "ok"));
-    iroha_logger::info!(
-        deal_id = %hex::encode(record.deal_id.as_bytes()),
-        provider_id = %hex::encode(record.provider_id.as_bytes()),
-        client_id = %hex::encode(record.client_id.as_bytes()),
-        activation_epoch = req.activation_epoch,
-        "opened SoraFS storage deal"
-    );
-
-    let response = OpenDealResponseDto {
-        deal_id_hex: hex::encode(record.deal_id.as_bytes()),
-        provider_id_hex: hex::encode(record.provider_id.as_bytes()),
-        client_id_hex: hex::encode(record.client_id.as_bytes()),
-        activation_epoch: req.activation_epoch,
-        start_epoch: record.start_epoch,
-        end_epoch: record.end_epoch,
-    };
-    let body = norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into());
-    let mut resp = Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
-}
-
-#[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
-pub async fn handle_post_sorafs_record_deal_usage(
-    _chain_id: Arc<ChainId>,
-    _queue: Arc<Queue>,
-    _state: Arc<CoreState>,
-    telemetry: MaybeTelemetry,
-    sorafs_node: sorafs_node::NodeHandle,
-    sorafs_limits: Arc<SorafsQuotaEnforcer>,
-    NoritoJson(req): NoritoJson<RecordDealUsageDto>,
-) -> Result<DealUsageHandlerResult> {
-    let deal_id_bytes = parse_hex_array::<32>(&req.deal_id_hex, "deal_id_hex")?;
-    if let Err(err) = sorafs_limits.enforce(SorafsAction::DealTelemetry, &deal_id_bytes) {
-        return Err(quota_limit_error(err));
-    }
-
-    let mut tickets = Vec::with_capacity(req.tickets.len());
-    for (index, ticket) in req.tickets.iter().enumerate() {
-        let ticket_bytes = parse_hex_array::<32>(
-            &ticket.ticket_id_hex,
-            &format!("tickets[{index}].ticket_id_hex"),
-        )?;
-        tickets.push(MicropaymentTicket {
-            ticket_id: TicketId(ticket_bytes),
-            issued_epoch: ticket.issued_epoch,
-            storage_gib_hours: ticket.storage_gib_hours,
-            egress_bytes: ticket.egress_bytes,
-        });
-    }
-
-    let report = DealUsageReport {
-        deal_id: DealId::new(deal_id_bytes),
-        epoch: req.epoch,
-        storage_gib_hours: req.storage_gib_hours,
-        egress_bytes: req.egress_bytes,
-        tickets,
-    };
-
-    let outcome = sorafs_node
-        .record_deal_usage(report.clone())
-        .map_err(deal_engine_error)?;
-
-    telemetry.with_metrics(|tel| tel.inc_torii_sorafs_admission("deal_usage", "ok"));
-    #[cfg(feature = "telemetry")]
-    {
-        use std::convert::TryFrom;
-
-        let provider_hex = hex::encode(outcome.provider_id.as_bytes());
-        let credits = MicropaymentCreditSnapshot {
-            deterministic_charge: outcome.deterministic_charge.clone().into_quantity(),
-            credit_generated: outcome
-                .micropayment_credit_generated
-                .clone()
-                .into_quantity(),
-            credit_applied: outcome.micropayment_credit_applied.clone().into_quantity(),
-            credit_carry: outcome.micropayment_credit_carry.clone().into_quantity(),
-            outstanding: outcome.outstanding.clone().into_quantity(),
-        };
-        let tickets = MicropaymentTicketCounters {
-            processed: u64::try_from(outcome.tickets_processed).unwrap_or(u64::MAX),
-            won: u64::try_from(outcome.tickets_won).unwrap_or(u64::MAX),
-            duplicate: u64::try_from(outcome.tickets_duplicate).unwrap_or(u64::MAX),
-        };
-        telemetry.with_metrics(|tel| {
-            tel.record_sorafs_micropayment_sample(&provider_hex, credits, tickets);
-        });
-    }
-
-    let response = RecordDealUsageResponseDto {
-        deal_id_hex: hex::encode(deal_id_bytes),
-        epoch: req.epoch,
-        deterministic_charge: outcome.deterministic_charge.clone(),
-        micropayment_credit_generated: outcome.micropayment_credit_generated.clone(),
-        micropayment_credit_applied: outcome.micropayment_credit_applied.clone(),
-        micropayment_credit_carry: outcome.micropayment_credit_carry.clone(),
-        outstanding: outcome.outstanding.clone(),
-        tickets_processed: outcome.tickets_processed,
-        tickets_won: outcome.tickets_won,
-        tickets_duplicate: outcome.tickets_duplicate,
-    };
-
-    iroha_logger::info!(
-        deal_id = %hex::encode(deal_id_bytes),
-        epoch = req.epoch,
-        storage_gib_hours = req.storage_gib_hours,
-        egress_bytes = req.egress_bytes,
-        deterministic_charge = %outcome.deterministic_charge,
-        micropayment_credit_generated = %outcome.micropayment_credit_generated,
-        micropayment_credit_applied = %outcome.micropayment_credit_applied,
-        outstanding = %outcome.outstanding,
-        "recorded SoraFS deal usage telemetry"
-    );
-
-    let body = norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into());
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(DealUsageHandlerResult {
-        response: resp,
-        report,
-        outcome,
-    })
-}
-
-#[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
-pub async fn handle_post_sorafs_settle_deal(
-    _chain_id: Arc<ChainId>,
-    _queue: Arc<Queue>,
-    _state: Arc<CoreState>,
-    telemetry: MaybeTelemetry,
-    sorafs_node: sorafs_node::NodeHandle,
-    sorafs_limits: Arc<SorafsQuotaEnforcer>,
-    NoritoJson(req): NoritoJson<SettleDealDto>,
-) -> Result<DealSettlementHandlerResult> {
-    let deal_id_bytes = parse_hex_array::<32>(&req.deal_id_hex, "deal_id_hex")?;
-    if let Err(err) = sorafs_limits.enforce(SorafsAction::DealTelemetry, &deal_id_bytes) {
-        return Err(quota_limit_error(err));
-    }
-
-    let outcome = sorafs_node
-        .settle_deal(DealId::new(deal_id_bytes), req.settlement_epoch)
-        .map_err(deal_engine_error)?;
-
-    let settlement_bytes = to_bytes(&outcome.governance)
-        .map_err(|err| conversion_error(format!("serialise settlement payload: {err}")))?;
-    let settlement_b64 =
-        base64::engine::general_purpose::STANDARD.encode(settlement_bytes.as_slice());
-
-    telemetry.with_metrics(|tel| tel.inc_torii_sorafs_admission("deal_settlement", "ok"));
-
-    iroha_logger::info!(
-        deal_id = %hex::encode(deal_id_bytes),
-        settlement_index = outcome.record.settlement_index,
-        settled_epoch = outcome.record.settled_epoch,
-        expected_charge = %outcome.record.expected_charge,
-        client_credit_debit = %outcome.record.client_credit_debit,
-        bond_slash = %outcome.record.bond_slash,
-        outstanding = %outcome.record.outstanding,
-        "recorded SoraFS deal settlement"
-    );
-
-    let expected_charge = XorQuantity::try_from_quantity(outcome.record.expected_charge.clone())
-        .map_err(|err| conversion_error(format!("convert settlement expected charge: {err}")))?;
-    let micropayment_credit = XorQuantity::try_from_quantity(
-        outcome.record.micropayment_credit.clone(),
-    )
-    .map_err(|err| conversion_error(format!("convert settlement micropayment credit: {err}")))?;
-    let client_credit_debit = XorQuantity::try_from_quantity(
-        outcome.record.client_credit_debit.clone(),
-    )
-    .map_err(|err| conversion_error(format!("convert settlement client credit debit: {err}")))?;
-    let bond_slash = XorQuantity::try_from_quantity(outcome.record.bond_slash.clone())
-        .map_err(|err| conversion_error(format!("convert settlement bond slash: {err}")))?;
-    let outstanding = XorQuantity::try_from_quantity(outcome.record.outstanding.clone())
-        .map_err(|err| conversion_error(format!("convert settlement outstanding: {err}")))?;
-
-    let response = SettleDealResponseDto {
-        deal_id_hex: hex::encode(deal_id_bytes),
-        settlement_index: outcome.record.settlement_index,
-        settled_epoch: outcome.record.settled_epoch,
-        expected_charge,
-        micropayment_credit,
-        client_credit_debit,
-        bond_slash,
-        outstanding,
-        governance_settlement_b64: settlement_b64.clone(),
-    };
-
-    let body = norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into());
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(DealSettlementHandlerResult {
-        response: resp,
-        outcome,
-        encoded: settlement_bytes,
-        encoded_b64: settlement_b64,
-    })
-}
-
-#[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
-pub async fn handle_post_sorafs_cancel_deal(
-    telemetry: MaybeTelemetry,
-    sorafs_node: sorafs_node::NodeHandle,
-    sorafs_limits: Arc<SorafsQuotaEnforcer>,
-    NoritoJson(req): NoritoJson<CancelDealDto>,
-) -> Result<DealSettlementHandlerResult> {
-    let deal_id_bytes = parse_hex_array::<32>(&req.deal_id_hex, "deal_id_hex")?;
-    if let Err(err) = sorafs_limits.enforce(SorafsAction::DealTelemetry, &deal_id_bytes) {
-        return Err(quota_limit_error(err));
-    }
-
-    let outcome = sorafs_node
-        .cancel_deal(
-            DealId::new(deal_id_bytes),
-            req.cancellation_epoch,
-            req.reason,
-        )
-        .map_err(deal_engine_error)?;
-    let settlement_bytes = to_bytes(&outcome.governance)
-        .map_err(|err| conversion_error(format!("serialise cancellation payload: {err}")))?;
-    let settlement_b64 =
-        base64::engine::general_purpose::STANDARD.encode(settlement_bytes.as_slice());
-
-    telemetry.with_metrics(|tel| tel.inc_torii_sorafs_admission("deal_cancellation", "ok"));
-    iroha_logger::info!(
-        deal_id = %hex::encode(deal_id_bytes),
-        settlement_index = outcome.record.settlement_index,
-        cancellation_epoch = outcome.record.settled_epoch,
-        "cancelled idle SoraFS storage deal"
-    );
-
-    let expected_charge = XorQuantity::try_from_quantity(outcome.record.expected_charge.clone())
-        .map_err(|err| conversion_error(format!("convert cancellation expected charge: {err}")))?;
-    let micropayment_credit = XorQuantity::try_from_quantity(
-        outcome.record.micropayment_credit.clone(),
-    )
-    .map_err(|err| conversion_error(format!("convert cancellation micropayment credit: {err}")))?;
-    let client_credit_debit = XorQuantity::try_from_quantity(
-        outcome.record.client_credit_debit.clone(),
-    )
-    .map_err(|err| conversion_error(format!("convert cancellation client credit debit: {err}")))?;
-    let bond_slash = XorQuantity::try_from_quantity(outcome.record.bond_slash.clone())
-        .map_err(|err| conversion_error(format!("convert cancellation bond slash: {err}")))?;
-    let outstanding = XorQuantity::try_from_quantity(outcome.record.outstanding.clone())
-        .map_err(|err| conversion_error(format!("convert cancellation outstanding: {err}")))?;
-
-    let response = SettleDealResponseDto {
-        deal_id_hex: hex::encode(deal_id_bytes),
-        settlement_index: outcome.record.settlement_index,
-        settled_epoch: outcome.record.settled_epoch,
-        expected_charge,
-        micropayment_credit,
-        client_credit_debit,
-        bond_slash,
-        outstanding,
-        governance_settlement_b64: settlement_b64.clone(),
-    };
-    let body = norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into());
-    let mut resp = Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(DealSettlementHandlerResult {
-        response: resp,
-        outcome,
-        encoded: settlement_bytes,
-        encoded_b64: settlement_b64,
-    })
-}
-
-#[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
-pub async fn handle_post_sorafs_register_capacity_dispute(
-    chain_id: Arc<ChainId>,
-    queue: Arc<Queue>,
-    state: Arc<CoreState>,
-    telemetry: MaybeTelemetry,
-    sorafs_limits: Arc<SorafsQuotaEnforcer>,
-    NoritoJson(req): NoritoJson<RegisterCapacityDisputeDto>,
-) -> Result<impl IntoResponse> {
-    use iroha_data_model::{isi::sorafs, prelude as dm};
-
-    let provider_bytes = parse_hex_array::<32>(&req.provider_id_hex, "provider_id_hex")?;
-    if let Err(err) = sorafs_limits.enforce(SorafsAction::CapacityDispute, &provider_bytes) {
-        return Err(quota_limit_error(err));
-    }
-    let complainant_bytes = parse_hex_array::<32>(&req.complainant_id_hex, "complainant_id_hex")?;
-    let replication_order_id = if let Some(hex) = &req.replication_order_id_hex {
-        Some(parse_hex_array::<32>(hex, "replication_order_id_hex")?)
-    } else {
-        None
-    };
-
-    let dispute_bytes = base64::engine::general_purpose::STANDARD
-        .decode(req.dispute_b64.as_bytes())
-        .map_err(|err| conversion_error(format!("invalid base64 in `dispute_b64`: {err}")))?;
-    let dispute: CapacityDisputeV1 = norito::decode_from_bytes(&dispute_bytes)
-        .map_err(|err| conversion_error(format!("invalid capacity dispute payload: {err}")))?;
-    dispute
-        .validate()
-        .map_err(|err| conversion_error(format!("capacity dispute validation failed: {err}")))?;
-
-    if dispute.submitted_epoch != req.submitted_epoch {
-        return Err(conversion_error(
-            "`submitted_epoch` does not match the dispute payload".to_string(),
-        ));
-    }
-    if dispute.provider_id != provider_bytes {
-        return Err(conversion_error(
-            "`provider_id_hex` does not match the dispute payload".to_string(),
-        ));
-    }
-    if dispute.complainant_id != complainant_bytes {
-        return Err(conversion_error(
-            "`complainant_id_hex` does not match the dispute payload".to_string(),
-        ));
-    }
-    if dispute.replication_order_id != replication_order_id {
-        return Err(conversion_error(
-            "`replication_order_id_hex` does not match the dispute payload".to_string(),
-        ));
-    }
-    if dispute_kind_label(dispute.kind) != req.kind.as_str() {
-        return Err(conversion_error(
-            "`kind` does not match the dispute payload".to_string(),
-        ));
-    }
-
-    let dispute_id = CapacityDisputeId::new(*blake3_hash(&dispute_bytes).as_bytes());
-    let provider_id = ProviderId::new(provider_bytes);
-    let evidence = CapacityDisputeEvidence {
-        digest: dispute.evidence.evidence_digest,
-        media_type: dispute.evidence.media_type.clone(),
-        uri: dispute.evidence.uri.clone(),
-        size_bytes: dispute.evidence.size_bytes,
-    };
-    let record = CapacityDisputeRecord::new_pending(
-        dispute_id,
-        provider_id,
-        dispute.complainant_id,
-        dispute.replication_order_id,
-        dispute.kind as u8,
-        dispute.submitted_epoch,
-        dispute.description.clone(),
-        dispute.requested_remedy.clone(),
-        evidence,
-        dispute_bytes,
-    );
-
-    let isi = sorafs::RegisterCapacityDispute { record };
-    let tx = quote_and_sign_app_api_transaction(
-        dm::TransactionBuilder::new(
-            (*chain_id).clone(),
-            req.authority.clone().into(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([dm::InstructionBox::from(isi)]),
-        &req.private_key.0,
-        queue.as_ref(),
-        state.as_ref(),
-        "/v1/sorafs/capacity/dispute",
-    )?;
-
-    let telemetry_for_tx = telemetry.clone();
     handle_transaction_with_metrics(
         chain_id,
         queue,
         state,
-        tx,
-        telemetry_for_tx,
-        "/v1/sorafs/capacity/dispute",
+        transaction,
+        telemetry,
+        "/v1/sorafs/capacity/telemetry",
     )
     .await?;
-
-    telemetry.with_metrics(|tel| tel.inc_sorafs_disputes("accepted"));
-
-    let response = RegisterCapacityDisputeResponseDto {
-        dispute_id_hex: dispute_id.as_bytes().encode_hex::<String>(),
-    };
-
-    let body = norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into());
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
-}
-
-#[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
-pub async fn handle_post_sorafs_schedule_replication_order(
-    telemetry: MaybeTelemetry,
-    sorafs_node: sorafs_node::NodeHandle,
-    NoritoJson(req): NoritoJson<ScheduleReplicationOrderDto>,
-) -> Result<impl IntoResponse> {
-    let order_bytes = base64::engine::general_purpose::STANDARD
-        .decode(req.order_b64.as_bytes())
-        .map_err(|err| conversion_error(format!("invalid base64 in `order_b64`: {err}")))?;
-    let order: ReplicationOrderV1 = norito::decode_from_bytes(&order_bytes)
-        .map_err(|err| conversion_error(format!("invalid replication order payload: {err}")))?;
-    order
-        .validate()
-        .map_err(replication_order_validation_error)?;
-
-    let response_value = match sorafs_node
-        .schedule_replication_order(&order)
-        .map_err(replication_schedule_error)?
-    {
-        Some(plan) => {
-            telemetry.with_metrics(|tel| tel.inc_torii_sorafs_admission("scheduled", "order"));
-            let value =
-                serialization::replication_plan_to_value("scheduled", &plan).map_err(|err| {
-                    conversion_error(format!("failed to serialize replication plan: {err}"))
-                })?;
-            observe_sorafs_metering(&telemetry, &sorafs_node);
-            value
-        }
-        None => {
-            telemetry.with_metrics(|tel| tel.inc_torii_sorafs_admission("ignored", "order"));
-            serialization::replication_plan_ignored_value(&order).map_err(|err| {
-                conversion_error(format!("failed to serialize replication plan: {err}"))
-            })?
-        }
-    };
-
-    let body = norito::json::to_json_pretty(&response_value).unwrap_or_else(|_| "{}".into());
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
-}
-
-#[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
-pub async fn handle_post_sorafs_complete_replication_order(
-    telemetry: MaybeTelemetry,
-    sorafs_node: sorafs_node::NodeHandle,
-    NoritoJson(req): NoritoJson<CompleteReplicationOrderDto>,
-) -> Result<impl IntoResponse> {
-    let order_id = parse_hex_array::<32>(&req.order_id_hex, "order_id_hex")?;
-
-    let response_value = match sorafs_node.complete_replication_order(order_id) {
-        Ok(release) => {
-            telemetry.with_metrics(|tel| tel.inc_torii_sorafs_admission("completed", "order"));
-            let value = serialization::replication_release_to_value("completed", &release)
-                .map_err(|err| {
-                    conversion_error(format!("failed to serialize replication release: {err}"))
-                })?;
-            observe_sorafs_metering(&telemetry, &sorafs_node);
-            value
-        }
-        Err(sorafs_node::capacity::CapacityError::OrderNotScheduled { order_id }) => {
-            let _recorded = sorafs_node.record_replication_failure(order_id);
-            observe_sorafs_metering(&telemetry, &sorafs_node);
-            telemetry.with_metrics(|tel| tel.inc_torii_sorafs_admission("ignored", "order"));
-            serialization::replication_release_ignored_value(&order_id).map_err(|err| {
-                conversion_error(format!("failed to serialize replication release: {err}"))
-            })?
-        }
-        Err(err) => return Err(replication_schedule_error(err)),
-    };
-
-    let body = norito::json::to_json_pretty(&response_value).unwrap_or_else(|_| "{}".into());
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
-}
-
-#[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
-pub async fn handle_post_sorafs_record_uptime_observation(
-    telemetry: MaybeTelemetry,
-    sorafs_node: sorafs_node::NodeHandle,
-    NoritoJson(req): NoritoJson<RecordUptimeObservationDto>,
-) -> Result<impl IntoResponse> {
-    if req.observed_secs == 0 {
-        return Err(conversion_error(
-            "`observed_secs` must be greater than zero".to_string(),
-        ));
-    }
-    if req.uptime_secs > req.observed_secs {
-        return Err(conversion_error(
-            "`uptime_secs` must not exceed `observed_secs`".to_string(),
-        ));
-    }
-
-    sorafs_node.record_uptime_observation(req.uptime_secs, req.observed_secs);
-    observe_sorafs_metering(&telemetry, &sorafs_node);
-
-    let response = RecordUptimeObservationResponseDto {
-        status: "recorded".to_owned(),
-        uptime_secs: req.uptime_secs,
-        observed_secs: req.observed_secs,
-    };
 
     let body = norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into());
     let mut resp = axum::response::Response::new(axum::body::Body::from(body));
@@ -33778,36 +32423,6 @@ pub fn handle_get_sorafs_por_report(
         .map_err(por_coordinator_error)
 }
 
-#[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
-pub async fn handle_post_sorafs_record_replication_failure(
-    telemetry: MaybeTelemetry,
-    sorafs_node: sorafs_node::NodeHandle,
-    NoritoJson(req): NoritoJson<RecordReplicationFailureDto>,
-) -> Result<impl IntoResponse> {
-    let order_id = parse_hex_array::<32>(&req.order_id_hex, "order_id_hex")?;
-    let recorded = sorafs_node.record_replication_failure(order_id);
-    observe_sorafs_metering(&telemetry, &sorafs_node);
-
-    let response = RecordReplicationFailureResponseDto {
-        status: if recorded {
-            "recorded".to_owned()
-        } else {
-            "ignored".to_owned()
-        },
-        order_id_hex: hex::encode(order_id),
-        recorded,
-    };
-
-    let body = norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into());
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
-}
-
 pub(crate) fn parse_hex_array<const N: usize>(value: &str, field: &str) -> Result<[u8; N], Error> {
     let trimmed = value.trim_start_matches("0x");
     let bytes = hex::decode(trimmed).map_err(|err| {
@@ -33846,17 +32461,6 @@ where
     Ok(resp)
 }
 
-fn dispute_kind_label(kind: sorafs_manifest::capacity::CapacityDisputeKind) -> &'static str {
-    use sorafs_manifest::capacity::CapacityDisputeKind::*;
-    match kind {
-        ReplicationShortfall => "replication_shortfall",
-        UptimeBreach => "uptime_breach",
-        ProofFailure => "proof_failure",
-        FeeDispute => "fee_dispute",
-        Other => "other",
-    }
-}
-
 #[cfg(feature = "app_api")]
 fn observe_sorafs_metering(telemetry: &MaybeTelemetry, sorafs_node: &sorafs_node::NodeHandle) {
     let usage = sorafs_node.capacity_usage();
@@ -33892,7 +32496,7 @@ fn observe_sorafs_metering(telemetry: &MaybeTelemetry, sorafs_node: &sorafs_node
             &provider_hex,
             storage_snapshot.bytes_used,
             storage_snapshot.bytes_capacity,
-            storage_snapshot.pin_queue_depth as u64,
+            storage_snapshot.provider_ingest_inflight as u64,
             storage_snapshot.fetch_inflight as u64,
             storage_snapshot.fetch_bytes_per_sec,
             storage_snapshot.por_inflight as u64,
@@ -33920,118 +32524,11 @@ fn provider_id_from_hex(value: &str) -> Result<ProviderId, Error> {
     parse_hex_array::<32>(value, "provider_id_hex").map(ProviderId::new)
 }
 
-#[cfg(feature = "app_api")]
-fn metadata_from_entries(entries: Option<Vec<MetadataEntryDto>>) -> Result<Metadata, Error> {
-    let mut metadata = Metadata::default();
-    let Some(entries) = entries else {
-        return Ok(metadata);
-    };
-
-    for MetadataEntryDto { key, value } in entries {
-        let name = Name::from_str(&key)
-            .map_err(|err| conversion_error(format!("invalid metadata key `{key}`: {err}")))?;
-        metadata.insert(name, value);
-    }
-    Ok(metadata)
-}
-
 fn capacity_declaration_validation_error(err: CapacityDeclarationValidationError) -> Error {
-    conversion_error(format!("capacity declaration validation failed: {err}"))
-}
-
-fn replication_order_validation_error(err: ReplicationOrderValidationError) -> Error {
-    conversion_error(format!("replication order validation failed: {err}"))
-}
-
-fn replication_schedule_error(err: sorafs_node::capacity::CapacityError) -> Error {
-    use sorafs_node::capacity::CapacityError::*;
-    let message = match err {
-        ResourceExhausted { .. } => return capacity_limit_error(),
-        DeclarationReplacementWhileOrdersOutstanding { count } => {
-            return Error::AppConflict {
-                code: "sorafs_capacity_declaration_replace_conflict",
-                message: format!(
-                    "cannot replace capacity declaration while {count} orders remain outstanding"
-                ),
-            };
-        }
-        DecodeDeclaration(e) => format!("failed to decode capacity declaration payload: {e}"),
-        ValidateDeclaration(e) => format!("capacity declaration validation failed: {e}"),
-        ProviderMismatch => "capacity declaration provider id mismatch".to_string(),
-        CommittedCapacityMismatch {
-            declaration,
-            record,
-        } => format!(
-            "capacity declaration committed GiB mismatch (declaration {declaration}, record {record})"
-        ),
-        NoActiveDeclaration => {
-            "no active SoraFS capacity declaration recorded on this node".to_string()
-        }
-        UnsupportedChunker { handle } => {
-            format!("replication order references unsupported chunker handle `{handle}`")
-        }
-        OrderAlreadyScheduled { order_id } => {
-            format!(
-                "replication order {} is already scheduled",
-                hex::encode(order_id)
-            )
-        }
-        InsufficientTotalCapacity {
-            requested,
-            available,
-        } => format!(
-            "insufficient total capacity: requested {requested} GiB, available {available} GiB"
-        ),
-        InsufficientChunkerCapacity {
-            requested,
-            available,
-        } => format!(
-            "insufficient chunker capacity: requested {requested} GiB, available {available} GiB"
-        ),
-        InsufficientLaneCapacity {
-            requested,
-            available,
-        } => format!(
-            "insufficient lane capacity: requested {requested} GiB, available {available} GiB"
-        ),
-        UnknownLane { lane } => format!("replication order references unknown lane `{lane}`"),
-        OrderNotScheduled { order_id } => format!(
-            "replication order {} is not currently scheduled",
-            hex::encode(order_id)
-        ),
-        ZeroSlice => "replication assignment must reserve a positive GiB slice".to_string(),
-        AllocationOverflow => {
-            return Error::AppServiceUnavailable {
-                code: "sorafs_capacity_allocation_overflow",
-                message: "capacity allocation overflowed internal counters".to_owned(),
-            };
-        }
-        AllocationUnderflow => {
-            return Error::AppServiceUnavailable {
-                code: "sorafs_capacity_allocation_underflow",
-                message: "capacity allocation underflowed internal counters".to_owned(),
-            };
-        }
-        InvalidCheckpoint(reason) => {
-            return Error::AppServiceUnavailable {
-                code: "sorafs_capacity_checkpoint_invalid",
-                message: format!("invalid capacity runtime checkpoint: {reason}"),
-            };
-        }
-        Checkpoint(reason) => {
-            return Error::AppServiceUnavailable {
-                code: "sorafs_capacity_checkpoint_failed",
-                message: format!("capacity runtime checkpoint failed: {reason}"),
-            };
-        }
-        StateLockPoisoned => {
-            return Error::AppServiceUnavailable {
-                code: "sorafs_capacity_state_poisoned",
-                message: "capacity state lock poisoned".to_owned(),
-            };
-        }
-    };
-    conversion_error(message)
+    sorafs_pin_validation_error(
+        "sorafs_capacity_declaration_payload_invalid",
+        format!("capacity declaration validation failed: {err}"),
+    )
 }
 
 pub(crate) fn decode_por_payload<T>(payload_b64: &str, kind: &str) -> Result<T, Error>
@@ -34155,59 +32652,111 @@ fn por_coordinator_error(err: PorCoordinatorError) -> Error {
 
 const SORAFS_PIN_ALIAS_SEGMENT_MAX_BYTES: usize = 128;
 const SORAFS_PIN_ALIAS_PROOF_MAX_BYTES: usize = 1024 * 1024;
-const SORAFS_PIN_ALIAS_PROOF_MAX_BASE64_BYTES: usize =
-    SORAFS_PIN_ALIAS_PROOF_MAX_BYTES.div_ceil(3) * 4;
-const SORAFS_PIN_MANIFEST_MAX_BASE64_BYTES: usize =
-    sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES.div_ceil(3) * 4;
 
 #[cfg(feature = "app_api")]
-fn decode_sorafs_pin_manifest_payload(
-    manifest_payload: &str,
-    constraints: &ManifestPinPolicyConstraints,
-) -> Result<(Vec<u8>, ManifestV1, [u8; 32])> {
-    if manifest_payload.is_empty() || manifest_payload.len() > SORAFS_PIN_MANIFEST_MAX_BASE64_BYTES
-    {
+fn validate_single_signed_instruction<'a, T: 'static>(
+    chain_id: &ChainId,
+    transaction: &'a SignedTransaction,
+    chain_code: &'static str,
+    signature_code: &'static str,
+    executable_code: &'static str,
+    instruction_count_code: &'static str,
+    instruction_type_code: &'static str,
+    route_description: &str,
+    instruction_name: &str,
+) -> Result<&'a T> {
+    if transaction.chain() != chain_id {
         return Err(sorafs_pin_validation_error(
-            "sorafs_pin_manifest_payload_size_invalid",
-            format!(
-                "manifest_payload must encode 1..={} bytes",
-                sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES
-            ),
+            chain_code,
+            format!("signed transaction chain does not match this Torii for {route_description}"),
         ));
     }
+    transaction.verify_signature().map_err(|error| {
+        sorafs_pin_validation_error(
+            signature_code,
+            format!(
+                "{route_description} signed transaction signature verification failed: {error}"
+            ),
+        )
+    })?;
+    let Executable::Instructions(instructions) = transaction.instructions() else {
+        return Err(sorafs_pin_validation_error(
+            executable_code,
+            format!("{route_description} accepts exactly one {instruction_name} instruction"),
+        ));
+    };
+    let [instruction] = instructions.as_ref() else {
+        return Err(sorafs_pin_validation_error(
+            instruction_count_code,
+            format!("{route_description} accepts exactly one {instruction_name} instruction"),
+        ));
+    };
+    instruction.as_any().downcast_ref::<T>().ok_or_else(|| {
+        sorafs_pin_validation_error(
+            instruction_type_code,
+            format!("{route_description} accepts only {instruction_name}"),
+        )
+    })
+}
 
-    let manifest_bytes = base64::engine::general_purpose::STANDARD
-        .decode(manifest_payload.as_bytes())
-        .map_err(|err| {
-            sorafs_pin_validation_error(
-                "sorafs_pin_manifest_payload_base64_invalid",
-                format!(
-                    "invalid base64 in manifest_payload; expected canonical padded base64: {err}"
-                ),
-            )
-        })?;
+#[cfg(feature = "app_api")]
+fn validate_sorafs_pin_register_transaction<'a>(
+    chain_id: &ChainId,
+    transaction: &'a SignedTransaction,
+) -> Result<&'a iroha_data_model::isi::sorafs::RegisterPinManifest> {
+    let register =
+        validate_single_signed_instruction::<iroha_data_model::isi::sorafs::RegisterPinManifest>(
+            chain_id,
+            transaction,
+            "sorafs_pin_transaction_chain_mismatch",
+            "sorafs_pin_transaction_signature_invalid",
+            "sorafs_pin_transaction_executable_invalid",
+            "sorafs_pin_transaction_instruction_count_invalid",
+            "sorafs_pin_transaction_instruction_invalid",
+            "pin registration",
+            "RegisterPinManifest",
+        )?;
+    if let Some(alias) = register.alias.as_ref() {
+        validate_sorafs_pin_alias_binding(alias)?;
+    }
+    if register
+        .successor_of
+        .as_ref()
+        .is_some_and(|digest| digest.as_bytes().iter().all(|byte| *byte == 0))
+    {
+        return Err(sorafs_pin_validation_error(
+            "sorafs_pin_successor_digest_invalid",
+            "RegisterPinManifest.successor_of must be a non-zero digest",
+        ));
+    }
+    Ok(register)
+}
+
+#[cfg(feature = "app_api")]
+fn decode_sorafs_pin_manifest_bytes(
+    manifest_bytes: &[u8],
+    constraints: &ManifestPinPolicyConstraints,
+) -> Result<(ManifestV1, [u8; 32])> {
     if manifest_bytes.is_empty()
         || manifest_bytes.len() > sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES
     {
         return Err(sorafs_pin_validation_error(
             "sorafs_pin_manifest_payload_size_invalid",
             format!(
-                "manifest_payload must encode 1..={} bytes",
+                "RegisterPinManifest.manifest_payload must contain 1..={} bytes",
                 sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES
             ),
         ));
     }
-    if base64::engine::general_purpose::STANDARD.encode(&manifest_bytes) != manifest_payload {
-        return Err(sorafs_pin_validation_error(
-            "sorafs_pin_manifest_payload_base64_invalid",
-            "manifest_payload must use exact canonical padded base64",
-        ));
-    }
+
     let manifest =
-        sorafs_manifest::decode_manifest_v1_canonical(&manifest_bytes).map_err(|err| {
+        sorafs_manifest::decode_manifest_v1_canonical(manifest_bytes).map_err(|err| {
             sorafs_pin_validation_error(
                 "sorafs_pin_manifest_payload_decode_failed",
-                format!("invalid canonical Norito ManifestV1 in manifest_payload: {err}"),
+                format!(
+                    "invalid canonical Norito ManifestV1 in \
+                     RegisterPinManifest.manifest_payload: {err}"
+                ),
             )
         })?;
 
@@ -34221,7 +32770,7 @@ fn decode_sorafs_pin_manifest_payload(
             format!("failed to digest manifest_payload: {err}"),
         )
     })?;
-    Ok((manifest_bytes, manifest, *digest.as_bytes()))
+    Ok((manifest, *digest.as_bytes()))
 }
 
 #[cfg(feature = "app_api")]
@@ -34247,81 +32796,18 @@ fn validate_sorafs_pin_alias_segment(value: &str, field: &str) -> Result<()> {
 }
 
 #[cfg(feature = "app_api")]
-fn decode_sorafs_pin_alias_binding(
-    alias: &PinAliasDto,
-) -> Result<iroha_data_model::sorafs::pin_registry::ManifestAliasBinding> {
+fn validate_sorafs_pin_alias_binding(
+    alias: &iroha_data_model::sorafs::pin_registry::ManifestAliasBinding,
+) -> Result<()> {
     validate_sorafs_pin_alias_segment(&alias.namespace, "alias.namespace")?;
     validate_sorafs_pin_alias_segment(&alias.name, "alias.name")?;
-    if alias.proof_base64.is_empty()
-        || alias.proof_base64.len() > SORAFS_PIN_ALIAS_PROOF_MAX_BASE64_BYTES
-    {
+    if alias.proof.is_empty() || alias.proof.len() > SORAFS_PIN_ALIAS_PROOF_MAX_BYTES {
         return Err(sorafs_pin_validation_error(
             "sorafs_pin_alias_proof_size_invalid",
-            format!("alias.proof_base64 must encode 1..={SORAFS_PIN_ALIAS_PROOF_MAX_BYTES} bytes"),
+            format!("alias.proof must contain 1..={SORAFS_PIN_ALIAS_PROOF_MAX_BYTES} bytes"),
         ));
     }
-    let proof = base64::engine::general_purpose::STANDARD
-        .decode(alias.proof_base64.as_bytes())
-        .map_err(|err| {
-            sorafs_pin_validation_error(
-                "sorafs_pin_alias_proof_base64_invalid",
-                format!(
-                    "invalid base64 in alias.proof_base64; expected canonical padded base64: {err}"
-                ),
-            )
-        })?;
-    if proof.is_empty() || proof.len() > SORAFS_PIN_ALIAS_PROOF_MAX_BYTES {
-        return Err(sorafs_pin_validation_error(
-            "sorafs_pin_alias_proof_size_invalid",
-            format!("alias.proof_base64 must encode 1..={SORAFS_PIN_ALIAS_PROOF_MAX_BYTES} bytes"),
-        ));
-    }
-    if base64::engine::general_purpose::STANDARD.encode(&proof) != alias.proof_base64 {
-        return Err(sorafs_pin_validation_error(
-            "sorafs_pin_alias_proof_base64_invalid",
-            "alias.proof_base64 must use exact canonical padded base64",
-        ));
-    }
-
-    Ok(
-        iroha_data_model::sorafs::pin_registry::ManifestAliasBinding {
-            name: alias.name.clone(),
-            namespace: alias.namespace.clone(),
-            proof,
-        },
-    )
-}
-
-#[cfg(feature = "app_api")]
-fn parse_sorafs_pin_successor_digest(
-    successor_of_hex: &str,
-) -> Result<iroha_data_model::sorafs::pin_registry::ManifestDigest> {
-    if successor_of_hex.len() != 64
-        || !successor_of_hex
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        || successor_of_hex.bytes().all(|byte| byte == b'0')
-    {
-        return Err(sorafs_pin_validation_error(
-            "sorafs_pin_successor_digest_invalid",
-            "successor_of_hex must be an exact non-zero lowercase 32-byte hex digest",
-        ));
-    }
-    let bytes = hex::decode(successor_of_hex).map_err(|err| {
-        sorafs_pin_validation_error(
-            "sorafs_pin_successor_digest_invalid",
-            format!("invalid successor_of_hex: {err}"),
-        )
-    })?;
-    let bytes: [u8; 32] = bytes.try_into().map_err(|_| {
-        sorafs_pin_validation_error(
-            "sorafs_pin_successor_digest_invalid",
-            "successor_of_hex must decode to exactly 32 bytes",
-        )
-    })?;
-    Ok(iroha_data_model::sorafs::pin_registry::ManifestDigest::new(
-        bytes,
-    ))
+    Ok(())
 }
 
 fn convert_manifest_policy(
@@ -34377,171 +32863,6 @@ fn contract_not_found_error(code: &'static str, message: impl Into<String>) -> E
     }
 }
 
-fn deal_engine_error(err: DealEngineError) -> Error {
-    use DealEngineError as E;
-    match err {
-        E::ZeroDeposit => Error::AppQueryValidation {
-            code: "sorafs_deal_zero_deposit",
-            message: "deal engine deposits must be greater than zero".to_owned(),
-        },
-        E::ResourceExhausted { .. } => capacity_limit_error(),
-        E::BalanceOverflow { resource } => Error::AppConflict {
-            code: "sorafs_deal_balance_overflow",
-            message: format!("deal engine balance overflow for `{resource}`"),
-        },
-        E::FundingSequenceMismatch {
-            account_kind,
-            expected,
-            found,
-        } => Error::AppConflict {
-            code: "sorafs_deal_funding_sequence_conflict",
-            message: format!(
-                "{account_kind} funding sequence {found} does not equal next expected sequence {expected}"
-            ),
-        },
-        E::FundingSequenceOverflow { account_kind } => Error::AppConflict {
-            code: "sorafs_deal_funding_sequence_exhausted",
-            message: format!("{account_kind} funding sequence space is exhausted"),
-        },
-        E::InvalidProposal(reason) => Error::AppQueryValidation {
-            code: "sorafs_deal_proposal_invalid",
-            message: reason,
-        },
-        E::UnknownProvider(provider) => Error::AppNotFound {
-            code: "sorafs_deal_provider_not_found",
-            message: format!("unknown provider {}", hex::encode(provider.as_bytes())),
-        },
-        E::UnknownClient(client) => Error::AppNotFound {
-            code: "sorafs_deal_client_not_found",
-            message: format!("unknown client {}", hex::encode(client.as_bytes())),
-        },
-        E::InsufficientBond {
-            provider,
-            required,
-            available,
-        } => Error::AppConflict {
-            code: "sorafs_deal_bond_insufficient",
-            message: format!(
-                "insufficient bond for provider {} (required {required}, available {available})",
-                hex::encode(provider.as_bytes())
-            ),
-        },
-        E::DuplicateDeal(deal) => Error::AppConflict {
-            code: "sorafs_deal_already_exists",
-            message: format!("deal {} already exists", hex::encode(deal.as_bytes())),
-        },
-        E::UnknownDeal(deal) => Error::AppNotFound {
-            code: "sorafs_deal_not_found",
-            message: format!("deal {} not found", hex::encode(deal.as_bytes())),
-        },
-        E::DealInactive(deal) => Error::AppConflict {
-            code: "sorafs_deal_inactive",
-            message: format!("deal {} is not active", hex::encode(deal.as_bytes())),
-        },
-        E::ActivationOutOfRange {
-            deal_id,
-            activation_epoch,
-            start,
-            end,
-        } => Error::AppQueryValidation {
-            code: "sorafs_deal_activation_epoch_invalid",
-            message: format!(
-                "activation epoch {activation_epoch} outside [{start}, {end}] for deal {}",
-                hex::encode(deal_id.as_bytes())
-            ),
-        },
-        E::UsageEpochOutOfRange {
-            deal_id,
-            usage_epoch,
-            start,
-            end,
-        } => Error::AppQueryValidation {
-            code: "sorafs_deal_usage_epoch_invalid",
-            message: format!(
-                "usage epoch {usage_epoch} outside [{start}, {end}] for deal {}",
-                hex::encode(deal_id.as_bytes())
-            ),
-        },
-        E::UsageEpochNotMonotonic {
-            deal_id,
-            usage_epoch,
-            previous_epoch,
-        } => Error::AppConflict {
-            code: "sorafs_deal_usage_epoch_conflict",
-            message: format!(
-                "usage epoch {usage_epoch} is not after prior epoch {previous_epoch} for deal {}",
-                hex::encode(deal_id.as_bytes())
-            ),
-        },
-        E::InvalidTicket { deal_id, reason } => Error::AppQueryValidation {
-            code: "sorafs_deal_ticket_invalid",
-            message: format!(
-                "invalid micropayment ticket for deal {}: {reason}",
-                hex::encode(deal_id.as_bytes())
-            ),
-        },
-        E::UnsafeCancellation { deal_id, reason } => Error::AppConflict {
-            code: "sorafs_deal_cancellation_unsafe",
-            message: format!(
-                "deal {} cannot be cancelled: {reason}",
-                hex::encode(deal_id.as_bytes())
-            ),
-        },
-        E::InvalidCancellationReason => Error::AppQueryValidation {
-            code: "sorafs_deal_cancellation_reason_invalid",
-            message:
-                "deal cancellation reason must be canonical, non-empty, control-free, and bounded"
-                    .to_owned(),
-        },
-        E::TicketReplay { deal_id, ticket_id } => Error::AppConflict {
-            code: "sorafs_deal_ticket_replay",
-            message: format!(
-                "micropayment ticket {} was already consumed for deal {}",
-                hex::encode(ticket_id.as_bytes()),
-                hex::encode(deal_id.as_bytes())
-            ),
-        },
-        E::SettlementWindowMismatch {
-            deal_id,
-            settlement_epoch,
-            window_epochs,
-        } => Error::AppQueryValidation {
-            code: "sorafs_deal_settlement_epoch_invalid",
-            message: format!(
-                "settlement epoch {settlement_epoch} does not satisfy window length {window_epochs} for deal {}",
-                hex::encode(deal_id.as_bytes())
-            ),
-        },
-        E::SettlementEpochOverflow(deal_id) => Error::AppConflict {
-            code: "sorafs_deal_settlement_epoch_exhausted",
-            message: format!(
-                "next settlement epoch overflows for deal {}",
-                hex::encode(deal_id.as_bytes())
-            ),
-        },
-        E::AllocationFailed { resource } => Error::AppServiceUnavailable {
-            code: "sorafs_deal_allocation_failed",
-            message: format!("deal engine could not reserve memory for `{resource}`"),
-        },
-        E::MetadataEncoding(err) => Error::AppQueryValidation {
-            code: "sorafs_deal_metadata_encoding_invalid",
-            message: format!("metadata encoding failed: {err}"),
-        },
-        E::InvalidCheckpoint(reason) => Error::AppServiceUnavailable {
-            code: "sorafs_deal_checkpoint_invalid",
-            message: format!("invalid deal runtime checkpoint: {reason}"),
-        },
-        E::Checkpoint(reason) => Error::AppServiceUnavailable {
-            code: "sorafs_deal_checkpoint_failed",
-            message: format!("deal runtime checkpoint failed: {reason}"),
-        },
-        E::StateLockPoisoned => Error::AppServiceUnavailable {
-            code: "sorafs_deal_state_poisoned",
-            message: "deal engine state lock poisoned".to_owned(),
-        },
-    }
-}
-
 fn capacity_limit_error() -> Error {
     Error::Query(iroha_data_model::ValidationFail::QueryFailed(
         iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
@@ -34551,323 +32872,6 @@ fn capacity_limit_error() -> Error {
 fn quota_limit_error(err: QuotaExceeded) -> Error {
     let _ = err;
     capacity_limit_error()
-}
-
-#[cfg(test)]
-mod sorafs_runtime_error_mapping_tests {
-    use super::*;
-
-    fn assert_service_unavailable_code(error: Error, expected_code: &'static str) {
-        match &error {
-            Error::AppServiceUnavailable { code, .. } => assert_eq!(*code, expected_code),
-            other => panic!("expected service-unavailable error, got {other:?}"),
-        }
-        assert_eq!(
-            error.into_response().status(),
-            StatusCode::SERVICE_UNAVAILABLE
-        );
-    }
-
-    #[test]
-    fn capacity_resource_and_replacement_errors_preserve_http_semantics() {
-        let exhausted =
-            replication_schedule_error(sorafs_node::capacity::CapacityError::ResourceExhausted {
-                resource: "replication_orders",
-                limit: 8,
-            });
-        assert_eq!(
-            exhausted.into_response().status(),
-            StatusCode::TOO_MANY_REQUESTS
-        );
-
-        let replacement = replication_schedule_error(
-            sorafs_node::capacity::CapacityError::DeclarationReplacementWhileOrdersOutstanding {
-                count: 3,
-            },
-        );
-        match &replacement {
-            Error::AppConflict { code, message } => {
-                assert_eq!(*code, "sorafs_capacity_declaration_replace_conflict");
-                assert!(message.contains('3'));
-            }
-            other => panic!("expected conflict error, got {other:?}"),
-        }
-        assert_eq!(replacement.into_response().status(), StatusCode::CONFLICT);
-    }
-
-    #[test]
-    fn capacity_internal_failures_have_distinct_stable_codes() {
-        for (error, code) in [
-            (
-                sorafs_node::capacity::CapacityError::AllocationOverflow,
-                "sorafs_capacity_allocation_overflow",
-            ),
-            (
-                sorafs_node::capacity::CapacityError::AllocationUnderflow,
-                "sorafs_capacity_allocation_underflow",
-            ),
-            (
-                sorafs_node::capacity::CapacityError::InvalidCheckpoint("invalid".to_owned()),
-                "sorafs_capacity_checkpoint_invalid",
-            ),
-            (
-                sorafs_node::capacity::CapacityError::Checkpoint("io".to_owned()),
-                "sorafs_capacity_checkpoint_failed",
-            ),
-            (
-                sorafs_node::capacity::CapacityError::StateLockPoisoned,
-                "sorafs_capacity_state_poisoned",
-            ),
-        ] {
-            assert_service_unavailable_code(replication_schedule_error(error), code);
-        }
-    }
-
-    #[test]
-    fn deal_validation_and_capacity_errors_preserve_http_semantics() {
-        let zero = deal_engine_error(DealEngineError::ZeroDeposit);
-        match &zero {
-            Error::AppQueryValidation { code, .. } => {
-                assert_eq!(*code, "sorafs_deal_zero_deposit");
-            }
-            other => panic!("expected validation error, got {other:?}"),
-        }
-        assert_eq!(zero.into_response().status(), StatusCode::BAD_REQUEST);
-
-        let exhausted = deal_engine_error(DealEngineError::ResourceExhausted {
-            resource: "deals",
-            limit: 8,
-        });
-        assert_eq!(
-            exhausted.into_response().status(),
-            StatusCode::TOO_MANY_REQUESTS
-        );
-
-        let overflow = deal_engine_error(DealEngineError::BalanceOverflow {
-            resource: "client_credit",
-        });
-        match &overflow {
-            Error::AppConflict { code, .. } => {
-                assert_eq!(*code, "sorafs_deal_balance_overflow");
-            }
-            other => panic!("expected conflict error, got {other:?}"),
-        }
-        assert_eq!(overflow.into_response().status(), StatusCode::CONFLICT);
-    }
-
-    #[test]
-    fn deal_checkpoint_errors_have_distinct_stable_codes() {
-        for (error, code) in [
-            (
-                DealEngineError::InvalidCheckpoint("invalid".to_owned()),
-                "sorafs_deal_checkpoint_invalid",
-            ),
-            (
-                DealEngineError::Checkpoint("io".to_owned()),
-                "sorafs_deal_checkpoint_failed",
-            ),
-            (
-                DealEngineError::StateLockPoisoned,
-                "sorafs_deal_state_poisoned",
-            ),
-        ] {
-            assert_service_unavailable_code(deal_engine_error(error), code);
-        }
-    }
-}
-
-#[cfg(feature = "app_api")]
-mod serialization {
-    use sorafs_manifest::capacity::CapacityMetadataEntry;
-
-    use super::*;
-
-    pub fn replication_plan_to_value(
-        status: &str,
-        plan: &sorafs_node::capacity::ReplicationPlan,
-    ) -> Result<Value, json::Error> {
-        let mut root = Map::new();
-        root.insert("status".into(), Value::String(status.to_string()));
-        root.insert(
-            "order_id_hex".into(),
-            Value::String(hex::encode(plan.order_id)),
-        );
-        root.insert(
-            "provider_id_hex".into(),
-            Value::String(hex::encode(plan.provider_id)),
-        );
-        root.insert(
-            "chunker_handle".into(),
-            Value::String(plan.chunker_handle.clone()),
-        );
-        root.insert(
-            "manifest_cid_hex".into(),
-            Value::String(hex::encode(&plan.manifest_cid)),
-        );
-        root.insert(
-            "manifest_digest_hex".into(),
-            Value::String(hex::encode(plan.manifest_digest)),
-        );
-        root.insert(
-            "assigned_slice_gib".into(),
-            json::to_value(&plan.assigned_slice_gib)?,
-        );
-        root.insert(
-            "remaining_total_gib".into(),
-            json::to_value(&plan.remaining_total_gib)?,
-        );
-        root.insert(
-            "remaining_chunker_gib".into(),
-            json::to_value(&plan.remaining_chunker_gib)?,
-        );
-        root.insert(
-            "remaining_lane_gib".into(),
-            plan.remaining_lane_gib
-                .map(|value| json::to_value(&value))
-                .transpose()?
-                .unwrap_or(Value::Null),
-        );
-        root.insert(
-            "lane".into(),
-            plan.lane
-                .as_ref()
-                .map(|lane| Value::String(lane.clone()))
-                .unwrap_or(Value::Null),
-        );
-        root.insert("deadline_at".into(), json::to_value(&plan.deadline_at)?);
-        root.insert("issued_at".into(), json::to_value(&plan.issued_at)?);
-        root.insert(
-            "sla_ingest_deadline_secs".into(),
-            json::to_value(&plan.sla.ingest_deadline_secs)?,
-        );
-        root.insert(
-            "sla_min_availability_percent_milli".into(),
-            json::to_value(&plan.sla.min_availability_percent_milli)?,
-        );
-        root.insert(
-            "sla_min_por_success_percent_milli".into(),
-            json::to_value(&plan.sla.min_por_success_percent_milli)?,
-        );
-        root.insert("metadata".into(), metadata_entries_to_array(&plan.metadata));
-        Ok(Value::Object(root))
-    }
-
-    pub fn replication_plan_ignored_value(
-        order: &ReplicationOrderV1,
-    ) -> Result<Value, json::Error> {
-        let mut root = Map::new();
-        root.insert("status".into(), Value::String("ignored".to_string()));
-        root.insert(
-            "order_id_hex".into(),
-            Value::String(hex::encode(order.order_id)),
-        );
-        root.insert("provider_id_hex".into(), Value::Null);
-        root.insert(
-            "chunker_handle".into(),
-            Value::String(order.chunking_profile.clone()),
-        );
-        root.insert(
-            "manifest_cid_hex".into(),
-            Value::String(hex::encode(&order.manifest_cid)),
-        );
-        root.insert(
-            "manifest_digest_hex".into(),
-            Value::String(hex::encode(order.manifest_digest)),
-        );
-        root.insert("assigned_slice_gib".into(), json::to_value(&0u64)?);
-        root.insert("remaining_total_gib".into(), json::to_value(&0u64)?);
-        root.insert("remaining_chunker_gib".into(), json::to_value(&0u64)?);
-        root.insert("remaining_lane_gib".into(), Value::Null);
-        root.insert("lane".into(), Value::Null);
-        root.insert("deadline_at".into(), json::to_value(&order.deadline_at)?);
-        root.insert("issued_at".into(), json::to_value(&order.issued_at)?);
-        root.insert(
-            "sla_ingest_deadline_secs".into(),
-            json::to_value(&order.sla.ingest_deadline_secs)?,
-        );
-        root.insert(
-            "sla_min_availability_percent_milli".into(),
-            json::to_value(&order.sla.min_availability_percent_milli)?,
-        );
-        root.insert(
-            "sla_min_por_success_percent_milli".into(),
-            json::to_value(&order.sla.min_por_success_percent_milli)?,
-        );
-        root.insert(
-            "metadata".into(),
-            metadata_entries_to_array(&order.metadata),
-        );
-        Ok(Value::Object(root))
-    }
-
-    fn metadata_entries_to_array(entries: &[CapacityMetadataEntry]) -> Value {
-        let mut out = Vec::with_capacity(entries.len());
-        for entry in entries {
-            let mut item = Map::new();
-            item.insert("key".into(), Value::String(entry.key.clone()));
-            item.insert("value".into(), Value::String(entry.value.clone()));
-            out.push(Value::Object(item));
-        }
-        Value::Array(out)
-    }
-
-    pub fn replication_release_to_value(
-        status: &str,
-        release: &sorafs_node::capacity::ReplicationRelease,
-    ) -> Result<Value, json::Error> {
-        let mut root = Map::new();
-        root.insert("status".into(), Value::String(status.to_string()));
-        root.insert(
-            "order_id_hex".into(),
-            Value::String(hex::encode(release.order_id)),
-        );
-        root.insert(
-            "provider_id_hex".into(),
-            Value::String(hex::encode(release.provider_id)),
-        );
-        root.insert(
-            "released_gib".into(),
-            json::to_value(&release.released_gib)?,
-        );
-        root.insert(
-            "remaining_total_gib".into(),
-            json::to_value(&release.remaining_total_gib)?,
-        );
-        root.insert(
-            "remaining_chunker_gib".into(),
-            json::to_value(&release.remaining_chunker_gib)?,
-        );
-        root.insert(
-            "remaining_lane_gib".into(),
-            release
-                .remaining_lane_gib
-                .map(|value| json::to_value(&value))
-                .transpose()?
-                .unwrap_or(Value::Null),
-        );
-        root.insert(
-            "lane".into(),
-            release
-                .lane
-                .as_ref()
-                .map(|lane| Value::String(lane.clone()))
-                .unwrap_or(Value::Null),
-        );
-        Ok(Value::Object(root))
-    }
-
-    pub fn replication_release_ignored_value(order_id: &[u8; 32]) -> Result<Value, json::Error> {
-        let mut root = Map::new();
-        root.insert("status".into(), Value::String("ignored".into()));
-        root.insert("order_id_hex".into(), Value::String(hex::encode(order_id)));
-        root.insert("provider_id_hex".into(), Value::Null);
-        root.insert("released_gib".into(), json::to_value(&0u64)?);
-        root.insert("remaining_total_gib".into(), json::to_value(&0u64)?);
-        root.insert("remaining_chunker_gib".into(), json::to_value(&0u64)?);
-        root.insert("remaining_lane_gib".into(), Value::Null);
-        root.insert("lane".into(), Value::Null);
-        Ok(Value::Object(root))
-    }
 }
 
 #[cfg(all(test, feature = "app_api"))]
@@ -35069,18 +33073,41 @@ mod sorafs_pin_tests {
         manifest
     }
 
-    fn request_from_manifest(manifest: &ManifestV1) -> RegisterPinManifestDto {
-        let kp = checked_pin_keypair(0x78, "derive pin manifest registration fixture key");
+    fn instruction_from_manifest(
+        manifest: &ManifestV1,
+    ) -> iroha_data_model::isi::sorafs::RegisterPinManifest {
+        iroha_data_model::isi::sorafs::RegisterPinManifest::new(
+            manifest.encode().expect("encode canonical manifest"),
+            5,
+            None,
+            None,
+        )
+    }
 
-        RegisterPinManifestDto {
-            authority: dm::AccountId::new(kp.public_key().clone()),
-            private_key: dm::ExposedPrivateKey(kp.private_key().clone()),
-            manifest_payload: base64::engine::general_purpose::STANDARD
-                .encode(manifest.encode().expect("encode canonical manifest")),
-            submitted_epoch: 5,
-            alias: None,
-            successor_of_hex: None,
-        }
+    fn transaction_from_instructions(
+        chain_id: &dm::ChainId,
+        instructions: impl IntoIterator<Item = dm::InstructionBox>,
+    ) -> SignedTransaction {
+        let key_pair = checked_pin_keypair(0x78, "derive pin manifest registration fixture key");
+        dm::TransactionBuilder::new(
+            chain_id.clone(),
+            dm::AccountId::new(key_pair.public_key().clone()).into(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(instructions)
+        .sign(key_pair.private_key())
+    }
+
+    fn transaction_from_manifest(
+        chain_id: &dm::ChainId,
+        manifest: &ManifestV1,
+    ) -> SignedTransaction {
+        transaction_from_instructions(
+            chain_id,
+            [dm::InstructionBox::from(instruction_from_manifest(
+                manifest,
+            ))],
+        )
     }
 
     fn handler_context<F>(
@@ -35131,61 +33158,6 @@ mod sorafs_pin_tests {
             Error::AppQueryValidation { code, message } => (code, message),
             other => panic!("unexpected error: {other:?}"),
         }
-    }
-
-    #[test]
-    fn register_manifest_json_rejects_every_retired_summary_field() {
-        let request = request_from_manifest(&default_manifest());
-        let canonical = norito::json::to_value(&request).expect("serialize canonical request");
-        for retired in [
-            "manifest_b64",
-            "manifest_digest_hex",
-            "chunker_profile_id",
-            "chunker_namespace",
-            "chunker_name",
-            "chunker_semver",
-            "chunker_multihash_code",
-            "pin_policy",
-            "chunk_digest_sha3_256_hex",
-            "content_length",
-            "fee_payment",
-            "gas_asset_id",
-        ] {
-            let mut mutated = canonical.clone();
-            mutated
-                .as_object_mut()
-                .expect("request JSON object")
-                .insert(retired.to_owned(), Value::Null);
-            let error = norito::json::from_value::<RegisterPinManifestDto>(mutated)
-                .expect_err("retired request field must fail closed");
-            assert!(
-                error.to_string().contains(retired),
-                "unknown-field error must identify `{retired}`: {error}"
-            );
-        }
-    }
-
-    #[test]
-    fn register_manifest_json_rejects_unknown_nested_alias_fields() {
-        let mut request = request_from_manifest(&default_manifest());
-        request.alias = Some(PinAliasDto {
-            namespace: "sora".into(),
-            name: "docs".into(),
-            proof_base64: base64::engine::general_purpose::STANDARD.encode(b"proof"),
-        });
-        let mut value = norito::json::to_value(&request).expect("serialize canonical request");
-        value
-            .as_object_mut()
-            .and_then(|request| request.get_mut("alias"))
-            .and_then(Value::as_object_mut)
-            .expect("alias JSON object")
-            .insert("proof".into(), Value::String("legacy".into()));
-        let error = norito::json::from_value::<RegisterPinManifestDto>(value)
-            .expect_err("retired nested alias field must fail closed");
-        assert!(
-            error.to_string().contains("proof"),
-            "unknown-field error must identify nested field: {error}"
-        );
     }
 
     #[test]
@@ -35279,20 +33251,21 @@ mod sorafs_pin_tests {
     #[cfg(feature = "app_api")]
     async fn register_manifest_handler_accepts_request() {
         let manifest = default_manifest();
-        let req = request_from_manifest(&manifest);
         let (chain_id, queue, state, telemetry) = handler_context(|_| {});
+        let transaction = transaction_from_manifest(chain_id.as_ref(), &manifest);
+        let expected_tx_hash = hex::encode(transaction.hash().as_ref());
 
         let resp = handle_post_sorafs_register_manifest(
             Arc::clone(&chain_id),
             queue,
             state,
             telemetry,
-            NoritoJson(req),
+            transaction,
         )
         .await
         .expect("handler ok")
         .into_response();
-        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+        assert_eq!(resp.status(), axum::http::StatusCode::ACCEPTED);
         let bytes = http_body_util::BodyExt::collect(resp.into_body())
             .await
             .unwrap()
@@ -35305,35 +33278,17 @@ mod sorafs_pin_tests {
             Some(expected_digest.as_str())
         );
         assert_eq!(
-            v.get("submitted_epoch")
-                .and_then(norito::json::Value::as_u64),
-            Some(5)
+            v.get("tx_hash_hex").and_then(norito::json::Value::as_str),
+            Some(expected_tx_hash.as_str())
         );
-    }
-
-    #[tokio::test]
-    #[cfg(feature = "app_api")]
-    async fn register_manifest_handler_rejects_noncanonical_base64_manifest_payload() {
-        let manifest = default_manifest();
-        let mut req = request_from_manifest(&manifest);
-        req.manifest_payload.push('\n');
-        let (chain_id, queue, state, telemetry) = handler_context(|_| {});
-
-        let err = match handle_post_sorafs_register_manifest(
-            Arc::clone(&chain_id),
-            queue,
-            state,
-            telemetry,
-            NoritoJson(req),
-        )
-        .await
-        {
-            Ok(_) => panic!("noncanonical base64 must fail closed"),
-            Err(err) => err,
-        };
         assert_eq!(
-            app_validation_error(err).0,
-            "sorafs_pin_manifest_payload_base64_invalid"
+            v.get("status").and_then(norito::json::Value::as_str),
+            Some("submitted")
+        );
+        assert_eq!(
+            v.as_object().map(|object| object.len()),
+            Some(3),
+            "admission response must not claim pre-finality fees, custody, or pin status"
         );
     }
 
@@ -35341,21 +33296,29 @@ mod sorafs_pin_tests {
     #[cfg(feature = "app_api")]
     async fn register_manifest_handler_rejects_legacy_encoded_manifest_payload() {
         let manifest = default_manifest();
-        let mut req = request_from_manifest(&manifest);
         let legacy_manifest_bytes = {
             let _guard = norito::core::DecodeFlagsGuard::enter(0);
             norito::to_bytes(&manifest).expect("noncanonical manifest fixture encoding")
         };
-        req.manifest_payload =
-            base64::engine::general_purpose::STANDARD.encode(legacy_manifest_bytes);
         let (chain_id, queue, state, telemetry) = handler_context(|_| {});
+        let transaction = transaction_from_instructions(
+            chain_id.as_ref(),
+            [dm::InstructionBox::from(
+                iroha_data_model::isi::sorafs::RegisterPinManifest::new(
+                    legacy_manifest_bytes,
+                    5,
+                    None,
+                    None,
+                ),
+            )],
+        );
 
         let err = match handle_post_sorafs_register_manifest(
             Arc::clone(&chain_id),
             queue,
             state,
             telemetry,
-            NoritoJson(req),
+            transaction,
         )
         .await
         {
@@ -35371,17 +33334,20 @@ mod sorafs_pin_tests {
     #[tokio::test]
     #[cfg(feature = "app_api")]
     async fn register_manifest_handler_rejects_empty_manifest_payload_before_decode() {
-        let manifest = default_manifest();
-        let mut req = request_from_manifest(&manifest);
-        req.manifest_payload.clear();
         let (chain_id, queue, state, telemetry) = handler_context(|_| {});
+        let transaction = transaction_from_instructions(
+            chain_id.as_ref(),
+            [dm::InstructionBox::from(
+                iroha_data_model::isi::sorafs::RegisterPinManifest::new(Vec::new(), 5, None, None),
+            )],
+        );
 
         let err = match handle_post_sorafs_register_manifest(
             Arc::clone(&chain_id),
             queue,
             state,
             telemetry,
-            NoritoJson(req),
+            transaction,
         )
         .await
         {
@@ -35391,7 +33357,7 @@ mod sorafs_pin_tests {
         let (code, message) = app_validation_error(err);
         assert_eq!(code, "sorafs_pin_manifest_payload_size_invalid");
         assert!(
-            message.contains("manifest_payload must encode"),
+            message.contains("manifest_payload must contain"),
             "unexpected error message: {message}"
         );
     }
@@ -35402,17 +33368,17 @@ mod sorafs_pin_tests {
     {
         let mut manifest = default_manifest();
         manifest.governance.council_signatures.clear();
-        let req = request_from_manifest(&manifest);
         let (chain_id, queue, state, telemetry) = handler_context(|state| {
             state.gov.sorafs_pin_policy.require_council_signatures = true;
         });
+        let transaction = transaction_from_manifest(chain_id.as_ref(), &manifest);
 
         let err = match handle_post_sorafs_register_manifest(
             Arc::clone(&chain_id),
             queue,
             state,
             telemetry,
-            NoritoJson(req),
+            transaction,
         )
         .await
         {
@@ -35428,58 +33394,56 @@ mod sorafs_pin_tests {
     }
 
     #[test]
-    fn register_manifest_rejects_oversized_manifest_before_base64_decode() {
-        let payload = "A".repeat(SORAFS_PIN_MANIFEST_MAX_BASE64_BYTES + 1);
-        let err = decode_sorafs_pin_manifest_payload(
-            payload.as_str(),
+    fn register_manifest_rejects_oversized_manifest_before_decode() {
+        let payload = vec![0; sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES + 1];
+        let err = decode_sorafs_pin_manifest_bytes(
+            payload.as_slice(),
             &ManifestPinPolicyConstraints::default(),
         )
         .expect_err("oversized manifest must fail before decode");
         let (code, message) = app_validation_error(err);
         assert_eq!(code, "sorafs_pin_manifest_payload_size_invalid");
         assert!(
-            message.contains("manifest_payload must encode"),
+            message.contains("manifest_payload must contain"),
             "unexpected error message: {message}"
         );
     }
 
     #[test]
-    fn register_manifest_successor_digest_is_exact_lowercase_and_nonzero() {
-        let valid = hex::encode([0xAB; 32]);
-        let digest =
-            parse_sorafs_pin_successor_digest(&valid).expect("canonical successor must parse");
-        assert_eq!(digest.as_bytes(), &[0xAB; 32]);
-
-        for invalid in [
-            String::new(),
-            "0".repeat(64),
-            valid.to_ascii_uppercase(),
-            format!("0x{valid}"),
-            "a".repeat(63),
-        ] {
-            let err = parse_sorafs_pin_successor_digest(&invalid)
-                .expect_err("noncanonical successor must fail closed");
-            assert_eq!(
-                app_validation_error(err).0,
-                "sorafs_pin_successor_digest_invalid"
-            );
-        }
+    fn register_manifest_rejects_zero_successor_digest() {
+        let chain_id: dm::ChainId = "chain".parse().expect("chain id");
+        let instruction = iroha_data_model::isi::sorafs::RegisterPinManifest::new(
+            default_manifest().encode().expect("manifest"),
+            5,
+            None,
+            Some(iroha_data_model::sorafs::pin_registry::ManifestDigest::new(
+                [0; 32],
+            )),
+        );
+        let transaction =
+            transaction_from_instructions(&chain_id, [dm::InstructionBox::from(instruction)]);
+        let err = validate_sorafs_pin_register_transaction(&chain_id, &transaction)
+            .expect_err("zero successor digest must fail closed");
+        assert_eq!(
+            app_validation_error(err).0,
+            "sorafs_pin_successor_digest_invalid"
+        );
     }
 
     #[test]
-    fn register_manifest_alias_is_bounded_and_canonical() {
-        let valid = PinAliasDto {
+    fn register_manifest_alias_is_bounded() {
+        let valid = iroha_data_model::sorafs::pin_registry::ManifestAliasBinding {
             namespace: "sora".into(),
             name: "docs".into(),
-            proof_base64: base64::engine::general_purpose::STANDARD.encode(b"proof"),
+            proof: b"proof".to_vec(),
         };
-        decode_sorafs_pin_alias_binding(&valid).expect("canonical alias must parse");
+        validate_sorafs_pin_alias_binding(&valid).expect("bounded alias must pass");
 
         let mut invalid_segment = valid.clone();
         invalid_segment.namespace = "Sora".into();
         assert_eq!(
             app_validation_error(
-                decode_sorafs_pin_alias_binding(&invalid_segment)
+                validate_sorafs_pin_alias_binding(&invalid_segment)
                     .expect_err("uppercase alias must fail")
             )
             .0,
@@ -35487,10 +33451,10 @@ mod sorafs_pin_tests {
         );
 
         let mut empty_proof = valid.clone();
-        empty_proof.proof_base64.clear();
+        empty_proof.proof.clear();
         assert_eq!(
             app_validation_error(
-                decode_sorafs_pin_alias_binding(&empty_proof)
+                validate_sorafs_pin_alias_binding(&empty_proof)
                     .expect_err("empty alias proof must fail")
             )
             .0,
@@ -35498,46 +33462,89 @@ mod sorafs_pin_tests {
         );
 
         let mut oversized_proof = valid;
-        oversized_proof.proof_base64 = "A".repeat(SORAFS_PIN_ALIAS_PROOF_MAX_BASE64_BYTES + 1);
+        oversized_proof.proof = vec![0; SORAFS_PIN_ALIAS_PROOF_MAX_BYTES + 1];
         assert_eq!(
             app_validation_error(
-                decode_sorafs_pin_alias_binding(&oversized_proof)
-                    .expect_err("oversized alias proof must fail before decode")
+                validate_sorafs_pin_alias_binding(&oversized_proof)
+                    .expect_err("oversized alias proof must fail")
             )
             .0,
             "sorafs_pin_alias_proof_size_invalid"
         );
     }
 
-    #[tokio::test]
-    #[cfg(feature = "app_api")]
-    async fn register_manifest_handler_rejects_invalid_alias_proof_with_stable_code() {
-        let manifest = default_manifest();
-        let mut req = request_from_manifest(&manifest);
-        req.alias = Some(PinAliasDto {
-            namespace: "sora".into(),
-            name: "docs".into(),
-            proof_base64: "not base64!!".into(),
-        });
-        let (chain_id, queue, state, telemetry) = handler_context(|_| {});
+    #[test]
+    fn register_manifest_requires_one_signed_native_instruction() {
+        let chain_id: dm::ChainId = "chain".parse().expect("chain id");
+        let register = instruction_from_manifest(&default_manifest());
 
-        let err = match handle_post_sorafs_register_manifest(
-            Arc::clone(&chain_id),
-            queue,
-            state,
-            telemetry,
-            NoritoJson(req),
-        )
-        .await
-        {
-            Ok(_) => panic!("invalid alias proof must fail"),
-            Err(err) => err,
-        };
-        let (code, message) = app_validation_error(err);
-        assert_eq!(code, "sorafs_pin_alias_proof_base64_invalid");
-        assert!(
-            message.contains("canonical padded base64"),
-            "unexpected error message: {message}"
+        let empty = transaction_from_instructions(&chain_id, []);
+        assert_eq!(
+            app_validation_error(
+                validate_sorafs_pin_register_transaction(&chain_id, &empty)
+                    .expect_err("empty instruction list must fail")
+            )
+            .0,
+            "sorafs_pin_transaction_instruction_count_invalid"
+        );
+
+        let two = transaction_from_instructions(
+            &chain_id,
+            [
+                dm::InstructionBox::from(register.clone()),
+                dm::InstructionBox::from(register),
+            ],
+        );
+        assert_eq!(
+            app_validation_error(
+                validate_sorafs_pin_register_transaction(&chain_id, &two)
+                    .expect_err("two instructions must fail")
+            )
+            .0,
+            "sorafs_pin_transaction_instruction_count_invalid"
+        );
+
+        let wrong = transaction_from_instructions(
+            &chain_id,
+            [dm::InstructionBox::from(dm::Log::new(
+                dm::Level::INFO,
+                "not a pin registration".to_owned(),
+            ))],
+        );
+        assert_eq!(
+            app_validation_error(
+                validate_sorafs_pin_register_transaction(&chain_id, &wrong)
+                    .expect_err("wrong instruction must fail")
+            )
+            .0,
+            "sorafs_pin_transaction_instruction_invalid"
+        );
+    }
+
+    #[test]
+    fn register_manifest_requires_matching_chain_and_valid_signature() {
+        let chain_id: dm::ChainId = "chain".parse().expect("chain id");
+        let other_chain: dm::ChainId = "other".parse().expect("chain id");
+        let transaction = transaction_from_manifest(&chain_id, &default_manifest());
+        assert_eq!(
+            app_validation_error(
+                validate_sorafs_pin_register_transaction(&other_chain, &transaction)
+                    .expect_err("chain mismatch must fail")
+            )
+            .0,
+            "sorafs_pin_transaction_chain_mismatch"
+        );
+
+        let other_key = checked_pin_keypair(0x79, "tampered pin authority");
+        let tampered =
+            transaction.with_authority(dm::AccountId::new(other_key.public_key().clone()));
+        assert_eq!(
+            app_validation_error(
+                validate_sorafs_pin_register_transaction(&chain_id, &tampered)
+                    .expect_err("invalid signature must fail")
+            )
+            .0,
+            "sorafs_pin_transaction_signature_invalid"
         );
     }
 
@@ -35551,12 +33558,23 @@ mod sorafs_pin_tests {
         let state = Arc::clone(&app.state);
         let manifest = default_manifest();
         let proof_bytes = b"alias-proof";
-        let mut req = request_from_manifest(&manifest);
-        req.alias = Some(PinAliasDto {
-            namespace: "sora".into(),
-            name: "docs".into(),
-            proof_base64: base64::engine::general_purpose::STANDARD.encode(proof_bytes.as_slice()),
-        });
+        let transaction = transaction_from_instructions(
+            chain_id.as_ref(),
+            [dm::InstructionBox::from(
+                iroha_data_model::isi::sorafs::RegisterPinManifest::new(
+                    manifest.encode().expect("manifest"),
+                    5,
+                    Some(
+                        iroha_data_model::sorafs::pin_registry::ManifestAliasBinding {
+                            namespace: "sora".into(),
+                            name: "docs".into(),
+                            proof: proof_bytes.to_vec(),
+                        },
+                    ),
+                    None,
+                ),
+            )],
+        );
 
         #[cfg(feature = "telemetry")]
         let telemetry = app.telemetry.clone();
@@ -35568,7 +33586,7 @@ mod sorafs_pin_tests {
             queue,
             state,
             telemetry,
-            NoritoJson(req),
+            transaction,
         )
         .await
         .expect("handler ok")
@@ -35608,16 +33626,12 @@ mod sorafs_capacity_tests {
     use iroha_data_model::{
         metadata::Metadata,
         prelude as dm,
-        sorafs::capacity::{CapacityDeclarationRecord, CapacityDisputeId, ProviderId},
+        sorafs::capacity::{CapacityDeclarationRecord, CapacityTelemetryRecord, ProviderId},
     };
     use norito::to_bytes;
     use sorafs_manifest::{
         StakePointer,
-        capacity::{
-            CapacityDeclarationV1, CapacityDisputeEvidenceV1, CapacityDisputeKind,
-            CapacityDisputeV1, ChunkerCommitmentV1, PricingScheduleV1, ReplicationAssignmentV1,
-            ReplicationOrderSlaV1, ReplicationOrderV1,
-        },
+        capacity::{CapacityDeclarationV1, ChunkerCommitmentV1, PricingScheduleV1},
         por::{
             AUDIT_VERDICT_VERSION_V1, AuditOutcomeV1, AuditVerdictV1, POR_CHALLENGE_VERSION_V1,
             POR_PROOF_VERSION_V1, PorChallengeV1, PorProofSampleV1, PorProofV1, PorReportIsoWeek,
@@ -35661,46 +33675,89 @@ mod sorafs_capacity_tests {
         }
     }
 
-    fn sample_capacity_dispute() -> CapacityDisputeV1 {
-        CapacityDisputeV1 {
-            version: sorafs_manifest::capacity::CAPACITY_DISPUTE_VERSION_V1,
-            provider_id: [0x11; 32],
-            complainant_id: [0x44; 32],
-            replication_order_id: Some([0x55; 32]),
-            kind: CapacityDisputeKind::ReplicationShortfall,
-            evidence: CapacityDisputeEvidenceV1 {
-                evidence_digest: [0xAB; 32],
-                media_type: Some("application/zip".into()),
-                uri: Some("https://example.com/evidence.zip".into()),
-                size_bytes: Some(1_024),
-            },
-            submitted_epoch: 1_700_000_128,
-            description: "provider failed range fetch SLA".into(),
-            requested_remedy: Some("slash stake".into()),
-        }
+    fn sample_capacity_declaration_record() -> CapacityDeclarationRecord {
+        let declaration = sample_capacity_declaration();
+        CapacityDeclarationRecord::new(
+            ProviderId::new(declaration.provider_id),
+            to_bytes(&declaration).expect("encode canonical declaration"),
+            declaration.committed_capacity_gib,
+            42,
+            50,
+            75,
+            Metadata::default(),
+        )
     }
 
-    fn sample_replication_order(slice_gib: u64) -> ReplicationOrderV1 {
-        ReplicationOrderV1 {
-            version: 1,
-            order_id: [0x77; 32],
-            manifest_cid: vec![0x42; 32],
-            manifest_digest: [0x24; 32],
-            chunking_profile: "sorafs.sf1@1.0.0".to_owned(),
-            target_replicas: 1,
-            assignments: vec![ReplicationAssignmentV1 {
-                provider_id: [0x11; 32],
-                slice_gib,
-                lane: None,
-            }],
-            issued_at: 1_700_000_100,
-            deadline_at: 1_700_000_900,
-            sla: ReplicationOrderSlaV1 {
-                ingest_deadline_secs: 600,
-                min_availability_percent_milli: 99_000,
-                min_por_success_percent_milli: 99_000,
-            },
-            metadata: Vec::new(),
+    fn sample_capacity_telemetry_record() -> CapacityTelemetryRecord {
+        CapacityTelemetryRecord::new(
+            ProviderId::new([0x11; 32]),
+            100,
+            120,
+            1_024,
+            1_000,
+            980,
+            10,
+            9,
+            9_500,
+            9_200,
+            512 * 1_048_576,
+            20,
+            1,
+            30,
+            2,
+        )
+        .with_nonce(120)
+    }
+
+    fn signed_capacity_transaction(
+        chain_id: &ChainId,
+        authority_key: &iroha_crypto::KeyPair,
+        signing_key: &iroha_crypto::KeyPair,
+        instructions: impl IntoIterator<Item = dm::InstructionBox>,
+    ) -> SignedTransaction {
+        dm::TransactionBuilder::new(
+            chain_id.clone(),
+            dm::AccountId::new(authority_key.public_key().clone()).into(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(instructions)
+        .sign(signing_key.private_key())
+    }
+
+    fn signed_capacity_declaration_transaction(
+        chain_id: &ChainId,
+        key_pair: &iroha_crypto::KeyPair,
+        record: CapacityDeclarationRecord,
+    ) -> SignedTransaction {
+        signed_capacity_transaction(
+            chain_id,
+            key_pair,
+            key_pair,
+            [dm::InstructionBox::from(
+                iroha_data_model::isi::sorafs::RegisterCapacityDeclaration::new(record),
+            )],
+        )
+    }
+
+    fn signed_capacity_telemetry_transaction(
+        chain_id: &ChainId,
+        key_pair: &iroha_crypto::KeyPair,
+        record: CapacityTelemetryRecord,
+    ) -> SignedTransaction {
+        signed_capacity_transaction(
+            chain_id,
+            key_pair,
+            key_pair,
+            [dm::InstructionBox::from(
+                iroha_data_model::isi::sorafs::RecordCapacityTelemetry::new(record),
+            )],
+        )
+    }
+
+    fn capacity_validation_code(error: Error) -> &'static str {
+        match error {
+            Error::AppQueryValidation { code, .. } => code,
+            other => panic!("expected capacity validation error, got {other:?}"),
         }
     }
 
@@ -35883,8 +33940,17 @@ mod sorafs_capacity_tests {
             declaration.valid_until,
             Metadata::default(),
         );
-        node.record_capacity_declaration(&record)
-            .expect("record declaration");
+        node.reconcile_finalized_capacity(
+            sorafs_node::capacity::CapacityFinalizedCursorV1 {
+                height: 1,
+                block_hash: [0xA1; 32],
+            },
+            sorafs_node::capacity::CapacityReconcileModeV1::FullRebuild,
+            record.provider_id,
+            Some(&record),
+            &[],
+        )
+        .expect("reconcile declaration");
     }
 
     fn sorafs_node_with_temp_storage() -> (sorafs_node::NodeHandle, TempDir) {
@@ -35894,50 +33960,6 @@ mod sorafs_capacity_tests {
             .data_dir(temp_dir.path().join("storage"))
             .build();
         (sorafs_node::NodeHandle::new(cfg), temp_dir)
-    }
-
-    fn seed_sample_deal(node: &sorafs_node::NodeHandle) -> (DealId, u64) {
-        let provider = ProviderId::new([0xAA; 32]);
-        let client = ClientId::new([0xBB; 32]);
-        node.fund_provider_bond_sequenced(
-            provider,
-            "5".parse().expect("canonical provider bond quantity"),
-            1,
-        )
-        .expect("deposit provider bond");
-        node.fund_client_credit_sequenced(
-            client,
-            "3".parse().expect("canonical client credit quantity"),
-            1,
-        )
-        .expect("deposit client credit");
-
-        let activation_epoch = 1_700_000_000;
-        let proposal = DealProposal {
-            provider_id: provider,
-            client_id: client,
-            storage_class: StorageClass::Hot,
-            capacity_gib: 4,
-            start_epoch: activation_epoch,
-            end_epoch: activation_epoch + 14,
-            terms: DealTerms {
-                storage_price_per_gib_month: "0.2"
-                    .parse()
-                    .expect("canonical storage price quantity"),
-                egress_price_per_gib: "0.05".parse().expect("canonical egress price quantity"),
-                settlement_window_epochs: 7,
-                micropayment_probability_bps: 10_000,
-                micropayment_payout: "0.05"
-                    .parse()
-                    .expect("canonical micropayment payout quantity"),
-            },
-            metadata: dm::Metadata::default(),
-        };
-
-        let record = node
-            .open_deal(proposal, activation_epoch)
-            .expect("open deal");
-        (record.deal_id, activation_epoch)
     }
 
     #[tokio::test]
@@ -36004,39 +34026,24 @@ mod sorafs_capacity_tests {
 
     #[tokio::test]
     #[cfg(feature = "app_api")]
-    async fn capacity_declaration_handler_accepts_request() {
+    async fn capacity_declaration_handler_queues_caller_signed_transaction() {
         let (state, queue, chain_id, telemetry) = test_state_components();
-        let declaration = sample_capacity_declaration();
-        let declaration_bytes = norito::to_bytes(&declaration).expect("encode declaration");
-        let declaration_b64 = base64::engine::general_purpose::STANDARD.encode(&declaration_bytes);
         let kp = checked_capacity_keypair(0x91, "derive capacity declaration fixture key");
-        let authority = dm::AccountId::new(kp.public_key().clone());
-        let metadata = vec![MetadataEntryDto {
-            key: "label".into(),
-            value: IrohaJson::from(Value::String("edge".into())),
-        }];
-
-        let req = RegisterCapacityDeclarationDto {
-            authority,
-            private_key: dm::ExposedPrivateKey(kp.private_key().clone()),
-            declaration_b64,
-            registered_epoch: 42,
-            valid_from_epoch: 50,
-            valid_until_epoch: 75,
-            metadata: Some(metadata),
-        };
-
-        let (node, _dir) = sorafs_node_with_temp_storage();
+        let transaction = signed_capacity_declaration_transaction(
+            chain_id.as_ref(),
+            &kp,
+            sample_capacity_declaration_record(),
+        );
+        let expected_hash = transaction.hash();
         let quotas = Arc::new(SorafsQuotaEnforcer::unlimited());
 
         let resp = handle_post_sorafs_register_capacity_declaration(
-            chain_id,
-            queue,
-            state,
+            Arc::clone(&chain_id),
+            Arc::clone(&queue),
+            Arc::clone(&state),
             telemetry,
-            node,
             quotas,
-            NoritoJson(req),
+            transaction,
         )
         .await
         .expect("handler ok")
@@ -36058,511 +34065,189 @@ mod sorafs_capacity_tests {
                 .and_then(norito::json::Value::as_u64),
             Some(42)
         );
+
+        let mut guards = Vec::new();
+        queue.get_transactions_for_block(
+            &state.view(),
+            std::num::NonZeroUsize::new(1).expect("one"),
+            &mut guards,
+        );
+        assert!(
+            guards
+                .iter()
+                .any(|accepted| accepted.as_ref().hash() == expected_hash),
+            "the exact caller-signed transaction must be queued"
+        );
     }
 
     #[test]
-    #[cfg(feature = "app_api")]
-    fn deal_usage_response_json_preserves_exact_and_wide_quantities() {
-        let response = RecordDealUsageResponseDto {
-            deal_id_hex: hex::encode([0xAB; 32]),
-            epoch: 9,
-            deterministic_charge: "0.000000001".parse().expect("canonical nano-XOR quantity"),
-            micropayment_credit_generated: "340282366920938463463374607431768211456"
-                .parse()
-                .expect("canonical quantity wider than u128"),
-            micropayment_credit_applied: "1.25".parse().expect("canonical fractional quantity"),
-            micropayment_credit_carry: "0".parse().expect("canonical zero XOR quantity"),
-            outstanding: "0.000000002".parse().expect("canonical exact XOR quantity"),
-            tickets_processed: 2,
-            tickets_won: 1,
-            tickets_duplicate: 0,
-        };
+    fn capacity_declaration_signed_envelope_rejects_chain_signature_and_instruction_substitution() {
+        let chain_id = ChainId::from("chain");
+        let wrong_chain = ChainId::from("other-chain");
+        let authority =
+            checked_capacity_keypair(0xA1, "derive capacity envelope authority fixture");
+        let attacker = checked_capacity_keypair(0xA2, "derive capacity envelope attacker fixture");
 
-        let bytes = norito::json::to_vec(&response).expect("encode exact deal usage response");
-        let decoded: RecordDealUsageResponseDto =
-            norito::json::from_slice(&bytes).expect("decode exact deal usage response");
-
-        assert_eq!(decoded.deterministic_charge, response.deterministic_charge);
-        assert_eq!(
-            decoded.micropayment_credit_generated,
-            response.micropayment_credit_generated
+        let wrong_chain_transaction = signed_capacity_declaration_transaction(
+            &wrong_chain,
+            &authority,
+            sample_capacity_declaration_record(),
         );
         assert_eq!(
-            decoded.micropayment_credit_applied,
-            response.micropayment_credit_applied
+            capacity_validation_code(
+                validate_sorafs_capacity_declaration_transaction(
+                    &chain_id,
+                    &wrong_chain_transaction
+                )
+                .expect_err("wrong-chain envelope must fail closed")
+            ),
+            "sorafs_capacity_declaration_transaction_chain_mismatch"
         );
-        assert_eq!(decoded.outstanding, response.outstanding);
+
+        let forged_transaction = signed_capacity_transaction(
+            &chain_id,
+            &authority,
+            &attacker,
+            [dm::InstructionBox::from(
+                iroha_data_model::isi::sorafs::RegisterCapacityDeclaration::new(
+                    sample_capacity_declaration_record(),
+                ),
+            )],
+        );
+        assert_eq!(
+            capacity_validation_code(
+                validate_sorafs_capacity_declaration_transaction(&chain_id, &forged_transaction)
+                    .expect_err("signature from a different authority must fail closed")
+            ),
+            "sorafs_capacity_declaration_transaction_signature_invalid"
+        );
+
+        let no_instructions =
+            signed_capacity_transaction(&chain_id, &authority, &authority, std::iter::empty());
+        assert_eq!(
+            capacity_validation_code(
+                validate_sorafs_capacity_declaration_transaction(&chain_id, &no_instructions)
+                    .expect_err("zero instructions must fail closed")
+            ),
+            "sorafs_capacity_declaration_transaction_instruction_count_invalid"
+        );
+
+        let multiple = signed_capacity_transaction(
+            &chain_id,
+            &authority,
+            &authority,
+            [
+                dm::InstructionBox::from(
+                    iroha_data_model::isi::sorafs::RegisterCapacityDeclaration::new(
+                        sample_capacity_declaration_record(),
+                    ),
+                ),
+                dm::InstructionBox::from(dm::Log::new(dm::Level::INFO, "extra".into())),
+            ],
+        );
+        assert_eq!(
+            capacity_validation_code(
+                validate_sorafs_capacity_declaration_transaction(&chain_id, &multiple)
+                    .expect_err("multiple instructions must fail closed")
+            ),
+            "sorafs_capacity_declaration_transaction_instruction_count_invalid"
+        );
+
+        let wrong_instruction = signed_capacity_transaction(
+            &chain_id,
+            &authority,
+            &authority,
+            [dm::InstructionBox::from(dm::Log::new(
+                dm::Level::INFO,
+                "substituted".into(),
+            ))],
+        );
+        assert_eq!(
+            capacity_validation_code(
+                validate_sorafs_capacity_declaration_transaction(&chain_id, &wrong_instruction)
+                    .expect_err("substituted instruction must fail closed")
+            ),
+            "sorafs_capacity_declaration_transaction_instruction_invalid"
+        );
+    }
+
+    #[test]
+    fn capacity_declaration_rejects_noncanonical_bounded_and_mismatched_records() {
+        let chain_id = ChainId::from("chain");
+        let key_pair = checked_capacity_keypair(0xA3, "derive capacity record validation fixture");
+
+        let mut trailing = sample_capacity_declaration_record();
+        trailing.declaration.push(0);
+        let transaction = signed_capacity_declaration_transaction(&chain_id, &key_pair, trailing);
+        let code = capacity_validation_code(
+            validate_sorafs_capacity_declaration_transaction(&chain_id, &transaction)
+                .expect_err("trailing payload data must fail closed"),
+        );
+        assert!(
+            matches!(
+                code,
+                "sorafs_capacity_declaration_payload_decode_failed"
+                    | "sorafs_capacity_declaration_payload_noncanonical"
+            ),
+            "unexpected trailing-data rejection code: {code}"
+        );
+
+        let mut oversized = sample_capacity_declaration_record();
+        oversized.declaration = vec![0xA5; SORAFS_CAPACITY_DECLARATION_PAYLOAD_MAX_BYTES + 1];
+        let transaction = signed_capacity_declaration_transaction(&chain_id, &key_pair, oversized);
+        assert_eq!(
+            capacity_validation_code(
+                validate_sorafs_capacity_declaration_transaction(&chain_id, &transaction)
+                    .expect_err("oversized payload must fail before decode")
+            ),
+            "sorafs_capacity_declaration_payload_size_invalid"
+        );
+
+        let mut provider_mismatch = sample_capacity_declaration_record();
+        provider_mismatch.provider_id = ProviderId::new([0xFE; 32]);
+        let transaction =
+            signed_capacity_declaration_transaction(&chain_id, &key_pair, provider_mismatch);
+        assert_eq!(
+            capacity_validation_code(
+                validate_sorafs_capacity_declaration_transaction(&chain_id, &transaction)
+                    .expect_err("provider summary mismatch must fail closed")
+            ),
+            "sorafs_capacity_declaration_record_mismatch"
+        );
+
+        let mut capacity_mismatch = sample_capacity_declaration_record();
+        capacity_mismatch.committed_capacity_gib += 1;
+        let transaction =
+            signed_capacity_declaration_transaction(&chain_id, &key_pair, capacity_mismatch);
+        assert_eq!(
+            capacity_validation_code(
+                validate_sorafs_capacity_declaration_transaction(&chain_id, &transaction)
+                    .expect_err("capacity summary mismatch must fail closed")
+            ),
+            "sorafs_capacity_declaration_record_mismatch"
+        );
     }
 
     #[tokio::test]
     #[cfg(feature = "app_api")]
-    async fn deal_usage_handler_records_usage() {
+    async fn capacity_telemetry_handler_queues_caller_signed_record() {
         let (state, queue, chain_id, telemetry) = test_state_components();
-        #[cfg(feature = "telemetry")]
-        let telemetry_clone = telemetry.clone();
-        let (node, _dir) = sorafs_node_with_temp_storage();
-        let (deal_id, activation_epoch) = seed_sample_deal(&node);
-        let quotas = Arc::new(SorafsQuotaEnforcer::unlimited());
-
-        let deal_hex = hex::encode(deal_id.as_bytes());
-        let ticket_hex = hex::encode([0xCD; 32]);
-
-        let request = RecordDealUsageDto {
-            deal_id_hex: deal_hex.to_ascii_uppercase(),
-            epoch: activation_epoch + 1,
-            storage_gib_hours: (4 * GIB_HOURS_PER_MONTH) as u64,
-            egress_bytes: 1_048_576,
-            tickets: vec![DealUsageTicketDto {
-                ticket_id_hex: ticket_hex,
-                issued_epoch: activation_epoch + 1,
-                storage_gib_hours: 0,
-                egress_bytes: 0,
-            }],
-        };
-
-        let result = handle_post_sorafs_record_deal_usage(
-            chain_id,
-            queue,
-            state,
-            telemetry,
-            node,
-            quotas,
-            NoritoJson(request),
-        )
-        .await
-        .expect("handler ok");
-        assert_eq!(hex::encode(result.report.deal_id.as_bytes()), deal_hex);
-        assert_eq!(result.outcome.tickets_processed, 1);
-
-        let resp = result.response;
-
-        assert_eq!(resp.status(), axum::http::StatusCode::OK);
-        let bytes = http_body_util::BodyExt::collect(resp.into_body())
-            .await
-            .unwrap()
-            .to_bytes();
-        let json: RecordDealUsageResponseDto = norito::json::from_slice(&bytes).unwrap();
-        assert_eq!(json.deal_id_hex, deal_hex);
-        assert_eq!(json.tickets_processed, 1);
-        assert_eq!(json.tickets_won, 1);
-        assert!(!json.micropayment_credit_generated.is_zero());
-        #[cfg(feature = "telemetry")]
-        {
-            let tel = telemetry_clone
-                .telemetry()
-                .expect("test telemetry handle present");
-            let provider_hex = hex::encode([0xAA; 32]);
-            let sample = tel
-                .micropayment_sample(&provider_hex)
-                .expect("micropayment sample recorded");
-            assert_eq!(
-                &sample.credits.deterministic_charge,
-                json.deterministic_charge.as_quantity()
-            );
-            assert_eq!(
-                &sample.credits.credit_generated,
-                json.micropayment_credit_generated.as_quantity()
-            );
-            assert_eq!(
-                &sample.credits.credit_applied,
-                json.micropayment_credit_applied.as_quantity()
-            );
-            assert_eq!(
-                &sample.credits.credit_carry,
-                json.micropayment_credit_carry.as_quantity()
-            );
-            assert_eq!(&sample.credits.outstanding, json.outstanding.as_quantity());
-            assert_eq!(sample.tickets.processed, 1);
-            assert_eq!(sample.tickets.won, 1);
-            assert_eq!(sample.tickets.duplicate, 0);
-        }
-    }
-
-    #[tokio::test]
-    #[cfg(feature = "app_api")]
-    async fn deal_settlement_handler_returns_governance_payload() {
-        let (state, queue, chain_id, telemetry) = test_state_components();
-        let (node, _dir) = sorafs_node_with_temp_storage();
-        let (deal_id, activation_epoch) = seed_sample_deal(&node);
-        let quotas = Arc::new(SorafsQuotaEnforcer::unlimited());
-        let deal_hex = hex::encode(deal_id.as_bytes());
-
-        // Record usage window first.
-        let usage_req = RecordDealUsageDto {
-            deal_id_hex: deal_hex.clone(),
-            epoch: activation_epoch + 1,
-            storage_gib_hours: (4 * GIB_HOURS_PER_MONTH) as u64,
-            egress_bytes: 1_048_576,
-            tickets: vec![DealUsageTicketDto {
-                ticket_id_hex: hex::encode([0xEF; 32]),
-                issued_epoch: activation_epoch + 1,
-                storage_gib_hours: 0,
-                egress_bytes: 0,
-            }],
-        };
-        handle_post_sorafs_record_deal_usage(
-            chain_id.clone(),
-            queue.clone(),
-            state.clone(),
-            telemetry.clone(),
-            node.clone(),
-            quotas.clone(),
-            NoritoJson(usage_req),
-        )
-        .await
-        .expect("usage handler ok");
-
-        let settlement_req = SettleDealDto {
-            deal_id_hex: deal_hex.to_ascii_uppercase(),
-            settlement_epoch: activation_epoch + 8,
-        };
-
-        let result = handle_post_sorafs_settle_deal(
-            chain_id,
-            queue,
-            state,
-            telemetry,
-            node,
-            quotas,
-            NoritoJson(settlement_req),
-        )
-        .await
-        .expect("settlement handler ok");
-        assert_eq!(
-            hex::encode(result.outcome.record.deal_id.as_bytes()),
-            deal_hex
-        );
-
-        let resp = result.response;
-        assert_eq!(resp.status(), axum::http::StatusCode::OK);
-        let bytes = http_body_util::BodyExt::collect(resp.into_body())
-            .await
-            .unwrap()
-            .to_bytes();
-        let json: SettleDealResponseDto = norito::json::from_slice(&bytes).unwrap();
-        assert_eq!(json.deal_id_hex, deal_hex);
-        let settlement_raw = base64::engine::general_purpose::STANDARD
-            .decode(json.governance_settlement_b64.as_bytes())
-            .unwrap();
-        let settlement: DealSettlementV1 =
-            norito::decode_from_bytes(&settlement_raw).expect("decode settlement payload");
-        assert_eq!(
-            settlement.deal_id,
-            <[u8; 32]>::try_from(deal_id.as_bytes().as_slice()).unwrap()
-        );
-        assert_eq!(
-            settlement_raw, result.encoded,
-            "handler must surface encoded bytes in result struct"
-        );
-    }
-
-    #[tokio::test]
-    #[cfg(feature = "app_api")]
-    async fn capacity_dispute_handler_accepts_request_and_records_metrics() {
-        let (state, queue, chain_id, telemetry) = test_state_components();
-        let dispute = sample_capacity_dispute();
-        let dispute_bytes = norito::to_bytes(&dispute).expect("encode dispute");
-        let dispute_b64 = base64::engine::general_purpose::STANDARD.encode(&dispute_bytes);
-        let kp = checked_capacity_keypair(0x92, "derive capacity dispute fixture key");
-        let authority = dm::AccountId::new(kp.public_key().clone());
-
-        let req = RegisterCapacityDisputeDto {
-            authority,
-            private_key: dm::ExposedPrivateKey(kp.private_key().clone()),
-            dispute_b64,
-            submitted_epoch: dispute.submitted_epoch,
-            provider_id_hex: hex::encode(dispute.provider_id),
-            complainant_id_hex: hex::encode(dispute.complainant_id),
-            replication_order_id_hex: dispute.replication_order_id.map(hex::encode),
-            kind: "replication_shortfall".to_owned(),
-        };
-
-        let dispute_id = CapacityDisputeId::new(*blake3_hash(&dispute_bytes).as_bytes());
-
-        #[cfg(feature = "telemetry")]
-        let accepted_before = if telemetry.is_enabled() {
-            telemetry
-                .metrics()
-                .await
-                .torii_sorafs_disputes_total
-                .with_label_values(&["accepted"])
-                .get()
-        } else {
-            0
-        };
-
-        let quotas = Arc::new(SorafsQuotaEnforcer::unlimited());
-
-        let resp = handle_post_sorafs_register_capacity_dispute(
-            chain_id,
-            queue,
-            state,
-            telemetry.clone(),
-            quotas,
-            NoritoJson(req),
-        )
-        .await
-        .expect("handler ok")
-        .into_response();
-        assert_eq!(resp.status(), axum::http::StatusCode::OK);
-        let body = http_body_util::BodyExt::collect(resp.into_body())
-            .await
-            .unwrap()
-            .to_bytes();
-        let json: norito::json::Value = norito::json::from_slice(&body).unwrap();
-        let dispute_hex_from_resp = json
-            .get("dispute_id_hex")
-            .and_then(norito::json::Value::as_str)
-            .expect("response dispute id");
-        assert_eq!(dispute_hex_from_resp, hex::encode(dispute_id.as_bytes()));
-
-        #[cfg(feature = "telemetry")]
-        if telemetry.is_enabled() {
-            let metrics = telemetry.metrics().await;
-            let accepted_after = metrics
-                .torii_sorafs_disputes_total
-                .with_label_values(&["accepted"])
-                .get();
-            assert_eq!(accepted_after, accepted_before + 1);
-        }
-    }
-
-    #[tokio::test]
-    #[cfg(feature = "app_api")]
-    async fn capacity_schedule_handler_returns_plan() {
-        let (state, queue, chain_id, telemetry) = test_state_components();
-        let declaration = sample_capacity_declaration();
-        let declaration_bytes = norito::to_bytes(&declaration).expect("encode declaration");
-        let declaration_b64 = base64::engine::general_purpose::STANDARD.encode(&declaration_bytes);
-        let kp = checked_capacity_keypair(0x93, "derive capacity schedule fixture key");
-        let authority = dm::AccountId::new(kp.public_key().clone());
-
-        let register_req = RegisterCapacityDeclarationDto {
-            authority: authority.clone(),
-            private_key: dm::ExposedPrivateKey(kp.private_key().clone()),
-            declaration_b64,
-            registered_epoch: 10,
-            valid_from_epoch: 11,
-            valid_until_epoch: 20,
-            metadata: None,
-        };
-
-        let (node, _dir) = sorafs_node_with_temp_storage();
-        let quotas = Arc::new(SorafsQuotaEnforcer::unlimited());
-        handle_post_sorafs_register_capacity_declaration(
-            chain_id.clone(),
-            queue.clone(),
-            state.clone(),
-            telemetry.clone(),
-            node.clone(),
-            quotas.clone(),
-            NoritoJson(register_req),
-        )
-        .await
-        .expect("declaration handler ok");
-
-        let order = sample_replication_order(128);
-        let order_bytes = norito::to_bytes(&order).expect("encode order");
-        let order_b64 = base64::engine::general_purpose::STANDARD.encode(&order_bytes);
-        let schedule_req = ScheduleReplicationOrderDto { order_b64 };
-
-        let resp = handle_post_sorafs_schedule_replication_order(
-            telemetry.clone(),
-            node.clone(),
-            NoritoJson(schedule_req),
-        )
-        .await
-        .expect("schedule handler ok")
-        .into_response();
-
-        assert_eq!(resp.status(), axum::http::StatusCode::OK);
-        let bytes = http_body_util::BodyExt::collect(resp.into_body())
-            .await
-            .unwrap()
-            .to_bytes();
-        let v: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
-        assert_eq!(v.get("status").and_then(Value::as_str), Some("scheduled"));
-        assert_eq!(
-            v.get("assigned_slice_gib").and_then(Value::as_u64),
-            Some(128)
-        );
-        assert_eq!(
-            v.get("remaining_total_gib").and_then(Value::as_u64),
-            Some(896)
-        );
-    }
-
-    #[tokio::test]
-    #[cfg(feature = "app_api")]
-    async fn capacity_complete_handler_releases_capacity() {
-        let (state, queue, chain_id, telemetry) = test_state_components();
-        let declaration = sample_capacity_declaration();
-        let declaration_bytes = norito::to_bytes(&declaration).expect("encode declaration");
-        let declaration_b64 = base64::engine::general_purpose::STANDARD.encode(&declaration_bytes);
-        let kp = checked_capacity_keypair(0x94, "derive capacity complete fixture key");
-        let authority = dm::AccountId::new(kp.public_key().clone());
-
-        let register_req = RegisterCapacityDeclarationDto {
-            authority: authority.clone(),
-            private_key: dm::ExposedPrivateKey(kp.private_key().clone()),
-            declaration_b64,
-            registered_epoch: 5,
-            valid_from_epoch: 6,
-            valid_until_epoch: 30,
-            metadata: None,
-        };
-
-        let (node, _dir) = sorafs_node_with_temp_storage();
-        let quotas = Arc::new(SorafsQuotaEnforcer::unlimited());
-        handle_post_sorafs_register_capacity_declaration(
-            chain_id.clone(),
-            queue.clone(),
-            state.clone(),
-            telemetry.clone(),
-            node.clone(),
-            quotas.clone(),
-            NoritoJson(register_req),
-        )
-        .await
-        .expect("declaration handler ok");
-
-        let order = sample_replication_order(256);
-        let order_bytes = norito::to_bytes(&order).expect("encode order");
-        let order_b64 = base64::engine::general_purpose::STANDARD.encode(&order_bytes);
-        let schedule_req = ScheduleReplicationOrderDto { order_b64 };
-        handle_post_sorafs_schedule_replication_order(
-            telemetry.clone(),
-            node.clone(),
-            NoritoJson(schedule_req),
-        )
-        .await
-        .expect("schedule handler ok");
-
-        let complete_req = CompleteReplicationOrderDto {
-            order_id_hex: hex::encode(order.order_id),
-        };
-        let resp = handle_post_sorafs_complete_replication_order(
-            telemetry.clone(),
-            node.clone(),
-            NoritoJson(complete_req),
-        )
-        .await
-        .expect("complete handler ok")
-        .into_response();
-
-        assert_eq!(resp.status(), axum::http::StatusCode::OK);
-        let bytes = http_body_util::BodyExt::collect(resp.into_body())
-            .await
-            .unwrap()
-            .to_bytes();
-        let v: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
-        assert_eq!(v.get("status").and_then(Value::as_str), Some("completed"));
-        assert_eq!(v.get("released_gib").and_then(Value::as_u64), Some(256));
-        assert_eq!(
-            v.get("remaining_total_gib").and_then(Value::as_u64),
-            Some(1_024)
-        );
-    }
-
-    #[tokio::test]
-    #[cfg(feature = "app_api")]
-    async fn capacity_schedule_handler_ignored_when_not_targeted() {
-        let (node, _dir) = sorafs_node_with_temp_storage();
-        seed_capacity_declaration(&node);
-        let mut order = sample_replication_order(64);
-        order.assignments[0].provider_id = [0xFE; 32];
-        let order_bytes = norito::to_bytes(&order).expect("encode order");
-        let order_b64 = base64::engine::general_purpose::STANDARD.encode(&order_bytes);
-        let req = ScheduleReplicationOrderDto { order_b64 };
-
-        #[cfg(feature = "telemetry")]
-        let telemetry = MaybeTelemetry::for_tests();
-        #[cfg(not(feature = "telemetry"))]
-        let telemetry = MaybeTelemetry::disabled();
-
-        let resp = handle_post_sorafs_schedule_replication_order(telemetry, node, NoritoJson(req))
-            .await
-            .expect("schedule handler ok")
-            .into_response();
-
-        let bytes = http_body_util::BodyExt::collect(resp.into_body())
-            .await
-            .unwrap()
-            .to_bytes();
-        let v: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
-        assert_eq!(v.get("status").and_then(Value::as_str), Some("ignored"));
-    }
-
-    #[tokio::test]
-    #[cfg(feature = "app_api")]
-    async fn capacity_complete_handler_ignored_when_unknown() {
-        let (node, _dir) = sorafs_node_with_temp_storage();
-        seed_capacity_declaration(&node);
-
-        #[cfg(feature = "telemetry")]
-        let telemetry = MaybeTelemetry::for_tests();
-        #[cfg(not(feature = "telemetry"))]
-        let telemetry = MaybeTelemetry::disabled();
-
-        let req = CompleteReplicationOrderDto {
-            order_id_hex: hex::encode([0xEE; 32]),
-        };
-
-        let resp = handle_post_sorafs_complete_replication_order(telemetry, node, NoritoJson(req))
-            .await
-            .expect("complete handler ok")
-            .into_response();
-
-        let bytes = http_body_util::BodyExt::collect(resp.into_body())
-            .await
-            .unwrap()
-            .to_bytes();
-        let v: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
-        assert_eq!(v.get("status").and_then(Value::as_str), Some("ignored"));
-    }
-
-    #[tokio::test]
-    #[cfg(feature = "app_api")]
-    async fn capacity_telemetry_handler_accepts_request() {
-        let (state, queue, chain_id, telemetry) = test_state_components();
-        #[cfg(feature = "telemetry")]
-        let telemetry_clone = telemetry.clone();
-        let (node, _dir) = sorafs_node_with_temp_storage();
-        seed_capacity_declaration(&node);
         let quotas = Arc::new(SorafsQuotaEnforcer::unlimited());
         let provider_hex = hex::encode([0x11; 32]);
         let kp = checked_capacity_keypair(0x95, "derive capacity telemetry fixture key");
-        let authority = dm::AccountId::new(kp.public_key().clone());
-        let req = RecordCapacityTelemetryDto {
-            authority,
-            private_key: dm::ExposedPrivateKey(kp.private_key().clone()),
-            provider_id_hex: provider_hex.clone(),
-            window_start_epoch: 100,
-            window_end_epoch: 120,
-            declared_gib: 1_024,
-            effective_gib: 1_000,
-            utilised_gib: 980,
-            orders_issued: 10,
-            orders_completed: 9,
-            uptime_bps: 9_500,
-            por_success_bps: 9_200,
-            egress_bytes: 512 * 1_048_576,
-            gateway_egress_bytes: Some(512 * 1_048_576),
-            orchestrator_egress_bytes: Some(513 * 1_048_576),
-            pdp_challenges: 0,
-            pdp_failures: 0,
-            potr_windows: 0,
-            potr_breaches: 0,
-        };
+        let transaction = signed_capacity_telemetry_transaction(
+            chain_id.as_ref(),
+            &kp,
+            sample_capacity_telemetry_record(),
+        );
 
         let resp = handle_post_sorafs_record_capacity_telemetry(
             chain_id,
             queue,
             state,
             telemetry,
-            node,
             quotas,
-            NoritoJson(req),
+            transaction,
         )
         .await
         .expect("handler ok")
@@ -36583,117 +34268,98 @@ mod sorafs_capacity_tests {
                 .and_then(norito::json::Value::as_u64),
             Some(100)
         );
-        #[cfg(feature = "telemetry")]
-        {
-            let metrics = telemetry_clone.metrics().await;
-            assert_eq!(
-                metrics
-                    .torii_sorafs_egress_bytes
-                    .with_label_values(&[provider_hex.as_str(), "billing"])
-                    .get(),
-                (512 * 1_048_576) as f64
-            );
-            assert_eq!(
-                metrics
-                    .torii_sorafs_egress_bytes
-                    .with_label_values(&[provider_hex.as_str(), "gateway"])
-                    .get(),
-                (512 * 1_048_576) as f64
-            );
-            assert_eq!(
-                metrics
-                    .torii_sorafs_egress_bytes
-                    .with_label_values(&[provider_hex.as_str(), "orchestrator"])
-                    .get(),
-                (513 * 1_048_576) as f64
-            );
-            let drift = metrics
-                .torii_sorafs_egress_drift_ratio
-                .with_label_values(&[provider_hex.as_str(), "orchestrator"])
-                .get();
-            assert!((drift - (1.0 / 512.0)).abs() < f64::EPSILON);
-        }
     }
 
     #[tokio::test]
-    #[cfg(feature = "app_api")]
-    async fn capacity_telemetry_handler_rejects_invalid_ranges() {
+    async fn capacity_mutation_replay_is_rejected_by_the_transaction_queue() {
         let (state, queue, chain_id, telemetry) = test_state_components();
-        let (node, _dir) = sorafs_node_with_temp_storage();
-        seed_capacity_declaration(&node);
+        let key_pair = checked_capacity_keypair(0x97, "derive capacity replay fixture key");
+        let transaction = signed_capacity_telemetry_transaction(
+            chain_id.as_ref(),
+            &key_pair,
+            sample_capacity_telemetry_record(),
+        );
         let quotas = Arc::new(SorafsQuotaEnforcer::unlimited());
-        let kp = checked_capacity_keypair(0x96, "derive invalid capacity telemetry fixture key");
-        let authority = dm::AccountId::new(kp.public_key().clone());
-        let req = RecordCapacityTelemetryDto {
-            authority,
-            private_key: dm::ExposedPrivateKey(kp.private_key().clone()),
-            provider_id_hex: hex::encode([0x33; 32]),
-            window_start_epoch: 200,
-            window_end_epoch: 150,
-            declared_gib: 1_024,
-            effective_gib: 1_000,
-            utilised_gib: 980,
-            orders_issued: 5,
-            orders_completed: 5,
-            uptime_bps: 8_000,
-            por_success_bps: 7_500,
-            egress_bytes: 0,
-            gateway_egress_bytes: None,
-            orchestrator_egress_bytes: None,
-            pdp_challenges: 0,
-            pdp_failures: 0,
-            potr_windows: 0,
-            potr_breaches: 0,
-        };
 
-        let result = handle_post_sorafs_record_capacity_telemetry(
-            chain_id,
-            queue,
-            state,
-            telemetry,
-            node,
-            quotas,
-            NoritoJson(req),
+        handle_post_sorafs_record_capacity_telemetry(
+            Arc::clone(&chain_id),
+            Arc::clone(&queue),
+            Arc::clone(&state),
+            telemetry.clone(),
+            Arc::clone(&quotas),
+            transaction.clone(),
         )
-        .await;
-        match result {
-            Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(_))) => {}
-            Err(other) => panic!("unexpected error: {other:?}"),
-            Ok(_) => panic!("handler should reject invalid range"),
-        }
+        .await
+        .expect("first submission must be queued");
+
+        validate_sorafs_capacity_telemetry_transaction(chain_id.as_ref(), &transaction)
+            .expect("the signed transaction remains structurally valid");
+        assert!(
+            handle_post_sorafs_record_capacity_telemetry(
+                chain_id,
+                queue,
+                state,
+                telemetry,
+                quotas,
+                transaction,
+            )
+            .await
+            .is_err(),
+            "the queue must reject replay of the same signed transaction"
+        );
     }
 
-    #[tokio::test]
-    #[cfg(feature = "app_api")]
-    async fn uptime_observation_handler_records_sample() {
-        let (_state, _queue, _chain_id, telemetry) = test_state_components();
-        let (node, _dir) = sorafs_node_with_temp_storage();
-        seed_capacity_declaration(&node);
+    #[test]
+    fn capacity_telemetry_rejects_invalid_accounting_and_replay_nonce() {
+        let chain_id = ChainId::from("chain");
+        let kp = checked_capacity_keypair(0x96, "derive invalid capacity telemetry fixture key");
 
-        let req = RecordUptimeObservationDto {
-            uptime_secs: 600,
-            observed_secs: 600,
-        };
+        let mut invalid_records = Vec::new();
+        let mut invalid = sample_capacity_telemetry_record();
+        invalid.window_start_epoch = invalid.window_end_epoch + 1;
+        invalid_records.push(invalid);
+        let mut invalid = sample_capacity_telemetry_record();
+        invalid.effective_gib = invalid.declared_gib + 1;
+        invalid_records.push(invalid);
+        let mut invalid = sample_capacity_telemetry_record();
+        invalid.utilised_gib = invalid.effective_gib + 1;
+        invalid_records.push(invalid);
+        let mut invalid = sample_capacity_telemetry_record();
+        invalid.orders_completed = invalid.orders_issued + 1;
+        invalid_records.push(invalid);
+        let mut invalid = sample_capacity_telemetry_record();
+        invalid.uptime_bps = 10_001;
+        invalid_records.push(invalid);
+        let mut invalid = sample_capacity_telemetry_record();
+        invalid.pdp_failures = invalid.pdp_challenges + 1;
+        invalid_records.push(invalid);
+        let mut invalid = sample_capacity_telemetry_record();
+        invalid.potr_breaches = invalid.potr_windows + 1;
+        invalid_records.push(invalid);
 
-        let resp =
-            handle_post_sorafs_record_uptime_observation(telemetry, node.clone(), NoritoJson(req))
-                .await
-                .expect("uptime handler ok")
-                .into_response();
+        for record in invalid_records {
+            let transaction = signed_capacity_telemetry_transaction(&chain_id, &kp, record);
+            assert_eq!(
+                capacity_validation_code(
+                    validate_sorafs_capacity_telemetry_transaction(&chain_id, &transaction)
+                        .expect_err("invalid capacity accounting must fail closed")
+                ),
+                "sorafs_capacity_telemetry_record_invalid"
+            );
+        }
 
-        assert_eq!(resp.status(), axum::http::StatusCode::OK);
-        let bytes = http_body_util::BodyExt::collect(resp.into_body())
-            .await
-            .unwrap()
-            .to_bytes();
-        let v: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
-        assert_eq!(v.get("status").and_then(Value::as_str), Some("recorded"));
-        assert_eq!(v.get("uptime_secs").and_then(Value::as_u64), Some(600));
-
-        let snapshot = node.metering_snapshot();
-        assert_eq!(snapshot.uptime_samples_total, 1);
-        assert_eq!(snapshot.uptime_samples_success, 1);
-        assert_eq!(snapshot.uptime_bps, 10_000);
+        for invalid_nonce in [0, 119, 121] {
+            let mut record = sample_capacity_telemetry_record();
+            record.nonce = invalid_nonce;
+            let transaction = signed_capacity_telemetry_transaction(&chain_id, &kp, record);
+            assert_eq!(
+                capacity_validation_code(
+                    validate_sorafs_capacity_telemetry_transaction(&chain_id, &transaction)
+                        .expect_err("invalid capacity telemetry nonce must fail closed")
+                ),
+                "sorafs_capacity_telemetry_nonce_invalid"
+            );
+        }
     }
 
     #[tokio::test]
@@ -36916,48 +34582,6 @@ mod sorafs_capacity_tests {
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(msg),
             )) => assert!(msg.contains("invalid base64")),
             other => panic!("unexpected error: {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    #[cfg(feature = "app_api")]
-    async fn replication_failure_handler_marks_meter() {
-        let (_state, _queue, _chain_id, telemetry) = test_state_components();
-        let (node, _dir) = sorafs_node_with_temp_storage();
-        seed_capacity_declaration(&node);
-
-        let order = sample_replication_order(64);
-        node.schedule_replication_order(&order)
-            .expect("schedule order")
-            .expect("plan produced");
-
-        let req = RecordReplicationFailureDto {
-            order_id_hex: hex::encode(order.order_id),
-        };
-
-        let resp =
-            handle_post_sorafs_record_replication_failure(telemetry, node.clone(), NoritoJson(req))
-                .await
-                .expect("failure handler ok")
-                .into_response();
-
-        assert_eq!(resp.status(), axum::http::StatusCode::OK);
-        let bytes = http_body_util::BodyExt::collect(resp.into_body())
-            .await
-            .unwrap()
-            .to_bytes();
-        let v: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
-        assert_eq!(v.get("status").and_then(Value::as_str), Some("recorded"));
-        assert_eq!(v.get("recorded").and_then(Value::as_bool), Some(true));
-
-        let snapshot = node.metering_snapshot();
-        assert_eq!(snapshot.orders_failed, 1);
-        assert_eq!(snapshot.outstanding_orders, 0);
-
-        if let Some(Ok(payload)) = node.build_capacity_telemetry() {
-            assert_eq!(payload.failed_replications, 1);
-        } else {
-            panic!("telemetry payload not initialised");
         }
     }
 }
@@ -50605,53 +48229,6 @@ mod app_api_integration_tests {
     }
 
     #[tokio::test]
-    async fn asset_holders_query_aggregate_uses_local_projection_store_when_hot_cache_cold() {
-        let _guard = app_query_limits_guard();
-        clear_query_projection_archive_cache_for_tests();
-
-        let (state, _, _) = build_asset_holder_aggregate_fixture_state();
-        let published = publish_asset_holder_checkpoint_with_real_manifests(&state).await;
-        let (node, _storage_dir) = projection_query_sorafs_node_with_temp_storage();
-        let app = crate::tests_runtime_handlers::reconfigure_sorafs_runtime_for_tests(
-            crate::mk_app_state_for_tests(),
-            None,
-            node,
-        );
-
-        for (archive, manifest) in &published {
-            let manifest_digest = iroha_data_model::da::types::BlobDigest::new(
-                manifest
-                    .digest()
-                    .expect("digest projection archive manifest")
-                    .into(),
-            );
-            assert!(
-                persist_query_projection_archive_for_query(&app, archive, &manifest_digest)
-                    .expect("persist local projection archive"),
-                "test manifest digest should match reconstructed local manifest"
-            );
-        }
-
-        let parsed = run_asset_holder_alias_aggregate_query(Some(app), state).await;
-        assert_eq!(parsed["query_source"].as_str(), Some("projection_da_cache"));
-        let items = parsed["items"].as_array().expect("items array");
-        assert_eq!(items.len(), 2);
-        assert_eq!(
-            items[0]["primary_alias_domain"].as_str(),
-            Some("hbl.paynet")
-        );
-        assert_eq!(items[0]["user_count"].as_u64(), Some(2));
-        assert_eq!(items[0]["pkr_total"].as_str(), Some("15"));
-        assert_eq!(
-            items[1]["primary_alias_domain"].as_str(),
-            Some("ubl.paynet")
-        );
-        assert_eq!(items[1]["user_count"].as_u64(), Some(1));
-        assert_eq!(items[1]["pkr_total"].as_str(), Some("5"));
-        clear_query_projection_archive_cache_for_tests();
-    }
-
-    #[tokio::test]
     async fn asset_holders_query_aggregate_hydrates_projection_store_from_remote_provider() {
         use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -50674,7 +48251,6 @@ mod app_api_integration_tests {
         };
         let remote_origin = format!("http://{}", listener.local_addr().expect("listener addr"));
         let fixture = make_projection_provider_fixture(&remote_origin);
-        let provider_id_hex = hex::encode(fixture.provider_id());
         let manifest_requests = Arc::new(AtomicUsize::new(0));
         let fetch_requests = Arc::new(AtomicUsize::new(0));
         let mut manifest_responses = std::collections::HashMap::new();
@@ -51133,16 +48709,28 @@ mod app_api_integration_tests {
 
         let order_id =
             iroha_data_model::sorafs::pin_registry::ReplicationOrderId::new([order_seed; 32]);
-        let canonical_order =
-            norito::to_bytes(&sorafs_manifest::pin_registry::ReplicationOrderV1 {
-                order_id: *order_id.as_bytes(),
-                manifest_cid: manifest.root_cid.clone(),
-                providers: vec![provider_id],
-                redundancy: 1,
-                deadline: 24,
-                policy_hash: [0x51; 32],
-            })
-            .expect("encode replication order");
+        let canonical_order = norito::to_bytes(&sorafs_manifest::capacity::ReplicationOrderV1 {
+            version: sorafs_manifest::capacity::REPLICATION_ORDER_VERSION_V1,
+            order_id: *order_id.as_bytes(),
+            manifest_cid: manifest.root_cid.clone(),
+            manifest_digest: *manifest_digest.as_bytes(),
+            chunking_profile: "sorafs.sf1@1.0.0".to_owned(),
+            target_replicas: 1,
+            assignments: vec![sorafs_manifest::capacity::ReplicationAssignmentV1 {
+                provider_id,
+                slice_gib: 1,
+                lane: None,
+            }],
+            issued_at: 8,
+            deadline_at: 24,
+            sla: sorafs_manifest::capacity::ReplicationOrderSlaV1 {
+                ingest_deadline_secs: 16,
+                min_availability_percent_milli: 99_000,
+                min_por_success_percent_milli: 98_000,
+            },
+            metadata: Vec::new(),
+        })
+        .expect("encode replication order");
         tx.world_mut_for_testing()
             .replication_orders_mut_for_testing()
             .insert(
@@ -51151,10 +48739,19 @@ mod app_api_integration_tests {
                     order_id,
                     manifest_digest,
                     manifest_root_cid,
-                    issued_by: issuer,
+                    issued_by: issuer.clone(),
                     issued_epoch: 8,
                     deadline_epoch: 24,
                     canonical_order,
+                    provider_completions: vec![
+                        iroha_data_model::sorafs::pin_registry::ReplicationOrderCompletionRecord {
+                            provider_id: iroha_data_model::sorafs::capacity::ProviderId::new(
+                                provider_id,
+                            ),
+                            completed_by: issuer,
+                            completion_epoch: 9,
+                        },
+                    ],
                     status: iroha_data_model::sorafs::pin_registry::ReplicationOrderStatus::Completed(9),
                 },
             );
@@ -80343,41 +77940,6 @@ pub(crate) fn query_projection_archive_storage_artifacts(
 }
 
 #[cfg(feature = "app_api")]
-pub(crate) fn persist_query_projection_archive_for_query(
-    app: &crate::SharedAppState,
-    archive: &QueryProjectionShardArchive,
-    expected_manifest_digest: &iroha_data_model::da::types::BlobDigest,
-) -> Result<bool, Error> {
-    use sorafs_node::{NodeStorageError, store::StorageError};
-
-    let (payload, plan, manifest) = query_projection_archive_storage_artifacts(archive)?;
-    let manifest_digest = iroha_data_model::da::types::BlobDigest::new(
-        manifest
-            .digest()
-            .map_err(|err| {
-                query_projection_archive_validation_error(format!(
-                    "failed to digest reconstructed query projection manifest: {err}"
-                ))
-            })?
-            .into(),
-    );
-    if &manifest_digest != expected_manifest_digest {
-        return Ok(false);
-    }
-
-    let mut reader = payload.as_slice();
-    match app
-        .sorafs_node()
-        .ingest_manifest(&manifest, &plan, &mut reader)
-    {
-        Ok(_) | Err(NodeStorageError::Storage(StorageError::ManifestExists { .. })) => Ok(true),
-        Err(err) => Err(query_projection_archive_validation_error(format!(
-            "failed to seed local query projection archive store: {err}"
-        ))),
-    }
-}
-
-#[cfg(feature = "app_api")]
 fn validate_query_projection_asset_holder_archive(
     archive: &QueryProjectionShardArchive,
     checkpoint: &iroha_core::query::projection_checkpoint::QueryProjectionCheckpoint,
@@ -80615,26 +78177,7 @@ async fn hydrate_query_projection_archive_from_remote(
     let mut last_error = None;
     for source in &sources {
         match fetch_remote_query_projection_archive_from_source(&client, source).await {
-            Ok((manifest, payload)) => {
-                let stored = ingest_remote_query_projection_archive(app, &manifest, &payload)?;
-                let stored_payload = app
-                    .sorafs_node()
-                    .read_payload_range(
-                        stored.manifest_id(),
-                        0,
-                        usize::try_from(stored.content_length()).map_err(|_| {
-                            query_projection_archive_validation_error(
-                                "hydrated query projection archive exceeds host payload limits",
-                            )
-                        })?,
-                    )
-                    .map_err(|err| {
-                        query_projection_archive_validation_error(format!(
-                            "failed to reread hydrated query projection archive payload: {err}"
-                        ))
-                    })?;
-                return decode_query_projection_archive_payload(&stored_payload);
-            }
+            Ok((_manifest, payload)) => return decode_query_projection_archive_payload(&payload),
             Err(err) => {
                 iroha_logger::warn!(
                     provider_id_hex = %source.provider_id_hex,
@@ -80902,58 +78445,6 @@ async fn fetch_remote_query_projection_archive_from_source(
     }
 
     Ok((manifest, payload))
-}
-
-#[cfg(feature = "app_api")]
-fn ingest_remote_query_projection_archive(
-    app: &crate::SharedAppState,
-    manifest: &sorafs_manifest::ManifestV1,
-    payload: &[u8],
-) -> Result<sorafs_node::store::StoredManifest, Error> {
-    use sorafs_node::{NodeStorageError, store::StorageError};
-
-    let profile = crate::sorafs::api::chunk_profile_for_manifest(manifest).map_err(|response| {
-        query_projection_archive_validation_error(format!(
-            "failed to resolve chunk profile for hydrated projection archive (status {})",
-            response.into_response().status()
-        ))
-    })?;
-    let plan =
-        sorafs_car::CarBuildPlan::single_file_with_profile(payload, profile).map_err(|err| {
-            query_projection_archive_validation_error(format!(
-                "failed to rebuild chunk plan for hydrated projection archive: {err}"
-            ))
-        })?;
-
-    let mut reader = payload;
-    match app
-        .sorafs_node()
-        .ingest_manifest(manifest, &plan, &mut reader)
-    {
-        Ok(_) => {}
-        Err(NodeStorageError::Storage(StorageError::ManifestExists { .. })) => {}
-        Err(err) => {
-            return Err(query_projection_archive_validation_error(format!(
-                "failed to cache hydrated query projection archive locally: {err}"
-            )));
-        }
-    }
-
-    let manifest_digest: [u8; 32] = manifest
-        .digest()
-        .map_err(|err| {
-            query_projection_archive_validation_error(format!(
-                "failed to digest hydrated query projection manifest: {err}"
-            ))
-        })?
-        .into();
-    app.sorafs_node()
-        .manifest_metadata_by_digest(&manifest_digest)
-        .map_err(|err| {
-            query_projection_archive_validation_error(format!(
-                "failed to reload hydrated query projection archive metadata: {err}"
-            ))
-        })
 }
 
 // No route-level tests here to avoid heavy state setup; see filter unit tests for parser coverage.
@@ -81866,16 +79357,11 @@ mod tests {
             pipeline::{BlockEvent, BlockStatus},
         },
         metadata::Metadata,
-        sorafs::{
-            capacity::ProviderId,
-            deal::{ClientId, DealProposal, DealTerms, GIB_HOURS_PER_MONTH},
-            pin_registry::StorageClass,
-        },
+        sorafs::capacity::ProviderId,
     };
     use iroha_telemetry::metrics::{
         Metrics, MicropaymentCreditSnapshot, MicropaymentSampleStatus, MicropaymentTicketCounters,
     };
-    use sorafs_manifest::deal::DealSettlementV1;
     use tokio::runtime::Runtime;
 
     use super::{sorafs_capacity_tests::build_por_challenge, *};

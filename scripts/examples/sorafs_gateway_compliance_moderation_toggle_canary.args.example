@@ -1,5 +1,9 @@
-# Canonicalize real governed-control probes. No claim is synthesized.
+# Exercise governed-control canonicalization with a non-production fixture.
 --kind moderation_toggle
---probe-artifact /runtime/sorafs/gateway-compliance/probes/moderation-controls.json
+--probe-artifact scripts/examples/fixtures/gateway_compliance/moderation_toggle.json
 --out artifacts/sorafs_gateway/moderation-toggle-canary.json
---now-unix 1800100000
+--deployment-id sorafs-gateway-release-42
+--environment production
+--generated-at-unix 1800699940
+--now-unix 1800700000
+--non-production-fixture

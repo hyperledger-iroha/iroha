@@ -60,9 +60,12 @@ manifest creation, signing, synchronization, or version publication.
   and `versions.json`. The navbar version dropdown automatically surfaces the
   new snapshot.
 - **Syncing OpenAPI artifacts:** after cutting a version, refresh the canonical
-  spec and manifest via
-  `cargo run -p xtask --bin xtask -- openapi --sign <path-to-ed25519-key>`, then
-  capture a matching snapshot with
+  spec from a clean pinned commit and emit the detached signing payload via
+  `cargo run --locked --offline -p xtask --bin xtask -- openapi --output docs/portal/static/openapi/torii.json --unsigned-manifest --signing-payload <operator-staging>/openapi-manifest-v2.payload`.
+  Have the release HSM sign those exact bytes with Ed25519, then regenerate from
+  the same commit and attach only its public envelope with
+  `cargo run --locked --offline -p xtask --bin xtask -- openapi --output docs/portal/static/openapi/torii.json --signature-envelope <signature-envelope-json>`.
+  Local private-key signing is intentionally unavailable. Capture the matching snapshot with
   `npm run sync-openapi -- --version=2025-q3 --mirror=current --latest --allowed-signers=<operator-allowlist-path>`. The
   script writes `static/openapi/versions/2025-q3/torii.json`, mirrors the spec
   into `versions/current/torii.json`, updates `versions.json`, refreshes
@@ -86,11 +89,12 @@ manifest creation, signing, synchronization, or version publication.
   public keys and pass it with `--allowed-signers=<path>`; never use a public
   fixture or example key as a release trust root. A missing, malformed, stale,
   forged, or unapproved manifest always fails the sync before publication.
-  Re-run `cargo run -p xtask --bin xtask -- openapi --sign <key>` and then
+  Repeat the detached signing procedure in
+  `static/openapi/README.md`, then run
   `npm run sync-openapi -- --allowed-signers=<operator-allowlist-path>` so
   versioned snapshots pick up the signed metadata. For an explicitly
   unsigned development snapshot, first run
-  `cargo run -p xtask --bin xtask -- openapi --unsigned-manifest`, then
+  `cargo run --locked --offline -p xtask --bin xtask -- openapi --output docs/portal/static/openapi/torii.json --unsigned-manifest`, then
   pass `--allow-unsigned` to `sync-openapi`. This opt-in relaxes only the
   signature requirement; checksum and source-provenance verification remain
   mandatory. Never publish an unsigned development snapshot as a release.

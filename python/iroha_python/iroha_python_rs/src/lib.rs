@@ -141,9 +141,10 @@ use sorafs_car::{
 };
 use sorafs_chunker::ChunkProfile;
 use sorafs_manifest::{
-    ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1, OrderCancelReasonV1, OrderSideV1, OrderTierV1,
-    OrderbookOrderCancelFieldsV1, OrderbookOrderRequestFieldsV1,
-    OrderbookSettlementReceiptFieldsV1, OrderbookValidationPayloadKindV1, ValidationOutcomeV1,
+    FixtureBundlePayloadKindV1, FixtureBundlePayloadV1, ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1,
+    OrderCancelReasonV1, OrderSideV1, OrderTierV1, OrderbookOrderCancelFieldsV1,
+    OrderbookOrderRequestFieldsV1, OrderbookSettlementReceiptFieldsV1,
+    OrderbookValidationPayloadKindV1, ValidationOutcomeV1,
     alias_cache::{AliasCachePolicy, AliasProofState, decode_alias_proof, unix_now_secs},
     build_signed_orderbook_order_cancel_bytes_ed25519_v1,
     build_signed_orderbook_order_request_bytes_ed25519_v1,
@@ -154,12 +155,14 @@ use sorafs_manifest::{
         AliasBindingV1, AliasProofBundleV1, alias_merkle_root, alias_proof_signature_digest,
     },
     reference_ffi::{
-        SORAFS_REFERENCE_FFI_MAX_INPUT_BYTES_V1, SORAFS_REFERENCE_FFI_MAX_LABEL_BYTES_V1,
-        SORAFS_REFERENCE_GOVERNANCE_DAG_CID_BYTES_V1,
+        SORAFS_REFERENCE_FFI_MAX_BUNDLE_PAYLOADS_V1,
+        SORAFS_REFERENCE_FFI_MAX_BUNDLE_TOTAL_BYTES_V1, SORAFS_REFERENCE_FFI_MAX_INPUT_BYTES_V1,
+        SORAFS_REFERENCE_FFI_MAX_LABEL_BYTES_V1, SORAFS_REFERENCE_GOVERNANCE_DAG_CID_BYTES_V1,
         SORAFS_REFERENCE_GOVERNANCE_DAG_MAX_BLOCKS_V1,
     },
-    sign_orderbook_payload_bytes_ed25519_v1, validate_governance_dag_block_bytes,
-    validate_governance_dag_head_chain_bytes, validate_orderbook_payload_bytes,
+    sign_orderbook_payload_bytes_ed25519_v1, validate_fixture_bundle_payloads,
+    validate_governance_dag_block_bytes, validate_governance_dag_head_chain_bytes,
+    validate_governance_log_node_bytes, validate_orderbook_payload_bytes,
     validate_pdp_challenge_bytes, validate_pdp_challenge_proof_bytes,
     validate_pdp_commitment_bytes, validate_pdp_commitment_challenge_bytes,
     validate_pdp_commitment_challenge_proof_bytes, validate_pdp_proof_bytes,
@@ -4734,6 +4737,37 @@ fn parse_sorafs_pdp_payload_kind(kind: &str) -> PyResult<SorafsPdpPayloadKind> {
     }
 }
 
+fn parse_sorafs_fixture_bundle_payload_kind_py(kind: &str) -> PyResult<FixtureBundlePayloadKindV1> {
+    match kind {
+        "provider-advert" => Ok(FixtureBundlePayloadKindV1::ProviderAdvert),
+        "provider-admission-envelope" => Ok(FixtureBundlePayloadKindV1::ProviderAdmissionEnvelope),
+        "replication-order" => Ok(FixtureBundlePayloadKindV1::ReplicationOrder),
+        "por-challenge" => Ok(FixtureBundlePayloadKindV1::PorChallenge),
+        "por-proof" => Ok(FixtureBundlePayloadKindV1::PorProof),
+        "potr-receipt" => Ok(FixtureBundlePayloadKindV1::PotrReceipt),
+        "repair-evidence" => Ok(FixtureBundlePayloadKindV1::RepairEvidence),
+        "repair-report" => Ok(FixtureBundlePayloadKindV1::RepairReport),
+        "repair-task-record" => Ok(FixtureBundlePayloadKindV1::RepairTaskRecord),
+        "repair-slash-proposal" => Ok(FixtureBundlePayloadKindV1::RepairSlashProposal),
+        "repair-task-event" => Ok(FixtureBundlePayloadKindV1::RepairTaskEvent),
+        "orderbook-order-request" => Ok(FixtureBundlePayloadKindV1::OrderbookOrderRequest),
+        "orderbook-order-cancel" => Ok(FixtureBundlePayloadKindV1::OrderbookOrderCancel),
+        "orderbook-trade-event" => Ok(FixtureBundlePayloadKindV1::OrderbookTradeEvent),
+        "orderbook-settlement-channel" => {
+            Ok(FixtureBundlePayloadKindV1::OrderbookSettlementChannel)
+        }
+        "orderbook-settlement-receipt" => {
+            Ok(FixtureBundlePayloadKindV1::OrderbookSettlementReceipt)
+        }
+        "pdp-commitment" => Ok(FixtureBundlePayloadKindV1::PdpCommitment),
+        "pdp-challenge" => Ok(FixtureBundlePayloadKindV1::PdpChallenge),
+        "pdp-proof" => Ok(FixtureBundlePayloadKindV1::PdpProof),
+        _ => Err(PyValueError::new_err(format!(
+            "unsupported SoraFS fixture-bundle payload kind `{kind}`"
+        ))),
+    }
+}
+
 #[pyfunction]
 #[pyo3(name = "sorafs_validate_orderbook_payload_json")]
 fn sorafs_validate_orderbook_payload_json_py(
@@ -4817,9 +4851,7 @@ fn sorafs_build_signed_orderbook_order_request_py(
     } else {
         let provider_id = sorafs_fixed32_from_bytes_py(provider_id, "provider_id")?;
         if provider_id == [0; 32] {
-            return Err(PyValueError::new_err(
-                "provider_id must not be all zero",
-            ));
+            return Err(PyValueError::new_err("provider_id must not be all zero"));
         }
         Some(provider_id)
     };
@@ -4999,6 +5031,73 @@ fn sorafs_validate_pdp_bundle_json_py(
 }
 
 #[pyfunction]
+#[pyo3(name = "sorafs_validate_fixture_bundle_json")]
+fn sorafs_validate_fixture_bundle_json_py(
+    payloads: Vec<(String, Vec<u8>, String)>,
+    now_unix: u64,
+    generated_at_unix: u64,
+) -> PyResult<String> {
+    let maximum_payloads = SORAFS_REFERENCE_FFI_MAX_BUNDLE_PAYLOADS_V1 as usize;
+    if payloads.is_empty() || payloads.len() > maximum_payloads {
+        return Err(PyValueError::new_err(format!(
+            "payloads must contain 1..={maximum_payloads} entries"
+        )));
+    }
+    let mut kinds = Vec::with_capacity(payloads.len());
+    let mut aggregate_bytes = 0usize;
+    for (index, (kind, bytes, label)) in payloads.iter().enumerate() {
+        kinds.push(parse_sorafs_fixture_bundle_payload_kind_py(kind)?);
+        validate_sorafs_reference_label_py(label, &format!("payloads[{index}].label"))?;
+        aggregate_bytes = aggregate_bytes
+            .checked_add(bytes.len())
+            .and_then(|total| total.checked_add(label.len()))
+            .ok_or_else(|| {
+                PyValueError::new_err("fixture-bundle aggregate byte length overflowed")
+            })?;
+        let maximum_bytes = SORAFS_REFERENCE_FFI_MAX_BUNDLE_TOTAL_BYTES_V1 as usize;
+        if aggregate_bytes > maximum_bytes {
+            return Err(PyValueError::new_err(format!(
+                "fixture-bundle inputs exceed {maximum_bytes} aggregate bytes"
+            )));
+        }
+    }
+    let borrowed = payloads
+        .iter()
+        .zip(kinds)
+        .map(|((_, bytes, label), kind)| {
+            FixtureBundlePayloadV1::new(kind, label.clone(), bytes.as_slice())
+        })
+        .collect::<Vec<_>>();
+    let outcome = validate_fixture_bundle_payloads(&borrowed, now_unix, generated_at_unix);
+    sorafs_validation_outcome_json(&outcome)
+}
+
+#[pyfunction]
+#[pyo3(name = "sorafs_validate_governance_log_node_json")]
+fn sorafs_validate_governance_log_node_json_py(
+    norito_bytes: &[u8],
+    label: &str,
+    expected_node_cid: &[u8],
+    generated_at_unix: u64,
+) -> PyResult<String> {
+    validate_sorafs_reference_label_py(label, "label")?;
+    let expected_node_cid =
+        validate_sorafs_reference_governance_cid_py(Some(expected_node_cid), "expected_node_cid")?
+            .expect("required CID was supplied");
+    validate_sorafs_reference_aggregate_bytes_py(
+        "governance log-node validation",
+        [norito_bytes.len(), label.len(), expected_node_cid.len()],
+    )?;
+    let outcome = validate_governance_log_node_bytes(
+        norito_bytes,
+        label.to_owned(),
+        Some(expected_node_cid),
+        generated_at_unix,
+    );
+    sorafs_validation_outcome_json(&outcome)
+}
+
+#[pyfunction]
 #[pyo3(name = "sorafs_validate_governance_dag_block_json")]
 #[pyo3(signature = (norito_bytes, label, expected_block_cid, generated_at_unix))]
 fn sorafs_validate_governance_dag_block_json_py(
@@ -5145,6 +5244,24 @@ mod sorafs_reference_validation_py_tests {
                     .is_err()
             );
         }
+    }
+
+    #[test]
+    fn governance_log_node_reference_fixture_has_stable_outcome() {
+        let node =
+            include_bytes!("../../../../fixtures/sorafs_manifest/moderation/governance_node_v1.to");
+        let expected_node_cid =
+            hex::decode("9a2dc9a930494cbc70f0e4cab25df893fb607e83f1fa52520ed62dabca918d5a")
+                .expect("fixture node CID");
+        let outcome = validate_governance_log_node_bytes(
+            node,
+            "moderation/governance_node_v1.to",
+            Some(expected_node_cid.as_slice()),
+            1_700_001_234,
+        );
+        assert_eq!(outcome.status.as_str(), "Ok");
+        assert_eq!(outcome.code, "SFS-OK-000");
+        assert_eq!(outcome.generated_at, 1_700_001_234);
     }
 
     #[test]
@@ -15133,10 +15250,15 @@ impl Instruction {
         _cls: &Bound<'_, PyType>,
         escrow_id: &str,
         amount: &str,
+        expected_remaining_amount: &str,
     ) -> PyResult<Self> {
         let instruction = DrawdownAssetLock::new(
             parse_escrow_id(escrow_id, "escrow_id")?,
             parse_typed_quantity(amount, "asset lock amount")?,
+            parse_typed_quantity(
+                expected_remaining_amount,
+                "asset lock expected remaining amount",
+            )?,
         );
         Ok(Instruction::new(instruction.into()))
     }
@@ -20006,6 +20128,14 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     module.add_function(wrap_pyfunction!(
         sorafs_validate_pdp_bundle_json_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        sorafs_validate_fixture_bundle_json_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        sorafs_validate_governance_log_node_json_py,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(

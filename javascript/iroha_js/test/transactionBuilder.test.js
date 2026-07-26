@@ -10,6 +10,8 @@ import {
   buildTransactionPayload,
   signQuotedTransactionPayload,
   quoteAndSignTransaction,
+  buildRegisterPinManifestInstruction,
+  buildRegisterPinManifestTransaction,
   buildIvmProvedTransaction,
   buildIvmProvedTransactionPayload,
   signQuotedIvmProvedTransactionPayload,
@@ -673,6 +675,111 @@ test("quoteAndSignTransaction performs the guided exact-payload flow", async () 
   assert.equal(calls[1][0], "sign");
   assert.equal(calls[1][1], JSON.stringify(payload));
   assert.deepEqual(JSON.parse(calls[1][2]), quotedIntent);
+});
+
+test("buildRegisterPinManifestInstruction binds the canonical pin fields", () => {
+  const successor = Buffer.alloc(32, 0x44);
+  const instruction = buildRegisterPinManifestInstruction({
+    manifestPayload: Buffer.from("manifest"),
+    submittedEpoch: 42,
+    alias: {
+      namespace: "docs",
+      name: "main",
+      proof: Buffer.from("alias-proof"),
+    },
+    successorOf: successor,
+  });
+
+  assert.deepEqual(instruction, {
+    RegisterPinManifest: {
+      manifest_payload: Buffer.from("manifest").toString("base64"),
+      submitted_epoch: 42,
+      alias: {
+        namespace: "docs",
+        name: "main",
+        proof: Buffer.from("alias-proof").toString("base64"),
+      },
+      successor_of: [...successor],
+    },
+  });
+  assert.throws(
+    () =>
+      buildRegisterPinManifestInstruction({
+        manifestPayload: Buffer.alloc(0),
+        submittedEpoch: 42,
+      }),
+    /manifestPayload must contain/,
+  );
+  assert.throws(
+    () =>
+      buildRegisterPinManifestInstruction({
+        manifestPayload: Buffer.from("manifest"),
+        submittedEpoch: 42,
+        successorOf: Buffer.alloc(32),
+      }),
+    /32 non-zero bytes/,
+  );
+});
+
+test("buildRegisterPinManifestTransaction quotes and signs exactly one instruction", async () => {
+  const draftCalls = [];
+  const payload = {
+    chain: "guided-chain",
+    authority: AUTHORITY_ID,
+    fee_payment: {
+      payer: "authority",
+      value: { charge_limits: [], gas_limit: null },
+    },
+  };
+  const quotedIntent = payload.fee_payment;
+  await withNativeBindingAsync(
+    {
+      buildTransactionPayload: (...args) => {
+        draftCalls.push(args);
+        return {
+          payload_json: JSON.stringify(payload),
+          payload_bytes: Buffer.from([1]),
+          payload_hash: Buffer.alloc(32, 2),
+        };
+      },
+      signQuotedTransactionPayload: () => ({
+        signed_transaction: Buffer.from([3]),
+        hash: Buffer.alloc(32, 4),
+      }),
+    },
+    async () => {
+      const client = {
+        async quoteFees() {
+          return {
+            intent: quotedIntent,
+            observation: {},
+            components: [],
+            capacities: [],
+          };
+        },
+      };
+      const result = await buildRegisterPinManifestTransaction(client, {
+        chainId: "guided-chain",
+        authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
+        privateKey: PRIVATE_KEY,
+        manifestPayload: Buffer.from("manifest"),
+        submittedEpoch: 42,
+      });
+      assert.deepEqual(result.signedTransaction, Buffer.from([3]));
+    },
+  );
+
+  assert.equal(draftCalls.length, 1);
+  assert.equal(draftCalls[0][2].length, 1);
+  assert.deepEqual(JSON.parse(draftCalls[0][2][0]), {
+    RegisterPinManifest: {
+      manifest_payload: Buffer.from("manifest").toString("base64"),
+      submitted_epoch: 42,
+      alias: null,
+      successor_of: null,
+    },
+  });
 });
 
 test("proved-IVM quote draft preserves the proof attachment through signing", () => {

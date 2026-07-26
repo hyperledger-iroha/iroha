@@ -1061,6 +1061,35 @@ pub struct ModerationSubmitOutcomeV1 {
     pub replay: bool,
 }
 
+/// Payload-free durable health observed after one moderation worker pass.
+///
+/// This report contains only bounded queue counts and the finalized anchor. It
+/// is safe to use for readiness decisions and never contacts an external
+/// signer, ingress, reader, or handoff destination.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ModerationOrchestratorDurableHealthV1 {
+    /// Finalized anchor retained in the durable projection, when initialized.
+    pub finalized_cursor: Option<ModerationFinalizedCursorV1>,
+    /// Native submissions still awaiting a finalized terminal effect.
+    pub pending_submissions: usize,
+    /// Settlement/publication handoffs still awaiting a durable sink result.
+    pub pending_handoffs: usize,
+    /// Panel notifications not yet delivered or terminally dead-lettered.
+    pub pending_panel_notifications: usize,
+    /// Native submission or terminal-handoff dead letters.
+    pub durable_dead_letters: usize,
+    /// Panel-notification dead letters.
+    pub panel_notification_dead_letters: usize,
+}
+
+impl ModerationOrchestratorDurableHealthV1 {
+    /// Return whether durable work has reached a release-blocking terminal failure.
+    #[must_use]
+    pub const fn has_dead_letters(self) -> bool {
+        self.durable_dead_letters != 0 || self.panel_notification_dead_letters != 0
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 enum StoredOperationStatusV1 {
     Pending,
@@ -1686,6 +1715,44 @@ impl ModerationOrchestratorV1 {
                 .filter(|event| after.is_none_or(|cursor| event.sequence > cursor.sequence))
                 .take(limit.min(self.config.max_events))
                 .collect()
+        })
+    }
+
+    /// Return payload-free durable queue health without contacting collaborators.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the durable state is fail-stopped or its mutex is poisoned.
+    pub fn durable_health(
+        &self,
+    ) -> Result<ModerationOrchestratorDurableHealthV1, ModerationOrchestratorError> {
+        let state = self.lock_state()?;
+        let pending_panel_notifications = state
+            .panel_notifications
+            .iter()
+            .filter(|entry| {
+                matches!(
+                    entry.state,
+                    StoredPanelNotificationStateV1::Pending
+                        | StoredPanelNotificationStateV1::Claimed
+                )
+            })
+            .count();
+        let panel_notification_dead_letters = state
+            .panel_notifications
+            .iter()
+            .filter(|entry| entry.state == StoredPanelNotificationStateV1::DeadLetter)
+            .count();
+        Ok(ModerationOrchestratorDurableHealthV1 {
+            finalized_cursor: state
+                .finalized_snapshot
+                .as_ref()
+                .map(ModerationFinalizedLedgerSnapshotV1::anchor),
+            pending_submissions: state.outbox.len(),
+            pending_handoffs: state.pending_handoffs.len(),
+            pending_panel_notifications,
+            durable_dead_letters: state.dead_letters.len(),
+            panel_notification_dead_letters,
         })
     }
 
@@ -6632,6 +6699,7 @@ mod tests {
         ChainId,
         events::data::sorafs::SorafsModerationLedgerEvent,
         metadata::Metadata,
+        prelude::Json,
         sorafs::{
             moderation::{
                 SORAFS_MODERATION_BALLOT_CONTEXT_VERSION_V1, SoraFsModerationBallotContextV1,
@@ -6650,7 +6718,6 @@ mod tests {
         },
         transaction::{FeePaymentIntent, TransactionBuilder},
     };
-    use iroha_primitives::json::Json;
     use tempfile::TempDir;
 
     use super::*;
@@ -9989,6 +10056,12 @@ mod tests {
                     2_002,
                 )
                 .expect("ambiguous delivery is safely retryable by identity");
+            assert!(matches!(
+                orchestrator
+                    .panel_notification_status(claim.notification.notification_id)
+                    .expect("ambiguous delivery status"),
+                Some(ModerationPanelNotificationStatusV1::Pending { attempts: 2, .. })
+            ));
         }
         let third = orchestrator
             .claim_panel_notifications([0xC3; 32], 4_002, 3)
@@ -10015,6 +10088,7 @@ mod tests {
             ));
         }
 
+        let poison_cursor = snapshot.anchor();
         let poison = ModerationOrchestratorV1::open(
             config(&temp, "panel-poison.norito"),
             deps(
@@ -10049,6 +10123,12 @@ mod tests {
                 ..
             })
         ));
+        let health = poison
+            .durable_health()
+            .expect("payload-free durable health");
+        assert_eq!(health.finalized_cursor, Some(poison_cursor));
+        assert_eq!(health.panel_notification_dead_letters, 1);
+        assert!(health.has_dead_letters());
     }
 
     #[test]

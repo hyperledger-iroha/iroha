@@ -4,24 +4,21 @@ use std::{
     io::{self, Read, Write},
     path::{Path, PathBuf},
     sync::{
-        Mutex, MutexGuard,
+        Arc, Mutex, MutexGuard,
         atomic::{AtomicU64, Ordering},
     },
     time::{SystemTime, UNIX_EPOCH},
 };
 
 #[cfg(unix)]
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
-
-#[cfg(unix)]
-unsafe extern "C" {
-    fn geteuid() -> std::os::raw::c_uint;
-}
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+use ed25519_dalek::VerifyingKey as DalekVerifyingKey;
 use hex::ToHex;
-use iroha_crypto::{Algorithm, KeyPair, PrivateKey, Signature as IrohaSignature};
+use iroha_crypto::{Algorithm, PublicKey, Signature as IrohaSignature};
 use norito::json::{self, Map as JsonMap, Value as JsonValue};
+use reqwest::RequestBuilder;
 use sorafs_car::{CarBuildPlan, CarWriter, FileEntry};
 use sorafs_manifest::{
     GOVERNANCE_DAG_BLOCK_VERSION_V1, GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1,
@@ -35,6 +32,7 @@ use sorafs_manifest::{
     SorafsReconciliationReportV1,
     deal::{DealSettlementStatusV1, DealSettlementV1},
     governance_dag_block_cid_v1,
+    por::{PorChallengePublicationV1, PorWeeklyReportV1},
     repair::GcAuditEventV1,
 };
 
@@ -58,8 +56,161 @@ const GOVERNANCE_RUNTIME_DAG_DIR: &str = "runtime-dag";
 const GOVERNANCE_RUNTIME_DAG_BLOCKS_DIR: &str = "blocks";
 const GOVERNANCE_RUNTIME_DAG_HEAD_FILE: &str = "head.to";
 const GOVERNANCE_PUBLISHER_LOCK_FILE: &str = ".governance-publisher.lock";
-const GOVERNANCE_SIGNING_KEY_FILE_MAX_BYTES: usize = 64;
 const GOVERNANCE_MUTABLE_INDEX_MAX_BYTES: usize = 64 * 1024 * 1024;
+const GOVERNANCE_RUNTIME_HANDLE_MAX_BYTES: usize = 256;
+
+/// Runtime-only signing boundary for the local Governance DAG publisher.
+///
+/// Production implementations are expected to delegate to PKCS#11, an HSM, or
+/// a managed signing service. Private key bytes must never be returned to the
+/// caller, persisted below the publisher root, or sourced from
+/// [`iroha_config`](iroha_config).
+pub trait GovernanceDagRuntimeSigner: Send + Sync + fmt::Debug {
+    /// Opaque, non-secret deployment handle for this signer.
+    fn handle(&self) -> &str;
+
+    /// Governed publisher peer identity bound to this signer.
+    fn publisher_peer_id(&self) -> &[u8];
+
+    /// Raw Ed25519 public key bound to the opaque handle.
+    fn public_key(&self) -> [u8; 32];
+
+    /// Sign one exact canonical Governance DAG payload.
+    ///
+    /// Implementations must not include credentials or provider diagnostics in
+    /// the returned error. This crate nevertheless redacts every provider error
+    /// at the trust boundary.
+    fn sign(&self, payload: &[u8]) -> Result<[u8; 64], String>;
+}
+
+/// Authenticated Governance DAG endpoint class.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GovernanceDagAuthenticationScope {
+    /// Kubo/IPFS/IPNS control-plane request.
+    Ipfs,
+    /// Signed-head compare-and-swap request.
+    SignedHead,
+}
+
+/// Rotation-aware runtime authenticator for Governance DAG publication.
+///
+/// Implementations own credentials and apply the currently active credential
+/// on every request. This lets a deployment rotate bearer tokens, mTLS
+/// identities, or HSM-backed request signatures behind one stable opaque
+/// handle without copying secret material into resolved configuration.
+pub trait GovernanceDagRequestAuthenticator: Send + Sync + fmt::Debug {
+    /// Opaque, non-secret deployment handle for this authenticator.
+    fn handle(&self) -> &str;
+
+    /// Authenticate one exact outbound request.
+    fn authenticate(
+        &self,
+        scope: GovernanceDagAuthenticationScope,
+        request: RequestBuilder,
+    ) -> Result<RequestBuilder, String>;
+}
+
+/// Durable object class owned by the sealed Governance DAG checkpoint store.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GovernanceDagSealedStateSlot {
+    /// Last fully published and verified checkpoint.
+    Checkpoint,
+    /// Write-ahead publication intent.
+    PublishIntent,
+}
+
+impl GovernanceDagSealedStateSlot {
+    fn domain(self) -> &'static [u8] {
+        match self {
+            Self::Checkpoint => b"sorafs.governance_dag.sealed.checkpoint.v1",
+            Self::PublishIntent => b"sorafs.governance_dag.sealed.publish_intent.v1",
+        }
+    }
+}
+
+/// Unsealed canonical record returned by the runtime checkpoint provider.
+///
+/// The provider must keep this payload authenticated and confidential at rest.
+/// `revision` is a public content/CAS token checked again by the service.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GovernanceDagSealedStateRecord {
+    /// Monotonic publication generation bound to the record.
+    pub generation: u64,
+    /// Deterministic content revision.
+    pub revision: [u8; 32],
+    /// Canonical Norito payload recovered by the provider.
+    pub payload: Vec<u8>,
+}
+
+impl GovernanceDagSealedStateRecord {
+    /// Construct a record and bind its public CAS revision.
+    #[must_use]
+    pub fn new(slot: GovernanceDagSealedStateSlot, generation: u64, payload: Vec<u8>) -> Self {
+        let revision = governance_dag_sealed_state_revision(slot, generation, &payload);
+        Self {
+            generation,
+            revision,
+            payload,
+        }
+    }
+
+    /// Verify the record's deterministic public CAS revision.
+    #[must_use]
+    pub fn has_valid_revision(&self, slot: GovernanceDagSealedStateSlot) -> bool {
+        self.revision == governance_dag_sealed_state_revision(slot, self.generation, &self.payload)
+    }
+}
+
+/// Derive the deterministic public CAS token for sealed Governance DAG state.
+#[must_use]
+pub fn governance_dag_sealed_state_revision(
+    slot: GovernanceDagSealedStateSlot,
+    generation: u64,
+    payload: &[u8],
+) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(slot.domain());
+    hasher.update(&generation.to_le_bytes());
+    hasher.update(
+        &u64::try_from(payload.len())
+            .unwrap_or(u64::MAX)
+            .to_le_bytes(),
+    );
+    hasher.update(payload);
+    *hasher.finalize().as_bytes()
+}
+
+/// Runtime-only sealed, monotonic Governance DAG checkpoint storage.
+///
+/// Implementations must seal payloads at rest and enforce linearizable
+/// compare-and-swap. A generation may stay equal while an in-flight publish
+/// intent advances, but it must never decrease. Checkpoint generation must
+/// strictly advance, and deletes must compare-and-swap the exact last revision.
+pub trait GovernanceDagSealedCheckpointStore: Send + Sync + fmt::Debug {
+    /// Opaque, non-secret deployment handle for this store.
+    fn handle(&self) -> &str;
+
+    /// Load and unseal the latest record for `slot`.
+    fn load(
+        &self,
+        slot: GovernanceDagSealedStateSlot,
+    ) -> Result<Option<GovernanceDagSealedStateRecord>, String>;
+
+    /// Atomically store `next` if `expected_revision` is still current.
+    fn compare_and_swap(
+        &self,
+        slot: GovernanceDagSealedStateSlot,
+        expected_revision: Option<[u8; 32]>,
+        next: GovernanceDagSealedStateRecord,
+    ) -> Result<(), String>;
+
+    /// Atomically remove a transient record if its exact revision is current.
+    fn delete(
+        &self,
+        slot: GovernanceDagSealedStateSlot,
+        expected_revision: [u8; 32],
+    ) -> Result<(), String>;
+}
 
 #[derive(Debug, Clone)]
 struct PublishIndexEntryForCar {
@@ -73,7 +224,7 @@ struct PublishIndexEntryForCar {
 
 /// Persists governance artefacts on the filesystem for downstream ingestion.
 #[derive(Debug)]
-pub struct FilesystemGovernancePublisher {
+pub(crate) struct FilesystemGovernancePublisher {
     root: PathBuf,
     runtime_dag_signer: Option<GovernanceRuntimeDagSigner>,
     publication_lock: Mutex<()>,
@@ -82,14 +233,17 @@ pub struct FilesystemGovernancePublisher {
 
 #[derive(Clone)]
 struct GovernanceRuntimeDagSigner {
+    handle: String,
     publisher_peer_id: Vec<u8>,
-    private_key: PrivateKey,
-    public_key: Vec<u8>,
+    public_key: [u8; 32],
+    verification_key: PublicKey,
+    provider: Arc<dyn GovernanceDagRuntimeSigner>,
 }
 
 impl fmt::Debug for GovernanceRuntimeDagSigner {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("GovernanceRuntimeDagSigner")
+            .field("handle", &self.handle)
             .field("publisher_peer_id", &self.publisher_peer_id)
             .field("public_key", &hex::encode(&self.public_key))
             .finish_non_exhaustive()
@@ -97,8 +251,9 @@ impl fmt::Debug for GovernanceRuntimeDagSigner {
 }
 
 impl FilesystemGovernancePublisher {
-    /// Construct a new publisher rooted at the supplied directory.
-    pub fn try_new(root: PathBuf) -> io::Result<Self> {
+    /// Construct an unsigned base publisher for crate-internal signed startup
+    /// assembly and isolated tests.
+    pub(crate) fn try_new(root: PathBuf) -> io::Result<Self> {
         validate_atomic_output_path(&root.join(".governance-root-probe"))?;
         fs::create_dir_all(&root)?;
         validate_atomic_output_path(&root.join(".governance-root-probe"))?;
@@ -111,40 +266,20 @@ impl FilesystemGovernancePublisher {
         })
     }
 
-    /// Enable signed runtime Governance DAG block/head assembly.
-    pub fn with_runtime_dag_signer(
+    /// Enable signed runtime Governance DAG block/head assembly through an
+    /// injected runtime-only signer.
+    pub(crate) fn with_runtime_dag_signer_provider(
         mut self,
-        publisher_peer_id: impl Into<Vec<u8>>,
-        signing_key_path: impl AsRef<Path>,
+        expected_handle: impl Into<String>,
+        expected_publisher_peer_id: impl Into<Vec<u8>>,
+        expected_public_key: [u8; 32],
+        signer: Arc<dyn GovernanceDagRuntimeSigner>,
     ) -> Result<Self, GovernancePublishError> {
-        let signing_key_path = signing_key_path.as_ref();
-        validate_atomic_output_path(signing_key_path).map_err(|err| {
-            GovernancePublishError::other(format!(
-                "invalid governance runtime DAG signing key path {}: {err}",
-                signing_key_path.display()
-            ))
-        })?;
-        let canonical_key_path = fs::canonicalize(signing_key_path).map_err(|err| {
-            GovernancePublishError::other(format!(
-                "failed to resolve governance runtime DAG signing key path {}: {err}",
-                signing_key_path.display()
-            ))
-        })?;
-        let canonical_root = fs::canonicalize(&self.root).map_err(|err| {
-            GovernancePublishError::other(format!(
-                "failed to resolve governance publisher root {}: {err}",
-                self.root.display()
-            ))
-        })?;
-        if canonical_key_path.starts_with(&canonical_root) {
-            return Err(GovernancePublishError::other(
-                "governance runtime DAG signing key must be stored outside the publisher root",
-            ));
-        }
-        let private_key = load_runtime_dag_signing_key(signing_key_path)?;
         self.runtime_dag_signer = Some(GovernanceRuntimeDagSigner::try_new(
-            publisher_peer_id.into(),
-            private_key,
+            expected_handle.into(),
+            expected_publisher_peer_id.into(),
+            expected_public_key,
+            signer,
         )?);
         Ok(self)
     }
@@ -155,6 +290,14 @@ impl FilesystemGovernancePublisher {
 
     fn pdp_archive_root(&self) -> PathBuf {
         self.root.join("pdp").join("archives")
+    }
+
+    fn por_challenge_root(&self) -> PathBuf {
+        self.root.join("por").join("challenges")
+    }
+
+    fn por_report_root(&self) -> PathBuf {
+        self.root.join("por").join("reports")
     }
 
     fn gc_audit_root(&self) -> PathBuf {
@@ -772,9 +915,12 @@ fn current_unix_timestamp_seconds() -> u64 {
 
 impl GovernanceRuntimeDagSigner {
     fn try_new(
+        expected_handle: String,
         publisher_peer_id: Vec<u8>,
-        private_key: PrivateKey,
+        expected_public_key: [u8; 32],
+        provider: Arc<dyn GovernanceDagRuntimeSigner>,
     ) -> Result<Self, GovernancePublishError> {
+        validate_runtime_handle(&expected_handle, "governance runtime DAG signer")?;
         if publisher_peer_id.is_empty() {
             return Err(GovernancePublishError::other(
                 "governance runtime DAG publisher peer id must not be empty",
@@ -785,43 +931,82 @@ impl GovernanceRuntimeDagSigner {
                 "governance runtime DAG publisher peer id exceeds {GOVERNANCE_DAG_PUBLISHER_PEER_ID_MAX_BYTES_V1} bytes"
             )));
         }
-        let keypair = KeyPair::from_private_key(private_key.clone()).map_err(|err| {
-            GovernancePublishError::other(format!(
-                "failed to derive governance runtime DAG signing keypair: {err}"
-            ))
-        })?;
-        let (algorithm, public_key) = keypair.public_key().try_to_bytes().map_err(|err| {
-            GovernancePublishError::other(format!(
-                "failed to extract governance runtime DAG signing public key: {err}"
-            ))
-        })?;
-        if algorithm != Algorithm::Ed25519 {
-            return Err(GovernancePublishError::other(format!(
-                "governance runtime DAG signing key must derive an Ed25519 public key, found {}",
-                algorithm.as_static_str()
-            )));
+        if expected_public_key.iter().all(|byte| *byte == 0) {
+            return Err(GovernancePublishError::other(
+                "governance runtime DAG signer public key must not be all zero",
+            ));
         }
-        if public_key.len() != 32 {
-            return Err(GovernancePublishError::other(format!(
-                "governance runtime DAG signing public key must be 32 bytes, found {}",
-                public_key.len()
-            )));
+        let dalek_public_key =
+            DalekVerifyingKey::from_bytes(&expected_public_key).map_err(|_| {
+                GovernancePublishError::other(
+                    "governance runtime DAG signer public key is not a canonical Ed25519 point",
+                )
+            })?;
+        if dalek_public_key.to_bytes() != expected_public_key || dalek_public_key.is_weak() {
+            return Err(GovernancePublishError::other(
+                "governance runtime DAG signer public key is non-canonical or weak",
+            ));
+        }
+        let verification_key = PublicKey::from_bytes(Algorithm::Ed25519, &expected_public_key)
+            .map_err(|_| {
+                GovernancePublishError::other(
+                    "governance runtime DAG signer public key is not canonical Ed25519",
+                )
+            })?;
+        if provider.handle() != expected_handle {
+            return Err(GovernancePublishError::other(
+                "governance runtime DAG signer handle does not match configured handle",
+            ));
+        }
+        if provider.publisher_peer_id() != publisher_peer_id {
+            return Err(GovernancePublishError::other(
+                "governance runtime DAG signer publisher identity does not match configured identity",
+            ));
+        }
+        if provider.public_key() != expected_public_key {
+            return Err(GovernancePublishError::other(
+                "governance runtime DAG signer public key does not match configured public key",
+            ));
         }
         Ok(Self {
+            handle: expected_handle,
             publisher_peer_id,
-            private_key,
-            public_key: public_key.to_vec(),
+            public_key: expected_public_key,
+            verification_key,
+            provider,
         })
     }
 
     fn sign(&self, payload: &[u8]) -> Result<GovernanceLogSignatureV1, GovernancePublishError> {
-        let signature = IrohaSignature::try_new(&self.private_key, payload).map_err(|err| {
-            GovernancePublishError::other(format!("failed to sign governance runtime DAG: {err}"))
+        if self.provider.handle() != self.handle
+            || self.provider.publisher_peer_id() != self.publisher_peer_id
+            || self.provider.public_key() != self.public_key
+        {
+            return Err(GovernancePublishError::other(
+                "governance runtime DAG signer identity changed after injection",
+            ));
+        }
+        let signature_bytes = self.provider.sign(payload).map_err(|_| {
+            GovernancePublishError::other(
+                "governance runtime DAG signer refused the canonical payload",
+            )
         })?;
+        let signature = IrohaSignature::try_from_bytes(&signature_bytes).map_err(|_| {
+            GovernancePublishError::other(
+                "governance runtime DAG signer returned a malformed Ed25519 signature",
+            )
+        })?;
+        signature
+            .verify(&self.verification_key, payload)
+            .map_err(|_| {
+                GovernancePublishError::other(
+                    "governance runtime DAG signer returned a signature for another key or payload",
+                )
+            })?;
         Ok(GovernanceLogSignatureV1 {
             algorithm: GovernanceSignatureAlgorithm::Ed25519,
-            public_key: self.public_key.clone(),
-            signature: signature.payload().to_vec(),
+            public_key: self.public_key.to_vec(),
+            signature: signature_bytes.to_vec(),
         })
     }
 
@@ -834,169 +1019,22 @@ impl GovernanceRuntimeDagSigner {
     }
 }
 
-fn load_runtime_dag_signing_key(path: &Path) -> Result<PrivateKey, GovernancePublishError> {
-    let mut raw = read_governance_signing_key_file(path).map_err(|err| {
-        GovernancePublishError::other(format!(
-            "failed to read governance runtime DAG signing key from {}: {err}",
-            path.display()
-        ))
-    })?;
-    let parsed_key = if raw.len() == 64
-        && raw
-            .iter()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+fn validate_runtime_handle(
+    handle: &str,
+    label: &'static str,
+) -> Result<(), GovernancePublishError> {
+    if handle.is_empty()
+        || handle.len() > GOVERNANCE_RUNTIME_HANDLE_MAX_BYTES
+        || !handle.is_ascii()
+        || handle
+            .bytes()
+            .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
     {
-        hex::decode(&raw).map_err(|err| {
-            GovernancePublishError::other(format!(
-                "failed to decode governance runtime DAG hex signing key: {err}"
-            ))
-        })
-    } else if raw.len() == 32 {
-        Ok(raw.clone())
-    } else {
-        Err(GovernancePublishError::other(format!(
-            "governance runtime DAG signing key at {} must be exactly 32 raw bytes or 64 lowercase hex bytes without whitespace",
-            path.display()
-        )))
-    };
-    raw.fill(0);
-    let mut key_bytes = parsed_key?;
-    if key_bytes.iter().all(|byte| *byte == 0) {
-        key_bytes.fill(0);
-        return Err(GovernancePublishError::other(
-            "governance runtime DAG signing key must not be all zero",
-        ));
-    }
-
-    let mut array = [0u8; 32];
-    array.copy_from_slice(&key_bytes);
-    key_bytes.fill(0);
-    let parsed = PrivateKey::from_bytes(Algorithm::Ed25519, &array);
-    array.fill(0);
-    parsed.map_err(|err| {
-        GovernancePublishError::other(format!(
-            "failed to parse governance runtime DAG signing key: {err}"
-        ))
-    })
-}
-
-fn read_governance_signing_key_file(path: &Path) -> io::Result<Vec<u8>> {
-    let max_bytes_u64 = u64::try_from(GOVERNANCE_SIGNING_KEY_FILE_MAX_BYTES)
-        .expect("governance signing-key byte limit fits u64");
-    validate_atomic_output_path(path)?;
-    let before_open = fs::symlink_metadata(path)?;
-    validate_governance_signing_key_metadata(path, &before_open)?;
-    let mut options = fs::OpenOptions::new();
-    options.read(true);
-    set_no_follow_flag(&mut options);
-    let mut file = options.open(path)?;
-    let opened_metadata = file.metadata()?;
-    validate_governance_signing_key_metadata(path, &opened_metadata)?;
-    if !metadata_identifies_same_file(&before_open, &opened_metadata) {
-        return Err(io::Error::other(format!(
-            "governance runtime DAG signing key `{}` changed while opening",
-            path.display()
+        return Err(GovernancePublishError::other(format!(
+            "{label} handle must be 1..={GOVERNANCE_RUNTIME_HANDLE_MAX_BYTES} visible ASCII bytes without whitespace"
         )));
-    }
-    if opened_metadata.len() > max_bytes_u64 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!(
-                "governance runtime DAG signing key `{}` exceeds {} bytes",
-                path.display(),
-                GOVERNANCE_SIGNING_KEY_FILE_MAX_BYTES
-            ),
-        ));
-    }
-    let mut bytes = Vec::with_capacity(
-        usize::try_from(opened_metadata.len()).unwrap_or(GOVERNANCE_SIGNING_KEY_FILE_MAX_BYTES),
-    );
-    let read_result = (&mut file)
-        .take(max_bytes_u64.saturating_add(1))
-        .read_to_end(&mut bytes);
-    if let Err(err) = read_result {
-        bytes.fill(0);
-        return Err(err);
-    }
-    let validation = (|| -> io::Result<()> {
-        if bytes.len() > GOVERNANCE_SIGNING_KEY_FILE_MAX_BYTES {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!(
-                    "governance runtime DAG signing key `{}` exceeds {} bytes",
-                    path.display(),
-                    GOVERNANCE_SIGNING_KEY_FILE_MAX_BYTES
-                ),
-            ));
-        }
-        let after_read_file = file.metadata()?;
-        if !metadata_stable_during_read(&opened_metadata, &after_read_file) {
-            return Err(io::Error::other(format!(
-                "governance runtime DAG signing key `{}` changed while reading",
-                path.display()
-            )));
-        }
-        let after_read_path = fs::symlink_metadata(path)?;
-        validate_governance_signing_key_metadata(path, &after_read_path)?;
-        if !metadata_identifies_same_file(&opened_metadata, &after_read_path) {
-            return Err(io::Error::other(format!(
-                "governance runtime DAG signing key path `{}` changed while reading",
-                path.display()
-            )));
-        }
-        validate_atomic_output_path(path)
-    })();
-    if let Err(err) = validation {
-        bytes.fill(0);
-        return Err(err);
-    }
-    Ok(bytes)
-}
-
-fn validate_governance_signing_key_metadata(
-    path: &Path,
-    metadata: &fs::Metadata,
-) -> io::Result<()> {
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err(io::Error::other(format!(
-            "governance runtime DAG signing key `{}` must be a regular file",
-            path.display()
-        )));
-    }
-    #[cfg(unix)]
-    {
-        if metadata.nlink() != 1 {
-            return Err(io::Error::other(format!(
-                "governance runtime DAG signing key `{}` must have exactly one hard link",
-                path.display()
-            )));
-        }
-        if metadata.uid() != effective_user_id() {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                format!(
-                    "governance runtime DAG signing key `{}` must be owned by the effective user",
-                    path.display()
-                ),
-            ));
-        }
-        if metadata.permissions().mode() & 0o077 != 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                format!(
-                    "governance runtime DAG signing key `{}` must not be accessible by group or other users",
-                    path.display()
-                ),
-            ));
-        }
     }
     Ok(())
-}
-
-#[cfg(unix)]
-fn effective_user_id() -> u32 {
-    // SAFETY: `geteuid` takes no arguments, owns no resources, and cannot fail.
-    unsafe { geteuid() }
 }
 
 #[cfg(unix)]
@@ -2071,6 +2109,17 @@ fn validate_runtime_dag_signer_fields(
     index: &JsonMap,
     signer: &GovernanceRuntimeDagSigner,
 ) -> Result<(), GovernancePublishError> {
+    let handle = index
+        .get("signer_handle")
+        .and_then(JsonValue::as_str)
+        .ok_or_else(|| {
+            GovernancePublishError::other("governance runtime DAG index is missing `signer_handle`")
+        })?;
+    if handle != signer.handle {
+        return Err(GovernancePublishError::other(
+            "governance runtime DAG index signer handle does not match configured signer",
+        ));
+    }
     let expected_peer = signer.publisher_peer_id_hex();
     let expected_public_key = signer.publisher_public_key_hex();
     let peer = index
@@ -2103,6 +2152,10 @@ fn validate_runtime_dag_signer_fields(
 }
 
 fn insert_runtime_dag_signer_fields(index: &mut JsonMap, signer: &GovernanceRuntimeDagSigner) {
+    index.insert(
+        "signer_handle".into(),
+        JsonValue::from(signer.handle.clone()),
+    );
     index.insert(
         "publisher_peer_id".into(),
         JsonValue::from(String::from_utf8_lossy(&signer.publisher_peer_id).to_string()),
@@ -2719,6 +2772,172 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
             Ok(())
         })();
         record_governance_dag_publish_result("pdp_archive", &result, encoded.len());
+        result
+    }
+
+    fn publish_por_challenge_publication(
+        &self,
+        publication: &PorChallengePublicationV1,
+        encoded: &[u8],
+    ) -> Result<(), GovernancePublishError> {
+        let result = (|| -> Result<(), GovernancePublishError> {
+            let _publication_guard = self.lock_publication()?;
+            ensure_canonical_governance_encoding(
+                publication,
+                encoded,
+                "PoR challenge publication",
+            )?;
+            publication.validate().map_err(|error| {
+                GovernancePublishError::other(format!("invalid PoR challenge publication: {error}"))
+            })?;
+            let challenge = &publication.challenge;
+            let digest = blake3::hash(encoded);
+            let digest_hex = digest.to_hex().to_string();
+            let base_path = self
+                .por_challenge_root()
+                .join(format!("{:020}", challenge.epoch_id))
+                .join(hex::encode(challenge.challenge_id));
+
+            let encoded_path = base_path.with_extension("to");
+            write_atomic(&encoded_path, encoded)?;
+            write_digest_sidecar(&encoded_path, encoded)?;
+
+            let mut payload = JsonMap::new();
+            payload.insert(
+                "publication".into(),
+                json::to_value(publication).map_err(|error| {
+                    GovernancePublishError::other(format!(
+                        "serialize PoR challenge publication json: {error}"
+                    ))
+                })?,
+            );
+            payload.insert("encoded_blake3".into(), JsonValue::from(digest_hex.clone()));
+            let json_body = json::to_json_pretty(&JsonValue::Object(payload)).map_err(|error| {
+                GovernancePublishError::other(format!(
+                    "serialize PoR challenge publication json: {error}"
+                ))
+            })?;
+            let json_path = base_path.with_extension("json");
+            write_atomic(&json_path, json_body.as_bytes())?;
+            write_digest_sidecar(&json_path, json_body.as_bytes())?;
+
+            let mut labels = JsonMap::new();
+            labels.insert(
+                "challenge_id_hex".into(),
+                JsonValue::from(hex::encode(challenge.challenge_id)),
+            );
+            labels.insert(
+                "manifest_digest_hex".into(),
+                JsonValue::from(hex::encode(challenge.manifest_digest)),
+            );
+            labels.insert(
+                "provider_id_hex".into(),
+                JsonValue::from(hex::encode(challenge.provider_id)),
+            );
+            labels.insert("epoch_id".into(), JsonValue::from(challenge.epoch_id));
+            labels.insert(
+                "duplicate_samples".into(),
+                JsonValue::from(u64::from(publication.duplicate_samples)),
+            );
+            labels.insert("forced".into(), JsonValue::from(challenge.forced));
+            self.record_publish_index(
+                "por_challenge_publication",
+                &encoded_path,
+                &json_path,
+                &digest_hex,
+                encoded.len(),
+                labels,
+            )?;
+            self.record_runtime_signed_payload(
+                "por_challenge_publication",
+                GovernanceLogPayloadV1::PorChallengePublication(publication.clone()),
+                &encoded_path,
+                &json_path,
+                &digest_hex,
+                encoded.len(),
+            )?;
+            Ok(())
+        })();
+        record_governance_dag_publish_result("por_challenge_publication", &result, encoded.len());
+        result
+    }
+
+    fn publish_por_weekly_report(
+        &self,
+        report: &PorWeeklyReportV1,
+        encoded: &[u8],
+    ) -> Result<(), GovernancePublishError> {
+        let result = (|| -> Result<(), GovernancePublishError> {
+            let _publication_guard = self.lock_publication()?;
+            ensure_canonical_governance_encoding(report, encoded, "PoR weekly report")?;
+            report.validate().map_err(|error| {
+                GovernancePublishError::other(format!("invalid PoR weekly report: {error}"))
+            })?;
+            let digest = blake3::hash(encoded);
+            let digest_hex = digest.to_hex().to_string();
+            let base_path = self.por_report_root().join(format!(
+                "{:04}-W{:02}_{:020}_{}",
+                report.cycle.year,
+                report.cycle.week,
+                report.generated_at,
+                &digest_hex[..16],
+            ));
+
+            let encoded_path = base_path.with_extension("to");
+            write_atomic(&encoded_path, encoded)?;
+            write_digest_sidecar(&encoded_path, encoded)?;
+
+            let mut payload = JsonMap::new();
+            payload.insert(
+                "report".into(),
+                json::to_value(report).map_err(|error| {
+                    GovernancePublishError::other(format!(
+                        "serialize PoR weekly report json: {error}"
+                    ))
+                })?,
+            );
+            payload.insert("encoded_blake3".into(), JsonValue::from(digest_hex.clone()));
+            let json_body = json::to_json_pretty(&JsonValue::Object(payload)).map_err(|error| {
+                GovernancePublishError::other(format!("serialize PoR weekly report json: {error}"))
+            })?;
+            let json_path = base_path.with_extension("json");
+            write_atomic(&json_path, json_body.as_bytes())?;
+            write_digest_sidecar(&json_path, json_body.as_bytes())?;
+
+            let mut labels = JsonMap::new();
+            labels.insert("cycle".into(), JsonValue::from(report.cycle.to_string()));
+            labels.insert("generated_at".into(), JsonValue::from(report.generated_at));
+            labels.insert(
+                "challenges_total".into(),
+                JsonValue::from(u64::from(report.challenges_total)),
+            );
+            labels.insert(
+                "challenges_failed".into(),
+                JsonValue::from(u64::from(report.challenges_failed)),
+            );
+            labels.insert(
+                "forced_challenges".into(),
+                JsonValue::from(u64::from(report.forced_challenges)),
+            );
+            self.record_publish_index(
+                "por_weekly_report",
+                &encoded_path,
+                &json_path,
+                &digest_hex,
+                encoded.len(),
+                labels,
+            )?;
+            self.record_runtime_signed_payload(
+                "por_weekly_report",
+                GovernanceLogPayloadV1::PorWeeklyReport(report.clone()),
+                &encoded_path,
+                &json_path,
+                &digest_hex,
+                encoded.len(),
+            )?;
+            Ok(())
+        })();
+        record_governance_dag_publish_result("por_weekly_report", &result, encoded.len());
         result
     }
 
@@ -4210,6 +4429,10 @@ mod tests {
     use sorafs_manifest::deal::{
         DEAL_LEDGER_VERSION_V1, DEAL_SETTLEMENT_VERSION_V1, DealLedgerSnapshotV1, XorQuantity,
     };
+    use sorafs_manifest::por::{
+        POR_CHALLENGE_VERSION_V1, POR_WEEKLY_REPORT_VERSION_V1, PorChallengeV1,
+        derive_challenge_id, derive_challenge_seed,
+    };
     use sorafs_manifest::repair::{
         GC_AUDIT_EVENT_VERSION_V1, GC_AUDIT_PAYLOAD_VERSION_V1, GC_AUDIT_SIGNER_V1, GcAuditEventV1,
         GcAuditPayloadV1, SorafsAuditHeaderV1, gc_audit_payload_digest_v1,
@@ -4232,7 +4455,7 @@ mod tests {
         SoraFsModerationVoteCountsV1, SorafsReconciliationReportV1, build_reputation_snapshot,
         validate_governance_dag_head_against_chain_v1,
     };
-    use tempfile::{NamedTempFile, TempDir};
+    use tempfile::TempDir;
 
     use super::*;
 
@@ -4314,6 +4537,71 @@ mod tests {
         settlement.settlement_id = settlement.derive_settlement_id().expect("settlement id");
         let encoded = norito::to_bytes(&settlement).expect("encode settlement");
         (settlement, encoded)
+    }
+
+    fn sample_por_challenge_publication() -> (PorChallengePublicationV1, Vec<u8>) {
+        let manifest_digest = [0x41; 32];
+        let provider_id = [0x42; 32];
+        let epoch_id = 7;
+        let drand_round = 11;
+        let drand_randomness = [0x43; 32];
+        let seed = derive_challenge_seed(&drand_randomness, None, &manifest_digest, epoch_id);
+        let challenge = PorChallengeV1 {
+            version: POR_CHALLENGE_VERSION_V1,
+            challenge_id: derive_challenge_id(
+                &seed,
+                &manifest_digest,
+                &provider_id,
+                epoch_id,
+                drand_round,
+            ),
+            manifest_digest,
+            provider_id,
+            epoch_id,
+            drand_round,
+            drand_randomness,
+            drand_signature: [0x44; iroha_crypto::drand::DRAND_SIGNATURE_BYTES],
+            vrf_output: None,
+            vrf_proof: None,
+            forced: true,
+            chunking_profile: "sorafs.sf1@1.0.0".to_owned(),
+            seed,
+            sample_tier: 1,
+            sample_count: 3,
+            sample_indices: vec![5, 5, 9],
+            issued_at: 1_800_000_000,
+            deadline_at: 1_800_000_900,
+        };
+        let publication =
+            PorChallengePublicationV1::try_new(challenge, 1).expect("challenge publication");
+        let encoded = norito::to_bytes(&publication).expect("encode challenge publication");
+        (publication, encoded)
+    }
+
+    fn sample_por_weekly_report() -> (PorWeeklyReportV1, Vec<u8>) {
+        let report = PorWeeklyReportV1 {
+            version: POR_WEEKLY_REPORT_VERSION_V1,
+            cycle: PorReportIsoWeek {
+                year: 2026,
+                week: 30,
+            },
+            generated_at: 1_800_604_800,
+            challenges_total: 3,
+            challenges_verified: 2,
+            challenges_failed: 1,
+            forced_challenges: 1,
+            repairs_enqueued: 1,
+            repairs_completed: 1,
+            mean_latency_ms: Some(75),
+            p95_latency_ms: Some(120),
+            slashing_events: Vec::new(),
+            providers_missing_vrf: vec![[0x42; 32]],
+            top_offenders: Vec::new(),
+            notes: None,
+        };
+        report.validate().expect("weekly report");
+        let encoded = norito::to_bytes(&report).expect("encode weekly report");
+        (report, encoded)
     }
 
     fn sample_reputation_snapshot() -> (SignedReputationSnapshotV1, Vec<u8>) {
@@ -4572,7 +4860,7 @@ mod tests {
             amount_xor: xor("420"),
             tx_hash_hex: "22".repeat(32),
             reconciliation_digest_hex: "33".repeat(32),
-            reconciliation_status: "pending_client_submission".to_string(),
+            reconciliation_status: "pending_forwarder_submission".to_string(),
             observed_lifecycle_status: "locked".to_string(),
             observed_remaining_xor: xor("420"),
             deposit_xor: xor("420"),
@@ -4677,24 +4965,97 @@ mod tests {
         assert!(error.to_string().contains("exactly one hard link"));
     }
 
-    fn signed_runtime_publisher(root: &Path) -> FilesystemGovernancePublisher {
-        let key_file = NamedTempFile::new().expect("runtime DAG key file");
-        let key_path = key_file
-            .path()
-            .canonicalize()
-            .expect("canonical runtime DAG key path");
-        write_runtime_signing_key(&key_path, hex::encode([0x31; 32]).as_bytes());
-        FilesystemGovernancePublisher::try_new(root.to_path_buf())
-            .expect("publisher")
-            .with_runtime_dag_signer(b"12D3KooWRuntimeDagPublisher".to_vec(), &key_path)
-            .expect("runtime DAG signer")
+    struct TestRuntimeDagSigner {
+        handle: String,
+        publisher_peer_id: Vec<u8>,
+        key_pair: KeyPair,
+        public_key_override: Option<[u8; 32]>,
+        refuse_with: Option<String>,
+        corrupt_signature: bool,
     }
 
-    fn write_runtime_signing_key(path: &Path, bytes: &[u8]) {
-        fs::write(path, bytes).expect("write runtime DAG key");
-        #[cfg(unix)]
-        fs::set_permissions(path, fs::Permissions::from_mode(0o600))
-            .expect("secure runtime DAG key permissions");
+    impl fmt::Debug for TestRuntimeDagSigner {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter
+                .debug_struct("TestRuntimeDagSigner")
+                .field("handle", &self.handle)
+                .field("publisher_peer_id", &self.publisher_peer_id)
+                .finish_non_exhaustive()
+        }
+    }
+
+    impl TestRuntimeDagSigner {
+        fn new(handle: &str, publisher_peer_id: &[u8], seed: u8) -> Self {
+            Self {
+                handle: handle.to_owned(),
+                publisher_peer_id: publisher_peer_id.to_vec(),
+                key_pair: KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+                    .expect("derive test runtime DAG signer"),
+                public_key_override: None,
+                refuse_with: None,
+                corrupt_signature: false,
+            }
+        }
+
+        fn public_key_bytes(&self) -> [u8; 32] {
+            let (algorithm, bytes) = self
+                .key_pair
+                .public_key()
+                .try_to_bytes()
+                .expect("serialize test public key");
+            assert_eq!(algorithm, Algorithm::Ed25519);
+            bytes.try_into().expect("Ed25519 public key is fixed-width")
+        }
+    }
+
+    impl GovernanceDagRuntimeSigner for TestRuntimeDagSigner {
+        fn handle(&self) -> &str {
+            &self.handle
+        }
+
+        fn publisher_peer_id(&self) -> &[u8] {
+            &self.publisher_peer_id
+        }
+
+        fn public_key(&self) -> [u8; 32] {
+            self.public_key_override
+                .unwrap_or_else(|| self.public_key_bytes())
+        }
+
+        fn sign(&self, payload: &[u8]) -> Result<[u8; 64], String> {
+            if let Some(error) = &self.refuse_with {
+                return Err(error.clone());
+            }
+            let mut signature: [u8; 64] =
+                IrohaSignature::try_new(self.key_pair.private_key(), payload)
+                    .expect("test runtime signer can sign")
+                    .payload()
+                    .try_into()
+                    .expect("Ed25519 signature is fixed-width");
+            if self.corrupt_signature {
+                signature[0] ^= 0x80;
+            }
+            Ok(signature)
+        }
+    }
+
+    fn signed_runtime_publisher(root: &Path) -> FilesystemGovernancePublisher {
+        let peer_id = b"12D3KooWRuntimeDagPublisher".to_vec();
+        let signer = Arc::new(TestRuntimeDagSigner::new(
+            "pkcs11:governance-dag:test",
+            &peer_id,
+            0x31,
+        ));
+        let public_key = signer.public_key();
+        FilesystemGovernancePublisher::try_new(root.to_path_buf())
+            .expect("publisher")
+            .with_runtime_dag_signer_provider(
+                "pkcs11:governance-dag:test",
+                peer_id,
+                public_key,
+                signer,
+            )
+            .expect("runtime DAG signer")
     }
 
     fn runtime_index(root: &Path) -> JsonValue {
@@ -4781,6 +5142,74 @@ mod tests {
     }
 
     #[test]
+    fn filesystem_publisher_writes_por_payloads_into_one_signed_canonical_chain() {
+        let temp = tempdir().expect("tempdir");
+        let publisher = signed_runtime_publisher(temp.path());
+        let (publication, publication_encoded) = sample_por_challenge_publication();
+        let (report, report_encoded) = sample_por_weekly_report();
+
+        publisher
+            .publish_por_challenge_publication(&publication, &publication_encoded)
+            .expect("publish PoR challenge");
+        publisher
+            .publish_por_weekly_report(&report, &report_encoded)
+            .expect("publish PoR weekly report");
+
+        let challenge_path = temp
+            .path()
+            .join("por")
+            .join("challenges")
+            .join(format!("{:020}", publication.challenge.epoch_id))
+            .join(hex::encode(publication.challenge.challenge_id))
+            .with_extension("to");
+        assert_eq!(
+            fs::read(&challenge_path).expect("read canonical challenge publication"),
+            publication_encoded
+        );
+
+        let report_digest = blake3::hash(&report_encoded).to_hex().to_string();
+        let report_path = temp
+            .path()
+            .join("por")
+            .join("reports")
+            .join(format!(
+                "{:04}-W{:02}_{:020}_{}",
+                report.cycle.year,
+                report.cycle.week,
+                report.generated_at,
+                &report_digest[..16],
+            ))
+            .with_extension("to");
+        assert_eq!(
+            fs::read(&report_path).expect("read canonical weekly report"),
+            report_encoded
+        );
+
+        let index = runtime_index(temp.path());
+        let blocks = runtime_blocks_from_index(temp.path(), &index);
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[1].prev_block_cid, Some(blocks[0].block_cid.clone()));
+        assert_eq!(
+            blocks[1].node.prev_cid,
+            Some(blocks[0].node.node_cid.clone())
+        );
+        assert_eq!(
+            blocks[0].node.payload,
+            GovernanceLogPayloadV1::PorChallengePublication(publication)
+        );
+        assert_eq!(
+            blocks[1].node.payload,
+            GovernanceLogPayloadV1::PorWeeklyReport(report)
+        );
+        let head_bytes =
+            fs::read(runtime_dag_head_path(temp.path())).expect("read signed runtime head");
+        let head: GovernanceDagHeadV1 =
+            norito::decode_from_bytes(&head_bytes).expect("decode signed runtime head");
+        validate_governance_dag_head_against_chain_v1(&head, &blocks)
+            .expect("PoR runtime chain and head validate");
+    }
+
+    #[test]
     fn filesystem_publisher_root_has_a_single_process_owner() {
         let temp = tempdir().expect("tempdir");
         let owner = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
@@ -4833,41 +5262,29 @@ mod tests {
     }
 
     #[test]
-    fn runtime_dag_signing_key_rejects_noncanonical_and_inert_material() {
-        let temp = tempdir().expect("tempdir");
-        let key_path = temp.path().join("runtime.key");
+    fn runtime_dag_signer_rejects_invalid_handle_and_oversized_identity() {
+        let peer_id = b"12D3KooWRuntimeDagPublisher".to_vec();
+        let signer = Arc::new(TestRuntimeDagSigner::new(
+            "pkcs11:governance-dag:test",
+            &peer_id,
+            0x31,
+        ));
+        let public_key = signer.public_key();
 
-        write_runtime_signing_key(&key_path, &[0x31; 32]);
-        load_runtime_dag_signing_key(&key_path).expect("nonzero raw seed");
-
-        write_runtime_signing_key(&key_path, hex::encode([0xAB; 32]).as_bytes());
-        load_runtime_dag_signing_key(&key_path).expect("canonical lowercase hex seed");
-
-        write_runtime_signing_key(&key_path, hex::encode_upper([0xAB; 32]).as_bytes());
-        let error = load_runtime_dag_signing_key(&key_path)
-            .expect_err("uppercase hex signing seed must fail");
-        assert!(error.to_string().contains("64 lowercase hex bytes"));
-
-        let mut whitespace = hex::encode([0xAB; 32]).into_bytes();
-        whitespace.push(b'\n');
-        write_runtime_signing_key(&key_path, &whitespace);
-        let error = load_runtime_dag_signing_key(&key_path)
-            .expect_err("whitespace-bearing signing seed must fail");
-        assert!(error.to_string().contains("exceeds 64 bytes"));
-
-        write_runtime_signing_key(&key_path, &[0; 32]);
-        let error =
-            load_runtime_dag_signing_key(&key_path).expect_err("all-zero signing seed must fail");
-        assert!(error.to_string().contains("must not be all zero"));
-    }
-
-    #[test]
-    fn runtime_dag_signer_rejects_oversized_publisher_identity() {
-        let private_key =
-            PrivateKey::from_bytes(Algorithm::Ed25519, &[0x31; 32]).expect("test Ed25519 key");
         let error = GovernanceRuntimeDagSigner::try_new(
+            "contains whitespace".to_owned(),
+            peer_id.clone(),
+            public_key,
+            signer.clone(),
+        )
+        .expect_err("whitespace-bearing signer handle must fail closed");
+        assert!(error.to_string().contains("without whitespace"));
+
+        let error = GovernanceRuntimeDagSigner::try_new(
+            signer.handle().to_owned(),
             vec![0x41; GOVERNANCE_DAG_PUBLISHER_PEER_ID_MAX_BYTES_V1 + 1],
-            private_key,
+            public_key,
+            signer,
         )
         .expect_err("oversized governance publisher identity must fail closed");
         assert!(
@@ -4878,51 +5295,104 @@ mod tests {
     }
 
     #[test]
-    fn runtime_dag_signer_rejects_key_inside_publisher_root() {
-        let temp = tempdir().expect("tempdir");
-        let key_path = temp.path().join("runtime.key");
-        write_runtime_signing_key(&key_path, &[0x31; 32]);
-        let publisher =
-            FilesystemGovernancePublisher::try_new(temp.path().to_path_buf()).expect("publisher");
-        let error = publisher
-            .with_runtime_dag_signer(b"12D3KooWRuntimeDagPublisher".to_vec(), &key_path)
-            .expect_err("publisher-root signing secret must fail");
-        assert!(error.to_string().contains("outside the publisher root"));
+    fn runtime_dag_signer_rejects_handle_peer_and_public_key_mismatch() {
+        let peer_id = b"12D3KooWRuntimeDagPublisher".to_vec();
+        let signer = Arc::new(TestRuntimeDagSigner::new(
+            "pkcs11:governance-dag:test",
+            &peer_id,
+            0x31,
+        ));
+        let public_key = signer.public_key();
+
+        for (handle, peer, key, expected) in [
+            (
+                "pkcs11:governance-dag:other",
+                peer_id.clone(),
+                public_key,
+                "handle does not match",
+            ),
+            (
+                signer.handle(),
+                b"12D3KooWOtherPublisher".to_vec(),
+                public_key,
+                "publisher identity does not match",
+            ),
+            (
+                signer.handle(),
+                peer_id.clone(),
+                [0xA5; 32],
+                "public key does not match",
+            ),
+        ] {
+            let error =
+                GovernanceRuntimeDagSigner::try_new(handle.to_owned(), peer, key, signer.clone())
+                    .expect_err("mismatched runtime signer must fail closed");
+            assert!(error.to_string().contains(expected), "{error}");
+        }
     }
 
-    #[cfg(unix)]
     #[test]
-    fn runtime_dag_signing_key_rejects_permissive_mode_and_symlink() {
-        let temp = tempdir().expect("tempdir");
-        let key_path = temp.path().join("runtime.key");
-        fs::write(&key_path, [0x31; 32]).expect("write permissive key");
-        fs::set_permissions(&key_path, fs::Permissions::from_mode(0o644))
-            .expect("set permissive mode");
-        let error = load_runtime_dag_signing_key(&key_path)
-            .expect_err("group-readable signing key must fail");
-        assert!(error.to_string().contains("group or other users"));
-
-        let target = temp.path().join("runtime-target.key");
-        write_runtime_signing_key(&target, &[0x31; 32]);
-        fs::remove_file(&key_path).expect("remove permissive key");
-        std::os::unix::fs::symlink(&target, &key_path).expect("create signing-key symlink");
-        let error =
-            load_runtime_dag_signing_key(&key_path).expect_err("signing-key symlink must fail");
-        assert!(error.to_string().contains("must not be a symlink"));
+    fn runtime_dag_signer_rejects_malformed_and_weak_ed25519_keys() {
+        let peer_id = b"12D3KooWRuntimeDagPublisher".to_vec();
+        for (public_key, expected) in [
+            ([0xFF; 32], "canonical Ed25519 point"),
+            (
+                {
+                    let mut identity = [0_u8; 32];
+                    identity[0] = 1;
+                    identity
+                },
+                "non-canonical or weak",
+            ),
+        ] {
+            let mut signer =
+                TestRuntimeDagSigner::new("pkcs11:governance-dag:test", &peer_id, 0x31);
+            signer.public_key_override = Some(public_key);
+            let signer = Arc::new(signer);
+            let error = GovernanceRuntimeDagSigner::try_new(
+                signer.handle().to_owned(),
+                peer_id.clone(),
+                public_key,
+                signer,
+            )
+            .expect_err("malformed or weak Ed25519 key must fail during provider binding");
+            assert!(error.to_string().contains(expected), "{error}");
+        }
     }
 
-    #[cfg(unix)]
     #[test]
-    fn runtime_dag_signing_key_rejects_hard_link() {
-        let temp = tempdir().expect("tempdir");
-        let target = temp.path().join("runtime-target.key");
-        let key_path = temp.path().join("runtime.key");
-        write_runtime_signing_key(&target, &[0x31; 32]);
-        fs::hard_link(&target, &key_path).expect("create signing-key hard link");
+    fn runtime_dag_signer_redacts_provider_error_and_rejects_wrong_signature() {
+        let peer_id = b"12D3KooWRuntimeDagPublisher".to_vec();
+        let mut refusing = TestRuntimeDagSigner::new("pkcs11:governance-dag:test", &peer_id, 0x31);
+        refusing.refuse_with = Some("bearer=must-never-escape".to_owned());
+        let refusing = Arc::new(refusing);
+        let wrapped = GovernanceRuntimeDagSigner::try_new(
+            refusing.handle().to_owned(),
+            peer_id.clone(),
+            refusing.public_key(),
+            refusing,
+        )
+        .expect("bind refusing test provider");
+        let error = wrapped
+            .sign(b"canonical governance payload")
+            .expect_err("provider outage must fail closed");
+        assert!(error.to_string().contains("refused"));
+        assert!(!error.to_string().contains("must-never-escape"));
 
-        let error =
-            load_runtime_dag_signing_key(&key_path).expect_err("hard-linked key must fail closed");
-        assert!(error.to_string().contains("exactly one hard link"));
+        let mut corrupt = TestRuntimeDagSigner::new("pkcs11:governance-dag:test", &peer_id, 0x31);
+        corrupt.corrupt_signature = true;
+        let corrupt = Arc::new(corrupt);
+        let wrapped = GovernanceRuntimeDagSigner::try_new(
+            corrupt.handle().to_owned(),
+            peer_id,
+            corrupt.public_key(),
+            corrupt,
+        )
+        .expect("bind corrupt test provider");
+        let error = wrapped
+            .sign(b"canonical governance payload")
+            .expect_err("wrong signature must fail closed");
+        assert!(error.to_string().contains("another key or payload"));
     }
 
     #[test]

@@ -1,149 +1,20 @@
-# SoraFS Node Prototype Implementation Plan (SF-3)
+<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
 
-SF-3 delivers the first runnable `sorafs-node` crate that turns an Iroha/Torii
-process into a SoraFS storage provider. This plan translates the high-level
-storage design into concrete engineering tasks, milestones, and test coverage.
-It should be used alongside `sorafs_node_storage.md`, the provider admission
-policy, and the capacity marketplace roadmap.
+---
+lang: ur
+direction: rtl
+source: docs/source/sorafs/sorafs_node_plan.md
+status: needs-translation
+generator: scripts/sync_docs_i18n.py
+source_hash: b996f5b61384bfe184207ad8f5866e5cdb961cd6a4b0839163314ef82d5ae3f0
+source_last_modified: "2026-07-25T23:14:10.820811+00:00"
+translation_last_reviewed: null
+---
 
-> **Portal:** Mirrored in `docs/portal/docs/sorafs/node-plan.md`. Update both
-> copies to keep reviewers aligned.
+# ترجمہ جاری ہے
 
-## Target Scope (Milestone M1)
+<div dir="rtl">
+یہ فائل انگریزی دستاویز کے اردو ترجمے کے لیے ایک عارضی نمونہ ہے۔ ترجمہ مکمل ہونے کے بعد اوپر موجود میٹا ڈیٹا میں `status` فیلڈ کو اپ ڈیٹ کریں۔
 
-1. **Chunk store integration**: wrap `sorafs_car::ChunkStore` with a persistent
-   backend that stores chunk bytes, manifests, and PoR trees in the configured
-   data directory.
-2. **Gateway endpoints**: expose Norito HTTP endpoints for pin submission,
-   chunk fetch, PoR sampling, and storage telemetry within the Torii process.
-3. **Configuration plumbing**: add `SoraFsStorage` config struct (enabled,
-   capacity, directories, concurrency limits) wired through `iroha_config`,
-   `iroha_core`, and `iroha_torii`.
-4. **Quota/scheduling**: enforce operator-defined disk/parallelism limits and
-   queue requests with back-pressure.
-5. **Telemetry**: emit metrics/logs for pin success, chunk fetch latency,
-   capacity utilisation, PoR sampling results.
-
-## Work Breakdown
-
-### A. Crate & Module Structure
-
-| Task | Owner(s) | Notes |
-|------|----------|-------|
-| Create `crates/sorafs_node` with modules: `config`, `store`, `gateway`, `scheduler`, `telemetry`. | Storage Team | Re-export reusable types for Torii integration. |
-| Implement `StorageConfig` mapped from `SoraFsStorage` (actual/default/user). | Storage Team / Config WG | Ensure Norito/config snapshot parity without production environment overrides. |
-| Provide `NodeHandle` facade that Torii uses to submit pins/fetches. | Storage Team | Encapsulate storage internals. |
-
-### B. Persistent Chunk Store
-
-| Task | Owner(s) | Notes |
-|------|----------|-------|
-| Build disk backend wrapping `sorafs_car::ChunkStore` with an on-disk manifest index (sled/sqlite?). | Storage Team | Deterministic layout: `<data_dir>/<manifest_cid>/chunk_{idx}.bin`. |
-| Maintain PoR metadata (64 KiB/4 KiB trees) using existing `ChunkStore::sample_leaves`. | Storage Team | Support resuming after restart. |
-| Implement integrity replay on startup (rehash manifest entries, prune incomplete pins). | Storage Team | Fail fast if corruption detected. |
-
-### C. Gateway Endpoints
-
-| Endpoint | Behaviour | Tasks |
-|----------|-----------|-------|
-| `GET /v1/sorafs/pin`, `POST /v1/sorafs/pin/register`, `GET /v1/sorafs/pin/{digest_hex}` | Read the pin registry, register paid manifest pins, and fetch bounded manifest pin details. | Validate chunker profiles, manifest payloads, pin policy, fee receipt context, aliases, and successor links before queueing the signed transaction. |
-| `POST /v1/sorafs/storage/pin`, `POST /v1/sorafs/storage/fetch`, `POST /v1/sorafs/storage/token` | Store payload bytes for an approved manifest, fetch content ranges, and issue storage access tokens. | Enforce quotas, token policy, provider capability checks, and scheduler/back-pressure limits. |
-| `GET /v1/sorafs/storage/manifest/{manifest_id}`, `GET /v1/sorafs/storage/plan/{manifest_id}`, `GET /v1/sorafs/storage/car/{manifest_id}`, `GET /v1/sorafs/storage/chunk/{manifest_id}/{chunk_digest}` | Serve bounded manifest metadata, deterministic chunk plans, CAR bytes, and individual chunk bytes. | Keep readback arrays bounded while preserving total counts and verify digest/path bindings before streaming bytes. |
-| `GET /v1/sorafs/storage/peers`, `GET /v1/sorafs/storage/state`, `POST /v1/sorafs/storage/por-sample` | Report peer/storage state and request bounded local PoR samples. Proof and verdict admission use the authenticated capacity lifecycle; direct storage mutation routes are not mounted. | Reuse chunk-store sampling, update telemetry, and preserve governance-verdict replay state. |
-
-The runtime now threads these PoR interactions through `sorafs_node::por`: the tracker records every `PorChallengeV1`, `PorProofV1`, and `AuditVerdictV1` so the `CapacityMeter` and scheduler metrics reflect governance verdicts without bespoke plumbing in Torii.
-
-Implementation Notes:
-- Use Axum (Torii’s stack) with `norito::json` for payloads.
-- Add Norito schemas for responses (e.g., `PinResultV1`, `FetchErrorV1`).
-
-### D. Scheduler & Quota Enforcement
-
-| Task | Details |
-|------|---------|
-| Disk quota | Track bytes on disk; reject new pins when exceeding `max_capacity_bytes`. Provide eviction hooks for future policies. |
-| Fetch concurrency | Global semaphore (`max_parallel_fetches`) + per-provider budgets (from SF-2d). |
-| Pin queue | Limit outstanding ingestion jobs; provide Norito status endpoint. |
-| PoR cadence | Background worker triggered by `por_sample_interval_secs`. |
-
-### E. Telemetry & Logging
-
-Metrics (Prometheus):
-- `sorafs_pin_success_total`, `sorafs_pin_failure_total`.
-- `sorafs_chunk_fetch_duration_seconds` (histogram with labels `result`).
-- `torii_sorafs_storage_bytes_used`, `torii_sorafs_storage_bytes_capacity`.
-- `torii_sorafs_storage_pin_queue_depth`, `torii_sorafs_storage_fetch_inflight`.
-- `torii_sorafs_storage_fetch_bytes_per_sec`.
-- `torii_sorafs_storage_por_inflight`.
-- `torii_sorafs_storage_por_samples_success_total`, `torii_sorafs_storage_por_samples_failed_total`.
-
-The initial runtime implementation now backs these gauges via
-`StorageSchedulersRuntime`, which enforces the pin/fetch/PoR concurrency
-budgets and aggregates throughput/queue statistics for Torii to expose via
-Prometheus.【crates/sorafs_node/src/scheduler.rs:147】
-
-Logs / events:
-- Structured Norito telemetry for governance ingestion (`StorageTelemetryV1`).
-- Governance-enforced capacity telemetry ingress (authorised submitters + nonces) that caps windows to declared capacity, rejects zero-capacity payloads, enforces monotonic windows with bounded gaps/replay guards, and emits rejection metrics before fee/strike handling.【crates/iroha_core/src/smartcontracts/isi/sorafs.rs】【crates/iroha_config/src/parameters/{actual,user}.rs】【crates/iroha_telemetry/src/metrics.rs】
-- Alerts when utilisation > 90% or PoR failure streak exceeds threshold.
-
-### F. Testing Strategy
-
-1. **Unit tests**: chunk store persistence, quota calculations, scheduler (see
-   `crates/sorafs_node/src/scheduler.rs` for queue and rate-limit coverage).
-2. **Integration tests** (new `crates/sorafs_node/tests`):
-   - Pin → fetch round trip using fixture manifest/plan.
-   - Restart recovery: pin, restart, verify manifest registry.
-   - Quota rejection: set low capacity, attempt additional pin.
-   - PoR sampling endpoint verifying proof matches chunk store root.
-3. **Torii integration tests**: run Torii with storage enabled, exercise HTTP endpoints using `assert_cmd`.
-4. **Chaos tests (future)**: simulate disk exhaustion, slow IO, provider removal (tracked in later milestones).
-
-### Dependencies
-
-- SF-2b admission policy (provider verifier) — ensure node checks admission envelopes before advertising.
-- SF-2c capacity marketplace — later tie storage telemetry into capacity declarations.
-- SF-2d advert extensions — consume range capability + stream budgets once available.
-
-### Milestone Exit Criteria
-
-- `cargo run -p sorafs_node --example pin_fetch` works against local fixtures.
-- Torii exposes the documented `/v1/sorafs/pin*` and
-  `/v1/sorafs/storage/*` routes and passes integration tests.
-- Documentation (`sorafs_node_storage.md`) updated to match implementation; operator guide drafted.
-- Telemetry visible in staging dashboards; alerts configured for capacity saturation and PoR failures.
-
-## M2 Integration Status
-
-The M2 local implementation items are now represented by the runtime and CLI
-surfaces below. Remaining SF‑3 work is operational hardening: hosted rollout
-evidence, governance policy tuning, and SDK management ergonomics.
-
-| Capability | Status | References |
-|------------|--------|------------|
-| PoR ingestion worker and status endpoint | Implemented locally. | `crates/sorafs_node/src/lib.rs`, `crates/iroha_torii/src/sorafs/api.rs`, `crates/iroha_torii/src/routing.rs`. |
-| Challenge queue and replay plumbing | Implemented locally through `PorCoordinatorRuntime` storage interactions and operator replay. | `crates/sorafs_node/src/por.rs`, `crates/sorafs_node/src/bin/sorafs-node.rs`. |
-| Governance telemetry | Implemented locally for ingest backlog/failure counters and dashboard export. | `crates/iroha_telemetry/src/metrics.rs`, `docs/source/sorafs_observability_plan.md`. |
-| Operator tooling | Implemented locally with `sorafs-node ingest por` and runbook coverage. | `crates/sorafs_node/src/bin/sorafs-node.rs`, `docs/source/sorafs/runbooks/sorafs_node_ops.md`. |
-
-- ✅ `/v1/sorafs/por/ingestion/{manifest_digest_hex}` now delegates to
-  `sorafs_node::NodeHandle::por_ingestion_status`, returning backlog depth, the oldest epoch/deadline, and the
-  most recent success/failure timestamps per provider while Torii updates
-  `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` so the dashboards track stalled manifests
-  automatically.【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:1883】【crates/iroha_torii/src/routing.rs:7244】【crates/iroha_telemetry/src/metrics.rs:5390】
-- ✅ `sorafs-node ingest por` now replays PoR challenges, proofs, and optional verdicts against the embedded
-  storage worker, emitting JSON summaries so operators can validate artefacts and archive evidence before calling
-  the HTTP API. Regression tests cover the new flow and the runbooks/portal docs describe the workflow for SREs
-  preparing governance tickets.【crates/sorafs_node/src/bin/sorafs-node.rs:184】【crates/sorafs_node/tests/cli.rs:103】【docs/source/sorafs/runbooks/sorafs_node_ops.md:57】【docs/portal/docs/sorafs/node-operations.md:59】
-
-These shipped items keep SF‑3 aligned with SF‑9 (PoR automation). Live rollout
-evidence and hosted governance archive hand-offs remain tracked in `roadmap.md`.
-
-## Documentation & Ops Deliverables
-
-- Update `docs/source/sorafs/sorafs_node_storage.md` with configuration defaults, CLI examples.
-- Create operator runbook (`docs/source/sorafs/runbooks/sorafs_node_ops.md`) covering deployment, monitoring, troubleshooting.
-- Keep the API reference for the `/v1/sorafs/pin*` and
-  `/v1/sorafs/storage/*` endpoints aligned with the OpenAPI manifest.
-
-Progress should be reflected in the roadmap by checking off the items in the SF-3 section as features land.
+یہ مسودہ ترجمے کا منتظر ہے۔ اس متن کو مکمل ترجمہ شدہ مواد سے تبدیل کریں اور اختتام پر `status` کو `complete` پر سیٹ کریں۔ ساتھ ہی یہ بھی یقینی بنائیں کہ `translation_last_reviewed` انگریزی نسخے کے ساتھ آخری موازنہ کی تاریخ دکھا رہا ہو۔
+</div>

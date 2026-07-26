@@ -173,10 +173,12 @@ direct-storage route from bypassing the coordinator, admission binding, replay
 protection, or auditor checks. Torii does not admit externally supplied
 challenges; the verified scheduler is the only permitted production authority
 for the `PorChallengeV1` contract.
-Production startup currently
-rejects `torii.sorafs_por.enabled = true` because no authenticated external
-drand/VRF feed is wired; deterministic seed material is explicitly not a
-substitute.
+Production startup wires the authenticated `DrandHttpRandomnessProvider` and
+admission-bound, durable `VerifiedVrfProvider`. Enabling
+`torii.sorafs_por.enabled` therefore requires a complete governed drand
+configuration, council-verified provider admission, and durable VRF replay
+state; deterministic seed material is explicitly not a substitute for those
+verified inputs.
 
 ## Offline Verification Pipeline
 - Implemented: `sorafs-validate por` loads Norito `PorChallengeV1` and

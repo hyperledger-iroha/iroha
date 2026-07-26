@@ -8,7 +8,7 @@ a Norito-encoded manifest suitable for pinning in the SoraFS registry.
      chunker) to derive chunk offsets, lengths, and BLAKE3 digests.
    - The plan exposes the payload digest and chunk metadata that downstream
      tooling can reuse for CAR assembly and Proof-of-Replication scheduling.
-   - Alternatively, the prototype `sorafs_car::ChunkStore` ingests bytes and
+   - Alternatively, the canonical `sorafs_car::ChunkStore` ingests bytes and
      records deterministic chunk metadata for later CAR construction.
      The store now derives the 64 KiB / 4 KiB PoR sampling tree (domain-tagged,
      chunk-aligned) so schedulers can request Merkle proofs without re-reading

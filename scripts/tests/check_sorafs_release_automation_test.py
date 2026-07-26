@@ -733,6 +733,34 @@ def test_validate_release_automation_requires_two_reference_validator_builds(
         automation.validate_release_automation(tmp_path)
 
 
+@pytest.mark.parametrize(
+    ("option", "message"),
+    (
+        (
+            '--source-commit "$source_commit"',
+            "both reference-validator package replays must bind the reviewed source commit",
+        ),
+        (
+            '--source-date-epoch "$source_date_epoch"',
+            "both reference-validator package replays must bind the canonical source epoch",
+        ),
+    ),
+)
+def test_validate_release_automation_requires_replayed_package_identity(
+    tmp_path: Path,
+    option: str,
+    message: str,
+) -> None:
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / ".github/workflows/sorafs-cli-release.yml"
+    source = workflow.read_text(encoding="utf-8")
+    assert source.count(option) == 2
+    workflow.write_text(source.replace(option, "REMOVED", 1), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=message):
+        automation.validate_release_automation(tmp_path)
+
+
 def test_validate_release_automation_requires_archive_and_manifest_comparisons(
     tmp_path: Path,
 ) -> None:
@@ -933,6 +961,24 @@ def test_release_auth_document_discovery_rejects_symlinked_entries(
 
     with pytest.raises(ValueError, match="must not contain symlinks"):
         automation.validate_release_automation(tmp_path)
+
+
+def test_release_auth_document_discovery_ignores_generated_node_dependencies(
+    tmp_path: Path,
+) -> None:
+    _copy_workflows(tmp_path)
+    generated = tmp_path / "docs/portal/node_modules/package"
+    generated.mkdir(parents=True)
+    (generated / "stale-release-auth.md").write_text(
+        "openssl pkeyutl -sign -inkey release.pem -in manifest.json\n",
+        encoding="utf-8",
+    )
+    binary_dir = generated / ".bin"
+    binary_dir.mkdir()
+    (binary_dir / "tool").symlink_to(generated / "stale-release-auth.md")
+
+    summary = automation.validate_release_automation(tmp_path)
+    assert summary["workflow_count"] == len(automation.WORKFLOWS)
 
 
 def test_release_auth_document_discovery_rejects_hard_linked_documents(

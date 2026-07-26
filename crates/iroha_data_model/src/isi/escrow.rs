@@ -267,6 +267,12 @@ isi! {
         pub escrow_id: crate::escrow::EscrowId,
         /// Amount to release to the lock destination.
         pub amount: iroha_primitives::numeric::Quantity,
+        /// Exact authoritative remaining amount observed before this drawdown.
+        ///
+        /// The ledger rejects the instruction if another transaction changed
+        /// the lock first. This optimistic precondition makes independently
+        /// submitted retries economically exactly-once.
+        pub expected_remaining_amount: iroha_primitives::numeric::Quantity,
     }
 }
 
@@ -276,10 +282,12 @@ impl DrawdownAssetLock {
     pub fn new(
         escrow_id: crate::escrow::EscrowId,
         amount: impl Into<iroha_primitives::numeric::Quantity>,
+        expected_remaining_amount: impl Into<iroha_primitives::numeric::Quantity>,
     ) -> Self {
         Self {
             escrow_id,
             amount: amount.into(),
+            expected_remaining_amount: expected_remaining_amount.into(),
         }
     }
 }
@@ -696,6 +704,7 @@ impl_escrow_decode_from_slice!(OpenAssetLock {
 impl_escrow_decode_from_slice!(DrawdownAssetLock {
     escrow_id: crate::escrow::EscrowId,
     amount: iroha_primitives::numeric::Quantity,
+    expected_remaining_amount: iroha_primitives::numeric::Quantity,
 });
 
 impl_escrow_decode_from_slice!(CancelAssetLock {
@@ -924,7 +933,8 @@ mod tests {
         assert_eq!(lock_with_options.expires_at_ms, Some(12_345));
         assert_eq!(lock_with_options.evidence_hashes, evidence.clone());
         assert_eq!(
-            DrawdownAssetLock::new(escrow_id, Quantity::from(5_u64)).amount,
+            DrawdownAssetLock::new(escrow_id, Quantity::from(5_u64), Quantity::from(20_u64),)
+                .amount,
             Quantity::from(5_u64)
         );
         assert_eq!(CancelAssetLock::new(escrow_id).escrow_id, escrow_id);
@@ -1043,7 +1053,11 @@ mod tests {
             Some(12_345),
             evidence.clone(),
         ));
-        assert_slice_roundtrip(DrawdownAssetLock::new(escrow_id, Quantity::from(5_u64)));
+        assert_slice_roundtrip(DrawdownAssetLock::new(
+            escrow_id,
+            Quantity::from(5_u64),
+            Quantity::from(20_u64),
+        ));
         assert_slice_roundtrip(CancelAssetLock::new(escrow_id));
         assert_slice_roundtrip(ExpireAssetLock::new(escrow_id));
         assert_slice_roundtrip(OpenAnonymousAssetEscrow::with_evidence_hashes(
@@ -1152,7 +1166,7 @@ mod tests {
         );
         assert_registry_decodes(
             &registry,
-            DrawdownAssetLock::new(escrow_id, Quantity::from(5_u64)),
+            DrawdownAssetLock::new(escrow_id, Quantity::from(5_u64), Quantity::from(20_u64)),
         );
         assert_registry_decodes(&registry, CancelAssetLock::new(escrow_id));
         assert_registry_decodes(&registry, ExpireAssetLock::new(escrow_id));

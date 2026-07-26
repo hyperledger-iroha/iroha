@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # FASTPQ reproducible build container (CUDA).
-# Copies the pinned Rust toolchain from the CPU image to avoid drift.
+# Copies the pinned Rust toolchain from the CPU image to avoid drift. The
+# caller must provide digest-pinned CUDA and Rust base images.
 
-ARG CUDA_IMAGE=nvidia/cuda:12.2.2-devel-ubuntu22.04
-ARG RUST_IMAGE=rust:1.88.0-slim-bookworm
+ARG CUDA_IMAGE
+ARG RUST_IMAGE
 ARG RUST_TOOLCHAIN=1.88.0
 
 FROM ${RUST_IMAGE} AS rust_toolchain

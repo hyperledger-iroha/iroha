@@ -4,14 +4,24 @@
  * Torii OpenAPI specs and manifests. CI calls this from ci/check_openapi_spec.sh.
  */
 import {createHash} from 'node:crypto';
-import {readdir, readFile} from 'node:fs/promises';
+import {lstat, readdir} from 'node:fs/promises';
 import {dirname, isAbsolute, join, relative, resolve, sep} from 'node:path';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 
 import {
-  validateOpenApiGeneratorProvenance,
   validateReleaseOpenApiDocumentBytes,
 } from './lib/openapi-provenance.mjs';
+import {
+  OPENAPI_MANIFEST_VERSION,
+  parseOpenApiManifestV2Json,
+  scanJsonRejectDuplicateKeys,
+  verifyOpenApiManifestV2,
+} from './lib/openapi-manifest-v2.mjs';
+import {readOpenApiStableFile} from './lib/openapi-safe-file.mjs';
+import {
+  rejectUnknownOpenApiVersionsIndexFields,
+  requireOpenApiVersionsIndexFields,
+} from './lib/openapi-versions-index.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -20,6 +30,9 @@ const defaultOutputDir = join(__dirname, '..', 'static', 'openapi');
 const defaultVersionsDir = join(defaultOutputDir, 'versions');
 const defaultVersionsFile = join(defaultOutputDir, 'versions.json');
 const staleHint = "Run 'npm run sync-openapi -- --latest' from docs/portal/ to refresh the version manifest.";
+const OPENAPI_SPEC_MAX_BYTES = 64 * 1024 * 1024;
+const OPENAPI_MANIFEST_MAX_BYTES = 64 * 1024;
+const OPENAPI_VERSIONS_MAX_BYTES = 1024 * 1024;
 
 export async function verifyOpenApiVersions(options = {}) {
   const outputDir = options.outputDir ?? defaultOutputDir;
@@ -48,6 +61,10 @@ async function ensureDirectoryCoverage(versionsDir, entries) {
   const labels = new Set(entries.map((entry) => entry.label));
   let dirEntries;
   try {
+    const rootMetadata = await lstat(versionsDir);
+    if (rootMetadata.isSymbolicLink() || !rootMetadata.isDirectory()) {
+      throw new Error(`OpenAPI versions directory ${versionsDir} must be a regular directory.`);
+    }
     dirEntries = await readdir(versionsDir, {withFileTypes: true});
   } catch (error) {
     if (error && error.code === 'ENOENT') {
@@ -59,8 +76,10 @@ async function ensureDirectoryCoverage(versionsDir, entries) {
   }
 
   for (const dirent of dirEntries) {
-    if (!dirent.isDirectory()) {
-      continue;
+    if (dirent.isSymbolicLink() || !dirent.isDirectory()) {
+      throw new Error(
+        `OpenAPI versions directory contains a non-directory entry ${dirent.name}.`,
+      );
     }
     if (!labels.has(dirent.name)) {
       throw new Error(
@@ -89,7 +108,7 @@ async function verifyEntry(entry, context) {
   });
   const digest = computeSha256Hex(specBuffer);
   const recordedSha = entry.sha256;
-  if (!equalsIgnoreCase(recordedSha, digest)) {
+  if (recordedSha !== digest) {
     throw new Error(
       `versions.json sha256 for ${entry.label} (${recordedSha}) does not match ${digest}. ${staleHint}`,
     );
@@ -112,6 +131,7 @@ async function verifyEntry(entry, context) {
       specPath,
       specSha: digest,
       specBytes: specBuffer.length,
+      specBuffer,
       allowDirtyUnsigned: context.allowDirtyUnsigned,
     });
   } else if (entry.signed) {
@@ -122,12 +142,22 @@ async function verifyEntry(entry, context) {
 }
 
 async function verifyManifest(entry, manifestPath, outputDir, specContext) {
-  const manifest = await readJsonFile(
+  const manifestText = await readFileSafe(
     manifestPath,
     `manifest ${manifestPath} referenced by ${entry.label} is missing. ${staleHint}`,
+    {
+      label: `OpenAPI manifest ${manifestPath}`,
+      maxBytes: OPENAPI_MANIFEST_MAX_BYTES,
+      encoding: 'utf8',
+    },
   );
-  if (typeof manifest.version !== 'number') {
-    throw new Error(`manifest ${manifestPath} is missing a numeric version. ${staleHint}`);
+  const manifest = parseOpenApiManifestV2Json(manifestText, {
+    label: `manifest ${manifestPath}`,
+  });
+  if (manifest.version !== OPENAPI_MANIFEST_VERSION) {
+    throw new Error(
+      `manifest ${manifestPath} must use version ${OPENAPI_MANIFEST_VERSION}. ${staleHint}`,
+    );
   }
   if (typeof manifest.generated_unix_ms !== 'number') {
     throw new Error(`manifest ${manifestPath} is missing generated_unix_ms. ${staleHint}`);
@@ -139,9 +169,14 @@ async function verifyManifest(entry, manifestPath, outputDir, specContext) {
       isNonEmptyString(recordedSignature.public_key_hex) &&
       isNonEmptyString(recordedSignature.signature_hex),
   );
-  validateOpenApiGeneratorProvenance(manifest, {
+  verifyOpenApiManifestV2({
+    manifest,
+    artifactBytes: specContext.specBuffer,
     label: `manifest ${manifestPath}`,
-    signed: manifestSigned,
+    expectedArtifactPath: toPosix(
+      relative(dirname(manifestPath), specContext.specPath),
+    ),
+    requireSignature: Boolean(entry.signed),
     requireClean: !specContext.allowDirtyUnsigned,
   });
   const artifact = manifest?.artifact;
@@ -150,7 +185,9 @@ async function verifyManifest(entry, manifestPath, outputDir, specContext) {
       `manifest ${manifestPath} is missing artifact.path. ${staleHint}`,
     );
   }
-  const expectedArtifactPath = toPosix(relative(outputDir, specContext.specPath));
+  const expectedArtifactPath = toPosix(
+    relative(dirname(manifestPath), specContext.specPath),
+  );
   if (artifact.path !== expectedArtifactPath) {
     throw new Error(
       `manifest ${manifestPath} references ${artifact.path} but versions.json lists ${entry.path}. ${staleHint}`,
@@ -171,7 +208,7 @@ async function verifyManifest(entry, manifestPath, outputDir, specContext) {
       `manifest ${manifestPath} is missing artifact.sha256_hex. ${staleHint}`,
     );
   }
-  if (!equalsIgnoreCase(artifact.sha256_hex, specContext.specSha)) {
+  if (artifact.sha256_hex !== specContext.specSha) {
     throw new Error(
       `manifest ${manifestPath} sha256 (${artifact.sha256_hex}) does not match the spec (${specContext.specSha}). ${staleHint}`,
     );
@@ -218,9 +255,24 @@ function ensurePathWithinOutputDir(outputDir, relativePath, label, fieldName) {
   if (!isNonEmptyString(relativePath)) {
     throw new Error(`versions.json entry ${label} is missing ${fieldName}. ${staleHint}`);
   }
-  if (isAbsolute(relativePath)) {
+  const segments = relativePath.split('/');
+  if (isAbsolute(relativePath) || /^[A-Za-z]:/.test(relativePath)) {
     throw new Error(
       `versions.json entry ${label} ${fieldName} must be relative to the OpenAPI output directory. ${staleHint}`,
+    );
+  }
+  if (segments.some((segment) => segment === '..')) {
+    throw new Error(
+      `versions.json entry ${label} ${fieldName} escapes the OpenAPI output directory. ${staleHint}`,
+    );
+  }
+  if (
+    relativePath.trim() !== relativePath ||
+    relativePath.includes('\\') ||
+    segments.some((segment) => segment === '' || segment === '.')
+  ) {
+    throw new Error(
+      `versions.json entry ${label} ${fieldName} must use canonical forward-slash segments. ${staleHint}`,
     );
   }
   const resolvedRoot = resolve(outputDir);
@@ -239,7 +291,7 @@ function ensurePathWithinOutputDir(outputDir, relativePath, label, fieldName) {
 }
 
 function compareHexField(recorded, expected, label) {
-  if (!equalsIgnoreCase(recorded ?? null, expected ?? null)) {
+  if ((recorded ?? null) !== (expected ?? null)) {
     throw new Error(`${label} mismatch (${recorded} vs ${expected}). ${staleHint}`);
   }
 }
@@ -248,8 +300,11 @@ function ensureVersionsList(versionsList, entries) {
   if (!Array.isArray(versionsList)) {
     throw new Error(`versions.json is missing the versions array. ${staleHint}`);
   }
-  const expected = canonicalize(entries.filter((entry) => entry.label !== 'latest').map((entry) => entry.label));
-  const recorded = canonicalize(versionsList);
+  const expected = canonicalize(
+    entries.filter((entry) => entry.label !== 'latest').map((entry) => entry.label),
+    'versions.json entries',
+  );
+  const recorded = canonicalize(versionsList, 'versions.json versions');
   if (!arraysEqual(recorded, expected)) {
     throw new Error(
       `versions.json versions array (${versionsList.join(', ')}) does not match entries (${expected.join(', ')}). ${staleHint}`,
@@ -257,19 +312,23 @@ function ensureVersionsList(versionsList, entries) {
   }
 }
 
-function canonicalize(values) {
+function canonicalize(values, label) {
   const seen = new Set();
-  return values
-    .filter((value) => typeof value === 'string' && value.trim().length > 0)
-    .map((value) => value.trim())
-    .filter((value) => {
-      if (seen.has(value)) {
-        return false;
-      }
-      seen.add(value);
-      return true;
-    })
-    .sort();
+  const canonical = [];
+  for (const [index, value] of values.entries()) {
+    if (typeof value !== 'string' || value === '') {
+      throw new Error(`${label}[${index}] must be a non-empty string. ${staleHint}`);
+    }
+    if (value.trim() !== value) {
+      throw new Error(`${label}[${index}] must not contain surrounding whitespace. ${staleHint}`);
+    }
+    if (seen.has(value)) {
+      throw new Error(`${label}[${index}] duplicates ${value}. ${staleHint}`);
+    }
+    seen.add(value);
+    canonical.push(value);
+  }
+  return canonical.sort();
 }
 
 function arraysEqual(a, b) {
@@ -291,7 +350,7 @@ function requireEntry(entries, label) {
 }
 
 function ensureLatestAndCurrentAligned(latestEntry, currentEntry) {
-  if (!equalsIgnoreCase(latestEntry.sha256, currentEntry.sha256) || latestEntry.bytes !== currentEntry.bytes) {
+  if (latestEntry.sha256 !== currentEntry.sha256 || latestEntry.bytes !== currentEntry.bytes) {
     throw new Error(
       `versions.json latest entry must match current entry for digest and size. ${staleHint}`,
     );
@@ -316,7 +375,12 @@ function ensureLatestAndCurrentAligned(latestEntry, currentEntry) {
 }
 
 async function readJsonFile(path, missingMessage) {
-  const text = await readFileSafe(path, missingMessage);
+  const text = await readFileSafe(path, missingMessage, {
+    label: `OpenAPI versions manifest ${path}`,
+    maxBytes: OPENAPI_VERSIONS_MAX_BYTES,
+    encoding: 'utf8',
+  });
+  scanJsonRejectDuplicateKeys(text, `OpenAPI versions manifest ${path}`);
   try {
     return JSON.parse(text);
   } catch (error) {
@@ -324,9 +388,9 @@ async function readJsonFile(path, missingMessage) {
   }
 }
 
-async function readFileSafe(path, missingMessage) {
+async function readFileSafe(path, missingMessage, options) {
   try {
-    return await readFile(path, 'utf8');
+    return await readOpenApiStableFile(path, options);
   } catch (error) {
     if (error && error.code === 'ENOENT') {
       throw new Error(missingMessage);
@@ -337,7 +401,10 @@ async function readFileSafe(path, missingMessage) {
 
 async function readBinaryFile(path, missingMessage) {
   try {
-    return await readFile(path);
+    return await readOpenApiStableFile(path, {
+      label: `OpenAPI specification ${path}`,
+      maxBytes: OPENAPI_SPEC_MAX_BYTES,
+    });
   } catch (error) {
     if (error && error.code === 'ENOENT') {
       throw new Error(missingMessage);
@@ -350,6 +417,12 @@ function validateManifestStructure(manifest) {
   if (!manifest || typeof manifest !== 'object') {
     throw new Error(`versions.json is malformed. ${staleHint}`);
   }
+  rejectUnknownOpenApiVersionsIndexFields(manifest, {
+    label: 'versions.json',
+  });
+  requireOpenApiVersionsIndexFields(manifest, {
+    label: 'versions.json',
+  });
   ensureIsoTimestamp(manifest.generatedAt, 'versions.json generatedAt');
   if (!Array.isArray(manifest.entries) || manifest.entries.length === 0) {
     throw new Error(`versions.json has no entries. ${staleHint}`);
@@ -373,16 +446,6 @@ export function isIsoTimestamp(value) {
 
 function computeSha256Hex(buffer) {
   return createHash('sha256').update(buffer).digest('hex');
-}
-
-function equalsIgnoreCase(a, b) {
-  if (a == null && b == null) {
-    return true;
-  }
-  if (typeof a !== 'string' || typeof b !== 'string') {
-    return false;
-  }
-  return a.toLowerCase() === b.toLowerCase();
 }
 
 function toPosix(pathValue) {

@@ -107,7 +107,7 @@ La passerelle est actuellement synchronisée.【crates/iroha_torii/src/sorafs/ap
 2. Ouvrez le manifeste dans le code base64 :
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/pin \
+   curl -X POST http://$TORII[REMOVED: provider-internal finalized-ledger ingest only] \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -174,7 +174,7 @@ La passerelle est actuellement synchronisée.【crates/iroha_torii/src/sorafs/ap
   et `por_sampling_returns_verified_proofs`.
 - Les Daschbords должны отслеживать:
   -`torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
-  - `torii_sorafs_storage_pin_queue_depth` et `torii_sorafs_storage_fetch_inflight`
+  - `sorafs_provider_ingest_inflight` et `torii_sorafs_storage_fetch_inflight`
   - счётчики успехов/неудач PoR, публикуемые через `/v1/sorafs/capacity/state`
   - Règlement des publications populaires par `sorafs_node_deal_publish_total{result=success|failure}`
 

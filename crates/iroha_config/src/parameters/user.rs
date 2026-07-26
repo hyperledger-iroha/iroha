@@ -1420,22 +1420,17 @@ pub struct SorafsPinApprovalSigner {
 pub struct SorafsPinPolicyConstraints {
     /// Minimum replicas floor enforced for approved manifests.
     #[config(
-        env = "GOV_SORAFS_PIN_POLICY_MIN_REPLICAS_FLOOR",
         default = "crate::parameters::defaults::governance::sorafs_pin_policy::MIN_REPLICAS_FLOOR"
     )]
     pub min_replicas_floor: u16,
     /// Optional maximum replicas ceiling (inclusive).
-    #[config(env = "GOV_SORAFS_PIN_POLICY_MAX_REPLICAS_CEILING")]
     pub max_replicas_ceiling: Option<u16>,
     /// Optional retention epoch cap (inclusive).
-    #[config(env = "GOV_SORAFS_PIN_POLICY_MAX_RETENTION_EPOCH")]
     pub max_retention_epoch: Option<u64>,
     /// Allowed storage classes (case-insensitive). `None` permits any class.
-    #[config(env = "GOV_SORAFS_PIN_POLICY_ALLOWED_STORAGE_CLASSES")]
     pub allowed_storage_classes: Option<AlgorithmListConfig>,
     /// Require council signatures on pin manifests. Public SoraFS pins are permissionless by default.
     #[config(
-        env = "GOV_SORAFS_PIN_POLICY_REQUIRE_COUNCIL_SIGNATURES",
         default = "crate::parameters::defaults::governance::sorafs_pin_policy::REQUIRE_COUNCIL_SIGNATURES"
     )]
     pub require_council_signatures: bool,
@@ -1591,49 +1586,41 @@ impl SorafsPinPolicyConstraints {
 pub struct SorafsPenaltyPolicy {
     /// Minimum utilisation ratio (basis points) before counting a strike.
     #[config(
-        env = "GOV_SORAFS_PENALTY_UTILISATION_FLOOR_BPS",
         default = "crate::parameters::defaults::governance::sorafs_penalty::UTILISATION_FLOOR_BPS"
     )]
     pub utilisation_floor_bps: u16,
     /// Minimum uptime ratio (basis points) before counting a strike.
     #[config(
-        env = "GOV_SORAFS_PENALTY_UPTIME_FLOOR_BPS",
         default = "crate::parameters::defaults::governance::sorafs_penalty::UPTIME_FLOOR_BPS"
     )]
     pub uptime_floor_bps: u16,
     /// Minimum PoR success ratio (basis points) before counting a strike.
     #[config(
-        env = "GOV_SORAFS_PENALTY_POR_FLOOR_BPS",
         default = "crate::parameters::defaults::governance::sorafs_penalty::POR_SUCCESS_FLOOR_BPS"
     )]
     pub por_success_floor_bps: u16,
     /// Number of consecutive strikes required before slashing.
     #[config(
-        env = "GOV_SORAFS_PENALTY_STRIKE_THRESHOLD",
         default = "crate::parameters::defaults::governance::sorafs_penalty::STRIKE_THRESHOLD"
     )]
     pub strike_threshold: u32,
     /// Fraction of bonded collateral removed per penalty (basis points).
     #[config(
-        env = "GOV_SORAFS_PENALTY_BOND_BPS",
         default = "crate::parameters::defaults::governance::sorafs_penalty::PENALTY_BOND_BPS"
     )]
     pub penalty_bond_bps: u16,
     /// Cooldown window count (settlement windows) enforced between penalties.
     #[config(
-        env = "GOV_SORAFS_PENALTY_COOLDOWN_WINDOWS",
         default = "crate::parameters::defaults::governance::sorafs_penalty::COOLDOWN_WINDOWS"
     )]
     pub cooldown_windows: u32,
     /// Maximum PDP failures tolerated within a telemetry window before forcing a strike.
     #[config(
-        env = "GOV_SORAFS_PENALTY_MAX_PDP_FAILURES",
         default = "crate::parameters::defaults::governance::sorafs_penalty::MAX_PDP_FAILURES"
     )]
     pub max_pdp_failures: u32,
     /// Maximum PoTR SLA breaches tolerated within a telemetry window before forcing a strike.
     #[config(
-        env = "GOV_SORAFS_PENALTY_MAX_POTR_BREACHES",
         default = "crate::parameters::defaults::governance::sorafs_penalty::MAX_POTR_BREACHES"
     )]
     pub max_potr_breaches: u32,
@@ -1681,41 +1668,25 @@ impl SorafsPenaltyPolicy {
 #[derive(Debug, ReadConfig, Clone)]
 pub struct SorafsTelemetryPolicy {
     /// Require telemetry submissions to originate from an allow-list.
-    #[config(
-        env = "SORAFS_TELEMETRY_REQUIRE_SUBMITTER",
-        default = "defaults::governance::sorafs_telemetry::REQUIRE_SUBMITTER"
-    )]
+    #[config(default = "defaults::governance::sorafs_telemetry::REQUIRE_SUBMITTER")]
     pub require_submitter: bool,
     /// Require a nonce per telemetry window for replay detection.
     /// When disabled, windows without a nonce are accepted but provided nonces are still checked.
-    #[config(
-        env = "SORAFS_TELEMETRY_REQUIRE_NONCE",
-        default = "defaults::governance::sorafs_telemetry::REQUIRE_NONCE"
-    )]
+    #[config(default = "defaults::governance::sorafs_telemetry::REQUIRE_NONCE")]
     pub require_nonce: bool,
     /// Maximum tolerated gap between telemetry windows (seconds).
-    #[config(
-        env = "SORAFS_TELEMETRY_MAX_WINDOW_GAP_SECS",
-        default = "defaults::governance::sorafs_telemetry::MAX_WINDOW_GAP_SECS"
-    )]
+    #[config(default = "defaults::governance::sorafs_telemetry::MAX_WINDOW_GAP_SECS")]
     pub max_window_gap_secs: u64,
     /// Reject zero-capacity telemetry windows.
-    #[config(
-        env = "SORAFS_TELEMETRY_REJECT_ZERO_CAPACITY",
-        default = "defaults::governance::sorafs_telemetry::REJECT_ZERO_CAPACITY"
-    )]
+    #[config(default = "defaults::governance::sorafs_telemetry::REJECT_ZERO_CAPACITY")]
     pub reject_zero_capacity: bool,
     /// Account ids authorised to submit telemetry when enforcement is enabled.
     #[config(
-        env = "SORAFS_TELEMETRY_SUBMITTERS",
         default = "AlgorithmListConfig::from(defaults::governance::sorafs_telemetry::submitters())"
     )]
     pub submitters: AlgorithmListConfig,
     /// Provider-specific submitter overrides keyed by provider identifier (hex).
-    #[config(
-        env = "SORAFS_TELEMETRY_PER_PROVIDER_SUBMITTERS",
-        default = "PerProviderSubmittersConfig::default()"
-    )]
+    #[config(default = "PerProviderSubmittersConfig::default()")]
     pub per_provider_submitters: PerProviderSubmittersConfig,
 }
 
@@ -17700,21 +17671,33 @@ impl Sorafs {
             self.alias_cache.parse(),
             self.gateway.parse(emitter),
             self.por.parse(),
-            self.appeal_finance_settlement.parse(),
+            self.appeal_finance_settlement.parse(emitter),
         )
     }
 }
 
-/// User-level SoraFS appeal-finance settlement submitter configuration.
+/// Non-secret identity binding for one runtime-only appeal-finance signer.
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+pub struct SorafsAppealFinanceSignerBinding {
+    /// Stable opaque PKCS#11/HSM/KMS provider handle.
+    pub handle: String,
+    /// Exact transaction authority controlled by the runtime signer.
+    pub authority: AccountId,
+    /// Canonical lowercase Ed25519 public key payload.
+    pub public_key_hex: String,
+    /// First finalized block height at which this binding is active.
+    #[config(default = "1")]
+    pub valid_from_block_height: u64,
+    /// First finalized block height at which this binding is revoked.
+    pub revoked_at_block_height: Option<u64>,
+}
+
+/// User-level SoraFS appeal-finance settlement worker configuration.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
 pub struct SorafsAppealFinanceSettlement {
-    /// Runtime signer private keys allowed to submit settlement transactions.
-    ///
-    /// Each key is mapped to its canonical `AccountId`; the submitter only signs
-    /// a settlement step when that step's required authority exactly matches one
-    /// configured signer.
+    /// Non-secret identities of runtime-only HSM/KMS signer providers.
     #[config(default)]
-    pub submitter_private_keys: Vec<ExposedPrivateKey>,
+    pub submitter_signers: Vec<SorafsAppealFinanceSignerBinding>,
     /// Interval between worker reconciliation scans for follow-up settlement steps.
     #[config(
         default = "DurationMs(std::time::Duration::from_millis(defaults::torii::SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_SCAN_INTERVAL_MS))"
@@ -17725,38 +17708,207 @@ pub struct SorafsAppealFinanceSettlement {
         default = "defaults::torii::SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_MAX_RETRY_ATTEMPTS"
     )]
     pub worker_max_retry_attempts: u32,
+    /// Maximum durable pending semantic operations.
+    #[config(default = "defaults::torii::SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_MAX_PENDING")]
+    pub worker_max_pending: usize,
+    /// Maximum durable finalized idempotency tombstones.
+    #[config(default = "defaults::torii::SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_MAX_COMPLETED")]
+    pub worker_max_completed: usize,
+    /// Maximum durable terminal dead letters.
+    #[config(
+        default = "defaults::torii::SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_MAX_DEAD_LETTERS"
+    )]
+    pub worker_max_dead_letters: usize,
+    /// Maximum canonical checkpoint size.
+    #[config(
+        default = "defaults::torii::SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_CHECKPOINT_MAX_BYTES"
+    )]
+    pub worker_checkpoint_max_bytes: u64,
 }
 
 impl Default for SorafsAppealFinanceSettlement {
     fn default() -> Self {
         Self {
-            submitter_private_keys: Vec::new(),
+            submitter_signers: Vec::new(),
             worker_scan_interval_ms: DurationMs(std::time::Duration::from_millis(
                 defaults::torii::SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_SCAN_INTERVAL_MS,
             )),
             worker_max_retry_attempts:
                 defaults::torii::SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_MAX_RETRY_ATTEMPTS,
+            worker_max_pending:
+                defaults::torii::SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_MAX_PENDING,
+            worker_max_completed:
+                defaults::torii::SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_MAX_COMPLETED,
+            worker_max_dead_letters:
+                defaults::torii::SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_MAX_DEAD_LETTERS,
+            worker_checkpoint_max_bytes:
+                defaults::torii::SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_CHECKPOINT_MAX_BYTES,
         }
     }
 }
 
 impl SorafsAppealFinanceSettlement {
-    fn parse(self) -> actual::SorafsAppealFinanceSettlement {
-        actual::SorafsAppealFinanceSettlement {
-            submitter_signers: self
-                .submitter_private_keys
-                .into_iter()
-                .map(|private_key| {
-                    KeyPair::from_private_key(private_key.0).unwrap_or_else(|err| {
-                        panic!("invalid torii.sorafs.appeal_finance_settlement submitter private key: {err}")
-                    })
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::SorafsAppealFinanceSettlement {
+        const MAX_SIGNERS: usize = 128;
+        const MAX_ENTRIES: usize = 1_000_000;
+        const MAX_RETRY_ATTEMPTS: u32 = 1_024;
+        const MAX_SCAN_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+        const MIN_CHECKPOINT_BYTES: u64 = 4 * 1024;
+        const MAX_CHECKPOINT_BYTES: u64 = 512 * 1024 * 1024;
+
+        let emit = |emitter: &mut Emitter<ParseError>, message: String| {
+            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(message));
+        };
+        if self.submitter_signers.len() > MAX_SIGNERS {
+            emit(
+                emitter,
+                format!(
+                    "torii.sorafs.appeal_finance_settlement.submitter_signers must contain at most {MAX_SIGNERS} entries"
+                ),
+            );
+        }
+        let mut submitter_signers = Vec::with_capacity(self.submitter_signers.len());
+        let mut handles = BTreeSet::new();
+        let mut active_windows: BTreeMap<AccountId, Vec<(u64, Option<u64>)>> = BTreeMap::new();
+        for (index, signer) in self.submitter_signers.into_iter().enumerate() {
+            if !is_canonical_runtime_handle(&signer.handle)
+                || !handles.insert(signer.handle.clone())
+            {
+                emit(
+                    emitter,
+                    format!(
+                        "torii.sorafs.appeal_finance_settlement.submitter_signers[{index}].handle must be unique canonical visible ASCII"
+                    ),
+                );
+            }
+            let public_key = match PublicKey::from_hex(Algorithm::Ed25519, &signer.public_key_hex) {
+                Ok(public_key)
+                    if is_canonical_nonzero_ed25519_public_key_hex(&signer.public_key_hex) =>
+                {
+                    Some(public_key)
+                }
+                _ => {
+                    emit(
+                        emitter,
+                        format!(
+                            "torii.sorafs.appeal_finance_settlement.submitter_signers[{index}].public_key_hex must be a canonical lowercase Ed25519 public key"
+                        ),
+                    );
+                    None
+                }
+            };
+            if signer.valid_from_block_height == 0
+                || signer
+                    .revoked_at_block_height
+                    .is_some_and(|height| height <= signer.valid_from_block_height)
+            {
+                emit(
+                    emitter,
+                    format!(
+                        "torii.sorafs.appeal_finance_settlement.submitter_signers[{index}] must have a nonzero valid_from_block_height and a later revocation height"
+                    ),
+                );
+            }
+            if let Some(public_key) = public_key {
+                if AccountId::new(public_key.clone()) != signer.authority {
+                    emit(
+                        emitter,
+                        format!(
+                            "torii.sorafs.appeal_finance_settlement.submitter_signers[{index}] authority does not match public_key_hex"
+                        ),
+                    );
+                }
+                active_windows
+                    .entry(signer.authority.clone())
+                    .or_default()
+                    .push((
+                        signer.valid_from_block_height,
+                        signer.revoked_at_block_height,
+                    ));
+                submitter_signers.push(actual::SorafsAppealFinanceSignerBinding {
+                    handle: signer.handle,
+                    authority: signer.authority,
+                    public_key,
+                    valid_from_block_height: signer.valid_from_block_height,
+                    revoked_at_block_height: signer.revoked_at_block_height,
+                });
+            }
+        }
+        for (authority, windows) in &mut active_windows {
+            windows.sort_unstable_by_key(|window| window.0);
+            if windows
+                .windows(2)
+                .any(|pair| pair[0].1.is_none_or(|revoked_at| pair[1].0 < revoked_at))
+            {
+                emit(
+                    emitter,
+                    format!(
+                        "torii.sorafs.appeal_finance_settlement signer windows overlap for authority `{authority}`"
+                    ),
+                );
+            }
+        }
+        submitter_signers.sort_by(|left, right| {
+            left.authority
+                .cmp(&right.authority)
+                .then_with(|| {
+                    left.valid_from_block_height
+                        .cmp(&right.valid_from_block_height)
                 })
-                .collect(),
-            worker_scan_interval: self
-                .worker_scan_interval_ms
-                .get()
-                .max(std::time::Duration::from_millis(1)),
-            worker_max_retry_attempts: self.worker_max_retry_attempts.max(1),
+                .then_with(|| left.handle.cmp(&right.handle))
+        });
+        for (field, value) in [
+            ("worker_max_pending", self.worker_max_pending),
+            ("worker_max_completed", self.worker_max_completed),
+            ("worker_max_dead_letters", self.worker_max_dead_letters),
+        ] {
+            if value == 0 || value > MAX_ENTRIES {
+                emit(
+                    emitter,
+                    format!(
+                        "torii.sorafs.appeal_finance_settlement.{field} must be within 1..={MAX_ENTRIES}"
+                    ),
+                );
+            }
+        }
+        let worker_scan_interval = self.worker_scan_interval_ms.get();
+        if worker_scan_interval.is_zero() || worker_scan_interval > MAX_SCAN_INTERVAL {
+            emit(
+                emitter,
+                format!(
+                    "torii.sorafs.appeal_finance_settlement.worker_scan_interval_ms must be within 1ms..={}ms",
+                    MAX_SCAN_INTERVAL.as_millis()
+                ),
+            );
+        }
+        if self.worker_max_retry_attempts == 0
+            || self.worker_max_retry_attempts > MAX_RETRY_ATTEMPTS
+        {
+            emit(
+                emitter,
+                format!(
+                    "torii.sorafs.appeal_finance_settlement.worker_max_retry_attempts must be within 1..={MAX_RETRY_ATTEMPTS}"
+                ),
+            );
+        }
+        if self.worker_checkpoint_max_bytes < MIN_CHECKPOINT_BYTES
+            || self.worker_checkpoint_max_bytes > MAX_CHECKPOINT_BYTES
+        {
+            emit(
+                emitter,
+                format!(
+                    "torii.sorafs.appeal_finance_settlement.worker_checkpoint_max_bytes must be within {MIN_CHECKPOINT_BYTES}..={MAX_CHECKPOINT_BYTES}"
+                ),
+            );
+        }
+        actual::SorafsAppealFinanceSettlement {
+            submitter_signers,
+            worker_scan_interval,
+            worker_max_retry_attempts: self.worker_max_retry_attempts,
+            worker_max_pending: self.worker_max_pending,
+            worker_max_completed: self.worker_max_completed,
+            worker_max_dead_letters: self.worker_max_dead_letters,
+            worker_checkpoint_max_bytes: self.worker_checkpoint_max_bytes,
         }
     }
 }
@@ -18285,6 +18437,1575 @@ impl SorafsModerationOrchestrator {
     }
 }
 
+/// User configuration for the production SFM-4b3 evidence viewer.
+///
+/// Only non-secret policy and opaque runtime identities are accepted here.
+/// WebAuthn credentials, bearer-grant keys, erasure credentials, and receipt
+/// signing material are runtime-only dependencies.
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+pub struct SorafsEvidenceViewerConfig {
+    /// Enable case-bound evidence viewing.
+    #[config(default = "defaults::sorafs::storage::evidence_viewer::ENABLED")]
+    pub enabled: bool,
+    /// Private canonical checkpoint path.
+    #[config(default = "defaults::sorafs::storage::evidence_viewer::checkpoint_path()")]
+    pub checkpoint_path: PathBuf,
+    /// Maximum canonical checkpoint size.
+    #[config(default = "defaults::sorafs::storage::evidence_viewer::CHECKPOINT_MAX_BYTES")]
+    pub checkpoint_max_bytes: Bytes<u64>,
+    /// Session lifetime in milliseconds; hard-capped at fifteen minutes.
+    #[config(default = "defaults::sorafs::storage::evidence_viewer::SESSION_TTL_MS")]
+    pub session_ttl_ms: u64,
+    /// Rotating grant lifetime in milliseconds.
+    #[config(default = "defaults::sorafs::storage::evidence_viewer::GRANT_TTL_MS")]
+    pub grant_ttl_ms: u64,
+    /// WebAuthn challenge lifetime in milliseconds.
+    #[config(default = "defaults::sorafs::storage::evidence_viewer::CHALLENGE_TTL_MS")]
+    pub challenge_ttl_ms: u64,
+    /// Maximum authenticated plaintext range.
+    #[config(default = "defaults::sorafs::storage::evidence_viewer::MAX_RANGE_BYTES")]
+    pub max_range_bytes: Bytes<u64>,
+    /// Maximum retained challenges.
+    #[config(default = "defaults::sorafs::storage::evidence_viewer::MAX_CHALLENGES")]
+    pub max_challenges: u32,
+    /// Maximum retained sessions.
+    #[config(default = "defaults::sorafs::storage::evidence_viewer::MAX_SESSIONS")]
+    pub max_sessions: u32,
+    /// Maximum retained signed receipts.
+    #[config(default = "defaults::sorafs::storage::evidence_viewer::MAX_RECEIPTS")]
+    pub max_receipts: u32,
+    /// Maximum retained idempotency tombstones.
+    #[config(default = "defaults::sorafs::storage::evidence_viewer::MAX_IDEMPOTENCY_RECORDS")]
+    pub max_idempotency_records: u32,
+    /// Retention interval after the last session expires.
+    #[config(default = "defaults::sorafs::storage::evidence_viewer::RETENTION_AFTER_EXPIRY_MS")]
+    pub retention_after_expiry_ms: u64,
+    /// WebAuthn relying-party identifier.
+    pub webauthn_rp_id: Option<String>,
+    /// Exact HTTPS origins accepted by WebAuthn.
+    #[config(default = "Vec::new()")]
+    pub webauthn_allowed_origins: Vec<String>,
+    /// Identity-pinned WebAuthn runtime handle.
+    pub webauthn_handle: Option<String>,
+    /// Identity-pinned rotating-grant runtime handle.
+    pub grant_handle: Option<String>,
+    /// Identity-pinned irreversible-erasure runtime handle.
+    pub erasure_handle: Option<String>,
+    /// Identity-pinned Ed25519 receipt signer handle.
+    pub receipt_signer_handle: Option<String>,
+    /// Exact Ed25519 receipt-verification key as canonical lowercase hex.
+    pub receipt_signer_public_key_hex: Option<String>,
+}
+
+impl Default for SorafsEvidenceViewerConfig {
+    fn default() -> Self {
+        use defaults::sorafs::storage::evidence_viewer as viewer;
+
+        Self {
+            enabled: viewer::ENABLED,
+            checkpoint_path: viewer::checkpoint_path(),
+            checkpoint_max_bytes: viewer::CHECKPOINT_MAX_BYTES,
+            session_ttl_ms: viewer::SESSION_TTL_MS,
+            grant_ttl_ms: viewer::GRANT_TTL_MS,
+            challenge_ttl_ms: viewer::CHALLENGE_TTL_MS,
+            max_range_bytes: viewer::MAX_RANGE_BYTES,
+            max_challenges: viewer::MAX_CHALLENGES,
+            max_sessions: viewer::MAX_SESSIONS,
+            max_receipts: viewer::MAX_RECEIPTS,
+            max_idempotency_records: viewer::MAX_IDEMPOTENCY_RECORDS,
+            retention_after_expiry_ms: viewer::RETENTION_AFTER_EXPIRY_MS,
+            webauthn_rp_id: None,
+            webauthn_allowed_origins: Vec::new(),
+            webauthn_handle: None,
+            grant_handle: None,
+            erasure_handle: None,
+            receipt_signer_handle: None,
+            receipt_signer_public_key_hex: None,
+        }
+    }
+}
+
+impl SorafsEvidenceViewerConfig {
+    fn parse(
+        self,
+        storage_enabled: bool,
+        emitter: &mut Emitter<ParseError>,
+    ) -> Option<actual::SorafsEvidenceViewer> {
+        const MAX_SESSION_TTL_MS: u64 = 15 * 60 * 1_000;
+        const MAX_CHECKPOINT_BYTES: u64 = 64 * 1024 * 1024;
+        const MAX_RANGE_BYTES: u64 = 64 * 1024 * 1024;
+        const MAX_COLLECTION: u32 = 1_000_000;
+
+        fn emit(emitter: &mut Emitter<ParseError>, message: impl Into<String>) {
+            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(message.into()));
+        }
+
+        let runtime_fields_present = [
+            self.webauthn_rp_id.is_some(),
+            self.webauthn_handle.is_some(),
+            self.grant_handle.is_some(),
+            self.erasure_handle.is_some(),
+            self.receipt_signer_handle.is_some(),
+            self.receipt_signer_public_key_hex.is_some(),
+            !self.webauthn_allowed_origins.is_empty(),
+        ];
+        if !self.enabled {
+            if runtime_fields_present.iter().any(|present| *present) {
+                emit(
+                    emitter,
+                    "torii.sorafs.storage.evidence_viewer runtime identities and WebAuthn policy must be absent when disabled",
+                );
+            }
+            return None;
+        }
+        if !storage_enabled {
+            emit(
+                emitter,
+                "torii.sorafs.storage.evidence_viewer.enabled requires storage.enabled",
+            );
+        }
+        if !self.checkpoint_path.is_absolute()
+            || self.checkpoint_path.file_name().is_none()
+            || self.checkpoint_path.components().any(|component| {
+                matches!(
+                    component,
+                    std::path::Component::CurDir | std::path::Component::ParentDir
+                )
+            })
+        {
+            emit(
+                emitter,
+                "torii.sorafs.storage.evidence_viewer.checkpoint_path must be an absolute file path without dot components",
+            );
+        }
+        if self.checkpoint_max_bytes.0 == 0 || self.checkpoint_max_bytes.0 > MAX_CHECKPOINT_BYTES {
+            emit(
+                emitter,
+                format!(
+                    "torii.sorafs.storage.evidence_viewer.checkpoint_max_bytes must be within 1..={MAX_CHECKPOINT_BYTES}"
+                ),
+            );
+        }
+        if self.session_ttl_ms == 0 || self.session_ttl_ms > MAX_SESSION_TTL_MS {
+            emit(
+                emitter,
+                "torii.sorafs.storage.evidence_viewer.session_ttl_ms must be within 1..=900000",
+            );
+        }
+        if self.grant_ttl_ms == 0
+            || self.grant_ttl_ms > self.session_ttl_ms
+            || self.challenge_ttl_ms == 0
+            || self.challenge_ttl_ms > self.session_ttl_ms
+            || self.retention_after_expiry_ms == 0
+        {
+            emit(
+                emitter,
+                "torii.sorafs.storage.evidence_viewer challenge/grant/retention intervals are inconsistent",
+            );
+        }
+        if self.max_range_bytes.0 == 0 || self.max_range_bytes.0 > MAX_RANGE_BYTES {
+            emit(
+                emitter,
+                format!(
+                    "torii.sorafs.storage.evidence_viewer.max_range_bytes must be within 1..={MAX_RANGE_BYTES}"
+                ),
+            );
+        }
+        for (field, value) in [
+            ("max_challenges", self.max_challenges),
+            ("max_sessions", self.max_sessions),
+            ("max_receipts", self.max_receipts),
+            ("max_idempotency_records", self.max_idempotency_records),
+        ] {
+            if value == 0 || value > MAX_COLLECTION {
+                emit(
+                    emitter,
+                    format!(
+                        "torii.sorafs.storage.evidence_viewer.{field} must be within 1..={MAX_COLLECTION}"
+                    ),
+                );
+            }
+        }
+
+        let webauthn_rp_id = self.webauthn_rp_id.and_then(|rp_id| {
+            if !is_canonical_webauthn_rp_id(&rp_id) {
+                emit(
+                    emitter,
+                    "torii.sorafs.storage.evidence_viewer.webauthn_rp_id must be one canonical DNS relying-party id",
+                );
+                None
+            } else {
+                Some(rp_id)
+            }
+        });
+        if webauthn_rp_id.is_none() {
+            emit(
+                emitter,
+                "torii.sorafs.storage.evidence_viewer.webauthn_rp_id is required when enabled",
+            );
+        }
+        let mut origins = self.webauthn_allowed_origins;
+        let supplied_origin_count = origins.len();
+        origins.sort();
+        origins.dedup();
+        if origins.is_empty()
+            || origins.len() > 16
+            || origins.len() != supplied_origin_count
+            || webauthn_rp_id.as_ref().is_some_and(|rp_id| {
+                origins
+                    .iter()
+                    .any(|origin| !is_canonical_webauthn_origin(origin, rp_id))
+            })
+        {
+            emit(
+                emitter,
+                "torii.sorafs.storage.evidence_viewer.webauthn_allowed_origins must contain 1..=16 unique canonical HTTPS origins",
+            );
+        }
+
+        let mut runtime_handle = |field: &str, value: Option<String>| {
+            let Some(value) = value else {
+                emit(
+                    emitter,
+                    format!(
+                        "torii.sorafs.storage.evidence_viewer.{field} is required when enabled"
+                    ),
+                );
+                return None;
+            };
+            if !is_production_runtime_handle(&value) {
+                emit(
+                    emitter,
+                    format!(
+                        "torii.sorafs.storage.evidence_viewer.{field} must be a canonical production runtime handle"
+                    ),
+                );
+                return None;
+            }
+            Some(value)
+        };
+        let webauthn_handle = runtime_handle("webauthn_handle", self.webauthn_handle);
+        let grant_handle = runtime_handle("grant_handle", self.grant_handle);
+        let erasure_handle = runtime_handle("erasure_handle", self.erasure_handle);
+        let receipt_signer_handle =
+            runtime_handle("receipt_signer_handle", self.receipt_signer_handle);
+        let receipt_signer_public_key =
+            self.receipt_signer_public_key_hex.and_then(|value| {
+                if !is_canonical_nonzero_ed25519_public_key_hex(&value) {
+                    emit(
+                        emitter,
+                        "torii.sorafs.storage.evidence_viewer.receipt_signer_public_key_hex must be canonical lowercase non-zero 32-byte hex",
+                    );
+                    return None;
+                }
+                let decoded = hex::decode(value).expect("validated lowercase Ed25519 key hex");
+                let mut public_key = [0_u8; 32];
+                public_key.copy_from_slice(&decoded);
+                if PublicKey::from_bytes(Algorithm::Ed25519, &public_key).is_err() {
+                    emit(
+                        emitter,
+                        "torii.sorafs.storage.evidence_viewer.receipt_signer_public_key_hex is not a valid Ed25519 public key",
+                    );
+                    return None;
+                }
+                Some(public_key)
+            });
+        if receipt_signer_public_key.is_none() {
+            emit(
+                emitter,
+                "torii.sorafs.storage.evidence_viewer.receipt_signer_public_key_hex is required when enabled",
+            );
+        }
+
+        Some(actual::SorafsEvidenceViewer {
+            checkpoint_path: self.checkpoint_path,
+            checkpoint_max_bytes: self.checkpoint_max_bytes,
+            session_ttl: Duration::from_millis(self.session_ttl_ms),
+            grant_ttl: Duration::from_millis(self.grant_ttl_ms),
+            challenge_ttl: Duration::from_millis(self.challenge_ttl_ms),
+            max_range_bytes: self.max_range_bytes,
+            max_challenges: usize::try_from(self.max_challenges).unwrap_or(usize::MAX),
+            max_sessions: usize::try_from(self.max_sessions).unwrap_or(usize::MAX),
+            max_receipts: usize::try_from(self.max_receipts).unwrap_or(usize::MAX),
+            max_idempotency_records: usize::try_from(self.max_idempotency_records)
+                .unwrap_or(usize::MAX),
+            retention_after_expiry: Duration::from_millis(self.retention_after_expiry_ms),
+            webauthn_rp_id: webauthn_rp_id?,
+            webauthn_allowed_origins: origins,
+            webauthn_handle: webauthn_handle?,
+            grant_handle: grant_handle?,
+            erasure_handle: erasure_handle?,
+            receipt_signer_handle: receipt_signer_handle?,
+            receipt_signer_public_key: receipt_signer_public_key?,
+        })
+    }
+}
+
+/// User policy for the durable provider-ingest completion outbox.
+#[derive(Debug, ReadConfig, Clone, Copy, norito::JsonDeserialize)]
+pub struct SorafsProviderIngestOutboxConfig {
+    /// Maximum non-terminal ingest jobs. Active work is never pruned.
+    #[config(
+        default = "defaults::sorafs::storage::provider_ingest_runtime::outbox::MAX_ACTIVE_ENTRIES"
+    )]
+    pub max_active_entries: usize,
+    /// Maximum terminal tombstones retained for replay safety.
+    #[config(
+        default = "defaults::sorafs::storage::provider_ingest_runtime::outbox::MAX_TERMINAL_ENTRIES"
+    )]
+    pub max_terminal_entries: usize,
+    /// Maximum failures or completion-delivery attempts.
+    #[config(default = "defaults::sorafs::storage::provider_ingest_runtime::outbox::MAX_ATTEMPTS")]
+    pub max_attempts: u32,
+    /// Maximum canonical checkpoint size.
+    #[config(
+        default = "defaults::sorafs::storage::provider_ingest_runtime::outbox::CHECKPOINT_MAX_BYTES"
+    )]
+    pub checkpoint_max_bytes: Bytes<u64>,
+    /// Source-claim lease duration in milliseconds.
+    #[config(
+        default = "defaults::sorafs::storage::provider_ingest_runtime::outbox::SOURCE_LEASE_TTL_MS"
+    )]
+    pub source_lease_ttl_ms: u64,
+    /// Initial retry delay in milliseconds.
+    #[config(
+        default = "defaults::sorafs::storage::provider_ingest_runtime::outbox::RETRY_BASE_DELAY_MS"
+    )]
+    pub retry_base_delay_ms: u64,
+    /// Maximum retry delay in milliseconds.
+    #[config(
+        default = "defaults::sorafs::storage::provider_ingest_runtime::outbox::RETRY_MAX_DELAY_MS"
+    )]
+    pub retry_max_delay_ms: u64,
+    /// Maximum finalized-block age of a terminal tombstone.
+    #[config(
+        default = "defaults::sorafs::storage::provider_ingest_runtime::outbox::TERMINAL_RETENTION_BLOCKS"
+    )]
+    pub terminal_retention_blocks: u64,
+    /// Maximum canonical size of one signed completion transaction.
+    #[config(
+        default = "defaults::sorafs::storage::provider_ingest_runtime::outbox::MAX_SIGNED_TRANSACTION_BYTES"
+    )]
+    pub max_signed_transaction_bytes: Bytes<u64>,
+    /// Maximum payload-free rows returned by one status page.
+    #[config(
+        default = "defaults::sorafs::storage::provider_ingest_runtime::outbox::MAX_STATUS_PAGE_SIZE"
+    )]
+    pub max_status_page_size: usize,
+}
+
+impl Default for SorafsProviderIngestOutboxConfig {
+    fn default() -> Self {
+        use defaults::sorafs::storage::provider_ingest_runtime::outbox;
+
+        Self {
+            max_active_entries: outbox::MAX_ACTIVE_ENTRIES,
+            max_terminal_entries: outbox::MAX_TERMINAL_ENTRIES,
+            max_attempts: outbox::MAX_ATTEMPTS,
+            checkpoint_max_bytes: outbox::CHECKPOINT_MAX_BYTES,
+            source_lease_ttl_ms: outbox::SOURCE_LEASE_TTL_MS,
+            retry_base_delay_ms: outbox::RETRY_BASE_DELAY_MS,
+            retry_max_delay_ms: outbox::RETRY_MAX_DELAY_MS,
+            terminal_retention_blocks: outbox::TERMINAL_RETENTION_BLOCKS,
+            max_signed_transaction_bytes: outbox::MAX_SIGNED_TRANSACTION_BYTES,
+            max_status_page_size: outbox::MAX_STATUS_PAGE_SIZE,
+        }
+    }
+}
+
+/// User configuration for supervised finalized-ledger provider ingest.
+///
+/// Only public policy and opaque runtime-provider identities are accepted.
+/// Source credentials, stream grants, endpoint secrets, transaction signing
+/// material, and fetched payloads are never valid configuration inputs.
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+pub struct SorafsProviderIngestRuntimeConfig {
+    /// Enable finalized assignment reconciliation and provider completion.
+    #[config(default = "defaults::sorafs::storage::provider_ingest_runtime::ENABLED")]
+    pub enabled: bool,
+    /// Identity-pinned authenticated source-fetch provider handle.
+    pub authenticated_source_fetch_handle: Option<String>,
+    /// Identity-pinned completion HSM/KMS signer-resolver handle.
+    pub completion_signer_resolver_handle: Option<String>,
+    /// Delay between finalized assignment scans, in milliseconds.
+    #[config(default = "defaults::sorafs::storage::provider_ingest_runtime::SCAN_INTERVAL_MS")]
+    pub scan_interval_ms: u64,
+    /// Maximum finalized assignment rows requested in one page.
+    #[config(default = "defaults::sorafs::storage::provider_ingest_runtime::MAX_PAGE_ROWS")]
+    pub max_page_rows: usize,
+    /// Maximum finalized pages reconciled in one tick.
+    #[config(default = "defaults::sorafs::storage::provider_ingest_runtime::MAX_PAGES_PER_TICK")]
+    pub max_pages_per_tick: usize,
+    /// Maximum source jobs performed in one tick.
+    #[config(
+        default = "defaults::sorafs::storage::provider_ingest_runtime::MAX_SOURCE_JOBS_PER_TICK"
+    )]
+    pub max_source_jobs_per_tick: usize,
+    /// Maximum governed source providers passed to one authenticated fetch.
+    #[config(default = "defaults::sorafs::storage::provider_ingest_runtime::MAX_SOURCE_PROVIDERS")]
+    pub max_source_providers: usize,
+    /// Timeout for authenticated source fetch, verification, and storage.
+    #[config(
+        default = "defaults::sorafs::storage::provider_ingest_runtime::SOURCE_OPERATION_TIMEOUT_MS"
+    )]
+    pub source_operation_timeout_ms: u64,
+    /// Durable source-lease renewal cadence.
+    #[config(
+        default = "defaults::sorafs::storage::provider_ingest_runtime::SOURCE_LEASE_RENEW_INTERVAL_MS"
+    )]
+    pub source_lease_renew_interval_ms: u64,
+    /// Timeout for completion payload construction and HSM/KMS signing.
+    #[config(default = "defaults::sorafs::storage::provider_ingest_runtime::SIGNER_TIMEOUT_MS")]
+    pub signer_timeout_ms: u64,
+    /// Timeout for transaction preflight, submission, and observation.
+    #[config(default = "defaults::sorafs::storage::provider_ingest_runtime::INGRESS_TIMEOUT_MS")]
+    pub ingress_timeout_ms: u64,
+    /// Time-to-live assigned to one completion transaction.
+    #[config(
+        default = "defaults::sorafs::storage::provider_ingest_runtime::COMPLETION_TRANSACTION_TTL_MS"
+    )]
+    pub completion_transaction_ttl_ms: u64,
+    /// Maximum rows retained by one immutable finalized snapshot.
+    #[config(default = "defaults::sorafs::storage::provider_ingest_runtime::MAX_SNAPSHOT_ROWS")]
+    pub max_snapshot_rows: usize,
+    /// Maximum canonical bytes retained by one immutable finalized snapshot.
+    #[config(default = "defaults::sorafs::storage::provider_ingest_runtime::MAX_SNAPSHOT_BYTES")]
+    pub max_snapshot_bytes: Bytes<u64>,
+    /// Maximum authenticated finalized-head lag admitted by readiness.
+    #[config(
+        default = "defaults::sorafs::storage::provider_ingest_runtime::MAX_FINALIZED_LAG_BLOCKS"
+    )]
+    pub max_finalized_lag_blocks: u64,
+    /// Durable payload-free completion-outbox policy.
+    #[config(nested)]
+    pub outbox: SorafsProviderIngestOutboxConfig,
+}
+
+impl Default for SorafsProviderIngestRuntimeConfig {
+    fn default() -> Self {
+        use defaults::sorafs::storage::provider_ingest_runtime as runtime;
+
+        Self {
+            enabled: runtime::ENABLED,
+            authenticated_source_fetch_handle: None,
+            completion_signer_resolver_handle: None,
+            scan_interval_ms: runtime::SCAN_INTERVAL_MS,
+            max_page_rows: runtime::MAX_PAGE_ROWS,
+            max_pages_per_tick: runtime::MAX_PAGES_PER_TICK,
+            max_source_jobs_per_tick: runtime::MAX_SOURCE_JOBS_PER_TICK,
+            max_source_providers: runtime::MAX_SOURCE_PROVIDERS,
+            source_operation_timeout_ms: runtime::SOURCE_OPERATION_TIMEOUT_MS,
+            source_lease_renew_interval_ms: runtime::SOURCE_LEASE_RENEW_INTERVAL_MS,
+            signer_timeout_ms: runtime::SIGNER_TIMEOUT_MS,
+            ingress_timeout_ms: runtime::INGRESS_TIMEOUT_MS,
+            completion_transaction_ttl_ms: runtime::COMPLETION_TRANSACTION_TTL_MS,
+            max_snapshot_rows: runtime::MAX_SNAPSHOT_ROWS,
+            max_snapshot_bytes: runtime::MAX_SNAPSHOT_BYTES,
+            max_finalized_lag_blocks: runtime::MAX_FINALIZED_LAG_BLOCKS,
+            outbox: SorafsProviderIngestOutboxConfig::default(),
+        }
+    }
+}
+
+impl SorafsProviderIngestRuntimeConfig {
+    fn parse(
+        self,
+        storage_enabled: bool,
+        provider_id: Option<&ProviderId>,
+        emitter: &mut Emitter<ParseError>,
+    ) -> Option<actual::SorafsProviderIngestRuntime> {
+        const MILLISECONDS_PER_DAY: u64 = 24 * 60 * 60 * 1_000;
+        const MIN_SCAN_INTERVAL_MS: u64 = 100;
+        const MAX_PAGE_ROWS: usize = 1_000;
+        const MAX_PAGES_PER_TICK: usize = 4_096;
+        const MAX_SOURCE_JOBS_PER_TICK: usize = 4_096;
+        // V1 protocol ceiling from
+        // `sorafs_manifest::capacity::MAX_REPLICATION_ORDER_ASSIGNMENTS`.
+        const MAX_SOURCE_PROVIDERS: usize = 1_024;
+        const MAX_SNAPSHOT_ROWS: usize = 65_536;
+        const MAX_RESOURCE_BYTES: u64 = 1024 * 1024 * 1024;
+        // One assignment retains a bounded 256 KiB canonical replication
+        // order plus pin/provider metadata and collection framing.
+        const MAX_ESTIMATED_SNAPSHOT_ROW_BYTES: u64 = 384 * 1024;
+        const MAX_FINALIZED_LAG_BLOCKS: u64 = 10_000;
+        const MAX_OUTBOX_ENTRIES: usize = 65_536;
+        const MAX_ATTEMPTS: u32 = 64;
+        const MAX_TERMINAL_RETENTION_BLOCKS: u64 = 10_000_000;
+        const MAX_STATUS_PAGE_SIZE: usize = 1_000;
+        // Active records may retain the maximum signed transaction. Both
+        // active and terminal records also retain their immutable
+        // authorization, state discriminants, cursors, and collection framing.
+        const ESTIMATED_OUTBOX_ENTRY_OVERHEAD_BYTES: u64 = 2 * 1024;
+
+        fn emit(emitter: &mut Emitter<ParseError>, message: impl Into<String>) {
+            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(message.into()));
+        }
+
+        let authority_fields_present = [
+            self.authenticated_source_fetch_handle.is_some(),
+            self.completion_signer_resolver_handle.is_some(),
+        ];
+        if !self.enabled {
+            if authority_fields_present.iter().any(|present| *present) {
+                emit(
+                    emitter,
+                    "torii.sorafs.storage.provider_ingest_runtime runtime provider handles must be absent when disabled",
+                );
+            }
+            return None;
+        }
+        if !storage_enabled {
+            emit(
+                emitter,
+                "torii.sorafs.storage.provider_ingest_runtime.enabled requires storage.enabled",
+            );
+        }
+        if provider_id.is_none_or(|provider| provider.as_bytes() == &[0; 32]) {
+            emit(
+                emitter,
+                "torii.sorafs.storage.provider_ingest_runtime.enabled requires a canonical non-zero storage.provider_id_hex",
+            );
+        }
+
+        let runtime_handle = |field: &'static str,
+                              value: Option<String>,
+                              emitter: &mut Emitter<ParseError>| {
+            value
+                .and_then(|value| {
+                    if is_production_runtime_handle(&value) {
+                        Some(value)
+                    } else {
+                        emit(
+                            emitter,
+                            format!(
+                                "torii.sorafs.storage.provider_ingest_runtime.{field} must be a production opaque handle of 1..=256 visible ASCII bytes without whitespace or test/null markers"
+                            ),
+                        );
+                        None
+                    }
+                })
+                .or_else(|| {
+                    emit(
+                        emitter,
+                        format!(
+                            "torii.sorafs.storage.provider_ingest_runtime.{field} is required when enabled"
+                        ),
+                    );
+                    None
+                })
+        };
+        let authenticated_source_fetch_handle = runtime_handle(
+            "authenticated_source_fetch_handle",
+            self.authenticated_source_fetch_handle,
+            emitter,
+        );
+        let completion_signer_resolver_handle = runtime_handle(
+            "completion_signer_resolver_handle",
+            self.completion_signer_resolver_handle,
+            emitter,
+        );
+
+        if !(MIN_SCAN_INTERVAL_MS..=MILLISECONDS_PER_DAY).contains(&self.scan_interval_ms) {
+            emit(
+                emitter,
+                format!(
+                    "torii.sorafs.storage.provider_ingest_runtime.scan_interval_ms must be within {MIN_SCAN_INTERVAL_MS}..={MILLISECONDS_PER_DAY}"
+                ),
+            );
+        }
+        if self.max_page_rows == 0 || self.max_page_rows > MAX_PAGE_ROWS {
+            emit(
+                emitter,
+                format!(
+                    "torii.sorafs.storage.provider_ingest_runtime.max_page_rows must be within 1..={MAX_PAGE_ROWS}"
+                ),
+            );
+        }
+        if self.max_pages_per_tick == 0 || self.max_pages_per_tick > MAX_PAGES_PER_TICK {
+            emit(
+                emitter,
+                format!(
+                    "torii.sorafs.storage.provider_ingest_runtime.max_pages_per_tick must be within 1..={MAX_PAGES_PER_TICK}"
+                ),
+            );
+        }
+        if self.max_source_jobs_per_tick == 0
+            || self.max_source_jobs_per_tick > MAX_SOURCE_JOBS_PER_TICK
+        {
+            emit(
+                emitter,
+                format!(
+                    "torii.sorafs.storage.provider_ingest_runtime.max_source_jobs_per_tick must be within 1..={MAX_SOURCE_JOBS_PER_TICK}"
+                ),
+            );
+        }
+        if self.max_source_providers == 0 || self.max_source_providers > MAX_SOURCE_PROVIDERS {
+            emit(
+                emitter,
+                format!(
+                    "torii.sorafs.storage.provider_ingest_runtime.max_source_providers must be within 1..={MAX_SOURCE_PROVIDERS}"
+                ),
+            );
+        }
+        for (field, value) in [
+            (
+                "source_operation_timeout_ms",
+                self.source_operation_timeout_ms,
+            ),
+            (
+                "source_lease_renew_interval_ms",
+                self.source_lease_renew_interval_ms,
+            ),
+            ("signer_timeout_ms", self.signer_timeout_ms),
+            ("ingress_timeout_ms", self.ingress_timeout_ms),
+            (
+                "completion_transaction_ttl_ms",
+                self.completion_transaction_ttl_ms,
+            ),
+        ] {
+            if value == 0 || value > MILLISECONDS_PER_DAY {
+                emit(
+                    emitter,
+                    format!(
+                        "torii.sorafs.storage.provider_ingest_runtime.{field} must be within 1..={MILLISECONDS_PER_DAY}"
+                    ),
+                );
+            }
+        }
+        if self.max_snapshot_rows == 0 || self.max_snapshot_rows > MAX_SNAPSHOT_ROWS {
+            emit(
+                emitter,
+                format!(
+                    "torii.sorafs.storage.provider_ingest_runtime.max_snapshot_rows must be within 1..={MAX_SNAPSHOT_ROWS}"
+                ),
+            );
+        }
+        if self.max_snapshot_bytes.0 == 0 || self.max_snapshot_bytes.0 > MAX_RESOURCE_BYTES {
+            emit(
+                emitter,
+                format!(
+                    "torii.sorafs.storage.provider_ingest_runtime.max_snapshot_bytes must be within 1..={MAX_RESOURCE_BYTES}"
+                ),
+            );
+        }
+        if self.max_finalized_lag_blocks == 0
+            || self.max_finalized_lag_blocks > MAX_FINALIZED_LAG_BLOCKS
+        {
+            emit(
+                emitter,
+                format!(
+                    "torii.sorafs.storage.provider_ingest_runtime.max_finalized_lag_blocks must be within 1..={MAX_FINALIZED_LAG_BLOCKS}"
+                ),
+            );
+        }
+
+        let page_capacity = self.max_page_rows.checked_mul(self.max_pages_per_tick);
+        if page_capacity.is_none_or(|rows| rows > self.max_snapshot_rows) {
+            emit(
+                emitter,
+                "torii.sorafs.storage.provider_ingest_runtime max_page_rows * max_pages_per_tick must fit max_snapshot_rows",
+            );
+        }
+        let estimated_snapshot_bytes = u64::try_from(self.max_snapshot_rows)
+            .ok()
+            .and_then(|rows| rows.checked_mul(MAX_ESTIMATED_SNAPSHOT_ROW_BYTES));
+        if estimated_snapshot_bytes.is_none_or(|bytes| bytes > self.max_snapshot_bytes.0) {
+            emit(
+                emitter,
+                "torii.sorafs.storage.provider_ingest_runtime max_snapshot_rows estimated capacity must fit max_snapshot_bytes",
+            );
+        }
+
+        let outbox = self.outbox;
+        if outbox.max_active_entries == 0 || outbox.max_active_entries > MAX_OUTBOX_ENTRIES {
+            emit(
+                emitter,
+                format!(
+                    "torii.sorafs.storage.provider_ingest_runtime.outbox.max_active_entries must be within 1..={MAX_OUTBOX_ENTRIES}"
+                ),
+            );
+        }
+        if outbox.max_terminal_entries == 0 || outbox.max_terminal_entries > MAX_OUTBOX_ENTRIES {
+            emit(
+                emitter,
+                format!(
+                    "torii.sorafs.storage.provider_ingest_runtime.outbox.max_terminal_entries must be within 1..={MAX_OUTBOX_ENTRIES}"
+                ),
+            );
+        }
+        if outbox.max_attempts == 0 || outbox.max_attempts > MAX_ATTEMPTS {
+            emit(
+                emitter,
+                format!(
+                    "torii.sorafs.storage.provider_ingest_runtime.outbox.max_attempts must be within 1..={MAX_ATTEMPTS}"
+                ),
+            );
+        }
+        if outbox.checkpoint_max_bytes.0 == 0 || outbox.checkpoint_max_bytes.0 > MAX_RESOURCE_BYTES
+        {
+            emit(
+                emitter,
+                format!(
+                    "torii.sorafs.storage.provider_ingest_runtime.outbox.checkpoint_max_bytes must be within 1..={MAX_RESOURCE_BYTES}"
+                ),
+            );
+        }
+        for (field, value) in [
+            ("source_lease_ttl_ms", outbox.source_lease_ttl_ms),
+            ("retry_base_delay_ms", outbox.retry_base_delay_ms),
+            ("retry_max_delay_ms", outbox.retry_max_delay_ms),
+        ] {
+            if value == 0 || value > MILLISECONDS_PER_DAY {
+                emit(
+                    emitter,
+                    format!(
+                        "torii.sorafs.storage.provider_ingest_runtime.outbox.{field} must be within 1..={MILLISECONDS_PER_DAY}"
+                    ),
+                );
+            }
+        }
+        if self.source_lease_renew_interval_ms >= outbox.source_lease_ttl_ms {
+            emit(
+                emitter,
+                "torii.sorafs.storage.provider_ingest_runtime.source_lease_renew_interval_ms must be less than outbox.source_lease_ttl_ms",
+            );
+        }
+        if outbox.retry_base_delay_ms > outbox.retry_max_delay_ms {
+            emit(
+                emitter,
+                "torii.sorafs.storage.provider_ingest_runtime.outbox.retry_base_delay_ms must not exceed retry_max_delay_ms",
+            );
+        }
+        if outbox.terminal_retention_blocks == 0
+            || outbox.terminal_retention_blocks > MAX_TERMINAL_RETENTION_BLOCKS
+        {
+            emit(
+                emitter,
+                format!(
+                    "torii.sorafs.storage.provider_ingest_runtime.outbox.terminal_retention_blocks must be within 1..={MAX_TERMINAL_RETENTION_BLOCKS}"
+                ),
+            );
+        }
+        if outbox.max_signed_transaction_bytes.0 == 0
+            || outbox.max_signed_transaction_bytes.0 > MAX_RESOURCE_BYTES
+            || outbox.max_signed_transaction_bytes.0 > outbox.checkpoint_max_bytes.0
+        {
+            emit(
+                emitter,
+                "torii.sorafs.storage.provider_ingest_runtime.outbox.max_signed_transaction_bytes must be non-zero and must not exceed checkpoint_max_bytes or 1073741824 bytes",
+            );
+        }
+        if outbox.max_status_page_size == 0 || outbox.max_status_page_size > MAX_STATUS_PAGE_SIZE {
+            emit(
+                emitter,
+                format!(
+                    "torii.sorafs.storage.provider_ingest_runtime.outbox.max_status_page_size must be within 1..={MAX_STATUS_PAGE_SIZE}"
+                ),
+            );
+        }
+        if self.max_source_jobs_per_tick > outbox.max_active_entries {
+            emit(
+                emitter,
+                "torii.sorafs.storage.provider_ingest_runtime.max_source_jobs_per_tick must not exceed outbox.max_active_entries",
+            );
+        }
+        let worst_case_outbox_bytes = u64::try_from(outbox.max_active_entries)
+            .ok()
+            .and_then(|active| {
+                outbox
+                    .max_signed_transaction_bytes
+                    .0
+                    .checked_add(ESTIMATED_OUTBOX_ENTRY_OVERHEAD_BYTES)
+                    .and_then(|per_active| active.checked_mul(per_active))
+            })
+            .and_then(|active_bytes| {
+                u64::try_from(outbox.max_terminal_entries)
+                    .ok()
+                    .and_then(|terminal| {
+                        terminal.checked_mul(ESTIMATED_OUTBOX_ENTRY_OVERHEAD_BYTES)
+                    })
+                    .and_then(|terminal_bytes| active_bytes.checked_add(terminal_bytes))
+            });
+        if worst_case_outbox_bytes.is_none_or(|bytes| bytes > outbox.checkpoint_max_bytes.0) {
+            emit(
+                emitter,
+                "torii.sorafs.storage.provider_ingest_runtime worst-case active transaction and terminal tombstone capacity must fit outbox.checkpoint_max_bytes",
+            );
+        }
+
+        Some(actual::SorafsProviderIngestRuntime {
+            authenticated_source_fetch_handle: authenticated_source_fetch_handle?,
+            completion_signer_resolver_handle: completion_signer_resolver_handle?,
+            scan_interval_ms: self.scan_interval_ms,
+            max_page_rows: self.max_page_rows,
+            max_pages_per_tick: self.max_pages_per_tick,
+            max_source_jobs_per_tick: self.max_source_jobs_per_tick,
+            max_source_providers: self.max_source_providers,
+            source_operation_timeout_ms: self.source_operation_timeout_ms,
+            source_lease_renew_interval_ms: self.source_lease_renew_interval_ms,
+            signer_timeout_ms: self.signer_timeout_ms,
+            ingress_timeout_ms: self.ingress_timeout_ms,
+            completion_transaction_ttl_ms: self.completion_transaction_ttl_ms,
+            max_snapshot_rows: self.max_snapshot_rows,
+            max_snapshot_bytes: self.max_snapshot_bytes,
+            max_finalized_lag_blocks: self.max_finalized_lag_blocks,
+            outbox: actual::SorafsProviderIngestOutbox {
+                max_active_entries: outbox.max_active_entries,
+                max_terminal_entries: outbox.max_terminal_entries,
+                max_attempts: outbox.max_attempts,
+                checkpoint_max_bytes: outbox.checkpoint_max_bytes,
+                source_lease_ttl_ms: outbox.source_lease_ttl_ms,
+                retry_base_delay_ms: outbox.retry_base_delay_ms,
+                retry_max_delay_ms: outbox.retry_max_delay_ms,
+                terminal_retention_blocks: outbox.terminal_retention_blocks,
+                max_signed_transaction_bytes: outbox.max_signed_transaction_bytes,
+                max_status_page_size: outbox.max_status_page_size,
+            },
+        })
+    }
+}
+
+/// User configuration for the supervised finalized-ledger hedging/billing runtime.
+///
+/// This structure contains only public policy paths, reviewed digests,
+/// resource bounds, and opaque runtime provider identities. Provider
+/// credentials, signing material, and acknowledgement proofs are never valid
+/// configuration inputs.
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+pub struct SorafsHedgingBillingRuntimeConfig {
+    /// Enable committed billing projection, statement delivery, and
+    /// hedge-intent generation.
+    #[config(default = "defaults::sorafs::storage::hedging_billing_runtime::ENABLED")]
+    pub enabled: bool,
+    /// Private directory containing the canonical projector checkpoint.
+    #[config(default = "defaults::sorafs::storage::hedging_billing_runtime::state_dir()")]
+    pub state_dir: PathBuf,
+    /// Canonical public deterministic service-policy artifact.
+    pub service_policy_path: Option<PathBuf>,
+    /// Reviewed canonical service-policy digest as lowercase non-zero hex.
+    pub service_policy_digest_hex: Option<String>,
+    /// Identity-pinned finalized billing query provider handle.
+    pub finalized_query_handle: Option<String>,
+    /// Identity-pinned consensus journal verifier handle.
+    pub journal_verifier_handle: Option<String>,
+    /// Identity-pinned statement HSM/KMS provider handle.
+    pub statement_signer_handle: Option<String>,
+    /// Identity-pinned immutable statement publisher handle.
+    pub statement_publisher_handle: Option<String>,
+    /// Identity-pinned acknowledgement authority handle.
+    pub acknowledgement_authority_handle: Option<String>,
+    /// Identity-pinned sealed monotonic epoch-witness store handle.
+    pub epoch_witness_store_handle: Option<String>,
+    /// Finalized reconciliation and delivery cadence.
+    #[config(default = "defaults::sorafs::storage::hedging_billing_runtime::POLL_INTERVAL_MS")]
+    pub poll_interval_ms: u64,
+    /// Maximum finalized journal pages consumed in one worker tick.
+    #[config(default = "defaults::sorafs::storage::hedging_billing_runtime::MAX_PAGES_PER_TICK")]
+    pub max_pages_per_tick: u32,
+    /// Maximum finalized period closes consumed in one worker tick.
+    #[config(
+        default = "defaults::sorafs::storage::hedging_billing_runtime::MAX_PERIOD_CLOSES_PER_TICK"
+    )]
+    pub max_period_closes_per_tick: u32,
+    /// Maximum signer/publication/reconciliation operations in one tick.
+    #[config(
+        default = "defaults::sorafs::storage::hedging_billing_runtime::MAX_DELIVERY_OPERATIONS_PER_TICK"
+    )]
+    pub max_delivery_operations_per_tick: u32,
+    /// Maximum admitted finalized-head lag before readiness fails closed.
+    #[config(
+        default = "defaults::sorafs::storage::hedging_billing_runtime::MAX_FINALIZED_LAG_BLOCKS"
+    )]
+    pub max_finalized_lag_blocks: u64,
+}
+
+impl Default for SorafsHedgingBillingRuntimeConfig {
+    fn default() -> Self {
+        use defaults::sorafs::storage::hedging_billing_runtime as runtime;
+
+        Self {
+            enabled: runtime::ENABLED,
+            state_dir: runtime::state_dir(),
+            service_policy_path: None,
+            service_policy_digest_hex: None,
+            finalized_query_handle: None,
+            journal_verifier_handle: None,
+            statement_signer_handle: None,
+            statement_publisher_handle: None,
+            acknowledgement_authority_handle: None,
+            epoch_witness_store_handle: None,
+            poll_interval_ms: runtime::POLL_INTERVAL_MS,
+            max_pages_per_tick: runtime::MAX_PAGES_PER_TICK,
+            max_period_closes_per_tick: runtime::MAX_PERIOD_CLOSES_PER_TICK,
+            max_delivery_operations_per_tick: runtime::MAX_DELIVERY_OPERATIONS_PER_TICK,
+            max_finalized_lag_blocks: runtime::MAX_FINALIZED_LAG_BLOCKS,
+        }
+    }
+}
+
+impl SorafsHedgingBillingRuntimeConfig {
+    fn parse(
+        self,
+        storage_enabled: bool,
+        feed_trust_policy_path: Option<&Path>,
+        emitter: &mut Emitter<ParseError>,
+    ) -> Option<actual::SorafsHedgingBillingRuntime> {
+        const MIN_POLL_INTERVAL_MS: u64 = 100;
+        const MAX_POLL_INTERVAL_MS: u64 = 60_000;
+        const MAX_WORK_PER_TICK: u32 = 4_096;
+
+        fn emit(emitter: &mut Emitter<ParseError>, message: impl Into<String>) {
+            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(message.into()));
+        }
+
+        fn absolute_leaf(path: &Path) -> bool {
+            path.is_absolute()
+                && path.file_name().is_some()
+                && !path.components().any(|component| {
+                    matches!(
+                        component,
+                        std::path::Component::CurDir | std::path::Component::ParentDir
+                    )
+                })
+        }
+
+        let authority_fields_present = [
+            self.service_policy_path.is_some(),
+            self.service_policy_digest_hex.is_some(),
+            self.finalized_query_handle.is_some(),
+            self.journal_verifier_handle.is_some(),
+            self.statement_signer_handle.is_some(),
+            self.statement_publisher_handle.is_some(),
+            self.acknowledgement_authority_handle.is_some(),
+            self.epoch_witness_store_handle.is_some(),
+        ];
+        if !self.enabled {
+            if authority_fields_present.iter().any(|present| *present) {
+                emit(
+                    emitter,
+                    "torii.sorafs.storage.hedging_billing_runtime policy and authority bindings must be absent when disabled",
+                );
+            }
+            return None;
+        }
+        if !storage_enabled {
+            emit(
+                emitter,
+                "torii.sorafs.storage.hedging_billing_runtime.enabled requires storage.enabled",
+            );
+        }
+        if !absolute_leaf(&self.state_dir) {
+            emit(
+                emitter,
+                "torii.sorafs.storage.hedging_billing_runtime.state_dir must be an absolute private directory without dot components",
+            );
+        }
+        let service_policy_path = self.service_policy_path.and_then(|path| {
+            if absolute_leaf(&path) {
+                Some(path)
+            } else {
+                emit(
+                    emitter,
+                    "torii.sorafs.storage.hedging_billing_runtime.service_policy_path must be an absolute public policy file without dot components",
+                );
+                None
+            }
+        });
+        if service_policy_path.is_none() {
+            emit(
+                emitter,
+                "torii.sorafs.storage.hedging_billing_runtime.service_policy_path is required when enabled",
+            );
+        }
+        if feed_trust_policy_path.is_none_or(|path| !absolute_leaf(path)) {
+            emit(
+                emitter,
+                "torii.sorafs.storage.hedging_billing_runtime.enabled requires an absolute hedging_feed_trust_policy_path without dot components",
+            );
+        }
+
+        let service_policy_digest =
+            self.service_policy_digest_hex.and_then(|value| {
+                if value.len() != 64
+                    || !value
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                {
+                    emit(
+                        emitter,
+                        "torii.sorafs.storage.hedging_billing_runtime.service_policy_digest_hex must be canonical lowercase non-zero 32-byte hex",
+                    );
+                    return None;
+                }
+                let decoded = hex::decode(value).expect("validated lowercase digest hex");
+                let mut digest = [0_u8; 32];
+                digest.copy_from_slice(&decoded);
+                if digest == [0; 32] {
+                    emit(
+                        emitter,
+                        "torii.sorafs.storage.hedging_billing_runtime.service_policy_digest_hex must be non-zero",
+                    );
+                    None
+                } else {
+                    Some(digest)
+                }
+            });
+        if service_policy_digest.is_none() {
+            emit(
+                emitter,
+                "torii.sorafs.storage.hedging_billing_runtime.service_policy_digest_hex is required when enabled",
+            );
+        }
+
+        let runtime_handle = |field: &'static str,
+                              value: Option<String>,
+                              emitter: &mut Emitter<ParseError>| {
+            value
+                .and_then(|value| {
+                    if is_production_runtime_handle(&value) {
+                        Some(value)
+                    } else {
+                        emit(
+                            emitter,
+                            format!(
+                                "torii.sorafs.storage.hedging_billing_runtime.{field} must be a production opaque handle of 1..=256 visible ASCII bytes without whitespace or test/null markers"
+                            ),
+                        );
+                        None
+                    }
+                })
+                .or_else(|| {
+                    emit(
+                        emitter,
+                        format!(
+                            "torii.sorafs.storage.hedging_billing_runtime.{field} is required when enabled"
+                        ),
+                    );
+                    None
+                })
+        };
+        let finalized_query_handle = runtime_handle(
+            "finalized_query_handle",
+            self.finalized_query_handle,
+            emitter,
+        );
+        let journal_verifier_handle = runtime_handle(
+            "journal_verifier_handle",
+            self.journal_verifier_handle,
+            emitter,
+        );
+        let statement_signer_handle = runtime_handle(
+            "statement_signer_handle",
+            self.statement_signer_handle,
+            emitter,
+        );
+        let statement_publisher_handle = runtime_handle(
+            "statement_publisher_handle",
+            self.statement_publisher_handle,
+            emitter,
+        );
+        let acknowledgement_authority_handle = runtime_handle(
+            "acknowledgement_authority_handle",
+            self.acknowledgement_authority_handle,
+            emitter,
+        );
+        let epoch_witness_store_handle = runtime_handle(
+            "epoch_witness_store_handle",
+            self.epoch_witness_store_handle,
+            emitter,
+        );
+
+        if !(MIN_POLL_INTERVAL_MS..=MAX_POLL_INTERVAL_MS).contains(&self.poll_interval_ms) {
+            emit(
+                emitter,
+                format!(
+                    "torii.sorafs.storage.hedging_billing_runtime.poll_interval_ms must be within {MIN_POLL_INTERVAL_MS}..={MAX_POLL_INTERVAL_MS}"
+                ),
+            );
+        }
+        for (field, value) in [
+            ("max_pages_per_tick", self.max_pages_per_tick),
+            (
+                "max_period_closes_per_tick",
+                self.max_period_closes_per_tick,
+            ),
+            (
+                "max_delivery_operations_per_tick",
+                self.max_delivery_operations_per_tick,
+            ),
+        ] {
+            if value == 0 || value > MAX_WORK_PER_TICK {
+                emit(
+                    emitter,
+                    format!(
+                        "torii.sorafs.storage.hedging_billing_runtime.{field} must be within 1..={MAX_WORK_PER_TICK}"
+                    ),
+                );
+            }
+        }
+        if self.max_finalized_lag_blocks == 0 || self.max_finalized_lag_blocks > 10_000 {
+            emit(
+                emitter,
+                "torii.sorafs.storage.hedging_billing_runtime.max_finalized_lag_blocks must be within 1..=10000",
+            );
+        }
+
+        Some(actual::SorafsHedgingBillingRuntime {
+            state_dir: self.state_dir,
+            service_policy_path: service_policy_path?,
+            service_policy_digest: service_policy_digest?,
+            finalized_query_handle: finalized_query_handle?,
+            journal_verifier_handle: journal_verifier_handle?,
+            statement_signer_handle: statement_signer_handle?,
+            statement_publisher_handle: statement_publisher_handle?,
+            acknowledgement_authority_handle: acknowledgement_authority_handle?,
+            epoch_witness_store_handle: epoch_witness_store_handle?,
+            poll_interval: Duration::from_millis(self.poll_interval_ms),
+            max_pages_per_tick: self.max_pages_per_tick,
+            max_period_closes_per_tick: self.max_period_closes_per_tick,
+            max_delivery_operations_per_tick: self.max_delivery_operations_per_tick,
+            max_finalized_lag_blocks: self.max_finalized_lag_blocks,
+        })
+    }
+}
+
+/// User configuration for the committed finalized-ledger reputation runtime.
+///
+/// This structure contains only non-secret policy and identity bindings.
+/// Finalized ledger access, threshold signing, Governance DAG publication, and
+/// native journal transaction submission are supplied through runtime-only
+/// daemon dependencies.
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+pub struct SorafsReputationRuntimeConfig {
+    /// Enable the committed projector and external publication reconciler.
+    #[config(default = "defaults::sorafs::storage::reputation_runtime::ENABLED")]
+    pub enabled: bool,
+    /// Private directory containing canonical runtime checkpoints.
+    #[config(default = "defaults::sorafs::storage::reputation_runtime::state_dir()")]
+    pub state_dir: PathBuf,
+    /// Inclusive first finalized block in the governed scoring window.
+    pub window_start_height: Option<u64>,
+    /// Inclusive final block and mandatory signing-material target.
+    pub window_end_height: Option<u64>,
+    /// Identity-pinned finalized-query adapter handle.
+    pub finalized_query_handle: Option<String>,
+    /// Identity-pinned runtime-only journal transaction submitter handle.
+    pub journal_transaction_submitter_handle: Option<String>,
+    /// Identity-pinned external threshold-signer adapter handle.
+    pub threshold_signer_handle: Option<String>,
+    /// Identity-pinned Governance DAG publication/readback adapter handle.
+    pub governance_dag_handle: Option<String>,
+    /// Exact governed Governance DAG publisher peer identity.
+    pub governance_publisher_peer_id: Option<String>,
+    /// Exact governed Ed25519 Governance DAG publisher public key.
+    pub governance_publisher_public_key_hex: Option<String>,
+    /// Exact-anchor reconciliation cadence.
+    #[config(default = "defaults::sorafs::storage::reputation_runtime::POLL_INTERVAL_MS")]
+    pub poll_interval_ms: u64,
+    /// Maximum items requested from one native finalized query page.
+    #[config(default = "defaults::sorafs::storage::reputation_runtime::PAGE_ITEMS")]
+    pub page_items: u32,
+    /// Maximum native pages accepted in one coherent ingest batch.
+    #[config(default = "defaults::sorafs::storage::reputation_runtime::MAX_PAGES_PER_BATCH")]
+    pub max_pages_per_batch: u32,
+    /// Maximum provider accumulators retained.
+    #[config(default = "defaults::sorafs::storage::reputation_runtime::MAX_PROVIDERS")]
+    pub max_providers: u32,
+    /// Maximum typed events staged in one atomic projector batch.
+    #[config(default = "defaults::sorafs::storage::reputation_runtime::MAX_PENDING_EVENTS")]
+    pub max_pending_events: u32,
+    /// Maximum exact-replay receipts retained.
+    #[config(default = "defaults::sorafs::storage::reputation_runtime::MAX_REPLAY_RECEIPTS")]
+    pub max_replay_receipts: u32,
+    /// Maximum external-delivery failures retained before dead-lettering.
+    #[config(
+        default = "defaults::sorafs::storage::reputation_runtime::MAX_MATERIAL_DELIVERY_FAILURES"
+    )]
+    pub max_material_delivery_failures: u32,
+    /// Maximum canonical projector checkpoint size.
+    #[config(
+        default = "defaults::sorafs::storage::reputation_runtime::INGEST_CHECKPOINT_MAX_BYTES"
+    )]
+    pub ingest_checkpoint_max_bytes: Bytes<u64>,
+    /// Maximum canonical publication checkpoint size.
+    #[config(
+        default = "defaults::sorafs::storage::reputation_runtime::PUBLICATION_CHECKPOINT_MAX_BYTES"
+    )]
+    pub publication_checkpoint_max_bytes: Bytes<u64>,
+    /// Governed PoR-success weight.
+    #[config(default = "defaults::sorafs::storage::reputation_runtime::POR_SUCCESS_BPS")]
+    pub por_success_bps: u16,
+    /// Governed PDP-success weight.
+    #[config(default = "defaults::sorafs::storage::reputation_runtime::PDP_SUCCESS_BPS")]
+    pub pdp_success_bps: u16,
+    /// Governed PoTR-success weight.
+    #[config(default = "defaults::sorafs::storage::reputation_runtime::POTR_SUCCESS_BPS")]
+    pub potr_success_bps: u16,
+    /// Governed latency-health weight.
+    #[config(default = "defaults::sorafs::storage::reputation_runtime::LATENCY_BPS")]
+    pub latency_bps: u16,
+    /// Governed upheld-dispute penalty weight.
+    #[config(default = "defaults::sorafs::storage::reputation_runtime::DISPUTE_BPS")]
+    pub dispute_bps: u16,
+    /// Governed stream-token violation penalty weight.
+    #[config(default = "defaults::sorafs::storage::reputation_runtime::TOKEN_VIOLATION_BPS")]
+    pub token_violation_bps: u16,
+    /// Governed unresolved-repair penalty weight.
+    #[config(default = "defaults::sorafs::storage::reputation_runtime::REPAIR_BREACH_BPS")]
+    pub repair_breach_bps: u16,
+}
+
+impl Default for SorafsReputationRuntimeConfig {
+    fn default() -> Self {
+        use defaults::sorafs::storage::reputation_runtime as runtime;
+
+        Self {
+            enabled: runtime::ENABLED,
+            state_dir: runtime::state_dir(),
+            window_start_height: None,
+            window_end_height: None,
+            finalized_query_handle: None,
+            journal_transaction_submitter_handle: None,
+            threshold_signer_handle: None,
+            governance_dag_handle: None,
+            governance_publisher_peer_id: None,
+            governance_publisher_public_key_hex: None,
+            poll_interval_ms: runtime::POLL_INTERVAL_MS,
+            page_items: runtime::PAGE_ITEMS,
+            max_pages_per_batch: runtime::MAX_PAGES_PER_BATCH,
+            max_providers: runtime::MAX_PROVIDERS,
+            max_pending_events: runtime::MAX_PENDING_EVENTS,
+            max_replay_receipts: runtime::MAX_REPLAY_RECEIPTS,
+            max_material_delivery_failures: runtime::MAX_MATERIAL_DELIVERY_FAILURES,
+            ingest_checkpoint_max_bytes: runtime::INGEST_CHECKPOINT_MAX_BYTES,
+            publication_checkpoint_max_bytes: runtime::PUBLICATION_CHECKPOINT_MAX_BYTES,
+            por_success_bps: runtime::POR_SUCCESS_BPS,
+            pdp_success_bps: runtime::PDP_SUCCESS_BPS,
+            potr_success_bps: runtime::POTR_SUCCESS_BPS,
+            latency_bps: runtime::LATENCY_BPS,
+            dispute_bps: runtime::DISPUTE_BPS,
+            token_violation_bps: runtime::TOKEN_VIOLATION_BPS,
+            repair_breach_bps: runtime::REPAIR_BREACH_BPS,
+        }
+    }
+}
+
+impl SorafsReputationRuntimeConfig {
+    fn parse(
+        self,
+        storage_enabled: bool,
+        trust_policy_path: Option<&Path>,
+        emitter: &mut Emitter<ParseError>,
+    ) -> Option<actual::SorafsReputationRuntime> {
+        const MIN_POLL_INTERVAL_MS: u64 = 100;
+        const MAX_POLL_INTERVAL_MS: u64 = 60_000;
+        const MAX_PAGE_ITEMS: u32 = 64;
+        const MIN_COMPLETE_BATCH_PAGES: u32 = 517;
+        const MAX_PAGES_PER_BATCH: u32 = 4_096;
+        const MAX_PROVIDERS: u32 = 65_536;
+        const MAX_PENDING_EVENTS: u32 = 65_536;
+        const MAX_REPLAY_RECEIPTS: u32 = 262_144;
+        const MAX_MATERIAL_DELIVERY_FAILURES: u32 = 64;
+        const MIN_CHECKPOINT_BYTES: u64 = 64 * 1024;
+        const MAX_INGEST_CHECKPOINT_BYTES: u64 = 64 * 1024 * 1024;
+        const MAX_PUBLICATION_CHECKPOINT_BYTES: u64 = 32 * 1024 * 1024;
+
+        fn emit(emitter: &mut Emitter<ParseError>, message: impl Into<String>) {
+            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(message.into()));
+        }
+
+        let authority_fields_present = [
+            self.window_start_height.is_some(),
+            self.window_end_height.is_some(),
+            self.finalized_query_handle.is_some(),
+            self.journal_transaction_submitter_handle.is_some(),
+            self.threshold_signer_handle.is_some(),
+            self.governance_dag_handle.is_some(),
+            self.governance_publisher_peer_id.is_some(),
+            self.governance_publisher_public_key_hex.is_some(),
+        ];
+        if !self.enabled {
+            if authority_fields_present.iter().any(|present| *present) {
+                emit(
+                    emitter,
+                    "torii.sorafs.storage.reputation_runtime authority bindings must be absent when disabled",
+                );
+            }
+            return None;
+        }
+        if !storage_enabled {
+            emit(
+                emitter,
+                "torii.sorafs.storage.reputation_runtime.enabled requires storage.enabled",
+            );
+        }
+        if !self.state_dir.is_absolute()
+            || self.state_dir.file_name().is_none()
+            || self.state_dir.components().any(|component| {
+                matches!(
+                    component,
+                    std::path::Component::CurDir | std::path::Component::ParentDir
+                )
+            })
+        {
+            emit(
+                emitter,
+                "torii.sorafs.storage.reputation_runtime.state_dir must be an absolute private directory without dot components",
+            );
+        }
+        match trust_policy_path {
+            Some(path)
+                if path.is_absolute()
+                    && path.file_name().is_some()
+                    && !path.components().any(|component| {
+                        matches!(
+                            component,
+                            std::path::Component::CurDir | std::path::Component::ParentDir
+                        )
+                    }) => {}
+            _ => emit(
+                emitter,
+                "torii.sorafs.storage.reputation_runtime.enabled requires an absolute reputation_trust_policy_path without dot components",
+            ),
+        }
+
+        let window_start_height = self.window_start_height.unwrap_or_else(|| {
+            emit(
+                emitter,
+                "torii.sorafs.storage.reputation_runtime.window_start_height is required when enabled",
+            );
+            0
+        });
+        let window_end_height = self.window_end_height.unwrap_or_else(|| {
+            emit(
+                emitter,
+                "torii.sorafs.storage.reputation_runtime.window_end_height is required when enabled",
+            );
+            0
+        });
+        if window_start_height == 0 || window_end_height < window_start_height {
+            emit(
+                emitter,
+                "torii.sorafs.storage.reputation_runtime window must start above zero and end at or after its start",
+            );
+        }
+
+        let runtime_handle = |field: &'static str,
+                              value: Option<String>,
+                              emitter: &mut Emitter<ParseError>| {
+            value.and_then(|value| {
+                if !is_production_runtime_handle(&value) {
+                    emit(
+                        emitter,
+                        format!(
+                            "torii.sorafs.storage.reputation_runtime.{field} must be a production opaque handle of 1..=256 visible ASCII bytes without whitespace or test/null markers"
+                        ),
+                    );
+                    None
+                } else {
+                    Some(value)
+                }
+            }).or_else(|| {
+                emit(
+                    emitter,
+                    format!(
+                        "torii.sorafs.storage.reputation_runtime.{field} is required when enabled"
+                    ),
+                );
+                None
+            })
+        };
+        let finalized_query_handle = runtime_handle(
+            "finalized_query_handle",
+            self.finalized_query_handle,
+            emitter,
+        );
+        let journal_transaction_submitter_handle = runtime_handle(
+            "journal_transaction_submitter_handle",
+            self.journal_transaction_submitter_handle,
+            emitter,
+        );
+        let threshold_signer_handle = runtime_handle(
+            "threshold_signer_handle",
+            self.threshold_signer_handle,
+            emitter,
+        );
+        let governance_dag_handle =
+            runtime_handle("governance_dag_handle", self.governance_dag_handle, emitter);
+
+        let governance_publisher_peer_id =
+            self.governance_publisher_peer_id.and_then(|value| {
+                if value.is_empty()
+                    || value.len() > 128
+                    || !value.is_ascii()
+                    || value
+                        .bytes()
+                        .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
+                {
+                    emit(
+                        emitter,
+                        "torii.sorafs.storage.reputation_runtime.governance_publisher_peer_id must be 1..=128 visible ASCII bytes without whitespace",
+                    );
+                    None
+                } else {
+                    Some(value.into_bytes())
+                }
+            });
+        if governance_publisher_peer_id.is_none() {
+            emit(
+                emitter,
+                "torii.sorafs.storage.reputation_runtime.governance_publisher_peer_id is required when enabled",
+            );
+        }
+
+        let governance_publisher_public_key =
+            self.governance_publisher_public_key_hex.and_then(|value| {
+                if !is_canonical_nonzero_ed25519_public_key_hex(&value) {
+                    emit(
+                        emitter,
+                        "torii.sorafs.storage.reputation_runtime.governance_publisher_public_key_hex must be canonical lowercase non-zero 32-byte hex",
+                    );
+                    return None;
+                }
+                let decoded = hex::decode(value).expect("validated lowercase Ed25519 key hex");
+                let mut public_key = [0_u8; 32];
+                public_key.copy_from_slice(&decoded);
+                if PublicKey::from_bytes(Algorithm::Ed25519, &public_key).is_err() {
+                    emit(
+                        emitter,
+                        "torii.sorafs.storage.reputation_runtime.governance_publisher_public_key_hex is not a valid Ed25519 public key",
+                    );
+                    return None;
+                }
+                Some(public_key)
+            });
+        if governance_publisher_public_key.is_none() {
+            emit(
+                emitter,
+                "torii.sorafs.storage.reputation_runtime.governance_publisher_public_key_hex is required when enabled",
+            );
+        }
+
+        if !(MIN_POLL_INTERVAL_MS..=MAX_POLL_INTERVAL_MS).contains(&self.poll_interval_ms) {
+            emit(
+                emitter,
+                format!(
+                    "torii.sorafs.storage.reputation_runtime.poll_interval_ms must be within {MIN_POLL_INTERVAL_MS}..={MAX_POLL_INTERVAL_MS}"
+                ),
+            );
+        }
+        if self.page_items == 0 || self.page_items > MAX_PAGE_ITEMS {
+            emit(
+                emitter,
+                format!(
+                    "torii.sorafs.storage.reputation_runtime.page_items must be within 1..={MAX_PAGE_ITEMS}"
+                ),
+            );
+        }
+        if !(MIN_COMPLETE_BATCH_PAGES..=MAX_PAGES_PER_BATCH).contains(&self.max_pages_per_batch) {
+            emit(
+                emitter,
+                format!(
+                    "torii.sorafs.storage.reputation_runtime.max_pages_per_batch must be within {MIN_COMPLETE_BATCH_PAGES}..={MAX_PAGES_PER_BATCH}"
+                ),
+            );
+        }
+        for (field, value, maximum) in [
+            ("max_providers", self.max_providers, MAX_PROVIDERS),
+            (
+                "max_pending_events",
+                self.max_pending_events,
+                MAX_PENDING_EVENTS,
+            ),
+            (
+                "max_replay_receipts",
+                self.max_replay_receipts,
+                MAX_REPLAY_RECEIPTS,
+            ),
+            (
+                "max_material_delivery_failures",
+                self.max_material_delivery_failures,
+                MAX_MATERIAL_DELIVERY_FAILURES,
+            ),
+        ] {
+            if value == 0 || value > maximum {
+                emit(
+                    emitter,
+                    format!(
+                        "torii.sorafs.storage.reputation_runtime.{field} must be within 1..={maximum}"
+                    ),
+                );
+            }
+        }
+        if !(MIN_CHECKPOINT_BYTES..=MAX_INGEST_CHECKPOINT_BYTES)
+            .contains(&self.ingest_checkpoint_max_bytes.0)
+        {
+            emit(
+                emitter,
+                format!(
+                    "torii.sorafs.storage.reputation_runtime.ingest_checkpoint_max_bytes must be within {MIN_CHECKPOINT_BYTES}..={MAX_INGEST_CHECKPOINT_BYTES}"
+                ),
+            );
+        }
+        if !(MIN_CHECKPOINT_BYTES..=MAX_PUBLICATION_CHECKPOINT_BYTES)
+            .contains(&self.publication_checkpoint_max_bytes.0)
+        {
+            emit(
+                emitter,
+                format!(
+                    "torii.sorafs.storage.reputation_runtime.publication_checkpoint_max_bytes must be within {MIN_CHECKPOINT_BYTES}..={MAX_PUBLICATION_CHECKPOINT_BYTES}"
+                ),
+            );
+        }
+        let weight_total = [
+            self.por_success_bps,
+            self.pdp_success_bps,
+            self.potr_success_bps,
+            self.latency_bps,
+            self.dispute_bps,
+            self.token_violation_bps,
+            self.repair_breach_bps,
+        ]
+        .into_iter()
+        .map(u32::from)
+        .sum::<u32>();
+        if weight_total != 10_000 {
+            emit(
+                emitter,
+                "torii.sorafs.storage.reputation_runtime governed weights must total exactly 10000 basis points",
+            );
+        }
+
+        Some(actual::SorafsReputationRuntime {
+            state_dir: self.state_dir,
+            window_start_height,
+            window_end_height,
+            finalized_query_handle: finalized_query_handle?,
+            journal_transaction_submitter_handle: journal_transaction_submitter_handle?,
+            threshold_signer_handle: threshold_signer_handle?,
+            governance_dag_handle: governance_dag_handle?,
+            governance_publisher_peer_id: governance_publisher_peer_id?,
+            governance_publisher_public_key: governance_publisher_public_key?,
+            poll_interval: Duration::from_millis(self.poll_interval_ms),
+            page_items: self.page_items,
+            max_pages_per_batch: self.max_pages_per_batch,
+            max_providers: self.max_providers,
+            max_pending_events: self.max_pending_events,
+            max_replay_receipts: self.max_replay_receipts,
+            max_material_delivery_failures: self.max_material_delivery_failures,
+            ingest_checkpoint_max_bytes: self.ingest_checkpoint_max_bytes,
+            publication_checkpoint_max_bytes: self.publication_checkpoint_max_bytes,
+            por_success_bps: self.por_success_bps,
+            pdp_success_bps: self.pdp_success_bps,
+            potr_success_bps: self.potr_success_bps,
+            latency_bps: self.latency_bps,
+            dispute_bps: self.dispute_bps,
+            token_violation_bps: self.token_violation_bps,
+            repair_breach_bps: self.repair_breach_bps,
+        })
+    }
+}
+
 #[cfg(test)]
 mod sorafs_moderation_orchestrator_tests {
     use super::*;
@@ -18373,6 +20094,380 @@ mod sorafs_moderation_orchestrator_tests {
         config.maintenance_authority = Some("not-an-account".to_owned());
         let mut emitter = Emitter::new();
         assert!(config.parse(true, &mut emitter).is_none());
+        assert!(emitter.into_result().is_err());
+    }
+}
+
+#[cfg(test)]
+mod sorafs_provider_ingest_runtime_config_tests {
+    use super::*;
+
+    fn provider_id() -> ProviderId {
+        ProviderId::new([0x51; 32])
+    }
+
+    fn valid_config() -> SorafsProviderIngestRuntimeConfig {
+        SorafsProviderIngestRuntimeConfig {
+            enabled: true,
+            authenticated_source_fetch_handle: Some(
+                "network.sorafs.authenticated-source.primary".to_owned(),
+            ),
+            completion_signer_resolver_handle: Some(
+                "hsm.sorafs.provider-completion.primary".to_owned(),
+            ),
+            ..SorafsProviderIngestRuntimeConfig::default()
+        }
+    }
+
+    #[test]
+    fn disabled_default_is_inert() {
+        let mut emitter = Emitter::new();
+        assert!(
+            SorafsProviderIngestRuntimeConfig::default()
+                .parse(false, None, &mut emitter)
+                .is_none()
+        );
+        assert!(emitter.into_result().is_ok());
+    }
+
+    #[test]
+    fn enabled_policy_parses_without_credentials() {
+        let provider_id = provider_id();
+        let mut emitter = Emitter::new();
+        let parsed = valid_config()
+            .parse(true, Some(&provider_id), &mut emitter)
+            .expect("enabled provider-ingest policy");
+        assert!(emitter.into_result().is_ok());
+        assert_eq!(parsed.scan_interval_ms, 1_000);
+        assert_eq!(parsed.max_page_rows, 64);
+        assert_eq!(parsed.max_pages_per_tick, 4);
+        assert_eq!(parsed.max_source_providers, 1_024);
+        assert_eq!(parsed.max_snapshot_rows, 256);
+        assert_eq!(parsed.max_snapshot_bytes.0, 128 * 1024 * 1024);
+        assert_eq!(parsed.max_finalized_lag_blocks, 2);
+        assert_eq!(parsed.outbox.max_status_page_size, 256);
+        assert_eq!(parsed.outbox.max_active_entries, 128);
+        assert_eq!(parsed.outbox.checkpoint_max_bytes.0, 64 * 1024 * 1024);
+    }
+
+    #[test]
+    fn enabled_policy_requires_storage_provider_and_production_handles() {
+        let mut config = valid_config();
+        config.authenticated_source_fetch_handle = Some("mock-source.test".to_owned());
+        config.completion_signer_resolver_handle = None;
+
+        let mut emitter = Emitter::new();
+        assert!(config.parse(false, None, &mut emitter).is_none());
+        assert!(emitter.into_result().is_err());
+    }
+
+    #[test]
+    fn enabled_policy_rejects_zero_provider_identity() {
+        let zero_provider_id = ProviderId::new([0; 32]);
+        let mut emitter = Emitter::new();
+        assert!(
+            valid_config()
+                .parse(true, Some(&zero_provider_id), &mut emitter)
+                .is_some()
+        );
+        assert!(emitter.into_result().is_err());
+    }
+
+    #[test]
+    fn unsafe_resource_timing_and_capacity_bounds_fail_closed() {
+        let provider_id = provider_id();
+        let mut config = valid_config();
+        config.scan_interval_ms = 0;
+        config.max_page_rows = 1_001;
+        config.max_pages_per_tick = 4_097;
+        config.max_source_jobs_per_tick = 4_097;
+        config.max_source_providers = 1_025;
+        config.source_operation_timeout_ms = 24 * 60 * 60 * 1_000 + 1;
+        config.source_lease_renew_interval_ms = 60_000;
+        config.signer_timeout_ms = 0;
+        config.ingress_timeout_ms = 0;
+        config.completion_transaction_ttl_ms = 0;
+        config.max_snapshot_rows = 65_537;
+        config.max_snapshot_bytes = Bytes(1024 * 1024 * 1024 + 1);
+        config.max_finalized_lag_blocks = 10_001;
+        config.outbox.max_active_entries = 0;
+        config.outbox.max_terminal_entries = 65_537;
+        config.outbox.max_attempts = 65;
+        config.outbox.checkpoint_max_bytes = Bytes(1024 * 1024 * 1024 + 1);
+        config.outbox.source_lease_ttl_ms = 60_000;
+        config.outbox.retry_base_delay_ms = 2_000;
+        config.outbox.retry_max_delay_ms = 1_000;
+        config.outbox.terminal_retention_blocks = 10_000_001;
+        config.outbox.max_signed_transaction_bytes = Bytes(1024 * 1024 * 1024 + 1);
+        config.outbox.max_status_page_size = 1_001;
+
+        let mut emitter = Emitter::new();
+        assert!(
+            config
+                .parse(true, Some(&provider_id), &mut emitter)
+                .is_some()
+        );
+        assert!(emitter.into_result().is_err());
+    }
+
+    #[test]
+    fn checked_aggregate_capacities_fail_closed() {
+        let provider_id = provider_id();
+        let mut config = valid_config();
+        config.max_page_rows = 1_000;
+        config.max_pages_per_tick = 4_096;
+        config.max_snapshot_rows = 65_536;
+        config.max_snapshot_bytes = Bytes(1);
+        config.max_source_jobs_per_tick = 16;
+        config.outbox.max_active_entries = 1;
+        config.outbox.max_terminal_entries = 1;
+        config.outbox.checkpoint_max_bytes = Bytes(1);
+        config.outbox.max_signed_transaction_bytes = Bytes(1);
+
+        let mut emitter = Emitter::new();
+        assert!(
+            config
+                .parse(true, Some(&provider_id), &mut emitter)
+                .is_some()
+        );
+        assert!(emitter.into_result().is_err());
+    }
+
+    #[test]
+    fn worst_case_outbox_transactions_must_fit_checkpoint() {
+        let provider_id = provider_id();
+        let mut config = valid_config();
+        config.outbox.max_active_entries = 4_096;
+
+        let mut emitter = Emitter::new();
+        assert!(
+            config
+                .parse(true, Some(&provider_id), &mut emitter)
+                .is_some()
+        );
+        assert!(emitter.into_result().is_err());
+    }
+
+    #[test]
+    fn disabled_policy_rejects_stale_runtime_bindings() {
+        let mut config = SorafsProviderIngestRuntimeConfig::default();
+        config.authenticated_source_fetch_handle =
+            Some("network.sorafs.authenticated-source.primary".to_owned());
+        let mut emitter = Emitter::new();
+        assert!(config.parse(false, None, &mut emitter).is_none());
+        assert!(emitter.into_result().is_err());
+    }
+}
+
+#[cfg(test)]
+mod sorafs_hedging_billing_runtime_config_tests {
+    use super::*;
+
+    fn absolute_state_dir() -> PathBuf {
+        #[cfg(target_os = "windows")]
+        {
+            PathBuf::from(r"C:\iroha\sorafs\hedging-billing")
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            PathBuf::from("/var/lib/iroha/sorafs/hedging-billing")
+        }
+    }
+
+    fn absolute_service_policy_path() -> PathBuf {
+        #[cfg(target_os = "windows")]
+        {
+            PathBuf::from(r"C:\iroha\hedging-billing-policy.to")
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            PathBuf::from("/etc/iroha/hedging-billing-policy.to")
+        }
+    }
+
+    fn absolute_feed_policy_path() -> PathBuf {
+        #[cfg(target_os = "windows")]
+        {
+            PathBuf::from(r"C:\iroha\hedging-feed-policy.to")
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            PathBuf::from("/etc/iroha/hedging-feed-policy.to")
+        }
+    }
+
+    fn valid_config() -> SorafsHedgingBillingRuntimeConfig {
+        SorafsHedgingBillingRuntimeConfig {
+            enabled: true,
+            state_dir: absolute_state_dir(),
+            service_policy_path: Some(absolute_service_policy_path()),
+            service_policy_digest_hex: Some("41".repeat(32)),
+            finalized_query_handle: Some("ledger.billing.finalized".to_owned()),
+            journal_verifier_handle: Some("consensus.billing.verifier".to_owned()),
+            statement_signer_handle: Some("hsm.billing.statement".to_owned()),
+            statement_publisher_handle: Some("publisher.billing.immutable".to_owned()),
+            acknowledgement_authority_handle: Some("authority.billing.ack".to_owned()),
+            epoch_witness_store_handle: Some("sealed.billing.epoch".to_owned()),
+            ..SorafsHedgingBillingRuntimeConfig::default()
+        }
+    }
+
+    #[test]
+    fn disabled_default_is_inert() {
+        let mut emitter = Emitter::new();
+        assert!(
+            SorafsHedgingBillingRuntimeConfig::default()
+                .parse(false, None, &mut emitter)
+                .is_none()
+        );
+        assert!(emitter.into_result().is_ok());
+    }
+
+    #[test]
+    fn enabled_policy_parses_without_credentials_or_execution_adapter() {
+        let mut emitter = Emitter::new();
+        let feed_path = absolute_feed_policy_path();
+        let parsed = valid_config()
+            .parse(true, Some(feed_path.as_path()), &mut emitter)
+            .expect("enabled runtime policy");
+        assert!(emitter.into_result().is_ok());
+        assert_eq!(parsed.service_policy_digest, [0x41; 32]);
+        assert_eq!(parsed.poll_interval, Duration::from_secs(1));
+        assert_eq!(parsed.max_pages_per_tick, 256);
+        assert_eq!(parsed.max_period_closes_per_tick, 32);
+        assert_eq!(parsed.max_delivery_operations_per_tick, 256);
+        assert_eq!(parsed.max_finalized_lag_blocks, 2);
+    }
+
+    #[test]
+    fn enabled_policy_rejects_missing_and_nonproduction_bindings() {
+        let mut config = valid_config();
+        config.state_dir = PathBuf::from("relative/state");
+        config.service_policy_digest_hex = Some("AA".repeat(32));
+        config.finalized_query_handle = Some("mock-query.test".to_owned());
+        config.journal_verifier_handle = None;
+        config.poll_interval_ms = 0;
+        config.max_period_closes_per_tick = 0;
+        config.max_finalized_lag_blocks = 0;
+
+        let mut emitter = Emitter::new();
+        assert!(config.parse(false, None, &mut emitter).is_none());
+        assert!(emitter.into_result().is_err());
+    }
+}
+
+#[cfg(test)]
+mod sorafs_reputation_runtime_config_tests {
+    use super::*;
+
+    fn publisher_public_key_hex() -> String {
+        let key = KeyPair::try_from_seed(vec![0x52; 32], Algorithm::Ed25519).expect("test keypair");
+        hex::encode(key.public_key().to_bytes().1)
+    }
+
+    fn absolute_state_dir() -> PathBuf {
+        #[cfg(target_os = "windows")]
+        {
+            PathBuf::from(r"C:\iroha\sorafs\reputation")
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            PathBuf::from("/var/lib/iroha/sorafs/reputation")
+        }
+    }
+
+    fn absolute_trust_policy_path() -> PathBuf {
+        #[cfg(target_os = "windows")]
+        {
+            PathBuf::from(r"C:\iroha\reputation-trust-policy.to")
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            PathBuf::from("/etc/iroha/reputation-trust-policy.to")
+        }
+    }
+
+    fn valid_config() -> SorafsReputationRuntimeConfig {
+        SorafsReputationRuntimeConfig {
+            enabled: true,
+            state_dir: absolute_state_dir(),
+            window_start_height: Some(10),
+            window_end_height: Some(20),
+            finalized_query_handle: Some("ledger.finalized.primary".to_owned()),
+            journal_transaction_submitter_handle: Some("queue.reputation.journal".to_owned()),
+            threshold_signer_handle: Some("hsm.reputation.threshold".to_owned()),
+            governance_dag_handle: Some("governance.dag.publisher".to_owned()),
+            governance_publisher_peer_id: Some("12D3KooWProductionPublisher".to_owned()),
+            governance_publisher_public_key_hex: Some(publisher_public_key_hex()),
+            ..SorafsReputationRuntimeConfig::default()
+        }
+    }
+
+    #[test]
+    fn disabled_default_is_inert() {
+        let mut emitter = Emitter::new();
+        assert!(
+            SorafsReputationRuntimeConfig::default()
+                .parse(false, None, &mut emitter)
+                .is_none()
+        );
+        assert!(emitter.into_result().is_ok());
+    }
+
+    #[test]
+    fn enabled_policy_parses_without_credentials() {
+        let mut emitter = Emitter::new();
+        let trust_policy_path = absolute_trust_policy_path();
+        let parsed = valid_config()
+            .parse(true, Some(trust_policy_path.as_path()), &mut emitter)
+            .expect("enabled runtime policy");
+        assert!(emitter.into_result().is_ok());
+        assert_eq!(parsed.window_start_height, 10);
+        assert_eq!(parsed.window_end_height, 20);
+        assert_eq!(parsed.page_items, 64);
+        assert_eq!(parsed.max_pages_per_batch, 4_096);
+        assert_eq!(parsed.poll_interval, Duration::from_secs(1));
+        assert_eq!(
+            parsed.journal_transaction_submitter_handle,
+            "queue.reputation.journal"
+        );
+        assert_eq!(
+            parsed
+                .por_success_bps
+                .saturating_add(parsed.pdp_success_bps)
+                .saturating_add(parsed.potr_success_bps)
+                .saturating_add(parsed.latency_bps)
+                .saturating_add(parsed.dispute_bps)
+                .saturating_add(parsed.token_violation_bps)
+                .saturating_add(parsed.repair_breach_bps),
+            10_000
+        );
+    }
+
+    #[test]
+    fn enabled_policy_rejects_missing_or_nonproduction_dependencies() {
+        let mut config = valid_config();
+        config.finalized_query_handle = Some("null-query.test".to_owned());
+        config.journal_transaction_submitter_handle = Some("mock-submit.test".to_owned());
+        config.threshold_signer_handle = None;
+        config.state_dir = PathBuf::from("relative/reputation");
+        config.window_end_height = Some(9);
+        config.page_items = 65;
+        config.max_pages_per_batch = 516;
+        config.poll_interval_ms = 0;
+        config.repair_breach_bps = 999;
+
+        let mut emitter = Emitter::new();
+        assert!(config.parse(false, None, &mut emitter).is_none());
+        assert!(emitter.into_result().is_err());
+    }
+
+    #[test]
+    fn disabled_policy_rejects_stale_authority_claims() {
+        let mut config = SorafsReputationRuntimeConfig::default();
+        config.finalized_query_handle = Some("ledger.finalized.primary".to_owned());
+        let mut emitter = Emitter::new();
+        assert!(config.parse(false, None, &mut emitter).is_none());
         assert!(emitter.into_result().is_err());
     }
 }
@@ -18469,16 +20564,12 @@ mod sorafs_pop_credential_service_tests {
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
 pub struct SorafsStorage {
     /// Enables the embedded storage worker.
-    #[config(
-        env = "SORAFS_STORAGE_ENABLED",
-        default = "defaults::sorafs::storage::ENABLED"
-    )]
+    #[config(default = "defaults::sorafs::storage::ENABLED")]
     pub enabled: bool,
+    /// Canonical lowercase 32-byte provider identifier reconciled from finalized ledger state.
+    pub provider_id_hex: Option<String>,
     /// Root directory used to persist chunk data and manifests.
-    #[config(
-        env = "SORAFS_STORAGE_DATA_DIR",
-        default = "defaults::sorafs::storage::data_dir()"
-    )]
+    #[config(default = "defaults::sorafs::storage::data_dir()")]
     pub data_dir: PathBuf,
     /// Maximum on-disk capacity allotted to stored chunks (bytes).
     #[config(default = "defaults::sorafs::storage::MAX_CAPACITY_BYTES")]
@@ -18511,6 +20602,18 @@ pub struct SorafsStorage {
     /// Finalized-chain moderation orchestrator policy.
     #[config(nested)]
     pub moderation_orchestrator: SorafsModerationOrchestrator,
+    /// Production case-bound evidence-viewer policy.
+    #[config(nested)]
+    pub evidence_viewer: SorafsEvidenceViewerConfig,
+    /// Finalized-ledger reputation projector and external publication policy.
+    #[config(nested)]
+    pub reputation_runtime: SorafsReputationRuntimeConfig,
+    /// Finalized-ledger billing projector and statement-delivery policy.
+    #[config(nested)]
+    pub hedging_billing_runtime: SorafsHedgingBillingRuntimeConfig,
+    /// Supervised finalized-ledger provider-ingest policy.
+    #[config(nested)]
+    pub provider_ingest_runtime: SorafsProviderIngestRuntimeConfig,
     /// Durable admission-bound PDP provider protocol policy.
     #[config(nested)]
     pub pdp_provider: SorafsPdpProviderPolicy,
@@ -18538,13 +20641,9 @@ pub struct SorafsStorage {
     ///
     /// When absent, the reputation publication endpoint remains fail-closed.
     pub reputation_trust_policy_path: Option<PathBuf>,
-    /// Canonical Norito trust-policy file required for governed pricing admission.
+    /// Canonical Norito trust-policy file reused by the committed billing runtime.
     ///
-    /// When absent, governed pricing mutation and read endpoints remain fail-closed.
-    pub pricing_trust_policy_path: Option<PathBuf>,
-    /// Canonical Norito trust-policy file required for signed hedging-feed admission.
-    ///
-    /// When absent, signed feed mutation and read endpoints remain fail-closed.
+    /// When absent, an enabled hedging/billing runtime remains fail-closed.
     pub hedging_feed_trust_policy_path: Option<PathBuf>,
     /// Local SFM-4c privacy aggregate publication scheduler.
     #[config(nested)]
@@ -18552,15 +20651,14 @@ pub struct SorafsStorage {
     /// Local SFM-4b3 evidence-viewer audit-report publication scheduler.
     #[config(nested)]
     pub evidence_viewer_audits: SorafsEvidenceViewerAuditScheduleConfig,
-    /// Authentication and rate limits for manifest pin submissions.
-    #[config(nested)]
-    pub pin: SorafsStoragePin,
     /// Optional filesystem directory used to publish governance artefacts.
     pub governance_dag_dir: Option<PathBuf>,
     /// Optional publisher peer identifier used for signed Governance DAG blocks.
     pub governance_dag_publisher_peer_id: Option<String>,
-    /// Optional Ed25519 signing-key path used for signed Governance DAG blocks.
-    pub governance_dag_signing_key_path: Option<PathBuf>,
+    /// Opaque runtime HSM/KMS signer handle used for signed Governance DAG blocks.
+    pub governance_dag_signer_handle: Option<String>,
+    /// Canonical lowercase Ed25519 public key bound to the runtime signer.
+    pub governance_dag_publisher_public_key_hex: Option<String>,
     /// Always-on Governance DAG public publisher and bounded mirror service.
     #[config(nested)]
     pub governance_dag_service: SorafsGovernanceDagService,
@@ -18568,10 +20666,9 @@ pub struct SorafsStorage {
 
 impl Default for SorafsStorage {
     fn default() -> Self {
-        let governance_dag_signing_key_path =
-            defaults::sorafs::storage::governance_signing_key_path();
         Self {
             enabled: defaults::sorafs::storage::ENABLED,
+            provider_id_hex: None,
             data_dir: defaults::sorafs::storage::data_dir(),
             max_capacity_bytes: defaults::sorafs::storage::MAX_CAPACITY_BYTES,
             max_parallel_fetches: defaults::sorafs::storage::MAX_PARALLEL_FETCHES,
@@ -18584,6 +20681,10 @@ impl Default for SorafsStorage {
             moderation_screening_authority_bundle_digest_hex: None,
             pop_credentials: SorafsPopCredentialService::default(),
             moderation_orchestrator: SorafsModerationOrchestrator::default(),
+            evidence_viewer: SorafsEvidenceViewerConfig::default(),
+            reputation_runtime: SorafsReputationRuntimeConfig::default(),
+            hedging_billing_runtime: SorafsHedgingBillingRuntimeConfig::default(),
+            provider_ingest_runtime: SorafsProviderIngestRuntimeConfig::default(),
             pdp_provider: SorafsPdpProviderPolicy::default(),
             runtime: SorafsRuntimeRetentionConfig::default(),
             alias: defaults::sorafs::storage::alias(),
@@ -18593,22 +20694,123 @@ impl Default for SorafsStorage {
             orderbook_worker: SorafsOrderbookWorkerConfig::default(),
             reserve_worker: SorafsReserveWorkerConfig::default(),
             reputation_trust_policy_path: None,
-            pricing_trust_policy_path: None,
             hedging_feed_trust_policy_path: None,
             privacy_aggregates: SorafsPrivacyAggregateScheduleConfig::default(),
             evidence_viewer_audits: SorafsEvidenceViewerAuditScheduleConfig::default(),
-            pin: SorafsStoragePin::default(),
             governance_dag_dir: defaults::sorafs::storage::governance_dir(),
             governance_dag_publisher_peer_id:
                 defaults::sorafs::storage::governance_publisher_peer_id(),
-            governance_dag_signing_key_path,
+            governance_dag_signer_handle: None,
+            governance_dag_publisher_public_key_hex: None,
             governance_dag_service: SorafsGovernanceDagService::default(),
         }
     }
 }
 
+fn is_canonical_runtime_handle(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 256
+        && value.is_ascii()
+        && !value
+            .bytes()
+            .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
+}
+
+fn is_production_runtime_handle(value: &str) -> bool {
+    if !is_canonical_runtime_handle(value) {
+        return false;
+    }
+    let lowercase = value.to_ascii_lowercase();
+    !lowercase
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .any(|component| {
+            matches!(
+                component,
+                "null" | "mock" | "test" | "dev" | "fake" | "placeholder"
+            )
+        })
+}
+
+fn is_canonical_nonzero_ed25519_public_key_hex(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+        && value.bytes().any(|byte| byte != b'0')
+}
+
+fn is_canonical_webauthn_rp_id(value: &str) -> bool {
+    value.len() <= 253
+        && value.contains('.')
+        && value == value.to_ascii_lowercase()
+        && value.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && label
+                    .bytes()
+                    .next()
+                    .is_some_and(|byte| byte.is_ascii_alphanumeric())
+                && label
+                    .bytes()
+                    .last()
+                    .is_some_and(|byte| byte.is_ascii_alphanumeric())
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        })
+}
+
+fn is_canonical_webauthn_origin(value: &str, rp_id: &str) -> bool {
+    if value.len() > 512
+        || value != value.trim()
+        || !value.is_ascii()
+        || value
+            .bytes()
+            .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
+    {
+        return false;
+    }
+    let Ok(parsed) = Url::parse(value) else {
+        return false;
+    };
+    let Some(host) = parsed.host_str() else {
+        return false;
+    };
+    parsed.scheme() == "https"
+        && parsed.username().is_empty()
+        && parsed.password().is_none()
+        && parsed.path() == "/"
+        && parsed.query().is_none()
+        && parsed.fragment().is_none()
+        && parsed.origin().ascii_serialization() == value
+        && (host == rp_id || host.ends_with(&format!(".{rp_id}")))
+}
+
 impl SorafsStorage {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::SorafsStorage {
+        let provider_id = self.provider_id_hex.as_deref().and_then(|raw| {
+            if raw.len() != 64
+                || raw
+                    .bytes()
+                    .any(|byte| !byte.is_ascii_digit() && !(b'a'..=b'f').contains(&byte))
+            {
+                emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(
+                    "torii.sorafs.storage.provider_id_hex must be 64 lowercase hex characters",
+                ));
+                return None;
+            }
+            let decoded = hex::decode(raw).expect("validated lowercase provider hex");
+            let mut provider = [0_u8; 32];
+            provider.copy_from_slice(&decoded);
+            if provider == [0; 32] {
+                emitter.emit(
+                    Report::new(ParseError::InvalidToriiConfig)
+                        .attach("torii.sorafs.storage.provider_id_hex must be nonzero"),
+                );
+                return None;
+            }
+            Some(ProviderId::new(provider))
+        });
         if self.pdp_sample_window == 0
             || self.pdp_sample_window > defaults::sorafs::storage::PDP_SAMPLE_WINDOW_MAX
         {
@@ -18673,10 +20875,51 @@ impl SorafsStorage {
                 ));
             }
         }
+        if let Some(handle) = self.governance_dag_signer_handle.as_deref()
+            && !is_canonical_runtime_handle(handle)
+        {
+            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(
+                "torii.sorafs.storage.governance_dag_signer_handle must be 1..=256 visible ASCII bytes without whitespace",
+            ));
+        }
+        if let Some(public_key) = self.governance_dag_publisher_public_key_hex.as_deref()
+            && !is_canonical_nonzero_ed25519_public_key_hex(public_key)
+        {
+            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(
+                "torii.sorafs.storage.governance_dag_publisher_public_key_hex must be canonical lowercase non-zero 32-byte hex",
+            ));
+        }
+        let runtime_signer_fields = [
+            self.governance_dag_publisher_peer_id.is_some(),
+            self.governance_dag_signer_handle.is_some(),
+            self.governance_dag_publisher_public_key_hex.is_some(),
+        ];
+        if runtime_signer_fields.iter().any(|present| *present)
+            && !runtime_signer_fields.iter().all(|present| *present)
+        {
+            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(
+                "torii.sorafs.storage signed Governance DAG publication requires publisher peer id, signer handle, and publisher public key together",
+            ));
+        }
         let pop_credentials = self.pop_credentials.parse(self.enabled, emitter);
         let moderation_orchestrator = self.moderation_orchestrator.parse(self.enabled, emitter);
+        let evidence_viewer = self.evidence_viewer.parse(self.enabled, emitter);
+        let reputation_runtime = self.reputation_runtime.parse(
+            self.enabled,
+            self.reputation_trust_policy_path.as_deref(),
+            emitter,
+        );
+        let hedging_billing_runtime = self.hedging_billing_runtime.parse(
+            self.enabled,
+            self.hedging_feed_trust_policy_path.as_deref(),
+            emitter,
+        );
+        let provider_ingest_runtime =
+            self.provider_ingest_runtime
+                .parse(self.enabled, provider_id.as_ref(), emitter);
         actual::SorafsStorage {
             enabled: self.enabled,
+            provider_id,
             data_dir: self.data_dir,
             max_capacity_bytes: self.max_capacity_bytes,
             max_parallel_fetches: self.max_parallel_fetches,
@@ -18690,23 +20933,26 @@ impl SorafsStorage {
             moderation_screening_authority_bundle_digest,
             pop_credentials,
             moderation_orchestrator,
+            evidence_viewer,
+            reputation_runtime,
+            hedging_billing_runtime,
+            provider_ingest_runtime,
             pdp_provider: self.pdp_provider.parse(emitter),
             runtime: self.runtime.parse(),
             alias: self.alias.or_else(super::defaults::sorafs::storage::alias),
             adverts: self.adverts.parse(),
             metering_smoothing: self.metering_smoothing.parse(),
-            stream_tokens: self.stream_tokens.parse(),
+            stream_tokens: self.stream_tokens.parse(self.enabled, emitter),
             orderbook_worker: self.orderbook_worker.parse(emitter),
             reserve_worker: self.reserve_worker.parse(emitter),
             reputation_trust_policy_path: self.reputation_trust_policy_path,
-            pricing_trust_policy_path: self.pricing_trust_policy_path,
             hedging_feed_trust_policy_path: self.hedging_feed_trust_policy_path,
             privacy_aggregates: self.privacy_aggregates.parse(emitter),
             evidence_viewer_audits: self.evidence_viewer_audits.parse(),
-            pin: self.pin.parse(),
             governance_dag_dir: self.governance_dag_dir,
             governance_dag_publisher_peer_id: self.governance_dag_publisher_peer_id,
-            governance_dag_signing_key_path: self.governance_dag_signing_key_path,
+            governance_dag_signer_handle: self.governance_dag_signer_handle,
+            governance_dag_publisher_public_key_hex: self.governance_dag_publisher_public_key_hex,
             governance_dag_service: self.governance_dag_service.parse(emitter),
         }
     }
@@ -18731,12 +20977,12 @@ pub struct SorafsGovernanceDagService {
     pub ipns_name: Option<String>,
     /// IPFS keystore alias passed to `name/publish` by `ipns` mode.
     pub ipns_key_name: Option<String>,
-    /// Runtime-only bearer-token file for the IPFS API.
-    pub ipfs_bearer_token_path: Option<PathBuf>,
-    /// Runtime-only bearer-token file for the signed-head endpoint.
-    pub head_bearer_token_path: Option<PathBuf>,
-    /// Runtime-only 32-byte key authenticating checkpoints and mirror indexes.
-    pub checkpoint_key_path: Option<PathBuf>,
+    /// Opaque runtime authenticator handle for the IPFS/Kubo API.
+    pub ipfs_authenticator_handle: Option<String>,
+    /// Opaque runtime authenticator handle for the signed-head endpoint.
+    pub head_authenticator_handle: Option<String>,
+    /// Opaque runtime sealed-checkpoint store handle.
+    pub checkpoint_store_handle: Option<String>,
     /// Canonical lowercase Ed25519 public key expected on every signed object.
     pub publisher_public_key_hex: Option<String>,
     /// Filesystem reconciliation interval in seconds.
@@ -18804,9 +21050,9 @@ impl Default for SorafsGovernanceDagService {
             signed_head_url: None,
             ipns_name: None,
             ipns_key_name: None,
-            ipfs_bearer_token_path: None,
-            head_bearer_token_path: None,
-            checkpoint_key_path: None,
+            ipfs_authenticator_handle: None,
+            head_authenticator_handle: None,
+            checkpoint_store_handle: None,
             publisher_public_key_hex: None,
             poll_interval_secs: service::POLL_INTERVAL_SECS,
             connect_timeout_ms: service::CONNECT_TIMEOUT_MS,
@@ -18895,11 +21141,7 @@ impl SorafsGovernanceDagService {
             }
         }
         if let Some(public_key_hex) = self.publisher_public_key_hex.as_deref()
-            && (public_key_hex.len() != 64
-                || !public_key_hex
-                    .bytes()
-                    .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
-                || public_key_hex.bytes().all(|byte| byte == b'0'))
+            && !is_canonical_nonzero_ed25519_public_key_hex(public_key_hex)
         {
             emit(
                 emitter,
@@ -18914,10 +21156,40 @@ impl SorafsGovernanceDagService {
                     .to_owned(),
             );
         }
+        for (field, value) in [
+            (
+                "ipfs_authenticator_handle",
+                self.ipfs_authenticator_handle.as_deref(),
+            ),
+            (
+                "head_authenticator_handle",
+                self.head_authenticator_handle.as_deref(),
+            ),
+            (
+                "checkpoint_store_handle",
+                self.checkpoint_store_handle.as_deref(),
+            ),
+        ] {
+            if value.is_some_and(|value| !is_canonical_runtime_handle(value)) {
+                emit(
+                    emitter,
+                    format!(
+                        "sorafs.storage.governance_dag_service.{field} must be 1..=256 visible ASCII bytes without whitespace"
+                    ),
+                );
+            }
+        }
         if self.enabled {
             for (field, present) in [
                 ("ipfs_api_url", self.ipfs_api_url.is_some()),
-                ("checkpoint_key_path", self.checkpoint_key_path.is_some()),
+                (
+                    "ipfs_authenticator_handle",
+                    self.ipfs_authenticator_handle.is_some(),
+                ),
+                (
+                    "checkpoint_store_handle",
+                    self.checkpoint_store_handle.is_some(),
+                ),
                 (
                     "publisher_public_key_hex",
                     self.publisher_public_key_hex.is_some(),
@@ -18933,11 +21205,16 @@ impl SorafsGovernanceDagService {
                 }
             }
             match self.head_mode.as_str() {
-                "signed_http" if self.signed_head_url.is_none() => emit(
-                    emitter,
-                    "sorafs.storage.governance_dag_service.signed_head_url is required in signed_http mode"
-                        .to_owned(),
-                ),
+                "signed_http"
+                    if self.signed_head_url.is_none()
+                        || self.head_authenticator_handle.is_none() =>
+                {
+                    emit(
+                        emitter,
+                        "sorafs.storage.governance_dag_service.signed_head_url and head_authenticator_handle are required in signed_http mode"
+                            .to_owned(),
+                    );
+                }
                 "ipns" if self.ipns_name.is_none() || self.ipns_key_name.is_none() => emit(
                     emitter,
                     "sorafs.storage.governance_dag_service.ipns_name and ipns_key_name are required in ipns mode"
@@ -18954,9 +21231,9 @@ impl SorafsGovernanceDagService {
             signed_head_url: self.signed_head_url,
             ipns_name: self.ipns_name,
             ipns_key_name: self.ipns_key_name,
-            ipfs_bearer_token_path: self.ipfs_bearer_token_path,
-            head_bearer_token_path: self.head_bearer_token_path,
-            checkpoint_key_path: self.checkpoint_key_path,
+            ipfs_authenticator_handle: self.ipfs_authenticator_handle,
+            head_authenticator_handle: self.head_authenticator_handle,
+            checkpoint_store_handle: self.checkpoint_store_handle,
             publisher_public_key_hex: self.publisher_public_key_hex,
             poll_interval: std::time::Duration::from_secs(self.poll_interval_secs.max(1)),
             connect_timeout: std::time::Duration::from_millis(self.connect_timeout_ms.max(1)),
@@ -19098,7 +21375,9 @@ governance_dag_dir = "/var/lib/iroha/sorafs/governance"
 enabled = true
 ipfs_api_url = "https://ipfs-api.example"
 signed_head_url = "https://governance-head.example/v1/head"
-checkpoint_key_path = "/run/secrets/governance-checkpoint.key"
+ipfs_authenticator_handle = "vault:governance/ipfs"
+head_authenticator_handle = "vault:governance/head"
+checkpoint_store_handle = "kms:governance/checkpoint"
 publisher_public_key_hex = "1111111111111111111111111111111111111111111111111111111111111111"
 allow_private_ipfs_endpoint = true
 allow_private_head_endpoint = false
@@ -19116,8 +21395,55 @@ allow_private_head_endpoint = false
             Some(Path::new("/var/lib/iroha/sorafs/governance"))
         );
         assert_eq!(view.service.head_mode, "signed_http");
+        assert_eq!(
+            view.service.checkpoint_store_handle.as_deref(),
+            Some("kms:governance/checkpoint")
+        );
         assert!(view.service.allow_private_ipfs_endpoint);
         assert!(!view.service.allow_private_head_endpoint);
+    }
+
+    #[test]
+    fn dedicated_view_rejects_removed_file_secret_paths() {
+        for field in [
+            "ipfs_bearer_token_path",
+            "head_bearer_token_path",
+            "checkpoint_key_path",
+        ] {
+            let table: toml::Table = toml::from_str(&format!(
+                r#"
+[sorafs.storage]
+governance_dag_dir = "/var/lib/iroha/sorafs/governance"
+
+[sorafs.storage.governance_dag_service]
+enabled = false
+{field} = "/run/secrets/legacy"
+"#
+            ))
+            .expect("parse legacy service TOML");
+            assert!(
+                actual::SorafsGovernanceDagServiceView::from_toml_source(TomlSource::inline(table))
+                    .is_err(),
+                "{field} must fail closed"
+            );
+        }
+
+        let table: toml::Table = toml::from_str(
+            r#"
+[sorafs.storage]
+governance_dag_dir = "/var/lib/iroha/sorafs/governance"
+governance_dag_signing_key_path = "/run/secrets/legacy"
+
+[sorafs.storage.governance_dag_service]
+enabled = false
+"#,
+        )
+        .expect("parse legacy signer TOML");
+        assert!(
+            actual::SorafsGovernanceDagServiceView::from_toml_source(TomlSource::inline(table))
+                .is_err(),
+            "governance_dag_signing_key_path must fail closed"
+        );
     }
 
     #[test]
@@ -19952,74 +22278,6 @@ impl SorafsEvidenceViewerAuditScheduleConfig {
     }
 }
 
-/// Authentication and abuse controls for `/v1/sorafs/storage/pin`.
-#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize, Default)]
-pub struct SorafsStoragePin {
-    /// Whether a bearer token is required to submit a pin request.
-    #[config(env = "SORAFS_STORAGE_PIN_REQUIRE_TOKEN", default = "false")]
-    pub require_token: bool,
-    /// Static allow-list of bearer tokens accepted by the gateway.
-    #[config(default = "Vec::new()")]
-    pub tokens: Vec<String>,
-    /// Optional CIDR allow-list limiting clients that may submit pin requests.
-    #[config(default = "Vec::new()")]
-    pub allow_cidrs: Vec<String>,
-    /// Per-client rate limits applied to pin submissions.
-    #[config(nested)]
-    pub rate_limit: SorafsPinRateLimit,
-}
-
-impl SorafsStoragePin {
-    fn parse(self) -> actual::SorafsStoragePin {
-        let tokens: BTreeSet<String> = self
-            .tokens
-            .into_iter()
-            .map(|token| token.trim().to_string())
-            .filter(|token| !token.is_empty())
-            .collect();
-        actual::SorafsStoragePin {
-            require_token: self.require_token,
-            tokens,
-            allow_cidrs: self.allow_cidrs,
-            rate_limit: self.rate_limit.parse(),
-        }
-    }
-}
-
-/// Per-client rate limits for manifest pin submissions.
-#[derive(Debug, ReadConfig, Clone, Copy, norito::JsonDeserialize)]
-pub struct SorafsPinRateLimit {
-    /// Maximum requests permitted within the window. `None` disables rate limiting.
-    #[config(env = "SORAFS_STORAGE_PIN_RATE_LIMIT_MAX_REQUESTS")]
-    pub max_requests: Option<u32>,
-    /// Duration of the rolling window (seconds).
-    #[config(env = "SORAFS_STORAGE_PIN_RATE_LIMIT_WINDOW_SECS", default = "1u64")]
-    pub window_secs: u64,
-    /// Optional ban duration applied after exceeding the limit (seconds).
-    #[config(env = "SORAFS_STORAGE_PIN_RATE_LIMIT_BAN_SECS")]
-    pub ban_secs: Option<u64>,
-}
-
-impl Default for SorafsPinRateLimit {
-    fn default() -> Self {
-        Self {
-            max_requests: None,
-            window_secs: 1,
-            ban_secs: None,
-        }
-    }
-}
-
-impl SorafsPinRateLimit {
-    fn parse(self) -> actual::SorafsGatewayRateLimit {
-        actual::SorafsGatewayRateLimit {
-            max_requests: self.max_requests.and_then(NonZeroU32::new),
-            window: Duration::from_secs(self.window_secs.max(1)),
-            ban: self.ban_secs.map(Duration::from_secs),
-        }
-    }
-}
-
 /// User-level native repair worker and transaction-forwarder configuration.
 #[derive(Debug, ReadConfig, Clone, Copy, norito::JsonDeserialize)]
 pub struct SorafsRepair {
@@ -20220,21 +22478,44 @@ mod sorafs_repair_gc_tests {
     }
 
     #[test]
-    fn sorafs_appeal_finance_settlement_parse_derives_submitter_accounts() {
+    fn sorafs_appeal_finance_settlement_parse_binds_only_public_runtime_identity() {
         let key_pair = KeyPair::try_from_seed(vec![0xA7; 32], Algorithm::Ed25519)
             .expect("derive settlement submitter keypair");
+        let authority = AccountId::new(key_pair.public_key().clone());
         let config = SorafsAppealFinanceSettlement {
-            submitter_private_keys: vec![ExposedPrivateKey(key_pair.private_key().clone())],
+            submitter_signers: vec![SorafsAppealFinanceSignerBinding {
+                handle: "pkcs11:appeal-finance-a".to_owned(),
+                authority: authority.clone(),
+                public_key_hex: hex::encode(key_pair.public_key().to_bytes().1),
+                valid_from_block_height: 7,
+                revoked_at_block_height: Some(11),
+            }],
             worker_scan_interval_ms: DurationMs(std::time::Duration::from_millis(30_000)),
             worker_max_retry_attempts: 3,
+            worker_max_pending: 128,
+            worker_max_completed: 256,
+            worker_max_dead_letters: 32,
+            worker_checkpoint_max_bytes: 8 * 1024 * 1024,
         };
 
-        let actual = config.parse();
+        let mut emitter = Emitter::new();
+        let actual = config.parse(&mut emitter);
+        assert!(emitter.into_result().is_ok());
 
         assert_eq!(actual.submitter_signers.len(), 1);
+        assert_eq!(actual.submitter_signers[0].authority, authority);
         assert_eq!(
-            actual.submitter_signers[0].public_key(),
-            key_pair.public_key()
+            actual.submitter_signers[0].public_key,
+            key_pair.public_key().clone()
+        );
+        assert_eq!(
+            actual.submitter_signers[0].handle,
+            "pkcs11:appeal-finance-a"
+        );
+        assert_eq!(actual.submitter_signers[0].valid_from_block_height, 7);
+        assert_eq!(
+            actual.submitter_signers[0].revoked_at_block_height,
+            Some(11)
         );
         assert_eq!(
             actual.worker_scan_interval,
@@ -20242,10 +22523,77 @@ mod sorafs_repair_gc_tests {
         );
         assert_eq!(actual.worker_max_retry_attempts, 3);
     }
+
+    #[test]
+    fn sorafs_appeal_finance_settlement_rejects_wrong_key_and_overlapping_rotation() {
+        let key_pair = KeyPair::try_from_seed(vec![0xA8; 32], Algorithm::Ed25519)
+            .expect("derive settlement submitter keypair");
+        let wrong = KeyPair::try_from_seed(vec![0xA9; 32], Algorithm::Ed25519)
+            .expect("derive wrong settlement submitter keypair");
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let binding = |handle: &str, valid_from_block_height, revoked_at_block_height| {
+            SorafsAppealFinanceSignerBinding {
+                handle: handle.to_owned(),
+                authority: authority.clone(),
+                public_key_hex: hex::encode(wrong.public_key().to_bytes().1),
+                valid_from_block_height,
+                revoked_at_block_height,
+            }
+        };
+        let config = SorafsAppealFinanceSettlement {
+            submitter_signers: vec![
+                binding("pkcs11:appeal-finance-old", 1, Some(10)),
+                binding("pkcs11:appeal-finance-new", 9, None),
+            ],
+            ..SorafsAppealFinanceSettlement::default()
+        };
+
+        let mut emitter = Emitter::new();
+        let _ = config.parse(&mut emitter);
+        assert!(
+            emitter.into_result().is_err(),
+            "wrong key identity and overlapping rotation must fail closed"
+        );
+    }
+
+    #[test]
+    fn sorafs_appeal_finance_settlement_rejects_retired_private_key_field() {
+        let retired = r#"{
+            "submitter_private_keys":[],
+            "worker_scan_interval_ms":30000,
+            "worker_max_retry_attempts":3,
+            "worker_max_pending":4096,
+            "worker_max_completed":16384,
+            "worker_max_dead_letters":1024,
+            "worker_checkpoint_max_bytes":67108864
+        }"#;
+        assert!(
+            norito::json::from_str::<SorafsAppealFinanceSettlement>(retired).is_err(),
+            "retired configured private keys must be rejected as an unknown V1 field"
+        );
+    }
+
+    #[test]
+    fn sorafs_appeal_finance_settlement_rejects_unbounded_worker_policy() {
+        let config = SorafsAppealFinanceSettlement {
+            worker_scan_interval_ms: DurationMs(std::time::Duration::ZERO),
+            worker_max_retry_attempts: 1_025,
+            worker_checkpoint_max_bytes: 4 * 1024 - 1,
+            ..SorafsAppealFinanceSettlement::default()
+        };
+
+        let mut emitter = Emitter::new();
+        let _ = config.parse(&mut emitter);
+        assert!(
+            emitter.into_result().is_err(),
+            "zero scan cadence, excessive retries, and undersized checkpoints must fail closed"
+        );
+    }
 }
 
 /// User-level configuration for the PoR coordinator runtime.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub struct SorafsPor {
     /// Enable the PoR coordinator runtime.
     ///
@@ -20257,15 +22605,12 @@ pub struct SorafsPor {
     /// Response window (seconds) granted to providers for PoR proofs.
     #[config(default = "defaults::sorafs::por::RESPONSE_WINDOW_SECS")]
     pub response_window_secs: u64,
-    /// Filesystem directory used for governance DAG outputs.
-    #[config(default = "defaults::sorafs::por::governance_dir()")]
-    pub governance_dir: PathBuf,
+    /// Private filesystem directory for coordinator, drand, and VRF state.
+    #[config(default = "defaults::sorafs::por::state_dir()")]
+    pub state_dir: PathBuf,
     /// Pinned drand trust and hardened transport configuration.
     #[config(nested)]
     pub drand: SorafsPorDrand,
-    /// Durable provider VRF state path.
-    #[config(default = "defaults::sorafs::por::vrf_state_path()")]
-    pub vrf_state_path: PathBuf,
     /// Deadline from epoch start before the forced-challenge path is allowed.
     #[config(default = "defaults::sorafs::por::VRF_SUBMISSION_DEADLINE_SECS")]
     pub vrf_submission_deadline_secs: u64,
@@ -20289,9 +22634,8 @@ impl Default for SorafsPor {
             enabled: defaults::sorafs::por::ENABLED,
             epoch_interval_secs: defaults::sorafs::por::EPOCH_INTERVAL_SECS,
             response_window_secs: defaults::sorafs::por::RESPONSE_WINDOW_SECS,
-            governance_dir: defaults::sorafs::por::governance_dir(),
+            state_dir: defaults::sorafs::por::state_dir(),
             drand: SorafsPorDrand::default(),
-            vrf_state_path: defaults::sorafs::por::vrf_state_path(),
             vrf_submission_deadline_secs: defaults::sorafs::por::VRF_SUBMISSION_DEADLINE_SECS,
             vrf_max_entries: defaults::sorafs::por::VRF_MAX_ENTRIES,
             vrf_retention_epochs: defaults::sorafs::por::VRF_RETENTION_EPOCHS,
@@ -20303,13 +22647,16 @@ impl Default for SorafsPor {
 
 impl SorafsPor {
     fn parse(self) -> actual::SorafsPor {
+        let state_dir = self.state_dir;
+        let drand_state_path = state_dir.join(defaults::sorafs::por::DRAND_STATE_FILE);
+        let vrf_state_path = state_dir.join(defaults::sorafs::por::VRF_STATE_FILE);
         actual::SorafsPor {
             enabled: self.enabled,
             epoch_interval_secs: self.epoch_interval_secs,
             response_window_secs: self.response_window_secs,
-            governance_dag_dir: self.governance_dir,
-            drand: self.drand.parse(),
-            vrf_state_path: self.vrf_state_path,
+            state_dir,
+            drand: self.drand.parse(drand_state_path),
+            vrf_state_path,
             vrf_submission_deadline_secs: self.vrf_submission_deadline_secs,
             vrf_max_entries: self.vrf_max_entries,
             vrf_retention_epochs: self.vrf_retention_epochs,
@@ -20322,6 +22669,7 @@ impl SorafsPor {
 
 /// User-level pinned drand chain and HTTP policy.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub struct SorafsPorDrand {
     /// Exact first-release scheme identifier.
     #[config(default = "String::new()")]
@@ -20362,9 +22710,6 @@ pub struct SorafsPorDrand {
     /// Maximum tolerated future clock skew.
     #[config(default = "defaults::sorafs::por::DRAND_MAX_FUTURE_SKEW_SECS")]
     pub max_future_skew_secs: u64,
-    /// Durable high-water state path.
-    #[config(default = "defaults::sorafs::por::drand_state_path()")]
-    pub state_path: PathBuf,
 }
 
 impl Default for SorafsPorDrand {
@@ -20383,13 +22728,12 @@ impl Default for SorafsPorDrand {
             max_body_bytes: defaults::sorafs::por::DRAND_MAX_BODY_BYTES,
             max_beacon_age_secs: defaults::sorafs::por::DRAND_MAX_BEACON_AGE_SECS,
             max_future_skew_secs: defaults::sorafs::por::DRAND_MAX_FUTURE_SKEW_SECS,
-            state_path: defaults::sorafs::por::drand_state_path(),
         }
     }
 }
 
 impl SorafsPorDrand {
-    fn parse(self) -> actual::SorafsPorDrand {
+    fn parse(self, state_path: PathBuf) -> actual::SorafsPorDrand {
         fn decode_fixed<const N: usize>(value: &str, field: &str) -> [u8; N] {
             if value.is_empty() {
                 return [0; N];
@@ -20424,7 +22768,7 @@ impl SorafsPorDrand {
             max_body_bytes: self.max_body_bytes,
             max_beacon_age_secs: self.max_beacon_age_secs,
             max_future_skew_secs: self.max_future_skew_secs,
-            state_path: self.state_path,
+            state_path,
         }
     }
 }
@@ -20451,6 +22795,7 @@ fn sorafs_por_parses_file_configured_verified_feed_fields_without_env_fallbacks(
         enabled: true,
         ..Default::default()
     };
+    config.state_dir = PathBuf::from("/var/lib/iroha/sorafs/por");
     config.drand.scheme = "bls-unchained-g1-rfc9380".to_owned();
     config.drand.chain_hash_hex = "11".repeat(32);
     config.drand.public_key_hex = "22".repeat(96);
@@ -20467,19 +22812,51 @@ fn sorafs_por_parses_file_configured_verified_feed_fields_without_env_fallbacks(
     assert_eq!(parsed.drand.chain_hash, [0x11; 32]);
     assert_eq!(parsed.drand.public_key, [0x22; 96]);
     assert_eq!(parsed.drand.endpoints.len(), 3);
+    assert_eq!(
+        parsed.drand.state_path,
+        parsed
+            .state_dir
+            .join(defaults::sorafs::por::DRAND_STATE_FILE)
+    );
+    assert_eq!(
+        parsed.vrf_state_path,
+        parsed.state_dir.join(defaults::sorafs::por::VRF_STATE_FILE)
+    );
+}
+
+#[cfg(test)]
+#[test]
+fn sorafs_por_rejects_obsolete_competing_state_paths() {
+    for retired in [
+        r#"{"governance_dir":"/tmp/retired"}"#,
+        r#"{"governance_dag_dir":"/tmp/retired"}"#,
+        r#"{"vrf_state_path":"/tmp/retired.to"}"#,
+    ] {
+        let error = norito::json::from_str::<SorafsPor>(retired)
+            .expect_err("retired PoR state field must be rejected");
+        assert!(
+            error.to_string().contains("unknown field"),
+            "unexpected retired-field diagnostic: {error}"
+        );
+    }
+    let error = norito::json::from_str::<SorafsPorDrand>(r#"{"state_path":"/tmp/retired.to"}"#)
+        .expect_err("retired drand state path must be rejected");
+    assert!(
+        error.to_string().contains("unknown field"),
+        "unexpected retired drand-field diagnostic: {error}"
+    );
 }
 
 /// User-level configuration for stream-token issuance.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
 pub struct SorafsStreamTokenConfig {
     /// Enable stream-token issuance.
-    #[config(
-        env = "SORAFS_STREAM_TOKENS_ENABLED",
-        default = "defaults::sorafs::storage::tokens::ENABLED"
-    )]
+    #[config(default = "defaults::sorafs::storage::tokens::ENABLED")]
     pub enabled: bool,
-    /// Filesystem path to the Ed25519 signing key.
-    pub signing_key_path: Option<PathBuf>,
+    /// Opaque runtime-only HSM/KMS signer handle.
+    pub signer_handle: Option<String>,
+    /// Canonical lowercase Ed25519 public key bound to the runtime signer.
+    pub signer_public_key_hex: Option<String>,
     /// Public-key version advertised in tokens.
     #[config(default = "defaults::sorafs::storage::tokens::KEY_VERSION")]
     pub key_version: u32,
@@ -20501,7 +22878,8 @@ impl Default for SorafsStreamTokenConfig {
     fn default() -> Self {
         Self {
             enabled: defaults::sorafs::storage::tokens::ENABLED,
-            signing_key_path: defaults::sorafs::storage::tokens::signing_key_path(),
+            signer_handle: None,
+            signer_public_key_hex: None,
             key_version: defaults::sorafs::storage::tokens::KEY_VERSION,
             default_ttl_secs: defaults::sorafs::storage::tokens::DEFAULT_TTL_SECS,
             default_max_streams: defaults::sorafs::storage::tokens::DEFAULT_MAX_STREAMS,
@@ -20513,10 +22891,70 @@ impl Default for SorafsStreamTokenConfig {
 }
 
 impl SorafsStreamTokenConfig {
-    fn parse(self) -> actual::SorafsTokenConfig {
+    fn parse(
+        self,
+        storage_enabled: bool,
+        emitter: &mut Emitter<ParseError>,
+    ) -> actual::SorafsTokenConfig {
+        let signer_public_key = self
+            .signer_public_key_hex
+            .as_deref()
+            .and_then(|value| {
+                if !is_canonical_nonzero_ed25519_public_key_hex(value) {
+                    emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(
+                        "torii.sorafs.storage.stream_tokens.signer_public_key_hex must be canonical lowercase non-zero 32-byte hex",
+                    ));
+                    return None;
+                }
+                let bytes: [u8; 32] = hex::decode(value)
+                    .expect("validated lowercase Ed25519 public key hex")
+                    .try_into()
+                    .expect("validated 32-byte Ed25519 public key");
+                if PublicKey::from_bytes(Algorithm::Ed25519, &bytes).is_err() {
+                    emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(
+                        "torii.sorafs.storage.stream_tokens.signer_public_key_hex is not a valid Ed25519 public key",
+                    ));
+                    return None;
+                }
+                Some(bytes)
+            });
+
+        if self.enabled {
+            if !storage_enabled {
+                emitter.emit(
+                    Report::new(ParseError::InvalidToriiConfig).attach(
+                        "torii.sorafs.storage.stream_tokens.enabled requires storage.enabled",
+                    ),
+                );
+            }
+            match self.signer_handle.as_deref() {
+                Some(handle) if is_production_runtime_handle(handle) => {}
+                Some(_) => {
+                    emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(
+                        "torii.sorafs.storage.stream_tokens.signer_handle must be a production runtime handle with 1..=256 visible ASCII bytes and no whitespace",
+                    ));
+                }
+                None => {
+                    emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(
+                        "torii.sorafs.storage.stream_tokens.signer_handle is required when issuance is enabled",
+                    ));
+                }
+            }
+            if self.signer_public_key_hex.is_none() {
+                emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(
+                    "torii.sorafs.storage.stream_tokens.signer_public_key_hex is required when issuance is enabled",
+                ));
+            }
+        } else if self.signer_handle.is_some() || self.signer_public_key_hex.is_some() {
+            emitter.emit(Report::new(ParseError::InvalidToriiConfig).attach(
+                "torii.sorafs.storage.stream_tokens signer binding is forbidden while issuance is disabled",
+            ));
+        }
+
         actual::SorafsTokenConfig {
             enabled: self.enabled,
-            signing_key_path: self.signing_key_path,
+            signer_handle: self.signer_handle,
+            signer_public_key,
             key_version: self.key_version,
             default_ttl_secs: self.default_ttl_secs,
             default_max_streams: self.default_max_streams,
@@ -20539,21 +22977,11 @@ pub struct SorafsQuota {
     /// Rolling window (seconds) applied to capacity telemetry quotas.
     #[config(default = "defaults::torii::SORAFS_QUOTA_TELEMETRY_WINDOW_SECS")]
     pub capacity_telemetry_window_secs: u64,
-    /// Optional override for the number of deal telemetry submissions allowed per window.
-    pub deal_telemetry_max_events: Option<u32>,
-    /// Rolling window (seconds) applied to deal telemetry quotas.
-    #[config(default = "defaults::torii::SORAFS_QUOTA_DEAL_TELEMETRY_WINDOW_SECS")]
-    pub deal_telemetry_window_secs: u64,
     /// Optional override for the number of capacity disputes allowed per window.
     pub capacity_dispute_max_events: Option<u32>,
     /// Rolling window (seconds) applied to capacity dispute quotas.
     #[config(default = "defaults::torii::SORAFS_QUOTA_DISPUTE_WINDOW_SECS")]
     pub capacity_dispute_window_secs: u64,
-    /// Optional override for the number of manifest pin submissions allowed per window.
-    pub storage_pin_max_events: Option<u32>,
-    /// Rolling window (seconds) applied to storage pin quotas.
-    #[config(default = "defaults::torii::SORAFS_QUOTA_STORAGE_PIN_WINDOW_SECS")]
-    pub storage_pin_window_secs: u64,
     /// Optional override for the number of PoR submissions allowed per window.
     pub por_submission_max_events: Option<u32>,
     /// Rolling window (seconds) applied to PoR submission quotas.
@@ -20568,12 +22996,8 @@ impl Default for SorafsQuota {
             capacity_declaration_window_secs: defaults::torii::SORAFS_QUOTA_DECLARATION_WINDOW_SECS,
             capacity_telemetry_max_events: defaults::torii::SORAFS_QUOTA_TELEMETRY_MAX_EVENTS,
             capacity_telemetry_window_secs: defaults::torii::SORAFS_QUOTA_TELEMETRY_WINDOW_SECS,
-            deal_telemetry_max_events: defaults::torii::SORAFS_QUOTA_DEAL_TELEMETRY_MAX_EVENTS,
-            deal_telemetry_window_secs: defaults::torii::SORAFS_QUOTA_DEAL_TELEMETRY_WINDOW_SECS,
             capacity_dispute_max_events: defaults::torii::SORAFS_QUOTA_DISPUTE_MAX_EVENTS,
             capacity_dispute_window_secs: defaults::torii::SORAFS_QUOTA_DISPUTE_WINDOW_SECS,
-            storage_pin_max_events: defaults::torii::SORAFS_QUOTA_STORAGE_PIN_MAX_EVENTS,
-            storage_pin_window_secs: defaults::torii::SORAFS_QUOTA_STORAGE_PIN_WINDOW_SECS,
             por_submission_max_events: defaults::torii::SORAFS_QUOTA_POR_MAX_EVENTS,
             por_submission_window_secs: defaults::torii::SORAFS_QUOTA_POR_WINDOW_SECS,
         }
@@ -20600,20 +23024,10 @@ impl SorafsQuota {
                     .or(super::defaults::torii::SORAFS_QUOTA_TELEMETRY_MAX_EVENTS),
                 self.capacity_telemetry_window_secs,
             ),
-            deal_telemetry: window(
-                self.deal_telemetry_max_events
-                    .or(super::defaults::torii::SORAFS_QUOTA_DEAL_TELEMETRY_MAX_EVENTS),
-                self.deal_telemetry_window_secs,
-            ),
             capacity_dispute: window(
                 self.capacity_dispute_max_events
                     .or(super::defaults::torii::SORAFS_QUOTA_DISPUTE_MAX_EVENTS),
                 self.capacity_dispute_window_secs,
-            ),
-            storage_pin: window(
-                self.storage_pin_max_events
-                    .or(super::defaults::torii::SORAFS_QUOTA_STORAGE_PIN_MAX_EVENTS),
-                self.storage_pin_window_secs,
             ),
             por_submission: window(
                 self.por_submission_max_events
@@ -21657,10 +24071,7 @@ impl SorafsMeteringSmoothing {
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
 pub struct SorafsDiscovery {
     /// Enables the SoraFS discovery ingress/egress API.
-    #[config(
-        env = "TORII_SORAFS_DISCOVERY_ENABLED",
-        default = "defaults::torii::SORAFS_DISCOVERY_ENABLED"
-    )]
+    #[config(default = "defaults::torii::SORAFS_DISCOVERY_ENABLED")]
     pub discovery_enabled: bool,
     /// Capability names accepted when validating provider adverts.
     #[config(default = "defaults::torii::sorafs_known_capabilities()")]
@@ -21717,7 +24128,6 @@ impl SorafsDiscovery {
 #[derive(Debug, ReadConfig, Clone, Default, norito::JsonDeserialize)]
 pub struct SorafsPublishDiscoveryConfig {
     /// Public gateway base URL used for post-deploy verification.
-    #[config(env = "TORII_SORAFS_PUBLISH_GATEWAY_BASE_URL")]
     pub gateway_base_url: Option<String>,
     /// Torii URLs that deploy clients should pin to after paid registration.
     #[config(default = "Vec::<String>::new()")]
@@ -21745,7 +24155,6 @@ impl SorafsPublishDiscoveryConfig {
 #[derive(Debug, ReadConfig, Clone, Default, norito::JsonDeserialize)]
 pub struct SorafsAdmissionConfig {
     /// Directory containing governance envelopes for approved providers.
-    #[config(env = "TORII_SORAFS_ADMISSION_DIR")]
     pub envelopes_dir: Option<PathBuf>,
     /// Canonical Ed25519 council keys trusted to authorise provider admission changes.
     #[config(default)]
@@ -24008,23 +26417,18 @@ checkpoint_max_bytes = {}
     }
 
     #[test]
-    fn sorafs_storage_economics_policy_paths_parse() {
+    fn sorafs_storage_hedging_billing_policy_path_parses() {
         let mut table = base_table();
         let sorafs: Table = toml::from_str(
             r#"
 [storage]
-pricing_trust_policy_path = "/run/iroha/sorafs-pricing-policy.to"
 hedging_feed_trust_policy_path = "/run/iroha/sorafs-hedging-policy.to"
 "#,
         )
-        .expect("parse SoraFS economics trust-policy paths");
+        .expect("parse SoraFS hedging/billing trust-policy path");
         table.insert("sorafs".into(), Value::Table(sorafs));
 
         let actual = load_root(table).torii.sorafs_storage;
-        assert_eq!(
-            actual.pricing_trust_policy_path,
-            Some(PathBuf::from("/run/iroha/sorafs-pricing-policy.to"))
-        );
         assert_eq!(
             actual.hedging_feed_trust_policy_path,
             Some(PathBuf::from("/run/iroha/sorafs-hedging-policy.to"))

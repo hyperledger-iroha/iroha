@@ -65,10 +65,21 @@ const SUPPORTED_JS_CANONICALIZATION_INSTRUCTIONS = [
   "zk.*",
   "VerifyingKey.*",
   "Rwa.*",
+  "SoraFS.ReplicationOrder.*",
   "RecordSccpMessage",
 ];
 const RECORD_SCCP_MESSAGE_WIRE_ID =
   "iroha_data_model::isi::bridge::RecordSccpMessage";
+const ISSUE_REPLICATION_ORDER_WIRE_ID =
+  "iroha_data_model::isi::sorafs::IssueReplicationOrder";
+const COMPLETE_REPLICATION_ORDER_WIRE_ID =
+  "iroha_data_model::isi::sorafs::CompleteReplicationOrder";
+const EXPIRE_REPLICATION_ORDER_WIRE_ID =
+  "iroha_data_model::isi::sorafs::ExpireReplicationOrder";
+const REPLICATION_ORDER_V1_SCHEMA_HASH = schemaHashForTypeName(
+  "sorafs_manifest::capacity::ReplicationOrderV1",
+);
+const SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BYTES_V1 = 1024 * 1024;
 const INSTRUCTION_BOX_SCHEMA_HASH = Buffer.from(
   "862a7d77075d4d23ff6c1261db027811",
   "hex",
@@ -112,6 +123,15 @@ const INNER_SCHEMA_HASH_BY_WIRE_ID = Object.freeze({
   [RECORD_SCCP_MESSAGE_WIRE_ID]: Buffer.from(
     "d89e5307d9c06f39f39086ffff9fc5d0",
     "hex",
+  ),
+  [ISSUE_REPLICATION_ORDER_WIRE_ID]: schemaHashForTypeName(
+    ISSUE_REPLICATION_ORDER_WIRE_ID,
+  ),
+  [COMPLETE_REPLICATION_ORDER_WIRE_ID]: schemaHashForTypeName(
+    COMPLETE_REPLICATION_ORDER_WIRE_ID,
+  ),
+  [EXPIRE_REPLICATION_ORDER_WIRE_ID]: schemaHashForTypeName(
+    EXPIRE_REPLICATION_ORDER_WIRE_ID,
   ),
   "iroha_data_model::isi::kaigi::CreateKaigi": Buffer.from(
     "24ee2ad1d6a56d3524ee2ad1d6a56d35",
@@ -1799,6 +1819,13 @@ function encodePureJsInstructionPayload(instruction) {
     const payload = encodeExecuteTriggerPayload(instruction.ExecuteTrigger);
     return encodeInstructionEnvelope("iroha.execute_trigger", payload);
   }
+  if (
+    isPlainObject(instruction.IssueReplicationOrder) ||
+    isPlainObject(instruction.CompleteReplicationOrder) ||
+    isPlainObject(instruction.ExpireReplicationOrder)
+  ) {
+    return encodeReplicationOrderInstruction(instruction);
+  }
   if (isPlainObject(instruction.RecordSccpMessage)) {
     return encodeRecordSccpMessageInstruction(instruction.RecordSccpMessage);
   }
@@ -1930,6 +1957,10 @@ function decodePureJsInstructionPayload(wireId, payload, innerFlags, framedInstr
       return { ExecuteTrigger: decodeExecuteTriggerPayload(payload) };
     case "iroha.rwa":
       return decodeRwaInstructionPayload(payload);
+    case ISSUE_REPLICATION_ORDER_WIRE_ID:
+    case COMPLETE_REPLICATION_ORDER_WIRE_ID:
+    case EXPIRE_REPLICATION_ORDER_WIRE_ID:
+      return decodeReplicationOrderInstructionPayload(wireId, payload);
     case RECORD_SCCP_MESSAGE_WIRE_ID:
       return {
         RecordSccpMessage: decodeRecordSccpMessagePayload(payload, innerFlags),
@@ -4056,6 +4087,354 @@ function decodeNestedValue(payload, decode, context) {
   const inner = readNoritoField(reader, "value");
   reader.assertEof();
   return decode(inner, context);
+}
+
+function decodeCanonicalReplicationId(value, context) {
+  if (typeof value !== "string" || !/^[0-9a-f]{64}$/u.test(value)) {
+    throw new TypeError(
+      `${context} must contain exactly 64 lowercase hexadecimal characters`,
+    );
+  }
+  if (/^0{64}$/u.test(value)) {
+    throw new TypeError(`${context} must not be the zero identifier`);
+  }
+  return Buffer.from(value, "hex");
+}
+
+function decodeReplicationIdValue(payload, context) {
+  const bytes = decodeFixedBytesValue(payload, 32, context);
+  if (bytes.every((byte) => byte === 0)) {
+    throw new TypeError(`${context} must not be the zero identifier`);
+  }
+  return bytes.toString("hex");
+}
+
+function decodeReplicationAssignmentProvider(payload, context) {
+  const fields = decodeStructFields(payload, context, [
+    "provider_id",
+    "slice_gib",
+    "lane",
+  ]);
+  const providerId = decodeFixedBytesValue(
+    fields.provider_id,
+    32,
+    `${context}.provider_id`,
+  );
+  if (providerId.every((byte) => byte === 0)) {
+    throw new TypeError(`${context}.provider_id must not be zero`);
+  }
+  if (decodeU64Value(fields.slice_gib, `${context}.slice_gib`) === "0") {
+    throw new TypeError(`${context}.slice_gib must be greater than zero`);
+  }
+  decodeOptionValue(
+    fields.lane,
+    decodeStringValue,
+    `${context}.lane`,
+  );
+  return providerId;
+}
+
+/**
+ * Validate a canonical Norito `ReplicationOrderV1` archive and its optional
+ * instruction-level order identifier binding.
+ *
+ * @param {ArrayBufferView | ArrayBuffer | Buffer} value
+ * @param {string | null} [expectedOrderId]
+ * @returns {{orderId: string, targetReplicas: number, providerIds: string[], issuedAt: string, deadlineAt: string}}
+ */
+export function validateSorafsReplicationOrderPayloadV1(
+  value,
+  expectedOrderId = null,
+) {
+  const bytes = Buffer.from(normalizeBytes(value));
+  if (
+    bytes.length === 0 ||
+    bytes.length > SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BYTES_V1
+  ) {
+    throw new TypeError(
+      `ReplicationOrderV1 payload must contain 1..${SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BYTES_V1} bytes`,
+    );
+  }
+  const frame = decodeNoritoFrame(
+    bytes,
+    "ReplicationOrderV1",
+    REPLICATION_ORDER_V1_SCHEMA_HASH,
+  );
+  const canonical = frameNoritoPayload(
+    frame.payload,
+    REPLICATION_ORDER_V1_SCHEMA_HASH,
+    frame.flags,
+  );
+  if (!canonical.equals(bytes)) {
+    throw new TypeError(
+      "ReplicationOrderV1 payload must use canonical unpadded Norito framing",
+    );
+  }
+
+  return withNoritoLengthFlags(frame.flags, () => {
+    const fields = decodeStructFields(frame.payload, "ReplicationOrderV1", [
+      "version",
+      "order_id",
+      "manifest_cid",
+      "manifest_digest",
+      "chunking_profile",
+      "target_replicas",
+      "assignments",
+      "issued_at",
+      "deadline_at",
+      "sla",
+      "metadata",
+    ]);
+    if (decodeU8Value(fields.version, "ReplicationOrderV1.version") !== 1) {
+      throw new TypeError("ReplicationOrderV1.version must be 1");
+    }
+    const orderIdBytes = decodeFixedBytesValue(
+      fields.order_id,
+      32,
+      "ReplicationOrderV1.order_id",
+    );
+    if (orderIdBytes.every((byte) => byte === 0)) {
+      throw new TypeError("ReplicationOrderV1.order_id must not be zero");
+    }
+    const orderId = orderIdBytes.toString("hex");
+    if (expectedOrderId !== null) {
+      const expected = decodeCanonicalReplicationId(
+        expectedOrderId,
+        "IssueReplicationOrder.order_id",
+      );
+      if (!expected.equals(orderIdBytes)) {
+        throw new TypeError(
+          "IssueReplicationOrder.order_id must match ReplicationOrderV1.order_id",
+        );
+      }
+    }
+
+    const targetReplicas = decodeU16Value(
+      fields.target_replicas,
+      "ReplicationOrderV1.target_replicas",
+    );
+    if (targetReplicas === 0) {
+      throw new TypeError("ReplicationOrderV1.target_replicas must be greater than zero");
+    }
+    const providers = decodeNoritoVec(
+      fields.assignments,
+      (entry, index) =>
+        decodeReplicationAssignmentProvider(
+          entry,
+          `ReplicationOrderV1.assignments[${index}]`,
+        ),
+      "ReplicationOrderV1.assignments",
+    );
+    if (
+      providers.length === 0 ||
+      providers.length > 1024 ||
+      targetReplicas > providers.length
+    ) {
+      throw new TypeError(
+        "ReplicationOrderV1 assignments must contain 1..1024 entries and cover target_replicas",
+      );
+    }
+    for (let index = 1; index < providers.length; index += 1) {
+      if (Buffer.compare(providers[index - 1], providers[index]) >= 0) {
+        throw new TypeError(
+          "ReplicationOrderV1 assignments must use unique, strictly increasing provider_id values",
+        );
+      }
+    }
+
+    const issuedAt = decodeU64Value(
+      fields.issued_at,
+      "ReplicationOrderV1.issued_at",
+    );
+    const deadlineAt = decodeU64Value(
+      fields.deadline_at,
+      "ReplicationOrderV1.deadline_at",
+    );
+    if (BigInt(deadlineAt) <= BigInt(issuedAt)) {
+      throw new TypeError(
+        "ReplicationOrderV1.deadline_at must be greater than issued_at",
+      );
+    }
+    return {
+      orderId,
+      targetReplicas,
+      providerIds: providers.map((provider) => provider.toString("hex")),
+      issuedAt,
+      deadlineAt,
+    };
+  });
+}
+
+function encodeReplicationOrderInstruction(instruction) {
+  if (isPlainObject(instruction.IssueReplicationOrder)) {
+    assertOnlyObjectKeys(instruction, ["IssueReplicationOrder"], "instruction");
+    const value = instruction.IssueReplicationOrder;
+    assertOnlyObjectKeys(
+      value,
+      ["order_id", "order_payload", "issued_epoch", "deadline_epoch"],
+      "IssueReplicationOrder",
+    );
+    const orderId = decodeCanonicalReplicationId(
+      value.order_id,
+      "IssueReplicationOrder.order_id",
+    );
+    const orderPayload = decodeExactStandardBase64(
+      value.order_payload,
+      "IssueReplicationOrder.order_payload",
+    );
+    validateSorafsReplicationOrderPayloadV1(orderPayload, value.order_id);
+    const issuedEpoch = normalizeU64Input(
+      value.issued_epoch,
+      "IssueReplicationOrder.issued_epoch",
+    );
+    const deadlineEpoch = normalizeU64Input(
+      value.deadline_epoch,
+      "IssueReplicationOrder.deadline_epoch",
+    );
+    if (deadlineEpoch <= issuedEpoch) {
+      throw new TypeError(
+        "IssueReplicationOrder.deadline_epoch must be greater than issued_epoch",
+      );
+    }
+    return encodeInstructionEnvelope(
+      ISSUE_REPLICATION_ORDER_WIRE_ID,
+      encodeStructValue([
+        [orderId],
+        [encodeByteVecValue(orderPayload, "IssueReplicationOrder.order_payload")],
+        [encodeU64Value(issuedEpoch, "IssueReplicationOrder.issued_epoch")],
+        [encodeU64Value(deadlineEpoch, "IssueReplicationOrder.deadline_epoch")],
+      ]),
+    );
+  }
+  if (isPlainObject(instruction.CompleteReplicationOrder)) {
+    assertOnlyObjectKeys(instruction, ["CompleteReplicationOrder"], "instruction");
+    const value = instruction.CompleteReplicationOrder;
+    assertOnlyObjectKeys(
+      value,
+      ["order_id", "provider_id", "completion_epoch"],
+      "CompleteReplicationOrder",
+    );
+    return encodeInstructionEnvelope(
+      COMPLETE_REPLICATION_ORDER_WIRE_ID,
+      encodeStructValue([
+        [decodeCanonicalReplicationId(
+          value.order_id,
+          "CompleteReplicationOrder.order_id",
+        )],
+        [decodeCanonicalReplicationId(
+          value.provider_id,
+          "CompleteReplicationOrder.provider_id",
+        )],
+        [encodeU64Value(
+          value.completion_epoch,
+          "CompleteReplicationOrder.completion_epoch",
+        )],
+      ]),
+    );
+  }
+  if (isPlainObject(instruction.ExpireReplicationOrder)) {
+    assertOnlyObjectKeys(instruction, ["ExpireReplicationOrder"], "instruction");
+    const value = instruction.ExpireReplicationOrder;
+    assertOnlyObjectKeys(
+      value,
+      ["order_id", "expiration_epoch"],
+      "ExpireReplicationOrder",
+    );
+    return encodeInstructionEnvelope(
+      EXPIRE_REPLICATION_ORDER_WIRE_ID,
+      encodeStructValue([
+        [decodeCanonicalReplicationId(
+          value.order_id,
+          "ExpireReplicationOrder.order_id",
+        )],
+        [encodeU64Value(
+          value.expiration_epoch,
+          "ExpireReplicationOrder.expiration_epoch",
+        )],
+      ]),
+    );
+  }
+  throw new TypeError("unsupported SoraFS replication-order instruction");
+}
+
+function decodeReplicationOrderInstructionPayload(wireId, payload) {
+  if (wireId === ISSUE_REPLICATION_ORDER_WIRE_ID) {
+    const fields = decodeStructFields(payload, "IssueReplicationOrder", [
+      "order_id",
+      "order_payload",
+      "issued_epoch",
+      "deadline_epoch",
+    ]);
+    const orderId = decodeReplicationIdValue(
+      fields.order_id,
+      "IssueReplicationOrder.order_id",
+    );
+    const orderPayload = decodeByteVecValue(
+      fields.order_payload,
+      "IssueReplicationOrder.order_payload",
+    );
+    validateSorafsReplicationOrderPayloadV1(orderPayload, orderId);
+    const issuedEpoch = decodeU64NumberValue(
+      fields.issued_epoch,
+      "IssueReplicationOrder.issued_epoch",
+    );
+    const deadlineEpoch = decodeU64NumberValue(
+      fields.deadline_epoch,
+      "IssueReplicationOrder.deadline_epoch",
+    );
+    if (deadlineEpoch <= issuedEpoch) {
+      throw new TypeError(
+        "IssueReplicationOrder.deadline_epoch must be greater than issued_epoch",
+      );
+    }
+    return {
+      IssueReplicationOrder: {
+        order_id: orderId,
+        order_payload: orderPayload.toString("base64"),
+        issued_epoch: issuedEpoch,
+        deadline_epoch: deadlineEpoch,
+      },
+    };
+  }
+  if (wireId === COMPLETE_REPLICATION_ORDER_WIRE_ID) {
+    const fields = decodeStructFields(payload, "CompleteReplicationOrder", [
+      "order_id",
+      "provider_id",
+      "completion_epoch",
+    ]);
+    return {
+      CompleteReplicationOrder: {
+        order_id: decodeReplicationIdValue(
+          fields.order_id,
+          "CompleteReplicationOrder.order_id",
+        ),
+        provider_id: decodeReplicationIdValue(
+          fields.provider_id,
+          "CompleteReplicationOrder.provider_id",
+        ),
+        completion_epoch: decodeU64NumberValue(
+          fields.completion_epoch,
+          "CompleteReplicationOrder.completion_epoch",
+        ),
+      },
+    };
+  }
+  const fields = decodeStructFields(payload, "ExpireReplicationOrder", [
+    "order_id",
+    "expiration_epoch",
+  ]);
+  return {
+    ExpireReplicationOrder: {
+      order_id: decodeReplicationIdValue(
+        fields.order_id,
+        "ExpireReplicationOrder.order_id",
+      ),
+      expiration_epoch: decodeU64NumberValue(
+        fields.expiration_epoch,
+        "ExpireReplicationOrder.expiration_epoch",
+      ),
+    },
+  };
 }
 
 function encodeGovernanceInstruction(instruction) {

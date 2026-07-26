@@ -989,6 +989,7 @@ client.drawdown_asset_lock_and_wait(
     private_key_hex="<trusted-release-private-key-hex>",
     escrow_id="merchant-lock-001",
     amount="1000",
+    expected_remaining_amount="2500",
 )
 client.cancel_asset_lock_and_wait(
     chain_id="dev-chain",
@@ -999,9 +1000,11 @@ client.cancel_asset_lock_and_wait(
 ```
 
 `OpenAssetLock` moves source funds into deterministic native custody.
-`DrawdownAssetLock` releases funds to the destination, signed either by the
-destination account for two-party locks or by `release_authority` when one is
-configured. `CancelAssetLock` refunds the opener while the lock is still active;
+`DrawdownAssetLock` releases funds to the destination only when the committed
+remaining amount still equals `expected_remaining_amount`; this prevents two
+independently submitted stale drawdowns from both debiting custody. It is
+signed either by the destination account for two-party locks or by
+`release_authority` when one is configured. `CancelAssetLock` refunds the opener while the lock is still active;
 `ExpireAssetLock` refunds remaining custody after the optional expiry deadline.
 Zero, negative, NaN, and infinite amounts are rejected by the SDK before
 transaction construction.
@@ -1878,6 +1881,41 @@ python python/iroha_python/scripts/update_python_runtime_path.py
 
 The helper mirrors the discovery logic used in `build.rs`, consulting
 `IROHA_PYTHON_RUNTIME_PATH` first and falling back to `sysconfig`.
+
+## SoraFS replication-order instructions
+
+`iroha_python.sorafs_replication` provides schema-closed typed wrappers for the
+three native V1 variants:
+
+```python
+import base64
+from iroha_python import (
+    CompleteReplicationOrderInstruction,
+    ExpireReplicationOrderInstruction,
+    IssueReplicationOrderInstruction,
+)
+
+issue = IssueReplicationOrderInstruction(
+    order_id,
+    base64.b64encode(replication_order_bytes).decode("ascii"),
+    issued_epoch=20,
+    deadline_epoch=28,
+)
+complete = CompleteReplicationOrderInstruction(
+    order_id,
+    provider_id,
+    completion_epoch=27,
+)
+expire = ExpireReplicationOrderInstruction(order_id, expiration_epoch=29)
+```
+
+IDs are exact non-zero lowercase 64-hex strings. Issue validates bounded,
+canonical base64/Norito framing plus the embedded order ID, target, provider
+ordering, and deadline. Completion always requires
+`order_id + provider_id + completion_epoch`; the retired two-field shape and
+unknown fields fail decoding. Call `.to_payload()` for exact Rust/Norito JSON or
+`.to_instruction()` after rebuilding the native extension from the same source
+revision.
 
 ## Configuration & overrides
 

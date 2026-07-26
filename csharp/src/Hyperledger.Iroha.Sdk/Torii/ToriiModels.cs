@@ -3936,157 +3936,16 @@ public sealed record class ToriiSoraFsPinPolicy
     public ulong? RetentionEpoch { get; init; }
 }
 
-[JsonConverter(typeof(ToriiSoraFsPinAliasJsonConverter))]
-public sealed record class ToriiSoraFsPinAlias
-{
-    [JsonPropertyName("namespace")]
-    public string? Namespace { get; init; }
-
-    [JsonPropertyName("name")]
-    public string? Name { get; init; }
-
-    [JsonPropertyName("proof_base64")]
-    public string? ProofBase64 { get; init; }
-}
-
-public sealed record class ToriiSoraFsPinRegisterRequest
-{
-    private byte[]? manifestBytes;
-
-    [JsonPropertyName("authority")]
-    public string? Authority { get; init; }
-
-    [JsonPropertyName("private_key")]
-    public string? PrivateKey { get; init; }
-
-    [JsonPropertyName("manifest_payload")]
-    public string? ManifestPayloadBase64 { get; init; }
-
-    [JsonIgnore]
-    public byte[]? ManifestBytes
-    {
-        get => manifestBytes?.ToArray();
-        init => manifestBytes = value?.ToArray();
-    }
-
-    [JsonPropertyName("submitted_epoch")]
-    public ulong? SubmittedEpoch { get; init; }
-
-    [JsonPropertyName("alias")]
-    public ToriiSoraFsPinAlias? Alias { get; init; }
-
-    [JsonPropertyName("successor_of_hex")]
-    public string? SuccessorOfHex { get; init; }
-}
-
-internal sealed record class ToriiSoraFsPinRegisterWireRequest
-{
-    [JsonPropertyName("authority")]
-    public string? Authority { get; init; }
-
-    [JsonPropertyName("private_key")]
-    public string? PrivateKey { get; init; }
-
-    [JsonPropertyName("manifest_payload")]
-    public string? ManifestPayloadBase64 { get; init; }
-
-    [JsonPropertyName("submitted_epoch")]
-    public ulong? SubmittedEpoch { get; init; }
-
-    [JsonPropertyName("alias")]
-    public ToriiSoraFsPinAlias? Alias { get; init; }
-
-    [JsonPropertyName("successor_of_hex")]
-    public string? SuccessorOfHex { get; init; }
-}
-
-[JsonConverter(typeof(ToriiSoraFsPinRegisterResponseJsonConverter))]
 public sealed record class ToriiSoraFsPinRegisterResponse
 {
-    private string? manifestDigestHex;
-    private string? chunkerHandle;
-    private ulong? submittedEpoch;
-    private ulong? contentLength;
-    private ulong? pinFeeNano;
-    private string? pinFeeAssetId;
-    private string? pinFeeTreasuryAccountId;
-    private ToriiSoraFsPinAlias? alias;
-    private string? successorOfHex;
+    [JsonPropertyName("status")]
+    public string Status { get; init; } = string.Empty;
+
+    [JsonPropertyName("tx_hash_hex")]
+    public string TxHashHex { get; init; } = string.Empty;
 
     [JsonPropertyName("manifest_digest_hex")]
-    public string? ManifestDigestHex
-    {
-        get => manifestDigestHex;
-        init => manifestDigestHex = ToriiSoraFsDirectMetadata.RequireExactSizedHex(
-            value,
-            nameof(ManifestDigestHex),
-            32);
-    }
-
-    [JsonPropertyName("chunker_handle")]
-    public string? ChunkerHandle
-    {
-        get => chunkerHandle;
-        init => chunkerHandle = ToriiSoraFsDirectMetadata.RequireExactTokenText(
-            value,
-            nameof(ChunkerHandle));
-    }
-
-    [JsonPropertyName("submitted_epoch")]
-    public ulong? SubmittedEpoch
-    {
-        get => submittedEpoch;
-        init => submittedEpoch = ToriiSoraFsDirectMetadata.RequireRequiredUInt64(value, nameof(SubmittedEpoch));
-    }
-
-    [JsonPropertyName("content_length")]
-    public ulong? ContentLength
-    {
-        get => contentLength;
-        init => contentLength = ToriiSoraFsDirectMetadata.RequireRequiredUInt64(value, nameof(ContentLength));
-    }
-
-    [JsonPropertyName("pin_fee_nano")]
-    public ulong? PinFeeNano
-    {
-        get => pinFeeNano;
-        init => pinFeeNano = ToriiSoraFsDirectMetadata.RequireRequiredUInt64(value, nameof(PinFeeNano));
-    }
-
-    [JsonPropertyName("pin_fee_asset_id")]
-    public string? PinFeeAssetId
-    {
-        get => pinFeeAssetId;
-        init => pinFeeAssetId = ToriiSoraFsDirectMetadata.RequireExactTokenText(
-            value,
-            nameof(PinFeeAssetId));
-    }
-
-    [JsonPropertyName("pin_fee_treasury_account_id")]
-    public string? PinFeeTreasuryAccountId
-    {
-        get => pinFeeTreasuryAccountId;
-        init => pinFeeTreasuryAccountId = ToriiSoraFsDirectMetadata.RequireCanonicalAccountId(
-            value,
-            nameof(PinFeeTreasuryAccountId));
-    }
-
-    [JsonPropertyName("alias")]
-    public ToriiSoraFsPinAlias? Alias
-    {
-        get => alias;
-        init => alias = ToriiSoraFsDirectMetadata.RequireOptionalPinAlias(value, nameof(Alias));
-    }
-
-    [JsonPropertyName("successor_of_hex")]
-    public string? SuccessorOfHex
-    {
-        get => successorOfHex;
-        init => successorOfHex = ToriiSoraFsDirectMetadata.RequireOptionalExactSizedHex(
-            value,
-            nameof(SuccessorOfHex),
-            32);
-    }
+    public string ManifestDigestHex { get; init; } = string.Empty;
 }
 
 internal static class ToriiSoraFsDirectMetadata
@@ -4221,18 +4080,6 @@ internal static class ToriiSoraFsDirectMetadata
         return copy;
     }
 
-    internal static ToriiSoraFsPinAlias? RequireOptionalPinAlias(ToriiSoraFsPinAlias? value, string paramName)
-    {
-        if (value is null)
-        {
-            return null;
-        }
-
-        RequireExactTokenText(value.Namespace, $"{paramName}.{nameof(ToriiSoraFsPinAlias.Namespace)}");
-        RequireExactTokenText(value.Name, $"{paramName}.{nameof(ToriiSoraFsPinAlias.Name)}");
-        RequireCanonicalBase64(value.ProofBase64, $"{paramName}.{nameof(ToriiSoraFsPinAlias.ProofBase64)}");
-        return value;
-    }
 
     private static string RequirePathComponent(string value, string paramName)
     {
@@ -6244,10 +6091,6 @@ public sealed record class ToriiContractCallResponse
     private string? signedTransactionBase64;
     private string? signingMessageBase64;
     private string? entrypoint;
-
-    // TODO: Remove with the retired response converter after its remaining view helpers are split out.
-    [JsonIgnore]
-    internal string ContractId { get; init; } = string.Empty;
 
     [JsonPropertyName("ok")]
     public bool Ok

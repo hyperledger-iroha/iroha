@@ -280,7 +280,7 @@ fn fetch_cli_handles_failures_across_three_providers() {
 
     let plan =
         CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
-    let specs = plan.chunk_fetch_specs();
+    let specs = plan.try_chunk_fetch_specs().expect("valid CAR plan");
     assert!(
         specs.len() >= 4,
         "expected at least four chunks for multi-provider failure test, got {}",
@@ -602,7 +602,7 @@ fn fetch_cli_reads_manifest_report_from_stdin() {
 
     let plan =
         CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
-    let fetch_specs = plan.chunk_fetch_specs();
+    let fetch_specs = plan.try_chunk_fetch_specs().expect("valid CAR plan");
     let fetch_array: Vec<Value> = fetch_specs
         .iter()
         .map(|spec| {
@@ -655,7 +655,7 @@ fn fetch_cli_reads_manifest_report_when_plan_omitted() {
 
     let plan =
         CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
-    let fetch_specs = plan.chunk_fetch_specs();
+    let fetch_specs = plan.try_chunk_fetch_specs().expect("valid CAR plan");
     let fetch_array: Vec<Value> = fetch_specs
         .iter()
         .map(|spec| {

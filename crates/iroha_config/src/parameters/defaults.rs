@@ -1265,6 +1265,138 @@ pub mod sorafs {
                 PathBuf::from("./storage/sorafs/moderation/orchestrator.norito")
             }
         }
+        /// Finalized-ledger reputation projector and external publication defaults.
+        pub mod reputation_runtime {
+            use std::path::PathBuf;
+
+            use iroha_config_base::util::Bytes;
+
+            /// The committed projector is opt-in until every runtime-only
+            /// finalized-query, threshold-signer, Governance DAG, and native
+            /// journal-transaction dependency is supplied.
+            pub const ENABLED: bool = false;
+            /// Exact-anchor reconciliation cadence.
+            pub const POLL_INTERVAL_MS: u64 = 1_000;
+            /// Maximum items requested from one native finalized query page.
+            pub const PAGE_ITEMS: u32 = 64;
+            /// Maximum native pages accepted in one coherent ingest batch.
+            pub const MAX_PAGES_PER_BATCH: u32 = 4_096;
+            /// Maximum provider accumulators retained by the V1 projector.
+            pub const MAX_PROVIDERS: u32 = 65_536;
+            /// Maximum typed events staged in one atomic projector batch.
+            pub const MAX_PENDING_EVENTS: u32 = 65_536;
+            /// Maximum exact-replay receipts retained.
+            pub const MAX_REPLAY_RECEIPTS: u32 = 262_144;
+            /// Maximum external-delivery failure receipts retained.
+            pub const MAX_MATERIAL_DELIVERY_FAILURES: u32 = 64;
+            /// Maximum canonical projector checkpoint size.
+            pub const INGEST_CHECKPOINT_MAX_BYTES: Bytes<u64> = Bytes(64 * 1024 * 1024);
+            /// Maximum canonical publication checkpoint size.
+            pub const PUBLICATION_CHECKPOINT_MAX_BYTES: Bytes<u64> = Bytes(32 * 1024 * 1024);
+            /// Governed default PoR-success weight.
+            pub const POR_SUCCESS_BPS: u16 = 2_200;
+            /// Governed default PDP-success weight.
+            pub const PDP_SUCCESS_BPS: u16 = 2_000;
+            /// Governed default PoTR-success weight.
+            pub const POTR_SUCCESS_BPS: u16 = 1_800;
+            /// Governed default latency-health weight.
+            pub const LATENCY_BPS: u16 = 1_500;
+            /// Governed default upheld-dispute penalty weight.
+            pub const DISPUTE_BPS: u16 = 1_000;
+            /// Governed default stream-token violation penalty weight.
+            pub const TOKEN_VIOLATION_BPS: u16 = 500;
+            /// Governed default unresolved-repair penalty weight.
+            pub const REPAIR_BREACH_BPS: u16 = 1_000;
+
+            /// Default private state root used only while the runtime is disabled.
+            pub fn state_dir() -> PathBuf {
+                PathBuf::from("./storage/sorafs/reputation")
+            }
+        }
+        /// Finalized-ledger hedging/billing supervisor defaults.
+        pub mod hedging_billing_runtime {
+            use std::path::PathBuf;
+
+            /// Disabled until all identity-pinned runtime-only adapters and
+            /// reviewed public policy artifacts are supplied.
+            pub const ENABLED: bool = false;
+            /// Finalized reconciliation and delivery cadence.
+            pub const POLL_INTERVAL_MS: u64 = 1_000;
+            /// Maximum finalized journal pages consumed in one worker tick.
+            pub const MAX_PAGES_PER_TICK: u32 = 256;
+            /// Maximum finalized period closes consumed in one worker tick.
+            pub const MAX_PERIOD_CLOSES_PER_TICK: u32 = 32;
+            /// Maximum signer/publication/reconciliation operations in one tick.
+            pub const MAX_DELIVERY_OPERATIONS_PER_TICK: u32 = 256;
+            /// Maximum admitted distance between the authenticated finalized
+            /// head and the durable billing projector cursor.
+            pub const MAX_FINALIZED_LAG_BLOCKS: u64 = 2;
+
+            /// Default private state root used only while the runtime is disabled.
+            pub fn state_dir() -> PathBuf {
+                PathBuf::from("./storage/sorafs/hedging-billing")
+            }
+        }
+        /// Supervised finalized-ledger provider-ingest defaults.
+        pub mod provider_ingest_runtime {
+            use iroha_config_base::util::Bytes;
+
+            /// Provider ingest is opt-in until both runtime-only provider
+            /// handles are registered by the daemon.
+            pub const ENABLED: bool = false;
+            /// Delay between finalized assignment scans.
+            pub const SCAN_INTERVAL_MS: u64 = 1_000;
+            /// Maximum finalized assignment rows requested in one page.
+            pub const MAX_PAGE_ROWS: usize = 64;
+            /// Maximum finalized pages reconciled in one tick.
+            pub const MAX_PAGES_PER_TICK: usize = 4;
+            /// Maximum source jobs performed in one tick.
+            pub const MAX_SOURCE_JOBS_PER_TICK: usize = 16;
+            /// Maximum governed source providers considered for one assignment.
+            pub const MAX_SOURCE_PROVIDERS: usize = 1_024;
+            /// Timeout for authenticated source fetch, verification, and storage.
+            pub const SOURCE_OPERATION_TIMEOUT_MS: u64 = 5 * 60_000;
+            /// Durable source-lease renewal cadence.
+            pub const SOURCE_LEASE_RENEW_INTERVAL_MS: u64 = 15_000;
+            /// Timeout for completion payload construction and HSM/KMS signing.
+            pub const SIGNER_TIMEOUT_MS: u64 = 30_000;
+            /// Timeout for transaction preflight, submission, and observation.
+            pub const INGRESS_TIMEOUT_MS: u64 = 30_000;
+            /// Time-to-live assigned to one completion transaction.
+            pub const COMPLETION_TRANSACTION_TTL_MS: u64 = 5 * 60_000;
+            /// Maximum rows retained by one immutable finalized snapshot.
+            pub const MAX_SNAPSHOT_ROWS: usize = 256;
+            /// Maximum canonical bytes retained by one immutable finalized snapshot.
+            pub const MAX_SNAPSHOT_BYTES: Bytes<u64> = Bytes(128 * 1024 * 1024);
+            /// Maximum authenticated finalized-head lag admitted by readiness.
+            pub const MAX_FINALIZED_LAG_BLOCKS: u64 = 2;
+
+            /// Durable provider-ingest completion-outbox defaults.
+            pub mod outbox {
+                use iroha_config_base::util::Bytes;
+
+                /// Maximum non-terminal ingest jobs.
+                pub const MAX_ACTIVE_ENTRIES: usize = 128;
+                /// Maximum retained terminal tombstones.
+                pub const MAX_TERMINAL_ENTRIES: usize = 4_096;
+                /// Maximum retry attempts under one semantic job identity.
+                pub const MAX_ATTEMPTS: u32 = 8;
+                /// Maximum canonical outbox checkpoint size.
+                pub const CHECKPOINT_MAX_BYTES: Bytes<u64> = Bytes(64 * 1024 * 1024);
+                /// Source-claim lease duration.
+                pub const SOURCE_LEASE_TTL_MS: u64 = 60_000;
+                /// Initial retry delay.
+                pub const RETRY_BASE_DELAY_MS: u64 = 1_000;
+                /// Maximum exponential retry delay.
+                pub const RETRY_MAX_DELAY_MS: u64 = 5 * 60_000;
+                /// Maximum finalized-block age of a terminal tombstone.
+                pub const TERMINAL_RETENTION_BLOCKS: u64 = 100_000;
+                /// Maximum canonical signed completion transaction size.
+                pub const MAX_SIGNED_TRANSACTION_BYTES: Bytes<u64> = Bytes(256 * 1024);
+                /// Maximum payload-free rows returned by one status page.
+                pub const MAX_STATUS_PAGE_SIZE: usize = 256;
+            }
+        }
         /// Defaults for the durable admission-bound PDP provider protocol.
         pub mod pdp_provider {
             use iroha_config_base::util::Bytes;
@@ -1322,11 +1454,6 @@ pub mod sorafs {
         pub fn governance_publisher_peer_id() -> Option<String> {
             None
         }
-        /// Default Governance DAG Ed25519 signing-key path.
-        pub fn governance_signing_key_path() -> Option<PathBuf> {
-            None
-        }
-
         /// Always-on Governance DAG public publisher defaults.
         pub mod governance_dag_service {
             use std::path::PathBuf;
@@ -1505,6 +1632,42 @@ pub mod sorafs {
             }
         }
 
+        /// Production SFM-4b3 evidence-viewer defaults.
+        pub mod evidence_viewer {
+            use std::path::PathBuf;
+
+            use iroha_config_base::util::Bytes;
+
+            /// Evidence viewing is disabled until every runtime security
+            /// boundary and governed identity is injected.
+            pub const ENABLED: bool = false;
+            /// Maximum session lifetime in milliseconds.
+            pub const SESSION_TTL_MS: u64 = 5 * 60 * 1_000;
+            /// Rotating bearer-grant lifetime in milliseconds.
+            pub const GRANT_TTL_MS: u64 = 60 * 1_000;
+            /// WebAuthn challenge lifetime in milliseconds.
+            pub const CHALLENGE_TTL_MS: u64 = 2 * 60 * 1_000;
+            /// Maximum authenticated plaintext bytes per range request.
+            pub const MAX_RANGE_BYTES: Bytes<u64> = Bytes(4 * 1024 * 1024);
+            /// Maximum retained single-use challenges.
+            pub const MAX_CHALLENGES: u32 = 65_536;
+            /// Maximum retained case-bound sessions and hold/erasure records.
+            pub const MAX_SESSIONS: u32 = 65_536;
+            /// Maximum retained signed hash-chain receipts.
+            pub const MAX_RECEIPTS: u32 = 1_000_000;
+            /// Maximum retained idempotency tombstones.
+            pub const MAX_IDEMPOTENCY_RECORDS: u32 = 1_000_000;
+            /// Maximum canonical checkpoint size.
+            pub const CHECKPOINT_MAX_BYTES: Bytes<u64> = Bytes(64 * 1024 * 1024);
+            /// Retention interval after the last session expires.
+            pub const RETENTION_AFTER_EXPIRY_MS: u64 = 30 * 24 * 60 * 60 * 1_000;
+
+            /// Default checkpoint used only while the service is disabled.
+            pub fn checkpoint_path() -> PathBuf {
+                PathBuf::from("./storage/sorafs/moderation/evidence-viewer.norito")
+            }
+        }
+
         /// Evidence-viewer audit-report scheduler defaults.
         pub mod evidence_viewer_audits {
             /// Enable config-backed SFM-4b3 evidence-viewer audit-report scheduling.
@@ -1517,14 +1680,8 @@ pub mod sorafs {
 
         /// Stream token issuance defaults.
         pub mod tokens {
-            use std::path::PathBuf;
-
             /// Enable gateway-issued stream tokens.
             pub const ENABLED: bool = false;
-            /// Default filesystem location for the Ed25519 signing key.
-            pub fn signing_key_path() -> Option<PathBuf> {
-                None
-            }
             /// Token public-key version advertised to clients.
             pub const KEY_VERSION: u32 = 1;
             /// Default TTL applied to issued tokens (seconds).
@@ -1609,17 +1766,27 @@ pub mod sorafs {
         pub const VRF_RETENTION_EPOCHS: u64 = 7 * 24;
         /// Maximum accepted clock skew for signed VRF submissions.
         pub const VRF_MAX_CLOCK_SKEW_SECS: u64 = 60;
-        /// Default filesystem directory used to persist governance DAG payloads.
-        pub fn governance_dir() -> PathBuf {
-            PathBuf::from("./storage/sorafs/governance")
+        /// Canonical PoR coordinator snapshot filename.
+        pub const COORDINATOR_STATE_FILE: &str = "por-coordinator.to";
+        /// Canonical verified drand high-water filename.
+        pub const DRAND_STATE_FILE: &str = "drand-high-water.to";
+        /// Canonical authenticated provider VRF state filename.
+        pub const VRF_STATE_FILE: &str = "provider-vrf-state.to";
+        /// Default private directory for PoR coordinator, drand, and VRF state.
+        pub fn state_dir() -> PathBuf {
+            PathBuf::from("./storage/sorafs/por")
+        }
+        /// Durable PoR coordinator snapshot path.
+        pub fn coordinator_state_path() -> PathBuf {
+            state_dir().join(COORDINATOR_STATE_FILE)
         }
         /// Durable verified drand high-water state path.
         pub fn drand_state_path() -> PathBuf {
-            governance_dir().join("drand-high-water.to")
+            state_dir().join(DRAND_STATE_FILE)
         }
         /// Durable authenticated provider VRF state path.
         pub fn vrf_state_path() -> PathBuf {
-            governance_dir().join("provider-vrf-state.to")
+            state_dir().join(VRF_STATE_FILE)
         }
     }
 
@@ -2469,18 +2636,10 @@ pub mod torii {
     pub const SORAFS_QUOTA_DECLARATION_MAX_EVENTS: Option<u32> = Some(4);
     /// Rolling window (seconds) for SoraFS capacity declarations.
     pub const SORAFS_QUOTA_DECLARATION_WINDOW_SECS: u64 = 60 * 60;
-    /// Maximum SoraFS storage pin submissions per provider per hour.
-    pub const SORAFS_QUOTA_STORAGE_PIN_MAX_EVENTS: Option<u32> = Some(4);
-    /// Rolling window (seconds) for SoraFS storage pin submissions.
-    pub const SORAFS_QUOTA_STORAGE_PIN_WINDOW_SECS: u64 = 60 * 60;
     /// Maximum SoraFS capacity telemetry reports per provider per hour.
     pub const SORAFS_QUOTA_TELEMETRY_MAX_EVENTS: Option<u32> = Some(12);
     /// Rolling window (seconds) for SoraFS capacity telemetry.
     pub const SORAFS_QUOTA_TELEMETRY_WINDOW_SECS: u64 = 60 * 60;
-    /// Maximum SoraFS deal telemetry submissions per deal per hour.
-    pub const SORAFS_QUOTA_DEAL_TELEMETRY_MAX_EVENTS: Option<u32> = Some(60);
-    /// Rolling window (seconds) for SoraFS deal telemetry.
-    pub const SORAFS_QUOTA_DEAL_TELEMETRY_WINDOW_SECS: u64 = 60 * 60;
     /// Maximum SoraFS disputes per provider per day.
     pub const SORAFS_QUOTA_DISPUTE_MAX_EVENTS: Option<u32> = Some(2);
     /// Rolling window (seconds) for SoraFS disputes.
@@ -2493,6 +2652,14 @@ pub mod torii {
     pub const SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_SCAN_INTERVAL_MS: u64 = 30_000;
     /// Default maximum appeal-finance settlement worker queue attempts per unchanged ledger state.
     pub const SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_MAX_RETRY_ATTEMPTS: u32 = 3;
+    /// Default maximum durable pending appeal-finance operations.
+    pub const SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_MAX_PENDING: usize = 4_096;
+    /// Default maximum durable finalized appeal-finance tombstones.
+    pub const SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_MAX_COMPLETED: usize = 16_384;
+    /// Default maximum durable appeal-finance dead letters.
+    pub const SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_MAX_DEAD_LETTERS: usize = 1_024;
+    /// Default maximum canonical appeal-finance checkpoint size.
+    pub const SORAFS_APPEAL_FINANCE_SETTLEMENT_WORKER_CHECKPOINT_MAX_BYTES: u64 = 64 * 1024 * 1024;
 
     /// Alias cache positive TTL (seconds) applied by Torii gateways and SDK helpers.
     pub const SORAFS_ALIAS_POSITIVE_TTL_SECS: u64 = 10 * 60;

@@ -34337,31 +34337,11 @@ impl Kura {
         Ok(())
     }
 
-    /// Persist QC-authenticated Native AMX participant manifests and receipts.
-    ///
-    /// Each route's standalone manifest is published before its standalone
-    /// receipt and the derived latest pointer. This operation never executes a
-    /// transaction and is idempotent at every artifact boundary.
-    pub(crate) fn persist_native_amx_participant_application_evidence(
-        &self,
-        block: &SignedBlock,
-    ) -> Result<usize> {
-        let _publication_guard = self.prune_lock.lock();
-        self.ensure_prune_recovery_not_required()?;
-        let artifacts = self
-            .native_amx_participant_application_evidence_for_block_under_publication_guard(
-                block, false,
-            )?;
-        self.persist_native_amx_participant_application_evidence_under_publication_guard(
-            block, artifacts,
-        )
-    }
-
     /// Repair Native AMX evidence after WSV commit and its Kura metadata join.
     ///
-    /// Unlike the pre-WSV publication path, startup repair requires and
-    /// revalidates the exact checkpoint and commit manifest in the same prune
-    /// critical section as finality, manifest proofs, and sidecar publication.
+    /// Startup repair requires and revalidates the exact checkpoint and commit
+    /// manifest in the same prune critical section as finality, manifest
+    /// proofs, and sidecar publication.
     pub(crate) fn repair_native_amx_participant_application_evidence(
         &self,
         block: &SignedBlock,

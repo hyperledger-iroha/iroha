@@ -78,7 +78,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. بیس 64 انکوڈنگ کے ساتھ مینی فیسٹ جمع کروائیں:
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/pin \
+   curl -X POST http://$TORII[REMOVED: provider-internal finalized-ledger ingest only] \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -138,7 +138,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
   ```جس میں `pin_fetch_roundtrip` ، `pin_survives_restart` ، `pin_quota_rejection` ، اور `por_sampling_returns_verified_proofs` کا احاطہ کیا گیا ہے۔
 - ڈیش بورڈز کو ٹریک کرنا چاہئے:
   - `torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
-  - `torii_sorafs_storage_pin_queue_depth` اور `torii_sorafs_storage_fetch_inflight`
+  - `sorafs_provider_ingest_inflight` اور `torii_sorafs_storage_fetch_inflight`
   - پور کامیابی/ناکامی کاؤنٹرز `/v1/sorafs/capacity/state` کے ذریعے منظر عام پر آئے
   - تصفیہ `sorafs_node_deal_publish_total{result=success|failure}` کے ذریعے کوششیں شائع کریں
 

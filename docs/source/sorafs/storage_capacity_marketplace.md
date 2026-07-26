@@ -23,7 +23,7 @@ rollout checks required before hosted production settlement.
 |---------|-------------|-------------------------------|
 | `CapacityDeclarationV1` | Norito payload describing provider ID, chunker profile support, committed GiB, lane-specific limits, pricing hints, staking commitment, and expiry. | Schema, validator, fixtures, and CLI helpers in `sorafs_manifest::capacity` / `sorafs_manifest_builder capacity declaration`. |
 | `ReplicationOrder` | Governance-issued instruction assigning a manifest CID to one or more providers, including redundancy level and SLA metrics. | `ReplicationOrderV1` schema, fixture generator, Torii scheduling endpoint, and node reservation hooks. |
-| `CapacityLedger` | On-chain/off-chain registry tracking active capacity declarations, replication orders, performance metrics, and fee accrual. | `/v1/sorafs/capacity/state`, fee/credit ledger export, dispute records, and reconciliation tooling. |
+| `CapacityLedger` | Chain-authoritative state tracking active capacity declarations, replication orders, performance metrics, fee accrual, and disputes. | Native world-state records and ISIs, the committed `/v1/sorafs/capacity/state` projection, fee/credit ledger export, and reconciliation tooling. Node-local capacity data is a rebuildable operational projection, not an authority. |
 | `MarketplacePolicy` | Governance policy defining minimum stake, audit requirements, and penalty curves. | Policy defaults, telemetry penalty hooks, dispute/slash runbook, and governance archive evidence. |
 
 ### Implemented Schemas (Status)
@@ -47,9 +47,14 @@ rollout checks required before hosted production settlement.
   `ExpireReplicationOrder` only at an epoch strictly later than the deadline;
   exact expiration replay is idempotent, while early, conflicting, completed,
   missing-permission, and corrupt stored-order transitions fail without mutation.
+  `CompleteReplicationOrder` is provider-scoped: the named assignment's current
+  registered owner must authorize it, exact replay is idempotent, partial
+  completions keep the order pending, and only the completion that reaches
+  `target_replicas` makes the whole order terminal. Relayers are never accepted
+  as provider-signing authorities.
 - `CapacityTelemetryV1` expresses epoch snapshots (declared vs utilised GiB, replication counters, uptime/PoR percentages) that feed fee distribution. Bounds checks keep utilisation within declarations and percentages within 0 – 100 %.【crates/sorafs_manifest/src/capacity.rs:476】
 - Shared helpers (`CapacityMetadataEntry`, `PricingScheduleV1`, lane/assignment/SLA validators) provide deterministic key validation and error reporting that CI and downstream tooling can reuse.【crates/sorafs_manifest/src/capacity.rs:230】
-- `PinProviderRegistry` now surfaces the on-chain snapshot via `/v1/sorafs/capacity/state`, combining provider declarations and fee ledger entries behind deterministic Norito JSON.【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
+- Torii's capacity registry projection reads the committed world-state snapshot at `/v1/sorafs/capacity/state`, combining provider declarations, fee and credit ledgers, and disputes behind deterministic Norito JSON; there is no separate `PinProviderRegistry` authority.【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/routing.rs:33849】
 - Validation coverage exercises canonical handle enforcement, duplicate detection, per-lane bounds, replication assignment guards, and telemetry range checks so regressions surface immediately in CI.【crates/sorafs_manifest/src/capacity.rs:792】
 - Operator tooling: `sorafs_manifest_builder capacity {declaration, telemetry, replication-order}` converts human-readable specs into canonical Norito payloads, base64 blobs, and JSON summaries so operators can stage `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry`, and replication order fixtures with local validation.【crates/sorafs_car/src/bin/sorafs_manifest_builder/capacity.rs:1】 Reference fixtures live in `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) and are generated via `cargo run --locked -p sorafs_car --bin sorafs_manifest_builder -- capacity replication-order --spec fixtures/sorafs_manifest/replication_order/order_v1.json`.
 
@@ -57,10 +62,10 @@ rollout checks required before hosted production settlement.
 
 | Task | Owner(s) | Notes |
 |------|----------|-------|
-| Prototype registry contract (`PinProviderRegistry`) with CRUD for capacity declarations and replication orders. | Core Infra / Smart Contract Team | Ensure deterministic hashing and Norito encoding parity. |
-| Expose gRPC/REST service (`/v1/sorafs/capacity`) mirroring contract state for Torii/gateways. | Core Infra | Provide pagination + attestation (block hash, proof). |
-| Implement fee accrual ledger with basic rate card (GiB · hour * price). | Economics WG / Core Infra | Export ledger snapshots for billing integration. |
-| Add dispute/resolution hooks (challenge window, evidence submission). | Governance Council | Determine default timeouts and penalties. |
+| Native capacity and replication-order ledger records plus authority-checked `RegisterCapacityDeclaration`, `IssueReplicationOrder`, `CompleteReplicationOrder`, and `ExpireReplicationOrder` ISIs. | Core Infra / Smart Contract Team | Implemented with bounded canonical payload decoding, provider-owner completion authority, ordered provider completion evidence, redundancy-target terminality, deterministic state transitions, replay checks, and Norito encoding. |
+| Expose transaction-submission routes and a committed-state REST projection under `/v1/sorafs/capacity`; do not maintain an independent registry authority. | Core Infra | Implemented for declaration, telemetry, dispute, order lifecycle, and state reads. Finalized-cursor/proof publication remains tracked by the V1 closure ledger. |
+| Accrue the deterministic capacity fee ledger from committed telemetry. | Economics WG / Core Infra | Implemented with fee and provider-credit projections for billing reconciliation. |
+| Register and resolve capacity disputes through governed native ISIs. | Governance Council | Implemented with permission checks, canonical evidence digests, idempotent replay, and chain-authoritative status. |
 
 ### 3. Torii & SoraFS Node Integration
 

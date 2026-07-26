@@ -17,12 +17,8 @@ pub enum SorafsAction {
     CapacityDeclaration,
     /// Capacity telemetry reporting.
     CapacityTelemetry,
-    /// Deal usage/settlement telemetry reporting.
-    DealTelemetry,
     /// Capacity dispute submission.
     CapacityDispute,
-    /// Manifest pin submission.
-    StoragePin,
     /// Proof-of-retrievability submissions (challenge/proof/verdict).
     PorSubmission,
 }
@@ -32,9 +28,7 @@ impl fmt::Display for SorafsAction {
         match self {
             Self::CapacityDeclaration => write!(f, "capacity_declaration"),
             Self::CapacityTelemetry => write!(f, "capacity_telemetry"),
-            Self::DealTelemetry => write!(f, "deal_telemetry"),
             Self::CapacityDispute => write!(f, "capacity_dispute"),
-            Self::StoragePin => write!(f, "storage_pin"),
             Self::PorSubmission => write!(f, "por_submission"),
         }
     }
@@ -148,12 +142,8 @@ pub struct SorafsQuotaConfig {
     pub capacity_declaration: SorafsQuotaWindow,
     /// Quota applied to capacity telemetry reports.
     pub capacity_telemetry: SorafsQuotaWindow,
-    /// Quota applied to deal telemetry (usage + settlement) submissions.
-    pub deal_telemetry: SorafsQuotaWindow,
     /// Quota applied to capacity dispute submissions.
     pub capacity_dispute: SorafsQuotaWindow,
-    /// Quota applied to manifest pin submissions.
-    pub storage_pin: SorafsQuotaWindow,
     /// Quota applied to proof-of-retrievability submissions.
     pub por_submission: SorafsQuotaWindow,
 }
@@ -172,15 +162,7 @@ impl SorafsQuotaConfig {
                 max_events: None,
                 window,
             },
-            deal_telemetry: SorafsQuotaWindow {
-                max_events: None,
-                window,
-            },
             capacity_dispute: SorafsQuotaWindow {
-                max_events: None,
-                window,
-            },
-            storage_pin: SorafsQuotaWindow {
                 max_events: None,
                 window,
             },
@@ -205,17 +187,9 @@ impl Default for SorafsQuotaConfig {
                 max_events: Some(12),
                 window: HOUR,
             },
-            deal_telemetry: SorafsQuotaWindow {
-                max_events: Some(60),
-                window: HOUR,
-            },
             capacity_dispute: SorafsQuotaWindow {
                 max_events: Some(2),
                 window: DAY,
-            },
-            storage_pin: SorafsQuotaWindow {
-                max_events: Some(4),
-                window: HOUR,
             },
             por_submission: SorafsQuotaWindow {
                 max_events: Some(60),
@@ -230,9 +204,7 @@ impl Default for SorafsQuotaConfig {
 pub struct SorafsQuotaEnforcer {
     declaration: Option<Arc<ActionLimiter>>,
     telemetry: Option<Arc<ActionLimiter>>,
-    deal: Option<Arc<ActionLimiter>>,
     dispute: Option<Arc<ActionLimiter>>,
-    storage_pin: Option<Arc<ActionLimiter>>,
     por: Option<Arc<ActionLimiter>>,
 }
 
@@ -253,9 +225,7 @@ impl SorafsQuotaEnforcer {
         Self {
             declaration: limiter_from_window(config.capacity_declaration),
             telemetry: limiter_from_window(config.capacity_telemetry),
-            deal: limiter_from_window(config.deal_telemetry),
             dispute: limiter_from_window(config.capacity_dispute),
-            storage_pin: limiter_from_window(config.storage_pin),
             por: limiter_from_window(config.por_submission),
         }
     }
@@ -297,9 +267,7 @@ impl SorafsQuotaEnforcer {
         match action {
             SorafsAction::CapacityDeclaration => self.declaration.as_ref(),
             SorafsAction::CapacityTelemetry => self.telemetry.as_ref(),
-            SorafsAction::DealTelemetry => self.deal.as_ref(),
             SorafsAction::CapacityDispute => self.dispute.as_ref(),
-            SorafsAction::StoragePin => self.storage_pin.as_ref(),
             SorafsAction::PorSubmission => self.por.as_ref(),
         }
     }
@@ -323,9 +291,7 @@ mod tests {
         let enforcer = SorafsQuotaEnforcer {
             declaration: ActionLimiter::new(Duration::from_mins(1), 2).map(Arc::new),
             telemetry: None,
-            deal: None,
             dispute: None,
-            storage_pin: None,
             por: None,
         };
         let provider = [1u8; 32];
@@ -367,31 +333,6 @@ mod tests {
                     .is_ok()
             );
         }
-    }
-
-    #[test]
-    fn storage_pin_quota_blocks_after_limit() {
-        let enforcer = SorafsQuotaEnforcer {
-            declaration: None,
-            telemetry: None,
-            deal: None,
-            dispute: None,
-            storage_pin: ActionLimiter::new(Duration::from_millis(10), 1).map(Arc::new),
-            por: None,
-        };
-        let provider = [9u8; 32];
-        assert!(
-            enforcer
-                .enforce(SorafsAction::StoragePin, &provider)
-                .is_ok()
-        );
-        assert!(matches!(
-            enforcer
-                .enforce(SorafsAction::StoragePin, &provider)
-                .unwrap_err()
-                .action(),
-            SorafsAction::StoragePin
-        ));
     }
 
     #[test]

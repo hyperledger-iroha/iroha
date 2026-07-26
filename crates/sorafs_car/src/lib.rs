@@ -6859,26 +6859,6 @@ impl CarBuildPlan {
         }
         Ok(specs)
     }
-
-    /// Returns chunk fetch specifications using the process allocator.
-    ///
-    /// This compatibility helper is intended for already validated, trusted in-memory plans.
-    /// Production paths handling untrusted plans must use [`Self::try_chunk_fetch_specs`] so
-    /// validation and allocation failures remain distinguishable from a legitimate empty plan.
-    #[must_use]
-    pub fn chunk_fetch_specs(&self) -> Vec<ChunkFetchSpec> {
-        let mut specs = Vec::new();
-        for (index, chunk) in self.chunks.iter().enumerate() {
-            specs.push(ChunkFetchSpec {
-                chunk_index: index,
-                offset: chunk.offset,
-                length: chunk.length,
-                digest: chunk.digest,
-                taikai_segment_hint: chunk.taikai_segment_hint.clone(),
-            });
-        }
-        specs
-    }
 }
 
 fn validate_path(path: &[String]) -> Result<(), CarPlanError> {

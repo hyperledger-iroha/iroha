@@ -1346,12 +1346,10 @@ impl PreparedOrderbookOperation {
         context: &OrderbookTransactionContextV1,
         max_transaction_bytes: usize,
     ) -> Result<Self, OrderbookTransactionForwarderError> {
-        let authority = required_governed_authority(
-            &context.policy_record.policy,
-            operation.kind(),
-        )
-        .ok_or(OrderbookTransactionForwarderError::ExplicitRelayerAuthorityRequired)?
-        .clone();
+        let authority =
+            required_governed_authority(&context.policy_record.policy, operation.kind())
+                .ok_or(OrderbookTransactionForwarderError::ExplicitRelayerAuthorityRequired)?
+                .clone();
         Self::new_bounded(
             context.chain_id.clone(),
             authority,

@@ -20954,260 +20954,76 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         }
     }
 
-    private func makeValidSoraFsPinRegisterRequest(
-        manifestPayload: String = Data("manifest-norito".utf8).base64EncodedString(),
-        successorOfHex: String? = String(repeating: "C", count: 64)
-    ) -> ToriiSoraFsPinRegisterRequest {
-        ToriiSoraFsPinRegisterRequest(
-            authority: authority,
-            privateKey: "ed25519:deadbeef",
-            manifestPayload: manifestPayload,
-            submittedEpoch: 42,
-            alias: ToriiSoraFsPinAlias(
-                namespace: "docs",
-                name: "main",
-                proofBase64: Data("alias-proof".utf8).base64EncodedString()
-            ),
-            successorOfHex: successorOfHex
-        )
-    }
-
-    private func mutatedSoraFsPinRequest(
-        _ mutate: (inout ToriiSoraFsPinRegisterRequest) -> Void
-    ) -> ToriiSoraFsPinRegisterRequest {
-        var request = makeValidSoraFsPinRegisterRequest()
-        mutate(&request)
-        return request
-    }
-
-    private func mutatedSoraFsAlias(
-        _ mutate: (inout ToriiSoraFsPinAlias) -> Void
-    ) -> ToriiSoraFsPinRegisterRequest {
-        mutatedSoraFsPinRequest { request in
-            var alias = request.alias!
-            mutate(&alias)
-            request.alias = alias
-        }
-    }
-
     @available(iOS 15.0, macOS 12.0, *)
-    func testRegisterSoraFsPinManifestPostsNormalizedPayloadAndDecodesResponse() async throws {
-        let manifestHex = String(repeating: "a", count: 64)
-        let successorHex = String(repeating: "c", count: 64)
-        let aliasProof = Data("alias-proof".utf8).base64EncodedString()
-        let manifestPayload = Data("manifest-norito".utf8).base64EncodedString()
-
+    func testRegisterSoraFsPinManifestPostsOnlySignedNoritoAndReturnsAdmission() async throws {
+        let signedBytes = Data([0x01, 0x02, 0x03])
+        let envelope = SignedTransactionEnvelope(
+            norito: signedBytes,
+            signedTransaction: signedBytes,
+            payload: nil,
+            transactionHash: Data(repeating: 0xAA, count: 32)
+        )
+        let txHash = String(repeating: "a", count: 64)
+        let manifestDigest = String(repeating: "b", count: 64)
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.httpMethod, "POST")
             XCTAssertEqual(request.url?.path, "/v1/sorafs/pin/register")
-            XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+            XCTAssertEqual(
+                request.value(forHTTPHeaderField: "Content-Type"),
+                "application/x-norito"
+            )
             XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
-            let root = self.bodyJSON(from: request)
-            XCTAssertEqual(root["authority"] as? String, self.authority)
-            XCTAssertEqual(root["private_key"] as? String, "ed25519:deadbeef")
-            XCTAssertEqual(root["manifest_payload"] as? String, manifestPayload)
-            XCTAssertEqual(root["submitted_epoch"] as? Int, 42)
-            let alias = root["alias"] as? [String: Any]
-            XCTAssertEqual(alias?["namespace"] as? String, "docs")
-            XCTAssertEqual(alias?["name"] as? String, "main")
-            XCTAssertEqual(alias?["proof_base64"] as? String, aliasProof)
-            XCTAssertEqual(root["successor_of_hex"] as? String, successorHex)
-            XCTAssertEqual(
-                Set(root.keys),
-                Set([
-                    "authority",
-                    "private_key",
-                    "manifest_payload",
-                    "submitted_epoch",
-                    "alias",
-                    "successor_of_hex",
-                ])
+            XCTAssertEqual(request.httpBody, signedBytes)
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 202,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            let body = Data(
+                #"{"status":"submitted","tx_hash_hex":"\#(txHash)","manifest_digest_hex":"\#(manifestDigest)"}"#.utf8
             )
-
-            let responseObject: [String: Any] = [
-                "manifest_digest_hex": manifestHex.uppercased(),
-                "chunker_handle": "sorafs.sf1@1.0.0",
-                "submitted_epoch": 42,
-                "content_length": 4096,
-                "pin_fee_nano": 500_000_000,
-                "pin_fee_asset_id": "xor#universal",
-                "pin_fee_treasury_account_id": "treasury@boi",
-                "alias": [
-                    "namespace": "docs",
-                    "name": "main",
-                    "proof_base64": aliasProof,
-                ],
-                "successor_of_hex": "0x\(successorHex.uppercased())",
-            ]
-            let response = HTTPURLResponse(url: request.url!,
-                                           statusCode: 200,
-                                           httpVersion: nil,
-                                           headerFields: ["Content-Type": "application/json"])!
-            let body = try JSONSerialization.data(withJSONObject: responseObject, options: [.sortedKeys])
             return (response, body)
         }
 
-        let response = try await makeClient().registerSoraFsPinManifest(
-            makeValidSoraFsPinRegisterRequest()
+        let admission = try await makeClient().registerSoraFsPinManifest(envelope)
+
+        XCTAssertEqual(admission.status, "submitted")
+        XCTAssertEqual(admission.txHashHex, txHash)
+        XCTAssertEqual(admission.manifestDigestHex, manifestDigest)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testRegisterSoraFsPinManifestRejectsPreFinalityFeeClaims() async throws {
+        let signedBytes = Data([0x01])
+        let envelope = SignedTransactionEnvelope(
+            norito: signedBytes,
+            signedTransaction: signedBytes,
+            payload: nil,
+            transactionHash: Data(repeating: 0xAA, count: 32)
         )
-        XCTAssertEqual(response.manifestDigestHex, manifestHex)
-        XCTAssertEqual(response.chunkerHandle, "sorafs.sf1@1.0.0")
-        XCTAssertEqual(response.submittedEpoch, UInt64(42))
-        XCTAssertEqual(response.contentLength, UInt64(4096))
-        XCTAssertEqual(response.pinFeeNano, UInt64(500_000_000))
-        XCTAssertEqual(response.pinFeeAssetId, "xor#universal")
-        XCTAssertEqual(response.pinFeeTreasuryAccountId, "treasury@boi")
-        XCTAssertEqual(response.alias?.namespace, "docs")
-        XCTAssertEqual(response.alias?.name, "main")
-        XCTAssertEqual(response.alias?.proofBase64, aliasProof)
-        XCTAssertEqual(response.successorOfHex, successorHex)
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testRegisterSoraFsPinManifestAcceptsMaximumManifestAndOmitsOptionalFields() async throws {
-        let manifestPayload = Data(
-            repeating: 0xA5,
-            count: 512 * 1024
-        ).base64EncodedString()
         StubURLProtocol.handler = { request in
-            let root = self.bodyJSON(from: request)
-            XCTAssertEqual(root["manifest_payload"] as? String, manifestPayload)
-            XCTAssertNil(root["alias"])
-            XCTAssertNil(root["successor_of_hex"])
-            XCTAssertEqual(
-                Set(root.keys),
-                Set(["authority", "private_key", "manifest_payload", "submitted_epoch"])
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 202,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            let body = Data(
+                #"{"status":"submitted","tx_hash_hex":"\#(String(repeating: "a", count: 64))","manifest_digest_hex":"\#(String(repeating: "b", count: 64))","pin_fee":"1"}"#.utf8
             )
-            let responseObject: [String: Any] = [
-                "manifest_digest_hex": String(repeating: "a", count: 64),
-                "chunker_handle": "sorafs.sf1@1.0.0",
-                "submitted_epoch": 42,
-                "content_length": 4096,
-                "pin_fee_nano": 500_000_000,
-                "pin_fee_asset_id": "xor#universal",
-                "pin_fee_treasury_account_id": "treasury@boi",
-            ]
-            let response = HTTPURLResponse(url: request.url!,
-                                           statusCode: 200,
-                                           httpVersion: nil,
-                                           headerFields: ["Content-Type": "application/json"])!
-            let body = try JSONSerialization.data(withJSONObject: responseObject, options: [.sortedKeys])
-            return (response, body)
-        }
-
-        var request = makeValidSoraFsPinRegisterRequest()
-        request.manifestPayload = manifestPayload
-        request.submittedEpoch = 0
-        request.alias = nil
-        request.successorOfHex = nil
-        _ = try await makeClient().registerSoraFsPinManifest(request)
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testRegisterSoraFsPinManifestRejectsMalformedInputsBeforeRequest() async throws {
-        let oversizedManifest = Data(
-            repeating: 0xA5,
-            count: 512 * 1024 + 1
-        ).base64EncodedString()
-        let oversizedAliasProof = Data(
-            repeating: 0x5A,
-            count: 1024 * 1024 + 1
-        ).base64EncodedString()
-        let invalidRequests: [ToriiSoraFsPinRegisterRequest] = [
-            mutatedSoraFsPinRequest { $0.authority = nil },
-            mutatedSoraFsPinRequest { $0.authority = "alice@boi" },
-            mutatedSoraFsPinRequest { $0.authority = " \(self.authority)" },
-            mutatedSoraFsPinRequest { $0.privateKey = nil },
-            mutatedSoraFsPinRequest { $0.privateKey = "" },
-            mutatedSoraFsPinRequest { $0.privateKey = " ed25519:deadbeef" },
-            mutatedSoraFsPinRequest { $0.privateKey = "ed25519:dead beef" },
-            mutatedSoraFsPinRequest { $0.privateKey = "ed25519:deadbeef\u{0001}" },
-            mutatedSoraFsPinRequest { $0.manifestPayload = nil },
-            mutatedSoraFsPinRequest { $0.manifestPayload = "" },
-            mutatedSoraFsPinRequest { $0.manifestPayload = "not base64!" },
-            mutatedSoraFsPinRequest { $0.manifestPayload = "YQ" },
-            mutatedSoraFsPinRequest { $0.manifestPayload = "bWFuaWZlc3Q" },
-            mutatedSoraFsPinRequest { $0.manifestPayload = "bWFuaWZlc3Q=\n" },
-            mutatedSoraFsPinRequest { $0.manifestPayload = oversizedManifest },
-            mutatedSoraFsPinRequest { $0.submittedEpoch = nil },
-            mutatedSoraFsPinRequest { $0.successorOfHex = "" },
-            mutatedSoraFsPinRequest { $0.successorOfHex = " " },
-            mutatedSoraFsPinRequest {
-                $0.successorOfHex = " \(String(repeating: "c", count: 64))"
-            },
-            mutatedSoraFsPinRequest { $0.successorOfHex = String(repeating: "c", count: 63) },
-            mutatedSoraFsPinRequest { $0.successorOfHex = String(repeating: "0", count: 64) },
-            mutatedSoraFsAlias { $0.namespace = nil },
-            mutatedSoraFsAlias { $0.namespace = "" },
-            mutatedSoraFsAlias { $0.namespace = "Docs" },
-            mutatedSoraFsAlias { $0.namespace = "docs main" },
-            mutatedSoraFsAlias { $0.namespace = String(repeating: "a", count: 129) },
-            mutatedSoraFsAlias { $0.namespace = "døcs" },
-            mutatedSoraFsAlias { $0.name = "main/current" },
-            mutatedSoraFsAlias { $0.name = "docs/main" },
-            mutatedSoraFsAlias { $0.proofBase64 = nil },
-            mutatedSoraFsAlias { $0.proofBase64 = "not base64!" },
-            mutatedSoraFsAlias { $0.proofBase64 = Data().base64EncodedString() },
-            mutatedSoraFsAlias {
-                $0.proofBase64 = Data("alias-proof".utf8).base64EncodedString() + "\n"
-            },
-            mutatedSoraFsAlias { $0.proofBase64 = oversizedAliasProof },
-        ]
-
-        var didSendRequest = false
-        StubURLProtocol.handler = { request in
-            didSendRequest = true
-            XCTFail("invalid SoraFS pin request should not be sent")
-            let response = HTTPURLResponse(url: request.url!,
-                                           statusCode: 200,
-                                           httpVersion: nil,
-                                           headerFields: ["Content-Type": "application/json"])!
-            return (response, Data("{}".utf8))
-        }
-
-        for request in invalidRequests {
-            didSendRequest = false
-            await XCTAssertThrowsErrorAsync(try await makeClient().registerSoraFsPinManifest(request)) { error in
-                guard case ToriiClientError.invalidPayload = error else {
-                    return XCTFail("expected invalidPayload, got \(error)")
-                }
-            }
-            XCTAssertFalse(didSendRequest)
-        }
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testRegisterSoraFsPinManifestRejectsMalformedResponse() async throws {
-        var didSendRequest = false
-        StubURLProtocol.handler = { request in
-            didSendRequest = true
-            XCTAssertEqual(request.url?.path, "/v1/sorafs/pin/register")
-            let responseObject: [String: Any] = [
-                "manifest_digest_hex": "abc123",
-                "chunker_handle": "sorafs.sf1@1.0.0",
-                "submitted_epoch": 42,
-                "content_length": 4096,
-                "pin_fee_nano": 500_000_000,
-                "pin_fee_asset_id": "xor#universal",
-                "pin_fee_treasury_account_id": "treasury@boi",
-            ]
-            let response = HTTPURLResponse(url: request.url!,
-                                           statusCode: 200,
-                                           httpVersion: nil,
-                                           headerFields: ["Content-Type": "application/json"])!
-            let body = try JSONSerialization.data(withJSONObject: responseObject, options: [.sortedKeys])
             return (response, body)
         }
 
         await XCTAssertThrowsErrorAsync(
-            try await makeClient().registerSoraFsPinManifest(makeValidSoraFsPinRegisterRequest())
+            try await makeClient().registerSoraFsPinManifest(envelope)
         ) { error in
             guard case ToriiClientError.invalidPayload = error else {
                 return XCTFail("expected invalidPayload, got \(error)")
             }
         }
-        XCTAssertTrue(didSendRequest)
     }
+
 }
 
 #if os(macOS)

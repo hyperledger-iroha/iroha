@@ -31,6 +31,22 @@ final class ReplicationOrderInstructionValidation {
     return value;
   }
 
+  static String requireProviderId(final String value) {
+    Objects.requireNonNull(value, "providerIdHex");
+    if (!value.matches("[0-9a-f]{64}")) {
+      throw new IllegalArgumentException(
+          "providerIdHex must contain exactly 64 lowercase hexadecimal characters");
+    }
+    boolean nonzero = false;
+    for (int i = 0; i < value.length(); i++) {
+      nonzero |= value.charAt(i) != '0';
+    }
+    if (!nonzero) {
+      throw new IllegalArgumentException("providerIdHex must not be the zero identifier");
+    }
+    return value;
+  }
+
   static String encodeOrderId(final byte[] value) {
     Objects.requireNonNull(value, "orderId");
     if (value.length != ORDER_ID_BYTES) {

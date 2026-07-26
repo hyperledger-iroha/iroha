@@ -83,18 +83,20 @@ symlinked parent components, and pre-existing release verification receipts. It
 does not overwrite release authenticity evidence. Keep the output directory on
 operator-controlled storage.
 
-## Denylist diff evidence
+## Catalog-promotion evidence
 
-For a governed denylist rotation, add both:
+The self-certification wrapper does not accept local denylist bundles or
+generate policy-diff evidence. Gateway enforcement is bound only to the
+threshold-approved, predecessor-linked catalog verified by
+`scripts/check_sorafs_gateway_compliance_rollout_evidence.py`.
 
-```text
-denylist_old_bundle=/path/to/previous.json
-denylist_new_bundle=/path/to/current.json
-```
-
-Optionally set `denylist_report`; otherwise the report is written to
-`<out>/denylist_diff.json`. Supplying only one denylist input produces a warning
-and no diff. Attach the resulting report to the same governance packet.
+Collect the canonical `catalog_promotion` artifact separately. It must bind the
+promoted and predecessor digests, contiguous sequence, bounded entry/change
+inventories, unique threshold signers, and acknowledgements from at least two
+gateways with distinct region and administration identities. Attach that
+payload-free artifact and the exact observed `451` probe artifacts to the
+governance packet; never attach source catalogs, denied payloads, tokens, or
+credentials.
 
 ## Troubleshooting
 

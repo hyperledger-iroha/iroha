@@ -92,7 +92,7 @@ curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_c
 2. 使用base64编码提交清单：
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/pin \
+   curl -X POST http://$TORII[REMOVED: provider-internal finalized-ledger ingest only] \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -172,7 +172,7 @@ GC CLI 特意设置为只读。使用它来捕获保留期限和过期清单库�
   其中涵盖 `pin_fetch_roundtrip`、`pin_survives_restart`、`pin_quota_rejection` 和 `por_sampling_returns_verified_proofs`。
 - 仪表板应跟踪：
   - `torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
-  - `torii_sorafs_storage_pin_queue_depth` 和 `torii_sorafs_storage_fetch_inflight`
+  - `sorafs_provider_ingest_inflight` 和 `torii_sorafs_storage_fetch_inflight`
   - PoR 成功/失败计数器通过 `/v1/sorafs/capacity/state` 出现
   - 和解通过 `sorafs_node_deal_publish_total{result=success|failure}` 发布尝试
 

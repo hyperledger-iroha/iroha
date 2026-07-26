@@ -9195,7 +9195,7 @@ mod tests {
     fn fetch_recovers_from_multi_provider_failures() {
         let payload = sample_payload(1 << 20);
         let plan = CarBuildPlan::single_file(&payload).expect("plan");
-        let specs = plan.chunk_fetch_specs();
+        let specs = plan.try_chunk_fetch_specs().expect("valid CAR plan");
         assert!(
             specs.len() >= 3,
             "expected at least three chunks in plan, got {}",
@@ -9452,7 +9452,8 @@ mod tests {
             .with_label_values(&[manifest_label.as_str(), "primary"])
             .get();
         let expected_bytes: u64 = plan
-            .chunk_fetch_specs()
+            .try_chunk_fetch_specs()
+            .expect("valid CAR plan")
             .into_iter()
             .map(|spec| u64::from(spec.length))
             .sum();
@@ -10830,7 +10831,7 @@ mod tests {
         let mut provider_id = [0u8; 32];
         let decoded = hex::decode(provider_id_hex).expect("provider hex");
         provider_id.copy_from_slice(&decoded);
-        let token = StreamTokenV1::sign_with_seed(
+        let token = StreamTokenV1::sign(
             StreamTokenBodyV1 {
                 token_id: "01J9TK3GR0XM6YQF7WQXA9Z2SF".to_owned(),
                 manifest_cid: hex::decode(manifest_cid_hex).expect("manifest cid"),
@@ -10843,7 +10844,7 @@ mod tests {
                 requests_per_minute: 120,
                 token_pk_version: 1,
             },
-            [0x42; 32],
+            &ed25519_dalek::SigningKey::from_bytes(&[0x42; 32]),
         )
         .expect("sign stream token fixture");
         let bytes = norito::to_bytes(&token).expect("encode token");
@@ -10907,7 +10908,7 @@ mod tests {
         payload: &[u8],
     ) -> HashMap<String, Vec<u8>> {
         let mut map = HashMap::new();
-        for spec in plan.chunk_fetch_specs() {
+        for spec in plan.try_chunk_fetch_specs().expect("valid CAR plan") {
             let digest_hex = to_hex(&spec.digest);
             let path = format!("/v1/sorafs/storage/chunk/{manifest_id_hex}/{digest_hex}");
             let start = spec.offset as usize;
@@ -11028,7 +11029,10 @@ mod tests {
         .await
         .expect("fetch outcome");
 
-        assert_eq!(session.outcome.chunks.len(), plan.chunk_fetch_specs().len());
+        assert_eq!(
+            session.outcome.chunks.len(),
+            plan.try_chunk_fetch_specs().expect("valid CAR plan").len()
+        );
         let assembled: Vec<u8> = session.outcome.chunks.concat();
         assert_eq!(assembled, payload);
     }

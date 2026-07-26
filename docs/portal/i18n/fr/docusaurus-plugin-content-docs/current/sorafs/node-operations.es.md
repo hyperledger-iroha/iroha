@@ -91,7 +91,7 @@ Ambos endpoints est servi par le travailleur de l'environnement intégré, ainsi
 2. Envoyez le manifeste avec la codification base64 :
 
    ```bash
-   curl -X POST http://$TORII/v1/sorafs/storage/pin \
+   curl -X POST http://$TORII[REMOVED: provider-internal finalized-ledger ingest only] \
      -H 'Content-Type: application/json' \
      -d @pin_request.json
    ```
@@ -151,7 +151,7 @@ Ambos endpoints est servi par le travailleur de l'environnement intégré, ainsi
   que cubren `pin_fetch_roundtrip`, `pin_survives_restart`, `pin_quota_rejection` et `por_sampling_returns_verified_proofs`.
 - Les tableaux de bord doivent suivre :
   -`torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
-  - `torii_sorafs_storage_pin_queue_depth` et `torii_sorafs_storage_fetch_inflight`
+  - `sorafs_provider_ingest_inflight` et `torii_sorafs_storage_fetch_inflight`
   - Contadores de exito/fallo de PoR expuestos via `/v1/sorafs/capacity/state`
   - intentions de publication de règlement via `sorafs_node_deal_publish_total{result=success|failure}`
 

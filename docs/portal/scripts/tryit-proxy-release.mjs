@@ -13,6 +13,7 @@ import path from 'node:path';
 import {parseArgs} from 'node:util';
 import {fileURLToPath} from 'node:url';
 
+import {parseOpenApiManifestV2Json} from './lib/openapi-manifest-v2.mjs';
 import {verifySpecDigest} from './tryit-proxy-lib.mjs';
 
 const PORTAL_ROOT = fileURLToPath(new URL('../', import.meta.url));
@@ -47,16 +48,31 @@ async function describeFile(filePath, relativeName) {
 
 async function loadOpenApiManifest(manifestPath) {
   const raw = await readFile(manifestPath, {encoding: 'utf8'});
-  const parsed = JSON.parse(raw);
+  const parsed = parseOpenApiManifestV2Json(raw, {
+    label: `openapi manifest ${manifestPath}`,
+  });
   if (!parsed.artifact || !parsed.artifact.sha256_hex) {
     throw new Error(
       `openapi manifest ${manifestPath} is missing the expected artifact digest`,
     );
   }
-  const specTarget = parsed.artifact.path ?? 'torii.json';
-  const specPath = path.isAbsolute(specTarget)
-    ? specTarget
-    : path.join(path.dirname(manifestPath), specTarget);
+  const specTarget = parsed.artifact.path;
+  if (specTarget !== 'torii.json') {
+    throw new Error(
+      `openapi manifest ${manifestPath} artifact.path must be exactly torii.json`,
+    );
+  }
+  const manifestDir = path.resolve(path.dirname(manifestPath));
+  const specPath = path.resolve(manifestDir, specTarget);
+  const relativeSpecPath = path.relative(manifestDir, specPath);
+  if (
+    relativeSpecPath.startsWith('..') ||
+    path.isAbsolute(relativeSpecPath)
+  ) {
+    throw new Error(
+      `openapi manifest ${manifestPath} artifact.path escapes its directory`,
+    );
+  }
   const specBuffer = await readFile(specPath);
   await verifySpecDigest({manifestPath, specPath, specBuffer});
   return {manifest: parsed, specPath};

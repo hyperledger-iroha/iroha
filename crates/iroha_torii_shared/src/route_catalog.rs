@@ -2948,6 +2948,22 @@ pub mod sorafs {
         public_post(stable_route_id, path, RouteProjections::OPENAPI_AND_SDK)
     }
 
+    const fn authenticated_documented_get(
+        stable_route_id: &'static str,
+        path: &'static str,
+    ) -> RouteDescriptor {
+        documented_get(stable_route_id, path)
+            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+    }
+
+    const fn authenticated_documented_post(
+        stable_route_id: &'static str,
+        path: &'static str,
+    ) -> RouteDescriptor {
+        documented_post(stable_route_id, path)
+            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+    }
+
     const fn local_get(stable_route_id: &'static str, path: &'static str) -> RouteDescriptor {
         public_get(stable_route_id, path, RouteProjections::NONE)
     }
@@ -3030,6 +3046,37 @@ pub mod sorafs {
     /// Read the local `SoraFS` capacity state.
     pub const CAPACITY_STATE: RouteDescriptor =
         documented_get("sorafs.capacity.read", "/v1/sorafs/capacity/state");
+    /// Read supervised finalized-ledger billing projector status.
+    pub const BILLING_STATUS: RouteDescriptor =
+        authenticated_documented_get("sorafs.billing.status", "/v1/sorafs/billing/status");
+    /// List terminally published billing statements owned by the authenticated account.
+    pub const BILLING_STATEMENTS: RouteDescriptor = authenticated_documented_get(
+        "sorafs.billing_statement.list",
+        "/v1/sorafs/billing/statements",
+    );
+    /// Read one exact terminally published billing statement owned by the authenticated account.
+    pub const BILLING_STATEMENT: RouteDescriptor = authenticated_documented_get(
+        "sorafs.billing_statement.read",
+        "/v1/sorafs/billing/statements/{statement_id}",
+    );
+    /// Acknowledge one owned terminally published billing statement.
+    pub const BILLING_STATEMENT_ACKNOWLEDGEMENTS: RouteDescriptor = authenticated_documented_post(
+        "sorafs.billing_statement_acknowledgement.submit",
+        "/v1/sorafs/billing/statements/{statement_id}/acknowledgements",
+    );
+    /// Read payload-free billing delivery reconciliation status.
+    pub const BILLING_RECONCILIATION: RouteDescriptor = authenticated_documented_get(
+        "sorafs.billing.reconciliation",
+        "/v1/sorafs/billing/reconciliation",
+    );
+    /// Read a bounded finalized active-epoch exposure page.
+    pub const HEDGING_EXPOSURE: RouteDescriptor = authenticated_documented_get(
+        "sorafs.hedging_exposure.list",
+        "/v1/sorafs/hedging/exposure",
+    );
+    /// Read a bounded finalized active-epoch hedge-intent page.
+    pub const HEDGING_INTENTS: RouteDescriptor =
+        authenticated_documented_get("sorafs.hedging_intent.list", "/v1/sorafs/hedging/intents");
 
     /// Read the local Governance DAG dashboard.
     pub const GOVERNANCE_DAG_DASHBOARD: RouteDescriptor = local_get(
@@ -3206,11 +3253,6 @@ pub mod sorafs {
         "sorafs.reputation_snapshot.latest",
         "/v1/sorafs/reputation/latest",
     );
-    /// Publish a reputation snapshot.
-    pub const REPUTATION_LATEST_POST: RouteDescriptor = documented_post(
-        "sorafs.reputation_snapshot.publish",
-        "/v1/sorafs/reputation/latest",
-    );
     /// Read one historical reputation snapshot.
     pub const REPUTATION_SNAPSHOT: RouteDescriptor = documented_get(
         "sorafs.reputation_snapshot.read",
@@ -3274,9 +3316,6 @@ pub mod sorafs {
         "sorafs.storage_plan.read",
         "/v1/sorafs/storage/plan/{manifest_id}",
     );
-    /// Pin staged storage content.
-    pub const STORAGE_PIN: RouteDescriptor =
-        documented_post("sorafs.storage.pin", "/v1/sorafs/storage/pin");
     /// Submit a storage fetch request.
     pub const STORAGE_FETCH: RouteDescriptor =
         documented_post("sorafs.storage.fetch", "/v1/sorafs/storage/fetch");
@@ -3388,84 +3427,6 @@ pub mod sorafs {
     pub const POP_VERIFY: RouteDescriptor =
         documented_post("sorafs.pop.membership.verify", "/v1/sorafs/pop/verify")
             .with_authentication(AuthenticationPolicy::ProtocolHandshake);
-    const fn authenticated_deal_post(
-        stable_route_id: &'static str,
-        path: &'static str,
-        authentication: AuthenticationPolicy,
-    ) -> RouteDescriptor {
-        documented_post(stable_route_id, path).with_authentication(authentication)
-    }
-
-    /// Fund a provider's `SoraFS` deal escrow.
-    pub const DEAL_FUND_PROVIDER: RouteDescriptor = authenticated_deal_post(
-        "sorafs.deal.provider_fund",
-        "/v1/sorafs/deal/fund-provider",
-        AuthenticationPolicy::IdentityBoundSignature,
-    );
-    /// Fund a client's `SoraFS` deal escrow.
-    pub const DEAL_FUND_CLIENT: RouteDescriptor = authenticated_deal_post(
-        "sorafs.deal.client_fund",
-        "/v1/sorafs/deal/fund-client",
-        AuthenticationPolicy::OperatorSignature,
-    );
-    /// Open a funded `SoraFS` deal.
-    pub const DEAL_OPEN: RouteDescriptor = authenticated_deal_post(
-        "sorafs.deal.open",
-        "/v1/sorafs/deal/open",
-        AuthenticationPolicy::OperatorSignature,
-    );
-    /// Cancel a `SoraFS` deal.
-    pub const DEAL_CANCEL: RouteDescriptor = authenticated_deal_post(
-        "sorafs.deal.cancel",
-        "/v1/sorafs/deal/cancel",
-        AuthenticationPolicy::OperatorSignature,
-    );
-    /// Submit a `SoraFS` deal-usage report.
-    pub const DEAL_USAGE: RouteDescriptor = authenticated_deal_post(
-        "sorafs.deal_usage.submit",
-        "/v1/sorafs/deal/usage",
-        AuthenticationPolicy::IdentityBoundSignature,
-    );
-    /// Submit a `SoraFS` deal settlement.
-    pub const DEAL_SETTLE: RouteDescriptor = authenticated_deal_post(
-        "sorafs.deal_settlement.submit",
-        "/v1/sorafs/deal/settle",
-        AuthenticationPolicy::OperatorSignature,
-    );
-
-    /// Publish a signed `SoraFS` pricing manifest.
-    ///
-    /// The handler authenticates the canonical request with the application
-    /// signing headers, so this descriptor intentionally keeps Torii's default
-    /// route authentication policy instead of applying operator middleware.
-    pub const ECONOMICS_PRICING_MANIFEST: RouteDescriptor = documented_post(
-        "sorafs.economics.pricing_manifest.publish",
-        "/v1/sorafs/economics/pricing/manifests",
-    );
-    /// Publish a signed `SoraFS` hedging feed.
-    ///
-    /// The handler authenticates the canonical request with the application
-    /// signing headers.
-    pub const ECONOMICS_HEDGING_FEED: RouteDescriptor = documented_post(
-        "sorafs.economics.hedging_feed.publish",
-        "/v1/sorafs/economics/hedging/feeds",
-    );
-    /// Read the effective `SoraFS` economics status.
-    pub const ECONOMICS_STATUS: RouteDescriptor = documented_get(
-        "sorafs.economics.status.read",
-        "/v1/sorafs/economics/status",
-    );
-    /// Read the active `SoraFS` pricing manifest.
-    pub const ECONOMICS_ACTIVE_PRICING: RouteDescriptor = documented_get(
-        "sorafs.economics.active_pricing.read",
-        "/v1/sorafs/economics/pricing/active",
-    );
-    /// Read the current `SoraFS` hedging reference price.
-    pub const ECONOMICS_HEDGING_REFERENCE: RouteDescriptor = documented_get(
-        "sorafs.economics.hedging_reference.read",
-        "/v1/sorafs/economics/hedging/reference",
-    );
-
     /// Read the manifest selected by the request's `SoraFS` site binding.
     pub const SITE_MANIFEST: RouteDescriptor = protocol_get(
         "protocol.sorafs.site_manifest",
@@ -3496,6 +3457,13 @@ pub mod sorafs {
         ROUTING_PROVIDERS,
         ROUTING_PEERS,
         CAPACITY_STATE,
+        BILLING_STATUS,
+        BILLING_STATEMENTS,
+        BILLING_STATEMENT,
+        BILLING_STATEMENT_ACKNOWLEDGEMENTS,
+        BILLING_RECONCILIATION,
+        HEDGING_EXPOSURE,
+        HEDGING_INTENTS,
         GOVERNANCE_DAG_DASHBOARD,
         GOVERNANCE_DAG_HEAD,
         GOVERNANCE_DAG_BLOCK,
@@ -3530,7 +3498,6 @@ pub mod sorafs {
         GOVERNANCE_DAG_RUNTIME_DIGEST,
         GOVERNANCE_DAG_RUNTIME_KIND,
         REPUTATION_LATEST_GET,
-        REPUTATION_LATEST_POST,
         REPUTATION_SNAPSHOT,
         REPUTATION_PROVIDER,
         REPUTATION_WEIGHTS,
@@ -3546,7 +3513,6 @@ pub mod sorafs {
         CID_LOOKUP,
         STORAGE_MANIFEST,
         STORAGE_PLAN,
-        STORAGE_PIN,
         STORAGE_FETCH,
         STORAGE_TOKEN,
         STORAGE_CAR,
@@ -3571,17 +3537,6 @@ pub mod sorafs {
         POP_WALLET_SYNCHRONIZE,
         POP_WALLET_PROVE,
         POP_VERIFY,
-        DEAL_FUND_PROVIDER,
-        DEAL_FUND_CLIENT,
-        DEAL_OPEN,
-        DEAL_CANCEL,
-        DEAL_USAGE,
-        DEAL_SETTLE,
-        ECONOMICS_PRICING_MANIFEST,
-        ECONOMICS_HEDGING_FEED,
-        ECONOMICS_STATUS,
-        ECONOMICS_ACTIVE_PRICING,
-        ECONOMICS_HEDGING_REFERENCE,
         SITE_MANIFEST,
         CID_ROOT,
         CID_PATH,
@@ -3975,6 +3930,10 @@ pub mod contracts_and_verification_keys {
         app_post(id, path).with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
     }
 
+    const fn app_unprojected_get(id: &'static str, path: &'static str) -> RouteDescriptor {
+        app_get(id, path).with_projections(RouteProjections::NONE)
+    }
+
     const fn app_sdk_get(id: &'static str, path: &'static str) -> RouteDescriptor {
         app_get(id, path).with_projections(RouteProjections::SDK)
     }
@@ -4061,9 +4020,6 @@ pub mod contracts_and_verification_keys {
         ZK_VK_UPDATE_POST => app_sdk_post("contracts.zk_vk_update_post", "/v1/zk/vk/update");
         SORAFS_CAPACITY_DECLARE_POST => app_sdk_post("contracts.sorafs_capacity_declare_post", "/v1/sorafs/capacity/declare");
         SORAFS_CAPACITY_TELEMETRY_POST => app_sdk_post("contracts.sorafs_capacity_telemetry_post", "/v1/sorafs/capacity/telemetry");
-        SORAFS_CAPACITY_SCHEDULE_POST => app_post("contracts.sorafs_capacity_schedule_post", "/v1/sorafs/capacity/schedule");
-        SORAFS_CAPACITY_COMPLETE_POST => app_post("contracts.sorafs_capacity_complete_post", "/v1/sorafs/capacity/complete");
-        SORAFS_CAPACITY_UPTIME_POST => app_post("contracts.sorafs_capacity_uptime_post", "/v1/sorafs/capacity/uptime");
         SORAFS_CAPACITY_POR_PROOF_POST => app_operator_post("contracts.sorafs_capacity_por_proof_post", "/v1/sorafs/capacity/por-proof");
         SORAFS_CAPACITY_POR_VERDICT_POST => app_operator_post("contracts.sorafs_capacity_por_verdict_post", "/v1/sorafs/capacity/por-verdict");
         SORAFS_POR_STATUS_GET => app_get("contracts.sorafs_por_status_get", "/v1/sorafs/por/status");
@@ -4071,7 +4027,6 @@ pub mod contracts_and_verification_keys {
         SORAFS_POR_INGESTION_BY_MANIFEST_DIGEST_HEX_GET => app_get("contracts.sorafs_por_ingestion_by_manifest_digest_hex_get", "/v1/sorafs/por/ingestion/{manifest_digest_hex}");
         SORAFS_POR_REPORT_BY_ISO_WEEK_GET => app_get("contracts.sorafs_por_report_by_iso_week_get", "/v1/sorafs/por/report/{iso_week}");
         SORAFS_POR_VRF_POST => app_sdk_post("contracts.sorafs_por_vrf_post", "/v1/sorafs/por/vrf");
-        SORAFS_CAPACITY_FAILURE_POST => app_post("contracts.sorafs_capacity_failure_post", "/v1/sorafs/capacity/failure");
         SORAFS_ORDERBOOK_ORDERS_POST => app_sdk_post("contracts.sorafs_orderbook_orders_post", "/v1/sorafs/orderbook/orders");
         SORAFS_ORDERBOOK_CANCEL_POST => app_sdk_post("contracts.sorafs_orderbook_cancel_post", "/v1/sorafs/orderbook/cancel");
         SORAFS_ORDERBOOK_RECEIPTS_POST => app_sdk_post("contracts.sorafs_orderbook_receipts_post", "/v1/sorafs/orderbook/receipts");
@@ -4142,8 +4097,21 @@ pub mod contracts_and_verification_keys {
         SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_OPERATOR_PANEL_GET => app_get("contracts.sorafs_moderation_quarantine_by_quarantine_id_hex_operator_panel_get", "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/operator-panel");
         SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_OBJECT_POST => app_post("contracts.sorafs_moderation_quarantine_by_quarantine_id_hex_object_post", "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/object");
         SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_OBJECT_GET => app_get("contracts.sorafs_moderation_quarantine_by_quarantine_id_hex_object_get", "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/object");
-        SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_VIEWER_SESSIONS_POST => app_post("contracts.sorafs_moderation_quarantine_by_quarantine_id_hex_viewer_sessions_post", "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/viewer-sessions");
-        SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_VIEWER_ACCESS_POST => app_post("contracts.sorafs_moderation_quarantine_by_quarantine_id_hex_viewer_access_post", "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/viewer-access");
+        EVIDENCE_SESSION_CHALLENGE_POST => app_signed_post("contracts.evidence_session_challenge_post", "/v1/evidence/session/challenge");
+        EVIDENCE_SESSION_POST => app_signed_post("contracts.evidence_session_post", "/v1/evidence/session");
+        EVIDENCE_MANIFEST_BY_SESSION_ID_HEX_GET => app_signed_get("contracts.evidence_manifest_by_session_id_hex_get", "/v1/evidence/manifest/{session_id_hex}");
+        EVIDENCE_SEGMENT_BY_SESSION_ID_HEX_GET => app_signed_get("contracts.evidence_segment_by_session_id_hex_get", "/v1/evidence/segment/{session_id_hex}");
+        EVIDENCE_LOG_BY_SESSION_ID_HEX_POST => app_signed_post("contracts.evidence_log_by_session_id_hex_post", "/v1/evidence/log/{session_id_hex}");
+        EVIDENCE_AUDIT_GET => app_signed_get("contracts.evidence_audit_get", "/v1/evidence/audit");
+        EVIDENCE_STATUS_GET => app_signed_get("contracts.evidence_status_get", "/v1/evidence/status");
+        EVIDENCE_LEGAL_HOLD_POST => app_signed_post("contracts.evidence_legal_hold_post", "/v1/evidence/legal-hold");
+        EVIDENCE_LEGAL_HOLD_BY_HOLD_ID_HEX_RELEASE_POST => app_signed_post("contracts.evidence_legal_hold_by_hold_id_hex_release_post", "/v1/evidence/legal-hold/{hold_id_hex}/release");
+        EVIDENCE_RETENTION_GET => app_signed_get("contracts.evidence_retention_get", "/v1/evidence/retention");
+        EVIDENCE_RETENTION_POST => app_signed_post("contracts.evidence_retention_post", "/v1/evidence/retention");
+        EVIDENCE_ERASURE_POST => app_signed_post("contracts.evidence_erasure_post", "/v1/evidence/erasure");
+        EVIDENCE_VIEWER_GET => app_unprojected_get("contracts.evidence_viewer_get", "/v1/evidence/viewer");
+        EVIDENCE_VIEWER_CSS_GET => app_unprojected_get("contracts.evidence_viewer_css_get", "/v1/evidence/viewer/app.css");
+        EVIDENCE_VIEWER_JS_GET => app_unprojected_get("contracts.evidence_viewer_js_get", "/v1/evidence/viewer/app.js");
         SORAFS_MODERATION_VIEWER_AUDIT_REPORTS_POST => app_post("contracts.sorafs_moderation_viewer_audit_reports_post", "/v1/sorafs/moderation/viewer-audit-reports");
         SORAFS_MODERATION_VIEWER_AUDIT_REPORTS_PUBLISH_DUE_POST => app_post("contracts.sorafs_moderation_viewer_audit_reports_publish_due_post", "/v1/sorafs/moderation/viewer-audit-reports/publish-due");
         SORAFS_AUDIT_REPAIR_REPORT_POST => app_post("contracts.sorafs_audit_repair_report_post", "/v1/sorafs/audit/repair/report");
@@ -4495,6 +4463,13 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     sorafs::ROUTING_PROVIDERS,
     sorafs::ROUTING_PEERS,
     sorafs::CAPACITY_STATE,
+    sorafs::BILLING_STATUS,
+    sorafs::BILLING_STATEMENTS,
+    sorafs::BILLING_STATEMENT,
+    sorafs::BILLING_STATEMENT_ACKNOWLEDGEMENTS,
+    sorafs::BILLING_RECONCILIATION,
+    sorafs::HEDGING_EXPOSURE,
+    sorafs::HEDGING_INTENTS,
     sorafs::GOVERNANCE_DAG_DASHBOARD,
     sorafs::GOVERNANCE_DAG_HEAD,
     sorafs::GOVERNANCE_DAG_BLOCK,
@@ -4529,7 +4504,6 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     sorafs::GOVERNANCE_DAG_RUNTIME_DIGEST,
     sorafs::GOVERNANCE_DAG_RUNTIME_KIND,
     sorafs::REPUTATION_LATEST_GET,
-    sorafs::REPUTATION_LATEST_POST,
     sorafs::REPUTATION_SNAPSHOT,
     sorafs::REPUTATION_PROVIDER,
     sorafs::REPUTATION_WEIGHTS,
@@ -4545,7 +4519,6 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     sorafs::CID_LOOKUP,
     sorafs::STORAGE_MANIFEST,
     sorafs::STORAGE_PLAN,
-    sorafs::STORAGE_PIN,
     sorafs::STORAGE_FETCH,
     sorafs::STORAGE_TOKEN,
     sorafs::STORAGE_CAR,
@@ -4570,17 +4543,6 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     sorafs::POP_WALLET_SYNCHRONIZE,
     sorafs::POP_WALLET_PROVE,
     sorafs::POP_VERIFY,
-    sorafs::DEAL_FUND_PROVIDER,
-    sorafs::DEAL_FUND_CLIENT,
-    sorafs::DEAL_OPEN,
-    sorafs::DEAL_CANCEL,
-    sorafs::DEAL_USAGE,
-    sorafs::DEAL_SETTLE,
-    sorafs::ECONOMICS_PRICING_MANIFEST,
-    sorafs::ECONOMICS_HEDGING_FEED,
-    sorafs::ECONOMICS_STATUS,
-    sorafs::ECONOMICS_ACTIVE_PRICING,
-    sorafs::ECONOMICS_HEDGING_REFERENCE,
     sorafs::SITE_MANIFEST,
     sorafs::CID_ROOT,
     sorafs::CID_PATH,
@@ -4807,9 +4769,6 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     contracts_and_verification_keys::ZK_VK_UPDATE_POST,
     contracts_and_verification_keys::SORAFS_CAPACITY_DECLARE_POST,
     contracts_and_verification_keys::SORAFS_CAPACITY_TELEMETRY_POST,
-    contracts_and_verification_keys::SORAFS_CAPACITY_SCHEDULE_POST,
-    contracts_and_verification_keys::SORAFS_CAPACITY_COMPLETE_POST,
-    contracts_and_verification_keys::SORAFS_CAPACITY_UPTIME_POST,
     contracts_and_verification_keys::SORAFS_CAPACITY_POR_PROOF_POST,
     contracts_and_verification_keys::SORAFS_CAPACITY_POR_VERDICT_POST,
     contracts_and_verification_keys::SORAFS_POR_STATUS_GET,
@@ -4817,7 +4776,6 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     contracts_and_verification_keys::SORAFS_POR_INGESTION_BY_MANIFEST_DIGEST_HEX_GET,
     contracts_and_verification_keys::SORAFS_POR_REPORT_BY_ISO_WEEK_GET,
     contracts_and_verification_keys::SORAFS_POR_VRF_POST,
-    contracts_and_verification_keys::SORAFS_CAPACITY_FAILURE_POST,
     contracts_and_verification_keys::SORAFS_ORDERBOOK_ORDERS_POST,
     contracts_and_verification_keys::SORAFS_ORDERBOOK_CANCEL_POST,
     contracts_and_verification_keys::SORAFS_ORDERBOOK_RECEIPTS_POST,
@@ -4882,8 +4840,21 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     contracts_and_verification_keys::SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_OPERATOR_PANEL_GET,
     contracts_and_verification_keys::SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_OBJECT_POST,
     contracts_and_verification_keys::SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_OBJECT_GET,
-    contracts_and_verification_keys::SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_VIEWER_SESSIONS_POST,
-    contracts_and_verification_keys::SORAFS_MODERATION_QUARANTINE_BY_QUARANTINE_ID_HEX_VIEWER_ACCESS_POST,
+    contracts_and_verification_keys::EVIDENCE_SESSION_CHALLENGE_POST,
+    contracts_and_verification_keys::EVIDENCE_SESSION_POST,
+    contracts_and_verification_keys::EVIDENCE_MANIFEST_BY_SESSION_ID_HEX_GET,
+    contracts_and_verification_keys::EVIDENCE_SEGMENT_BY_SESSION_ID_HEX_GET,
+    contracts_and_verification_keys::EVIDENCE_LOG_BY_SESSION_ID_HEX_POST,
+    contracts_and_verification_keys::EVIDENCE_AUDIT_GET,
+    contracts_and_verification_keys::EVIDENCE_STATUS_GET,
+    contracts_and_verification_keys::EVIDENCE_LEGAL_HOLD_POST,
+    contracts_and_verification_keys::EVIDENCE_LEGAL_HOLD_BY_HOLD_ID_HEX_RELEASE_POST,
+    contracts_and_verification_keys::EVIDENCE_RETENTION_GET,
+    contracts_and_verification_keys::EVIDENCE_RETENTION_POST,
+    contracts_and_verification_keys::EVIDENCE_ERASURE_POST,
+    contracts_and_verification_keys::EVIDENCE_VIEWER_GET,
+    contracts_and_verification_keys::EVIDENCE_VIEWER_CSS_GET,
+    contracts_and_verification_keys::EVIDENCE_VIEWER_JS_GET,
     contracts_and_verification_keys::SORAFS_MODERATION_VIEWER_AUDIT_REPORTS_POST,
     contracts_and_verification_keys::SORAFS_MODERATION_VIEWER_AUDIT_REPORTS_PUBLISH_DUE_POST,
     contracts_and_verification_keys::SORAFS_AUDIT_REPAIR_REPORT_POST,
@@ -4989,6 +4960,22 @@ mod tests {
                 "retired route {retired} leaked into the canonical catalog"
             );
         }
+    }
+
+    #[test]
+    fn canonical_catalog_has_no_direct_storage_ingest_route() {
+        assert!(
+            CATALOGED_ROUTES
+                .iter()
+                .all(|route| route.path() != "/v1/sorafs/storage/pin"),
+            "storage ingest must remain provider-internal and finalized-ledger driven"
+        );
+        assert!(
+            CATALOGED_ROUTES
+                .iter()
+                .all(|route| route.id() != "sorafs.storage.pin"),
+            "the retired direct storage-ingest route id must not be reusable"
+        );
     }
 
     #[test]
@@ -5282,6 +5269,17 @@ mod tests {
             "/v1/sorafs/storage/por-challenge",
             "/v1/sorafs/storage/por-proof",
             "/v1/sorafs/storage/por-verdict",
+            "/v1/sorafs/deal/fund-provider",
+            "/v1/sorafs/deal/fund-client",
+            "/v1/sorafs/deal/open",
+            "/v1/sorafs/deal/cancel",
+            "/v1/sorafs/deal/usage",
+            "/v1/sorafs/deal/settle",
+            "/v1/sorafs/economics/pricing/manifests",
+            "/v1/sorafs/economics/hedging/feeds",
+            "/v1/sorafs/economics/status",
+            "/v1/sorafs/economics/pricing/active",
+            "/v1/sorafs/economics/hedging/reference",
         ] {
             assert!(
                 sorafs::ROUTES
@@ -5297,39 +5295,6 @@ mod tests {
         assert_eq!(sorafs::CID_ROOT.path(), "/sorafs/cid/{cid}");
         assert_eq!(sorafs::CID_ROOT.route_match(), RouteMatch::Exact);
         assert_eq!(sorafs::CID_PATH.route_match(), RouteMatch::Wildcard);
-        for route in [sorafs::DEAL_FUND_PROVIDER, sorafs::DEAL_USAGE] {
-            assert_eq!(
-                route.authentication(),
-                AuthenticationPolicy::IdentityBoundSignature
-            );
-        }
-        for route in [
-            sorafs::DEAL_FUND_CLIENT,
-            sorafs::DEAL_OPEN,
-            sorafs::DEAL_CANCEL,
-            sorafs::DEAL_SETTLE,
-        ] {
-            assert_eq!(
-                route.authentication(),
-                AuthenticationPolicy::OperatorSignature
-            );
-        }
-        for route in [
-            sorafs::ECONOMICS_PRICING_MANIFEST,
-            sorafs::ECONOMICS_HEDGING_FEED,
-            sorafs::ECONOMICS_STATUS,
-            sorafs::ECONOMICS_ACTIVE_PRICING,
-            sorafs::ECONOMICS_HEDGING_REFERENCE,
-        ] {
-            assert_eq!(route.feature_gate(), FeatureGate::Feature("app_api"));
-            assert_eq!(
-                route.authentication(),
-                AuthenticationPolicy::ToriiDefault,
-                "economics canonical X-Iroha authentication is enforced inside the handler"
-            );
-            assert!(route.projections().openapi());
-        }
-
         for invalid_path in [
             "/v1/sorafs//providers",
             "/v1/sorafs/providers/%2fadmin",
@@ -5362,6 +5327,37 @@ mod tests {
         })
         .with_implicit_head(true);
         assert!(validate_catalog(&[trailing_root]).is_err());
+    }
+
+    #[test]
+    fn sorafs_hedging_billing_routes_require_canonical_auth_and_tooling_projection() {
+        for route in [
+            sorafs::BILLING_STATUS,
+            sorafs::BILLING_STATEMENTS,
+            sorafs::BILLING_STATEMENT,
+            sorafs::BILLING_STATEMENT_ACKNOWLEDGEMENTS,
+            sorafs::BILLING_RECONCILIATION,
+            sorafs::HEDGING_EXPOSURE,
+            sorafs::HEDGING_INTENTS,
+        ] {
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::CanonicalAccountSignature,
+                "{} must require canonical account authentication",
+                route.stable_route_id()
+            );
+            assert_eq!(
+                route.projections(),
+                RouteProjections::OPENAPI_AND_SDK,
+                "{} must remain projected to the OpenAPI and SDK inventories",
+                route.stable_route_id()
+            );
+            assert!(
+                route.cors_options(),
+                "{} must expose the cataloged CORS preflight",
+                route.stable_route_id()
+            );
+        }
     }
 
     #[test]
@@ -6067,6 +6063,22 @@ mod tests {
             errors.iter().any(|error| {
                 error.kind == CatalogValidationErrorKind::AnyMethodToolingProjection
             })
+        );
+    }
+
+    #[test]
+    fn reputation_surface_is_committed_projection_read_only() {
+        let matching = ALL_ROUTES
+            .iter()
+            .filter(|route| route.path() == "/v1/sorafs/reputation/latest")
+            .collect::<Vec<_>>();
+        assert_eq!(matching.len(), 1);
+        assert_eq!(matching[0].method(), HttpMethod::Get);
+        assert_eq!(matching[0].id(), "sorafs.reputation_snapshot.latest");
+        assert!(
+            !ALL_ROUTES
+                .iter()
+                .any(|route| route.id() == "sorafs.reputation_snapshot.publish")
         );
     }
 }

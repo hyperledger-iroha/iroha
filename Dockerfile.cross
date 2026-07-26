@@ -7,13 +7,14 @@
 # - https://github.com/tonistiigi/xx
 # - https://users.rust-lang.org/t/cross-compilation-linux-x86-64-host-aarch64-target/105680
 #
-# FIX: Unresolved issues:
-# - libunwind cryptic message after irohad start
+ARG IROHA_CROSS_XX_IMAGE
+ARG IROHA_CROSS_RUST_IMAGE
+ARG IROHA_CROSS_RUNTIME_IMAGE
 
-FROM --platform=$BUILDPLATFORM tonistiigi/xx AS xx
+FROM --platform=$BUILDPLATFORM ${IROHA_CROSS_XX_IMAGE} AS xx
 
 # NOTE: building on the **host** platform to avoid emulation, which is extremely slow
-FROM --platform=$BUILDPLATFORM rust:alpine as xx-build
+FROM --platform=$BUILDPLATFORM ${IROHA_CROSS_RUST_IMAGE} AS xx-build
 
 WORKDIR /app
 COPY --from=xx / /
@@ -106,7 +107,7 @@ FROM scratch AS bins
 
 COPY --from=xx-build /app/bins/ /
 
-FROM alpine
+FROM ${IROHA_CROSS_RUNTIME_IMAGE}
 
 COPY --from=xx-build /app/bins/* /usr/local/bin/
 

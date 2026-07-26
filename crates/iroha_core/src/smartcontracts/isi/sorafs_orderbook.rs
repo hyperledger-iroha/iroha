@@ -6151,7 +6151,7 @@ mod tests {
             "buyer cannot bypass authoritative settlement by cancelling channel custody"
         );
         assert!(
-            DrawdownAssetLock::new(child_id, child_remaining)
+            DrawdownAssetLock::new(child_id, child_remaining.clone(), child_remaining)
                 .execute(&settlement_id, &mut stx)
                 .is_err(),
             "matcher cannot bypass authoritative receipt settlement with generic drawdown"
@@ -6169,7 +6169,7 @@ mod tests {
             "buyer cannot bypass order cancellation by cancelling parent custody directly"
         );
         assert!(
-            DrawdownAssetLock::new(parent_id, parent_remaining)
+            DrawdownAssetLock::new(parent_id, parent_remaining.clone(), parent_remaining)
                 .execute(&settlement_id, &mut stx)
                 .is_err(),
             "matcher cannot draw down the remaining parent custody directly"

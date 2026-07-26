@@ -68,21 +68,73 @@ reconciliation now consume one complete finalized native projection. Source
 validation and four-peer exactly-once evidence remain release-blocking for the
 repair lane.
 
+Stream-token issuance is now controlled only by node TOML and binds one
+runtime-injected Ed25519 HSM/KMS signer by its non-secret handle and exact
+configured public key. The former file-seed loader, environment enablement,
+standard-launcher node-key derivation, and internal seed-signing API are
+deleted. Enabled startup fails closed on a missing or substituted signer, and
+Torii verifies every returned signature before releasing a token. Focused
+Cargo/workspace validation and reviewed reference-HSM deployment evidence
+remain open.
+
+Provider ingest is now an opt-in supervised `irohad` worker over one immutable,
+bounded finalized replication-order snapshot. Its durable single-writer
+outbox, monotonic finalized high-water, bounded claims, retention-only terminal
+pruning, retry/dead-letter path, exact fee-quoted completion transactions,
+committed reconciliation, and payload-free liveness/readiness are wired from
+`iroha_config`. Enabled startup requires separately identified
+authenticated-source and governed completion-signer providers. The worker now
+rechecks the current committed provider owner before signer resolution and
+immediately before and after signing; a newer finalized assignment snapshot
+also invalidates retained `Signing`, `Signed`, `Ambiguous`, and `Submitted`
+material when that owner changes or is removed. Remaining gaps are the
+production authenticated multi-provider transport and HSM/KMS signer-resolver
+adapters, a provider-indexed committed query or governed archive that stays
+bounded across long-lived history, and a persisted governed signer-policy
+revision/digest binding so same-owner key rotation or revocation is recoverable
+across prepared state and restart. Focused/workspace validation and reviewed
+four-peer restart/duplicate-submission evidence remain open under
+`V1-BLOCK-PROVIDER-INGEST-RUNTIME-01`.
+
+PoTR finalization no longer authorizes a provider from Torii's immutable
+startup admission registry. The injected runtime boundary requires a separate
+live finalized-policy reader, resolves and rechecks the exact admission around
+the two independently administered signatures, and atomically persists the
+accepted policy identity, digest, sequence, finalized cursor, provider, and
+envelope digest as a restart-safe monotonic floor. Torii now constructs
+`PotrFinalizedAdmissionReaderV1` from
+`PotrStateFinalizedPolicySourceV1` and the council-verified admission registry
+when runtime signer roles are supplied. Focused/workspace Rust validation,
+deployment-owned HSM/KMS signer adapters, and four-peer
+rotation/revocation/replay/crash evidence remain open under
+`V1-BLOCK-POTR-DUAL-SIGNER-01`.
+
 The reputation lane now has a native committed input journal with governed
 predecessor-bound recorder policy, one globally contiguous sequence, typed
 payload-free committed events, and a fixed-view finalized query. PoR terminals
 and stream-token outcomes have exact append instructions; canonical capacity
 dispute registration and resolution update the dispute record and journal
-    atomically. This is source implementation only. Typed proof-outcome, repair,
-    orderbook, and reserve finalized feeds already exist; durable PoR and counted
-    stream-token journal append producers remain open. The deterministic
-    multi-feed projector exists in `sorafs_node` but is not exported, configured,
-    or supervised, and it lacks a durable signing-material outbox. Authenticated
-    dedicated Torii/OpenAPI and SDK projections, runtime
-    ingest/reconciliation, external threshold signing, and reviewed deployment
-    evidence remain open. The existing local
-`/v1/sorafs/reputation/*` snapshot checkpoint is not the production committed
-journal projection.
+atomically. Typed proof-outcome, repair, orderbook, and reserve finalized feeds
+already exist. The runtime now requires an injected immutable historical
+`ReputationFinalizedQueryV1`; the current-head state adapter was removed because
+it could not provide exact-anchor pages.
+`QueuedReputationJournalTransactionSubmitterV1` signs and enqueues the exact
+PoR and counted stream-token append transactions for supervised committed-event
+reconciliation. The exported deterministic `sorafs_node` multi-feed projector
+persists five finalized-feed cursors, provider accumulators, a bounded
+retry/dead-letter signing-material outbox, and acknowledgements that verify the
+full threshold-signed snapshot against the anchored trust policy and
+authoritative finalized time. Strict standard-daemon policy construction,
+trust-policy reuse, supervised fixed-view scheduling, shutdown, status, and
+bounded metrics are now wired through runtime-only finalized-query,
+threshold-signer, and Governance DAG clients. Enabled startup rejects missing,
+null/test-marked, or substituted clients. The queue-backed journal submitter is
+constructed by `irohad`; the immutable historical query, external threshold
+signer, authenticated Governance DAG publication/readback and current-head
+inclusion adapters, PoR/token callback-owner wiring, pending integrated Rust
+validation, and reviewed four-peer deployment evidence remain open. Latest,
+provider, weights, and event reads are gated on the fresh committed projection;
+the snapshot-id route remains latest-only.
 
 All four ledger-authority domains enumerated by V1-C04 now use native committed
 state as their local source of truth.
@@ -94,11 +146,20 @@ accounts with bounded labels and an explicit reconciled-height readiness bit.
 The competing `sorafs_node` orderbook, checkpoint, config, mutation/event API,
 and pre-release snapshot wire are also deleted. The reserve/rent and orderbook
 lanes remain open for full source validation and reviewed distributed recovery
-evidence. Moderation remains open for production transaction submission,
-retry/reconciliation, notification and failover orchestration, protected-viewer
-integration, settlement, downstream publication, and four-peer evidence; its
-ballot lifecycle is already chain-authoritative and rebuildable from finalized
-events. Taira and Minamoto mutation remains separately authorized cutover work.
+evidence. Moderation GETs now consume only a fresh supervised finalized
+projection, and the signed receipt checkpoint/projection is the sole viewer
+audit authority; the retired local audit POSTs are authenticated `410 Gone`
+tombstones and have no scheduler. The retained checkpoint now exposes an
+Ed25519-signed canonical digest/receipt-count/chain-head anchor; audit pages
+require that exact digest and an explicit digest-bound limit, reject alternate
+query encodings, and return `409` on checkpoint change. Moderation remains open
+for reference runtime construction, durable notification delivery, settlement
+and downstream publication adapters, cross-replica operation/checkpoint
+fencing, signed terminal compaction/archive, a transparency-published monotonic
+head that gives first-contact clients freshness, and four-peer evidence.
+Its ballot lifecycle is already chain-authoritative and rebuildable from
+finalized events. Taira and Minamoto mutation remains separately authorized
+cutover work.
 
 ## Memory-containment follow-ups
 
@@ -669,8 +730,10 @@ plan docs plus static rollout contract pin the singleton-anchor behavior.
 SoraFS SFM-4 gateway-compliance rollout summaries reject mixed active catalog
 promotion anchors. The gateway-compliance evidence gate requires exactly one
 valid `catalog_digest_hex` before any catalog-bound artifact can satisfy final
-promotion, and its summaries expose that singleton through
-`valid_catalog_digests`.
+promotion. Its summaries expose that singleton through `valid_catalog_digests`
+and expose the current digest/sequence plus predecessor digest/sequence as one
+atomic object in `valid_catalog_history_bindings`; controller and gateway-reload
+evidence must match that complete history before final promotion.
 
 SoraFS SF-5a gateway-load rollout summaries now reject mixed active load
 promotion anchors. The gateway-load evidence gate requires exactly one valid
@@ -1230,10 +1293,13 @@ excluded from the first release.
   reruns the final constructor/algorithm inventories with no new production
   signer-aware gap, and closes the prior non-crypto consensus/DA blocker with
   the full serialized `consensus_and_da` target green locally,
-  and externally supplied Ed25519 signing seed parsers for Torii SoraFS stream
-  tokens, SoraFS CAR provider adverts, SoraFS CAR provider-admission council
-  secrets, and `sorafs-validate` signing commands now reject all-zero seed
-  material before constructing dalek signing keys, and SoraNet
+  and, at that checkpoint, externally supplied Ed25519 signing seed parsers for
+  Torii SoraFS stream tokens, SoraFS CAR provider adverts, SoraFS CAR
+  provider-admission council secrets, and `sorafs-validate` signing commands
+  rejected all-zero seed material before constructing dalek signing keys. The
+  Torii stream-token file-seed parser and local key path were later deleted by
+  the V1 hard cut; current issuance accepts only the node-TOML policy plus an
+  exact runtime-injected HSM/KMS signer binding. SoraNet
   guard-directory issuer rotation now fails closed if the generated Ed25519
   issuer seed is all zero before constructing a dalek signing key or reissuing
   relay certificates,
@@ -3199,10 +3265,16 @@ excluded from the first release.
   iteration, degradation flags, snapshot Merkle roots/proofs, Governance DAG
   payload validation, and scoreboard consumption through
   `reputation_score_bps`. `sorafs_cli reputation verify` also validates
-  archived Norito snapshots and optional provider Merkle proofs, and Torii now
-  exposes the local SoraFS reputation publish/latest/provider-proof surface at
-  `/v1/sorafs/reputation/*`. `sorafs_cli reputation publish`, `snapshot`, and
-  `fetch` exercise that surface for operators. Historical snapshot lookup,
+  archived Norito snapshots and optional provider Merkle proofs. The exported
+  finalized multi-feed projector consumes the native proof, unified journal,
+  repair, orderbook, reserve-event, and reserve-provider projections with five
+  restart-safe cursors and a canonical bounded unsigned-material
+  retry/dead-letter/acknowledgement outbox. Signed-result acknowledgement
+  verifies the anchored public trust policy, quorum, signer revocation,
+  signatures, freshness/future skew, and exact snapshot/evidence/signing
+  digest. The competing Torii POST/OpenAPI operation and `sorafs_cli reputation
+  publish` command are removed; the remaining reputation Torii/CLI surface is
+  read-only. Historical snapshot lookup,
   latest-weight discovery, sequenced snapshot events, bounded latest/historical
   snapshot provider readback, and bounded CLI event watching are also covered
   locally, with deterministic `ETag`/`Cache-Control` validators on reputation
@@ -3216,9 +3288,16 @@ excluded from the first release.
   Rust and JavaScript. The JavaScript/TypeScript and Python Torii
   clients also expose local convenience helpers for
   latest/provider/snapshot/weights reads, event polling, and SSE consumption with
-  cache-validator options. Accepted snapshots now also export reputation
-  publisher health metrics, a bounded top-provider score gauge, low-score
-  threshold-crossing counters, a Grafana dashboard, and Prometheus alerts.
+  cache-validator options. Reputation publisher health metrics, a bounded
+  top-provider score gauge, low-score threshold-crossing counters, a Grafana
+  dashboard, and Prometheus alerts are defined. Strict standard-daemon
+  configuration, dependency injection, supervision, status, and metrics are
+  wired. `QueuedReputationJournalTransactionSubmitterV1` provides the
+  queue-backed journal-delivery boundary; an immutable historical finalized
+  query must be injected because a current-head state view is not exact.
+  External historical-query, threshold-signing, Governance DAG publication/
+  readback/head-inclusion, and producer-owner adapters, integrated Rust
+  validation, and reviewed four-peer live evidence remain open.
   `scripts/check_sorafs_reputation_rollout_evidence.py` now gates deployed
   SFM-3 rollout evidence: publish/latest/provider/event/proof replay artifacts,
   integer-unit metrics freshness/ingest lag, SSE/WebSocket transport delivery,
@@ -4581,26 +4660,33 @@ excluded from the first release.
   snapshot-bound reputation artifact kind against the publish/latest
   `snapshot_id_hex`/`merkle_root_hex` binding before final readiness can report
   ready.
-  Remaining SFM-3 work includes integrated source validation, authenticated
-  Torii/OpenAPI and SDK journal transaction/query projections, committed
-  PDP/PoTR/repair/orderbook/reserve producers, and the durable finalized-cursor
-  ingest/reconciliation/outbox service that emits deterministic signing
-  material while threshold signing remains external. The service, publisher,
-  and regional API must then be deployed and produce live evidence that passes
-  the gate. The existing local Torii snapshot API, cache validators,
-  SSE/WebSocket push, SDK convenience clients, operator CLI core, local
-  observability wiring, and evidence verifier remain foundations, but those
-  snapshot routes are not the committed journal projection.
-  The rollout-gate static contract now pins the live reputation ingest
-  pipeline, scoring engine, snapshot publisher, regional public API/GraphQL
-  gateway, S3/IPFS publication, and production promotion surfaces as unshipped
-  with reusable matchers and negative controls while preserving the local Torii
-  reputation latest/provider/snapshot/weights, event polling, SSE/WebSocket,
-  CLI, SDK, dashboard, and evidence-gate foundations. The static contract now
-  also scans CLI sources for nested deployed-only reputation spellings such as
-  `reputation ingest`, `reputation publisher`, `reputation graphql`, and
-  `reputation promote`, while preserving local
-  `reputation publish|snapshot|fetch|watch|verify` and canary commands. The SF-3 node
+  The source tree now exports the bounded deterministic finalized-feed
+  projector: it joins five physical committed feeds, keeps the unified
+  PoR/dispute/token journal on one cursor, reconciles crash-staged state, and
+  durably emits keyless signing material through an idempotent
+  retry/dead-letter/acknowledgement outbox. Acknowledgement performs full
+  anchored trust-policy, quorum, revocation, signature, and freshness
+  verification using the locked finalized timestamp; callers cannot select
+  that time. Strict `iroha_config`, the immutable historical-query injection
+  boundary, `QueuedReputationJournalTransactionSubmitterV1` PoR/counting
+  submission, and supervised finality reconciliation are wired through
+  `irohad`. Latest/provider/weights/event routes read the fresh committed
+  projection. Remaining SFM-3 work is integrated Rust validation, production
+  historical-query and producer-owner wiring, external threshold-signing,
+  authenticated Governance DAG publication/readback/head inclusion, a genuine
+  historical snapshot-id route, and reviewed four-peer deployment/recovery
+  evidence. Those
+  remaining components and the regional API must be deployed and produce live
+  evidence that passes the gate. The obsolete local Torii snapshot POST and CLI
+  `reputation publish` path are removed.
+  The rollout-gate static contract pins only the still-unshipped supervised
+  ingest command, snapshot publisher, regional public API/GraphQL gateway,
+  S3/IPFS publication, and production-promotion surfaces with reusable matchers
+  and negative controls. The static contract also scans CLI sources for nested
+  deployed-only reputation spellings such as `reputation ingest`,
+  `reputation publisher`, `reputation graphql`, and `reputation promote`, while
+  preserving the read-only local `reputation snapshot|fetch|watch|verify` and
+  canary commands. The SF-3 node
   implementation plan, localized mirrors, and
   canonical plus localized portal mirrors now document the current
   OpenAPI-backed `/v1/sorafs/pin*` and `/v1/sorafs/storage/*` route surface,
@@ -5777,13 +5863,18 @@ excluded from the first release.
   `catalog_change_count`/`catalog_changes`,
   `predecessor_catalog_digest_hex`, `predecessor_catalog_sequence`, and
   independently administered `gateway_acknowledgements`. Every downstream
-  artifact binds that same `catalog_digest_hex`; summaries expose
-  `valid_catalog_digests`, and mixed, missing, stale, duplicate, or
-  predecessor-inconsistent anchors fail closed.
+  artifact binds that same `catalog_digest_hex`; controller and reload evidence
+  additionally bind the promotion's exact predecessor digest and sequence.
+  Summaries expose `valid_catalog_digests` and the atomic
+  `valid_catalog_history_bindings` object, and mixed, missing, stale,
+  duplicate, or predecessor-inconsistent anchors fail closed.
   Enforcement evidence must show HTTP 451
   `gateway_compliance_denied` with a bounded decision source of
-  `baseline` or `legal_safety_hold`; unavailable, stale, conflicting, or
-  poisoned controller state is a distinct fail-closed service error. Evidence
+  `baseline` or `legal_safety_hold`; the required two-source coverage is derived
+  from route records. Honey-audit coverage is likewise derived from its probe
+  records and requires all four canonical attacks. Unavailable, stale,
+  conflicting, or poisoned controller state is a distinct fail-closed service
+  error. Evidence
   never contains raw feeds, catalogs, request/response bodies, appeal payloads,
   signed transactions, tokens, credentials, or signing material. The matching
   collection planner and canary builder accept the canonical
@@ -5873,14 +5964,15 @@ excluded from the first release.
   the local verifier throttle and bounded readback arrays, deployed proof-token
   issuance producers/explorer-linking rollout evidence, deployed public receipt
   explorer rollout evidence capture, and live privacy-safe moderation aggregate
-  publisher. The rollout-gate static contract now also keeps the generic
-  `/v1/transparency/*` and evidence-viewer `/v1/evidence/{session,manifest,log,audit}`
-  route families out of Torii/OpenAPI and warning-only in SoraFS docs until the
-  deployed transparency builder, public explorer, and evidence-viewer
-  authorization services exist. That public-route scanner now uses
-  segment-aware family/stem matching, so canary/evidence route labels such as
-  `/v1/transparency-canary/*` and `/v1/evidence/session-canary` stay local
-  without weakening the generic public-route block. The warning-only public
+  publisher. The rollout-gate static contract keeps the generic
+  `/v1/transparency/*` route family out of Torii/OpenAPI and warning-only in
+  SoraFS docs until the deployed transparency builder and public explorer
+  exist. SFM-4b3 separately exposes the authenticated `/v1/evidence/*` family
+  after finalized authorization, WebAuthn, rotating grants, signed receipts,
+  and legal-hold-aware retention/erasure were implemented. The transparency
+  public-route scanner uses segment-aware family/stem matching, so route labels
+  such as `/v1/transparency-canary/*` stay local without weakening the generic
+  public-route block. The warning-only public
   route scan now shares the broad SoraFS docs path inventory used by reserved
   operator-command checks, covering top-level source docs, nested
   `docs/source/sorafs/**` docs, portal SoraFS docs, and portal i18n SoraFS
@@ -6757,53 +6849,47 @@ excluded from the first release.
   writing, requires explicit audit-log tamper and watermark metadata mismatch
   rejection, rejects overlong URL TTLs, invalid digest casing, and unsafe output
   targets before writing, and writes the artifact atomically for staged review.
-  The rollout-gate static
-	  contract now publishes `valid_evidence_viewer_digest_sets` from valid
-	  `evidence_viewer` artifacts and makes the final aggregate production
-	  readiness gate tether those digest sets to recognized artifact fingerprints
-	  before reporting ready. The aggregate gate now also requires
-		  `valid_roster_bindings`, `valid_tally_bindings`, `valid_e2e_runs`, and
-		  `valid_evidence_viewer_digest_sets` to preserve the case, roster, and tally
-		  chain proven by the moderation-panel lane checker before final promotion can
-		  report ready, and rechecks case-bound, roster-bound, tally-bound, and
-		  policy-bound artifact fingerprints against `valid_case_digests`,
-		  `valid_roster_bindings`, `valid_tally_bindings`, and
-		  `valid_policy_digests`. The local SoraFS node now ships payload-free,
-	  quarantine-scoped evidence-viewer session manifests and append-only
-  access-event checkpoints, with Torii operator endpoints that reject raw
-  evidence, signed URLs, session tokens, response bodies, raw access-log
-  payloads, and watermark secrets. It now also derives payload-free daily
-  evidence-viewer audit reports with aggregate counts and digest-set hashes,
-  records them as local `EvidenceAccess` transparency source entries via the
-  operator-gated `/v1/sorafs/moderation/viewer-audit-reports` route, and rejects
-  raw evidence, raw access logs, viewer accounts, signed URLs, session tokens,
-  and response bodies at that exporter boundary. The operator-gated
-  `/v1/sorafs/moderation/viewer-audit-reports/publish-due` route now runs one
-  local scheduler tick from explicit request cadence or the configured
-  `[sorafs.storage.evidence_viewer_audits]` cadence, records the oldest due
-  payload-free report source entry, publishes the matching transparency ledger
-  cycle through the configured Governance DAG publisher when present, returns a
-  structured disabled outcome when config-backed scheduling is off, and
-  suppresses duplicate cycle publication. Torii now also starts the
-  config-backed background scheduler when SoraFS storage and
-  `sorafs.storage.evidence_viewer_audits` are enabled, runs an immediate local
-  tick, catches up stale published windows without another full cadence, uses
-  the default `local-daily` report scope without fabricating request-only policy
-  or previous-block metadata, and leaves the operator-gated publish-due route
-  available for explicit replay. The rollout-gate static contract
-  still pins the SFM-4b3 browser viewer, streaming backend, short-lived URL signer,
-  watermark engine, WebAuthn/session flow, frontend/deployed access-logger
-  integration, configured scheduler rollout evidence, and deployed Governance
-  DAG transparency-publication rollout evidence as unshipped service work, and
-  rejects matching full evidence-viewer routes or
-  operator subcommands with reusable matchers and segment-aware negative
-  controls while preserving digest-only canary artifacts,
-  `moderation-viewer-session-*` labels, and payload-free evidence-viewer rollout
-  checks. It also scans CLI sources for nested deployed-only browser/streaming
-  spellings such as `moderation evidence viewer serve`,
-  `moderation viewer session`, `moderation watermark engine`, and
-  `moderation access logger`, while preserving local viewer-audit report,
-  publish-due, watermark-digest, access-log-digest, and canary labels.
+  The rollout-gate static contract now publishes
+  `valid_evidence_viewer_digest_sets` from valid `evidence_viewer` artifacts,
+  including the viewer's canonical nested gateway catalog digest, and makes the
+  final aggregate production-readiness gate tether those digest sets to
+  recognized artifact fingerprints before reporting ready. When moderation
+  and gateway compliance are selected together, that viewer catalog digest set
+  must equal gateway compliance `valid_catalog_digests`. The aggregate gate
+  also requires `valid_roster_bindings`, `valid_tally_bindings`,
+  `valid_e2e_runs`, and `valid_evidence_viewer_digest_sets` to preserve the
+  case, roster, tally, and gateway-catalog chain proven by the lane checkers
+  before final promotion can report ready, and rechecks case-bound,
+  roster-bound, tally-bound, and policy-bound artifact fingerprints against
+  `valid_case_digests`, `valid_roster_bindings`, `valid_tally_bindings`, and
+  `valid_policy_digests`. The SFM-4b3 reference service now ships
+  finalized case/round/evidence authorization for current jurors and explicit
+  auditor/legal roles, WebAuthn challenge consumption and replay prevention,
+  rotating grants with a 15-minute session ceiling, authenticated range
+  decryption, a strict-CSP/no-store embedded viewer shell, and Ed25519-signed
+  hash-chained payload-free receipts. The catalogued `/v1/evidence/*` family
+  covers session, manifest, range, interaction, audit/status, legal-hold,
+  retention, and erasure operations; the former operator-only local
+  viewer-session/access routes are no longer mounted or advertised. The
+  crash-safe canonical Ed25519-signed checkpoint envelope retains digests and
+  finalized anchors rather than assertions, credentials, bearer grants,
+  signing keys, or evidence payloads. Legal holds take precedence over erasure
+  without a check/commit race. The signed receipt checkpoint and exact
+  predecessor-bound receipt projection are now the sole evidence-access audit
+  authority. The old aggregate-audit POSTs authenticate and authorize before
+  returning `410 Gone`; their scheduler and all Torii calls into the former
+  local viewer registry are removed. Moderation GETs read only the fresh
+  worker-owned finalized projection, while reconciliation runs outside request
+  threads with supervised deadlines, non-overlap fencing, monotonic
+  cursor/freshness/liveness checks, dead-letter readiness, and typed
+  payload-free startup failures.
+  SFM-4b3 remains open under `V1-BLOCK-MODERATION-VIEWER-RUNTIME-01`: construct
+  reference runtime HSM/KMS/WebAuthn and authenticated downstream providers;
+  add durable notification delivery, real settlement/publication adapters, and
+  the signed receipt-to-transparency adapter; fence semantic operation IDs and
+  predecessor-bound monotonic checkpoints across instances; add signed
+  replay-safe terminal/receipt compaction and archive; and complete focused,
+  adversarial, multi-instance, recovery, and four-validator evidence.
   The commit/reveal canary now covers SFM-4b4-specific controls for
   commit digest recomputation, duplicate-commit rejection, mismatched-reveal
   rejection, late commit/reveal rejection, missed-quorum detection, no-show
@@ -6865,9 +6951,24 @@ excluded from the first release.
   payloads through `validate_hedging_payload_bytes`, and `sorafs-validate
   hedging`/`billing` provides local operator validation for those artifacts.
   The source bridge surface now exposes the same validator through
-  `sorafs_reference_validate_hedging_json`, Connect C/JNI ABI 15
+  `sorafs_reference_validate_hedging_json`, Connect C/JNI ABI 21
   `connect_norito_sorafs_reference_validate_hedging_json`, and Kotlin/JVM,
-  Java Android, and Swift SDK wrappers. The SFM-5 rollout evidence gate now
+  Java Android, and Swift SDK wrappers. `sorafs_node` now also exports the
+  durable `HedgingBillingService`, and standard `irohad` can supervise it under
+  strict `iroha_config` policy, digest, bounds, and opaque runtime-adapter
+  handles. The worker consumes bounded contiguous finalized event pages and
+  authenticated period closes, deterministically projects accruals,
+  per-account governed statements, aggregate XOR exposure, and hedge intents,
+  then durably coordinates runtime-only signing, immutable publication,
+  ambiguous-write lookup, authoritative acknowledgements, reconciliation,
+  retry/dead-letter state, sealed epoch witnesses, and payload-free
+  health/alert metrics. The finalized query, journal verifier, HSM/KMS signer,
+  publisher, acknowledgement authority, and witness store are injected
+  private-key-free interfaces; missing, test-marked, unready, substituted, or
+  drifting providers fail startup. No execution adapter or timer is present in
+  the worker, every intent has `automatic_execution=false`, and the separate
+  explicitly authorized submission helper rejects adapters that advertise
+  automatic execution. The SFM-5 rollout evidence gate now
   validates feed-collector, reference-price, billing-cycle,
   statement-publication, reconciliation, metrics/alert, native-bridge-release,
   and governance-approval artifacts, rejects payload-bearing evidence including
@@ -7015,12 +7116,13 @@ excluded from the first release.
   files that are not pinned by the manifest. The generated positive and
   negative fixture byte suite is now checked in and pinned by the rollout
   contract so future deletions or unmanifested fixture drift fail closed. The
-  rollout-gate static contract now also pins the collector, hedging daemon,
-  billing daemon, statement publisher, REST API, service-management CLI,
-  automated hedge execution, and runtime metric-emission service surfaces as
-  unshipped in the SFM-5 plan with reusable matchers and segment-aware negative
-  controls while preserving local `sorafs-validate hedging`/`billing`, fixture
-  validation, rollout evidence, and payload-free canary labels. It also scans
+  rollout-gate static contract now distinguishes the shipped internal
+  projector/supervisor from the still-external live collector, concrete
+  finalized-query/journal-verifier/HSM/publisher/acknowledgement/witness
+  providers, public REST API, service-management CLI, and governed manual venue
+  adapter. Automated hedge execution remains forbidden. The contract preserves
+  local `sorafs-validate hedging`/`billing`, fixture validation, rollout
+  evidence, runtime metrics, and payload-free canary labels. It also scans
   CLI sources for nested deployed-only `hedging
   daemon|price-feed-collector|hedge-execute|status` and `billing
   daemon|statement-publish|statement-ack|api` spellings without blocking local
@@ -7030,12 +7132,14 @@ excluded from the first release.
   handling; the missing-budget override and permissive reward-engine plumbing
   are removed down to the internal validation helpers, the relay incentive docs
   state that lab/staging fixtures must carry a signed Parliament hash, and the
-  rollout contract pins that service-wide surface. SFM-5
-  still needs the collector service, daemonized
-  pricing/exposure engine, billing aggregator, statement publisher, signed APIs,
-  runtime CLI helpers, runtime service emission of those metric families,
-  released native bridge artifacts, reconciliation tests, governance approval
-  flow, and staged billing evidence that passes the gate; SFM-6
+  rollout contract pins that service-wide surface. SFM-5 still needs focused
+  Rust verification, a live collector, production finalized-query and
+  journal-verifier adapters, independently administered HSM/KMS signing,
+  immutable publication, acknowledgement-authority and sealed-witness
+  providers, any manually governed venue adapter, signed public APIs, runtime
+  CLI helpers, released native bridge artifacts, deployed scrape/alert-routing
+  validation, governance approval, and staged billing evidence that passes the
+  gate; SFM-6
   now uses only native reserve policy/provider/movement/rent/lifecycle/credit/
   repayment/appeal state and committed events. Exact caller-signed native
   transactions enter strict durable ingress; the supervised worker derives

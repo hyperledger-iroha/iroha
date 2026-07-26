@@ -3,7 +3,7 @@
 
 use std::{
     cmp::Ordering,
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     env,
     error::Error,
     ffi::OsStr,
@@ -48,10 +48,9 @@ use iroha_core::{
     queue::Queue,
     state::{State, World},
 };
-use iroha_crypto::{
-    Algorithm, KeyPair, PrivateKey, PublicKey, Signature,
-    soranet::certificate::CertificateValidationPhase,
-};
+use iroha_crypto::{Algorithm, PublicKey, soranet::certificate::CertificateValidationPhase};
+#[cfg(test)]
+use iroha_crypto::{KeyPair, PrivateKey, Signature};
 use iroha_data_model::{
     account::address::compliance_vectors::compliance_vectors_json, nexus::AssetPermissionManifest,
 };
@@ -156,8 +155,8 @@ enum CommandKind {
     OpenApi {
         outputs: Vec<PathBuf>,
         manifest: PathBuf,
-        signing_key: Option<PathBuf>,
         signature_envelope: Option<PathBuf>,
+        signing_payload: Option<PathBuf>,
         unsigned_manifest: bool,
     },
     OpenApiVerify {
@@ -1141,14 +1140,14 @@ fn entrypoint() -> Result<(), Box<dyn Error>> {
         CommandKind::OpenApi {
             outputs,
             manifest,
-            signing_key,
             signature_envelope,
+            signing_payload,
             unsigned_manifest,
         } => generate_openapi(
             outputs,
             manifest,
-            signing_key,
             signature_envelope,
+            signing_payload,
             unsigned_manifest,
         )?,
         CommandKind::OpenApiVerify {
@@ -2034,8 +2033,8 @@ where
         "openapi" => {
             let mut outputs = Vec::new();
             let mut manifest_path: Option<PathBuf> = None;
-            let mut signing_key: Option<PathBuf> = None;
             let mut signature_envelope: Option<PathBuf> = None;
+            let mut signing_payload: Option<PathBuf> = None;
             let mut unsigned_manifest = false;
             let mut pending = args.peekable();
             while let Some(arg) = pending.next() {
@@ -2052,31 +2051,32 @@ where
                         };
                         manifest_path = Some(normalize_path(Path::new(&path))?);
                     }
-                    "--sign" => {
-                        let Some(path) = pending.next() else {
-                            return Err("expected path after --sign".into());
-                        };
-                        signing_key = Some(normalize_path(Path::new(&path))?);
-                    }
                     "--signature-envelope" => {
                         let Some(path) = pending.next() else {
                             return Err("expected path after --signature-envelope".into());
                         };
                         signature_envelope = Some(normalize_path(Path::new(&path))?);
                     }
+                    "--signing-payload" => {
+                        let Some(path) = pending.next() else {
+                            return Err("expected path after --signing-payload".into());
+                        };
+                        signing_payload = Some(normalize_path(Path::new(&path))?);
+                    }
                     "--unsigned-manifest" => unsigned_manifest = true,
                     flag => return Err(format!("unknown flag for openapi: {flag}").into()),
                 }
             }
 
-            if signing_key.is_some() && signature_envelope.is_some() {
+            if unsigned_manifest && signature_envelope.is_some() {
                 return Err(
-                    "openapi flags --sign and --signature-envelope are mutually exclusive".into(),
+                    "openapi flag --unsigned-manifest cannot be combined with --signature-envelope"
+                        .into(),
                 );
             }
-            if unsigned_manifest && (signing_key.is_some() || signature_envelope.is_some()) {
+            if signing_payload.is_some() && !unsigned_manifest && signature_envelope.is_none() {
                 return Err(
-                    "openapi flag --unsigned-manifest cannot be combined with --sign or --signature-envelope"
+                    "openapi flag --signing-payload requires --unsigned-manifest or --signature-envelope"
                         .into(),
                 );
             }
@@ -2087,12 +2087,48 @@ where
 
             outputs.sort();
             outputs.dedup();
+            let manifest = manifest_path.unwrap_or_else(default_openapi_manifest_path);
+            if let Some(signing_payload_path) = signing_payload.as_deref() {
+                for (label, reserved) in outputs
+                    .iter()
+                    .map(|path| ("OpenAPI output", path.as_path()))
+                    .chain(std::iter::once(("manifest", manifest.as_path())))
+                    .chain(
+                        signature_envelope
+                            .as_deref()
+                            .map(|path| ("signature envelope", path)),
+                    )
+                {
+                    if openapi_paths_alias(signing_payload_path, reserved) {
+                        return Err(format!(
+                            "openapi --signing-payload must not alias the {label} path {}",
+                            reserved.display()
+                        )
+                        .into());
+                    }
+                }
+            }
+            if let Some(signature_envelope_path) = signature_envelope.as_deref() {
+                for (label, reserved) in outputs
+                    .iter()
+                    .map(|path| ("OpenAPI output", path.as_path()))
+                    .chain(std::iter::once(("manifest", manifest.as_path())))
+                {
+                    if openapi_paths_alias(signature_envelope_path, reserved) {
+                        return Err(format!(
+                            "openapi --signature-envelope must not alias the {label} path {}",
+                            reserved.display()
+                        )
+                        .into());
+                    }
+                }
+            }
 
             Ok(CommandKind::OpenApi {
                 outputs,
-                manifest: manifest_path.unwrap_or_else(default_openapi_manifest_path),
-                signing_key,
+                manifest,
                 signature_envelope,
+                signing_payload,
                 unsigned_manifest,
             })
         }
@@ -9819,23 +9855,28 @@ where
 fn generate_openapi(
     outputs: Vec<PathBuf>,
     manifest: PathBuf,
-    signing_key: Option<PathBuf>,
     signature_envelope: Option<PathBuf>,
+    signing_payload: Option<PathBuf>,
     unsigned_manifest: bool,
 ) -> Result<(), Box<dyn Error>> {
     let spec = require_release_router_openapi(try_generate_router_openapi())?;
 
     let formatted = json::to_string_pretty(&spec)?;
-    let emits_manifest = signing_key.is_some() || signature_envelope.is_some() || unsigned_manifest;
+    let emits_manifest = signature_envelope.is_some() || unsigned_manifest;
     let generator_provenance = if emits_manifest {
         Some(git_source_provenance(
             &workspace_root(),
-            &openapi_generator_output_paths(&outputs, &manifest),
+            &openapi_generator_output_paths(
+                &outputs,
+                &manifest,
+                signing_payload.as_deref(),
+                signature_envelope.as_deref(),
+            ),
         )?)
     } else {
         None
     };
-    if (signing_key.is_some() || signature_envelope.is_some())
+    if signature_envelope.is_some()
         && generator_provenance
             .as_ref()
             .is_some_and(|provenance| provenance.dirty)
@@ -9847,14 +9888,11 @@ fn generate_openapi(
     }
 
     for path in &outputs {
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        fs::write(path, formatted.as_bytes())?;
+        write_openapi_file_atomic(path, formatted.as_bytes(), "OpenAPI output")?;
         println!("wrote {}", path.display());
     }
 
-    if signing_key.is_some() || signature_envelope.is_some() || unsigned_manifest {
+    if emits_manifest {
         let canonical = default_openapi_path();
         if !outputs.contains(&canonical) {
             return Err(
@@ -9862,32 +9900,24 @@ fn generate_openapi(
                     .into(),
             );
         }
-        if let Some(signing_key) = signing_key {
-            write_openapi_manifest(
-                &canonical,
-                &manifest,
-                &signing_key,
-                generator_provenance
-                    .as_ref()
-                    .expect("manifest provenance captured"),
-            )?;
-        } else if let Some(signature_envelope) = signature_envelope {
+        let provenance = generator_provenance
+            .as_ref()
+            .expect("manifest provenance captured");
+        if let Some(signature_envelope) = signature_envelope {
             let signature = load_signature_envelope(&signature_envelope)?;
             write_openapi_manifest_with_signature(
                 &canonical,
                 &manifest,
                 signature,
-                generator_provenance
-                    .as_ref()
-                    .expect("manifest provenance captured"),
+                provenance,
+                signing_payload.as_deref(),
             )?;
         } else {
             write_openapi_manifest_unsigned(
                 &canonical,
                 &manifest,
-                generator_provenance
-                    .as_ref()
-                    .expect("manifest provenance captured"),
+                provenance,
+                signing_payload.as_deref(),
             )?;
         }
     }
@@ -9969,26 +9999,37 @@ fn validate_release_openapi_bytes(spec_bytes: &[u8]) -> Result<(), Box<dyn Error
     validate_release_openapi_spec(&spec)
 }
 
+const OPENAPI_MANIFEST_VERSION: u32 = 2;
+const OPENAPI_MANIFEST_SIGNATURE_DOMAIN_V2: &[u8] = b"iroha.openapi.manifest.signature.v2";
+const OPENAPI_MANIFEST_MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
+const OPENAPI_SPEC_MAX_BYTES: u64 = 64 * 1024 * 1024;
+const OPENAPI_MANIFEST_MAX_BYTES: u64 = 64 * 1024;
+const OPENAPI_SIGNATURE_ENVELOPE_MAX_BYTES: u64 = 4_096;
+const OPENAPI_SIGNER_ALLOWLIST_MAX_BYTES: u64 = 64 * 1024;
+const OPENAPI_SIGNER_ALLOWLIST_MAX_ENTRIES: usize = 256;
+
 #[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct OpenApiManifest {
     version: u32,
     generated_unix_ms: u64,
     generator_commit: Option<String>,
-    #[serde(default)]
     generator_dirty: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     generator_source_sha256_hex: Option<String>,
     artifact: OpenApiArtifact,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct OpenApiGeneratorProvenance {
+    generated_unix_ms: u64,
     commit: Option<String>,
     dirty: bool,
     source_sha256_hex: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct OpenApiArtifact {
     path: String,
     bytes: u64,
@@ -9998,6 +10039,7 @@ struct OpenApiArtifact {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SignatureEnvelope {
     algorithm: String,
     public_key_hex: String,
@@ -10005,37 +10047,42 @@ struct SignatureEnvelope {
 }
 
 #[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SignerAllowlist {
     version: u32,
     allow: Vec<AllowedSigner>,
 }
 
 #[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct AllowedSigner {
     algorithm: String,
     public_key_hex: String,
 }
 
+#[cfg(test)]
 fn write_openapi_manifest(
     spec_path: &Path,
     manifest_path: &Path,
     signing_key: &Path,
     provenance: &OpenApiGeneratorProvenance,
 ) -> Result<(), Box<dyn Error>> {
-    let spec_bytes = fs::read(spec_path).map_err(|err| {
-        format!(
-            "failed to read {} for manifest signing: {err}",
-            spec_path.display()
-        )
-    })?;
+    let spec_bytes = read_openapi_input_stable(
+        spec_path,
+        "OpenAPI specification for manifest signing",
+        OPENAPI_SPEC_MAX_BYTES,
+    )?;
     validate_release_openapi_bytes(&spec_bytes)?;
-    let signature = sign_manifest_payload(&spec_bytes, signing_key)?;
+    let unsigned = build_openapi_manifest(spec_path, &spec_bytes, provenance)?;
+    let signing_payload = encode_openapi_manifest_signing_payload(&unsigned, &spec_bytes)?;
+    let signature = sign_manifest_payload_for_test(&signing_payload, signing_key)?;
     write_openapi_manifest_from_bytes(
         spec_path,
         manifest_path,
         &spec_bytes,
         Some(signature),
         provenance,
+        None,
     )
 }
 
@@ -10044,21 +10091,21 @@ fn write_openapi_manifest_with_signature(
     manifest_path: &Path,
     signature: SignatureEnvelope,
     provenance: &OpenApiGeneratorProvenance,
+    signing_payload_path: Option<&Path>,
 ) -> Result<(), Box<dyn Error>> {
-    let spec_bytes = fs::read(spec_path).map_err(|err| {
-        format!(
-            "failed to read {} for manifest signature verification: {err}",
-            spec_path.display()
-        )
-    })?;
+    let spec_bytes = read_openapi_input_stable(
+        spec_path,
+        "OpenAPI specification for manifest signature verification",
+        OPENAPI_SPEC_MAX_BYTES,
+    )?;
     validate_release_openapi_bytes(&spec_bytes)?;
-    verify_manifest_signature(&signature, &spec_bytes)?;
     write_openapi_manifest_from_bytes(
         spec_path,
         manifest_path,
         &spec_bytes,
         Some(signature),
         provenance,
+        signing_payload_path,
     )
 }
 
@@ -10066,15 +10113,22 @@ fn write_openapi_manifest_unsigned(
     spec_path: &Path,
     manifest_path: &Path,
     provenance: &OpenApiGeneratorProvenance,
+    signing_payload_path: Option<&Path>,
 ) -> Result<(), Box<dyn Error>> {
-    let spec_bytes = fs::read(spec_path).map_err(|err| {
-        format!(
-            "failed to read {} for unsigned manifest generation: {err}",
-            spec_path.display()
-        )
-    })?;
+    let spec_bytes = read_openapi_input_stable(
+        spec_path,
+        "OpenAPI specification for unsigned manifest generation",
+        OPENAPI_SPEC_MAX_BYTES,
+    )?;
     validate_release_openapi_bytes(&spec_bytes)?;
-    write_openapi_manifest_from_bytes(spec_path, manifest_path, &spec_bytes, None, provenance)
+    write_openapi_manifest_from_bytes(
+        spec_path,
+        manifest_path,
+        &spec_bytes,
+        None,
+        provenance,
+        signing_payload_path,
+    )
 }
 
 fn write_openapi_manifest_from_bytes(
@@ -10083,6 +10137,7 @@ fn write_openapi_manifest_from_bytes(
     spec_bytes: &[u8],
     signature: Option<SignatureEnvelope>,
     provenance: &OpenApiGeneratorProvenance,
+    signing_payload_path: Option<&Path>,
 ) -> Result<(), Box<dyn Error>> {
     validate_release_openapi_bytes(spec_bytes)?;
     validate_openapi_generator_provenance(provenance, signature.is_none())?;
@@ -10091,32 +10146,423 @@ fn write_openapi_manifest_from_bytes(
             "refusing to write a signed OpenAPI manifest with dirty source provenance".into(),
         );
     }
-    let sha256_hex = hex::encode(Sha256::digest(spec_bytes));
-    let blake3_hex = blake3::hash(spec_bytes).to_hex().to_string();
-    let size_bytes = spec_bytes.len() as u64;
+    let mut manifest = build_openapi_manifest(spec_path, spec_bytes, provenance)?;
+    let signing_payload = encode_openapi_manifest_signing_payload(&manifest, spec_bytes)?;
+    if let Some(signature) = signature {
+        verify_manifest_signature(&signature, &signing_payload)?;
+        manifest.artifact.signature = Some(signature);
+    }
+    if let Some(path) = signing_payload_path {
+        write_openapi_signing_payload_new(path, &signing_payload)?;
+        println!("wrote {}", path.display());
+    }
 
-    let manifest = OpenApiManifest {
-        version: 1,
-        generated_unix_ms: unix_ms_now(),
+    let manifest_json = serde_json::to_string_pretty(&manifest)?;
+    write_openapi_manifest_atomic(manifest_path, manifest_json.as_bytes())?;
+    println!("wrote {}", manifest_path.display());
+    Ok(())
+}
+
+fn write_openapi_signing_payload_new(
+    path: &Path,
+    signing_payload: &[u8],
+) -> Result<(), Box<dyn Error>> {
+    if let Some(parent) = path.parent() {
+        validate_openapi_output_ancestors(parent, "--signing-payload")?;
+        fs::create_dir_all(parent)?;
+        validate_openapi_output_ancestors(parent, "--signing-payload")?;
+    }
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    set_openapi_no_follow_flag(&mut options);
+    let mut file = options.open(path).map_err(|err| {
+        format!(
+            "refusing to overwrite or follow an existing --signing-payload path {}: {err}",
+            path.display()
+        )
+    })?;
+    let write_result = (|| -> Result<(), Box<dyn Error>> {
+        use std::io::Write as _;
+        validate_openapi_open_file(path, &file, "--signing-payload")?;
+        file.write_all(signing_payload)?;
+        file.flush()?;
+        file.sync_all()?;
+        validate_openapi_open_file(path, &file, "--signing-payload")?;
+        if let Some(parent) = path.parent() {
+            validate_openapi_output_ancestors(parent, "--signing-payload")?;
+        }
+        Ok(())
+    })();
+    if write_result.is_err() && openapi_path_matches_file(path, &file) {
+        let _ = fs::remove_file(path);
+    }
+    write_result
+}
+
+fn write_openapi_manifest_atomic(path: &Path, bytes: &[u8]) -> Result<(), Box<dyn Error>> {
+    write_openapi_file_atomic(path, bytes, "OpenAPI manifest")
+}
+
+fn write_openapi_file_atomic(path: &Path, bytes: &[u8], label: &str) -> Result<(), Box<dyn Error>> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("{label} path must have a parent directory"))?;
+    validate_openapi_output_ancestors(parent, label)?;
+    fs::create_dir_all(parent)?;
+    validate_openapi_output_ancestors(parent, label)?;
+    validate_openapi_replace_target(path, label)?;
+
+    let mut temporary = tempfile::Builder::new()
+        .prefix(".openapi-manifest-v2.")
+        .tempfile_in(parent)
+        .map_err(|err| {
+            format!(
+                "failed to create an atomic {label} temporary file in {}: {err}",
+                parent.display()
+            )
+        })?;
+    {
+        use std::io::Write as _;
+        temporary.write_all(bytes)?;
+        temporary.flush()?;
+    }
+    temporary.as_file().sync_all()?;
+    validate_openapi_replace_target(path, label)?;
+    validate_openapi_output_ancestors(parent, label)?;
+    let published = temporary.persist(path).map_err(|err| {
+        format!(
+            "failed to atomically publish {label} {}: {}",
+            path.display(),
+            err.error
+        )
+    })?;
+    validate_openapi_open_file(path, &published, &format!("published {label}"))?;
+    validate_openapi_output_ancestors(parent, label)?;
+    #[cfg(unix)]
+    fs::File::open(parent)?.sync_all()?;
+    Ok(())
+}
+
+fn validate_openapi_replace_target(path: &Path, label: &str) -> Result<(), Box<dyn Error>> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() {
+                return Err(format!("{label} {} must not be a symlink", path.display()).into());
+            }
+            if !metadata.is_file() {
+                return Err(format!("{label} {} must be a regular file", path.display()).into());
+            }
+            validate_openapi_single_link(&metadata, path, label)?;
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => {
+            return Err(format!("failed to inspect {label} {}: {err}", path.display()).into());
+        }
+    }
+    Ok(())
+}
+
+fn validate_openapi_output_ancestors(parent: &Path, label: &str) -> Result<(), Box<dyn Error>> {
+    for ancestor in std::iter::once(parent).chain(parent.ancestors().skip(1)) {
+        if ancestor.as_os_str().is_empty() {
+            continue;
+        }
+        match fs::symlink_metadata(ancestor) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() {
+                    #[cfg(unix)]
+                    if ancestor.parent() == Some(Path::new("/")) {
+                        // macOS exposes system-owned aliases such as /var and
+                        // /tmp. Deeper symlinked output parents remain banned.
+                        continue;
+                    }
+                    return Err(format!(
+                        "{label} parent {} must not be a symlink",
+                        ancestor.display()
+                    )
+                    .into());
+                }
+                if !metadata.is_dir() {
+                    return Err(format!(
+                        "{label} parent {} must be a directory",
+                        ancestor.display()
+                    )
+                    .into());
+                }
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => {
+                return Err(format!(
+                    "failed to inspect {label} parent {}: {err}",
+                    ancestor.display()
+                )
+                .into());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_openapi_open_file(
+    path: &Path,
+    file: &fs::File,
+    label: &str,
+) -> Result<(), Box<dyn Error>> {
+    let opened = file
+        .metadata()
+        .map_err(|err| format!("failed to inspect opened {label} {}: {err}", path.display()))?;
+    if !opened.is_file() {
+        return Err(format!("{label} {} must be a regular file", path.display()).into());
+    }
+    validate_openapi_single_link(&opened, path, label)?;
+    let current = fs::symlink_metadata(path)
+        .map_err(|err| format!("failed to re-inspect {label} {}: {err}", path.display()))?;
+    if current.file_type().is_symlink() || !current.is_file() {
+        return Err(format!("{label} {} changed to a non-regular file", path.display()).into());
+    }
+    validate_openapi_single_link(&current, path, label)?;
+    if !openapi_metadata_matches(&opened, &current) {
+        return Err(format!("{label} {} changed while it was open", path.display()).into());
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn validate_openapi_single_link(
+    metadata: &fs::Metadata,
+    path: &Path,
+    label: &str,
+) -> Result<(), Box<dyn Error>> {
+    use std::os::unix::fs::MetadataExt as _;
+    if metadata.nlink() != 1 {
+        return Err(format!("{label} {} must have exactly one hard link", path.display()).into());
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn validate_openapi_single_link(
+    _metadata: &fs::Metadata,
+    _path: &Path,
+    _label: &str,
+) -> Result<(), Box<dyn Error>> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn openapi_metadata_matches(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    left.dev() == right.dev() && left.ino() == right.ino()
+}
+
+#[cfg(not(unix))]
+fn openapi_metadata_matches(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    left.len() == right.len()
+}
+
+fn openapi_path_matches_file(path: &Path, file: &fs::File) -> bool {
+    let Ok(opened) = file.metadata() else {
+        return false;
+    };
+    let Ok(current) = fs::symlink_metadata(path) else {
+        return false;
+    };
+    !current.file_type().is_symlink()
+        && current.is_file()
+        && openapi_metadata_matches(&opened, &current)
+}
+
+fn read_openapi_input_stable(
+    path: &Path,
+    label: &str,
+    max_bytes: u64,
+) -> Result<Vec<u8>, Box<dyn Error>> {
+    read_openapi_input_stable_with_policy(path, label, max_bytes, false)
+}
+
+fn read_openapi_input_stable_with_policy(
+    path: &Path,
+    label: &str,
+    max_bytes: u64,
+    require_safe_permissions: bool,
+) -> Result<Vec<u8>, Box<dyn Error>> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("{label} path must have a parent directory"))?;
+    validate_openapi_output_ancestors(parent, label)?;
+    validate_openapi_replace_target(path, label)?;
+
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    set_openapi_no_follow_flag(&mut options);
+    let file = options.open(path).map_err(|err| {
+        format!(
+            "failed to open {label} {} without following symlinks: {err}",
+            path.display()
+        )
+    })?;
+    validate_openapi_open_file(path, &file, label)?;
+    let opened_before = file
+        .metadata()
+        .map_err(|err| format!("failed to inspect opened {label} {}: {err}", path.display()))?;
+    if require_safe_permissions {
+        validate_openapi_open_trust_file_permissions(path, &file, label)?;
+    }
+    let declared_len = opened_before.len();
+    if declared_len > max_bytes {
+        return Err(format!(
+            "{label} {} exceeds the {max_bytes}-byte limit",
+            path.display()
+        )
+        .into());
+    }
+
+    let capacity = usize::try_from(declared_len)
+        .map_err(|_| format!("{label} {} does not fit in memory", path.display()))?;
+    let mut bytes = Vec::with_capacity(capacity);
+    {
+        use std::io::Read as _;
+        (&file)
+            .take(max_bytes.saturating_add(1))
+            .read_to_end(&mut bytes)
+            .map_err(|err| format!("failed to read {label} {}: {err}", path.display()))?;
+    }
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > max_bytes {
+        return Err(format!(
+            "{label} {} exceeds the {max_bytes}-byte limit",
+            path.display()
+        )
+        .into());
+    }
+    let opened_after = file.metadata().map_err(|err| {
+        format!(
+            "failed to re-inspect opened {label} {}: {err}",
+            path.display()
+        )
+    })?;
+    if !openapi_read_state_matches(&opened_before, &opened_after) {
+        return Err(format!("{label} {} changed while it was read", path.display()).into());
+    }
+    validate_openapi_open_file(path, &file, label)?;
+    if require_safe_permissions {
+        validate_openapi_open_trust_file_permissions(path, &file, label)?;
+    }
+    validate_openapi_output_ancestors(parent, label)?;
+    Ok(bytes)
+}
+
+#[cfg(unix)]
+fn openapi_read_state_matches(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    left.dev() == right.dev()
+        && left.ino() == right.ino()
+        && left.len() == right.len()
+        && left.mtime() == right.mtime()
+        && left.mtime_nsec() == right.mtime_nsec()
+        && left.ctime() == right.ctime()
+        && left.ctime_nsec() == right.ctime_nsec()
+}
+
+#[cfg(not(unix))]
+fn openapi_read_state_matches(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    left.len() == right.len() && left.modified().ok() == right.modified().ok()
+}
+
+fn read_openapi_utf8_input_stable(
+    path: &Path,
+    label: &str,
+    max_bytes: u64,
+) -> Result<String, Box<dyn Error>> {
+    let bytes = read_openapi_input_stable(path, label, max_bytes)?;
+    String::from_utf8(bytes)
+        .map_err(|err| format!("{label} {} must be UTF-8: {err}", path.display()).into())
+}
+
+fn read_openapi_utf8_trust_input_stable(
+    path: &Path,
+    label: &str,
+    max_bytes: u64,
+) -> Result<String, Box<dyn Error>> {
+    let bytes = read_openapi_input_stable_with_policy(path, label, max_bytes, true)?;
+    String::from_utf8(bytes)
+        .map_err(|err| format!("{label} {} must be UTF-8: {err}", path.display()).into())
+}
+
+#[cfg(unix)]
+fn set_openapi_no_follow_flag(options: &mut fs::OpenOptions) {
+    use std::os::unix::fs::OpenOptionsExt as _;
+    options.custom_flags(openapi_no_follow_flag());
+}
+
+#[cfg(not(unix))]
+fn set_openapi_no_follow_flag(_options: &mut fs::OpenOptions) {}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn openapi_no_follow_flag() -> i32 {
+    0o400000
+}
+
+#[cfg(all(
+    unix,
+    not(any(target_os = "linux", target_os = "android")),
+    any(
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    )
+))]
+fn openapi_no_follow_flag() -> i32 {
+    0x100
+}
+
+#[cfg(all(
+    unix,
+    not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    ))
+))]
+fn openapi_no_follow_flag() -> i32 {
+    0
+}
+
+fn build_openapi_manifest(
+    _spec_path: &Path,
+    spec_bytes: &[u8],
+    provenance: &OpenApiGeneratorProvenance,
+) -> Result<OpenApiManifest, Box<dyn Error>> {
+    validate_release_openapi_bytes(spec_bytes)?;
+    validate_openapi_generator_provenance(provenance, true)?;
+    let size_bytes =
+        u64::try_from(spec_bytes.len()).map_err(|_| "OpenAPI artifact size does not fit in u64")?;
+    Ok(OpenApiManifest {
+        version: OPENAPI_MANIFEST_VERSION,
+        generated_unix_ms: provenance.generated_unix_ms,
         generator_commit: provenance.commit.clone(),
         generator_dirty: provenance.dirty,
         generator_source_sha256_hex: provenance.source_sha256_hex.clone(),
         artifact: OpenApiArtifact {
-            path: infer_artifact_label(spec_path),
+            path: "torii.json".to_owned(),
             bytes: size_bytes,
-            sha256_hex,
-            blake3_hex,
-            signature,
+            sha256_hex: hex::encode(Sha256::digest(spec_bytes)),
+            blake3_hex: blake3::hash(spec_bytes).to_hex().to_string(),
+            signature: None,
         },
-    };
-
-    if let Some(parent) = manifest_path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let manifest_json = serde_json::to_string_pretty(&manifest)?;
-    fs::write(manifest_path, manifest_json.as_bytes())?;
-    println!("wrote {}", manifest_path.display());
-    Ok(())
+    })
 }
 
 fn verify_openapi_manifest(
@@ -10125,16 +10571,20 @@ fn verify_openapi_manifest(
     allow_unsigned: bool,
     allowed_signers_path: Option<&Path>,
 ) -> Result<(), Box<dyn Error>> {
-    let spec_bytes = fs::read(spec_path).map_err(|err| {
-        format!(
-            "failed to read {} for manifest verification: {err}",
-            spec_path.display()
-        )
-    })?;
+    let spec_bytes = read_openapi_input_stable(
+        spec_path,
+        "OpenAPI specification for manifest verification",
+        OPENAPI_SPEC_MAX_BYTES,
+    )?;
     validate_release_openapi_bytes(&spec_bytes)?;
-    let manifest_text = fs::read_to_string(manifest_path).map_err(|err| {
+    let manifest_text = read_openapi_utf8_input_stable(
+        manifest_path,
+        "OpenAPI manifest for verification",
+        OPENAPI_MANIFEST_MAX_BYTES,
+    )?;
+    let _: Value = json::from_str(&manifest_text).map_err(|err| {
         format!(
-            "failed to read {} for manifest verification: {err}",
+            "failed to parse {} as duplicate-free JSON manifest: {err}",
             manifest_path.display()
         )
     })?;
@@ -10145,15 +10595,21 @@ fn verify_openapi_manifest(
         )
     })?;
 
-    if manifest.version != 1 {
+    if manifest.version != OPENAPI_MANIFEST_VERSION {
         return Err(format!(
-            "unsupported OpenAPI manifest version {}; expected 1",
-            manifest.version
+            "unsupported OpenAPI manifest version {}; expected {OPENAPI_MANIFEST_VERSION}",
+            manifest.version,
         )
         .into());
     }
+    if manifest.generated_unix_ms == 0
+        || manifest.generated_unix_ms > OPENAPI_MANIFEST_MAX_SAFE_INTEGER
+    {
+        return Err("OpenAPI manifest generated_unix_ms must be a positive safe integer".into());
+    }
 
     let provenance = OpenApiGeneratorProvenance {
+        generated_unix_ms: manifest.generated_unix_ms,
         commit: manifest.generator_commit.clone(),
         dirty: manifest.generator_dirty,
         source_sha256_hex: manifest.generator_source_sha256_hex.clone(),
@@ -10166,11 +10622,7 @@ fn verify_openapi_manifest(
     verify_openapi_artifact_path(spec_path, &manifest.artifact.path)?;
 
     let expected_sha256 = hex::encode(Sha256::digest(&spec_bytes));
-    if !manifest
-        .artifact
-        .sha256_hex
-        .eq_ignore_ascii_case(&expected_sha256)
-    {
+    if manifest.artifact.sha256_hex != expected_sha256 {
         return Err(format!(
             "manifest sha256_hex mismatch (expected {expected_sha256}, found {})",
             manifest.artifact.sha256_hex
@@ -10179,11 +10631,7 @@ fn verify_openapi_manifest(
     }
 
     let expected_blake3 = blake3::hash(&spec_bytes).to_hex().to_string();
-    if !manifest
-        .artifact
-        .blake3_hex
-        .eq_ignore_ascii_case(&expected_blake3)
-    {
+    if manifest.artifact.blake3_hex != expected_blake3 {
         return Err(format!(
             "manifest blake3_hex mismatch (expected {expected_blake3}, found {})",
             manifest.artifact.blake3_hex
@@ -10199,6 +10647,7 @@ fn verify_openapi_manifest(
         )
         .into());
     }
+    let signing_payload = encode_openapi_manifest_signing_payload(&manifest, &spec_bytes)?;
 
     match &manifest.artifact.signature {
         Some(signature) => {
@@ -10213,7 +10662,7 @@ fn verify_openapi_manifest(
                             .display()
                     )
                 })?;
-            verify_manifest_signature(signature, &spec_bytes)?;
+            verify_manifest_signature(signature, &signing_payload)?;
             if let Some(allowlist) = allowed_signers.as_ref() {
                 ensure_signer_allowed(signature, allowlist)?;
             }
@@ -10225,7 +10674,10 @@ fn verify_openapi_manifest(
             );
         }
         None => {
-            return Err("manifest missing signature; re-run `cargo xtask openapi --sign <key>` or provide `--signature-envelope <path>`".into());
+            return Err(
+                "manifest missing signature; emit a deterministic --signing-payload, sign it with the release HSM, and provide --signature-envelope <path>"
+                    .into(),
+            );
         }
     }
 
@@ -10238,49 +10690,12 @@ fn verify_openapi_manifest(
 }
 
 fn verify_openapi_artifact_path(
-    spec_path: &Path,
+    _spec_path: &Path,
     artifact_path: &str,
 ) -> Result<(), Box<dyn Error>> {
-    if artifact_path.trim().is_empty() {
-        return Err("manifest artifact.path is empty".into());
-    }
-    if artifact_path.contains('\\') {
-        return Err(
-            format!("manifest artifact.path `{artifact_path}` must use forward slashes").into(),
-        );
-    }
-    if artifact_path
-        .split('/')
-        .next()
-        .is_some_and(|segment| segment.ends_with(':'))
-    {
+    if artifact_path != "torii.json" {
         return Err(format!(
-            "manifest artifact.path `{artifact_path}` must not use drive prefixes"
-        )
-        .into());
-    }
-    let recorded_path = Path::new(artifact_path);
-    if recorded_path.is_absolute()
-        || recorded_path
-            .components()
-            .any(|component| matches!(component, std::path::Component::ParentDir))
-    {
-        return Err(format!(
-            "manifest artifact.path `{artifact_path}` must be relative and stay under the OpenAPI directory"
-        )
-        .into());
-    }
-    let recorded_file_name = recorded_path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .ok_or_else(|| format!("manifest artifact.path `{artifact_path}` has no file name"))?;
-    let expected_file_name = spec_path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .ok_or_else(|| format!("spec path `{}` has no file name", spec_path.display()))?;
-    if recorded_file_name != expected_file_name {
-        return Err(format!(
-            "manifest artifact.path `{artifact_path}` does not match spec file `{expected_file_name}`"
+            "manifest artifact.path `{artifact_path}` must be exactly `torii.json`"
         )
         .into());
     }
@@ -10337,7 +10752,156 @@ fn encode_space_directory_manifest(input: &Path, output: &Path) -> Result<(), Bo
     Ok(())
 }
 
-fn sign_manifest_payload(
+fn encode_openapi_manifest_signing_payload(
+    manifest: &OpenApiManifest,
+    artifact_bytes: &[u8],
+) -> Result<Vec<u8>, Box<dyn Error>> {
+    validate_openapi_manifest_v2_fields(manifest, artifact_bytes)?;
+    let mut encoded = Vec::with_capacity(artifact_bytes.len().saturating_add(512));
+    append_openapi_signing_component(
+        &mut encoded,
+        b"domain",
+        OPENAPI_MANIFEST_SIGNATURE_DOMAIN_V2,
+    )?;
+    append_openapi_signing_component(
+        &mut encoded,
+        b"version",
+        manifest.version.to_string().as_bytes(),
+    )?;
+    append_openapi_signing_component(
+        &mut encoded,
+        b"generated_unix_ms",
+        manifest.generated_unix_ms.to_string().as_bytes(),
+    )?;
+    append_openapi_signing_component(
+        &mut encoded,
+        b"generator_commit",
+        manifest
+            .generator_commit
+            .as_deref()
+            .unwrap_or("null")
+            .as_bytes(),
+    )?;
+    append_openapi_signing_component(
+        &mut encoded,
+        b"generator_dirty",
+        if manifest.generator_dirty {
+            b"true"
+        } else {
+            b"false"
+        },
+    )?;
+    append_openapi_signing_component(
+        &mut encoded,
+        b"generator_source_sha256_hex",
+        manifest
+            .generator_source_sha256_hex
+            .as_deref()
+            .unwrap_or("null")
+            .as_bytes(),
+    )?;
+    append_openapi_signing_component(
+        &mut encoded,
+        b"artifact.path",
+        manifest.artifact.path.as_bytes(),
+    )?;
+    append_openapi_signing_component(
+        &mut encoded,
+        b"artifact.bytes",
+        manifest.artifact.bytes.to_string().as_bytes(),
+    )?;
+    append_openapi_signing_component(
+        &mut encoded,
+        b"artifact.sha256_hex",
+        manifest.artifact.sha256_hex.as_bytes(),
+    )?;
+    append_openapi_signing_component(
+        &mut encoded,
+        b"artifact.blake3_hex",
+        manifest.artifact.blake3_hex.as_bytes(),
+    )?;
+    append_openapi_signing_component(&mut encoded, b"artifact.content", artifact_bytes)?;
+    Ok(encoded)
+}
+
+fn append_openapi_signing_component(
+    output: &mut Vec<u8>,
+    label: &[u8],
+    value: &[u8],
+) -> Result<(), Box<dyn Error>> {
+    let label_len =
+        u64::try_from(label.len()).map_err(|_| "OpenAPI signing label length exceeds u64")?;
+    let value_len =
+        u64::try_from(value.len()).map_err(|_| "OpenAPI signing value length exceeds u64")?;
+    output.extend_from_slice(&label_len.to_le_bytes());
+    output.extend_from_slice(label);
+    output.extend_from_slice(&value_len.to_le_bytes());
+    output.extend_from_slice(value);
+    Ok(())
+}
+
+fn validate_openapi_manifest_v2_fields(
+    manifest: &OpenApiManifest,
+    artifact_bytes: &[u8],
+) -> Result<(), Box<dyn Error>> {
+    if manifest.version != OPENAPI_MANIFEST_VERSION {
+        return Err(format!(
+            "unsupported OpenAPI manifest version {}; expected {OPENAPI_MANIFEST_VERSION}",
+            manifest.version
+        )
+        .into());
+    }
+    if manifest.generated_unix_ms == 0
+        || manifest.generated_unix_ms > OPENAPI_MANIFEST_MAX_SAFE_INTEGER
+    {
+        return Err("OpenAPI manifest generated_unix_ms must be a positive safe integer".into());
+    }
+    validate_openapi_generator_provenance(
+        &OpenApiGeneratorProvenance {
+            generated_unix_ms: manifest.generated_unix_ms,
+            commit: manifest.generator_commit.clone(),
+            dirty: manifest.generator_dirty,
+            source_sha256_hex: manifest.generator_source_sha256_hex.clone(),
+        },
+        manifest.artifact.signature.is_none(),
+    )?;
+    verify_openapi_artifact_path(Path::new(&manifest.artifact.path), &manifest.artifact.path)?;
+    let actual_size =
+        u64::try_from(artifact_bytes.len()).map_err(|_| "OpenAPI artifact exceeds u64")?;
+    if actual_size > OPENAPI_MANIFEST_MAX_SAFE_INTEGER {
+        return Err("OpenAPI artifact exceeds the V2 safe-integer byte limit".into());
+    }
+    if manifest.artifact.bytes != actual_size {
+        return Err(format!(
+            "manifest size mismatch (expected {actual_size} bytes, found {})",
+            manifest.artifact.bytes
+        )
+        .into());
+    }
+    let expected_sha256 = hex::encode(Sha256::digest(artifact_bytes));
+    if manifest.artifact.sha256_hex != expected_sha256 {
+        return Err(format!(
+            "manifest sha256_hex mismatch (expected {expected_sha256}, found {})",
+            manifest.artifact.sha256_hex
+        )
+        .into());
+    }
+    let expected_blake3 = blake3::hash(artifact_bytes).to_hex().to_string();
+    if manifest.artifact.blake3_hex != expected_blake3 {
+        return Err(format!(
+            "manifest blake3_hex mismatch (expected {expected_blake3}, found {})",
+            manifest.artifact.blake3_hex
+        )
+        .into());
+    }
+    if let Some(signature) = &manifest.artifact.signature {
+        validate_signature_envelope_fields(signature)?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+fn sign_manifest_payload_for_test(
     payload: &[u8],
     key_path: &Path,
 ) -> Result<SignatureEnvelope, Box<dyn Error>> {
@@ -10361,7 +10925,7 @@ fn sign_manifest_payload(
         .try_to_bytes()
         .map_err(|err| format!("signing public key is malformed: {err}"))?;
     if algorithm != Algorithm::Ed25519 {
-        return Err("--sign currently supports Ed25519 keys only".into());
+        return Err("OpenAPI test signing supports Ed25519 keys only".into());
     }
     Ok(SignatureEnvelope {
         algorithm: "ed25519".to_string(),
@@ -10371,29 +10935,73 @@ fn sign_manifest_payload(
 }
 
 fn load_signature_envelope(path: &Path) -> Result<SignatureEnvelope, Box<dyn Error>> {
-    let text = fs::read_to_string(path).map_err(|err| {
+    let text = read_openapi_utf8_input_stable(
+        path,
+        "signature envelope",
+        OPENAPI_SIGNATURE_ENVELOPE_MAX_BYTES,
+    )?;
+    let _: Value = json::from_str(&text).map_err(|err| {
         format!(
-            "failed to read signature envelope {}: {err}",
+            "failed to parse signature envelope {} as duplicate-free JSON: {err}",
             path.display()
         )
     })?;
-    serde_json::from_str(&text).map_err(|err| {
+    let envelope: SignatureEnvelope = serde_json::from_str(&text).map_err(|err| {
         format!(
             "failed to parse signature envelope {}: {err}",
             path.display()
         )
         .into()
-    })
+    })?;
+    validate_signature_envelope_fields(&envelope)?;
+    Ok(envelope)
+}
+
+fn validate_signature_envelope_fields(signature: &SignatureEnvelope) -> Result<(), Box<dyn Error>> {
+    if signature.algorithm != "ed25519" {
+        return Err(format!(
+            "unsupported manifest signature algorithm `{}`; expected exactly `ed25519`",
+            signature.algorithm
+        )
+        .into());
+    }
+    validate_openapi_ed25519_public_key_hex(&signature.public_key_hex, "manifest public_key_hex")?;
+    if !is_lower_hex_digest(&signature.signature_hex, 64) {
+        return Err(
+            "manifest signature_hex must be exactly 128 lowercase hexadecimal characters".into(),
+        );
+    }
+    Ok(())
+}
+
+fn validate_openapi_ed25519_public_key_hex(
+    public_key_hex: &str,
+    label: &str,
+) -> Result<(), Box<dyn Error>> {
+    if !is_lower_hex_digest(public_key_hex, 32) {
+        return Err(format!("{label} must be exactly 64 lowercase hexadecimal characters").into());
+    }
+    let public_key_bytes: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = hex::decode(public_key_hex)
+        .map_err(|err| format!("{label} decoding failed: {err}"))?
+        .try_into()
+        .map_err(|_| format!("{label} must decode to exactly 32 bytes"))?;
+    let dalek_public_key = ed25519_dalek::VerifyingKey::from_bytes(&public_key_bytes)
+        .map_err(|err| format!("{label} is not an Ed25519 point: {err}"))?;
+    if dalek_public_key.to_bytes() != public_key_bytes {
+        return Err(format!("{label} is not a canonical Ed25519 point").into());
+    }
+    if dalek_public_key.is_weak() {
+        return Err(format!("{label} is a weak or small-order Ed25519 point").into());
+    }
+    Ok(())
 }
 
 fn verify_manifest_signature(
     signature: &SignatureEnvelope,
     payload: &[u8],
 ) -> Result<(), Box<dyn Error>> {
-    let algorithm = match normalize_algorithm_label(&signature.algorithm).as_str() {
-        "ed25519" => Algorithm::Ed25519,
-        other => return Err(format!("unsupported manifest signature algorithm `{other}`").into()),
-    };
+    validate_signature_envelope_fields(signature)?;
+    let algorithm = Algorithm::Ed25519;
     let public_key = PublicKey::from_hex(algorithm, &signature.public_key_hex)
         .map_err(|err| format!("invalid manifest public key hex: {err}"))?;
     let sig_bytes = hex::decode(&signature.signature_hex)
@@ -10405,8 +11013,13 @@ fn verify_manifest_signature(
 }
 
 fn load_signer_allowlist(path: &Path) -> Result<SignerAllowlist, Box<dyn Error>> {
-    let contents =
-        fs::read_to_string(path).map_err(|err| format!("failed to read allowlist: {err}"))?;
+    let contents = read_openapi_utf8_trust_input_stable(
+        path,
+        "OpenAPI signer allowlist",
+        OPENAPI_SIGNER_ALLOWLIST_MAX_BYTES,
+    )?;
+    let _: Value = json::from_str(&contents)
+        .map_err(|err| format!("invalid duplicate-free allowlist JSON: {err}"))?;
     let allowlist: SignerAllowlist =
         serde_json::from_str(&contents).map_err(|err| format!("invalid allowlist JSON: {err}"))?;
     if allowlist.version != 1 {
@@ -10416,20 +11029,75 @@ fn load_signer_allowlist(path: &Path) -> Result<SignerAllowlist, Box<dyn Error>>
         )
         .into());
     }
+    if allowlist.allow.len() > OPENAPI_SIGNER_ALLOWLIST_MAX_ENTRIES {
+        return Err(format!(
+            "OpenAPI signer allowlist has {} entries; the limit is {}",
+            allowlist.allow.len(),
+            OPENAPI_SIGNER_ALLOWLIST_MAX_ENTRIES
+        )
+        .into());
+    }
+    let mut identities = BTreeSet::new();
+    for (index, signer) in allowlist.allow.iter().enumerate() {
+        if signer.algorithm != "ed25519" {
+            return Err(format!(
+                "OpenAPI signer allowlist entry {index} algorithm must be exactly `ed25519`"
+            )
+            .into());
+        }
+        validate_openapi_ed25519_public_key_hex(
+            &signer.public_key_hex,
+            &format!("OpenAPI signer allowlist entry {index} public_key_hex"),
+        )?;
+        if !identities.insert(signer.public_key_hex.as_str()) {
+            return Err(format!(
+                "OpenAPI signer allowlist entry {index} duplicates public key {}",
+                signer.public_key_hex
+            )
+            .into());
+        }
+    }
     Ok(allowlist)
+}
+
+#[cfg(unix)]
+fn validate_openapi_open_trust_file_permissions(
+    path: &Path,
+    file: &fs::File,
+    label: &str,
+) -> Result<(), Box<dyn Error>> {
+    use std::os::unix::fs::PermissionsExt as _;
+    let metadata = file.metadata().map_err(|err| {
+        format!(
+            "failed to inspect opened {label} {} permissions: {err}",
+            path.display()
+        )
+    })?;
+    if metadata.permissions().mode() & 0o022 != 0 {
+        return Err(format!(
+            "{label} {} must not be writable by group or other users",
+            path.display()
+        )
+        .into());
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn validate_openapi_open_trust_file_permissions(
+    _path: &Path,
+    _file: &fs::File,
+    _label: &str,
+) -> Result<(), Box<dyn Error>> {
+    Ok(())
 }
 
 fn ensure_signer_allowed(
     signature: &SignatureEnvelope,
     allowlist: &SignerAllowlist,
 ) -> Result<(), Box<dyn Error>> {
-    let normalized_algorithm = normalize_algorithm_label(&signature.algorithm);
-    let public_key_hex = signature.public_key_hex.to_ascii_lowercase();
     let allowed = allowlist.allow.iter().any(|signer| {
-        normalize_algorithm_label(&signer.algorithm) == normalized_algorithm
-            && signer
-                .public_key_hex
-                .eq_ignore_ascii_case(&signature.public_key_hex)
+        signer.algorithm == signature.algorithm && signer.public_key_hex == signature.public_key_hex
     });
     if allowed {
         return Ok(());
@@ -10438,46 +11106,28 @@ fn ensure_signer_allowed(
     let allowed_keys: Vec<String> = allowlist
         .allow
         .iter()
-        .map(|signer| {
-            format!(
-                "{}:{}",
-                normalize_algorithm_label(&signer.algorithm),
-                signer.public_key_hex.to_ascii_lowercase()
-            )
-        })
+        .map(|signer| format!("{}:{}", signer.algorithm, signer.public_key_hex))
         .collect();
     Err(format!(
         "unrecognized manifest signer {}:{}; allowed signers: {}",
-        normalized_algorithm,
-        public_key_hex,
+        signature.algorithm,
+        signature.public_key_hex,
         allowed_keys.join(", ")
     )
     .into())
-}
-
-fn normalize_algorithm_label(label: &str) -> String {
-    label.trim().to_ascii_lowercase()
-}
-
-fn infer_artifact_label(path: &Path) -> String {
-    path.file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| path.display().to_string())
-}
-
-fn unix_ms_now() -> u64 {
-    let nanos = OffsetDateTime::now_utc().unix_timestamp_nanos();
-    if nanos <= 0 {
-        0
-    } else {
-        (nanos / 1_000_000) as u64
-    }
 }
 
 fn validate_openapi_generator_provenance(
     provenance: &OpenApiGeneratorProvenance,
     allow_dirty_unsigned: bool,
 ) -> Result<(), Box<dyn Error>> {
+    if provenance.generated_unix_ms == 0
+        || provenance.generated_unix_ms > OPENAPI_MANIFEST_MAX_SAFE_INTEGER
+    {
+        return Err(
+            "OpenAPI generator provenance timestamp must be a positive safe integer".into(),
+        );
+    }
     if provenance.dirty {
         if provenance.commit.is_some() {
             return Err(
@@ -10526,7 +11176,12 @@ fn is_lower_hex_digest(value: &str, bytes: usize) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
-fn openapi_generator_output_paths(outputs: &[PathBuf], manifest: &Path) -> Vec<PathBuf> {
+fn openapi_generator_output_paths(
+    outputs: &[PathBuf],
+    manifest: &Path,
+    signing_payload: Option<&Path>,
+    signature_envelope: Option<&Path>,
+) -> Vec<PathBuf> {
     let openapi_dir = default_openapi_path()
         .parent()
         .expect("canonical OpenAPI output has a parent")
@@ -10540,6 +11195,8 @@ fn openapi_generator_output_paths(outputs: &[PathBuf], manifest: &Path) -> Vec<P
         manifest.to_path_buf(),
     ];
     paths.extend(outputs.iter().cloned());
+    paths.extend(signing_payload.map(Path::to_path_buf));
+    paths.extend(signature_envelope.map(Path::to_path_buf));
     paths.sort();
     paths.dedup();
     paths
@@ -10556,6 +11213,7 @@ fn git_source_provenance(
     if head.is_empty() {
         return Err("git rev-parse returned an empty HEAD".into());
     }
+    let generated_unix_ms = git_head_timestamp_ms(repo_root)?;
 
     let pathspecs = git_source_pathspecs(repo_root, excluded_paths)?;
     let mut status_args = vec![
@@ -10568,6 +11226,7 @@ fn git_source_provenance(
     let status = git_stdout(repo_root, &status_args)?;
     if status.is_empty() {
         return Ok(OpenApiGeneratorProvenance {
+            generated_unix_ms,
             commit: Some(head.to_owned()),
             dirty: false,
             source_sha256_hex: None,
@@ -10597,7 +11256,7 @@ fn git_source_provenance(
     update_sha256_component(
         &mut source_digest,
         b"domain",
-        b"iroha-openapi-generator-source-v1",
+        b"iroha-openapi-generator-source-v2",
     );
     update_sha256_component(&mut source_digest, b"head", head.as_bytes());
     update_sha256_component(&mut source_digest, b"status", &status);
@@ -10612,10 +11271,24 @@ fn git_source_provenance(
     }
 
     Ok(OpenApiGeneratorProvenance {
+        generated_unix_ms,
         commit: None,
         dirty: true,
         source_sha256_hex: Some(hex::encode(source_digest.finalize())),
     })
+}
+
+fn git_head_timestamp_ms(repo_root: &Path) -> Result<u64, Box<dyn Error>> {
+    let timestamp = git_stdout(repo_root, &["show", "-s", "--format=%ct", "HEAD"])?;
+    let seconds = std::str::from_utf8(&timestamp)
+        .map_err(|err| format!("git HEAD timestamp is not valid UTF-8: {err}"))?
+        .trim()
+        .parse::<u64>()
+        .map_err(|err| format!("git HEAD timestamp is not an unsigned integer: {err}"))?;
+    seconds
+        .checked_mul(1_000)
+        .filter(|milliseconds| *milliseconds > 0)
+        .ok_or_else(|| "git HEAD timestamp cannot be represented as positive milliseconds".into())
 }
 
 fn git_source_pathspecs(
@@ -10962,10 +11635,41 @@ mod openapi_tests {
 
     fn clean_generator_provenance() -> OpenApiGeneratorProvenance {
         OpenApiGeneratorProvenance {
+            generated_unix_ms: 1_700_000_000_000,
             commit: Some("11".repeat(20)),
             dirty: false,
             source_sha256_hex: None,
         }
+    }
+
+    #[test]
+    fn manifest_v2_signing_payload_matches_the_cross_language_fixture() {
+        const ARTIFACT: &[u8] = b"OpenAPI V2 deterministic fixture\n";
+        let manifest = OpenApiManifest {
+            version: OPENAPI_MANIFEST_VERSION,
+            generated_unix_ms: 1_700_000_000_000,
+            generator_commit: Some("11".repeat(20)),
+            generator_dirty: false,
+            generator_source_sha256_hex: None,
+            artifact: OpenApiArtifact {
+                path: "torii.json".to_owned(),
+                bytes: u64::try_from(ARTIFACT.len()).expect("fixture length"),
+                sha256_hex: hex::encode(Sha256::digest(ARTIFACT)),
+                blake3_hex: "d39d778cc128eafcfb89fbc286690120032a99eff18ffdec08c2a373e8618d41"
+                    .to_owned(),
+                signature: None,
+            },
+        };
+        assert_eq!(
+            manifest.artifact.blake3_hex,
+            "d39d778cc128eafcfb89fbc286690120032a99eff18ffdec08c2a373e8618d41"
+        );
+        let payload = encode_openapi_manifest_signing_payload(&manifest, ARTIFACT)
+            .expect("encode deterministic V2 signing payload");
+        assert_eq!(
+            hex::encode(Sha256::digest(payload)),
+            "83148de11a5187d7f000770c29f4f18419163d654ed6aa5ffade0558ce47b5e5"
+        );
     }
 
     fn initialize_git_fixture(root: &Path) {
@@ -11045,7 +11749,8 @@ mod openapi_tests {
         fs::write(&spec_path, &stub_bytes).expect("write empty OpenAPI");
         let key_path = tmp.path().join("key.hex");
         fs::write(&key_path, hex::encode([0x42_u8; 32])).expect("write key");
-        let detached = sign_manifest_payload(&stub_bytes, &key_path).expect("sign fixture payload");
+        let detached =
+            sign_manifest_payload_for_test(&stub_bytes, &key_path).expect("sign fixture payload");
 
         for (name, result, manifest_path) in [
             {
@@ -11065,6 +11770,7 @@ mod openapi_tests {
                     &manifest_path,
                     detached,
                     &clean_generator_provenance(),
+                    None,
                 );
                 ("detached", result, manifest_path)
             },
@@ -11074,6 +11780,7 @@ mod openapi_tests {
                     &spec_path,
                     &manifest_path,
                     &clean_generator_provenance(),
+                    None,
                 );
                 ("unsigned", result, manifest_path)
             },
@@ -11100,7 +11807,7 @@ mod openapi_tests {
         fs::write(&spec_path, &stub_bytes).expect("write empty OpenAPI");
         let manifest_path = tmp.path().join("manifest.json");
         let manifest = OpenApiManifest {
-            version: 1,
+            version: OPENAPI_MANIFEST_VERSION,
             generated_unix_ms: 1,
             generator_commit: Some("11".repeat(20)),
             generator_dirty: false,
@@ -11136,8 +11843,74 @@ mod openapi_tests {
         let key_hex = hex::encode([0x11u8; 32]);
         fs::write(&key_path, key_hex).expect("write key");
         let payload = fs::read(&spec_path).expect("read spec");
-        let signature = sign_manifest_payload(&payload, &key_path).expect("sign payload");
+        let signature = sign_manifest_payload_for_test(&payload, &key_path).expect("sign payload");
         verify_manifest_signature(&signature, &payload).expect("verify signature");
+    }
+
+    #[test]
+    fn openapi_v2_signing_payload_matches_javascript_fixture() {
+        let artifact = b"OpenAPI V2 deterministic fixture\n";
+        let manifest = OpenApiManifest {
+            version: OPENAPI_MANIFEST_VERSION,
+            generated_unix_ms: 1_700_000_000_000,
+            generator_commit: Some("11".repeat(20)),
+            generator_dirty: false,
+            generator_source_sha256_hex: None,
+            artifact: OpenApiArtifact {
+                path: "torii.json".to_owned(),
+                bytes: artifact.len() as u64,
+                sha256_hex: hex::encode(Sha256::digest(artifact)),
+                blake3_hex: blake3::hash(artifact).to_hex().to_string(),
+                signature: None,
+            },
+        };
+        let payload = encode_openapi_manifest_signing_payload(&manifest, artifact)
+            .expect("encode deterministic signing payload");
+        assert_eq!(
+            hex::encode(Sha256::digest(payload)),
+            "83148de11a5187d7f000770c29f4f18419163d654ed6aa5ffade0558ce47b5e5"
+        );
+    }
+
+    #[test]
+    fn openapi_v2_manifest_deserialization_rejects_v1_and_unknown_fields() {
+        let v1 = br#"{
+  "version": 1,
+  "generated_unix_ms": 1700000000000,
+  "generator_commit": "1111111111111111111111111111111111111111",
+  "generator_dirty": false,
+  "artifact": {
+    "path": "torii.json",
+    "bytes": 1,
+    "sha256_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "blake3_hex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "signature": null
+  }
+}"#;
+        let parsed: OpenApiManifest =
+            serde_json::from_slice(v1).expect("V1 remains syntactically distinct");
+        assert_ne!(parsed.version, OPENAPI_MANIFEST_VERSION);
+        let err = encode_openapi_manifest_signing_payload(&parsed, b"x")
+            .expect_err("V1 manifests must not produce a signing payload");
+        assert!(err.to_string().contains("expected 2"));
+
+        let unknown = br#"{
+  "version": 2,
+  "generated_unix_ms": 1700000000000,
+  "generator_commit": "1111111111111111111111111111111111111111",
+  "generator_dirty": false,
+  "legacy_provenance": true,
+  "artifact": {
+    "path": "torii.json",
+    "bytes": 1,
+    "sha256_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "blake3_hex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "signature": null
+  }
+}"#;
+        let err = serde_json::from_slice::<OpenApiManifest>(unknown)
+            .expect_err("unknown V1 compatibility fields must fail closed");
+        assert!(err.to_string().contains("unknown field"));
     }
 
     #[test]
@@ -11151,7 +11924,12 @@ mod openapi_tests {
         fs::write(&key_path, key_hex).expect("write key");
 
         let payload = fs::read(&spec_path).expect("read spec");
-        let signature = sign_manifest_payload(&payload, &key_path).expect("sign payload");
+        let unsigned = build_openapi_manifest(&spec_path, &payload, &clean_generator_provenance())
+            .expect("build unsigned manifest");
+        let signing_payload =
+            encode_openapi_manifest_signing_payload(&unsigned, &payload).expect("encode payload");
+        let signature =
+            sign_manifest_payload_for_test(&signing_payload, &key_path).expect("sign payload");
         let envelope_path = tmp.path().join("signature.json");
         fs::write(
             &envelope_path,
@@ -11166,6 +11944,7 @@ mod openapi_tests {
             &manifest_path,
             loaded,
             &clean_generator_provenance(),
+            None,
         )
         .expect("write manifest with detached signature");
         verify_openapi_manifest(&spec_path, &manifest_path, false, None)
@@ -11173,56 +11952,86 @@ mod openapi_tests {
     }
 
     #[test]
-    fn openapi_signing_modes_are_mutually_exclusive() {
-        let args = [
-            "xtask",
-            "openapi",
-            "--sign",
-            "signing.key",
-            "--signature-envelope",
-            "signature.json",
-        ];
+    fn openapi_manifest_verifier_rejects_duplicate_json_members() {
+        let tmp = tempdir().expect("tempdir");
+        let spec_path = tmp.path().join("torii.json");
+        write_release_openapi_fixture(&spec_path);
+        let manifest_path = tmp.path().join("manifest.json");
+        write_openapi_manifest_unsigned(
+            &spec_path,
+            &manifest_path,
+            &clean_generator_provenance(),
+            None,
+        )
+        .expect("write unsigned manifest");
+        let manifest = fs::read_to_string(&manifest_path).expect("read manifest");
+        let duplicated =
+            manifest.replacen("\"version\": 2,", "\"version\": 2,\n  \"version\": 2,", 1);
+        fs::write(&manifest_path, duplicated).expect("write duplicate-key manifest");
+
+        let err = verify_openapi_manifest(&spec_path, &manifest_path, true, None)
+            .expect_err("duplicate JSON members must fail closed");
+        assert!(
+            err.to_string().contains("duplicate"),
+            "unexpected duplicate-key manifest error: {err}"
+        );
+    }
+
+    #[test]
+    fn signature_envelope_reader_rejects_duplicate_json_members() {
+        let tmp = tempdir().expect("tempdir");
+        let envelope_path = tmp.path().join("signature.json");
+        fs::write(
+            &envelope_path,
+            r#"{
+  "algorithm": "ed25519",
+  "algorithm": "ed25519",
+  "public_key_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "signature_hex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+}"#,
+        )
+        .expect("write duplicate-key envelope");
+        let err = load_signature_envelope(&envelope_path)
+            .expect_err("duplicate signature-envelope members must fail closed");
+        assert!(
+            err.to_string().contains("duplicate"),
+            "unexpected duplicate-key envelope error: {err}"
+        );
+    }
+
+    #[test]
+    fn openapi_local_signing_flag_is_removed() {
+        let args = ["xtask", "openapi", "--sign", "signing.key"];
         let iter = args.into_iter().map(String::from);
         let err = match parse_command(iter) {
-            Ok(_) => panic!("conflicting signing modes must fail"),
+            Ok(_) => panic!("removed local signing mode must fail"),
             Err(err) => err,
         };
         let message = err.to_string();
         assert!(
-            message.contains("mutually exclusive"),
-            "expected mutually exclusive message, got {message}"
+            message.contains("unknown flag for openapi: --sign"),
+            "expected removed flag rejection, got {message}"
         );
     }
 
     #[test]
     fn openapi_unsigned_manifest_mode_conflicts_with_signing() {
-        for args in [
-            vec![
-                "xtask",
-                "openapi",
-                "--unsigned-manifest",
-                "--sign",
-                "signing.key",
-            ],
-            vec![
-                "xtask",
-                "openapi",
-                "--unsigned-manifest",
-                "--signature-envelope",
-                "signature.json",
-            ],
-        ] {
-            let iter = args.into_iter().map(String::from);
-            let err = match parse_command(iter) {
-                Ok(_) => panic!("unsigned manifest and signed modes must fail"),
-                Err(err) => err,
-            };
-            let message = err.to_string();
-            assert!(
-                message.contains("cannot be combined"),
-                "expected cannot be combined message, got {message}"
-            );
-        }
+        let args = [
+            "xtask",
+            "openapi",
+            "--unsigned-manifest",
+            "--signature-envelope",
+            "signature.json",
+        ];
+        let err = match parse_command(args.into_iter().map(String::from)) {
+            Ok(_) => panic!("unsigned manifest and detached signature must fail"),
+            Err(err) => err,
+        };
+        let message = err.to_string();
+        assert!(
+            message.contains("cannot be combined"),
+            "expected cannot be combined message, got {message}"
+        );
     }
 
     #[test]
@@ -11232,8 +12041,13 @@ mod openapi_tests {
         write_release_openapi_fixture(&spec_path);
         let manifest_path = tmp.path().join("manifest.json");
 
-        write_openapi_manifest_unsigned(&spec_path, &manifest_path, &clean_generator_provenance())
-            .expect("write unsigned manifest");
+        write_openapi_manifest_unsigned(
+            &spec_path,
+            &manifest_path,
+            &clean_generator_provenance(),
+            None,
+        )
+        .expect("write unsigned manifest");
         verify_openapi_manifest(&spec_path, &manifest_path, true, None)
             .expect("unsigned manifest should verify when allowed");
 
@@ -11253,8 +12067,13 @@ mod openapi_tests {
         write_release_openapi_fixture(&spec_path);
         let manifest_path = tmp.path().join("manifest.json");
 
-        write_openapi_manifest_unsigned(&spec_path, &manifest_path, &clean_generator_provenance())
-            .expect("write unsigned manifest");
+        write_openapi_manifest_unsigned(
+            &spec_path,
+            &manifest_path,
+            &clean_generator_provenance(),
+            None,
+        )
+        .expect("write unsigned manifest");
         fs::write(&spec_path, ALTERED_RELEASE_OPENAPI_FIXTURE).expect("tamper spec");
 
         let err = verify_openapi_manifest(&spec_path, &manifest_path, true, None)
@@ -11273,12 +12092,13 @@ mod openapi_tests {
         write_release_openapi_fixture(&spec_path);
         let manifest_path = tmp.path().join("manifest.json");
         let dirty = OpenApiGeneratorProvenance {
+            generated_unix_ms: 1_700_000_000_000,
             commit: None,
             dirty: true,
             source_sha256_hex: Some("ab".repeat(32)),
         };
 
-        write_openapi_manifest_unsigned(&spec_path, &manifest_path, &dirty)
+        write_openapi_manifest_unsigned(&spec_path, &manifest_path, &dirty, None)
             .expect("write dirty unsigned manifest");
         verify_openapi_manifest(&spec_path, &manifest_path, true, None)
             .expect("explicitly allowed dirty unsigned manifest should verify");
@@ -11307,6 +12127,7 @@ mod openapi_tests {
             (
                 "dirty-with-commit",
                 OpenApiGeneratorProvenance {
+                    generated_unix_ms: 1_700_000_000_000,
                     commit: Some("pretend-clean-head".to_owned()),
                     dirty: true,
                     source_sha256_hex: Some("ab".repeat(32)),
@@ -11316,6 +12137,7 @@ mod openapi_tests {
             (
                 "dirty-without-digest",
                 OpenApiGeneratorProvenance {
+                    generated_unix_ms: 1_700_000_000_000,
                     commit: None,
                     dirty: true,
                     source_sha256_hex: None,
@@ -11325,6 +12147,7 @@ mod openapi_tests {
             (
                 "dirty-with-uppercase-digest",
                 OpenApiGeneratorProvenance {
+                    generated_unix_ms: 1_700_000_000_000,
                     commit: None,
                     dirty: true,
                     source_sha256_hex: Some("AB".repeat(32)),
@@ -11334,6 +12157,7 @@ mod openapi_tests {
             (
                 "clean-with-dirty-digest",
                 OpenApiGeneratorProvenance {
+                    generated_unix_ms: 1_700_000_000_000,
                     commit: Some("11".repeat(20)),
                     dirty: false,
                     source_sha256_hex: Some("ab".repeat(32)),
@@ -11343,6 +12167,7 @@ mod openapi_tests {
             (
                 "clean-short-commit",
                 OpenApiGeneratorProvenance {
+                    generated_unix_ms: 1_700_000_000_000,
                     commit: Some("ab".repeat(19)),
                     dirty: false,
                     source_sha256_hex: None,
@@ -11352,6 +12177,7 @@ mod openapi_tests {
             (
                 "clean-uppercase-commit",
                 OpenApiGeneratorProvenance {
+                    generated_unix_ms: 1_700_000_000_000,
                     commit: Some("AB".repeat(20)),
                     dirty: false,
                     source_sha256_hex: None,
@@ -11361,6 +12187,7 @@ mod openapi_tests {
             (
                 "clean-nonhex-commit",
                 OpenApiGeneratorProvenance {
+                    generated_unix_ms: 1_700_000_000_000,
                     commit: Some("gg".repeat(20)),
                     dirty: false,
                     source_sha256_hex: None,
@@ -11370,6 +12197,7 @@ mod openapi_tests {
             (
                 "clean-padded-commit",
                 OpenApiGeneratorProvenance {
+                    generated_unix_ms: 1_700_000_000_000,
                     commit: Some(format!(" {} ", "ab".repeat(20))),
                     dirty: false,
                     source_sha256_hex: None,
@@ -11395,6 +12223,7 @@ mod openapi_tests {
         fs::write(&key_path, hex::encode([0x77_u8; 32])).expect("write signing key");
         let manifest_path = tmp.path().join("manifest.json");
         let dirty = OpenApiGeneratorProvenance {
+            generated_unix_ms: 1_700_000_000_000,
             commit: None,
             dirty: true,
             source_sha256_hex: Some("ab".repeat(32)),
@@ -11425,6 +12254,11 @@ mod openapi_tests {
         let clean = git_source_provenance(tmp.path(), &generated).expect("clean provenance");
         assert!(!clean.dirty);
         assert!(clean.commit.is_some());
+        assert_eq!(
+            clean.generated_unix_ms,
+            git_head_timestamp_ms(tmp.path()).expect("HEAD timestamp"),
+            "generated_unix_ms must derive from immutable HEAD metadata"
+        );
 
         fs::write(
             &generated[0],
@@ -11447,6 +12281,10 @@ mod openapi_tests {
         assert!(first.dirty);
         assert_eq!(first.commit, None);
         assert!(first.source_sha256_hex.is_some());
+        assert_eq!(
+            first.generated_unix_ms, clean.generated_unix_ms,
+            "dirty development generation must retain the deterministic HEAD timestamp"
+        );
 
         fs::write(
             &generated[0],
@@ -11495,7 +12333,14 @@ mod openapi_tests {
         fs::write(&key_path, key_hex).expect("write key");
 
         let other_payload = ALTERED_RELEASE_OPENAPI_FIXTURE;
-        let signature = sign_manifest_payload(other_payload, &key_path).expect("sign payload");
+        let other_manifest =
+            build_openapi_manifest(&spec_path, other_payload, &clean_generator_provenance())
+                .expect("build other manifest");
+        let other_signing_payload =
+            encode_openapi_manifest_signing_payload(&other_manifest, other_payload)
+                .expect("encode other signing payload");
+        let signature = sign_manifest_payload_for_test(&other_signing_payload, &key_path)
+            .expect("sign payload");
         let manifest_path = tmp.path().join("manifest.json");
 
         let err = write_openapi_manifest_with_signature(
@@ -11503,6 +12348,7 @@ mod openapi_tests {
             &manifest_path,
             signature,
             &clean_generator_provenance(),
+            None,
         )
         .expect_err("detached signature for another payload must be rejected");
         let message = err.to_string();
@@ -11575,7 +12421,7 @@ mod openapi_tests {
         let key_path = tmp.path().join("key.hex");
         fs::write(&key_path, hex::encode([0x67u8; 32])).expect("write key");
         let payload = b"{\"ok\":true}";
-        let signature = sign_manifest_payload(payload, &key_path).expect("sign payload");
+        let signature = sign_manifest_payload_for_test(payload, &key_path).expect("sign payload");
         verify_manifest_signature(&signature, payload).expect("valid signature verifies");
 
         for (label, replacement_r) in [
@@ -11628,22 +12474,56 @@ mod openapi_tests {
             .expect_err("invalid public key hex must fail verification");
         let message = err.to_string();
         assert!(
-            message.contains("invalid manifest public key hex"),
+            message.contains("public_key_hex must be exactly 64 lowercase"),
             "expected invalid public key message, got {message}"
         );
 
+        let tmp = tempdir().expect("tempdir");
+        let key_path = tmp.path().join("key.hex");
+        fs::write(&key_path, hex::encode([0x78_u8; 32])).expect("write signing key");
+        let valid_signature =
+            sign_manifest_payload_for_test(payload, &key_path).expect("sign fixture payload");
         let invalid_signature = SignatureEnvelope {
             algorithm: "ed25519".to_owned(),
-            public_key_hex: hex::encode([0x77u8; 32]),
+            public_key_hex: valid_signature.public_key_hex,
             signature_hex: "not-hex".to_owned(),
         };
         let err = verify_manifest_signature(&invalid_signature, payload)
             .expect_err("invalid signature hex must fail verification");
         let message = err.to_string();
         assert!(
-            message.contains("invalid manifest signature hex"),
+            message.contains("signature_hex must be exactly 128 lowercase"),
             "expected invalid signature hex message, got {message}"
         );
+    }
+
+    #[test]
+    fn openapi_signature_envelope_rejects_weak_and_noncanonical_public_keys() {
+        let cases = [
+            ("identity", format!("01{}", "00".repeat(31))),
+            ("all-zero", "00".repeat(32)),
+            (
+                "noncanonical-field-encoding",
+                format!("ed{}7f", "ff".repeat(30)),
+            ),
+        ];
+        for (name, public_key_hex) in cases {
+            let envelope = SignatureEnvelope {
+                algorithm: "ed25519".to_owned(),
+                public_key_hex,
+                signature_hex: "00".repeat(64),
+            };
+            let err = validate_signature_envelope_fields(&envelope)
+                .expect_err("weak or noncanonical public key must fail admission");
+            let message = err.to_string();
+            assert!(
+                message.contains("weak")
+                    || message.contains("small-order")
+                    || message.contains("canonical")
+                    || message.contains("not an Ed25519 point"),
+                "unexpected {name} public-key error: {message}"
+            );
+        }
     }
 
     #[test]
@@ -11652,8 +12532,13 @@ mod openapi_tests {
         let spec_path = tmp.path().join("torii.json");
         write_release_openapi_fixture(&spec_path);
         let manifest_path = tmp.path().join("manifest.json");
-        write_openapi_manifest_unsigned(&spec_path, &manifest_path, &clean_generator_provenance())
-            .expect("write unsigned manifest");
+        write_openapi_manifest_unsigned(
+            &spec_path,
+            &manifest_path,
+            &clean_generator_provenance(),
+            None,
+        )
+        .expect("write unsigned manifest");
 
         let manifest_json = fs::read_to_string(&manifest_path).expect("manifest json");
         let mut manifest: OpenApiManifest =
@@ -11669,7 +12554,7 @@ mod openapi_tests {
             .expect_err("unsafe artifact path must fail verification");
         let message = err.to_string();
         assert!(
-            message.contains("must be relative"),
+            message.contains("must be exactly `torii.json`"),
             "expected unsafe path message, got {message}"
         );
     }
@@ -11685,6 +12570,7 @@ mod openapi_tests {
                 &spec_path,
                 &manifest_path,
                 &clean_generator_provenance(),
+                None,
             )
             .expect("write unsigned manifest");
 
@@ -11714,8 +12600,13 @@ mod openapi_tests {
         let spec_path = tmp.path().join("torii.json");
         write_release_openapi_fixture(&spec_path);
         let manifest_path = tmp.path().join("manifest.json");
-        write_openapi_manifest_unsigned(&spec_path, &manifest_path, &clean_generator_provenance())
-            .expect("write unsigned manifest");
+        write_openapi_manifest_unsigned(
+            &spec_path,
+            &manifest_path,
+            &clean_generator_provenance(),
+            None,
+        )
+        .expect("write unsigned manifest");
 
         let manifest_json = fs::read_to_string(&manifest_path).expect("manifest json");
         let mut manifest: OpenApiManifest =
@@ -11731,17 +12622,311 @@ mod openapi_tests {
             .expect_err("artifact filename mismatch must fail verification");
         let message = err.to_string();
         assert!(
-            message.contains("does not match spec file"),
+            message.contains("must be exactly `torii.json`"),
             "expected artifact path mismatch message, got {message}"
         );
     }
 
     #[test]
-    fn infer_label_uses_file_name() {
+    fn signing_payload_output_is_create_new_and_never_overwrites() {
         let tmp = tempdir().expect("tempdir");
-        let nested = tmp.path().join("nested").join("file.txt");
-        assert_eq!(infer_artifact_label(&nested), "file.txt");
-        assert_eq!(infer_artifact_label(Path::new("torii.json")), "torii.json");
+        let payload_path = tmp.path().join("manifest-v2.payload");
+        write_openapi_signing_payload_new(&payload_path, b"first").expect("write new payload");
+        let err = write_openapi_signing_payload_new(&payload_path, b"replacement")
+            .expect_err("existing signing payload must not be overwritten");
+        assert!(
+            err.to_string().contains("refusing to overwrite or follow"),
+            "unexpected overwrite error: {err}"
+        );
+        assert_eq!(
+            fs::read(&payload_path).expect("read original payload"),
+            b"first"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mode = fs::metadata(&payload_path)
+                .expect("payload metadata")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o600, "signing payload must be owner-only");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn signing_payload_output_refuses_symlinks() {
+        let tmp = tempdir().expect("tempdir");
+        let target = tmp.path().join("target.payload");
+        let link = tmp.path().join("manifest-v2.payload");
+        fs::write(&target, b"target").expect("write symlink target");
+        std::os::unix::fs::symlink(&target, &link).expect("create payload symlink");
+        let err = write_openapi_signing_payload_new(&link, b"replacement")
+            .expect_err("signing payload symlink must fail closed");
+        assert!(
+            err.to_string().contains("refusing to overwrite or follow"),
+            "unexpected symlink error: {err}"
+        );
+        assert_eq!(fs::read(&target).expect("read target"), b"target");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn signing_payload_output_refuses_symlinked_parent() {
+        let tmp = tempdir().expect("tempdir");
+        let real_parent = tmp.path().join("real");
+        let linked_parent = tmp.path().join("linked");
+        fs::create_dir(&real_parent).expect("create real parent");
+        std::os::unix::fs::symlink(&real_parent, &linked_parent).expect("create parent symlink");
+        let err = write_openapi_signing_payload_new(&linked_parent.join("payload"), b"replacement")
+            .expect_err("symlinked signing payload parent must fail closed");
+        assert!(
+            err.to_string().contains("parent") && err.to_string().contains("symlink"),
+            "unexpected symlink-parent error: {err}"
+        );
+        assert!(!real_parent.join("payload").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn openapi_manifest_writer_refuses_symlink_and_hardlink_targets() {
+        for target_kind in ["symlink", "hardlink"] {
+            let tmp = tempdir().expect("tempdir");
+            let spec_path = tmp.path().join("torii.json");
+            write_release_openapi_fixture(&spec_path);
+            let protected = tmp.path().join("protected.json");
+            let manifest_path = tmp.path().join("manifest.json");
+            fs::write(&protected, b"protected").expect("write protected target");
+            if target_kind == "symlink" {
+                std::os::unix::fs::symlink(&protected, &manifest_path)
+                    .expect("create manifest symlink");
+            } else {
+                fs::hard_link(&protected, &manifest_path).expect("create manifest hard link");
+            }
+
+            let err = write_openapi_manifest_unsigned(
+                &spec_path,
+                &manifest_path,
+                &clean_generator_provenance(),
+                None,
+            )
+            .expect_err("linked manifest target must fail closed");
+            assert!(
+                err.to_string().contains("symlink") || err.to_string().contains("hard link"),
+                "unexpected {target_kind} manifest error: {err}"
+            );
+            assert_eq!(
+                fs::read(&protected).expect("read protected target"),
+                b"protected"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn openapi_output_writer_refuses_symlink_and_hardlink_targets() {
+        for target_kind in ["symlink", "hardlink"] {
+            let tmp = tempdir().expect("tempdir");
+            let protected = tmp.path().join("protected.json");
+            let output_path = tmp.path().join("torii.json");
+            fs::write(&protected, b"protected").expect("write protected target");
+            if target_kind == "symlink" {
+                std::os::unix::fs::symlink(&protected, &output_path)
+                    .expect("create OpenAPI output symlink");
+            } else {
+                fs::hard_link(&protected, &output_path).expect("create OpenAPI output hard link");
+            }
+
+            let err = write_openapi_file_atomic(&output_path, b"replacement", "OpenAPI output")
+                .expect_err("linked OpenAPI output target must fail closed");
+            assert!(
+                err.to_string().contains("symlink") || err.to_string().contains("hard link"),
+                "unexpected {target_kind} OpenAPI output error: {err}"
+            );
+            assert_eq!(
+                fs::read(&protected).expect("read protected target"),
+                b"protected"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn signature_envelope_reader_refuses_symlinks_and_hardlinks() {
+        for target_kind in ["symlink", "hardlink"] {
+            let tmp = tempdir().expect("tempdir");
+            let protected = tmp.path().join("protected.json");
+            let envelope_path = tmp.path().join("signature.json");
+            fs::write(&protected, b"{}").expect("write protected envelope");
+            if target_kind == "symlink" {
+                std::os::unix::fs::symlink(&protected, &envelope_path)
+                    .expect("create envelope symlink");
+            } else {
+                fs::hard_link(&protected, &envelope_path).expect("create envelope hard link");
+            }
+
+            let err = load_signature_envelope(&envelope_path)
+                .expect_err("linked signature envelope must fail closed");
+            assert!(
+                err.to_string().contains("symlink") || err.to_string().contains("hard link"),
+                "unexpected {target_kind} envelope error: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn signature_envelope_reader_bounds_input() {
+        let tmp = tempdir().expect("tempdir");
+        let envelope_path = tmp.path().join("signature.json");
+        fs::write(
+            &envelope_path,
+            vec![b' '; OPENAPI_SIGNATURE_ENVELOPE_MAX_BYTES as usize + 1],
+        )
+        .expect("write oversized envelope");
+        let err = load_signature_envelope(&envelope_path)
+            .expect_err("oversized signature envelope must fail closed");
+        assert!(
+            err.to_string().contains("exceeds the 4096-byte limit"),
+            "unexpected oversized-envelope error: {err}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn openapi_manifest_verifier_refuses_linked_inputs() {
+        for (input_kind, target_kind) in [
+            ("specification", "symlink"),
+            ("specification", "hardlink"),
+            ("manifest", "symlink"),
+            ("manifest", "hardlink"),
+        ] {
+            let tmp = tempdir().expect("tempdir");
+            let spec_path = tmp.path().join("torii.json");
+            write_release_openapi_fixture(&spec_path);
+            let manifest_path = tmp.path().join("manifest.json");
+            write_openapi_manifest_unsigned(
+                &spec_path,
+                &manifest_path,
+                &clean_generator_provenance(),
+                None,
+            )
+            .expect("write unsigned manifest");
+
+            let linked_path = if input_kind == "specification" {
+                &spec_path
+            } else {
+                &manifest_path
+            };
+            let protected = tmp
+                .path()
+                .join(format!("protected-{input_kind}-{target_kind}.json"));
+            fs::rename(linked_path, &protected).expect("preserve linked input");
+            if target_kind == "symlink" {
+                std::os::unix::fs::symlink(&protected, linked_path)
+                    .expect("create OpenAPI verifier input symlink");
+            } else {
+                fs::hard_link(&protected, linked_path)
+                    .expect("create OpenAPI verifier input hard link");
+            }
+
+            let err = verify_openapi_manifest(&spec_path, &manifest_path, true, None)
+                .expect_err("linked verifier input must fail closed");
+            assert!(
+                err.to_string().contains("symlink") || err.to_string().contains("hard link"),
+                "unexpected {target_kind} {input_kind} error: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn openapi_signer_allowlist_is_canonical_and_duplicate_free() {
+        let tmp = tempdir().expect("tempdir");
+        let key_path = tmp.path().join("key.hex");
+        fs::write(&key_path, hex::encode([0x55u8; 32])).expect("write key");
+        let signer = sign_manifest_payload_for_test(b"allowlist", &key_path)
+            .expect("derive valid signer public key");
+
+        for (name, contents, expected) in [
+            (
+                "duplicate-json-member",
+                r#"{"version":1,"version":1,"allow":[]}"#.to_owned(),
+                "duplicate",
+            ),
+            (
+                "unknown-field",
+                r#"{"version":1,"allow":[],"legacy":true}"#.to_owned(),
+                "unknown field",
+            ),
+            (
+                "noncanonical-algorithm",
+                format!(
+                    r#"{{"version":1,"allow":[{{"algorithm":"Ed25519","public_key_hex":"{}"}}]}}"#,
+                    signer.public_key_hex
+                ),
+                "exactly `ed25519`",
+            ),
+            (
+                "duplicate-signer",
+                format!(
+                    r#"{{"version":1,"allow":[{{"algorithm":"ed25519","public_key_hex":"{0}"}},{{"algorithm":"ed25519","public_key_hex":"{0}"}}]}}"#,
+                    signer.public_key_hex
+                ),
+                "duplicates public key",
+            ),
+        ] {
+            let allowlist_path = tmp.path().join(format!("{name}.json"));
+            fs::write(&allowlist_path, contents).expect("write malformed allowlist");
+            let err =
+                load_signer_allowlist(&allowlist_path).expect_err("malformed allowlist must fail");
+            assert!(
+                err.to_string().contains(expected),
+                "unexpected {name} allowlist error: {err}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn openapi_signer_allowlist_refuses_unsafe_permissions() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let tmp = tempdir().expect("tempdir");
+        let allowlist_path = tmp.path().join("allow.json");
+        fs::write(&allowlist_path, r#"{"version":1,"allow":[]}"#).expect("write empty allowlist");
+        fs::set_permissions(&allowlist_path, fs::Permissions::from_mode(0o666))
+            .expect("make allowlist unsafe");
+        let err = load_signer_allowlist(&allowlist_path)
+            .expect_err("group/world-writable allowlist must fail closed");
+        assert!(
+            err.to_string()
+                .contains("must not be writable by group or other users"),
+            "unexpected unsafe-permission error: {err}"
+        );
+    }
+
+    #[test]
+    fn signing_payload_path_must_not_alias_generated_outputs() {
+        let tmp = tempdir().expect("tempdir");
+        let output = tmp.path().join("torii.json");
+        let args = vec![
+            "xtask".to_owned(),
+            "openapi".to_owned(),
+            "--output".to_owned(),
+            output.display().to_string(),
+            "--unsigned-manifest".to_owned(),
+            "--signing-payload".to_owned(),
+            output.display().to_string(),
+        ];
+        let err = match parse_command(args.into_iter()) {
+            Ok(_) => panic!("signing payload alias must fail"),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string()
+                .contains("--signing-payload must not alias the OpenAPI output"),
+            "unexpected alias error: {err}"
+        );
     }
 
     #[test]
@@ -11786,10 +12971,14 @@ mod openapi_tests {
         )
         .expect("allowed signer should verify");
 
+        let rejecting_key_path = tmp.path().join("rejecting.key");
+        fs::write(&rejecting_key_path, hex::encode([0x44u8; 32])).expect("write rejecting key");
+        let rejecting_signer = sign_manifest_payload_for_test(b"rejecting", &rejecting_key_path)
+            .expect("derive rejecting signer public key");
         let rejecting_path = tmp.path().join("reject.json");
         let rejecting_contents = format!(
             "{{\"version\":1,\"allow\":[{{\"algorithm\":\"ed25519\",\"public_key_hex\":\"{}\"}}]}}",
-            hex::encode([0x44u8; 32])
+            rejecting_signer.public_key_hex
         );
         fs::write(&rejecting_path, rejecting_contents).expect("write rejecting allowlist");
 
@@ -12665,6 +13854,32 @@ pub(crate) fn normalize_path(path: &Path) -> Result<PathBuf, Box<dyn Error>> {
     }
 }
 
+fn openapi_paths_alias(left: &Path, right: &Path) -> bool {
+    openapi_path_identity(left) == openapi_path_identity(right)
+}
+
+fn openapi_path_identity(path: &Path) -> PathBuf {
+    if let Ok(canonical) = path.canonicalize() {
+        return canonical;
+    }
+    if let (Some(parent), Some(file_name)) = (path.parent(), path.file_name())
+        && let Ok(canonical_parent) = parent.canonicalize()
+    {
+        return canonical_parent.join(file_name);
+    }
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    normalized
+}
+
 fn parse_gate_date(value: &str) -> Result<Date, Box<dyn Error>> {
     let spec = format_description::parse("[year]-[month]-[day]")
         .map_err(|err| -> Box<dyn Error> { format!("invalid gate date spec: {err}").into() })?;
@@ -12792,10 +14007,10 @@ fn print_usage() {
         "    Run the hosted-HTTP Inrou smoke harness for PortableVm, Firecracker/KVM, or a mixed-host inventory gate."
     );
     eprintln!(
-        "  cargo xtask openapi [--output <path>] [--sign <key>|--signature-envelope <path>|--unsigned-manifest]"
+        "  cargo xtask openapi [--output <path>] [--signature-envelope <path>|--unsigned-manifest] [--signing-payload <path>]"
     );
     eprintln!(
-        "    Generate the Torii OpenAPI spec from a live Torii router. Generation fails closed if Torii does not return a complete release document. Defaults to docs/portal/static/openapi/torii.json"
+        "    Generate the Torii OpenAPI spec from a live Torii router. Release signing is detached-only: emit the deterministic V2 payload with --unsigned-manifest --signing-payload, sign it with the HSM, then attach --signature-envelope. Defaults to docs/portal/static/openapi/torii.json"
     );
     eprintln!(
         "  cargo xtask da-threat-model-report [--out <path|->] [--seed <u64|0xhex>] [--config <path>]"

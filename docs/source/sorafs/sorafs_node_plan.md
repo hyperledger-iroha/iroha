@@ -1,15 +1,15 @@
-# SoraFS Node Prototype Implementation Plan (SF-3)
+# SoraFS Node V1 Implementation Record (SF-3)
 
-SF-3 delivers the first runnable `sorafs-node` crate that turns an Iroha/Torii
-process into a SoraFS storage provider. This plan translates the high-level
-storage design into concrete engineering tasks, milestones, and test coverage.
-It should be used alongside `sorafs_node_storage.md`, the provider admission
-policy, and the capacity marketplace roadmap.
+SF-3 defines the canonical `sorafs-node` provider service embedded in the
+Iroha/Torii runtime. This record captures the implemented V1 storage contract,
+its verification surface, and the genuine deployment evidence that remains.
+Use it alongside `sorafs_node_storage.md`, the provider admission policy, and
+the capacity marketplace contract.
 
 > **Portal:** Mirrored in `docs/portal/docs/sorafs/node-plan.md`. Update both
 > copies to keep reviewers aligned.
 
-## Target Scope (Milestone M1)
+## V1 Provider Scope
 
 1. **Chunk store integration**: wrap `sorafs_car::ChunkStore` with a persistent
    backend that stores chunk bytes, manifests, and PoR trees in the configured
@@ -33,13 +33,13 @@ policy, and the capacity marketplace roadmap.
 |------|----------|-------|
 | Create `crates/sorafs_node` with modules: `config`, `store`, `gateway`, `scheduler`, `telemetry`. | Storage Team | Re-export reusable types for Torii integration. |
 | Implement `StorageConfig` mapped from `SoraFsStorage` (actual/default/user). | Storage Team / Config WG | Ensure Norito/config snapshot parity without production environment overrides. |
-| Provide `NodeHandle` facade that Torii uses to submit pins/fetches. | Storage Team | Encapsulate storage internals. |
+| Provide `NodeHandle` read facade for Torii and an internal finalized-ledger ingest worker. | Storage Team | Torii never accepts payload uploads; only the provider outbox may call storage mutation after exact cursor, manifest, and provider-assignment validation. |
 
 ### B. Persistent Chunk Store
 
 | Task | Owner(s) | Notes |
 |------|----------|-------|
-| Build disk backend wrapping `sorafs_car::ChunkStore` with an on-disk manifest index (sled/sqlite?). | Storage Team | Deterministic layout: `<data_dir>/<manifest_cid>/chunk_{idx}.bin`. |
+| Persist `sorafs_car::ChunkStore` data through the canonical filesystem backend and Norito manifest index. | Storage Team | Deterministic layout: `<data_dir>/<manifest_cid>/chunk_{idx}.bin`; unsafe path and corrupt-index inputs fail closed. |
 | Maintain PoR metadata (64 KiB/4 KiB trees) using existing `ChunkStore::sample_leaves`. | Storage Team | Support resuming after restart. |
 | Implement integrity replay on startup (rehash manifest entries, prune incomplete pins). | Storage Team | Fail fast if corruption detected. |
 
@@ -48,7 +48,7 @@ policy, and the capacity marketplace roadmap.
 | Endpoint | Behaviour | Tasks |
 |----------|-----------|-------|
 | `GET /v1/sorafs/pin`, `POST /v1/sorafs/pin/register`, `GET /v1/sorafs/pin/{digest_hex}` | Read the pin registry, register paid manifest pins, and fetch one exact native manifest record at a finalized cursor. | Validate chunker profiles and canonical manifest payloads before registration; for detail reads return `PinManifestFinalizedRecordV1` and accept only the paired expected finalized height/hash precondition. |
-| `POST /v1/sorafs/storage/pin`, `POST /v1/sorafs/storage/fetch`, `POST /v1/sorafs/storage/token` | Store payload bytes for an approved manifest, fetch content ranges, and issue storage access tokens. | Enforce quotas, token policy, provider capability checks, and scheduler/back-pressure limits. |
+| `POST /v1/sorafs/storage/fetch`, `POST /v1/sorafs/storage/token` | Fetch content ranges and issue storage access tokens. Storage ingest has no public route. | Enforce token policy, provider capability checks, and scheduler/back-pressure limits. Provider bytes arrive only through the durable finalized-ledger outbox. |
 | `GET /v1/sorafs/storage/manifest/{manifest_id}`, `GET /v1/sorafs/storage/plan/{manifest_id}`, `GET /v1/sorafs/storage/car/{manifest_id}`, `GET /v1/sorafs/storage/chunk/{manifest_id}/{chunk_digest}` | Serve bounded manifest metadata, deterministic chunk plans, CAR bytes, and individual chunk bytes. | Keep readback arrays bounded while preserving total counts and verify digest/path bindings before streaming bytes. |
 | `GET /v1/sorafs/storage/peers`, `GET /v1/sorafs/storage/state`, `POST /v1/sorafs/proof/stream` | Report peer/storage state and request authenticated, finalized-pin-bound PoR witnesses. The unauthenticated local PoR sampling route is retired; proof and verdict admission use the governed capacity lifecycle. | Reuse chunk-store sampling behind the authenticated proof stream, verify generated witnesses against the committed manifest root, update telemetry, and preserve governance-verdict replay state. |
 
@@ -73,7 +73,7 @@ Metrics (Prometheus):
 - `sorafs_pin_success_total`, `sorafs_pin_failure_total`.
 - `sorafs_chunk_fetch_duration_seconds` (histogram with labels `result`).
 - `torii_sorafs_storage_bytes_used`, `torii_sorafs_storage_bytes_capacity`.
-- `torii_sorafs_storage_pin_queue_depth`, `torii_sorafs_storage_fetch_inflight`.
+- `sorafs_provider_ingest_inflight`, `torii_sorafs_storage_fetch_inflight`.
 - `torii_sorafs_storage_fetch_bytes_per_sec`.
 - `torii_sorafs_storage_por_inflight`.
 - `torii_sorafs_storage_por_samples_success_total`, `torii_sorafs_storage_por_samples_failed_total`.
@@ -99,17 +99,19 @@ Logs / events:
    - Authenticated proof-stream PoR sampling verifies every witness against the
      committed chunk-store root.
 3. **Torii integration tests**: run Torii with storage enabled, exercise HTTP endpoints using `assert_cmd`.
-4. **Chaos tests (future)**: simulate disk exhaustion, slow IO, provider removal (tracked in later milestones).
+4. **Adversarial deployment rehearsal**: simulate disk exhaustion, slow IO,
+   restart, and provider removal in the reviewed reference deployment.
 
 ### Dependencies
 
-- SF-2b admission policy (provider verifier) — ensure node checks admission envelopes before advertising.
-- SF-2c capacity marketplace — later tie storage telemetry into capacity declarations.
-- SF-2d advert extensions — consume range capability + stream budgets once available.
+- SF-2b admission policy — nodes verify canonical admission envelopes before advertising.
+- SF-2c capacity marketplace — committed capacity state and storage telemetry reconcile at finalized cursors.
+- SF-2d advert extensions — range capability and stream budgets are enforced at admission and serving.
 
 ### Milestone Exit Criteria
 
-- `cargo run -p sorafs_node --example pin_fetch` works against local fixtures.
+- `cargo test -p sorafs_node --test pin_workflows pin_fetch_roundtrip` passes
+  against canonical fixtures.
 - Torii exposes the documented `/v1/sorafs/pin*` and
   `/v1/sorafs/storage/*` routes and passes integration tests.
 - Documentation (`sorafs_node_storage.md`) updated to match implementation; operator guide drafted.
@@ -144,9 +146,14 @@ evidence and hosted governance archive hand-offs remain tracked in `roadmap.md`.
 
 ## Documentation & Ops Deliverables
 
-- Update `docs/source/sorafs/sorafs_node_storage.md` with configuration defaults, CLI examples.
-- Create operator runbook (`docs/source/sorafs/runbooks/sorafs_node_ops.md`) covering deployment, monitoring, troubleshooting.
+- Keep `docs/source/sorafs/sorafs_node_storage.md` aligned with configuration
+  defaults and CLI examples.
+- Keep the operator runbook
+  (`docs/source/sorafs/runbooks/sorafs_node_ops.md`) aligned with deployment,
+  monitoring, and troubleshooting behavior.
 - Keep the API reference for the `/v1/sorafs/pin*` and
   `/v1/sorafs/storage/*` endpoints aligned with the OpenAPI manifest.
 
-Progress should be reflected in the roadmap by checking off the items in the SF-3 section as features land.
+Local implementation and external-evidence state are tracked in
+`docs/source/sorafs/v1_closure_ledger.md`; this document does not create a
+second readiness authority.

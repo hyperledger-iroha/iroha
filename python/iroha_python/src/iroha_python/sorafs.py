@@ -67,11 +67,14 @@ __all__ = [
     "ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1",
     "SORAFS_ORDERBOOK_PAYLOAD_KINDS",
     "SORAFS_PDP_PAYLOAD_KINDS",
+    "SORAFS_FIXTURE_BUNDLE_PAYLOAD_KINDS",
+    "SORAFS_FIXTURE_BUNDLE_MAX_PAYLOADS_V1",
     "SORAFS_GOVERNANCE_DAG_CID_BYTES_V1",
     "SORAFS_GOVERNANCE_DAG_MAX_BLOCKS_V1",
     "SORAFS_REFERENCE_MAX_INPUT_BYTES_V1",
     "SORAFS_REFERENCE_MAX_LABEL_BYTES_V1",
     "SorafsGovernanceDagBlockInput",
+    "SorafsFixtureBundlePayloadInput",
     "validate_orderbook_payload",
     "sign_orderbook_payload",
     "derive_orderbook_order_id",
@@ -82,6 +85,8 @@ __all__ = [
     "validate_pdp_commitment_challenge",
     "validate_pdp_challenge_proof",
     "validate_pdp_bundle",
+    "validate_fixture_bundle",
+    "validate_governance_log_node",
     "validate_governance_dag_block",
     "validate_governance_dag_head_chain",
     "SorafsRangeCapability",
@@ -558,6 +563,30 @@ SORAFS_PDP_PAYLOAD_KINDS: Mapping[str, str] = MappingProxyType(
         "PROOF": "proof",
     }
 )
+SORAFS_FIXTURE_BUNDLE_PAYLOAD_KINDS: Mapping[str, str] = MappingProxyType(
+    {
+        "PROVIDER_ADVERT": "provider-advert",
+        "PROVIDER_ADMISSION_ENVELOPE": "provider-admission-envelope",
+        "REPLICATION_ORDER": "replication-order",
+        "POR_CHALLENGE": "por-challenge",
+        "POR_PROOF": "por-proof",
+        "POTR_RECEIPT": "potr-receipt",
+        "REPAIR_EVIDENCE": "repair-evidence",
+        "REPAIR_REPORT": "repair-report",
+        "REPAIR_TASK_RECORD": "repair-task-record",
+        "REPAIR_SLASH_PROPOSAL": "repair-slash-proposal",
+        "REPAIR_TASK_EVENT": "repair-task-event",
+        "ORDERBOOK_ORDER_REQUEST": "orderbook-order-request",
+        "ORDERBOOK_ORDER_CANCEL": "orderbook-order-cancel",
+        "ORDERBOOK_TRADE_EVENT": "orderbook-trade-event",
+        "ORDERBOOK_SETTLEMENT_CHANNEL": "orderbook-settlement-channel",
+        "ORDERBOOK_SETTLEMENT_RECEIPT": "orderbook-settlement-receipt",
+        "PDP_COMMITMENT": "pdp-commitment",
+        "PDP_CHALLENGE": "pdp-challenge",
+        "PDP_PROOF": "pdp-proof",
+    }
+)
+SORAFS_FIXTURE_BUNDLE_MAX_PAYLOADS_V1 = 64
 SORAFS_GOVERNANCE_DAG_CID_BYTES_V1 = 32
 SORAFS_GOVERNANCE_DAG_MAX_BLOCKS_V1 = 64
 SORAFS_REFERENCE_MAX_INPUT_BYTES_V1 = 67_108_864
@@ -565,6 +594,9 @@ SORAFS_REFERENCE_MAX_LABEL_BYTES_V1 = 1_024
 
 _ORDERBOOK_PAYLOAD_KIND_VALUES = frozenset(SORAFS_ORDERBOOK_PAYLOAD_KINDS.values())
 _PDP_PAYLOAD_KIND_VALUES = frozenset(SORAFS_PDP_PAYLOAD_KINDS.values())
+_FIXTURE_BUNDLE_PAYLOAD_KIND_VALUES = frozenset(
+    SORAFS_FIXTURE_BUNDLE_PAYLOAD_KINDS.values()
+)
 _ORDERBOOK_SIDE_VALUES = frozenset(("bid", "ask"))
 _ORDERBOOK_TIER_VALUES = frozenset(("hot", "warm", "archive"))
 _ORDERBOOK_CANCEL_REASON_VALUES = frozenset(
@@ -594,6 +626,36 @@ class SorafsGovernanceDagBlockInput:
         object.__setattr__(self, "payload", _bytes_payload(self.payload, "payload"))
         if self.label is not None:
             _governance_reference_label(self.label, "", "label")
+
+
+@dataclass(frozen=True)
+class SorafsFixtureBundlePayloadInput:
+    """One typed canonical payload supplied to fixture-bundle validation."""
+
+    kind: str
+    payload: bytes | bytearray | memoryview
+    label: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "kind",
+            _normalize_reference_kind(
+                self.kind,
+                _FIXTURE_BUNDLE_PAYLOAD_KIND_VALUES,
+                "fixture-bundle",
+            ),
+        )
+        object.__setattr__(self, "payload", _bytes_payload(self.payload, "payload"))
+        object.__setattr__(
+            self,
+            "label",
+            _governance_reference_label(
+                self.label,
+                f"{self.kind}.to",
+                "label",
+            ),
+        )
 
 
 def _orderbook_owner_account(value: bytes | bytearray | memoryview, field: str) -> bytes:
@@ -703,15 +765,28 @@ def _canonical_orderbook_selector(value: Any, allowed: frozenset[str], field: st
     return value
 
 
-def _normalize_generated_at_unix(value: Optional[int]) -> int:
-    raw = int(time.time()) if value is None else value
+def _normalize_reference_unix(
+    value: Optional[int],
+    field: str,
+    *,
+    default_now: bool,
+) -> int:
+    raw = int(time.time()) if value is None and default_now else value
     if isinstance(raw, bool) or not isinstance(raw, int):
-        raise TypeError("generated_at_unix must be a non-negative integer")
+        raise TypeError(f"{field} must be a non-negative integer")
     if raw < 0:
-        raise ValueError("generated_at_unix must be a non-negative integer")
+        raise ValueError(f"{field} must be a non-negative integer")
     if raw > _U64_MAX:
-        raise ValueError("generated_at_unix must fit in u64")
+        raise ValueError(f"{field} must fit in u64")
     return raw
+
+
+def _normalize_generated_at_unix(value: Optional[int]) -> int:
+    return _normalize_reference_unix(
+        value,
+        "generated_at_unix",
+        default_now=True,
+    )
 
 
 def _reference_label(value: Optional[str], fallback: str, field: str) -> str:
@@ -731,7 +806,12 @@ def _governance_reference_label(value: Optional[str], fallback: str, field: str)
         raise ValueError(f"{field} must not be blank")
     if label.strip() != label:
         raise ValueError(f"{field} must not contain surrounding whitespace")
-    if not label.isprintable():
+    if any(0xD800 <= ord(character) <= 0xDFFF for character in label):
+        raise ValueError(f"{field} must be valid Unicode text")
+    if any(
+        ord(character) <= 0x1F or 0x7F <= ord(character) <= 0x9F
+        for character in label
+    ):
         raise ValueError(f"{field} must not contain control characters")
     if len(label.encode("utf-8")) > SORAFS_REFERENCE_MAX_LABEL_BYTES_V1:
         raise ValueError(
@@ -758,6 +838,25 @@ def _reference_outcome_from_json(payload: Any, capability: str) -> Dict[str, Any
     if not isinstance(outcome, dict):
         raise TypeError(f"native {capability} returned an invalid outcome")
     return outcome
+
+
+def _require_sorafs_native_function(
+    function_name: str,
+    capability: str,
+) -> Callable[..., Any]:
+    try:
+        function = getattr(_crypto, function_name)
+    except (AttributeError, RuntimeError) as error:
+        raise RuntimeError(
+            f"SoraFS {capability} requires native function `{function_name}`. "
+            "Install or rebuild the iroha_python._crypto extension."
+        ) from error
+    if not callable(function):
+        raise RuntimeError(
+            f"SoraFS {capability} requires callable native function `{function_name}`. "
+            "Install or rebuild the iroha_python._crypto extension."
+        )
+    return function
 
 
 def validate_orderbook_payload(
@@ -1110,6 +1209,97 @@ def validate_pdp_bundle(
         _normalize_generated_at_unix(generated_at_unix),
     )
     return _reference_outcome_from_json(payload, "PDP bundle validation")
+
+
+def validate_fixture_bundle(
+    payloads: Sequence[SorafsFixtureBundlePayloadInput],
+    *,
+    now_unix: Optional[int] = None,
+    generated_at_unix: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Validate a bounded heterogeneous fixture bundle and canonical cross-links."""
+
+    if isinstance(payloads, (str, bytes, bytearray, memoryview)) or not isinstance(
+        payloads,
+        Sequence,
+    ):
+        raise TypeError(
+            "payloads must be a sequence of SorafsFixtureBundlePayloadInput"
+        )
+    if not 1 <= len(payloads) <= SORAFS_FIXTURE_BUNDLE_MAX_PAYLOADS_V1:
+        raise ValueError(
+            "payloads must contain "
+            f"1..={SORAFS_FIXTURE_BUNDLE_MAX_PAYLOADS_V1} entries"
+        )
+    native_payloads: list[tuple[str, bytes, str]] = []
+    aggregate_bytes = 0
+    for index, payload in enumerate(payloads):
+        if not isinstance(payload, SorafsFixtureBundlePayloadInput):
+            raise TypeError(
+                f"payloads[{index}] must be a SorafsFixtureBundlePayloadInput"
+            )
+        label = payload.label
+        if label is None:  # Frozen input normalization makes this unreachable.
+            raise ValueError(f"payloads[{index}].label must be present")
+        aggregate_bytes += len(payload.payload) + len(label.encode("utf-8"))
+        if aggregate_bytes > SORAFS_REFERENCE_MAX_INPUT_BYTES_V1:
+            raise ValueError(
+                "fixture-bundle inputs exceed "
+                f"{SORAFS_REFERENCE_MAX_INPUT_BYTES_V1} aggregate bytes"
+            )
+        native_payloads.append((payload.kind, bytes(payload.payload), label))
+    generated_at = _normalize_generated_at_unix(generated_at_unix)
+    resolved_now = _normalize_reference_unix(
+        generated_at if now_unix is None else now_unix,
+        "now_unix",
+        default_now=False,
+    )
+    outcome = _crypto.sorafs_validate_fixture_bundle_json(
+        native_payloads,
+        resolved_now,
+        generated_at,
+    )
+    return _reference_outcome_from_json(outcome, "fixture-bundle validation")
+
+
+def validate_governance_log_node(
+    norito_bytes: bytes | bytearray | memoryview,
+    *,
+    expected_node_cid: bytes | bytearray | memoryview,
+    label: Optional[str] = None,
+    generated_at_unix: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Validate a canonical governance log node bound to its expected CID."""
+
+    payload_bytes = _bytes_payload(norito_bytes, "norito_bytes")
+    resolved_label = _governance_reference_label(
+        label,
+        "governance.to",
+        "label",
+    )
+    expected_cid = _bytes_payload(expected_node_cid, "expected_node_cid")
+    if len(expected_cid) != SORAFS_GOVERNANCE_DAG_CID_BYTES_V1:
+        raise ValueError(
+            "expected_node_cid must contain exactly "
+            f"{SORAFS_GOVERNANCE_DAG_CID_BYTES_V1} bytes"
+        )
+    _governance_reference_aggregate_bytes(
+        "governance log-node validation",
+        len(payload_bytes),
+        len(resolved_label.encode("utf-8")),
+        len(expected_cid),
+    )
+    native_validator = _require_sorafs_native_function(
+        "sorafs_validate_governance_log_node_json",
+        "governance log-node validation",
+    )
+    outcome = native_validator(
+        payload_bytes,
+        resolved_label,
+        expected_cid,
+        _normalize_generated_at_unix(generated_at_unix),
+    )
+    return _reference_outcome_from_json(outcome, "governance log-node validation")
 
 
 def validate_governance_dag_block(

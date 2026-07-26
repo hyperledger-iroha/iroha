@@ -1596,6 +1596,72 @@ impl Quantity {
         )?)
     }
 
+    /// Multiply this quantity by decimal factors as one unbounded conceptual
+    /// product, then round the aggregate once at `output_scale`.
+    ///
+    /// This is the rounded counterpart to [`Self::try_product_decimals`].
+    /// Intermediate products are never narrowed to the public mantissa or
+    /// scale domain, so deterministic final rounding is independent of factor
+    /// grouping.
+    ///
+    /// # Errors
+    /// Rejects a scale above 28, a noncanonical factor, an aggregate scale that
+    /// cannot be bounded safely, or a rounded result outside the canonical
+    /// non-negative quantity domain.
+    pub fn try_product_decimals_round<'a, I>(
+        &self,
+        factors: I,
+        output_scale: u32,
+        mode: RoundingMode,
+    ) -> Result<Self, NumericOperationError>
+    where
+        I: IntoIterator<Item = &'a Numeric>,
+    {
+        if output_scale > MAX_DECIMAL_SCALE {
+            return Err(NumericOperationError::InvalidScale);
+        }
+        self.0.validate_decimal()?;
+        let ten = UnboundedBigInt::from(10_u8);
+        let mut product = self.mantissa().inner().clone();
+        let mut scale = u128::from(self.scale());
+
+        for factor in factors {
+            factor.validate_decimal()?;
+            product *= factor.mantissa().inner();
+            if product.is_zero() {
+                scale = 0;
+                continue;
+            }
+            scale = scale
+                .checked_add(u128::from(factor.scale()))
+                .ok_or(NumericOperationError::ScaleOverflow)?;
+            while scale > 0 {
+                let (quotient, remainder) = quotient_remainder(&product, &ten);
+                if !remainder.is_zero() {
+                    break;
+                }
+                product = quotient;
+                scale -= 1;
+            }
+        }
+
+        let output_scale_wide = u128::from(output_scale);
+        let rounded = if scale > output_scale_wide {
+            let reduction = u32::try_from(scale - output_scale_wide)
+                .map_err(|_| NumericOperationError::ScaleOverflow)?;
+            rounded_quotient(&product, &ten.pow(reduction), mode)
+        } else {
+            let expansion = u32::try_from(output_scale_wide - scale)
+                .expect("validated output scale difference fits u32");
+            product * ten.pow(expansion)
+        };
+        Self::from_canonical_numeric(infallible_observed(
+            canonical_decimal_from_unbounded_observed(rounded, output_scale, &mut |_| {
+                Ok::<_, core::convert::Infallible>(())
+            }),
+        )?)
+    }
+
     /// Compare `self * self_multiplier` with `other * other_multiplier`.
     ///
     /// Products and decimal alignment are conceptual unbounded intermediates,
@@ -3389,6 +3455,62 @@ mod tests {
         assert_eq!(
             Quantity::one().try_product_decimals([&decimal("-1")]),
             Err(NumericOperationError::NegativeQuantity)
+        );
+    }
+
+    #[test]
+    fn aggregate_decimal_product_rounds_only_its_final_result() {
+        let panel_multiplier = decimal("0.7142857142857142857142857143");
+        let result = Quantity::from(150_u32)
+            .try_product_decimals_round(
+                [
+                    &decimal("1.06"),
+                    &decimal("1.08"),
+                    &decimal("1.2"),
+                    &panel_multiplier,
+                    &Numeric::one(),
+                ],
+                MAX_DECIMAL_SCALE,
+                RoundingMode::NearestEven,
+            )
+            .expect("aggregate appeal-pricing product");
+        assert_eq!(result.to_string(), "147.1885714285714285714285714315");
+        assert_eq!(
+            Quantity::from(150_u32)
+                .try_product_decimals_round(
+                    [
+                        &decimal("1.06"),
+                        &decimal("1.08"),
+                        &decimal("1.2"),
+                        &panel_multiplier,
+                        &Numeric::one(),
+                    ],
+                    XOR_QUANTITY_SCALE,
+                    RoundingMode::NearestEven,
+                )
+                .expect("nano-XOR aggregate appeal-pricing product")
+                .to_string(),
+            "147.188571429"
+        );
+        assert_eq!(
+            Quantity::one()
+                .try_product_decimals_round(
+                    [&decimal("1.25"), &decimal("1.25")],
+                    1,
+                    RoundingMode::NearestEven,
+                )
+                .expect("aggregate final-only rounding")
+                .to_string(),
+            "1.6",
+            "one aggregate rounding must differ from staged tie-to-even rounding"
+        );
+        assert_eq!(
+            Quantity::one().try_product_decimals_round(
+                [&Numeric::one()],
+                MAX_DECIMAL_SCALE + 1,
+                RoundingMode::NearestEven,
+            ),
+            Err(NumericOperationError::InvalidScale)
         );
     }
 
