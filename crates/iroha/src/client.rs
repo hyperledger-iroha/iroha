@@ -24246,7 +24246,7 @@ mod url_join_tests {
     }
 
     #[test]
-    fn zk_client_backend_guard_rejects_pending_trusted_setup_and_path_labels() {
+    fn zk_client_backend_guard_rejects_protocol_trusted_setup_and_path_labels() {
         for backend in [
             "unknown/privacy/backend",
             "halo2/ipa-pasta-cycle-v1",

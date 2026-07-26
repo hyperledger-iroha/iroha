@@ -24,6 +24,8 @@ pub mod nft;
 pub mod offline;
 /// Oracle feed admission and aggregation instruction handlers.
 pub mod oracle;
+/// Canonical first-release privacy governance and proof admission.
+pub mod privacy;
 pub mod query;
 pub mod ram_lfe;
 pub mod repo;
@@ -472,6 +474,14 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::governance::UnregisterCitizen>,
     dispatch_instruction::<iroha_data_model::isi::governance::SlashGovernanceLock>,
     dispatch_instruction::<iroha_data_model::isi::governance::RestituteGovernanceLock>,
+    dispatch_instruction::<
+        iroha_data_model::isi::privacy::RegisterPrivacyProtocolActivationV1
+    >,
+    dispatch_instruction::<
+        iroha_data_model::isi::privacy::TransitionPrivacyProtocolLifecycleV1
+    >,
+    dispatch_instruction::<iroha_data_model::isi::privacy::PublishPrivacyRootV1>,
+    dispatch_instruction::<iroha_data_model::isi::privacy::BootstrapPrivacyPgcAccountsV1>,
 }
 
 pub(crate) fn execute_borrowed_instruction(

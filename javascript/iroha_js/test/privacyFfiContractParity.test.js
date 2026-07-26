@@ -3539,6 +3539,7 @@ test("pending privacy backend tags stay in cross-SDK parity", () => {
   );
 
   const rustBackendTags = source("crates/iroha_data_model/src/zk.rs");
+  const rustPrivacyDescriptors = source("crates/iroha_data_model/src/privacy.rs");
   const swiftBackendTags = source("IrohaSwift/Sources/IrohaSwift/VerifyingKeyBackendTag.swift");
   const javaBackendTags = source(
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/zk/VerifyingKeyBackendTag.java",
@@ -3548,7 +3549,6 @@ test("pending privacy backend tags stay in cross-SDK parity", () => {
   );
   const csharpBackendTags = source("csharp/src/Hyperledger.Iroha.Sdk/Zk/VerifyingKeyBackendTag.cs");
   const surfaces = [
-    ["Rust data-model BackendTag", rustBackendTags],
     ["JS source Norito codec", source("javascript/iroha_js/src/norito.js")],
     ["JS dist Norito codec", source("javascript/iroha_js/dist/norito.js")],
     ["JS source privacy builders", source("javascript/iroha_js/src/instructionBuilders.js")],
@@ -3561,6 +3561,35 @@ test("pending privacy backend tags stay in cross-SDK parity", () => {
     ["C# backend tag", csharpBackendTags],
   ];
 
+  const rustOpenVerifyBackendTag = sliceBetween(
+    rustBackendTags,
+    "pub enum BackendTag {",
+    "impl BackendTag {",
+    "Rust OpenVerify backend tag",
+  );
+  assert.deepEqual(
+    [...rustOpenVerifyBackendTag.matchAll(/^\s{4}([A-Z][A-Za-z0-9]+),$/gmu)].map(
+      (match) => match[1],
+    ),
+    ["Halo2IpaPasta", "Stark"],
+    "Rust OpenVerify backend tags must stay limited to low-level proof engines",
+  );
+  assert.match(
+    rustBackendTags,
+    /Privacy protocols and verifier profiles are deliberately not represented by[\s\S]*this enum/,
+    "Rust OpenVerify backend tags must remain separate from privacy protocol descriptors",
+  );
+  for (const descriptor of [
+    "PrivacyProtocolIdV1",
+    "PrivacyProofSystemIdV1",
+    "PrivacyEngineIdV1",
+  ]) {
+    assert.ok(
+      rustPrivacyDescriptors.includes(`pub enum ${descriptor}`),
+      `Rust privacy data model must expose closed ${descriptor} descriptors`,
+    );
+  }
+
   for (const [label, text] of surfaces) {
     for (const backendLabel of EXPECTED_PENDING_PRIVACY_BACKEND_LABELS) {
       const compactLabel = backendLabel.replaceAll(/[-_/]/g, "");
@@ -3572,11 +3601,6 @@ test("pending privacy backend tags stay in cross-SDK parity", () => {
   }
 
   const pendingClassifierSurfaces = [
-    [
-      "Rust data-model BackendTag",
-      rustBackendTags,
-      [/is_pending_production_backend\(/, /is_pending_production_backend_label\(/],
-    ],
     [
       "Swift backend tag",
       swiftBackendTags,
@@ -3663,7 +3687,7 @@ test("native chain proof admission uses explicit production verifier backend all
 
   assert.match(
     coreZk,
-    /pub fn production_verify_backend_tag\([\s\S]*is_pending_production_backend_label\([\s\S]*is_production_claim_backend_label\([\s\S]*is_trusted_setup_backend_label\([\s\S]*is_developer_only_backend_label\([\s\S]*BackendTag::Stark[\s\S]*BackendTag::Halo2IpaPasta/,
+    /pub fn production_verify_backend_tag\([\s\S]*production_verify_backend_label_is_portable\([\s\S]*is_production_claim_backend_label\([\s\S]*is_trusted_setup_backend_label\([\s\S]*is_developer_only_backend_label\([\s\S]*BackendTag::Stark[\s\S]*BackendTag::Halo2IpaPasta/,
     "Rust verifier dispatch must expose an explicit production backend tag allowlist",
   );
   assert.match(
@@ -3679,7 +3703,7 @@ test("native chain proof admission uses explicit production verifier backend all
   const rustProductionAllowlistTest = sliceBetween(
     coreZk,
     "fn production_verify_backend_allowlist_is_explicit",
-    "fn verify_backend_rejects_pending_production_labels_before_dispatch",
+    "fn verify_backend_rejects_protocol_names_before_dispatch",
     "Rust production verifier backend allowlist test",
   );
   const requiredAllowlistRustBackends = new Map(

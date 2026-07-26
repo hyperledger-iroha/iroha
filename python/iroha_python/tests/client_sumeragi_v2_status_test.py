@@ -157,7 +157,7 @@ def _healthy_status() -> dict[str, object]:
                     "proposal_round": {
                         "context_id": [_canonical_hash(0x14)],
                         "height": 15,
-                        "view": 3,
+                        "view": 4,
                     },
                     "subject": _subject(),
                     "execution_commitment": _execution_commitment(),
@@ -286,7 +286,7 @@ def test_status_parses_authoritative_reducer_state() -> None:
     outbound_intent = status.liveness.outbound_intents[0]
     assert outbound_intent.round.view == 4
     assert outbound_intent.proposal_round is not None
-    assert outbound_intent.proposal_round.view == 3
+    assert outbound_intent.proposal_round.view == 4
     assert outbound_intent.execution_commitment is not None
     assert (
         outbound_intent.execution_commitment.executed_block_wire_hash

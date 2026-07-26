@@ -1766,7 +1766,7 @@ mod tests {
     }
 
     #[test]
-    fn prover_backend_allowlist_rejects_pending_claimed_and_unregistered_stark_labels() {
+    fn prover_backend_allowlist_rejects_protocol_claimed_and_unregistered_stark_labels() {
         let broad_backends = [
             "halo2/ipa".to_owned(),
             "halo2/pasta".to_owned(),

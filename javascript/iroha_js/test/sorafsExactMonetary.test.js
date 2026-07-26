@@ -111,7 +111,7 @@ test("signed orderbook builders reject noncanonical XOR quantities before native
         { ...orderRequestFields("1"), price_per_gib: "1" },
         PRIVATE_KEY,
       ),
-    /exactly once/i,
+    /retired/i,
   );
   assert.throws(
     () =>

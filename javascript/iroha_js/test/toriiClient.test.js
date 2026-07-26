@@ -11900,36 +11900,37 @@ test("Sumeragi execution commitment declarations expose Native AMX manifest fiel
   }
 });
 
-test("getSumeragiStatusTyped preserves carried proposal origins", async () => {
+test("getSumeragiStatusTyped preserves exact proposal rounds", async () => {
   const payload = createSumeragiV2StatusPayload();
   const commitQuorum = structuredClone(payload.liveness.prepare_quorums[0]);
   commitQuorum.round.view = 2;
-  commitQuorum.proposal_round.view = 1;
+  commitQuorum.proposal_round.view = 2;
   payload.liveness.commit_quorums = [commitQuorum];
 
   const commitIntent = structuredClone(payload.liveness.outbound_intents[0]);
   commitIntent.kind.kind = "commit_vote";
   commitIntent.round.view = 2;
-  commitIntent.proposal_round.view = 1;
+  commitIntent.proposal_round.view = 2;
   commitIntent.execution_commitment = structuredClone(
     commitQuorum.execution_commitment,
   );
   payload.liveness.outbound_intents = [commitIntent];
   payload.last_commit_qc.certificate.round.view = 2;
-  payload.last_commit_qc.certificate.proposal_round.view = 1;
+  payload.last_commit_qc.certificate.proposal_round.view = 2;
 
   const status = await sumeragiClientForPayload(payload).getSumeragiStatusTyped();
 
   assert.equal(status.liveness.commit_quorums[0].round.view, 2);
-  assert.equal(status.liveness.commit_quorums[0].proposal_round.view, 1);
+  assert.equal(status.liveness.commit_quorums[0].proposal_round.view, 2);
   assert.equal(status.liveness.outbound_intents[0].round.view, 2);
-  assert.equal(status.liveness.outbound_intents[0].proposal_round.view, 1);
-  assert.equal(status.last_commit_qc.certificate.proposal_round.view, 1);
+  assert.equal(status.liveness.outbound_intents[0].proposal_round.view, 2);
+  assert.equal(status.last_commit_qc.certificate.proposal_round.view, 2);
 
   const laterCommitPayload = createSumeragiV2StatusPayload();
   const laterCommitIntent = laterCommitPayload.liveness.outbound_intents[0];
   laterCommitIntent.kind.kind = "commit_qc";
   laterCommitIntent.round.view = 3;
+  laterCommitIntent.proposal_round.view = 3;
   laterCommitIntent.execution_commitment = structuredClone(
     laterCommitPayload.last_commit_qc.certificate.execution_commitment,
   );
@@ -11938,7 +11939,7 @@ test("getSumeragiStatusTyped preserves carried proposal origins", async () => {
   assert.equal(laterCommitStatus.liveness.outbound_intents[0].round.view, 3);
   assert.equal(
     laterCommitStatus.liveness.outbound_intents[0].proposal_round.view,
-    1,
+    3,
   );
 
   const timeoutPayload = createSumeragiV2StatusPayload();
@@ -11974,7 +11975,7 @@ test("getSumeragiStatusTyped enforces vote-quorum proposal geometry", async () =
   futureCommitOrigin.liveness.commit_quorums = [commitQuorum];
   await assert.rejects(
     () => sumeragiClientForPayload(futureCommitOrigin).getSumeragiStatusTyped(),
-    /proposal_round.view must not exceed/,
+    /proposal_round must equal round/,
   );
 
   const foreignOrigin = createSumeragiV2StatusPayload();
@@ -12031,7 +12032,7 @@ test("getSumeragiStatusTyped enforces outbound-intent proposal geometry", async 
   commitIntent.proposal_round.view = 2;
   await assert.rejects(
     () => sumeragiClientForPayload(futureCommitOrigin).getSumeragiStatusTyped(),
-    /proposal_round.view must not exceed/,
+    /proposal_round must equal round/,
   );
 
   const foreignOrigin = createSumeragiV2StatusPayload();
@@ -12301,7 +12302,7 @@ test("getSumeragiStatusTyped rejects inconsistent or under-quorum commits", asyn
   futureProposalRound.last_commit_qc.certificate.proposal_round.view = 2;
   await assert.rejects(
     () => sumeragiClientForPayload(futureProposalRound).getSumeragiStatusTyped(),
-    /proposal_round.view must not exceed/,
+    /proposal_round must equal round/,
   );
 
   const underpowered = createSumeragiV2StatusPayload();
