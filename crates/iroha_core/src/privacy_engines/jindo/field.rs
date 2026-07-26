@@ -7,10 +7,17 @@
 //! four-limb Montgomery representation internally.
 
 use core::ops::{Add, Mul, Neg, Sub};
+use zeroize::Zeroize;
 
 /// Canonical field element in Montgomery form.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct JindoFieldElementV1([u64; 4]);
+
+impl Zeroize for JindoFieldElementV1 {
+    fn zeroize(&mut self) {
+        self.0.zeroize();
+    }
+}
 
 impl JindoFieldElementV1 {
     /// Field modulus in little-endian 64-bit limbs.
@@ -41,6 +48,7 @@ impl JindoFieldElementV1 {
     const MONTGOMERY_NEG_INV: u64 = 0xffff_ffff_ffff_ffff;
 
     /// Exponent `p - 2`, in little-endian limbs.
+    #[cfg(test)]
     const INVERSE_EXPONENT: [u64; 4] = [
         0xffff_ffff_ffff_ffff,
         0x8e96_30dc_8c37_3280,
@@ -113,6 +121,7 @@ impl JindoFieldElementV1 {
     }
 
     /// Multiplicative inverse, or `None` for zero.
+    #[cfg(test)]
     pub(crate) fn invert(self) -> Option<Self> {
         if self.is_zero() {
             return None;

@@ -1514,6 +1514,13 @@ mod tests {
         )
     }
 
+    fn smart_contract_parameter_message(error: &Error) -> &str {
+        let Error::InvalidParameter(InvalidParameterError::SmartContract(message)) = error else {
+            panic!("expected a typed smart-contract parameter error, got {error:?}");
+        };
+        message
+    }
+
     fn assert_empty_and_unbudgeted(state_transaction: &StateTransaction<'_, '_>) {
         assert_eq!(privacy_map_counts(state_transaction), (0, 0, 0, 0));
         assert_eq!(state_transaction.privacy_budget_for_testing(), (0, 0, 0, 0));
@@ -1989,7 +1996,10 @@ mod tests {
             let error = instruction
                 .execute(&ALICE_ID, &mut transaction)
                 .expect_err("double bootstrap");
-            assert!(error.to_string().contains("already initialized"), "{error}");
+            assert!(
+                smart_contract_parameter_message(&error).contains("already initialized"),
+                "{error:?}"
+            );
             assert_eq!(privacy_map_counts(&transaction), counts_before);
             assert_eq!(transaction.privacy_budget_for_testing(), budget_before);
         }
@@ -2010,16 +2020,17 @@ mod tests {
             transaction.apply();
         }
 
-        let assert_unchanged = |transaction: &StateTransaction<'_, '_>,
-                                expected_maps: (usize, usize, usize, usize),
-                                expected_budget: (u32, u64, u32, u64)| {
-            assert_eq!(privacy_map_counts(transaction), expected_maps);
-            assert_eq!(
-                transaction.privacy_budget_for_testing(),
-                expected_budget,
-                "intent rejection must not reserve privacy budget"
-            );
-        };
+        let assert_unchanged =
+            |transaction: &StateTransaction<'_, '_>,
+             expected_maps: (usize, usize, usize, usize),
+             expected_budget: (u32, u64, u32, u64)| {
+                assert_eq!(privacy_map_counts(transaction), expected_maps);
+                assert_eq!(
+                    transaction.privacy_budget_for_testing(),
+                    expected_budget,
+                    "intent rejection must not reserve privacy budget"
+                );
+            };
 
         {
             let mut transaction = block.transaction();
@@ -2029,7 +2040,10 @@ mod tests {
                 .clone()
                 .execute(&ALICE_ID, &mut transaction)
                 .expect_err("contract, trigger, IVM, and ad-hoc paths have no direct binding");
-            assert!(error.to_string().contains("no bound direct"), "{error}");
+            assert!(
+                smart_contract_parameter_message(&error).contains("no bound direct"),
+                "{error:?}"
+            );
             assert_unchanged(&transaction, before, budget_before);
         }
 
@@ -2047,7 +2061,10 @@ mod tests {
                 .clone()
                 .execute(&ALICE_ID, &mut transaction)
                 .expect_err("stale signed-payload binding");
-            assert!(error.to_string().contains("digest differs"), "{error}");
+            assert!(
+                smart_contract_parameter_message(&error).contains("digest differs"),
+                "{error:?}"
+            );
             assert_unchanged(&transaction, before, budget_before);
         }
 
@@ -2062,8 +2079,8 @@ mod tests {
                 .execute(&ALICE_ID, &mut transaction)
                 .expect_err("child overlay substituted another proof");
             assert!(
-                error.to_string().contains("differs from the exact direct"),
-                "{error}"
+                smart_contract_parameter_message(&error).contains("differs from the exact direct"),
+                "{error:?}"
             );
             assert_unchanged(&transaction, before, budget_before);
         }
@@ -2086,7 +2103,10 @@ mod tests {
             let error = payment
                 .execute(&ALICE_ID, &mut transaction)
                 .expect_err("the exact submission cannot be replayed in a child overlay");
-            assert!(error.to_string().contains("already been consumed"), "{error}");
+            assert!(
+                smart_contract_parameter_message(&error).contains("already been consumed"),
+                "{error:?}"
+            );
             assert_unchanged(&transaction, before, budget_before);
         }
     }
@@ -2143,10 +2163,10 @@ mod tests {
         let error = payment
             .execute(&ALICE_ID, &mut transaction)
             .expect_err("one-bit proof mutation");
+        let message = smart_contract_parameter_message(&error);
         assert!(
-            error.to_string().contains("Anonymous PGC")
-                || error.to_string().contains("native proof"),
-            "{error}"
+            message.contains("Anonymous PGC") || message.contains("native proof"),
+            "{error:?}"
         );
         assert_eq!(
             transaction
@@ -2346,8 +2366,8 @@ mod tests {
             .execute(&ALICE_ID, &mut transaction)
             .expect_err("stale payment replay");
         assert!(
-            error.to_string().contains("StaleHead"),
-            "unexpected replay rejection: {error}"
+            smart_contract_parameter_message(&error).contains("StaleHead"),
+            "unexpected replay rejection: {error:?}"
         );
         assert_eq!(privacy_map_counts(&transaction), counts_before);
         assert_eq!(

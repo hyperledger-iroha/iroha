@@ -93,7 +93,7 @@ pub enum PrivacyProtocolIdV1 {
     /// Native Iroha P-256 X.509 predicate STARK protocol v0.
     #[cfg_attr(feature = "json", norito(rename = "iroha-zk-x509-stark-p256-v0"))]
     IrohaZkX509StarkP256V0,
-    /// Native Iroha Jindo multilinear lattice polynomial-commitment protocol v0.
+    /// Native Iroha Jindo batched univariate lattice polynomial-commitment protocol v0.
     #[cfg_attr(
         feature = "json",
         norito(rename = "iroha-jindo-polynomial-commitment-v0")
@@ -277,7 +277,7 @@ pub enum PrivacyProofSystemIdV1 {
         norito(rename = "vega-neutron-nova-spartan-hyrax-t256")
     )]
     VegaNeutronNovaSpartanHyraxT256,
-    /// Jindo multilinear lattice polynomial-commitment proof system.
+    /// Jindo batched univariate lattice polynomial-commitment proof system.
     #[cfg_attr(feature = "json", norito(rename = "jindo-polynomial-commitment"))]
     JindoPolynomialCommitment,
     /// Halo2 IPA proof system over the Pasta curve cycle.
@@ -3856,8 +3856,17 @@ pub const IROHA_JINDO_COMMITMENT_COEFFICIENT_BYTES_V1: usize = 4;
 pub const IROHA_JINDO_LATTICE_COMMITMENT_BYTES_V1: usize = IROHA_JINDO_OUTER_COMMITMENT_RANK_V1
     * IROHA_JINDO_RING_DEGREE_V1
     * IROHA_JINDO_COMMITMENT_COEFFICIENT_BYTES_V1;
-/// Maximum absolute rounded outer-commitment coefficient.
-pub const IROHA_JINDO_MAX_ROUNDED_COMMITMENT_COEFFICIENT_V1: i64 = 1 << 28;
+/// Minimum canonical rounded outer-commitment coefficient.
+///
+/// This is the arithmetic-floor quotient of the smallest balanced residue
+/// modulo the fixed 95-bit outer modulus by `2^65`.
+pub const IROHA_JINDO_MIN_ROUNDED_COMMITMENT_COEFFICIENT_V1: i32 = -268_435_457;
+/// Maximum canonical rounded outer-commitment coefficient.
+///
+/// The one-value asymmetry relative to the minimum is required by the odd
+/// outer modulus and arithmetic-floor rounding; accepting a wider symmetric
+/// interval would admit encodings the commitment algorithm cannot produce.
+pub const IROHA_JINDO_MAX_ROUNDED_COMMITMENT_COEFFICIENT_V1: i32 = 268_435_456;
 /// Exact direct 64-bit attribute count in the Bootle/Lantern credential profile.
 pub const BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1: usize = 8;
 /// Exact byte width of one direct Bootle/Lantern attribute.
@@ -5228,7 +5237,7 @@ pub enum PrivacyStatementV1 {
     VegaExistingCredentialZkV0(VegaExistingCredentialStatementV1),
     /// Native Iroha P-256 X.509 predicate STARK statement.
     IrohaZkX509StarkP256V0(IrohaZkX509StarkP256StatementV1),
-    /// Native Iroha Jindo multilinear lattice polynomial-commitment statement.
+    /// Native Iroha Jindo batched univariate lattice polynomial-commitment statement.
     IrohaJindoPolynomialCommitmentV0(IrohaJindoPolynomialCommitmentStatementV1),
     /// Native Bootle Lantern/LNP22 anonymous-credential statement.
     IrohaBootleLanternAnoncredV1(IrohaBootleLanternAnoncredStatementV1),
@@ -5803,12 +5812,16 @@ fn validate_jindo(
                     .try_into()
                     .expect("Jindo commitment width is a multiple of four"),
             );
-            if i64::from(coefficient).abs() > IROHA_JINDO_MAX_ROUNDED_COMMITMENT_COEFFICIENT_V1 {
+            if !(IROHA_JINDO_MIN_ROUNDED_COMMITMENT_COEFFICIENT_V1
+                ..=IROHA_JINDO_MAX_ROUNDED_COMMITMENT_COEFFICIENT_V1)
+                .contains(&coefficient)
+            {
                 return Err(
                     PrivacyStatementValidationError::JindoCommitmentCoefficientOutOfRange {
                         commitment_index: u32_index(index)?,
                         coefficient_index: u32_index(coefficient_index)?,
                         value: coefficient,
+                        min: IROHA_JINDO_MIN_ROUNDED_COMMITMENT_COEFFICIENT_V1,
                         max: IROHA_JINDO_MAX_ROUNDED_COMMITMENT_COEFFICIENT_V1,
                     },
                 );
@@ -6585,7 +6598,7 @@ pub enum PrivacyProofV1 {
     VegaExistingCredentialZkV0(PrivacyProofBytesV1),
     /// Native Iroha P-256 X.509 predicate STARK proof.
     IrohaZkX509StarkP256V0(PrivacyProofBytesV1),
-    /// Native Iroha Jindo multilinear lattice polynomial-commitment proof.
+    /// Native Iroha Jindo batched univariate lattice polynomial-commitment proof.
     IrohaJindoPolynomialCommitmentV0(PrivacyProofBytesV1),
     /// Native Bootle Lantern/LNP22 anonymous-credential proof.
     IrohaBootleLanternAnoncredV1(PrivacyProofBytesV1),
@@ -7154,7 +7167,7 @@ pub enum PrivacyStatementValidationError {
     DuplicateJindoLatticeCommitment,
     /// A rounded public Jindo commitment coefficient is outside the fixed bound.
     #[error(
-        "Jindo commitment {commitment_index} coefficient {coefficient_index} is {value}; absolute value exceeds {max}"
+        "Jindo commitment {commitment_index} coefficient {coefficient_index} is {value}; expected {min}..={max}"
     )]
     JindoCommitmentCoefficientOutOfRange {
         /// Zero-based commitment index.
@@ -7163,8 +7176,10 @@ pub enum PrivacyStatementValidationError {
         coefficient_index: u32,
         /// Decoded signed little-endian coefficient.
         value: i32,
-        /// Fixed absolute-value bound.
-        max: i64,
+        /// Inclusive fixed lower bound.
+        min: i32,
+        /// Inclusive fixed upper bound.
+        max: i32,
     },
     /// Bootle/Lantern disclosed attribute count exceeds its fixed profile.
     #[error("Bootle/Lantern disclosed attribute count {count} exceeds {max}")]
@@ -9942,7 +9957,9 @@ mod tests {
         ));
 
         assert!(matches!(
-            mutate(|statement| statement.claimed_evaluations.pop()),
+            mutate(|statement| {
+                statement.claimed_evaluations.pop();
+            }),
             Err(PrivacyStatementValidationError::DeclaredCountMismatch {
                 field: PrivacyCountFieldV1::JindoClaimedEvaluations,
                 declared: 2,
@@ -9998,25 +10015,22 @@ mod tests {
 
         for boundary in [
             IROHA_JINDO_MAX_ROUNDED_COMMITMENT_COEFFICIENT_V1,
-            -IROHA_JINDO_MAX_ROUNDED_COMMITMENT_COEFFICIENT_V1,
+            IROHA_JINDO_MIN_ROUNDED_COMMITMENT_COEFFICIENT_V1,
         ] {
             let mut value = base.clone();
             let PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(statement) = &mut value else {
                 unreachable!()
             };
-            statement.polynomial_commitments[0].encoding[..4].copy_from_slice(
-                &i32::try_from(boundary)
-                    .expect("Jindo rounded-coefficient bound fits i32")
-                    .to_le_bytes(),
-            );
+            statement.polynomial_commitments[0].encoding[..4]
+                .copy_from_slice(&boundary.to_le_bytes());
             value
                 .validate(&limits)
                 .expect("inclusive Jindo rounded-coefficient boundary");
         }
 
         for outside in [
-            IROHA_JINDO_MAX_ROUNDED_COMMITMENT_COEFFICIENT_V1 + 1,
-            -IROHA_JINDO_MAX_ROUNDED_COMMITMENT_COEFFICIENT_V1 - 1,
+            i64::from(IROHA_JINDO_MAX_ROUNDED_COMMITMENT_COEFFICIENT_V1) + 1,
+            i64::from(IROHA_JINDO_MIN_ROUNDED_COMMITMENT_COEFFICIENT_V1) - 1,
         ] {
             let mut value = base.clone();
             let PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(statement) = &mut value else {
@@ -10034,6 +10048,7 @@ mod tests {
                         commitment_index: 0,
                         coefficient_index: 0,
                         value: observed,
+                        min: IROHA_JINDO_MIN_ROUNDED_COMMITMENT_COEFFICIENT_V1,
                         max: IROHA_JINDO_MAX_ROUNDED_COMMITMENT_COEFFICIENT_V1
                     }
                 ) if i64::from(observed) == outside

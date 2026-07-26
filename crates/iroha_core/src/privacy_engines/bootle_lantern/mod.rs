@@ -6,8 +6,11 @@
 //! consensus engine until committed issuer-policy lookup and verifier-side
 //! transaction-intent recomputation are wired into core.
 
+pub mod bounds;
 pub mod codec;
+pub mod compression;
 pub mod params;
+pub mod relation;
 pub mod ring;
 pub mod transcript;
 

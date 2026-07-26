@@ -7,6 +7,7 @@
 
 use std::sync::OnceLock;
 
+use sha2::{Digest, Sha256};
 use sha3::{
     Shake256,
     digest::{ExtendableOutput, Update, XofReader},
@@ -24,6 +25,7 @@ const CRS_DOMAIN_V1: &[u8] = b"iroha.privacy.jindo.transparent-crs.v1";
 const INNER_MATRIX_LABEL_V1: &[u8] = b"inner-msis-A";
 const MLWE_MATRIX_LABEL_V1: &[u8] = b"mlwe-B-prime";
 const OUTER_MATRIX_LABEL_V1: &[u8] = b"outer-msis-D";
+const CRS_DIGEST_DOMAIN_V1: &[u8] = b"iroha.privacy.jindo.transparent-crs-digest.v1";
 
 /// Fixed transparent commitment matrices.
 pub(crate) struct JindoCommitKeyV1 {
@@ -58,6 +60,52 @@ pub(crate) fn commit_key_v1() -> &'static JindoCommitKeyV1 {
             JINDO_OUTER_MODULI_V1,
         ),
     })
+}
+
+/// Digest the exact generated matrices in canonical row-major RNS order.
+pub(crate) fn crs_digest_v1() -> [u8; 32] {
+    static DIGEST: OnceLock<[u8; 32]> = OnceLock::new();
+    *DIGEST.get_or_init(|| {
+        let key = commit_key_v1();
+        let mut hash = Sha256::new();
+        digest_field(&mut hash, CRS_DIGEST_DOMAIN_V1);
+        digest_field(&mut hash, JINDO_PARAMETER_MANIFEST_V1);
+        digest_matrix(&mut hash, INNER_MATRIX_LABEL_V1, &key.inner);
+        digest_matrix(&mut hash, MLWE_MATRIX_LABEL_V1, &key.mlwe);
+        digest_matrix(&mut hash, OUTER_MATRIX_LABEL_V1, &key.outer);
+        hash.finalize().into()
+    })
+}
+
+fn digest_matrix(hash: &mut Sha256, label: &[u8], matrix: &[Vec<JindoRnsPolynomialV1>]) {
+    digest_field(hash, label);
+    Digest::update(
+        hash,
+        u64::try_from(matrix.len())
+            .expect("fixed Jindo matrix row count fits u64")
+            .to_le_bytes(),
+    );
+    Digest::update(
+        hash,
+        u64::try_from(matrix.first().map_or(0, Vec::len))
+            .expect("fixed Jindo matrix column count fits u64")
+            .to_le_bytes(),
+    );
+    for polynomial in matrix.iter().flatten() {
+        for residue in polynomial.residues().iter().flatten() {
+            Digest::update(hash, residue.to_le_bytes());
+        }
+    }
+}
+
+fn digest_field(hash: &mut Sha256, value: &[u8]) {
+    Digest::update(
+        hash,
+        u64::try_from(value.len())
+            .expect("fixed Jindo digest field length fits u64")
+            .to_le_bytes(),
+    );
+    Digest::update(hash, value);
 }
 
 fn matrix(
@@ -193,6 +241,13 @@ mod tests {
                 136_787_570_400_795,
             ]
         );
+    }
+
+    #[test]
+    fn transparent_crs_digest_is_nonzero_and_cached() {
+        let first = crs_digest_v1();
+        assert_ne!(first, [0; 32]);
+        assert_eq!(first, crs_digest_v1());
     }
 
     #[test]

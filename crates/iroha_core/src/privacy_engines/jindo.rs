@@ -11,22 +11,39 @@
 //! ring parameters, proof wire, prover, verifier, and adversarial vectors in
 //! this module are all complete.
 
+#[path = "jindo/codec.rs"]
+mod codec;
 #[path = "jindo/crs.rs"]
 mod crs;
 #[path = "jindo/encoding.rs"]
 mod encoding;
 #[path = "jindo/field.rs"]
 mod field;
+#[path = "jindo/norm.rs"]
+mod norm;
 #[path = "jindo/parameters.rs"]
 mod parameters;
+#[path = "jindo/protocol.rs"]
+mod protocol;
 #[path = "jindo/ring.rs"]
 mod ring;
 #[path = "jindo/sampling.rs"]
 mod sampling;
+#[path = "jindo/transcript.rs"]
+mod transcript;
+
+pub use codec::{JindoProofCodecErrorV1, JindoProofSectionV1};
+pub use parameters::JINDO_PARAMETER_MANIFEST_V1;
+pub use protocol::{
+    JINDO_NATIVE_PROOF_BYTES_V1, JINDO_SOURCE_PROFILE_V1, JINDO_SUITE_V1, JindoBindingFieldV1,
+    JindoErrorV1, JindoOpeningV1, commit_polynomial_v1, evaluate_polynomial_v1,
+    jindo_crs_digest_v1, prove_batched_evaluation_v1, verify_batched_evaluation_v1,
+};
+pub use sampling::JindoSamplingErrorV1;
+pub use transcript::JindoTranscriptErrorV1;
 
 pub(crate) use field::JindoFieldElementV1;
-pub(crate) use parameters::JINDO_PARAMETERS_V1;
-pub(crate) use ring::{JINDO_INNER_MODULI_V1, JINDO_OUTER_MODULI_V1, JindoRnsPolynomialV1};
+pub(crate) use ring::JindoRnsPolynomialV1;
 
 /// Exact coefficient-field byte width in the first native Jindo profile.
 pub const JINDO_FIELD_ELEMENT_BYTES_V1: usize = 32;

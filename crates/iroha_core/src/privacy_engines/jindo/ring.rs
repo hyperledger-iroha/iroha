@@ -7,6 +7,7 @@
 //! overflow.
 
 use super::JINDO_RING_DEGREE_V1;
+use zeroize::Zeroize;
 
 /// One pinned NTT prime and primitive `2d`-th root.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -41,6 +42,12 @@ pub(crate) const JINDO_OUTER_MODULI_V1: [JindoPrimeModulusV1; 2] = [
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct JindoRnsPolynomialV1 {
     residues: [[u64; JINDO_RING_DEGREE_V1]; 2],
+}
+
+impl Zeroize for JindoRnsPolynomialV1 {
+    fn zeroize(&mut self) {
+        self.residues.zeroize();
+    }
 }
 
 impl Default for JindoRnsPolynomialV1 {
@@ -138,6 +145,32 @@ impl JindoRnsPolynomialV1 {
         Self { residues }
     }
 
+    /// Multiply every coefficient by `2^exponent` in the selected ring.
+    pub(crate) fn scale_power_of_two(
+        &self,
+        exponent: u32,
+        moduli: [JindoPrimeModulusV1; 2],
+    ) -> Self {
+        let mut residues = self.residues;
+        for ((output, input), prime) in residues.iter_mut().zip(self.residues.iter()).zip(moduli) {
+            let scalar = pow_mod(2, u64::from(exponent), prime.modulus);
+            for (output, input) in output.iter_mut().zip(input) {
+                *output = mul_mod(*input, scalar, prime.modulus);
+            }
+        }
+        Self { residues }
+    }
+
+    /// Return whether this ring element is the additive identity.
+    pub(crate) fn is_zero(&self) -> bool {
+        self.residues.iter().flatten().all(|residue| *residue == 0)
+    }
+
+    /// Erase every residue in place.
+    pub(crate) fn clear(&mut self) {
+        self.zeroize();
+    }
+
     /// Reconstruct one coefficient in `[0, q_0 q_1)`.
     pub(crate) fn reconstruct_coefficient(
         &self,
@@ -153,6 +186,7 @@ impl JindoRnsPolynomialV1 {
     }
 
     /// Return the absolute value of the balanced CRT representative.
+    #[cfg(test)]
     pub(crate) fn balanced_abs_coefficient(
         &self,
         coefficient_index: usize,

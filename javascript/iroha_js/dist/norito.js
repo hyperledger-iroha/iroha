@@ -3829,7 +3829,7 @@ function normalizeU128Input(value, context) {
 }
 
 function encodeDomainIdValue(value, context) {
-  const literal = assertNonEmptyString(value, context);
+  const literal = assertExactNonEmptyString(value, context);
   if (literal.trim() !== literal) {
     throw new TypeError(`${context} must not contain surrounding whitespace`);
   }
@@ -3863,29 +3863,47 @@ function decodeArchivedDomainIdValue(payload, context) {
 }
 
 function encodeNameValue(value, context) {
-  return encodeNoritoStringValue(assertNonEmptyString(value, context));
+  const literal = assertExactNonEmptyString(value, context);
+  if (/\p{White_Space}/u.test(literal)) {
+    throw new TypeError(`${context} must not contain whitespace`);
+  }
+  if (/[@#$]/u.test(literal)) {
+    throw new TypeError(`${context} contains a reserved Name character`);
+  }
+  return encodeNoritoStringValue(literal.normalize("NFC"));
 }
 
 function decodeNameValue(payload, context) {
-  return decodeStringValue(payload, context);
+  const literal = decodeStringValue(payload, context);
+  if (literal.length === 0 || /\p{White_Space}/u.test(literal)) {
+    throw new TypeError(`${context} must be a non-empty Name without whitespace`);
+  }
+  if (/[@#$]/u.test(literal)) {
+    throw new TypeError(`${context} contains a reserved Name character`);
+  }
+  return literal.normalize("NFC");
 }
 
 function encodeRoleIdValue(value, context) {
-  return encodeNoritoStringValue(assertNonEmptyString(value, context));
+  return encodeNoritoField(encodeNameValue(value, `${context}.name`));
 }
 
 function decodeRoleIdValue(payload, context) {
-  return decodeStringValue(payload, context);
+  return decodeNestedValue(payload, decodeNameValue, `${context}.name`);
 }
 
 function encodeNftIdValue(value, context) {
-  const literal = assertNonEmptyString(value, context);
+  const literal = assertExactNonEmptyString(value, context);
   const separator = literal.indexOf("$");
   if (separator <= 0 || separator === literal.length - 1) {
     throw new Error(`${context} must use name$domain`);
   }
+  const domain = literal.slice(separator + 1);
   return encodeTupleValue([
-    encodeDomainIdValue(literal.slice(separator + 1), `${context}.domain`),
+    encodeDomainIdValue(
+      domain.includes(".") ? domain : `${domain}.universal`,
+      `${context}.domain`,
+    ),
     encodeNameValue(literal.slice(0, separator), `${context}.name`),
   ]);
 }
@@ -3899,7 +3917,7 @@ function decodeNftIdValue(payload, context) {
 }
 
 function encodeRwaIdValue(value, context) {
-  const literal = assertNonEmptyString(value, context);
+  const literal = assertExactNonEmptyString(value, context);
   const separator = literal.indexOf("$");
   if (separator <= 0 || separator === literal.length - 1) {
     throw new Error(`${context} must use hash$domain`);
@@ -4114,8 +4132,16 @@ function decodeCanonicalReplicationId(value, context) {
   return Buffer.from(value, "hex");
 }
 
+function encodeReplicationIdValue(value, context) {
+  return encodeNoritoField(decodeCanonicalReplicationId(value, context));
+}
+
 function decodeReplicationIdValue(payload, context) {
-  const bytes = decodeFixedBytesValue(payload, 32, context);
+  const bytes = decodeNestedValue(
+    payload,
+    (inner, innerContext) => decodeFixedBytesValue(inner, 32, innerContext),
+    `${context}.value`,
+  );
   if (bytes.every((byte) => byte === 0)) {
     throw new TypeError(`${context} must not be the zero identifier`);
   }
@@ -4287,10 +4313,6 @@ function encodeReplicationOrderInstruction(instruction) {
       ["order_id", "order_payload", "issued_epoch", "deadline_epoch"],
       "IssueReplicationOrder",
     );
-    const orderId = decodeCanonicalReplicationId(
-      value.order_id,
-      "IssueReplicationOrder.order_id",
-    );
     const orderPayload = decodeExactStandardBase64(
       value.order_payload,
       "IssueReplicationOrder.order_payload",
@@ -4312,7 +4334,12 @@ function encodeReplicationOrderInstruction(instruction) {
     return encodeInstructionEnvelope(
       ISSUE_REPLICATION_ORDER_WIRE_ID,
       encodeStructValue([
-        [orderId],
+        [
+          encodeReplicationIdValue(
+            value.order_id,
+            "IssueReplicationOrder.order_id",
+          ),
+        ],
         [encodeByteVecValue(orderPayload, "IssueReplicationOrder.order_payload")],
         [encodeU64Value(issuedEpoch, "IssueReplicationOrder.issued_epoch")],
         [encodeU64Value(deadlineEpoch, "IssueReplicationOrder.deadline_epoch")],
@@ -4330,14 +4357,18 @@ function encodeReplicationOrderInstruction(instruction) {
     return encodeInstructionEnvelope(
       COMPLETE_REPLICATION_ORDER_WIRE_ID,
       encodeStructValue([
-        [decodeCanonicalReplicationId(
-          value.order_id,
-          "CompleteReplicationOrder.order_id",
-        )],
-        [decodeCanonicalReplicationId(
-          value.provider_id,
-          "CompleteReplicationOrder.provider_id",
-        )],
+        [
+          encodeReplicationIdValue(
+            value.order_id,
+            "CompleteReplicationOrder.order_id",
+          ),
+        ],
+        [
+          encodeReplicationIdValue(
+            value.provider_id,
+            "CompleteReplicationOrder.provider_id",
+          ),
+        ],
         [encodeU64Value(
           value.completion_epoch,
           "CompleteReplicationOrder.completion_epoch",
@@ -4356,10 +4387,12 @@ function encodeReplicationOrderInstruction(instruction) {
     return encodeInstructionEnvelope(
       EXPIRE_REPLICATION_ORDER_WIRE_ID,
       encodeStructValue([
-        [decodeCanonicalReplicationId(
-          value.order_id,
-          "ExpireReplicationOrder.order_id",
-        )],
+        [
+          encodeReplicationIdValue(
+            value.order_id,
+            "ExpireReplicationOrder.order_id",
+          ),
+        ],
         [encodeU64Value(
           value.expiration_epoch,
           "ExpireReplicationOrder.expiration_epoch",
@@ -5199,7 +5232,7 @@ function encodeRwaInstruction(instruction) {
 }
 
 function encodeKaigiIdValue(value, context) {
-  const literal = assertNonEmptyString(
+  const literal = assertExactNonEmptyString(
     typeof value === "string" ? value : `${value.domain_id}:${value.call_name}`,
     context,
   );
@@ -5208,7 +5241,7 @@ function encodeKaigiIdValue(value, context) {
     throw new Error(`${context} must use domain:call format`);
   }
   return encodeStructValue([
-    [encodeNoritoField(encodeDomainIdValue(literal.slice(0, separator), `${context}.domain_id`))],
+    [encodeDomainIdValue(literal.slice(0, separator), `${context}.domain_id`)],
     [encodeNameValue(literal.slice(separator + 1), `${context}.call_name`)],
   ]);
 }
@@ -5216,7 +5249,7 @@ function encodeKaigiIdValue(value, context) {
 function decodeKaigiIdValue(payload, context) {
   const fields = decodeStructFields(payload, context, ["domain_id", "call_name"]);
   return {
-    domain_id: decodeNestedValue(fields.domain_id, decodeDomainIdValue, `${context}.domain_id`),
+    domain_id: decodeDomainIdValue(fields.domain_id, `${context}.domain_id`),
     call_name: decodeNameValue(fields.call_name, `${context}.call_name`),
   };
 }
@@ -6044,7 +6077,7 @@ function encodeHashLiteralBytes(value, context) {
   if (Buffer.isBuffer(value) || ArrayBuffer.isView(value) || value instanceof ArrayBuffer || Array.isArray(value)) {
     bytes = encodeFixedBytesValue(value, 32, context);
   } else {
-    const literal = assertNonEmptyString(value, context);
+    const literal = assertExactNonEmptyString(value, context);
     const match = HASH_LITERAL_RE.exec(literal);
     if (match) {
       const [, body, checksum] = match;
@@ -8906,6 +8939,13 @@ function assertNonEmptyString(value, context) {
     throw new TypeError(`${context} must be a non-empty string`);
   }
   return value.trim();
+}
+
+function assertExactNonEmptyString(value, context) {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new TypeError(`${context} must be a non-empty string`);
+  }
+  return value;
 }
 
 function describeInstructionShape(instruction) {

@@ -30,6 +30,8 @@ pub(crate) const JINDO_MLWE_STD_DEV_V1: f64 = f64::from_bits(0x401b_14c2_f863_e9
 pub(crate) const JINDO_MASK_MLWE_STD_DEV_V1: f64 = f64::from_bits(0x40a3_2633_e6df_28bf);
 
 const MAX_GAUSSIAN_ATTEMPTS_V1: usize = 4_096;
+const MAX_UNIFORM_REJECTION_ATTEMPTS_V1: usize = 4_096;
+const MAX_FIELD_REJECTION_ATTEMPTS_V1: usize = 65_536;
 const GAUSSIAN_TAIL_STANDARD_DEVIATIONS_V1: f64 = 14.0;
 
 // Only the non-negligible `-b^i / p` entries survive the paper's threshold.
@@ -54,7 +56,7 @@ const DELTA_INVERSE_V1: [f64; JINDO_ENCODING_EXPONENT_V1] = [
 
 /// Bounded prover-side sampling failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
-pub(crate) enum JindoSamplingErrorV1 {
+pub enum JindoSamplingErrorV1 {
     /// The supplied randomness stream failed every bounded rejection attempt.
     #[error("Jindo Gaussian rejection sampler exhausted its fixed attempt budget")]
     RejectionBudgetExhausted,
@@ -64,6 +66,26 @@ pub(crate) enum JindoSamplingErrorV1 {
     /// A sampled coefficient exceeded the fixed signed representation.
     #[error("Jindo Gaussian sample exceeded the fixed signed coefficient range")]
     SampleOutOfRange,
+    /// Uniform coefficient-field sampling exhausted its fixed retry budget.
+    #[error("Jindo coefficient-field rejection sampler exhausted its fixed attempt budget")]
+    FieldRejectionBudgetExhausted,
+}
+
+/// Sample one uniform canonical coefficient-field element.
+pub(crate) fn sample_uniform_field_element_v1<R>(
+    rng: &mut R,
+) -> Result<JindoFieldElementV1, JindoSamplingErrorV1>
+where
+    R: CryptoRng + RngCore,
+{
+    for _ in 0..MAX_FIELD_REJECTION_ATTEMPTS_V1 {
+        let mut bytes = [0_u8; 32];
+        rng.fill_bytes(&mut bytes);
+        if let Some(value) = JindoFieldElementV1::from_canonical_bytes(bytes) {
+            return Ok(value);
+        }
+    }
+    Err(JindoSamplingErrorV1::FieldRejectionBudgetExhausted)
 }
 
 /// Sample one discrete Gaussian integer by bounded uniform rejection.
@@ -102,7 +124,7 @@ where
     }
 
     for _ in 0..MAX_GAUSSIAN_ATTEMPTS_V1 {
-        let offset = sample_bounded_u64_v1(width, rng);
+        let offset = sample_bounded_u64_v1(width, rng)?;
         let candidate = i128::from(lower) + i128::from(offset);
         let candidate =
             i64::try_from(candidate).map_err(|_| JindoSamplingErrorV1::SampleOutOfRange)?;
@@ -189,15 +211,16 @@ where
     ))
 }
 
-fn sample_bounded_u64_v1(bound: u64, rng: &mut impl RngCore) -> u64 {
+fn sample_bounded_u64_v1(bound: u64, rng: &mut impl RngCore) -> Result<u64, JindoSamplingErrorV1> {
     debug_assert!(bound > 0);
     let acceptance_limit = u64::MAX - (u64::MAX % bound);
-    loop {
+    for _ in 0..MAX_UNIFORM_REJECTION_ATTEMPTS_V1 {
         let candidate = rng.next_u64();
         if candidate < acceptance_limit {
-            return candidate % bound;
+            return Ok(candidate % bound);
         }
     }
+    Err(JindoSamplingErrorV1::RejectionBudgetExhausted)
 }
 
 fn uniform_open_v1(rng: &mut impl RngCore) -> f64 {
@@ -282,6 +305,29 @@ mod tests {
 
     impl CryptoRng for StuckRng {}
 
+    struct RejectingFieldRng;
+
+    impl RngCore for RejectingFieldRng {
+        fn next_u32(&mut self) -> u32 {
+            u32::MAX
+        }
+
+        fn next_u64(&mut self) -> u64 {
+            u64::MAX
+        }
+
+        fn fill_bytes(&mut self, destination: &mut [u8]) {
+            destination.fill(u8::MAX);
+        }
+
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
+            self.fill_bytes(destination);
+            Ok(())
+        }
+    }
+
+    impl CryptoRng for RejectingFieldRng {}
+
     #[test]
     fn invalid_parameters_and_failed_randomness_are_rejected() {
         let mut rng = TestRng::new(1);
@@ -297,6 +343,26 @@ mod tests {
             sample_discrete_gaussian_v1(0.0, 1.0, &mut StuckRng),
             Err(JindoSamplingErrorV1::RejectionBudgetExhausted)
         );
+        assert_eq!(
+            sample_uniform_field_element_v1(&mut RejectingFieldRng),
+            Err(JindoSamplingErrorV1::FieldRejectionBudgetExhausted)
+        );
+    }
+
+    #[test]
+    fn uniform_field_sampler_is_canonical_and_reproducible() {
+        let mut first = TestRng::new(0xfeed_face_cafe_babe);
+        let mut replay = first.clone();
+        let first_values: Vec<_> = (0..64)
+            .map(|_| sample_uniform_field_element_v1(&mut first).expect("field sample"))
+            .collect();
+        let replay_values: Vec<_> = (0..64)
+            .map(|_| sample_uniform_field_element_v1(&mut replay).expect("field sample"))
+            .collect();
+        assert_eq!(first_values, replay_values);
+        assert!(first_values.iter().all(|value| {
+            JindoFieldElementV1::from_canonical_bytes(value.to_canonical_bytes()).is_some()
+        }));
     }
 
     #[test]

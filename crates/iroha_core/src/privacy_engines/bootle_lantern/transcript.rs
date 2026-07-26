@@ -802,8 +802,31 @@ mod tests {
         let challenge = derive_presentation_challenge_v1(binding(), b"canonical commitments")
             .expect("challenge");
 
-        assert_eq!(&application.coefficients()[..4], &[0, 0, 0, 0]);
-        assert_eq!(&proof.coefficients()[..4], &[0, 0, 0, 0]);
-        assert_eq!(&challenge.coefficients()[..8], &[0, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(
+            &application.coefficients()[..4],
+            &[3_766, 7_759, 1_604, 8_810]
+        );
+        assert_eq!(
+            &proof.coefficients()[..4],
+            &[
+                81_301_060_368_069,
+                36_322_145_752_893,
+                359_779_698_830_871,
+                64_982_682_605_156,
+            ]
+        );
+        assert_eq!(
+            &challenge.coefficients()[..8],
+            &[
+                1_125_899_906_843_217,
+                3,
+                4,
+                4,
+                8,
+                1_125_899_906_843_214,
+                1_125_899_906_843_220,
+                1_125_899_906_843_220,
+            ]
+        );
     }
 }

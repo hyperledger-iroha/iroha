@@ -4,8 +4,9 @@
 from __future__ import annotations
 
 import argparse
-import json
+import fnmatch
 import hashlib
+import json
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -18,12 +19,35 @@ DEFAULT_STATE = Path("artifacts/swift_fixture_regen_state.json")
 DEFAULT_ODD_OWNER = "android-foundations"
 DEFAULT_EVEN_OWNER = "swift-lead"
 DEFAULT_CADENCE_LABEL = "weekly-wed-1700utc"
+MANAGED_FIXTURE_PATTERNS = (
+    "*.norito",
+    "*transaction_payload*.json",
+    "*transaction_fixtures*.manifest.json",
+    "*trigger_instructions*.json",
+)
+
+
+def is_managed_fixture(relative_path: Path) -> bool:
+    """Match the fixture subset mirrored by ``swift_fixture_regen.sh``."""
+    if relative_path.parent == Path("."):
+        if fnmatch.fnmatchcase(relative_path.name, "swift_*.norito"):
+            return False
+        if relative_path.name == "transaction_payload.json":
+            return False
+    return any(
+        fnmatch.fnmatchcase(relative_path.name, pattern)
+        for pattern in MANAGED_FIXTURE_PATTERNS
+    )
 
 
 def collect_files(root: Path) -> List[Path]:
     if not root.exists():
         raise FileNotFoundError(f"missing directory: {root}")
-    files = [p for p in root.rglob("*") if p.is_file()]
+    files = [
+        path
+        for path in root.rglob("*")
+        if path.is_file() and is_managed_fixture(path.relative_to(root))
+    ]
     files.sort()
     return files
 

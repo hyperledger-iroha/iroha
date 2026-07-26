@@ -5,6 +5,7 @@ use thiserror::Error;
 use super::params::{
     APPLICATION_RING_DEGREE_V1, CHALLENGE_OMEGA_V1, PROOF_MODULUS_V1, PROOF_RESIDUE_BYTES_V1,
 };
+use super::ring::ProofPolynomialV1;
 
 /// Proof wire magic.
 pub const PROOF_MAGIC_V1: [u8; 4] = *b"ILN1";
@@ -216,6 +217,72 @@ impl BootleLanternPresentationProofV1 {
     pub fn z4(&self) -> &[u64] {
         &self.coefficients[Z4_START..PROOF_END]
     }
+
+    /// Return one typed `tB` polynomial.
+    #[must_use]
+    pub fn t_b_polynomial(&self, index: usize) -> Option<ProofPolynomialV1> {
+        typed_polynomial(self.t_b(), index)
+    }
+
+    /// Return one typed `h` polynomial.
+    #[must_use]
+    pub fn h_polynomial(&self, index: usize) -> Option<ProofPolynomialV1> {
+        typed_polynomial(self.h(), index)
+    }
+
+    /// Return one typed compressed `tA1` polynomial.
+    #[must_use]
+    pub fn t_a1_polynomial(&self, index: usize) -> Option<ProofPolynomialV1> {
+        typed_polynomial(self.t_a1(), index)
+    }
+
+    /// Return the typed auto-stable challenge polynomial.
+    #[must_use]
+    pub fn challenge_polynomial(&self) -> ProofPolynomialV1 {
+        typed_polynomial(self.challenge(), 0)
+            .expect("validated proof contains exactly one challenge polynomial")
+    }
+
+    /// Return one typed reconciliation-hint polynomial.
+    #[must_use]
+    pub fn hint_polynomial(&self, index: usize) -> Option<ProofPolynomialV1> {
+        typed_polynomial(self.hint(), index)
+    }
+
+    /// Return one typed `z1` polynomial.
+    #[must_use]
+    pub fn z1_polynomial(&self, index: usize) -> Option<ProofPolynomialV1> {
+        typed_polynomial(self.z1(), index)
+    }
+
+    /// Return one typed `z21` polynomial.
+    #[must_use]
+    pub fn z21_polynomial(&self, index: usize) -> Option<ProofPolynomialV1> {
+        typed_polynomial(self.z21(), index)
+    }
+
+    /// Return one typed `z3` polynomial.
+    #[must_use]
+    pub fn z3_polynomial(&self, index: usize) -> Option<ProofPolynomialV1> {
+        typed_polynomial(self.z3(), index)
+    }
+
+    /// Return one typed `z4` polynomial.
+    #[must_use]
+    pub fn z4_polynomial(&self, index: usize) -> Option<ProofPolynomialV1> {
+        typed_polynomial(self.z4(), index)
+    }
+}
+
+fn typed_polynomial(residues: &[u64], index: usize) -> Option<ProofPolynomialV1> {
+    let start = index.checked_mul(APPLICATION_RING_DEGREE_V1)?;
+    let end = start.checked_add(APPLICATION_RING_DEGREE_V1)?;
+    let coefficients: [u64; APPLICATION_RING_DEGREE_V1] =
+        residues.get(start..end)?.try_into().ok()?;
+    Some(
+        ProofPolynomialV1::new(coefficients)
+            .expect("strict proof decoder already established canonical residues"),
+    )
 }
 
 fn validate_coefficients(coefficients: &[u64]) -> Result<(), ProofCodecErrorV1> {
@@ -436,6 +503,52 @@ mod tests {
         assert_eq!(proof.z3().len(), 4 * 64);
         assert_eq!(proof.z4().len(), 4 * 64);
         assert_eq!(PROOF_END, proof.coefficients().len());
+        let component_getters: [(
+            usize,
+            fn(&BootleLanternPresentationProofV1, usize) -> Option<ProofPolynomialV1>,
+        ); 8] = [
+            (
+                T_B_POLYNOMIALS_V1,
+                BootleLanternPresentationProofV1::t_b_polynomial,
+            ),
+            (
+                H_POLYNOMIALS_V1,
+                BootleLanternPresentationProofV1::h_polynomial,
+            ),
+            (
+                T_A1_POLYNOMIALS_V1,
+                BootleLanternPresentationProofV1::t_a1_polynomial,
+            ),
+            (
+                HINT_POLYNOMIALS_V1,
+                BootleLanternPresentationProofV1::hint_polynomial,
+            ),
+            (
+                Z1_POLYNOMIALS_V1,
+                BootleLanternPresentationProofV1::z1_polynomial,
+            ),
+            (
+                Z21_POLYNOMIALS_V1,
+                BootleLanternPresentationProofV1::z21_polynomial,
+            ),
+            (
+                Z3_POLYNOMIALS_V1,
+                BootleLanternPresentationProofV1::z3_polynomial,
+            ),
+            (
+                Z4_POLYNOMIALS_V1,
+                BootleLanternPresentationProofV1::z4_polynomial,
+            ),
+        ];
+        for (count, get) in component_getters {
+            assert!((0..count).all(|index| get(&proof, index).is_some()));
+            assert!(get(&proof, count).is_none());
+            assert!(get(&proof, usize::MAX).is_none());
+        }
+        assert_eq!(
+            proof.challenge_polynomial().coefficients(),
+            proof.challenge()
+        );
     }
 
     #[test]
