@@ -12,14 +12,14 @@ use std::collections::BTreeMap;
 use iroha_data_model::privacy::{
     ANONYMOUS_PGC_MAX_ANONYMITY_SET_SIZE_V1, ANONYMOUS_PGC_MAX_RECIPIENTS_V1,
     AnonymousPgcActivationLimitsV1, AnonymousPgcKOutOfNStatementV1,
-    PRIVACY_PGC_ACCOUNT_STATE_ROOT_DOMAIN_V1, PrivacyAssuranceV1, PrivacyConsensusLimitsV1,
-    PrivacyEngineIdV1, PrivacyEngineManifestDigestV1, PrivacyParameterDigestV1,
-    PrivacyParameterIdV1, PrivacyPgcAccountBootstrapV1, PrivacyProofSystemIdV1,
-    PrivacyProtocolActivationLimitsV1, PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1,
-    PrivacyProtocolLifecycleV1, PrivacyStatementSchemaDigestV1, PrivacyVerifierDigestV1,
-    TAIRA_PRIVACY_MAX_COMMITMENTS_PER_ACTION_V1, TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1,
-    VERANGE_HARD_MAX_AGGREGATION_COUNT_V1, VeRangeActivationLimitsV1,
-    VeRangeTransparentRangeStatementV1,
+    PRIVACY_PGC_ACCOUNT_STATE_ROOT_DOMAIN_V1, PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1,
+    PrivacyAssuranceV1, PrivacyConsensusLimitsV1, PrivacyEngineIdV1, PrivacyEngineManifestDigestV1,
+    PrivacyParameterDigestV1, PrivacyParameterIdV1, PrivacyPgcAccountBootstrapV1,
+    PrivacyProofSystemIdV1, PrivacyProtocolActivationLimitsV1, PrivacyProtocolActivationRecordV1,
+    PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1, PrivacyStatementSchemaDigestV1,
+    PrivacyVerifierDigestV1, TAIRA_PRIVACY_MAX_COMMITMENTS_PER_ACTION_V1,
+    TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1, VERANGE_HARD_MAX_AGGREGATION_COUNT_V1,
+    VeRangeActivationLimitsV1, VeRangeTransparentRangeStatementV1,
 };
 use iroha_schema::{FloatMode, IntMode, IntoSchema, MetaMapEntry, Metadata};
 use sha2::{Digest, Sha256};
@@ -30,9 +30,10 @@ use crate::privacy_engines::{
         ANONYMOUS_PGC_FULL_ENGINE_AVAILABLE_V1, AnonymousPgcParametersV1, PGC_SOURCE_PROFILE_V1,
         bootstrap::{
             MAX_PGC_BOOTSTRAP_NAMESPACE_BYTES_V1, MAX_PGC_BOOTSTRAP_PROOF_BYTES_V1,
-            PGC_BOOTSTRAP_ACCOUNT_COUNTS_V1, PGC_BOOTSTRAP_MAX_AGGREGATE_BALANCE_V1,
-            PGC_BOOTSTRAP_PROOF_VERSION_V1, PGC_BOOTSTRAP_SUITE_V1,
-            PGC_BOOTSTRAP_TABLE_DIGEST_DOMAIN_V1, PGC_BOOTSTRAP_TABLE_DIGEST_SCHEMA_V1,
+            PGC_BOOTSTRAP_ACCOUNT_COUNTS_V1, PGC_BOOTSTRAP_INITIAL_EPOCH_V1,
+            PGC_BOOTSTRAP_MAX_AGGREGATE_BALANCE_V1, PGC_BOOTSTRAP_PROOF_VERSION_V1,
+            PGC_BOOTSTRAP_SUITE_V1, PGC_BOOTSTRAP_TABLE_DIGEST_DOMAIN_V1,
+            PGC_BOOTSTRAP_TABLE_DIGEST_SCHEMA_V1,
         },
         payment::{
             MAX_PGC_PAYMENT_PROOF_BYTES_V1, PGC_PAYMENT_ANONYMITY_SET_SIZES_V1,
@@ -230,6 +231,7 @@ fn compiled_anonymous_pgc_profile_v1()
         .to_be_bytes();
 
     let bootstrap_version = [PGC_BOOTSTRAP_PROOF_VERSION_V1];
+    let bootstrap_initial_epoch = PGC_BOOTSTRAP_INITIAL_EPOCH_V1.to_be_bytes();
     let bootstrap_count_16 = u32::try_from(PGC_BOOTSTRAP_ACCOUNT_COUNTS_V1[0])
         .map_err(|_| CompiledPrivacyProfileErrorV1::ProfileInitializationFailed { protocol_id })?
         .to_be_bytes();
@@ -270,6 +272,7 @@ fn compiled_anonymous_pgc_profile_v1()
             &payment_proof_cap,
             PGC_BOOTSTRAP_SUITE_V1,
             &bootstrap_version,
+            &bootstrap_initial_epoch,
             ANONYMOUS_PGC_BOOTSTRAP_PROOF_WIRE_LABEL_V1,
             &bootstrap_count_16,
             &bootstrap_count_32,
@@ -309,6 +312,7 @@ fn compiled_anonymous_pgc_profile_v1()
             &bootstrap_schema_digest,
             PGC_PAYMENT_POOL_INVARIANT_SCHEMA_V1,
             PGC_BOOTSTRAP_TABLE_DIGEST_SCHEMA_V1,
+            &bootstrap_initial_epoch,
             PRIVACY_PGC_ACCOUNT_STATE_ROOT_DOMAIN_V1,
             ANONYMOUS_PGC_ACCOUNT_ROOT_SCHEMA_V1,
             ANONYMOUS_PGC_VERIFIED_EFFECT_SCHEMA_V1,
@@ -1048,6 +1052,10 @@ mod tests {
             .expect("profile");
         assert_eq!(first, second);
         assert_eq!(
+            PGC_BOOTSTRAP_INITIAL_EPOCH_V1,
+            PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1
+        );
+        assert_eq!(
             first.protocol_limits,
             PrivacyProtocolActivationLimitsV1::AnonymousPgcKOutOfNV1(
                 AnonymousPgcActivationLimitsV1 {
@@ -1065,11 +1073,11 @@ mod tests {
                 hex::encode(first.engine_manifest_digest.as_bytes()),
             ),
             (
-                "REPLACE_PGC_PROFILE_PARAMETER_ID".to_owned(),
+                "58c1a93d39f23727ae8b5bbb661414f3dcadf2479575282cd7e3b9ebbb5589fc".to_owned(),
                 "e6cfafc5380a4a4c248f399684a5e43df1192bc460bd4de630eea985655ec575".to_owned(),
-                "REPLACE_PGC_PROFILE_VERIFIER_DIGEST".to_owned(),
-                "REPLACE_PGC_PROFILE_STATEMENT_SCHEMA_DIGEST".to_owned(),
-                "REPLACE_PGC_PROFILE_ENGINE_MANIFEST_DIGEST".to_owned(),
+                "f4d0bc2d8e806a656be12a693598679896c1acf113733c4f29121c592f00c8fa".to_owned(),
+                "5098dd5693ae9b8a45e652a9dfa7774326e3fbc6ae6b616d5ed16dd3c536a176".to_owned(),
+                "2e81158ef41e5487eef19c9d80d2dc0ac8d0ead34eccd5c87eec6ad40d4cfe95".to_owned(),
             )
         );
     }

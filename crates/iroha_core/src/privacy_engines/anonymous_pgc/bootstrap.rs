@@ -26,6 +26,8 @@ use crate::privacy_engines::p256::{
 pub const PGC_BOOTSTRAP_SUITE_V1: &[u8] = b"iroha.anonymous-pgc.account-bootstrap.p256.sha256.v1";
 /// Canonical bootstrap-proof wire version.
 pub const PGC_BOOTSTRAP_PROOF_VERSION_V1: u8 = 1;
+/// Only admissible initial account-state epoch for a first-release bootstrap.
+pub const PGC_BOOTSTRAP_INITIAL_EPOCH_V1: u64 = 1;
 /// Closed first-release account-table sizes.
 pub const PGC_BOOTSTRAP_ACCOUNT_COUNTS_V1: [usize; 3] = [16, 32, 64];
 /// Maximum exact canonical namespace bytes absorbed by a bootstrap transcript.
@@ -71,9 +73,11 @@ impl<'a> AnonymousPgcBootstrapStatementV1<'a> {
     ///
     /// # Errors
     ///
-    /// Rejects an empty/oversized namespace, zero root/epoch/supply,
-    /// unsupported account count, length mismatch, unsorted or duplicate keys,
-    /// malformed points, or governed transcript-digest mismatches.
+    /// Rejects an initial epoch other than the exact first-release value before
+    /// validating or allocating for any other statement field. Also rejects an
+    /// empty/oversized namespace, zero root/supply, unsupported account count,
+    /// length mismatch, unsorted or duplicate keys, malformed points, or
+    /// governed transcript-digest mismatches.
     pub fn new(
         namespace_encoding: &'a [u8],
         initial_root: [u8; 32],
@@ -83,6 +87,12 @@ impl<'a> AnonymousPgcBootstrapStatementV1<'a> {
         encrypted_balances: &'a [TwistedElGamalCiphertextV1],
         transcript_binding: TranscriptBindingV1<'a>,
     ) -> Result<Self, AnonymousPgcError> {
+        if initial_epoch != PGC_BOOTSTRAP_INITIAL_EPOCH_V1 {
+            return Err(AnonymousPgcError::InvalidBootstrapEpoch {
+                actual: initial_epoch,
+                expected: PGC_BOOTSTRAP_INITIAL_EPOCH_V1,
+            });
+        }
         super::validate_binding(&transcript_binding)?;
         if namespace_encoding.is_empty()
             || namespace_encoding.len() > MAX_PGC_BOOTSTRAP_NAMESPACE_BYTES_V1
@@ -94,9 +104,6 @@ impl<'a> AnonymousPgcBootstrapStatementV1<'a> {
         }
         if initial_root == [0; 32] {
             return Err(AnonymousPgcError::ZeroBootstrapRoot);
-        }
-        if initial_epoch == 0 {
-            return Err(AnonymousPgcError::ZeroBootstrapEpoch);
         }
         if total_supply == 0 {
             return Err(AnonymousPgcError::ZeroPgcTotalSupply);
@@ -152,7 +159,7 @@ impl<'a> AnonymousPgcBootstrapStatementV1<'a> {
         self.initial_root
     }
 
-    /// Declared nonzero initial account-state epoch.
+    /// Declared canonical initial account-state epoch (exactly one).
     #[must_use]
     pub const fn initial_epoch(&self) -> u64 {
         self.initial_epoch
@@ -1104,7 +1111,7 @@ mod tests {
                 balances,
                 randomness,
                 initial_root: [0xa1; 32],
-                initial_epoch: 11,
+                initial_epoch: PGC_BOOTSTRAP_INITIAL_EPOCH_V1,
                 total_supply: u32::try_from(total).expect("fixture supply fits u32"),
             }
         }
@@ -1333,23 +1340,18 @@ mod tests {
         assert_ne!(changed_root_statement.bootstrap_table_digest(), baseline);
         assert!(verify_bootstrap(&changed_root_statement, &proof).is_err());
 
-        for (epoch, supply) in [
-            (fixture.initial_epoch + 1, fixture.total_supply),
-            (fixture.initial_epoch, fixture.total_supply + 1),
-        ] {
-            let changed = AnonymousPgcBootstrapStatementV1::new(
-                TEST_NAMESPACE,
-                fixture.initial_root,
-                epoch,
-                supply,
-                &fixture.public_keys,
-                &fixture.encrypted_balances,
-                binding(),
-            )
-            .expect("changed scalar public field");
-            assert_ne!(changed.bootstrap_table_digest(), baseline);
-            assert!(verify_bootstrap(&changed, &proof).is_err());
-        }
+        let changed_supply = AnonymousPgcBootstrapStatementV1::new(
+            TEST_NAMESPACE,
+            fixture.initial_root,
+            fixture.initial_epoch,
+            fixture.total_supply + 1,
+            &fixture.public_keys,
+            &fixture.encrypted_balances,
+            binding(),
+        )
+        .expect("changed supply public field");
+        assert_ne!(changed_supply.bootstrap_table_digest(), baseline);
+        assert!(verify_bootstrap(&changed_supply, &proof).is_err());
 
         let mut alternative_pairs = (50_000_u64..50_016)
             .map(|value| TwistedElGamalKeyPairV1::from_secret(secret(value)).expect("key"))
@@ -1648,7 +1650,38 @@ mod tests {
     }
 
     #[test]
-    fn statement_rejects_zero_and_oversized_namespace_root_epoch_and_supply() {
+    fn statement_rejects_noncanonical_epoch_before_all_other_validation() {
+        for epoch in [0, 2, 11, u64::MAX] {
+            let result = AnonymousPgcBootstrapStatementV1::new(
+                &[],
+                [0; 32],
+                epoch,
+                0,
+                &[],
+                &[],
+                TranscriptBindingV1 {
+                    chain_id: &[],
+                    genesis_hash: [0; 32],
+                    action_index: 0,
+                    statement_digest: [0; 32],
+                    parameter_id: [0; 32],
+                    parameter_digest: [0; 32],
+                    verifier_digest: [0; 32],
+                    statement_schema_digest: [0; 32],
+                    engine_manifest_digest: [0; 32],
+                    generator_digest: [0; 32],
+                },
+            );
+            assert!(matches!(
+                result,
+                Err(AnonymousPgcError::InvalidBootstrapEpoch { actual, expected })
+                    if actual == epoch && expected == PGC_BOOTSTRAP_INITIAL_EPOCH_V1
+            ));
+        }
+    }
+
+    #[test]
+    fn statement_rejects_zero_and_oversized_namespace_root_and_supply() {
         let fixture = Fixture::new_16();
         for namespace in [
             Vec::new(),
@@ -1678,18 +1711,6 @@ mod tests {
                 binding(),
             ),
             Err(AnonymousPgcError::ZeroBootstrapRoot)
-        ));
-        assert!(matches!(
-            AnonymousPgcBootstrapStatementV1::new(
-                TEST_NAMESPACE,
-                fixture.initial_root,
-                0,
-                fixture.total_supply,
-                &fixture.public_keys,
-                &fixture.encrypted_balances,
-                binding(),
-            ),
-            Err(AnonymousPgcError::ZeroBootstrapEpoch)
         ));
         assert!(matches!(
             AnonymousPgcBootstrapStatementV1::new(

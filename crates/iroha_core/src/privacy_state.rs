@@ -10,11 +10,12 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use iroha_data_model::privacy::{
     ANONYMOUS_PGC_ANONYMITY_SET_SIZES_V1, PRIVACY_PGC_ACCOUNT_STATE_ROOT_DOMAIN_V1,
-    PrivacyActivationValidationError, PrivacyCommitmentV1, PrivacyConsensusLimitsV1,
-    PrivacyNamespaceV1, PrivacyNullifierV1, PrivacyP256CiphertextV1, PrivacyP256PointV1,
-    PrivacyPgcAccountBootstrapDigestV1, PrivacyPgcAccountV1, PrivacyPgcBootstrapProofDigestV1,
-    PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1, PrivacyRootManagementV1,
-    PrivacyRootPublicationDigestV1, PrivacyRootRoleV1, PrivacyRootV1, PrivacyStatementDigestV1,
+    PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1, PrivacyActivationValidationError, PrivacyCommitmentV1,
+    PrivacyConsensusLimitsV1, PrivacyNamespaceV1, PrivacyNullifierV1, PrivacyP256CiphertextV1,
+    PrivacyP256PointV1, PrivacyPgcAccountBootstrapDigestV1, PrivacyPgcAccountV1,
+    PrivacyPgcBootstrapProofDigestV1, PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1,
+    PrivacyRootManagementV1, PrivacyRootPublicationDigestV1, PrivacyRootRoleV1, PrivacyRootV1,
+    PrivacyStatementDigestV1,
 };
 use mv::storage::StorageReadOnly;
 use norito::{
@@ -23,6 +24,9 @@ use norito::{
     json,
 };
 use thiserror::Error;
+
+const PRIVACY_PGC_POOL_INVARIANT_DIGEST_DOMAIN_V1: &[u8] =
+    b"iroha:privacy:pgc-pool-invariant:v1";
 
 /// Typed key for the immutable activation registered for one protocol.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
@@ -262,8 +266,26 @@ impl PrivacyPgcPoolInvariantKeyV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, Encode, Decode)]
 pub(crate) struct PrivacyPgcPoolInvariantV1 {
     total_supply: u32,
+    bootstrap_root: PrivacyRootV1,
     bootstrap_digest: PrivacyPgcAccountBootstrapDigestV1,
     bootstrap_proof_digest: PrivacyPgcBootstrapProofDigestV1,
+}
+
+/// Domain-separated commitment copied into every retained PGC successor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, Encode, Decode)]
+pub(crate) struct PrivacyPgcPoolInvariantDigestV1([u8; 32]);
+
+impl PrivacyPgcPoolInvariantDigestV1 {
+    fn new(bytes: [u8; 32]) -> Result<Self, &'static str> {
+        if bytes == [0; 32] {
+            return Err("privacy PGC pool invariant digest must be non-zero");
+        }
+        Ok(Self(bytes))
+    }
+
+    fn validate(self) -> Result<(), &'static str> {
+        Self::new(self.0).map(|_| ())
+    }
 }
 
 impl PrivacyPgcPoolInvariantV1 {
@@ -274,11 +296,15 @@ impl PrivacyPgcPoolInvariantV1 {
     /// Rejects zero supply or either zero audit digest.
     pub(crate) fn new(
         total_supply: u32,
+        bootstrap_root: PrivacyRootV1,
         bootstrap_digest: PrivacyPgcAccountBootstrapDigestV1,
         bootstrap_proof_digest: PrivacyPgcBootstrapProofDigestV1,
     ) -> Result<Self, &'static str> {
         if total_supply == 0 {
             return Err("privacy PGC pool total supply must be non-zero");
+        }
+        if bootstrap_root.is_zero() {
+            return Err("privacy PGC bootstrap root must be non-zero");
         }
         if bootstrap_digest.is_zero() {
             return Err("privacy PGC bootstrap digest must be non-zero");
@@ -288,6 +314,7 @@ impl PrivacyPgcPoolInvariantV1 {
         }
         Ok(Self {
             total_supply,
+            bootstrap_root,
             bootstrap_digest,
             bootstrap_proof_digest,
         })
@@ -297,6 +324,12 @@ impl PrivacyPgcPoolInvariantV1 {
     #[must_use]
     pub(crate) const fn total_supply(self) -> u32 {
         self.total_supply
+    }
+
+    /// Return the exact account-state root admitted at canonical epoch one.
+    #[must_use]
+    pub(crate) const fn bootstrap_root(self) -> PrivacyRootV1 {
+        self.bootstrap_root
     }
 
     /// Return the exact canonical public bootstrap digest.
@@ -311,9 +344,32 @@ impl PrivacyPgcPoolInvariantV1 {
         self.bootstrap_proof_digest
     }
 
+    /// Commit this immutable invariant to its exact pool namespace.
+    pub(crate) fn digest(
+        self,
+        namespace: PrivacyNamespaceV1,
+    ) -> Result<PrivacyPgcPoolInvariantDigestV1, &'static str> {
+        let key = PrivacyPgcPoolInvariantKeyV1::new(namespace)?;
+        self.validate()?;
+        let namespace_bytes = norito::to_bytes(&key.namespace())
+            .map_err(|_| "privacy PGC invariant namespace encoding failed")?;
+        let namespace_len = u64::try_from(namespace_bytes.len())
+            .map_err(|_| "privacy PGC invariant namespace length overflow")?;
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(PRIVACY_PGC_POOL_INVARIANT_DIGEST_DOMAIN_V1);
+        hasher.update(&namespace_len.to_le_bytes());
+        hasher.update(&namespace_bytes);
+        hasher.update(&self.total_supply.to_le_bytes());
+        hasher.update(self.bootstrap_root.as_bytes());
+        hasher.update(self.bootstrap_digest.as_bytes());
+        hasher.update(self.bootstrap_proof_digest.as_bytes());
+        PrivacyPgcPoolInvariantDigestV1::new(*hasher.finalize().as_bytes())
+    }
+
     pub(crate) fn validate(self) -> Result<(), &'static str> {
         Self::new(
             self.total_supply,
+            self.bootstrap_root,
             self.bootstrap_digest,
             self.bootstrap_proof_digest,
         )
@@ -569,6 +625,148 @@ impl PrivacyPgcPoolSnapshotV1 {
     }
 }
 
+fn validate_pgc_successor_link_v1(
+    namespace: PrivacyNamespaceV1,
+    key: PrivacyRootKeyV1,
+    provenance: PrivacyRootProvenanceV1,
+    invariant_digest: PrivacyPgcPoolInvariantDigestV1,
+) -> Result<(u64, PrivacyRootV1), String> {
+    let PrivacyRootProvenanceV1::VerifiedPgcSuccessor {
+        parent_epoch,
+        parent_root,
+        pool_invariant_digest,
+        ..
+    } = provenance
+    else {
+        return Err(format!(
+            "privacy PGC root history {namespace:?} contains a non-PGC successor"
+        ));
+    };
+    if pool_invariant_digest != invariant_digest {
+        return Err(format!(
+            "privacy PGC successor {} is bound to a different immutable pool invariant",
+            key.epoch()
+        ));
+    }
+    if parent_epoch.checked_add(1) != Some(key.epoch()) {
+        return Err(format!(
+            "privacy PGC successor {} does not advance parent epoch {parent_epoch} by exactly one",
+            key.epoch()
+        ));
+    }
+    Ok((parent_epoch, parent_root))
+}
+
+/// Validate an independently retained, newest-first-pruned PGC root window.
+///
+/// The first retained item is either the canonical epoch-one bootstrap or a
+/// successor whose missing parent is the immediately preceding pruned prefix.
+/// Once the prefix boundary is crossed, every retained item must link exactly
+/// to its preceding `(epoch, root)` with no gap.
+fn validate_pgc_retained_root_chain_v1(
+    namespace: PrivacyNamespaceV1,
+    invariant: PrivacyPgcPoolInvariantV1,
+    retained_root_count: usize,
+    history: &[(PrivacyRootKeyV1, PrivacyRootProvenanceV1)],
+) -> Result<(), String> {
+    if retained_root_count == 0 {
+        return Err("privacy PGC retained-root count must be non-zero".to_owned());
+    }
+    if history.is_empty() {
+        return Err("privacy PGC pool has no retained root history".to_owned());
+    }
+    if history.len() > retained_root_count {
+        return Err(format!(
+            "privacy PGC root history exceeds retention {retained_root_count}"
+        ));
+    }
+    let invariant_digest = invariant
+        .digest(namespace)
+        .map_err(|error| format!("invalid privacy PGC pool invariant digest: {error}"))?;
+    let (first_key, first_provenance) = history[0];
+    match first_provenance {
+        PrivacyRootProvenanceV1::VerifiedBootstrap {
+            bootstrap_digest,
+            bootstrap_proof_digest,
+            ..
+        } => {
+            if first_key.epoch() != PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1 {
+                return Err(format!(
+                    "privacy PGC bootstrap root epoch {} is not canonical epoch {}",
+                    first_key.epoch(),
+                    PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1
+                ));
+            }
+            if first_key.root() != invariant.bootstrap_root()
+                || bootstrap_digest != invariant.bootstrap_digest()
+                || bootstrap_proof_digest != invariant.bootstrap_proof_digest()
+            {
+                return Err(
+                    "privacy PGC bootstrap root provenance differs from its immutable invariant"
+                        .to_owned(),
+                );
+            }
+        }
+        PrivacyRootProvenanceV1::VerifiedPgcSuccessor { .. } => {
+            if history.len() != retained_root_count {
+                return Err(format!(
+                    "privacy PGC pruned-prefix history has {} roots but must fill retention {retained_root_count}",
+                    history.len()
+                ));
+            }
+            let (parent_epoch, parent_root) = validate_pgc_successor_link_v1(
+                namespace,
+                first_key,
+                first_provenance,
+                invariant_digest,
+            )?;
+            if first_key.epoch() <= PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1 {
+                return Err(
+                    "privacy PGC pruned prefix begins at or before the canonical bootstrap epoch"
+                        .to_owned(),
+                );
+            }
+            if first_key.epoch() == PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1 + 1
+                && (parent_epoch != PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1
+                    || parent_root != invariant.bootstrap_root())
+            {
+                return Err(
+                    "privacy PGC first successor does not consume the immutable bootstrap root"
+                        .to_owned(),
+                );
+            }
+        }
+        PrivacyRootProvenanceV1::Governance { .. }
+        | PrivacyRootProvenanceV1::VerifiedProof { .. } => {
+            return Err(
+                "privacy PGC retained history begins with invalid provenance".to_owned(),
+            );
+        }
+    }
+
+    for adjacent in history.windows(2) {
+        let (parent_key, _) = adjacent[0];
+        let (child_key, child_provenance) = adjacent[1];
+        let (declared_parent_epoch, declared_parent_root) = validate_pgc_successor_link_v1(
+            namespace,
+            child_key,
+            child_provenance,
+            invariant_digest,
+        )?;
+        if parent_key.epoch().checked_add(1) != Some(child_key.epoch())
+            || declared_parent_epoch != parent_key.epoch()
+            || declared_parent_root != parent_key.root()
+        {
+            return Err(format!(
+                "privacy PGC retained history has a gap or forged parent between epochs {} and {}",
+                parent_key.epoch(),
+                child_key.epoch()
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Load and validate every persisted component of one Anonymous PGC pool.
 ///
 /// Iteration is bounded by the closed 64-account profile and governed retained
@@ -651,35 +849,12 @@ pub(crate) fn load_privacy_pgc_pool_snapshot_v1(
         }
         retained_roots.push((*key, *provenance));
     }
-    let Some((_, first_provenance)) = retained_roots.first() else {
-        return Err("privacy PGC pool has no retained root history".to_owned());
-    };
-    let PrivacyRootProvenanceV1::VerifiedBootstrap {
-        bootstrap_digest,
-        bootstrap_proof_digest,
-        ..
-    } = first_provenance
-    else {
-        return Err(
-            "privacy PGC root history does not begin with verified-bootstrap provenance".to_owned(),
-        );
-    };
-    if *bootstrap_digest != invariant.bootstrap_digest()
-        || *bootstrap_proof_digest != invariant.bootstrap_proof_digest()
-    {
-        return Err(
-            "privacy PGC root history bootstrap provenance differs from its invariant".to_owned(),
-        );
-    }
-    if retained_roots
-        .iter()
-        .skip(1)
-        .any(|(_, provenance)| !matches!(provenance, PrivacyRootProvenanceV1::VerifiedProof { .. }))
-    {
-        return Err(
-            "privacy PGC root history contains a non-proof successor after bootstrap".to_owned(),
-        );
-    }
+    validate_pgc_retained_root_chain_v1(
+        namespace,
+        invariant,
+        retained_root_count,
+        &retained_roots,
+    )?;
     let latest = retained_roots
         .last()
         .expect("non-empty history checked above");
@@ -753,10 +928,11 @@ pub(crate) fn load_privacy_pgc_pool_snapshot_v1(
                 admitted_at_height: account_height,
                 action_index: account_action_index,
             },
-            PrivacyRootProvenanceV1::VerifiedProof {
+            PrivacyRootProvenanceV1::VerifiedPgcSuccessor {
                 statement_digest: root_statement_digest,
                 admitted_at_height: root_height,
                 action_index: root_action_index,
+                ..
             },
         ) => {
             account_statement_digest == root_statement_digest
@@ -861,9 +1037,12 @@ pub(crate) fn validate_privacy_persisted_state_v1(
             .push((*key, *provenance));
     }
 
-    let retained = usize::try_from(PrivacyConsensusLimitsV1::taira_default().retained_root_count)
-        .map_err(|_| "privacy retained-root count cannot be represented".to_owned())?;
     for ((namespace, role), history) in &history_by_scope {
+        let activation = activations
+            .get(&PrivacyActivationKeyV1::new(namespace.protocol_id()))
+            .expect("activation existence checked while grouping roots");
+        let retained = usize::try_from(activation.limits.retained_root_count)
+            .map_err(|_| "privacy retained-root count cannot be represented".to_owned())?;
         if history.len() > retained {
             return Err(format!(
                 "privacy root history for {namespace:?}/{role:?} exceeds retention {retained}"
@@ -877,7 +1056,17 @@ pub(crate) fn validate_privacy_persisted_state_v1(
                 ));
             }
         }
-        match role.management() {
+        if *role == PrivacyRootRoleV1::PgcAccountState {
+            let invariant_key =
+                PrivacyPgcPoolInvariantKeyV1::new(*namespace).map_err(|error| {
+                    format!("invalid privacy PGC invariant key for root history: {error}")
+                })?;
+            let invariant = pgc_pool_invariants.get(&invariant_key).copied().ok_or_else(|| {
+                format!("PGC privacy root history for {namespace:?} has no pool invariant")
+            })?;
+            validate_pgc_retained_root_chain_v1(*namespace, invariant, retained, history)?;
+        } else {
+            match role.management() {
             PrivacyRootManagementV1::GovernanceManaged => {
                 if history.iter().any(|(_, provenance)| {
                     !matches!(provenance, PrivacyRootProvenanceV1::Governance { .. })
@@ -891,32 +1080,7 @@ pub(crate) fn validate_privacy_persisted_state_v1(
                 let Some((_, first_provenance)) = history.first() else {
                     return Err("grouped privacy root history is unexpectedly empty".to_owned());
                 };
-                if *role == PrivacyRootRoleV1::PgcAccountState {
-                    let PrivacyRootProvenanceV1::VerifiedBootstrap {
-                        bootstrap_digest,
-                        bootstrap_proof_digest,
-                        ..
-                    } = first_provenance
-                    else {
-                        return Err(format!(
-                            "PGC privacy root history for {namespace:?} does not begin with verified-bootstrap provenance"
-                        ));
-                    };
-                    let invariant_key =
-                        PrivacyPgcPoolInvariantKeyV1::new(*namespace).map_err(|error| {
-                            format!("invalid privacy PGC invariant key for root history: {error}")
-                        })?;
-                    let invariant = pgc_pool_invariants.get(&invariant_key).ok_or_else(|| {
-                        format!("PGC privacy root history for {namespace:?} has no pool invariant")
-                    })?;
-                    if *bootstrap_digest != invariant.bootstrap_digest()
-                        || *bootstrap_proof_digest != invariant.bootstrap_proof_digest()
-                    {
-                        return Err(format!(
-                            "PGC privacy root history for {namespace:?} bootstrap provenance differs from its pool invariant"
-                        ));
-                    }
-                } else if !matches!(first_provenance, PrivacyRootProvenanceV1::Governance { .. }) {
+                if !matches!(first_provenance, PrivacyRootProvenanceV1::Governance { .. }) {
                     return Err(format!(
                         "proof-managed privacy root history for {namespace:?}/{role:?} does not begin with governance initialization"
                     ));
@@ -928,6 +1092,17 @@ pub(crate) fn validate_privacy_persisted_state_v1(
                         "proof-managed privacy root history for {namespace:?}/{role:?} contains a non-proof advancement"
                     ));
                 }
+                for adjacent in history.windows(2) {
+                    if adjacent[1].1.proof_parent()
+                        != Some((adjacent[0].0.epoch(), adjacent[0].0.root()))
+                        || adjacent[0].0.epoch().checked_add(1) != Some(adjacent[1].0.epoch())
+                    {
+                        return Err(format!(
+                            "proof-managed privacy root history for {namespace:?}/{role:?} has a gap or forged parent"
+                        ));
+                    }
+                }
+            }
             }
         }
         let head_key = PrivacyRootHeadKeyV1::new(*namespace, *role)
@@ -1049,10 +1224,11 @@ pub(crate) fn validate_privacy_persisted_state_v1(
                     admitted_at_height: account_height,
                     action_index: account_action_index,
                 },
-                PrivacyRootProvenanceV1::VerifiedProof {
+                PrivacyRootProvenanceV1::VerifiedPgcSuccessor {
                     statement_digest: root_statement_digest,
                     admitted_at_height: root_height,
                     action_index: root_action_index,
+                    ..
                 },
             ) => {
                 account_statement_digest == root_statement_digest
@@ -1372,6 +1548,25 @@ pub(crate) enum PrivacyRootProvenanceV1 {
         admitted_at_height: u64,
         /// Zero-based privacy-action index within the transaction.
         action_index: u32,
+        /// Exact epoch consumed by the verified state transition.
+        parent_epoch: u64,
+        /// Exact root consumed by the verified state transition.
+        parent_root: PrivacyRootV1,
+    },
+    /// Anonymous PGC successor certified by an admitted native payment proof.
+    VerifiedPgcSuccessor {
+        /// Digest of the exact verified public statement.
+        statement_digest: PrivacyStatementDigestV1,
+        /// Block height at which the proof effect became durable.
+        admitted_at_height: u64,
+        /// Zero-based privacy-action index within the transaction.
+        action_index: u32,
+        /// Exact epoch consumed by the verified state transition.
+        parent_epoch: u64,
+        /// Exact root consumed by the verified state transition.
+        parent_root: PrivacyRootV1,
+        /// Immutable pool invariant bound by the native proof.
+        pool_invariant_digest: PrivacyPgcPoolInvariantDigestV1,
     },
 }
 
@@ -1432,6 +1627,8 @@ impl PrivacyRootProvenanceV1 {
         statement_digest: PrivacyStatementDigestV1,
         admitted_at_height: u64,
         action_index: u32,
+        parent_epoch: u64,
+        parent_root: PrivacyRootV1,
     ) -> Result<Self, &'static str> {
         if statement_digest.is_zero() {
             return Err("privacy root statement digest must be non-zero");
@@ -1439,11 +1636,87 @@ impl PrivacyRootProvenanceV1 {
         if admitted_at_height == 0 {
             return Err("privacy root admission height must be non-zero");
         }
+        if parent_epoch == 0 {
+            return Err("privacy root proof parent epoch must be non-zero");
+        }
+        if parent_root.is_zero() {
+            return Err("privacy root proof parent root must be non-zero");
+        }
         Ok(Self::VerifiedProof {
             statement_digest,
             admitted_at_height,
             action_index,
+            parent_epoch,
+            parent_root,
         })
+    }
+
+    /// Construct a PGC successor with its complete retained-chain binding.
+    ///
+    /// # Errors
+    ///
+    /// Rejects malformed statement, admission, parent, or pool-invariant
+    /// provenance.
+    pub(crate) fn verified_pgc_successor(
+        statement_digest: PrivacyStatementDigestV1,
+        admitted_at_height: u64,
+        action_index: u32,
+        parent_epoch: u64,
+        parent_root: PrivacyRootV1,
+        pool_invariant_digest: PrivacyPgcPoolInvariantDigestV1,
+    ) -> Result<Self, &'static str> {
+        if statement_digest.is_zero() {
+            return Err("privacy PGC successor statement digest must be non-zero");
+        }
+        if admitted_at_height == 0 {
+            return Err("privacy PGC successor admission height must be non-zero");
+        }
+        if parent_epoch == 0 {
+            return Err("privacy PGC successor parent epoch must be non-zero");
+        }
+        if parent_root.is_zero() {
+            return Err("privacy PGC successor parent root must be non-zero");
+        }
+        pool_invariant_digest.validate()?;
+        Ok(Self::VerifiedPgcSuccessor {
+            statement_digest,
+            admitted_at_height,
+            action_index,
+            parent_epoch,
+            parent_root,
+            pool_invariant_digest,
+        })
+    }
+
+    /// Return the exact consumed root for proof-produced successors.
+    #[must_use]
+    pub(crate) const fn proof_parent(self) -> Option<(u64, PrivacyRootV1)> {
+        match self {
+            Self::VerifiedProof {
+                parent_epoch,
+                parent_root,
+                ..
+            }
+            | Self::VerifiedPgcSuccessor {
+                parent_epoch,
+                parent_root,
+                ..
+            } => Some((parent_epoch, parent_root)),
+            Self::Governance { .. } | Self::VerifiedBootstrap { .. } => None,
+        }
+    }
+
+    #[must_use]
+    const fn pgc_invariant_digest(self) -> Option<PrivacyPgcPoolInvariantDigestV1> {
+        match self {
+            Self::VerifiedPgcSuccessor {
+                pool_invariant_digest,
+                ..
+            } => Some(pool_invariant_digest),
+            Self::Governance { .. }
+            | Self::VerifiedBootstrap { .. }
+            | Self::VerifiedProof { .. } => None,
+        }
     }
 
     /// Validate restored provenance.
@@ -1471,9 +1744,34 @@ impl PrivacyRootProvenanceV1 {
                 statement_digest,
                 admitted_at_height,
                 action_index,
+                parent_epoch,
+                parent_root,
             } => {
-                Self::verified_proof(statement_digest, admitted_at_height, action_index).map(|_| ())
+                Self::verified_proof(
+                    statement_digest,
+                    admitted_at_height,
+                    action_index,
+                    parent_epoch,
+                    parent_root,
+                )
+                .map(|_| ())
             }
+            Self::VerifiedPgcSuccessor {
+                statement_digest,
+                admitted_at_height,
+                action_index,
+                parent_epoch,
+                parent_root,
+                pool_invariant_digest,
+            } => Self::verified_pgc_successor(
+                statement_digest,
+                admitted_at_height,
+                action_index,
+                parent_epoch,
+                parent_root,
+                pool_invariant_digest,
+            )
+            .map(|_| ()),
         }
     }
 }
@@ -1861,8 +2159,14 @@ mod tests {
     }
 
     fn root_provenance() -> PrivacyRootProvenanceV1 {
-        PrivacyRootProvenanceV1::verified_proof(PrivacyStatementDigestV1::new(nonzero(50)), 1, 0)
-            .expect("valid root provenance")
+        PrivacyRootProvenanceV1::verified_proof(
+            PrivacyStatementDigestV1::new(nonzero(50)),
+            1,
+            0,
+            1,
+            PrivacyRootV1::new(nonzero(49)),
+        )
+        .expect("valid root provenance")
     }
 
     fn pgc_accounts(count: u8) -> Vec<PrivacyPgcAccountV1> {
@@ -1965,7 +2269,7 @@ mod tests {
         let bootstrap_digest = PrivacyPgcAccountBootstrapDigestV1::new(nonzero(0xB1));
         let bootstrap_proof_digest = PrivacyPgcBootstrapProofDigestV1::new(nonzero(0xB2));
         let total_supply = 160;
-        let epoch = 7;
+        let epoch = PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1;
         let account_table = pgc_accounts(16);
         let root = compute_privacy_pgc_account_state_root_v1(
             namespace,
@@ -2018,8 +2322,13 @@ mod tests {
         let mut pgc_pool_invariants = Storage::new();
         pgc_pool_invariants.insert(
             invariant_key,
-            PrivacyPgcPoolInvariantV1::new(total_supply, bootstrap_digest, bootstrap_proof_digest)
-                .expect("pool invariant"),
+            PrivacyPgcPoolInvariantV1::new(
+                total_supply,
+                root,
+                bootstrap_digest,
+                bootstrap_proof_digest,
+            )
+            .expect("pool invariant"),
         );
         let root_key =
             PrivacyRootKeyV1::new(namespace, PrivacyRootRoleV1::PgcAccountState, epoch, root)
@@ -2284,11 +2593,14 @@ mod tests {
         .expect("bounded runtime snapshot");
         assert_eq!(runtime_snapshot.namespace(), fixture.namespace);
         assert_eq!(runtime_snapshot.accounts().len(), 16);
-        assert_eq!(runtime_snapshot.current_epoch(), 7);
+        assert_eq!(
+            runtime_snapshot.current_epoch(),
+            PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1
+        );
         assert_eq!(runtime_snapshot.current_root(), fixture.root);
         assert_eq!(
             runtime_snapshot.retained_current_root(),
-            Some((7, fixture.root))
+            Some((PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1, fixture.root))
         );
 
         let activations =
@@ -2355,6 +2667,7 @@ mod tests {
                     fixture.invariant_key,
                     PrivacyPgcPoolInvariantV1::new(
                         161,
+                        fixture.root,
                         fixture.bootstrap_digest,
                         fixture.bootstrap_proof_digest,
                     )
@@ -2369,13 +2682,14 @@ mod tests {
                     fixture.invariant_key,
                     PrivacyPgcPoolInvariantV1::new(
                         160,
-                        PrivacyPgcAccountBootstrapDigestV1::new(nonzero(0xC1)),
+                        PrivacyRootV1::new(nonzero(0xC0)),
+                        fixture.bootstrap_digest,
                         fixture.bootstrap_proof_digest,
                     )
-                    .expect("altered public digest remains locally valid"),
+                    .expect("altered bootstrap root remains locally valid"),
                 );
             },
-            "bootstrap provenance differs from its pool invariant",
+            "bootstrap root provenance differs from its immutable invariant",
         );
         expect_pgc_persisted_error(
             |fixture| {
@@ -2383,13 +2697,29 @@ mod tests {
                     fixture.invariant_key,
                     PrivacyPgcPoolInvariantV1::new(
                         160,
+                        fixture.root,
+                        PrivacyPgcAccountBootstrapDigestV1::new(nonzero(0xC1)),
+                        fixture.bootstrap_proof_digest,
+                    )
+                    .expect("altered public digest remains locally valid"),
+                );
+            },
+            "bootstrap root provenance differs from its immutable invariant",
+        );
+        expect_pgc_persisted_error(
+            |fixture| {
+                fixture.pgc_pool_invariants.insert(
+                    fixture.invariant_key,
+                    PrivacyPgcPoolInvariantV1::new(
+                        160,
+                        fixture.root,
                         fixture.bootstrap_digest,
                         PrivacyPgcBootstrapProofDigestV1::new(nonzero(0xC2)),
                     )
                     .expect("altered proof digest remains locally valid"),
                 );
             },
-            "bootstrap provenance differs from its pool invariant",
+            "bootstrap root provenance differs from its immutable invariant",
         );
         expect_pgc_persisted_error(
             |fixture| {
@@ -2437,12 +2767,12 @@ mod tests {
         expect_pgc_persisted_error(
             |fixture| {
                 fixture.replace_root_and_head(
-                    7,
+                    PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1,
                     PrivacyRootV1::new(nonzero(0xC4)),
                     fixture.provenance,
                 );
             },
-            "does not match its root head",
+            "bootstrap root provenance differs from its immutable invariant",
         );
         expect_pgc_persisted_error(
             |fixture| {
@@ -2454,7 +2784,11 @@ mod tests {
                 .expect("different admitted height");
                 fixture.root_heads.insert(
                     fixture.head_key,
-                    PrivacyRootHeadRecordV1::new(7, fixture.root, wrong)
+                    PrivacyRootHeadRecordV1::new(
+                        PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1,
+                        fixture.root,
+                        wrong,
+                    )
                         .expect("locally valid mismatched head"),
                 );
             },
@@ -2467,9 +2801,13 @@ mod tests {
                     9,
                 )
                 .expect("governance provenance");
-                fixture.replace_root_and_head(7, fixture.root, governance);
+                fixture.replace_root_and_head(
+                    PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1,
+                    fixture.root,
+                    governance,
+                );
             },
-            "does not begin with verified-bootstrap provenance",
+            "begins with invalid provenance",
         );
     }
 
@@ -2480,8 +2818,22 @@ mod tests {
         let account_provenance =
             PrivacyPgcAccountProvenanceV1::verified_proof(statement_digest, 10, 0)
                 .expect("proof account provenance");
-        let root_provenance = PrivacyRootProvenanceV1::verified_proof(statement_digest, 10, 0)
-            .expect("proof root provenance");
+        let invariant = *fixture
+            .pgc_pool_invariants
+            .view()
+            .get(&fixture.invariant_key)
+            .expect("pool invariant");
+        let root_provenance = PrivacyRootProvenanceV1::verified_pgc_successor(
+            statement_digest,
+            10,
+            0,
+            PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1,
+            fixture.root,
+            invariant
+                .digest(fixture.namespace)
+                .expect("pool invariant digest"),
+        )
+        .expect("proof root provenance");
         let account_table = fixture
             .pgc_accounts
             .view()
@@ -2500,24 +2852,33 @@ mod tests {
                 .encrypted_balance();
             fixture.pgc_accounts.insert(
                 *key,
-                PrivacyPgcAccountStateV1::new(encrypted_balance, 8, account_provenance)
+                PrivacyPgcAccountStateV1::new(
+                    encrypted_balance,
+                    PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1 + 1,
+                    account_provenance,
+                )
                     .expect("proof-updated account"),
             );
         }
-        let successor_root =
-            compute_privacy_pgc_account_state_root_v1(fixture.namespace, 8, 160, &account_table)
-                .expect("successor root");
+        let successor_epoch = PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1 + 1;
+        let successor_root = compute_privacy_pgc_account_state_root_v1(
+            fixture.namespace,
+            successor_epoch,
+            160,
+            &account_table,
+        )
+        .expect("successor root");
         let successor_key = PrivacyRootKeyV1::new(
             fixture.namespace,
             PrivacyRootRoleV1::PgcAccountState,
-            8,
+            successor_epoch,
             successor_root,
         )
         .expect("successor root key");
         fixture.roots.insert(successor_key, root_provenance);
         fixture.root_heads.insert(
             fixture.head_key,
-            PrivacyRootHeadRecordV1::new(8, successor_root, root_provenance)
+            PrivacyRootHeadRecordV1::new(successor_epoch, successor_root, root_provenance)
                 .expect("successor head"),
         );
         fixture
@@ -2537,7 +2898,7 @@ mod tests {
                     PrivacyRootKeyV1::new(
                         fixture.namespace,
                         PrivacyRootRoleV1::PgcAccountState,
-                        8,
+                        successor_epoch,
                         second_root,
                     )
                     .expect("second root"),
@@ -2545,11 +2906,15 @@ mod tests {
                 );
                 fixture.root_heads.insert(
                     fixture.head_key,
-                    PrivacyRootHeadRecordV1::new(8, second_root, second_bootstrap)
+                    PrivacyRootHeadRecordV1::new(
+                        successor_epoch,
+                        second_root,
+                        second_bootstrap,
+                    )
                         .expect("second head"),
                 );
             },
-            "contains a non-proof advancement",
+            "contains a non-PGC successor",
         );
     }
 

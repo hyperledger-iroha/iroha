@@ -546,6 +546,7 @@ impl Execute for BootstrapPrivacyPgcAccountsV1 {
         })?;
         let pool_invariant = PrivacyPgcPoolInvariantV1::new(
             self.bootstrap.total_supply,
+            self.bootstrap.initial_root,
             bootstrap_digest,
             bootstrap_proof_digest,
         )
@@ -775,10 +776,24 @@ impl Execute for SubmitPrivacyProofV1 {
                     expected_action_index,
                 )
                 .map_err(invalid_privacy_parameter)?;
-                let root_provenance = PrivacyRootProvenanceV1::verified_proof(
+                let pool_invariant_digest = snapshot
+                    .invariant()
+                    .digest(effect.namespace())
+                    .map_err(|error| {
+                        Error::InvariantViolation(
+                            format!(
+                                "verified Anonymous PGC pool invariant digest failed: {error}"
+                            )
+                            .into(),
+                        )
+                    })?;
+                let root_provenance = PrivacyRootProvenanceV1::verified_pgc_successor(
                     self.envelope.statement_digest,
                     state_transaction.block_height(),
                     expected_action_index,
+                    snapshot.current_epoch(),
+                    snapshot.current_root(),
+                    pool_invariant_digest,
                 )
                 .map_err(invalid_privacy_parameter)?;
                 let mut seen_keys = BTreeSet::new();
@@ -860,6 +875,8 @@ mod tests {
 
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::{
+        Registrable,
+        account::Account,
         asset::AssetDefinitionId,
         block::BlockHeader,
         domain::DomainId,
@@ -1248,7 +1265,8 @@ mod tests {
         let activation = compiled_privacy_profile_v1(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1)
             .expect("compiled Anonymous PGC profile")
             .activation_record(lifecycle);
-        let mut world = World::default();
+        let alice = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let mut world = World::with([], [alice], []);
         world.privacy_activations.insert(
             PrivacyActivationKeyV1::new(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1),
             activation,
@@ -1451,6 +1469,7 @@ mod tests {
             .expect("invariant key");
         let invariant = PrivacyPgcPoolInvariantV1::new(
             instruction.bootstrap.total_supply,
+            instruction.bootstrap.initial_root,
             bootstrap_digest,
             proof_digest,
         )

@@ -8,10 +8,47 @@
 //! The protocol source is Microsoft `vega-prover` commit
 //! `c0ee259053cd12eaf43ed71b5cde375452b3ee4d`, licensed under MIT.
 
-use core::fmt;
+use core::{
+    fmt,
+    ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign},
+};
 
-use halo2curves::{ff::PrimeField, t256::Fq};
+use halo2curves::{
+    ff::{Field, FromUniformBytes, PrimeField},
+    t256::Fq,
+};
 use thiserror::Error;
+
+#[path = "vega/algebra.rs"]
+mod algebra;
+#[path = "vega/commitment.rs"]
+mod commitment;
+#[path = "vega/curve.rs"]
+mod curve;
+#[path = "vega/hyrax.rs"]
+mod hyrax;
+#[path = "vega/sponge.rs"]
+mod sponge;
+#[path = "vega/sumcheck.rs"]
+mod sumcheck;
+#[path = "vega/transcript.rs"]
+mod transcript;
+#[path = "vega/wire.rs"]
+mod wire;
+
+pub use curve::{
+    VEGA_T256_BASE_MODULUS_BE_V1, VegaCurveError, VegaT256PointV1, derive_t256_generators_v1,
+};
+pub use transcript::{VegaTranscriptError, VegaTranscriptV1};
+pub use wire::{VegaPointWireV1, VegaScalarWireV1, VegaWireError, validate_proof_byte_cap_v1};
+
+/// Tight first-release cap for one canonical Norito Vega proof.
+///
+/// Microsoft's 1,920-byte mDL benchmark produces proofs of about 108 KiB.
+/// A 512 KiB ceiling leaves room for the exact Figure 9 relation and Norito
+/// framing while preventing this engine from inheriting the much broader
+/// per-action opaque-byte allowance.
+pub const MAX_VEGA_PROOF_BYTES_V1: usize = 512 * 1024;
 
 /// Big-endian modulus of the canonical T256 scalar field.
 ///
@@ -28,6 +65,9 @@ pub enum VegaFieldError {
     /// modulus.
     #[error("integer is not a canonical T256 scalar")]
     NonCanonicalScalar,
+    /// The zero scalar does not have a multiplicative inverse.
+    #[error("cannot invert the zero T256 scalar")]
+    InversionOfZero,
 }
 
 /// Canonical T256 scalar used by Vega public inputs and proof-system algebra.
@@ -38,6 +78,18 @@ pub enum VegaFieldError {
 pub struct VegaT256ScalarV1(Fq);
 
 impl VegaT256ScalarV1 {
+    /// Return the additive identity.
+    #[must_use]
+    pub fn zero() -> Self {
+        Self(Fq::ZERO)
+    }
+
+    /// Return the multiplicative identity.
+    #[must_use]
+    pub fn one() -> Self {
+        Self(Fq::ONE)
+    }
+
     /// Parse one canonical 32-byte big-endian scalar without modular reduction.
     ///
     /// # Errors
@@ -58,6 +110,25 @@ impl VegaT256ScalarV1 {
         Ok(Self(value))
     }
 
+    /// Parse one canonical 32-byte little-endian proof scalar without modular
+    /// reduction.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VegaFieldError::NonCanonicalScalar`] when `bytes` represents
+    /// an integer greater than or equal to the scalar modulus.
+    pub fn from_le_bytes_exact(mut bytes: [u8; 32]) -> Result<Self, VegaFieldError> {
+        bytes.reverse();
+        Self::from_be_bytes_exact(bytes)
+    }
+
+    /// Reduce an exact 64-byte little-endian uniform string as specified by
+    /// the pinned Vega Fiat--Shamir transcript.
+    #[must_use]
+    pub fn from_uniform_le_bytes(bytes: [u8; 64]) -> Self {
+        Self(Fq::from_uniform_bytes(&bytes))
+    }
+
     /// Construct a scalar from an unsigned 64-bit integer.
     #[must_use]
     pub fn from_u64(value: u64) -> Self {
@@ -72,10 +143,91 @@ impl VegaT256ScalarV1 {
         bytes
     }
 
+    /// Return the exact canonical 32-byte little-endian proof encoding.
+    #[must_use]
+    pub fn to_le_bytes(self) -> [u8; 32] {
+        let mut bytes = self.to_be_bytes();
+        bytes.reverse();
+        bytes
+    }
+
     /// Return whether this field element is zero.
     #[must_use]
     pub fn is_zero(self) -> bool {
-        self.to_be_bytes() == [0; 32]
+        bool::from(self.0.is_zero())
+    }
+
+    /// Return the multiplicative inverse.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VegaFieldError::InversionOfZero`] for the additive identity.
+    pub fn inverse(self) -> Result<Self, VegaFieldError> {
+        Option::<Fq>::from(self.0.invert())
+            .map(Self)
+            .ok_or(VegaFieldError::InversionOfZero)
+    }
+
+    /// Square this scalar.
+    #[must_use]
+    pub fn square(self) -> Self {
+        Self(self.0.square())
+    }
+}
+
+impl Default for VegaT256ScalarV1 {
+    fn default() -> Self {
+        Self::zero()
+    }
+}
+
+impl Add for VegaT256ScalarV1 {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        Self(self.0 + rhs.0)
+    }
+}
+
+impl AddAssign for VegaT256ScalarV1 {
+    fn add_assign(&mut self, rhs: Self) {
+        self.0 += rhs.0;
+    }
+}
+
+impl Sub for VegaT256ScalarV1 {
+    type Output = Self;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        Self(self.0 - rhs.0)
+    }
+}
+
+impl SubAssign for VegaT256ScalarV1 {
+    fn sub_assign(&mut self, rhs: Self) {
+        self.0 -= rhs.0;
+    }
+}
+
+impl Mul for VegaT256ScalarV1 {
+    type Output = Self;
+
+    fn mul(self, rhs: Self) -> Self::Output {
+        Self(self.0 * rhs.0)
+    }
+}
+
+impl MulAssign for VegaT256ScalarV1 {
+    fn mul_assign(&mut self, rhs: Self) {
+        self.0 *= rhs.0;
+    }
+}
+
+impl Neg for VegaT256ScalarV1 {
+    type Output = Self;
+
+    fn neg(self) -> Self::Output {
+        Self(-self.0)
     }
 }
 

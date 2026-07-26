@@ -1393,6 +1393,19 @@ mod tests {
     }
 
     #[test]
+    fn pgc_rejects_cross_suite_proof_replay() {
+        let fixture = PgcFixture::new();
+        let (verange_envelope, _, _) = valid_envelope();
+        let mut replayed = fixture.envelope.clone();
+        replayed.proof = verange_envelope.proof;
+
+        assert!(matches!(
+            verify_privacy_envelope_v1(&replayed, fixture.verification_context()),
+            Err(PrivacyVerificationErrorV1::Envelope(_))
+        ));
+    }
+
+    #[test]
     fn context_chain_action_and_genesis_are_fail_closed() {
         let (envelope, activation, chain_id) = valid_envelope();
 

@@ -134,6 +134,7 @@ impl AnonymousPgcParametersV1 {
         );
         hash.update(bootstrap::PGC_BOOTSTRAP_SUITE_V1);
         hash.update([bootstrap::PGC_BOOTSTRAP_PROOF_VERSION_V1]);
+        hash.update(bootstrap::PGC_BOOTSTRAP_INITIAL_EPOCH_V1.to_be_bytes());
         hash.update(
             u16::try_from(bootstrap::MAX_PGC_BOOTSTRAP_NAMESPACE_BYTES_V1)
                 .expect("bootstrap namespace cap fits u16")
@@ -571,9 +572,16 @@ pub enum AnonymousPgcError {
     /// The bootstrap initial root was the reserved all-zero value.
     #[error("Anonymous-PGC bootstrap initial root must be non-zero")]
     ZeroBootstrapRoot,
-    /// The bootstrap initial epoch was zero.
-    #[error("Anonymous-PGC bootstrap initial epoch must be non-zero")]
-    ZeroBootstrapEpoch,
+    /// The bootstrap initial epoch differed from the closed first-release value.
+    #[error(
+        "Anonymous-PGC bootstrap initial epoch {actual} does not equal required epoch {expected}"
+    )]
+    InvalidBootstrapEpoch {
+        /// Supplied initial epoch.
+        actual: u64,
+        /// Closed first-release initial epoch.
+        expected: u64,
+    },
     /// A bootstrap used an account count outside the closed profile.
     #[error("Anonymous-PGC bootstrap account count {count} is not one of 16, 32, or 64")]
     InvalidBootstrapAccountCount {

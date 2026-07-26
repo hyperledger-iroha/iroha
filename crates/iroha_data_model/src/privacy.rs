@@ -34,6 +34,11 @@ pub const TAIRA_PRIVACY_MAX_ACTIONS_PER_BLOCK_V1: u32 = 2;
 pub const TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1: u32 = 8 * 1024 * 1024;
 /// Maximum canonical bytes admitted for one Anonymous PGC bootstrap proof.
 pub const TAIRA_PRIVACY_MAX_PGC_BOOTSTRAP_PROOF_BYTES_V1: u32 = 4 * 1024 * 1024;
+/// The only account-state epoch admitted for an Anonymous PGC bootstrap.
+///
+/// Successor proofs advance this epoch by exactly one. Keeping the origin
+/// fixed prevents governance or a caller from creating ambiguous histories.
+pub const PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1: u64 = 1;
 /// Maximum encoded bytes admitted for one Taira privacy action.
 pub const TAIRA_PRIVACY_MAX_ACTION_BYTES_V1: u32 = 8 * 1024 * 1024;
 /// Maximum privacy bytes admitted in one Taira transaction.
@@ -106,6 +111,58 @@ impl PrivacyProtocolIdV1 {
         Self::IrohaIvmPrivateNoteStarkV1,
         Self::PqMaspStarkV0,
     ];
+
+    /// Exact external identifier used by SDK catalogs, governance tooling, and
+    /// the BOI Privacy Lab.
+    ///
+    /// These labels are part of the first-release contract. Callers must not
+    /// trim, case-fold, normalize, or accept aliases for them.
+    #[must_use]
+    pub const fn canonical_label(self) -> &'static str {
+        match self {
+            Self::ZkAcePqAuthorizationV0 => "zk-ace-pq-authorization-v0",
+            Self::AnonymousPgcKOutOfNV1 => "anonymous-pgc-k-out-of-n-v1",
+            Self::VeRangeTransparentRangeV1 => "verange-transparent-range-v1",
+            Self::IrohaZkAmsV1 => "iroha-zk-ams-v1",
+            Self::VegaExistingCredentialZkV0 => "vega-existing-credential-zk-v0",
+            Self::IrohaZkX509StarkP256V0 => "iroha-zk-x509-stark-p256-v0",
+            Self::IrohaJindoPolynomialCommitmentV0 => {
+                "iroha-jindo-polynomial-commitment-v0"
+            }
+            Self::IrohaBootleGenisisAcStarkV0 => "iroha-bootle-genisis-ac-stark-v0",
+            Self::OrchardHalo2ActionsV1 => "orchard-halo2-actions-v1",
+            Self::MoneroFcmpPlusPlusV1 => "monero-fcmp-plus-plus-v1",
+            Self::IrohaIvmPrivateNoteStarkV1 => "iroha-ivm-private-note-stark-v1",
+            Self::PqMaspStarkV0 => "pq-masp-stark-v0",
+        }
+    }
+
+    /// Parse one exact first-release external identifier.
+    ///
+    /// Returns `None` for aliases, retired identifiers, and non-canonical
+    /// spellings.
+    #[must_use]
+    pub const fn from_canonical_label(label: &str) -> Option<Self> {
+        match label.as_bytes() {
+            b"zk-ace-pq-authorization-v0" => Some(Self::ZkAcePqAuthorizationV0),
+            b"anonymous-pgc-k-out-of-n-v1" => Some(Self::AnonymousPgcKOutOfNV1),
+            b"verange-transparent-range-v1" => Some(Self::VeRangeTransparentRangeV1),
+            b"iroha-zk-ams-v1" => Some(Self::IrohaZkAmsV1),
+            b"vega-existing-credential-zk-v0" => Some(Self::VegaExistingCredentialZkV0),
+            b"iroha-zk-x509-stark-p256-v0" => Some(Self::IrohaZkX509StarkP256V0),
+            b"iroha-jindo-polynomial-commitment-v0" => {
+                Some(Self::IrohaJindoPolynomialCommitmentV0)
+            }
+            b"iroha-bootle-genisis-ac-stark-v0" => {
+                Some(Self::IrohaBootleGenisisAcStarkV0)
+            }
+            b"orchard-halo2-actions-v1" => Some(Self::OrchardHalo2ActionsV1),
+            b"monero-fcmp-plus-plus-v1" => Some(Self::MoneroFcmpPlusPlusV1),
+            b"iroha-ivm-private-note-stark-v1" => Some(Self::IrohaIvmPrivateNoteStarkV1),
+            b"pq-masp-stark-v0" => Some(Self::PqMaspStarkV0),
+            _ => None,
+        }
+    }
 
     /// Exact proof system required by this protocol.
     #[must_use]
@@ -1263,7 +1320,8 @@ pub struct PrivacyPgcAccountBootstrapV1 {
     pub namespace: PrivacyNamespaceV1,
     /// Declared root, which core must recompute from `accounts`.
     pub initial_root: PrivacyRootV1,
-    /// Initial nonzero account-state epoch.
+    /// Canonical initial account-state epoch (exactly
+    /// [`PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1`]).
     pub initial_epoch: u64,
     /// Exact public aggregate supply encrypted across the initial accounts.
     pub total_supply: u32,
@@ -1294,8 +1352,12 @@ impl PrivacyPgcAccountBootstrapV1 {
         if self.initial_root.is_zero() {
             return Err(PrivacyPgcAccountBootstrapValidationError::ZeroRoot);
         }
-        if self.initial_epoch == 0 {
-            return Err(PrivacyPgcAccountBootstrapValidationError::ZeroEpoch);
+        if self.initial_epoch != PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1 {
+            return Err(
+                PrivacyPgcAccountBootstrapValidationError::NonCanonicalInitialEpoch {
+                    epoch: self.initial_epoch,
+                },
+            );
         }
         if self.total_supply == 0 {
             return Err(PrivacyPgcAccountBootstrapValidationError::ZeroTotalSupply);
@@ -1373,9 +1435,12 @@ pub enum PrivacyPgcAccountBootstrapValidationError {
     /// Declared initial root is zero.
     #[error("PGC bootstrap initial root must be non-zero")]
     ZeroRoot,
-    /// Declared initial epoch is zero.
-    #[error("PGC bootstrap initial epoch must be non-zero")]
-    ZeroEpoch,
+    /// Declared initial epoch differs from the closed first-release origin.
+    #[error("PGC bootstrap initial epoch must be 1, got {epoch}")]
+    NonCanonicalInitialEpoch {
+        /// Rejected caller-provided epoch.
+        epoch: u64,
+    },
     /// Declared aggregate supply is zero.
     #[error("PGC bootstrap total supply must be non-zero")]
     ZeroTotalSupply,
@@ -6554,6 +6619,100 @@ mod tests {
     }
 
     #[test]
+    fn protocol_ids_have_unique_exact_external_labels() {
+        let expected = [
+            (
+                PrivacyProtocolIdV1::ZkAcePqAuthorizationV0,
+                "zk-ace-pq-authorization-v0",
+            ),
+            (
+                PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
+                "anonymous-pgc-k-out-of-n-v1",
+            ),
+            (
+                PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
+                "verange-transparent-range-v1",
+            ),
+            (PrivacyProtocolIdV1::IrohaZkAmsV1, "iroha-zk-ams-v1"),
+            (
+                PrivacyProtocolIdV1::VegaExistingCredentialZkV0,
+                "vega-existing-credential-zk-v0",
+            ),
+            (
+                PrivacyProtocolIdV1::IrohaZkX509StarkP256V0,
+                "iroha-zk-x509-stark-p256-v0",
+            ),
+            (
+                PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0,
+                "iroha-jindo-polynomial-commitment-v0",
+            ),
+            (
+                PrivacyProtocolIdV1::IrohaBootleGenisisAcStarkV0,
+                "iroha-bootle-genisis-ac-stark-v0",
+            ),
+            (
+                PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
+                "orchard-halo2-actions-v1",
+            ),
+            (
+                PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1,
+                "monero-fcmp-plus-plus-v1",
+            ),
+            (
+                PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+                "iroha-ivm-private-note-stark-v1",
+            ),
+            (PrivacyProtocolIdV1::PqMaspStarkV0, "pq-masp-stark-v0"),
+        ];
+        assert_eq!(expected.len(), PrivacyProtocolIdV1::COUNT);
+
+        for (index, (protocol, label)) in expected.into_iter().enumerate() {
+            assert_eq!(PrivacyProtocolIdV1::ALL[index], protocol);
+            assert_eq!(protocol.canonical_label(), label);
+            assert_eq!(
+                PrivacyProtocolIdV1::from_canonical_label(label),
+                Some(protocol)
+            );
+            assert!(
+                PrivacyProtocolIdV1::ALL[..index]
+                    .iter()
+                    .all(|prior| prior.canonical_label() != label),
+                "duplicate privacy protocol label {label}"
+            );
+        }
+    }
+
+    #[test]
+    fn protocol_id_parser_rejects_aliases_retired_ids_and_noncanonical_text() {
+        for label in [
+            "",
+            " ",
+            " iroha-zk-ams-v1",
+            "iroha-zk-ams-v1 ",
+            "IROHA-ZK-AMS-V1",
+            "zk-ams-recursive-admission-v0",
+            "zk-x509-onchain-identity-v0",
+            "jindo-lattice-pcs-zk-v0",
+            "sis-hints-anoncred-pq-v0",
+            "miden-stark-note-v1",
+            "pq-masp-stark-fri-v1",
+            "zkat-policy-private-auth-v1",
+            "silent-threshold-anoncred-v0",
+            "penumbra-masp-v1",
+            "aztec-private-rollup-v1",
+            "iroha-zk-ams-v1\0",
+            "iroha-zk-\u{200b}ams-v1",
+            "iroha\u{ff0f}zk-ams-v1",
+            "iroh\u{0430}-zk-ams-v1",
+        ] {
+            assert!(
+                PrivacyProtocolIdV1::from_canonical_label(label).is_none(),
+                "non-canonical protocol label {label:?} must fail"
+            );
+        }
+    }
+
+    #[test]
     fn all_protocol_mappings_and_typed_variants_are_exact() {
         let statements = sample_statements();
         assert_eq!(statements.len(), PrivacyProtocolIdV1::COUNT);
@@ -6956,9 +7115,18 @@ mod tests {
         let mut invalid = bootstrap.clone();
         invalid.initial_root = PrivacyRootV1::new([0; 32]);
         assert!(invalid.validate().is_err());
-        invalid = bootstrap.clone();
-        invalid.initial_epoch = 0;
-        assert!(invalid.validate().is_err());
+        for epoch in [0, 2, u64::MAX] {
+            invalid = bootstrap.clone();
+            invalid.initial_epoch = epoch;
+            assert!(matches!(
+                invalid.validate(),
+                Err(
+                    PrivacyPgcAccountBootstrapValidationError::NonCanonicalInitialEpoch {
+                        epoch: rejected,
+                    }
+                ) if rejected == epoch
+            ));
+        }
         invalid = bootstrap.clone();
         invalid.total_supply = 0;
         assert!(matches!(
@@ -7910,6 +8078,30 @@ mod tests {
                 state_since_height: 4,
             });
         assert!(active.validate_transition_to(&rewritten_history).is_err());
+    }
+
+    #[test]
+    fn activation_effective_height_uses_active_lifecycle_payload() {
+        let envelope = envelope(statement_for(
+            PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0,
+        ));
+        let mut activation = activation(&envelope);
+        activation.lifecycle = PrivacyProtocolLifecycleV1::Active(PrivacyActiveLifecycleV1 {
+            proposed_at_height: 1,
+            activated_at_height: 2,
+            state_since_height: 5,
+        });
+
+        assert_eq!(
+            envelope.validate_against_activation(&activation, 4),
+            Err(
+                PrivacyProofEnvelopeValidationError::ActivationNotEffective {
+                    current_height: 4,
+                    effective_height: 5,
+                }
+            )
+        );
+        assert_eq!(envelope.validate_against_activation(&activation, 5), Ok(()));
     }
 
     #[test]

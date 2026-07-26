@@ -9,8 +9,8 @@
       "kind": "cancel_asset_lock",
       "encoding": "json",
       "expectation": "valid",
-      "byte_length": 143,
-      "sha256": "719a09a4c39a90bfaada33f5f9db900a31059e4b88dd7e8577f206464a0f582c"
+      "byte_length": 133,
+      "sha256": "e7836804bcb81a36638fd44deccff680b6084fec063ebbb55b94f7fb1c71a680"
     },
     {
       "path": "appeal_finance/cancel_asset_lock_v1.to",
@@ -27,8 +27,8 @@
       "kind": "cancel_asset_lock",
       "encoding": "json",
       "expectation": "invalid_missing_expected_remaining_amount",
-      "byte_length": 106,
-      "sha256": "33c9d1c4b3c89decae2146b71e54d2e65928b856da8f174b16a5aceecb890e74"
+      "byte_length": 96,
+      "sha256": "3478e3e525bc0145de85eb829005798cab6de4ee0b7a8b8a8f0b1168866933dd"
     },
     {
       "path": "appeal_finance/negative/cancel_asset_lock_legacy_missing_expected_v1.to",
@@ -45,8 +45,8 @@
       "kind": "cancel_asset_lock",
       "encoding": "json",
       "expectation": "invalid_noncanonical_quantity",
-      "byte_length": 145,
-      "sha256": "16ed4174ec36485b73d3510b0c278ac38dc66b9a1835c4772ba3969c028a947d"
+      "byte_length": 135,
+      "sha256": "8f9f8186ee1ae510d17426f78e43c5efbf6543d596edc2180058f0da49f6e612"
     },
     {
       "path": "appeal_finance/negative/cancel_asset_lock_trailing_bytes_v1.to",
@@ -63,8 +63,8 @@
       "kind": "cancel_asset_lock",
       "encoding": "json",
       "expectation": "invalid_zero_expected_remaining_amount",
-      "byte_length": 142,
-      "sha256": "b315131393074700e978aa94637cde8d9991c5ae7ee70b2a5714d22f8bd36987"
+      "byte_length": 132,
+      "sha256": "95a45bc0b4dc519276f53da995e4c750bab6b6e5ca7a12de9d30d05a7ad8df26"
     },
     {
       "path": "appeal_finance/negative/cancel_asset_lock_zero_expected_v1.to",
@@ -1019,6 +1019,6 @@
     "key_usage": "test_only_reference_sdk_fixture",
     "public_key_hex": "d5af25e204ad03d0a26e236996404f1be51a60948bcc026cd084a83690b756d3",
     "public_key_fingerprint_sha256": "1a09a6a1b85cec77787ba6ce26f18500a2434865cee04d79c69a481888f52fff",
-    "signature_hex": "035b1d9e147ab264a4866e74086518facdfcc34fe451387d7bdb96e45e572ac7a44bb027f15eff4239de2dbcdd776cfaa61696c4001d87f6fe173fac38fd6f0d"
+    "signature_hex": "535ec9766cc4c6794d39b14d708e1eb0c69b93dd9b1f06998e4268c16a6e43a28fb8c3cc9f8bf541200802ab5f4e16286969a028396d01259f17fa8de32ac904"
   }
 }
