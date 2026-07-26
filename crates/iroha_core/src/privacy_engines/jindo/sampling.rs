@@ -11,9 +11,10 @@ use thiserror::Error;
 
 use super::{
     JINDO_ENCODING_BASE_V1, JINDO_ENCODING_EXPONENT_V1, JINDO_ENCODING_SLOTS_V1,
-    JINDO_RING_DEGREE_V1, JindoFieldElementV1, JindoRnsPolynomialV1,
+    JINDO_RING_DEGREE_V1,
     encoding::encode_coefficient_slots_v1,
-    ring::{JINDO_INNER_MODULI_V1, JindoPrimeModulusV1},
+    field::JindoFieldElementV1,
+    ring::{JINDO_INNER_MODULI_V1, JindoPrimeModulusV1, JindoRnsPolynomialV1},
 };
 
 /// Standard deviation for ordinary randomized coefficient encodings.

@@ -24,10 +24,6 @@ mod ring;
 #[path = "jindo/sampling.rs"]
 mod sampling;
 
-pub(crate) use field::JindoFieldElementV1;
-pub(crate) use parameters::JINDO_PARAMETERS_V1;
-pub(crate) use ring::{JINDO_INNER_MODULI_V1, JINDO_OUTER_MODULI_V1, JindoRnsPolynomialV1};
-
 /// Exact coefficient-field byte width in the first native Jindo profile.
 pub const JINDO_FIELD_ELEMENT_BYTES_V1: usize = 32;
 

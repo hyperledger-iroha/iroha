@@ -6,12 +6,6 @@
 //! consensus code: its selected output is pinned here and covered by the engine
 //! manifest and known-answer tests.
 
-use super::{
-    JINDO_ENCODING_EXPONENT_V1, JINDO_ENCODING_SLOTS_V1, JINDO_MAX_COEFFICIENTS_V1,
-    JINDO_RING_DEGREE_V1,
-    ring::{JINDO_INNER_MODULI_V1, JINDO_OUTER_MODULI_V1},
-};
-
 /// Exact compiled Jindo parameter tuple.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct JindoParametersV1 {
@@ -63,6 +57,11 @@ pub(crate) const JINDO_PARAMETER_MANIFEST_V1: &[u8] = b"iroha-jindo-v0|paper=epr
 
 #[cfg(test)]
 mod tests {
+    use super::super::{
+        JINDO_ENCODING_EXPONENT_V1, JINDO_ENCODING_SLOTS_V1, JINDO_MAX_COEFFICIENTS_V1,
+        JINDO_RING_DEGREE_V1,
+        ring::{JINDO_INNER_MODULI_V1, JINDO_OUTER_MODULI_V1},
+    };
     use super::*;
 
     #[test]

@@ -7,7 +7,9 @@
 
 use super::{
     JINDO_ENCODING_BASE_V1, JINDO_ENCODING_EXPONENT_V1, JINDO_ENCODING_SLOTS_V1,
-    JINDO_RING_DEGREE_V1, JindoFieldElementV1, JindoRnsPolynomialV1, ring::JINDO_INNER_MODULI_V1,
+    JINDO_RING_DEGREE_V1,
+    field::JindoFieldElementV1,
+    ring::{JINDO_INNER_MODULI_V1, JindoRnsPolynomialV1},
 };
 
 /// Deterministically encode at most sixteen coefficient-field values.
