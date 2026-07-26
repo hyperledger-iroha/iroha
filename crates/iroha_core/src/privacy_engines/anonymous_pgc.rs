@@ -1,24 +1,29 @@
-//! Source-justified Anonymous-PGC cryptographic building blocks.
+//! Source-justified Anonymous-PGC cryptographic engine.
 //!
 //! This module implements the Twisted-ElGamal construction in Definition 6.1
-//! of ePrint 2025/884 and complete Schnorr representation proofs for public-key
-//! possession and ciphertext opening.  It deliberately does **not** claim to
-//! implement the paper's k-out-of-n proof composition; the runtime must not
-//! advertise the full Anonymous-PGC engine until that separate relation is
-//! present.
+//! of ePrint 2025/884, complete Schnorr representation proofs for public-key
+//! possession and ciphertext opening, and the first-release bootstrap and
+//! payment relations.  The [`bootstrap`] protocol establishes a bounded,
+//! nonnegative encrypted account table with an exact public total supply.
+//! The [`payment`] protocol proves the four §6 legality sub-languages without
+//! disclosing the sender or recipient indices and carries that bootstrap
+//! invariant forward.
+
+pub mod bootstrap;
+pub mod payment;
 
 use std::collections::BTreeMap;
 
 use once_cell::sync::Lazy;
-use p256::{elliptic_curve::Group, ProjectivePoint, Scalar};
+use p256::{ProjectivePoint, Scalar, elliptic_curve::Group};
 use rand_core_06::{CryptoRng, RngCore};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use super::p256::{
-    generator_digest, hash_to_curve_rfc9380, random_nonzero_scalar,
-    validate_generator_independence, CanonicalScalarV1, CompressedPointV1, P256EngineError,
-    SecretScalarV1, TranscriptBindingV1, TranscriptV1,
+    CanonicalScalarV1, CompressedPointV1, P256EngineError, SecretScalarV1, TranscriptBindingV1,
+    TranscriptV1, generator_digest, hash_to_curve_rfc9380, random_nonzero_scalar,
+    validate_generator_independence,
 };
 
 /// Closed identifier for Twisted-ElGamal public-key possession transcripts.
@@ -34,12 +39,11 @@ pub const PGC_MESSAGE_BITS_V1: u16 = 32;
 pub const PGC_MESSAGE_MIN_V1: u32 = 0;
 /// Inclusive upper endpoint `2^32 - 1` of the paper's plaintext domain.
 pub const PGC_MESSAGE_MAX_V1: u32 = u32::MAX;
-/// Fail-closed capability marker for the complete Anonymous-PGC relation.
+/// Capability marker for the complete bootstrap and payment relations.
 ///
-/// TODO(privacy-anonymous-pgc-k-out-of-n): implement and adversarially test the
-/// paper's complete k-out-of-n legality composition before changing this gate.
-/// Compiled Anonymous-PGC activation must remain unavailable while it is false.
-pub const ANONYMOUS_PGC_FULL_ENGINE_AVAILABLE_V1: bool = false;
+/// The compiled profile additionally binds this exact engine's parameters,
+/// proof wires, limits, statement schemas, and native effect derivation.
+pub const ANONYMOUS_PGC_FULL_ENGINE_AVAILABLE_V1: bool = true;
 /// Tight maximum encoded length of a Twisted-ElGamal ciphertext.
 pub const MAX_PGC_CIPHERTEXT_BYTES_V1: usize = 256;
 /// Tight maximum encoded length of either Schnorr building-block proof.
@@ -52,7 +56,9 @@ pub const PGC_DECRYPTION_GIANT_STEP_BOUND_V1: usize = 1 << 16;
 const PGC_G_DST_V1: &[u8] = b"IROHA-ANON-PGC-V1-G-P256_XMD:SHA-256_SSWU_RO_";
 const PGC_H_DST_V1: &[u8] = b"IROHA-ANON-PGC-V1-H-P256_XMD:SHA-256_SSWU_RO_";
 const PARAMETER_DIGEST_DOMAIN_V1: &[u8] = b"iroha.anonymous-pgc.parameters.v1";
-const SOURCE_PROFILE_V1: &[u8] = b"eprint:2025/884:def-6.1:twisted-elgamal";
+/// Exact source/construction profile bound by the compiled engine manifest.
+pub const PGC_SOURCE_PROFILE_V1: &[u8] =
+    b"eprint:2025/884:sections-3-4-6:twisted-elgamal-payment-legality";
 const MAX_PROVER_RESTARTS: usize = 128;
 
 /// Transparent P-256 parameters for the Anonymous-PGC building blocks.
@@ -113,14 +119,91 @@ impl AnonymousPgcParametersV1 {
         let mut hash = Sha256::new();
         hash.update(PARAMETER_DIGEST_DOMAIN_V1);
         hash.update(
-            u16::try_from(SOURCE_PROFILE_V1.len())
+            u16::try_from(PGC_SOURCE_PROFILE_V1.len())
                 .expect("source profile label is bounded")
                 .to_be_bytes(),
         );
-        hash.update(SOURCE_PROFILE_V1);
+        hash.update(PGC_SOURCE_PROFILE_V1);
         hash.update(PGC_MESSAGE_BITS_V1.to_be_bytes());
         hash.update(PGC_MESSAGE_MIN_V1.to_be_bytes());
         hash.update(PGC_MESSAGE_MAX_V1.to_be_bytes());
+        hash.update(
+            u16::try_from(bootstrap::PGC_BOOTSTRAP_SUITE_V1.len())
+                .expect("bootstrap suite label is bounded")
+                .to_be_bytes(),
+        );
+        hash.update(bootstrap::PGC_BOOTSTRAP_SUITE_V1);
+        hash.update([bootstrap::PGC_BOOTSTRAP_PROOF_VERSION_V1]);
+        hash.update(
+            u16::try_from(bootstrap::MAX_PGC_BOOTSTRAP_NAMESPACE_BYTES_V1)
+                .expect("bootstrap namespace cap fits u16")
+                .to_be_bytes(),
+        );
+        hash.update(
+            u16::try_from(bootstrap::PGC_BOOTSTRAP_ACCOUNT_COUNTS_V1.len())
+                .expect("bootstrap count profile is bounded")
+                .to_be_bytes(),
+        );
+        hash.update(bootstrap::PGC_BOOTSTRAP_MAX_AGGREGATE_BALANCE_V1.to_be_bytes());
+        hash.update(
+            u16::try_from(bootstrap::PGC_BOOTSTRAP_TABLE_DIGEST_DOMAIN_V1.len())
+                .expect("bootstrap table digest domain is bounded")
+                .to_be_bytes(),
+        );
+        hash.update(bootstrap::PGC_BOOTSTRAP_TABLE_DIGEST_DOMAIN_V1);
+        hash.update(
+            u16::try_from(bootstrap::PGC_BOOTSTRAP_TABLE_DIGEST_SCHEMA_V1.len())
+                .expect("bootstrap table digest schema is bounded")
+                .to_be_bytes(),
+        );
+        hash.update(bootstrap::PGC_BOOTSTRAP_TABLE_DIGEST_SCHEMA_V1);
+        for count in bootstrap::PGC_BOOTSTRAP_ACCOUNT_COUNTS_V1 {
+            hash.update(
+                u16::try_from(count)
+                    .expect("bootstrap account count fits u16")
+                    .to_be_bytes(),
+            );
+        }
+        hash.update(
+            u32::try_from(bootstrap::MAX_PGC_BOOTSTRAP_PROOF_BYTES_V1)
+                .expect("bootstrap proof cap fits u32")
+                .to_be_bytes(),
+        );
+        hash.update(
+            u16::try_from(payment::PGC_PAYMENT_SUITE_V1.len())
+                .expect("payment suite label is bounded")
+                .to_be_bytes(),
+        );
+        hash.update(payment::PGC_PAYMENT_SUITE_V1);
+        hash.update([payment::PGC_PAYMENT_PROOF_VERSION_V1]);
+        hash.update(
+            u16::try_from(payment::PGC_PAYMENT_POOL_INVARIANT_SCHEMA_V1.len())
+                .expect("payment invariant schema is bounded")
+                .to_be_bytes(),
+        );
+        hash.update(payment::PGC_PAYMENT_POOL_INVARIANT_SCHEMA_V1);
+        hash.update(
+            u16::try_from(payment::PGC_PAYMENT_ANONYMITY_SET_SIZES_V1.len())
+                .expect("payment size profile is bounded")
+                .to_be_bytes(),
+        );
+        for count in payment::PGC_PAYMENT_ANONYMITY_SET_SIZES_V1 {
+            hash.update(
+                u16::try_from(count)
+                    .expect("payment anonymity-set size fits u16")
+                    .to_be_bytes(),
+            );
+        }
+        hash.update(
+            u16::try_from(payment::PGC_PAYMENT_MAX_RECIPIENTS_V1)
+                .expect("payment recipient cap fits u16")
+                .to_be_bytes(),
+        );
+        hash.update(
+            u32::try_from(payment::MAX_PGC_PAYMENT_PROOF_BYTES_V1)
+                .expect("payment proof cap fits u32")
+                .to_be_bytes(),
+        );
         hash.update(generator_digest);
         let parameter_digest = hash.finalize().into();
         Ok(Self {
@@ -254,6 +337,21 @@ pub struct TwistedElGamalCiphertextV1 {
 }
 
 impl TwistedElGamalCiphertextV1 {
+    /// Parse and validate both compressed SEC1 ciphertext components.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if either component is malformed, noncanonical, or
+    /// the identity.
+    pub fn from_sec1_bytes(left: &[u8], right: &[u8]) -> Result<Self, AnonymousPgcError> {
+        let ciphertext = Self {
+            left: CompressedPointV1::from_slice(left)?,
+            right: CompressedPointV1::from_slice(right)?,
+        };
+        ciphertext.validate()?;
+        Ok(ciphertext)
+    }
+
     /// Return `C_L`.
     #[must_use]
     pub const fn left(&self) -> CompressedPointV1 {
@@ -344,6 +442,65 @@ impl TwistedElGamalKeyPairV1 {
     }
 }
 
+/// Immutable supply provenance carried by every payment in one PGC pool.
+///
+/// Core creates this value only after a complete bootstrap proof verifies and
+/// persists the corresponding canonical bootstrap digest.  Binding both
+/// fields into every payment prevents a proof from being replayed across pools
+/// with different initial supply histories.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AnonymousPgcPoolInvariantV1 {
+    total_supply: u32,
+    bootstrap_digest: [u8; 32],
+    bootstrap_proof_digest: [u8; 32],
+}
+
+impl AnonymousPgcPoolInvariantV1 {
+    /// Construct a validated pool invariant.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a zero total supply or zero canonical bootstrap digest.
+    pub fn new(
+        total_supply: u32,
+        bootstrap_digest: [u8; 32],
+        bootstrap_proof_digest: [u8; 32],
+    ) -> Result<Self, AnonymousPgcError> {
+        if total_supply == 0 {
+            return Err(AnonymousPgcError::ZeroPgcTotalSupply);
+        }
+        if bootstrap_digest == [0; 32] {
+            return Err(AnonymousPgcError::ZeroPgcBootstrapDigest);
+        }
+        if bootstrap_proof_digest == [0; 32] {
+            return Err(AnonymousPgcError::ZeroPgcBootstrapProofDigest);
+        }
+        Ok(Self {
+            total_supply,
+            bootstrap_digest,
+            bootstrap_proof_digest,
+        })
+    }
+
+    /// Exact public supply established by the pool bootstrap.
+    #[must_use]
+    pub const fn total_supply(self) -> u32 {
+        self.total_supply
+    }
+
+    /// Digest of the canonical accepted bootstrap payload.
+    #[must_use]
+    pub const fn bootstrap_digest(self) -> [u8; 32] {
+        self.bootstrap_digest
+    }
+
+    /// Digest of the exact canonical bootstrap proof bytes admitted by core.
+    #[must_use]
+    pub const fn bootstrap_proof_digest(self) -> [u8; 32] {
+        self.bootstrap_proof_digest
+    }
+}
+
 /// Twisted-ElGamal or proof-building-block failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum AnonymousPgcError {
@@ -394,6 +551,124 @@ pub enum AnonymousPgcError {
     /// A ciphertext opening proof equation failed.
     #[error("Twisted-ElGamal ciphertext opening equation failed")]
     CiphertextOpeningEquationFailed,
+    /// A pool bootstrap or persisted payment invariant declared zero supply.
+    #[error("Anonymous-PGC total supply must be in 1..=2^32-1")]
+    ZeroPgcTotalSupply,
+    /// A persisted pool invariant used the reserved all-zero bootstrap digest.
+    #[error("Anonymous-PGC canonical bootstrap digest must be non-zero")]
+    ZeroPgcBootstrapDigest,
+    /// A persisted pool invariant used the reserved all-zero proof digest.
+    #[error("Anonymous-PGC canonical bootstrap proof digest must be non-zero")]
+    ZeroPgcBootstrapProofDigest,
+    /// The exact canonical bootstrap namespace encoding was empty or oversized.
+    #[error("Anonymous-PGC bootstrap namespace length {actual} is outside 1..={max}")]
+    InvalidBootstrapNamespaceLength {
+        /// Supplied byte length.
+        actual: usize,
+        /// First-release maximum.
+        max: usize,
+    },
+    /// The bootstrap initial root was the reserved all-zero value.
+    #[error("Anonymous-PGC bootstrap initial root must be non-zero")]
+    ZeroBootstrapRoot,
+    /// The bootstrap initial epoch was zero.
+    #[error("Anonymous-PGC bootstrap initial epoch must be non-zero")]
+    ZeroBootstrapEpoch,
+    /// A bootstrap used an account count outside the closed profile.
+    #[error("Anonymous-PGC bootstrap account count {count} is not one of 16, 32, or 64")]
+    InvalidBootstrapAccountCount {
+        /// Supplied count.
+        count: usize,
+    },
+    /// Public bootstrap vectors did not have identical lengths.
+    #[error(
+        "Anonymous-PGC bootstrap length mismatch: keys {public_keys}, encrypted balances {encrypted_balances}"
+    )]
+    BootstrapLengthMismatch {
+        /// Public-key count.
+        public_keys: usize,
+        /// Encrypted-balance count.
+        encrypted_balances: usize,
+    },
+    /// Ordered bootstrap public keys were duplicated or unsorted.
+    #[error("Anonymous-PGC bootstrap public keys must be strictly increasing")]
+    BootstrapKeysNotStrictlyIncreasing,
+    /// The bootstrap witness did not open the public table and exact supply.
+    #[error("Anonymous-PGC bootstrap witness does not satisfy the public bootstrap relation")]
+    InvalidBootstrapWitness,
+    /// The bootstrap proof used an unknown wire version.
+    #[error("unsupported Anonymous-PGC bootstrap proof version {version}")]
+    UnsupportedBootstrapProofVersion {
+        /// Supplied version.
+        version: u8,
+    },
+    /// A bootstrap proof did not contain exactly one proof for every account.
+    #[error("invalid Anonymous-PGC bootstrap proof shape")]
+    InvalidBootstrapProofShape,
+    /// A bootstrap range proof did not have the exact 32-bit shape.
+    #[error("invalid Anonymous-PGC bootstrap 32-bit range-proof shape")]
+    InvalidBootstrapRangeProofShape,
+    /// One complete bootstrap proof equation failed.
+    #[error("Anonymous-PGC bootstrap proof equation failed")]
+    BootstrapProofEquationFailed,
+    /// A payment used an anonymity-set size outside the closed profile.
+    #[error("Anonymous-PGC payment anonymity-set size {count} is not one of 16, 32, or 64")]
+    InvalidPaymentAnonymitySetSize {
+        /// Supplied count.
+        count: usize,
+    },
+    /// Public payment vectors did not have identical lengths.
+    #[error(
+        "Anonymous-PGC payment length mismatch: keys {public_keys}, transfers {transfers}, current balances {current_balances}"
+    )]
+    PaymentLengthMismatch {
+        /// Public-key count.
+        public_keys: usize,
+        /// Transfer-ciphertext count.
+        transfers: usize,
+        /// Current-balance count.
+        current_balances: usize,
+    },
+    /// The exact recipient count was outside the closed first-release profile.
+    #[error(
+        "Anonymous-PGC recipient count {count} is invalid for anonymity-set size {anonymity_set_size}"
+    )]
+    InvalidPaymentRecipientCount {
+        /// Supplied recipient count.
+        count: usize,
+        /// Ordered anonymity-set size.
+        anonymity_set_size: usize,
+    },
+    /// Ordered anonymity-set public keys were duplicated or unsorted.
+    #[error("Anonymous-PGC payment public keys must be strictly increasing")]
+    PaymentKeysNotStrictlyIncreasing,
+    /// A signed transfer exceeded the exact first-release magnitude bound.
+    #[error("Anonymous-PGC signed transfer value {value} is outside ±(2^32-1)")]
+    PaymentValueOutOfRange {
+        /// Supplied signed value.
+        value: i64,
+    },
+    /// The payment witness did not match the public memo or exact role counts.
+    #[error("Anonymous-PGC payment witness does not satisfy the public payment relation")]
+    InvalidPaymentWitness,
+    /// The payment proof used an unknown wire version.
+    #[error("unsupported Anonymous-PGC payment proof version {version}")]
+    UnsupportedPaymentProofVersion {
+        /// Supplied version.
+        version: u8,
+    },
+    /// Top-level proof vector dimensions did not match `(n,k)`.
+    #[error("invalid Anonymous-PGC payment proof shape")]
+    InvalidPaymentProofShape,
+    /// One hidden selection proof did not have exactly one response per branch.
+    #[error("invalid Anonymous-PGC hidden-selection proof shape")]
+    InvalidPaymentSelectionProofShape,
+    /// A range proof did not have the exact 32-bit shape.
+    #[error("invalid Anonymous-PGC 32-bit range-proof shape")]
+    InvalidPaymentRangeProofShape,
+    /// One complete payment proof equation failed.
+    #[error("Anonymous-PGC payment proof equation failed")]
+    PaymentProofEquationFailed,
     /// Prover randomness repeatedly produced a prohibited identity intermediate.
     #[error("Anonymous-PGC building-block prover exhausted its restart bound")]
     ProverRestartExhausted,
@@ -1453,11 +1728,11 @@ mod tests {
                 hex::encode(Sha256::digest(proof.encode())),
             ),
             (
-                "REPLACE_PGC_PARAMETER_DIGEST".to_owned(),
-                "REPLACE_PGC_GENERATOR_DIGEST".to_owned(),
-                "REPLACE_PGC_PUBLIC_KEY".to_owned(),
-                "REPLACE_PGC_CIPHERTEXT_DIGEST".to_owned(),
-                "REPLACE_PGC_PROOF_DIGEST".to_owned(),
+                "e6cfafc5380a4a4c248f399684a5e43df1192bc460bd4de630eea985655ec575".to_owned(),
+                "9cacd524346b8e92765f16bd25941f661606ace6a60184f621af700500c3fadc".to_owned(),
+                "030f3b56925aa800a902be063f559e832a1f80b1a1989ffff2b5d37e9628ee7c3c".to_owned(),
+                "42878d6c1427706aca80b2e5e296554c094e2c265f9d8e76f208db20118a9758".to_owned(),
+                "c6ef321b3ab3495dc0d818bf9bd3e18e74314f8ab929138e08572501c0df3fbe".to_owned(),
             )
         );
     }

@@ -294,6 +294,10 @@ impl DrawdownAssetLock {
 
 isi! {
     /// Cancel an active generic asset lock and refund remaining custody.
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
     pub struct CancelAssetLock {
         /// Lock to cancel.
         pub escrow_id: crate::escrow::EscrowId,

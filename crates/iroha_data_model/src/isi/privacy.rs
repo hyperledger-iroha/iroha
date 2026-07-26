@@ -6,8 +6,9 @@
 
 use super::*;
 use crate::privacy::{
-    PrivacyPgcAccountBootstrapV1, PrivacyProofEnvelopeV1, PrivacyProtocolActivationRecordV1,
-    PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1, PrivacyRootPublicationV1,
+    PrivacyPgcAccountBootstrapV1, PrivacyPgcBootstrapProofBytesV1, PrivacyProofEnvelopeV1,
+    PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1,
+    PrivacyRootPublicationV1,
 };
 
 isi! {
@@ -102,6 +103,8 @@ isi! {
     pub struct BootstrapPrivacyPgcAccountsV1 {
         /// Complete canonical pool namespace, root, epoch, and ordered accounts.
         pub bootstrap: PrivacyPgcAccountBootstrapV1,
+        /// Exact canonical native proof of account well-formedness, range, and supply.
+        pub proof: PrivacyPgcBootstrapProofBytesV1,
     }
 }
 
@@ -113,8 +116,11 @@ impl BootstrapPrivacyPgcAccountsV1 {
 
     /// Construct a governed Anonymous PGC account bootstrap.
     #[must_use]
-    pub fn new(bootstrap: PrivacyPgcAccountBootstrapV1) -> Self {
-        Self { bootstrap }
+    pub fn new(
+        bootstrap: PrivacyPgcAccountBootstrapV1,
+        proof: PrivacyPgcBootstrapProofBytesV1,
+    ) -> Self {
+        Self { bootstrap, proof }
     }
 }
 
@@ -185,6 +191,7 @@ impl_privacy_decode_from_slice!(PublishPrivacyRootV1 {
 });
 impl_privacy_decode_from_slice!(BootstrapPrivacyPgcAccountsV1 {
     bootstrap: PrivacyPgcAccountBootstrapV1,
+    proof: PrivacyPgcBootstrapProofBytesV1,
 });
 impl_privacy_decode_from_slice!(SubmitPrivacyProofV1 {
     envelope: PrivacyProofEnvelopeV1,
@@ -315,6 +322,7 @@ mod tests {
             namespace: publication().namespace,
             initial_root: PrivacyRootV1::new(digest(22)),
             initial_epoch: 1,
+            total_supply: 160,
             accounts: (1..=16)
                 .map(|index| PrivacyPgcAccountV1 {
                     public_key: p256_point(2, index),
@@ -353,7 +361,10 @@ mod tests {
             }),
         ));
         assert_slice_roundtrip(PublishPrivacyRootV1::new(publication()));
-        assert_slice_roundtrip(BootstrapPrivacyPgcAccountsV1::new(pgc_bootstrap()));
+        assert_slice_roundtrip(BootstrapPrivacyPgcAccountsV1::new(
+            pgc_bootstrap(),
+            PrivacyPgcBootstrapProofBytesV1::new(vec![0xA5, 0x5A, 1]),
+        ));
         assert_slice_roundtrip(SubmitPrivacyProofV1::new(envelope()));
     }
 
@@ -373,6 +384,29 @@ mod tests {
                 "truncation at {truncated_len} bytes must fail closed"
             );
         }
+
+        let bootstrap = BootstrapPrivacyPgcAccountsV1::new(
+            pgc_bootstrap(),
+            PrivacyPgcBootstrapProofBytesV1::new(vec![0xA5, 0x5A, 1]),
+        )
+        .encode();
+        for truncated_len in [0, 1, bootstrap.len() / 2, bootstrap.len() - 1] {
+            assert!(
+                BootstrapPrivacyPgcAccountsV1::decode_from_slice(&bootstrap[..truncated_len])
+                    .is_err(),
+                "bootstrap truncation at {truncated_len} bytes must fail closed"
+            );
+        }
+        let mut trailing_bootstrap = bootstrap;
+        trailing_bootstrap.push(0x5A);
+        assert!(
+            BootstrapPrivacyPgcAccountsV1::decode_from_slice(&trailing_bootstrap).is_err(),
+            "bootstrap trailing bytes must fail closed"
+        );
+        assert!(
+            BootstrapPrivacyPgcAccountsV1::decode_from_slice(&pgc_bootstrap().encode()).is_err(),
+            "the unreleased proofless bootstrap layout has no legacy decoder"
+        );
     }
 
     #[test]

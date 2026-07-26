@@ -12,11 +12,24 @@ pub const KOTODAMA_ESCROW_ID_PREFIX: &str = "kotodama-native-escrow:";
 
 /// Stable identifier for a native asset escrow.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[repr(transparent)]
 pub struct EscrowId(pub Hash);
+
+#[cfg(feature = "json")]
+impl norito::json::FastJsonWrite for EscrowId {
+    fn write_json(&self, out: &mut String) {
+        norito::json::FastJsonWrite::write_json(&self.0, out);
+    }
+}
+
+#[cfg(feature = "json")]
+impl norito::json::JsonDeserialize for EscrowId {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        <Hash as norito::json::JsonDeserialize>::json_deserialize(parser).map(Self)
+    }
+}
 
 impl EscrowId {
     /// Construct an escrow identifier from a hash.
@@ -394,6 +407,24 @@ mod tests {
         assert_eq!(
             EscrowId::from_kotodama_name(&name),
             EscrowId::new(Hash::new("kotodama-native-escrow:aitai_offer"))
+        );
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn escrow_id_json_is_a_canonical_hash_literal() {
+        let id = EscrowId::new(Hash::new("escrow-json"));
+        let expected =
+            norito::json::to_json(id.as_hash()).expect("serialize canonical escrow hash");
+        let encoded = norito::json::to_json(&id).expect("serialize escrow id");
+        assert_eq!(encoded, expected);
+        assert_eq!(
+            norito::json::from_str::<EscrowId>(&encoded).expect("deserialize escrow id"),
+            id
+        );
+        assert!(
+            norito::json::from_str::<EscrowId>(&format!("[{encoded}]")).is_err(),
+            "the retired tuple-shaped EscrowId JSON must be rejected"
         );
     }
 

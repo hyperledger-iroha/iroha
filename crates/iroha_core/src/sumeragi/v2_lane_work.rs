@@ -14368,11 +14368,14 @@ pub(super) mod tests {
         );
         assert_eq!(
             successor_transport.server_service_generation_for_test(),
-            service_generation(
-                predecessor_generation
-                    .get()
-                    .checked_add(1)
-                    .expect("test generation remains representable")
+            CertifiedMergeSidecarServiceGenerationV1(
+                NonZeroU64::new(
+                    predecessor_generation
+                        .get()
+                        .checked_add(1)
+                        .expect("test generation remains representable"),
+                )
+                .expect("successor service generation remains non-zero"),
             )
         );
         assert_eq!(
