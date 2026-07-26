@@ -31,6 +31,15 @@ pub const BOOTLE_LANTERN_ISSUER_POLICY_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha:privacy:bootle-lantern:issuer-policy:v1";
 /// Domain separator for canonical ZK-AMS Personhood Credential hashes.
 pub const ZK_AMS_PHC_HASH_DOMAIN_V1: &[u8] = b"iroha:privacy:zk-ams:phc:v1";
+/// Domain separator for canonical ZK-AMS issuer-policy records.
+pub const ZK_AMS_ISSUER_POLICY_RECORD_DIGEST_DOMAIN_V1: &[u8] =
+    b"iroha:privacy:zk-ams:issuer-policy-record:v1";
+/// Domain separator for canonical ZK-AMS registry-snapshot records.
+pub const ZK_AMS_REGISTRY_RECORD_DIGEST_DOMAIN_V1: &[u8] =
+    b"iroha:privacy:zk-ams:registry-record:v1";
+/// Domain separator for canonical ZK-AMS registry bootstrap provenance.
+pub const ZK_AMS_REGISTRY_BOOTSTRAP_DIGEST_DOMAIN_V1: &[u8] =
+    b"iroha:privacy:zk-ams:registry-bootstrap:v1";
 
 /// Maximum privacy actions admitted in one Taira transaction.
 pub const TAIRA_PRIVACY_MAX_ACTIONS_PER_TRANSACTION_V1: u32 = 1;
@@ -262,9 +271,7 @@ pub enum PrivacyProofSystemIdV1 {
     /// Ristretto255 with SHA3-512 for the transcript and hash-to-group suite.
     #[cfg_attr(
         feature = "json",
-        norito(
-            rename = "zk-ams-masked-relaxed-spartan-t256-ristretto255-sha3-512"
-        )
+        norito(rename = "zk-ams-masked-relaxed-spartan-t256-ristretto255-sha3-512")
     )]
     ZkAmsMaskedRelaxedSpartanT256Ristretto255Sha3_512,
     /// Anonymous PGC k-out-of-n proof system over P-256.
@@ -553,6 +560,10 @@ define_privacy_digest!(
 define_privacy_digest!(
     /// Digest of an authoritative ZK-AMS registry snapshot record.
     PrivacyZkAmsRegistryRecordDigestV1
+);
+define_privacy_digest!(
+    /// Digest of one canonical governed ZK-AMS registry bootstrap.
+    PrivacyZkAmsRegistryBootstrapDigestV1
 );
 
 macro_rules! define_ristretto255_encoding {
@@ -4136,6 +4147,228 @@ pub struct VeRangeTransparentRangeStatementV1 {
 
 /// Exact wire version of [`PrivacyZkAmsPersonhoodCredentialV1`].
 pub const ZK_AMS_PHC_VERSION_V1: u8 = 1;
+/// Exact byte width of the closed canonical PHC payload.
+pub const ZK_AMS_PHC_CANONICAL_PAYLOAD_BYTES_V1: usize = 161;
+/// The only initial epoch admitted by the ZK-AMS registry bootstrap.
+pub const ZK_AMS_REGISTRY_BOOTSTRAP_INITIAL_EPOCH_V1: u64 = 1;
+/// Exact issuer-policy record preimage width.
+pub const ZK_AMS_ISSUER_POLICY_RECORD_PAYLOAD_BYTES_V1: usize = 129;
+/// Exact registry-snapshot record preimage width.
+pub const ZK_AMS_REGISTRY_RECORD_PAYLOAD_BYTES_V1: usize = 200;
+/// Exact registry-bootstrap provenance preimage width.
+pub const ZK_AMS_REGISTRY_BOOTSTRAP_PAYLOAD_BYTES_V1: usize = 201;
+
+/// Canonical governed origin for one ZK-AMS admitted-identity registry.
+///
+/// This is the only first-release instruction payload that may initialize an
+/// `AccountRegistry` root. It fixes the issuer key, admission policy, registry
+/// namespace, and exact nonzero origin root in one atomic governance action.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct PrivacyZkAmsRegistryBootstrapV1 {
+    /// Credential issuer authorized to sign canonical PHCs.
+    pub issuer_id: PrivacyIssuerIdV1,
+    /// Admitted-identity registry initialized by this record.
+    pub registry_id: PrivacyZkAmsRegistryIdV1,
+    /// Exact governed admission policy.
+    pub policy_id: PrivacyPolicyIdV1,
+    /// Canonical compressed SEC1 P-256 issuer verification key.
+    pub issuer_public_key: PrivacyP256PointV1,
+    /// Digest of the complete governed admission policy.
+    pub policy_digest: PrivacyPolicyDigestV1,
+    /// Nonzero origin of the proof-managed admitted-identity registry.
+    pub initial_registry_root: PrivacyRootV1,
+    /// Closed origin epoch; exactly
+    /// [`ZK_AMS_REGISTRY_BOOTSTRAP_INITIAL_EPOCH_V1`].
+    pub initial_registry_epoch: u64,
+}
+
+impl PrivacyZkAmsRegistryBootstrapV1 {
+    /// Derive the sole protocol-scoped namespace governed by this bootstrap.
+    #[must_use]
+    pub const fn namespace(self) -> PrivacyNamespaceV1 {
+        PrivacyNamespaceV1::new(
+            PrivacyProtocolIdV1::IrohaZkAmsV1,
+            PrivacyNamespaceScopeV1::IssuerRegistryPolicy(PrivacyIssuerRegistryPolicyNamespaceV1 {
+                issuer_id: self.issuer_id,
+                registry_id: self.registry_id,
+                policy_id: self.policy_id,
+            }),
+        )
+    }
+
+    /// Validate every closed nonzero field and the exact origin epoch.
+    ///
+    /// Core additionally parses `issuer_public_key` as a canonical,
+    /// non-identity P-256 point before persistence.
+    pub fn validate(&self) -> Result<(), PrivacyZkAmsRegistryBootstrapValidationError> {
+        if self.issuer_id.is_zero() {
+            return Err(PrivacyZkAmsRegistryBootstrapValidationError::ZeroIssuerId);
+        }
+        if self.registry_id.is_zero() {
+            return Err(PrivacyZkAmsRegistryBootstrapValidationError::ZeroRegistryId);
+        }
+        if self.policy_id.is_zero() {
+            return Err(PrivacyZkAmsRegistryBootstrapValidationError::ZeroPolicyId);
+        }
+        if self.issuer_public_key.is_zero() {
+            return Err(PrivacyZkAmsRegistryBootstrapValidationError::ZeroIssuerPublicKey);
+        }
+        if self.policy_digest.is_zero() {
+            return Err(PrivacyZkAmsRegistryBootstrapValidationError::ZeroPolicyDigest);
+        }
+        if self.initial_registry_root.is_zero() {
+            return Err(PrivacyZkAmsRegistryBootstrapValidationError::ZeroInitialRoot);
+        }
+        if self.initial_registry_epoch != ZK_AMS_REGISTRY_BOOTSTRAP_INITIAL_EPOCH_V1 {
+            return Err(
+                PrivacyZkAmsRegistryBootstrapValidationError::NonCanonicalInitialEpoch {
+                    epoch: self.initial_registry_epoch,
+                },
+            );
+        }
+        self.namespace()
+            .validate()
+            .map_err(|_| PrivacyZkAmsRegistryBootstrapValidationError::InvalidNamespace)
+    }
+
+    /// Derive the authoritative issuer-key/policy record digest.
+    #[must_use]
+    pub fn issuer_policy_record_digest(self) -> PrivacyZkAmsIssuerPolicyRecordDigestV1 {
+        zk_ams_issuer_policy_record_digest_v1(
+            self.issuer_id,
+            self.policy_id,
+            self.issuer_public_key,
+            self.policy_digest,
+        )
+    }
+
+    /// Derive the authoritative origin registry-snapshot record digest.
+    #[must_use]
+    pub fn registry_record_digest(self) -> PrivacyZkAmsRegistryRecordDigestV1 {
+        zk_ams_registry_record_digest_v1(
+            self.issuer_id,
+            self.registry_id,
+            self.policy_id,
+            self.issuer_policy_record_digest(),
+            self.policy_digest,
+            self.initial_registry_root,
+            self.initial_registry_epoch,
+        )
+    }
+
+    /// Hash the exact fixed bootstrap fields in their provenance domain.
+    #[must_use]
+    pub fn digest(self) -> PrivacyZkAmsRegistryBootstrapDigestV1 {
+        let mut payload = [0_u8; ZK_AMS_REGISTRY_BOOTSTRAP_PAYLOAD_BYTES_V1];
+        payload[0..32].copy_from_slice(self.issuer_id.as_bytes());
+        payload[32..64].copy_from_slice(self.registry_id.as_bytes());
+        payload[64..96].copy_from_slice(self.policy_id.as_bytes());
+        payload[96..129].copy_from_slice(self.issuer_public_key.as_bytes());
+        payload[129..161].copy_from_slice(self.policy_digest.as_bytes());
+        payload[161..193].copy_from_slice(self.initial_registry_root.as_bytes());
+        payload[193..201].copy_from_slice(&self.initial_registry_epoch.to_be_bytes());
+        let mut hasher = Sha256::new();
+        hasher.update(ZK_AMS_REGISTRY_BOOTSTRAP_DIGEST_DOMAIN_V1);
+        hasher.update(
+            u64::try_from(payload.len())
+                .expect("fixed ZK-AMS bootstrap payload length fits u64")
+                .to_le_bytes(),
+        );
+        hasher.update(payload);
+        PrivacyZkAmsRegistryBootstrapDigestV1::new(hasher.finalize().into())
+    }
+}
+
+/// Derive one exact authoritative ZK-AMS issuer-key/policy record digest.
+#[must_use]
+pub fn zk_ams_issuer_policy_record_digest_v1(
+    issuer_id: PrivacyIssuerIdV1,
+    policy_id: PrivacyPolicyIdV1,
+    issuer_public_key: PrivacyP256PointV1,
+    policy_digest: PrivacyPolicyDigestV1,
+) -> PrivacyZkAmsIssuerPolicyRecordDigestV1 {
+    let mut payload = [0_u8; ZK_AMS_ISSUER_POLICY_RECORD_PAYLOAD_BYTES_V1];
+    payload[0..32].copy_from_slice(issuer_id.as_bytes());
+    payload[32..64].copy_from_slice(policy_id.as_bytes());
+    payload[64..97].copy_from_slice(issuer_public_key.as_bytes());
+    payload[97..129].copy_from_slice(policy_digest.as_bytes());
+    let mut hasher = Sha256::new();
+    hasher.update(ZK_AMS_ISSUER_POLICY_RECORD_DIGEST_DOMAIN_V1);
+    hasher.update(
+        u64::try_from(payload.len())
+            .expect("fixed ZK-AMS issuer-policy payload length fits u64")
+            .to_le_bytes(),
+    );
+    hasher.update(payload);
+    PrivacyZkAmsIssuerPolicyRecordDigestV1::new(hasher.finalize().into())
+}
+
+/// Derive one exact authoritative ZK-AMS registry-snapshot record digest.
+#[must_use]
+#[allow(clippy::too_many_arguments)]
+pub fn zk_ams_registry_record_digest_v1(
+    issuer_id: PrivacyIssuerIdV1,
+    registry_id: PrivacyZkAmsRegistryIdV1,
+    policy_id: PrivacyPolicyIdV1,
+    issuer_policy_record_digest: PrivacyZkAmsIssuerPolicyRecordDigestV1,
+    policy_digest: PrivacyPolicyDigestV1,
+    registry_root: PrivacyRootV1,
+    registry_epoch: u64,
+) -> PrivacyZkAmsRegistryRecordDigestV1 {
+    let mut payload = [0_u8; ZK_AMS_REGISTRY_RECORD_PAYLOAD_BYTES_V1];
+    payload[0..32].copy_from_slice(issuer_id.as_bytes());
+    payload[32..64].copy_from_slice(registry_id.as_bytes());
+    payload[64..96].copy_from_slice(policy_id.as_bytes());
+    payload[96..128].copy_from_slice(issuer_policy_record_digest.as_bytes());
+    payload[128..160].copy_from_slice(policy_digest.as_bytes());
+    payload[160..192].copy_from_slice(registry_root.as_bytes());
+    payload[192..200].copy_from_slice(&registry_epoch.to_be_bytes());
+    let mut hasher = Sha256::new();
+    hasher.update(ZK_AMS_REGISTRY_RECORD_DIGEST_DOMAIN_V1);
+    hasher.update(
+        u64::try_from(payload.len())
+            .expect("fixed ZK-AMS registry-record payload length fits u64")
+            .to_le_bytes(),
+    );
+    hasher.update(payload);
+    PrivacyZkAmsRegistryRecordDigestV1::new(hasher.finalize().into())
+}
+
+/// Structural failure for [`PrivacyZkAmsRegistryBootstrapV1`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+pub enum PrivacyZkAmsRegistryBootstrapValidationError {
+    /// Issuer id is the zero sentinel.
+    #[error("ZK-AMS registry bootstrap issuer id must be nonzero")]
+    ZeroIssuerId,
+    /// Registry id is the zero sentinel.
+    #[error("ZK-AMS registry bootstrap registry id must be nonzero")]
+    ZeroRegistryId,
+    /// Policy id is the zero sentinel.
+    #[error("ZK-AMS registry bootstrap policy id must be nonzero")]
+    ZeroPolicyId,
+    /// Issuer public key is the all-zero sentinel.
+    #[error("ZK-AMS registry bootstrap issuer public key must be nonzero")]
+    ZeroIssuerPublicKey,
+    /// Policy digest is the zero sentinel.
+    #[error("ZK-AMS registry bootstrap policy digest must be nonzero")]
+    ZeroPolicyDigest,
+    /// Initial registry root is the zero sentinel.
+    #[error("ZK-AMS registry bootstrap root must be nonzero")]
+    ZeroInitialRoot,
+    /// Initial epoch differs from the only closed first-release origin.
+    #[error("ZK-AMS registry bootstrap initial epoch must be 1, got {epoch}")]
+    NonCanonicalInitialEpoch {
+        /// Rejected caller-provided epoch.
+        epoch: u64,
+    },
+    /// Derived namespace is invalid.
+    #[error("ZK-AMS registry bootstrap namespace is invalid")]
+    InvalidNamespace,
+}
 
 /// Fixed typed Personhood Credential admitted by the Iroha ZK-AMS profile.
 ///
@@ -4164,23 +4397,60 @@ pub struct PrivacyZkAmsPersonhoodCredentialV1 {
 }
 
 impl PrivacyZkAmsPersonhoodCredentialV1 {
-    /// Hash the exact typed Norito credential with domain and length framing.
+    /// Return the exact fixed typed-Norito payload signed by the issuer.
     ///
-    /// # Errors
-    ///
-    /// Returns a Norito error if canonical credential encoding unexpectedly
-    /// fails.
-    pub fn digest(&self) -> Result<PrivacyZkAmsPhcHashV1, norito::Error> {
-        let encoded = norito::to_bytes(self)?;
+    /// The payload is closed to
+    /// `version || issuer_id || policy_id || subject_commitment ||
+    /// seed_public_key || credential_nonce`. Every field has a fixed width, so
+    /// no optional, offset, or length table can introduce an alternative
+    /// preimage.
+    #[must_use]
+    pub fn canonical_payload(&self) -> PrivacyZkAmsPhcCanonicalPayloadV1 {
+        let mut payload = [0_u8; ZK_AMS_PHC_CANONICAL_PAYLOAD_BYTES_V1];
+        payload[0] = self.version;
+        payload[1..33].copy_from_slice(self.issuer_id.as_bytes());
+        payload[33..65].copy_from_slice(self.policy_id.as_bytes());
+        payload[65..97].copy_from_slice(self.subject_commitment.as_bytes());
+        payload[97..129].copy_from_slice(self.seed_public_key.as_bytes());
+        payload[129..161].copy_from_slice(self.credential_nonce.as_bytes());
+        PrivacyZkAmsPhcCanonicalPayloadV1(payload)
+    }
+
+    /// Hash the exact typed credential payload with domain and length framing.
+    #[must_use]
+    pub fn digest(&self) -> PrivacyZkAmsPhcHashV1 {
+        let payload = self.canonical_payload();
         let mut hasher = Sha256::new();
         hasher.update(ZK_AMS_PHC_HASH_DOMAIN_V1);
         hasher.update(
-            u64::try_from(encoded.len())
+            u64::try_from(payload.as_bytes().len())
                 .expect("Norito output length fits u64 on supported targets")
                 .to_le_bytes(),
         );
-        hasher.update(encoded);
-        Ok(PrivacyZkAmsPhcHashV1::new(hasher.finalize().into()))
+        hasher.update(payload.as_bytes());
+        PrivacyZkAmsPhcHashV1::new(hasher.finalize().into())
+    }
+}
+
+/// Exact fixed typed-Norito preimage of a ZK-AMS Personhood Credential.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
+#[repr(transparent)]
+#[norito(transparent, decode_from_slice)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct PrivacyZkAmsPhcCanonicalPayloadV1(
+    /// Exact closed credential payload.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub [u8; ZK_AMS_PHC_CANONICAL_PAYLOAD_BYTES_V1],
+);
+
+impl PrivacyZkAmsPhcCanonicalPayloadV1 {
+    /// Borrow the exact canonical payload.
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; ZK_AMS_PHC_CANONICAL_PAYLOAD_BYTES_V1] {
+        &self.0
     }
 }
 
@@ -9000,10 +9270,9 @@ mod tests {
         batch_envelope
             .validate_with_limits(&limits)
             .expect("batch masked Relaxed Spartan proof variant");
-        batch_envelope.proof =
-            PrivacyProofV1::IrohaZkAmsV1(IrohaZkAmsProofV1::Ristretto255LsagProvisionAccount(
-                PrivacyProofBytesV1::new(vec![1]),
-            ));
+        batch_envelope.proof = PrivacyProofV1::IrohaZkAmsV1(
+            IrohaZkAmsProofV1::Ristretto255LsagProvisionAccount(PrivacyProofBytesV1::new(vec![1])),
+        );
         assert!(matches!(
             batch_envelope.validate_with_limits(&limits),
             Err(PrivacyProofEnvelopeValidationError::ZkAmsActionProofMismatch)
@@ -9014,9 +9283,10 @@ mod tests {
         provision_envelope
             .validate_with_limits(&limits)
             .expect("provisioning LSAG proof variant");
-        provision_envelope.proof = PrivacyProofV1::IrohaZkAmsV1(
-            IrohaZkAmsProofV1::MaskedRelaxedSpartanBatchAdmission(PrivacyProofBytesV1::new(vec![1])),
-        );
+        provision_envelope.proof =
+            PrivacyProofV1::IrohaZkAmsV1(IrohaZkAmsProofV1::MaskedRelaxedSpartanBatchAdmission(
+                PrivacyProofBytesV1::new(vec![1]),
+            ));
         assert!(matches!(
             provision_envelope.validate_with_limits(&limits),
             Err(PrivacyProofEnvelopeValidationError::ZkAmsActionProofMismatch)

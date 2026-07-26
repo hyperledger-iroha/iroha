@@ -24,9 +24,13 @@ use iroha_data_model::privacy::{
     PrivacyStatementSchemaDigestV1, PrivacyVerifierDigestV1,
     TAIRA_PRIVACY_MAX_COMMITMENTS_PER_ACTION_V1, TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1,
     VERANGE_HARD_MAX_AGGREGATION_COUNT_V1, VeRangeActivationLimitsV1,
-    VeRangeTransparentRangeStatementV1,
+    VeRangeTransparentRangeStatementV1, VegaExistingCredentialStatementV1,
 };
 use iroha_schema::{FloatMode, IntMode, IntoSchema, MetaMapEntry, Metadata};
+use iroha_zkp_halo2::vega::{
+    MAX_VEGA_PROOF_BYTES_V1, VEGA_EXISTING_CREDENTIAL_PROTOCOL_LABEL_V1,
+    VEGA_INTERNAL_TRANSCRIPT_PERSONA_V1, vega_mdl_compiled_profile_digest_v1,
+};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
@@ -83,6 +87,12 @@ const JINDO_PARAMETER_SET_LABEL_V1: &[u8] = b"jindo-univariate-batch4-degree256-
 const JINDO_PROOF_WIRE_LABEL_V1: &[u8] = b"IJP1:fixed-rns-le:30-outer:66-inner:strict-exact:v1";
 const JINDO_IMPLEMENTATION_PROVENANCE_V1: &[u8] =
     b"iroha-native-rust:clean-room:eprint-2026-044:figures-1-5:univariate:v1";
+const VEGA_PARAMETER_SET_LABEL_V1: &[u8] =
+    b"vega-figure9-mdl-age-neutron-nova-spartan-hyrax-t256-v1";
+const VEGA_PROOF_WIRE_LABEL_V1: &[u8] =
+    b"norito:vega-figure9-masked-relaxed-fold-spartan-hyrax:strict-exact:v1";
+const VEGA_IMPLEMENTATION_PROVENANCE_V1: &[u8] =
+    b"iroha-native-rust:microsoft-vega-prover:c0ee259053cd12eaf43ed71b5cde375452b3ee4d:figure9:v1";
 const ANONYMOUS_PGC_ACCOUNT_ROOT_SCHEMA_V1: &[u8] = b"namespace_len:u64le|namespace:norito|epoch:u64le|total_supply:u32le|account_count:u32le|accounts[public_key:33,cipher_left:33,cipher_right:33]";
 const ANONYMOUS_PGC_VERIFIED_EFFECT_SCHEMA_V1: &[u8] = b"namespace:norito|total_supply:u32|current_root:32|current_epoch:u64|next_root:32|next_epoch:u64|complete_accounts[public_key:33,cipher_left:33,cipher_right:33]";
 
@@ -232,12 +242,12 @@ pub fn compiled_privacy_profile_v1(
         PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1 => compiled_anonymous_pgc_profile_v1(),
         PrivacyProtocolIdV1::VeRangeTransparentRangeV1 => compiled_verange_profile_v1(),
         PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0 => compiled_jindo_profile_v1(),
+        PrivacyProtocolIdV1::VegaExistingCredentialZkV0 => compiled_vega_profile_v1(),
         // TODO(privacy-native-engines): remove each fail-closed branch only
         // after its complete canonical verifier, effect derivation, KATs, and
         // adversarial tests are compiled into this manifest.
         PrivacyProtocolIdV1::ZkAcePqAuthorizationV0
         | PrivacyProtocolIdV1::IrohaZkAmsV1
-        | PrivacyProtocolIdV1::VegaExistingCredentialZkV0
         | PrivacyProtocolIdV1::IrohaZkX509StarkP256V0
         | PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1
         | PrivacyProtocolIdV1::OrchardHalo2ActionsV1
@@ -289,6 +299,92 @@ pub fn validate_compiled_privacy_activation_v1(
         return Err(CompiledPrivacyProfileValidationErrorV1::AssuranceMismatch);
     }
     Ok(())
+}
+
+fn compiled_vega_profile_v1() -> Result<CompiledPrivacyProfileV1, CompiledPrivacyProfileErrorV1> {
+    let protocol_id = PrivacyProtocolIdV1::VegaExistingCredentialZkV0;
+    let compiled_profile_digest = vega_mdl_compiled_profile_digest_v1();
+    let proof_bytes = u64::try_from(MAX_VEGA_PROOF_BYTES_V1)
+        .map_err(|_| CompiledPrivacyProfileErrorV1::ProfileInitializationFailed { protocol_id })?;
+    if proof_bytes > u64::from(TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1) {
+        return Err(CompiledPrivacyProfileErrorV1::ProfileInitializationFailed { protocol_id });
+    }
+    let proof_bytes_encoded = proof_bytes.to_be_bytes();
+    let global_proof_cap = TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1.to_be_bytes();
+    let parameter_id = digest_fields_v1(
+        PARAMETER_ID_DOMAIN_V1,
+        &[
+            VEGA_EXISTING_CREDENTIAL_PROTOCOL_LABEL_V1,
+            VEGA_PARAMETER_SET_LABEL_V1,
+            VEGA_IMPLEMENTATION_PROVENANCE_V1,
+            VEGA_INTERNAL_TRANSCRIPT_PERSONA_V1,
+            &compiled_profile_digest,
+            &proof_bytes_encoded,
+        ],
+    );
+    let parameter_digest = digest_fields_v1(
+        PARAMETER_DIGEST_DOMAIN_V1,
+        &[
+            VEGA_EXISTING_CREDENTIAL_PROTOCOL_LABEL_V1,
+            VEGA_PARAMETER_SET_LABEL_V1,
+            VEGA_IMPLEMENTATION_PROVENANCE_V1,
+            VEGA_INTERNAL_TRANSCRIPT_PERSONA_V1,
+            &compiled_profile_digest,
+            &proof_bytes_encoded,
+        ],
+    );
+    let statement_schema_digest = canonical_schema_digest_v1::<VegaExistingCredentialStatementV1>()
+        .map_err(
+            |source| CompiledPrivacyProfileErrorV1::StatementSchemaInvalid {
+                protocol_id,
+                source,
+            },
+        )?;
+    let verifier_digest = digest_fields_v1(
+        VERIFIER_DIGEST_DOMAIN_V1,
+        &[
+            VEGA_EXISTING_CREDENTIAL_PROTOCOL_LABEL_V1,
+            VEGA_IMPLEMENTATION_PROVENANCE_V1,
+            VEGA_PARAMETER_SET_LABEL_V1,
+            VEGA_INTERNAL_TRANSCRIPT_PERSONA_V1,
+            VEGA_PROOF_WIRE_LABEL_V1,
+            &compiled_profile_digest,
+            &proof_bytes_encoded,
+            &statement_schema_digest,
+            &global_proof_cap,
+        ],
+    );
+    let engine_manifest_digest = digest_fields_v1(
+        ENGINE_MANIFEST_DIGEST_DOMAIN_V1,
+        &[
+            VEGA_EXISTING_CREDENTIAL_PROTOCOL_LABEL_V1,
+            VEGA_IMPLEMENTATION_PROVENANCE_V1,
+            b"proof-system:vega-neutron-nova-spartan-hyrax-t256",
+            b"engine:native-vega",
+            VEGA_PARAMETER_SET_LABEL_V1,
+            VEGA_INTERNAL_TRANSCRIPT_PERSONA_V1,
+            VEGA_PROOF_WIRE_LABEL_V1,
+            &compiled_profile_digest,
+            &proof_bytes_encoded,
+            &parameter_id,
+            &parameter_digest,
+            &verifier_digest,
+            &statement_schema_digest,
+            &global_proof_cap,
+        ],
+    );
+
+    Ok(CompiledPrivacyProfileV1 {
+        protocol_id,
+        proof_system_id: PrivacyProofSystemIdV1::VegaNeutronNovaSpartanHyraxT256,
+        engine_id: PrivacyEngineIdV1::NativeVega,
+        parameter_id: PrivacyParameterIdV1::new(parameter_id),
+        parameter_digest: PrivacyParameterDigestV1::new(parameter_digest),
+        verifier_digest: PrivacyVerifierDigestV1::new(verifier_digest),
+        statement_schema_digest: PrivacyStatementSchemaDigestV1::new(statement_schema_digest),
+        engine_manifest_digest: PrivacyEngineManifestDigestV1::new(engine_manifest_digest),
+        protocol_limits: PrivacyProtocolActivationLimitsV1::VegaExistingCredentialZkV0,
+    })
 }
 
 fn compiled_anonymous_pgc_profile_v1()
@@ -1167,6 +1263,17 @@ mod tests {
             ))
     }
 
+    fn vega_activation() -> PrivacyProtocolActivationRecordV1 {
+        compiled_privacy_profile_v1(PrivacyProtocolIdV1::VegaExistingCredentialZkV0)
+            .expect("fixed Vega profile derives")
+            .activation_record(PrivacyProtocolLifecycleV1::Proposed(
+                PrivacyProposedLifecycleV1 {
+                    proposed_at_height: 100,
+                    activate_at_height: 400,
+                },
+            ))
+    }
+
     #[test]
     fn only_complete_engines_have_compiled_profiles() {
         let available = PrivacyProtocolIdV1::ALL
@@ -1178,6 +1285,7 @@ mod tests {
             vec![
                 PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
                 PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
+                PrivacyProtocolIdV1::VegaExistingCredentialZkV0,
                 PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV0,
             ]
         );
@@ -1335,6 +1443,100 @@ mod tests {
                 "0ed26c12d05daa25307810cb6bf26b388baab3aa3f7641248db8ea3e4424f6b9".to_owned(),
             )
         );
+    }
+
+    #[test]
+    fn vega_profile_is_deterministic_complete_and_bounded() {
+        let first = compiled_privacy_profile_v1(PrivacyProtocolIdV1::VegaExistingCredentialZkV0)
+            .expect("profile");
+        let second = compiled_privacy_profile_v1(PrivacyProtocolIdV1::VegaExistingCredentialZkV0)
+            .expect("profile");
+        assert_eq!(first, second);
+        assert_eq!(
+            first.proof_system_id,
+            PrivacyProofSystemIdV1::VegaNeutronNovaSpartanHyraxT256
+        );
+        assert_eq!(first.engine_id, PrivacyEngineIdV1::NativeVega);
+        assert_eq!(
+            first.protocol_limits,
+            PrivacyProtocolActivationLimitsV1::VegaExistingCredentialZkV0
+        );
+        assert!(MAX_VEGA_PROOF_BYTES_V1 <= TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1 as usize);
+        assert_ne!(vega_mdl_compiled_profile_digest_v1(), [0; 32]);
+        for digest in [
+            *first.parameter_id.as_bytes(),
+            *first.parameter_digest.as_bytes(),
+            *first.verifier_digest.as_bytes(),
+            *first.statement_schema_digest.as_bytes(),
+            *first.engine_manifest_digest.as_bytes(),
+        ] {
+            assert_ne!(digest, [0; 32]);
+        }
+        assert_eq!(
+            (
+                hex::encode(first.parameter_id.as_bytes()),
+                hex::encode(first.parameter_digest.as_bytes()),
+                hex::encode(first.verifier_digest.as_bytes()),
+                hex::encode(first.statement_schema_digest.as_bytes()),
+                hex::encode(first.engine_manifest_digest.as_bytes()),
+            ),
+            (
+                "65a3df3b4d5565ed6d17f048742f6443bdf005f9f7e465de269a3895dd0f3150".to_owned(),
+                "7ae98000975ff7b55613bd7f96d3a708e8c71cad6f62adf8c7ae3d7fb031089d".to_owned(),
+                "18087d00cfde4642595cbcd191b1175d5dcfa7ef512cd99976f729eb7a3a2c68".to_owned(),
+                "2f5cfb37e975ece2b89d526e5d7105bbb2266962be1505ec7c747ba9822e80ec".to_owned(),
+                "c3f04482c1a012ccea43dc6c13c5ee2aea246d44aba7b034e30619bf3a112272".to_owned(),
+            )
+        );
+    }
+
+    #[test]
+    fn vega_compiled_profile_rejects_every_binding_mismatch() {
+        let valid = vega_activation();
+        validate_compiled_privacy_activation_v1(&valid).expect("exact profile");
+        let mutations: [(
+            CompiledPrivacyProfileValidationErrorV1,
+            fn(&mut PrivacyProtocolActivationRecordV1),
+        ); 7] = [
+            (
+                CompiledPrivacyProfileValidationErrorV1::ProofSystemMismatch,
+                |record| {
+                    record.proof_system_id = PrivacyProofSystemIdV1::IrohaVeRangeP256;
+                },
+            ),
+            (
+                CompiledPrivacyProfileValidationErrorV1::EngineMismatch,
+                |record| record.engine_id = PrivacyEngineIdV1::NativeVeRangeP256,
+            ),
+            (
+                CompiledPrivacyProfileValidationErrorV1::ParameterIdMismatch,
+                |record| record.parameter_id.0[0] ^= 1,
+            ),
+            (
+                CompiledPrivacyProfileValidationErrorV1::ParameterDigestMismatch,
+                |record| record.parameter_digest.0[0] ^= 1,
+            ),
+            (
+                CompiledPrivacyProfileValidationErrorV1::VerifierDigestMismatch,
+                |record| record.verifier_digest.0[0] ^= 1,
+            ),
+            (
+                CompiledPrivacyProfileValidationErrorV1::StatementSchemaDigestMismatch,
+                |record| record.statement_schema_digest.0[0] ^= 1,
+            ),
+            (
+                CompiledPrivacyProfileValidationErrorV1::EngineManifestDigestMismatch,
+                |record| record.engine_manifest_digest.0[0] ^= 1,
+            ),
+        ];
+        for (expected, mutate) in mutations {
+            let mut changed = valid;
+            mutate(&mut changed);
+            assert_eq!(
+                validate_compiled_privacy_activation_v1(&changed),
+                Err(expected)
+            );
+        }
     }
 
     #[test]

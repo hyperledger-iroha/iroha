@@ -948,6 +948,12 @@ pub const DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         "Keep each decoded key exactly once; identifier and quoted spellings of the same key still collide."
     ),
     explanation!(
+        "E_JSON_LITERAL_INVALID",
+        Semantic,
+        "a Json::parse string literal is not valid JSON",
+        "Provide one valid JSON value and keep every decoded object key unique."
+    ),
+    explanation!(
         "E_JSON_SCHEMA_LIMIT",
         Semantic,
         "a native JSON construction exceeds a recursive V1 ABI bound",

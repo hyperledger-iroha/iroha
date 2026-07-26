@@ -165,6 +165,11 @@ fn visit_core_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionB
         visitor.visit_bootstrap_privacy_pgc_accounts_v1(v);
     } else if let Some(v) = isi
         .as_any()
+        .downcast_ref::<crate::isi::privacy::BootstrapPrivacyZkAmsRegistryV1>()
+    {
+        visitor.visit_bootstrap_privacy_zk_ams_registry_v1(v);
+    } else if let Some(v) = isi
+        .as_any()
         .downcast_ref::<crate::isi::privacy::SubmitPrivacyProofV1>()
     {
         visitor.visit_submit_privacy_proof_v1(v);
@@ -615,6 +620,9 @@ macro_rules! instruction_visitors {
             visit_publish_privacy_root_v1(&$crate::isi::privacy::PublishPrivacyRootV1),
             visit_bootstrap_privacy_pgc_accounts_v1(
                 &$crate::isi::privacy::BootstrapPrivacyPgcAccountsV1
+            ),
+            visit_bootstrap_privacy_zk_ams_registry_v1(
+                &$crate::isi::privacy::BootstrapPrivacyZkAmsRegistryV1
             ),
             visit_submit_privacy_proof_v1(&$crate::isi::privacy::SubmitPrivacyProofV1),
             visit_publish_pedersen_params(&PublishPedersenParams),

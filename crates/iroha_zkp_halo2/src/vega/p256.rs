@@ -15,6 +15,13 @@ const P256_ORDER_BE: [u8; 32] = [
     0xbc, 0xe6, 0xfa, 0xad, 0xa7, 0x17, 0x9e, 0x84, 0xf3, 0xb9, 0xca, 0xc2, 0xfc, 0x63, 0x25, 0x51,
 ];
 
+// floor(n / 2) + 1. Requiring `s <` this constant is exactly the closed
+// low-s condition `1 <= s <= floor(n / 2)`.
+const P256_HALF_ORDER_PLUS_ONE_BE: [u8; 32] = [
+    0x7f, 0xff, 0xff, 0xff, 0x80, 0x00, 0x00, 0x00, 0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0xde, 0x73, 0x7d, 0x56, 0xd3, 0x8b, 0xcf, 0x42, 0x79, 0xdc, 0xe5, 0x61, 0x7e, 0x31, 0x92, 0xa9,
+];
+
 const P256_B_BE: [u8; 32] = [
     0x5a, 0xc6, 0x35, 0xd8, 0xaa, 0x3a, 0x93, 0xe7, 0xb3, 0xeb, 0xbd, 0x55, 0x76, 0x98, 0x86, 0xbc,
     0x65, 0x1d, 0x06, 0xb0, 0xcc, 0x53, 0xb0, 0xf6, 0x3b, 0xce, 0x3c, 0x3e, 0x27, 0xd2, 0x60, 0x4b,
@@ -90,6 +97,23 @@ pub(super) fn public_point(
     Ok(point)
 }
 
+/// Allocate a public finite P-256 point and constrain the exact compressed
+/// SEC1 prefix (`0x02` for even y, `0x03` for odd y).
+pub(super) fn public_compressed_point(
+    builder: &mut CircuitBuilder,
+    x_index: usize,
+    y_index: usize,
+    prefix_index: usize,
+) -> Result<P256PointVar, CircuitError> {
+    let point = public_point(builder, x_index, y_index)?;
+    let y_bits = decompose_field(builder, point.y.clone())?;
+    builder.enforce_equal(
+        builder.public(prefix_index)?.into(),
+        LinearCombination::constant(Scalar::from_u64(2)).plus(&y_bits[0].lc()),
+    )?;
+    Ok(point)
+}
+
 pub(super) fn private_point_from_be_bytes(
     builder: &mut CircuitBuilder,
     x: &[ByteVar],
@@ -135,6 +159,45 @@ pub(super) fn verify_es256(
     builder.enforce_zero(result.infinity.lc())?;
     enforce_x_mod_order_equals_r(builder, result.x, &r)?;
     Ok(())
+}
+
+/// Verify one canonical low-s ES256 signature without trusting a host-side
+/// modular inverse.
+///
+/// The private recovery point `R` is constrained on curve, constrained by
+/// `x(R) mod n = r`, and used in the exact group equation
+/// `sR = H(m)G + rQ`. This proves the ECDSA relation while T256's scalar field
+/// remains the P-256 coordinate field rather than the P-256 group-order field.
+pub(super) fn verify_es256_low_s(
+    builder: &mut CircuitBuilder,
+    message_digest: [WordVar; 8],
+    public_key: &P256PointVar,
+    r_be: [u8; 32],
+    s_be: [u8; 32],
+    recovery_x_be: [u8; 32],
+    recovery_y_be: [u8; 32],
+) -> Result<(), CircuitError> {
+    let digest = digest_scalar_bits(message_digest);
+    let r = allocate_scalar_be(builder, r_be)?;
+    let s = allocate_scalar_be(builder, s_be)?;
+    enforce_nonzero_below_order(builder, &r)?;
+    enforce_nonzero_below_order(builder, &s)?;
+    let (_, is_low_s) = subtract_constant(builder, &s.bits_le, &P256_HALF_ORDER_PLUS_ONE_BE)?;
+    builder.enforce_equal(is_low_s.lc(), LinearCombination::one())?;
+
+    let recovery_x = allocate_bytes(builder, &recovery_x_be)?;
+    let recovery_y = allocate_bytes(builder, &recovery_y_be)?;
+    let recovery = private_point_from_be_bytes(builder, &recovery_x, &recovery_y)?;
+    enforce_x_mod_order_equals_r(builder, recovery.x.clone(), &r)?;
+
+    let generator = constant_generator(builder)?;
+    let digest_times_generator = scalar_mul(builder, &generator, &digest.bits_le)?;
+    let r_times_key = scalar_mul(builder, public_key, &r.bits_le)?;
+    let right = add_complete(builder, &digest_times_generator, &r_times_key)?;
+    let left = scalar_mul(builder, &recovery, &s.bits_le)?;
+    builder.enforce_equal(left.infinity.lc(), right.infinity.lc())?;
+    builder.enforce_equal(left.x, right.x)?;
+    builder.enforce_equal(left.y, right.y)
 }
 
 fn enforce_nonidentity_on_curve(

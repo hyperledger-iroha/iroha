@@ -10,18 +10,20 @@ use iroha_data_model::{
     isi::{
         error::{InstructionExecutionError as Error, InvalidParameterError},
         privacy::{
-            BootstrapPrivacyPgcAccountsV1, PublishPrivacyRootV1,
+            BootstrapPrivacyPgcAccountsV1, BootstrapPrivacyZkAmsRegistryV1, PublishPrivacyRootV1,
             RegisterPrivacyProtocolActivationV1, SchedulePrivacyConsensusPolicyTighteningV1,
             SchedulePrivacyProtocolLimitsTighteningV1, SubmitPrivacyProofV1,
             TransitionPrivacyProtocolLifecycleV1,
         },
     },
     permission::Permission,
-    prelude::AccountId,
+    prelude::{Account, AccountId, Register},
     privacy::{
         PrivacyConsensusPolicyTighteningV1, PrivacyNamespaceV1, PrivacyProtocolIdV1,
         PrivacyProtocolLifecycleV1, PrivacyProtocolLimitsTighteningV1, PrivacyRootManagementV1,
-        PrivacyRootRoleV1, TAIRA_PRIVACY_MAX_PGC_BOOTSTRAP_PROOF_BYTES_V1,
+        PrivacyRootRoleV1, PrivacyStatementV1, PrivacyZkAmsActionV1,
+        TAIRA_PRIVACY_MAX_PGC_BOOTSTRAP_PROOF_BYTES_V1,
+        zk_ams_issuer_policy_record_digest_v1, zk_ams_registry_record_digest_v1,
     },
 };
 use iroha_executor_data_model::permission::governance::CanEnactGovernance;
@@ -38,15 +40,18 @@ use crate::{
                 verify_bootstrap_encoded,
             },
         },
-        p256::TranscriptBindingV1,
+        p256::{CompressedPointV1, TranscriptBindingV1},
+        zk_ams::zk_ams_registry_transition_root_v1,
     },
     privacy_profiles::validate_compiled_privacy_activation_v1,
     privacy_state::{
-        PrivacyActivationKeyV1, PrivacyPgcAccountKeyV1, PrivacyPgcAccountProvenanceV1,
-        PrivacyPgcAccountStateV1, PrivacyPgcPoolInvariantKeyV1, PrivacyPgcPoolInvariantV1,
-        PrivacyRootHeadKeyV1, PrivacyRootHeadRecordV1, PrivacyRootKeyV1, PrivacyRootProvenanceV1,
-        PrivacyRootRetentionAnchorV1, compute_privacy_pgc_account_state_root_v1,
-        load_privacy_pgc_pool_snapshot_v1, plan_privacy_root_history_update_v1,
+        PrivacyActivationKeyV1, PrivacyCommitmentKeyV1, PrivacyNullifierKeyV1,
+        PrivacyPgcAccountKeyV1, PrivacyPgcAccountProvenanceV1, PrivacyPgcAccountStateV1,
+        PrivacyPgcPoolInvariantKeyV1, PrivacyPgcPoolInvariantV1, PrivacyRootHeadKeyV1,
+        PrivacyRootHeadRecordV1, PrivacyRootKeyV1, PrivacyRootProvenanceV1,
+        PrivacyRootRetentionAnchorV1, PrivacyStateItemRecordV1,
+        compute_privacy_pgc_account_state_root_v1, load_privacy_pgc_pool_snapshot_v1,
+        load_privacy_zk_ams_registry_snapshot_v1, plan_privacy_root_history_update_v1,
         validate_non_pgc_privacy_root_retention_v1,
     },
     privacy_verifier::{
@@ -119,7 +124,9 @@ fn privacy_verification_error(error: PrivacyVerificationErrorV1) -> Error {
         PrivacyVerificationErrorV1::Envelope(_)
         | PrivacyVerificationErrorV1::EngineUnavailable(_)
         | PrivacyVerificationErrorV1::NativeVeRange(_)
+        | PrivacyVerificationErrorV1::NativeVega(_)
         | PrivacyVerificationErrorV1::NativeJindo(_)
+        | PrivacyVerificationErrorV1::NativeZkAms(_)
         | PrivacyVerificationErrorV1::NativeAnonymousPgc(_) => false,
     };
     if invariant {
@@ -327,6 +334,11 @@ impl Execute for PublishPrivacyRootV1 {
                 "PGC account-state roots require a complete typed account bootstrap",
             ));
         }
+        if self.publication.role == PrivacyRootRoleV1::AccountRegistry {
+            return Err(invalid_privacy_parameter(
+                "ZK-AMS AccountRegistry roots require the typed registry bootstrap and verified proof successors",
+            ));
+        }
         let current_height = state_transaction._curr_block.height().get();
         let activation_key = PrivacyActivationKeyV1::new(self.publication.namespace.protocol_id());
         let activation = state_transaction
@@ -456,6 +468,186 @@ impl Execute for PublishPrivacyRootV1 {
             .world
             .privacy_root_heads
             .insert(head_key, next_head);
+        Ok(())
+    }
+}
+
+impl Execute for BootstrapPrivacyZkAmsRegistryV1 {
+    fn execute(
+        self,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        ensure_privacy_governance(authority, state_transaction)?;
+        let encoded_action_bytes = norito::to_bytes(&self)
+            .ok()
+            .and_then(|bytes| u64::try_from(bytes.len()).ok())
+            .ok_or_else(|| {
+                Error::InvariantViolation(
+                    "ZK-AMS registry bootstrap canonical encoding failed".into(),
+                )
+            })?;
+        let expected_action_index = state_transaction.next_privacy_action_index();
+        state_transaction.preflight_privacy_action(expected_action_index, encoded_action_bytes)?;
+        self.bootstrap.validate().map_err(|error| {
+            invalid_privacy_parameter(format!("ZK-AMS registry bootstrap rejected: {error}"))
+        })?;
+        CompressedPointV1::from_slice(self.bootstrap.issuer_public_key.as_bytes()).map_err(
+            |error| {
+                invalid_privacy_parameter(format!(
+                    "ZK-AMS registry bootstrap issuer key rejected: {error}"
+                ))
+            },
+        )?;
+
+        let current_height = state_transaction._curr_block.height().get();
+        let namespace = self.bootstrap.namespace();
+        let activation_key = PrivacyActivationKeyV1::new(PrivacyProtocolIdV1::IrohaZkAmsV1);
+        let activation = state_transaction
+            .world
+            .privacy_activations
+            .get(&activation_key)
+            .copied()
+            .ok_or_else(|| invalid_privacy_parameter("ZK-AMS privacy protocol is not registered"))?;
+        validate_compiled_privacy_activation_v1(&activation).map_err(|error| {
+            Error::InvariantViolation(
+                format!("registered ZK-AMS activation is not executable: {error}").into(),
+            )
+        })?;
+        activation.validate().map_err(|error| {
+            invalid_privacy_parameter(format!("registered ZK-AMS activation is invalid: {error}"))
+        })?;
+        let PrivacyProtocolLifecycleV1::Active(active) = activation.lifecycle else {
+            return Err(invalid_privacy_parameter(
+                "cannot bootstrap a registry before ZK-AMS is active",
+            ));
+        };
+        if current_height < active.state_since_height {
+            return Err(invalid_privacy_parameter(format!(
+                "ZK-AMS activation is not effective until block {}",
+                active.state_since_height
+            )));
+        }
+
+        let head_key =
+            PrivacyRootHeadKeyV1::new(namespace, PrivacyRootRoleV1::AccountRegistry)
+                .map_err(invalid_privacy_parameter)?;
+        if state_transaction
+            .world
+            .privacy_root_heads
+            .get(&head_key)
+            .is_some()
+        {
+            return Err(invalid_privacy_parameter(
+                "ZK-AMS AccountRegistry is already initialized",
+            ));
+        }
+        if state_transaction
+            .world
+            .privacy_roots
+            .range(PrivacyRootKeyV1::history_range(
+                namespace,
+                PrivacyRootRoleV1::AccountRegistry,
+            ))
+            .next()
+            .is_some()
+        {
+            return Err(Error::InvariantViolation(
+                "ZK-AMS AccountRegistry history exists without a current head".into(),
+            ));
+        }
+        if state_transaction
+            .world
+            .privacy_commitments
+            .range(PrivacyCommitmentKeyV1::zk_ams_issuer_policy_record_range(namespace))
+            .next()
+            .is_some()
+            || state_transaction
+                .world
+                .privacy_commitments
+                .range(PrivacyCommitmentKeyV1::zk_ams_phc_range(namespace))
+                .next()
+                .is_some()
+            || state_transaction
+                .world
+                .privacy_commitments
+                .range(PrivacyCommitmentKeyV1::zk_ams_seed_key_range(namespace))
+                .next()
+                .is_some()
+            || state_transaction
+                .world
+                .privacy_nullifiers
+                .range(crate::privacy_state::PrivacyNullifierKeyV1::zk_ams_key_image_range(
+                    namespace,
+                ))
+                .next()
+                .is_some()
+        {
+            return Err(Error::InvariantViolation(
+                "ZK-AMS state items exist without a current registry head".into(),
+            ));
+        }
+
+        let bootstrap_digest = self.bootstrap.digest();
+        let issuer_record_key = PrivacyCommitmentKeyV1::zk_ams_issuer_policy_record(
+            namespace,
+            self.bootstrap.issuer_policy_record_digest(),
+        )
+        .map_err(invalid_privacy_parameter)?;
+        let issuer_record = PrivacyStateItemRecordV1::zk_ams_governance(
+            bootstrap_digest,
+            current_height,
+        )
+        .map_err(invalid_privacy_parameter)?;
+        let root_key = PrivacyRootKeyV1::new(
+            namespace,
+            PrivacyRootRoleV1::AccountRegistry,
+            self.bootstrap.initial_registry_epoch,
+            self.bootstrap.initial_registry_root,
+        )
+        .map_err(invalid_privacy_parameter)?;
+        let root_provenance =
+            PrivacyRootProvenanceV1::zk_ams_registry_bootstrap(bootstrap_digest, current_height)
+                .map_err(invalid_privacy_parameter)?;
+        let root_head = PrivacyRootHeadRecordV1::new(
+            self.bootstrap.initial_registry_epoch,
+            self.bootstrap.initial_registry_root,
+            root_provenance,
+            None,
+        )
+        .map_err(invalid_privacy_parameter)?;
+        let removals = plan_privacy_root_history_update_v1(
+            &state_transaction.world.privacy_roots,
+            &[root_key],
+            state_transaction
+                .world
+                .privacy_consensus_policy
+                .get()
+                .current_limits
+                .retained_root_count,
+        )
+        .map_err(|error| {
+            invalid_privacy_parameter(format!("ZK-AMS registry bootstrap root rejected: {error}"))
+        })?;
+        if !removals.is_empty() {
+            return Err(Error::InvariantViolation(
+                "new ZK-AMS registry history unexpectedly requires pruning".into(),
+            ));
+        }
+
+        state_transaction.reserve_privacy_action(expected_action_index, encoded_action_bytes)?;
+        state_transaction
+            .world
+            .privacy_commitments
+            .insert(issuer_record_key, issuer_record);
+        state_transaction
+            .world
+            .privacy_roots
+            .insert(root_key, root_provenance);
+        state_transaction
+            .world
+            .privacy_root_heads
+            .insert(head_key, root_head);
         Ok(())
     }
 }

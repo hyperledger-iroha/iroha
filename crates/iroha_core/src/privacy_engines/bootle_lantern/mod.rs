@@ -10,9 +10,11 @@ pub mod bounds;
 pub mod codec;
 pub mod compression;
 pub mod params;
+pub mod proof;
 pub mod relation;
 pub mod ring;
 pub mod sampling;
+mod toolbox;
 pub mod transcript;
 
 /// This engine remains fail-closed until its trusted runtime inputs and the

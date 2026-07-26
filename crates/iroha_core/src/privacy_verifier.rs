@@ -10,11 +10,13 @@ use iroha_data_model::{
     ChainId,
     privacy::{
         AnonymousPgcKOutOfNStatementV1, IrohaJindoPolynomialCommitmentStatementV1,
-        PrivacyConsensusLimitsV1, PrivacyNamespaceV1, PrivacyP256CiphertextV1, PrivacyP256PointV1,
-        PrivacyPgcAccountBootstrapDigestV1, PrivacyPgcAccountV1, PrivacyPgcBootstrapProofDigestV1,
-        PrivacyProofBytesV1, PrivacyProofEnvelopeV1, PrivacyProofEnvelopeValidationError,
-        PrivacyProofV1, PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1, PrivacyRootV1,
+        IrohaZkAmsProofV1, IrohaZkAmsStatementV1, PrivacyConsensusLimitsV1, PrivacyNamespaceV1,
+        PrivacyP256CiphertextV1, PrivacyP256PointV1, PrivacyPgcAccountBootstrapDigestV1,
+        PrivacyPgcAccountV1, PrivacyPgcBootstrapProofDigestV1, PrivacyProofBytesV1,
+        PrivacyProofEnvelopeV1, PrivacyProofEnvelopeValidationError, PrivacyProofV1,
+        PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1, PrivacyRootV1,
         PrivacyStatementDigestV1, PrivacyStatementV1, PrivacyVeRangeBitLengthV1,
+        VegaExistingCredentialStatementV1,
     },
 };
 use thiserror::Error;
@@ -28,9 +30,15 @@ use crate::{
         },
         jindo::{JindoErrorV1, jindo_crs_digest_v1, verify_batched_evaluation_v1},
         p256::{CompressedPointV1, TranscriptBindingV1},
+        vega::{VegaMdlConsensusBindingV1, VegaMdlError, verify_mdl_figure9_v1},
         verange::{
             VeRangeBitLengthV1, VeRangeError, VeRangeParametersV1, VeRangeType1BatchStatementV1,
             verify_batch_encoded,
+        },
+        zk_ams::{
+            VerifiedZkAmsBatchAdmissionV1, VerifiedZkAmsProvisionAccountV1, ZkAmsErrorV1,
+            verify_zk_ams_batch_admission_v1, verify_zk_ams_provision_statement_v1,
+            zk_ams_generator_digest_v1,
         },
     },
     privacy_profiles::{
@@ -151,6 +159,10 @@ pub(crate) enum VerifiedPrivacyLedgerEffectsV1 {
     None,
     /// Complete Anonymous-PGC encrypted account-table transition.
     AnonymousPgcPayment(VerifiedAnonymousPgcLedgerEffectV1),
+    /// Atomic ZK-AMS PHC/seed admission and AccountRegistry successor.
+    ZkAmsBatchAdmission(VerifiedZkAmsBatchAdmissionV1),
+    /// Atomic ZK-AMS provisioning key image and fresh account creation.
+    ZkAmsProvisionAccount(VerifiedZkAmsProvisionAccountV1),
 }
 
 /// Fully verified, statement-derived effects ready for atomic admission.
@@ -328,6 +340,13 @@ pub(crate) fn verify_privacy_envelope_v1(
             VerifiedPrivacyLedgerEffectsV1::None
         }
         (
+            PrivacyStatementV1::VegaExistingCredentialZkV0(statement),
+            PrivacyProofV1::VegaExistingCredentialZkV0(proof),
+        ) => verify_vega_existing_credential_v1(statement, proof, &context)?,
+        (PrivacyStatementV1::IrohaZkAmsV1(statement), PrivacyProofV1::IrohaZkAmsV1(proof)) => {
+            verify_zk_ams_v1(statement, proof, envelope, &context)?
+        }
+        (
             PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(statement),
             PrivacyProofV1::IrohaJindoPolynomialCommitmentV0(proof),
         ) => verify_jindo_batched_evaluation_v1(statement, proof, envelope, &context)?,
@@ -348,6 +367,61 @@ pub(crate) fn verify_privacy_envelope_v1(
         encoded_action_bytes,
         ledger,
     })
+}
+
+fn verify_zk_ams_v1(
+    statement: &IrohaZkAmsStatementV1,
+    proof: &IrohaZkAmsProofV1,
+    envelope: &PrivacyProofEnvelopeV1,
+    context: &PrivacyVerificationContextV1<'_>,
+) -> Result<VerifiedPrivacyLedgerEffectsV1, PrivacyVerificationErrorV1> {
+    let binding = TranscriptBindingV1 {
+        chain_id: context.chain_id.as_str().as_bytes(),
+        genesis_hash: context.genesis_hash,
+        action_index: context.expected_action_index,
+        statement_digest: *envelope.statement_digest.as_bytes(),
+        parameter_id: *envelope.parameter_id.as_bytes(),
+        parameter_digest: *envelope.parameter_digest.as_bytes(),
+        verifier_digest: *envelope.verifier_digest.as_bytes(),
+        statement_schema_digest: *envelope.statement_schema_digest.as_bytes(),
+        engine_manifest_digest: *envelope.engine_manifest_digest.as_bytes(),
+        generator_digest: zk_ams_generator_digest_v1(),
+    };
+    match proof {
+        IrohaZkAmsProofV1::MaskedRelaxedSpartanBatchAdmission(bytes) => {
+            verify_zk_ams_batch_admission_v1(statement, &binding, bytes.as_bytes())
+                .map(VerifiedPrivacyLedgerEffectsV1::ZkAmsBatchAdmission)
+        }
+        IrohaZkAmsProofV1::Ristretto255LsagProvisionAccount(bytes) => {
+            verify_zk_ams_provision_statement_v1(statement, &binding, bytes.as_bytes())
+                .map(VerifiedPrivacyLedgerEffectsV1::ZkAmsProvisionAccount)
+        }
+    }
+    .map_err(|source| {
+        PrivacyVerificationErrorV1::NativeZkAms(Box::new(PrivacyZkAmsVerificationFailureV1 {
+            source,
+        }))
+    })
+}
+
+fn verify_vega_existing_credential_v1(
+    statement: &VegaExistingCredentialStatementV1,
+    proof: &PrivacyProofBytesV1,
+    context: &PrivacyVerificationContextV1<'_>,
+) -> Result<VerifiedPrivacyLedgerEffectsV1, PrivacyVerificationErrorV1> {
+    let binding = VegaMdlConsensusBindingV1::from_context(&statement.context, context.genesis_hash);
+    verify_mdl_figure9_v1(
+        statement,
+        &binding,
+        context.block_timestamp_ms,
+        proof.as_bytes(),
+    )
+    .map_err(|source| {
+        PrivacyVerificationErrorV1::NativeVega(Box::new(PrivacyVegaVerificationFailureV1 {
+            source,
+        }))
+    })?;
+    Ok(VerifiedPrivacyLedgerEffectsV1::None)
 }
 
 fn verify_jindo_batched_evaluation_v1(
@@ -580,6 +654,12 @@ pub(crate) enum PrivacyVerificationErrorV1 {
     /// Native Jindo decoding or verification failed.
     #[error(transparent)]
     NativeJindo(Box<PrivacyJindoVerificationFailureV1>),
+    /// Native Vega decoding or verification failed.
+    #[error(transparent)]
+    NativeVega(Box<PrivacyVegaVerificationFailureV1>),
+    /// Native ZK-AMS decoding or verification failed.
+    #[error(transparent)]
+    NativeZkAms(Box<PrivacyZkAmsVerificationFailureV1>),
     /// Trusted persisted Anonymous-PGC state was absent or inconsistent.
     #[error(transparent)]
     AnonymousPgcState(Box<PrivacyAnonymousPgcStateFailureV1>),
@@ -654,6 +734,18 @@ pub(crate) struct PrivacyJindoVerificationFailureV1 {
     source: JindoErrorV1,
 }
 
+#[derive(Debug, Error)]
+#[error("native Vega verification failed: {source}")]
+pub(crate) struct PrivacyVegaVerificationFailureV1 {
+    source: VegaMdlError,
+}
+
+#[derive(Debug, Error)]
+#[error("native ZK-AMS verification failed: {source}")]
+pub(crate) struct PrivacyZkAmsVerificationFailureV1 {
+    source: ZkAmsErrorV1,
+}
+
 /// Stable trusted-state failure detected before or after native PGC proof
 /// verification.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -709,14 +801,18 @@ mod tests {
         name::Name,
         privacy::{
             IROHA_JINDO_MAX_ROUNDED_COMMITMENT_COEFFICIENT_V1, PrivacyActiveLifecycleV1,
-            PrivacyEngineIdV1, PrivacyJindoFieldElementV1, PrivacyNamespaceScopeV1,
-            PrivacyP256PointV1, PrivacyPgcAccountBootstrapDigestV1,
-            PrivacyPgcBootstrapProofDigestV1, PrivacyPolicyIdV1, PrivacyPoolIdV1,
-            PrivacyPoolNamespaceV1, PrivacyProofBytesV1, PrivacyProofSystemIdV1,
-            PrivacyProposedLifecycleV1, PrivacyProtocolLifecycleV1, PrivacyStatementContextV1,
-            PrivacyTransactionIntentDigestV1, VeRangeTransparentRangeStatementV1,
+            PrivacyChallengeV1, PrivacyCredentialDocumentTypeV1, PrivacyEngineIdV1,
+            PrivacyJindoFieldElementV1, PrivacyNamespaceScopeV1, PrivacyP256PointV1,
+            PrivacyPgcAccountBootstrapDigestV1, PrivacyPgcBootstrapProofDigestV1,
+            PrivacyPolicyIdV1, PrivacyPoolIdV1, PrivacyPoolNamespaceV1, PrivacyProofBytesV1,
+            PrivacyProofSystemIdV1, PrivacyProposedLifecycleV1, PrivacyProtocolLifecycleV1,
+            PrivacySessionTranscriptDigestV1, PrivacyStatementContextV1,
+            PrivacyTransactionIntentDigestV1, PrivacyVegaDeviceAuthenticationDigestV1,
+            PrivacyVegaMdlDateV1, PrivacyVegaMdlDigestAlgorithmV1, PrivacyVegaMdlNamespaceV1,
+            PrivacyVegaMdlSignatureAlgorithmV1, VeRangeTransparentRangeStatementV1,
         },
     };
+    use iroha_zkp_halo2::vega::MAX_VEGA_PROOF_BYTES_V1;
     use rand_core_06::{CryptoRng, Error as RngError, RngCore};
     use sha2::{Digest, Sha256};
 
@@ -734,6 +830,7 @@ mod tests {
                 prove_batched_evaluation_v1,
             },
             p256::SecretScalarV1,
+            vega::derive_device_authentication_digest_v1,
             verange::{commit, prove_batch},
         },
         privacy_profiles::{CompiledPrivacyProfileV1, compiled_privacy_profile_v1},
@@ -1005,6 +1102,85 @@ mod tests {
     fn jindo_fixture() -> &'static JindoFixture {
         static FIXTURE: OnceLock<JindoFixture> = OnceLock::new();
         FIXTURE.get_or_init(JindoFixture::new)
+    }
+
+    const VEGA_TRUSTED_TIMESTAMP_MS: u64 = 1_785_024_000_000;
+
+    fn vega_issuer_key() -> PrivacyP256PointV1 {
+        PrivacyP256PointV1::new([
+            0x03, 0x6b, 0x17, 0xd1, 0xf2, 0xe1, 0x2c, 0x42, 0x47, 0xf8, 0xbc, 0xe6, 0xe5, 0x63,
+            0xa4, 0x40, 0xf2, 0x77, 0x03, 0x7d, 0x81, 0x2d, 0xeb, 0x33, 0xa0, 0xf4, 0xa1, 0x39,
+            0x45, 0xd8, 0x98, 0xc2, 0x96,
+        ])
+    }
+
+    fn vega_invalid_proof_fixture() -> (
+        PrivacyProofEnvelopeV1,
+        PrivacyProtocolActivationRecordV1,
+        ChainId,
+    ) {
+        let compiled = compiled_privacy_profile_v1(PrivacyProtocolIdV1::VegaExistingCredentialZkV0)
+            .expect("compiled Vega");
+        let activation = compiled.activation_record(PrivacyProtocolLifecycleV1::Active(
+            PrivacyActiveLifecycleV1 {
+                proposed_at_height: 1,
+                activated_at_height: 2,
+                state_since_height: 2,
+            },
+        ));
+        let chain_id = ChainId::from("taira-privacy-vega-test");
+        let mut statement = VegaExistingCredentialStatementV1 {
+            context: PrivacyStatementContextV1 {
+                chain_id: chain_id.clone(),
+                action_index: 0,
+                transaction_intent_digest: PrivacyTransactionIntentDigestV1::new([0xd4; 32]),
+                parameter_id: compiled.parameter_id,
+                parameter_digest: compiled.parameter_digest,
+                verifier_digest: compiled.verifier_digest,
+                statement_schema_digest: compiled.statement_schema_digest,
+                engine_manifest_digest: compiled.engine_manifest_digest,
+            },
+            document_type: PrivacyCredentialDocumentTypeV1::Iso18013_5Mdl,
+            namespace: PrivacyVegaMdlNamespaceV1::OrgIso18013_5_1,
+            digest_algorithm: PrivacyVegaMdlDigestAlgorithmV1::Sha256,
+            issuer_authentication_algorithm: PrivacyVegaMdlSignatureAlgorithmV1::CoseSign1Es256,
+            device_authentication_algorithm: PrivacyVegaMdlSignatureAlgorithmV1::CoseSign1Es256,
+            issuer_public_key: vega_issuer_key(),
+            device_authentication_digest: PrivacyVegaDeviceAuthenticationDigestV1::new([0x11; 32]),
+            presentation_date: PrivacyVegaMdlDateV1 {
+                year: 2026,
+                month: 7,
+                day: 26,
+            },
+            minimum_age_years: 18,
+            reader_challenge: PrivacyChallengeV1::new([0x31; 32]),
+            session_transcript_digest: PrivacySessionTranscriptDigestV1::new([0x32; 32]),
+        };
+        let binding = VegaMdlConsensusBindingV1::from_context(&statement.context, [0xa7; 32]);
+        statement.device_authentication_digest =
+            derive_device_authentication_digest_v1(&statement, &binding)
+                .expect("canonical Vega device binding");
+        let typed_statement = PrivacyStatementV1::VegaExistingCredentialZkV0(statement);
+        let statement_digest = typed_statement.digest().expect("Vega statement digest");
+        (
+            PrivacyProofEnvelopeV1 {
+                protocol_id: compiled.protocol_id,
+                proof_system_id: compiled.proof_system_id,
+                engine_id: compiled.engine_id,
+                parameter_id: compiled.parameter_id,
+                parameter_digest: compiled.parameter_digest,
+                verifier_digest: compiled.verifier_digest,
+                statement_schema_digest: compiled.statement_schema_digest,
+                engine_manifest_digest: compiled.engine_manifest_digest,
+                statement_digest,
+                statement: typed_statement,
+                proof: PrivacyProofV1::VegaExistingCredentialZkV0(PrivacyProofBytesV1::new(vec![
+                    0x51,
+                ])),
+            },
+            activation,
+            chain_id,
+        )
     }
 
     struct PgcFixture {
@@ -1309,6 +1485,16 @@ mod tests {
             &mut envelope.statement
         else {
             unreachable!("Jindo fixture")
+        };
+        statement
+    }
+
+    fn vega_statement_mut(
+        envelope: &mut PrivacyProofEnvelopeV1,
+    ) -> &mut VegaExistingCredentialStatementV1 {
+        let PrivacyStatementV1::VegaExistingCredentialZkV0(statement) = &mut envelope.statement
+        else {
+            unreachable!("Vega fixture")
         };
         statement
     }
@@ -1917,6 +2103,99 @@ mod tests {
                 fixture.verification_context(&one_byte_below)
             ),
             Err(PrivacyVerificationErrorV1::Envelope(_))
+        ));
+    }
+
+    #[test]
+    fn vega_runtime_dispatches_to_the_native_verifier_and_enforces_its_tighter_cap() {
+        let (envelope, activation, chain_id) = vega_invalid_proof_fixture();
+        let mut context = verification_context(&activation, &chain_id);
+        context.block_timestamp_ms = VEGA_TRUSTED_TIMESTAMP_MS;
+        assert!(matches!(
+            verify_privacy_envelope_v1(&envelope, context),
+            Err(PrivacyVerificationErrorV1::NativeVega(_))
+        ));
+
+        let mut oversized = envelope.clone();
+        oversized.proof =
+            PrivacyProofV1::VegaExistingCredentialZkV0(PrivacyProofBytesV1::new(vec![
+                0x51;
+                MAX_VEGA_PROOF_BYTES_V1
+                    + 1
+            ]));
+        let mut context = verification_context(&activation, &chain_id);
+        context.block_timestamp_ms = VEGA_TRUSTED_TIMESTAMP_MS;
+        assert!(matches!(
+            verify_privacy_envelope_v1(&oversized, context),
+            Err(PrivacyVerificationErrorV1::NativeVega(_))
+        ));
+
+        for bytes in [Vec::new(), vec![0; 1], vec![0; 32]] {
+            let mut malformed = envelope.clone();
+            malformed.proof =
+                PrivacyProofV1::VegaExistingCredentialZkV0(PrivacyProofBytesV1::new(bytes));
+            let mut context = verification_context(&activation, &chain_id);
+            context.block_timestamp_ms = VEGA_TRUSTED_TIMESTAMP_MS;
+            assert!(matches!(
+                verify_privacy_envelope_v1(&malformed, context),
+                Err(PrivacyVerificationErrorV1::Envelope(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn vega_runtime_rejects_time_device_genesis_suite_and_governance_replay() {
+        let (envelope, activation, chain_id) = vega_invalid_proof_fixture();
+
+        for timestamp in [
+            VEGA_TRUSTED_TIMESTAMP_MS - 86_400_000,
+            VEGA_TRUSTED_TIMESTAMP_MS + 86_400_000,
+        ] {
+            let mut context = verification_context(&activation, &chain_id);
+            context.block_timestamp_ms = timestamp;
+            assert!(matches!(
+                verify_privacy_envelope_v1(&envelope, context),
+                Err(PrivacyVerificationErrorV1::NativeVega(_))
+            ));
+        }
+
+        let mut changed_device = envelope.clone();
+        vega_statement_mut(&mut changed_device)
+            .device_authentication_digest
+            .0[0] ^= 1;
+        refresh_statement_digest(&mut changed_device);
+        let mut context = verification_context(&activation, &chain_id);
+        context.block_timestamp_ms = VEGA_TRUSTED_TIMESTAMP_MS;
+        assert!(matches!(
+            verify_privacy_envelope_v1(&changed_device, context),
+            Err(PrivacyVerificationErrorV1::NativeVega(_))
+        ));
+
+        let mut changed_genesis = verification_context(&activation, &chain_id);
+        changed_genesis.block_timestamp_ms = VEGA_TRUSTED_TIMESTAMP_MS;
+        changed_genesis.genesis_hash[0] ^= 1;
+        assert!(matches!(
+            verify_privacy_envelope_v1(&envelope, changed_genesis),
+            Err(PrivacyVerificationErrorV1::NativeVega(_))
+        ));
+
+        let mut cross_suite = envelope.clone();
+        cross_suite.proof =
+            PrivacyProofV1::VeRangeTransparentRangeV1(PrivacyProofBytesV1::new(vec![0x51]));
+        let mut context = verification_context(&activation, &chain_id);
+        context.block_timestamp_ms = VEGA_TRUSTED_TIMESTAMP_MS;
+        assert!(matches!(
+            verify_privacy_envelope_v1(&cross_suite, context),
+            Err(PrivacyVerificationErrorV1::Envelope(_))
+        ));
+
+        let mut altered_activation = activation;
+        altered_activation.verifier_digest.0[0] ^= 1;
+        let mut context = verification_context(&altered_activation, &chain_id);
+        context.block_timestamp_ms = VEGA_TRUSTED_TIMESTAMP_MS;
+        assert!(matches!(
+            verify_privacy_envelope_v1(&envelope, context),
+            Err(PrivacyVerificationErrorV1::CompiledActivation(_))
         ));
     }
 

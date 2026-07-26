@@ -44,6 +44,17 @@ use super::{
 pub const VEGA_EXISTING_CREDENTIAL_PROTOCOL_LABEL_V1: &[u8] = b"vega-existing-credential-zk-v0";
 /// Exact internal Microsoft transcript persona.
 pub const VEGA_INTERNAL_TRANSCRIPT_PERSONA_V1: &[u8] = b"neutronnova_prove";
+/// Keccak-256 digest of the exact first-release Figure 9 compiled profile.
+///
+/// Keeping this value in the executable manifest lets capability discovery and
+/// governance remain constant-time: they do not synthesize the million-row
+/// circuit merely to identify the verifier. Proof and verification paths
+/// independently recompute the digest once the canonical shape is already
+/// required and fail closed if the compiled relation has drifted.
+pub const VEGA_MDL_COMPILED_PROFILE_DIGEST_V1: [u8; 32] = [
+    0xe2, 0xbc, 0xbb, 0x62, 0x0c, 0x66, 0x47, 0x20, 0xe4, 0x8a, 0x91, 0x3a, 0x13, 0xd7, 0x21, 0x61,
+    0x56, 0x74, 0xe2, 0x12, 0x71, 0x21, 0x28, 0x1a, 0x30, 0x39, 0x7d, 0x3c, 0x0f, 0x2d, 0x88, 0x33,
+];
 
 const PROOF_VERSION: u8 = 1;
 const COMMITMENT_KEY_COLUMNS: usize = 1024;
@@ -275,6 +286,18 @@ impl VegaMdlProofDimensionsV1 {
 pub fn vega_mdl_proof_dimensions_v1() -> Result<VegaMdlProofDimensionsV1, VegaMdlProofErrorV1> {
     let shape = canonical_shape()?;
     VegaMdlProofDimensionsV1::from_shape(&shape)
+}
+
+/// Return the Keccak-256 digest of the exact compiled Figure 9 profile frame.
+///
+/// The frame binds the pinned source revision, proof version, circuit template
+/// lengths, full R1CS dimensions, Hyrax commitment shape, sumcheck schedule,
+/// commitment-key derivation label, and native proof-byte cap. Governance uses
+/// this digest as an input to its parameter and verifier manifests so a binary
+/// cannot activate a profile whose compiled proof relation has drifted.
+#[must_use]
+pub const fn vega_mdl_compiled_profile_digest_v1() -> [u8; 32] {
+    VEGA_MDL_COMPILED_PROFILE_DIGEST_V1
 }
 
 /// Prove the complete Figure 9 relation and return exact canonical Norito.
@@ -757,6 +780,9 @@ fn context_frame(
 ) -> Result<Vec<u8>, VegaMdlProofErrorV1> {
     let profile = profile_frame(shape, dimensions)?;
     let profile_digest = keccak256(&profile);
+    if profile_digest != VEGA_MDL_COMPILED_PROFILE_DIGEST_V1 {
+        return Err(VegaMdlProofErrorV1::InvalidCompiledProfile);
+    }
     let mut frame = Vec::with_capacity(2048);
     push_frame_field(&mut frame, 0, VEGA_EXISTING_CREDENTIAL_PROTOCOL_LABEL_V1)?;
     push_frame_field(&mut frame, 1, VEGA_INTERNAL_TRANSCRIPT_PERSONA_V1)?;
@@ -1057,6 +1083,22 @@ mod tests {
         assert_eq!(
             sample_nonzero_scalar(&mut ZeroRandom),
             Err(VegaMdlProofErrorV1::DegenerateRandomness)
+        );
+    }
+
+    #[test]
+    fn compiled_profile_digest_matches_the_exact_circuit_shape() {
+        let shape = canonical_shape().expect("canonical shape");
+        let dimensions = VegaMdlProofDimensionsV1::from_shape(&shape).expect("dimensions");
+        let recomputed = keccak256(&profile_frame(&shape, dimensions).expect("profile frame"));
+        assert_eq!(recomputed, VEGA_MDL_COMPILED_PROFILE_DIGEST_V1);
+        assert_eq!(
+            hex::encode(VEGA_MDL_COMPILED_PROFILE_DIGEST_V1),
+            "e2bcbb620c664720e48a913a13d721615674e2127121281a30397d3c0f2d8833"
+        );
+        assert_eq!(
+            vega_mdl_compiled_profile_digest_v1(),
+            VEGA_MDL_COMPILED_PROFILE_DIGEST_V1
         );
     }
 

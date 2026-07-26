@@ -10,12 +10,14 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use iroha_data_model::privacy::{
     ANONYMOUS_PGC_ANONYMITY_SET_SIZES_V1, PRIVACY_PGC_ACCOUNT_STATE_ROOT_DOMAIN_V1,
-    PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1, PrivacyActivationValidationError, PrivacyCommitmentV1,
-    PrivacyConsensusPolicyV1, PrivacyNamespaceV1, PrivacyNullifierV1, PrivacyP256CiphertextV1,
+    PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1, PrivacyActivationValidationError,
+    PrivacyConsensusPolicyV1, PrivacyNamespaceV1, PrivacyP256CiphertextV1,
     PrivacyP256PointV1, PrivacyPgcAccountBootstrapDigestV1, PrivacyPgcAccountV1,
     PrivacyPgcBootstrapProofDigestV1, PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1,
     PrivacyRootManagementV1, PrivacyRootPublicationDigestV1, PrivacyRootRoleV1, PrivacyRootV1,
-    PrivacyStatementDigestV1,
+    PrivacyStatementDigestV1, PrivacyZkAmsIssuerPolicyRecordDigestV1, PrivacyZkAmsKeyImageV1,
+    PrivacyZkAmsPhcHashV1, PrivacyZkAmsRegistryBootstrapDigestV1, PrivacyZkAmsSeedPublicKeyV1,
+    ZK_AMS_REGISTRY_BOOTSTRAP_INITIAL_EPOCH_V1,
 };
 use mv::storage::StorageReadOnly;
 use norito::{
@@ -816,6 +818,8 @@ fn validate_pgc_retained_root_chain_v1(
             }
         }
         PrivacyRootProvenanceV1::Governance { .. }
+        | PrivacyRootProvenanceV1::ZkAmsRegistryBootstrap { .. }
+        | PrivacyRootProvenanceV1::ZkAmsRegistrySuccessor { .. }
         | PrivacyRootProvenanceV1::VerifiedProof { .. } => {
             return Err("privacy PGC retained history begins with invalid provenance".to_owned());
         }
@@ -1050,6 +1054,329 @@ pub(crate) fn load_privacy_pgc_pool_snapshot_v1(
     })
 }
 
+/// Fully validated, transaction-local view of one ZK-AMS AccountRegistry.
+///
+/// The snapshot joins the immutable governed issuer record to the exact
+/// retained root chain.  Callers can therefore compare proof input against one
+/// coherent authoritative state without trusting duplicated statement fields.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PrivacyZkAmsRegistrySnapshotV1 {
+    namespace: PrivacyNamespaceV1,
+    issuer_policy_record_digest: PrivacyZkAmsIssuerPolicyRecordDigestV1,
+    bootstrap_digest: PrivacyZkAmsRegistryBootstrapDigestV1,
+    current_epoch: u64,
+    current_root: PrivacyRootV1,
+    retention_anchor: Option<PrivacyRootRetentionAnchorV1>,
+    retained_roots: Vec<(PrivacyRootKeyV1, PrivacyRootProvenanceV1)>,
+}
+
+impl PrivacyZkAmsRegistrySnapshotV1 {
+    #[must_use]
+    pub(crate) const fn namespace(&self) -> PrivacyNamespaceV1 {
+        self.namespace
+    }
+
+    #[must_use]
+    pub(crate) const fn issuer_policy_record_digest(
+        &self,
+    ) -> PrivacyZkAmsIssuerPolicyRecordDigestV1 {
+        self.issuer_policy_record_digest
+    }
+
+    #[must_use]
+    pub(crate) const fn bootstrap_digest(&self) -> PrivacyZkAmsRegistryBootstrapDigestV1 {
+        self.bootstrap_digest
+    }
+
+    #[must_use]
+    pub(crate) const fn current_epoch(&self) -> u64 {
+        self.current_epoch
+    }
+
+    #[must_use]
+    pub(crate) const fn current_root(&self) -> PrivacyRootV1 {
+        self.current_root
+    }
+
+    #[must_use]
+    pub(crate) const fn retention_anchor(&self) -> Option<PrivacyRootRetentionAnchorV1> {
+        self.retention_anchor
+    }
+
+    /// Return trusted retained membership for the exact current head.
+    #[must_use]
+    pub(crate) fn retained_current_root(&self) -> Option<(u64, PrivacyRootV1)> {
+        self.retained_roots
+            .iter()
+            .any(|(key, _)| key.epoch() == self.current_epoch && key.root() == self.current_root)
+            .then_some((self.current_epoch, self.current_root))
+    }
+}
+
+fn validate_zk_ams_successor_link_v1(
+    namespace: PrivacyNamespaceV1,
+    key: PrivacyRootKeyV1,
+    provenance: PrivacyRootProvenanceV1,
+    bootstrap_digest: PrivacyZkAmsRegistryBootstrapDigestV1,
+) -> Result<(u64, PrivacyRootV1), String> {
+    let PrivacyRootProvenanceV1::ZkAmsRegistrySuccessor {
+        bootstrap_digest: observed_bootstrap_digest,
+        parent_epoch,
+        parent_root,
+        ..
+    } = provenance
+    else {
+        return Err(format!(
+            "ZK-AMS AccountRegistry history {namespace:?} contains a non-successor advancement"
+        ));
+    };
+    if observed_bootstrap_digest != bootstrap_digest {
+        return Err(format!(
+            "ZK-AMS AccountRegistry successor {} is bound to a different bootstrap",
+            key.epoch()
+        ));
+    }
+    if parent_epoch.checked_add(1) != Some(key.epoch()) {
+        return Err(format!(
+            "ZK-AMS AccountRegistry successor {} does not advance parent epoch {parent_epoch} by exactly one",
+            key.epoch()
+        ));
+    }
+    Ok((parent_epoch, parent_root))
+}
+
+fn validate_zk_ams_retained_root_chain_v1(
+    namespace: PrivacyNamespaceV1,
+    bootstrap_digest: PrivacyZkAmsRegistryBootstrapDigestV1,
+    retained_root_count: usize,
+    retention_anchor: Option<PrivacyRootRetentionAnchorV1>,
+    history: &[(PrivacyRootKeyV1, PrivacyRootProvenanceV1)],
+) -> Result<(), String> {
+    if retained_root_count == 0 {
+        return Err("ZK-AMS retained-root count must be non-zero".to_owned());
+    }
+    if history.is_empty() {
+        return Err("ZK-AMS AccountRegistry has no retained root history".to_owned());
+    }
+    if history.len() > retained_root_count {
+        return Err(format!(
+            "ZK-AMS AccountRegistry history exceeds retention {retained_root_count}"
+        ));
+    }
+
+    let (first_key, first_provenance) = history[0];
+    match first_provenance {
+        PrivacyRootProvenanceV1::ZkAmsRegistryBootstrap {
+            bootstrap_digest: observed_bootstrap_digest,
+            ..
+        } => {
+            if observed_bootstrap_digest != bootstrap_digest {
+                return Err(
+                    "ZK-AMS AccountRegistry root origin differs from its issuer record".to_owned(),
+                );
+            }
+            if retention_anchor.is_some() {
+                return Err(
+                    "ZK-AMS retained bootstrap history has an unexpected pruned-prefix anchor"
+                        .to_owned(),
+                );
+            }
+            if first_key.epoch() != ZK_AMS_REGISTRY_BOOTSTRAP_INITIAL_EPOCH_V1 {
+                return Err(format!(
+                    "ZK-AMS AccountRegistry bootstrap epoch {} is not canonical epoch {}",
+                    first_key.epoch(),
+                    ZK_AMS_REGISTRY_BOOTSTRAP_INITIAL_EPOCH_V1
+                ));
+            }
+        }
+        PrivacyRootProvenanceV1::ZkAmsRegistrySuccessor { .. } => {
+            let (parent_epoch, parent_root) = validate_zk_ams_successor_link_v1(
+                namespace,
+                first_key,
+                first_provenance,
+                bootstrap_digest,
+            )?;
+            if first_key.epoch() <= ZK_AMS_REGISTRY_BOOTSTRAP_INITIAL_EPOCH_V1 {
+                return Err(
+                    "ZK-AMS pruned history begins at or before the canonical bootstrap epoch"
+                        .to_owned(),
+                );
+            }
+            let anchor = retention_anchor.ok_or_else(|| {
+                "ZK-AMS pruned-prefix history has no exact retention anchor".to_owned()
+            })?;
+            if anchor.epoch().checked_add(1) != Some(first_key.epoch())
+                || parent_epoch != anchor.epoch()
+                || parent_root != anchor.root()
+            {
+                return Err(
+                    "ZK-AMS first retained successor does not consume its exact pruned-prefix anchor"
+                        .to_owned(),
+                );
+            }
+        }
+        PrivacyRootProvenanceV1::Governance { .. }
+        | PrivacyRootProvenanceV1::VerifiedBootstrap { .. }
+        | PrivacyRootProvenanceV1::VerifiedProof { .. }
+        | PrivacyRootProvenanceV1::VerifiedPgcSuccessor { .. } => {
+            return Err(
+                "ZK-AMS AccountRegistry retained history begins with invalid provenance".to_owned(),
+            );
+        }
+    }
+
+    for adjacent in history.windows(2) {
+        let (parent_key, _) = adjacent[0];
+        let (child_key, child_provenance) = adjacent[1];
+        let (declared_parent_epoch, declared_parent_root) = validate_zk_ams_successor_link_v1(
+            namespace,
+            child_key,
+            child_provenance,
+            bootstrap_digest,
+        )?;
+        if parent_key.epoch().checked_add(1) != Some(child_key.epoch())
+            || declared_parent_epoch != parent_key.epoch()
+            || declared_parent_root != parent_key.root()
+        {
+            return Err(format!(
+                "ZK-AMS AccountRegistry history has a gap or forged parent between epochs {} and {}",
+                parent_key.epoch(),
+                child_key.epoch()
+            ));
+        }
+    }
+    if retention_anchor.is_some() && history.len() != retained_root_count {
+        return Err(format!(
+            "ZK-AMS anchored history has {} roots but must fill retention {retained_root_count}",
+            history.len()
+        ));
+    }
+    Ok(())
+}
+
+/// Load and validate every bounded authoritative component of one ZK-AMS
+/// AccountRegistry.
+///
+/// # Errors
+///
+/// Rejects a missing or duplicate issuer record, cross-bootstrap provenance,
+/// malformed/pruned root chains, over-retention history, and a head that is
+/// not the exact newest retained root.
+pub(crate) fn load_privacy_zk_ams_registry_snapshot_v1(
+    namespace: PrivacyNamespaceV1,
+    retained_root_count: u32,
+    commitments: &impl StorageReadOnly<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>,
+    roots: &impl StorageReadOnly<PrivacyRootKeyV1, PrivacyRootProvenanceV1>,
+    root_heads: &impl StorageReadOnly<PrivacyRootHeadKeyV1, PrivacyRootHeadRecordV1>,
+) -> Result<PrivacyZkAmsRegistrySnapshotV1, String> {
+    validate_zk_ams_namespace(namespace)
+        .map_err(|error| format!("invalid ZK-AMS registry namespace: {error}"))?;
+    if retained_root_count == 0 {
+        return Err("ZK-AMS retained-root count must be non-zero".to_owned());
+    }
+    let retained_root_count = usize::try_from(retained_root_count)
+        .map_err(|_| "ZK-AMS retained-root count cannot be represented".to_owned())?;
+
+    let mut issuer_record = None;
+    for (key, record) in commitments.range(
+        PrivacyCommitmentKeyV1::zk_ams_issuer_policy_record_range(namespace),
+    ) {
+        if issuer_record.is_some() {
+            return Err("ZK-AMS registry has multiple governed issuer-policy records".to_owned());
+        }
+        key.validate()
+            .map_err(|error| format!("invalid ZK-AMS issuer-policy key: {error}"))?;
+        record
+            .validate()
+            .map_err(|error| format!("invalid ZK-AMS issuer-policy provenance: {error}"))?;
+        let record_digest = key.zk_ams_issuer_policy_digest().ok_or_else(|| {
+            "ZK-AMS issuer-policy range returned a differently typed key".to_owned()
+        })?;
+        let PrivacyStateItemRecordV1::ZkAmsGovernance {
+            bootstrap_digest,
+            ..
+        } = *record
+        else {
+            return Err(
+                "ZK-AMS issuer-policy record was not installed by typed governance".to_owned(),
+            );
+        };
+        issuer_record = Some((record_digest, bootstrap_digest));
+    }
+    let (issuer_policy_record_digest, bootstrap_digest) = issuer_record
+        .ok_or_else(|| "ZK-AMS registry has no governed issuer-policy record".to_owned())?;
+
+    let head_key = PrivacyRootHeadKeyV1::new(namespace, PrivacyRootRoleV1::AccountRegistry)
+        .map_err(|error| format!("invalid ZK-AMS registry-head key: {error}"))?;
+    let head = root_heads
+        .get(&head_key)
+        .copied()
+        .ok_or_else(|| "ZK-AMS registry has no current AccountRegistry head".to_owned())?;
+    head.validate()
+        .map_err(|error| format!("invalid ZK-AMS AccountRegistry head: {error}"))?;
+
+    let mut retained_roots = Vec::new();
+    for (key, provenance) in roots.range(PrivacyRootKeyV1::history_range(
+        namespace,
+        PrivacyRootRoleV1::AccountRegistry,
+    )) {
+        if retained_roots.len() == retained_root_count {
+            return Err(format!(
+                "ZK-AMS AccountRegistry history exceeds retention {retained_root_count}"
+            ));
+        }
+        key.validate()
+            .map_err(|error| format!("invalid ZK-AMS AccountRegistry root key: {error}"))?;
+        provenance
+            .validate()
+            .map_err(|error| format!("invalid ZK-AMS AccountRegistry provenance: {error}"))?;
+        if retained_roots.last().is_some_and(
+            |(previous, _): &(PrivacyRootKeyV1, PrivacyRootProvenanceV1)| {
+                previous.epoch() == key.epoch()
+            },
+        ) {
+            return Err(format!(
+                "ZK-AMS AccountRegistry history contains duplicate epoch {}",
+                key.epoch()
+            ));
+        }
+        retained_roots.push((*key, *provenance));
+    }
+    validate_zk_ams_retained_root_chain_v1(
+        namespace,
+        bootstrap_digest,
+        retained_root_count,
+        head.retention_anchor(),
+        &retained_roots,
+    )?;
+    let latest = retained_roots
+        .last()
+        .expect("non-empty ZK-AMS history checked above");
+    if head.epoch() != latest.0.epoch()
+        || head.root() != latest.0.root()
+        || head.provenance() != latest.1
+    {
+        return Err(
+            "ZK-AMS AccountRegistry head does not equal latest retained history".to_owned(),
+        );
+    }
+    if head.provenance().zk_ams_bootstrap_digest() != Some(bootstrap_digest) {
+        return Err(
+            "ZK-AMS AccountRegistry head differs from its governed bootstrap".to_owned(),
+        );
+    }
+
+    Ok(PrivacyZkAmsRegistrySnapshotV1 {
+        namespace,
+        issuer_policy_record_digest,
+        bootstrap_digest,
+        current_epoch: head.epoch(),
+        current_root: head.root(),
+        retention_anchor: head.retention_anchor(),
+        retained_roots,
+    })
+}
+
 /// Validate every cross-map invariant in restored first-release privacy state.
 ///
 /// Snapshot decoding invokes this before constructing `World`. Consequently a
@@ -1190,7 +1517,18 @@ pub(crate) fn validate_privacy_persisted_state_v1(
                     let Some((_, first_provenance)) = history.first() else {
                         return Err("grouped privacy root history is unexpectedly empty".to_owned());
                     };
-                    if !matches!(first_provenance, PrivacyRootProvenanceV1::Governance { .. }) {
+                    let valid_origin = if namespace.protocol_id()
+                        == PrivacyProtocolIdV1::IrohaZkAmsV1
+                        && *role == PrivacyRootRoleV1::AccountRegistry
+                    {
+                        matches!(
+                            first_provenance,
+                            PrivacyRootProvenanceV1::ZkAmsRegistryBootstrap { .. }
+                        )
+                    } else {
+                        matches!(first_provenance, PrivacyRootProvenanceV1::Governance { .. })
+                    };
+                    if !valid_origin {
                         return Err(format!(
                             "proof-managed privacy root history for {namespace:?}/{role:?} does not begin with governance initialization"
                         ));
@@ -1393,96 +1731,243 @@ pub(crate) fn validate_privacy_persisted_state_v1(
     Ok(())
 }
 
-/// Key for one consumed replay-prevention value.
+/// Closed role-separated key for one consumed privacy replay marker.
+///
+/// The enum discriminant is part of canonical Norito key bytes. A ZK-AMS key
+/// image therefore cannot alias a future protocol nullifier carrying the same
+/// 32 bytes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
-pub struct PrivacyNullifierKeyV1 {
-    namespace: PrivacyNamespaceV1,
-    nullifier: PrivacyNullifierV1,
+pub enum PrivacyNullifierKeyV1 {
+    /// One consumed ZK-AMS LSAG key image in its exact registry namespace.
+    ZkAmsKeyImage {
+        /// Issuer/registry/policy namespace.
+        namespace: PrivacyNamespaceV1,
+        /// Canonical nonzero compressed Ristretto key image.
+        key_image: PrivacyZkAmsKeyImageV1,
+    },
 }
 
 impl PrivacyNullifierKeyV1 {
-    /// Construct and validate a scoped nullifier key.
+    /// Construct a scoped ZK-AMS provisioning replay key.
     ///
     /// # Errors
     ///
-    /// Rejects an invalid namespace or an all-zero nullifier.
-    pub fn new(
+    /// Rejects a non-ZK-AMS namespace or an all-zero key image.
+    pub fn zk_ams_key_image(
         namespace: PrivacyNamespaceV1,
-        nullifier: PrivacyNullifierV1,
+        key_image: PrivacyZkAmsKeyImageV1,
     ) -> Result<Self, &'static str> {
-        namespace
-            .validate()
-            .map_err(|_| "privacy nullifier namespace is invalid")?;
-        if nullifier.is_zero() {
-            return Err("privacy nullifier must be non-zero");
+        validate_zk_ams_namespace(namespace)?;
+        if key_image.is_zero() {
+            return Err("ZK-AMS key image must be non-zero");
         }
-        Ok(Self {
+        Ok(Self::ZkAmsKeyImage {
             namespace,
-            nullifier,
+            key_image,
         })
     }
 
     /// Return the exact namespace.
     #[must_use]
     pub const fn namespace(self) -> PrivacyNamespaceV1 {
-        self.namespace
+        match self {
+            Self::ZkAmsKeyImage { namespace, .. } => namespace,
+        }
     }
 
-    /// Return the exact nullifier.
+    /// Return the typed ZK-AMS key image.
     #[must_use]
-    pub const fn nullifier(self) -> PrivacyNullifierV1 {
-        self.nullifier
+    pub const fn zk_ams_image(self) -> PrivacyZkAmsKeyImageV1 {
+        match self {
+            Self::ZkAmsKeyImage { key_image, .. } => key_image,
+        }
+    }
+
+    /// Ordered bounds covering consumed key images in exactly one namespace.
+    #[must_use]
+    pub fn zk_ams_key_image_range(
+        namespace: PrivacyNamespaceV1,
+    ) -> core::ops::RangeInclusive<Self> {
+        Self::ZkAmsKeyImage {
+            namespace,
+            key_image: PrivacyZkAmsKeyImageV1::new([0; 32]),
+        }..=Self::ZkAmsKeyImage {
+            namespace,
+            key_image: PrivacyZkAmsKeyImageV1::new([u8::MAX; 32]),
+        }
     }
 
     fn validate(self) -> Result<(), &'static str> {
-        Self::new(self.namespace, self.nullifier).map(|_| ())
+        match self {
+            Self::ZkAmsKeyImage {
+                namespace,
+                key_image,
+            } => Self::zk_ams_key_image(namespace, key_image).map(|_| ()),
+        }
     }
 }
 
-/// Key for one admitted output or account commitment.
+/// Closed role-separated key for one admitted privacy state item.
+///
+/// Distinct canonical enum variants provide protocol-level domain separation:
+/// issuer records, PHC hashes, and seed keys cannot collide even when their
+/// inner 32-byte values happen to be equal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
-pub struct PrivacyCommitmentKeyV1 {
-    namespace: PrivacyNamespaceV1,
-    commitment: PrivacyCommitmentV1,
+pub enum PrivacyCommitmentKeyV1 {
+    /// Governed issuer-key/policy record.
+    ZkAmsIssuerPolicyRecord {
+        /// Issuer/registry/policy namespace.
+        namespace: PrivacyNamespaceV1,
+        /// Digest of the exact fixed issuer key and policy record.
+        record_digest: PrivacyZkAmsIssuerPolicyRecordDigestV1,
+    },
+    /// Admitted canonical Personhood Credential hash.
+    ZkAmsPhc {
+        /// Issuer/registry/policy namespace.
+        namespace: PrivacyNamespaceV1,
+        /// Canonical PHC hash.
+        phc_hash: PrivacyZkAmsPhcHashV1,
+    },
+    /// Admitted Ristretto seed public key.
+    ZkAmsSeedKey {
+        /// Issuer/registry/policy namespace.
+        namespace: PrivacyNamespaceV1,
+        /// Canonical seed public key.
+        seed_public_key: PrivacyZkAmsSeedPublicKeyV1,
+    },
 }
 
 impl PrivacyCommitmentKeyV1 {
-    /// Construct and validate a scoped commitment key.
-    ///
-    /// # Errors
-    ///
-    /// Rejects an invalid namespace or an all-zero commitment.
-    pub fn new(
+    /// Construct the exact governed ZK-AMS issuer-policy record key.
+    pub fn zk_ams_issuer_policy_record(
         namespace: PrivacyNamespaceV1,
-        commitment: PrivacyCommitmentV1,
+        record_digest: PrivacyZkAmsIssuerPolicyRecordDigestV1,
     ) -> Result<Self, &'static str> {
-        namespace
-            .validate()
-            .map_err(|_| "privacy commitment namespace is invalid")?;
-        if commitment.is_zero() {
-            return Err("privacy commitment must be non-zero");
+        validate_zk_ams_namespace(namespace)?;
+        if record_digest.is_zero() {
+            return Err("ZK-AMS issuer-policy record digest must be non-zero");
         }
-        Ok(Self {
+        Ok(Self::ZkAmsIssuerPolicyRecord {
             namespace,
-            commitment,
+            record_digest,
+        })
+    }
+
+    /// Construct one exact admitted ZK-AMS PHC key.
+    pub fn zk_ams_phc(
+        namespace: PrivacyNamespaceV1,
+        phc_hash: PrivacyZkAmsPhcHashV1,
+    ) -> Result<Self, &'static str> {
+        validate_zk_ams_namespace(namespace)?;
+        if phc_hash.is_zero() {
+            return Err("ZK-AMS PHC hash must be non-zero");
+        }
+        Ok(Self::ZkAmsPhc {
+            namespace,
+            phc_hash,
+        })
+    }
+
+    /// Construct one exact admitted ZK-AMS seed-key membership key.
+    pub fn zk_ams_seed_key(
+        namespace: PrivacyNamespaceV1,
+        seed_public_key: PrivacyZkAmsSeedPublicKeyV1,
+    ) -> Result<Self, &'static str> {
+        validate_zk_ams_namespace(namespace)?;
+        if seed_public_key.is_zero() {
+            return Err("ZK-AMS seed public key must be non-zero");
+        }
+        Ok(Self::ZkAmsSeedKey {
+            namespace,
+            seed_public_key,
         })
     }
 
     /// Return the exact namespace.
     #[must_use]
     pub const fn namespace(self) -> PrivacyNamespaceV1 {
-        self.namespace
+        match self {
+            Self::ZkAmsIssuerPolicyRecord { namespace, .. }
+            | Self::ZkAmsPhc { namespace, .. }
+            | Self::ZkAmsSeedKey { namespace, .. } => namespace,
+        }
     }
 
-    /// Return the exact commitment.
+    /// Return the governed issuer-policy digest for that exact key role.
     #[must_use]
-    pub const fn commitment(self) -> PrivacyCommitmentV1 {
-        self.commitment
+    pub const fn zk_ams_issuer_policy_digest(
+        self,
+    ) -> Option<PrivacyZkAmsIssuerPolicyRecordDigestV1> {
+        match self {
+            Self::ZkAmsIssuerPolicyRecord { record_digest, .. } => Some(record_digest),
+            Self::ZkAmsPhc { .. } | Self::ZkAmsSeedKey { .. } => None,
+        }
+    }
+
+    /// Ordered bounds covering issuer-policy records in exactly one namespace.
+    #[must_use]
+    pub fn zk_ams_issuer_policy_record_range(
+        namespace: PrivacyNamespaceV1,
+    ) -> core::ops::RangeInclusive<Self> {
+        Self::ZkAmsIssuerPolicyRecord {
+            namespace,
+            record_digest: PrivacyZkAmsIssuerPolicyRecordDigestV1::new([0; 32]),
+        }..=Self::ZkAmsIssuerPolicyRecord {
+            namespace,
+            record_digest: PrivacyZkAmsIssuerPolicyRecordDigestV1::new([u8::MAX; 32]),
+        }
+    }
+
+    /// Ordered bounds covering PHC records in exactly one namespace.
+    #[must_use]
+    pub fn zk_ams_phc_range(namespace: PrivacyNamespaceV1) -> core::ops::RangeInclusive<Self> {
+        Self::ZkAmsPhc {
+            namespace,
+            phc_hash: PrivacyZkAmsPhcHashV1::new([0; 32]),
+        }..=Self::ZkAmsPhc {
+            namespace,
+            phc_hash: PrivacyZkAmsPhcHashV1::new([u8::MAX; 32]),
+        }
+    }
+
+    /// Ordered bounds covering admitted seed keys in exactly one namespace.
+    #[must_use]
+    pub fn zk_ams_seed_key_range(namespace: PrivacyNamespaceV1) -> core::ops::RangeInclusive<Self> {
+        Self::ZkAmsSeedKey {
+            namespace,
+            seed_public_key: PrivacyZkAmsSeedPublicKeyV1::new([0; 32]),
+        }..=Self::ZkAmsSeedKey {
+            namespace,
+            seed_public_key: PrivacyZkAmsSeedPublicKeyV1::new([u8::MAX; 32]),
+        }
     }
 
     fn validate(self) -> Result<(), &'static str> {
-        Self::new(self.namespace, self.commitment).map(|_| ())
+        match self {
+            Self::ZkAmsIssuerPolicyRecord {
+                namespace,
+                record_digest,
+            } => Self::zk_ams_issuer_policy_record(namespace, record_digest).map(|_| ()),
+            Self::ZkAmsPhc {
+                namespace,
+                phc_hash,
+            } => Self::zk_ams_phc(namespace, phc_hash).map(|_| ()),
+            Self::ZkAmsSeedKey {
+                namespace,
+                seed_public_key,
+            } => Self::zk_ams_seed_key(namespace, seed_public_key).map(|_| ()),
+        }
     }
+}
+
+fn validate_zk_ams_namespace(namespace: PrivacyNamespaceV1) -> Result<(), &'static str> {
+    namespace
+        .validate()
+        .map_err(|_| "ZK-AMS state namespace is invalid")?;
+    if namespace.protocol_id() != PrivacyProtocolIdV1::IrohaZkAmsV1 {
+        return Err("ZK-AMS state key requires the ZK-AMS protocol namespace");
+    }
+    Ok(())
 }
 
 /// Exact ordered root-membership key.
@@ -1636,6 +2121,28 @@ pub(crate) enum PrivacyRootProvenanceV1 {
         /// Block height at which the publication became durable.
         admitted_at_height: u64,
     },
+    /// Initial ZK-AMS AccountRegistry root installed by its typed bootstrap.
+    ZkAmsRegistryBootstrap {
+        /// Digest of the exact canonical registry-bootstrap payload.
+        bootstrap_digest: PrivacyZkAmsRegistryBootstrapDigestV1,
+        /// Block height at which the bootstrap became durable.
+        admitted_at_height: u64,
+    },
+    /// ZK-AMS AccountRegistry successor certified by a complete admission proof.
+    ZkAmsRegistrySuccessor {
+        /// Immutable typed registry-bootstrap provenance.
+        bootstrap_digest: PrivacyZkAmsRegistryBootstrapDigestV1,
+        /// Digest of the exact verified public statement.
+        statement_digest: PrivacyStatementDigestV1,
+        /// Block height at which the successor became durable.
+        admitted_at_height: u64,
+        /// Zero-based privacy-action index within the transaction.
+        action_index: u32,
+        /// Exact epoch consumed by the verified transition.
+        parent_epoch: u64,
+        /// Exact root consumed by the verified transition.
+        parent_root: PrivacyRootV1,
+    },
     /// Initial PGC account-state root certified by a native bootstrap proof.
     VerifiedBootstrap {
         /// Digest of the exact canonical public bootstrap payload.
@@ -1694,6 +2201,57 @@ impl PrivacyRootProvenanceV1 {
         Ok(Self::Governance {
             publication_digest,
             admitted_at_height,
+        })
+    }
+
+    /// Construct typed ZK-AMS registry-bootstrap provenance.
+    pub(crate) fn zk_ams_registry_bootstrap(
+        bootstrap_digest: PrivacyZkAmsRegistryBootstrapDigestV1,
+        admitted_at_height: u64,
+    ) -> Result<Self, &'static str> {
+        if bootstrap_digest.is_zero() {
+            return Err("ZK-AMS registry bootstrap digest must be non-zero");
+        }
+        if admitted_at_height == 0 {
+            return Err("privacy root admission height must be non-zero");
+        }
+        Ok(Self::ZkAmsRegistryBootstrap {
+            bootstrap_digest,
+            admitted_at_height,
+        })
+    }
+
+    /// Construct a ZK-AMS registry successor with immutable origin binding.
+    pub(crate) fn zk_ams_registry_successor(
+        bootstrap_digest: PrivacyZkAmsRegistryBootstrapDigestV1,
+        statement_digest: PrivacyStatementDigestV1,
+        admitted_at_height: u64,
+        action_index: u32,
+        parent_epoch: u64,
+        parent_root: PrivacyRootV1,
+    ) -> Result<Self, &'static str> {
+        if bootstrap_digest.is_zero() {
+            return Err("ZK-AMS registry bootstrap digest must be non-zero");
+        }
+        if statement_digest.is_zero() {
+            return Err("ZK-AMS registry statement digest must be non-zero");
+        }
+        if admitted_at_height == 0 {
+            return Err("privacy root admission height must be non-zero");
+        }
+        if parent_epoch == 0 {
+            return Err("ZK-AMS registry parent epoch must be non-zero");
+        }
+        if parent_root.is_zero() {
+            return Err("ZK-AMS registry parent root must be non-zero");
+        }
+        Ok(Self::ZkAmsRegistrySuccessor {
+            bootstrap_digest,
+            statement_digest,
+            admitted_at_height,
+            action_index,
+            parent_epoch,
+            parent_root,
         })
     }
 
@@ -1806,8 +2364,35 @@ impl PrivacyRootProvenanceV1 {
                 parent_epoch,
                 parent_root,
                 ..
+            }
+            | Self::ZkAmsRegistrySuccessor {
+                parent_epoch,
+                parent_root,
+                ..
             } => Some((parent_epoch, parent_root)),
-            Self::Governance { .. } | Self::VerifiedBootstrap { .. } => None,
+            Self::Governance { .. }
+            | Self::ZkAmsRegistryBootstrap { .. }
+            | Self::VerifiedBootstrap { .. } => None,
+        }
+    }
+
+    /// Return the immutable ZK-AMS registry origin carried by typed root
+    /// provenance.
+    #[must_use]
+    pub(crate) const fn zk_ams_bootstrap_digest(
+        self,
+    ) -> Option<PrivacyZkAmsRegistryBootstrapDigestV1> {
+        match self {
+            Self::ZkAmsRegistryBootstrap {
+                bootstrap_digest, ..
+            }
+            | Self::ZkAmsRegistrySuccessor {
+                bootstrap_digest, ..
+            } => Some(bootstrap_digest),
+            Self::Governance { .. }
+            | Self::VerifiedBootstrap { .. }
+            | Self::VerifiedProof { .. }
+            | Self::VerifiedPgcSuccessor { .. } => None,
         }
     }
 
@@ -1822,6 +2407,26 @@ impl PrivacyRootProvenanceV1 {
                 publication_digest,
                 admitted_at_height,
             } => Self::governance(publication_digest, admitted_at_height).map(|_| ()),
+            Self::ZkAmsRegistryBootstrap {
+                bootstrap_digest,
+                admitted_at_height,
+            } => Self::zk_ams_registry_bootstrap(bootstrap_digest, admitted_at_height).map(|_| ()),
+            Self::ZkAmsRegistrySuccessor {
+                bootstrap_digest,
+                statement_digest,
+                admitted_at_height,
+                action_index,
+                parent_epoch,
+                parent_root,
+            } => Self::zk_ams_registry_successor(
+                bootstrap_digest,
+                statement_digest,
+                admitted_at_height,
+                action_index,
+                parent_epoch,
+                parent_root,
+            )
+            .map(|_| ()),
             Self::VerifiedBootstrap {
                 bootstrap_digest,
                 bootstrap_proof_digest,
@@ -1981,35 +2586,70 @@ impl PrivacyRootHeadRecordV1 {
     }
 }
 
-/// Durable provenance for one verified replay marker or output commitment.
+/// Durable, origin-typed provenance for one privacy state item.
+///
+/// Governance records and proof-produced items are distinct closed variants;
+/// governance can never manufacture a synthetic statement digest, and a proof
+/// path cannot impersonate the registry bootstrap.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, Encode, Decode)]
-pub struct PrivacyStateItemRecordV1 {
-    /// Digest of the exact verified public statement.
-    pub statement_digest: PrivacyStatementDigestV1,
-    /// Block height at which the item became durable.
-    pub admitted_at_height: u64,
-    /// Zero-based privacy-action index within the transaction.
-    pub action_index: u32,
+#[norito(tag = "origin", content = "record")]
+pub enum PrivacyStateItemRecordV1 {
+    /// Issuer-policy record installed by the typed ZK-AMS bootstrap.
+    ZkAmsGovernance {
+        /// Digest of the complete canonical bootstrap.
+        bootstrap_digest: PrivacyZkAmsRegistryBootstrapDigestV1,
+        /// Block height at which governance initialized the registry.
+        admitted_at_height: u64,
+    },
+    /// PHC, seed key, or key image emitted by a verified ZK-AMS proof.
+    ZkAmsVerifiedProof {
+        /// Registry bootstrap whose append-only history admitted this item.
+        bootstrap_digest: PrivacyZkAmsRegistryBootstrapDigestV1,
+        /// Digest of the exact verified public statement.
+        statement_digest: PrivacyStatementDigestV1,
+        /// Block height at which the item became durable.
+        admitted_at_height: u64,
+        /// Zero-based privacy-action index within the transaction.
+        action_index: u32,
+    },
 }
 
 impl PrivacyStateItemRecordV1 {
-    /// Construct validated durable provenance.
-    ///
-    /// # Errors
-    ///
-    /// Rejects a zero statement digest or zero block height.
-    pub fn new(
+    /// Construct typed provenance for a governed ZK-AMS issuer record.
+    pub fn zk_ams_governance(
+        bootstrap_digest: PrivacyZkAmsRegistryBootstrapDigestV1,
+        admitted_at_height: u64,
+    ) -> Result<Self, &'static str> {
+        if bootstrap_digest.is_zero() {
+            return Err("ZK-AMS bootstrap digest must be non-zero");
+        }
+        if admitted_at_height == 0 {
+            return Err("privacy state admission height must be non-zero");
+        }
+        Ok(Self::ZkAmsGovernance {
+            bootstrap_digest,
+            admitted_at_height,
+        })
+    }
+
+    /// Construct typed provenance for a proof-produced state item.
+    pub fn zk_ams_verified_proof(
+        bootstrap_digest: PrivacyZkAmsRegistryBootstrapDigestV1,
         statement_digest: PrivacyStatementDigestV1,
         admitted_at_height: u64,
         action_index: u32,
     ) -> Result<Self, &'static str> {
+        if bootstrap_digest.is_zero() {
+            return Err("ZK-AMS bootstrap digest must be non-zero");
+        }
         if statement_digest.is_zero() {
             return Err("privacy state statement digest must be non-zero");
         }
         if admitted_at_height == 0 {
             return Err("privacy state admission height must be non-zero");
         }
-        Ok(Self {
+        Ok(Self::ZkAmsVerifiedProof {
+            bootstrap_digest,
             statement_digest,
             admitted_at_height,
             action_index,
@@ -2022,12 +2662,37 @@ impl PrivacyStateItemRecordV1 {
     ///
     /// Rejects a zero statement digest or zero block height.
     pub fn validate(self) -> Result<(), &'static str> {
-        Self::new(
-            self.statement_digest,
-            self.admitted_at_height,
-            self.action_index,
-        )
-        .map(|_| ())
+        match self {
+            Self::ZkAmsGovernance {
+                bootstrap_digest,
+                admitted_at_height,
+            } => Self::zk_ams_governance(bootstrap_digest, admitted_at_height).map(|_| ()),
+            Self::ZkAmsVerifiedProof {
+                bootstrap_digest,
+                statement_digest,
+                admitted_at_height,
+                action_index,
+            } => Self::zk_ams_verified_proof(
+                bootstrap_digest,
+                statement_digest,
+                admitted_at_height,
+                action_index,
+            )
+            .map(|_| ()),
+        }
+    }
+
+    /// Return the immutable ZK-AMS registry origin bound to this item.
+    #[must_use]
+    pub const fn zk_ams_bootstrap_digest(self) -> PrivacyZkAmsRegistryBootstrapDigestV1 {
+        match self {
+            Self::ZkAmsGovernance {
+                bootstrap_digest, ..
+            }
+            | Self::ZkAmsVerifiedProof {
+                bootstrap_digest, ..
+            } => bootstrap_digest,
+        }
     }
 }
 

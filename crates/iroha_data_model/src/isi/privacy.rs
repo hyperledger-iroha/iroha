@@ -9,6 +9,7 @@ use crate::privacy::{
     PrivacyConsensusLimitsV1, PrivacyPgcAccountBootstrapV1, PrivacyPgcBootstrapProofBytesV1,
     PrivacyProofEnvelopeV1, PrivacyProtocolActivationLimitsV1, PrivacyProtocolActivationRecordV1,
     PrivacyProtocolIdV1, PrivacyProtocolLifecycleV1, PrivacyRootPublicationV1,
+    PrivacyZkAmsRegistryBootstrapV1,
 };
 
 isi! {
@@ -192,6 +193,31 @@ impl BootstrapPrivacyPgcAccountsV1 {
 }
 
 isi! {
+    /// Atomically initialize one governed ZK-AMS issuer, policy, and admitted-identity registry.
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct BootstrapPrivacyZkAmsRegistryV1 {
+        /// Exact issuer key, policy digest, namespace, root, and origin epoch.
+        pub bootstrap: PrivacyZkAmsRegistryBootstrapV1,
+    }
+}
+
+impl crate::seal::Instruction for BootstrapPrivacyZkAmsRegistryV1 {}
+
+impl BootstrapPrivacyZkAmsRegistryV1 {
+    /// Canonical first-release Norito instruction identifier.
+    pub const WIRE_ID: &'static str = "iroha.privacy.bootstrap_zk_ams_registry.v1";
+
+    /// Construct a governed ZK-AMS registry bootstrap.
+    #[must_use]
+    pub const fn new(bootstrap: PrivacyZkAmsRegistryBootstrapV1) -> Self {
+        Self { bootstrap }
+    }
+}
+
+isi! {
     /// Verify and atomically apply one protocol-typed privacy proof action.
     #[cfg_attr(
         feature = "json",
@@ -268,6 +294,9 @@ impl_privacy_decode_from_slice!(PublishPrivacyRootV1 {
 impl_privacy_decode_from_slice!(BootstrapPrivacyPgcAccountsV1 {
     bootstrap: PrivacyPgcAccountBootstrapV1,
     proof: PrivacyPgcBootstrapProofBytesV1,
+});
+impl_privacy_decode_from_slice!(BootstrapPrivacyZkAmsRegistryV1 {
+    bootstrap: PrivacyZkAmsRegistryBootstrapV1,
 });
 impl_privacy_decode_from_slice!(SubmitPrivacyProofV1 {
     envelope: PrivacyProofEnvelopeV1,

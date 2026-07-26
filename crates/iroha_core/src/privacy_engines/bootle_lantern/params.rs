@@ -13,6 +13,15 @@ pub const APPLICATION_WITNESS_POLYNOMIALS_V1: usize = 48;
 
 /// Internal Lantern/LNP22 proof modulus.
 pub const PROOF_MODULUS_V1: u64 = 1_125_899_906_843_221;
+/// Canonical inverse of two modulo the internal proof modulus.
+pub const PROOF_INVERSE_TWO_V1: u64 = 562_949_953_421_611;
+/// Canonical inverse of four modulo the internal proof modulus.
+pub const PROOF_INVERSE_FOUR_V1: u64 = 844_424_930_132_416;
+/// Canonical inverse of the application modulus modulo the proof modulus.
+pub const APPLICATION_MODULUS_INVERSE_IN_PROOF_V1: u64 = 305_914_215_066_280;
+/// Exact quotient bound used when lifting the eight application equations
+/// from `R_p` into `R_q`.
+pub const APPLICATION_RELATION_QUOTIENT_BOUND_V1: u64 = 30_064;
 /// Encoded bit width of an internal proof residue.
 pub const PROOF_MODULUS_BITS_V1: u8 = 51;
 /// Canonical wire width of one proof residue.
@@ -103,3 +112,45 @@ pub const MAX_GAUSSIAN_COEFFICIENT_ATTEMPTS_V1: u32 = 4_096;
 /// Pinned mathematical source profile.
 pub const SOURCE_PROFILE_V1: &[u8] =
     b"BLNS-CRYPTO-2023-eprint-2023-560:LaZeR-10eafeca4cd53ff4fc54193dce904dbd0026fefd";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn modular_inverse_constants_are_exact() {
+        assert_eq!(
+            (u128::from(PROOF_INVERSE_TWO_V1) * 2) % u128::from(PROOF_MODULUS_V1),
+            1
+        );
+        assert_eq!(
+            (u128::from(PROOF_INVERSE_FOUR_V1) * 4) % u128::from(PROOF_MODULUS_V1),
+            1
+        );
+        assert_eq!(
+            (u128::from(APPLICATION_MODULUS_INVERSE_IN_PROOF_V1)
+                * u128::from(APPLICATION_MODULUS_V1))
+                % u128::from(PROOF_MODULUS_V1),
+            1
+        );
+    }
+
+    #[test]
+    fn compression_identity_is_exact() {
+        assert_eq!(
+            u128::from(COMPRESSION_GAMMA_V1) * u128::from(COMPRESSION_MODULUS_V1) + 1,
+            u128::from(PROOF_MODULUS_V1)
+        );
+    }
+
+    #[test]
+    fn profile_dimensions_are_internally_consistent() {
+        assert_eq!(APPLICATION_ROWS_V1, EXACT_RELATIONS_V1);
+        assert_eq!(
+            APPLICATION_WITNESS_POLYNOMIALS_V1 + NORM_STATEMENTS_V1,
+            TBOX_M1_V1
+        );
+        assert_eq!(TBOX_M2_V1 - TBOX_KMSIS_V1, 44);
+        assert_eq!(BINARY_POLYNOMIALS_V1, ATTRIBUTE_COUNT_V1 * 2);
+    }
+}

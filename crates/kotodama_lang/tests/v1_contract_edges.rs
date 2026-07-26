@@ -215,16 +215,57 @@ fn json_parse_rejects_duplicate_object_keys_before_artifact_emission() {
     let diagnostic = diagnostics
         .diagnostics
         .iter()
-        .find(|diagnostic| {
-            diagnostic.message.contains("invalid JSON literal")
-                && diagnostic.message.contains("owner")
-        })
+        .find(|diagnostic| diagnostic.code == "E_JSON_DUPLICATE_KEY")
         .unwrap_or_else(|| panic!("missing parsed duplicate-key diagnostic: {diagnostics:#?}"));
+    assert!(
+        !diagnostic.message.contains("{error}"),
+        "translated diagnostic leaked an unresolved placeholder: {}",
+        diagnostic.message
+    );
     assert_eq!(
         diagnostic
             .primary_span
             .as_ref()
             .and_then(|span| span.source.as_deref()),
         Some("duplicate-parsed-json-key.ko")
+    );
+}
+
+#[test]
+fn json_parse_rejects_malformed_literals_before_artifact_emission() {
+    let source = r#"
+        seiyaku MalformedParsedJson {
+            view fn build() -> Json {
+                Json::parse("{\"owner\":")
+            }
+        }
+    "#;
+    let diagnostics = CompilerSession::default()
+        .build(CompileRequest {
+            source,
+            source_name: Some("malformed-parsed-json.ko"),
+        })
+        .expect_err("malformed Json::parse literals must fail closed");
+    let diagnostic = diagnostics
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "E_JSON_LITERAL_INVALID")
+        .unwrap_or_else(|| panic!("missing malformed JSON diagnostic: {diagnostics:#?}"));
+    assert!(
+        diagnostic.message.contains("Json::parse"),
+        "{}",
+        diagnostic.message
+    );
+    assert!(
+        !diagnostic.message.contains("{error}"),
+        "translated diagnostic leaked an unresolved placeholder: {}",
+        diagnostic.message
+    );
+    assert_eq!(
+        diagnostic
+            .primary_span
+            .as_ref()
+            .and_then(|span| span.source.as_deref()),
+        Some("malformed-parsed-json.ko")
     );
 }

@@ -413,6 +413,22 @@ impl ProofPolynomialV1 {
     #[must_use]
     pub fn scale_centered(self, scalar: i64) -> Self {
         let scalar = canonicalize_i128(i128::from(scalar), PROOF_MODULUS_V1);
+        self.scale_canonical_unchecked(scalar)
+    }
+
+    /// Multiply by one canonical proof-field scalar.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a scalar outside `[0,q)`.
+    pub fn scale_canonical(self, scalar: u64) -> Result<Self, RingErrorV1> {
+        if scalar >= PROOF_MODULUS_V1 {
+            return Err(RingErrorV1::NonCanonicalProofScalar { scalar });
+        }
+        Ok(self.scale_canonical_unchecked(scalar))
+    }
+
+    fn scale_canonical_unchecked(self, scalar: u64) -> Self {
         let mut output = [0_u64; APPLICATION_RING_DEGREE_V1];
         for (output, coefficient) in output.iter_mut().zip(self.coefficients) {
             *output = u64::try_from(
@@ -551,6 +567,12 @@ pub enum RingErrorV1 {
         index: u8,
         /// Rejected residue.
         coefficient: u64,
+    },
+    /// A proof-field scalar was not in `[0,q)`.
+    #[error("proof scalar has non-canonical residue {scalar}")]
+    NonCanonicalProofScalar {
+        /// Rejected scalar.
+        scalar: u64,
     },
     /// A direct attribute polynomial was not binary.
     #[error("direct attribute coefficient {index} is {coefficient}, not zero or one")]
@@ -708,8 +730,8 @@ mod tests {
 
     #[test]
     fn centered_lifts_scaling_automorphism_and_monomials_are_exact() {
-        let application = ApplicationPolynomialV1::from_centered_coefficients(
-            core::array::from_fn(|index| {
+        let application =
+            ApplicationPolynomialV1::from_centered_coefficients(core::array::from_fn(|index| {
                 if index == 0 {
                     -1
                 } else if index == 63 {
@@ -717,18 +739,15 @@ mod tests {
                 } else {
                     0
                 }
-            }),
-        );
+            }));
         assert_eq!(application.centered_coefficient(0), -1);
         assert_eq!(application.centered_coefficient(63), 7);
         assert_eq!(application.automorphism().automorphism(), application);
         assert_eq!(
             application.scale_centered(-3),
-            application
-                .multiply(ApplicationPolynomialV1::constant(
-                    APPLICATION_MODULUS_V1 - 3
-                )
-                .expect("canonical"))
+            application.multiply(
+                ApplicationPolynomialV1::constant(APPLICATION_MODULUS_V1 - 3).expect("canonical")
+            )
         );
 
         let proof = ProofPolynomialV1::from_application_centered(application);
@@ -737,8 +756,7 @@ mod tests {
         assert_eq!(proof.automorphism().automorphism(), proof);
         assert_eq!(
             proof.scale_centered(-3),
-            proof
-                .multiply(ProofPolynomialV1::constant(PROOF_MODULUS_V1 - 3).expect("canonical"))
+            proof.multiply(ProofPolynomialV1::constant(PROOF_MODULUS_V1 - 3).expect("canonical"))
         );
         let x = proof_monomial(1, 1);
         assert_eq!(

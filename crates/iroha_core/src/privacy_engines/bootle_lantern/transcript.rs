@@ -21,8 +21,7 @@ use super::{
 const MATRIX_DOMAIN_V1: &[u8] = b"iroha.privacy.bootle-lantern.matrix.v1";
 const PRESENTATION_CHALLENGE_DOMAIN_V1: &[u8] =
     b"iroha.privacy.bootle-lantern.presentation-challenge.v1";
-const PRESENTATION_STAGE_DOMAIN_V1: &[u8] =
-    b"iroha.privacy.bootle-lantern.presentation-stage.v1";
+const PRESENTATION_STAGE_DOMAIN_V1: &[u8] = b"iroha.privacy.bootle-lantern.presentation-stage.v1";
 const MAX_UNIFORM_REJECTION_ATTEMPTS_V1: u32 = 4_096;
 const APPLICATION_ACCEPTANCE_LIMIT_V1: u16 = 61_445;
 const PROOF_ACCEPTANCE_LIMIT_V1: u64 = 70_931_694_131_122_923;
@@ -506,10 +505,7 @@ impl PresentationTranscriptV1 {
         absorb_frame_checked(&mut state, stage)?;
         absorb_frame_checked(&mut state, &self.binding.parameter_digest)?;
         absorb_frame_checked(&mut state, &self.binding.statement_digest)?;
-        absorb_frame_checked(
-            &mut state,
-            &self.binding.issuer_policy_record_digest,
-        )?;
+        absorb_frame_checked(&mut state, &self.binding.issuer_policy_record_digest)?;
         absorb_frame_checked(&mut state, &self.binding.transaction_intent_digest)?;
         absorb_frame_checked(&mut state, self.matrix_seed.parameter_digest())?;
         absorb_frame_checked(&mut state, self.matrix_seed.public_parameter_seed())?;
@@ -541,8 +537,7 @@ impl PresentationTranscriptV1 {
         if columns == 0 {
             return Err(TranscriptErrorV1::EmptyProjectionRow);
         }
-        let columns_u32 =
-            u32::try_from(columns).map_err(|_| TranscriptErrorV1::FieldTooLarge)?;
+        let columns_u32 = u32::try_from(columns).map_err(|_| TranscriptErrorV1::FieldTooLarge)?;
         let mut coordinate = [0_u8; 6];
         coordinate[..2].copy_from_slice(&row.to_be_bytes());
         coordinate[2..].copy_from_slice(&columns_u32.to_be_bytes());
@@ -593,13 +588,53 @@ impl PresentationTranscriptV1 {
                         break;
                     }
                 }
-                *coefficient =
-                    accepted.ok_or(TranscriptErrorV1::UniformRejectionExhausted)?;
+                *coefficient = accepted.ok_or(TranscriptErrorV1::UniformRejectionExhausted)?;
             }
             output.push(
                 ProofPolynomialV1::new(coefficients)
                     .map_err(|_| TranscriptErrorV1::InternalInvariant)?,
             );
+        }
+        Ok(output)
+    }
+
+    /// Derive independent uniform proof-ring scalars.
+    ///
+    /// The scalar-vector shape is explicitly framed, so this stream cannot
+    /// alias polynomial expansion under the same stage and components.
+    ///
+    /// # Errors
+    ///
+    /// Returns transcript framing or bounded uniform-rejection failure.
+    pub fn derive_uniform_scalars(
+        &self,
+        stage: &[u8],
+        components: &[&[u8]],
+        count: usize,
+    ) -> Result<Vec<u64>, TranscriptErrorV1> {
+        const SCALAR_SHAPE_V1: &[u8] = b"scalar-vector-v1";
+
+        let count_u32 = u32::try_from(count).map_err(|_| TranscriptErrorV1::FieldTooLarge)?;
+        let mut state = Shake256::default();
+        absorb_stage_prefix(self, &mut state, stage, components)?;
+        absorb_frame_checked(&mut state, SCALAR_SHAPE_V1)?;
+        absorb_frame_checked(&mut state, &count_u32.to_be_bytes())?;
+        let mut reader = state.finalize_xof();
+        let mut output = Vec::with_capacity(count);
+        for _ in 0..count {
+            let mut accepted = None;
+            for _ in 0..MAX_UNIFORM_REJECTION_ATTEMPTS_V1 {
+                let mut bytes = [0_u8; 7];
+                reader.read(&mut bytes);
+                let mut wide = [0_u8; 8];
+                wide[1..].copy_from_slice(&bytes);
+                let candidate = u64::from_be_bytes(wide);
+                if candidate < PROOF_ACCEPTANCE_LIMIT_V1 {
+                    accepted = Some(candidate % PROOF_MODULUS_V1);
+                    break;
+                }
+            }
+            output.push(accepted.ok_or(TranscriptErrorV1::UniformRejectionExhausted)?);
         }
         Ok(output)
     }
@@ -1102,8 +1137,8 @@ mod tests {
             .expect("stage");
         assert_ne!(first, second);
 
-        let changed = PresentationTranscriptV1::new(binding(), seed(), [0x94; 32])
-            .expect("relation binding");
+        let changed =
+            PresentationTranscriptV1::new(binding(), seed(), [0x94; 32]).expect("relation binding");
         changed
             .derive_bytes(b"stage-a", &[b"ab", b"c"], &mut second)
             .expect("stage");
@@ -1144,6 +1179,23 @@ mod tests {
                 .derive_uniform_polynomials(b"weights", &[b"commitment"], 9)
                 .expect("uniform polynomials")
         );
+
+        let scalars = transcript
+            .derive_uniform_scalars(b"weights", &[b"commitment"], 257)
+            .expect("uniform scalars");
+        assert_eq!(scalars.len(), 257);
+        assert!(
+            scalars
+                .iter()
+                .all(|coefficient| *coefficient < PROOF_MODULUS_V1)
+        );
+        assert_eq!(
+            scalars,
+            transcript
+                .derive_uniform_scalars(b"weights", &[b"commitment"], 257)
+                .expect("uniform scalars")
+        );
+        assert_ne!(scalars[0], polynomials[0].coefficients()[0]);
     }
 
     #[test]
