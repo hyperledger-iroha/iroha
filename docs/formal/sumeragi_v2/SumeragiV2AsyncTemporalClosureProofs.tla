@@ -22,10 +22,15 @@ responsive voter to Local, while durable Decision receipts accumulate over the
 finite frozen roster.  The two declarations without proof are the complete
 remaining abstract temporal debt.  The leader declaration is the conjunction
 of exact scheduler-origin readiness, physical transport/ordinary-runner/
-timeout-quorum convergence, and fixed-identity semantic phase composition;
+timeout-quorum convergence, and target/context/leader/view/subject-indexed
+semantic phase composition.  Its occurrence rank counts every distinct
+target/leader owner at the frozen semantic rank; equal-count replacement and
+count-increasing producer replenishment remain explicit non-progress debt.
 the recipient-local certified-response capacity arm is already proved from
 the dedicated runtime slot and fair claim runner.  The Decision declaration
-contains only its exact off-scheduler residuals.  The Decision-local Stage-2
+contains exactly the request clock-owner, Runtime-prefix, request
+head/gate-owner, request admission/coalescing, and nonphysical nonclaim
+response head/gate-owner residuals.  The Decision-local Stage-2
 Busy owner and protected Serve FIFO starvation are proved in their dedicated
 closure leaf.  Keeping the open declarations above their eventual
 proof-bearing leaves prevents a strict leaf run from accepting either broad

@@ -800,16 +800,16 @@ _RELIABLE_FLUSH_IDENTITY_CONSTANT_SOURCE_ITEM_SEALS = (
 
 
 _RELIABLE_FLUSH_APPLICATION_SOURCE_ITEM_SEALS = (
-    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "ProductionReliableFlushApplicationProjection", "d9b88c7667654798672e48f456615a0e56ec7bd5d989da11a0fb6a4a557ec131", "struct"),
-    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "production_reliable_flush_application_body", "0e9acf08942860367c6a5d953deaa51a430924ffdafe7174e51bb4b96f4def4e", "macro"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "ProductionReliableFlushApplicationProjection", "7ffaf7f495f2a7f96320e1c377c0358c895d00dcfd35bf53f3e8e4d61a443e05", "struct"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "production_reliable_flush_application_body", "49559bef138c5b61161d45ca264e50a35e4c6f48d76d517b289b4f5e6fa64b80", "macro"),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "production_reliable_flush_two_phase_link_body", "b165517bbaf656b9136ab8e10c9c909e53ec68fff3dc2116ce4a1a2eade84da6", "macro"),
-    CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "ProductionReliableFlushApplicationProjection", "15a91e930f41a72fd057956ef0c26d9d3e24a3f6043af5884b670fc632cedd53", "struct", (("verus", "!"),)),
+    CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "ProductionReliableFlushApplicationProjection", "e71a4e1d1f591e86542c9379fb5d280702e291c1a644144975fd30f8b8e361fd", "struct", (("verus", "!"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "ReliableFlushProjectionBytes", "6561689ace006734d5b7da3ed40d527460e78aedd7dd356aeda4219dcb1e8033", "struct"),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "ReliableFlushTargetGateResidual", "29c6ccec7cb1b4f5f82b629f42763c65bfc8e33d9b5daeeb12ba70645a7ae5d5", "struct"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "ReliableFlushTargetGateResidual", "13f961f2f17b810e1fc59378e946d0f42828b196f88433e6b9837364729f7993", "struct"),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "ReliableFlushTargetOutboundResidual", "c7059660e4aba5989c599d08bb30907eb313e025c455f749b42ffa9e4df51959", "struct"),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "ReliableFlushChunkArcIdentity", "bba07374c9524055d3ce702e9f0aeb74880a4ceddbe199285bcbb81100081a6a", "struct"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "ReliableFlushChunkArcIdentity", "070ca20fc32e5a4cbc0e90831bd568e88cc665b6e7f32b4c5222c081c93ab408", "struct"),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "ReliableFlushSharedTransferSnapshot", "4d8641651448847cc75c596ed7b65b5de0d845fbb60fb97885013aa3f2235955", "struct"),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "ReliableFlushSiblingGateSnapshot", "24575aef084082886f7c19179dbd0a0cdfbcd484a721b25ae40792f2d8c7302c", "struct"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "ReliableFlushSiblingGateSnapshot", "d6b5d5cdbfbb0f1f7bd0a27575dfc811cef3a74b86c177cb5d29d6d372b057c6", "struct"),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "ReliableFlushSiblingOutboundSnapshot", "64183ad2a502d96cbc5de2ad0e808b5193dfe628fcf59d66bc0a7f9ca15aa8aa", "struct"),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "ReliableFlushSiblingStateSnapshot", "d5f2c6c8a5687a08677946625293f80a8521f02dc65e5a41fc3c44c48889dfb7", "struct"),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "ReliableFlushGateApplicationPlan", "77cd6b2af38d39809917b3d082104a8e63427bc78ae492d252d1373caa480c04", "struct"),
@@ -827,25 +827,25 @@ _RELIABLE_FLUSH_APPLICATION_SOURCE_ITEM_SEALS = (
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "typed_hash", "9e4cd4400baa11201ece5bf143c9d2618b529db97413aabe39a0b2cd77705a1e", brace_context=(("impl", "ReliableFlushProjectionBytes"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "source", "9d8de926c5a07c7e7d6ba62f11c9e44c5f8a6c875f0f01133559859b51dd5ebc", brace_context=(("impl", "ReliableFlushProjectionBytes"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "cursor", "002f5526f0b10ffdc6d02129e091459a0ce28de800a186c7fcf1bb74dfe18c59", brace_context=(("impl", "ReliableFlushProjectionBytes"),)),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "pending_chunk", "907a0138200d65a67078ba97983c2a7e2b9c13795afccc3b360fe3547d4ca587", brace_context=(("impl", "ReliableFlushProjectionBytes"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "pending_chunk", "6cf5d0b970d680b70cf8afd9f88f01061fedac7e81abe959a51fbe13c4f3ee3c", brace_context=(("impl", "ReliableFlushProjectionBytes"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "key", "73a8e5fa851fd941b9004bbc3c1eaab53c1ad9538d51132d4ced6f8e6004e2bb", brace_context=(("impl", "ReliableFlushProjectionBytes"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "finish", "d92b5b03bcfab47c5813a3398fe7a773aa566eec9284b49e0cf91ec7b30d2d0d", brace_context=(("impl", "ReliableFlushProjectionBytes"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "capture", "fe82f420ac5c5bf2fd5cb0e60b6635688c006ccdbef572feb130776e409ec5a3", brace_context=(("impl", "ReliableFlushRouteIdentity"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "digest", "53ce7070e038967a279ea803de9d507bc7608284337c8a73c7aaf1c8654d78b4", brace_context=(("impl", "ReliableFlushRouteIdentity"),)),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "capture", "82002df509439af4e35aaed77bd9e02f9b0dc395893d057168b3f042c5c21f6c", brace_context=(("impl", "ReliableFlushTargetGateResidual"),)),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "digest", "61bf76985ab6b884520d58afdc22409595debe1d33bb85064fb5ed7ddff7c3fe", brace_context=(("impl", "ReliableFlushTargetGateResidual"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "capture", "cd0e744904b0fa142732607dfa400340cbdb172f28809973847f73d12ad6c31c", brace_context=(("impl", "ReliableFlushTargetGateResidual"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "digest", "2ef6e6b5f3403e2f307d64b3962c8dbdf32dfdd2ff352608d177105034e6c212", brace_context=(("impl", "ReliableFlushTargetGateResidual"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "capture", "e8fba25aa719fe80850ff4633d7db9b0ff53a52872149a86e1102d12041a5679", brace_context=(("impl", "ReliableFlushTargetOutboundResidual"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "digest", "e29da87c7d60f617ac76a0fad11b7d82dce2c137118815ea0da7307c96fd96ff", brace_context=(("impl", "ReliableFlushTargetOutboundResidual"),)),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "capture", "ab931898cbc6647b3031498006cc6f6bba04b29cc7acbea4a80553b214604804", brace_context=(("impl", "ReliableFlushChunkArcIdentity"),)),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "append_to", "0b20503cf92be8020c661de09aeef2b3ac1262f6fdb7af13c406dee1885d9e2d", brace_context=(("impl", "ReliableFlushChunkArcIdentity"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "capture", "15454080eae97fb168dade79fabb3cd4598eee476b71253e6be1797fd0ce293a", brace_context=(("impl", "ReliableFlushChunkArcIdentity"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "append_to", "c4e8f5e58b5587c1d067f2cc97a321b8a6b4736d76d69c0b27e3917f27d49abb", brace_context=(("impl", "ReliableFlushChunkArcIdentity"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "capture", "a0da4d0e59f8b4c0f9ed9af08ed6b80c9e9603b8b3eab608e11e1139be4142dc", brace_context=(("impl", "ReliableFlushSharedTransferSnapshot"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "digest", "be53565d8672ac62cdd092462388d168bcaded210cfe53e28a9c1f20722c113a", brace_context=(("impl", "ReliableFlushSharedTransferSnapshot"),)),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "capture", "c43764d7234abe2fc8afdb3c40088e4d9f3224b00ebd5837ea6b1c2db417298a", brace_context=(("impl", "ReliableFlushSiblingStateSnapshot"),)),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "digest", "ae2c8c985a04b9a4701ccd250face95f8e3ef6a6f5d0ded15a43c3aaa4fe43e8", brace_context=(("impl", "ReliableFlushSiblingStateSnapshot"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "capture", "7b1586cfae44a33a2e5e2f0d9772c20528ac844711559deb2e2e4b39e6ea7aa4", brace_context=(("impl", "ReliableFlushSiblingStateSnapshot"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "digest", "cd7f087a31da89e54eadce3f660636441ba7b6c2a190f6b6650e18cc9a199e21", brace_context=(("impl", "ReliableFlushSiblingStateSnapshot"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "eq", "2682491a6b73b17ce91aaf6dd374f2158a0196b6a9e0b3ca6487a269466dd0a1", brace_context=(("impl", "PartialEq", "for", "ReliableFlushRouteIdentity"),)),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "eq", "ed9b902a7091c9acac4a3bbf455a0860c5b9e4aef30841ce6688c62a4cc1cb01", brace_context=(("impl", "PartialEq", "for", "ReliableFlushTargetGateResidual"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "eq", "85fca42ad6e1b4ae30138ad40b3b4a54b6bf187f3f9a73e54571da62caf98b3f", brace_context=(("impl", "PartialEq", "for", "ReliableFlushTargetGateResidual"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "eq", "b249fcbef09dc41c47eae28e6b1fe275305e502edc078ae817241b0581c8d70a", brace_context=(("impl", "PartialEq", "for", "ReliableFlushTargetOutboundResidual"),)),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "eq", "4560af28092b529e7d399e83bf370bdd0ac33efd7140c70dc54461c9bd082cc1", brace_context=(("impl", "PartialEq", "for", "ReliableFlushChunkArcIdentity"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "eq", "19d57e02a57170cdb0c1394fc08fe93f44ca5d89ba058aeceafd2deb6662fb0f", brace_context=(("impl", "PartialEq", "for", "ReliableFlushChunkArcIdentity"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "reliable_flush_typed_identity", "e0f75753b395d116820035bcfe43ba3759fe8973d38d414b5cdbadd3a1a5db8f"),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "reliable_flush_hash_identity", "3a6cc6e2dcb6137ff1722f167fbd5b4828596bce1bf8422e8177d75c24d0f6f3"),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "reliable_flush_peer_identity", "3a1c9e36eaf39d860738c32f7612b187ef8dc45db64f7cf57622fbc3ca10a944"),
@@ -853,14 +853,14 @@ _RELIABLE_FLUSH_APPLICATION_SOURCE_ITEM_SEALS = (
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "reliable_flush_usize", "674058b603b97c8ffaf4ea506e42514d76237ad8392c0de38eb6a815ad2d30b2"),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "reliable_flush_topic_tag", "0ce52c4dfc94894c9656eec6bd9348c55b1653b634660857b9f4e6514ee72eaf"),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "reliable_flush_target_order_position", "c82e9b6840fd471ad4a4cc3cba73d364ac172bae343ac5f39d3cadea6cd8fc5f"),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "preflight_reliable_flush_gate", "b9ed8e3fdd0f2e0864fff1f4764006783f7c0721974f692a49d5833d24ed11fe"),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "preflight_reliable_flush_outbound", "9602ada0ff5aab21abd59e8046384a397eac581634bff2dd2c19c7771640f463"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "preflight_reliable_flush_gate", "6f7b8e5cc37b371acc0850850ac00df8c50c957094aac32d6ed13ec16edf6b90"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "preflight_reliable_flush_outbound", "a09d5a66a346811fa664361fa38de502d06af0986384fd4f491cd5cb298d6667"),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "preflight_reliable_flush_outbound_attempt", "cdbcb606745395d0325f2046dd5f4cbdf0ad2e4595d2aa6887d9866f232c1d11"),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "finish_reliable_flush_application_plan", "86dd7b1577741b605a95df8bd114c3c33717d21f395f229551950394f173d751"),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "apply_reliable_flush_application", "93912d6c690daa60be7fda65daa0a997a0e55839d3661560ada00aaca8dd8a52"),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "observe_reliable_flush_application", "4b1799bf12e791d70d96dbdeaa7faf4fa73e1ed2c228f441d4862e0a5e68b34a"),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "reliable_flush_application_occurrence_projection", "15618d27a59f7246f7a7f32529cbde1cb8e19f1514821177c4738b693ff7c84b"),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "project_reliable_flush_marker", "1b83ddf1a0493b88911c19ce08807a3dbe2f1b2d6e24b38da6f7284e908923f0"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "reliable_flush_application_occurrence_projection", "a15d6e74a32f1b0117578bf9d2c12ae08f9e0cef7818229886252a4ef9f3bc7f"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "project_reliable_flush_marker", "aa021429243b00767306e42643531251aa0a28d43cc992eae1494278cc5791c3"),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "project_reliable_flush_transition", "e65ebf42b756072f30b783798446834e4ef67c44fe051792d3995f5009f065fe"),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "process_local_projection", "deef81bb181613540e6a2c3c70ceb9b06f484fac5fc2bf66ed6211133384ffc7"),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "project_reliable_flush_residuals", "6c38a1e1206d937ab4d10fa07f18c689490bafb01d1593b326849134398b2ba6"),
@@ -876,32 +876,32 @@ _RELIABLE_FLUSH_SOURCE_ITEM_SEALS = (
     + _RELIABLE_FLUSH_APPLICATION_SOURCE_ITEM_SEALS
     + (
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "CanonicalIdentityProjection", "6988ca07a23b2b0b2f6f97862355cd26b65549402367584c30cc32311fa907b0", "struct"),
-    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "ProductionReliableFlushTraceProjection", "707b03ddf6a683acc8cd78cc7a2071f25a89da5e8eaba1465f6a96016888e107", "struct"),
-    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "production_reliable_flush_trace_body", "611933062ae23d502966c25c176f8dff489ed83215d7639773ba63049695d686", "macro"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "ProductionReliableFlushTraceProjection", "ec137085348f9e052ece6aaf19aaabcdc11f6ea0848b1998495f1ea2ff48402b", "struct"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_core/refinement.rs", "production_reliable_flush_trace_body", "7b830dafccef15b33a2966e57e2fccd18c6f6ce3e454831cb7378d12ae2db1d5", "macro"),
     CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "CanonicalIdentityProjection", "bbf3897009970afe8953d3fd51bfc88105d3a39e332853973ef6f1cb57013fe6", "struct", (("verus", "!"),)),
-    CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "ProductionReliableFlushTraceProjection", "4449822043b8473e00e3fe01e2b7bf6f524e294234c81d2863b2942cf587c88b", "struct", (("verus", "!"),)),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "CertifiedMergeSidecarChunkFlushProjection", "12c0d7db72a87a59588640d0e482e64a60b41e432668040169291a0e09ba7217", "struct"),
+    CrossToolSourceItemSeal("crates/iroha_sumeragi_core/src/verus_proofs.rs", "ProductionReliableFlushTraceProjection", "908e6622ab099784f36095f2bf96c9ace7fcc2b2be791d6c55d755a4fdd7850d", "struct", (("verus", "!"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "CertifiedMergeSidecarChunkFlushProjection", "e33ee8cd88404b0627305a89a28beb6e9d74cc3a80d9eb105af395fa0effd0db", "struct"),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "CertifiedMergeSidecarChunkAdmission", "f8f5605e0249bfbe54216287e4d82c2a1cb2a27621731e2073a6f0c16f3e53fa", "struct"),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "ServerPendingChunkIdentity", "bf466defc9a4a4fd7ae6812b5af10f1b2369a92ee71caf2eb8b63f8044cbf361", "struct"),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "from_admitted_reply", "6aab4029fd336b2651d767106862270fd1ac3accb751fbfffe2e5335e21523ca", brace_context=(("impl", "CertifiedMergeSidecarChunkAdmission"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "ServerPendingChunkIdentity", "f829ed6abcaefd45ee46ea385995c58f3ac40b535782fdbf36d551d72e221504", "struct"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "from_admitted_reply", "a2b593a56511c97eae5bfaca2235490ace31a128884729704bb6dc907a98da44", brace_context=(("impl", "CertifiedMergeSidecarChunkAdmission"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "projection", "7c2b58e389e8a3f8d3875bef22e7407f914c44d16baa8db933c14d1b53c754ef", brace_context=(("impl", "CertifiedMergeSidecarChunkAdmission"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "matches_ack_identity", "b41736d098c44a77011b4e5e02b84fc849f7c41f4a523ec4d5e7c7138f9308c7", brace_context=(("impl", "CertifiedMergeSidecarChunkAdmission"),)),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "projection_matches_identity", "e664bed9c23ca13891cc54d9609ed286e5d1d8d9e75ae9be82eefbca63c9efd6", brace_context=(("impl", "CertifiedMergeSidecarChunkAdmission"),)),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "matches_materialized_chunk", "5409de569e6d24d487c2da720277f46b71dd3eda1ae7b808549a37bb46ab1196", brace_context=(("impl", "CertifiedMergeSidecarChunkAdmission"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "projection_matches_identity", "14d965c4c6fa7416fe47a93c29d32b1f244f5baf7af3d72ad64282b996579303", brace_context=(("impl", "CertifiedMergeSidecarChunkAdmission"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "matches_materialized_chunk", "353fc1629ed277f4b30242bb13134084b118bb92efa3c92437ae6c7f4b8b507a", brace_context=(("impl", "CertifiedMergeSidecarChunkAdmission"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "is_bound_to_attempt", "bc91d3dca2a1cd0d409ae3a00956265c44db98e16fece0312721a30dc7c41d0e", brace_context=(("impl", "CertifiedMergeSidecarChunkAdmission"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "is_bound_to_source", "9b3eb15cf936a718438f1aaed1f91a1ff839fad37327b5050180c25859d224f7", brace_context=(("impl", "CertifiedMergeSidecarChunkAdmission"),)),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "from_message", "3df9cc44b6f184195c2a2aeedfc3b875077fdcda06850bacf0b552c62df93b29", brace_context=(("impl", "ServerPendingChunkIdentity"),)),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "matches_admission", "832b2006e63195d9962938caa6c08eff7609efe6c2eeebdc9ee6eb0df02ed263", brace_context=(("impl", "ServerPendingChunkIdentity"),)),
-    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "acknowledge_outbound_chunk", "d6a4362416a2a2ec8d2d88620e33702ef30ac95212f0d2c1ea5d5788bcc2e887", brace_context=(("impl", "MergeSidecarTransport"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "from_message", "332520780a3fd24ecb3408909165c5018800bad19562c8434c6b4de225cd7d46", brace_context=(("impl", "ServerPendingChunkIdentity"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "matches_admission", "ca5f53b31a91aac8cc3ceec313c4ee309b8ba10126c86c1fde5a97f7083807c5", brace_context=(("impl", "ServerPendingChunkIdentity"),)),
+    CrossToolSourceItemSeal("crates/iroha_core/src/merge_sidecar.rs", "acknowledge_outbound_chunk", "ea52e797318cf35982fc24c9da0d7a40c6aa87df2814ba49612ec4d6a5184fdb", brace_context=(("impl", "MergeSidecarTransport"),)),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_worker.rs", "reliable_flush_typed_identity", "e0f75753b395d116820035bcfe43ba3759fe8973d38d414b5cdbadd3a1a5db8f"),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_worker.rs", "reliable_flush_hash_identity", "3a6cc6e2dcb6137ff1722f167fbd5b4828596bce1bf8422e8177d75c24d0f6f3"),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_worker.rs", "reliable_flush_peer_identity", "3a1c9e36eaf39d860738c32f7612b187ef8dc45db64f7cf57622fbc3ca10a944"),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_worker.rs", "reliable_flush_ordinal_halves", "efc05f069320482233885330aa53196e5f5d6382da0b8eb482759e7f7854e52b"),
     CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_worker.rs", "reliable_flush_usize", "674058b603b97c8ffaf4ea506e42514d76237ad8392c0de38eb6a815ad2d30b2"),
-    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_worker.rs", "reliable_flush_trace_projection", "ff6227ecbcf138127c0f8895808f9226f8e6f06ef4a3a9a21f4808599507cbd9"),
+    CrossToolSourceItemSeal("crates/iroha_core/src/sumeragi/v2_worker.rs", "reliable_flush_trace_projection", "7d8f14adddee04f2fcb04c6bf45d51debc1b346fcb09e51afee76f1ca520bef5"),
     CrossToolSourceItemSeal("crates/iroha_p2p/src/network.rs", "NetworkActorAdmittedTicketIdentity", "a77a7f1d0c9204b74b042466c371e4bf93d85adb56c77f6533730cc5754fc5e0", "struct"),
     CrossToolSourceItemSeal("crates/iroha_p2p/src/network.rs", "same_ticket", "1264d6ad9adafb1984aa90db2e301a5832e47694a99b33313f9d71adf97dc120", brace_context=(("impl", "NetworkActorAdmittedTicketIdentity"),)),
-    CrossToolSourceItemSeal("crates/iroha_p2p/src/network.rs", "process_local_identity_hash", "8aca03dffb50726eb4217efc42274331186721a7467f3f49dc5b5c55d1050e87", brace_context=(("impl", "NetworkActorAdmittedTicketIdentity"),)),
+    CrossToolSourceItemSeal("crates/iroha_p2p/src/network.rs", "process_local_identity_hash", "462c668bd2f0bb4f56421c2f95293a2432a6a3e59e35526a6d61ff2915e2ed9e", brace_context=(("impl", "NetworkActorAdmittedTicketIdentity"),)),
     CrossToolSourceItemSeal("crates/iroha_p2p/src/network.rs", "matches", "d7aa1ff1bba2b408eacaa4821e5c8791a3298f8ecbbc10a120e4cf4f18dd00aa", brace_context=(("impl", "WeakProgressDeliveryAuthority"),)),
     CrossToolSourceItemSeal("crates/iroha_p2p/src/network.rs", "try_reserve_for_source", "b938440d9f487ac064ca8ac46269d88551da51349ce14b4e470c87d672e82888", brace_context=(("impl", "NetworkActorProgressBudget"),)),
     CrossToolSourceItemSeal("crates/iroha_p2p/src/network.rs", "NetworkReplyFlushIdentity", "dce80dad1dd1ec1ff9d40090bec2dcff4ed40a7565e316acc69f5b87dc8eb089", "struct"),
@@ -942,7 +942,7 @@ _TWO_STAGE_RELAY_RETRY_SOURCE_ITEM_SEALS = (
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "send_rehydrated", "d10242d792a48f0778102fd02d6eb3b1843dfb2c099101cddc181b817eadf668", brace_context=(("impl", "SumeragiRelayIngress"),)),
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "sumeragi_rehydrated_ownership_matches", "e256e3116ecb06539aa891d0057e502b9b6bdf46150211a9891168eeb38a256e"),
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "rehydrate_held_sumeragi_relay_work", "c70d1d27ef4f639937fdbb8e4c5deb035142532b31c7bcfdb539ab752e36bb16"),
-    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "prepare_sumeragi_relay_work", "fa9919eae532cfec51c26996d518bc8794f2bb7e28543521b4709aa36c2f3936", brace_context=(("impl", "NetworkRelayShared"),)),
+    CrossToolSourceItemSeal("crates/irohad/src/main.rs", "prepare_sumeragi_relay_work", "25149b267f36f5a990d340fbc9331768bc5062a5c414e3de46720407862a874c", brace_context=(("impl", "NetworkRelayShared"),)),
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "push", "d30cc609e125945f143c35d42f513479d7255ed739859859a6a2149aa74abf82", brace_context=(("impl", "<", "K", ":", "Clone", "+", "Ord", ",", "T", ">", "FairRetainedQueue", "<", "K", ",", "T", ">"),)),
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "pop_if_with_trace", "4041485881b4ba7d2898082b21a228ff77652d520a91bb20cb9475ece8a48b41", brace_context=(("impl", "<", "K", ":", "Clone", "+", "Ord", ",", "T", ">", "FairRetainedQueue", "<", "K", ",", "T", ">"),)),
     CrossToolSourceItemSeal("crates/irohad/src/main.rs", "finish_sumeragi_block_ingress_attempt", "acfcb75628dc5cc0a843059252287d0caaddae96a7575435ced11cd3b84a86fb"),
@@ -2699,6 +2699,30 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                         production_reliable_flush_application_projection(application),
                     ),
                     worker.status == 2u8,
+                    worker.stream_epoch > 0u64,
+                    application.stream_epoch > 0u64,
+                    application.marker_stream_epoch > 0u64,
+                    worker.stream_epoch == application.stream_epoch,
+                    worker.stream_epoch == application.marker_stream_epoch,
+                    application.stream_epoch == application.marker_stream_epoch,
+                    worker.service_generation > 0u64,
+                    application.service_generation > 0u64,
+                    application.marker_service_generation > 0u64,
+                    worker.service_generation == application.service_generation,
+                    worker.service_generation
+                        == application.marker_service_generation,
+                    application.service_generation
+                        == application.marker_service_generation,
+                    worker.semantic_sequence > 0u64,
+                    application.semantic_sequence > 0u64,
+                    application.marker_semantic_sequence > 0u64,
+                    worker.semantic_sequence == application.semantic_sequence,
+                    worker.semantic_sequence
+                        == application.marker_semantic_sequence,
+                    application.semantic_sequence
+                        == application.marker_semantic_sequence,
+                    worker.reply_writer_timeout_attempt
+                        == application.reply_writer_timeout_attempt,
                     application.claim_acquired,
                     application.gate_marker_present_before,
                     !application.gate_marker_present_after,
@@ -2739,7 +2763,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                 ),
                 verified_kernel_shared_macro_sha256=(
     ("refinement_tag_value", "a130f9d278fae454818b463169f1f840dbe9d271fdc6f444b33caf185aefcd97"),
-                    ("production_reliable_flush_trace_body", "611933062ae23d502966c25c176f8dff489ed83215d7639773ba63049695d686"),
+                    ("production_reliable_flush_trace_body", "7b830dafccef15b33a2966e57e2fccd18c6f6ce3e454831cb7378d12ae2db1d5"),
                 ),
                 theorem_kernel_projection=(
                     "production_reliable_flush_trace_projection(worker),"
@@ -2761,7 +2785,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                         source="crates/iroha_core/src/sumeragi/v2_worker.rs",
                         item="poll_reply_flushes",
                         item_token_sha256=(
-                            "6bb5a13a7fa1516153de7a1410d00fcf12d8b8dee7d40b27be591ac51f0088d4"
+                            "bdcb177a425296d471e827d561974ec96bedb9de661681d6a8144f8326c4f372"
                         ),
                         brace_context=(("impl", "PendingExactOutput"),),
                         projection="flush_trace",
@@ -2818,7 +2842,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                         ),
                         verified_kernel_shared_macro_sha256=(
     ("refinement_tag_value", "a130f9d278fae454818b463169f1f840dbe9d271fdc6f444b33caf185aefcd97"),
-                            ("production_reliable_flush_application_body", "0e9acf08942860367c6a5d953deaa51a430924ffdafe7174e51bb4b96f4def4e"),
+                            ("production_reliable_flush_application_body", "49559bef138c5b61161d45ca264e50a35e4c6f48d76d517b289b4f5e6fa64b80"),
                         ),
                         theorem_kernel_projection=(
                             "production_reliable_flush_application_projection(application),"
@@ -2857,7 +2881,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                                     }
                                 """,
                                 item_token_sha256=(
-                                    "d6a4362416a2a2ec8d2d88620e33702ef30ac95212f0d2c1ea5d5788bcc2e887"
+                                    "ea52e797318cf35982fc24c9da0d7a40c6aa87df2814ba49612ec4d6a5184fdb"
                                 ),
                             ),
                         ),
@@ -2930,7 +2954,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                                     }
                                 """,
                                 item_token_sha256=(
-                                    "d6a4362416a2a2ec8d2d88620e33702ef30ac95212f0d2c1ea5d5788bcc2e887"
+                                    "ea52e797318cf35982fc24c9da0d7a40c6aa87df2814ba49612ec4d6a5184fdb"
                                 ),
                             ),
                         ),
@@ -3585,7 +3609,7 @@ CROSS_TOOL_REFINEMENT_CONTRACTS = (
                         source="crates/iroha_core/src/sumeragi/v2_runner.rs",
                         item="run_inner",
                         item_token_sha256=(
-                            "e48af8d484dc2fb93697b167e8edd2a96b626bfb39e84a69fc37c47c2e4169c7"
+                            "665cb4f59dc4037e17216d4f250cb08ec33f8dacd3c34405c544bd1582c8ebab"
                         ),
                         projection="terminal_application,",
                         required_expression="""
@@ -3963,6 +3987,23 @@ SUPPORT_PROOF_OBLIGATION_INVENTORY = {
         "ResponsiveRestartRestoreRolloverLivenessObligation",
     ),
 }
+
+# Historical recovery has exactly three temporal debt leaves.  Decision-stage
+# ownership is a fourth support leaf, but it is a proved safety theorem and may
+# never fall back into the proofless-support accounting path.
+HISTORICAL_RECOVERY_PROOFLESS_SUPPORT_IDS = (
+    "historical-recovery-authority-acquisition",
+    "historical-recovery-certificate-rank-progress",
+    "historical-recovery-decision-rank-progress",
+)
+HISTORICAL_RECOVERY_PROVED_SAFETY_SUPPORT_IDS = (
+    "historical-recovery-decision-stage-ownership",
+)
+STRICT_PROOFLESS_TEMPORAL_SUPPORT_IDS = (
+    "adequate-leader-exact-closure-residual",
+    "exact-decision-off-scheduler-residual-convergence",
+) + HISTORICAL_RECOVERY_PROOFLESS_SUPPORT_IDS
+
 SUPPORT_PROOF_CONSUMER_BY_ID = {
     "chain-durable-receipt-agreement": "height-liveness",
     "terminal-ingress-process-lifetime-absorbency": (
@@ -4477,13 +4518,13 @@ _REPLY_WRITER_DEADLINE_MUTATION_RUNNER_SHA256 = (
 
 _TYPED_ROLLOVER_HANDOFF_FORMAL_SOURCE_SHA256 = {
     "SumeragiV2TypedRolloverHandoff.tla": (
-        "2c5d1dabd0387568e364fb4260be51d68a308bc6dc53718d9e72a999f8f0b840"
+        "e81da94ee4ead2b9183819a5eb733082267429ee89b7caea23b686dd007ca77c"
     ),
     "SumeragiV2TypedRolloverHandoffProofs.tla": (
-        "d9e78eb1e44c22bb0d5c8c861ef20ad922fbefc35a18d545a3f92d12c13a4872"
+        "635b6d75b3aa8c942061c67ebeffb9ef35afbeba5a043cfc904abe7a602d6cde"
     ),
     "SumeragiV2TypedRolloverHandoffMutation.tla": (
-        "84a96abc4e8e36044a3601836a51f9dae293ca2c606dbc559da868663b9ba592"
+        "21de53c3bf6d7853e47faf5a0009ebad453966dd36e919b88481c0bca0f53378"
     ),
     "SumeragiV2TypedRolloverHandoffRepeatedHandoffMutation.tla": (
         "8995252082e80cbab0649f98aded2c98b59b7ab74839e02457ca73f5bb4a3d23"
@@ -4628,11 +4669,8 @@ _TYPED_ROLLOVER_HANDOFF_MUTATION_RUNNER_SHA256 = (
 
 _TYPED_ROLLOVER_MODEL_SAFETY_PROOFLESS_THEOREMS = (
     "TypedRolloverInitEstablishesSafetyObligation",
-    "BootstrapCrashRecoveryObligation",
-    "BootstrapFirstCommitSelectsExactInitialPairObligation",
     "EveryCrashDropsProcessLocalAuthorityObligation",
     "OnlyValidatedRestartMayFenceAfterCrashObligation",
-    "ValidationFailurePreservesArtifactsObligation",
     "RootGenerationAdvancesExactlyOnceAndAlternatesSlotObligation",
     "ForcedFenceCannotForgeAuthenticatedClosePrefixObligation",
     "TypedRolloverNextPreservesSafetyObligation",
@@ -4642,11 +4680,14 @@ _TYPED_ROLLOVER_MODEL_SAFETY_PROVED_THEOREMS = (
     "BootstrapRootHasExactGenerationZeroShapeObligation",
     "FreshBootstrapUsesTargetGeometryEpochZeroObligation",
     "BootstrapStateReplacementRequiresDirectorySyncObligation",
+    "BootstrapCrashRecoveryObligation",
+    "BootstrapFirstCommitSelectsExactInitialPairObligation",
     "ExactOwnerPairRequiredForRetainedHandoffObligation",
     "StateReplacementRequiresDirectorySyncBeforeRootReplacementObligation",
     "RootReplacementRequiresStoreSyncBeforeMemoryPublicationObligation",
     "RootSelectedPairBindsGenerationAndDigestObligation",
     "MissingRootSelectedStateCannotValidateOrCleanupObligation",
+    "ValidationFailurePreservesArtifactsObligation",
     "SemanticValidationPrecedesArtifactCleanupObligation",
     "ValidatedCleanupRemovesInactiveSlotObligation",
     "SecondCrashBeforeRootResyncPreservesPredecessorObligation",
@@ -4691,6 +4732,7 @@ _PROOFLESS_RELEASE_SUPPORT_BY_THEOREM.update(
         for support_id, (module, symbols) in (
             SUPPORT_PROOF_OBLIGATION_INVENTORY.items()
         )
+        if support_id not in HISTORICAL_RECOVERY_PROVED_SAFETY_SUPPORT_IDS
         for symbol in symbols.split(" / ")
     }
 )
@@ -4919,6 +4961,16 @@ EXACT_FIXED_PROOF_OBLIGATION_STATEMENTS = {
         "TerminalIngressLifecycleSpec "
         "=> TerminalIngressProcessLifetimeAbsorbencyProperty"
     ),
+    "adequate-leader-exact-closure-residual": (
+        "\\A initialContext: "
+        "AdequateLeaderExactClosureResidualProperty("
+        "AsyncLiveSpecAt(initialContext))"
+    ),
+    "exact-decision-off-scheduler-residual-convergence": (
+        "\\A initialContext: "
+        "ExactDecisionOffSchedulerResidualConvergenceProperty("
+        " AsyncSpecAt(initialContext))"
+    ),
     "historical-recovery-authority-acquisition": (
         "IndexedChainSpec "
         "=> IndexedHistoricalRecoveryAuthorityAcquisitionResidualProperty"
@@ -4948,6 +5000,376 @@ EXACT_FIXED_PROOF_OBLIGATION_STATEMENTS = {
 # theorem declaration and silently turn a real release obligation into a
 # tautology.
 EXACT_FIXED_PROOF_PROPERTY_OPERATOR_BODIES = {
+    (
+        "SumeragiV2AsyncTemporalClosureProofs",
+        "AdequateLeaderExactClosureResidualProperty",
+    ): (
+        "/\\ AdequateLeaderExactResidualKernelProperty(specification) "
+        "/\\ AdequateLeaderSemanticCompositionProperty(specification)"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderExactResidualKernelProperty",
+    ): (
+        "/\\ ExactLeaderSchedulerOriginReadinessProperty(specification) "
+        "/\\ AdequateLeaderOpenPhysicalResidualConvergenceProperty(specification)"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderSemanticCompositionProperty",
+    ): (
+        "/\\ AdequateLeaderViewReachCompositionProperty(specification) "
+        "/\\ AdequateLeaderTargetSemanticCompositionProperty(specification)"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderViewReachCompositionProperty",
+    ): (
+        "specification => (gst /\\ ~ResponsiveNodesDecide) "
+        "~> (AdequateResponsiveHonestLeaderViewReached "
+        "\\/ ResponsiveNodesDecide)"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetSemanticCompositionProperty",
+    ): (
+        "/\\ AdequateLeaderTargetCorridorEntryProperty(specification) "
+        "/\\ AdequateLeaderTargetProducerTransportClosureProperty(specification) "
+        "/\\ AdequateLeaderTargetRankDescentProperty(specification)"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetCorridorEntryProperty",
+    ): (
+        "specification => \\A target \\in ValidatorIds: "
+        "AdequateLeaderTargetDecisionSource(target) "
+        "~> (NodeHasDecision(target) "
+        "\\/ \\E leaderContext \\in ContextRecords, "
+        "leader \\in ValidatorIds, leaderView \\in Views, "
+        "subject \\in Subjects: AdequateLeaderTargetOpenFrontier( "
+        "target, leaderContext, leader, leaderView, subject))"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetProducerTransportClosureProperty",
+    ): (
+        "specification => \\A target \\in ValidatorIds, "
+        "leaderContext \\in ContextRecords, leader \\in ValidatorIds, "
+        "leaderView \\in Views, subject \\in Subjects: "
+        "AdequateLeaderTargetProducerTransportResidual( "
+        "target, leaderContext, leader, leaderView, subject) "
+        "~> (NodeHasDecision(target) "
+        "\\/ \\E occurrenceRank \\in "
+        "AdequateLeaderTargetOccurrenceRankCarrier: "
+        "AdequateLeaderTargetOccurrenceRankFrontier( "
+        "target, leaderContext, leader, leaderView, subject, occurrenceRank))"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetRankDescentProperty",
+    ): (
+        "specification => \\A target \\in ValidatorIds, "
+        "leaderContext \\in ContextRecords, leader \\in ValidatorIds, "
+        "leaderView \\in Views, subject \\in Subjects, "
+        "occurrenceRank \\in AdequateLeaderTargetOccurrenceRankCarrier: "
+        "AdequateLeaderTargetOccurrenceRankFrontier( "
+        "target, leaderContext, leader, leaderView, subject, occurrenceRank) "
+        "~> (NodeHasDecision(target) "
+        "\\/ \\E lowerOccurrenceRank \\in SetLessThan( "
+        "occurrenceRank, AdequateLeaderTargetOccurrenceRankOrdering, "
+        "AdequateLeaderTargetOccurrenceRankCarrier): "
+        "AdequateLeaderTargetOccurrenceRankFrontier( "
+        "target, leaderContext, leader, leaderView, "
+        "subject, lowerOccurrenceRank))"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderFrozenTargetCorridor",
+    ): (
+        "/\\ gst /\\ leaderContext \\in ContextRecords "
+        "/\\ leaderContext = context "
+        "/\\ target \\in Responsive \\cap VotingRoster(leaderContext.epoch) "
+        "/\\ leader \\in Responsive \\cap VotingRoster(leaderContext.epoch) "
+        "/\\ leader \\in Honest /\\ leaderView \\in Views "
+        "/\\ nodeView[leader] = leaderView "
+        "/\\ nodeView[target] = leaderView "
+        "/\\ Leader(leaderContext, leaderView) = leader "
+        "/\\ AsyncViewTimeout(leaderView) > AsyncWorstCaseServiceBudget "
+        "/\\ ~NodeHasDecision(target)"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetCandidateRole",
+    ): (
+        "/\\ candidate.node \\in {target, leader} "
+        "/\\ IF candidate.kind \\in {\"BeginDecision\", \"PersistDecision\"} "
+        "THEN candidate.node = target "
+        "ELSE IF candidate.node # target "
+        "THEN ~NodeHasDecision(candidate.node) ELSE TRUE"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetCandidateIdentity",
+    ): (
+        "/\\ rank \\in AdequateLeaderTargetSemanticRankCarrier "
+        "/\\ subject \\in Subjects "
+        "/\\ AdequateLeaderFrozenTargetCorridor( "
+        "target, leaderContext, leader, leaderView) "
+        "/\\ ExactLeaderCurrentRankWitness( candidate, rank, leaderContext, "
+        "candidate.node, leaderView, subject) "
+        "/\\ AdequateLeaderTargetCandidateRole(candidate, target, leader)"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetSemanticRankCarrier",
+    ): "(1..4) \\X (0..9)",
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetSemanticRankOrdering",
+    ): (
+        "LexPairOrdering( OpToRel(<, Nat), OpToRel(<, Nat), "
+        "1..4, 0..9)"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetRankFrontier",
+    ): (
+        "\\E candidate \\in AsyncCandidateSet: "
+        "AdequateLeaderTargetCandidateIdentity( "
+        "candidate, rank, target, leaderContext, leader, leaderView, subject)"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetRankOwnerSet",
+    ): (
+        "{candidate \\in AsyncCandidateSet: "
+        "AdequateLeaderTargetCandidateIdentity( candidate, rank, target, "
+        "leaderContext, leader, leaderView, subject)}"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetRankOwnerCount",
+    ): (
+        "Cardinality( AdequateLeaderTargetRankOwnerSet( "
+        "target, leaderContext, leader, leaderView, subject, rank))"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetOccurrenceRankCarrier",
+    ): "AdequateLeaderTargetSemanticRankCarrier \\X Nat",
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetOccurrenceRankOrdering",
+    ): (
+        "LexPairOrdering( AdequateLeaderTargetSemanticRankOrdering, "
+        "OpToRel(<, Nat), AdequateLeaderTargetSemanticRankCarrier, Nat)"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetOccurrenceRankFrontier",
+    ): (
+        "/\\ occurrenceRank \\in AdequateLeaderTargetOccurrenceRankCarrier "
+        "/\\ occurrenceRank[2] > 0 "
+        "/\\ IsFiniteSet( AdequateLeaderTargetRankOwnerSet( "
+        "target, leaderContext, leader, leaderView, "
+        "subject, occurrenceRank[1])) "
+        "/\\ AdequateLeaderTargetRankFrontier( "
+        "target, leaderContext, leader, leaderView, "
+        "subject, occurrenceRank[1]) "
+        "/\\ occurrenceRank[2] = AdequateLeaderTargetRankOwnerCount( "
+        "target, leaderContext, leader, leaderView, "
+        "subject, occurrenceRank[1])"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetRankReplenishmentAction",
+    ): (
+        "/\\ rank \\in AdequateLeaderTargetSemanticRankCarrier "
+        "/\\ subject \\in Subjects "
+        "/\\ AdequateLeaderFrozenTargetCorridor( "
+        "target, leaderContext, leader, leaderView) "
+        "/\\ IsFiniteSet( AdequateLeaderTargetRankOwnerSet( "
+        "target, leaderContext, leader, leaderView, subject, rank)) "
+        "/\\ IsFiniteSet( AdequateLeaderTargetRankOwnerSet( "
+        "target, leaderContext, leader, leaderView, subject, rank)') "
+        "/\\ AsyncNext /\\ ~NodeHasDecision(target)' "
+        "/\\ AdequateLeaderTargetRankOwnerCount( "
+        "target, leaderContext, leader, leaderView, subject, rank)' "
+        "> AdequateLeaderTargetRankOwnerCount( "
+        "target, leaderContext, leader, leaderView, subject, rank)"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetRankReplenishmentResidual",
+    ): (
+        "/\\ AdequateLeaderTargetRankFrontier( "
+        "target, leaderContext, leader, leaderView, subject, rank) "
+        "/\\ ENABLED <<AdequateLeaderTargetRankReplenishmentAction( "
+        "target, leaderContext, leader, leaderView, "
+        "subject, rank)>>_AsyncAllVars"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetCommitQcRebroadcastResidual",
+    ): (
+        "/\\ target # leader "
+        "/\\ AdequateLeaderFrozenTargetCorridor( "
+        "target, leaderContext, leader, leaderView) "
+        "/\\ subject \\in Subjects "
+        "/\\ \\E candidate \\in AsyncCandidateSet: "
+        "/\\ ExactLeaderCurrentRankWitness( "
+        "candidate, DecisionSemanticRank(2), "
+        "leaderContext, leader, leaderView, subject) "
+        "/\\ candidate.kind = \"PersistDecision\" "
+        "/\\ \\E request \\in PersistDecisionRequests(candidate): "
+        "request.rebroadcast"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetProducerResidual",
+    ): (
+        "/\\ AdequateLeaderTargetProtocolSubjectSource( "
+        "target, leaderContext, leader, leaderView, subject) "
+        "/\\ ~(\\E rank \\in AdequateLeaderTargetSemanticRankCarrier: "
+        "AdequateLeaderTargetRankFrontier( "
+        "target, leaderContext, leader, leaderView, subject, rank)) "
+        "/\\ ~AdequateLeaderTargetCommitQcRebroadcastResidual( "
+        "target, leaderContext, leader, leaderView, subject) "
+        "/\\ ~AdequateLeaderTargetDueTransportResidual( "
+        "target, leaderContext, leader, leaderView, subject) "
+        "/\\ ~AdequateLeaderTargetRunnerAdmissionResidual( "
+        "target, leaderContext, leader, leaderView, subject) "
+        "/\\ ~AdequateLeaderTargetCertifiedResponseCapacityResidual( "
+        "target, leaderContext, leader, leaderView, subject)"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetProducerTransportResidual",
+    ): (
+        "\\/ AdequateLeaderTargetCommitQcRebroadcastResidual( "
+        "target, leaderContext, leader, leaderView, subject) "
+        "\\/ AdequateLeaderTargetDueTransportResidual( "
+        "target, leaderContext, leader, leaderView, subject) "
+        "\\/ AdequateLeaderTargetRunnerAdmissionResidual( "
+        "target, leaderContext, leader, leaderView, subject) "
+        "\\/ AdequateLeaderTargetCertifiedResponseCapacityResidual( "
+        "target, leaderContext, leader, leaderView, subject) "
+        "\\/ AdequateLeaderTargetProducerResidual( "
+        "target, leaderContext, leader, leaderView, subject)"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetOpenFrontier",
+    ): (
+        "\\/ AdequateLeaderTargetProducerTransportResidual( "
+        "target, leaderContext, leader, leaderView, subject) "
+        "\\/ \\E occurrenceRank \\in "
+        "AdequateLeaderTargetOccurrenceRankCarrier: "
+        "AdequateLeaderTargetOccurrenceRankFrontier( "
+        "target, leaderContext, leader, leaderView, subject, occurrenceRank)"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetDecisionSource",
+    ): (
+        "/\\ gst /\\ AdequateResponsiveHonestLeaderViewReached "
+        "/\\ target \\in AsyncCurrentResponsiveVoters "
+        "/\\ ~NodeHasDecision(target)"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetDecisionConvergenceProperty",
+    ): (
+        "specification => \\A target \\in ValidatorIds: "
+        "AdequateLeaderTargetDecisionSource(target) "
+        "~> NodeHasDecision(target)"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderDecisionPrefixAt",
+    ): (
+        "\\A target \\in AsyncVotersAt(initialContext) \\cap (0..limit): "
+        "NodeHasDecision(target)"
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionRequestPacketEmissionResidual",
+    ): (
+        "/\\ ExactDecisionActiveRequestOwner(node, qc) "
+        "/\\ ~ExactDecisionRequestPacketEmissionGoal(node, qc)"
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionOffSchedulerResidualConvergenceProperty",
+    ): (
+        "/\\ ExactDecisionRequestClockOwnerConvergenceProperty(specification) "
+        "/\\ ExactDecisionRequestRuntimePrefixConvergenceProperty(specification) "
+        "/\\ ExactDecisionRequestHeadGateOwnerConvergenceProperty(specification) "
+        "/\\ ExactDecisionRequestAdmissionCoalescingOutcomeConvergenceProperty( "
+        "specification) "
+        "/\\ ExactDecisionResponseNonPhysicalNonClaimHeadGateOwnerConvergenceProperty( "
+        "specification)"
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionRequestClockOwnerConvergenceProperty",
+    ): (
+        "specification => \\A node, qc: "
+        "ExactDecisionRequestPacketEmissionResidual(node, qc) "
+        "~> (ExactDecisionRequestPacketEmissionGoal(node, qc) "
+        "\\/ ExactDecisionRequestRetransmitArmedResidual( node, qc))"
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionRequestRuntimePrefixConvergenceProperty",
+    ): (
+        "specification => \\A node, qc: "
+        "/\\ ExactDecisionRequestRetransmitArmedResidual(node, qc) "
+        "~> (ExactDecisionRequestPacketEmissionGoal(node, qc) "
+        "\\/ ExactDecisionRequestSendingRetransmitReady( node, qc)) "
+        "/\\ ExactDecisionRequestSendingRetransmitReady(node, qc) "
+        "~> ExactDecisionRequestPacketEmissionGoal(node, qc)"
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionRequestHeadGateOwnerConvergenceProperty",
+    ): (
+        "specification => \\A node, qc, archive, request, packet: "
+        "ExactDecisionRequestHeadGateOwnerResidual( "
+        "node, qc, archive, request, packet) "
+        "~> (ExactDecisionRequestIngressGoal( "
+        "node, qc, archive, request) "
+        "\\/ ExactDecisionRequestPacketAdmissionReady( "
+        "node, qc, archive, request, packet))"
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionRequestAdmissionCoalescingOutcomeConvergenceProperty",
+    ): (
+        "ExactDecisionRequestIngressLaneRunnerConvergenceProperty( "
+        "specification)"
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionRequestIngressLaneRunnerConvergenceProperty",
+    ): (
+        "specification => \\A node, qc, archive, request: "
+        "ExactDecisionRequestIngressLaneResidual( "
+        "node, qc, archive, request) "
+        "~> ExactDecisionRequestIngressGoal( "
+        "node, qc, archive, request)"
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionResponseNonPhysicalNonClaimHeadGateOwnerConvergenceProperty",
+    ): (
+        "specification => \\A node, qc, archive, request, response, packet: "
+        "ExactDecisionResponseNonPhysicalNonClaimHeadGateOwnerResidual( "
+        "node, qc, archive, request, response, packet) "
+        "~> (ExactDecisionResponseAdmissionGoal(node, qc) "
+        "\\/ ExactDecisionResponsePacketAdmissionReady( "
+        "node, qc, archive, request, response, packet))"
+    ),
     (
         "SumeragiV2AsyncTemporalClosureProofs",
         "AsyncTemporalClosureTimeoutViewProgressObligation",
@@ -5779,7 +6201,6 @@ EXACT_FIXED_PROOF_PROPERTY_OPERATOR_BODIES = {
     ): (
         "/\\ IndexedHistoricalRecoveryAuthorityAcquisitionResidualProperty "
         "/\\ IndexedHistoricalCertificateRankProgressResidualProperty "
-        "/\\ IndexedHistoricalDecisionStageOwnershipResidualProperty "
         "/\\ IndexedHistoricalDecisionRankProgressResidualProperty"
     ),
 }
@@ -5789,6 +6210,206 @@ EXACT_FIXED_PROOF_PROPERTY_OPERATOR_BODIES = {
 # In particular, receipt subject equality must come from one-height
 # DecisionAgreement, not from the write-once chain projection.
 EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetOccurrenceRankOrderingWellFounded",
+    ): (
+        "IsWellFoundedOn( AdequateLeaderTargetOccurrenceRankOrdering, "
+        "AdequateLeaderTargetOccurrenceRankCarrier)"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetRanksReachIndexedDecision",
+    ): (
+        "\\A initialContext: "
+        "AdequateLeaderTargetRankDescentProperty( "
+        "AsyncLiveSpecAt(initialContext)) "
+        "=> (AsyncLiveSpecAt(initialContext) "
+        "=> \\A target \\in ValidatorIds, "
+        "leaderContext \\in ContextRecords, leader \\in ValidatorIds, "
+        "leaderView \\in Views, subject \\in Subjects, "
+        "occurrenceRank \\in AdequateLeaderTargetOccurrenceRankCarrier: "
+        "AdequateLeaderTargetOccurrenceRankFrontier( "
+        "target, leaderContext, leader, leaderView, "
+        "subject, occurrenceRank) "
+        "~> NodeHasDecision(target))"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetConvergenceReachesEveryDecisionPrefix",
+    ): (
+        "\\A initialContext: "
+        "/\\ AsyncLiveSpecAt(initialContext) "
+        "/\\ AdequateLeaderTargetDecisionConvergenceProperty( "
+        "AsyncLiveSpecAt(initialContext)) "
+        "=> \\A limit \\in Nat: "
+        "(gst /\\ AdequateResponsiveHonestLeaderViewReached "
+        "/\\ ~ResponsiveNodesDecide) "
+        "~> AdequateLeaderDecisionPrefixAt(initialContext, limit)"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "FrozenContextFullAdequateLeaderDecisionPrefixImpliesResponsiveDecide",
+    ): (
+        "\\A initialContext: "
+        "/\\ ModelConfiguration "
+        "/\\ AsyncFrozenContextAt(initialContext) "
+        "/\\ AdequateLeaderDecisionPrefixAt(initialContext, N - 1) "
+        "=> ResponsiveNodesDecide"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetSemanticCompositionSuppliesTargetConvergence",
+    ): (
+        "\\A initialContext: "
+        "AdequateLeaderTargetSemanticCompositionProperty( "
+        "AsyncLiveSpecAt(initialContext)) "
+        "=> AdequateLeaderTargetDecisionConvergenceProperty( "
+        "AsyncLiveSpecAt(initialContext))"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetDecisionConvergenceSuppliesDecisionMode",
+    ): (
+        "\\A initialContext: "
+        "AdequateLeaderTargetDecisionConvergenceProperty( "
+        "AsyncLiveSpecAt(initialContext)) "
+        "=> (AsyncLiveSpecAt(initialContext) "
+        "=> (gst /\\ AdequateResponsiveHonestLeaderViewReached "
+        "/\\ ~ResponsiveNodesDecide) ~> ResponsiveNodesDecide)"
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "ExactAdequateLeaderSubkernelsReduceToServiceKernel",
+    ): (
+        "\\A initialContext: "
+        "/\\ AdequateLeaderExactResidualKernelProperty( "
+        "AsyncLiveSpecAt(initialContext)) "
+        "/\\ AdequateLeaderSemanticCompositionProperty( "
+        "AsyncLiveSpecAt(initialContext)) "
+        "=> AdequateLeaderServiceKernelProperty( "
+        "AsyncLiveSpecAt(initialContext))"
+    ),
+    (
+        "SumeragiV2AsyncTemporalClosureProofs",
+        "AdequateLeaderServiceKernelObligation",
+    ): (
+        "\\A initialContext: "
+        "AdequateLeaderServiceKernelProperty(AsyncLiveSpecAt(initialContext))"
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionRequestEmissionKernelsDischargeResidual",
+    ): (
+        "\\A initialContext: "
+        "/\\ ExactDecisionRequestClockOwnerConvergenceProperty( "
+        "AsyncSpecAt(initialContext)) "
+        "/\\ ExactDecisionRequestRuntimePrefixConvergenceProperty( "
+        "AsyncSpecAt(initialContext)) "
+        "=> ExactDecisionRequestPacketEmissionResidualConvergenceProperty( "
+        "AsyncSpecAt(initialContext))"
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionRequestIngressKernelsDischargeResidual",
+    ): (
+        "\\A initialContext: "
+        "/\\ ExactDecisionRequestHeadGateOwnerConvergenceProperty( "
+        "AsyncSpecAt(initialContext)) "
+        "/\\ ExactDecisionRequestAdmissionCoalescingOutcomeConvergenceProperty( "
+        "AsyncSpecAt(initialContext)) "
+        "=> ExactDecisionRequestIngressResidualConvergenceProperty( "
+        "AsyncSpecAt(initialContext))"
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionServeResponseResidualConvergence",
+    ): (
+        "\\A initialContext: "
+        "ExactDecisionServeResponseResidualConvergenceProperty( "
+        "AsyncSpecAt(initialContext))"
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionResponseClaimKernelNarrowsNonPhysicalResidual",
+    ): (
+        "\\A initialContext: "
+        "ExactDecisionResponseNonPhysicalNonClaimHeadGateOwnerConvergenceProperty( "
+        "AsyncSpecAt(initialContext)) "
+        "=> ExactDecisionResponseNonPhysicalHeadGateOwnerConvergenceProperty( "
+        "AsyncSpecAt(initialContext))"
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionResponsePhysicalKernelNarrowsHeadGateResidual",
+    ): (
+        "\\A initialContext: "
+        "ExactDecisionResponseNonPhysicalHeadGateOwnerConvergenceProperty( "
+        "AsyncSpecAt(initialContext)) "
+        "=> ExactDecisionResponseHeadGateOwnerConvergenceProperty( "
+        "AsyncSpecAt(initialContext))"
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionResponseAdmissionKernelsDischargeResidual",
+    ): (
+        "\\A initialContext: "
+        "ExactDecisionResponseHeadGateOwnerConvergenceProperty( "
+        "AsyncSpecAt(initialContext)) "
+        "=> ExactDecisionResponseAdmissionResidualConvergenceProperty( "
+        "AsyncSpecAt(initialContext))"
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionOffSchedulerResidualsDischargeKernels",
+    ): (
+        "\\A initialContext: "
+        "ExactDecisionOffSchedulerResidualConvergenceProperty( "
+        "AsyncSpecAt(initialContext)) "
+        "=> /\\ ExactDecisionRequestPacketEmissionKernelProperty( "
+        "AsyncSpecAt(initialContext)) "
+        "/\\ ExactDecisionRequestIngressKernelProperty( "
+        "AsyncSpecAt(initialContext)) "
+        "/\\ ExactDecisionServeResponseKernelProperty( "
+        "AsyncSpecAt(initialContext)) "
+        "/\\ ExactDecisionResponseAdmissionKernelProperty( "
+        "AsyncSpecAt(initialContext))"
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionOffSchedulerResidualConvergenceDischargesStageService",
+    ): (
+        "\\A initialContext: "
+        "ExactDecisionOffSchedulerResidualConvergenceProperty( "
+        "AsyncSpecAt(initialContext)) "
+        "=> ExactDecisionStageServiceProperty( "
+        "AsyncSpecAt(initialContext))"
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionResidualKernelsDischargeStageService",
+    ): (
+        "\\A initialContext: "
+        "/\\ ExactDecisionStage2BusyClosureProperty( "
+        "AsyncSpecAt(initialContext)) "
+        "/\\ ExactDecisionRequestPacketEmissionKernelProperty( "
+        "AsyncSpecAt(initialContext)) "
+        "/\\ ExactDecisionRequestIngressKernelProperty( "
+        "AsyncSpecAt(initialContext)) "
+        "/\\ ExactDecisionServeResponseKernelProperty( "
+        "AsyncSpecAt(initialContext)) "
+        "/\\ ExactDecisionResponseAdmissionKernelProperty( "
+        "AsyncSpecAt(initialContext)) "
+        "=> ExactDecisionStageServiceProperty( "
+        "AsyncSpecAt(initialContext))"
+    ),
+    (
+        "SumeragiV2AsyncTemporalClosureProofs",
+        "ExactDecisionStageServiceObligation",
+    ): (
+        "\\A initialContext: "
+        "ExactDecisionStageServiceProperty(AsyncSpecAt(initialContext))"
+    ),
     (
         "SumeragiV2AsyncTemporalClosureProofs",
         "AsyncTemporalClosureTimeoutViewProgressReduction",
@@ -5891,6 +6512,15 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
     ),
     (
         "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalServiceKernelsDischargeAuthorityReadyProgress",
+    ): (
+        "/\\ IndexedChainSpec "
+        "/\\ IndexedHistoricalCertificateRankProgressResidualProperty "
+        "/\\ IndexedHistoricalDecisionRankProgressResidualProperty "
+        "=> IndexedExactHistoricalRecoveryFromAuthorityProgress"
+    ),
+    (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
         "IndexedHistoricalRecoveryResidualKernelsDischargeExactProgress",
     ): (
         "/\\ IndexedChainSpec "
@@ -5900,6 +6530,177 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
 }
 
 FIXED_PROOF_REQUIRED_PROOF_TOKENS = {
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetOccurrenceRankOrderingWellFounded",
+    ): (
+        "AdequateLeaderTargetSemanticRankOrderingWellFounded",
+        "NatLessThanWellFounded",
+        "WFLexPairOrdering",
+        "AdequateLeaderTargetOccurrenceRankOrdering",
+        "AdequateLeaderTargetOccurrenceRankCarrier",
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetRanksReachIndexedDecision",
+    ): (
+        "AdequateLeaderTargetOccurrenceRankOrderingWellFounded",
+        "WellFoundedLeadsTo",
+        "AdequateLeaderTargetRankDescentProperty",
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetConvergenceReachesEveryDecisionPrefix",
+    ): (
+        "AdequateLeaderTargetConvergenceDecidesFixedFrozenVoter",
+        "AdequateLeaderDecisionPrefixAtIsStable",
+        "AdequateLeaderAsyncBracketStepPreservesTargetDecision",
+        "AdequateLeaderDecisionPrefixAt",
+        "NatInduction",
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "FrozenContextFullAdequateLeaderDecisionPrefixImpliesResponsiveDecide",
+    ): (
+        "FrozenContextFixesResponsiveVoters",
+        "AdequateLeaderDecisionPrefixAt",
+        "ResponsiveNodesDecide",
+        "AsyncVotersAt",
+        "ValidatorIds",
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetSemanticCompositionSuppliesTargetConvergence",
+    ): (
+        "AdequateLeaderTargetRanksReachIndexedDecision",
+        "AdequateLeaderTargetCorridorEntryProperty",
+        "AdequateLeaderTargetProducerTransportClosureProperty",
+        "AdequateLeaderTargetOpenFrontier",
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "AdequateLeaderTargetDecisionConvergenceSuppliesDecisionMode",
+    ): (
+        "AdequateLeaderTargetConvergenceReachesEveryDecisionPrefix",
+        "FrozenContextFullAdequateLeaderDecisionPrefixImpliesResponsiveDecide",
+        "AdequateLeaderDecisionPrefixAt",
+    ),
+    (
+        "SumeragiV2AdequateLeaderServiceClosureProofs",
+        "ExactAdequateLeaderSubkernelsReduceToServiceKernel",
+    ): (
+        "AdequateLeaderTargetSemanticCompositionSuppliesTargetConvergence",
+        "AdequateLeaderTargetDecisionConvergenceSuppliesDecisionMode",
+        "AdequateLeaderViewReachCompositionProperty",
+    ),
+    (
+        "SumeragiV2AsyncTemporalClosureProofs",
+        "AdequateLeaderServiceKernelObligation",
+    ): (
+        "AdequateLeaderExactClosureResidualObligation",
+        "ExactAdequateLeaderSubkernelsReduceToServiceKernel",
+        "AdequateLeaderExactClosureResidualProperty",
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionRequestEmissionKernelsDischargeResidual",
+    ): (
+        "PTL",
+        "ExactDecisionRequestClockOwnerConvergenceProperty",
+        "ExactDecisionRequestRuntimePrefixConvergenceProperty",
+        "ExactDecisionRequestPacketEmissionResidualConvergenceProperty",
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionRequestIngressKernelsDischargeResidual",
+    ): (
+        "ExactDecisionRequestAdmissionHandoffConvergence",
+        "ExactDecisionRequestIngressResidualSplitsAtAdmissionReady",
+        "ExactDecisionRequestIngressLaneRunnerConvergenceProperty",
+        "ExactDecisionRequestIngressResidualConvergenceProperty",
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionServeResponseResidualConvergence",
+    ): (
+        "ExactDecisionServeExitSafetyKernel",
+        "ExactDecisionServeExitSafetyDischargesResidual",
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionResponseClaimKernelNarrowsNonPhysicalResidual",
+    ): (
+        "ExactDecisionResponseClaimContentionConvergence",
+        "ExactDecisionResponseNonPhysicalNonClaimHeadGateOwnerConvergenceProperty",
+        "ExactDecisionResponseNonPhysicalHeadGateOwnerConvergenceProperty",
+        "PTL",
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionResponsePhysicalKernelNarrowsHeadGateResidual",
+    ): (
+        "ExactDecisionResponsePhysicalCompletionConvergence",
+        "ExactDecisionResponseAdmissionResidualSplitsAtReady",
+        "ExactDecisionResponseHeadGateOwnerConvergenceProperty",
+        "PTL",
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionResponseAdmissionKernelsDischargeResidual",
+    ): (
+        "ExactDecisionResponseAdmissionHandoffConvergence",
+        "ExactDecisionResponseClaimIngressRunnerConvergence",
+        "ExactDecisionResponseAdmissionResidualSplitsAtReady",
+        "ExactDecisionResponseAdmissionResidualConvergenceProperty",
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionOffSchedulerResidualsDischargeKernels",
+    ): (
+        "ExactDecisionRequestEmissionKernelsDischargeResidual",
+        "ExactDecisionRequestIngressKernelsDischargeResidual",
+        "ExactDecisionServeResponseResidualConvergence",
+        "ExactDecisionResponseClaimKernelNarrowsNonPhysicalResidual",
+        "ExactDecisionResponsePhysicalKernelNarrowsHeadGateResidual",
+        "ExactDecisionResponseAdmissionKernelsDischargeResidual",
+        "ExactDecisionOffSchedulerResidualConvergenceProperty",
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionResidualKernelsDischargeStageService",
+    ): (
+        "ExactDecisionServiceSourceDecomposition",
+        "ExactDecisionLocalStage2ClosesPhysicalOwnerExit",
+        "ExactDecisionPhysicalExitClosesCandidatePipeline",
+        "ExactDecisionRequestHasResponsiveBodyHoldingAlias",
+        "ExactRequestPacketAdmissionCreatesIngressOwner",
+        "NormalExactRequestIngressCreatesFreshServeOwner",
+        "HistoricalExactRequestIngressCreatesFreshServeOwner",
+        "ExactServeHeadCreatesAuthenticatedResponsePacket",
+        "FreshExactResponsePacketAdmissionAcquiresRecipientClaim",
+        "ExactResponsePacketCoalescingRetainsRouteNeutralClaim",
+        "ExactResponseIngressDrainAtomicallyRetiresAliasesAndCreatesFetchOwner",
+        "ExactDecisionFetchHeldBodySchedulesValidation",
+        "ExactCertifiedFetchStagesBodyAndSchedulesStore",
+        "DecisionStoreSchedulesValidation",
+        "DecisionValidationSchedulesApply",
+        "DecisionApplyCreatesTerminalStage",
+    ),
+    (
+        "SumeragiV2ExactDecisionStageServiceClosureProofs",
+        "ExactDecisionOffSchedulerResidualConvergenceDischargesStageService",
+    ): (
+        "ExactDecisionStage2BusyClosure",
+        "ExactDecisionOffSchedulerResidualsDischargeKernels",
+        "ExactDecisionResidualKernelsDischargeStageService",
+    ),
+    (
+        "SumeragiV2AsyncTemporalClosureProofs",
+        "ExactDecisionStageServiceObligation",
+    ): (
+        "ExactDecisionOffSchedulerResidualConvergenceObligation",
+        "ExactDecisionOffSchedulerResidualConvergenceDischargesStageService",
+    ),
     (
         "SumeragiV2AsyncTemporalClosureProofs",
         "AsyncTemporalClosureTimeoutViewProgressReduction",
@@ -6003,11 +6804,32 @@ FIXED_PROOF_REQUIRED_PROOF_TOKENS = {
     ),
     (
         "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalDecisionStageOwnershipResidualObligation",
+    ): (
+        "IndexedChainSpecAlwaysDecisionWitnessSupport",
+        "IndexedChainSpecKeepsResponsiveRecoveryDormant",
+        "IndexedChainSpecEstablishesCompositionInvariant",
+        "IndexedHistoricalDecisionStageOwnershipResidualIsEmpty",
+    ),
+    (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
+        "IndexedHistoricalServiceKernelsDischargeAuthorityReadyProgress",
+    ): (
+        "IndexedHistoricalCertificateRankProgressResidualProperty",
+        "IndexedHistoricalDecisionRankProgressResidualProperty",
+        "IndexedHistoricalDecisionStageOwnershipResidualObligation",
+        "IndexedChainSpecClosesHistoricalOpenTarget",
+        "IndexedHistoricalCertificateRankConvergence",
+        "IndexedHistoricalDecisionRankConvergence",
+        "IndexedChainSpecClosesHistoricalApplicationReceiptHandoff",
+    ),
+    (
+        "SumeragiV2HistoricalRecoveryTemporalClosureProofs",
         "IndexedHistoricalRecoveryResidualKernelsDischargeExactProgress",
     ): (
         "IndexedHistoricalRecoveryAuthorityAcquisitionResidualProperty",
         "IndexedHistoricalCertificateRankProgressResidualProperty",
-        "IndexedHistoricalDecisionStageOwnershipResidualProperty",
+        "IndexedHistoricalDecisionStageOwnershipResidualObligation",
         "IndexedHistoricalDecisionRankProgressResidualProperty",
         "IndexedChainSpecClosesHistoricalOpenTarget",
         "IndexedHistoricalCertificateRankConvergence",
@@ -6622,13 +7444,13 @@ _LOCKED_COMMIT_PROGRESS_WITNESS_HELPER_SHA256 = {
     ),
 }
 
-_PRODUCTION_LIVENESS_RELEASE_COUNT = 732
+_PRODUCTION_LIVENESS_RELEASE_COUNT = 733
 _PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT = 81
 _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
-    "e4f9c69b5465ae3203d289394f490b4d98adb895dae8a6e0362092d7549a7169"
+    "e75c51803aac27dd973d1a31e786dec2da0b0be3d984c2f333c3efbb853f3a66"
 )
 _CLOSED_SIDECAR_PREFIX_HANDOFF_TEST_SHA256 = (
-    "e92eb18ed0ef23e097e0bb59f002300ddb31b1b3d674b68c50d2bb11fb4da5cb"
+    "75019365bd62839da229b51671071af1b9165f4c08fc06d36be6bc2e4e14b893"
 )
 _PRODUCTION_MULTILANE_FOCUS_TEST_COUNT = 277
 _PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT = 278
@@ -6733,7 +7555,7 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
     ("production-v2-body-store", "sumeragi::v2_body_store::tests", 2),
     ("production-v2-block-sync", "sumeragi::v2_block_sync::tests", 3),
     ("production-v2-apply", "sumeragi::v2_apply::tests", 1),
-    ("production-v2-effects", "sumeragi::v2_effects::tests", 62),
+    ("production-v2-effects", "sumeragi::v2_effects::tests", 63),
     ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 53),
     ("production-v2-runtime", "sumeragi::v2_runtime::tests", 39),
     ("production-v2-transport", "sumeragi::v2_transport::tests", 1),
@@ -7130,6 +7952,7 @@ _PRODUCTION_LIVENESS_POSTCUT_REGRESSIONS = (
     "sumeragi::v2_core::tests::later_reproposal_commit_qc_replays_and_applies_its_exact_certified_round",
     "sumeragi::v2_core::tests::valid_commit_qc_supersedes_different_subject_prepare_lock_live_and_replay",
     "sumeragi::v2_effects::tests::different_subject_decision_supersedes_protected_lock_and_frees_losing_capacity",
+    "sumeragi::v2_effects::tests::apply_rejects_matching_commit_qc_from_foreign_context_without_scheduling_work",
     "sumeragi::v2_core::tests::height_context_requires_one_same_round_parent_commit_geometry",
     "sumeragi::v2_core::tests::same_round_timeout_upgrade_rebinds_lock_and_retains_current_timeout_vote",
     "sumeragi::v2_core::tests::later_reproposal_commit_ack_retires_durable_old_round_commit_pool",
@@ -7443,7 +8266,7 @@ _PRODUCTION_MERGE_SIDECAR_ARTIFACT_HELPER_SHA256 = {
         "cfc8db5f4cd9eaee8a95a476440bb53c2f39423b12860d444ffd713c051f1ceb",
     ),
     "verify_open_lifecycle_regular": (
-        "9157a4fa2b9bd95b7e61fc5d44a35fd32cadaa5efe7fee4a5a8a14e2bc037013",
+        "b3354225cd5d701857ffc3ddd06b958ceffeb4b3f611d5bb7af9980b7f52d12f",
     ),
     "open_lifecycle_regular": (
         "1762c07b05b671e00fa3b476b61267510a4313aac498d6f440f4b29651e3836e",
@@ -12786,6 +13609,23 @@ def _proofless_release_theorem_errors(
             obligation_id = exact_entries[0].get("id")
             cross_tool_contract = CROSS_TOOL_REFINEMENT_BY_ID.get(obligation_id)
             if support_consumer is not None:
+                if support_id in STRICT_PROOFLESS_TEMPORAL_SUPPORT_IDS:
+                    if status == "specified_unproved":
+                        continue
+                    support_label = (
+                        "historical recovery"
+                        if support_id
+                        in HISTORICAL_RECOVERY_PROOFLESS_SUPPORT_IDS
+                        else "temporal closure"
+                    )
+                    errors.append(
+                        f"{module}.tla:{extracted[1]}: proofless "
+                        f"{support_label} support theorem {module}!{symbol} must "
+                        "remain transitively specified_unproved through "
+                        f"consumer {obligation_id}; found consumer status "
+                        f"{status!r}"
+                    )
+                    continue
                 if status == "specified_unproved":
                     continue
                 if status == "tlaps_proved":
@@ -12833,6 +13673,23 @@ def _machine_checked_completion_contract_errors() -> list[str]:
             "proof support inventory must contain exactly sixteen distinct "
             f"decomposition leaves; found {len(support_ids)} entries and "
             f"{len(set(support_ids))} distinct IDs"
+        )
+    historical_support_ids = tuple(
+        support_id
+        for support_id in support_ids
+        if support_id.startswith("historical-recovery-")
+    )
+    expected_historical_support_ids = (
+        HISTORICAL_RECOVERY_PROOFLESS_SUPPORT_IDS[:2]
+        + HISTORICAL_RECOVERY_PROVED_SAFETY_SUPPORT_IDS
+        + HISTORICAL_RECOVERY_PROOFLESS_SUPPORT_IDS[2:]
+    )
+    if historical_support_ids != expected_historical_support_ids:
+        errors.append(
+            "historical recovery support accounting must contain exactly "
+            "three proofless temporal leaves and one proved Decision-stage "
+            "ownership safety leaf; found "
+            f"{historical_support_ids!r}"
         )
     if set(source_ids) & set(support_ids):
         errors.append(
@@ -19450,8 +20307,8 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
             "43 mutation configs"
         )
     if (
-        len(_TYPED_ROLLOVER_MODEL_SAFETY_PROOFLESS_THEOREMS) != 10
-        or len(_TYPED_ROLLOVER_MODEL_SAFETY_PROVED_THEOREMS) != 26
+        len(_TYPED_ROLLOVER_MODEL_SAFETY_PROOFLESS_THEOREMS) != 7
+        or len(_TYPED_ROLLOVER_MODEL_SAFETY_PROVED_THEOREMS) != 29
         or len(_TYPED_ROLLOVER_LOCAL_LIVENESS_PROOFLESS_THEOREMS) != 2
         or len(
             set(_TYPED_ROLLOVER_MODEL_SAFETY_PROOFLESS_THEOREMS)
@@ -19462,8 +20319,8 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
     ):
         errors.append(
             "internal typed rollover proof inventory must contain exactly "
-            "26 proved and 12 proofless theorem declarations "
-            "(10 safety and 2 liveness proofless)"
+            "29 proved and 9 proofless theorem declarations "
+            "(7 safety and 2 liveness proofless)"
         )
     for name, expected_sha256 in (
         _TYPED_ROLLOVER_HANDOFF_FORMAL_SOURCE_SHA256.items()
@@ -19953,6 +20810,14 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
             "RootSelectedLifecyclePairMatches(state)",
             "LifecycleSnapshotSemanticallyValid(DurableSnapshot(state))",
         ),
+        "LifecycleCommitPhaseInvariant": (
+            'state.lifecycleCommitPhase = "BootstrapRootReplaced"',
+            "state.syncedLifecycleRootV3 = BootstrapLifecycleRootV3",
+            "DurableSnapshot(state) = "
+            "InitialLifecycleSnapshotV3(state.targetRoster)",
+            "state.candidatePresent",
+            "~LifecycleRootDirectoryIsSynced(state)",
+        ),
         "SemanticValidationBeforeCleanupInvariant": (
             "state.cleanupPerformed => "
             "/\\ state.durableJournalValidated",
@@ -20434,6 +21299,27 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
             "~state.restartRootDirectoryResynced",
             "InactiveLifecycleStateSlot(state)",
             "!.cleanupPerformed = TRUE",
+        ),
+    )
+    require_operator_fragments(
+        mutation_name,
+        "WrongBootstrapLifecycleProjection",
+        (
+            'state.lifecycleCommitPhase = "BootstrapStatePublished"',
+            "state.durableLifecycleRootV3 = BootstrapLifecycleRootV3",
+            "state.candidatePresent",
+            "state.candidateSemanticallyValidated",
+            "LifecycleStateDirectoryIsSynced(state)",
+            "state.targetRoster = state.currentRoster",
+            "state.currentRoster = state.baselineRoster",
+            'state.compactionCause = "NoCompaction"',
+            'IF state.targetRoster = "RosterA" '
+            'THEN "RosterB" ELSE "RosterA"',
+            "!.targetRoster = wrongTarget",
+            '!.compactionCause = "RosterGeometryReplacement"',
+            "!.durableLifecycleRootV3 = "
+            "LifecycleRootV3(state.candidateLifecycleSnapshotV3)",
+            '!.lifecycleCommitPhase = "BootstrapRootReplaced"',
         ),
     )
 
@@ -32341,6 +33227,10 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
     source = path.read_text(encoding="utf-8")
     stripped = strip_tla_comments(source)
     errors: list[str] = []
+    core_path = formal_dir / "SumeragiV2Core.tla"
+    core_source = (
+        core_path.read_text(encoding="utf-8") if core_path.is_file() else None
+    )
 
     reviewed_local_theorems: tuple[str, ...] = ()
     observed_local_theorems = tuple(
@@ -33432,6 +34322,43 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 "the open-action frame must exclude only that component"
             )
 
+    apply_authority = (
+        "IN /\\ DecisionCertifiedBodyRecoveryAuthority(node, qc)"
+    )
+    if core_source is not None:
+        apply_decision = _top_level_operator_body(
+            core_source, "ApplyDecision", preserve_string_contents=True
+        )
+        if apply_decision is None:
+            errors.append(
+                f"{core_path}: missing source-fidelity operator ApplyDecision"
+            )
+        else:
+            apply_decision_body, apply_decision_line = apply_decision
+            apply_decision_normalized = " ".join(apply_decision_body.split())
+            if apply_decision_normalized.count(apply_authority) != 1:
+                errors.append(
+                    f"{core_path}:{apply_decision_line}: ApplyDecision must "
+                    "require the exact current-context Commit Decision "
+                    "authority once"
+                )
+
+    apply_ready = _top_level_operator_body(
+        source, "ApplyDecisionReady", preserve_string_contents=True
+    )
+    if apply_ready is None:
+        errors.append(
+            f"{path}: missing source-fidelity operator ApplyDecisionReady"
+        )
+    else:
+        apply_ready_body, apply_ready_line = apply_ready
+        apply_ready_normalized = " ".join(apply_ready_body.split())
+        if apply_ready_normalized.count(apply_authority) != 1:
+            errors.append(
+                f"{path}:{apply_ready_line}: ApplyDecisionReady must require "
+                "the exact current-context Commit Decision authority once"
+            )
+
     apply_action = _top_level_operator_body(
         source, "ExecuteApply", preserve_string_contents=True
     )
@@ -33452,6 +34379,21 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 f"{path}:{apply_line}: ExecuteApply must atomically retire only "
                 "the applying node's historical recovery target; "
                 f"found direct writes {apply_writes}"
+            )
+        overloaded_provenance = tuple(
+            forbidden
+            for forbidden in (
+                "command.evidence = qc",
+                "ApplyDecision(command.node, command.evidence)",
+            )
+            if forbidden in apply_normalized
+        )
+        if overloaded_provenance:
+            errors.append(
+                f"{path}:{apply_line}: ExecuteApply must resolve application "
+                "authority from the durable current Decision and may not "
+                "overload causal command evidence; found "
+                f"{overloaded_provenance}"
             )
 
     drain_action = _top_level_operator_body(
@@ -37224,7 +38166,7 @@ _REPLY_WRITER_DEADLINE_WORKER_TEST_SHA256 = {
 
 _REPLY_WRITER_DEADLINE_MERGE_TEST_SHA256 = {
     "sidecar_flush_admission_retains_timeout_attempt_identity": (
-        "343feac620df454cdde5751046c4c28e2f01913f61607701639ff940b261f126"
+        "1ecbc2c924039bdf616a5de23771dc100b9885baef097467894f97c5060c2b1c"
     ),
 }
 
@@ -37650,10 +38592,32 @@ connect_startup_delay_until,
             "exact accepting-connection timeout retirement",
         ),
     )
+    context_qualified_items = {
+        "NetworkReplyFlushAckTestFixture::for_reply",
+        "NetworkReplyFlushAckTestFixture::for_reply_at_attempt",
+    }
     for qualified_name, item_name, context, attributes, description in (
         item_contracts
     ):
-        item = _require_rust_item(network_path, network_source, item_name, errors)
+        if qualified_name in context_qualified_items:
+            matching = [
+                candidate
+                for candidate in rust_items(network_source, item_name)
+                if candidate.brace_context == context
+            ]
+            if len(matching) != 1:
+                errors.append(
+                    f"{network_path}: require exactly one real Rust/Verus "
+                    f"function item named {qualified_name}; found "
+                    f"{len(matching)}"
+                )
+                item = None
+            else:
+                item = matching[0]
+        else:
+            item = _require_rust_item(
+                network_path, network_source, item_name, errors
+            )
         network_items[qualified_name] = item
         _require_rust_item_context(
             network_path,
@@ -50703,13 +51667,7 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                 "close_ingress_for_rollover(ingress_ready, block_ingress)",
             ),
         )
-        run_inner = region(
-            runner_path,
-            runner_source,
-            "run_inner",
-            "fn run_inner(",
-            "\nfn replayed_proposal_sign_tag(",
-        )
+        run_inner = run_inner_item.source if run_inner_item is not None else ""
         require_tokens(
             runner_path,
             "run_inner recovery ownership",
@@ -51900,6 +52858,47 @@ def _successor_activation_rank_source_fidelity_errors(
             )
 
     theorem_contracts = {
+        "ExactDurableParentApplicationHasAdmissibleSuccessorContext": (
+            "\\A parentContext \\in AdmissibleContextRecords, "
+            "node \\in ValidatorIds, "
+            "application \\in Chain!DecisionEvidenceSet: "
+            "/\\ Chain!ChainEpochInvariant "
+            "/\\ ExactDurableParentApplication(parentContext, node, application) "
+            "=> CanonicalIndexedContext(parentContext.height + 1) "
+            "\\in AdmissibleContextRecords",
+            (
+                "Chain!ChainEpochTypeInvariant",
+                "Chain!NodesDoNotOutrunCertificates",
+                "Chain!CertifiedPrefixBacked",
+                "FrozenContextAdmissible",
+                "Isa",
+            ),
+        ),
+        "SuccessorActivationProgressPreservesProtocolInvariant": (
+            "\\A selectedParent \\in AdmissibleContextRecords, "
+            "selectedNode \\in ValidatorIds: "
+            "Chain!ChainEpochInvariant "
+            "/\\ SuccessorActivationProtocolInvariant "
+            "/\\ IndexedSuccessorActivationProgressStep( "
+            "selectedParent, selectedNode) "
+            "=> SuccessorActivationProtocolInvariant'",
+            (
+                "ExactDurableParentApplicationHasAdmissibleSuccessorContext",
+                "ExpandENABLED",
+                "Isa",
+            ),
+        ),
+        "IndexedActionPreservesSuccessorActivationProtocolInvariant": (
+            "IndexedCompositionInvariant "
+            "/\\ SuccessorActivationProtocolInvariant "
+            "/\\ IndexedChainNext "
+            "=> SuccessorActivationProtocolInvariant'",
+            (
+                "IndexedProductActionPreservesSuccessorActivationProtocolInvariant",
+                "SuccessorActivationProgressPreservesProtocolInvariant",
+                "DEF IndexedCompositionInvariant",
+            ),
+        ),
         "CleanCompleteTipRestartDescendsPublishedTier": (
             "\\A parentContext \\in AdmissibleContextRecords, "
             "node \\in Responsive, "
@@ -51960,6 +52959,24 @@ def _successor_activation_rank_source_fidelity_errors(
                 "Isa",
             ),
         ),
+        "SuccessorActivationFailureFreeProgressExitsCurrentRank": (
+            "\\A parentContext \\in AdmissibleContextRecords, "
+            "node \\in Responsive, "
+            "rank \\in SuccessorActivationRankCarrier: "
+            "/\\ Chain!ChainEpochInvariant "
+            "/\\ SuccessorActivationProtocolInvariant "
+            "/\\ SuccessorActivationAtRank(parentContext, node, rank) "
+            "/\\ SuccessorActivationFailureAbsent(parentContext, node) "
+            "/\\ SuccessorActivationFailureAbsent(parentContext, node)' "
+            "/\\ <<IndexedSuccessorActivationProgressStep( "
+            "parentContext, node)>>_(IndexedChainVars) "
+            "=> SuccessorActivationRankExit(parentContext, node, rank)'",
+            (
+                "SuccessorActivationFailureFreeProgressStrictlyDecreasesRank",
+                "SuccessorActivationProgressPreservesProtocolInvariant",
+                "Isa",
+            ),
+        ),
         "FailureFreeSuccessorActivationRankLeadsToExit": (
             "\\A parentContext \\in AdmissibleContextRecords, "
             "node \\in Responsive, "
@@ -51972,6 +52989,8 @@ def _successor_activation_rank_source_fidelity_errors(
                 "SuccessorActivationFailureFreeRankPersistsOrExits",
                 "SuccessorActivationAtRankEnablesFairProgress",
                 "SuccessorActivationFailureFreeProgressExitsCurrentRank",
+                "Chain!ChainEpochInvariant",
+                "DEF IndexedCompositionInvariant",
                 "WF_IndexedChainVars",
                 "PTL",
             ),
@@ -52052,6 +53071,15 @@ def _successor_activation_rank_source_fidelity_errors(
             ),
         ),
     }
+    exact_proof_token_counts = {
+        "IndexedActionPreservesSuccessorActivationProtocolInvariant": {
+            "DEF IndexedCompositionInvariant": 2,
+        },
+        "FailureFreeSuccessorActivationRankLeadsToExit": {
+            "Chain!ChainEpochInvariant": 1,
+            "DEF IndexedCompositionInvariant": 1,
+        },
+    }
     for symbol, (exact_statement, required_proof_tokens) in (
         theorem_contracts.items()
     ):
@@ -52085,6 +53113,16 @@ def _successor_activation_rank_source_fidelity_errors(
                 errors.append(
                     f"{proof_path}:{line}: {symbol} proof must invoke "
                     f"{required_token}"
+                )
+        for exact_token, exact_count in exact_proof_token_counts.get(
+            symbol, {}
+        ).items():
+            observed_count = observed_proof.count(exact_token)
+            if observed_count != exact_count:
+                errors.append(
+                    f"{proof_path}:{line}: {symbol} proof must contain "
+                    f"{exact_token!r} exactly {exact_count} time(s); found "
+                    f"{observed_count}"
                 )
         if re.search(
             r"(?:\bOBVIOUS\b|\bASSUME\s+FALSE\b|\bBY\s+TRUE\b|"
@@ -56184,8 +57222,8 @@ def _production_liveness_release_inventory_errors(
             f"({_PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT} total lines)"
         )
 
-    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 331:
-        errors.append("internal release-regression seal must contain exactly 331 names")
+    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 332:
+        errors.append("internal release-regression seal must contain exactly 332 names")
     for test_name in _PRODUCTION_LIVENESS_NEW_REGRESSIONS:
         occurrences = inventory.count(test_name)
         if occurrences != 1:
@@ -56858,21 +57896,21 @@ def _production_liveness_release_inventory_errors(
 
     documentation_claims = {
         repo_root / "docs" / "formal" / "sumeragi_v2" / "README.md": (
-            "current inventory therefore contains 732 tests across 38 modules.\n"
+            "current inventory therefore contains 733 tests across 38 modules.\n"
             "Together with the source-sealed command and tooling legs, the pre-network\n"
             f"corridor contains {_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} legs.",
             "canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
         ),
         repo_root / "docs" / "formal" / "sumeragi_v2" / "PROOF.md": (
-            "732-test, 38-module inventory. The complete source-sealed\n"
+            "733-test, 38-module inventory. The complete source-sealed\n"
             "pre-network corridor\ncontains "
             f"{_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} legs.",
             "canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
         ),
         repo_root / "docs" / "source" / "sumeragi_v2_liveness.md": (
-            "current source-bound inventory therefore contains 732 exact tests "
+            "current source-bound inventory therefore contains 733 exact tests "
             "across\n38 modules and "
             f"{_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} pre-network legs.",
             "Its canonical module/test TSV inventory SHA-256 is\n"
@@ -57500,7 +58538,7 @@ _READINESS_TLA_SOURCE_SHA256 = {
         "758d3e233c9143ac6f60e85521d65d1d04d556ddda3aa0bda7da6ab269e783c1"
     ),
     "SumeragiV2NonRegularCommandExecutionReadyProofs.tla": (
-        "24495e085be1d2ad641c93d3eb9887731eecf96ba0072932316f28ab415f0930"
+        "b86cedd16802ce5f00f85a336749c5cf2c2a5d5b064ea54027eb5d93fc537507"
     ),
     "SumeragiV2CommandExecutionReadyProofs.tla": (
         "16927b07a9dfb5a45322f4d8a0de6daeeb7f009d551fc4dd56864208a11ddb35"
@@ -57510,7 +58548,7 @@ _READINESS_TLA_SOURCE_SHA256 = {
 
 _READINESS_TOOL_SOURCE_SHA256 = {
     "ci/check_sumeragi_formal.sh": (
-        "4f5c3499dab60331fb5375fd604ef2bebb6c6387696908697ec8b4e1dea7e06c"
+        "bdce15f99bf1b1db9842d243a0b16df46602e1f20bb8d6c1800fde2ed3b37230"
     ),
     "scripts/formal/check_sumeragi_v2_begin_timeout_ready_contract.py": (
         "70676b4b572c1b6cbd420ffbcc3f638a151fa3cb60d094d52c27556e6cfee4da"
@@ -57519,7 +58557,7 @@ _READINESS_TOOL_SOURCE_SHA256 = {
         "b9840b7f6de6abbc62a27ea52ce59b8c7237ed7fceaf460c62b4d2cc976de42b"
     ),
     "scripts/formal/check_sumeragi_v2_command_execution_ready_contract.py": (
-        "611b4bb10cbc36a787adab3d9018931e74de885e40a8de641660d9b5cbdd5462"
+        "607f4f7e7f4b98706e175099a30da305a72d295df8ac1f6554cc914c69145b63"
     ),
     "scripts/formal/run_sumeragi_v2_command_execution_ready_mutation.sh": (
         "6f15888c8d6c4b28273e197e15e9fa19346d11d7669da84be3cc7c5f2cb8b5e5"
@@ -57971,10 +59009,10 @@ def _atomic_timeout_completion_source_fidelity_errors(
 
 _SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256 = {
     "crates/iroha_core/src/sumeragi/v2_core/refinement.rs": (
-        "533255b708b6c9f084a369b02264a448674e357c2d34f2dde396ca222568354f"
+        "99bc9bee30268e5b4511838ab5e40e93bacdd163b71a9b5874d51bcb72154ef4"
     ),
     "crates/iroha_core/src/sumeragi/v2_core/reducer.rs": (
-        "39db66a694be27a6243b773f073af8b7e01a1348482041e6e40dc7763a80f3e2"
+        "0e18b3c7c1663b9ea8f2ba8e691d4403d22c7e007f52c86a62c4cc6066268b05"
     ),
     "crates/iroha_core/src/sumeragi/v2_core/types.rs": (
         "5c0e3d9acd7ca82304ff752338ab69f93962f6d85658c568119e5e09b69edb52"
@@ -57983,16 +59021,16 @@ _SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256 = {
         "9fb4335289c39dae60b9a8299902e57a64d258070e61e331941c24201519c947"
     ),
     "crates/iroha_core/src/sumeragi/v2_effects.rs": (
-        "d9b9799d17ac1f84b9e166ad04640606c55337c474cc5a29a7bd8ceb45a6613c"
+        "dd40226dee2b05dc4763c2c50ad26163dddeb9d1bb1d1417cd7157c31c20414a"
     ),
     "crates/iroha_core/src/sumeragi/v2_runner.rs": (
-        "833b33f94b232078fcc03518e552c51aed987bea51ac6fc34cdb2aac7e6598a3"
+        "bdc97dc6d54243f4887a1794e76e5d96969a83ab4986548fccff8ef9dc2ad45f"
     ),
     "crates/iroha_core/src/sumeragi/v2_worker.rs": (
-        "06d94aa8755853ae13a2ed539882d569607fc12c68c655f905c4802583ebeddf"
+        "afdfb8a69492d30ee3af986954ef1a6600eb569396b077c79ce2907ee4f29411"
     ),
     "crates/iroha_sumeragi_core/src/verus_proofs.rs": (
-        "c64307cb8a40f5f5c4e36455e0cccf930da2b6fde3980274aa05d7af84bce576"
+        "b0a35d3ed66c22fa6b37fc4cd0155ebcfb00de47afeb6ddf89f609f3bbdc70e0"
     ),
 }
 
@@ -58022,7 +59060,7 @@ _LOCAL_PROPOSAL_TIMEOUT_RUST_ITEM_SHA256 = {
         "7473b0680ec743e30070bc5dcb5ca9d1c7934199852c861fb5e0e9796e7ab709"
     ),
     "reducer_active_proposal": (
-        "2b875bd55465ad5b1f60349961a940ee8d92379eaf3441c971c5136ee7be662d"
+        "dd2dd74ab7257442e5ce7017be1f4579d8716a162960a043763180a0f1016525"
     ),
     "reducer_local_proposal": (
         "99de499e1686f8e88376fa7a3a1542bfb5e7e9a413d1106e39de2601ad9aec85"

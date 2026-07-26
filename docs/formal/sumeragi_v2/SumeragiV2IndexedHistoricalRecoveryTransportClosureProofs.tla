@@ -599,6 +599,15 @@ PROOF
            PROVE \E server \in ValidatorIds:
                    IndexedHistoricalCommitArchiveRouteAvailable(
                      initialContext, target, server)'
+      <3>0. target \in ValidatorIds
+        BY <2>1, <2>5, Isa
+           DEF IndexedHistoricalCommitArchiveRouteWitnessAt,
+               IndexedHistoricalTransport!AsyncStrongTypeInvariant,
+               IndexedHistoricalTransport!StrongInductiveInvariant,
+               IndexedHistoricalTransport!Safety,
+               IndexedHistoricalTransport!TypeInvariant,
+               IndexedHistoricalTransport!ModelConfiguration,
+               IndexedHistoricalTransport!QuorumConfiguration
       <3>1. ~IndexedHistoricalTransport(initialContext)!
                  NodeHasDecision(target)
         BY <2>2, <2>5,
@@ -618,7 +627,7 @@ PROOF
              DEF IndexedHistoricalCommitArchiveRouteWitnessAt
         <4>2. IndexedHistoricalCommitArchiveRouteAvailable(
                  initialContext, target, server)'
-          BY <1>1, <2>1, <2>5, <4>1,
+          BY <1>1, <2>1, <2>5, <3>0, <4>1,
              IndexedHistoricalArchiveRoutePersistsUntilTargetDecision
              DEF IndexedHistoricalCommitArchiveRouteWitnessAt
         <4> QED BY <4>1, <4>2
@@ -628,7 +637,7 @@ PROOF
                   source \in Chain!DecisionEvidenceSet:
                  IndexedOpenHistoricalRecovery(
                    initialContext, target, server, source)
-          BY <1>1, <2>5, <3>4,
+          BY <1>1, <2>5, <3>0, <3>4,
              IndexedNewHistoricalTargetHasExactOpenSource
         <4>2. PICK server \in ValidatorIds,
                      source \in Chain!DecisionEvidenceSet:
@@ -637,7 +646,7 @@ PROOF
           BY <4>1
         <4>3. IndexedHistoricalCommitArchiveRouteAvailable(
                  initialContext, target, server)'
-          BY <2>1, <4>2,
+          BY <2>1, <3>0, <4>2,
              IndexedOpenHistoricalRecoveryEstablishesPostStateArchiveRoute
              DEF IndexedHistoricalCommitArchiveRouteWitnessAt
         <4> QED BY <4>2, <4>3
@@ -680,17 +689,19 @@ BY Isa
        IndexedHistoricalTransport!
          HistoricalCommitArchiveRouteAvailabilityInvariant
 
+THEOREM IndexedChainSpecAlwaysHasHistoricalCommitArchiveRoute ==
+  IndexedChainSpec
+    => []IndexedHistoricalCommitArchiveRouteAvailabilityInvariant
+BY IndexedChainSpecAlwaysHasHistoricalArchiveRouteWitness,
+   IndexedHistoricalArchiveRouteWitnessImpliesAvailability, PTL
+
 THEOREM IndexedChainSpecDischargesHistoricalCommitArchiveRouteAvailability ==
   IndexedHistoricalCommitArchiveRouteAvailabilityProperty
 PROOF
   <1>1. IndexedChainSpec
-          => []IndexedHistoricalCommitArchiveRouteWitnessInvariant
-    BY IndexedChainSpecAlwaysHasHistoricalArchiveRouteWitness
-  <1>2. IndexedChainSpec
           => []IndexedHistoricalCommitArchiveRouteAvailabilityInvariant
-    BY <1>1,
-       IndexedHistoricalArchiveRouteWitnessImpliesAvailability, PTL
-  <1>3. ASSUME NEW initialContext \in AdmissibleContextRecords
+    BY IndexedChainSpecAlwaysHasHistoricalCommitArchiveRoute
+  <1>2. ASSUME NEW initialContext \in AdmissibleContextRecords
          PROVE
            IndexedHistoricalTransport(initialContext)!
              HistoricalCommitArchiveRouteAvailabilityProperty(
@@ -698,12 +709,12 @@ PROOF
     <2>1. IndexedChainSpec
             => []IndexedHistoricalTransport(initialContext)!
                   HistoricalCommitArchiveRouteAvailabilityInvariant
-      BY <1>2, PTL
+      BY <1>1, PTL
          DEF IndexedHistoricalCommitArchiveRouteAvailabilityInvariant
     <2> QED BY <2>1
          DEF IndexedHistoricalTransport!
                HistoricalCommitArchiveRouteAvailabilityProperty
-  <1> QED BY <1>3
+  <1> QED BY <1>2
        DEF IndexedHistoricalCommitArchiveRouteAvailabilityProperty
 
 =============================================================================

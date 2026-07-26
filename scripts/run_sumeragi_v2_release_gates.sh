@@ -1360,6 +1360,7 @@ required_production_liveness_tests=(
   sumeragi::v2_effects::tests::stale_generation_local_completion_uses_durable_recovery
   sumeragi::v2_effects::tests::missing_merge_sidecar_retains_exact_validation_until_retry
   sumeragi::v2_effects::tests::decided_apply_retries_after_exact_merge_sidecar_recovery
+  sumeragi::v2_effects::tests::apply_rejects_matching_commit_qc_from_foreign_context_without_scheduling_work
   sumeragi::v2_effects::tests::production_certified_body_request_rejects_locally_conflicting_qc_without_fail_close
   sumeragi::v2_effects::tests::production_commit_certificate_response_conflict_keeps_discovery_outstanding_and_runtime_open
   sumeragi::v2_effects::tests::proposal_a_distinct_prepare_qc_b_and_timeout_sign_progress_at_capacity_two
@@ -1764,7 +1765,7 @@ required_production_liveness_tests=(
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_must_fit_network_geometry
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_use_effective_lane_profile_geometry
 )
-readonly expected_production_liveness_test_count=732
+readonly expected_production_liveness_test_count=733
 if (( ${#required_production_liveness_tests[@]} != expected_production_liveness_test_count )); then
   echo "expected exactly ${expected_production_liveness_test_count} production Sumeragi v2 liveness tests, found ${#required_production_liveness_tests[@]}" >&2
   exit 1
@@ -1864,7 +1865,7 @@ for required_test in "${required_production_liveness_tests[@]}"; do
 done
 
 # Keep the multilane closure-critical focused tests explicit even when they do
-# not belong to the canonical 732-test liveness inventory above. The later
+# not belong to the canonical 733-test liveness inventory above. The later
 # source-sealed workspace leg executes these non-ignored tests; this preflight
 # prevents a rename, deletion, or accidental `#[ignore]` from hiding behind
 # Cargo's successful zero-test filtering.
@@ -3160,15 +3161,15 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovi
 proof_fidelity_pipeline_status=("${PIPESTATUS[@]}")
 set -e
 proof_fidelity_pass_summary="$(
-  grep -Ec '^1045 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' "$proof_fidelity_contract_log" || true
+  grep -Ec '^1686 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' "$proof_fidelity_contract_log" || true
 )"
 if ((proof_fidelity_pipeline_status[0] != 0 || proof_fidelity_pipeline_status[1] != 0)) \
   || [[ "$proof_fidelity_pass_summary" != 1 ]]; then
-  echo "Sumeragi v2 proof-fidelity preflight did not run exactly 1045 passing tests (pytest=${proof_fidelity_pipeline_status[0]}, tee=${proof_fidelity_pipeline_status[1]})" >&2
+  echo "Sumeragi v2 proof-fidelity preflight did not run exactly 1686 passing tests (pytest=${proof_fidelity_pipeline_status[0]}, tee=${proof_fidelity_pipeline_status[1]})" >&2
   exit 1
 fi
 record_corridor_log \
-  preflight-proof-fidelity pytest 1045 \
+  preflight-proof-fidelity pytest 1686 \
   "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${proof_fidelity_contract_files[*]}" \
   "$proof_fidelity_contract_log" \
   "${proof_fidelity_pipeline_status[0]}" "${proof_fidelity_pipeline_status[1]}"
@@ -3184,15 +3185,15 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovi
 formal_launcher_pipeline_status=("${PIPESTATUS[@]}")
 set -e
 formal_launcher_pass_summary="$(
-  grep -Ec '^16 passed in [0-9]+([.][0-9]+)?s$' "$formal_launcher_contract_log" || true
+  grep -Ec '^24 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' "$formal_launcher_contract_log" || true
 )"
 if ((formal_launcher_pipeline_status[0] != 0 || formal_launcher_pipeline_status[1] != 0)) \
   || [[ "$formal_launcher_pass_summary" != 1 ]]; then
-  echo "Sumeragi v2 formal-launcher contract preflight did not run exactly 16 passing tests (pytest=${formal_launcher_pipeline_status[0]}, tee=${formal_launcher_pipeline_status[1]})" >&2
+  echo "Sumeragi v2 formal-launcher contract preflight did not run exactly 24 passing tests (pytest=${formal_launcher_pipeline_status[0]}, tee=${formal_launcher_pipeline_status[1]})" >&2
   exit 1
 fi
 record_corridor_log \
-  preflight-formal-launcher pytest 16 \
+  preflight-formal-launcher pytest 24 \
   "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${formal_launcher_contract_files[*]}" \
   "$formal_launcher_contract_log" \
   "${formal_launcher_pipeline_status[0]}" "${formal_launcher_pipeline_status[1]}"

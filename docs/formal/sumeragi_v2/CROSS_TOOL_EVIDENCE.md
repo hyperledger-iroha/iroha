@@ -72,7 +72,11 @@ Ledger obligation:
 `effective-lock-body-acquisition-production-refinement`.
 
 Named TLA+ theorem:
-`SumeragiV2AsyncLivenessProofs!EffectiveLockBodyAcquisitionCrossToolRefinement`.
+`SumeragiV2AsyncStage4RefinementProofs!EffectiveLockBodyAcquisitionCrossToolRefinement`
+(inherited by the `SumeragiV2AsyncLivenessProofs` review root).
+
+Required strict provider log:
+`target/formal/sumeragi_v2/tlaps/SumeragiV2AsyncStage4RefinementProofs.log`.
 
 Verus source:
 `crates/iroha_sumeragi_core/src/effective_lock_verus_proofs.rs`.
@@ -92,7 +96,10 @@ Its dependency closure includes
 Ledger obligation: `progress-witness-production-refinement`.
 
 Named TLA+ theorem:
-`SumeragiV2AsyncLivenessProofs!ProgressWitnessCrossToolRefinement`.
+`SumeragiV2AsyncTemporalClosureProofs!ProgressWitnessCrossToolRefinement`.
+
+Required strict provider log:
+`target/formal/sumeragi_v2/tlaps/SumeragiV2AsyncTemporalClosureProofs.log`.
 
 Verus source: `crates/iroha_sumeragi_core/src/verus_proofs.rs`.
 
@@ -117,6 +124,9 @@ Ledger obligation:
 
 Named TLA+ theorem:
 `SumeragiV2ChainEpochRefinement!SuccessorActivationAndExactHistoricalRecoveryCrossToolRefinement`.
+
+Required strict provider log:
+`target/formal/sumeragi_v2/tlaps/SumeragiV2ChainEpochRefinement.log`.
 
 Verus source: `crates/iroha_sumeragi_core/src/verus_proofs.rs`.
 
@@ -170,48 +180,42 @@ override lets validation read the immutable archived copy instead of mutable
 
 The evidence architecture does not itself prove a production refinement. The
 three ledger obligations above remain `specified_unproved`, but the code-owned
-4 + 7 + 6 inventory now has exact named Verus signatures, non-vacuous
+`4 + 7 + 6` inventory now has exact named Verus signatures, non-vacuous
 postconditions, shared Rust/Verus kernels, sealed projection builders and
 identity extractors, and fail-closed production call-site expressions. The
-checker also seals the complete token stream of each authoritative production
-call item, so retaining the reviewed kernel snippet behind a newly inserted
-bypass is not accepted. Seventeen of the 24 call items are sealed. Seven remain
-explicitly unfrozen while the reply-route ownership patch changes
-`v2_runtime.rs::{pop_next_with_ownership, enqueue_classified_command,
-enqueue_completion_batch, commit_canonical_body_available}`,
-`v2_worker.rs::poll_sidecar_flushes`, and
-`v2_runner.rs::{recovered, run_inner}`. Each unfrozen item is a promotion error,
-not evidence. None of the three obligations is promoted until those items are
-sealed and strict TLAPS and pinned Verus results are regenerated as one
-immutable, source-manifest-bound release evidence set. The current boundary is:
+checker seals all 22 primary production call-site contracts and the two
+supplemental reliable-flush kernel/call-site contracts. Those 24 triples span
+23 unique production call items; no call site remains intentionally unfrozen.
+Read-only reconstruction of the current source-bound claim payload succeeds
+for all `4/4`, `7/7`, and `6/6` claims. This is structural/source-fidelity
+validation, not backend proof evidence, so none of the three obligations is
+promoted.
 
-- effective-lock verification now covers the serialized post-install lock,
-  immutable body-owner, exact retirement-accounting, and bounded class-selector
-  seams through live production invocations. Repeated host invocation and
-  terminating local work remain explicit runtime assumptions of the liveness
-  theorem rather than facts manufactured by this refinement;
-- progress-witness verification reaches seven pure reducer/WAL, timer/FIFO,
-  ingress, two-stage relay retry, writer-flush, and application kernels, but
-  not those collection-heavy runtime paths as one verified transition system.
-  The writer-flush and lane-application kernels are linked by typed,
-  process-local identities for the opaque authenticated source key, the exact
-  admitted delivery route, and the clone-shared one-shot writer claim. Equal
-  peer, ordinal, ticket, and payload fields under another actor, route, budget,
-  or independently rebuilt completion therefore cannot satisfy the link. These
-  identities are never wire, persistent, or consensus fields. Promotion remains
-  blocked until the remaining production paths are sealed and one fresh pinned
-  source-bound evidence set verifies the complete contract; and
-- successor verification reaches six pure status, runner, startup, historical
-  block-sync, and terminal Apply-boundary kernels. Crash/restart scheduling,
-  recovery-scoped eager CommitQC-discovery scheduling, late canonical
-  lane-ownership rehydration at rollover, and the full epoch-boundary action
-  map remain outside those safety refinements.
+- Effective-lock verification covers the serialized post-install lock,
+  immutable body owner, exact retirement accounting, and bounded class
+  selector through live production invocations. Its only ledger prerequisite,
+  `effective-lock-body-acquisition-model`, is `tlaps_proved`. Repeated host
+  invocation and terminating local work remain explicit runtime assumptions.
+  Promotion still requires one frozen-source strict TLAPS provider log, the
+  pinned Verus run, and derived cross-tool evidence.
+- Progress-witness verification covers seven pure reducer/WAL, timer/FIFO,
+  ingress, two-stage relay retry, writer-flush, and application kernels. The
+  writer-flush claim additionally binds two supplemental kernels to the same
+  exact `MergeSidecarTransport::acknowledge_outbound_chunk` item. Its entire
+  transitive proof dependency closure is `tlaps_proved`. Promotion remains
+  blocked only on a fresh frozen-source strict TLAPS plus pinned Verus evidence
+  set and the derived cross-tool document.
+- Successor verification covers six pure status, runner, startup, historical
+  block-sync, and terminal Apply-boundary kernels. Its production source
+  binding is complete, but `successor-activation-starvation-freedom` remains
+  `specified_unproved`; the newly strengthened ChainEpoch-premised proof
+  source has not yet received release-grade strict TLAPS evidence or ledger
+  promotion. This prerequisite must close before the successor cross-tool
+  obligation can be promoted.
 
-Earlier pinned Verus result counts predate this 17-claim source closure and
-remain diagnostic only. In addition, the progress-witness target still depends
-on the unproved async progress-ownership invariant, and the successor target
-still depends on unproved successor starvation freedom.
-Because no ledger entry is yet `cross_tool_proved`, the dormant release
-workflow neither generates nor accepts a cross-tool evidence document. The
-checker reports the active set with `--print-cross-tool-obligations`; empty
-output means the document must be absent.
+`target/formal/sumeragi_v2` is currently absent, so no current
+`proof_evidence.json`, provider TLAPS logs, `verus.log`,
+`verus_evidence.json`, or `cross_tool_evidence.json` exists. Earlier results
+remain diagnostic. Because no ledger entry is yet `cross_tool_proved`,
+`--print-cross-tool-obligations` remains empty and cross-tool evidence must
+remain absent until the final source-bound promotion run.

@@ -2271,6 +2271,8 @@ LifecycleCommitPhaseInvariant ==
          /\ state.durableLifecycleRootV3.shape = "Committed"
          /\ state.syncedLifecycleRootV3 =
               BootstrapLifecycleRootV3
+         /\ DurableSnapshot(state) =
+              InitialLifecycleSnapshotV3(state.targetRoster)
          /\ state.candidatePresent
          /\ ~LifecycleRootDirectoryIsSynced(state)
     [] state.lifecycleCommitPhase = "Current" ->

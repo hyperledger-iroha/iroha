@@ -256,8 +256,13 @@ HistoricalDiscoveryReadyAuxBottom ==
 HistoricalDiscoveryStage4Bottom ==
   <<0, HistoricalDiscoveryReadyAuxBottom>>
 
+HistoricalDiscoveryCandidateDebtBottom == <<2, 0>>
+
+HistoricalDiscoveryServeDebtBottom == <<5, 0>>
+
 HistoricalDiscoveryCandidateServeBottom ==
-  <<<<2, 0>>, <<5, 0>>>>
+  <<HistoricalDiscoveryCandidateDebtBottom,
+    HistoricalDiscoveryServeDebtBottom>>
 
 HistoricalDiscoveryIngressStage4Bottom ==
   <<HistoricalDiscoveryStage4Bottom,
@@ -299,6 +304,8 @@ BY Isa
        HistoricalDiscoveryIngressReadyBottom,
        HistoricalDiscoveryIngressStage4Bottom,
        HistoricalDiscoveryCandidateServeBottom,
+       HistoricalDiscoveryCandidateDebtBottom,
+       HistoricalDiscoveryServeDebtBottom,
        HistoricalDiscoveryStage4Bottom,
        HistoricalDiscoveryReadyAuxBottom,
        HistoricalDiscoveryReadyDeferredBottom,
@@ -406,13 +413,28 @@ PROOF
            HistoricalDiscoveryFixedClockBlockerCarrier
 
 (***************************************************************************
-Exact packet dependency choice.
+Exact packet dependency product.
 
-The base choice records the packet-local gates and runner ranks with canonical
-candidate/Serve tails.  When an exact historical candidate or Serve owner is
-present, the choice set also contains its live service rank.  Selection is
-restricted to the proved ingress carrier; the canonical base makes that
-intersection nonempty for every overdue packet in a strong-typed state.
+The former scaffold formed a set containing three whole dependency ranks
+(the base, one rank per live historical candidate, and one rank per live
+Serve occurrence) and selected an arbitrary member with `CHOOSE`.  That was
+not a usable descent measure: lowering the base left the selected candidate
+or Serve alternative unconstrained, and changing either owner set could make
+`CHOOSE` select an unrelated whole rank.
+
+The construction below keeps the packet-local base spine exactly once and
+fills both of its independent tail slots simultaneously.  Each nonempty live
+owner set contributes its minimal `OwnedServiceRank`; an empty set contributes
+an explicit typed bottom.  `CHOOSE` is now used only to name the mathematical
+minimum rank and an exact owner which realizes that rank.  It no longer
+chooses between different dependency shapes.
+
+The exact owner witnesses expose the individually fair actions needed by a
+later temporal proof.  This module still proves only structural membership
+and witness facts; it does not assert that either fair action occurs or that
+its tail descends.  A witness `CHOOSE` is intentionally unconstrained when
+its owner set is empty; every theorem which uses that witness requires the
+corresponding owner set to be nonempty.
 ***************************************************************************)
 
 HistoricalDiscoveryServeJobOwned(node, job) ==
@@ -420,37 +442,78 @@ HistoricalDiscoveryServeJobOwned(node, job) ==
   /\ job \in AsyncServeJobSet
   /\ job \in SequenceSet(asyncIoQueues[node])
 
-HistoricalDiscoveryPacketDependencyRanks(packet) ==
+HistoricalDiscoveryPacketCandidateOwners(packet) ==
   LET recipient == packet.item.envelope.recipient
-      base ==
-        IngressBoundaryDependencyRank(
-          packet, recipient, <<2, 0>>, <<5, 0>>)
-  IN {base}
-       \cup {
-         CandidateIngressDependencyRank(packet, candidate):
-           candidate
-             \in {owned \in ActiveScheduledCandidates:
-                   /\ owned.node = recipient
-                   /\ HistoricalProtectedCandidateOwned(owned)}}
-       \cup {
-         ServeIngressDependencyRank(packet, recipient, job):
-           job
-             \in {owned \in ActiveIoJobs:
-                   HistoricalDiscoveryServeJobOwned(
-                     recipient, owned)}}
+  IN {candidate \in ActiveScheduledCandidates:
+        /\ candidate.node = recipient
+        /\ HistoricalProtectedCandidateOwned(candidate)}
 
-HistoricalDiscoveryPacketCarrierRanks(packet) ==
-  HistoricalDiscoveryPacketDependencyRanks(packet)
-    \cap IngressBoundaryDependencyCarrier
+HistoricalDiscoveryPacketServeOwners(packet) ==
+  LET recipient == packet.item.envelope.recipient
+  IN {job \in ActiveIoJobs:
+        HistoricalDiscoveryServeJobOwned(recipient, job)}
+
+HistoricalDiscoveryPacketCandidateRanks(packet) ==
+  {CandidateServiceRank(candidate):
+     candidate \in HistoricalDiscoveryPacketCandidateOwners(packet)}
+
+HistoricalDiscoveryPacketServeRanks(packet) ==
+  LET recipient == packet.item.envelope.recipient
+  IN {ServeJobRank(recipient, job):
+        job \in HistoricalDiscoveryPacketServeOwners(packet)}
+
+HistoricalDiscoveryOwnedRankMinimum(ranks) ==
+  CHOOSE rank \in ranks:
+    \A other \in ranks:
+      <<other, rank>> \notin OwnedServiceRankOrdering
+
+HistoricalDiscoveryPacketCandidateDebtRank(packet) ==
+  LET ranks == HistoricalDiscoveryPacketCandidateRanks(packet)
+  IN IF ranks = {}
+     THEN HistoricalDiscoveryCandidateDebtBottom
+     ELSE HistoricalDiscoveryOwnedRankMinimum(ranks)
+
+HistoricalDiscoveryPacketServeDebtRank(packet) ==
+  LET ranks == HistoricalDiscoveryPacketServeRanks(packet)
+  IN IF ranks = {}
+     THEN HistoricalDiscoveryServeDebtBottom
+     ELSE HistoricalDiscoveryOwnedRankMinimum(ranks)
+
+HistoricalDiscoveryPacketCandidateDebtWitness(packet) ==
+  CHOOSE candidate
+    \in HistoricalDiscoveryPacketCandidateOwners(packet):
+      CandidateServiceRank(candidate)
+        = HistoricalDiscoveryPacketCandidateDebtRank(packet)
+
+HistoricalDiscoveryPacketServeDebtWitness(packet) ==
+  LET recipient == packet.item.envelope.recipient
+  IN CHOOSE job \in HistoricalDiscoveryPacketServeOwners(packet):
+       ServeJobRank(recipient, job)
+         = HistoricalDiscoveryPacketServeDebtRank(packet)
+
+HistoricalDiscoveryPacketCandidateDebtFairAction(packet) ==
+  PostGstRunHistoricalRecoveryNode(
+    packet.item.envelope.recipient)
+
+HistoricalDiscoveryPacketServeDebtFairAction(packet) ==
+  LET recipient == packet.item.envelope.recipient
+  IN IF HistoricalRecoveryTarget(recipient)
+     THEN PostGstServiceHistoricalRecoveryIoWorker(recipient)
+     ELSE PostGstServiceIoWorker(recipient)
+
+HistoricalDiscoveryPacketDependencyRank(packet) ==
+  LET recipient == packet.item.envelope.recipient
+  IN IngressBoundaryDependencyRank(
+       packet, recipient,
+       HistoricalDiscoveryPacketCandidateDebtRank(packet),
+       HistoricalDiscoveryPacketServeDebtRank(packet))
 
 HistoricalDiscoverySelectedOverduePacket ==
   CHOOSE packet \in OverdueResponsivePackets: TRUE
 
 HistoricalDiscoverySelectedPacketDependencyRank ==
-  CHOOSE rank \in
-    HistoricalDiscoveryPacketCarrierRanks(
-      HistoricalDiscoverySelectedOverduePacket):
-      TRUE
+  HistoricalDiscoveryPacketDependencyRank(
+    HistoricalDiscoverySelectedOverduePacket)
 
 HistoricalDiscoveryPacketBlockerRank(clockValue) ==
   HistoricalDiscoveryFixedClockRank(
@@ -488,74 +551,299 @@ HistoricalDiscoveryFixedClockBlockedAtRank(
   /\ HistoricalDiscoveryFixedClockPending(node, clockValue)
   /\ HistoricalDiscoveryConcreteFixedClockRank(clockValue) = rank
 
-THEOREM HistoricalDiscoveryBasePacketDependencyRankInCarrier ==
+THEOREM HistoricalDiscoveryOwnedRankMinimumFacts ==
+  \A ranks \in SUBSET OwnedServiceRankCarrier:
+    ranks # {}
+      => LET minimum == HistoricalDiscoveryOwnedRankMinimum(ranks)
+         IN /\ minimum \in ranks
+            /\ \A other \in ranks:
+                 <<other, minimum>>
+                   \notin OwnedServiceRankOrdering
+PROOF
+  <1>1. ASSUME NEW ranks \in SUBSET OwnedServiceRankCarrier,
+                ranks # {}
+         PROVE LET minimum ==
+                     HistoricalDiscoveryOwnedRankMinimum(ranks)
+               IN /\ minimum \in ranks
+                  /\ \A other \in ranks:
+                       <<other, minimum>>
+                         \notin OwnedServiceRankOrdering
+    <2>1. \E minimum \in ranks:
+             \A other \in ranks:
+               <<other, minimum>>
+                 \notin OwnedServiceRankOrdering
+      <3>1. ASSUME
+               ~(\E minimum \in ranks:
+                   \A other \in ranks:
+                     <<other, minimum>>
+                       \notin OwnedServiceRankOrdering)
+             PROVE FALSE
+        <4>1. \A rank \in OwnedServiceRankCarrier:
+                 (\A lower \in SetLessThan(
+                      rank, OwnedServiceRankOrdering,
+                      OwnedServiceRankCarrier):
+                    lower \notin ranks)
+                   => rank \notin ranks
+          BY <1>1, <3>1, Isa DEF SetLessThan
+        <4>2. \A rank \in OwnedServiceRankCarrier:
+                 rank \notin ranks
+          BY OwnedServiceRankOrderingWellFounded, <4>1
+             DEF IsWellFoundedOn
+        <4>3. ranks = {}
+          BY <1>1, <4>2, Isa
+        <4> QED BY <1>1, <4>3
+      <3> QED BY <3>1
+    <2> QED BY <2>1, Isa
+         DEF HistoricalDiscoveryOwnedRankMinimum
+  <1> QED BY <1>1
+
+THEOREM HistoricalDiscoveryOwnedRankMinimumIsUnique ==
+  \A ranks \in SUBSET OwnedServiceRankCarrier:
+    ranks # {}
+      => \A candidate \in ranks:
+           (\A other \in ranks:
+              <<other, candidate>>
+                \notin OwnedServiceRankOrdering)
+             => candidate
+                  = HistoricalDiscoveryOwnedRankMinimum(ranks)
+BY HistoricalDiscoveryOwnedRankMinimumFacts,
+   OwnedServiceRankOrderingMatchesLess, SMT
+   DEF OwnedServiceRankCarrier, ServiceRankLess
+
+THEOREM HistoricalDiscoveryOwnedRankTrichotomy ==
+  \A left, right \in OwnedServiceRankCarrier:
+    \/ left = right
+    \/ <<left, right>> \in OwnedServiceRankOrdering
+    \/ <<right, left>> \in OwnedServiceRankOrdering
+BY OwnedServiceRankOrderingMatchesLess, SMT
+   DEF OwnedServiceRankCarrier, ServiceRankLess
+
+THEOREM HistoricalDiscoveryOwnedRankMinimumStable ==
+  \A beforeRanks, afterRanks \in SUBSET OwnedServiceRankCarrier:
+    /\ beforeRanks # {}
+    /\ afterRanks # {}
+    /\ HistoricalDiscoveryOwnedRankMinimum(beforeRanks)
+         \in afterRanks
+    /\ \A rank \in afterRanks:
+         <<rank,
+           HistoricalDiscoveryOwnedRankMinimum(beforeRanks)>>
+           \notin OwnedServiceRankOrdering
+    => HistoricalDiscoveryOwnedRankMinimum(afterRanks)
+         = HistoricalDiscoveryOwnedRankMinimum(beforeRanks)
+BY HistoricalDiscoveryOwnedRankMinimumFacts,
+   HistoricalDiscoveryOwnedRankMinimumIsUnique, Isa
+
+THEOREM HistoricalDiscoveryLowerOwnedRankForcesMinimumDescent ==
+  \A beforeRanks, afterRanks \in SUBSET OwnedServiceRankCarrier:
+    /\ beforeRanks # {}
+    /\ afterRanks # {}
+    /\ \E lower \in afterRanks:
+         <<lower,
+           HistoricalDiscoveryOwnedRankMinimum(beforeRanks)>>
+           \in OwnedServiceRankOrdering
+    => <<HistoricalDiscoveryOwnedRankMinimum(afterRanks),
+          HistoricalDiscoveryOwnedRankMinimum(beforeRanks)>>
+         \in OwnedServiceRankOrdering
+BY HistoricalDiscoveryOwnedRankMinimumFacts,
+   HistoricalDiscoveryOwnedRankTrichotomy,
+   OwnedServiceRankOrderingMatchesLess, SMT
+   DEF OwnedServiceRankCarrier, ServiceRankLess
+
+(***************************************************************************
+Removing the unique selected minimum is not, by itself, rank descent.
+
+The two-element witness below is deliberately algebraic rather than a
+reachability claim.  It prevents a later action proof from treating arbitrary
+selected-owner exit as a smaller plain minimum: after removing <<2,1>>, the
+remaining minimum is <<2,2>>, which is strictly greater.  Distinct owners
+with equal rank values can likewise make one removal leave the set-valued
+minimum unchanged.
+Any temporal proof must either show that an earlier dependency component
+falls on such an exit or refine this tail with occurrence debt.  The
+count-first refinement below closes exact no-refill removal without importing
+an abstract multiset theorem; replacement and growth remain separate
+action-local obligations.
+***************************************************************************)
+
+THEOREM HistoricalDiscoveryPlainMinimumRemovalCanIncrease ==
+  LET lower == <<2, 1>>
+      higher == <<2, 2>>
+  IN /\ lower \in OwnedServiceRankCarrier
+     /\ higher \in OwnedServiceRankCarrier
+     /\ HistoricalDiscoveryOwnedRankMinimum({lower, higher})
+          = lower
+     /\ HistoricalDiscoveryOwnedRankMinimum({higher})
+          = higher
+     /\ <<lower, higher>> \in OwnedServiceRankOrdering
+BY HistoricalDiscoveryOwnedRankMinimumFacts,
+   HistoricalDiscoveryOwnedRankMinimumIsUnique,
+   OwnedServiceRankOrderingMatchesLess, SMT
+   DEF OwnedServiceRankCarrier, ServiceRankLess
+
+(***************************************************************************
+Concrete logical-owner/occurrence refinement and rank-bound audit.
+
+Serve positions have a configuration bound: a live Serve job occupies one
+unique nonce-owned position in an I/O queue of length at most
+`AsyncIoCapacity`.  Candidate positions do not have a corresponding global
+configuration bound.  `ModelConfiguration` allows the explicit
+`ViewDomain = Nat` mode used by `AsyncInit`; moreover,
+`AsyncCausalTypeInvariant` types the causal queues without a length cap,
+`AsyncDeferredContentTypeInvariant` does not cap the deferred Completion
+queue, and `AsyncCompletionLoad` includes that unbounded-but-finite deferred
+count.  The proved candidate carrier is therefore exactly
+`(2..6) \X Nat`, not a finite interval suitable for a fixed-width histogram.
+
+Every concrete queue and outstanding-work owner set is nevertheless finite
+in each strong-typed state.  On the candidate side, set cardinality counts
+distinct logical owner values, not raw queue occurrences.  It agrees with
+physical scheduler ownership only under the separately proved
+`AsyncProgressOwnershipInvariant`; equal candidate values can otherwise
+collapse and remain an explicit duplicate-occurrence residual.  Serve
+cardinality is exact already under strong typing because fresh nonces make
+Serve queue occurrences unique.  Prefixing either count to the existing
+minimum records equal-rank logical owners or exact Serve occurrences.  An
+exact owner removal with no replacement lowers the first natural component,
+regardless of how the remaining minimum changes.  This is a plain
+lexicographic product of two already-proved well-founded orders.
+***************************************************************************)
+
+HistoricalDiscoveryOccurrenceDebtCarrier ==
+  Nat \X OwnedServiceRankCarrier
+
+HistoricalDiscoveryOccurrenceDebtOrdering ==
+  LexPairOrdering(
+    OpToRel(<, Nat), OwnedServiceRankOrdering,
+    Nat, OwnedServiceRankCarrier)
+
+\* This is a distinct-logical-owner count.  Reachable `AsyncSpec` states use
+\* `AsyncProgressOwnershipInvariant` to rule out collapsed physical copies.
+HistoricalDiscoveryPacketCandidateOccurrenceDebtRank(packet) ==
+  <<Cardinality(
+       HistoricalDiscoveryPacketCandidateOwners(packet)),
+    HistoricalDiscoveryPacketCandidateDebtRank(packet)>>
+
+HistoricalDiscoveryPacketServeOccurrenceDebtRank(packet) ==
+  <<Cardinality(
+       HistoricalDiscoveryPacketServeOwners(packet)),
+    HistoricalDiscoveryPacketServeDebtRank(packet)>>
+
+THEOREM HistoricalDiscoveryOccurrenceDebtOrderingIsWellFounded ==
+  IsWellFoundedOn(
+    HistoricalDiscoveryOccurrenceDebtOrdering,
+    HistoricalDiscoveryOccurrenceDebtCarrier)
+BY NatLessThanWellFounded,
+   OwnedServiceRankOrderingWellFounded,
+   WFLexPairOrdering
+   DEF HistoricalDiscoveryOccurrenceDebtOrdering,
+       HistoricalDiscoveryOccurrenceDebtCarrier
+
+THEOREM StrongTypeHasFiniteHistoricalDiscoveryRankOwners ==
+  AsyncStrongTypeInvariant
+    => /\ IsFiniteSet(ActiveScheduledCandidates)
+       /\ IsFiniteSet(ActiveIoJobs)
+BY AsyncStrongTypeProjectsAsyncType,
+   FS_Interval, FS_Image, FS_Union, FS_Subset, Isa
+   DEF ActiveScheduledCandidates, ActiveIoJobs,
+       QueuedCandidates, DeferredCandidates, CausalCandidates,
+       TrackedWorkCandidates, SequenceSet,
+       AsyncStrongTypeInvariant, AsyncTypeInvariant,
+       AsyncSchedulerTypeInvariant,
+       AsyncRuntimeTypeInvariant, AsyncRuntimeScalarTypeInvariant,
+       AsyncCausalTypeInvariant,
+       AsyncIoTypeInvariant, AsyncIoTopologyTypeInvariant,
+       AsyncIoContentTypeInvariant,
+       AsyncIoQueueContentTypeInvariant,
+       AsyncIoWorkContentTypeInvariant,
+       AsyncDeferredTypeInvariant,
+       AsyncDeferredTopologyTypeInvariant,
+       AsyncDeferredContentTypeInvariant,
+       AsyncQueueTyped, AsyncIoSequenceTyped,
+       AsyncConfiguration, ModelConfiguration, ValidatorIds
+
+THEOREM HistoricalDiscoveryPacketOccurrenceDebtRanksInCarrier ==
+  \A packet \in OverdueResponsivePackets:
+    AsyncStrongTypeInvariant
+      => /\ IsFiniteSet(
+              HistoricalDiscoveryPacketCandidateOwners(packet))
+         /\ IsFiniteSet(
+              HistoricalDiscoveryPacketServeOwners(packet))
+         /\ HistoricalDiscoveryPacketCandidateOccurrenceDebtRank(packet)
+              \in HistoricalDiscoveryOccurrenceDebtCarrier
+         /\ HistoricalDiscoveryPacketServeOccurrenceDebtRank(packet)
+              \in HistoricalDiscoveryOccurrenceDebtCarrier
+BY StrongTypeHasFiniteHistoricalDiscoveryRankOwners,
+   HistoricalDiscoveryPacketDebtRanksInCarrier,
+   FS_Subset, FS_CardinalityType, Isa
+   DEF HistoricalDiscoveryPacketCandidateOwners,
+       HistoricalDiscoveryPacketServeOwners,
+       HistoricalDiscoveryPacketCandidateOccurrenceDebtRank,
+       HistoricalDiscoveryPacketServeOccurrenceDebtRank,
+       HistoricalDiscoveryOccurrenceDebtCarrier
+
+THEOREM HistoricalDiscoveryPacketServeRanksHaveConcreteBound ==
   \A packet \in OverdueResponsivePackets:
     AsyncStrongTypeInvariant
       => LET recipient == packet.item.envelope.recipient
-             base ==
-               IngressBoundaryDependencyRank(
-                 packet, recipient, <<2, 0>>, <<5, 0>>)
-         IN /\ recipient \in ValidatorIds
-            /\ base \in IngressBoundaryDependencyCarrier
-            /\ base \in HistoricalDiscoveryPacketDependencyRanks(packet)
-            /\ base \in HistoricalDiscoveryPacketCarrierRanks(packet)
-BY IngressBoundaryDependencyRankInCarrier, Isa
-   DEF OverdueResponsivePackets,
-       HistoricalDiscoveryPacketDependencyRanks,
-       HistoricalDiscoveryPacketCarrierRanks,
-       AsyncStrongTypeInvariant,
-       AsyncTransportTypeInvariant,
-       AsyncPacketContentTypeInvariant,
-       AsyncPacketTyped, AsyncItemTyped,
-       OwnedServiceRankCarrier
-
-THEOREM HistoricalDiscoveryCandidatePacketDependencyRankInCarrier ==
-  \A packet \in OverdueResponsivePackets,
-     candidate \in ActiveScheduledCandidates:
-    /\ AsyncStrongTypeInvariant
-    /\ candidate.node = packet.item.envelope.recipient
-    /\ HistoricalProtectedCandidateOwned(candidate)
-    => /\ CandidateIngressDependencyRank(packet, candidate)
-             \in IngressBoundaryDependencyCarrier
-       /\ CandidateIngressDependencyRank(packet, candidate)
-             \in HistoricalDiscoveryPacketDependencyRanks(packet)
-       /\ CandidateIngressDependencyRank(packet, candidate)
-             \in HistoricalDiscoveryPacketCarrierRanks(packet)
-BY AsyncStrongTypeProjectsAsyncType,
-   ScheduledCandidateServiceRankInCarrier,
-   IngressBoundaryDependencyRankInCarrier, Isa
-   DEF HistoricalProtectedCandidateOwned,
-       ProtectedCandidateOwned,
-       CandidateIngressDependencyRank,
-       HistoricalDiscoveryPacketDependencyRanks,
-       HistoricalDiscoveryPacketCarrierRanks,
+             queue == asyncIoQueues[recipient]
+             indices == AsyncIoServeIndices(queue)
+         IN /\ HistoricalDiscoveryPacketServeOwners(packet)
+                  = {queue[index]: index \in indices}
+            /\ \A left, right \in indices:
+                 queue[left] = queue[right] => left = right
+            /\ Cardinality(
+                 HistoricalDiscoveryPacketServeOwners(packet))
+                 <= AsyncIoCapacity
+            /\ HistoricalDiscoveryPacketServeRanks(packet)
+                 \subseteq ({5} \X (1..AsyncIoCapacity))
+BY HistoricalDiscoveryOwnersIncludeNonVoterService,
+   ServeOccurrenceIndexCharacterization,
+   ServeJobIndexMatchesOccurrenceIndex,
+   FS_Interval, FS_Image, FS_Subset, FS_CardinalityType, Isa
+   DEF HistoricalDiscoveryPacketServeOwners,
+       HistoricalDiscoveryPacketServeRanks,
+       HistoricalDiscoveryServeJobOwned,
+       HistoricalDiscoveryIoOwners,
+       ActiveIoJobs, AsyncIoServeIndices,
+       AsyncIoQueueDepth, ServeJobRank,
        OverdueResponsivePackets,
-       OwnedServiceRankCarrier
+       AsyncTimedServiceNodes,
+       AsyncStrongTypeInvariant, AsyncTypeInvariant,
+       AsyncSchedulerTypeInvariant,
+       AsyncIoTypeInvariant, AsyncIoContentTypeInvariant,
+       AsyncIoQueueContentTypeInvariant,
+       AsyncIoCapacityTypeInvariant,
+       AsyncConfiguration, SequenceSet
 
-THEOREM HistoricalDiscoveryServePacketDependencyRankInCarrier ==
+THEOREM HistoricalDiscoveryPacketCandidateRanksInCarrier ==
+  \A packet \in OverdueResponsivePackets:
+    AsyncStrongTypeInvariant
+      => HistoricalDiscoveryPacketCandidateRanks(packet)
+           \subseteq OwnedServiceRankCarrier
+BY AsyncStrongTypeProjectsAsyncType,
+   ScheduledCandidateServiceRankInCarrier, Isa
+   DEF HistoricalDiscoveryPacketCandidateRanks,
+       HistoricalDiscoveryPacketCandidateOwners,
+       HistoricalProtectedCandidateOwned,
+       ProtectedCandidateOwned
+
+THEOREM HistoricalDiscoveryPacketServeOwnerRankInCarrier ==
   \A packet \in OverdueResponsivePackets,
-     job \in ActiveIoJobs:
-    LET recipient == packet.item.envelope.recipient
-    IN /\ AsyncStrongTypeInvariant
-       /\ HistoricalDiscoveryServeJobOwned(recipient, job)
-       => /\ ServeIngressDependencyRank(packet, recipient, job)
-                \in IngressBoundaryDependencyCarrier
-          /\ ServeIngressDependencyRank(packet, recipient, job)
-                \in HistoricalDiscoveryPacketDependencyRanks(packet)
-          /\ ServeIngressDependencyRank(packet, recipient, job)
-                \in HistoricalDiscoveryPacketCarrierRanks(packet)
+     job \in HistoricalDiscoveryPacketServeOwners(packet):
+    AsyncStrongTypeInvariant
+      => ServeJobRank(
+           packet.item.envelope.recipient, job)
+           \in OwnedServiceRankCarrier
 BY ServeOccurrenceIndexCharacterization,
    ServeJobIndexMatchesOccurrenceIndex,
    AsyncStrongTypeProjectsAsyncType,
    AsyncArchiveIoServiceNodesAreValidators,
-   HistoricalRecoveryTargetsAreValidators,
-   IngressBoundaryDependencyRankInCarrier, Isa
-   DEF HistoricalDiscoveryServeJobOwned,
+   HistoricalRecoveryTargetsAreValidators, Isa
+   DEF HistoricalDiscoveryPacketServeOwners,
+       HistoricalDiscoveryServeJobOwned,
        HistoricalDiscoveryIoOwners,
-       HistoricalDiscoveryPacketDependencyRanks,
-       HistoricalDiscoveryPacketCarrierRanks,
        OverdueResponsivePackets,
-       ServeIngressDependencyRank, ServeJobRank,
+       ServeJobRank,
        AsyncStrongTypeInvariant,
        AsyncSchedulerTypeInvariant,
        AsyncIoTypeInvariant,
@@ -563,13 +851,148 @@ BY ServeOccurrenceIndexCharacterization,
        AsyncIoQueueContentTypeInvariant,
        AsyncIoServeIndices, OwnedServiceRankCarrier
 
+THEOREM HistoricalDiscoveryPacketServeRanksInCarrier ==
+  \A packet \in OverdueResponsivePackets:
+    AsyncStrongTypeInvariant
+      => HistoricalDiscoveryPacketServeRanks(packet)
+           \subseteq OwnedServiceRankCarrier
+BY HistoricalDiscoveryPacketServeOwnerRankInCarrier, Isa
+   DEF HistoricalDiscoveryPacketServeRanks
+
+THEOREM HistoricalDiscoveryPacketDebtRanksInCarrier ==
+  \A packet \in OverdueResponsivePackets:
+    AsyncStrongTypeInvariant
+      => /\ HistoricalDiscoveryPacketCandidateDebtRank(packet)
+               \in OwnedServiceRankCarrier
+         /\ HistoricalDiscoveryPacketServeDebtRank(packet)
+               \in OwnedServiceRankCarrier
+BY HistoricalDiscoveryPacketCandidateRanksInCarrier,
+   HistoricalDiscoveryPacketServeRanksInCarrier,
+   HistoricalDiscoveryOwnedRankMinimumFacts, Isa
+   DEF HistoricalDiscoveryPacketCandidateDebtRank,
+       HistoricalDiscoveryPacketServeDebtRank,
+       HistoricalDiscoveryCandidateDebtBottom,
+       HistoricalDiscoveryServeDebtBottom,
+       OwnedServiceRankCarrier
+
+THEOREM HistoricalDiscoveryEmptyPacketDebtUsesExactBottoms ==
+  \A packet:
+    /\ (HistoricalDiscoveryPacketCandidateOwners(packet) = {}
+          => HistoricalDiscoveryPacketCandidateDebtRank(packet)
+               = HistoricalDiscoveryCandidateDebtBottom)
+    /\ (HistoricalDiscoveryPacketServeOwners(packet) = {}
+          => HistoricalDiscoveryPacketServeDebtRank(packet)
+               = HistoricalDiscoveryServeDebtBottom)
+BY Isa
+   DEF HistoricalDiscoveryPacketCandidateOwners,
+       HistoricalDiscoveryPacketServeOwners,
+       HistoricalDiscoveryPacketCandidateRanks,
+       HistoricalDiscoveryPacketServeRanks,
+       HistoricalDiscoveryPacketCandidateDebtRank,
+       HistoricalDiscoveryPacketServeDebtRank
+
+THEOREM HistoricalDiscoveryLiveCandidateDebtHasExactFairOwner ==
+  \A packet \in OverdueResponsivePackets:
+    /\ AsyncStrongTypeInvariant
+    /\ HistoricalDiscoveryPacketCandidateOwners(packet) # {}
+    => LET candidate ==
+             HistoricalDiscoveryPacketCandidateDebtWitness(packet)
+           rank ==
+             HistoricalDiscoveryPacketCandidateDebtRank(packet)
+           recipient == packet.item.envelope.recipient
+       IN /\ candidate
+               \in HistoricalDiscoveryPacketCandidateOwners(packet)
+          /\ HistoricalProtectedCandidateOwned(candidate)
+          /\ CandidateServiceRank(candidate) = rank
+          /\ rank \in OwnedServiceRankCarrier
+          /\ \A other
+                  \in HistoricalDiscoveryPacketCandidateRanks(packet):
+               <<other, rank>>
+                 \notin OwnedServiceRankOrdering
+          /\ candidate.node = recipient
+          /\ recipient \in Responsive
+          /\ HistoricalRecoveryTarget(recipient)
+          /\ HistoricalDiscoveryPacketCandidateDebtFairAction(packet)
+               = PostGstRunHistoricalRecoveryNode(recipient)
+BY HistoricalDiscoveryPacketCandidateRanksInCarrier,
+   HistoricalDiscoveryPacketDebtRanksInCarrier,
+   HistoricalDiscoveryOwnedRankMinimumFacts, Isa
+   DEF HistoricalDiscoveryPacketCandidateDebtWitness,
+       HistoricalDiscoveryPacketCandidateDebtRank,
+       HistoricalDiscoveryPacketCandidateRanks,
+       HistoricalDiscoveryPacketCandidateOwners,
+       HistoricalDiscoveryPacketCandidateDebtFairAction,
+       HistoricalProtectedCandidateOwned
+
+THEOREM HistoricalDiscoveryLiveServeDebtHasExactFairOwner ==
+  \A packet \in OverdueResponsivePackets:
+    /\ AsyncStrongTypeInvariant
+    /\ HistoricalDiscoveryPacketServeOwners(packet) # {}
+    => LET job ==
+             HistoricalDiscoveryPacketServeDebtWitness(packet)
+           rank ==
+             HistoricalDiscoveryPacketServeDebtRank(packet)
+           recipient == packet.item.envelope.recipient
+       IN /\ job \in HistoricalDiscoveryPacketServeOwners(packet)
+          /\ ServeJobRank(recipient, job) = rank
+          /\ rank \in OwnedServiceRankCarrier
+          /\ \A other
+                  \in HistoricalDiscoveryPacketServeRanks(packet):
+               <<other, rank>>
+                 \notin OwnedServiceRankOrdering
+          /\ HistoricalDiscoveryServeJobOwned(recipient, job)
+          /\ recipient \in Responsive
+          /\ \/ /\ HistoricalRecoveryTarget(recipient)
+                /\ HistoricalDiscoveryPacketServeDebtFairAction(packet)
+                     =
+                     PostGstServiceHistoricalRecoveryIoWorker(
+                       recipient)
+             \/ /\ recipient \in AsyncArchiveIoServiceNodes
+                /\ HistoricalDiscoveryPacketServeDebtFairAction(packet)
+                     = PostGstServiceIoWorker(recipient)
+BY HistoricalDiscoveryPacketServeRanksInCarrier,
+   HistoricalDiscoveryPacketDebtRanksInCarrier,
+   HistoricalDiscoveryOwnedRankMinimumFacts,
+   AsyncStrongTypeProjectsAsyncType, Isa
+   DEF HistoricalDiscoveryPacketServeDebtWitness,
+       HistoricalDiscoveryPacketServeDebtRank,
+       HistoricalDiscoveryPacketServeRanks,
+       HistoricalDiscoveryPacketServeOwners,
+       HistoricalDiscoveryPacketServeDebtFairAction,
+       HistoricalDiscoveryServeJobOwned,
+       HistoricalDiscoveryIoOwners,
+       AsyncArchiveIoServiceNodes,
+       AsyncCurrentResponsiveVoters,
+       AsyncResponsiveAppliedArchiveServers,
+       AsyncResponsiveOnlineArchiveServers,
+       AsyncResponsiveArchiveServers,
+       AsyncStrongTypeInvariant,
+       AsyncSchedulerTypeInvariant,
+       AsyncHistoricalRecoveryTypeInvariant
+
+THEOREM HistoricalDiscoveryPacketDependencyRankInCarrier ==
+  \A packet \in OverdueResponsivePackets:
+    AsyncStrongTypeInvariant
+      => LET recipient == packet.item.envelope.recipient
+         IN /\ recipient \in ValidatorIds
+            /\ HistoricalDiscoveryPacketDependencyRank(packet)
+                 \in IngressBoundaryDependencyCarrier
+BY HistoricalDiscoveryPacketDebtRanksInCarrier,
+   IngressBoundaryDependencyRankInCarrier, Isa
+   DEF HistoricalDiscoveryPacketDependencyRank,
+       OverdueResponsivePackets,
+       AsyncStrongTypeInvariant,
+       AsyncTransportTypeInvariant,
+       AsyncPacketContentTypeInvariant,
+       AsyncPacketTyped, AsyncItemTyped
+
 THEOREM HistoricalDiscoveryConcreteFixedClockRankInCarrier ==
   \A node \in Responsive, clockValue \in Nat:
     HistoricalDiscoveryFixedClockPending(node, clockValue)
       => HistoricalDiscoveryConcreteFixedClockRank(clockValue)
            \in HistoricalDiscoveryFixedClockBlockerCarrier
 BY StrongTypeHasFiniteHistoricalDiscoveryCohorts,
-   HistoricalDiscoveryBasePacketDependencyRankInCarrier,
+   HistoricalDiscoveryPacketDependencyRankInCarrier,
    HistoricalDiscoveryIngressCounterRankInCarrier,
    FS_CardinalityType, Isa
    DEF HistoricalDiscoveryFixedClockPending,
@@ -581,8 +1004,7 @@ BY StrongTypeHasFiniteHistoricalDiscoveryCohorts,
        HistoricalDiscoveryFixedClockRank,
        HistoricalDiscoverySelectedOverduePacket,
        HistoricalDiscoverySelectedPacketDependencyRank,
-       HistoricalDiscoveryPacketDependencyRanks,
-       HistoricalDiscoveryPacketCarrierRanks,
+       HistoricalDiscoveryPacketDependencyRank,
        HistoricalDiscoveryFixedClockBlockerCarrier,
        HistoricalDiscoveryDuePacketTailCarrier,
        HistoricalDiscoveryDormantTailCarrier,
