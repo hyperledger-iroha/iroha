@@ -135,6 +135,14 @@ These types sit alongside the existing Ed25519/BLS/ML-DSA primitives and become 
   - `TransactionResult` = `Result<DataTriggerSequence, TransactionRejectionReason>` with hashing helpers.
   - `ExecutionStep(ConstVec<InstructionBox>)`: a single ordered batch of instructions in a transaction.
 
+The current SDK/node compatibility handshake is `DATA_MODEL_VERSION = 4`.
+Version 3 remains the historical introduction point for the append-only mixed
+batch above. Version 4 changes canonical validation-fee governance bytes by
+requiring exact `plain_electorate_rules` in policy and payout-lifecycle
+proposal instructions and retaining those rules in enacted registry entries.
+SDKs must reject a node advertising any other data-model version before
+submission.
+
 ## Blocks
 
 - `SignedBlock` (versioned) encapsulates:

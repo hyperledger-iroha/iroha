@@ -1914,6 +1914,28 @@ fn validate_parliament_authorization(
             ));
         }
     };
+    let electorate = approvals
+        .validation_fee_plain_electorate_snapshot
+        .as_ref()
+        .ok_or_else(|| {
+            ValidationFeeAdmissionError::InvalidPolicyRegistry(
+                "authorized proposal has no frozen PLAIN electorate snapshot".to_owned(),
+            )
+        })?;
+    if electorate
+        .context_error(authorization.proposal_id, &proposal.proposer, rules)
+        .is_some()
+        || electorate.captured_at_height != referendum.h_start
+        || approvals.approval_gate_height != Some(electorate.approval_gate_height)
+        || authorization
+            .plain_electorate_snapshot_anchor_error(electorate)
+            .is_some()
+    {
+        return Err(ValidationFeeAdmissionError::InvalidPolicyRegistry(
+            "frozen PLAIN electorate snapshot differs from retained governance authorization"
+                .to_owned(),
+        ));
+    }
     if finalized.mode != iroha_data_model::isi::governance::VotingMode::Plain
         || finalized.finalized_at_height != referendum.h_end
         || finalized.min_turnout != rules.min_turnout

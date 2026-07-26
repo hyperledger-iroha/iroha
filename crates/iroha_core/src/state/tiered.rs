@@ -2777,6 +2777,9 @@ mod measured_bytes_impls {
         },
         sorafs_uri::SorafsUri,
         trigger::{TriggerId, action::Repeats},
+        validation_fee::{
+            ValidationFeePlainElectorateMemberV1, ValidationFeePlainElectorateSnapshotV1,
+        },
         zk::BackendTag,
     };
     use iroha_primitives::{
@@ -4008,6 +4011,28 @@ mod measured_bytes_impls {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<GovernanceStageApprovals>();
             total = total.saturating_add(self.stages.measured_bytes_extra());
+            total = total.saturating_add(
+                self.validation_fee_plain_electorate_snapshot
+                    .measured_bytes_extra(),
+            );
+            total
+        }
+    }
+
+    impl MeasuredBytes for ValidationFeePlainElectorateMemberV1 {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<ValidationFeePlainElectorateMemberV1>();
+            total = total.saturating_add(self.account_id.measured_bytes_extra());
+            total = total.saturating_add(self.bonded_amount.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for ValidationFeePlainElectorateSnapshotV1 {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<ValidationFeePlainElectorateSnapshotV1>();
+            total = total.saturating_add(self.proposal_operator.measured_bytes_extra());
+            total = total.saturating_add(self.members.measured_bytes_extra());
             total
         }
     }

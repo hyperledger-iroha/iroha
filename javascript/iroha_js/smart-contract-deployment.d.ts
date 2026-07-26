@@ -92,14 +92,14 @@ export interface BrowserDeploymentSubmission {
 
 export interface BrowserDeploymentNodeCapabilities {
   abi_version: 1;
-  data_model_version: 3;
+  data_model_version: 4;
   signed_transaction_schema_hash_hex: string;
   readonly [key: string]: unknown;
 }
 
 export interface ValidatedBrowserDeploymentNodeCapabilities {
   readonly abiVersion: 1;
-  readonly dataModelVersion: 3;
+  readonly dataModelVersion: 4;
   readonly signedTransactionSchemaHashHex: string;
 }
 

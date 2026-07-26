@@ -50,6 +50,10 @@ from iroha_python.tx import (
 FEE_PAYMENT = authority_fee_payment(charge_limits=[])
 
 
+def test_data_model_version_matches_current_wire_contract() -> None:
+    assert DATA_MODEL_VERSION == 4
+
+
 class FakeSession:
     def __init__(self, responses: list[requests.Response]):
         self.responses = responses

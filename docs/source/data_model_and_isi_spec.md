@@ -186,6 +186,14 @@ Common envelope: `InstructionExecutionError` with variants for evaluation errors
 - Admission rejects an empty mixed batch. At runtime, `iroha_core` executes `InstructionBox` batches via `Execute for InstructionBox`, downcasting to the appropriate `*Box` or concrete instruction. A mixed batch is a global live-state scheduler barrier: each item observes all earlier item effects, and any failure discards every staged effect. Transaction batches containing a call share one signature-bound gas limit across explicit ISIs and calls, with one fee settlement for the transaction. Trigger actions support the same ordered atomic batch and share one deterministic trigger gas budget across all items in an invocation. Code: `crates/iroha_core/src/smartcontracts/isi/mod.rs` and `crates/iroha_core/src/executor.rs`.
 - Runtime executor validation budget (user-provided executor): base `executor.fuel` from parameters plus optional transaction metadata `additional_fuel` (`u64`), shared across instruction/trigger validations within the transaction.
 
+The current SDK/node compatibility handshake is `DATA_MODEL_VERSION = 4`.
+Version 3 remains the historical introduction point for the append-only mixed
+batch above. Version 4 changes canonical validation-fee governance bytes by
+requiring exact `plain_electorate_rules` in policy and payout-lifecycle
+proposal instructions and retaining those rules in enacted registry entries.
+SDKs must reject a node advertising any other data-model version before
+submission.
+
 ---
 
 ## Invariants and Notes (from tests and guards)

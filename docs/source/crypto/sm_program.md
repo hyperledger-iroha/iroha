@@ -343,7 +343,7 @@ summary below tracks the headline items surfaced to release engineering.
 ```json
 {
   "abi_version": 1,
-  "data_model_version": 1,
+  "data_model_version": 4,
   "crypto": {
     "sm": {
       "enabled": true,

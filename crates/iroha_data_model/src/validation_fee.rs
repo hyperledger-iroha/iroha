@@ -48,6 +48,9 @@ pub const VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS: &str = "TREASURY_PAYOU
 pub const VALIDATION_FEE_TREASURY_PAYOUT_RECIPIENT_COUNT: usize = 4;
 /// Maximum number of citizens admitted to a first-release validation-fee PLAIN roster.
 pub const VALIDATION_FEE_PLAIN_MAX_MEMBERS_V1: u64 = 256;
+/// Domain separator for a canonical validation-fee PLAIN electorate snapshot root.
+pub const VALIDATION_FEE_PLAIN_ELECTORATE_SNAPSHOT_ROOT_DOMAIN_V1: &[u8] =
+    b"iroha.validation_fee.plain_electorate.snapshot.v1";
 /// Domain separator for policy hashing.
 pub const VALIDATION_FEE_POLICY_HASH_DOMAIN: &[u8] = b"iroha.validation_fee.policy.parliament.v1";
 /// Canonical domain separator shared by all V1 governance proposal fingerprints.
@@ -505,6 +508,213 @@ impl ValidationFeePlainElectorateRulesV1 {
     }
 }
 
+/// One citizen frozen into a validation-fee PLAIN electorate snapshot.
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct ValidationFeePlainElectorateMemberV1 {
+    /// Canonical citizen account.
+    pub account_id: AccountId,
+    /// Height at which the uninterrupted citizenship bond began.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u64_string"))]
+    pub bonded_height: u64,
+    /// Exact citizenship amount observed at the snapshot boundary.
+    pub bonded_amount: Quantity,
+}
+
+#[derive(Encode)]
+struct ValidationFeePlainElectorateSnapshotRootPayloadV1 {
+    proposal_id: [u8; 32],
+    proposal_operator: AccountId,
+    captured_at_height: u64,
+    approval_gate_height: u64,
+    member_count: u64,
+    members: Vec<ValidationFeePlainElectorateMemberV1>,
+}
+
+/// Canonical citizen roster frozen immediately before the referendum's inclusive start block.
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+pub struct ValidationFeePlainElectorateSnapshotV1 {
+    /// Native proposal identifier whose retained rules govern this roster.
+    pub proposal_id: [u8; 32],
+    /// Proposal operator receiving the closed first-release eligibility exception.
+    pub proposal_operator: AccountId,
+    /// Exact referendum start height at whose boundary the roster was frozen.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u64_string"))]
+    pub captured_at_height: u64,
+    /// First height at which all seven Parliament bodies held approval quorum.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u64_string"))]
+    pub approval_gate_height: u64,
+    /// Exact number of canonically ordered members.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u64_string"))]
+    pub member_count: u64,
+    /// Canonically ordered, duplicate-free electorate.
+    pub members: Vec<ValidationFeePlainElectorateMemberV1>,
+    /// Domain-separated commitment to the complete snapshot payload.
+    pub roster_root: [u8; 32],
+}
+
+impl ValidationFeePlainElectorateSnapshotV1 {
+    /// Construct a snapshot from an already canonical member vector.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable invariant reason when the vector is empty, oversized,
+    /// unordered, duplicated, ineligible by height, or cannot be encoded.
+    pub fn from_canonical_members(
+        proposal_id: [u8; 32],
+        proposal_operator: AccountId,
+        captured_at_height: u64,
+        approval_gate_height: u64,
+        members: Vec<ValidationFeePlainElectorateMemberV1>,
+    ) -> Result<Self, &'static str> {
+        let member_count = u64::try_from(members.len())
+            .map_err(|_| "validation-fee PLAIN electorate member count overflows u64")?;
+        let mut snapshot = Self {
+            proposal_id,
+            proposal_operator,
+            captured_at_height,
+            approval_gate_height,
+            member_count,
+            members,
+            roster_root: [0; 32],
+        };
+        snapshot.roster_root = snapshot.checked_roster_root().map_err(|_| {
+            "validation-fee PLAIN electorate snapshot cannot be canonically encoded"
+        })?;
+        if let Some(reason) = snapshot.invariant_error() {
+            return Err(reason);
+        }
+        Ok(snapshot)
+    }
+
+    /// Recompute the domain-separated root of the complete snapshot payload.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Norito encoding error when the typed payload cannot be serialized.
+    pub fn checked_roster_root(&self) -> Result<[u8; 32], norito::Error> {
+        let encoded = norito::to_bytes(&ValidationFeePlainElectorateSnapshotRootPayloadV1 {
+            proposal_id: self.proposal_id,
+            proposal_operator: self.proposal_operator.clone(),
+            captured_at_height: self.captured_at_height,
+            approval_gate_height: self.approval_gate_height,
+            member_count: self.member_count,
+            members: self.members.clone(),
+        })?;
+        let mut preimage = Vec::with_capacity(
+            VALIDATION_FEE_PLAIN_ELECTORATE_SNAPSHOT_ROOT_DOMAIN_V1.len() + 1 + encoded.len(),
+        );
+        preimage.extend_from_slice(VALIDATION_FEE_PLAIN_ELECTORATE_SNAPSHOT_ROOT_DOMAIN_V1);
+        preimage.push(0);
+        preimage.extend_from_slice(&encoded);
+        Ok(*Hash::new(preimage).as_ref())
+    }
+
+    /// Return a stable intrinsic invariant violation, if any.
+    #[must_use]
+    pub fn invariant_error(&self) -> Option<&'static str> {
+        if self.proposal_id == [0; 32] {
+            return Some("validation-fee PLAIN electorate proposal id must be non-zero");
+        }
+        if self.captured_at_height == 0
+            || self.approval_gate_height >= self.captured_at_height
+        {
+            return Some(
+                "validation-fee PLAIN electorate gate must precede its positive capture height",
+            );
+        }
+        if self.member_count == 0
+            || self.member_count > VALIDATION_FEE_PLAIN_MAX_MEMBERS_V1
+            || usize::try_from(self.member_count).ok() != Some(self.members.len())
+        {
+            return Some(
+                "validation-fee PLAIN electorate count must exactly match a non-empty bounded roster",
+            );
+        }
+        let mut previous: Option<&AccountId> = None;
+        for member in &self.members {
+            if previous.is_some_and(|account_id| account_id >= &member.account_id) {
+                return Some(
+                    "validation-fee PLAIN electorate members must be strictly canonically ordered",
+                );
+            }
+            if member.bonded_amount.is_zero() || member.bonded_amount.scale() != 0 {
+                return Some(
+                    "validation-fee PLAIN electorate member bond must be a positive exact integer",
+                );
+            }
+            let eligible_height = if member.account_id == self.proposal_operator {
+                member.bonded_height <= self.approval_gate_height
+            } else {
+                member.bonded_height > self.approval_gate_height
+                    && member.bonded_height < self.captured_at_height
+            };
+            if !eligible_height {
+                return Some(
+                    "validation-fee PLAIN electorate member joined outside the frozen eligibility interval",
+                );
+            }
+            previous = Some(&member.account_id);
+        }
+        if self.roster_root == [0; 32]
+            || self.checked_roster_root().ok() != Some(self.roster_root)
+        {
+            return Some("validation-fee PLAIN electorate snapshot root is invalid");
+        }
+        None
+    }
+
+    /// Return a stable proposal/rules binding violation, if any.
+    #[must_use]
+    pub fn context_error(
+        &self,
+        proposal_id: [u8; 32],
+        proposal_operator: &AccountId,
+        rules: &ValidationFeePlainElectorateRulesV1,
+    ) -> Option<&'static str> {
+        if let Some(reason) = self.invariant_error() {
+            return Some(reason);
+        }
+        if self.proposal_id != proposal_id || &self.proposal_operator != proposal_operator {
+            return Some(
+                "validation-fee PLAIN electorate snapshot targets a different proposal or operator",
+            );
+        }
+        if self.member_count > rules.max_members {
+            return Some(
+                "validation-fee PLAIN electorate snapshot exceeds the proposal-bound member cap",
+            );
+        }
+        if self
+            .members
+            .iter()
+            .any(|member| member.bonded_amount < rules.citizenship_amount)
+        {
+            return Some(
+                "validation-fee PLAIN electorate member is below the proposal-bound citizenship amount",
+            );
+        }
+        None
+    }
+
+    /// Return whether the canonical snapshot contains `account_id`.
+    #[must_use]
+    pub fn contains(&self, account_id: &AccountId) -> bool {
+        self.members
+            .binary_search_by(|member| member.account_id.cmp(account_id))
+            .is_ok()
+    }
+}
+
 /// Exact inclusive referendum window authorized for a validation-fee proposal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -598,6 +808,17 @@ pub struct ValidationFeeParliamentAuthorizationV1 {
     pub proposal_fingerprint: [u8; 32],
     /// Proposal-time commitment to all Parliament body rosters.
     pub proposal_time_roster_root: [u8; 32],
+    /// Commitment to the citizen electorate frozen at the referendum start boundary.
+    pub plain_electorate_snapshot_root: [u8; 32],
+    /// Exact number of citizens in the frozen PLAIN electorate.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u64_string"))]
+    pub plain_electorate_snapshot_member_count: u64,
+    /// Exact height at which the PLAIN electorate was frozen.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u64_string"))]
+    pub plain_electorate_snapshot_captured_at_height: u64,
+    /// Immutable seven-body approval gate used by the electorate eligibility rule.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u64_string"))]
+    pub plain_electorate_snapshot_approval_gate_height: u64,
     /// Exact referendum window retained in consensus state.
     pub referendum_window: ValidationFeeGovernanceWindowV1,
     /// Deterministic finalized referendum result.
@@ -622,8 +843,25 @@ impl ValidationFeeParliamentAuthorizationV1 {
         if self.proposal_time_roster_root == [0; 32] {
             return Some("validation-fee Parliament roster commitment must be non-zero");
         }
+        if self.plain_electorate_snapshot_root == [0; 32]
+            || self.plain_electorate_snapshot_member_count == 0
+            || self.plain_electorate_snapshot_member_count
+                > VALIDATION_FEE_PLAIN_MAX_MEMBERS_V1
+        {
+            return Some(
+                "validation-fee PLAIN electorate snapshot root and bounded count must be retained",
+            );
+        }
         if self.referendum_window.upper < self.referendum_window.lower {
             return Some("validation-fee referendum window is invalid");
+        }
+        if self.plain_electorate_snapshot_captured_at_height != self.referendum_window.lower
+            || self.plain_electorate_snapshot_approval_gate_height
+                >= self.plain_electorate_snapshot_captured_at_height
+        {
+            return Some(
+                "validation-fee PLAIN electorate snapshot must be captured at the referendum start after its approval gate",
+            );
         }
         if self.finalization.referendum_id != self.proposal_id {
             return Some("validation-fee finalization referendum id differs from the proposal id");
@@ -641,6 +879,28 @@ impl ValidationFeeParliamentAuthorizationV1 {
         }
         if !self.finalization.approved || !self.finalization.recomputed_approval() {
             return Some("validation-fee referendum evidence is not a finalized approval");
+        }
+        None
+    }
+
+    /// Return a stable mismatch against the full retained electorate snapshot, if any.
+    #[must_use]
+    pub fn plain_electorate_snapshot_anchor_error(
+        &self,
+        snapshot: &ValidationFeePlainElectorateSnapshotV1,
+    ) -> Option<&'static str> {
+        if let Some(reason) = snapshot.invariant_error() {
+            return Some(reason);
+        }
+        if self.plain_electorate_snapshot_root != snapshot.roster_root
+            || self.plain_electorate_snapshot_member_count != snapshot.member_count
+            || self.plain_electorate_snapshot_captured_at_height != snapshot.captured_at_height
+            || self.plain_electorate_snapshot_approval_gate_height
+                != snapshot.approval_gate_height
+        {
+            return Some(
+                "validation-fee PLAIN electorate authorization anchors differ from the retained snapshot",
+            );
         }
         None
     }
@@ -1291,6 +1551,11 @@ fn validation_fee_authorization_matches_plain_rules(
         return false;
     };
     span == rules.ballot_duration_blocks
+        && authorization.plain_electorate_snapshot_member_count <= rules.max_members
+        && authorization.plain_electorate_snapshot_captured_at_height
+            == authorization.referendum_window.lower
+        && authorization.plain_electorate_snapshot_approval_gate_height
+            < authorization.plain_electorate_snapshot_captured_at_height
         && authorization.finalization.finalized_at_height
             == authorization.referendum_window.upper
         && authorization.finalization.min_turnout == rules.min_turnout
@@ -1733,6 +1998,10 @@ mod parliament_tests {
             proposal_id,
             proposal_fingerprint: proposal_id,
             proposal_time_roster_root: [marker.wrapping_add(1); 32],
+            plain_electorate_snapshot_root: [marker.wrapping_add(2); 32],
+            plain_electorate_snapshot_member_count: 1,
+            plain_electorate_snapshot_captured_at_height: lower,
+            plain_electorate_snapshot_approval_gate_height: lower.saturating_sub(1),
             referendum_window: ValidationFeeGovernanceWindowV1 { lower, upper },
             finalization: ValidationFeeFinalizationEvidenceV1 {
                 referendum_id: proposal_id,
