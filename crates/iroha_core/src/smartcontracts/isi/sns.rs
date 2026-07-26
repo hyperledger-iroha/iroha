@@ -939,6 +939,132 @@ mod tests {
         )
     }
 
+    struct PspAliasFixture {
+        state: State,
+        authority: AccountId,
+        collector: AccountId,
+        target_a: AccountId,
+        target_b: AccountId,
+        payment_asset: AssetDefinitionId,
+        dataspace: DataSpaceId,
+    }
+
+    fn psp_alias_fixture() -> PspAliasFixture {
+        let authority = another_owner();
+        let collector = owner();
+        let target_a = AccountId::new(
+            KeyPair::try_from_seed(vec![0x43; 32], Algorithm::Ed25519)
+                .expect("fixture seed must derive a valid target-a keypair")
+                .public_key()
+                .clone(),
+        );
+        let target_b = AccountId::new(
+            KeyPair::try_from_seed(vec![0x44; 32], Algorithm::Ed25519)
+                .expect("fixture seed must derive a valid target-b keypair")
+                .public_key()
+                .clone(),
+        );
+        let payment_asset: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
+            .parse()
+            .expect("payment asset definition id");
+        let genesis =
+            Domain::new(DomainId::try_new("genesis", "universal").expect("genesis domain id"))
+                .build(&collector);
+        let leumi = Domain::new(DomainId::try_new("leumi", "is").expect("leumi.is domain id"))
+            .build(&authority);
+        let hapoalim =
+            Domain::new(DomainId::try_new("hapoalim", "is").expect("hapoalim.is domain id"))
+                .build(&authority);
+        let collector_account = Account::new(collector.clone()).build(&collector);
+        let authority_account = Account::new(authority.clone()).build(&collector);
+        let target_a_account = Account::new(target_a.clone()).build(&collector);
+        let target_b_account = Account::new(target_b.clone()).build(&collector);
+        let payment_definition = AssetDefinition::numeric(payment_asset.clone())
+            .with_name("xor".to_owned())
+            .build(&collector);
+        let mut world = World::with(
+            [genesis, leumi, hapoalim],
+            [
+                collector_account,
+                authority_account,
+                target_a_account,
+                target_b_account,
+            ],
+            [payment_definition],
+        );
+        seed_default_namespace_policies(&mut world);
+        let dataspace = DataSpaceId::new(10);
+        let mut permissions = world
+            .account_permissions
+            .view()
+            .get(&authority)
+            .cloned()
+            .unwrap_or_default();
+        permissions.insert(Permission::from(CanManageAccountAlias {
+            scope: AccountAliasPermissionScope::Dataspace(dataspace),
+        }));
+        for domain in [
+            DomainId::try_new("leumi", "is").expect("leumi.is domain id"),
+            DomainId::try_new("hapoalim", "is").expect("hapoalim.is domain id"),
+        ] {
+            permissions.insert(Permission::from(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Domain(domain),
+            }));
+        }
+        world
+            .account_permissions
+            .insert(authority.clone(), permissions);
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        configure_test_fee_asset(&state, &payment_asset);
+        state.nexus.write().dataspace_catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata::default(),
+            DataSpaceMetadata {
+                id: dataspace,
+                alias: "is".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("is dataspace catalog");
+
+        {
+            let mut block = state.block(next_header(&state));
+            let mut stx = block.transaction();
+            Mint::asset_quantity(
+                1_000_u64,
+                AssetId::of(payment_asset.clone(), authority.clone()),
+            )
+            .execute(&authority, &mut stx)
+            .expect("mint alias payer balance");
+            seed_active_domain_lease(
+                &mut stx,
+                &DomainId::try_new("leumi", "is").expect("leumi.is domain id"),
+                &authority,
+            );
+            seed_active_domain_lease(
+                &mut stx,
+                &DomainId::try_new("hapoalim", "is").expect("hapoalim.is domain id"),
+                &authority,
+            );
+            stx.apply();
+            block.commit().expect("PSP alias fixture block commits");
+        }
+
+        PspAliasFixture {
+            state,
+            authority,
+            collector,
+            target_a,
+            target_b,
+            payment_asset,
+            dataspace,
+        }
+    }
+
     fn renew_account_alias_instruction(
         state_transaction: &StateTransaction<'_, '_>,
         alias: &AccountAlias,
@@ -2566,6 +2692,207 @@ mod tests {
             view.world().account_aliases().get(&alias),
             Some(&retail_account),
             "FI alias binding should be visible after the batch"
+        );
+    }
+
+    #[test]
+    fn serial_psp_alias_claims_from_one_prestate_have_one_winner() {
+        let PspAliasFixture {
+            state,
+            authority,
+            collector,
+            target_a,
+            target_b,
+            payment_asset,
+            dataspace,
+        } = psp_alias_fixture();
+        let alias = AccountAlias::new(
+            "shared3941".parse().expect("alias label"),
+            Some(AccountAliasDomain::new(
+                "leumi".parse().expect("PSP domain label"),
+            )),
+            dataspace,
+        );
+        let (claim_a, claim_b) = {
+            let mut block = state.block(next_header(&state));
+            let stx = block.transaction();
+            let claim_a = ensure_account_alias_instruction(
+                &stx,
+                &alias,
+                target_a.clone(),
+                AccountProvisionV1::Existing,
+                AccountAliasRoleV1::Additional,
+                1,
+                None,
+            );
+            let claim_b = ensure_account_alias_instruction(
+                &stx,
+                &alias,
+                target_b.clone(),
+                AccountProvisionV1::Existing,
+                AccountAliasRoleV1::Additional,
+                1,
+                None,
+            );
+            drop(stx);
+            drop(block);
+            (claim_a, claim_b)
+        };
+
+        let mut successes = 0_u8;
+        let mut owner_conflicts = 0_u8;
+        let mut winner = None;
+        for (index, (claim, target)) in [(claim_a, target_a), (claim_b, target_b)]
+            .into_iter()
+            .enumerate()
+        {
+            let payer_before = asset_balance(&state, &payment_asset, &authority);
+            let collector_before = asset_balance(&state, &payment_asset, &collector);
+            let mut block = state.block(next_header(&state));
+            let mut stx = block.transaction();
+            seed_test_call_hash(
+                &mut stx,
+                0xE0_u8.saturating_add(u8::try_from(index).expect("bounded claim index")),
+            );
+            match claim.execute(&authority, &mut stx) {
+                Ok(()) => {
+                    successes = successes.saturating_add(1);
+                    winner = Some(target);
+                    stx.apply();
+                    block.commit().expect("winning PSP alias claim commits");
+                }
+                Err(error) => {
+                    assert!(
+                        smart_contract_error_contains(&error, "alias.owner.conflict"),
+                        "losing PSP alias claim must return alias.owner.conflict: {error}"
+                    );
+                    owner_conflicts = owner_conflicts.saturating_add(1);
+                    assert_eq!(
+                        asset_balance_in_world(stx.world(), &payment_asset, &authority),
+                        payer_before,
+                        "owner conflict must precede any payer debit"
+                    );
+                    assert_eq!(
+                        asset_balance_in_world(stx.world(), &payment_asset, &collector),
+                        collector_before,
+                        "owner conflict must precede any collector credit"
+                    );
+                    drop(stx);
+                    drop(block);
+                    assert_eq!(
+                        asset_balance(&state, &payment_asset, &authority),
+                        payer_before,
+                        "rejected claim must not persist a payer debit"
+                    );
+                    assert_eq!(
+                        asset_balance(&state, &payment_asset, &collector),
+                        collector_before,
+                        "rejected claim must not persist a collector credit"
+                    );
+                }
+            }
+        }
+
+        assert_eq!(successes, 1, "exactly one serial claim must commit");
+        assert_eq!(
+            owner_conflicts, 1,
+            "exactly one serial claim must lose with alias.owner.conflict"
+        );
+        let winner = winner.expect("one claim must win");
+        let view = state.view();
+        let lease = get_name_record(
+            view.world(),
+            &view.nexus.dataspace_catalog,
+            SnsNamespace::AccountAlias,
+            "shared3941@leumi.is",
+            0,
+        )
+        .expect("winning PSP alias lease");
+        assert_eq!(lease.owner, winner);
+        assert_eq!(view.world().account_aliases().get(&alias), Some(&winner));
+    }
+
+    #[test]
+    fn same_local_alias_isolated_by_psp_domain() {
+        let PspAliasFixture {
+            state,
+            authority,
+            target_a,
+            target_b,
+            dataspace,
+            ..
+        } = psp_alias_fixture();
+        let leumi_alias = AccountAlias::new(
+            "shared3941".parse().expect("alias label"),
+            Some(AccountAliasDomain::new(
+                "leumi".parse().expect("Leumi domain label"),
+            )),
+            dataspace,
+        );
+        let hapoalim_alias = AccountAlias::new(
+            "shared3941".parse().expect("alias label"),
+            Some(AccountAliasDomain::new(
+                "hapoalim".parse().expect("Hapoalim domain label"),
+            )),
+            dataspace,
+        );
+
+        {
+            let mut block = state.block(next_header(&state));
+            let mut stx = block.transaction();
+            seed_test_call_hash(&mut stx, 0xE2);
+            ensure_account_alias_instruction(
+                &stx,
+                &leumi_alias,
+                target_a.clone(),
+                AccountProvisionV1::Existing,
+                AccountAliasRoleV1::Additional,
+                1,
+                None,
+            )
+            .execute(&authority, &mut stx)
+            .expect("Leumi-scoped local alias must succeed");
+            ensure_account_alias_instruction(
+                &stx,
+                &hapoalim_alias,
+                target_b.clone(),
+                AccountProvisionV1::Existing,
+                AccountAliasRoleV1::Additional,
+                1,
+                None,
+            )
+            .execute(&authority, &mut stx)
+            .expect("Hapoalim-scoped same local alias must succeed");
+            stx.apply();
+            block.commit().expect("independent PSP aliases commit");
+        }
+
+        let view = state.view();
+        let leumi_lease = get_name_record(
+            view.world(),
+            &view.nexus.dataspace_catalog,
+            SnsNamespace::AccountAlias,
+            "shared3941@leumi.is",
+            0,
+        )
+        .expect("Leumi alias lease");
+        let hapoalim_lease = get_name_record(
+            view.world(),
+            &view.nexus.dataspace_catalog,
+            SnsNamespace::AccountAlias,
+            "shared3941@hapoalim.is",
+            0,
+        )
+        .expect("Hapoalim alias lease");
+        assert_eq!(leumi_lease.owner, target_a);
+        assert_eq!(hapoalim_lease.owner, target_b);
+        assert_eq!(
+            view.world().account_aliases().get(&leumi_alias),
+            Some(&target_a)
+        );
+        assert_eq!(
+            view.world().account_aliases().get(&hapoalim_alias),
+            Some(&target_b)
         );
     }
 

@@ -49,6 +49,7 @@ public enum KagemushaNearbyEvent: Equatable, Sendable {
     case peerConnected
     case pairingChallenge(KagemushaNearbyPairingChallenge)
     case receiveRequest(KagemushaRecipientReceiveOfferV2)
+    case paymentCommitted(KagemushaRecursiveSpendPeerPaymentV4)
     case paymentQueued(KagemushaRecursiveSpendPeerPaymentV4)
     case paymentReceived(KagemushaRecursiveSpendPeerPaymentV4)
     case acknowledgementQueued(KagemushaReceiverAcknowledgement)
@@ -417,7 +418,7 @@ public final class KagemushaNearbyExchange: @unchecked Sendable {
         case sender(
             confirmPairing: @Sendable (KagemushaNearbyPairingChallenge) async
                 -> KagemushaNearbyPairingDecision,
-            createPayment: @Sendable (KagemushaRecipientReceiveOfferV2) async throws
+            commitPaymentForHandoff: @Sendable (KagemushaRecipientReceiveOfferV2) async throws
                 -> KagemushaRecursiveSpendPeerPaymentV4
         )
         case receiver(
@@ -489,13 +490,16 @@ public final class KagemushaNearbyExchange: @unchecked Sendable {
         confirmPairing: @escaping @Sendable (
             KagemushaNearbyPairingChallenge
         ) async -> KagemushaNearbyPairingDecision,
-        createPayment: @escaping @Sendable (
+        commitPaymentForHandoff: @escaping @Sendable (
             KagemushaRecipientReceiveOfferV2
         ) async throws -> KagemushaRecursiveSpendPeerPaymentV4
     ) async throws -> KagemushaPeerSendResult {
         guard Self.isAvailable else { throw KagemushaNearbyError.unavailable }
         let result = try await begin(
-            mode: .sender(confirmPairing: confirmPairing, createPayment: createPayment),
+            mode: .sender(
+                confirmPairing: confirmPairing,
+                commitPaymentForHandoff: commitPaymentForHandoff
+            ),
             onEvent: onEvent
         )
         guard case .sent(let value) = result else {
@@ -662,7 +666,7 @@ public final class KagemushaNearbyExchange: @unchecked Sendable {
     ) {
         lock.lock(); let mode = self.mode; lock.unlock()
         switch (mode, envelope.messageKind, envelope.payload) {
-        case let (.sender(confirmPairing, createPayment), .receiveRequest,
+        case let (.sender(confirmPairing, commitPaymentForHandoff), .receiveRequest,
                   .some(.receiveRequest(request))):
             guard let challenge = envelope.pairingChallenge else {
                 finish(.failure(KagemushaNearbyError.invalidMessage)); return
@@ -678,9 +682,13 @@ public final class KagemushaNearbyExchange: @unchecked Sendable {
                     }
                     try Task.checkCancellation()
                     self.onEvent?(.receiveRequest(request))
-                    let payment = try await createPayment(request)
+                    // The callback is the irreversible cash boundary: it must
+                    // atomically consume parents and durably bind/sign the
+                    // exact payment before any receiver-capable send occurs.
+                    let payment = try await commitPaymentForHandoff(request)
                     try Task.checkCancellation()
                     self.withStateLock { self.payment = payment }
+                    self.onEvent?(.paymentCommitted(payment))
                     try self.send(.payment(payment), to: peer)
                     self.onEvent?(.paymentQueued(payment))
                 } catch {
@@ -1063,11 +1071,11 @@ public final class KagemushaNearbyExchange: @unchecked Sendable {
         confirmPairing: @escaping @Sendable (
             KagemushaNearbyPairingChallenge
         ) async -> KagemushaNearbyPairingDecision,
-        createPayment: @escaping @Sendable (
+        commitPaymentForHandoff: @escaping @Sendable (
             KagemushaRecipientReceiveOfferV2
         ) async throws -> KagemushaRecursiveSpendPeerPaymentV4
     ) async throws -> KagemushaPeerSendResult {
-        _ = onEvent; _ = confirmPairing; _ = createPayment
+        _ = onEvent; _ = confirmPairing; _ = commitPaymentForHandoff
         throw KagemushaNearbyError.unavailable
     }
     public func receivePayment(

@@ -21519,6 +21519,8 @@ mod kagemusha_bridge_tests {
             kagemusha_recursive_spend_step_ep_public_inputs_schema_hash_v4(),
         );
         let readiness = OfflineReadiness {
+            cash_handoff_capability:
+                iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1.to_owned(),
             required_bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
             max_hops: KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2,
             asset_definition_id: fixture.manifest.asset.to_string(),
@@ -21557,8 +21559,13 @@ mod kagemusha_bridge_tests {
             ready: true,
             blockers: Vec::new(),
         };
-        java_kagemusha_project_readiness_v4_fields(readiness.clone())
+        let projected = java_kagemusha_project_readiness_v4_fields(readiness.clone())
             .expect("production SBD readiness must satisfy the exact mobile projection");
+        assert_eq!(
+            projected.first().map(Vec::as_slice),
+            Some(iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1.as_bytes()),
+            "mobile readiness must carry the authenticated cash-handoff capability instead of synthesizing it in an SDK",
+        );
         readiness
     }
 
@@ -33390,9 +33397,7 @@ fn java_sorafs_orderbook_fixed32(bytes: Vec<u8>, field: &str) -> Result<[u8; 32]
     target_os = "macos",
     target_os = "windows"
 ))]
-fn java_sorafs_orderbook_provider_id(
-    bytes: Vec<u8>,
-) -> Result<Option<[u8; 32]>, String> {
+fn java_sorafs_orderbook_provider_id(bytes: Vec<u8>) -> Result<Option<[u8; 32]>, String> {
     if bytes.is_empty() {
         return Ok(None);
     }
@@ -39220,6 +39225,13 @@ fn java_kagemusha_validate_exact_readiness_verifier_role(
 fn java_kagemusha_project_readiness_v4_fields(
     readiness: iroha_torii_shared::offline_api::OfflineReadiness,
 ) -> Result<Vec<Vec<u8>>, String> {
+    if readiness.cash_handoff_capability
+        != iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1
+    {
+        return Err(
+            "cash handoff capability must be the exact cash_handoff_v1 contract".to_owned(),
+        );
+    }
     if readiness.required_bridge_abi_version
         != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4
     {
@@ -39460,6 +39472,7 @@ fn java_kagemusha_project_readiness_v4_fields(
     }
 
     let mut fields = vec![
+        readiness.cash_handoff_capability.into_bytes(),
         readiness
             .required_bridge_abi_version
             .to_string()

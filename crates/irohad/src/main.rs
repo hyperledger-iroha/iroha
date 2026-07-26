@@ -7550,6 +7550,15 @@ impl Iroha {
         let mut supervisor = Supervisor::new();
         let startup_trace_started_at = Instant::now();
         log_startup_trace("irohad.start.enter", startup_trace_started_at);
+        iroha_torii::ensure_mandatory_offline_configuration(
+            &config.settlement.offline,
+            config.torii.kagemusha_commands.as_ref(),
+        )
+        .map_err(|error| {
+            Report::new(StartError::InitKura).attach(format!(
+                "mandatory offline cash configuration failed: {error}"
+            ))
+        })?;
 
         // Log detailed backtraces if a lock-order deadlock occurs so we can
         // diagnose stalls during long-running scenarios (e.g., integration tests).
@@ -7802,7 +7811,9 @@ impl Iroha {
             config.settlement.offline.kagemusha_artifact_dir.as_deref(),
         ) {
             (None, None) => {
-                iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::empty()
+                return Err(Report::new(StartError::InitKura).attach(
+                    "mandatory offline cash cannot start without a Kagemusha V4 release policy and artifact directory",
+                ));
             }
             (Some(policy_path), Some(artifact_dir)) => {
                 iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::load_with_decoded_budget(
@@ -8038,17 +8049,16 @@ impl Iroha {
             .map_err(|err| Report::new(StartError::InitKura).attach(err))?;
         }
         {
-            let world = state.world.view();
-            let height = u64::try_from(state.committed_height()).unwrap_or(u64::MAX);
-            iroha_core::smartcontracts::isi::offline::ensure_kagemusha_active_release_material_v4(
-                &world,
-                &state.kagemusha_release_catalog,
-                height,
+            iroha_torii::ensure_mandatory_offline_startup_readiness(
+                &state,
+                &config.common.chain,
+                &config.settlement.offline,
+                config.torii.kagemusha_commands.as_ref(),
+                &config.nexus.fees.fee_asset_id,
             )
             .map_err(|error| {
-                Report::new(StartError::InitKura).attach(format!(
-                    "active Kagemusha V4 release material is unavailable: {error}"
-                ))
+                Report::new(StartError::InitKura)
+                    .attach(format!("mandatory offline cash readiness failed: {error}"))
             })?;
         }
         // No Kura writer is live while trust selection or replay can still fail. Only the fully

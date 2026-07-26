@@ -8467,6 +8467,8 @@ mod offline_client_tests {
 
     fn first_release_readiness(asset_definition_id: &AssetDefinitionId) -> OfflineReadiness {
         OfflineReadiness {
+            cash_handoff_capability:
+                iroha_data_model::offline::KAGEMUSHA_CASH_HANDOFF_CAPABILITY_V1.to_owned(),
             required_bridge_abi_version:
                 iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
             max_hops: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2,

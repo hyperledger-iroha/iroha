@@ -135,7 +135,8 @@ The complete first-release route set is:
 - `POST /v1/offline/redeem`
 - `GET /v1/offline/operations/{operation_id}`
 
-Readiness is a closed snapshot-bound object. It carries exact bridge ABI 21,
+Readiness is a closed snapshot-bound object. It carries mandatory
+`cash_handoff_capability = "cash_handoff_v1"`, exact bridge ABI 21,
 maximum hop count, canonical asset and scale, evaluated block height/hash,
 active transfer, top-up-shield, unshield, recursive StepEq and recursive StepEp
 verifier records, the required nullable authenticated `artifact_set`, backend

@@ -656,10 +656,12 @@ pub fn resolve_kagemusha_recursive_transaction_release_v4(
     })
 }
 
-/// Fail startup when consensus selects a V4 release absent from local cache.
+/// Fail startup unless an active V4 release is present and its exact material
+/// is authenticated in the local cache.
 ///
 /// Validators call this after authenticated Kura replay and before joining the
-/// voting set. An unactivated, unconfigured node remains valid and unready.
+/// voting set. Offline cash is a mandatory protocol capability: an
+/// unactivated or unconfigured node must not start networking.
 pub fn ensure_kagemusha_active_release_material_v4(
     world: &impl WorldReadOnly,
     catalog: &KagemushaReleaseCatalogV4,
@@ -695,6 +697,11 @@ pub fn ensure_kagemusha_active_release_material_v4(
             Ok(())
         },
     )?;
+    if covered_manifest_digests.is_empty() {
+        return Err(
+            "no active authenticated ABI-21/V4 Kagemusha Eq/Ep release is installed".to_owned(),
+        );
+    }
     for (key, payload) in world.smart_contract_state().iter() {
         let Some((binding, release_record)) =
             decode_kagemusha_v4_consensus_release_state(key, payload)?
@@ -3173,6 +3180,18 @@ pub mod isi {
                 format!("the governed device-attestation policy cannot be hashed: {error}")
             })?;
         Ok((policy, policy_hash))
+    }
+
+    /// Require the governed, canonical anti-rollback spend-authority policy.
+    ///
+    /// Startup calls this after Kura replay and before networking. A validator
+    /// must never substitute a software-only or absent policy for the
+    /// rollback-resistant hardware contract used by offline cash.
+    pub fn ensure_offline_device_attestation_policy_ready_v1(
+        world: &impl WorldReadOnly,
+        evaluated_at_ms: u64,
+    ) -> Result<(), String> {
+        current_offline_device_attestation_policy_from_world(world, evaluated_at_ms).map(|_| ())
     }
 
     /// Derive the canonical end-of-block active-receiver snapshot.

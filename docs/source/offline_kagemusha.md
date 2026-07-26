@@ -94,9 +94,11 @@ operation and local encrypted-state transition are durable.
 
 The receiver creates a nonce-bound payment request containing its output
 commitment, exact amount, asset, scale, verifier generation, and expiry. The
-sender authenticates, reserves its selected inputs, creates recipient and
-optional change outputs, proves the transition, verifies the result locally,
-and durably stages the outgoing payment and local change.
+sender authenticates the request, creates recipient and optional change
+outputs, proves and locally verifies the transition, then performs the
+`cash_handoff_v1` boundary atomically: it irreversibly consumes the selected
+parents and durably binds/signs the exact outgoing payment before exposing any
+payment byte to a receiver-capable transport.
 
 The peer payload contains the recipient's opaque proof bundle and the exact
 proof-bound, secret-free membership witness required for its next spend. Replay
@@ -108,9 +110,11 @@ The receiver runs `verifySpendV4` and checks the signed request, chain, asset,
 scale, exact amount, recipient commitment, hop limit, verifier activation
 window, finalized top-up origin, recursive proof validity, and branch
 disjointness. It atomically persists the received note before signing a durable
-acknowledgement. The sender marks reserved inputs spent only after verifying
-that acknowledgement. Duplicate delivery and lost acknowledgements are
-idempotent across transport loss and process restart.
+acknowledgement receipt. The receipt is evidence only, not acceptance or a
+sender commit gate. Missing, invalid, or lost acknowledgements never unspend,
+roll back, replace, or claw back the exact outgoing payment. Duplicate delivery
+and exact retransmission remain idempotent. If no receiver ever obtains the
+committed bytes, the sender bears cash-loss risk exactly as with physical cash.
 
 No network or artifact fetch is permitted during send, receive, proof creation,
 or peer verification. QR and NFC carry the same canonical request, payment, and
@@ -240,16 +244,15 @@ active.
 
 ## Validator provisioning and activation
 
-Operators configure both optional paths together under `settlement.offline`:
+Operators must configure both paths together under `settlement.offline`:
 `kagemusha_release_policy_path` names the canonical Norito trust policy, and
 `kagemusha_artifact_dir` names the directory whose children are manifest
 digests. `kagemusha_max_decoded_bytes` caps the conservative decoded verifier
 working-set estimate. It defaults to, and cannot be raised above, 256 MiB per
-node; lower deployment limits are accepted. Leaving both paths unset is valid
-and keeps Kagemusha readiness false while
-the node otherwise operates normally. Supplying only one path, an empty path,
-a malformed policy, an invalid release directory, or corrupt artifact material
-is a startup error.
+node; lower deployment limits are accepted. Leaving either path unset,
+disabling escrow, omitting every escrow asset, omitting the funded permitted
+command issuer, or supplying malformed/corrupt material is a startup error
+after Kura replay and before Kura writing, networking, consensus, or Torii.
 
 Startup authenticates every candidate subdirectory, validates framed and
 payload sizes and SHA-256 values, parses the six validator-side artifacts

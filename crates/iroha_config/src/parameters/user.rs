@@ -7973,7 +7973,7 @@ pub struct Repo {
 #[derive(Debug, ReadConfig, Clone)]
 pub struct Offline {
     /// Require Kagemusha cash to be escrow-backed.
-    #[config(default = "false")]
+    #[config(default = "true")]
     pub escrow_required: bool,
     /// Escrow account bindings keyed by asset definition id.
     #[config(default = "BTreeMap::new()")]
@@ -7990,7 +7990,7 @@ pub struct Offline {
 impl Default for Offline {
     fn default() -> Self {
         Self {
-            escrow_required: false,
+            escrow_required: true,
             escrow_accounts: BTreeMap::new(),
             kagemusha_release_policy_path:
                 defaults::settlement::offline::kagemusha_release_policy_path(),
@@ -8221,6 +8221,11 @@ impl Offline {
             kagemusha_artifact_dir,
             mut kagemusha_max_decoded_bytes,
         } = self;
+        if !escrow_required {
+            emitter.emit(Report::new(ParseError::InvalidSettlementConfig).attach(
+                "settlement.offline.escrow_required cannot be false; offline cash is mandatory",
+            ));
+        }
         if kagemusha_release_policy_path.is_some() != kagemusha_artifact_dir.is_some() {
             emitter.emit(
                 Report::new(ParseError::InvalidSettlementConfig).attach(
@@ -25804,17 +25809,31 @@ mod settlement_offline_tests {
     use super::*;
 
     #[test]
-    fn offline_parse_preserves_unconfigured_kagemusha_defaults() {
+    fn offline_parse_defaults_to_mandatory_escrow() {
         let mut emitter = Emitter::new();
         let actual = Offline::default().parse(&mut emitter);
 
         assert!(emitter.into_result().is_ok());
+        assert!(actual.escrow_required);
         assert!(actual.kagemusha_release_policy_path.is_none());
         assert!(actual.kagemusha_artifact_dir.is_none());
         assert_eq!(
             actual.kagemusha_max_decoded_bytes,
             defaults::settlement::offline::KAGEMUSHA_MAX_DECODED_BYTES
         );
+    }
+
+    #[test]
+    fn offline_parse_rejects_false_escrow_opt_out() {
+        let mut emitter = Emitter::new();
+        let actual = Offline {
+            escrow_required: false,
+            ..Offline::default()
+        }
+        .parse(&mut emitter);
+
+        assert!(emitter.into_result().is_err());
+        assert!(!actual.escrow_required);
     }
 
     #[test]

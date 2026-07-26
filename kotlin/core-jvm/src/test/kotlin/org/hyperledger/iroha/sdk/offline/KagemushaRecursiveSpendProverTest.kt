@@ -1267,12 +1267,14 @@ class KagemushaRecursiveSpendProverTest {
             30,
         )
         fun readiness(
+            cashHandoffCapability: String = KagemushaRecursiveSpendProver.CASH_HANDOFF_CAPABILITY_V1,
             transferVerifier: KagemushaRecursiveSpendProver.ActiveVerifier? = transfer,
             unshieldVerifier: KagemushaRecursiveSpendProver.ActiveVerifier? = unshield,
             recursiveStepEqVerifier: KagemushaRecursiveSpendProver.ActiveVerifier? = stepEq,
             artifact: KagemushaRecursiveSpendProver.AuthenticatedArtifactSet? = artifactSet(),
             proofBackendAvailable: Boolean = true,
         ) = KagemushaRecursiveSpendProver.ReadinessProjection(
+            cashHandoffCapability,
             21,
             8,
             "xor#sora",
@@ -1294,6 +1296,12 @@ class KagemushaRecursiveSpendProverTest {
         assertTrue(readiness().allVerifiersActive)
         assertTrue(readiness().chainArtifactSetReady)
         assertFalse(readiness().offlineReady)
+        assertFailsWith<IllegalArgumentException> {
+            readiness(cashHandoffCapability = "")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            readiness(cashHandoffCapability = "cash_handoff_v2")
+        }
         assertFalse(readiness(transferVerifier = null).allVerifiersActive)
         assertTrue(readiness(transferVerifier = null).chainArtifactSetReady)
         assertFalse(

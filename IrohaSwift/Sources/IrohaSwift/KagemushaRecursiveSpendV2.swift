@@ -173,6 +173,8 @@ public enum KagemushaRecursiveSpend {
     }
 
     public static let requiredNativeBridgeAbiVersion: UInt32 = 21
+    /// Mandatory sender-final peer-cash contract advertised by Torii readiness.
+    public static let cashHandoffCapabilityV1 = "cash_handoff_v1"
     public static let authorizationPreparationVersionV2: UInt16 = 2
     public static let wireVersionV4: UInt16 = 4
     public static let localWitnessVersionV4: UInt16 = 4
@@ -2075,8 +2077,12 @@ public struct KagemushaReceiverAcknowledgement: Equatable, Sendable {
         self.archive = Data(archive)
     }
 
-    /// Sender-side commit gate. Inputs must remain reserved until this succeeds
-    /// and the application confirms the receiver key's registered-device lineage.
+    /// Verify a receiver-signed delivery receipt.
+    ///
+    /// Under `cash_handoff_v1` this is evidence only. The sender has already
+    /// irreversibly consumed its inputs and committed the exact payment before
+    /// transport handoff; failure, absence, or rejection of this receipt must
+    /// never unspend, roll back, replace, or claw back that payment.
     public func verifiedForSender(
         request: KagemushaRecipientPaymentRequest,
         payment: KagemushaRecursiveSpendPeerPaymentV4

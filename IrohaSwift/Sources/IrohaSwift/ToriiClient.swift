@@ -10863,6 +10863,7 @@ public struct ToriiKagemushaAuthenticatedArtifactSet: Decodable, Sendable, Equat
 }
 
 public struct ToriiKagemushaReadiness: Decodable, Sendable, Equatable {
+    public let cashHandoffCapability: String
     public let requiredBridgeAbiVersion: UInt32
     public let maxHops: UInt32
     public let assetDefinitionId: String
@@ -10887,6 +10888,7 @@ public struct ToriiKagemushaReadiness: Decodable, Sendable, Equatable {
     public let blockers: [ToriiKagemushaReadinessBlocker]
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
+        case cashHandoffCapability = "cash_handoff_capability"
         case requiredBridgeAbiVersion = "required_bridge_abi_version"
         case maxHops = "max_hops"
         case assetDefinitionId = "asset_definition_id"
@@ -10912,6 +10914,17 @@ public struct ToriiKagemushaReadiness: Decodable, Sendable, Equatable {
             context: "Kagemusha readiness"
         )
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedCashHandoffCapability = try container.decode(
+            String.self,
+            forKey: .cashHandoffCapability
+        )
+        guard decodedCashHandoffCapability == KagemushaRecursiveSpend.cashHandoffCapabilityV1 else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .cashHandoffCapability,
+                in: container,
+                debugDescription: "cash_handoff_capability must be cash_handoff_v1"
+            )
+        }
         let decodedBridgeABI = try container.decode(
             UInt32.self,
             forKey: .requiredBridgeAbiVersion
@@ -11227,6 +11240,7 @@ public struct ToriiKagemushaReadiness: Decodable, Sendable, Equatable {
                 debugDescription: "ready must equal the complete ABI-21 runtime conjunction"
             )
         }
+        cashHandoffCapability = decodedCashHandoffCapability
         requiredBridgeAbiVersion = decodedBridgeABI
         maxHops = decodedMaxHops
         assetScale = decodedAssetScale
