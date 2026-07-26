@@ -133,6 +133,31 @@ fn visit_core_instruction<V: Visit + ?Sized>(visitor: &mut V, isi: &InstructionB
         visitor.visit_upgrade(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<CustomInstruction>() {
         visitor.visit_custom_instruction(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<crate::isi::privacy::RegisterPrivacyProtocolActivationV1>()
+    {
+        visitor.visit_register_privacy_protocol_activation_v1(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<crate::isi::privacy::TransitionPrivacyProtocolLifecycleV1>()
+    {
+        visitor.visit_transition_privacy_protocol_lifecycle_v1(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<crate::isi::privacy::PublishPrivacyRootV1>()
+    {
+        visitor.visit_publish_privacy_root_v1(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<crate::isi::privacy::BootstrapPrivacyPgcAccountsV1>()
+    {
+        visitor.visit_bootstrap_privacy_pgc_accounts_v1(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<crate::isi::privacy::SubmitPrivacyProofV1>()
+    {
+        visitor.visit_submit_privacy_proof_v1(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<PublishPedersenParams>() {
         visitor.visit_publish_pedersen_params(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<SetPedersenParamsLifecycle>() {
@@ -565,6 +590,17 @@ macro_rules! instruction_visitors {
             visit_audit_offline_note(&$crate::isi::offline::AuditOfflineNote),
             visit_log(&Log),
             visit_custom_instruction(&CustomInstruction),
+            visit_register_privacy_protocol_activation_v1(
+                &$crate::isi::privacy::RegisterPrivacyProtocolActivationV1
+            ),
+            visit_transition_privacy_protocol_lifecycle_v1(
+                &$crate::isi::privacy::TransitionPrivacyProtocolLifecycleV1
+            ),
+            visit_publish_privacy_root_v1(&$crate::isi::privacy::PublishPrivacyRootV1),
+            visit_bootstrap_privacy_pgc_accounts_v1(
+                &$crate::isi::privacy::BootstrapPrivacyPgcAccountsV1
+            ),
+            visit_submit_privacy_proof_v1(&$crate::isi::privacy::SubmitPrivacyProofV1),
             visit_publish_pedersen_params(&PublishPedersenParams),
             visit_set_pedersen_params_lifecycle(&SetPedersenParamsLifecycle),
             visit_publish_poseidon_params(&PublishPoseidonParams),

@@ -20,7 +20,7 @@ export const BUNDLE_TARGETS = Object.freeze([
     target: "node18",
     // This direct entrypoint intentionally exposes the complete Torii surface. The
     // protected pre-reset tree measured 945,975 bytes on the same pinned runner; the
-    // current V1 tree measures 966,623 bytes (+2.18%). The 969 KiB ceiling remains
+    // current V1 tree measures 966,355 bytes (+2.15%). The 969 KiB ceiling remains
     // below a 5% regression from that documented predecessor.
     limitKb: 969,
   }),

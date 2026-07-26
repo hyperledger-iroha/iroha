@@ -131,6 +131,14 @@ pub mod panic_hook;
 pub mod peers_gossiper;
 /// Pipeline helpers (access-set derivation, scheduler glue)
 pub mod pipeline;
+/// First-release privacy protocol governance and admission budgets.
+pub mod privacy;
+/// Native transparent privacy protocol engines.
+pub mod privacy_engines;
+/// Deterministic compiled manifests for executable privacy engines.
+pub mod privacy_profiles;
+/// Durable records produced by verified first-release privacy actions.
+pub mod privacy_state;
 /// Query API types and execution.
 pub mod query;
 /// Transaction queue and mempool logic.

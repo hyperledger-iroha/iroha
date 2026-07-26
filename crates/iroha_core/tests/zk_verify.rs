@@ -478,7 +478,7 @@ fn preverify_rejects_protocol_names_as_backend_labels_before_lookup() {
             iroha_data_model::proof::ProofBox::new(backend.into(), vec![idx as u8, 2, 3]),
             iroha_data_model::proof::VerifyingKeyId::new(
                 backend,
-                format!("vk_pending_attachment_{idx}"),
+                format!("vk_unsupported_protocol_attachment_{idx}"),
             ),
         );
         let tx = signed_empty_tx_with_attachments(

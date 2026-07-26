@@ -26038,7 +26038,7 @@ seiyaku GovernanceLifecycle {
                     "{rejected_backend} must not be treated as an admitted enveloped backend"
                 );
             }
-            for pending_backend in [
+            for protocol_name in [
                 "halo2-ipa-orchard",
                 "groth16-bls12-377",
                 "fcmp-plus-plus-curve-tree",
@@ -26056,12 +26056,12 @@ seiyaku GovernanceLifecycle {
                 "sis-with-hints",
             ] {
                 assert!(
-                    !open_verify_backend_tag_matches(pending_backend, BackendTag::Halo2IpaPasta),
-                    "{pending_backend} must stay fail-closed against Halo2 envelopes"
+                    !open_verify_backend_tag_matches(protocol_name, BackendTag::Halo2IpaPasta),
+                    "{protocol_name} must stay fail-closed against Halo2 envelopes"
                 );
                 assert!(
-                    !open_verify_backend_tag_matches(pending_backend, BackendTag::Stark),
-                    "{pending_backend} must stay fail-closed against STARK envelopes"
+                    !open_verify_backend_tag_matches(protocol_name, BackendTag::Stark),
+                    "{protocol_name} must stay fail-closed against STARK envelopes"
                 );
             }
         }

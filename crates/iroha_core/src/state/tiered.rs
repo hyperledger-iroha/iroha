@@ -2041,6 +2041,36 @@ impl TieredStateBackend {
             RuntimeUpgrade,
             world.runtime_upgrades
         );
+        collect_map!(
+            TieredSegment::PrivacyActivations,
+            PrivacyActivation,
+            world.privacy_activations
+        );
+        collect_map!(
+            TieredSegment::PrivacyPgcAccounts,
+            PrivacyPgcAccount,
+            world.privacy_pgc_accounts
+        );
+        collect_map!(
+            TieredSegment::PrivacyNullifiers,
+            PrivacyNullifier,
+            world.privacy_nullifiers
+        );
+        collect_map!(
+            TieredSegment::PrivacyCommitments,
+            PrivacyCommitment,
+            world.privacy_commitments
+        );
+        collect_map!(
+            TieredSegment::PrivacyRoots,
+            PrivacyRoot,
+            world.privacy_roots
+        );
+        collect_map!(
+            TieredSegment::PrivacyRootHeads,
+            PrivacyRootHead,
+            world.privacy_root_heads
+        );
         collect_map!(TieredSegment::Proofs, Proof, world.proofs);
         collect_map!(TieredSegment::ProofTags, ProofTag, world.proof_tags);
         collect_map!(TieredSegment::ProofsByTag, ProofByTag, world.proofs_by_tag);
@@ -2722,6 +2752,7 @@ mod measured_bytes_impls {
         nft::NftData,
         peer::PeerId,
         permission::Permission,
+        privacy::PrivacyProtocolActivationRecordV1,
         proof::{
             ProofAttachment, ProofAttachmentList, ProofBox, ProofId, ProofRecord, ProofStatus,
             VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord,
@@ -2753,6 +2784,10 @@ mod measured_bytes_impls {
 
     use crate::{
         governance::state::ParliamentTerm,
+        privacy_state::{
+            PrivacyPgcAccountProvenanceV1, PrivacyPgcAccountStateV1, PrivacyRootHeadRecordV1,
+            PrivacyRootProvenanceV1, PrivacyStateItemRecordV1,
+        },
         smartcontracts::code::ContractSubjectBinding,
         state::{
             AssetDefinitionAliasBindingRecord, ContractAliasBindingRecord,
@@ -2832,6 +2867,12 @@ mod measured_bytes_impls {
         Repeats,
         RuntimeUpgradeId,
         RuntimeUpgradeStatus,
+        PrivacyProtocolActivationRecordV1,
+        PrivacyPgcAccountProvenanceV1,
+        PrivacyPgcAccountStateV1,
+        PrivacyRootHeadRecordV1,
+        PrivacyRootProvenanceV1,
+        PrivacyStateItemRecordV1,
         ZkAssetMode,
     );
 
@@ -4342,6 +4383,12 @@ enum TieredSegment {
     TxSequences,
     VerifyingKeys,
     RuntimeUpgrades,
+    PrivacyActivations,
+    PrivacyPgcAccounts,
+    PrivacyNullifiers,
+    PrivacyCommitments,
+    PrivacyRoots,
+    PrivacyRootHeads,
     Proofs,
     ProofTags,
     ProofsByTag,
@@ -4393,6 +4440,12 @@ impl TieredSegment {
             TieredSegment::TxSequences => "tx_sequences",
             TieredSegment::VerifyingKeys => "verifying_keys",
             TieredSegment::RuntimeUpgrades => "runtime_upgrades",
+            TieredSegment::PrivacyActivations => "privacy_activations",
+            TieredSegment::PrivacyPgcAccounts => "privacy_pgc_accounts",
+            TieredSegment::PrivacyNullifiers => "privacy_nullifiers",
+            TieredSegment::PrivacyCommitments => "privacy_commitments",
+            TieredSegment::PrivacyRoots => "privacy_roots",
+            TieredSegment::PrivacyRootHeads => "privacy_root_heads",
             TieredSegment::Proofs => "proofs",
             TieredSegment::ProofTags => "proof_tags",
             TieredSegment::ProofsByTag => "proofs_by_tag",
@@ -4457,6 +4510,12 @@ impl norito::json::JsonDeserialize for TieredSegment {
             "tx_sequences" => TieredSegment::TxSequences,
             "verifying_keys" => TieredSegment::VerifyingKeys,
             "runtime_upgrades" => TieredSegment::RuntimeUpgrades,
+            "privacy_activations" => TieredSegment::PrivacyActivations,
+            "privacy_pgc_accounts" => TieredSegment::PrivacyPgcAccounts,
+            "privacy_nullifiers" => TieredSegment::PrivacyNullifiers,
+            "privacy_commitments" => TieredSegment::PrivacyCommitments,
+            "privacy_roots" => TieredSegment::PrivacyRoots,
+            "privacy_root_heads" => TieredSegment::PrivacyRootHeads,
             "proofs" => TieredSegment::Proofs,
             "proof_tags" => TieredSegment::ProofTags,
             "proofs_by_tag" => TieredSegment::ProofsByTag,
@@ -4664,6 +4723,12 @@ pub(crate) enum TieredKeyHandle {
     TxSequence(iroha_data_model::account::AccountId),
     VerifyingKey(iroha_data_model::proof::VerifyingKeyId),
     RuntimeUpgrade(iroha_data_model::runtime::RuntimeUpgradeId),
+    PrivacyActivation(crate::privacy_state::PrivacyActivationKeyV1),
+    PrivacyPgcAccount(crate::privacy_state::PrivacyPgcAccountKeyV1),
+    PrivacyNullifier(crate::privacy_state::PrivacyNullifierKeyV1),
+    PrivacyCommitment(crate::privacy_state::PrivacyCommitmentKeyV1),
+    PrivacyRoot(crate::privacy_state::PrivacyRootKeyV1),
+    PrivacyRootHead(crate::privacy_state::PrivacyRootHeadKeyV1),
     Proof(iroha_data_model::proof::ProofId),
     ProofTag(iroha_data_model::proof::ProofId),
     ProofByTag([u8; 4]),
@@ -4721,6 +4786,12 @@ impl TieredKeyHandle {
             TieredKeyHandle::TxSequence(_) => TieredSegment::TxSequences,
             TieredKeyHandle::VerifyingKey(_) => TieredSegment::VerifyingKeys,
             TieredKeyHandle::RuntimeUpgrade(_) => TieredSegment::RuntimeUpgrades,
+            TieredKeyHandle::PrivacyActivation(_) => TieredSegment::PrivacyActivations,
+            TieredKeyHandle::PrivacyPgcAccount(_) => TieredSegment::PrivacyPgcAccounts,
+            TieredKeyHandle::PrivacyNullifier(_) => TieredSegment::PrivacyNullifiers,
+            TieredKeyHandle::PrivacyCommitment(_) => TieredSegment::PrivacyCommitments,
+            TieredKeyHandle::PrivacyRoot(_) => TieredSegment::PrivacyRoots,
+            TieredKeyHandle::PrivacyRootHead(_) => TieredSegment::PrivacyRootHeads,
             TieredKeyHandle::Proof(_) => TieredSegment::Proofs,
             TieredKeyHandle::ProofTag(_) => TieredSegment::ProofTags,
             TieredKeyHandle::ProofByTag(_) => TieredSegment::ProofsByTag,
@@ -4785,6 +4856,12 @@ impl TieredKeyHandle {
             TieredKeyHandle::TxSequence(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::VerifyingKey(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::RuntimeUpgrade(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::PrivacyActivation(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::PrivacyPgcAccount(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::PrivacyNullifier(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::PrivacyCommitment(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::PrivacyRoot(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::PrivacyRootHead(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::Proof(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::ProofTag(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::ProofByTag(key) => Ok(norito::codec::Encode::encode(key)),
@@ -4871,6 +4948,12 @@ impl TieredKeyHandle {
             TieredKeyHandle::TxSequence(id) => fetch!(world.tx_sequences, id),
             TieredKeyHandle::VerifyingKey(id) => fetch!(world.verifying_keys, id),
             TieredKeyHandle::RuntimeUpgrade(id) => fetch!(world.runtime_upgrades, id),
+            TieredKeyHandle::PrivacyActivation(id) => fetch!(world.privacy_activations, id),
+            TieredKeyHandle::PrivacyPgcAccount(id) => fetch!(world.privacy_pgc_accounts, id),
+            TieredKeyHandle::PrivacyNullifier(id) => fetch!(world.privacy_nullifiers, id),
+            TieredKeyHandle::PrivacyCommitment(id) => fetch!(world.privacy_commitments, id),
+            TieredKeyHandle::PrivacyRoot(id) => fetch!(world.privacy_roots, id),
+            TieredKeyHandle::PrivacyRootHead(id) => fetch!(world.privacy_root_heads, id),
             TieredKeyHandle::Proof(id) => fetch!(world.proofs, id),
             TieredKeyHandle::ProofTag(id) => fetch!(world.proof_tags, id),
             TieredKeyHandle::ProofByTag(tag) => fetch!(world.proofs_by_tag, tag),
@@ -4963,6 +5046,12 @@ impl TieredKeyHandle {
             TieredKeyHandle::TxSequence(id) => fetch!(world.tx_sequences, id),
             TieredKeyHandle::VerifyingKey(id) => fetch!(world.verifying_keys, id),
             TieredKeyHandle::RuntimeUpgrade(id) => fetch!(world.runtime_upgrades, id),
+            TieredKeyHandle::PrivacyActivation(id) => fetch!(world.privacy_activations, id),
+            TieredKeyHandle::PrivacyPgcAccount(id) => fetch!(world.privacy_pgc_accounts, id),
+            TieredKeyHandle::PrivacyNullifier(id) => fetch!(world.privacy_nullifiers, id),
+            TieredKeyHandle::PrivacyCommitment(id) => fetch!(world.privacy_commitments, id),
+            TieredKeyHandle::PrivacyRoot(id) => fetch!(world.privacy_roots, id),
+            TieredKeyHandle::PrivacyRootHead(id) => fetch!(world.privacy_root_heads, id),
             TieredKeyHandle::Proof(id) => fetch!(world.proofs, id),
             TieredKeyHandle::ProofTag(id) => fetch!(world.proof_tags, id),
             TieredKeyHandle::ProofByTag(tag) => fetch!(world.proofs_by_tag, tag),
@@ -5076,6 +5165,22 @@ impl fmt::Display for TieredKeyHandle {
             TieredKeyHandle::TxSequence(id) => write!(f, "tx_sequence:{id}"),
             TieredKeyHandle::VerifyingKey(id) => write!(f, "verifying_key:{id:?}"),
             TieredKeyHandle::RuntimeUpgrade(id) => write!(f, "runtime_upgrade:{id:?}"),
+            TieredKeyHandle::PrivacyActivation(id) => {
+                write!(f, "privacy_activation:{id:?}")
+            }
+            TieredKeyHandle::PrivacyPgcAccount(id) => {
+                write!(f, "privacy_pgc_account:{id:?}")
+            }
+            TieredKeyHandle::PrivacyNullifier(id) => {
+                write!(f, "privacy_nullifier:{id:?}")
+            }
+            TieredKeyHandle::PrivacyCommitment(id) => {
+                write!(f, "privacy_commitment:{id:?}")
+            }
+            TieredKeyHandle::PrivacyRoot(id) => write!(f, "privacy_root:{id:?}"),
+            TieredKeyHandle::PrivacyRootHead(id) => {
+                write!(f, "privacy_root_head:{id:?}")
+            }
             TieredKeyHandle::Proof(id) => write!(f, "proof:{id}"),
             TieredKeyHandle::ProofTag(id) => write!(f, "proof_tag:{id}"),
             TieredKeyHandle::ProofByTag(tag) => write!(f, "proofs_by_tag:{tag:?}"),

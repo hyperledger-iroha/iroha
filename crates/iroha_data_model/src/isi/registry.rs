@@ -5,8 +5,8 @@ use crate::{
         InstructionRegistry, account_alias_lease, account_recovery, alias_setup, asset_alias,
         asset_transfer_control, bridge, confidential, consensus_keys, content, contract_alias,
         defi, domain_link, endorsement, escrow, identifier, kaigi, ministry, musubi, nexus,
-        offline, oracle, ram_lfe, repo, runtime_upgrade, rwa, settlement, smart_contract_code,
-        social, soracloud, soradns, sorafs, space_directory,
+        offline, oracle, privacy, ram_lfe, repo, runtime_upgrade, rwa, settlement,
+        smart_contract_code, social, soracloud, soradns, sorafs, space_directory,
         transparent::{
             AddSignatory, InvalidInstruction, RemoveAssetKeyValue, RemoveSignatory,
             SetAccountQuorum, SetAssetKeyValue,
@@ -294,6 +294,11 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<smart_contract_code::RemoveSmartContractBytes>,
     InstructionRegistry::register_slice::<zk::VerifyProof>,
     InstructionRegistry::register_slice::<zk::PruneProofs>,
+    InstructionRegistry::register_slice::<privacy::RegisterPrivacyProtocolActivationV1>,
+    InstructionRegistry::register_slice::<privacy::TransitionPrivacyProtocolLifecycleV1>,
+    InstructionRegistry::register_slice::<privacy::PublishPrivacyRootV1>,
+    InstructionRegistry::register_slice::<privacy::BootstrapPrivacyPgcAccountsV1>,
+    InstructionRegistry::register_slice::<privacy::SubmitPrivacyProofV1>,
     InstructionRegistry::register_slice::<kaigi::CreateKaigi>,
     InstructionRegistry::register_slice::<kaigi::JoinKaigi>,
     InstructionRegistry::register_slice::<kaigi::LeaveKaigi>,
@@ -421,6 +426,21 @@ fn with_core_stable_ids(mut registry: InstructionRegistry) -> InstructionRegistr
     );
     registry = registry.register_with_id_slice::<zk::CancelConfidentialPolicyTransition>(
         "zk::CancelConfidentialPolicyTransition",
+    );
+    registry = registry.register_with_id_slice::<privacy::RegisterPrivacyProtocolActivationV1>(
+        privacy::RegisterPrivacyProtocolActivationV1::WIRE_ID,
+    );
+    registry = registry.register_with_id_slice::<privacy::TransitionPrivacyProtocolLifecycleV1>(
+        privacy::TransitionPrivacyProtocolLifecycleV1::WIRE_ID,
+    );
+    registry = registry.register_with_id_slice::<privacy::PublishPrivacyRootV1>(
+        privacy::PublishPrivacyRootV1::WIRE_ID,
+    );
+    registry = registry.register_with_id_slice::<privacy::BootstrapPrivacyPgcAccountsV1>(
+        privacy::BootstrapPrivacyPgcAccountsV1::WIRE_ID,
+    );
+    registry = registry.register_with_id_slice::<privacy::SubmitPrivacyProofV1>(
+        privacy::SubmitPrivacyProofV1::WIRE_ID,
     );
     registry = registry.register_with_id_slice::<SetKeyValueBox>(SetKeyValueBox::WIRE_ID);
     registry = registry.register_with_id_slice::<RemoveKeyValueBox>(RemoveKeyValueBox::WIRE_ID);
