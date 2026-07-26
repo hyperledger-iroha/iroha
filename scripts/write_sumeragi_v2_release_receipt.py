@@ -340,7 +340,7 @@ _CORRIDOR_SUMMARY_FIELDS = (
     "log",
     "command",
 )
-_PRODUCTION_TEST_COUNT = 727
+_PRODUCTION_TEST_COUNT = 732
 _G_UNIT_TEST_COUNT = 277
 _G_UNIT_GROUPS = (
     (
@@ -451,12 +451,12 @@ _PRODUCTION_MODULES = (
     ("production-v2-block-sync", "sumeragi::v2_block_sync::tests", 3),
     ("production-v2-apply", "sumeragi::v2_apply::tests", 1),
     ("production-v2-effects", "sumeragi::v2_effects::tests", 62),
-    ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 52),
+    ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 53),
     ("production-v2-runtime", "sumeragi::v2_runtime::tests", 39),
     ("production-v2-transport", "sumeragi::v2_transport::tests", 1),
     ("production-v2-recovery", "sumeragi::v2_recovery::tests", 3),
     ("production-v2-runner", "sumeragi::v2_runner::tests", 32),
-    ("production-v2-worker", "sumeragi::v2_worker::tests", 79),
+    ("production-v2-worker", "sumeragi::v2_worker::tests", 83),
     (
         "production-v2-watchdog",
         "sumeragi::status::v2_liveness_watchdog_tests",

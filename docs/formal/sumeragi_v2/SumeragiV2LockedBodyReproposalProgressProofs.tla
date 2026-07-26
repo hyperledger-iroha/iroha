@@ -210,22 +210,23 @@ Static safety anchors.
 
 THEOREM RetainedLockLaterProposalIsSafeForDurableLock ==
   \A node \in ValidatorIds, lockedRound \in Views,
-     subject \in Subjects, proposal:
-    /\ StableAvailableRetainedLock(node, lockedRound, subject)
-    /\ proposal.view > lockedRound
-    /\ proposal.subject = subject
-    => DurableProposalSafeForLock(node, proposal)
+     subject \in Subjects:
+    \A proposal:
+      /\ StableAvailableRetainedLock(node, lockedRound, subject)
+      /\ proposal.view > lockedRound
+      /\ proposal.subject = subject
+      => DurableProposalSafeForLock(node, proposal)
 BY Isa
    DEF StableAvailableRetainedLock,
        DurableProposalSafeForLock
 
 THEOREM OldRoundCommitFrontierRejectsSplitRoundCommit ==
   \A node \in ValidatorIds, lockedRound \in Views,
-     subject \in Subjects, originView \in Views,
-     candidate, rank:
-    /\ originView # lockedRound
-    => ~RetainedLockOldRoundCommitCandidateRank(
-          node, lockedRound, subject, originView, candidate, rank)
+     subject \in Subjects, originView \in Views:
+    \A candidate, rank:
+      /\ originView # lockedRound
+      => ~RetainedLockOldRoundCommitCandidateRank(
+            node, lockedRound, subject, originView, candidate, rank)
 BY DEF RetainedLockOldRoundCommitCandidateRank
 
 (***************************************************************************

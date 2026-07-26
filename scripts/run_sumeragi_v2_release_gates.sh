@@ -1427,6 +1427,7 @@ required_production_liveness_tests=(
   sumeragi::v2_lane_work::tests::request_generation_hint_journal_failure_preserves_queued_occurrence
   sumeragi::v2_lane_work::tests::retained_sidecar_handoff_rejects_foreign_owner_and_wrong_successor
   sumeragi::v2_lane_work::tests::retryable_control_flood_cannot_fail_stop_close_or_block_request_progress
+  sumeragi::v2_lane_work::tests::stranded_responder_control_queue_slot_replaces_with_a_writable_trigger
   sumeragi::v2_lane_work::tests::sidecar_close_cancels_and_coalesces_dominant_stream_epoch
   sumeragi::v2_lane_work::tests::sidecar_ingress_materializes_the_fair_scheduler_job_not_the_newest_request
   sumeragi::v2_lane_work::tests::sidecar_server_allocations_require_roster_requester_but_not_roster_relay
@@ -1578,6 +1579,10 @@ required_production_liveness_tests=(
   sumeragi::v2_worker::tests::generation_hint_uses_exact_reply_ownership_without_topology_fallback
   sumeragi::v2_worker::tests::generation_hint_requires_exact_reply_route_ownership
   sumeragi::v2_worker::tests::responder_control_retry_coalesces_alternate_return_route
+  sumeragi::v2_worker::tests::stranded_responder_control_is_replaced_by_a_writable_authenticated_trigger
+  sumeragi::v2_worker::tests::multi_route_stranded_responder_control_uses_one_dedicated_reservation
+  sumeragi::v2_worker::tests::stranded_responder_control_fifo_collision_is_fail_atomic
+  sumeragi::v2_worker::tests::responder_control_replacement_cancels_ticket_after_index_commit
   sumeragi::v2_worker::tests::final_exact_output_seal_is_one_shot_and_blocks_late_enqueue
   sumeragi::v2_worker::tests::finalized_cleanup_without_exact_output_seal_latches_restart
   sumeragi::v2_worker::tests::generation_close_dominance_cancels_queued_and_admitted_sidecar_occurrences
@@ -1588,7 +1593,7 @@ required_production_liveness_tests=(
   sumeragi::v2_worker::tests::reliable_flush_projection_preserves_exact_stream_epoch
   sumeragi::v2_worker::tests::responder_control_uses_ordinary_reply_flush_ownership
   sumeragi::v2_worker::tests::retryable_sidecar_controls_are_bounded_and_fair_per_semantic_target
-  sumeragi::v2_worker::tests::retryable_sidecar_responder_controls_retain_at_most_one_worker_fanout
+  sumeragi::v2_worker::tests::writable_responder_control_source_retains_one_distinct_pending_control
   sumeragi::v2_worker::tests::unrelated_parked_reply_does_not_suppress_responsive_target_control
   sumeragi::status::v2_liveness_watchdog_tests::blocker_classifier_has_stable_specific_precedence
   sumeragi::status::v2_liveness_watchdog_tests::current_view_timeout_path_yields_only_to_an_exact_locked_commit_owner
@@ -1759,7 +1764,7 @@ required_production_liveness_tests=(
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_must_fit_network_geometry
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_use_effective_lane_profile_geometry
 )
-readonly expected_production_liveness_test_count=727
+readonly expected_production_liveness_test_count=732
 if (( ${#required_production_liveness_tests[@]} != expected_production_liveness_test_count )); then
   echo "expected exactly ${expected_production_liveness_test_count} production Sumeragi v2 liveness tests, found ${#required_production_liveness_tests[@]}" >&2
   exit 1
@@ -1859,7 +1864,7 @@ for required_test in "${required_production_liveness_tests[@]}"; do
 done
 
 # Keep the multilane closure-critical focused tests explicit even when they do
-# not belong to the canonical 727-test liveness inventory above. The later
+# not belong to the canonical 732-test liveness inventory above. The later
 # source-sealed workspace leg executes these non-ignored tests; this preflight
 # prevents a rename, deletion, or accidental `#[ignore]` from hiding behind
 # Cargo's successful zero-test filtering.
@@ -2510,7 +2515,7 @@ if ! grep -Fqx -- \
   exit 1
 fi
 
-readonly expected_typed_rollover_formal_mutation_count=35
+readonly expected_typed_rollover_formal_mutation_count=42
 observed_typed_rollover_formal_mutation_count="$(
   grep -Ec '^  "[a-z0-9-]+\|typed_rollover_handoff_[a-z0-9_]+_bug[.]cfg\|12\|\$\{INVARIANT_MARKER\}"$' \
     scripts/formal/run_sumeragi_v2_typed_rollover_handoff_mutations.sh
@@ -2521,9 +2526,9 @@ if ((observed_typed_rollover_formal_mutation_count
   exit 1
 fi
 if ! grep -Fqx -- \
-  'echo "[tlc] typed rollover-handoff fixed model and 35-mutant root-anchored V3 matrix passed"' \
+  'echo "[tlc] typed rollover-handoff fixed model and 42-mutant root-anchored V3 matrix passed"' \
   scripts/formal/run_sumeragi_v2_typed_rollover_handoff_mutations.sh; then
-  echo "typed rollover mutation runner lacks the exact 35-mutation completion contract" >&2
+  echo "typed rollover mutation runner lacks the exact 42-mutation completion contract" >&2
   exit 1
 fi
 

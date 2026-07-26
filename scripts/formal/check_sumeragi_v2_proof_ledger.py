@@ -3959,7 +3959,10 @@ SUPPORT_PROOF_OBLIGATION_INVENTORY = {
     ),
     "typed-rollover-handoff-conditional-local-liveness": (
         "SumeragiV2TypedRolloverHandoffProofs",
-        "ResponsiveDurableExactOutputRolloverLivenessObligation / "
+        "ResponsiveDurableExactOutputRolloverLivenessObligation",
+    ),
+    "typed-rollover-handoff-restart-restore-local-liveness": (
+        "SumeragiV2TypedRolloverHandoffProofs",
         "ResponsiveRestartRestoreRolloverLivenessObligation",
     ),
 }
@@ -3992,6 +3995,9 @@ SUPPORT_PROOF_CONSUMER_BY_ID = {
         "successor-activation-exact-recovery-production-refinement"
     ),
     "typed-rollover-handoff-conditional-local-liveness": (
+        "successor-activation-exact-recovery-production-refinement"
+    ),
+    "typed-rollover-handoff-restart-restore-local-liveness": (
         "successor-activation-exact-recovery-production-refinement"
     ),
 }
@@ -4477,147 +4483,147 @@ _REPLY_WRITER_DEADLINE_MUTATION_RUNNER_SHA256 = (
 
 _TYPED_ROLLOVER_HANDOFF_FORMAL_SOURCE_SHA256 = {
     "SumeragiV2TypedRolloverHandoff.tla": (
-        "61f21fe5982f07d2052307d5bac792f7427cc05ad47da88e2fb469bfa91503c2"
+        "7dbc6d2432ed776187706d6d0d5924f3bbbe33abbf9d442855ca29dd9cc996ac"
     ),
     "SumeragiV2TypedRolloverHandoffProofs.tla": (
-        "c8fd33cd56de8157ca1d470ef7d418b82479e8da98d614f127d59533209c4563"
+        "221d6c486d2a6ceb3078be15ae8d0eca5f66525273b5e57042a5266713685f68"
     ),
     "SumeragiV2TypedRolloverHandoffMutation.tla": (
-        "29bd4350b89334d8514fa386201090d087291cf277e96e5cf093f2ebe34934de"
+        "84a96abc4e8e36044a3601836a51f9dae293ca2c606dbc559da868663b9ba592"
     ),
     "typed_rollover_handoff_fixed.cfg": (
-        "b003dd8a6ea154ede9cc654acffe64db220db1c1347709b13352c0c92cff92d5"
+        "809a86192ec03d163236806d03514615c43cd48d18fb701ed050a2988ff7fdc6"
     ),
     "typed_rollover_handoff_accept_semantic_invalid_lifecycle_state_bug.cfg": (
-        "0000000000000000000000000000000000000000000000000000000000000000"
+        "c3659f678de35e046075a4b917c0ff946b3945d6da818c5d62ba712ab424bad3"
     ),
     "typed_rollover_handoff_active_state_roll_bug.cfg": (
-        "380206dd62e6063ae7a7591433c808d5d3c454c74c1c3f4d77f0f7ec8e556c0b"
+        "6e54a37be02494c53de0c27d282c8996064e89703ca45232aaf8429db8d7465c"
     ),
     "typed_rollover_handoff_changed_roster_without_generation_advance_bug.cfg": (
-        "910473b3b0d4b2005cf856b04bfac97c08699a34cf447b00699505027a803a0e"
+        "e342421faaf96607a0127680fa97a9329b0bff9d4633cc84b10a0d010d328e38"
     ),
     "typed_rollover_handoff_clean_state_slot_v3_persistence_failure_bug.cfg": (
-        "414fc8ae15bbb5283e107fb4f33f303380291236d1ae88c8e30818fa48e76c81"
+        "4ec02dd05d719f732346cfc09ba2423ce07b71e0dce6ffd912a7b5e8cdbf6d2d"
     ),
     "typed_rollover_handoff_clean_crash_after_lifecycle_root_v3_commit_bug.cfg": (
-        "a74ee72145854f894f491847539275e8209e530c41c35303d7e3bbd75d578220"
+        "77b166d9480ce848e9b818ced2eb025d4cfaeb47acb2745ca9fc86adb968044e"
     ),
     "typed_rollover_handoff_clean_foreign_owner_reject_bug.cfg": (
-        "b23ff8864d85328037d1d2a4faf3454934cb833b4426414fb1adb2a66207a337"
+        "9e9fc9e5c1b98b010089a21921b45a4ab4af653fcb542d92c9388c6bd09d06ec"
     ),
     "typed_rollover_handoff_clean_late_enqueue_reject_bug.cfg": (
-        "99a46bca91fa2bae89972c83d83ed9bf151bf1312592b6fd7a36973cf7643df6"
+        "16085a16c185d7c009046f112e8ac35902b7b506a7f28780bd9f2891ee90c967"
     ),
     "typed_rollover_handoff_clean_predecessor_artifact_reject_bug.cfg": (
-        "af3f3fe49560616552cde1ca37bbd18d5ed977e25ec2eef5da44400de8d4126b"
+        "9cdfccfe85d63ad27492168e650859005188b9b6cbda7134c12379a6fcaaf591"
     ),
     "typed_rollover_handoff_clean_predecessor_context_reject_bug.cfg": (
-        "bda22dfce0388bf752e10df59aa83811ced2bd0f9f273abc305f547a9a8ee632"
+        "0d62a12bb77eb622594368554e4af00282f1c044d4e4b953b27618e786d51962"
     ),
     "typed_rollover_handoff_clean_wrong_successor_reject_bug.cfg": (
-        "22d775c14641b1d07e1c28f9eae4b4ed983ff045c28ce559661e3be1e4d58e96"
+        "b30f0be811e137ad56880e644f3e1a6deb90a113c54e0e44738e7d86469d1b4d"
     ),
     "typed_rollover_handoff_cleanup_before_root_parent_resync_bug.cfg": (
-        "0000000000000000000000000000000000000000000000000000000000000000"
+        "b33f2ddd6417c8b43eaca226687edcd28bcddabc2d64efc74eaded6c83c2971f"
     ),
     "typed_rollover_handoff_cleanup_before_validation_bug.cfg": (
-        "9c99ced2d012c4e4ae57be2131fc9cb37214d2229c7e0be154beb66063302536"
+        "abe8de889668f65a9e47e721c32bbd57d5ecbf52f6ff2cde9dafe2b5408241ab"
     ),
     "typed_rollover_handoff_cleanup_retains_inactive_slot_bug.cfg": (
-        "0000000000000000000000000000000000000000000000000000000000000000"
+        "baa273c35b7a7f2d031988bd984498a16e556ce46ca7b930ca7712782a11c09a"
     ),
     "typed_rollover_handoff_cross_service_transport_owner_pair_bug.cfg": (
-        "0000000000000000000000000000000000000000000000000000000000000000"
+        "ad51095a5ede9c012752e8287ef3519e2ad77365f67402a3fee4140180194d23"
     ),
     "typed_rollover_handoff_crossed_root_shape_bug.cfg": (
-        "2a8f07cd4e5a6e6e1b8faf5fc598d14520e9cf9e51dbaae4b53280c9737b9565"
+        "77c3e97f34ca11c01418495b1e95e7999267ffb95499764eace57ca77d07febc"
     ),
     "typed_rollover_handoff_epoch_overflow_bug.cfg": (
-        "51129a49fcf3a54c3c18252dfd358376340366d4927164727af9b7f98f08acf1"
+        "ba66428dbb7f621a75246892029a8bb48c8cd086b6cb12b5c934f1e082a6ba06"
     ),
     "typed_rollover_handoff_lose_requester_incarnation_after_crash_bug.cfg": (
-        "a72df6fa00cecc5de84538bd49752474ad5210682043229a3c1b37367eeb6be4"
+        "a9585ebdaa2f3ba3e5ce694eecde958abb2f7ddd1ca2bc3a22f91df0345e007f"
     ),
     "typed_rollover_handoff_epoch_use_before_persist_bug.cfg": (
-        "0e1ab8cc507200426010931b7938bbbdc8abe65136f44dd280314285e224365c"
+        "597fe537a1fdc98005171c056eb35b38f0a62dd78855ca13e5678df2c9cc7da8"
     ),
     "typed_rollover_handoff_foreign_candidate_ignored_bug.cfg": (
-        "26c8f79e41b77d0d09b346f7ec01ef9e28ddb6fe1b6955949d86e77a34f8452d"
+        "047275a974264b953baf70238e493325099c2460b005dbb7a04ae12d5413f465"
     ),
     "typed_rollover_handoff_foreign_receipt_bug.cfg": (
-        "32c2163fc241828932f10970cceaabc51f6ab4df2d64bffaca280cbaa9c088d1"
+        "6c4bc9b411e21f150a23dfa2f709bc2a34589e7a895e930decf82df6ad14054a"
     ),
     "typed_rollover_handoff_foreign_successor_bug.cfg": (
-        "cf309e4d31ccd85d63324421bc5906b73cd631e14d52f6616eaafd52cb2ff7a2"
+        "d2c662e48d933b2e8118fcce3b8e78fbdd2cb9fddea82b59f14dde82f7e556f5"
     ),
     "typed_rollover_handoff_forged_authenticated_close_prefix_bug.cfg": (
-        "73bfa67c71edf78a0168c352bcd4673c9208705adde5e598d80bad47f54db33c"
+        "b5b69ccaa8766b0a7f210aedb000d55db0cc851a2e1ee25ee62de1dd49a36757"
     ),
     "typed_rollover_handoff_generation_overflow_bug.cfg": (
-        "e48eb3219c7adce29098d4ed38c8e90486bafcec26ad77a9f570bcac406e27bc"
+        "1a91a8ad2158774310e18251447b6643863e50068169bfc62530263fc6b9bb2e"
     ),
     "typed_rollover_handoff_late_callback_bug.cfg": (
-        "82ebcd86857d4e7684de8179de844e8b71d296ef05dd8f068e793e593b905fdd"
+        "34ee3c2d0c682de0925613783449d5dfbb15254142f34a85b0188128fe93d31b"
     ),
     "typed_rollover_handoff_late_enqueue_bug.cfg": (
-        "173e5e8657af5771401a6f783e7f5825231889be090f290319935484db95086b"
+        "13016842c0df21e6d5efdd7a6f858619770a2c26304347afe4926ae4456bdb3e"
     ),
     "typed_rollover_handoff_missing_selected_state_bug.cfg": (
-        "12aa7b190e2832cb11ab3e46776b873064982925cd534b5b2fd8dd46babd7712"
+        "24b4db0f1fa54017035999b389464141627f51ed1279e460f4e837bfb84470c2"
     ),
     "typed_rollover_handoff_predecessor_artifact_accept_bug.cfg": (
-        "c3dda7ed274606c2509a7c0bccb5346844c1589b626de2a799e9ae3d39ad4f04"
+        "4d337f7b55fe2ea2dd3d5ecbba8768f9880f54c33709369692103422e01c1318"
     ),
     "typed_rollover_handoff_predecessor_context_accept_bug.cfg": (
-        "7ef1dbb51e82a5aa8b3b54a0c03f9e01528588da7183b966974506ae216e0efc"
+        "f362f2f8faa173ea7da8572237e80f098e5020418e17fd4ec2aa9ae5181e19bf"
     ),
     "typed_rollover_handoff_premature_mint_bug.cfg": (
-        "832fafb0805ebea8afc5aa0b3c6d99ada493a4047411f671a2a51a0c13ffe49a"
+        "191e34d9b4e3897f281e63a15999e9ca761d579a11308d8c37edb5bbb5dfdc0d"
     ),
     "typed_rollover_handoff_preserve_process_receipt_across_crash_bug.cfg": (
-        "0000000000000000000000000000000000000000000000000000000000000000"
+        "dc6828172645ec6cac3f57de2a8a4f507dafaabf98230a817730c108d8d23cb5"
     ),
     "typed_rollover_handoff_publish_memory_before_lifecycle_root_v3_commit_bug.cfg": (
-        "3f6d264eb271442f8a13e0d500263ec1d184e28f0e21356c632fc83a097c94f4"
+        "66b9b2ce6045be01c9225ed904ec397cdc43a7ee82decba080cb8198f5afe08f"
     ),
     "typed_rollover_handoff_retry_loss_bug.cfg": (
-        "e9439fb881583cfe831572ff8acaafdd1e9b269e323040df695df126cc3aba42"
+        "7c30dbe724a751aec3c012083493c1dee4fde6d192e4a88f50b144c6dfda3f35"
     ),
     "typed_rollover_handoff_reuse_root_selected_state_slot_bug.cfg": (
-        "8b8f068efe01af6d917750eeed2798796ceaa860fc10065f0b324ae1574e7b2e"
+        "b8f82d925fdb7b8e98033943640b711aa596991f8bdcb3cdca337cb9dbe9bd0c"
     ),
     "typed_rollover_handoff_root_commit_before_state_slot_bug.cfg": (
-        "13458e148ff03892e5b7d1f8c305ab55473eaafa26946f499685cd97d6d4f577"
+        "9d94abe53148e124adacef888e2f54a75648c7e521fac23da5d07da866d3ec63"
     ),
     "typed_rollover_handoff_root_generation_overflow_bug.cfg": (
-        "558f1822fe0120c4596ee04d3a7b6f983be5c30e2967eae016a93713e5c8e200"
+        "94242eac961422c567fed5da2f4c72479d719ab7887be9bcfaf3cdc5c1dd2e29"
     ),
     "typed_rollover_handoff_same_roster_generation_roll_bug.cfg": (
-        "25a606cfaf35b3877b61a8567c922be51cd608f0cc57618ee22e4d5bfdd392f3"
+        "c1f8e1ecba1e2e7ef1c5aa5e77287795f6514f0c7d7a5dabf298dd707fb219a6"
     ),
     "typed_rollover_handoff_skip_bootstrap_crash_history_bug.cfg": (
-        "0000000000000000000000000000000000000000000000000000000000000000"
+        "5a0c0045f81b636c42d42b9a32129c2f3301be1e7be7d32f7a26af5d72d1cbc3"
     ),
     "typed_rollover_handoff_skip_lifecycle_root_v3_crash_history_bug.cfg": (
-        "b1e3f7c2db9ca82f97422713c75e13a590545f53b96f50d05701d1179165686a"
+        "641626c1a0cc96125649d40dbd73b4432e153ef275a7567453c7c095f5a61d48"
     ),
     "typed_rollover_handoff_recover_uncommitted_state_slot_bug.cfg": (
-        "15d379240736ad9fdb0cea140337fa632c15538c38821200fceb44c0c2f7d426"
+        "24ed862807885af3f8f398a76cd5699ffac6a4d41a682a891d0ec76d358595f3"
     ),
     "typed_rollover_handoff_split_generation_hash_bug.cfg": (
-        "3e2a9a48c0238c8cece65f8ecea9bf0b1aa4da56908b283fba4b00017e8c1459"
+        "f2e349bc658353a272add46cf9e3c246150c9e10c6182eecce27caec56c11a3d"
     ),
     "typed_rollover_handoff_untyped_force_bug.cfg": (
-        "1015baca619f5c1b79670d481fa4144ab9561d138089f18ae6f58383a676ce82"
+        "c725dc6aa339a63eea289cdcbebf557cb45c6df45a1f63aea4ca32f8b22655b7"
     ),
     "typed_rollover_handoff_wrong_bootstrap_lifecycle_projection_bug.cfg": (
-        "0000000000000000000000000000000000000000000000000000000000000000"
+        "a916601a43baa2a7d85fe77670966890b81e85ea741eeabeaadab3170f9ee871"
     ),
 }
 
 _TYPED_ROLLOVER_HANDOFF_MUTATION_RUNNER_SHA256 = (
-    "fc57621198360ef34d7e9bf14e744182813b309da00d313f77fba0a227c19649"
+    "a2f057051176a706823cbfc848812824527e830d820d1ff1b626551a6c08bcda"
 )
 
 _TYPED_ROLLOVER_MODEL_SAFETY_PROOFLESS_THEOREMS = (
@@ -4690,6 +4696,12 @@ _PROOFLESS_RELEASE_SUPPORT_BY_THEOREM.update(
         for symbol in symbols.split(" / ")
     }
 )
+_PROOFLESS_RELEASE_DIRECT_CONSUMER_BY_THEOREM = {
+    (
+        "SumeragiV2AsyncTemporalClosureProofs",
+        "AsyncTemporalClosureTimeoutViewProgressObligation",
+    ): "timeout-view-liveness",
+}
 
 RETIRED_PATHS = (
     ROOT_DIR / "docs" / "formal" / "sumeragi",
@@ -6491,10 +6503,10 @@ _LOCKED_COMMIT_PROGRESS_WITNESS_HELPER_SHA256 = {
     ),
 }
 
-_PRODUCTION_LIVENESS_RELEASE_COUNT = 727
+_PRODUCTION_LIVENESS_RELEASE_COUNT = 732
 _PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT = 81
 _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
-    "53c85b2ca35797cf17b6939dbd1cc6d3a5e7653ccf0e7b37941c4bf79339ed96"
+    "e4f9c69b5465ae3203d289394f490b4d98adb895dae8a6e0362092d7549a7169"
 )
 _CLOSED_SIDECAR_PREFIX_HANDOFF_TEST_SHA256 = (
     "e92eb18ed0ef23e097e0bb59f002300ddb31b1b3d674b68c50d2bb11fb4da5cb"
@@ -6603,12 +6615,12 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
     ("production-v2-block-sync", "sumeragi::v2_block_sync::tests", 3),
     ("production-v2-apply", "sumeragi::v2_apply::tests", 1),
     ("production-v2-effects", "sumeragi::v2_effects::tests", 62),
-    ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 52),
+    ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 53),
     ("production-v2-runtime", "sumeragi::v2_runtime::tests", 39),
     ("production-v2-transport", "sumeragi::v2_transport::tests", 1),
     ("production-v2-recovery", "sumeragi::v2_recovery::tests", 3),
     ("production-v2-runner", "sumeragi::v2_runner::tests", 32),
-    ("production-v2-worker", "sumeragi::v2_worker::tests", 79),
+    ("production-v2-worker", "sumeragi::v2_worker::tests", 83),
     (
         "production-v2-watchdog",
         "sumeragi::status::v2_liveness_watchdog_tests",
@@ -12598,9 +12610,20 @@ def _proofless_release_theorem_errors(
             support_id = _PROOFLESS_RELEASE_SUPPORT_BY_THEOREM.get(
                 (module, symbol)
             )
+            direct_consumer_id = (
+                _PROOFLESS_RELEASE_DIRECT_CONSUMER_BY_THEOREM.get(
+                    (module, symbol)
+                )
+            )
             support_consumer = None
-            if not exact_entries and support_id is not None:
-                consumer_id = SUPPORT_PROOF_CONSUMER_BY_ID[support_id]
+            if not exact_entries and (
+                support_id is not None or direct_consumer_id is not None
+            ):
+                consumer_id = (
+                    direct_consumer_id
+                    if direct_consumer_id is not None
+                    else SUPPORT_PROOF_CONSUMER_BY_ID[support_id]
+                )
                 support_consumer_entries = [
                     obligation
                     for obligation in obligations
@@ -12619,8 +12642,12 @@ def _proofless_release_theorem_errors(
                         support_consumer = candidate
                         exact_entries = support_consumer_entries
             if len(exact_entries) != 1:
-                if support_id is not None:
-                    consumer_id = SUPPORT_PROOF_CONSUMER_BY_ID[support_id]
+                if support_id is not None or direct_consumer_id is not None:
+                    consumer_id = (
+                        direct_consumer_id
+                        if direct_consumer_id is not None
+                        else SUPPORT_PROOF_CONSUMER_BY_ID[support_id]
+                    )
                     errors.append(
                         f"{module}.tla:{extracted[1]}: proofless support "
                         f"theorem {module}!{symbol} must be transitively "
@@ -19560,7 +19587,19 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
         """,
     )
     require_exact_operator(model, "StateSlots", "{0, 1}")
+    # UnvalidatedRestart fault values are intentionally oracle labels over a
+    # structurally valid durable pair. This model checks fail-closed handling
+    # for each validator outcome; it does not establish reachability of
+    # concrete malformed root, slot, digest, or semantic debris.
     model_contracts: dict[str, tuple[str, ...]] = {
+        "Init": (
+            'startup = "UnvalidatedRestart"',
+            'startup # "UnvalidatedRestart" => fault = "None"',
+            "startupValidationFault |-> fault",
+            "ELSE LifecycleRootV3(initialSnapshot)",
+            "ELSE InitialLifecycleStateSlotsV3(initialSnapshot)",
+            'restartRequired |-> startup = "UnvalidatedRestart"',
+        ),
         "NoLifecycleSnapshot": (
             "version |-> 0",
             "rootGeneration |-> 0",
@@ -19698,7 +19737,7 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
         ),
         "ReplaceSuccessorLifecycleRootV3": (
             "ValidatedCandidateSuccessorStateSlotAheadOfRoot",
-            "LifecycleRootV3(state.candidateLifecycleSnapshotV3)",
+            "LifecycleRootV3( state.candidateLifecycleSnapshotV3)",
             '!.lifecycleCommitPhase = "RootReplaced"',
         ),
         "CommitSuccessorLifecycleRootV3": (
@@ -19714,7 +19753,7 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
             '!.failureReason = "CrashAfterLifecycleRootV3Commit"',
         ),
         "RestoreSuccessorLifecycleV3AfterCrash": (
-            "RootCommittedSuccessorAheadOfMemory",
+            "RootSelectedSuccessorAheadOfMemory",
             "state.durableJournalValidated",
             "RootSelectedLifecyclePairMatches(state)",
             "LifecycleSnapshotSemanticallyValid(DurableSnapshot(state))",
@@ -39451,10 +39490,14 @@ if !executor.can_admit_network_message_with_ingress_ownership(message, ingress_o
                 item_name,
                 errors,
                 f"crash-safe sidecar lifecycle {qualified_name} production item",
-                expected_attributes=("#[must_use]",)
-                if qualified_name
-                == "CertifiedMergeSidecarGenerationHintV1::canonical_hint_id"
-                else (),
+                expected_attributes=(
+                    ("#[must_use]",)
+                    if qualified_name
+                    == "CertifiedMergeSidecarGenerationHintV1::canonical_hint_id"
+                    else ("#[cfg(test)]",)
+                    if qualified_name == "MergeSidecarLifecycleJournal::state_path"
+                    else ()
+                ),
             )
 
     for helper_name, expected_sha256 in (
@@ -56457,21 +56500,21 @@ def _production_liveness_release_inventory_errors(
 
     documentation_claims = {
         repo_root / "docs" / "formal" / "sumeragi_v2" / "README.md": (
-            "current inventory therefore contains 727 tests across 38 modules.\n"
+            "current inventory therefore contains 732 tests across 38 modules.\n"
             "Together with the source-sealed command and tooling legs, the pre-network\n"
             f"corridor contains {_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} legs.",
             "canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
         ),
         repo_root / "docs" / "formal" / "sumeragi_v2" / "PROOF.md": (
-            "727-test, 38-module inventory. The complete source-sealed\n"
+            "732-test, 38-module inventory. The complete source-sealed\n"
             "pre-network corridor\ncontains "
             f"{_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} legs.",
             "canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
         ),
         repo_root / "docs" / "source" / "sumeragi_v2_liveness.md": (
-            "current source-bound inventory therefore contains 727 exact tests "
+            "current source-bound inventory therefore contains 732 exact tests "
             "across\n38 modules and "
             f"{_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} pre-network legs.",
             "Its canonical module/test TSV inventory SHA-256 is\n"

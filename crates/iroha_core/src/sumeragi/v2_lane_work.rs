@@ -15939,7 +15939,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn stranded_responder_control_queue_slot_refreshes_to_a_writable_trigger() {
+    fn stranded_responder_control_queue_slot_replaces_with_a_writable_trigger() {
         let CertifiedSidecarServerFixture {
             mut adapter,
             requester,
@@ -16000,7 +16000,7 @@ pub(super) mod tests {
                     route_b.clone(),
                     request.clone(),
                 )
-                .expect("an exact replay refreshes a full stranded route history"),
+                .expect("an exact replay replaces the stranded unwritable attempt"),
             V2LaneIngressOutcome::Inserted
         );
         assert_eq!(adapter.sidecar_effects.len(), 2);
@@ -16031,7 +16031,7 @@ pub(super) mod tests {
 
         assert!(
             routes.mark_reply_unwritable_while_delivery_active(&route_b),
-            "the refreshed exact route may independently start draining"
+            "the replacement exact route may independently start draining"
         );
         let mut later_request = request.clone();
         later_request.semantic_sequence = semantic_sequence(
