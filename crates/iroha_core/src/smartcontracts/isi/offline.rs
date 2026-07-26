@@ -77,17 +77,6 @@ fn labeled_invariant(label: &str, message: impl Into<String>) -> InstructionExec
     InstructionExecutionError::InvariantViolation(boxed)
 }
 
-fn ensure_offline_enabled(state_transaction: &StateTransaction<'_, '_>) -> Result<(), Error> {
-    if !state_transaction.settlement.offline.enabled {
-        return Err(labeled_invariant(
-            "offline_disabled",
-            "offline cash is disabled by validator configuration",
-        )
-        .into());
-    }
-    Ok(())
-}
-
 fn verify_legacy_note_signature(
     signature: &Signature,
     signer: &PublicKey,
@@ -6990,7 +6979,6 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            ensure_offline_enabled(state_transaction)?;
             let issue = self.issue;
             validate_legacy_note_certificate(&issue.key_certificate)?;
             if issue.amount <= Numeric::zero() {
@@ -7072,7 +7060,6 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            ensure_offline_enabled(state_transaction)?;
             let redemption = self.redemption;
             if redemption.input_nullifiers.is_empty() || redemption.input_nullifiers.len() > 4 {
                 return Err(labeled_invariant(
@@ -7225,7 +7212,6 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            ensure_offline_enabled(state_transaction)?;
             let audit = self.audit;
             if audit.input_nullifiers.is_empty()
                 || audit.input_nullifiers.len() > 4
@@ -7405,7 +7391,6 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            ensure_offline_enabled(state_transaction)?;
             let registration = self.registration;
             let (registration_hash, admission_policy_hash) =
                 validate_offline_device_attestation_registration(
@@ -7576,7 +7561,6 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            ensure_offline_enabled(state_transaction)?;
             if !can_manage_offline_device_attestation_policy(state_transaction, authority) {
                 return Err(labeled_invariant(
                     "unauthorized_controller",
@@ -8153,7 +8137,6 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            ensure_offline_enabled(state_transaction)?;
             ensure_kagemusha_recursive_release_v4_activation_authorized(
                 state_transaction,
                 authority,
@@ -8336,7 +8319,6 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            ensure_offline_enabled(state_transaction)?;
             let request = self.request;
             request
                 .validate_public_binding()
@@ -8584,7 +8566,6 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            ensure_offline_enabled(state_transaction)?;
             let request = self.request;
             request
                 .validate_public_binding()
@@ -9054,31 +9035,67 @@ pub mod isi {
         }
 
         #[test]
-        fn disabled_profile_rejects_offline_mutation_before_state_change() {
+        fn every_offline_executor_is_independent_of_local_service_switch() {
+            let source = include_str!("offline.rs");
+            let executor_names = [
+                "IssueOfflineNote",
+                "RedeemOfflineNote",
+                "AuditOfflineNote",
+                "RegisterOfflineDeviceAttestation",
+                "SetOfflineDeviceAttestationPolicy",
+                "ActivateKagemushaRecursiveReleaseV4",
+                "TopUpKagemushaRecursiveV4",
+                "RedeemKagemushaRecursiveV4",
+            ];
+            let starts = executor_names
+                .iter()
+                .map(|name| {
+                    source
+                        .find(&format!("impl Execute for {name}"))
+                        .unwrap_or_else(|| panic!("missing offline executor {name}"))
+                })
+                .collect::<Vec<_>>();
+            let last_start = *starts.last().expect("offline executor list is non-empty");
+            let tests_start = last_start
+                + source[last_start..]
+                    .find("#[cfg(test)]")
+                    .expect("offline executor test module");
+
+            for (index, name) in executor_names.iter().enumerate() {
+                let end = starts.get(index + 1).copied().unwrap_or(tests_start);
+                let executor = &source[starts[index]..end];
+                assert!(
+                    !executor.contains("settlement.offline.enabled")
+                        && !executor.contains("ensure_offline_enabled"),
+                    "{name} must not derive consensus validity from a process-local service switch"
+                );
+            }
+        }
+
+        #[test]
+        fn local_offline_switch_does_not_change_offline_instruction_execution() {
             let state = offline_test_state();
             let mut block = state.block(offline_test_header());
             let mut state_transaction = block.transaction();
+            state_transaction.world.add_account_permission(
+                &ALICE_ID,
+                offline_permission(CAN_MANAGE_OFFLINE_DEVICE_ATTESTATION_POLICY_PERMISSION),
+            );
             state_transaction.settlement.offline.enabled = false;
 
-            let error = SetOfflineDeviceAttestationPolicy::new(
+            SetOfflineDeviceAttestationPolicy::new(
                 default_offline_device_attestation_policy()
                     .expect("built-in policy fixture must be valid"),
             )
             .execute(&ALICE_ID, &mut state_transaction)
-            .expect_err("disabled profile must reject every offline mutation");
-            assert!(
-                error
-                    .to_string()
-                    .contains("offline_reason::offline_disabled"),
-                "unexpected disabled-profile rejection: {error}"
-            );
+            .expect("process-local service switches must not affect consensus execution");
             assert!(
                 state_transaction
                     .world
                     .smart_contract_state
                     .get(&*OFFLINE_DEVICE_ATTESTATION_POLICY_STATE_KEY)
-                    .is_none(),
-                "rejected policy mutation must not change consensus state"
+                    .is_some(),
+                "valid offline instructions must execute regardless of local service state"
             );
         }
 

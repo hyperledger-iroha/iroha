@@ -4557,6 +4557,17 @@ fn taira_config_enables_untrusted_cid_hosting() {
     let raw = fs::read_to_string(&config_path).expect("Taira config should exist");
     let doc: TomlValue = toml::from_str(&raw).expect("Taira config should be valid TOML");
 
+    assert_eq!(
+        doc.get("settlement")
+            .and_then(TomlValue::as_table)
+            .and_then(|settlement| settlement.get("offline"))
+            .and_then(TomlValue::as_table)
+            .and_then(|offline| offline.get("enabled"))
+            .and_then(TomlValue::as_bool),
+        Some(true),
+        "Taira must explicitly enable mandatory offline cash"
+    );
+
     let dataspaces = doc
         .get("nexus")
         .and_then(TomlValue::as_table)

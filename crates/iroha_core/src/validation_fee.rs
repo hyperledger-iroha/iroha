@@ -7,7 +7,8 @@ use iroha_crypto::{Hash, HashOf, blake2::Blake2b512};
 #[cfg(test)]
 use iroha_data_model::validation_fee::{
     VALIDATION_FEE_PLAIN_MAX_MEMBERS_V1, ValidationFeePlainElectorateEligibilityRuleV1,
-    ValidationFeePlainElectorateRulesV1,
+    ValidationFeePlainElectorateMemberV1, ValidationFeePlainElectorateRulesV1,
+    ValidationFeePlainElectorateSnapshotV1,
 };
 use iroha_data_model::{
     ValidationFail,
@@ -1858,12 +1859,15 @@ fn validate_parliament_authorization(
                 "authorized Parliament approval records are missing".to_owned(),
             )
         })?;
-    if REQUIRED_BODIES.iter().copied().any(|body| {
-        !approvals.quorum_met(body, snapshot.selection_epoch)
-            || approvals.rejection_quorum_met(body, snapshot.selection_epoch)
-    }) {
+    if approvals.approval_gate_height.is_none()
+        || REQUIRED_BODIES.iter().copied().any(|body| {
+            !approvals.quorum_met(body, snapshot.selection_epoch)
+                || approvals.rejection_quorum_met(body, snapshot.selection_epoch)
+        })
+    {
         return Err(ValidationFeeAdmissionError::InvalidPolicyRegistry(
-            "all seven Parliament bodies do not retain affirmative quorum".to_owned(),
+            "all seven Parliament bodies and their immutable approval gate are not retained"
+                .to_owned(),
         ));
     }
     let finalized = proposal.finalization_evidence.as_ref().ok_or_else(|| {
@@ -1895,6 +1899,52 @@ fn validate_parliament_authorization(
     {
         return Err(ValidationFeeAdmissionError::InvalidPolicyRegistry(
             "finalized referendum evidence differs from the typed registry authorization"
+                .to_owned(),
+        ));
+    }
+    let rules = match exact_kind {
+        iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(payload) => {
+            &payload.plain_electorate_rules
+        }
+        iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(
+            payload,
+        ) => &payload.plain_electorate_rules,
+        _ => {
+            return Err(ValidationFeeAdmissionError::InvalidPolicyRegistry(
+                "validation-fee authorization references a non-validation-fee proposal".to_owned(),
+            ));
+        }
+    };
+    let electorate = approvals
+        .validation_fee_plain_electorate_snapshot
+        .as_ref()
+        .ok_or_else(|| {
+            ValidationFeeAdmissionError::InvalidPolicyRegistry(
+                "authorized proposal has no frozen PLAIN electorate snapshot".to_owned(),
+            )
+        })?;
+    if electorate
+        .context_error(authorization.proposal_id, &proposal.proposer, rules)
+        .is_some()
+        || electorate.captured_at_height != referendum.h_start
+        || approvals.approval_gate_height != Some(electorate.approval_gate_height)
+        || authorization
+            .plain_electorate_snapshot_anchor_error(electorate)
+            .is_some()
+    {
+        return Err(ValidationFeeAdmissionError::InvalidPolicyRegistry(
+            "frozen PLAIN electorate snapshot differs from retained governance authorization"
+                .to_owned(),
+        ));
+    }
+    if finalized.mode != iroha_data_model::isi::governance::VotingMode::Plain
+        || finalized.finalized_at_height != referendum.h_end
+        || finalized.min_turnout != rules.min_turnout
+        || finalized.approval_threshold_numerator != rules.approval_threshold_numerator
+        || finalized.approval_threshold_denominator != rules.approval_threshold_denominator
+    {
+        return Err(ValidationFeeAdmissionError::InvalidPolicyRegistry(
+            "finalized referendum evidence differs from the proposal-bound PLAIN electorate rules"
                 .to_owned(),
         ));
     }
@@ -3695,6 +3745,10 @@ mod tests {
     const TEST_VALIDATION_FEE_ASSET_SCALE: u8 =
         iroha_data_model::validation_fee::VALIDATION_FEE_DS_SCALE;
     const TEST_VALIDATION_FEE_MINOR_UNITS: u64 = 10;
+    const TEST_REFERENDUM_START_HEIGHT: u64 = 10;
+    const TEST_POLICY_EFFECTIVE_HEIGHT: u64 = TEST_REFERENDUM_START_HEIGHT
+        + 3_600
+        + iroha_data_model::validation_fee::VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS;
 
     fn key_pair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("key pair")
@@ -3728,8 +3782,8 @@ mod tests {
             fee: iroha_data_model::validation_fee::initial_validation_fee_amount(),
             treasury_account_id: treasury.clone(),
             charging_mode: ValidationFeeChargingMode::PerQualifyingTransferInstruction,
-            effective_from_height: 10,
-            expires_after_height: Some(100),
+            effective_from_height: TEST_POLICY_EFFECTIVE_HEIGHT,
+            expires_after_height: TEST_POLICY_EFFECTIVE_HEIGHT.checked_add(100),
             exemption_classes: Vec::new(),
             treasury_payout_binding: None,
         }
@@ -3846,18 +3900,57 @@ mod tests {
         root
     }
 
-    fn test_authorization(proposal_id: [u8; 32]) -> ValidationFeeParliamentAuthorizationV1 {
+    fn test_plain_electorate_snapshot(
+        proposal_id: [u8; 32],
+        captured_at_height: u64,
+        approval_gate_height: u64,
+        rules: &ValidationFeePlainElectorateRulesV1,
+    ) -> ValidationFeePlainElectorateSnapshotV1 {
+        ValidationFeePlainElectorateSnapshotV1::from_canonical_members(
+            proposal_id,
+            account(250),
+            captured_at_height,
+            approval_gate_height,
+            vec![ValidationFeePlainElectorateMemberV1 {
+                account_id: account(250),
+                bonded_height: approval_gate_height,
+                bonded_amount: rules.citizenship_amount.clone(),
+            }],
+        )
+        .expect("canonical test PLAIN electorate snapshot")
+    }
+
+    fn test_authorization(
+        proposal_id: [u8; 32],
+        policy_effective_height: u64,
+    ) -> ValidationFeeParliamentAuthorizationV1 {
+        let rules = test_plain_electorate_rules();
+        let enacted_at_height = policy_effective_height
+            .checked_sub(
+                iroha_data_model::validation_fee::VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS,
+            )
+            .expect("test policy leaves the full activation delay");
+        let lower = enacted_at_height
+            .checked_sub(rules.ballot_duration_blocks)
+            .expect("test policy leaves the full referendum window");
+        let upper = enacted_at_height
+            .checked_sub(1)
+            .expect("test referendum end");
+        let approval_gate_height = lower.checked_sub(1).expect("test approval gate");
+        let electorate =
+            test_plain_electorate_snapshot(proposal_id, lower, approval_gate_height, &rules);
         ValidationFeeParliamentAuthorizationV1 {
             proposal_id,
             proposal_fingerprint: proposal_id,
             proposal_time_roster_root: test_roster_root(),
-            referendum_window: ValidationFeeGovernanceWindowV1 {
-                lower: 1,
-                upper: 1_000,
-            },
+            plain_electorate_snapshot_root: electorate.roster_root,
+            plain_electorate_snapshot_member_count: electorate.member_count,
+            plain_electorate_snapshot_captured_at_height: electorate.captured_at_height,
+            plain_electorate_snapshot_approval_gate_height: electorate.approval_gate_height,
+            referendum_window: ValidationFeeGovernanceWindowV1 { lower, upper },
             finalization: ValidationFeeFinalizationEvidenceV1 {
                 referendum_id: proposal_id,
-                finalized_at_height: 8,
+                finalized_at_height: upper,
                 mode: ValidationFeeGovernanceVotingModeV1::Plain,
                 approve: 1,
                 reject: 0,
@@ -3867,7 +3960,7 @@ mod tests {
                 approval_threshold_denominator: 2,
                 approved: true,
             },
-            enacted_at_height: 9,
+            enacted_at_height,
         }
     }
 
@@ -3912,7 +4005,10 @@ mod tests {
                     let lifecycle_id = lifecycle_kind.fingerprint();
                     ValidationFeePayoutLifecycleReferenceV1 {
                         lifecycle_seal,
-                        parliament_authorization: test_authorization(lifecycle_id),
+                        parliament_authorization: test_authorization(
+                            lifecycle_id,
+                            policy.effective_from_height,
+                        ),
                         plain_electorate_rules: plain_electorate_rules.clone(),
                     }
                 });
@@ -3928,7 +4024,7 @@ mod tests {
                 ValidationFeePolicyRegistryEntryV1::from_enactment(
                     policy.clone(),
                     plain_electorate_rules,
-                    test_authorization(proposal_id),
+                    test_authorization(proposal_id, policy.effective_from_height),
                     payout_lifecycle,
                 )
                 .expect("registry entry")
@@ -3952,6 +4048,26 @@ mod tests {
         let proposal_id = authorization.proposal_id;
         let referendum_id = hex::encode(proposal_id);
         let bodies = test_parliament_bodies();
+        let plain_electorate_rules = match &kind {
+            iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(payload) => {
+                &payload.plain_electorate_rules
+            }
+            iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(
+                payload,
+            ) => &payload.plain_electorate_rules,
+            _ => panic!("test authorization requires a validation-fee proposal"),
+        };
+        let electorate = test_plain_electorate_snapshot(
+            proposal_id,
+            authorization.plain_electorate_snapshot_captured_at_height,
+            authorization.plain_electorate_snapshot_approval_gate_height,
+            plain_electorate_rules,
+        );
+        assert_eq!(
+            authorization.plain_electorate_snapshot_anchor_error(&electorate),
+            None,
+            "test authorization must exactly anchor its retained electorate"
+        );
         state_tx.world.governance_proposals.insert(
             proposal_id,
             crate::state::GovernanceProposalRecord {
@@ -4019,6 +4135,9 @@ mod tests {
                 .ensure_stage(body, 1, 1, 10_000)
                 .record(account(250));
         }
+        approvals.approval_gate_height =
+            Some(authorization.plain_electorate_snapshot_approval_gate_height);
+        approvals.validation_fee_plain_electorate_snapshot = Some(electorate);
         state_tx
             .world
             .governance_stage_approvals
@@ -5191,13 +5310,10 @@ mod tests {
 
     #[test]
     fn enacted_initial_policy_remains_inactive_until_delayed_effective_height() {
-        let mut future = policy_with_treasury_payout_lifecycle(treasury_payout_binding(
+        let future = policy_with_treasury_payout_lifecycle(treasury_payout_binding(
             test_contract_address(),
             b"future-policy-payout",
         ));
-        future.effective_from_height =
-            9 + iroha_data_model::validation_fee::VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS;
-        future.expires_after_height = future.effective_from_height.checked_add(100);
         let registry = policy_registry(std::slice::from_ref(&future));
         let state = crate::state::State::new_with_chain_for_testing(
             crate::state::World::default(),
@@ -6227,8 +6343,6 @@ mod tests {
             prelude::{Account, AssetDefinition, Domain},
             smart_contract::ContractAddress,
         };
-        use nonzero_ext::nonzero;
-
         let deployer_key = key_pair(55);
         let deployer = AccountId::new(deployer_key.public_key().clone());
         let domain_id = DomainId::try_new("contracts", "universal").expect("domain id");
@@ -6265,7 +6379,15 @@ mod tests {
             hashes.commit_for_tests();
         }
 
-        let header = BlockHeader::new(nonzero!(10_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(
+            std::num::NonZeroU64::new(TEST_POLICY_EFFECTIVE_HEIGHT)
+                .expect("test policy effective height is non-zero"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
         let mut block = state.block(header);
         let mut state_tx = block.transaction();
         let deployment_permission: iroha_data_model::permission::Permission =
@@ -6813,8 +6935,6 @@ mod tests {
     #[test]
     fn active_policy_admission_rejects_completed_ivm_proved_axt() {
         use iroha_data_model::block::BlockHeader;
-        use nonzero_ext::nonzero;
-
         let deployer_key = key_pair(55);
         let deployer = AccountId::new(deployer_key.public_key().clone());
         let state = crate::state::State::new_with_chain_for_testing(
@@ -6829,7 +6949,15 @@ mod tests {
             hashes.commit_for_tests();
         }
 
-        let header = BlockHeader::new(nonzero!(10_u64), None, None, None, 0, 0);
+        let header = BlockHeader::new(
+            std::num::NonZeroU64::new(TEST_POLICY_EFFECTIVE_HEIGHT)
+                .expect("test policy effective height is non-zero"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
         let mut block = state.block(header);
         let mut state_tx = block.transaction();
         let policy =

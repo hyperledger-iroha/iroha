@@ -8221,6 +8221,13 @@ fn validate_validation_fee_payout_binding(
 fn validation_fee_plain_electorate_rules_from_json(
     payload: &str,
 ) -> napi::Result<ValidationFeePlainElectorateRulesV1> {
+    let value: json::Value = json::from_json(payload).map_err(norito_to_napi)?;
+    validation_fee_plain_electorate_rules_from_json_value(value)
+}
+
+fn validation_fee_plain_electorate_rules_from_json_value(
+    value: json::Value,
+) -> napi::Result<ValidationFeePlainElectorateRulesV1> {
     const RULES_FIELDS: &[&str] = &[
         "voting_asset_id",
         "ballot_amount",
@@ -8236,7 +8243,6 @@ fn validation_fee_plain_electorate_rules_from_json(
     ];
     const ELIGIBILITY_RULE_FIELDS: &[&str] = &["rule", "value"];
 
-    let value: json::Value = json::from_json(payload).map_err(norito_to_napi)?;
     let json::Value::Object(fields) = &value else {
         return Err(napi::Error::new(
             napi::Status::InvalidArg,
@@ -8297,6 +8303,7 @@ fn validation_fee_policy_instruction_from_json(value: json::Value) -> napi::Resu
     const INSTRUCTION_FIELDS: &[&str] = &[
         "policy",
         "payout_lifecycle_proposal_id",
+        "plain_electorate_rules",
         "referendum_window",
         "mode",
     ];
@@ -8320,6 +8327,12 @@ fn validation_fee_policy_instruction_from_json(value: json::Value) -> napi::Resu
         json::Value::Null => None,
         value => Some(json::from_value::<[u8; 32]>(value).map_err(norito_to_napi)?),
     };
+    let plain_electorate_rules =
+        validation_fee_plain_electorate_rules_from_json_value(required_value(
+            &mut fields,
+            "plain_electorate_rules",
+            "ProposeValidationFeePolicy",
+        )?)?;
     let referendum_window = match required_value(
         &mut fields,
         "referendum_window",
@@ -8359,6 +8372,7 @@ fn validation_fee_policy_instruction_from_json(value: json::Value) -> napi::Resu
     Ok(ProposeValidationFeePolicy {
         policy,
         payout_lifecycle_proposal_id,
+        plain_electorate_rules,
         referendum_window,
         mode,
     }
@@ -11137,6 +11151,10 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         inner.insert(
             "payout_lifecycle_proposal_id".to_owned(),
             json::to_value(&propose.payout_lifecycle_proposal_id).map_err(norito_to_napi)?,
+        );
+        inner.insert(
+            "plain_electorate_rules".to_owned(),
+            json::to_value(&propose.plain_electorate_rules).map_err(norito_to_napi)?,
         );
         inner.insert(
             "referendum_window".to_owned(),
@@ -23852,6 +23870,7 @@ seiyaku Privacy {
         let instruction: InstructionBox = ProposeValidationFeePolicy {
             policy,
             payout_lifecycle_proposal_id,
+            plain_electorate_rules: validation_fee_plain_electorate_rules_fixture(),
             referendum_window: Some(AtWindow {
                 lower: 100,
                 upper: 140,
@@ -23937,6 +23956,7 @@ seiyaku Privacy {
         let instruction: InstructionBox = ProposeValidationFeePolicy {
             policy: validation_fee_policy_fixture(None),
             payout_lifecycle_proposal_id: None,
+            plain_electorate_rules: validation_fee_plain_electorate_rules_fixture(),
             referendum_window: Some(AtWindow {
                 lower: 100,
                 upper: 140,

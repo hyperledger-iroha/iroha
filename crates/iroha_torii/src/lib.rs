@@ -12637,6 +12637,22 @@ fn strong_etag_for_representation(bytes: &[u8]) -> String {
     format!("\"{}\"", hex::encode(sha2::Sha256::digest(bytes)))
 }
 
+#[cfg(feature = "app_api")]
+const PUBLIC_TAIRA_CHAIN_ID: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
+
+#[cfg(feature = "app_api")]
+fn chain_requires_mandatory_offline(chain_id: &ChainId) -> bool {
+    matches!(
+        chain_id.as_str(),
+        PUBLIC_TAIRA_CHAIN_ID | "iroha3-taira" | "taira"
+    )
+}
+
+#[cfg(feature = "app_api")]
+fn offline_service_is_mandatory(chain_id: &ChainId, configured_enabled: bool) -> bool {
+    configured_enabled || chain_requires_mandatory_offline(chain_id)
+}
+
 /// Enforce the complete mandatory offline-cash invariant after Kura replay and
 /// before the node starts Kura writing, networking, consensus, or Torii.
 ///
@@ -12695,6 +12711,25 @@ pub fn ensure_mandatory_offline_configuration(
         return Err("torii.kagemusha_commands is mandatory for offline cash".to_owned());
     }
     Ok(())
+}
+
+#[cfg(feature = "app_api")]
+/// Enforce chain-profile requirements in addition to local offline configuration.
+///
+/// Public Taira validators must never join with offline cash disabled. Other
+/// profiles may disable only local service surfaces; consensus execution stays
+/// independent of this process-local switch.
+pub fn ensure_mandatory_offline_configuration_for_chain(
+    chain_id: &ChainId,
+    offline_config: &iroha_config::parameters::actual::Offline,
+    command_config: Option<&iroha_config::parameters::actual::ToriiKagemushaCommands>,
+) -> Result<(), String> {
+    if chain_requires_mandatory_offline(chain_id) && !offline_config.enabled {
+        return Err(format!(
+            "public Taira chain `{chain_id}` requires settlement.offline.enabled=true"
+        ));
+    }
+    ensure_mandatory_offline_configuration(offline_config, command_config)
 }
 
 #[cfg(feature = "app_api")]
@@ -12814,7 +12849,7 @@ pub fn ensure_mandatory_offline_startup_readiness(
     command_config: Option<&iroha_config::parameters::actual::ToriiKagemushaCommands>,
     fee_asset_selector: &str,
 ) -> Result<(), String> {
-    ensure_mandatory_offline_configuration(offline_config, command_config)?;
+    ensure_mandatory_offline_configuration_for_chain(chain_id, offline_config, command_config)?;
     if !offline_config.enabled {
         return Ok(());
     }
@@ -13396,16 +13431,18 @@ async fn handler_offline_recipient_lineage(
 mod offline_kagemusha_readiness_tests {
     use std::collections::BTreeMap;
 
-    use iroha_data_model::asset::AssetDefinitionId;
+    use iroha_data_model::{ChainId, asset::AssetDefinitionId};
 
     use super::{
-        encode_offline_readiness_representation, ensure_mandatory_offline_configuration,
+        PUBLIC_TAIRA_CHAIN_ID, encode_offline_readiness_representation,
+        ensure_mandatory_offline_configuration, ensure_mandatory_offline_configuration_for_chain,
         ensure_offline_readiness_verifier_roles_are_distinct,
         mandatory_offline_escrow_bindings_after_replay, mandatory_offline_probe_status,
         offline_kagemusha_asset_transfer_verifier_record,
         offline_kagemusha_readiness_capability_flags, offline_kagemusha_readiness_verifier_record,
         offline_kagemusha_recursive_v4_evaluation_from_resolution, offline_readiness_blocker,
-        offline_redeem_body_limit, offline_top_up_body_limit, strong_etag_for_representation,
+        offline_redeem_body_limit, offline_service_is_mandatory, offline_top_up_body_limit,
+        strong_etag_for_representation,
     };
 
     #[test]
@@ -13423,6 +13460,15 @@ mod offline_kagemusha_readiness_tests {
             mandatory_offline_probe_status(false, false),
             axum::http::StatusCode::OK,
             "an explicitly disabled optional service cannot fail node readiness",
+        );
+        let public_taira = ChainId::from(PUBLIC_TAIRA_CHAIN_ID);
+        assert_eq!(
+            mandatory_offline_probe_status(
+                offline_service_is_mandatory(&public_taira, false),
+                false,
+            ),
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            "public Taira must remain fail-closed when local config disables offline cash",
         );
     }
 
@@ -13520,6 +13566,30 @@ mod offline_kagemusha_readiness_tests {
         let error = ensure_mandatory_offline_configuration(&offline, None)
             .expect_err("disabled profiles must reject dormant escrow configuration");
         assert!(error.contains("enabled=false"));
+    }
+
+    #[test]
+    fn public_taira_profile_rejects_disabled_offline_service() {
+        let offline = iroha_config::parameters::actual::Offline {
+            enabled: false,
+            ..iroha_config::parameters::actual::Offline::default()
+        };
+        for chain_id in [PUBLIC_TAIRA_CHAIN_ID, "iroha3-taira", "taira"] {
+            let chain_id = ChainId::from(chain_id);
+            let error = ensure_mandatory_offline_configuration_for_chain(&chain_id, &offline, None)
+                .expect_err("public Taira must not start with offline cash disabled");
+            assert!(
+                error.contains("requires settlement.offline.enabled=true"),
+                "unexpected Taira profile rejection: {error}"
+            );
+        }
+
+        ensure_mandatory_offline_configuration_for_chain(
+            &ChainId::from("generic-offline-optional-chain"),
+            &offline,
+            None,
+        )
+        .expect("non-Taira profiles may disable local offline service surfaces");
     }
 
     #[test]
@@ -17322,7 +17392,8 @@ fn mandatory_offline_status_snapshot(
     app: &AppState,
 ) -> iroha_torii_shared::offline_api::OfflineStatus {
     let offline_config = app.state.view().settlement.offline.clone();
-    if !offline_config.enabled {
+    let mandatory = offline_service_is_mandatory(app.chain_id.as_ref(), offline_config.enabled);
+    if !mandatory {
         return iroha_torii_shared::offline_api::OfflineStatus {
             mandatory: false,
             cash_handoff_capability:
@@ -17417,7 +17488,7 @@ fn mandatory_offline_probe_status(mandatory: bool, ready: bool) -> StatusCode {
 #[cfg(feature = "app_api")]
 fn mandatory_offline_probe_response(app: &AppState) -> AxResponse {
     let offline_config = app.state.view().settlement.offline.clone();
-    let mandatory = offline_config.enabled;
+    let mandatory = offline_service_is_mandatory(app.chain_id.as_ref(), offline_config.enabled);
     let command_config = app
         .offline_commands
         .as_deref()
@@ -55719,6 +55790,10 @@ impl Torii {
             mount_post!(
                 VALIDATION_FEE_PROPOSAL_DRAFT,
                 validation_fee_api::handler_proposal_draft
+            );
+            mount_post!(
+                VALIDATION_FEE_PLAIN_BALLOT_DRAFT,
+                validation_fee_api::handler_plain_ballot_draft
             );
             mount_get!(GOV_PROPOSAL_GET, handler_gov_proposal_get);
             mount_get!(GOV_LOCKS_GET, handler_gov_locks_get);

@@ -53862,12 +53862,15 @@ mod validation_fee_torii_ingress_tests {
         transaction::SignedTransaction,
         validation_fee::{
             VALIDATION_FEE_DS_SCALE, VALIDATION_FEE_INSTRUCTION_INDEX_METADATA_KEY,
-            VALIDATION_FEE_POLICY_HASH_METADATA_KEY, VALIDATION_FEE_POLICY_SCHEMA_VERSION,
-            VALIDATION_FEE_POLICY_VERSION_METADATA_KEY, ValidationFeeChargingMode,
-            ValidationFeeFinalizationEvidenceV1, ValidationFeeGovernanceVotingModeV1,
-            ValidationFeeGovernanceWindowV1, ValidationFeeMultisigMarkerV1,
-            ValidationFeeParliamentAuthorizationV1, ValidationFeePolicyRegistryEntryV1,
-            ValidationFeePolicyRegistryV1, ValidationFeePolicyV1,
+            VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS, VALIDATION_FEE_POLICY_HASH_METADATA_KEY,
+            VALIDATION_FEE_POLICY_SCHEMA_VERSION, VALIDATION_FEE_POLICY_VERSION_METADATA_KEY,
+            ValidationFeeChargingMode, ValidationFeeFinalizationEvidenceV1,
+            ValidationFeeGovernanceVotingModeV1, ValidationFeeGovernanceWindowV1,
+            ValidationFeeMultisigMarkerV1, ValidationFeeParliamentAuthorizationV1,
+            ValidationFeePlainElectorateEligibilityRuleV1, ValidationFeePlainElectorateMemberV1,
+            ValidationFeePlainElectorateRulesV1, ValidationFeePlainElectorateSnapshotV1,
+            ValidationFeePolicyRegistryEntryV1, ValidationFeePolicyRegistryV1,
+            ValidationFeePolicyV1,
         },
     };
     use iroha_executor_data_model::isi::multisig::MultisigPropose;
@@ -53878,6 +53881,14 @@ mod validation_fee_torii_ingress_tests {
 
     const TEST_VALIDATION_FEE_ASSET_SCALE: u8 = VALIDATION_FEE_DS_SCALE;
     const TEST_VALIDATION_FEE_MINOR_UNITS: u64 = 10;
+    const TEST_REFERENDUM_START_HEIGHT: u64 = 1;
+    const TEST_REFERENDUM_DURATION_BLOCKS: u64 = 3_600;
+    const TEST_REFERENDUM_END_HEIGHT: u64 =
+        TEST_REFERENDUM_START_HEIGHT + TEST_REFERENDUM_DURATION_BLOCKS - 1;
+    const TEST_POLICY_ENACTMENT_HEIGHT: u64 = TEST_REFERENDUM_END_HEIGHT + 1;
+    const TEST_POLICY_EFFECTIVE_HEIGHT: u64 =
+        TEST_POLICY_ENACTMENT_HEIGHT + VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS;
+    const TEST_ACTIVE_VALIDATION_HEIGHT: u64 = TEST_POLICY_EFFECTIVE_HEIGHT + 1;
 
     fn fixture_key_pair(seed: u8, algorithm: Algorithm, context: &'static str) -> KeyPair {
         checked_routing_fixture_keypair(seed, algorithm, context)
@@ -54031,8 +54042,8 @@ mod validation_fee_torii_ingress_tests {
             fee: iroha_data_model::validation_fee::initial_validation_fee_amount(),
             treasury_account_id: treasury,
             charging_mode: ValidationFeeChargingMode::PerQualifyingTransferInstruction,
-            effective_from_height: 3,
-            expires_after_height: Some(100),
+            effective_from_height: TEST_POLICY_EFFECTIVE_HEIGHT,
+            expires_after_height: TEST_POLICY_EFFECTIVE_HEIGHT.checked_add(100),
             exemption_classes: Vec::new(),
             treasury_payout_binding: None,
         }
@@ -54094,22 +54105,58 @@ mod validation_fee_torii_ingress_tests {
         );
         let mut roster_root = [0; 32];
         roster_root.copy_from_slice(&roster_digest[..32]);
+        let plain_electorate_rules = ValidationFeePlainElectorateRulesV1 {
+            voting_asset_id: policy.ds_asset_id.clone(),
+            ballot_amount: 150_u64.into(),
+            ballot_duration_blocks: TEST_REFERENDUM_DURATION_BLOCKS,
+            citizenship_amount: 10_000_u64.into(),
+            max_members: 256,
+            conviction_step_blocks: 100,
+            max_conviction: 6,
+            min_turnout: 1,
+            approval_threshold_numerator: 1,
+            approval_threshold_denominator: 2,
+            eligibility_rule:
+                ValidationFeePlainElectorateEligibilityRuleV1::ProposalOperatorAtOrBeforeGateOthersAfterGate,
+        };
         let kind = ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
             policy: policy.clone(),
             payout_lifecycle_proposal_id: None,
+            plain_electorate_rules: plain_electorate_rules.clone(),
         });
         let proposal_id = kind.fingerprint();
+        let approval_gate_height = TEST_REFERENDUM_START_HEIGHT - 1;
+        let electorate = ValidationFeePlainElectorateSnapshotV1::from_canonical_members(
+            proposal_id,
+            authority.clone(),
+            TEST_REFERENDUM_START_HEIGHT,
+            approval_gate_height,
+            vec![ValidationFeePlainElectorateMemberV1 {
+                account_id: authority.clone(),
+                bonded_height: approval_gate_height,
+                bonded_amount: plain_electorate_rules.citizenship_amount.clone(),
+            }],
+        )
+        .expect("canonical validation-fee Torii PLAIN electorate snapshot");
+        assert_eq!(
+            electorate.context_error(proposal_id, authority, &plain_electorate_rules),
+            None
+        );
         let authorization = ValidationFeeParliamentAuthorizationV1 {
             proposal_id,
             proposal_fingerprint: proposal_id,
             proposal_time_roster_root: roster_root,
+            plain_electorate_snapshot_root: electorate.roster_root,
+            plain_electorate_snapshot_member_count: electorate.member_count,
+            plain_electorate_snapshot_captured_at_height: electorate.captured_at_height,
+            plain_electorate_snapshot_approval_gate_height: electorate.approval_gate_height,
             referendum_window: ValidationFeeGovernanceWindowV1 {
-                lower: 1,
-                upper: 100,
+                lower: TEST_REFERENDUM_START_HEIGHT,
+                upper: TEST_REFERENDUM_END_HEIGHT,
             },
             finalization: ValidationFeeFinalizationEvidenceV1 {
                 referendum_id: proposal_id,
-                finalized_at_height: 2,
+                finalized_at_height: TEST_REFERENDUM_END_HEIGHT,
                 mode: ValidationFeeGovernanceVotingModeV1::Plain,
                 approve: 1,
                 reject: 0,
@@ -54119,21 +54166,29 @@ mod validation_fee_torii_ingress_tests {
                 approval_threshold_denominator: 2,
                 approved: true,
             },
-            enacted_at_height: 2,
+            enacted_at_height: TEST_POLICY_ENACTMENT_HEIGHT,
         };
-        let entry = ValidationFeePolicyRegistryEntryV1::from_enactment(policy, authorization, None)
-            .expect("validation-fee registry entry");
+        let entry = ValidationFeePolicyRegistryEntryV1::from_enactment(
+            policy,
+            plain_electorate_rules,
+            authorization,
+            None,
+        )
+        .expect("validation-fee registry entry");
         let registry = ValidationFeePolicyRegistryV1 {
             registered_policies: vec![entry],
         };
-        let mut block = state.block(block_header(2, 1_700_000_001_000));
+        let mut block = state.block(block_header(
+            TEST_POLICY_ENACTMENT_HEIGHT,
+            1_700_000_001_000,
+        ));
         let mut stx = block.transaction();
         stx.world.governance_proposals_mut().insert(
             proposal_id,
             iroha_core::state::GovernanceProposalRecord {
                 proposer: authority.clone(),
                 kind,
-                created_height: 1,
+                created_height: TEST_REFERENDUM_START_HEIGHT,
                 status: iroha_core::state::GovernanceProposalStatus::Enacted,
                 pipeline: iroha_core::state::GovernancePipeline::default(),
                 parliament_snapshot: Some(iroha_core::state::GovernanceParliamentSnapshot {
@@ -54145,7 +54200,7 @@ mod validation_fee_torii_ingress_tests {
                 finalization_evidence: Some(GovernanceFinalizationEvidence {
                     proposal_id,
                     referendum_id: proposal_id,
-                    finalized_at_height: 2,
+                    finalized_at_height: TEST_REFERENDUM_END_HEIGHT,
                     mode: VotingMode::Plain,
                     approve: 1,
                     reject: 0,
@@ -54155,15 +54210,15 @@ mod validation_fee_torii_ingress_tests {
                     approval_threshold_denominator: 2,
                     approved: true,
                 }),
-                enacted_at_height: Some(2),
+                enacted_at_height: Some(TEST_POLICY_ENACTMENT_HEIGHT),
             },
         );
         let referendum_id = hex::encode(proposal_id);
         stx.world.governance_referenda_mut().insert(
             referendum_id.clone(),
             iroha_core::state::GovernanceReferendumRecord {
-                h_start: 1,
-                h_end: 100,
+                h_start: TEST_REFERENDUM_START_HEIGHT,
+                h_end: TEST_REFERENDUM_END_HEIGHT,
                 status: iroha_core::state::GovernanceReferendumStatus::Closed,
                 mode: iroha_core::state::GovernanceReferendumMode::Plain,
             },
@@ -54182,6 +54237,8 @@ mod validation_fee_torii_ingress_tests {
                 .ensure_stage(body, 1, 1, 10_000)
                 .record(authority.clone());
         }
+        approvals.approval_gate_height = Some(approval_gate_height);
+        approvals.validation_fee_plain_electorate_snapshot = Some(electorate);
         stx.world
             .governance_stage_approvals_mut()
             .insert(referendum_id, approvals);
@@ -54379,8 +54436,11 @@ mod validation_fee_torii_ingress_tests {
         )
         .await
         .expect("Torii should enqueue a statelessly valid raw transaction");
-        let missing_fee_error =
-            validate_single_queued_transaction_in_block(&state, &missing_fee_queue, 3);
+        let missing_fee_error = validate_single_queued_transaction_in_block(
+            &state,
+            &missing_fee_queue,
+            TEST_ACTIVE_VALIDATION_HEIGHT,
+        );
         assert!(
             missing_fee_error.contains("missing validation-fee transfer of 10 minor units"),
             "unexpected missing-fee rejection: {missing_fee_error}"
@@ -54404,8 +54464,11 @@ mod validation_fee_torii_ingress_tests {
         )
         .await
         .expect("Torii should enqueue a raw transaction carrying the exact validation fee");
-        let exact_fee_result =
-            validate_single_queued_transaction_in_block(&state, &exact_fee_queue, 4);
+        let exact_fee_result = validate_single_queued_transaction_in_block(
+            &state,
+            &exact_fee_queue,
+            TEST_ACTIVE_VALIDATION_HEIGHT,
+        );
         assert_eq!(exact_fee_result, "ok");
     }
 
@@ -54466,7 +54529,11 @@ mod validation_fee_torii_ingress_tests {
         )
         .await
         .expect("Torii should enqueue the nested exact-fee proposal");
-        let exact_result = validate_single_queued_transaction_in_block(&state, &exact_queue, 3);
+        let exact_result = validate_single_queued_transaction_in_block(
+            &state,
+            &exact_queue,
+            TEST_ACTIVE_VALIDATION_HEIGHT,
+        );
         assert!(
             !exact_result.contains("validation-fee admission rejected transaction"),
             "nested exact fee must pass validation-fee admission: {exact_result}"
@@ -54481,7 +54548,11 @@ mod validation_fee_torii_ingress_tests {
         )
         .await
         .expect("Torii should enqueue the nested wrong-coordinate proposal");
-        let wrong_result = validate_single_queued_transaction_in_block(&state, &wrong_queue, 4);
+        let wrong_result = validate_single_queued_transaction_in_block(
+            &state,
+            &wrong_queue,
+            TEST_ACTIVE_VALIDATION_HEIGHT,
+        );
         assert!(
             wrong_result.contains("metadata and signed multisig validation-fee marker disagree"),
             "nested principal coordinate must reject: {wrong_result}"
@@ -54511,8 +54582,11 @@ mod validation_fee_torii_ingress_tests {
         )
         .await
         .expect("Torii should enqueue the ambiguous-coordinate proposal");
-        let ambiguous_result =
-            validate_single_queued_transaction_in_block(&state, &ambiguous_queue, 5);
+        let ambiguous_result = validate_single_queued_transaction_in_block(
+            &state,
+            &ambiguous_queue,
+            TEST_ACTIVE_VALIDATION_HEIGHT,
+        );
         assert!(
             ambiguous_result.contains("matches multiple transfer contexts"),
             "ambiguous nested coordinate must reject: {ambiguous_result}"
@@ -54553,7 +54627,7 @@ mod validation_fee_torii_ingress_tests {
         let missing_fee_error = validate_single_queued_transaction_in_block(
             &missing_fee_app.state,
             &missing_fee_app.queue,
-            3,
+            TEST_ACTIVE_VALIDATION_HEIGHT,
         );
         assert!(
             missing_fee_error.contains("missing validation-fee transfer of 10 minor units"),
@@ -54576,7 +54650,7 @@ mod validation_fee_torii_ingress_tests {
         let exact_fee_result = validate_single_queued_transaction_in_block(
             &exact_fee_app.state,
             &exact_fee_app.queue,
-            3,
+            TEST_ACTIVE_VALIDATION_HEIGHT,
         );
         assert_eq!(exact_fee_result, "ok");
     }
@@ -54603,7 +54677,7 @@ mod validation_fee_torii_ingress_tests {
         let missing_fee_error = validate_single_queued_transaction_in_block(
             &missing_fee_app.state,
             &missing_fee_app.queue,
-            3,
+            TEST_ACTIVE_VALIDATION_HEIGHT,
         );
         assert!(
             missing_fee_error.contains("missing validation-fee transfer of 10 minor units"),
@@ -54629,7 +54703,7 @@ mod validation_fee_torii_ingress_tests {
         let exact_fee_result = validate_single_queued_transaction_in_block(
             &exact_fee_app.state,
             &exact_fee_app.queue,
-            3,
+            TEST_ACTIVE_VALIDATION_HEIGHT,
         );
         assert_eq!(exact_fee_result, "ok");
     }
@@ -54656,7 +54730,7 @@ mod validation_fee_torii_ingress_tests {
         let missing_fee_error = validate_single_queued_transaction_in_block(
             &missing_fee_app.state,
             &missing_fee_app.queue,
-            3,
+            TEST_ACTIVE_VALIDATION_HEIGHT,
         );
         assert!(
             missing_fee_error.contains("missing validation-fee transfer of 10 minor units"),
@@ -54682,7 +54756,7 @@ mod validation_fee_torii_ingress_tests {
         let exact_fee_result = validate_single_queued_transaction_in_block(
             &exact_fee_app.state,
             &exact_fee_app.queue,
-            3,
+            TEST_ACTIVE_VALIDATION_HEIGHT,
         );
         assert_eq!(exact_fee_result, "ok");
     }

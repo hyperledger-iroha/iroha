@@ -130,8 +130,9 @@ pub mod isi {
             VALIDATION_FEE_PLAIN_MAX_MEMBERS_V1, ValidationFeeFinalizationEvidenceV1,
             ValidationFeeGovernanceVotingModeV1, ValidationFeeGovernanceWindowV1,
             ValidationFeeParliamentAuthorizationV1, ValidationFeePayoutLifecycleReferenceV1,
-            ValidationFeePlainElectorateRulesV1, ValidationFeePolicyRegistryEntryV1,
-            ValidationFeePolicyRegistryV1, ValidationFeePolicyV1,
+            ValidationFeePlainElectorateRulesV1, ValidationFeePlainElectorateSnapshotV1,
+            ValidationFeePolicyRegistryEntryV1, ValidationFeePolicyRegistryV1,
+            ValidationFeePolicyV1,
         },
         zk::{
             BackendTag, OpenVerifyEnvelope as ZkOpenVerifyEnvelope,
@@ -5494,6 +5495,37 @@ pub mod isi {
         }
     }
 
+    fn retained_validation_fee_plain_electorate_snapshot<'a>(
+        proposal_id: [u8; 32],
+        proposal: &crate::state::GovernanceProposalRecord,
+        referendum: crate::state::GovernanceReferendumRecord,
+        approvals: &'a crate::state::GovernanceStageApprovals,
+        rules: &ValidationFeePlainElectorateRulesV1,
+    ) -> Result<&'a ValidationFeePlainElectorateSnapshotV1, Error> {
+        let snapshot = approvals
+            .validation_fee_plain_electorate_snapshot
+            .as_ref()
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    "validation-fee proposal has no frozen PLAIN electorate snapshot".into(),
+                )
+            })?;
+        if let Some(reason) = snapshot.context_error(proposal_id, &proposal.proposer, rules) {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!("invalid validation-fee PLAIN electorate snapshot: {reason}").into(),
+            ));
+        }
+        if snapshot.captured_at_height != referendum.h_start
+            || approvals.approval_gate_height != Some(snapshot.approval_gate_height)
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "validation-fee PLAIN electorate snapshot anchors differ from retained governance state"
+                    .into(),
+            ));
+        }
+        Ok(snapshot)
+    }
+
     fn ensure_validation_fee_plain_ballot_preconditions(
         ballot: &gov::CastPlainBallot,
         authority: &AccountId,
@@ -5505,7 +5537,14 @@ pub mod isi {
                 "validation-fee proposal is missing its PLAIN electorate rules".into(),
             )
         })?;
-        validate_validation_fee_plain_electorate_rules(rules, state_transaction)?;
+        if let Some(reason) = rules.invariant_error() {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "validation-fee proposal retained invalid PLAIN electorate rules: {reason}"
+                )
+                .into(),
+            ));
+        }
         if ballot.amount != rules.ballot_amount
             || ballot.duration_blocks != rules.ballot_duration_blocks
         {
@@ -5529,20 +5568,16 @@ pub mod isi {
                 "validation-fee referendum accepts one effective ballot per account".into(),
             ));
         }
-        let citizen = state_transaction
+        let referendum = state_transaction
             .world
-            .citizens
-            .get(authority)
+            .governance_referenda
+            .get(&ballot.referendum_id)
+            .copied()
             .ok_or_else(|| {
                 InstructionExecutionError::InvariantViolation(
-                    "validation-fee ballot requires a retained citizen record".into(),
+                    "validation-fee proposal has no retained referendum".into(),
                 )
             })?;
-        if citizen.amount < rules.citizenship_amount {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "validation-fee ballot citizen bond is below the immutable requirement".into(),
-            ));
-        }
         let approvals = state_transaction
             .world
             .governance_stage_approvals
@@ -5552,37 +5587,17 @@ pub mod isi {
                     "validation-fee proposal has no retained Parliament approval gate".into(),
                 )
             })?;
-        let gate_height = approvals.approval_gate_height.ok_or_else(|| {
-            InstructionExecutionError::InvariantViolation(
-                "validation-fee proposal has not crossed its Parliament approval gate".into(),
-            )
-        })?;
-        let eligible = if authority == &proposal.proposer {
-            citizen.bonded_height <= gate_height
-        } else {
-            citizen.bonded_height > gate_height
-        };
-        if !eligible {
+        let proposal_id = proposal.kind.fingerprint();
+        let electorate = retained_validation_fee_plain_electorate_snapshot(
+            proposal_id,
+            proposal,
+            referendum,
+            approvals,
+            rules,
+        )?;
+        if !electorate.contains(authority) {
             return Err(InstructionExecutionError::InvariantViolation(
-                "citizen registration height is outside the proposal-bound eligibility rule".into(),
-            ));
-        }
-        let eligible_count = state_transaction
-            .world
-            .citizens
-            .iter()
-            .filter(|(account_id, record)| {
-                record.amount >= rules.citizenship_amount
-                    && if *account_id == &proposal.proposer {
-                        record.bonded_height <= gate_height
-                    } else {
-                        record.bonded_height > gate_height
-                    }
-            })
-            .count();
-        if u64::try_from(eligible_count).unwrap_or(u64::MAX) > rules.max_members {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "validation-fee electorate exceeds its immutable member cap".into(),
+                "validation-fee ballot owner is not in the frozen PLAIN electorate".into(),
             ));
         }
         Ok(())
@@ -6338,6 +6353,22 @@ pub mod isi {
                     "validation-fee proposal has no retained referendum".into(),
                 )
             })?;
+        let rules = validation_fee_plain_electorate_rules(&proposal.kind).ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                "validation-fee proposal is missing its retained PLAIN electorate rules".into(),
+            )
+        })?;
+        if evidence.mode != gov::VotingMode::Plain
+            || evidence.finalized_at_height != referendum.h_end
+            || evidence.min_turnout != rules.min_turnout
+            || evidence.approval_threshold_numerator != rules.approval_threshold_numerator
+            || evidence.approval_threshold_denominator != rules.approval_threshold_denominator
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "validation-fee finalization evidence differs from its retained PLAIN electorate rules"
+                    .into(),
+            ));
+        }
         let approvals = state_transaction
             .world
             .governance_stage_approvals
@@ -6364,11 +6395,22 @@ pub mod isi {
                     .into(),
             ));
         }
+        let electorate = retained_validation_fee_plain_electorate_snapshot(
+            proposal_id,
+            proposal,
+            referendum,
+            &approvals,
+            rules,
+        )?;
 
         let authorization = ValidationFeeParliamentAuthorizationV1 {
             proposal_id,
             proposal_fingerprint,
             proposal_time_roster_root: snapshot.roster_root,
+            plain_electorate_snapshot_root: electorate.roster_root,
+            plain_electorate_snapshot_member_count: electorate.member_count,
+            plain_electorate_snapshot_captured_at_height: electorate.captured_at_height,
+            plain_electorate_snapshot_approval_gate_height: electorate.approval_gate_height,
             referendum_window: ValidationFeeGovernanceWindowV1 {
                 lower: referendum.h_start,
                 upper: referendum.h_end,
@@ -8641,6 +8683,7 @@ pub mod isi {
             }
             let validation_fee_rules =
                 validation_fee_plain_electorate_rules(&proposal.kind).cloned();
+            let mut validation_fee_electorate_snapshot = None;
             if let Some(rules) = validation_fee_rules.as_ref() {
                 if let Some(reason) = rules.invariant_error() {
                     return Err(InstructionExecutionError::InvariantViolation(
@@ -8691,6 +8734,16 @@ pub mod isi {
                             .into(),
                     ));
                 }
+                validation_fee_electorate_snapshot = Some(
+                    retained_validation_fee_plain_electorate_snapshot(
+                        self.proposal_id,
+                        &proposal,
+                        referendum,
+                        &approvals,
+                        rules,
+                    )?
+                    .clone(),
+                );
             }
 
             let now_h = state_transaction._curr_block.height().get();
@@ -8742,8 +8795,37 @@ pub mod isi {
                             ),
                             |rules| (rules.conviction_step_blocks, rules.max_conviction),
                         );
-                        for rec in locks.locks.values() {
+                        for (owner, rec) in &locks.locks {
+                            if validation_fee_rules.is_some()
+                                && !validation_fee_electorate_snapshot
+                                    .as_ref()
+                                    .is_some_and(|snapshot| snapshot.contains(owner))
+                            {
+                                return Err(InstructionExecutionError::InvariantViolation(
+                                    "validation-fee citizen lock owner is outside the frozen PLAIN electorate"
+                                        .into(),
+                                ));
+                            }
+                            if let Some(rules) = validation_fee_rules.as_ref()
+                                && (&rec.owner != owner
+                                    || rec.amount != rules.ballot_amount
+                                    || rec.duration_blocks != rules.ballot_duration_blocks
+                                    || rec.direction > 2)
+                            {
+                                return Err(InstructionExecutionError::InvariantViolation(
+                                    "validation-fee citizen lock differs from retained PLAIN electorate rules"
+                                        .into(),
+                                ));
+                            }
                             if rec.expiry_height < tally_height {
+                                if validation_fee_rules.is_some() {
+                                    return Err(
+                                        InstructionExecutionError::InvariantViolation(
+                                            "validation-fee citizen lock expires before the retained referendum end"
+                                                .into(),
+                                        ),
+                                    );
+                                }
                                 continue;
                             }
                             let weight =
@@ -9526,12 +9608,19 @@ pub mod isi {
                     .world
                     .deposit_numeric_asset(&escrow_asset_id, &delta)?;
             }
-            let bonded_height = state_transaction._curr_block.height().get();
-            let record = crate::state::CitizenshipRecord::new(
-                self.owner.clone(),
-                self.amount.clone(),
-                bonded_height,
-            );
+            let record = if let Some(mut record) = existing {
+                // A top-up (including a same-amount no-op) continues the
+                // original citizenship interval and must not erase service,
+                // cooldown, or discipline state.
+                record.amount = self.amount.clone();
+                record
+            } else {
+                crate::state::CitizenshipRecord::new(
+                    self.owner.clone(),
+                    self.amount.clone(),
+                    state_transaction._curr_block.height().get(),
+                )
+            };
             state_transaction
                 .world
                 .citizens
@@ -22028,7 +22117,6 @@ pub mod isi {
                     smart_contract_instruction_error_message(error).contains(expected_message),
                     "unexpected unshield proof-boundary error for {literal}"
                 );
-
             }
 
             assert!(stx.world.asset_definitions.is_empty());
