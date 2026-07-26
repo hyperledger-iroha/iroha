@@ -695,7 +695,19 @@ impl ProviderIngestCompletionSignerPolicyV1 {
     /// Return whether every canonical identity component is non-zero.
     #[must_use]
     pub const fn is_valid(&self) -> bool {
-        self.policy_id != [0; 32] && self.revision != 0 && self.policy_digest != [0; 32]
+        let mut policy_id_is_nonzero = false;
+        let mut policy_digest_is_nonzero = false;
+        let mut index = 0;
+        while index < 32 {
+            if self.policy_id[index] != 0 {
+                policy_id_is_nonzero = true;
+            }
+            if self.policy_digest[index] != 0 {
+                policy_digest_is_nonzero = true;
+            }
+            index += 1;
+        }
+        policy_id_is_nonzero && self.revision != 0 && policy_digest_is_nonzero
     }
 
     fn validate(self) -> Result<(), ProviderIngestOutboxError> {
@@ -4203,6 +4215,10 @@ fn observe_finalized_completion_authority(
         return Err(ProviderIngestOutboxError::FinalizedAuthorityConflict);
     }
     match (retained.signer_policy, incoming.signer_policy) {
+        (
+            ProviderIngestSignerPolicyObservationV1::NotChecked,
+            ProviderIngestSignerPolicyObservationV1::NotChecked,
+        ) => Ok(false),
         (left, right) if left == right => Ok(false),
         (
             ProviderIngestSignerPolicyObservationV1::NotChecked,
@@ -4652,8 +4668,13 @@ fn validate_checkpoint_finalized_high_water(
         checkpoint.finalized_block_time_ms_high_water,
     ) {
         (None, None) => return Ok(()),
-        (Some(cursor), Some(finalized_block_time_ms)) if finalized_block_time_ms != 0 => cursor,
-        (None, Some(_)) | (Some(_), None) | (Some(_), Some(0)) => {
+        (Some(cursor), Some(finalized_block_time_ms)) => {
+            if finalized_block_time_ms == 0 {
+                return Err(ProviderIngestOutboxError::InvalidCheckpoint);
+            }
+            cursor
+        }
+        (None, Some(_)) | (Some(_), None) => {
             return Err(ProviderIngestOutboxError::InvalidCheckpoint);
         }
     };
@@ -5373,6 +5394,109 @@ mod tests {
             manifest_digest: authorization.manifest_digest(),
             reason,
         }
+    }
+
+    #[test]
+    fn completion_signer_policy_validity_is_const_and_requires_nonzero_components() {
+        const VALID: bool = ProviderIngestCompletionSignerPolicyV1 {
+            policy_id: [1; 32],
+            revision: 1,
+            policy_digest: [2; 32],
+        }
+        .is_valid();
+        const ZERO_POLICY_ID: bool = ProviderIngestCompletionSignerPolicyV1 {
+            policy_id: [0; 32],
+            revision: 1,
+            policy_digest: [2; 32],
+        }
+        .is_valid();
+        const ZERO_REVISION: bool = ProviderIngestCompletionSignerPolicyV1 {
+            policy_id: [1; 32],
+            revision: 0,
+            policy_digest: [2; 32],
+        }
+        .is_valid();
+        const ZERO_POLICY_DIGEST: bool = ProviderIngestCompletionSignerPolicyV1 {
+            policy_id: [1; 32],
+            revision: 1,
+            policy_digest: [0; 32],
+        }
+        .is_valid();
+
+        assert!(VALID);
+        assert!(!ZERO_POLICY_ID);
+        assert!(!ZERO_REVISION);
+        assert!(!ZERO_POLICY_DIGEST);
+
+        let mut sparse_policy = ProviderIngestCompletionSignerPolicyV1 {
+            policy_id: [0; 32],
+            revision: 1,
+            policy_digest: [0; 32],
+        };
+        sparse_policy.policy_id[31] = 1;
+        sparse_policy.policy_digest[0] = 1;
+        assert!(sparse_policy.is_valid());
+    }
+
+    #[test]
+    fn repeated_unchecked_authority_observation_is_idempotent() {
+        let owner = completed_by(0xA0);
+        let mut completion = StoredCompletionDeliveryV1::default();
+        assert_eq!(
+            observe_finalized_completion_authority(
+                &mut completion,
+                Some(&owner),
+                ProviderIngestSignerPolicyObservationV1::NotChecked,
+                cursor(8),
+            ),
+            Ok(true)
+        );
+
+        let retained = completion.clone();
+        assert_eq!(
+            observe_finalized_completion_authority(
+                &mut completion,
+                Some(&owner),
+                ProviderIngestSignerPolicyObservationV1::NotChecked,
+                cursor(8),
+            ),
+            Ok(false)
+        );
+        assert_eq!(completion, retained);
+    }
+
+    #[test]
+    fn checkpoint_finalized_high_water_requires_a_complete_nonzero_time_pair() {
+        let mut checkpoint = ProviderIngestOutboxCheckpointV1::default();
+        assert_eq!(
+            validate_checkpoint_finalized_high_water(&checkpoint),
+            Ok(())
+        );
+
+        checkpoint.finalized_cursor_high_water = Some(cursor(8));
+        assert_eq!(
+            validate_checkpoint_finalized_high_water(&checkpoint),
+            Err(ProviderIngestOutboxError::InvalidCheckpoint)
+        );
+
+        checkpoint.finalized_block_time_ms_high_water = Some(8_000);
+        assert_eq!(
+            validate_checkpoint_finalized_high_water(&checkpoint),
+            Ok(())
+        );
+
+        checkpoint.finalized_block_time_ms_high_water = Some(0);
+        assert_eq!(
+            validate_checkpoint_finalized_high_water(&checkpoint),
+            Err(ProviderIngestOutboxError::InvalidCheckpoint)
+        );
+
+        checkpoint.finalized_cursor_high_water = None;
+        checkpoint.finalized_block_time_ms_high_water = Some(8_000);
+        assert_eq!(
+            validate_checkpoint_finalized_high_water(&checkpoint),
+            Err(ProviderIngestOutboxError::InvalidCheckpoint)
+        );
     }
 
     #[test]
