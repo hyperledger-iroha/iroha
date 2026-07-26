@@ -8374,6 +8374,45 @@ impl V2LaneWorkAdapter {
         self.merge_sidecars.confirm_closed_server_prefix_handoff();
     }
 
+    fn stranded_retryable_sidecar_control_index(
+        &self,
+        candidate: &V2LaneWorkEffect,
+    ) -> Option<usize> {
+        let candidate_peer = retryable_sidecar_server_control_peer(candidate)?;
+        if !retryable_sidecar_server_control_has_writable_route(candidate) {
+            return None;
+        }
+        self.sidecar_effects.iter().position(|retained| {
+            retryable_sidecar_server_control_peer(retained) == Some(candidate_peer)
+                && !retryable_sidecar_server_control_has_writable_route(retained)
+        })
+    }
+
+    fn replace_stranded_retryable_sidecar_control(
+        &mut self,
+        retained_index: usize,
+        candidate_key: Hash,
+        candidate: V2LaneWorkEffect,
+    ) -> bool {
+        let Some(retained) = self.sidecar_effects.remove(retained_index) else {
+            return false;
+        };
+        let retained_key = lane_work_effect_key(&retained);
+        if !self.sidecar_effect_keys.remove(&retained_key) {
+            self.sidecar_effects.insert(retained_index, retained);
+            return false;
+        }
+        if !self.sidecar_effect_keys.insert(candidate_key) {
+            self.sidecar_effect_keys.insert(retained_key);
+            self.sidecar_effects.insert(retained_index, retained);
+            return false;
+        }
+        // This is new authenticated-source work, so it rejoins at the tail
+        // instead of inheriting the stranded occurrence's queue age.
+        self.sidecar_effects.push_back(candidate);
+        true
+    }
+
     fn push_merge_sidecar_effect(&mut self, effect: V2LaneWorkEffect) -> bool {
         if !matches!(&effect, V2LaneWorkEffect::PostCertifiedMergeSidecar { .. })
             || !lane_work_effect_reply_routes_have_valid_shape(&effect)
@@ -8382,17 +8421,35 @@ impl V2LaneWorkAdapter {
         }
         let key = lane_work_effect_key(&effect);
         if self.sidecar_effect_keys.contains(&key) {
-            return self
+            let Some(index) = self
                 .sidecar_effects
-                .iter_mut()
-                .find(|queued| lane_work_effect_key(queued) == key)
-                .is_some_and(|queued| merge_lane_work_effect_reply_routes(queued, &effect));
+                .iter()
+                .position(|queued| lane_work_effect_key(queued) == key)
+            else {
+                return false;
+            };
+            if self
+                .sidecar_effects
+                .get_mut(index)
+                .is_some_and(|queued| merge_lane_work_effect_reply_routes(queued, &effect))
+            {
+                return true;
+            }
+            if !lane_work_effect_reply_routes_are_valid(&effect)
+                || self.stranded_retryable_sidecar_control_index(&effect) != Some(index)
+            {
+                return false;
+            }
+            return self.replace_stranded_retryable_sidecar_control(index, key, effect);
         }
         if !lane_work_effect_reply_routes_are_valid(&effect) {
             return false;
         }
         let retryable_peer = retryable_sidecar_server_control_peer(&effect).cloned();
         if let Some(peer) = &retryable_peer {
+            if let Some(index) = self.stranded_retryable_sidecar_control_index(&effect) {
+                return self.replace_stranded_retryable_sidecar_control(index, key, effect);
+            }
             if self
                 .sidecar_effects
                 .iter()
@@ -12577,6 +12634,19 @@ fn retryable_sidecar_server_control_peer(effect: &V2LaneWorkEffect) -> Option<&P
     }
 }
 
+fn retryable_sidecar_server_control_has_writable_route(effect: &V2LaneWorkEffect) -> bool {
+    retryable_sidecar_server_control_peer(effect).is_some()
+        && matches!(
+            effect,
+            V2LaneWorkEffect::PostCertifiedMergeSidecar {
+                reply_routes: Some(reply_routes),
+                ..
+            } if reply_routes
+                .iter()
+                .any(NetworkReplyRoute::is_reply_writable)
+        )
+}
+
 fn lane_work_effect_reply_routes_have_valid_shape(effect: &V2LaneWorkEffect) -> bool {
     let reply_routes_target_peer = |reply_routes: &NetworkReplyRoutes, peer: &PeerId| {
         !reply_routes.is_empty() && reply_routes.semantic_target() == peer
@@ -15866,6 +15936,144 @@ pub(super) mod tests {
             )
         }));
         assert!(!output_guard.restart_required());
+    }
+
+    #[test]
+    fn stranded_responder_control_queue_slot_refreshes_to_a_writable_trigger() {
+        let CertifiedSidecarServerFixture {
+            mut adapter,
+            requester,
+            request,
+            ..
+        } = certified_sidecar_server_fixture();
+        let changed_roster = changed_merge_sidecar_server_roster();
+        adapter
+            .transition_merge_sidecar_responder_roster_for_test(&changed_roster)
+            .expect("persist a quiescent successor responder generation");
+        let hub_a = PeerId::new(KeyPair::random().public_key().clone());
+        let hub_b = PeerId::new(KeyPair::random().public_key().clone());
+        let hub_c = PeerId::new(KeyPair::random().public_key().clone());
+        let hub_d = PeerId::new(KeyPair::random().public_key().clone());
+        let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(hub_a.clone(), 1);
+        let route_a = routes.mint_via(requester.clone(), hub_a);
+        assert_eq!(
+            adapter
+                .accept_certified_merge_sidecar_for_test(
+                    requester.clone(),
+                    route_a.clone(),
+                    request.clone(),
+                )
+                .expect("the first stale request creates one generation Hint"),
+            V2LaneIngressOutcome::Inserted
+        );
+        let other_requester = adapter
+            .context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .find(|peer| peer != &adapter.local_peer && peer != &requester)
+            .expect("the four-validator fixture has another remote requester");
+        let mut other_request = request.clone();
+        other_request.requester = other_requester.clone();
+        other_request.request_id = other_request.canonical_request_id();
+        let other_route = routes.mint_via(other_requester.clone(), hub_d);
+        assert_eq!(
+            adapter
+                .accept_certified_merge_sidecar_for_test(
+                    other_requester.clone(),
+                    other_route,
+                    other_request,
+                )
+                .expect("an independent target owns the next queue position"),
+            V2LaneIngressOutcome::Inserted
+        );
+        assert!(
+            routes.mark_reply_unwritable_while_delivery_active(&route_a),
+            "the first exact return route starts draining"
+        );
+
+        let route_b = routes.mint_via(requester.clone(), hub_b);
+        assert_eq!(
+            adapter
+                .accept_certified_merge_sidecar_for_test(
+                    requester.clone(),
+                    route_b.clone(),
+                    request.clone(),
+                )
+                .expect("an exact replay refreshes a full stranded route history"),
+            V2LaneIngressOutcome::Inserted
+        );
+        assert_eq!(adapter.sidecar_effects.len(), 2);
+        assert_eq!(adapter.sidecar_effect_keys.len(), 2);
+        assert_eq!(
+            retryable_sidecar_server_control_peer(
+                adapter
+                    .sidecar_effects
+                    .front()
+                    .expect("the independent control keeps its older queue age")
+            ),
+            Some(&other_requester),
+            "the replacement must rejoin at the tail"
+        );
+        assert!(matches!(
+            adapter.sidecar_effects.back(),
+            Some(V2LaneWorkEffect::PostCertifiedMergeSidecar {
+                reply_routes: Some(reply_routes),
+                ..
+            }) if reply_routes.len() == 1
+                && reply_routes
+                    .iter()
+                    .any(|route| route.same_delivery(&route_b))
+                && !reply_routes
+                    .iter()
+                    .any(|route| route.same_delivery(&route_a))
+        ));
+
+        assert!(
+            routes.mark_reply_unwritable_while_delivery_active(&route_b),
+            "the refreshed exact route may independently start draining"
+        );
+        let mut later_request = request.clone();
+        later_request.semantic_sequence = semantic_sequence(
+            later_request
+                .semantic_sequence
+                .get()
+                .checked_add(1)
+                .expect("the stale stream has one later request"),
+        );
+        later_request.request_id = later_request.canonical_request_id();
+        let later_request_hash: Hash = HashOf::new(&later_request).into();
+        let route_c = routes.mint_via(requester.clone(), hub_c);
+        assert_eq!(
+            adapter
+                .accept_certified_merge_sidecar_for_test(
+                    requester.clone(),
+                    route_c.clone(),
+                    later_request,
+                )
+                .expect("a distinct live trigger replaces the stranded Hint"),
+            V2LaneIngressOutcome::Inserted
+        );
+        assert_eq!(adapter.sidecar_effects.len(), 2);
+        assert_eq!(adapter.sidecar_effect_keys.len(), 2);
+        assert!(matches!(
+            adapter.sidecar_effects.back(),
+            Some(V2LaneWorkEffect::PostCertifiedMergeSidecar {
+                peer,
+                reply_routes: Some(reply_routes),
+                message,
+            }) if peer == &requester
+                && reply_routes.len() == 1
+                && reply_routes
+                    .iter()
+                    .any(|route| route.same_delivery(&route_c))
+                && matches!(
+                    message.as_ref(),
+                    CertifiedMergeSidecarMessage::GenerationHint(hint)
+                        if hint.observed_message_hash == later_request_hash
+                )
+        ));
+        assert!(!adapter.output_guard.restart_required());
     }
 
     #[test]

@@ -18,6 +18,11 @@ CancelAssetLock {
 - a zero expected amount, which is structurally codec-valid but rejected by
   native ledger execution before custody is changed.
 
+Kotlin/JVM, mirrored Java Android, and Swift tests encode the same native
+frame, compare it byte-for-byte with `cancel_asset_lock_v1.to` when the
+generated fixture is present, and reject the legacy, trailing-byte, and zero
+vectors at their public SDK boundaries.
+
 Regenerate the payloads from the typed Rust model, then reseal the signed
 reference-SDK inventory:
 

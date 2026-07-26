@@ -176,11 +176,14 @@ a provider-indexed committed query or governed terminal-history filter/archive.
 The daemon now checks current committed provider ownership before signer
 resolution and on both sides of signing, while every newer finalized assignment
 snapshot invalidates retained `Signing`, `Signed`, `Ambiguous`, or `Submitted`
-material when the owner changes or is removed. What remains is a persisted
-governed signer-policy identity/revision/digest in the durable signing context
-so same-owner key rotation or revocation is detectable across prepared state
-and restart; the deployment resolver must also enforce key validity atomically
-with signing.
+material when the owner changes or is removed. The durable signing context now
+also binds the exact governed signer-policy identity, monotonic revision, and
+digest. Before observation or resubmission, a newer finalized policy lookup
+invalidates retained material on same-owner rotation or revocation, including
+after restart. A durable policy floor rejects revision rollback,
+same-revision digest equivocation, identity substitution, and post-revocation
+reuse without a strict successor. The deployment resolver must supply that
+exact binding and enforce key validity atomically with signing.
 
 Shutdown remains bounded only when the deployment source reader honors the
 required deadline inside each underlying read; the wrapper cannot interrupt an

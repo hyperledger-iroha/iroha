@@ -97,13 +97,17 @@ certificate round.
   `SumeragiV2TypedRolloverHandoffProofs.tla`, and the paired mutation module
   isolate the move-only service/transport owner pair, final empty-corridor
   seal, exact predecessor and immediate-successor receipt, retry preservation,
-  and late-callback isolation. This applied-height handoff model is orthogonal
-  to the production responder lifecycle and does not authorize rolling
-  responder service generation. Production requires terminal compaction and
-  persists the generation with empty successor state in the same V2 snapshot.
-  The earlier strict and bounded receipts predate that final relation, so fresh
-  validation remains pending and both typed-handoff ledger entries remain
-  `specified_unproved`.
+  and late-callback isolation. Production ordinary rollover requires a changed
+  certified roster and authenticated predecessor terminality. A sealed,
+  move-only durable handoff or a semantically validated restart may instead
+  fence active predecessor responder state, but only through the durable
+  lifecycle journal; it commits the changed-roster generation and empty
+  responder projection before clearing memory and never invents an
+  authenticated close prefix. Same-roster rehydration preserves generation and
+  responder ownership. The earlier strict and bounded receipts predate this
+  authority-gated relation, V3 bootstrap adoption, cleanup ordering, and root
+  trust boundary, so fresh validation remains pending and both typed-handoff
+  ledger entries remain `specified_unproved`.
   Neither the model nor historical bounded evidence proves eventual finality
   validation, network delivery, writer flush, recovery after failure, repeated
   rollover, or Rust-to-TLA refinement.
@@ -428,9 +432,9 @@ certificate round.
   ledger, and bound production source before and after checking, then records
   each model/config/log hash, bound length, and exact `NoError` result. A
   failed or source-drifting run removes or withholds the completion evidence.
-  These finite checks constrain the four `specified_unproved`
-  production-refinement obligations in `proof_coverage.json`; they are not TLAPS
-  or cross-tool proof evidence and do not change proof-ledger status.
+  These finite checks constrain four source-bound production-refinement
+  declarations consumed transitively by the top-level refinement debts; they
+  are not independent ledger rows, TLAPS evidence, or cross-tool proof evidence.
 
 ## Exact protocol abstractions
 
@@ -679,14 +683,14 @@ progress ownership, and the three rank leaves use their exact fair-action
 prerequisites. The
 aggregate `protected-service-rank` obligation depends on every one of these
 leaves, without conflating the abstract model with production admission,
-runtime, ingress, or actor-to-flush ownership. The source ledger now contains
-70 obligations: 35 `tlaps_proved`, 28 `specified_unproved`, 6
-`trusted_contract`, and 1 `out_of_scope`. Machine-checked completion is
-evaluated over exactly 60 targets, with 10 reviewed source obligations
-excluded from that completion projection. A completed projection must contain
-50 `tlaps_proved`, 3 `cross_tool_proved`, 6 `trusted_contract`, and 1
-`out_of_scope`; the current ledger keeps
-`machine_checked_completion: false`.
+runtime, ingress, or actor-to-flush ownership. The top-level source ledger now
+contains exactly 54 obligations: 35 `tlaps_proved`, 12 `specified_unproved`, 6
+`trusted_contract`, and 1 `out_of_scope`. Sixteen proof/evidence decomposition
+leaves remain source-bound and transitively checked through reviewed top-level
+consumers rather than being promoted into extra ledger rows. Machine-checked
+completion is evaluated over the same 54 obligations and must contain 44
+`tlaps_proved`, 3 `cross_tool_proved`, 6 `trusted_contract`, and 1
+`out_of_scope`; the current ledger keeps `machine_checked_completion: false`.
 `AdequateLeaderExactClosureResidualObligation` and
 `ExactDecisionOffSchedulerResidualConvergenceObligation` are the two explicit
 proofless residual theorems in the aggregate temporal closure. Their downstream
@@ -817,15 +821,16 @@ is well founded for that owner, and proves the weak-fair historical discovery
 rule conditional on exact next-step preservation. Clock/readiness, discovery
 preservation, authenticated request-to-Decision delivery, and the historical
 Decision/body/application corridor remain named operator premises; the child
-does not promote either endpoint from those premises. The release ledger
-exposes the remaining historical corridor as four exact proofless wrappers:
+does not promote either endpoint from those premises. The checker exposes the
+remaining historical corridor as four exact proofless support wrappers:
 `IndexedHistoricalRecoveryAuthorityAcquisitionResidualObligation`,
 `IndexedHistoricalCertificateRankProgressResidualObligation`,
 `IndexedHistoricalDecisionStageOwnershipResidualObligation`, and
 `IndexedHistoricalDecisionRankProgressResidualObligation`. The downstream
 exact-recovery composition assumes their residual properties and therefore
-cannot serve as proof of them. All four remain `specified_unproved`, with no
-promotion. The release-facing theorem itself remains proofless, explicit
+cannot serve as proof of them. They are source-bound transitively through the
+top-level `height-liveness` row rather than promoted into four extra claims.
+The release-facing theorem itself remains proofless, explicit
 `specified_unproved` debt until its prerequisites are discharged and a fresh
 pinned strict proof succeeds
 after rotating-leader, application liveness, successor-activation starvation,
@@ -1068,7 +1073,11 @@ and 18 P2P network tests; the daemon network-relay rename is cardinality
 neutral. The runner close-prefix failed-suffix handoff regression adds one
 exact name. The routed-Hint and crash-safe V3 lifecycle closure then adds 26
 exact regressions and retires eight obsolete route-free/V2 selectors, for a net
-increase of 18. The current inventory therefore contains 723 tests across 38 modules.
+increase of 18. Rejecting replay of a proposal superseded by a same-round lock
+adds one exact reducer regression. Preserving that proposal's exact tag, round,
+and subject through runner startup adds one exact runner regression. Two
+cross-platform lifecycle V3 crash regressions cover state replacement before
+directory sync and root replacement before predecessor cleanup. The current inventory therefore contains 727 tests across 38 modules.
 Together with the source-sealed command and tooling legs, the pre-network
 corridor contains 81 legs. The
 G-SCALE runner/validator preflight remains part of that sealed corridor.
@@ -1080,7 +1089,12 @@ only cumulative `closed_through`, which may advance monotonically on the same
 occurrence without rematerializing output. `GenerationHint` carries the
 observed/current generations and exact triggering Request or Close hash on the
 triggering authenticated reply route. Alternate sources retain independent
-attempts, and a later delivery refreshes only its own source route.
+attempts, and a later delivery refreshes only its own source route. Every
+frozen target has a dedicated `SidecarTopologyProgress` Lane reservation for
+topology-routed Request/Close and an independent `SidecarReplyControl` Lane
+reservation for exact-reply CloseAck/GenerationHint. Parked ordinary output and
+a saturated shared pool cannot consume either reservation; alternate Hint
+routes coalesce without multiplying reservations.
 The canonical progress-mutation runner also executes the source-bound
 `GenerationEpochFixed` trace. The repaired path persists and installs the next
 responder generation, persists a fresh requester epoch before retiring the old
@@ -1108,18 +1122,37 @@ rotating-leader progress, or another liveness claim.
 
 `MergeSidecarLifecycleSnapshotV3` is the sole durable lifecycle schema. It
 contains geometry, `next_stream_epoch`, responder generation, requester
-streams, the unified bounded server-stream table, and request gates; V1/V2 are
-unsupported rather than decoded or migrated. Successive snapshots alternate
-between two immutable state slots. The inactive slot is fsynced first and an
-independent root high-water marker is the sole commit point, so restart selects
-the exact predecessor before marker publication and the exact successor after
-it. The server-stream and gate tables are the two bounded responder tables,
-with attempts bounded inside gates. Generation advances only for a certified
-changed-roster geometry after all old streams, gates, transfers, and flushes
-become terminal. A full same-roster table, active-state exhaustion, and
-overflow return `Capacity` atomically.
+streams, the unified bounded server-stream table, request gates, and the root
+generation; V1/V2 are unsupported rather than decoded or migrated. Before the
+state directory exists, the root is atomically published and fsynced as a
+generation-zero bootstrap sentinel with no snapshot hash. A surviving
+generation-one candidate beside that sentinel is semantically validated and
+rechecked before the root adopts it. Later snapshots alternate between two
+immutable state slots. The inactive slot is fsynced first and an independent
+root high-water marker is the sole commit point, so restart selects the exact
+predecessor before marker publication and the exact successor after it.
+Startup validates the selected state, rechecks the live pair, and validates
+known temp artifact types before deleting temps or the unselected slot;
+unknown or non-regular artifacts fail closed. Committed recovery re-syncs the
+selected state and root-marker directories before cleanup, and filesystem
+aliases, including Windows reparse-point files or directories, fail closed.
+Unix and Windows use native atomic replacement, and unsupported directory-sync
+platforms fail closed.
+The marker is a local trust anchor rather than an external monotonic counter:
+marker replacement or rollback, including restoration of the bootstrap
+sentinel, and whole-store rollback are outside the guarantee.
+
+The server-stream and gate tables are the two bounded responder tables, with
+attempts bounded inside gates. Ordinary changed-roster rollover requires
+authenticated terminality. A sealed durable handoff or validated restart may
+force-fence active predecessor responder state after durably committing the
+empty successor projection; it clears predecessor responder/output debt
+without manufacturing close prefixes. Equal-roster rehydration never advances
+generation and preserves retained responder state. A new same-roster requester
+against a full table, an unauthorized active-state replacement, or overflow
+returns `Capacity` atomically.
 The canonical module/test TSV inventory SHA-256 is
-`66a130b892347a296ed3b447d3cf388e00a5c83fdfcd193b228b8eab67059f1a`.
+`53c85b2ca35797cf17b6939dbd1cc6d3a5e7653ccf0e7b37941c4bf79339ed96`.
 The six boundaries preserve the predecessor CommitQC through wire-to-core
 conversion, block rollover until the decided lane session is durable, reopen a
 globally finalized tip whose lane evidence is incomplete, filter terminal
@@ -1163,7 +1196,7 @@ module, and source-sealed command-success legs. Its finality, offline compact-QC
 and height-context proposal-origin modules each use a dedicated
 `iroha_data_model` leg. The inventory executes the `iroha_p2p` library with its
 empty default feature set. It does not claim the feature-gated QUIC first-packet
-geometry tests as part of those thirty-nine modules or eighty-two legs. The
+geometry tests as part of those thirty-eight modules or eighty-one legs. The
 inventory includes five native-AMX lane-work
 capacity regressions, adapter/runner/watchdog successor-activation boundaries,
 exact recovery-derived successor identity, authenticated exact historical
@@ -1240,7 +1273,7 @@ walk checks directories and rejects source symlink escapes, writable-output
 targets, and hard-linked regular files. Child builds and evidence bind the
 sealed manifest actually compiled. The canonical aggregate receipt additionally
 binds original HEAD/tree/`Cargo.lock`, all 81 pre-network legs and the exact
-723-test inventory, the pinned harness lock and resolved toolchain, the formal
+727-test inventory, the pinned harness lock and resolved toolchain, the formal
 ledger/evidence/log, all matrix logs, chaos log, and exact-identity soak
 evidence. Its no-clobber, file/directory-`fsync` publication has no mutable
 pointer; after success the external bootstrap independently validates it and
@@ -1337,14 +1370,18 @@ whole-item digests. The binding covers per-target and cross-fanout FIFO heads,
 round-robin admission, pinned returned-post payload identity, atomic
 applied-height preflight, and the exact creation scope of every typed claim.
 The bounded corridor derives an immutable reservation set from the height
-roster crossed with the Safety, Lane, and Bulk classes. Its physical bound is
-that exact set plus a separate non-zero shared fanout capacity. Deterministic
-maximum matching assigns at most one distinct frozen reservation to each
-retained fanout and recomputes assignments after every delivery attempt;
-non-roster reply targets and repeated same-target/class output can consume only
-shared slots. Thus identity churn cannot consume unopened validator output
-reservations, and partial multi-target progress immediately releases the
-completed target/class reservation.
+roster crossed with the Safety, Lane, and Bulk reliable classes, plus
+`SidecarTopologyProgress` and `SidecarReplyControl` Lane reservations for each
+frozen target. Its physical bound is that exact set plus a separate non-zero
+shared fanout capacity. Deterministic maximum matching assigns at most one
+distinct frozen target/class/kind reservation to each retained fanout and
+recomputes assignments after every delivery attempt. Parked ordinary
+same-target output and saturated shared capacity cannot consume either sidecar
+progress reservation, while alternate authenticated Hint routes coalesce
+without multiplying ownership. Non-roster reply targets and repeated
+same-target/class/kind output can consume only shared slots. Thus identity churn
+cannot consume unopened validator output reservations, and partial multi-target
+progress immediately releases the completed reservation.
 Historical CommitQC, certified-body, and lane-certificate response claims are
 single-target exact identities whose finality artifact, canonical body, or
 certified lane artifact is independently reread from Kura at handoff; responder,

@@ -54,15 +54,16 @@ use sorafs_node::{
     ProviderIngestAuthenticatedSourceFetchV1, ProviderIngestClaimOwnerV1,
     ProviderIngestCompletionPayloadBuilderV1, ProviderIngestCompletionPayloadErrorV1,
     ProviderIngestCompletionPayloadRequestV1, ProviderIngestCompletionSignerErrorV1,
-    ProviderIngestCompletionSignerResolverErrorV1, ProviderIngestCompletionSignerResolverV1,
-    ProviderIngestCompletionSignerV1, ProviderIngestFinalizedAssignmentPageV1,
-    ProviderIngestFinalizedAssignmentV1, ProviderIngestFinalizedCursorV1,
-    ProviderIngestFinalizedLedgerErrorV1, ProviderIngestFinalizedLedgerV1, ProviderIngestFutureV1,
-    ProviderIngestIngressDispositionV1, ProviderIngestIngressPrepareErrorV1,
-    ProviderIngestLocalStorageErrorV1, ProviderIngestLocalStorageV1, ProviderIngestRuntimePolicyV1,
-    ProviderIngestSourceFetchErrorV1, ProviderIngestSourceRequestV1, ProviderIngestSystemClockV1,
-    ProviderIngestTickOutcomeV1, ProviderIngestTransactionIngressV1,
-    ProviderIngestTransactionObservationV1, store::StorageError,
+    ProviderIngestCompletionSignerPolicyV1, ProviderIngestCompletionSignerResolverErrorV1,
+    ProviderIngestCompletionSignerResolverV1, ProviderIngestCompletionSignerV1,
+    ProviderIngestFinalizedAssignmentPageV1, ProviderIngestFinalizedAssignmentV1,
+    ProviderIngestFinalizedCursorV1, ProviderIngestFinalizedLedgerErrorV1,
+    ProviderIngestFinalizedLedgerV1, ProviderIngestFutureV1, ProviderIngestIngressDispositionV1,
+    ProviderIngestIngressPrepareErrorV1, ProviderIngestLocalStorageErrorV1,
+    ProviderIngestLocalStorageV1, ProviderIngestRuntimePolicyV1, ProviderIngestSourceFetchErrorV1,
+    ProviderIngestSourceRequestV1, ProviderIngestSystemClockV1, ProviderIngestTickOutcomeV1,
+    ProviderIngestTransactionIngressV1, ProviderIngestTransactionObservationV1,
+    store::StorageError,
 };
 
 const SHUTDOWN_WAIT_FLOOR: Duration = Duration::from_secs(2);
@@ -185,14 +186,39 @@ impl ProviderIngestAuthenticatedSourceFetchV1 for AuthenticatedSourceAdapterV1 {
 #[derive(Clone)]
 struct GovernedCompletionSignerV1 {
     signer: Arc<dyn ProviderIngestCompletionSignerV1>,
-    state: Arc<State>,
+    owner_authority: Arc<dyn ProviderIngestFinalizedOwnerAuthorityV1>,
     provider_id: ProviderId,
     expected_owner: AccountId,
+    expected_policy: ProviderIngestCompletionSignerPolicyV1,
 }
 
 impl ProviderIngestCompletionSignerV1 for GovernedCompletionSignerV1 {
     fn authority(&self) -> &AccountId {
         self.signer.authority()
+    }
+
+    fn signer_policy(&self) -> ProviderIngestCompletionSignerPolicyV1 {
+        self.signer.signer_policy()
+    }
+
+    fn current_eligibility(
+        &self,
+    ) -> std::result::Result<
+        ProviderIngestCompletionSignerPolicyV1,
+        ProviderIngestCompletionSignerErrorV1,
+    > {
+        let current_policy = self.signer.current_eligibility()?;
+        if !self
+            .owner_authority
+            .owner_matches(self.provider_id, &self.expected_owner)
+            || self.signer.authority() != &self.expected_owner
+            || self.signer.signer_policy() != current_policy
+            || current_policy != self.expected_policy
+            || !current_policy.is_valid()
+        {
+            return Err(ProviderIngestCompletionSignerErrorV1::Unavailable);
+        }
+        Ok(current_policy)
     }
 
     fn sign<'a>(
@@ -203,21 +229,9 @@ impl ProviderIngestCompletionSignerV1 for GovernedCompletionSignerV1 {
         std::result::Result<SignedTransaction, ProviderIngestCompletionSignerErrorV1>,
     > {
         Box::pin(async move {
-            if !current_provider_owner_matches(
-                self.state.as_ref(),
-                self.provider_id,
-                &self.expected_owner,
-            ) {
-                return Err(ProviderIngestCompletionSignerErrorV1::Unavailable);
-            }
+            self.current_eligibility()?;
             let transaction = self.signer.sign(payload).await?;
-            if !current_provider_owner_matches(
-                self.state.as_ref(),
-                self.provider_id,
-                &self.expected_owner,
-            ) {
-                return Err(ProviderIngestCompletionSignerErrorV1::Unavailable);
-            }
+            self.current_eligibility()?;
             Ok(transaction)
         })
     }
@@ -226,7 +240,7 @@ impl ProviderIngestCompletionSignerV1 for GovernedCompletionSignerV1 {
 #[derive(Clone)]
 struct GovernedSignerResolverAdapterV1 {
     resolver: Arc<dyn ProviderIngestGovernedSignerResolverRuntimeV1>,
-    state: Arc<State>,
+    owner_authority: Arc<dyn ProviderIngestFinalizedOwnerAuthorityV1>,
     provider_id: ProviderId,
 }
 
@@ -242,40 +256,64 @@ impl ProviderIngestCompletionSignerResolverV1 for GovernedSignerResolverAdapterV
         std::result::Result<Option<Self::Signer>, ProviderIngestCompletionSignerResolverErrorV1>,
     > {
         Box::pin(async move {
-            if !current_provider_owner_matches(
-                self.state.as_ref(),
-                self.provider_id,
-                &provider_owner,
-            ) {
-                return Ok(None);
+            if !self
+                .owner_authority
+                .owner_matches(self.provider_id, &provider_owner)
+            {
+                return Err(ProviderIngestCompletionSignerResolverErrorV1::Unavailable);
             }
             let expected_owner = provider_owner.clone();
-            self.resolver
+            let signer = self
+                .resolver
                 .resolve(provider_owner, finalized_cursor)
-                .await
-                .map(|signer| {
-                    signer.map(|signer| GovernedCompletionSignerV1 {
-                        signer,
-                        state: Arc::clone(&self.state),
-                        provider_id: self.provider_id,
-                        expected_owner,
-                    })
-                })
+                .await?;
+            let Some(signer) = signer else {
+                return Ok(None);
+            };
+            let expected_policy = match signer.current_eligibility() {
+                Ok(policy) => policy,
+                Err(ProviderIngestCompletionSignerErrorV1::Unavailable) => {
+                    return Err(ProviderIngestCompletionSignerResolverErrorV1::Unavailable);
+                }
+                Err(ProviderIngestCompletionSignerErrorV1::Rejected) => {
+                    return Err(ProviderIngestCompletionSignerResolverErrorV1::Rejected);
+                }
+            };
+            if !self
+                .owner_authority
+                .owner_matches(self.provider_id, &expected_owner)
+            {
+                return Err(ProviderIngestCompletionSignerResolverErrorV1::Unavailable);
+            }
+            if signer.authority() != &expected_owner
+                || signer.signer_policy() != expected_policy
+                || !expected_policy.is_valid()
+            {
+                return Err(ProviderIngestCompletionSignerResolverErrorV1::Rejected);
+            }
+            Ok(Some(GovernedCompletionSignerV1 {
+                signer,
+                owner_authority: Arc::clone(&self.owner_authority),
+                provider_id: self.provider_id,
+                expected_owner,
+                expected_policy,
+            }))
         })
     }
 }
 
-fn current_provider_owner_matches(
-    state: &State,
-    provider_id: ProviderId,
-    expected_owner: &AccountId,
-) -> bool {
-    state
-        .query_view()
-        .world()
-        .provider_owners()
-        .get(&provider_id)
-        == Some(expected_owner)
+trait ProviderIngestFinalizedOwnerAuthorityV1: Send + Sync + 'static {
+    fn owner_matches(&self, provider_id: ProviderId, expected_owner: &AccountId) -> bool;
+}
+
+impl ProviderIngestFinalizedOwnerAuthorityV1 for State {
+    fn owner_matches(&self, provider_id: ProviderId, expected_owner: &AccountId) -> bool {
+        self.query_view()
+            .world()
+            .provider_owners()
+            .get(&provider_id)
+            == Some(expected_owner)
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -286,6 +324,7 @@ struct FinalizedSnapshotProbeV1 {
 #[derive(Debug)]
 struct OwnedFinalizedAssignmentSnapshotV1 {
     cursor: ProviderIngestFinalizedCursorV1,
+    finalized_block_time_ms: u64,
     rows: Vec<ProviderIngestFinalizedAssignmentV1>,
     expected_after_order_id: Option<[u8; 32]>,
 }
@@ -343,6 +382,11 @@ impl NativeFinalizedAssignmentLedgerV1 {
         {
             return Err(ProviderIngestFinalizedLedgerErrorV1::Unavailable);
         }
+        let finalized_block_time_ms = view
+            .latest_block()
+            .and_then(|block| u64::try_from(block.header().creation_time().as_millis()).ok())
+            .filter(|timestamp| *timestamp != 0)
+            .ok_or(ProviderIngestFinalizedLedgerErrorV1::Unavailable)?;
         let cursor = ProviderIngestFinalizedCursorV1 { height, block_hash };
         let pin_cursor = PinManifestFinalizedCursorV1 { height, block_hash };
         let provider_owner = view
@@ -470,6 +514,7 @@ impl NativeFinalizedAssignmentLedgerV1 {
         rows.sort_by_key(|row| *row.order.order_id.as_bytes());
         Ok(OwnedFinalizedAssignmentSnapshotV1 {
             cursor,
+            finalized_block_time_ms,
             rows,
             expected_after_order_id: None,
         })
@@ -525,6 +570,7 @@ impl NativeFinalizedAssignmentLedgerV1 {
                 .as_bytes()
         });
         let cursor = snapshot.cursor;
+        let finalized_block_time_ms = snapshot.finalized_block_time_ms;
         if let Some(next) = next_after_order_id {
             snapshot.expected_after_order_id = Some(next);
         } else {
@@ -537,6 +583,7 @@ impl NativeFinalizedAssignmentLedgerV1 {
         }
         Ok(ProviderIngestFinalizedAssignmentPageV1 {
             finalized_cursor: cursor,
+            finalized_block_time_ms,
             rows,
             next_after_order_id,
         })
@@ -1504,9 +1551,10 @@ pub(crate) async fn start(
         ttl: Duration::from_millis(config.completion_transaction_ttl_ms),
         max_signed_transaction_bytes: config.outbox.max_signed_transaction_bytes.0,
     });
+    let owner_authority: Arc<dyn ProviderIngestFinalizedOwnerAuthorityV1> = state.clone();
     let resolver = Arc::new(GovernedSignerResolverAdapterV1 {
         resolver: Arc::clone(&signer_resolver),
-        state: Arc::clone(&state),
+        owner_authority,
         provider_id,
     });
     let ingress = Arc::new(NativeTransactionIngressV1 {
@@ -1852,7 +1900,313 @@ fn is_production_handle(handle: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_data_model::isi::InstructionBox;
+
     use super::*;
+
+    #[derive(Clone)]
+    struct TestOwnerAuthorityV1 {
+        owner: Arc<Mutex<Option<AccountId>>>,
+    }
+
+    impl TestOwnerAuthorityV1 {
+        fn new(owner: AccountId) -> Self {
+            Self {
+                owner: Arc::new(Mutex::new(Some(owner))),
+            }
+        }
+
+        fn replace(&self, owner: AccountId) {
+            *self.owner.lock().expect("owner authority lock") = Some(owner);
+        }
+    }
+
+    impl ProviderIngestFinalizedOwnerAuthorityV1 for TestOwnerAuthorityV1 {
+        fn owner_matches(&self, _provider_id: ProviderId, expected_owner: &AccountId) -> bool {
+            self.owner.lock().expect("owner authority lock").as_ref() == Some(expected_owner)
+        }
+    }
+
+    enum TestSignerMutationV1 {
+        Owner(AccountId),
+        Policy(ProviderIngestCompletionSignerPolicyV1),
+    }
+
+    struct TestGovernedCompletionSignerV1 {
+        key: KeyPair,
+        authority: AccountId,
+        policy: Mutex<ProviderIngestCompletionSignerPolicyV1>,
+        owner_authority: TestOwnerAuthorityV1,
+        mutation: Mutex<Option<TestSignerMutationV1>>,
+    }
+
+    impl ProviderIngestCompletionSignerV1 for TestGovernedCompletionSignerV1 {
+        fn authority(&self) -> &AccountId {
+            &self.authority
+        }
+
+        fn signer_policy(&self) -> ProviderIngestCompletionSignerPolicyV1 {
+            *self.policy.lock().expect("signer policy lock")
+        }
+
+        fn current_eligibility(
+            &self,
+        ) -> std::result::Result<
+            ProviderIngestCompletionSignerPolicyV1,
+            ProviderIngestCompletionSignerErrorV1,
+        > {
+            let policy = self.signer_policy();
+            if policy.is_valid() {
+                Ok(policy)
+            } else {
+                Err(ProviderIngestCompletionSignerErrorV1::Rejected)
+            }
+        }
+
+        fn sign<'a>(
+            &'a self,
+            payload: TransactionPayload,
+        ) -> ProviderIngestFutureV1<
+            'a,
+            std::result::Result<SignedTransaction, ProviderIngestCompletionSignerErrorV1>,
+        > {
+            Box::pin(async move {
+                let transaction = TransactionBuilder::from_payload(payload)
+                    .and_then(|builder| builder.try_sign(self.key.private_key()))
+                    .map_err(|_| ProviderIngestCompletionSignerErrorV1::Rejected)?;
+                match self.mutation.lock().expect("signer mutation lock").take() {
+                    Some(TestSignerMutationV1::Owner(owner)) => {
+                        self.owner_authority.replace(owner);
+                    }
+                    Some(TestSignerMutationV1::Policy(policy)) => {
+                        *self.policy.lock().expect("signer policy lock") = policy;
+                    }
+                    None => {}
+                }
+                Ok(transaction)
+            })
+        }
+    }
+
+    struct TestGovernedSignerResolverV1 {
+        signer: Arc<dyn ProviderIngestCompletionSignerV1>,
+    }
+
+    impl ProviderIngestGovernedSignerResolverRuntimeV1 for TestGovernedSignerResolverV1 {
+        fn runtime_handle(&self) -> &str {
+            "pkcs11:sorafs-provider-ingest-test"
+        }
+
+        fn check_readiness(
+            &self,
+        ) -> std::result::Result<(), ProviderIngestCompletionSignerResolverErrorV1> {
+            Ok(())
+        }
+
+        fn resolve<'a>(
+            &'a self,
+            _provider_owner: AccountId,
+            _finalized_cursor: ProviderIngestFinalizedCursorV1,
+        ) -> ProviderIngestFutureV1<
+            'a,
+            std::result::Result<
+                Option<Arc<dyn ProviderIngestCompletionSignerV1>>,
+                ProviderIngestCompletionSignerResolverErrorV1,
+            >,
+        > {
+            let signer = Arc::clone(&self.signer);
+            Box::pin(async move { Ok(Some(signer)) })
+        }
+    }
+
+    fn test_signer_policy(revision: u64) -> ProviderIngestCompletionSignerPolicyV1 {
+        ProviderIngestCompletionSignerPolicyV1 {
+            policy_id: [0xA1; 32],
+            revision,
+            policy_digest: [u8::try_from(revision).unwrap_or(0xFE); 32],
+        }
+    }
+
+    fn test_completion_payload(
+        key: &KeyPair,
+        provider_id: ProviderId,
+        completion_epoch: u64,
+    ) -> TransactionPayload {
+        let mut builder = TransactionBuilder::new(
+            ChainId::from("provider-ingest-governed-signer-test"),
+            AccountId::new(key.public_key().clone()),
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([InstructionBox::from(CompleteReplicationOrder {
+            order_id: ReplicationOrderId::new([0xB1; 32]),
+            provider_id,
+            completion_epoch,
+        })]);
+        builder.set_creation_time(Duration::from_secs(1));
+        builder.set_ttl(Duration::from_secs(30));
+        builder
+            .try_sign(key.private_key())
+            .expect("sign payload fixture")
+            .payload()
+            .clone()
+    }
+
+    fn test_governed_signer(
+        policy: ProviderIngestCompletionSignerPolicyV1,
+        mutation: Option<TestSignerMutationV1>,
+    ) -> (
+        Arc<TestGovernedCompletionSignerV1>,
+        TestOwnerAuthorityV1,
+        ProviderId,
+        TransactionPayload,
+    ) {
+        let key =
+            KeyPair::try_from_seed(vec![0x31; 32], Algorithm::Ed25519).expect("derive signer key");
+        let authority = AccountId::new(key.public_key().clone());
+        let owner_authority = TestOwnerAuthorityV1::new(authority.clone());
+        let provider_id = ProviderId::new([0x41; 32]);
+        let payload = test_completion_payload(&key, provider_id, 8);
+        let signer = Arc::new(TestGovernedCompletionSignerV1 {
+            key,
+            authority,
+            policy: Mutex::new(policy),
+            owner_authority: owner_authority.clone(),
+            mutation: Mutex::new(mutation),
+        });
+        (signer, owner_authority, provider_id, payload)
+    }
+
+    fn governed_signer_adapter(
+        signer: Arc<TestGovernedCompletionSignerV1>,
+        owner_authority: TestOwnerAuthorityV1,
+        provider_id: ProviderId,
+    ) -> GovernedSignerResolverAdapterV1 {
+        let signer: Arc<dyn ProviderIngestCompletionSignerV1> = signer;
+        let resolver: Arc<dyn ProviderIngestGovernedSignerResolverRuntimeV1> =
+            Arc::new(TestGovernedSignerResolverV1 { signer });
+        let owner_authority: Arc<dyn ProviderIngestFinalizedOwnerAuthorityV1> =
+            Arc::new(owner_authority);
+        GovernedSignerResolverAdapterV1 {
+            resolver,
+            owner_authority,
+            provider_id,
+        }
+    }
+
+    fn signer_test_cursor() -> ProviderIngestFinalizedCursorV1 {
+        ProviderIngestFinalizedCursorV1 {
+            height: 8,
+            block_hash: [0x48; 32],
+        }
+    }
+
+    #[tokio::test]
+    async fn governed_signer_resolver_rejects_invalid_initial_policy() {
+        let (signer, owner_authority, provider_id, _payload) = test_governed_signer(
+            ProviderIngestCompletionSignerPolicyV1 {
+                policy_id: [0; 32],
+                revision: 0,
+                policy_digest: [0; 32],
+            },
+            None,
+        );
+        let provider_owner = signer.authority().clone();
+        let adapter = governed_signer_adapter(signer, owner_authority, provider_id);
+
+        assert!(matches!(
+            adapter.resolve(provider_owner, signer_test_cursor()).await,
+            Err(ProviderIngestCompletionSignerResolverErrorV1::Rejected)
+        ));
+    }
+
+    #[tokio::test]
+    async fn governed_signer_rechecks_policy_after_signing() {
+        let (signer, owner_authority, provider_id, payload) = test_governed_signer(
+            test_signer_policy(1),
+            Some(TestSignerMutationV1::Policy(test_signer_policy(2))),
+        );
+        let provider_owner = signer.authority().clone();
+        let adapter = governed_signer_adapter(signer, owner_authority, provider_id);
+        let governed = adapter
+            .resolve(provider_owner, signer_test_cursor())
+            .await
+            .expect("resolve governed signer")
+            .expect("governed signer");
+
+        assert_eq!(
+            governed.sign(payload).await,
+            Err(ProviderIngestCompletionSignerErrorV1::Unavailable)
+        );
+    }
+
+    #[tokio::test]
+    async fn governed_signer_surfaces_policy_rotation_before_authorization() {
+        let (signer, owner_authority, provider_id, _payload) =
+            test_governed_signer(test_signer_policy(1), None);
+        let provider_owner = signer.authority().clone();
+        let adapter = governed_signer_adapter(Arc::clone(&signer), owner_authority, provider_id);
+        let governed = adapter
+            .resolve(provider_owner, signer_test_cursor())
+            .await
+            .expect("resolve governed signer")
+            .expect("governed signer");
+
+        *signer.policy.lock().expect("signer policy lock") = test_signer_policy(2);
+
+        assert_eq!(governed.signer_policy(), test_signer_policy(2));
+        assert_eq!(
+            governed.current_eligibility(),
+            Err(ProviderIngestCompletionSignerErrorV1::Unavailable)
+        );
+    }
+
+    #[tokio::test]
+    async fn governed_signer_reports_owner_rotation_before_authorization() {
+        let replacement_key = KeyPair::try_from_seed(vec![0x33; 32], Algorithm::Ed25519)
+            .expect("derive replacement owner");
+        let replacement_owner = AccountId::new(replacement_key.public_key().clone());
+        let (signer, owner_authority, provider_id, _payload) =
+            test_governed_signer(test_signer_policy(1), None);
+        let provider_owner = signer.authority().clone();
+        let adapter =
+            governed_signer_adapter(Arc::clone(&signer), owner_authority.clone(), provider_id);
+        let governed = adapter
+            .resolve(provider_owner, signer_test_cursor())
+            .await
+            .expect("resolve governed signer")
+            .expect("governed signer");
+
+        owner_authority.replace(replacement_owner);
+
+        assert_eq!(
+            governed.current_eligibility(),
+            Err(ProviderIngestCompletionSignerErrorV1::Unavailable)
+        );
+    }
+
+    #[tokio::test]
+    async fn governed_signer_rechecks_owner_after_signing() {
+        let replacement_key = KeyPair::try_from_seed(vec![0x32; 32], Algorithm::Ed25519)
+            .expect("derive replacement owner");
+        let replacement_owner = AccountId::new(replacement_key.public_key().clone());
+        let (signer, owner_authority, provider_id, payload) = test_governed_signer(
+            test_signer_policy(1),
+            Some(TestSignerMutationV1::Owner(replacement_owner)),
+        );
+        let provider_owner = signer.authority().clone();
+        let adapter = governed_signer_adapter(signer, owner_authority, provider_id);
+        let governed = adapter
+            .resolve(provider_owner, signer_test_cursor())
+            .await
+            .expect("resolve governed signer")
+            .expect("governed signer");
+
+        assert_eq!(
+            governed.sign(payload).await,
+            Err(ProviderIngestCompletionSignerErrorV1::Unavailable)
+        );
+    }
 
     #[test]
     fn production_handle_validation_rejects_placeholders_and_whitespace() {

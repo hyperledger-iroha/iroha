@@ -189,6 +189,60 @@ public enum NativeEscrowInstructionBuilders {
                                                                        escrowId: escrowId)
     }
 
+    /// Build the strict V1 `CancelAssetLock` instruction from a clean lock id.
+    ///
+    /// The lock id is converted to the native `EscrowId(Hash::new(lockId))`
+    /// literal and the expected remaining amount is mandatory and positive.
+    public static func cancelAssetLock(
+        lockId: String,
+        expectedRemainingAmount: String
+    ) throws -> NoritoJSON {
+        try CancelAssetLockInstructionV1(
+            lockId: lockId,
+            expectedRemainingAmount: expectedRemainingAmount
+        ).noritoJSON()
+    }
+
+    /// Build strict V1 cancellation from a clean lock id and typed quantity.
+    public static func cancelAssetLock(
+        lockId: String,
+        expectedRemainingAmount: KotodamaQuantity
+    ) throws -> NoritoJSON {
+        try CancelAssetLockInstructionV1(
+            lockId: lockId,
+            expectedRemainingAmount: expectedRemainingAmount
+        ).noritoJSON()
+    }
+
+    /// Build strict V1 cancellation from a finalized canonical escrow id.
+    public static func cancelAssetLock(
+        escrowId: String,
+        expectedRemainingAmount: String
+    ) throws -> NoritoJSON {
+        try CancelAssetLockInstructionV1(
+            escrowId: escrowId,
+            expectedRemainingAmount: expectedRemainingAmount
+        ).noritoJSON()
+    }
+
+    /// Build strict V1 cancellation from finalized canonical typed values.
+    public static func cancelAssetLock(
+        escrowId: String,
+        expectedRemainingAmount: KotodamaQuantity
+    ) throws -> NoritoJSON {
+        try CancelAssetLockInstructionV1(
+            escrowId: escrowId,
+            expectedRemainingAmount: expectedRemainingAmount
+        ).noritoJSON()
+    }
+
+    /// Strictly decode an exact two-field V1 `CancelAssetLock` JSON instruction.
+    public static func decodeCancelAssetLock(
+        _ instruction: NoritoJSON
+    ) throws -> CancelAssetLockInstructionV1 {
+        try CancelAssetLockInstructionV1.decodeInstructionJSON(instruction)
+    }
+
     /// Build an `OpenEscrowDispute` instruction payload.
     public static func openEscrowDispute(escrowId: String,
                                          evidenceHashes: [String] = []) throws -> NoritoJSON {
@@ -399,6 +453,50 @@ public extension IrohaSDK {
     /// Build a `CancelAssetEscrow` instruction payload (Norito JSON).
     func buildCancelAssetEscrow(escrowId: String) throws -> NoritoJSON {
         try NativeEscrowInstructionBuilders.cancelAssetEscrow(escrowId: escrowId)
+    }
+
+    /// Build strict compare-and-cancel V1 JSON from a clean lock id.
+    func buildCancelAssetLock(
+        lockId: String,
+        expectedRemainingAmount: String
+    ) throws -> NoritoJSON {
+        try NativeEscrowInstructionBuilders.cancelAssetLock(
+            lockId: lockId,
+            expectedRemainingAmount: expectedRemainingAmount
+        )
+    }
+
+    /// Build strict compare-and-cancel V1 JSON from a typed quantity.
+    func buildCancelAssetLock(
+        lockId: String,
+        expectedRemainingAmount: KotodamaQuantity
+    ) throws -> NoritoJSON {
+        try NativeEscrowInstructionBuilders.cancelAssetLock(
+            lockId: lockId,
+            expectedRemainingAmount: expectedRemainingAmount
+        )
+    }
+
+    /// Build strict compare-and-cancel V1 JSON from finalized ledger values.
+    func buildCancelAssetLock(
+        escrowId: String,
+        expectedRemainingAmount: String
+    ) throws -> NoritoJSON {
+        try NativeEscrowInstructionBuilders.cancelAssetLock(
+            escrowId: escrowId,
+            expectedRemainingAmount: expectedRemainingAmount
+        )
+    }
+
+    /// Build strict compare-and-cancel V1 JSON from canonical typed values.
+    func buildCancelAssetLock(
+        escrowId: String,
+        expectedRemainingAmount: KotodamaQuantity
+    ) throws -> NoritoJSON {
+        try NativeEscrowInstructionBuilders.cancelAssetLock(
+            escrowId: escrowId,
+            expectedRemainingAmount: expectedRemainingAmount
+        )
     }
 
     /// Build an `OpenEscrowDispute` instruction payload (Norito JSON).

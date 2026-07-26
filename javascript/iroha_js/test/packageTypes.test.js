@@ -356,8 +356,9 @@ test("strict NodeNext resolves the root and every public subpath from a packed l
       path.join(tempRoot, "consumer.mts"),
       [
         ...imports,
-        `import { Crypto, Norito, NumericV1, Torii, ToriiClient, buildCancelAssetLockInstruction, type CancelAssetLockInstruction, type ContractEntrypointValueKindName, type CryptoAlgorithm, type IdentifierClaimLookupResponse, type IdentifierPolicyListResponse, type IdentifierResolutionReceipt, type RamLfeExecuteResponse, type RamLfeOutputOpening } from ${JSON.stringify(PACKAGE_NAME)};`,
+        `import { Crypto, Norito, NumericV1, Torii, ToriiClient, CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1, buildCancelAssetLockInstruction, type CancelAssetLockInstruction, type ContractEntrypointValueKindName, type CryptoAlgorithm, type IdentifierClaimLookupResponse, type IdentifierPolicyListResponse, type IdentifierResolutionReceipt, type RamLfeExecuteResponse, type RamLfeOutputOpening } from ${JSON.stringify(PACKAGE_NAME)};`,
         'const algorithm: CryptoAlgorithm = "ed25519";',
+        "const cancelAssetLockMaxLockIdUtf8BytesV1: 4096 = CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1;",
         'const cancelAssetLock: CancelAssetLockInstruction = buildCancelAssetLockInstruction({ lockId: "merchant-lock-001", expectedRemainingAmount: "15" });',
         "// @ts-expect-error quantity-bearing APIs reject lossy JavaScript numbers.",
         'buildCancelAssetLockInstruction({ lockId: "merchant-lock-001", expectedRemainingAmount: 15 });',

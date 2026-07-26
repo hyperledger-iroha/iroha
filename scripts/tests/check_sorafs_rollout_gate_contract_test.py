@@ -15178,6 +15178,52 @@ def test_public_storage_ingest_surface_cannot_be_resurrected() -> None:
     assert all(".ingest_manifest(" not in source for source in torii_storage_writers)
 
 
+def test_provider_ingest_persists_and_reconciles_governed_signer_policy() -> None:
+    outbox = read(
+        REPO_ROOT / "crates" / "sorafs_node" / "src" / "provider_ingest_outbox.rs"
+    )
+    runtime = read(
+        REPO_ROOT / "crates" / "sorafs_node" / "src" / "provider_ingest_runtime.rs"
+    )
+    daemon = read(
+        REPO_ROOT
+        / "crates"
+        / "irohad"
+        / "src"
+        / "sorafs_provider_ingest_runtime.rs"
+    )
+    closure = read(DOCS_SOURCE_DIR / "sorafs" / "v1_closure_ledger.md")
+
+    for field in (
+        "pub policy_id: [u8; 32]",
+        "pub revision: u64",
+        "pub policy_digest: [u8; 32]",
+        "pub signer_policy: ProviderIngestCompletionSignerPolicyV1",
+        "signer_policy_floor: Option<ProviderIngestCompletionSignerPolicyV1>",
+        "signer_policy_successor_required: bool",
+    ):
+        assert field in outbox
+    for guard in (
+        "ProviderIngestSignerPolicyObservationV1::Missing",
+        "ProviderIngestFailureClassV1::SignerPolicyChanged",
+        "policy == signing_context.signer_policy",
+        "finalized_signer_policy_rotation_or_revocation_invalidates_after_restart",
+        "signer_policy_floor_rejects_rollback_equivocation_and_identity_substitution",
+        "ProviderIngestOutboxError::SignerPolicyRollback",
+    ):
+        assert guard in outbox
+    for guard in (
+        "fn signer_policy(&self) -> ProviderIngestCompletionSignerPolicyV1",
+        "signer.signer_policy() != claim.context().signer_policy",
+        "record_completion_signer_resolution_failure",
+        "signer_policy_rotation_invalidates_retained_transaction_before_observation",
+    ):
+        assert guard in runtime
+    assert "self.signer.signer_policy()" in daemon
+    assert "same-owner rotation or revocation" in closure
+    assert "What remains is a persisted governed signer-policy" not in closure
+
+
 def test_sorafs_node_storage_docs_track_current_readback_routes() -> None:
     required_routes = (
         "/v1/sorafs/storage/manifest/{manifest_id}",

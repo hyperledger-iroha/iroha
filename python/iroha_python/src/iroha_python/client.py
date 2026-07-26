@@ -14816,7 +14816,7 @@ class ToriiClient(_BaseToriiClient):
         timeout: Optional[float] = 30.0,
         interval: float = 1.0,
     ) -> Mapping[str, Any]:
-        """Compare-and-cancel a native asset lock and optionally wait for commit."""
+        """Cancel from an exact bounded lock-ID preimage and optionally await commit."""
 
         draft = self._transaction_draft(
             chain_id=chain_id,

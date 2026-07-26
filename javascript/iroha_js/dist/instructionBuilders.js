@@ -40,6 +40,8 @@ const DEFAULT_PRIVACY_MAX_PROOF_BYTES = 64 * 1024 * 1024;
 const DEFAULT_PRIVACY_MAX_PUBLIC_INPUT_BYTES = 1024 * 1024;
 const DEFAULT_PRIVACY_MAX_AUX_BYTES = 64 * 1024;
 export const SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BYTES_V1 = 1024 * 1024;
+/** Maximum UTF-8 bytes accepted for a CancelAssetLock lock-id preimage. */
+export const CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1 = 4_096;
 const SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BASE64_CHARS_V1 =
   4 * Math.ceil(SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BYTES_V1 / 3);
 const ZK_ACE_BACKEND = "stark/fri/sha256-goldilocks";
@@ -325,7 +327,15 @@ function asPositiveQuantity(value, name) {
 
 function normalizeAssetLockId(value, name) {
   const lockId = assertExactNonBlankString(value, name);
-  return canonicalHashLiteral(blake2b256(Buffer.from(lockId, "utf8")));
+  const lockIdBytes = Buffer.from(lockId, "utf8");
+  if (lockIdBytes.length > CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1) {
+    fail(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${name} must be at most ${CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1} UTF-8 bytes`,
+      name,
+    );
+  }
+  return canonicalHashLiteral(blake2b256(lockIdBytes));
 }
 
 function asPositiveProofScalarQuantity(value, name) {
@@ -10767,7 +10777,9 @@ export function buildExpireReplicationOrderInstruction(options) {
 /**
  * Build the canonical compare-and-cancel `CancelAssetLock` instruction.
  *
- * `lockId` is hashed with the native Blake2b-256 escrow-id derivation. The
+ * `lockId` is exact, nonempty text without surrounding whitespace or a BOM,
+ * is bounded by {@link CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1} UTF-8
+ * bytes, and is hashed with the native Blake2b-256 escrow-id derivation. The
  * expected remaining amount is mandatory, positive, and encoded using the
  * exact canonical Quantity spelling observed in finalized ledger state.
  *

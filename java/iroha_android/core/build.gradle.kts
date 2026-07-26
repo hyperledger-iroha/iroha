@@ -77,6 +77,12 @@ tasks.withType<Test>().configureEach {
             .dir("..")
             .file("fixtures/offline/peer_nfc_v1.json"),
     )
+    inputs.dir(
+        rootProject.layout.projectDirectory
+            .dir("..")
+            .dir("..")
+            .dir("fixtures/sorafs_manifest/appeal_finance"),
+    )
     val harnessFilter = System.getenv("ANDROID_HARNESS_MAINS")
     if (!harnessFilter.isNullOrBlank()) {
         systemProperty("android.test.mains", harnessFilter)

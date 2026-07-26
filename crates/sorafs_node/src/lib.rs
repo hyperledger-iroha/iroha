@@ -99,14 +99,15 @@ pub use proof_outcome_forwarder::{
 pub use provider_ingest_outbox::{
     FinalizedProviderIngestAuthorizationV1, PROVIDER_INGEST_OUTBOX_FILE_V1,
     PROVIDER_INGEST_STATUS_PAGE_MAX_V1, ProviderIngestCancellationReasonV1,
-    ProviderIngestClaimOwnerV1, ProviderIngestCompletionSigningClaimV1,
-    ProviderIngestCompletionSigningContextV1, ProviderIngestCompletionStateV1,
-    ProviderIngestCompletionSubmissionV1, ProviderIngestDeadLetterReasonV1,
-    ProviderIngestDeliveryStateV1, ProviderIngestEnqueueResultV1, ProviderIngestFailureClassV1,
-    ProviderIngestFinalizedCancellationV1, ProviderIngestFinalizedCompletionV1,
-    ProviderIngestFinalizedCursorV1, ProviderIngestOutbox, ProviderIngestOutboxCountsV1,
-    ProviderIngestOutboxError, ProviderIngestOutboxPolicyV1, ProviderIngestRetryOutcomeV1,
-    ProviderIngestSourceClaimV1, ProviderIngestStatusPageV1, ProviderIngestStatusV1,
+    ProviderIngestClaimOwnerV1, ProviderIngestCompletionSignerPolicyV1,
+    ProviderIngestCompletionSigningClaimV1, ProviderIngestCompletionSigningContextV1,
+    ProviderIngestCompletionStateV1, ProviderIngestCompletionSubmissionV1,
+    ProviderIngestDeadLetterReasonV1, ProviderIngestDeliveryStateV1, ProviderIngestEnqueueResultV1,
+    ProviderIngestFailureClassV1, ProviderIngestFinalizedCancellationV1,
+    ProviderIngestFinalizedCompletionV1, ProviderIngestFinalizedCursorV1, ProviderIngestOutbox,
+    ProviderIngestOutboxCountsV1, ProviderIngestOutboxError, ProviderIngestOutboxPolicyV1,
+    ProviderIngestRetryOutcomeV1, ProviderIngestSourceClaimV1, ProviderIngestStatusPageV1,
+    ProviderIngestStatusV1,
 };
 pub use provider_ingest_runtime::{
     ProviderIngestAuthenticatedSourceFetchV1, ProviderIngestClockV1,
@@ -13481,6 +13482,9 @@ mod tests {
             .provider_ingest_outbox
             .as_ref()
             .expect("provider ingest outbox");
+        outbox
+            .observe_finalized_snapshot(fixture.ingest_cursor, 1_000)
+            .expect("observe finalized provider-ingest snapshot");
         let signing_claim = outbox
             .claim_completion_signing(
                 inserted.job_id(),
@@ -13488,6 +13492,11 @@ mod tests {
                     baseline_finalized_cursor: fixture.ingest_cursor,
                     chain_id: completion_payload.chain.clone(),
                     provider_owner: completion_payload.authority.clone(),
+                    signer_policy: ProviderIngestCompletionSignerPolicyV1 {
+                        policy_id: [0xA1; 32],
+                        revision: 1,
+                        policy_digest: [0xA2; 32],
+                    },
                     completion_epoch,
                     expected_payload: completion_payload,
                 },

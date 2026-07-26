@@ -1000,6 +1000,13 @@ client.cancel_asset_lock_and_wait(
 )
 ```
 
+For `CancelAssetLock`, the `escrow_id` convenience argument is the application
+lock-ID preimage: it must be nonempty exact text without surrounding whitespace
+or a BOM and is bounded by
+`CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1` (4,096 UTF-8 bytes, not
+characters). It is hashed before encoding, so the on-wire `EscrowId` remains
+32 bytes.
+
 `OpenAssetLock` moves source funds into deterministic native custody.
 `DrawdownAssetLock` releases funds to the destination only when the committed
 remaining amount still equals `expected_remaining_amount`; this prevents two

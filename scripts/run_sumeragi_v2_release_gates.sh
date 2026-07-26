@@ -1067,6 +1067,7 @@ required_production_liveness_tests=(
   sumeragi::v2_core::tests::replay_rejects_later_view_commit_even_after_exact_tc_lock_installation
   sumeragi::v2_core::tests::higher_conflicting_prepare_intent_fences_historical_commit_reconstruction
   sumeragi::v2_core::tests::higher_same_subject_prepare_fences_historical_commit_reconstruction
+  sumeragi::v2_core::tests::replay_does_not_resign_proposal_superseded_by_same_round_lock
   sumeragi::v2_core::tests::replay_does_not_resign_commit_superseded_by_higher_tc_lock
   sumeragi::v2_core::tests::replay_resigns_current_proposal_prepare_then_commit_fifo
   sumeragi::v2_core::tests::replay_resigns_current_timeout_then_durable_old_round_commit_fifo
@@ -1219,7 +1220,9 @@ required_production_liveness_tests=(
   merge_sidecar::tests::durable_lifecycle_v3_rejects_split_generations_and_rehashed_state
   merge_sidecar::tests::durable_lifecycle_v3_generation_exhaustion_precedes_close_mutation
   merge_sidecar::tests::durable_lifecycle_v3_generation_exhaustion_precedes_writer_flush_cas
+  merge_sidecar::tests::durable_lifecycle_v3_recovers_predecessor_before_state_directory_sync
   merge_sidecar::tests::durable_lifecycle_v3_recovers_predecessor_between_state_and_root_publication
+  merge_sidecar::tests::durable_lifecycle_v3_resyncs_replaced_root_before_predecessor_cleanup
   merge_sidecar::tests::durable_lifecycle_v3_recovers_successor_after_root_publication
   merge_sidecar::tests::durable_lifecycle_v3_rejects_missing_state_with_surviving_root_high_water
   merge_sidecar::tests::durable_lifecycle_rejects_legacy_stream_state_without_guessing_a_layout
@@ -1491,6 +1494,7 @@ required_production_liveness_tests=(
   sumeragi::v2_runner::tests::runner_dispatch_rejects_certified_sidecar_chunk_without_reply_route
   sumeragi::v2_runner::tests::runner_dispatch_rejects_durable_response_without_reply_routes
   sumeragi::v2_runner::tests::exact_locked_body_is_reencoded_at_the_reproposal_round_without_byte_drift
+  sumeragi::v2_runner::tests::replayed_proposal_sign_reserves_only_the_exact_current_lock_owner
   sumeragi::v2_runner::tests::first_same_subject_lock_preserves_pending_local_proposal_events
   sumeragi::v2_runner::tests::higher_same_subject_lock_retires_prior_origin_work
   sumeragi::v2_runner::tests::first_same_subject_lock_from_prior_view_retires_unlocked_work
@@ -1537,7 +1541,7 @@ required_production_liveness_tests=(
   sumeragi::v2_worker::tests::unavailable_admission_racing_retirement_is_nonfatal
   sumeragi::v2_worker::tests::ordinary_reply_late_old_flush_after_reconnect_advances_exactly_once
   sumeragi::v2_worker::tests::closed_sidecar_source_reconnect_retries_current_item_while_sibling_backpressures
-  sumeragi::v2_worker::tests::closed_sidecar_reconnect_is_capacity_checked_then_retries_current_item
+  sumeragi::v2_worker::tests::completed_sidecar_reconnect_preserves_terminal_cursor_without_capacity_charge
   sumeragi::v2_worker::tests::later_delivery_cannot_requeue_pending_or_unapplied_sidecar_flush_but_other_attempts_progress
   sumeragi::v2_worker::tests::mixed_source_retry_retains_pending_flush_target_without_resetting_live_siblings
   sumeragi::v2_worker::tests::inactive_reply_target_tombstone_rejects_cross_source_equal_ordinal_collision
@@ -1755,7 +1759,7 @@ required_production_liveness_tests=(
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_must_fit_network_geometry
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_use_effective_lane_profile_geometry
 )
-readonly expected_production_liveness_test_count=723
+readonly expected_production_liveness_test_count=727
 if (( ${#required_production_liveness_tests[@]} != expected_production_liveness_test_count )); then
   echo "expected exactly ${expected_production_liveness_test_count} production Sumeragi v2 liveness tests, found ${#required_production_liveness_tests[@]}" >&2
   exit 1
@@ -1777,7 +1781,7 @@ production_data_model_ignored_unit_list="$(
 # This source-bound corridor intentionally exercises `iroha_p2p`'s production
 # default feature set (`default = []`). Feature-gated QUIC first-packet geometry
 # tests remain useful transport regressions, but are not claimed by this
-# thirty-nine-module pre-network inventory.
+# thirty-eight-module pre-network inventory.
 production_p2p_unit_list="$(run_cargo test --locked --offline -p iroha_p2p --lib -- --list)"
 production_p2p_ignored_unit_list="$(
   run_cargo test --locked --offline -p iroha_p2p --lib -- --list --ignored
@@ -1855,7 +1859,7 @@ for required_test in "${required_production_liveness_tests[@]}"; do
 done
 
 # Keep the multilane closure-critical focused tests explicit even when they do
-# not belong to the canonical 723-test liveness inventory above. The later
+# not belong to the canonical 727-test liveness inventory above. The later
 # source-sealed workspace leg executes these non-ignored tests; this preflight
 # prevents a rename, deletion, or accidental `#[ignore]` from hiding behind
 # Cargo's successful zero-test filtering.
@@ -2503,6 +2507,23 @@ if ! grep -Fqx -- \
   'echo "[tlc] all 37 multilane mutations produced their exact named counterexamples; no deductive proof status was changed"' \
   scripts/formal/run_sumeragi_v2_multilane_mutations.sh; then
   echo "multilane mutation runner lacks the exact 37-mutation completion contract" >&2
+  exit 1
+fi
+
+readonly expected_typed_rollover_formal_mutation_count=35
+observed_typed_rollover_formal_mutation_count="$(
+  grep -Ec '^  "[a-z0-9-]+\|typed_rollover_handoff_[a-z0-9_]+_bug[.]cfg\|12\|\$\{INVARIANT_MARKER\}"$' \
+    scripts/formal/run_sumeragi_v2_typed_rollover_handoff_mutations.sh
+)"
+if ((observed_typed_rollover_formal_mutation_count
+    != expected_typed_rollover_formal_mutation_count)); then
+  echo "expected exactly ${expected_typed_rollover_formal_mutation_count} typed rollover formal mutations, found ${observed_typed_rollover_formal_mutation_count}" >&2
+  exit 1
+fi
+if ! grep -Fqx -- \
+  'echo "[tlc] typed rollover-handoff fixed model and 35-mutant root-anchored V3 matrix passed"' \
+  scripts/formal/run_sumeragi_v2_typed_rollover_handoff_mutations.sh; then
+  echo "typed rollover mutation runner lacks the exact 35-mutation completion contract" >&2
   exit 1
 fi
 

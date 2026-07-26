@@ -4,6 +4,8 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [Unreleased]
 
+- Bound the `CancelAssetLock` lock-ID preimage to the public V1 limit of 4,096
+  UTF-8 bytes while preserving the fixed 32-byte `EscrowId` wire field.
 - Added strict JavaScript/TypeScript `CancelAssetLock` parity. The new builder
   derives the native escrow id, requires a positive canonical
   `expected_remaining_amount`, and the native and pure-JavaScript codecs reject

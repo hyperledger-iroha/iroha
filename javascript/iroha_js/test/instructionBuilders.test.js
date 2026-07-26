@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import {
   buildBurnAssetInstruction,
   buildCancelAssetLockInstruction,
+  CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1,
   buildMintAssetInstruction,
   buildMintTriggerRepetitionsInstruction,
   buildBurnTriggerRepetitionsInstruction,
@@ -504,6 +505,16 @@ baseTest("buildCancelAssetLockInstruction rejects legacy and ambiguous inputs", 
       }),
     /surrounding whitespace/,
   );
+  for (const lockId of ["\uFEFFmerchant-lock-001", "merchant-lock-001\uFEFF"]) {
+    assert.throws(
+      () =>
+        buildCancelAssetLockInstruction({
+          lockId,
+          expectedRemainingAmount: "1",
+        }),
+      /surrounding whitespace/,
+    );
+  }
   for (const expectedRemainingAmount of [0n, "0", "-1", "01", "1.0", "+1", 1]) {
     assert.throws(
       () =>
@@ -515,6 +526,29 @@ baseTest("buildCancelAssetLockInstruction rejects legacy and ambiguous inputs", 
       `accepted invalid expected remaining amount ${String(expectedRemainingAmount)}`,
     );
   }
+});
+
+baseTest("buildCancelAssetLockInstruction bounds the exact UTF-8 lock-id preimage", () => {
+  const exactBound = "🔒".repeat(1_024);
+  assert.equal(Buffer.byteLength(exactBound, "utf8"), 4_096);
+  assert.equal(CANCEL_ASSET_LOCK_MAX_LOCK_ID_UTF8_BYTES_V1, 4_096);
+  assert.doesNotThrow(() =>
+    buildCancelAssetLockInstruction({
+      lockId: exactBound,
+      expectedRemainingAmount: "1",
+    }),
+  );
+
+  const overBound = `${exactBound}a`;
+  assert.equal(Buffer.byteLength(overBound, "utf8"), 4_097);
+  assert.throws(
+    () =>
+      buildCancelAssetLockInstruction({
+        lockId: overBound,
+        expectedRemainingAmount: "1",
+      }),
+    /at most 4096 UTF-8 bytes/u,
+  );
 });
 
 baseTest("pure JS codec roundtrips CancelAssetLock and rejects the legacy shape", () => {

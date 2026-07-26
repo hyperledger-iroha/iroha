@@ -6406,7 +6406,7 @@ mod tests {
         assert_ne!(
             retained.direct[0].process_local_projection_hash(),
             retained.direct[1].process_local_projection_hash(),
-            "route-free carrier projections must retain their distinct source identities"
+            "direct carrier projections must retain their distinct authenticated-source identities"
         );
 
         let mut source_substituted = retained.clone();
