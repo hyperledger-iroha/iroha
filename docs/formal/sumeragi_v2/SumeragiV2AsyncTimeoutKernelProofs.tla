@@ -322,10 +322,12 @@ PROOF
                   CompleteProposalSignature(request)
       BY <2>5, Isa DEF CompleteProposalSignature
     <2>6. CASE \E signer \in ValidatorIds, roundView \in Views,
-                  subject \in Subjects, justifyRank \in Ranks,
-                  justifySubject \in SubjectOrNone:
+                  subject \in Subjects,
+                  timeoutCertificate \in TimeoutCertificateOptionSet,
+                  highestPrepare \in PrepareQcOptionSet:
                   ByzantineBroadcastProposal(
-                    signer, roundView, subject, justifyRank, justifySubject)
+                    signer, roundView, subject,
+                    timeoutCertificate, highestPrepare)
       BY <2>6, Isa DEF ByzantineBroadcastProposal
     <2>7. CASE \E envelope \in proposalNetwork:
                   DeliverProposal(envelope)
@@ -405,15 +407,12 @@ PROOF
                    CompleteTimeoutSignature(request)
       BY <2>27, Isa DEF CompleteTimeoutSignature
     <2>28. CASE \E signer \in ValidatorIds, roundView \in Views,
-                   highRank \in Ranks, highSubject \in SubjectOrNone:
+                   highestPrepare \in PrepareQcOptionSet:
                    ByzantineBroadcastTimeout(
-                     signer, roundView, highRank, highSubject)
+                    signer, roundView, highestPrepare)
       BY <2>28, Isa DEF ByzantineBroadcastTimeout
     <2>29. CASE \E envelope \in timeoutNetwork: DeliverTimeout(envelope)
       BY <2>29, Isa DEF DeliverTimeout
-    <2>30. CASE \E node \in ValidatorIds, roundView \in Views:
-                   FormTC(node, roundView)
-      BY <2>30, Isa DEF FormTC
     <2>31. CASE \E envelope \in tcNetwork: DeliverTC(envelope)
       BY <2>31, Isa DEF DeliverTC
     <2>32. CASE \E node \in ValidatorIds, tc \in ReceivedTcValues:
@@ -447,7 +446,7 @@ PROOF
                 <2>8, <2>9, <2>10, <2>11, <2>12, <2>13, <2>14,
                 <2>15, <2>16, <2>17, <2>18, <2>19, <2>20, <2>21,
                 <2>22, <2>23, <2>24, <2>25, <2>26, <2>27, <2>28,
-                <2>29, <2>30, <2>31, <2>32, <2>33, <2>34, <2>35,
+                <2>29, <2>31, <2>32, <2>33, <2>34, <2>35,
                 <2>36, <2>37, <2>38, <2>39, <2>40
          DEF Next
   <1> QED BY <1>1
@@ -628,9 +627,6 @@ PROOF
                            request.vote.highSubject)
                       /\ PersistTimeout(request)
       BY <2>15, Isa DEF PersistTimeout
-    <2>16. CASE command.kind = "FormTC"
-                 /\ FormTC(command.node, command.view)
-      BY <2>16, Isa DEF FormTC
     <2>17. CASE command.kind = "BeginInstallTC"
                  /\ \E tc \in ReceivedTcValues:
                       /\ command.node = command.node
@@ -642,16 +638,15 @@ PROOF
                  /\ command.item.envelope.recipient = command.node
                  /\ command.item.envelope.view = command.view
                  /\ command.item.envelope.subject = command.subject
-                 /\ \E qc \in DecisionQcValues \cup prepareQCs:
-                      /\ CommandMatches(
-                           command, command.node, qc.view, qc.subject)
-                      /\ CertifiedBodyRecoveryAuthority(command.node, qc)
-                      /\ command.item.source \in qc.signers
-                      /\ FetchCertifiedBody(command.node, qc)
-      BY <2>18, Isa DEF FetchCertifiedBody
+                 /\ CertifiedResponseCapabilityAuthorized(command.item)
+                 /\ AcceptCertifiedResponseCapability(
+                      command.node, command.view, command.subject)
+      BY <2>18, Isa
+         DEF AcceptCertifiedResponseCapability,
+             InstallCertifiedBodyEffect
     <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, <2>5, <2>6,
                 <2>7, <2>8, <2>9, <2>10, <2>11, <2>12, <2>13,
-                <2>14, <2>15, <2>16, <2>17, <2>18
+                <2>14, <2>15, <2>17, <2>18
          DEF RegularCoreCommand
   <1> QED BY <1>1
 
@@ -804,10 +799,12 @@ PROOF
                     source, recipient, qc, nonce)
       BY <2>5, Isa DEF InjectByzantineCertifiedRequest, vars
     <2>6. CASE \E signer \in ValidatorIds, roundView \in Views,
-                  subject \in Subjects, justifyRank \in Ranks,
-                  justifySubject \in SubjectOrNone:
+                  subject \in Subjects,
+                  timeoutCertificate \in TimeoutCertificateOptionSet,
+                  highestPrepare \in PrepareQcOptionSet:
                   AsyncByzantineProposal(
-                    signer, roundView, subject, justifyRank, justifySubject)
+                    signer, roundView, subject,
+                    timeoutCertificate, highestPrepare)
       BY <2>6, Isa
          DEF AsyncByzantineProposal, ByzantineBroadcastProposal
     <2>7. CASE \E signer \in ValidatorIds, roundView \in Views,
@@ -815,9 +812,9 @@ PROOF
                   AsyncByzantineVote(signer, roundView, phase, subject)
       BY <2>7, Isa DEF AsyncByzantineVote, ByzantineBroadcastVote
     <2>8. CASE \E signer \in ValidatorIds, roundView \in Views,
-                  highRank \in Ranks, highSubject \in SubjectOrNone:
+                  highestPrepare \in PrepareQcOptionSet:
                   AsyncByzantineTimeout(
-                    signer, roundView, highRank, highSubject)
+                    signer, roundView, highestPrepare)
       BY <2>8, Isa
          DEF AsyncByzantineTimeout, ByzantineBroadcastTimeout
     <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>3c, <2>4, <2>5,
@@ -845,7 +842,7 @@ PROOF
       BY <2>5, Isa
          DEF DirectHistoricalCommitCertificateDiscoveryStep,
              CommitCertificateDiscoveryStepWork, vars
-    <2>6. CASE \E node \in AsyncCurrentResponsiveVoters:
+    <2>6. CASE \E node \in AsyncArchiveIoServiceNodes:
                   ServiceIoWorker(node)
       BY <2>6, Isa DEF ServiceIoWorker, ServiceIoWorkerWork, vars
     <2>7. CASE \E node \in asyncHistoricalRecoveryTargets:
@@ -894,7 +891,7 @@ PROOF
         BY <1>1, <3>1, ChangedRunNodeWorkExecutesCommand
            DEF RunHistoricalRecoveryNode
       <3> QED BY <2>2, <3>1
-    <2>3. CASE \E node \in AsyncCurrentResponsiveVoters:
+    <2>3. CASE \E node \in AsyncResponsiveAppliedArchiveServers:
                   RunHistoricalServer(node)
       BY <1>1, <2>3, Isa
          DEF RunHistoricalServer, DrainHistoricalIngressSelected,
@@ -1394,8 +1391,7 @@ THEOREM InjectedByzantineNoisePacketIsTyped ==
                             nodeView[recipient],
                             AsyncHeartbeatSubject, NoAsyncChunk, nonce)
         item == AsyncNetworkItem("Noise", source, envelope)
-        packet ==
-          AsyncPacket(item, asyncNow, asyncNow + AsyncDeliveryBound)
+        packet == PacketForItem(item)
     IN /\ AsyncTypeInvariant
        /\ InjectByzantineNoise(source, recipient, nonce)
        => AsyncPacketTyped(packet)
@@ -1421,8 +1417,7 @@ PROOF
                             nodeView[recipient],
                             AsyncHeartbeatSubject, NoAsyncChunk, nonce)
     <2> DEFINE Item == AsyncNetworkItem("Noise", source, Envelope)
-    <2> DEFINE Packet ==
-          AsyncPacket(Item, asyncNow, asyncNow + AsyncDeliveryBound)
+    <2> DEFINE Packet == PacketForItem(Item)
     <2>1. AsyncPacketTyped(Packet)
       BY <1>1, InjectedByzantineNoisePacketIsTyped
          DEF Envelope, Item, Packet
@@ -1434,6 +1429,7 @@ PROOF
          DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
              AsyncTransportTypeInvariant, InjectByzantineNoise,
              AsyncTransportHistoryTypeVars, Envelope, Item, Packet,
+             AsyncCertifiedResponseClaimAuthorityVars,
              LeaveCausalQueues, AsyncSchedulerVars, vars
     <2>3. AsyncTransportContentTypeInvariant'
       BY <2>1, <2>2,
@@ -1471,11 +1467,8 @@ THEOREM AsyncUntrustedTransportCompletionItemIsTyped ==
   \A kind \in IngressTransportCompletionKinds,
      recipient \in ValidatorIds,
      nonce \in 0..(AsyncIngressCapacity - 1):
-    LET envelope ==
-          AsyncBodyEnvelope(recipient, context.height,
-                            nodeView[recipient],
-                            AsyncHeartbeatSubject, NoAsyncChunk, nonce)
-        item == AsyncNetworkItem(kind, AsyncUntrustedSource, envelope)
+    LET item ==
+          AsyncUntrustedTransportCompletionItem(kind, recipient, nonce)
     IN /\ TypeInvariant
        /\ AsyncConfiguration
        => AsyncItemTyped(item)
@@ -1483,24 +1476,16 @@ PROOF
   <1>1. ASSUME NEW kind \in IngressTransportCompletionKinds,
                 NEW recipient \in ValidatorIds,
                 NEW nonce \in 0..(AsyncIngressCapacity - 1)
-         PROVE LET envelope ==
-                 AsyncBodyEnvelope(recipient, context.height,
-                                   nodeView[recipient],
-                                   AsyncHeartbeatSubject,
-                                   NoAsyncChunk, nonce)
-               item == AsyncNetworkItem(
-                         kind, AsyncUntrustedSource, envelope)
+         PROVE LET item ==
+                 AsyncUntrustedTransportCompletionItem(
+                   kind, recipient, nonce)
                IN /\ TypeInvariant
                   /\ AsyncConfiguration
                   => AsyncItemTyped(item)
     <2>1. ASSUME TypeInvariant, AsyncConfiguration
-           PROVE LET envelope ==
-                   AsyncBodyEnvelope(recipient, context.height,
-                                     nodeView[recipient],
-                                     AsyncHeartbeatSubject,
-                                     NoAsyncChunk, nonce)
-                 item == AsyncNetworkItem(
-                           kind, AsyncUntrustedSource, envelope)
+           PROVE LET item ==
+                   AsyncUntrustedTransportCompletionItem(
+                     kind, recipient, nonce)
                  IN AsyncItemTyped(item)
       <3>1. /\ ModelConfiguration
              /\ context.height \in Heights
@@ -1509,8 +1494,13 @@ PROOF
         BY <1>1, <2>1, AsyncHeartbeatSubjectIsValid
            DEF TypeInvariant
       <3> QED BY <1>1, <2>1, <3>1, SMT
-           DEF AsyncItemTyped, AsyncNetworkItem,
+           DEF AsyncUntrustedTransportCompletionItem,
+               AsyncUntrustedCompletionRequestWitness,
+               AsyncItemTyped, AsyncNetworkItem,
                AsyncBodyEnvelopeTyped, AsyncBodyEnvelope,
+               AsyncCertifiedResponseEnvelope,
+               AsyncCertifiedResponseEnvelopeTyped,
+               AsyncReplyRequestItemTyped,
                AsyncNetworkKinds, AsyncIngressSources,
                IngressTransportCompletionKinds,
                AsyncConfiguration, NoAsyncChunk
@@ -1521,14 +1511,9 @@ THEOREM InjectedUntrustedTransportCompletionPacketIsTyped ==
   \A kind \in IngressTransportCompletionKinds,
      recipient \in ValidatorIds,
      nonce \in 0..(AsyncIngressCapacity - 1):
-    LET envelope ==
-          AsyncBodyEnvelope(recipient, context.height,
-                            nodeView[recipient],
-                            AsyncHeartbeatSubject, NoAsyncChunk, nonce)
-        item == AsyncNetworkItem(
-                  kind, AsyncUntrustedSource, envelope)
-        packet ==
-          AsyncPacket(item, asyncNow, asyncNow + AsyncDeliveryBound)
+    LET item ==
+          AsyncUntrustedTransportCompletionItem(kind, recipient, nonce)
+        packet == PacketForItem(item)
     IN /\ AsyncTypeInvariant
        /\ InjectUntrustedTransportCompletion(kind, recipient, nonce)
        => AsyncPacketTyped(packet)
@@ -1552,17 +1537,12 @@ PROOF
                 InjectUntrustedTransportCompletion(
                   kind, recipient, nonce)
          PROVE AsyncSchedulerTypeInvariant'
-    <2> DEFINE Envelope ==
-          AsyncBodyEnvelope(recipient, context.height,
-                            nodeView[recipient],
-                            AsyncHeartbeatSubject, NoAsyncChunk, nonce)
     <2> DEFINE Item ==
-          AsyncNetworkItem(kind, AsyncUntrustedSource, Envelope)
-    <2> DEFINE Packet ==
-          AsyncPacket(Item, asyncNow, asyncNow + AsyncDeliveryBound)
+          AsyncUntrustedTransportCompletionItem(kind, recipient, nonce)
+    <2> DEFINE Packet == PacketForItem(Item)
     <2>1. AsyncPacketTyped(Packet)
       BY <1>1, InjectedUntrustedTransportCompletionPacketIsTyped
-         DEF Envelope, Item, Packet
+         DEF Item, Packet
     <2>2. /\ AsyncTransportContentTypeInvariant
            /\ asyncTransport' = asyncTransport \cup {Packet}
            /\ UNCHANGED AsyncTransportHistoryTypeVars
@@ -1571,7 +1551,8 @@ PROOF
          DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
              AsyncTransportTypeInvariant,
              InjectUntrustedTransportCompletion,
-             AsyncTransportHistoryTypeVars, Envelope, Item, Packet,
+             AsyncTransportHistoryTypeVars, Item, Packet,
+             AsyncCertifiedResponseClaimAuthorityVars,
              LeaveCausalQueues, AsyncSchedulerVars, vars
     <2>3. AsyncTransportContentTypeInvariant'
       BY <2>1, <2>2,
@@ -1610,14 +1591,18 @@ THEOREM PublishTypedSingletonPreservesTransportContentType ==
     /\ AsyncTypeInvariant
     /\ AsyncItemTyped(item)
     /\ PublishEphemeralItems({item})
-    /\ UNCHANGED <<context, asyncHeldChunks>>
+    /\ UNCHANGED
+         <<context, AsyncCertifiedResponseClaimCoreAuthorityVars,
+           asyncHeldChunks>>
     => AsyncTransportContentTypeInvariant'
 PROOF
   <1>1. ASSUME NEW item,
                 AsyncTypeInvariant,
                 AsyncItemTyped(item),
                 PublishEphemeralItems({item}),
-                UNCHANGED <<context, asyncHeldChunks>>
+                UNCHANGED
+                  <<context, AsyncCertifiedResponseClaimCoreAuthorityVars,
+                    asyncHeldChunks>>
          PROVE AsyncTransportContentTypeInvariant'
     <2>1. /\ AsyncRuntimeScalarTypeInvariant
            /\ AsyncTransportContentTypeInvariant
@@ -1636,7 +1621,9 @@ THEOREM PublishTypedSingletonPreservesSchedulerType ==
     /\ AsyncTypeInvariant
     /\ AsyncItemTyped(item)
     /\ PublishEphemeralItems({item})
-    /\ UNCHANGED <<context, asyncHeldChunks>>
+    /\ UNCHANGED
+         <<context, AsyncCertifiedResponseClaimCoreAuthorityVars,
+           asyncHeldChunks>>
     /\ UNCHANGED AsyncRuntimeScalarTypeVars
     /\ UNCHANGED asyncCausalQueues
     /\ UNCHANGED AsyncIoTopologyTypeVars
@@ -1661,7 +1648,9 @@ THEOREM PublishTypedItemsPreservesSchedulerType ==
     /\ IsFiniteSet(items)
     /\ \A item \in items: AsyncItemTyped(item)
     /\ PublishEphemeralItems(items)
-    /\ UNCHANGED <<context, asyncHeldChunks>>
+    /\ UNCHANGED
+         <<context, AsyncCertifiedResponseClaimCoreAuthorityVars,
+           asyncHeldChunks>>
     /\ UNCHANGED AsyncRuntimeScalarTypeVars
     /\ UNCHANGED asyncCausalQueues
     /\ UNCHANGED AsyncIoTopologyTypeVars
@@ -1797,7 +1786,8 @@ PROOF
 THEOREM ByzantineProposalItemIsTyped ==
   \A signer \in ValidatorIds, recipient \in ValidatorIds,
      roundView \in Views, subject \in Subjects,
-     justifyRank \in Ranks, justifySubject \in SubjectOrNone:
+     timeoutCertificate \in TimeoutCertificateOptionSet,
+     highestPrepare \in PrepareQcOptionSet:
     TypeInvariant
       => AsyncItemTyped(
            AsyncNetworkItem(
@@ -1805,14 +1795,14 @@ THEOREM ByzantineProposalItemIsTyped ==
              ProposalEnvelope(
                recipient,
                Proposal(context, roundView, subject, signer,
-                        justifyRank, justifySubject))))
+                        timeoutCertificate, highestPrepare))))
 PROOF
   <1>1. ASSUME NEW signer \in ValidatorIds,
                 NEW recipient \in ValidatorIds,
                 NEW roundView \in Views,
                 NEW subject \in Subjects,
-                NEW justifyRank \in Ranks,
-                NEW justifySubject \in SubjectOrNone,
+                NEW timeoutCertificate \in TimeoutCertificateOptionSet,
+                NEW highestPrepare \in PrepareQcOptionSet,
                 TypeInvariant
          PROVE AsyncItemTyped(
                  AsyncNetworkItem(
@@ -1820,17 +1810,17 @@ PROOF
                    ProposalEnvelope(
                      recipient,
                      Proposal(context, roundView, subject, signer,
-                              justifyRank, justifySubject))))
+                        timeoutCertificate, highestPrepare))))
     <2>1. /\ context \in ContextRecords
            /\ context.height \in Heights
       BY <1>1 DEF TypeInvariant
     <2>2. Proposal(context, roundView, subject, signer,
-                   justifyRank, justifySubject) \in ProposalRecordSet
+                        timeoutCertificate, highestPrepare) \in ProposalRecordSet
       BY <1>1, <2>1, SMT DEF Proposal, ProposalRecordSet
     <2>3. ProposalEnvelope(
              recipient,
              Proposal(context, roundView, subject, signer,
-                      justifyRank, justifySubject)) \in ProposalEnvelopeSet
+                        timeoutCertificate, highestPrepare)) \in ProposalEnvelopeSet
       BY <1>1, <2>2, SMT DEF ProposalEnvelope, ProposalEnvelopeSet
     <2> QED BY <1>1, <2>3,
                  ProposalEnvelopeMakesTypedAsyncItem
@@ -1838,10 +1828,11 @@ PROOF
 
 THEOREM ByzantineProposalOutboxIsFiniteAndTyped ==
   \A signer \in ValidatorIds, roundView \in Views,
-     subject \in Subjects, justifyRank \in Ranks,
-     justifySubject \in SubjectOrNone:
+     subject \in Subjects,
+     timeoutCertificate \in TimeoutCertificateOptionSet,
+     highestPrepare \in PrepareQcOptionSet:
     LET proposal == Proposal(context, roundView, subject, signer,
-                             justifyRank, justifySubject)
+                        timeoutCertificate, highestPrepare)
         items == ByzantineProposalOutbox(signer, proposal)
     IN TypeInvariant
          => /\ IsFiniteSet(items)
@@ -1850,11 +1841,11 @@ PROOF
   <1>1. ASSUME NEW signer \in ValidatorIds,
                 NEW roundView \in Views,
                 NEW subject \in Subjects,
-                NEW justifyRank \in Ranks,
-                NEW justifySubject \in SubjectOrNone
+                NEW timeoutCertificate \in TimeoutCertificateOptionSet,
+                NEW highestPrepare \in PrepareQcOptionSet
          PROVE LET proposal ==
                  Proposal(context, roundView, subject, signer,
-                          justifyRank, justifySubject)
+                        timeoutCertificate, highestPrepare)
                items == ByzantineProposalOutbox(signer, proposal)
                IN TypeInvariant
                     => /\ IsFiniteSet(items)
@@ -1862,7 +1853,7 @@ PROOF
     <2>1. ASSUME TypeInvariant
            PROVE LET proposal ==
                    Proposal(context, roundView, subject, signer,
-                            justifyRank, justifySubject)
+                        timeoutCertificate, highestPrepare)
                  items == ByzantineProposalOutbox(signer, proposal)
                  IN /\ IsFiniteSet(items)
                     /\ \A item \in items: AsyncItemTyped(item)
@@ -1875,19 +1866,19 @@ PROOF
       <3>2. IsFiniteSet(
                ByzantineProposalOutbox(
                  signer, Proposal(context, roundView, subject, signer,
-                                  justifyRank, justifySubject)))
+                        timeoutCertificate, highestPrepare)))
         BY <3>1, FS_Image DEF ByzantineProposalOutbox
       <3>3. \A item \in
                     ByzantineProposalOutbox(
                       signer,
                       Proposal(context, roundView, subject, signer,
-                               justifyRank, justifySubject)):
+                        timeoutCertificate, highestPrepare)):
                AsyncItemTyped(item)
         <4>1. ASSUME NEW item \in
                      ByzantineProposalOutbox(
                        signer,
                        Proposal(context, roundView, subject, signer,
-                                justifyRank, justifySubject))
+                        timeoutCertificate, highestPrepare))
                PROVE AsyncItemTyped(item)
           <5>1. PICK recipient \in CurrentVoters:
                    item = AsyncNetworkItem(
@@ -1895,7 +1886,7 @@ PROOF
                      ProposalEnvelope(
                        recipient,
                        Proposal(context, roundView, subject, signer,
-                                justifyRank, justifySubject)))
+                        timeoutCertificate, highestPrepare)))
             BY <4>1 DEF ByzantineProposalOutbox
           <5>2. recipient \in ValidatorIds
             BY <3>1, <5>1
@@ -1905,7 +1896,7 @@ PROOF
                      ProposalEnvelope(
                        recipient,
                        Proposal(context, roundView, subject, signer,
-                                justifyRank, justifySubject))))
+                        timeoutCertificate, highestPrepare))))
             BY <1>1, <2>1, <5>2, ByzantineProposalItemIsTyped
           <5> QED BY <5>1, <5>3
         <4> QED BY <4>1
@@ -1915,25 +1906,28 @@ PROOF
 
 THEOREM AsyncByzantineProposalPreservesSchedulerType ==
   \A signer \in ValidatorIds, roundView \in Views,
-     subject \in Subjects, justifyRank \in Ranks,
-     justifySubject \in SubjectOrNone:
+     subject \in Subjects,
+     timeoutCertificate \in TimeoutCertificateOptionSet,
+     highestPrepare \in PrepareQcOptionSet:
     AsyncTypeInvariant
       /\ AsyncByzantineProposal(
-           signer, roundView, subject, justifyRank, justifySubject)
+                    signer, roundView, subject,
+                    timeoutCertificate, highestPrepare)
       => AsyncSchedulerTypeInvariant'
 PROOF
   <1>1. ASSUME NEW signer \in ValidatorIds,
                 NEW roundView \in Views,
                 NEW subject \in Subjects,
-                NEW justifyRank \in Ranks,
-                NEW justifySubject \in SubjectOrNone,
+                NEW timeoutCertificate \in TimeoutCertificateOptionSet,
+                NEW highestPrepare \in PrepareQcOptionSet,
                 AsyncTypeInvariant,
                 AsyncByzantineProposal(
-                  signer, roundView, subject, justifyRank, justifySubject)
+                    signer, roundView, subject,
+                    timeoutCertificate, highestPrepare)
          PROVE AsyncSchedulerTypeInvariant'
     <2> DEFINE ProposalValue ==
           Proposal(context, roundView, subject, signer,
-                   justifyRank, justifySubject)
+                        timeoutCertificate, highestPrepare)
     <2> DEFINE Items ==
           ByzantineProposalOutbox(signer, ProposalValue)
     <2>1. /\ IsFiniteSet(Items)
@@ -2142,41 +2136,35 @@ PROOF
 
 THEOREM ByzantineTimeoutItemIsTyped ==
   \A signer \in ValidatorIds, recipient \in ValidatorIds,
-     roundView \in Views, highRank \in Ranks,
-     highSubject \in SubjectOrNone:
+     roundView \in Views, highestPrepare \in PrepareQcOptionSet:
     TypeInvariant
       => AsyncItemTyped(
            AsyncNetworkItem(
              "TimeoutVote", signer,
              TimeoutEnvelope(
                recipient,
-               TimeoutVote(context, roundView, signer,
-                           highRank, highSubject))))
+               TimeoutVote(context, roundView, signer, highestPrepare))))
 PROOF
   <1>1. ASSUME NEW signer \in ValidatorIds,
                 NEW recipient \in ValidatorIds,
                 NEW roundView \in Views,
-                NEW highRank \in Ranks,
-                NEW highSubject \in SubjectOrNone,
+                NEW highestPrepare \in PrepareQcOptionSet,
                 TypeInvariant
          PROVE AsyncItemTyped(
                  AsyncNetworkItem(
                    "TimeoutVote", signer,
                    TimeoutEnvelope(
                      recipient,
-                     TimeoutVote(context, roundView, signer,
-                                 highRank, highSubject))))
+                     TimeoutVote(context, roundView, signer, highestPrepare))))
     <2>1. /\ context \in ContextRecords
            /\ context.height \in Heights
       BY <1>1 DEF TypeInvariant
-    <2>2. TimeoutVote(context, roundView, signer,
-                      highRank, highSubject) \in TimeoutVoteRecordSet
+    <2>2. TimeoutVote(context, roundView, signer, highestPrepare) \in TimeoutVoteRecordSet
       BY <1>1, <2>1, SMT
          DEF TimeoutVote, TimeoutVoteRecordSet
     <2>3. TimeoutEnvelope(
              recipient,
-             TimeoutVote(context, roundView, signer,
-                         highRank, highSubject)) \in TimeoutEnvelopeSet
+             TimeoutVote(context, roundView, signer, highestPrepare)) \in TimeoutEnvelopeSet
       BY <1>1, <2>2, SMT DEF TimeoutEnvelope, TimeoutEnvelopeSet
     <2> QED BY <1>1, <2>3,
                  TimeoutEnvelopeMakesTypedAsyncItem
@@ -2184,9 +2172,9 @@ PROOF
 
 THEOREM ByzantineTimeoutOutboxIsFiniteAndTyped ==
   \A signer \in ValidatorIds, roundView \in Views,
-     highRank \in Ranks, highSubject \in SubjectOrNone:
+     highestPrepare \in PrepareQcOptionSet:
     LET vote ==
-          TimeoutVote(context, roundView, signer, highRank, highSubject)
+          TimeoutVote(context, roundView, signer, highestPrepare)
         items == ByzantineTimeoutOutbox(signer, vote)
     IN TypeInvariant
          => /\ IsFiniteSet(items)
@@ -2194,19 +2182,16 @@ THEOREM ByzantineTimeoutOutboxIsFiniteAndTyped ==
 PROOF
   <1>1. ASSUME NEW signer \in ValidatorIds,
                 NEW roundView \in Views,
-                NEW highRank \in Ranks,
-                NEW highSubject \in SubjectOrNone
+                NEW highestPrepare \in PrepareQcOptionSet
          PROVE LET vote ==
-                 TimeoutVote(context, roundView, signer,
-                             highRank, highSubject)
+                 TimeoutVote(context, roundView, signer, highestPrepare)
                items == ByzantineTimeoutOutbox(signer, vote)
                IN TypeInvariant
                     => /\ IsFiniteSet(items)
                        /\ \A item \in items: AsyncItemTyped(item)
     <2>1. ASSUME TypeInvariant
            PROVE LET vote ==
-                   TimeoutVote(context, roundView, signer,
-                               highRank, highSubject)
+                   TimeoutVote(context, roundView, signer, highestPrepare)
                  items == ByzantineTimeoutOutbox(signer, vote)
                  IN /\ IsFiniteSet(items)
                     /\ \A item \in items: AsyncItemTyped(item)
@@ -2219,28 +2204,24 @@ PROOF
       <3>2. IsFiniteSet(
                ByzantineTimeoutOutbox(
                  signer,
-                 TimeoutVote(context, roundView, signer,
-                             highRank, highSubject)))
+                 TimeoutVote(context, roundView, signer, highestPrepare)))
         BY <3>1, FS_Image DEF ByzantineTimeoutOutbox
       <3>3. \A item \in
                     ByzantineTimeoutOutbox(
                       signer,
-                      TimeoutVote(context, roundView, signer,
-                                  highRank, highSubject)):
+                      TimeoutVote(context, roundView, signer, highestPrepare)):
                AsyncItemTyped(item)
         <4>1. ASSUME NEW item \in
                      ByzantineTimeoutOutbox(
                        signer,
-                       TimeoutVote(context, roundView, signer,
-                                   highRank, highSubject))
+                       TimeoutVote(context, roundView, signer, highestPrepare))
                PROVE AsyncItemTyped(item)
           <5>1. PICK recipient \in CurrentVoters:
                    item = AsyncNetworkItem(
                      "TimeoutVote", signer,
                      TimeoutEnvelope(
                        recipient,
-                       TimeoutVote(context, roundView, signer,
-                                   highRank, highSubject)))
+                       TimeoutVote(context, roundView, signer, highestPrepare)))
             BY <4>1 DEF ByzantineTimeoutOutbox
           <5>2. recipient \in ValidatorIds
             BY <3>1, <5>1
@@ -2249,8 +2230,7 @@ PROOF
                      "TimeoutVote", signer,
                      TimeoutEnvelope(
                        recipient,
-                       TimeoutVote(context, roundView, signer,
-                                   highRank, highSubject))))
+                       TimeoutVote(context, roundView, signer, highestPrepare))))
             BY <1>1, <2>1, <5>2, ByzantineTimeoutItemIsTyped
           <5> QED BY <5>1, <5>3
         <4> QED BY <4>1
@@ -2260,22 +2240,21 @@ PROOF
 
 THEOREM AsyncByzantineTimeoutPreservesSchedulerType ==
   \A signer \in ValidatorIds, roundView \in Views,
-     highRank \in Ranks, highSubject \in SubjectOrNone:
+     highestPrepare \in PrepareQcOptionSet:
     AsyncTypeInvariant
       /\ AsyncByzantineTimeout(
-           signer, roundView, highRank, highSubject)
+                    signer, roundView, highestPrepare)
       => AsyncSchedulerTypeInvariant'
 PROOF
   <1>1. ASSUME NEW signer \in ValidatorIds,
                 NEW roundView \in Views,
-                NEW highRank \in Ranks,
-                NEW highSubject \in SubjectOrNone,
+                NEW highestPrepare \in PrepareQcOptionSet,
                 AsyncTypeInvariant,
                 AsyncByzantineTimeout(
-                  signer, roundView, highRank, highSubject)
+                    signer, roundView, highestPrepare)
          PROVE AsyncSchedulerTypeInvariant'
     <2> DEFINE VoteValue ==
-          TimeoutVote(context, roundView, signer, highRank, highSubject)
+          TimeoutVote(context, roundView, signer, highestPrepare)
     <2> DEFINE Items == ByzantineTimeoutOutbox(signer, VoteValue)
     <2>1. /\ IsFiniteSet(Items)
            /\ \A item \in Items: AsyncItemTyped(item)
@@ -2419,79 +2398,37 @@ PROOF
   <1> QED BY <1>1
 
 THEOREM CertifiedRequestEnvelopeMakesTypedAsyncItem ==
-  \A source \in ValidatorIds:
-    \A envelope:
-      AsyncBodyEnvelopeTyped(envelope)
-        => AsyncItemTyped(
-             AsyncNetworkItem("CertifiedRequest", source, envelope))
-PROOF
-  <1>1. ASSUME NEW source \in ValidatorIds,
-                NEW envelope,
-                AsyncBodyEnvelopeTyped(envelope)
-         PROVE AsyncItemTyped(
-                 AsyncNetworkItem("CertifiedRequest", source, envelope))
-    <2>1. /\ DOMAIN
-                  AsyncNetworkItem("CertifiedRequest", source, envelope) =
-                  {"kind", "source", "envelope"}
-           /\ AsyncNetworkItem(
-                "CertifiedRequest", source, envelope).kind =
-                "CertifiedRequest"
-           /\ AsyncNetworkItem(
-                "CertifiedRequest", source, envelope).source = source
-           /\ AsyncNetworkItem(
-                "CertifiedRequest", source, envelope).envelope = envelope
-      BY DEF AsyncNetworkItem
-    <2>2. /\ "CertifiedRequest" \in AsyncNetworkKinds
-           /\ source \in AsyncIngressSources
-           /\ envelope.recipient \in ValidatorIds
-      BY <1>1, SMT
-         DEF AsyncNetworkKinds, AsyncIngressSources,
-             AsyncBodyEnvelopeTyped
-    <2> QED BY <1>1, <2>1, <2>2, SMT DEF AsyncItemTyped
-  <1> QED BY <1>1
-
-THEOREM CertifiedRequestFieldsMakeTypedItem ==
   \A source \in ValidatorIds, recipient \in ValidatorIds,
-     blockHeight \in Heights, roundView \in Views,
-     subject \in ValidSubjects,
+     qc \in QcRecordSet,
      nonce \in 0..(AsyncIngressCapacity - 1):
     AsyncConfiguration
       => AsyncItemTyped(
            AsyncNetworkItem(
              "CertifiedRequest", source,
-             AsyncBodyEnvelope(recipient, blockHeight, roundView, subject,
-                               NoAsyncChunk, nonce)))
-PROOF
-  <1>1. ASSUME NEW source \in ValidatorIds,
-                NEW recipient \in ValidatorIds,
-                NEW blockHeight \in Heights,
-                NEW roundView \in Views,
-                NEW subject \in ValidSubjects,
-                NEW nonce \in 0..(AsyncIngressCapacity - 1),
-                AsyncConfiguration
-         PROVE AsyncItemTyped(
-                 AsyncNetworkItem(
-                   "CertifiedRequest", source,
-                   AsyncBodyEnvelope(
-                     recipient, blockHeight, roundView, subject,
-                     NoAsyncChunk, nonce)))
-    <2>1. AsyncBodyEnvelopeTyped(
-             AsyncBodyEnvelope(
-               recipient, blockHeight, roundView, subject,
-               NoAsyncChunk, nonce))
-      BY <1>1, SMT
-         DEF AsyncBodyEnvelopeTyped, AsyncBodyEnvelope,
-             AsyncConfiguration, NoAsyncChunk
-    <2> QED BY <1>1, <2>1,
-                 CertifiedRequestEnvelopeMakesTypedAsyncItem
-  <1> QED BY <1>1
+             AsyncCertifiedRequestEnvelope(
+               recipient, source, qc, nonce)))
+BY SMTT(60)
+   DEF AsyncItemTyped, AsyncReplyRequestItemTyped,
+       AsyncCertifiedRequestEnvelope, AsyncNetworkItem,
+       AsyncNetworkKinds, AsyncIngressSources, AsyncConfiguration
+
+THEOREM CertifiedRequestFieldsMakeTypedItem ==
+  \A source \in ValidatorIds, recipient \in ValidatorIds,
+     qc \in QcRecordSet,
+     nonce \in 0..(AsyncIngressCapacity - 1):
+    AsyncConfiguration
+      => AsyncItemTyped(
+           AsyncNetworkItem(
+             "CertifiedRequest", source,
+             AsyncCertifiedRequestEnvelope(
+               recipient, source, qc, nonce)))
+BY CertifiedRequestEnvelopeMakesTypedAsyncItem
 
 THEOREM ByzantineCertifiedRequestItemIsTyped ==
   \A source \in ValidatorIds, recipient \in ValidatorIds,
      qc \in commitQCs, nonce \in 0..(AsyncIngressCapacity - 1):
     LET envelope ==
-          AsyncBodyEnvelope(recipient, context.height, qc.view, qc.subject,
-                            NoAsyncChunk, nonce)
+          AsyncCertifiedRequestEnvelope(recipient, source, qc, nonce)
         item == AsyncNetworkItem("CertifiedRequest", source, envelope)
     IN /\ StrongInductiveInvariant
        /\ AsyncConfiguration
@@ -2502,9 +2439,8 @@ PROOF
                 NEW qc \in commitQCs,
                 NEW nonce \in 0..(AsyncIngressCapacity - 1)
          PROVE LET envelope ==
-                 AsyncBodyEnvelope(recipient, context.height,
-                                   qc.view, qc.subject,
-                                   NoAsyncChunk, nonce)
+                 AsyncCertifiedRequestEnvelope(
+                   recipient, source, qc, nonce)
                item ==
                  AsyncNetworkItem("CertifiedRequest", source, envelope)
                IN /\ StrongInductiveInvariant
@@ -2512,15 +2448,13 @@ PROOF
                   => AsyncItemTyped(item)
     <2>1. ASSUME StrongInductiveInvariant, AsyncConfiguration
            PROVE LET envelope ==
-                   AsyncBodyEnvelope(recipient, context.height,
-                                     qc.view, qc.subject,
-                                     NoAsyncChunk, nonce)
+                   AsyncCertifiedRequestEnvelope(
+                     recipient, source, qc, nonce)
                  item ==
                    AsyncNetworkItem("CertifiedRequest", source, envelope)
                  IN AsyncItemTyped(item)
       <3>1. /\ context.height \in Heights
-             /\ qc.view \in Views
-             /\ qc.subject \in ValidSubjects
+             /\ qc \in QcRecordSet
         BY <1>1, <2>1
            DEF StrongInductiveInvariant, Safety, TypeInvariant,
                ReducerProvenanceInvariant, CertificatesBackedByIntents,
@@ -2548,8 +2482,7 @@ PROOF
                   source, recipient, qc, nonce)
          PROVE AsyncSchedulerTypeInvariant'
     <2> DEFINE Envelope ==
-          AsyncBodyEnvelope(recipient, context.height, qc.view, qc.subject,
-                            NoAsyncChunk, nonce)
+          AsyncCertifiedRequestEnvelope(recipient, source, qc, nonce)
     <2> DEFINE Item ==
           AsyncNetworkItem("CertifiedRequest", source, Envelope)
     <2>1. AsyncItemTyped(Item)
@@ -2634,11 +2567,12 @@ PROOF
       BY <1>1, <2>5,
          InjectByzantineCertifiedRequestPreservesSchedulerType
     <2>6. CASE \E signer \in ValidatorIds, roundView \in Views,
-                  subject \in Subjects, justifyRank \in Ranks,
-                  justifySubject \in SubjectOrNone:
+                  subject \in Subjects,
+                  timeoutCertificate \in TimeoutCertificateOptionSet,
+                  highestPrepare \in PrepareQcOptionSet:
                   AsyncByzantineProposal(
                     signer, roundView, subject,
-                    justifyRank, justifySubject)
+                    timeoutCertificate, highestPrepare)
       BY <1>1, <2>6,
          AsyncByzantineProposalPreservesSchedulerType
     <2>7. CASE \E signer \in ValidatorIds, roundView \in Views,
@@ -2647,9 +2581,9 @@ PROOF
                     signer, roundView, phase, subject)
       BY <1>1, <2>7, AsyncByzantineVotePreservesSchedulerType
     <2>8. CASE \E signer \in ValidatorIds, roundView \in Views,
-                  highRank \in Ranks, highSubject \in SubjectOrNone:
+                  highestPrepare \in PrepareQcOptionSet:
                   AsyncByzantineTimeout(
-                    signer, roundView, highRank, highSubject)
+                    signer, roundView, highestPrepare)
       BY <1>1, <2>8,
          AsyncByzantineTimeoutPreservesSchedulerType
     <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>3c, <2>4,
@@ -2762,9 +2696,9 @@ PROOF
       BY <1>1, <2>5, HistoricalRecoveryTargetsAreValidators,
          DirectCommitDiscoveryPreservesSchedulerType
          DEF DirectHistoricalCommitCertificateDiscoveryStep
-    <2>6. CASE \E node \in AsyncCurrentResponsiveVoters:
+    <2>6. CASE \E node \in AsyncArchiveIoServiceNodes:
                   ServiceIoWorker(node)
-      BY <1>1, <2>6, AsyncCurrentResponsiveVotersAreValidators,
+      BY <1>1, <2>6, AsyncArchiveIoServiceNodesAreValidators,
          ServiceIoWorkerPreservesSchedulerType
          DEF ServiceIoWorker
     <2>7. CASE \E node \in asyncHistoricalRecoveryTargets:
@@ -2789,6 +2723,63 @@ PROOF
     <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, <2>5, <2>6,
                 <2>7, <2>8, <2>9, <2>10, <2>11
          DEF AsyncNonRunnerStep
+  <1> QED BY <1>1
+
+THEOREM AsyncNetworkStepPreservesClaimIngressOwnership ==
+  /\ AsyncTypeInvariant
+  /\ AsyncCertifiedResponseClaimIngressOwnershipInvariant
+  /\ AsyncNetworkStep
+  => AsyncCertifiedResponseClaimIngressOwnershipInvariant'
+BY AdmitIngressPacketPreservesClaimIngressOwnership
+   DEF AsyncNetworkStep
+
+THEOREM AsyncFaultStepClaimIngressStutter ==
+  AsyncFaultStep
+    => UNCHANGED
+         <<asyncCertifiedResponseClaim, asyncIngressLanes>>
+BY SMTT(90), Isa
+   DEF AsyncFaultStep, PreGstLosePacket, PreGstCrash, Crash,
+       InjectByzantineNoise, InjectUntrustedTransportCompletion,
+       InjectAuthenticatedJunk, InjectByzantineCertifiedRequest,
+       AsyncByzantineProposal, AsyncByzantineVote,
+       AsyncByzantineTimeout,
+       PublishControlItems, PublishEphemeralItems,
+       PublishControlAndEphemeralItems,
+       LeaveCausalQueues, AsyncDeferredVars,
+       AsyncLocalAdmissionVars, AsyncSchedulerVars, vars
+
+THEOREM AsyncNonRunnerStepPreservesClaimIngressOwnership ==
+  /\ AsyncTypeInvariant
+  /\ AsyncCertifiedResponseClaimIngressOwnershipInvariant
+  /\ AsyncNonRunnerStep
+  => AsyncCertifiedResponseClaimIngressOwnershipInvariant'
+PROOF
+  <1>1. ASSUME AsyncTypeInvariant,
+              AsyncCertifiedResponseClaimIngressOwnershipInvariant,
+              AsyncNonRunnerStep
+         PROVE AsyncCertifiedResponseClaimIngressOwnershipInvariant'
+    <2>1. CASE AsyncNetworkStep
+      BY <1>1, <2>1,
+         AsyncNetworkStepPreservesClaimIngressOwnership
+    <2>2. CASE AsyncFaultStep
+      BY <1>1, <2>2, AsyncFaultStepClaimIngressStutter,
+         CertifiedResponseClaimIngressOwnershipStutter
+    <2>3. CASE ~(AsyncNetworkStep \/ AsyncFaultStep)
+      BY <1>1, <2>3,
+         CertifiedResponseClaimIngressOwnershipStutter, Isa
+         DEF AsyncNonRunnerStep, AsyncSetGST, AsyncTick,
+             AsyncNonClockVars, OpenHistoricalRecovery,
+             DirectCommitCertificateDiscoveryStep,
+             DirectHistoricalCommitCertificateDiscoveryStep,
+             CommitCertificateDiscoveryStepWork,
+             PublishCommitCertificateRequests,
+             ServiceIoWorker, ServiceHistoricalRecoveryIoWorker,
+             ServiceIoWorkerWork, PublishEphemeralItems,
+             EnqueueIoLocalControl, EnqueueHistoricalRecoveryIoLocalControl,
+             EnqueueIoLocalControlWork, LeaveCausalQueues,
+             AsyncDeferredVars, AsyncLocalAdmissionVars,
+             AsyncSchedulerExceptHistoricalRecoveryTargets, vars
+    <2> QED BY <1>1, <2>1, <2>2, <2>3
   <1> QED BY <1>1
 
 =============================================================================

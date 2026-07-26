@@ -293,14 +293,14 @@ THEOREM TimeoutMissingRanksAreNatural ==
   AsyncTypeInvariant
     => /\ \A roundView:
              TimeoutMissingCatchupRank(roundView) \in Nat
-       /\ \A target, roundView:
-             TimeoutMissingReceiptRank(target, roundView) \in Nat
+       /\ \A target, receiptView:
+             TimeoutMissingReceiptRank(target, receiptView) \in Nat
 PROOF
   <1>1. ASSUME AsyncTypeInvariant
          PROVE /\ \A roundView:
                        TimeoutMissingCatchupRank(roundView) \in Nat
-                /\ \A target, roundView:
-                       TimeoutMissingReceiptRank(target, roundView) \in Nat
+                /\ \A target, receiptView:
+                       TimeoutMissingReceiptRank(target, receiptView) \in Nat
     <2>1. IsFiniteSet(AsyncCurrentResponsiveVoters)
       BY <1>1, RuntimeValidatorIdsAreFinite, FS_Subset, Isa
          DEF AsyncTypeInvariant, AsyncCurrentResponsiveVoters,
@@ -308,9 +308,9 @@ PROOF
     <2>2. \A roundView:
              IsFiniteSet(TimeoutMissingCatchupVoters(roundView))
       BY <2>1, FS_Subset DEF TimeoutMissingCatchupVoters
-    <2>3. \A target, roundView:
+    <2>3. \A target, receiptView:
              IsFiniteSet(
-               TimeoutMissingReceiptVoters(target, roundView))
+               TimeoutMissingReceiptVoters(target, receiptView))
       BY <2>1, FS_Subset DEF TimeoutMissingReceiptVoters
     <2> QED BY <2>2, <2>3, FS_CardinalityType
          DEF TimeoutMissingCatchupRank, TimeoutMissingReceiptRank

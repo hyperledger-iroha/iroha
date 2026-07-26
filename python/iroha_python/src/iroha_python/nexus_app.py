@@ -264,45 +264,51 @@ def _normalize_algorithm(algorithm: Any) -> str:
     return "ed25519"
 
 
+_SUBMISSION_HASH_ALIASES = (
+    "hash_hex",
+    "hashHex",
+    "transaction_hash_hex",
+    "transactionHashHex",
+    "entrypoint_hash_hex",
+    "entrypointHashHex",
+    "transaction_hash",
+    "transactionHash",
+    "entrypoint_hash",
+    "entrypointHash",
+    "hash",
+    "tx_hash",
+    "txHash",
+)
+
+
 def _submission_hash_hex(submission: Any) -> Optional[str]:
     if submission is None:
         return None
+    sources: list[Any] = [submission]
     if isinstance(submission, Mapping):
         payload = submission.get("payload")
-        candidates = (
-            submission.get("hash_hex"),
-            submission.get("hashHex"),
-            submission.get("hash"),
-            submission.get("tx_hash"),
-            submission.get("txHash"),
-            submission.get("transaction_hash_hex"),
-            submission.get("transactionHashHex"),
-            submission.get("signed_transaction_hash"),
-            submission.get("signedTransactionHash"),
-            payload.get("tx_hash") if isinstance(payload, Mapping) else None,
-            payload.get("txHash") if isinstance(payload, Mapping) else None,
-            payload.get("hash") if isinstance(payload, Mapping) else None,
-            payload.get("signed_transaction_hash") if isinstance(payload, Mapping) else None,
-            payload.get("signedTransactionHash") if isinstance(payload, Mapping) else None,
-        )
-        for candidate in candidates:
-            if candidate:
-                return _bytes(candidate, "submission.hash").hex()
-    for attr in (
-        "hash_hex",
-        "hashHex",
-        "hash",
-        "tx_hash",
-        "txHash",
-        "transaction_hash_hex",
-        "transactionHashHex",
-        "signed_transaction_hash",
-        "signedTransactionHash",
-    ):
-        candidate = getattr(submission, attr, None)
-        if candidate:
-            return _bytes(candidate, "submission.hash").hex()
-    return None
+        if isinstance(payload, Mapping):
+            sources.append(payload)
+
+    canonical_hash: Optional[str] = None
+    for source in sources:
+        for alias in _SUBMISSION_HASH_ALIASES:
+            candidate = (
+                source.get(alias)
+                if isinstance(source, Mapping)
+                else getattr(source, alias, None)
+            )
+            if not candidate:
+                continue
+            candidate_hash = _bytes(candidate, f"submission.{alias}").hex()
+            if canonical_hash is not None and candidate_hash != canonical_hash:
+                raise NexusAppError(
+                    "transaction_hash_mismatch",
+                    "Torii returned conflicting canonical transaction hash aliases",
+                )
+            canonical_hash = candidate_hash
+    # `signed_transaction_hash` is Torii's distinct inner-wire identity.
+    return canonical_hash
 
 
 def _tagged_connect_field(tag: str, value: bytes) -> bytes:

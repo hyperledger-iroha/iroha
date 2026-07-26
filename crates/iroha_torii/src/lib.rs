@@ -20625,8 +20625,10 @@ fn signed_transaction_hash_for_entrypoint(
     entrypoint: &TransactionEntrypoint,
 ) -> Option<HashOf<SignedTransaction>> {
     match entrypoint {
-        TransactionEntrypoint::External(signed) => Some(signed.hash()),
-        TransactionEntrypoint::SealedReveal(reveal) => Some(reveal.signed_transaction().hash()),
+        TransactionEntrypoint::External(signed) => Some(HashOf::new(signed)),
+        TransactionEntrypoint::SealedReveal(reveal) => {
+            Some(HashOf::new(reveal.signed_transaction()))
+        }
         TransactionEntrypoint::SealedCommitment(_)
         | TransactionEntrypoint::PrivateKaigi(_)
         | TransactionEntrypoint::Time(_) => None,
@@ -65981,6 +65983,23 @@ pub(crate) mod tests_runtime_handlers {
         let expectation = super::queue_plan_synced_acceptance_expectation(&request)
             .expect("exact-claim expectation must be valid")
             .expect("exact-claim fixture must be strict");
+        let expected_signed_hash = expectation
+            .signed_transaction_hash
+            .as_ref()
+            .expect("external exact-claim fixture must have a signed transaction hash");
+        assert_eq!(
+            Some(expected_signed_hash),
+            expectation
+                .admission_binding
+                .signed_transaction_hash
+                .as_ref(),
+            "ingress must expect the same inner signed-wire hash carried by the durable binding"
+        );
+        assert_ne!(
+            expected_signed_hash.as_ref(),
+            expectation.entrypoint_hash.as_ref(),
+            "the inner signed-wire hash must remain distinct from the external entrypoint hash"
+        );
         let exact_receipt =
             exact_queue_plan_synced_test_receipt(&request, &app.torii_proxy_bridge_signer, 30_001);
         let exact_snapshot =

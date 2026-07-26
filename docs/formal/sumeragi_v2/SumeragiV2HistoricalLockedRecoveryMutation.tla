@@ -7,12 +7,12 @@ recovery seam.  The fixed constructor retains Fetch/Validate ownership from
 either an incoming selected high or the exact durable Commit intent which
 created the lock.  The installed-only mutation forgets the latter source.
 
-The exact-intent arm never grants fresh Commit authority: it reconstructs only
-body recovery ownership.  A fresh historical Commit remains restricted to an
-incoming selected high and absence of an already durable exact intent.
+Neither arm grants fresh Commit authority: both reconstruct only body recovery
+ownership. An incoming selected high can justify unchanged later reproposal;
+only an already durable old same-round Commit may be retransmitted.
 ***************************************************************************)
 
-CONSTANT UseFixedRecoveryGuard
+CONSTANTS UseFixedRecoveryGuard, AllowFreshHistoricalCommitBug
 
 VARIABLES phase, lockRank, lockSubject, exactLockedCommitIntent,
           incomingHighSelectsLock, fetchOwned, freshCommitAuthorized
@@ -43,9 +43,8 @@ SelectedRecoverySource ==
   ELSE InstalledOnlyRecoverySource
 
 FreshHistoricalCommitSource ==
+  /\ AllowFreshHistoricalCommitBug
   /\ LockMatchesHistoricalPrepare
-  /\ incomingHighSelectsLock
-  /\ ~exactLockedCommitIntent
 
 Init ==
   /\ phase = 0
@@ -96,5 +95,8 @@ RecoveryOwnedAfterNoHighCarry ==
 
 ExactIntentDoesNotAuthorizeFreshCommit ==
   exactLockedCommitIntent => ~freshCommitAuthorized
+
+NoFreshHistoricalCommit ==
+  ~freshCommitAuthorized
 
 =============================================================================

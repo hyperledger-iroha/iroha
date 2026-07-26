@@ -192,7 +192,7 @@ impl BodyValidationError for String {}
 /// signature check for ordinary blocks.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum BlockSignaturePolicy {
-    /// Require the rotating leader selected for the exact proposal round.
+    /// Require the rotating leader selected by the immutable body-header view.
     RotatingLeader,
     /// Require signature index zero and the configured genesis public key.
     GenesisAuthority(PublicKey),
@@ -831,7 +831,10 @@ impl V2BodyStore {
         let header = block.header();
         let body_origin_view = header.view_change_index();
         let view_matches = match &self.signature_policy {
-            BlockSignaturePolicy::RotatingLeader => body_origin_view == envelope.round.view,
+            // An unchanged locked body keeps its original header and signature
+            // when a later leader re-proposes it. Authenticate that original
+            // leader and forbid only bodies originating in a future view.
+            BlockSignaturePolicy::RotatingLeader => body_origin_view <= envelope.round.view,
             // Genesis is the sole exception: height one retains the fixed
             // authority-signed view-zero body across certified view changes.
             // `open_with_policy` separately rejects this policy outside an
@@ -1466,7 +1469,7 @@ mod tests {
     }
 
     #[test]
-    fn rotating_leader_body_cannot_bind_to_a_later_proposal_round() {
+    fn rotating_leader_locked_body_reproposal_is_stored_and_revalidated_per_round() {
         let directory = TempDir::new().expect("temporary directory");
         let (context, keys) = context_and_keys();
         let (body, origin_manifest) = body_and_manifest(&context, &keys, None);
@@ -1510,12 +1513,28 @@ mod tests {
             std::slice::from_ref(&body),
         )
         .expect("derive the later-view manifest for the exact body");
-        let error = store
+        let later_receipt = store
             .store(later_manifest, body)
-            .expect_err("a rotating-leader body cannot change proposal origin");
-        assert!(matches!(error, V2BodyStoreError::BlockSubjectMismatch));
+            .expect("the original leader signature authenticates an unchanged reproposal body");
+        let callback_ran = Cell::new(false);
+        let later_validation = store
+            .execute_validation_task(&BodyValidationTask::for_test(52, later_receipt), |_| {
+                callback_ran.set(true);
+                Ok::<_, FixtureValidationError>(execution_commitment)
+            })
+            .expect("revalidate the unchanged body under its new proposal round");
         assert!(
-            !store
+            callback_ran.get(),
+            "validation markers never promote across rounds"
+        );
+        assert_eq!(
+            later_validation
+                .validated_receipt()
+                .map(ValidatedBodyReceipt::execution_commitment),
+            Some(execution_commitment)
+        );
+        assert!(
+            store
                 .validated_path_for(later_round, origin_manifest.subject)
                 .exists()
         );
@@ -1857,7 +1876,7 @@ mod tests {
     }
 
     #[test]
-    fn rotating_leader_body_with_a_stale_header_view_fails_closed() {
+    fn rotating_leader_reproposal_authenticates_the_immutable_header_leader() {
         let directory = TempDir::new().expect("temporary directory");
         let (context, keys) = context_and_keys();
         let origin_view = 1;
@@ -1872,10 +1891,9 @@ mod tests {
         );
         let mut store = V2BodyStore::open(directory.path(), context).expect("open body store");
 
-        assert!(matches!(
-            store.store(manifest, body),
-            Err(V2BodyStoreError::BlockSubjectMismatch)
-        ));
+        let _ = store
+            .store(manifest, body)
+            .expect("a later reproposal retains the original header leader signature");
     }
 
     #[test]

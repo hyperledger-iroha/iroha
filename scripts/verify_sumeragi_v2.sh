@@ -119,7 +119,7 @@ for action in \
   PersistDecision DeliverProposal DeliverVote DeliverQC DeliverTimeout \
   DeliverTC FetchBody StoreBody ValidateBody CompleteProposalSignature \
   CompleteVoteSignature CompleteTimeoutSignature FormPrepareQC FormCommitQC \
-  FormTC ApplyDecision; do
+  ApplyDecision; do
   if ! rg -q "^${action}\\(" "$tla_core"; then
     echo "mapped TLA+ action ${action} is missing from SumeragiV2Core.tla" >&2
     exit 1

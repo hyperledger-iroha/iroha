@@ -21,7 +21,7 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
         }
     }
 
-    func testLaterViewCommitFixturesPreserveProposalOrigin() throws {
+    func testCommitReproposalsRequireTheirVoteAndCertificateRound() throws {
         func message(_ name: String) throws -> SumeragiV2ConsensusMessage {
             let row = try XCTUnwrap(
                 fixtureRows().first { $0.kind == "message" && $0.name == name }
@@ -31,13 +31,13 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
             )
         }
 
-        guard case .vote(let vote) = try message("commit_vote_later_view").payload else {
-            return XCTFail("later-view Commit vote fixture decoded to the wrong payload")
+        guard case .vote(let vote) = try message("commit_vote_reproposal").payload else {
+            return XCTFail("Commit reproposal vote fixture decoded to the wrong payload")
         }
         guard case .quorumCertificate(let certificate) = try message(
-            "commit_quorum_certificate_later_view"
+            "commit_quorum_certificate_reproposal"
         ).payload else {
-            return XCTFail("later-view CommitQC fixture decoded to the wrong payload")
+            return XCTFail("Commit reproposal QC fixture decoded to the wrong payload")
         }
         guard case .commitCertificateResponse(let response) = try message(
             "commit_certificate_response"
@@ -47,14 +47,166 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
 
         XCTAssertEqual(vote.phase, .commit)
         XCTAssertEqual(vote.round.view, 9)
-        XCTAssertEqual(vote.proposalRound.view, 1)
-        XCTAssertEqual(vote.round.contextID, vote.proposalRound.contextID)
-        XCTAssertEqual(vote.round.height, vote.proposalRound.height)
+        XCTAssertEqual(vote.round, vote.proposalRound)
         XCTAssertEqual(certificate.round, vote.round)
         XCTAssertEqual(certificate.proposalRound, vote.proposalRound)
         XCTAssertEqual(certificate.subject, vote.subject)
         XCTAssertEqual(certificate.executionCommitment, vote.executionCommitment)
         XCTAssertEqual(response.certificate.reference, certificate.reference)
+
+        let splitCases: [(name: String, message: String)] = [
+            (
+                "commit_vote_split_round",
+                "Prepare/Commit vote proposal round must match its round"
+            ),
+            (
+                "commit_quorum_certificate_split_round",
+                "Prepare/Commit certificate proposal round must match its round"
+            ),
+        ]
+        for splitCase in splitCases {
+            let row = try XCTUnwrap(
+                fixtureRows().first {
+                    $0.kind == "negative_message" && $0.name == splitCase.name
+                }
+            )
+            XCTAssertThrowsError(
+                try SumeragiV2ConsensusMessage.decodeCanonical(
+                    Data(sumeragiV2Hex: row.hex)
+                )
+            ) { error in
+                XCTAssertEqual(
+                    error as? SumeragiV2WireError,
+                    .invalid(splitCase.message)
+                )
+            }
+        }
+    }
+
+    func testStatusValidatorsRejectAnOlderCommitProposalRound() throws {
+        let row = try XCTUnwrap(
+            fixtureRows().first {
+                $0.kind == "message" &&
+                    $0.name == "commit_quorum_certificate_reproposal"
+            }
+        )
+        let message = try SumeragiV2ConsensusMessage.decodeCanonical(
+            Data(sumeragiV2Hex: row.hex)
+        )
+        guard case .quorumCertificate(let certificate) = message.payload else {
+            return XCTFail("Commit reproposal QC fixture decoded to the wrong payload")
+        }
+        let olderProposalRound = SumeragiV2ConsensusRound(
+            contextID: certificate.round.contextID,
+            height: certificate.round.height,
+            view: certificate.round.view - 1
+        )
+
+        XCTAssertThrowsError(
+            try SumeragiV2QuorumCertificateRef(
+                round: certificate.round,
+                proposalRound: olderProposalRound,
+                phase: .commit,
+                subject: certificate.subject,
+                executionCommitment: certificate.executionCommitment
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? SumeragiV2WireError,
+                .invalid(
+                    "Prepare/Commit certificate reference proposal round must match its round"
+                )
+            )
+        }
+
+        XCTAssertThrowsError(
+            try SumeragiV2VoteQuorumStatus(
+                round: certificate.round,
+                proposalRound: olderProposalRound,
+                subject: certificate.subject,
+                executionCommitment: certificate.executionCommitment,
+                signerCount: 1,
+                signedPower: 1,
+                minSigners: 3,
+                totalPower: 4
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? SumeragiV2WireError,
+                .invalid("Prepare/Commit quorum status proposal round must match its round")
+            )
+        }
+
+        XCTAssertThrowsError(
+            try SumeragiV2OutboundIntentStatus(
+                kind: .commitVote,
+                round: certificate.round,
+                proposalRound: olderProposalRound,
+                subject: certificate.subject,
+                executionCommitment: certificate.executionCommitment,
+                stage: .queued
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? SumeragiV2WireError,
+                .invalid(
+                    "Proposal/Prepare/Commit outbound intent origin must match its round"
+                )
+            )
+        }
+    }
+
+    func testPrepareVotesAndCertificatesRejectSplitRounds() throws {
+        let row = try XCTUnwrap(
+            fixtureRows().first {
+                $0.kind == "message" && $0.name == "quorum_certificate"
+            }
+        )
+        let message = try SumeragiV2ConsensusMessage.decodeCanonical(
+            Data(sumeragiV2Hex: row.hex)
+        )
+        guard case .quorumCertificate(let prepare) = message.payload else {
+            return XCTFail("PrepareQC fixture decoded to the wrong payload")
+        }
+        let laterRound = SumeragiV2ConsensusRound(
+            contextID: prepare.round.contextID,
+            height: prepare.round.height,
+            view: prepare.round.view + 1
+        )
+
+        XCTAssertThrowsError(
+            try SumeragiV2Vote(
+                round: laterRound,
+                proposalRound: prepare.round,
+                phase: .prepare,
+                subject: prepare.subject,
+                executionCommitment: prepare.executionCommitment,
+                signer: 0,
+                signature: Data([1])
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? SumeragiV2WireError,
+                .invalid("Prepare/Commit vote proposal round must match its round")
+            )
+        }
+
+        XCTAssertThrowsError(
+            try SumeragiV2QuorumCertificate(
+                round: laterRound,
+                proposalRound: prepare.round,
+                phase: .prepare,
+                subject: prepare.subject,
+                executionCommitment: prepare.executionCommitment,
+                signers: prepare.signers,
+                aggregateSignature: prepare.aggregateSignature
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? SumeragiV2WireError,
+                .invalid("Prepare/Commit certificate proposal round must match its round")
+            )
+        }
     }
 
     func testCommitCertificateSigningPreimagesMatchRustExactly() throws {
@@ -110,7 +262,7 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
         }
         XCTAssertEqual(response.certificate.phase, .commit)
         XCTAssertEqual(response.certificate.round.view, 9)
-        XCTAssertEqual(response.certificate.proposalRound.view, 1)
+        XCTAssertEqual(response.certificate.round, response.certificate.proposalRound)
         XCTAssertEqual(
             response.certificate.reference.proposalRound,
             response.certificate.proposalRound
@@ -234,11 +386,11 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
         XCTAssertEqual(decoded.liveness.prepareQuorums.first?.round.view, 1)
         XCTAssertEqual(decoded.liveness.prepareQuorums.first?.proposalRound.view, 1)
         XCTAssertEqual(decoded.liveness.commitQuorums.first?.round.view, 3)
-        XCTAssertEqual(decoded.liveness.commitQuorums.first?.proposalRound.view, 1)
+        XCTAssertEqual(decoded.liveness.commitQuorums.first?.proposalRound.view, 3)
         XCTAssertEqual(decoded.liveness.timeoutQuorums.count, 1)
         XCTAssertEqual(decoded.liveness.outboundIntents.first?.kind, .commitVote)
         XCTAssertEqual(decoded.liveness.outboundIntents.first?.round.view, 3)
-        XCTAssertEqual(decoded.liveness.outboundIntents.first?.proposalRound?.view, 1)
+        XCTAssertEqual(decoded.liveness.outboundIntents.first?.proposalRound?.view, 3)
         XCTAssertEqual(decoded.liveness.queues.count, 1)
         XCTAssertEqual(decoded.liveness.queues.first?.queue, .effectDispatch)
         XCTAssertEqual(decoded.liveness.blocker, .localControlPending)
@@ -489,8 +641,8 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
         "proposal",
         "vote",
         "quorum_certificate",
-        "commit_vote_later_view",
-        "commit_quorum_certificate_later_view",
+        "commit_vote_reproposal",
+        "commit_quorum_certificate_reproposal",
         "timeout_vote",
         "timeout_certificate",
         "payload_manifest",

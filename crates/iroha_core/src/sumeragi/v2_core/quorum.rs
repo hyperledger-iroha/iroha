@@ -109,7 +109,7 @@ pub enum QuorumError {
     HeightMismatch,
     /// A nested certificate has an unexpected phase.
     InvalidPhase,
-    /// A vote or certificate carries an invalid proposal-body origin round.
+    /// A vote or certificate is split across distinct proposal and vote rounds.
     InvalidProposalRound,
     /// Two timeout groups contain the same signer.
     OverlappingTimeoutSigner(ValidatorId),
@@ -145,7 +145,7 @@ impl fmt::Display for QuorumError {
             Self::HeightMismatch => formatter.write_str("certificate height mismatch"),
             Self::InvalidPhase => formatter.write_str("certificate has an invalid phase"),
             Self::InvalidProposalRound => {
-                formatter.write_str("certificate has an invalid proposal-body origin round")
+                formatter.write_str("certificate has split proposal and vote rounds")
             }
             Self::OverlappingTimeoutSigner(validator) => {
                 write!(

@@ -244,7 +244,9 @@ impl CertificateRef {
         Self::new_with_proposal_round(context_id, round, round, phase, subject)
     }
 
-    /// Constructs a certificate reference with an explicit proposal origin.
+    /// Constructs a certificate reference with an explicit proposal round.
+    /// Validation requires it to equal `round`; the explicit form is retained
+    /// for canonical decode and adversarial fixtures.
     #[must_use]
     pub const fn new_with_proposal_round(
         context_id: ContextId,
@@ -274,7 +276,7 @@ impl CertificateRef {
         self.round
     }
 
-    /// Returns the immutable proposal-body origin round.
+    /// Returns the proposal round, which equals the certified round when valid.
     #[must_use]
     pub const fn proposal_round(self) -> Round {
         self.proposal_round
@@ -292,19 +294,33 @@ impl CertificateRef {
         self.subject
     }
 
+    /// Return whether two certificates concern one immutable body at one height.
+    ///
+    /// The view and phase are intentionally excluded so a Prepare lock and a
+    /// same-body CommitQC from an earlier or later unchanged re-proposal can
+    /// be related without weakening context, height, or subject identity.
+    #[must_use]
+    pub fn same_height_subject(self, other: Self) -> bool {
+        certificate_height_subject_identity_equal_body!(
+            self.context_id,
+            self.round.height,
+            self.subject,
+            other.context_id,
+            other.round.height,
+            other.subject,
+        )
+    }
+
     /// Returns whether both references certify the same committed decision.
     ///
-    /// A committed proposal may acquire valid certificates in multiple
-    /// finality views. The stable decision identity binds its immutable
-    /// proposal origin while deliberately excluding only the finality view.
+    /// An immutable body may acquire a CommitQC before or after unchanged
+    /// re-proposal. The stable decision identity deliberately excludes the
+    /// round while retaining its height-context, height, and subject.
     #[must_use]
     pub fn same_commit_decision(self, other: Self) -> bool {
         self.phase == Phase::Commit
             && other.phase == Phase::Commit
-            && self.context_id == other.context_id
-            && self.round.height == other.round.height
-            && self.proposal_round == other.proposal_round
-            && self.subject == other.subject
+            && self.same_height_subject(other)
     }
 }
 
@@ -445,8 +461,7 @@ impl HeightContext {
             (_, Some(parent), false)
                 if parent.phase != Phase::Commit
                     || parent.round.height.checked_add(1) != Some(height)
-                    || parent.proposal_round.height != parent.round.height
-                    || parent.proposal_round.view > parent.round.view =>
+                    || parent.proposal_round != parent.round =>
             {
                 return Err(HeightContextError::InvalidParentCommit);
             }
@@ -693,7 +708,9 @@ impl Vote {
         Self::new_with_proposal_round(context_id, round, round, phase, subject, signer)
     }
 
-    /// Constructs a vote with an explicit immutable proposal origin.
+    /// Constructs a vote with an explicit proposal round. Validation requires
+    /// it to equal `round`; the explicit form is retained for decode adapters
+    /// and adversarial fixtures.
     #[must_use]
     pub const fn new_with_proposal_round(
         context_id: ContextId,
@@ -725,7 +742,7 @@ impl Vote {
         self.round
     }
 
-    /// Returns the immutable proposal-body origin round.
+    /// Returns the proposal round, which equals the vote round when valid.
     #[must_use]
     pub const fn proposal_round(self) -> Round {
         self.proposal_round
@@ -747,6 +764,32 @@ impl Vote {
     #[must_use]
     pub const fn signer(self) -> ValidatorId {
         self.signer
+    }
+
+    /// Return whether two validators voted for the exact same signable statement.
+    ///
+    /// The authenticated signer is intentionally excluded: a quorum is formed
+    /// from distinct validators signing one shared context, round, phase, and
+    /// subject. This predicate does not validate either signer against a
+    /// roster; authenticated ingress must do that before reducer admission.
+    #[must_use]
+    pub fn same_statement(self, other: Self) -> bool {
+        vote_statement_identity_equal_body!(
+            self.context_id,
+            self.round.height,
+            self.round.view,
+            self.proposal_round.height,
+            self.proposal_round.view,
+            self.phase,
+            self.subject,
+            other.context_id,
+            other.round.height,
+            other.round.view,
+            other.proposal_round.height,
+            other.proposal_round.view,
+            other.phase,
+            other.subject,
+        )
     }
 }
 
@@ -806,7 +849,7 @@ impl QuorumCertificate {
         self.reference.round
     }
 
-    /// Returns the immutable proposal-body origin round.
+    /// Returns the exact proposal round, equal to the certificate round.
     #[must_use]
     pub const fn proposal_round(&self) -> Round {
         self.reference.proposal_round
@@ -843,11 +886,7 @@ impl QuorumCertificate {
         if self.reference.round.height != context.height {
             return Err(QuorumError::HeightMismatch);
         }
-        if self.reference.proposal_round.height != context.height
-            || self.reference.proposal_round.view > self.reference.round.view
-            || (self.reference.phase == Phase::Prepare
-                && self.reference.proposal_round != self.reference.round)
-        {
+        if self.reference.proposal_round != self.reference.round {
             return Err(QuorumError::InvalidProposalRound);
         }
         let signers: Vec<_> = self.signatures.iter().map(SignatureShare::signer).collect();

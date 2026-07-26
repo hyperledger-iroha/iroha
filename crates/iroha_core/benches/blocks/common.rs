@@ -319,17 +319,13 @@ pub fn build_state(
     state
 }
 
-/// Bootstrap synthetic benchmark domains and their active SNS leases directly into state.
+/// Bootstrap synthetic benchmark domains and their active SNS leases in state.
 pub fn seed_benchmark_domains(state: &mut State, domains: &[DomainId], owner_id: &AccountId) {
+    let address =
+        AccountAddress::from_account_id(owner_id).expect("benchmark owner id is addressable");
     for domain_id in domains {
-        let _ = state.world.insert_domain_for_testing(
-            domain_id.clone(),
-            Domain::new(domain_id.clone()).build(owner_id),
-        );
         let selector =
             iroha_core::sns::selector_for_domain(domain_id).expect("benchmark domain id is valid");
-        let address =
-            AccountAddress::from_account_id(owner_id).expect("benchmark owner id is addressable");
         let record = NameRecordV1::new(
             selector.clone(),
             owner_id.clone(),
@@ -346,6 +342,25 @@ pub fn seed_benchmark_domains(state: &mut State, domains: &[DomainId], owner_id:
             norito::codec::Encode::encode(&record),
         );
     }
+
+    let current_header = state
+        .view()
+        .latest_block()
+        .expect("benchmark state has an initialized block")
+        .as_ref()
+        .header()
+        .clone();
+    let mut state_block = state.block(current_header);
+    let mut state_transaction = state_block.transaction();
+    for domain_id in domains {
+        Register::domain(Domain::new(domain_id.clone()))
+            .execute(owner_id, &mut state_transaction)
+            .expect("register synthetic benchmark domain");
+    }
+    state_transaction.apply();
+    state_block
+        .commit()
+        .expect("commit synthetic benchmark domains");
 }
 
 fn construct_domain_id(i: usize) -> DomainId {

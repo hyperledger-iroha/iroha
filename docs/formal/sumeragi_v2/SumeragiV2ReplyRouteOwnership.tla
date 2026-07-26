@@ -17,6 +17,15 @@ admission ticket, but retries the current message/chunk cursor.  Only a newly
 attached alternate source starts at <<0, 0>>.  The payload carrier is a set
 keyed only by semantic identity, which models immutable byte sharing without
 conflating per-source progress.
+
+Semantic ownership has a second, durable identity layer.  Each requester
+assigns a cumulative sequence to a canonical semantic hash exactly once,
+keeps only a bounded active sequence window, and advances that window only
+with an authenticated cumulative close witness.  Connection recovery may
+drop process-local tickets and activity, but it never rewinds a semantic
+sequence, a close floor, or an attempt cursor.  There is deliberately no
+wall-clock expiry: a delayed delivery is either the same active semantic or a
+closed semantic which cannot reopen.
 ***************************************************************************)
 
 CONSTANTS
@@ -34,7 +43,16 @@ ReplySources ==
   {ReplySourceOrder[index]: index \in 1..Len(ReplySourceOrder)}
 ReplyDeliveryOrdinals == 1..ReplyDeliveryOrdinalLimit
 ReplyConnectionTenures == 1..ReplyDeliveryOrdinalLimit
+ReplySemanticSequences == 1..ReplyDeliveryOrdinalLimit
 NoReplyTicketTenure == 0
+ReplyActiveWindowCapacity == ReplySourceCapacity
+
+(***************************************************************************
+The model keeps the digest symbolic while retaining the production
+requirement that canonical bytes determine it.  The singleton is injective
+over ReplySemantics, so a hash cannot be rebound to a different semantic.
+***************************************************************************)
+ReplyCanonicalSemanticHash(semantic) == {semantic}
 
 ReplyRouteConfiguration ==
   /\ IsFiniteSet(ReplyOwners)
@@ -110,11 +128,132 @@ VARIABLES
   rrNextDeliveryOrdinal,
   rrConnectionTenure,
   rrSourceActive,
-  rrNextServiceIndex
+  rrNextServiceIndex,
+  rrSemanticSequence,
+  rrSemanticHash,
+  rrRequesterNextSequence,
+  rrRequesterClosedThrough,
+  rrClosePendingThrough,
+  rrCloseSentThrough,
+  rrCloseAcknowledgedThrough,
+  rrCloseRetryGeneration
+
+ReplyLifecycleVars ==
+  <<rrSemanticSequence, rrSemanticHash, rrRequesterNextSequence,
+    rrRequesterClosedThrough>>
+
+ReplyCloseVars ==
+  <<rrClosePendingThrough, rrCloseSentThrough,
+    rrCloseAcknowledgedThrough, rrCloseRetryGeneration>>
 
 ReplyRouteVars ==
   <<rrAttempts, rrPayloads, rrNextDeliveryOrdinal, rrConnectionTenure,
-    rrSourceActive, rrNextServiceIndex>>
+    rrSourceActive, rrNextServiceIndex, rrSemanticSequence, rrSemanticHash,
+    rrRequesterNextSequence, rrRequesterClosedThrough,
+    rrClosePendingThrough, rrCloseSentThrough,
+    rrCloseAcknowledgedThrough, rrCloseRetryGeneration>>
+
+ReplySemanticBound(owner, semantic) ==
+  /\ rrSemanticSequence[owner][semantic] \in ReplySemanticSequences
+  /\ rrSemanticHash[owner][semantic] =
+       ReplyCanonicalSemanticHash(semantic)
+
+ReplySemanticClosed(owner, semantic) ==
+  /\ ReplySemanticBound(owner, semantic)
+  /\ rrSemanticSequence[owner][semantic]
+       <= rrRequesterClosedThrough[owner]
+
+ReplySemanticActive(owner, semantic) ==
+  /\ ReplySemanticBound(owner, semantic)
+  /\ rrSemanticSequence[owner][semantic]
+       > rrRequesterClosedThrough[owner]
+
+ReplyActiveSemantics(owner) ==
+  {semantic \in ReplySemantics:
+     ReplySemanticActive(owner, semantic)}
+
+ReplyPayloadsForAttempts(attempts) ==
+  {attempt.semantic: attempt \in attempts}
+
+ReplyCloseWorkPending(requester, responder) ==
+  rrClosePendingThrough[requester][responder]
+    > rrCloseAcknowledgedThrough[requester][responder]
+
+NextReplyCloseRetryGeneration(generation) ==
+  IF generation = ReplyDeliveryOrdinalLimit
+  THEN 0
+  ELSE generation + 1
+
+ReplyCloseWitness(requester, authenticatedRequester, responder,
+                  authenticatedResponder, closedThrough,
+                  bindingRequester, bindingResponder,
+                  bindingClosedThrough) ==
+  [requester |-> requester,
+   authenticatedRequester |-> authenticatedRequester,
+   responder |-> responder,
+   authenticatedResponder |-> authenticatedResponder,
+   closedThrough |-> closedThrough,
+   bindingRequester |-> bindingRequester,
+   bindingResponder |-> bindingResponder,
+   bindingClosedThrough |-> bindingClosedThrough]
+
+ReplyCloseWitnessSet ==
+  [requester: ReplyOwners,
+   authenticatedRequester: ReplyOwners,
+   responder: ReplySources,
+   authenticatedResponder: ReplySources,
+   closedThrough: 0..ReplyDeliveryOrdinalLimit,
+   bindingRequester: ReplyOwners,
+   bindingResponder: ReplySources,
+   bindingClosedThrough: 0..ReplyDeliveryOrdinalLimit]
+
+ReplyCloseWitnessValid(witness) ==
+  /\ witness \in ReplyCloseWitnessSet
+  /\ witness.authenticatedRequester = witness.requester
+  /\ witness.authenticatedResponder = witness.responder
+  /\ witness.bindingRequester = witness.requester
+  /\ witness.bindingResponder = witness.responder
+  /\ witness.bindingClosedThrough = witness.closedThrough
+
+ReplyCanonicalCloseWitness(requester, responder, closedThrough) ==
+  ReplyCloseWitness(
+    requester, requester, responder, responder, closedThrough,
+    requester, responder, closedThrough)
+
+ReplyCloseAcknowledgement(requester, responder, authenticatedResponder,
+                          closedThrough,
+                          bindingRequester, bindingResponder,
+                          bindingClosedThrough) ==
+  [requester |-> requester,
+   responder |-> responder,
+   authenticatedResponder |-> authenticatedResponder,
+   closedThrough |-> closedThrough,
+   bindingRequester |-> bindingRequester,
+   bindingResponder |-> bindingResponder,
+   bindingClosedThrough |-> bindingClosedThrough]
+
+ReplyCloseAcknowledgementSet ==
+  [requester: ReplyOwners,
+   responder: ReplySources,
+   authenticatedResponder: ReplySources,
+   closedThrough: 0..ReplyDeliveryOrdinalLimit,
+   bindingRequester: ReplyOwners,
+   bindingResponder: ReplySources,
+   bindingClosedThrough: 0..ReplyDeliveryOrdinalLimit]
+
+ReplyCloseAcknowledgementValid(acknowledgement) ==
+  /\ acknowledgement \in ReplyCloseAcknowledgementSet
+  /\ acknowledgement.authenticatedResponder =
+       acknowledgement.responder
+  /\ acknowledgement.bindingRequester = acknowledgement.requester
+  /\ acknowledgement.bindingResponder = acknowledgement.responder
+  /\ acknowledgement.bindingClosedThrough =
+       acknowledgement.closedThrough
+
+ReplyCanonicalCloseAcknowledgement(requester, responder, closedThrough) ==
+  ReplyCloseAcknowledgement(
+    requester, responder, responder, closedThrough,
+    requester, responder, closedThrough)
 
 ReplyAttemptsFor(owner, semantic) ==
   {attempt \in rrAttempts:
@@ -317,6 +456,11 @@ ReplyAttemptsAfterReconnect(oldAttempt, routedAttempt) ==
         THEN ReplyAttemptWithoutTicket(attempt)
         ELSE attempt: attempt \in rrAttempts}
 
+ReplyAttemptsAfterClose(requester, closedThrough) ==
+  {attempt \in rrAttempts:
+     \/ attempt.owner # requester
+     \/ rrSemanticSequence[requester][attempt.semantic] > closedThrough}
+
 ReplyAttemptWithTicket(attempt) ==
   [attempt EXCEPT
      !.ticketTenure = attempt.connectionTenure,
@@ -374,7 +518,11 @@ AdvanceCurrentReplyAttempt(owner, semantic, source) ==
      /\ rrAttempts' = ReplaceReplyAttempt(oldAttempt, serviced)
      /\ UNCHANGED <<rrPayloads, rrNextDeliveryOrdinal,
                     rrConnectionTenure, rrSourceActive,
-                    rrNextServiceIndex>>
+                    rrNextServiceIndex, rrSemanticSequence,
+                    rrSemanticHash, rrRequesterNextSequence,
+                    rrRequesterClosedThrough, rrClosePendingThrough,
+                    rrCloseSentThrough, rrCloseAcknowledgedThrough,
+                    rrCloseRetryGeneration>>
 
 NextReplySourceIndex(index) ==
   IF index = Len(ReplySourceOrder) THEN 1 ELSE index + 1
@@ -425,6 +573,26 @@ ReplyRouteInit ==
        [owner \in ReplyOwners |-> [source \in ReplySources |-> TRUE]]
   /\ rrNextServiceIndex =
        [owner \in ReplyOwners |-> [semantic \in ReplySemantics |-> 1]]
+  /\ rrSemanticSequence =
+       [owner \in ReplyOwners |->
+          [semantic \in ReplySemantics |-> 0]]
+  /\ rrSemanticHash =
+       [owner \in ReplyOwners |->
+          [semantic \in ReplySemantics |-> {}]]
+  /\ rrRequesterNextSequence = [owner \in ReplyOwners |-> 1]
+  /\ rrRequesterClosedThrough = [owner \in ReplyOwners |-> 0]
+  /\ rrClosePendingThrough =
+       [owner \in ReplyOwners |->
+          [source \in ReplySources |-> 0]]
+  /\ rrCloseSentThrough =
+       [owner \in ReplyOwners |->
+          [source \in ReplySources |-> 0]]
+  /\ rrCloseAcknowledgedThrough =
+       [owner \in ReplyOwners |->
+          [source \in ReplySources |-> 0]]
+  /\ rrCloseRetryGeneration =
+       [owner \in ReplyOwners |->
+          [source \in ReplySources |-> 0]]
 
 (***************************************************************************
 Only a new authenticated source allocates a cursor-zero attempt.  Capacity is
@@ -433,6 +601,11 @@ the exact configured source geometry, not an eviction policy.
 ObserveNewReplySource(owner, semantic, source) ==
   LET deliveryOrdinal == rrNextDeliveryOrdinal[owner]
       connectionTenure == rrConnectionTenure[owner][source]
+      semanticWasBound == ReplySemanticBound(owner, semantic)
+      semanticSequence ==
+        IF semanticWasBound
+        THEN rrSemanticSequence[owner][semantic]
+        ELSE rrRequesterNextSequence[owner]
       capability ==
         ReplyCapability(
           owner, source, ReplySemanticTarget(semantic), semantic,
@@ -447,6 +620,17 @@ ObserveNewReplySource(owner, semantic, source) ==
      /\ ~ReplyAttemptOwned(owner, semantic, source)
      /\ Cardinality(ReplyAttemptSources(owner, semantic))
           < ReplySourceCapacity
+     /\ semanticSequence \in ReplySemanticSequences
+     /\ semanticSequence > rrRequesterClosedThrough[owner]
+     /\ semanticSequence
+          <= rrRequesterClosedThrough[owner]
+               + ReplyActiveWindowCapacity
+     /\ IF semanticWasBound
+        THEN ReplySemanticActive(owner, semantic)
+        ELSE /\ rrSemanticSequence[owner][semantic] = 0
+             /\ rrSemanticHash[owner][semantic] = {}
+             /\ Cardinality(ReplyActiveSemantics(owner))
+                  < ReplyActiveWindowCapacity
      /\ deliveryOrdinal \in ReplyDeliveryOrdinals
      /\ ReplyCapabilityValidFor(
           capability, owner, source, semantic)
@@ -454,8 +638,26 @@ ObserveNewReplySource(owner, semantic, source) ==
      /\ rrPayloads' = rrPayloads \cup {semantic}
      /\ rrNextDeliveryOrdinal' =
           [rrNextDeliveryOrdinal EXCEPT ![owner] = @ + 1]
+     /\ rrSemanticSequence' =
+          IF semanticWasBound
+          THEN rrSemanticSequence
+          ELSE [rrSemanticSequence EXCEPT
+                  ![owner][semantic] = semanticSequence]
+     /\ rrSemanticHash' =
+          IF semanticWasBound
+          THEN rrSemanticHash
+          ELSE [rrSemanticHash EXCEPT
+                  ![owner][semantic] =
+                    ReplyCanonicalSemanticHash(semantic)]
+     /\ rrRequesterNextSequence' =
+          IF semanticWasBound
+          THEN rrRequesterNextSequence
+          ELSE [rrRequesterNextSequence EXCEPT ![owner] = @ + 1]
      /\ UNCHANGED <<rrConnectionTenure, rrSourceActive,
-                    rrNextServiceIndex>>
+                    rrNextServiceIndex, rrRequesterClosedThrough,
+                    rrClosePendingThrough, rrCloseSentThrough,
+                    rrCloseAcknowledgedThrough,
+                    rrCloseRetryGeneration>>
 
 (***************************************************************************
 A later delivery from one source changes only that attempt.  A same-tenure
@@ -489,7 +691,11 @@ ObserveLaterReplyDelivery(owner, semantic, source) ==
      /\ rrNextDeliveryOrdinal' =
           [rrNextDeliveryOrdinal EXCEPT ![owner] = @ + 1]
      /\ UNCHANGED <<rrPayloads, rrConnectionTenure, rrSourceActive,
-                    rrNextServiceIndex>>
+                    rrNextServiceIndex, rrSemanticSequence,
+                    rrSemanticHash, rrRequesterNextSequence,
+                    rrRequesterClosedThrough, rrClosePendingThrough,
+                    rrCloseSentThrough, rrCloseAcknowledgedThrough,
+                    rrCloseRetryGeneration>>
 
 (***************************************************************************
 An exact authenticated duplicate observes the already-owned attempt without
@@ -525,7 +731,12 @@ RetireReplySource(owner, source) ==
   /\ rrSourceActive' =
        [rrSourceActive EXCEPT ![owner][source] = FALSE]
   /\ UNCHANGED <<rrPayloads, rrNextDeliveryOrdinal,
-                 rrConnectionTenure, rrNextServiceIndex>>
+                 rrConnectionTenure, rrNextServiceIndex,
+                 rrSemanticSequence, rrSemanticHash,
+                 rrRequesterNextSequence, rrRequesterClosedThrough,
+                 rrClosePendingThrough, rrCloseSentThrough,
+                 rrCloseAcknowledgedThrough,
+                 rrCloseRetryGeneration>>
 
 (***************************************************************************
 Reconnect is a new delivery under a new connection tenure.  The new writer
@@ -572,7 +783,12 @@ ReconnectReplySource(owner, semantic, source) ==
           [rrSourceActive EXCEPT ![owner][source] = TRUE]
      /\ rrNextDeliveryOrdinal' =
           [rrNextDeliveryOrdinal EXCEPT ![owner] = @ + 1]
-     /\ UNCHANGED <<rrPayloads, rrNextServiceIndex>>
+     /\ UNCHANGED <<rrPayloads, rrNextServiceIndex,
+                    rrSemanticSequence, rrSemanticHash,
+                    rrRequesterNextSequence, rrRequesterClosedThrough,
+                    rrClosePendingThrough, rrCloseSentThrough,
+                    rrCloseAcknowledgedThrough,
+                    rrCloseRetryGeneration>>
 
 AcquireReplyTicket(owner, semantic, source) ==
   LET oldAttempt == ReplyAttemptFor(owner, semantic, source)
@@ -586,7 +802,11 @@ AcquireReplyTicket(owner, semantic, source) ==
      /\ rrAttempts' = ReplaceReplyAttempt(oldAttempt, ticketed)
      /\ UNCHANGED <<rrPayloads, rrNextDeliveryOrdinal,
                     rrConnectionTenure, rrSourceActive,
-                    rrNextServiceIndex>>
+                    rrNextServiceIndex, rrSemanticSequence,
+                    rrSemanticHash, rrRequesterNextSequence,
+                    rrRequesterClosedThrough, rrClosePendingThrough,
+                    rrCloseSentThrough, rrCloseAcknowledgedThrough,
+                    rrCloseRetryGeneration>>
 
 (***************************************************************************
 Terminal exact-item linearization.  For ordinary reliable output this action
@@ -609,7 +829,129 @@ ServiceReplyRoute(owner, semantic) ==
           [rrNextServiceIndex EXCEPT
              ![owner][semantic] = NextReplySourceIndex(selectedIndex)]
      /\ UNCHANGED <<rrPayloads, rrNextDeliveryOrdinal,
-                    rrConnectionTenure, rrSourceActive>>
+                    rrConnectionTenure, rrSourceActive,
+                    rrSemanticSequence, rrSemanticHash,
+                    rrRequesterNextSequence, rrRequesterClosedThrough,
+                    rrClosePendingThrough, rrCloseSentThrough,
+                    rrCloseAcknowledgedThrough,
+                    rrCloseRetryGeneration>>
+
+(***************************************************************************
+Only an authenticated requester may advance its cumulative close floor.  The
+witness is bound to the exact requester and exact cumulative sequence, and it
+may cover only sequences which that requester has already issued.  All
+source attempts for covered semantic requests leave together; attempts owned
+by another requester survive even when they share the same semantic payload.
+The durable sequence/hash journal is retained so delayed delivery cannot bind
+the closed semantic to a new sequence.
+***************************************************************************)
+CloseSemanticRequest(witness) ==
+  LET requester == witness.requester
+      responder == witness.responder
+      closedThrough == witness.closedThrough
+      remainingAttempts ==
+        ReplyAttemptsAfterClose(requester, closedThrough)
+  IN /\ ReplyCloseWitnessValid(witness)
+     /\ ~ReplyCloseWorkPending(requester, responder)
+     /\ closedThrough > rrRequesterClosedThrough[requester]
+     /\ closedThrough < rrRequesterNextSequence[requester]
+     /\ rrAttempts' = remainingAttempts
+     /\ rrPayloads' = ReplyPayloadsForAttempts(remainingAttempts)
+     /\ rrRequesterClosedThrough' =
+          [rrRequesterClosedThrough EXCEPT
+             ![requester] = closedThrough]
+     /\ rrClosePendingThrough' =
+          [rrClosePendingThrough EXCEPT
+             ![requester][responder] = closedThrough]
+     /\ rrCloseSentThrough' =
+          [rrCloseSentThrough EXCEPT
+             ![requester][responder] = closedThrough]
+     /\ UNCHANGED <<rrNextDeliveryOrdinal, rrConnectionTenure,
+                    rrSourceActive, rrNextServiceIndex,
+                    rrSemanticSequence, rrSemanticHash,
+                    rrRequesterNextSequence,
+                    rrCloseAcknowledgedThrough,
+                    rrCloseRetryGeneration>>
+
+(***************************************************************************
+A close carried on a newly authenticated request has the same durable
+linearization as a standalone close.  The carrying request is subsequently
+observed through ObserveNewReplySource or ObserveLaterReplyDelivery, so the
+close cannot inherit or manufacture a route capability.
+***************************************************************************)
+PiggybackCloseSemanticRequest(witness) ==
+  CloseSemanticRequest(witness)
+
+(***************************************************************************
+The requester retains the latest cumulative close until the exact responder
+acknowledges the exact floor.  Retry generation is bounded bookkeeping only;
+it is neither a delivery ordinal nor a reply capability.  Replaying the
+latest witness after acknowledgement is a semantic stutter.
+***************************************************************************)
+RetryCloseSemanticRequest(witness) ==
+  LET requester == witness.requester
+      responder == witness.responder
+      closedThrough == witness.closedThrough
+  IN /\ ReplyCloseWitnessValid(witness)
+     /\ closedThrough =
+          rrClosePendingThrough[requester][responder]
+     /\ closedThrough =
+          rrCloseSentThrough[requester][responder]
+     /\ closedThrough <= rrRequesterClosedThrough[requester]
+     /\ IF ReplyCloseWorkPending(requester, responder)
+        THEN /\ rrCloseRetryGeneration' =
+                  [rrCloseRetryGeneration EXCEPT
+                     ![requester][responder] =
+                       NextReplyCloseRetryGeneration(@)]
+             /\ UNCHANGED <<rrAttempts, rrPayloads,
+                            rrNextDeliveryOrdinal,
+                            rrConnectionTenure, rrSourceActive,
+                            rrNextServiceIndex, rrSemanticSequence,
+                            rrSemanticHash, rrRequesterNextSequence,
+                            rrRequesterClosedThrough,
+                            rrClosePendingThrough, rrCloseSentThrough,
+                            rrCloseAcknowledgedThrough>>
+        ELSE /\ rrCloseAcknowledgedThrough[requester][responder]
+                  >= closedThrough
+             /\ UNCHANGED ReplyRouteVars
+
+(***************************************************************************
+The acknowledgement carries only the authenticated close identity.  It has
+no delivery ordinal, connection tenure, target, ticket, or route capability,
+so it cannot be replayed as permission to emit output.
+***************************************************************************)
+AcknowledgeCloseSemanticRequest(acknowledgement) ==
+  LET requester == acknowledgement.requester
+      responder == acknowledgement.responder
+      closedThrough == acknowledgement.closedThrough
+  IN /\ ReplyCloseAcknowledgementValid(acknowledgement)
+     /\ closedThrough # 0
+     /\ closedThrough =
+          rrClosePendingThrough[requester][responder]
+     /\ closedThrough =
+          rrCloseSentThrough[requester][responder]
+     /\ closedThrough <= rrRequesterClosedThrough[requester]
+     /\ rrCloseAcknowledgedThrough[requester][responder]
+          <= closedThrough
+     /\ rrCloseAcknowledgedThrough' =
+          [rrCloseAcknowledgedThrough EXCEPT
+             ![requester][responder] = closedThrough]
+     /\ UNCHANGED <<rrAttempts, rrPayloads, rrNextDeliveryOrdinal,
+                    rrConnectionTenure, rrSourceActive,
+                    rrNextServiceIndex, rrSemanticSequence,
+                    rrSemanticHash, rrRequesterNextSequence,
+                    rrRequesterClosedThrough, rrClosePendingThrough,
+                    rrCloseSentThrough, rrCloseRetryGeneration>>
+
+(***************************************************************************
+Recovery invalidates one authenticated source's process-local admission
+tickets and live capability, but retains each semantic binding and every
+per-source cursor.  A full actor rehydration is the finite composition of
+these source-scoped recovery steps; sources with no retained attempt remain
+available for a first authenticated delivery.
+***************************************************************************)
+RecoverReplyRouteState(owner, source) ==
+  RetireReplySource(owner, source)
 
 ReplyRouteNext ==
   \/ \E owner \in ReplyOwners, semantic \in ReplySemantics,
@@ -631,6 +973,16 @@ ReplyRouteNext ==
        AcquireReplyTicket(owner, semantic, source)
   \/ \E owner \in ReplyOwners, semantic \in ReplySemantics:
        ServiceReplyRoute(owner, semantic)
+  \/ \E witness \in ReplyCloseWitnessSet:
+       CloseSemanticRequest(witness)
+  \/ \E witness \in ReplyCloseWitnessSet:
+       PiggybackCloseSemanticRequest(witness)
+  \/ \E witness \in ReplyCloseWitnessSet:
+       RetryCloseSemanticRequest(witness)
+  \/ \E acknowledgement \in ReplyCloseAcknowledgementSet:
+       AcknowledgeCloseSemanticRequest(acknowledgement)
+  \/ \E owner \in ReplyOwners, source \in ReplySources:
+       RecoverReplyRouteState(owner, source)
 
 ReplyRouteFairness ==
   /\ \A owner \in ReplyOwners, semantic \in ReplySemantics,
@@ -638,6 +990,11 @@ ReplyRouteFairness ==
        WF_ReplyRouteVars(AcquireReplyTicket(owner, semantic, source))
   /\ \A owner \in ReplyOwners, semantic \in ReplySemantics:
        WF_ReplyRouteVars(ServiceReplyRoute(owner, semantic))
+  /\ \A witness \in ReplyCloseWitnessSet:
+       WF_ReplyRouteVars(RetryCloseSemanticRequest(witness))
+  /\ \A acknowledgement \in ReplyCloseAcknowledgementSet:
+       WF_ReplyRouteVars(
+         AcknowledgeCloseSemanticRequest(acknowledgement))
 
 ReplyRouteSpec ==
   ReplyRouteInit
@@ -654,6 +1011,30 @@ ReplyRouteTypeInvariant ==
   /\ rrSourceActive \in [ReplyOwners -> [ReplySources -> BOOLEAN]]
   /\ rrNextServiceIndex
        \in [ReplyOwners -> [ReplySemantics -> 1..Len(ReplySourceOrder)]]
+
+ReplyLifecycleTypeInvariant ==
+  /\ rrSemanticSequence
+       \in [ReplyOwners ->
+             [ReplySemantics -> 0..ReplyDeliveryOrdinalLimit]]
+  /\ rrSemanticHash
+       \in [ReplyOwners ->
+             [ReplySemantics -> SUBSET ReplySemantics]]
+  /\ rrRequesterNextSequence
+       \in [ReplyOwners -> 1..(ReplyDeliveryOrdinalLimit + 1)]
+  /\ rrRequesterClosedThrough
+       \in [ReplyOwners -> 0..ReplyDeliveryOrdinalLimit]
+  /\ rrClosePendingThrough
+       \in [ReplyOwners ->
+             [ReplySources -> 0..ReplyDeliveryOrdinalLimit]]
+  /\ rrCloseSentThrough
+       \in [ReplyOwners ->
+             [ReplySources -> 0..ReplyDeliveryOrdinalLimit]]
+  /\ rrCloseAcknowledgedThrough
+       \in [ReplyOwners ->
+             [ReplySources -> 0..ReplyDeliveryOrdinalLimit]]
+  /\ rrCloseRetryGeneration
+       \in [ReplyOwners ->
+             [ReplySources -> 0..ReplyDeliveryOrdinalLimit]]
 
 ReplyRouteOwnershipInvariant ==
   /\ \A owner \in ReplyOwners, semantic \in ReplySemantics,
@@ -677,6 +1058,38 @@ ReplyRouteOwnershipInvariant ==
           THEN ReplyAttemptHasNoTicket(attempt)
           ELSE ReplyTicketValidForAttempt(attempt)
 
+ReplyLifecycleOwnershipInvariant ==
+  /\ \A owner \in ReplyOwners:
+       /\ rrRequesterClosedThrough[owner]
+            < rrRequesterNextSequence[owner]
+       /\ \A semantic \in ReplySemantics:
+            /\ (rrSemanticSequence[owner][semantic] = 0)
+                 <=> (rrSemanticHash[owner][semantic] = {})
+            /\ rrSemanticSequence[owner][semantic] # 0 =>
+                 /\ rrSemanticHash[owner][semantic] =
+                      ReplyCanonicalSemanticHash(semantic)
+                 /\ rrSemanticSequence[owner][semantic]
+                      < rrRequesterNextSequence[owner]
+            /\ ReplySemanticActive(owner, semantic) =>
+                 rrSemanticSequence[owner][semantic]
+                   <= rrRequesterClosedThrough[owner]
+                        + ReplyActiveWindowCapacity
+       /\ \A left, right \in ReplySemantics:
+            /\ rrSemanticSequence[owner][left] # 0
+            /\ rrSemanticSequence[owner][left] =
+                 rrSemanticSequence[owner][right]
+            => left = right
+  /\ \A attempt \in rrAttempts:
+       ReplySemanticActive(attempt.owner, attempt.semantic)
+  /\ rrPayloads = ReplyPayloadsForAttempts(rrAttempts)
+  /\ \A owner \in ReplyOwners, responder \in ReplySources:
+       /\ rrCloseSentThrough[owner][responder] =
+            rrClosePendingThrough[owner][responder]
+       /\ rrCloseAcknowledgedThrough[owner][responder]
+            <= rrClosePendingThrough[owner][responder]
+       /\ rrClosePendingThrough[owner][responder]
+            <= rrRequesterClosedThrough[owner]
+
 (***************************************************************************
 This transition predicate is the tenure-aware retry contract consumed by both
 the asynchronous composition and the mutation matrix.  Matching is semantic
@@ -689,6 +1102,19 @@ ReplySourceTenureInvalidationStep ==
     rrConnectionTenure'[owner][source]
       > rrConnectionTenure[owner][source] =>
         ReplySourceHasNoTickets(owner, source)'
+
+ReplyAttemptCoveredByCloseStep(attempt) ==
+  /\ ReplySemanticBound(attempt.owner, attempt.semantic)
+  /\ rrSemanticSequence'[attempt.owner][attempt.semantic] =
+       rrSemanticSequence[attempt.owner][attempt.semantic]
+  /\ rrSemanticHash'[attempt.owner][attempt.semantic] =
+       rrSemanticHash[attempt.owner][attempt.semantic]
+  /\ rrRequesterClosedThrough'[attempt.owner]
+       > rrRequesterClosedThrough[attempt.owner]
+  /\ rrSemanticSequence[attempt.owner][attempt.semantic]
+       > rrRequesterClosedThrough[attempt.owner]
+  /\ rrSemanticSequence[attempt.owner][attempt.semantic]
+       <= rrRequesterClosedThrough'[attempt.owner]
 
 ReplyAttemptReplayValid(oldAttempt, newAttempt) ==
   /\ newAttempt.owner = oldAttempt.owner
@@ -709,8 +1135,20 @@ ReplyAttemptReplayValid(oldAttempt, newAttempt) ==
 
 ReplyAttemptReplayStep ==
   \A oldAttempt \in rrAttempts:
-    \E newAttempt \in rrAttempts':
-      ReplyAttemptReplayValid(oldAttempt, newAttempt)
+    \/ ReplyAttemptCoveredByCloseStep(oldAttempt)
+    \/ \E newAttempt \in rrAttempts':
+         ReplyAttemptReplayValid(oldAttempt, newAttempt)
+
+ReplyLifecycleJournalStep ==
+  /\ \A owner \in ReplyOwners:
+       rrRequesterClosedThrough'[owner]
+         >= rrRequesterClosedThrough[owner]
+  /\ \A owner \in ReplyOwners, semantic \in ReplySemantics:
+       ReplySemanticBound(owner, semantic) =>
+         /\ rrSemanticSequence'[owner][semantic] =
+              rrSemanticSequence[owner][semantic]
+         /\ rrSemanticHash'[owner][semantic] =
+              rrSemanticHash[owner][semantic]
 
 ReplyTenureAwareReplayStep ==
   /\ ReplyAttemptReplayStep
@@ -719,20 +1157,32 @@ ReplyTenureAwareReplayStep ==
 ReplyTenureAwareReplay ==
   [][ReplyTenureAwareReplayStep]_ReplyRouteVars
 
+ReplyLifecycleJournal ==
+  [][ReplyLifecycleJournalStep]_ReplyRouteVars
+
 (***************************************************************************
-Every owned attempt survives a route transition.  When one attempt changes,
-all other attempts owned by the same actor retain their independent cursors,
-including other semantic requests from the same authenticated source.
+Every owned attempt survives a route transition unless the exact durable
+sequence for that attempt is covered by an authenticated cumulative close.
+When one retained attempt changes, all other attempts owned by the same actor
+retain their independent cursors, including other semantic requests from the
+same authenticated source.
 ***************************************************************************)
 SameReplyAttemptIdentity(left, right) ==
   /\ left.owner = right.owner
   /\ left.semantic = right.semantic
   /\ left.source = right.source
 
+ReplyRecoveryCursorPreservationStep ==
+  \A before \in rrAttempts:
+    \E after \in rrAttempts':
+      /\ SameReplyAttemptIdentity(before, after)
+      /\ ReplyAttemptCursor(after) = ReplyAttemptCursor(before)
+
 ReplyAttemptSurvivalStep ==
   \A retainedBefore \in rrAttempts:
-    \E retainedAfter \in rrAttempts':
-      SameReplyAttemptIdentity(retainedBefore, retainedAfter)
+    \/ ReplyAttemptCoveredByCloseStep(retainedBefore)
+    \/ \E retainedAfter \in rrAttempts':
+         SameReplyAttemptIdentity(retainedBefore, retainedAfter)
 
 ReplyOtherCursorIsolationStep ==
   \A changedBefore \in rrAttempts:
@@ -764,6 +1214,14 @@ ReplyRouteSafetyInvariant ==
   /\ ReplyRouteTypeInvariant
   /\ ReplyRouteOwnershipInvariant
 
+ReplyRouteLifecycleInvariant ==
+  /\ ReplyLifecycleTypeInvariant
+  /\ ReplyLifecycleOwnershipInvariant
+
+ReplyRouteFullSafetyInvariant ==
+  /\ ReplyRouteSafetyInvariant
+  /\ ReplyRouteLifecycleInvariant
+
 (***************************************************************************
 This is an explicit liveness obligation, not a safety shorthand.  Stability
 requires only that the source-owned attempt eventually remains active under a
@@ -771,7 +1229,9 @@ single current connection tenure; it deliberately does not pre-assume an
 admission ticket.  Weak fairness must first acquire that ticket and then serve
 the finite round-robin distance.  The conclusion requires a strictly larger
 cursor rank or completion; merely retiring the route, reconnecting it, or
-invalidating its ticket cannot satisfy the leads-to target.
+invalidating its ticket cannot satisfy the leads-to target.  An authenticated
+cumulative close is the sole alternative target because it explicitly
+supersedes the exact semantic sequence rather than silently losing ownership.
 ***************************************************************************)
 ReplySourceServiceEligible(owner, semantic, source) ==
   /\ ReplyAttemptOwned(owner, semantic, source)
@@ -794,11 +1254,13 @@ ReplySourceAtCursor(owner, semantic, source, messageCursor, chunkCursor) ==
 
 ReplySourceAdvancedFrom(owner, semantic, source,
                         messageCursor, chunkCursor) ==
-  /\ ReplyAttemptOwned(owner, semantic, source)
-  /\ LET attempt == ReplyAttemptFor(owner, semantic, source)
-         oldRank == messageCursor * (ReplyChunkCount + 1) + chunkCursor
-     IN \/ ReplyAttemptComplete(attempt)
-        \/ ReplyAttemptRank(attempt) > oldRank
+  \/ ReplySemanticClosed(owner, semantic)
+  \/ /\ ReplyAttemptOwned(owner, semantic, source)
+     /\ LET attempt == ReplyAttemptFor(owner, semantic, source)
+            oldRank ==
+              messageCursor * (ReplyChunkCount + 1) + chunkCursor
+        IN \/ ReplyAttemptComplete(attempt)
+           \/ ReplyAttemptRank(attempt) > oldRank
 
 ReplySourceEventuallyProgresses(owner, semantic, source) ==
   ReplySourceStableResponsive(owner, semantic, source) =>
@@ -808,5 +1270,9 @@ ReplySourceEventuallyProgresses(owner, semantic, source) ==
                           messageCursor, chunkCursor)
         ~> ReplySourceAdvancedFrom(owner, semantic, source,
                                    messageCursor, chunkCursor)
+
+ReplyCloseWorkEventuallyTerminates(requester, responder) ==
+  ReplyCloseWorkPending(requester, responder)
+    ~> ~ReplyCloseWorkPending(requester, responder)
 
 =============================================================================

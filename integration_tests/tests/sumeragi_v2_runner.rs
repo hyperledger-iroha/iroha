@@ -585,9 +585,7 @@ fn held_prepare_certificate_sequences(
     expected_signers: &[ValidatorIndex],
     required: usize,
 ) -> Option<Vec<u64>> {
-    let mut senders = BTreeSet::new();
-    let mut digests = Vec::with_capacity(required);
-    let mut sequences = Vec::with_capacity(required);
+    let mut sources_by_digest = BTreeMap::<Hash, BTreeMap<PeerId, u64>>::new();
     for message in &ack.held {
         if message.height != Some(height)
             || message.view != Some(view)
@@ -599,19 +597,27 @@ fn held_prepare_certificate_sequences(
             || message.block_hash.as_ref() != Some(&expected_subject.block_hash)
             || message.signer.is_some()
             || message.certificate_signers != expected_signers
-            || !senders.insert(message.sender.clone())
-            || digests.contains(&message.envelope_digest)
         {
             continue;
         }
-        digests.push(message.envelope_digest);
-        sequences.push(message.sequence);
+        sources_by_digest
+            .entry(message.envelope_digest)
+            .or_default()
+            .entry(message.sender.clone())
+            .or_insert(message.sequence);
+    }
+    sources_by_digest.into_values().find_map(|sources| {
+        if sources.len() < required {
+            return None;
+        }
+        let mut sequences = sources.into_values().take(required).collect::<Vec<_>>();
         if sequences.len() == required {
             sequences.sort_unstable();
-            return Some(sequences);
+            Some(sequences)
+        } else {
+            None
         }
-    }
-    None
+    })
 }
 
 fn held_timeout_certificate_sequences(
@@ -625,9 +631,7 @@ fn held_timeout_certificate_sequences(
     required: usize,
 ) -> Option<Vec<u64>> {
     let expected_block_hash = expected_subject.map(|subject| subject.block_hash);
-    let mut senders = BTreeSet::new();
-    let mut digests = BTreeSet::new();
-    let mut sequences = Vec::with_capacity(required);
+    let mut sources_by_digest = BTreeMap::<Hash, BTreeMap<PeerId, u64>>::new();
     for message in &ack.held {
         if message.height != Some(height)
             || message.view != Some(view)
@@ -639,18 +643,27 @@ fn held_timeout_certificate_sequences(
             || message.block_hash != expected_block_hash
             || message.signer.is_some()
             || message.certificate_signers != expected_signers
-            || !senders.insert(message.sender.clone())
-            || !digests.insert(message.envelope_digest)
         {
             continue;
         }
-        sequences.push(message.sequence);
+        sources_by_digest
+            .entry(message.envelope_digest)
+            .or_default()
+            .entry(message.sender.clone())
+            .or_insert(message.sequence);
+    }
+    sources_by_digest.into_values().find_map(|sources| {
+        if sources.len() < required {
+            return None;
+        }
+        let mut sequences = sources.into_values().take(required).collect::<Vec<_>>();
         if sequences.len() == required {
             sequences.sort_unstable();
-            return Some(sequences);
+            Some(sequences)
+        } else {
+            None
         }
-    }
-    None
+    })
 }
 
 fn held_quorum_evidence_sequences(
@@ -970,6 +983,7 @@ mod prepare_qc_split_tests {
             subject: Some(reference.subject),
             execution_commitment: Some(reference.execution_commitment),
             signer: Some(signer),
+            cited_responder: None,
             certificate_signers: Vec::new(),
             envelope_digest: hash(u8::try_from(sequence).expect("small test sequence")),
             size_bytes: 64,
@@ -992,6 +1006,7 @@ mod prepare_qc_split_tests {
             subject: None,
             execution_commitment: None,
             signer: Some(signer),
+            cited_responder: None,
             certificate_signers: Vec::new(),
             envelope_digest: hash(u8::try_from(sequence).expect("small test sequence")),
             size_bytes: 64,
@@ -1015,6 +1030,7 @@ mod prepare_qc_split_tests {
             subject: Some(reference.subject),
             execution_commitment: Some(reference.execution_commitment),
             signer: None,
+            cited_responder: None,
             certificate_signers,
             envelope_digest: hash(u8::try_from(sequence).expect("small test sequence")),
             size_bytes: 96,
@@ -1038,6 +1054,7 @@ mod prepare_qc_split_tests {
             subject: reference.map(|reference| reference.subject),
             execution_commitment: reference.map(|reference| reference.execution_commitment),
             signer: None,
+            cited_responder: None,
             certificate_signers,
             envelope_digest: hash(u8::try_from(sequence).expect("small test sequence")),
             size_bytes: 96,
@@ -1191,47 +1208,149 @@ mod prepare_qc_split_tests {
         assert_eq!(timeout.sequences, vec![5, 6]);
 
         let certificate_signers = vec![0, 1, 2];
-        let certificate_ack = ack(vec![held_prepare_certificate(
+        let certificate_digest = hash(0xA0);
+        let mut first_certificate = held_prepare_certificate(
             7,
             peer_ids[0].clone(),
             first_vote,
             certificate_signers.clone(),
-        )]);
+        );
+        first_certificate.envelope_digest = certificate_digest;
+        let mut second_certificate = held_prepare_certificate(
+            10,
+            peer_ids[1].clone(),
+            first_vote,
+            certificate_signers.clone(),
+        );
+        second_certificate.envelope_digest = certificate_digest;
+        let conflicting_certificate = held_prepare_certificate(
+            11,
+            peer_ids[2].clone(),
+            first_vote,
+            certificate_signers.clone(),
+        );
+        let certificate_ack = ack(vec![
+            first_certificate,
+            second_certificate,
+            conflicting_certificate,
+        ]);
         assert_eq!(
             held_prepare_certificate_sequences(
                 &certificate_ack,
                 HEIGHT,
                 FIRST_VIEW,
-                &BTreeSet::from([peer_ids[0].clone()]),
+                &BTreeSet::from([
+                    peer_ids[0].clone(),
+                    peer_ids[1].clone(),
+                    peer_ids[2].clone(),
+                ]),
                 &first_vote.subject,
                 &first_vote.execution_commitment,
                 &certificate_signers,
-                1,
+                2,
             ),
-            Some(vec![7]),
+            Some(vec![7, 10]),
+            "one canonical PrepareQC rebroadcast by two authenticated sources is two retained source attempts"
+        );
+        assert!(
+            held_prepare_certificate_sequences(
+                &certificate_ack,
+                HEIGHT,
+                FIRST_VIEW,
+                &BTreeSet::from([
+                    peer_ids[0].clone(),
+                    peer_ids[1].clone(),
+                    peer_ids[2].clone(),
+                ]),
+                &first_vote.subject,
+                &first_vote.execution_commitment,
+                &certificate_signers,
+                3,
+            )
+            .is_none(),
+            "different certificate digests cannot be combined into one source set"
         );
 
+        let timeout_certificate_digest = hash(0xA1);
+        let mut first_timeout_certificate =
+            held_timeout_certificate(8, peer_ids[0].clone(), None, certificate_signers.clone());
+        first_timeout_certificate.envelope_digest = timeout_certificate_digest;
+        let mut second_timeout_certificate =
+            held_timeout_certificate(12, peer_ids[1].clone(), None, certificate_signers.clone());
+        second_timeout_certificate.envelope_digest = timeout_certificate_digest;
+        let mut third_timeout_certificate =
+            held_timeout_certificate(13, peer_ids[2].clone(), None, certificate_signers.clone());
+        third_timeout_certificate.envelope_digest = timeout_certificate_digest;
+        let mut timeout_certificate_retry =
+            held_timeout_certificate(15, peer_ids[0].clone(), None, certificate_signers.clone());
+        timeout_certificate_retry.envelope_digest = timeout_certificate_digest;
+        assert!(
+            held_timeout_certificate_sequences(
+                &ack(vec![
+                    first_timeout_certificate.clone(),
+                    timeout_certificate_retry,
+                ]),
+                HEIGHT,
+                FIRST_VIEW,
+                &BTreeSet::from([peer_ids[0].clone()]),
+                None,
+                None,
+                &certificate_signers,
+                2,
+            )
+            .is_none(),
+            "one source's repeated certificate cannot pad the source quorum"
+        );
+        let locked_timeout_certificate = held_timeout_certificate(
+            9,
+            peer_ids[1].clone(),
+            Some(first_vote),
+            certificate_signers.clone(),
+        );
         let timeout_certificate_ack = ack(vec![
-            held_timeout_certificate(8, peer_ids[0].clone(), None, certificate_signers.clone()),
-            held_timeout_certificate(
-                9,
-                peer_ids[1].clone(),
-                Some(first_vote),
-                certificate_signers.clone(),
-            ),
+            first_timeout_certificate,
+            locked_timeout_certificate,
+            second_timeout_certificate,
+            third_timeout_certificate,
+            held_timeout_certificate(14, peer_ids[3].clone(), None, certificate_signers.clone()),
         ]);
         assert_eq!(
             held_timeout_certificate_sequences(
                 &timeout_certificate_ack,
                 HEIGHT,
                 FIRST_VIEW,
-                &BTreeSet::from([peer_ids[0].clone()]),
+                &BTreeSet::from([
+                    peer_ids[0].clone(),
+                    peer_ids[1].clone(),
+                    peer_ids[2].clone(),
+                    peer_ids[3].clone(),
+                ]),
                 None,
                 None,
                 &certificate_signers,
-                1,
+                3,
             ),
-            Some(vec![8]),
+            Some(vec![8, 12, 13]),
+            "one canonical TimeoutCertificate rebroadcast by three authenticated sources is three retained source attempts"
+        );
+        assert!(
+            held_timeout_certificate_sequences(
+                &timeout_certificate_ack,
+                HEIGHT,
+                FIRST_VIEW,
+                &BTreeSet::from([
+                    peer_ids[0].clone(),
+                    peer_ids[1].clone(),
+                    peer_ids[2].clone(),
+                    peer_ids[3].clone(),
+                ]),
+                None,
+                None,
+                &certificate_signers,
+                4,
+            )
+            .is_none(),
+            "different TimeoutCertificate digests cannot be combined into one source set"
         );
         assert_eq!(
             held_timeout_certificate_sequences(
@@ -2871,34 +2990,40 @@ async fn real_network_same_subject_locked_reproposal_converges_after_ordered_quo
             .ensure_blocks_with(|height| height.total >= target_height)
             .await
             .wrap_err("captured Commit release did not finalize the controlled height")?;
-        let committed_views = try_join_all(
-            peers
-                .iter()
-                .map(|peer| committed_view_at_height(peer, target_height)),
-        )
-        .await?;
+        let committed_metadata =
+            wait_for_committed_block_metadata(&peers, target_height, STATUS_TIMEOUT)
+                .await
+                .wrap_err("not every validator exposed the controlled decision")?;
+        let committed_header_views = committed_metadata
+            .iter()
+            .map(|(view, _)| *view)
+            .collect::<Vec<_>>();
+        // The consensus certificate advances to `second_view`, as established
+        // by `reproposed_reference` and the released controller evidence. The
+        // resultless block header is part of the immutable locked bytes, so an
+        // exact reproposal must retain its original header view.
         ensure!(
-            committed_views.iter().all(|view| *view == second_view),
-            "captured Commit release finalized an unexpected view: expected={second_view}, committed={committed_views:?}"
-        );
-        let committed_hashes = try_join_all(
-            peers
+            committed_header_views
                 .iter()
-                .map(|peer| committed_hash_at_height(peer, target_height)),
-        )
-        .await?;
+                .all(|view| *view == first_view),
+            "an exact later-round reproposal must not rewrite the locked block header view: expected={first_view}, committed={committed_header_views:?}"
+        );
+        let committed_hashes = committed_metadata
+            .into_iter()
+            .map(|(_, hash)| hash)
+            .collect::<Vec<_>>();
         ensure!(
             committed_hashes
                 .iter()
                 .all(|hash| hash == &canonical_subject_hash),
             "validators did not commit the exact re-proposed locked body: locked={canonical_subject_hash}, committed={committed_hashes:?}"
         );
-        for ((((peer, expected), release), released_ack), committed_view) in peers
+        for ((((peer, expected), release), released_ack), committed_header_view) in peers
             .iter()
             .zip(&expected_rules)
             .zip(&commit_releases)
             .zip(&commit_release_acks)
-            .zip(&committed_views)
+            .zip(&committed_header_views)
         {
             let live_ack = peer
                 .consensus_message_control()
@@ -2908,7 +3033,7 @@ async fn real_network_same_subject_locked_reproposal_converges_after_ordered_quo
                 live_ack.revision == released_ack.revision
                     && live_ack.rules.as_slice() == expected.as_slice()
                     && live_ack.delivered.as_slice() == release.as_slice(),
-                "{} finalized view {committed_view} only after its partition rules changed or its captured Commit delivery lost identity",
+                "{} finalized the immutable header view {committed_header_view} only after its partition rules changed or its captured Commit delivery lost identity",
                 peer.mnemonic(),
             );
             ensure!(!live_ack.fatal, "{} controller failed closed", peer.mnemonic());
@@ -4177,24 +4302,21 @@ fn validator_indices_by_peer(peers: &[NetworkPeer]) -> Result<BTreeMap<PeerId, V
 }
 
 async fn committed_view_at_height(peer: &NetworkPeer, height: u64) -> Result<u64> {
-    let client = peer.client();
-    let peer_name = peer.mnemonic().to_owned();
-    task::spawn_blocking(move || {
-        let blocks = client
-            .query(FindBlocks)
-            .execute_all()
-            .wrap_err_with(|| format!("query blocks from {peer_name}"))?;
-        blocks
-            .iter()
-            .find(|block| block.header().height().get() == height)
-            .map(|block| block.header().view_change_index())
-            .ok_or_else(|| eyre!("{peer_name} has no committed block at height {height}"))
-    })
-    .await
-    .wrap_err_with(|| format!("block-view query panicked for {}", peer.mnemonic()))?
+    committed_block_metadata_at_height(peer, height)
+        .await
+        .map(|(view, _)| view)
 }
 
 async fn committed_hash_at_height(peer: &NetworkPeer, height: u64) -> Result<String> {
+    committed_block_metadata_at_height(peer, height)
+        .await
+        .map(|(_, hash)| hash)
+}
+
+async fn committed_block_metadata_at_height(
+    peer: &NetworkPeer,
+    height: u64,
+) -> Result<(u64, String)> {
     let client = peer.client();
     let peer_name = peer.mnemonic().to_owned();
     task::spawn_blocking(move || {
@@ -4205,11 +4327,43 @@ async fn committed_hash_at_height(peer: &NetworkPeer, height: u64) -> Result<Str
         blocks
             .iter()
             .find(|block| block.header().height().get() == height)
-            .map(|block| block.hash().to_string())
+            .map(|block| (block.header().view_change_index(), block.hash().to_string()))
             .ok_or_else(|| eyre!("{peer_name} has no committed block at height {height}"))
     })
     .await
-    .wrap_err_with(|| format!("block-hash query panicked for {}", peer.mnemonic()))?
+    .wrap_err_with(|| format!("block-metadata query panicked for {}", peer.mnemonic()))?
+}
+
+async fn wait_for_committed_block_metadata(
+    peers: &[NetworkPeer],
+    height: u64,
+    timeout: Duration,
+) -> Result<Vec<(u64, String)>> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let mut committed = Vec::with_capacity(peers.len());
+        let mut errors = Vec::new();
+        for peer in peers {
+            match committed_block_metadata_at_height(peer, height).await {
+                Ok((view, hash)) => {
+                    committed.push((peer.mnemonic().to_owned(), view, hash));
+                }
+                Err(error) => errors.push(format!("{}: {error:#}", peer.mnemonic())),
+            }
+        }
+        if committed.len() == peers.len() {
+            return Ok(committed
+                .into_iter()
+                .map(|(_, view, hash)| (view, hash))
+                .collect());
+        }
+        if Instant::now() >= deadline {
+            return Err(eyre!(
+                "not every validator exposed committed block {height} within {timeout:?}: committed={committed:?}, errors={errors:?}"
+            ));
+        }
+        sleep(FAST_STATUS_POLL_INTERVAL).await;
+    }
 }
 
 async fn assert_account_registration_in_exact_block(

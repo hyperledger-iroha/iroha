@@ -1025,6 +1025,64 @@ PROOF
     <2> QED BY <2>1, <2>3, WellFoundedLeadsTo
   <1> QED BY <1>1
 
+THEOREM SuccessorActivationRankQuantifierEquivalence ==
+  \A parentContext, node:
+    (\A rank \in SuccessorActivationRankCarrier:
+       SuccessorActivationAtRank(parentContext, node, rank)
+         => <>SuccessorPublicationOrSuperseded(parentContext, node))
+      <=> ((\E rank \in SuccessorActivationRankCarrier:
+               SuccessorActivationAtRank(parentContext, node, rank))
+             => <>SuccessorPublicationOrSuperseded(parentContext, node))
+BY SMT
+
+THEOREM AlwaysSuccessorActivationRankQuantifierEquivalence ==
+  []SuccessorActivationRankQuantifierEquivalence
+BY SuccessorActivationRankQuantifierEquivalence, PTL
+
+THEOREM BoxedSuccessorActivationRankQuantifierEquivalence ==
+  \A parentContext, node:
+    [](\A rank \in SuccessorActivationRankCarrier:
+         SuccessorActivationAtRank(parentContext, node, rank)
+           => <>SuccessorPublicationOrSuperseded(parentContext, node))
+      <=> []((\E rank \in SuccessorActivationRankCarrier:
+                SuccessorActivationAtRank(parentContext, node, rank))
+               => <>SuccessorPublicationOrSuperseded(parentContext, node))
+PROOF
+  <1>1. \A parentContext, node:
+          []((\A rank \in SuccessorActivationRankCarrier:
+                SuccessorActivationAtRank(parentContext, node, rank)
+                  => <>SuccessorPublicationOrSuperseded(
+                       parentContext, node))
+             <=> ((\E rank \in SuccessorActivationRankCarrier:
+                      SuccessorActivationAtRank(
+                        parentContext, node, rank))
+                    => <>SuccessorPublicationOrSuperseded(
+                         parentContext, node)))
+    BY AlwaysSuccessorActivationRankQuantifierEquivalence, Isa
+  <1>2. ASSUME NEW parentContext, NEW node
+         PROVE [](\A rank \in SuccessorActivationRankCarrier:
+                    SuccessorActivationAtRank(
+                      parentContext, node, rank)
+                      => <>SuccessorPublicationOrSuperseded(
+                           parentContext, node))
+                 <=> []((\E rank \in SuccessorActivationRankCarrier:
+                            SuccessorActivationAtRank(
+                              parentContext, node, rank))
+                           => <>SuccessorPublicationOrSuperseded(
+                                parentContext, node))
+    <2>1. []((\A rank \in SuccessorActivationRankCarrier:
+                SuccessorActivationAtRank(parentContext, node, rank)
+                  => <>SuccessorPublicationOrSuperseded(
+                       parentContext, node))
+               <=> ((\E rank \in SuccessorActivationRankCarrier:
+                        SuccessorActivationAtRank(
+                          parentContext, node, rank))
+                      => <>SuccessorPublicationOrSuperseded(
+                           parentContext, node)))
+      BY <1>1, SMT
+    <2> QED BY <2>1, PTL
+  <1> QED BY <1>2
+
 THEOREM SuccessorActivationRankExistentialLift ==
   ASSUME NEW parentContext,
          NEW node,
@@ -1051,7 +1109,7 @@ PROOF
                      SuccessorActivationAtRank(parentContext, node, rank))
                    => <>SuccessorPublicationOrSuperseded(
                         parentContext, node))
-    OBVIOUS
+    BY ONLY BoxedSuccessorActivationRankQuantifierEquivalence, SMT
   <1> QED BY <1>1, <1>2, PTL
 
 THEOREM FailureFreeSuccessorActivationConverges ==

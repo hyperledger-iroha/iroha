@@ -300,8 +300,8 @@ DurableDecisionFrontierStutteringStep ==
   \/ \E request \in pendingTimeout: PersistTimeout(request)
   \/ \E request \in signTimeouts: CompleteTimeoutSignature(request)
   \/ \E signer \in ValidatorIds, roundView \in Views,
-       highRank \in Ranks, highSubject \in SubjectOrNone:
-       ByzantineBroadcastTimeout(signer, roundView, highRank, highSubject)
+       highestPrepare \in PrepareQcOptionSet:
+       ByzantineBroadcastTimeout(signer, roundView, highestPrepare)
   \/ \E envelope \in timeoutNetwork: DeliverTimeout(envelope)
   \/ \E node \in ValidatorIds, roundView \in Views:
        FormTC(node, roundView)
@@ -312,6 +312,9 @@ DurableDecisionFrontierStutteringStep ==
   \/ \E node \in ValidatorIds,
        qc \in DecisionQcValues \cup prepareQCs:
        FetchCertifiedBody(node, qc)
+  \/ \E node \in ValidatorIds, roundView \in Views,
+       subject \in Subjects:
+       AcceptCertifiedResponseCapability(node, roundView, subject)
   \/ \E node \in ValidatorIds, qc \in DecisionQcValues:
        ApplyDecision(node, qc)
   \/ \E node \in ValidatorIds: Restart(node)
@@ -341,7 +344,9 @@ BY IsaT(120)
        PersistLockCommit, BeginTimeout, PersistTimeout,
        CompleteTimeoutSignature, ByzantineBroadcastTimeout,
        DeliverTimeout, FormTC, DeliverTC, BeginInstallTC,
-       PersistInstallTC, FetchCertifiedBody, ApplyDecision, Restart,
+       PersistInstallTC, FetchCertifiedBody,
+       AcceptCertifiedResponseCapability, InstallCertifiedBodyEffect,
+       ApplyDecision, Restart,
        ResumeProposal, ResumeVote, ResumeTimeout, DropProposal
 
 THEOREM CoreNextPreservesDecisionFrontierUniqueness ==

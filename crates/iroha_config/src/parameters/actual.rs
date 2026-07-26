@@ -5700,8 +5700,6 @@ pub struct SumeragiV2RuntimeLimits {
     pub merge_sidecar_outbound_bytes_per_source: NonZeroUsize,
     /// Idempotency request gates retained for one authenticated source.
     pub merge_sidecar_server_request_gates_per_source: NonZeroUsize,
-    /// Lifetime of a completed/rejected server request gate.
-    pub merge_sidecar_server_request_gate_ttl: Duration,
     /// Certified merge entries retained in Kura before canonical carrier commitment.
     pub pending_certified_merge_entry_capacity: NonZeroUsize,
     /// QueuePlan admission certificates retained before canonical carrier commitment.
@@ -5757,8 +5755,6 @@ impl Default for SumeragiV2RuntimeLimits {
                 defaults::sumeragi::V2_MERGE_SIDECAR_OUTBOUND_BYTES_PER_SOURCE,
             merge_sidecar_server_request_gates_per_source:
                 defaults::sumeragi::V2_MERGE_SIDECAR_SERVER_REQUEST_GATES_PER_SOURCE,
-            merge_sidecar_server_request_gate_ttl:
-                defaults::sumeragi::V2_MERGE_SIDECAR_SERVER_REQUEST_GATE_TTL,
             pending_certified_merge_entry_capacity:
                 defaults::sumeragi::V2_PENDING_CERTIFIED_MERGE_ENTRY_CAPACITY,
             pending_queue_plan_admission_capacity:
@@ -6170,20 +6166,6 @@ impl Sumeragi {
             merge_sidecar_server_request_gates_per_source,
             merge_sidecar_outbound_sessions_per_source,
         )?;
-        let merge_sidecar_server_request_gate_ttl_ms = canonical_duration_ms(
-            "sumeragi.limits.merge_sidecar_server_request_gate_ttl_ms",
-            self.limits.merge_sidecar_server_request_gate_ttl,
-        )?;
-        require_maximum(
-            "sumeragi.limits.merge_sidecar_server_request_gate_ttl_ms",
-            merge_sidecar_server_request_gate_ttl_ms,
-            defaults::sumeragi::V2_MERGE_SIDECAR_SERVER_REQUEST_GATE_TTL_MAX_MS,
-        )?;
-        require_minimum(
-            "sumeragi.limits.merge_sidecar_server_request_gate_ttl_ms",
-            merge_sidecar_server_request_gate_ttl_ms,
-            merge_sidecar_request_timeout_ms,
-        )?;
         let pending_certified_merge_entry_capacity = canonical_bounded_size(
             "sumeragi.limits.pending_certified_merge_entry_capacity",
             self.limits.pending_certified_merge_entry_capacity.get(),
@@ -6324,7 +6306,6 @@ impl Sumeragi {
                 merge_sidecar_outbound_sessions_per_source,
                 merge_sidecar_outbound_bytes_per_source,
                 merge_sidecar_server_request_gates_per_source,
-                merge_sidecar_server_request_gate_ttl_ms,
                 pending_certified_merge_entry_capacity,
                 pending_queue_plan_admission_capacity,
                 pending_control_sidecar_bytes,
@@ -6493,8 +6474,6 @@ pub struct SumeragiV2Limits {
     pub merge_sidecar_outbound_bytes_per_source: u64,
     /// Idempotency request gates retained for one authenticated source.
     pub merge_sidecar_server_request_gates_per_source: u64,
-    /// Lifetime of a completed/rejected server request gate.
-    pub merge_sidecar_server_request_gate_ttl_ms: u64,
     /// Certified merge entries retained in Kura before canonical carrier commitment.
     pub pending_certified_merge_entry_capacity: u64,
     /// QueuePlan admission certificates retained before canonical carrier commitment.
@@ -12007,10 +11986,6 @@ mod tests {
             shared.limits.merge_sidecar_server_request_gates_per_source,
             4
         );
-        assert_eq!(
-            shared.limits.merge_sidecar_server_request_gate_ttl_ms,
-            10_000
-        );
         assert_eq!(shared.limits.pending_certified_merge_entry_capacity, 1_024);
         assert_eq!(shared.limits.pending_queue_plan_admission_capacity, 1_024);
         assert_eq!(
@@ -12233,9 +12208,6 @@ mod tests {
                     + 1,
             )
             .expect("non-zero");
-        });
-        assert_config_change!("merge-sidecar request-gate TTL", |config: &mut Sumeragi| {
-            config.limits.merge_sidecar_server_request_gate_ttl += Duration::from_millis(1);
         });
         assert_config_change!(
             "pending certified merge entries",
@@ -12560,17 +12532,6 @@ mod tests {
             config,
             SumeragiV2ConfigError::LimitBelowMinimum {
                 field: "sumeragi.limits.merge_sidecar_server_request_gates_per_source",
-                ..
-            }
-        );
-
-        let mut config = default_v2_sumeragi();
-        config.limits.merge_sidecar_server_request_gate_ttl =
-            config.limits.merge_sidecar_request_timeout - Duration::from_millis(1);
-        assert_invalid!(
-            config,
-            SumeragiV2ConfigError::LimitBelowMinimum {
-                field: "sumeragi.limits.merge_sidecar_server_request_gate_ttl_ms",
                 ..
             }
         );

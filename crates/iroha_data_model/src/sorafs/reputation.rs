@@ -217,7 +217,7 @@ impl ReputationJournalAuthorityPolicyV1 {
 }
 
 /// Auditable activation record for one governed recorder-policy revision.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -599,24 +599,19 @@ impl ProviderDisputeEventV1 {
                     return Err(ReputationJournalValidationError::RecordedTimestampMismatch);
                 }
             }
-            ProviderDisputeStatusV1::Resolved(ProviderDisputeResolutionV1 {
-                resolved_at_unix_ms,
-                decision_digest,
-                rationale,
-                ..
-            }) => {
-                ensure_timestamp(*resolved_at_unix_ms, "resolved_at_unix_ms")?;
-                ensure_digest(*decision_digest, "decision_digest")?;
-                if *resolved_at_unix_ms <= self.submitted_at_unix_ms {
+            ProviderDisputeStatusV1::Resolved(resolution) => {
+                ensure_timestamp(resolution.resolved_at_unix_ms, "resolved_at_unix_ms")?;
+                ensure_digest(resolution.decision_digest, "decision_digest")?;
+                if resolution.resolved_at_unix_ms <= self.submitted_at_unix_ms {
                     return Err(ReputationJournalValidationError::InvalidTimestampOrder {
                         earlier: "submitted_at_unix_ms",
                         later: "resolved_at_unix_ms",
                     });
                 }
-                if recorded_at_unix_ms != *resolved_at_unix_ms {
+                if recorded_at_unix_ms != resolution.resolved_at_unix_ms {
                     return Err(ReputationJournalValidationError::RecordedTimestampMismatch);
                 }
-                if let Some(rationale) = rationale {
+                if let Some(rationale) = &resolution.rationale {
                     validate_text(rationale)?;
                 }
             }

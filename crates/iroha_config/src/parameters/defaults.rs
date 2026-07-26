@@ -3486,10 +3486,6 @@ pub mod sumeragi {
     pub const V2_MERGE_SIDECAR_SERVER_REQUEST_GATES_PER_SOURCE: NonZeroUsize = nonzero!(4_usize);
     /// Hard ceiling for request gates retained per source.
     pub const V2_MERGE_SIDECAR_SERVER_REQUEST_GATES_PER_SOURCE_MAX: usize = 4_096;
-    /// Lifetime of a completed/rejected server request gate.
-    pub const V2_MERGE_SIDECAR_SERVER_REQUEST_GATE_TTL: Duration = Duration::from_secs(10);
-    /// Longest admitted server request-gate lifetime.
-    pub const V2_MERGE_SIDECAR_SERVER_REQUEST_GATE_TTL_MAX_MS: u64 = 300_000;
     /// Certified merge entries retained in Kura before canonical carrier commitment.
     pub const V2_PENDING_CERTIFIED_MERGE_ENTRY_CAPACITY: NonZeroUsize = nonzero!(1_024_usize);
     /// Hard ceiling for pending certified merge entries retained by Kura.

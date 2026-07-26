@@ -34,18 +34,18 @@ class SumeragiV2WireFixtureTest {
     }
 
     @Test
-    fun `later view commit fixtures preserve proposal origin`() {
+    fun `commit reproposals require their vote and certificate round`() {
         fun message(name: String): SumeragiV2Wire.ConsensusMessageV2 =
             SumeragiV2Wire.ConsensusMessageV2.decodeCanonical(
                 fixtureRows().single { it.kind == "message" && it.name == name }.hex.hexBytes(),
             )
 
         val vote = (
-            message("commit_vote_later_view").payload
+            message("commit_vote_reproposal").payload
                 as SumeragiV2Wire.ConsensusPayload.VoteMessage
             ).value
         val certificate = (
-            message("commit_quorum_certificate_later_view").payload
+            message("commit_quorum_certificate_reproposal").payload
                 as SumeragiV2Wire.ConsensusPayload.QuorumCertificateMessage
             ).value
         val response = (
@@ -55,14 +55,146 @@ class SumeragiV2WireFixtureTest {
 
         assertEquals(SumeragiV2Wire.GlobalPhase.COMMIT, vote.phase)
         assertEquals(9L, vote.round.view)
-        assertEquals(1L, vote.proposalRound.view)
-        assertEquals(vote.round.contextId, vote.proposalRound.contextId)
-        assertEquals(vote.round.height, vote.proposalRound.height)
+        assertEquals(vote.round, vote.proposalRound)
         assertEquals(vote.round, certificate.round)
         assertEquals(vote.proposalRound, certificate.proposalRound)
         assertEquals(vote.subject, certificate.subject)
         assertEquals(vote.executionCommitment, certificate.executionCommitment)
         assertEquals(certificate.reference(), response.certificate.reference())
+
+        val splitVote = fixtureRows().single {
+            it.kind == "negative_message" && it.name == "commit_vote_split_round"
+        }
+        val voteError = assertFailsWith<IllegalArgumentException> {
+            SumeragiV2Wire.ConsensusMessageV2.decodeCanonical(splitVote.hex.hexBytes())
+        }
+        assertEquals(
+            "Prepare/Commit vote proposal round must match its round",
+            voteError.message,
+        )
+
+        val splitCertificate = fixtureRows().single {
+            it.kind == "negative_message" &&
+                it.name == "commit_quorum_certificate_split_round"
+        }
+        val certificateError = assertFailsWith<IllegalArgumentException> {
+            SumeragiV2Wire.ConsensusMessageV2.decodeCanonical(splitCertificate.hex.hexBytes())
+        }
+        assertEquals(
+            "Prepare/Commit certificate proposal round must match its round",
+            certificateError.message,
+        )
+    }
+
+    @Test
+    fun `status validators reject an older commit proposal round`() {
+        val certificate = (
+            SumeragiV2Wire.ConsensusMessageV2.decodeCanonical(
+                fixtureRows().single {
+                    it.kind == "message" &&
+                        it.name == "commit_quorum_certificate_reproposal"
+                }.hex.hexBytes(),
+            ).payload as SumeragiV2Wire.ConsensusPayload.QuorumCertificateMessage
+            ).value
+        val olderProposalRound = SumeragiV2Wire.ConsensusRound(
+            certificate.round.contextId,
+            certificate.round.height,
+            certificate.round.view - 1,
+        )
+
+        val referenceError = assertFailsWith<IllegalArgumentException> {
+            SumeragiV2Wire.QuorumCertificateRef(
+                certificate.round,
+                olderProposalRound,
+                SumeragiV2Wire.GlobalPhase.COMMIT,
+                certificate.subject,
+                certificate.executionCommitment,
+            )
+        }
+        assertEquals(
+            "Prepare/Commit certificate reference proposal round must match its round",
+            referenceError.message,
+        )
+
+        val quorumError = assertFailsWith<IllegalArgumentException> {
+            SumeragiV2Wire.VoteQuorumStatus(
+                certificate.round,
+                olderProposalRound,
+                certificate.subject,
+                certificate.executionCommitment,
+                1,
+                1,
+                3,
+                4,
+            )
+        }
+        assertEquals(
+            "Prepare/Commit quorum status proposal round must match its round",
+            quorumError.message,
+        )
+
+        val outboundError = assertFailsWith<IllegalArgumentException> {
+            SumeragiV2Wire.OutboundIntentStatus(
+                SumeragiV2Wire.OutboundIntentKind.COMMIT_VOTE,
+                certificate.round,
+                olderProposalRound,
+                certificate.subject,
+                certificate.executionCommitment,
+                SumeragiV2Wire.OutboundIntentStage.QUEUED,
+            )
+        }
+        assertEquals(
+            "Proposal/Prepare/Commit outbound intent origin must match its round",
+            outboundError.message,
+        )
+    }
+
+    @Test
+    fun `prepare votes and certificates reject split rounds`() {
+        val prepare = (
+            SumeragiV2Wire.ConsensusMessageV2.decodeCanonical(
+                fixtureRows().single {
+                    it.kind == "message" && it.name == "quorum_certificate"
+                }.hex.hexBytes(),
+            ).payload as SumeragiV2Wire.ConsensusPayload.QuorumCertificateMessage
+            ).value
+        val laterRound = SumeragiV2Wire.ConsensusRound(
+            prepare.round.contextId,
+            prepare.round.height,
+            prepare.round.view + 1,
+        )
+
+        val voteError = assertFailsWith<IllegalArgumentException> {
+            SumeragiV2Wire.Vote(
+                laterRound,
+                prepare.round,
+                SumeragiV2Wire.GlobalPhase.PREPARE,
+                prepare.subject,
+                prepare.executionCommitment,
+                0,
+                byteArrayOf(1),
+            )
+        }
+        assertEquals(
+            "Prepare/Commit vote proposal round must match its round",
+            voteError.message,
+        )
+
+        val certificateError = assertFailsWith<IllegalArgumentException> {
+            SumeragiV2Wire.QuorumCertificate(
+                laterRound,
+                prepare.round,
+                SumeragiV2Wire.GlobalPhase.PREPARE,
+                prepare.subject,
+                prepare.executionCommitment,
+                prepare.signers,
+                prepare.aggregateSignature(),
+            )
+        }
+        assertEquals(
+            "Prepare/Commit certificate proposal round must match its round",
+            certificateError.message,
+        )
     }
 
     @Test
@@ -164,7 +296,7 @@ class SumeragiV2WireFixtureTest {
             ).value
         assertEquals(SumeragiV2Wire.GlobalPhase.COMMIT, response.certificate.phase)
         assertEquals(9L, response.certificate.round.view)
-        assertEquals(1L, response.certificate.proposalRound.view)
+        assertEquals(response.certificate.round, response.certificate.proposalRound)
         assertEquals(48, response.signature().size)
         assertEquals(response.requestHash, request.requestHash())
         response.validateAgainst(request)
@@ -464,11 +596,11 @@ class SumeragiV2WireFixtureTest {
         assertEquals(1L, decoded.liveness.prepareQuorums.single().round.view)
         assertEquals(1L, decoded.liveness.prepareQuorums.single().proposalRound.view)
         assertEquals(3L, decoded.liveness.commitQuorums.single().round.view)
-        assertEquals(1L, decoded.liveness.commitQuorums.single().proposalRound.view)
+        assertEquals(3L, decoded.liveness.commitQuorums.single().proposalRound.view)
         assertEquals(1, decoded.liveness.timeoutQuorums.size)
         assertEquals(SumeragiV2Wire.OutboundIntentKind.COMMIT_VOTE, decoded.liveness.outboundIntents.single().kind)
         assertEquals(3L, decoded.liveness.outboundIntents.single().round.view)
-        assertEquals(1L, decoded.liveness.outboundIntents.single().proposalRound?.view)
+        assertEquals(3L, decoded.liveness.outboundIntents.single().proposalRound?.view)
         assertEquals(1, decoded.liveness.queues.size)
         assertEquals(SumeragiV2Wire.QueueKind.EFFECT_DISPATCH, decoded.liveness.queues.single().queue)
         assertEquals(SumeragiV2Wire.LivenessBlocker.LOCAL_CONTROL_PENDING, decoded.liveness.blocker)
@@ -559,8 +691,8 @@ class SumeragiV2WireFixtureTest {
             "proposal",
             "vote",
             "quorum_certificate",
-            "commit_vote_later_view",
-            "commit_quorum_certificate_later_view",
+            "commit_vote_reproposal",
+            "commit_quorum_certificate_reproposal",
             "timeout_vote",
             "timeout_certificate",
             "payload_manifest",

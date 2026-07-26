@@ -1,5 +1,5 @@
 ---- MODULE SumeragiV2HistoricalLockedBodyRecoveryBridgeScratch ----
-EXTENDS SumeragiV2AsyncLivenessProofs
+EXTENDS SumeragiV2AsyncTemporalClosureProofs
 
 (***************************************************************************
 Independent deductive check for folding the production historical locked-body

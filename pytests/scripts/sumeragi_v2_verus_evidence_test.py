@@ -44,7 +44,7 @@ def configure_fixture(module, monkeypatch, tmp_path: Path):
             (
                 module.begin_marker(NONCE, MANIFEST),
                 "verification results:: 1690 verified, 0 errors",
-                "verification results:: 157 verified, 0 errors",
+                f"verification results:: {module.EXPECTED_ROOT_VERIFIED} verified, 0 errors",
                 module.success_marker(NONCE, MANIFEST),
             )
         )
@@ -195,12 +195,12 @@ def test_archived_log_override_retains_canonical_evidence_name(
     (
         (
             "verification results:: 1690 verified, 0 errors",
-            "verification results:: 157 verified, 0 errors",
+            "verification results:: 171 verified, 0 errors",
         ),
         (
             "BEGIN",
             "verification results:: 1690 verified, 0 errors",
-            "verification results:: 157 verified, 0 errors",
+            "verification results:: 171 verified, 0 errors",
             "SUCCESS",
             "SUCCESS",
         ),
@@ -213,7 +213,7 @@ def test_archived_log_override_retains_canonical_evidence_name(
         (
             "BEGIN",
             "verification results:: 1690 verified, 1 errors",
-            "verification results:: 157 verified, 0 errors",
+            "verification results:: 171 verified, 0 errors",
             "SUCCESS",
         ),
         (
@@ -224,7 +224,7 @@ def test_archived_log_override_retains_canonical_evidence_name(
         ),
         (
             "BEGIN",
-            "verification results:: 157 verified, 0 errors",
+            "verification results:: 171 verified, 0 errors",
             "verification results:: 1690 verified, 0 errors",
             "SUCCESS",
         ),
@@ -287,6 +287,25 @@ def test_fake_verifier_digest_is_rejected_before_evidence_is_built(
         )
 
 
+def test_indented_pinned_verus_version_output_is_normalized(tmp_path: Path) -> None:
+    """The release binary's indented version fields remain machine-readable."""
+
+    module = load_module()
+    verifier = tmp_path / "verus"
+    verifier.write_text(
+        "#!/bin/sh\n"
+        "printf 'Verus\\n  Version: "
+        f"{module.EXPECTED_VERUS_VERSION}"
+        "\\n  Platform: macos_aarch64\\n'\n",
+        encoding="utf-8",
+    )
+    verifier.chmod(0o755)
+    assert module._verus_version(verifier) == (
+        module.EXPECTED_VERUS_VERSION,
+        "macos_aarch64",
+    )
+
+
 def test_repository_verus_invocation_matches_the_evidence_contract() -> None:
     """The recorded command is exactly the one the checked-in runner executes."""
 
@@ -315,6 +334,19 @@ def test_repository_verus_evidence_binds_the_sidecar_admission_corridor() -> Non
         "crates/iroha_p2p/src/network.rs",
         "crates/iroha_p2p/src/peer.rs",
         "crates/irohad/src/main.rs",
+    } <= set(module.REQUIRED_SOURCE_PATHS)
+
+
+def test_repository_verus_evidence_binds_exact_timeout_proposal_corridor() -> None:
+    """Shared predicate, WAL callers, regressions, and Verus proof are sealed."""
+
+    module = load_module()
+    assert {
+        "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
+        "crates/iroha_core/src/sumeragi/v2_core/wal.rs",
+        "crates/iroha_core/src/sumeragi/v2_core/reducer.rs",
+        "crates/iroha_core/src/sumeragi/v2_core/tests.rs",
+        "crates/iroha_sumeragi_core/src/verus_proofs.rs",
     } <= set(module.REQUIRED_SOURCE_PATHS)
 
 

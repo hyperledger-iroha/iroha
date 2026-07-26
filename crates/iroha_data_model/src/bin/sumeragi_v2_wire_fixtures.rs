@@ -241,15 +241,16 @@ fn build_values() -> Result<FixtureValues, Box<dyn Error>> {
     commit_request
         .validate(&context)
         .map_err(|error| format!("fixture commit request is invalid: {error}"))?;
-    let mut delayed_commit = prepare.clone();
-    delayed_commit.round = round(&context, 9);
-    delayed_commit.phase = GlobalPhase::Commit;
-    delayed_commit
+    let mut reproposal_commit = prepare.clone();
+    reproposal_commit.round = round(&context, 9);
+    reproposal_commit.proposal_round = reproposal_commit.round;
+    reproposal_commit.phase = GlobalPhase::Commit;
+    reproposal_commit
         .validate(&context)
-        .map_err(|error| format!("fixture delayed CommitQC is invalid: {error}"))?;
+        .map_err(|error| format!("fixture reproposal CommitQC is invalid: {error}"))?;
     let commit_response = CommitCertificateResponse {
         request_hash: HashOf::new(&commit_request),
-        certificate: delayed_commit.clone(),
+        certificate: reproposal_commit.clone(),
         responder: peer(100),
         signature: vec![0x82; 48],
     };
@@ -281,21 +282,21 @@ fn build_values() -> Result<FixtureValues, Box<dyn Error>> {
             )),
         },
         NamedMessage {
-            name: "commit_vote_later_view",
+            name: "commit_vote_reproposal",
             message: ConsensusMessageV2::new(ConsensusMessageV2Payload::Vote(Vote {
-                round: delayed_commit.round,
-                proposal_round: delayed_commit.proposal_round,
+                round: reproposal_commit.round,
+                proposal_round: reproposal_commit.proposal_round,
                 phase: GlobalPhase::Commit,
-                subject: delayed_commit.subject,
-                execution_commitment: delayed_commit.execution_commitment,
+                subject: reproposal_commit.subject,
+                execution_commitment: reproposal_commit.execution_commitment,
                 signer: 0,
                 signature: vec![0x7A],
             })),
         },
         NamedMessage {
-            name: "commit_quorum_certificate_later_view",
+            name: "commit_quorum_certificate_reproposal",
             message: ConsensusMessageV2::new(ConsensusMessageV2Payload::QuorumCertificate(
-                delayed_commit,
+                reproposal_commit,
             )),
         },
         NamedMessage {
@@ -403,7 +404,7 @@ fn build_values() -> Result<FixtureValues, Box<dyn Error>> {
             }],
             commit_quorums: vec![SumeragiV2VoteQuorumStatus {
                 round: round(&context, 3),
-                proposal_round: prepare.proposal_round,
+                proposal_round: round(&context, 3),
                 subject: prepare.subject,
                 execution_commitment: prepare.execution_commitment,
                 signer_count: 1,
@@ -422,7 +423,7 @@ fn build_values() -> Result<FixtureValues, Box<dyn Error>> {
             outbound_intents: vec![SumeragiV2OutboundIntentStatus {
                 kind: SumeragiV2OutboundIntentKind::CommitVote,
                 round: round(&context, 3),
-                proposal_round: Some(prepare.proposal_round),
+                proposal_round: Some(round(&context, 3)),
                 subject: Some(prepare.subject),
                 execution_commitment: Some(prepare.execution_commitment),
                 stage: SumeragiV2OutboundIntentStage::Sent,
@@ -502,6 +503,8 @@ fn build_rows(values: &FixtureValues) -> Result<Vec<FixtureRow>, Box<dyn Error>>
 
     let canonical_manifest = values.message("payload_manifest")?;
     let canonical_vote = values.message("vote")?;
+    let canonical_reproposal_vote = values.message("commit_vote_reproposal")?;
+    let canonical_reproposal_qc = values.message("commit_quorum_certificate_reproposal")?;
     let canonical_request = values.message("commit_certificate_request")?;
     let canonical_response = values.message("commit_certificate_response")?;
 
@@ -594,6 +597,18 @@ fn build_rows(values: &FixtureValues) -> Result<Vec<FixtureRow>, Box<dyn Error>>
         .ok_or("canonical commit response message was unexpectedly empty")?;
     let mut prepare_response = values.commit_response.clone();
     prepare_response.certificate.phase = GlobalPhase::Prepare;
+
+    let mut split_round_vote = canonical_reproposal_vote.clone();
+    let ConsensusMessageV2Payload::Vote(vote) = &mut split_round_vote.payload else {
+        return Err("canonical reproposal vote fixture contains the wrong payload".into());
+    };
+    vote.proposal_round = round(&values.context, 1);
+    let mut split_round_qc = canonical_reproposal_qc.clone();
+    let ConsensusMessageV2Payload::QuorumCertificate(certificate) = &mut split_round_qc.payload
+    else {
+        return Err("canonical reproposal QC fixture contains the wrong payload".into());
+    };
+    certificate.proposal_round = round(&values.context, 1);
 
     let mut invalid_chain_utf8 = canonical_request.encode();
     replace_first_guarded(
@@ -710,6 +725,16 @@ fn build_rows(values: &FixtureValues) -> Result<Vec<FixtureRow>, Box<dyn Error>>
                 prepare_response,
             ))
             .encode(),
+        ),
+        FixtureRow::rejected(
+            "negative_message",
+            "commit_vote_split_round",
+            split_round_vote.encode(),
+        ),
+        FixtureRow::rejected(
+            "negative_message",
+            "commit_quorum_certificate_split_round",
+            split_round_qc.encode(),
         ),
         FixtureRow::rejected(
             "negative_message",

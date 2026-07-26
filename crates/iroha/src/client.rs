@@ -11176,7 +11176,7 @@ mod evidence_http_tests {
         ];
 
         for alias in cases {
-            Client::build_sorafs_pin_register_payload(SorafsPinRegisterArgs {
+            let _ = Client::build_sorafs_pin_register_payload(SorafsPinRegisterArgs {
                 authority: &authority,
                 private_key: key_pair.private_key(),
                 manifest_payload: &manifest_payload,
@@ -31988,7 +31988,7 @@ mod tests {
                 .as_any()
                 .downcast_ref::<SubmitSorafsModerationCommit>()
                 .expect("exact commit instruction");
-            assert_eq!(embedded.commit_payload(), commit_payload);
+            assert_eq!(embedded.commit_payload(), &commit_payload);
 
             for (route, _) in expected_routes {
                 client

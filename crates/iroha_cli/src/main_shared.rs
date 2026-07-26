@@ -9185,6 +9185,51 @@ mod tests {
         .expect("parse offline rent quote");
         assert!(args.command.allows_fallback_config());
 
+        for command in [
+            vec![
+                "iroha",
+                "app",
+                "sorafs",
+                "reserve",
+                "quote",
+                "--storage-class",
+                "hot",
+                "--tier",
+                "tier-a",
+                "--gib",
+                "1",
+            ],
+            vec![
+                "iroha",
+                "app",
+                "sorafs",
+                "reserve",
+                "ledger",
+                "--quote",
+                "reserve-quote.json",
+                "--provider-account",
+                "provider",
+                "--treasury-account",
+                "treasury",
+                "--reserve-account",
+                "reserve",
+                "--asset-definition",
+                "xor",
+            ],
+            vec![
+                "iroha",
+                "app",
+                "sorafs",
+                "reserve",
+                "lifecycle",
+                "--quote",
+                "reserve-quote.json",
+            ],
+        ] {
+            let args = Args::try_parse_from(command).expect("parse offline SoraFS reserve command");
+            assert!(args.command.allows_fallback_config());
+        }
+
         let args = Args::try_parse_from([
             "iroha",
             "app",

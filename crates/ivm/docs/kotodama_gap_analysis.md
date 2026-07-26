@@ -281,18 +281,18 @@ candidate-only identities:
 
 ```console
 # In the base checkout:
-cargo bench -p ivm --bench bench_kotodama -- --save-baseline base
-cargo bench -p iroha_core --bench kotodama_runtime_cache -- --save-baseline base
-cargo bench -p iroha_core --bench queries -- \
+cargo bench --locked -p ivm --bench bench_kotodama -- --save-baseline base
+cargo bench --locked -p iroha_core --bench kotodama_runtime_cache -- --save-baseline base
+cargo bench --locked -p iroha_core --bench queries -- \
   typed_core_query_ --save-baseline base
 
 # Remove only Criterion `new` directories so candidate evidence cannot be reused.
 find "$CARGO_TARGET_DIR/criterion" -type d -name new -prune -exec rm -rf {} +
 
 # In the candidate checkout:
-cargo bench -p ivm --bench bench_kotodama -- --save-baseline candidate
-cargo bench -p iroha_core --bench kotodama_runtime_cache -- --save-baseline candidate
-cargo bench -p iroha_core --bench queries -- \
+cargo bench --locked -p ivm --bench bench_kotodama -- --save-baseline candidate
+cargo bench --locked -p iroha_core --bench kotodama_runtime_cache -- --save-baseline candidate
+cargo bench --locked -p iroha_core --bench queries -- \
   typed_core_query_ --save-baseline candidate
 python3 scripts/check_kotodama_perf.py \
   --criterion-dir "$CARGO_TARGET_DIR/criterion" --threshold 0.05
@@ -324,9 +324,10 @@ captured predecessor contains the same benchmark identity and workload; the
 candidate run itself is never accepted as that predecessor.
 
 Comparable parse, semantic, lowering, code-generation, numeric, query, and
-runtime identities receive the five-percent regression ceiling. The typed-query
-benchmarks assert one host query, one decode, and a projection smaller than the
-raw query envelope on every iteration. The List comprehension runtime has a
-separate zero-slowdown gate against its manual-loop baseline; the general
-five-percent allowance cannot loosen that parity requirement. Missing required
-base samples, candidate samples, or coverage fail closed.
+runtime identities receive the five-percent regression ceiling. Before timing
+each typed-query family, the benchmark asserts one host query, one decode, and a
+projection smaller than the raw query envelope; the timed iterations reset and
+black-box those counters. The List comprehension runtime has a separate
+zero-slowdown gate against its manual-loop baseline; the general five-percent
+allowance cannot loosen that parity requirement. Missing required base samples,
+candidate samples, or coverage fail closed.

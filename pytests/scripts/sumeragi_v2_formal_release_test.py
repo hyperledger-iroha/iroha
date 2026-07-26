@@ -474,6 +474,34 @@ def test_every_sumeragi_formal_java_entrypoint_uses_the_shared_resolver() -> Non
         ROOT_DIR
         / "scripts"
         / "formal"
+        / "run_sumeragi_v2_restart_locked_fetch_order_mutation.sh",
+        ROOT_DIR
+        / "scripts"
+        / "formal"
+        / "run_sumeragi_v2_persist_install_generation_mutation.sh",
+        ROOT_DIR
+        / "scripts"
+        / "formal"
+        / "run_sumeragi_v2_persist_install_validation_mutation.sh",
+        ROOT_DIR
+        / "scripts"
+        / "formal"
+        / "run_sumeragi_v2_replay_locked_body_carrier_mutation.sh",
+        ROOT_DIR
+        / "scripts"
+        / "formal"
+        / "run_sumeragi_v2_certificate_ref_recovery_mutation.sh",
+        ROOT_DIR
+        / "scripts"
+        / "formal"
+        / "run_sumeragi_v2_certified_response_source_lineage_mutation.sh",
+        ROOT_DIR
+        / "scripts"
+        / "formal"
+        / "run_sumeragi_v2_certified_response_identity_separation_mutation.sh",
+        ROOT_DIR
+        / "scripts"
+        / "formal"
         / "run_sumeragi_v2_decision_recovery_lifecycle_mutation.sh",
         ROOT_DIR
         / "scripts"
@@ -496,6 +524,621 @@ def test_every_sumeragi_formal_java_entrypoint_uses_the_shared_resolver() -> Non
     assert "canonical_executable java" not in release
 
 
+def test_restart_locked_fetch_order_mutation_is_release_gated_and_pinned() -> None:
+    relative_runner = (
+        "scripts/formal/run_sumeragi_v2_restart_locked_fetch_order_mutation.sh"
+    )
+    gate = (ROOT_DIR / "ci" / "check_sumeragi_formal.sh").read_text(
+        encoding="utf-8"
+    )
+    assert gate.count(f"bash {relative_runner}") == 1
+    assert gate.index(relative_runner) < gate.index("run_sumeragi_v2_tlc.sh")
+
+    runner = (ROOT_DIR / relative_runner).read_text(encoding="utf-8")
+    assert 'readonly TLA2TOOLS_VERSION="1.7.4"' in runner
+    assert (
+        'readonly TLA2TOOLS_SHA256="936a262061c914694dfd669a543be24573'
+        'c45d5aa0ff20a8b96b23d01e050e88"'
+        in runner
+    )
+    assert (
+        'readonly MODEL="SumeragiV2RestartLockedFetchOrderMutation.tla"' in runner
+    )
+    assert (
+        'readonly SANY_SUCCESS_MARKER="Semantic processing of module '
+        'SumeragiV2RestartLockedFetchOrderMutation"'
+        in runner
+    )
+    assert (
+        "sany_last_nonblank=\"$(awk 'NF { line = $0 } END { print line }' "
+        '\"${run_dir}/sany.log\")\"'
+        in runner
+    )
+    assert '[[ "$sany_last_nonblank" == "$SANY_SUCCESS_MARKER" ]]' in runner
+    assert "-fp 96 -seed 139154308881391968" in runner
+    assert "resolve_java.sh" in runner
+    assert '"$JAVA_BIN"' in runner
+    assert (
+        "run_case repaired \\\n"
+        "  restart_locked_fetch_order_fixed.cfg 0 \\\n"
+        '  "TLC2 Version 2.19" \\\n'
+        '  "Model checking completed. No error has been found."'
+        in runner
+    )
+    assert (
+        "run_case dropped-fetch \\\n"
+        "  restart_locked_fetch_order_drop_fetch_bug.cfg 12 \\\n"
+        '  "Invariant RestartReplayHasExactOwnership is violated."'
+        in runner
+    )
+    assert (
+        "run_case reversed-order \\\n"
+        "  restart_locked_fetch_order_reversed_bug.cfg 12 \\\n"
+        '  "Invariant LockedFetchPrecedesFirstSign is violated."'
+        in runner
+    )
+
+    formal_dir = ROOT_DIR / "docs" / "formal" / "sumeragi_v2"
+    model = (formal_dir / "SumeragiV2RestartLockedFetchOrderMutation.tla").read_text(
+        encoding="utf-8"
+    )
+    assert (
+        'Mode = "Repaired" ->\n'
+        "              <<LockedFetchRequest, DurableSignRequest>>"
+        in model
+    )
+    assert "Len(replay) = 2" in model
+    assert "fetchIndex < signIndex" in model
+    fixed = (formal_dir / "restart_locked_fetch_order_fixed.cfg").read_text(
+        encoding="utf-8"
+    )
+    dropped = (
+        formal_dir / "restart_locked_fetch_order_drop_fetch_bug.cfg"
+    ).read_text(encoding="utf-8")
+    reversed_order = (
+        formal_dir / "restart_locked_fetch_order_reversed_bug.cfg"
+    ).read_text(encoding="utf-8")
+    assert fixed.count('CONSTANT Mode = "Repaired"') == 1
+    assert "INVARIANT RestartReplayHasExactOwnership\n" in fixed
+    assert "INVARIANT LockedFetchPrecedesFirstSign\n" in fixed
+    assert dropped.count('CONSTANT Mode = "DropFetch"') == 1
+    assert "INVARIANT RestartReplayHasExactOwnership\n" in dropped
+    assert reversed_order.count('CONSTANT Mode = "Reverse"') == 1
+    assert "INVARIANT LockedFetchPrecedesFirstSign\n" in reversed_order
+
+
+def test_persist_install_generation_mutation_is_release_gated_and_pinned() -> None:
+    relative_runner = (
+        "scripts/formal/run_sumeragi_v2_persist_install_generation_mutation.sh"
+    )
+    gate = (ROOT_DIR / "ci" / "check_sumeragi_formal.sh").read_text(
+        encoding="utf-8"
+    )
+    assert gate.count(f"bash {relative_runner}") == 1
+    assert gate.index(relative_runner) < gate.index("run_sumeragi_v2_tlc.sh")
+
+    runner = (ROOT_DIR / relative_runner).read_text(encoding="utf-8")
+    assert 'readonly TLA2TOOLS_VERSION="1.7.4"' in runner
+    assert (
+        'readonly TLA2TOOLS_SHA256="936a262061c914694dfd669a543be24573'
+        'c45d5aa0ff20a8b96b23d01e050e88"'
+        in runner
+    )
+    assert (
+        'readonly MODEL="SumeragiV2PersistInstallGenerationMutation.tla"' in runner
+    )
+    assert (
+        'readonly SANY_SUCCESS_MARKER="Semantic processing of module '
+        'SumeragiV2PersistInstallGenerationMutation"'
+        in runner
+    )
+    assert (
+        "sany_last_nonblank=\"$(awk 'NF { line = $0 } END { print line }' "
+        '\"${run_dir}/sany.log\")\"'
+        in runner
+    )
+    assert '[[ "$sany_last_nonblank" == "$SANY_SUCCESS_MARKER" ]]' in runner
+    assert "-fp 96 -seed 139154308881391968" in runner
+    assert "resolve_java.sh" in runner
+    assert '"$JAVA_BIN"' in runner
+    assert (
+        "run_case repaired-overflow-rejection \\\n"
+        "  persist_install_generation_fixed.cfg 0 \\\n"
+        '  "TLC2 Version 2.19" \\\n'
+        '  "Model checking completed. No error has been found."'
+        in runner
+    )
+    assert (
+        "run_case saturating-partial-commit \\\n"
+        "  persist_install_generation_saturation_bug.cfg 12 \\\n"
+        '  "Invariant OverflowRejectionPreservesCompleteState is violated."'
+        in runner
+    )
+
+    formal_dir = ROOT_DIR / "docs" / "formal" / "sumeragi_v2"
+    model = (
+        formal_dir / "SumeragiV2PersistInstallGenerationMutation.tla"
+    ).read_text(encoding="utf-8")
+    assert (
+        "RejectGenerationOverflow ==\n"
+        "  /\\ pendingInstall\n"
+        '  /\\ outcome = "Pending"\n'
+        "  /\\ generation = MaxGeneration\n"
+        '  /\\ outcome\' = "OverflowRejected"\n'
+        "  /\\ UNCHANGED <<generation, durableSnapshot, pendingInstall>>"
+        in model
+    )
+    assert "durableSnapshot' = PartialSnapshot" in model
+    assert "pendingInstall' = FALSE" in model
+    fixed = (formal_dir / "persist_install_generation_fixed.cfg").read_text(
+        encoding="utf-8"
+    )
+    mutant = (
+        formal_dir / "persist_install_generation_saturation_bug.cfg"
+    ).read_text(encoding="utf-8")
+    assert fixed.count('Mode = "Repaired"') == 1
+    assert fixed.count("MaxGeneration = 2") == 1
+    assert "INVARIANT OverflowRejectionPreservesCompleteState\n" in fixed
+    assert "INVARIANT InstallSnapshotIsAtomic\n" in fixed
+    assert mutant.count('Mode = "SaturatingPartialCommit"') == 1
+    assert "INVARIANT OverflowRejectionPreservesCompleteState\n" in mutant
+    assert "INVARIANT InstallSnapshotIsAtomic\n" in mutant
+
+
+def test_persist_install_validation_mutation_is_release_gated_and_pinned() -> None:
+    relative_runner = (
+        "scripts/formal/run_sumeragi_v2_persist_install_validation_mutation.sh"
+    )
+    gate = (ROOT_DIR / "ci" / "check_sumeragi_formal.sh").read_text(
+        encoding="utf-8"
+    )
+    assert gate.count(f"bash {relative_runner}") == 1
+    assert gate.index(relative_runner) < gate.index("run_sumeragi_v2_tlc.sh")
+
+    runner = (ROOT_DIR / relative_runner).read_text(encoding="utf-8")
+    assert 'readonly TLA2TOOLS_VERSION="1.7.4"' in runner
+    assert (
+        'readonly TLA2TOOLS_SHA256="936a262061c914694dfd669a543be24573'
+        'c45d5aa0ff20a8b96b23d01e050e88"'
+        in runner
+    )
+    assert (
+        'readonly MODEL="SumeragiV2PersistInstallValidationMutation.tla"'
+        in runner
+    )
+    assert (
+        'readonly SANY_SUCCESS_MARKER="Semantic processing of module '
+        'SumeragiV2PersistInstallValidationMutation"'
+        in runner
+    )
+    assert (
+        "sany_last_nonblank=\"$(awk 'NF { line = $0 } END { print line }' "
+        '\"${run_dir}/sany.log\")\"'
+        in runner
+    )
+    assert '[[ "$sany_last_nonblank" == "$SANY_SUCCESS_MARKER" ]]' in runner
+    assert "-fp 97 -seed 712381923" in runner
+    assert "resolve_java.sh" in runner
+    assert '"$JAVA_BIN"' in runner
+    assert (
+        "run_case repaired-validation-clear \\\n"
+        "  persist_install_validation_fixed.cfg 0 \\\n"
+        '  "TLC2 Version 2.19" \\\n'
+        '  "Model checking completed. No error has been found."'
+        in runner
+    )
+    assert (
+        "run_case retained-stale-validation \\\n"
+        "  persist_install_validation_retained_bug.cfg 12 \\\n"
+        '  "Invariant NoOrphanedValidationReceipt is violated."'
+        in runner
+    )
+
+    formal_dir = ROOT_DIR / "docs" / "formal" / "sumeragi_v2"
+    model = (
+        formal_dir / "SumeragiV2PersistInstallValidationMutation.tla"
+    ).read_text(encoding="utf-8")
+    assert (
+        "validatedBodies' =\n"
+        "       {validation \\in validatedBodies:\n"
+        '          validation.node # "installing"}'
+        in model
+    )
+    assert "validatedBodies' = validatedBodies" in model
+    assert (
+        "validation.generation = generation[validation.node]"
+        in model
+    )
+    fixed = (formal_dir / "persist_install_validation_fixed.cfg").read_text(
+        encoding="utf-8"
+    )
+    mutant = (
+        formal_dir / "persist_install_validation_retained_bug.cfg"
+    ).read_text(encoding="utf-8")
+    assert fixed.count('CONSTANT Mode = "Repaired"') == 1
+    assert "INVARIANT NoOrphanedValidationReceipt\n" in fixed
+    assert "PROPERTY InstallCompletes\n" in fixed
+    assert mutant.count('CONSTANT Mode = "RetainStaleValidation"') == 1
+    assert "INVARIANT NoOrphanedValidationReceipt\n" in mutant
+
+
+def test_replay_locked_body_carrier_mutation_is_release_gated_and_pinned() -> None:
+    relative_runner = (
+        "scripts/formal/run_sumeragi_v2_replay_locked_body_carrier_mutation.sh"
+    )
+    gate = (ROOT_DIR / "ci" / "check_sumeragi_formal.sh").read_text(
+        encoding="utf-8"
+    )
+    assert gate.count(f"bash {relative_runner}") == 1
+    assert gate.index(relative_runner) < gate.index("run_sumeragi_v2_tlc.sh")
+
+    runner = (ROOT_DIR / relative_runner).read_text(encoding="utf-8")
+    assert 'readonly TLA2TOOLS_VERSION="1.7.4"' in runner
+    assert (
+        'readonly TLA2TOOLS_SHA256="936a262061c914694dfd669a543be24573'
+        'c45d5aa0ff20a8b96b23d01e050e88"'
+        in runner
+    )
+    assert (
+        'readonly MODEL="SumeragiV2ReplayLockedBodyCarrierMutation.tla"'
+        in runner
+    )
+    assert (
+        'readonly SANY_SUCCESS_MARKER="Semantic processing of module '
+        'SumeragiV2ReplayLockedBodyCarrierMutation"'
+        in runner
+    )
+    assert "-fp 96 -seed 139154308881391968" in runner
+    assert "resolve_java.sh" in runner
+    assert '"$JAVA_BIN"' in runner
+    assert (
+        "run_case fixed \\\n"
+        "  replay_locked_body_carrier_fixed.cfg 0 \\\n"
+        '  "TLC2 Version 2.19" \\\n'
+        '  "Model checking completed. No error has been found."'
+        in runner
+    )
+    assert (
+        "run_case dropped-locked-fetch \\\n"
+        "  replay_locked_body_carrier_drop_fetch_bug.cfg 12 \\\n"
+        '  "Invariant HistoricalLockedBodyRecoveryStageInvariant is violated."'
+        in runner
+    )
+    assert '"State 4: <FinishResponsiveReplay"' in runner
+
+    formal_dir = ROOT_DIR / "docs" / "formal" / "sumeragi_v2"
+    model = (
+        formal_dir / "SumeragiV2ReplayLockedBodyCarrierMutation.tla"
+    ).read_text(encoding="utf-8")
+    assert (
+        'IF Mode = "Fixed"\n'
+        "  THEN <<LockedFetchCandidate, ReplaySignatureCandidate>>\n"
+        "  ELSE <<ReplaySignatureCandidate>>"
+        in model
+    )
+    assert "HistoricalLockedBodyNonAuthorityCarrier ==" in model
+    assert "FinishResponsiveReplay ==" in model
+    fixed = (formal_dir / "replay_locked_body_carrier_fixed.cfg").read_text(
+        encoding="utf-8"
+    )
+    mutant = (
+        formal_dir / "replay_locked_body_carrier_drop_fetch_bug.cfg"
+    ).read_text(encoding="utf-8")
+    assert fixed.count('CONSTANT Mode = "Fixed"') == 1
+    assert "INVARIANT ReplayLockedBodyCarrierInvariant\n" in fixed
+    assert "INVARIANT FinishDoesNotDropLastLockedBodyOwner\n" in fixed
+    assert mutant.count('CONSTANT Mode = "DropLockedFetch"') == 1
+    assert "INVARIANT HistoricalLockedBodyRecoveryStageInvariant\n" in mutant
+    assert "INVARIANT ReplayLockedBodyCarrierInvariant\n" not in mutant
+
+
+def test_certificate_ref_recovery_mutation_is_release_gated_and_pinned() -> None:
+    relative_runner = (
+        "scripts/formal/run_sumeragi_v2_certificate_ref_recovery_mutation.sh"
+    )
+    gate = (ROOT_DIR / "ci" / "check_sumeragi_formal.sh").read_text(
+        encoding="utf-8"
+    )
+    assert gate.count(f"bash {relative_runner}") == 1
+    assert gate.index(relative_runner) < gate.index("run_sumeragi_v2_tlc.sh")
+
+    runner = (ROOT_DIR / relative_runner).read_text(encoding="utf-8")
+    assert 'readonly TLA2TOOLS_VERSION="1.7.4"' in runner
+    assert (
+        'readonly TLA2TOOLS_SHA256="936a262061c914694dfd669a543be24573'
+        'c45d5aa0ff20a8b96b23d01e050e88"'
+        in runner
+    )
+    assert (
+        'readonly MODEL="SumeragiV2CertificateRefRecoveryMutation.tla"'
+        in runner
+    )
+    assert (
+        'readonly SANY_SUCCESS_MARKER="Semantic processing of module '
+        'SumeragiV2CertificateRefRecoveryMutation"'
+        in runner
+    )
+    assert "-fp 96 -seed 139154308881391968" in runner
+    assert "resolve_java.sh" in runner
+    assert '"$JAVA_BIN"' in runner
+    assert (
+        "run_case fixed-full-certificate-ref \\\n"
+        "  certificate_ref_recovery_fixed.cfg 0 \\\n"
+        '  "TLC2 Version 2.19" \\\n'
+        '  "Model checking completed. No error has been found."'
+        in runner
+    )
+    assert (
+        "run_case exact-qc-equality-mutant \\\n"
+        "  certificate_ref_recovery_exact_qc_bug.cfg 12 \\\n"
+        '  "TLC2 Version 2.19" \\\n'
+        '  "Invariant HistoricalLockedCommitRecoveryProgress is violated."'
+        in runner
+    )
+
+    formal_dir = ROOT_DIR / "docs" / "formal" / "sumeragi_v2"
+    model = (
+        formal_dir / "SumeragiV2CertificateRefRecoveryMutation.tla"
+    ).read_text(encoding="utf-8")
+    for stable_field in (
+        "left.context = right.context",
+        "left.height = right.height",
+        "left.view = right.view",
+        "left.phase = right.phase",
+        "left.subject = right.subject",
+    ):
+        assert stable_field in model
+    assert "PrepareQcA # PrepareQcB" in model
+    assert "request.qc = qc" in model
+    fixed = (formal_dir / "certificate_ref_recovery_fixed.cfg").read_text(
+        encoding="utf-8"
+    )
+    mutant = (
+        formal_dir / "certificate_ref_recovery_exact_qc_bug.cfg"
+    ).read_text(encoding="utf-8")
+    assert fixed.count('CONSTANT Mode = "FullCertificateRef"') == 1
+    assert "INVARIANT StableReferenceFieldsCannotAlias\n" in fixed
+    assert "INVARIANT HistoricalLockedCommitRecoveryProgress\n" in fixed
+    assert mutant.count('CONSTANT Mode = "ExactQcEquality"') == 1
+    assert "INVARIANT HistoricalLockedCommitRecoveryProgress\n" in mutant
+
+
+def test_certified_response_source_lineage_mutation_is_release_gated_and_pinned() -> None:
+    relative_runner = (
+        "scripts/formal/"
+        "run_sumeragi_v2_certified_response_source_lineage_mutation.sh"
+    )
+    gate = (ROOT_DIR / "ci" / "check_sumeragi_formal.sh").read_text(
+        encoding="utf-8"
+    )
+    assert gate.count(f"bash {relative_runner}") == 1
+    assert gate.index(relative_runner) < gate.index("run_sumeragi_v2_tlc.sh")
+
+    runner = (ROOT_DIR / relative_runner).read_text(encoding="utf-8")
+    assert 'readonly TLA2TOOLS_VERSION="1.7.4"' in runner
+    assert (
+        'readonly TLA2TOOLS_SHA256="936a262061c914694dfd669a543be24573'
+        'c45d5aa0ff20a8b96b23d01e050e88"'
+        in runner
+    )
+    assert (
+        'readonly MODEL="SumeragiV2CertifiedResponseSourceLineageMutation.tla"'
+        in runner
+    )
+    assert (
+        'readonly SANY_SUCCESS_MARKER="Semantic processing of module '
+        'SumeragiV2CertifiedResponseSourceLineageMutation"'
+        in runner
+    )
+    assert "-fp 96 -seed 139154308881391968" in runner
+    assert "resolve_java.sh" in runner
+    assert '"$JAVA_BIN"' in runner
+    assert (
+        "run_case embedded-cited-signer-surrogate-fixed \\\n"
+        "  certified_response_source_lineage_fixed.cfg 0 \\\n"
+        '  "TLC2 Version 2.19" \\\n'
+        '  "Model checking completed. No error has been found."'
+        in runner
+    )
+    assert (
+        "run_case outer-transport-source-mutant \\\n"
+        "  certified_response_source_lineage_outer_source_bug.cfg 12 \\\n"
+        '  "TLC2 Version 2.19" \\\n'
+        '  "Invariant DecisionRecoveryOwnerRetained is violated."'
+        in runner
+    )
+
+    formal_dir = ROOT_DIR / "docs" / "formal" / "sumeragi_v2"
+    model = (
+        formal_dir / "SumeragiV2CertifiedResponseSourceLineageMutation.tla"
+    ).read_text(encoding="utf-8")
+    assert (
+        "CertifiedResponse.envelope.citedResponder \\in CommitQc.signers"
+        in model
+    )
+    assert "CertifiedResponse.source \\in CommitQc.signers" in model
+    assert (
+        'IF Mode = "EmbeddedCitedSignerSurrogate"\n'
+        "  THEN ExplicitCitedResponderOwnsResponse\n"
+        "  ELSE OuterTransportSourceOwnsResponse"
+        in model
+    )
+    fixed = (
+        formal_dir / "certified_response_source_lineage_fixed.cfg"
+    ).read_text(encoding="utf-8")
+    mutant = (
+        formal_dir / "certified_response_source_lineage_outer_source_bug.cfg"
+    ).read_text(encoding="utf-8")
+    assert fixed.count('CONSTANT Mode = "EmbeddedCitedSignerSurrogate"') == 1
+    assert "INVARIANT HonestCertifiedResponseShape\n" in fixed
+    assert "INVARIANT DecisionRecoveryOwnerRetained\n" in fixed
+    assert mutant.count('CONSTANT Mode = "OuterTransportSource"') == 1
+    assert "INVARIANT DecisionRecoveryOwnerRetained\n" in mutant
+
+
+def test_certified_response_identity_separation_mutation_is_release_gated_and_pinned() -> None:
+    relative_runner = (
+        "scripts/formal/"
+        "run_sumeragi_v2_certified_response_identity_separation_mutation.sh"
+    )
+    gate = (ROOT_DIR / "ci" / "check_sumeragi_formal.sh").read_text(
+        encoding="utf-8"
+    )
+    assert gate.count(f"bash {relative_runner}") == 1
+    assert gate.index(relative_runner) < gate.index("run_sumeragi_v2_tlc.sh")
+
+    runner = (ROOT_DIR / relative_runner).read_text(encoding="utf-8")
+    assert 'readonly TLA2TOOLS_VERSION="1.7.4"' in runner
+    assert (
+        'readonly TLA2TOOLS_SHA256="936a262061c914694dfd669a543be24573'
+        'c45d5aa0ff20a8b96b23d01e050e88"'
+        in runner
+    )
+    assert (
+        'readonly MODEL="SumeragiV2CertifiedResponseIdentitySeparationMutation.tla"'
+        in runner
+    )
+    assert (
+        'readonly SANY_SUCCESS_MARKER="Semantic processing of module '
+        'SumeragiV2CertifiedResponseIdentitySeparationMutation"'
+        in runner
+    )
+    assert "-fp 97 -seed 139154308881391968" in runner
+    assert "resolve_java.sh" in runner
+    assert '"$JAVA_BIN"' in runner
+    assert (
+        "run_case separated-identities-fixed \\\n"
+        "  certified_response_identity_separation_fixed.cfg 0 \\\n"
+        '  "TLC2 Version 2.19" \\\n'
+        '  "Model checking completed. No error has been found."'
+        in runner
+    )
+    assert (
+        "run_case archive-server-as-qc-signer-mutant \\\n"
+        "  certified_response_identity_archive_signer_bug.cfg 12 \\\n"
+        '  "TLC2 Version 2.19" \\\n'
+        '  "Invariant ValidRotatedArchiveResponseAccepted is violated."'
+        in runner
+    )
+    assert (
+        "run_case archive-server-as-route-target-mutant \\\n"
+        "  certified_response_identity_route_target_bug.cfg 12 \\\n"
+        '  "TLC2 Version 2.19" \\\n'
+        '  "Invariant ValidRotatedArchiveResponseAccepted is violated."'
+        in runner
+    )
+    assert (
+        "route-target authority conflation rejected a valid non-target "
+        "recovery response"
+        in runner
+    )
+    assert runner.count('"State 2: <ProcessResponse"') == 2
+    assert runner.count('\'/\\ lastAttempt = "Honest"\'') == 2
+
+    formal_dir = ROOT_DIR / "docs" / "formal" / "sumeragi_v2"
+    model = (
+        formal_dir
+        / "SumeragiV2CertifiedResponseIdentitySeparationMutation.tla"
+    ).read_text(encoding="utf-8")
+    for field in (
+        "via |-> UntrustedRelay",
+        "archiveServer |-> RotatedArchive",
+        "requestHash |-> ExactRequestHash",
+        "citedResponder |-> FrozenSigner",
+    ):
+        assert field in model
+    assert "routeTarget |-> OriginalRouteTarget" in model
+    assert "OriginalRouteTarget \\in CurrentVotingRoster" in model
+    assert "RotatedArchive \\notin CurrentVotingRoster" in model
+    assert "CurrentVotingPower(RotatedArchive) = 0" in model
+    assert "response.signatureOwner = response.archiveServer" in model
+    assert (
+        "response.citedResponder \\in CertifiedRequest.certificate.signers"
+        in model
+    )
+    assert "FrozenSigner \\in CommitQc.signers \\ {Requester}" in model
+    assert "response.archiveServer \\in CommitQc.signers" in model
+    assert (
+        "WrongRequestPreimage ==\n"
+        '  [ExactRequestPreimage EXCEPT !.subject = "different-decided-block-12"]'
+        in model
+    )
+    assert (
+        "WrongRequestHash ==\n"
+        "  [exactSignedRequest |->\n"
+        "    [preimage |-> WrongRequestPreimage,\n"
+        "     signature |-> WrongRequestSignature]]"
+        in model
+    )
+    assert '"different-exact-signed-request"' not in model
+    separated_authorization = model.split(
+        "SeparatedResponseAuthorized(response) ==", 1
+    )[1].split("ConflatedResponseAuthorized(response) ==", 1)[0]
+    assert "routeTarget" not in separated_authorization
+    assert (
+        "RouteBoundResponseAuthorized(response) ==\n"
+        "  /\\ SeparatedResponseAuthorized(response)\n"
+        "  /\\ response.archiveServer = CertifiedRequest.routeTarget"
+        in model
+    )
+    for negative in (
+        "RequestHashMismatchResponse",
+        "CoordinateMismatchResponse",
+        "CitedSignerMismatchResponse",
+        "RelaySignedResponse",
+    ):
+        assert f"~SeparatedResponseAuthorized({negative})" in model
+    assert (
+        "responseRejected =>\n"
+        "    /\\ outstandingRequest = CertifiedRequest\n"
+        "    /\\ requestLive\n"
+        "    /\\ ~candidateScheduled"
+        in model
+    )
+    fixed = (
+        formal_dir / "certified_response_identity_separation_fixed.cfg"
+    ).read_text(encoding="utf-8")
+    archive_signer_mutant = (
+        formal_dir / "certified_response_identity_archive_signer_bug.cfg"
+    ).read_text(encoding="utf-8")
+    route_target_mutant = (
+        formal_dir / "certified_response_identity_route_target_bug.cfg"
+    ).read_text(encoding="utf-8")
+    assert fixed.count('CONSTANT Mode = "SeparatedIdentities"') == 1
+    assert "INVARIANT ExactNegativeControlsRejected\n" in fixed
+    assert "INVARIANT RejectedResponseRetainsExactRequest\n" in fixed
+    assert "INVARIANT ValidRotatedArchiveResponseAccepted\n" in fixed
+    assert (
+        archive_signer_mutant.count(
+            'CONSTANT Mode = "ArchiveServerMustBeQcSigner"'
+        )
+        == 1
+    )
+    assert (
+        "INVARIANT ExactRequestRecoveryOwnerRetained\n"
+        in archive_signer_mutant
+    )
+    assert (
+        "INVARIANT ValidRotatedArchiveResponseAccepted\n"
+        in archive_signer_mutant
+    )
+    assert (
+        route_target_mutant.count(
+            'CONSTANT Mode = "ArchiveServerMustMatchRouteTarget"'
+        )
+        == 1
+    )
+    assert "INVARIANT ExactNegativeControlsRejected\n" in route_target_mutant
+    assert (
+        "INVARIANT RejectedResponseRetainsExactRequest\n"
+        in route_target_mutant
+    )
+    assert (
+        "INVARIANT ValidRotatedArchiveResponseAccepted\n"
+        in route_target_mutant
+    )
+
+
 def test_ingress_causal_freshness_mutation_is_release_gated_and_pinned() -> None:
     relative_runner = (
         "scripts/formal/run_sumeragi_v2_ingress_causal_freshness_mutation.sh"
@@ -513,7 +1156,19 @@ def test_ingress_causal_freshness_mutation_is_release_gated_and_pinned() -> None
         'c45d5aa0ff20a8b96b23d01e050e88"'
         in runner
     )
-    assert 'readonly EXPECTED_JAVA_VERSION=\'openjdk version "21.0.11"\'' in runner
+    assert 'readonly EXPECTED_JAVA_VERSION=\'openjdk version "21.0.12"\'' in runner
+    assert runner.count(
+        'readonly SANY_SUCCESS_MARKER="Semantic processing of module '
+        'SumeragiV2IngressCausalFreshnessMutation"'
+    ) == 1
+    assert runner.count(
+        "sany_last_nonblank=\"$(awk 'NF { line = $0 } END { print line }' "
+        '\"${run_dir}/sany.log\")\"'
+    ) == 1
+    assert runner.count(
+        '[[ "$sany_last_nonblank" == "$SANY_SUCCESS_MARKER" ]]'
+    ) == 1
+    assert 'grep -Fq "$SANY_SUCCESS_MARKER" "${run_dir}/sany.log"' not in runner
     assert 'readonly MODEL="SumeragiV2IngressCausalFreshnessMutation.tla"' in runner
     assert "resolve_java.sh" in runner
     assert '"$JAVA_BIN"' in runner

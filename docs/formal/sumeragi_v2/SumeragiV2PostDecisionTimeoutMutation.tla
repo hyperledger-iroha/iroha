@@ -2,26 +2,29 @@
 EXTENDS Naturals, Sequences, TLC
 
 (***************************************************************************
-Finite-state adversarial projection of the Decision/timeout boundary.
+Finite-state adversarial projection of the atomic Decision/timeout boundary.
 
-The trace first installs a durable Decision, then deliberately presents every
-timeout-side operation which production may observe after that Decision:
+The trace first installs a durable Decision, then presents every timeout-side
+operation which production may observe after that Decision:
 
   * replay of one durable timeout-signing intent;
-  * direct BeginTimeout, FormTC, and BeginInstallTC attempts;
+  * direct BeginTimeout and BeginInstallTC attempts;
+  * one stale signed-local timeout completion;
   * delivery of one authenticated TimeoutVote envelope; and
   * delivery of one authenticated TC envelope.
 
-In repaired mode the three direct attempts return without creating work.  The
-two envelopes are consumed, but are not admitted to the receive pools and do
-not create asynchronous causal successors.  Each mutation mode removes one
-of those seven restrictions.  Every non-Decision precondition is deliberately
-assumed satisfied, so no mutant can be hidden behind an unrelated quorum or
-authentication guard.  This model is intentionally a bounded regression
-witness, not a replacement for the unbounded Core/AsyncNetwork proof
-obligations.  The replay mutation is independent of the live BeginTimeout
-guard: a durable timeout intent may predate Decision and must still be
-suppressed during recovery.
+Signed-local completion and TimeoutVote delivery are the two production
+receipt actions.  Each must atomically do nothing after Decision: neither may
+admit a receipt, form a TC, open InstallTC persistence, or publish a
+PersistInstallTC causal child.  The TC envelope is consumed without receive
+pool admission or a BeginInstallTC child.  Every non-Decision precondition is
+deliberately assumed satisfied, so no mutant can hide behind an unrelated
+quorum or authentication guard.
+
+This bounded matrix is regression evidence, not a replacement for the
+unbounded Core/AsyncNetwork proof.  In particular, the replay mutation is
+independent of BeginTimeout: a durable timeout intent may predate Decision and
+must still be suppressed during recovery.
 ***************************************************************************)
 
 CONSTANT Mode
@@ -30,11 +33,12 @@ Modes ==
   {"Fixed",
    "NoResumeTimeoutGuard",
    "NoBeginTimeoutGuard",
-   "NoFormTCGuard",
+   "NoCompleteTimeoutGuard",
+   "LocalTimeoutSuccessorAfterDecision",
    "NoBeginInstallTCGuard",
    "RecordTimeoutAfterDecision",
-   "RecordTCAfterDecision",
    "TimeoutSuccessorAfterDecision",
+   "RecordTCAfterDecision",
    "TCSuccessorAfterDecision"}
 
 VARIABLES
@@ -73,7 +77,8 @@ Phases ==
   {"AwaitDecision",
    "AttemptResumeTimeout",
    "AttemptBeginTimeout",
-   "AttemptFormTC",
+   "AttemptCompleteTimeoutSignature",
+   "DispatchLocalTimeoutSuccessor",
    "AttemptBeginInstallTC",
    "InjectTimeout",
    "DeliverTimeout",
@@ -108,8 +113,7 @@ InstallDecision ==
                   timeoutConsumed, tcConsumed,
                   receivedTimeoutVotes, receivedTCs,
                   pendingTimeouts, timeoutSignatures, formedTCs,
-                  pendingInstallTCs,
-                  causalQueue>>
+                  pendingInstallTCs, causalQueue>>
 
 (***************************************************************************
 Recovery may still hold a durable timeout intent which predates Decision.
@@ -137,7 +141,7 @@ BeginTimeoutAllowed ==
 
 AttemptBeginTimeout ==
   /\ phase = "AttemptBeginTimeout"
-  /\ phase' = "AttemptFormTC"
+  /\ phase' = "AttemptCompleteTimeoutSignature"
   /\ pendingTimeouts' =
        IF BeginTimeoutAllowed THEN pendingTimeouts + 1
        ELSE pendingTimeouts
@@ -148,19 +152,53 @@ AttemptBeginTimeout ==
                   timeoutSignatures, formedTCs, pendingInstallTCs,
                   causalQueue>>
 
-FormTCAllowed ==
-  ~decided \/ Mode = "NoFormTCGuard"
+(***************************************************************************
+CompleteTimeoutSignature and DeliverTimeout each own receipt admission, TC
+formation, and the InstallTC WAL request in one reducer turn.  A stale local
+completion after Decision must therefore be an atomic no-op, including at the
+causal-successor adapter boundary.
+***************************************************************************)
+CompleteTimeoutAllowed ==
+  ~decided \/ Mode = "NoCompleteTimeoutGuard"
 
-AttemptFormTC ==
-  /\ phase = "AttemptFormTC"
+LocalTimeoutSuccessorAllowed ==
+  ~decided \/ Mode = "LocalTimeoutSuccessorAfterDecision"
+
+AttemptCompleteTimeoutSignature ==
+  /\ phase = "AttemptCompleteTimeoutSignature"
+  /\ phase' = "DispatchLocalTimeoutSuccessor"
+  /\ receivedTimeoutVotes' =
+       IF CompleteTimeoutAllowed
+       THEN receivedTimeoutVotes + 1
+       ELSE receivedTimeoutVotes
+  /\ formedTCs' =
+       IF CompleteTimeoutAllowed THEN formedTCs + 1 ELSE formedTCs
+  /\ pendingInstallTCs' =
+       IF CompleteTimeoutAllowed
+       THEN pendingInstallTCs + 1
+       ELSE pendingInstallTCs
+  /\ causalQueue' =
+       IF LocalTimeoutSuccessorAllowed
+       THEN Append(causalQueue, "PersistInstallTC")
+       ELSE causalQueue
+  /\ lastTransition' = "AttemptCompleteTimeoutSignature"
+  /\ UNCHANGED <<decided, timeoutEnvelope, tcEnvelope,
+                  timeoutConsumed, tcConsumed, receivedTCs,
+                  pendingTimeouts, timeoutSignatures>>
+
+DispatchLocalTimeoutSuccessor ==
+  /\ phase = "DispatchLocalTimeoutSuccessor"
   /\ phase' = "AttemptBeginInstallTC"
-  /\ formedTCs' = IF FormTCAllowed THEN formedTCs + 1 ELSE formedTCs
-  /\ lastTransition' = "AttemptFormTC"
+  /\ causalQueue' =
+       IF causalQueue # <<>> /\ Head(causalQueue) = "PersistInstallTC"
+       THEN Tail(causalQueue)
+       ELSE causalQueue
+  /\ lastTransition' = "DispatchLocalTimeoutSuccessor"
   /\ UNCHANGED <<decided, timeoutEnvelope, tcEnvelope,
                   timeoutConsumed, tcConsumed,
                   receivedTimeoutVotes, receivedTCs,
-                  pendingTimeouts, timeoutSignatures, pendingInstallTCs,
-                  causalQueue>>
+                  pendingTimeouts, timeoutSignatures, formedTCs,
+                  pendingInstallTCs>>
 
 BeginInstallTCAllowed ==
   ~decided \/ Mode = "NoBeginInstallTCGuard"
@@ -187,8 +225,7 @@ InjectTimeoutEnvelope ==
                   timeoutConsumed, tcConsumed,
                   receivedTimeoutVotes, receivedTCs,
                   pendingTimeouts, timeoutSignatures, formedTCs,
-                  pendingInstallTCs,
-                  causalQueue>>
+                  pendingInstallTCs, causalQueue>>
 
 TimeoutAdmissionAllowed ==
   ~decided \/ Mode = "RecordTimeoutAfterDecision"
@@ -206,33 +243,32 @@ DeliverTimeout ==
        IF TimeoutAdmissionAllowed
        THEN receivedTimeoutVotes + 1
        ELSE receivedTimeoutVotes
+  /\ formedTCs' =
+       IF TimeoutAdmissionAllowed THEN formedTCs + 1 ELSE formedTCs
+  /\ pendingInstallTCs' =
+       IF TimeoutAdmissionAllowed
+       THEN pendingInstallTCs + 1
+       ELSE pendingInstallTCs
   /\ causalQueue' =
        IF TimeoutSuccessorAllowed
-       THEN Append(causalQueue, "FormTC")
+       THEN Append(causalQueue, "PersistInstallTC")
        ELSE causalQueue
   /\ lastTransition' = "DeliverTimeout"
   /\ UNCHANGED <<decided, tcEnvelope, tcConsumed, receivedTCs,
-                  pendingTimeouts, timeoutSignatures, formedTCs,
-                  pendingInstallTCs>>
+                  pendingTimeouts, timeoutSignatures>>
 
 DispatchTimeoutSuccessor ==
   /\ phase = "DispatchTimeoutSuccessor"
   /\ phase' = "InjectTC"
-  /\ formedTCs' =
-       IF causalQueue # <<>>
-          /\ Head(causalQueue) = "FormTC"
-          /\ FormTCAllowed
-       THEN formedTCs + 1
-       ELSE formedTCs
   /\ causalQueue' =
-       IF causalQueue # <<>> /\ Head(causalQueue) = "FormTC"
+       IF causalQueue # <<>> /\ Head(causalQueue) = "PersistInstallTC"
        THEN Tail(causalQueue)
        ELSE causalQueue
   /\ lastTransition' = "DispatchTimeoutSuccessor"
   /\ UNCHANGED <<decided, timeoutEnvelope, tcEnvelope,
                   timeoutConsumed, tcConsumed,
                   receivedTimeoutVotes, receivedTCs,
-                  pendingTimeouts, timeoutSignatures,
+                  pendingTimeouts, timeoutSignatures, formedTCs,
                   pendingInstallTCs>>
 
 InjectTCEnvelope ==
@@ -244,8 +280,7 @@ InjectTCEnvelope ==
                   timeoutConsumed, tcConsumed,
                   receivedTimeoutVotes, receivedTCs,
                   pendingTimeouts, timeoutSignatures, formedTCs,
-                  pendingInstallTCs,
-                  causalQueue>>
+                  pendingInstallTCs, causalQueue>>
 
 TCAdmissionAllowed ==
   ~decided \/ Mode = "RecordTCAfterDecision"
@@ -297,7 +332,8 @@ Next ==
   \/ InstallDecision
   \/ AttemptResumeTimeout
   \/ AttemptBeginTimeout
-  \/ AttemptFormTC
+  \/ AttemptCompleteTimeoutSignature
+  \/ DispatchLocalTimeoutSuccessor
   \/ AttemptBeginInstallTC
   \/ InjectTimeoutEnvelope
   \/ DeliverTimeout
@@ -313,7 +349,8 @@ Spec ==
   /\ WF_vars(InstallDecision)
   /\ WF_vars(AttemptResumeTimeout)
   /\ WF_vars(AttemptBeginTimeout)
-  /\ WF_vars(AttemptFormTC)
+  /\ WF_vars(AttemptCompleteTimeoutSignature)
+  /\ WF_vars(DispatchLocalTimeoutSuccessor)
   /\ WF_vars(AttemptBeginInstallTC)
   /\ WF_vars(InjectTimeoutEnvelope)
   /\ WF_vars(DeliverTimeout)
@@ -336,11 +373,12 @@ TypeInvariant ==
   /\ timeoutSignatures \in Nat
   /\ formedTCs \in Nat
   /\ pendingInstallTCs \in Nat
-  /\ causalQueue \in Seq({"FormTC", "BeginInstallTC"})
+  /\ causalQueue \in Seq({"PersistInstallTC", "BeginInstallTC"})
   /\ lastTransition \in
        {"Init", "InstallDecision", "AttemptResumeTimeout",
-        "AttemptBeginTimeout", "AttemptFormTC",
-        "AttemptBeginInstallTC", "InjectTimeoutEnvelope", "DeliverTimeout",
+        "AttemptBeginTimeout", "AttemptCompleteTimeoutSignature",
+        "DispatchLocalTimeoutSuccessor", "AttemptBeginInstallTC",
+        "InjectTimeoutEnvelope", "DeliverTimeout",
         "DispatchTimeoutSuccessor", "InjectTCEnvelope", "DeliverTC",
         "DispatchTCSuccessor"}
 
@@ -356,11 +394,23 @@ NoTCFormationAfterDecision ==
 NoTCInstallAfterDecision ==
   decided => pendingInstallTCs = 0
 
-TimeoutDeliveryConsumesWithoutAdmission ==
+LocalTimeoutCompletionIsAtomicNoOp ==
+  lastTransition = "AttemptCompleteTimeoutSignature" =>
+    /\ receivedTimeoutVotes = 0
+    /\ formedTCs = 0
+    /\ pendingInstallTCs = 0
+
+LocalTimeoutCompletionHasNoCausalSuccessor ==
+  lastTransition = "AttemptCompleteTimeoutSignature" =>
+    causalQueue = <<>>
+
+TimeoutDeliveryConsumesWithoutAtomicAdmission ==
   lastTransition = "DeliverTimeout" =>
     /\ ~timeoutEnvelope
     /\ timeoutConsumed
     /\ receivedTimeoutVotes = 0
+    /\ formedTCs = 0
+    /\ pendingInstallTCs = 0
 
 TCDeliveryConsumesWithoutAdmission ==
   lastTransition = "DeliverTC" =>
@@ -379,7 +429,9 @@ PostDecisionBoundarySafe ==
   /\ NoTimeoutSignatureAfterDecision
   /\ NoTCFormationAfterDecision
   /\ NoTCInstallAfterDecision
-  /\ TimeoutDeliveryConsumesWithoutAdmission
+  /\ LocalTimeoutCompletionIsAtomicNoOp
+  /\ LocalTimeoutCompletionHasNoCausalSuccessor
+  /\ TimeoutDeliveryConsumesWithoutAtomicAdmission
   /\ TCDeliveryConsumesWithoutAdmission
   /\ TimeoutDeliveryHasNoCausalSuccessor
   /\ TCDeliveryHasNoCausalSuccessor

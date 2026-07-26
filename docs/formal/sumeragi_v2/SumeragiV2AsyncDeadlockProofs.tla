@@ -99,10 +99,16 @@ ResponsivePacketPairAt(initialContext, recipient, source) ==
         /\ source \in AsyncVotersAt(initialContext)
   \/ HistoricalRecoveryPacketCorridor(recipient, source)
 
+DueIngressPacketCanCoalesce(item) ==
+  /\ IngressHasCoalescingOwner(item)
+  /\ \/ item.kind # "CertifiedResponse"
+     \/ CertifiedResponseClaimMatches(item)
+
 DueIngressPacketCanEnter(recipient, source) ==
   LET item == OldestDueSourcePacket(recipient, source).item
-  IN \/ item \in SequenceSet(IngressLane(recipient, source))
-     \/ CanAdmitIngressItem(item)
+  IN \/ DueIngressPacketCanCoalesce(item)
+     \/ /\ ~IngressHasCoalescingOwner(item)
+           /\ CanAdmitIngressItem(item)
 
 IoDepthLocalWorkDecreaseStep ==
   \E node \in AsyncCurrentResponsiveVoters
@@ -561,6 +567,338 @@ PROOF
     <2> QED BY <2>2, <2>3
   <1> QED BY <1>1
 
+(***************************************************************************
+The restart-authority projection is the only ghost variable whose exact
+successor is computed from the post-state.  Clock, ingress, historical-server,
+and historical-I/O actions leave every source and exact-FetchBody owner input
+unchanged.  The witness below therefore evaluates the same filter in the
+pre-state, outside ENABLED's rigid quantification, and the refinement lemma
+proves that this concrete witness is exactly the production-facing transition.
+***************************************************************************)
+
+HistoricalLockRestartAuthorityObservedVars ==
+  <<context, nodeView, generation, prepareQCs, installedTCs,
+    lockRank, lockSubject, commitIntents, decisions,
+    asyncCommandQueues,
+    asyncDeferredCompletionQueues, asyncDeferredProgressQueues,
+    asyncDeferredNormalQueues, asyncCausalQueues, asyncOutstandingWork>>
+
+RetainedHistoricalLockRestartAuthorities ==
+  {authority \in asyncHistoricalLockRestartAuthorities:
+    /\ HistoricalLockRestartAuthoritySource(authority)
+    /\ ~HistoricalLockRestartExactCurrentFetchOwner(authority)}
+
+RetainedHistoricalLockRestartAuthorityFrame ==
+  /\ UNCHANGED AsyncRecoveryControlVars
+  /\ UNCHANGED HistoricalLockRestartAuthorityObservedVars
+  /\ asyncHistoricalLockRestartAuthorities' =
+       RetainedHistoricalLockRestartAuthorities
+
+THEOREM RetainedHistoricalLockRestartAuthorityFrameRefinesTransition ==
+  RetainedHistoricalLockRestartAuthorityFrame
+    => AsyncHistoricalLockRestartAuthorityTransition
+BY IsaT(300)
+   DEF RetainedHistoricalLockRestartAuthorityFrame,
+       RetainedHistoricalLockRestartAuthorities,
+       HistoricalLockRestartAuthorityObservedVars,
+       AsyncRecoveryControlVars,
+       AsyncHistoricalLockRestartAuthorityTransition,
+       ResponsiveCrashRecoveryRegistration,
+       HistoricalLockRestartAuthoritySource,
+       HistoricalLockRestartAuthoritySourceAfter,
+       HistoricalLockRestartExactCurrentFetchOwner,
+       HistoricalLockRestartExactCurrentFetchOwnerAfter, vars
+
+(***************************************************************************
+The historical-recovery runner may change an exact FetchBody owner input, so
+it cannot use the retained pre-state projection above.  Expose every
+post-state input as an explicit pure-kernel parameter instead.  ENABLED can
+then rigidly quantify those arguments without expanding the authority
+predicates into each scheduler-phase successor.
+***************************************************************************)
+
+HistoricalLockRestartAuthoritiesAt(
+    currentContext, currentNodeView, currentGeneration,
+    currentPrepareQCs, currentInstalledTCs,
+    currentLockRank, currentLockSubject,
+    currentCommitIntents, currentDecisions,
+    currentCommandQueues,
+    currentDeferredCompletionQueues,
+    currentDeferredProgressQueues,
+    currentDeferredNormalQueues,
+    currentCausalQueues, currentOutstandingWork) ==
+  {authority \in asyncHistoricalLockRestartAuthorities:
+    /\ \E qc \in currentPrepareQCs:
+         HistoricalLockRestartAuthoritySourceKernel(
+           authority, qc, currentContext, currentNodeView,
+           currentLockRank, currentLockSubject,
+           currentInstalledTCs, currentCommitIntents, currentDecisions)
+    /\ ~\E qc \in currentPrepareQCs, candidate \in AsyncCandidateSet:
+         /\ HistoricalLockRestartAuthoritySourceKernel(
+              authority, qc, currentContext, currentNodeView,
+              currentLockRank, currentLockSubject,
+              currentInstalledTCs, currentCommitIntents, currentDecisions)
+         /\ HistoricalLockRestartExactCurrentFetchKernel(
+              authority, qc, candidate, currentContext,
+              currentNodeView, currentGeneration,
+              currentCommandQueues, currentDeferredCompletionQueues,
+              currentDeferredProgressQueues, currentDeferredNormalQueues,
+              currentCausalQueues, currentOutstandingWork)}
+
+PostStateHistoricalLockRestartAuthorityFrame ==
+  /\ UNCHANGED AsyncRecoveryControlVars
+  /\ asyncHistoricalLockRestartAuthorities' =
+       HistoricalLockRestartAuthoritiesAt(
+         context', nodeView', generation', prepareQCs', installedTCs',
+         lockRank', lockSubject', commitIntents', decisions',
+         asyncCommandQueues',
+         asyncDeferredCompletionQueues',
+         asyncDeferredProgressQueues',
+         asyncDeferredNormalQueues',
+         asyncCausalQueues', asyncOutstandingWork')
+
+THEOREM PostStateHistoricalLockRestartAuthorityFrameRefinesTransition ==
+  PostStateHistoricalLockRestartAuthorityFrame
+    => AsyncHistoricalLockRestartAuthorityTransition
+BY IsaT(300)
+   DEF PostStateHistoricalLockRestartAuthorityFrame,
+       HistoricalLockRestartAuthoritiesAt,
+       AsyncHistoricalLockRestartAuthorityTransition,
+       ResponsiveCrashRecoveryRegistration,
+       HistoricalLockRestartAuthoritySourceAfter,
+       HistoricalLockRestartExactCurrentFetchOwnerAfter,
+       AsyncRecoveryControlVars
+
+PostStateHistoricalLockRestartNonCrashOuterFrame ==
+  /\ UNCHANGED up
+  /\ PostStateHistoricalLockRestartAuthorityFrame
+  /\ AsyncCoreOuterFrame
+
+THEOREM PostStateHistoricalLockRestartNonCrashOuterFrameRefinesExact ==
+  PostStateHistoricalLockRestartNonCrashOuterFrame
+    => AsyncNonCrashOuterFrame
+BY PostStateHistoricalLockRestartAuthorityFrameRefinesTransition
+   DEF PostStateHistoricalLockRestartNonCrashOuterFrame,
+       PostStateHistoricalLockRestartAuthorityFrame,
+       AsyncNonCrashOuterFrame
+
+RetainedHistoricalLockRestartNonCrashOuterFrame ==
+  /\ UNCHANGED up
+  /\ RetainedHistoricalLockRestartAuthorityFrame
+  /\ AsyncCoreOuterFrame
+
+THEOREM RetainedHistoricalLockRestartNonCrashOuterFrameRefinesExact ==
+  RetainedHistoricalLockRestartNonCrashOuterFrame
+    => AsyncNonCrashOuterFrame
+BY RetainedHistoricalLockRestartAuthorityFrameRefinesTransition
+   DEF RetainedHistoricalLockRestartNonCrashOuterFrame,
+       RetainedHistoricalLockRestartAuthorityFrame,
+       AsyncNonCrashOuterFrame
+
+RetainedHistoricalLockRestartNonRunnerOuterFrame ==
+  /\ UNCHANGED asyncNodeServiceDeadlines
+  /\ RetainedHistoricalLockRestartNonCrashOuterFrame
+
+THEOREM RetainedHistoricalLockRestartNonRunnerOuterFrameRefinesExact ==
+  RetainedHistoricalLockRestartNonRunnerOuterFrame
+    => AsyncNonRunnerOuterFrame
+BY RetainedHistoricalLockRestartNonCrashOuterFrameRefinesExact
+   DEF RetainedHistoricalLockRestartNonRunnerOuterFrame,
+       RetainedHistoricalLockRestartNonCrashOuterFrame,
+       AsyncNonRunnerOuterFrame
+
+RetainedHistoricalLockRestartTickWitness ==
+  /\ AsyncTickEnabled
+  /\ asyncNow' = asyncNow + 1
+  /\ UNCHANGED AsyncNonClockVars
+  /\ RetainedHistoricalLockRestartNonRunnerOuterFrame
+
+THEOREM RetainedHistoricalLockRestartTickWitnessRefinesExact ==
+  RetainedHistoricalLockRestartTickWitness => AsyncTick
+BY RetainedHistoricalLockRestartNonRunnerOuterFrameRefinesExact
+   DEF RetainedHistoricalLockRestartTickWitness, AsyncTick
+
+THEOREM AsyncTickGuardEnablesRetainedHistoricalLockRestartWitness ==
+  AsyncTickEnabled => ENABLED RetainedHistoricalLockRestartTickWitness
+BY ExpandENABLED, Isa
+   DEF RetainedHistoricalLockRestartTickWitness,
+       RetainedHistoricalLockRestartNonRunnerOuterFrame,
+       RetainedHistoricalLockRestartNonCrashOuterFrame,
+       RetainedHistoricalLockRestartAuthorityFrame,
+       HistoricalLockRestartAuthorityObservedVars,
+       AsyncNonClockVars, AsyncRecoveryControlVars,
+       AsyncLocalAdmissionVars, AsyncIoVars,
+       AsyncCoreOuterFrame, vars
+
+RetainedHistoricalLockRestartIngressWitness(recipient, source) ==
+  /\ gst
+  /\ AdmitIngressPacket(recipient, source)
+  /\ RetainedHistoricalLockRestartNonRunnerOuterFrame
+
+RetainedHistoricalLockRestartCoalescingIngressWitness(recipient, source) ==
+  /\ gst
+  /\ CoalesceHiddenPacket(recipient, source)
+  /\ RetainedHistoricalLockRestartNonRunnerOuterFrame
+
+RetainedHistoricalLockRestartFreshIngressWitness(recipient, source) ==
+  /\ gst
+  /\ AdmitHiddenPacket(recipient, source)
+  /\ RetainedHistoricalLockRestartNonRunnerOuterFrame
+
+THEOREM RetainedHistoricalLockRestartIngressWitnessRefinesExact ==
+  \A recipient, source:
+    RetainedHistoricalLockRestartIngressWitness(recipient, source)
+      => PostGstAdmitHiddenPacket(recipient, source)
+BY RetainedHistoricalLockRestartNonRunnerOuterFrameRefinesExact
+   DEF RetainedHistoricalLockRestartIngressWitness,
+       PostGstAdmitHiddenPacket
+
+THEOREM EnabledRetainedHistoricalLockRestartIngressWitnessRefinesExact ==
+  \A recipient, source:
+    ENABLED RetainedHistoricalLockRestartIngressWitness(recipient, source)
+      => ENABLED (PostGstAdmitHiddenPacket(recipient, source)
+                    \/ PostGstAdmitHistoricalRecoveryPacket(
+                         recipient, source))
+PROOF
+  <1>1. ASSUME NEW recipient, NEW source,
+                ENABLED RetainedHistoricalLockRestartIngressWitness(
+                  recipient, source)
+         PROVE ENABLED (PostGstAdmitHiddenPacket(recipient, source)
+                          \/ PostGstAdmitHistoricalRecoveryPacket(
+                               recipient, source))
+    <2>1. RetainedHistoricalLockRestartIngressWitness(
+              recipient, source) \in BOOLEAN
+      BY Isa DEF RetainedHistoricalLockRestartIngressWitness
+    <2>2. (PostGstAdmitHiddenPacket(recipient, source)
+               \/ PostGstAdmitHistoricalRecoveryPacket(
+                    recipient, source)) \in BOOLEAN
+      BY Isa
+         DEF PostGstAdmitHiddenPacket,
+             PostGstAdmitHistoricalRecoveryPacket
+    <2>3. RetainedHistoricalLockRestartIngressWitness(
+              recipient, source)
+             => (PostGstAdmitHiddenPacket(recipient, source)
+                   \/ PostGstAdmitHistoricalRecoveryPacket(
+                        recipient, source))
+      BY RetainedHistoricalLockRestartIngressWitnessRefinesExact
+    <2>4. ENABLED RetainedHistoricalLockRestartIngressWitness(
+              recipient, source)
+             => ENABLED (PostGstAdmitHiddenPacket(recipient, source)
+                           \/ PostGstAdmitHistoricalRecoveryPacket(
+                                recipient, source))
+      BY <2>1, <2>2, <2>3, ENABLEDaxioms
+    <2> QED BY <1>1, <2>4
+  <1> QED BY <1>1
+
+THEOREM EnabledRetainedHistoricalLockRestartCoalescingIngressWitnessRefinesExact ==
+  \A recipient, source:
+    ENABLED RetainedHistoricalLockRestartCoalescingIngressWitness(
+      recipient, source)
+      => ENABLED (PostGstAdmitHiddenPacket(recipient, source)
+                    \/ PostGstAdmitHistoricalRecoveryPacket(
+                         recipient, source))
+PROOF
+  <1>1. ASSUME NEW recipient, NEW source,
+                ENABLED
+                  RetainedHistoricalLockRestartCoalescingIngressWitness(
+                    recipient, source)
+         PROVE ENABLED (PostGstAdmitHiddenPacket(recipient, source)
+                          \/ PostGstAdmitHistoricalRecoveryPacket(
+                               recipient, source))
+    <2>1. RetainedHistoricalLockRestartCoalescingIngressWitness(
+              recipient, source) \in BOOLEAN
+      BY Isa
+         DEF RetainedHistoricalLockRestartCoalescingIngressWitness
+    <2>2. (PostGstAdmitHiddenPacket(recipient, source)
+               \/ PostGstAdmitHistoricalRecoveryPacket(
+                    recipient, source)) \in BOOLEAN
+      BY Isa
+         DEF PostGstAdmitHiddenPacket,
+             PostGstAdmitHistoricalRecoveryPacket
+    <2>3. RetainedHistoricalLockRestartCoalescingIngressWitness(
+              recipient, source)
+             => (PostGstAdmitHiddenPacket(recipient, source)
+                   \/ PostGstAdmitHistoricalRecoveryPacket(
+                        recipient, source))
+      BY RetainedHistoricalLockRestartNonRunnerOuterFrameRefinesExact
+         DEF RetainedHistoricalLockRestartCoalescingIngressWitness,
+             PostGstAdmitHiddenPacket, AdmitIngressPacket
+    <2>4. ENABLED
+              RetainedHistoricalLockRestartCoalescingIngressWitness(
+                recipient, source)
+             => ENABLED (PostGstAdmitHiddenPacket(recipient, source)
+                           \/ PostGstAdmitHistoricalRecoveryPacket(
+                                recipient, source))
+      BY <2>1, <2>2, <2>3, ENABLEDaxioms
+    <2> QED BY <1>1, <2>4
+  <1> QED BY <1>1
+
+THEOREM EnabledRetainedHistoricalLockRestartFreshIngressWitnessRefinesExact ==
+  \A recipient, source:
+    ENABLED RetainedHistoricalLockRestartFreshIngressWitness(
+      recipient, source)
+      => ENABLED (PostGstAdmitHiddenPacket(recipient, source)
+                    \/ PostGstAdmitHistoricalRecoveryPacket(
+                         recipient, source))
+PROOF
+  <1>1. ASSUME NEW recipient, NEW source,
+                ENABLED RetainedHistoricalLockRestartFreshIngressWitness(
+                  recipient, source)
+         PROVE ENABLED (PostGstAdmitHiddenPacket(recipient, source)
+                          \/ PostGstAdmitHistoricalRecoveryPacket(
+                               recipient, source))
+    <2>1. RetainedHistoricalLockRestartFreshIngressWitness(
+              recipient, source) \in BOOLEAN
+      BY Isa DEF RetainedHistoricalLockRestartFreshIngressWitness
+    <2>2. (PostGstAdmitHiddenPacket(recipient, source)
+               \/ PostGstAdmitHistoricalRecoveryPacket(
+                    recipient, source)) \in BOOLEAN
+      BY Isa
+         DEF PostGstAdmitHiddenPacket,
+             PostGstAdmitHistoricalRecoveryPacket
+    <2>3. RetainedHistoricalLockRestartFreshIngressWitness(
+              recipient, source)
+             => (PostGstAdmitHiddenPacket(recipient, source)
+                   \/ PostGstAdmitHistoricalRecoveryPacket(
+                        recipient, source))
+      BY RetainedHistoricalLockRestartNonRunnerOuterFrameRefinesExact
+         DEF RetainedHistoricalLockRestartFreshIngressWitness,
+             PostGstAdmitHiddenPacket, AdmitIngressPacket
+    <2>4. ENABLED RetainedHistoricalLockRestartFreshIngressWitness(
+              recipient, source)
+             => ENABLED (PostGstAdmitHiddenPacket(recipient, source)
+                           \/ PostGstAdmitHistoricalRecoveryPacket(
+                                recipient, source))
+      BY <2>1, <2>2, <2>3, ENABLEDaxioms
+    <2> QED BY <1>1, <2>4
+  <1> QED BY <1>1
+
+RetainedHistoricalLockRestartServerWitness(node) ==
+  /\ gst
+  /\ RunHistoricalServer(node)
+  /\ RetainedHistoricalLockRestartNonCrashOuterFrame
+
+THEOREM RetainedHistoricalLockRestartServerWitnessRefinesExact ==
+  \A node:
+    RetainedHistoricalLockRestartServerWitness(node)
+      => PostGstRunHistoricalServer(node)
+BY RetainedHistoricalLockRestartNonCrashOuterFrameRefinesExact
+   DEF RetainedHistoricalLockRestartServerWitness,
+       PostGstRunHistoricalServer
+
+RetainedHistoricalLockRestartIoWorkerWitness(node) ==
+  /\ gst
+  /\ ServiceHistoricalRecoveryIoWorker(node)
+  /\ RetainedHistoricalLockRestartNonRunnerOuterFrame
+
+THEOREM RetainedHistoricalLockRestartIoWorkerWitnessRefinesExact ==
+  \A node:
+    RetainedHistoricalLockRestartIoWorkerWitness(node)
+      => PostGstServiceHistoricalRecoveryIoWorker(node)
+BY RetainedHistoricalLockRestartNonRunnerOuterFrameRefinesExact
+   DEF RetainedHistoricalLockRestartIoWorkerWitness,
+       PostGstServiceHistoricalRecoveryIoWorker
+
 THEOREM DueIngressPacketAdmissionIsEnabled ==
   \A initialContext \in ContextRecords,
      recipient \in ValidatorIds, source \in AsyncIngressSources:
@@ -606,42 +944,57 @@ PROOF
              AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
              AsyncHistoricalRecoveryTypeInvariant,
              AsyncRecoveryTypeInvariant, AsyncCurrentResponsiveVoters
-    <2>2. CASE Item \in SequenceSet(IngressLane(recipient, source))
+    <2>2. CASE DueIngressPacketCanCoalesce(Item)
       <3>1. ENABLED
-               (PostGstAdmitHiddenPacket(recipient, source)
-                  \/ PostGstAdmitHistoricalRecoveryPacket(
-                       recipient, source))
-        BY <1>1, <2>1, <2>2, ExpandENABLED, Isa
-           DEF ResponsivePacketPairAt,
-               PostGstAdmitHiddenPacket,
-               PostGstAdmitHistoricalRecoveryPacket,
-               HistoricalRecoveryPacketCorridor,
-               AdmitIngressPacket, AdmitHiddenPacket,
-               CoalesceHiddenPacket, Item, AsyncAllVars,
+               RetainedHistoricalLockRestartCoalescingIngressWitness(
+                 recipient, source)
+        BY <1>1, <2>1, <2>2,
+           AutoUSE, ExpandENABLED, IsaT(300)
+           DEF RetainedHistoricalLockRestartCoalescingIngressWitness,
+               RetainedHistoricalLockRestartNonRunnerOuterFrame,
+               RetainedHistoricalLockRestartNonCrashOuterFrame,
+               RetainedHistoricalLockRestartAuthorityFrame,
+               HistoricalLockRestartAuthorityObservedVars,
+               CoalesceHiddenPacket, DueIngressPacketCanCoalesce,
+               Item, AsyncAllVars,
                AsyncSchedulerVars, AsyncIoVars, AsyncDeferredVars,
-               AsyncLocalAdmissionVars, AsyncNonRunnerOuterFrame,
-               AsyncNonCrashOuterFrame, AsyncRecoveryOuterFrame,
+               AsyncLocalAdmissionVars, AsyncRecoveryControlVars, LeaveCausalQueues,
                AsyncCoreOuterFrame, vars
-      <3> QED BY <3>1
-    <2>3. CASE Item \notin SequenceSet(IngressLane(recipient, source))
-      <3>1. CanAdmitIngressItem(Item)
-        BY <1>1, <2>3 DEF DueIngressPacketCanEnter, Item
       <3>2. ENABLED
                (PostGstAdmitHiddenPacket(recipient, source)
                   \/ PostGstAdmitHistoricalRecoveryPacket(
                        recipient, source))
-        BY <1>1, <2>1, <2>3, <3>1, ExpandENABLED, Isa
-           DEF ResponsivePacketPairAt,
-               PostGstAdmitHiddenPacket,
-               PostGstAdmitHistoricalRecoveryPacket,
-               HistoricalRecoveryPacketCorridor,
-               AdmitIngressPacket, AdmitHiddenPacket,
-               CoalesceHiddenPacket, Item, AsyncAllVars,
-               AsyncSchedulerVars, AsyncIoVars, AsyncDeferredVars,
-               AsyncLocalAdmissionVars, AsyncNonRunnerOuterFrame,
-               AsyncNonCrashOuterFrame, AsyncRecoveryOuterFrame,
-               AsyncCoreOuterFrame, vars
+        BY <3>1,
+           EnabledRetainedHistoricalLockRestartCoalescingIngressWitnessRefinesExact
       <3> QED BY <3>2
+    <2>3. CASE ~DueIngressPacketCanCoalesce(Item)
+      <3>1. /\ ~IngressHasCoalescingOwner(Item)
+             /\ CanAdmitIngressItem(Item)
+        BY <1>1, <2>3
+           DEF DueIngressPacketCanEnter, DueIngressPacketCanCoalesce,
+               Item
+      <3>2. ENABLED
+               RetainedHistoricalLockRestartFreshIngressWitness(
+                 recipient, source)
+        BY <1>1, <2>1, <2>3, <3>1,
+           AutoUSE, ExpandENABLED, IsaT(300)
+           DEF RetainedHistoricalLockRestartFreshIngressWitness,
+               RetainedHistoricalLockRestartNonRunnerOuterFrame,
+               RetainedHistoricalLockRestartNonCrashOuterFrame,
+               RetainedHistoricalLockRestartAuthorityFrame,
+               HistoricalLockRestartAuthorityObservedVars,
+               AdmitHiddenPacket, DueIngressPacketCanCoalesce,
+               Item, AsyncAllVars,
+               AsyncSchedulerVars, AsyncIoVars, AsyncDeferredVars,
+               AsyncLocalAdmissionVars, AsyncRecoveryControlVars, LeaveCausalQueues,
+               AsyncCoreOuterFrame, vars
+      <3>3. ENABLED
+               (PostGstAdmitHiddenPacket(recipient, source)
+                  \/ PostGstAdmitHistoricalRecoveryPacket(
+                       recipient, source))
+        BY <3>2,
+           EnabledRetainedHistoricalLockRestartFreshIngressWitnessRefinesExact
+      <3> QED BY <3>3
     <2> QED BY <2>2, <2>3
   <1> QED BY <1>1
 
@@ -652,51 +1005,440 @@ THEOREM AppliedResponsiveHistoricalServerEnabledAfterGst ==
     /\ gst
     /\ NodeHasApplication(node)
     => ENABLED PostGstRunHistoricalServer(node)
-BY ExpandENABLED, Isa
-   DEF AsyncStrongTypeInvariant, AsyncRecoveryTypeInvariant,
-       PostGstReplayQuarantineExcluded,
-       ResponsiveReplayQuarantined, PostGstRunHistoricalServer,
-       RunHistoricalServer, DrainHistoricalIngressSelected,
-       HistoricalIdleStep, PopSelectedIngress,
-       AsyncAllVars, AsyncSchedulerVars, AsyncIoVars,
-       AsyncDeferredVars, AsyncLocalAdmissionVars, vars
+PROOF
+  <1>1. ASSUME NEW node \in AsyncCurrentResponsiveVoters,
+                AsyncStrongTypeInvariant,
+                PostGstReplayQuarantineExcluded,
+                gst,
+                NodeHasApplication(node)
+         PROVE ENABLED PostGstRunHistoricalServer(node)
+    <2>1a. AsyncTypeInvariant
+      BY <1>1, AsyncStrongTypeProjectsAsyncType
+    <2>1b. node \in ValidatorIds
+      BY <1>1, <2>1a, AsyncCurrentResponsiveVotersAreValidators
+    <2>1c. node \in up
+      BY <1>1, GstResponsiveNodesAreUp
+         DEF AsyncStrongTypeInvariant
+    <2>1d. ~ResponsiveReplayQuarantined(node)
+      BY <1>1, <2>1b
+         DEF PostGstReplayQuarantineExcluded
+    <2>1. /\ node \in AsyncResponsiveAppliedArchiveServers
+           /\ ~ResponsiveReplayQuarantined(node)
+      BY <1>1, <2>1b, <2>1c, <2>1d, Isa
+         DEF AsyncCurrentResponsiveVoters,
+             AsyncResponsiveAppliedArchiveServers,
+             AsyncResponsiveOnlineArchiveServers,
+             AsyncResponsiveArchiveServers, AsyncArchiveServerIds
+    <2>2. RetainedHistoricalLockRestartServerWitness(node) \in BOOLEAN
+      BY Isa DEF RetainedHistoricalLockRestartServerWitness
+    <2>3. PostGstRunHistoricalServer(node) \in BOOLEAN
+      BY Isa DEF PostGstRunHistoricalServer
+    <2>4. RetainedHistoricalLockRestartServerWitness(node)
+             => PostGstRunHistoricalServer(node)
+      BY RetainedHistoricalLockRestartServerWitnessRefinesExact
+    <2>5. ENABLED RetainedHistoricalLockRestartServerWitness(node)
+             => ENABLED PostGstRunHistoricalServer(node)
+      BY <2>2, <2>3, <2>4, ENABLEDaxioms
+    <2>6. CASE HistoricalDrainableIngressIndices(node) # {}
+      <3>1a. FirstHistoricalDrainableIngressIndex(node)
+                  \in HistoricalDrainableIngressIndices(node)
+        BY <2>6, FirstHistoricalDrainableIndexIsDrainable
+      <3>1b. /\ FirstHistoricalDrainableIngressIndex(node)
+                      \in 1..Len(asyncIngressReady[node])
+               /\ HistoricalIngressSourceCanDrain(
+                    node,
+                    asyncIngressReady[node][
+                      FirstHistoricalDrainableIngressIndex(node)])
+        BY <3>1a DEF HistoricalDrainableIngressIndices
+      <3>1c. HistoricalSelectedIngressLaneIndex(
+                  node, FirstHistoricalDrainableIngressIndex(node))
+                \in HistoricalDrainableIngressLaneIndices(
+                     node,
+                     asyncIngressReady[node][
+                       FirstHistoricalDrainableIngressIndex(node)])
+        BY <3>1b, FirstHistoricalDrainableIngressLaneIndexIsDrainable
+           DEF HistoricalIngressSourceCanDrain,
+               HistoricalSelectedIngressLaneIndex
+      <3>1d. HistoricalSelectedIngressLaneIndex(
+                  node, FirstHistoricalDrainableIngressIndex(node))
+                \in 1..Len(
+                     IngressLane(
+                       node,
+                       asyncIngressReady[node][
+                         FirstHistoricalDrainableIngressIndex(node)]))
+        BY <3>1c DEF HistoricalDrainableIngressLaneIndices
+      <3>2. ENABLED RetainedHistoricalLockRestartServerWitness(node)
+        BY <1>1, <2>1, <2>6, <3>1b, <3>1d,
+           FirstHistoricalDrainableIndexIsDrainable,
+           FirstHistoricalDrainableIngressLaneIndexIsDrainable,
+           AutoUSE, ExpandENABLED, SMTT(300)
+           DEF RetainedHistoricalLockRestartServerWitness,
+               RetainedHistoricalLockRestartNonCrashOuterFrame,
+               RetainedHistoricalLockRestartAuthorityFrame,
+               HistoricalLockRestartAuthorityObservedVars,
+               RunHistoricalServer, DrainHistoricalIngressSelected,
+               PopSelectedIngress,
+               AsyncCoreOuterFrame, AsyncAllVars, AsyncSchedulerVars,
+               AsyncRecoveryVars, AsyncRecoveryControlVars,
+               AsyncIoVars, AsyncDeferredVars, AsyncLocalAdmissionVars,
+               LeaveCausalQueues, vars
+      <3> QED BY <3>2, <2>5
+    <2>7. CASE HistoricalDrainableIngressIndices(node) = {}
+      <3>1. ENABLED RetainedHistoricalLockRestartServerWitness(node)
+        BY <1>1, <2>1, <2>7,
+           AutoUSE, ExpandENABLED, IsaT(300)
+           DEF RetainedHistoricalLockRestartServerWitness,
+               RetainedHistoricalLockRestartNonCrashOuterFrame,
+               RetainedHistoricalLockRestartAuthorityFrame,
+               HistoricalLockRestartAuthorityObservedVars,
+               RunHistoricalServer, HistoricalIdleStep,
+               AsyncCoreOuterFrame, AsyncAllVars, AsyncSchedulerVars,
+               AsyncRecoveryVars, AsyncRecoveryControlVars,
+               AsyncIoVars, AsyncDeferredVars, AsyncLocalAdmissionVars,
+               LeaveCausalQueues, vars
+      <3> QED BY <3>1, <2>5
+    <2> QED BY <2>6, <2>7
+  <1> QED BY <1>1
+
+PostStateHistoricalRecoveryRunnerEnvelope(node) ==
+  /\ HistoricalRecoveryTarget(node)
+  /\ node \in up
+  /\ ~NodeHasApplication(node)
+  /\ ~ResponsiveReplayQuarantined(node)
+  /\ NodeServiceFrame(node)
+  /\ PostStateHistoricalLockRestartNonCrashOuterFrame
+
+PostStateHistoricalRecoveryLocalRunnerWitness(node) ==
+  /\ gst
+  /\ LocalAdmissionStep(node)
+  /\ PostStateHistoricalRecoveryRunnerEnvelope(node)
+
+PostStateHistoricalRecoveryIngressRunnerWitness(node) ==
+  /\ gst
+  /\ IngressDrainStep(node)
+  /\ PostStateHistoricalRecoveryRunnerEnvelope(node)
+
+PostStateHistoricalRecoveryRuntimeRunnerWitness(node) ==
+  /\ gst
+  /\ SerializedRuntimeStep(node)
+  /\ PostStateHistoricalRecoveryRunnerEnvelope(node)
+
+HistoricalRecoveryRunnerCurrentGuard(node) ==
+  /\ node \in asyncHistoricalRecoveryTargets
+  /\ gst
+  /\ node \in up
+  /\ ~NodeHasApplication(node)
+  /\ ~ResponsiveReplayQuarantined(node)
+
+(***************************************************************************
+Construct each local-runner successor from its exact scheduler guard.  This
+avoids expanding `ENABLED LocalAdmissionStep` once as a hypothesis and again
+inside the framed target.  The no-admission arm preserves every authority
+observation, so it uses the already-proved retained projection while advancing
+the runner phase.
+***************************************************************************)
+
+HistoricalRecoveryLocalPhaseAdvanceBaseWitness(node) ==
+  /\ gst
+  /\ asyncRunnerPhase[node] = "Local"
+  /\ ~LocalAdmissionCanAdvance(node)
+  /\ LocalPhaseAdvanceStep(node)
+  /\ HistoricalRecoveryTarget(node)
+  /\ node \in up
+  /\ ~NodeHasApplication(node)
+  /\ ~ResponsiveReplayQuarantined(node)
+  /\ NodeServiceFrame(node)
+  /\ UNCHANGED AsyncRecoveryControlVars
+
+RetainedHistoricalRecoveryLocalPhaseAdvanceWitness(node) ==
+  /\ HistoricalRecoveryLocalPhaseAdvanceBaseWitness(node)
+  /\ asyncHistoricalLockRestartAuthorities' =
+       RetainedHistoricalLockRestartAuthorities
+
+THEOREM RetainedHistoricalRecoveryLocalPhaseAdvanceProvidesOuterFrame ==
+  \A node:
+    RetainedHistoricalRecoveryLocalPhaseAdvanceWitness(node)
+      => RetainedHistoricalLockRestartNonCrashOuterFrame
+BY Isa
+   DEF RetainedHistoricalRecoveryLocalPhaseAdvanceWitness,
+       HistoricalRecoveryLocalPhaseAdvanceBaseWitness,
+       RetainedHistoricalLockRestartNonCrashOuterFrame,
+       RetainedHistoricalLockRestartAuthorityFrame,
+       HistoricalLockRestartAuthorityObservedVars,
+       LocalPhaseAdvanceStep, RecordBlockedCausalDebt,
+       LeaveCausalQueues, AsyncCoreOuterFrame,
+       AsyncIoVars, AsyncDeferredVars, AsyncRecoveryControlVars, vars
+
+THEOREM RetainedHistoricalRecoveryLocalPhaseAdvanceUsesLocalAdmission ==
+  \A node:
+    RetainedHistoricalRecoveryLocalPhaseAdvanceWitness(node)
+      => LocalAdmissionStep(node)
+BY Isa
+   DEF RetainedHistoricalRecoveryLocalPhaseAdvanceWitness,
+       HistoricalRecoveryLocalPhaseAdvanceBaseWitness,
+       LocalPhaseAdvanceStep, LocalAdmissionStep,
+       AdmitProducerCompletion, AdmitCausalHead,
+       UpdateLocalAdmissionMetadata, RecordBlockedCausalDebt,
+       EnqueueCandidate, LeaveCausalQueues,
+       AsyncIoVars, AsyncDeferredVars, vars
+
+THEOREM RetainedHistoricalRecoveryLocalPhaseAdvanceRefinesExact ==
+  \A node:
+    RetainedHistoricalRecoveryLocalPhaseAdvanceWitness(node)
+      => PostGstRunHistoricalRecoveryNode(node)
+BY RetainedHistoricalRecoveryLocalPhaseAdvanceUsesLocalAdmission,
+   RetainedHistoricalRecoveryLocalPhaseAdvanceProvidesOuterFrame,
+   RetainedHistoricalLockRestartNonCrashOuterFrameRefinesExact, Isa
+   DEF RetainedHistoricalRecoveryLocalPhaseAdvanceWitness,
+       HistoricalRecoveryLocalPhaseAdvanceBaseWitness,
+       PostGstRunHistoricalRecoveryNode,
+       RunHistoricalRecoveryNode, RunNodeWork, NodeServiceFrame
+
+THEOREM HistoricalRecoveryLocalPhaseAdvanceBaseEnabled ==
+  \A node \in ValidatorIds:
+    /\ HistoricalRecoveryRunnerCurrentGuard(node)
+    /\ asyncRunnerPhase[node] = "Local"
+    /\ ~LocalAdmissionCanAdvance(node)
+    => ENABLED HistoricalRecoveryLocalPhaseAdvanceBaseWitness(node)
+BY AutoUSE, ExpandENABLED, Isa
+   DEF HistoricalRecoveryRunnerCurrentGuard,
+       HistoricalRecoveryLocalPhaseAdvanceBaseWitness,
+       HistoricalRecoveryTarget,
+       LocalPhaseAdvanceStep, RecordBlockedCausalDebt,
+       LeaveCausalQueues, NodeServiceFrame,
+       AsyncIoVars, AsyncDeferredVars, AsyncRecoveryControlVars, vars
+
+THEOREM HistoricalRecoveryLocalPhaseAdvanceEnabled ==
+  \A node \in ValidatorIds:
+    /\ HistoricalRecoveryRunnerCurrentGuard(node)
+    /\ asyncRunnerPhase[node] = "Local"
+    /\ ~LocalAdmissionCanAdvance(node)
+    => ENABLED RetainedHistoricalRecoveryLocalPhaseAdvanceWitness(node)
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                HistoricalRecoveryRunnerCurrentGuard(node),
+                asyncRunnerPhase[node] = "Local",
+                ~LocalAdmissionCanAdvance(node)
+         PROVE ENABLED
+                 RetainedHistoricalRecoveryLocalPhaseAdvanceWitness(node)
+    <2>1. ENABLED HistoricalRecoveryLocalPhaseAdvanceBaseWitness(node)
+      BY <1>1, HistoricalRecoveryLocalPhaseAdvanceBaseEnabled
+    <2>2. ENABLED RetainedHistoricalRecoveryLocalPhaseAdvanceWitness(node)
+      BY <2>1, AutoUSE, ExpandENABLED, Isa
+         DEF RetainedHistoricalRecoveryLocalPhaseAdvanceWitness
+    <2> QED BY <2>2
+  <1> QED BY <1>1
+
+PostStateHistoricalRecoveryRunnerWitness(node) ==
+  \/ PostStateHistoricalRecoveryLocalRunnerWitness(node)
+  \/ PostStateHistoricalRecoveryIngressRunnerWitness(node)
+  \/ PostStateHistoricalRecoveryRuntimeRunnerWitness(node)
+
+THEOREM PostStateHistoricalRecoveryRunnerWitnessRefinesExact ==
+  \A node:
+    PostStateHistoricalRecoveryRunnerWitness(node)
+      => PostGstRunHistoricalRecoveryNode(node)
+BY PostStateHistoricalLockRestartNonCrashOuterFrameRefinesExact, Isa
+   DEF PostStateHistoricalRecoveryRunnerWitness,
+       PostStateHistoricalRecoveryLocalRunnerWitness,
+       PostStateHistoricalRecoveryIngressRunnerWitness,
+       PostStateHistoricalRecoveryRuntimeRunnerWitness,
+       PostStateHistoricalRecoveryRunnerEnvelope,
+       PostStateHistoricalLockRestartNonCrashOuterFrame,
+       PostGstRunHistoricalRecoveryNode,
+       RunHistoricalRecoveryNode, RunNodeWork, NodeServiceFrame
+
+THEOREM EnabledPostStateHistoricalRecoveryRunnerWitnessRefinesExact ==
+  \A node:
+    ENABLED PostStateHistoricalRecoveryRunnerWitness(node)
+      => ENABLED PostGstRunHistoricalRecoveryNode(node)
+PROOF
+  <1>1. ASSUME NEW node,
+                ENABLED PostStateHistoricalRecoveryRunnerWitness(node)
+         PROVE ENABLED PostGstRunHistoricalRecoveryNode(node)
+    <2>1. PostStateHistoricalRecoveryRunnerWitness(node) \in BOOLEAN
+      BY Isa DEF PostStateHistoricalRecoveryRunnerWitness,
+                 PostStateHistoricalRecoveryLocalRunnerWitness,
+                 PostStateHistoricalRecoveryIngressRunnerWitness,
+                 PostStateHistoricalRecoveryRuntimeRunnerWitness
+    <2>2. PostGstRunHistoricalRecoveryNode(node) \in BOOLEAN
+      BY Isa DEF PostGstRunHistoricalRecoveryNode
+    <2>3. PostStateHistoricalRecoveryRunnerWitness(node)
+             => PostGstRunHistoricalRecoveryNode(node)
+      BY PostStateHistoricalRecoveryRunnerWitnessRefinesExact
+    <2>4. ENABLED PostStateHistoricalRecoveryRunnerWitness(node)
+             => ENABLED PostGstRunHistoricalRecoveryNode(node)
+      BY <2>1, <2>2, <2>3, ENABLEDaxioms
+    <2> QED BY <1>1, <2>4
+  <1> QED BY <1>1
 
 THEOREM HistoricalRecoveryRunnerEnabledAfterGst ==
   \A node \in asyncHistoricalRecoveryTargets:
     /\ AsyncStrongTypeInvariant
     /\ gst
     => ENABLED PostGstRunHistoricalRecoveryNode(node)
-BY ExpandENABLED, Isa
-   DEF AsyncStrongTypeInvariant, AsyncTypeInvariant,
-       AsyncSchedulerTypeInvariant,
-       AsyncHistoricalRecoveryTypeInvariant,
-       PostGstRunHistoricalRecoveryNode,
-       RunHistoricalRecoveryNode, HistoricalRecoveryTarget,
-       RunNodeWork, LocalAdmissionStep, IngressDrainStep,
-       SerializedRuntimeStep, RuntimeStep,
-       AsyncAllVars, AsyncSchedulerVars, AsyncIoVars,
-       AsyncDeferredVars, AsyncLocalAdmissionVars, vars
+PROOF
+  <1>1. ASSUME NEW node \in asyncHistoricalRecoveryTargets,
+                AsyncStrongTypeInvariant,
+                gst
+         PROVE ENABLED PostGstRunHistoricalRecoveryNode(node)
+    <2>1a. AsyncTypeInvariant
+      BY <1>1, AsyncStrongTypeProjectsAsyncType
+    <2>1b. node \in ValidatorIds
+      BY <1>1, <2>1a, HistoricalRecoveryTargetsAreValidators
+    <2>1c. /\ node \in up
+             /\ ~NodeHasApplication(node)
+      BY <1>1
+         DEF AsyncStrongTypeInvariant, AsyncTypeInvariant,
+             AsyncSchedulerTypeInvariant,
+             AsyncHistoricalRecoveryTypeInvariant
+    <2>1d. ~ResponsiveReplayQuarantined(node)
+      BY <1>1, GstExcludesResponsiveReplayQuarantine
+         DEF AsyncStrongTypeInvariant
+    <2>1e. asyncRunnerPhase[node]
+                \in {"Local", "Ingress", "Runtime"}
+      BY <1>1, <2>1b
+         DEF AsyncStrongTypeInvariant, AsyncTypeInvariant,
+             AsyncSchedulerTypeInvariant,
+             AsyncRuntimeTypeInvariant, AsyncRuntimeScalarTypeInvariant
+    <2>2. CASE asyncRunnerPhase[node] = "Local"
+      <3>1. ENABLED LocalAdmissionStep(node)
+        BY <2>1b, <2>2, LocalAdmissionStepIsEnabled
+      <3>2. ENABLED
+                PostStateHistoricalRecoveryLocalRunnerWitness(node)
+        BY <1>1, <2>1c, <2>1d, <3>1,
+           AutoUSE, ExpandENABLED, Isa
+           DEF PostStateHistoricalRecoveryLocalRunnerWitness,
+               PostStateHistoricalRecoveryRunnerEnvelope,
+               PostStateHistoricalLockRestartNonCrashOuterFrame,
+               PostStateHistoricalLockRestartAuthorityFrame,
+               HistoricalRecoveryTarget,
+               NodeServiceFrame, AsyncCoreOuterFrame,
+               AsyncRecoveryControlVars
+      <3>3. ENABLED PostStateHistoricalRecoveryRunnerWitness(node)
+        BY <3>2, AutoUSE, ExpandENABLED, Isa
+           DEF PostStateHistoricalRecoveryRunnerWitness
+      <3> QED BY <3>3,
+           EnabledPostStateHistoricalRecoveryRunnerWitnessRefinesExact
+    <2>3. CASE asyncRunnerPhase[node] = "Ingress"
+      <3>1. ENABLED IngressDrainStep(node)
+        BY <2>1b, <2>3, IngressDrainStepIsEnabled
+      <3>2. ENABLED
+                PostStateHistoricalRecoveryIngressRunnerWitness(node)
+        BY <1>1, <2>1c, <2>1d, <3>1,
+           AutoUSE, ExpandENABLED, Isa
+           DEF PostStateHistoricalRecoveryIngressRunnerWitness,
+               PostStateHistoricalRecoveryRunnerEnvelope,
+               PostStateHistoricalLockRestartNonCrashOuterFrame,
+               PostStateHistoricalLockRestartAuthorityFrame,
+               HistoricalRecoveryTarget,
+               NodeServiceFrame, AsyncCoreOuterFrame,
+               AsyncRecoveryControlVars
+      <3>3. ENABLED PostStateHistoricalRecoveryRunnerWitness(node)
+        BY <3>2, AutoUSE, ExpandENABLED, Isa
+           DEF PostStateHistoricalRecoveryRunnerWitness
+      <3> QED BY <3>3,
+           EnabledPostStateHistoricalRecoveryRunnerWitnessRefinesExact
+    <2>4. CASE asyncRunnerPhase[node] = "Runtime"
+      <3>1. ENABLED SerializedRuntimeStep(node)
+        BY <2>1b, <2>4, SerializedRuntimeStepIsEnabled
+      <3>2. ENABLED
+                PostStateHistoricalRecoveryRuntimeRunnerWitness(node)
+        BY <1>1, <2>1c, <2>1d, <3>1,
+           AutoUSE, ExpandENABLED, Isa
+           DEF PostStateHistoricalRecoveryRuntimeRunnerWitness,
+               PostStateHistoricalRecoveryRunnerEnvelope,
+               PostStateHistoricalLockRestartNonCrashOuterFrame,
+               PostStateHistoricalLockRestartAuthorityFrame,
+               HistoricalRecoveryTarget,
+               NodeServiceFrame, AsyncCoreOuterFrame,
+               AsyncRecoveryControlVars
+      <3>3. ENABLED PostStateHistoricalRecoveryRunnerWitness(node)
+        BY <3>2, AutoUSE, ExpandENABLED, Isa
+           DEF PostStateHistoricalRecoveryRunnerWitness
+      <3> QED BY <3>3,
+           EnabledPostStateHistoricalRecoveryRunnerWitnessRefinesExact
+    <2> QED BY <2>1e, <2>2, <2>3, <2>4
+  <1> QED BY <1>1
 
 THEOREM HistoricalRecoveryIoWorkerEnabledAfterGst ==
   \A node \in asyncHistoricalRecoveryTargets:
-    /\ AsyncTypeInvariant
+    /\ AsyncStrongTypeInvariant
     /\ gst
     /\ AsyncIoQueueDepth(node) > 0
     => ENABLED PostGstServiceHistoricalRecoveryIoWorker(node)
-BY ExpandENABLED, Isa
-   DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
-       AsyncHistoricalRecoveryTypeInvariant,
-       PostGstServiceHistoricalRecoveryIoWorker,
-       ServiceHistoricalRecoveryIoWorker, ServiceIoWorkerWork,
-       PublishEphemeralItems, LeaveCausalQueues,
-       AsyncIoQueueDepth, AsyncAllVars, AsyncSchedulerVars,
-       AsyncLocalAdmissionVars, AsyncDeferredVars, vars
+PROOF
+  <1>1. ASSUME NEW node \in asyncHistoricalRecoveryTargets,
+                AsyncStrongTypeInvariant,
+                gst,
+                AsyncIoQueueDepth(node) > 0
+         PROVE ENABLED PostGstServiceHistoricalRecoveryIoWorker(node)
+    <2>1a. AsyncTypeInvariant
+      BY <1>1, AsyncStrongTypeProjectsAsyncType
+    <2>1b. node \in up
+      BY <1>1, <2>1a, Isa
+         DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+             AsyncHistoricalRecoveryTypeInvariant
+    <2>1c. ~ResponsiveReplayQuarantined(node)
+      BY <1>1, GstExcludesResponsiveReplayQuarantine
+         DEF AsyncStrongTypeInvariant
+    <2>1. /\ node \in up
+           /\ ~ResponsiveReplayQuarantined(node)
+      BY <2>1b, <2>1c
+    <2>2. ENABLED RetainedHistoricalLockRestartIoWorkerWitness(node)
+      BY <1>1, <2>1, AsyncStrongTypeProjectsAsyncType,
+         HistoricalRecoveryTargetsAreValidators,
+         GstExcludesResponsiveReplayQuarantine,
+         AutoUSE, ExpandENABLED, IsaT(300)
+         DEF RetainedHistoricalLockRestartIoWorkerWitness,
+             RetainedHistoricalLockRestartNonRunnerOuterFrame,
+             RetainedHistoricalLockRestartNonCrashOuterFrame,
+             RetainedHistoricalLockRestartAuthorityFrame,
+             HistoricalLockRestartAuthorityObservedVars,
+             AsyncStrongTypeInvariant, AsyncTypeInvariant,
+             AsyncHistoricalRecoveryTypeInvariant,
+             ServiceHistoricalRecoveryIoWorker, ServiceIoWorkerWork,
+             HistoricalRecoveryTarget,
+             ResponsiveReplayExecutorAllowed,
+             ResponsiveReplayQuarantined, ResponsiveReplayDraining,
+             PublishEphemeralItems, LeaveCausalQueues,
+             AsyncIoQueueDepth, AsyncCoreOuterFrame,
+             AsyncAllVars, AsyncSchedulerVars, AsyncRecoveryVars,
+             AsyncRecoveryControlVars, AsyncIoVars,
+             AsyncDeferredVars, AsyncLocalAdmissionVars, vars
+    <2>3. RetainedHistoricalLockRestartIoWorkerWitness(node) \in BOOLEAN
+      BY Isa DEF RetainedHistoricalLockRestartIoWorkerWitness
+    <2>4. PostGstServiceHistoricalRecoveryIoWorker(node) \in BOOLEAN
+      BY Isa DEF PostGstServiceHistoricalRecoveryIoWorker
+    <2>5. RetainedHistoricalLockRestartIoWorkerWitness(node)
+             => PostGstServiceHistoricalRecoveryIoWorker(node)
+      BY RetainedHistoricalLockRestartIoWorkerWitnessRefinesExact
+    <2>6. ENABLED RetainedHistoricalLockRestartIoWorkerWitness(node)
+             => ENABLED PostGstServiceHistoricalRecoveryIoWorker(node)
+      BY <2>3, <2>4, <2>5, ENABLEDaxioms
+    <2> QED BY <2>2, <2>6
+  <1> QED BY <1>1
 
 THEOREM AsyncTickEnabledHasConcreteSuccessor ==
   AsyncTickEnabled => ENABLED AsyncTick
-BY ExpandENABLED
-   DEF AsyncTick, AsyncNonClockVars, AsyncAllVars,
-       AsyncSchedulerVars, AsyncRecoveryVars, vars
+PROOF
+  <1>1. ASSUME AsyncTickEnabled
+         PROVE ENABLED AsyncTick
+    <2>1. ENABLED RetainedHistoricalLockRestartTickWitness
+      BY <1>1,
+         AsyncTickGuardEnablesRetainedHistoricalLockRestartWitness
+    <2>2. RetainedHistoricalLockRestartTickWitness \in BOOLEAN
+      BY Isa
+         DEF RetainedHistoricalLockRestartTickWitness
+    <2>3. AsyncTick \in BOOLEAN
+      BY Isa DEF AsyncTick
+    <2>4. RetainedHistoricalLockRestartTickWitness => AsyncTick
+      BY RetainedHistoricalLockRestartTickWitnessRefinesExact
+    <2>5. ENABLED RetainedHistoricalLockRestartTickWitness
+             => ENABLED AsyncTick
+      BY <2>2, <2>3, <2>4, ENABLEDaxioms
+    <2> QED BY <2>1, <2>5
+  <1> QED BY <1>1
 
 THEOREM AsyncTickStrictlyDecreasesResponsiveServiceDebt ==
   \A node \in AsyncCurrentResponsiveVoters:
@@ -1365,10 +2107,11 @@ PROOF
       BY <1>1, <2>3, <2>5,
          AdmissibleResponsivePacketEnablesConcreteProgress
     <2>6. CASE ~DueIngressPacketCanEnter(Recipient, Source)
-      <3>1. /\ Item \notin
-                       SequenceSet(IngressLane(Recipient, Source))
-             /\ ~CanAdmitIngressItem(Item)
-        BY <2>6 DEF DueIngressPacketCanEnter, Item
+      <3>1. \/ IngressHasCoalescingOwner(Item)
+             \/ ~CanAdmitIngressItem(Item)
+        BY <2>6
+           DEF DueIngressPacketCanEnter,
+               DueIngressPacketCanCoalesce, Item
       <3>2. CASE ~NodeHasApplication(Recipient)
         BY <1>1, <2>3, <3>2,
            UnappliedPacketRecipientEnablesConcreteRunnerProgress
@@ -1378,8 +2121,30 @@ PROOF
              DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
                  AsyncHistoricalRecoveryTypeInvariant
         <4>2. IngressDepth(Recipient) > 0
-          BY <2>1, <2>3, <2>4, <3>1,
-             RejectedFreshPacketWitnessesExistingIngress
+          <5>1. CASE IngressHasCoalescingOwner(Item)
+            <6>1. IngressResourceSource(Item) \in AsyncIngressSources
+              BY <2>4, Isa
+                 DEF AsyncItemTyped, AsyncIngressSources
+            <6>2. ASSUME IngressDepth(Recipient) = 0
+                   PROVE FALSE
+              <7>1. IngressLane(
+                       Recipient, IngressResourceSource(Item)) = <<>>
+                BY <2>1, <2>3, <6>1, <6>2,
+                   ZeroIngressDepthMeansEveryLaneEmpty
+              <7> QED BY <5>1, <7>1
+                   DEF IngressHasCoalescingOwner, SequenceSet,
+                       IngressLane
+            <6> QED BY <2>1, <6>2, SMT
+                 DEF AsyncTypeInvariant, TypeInvariant,
+                     AsyncSchedulerTypeInvariant,
+                     AsyncIngressTypeInvariant,
+                     AsyncIngressCapacityTypeInvariant
+          <5>2. CASE ~IngressHasCoalescingOwner(Item)
+            <6>1. ~CanAdmitIngressItem(Item)
+              BY <3>1, <5>2
+            <6> QED BY <2>1, <2>3, <2>4, <6>1,
+                 EmptyIngressAdmitsTypedPacket, SMT
+          <5> QED BY <5>1, <5>2
         <4>3. CASE HistoricalDrainableIngressIndices(Recipient) # {}
           BY <1>1, <4>1, <3>3, <4>3,
              AppliedDrainableRecipientEnablesConcreteIngressProgress
@@ -1495,12 +2260,14 @@ entire dependency cone passes the pinned strict TLAPS release invocation.
 THEOREM DeadlockFreedomObligation ==
   \A initialContext:
     DeadlockFreedomWithLocalWorkProperty(AsyncSpecAt(initialContext),
-      AsyncTerminatingLocalWorkDecreaseStep)
+      ENABLED PostGstProductiveStepWith(
+        AsyncTerminatingLocalWorkDecreaseStep))
 PROOF
   <1>1. ASSUME NEW initialContext
          PROVE DeadlockFreedomWithLocalWorkProperty(
                  AsyncSpecAt(initialContext),
-                 AsyncTerminatingLocalWorkDecreaseStep)
+                 ENABLED PostGstProductiveStepWith(
+                   AsyncTerminatingLocalWorkDecreaseStep))
     <2>1. AsyncSpecAt(initialContext)
              => []AsyncStrongTypeInvariant
       BY AsyncSpecAlwaysStrongTypeInvariant
@@ -1521,11 +2288,10 @@ PROOF
              Safety, TypeInvariant, AsyncFrozenContextAt
     <2>6. AsyncSpecAt(initialContext)
              => [](gst /\ ~ResponsiveNodesDecide
-                    => PostGstProductiveActionEnabledWith(
+                    => ENABLED PostGstProductiveStepWith(
                          AsyncTerminatingLocalWorkDecreaseStep))
       BY <2>1, <2>2, <2>3, <2>5,
          PostGstUndecidedEnablesConcreteProductiveStepAt, PTL
-         DEF PostGstProductiveActionEnabledWith
     <2> QED BY <2>6
          DEF DeadlockFreedomWithLocalWorkProperty
   <1> QED BY <1>1

@@ -4,10 +4,11 @@ EXTENDS SumeragiV2AsyncTimeoutKernelProofs
 (***************************************************************************
 Strengthened asynchronous induction.  The Core safety proof is reusable
 through the refinement boundary, while scheduler state, the concrete
-timeout-receipt pool, and recovery type, authority, and execution state require
-their own asynchronous preservation arguments.  Keeping these conjuncts in
-one invariant makes the final temporal proof an ordinary Init/Next induction
-rather than an implicit reachability claim.
+timeout-receipt pool, physical certified-response claim ownership, recovery
+type, authority, and execution state, and the serialized Busy readiness kernel
+require their own asynchronous preservation arguments.  Keeping these
+conjuncts in one invariant makes the final temporal proof an ordinary
+Init/Next induction rather than an implicit reachability claim.
 ***************************************************************************)
 
 AsyncRecoveryExecutionInvariant ==
@@ -29,16 +30,960 @@ exact current-generation FetchBody owner is present in scheduler state.
 HistoricalLockRestartAuthoritySourceRetentionInvariant ==
   \A authority \in asyncHistoricalLockRestartAuthorities:
     HistoricalLockRestartAuthoritySource(authority)
+AsyncGstRecoveryPhaseInvariant ==
+  gst =>
+    asyncRecoveryPhase
+      \notin {"RestartRequired", "ReplayRequired", "Replaying"}
+
+THEOREM AsyncInitEstablishesSerializedBusyKernelInvariant ==
+  \A initialContext:
+    AsyncInitAt(initialContext) => AsyncSerializedBusyKernelInvariant
+BY Isa
+   DEF AsyncInitAt, AsyncBaseInitAt, InitAt,
+       AsyncSerializedBusyKernelInvariant,
+       AsyncBusyReadinessInvariant,
+       SerializedBusyOwnershipInvariant, SerializedBusyOwners,
+       AllPendingRequests, RequestsUniqueByNode
+
+THEOREM CoreVarsStutterPreservesSerializedBusyKernelInvariant ==
+  AsyncSerializedBusyKernelInvariant /\ UNCHANGED vars
+    => AsyncSerializedBusyKernelInvariant'
+BY Isa
+   DEF AsyncSerializedBusyKernelInvariant,
+       AsyncBusyReadinessInvariant,
+       SerializedBusyOwnershipInvariant, SerializedBusyOwners,
+       AllPendingRequests, RequestsUniqueByNode, vars
+
+THEOREM SerializedBusyOwnerNodeSet ==
+  RequestNodeSet(SerializedBusyOwners) = PendingNodes \cup SigningNodes
+BY Isa
+   DEF SerializedBusyOwners, PendingNodes, SigningNodes,
+       AllPendingRequests, RequestNodeSet
+
+(***************************************************************************
+The direct Core induction below projects exactly the state read by the Busy
+kernel.  Ordinary Core actions either frame this tuple, grow only the two
+positive evidence carriers, create/convert/remove one serialized owner, or
+perform the special InstallTC replacement.
+***************************************************************************)
+
+AsyncSerializedBusyKernelVars ==
+  <<context, nodeView, durableBodies,
+    proposalIntents, prepareIntents, commitIntents, timeoutIntents,
+    prepareQCs, lockRank, lockSubject,
+    pendingProposal, pendingPrepare, pendingObservePrepare,
+    pendingLockCommit, pendingTimeout, pendingInstallTC, pendingDecision,
+    signProposals, signVotes, signTimeouts>>
+
+AsyncSerializedBusyKernelGrowthFrameVars ==
+  <<context, nodeView,
+    proposalIntents, prepareIntents, commitIntents, timeoutIntents,
+    lockRank, lockSubject,
+    pendingProposal, pendingPrepare, pendingObservePrepare,
+    pendingLockCommit, pendingTimeout, pendingInstallTC, pendingDecision,
+    signProposals, signVotes, signTimeouts>>
+
+THEOREM SerializedBusyKernelFramePreservesInvariant ==
+  /\ AsyncSerializedBusyKernelInvariant
+  /\ UNCHANGED AsyncSerializedBusyKernelVars
+  => AsyncSerializedBusyKernelInvariant'
+BY Isa
+   DEF AsyncSerializedBusyKernelVars,
+       AsyncSerializedBusyKernelInvariant,
+       AsyncBusyReadinessInvariant,
+       SerializedBusyOwnershipInvariant, SerializedBusyOwners,
+       AllPendingRequests, RequestsUniqueByNode
+
+THEOREM SerializedBusyKernelEvidenceGrowthPreservesInvariant ==
+  /\ AsyncSerializedBusyKernelInvariant
+  /\ UNCHANGED AsyncSerializedBusyKernelGrowthFrameVars
+  /\ durableBodies \subseteq durableBodies'
+  /\ prepareQCs \subseteq prepareQCs'
+  => AsyncSerializedBusyKernelInvariant'
+BY Isa
+   DEF AsyncSerializedBusyKernelGrowthFrameVars,
+       AsyncSerializedBusyKernelInvariant,
+       AsyncBusyReadinessInvariant,
+       SerializedBusyOwnershipInvariant, SerializedBusyOwners,
+       AllPendingRequests, RequestsUniqueByNode,
+       BodyHeldBy, VoteRoundAdmissible, LockedPrepareRound
+
+CoreSerializedBusyExactFrameAction ==
+  \/ SetGST
+  \/ \E signer \in ValidatorIds, roundView \in Views,
+       subject \in Subjects,
+       timeoutCertificate \in TimeoutCertificateOptionSet,
+       highestPrepare \in PrepareQcOptionSet:
+       ByzantineBroadcastProposal(signer, roundView, subject,
+                                  timeoutCertificate, highestPrepare)
+  \/ \E envelope \in proposalNetwork: DeliverProposal(envelope)
+  \/ \E node \in ValidatorIds, proposal \in SeenProposalValues:
+       FetchBody(node, proposal)
+  \/ \E node \in ValidatorIds, proposal \in SeenProposalValues:
+       RebindRetainedBody(node, proposal)
+  \/ \E node \in ValidatorIds, proposal \in SeenProposalValues:
+       ValidateBody(node, proposal)
+  \/ \E node \in ValidatorIds, proposal \in SeenProposalValues:
+       RejectBody(node, proposal)
+  \/ \E node \in ValidatorIds, qc \in DecisionQcValues:
+       ValidateDecidedBody(node, qc)
+  \/ \E node \in ValidatorIds, qc \in prepareQCs:
+       ValidateLockedBody(node, qc)
+  \/ \E signer \in ValidatorIds, roundView \in Views,
+       phase \in Phases, subject \in Subjects:
+       ByzantineBroadcastVote(signer, roundView, phase, subject)
+  \/ \E envelope \in voteNetwork: DeliverVote(envelope)
+  \/ \E envelope \in QcEnvelopeSet:
+       ImportAuthenticatedCommitCertificate(envelope)
+  \/ \E envelope \in qcNetwork: DeliverQC(envelope)
+  \/ \E signer \in ValidatorIds, roundView \in Views,
+       highestPrepare \in PrepareQcOptionSet:
+       ByzantineBroadcastTimeout(signer, roundView, highestPrepare)
+  \/ \E envelope \in timeoutNetwork: DeliverTimeout(envelope)
+  \/ \E envelope \in tcNetwork: DeliverTC(envelope)
+  \/ \E node \in ValidatorIds,
+       qc \in DecisionQcValues \cup prepareQCs:
+       FetchCertifiedBody(node, qc)
+  \/ \E node \in ValidatorIds, roundView \in Views,
+       subject \in Subjects:
+       AcceptCertifiedResponseCapability(node, roundView, subject)
+  \/ \E node \in ValidatorIds, qc \in DecisionQcValues:
+       ApplyDecision(node, qc)
+  \/ \E node \in ValidatorIds: Restart(node)
+  \/ \E envelope \in proposalNetwork: DropProposal(envelope)
+
+CoreSerializedBusyEvidenceGrowthAction ==
+  \/ \E node \in ValidatorIds, subject \in Subjects:
+       AssembleLocalBody(node, subject)
+  \/ \E node \in ValidatorIds, roundView \in Views, subject \in Subjects:
+       StoreBody(node, roundView, subject)
+  \/ \E node \in ValidatorIds, roundView \in Views, subject \in Subjects:
+       FormPrepareQC(node, roundView, subject)
+
+CoreSerializedBusyOwnerCreationAction ==
+  \/ \E node \in ValidatorIds, subject \in Subjects:
+       BeginLocalProposal(node, subject)
+  \/ \E node \in ValidatorIds, proposal \in SeenProposalValues:
+       BeginPrepare(node, proposal)
+  \/ \E node \in ValidatorIds, qc \in ReceivedQcValues:
+       BeginObservePrepare(node, qc)
+  \/ \E node \in ValidatorIds, qc \in LockCommitQcValues:
+       BeginLockCommit(node, qc)
+  \/ \E node \in ValidatorIds, roundView \in Views, subject \in Subjects:
+       FormCommitQC(node, roundView, subject)
+  \/ \E node \in ValidatorIds, qc \in ReceivedQcValues:
+       BeginDecision(node, qc)
+  \/ \E node \in ValidatorIds: BeginTimeout(node)
+  \/ \E node \in ValidatorIds, roundView \in Views:
+       FormTC(node, roundView)
+  \/ \E node \in ValidatorIds, tc \in ReceivedTcValues:
+       BeginInstallTC(node, tc)
+  \/ \E node \in ValidatorIds, proposal \in proposalIntents:
+       ResumeProposal(node, proposal)
+  \/ \E node \in ValidatorIds, vote \in prepareIntents \cup commitIntents:
+       ResumeVote(node, vote)
+  \/ \E node \in ValidatorIds, vote \in timeoutIntents:
+       ResumeTimeout(node, vote)
+
+CoreSerializedBusyOwnerConversionAction ==
+  \/ \E request \in pendingProposal: PersistProposal(request)
+  \/ \E request \in pendingPrepare: PersistPrepare(request)
+  \/ \E request \in pendingLockCommit: PersistLockCommit(request)
+  \/ \E request \in pendingTimeout: PersistTimeout(request)
+
+CoreSerializedBusyOwnerRemovalAction ==
+  \/ \E request \in signProposals: CompleteProposalSignature(request)
+  \/ \E request \in signVotes: CompleteVoteSignature(request)
+  \/ \E request \in pendingObservePrepare:
+       PersistObservePrepare(request)
+  \/ \E request \in pendingDecision: PersistDecision(request)
+  \/ \E request \in signTimeouts: CompleteTimeoutSignature(request)
+
+CoreSerializedBusyCrashAction ==
+  \E node \in ValidatorIds: Crash(node)
+
+CoreSerializedBusyInstallAction ==
+  \E request \in pendingInstallTC: PersistInstallTC(request)
+
+THEOREM CoreNextSerializedBusyActionClassification ==
+  Next
+    => \/ CoreSerializedBusyExactFrameAction
+       \/ CoreSerializedBusyEvidenceGrowthAction
+       \/ CoreSerializedBusyOwnerCreationAction
+       \/ CoreSerializedBusyOwnerConversionAction
+       \/ CoreSerializedBusyOwnerRemovalAction
+       \/ CoreSerializedBusyCrashAction
+       \/ CoreSerializedBusyInstallAction
+BY DEF Next,
+       CoreSerializedBusyExactFrameAction,
+       CoreSerializedBusyEvidenceGrowthAction,
+       CoreSerializedBusyOwnerCreationAction,
+       CoreSerializedBusyOwnerConversionAction,
+       CoreSerializedBusyOwnerRemovalAction,
+       CoreSerializedBusyCrashAction,
+       CoreSerializedBusyInstallAction
+
+THEOREM CoreSerializedBusyExactFrameActionPreservesKernel ==
+  /\ AsyncSerializedBusyKernelInvariant
+  /\ CoreSerializedBusyExactFrameAction
+  => AsyncSerializedBusyKernelInvariant'
+BY SerializedBusyKernelFramePreservesInvariant, Isa
+   DEF CoreSerializedBusyExactFrameAction,
+       AsyncSerializedBusyKernelVars,
+       SetGST, ByzantineBroadcastProposal, DeliverProposal,
+       FetchBody, RebindRetainedBody, ValidateBody, RejectBody,
+       ValidateDecidedBody, ValidateLockedBody,
+       ByzantineBroadcastVote, DeliverVote,
+       ImportAuthenticatedCommitCertificate, DeliverQC,
+       ByzantineBroadcastTimeout, DeliverTimeout, DeliverTC,
+       FetchCertifiedBody, AcceptCertifiedResponseCapability,
+       InstallCertifiedBodyEffect, ApplyDecision, Restart, DropProposal
+
+THEOREM CoreSerializedBusyEvidenceGrowthActionPreservesKernel ==
+  /\ AsyncSerializedBusyKernelInvariant
+  /\ CoreSerializedBusyEvidenceGrowthAction
+  => AsyncSerializedBusyKernelInvariant'
+BY SerializedBusyKernelEvidenceGrowthPreservesInvariant, Isa
+   DEF CoreSerializedBusyEvidenceGrowthAction,
+       AsyncSerializedBusyKernelGrowthFrameVars,
+       AssembleLocalBody, StoreBody, FormPrepareQC
+
+THEOREM NodeIdleExcludesSerializedBusyOwnerNode ==
+  \A node:
+    NodeIdle(node)
+      => node \notin RequestNodeSet(SerializedBusyOwners)
+BY SerializedBusyOwnerNodeSet
+   DEF NodeIdle
+
+THEOREM AddingFreshSerializedBusyOwnerPreservesOwnership ==
+  \A request:
+    /\ SerializedBusyOwnershipInvariant
+    /\ NodeIdle(request.node)
+    /\ SerializedBusyOwners' =
+         SerializedBusyOwners \cup {request}
+    => SerializedBusyOwnershipInvariant'
+PROOF
+  <1>1. ASSUME NEW request,
+                SerializedBusyOwnershipInvariant,
+                NodeIdle(request.node),
+                SerializedBusyOwners' =
+                  SerializedBusyOwners \cup {request}
+         PROVE SerializedBusyOwnershipInvariant'
+    <2>1. RequestsUniqueByNode(SerializedBusyOwners)
+      BY <1>1 DEF SerializedBusyOwnershipInvariant
+    <2>2. request.node
+             \notin RequestNodeSet(SerializedBusyOwners)
+      BY <1>1, NodeIdleExcludesSerializedBusyOwnerNode
+    <2>3. RequestsUniqueByNode(
+             SerializedBusyOwners \cup {request})
+      BY <2>1, <2>2, NewRequestPreservesNodeUniqueness
+    <2> QED BY <1>1, <2>3
+         DEF SerializedBusyOwnershipInvariant
+  <1> QED BY <1>1
+
+THEOREM AddingReadySerializedBusyOwnerPreservesKernel ==
+  \A request:
+    /\ AsyncSerializedBusyKernelInvariant
+    /\ NodeIdle(request.node)
+    /\ SerializedBusyOwners' =
+         SerializedBusyOwners \cup {request}
+    /\ AsyncBusyReadinessInvariant'
+    => AsyncSerializedBusyKernelInvariant'
+BY AddingFreshSerializedBusyOwnerPreservesOwnership
+   DEF AsyncSerializedBusyKernelInvariant
+
+THEOREM CoreBeginLocalProposalPreservesSerializedBusyKernel ==
+  \A node, subject:
+    /\ StrongInductiveInvariant
+    /\ AsyncSerializedBusyKernelInvariant
+    /\ BeginLocalProposal(node, subject)
+    => AsyncSerializedBusyKernelInvariant'
+BY AddingReadySerializedBusyOwnerPreservesKernel, IsaT(60)
+   DEF BeginLocalProposal, LocalProposalFor, ProposalWal,
+       AsyncBusyReadinessInvariant,
+       SerializedBusyOwners, AllPendingRequests
+
+THEOREM CoreBeginPreparePreservesSerializedBusyKernel ==
+  \A node, proposal:
+    /\ StrongInductiveInvariant
+    /\ AsyncSerializedBusyKernelInvariant
+    /\ BeginPrepare(node, proposal)
+    => AsyncSerializedBusyKernelInvariant'
+BY AddingReadySerializedBusyOwnerPreservesKernel, IsaT(60)
+   DEF BeginPrepare, PrepareRequestFor, PrepareVoteFor, PrepareWal,
+       AsyncBusyReadinessInvariant,
+       SerializedBusyOwners, AllPendingRequests
+
+THEOREM CoreBeginObservePreparePreservesSerializedBusyKernel ==
+  \A node, qc:
+    /\ StrongInductiveInvariant
+    /\ AsyncSerializedBusyKernelInvariant
+    /\ BeginObservePrepare(node, qc)
+    => AsyncSerializedBusyKernelInvariant'
+BY AddingReadySerializedBusyOwnerPreservesKernel, Isa
+   DEF BeginObservePrepare, ObservePrepareWal,
+       AsyncBusyReadinessInvariant,
+       SerializedBusyOwners, AllPendingRequests
+
+THEOREM CoreBeginLockCommitPreservesSerializedBusyKernel ==
+  \A node, qc:
+    /\ StrongInductiveInvariant
+    /\ AsyncSerializedBusyKernelInvariant
+    /\ BeginLockCommit(node, qc)
+    => AsyncSerializedBusyKernelInvariant'
+BY AddingReadySerializedBusyOwnerPreservesKernel, IsaT(120)
+   DEF StrongInductiveInvariant, Safety, TypeInvariant,
+       BeginLockCommit, LockCommitWal, Vote,
+       AsyncBusyReadinessInvariant,
+       SerializedBusyOwners, AllPendingRequests,
+       RetainedLockedBodyRecord, RetainedLockedBodyRecordSet,
+       ValidatorIds, QcRecordSet, ContextRecords, Subjects
+
+THEOREM CoreFormCommitQCPreservesSerializedBusyKernel ==
+  \A node, roundView, subject:
+    /\ StrongInductiveInvariant
+    /\ AsyncSerializedBusyKernelInvariant
+    /\ FormCommitQC(node, roundView, subject)
+    => AsyncSerializedBusyKernelInvariant'
+BY AddingReadySerializedBusyOwnerPreservesKernel, Isa
+   DEF FormCommitQC, DecisionWal,
+       AsyncBusyReadinessInvariant,
+       SerializedBusyOwners, AllPendingRequests
+
+THEOREM CoreBeginDecisionPreservesSerializedBusyKernel ==
+  \A node, qc:
+    /\ StrongInductiveInvariant
+    /\ AsyncSerializedBusyKernelInvariant
+    /\ BeginDecision(node, qc)
+    => AsyncSerializedBusyKernelInvariant'
+BY AddingReadySerializedBusyOwnerPreservesKernel, Isa
+   DEF BeginDecision, DecisionWal,
+       AsyncBusyReadinessInvariant,
+       SerializedBusyOwners, AllPendingRequests
+
+THEOREM CoreBeginTimeoutPreservesSerializedBusyKernel ==
+  \A node:
+    /\ StrongInductiveInvariant
+    /\ AsyncSerializedBusyKernelInvariant
+    /\ BeginTimeout(node)
+    => AsyncSerializedBusyKernelInvariant'
+BY AddingReadySerializedBusyOwnerPreservesKernel, IsaT(60)
+   DEF BeginTimeout, TimeoutRequestFor, LocalTimeoutVoteFor,
+       TimeoutWal, NodeTimedOut,
+       AsyncBusyReadinessInvariant,
+       SerializedBusyOwners, AllPendingRequests
+
+THEOREM CoreFormTCPreservesSerializedBusyKernel ==
+  \A node, roundView:
+    /\ StrongInductiveInvariant
+    /\ AsyncSerializedBusyKernelInvariant
+    /\ FormTC(node, roundView)
+    => AsyncSerializedBusyKernelInvariant'
+BY AddingReadySerializedBusyOwnerPreservesKernel, Isa
+   DEF FormTC, InstallTcWal,
+       AsyncBusyReadinessInvariant,
+       SerializedBusyOwners, AllPendingRequests
+
+THEOREM CoreBeginInstallTCPreservesSerializedBusyKernel ==
+  \A node, tc:
+    /\ StrongInductiveInvariant
+    /\ AsyncSerializedBusyKernelInvariant
+    /\ BeginInstallTC(node, tc)
+    => AsyncSerializedBusyKernelInvariant'
+BY AddingReadySerializedBusyOwnerPreservesKernel, Isa
+   DEF BeginInstallTC, InstallTcWal,
+       AsyncBusyReadinessInvariant,
+       SerializedBusyOwners, AllPendingRequests
+
+THEOREM CoreResumeProposalPreservesSerializedBusyKernel ==
+  \A node, proposal:
+    /\ StrongInductiveInvariant
+    /\ AsyncSerializedBusyKernelInvariant
+    /\ ResumeProposal(node, proposal)
+    => AsyncSerializedBusyKernelInvariant'
+BY AddingReadySerializedBusyOwnerPreservesKernel, Isa
+   DEF ResumeProposal, ProposalSign,
+       AsyncBusyReadinessInvariant,
+       SerializedBusyOwners, AllPendingRequests
+
+THEOREM CoreResumeVotePreservesSerializedBusyKernel ==
+  \A node, vote:
+    /\ StrongInductiveInvariant
+    /\ AsyncSerializedBusyKernelInvariant
+    /\ ResumeVote(node, vote)
+    => AsyncSerializedBusyKernelInvariant'
+BY AddingReadySerializedBusyOwnerPreservesKernel, Isa
+   DEF ResumeVote, VoteResumeAuthorized, VoteSign,
+       VoteRoundAdmissible,
+       AsyncBusyReadinessInvariant,
+       SerializedBusyOwners, AllPendingRequests
+
+THEOREM CoreResumeTimeoutPreservesSerializedBusyKernel ==
+  \A node, vote:
+    /\ StrongInductiveInvariant
+    /\ AsyncSerializedBusyKernelInvariant
+    /\ ResumeTimeout(node, vote)
+    => AsyncSerializedBusyKernelInvariant'
+BY AddingReadySerializedBusyOwnerPreservesKernel, Isa
+   DEF ResumeTimeout, TimeoutSign,
+       AsyncBusyReadinessInvariant,
+       SerializedBusyOwners, AllPendingRequests
+
+THEOREM CoreSerializedBusyOwnerCreationActionPreservesKernel ==
+  /\ StrongInductiveInvariant
+  /\ AsyncSerializedBusyKernelInvariant
+  /\ CoreSerializedBusyOwnerCreationAction
+  => AsyncSerializedBusyKernelInvariant'
+BY CoreBeginLocalProposalPreservesSerializedBusyKernel,
+   CoreBeginPreparePreservesSerializedBusyKernel,
+   CoreBeginObservePreparePreservesSerializedBusyKernel,
+   CoreBeginLockCommitPreservesSerializedBusyKernel,
+   CoreFormCommitQCPreservesSerializedBusyKernel,
+   CoreBeginDecisionPreservesSerializedBusyKernel,
+   CoreBeginTimeoutPreservesSerializedBusyKernel,
+   CoreFormTCPreservesSerializedBusyKernel,
+   CoreBeginInstallTCPreservesSerializedBusyKernel,
+   CoreResumeProposalPreservesSerializedBusyKernel,
+   CoreResumeVotePreservesSerializedBusyKernel,
+   CoreResumeTimeoutPreservesSerializedBusyKernel
+   DEF CoreSerializedBusyOwnerCreationAction
+
+THEOREM ReplacingSerializedBusyOwnerAtSameNodePreservesOwnership ==
+  \A oldOwner, newOwner:
+    /\ SerializedBusyOwnershipInvariant
+    /\ oldOwner \in SerializedBusyOwners
+    /\ newOwner.node = oldOwner.node
+    /\ SerializedBusyOwners' =
+         (SerializedBusyOwners \ {oldOwner}) \cup {newOwner}
+    => SerializedBusyOwnershipInvariant'
+BY SMT
+   DEF SerializedBusyOwnershipInvariant, RequestsUniqueByNode
+
+THEOREM ConvertingReadySerializedBusyOwnerPreservesKernel ==
+  \A oldOwner, newOwner:
+    /\ AsyncSerializedBusyKernelInvariant
+    /\ oldOwner \in SerializedBusyOwners
+    /\ newOwner.node = oldOwner.node
+    /\ SerializedBusyOwners' =
+         (SerializedBusyOwners \ {oldOwner}) \cup {newOwner}
+    /\ AsyncBusyReadinessInvariant'
+    => AsyncSerializedBusyKernelInvariant'
+BY ReplacingSerializedBusyOwnerAtSameNodePreservesOwnership
+   DEF AsyncSerializedBusyKernelInvariant
+
+THEOREM CorePersistProposalPreservesSerializedBusyKernel ==
+  \A request:
+    /\ StrongInductiveInvariant
+    /\ AsyncSerializedBusyKernelInvariant
+    /\ PersistProposal(request)
+    => AsyncSerializedBusyKernelInvariant'
+BY ConvertingReadySerializedBusyOwnerPreservesKernel, IsaT(120)
+   DEF PersistProposal, ProposalSign,
+       AsyncSerializedBusyKernelInvariant,
+       AsyncBusyReadinessInvariant,
+       SerializedBusyOwnershipInvariant, RequestsUniqueByNode,
+       SerializedBusyOwners, AllPendingRequests
+
+THEOREM CorePersistPreparePreservesSerializedBusyKernel ==
+  \A request:
+    /\ StrongInductiveInvariant
+    /\ AsyncSerializedBusyKernelInvariant
+    /\ PersistPrepare(request)
+    => AsyncSerializedBusyKernelInvariant'
+BY ConvertingReadySerializedBusyOwnerPreservesKernel, IsaT(180)
+   DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
+       PendingVoteWritesAuthorized,
+       PersistPrepare, VoteSign,
+       VoteRoundAdmissible,
+       AsyncSerializedBusyKernelInvariant,
+       AsyncBusyReadinessInvariant,
+       SerializedBusyOwnershipInvariant, RequestsUniqueByNode,
+       SerializedBusyOwners, AllPendingRequests
+
+THEOREM CorePersistLockCommitPreservesSerializedBusyKernel ==
+  \A request:
+    /\ StrongInductiveInvariant
+    /\ AsyncSerializedBusyKernelInvariant
+    /\ PersistLockCommit(request)
+    => AsyncSerializedBusyKernelInvariant'
+BY ConvertingReadySerializedBusyOwnerPreservesKernel, IsaT(240)
+   DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
+       PendingVoteWritesAuthorized,
+       PersistLockCommit, VoteSign,
+       VoteRoundAdmissible, LockedPrepareRound,
+       AsyncSerializedBusyKernelInvariant,
+       AsyncBusyReadinessInvariant,
+       SerializedBusyOwnershipInvariant, RequestsUniqueByNode,
+       SerializedBusyOwners, AllPendingRequests
+
+THEOREM CorePersistTimeoutPreservesSerializedBusyKernel ==
+  \A request:
+    /\ StrongInductiveInvariant
+    /\ AsyncSerializedBusyKernelInvariant
+    /\ PersistTimeout(request)
+    => AsyncSerializedBusyKernelInvariant'
+BY ConvertingReadySerializedBusyOwnerPreservesKernel, IsaT(180)
+   DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
+       PendingVoteWritesAuthorized,
+       PersistTimeout, TimeoutSign,
+       AsyncSerializedBusyKernelInvariant,
+       AsyncBusyReadinessInvariant,
+       SerializedBusyOwnershipInvariant, RequestsUniqueByNode,
+       SerializedBusyOwners, AllPendingRequests
+
+THEOREM CoreSerializedBusyOwnerConversionActionPreservesKernel ==
+  /\ StrongInductiveInvariant
+  /\ AsyncSerializedBusyKernelInvariant
+  /\ CoreSerializedBusyOwnerConversionAction
+  => AsyncSerializedBusyKernelInvariant'
+BY CorePersistProposalPreservesSerializedBusyKernel,
+   CorePersistPreparePreservesSerializedBusyKernel,
+   CorePersistLockCommitPreservesSerializedBusyKernel,
+   CorePersistTimeoutPreservesSerializedBusyKernel
+   DEF CoreSerializedBusyOwnerConversionAction
+
+AsyncBusyReadinessGuardVars ==
+  <<context, nodeView, durableBodies,
+    proposalIntents, prepareIntents, commitIntents, timeoutIntents,
+    prepareQCs, lockRank, lockSubject>>
+
+THEOREM RemovingSerializedBusyOwnersPreservesKernel ==
+  /\ AsyncSerializedBusyKernelInvariant
+  /\ UNCHANGED AsyncBusyReadinessGuardVars
+  /\ pendingProposal' \subseteq pendingProposal
+  /\ pendingPrepare' \subseteq pendingPrepare
+  /\ pendingObservePrepare' \subseteq pendingObservePrepare
+  /\ pendingLockCommit' \subseteq pendingLockCommit
+  /\ pendingTimeout' \subseteq pendingTimeout
+  /\ pendingInstallTC' \subseteq pendingInstallTC
+  /\ pendingDecision' \subseteq pendingDecision
+  /\ signProposals' \subseteq signProposals
+  /\ signVotes' \subseteq signVotes
+  /\ signTimeouts' \subseteq signTimeouts
+  => AsyncSerializedBusyKernelInvariant'
+PROOF
+  <1>1. ASSUME AsyncSerializedBusyKernelInvariant,
+              UNCHANGED AsyncBusyReadinessGuardVars,
+              pendingProposal' \subseteq pendingProposal,
+              pendingPrepare' \subseteq pendingPrepare,
+              pendingObservePrepare' \subseteq pendingObservePrepare,
+              pendingLockCommit' \subseteq pendingLockCommit,
+              pendingTimeout' \subseteq pendingTimeout,
+              pendingInstallTC' \subseteq pendingInstallTC,
+              pendingDecision' \subseteq pendingDecision,
+              signProposals' \subseteq signProposals,
+              signVotes' \subseteq signVotes,
+              signTimeouts' \subseteq signTimeouts
+         PROVE AsyncSerializedBusyKernelInvariant'
+    <2>1. SerializedBusyOwners' \subseteq SerializedBusyOwners
+      BY <1>1, Isa
+         DEF SerializedBusyOwners, AllPendingRequests
+    <2>2. SerializedBusyOwnershipInvariant'
+      BY <1>1, <2>1, RemovingRequestsPreservesNodeUniqueness
+         DEF AsyncSerializedBusyKernelInvariant,
+             SerializedBusyOwnershipInvariant
+    <2>3. AsyncBusyReadinessInvariant'
+      BY <1>1, Isa
+         DEF AsyncSerializedBusyKernelInvariant,
+             AsyncBusyReadinessInvariant,
+             AsyncBusyReadinessGuardVars,
+             VoteRoundAdmissible, LockedPrepareRound
+    <2> QED BY <2>2, <2>3
+         DEF AsyncSerializedBusyKernelInvariant
+  <1> QED BY <1>1
+
+THEOREM CoreSerializedBusyOwnerRemovalActionPreservesKernel ==
+  /\ AsyncSerializedBusyKernelInvariant
+  /\ CoreSerializedBusyOwnerRemovalAction
+  => AsyncSerializedBusyKernelInvariant'
+BY RemovingSerializedBusyOwnersPreservesKernel, Isa
+   DEF CoreSerializedBusyOwnerRemovalAction,
+       AsyncBusyReadinessGuardVars,
+       CompleteProposalSignature, CompleteVoteSignature,
+       PersistObservePrepare, PersistDecision,
+       CompleteTimeoutSignature
+
+THEOREM CoreSerializedBusyCrashActionPreservesKernel ==
+  /\ AsyncSerializedBusyKernelInvariant
+  /\ CoreSerializedBusyCrashAction
+  => AsyncSerializedBusyKernelInvariant'
+BY RemovingSerializedBusyOwnersPreservesKernel, Isa
+   DEF CoreSerializedBusyCrashAction,
+       AsyncBusyReadinessGuardVars, Crash
+
+THEOREM ActiveLockedCommitSignRequestsAfterInstallIsCanonical ==
+  \A node, tc:
+    \/ ActiveLockedCommitSignRequestsAfterInstall(node, tc) = {}
+    \/ ActiveLockedCommitSignRequestsAfterInstall(node, tc) =
+         {VoteSign(
+            node,
+            Vote(context, ResultingInstallLockRank(node, tc),
+                 "Commit", ResultingInstallLockSubject(node, tc), node))}
+BY SMT
+   DEF ActiveLockedCommitSignRequestsAfterInstall,
+       ExactLockedCommitIntents
+
+THEOREM ActiveLockedCommitSignRequestsAfterInstallIsUniqueAtNode ==
+  \A node, tc:
+    /\ RequestsUniqueByNode(
+         ActiveLockedCommitSignRequestsAfterInstall(node, tc))
+    /\ \A request \in
+             ActiveLockedCommitSignRequestsAfterInstall(node, tc):
+         request.node = node
+BY ActiveLockedCommitSignRequestsAfterInstallIsCanonical, SMT
+   DEF RequestsUniqueByNode, VoteSign
+
+THEOREM ReplacingSerializedBusyOwnerBySameNodeSetPreservesOwnership ==
+  \A oldOwner, newOwners:
+    /\ SerializedBusyOwnershipInvariant
+    /\ oldOwner \in SerializedBusyOwners
+    /\ RequestsUniqueByNode(newOwners)
+    /\ \A newOwner \in newOwners:
+         newOwner.node = oldOwner.node
+    /\ SerializedBusyOwners' =
+         (SerializedBusyOwners \ {oldOwner}) \cup newOwners
+    => SerializedBusyOwnershipInvariant'
+BY SMT
+   DEF SerializedBusyOwnershipInvariant, RequestsUniqueByNode
+
+THEOREM PendingInstallTCResultingLockIsCertified ==
+  \A request:
+    /\ StrongInductiveInvariant
+    /\ request \in pendingInstallTC
+    => LET node == request.node
+           tc == request.tc
+           resultingRank == ResultingInstallLockRank(node, tc)
+           resultingSubject == ResultingInstallLockSubject(node, tc)
+       IN /\ (resultingRank = NoRank
+                => resultingSubject = NoSubject)
+          /\ (resultingRank # NoRank
+                => \E qc \in prepareQCs:
+                     /\ qc.context = context
+                     /\ qc.view = resultingRank
+                     /\ qc.phase = "Prepare"
+                     /\ qc.subject = resultingSubject)
+PROOF
+  <1>1. ASSUME NEW request,
+                StrongInductiveInvariant,
+                request \in pendingInstallTC
+         PROVE LET node == request.node
+                   tc == request.tc
+                   resultingRank ==
+                     ResultingInstallLockRank(node, tc)
+                   resultingSubject ==
+                     ResultingInstallLockSubject(node, tc)
+               IN /\ (resultingRank = NoRank
+                        => resultingSubject = NoSubject)
+                  /\ (resultingRank # NoRank
+                        => \E qc \in prepareQCs:
+                             /\ qc.context = context
+                             /\ qc.view = resultingRank
+                             /\ qc.phase = "Prepare"
+                             /\ qc.subject = resultingSubject)
+    <2> DEFINE Node == request.node
+    <2> DEFINE Certificate == request.tc
+    <2> DEFINE SelectedRank == TcHighRank(Certificate)
+    <2> DEFINE SelectedSubject == TcHighSubject(Certificate)
+    <2>1. /\ ModelConfiguration
+           /\ Node \in ValidatorIds
+           /\ Certificate \in formedTCs
+           /\ Certificate.context = context
+           /\ TCValid(Certificate)
+           /\ Certificate.votes # {}
+           /\ lockRank[Node] \in Ranks
+      BY <1>1, Isa
+         DEF StrongInductiveInvariant, Safety, TypeInvariant,
+             ReducerProvenanceInvariant,
+             PendingCertificateWritesAuthorized,
+             InstallTcWalSet, Node, Certificate
+    <2>2. HighestTimeoutVote(Certificate.votes)
+             \in Certificate.votes
+      BY <2>1, ValidTimeoutCertificateSelectsMember
+    <2>3. HighRefValid(SelectedRank, SelectedSubject)
+      BY <2>1, <2>2
+         DEF TCValid, AuthenticatedHighRef,
+             TcHighRank, TcHighSubject,
+             SelectedRank, SelectedSubject, Certificate
+    <2>4. /\ CertificatePhasesCorrect
+           /\ HighestAndLockAreCertified
+      BY <1>1
+         DEF StrongInductiveInvariant,
+             ReducerProvenanceInvariant, LineageInvariant
+    <2>5. \/ /\ SelectedRank = NoRank
+                /\ SelectedSubject = NoSubject
+           \/ /\ SelectedRank \in Views
+                /\ SelectedSubject \in Subjects
+                /\ \E qc \in prepareQCs:
+                     /\ qc.context = context
+                     /\ qc.view = SelectedRank
+                     /\ qc.phase = "Prepare"
+                     /\ qc.subject = SelectedSubject
+      BY <2>3, <2>4, Isa DEF HighRefValid, CertificatePhasesCorrect
+    <2>6. /\ (lockRank[Node] = NoRank
+                => lockSubject[Node] = NoSubject)
+           /\ (lockRank[Node] # NoRank
+                => \E qc \in prepareQCs:
+                     /\ qc.context = context
+                     /\ qc.view = lockRank[Node]
+                     /\ qc.phase = "Prepare"
+                     /\ qc.subject = lockSubject[Node])
+      BY <2>1, <2>4, Isa
+         DEF HighestAndLockAreCertified, CertificatePhasesCorrect
+    <2>7. /\ SelectedRank \in Ranks
+           /\ SelectedRank \in Int
+           /\ lockRank[Node] \in Int
+      BY <2>1, <2>5, SMT
+         DEF Ranks, Views, NoRank
+    <2>8. CASE SelectedRank > lockRank[Node]
+      <3>1. /\ ResultingInstallLockRank(Node, Certificate) =
+                    SelectedRank
+             /\ ResultingInstallLockSubject(Node, Certificate) =
+                    SelectedSubject
+        BY <2>8
+           DEF ResultingInstallLockRank,
+               ResultingInstallLockSubject,
+               SelectedRank, SelectedSubject, Certificate
+      <3>2. SelectedRank # NoRank
+        BY <2>1, <2>5, <2>7, <2>8, SMT
+           DEF Ranks, Views, NoRank
+      <3> QED BY <2>5, <3>1, <3>2, Isa
+    <2>9. CASE SelectedRank <= lockRank[Node]
+      <3>1. /\ ResultingInstallLockRank(Node, Certificate) =
+                    lockRank[Node]
+             /\ ResultingInstallLockSubject(Node, Certificate) =
+                    lockSubject[Node]
+        BY <2>9
+           DEF ResultingInstallLockRank,
+               ResultingInstallLockSubject,
+               SelectedRank, SelectedSubject, Certificate
+      <3> QED BY <2>6, <3>1, Isa
+    <2>10. SelectedRank > lockRank[Node]
+               \/ SelectedRank <= lockRank[Node]
+      BY <2>7, SMT
+    <2> QED BY <2>8, <2>9, <2>10 DEF Node, Certificate
+  <1> QED BY <1>1
+
+THEOREM PersistInstallActiveSignRequestsAreReady ==
+  \A request:
+    /\ StrongInductiveInvariant
+    /\ PersistInstallTC(request)
+    => \A signRequest \in
+             ActiveLockedCommitSignRequestsAfterInstall(
+               request.node, request.tc):
+         /\ signRequest.vote.signer = signRequest.node
+         /\ signRequest.vote \in commitIntents'
+         /\ VoteRoundAdmissible(
+              signRequest.node, signRequest.vote)'
+PROOF
+  <1>1. ASSUME NEW request,
+                StrongInductiveInvariant,
+                PersistInstallTC(request)
+         PROVE \A signRequest \in
+                   ActiveLockedCommitSignRequestsAfterInstall(
+                     request.node, request.tc):
+                 /\ signRequest.vote.signer = signRequest.node
+                 /\ signRequest.vote \in commitIntents'
+                 /\ VoteRoundAdmissible(
+                      signRequest.node, signRequest.vote)'
+    <2> DEFINE Node == request.node
+    <2> DEFINE Certificate == request.tc
+    <2> DEFINE ResultingRank ==
+          ResultingInstallLockRank(Node, Certificate)
+    <2> DEFINE ResultingSubject ==
+          ResultingInstallLockSubject(Node, Certificate)
+    <2>1. /\ request \in pendingInstallTC
+           /\ Node \in ValidatorIds
+           /\ commitIntents \subseteq VoteRecordSet
+      BY <1>1, Isa
+         DEF StrongInductiveInvariant, Safety, TypeInvariant,
+             PersistInstallTC, Node
+    <2>2. /\ (ResultingRank = NoRank
+                => ResultingSubject = NoSubject)
+           /\ (ResultingRank # NoRank
+                => \E qc \in prepareQCs:
+                     /\ qc.context = context
+                     /\ qc.view = ResultingRank
+                     /\ qc.phase = "Prepare"
+                     /\ qc.subject = ResultingSubject)
+      BY <1>1, <2>1, PendingInstallTCResultingLockIsCertified
+         DEF ResultingRank, ResultingSubject, Node, Certificate
+    <2>3. /\ context' = context
+           /\ commitIntents' = commitIntents
+           /\ prepareQCs' = prepareQCs
+           /\ lockRank'[Node] = ResultingRank
+           /\ lockSubject'[Node] = ResultingSubject
+      BY <1>1, <2>1, Isa
+         DEF PersistInstallTC,
+             ResultingInstallLockRank,
+             ResultingInstallLockSubject,
+             ResultingRank, ResultingSubject, Node, Certificate
+    <2>4. ASSUME NEW signRequest \in
+                     ActiveLockedCommitSignRequestsAfterInstall(
+                       request.node, request.tc)
+           PROVE /\ signRequest.vote.signer = signRequest.node
+                 /\ signRequest.vote \in commitIntents'
+                 /\ VoteRoundAdmissible(
+                      signRequest.node, signRequest.vote)'
+      <3>1. /\ signRequest.node = Node
+             /\ signRequest.vote =
+                  Vote(context, ResultingRank, "Commit",
+                       ResultingSubject, Node)
+             /\ signRequest.vote \in commitIntents
+        BY <2>4, Isa
+           DEF ActiveLockedCommitSignRequestsAfterInstall,
+               ExactLockedCommitIntents, VoteSign,
+               ResultingRank, ResultingSubject, Node, Certificate
+      <3>2. /\ signRequest.vote.view \in Views
+             /\ ResultingRank # NoRank
+        BY <2>1, <3>1, Isa
+           DEF VoteRecordSet, Vote, Views, Ranks, NoRank
+      <3>3. PICK qc \in prepareQCs:
+               /\ qc.context = context
+               /\ qc.view = ResultingRank
+               /\ qc.phase = "Prepare"
+               /\ qc.subject = ResultingSubject
+        BY <2>2, <3>2
+      <3>4. LockedPrepareRound(
+               signRequest.node, signRequest.vote.view,
+               signRequest.vote.subject)'
+        BY <2>3, <3>1, <3>3, Isa
+           DEF LockedPrepareRound, Vote
+      <3> QED BY <2>3, <3>1, <3>4, Isa
+           DEF VoteRoundAdmissible, Vote
+    <2> QED BY <2>4
+  <1> QED BY <1>1
+
+THEOREM RemovingOneSerializedBusyOwnerSeparatesRemainingNodes ==
+  \A oldOwner:
+    /\ SerializedBusyOwnershipInvariant
+    /\ oldOwner \in SerializedBusyOwners
+    => \A otherOwner \in SerializedBusyOwners \ {oldOwner}:
+         otherOwner.node # oldOwner.node
+BY DistinctUniqueRequestsHaveDistinctNodes, SMT
+   DEF SerializedBusyOwnershipInvariant
+
+THEOREM CorePersistInstallTCPreservesSerializedBusyKernel ==
+  \A request:
+    /\ StrongInductiveInvariant
+    /\ AsyncSerializedBusyKernelInvariant
+    /\ PersistInstallTC(request)
+    => AsyncSerializedBusyKernelInvariant'
+PROOF
+  <1>1. ASSUME NEW request,
+                StrongInductiveInvariant,
+                AsyncSerializedBusyKernelInvariant,
+                PersistInstallTC(request)
+         PROVE AsyncSerializedBusyKernelInvariant'
+    <2> DEFINE Node == request.node
+    <2> DEFINE Certificate == request.tc
+    <2> DEFINE NewOwners ==
+          ActiveLockedCommitSignRequestsAfterInstall(Node, Certificate)
+    <2>1. /\ request \in pendingInstallTC
+           /\ request \in SerializedBusyOwners
+           /\ SerializedBusyOwnershipInvariant
+      BY <1>1, Isa
+         DEF PersistInstallTC,
+             AsyncSerializedBusyKernelInvariant,
+             SerializedBusyOwners, AllPendingRequests
+    <2>2. /\ RequestsUniqueByNode(NewOwners)
+           /\ \A newOwner \in NewOwners:
+                newOwner.node = Node
+      BY ActiveLockedCommitSignRequestsAfterInstallIsUniqueAtNode
+         DEF NewOwners
+    <2>3. SerializedBusyOwners' =
+             (SerializedBusyOwners \ {request}) \cup NewOwners
+      BY <1>1, <2>1, InstallKindExcludesOtherWalSets, IsaT(120)
+         DEF StrongInductiveInvariant, Safety, TypeInvariant,
+             PersistInstallTC,
+             SerializedBusyOwners, AllPendingRequests,
+             ProposalWalSet, PrepareWalSet, ObservePrepareWalSet,
+             LockCommitWalSet, TimeoutWalSet, InstallTcWalSet,
+             DecisionWalSet, ProposalSignSet, VoteSignSet,
+             TimeoutSignSet, NewOwners, Node, Certificate
+    <2>4. SerializedBusyOwnershipInvariant'
+      BY <2>1, <2>2, <2>3,
+         ReplacingSerializedBusyOwnerBySameNodeSetPreservesOwnership
+         DEF Node
+    <2>5. \A otherOwner \in
+                   SerializedBusyOwners \ {request}:
+             otherOwner.node # Node
+      BY <2>1, RemovingOneSerializedBusyOwnerSeparatesRemainingNodes
+         DEF Node
+    <2>6. \A signRequest \in NewOwners:
+             /\ signRequest.vote.signer = signRequest.node
+             /\ signRequest.vote \in commitIntents'
+             /\ VoteRoundAdmissible(
+                  signRequest.node, signRequest.vote)'
+      BY <1>1, PersistInstallActiveSignRequestsAreReady
+         DEF NewOwners, Node, Certificate
+    <2>7. AsyncBusyReadinessInvariant'
+      BY <1>1, <2>5, <2>6, IsaT(240)
+         DEF StrongInductiveInvariant, Safety, TypeInvariant,
+             AsyncSerializedBusyKernelInvariant,
+             AsyncBusyReadinessInvariant,
+             SerializedBusyOwners, AllPendingRequests,
+             PersistInstallTC,
+             VoteRoundAdmissible, LockedPrepareRound,
+             NewOwners, Node, Certificate
+    <2> QED BY <2>4, <2>7
+         DEF AsyncSerializedBusyKernelInvariant
+  <1> QED BY <1>1
+
+THEOREM CoreSerializedBusyInstallActionPreservesKernel ==
+  /\ StrongInductiveInvariant
+  /\ AsyncSerializedBusyKernelInvariant
+  /\ CoreSerializedBusyInstallAction
+  => AsyncSerializedBusyKernelInvariant'
+BY CorePersistInstallTCPreservesSerializedBusyKernel
+   DEF CoreSerializedBusyInstallAction
+
+(***************************************************************************
+This direct action-preservation leaf for the serialized Busy kernel
+deliberately assumes only the Core strong invariant, the kernel itself, and
+the bracketed Core step; it must not be discharged from the later
+progress-ownership induction.  The proof classifies all 47 atomic Core actions
+into exact frame, monotone evidence growth, owner creation, same-node
+conversion, owner removal, crash restriction, and InstallTC replacement, with
+bracket stutter handled separately.  Fresh pinned strict sealing remains
+pending for this direct split.
+***************************************************************************)
+THEOREM CoreNextPreservesAsyncSerializedBusyKernel ==
+  /\ StrongInductiveInvariant
+  /\ AsyncSerializedBusyKernelInvariant
+  /\ [Next]_vars
+  => AsyncSerializedBusyKernelInvariant'
+BY CoreVarsStutterPreservesSerializedBusyKernelInvariant,
+   CoreNextSerializedBusyActionClassification,
+   CoreSerializedBusyExactFrameActionPreservesKernel,
+   CoreSerializedBusyEvidenceGrowthActionPreservesKernel,
+   CoreSerializedBusyOwnerCreationActionPreservesKernel,
+   CoreSerializedBusyOwnerConversionActionPreservesKernel,
+   CoreSerializedBusyOwnerRemovalActionPreservesKernel,
+   CoreSerializedBusyCrashActionPreservesKernel,
+   CoreSerializedBusyInstallActionPreservesKernel,
+   Isa
+   DEF vars
+
+THEOREM AsyncNextPreservesSerializedBusyKernelInvariant ==
+  /\ StrongInductiveInvariant
+  /\ AsyncSerializedBusyKernelInvariant
+  /\ AsyncNext
+  => AsyncSerializedBusyKernelInvariant'
+BY AsyncStepRefinementObligation,
+   CoreNextPreservesAsyncSerializedBusyKernel
 
 AsyncStrongTypeInvariant ==
   /\ StrongInductiveInvariant
   /\ AsyncSchedulerTypeInvariant
+  /\ AsyncCertifiedResponseClaimIngressOwnershipInvariant
   /\ ReceivedTimeoutVotePoolInvariant
   /\ AsyncRecoveryTypeInvariant
   /\ AsyncRestartAuthorityInvariant
   /\ AsyncRecoveryExecutionInvariant
   /\ AsyncHistoricalLockRestartAuthorityTypeInvariant
   /\ HistoricalLockRestartAuthoritySourceRetentionInvariant
+  /\ AsyncGstRecoveryPhaseInvariant
+  /\ AsyncSerializedBusyKernelInvariant
 
 THEOREM AsyncStrongTypeProjectsAsyncType ==
   AsyncStrongTypeInvariant => AsyncTypeInvariant
@@ -59,6 +1004,9 @@ PROOF
       BY <2>1 DEF StrongInductiveInvariant, Safety
     <2>3. AsyncSchedulerTypeInvariant
       BY <1>1, <2>2, AsyncInitEstablishesSchedulerType
+    <2>3a. AsyncCertifiedResponseClaimIngressOwnershipInvariant
+      BY <1>1, EmptyCertifiedResponseClaimHasIngressOwnership
+         DEF AsyncInitAt, AsyncBaseInitAt, AsyncTransportInit
     <2>4. ReceivedTimeoutVotePoolInvariant
       BY <1>1, AsyncInitEstablishesTimeoutPoolInvariant
     <2>5. /\ AsyncRecoveryTypeInvariant
@@ -74,7 +1022,14 @@ PROOF
              HistoricalLockRestartAuthoritySourceRetentionInvariant,
              AsyncRecoveryPhases, TypeInvariant, ModelConfiguration,
              QuorumConfiguration, ValidatorIds, Generations
-    <2> QED BY <2>1, <2>3, <2>4, <2>5 DEF AsyncStrongTypeInvariant
+    <2>6. AsyncGstRecoveryPhaseInvariant
+      BY <1>1, Isa
+         DEF AsyncInitAt, AsyncBaseInitAt, InitAt,
+             AsyncGstRecoveryPhaseInvariant
+    <2>7. AsyncSerializedBusyKernelInvariant
+      BY <1>1, AsyncInitEstablishesSerializedBusyKernelInvariant
+    <2> QED BY <2>1, <2>3, <2>3a, <2>4, <2>5, <2>6, <2>7
+         DEF AsyncStrongTypeInvariant
   <1> QED BY <1>1
 
 THEOREM AsyncNextPreservesStrongInductiveInvariant ==
@@ -110,12 +1065,15 @@ PROOF
          PROVE AsyncStrongTypeInvariant'
     <2>1. /\ StrongInductiveInvariant
            /\ AsyncSchedulerTypeInvariant
+           /\ AsyncCertifiedResponseClaimIngressOwnershipInvariant
            /\ ReceivedTimeoutVotePoolInvariant
            /\ AsyncRecoveryTypeInvariant
            /\ AsyncRestartAuthorityInvariant
            /\ AsyncRecoveryExecutionInvariant
            /\ AsyncHistoricalLockRestartAuthorityTypeInvariant
            /\ HistoricalLockRestartAuthoritySourceRetentionInvariant
+           /\ AsyncGstRecoveryPhaseInvariant
+           /\ AsyncSerializedBusyKernelInvariant
       BY <1>1 DEF AsyncStrongTypeInvariant
     <2>2. UNCHANGED vars
       BY <1>1, Isa DEF AsyncAllVars
@@ -123,6 +1081,10 @@ PROOF
       BY <2>1, <2>2, CoreStrongInductiveActionPreservation
     <2>4. AsyncSchedulerTypeInvariant'
       BY <1>1, <2>1, AsyncAllVarsStutterPreservesSchedulerType
+    <2>4a. AsyncCertifiedResponseClaimIngressOwnershipInvariant'
+      BY <1>1, <2>1,
+         CertifiedResponseClaimIngressOwnershipStutter
+         DEF AsyncAllVars, AsyncSchedulerVars
     <2>5. ReceivedTimeoutVotePoolInvariant'
       BY <1>1, <2>1,
          AsyncAllVarsStutterPreservesTimeoutPoolInvariant
@@ -137,7 +1099,14 @@ PROOF
              AsyncRecoveryExecutionInvariant,
              AsyncHistoricalLockRestartAuthorityTypeInvariant,
              HistoricalLockRestartAuthoritySourceRetentionInvariant
-    <2> QED BY <2>3, <2>4, <2>5, <2>6
+    <2>7. AsyncGstRecoveryPhaseInvariant'
+      BY <1>1, <2>1, Isa
+         DEF AsyncAllVars, AsyncRecoveryVars, vars,
+             AsyncGstRecoveryPhaseInvariant
+    <2>8. AsyncSerializedBusyKernelInvariant'
+      BY <2>1, <2>2,
+         CoreVarsStutterPreservesSerializedBusyKernelInvariant
+    <2> QED BY <2>3, <2>4, <2>4a, <2>5, <2>6, <2>7, <2>8
          DEF AsyncStrongTypeInvariant
   <1> QED BY <1>1
 
@@ -364,7 +1333,8 @@ THEOREM PreGstResponsiveReplayPreservesSchedulerType ==
   /\ PreGstResponsiveReplay
   => AsyncSchedulerTypeInvariant'
 BY RestartReplayIsTypedOwnedAndUnique,
-   RestartRetainedControlPreservesType, SMTT(30), Isa
+   RestartRetainedControlPreservesType,
+   FilterActiveRequestsAndClaimPreservesInvariant, SMTT(45), Isa
    DEF PreGstResponsiveReplay, RecoveryCoreReplay,
        ResetNodeSchedulerForRestart,
        AsyncSchedulerTypeInvariant, AsyncRuntimeTypeInvariant,
@@ -379,6 +1349,7 @@ BY RestartReplayIsTypedOwnedAndUnique,
        AsyncTransportClockTypeInvariant,
        AsyncTransportContentTypeInvariant,
        AsyncTransportHistoryTypeInvariant,
+       AsyncCertifiedResponseClaimInvariant,
        AsyncPacketContentTypeInvariant, AsyncHeldChunksTypeInvariant,
        AsyncIngressTypeInvariant, AsyncIngressTopologyTypeInvariant,
        AsyncIngressCapacityTypeInvariant,
@@ -722,6 +1693,72 @@ PROOF
     <2> QED BY <2>8, <2>9
   <1> QED BY <1>1
 
+THEOREM ReplayingOrdinaryStepPreservesRecoveryCorridor ==
+  /\ StrongInductiveInvariant
+  /\ AsyncTypeInvariant
+  /\ AsyncRecoveryTypeInvariant
+  /\ AsyncRecoveryExecutionInvariant
+  /\ asyncRecoveryPhase = "Replaying"
+  /\ (AsyncRunnerStep \/ AsyncNonRunnerStep)
+  /\ UNCHANGED <<up, AsyncRecoveryVars>>
+  => /\ (~NodeHasApplication(asyncRecoveryNode))'
+     /\ (RestartDecisions(asyncRecoveryNode) = {})'
+     /\ \A request \in asyncActiveRequests':
+          \/ request.source # asyncRecoveryNode'
+          \/ (RestartLockedCertifiedRequest(
+                asyncRecoveryNode, request))'
+     /\ \A candidate \in
+          ResponsiveReplayScheduledCandidates(asyncRecoveryNode)':
+          /\ (CandidateConsumerCurrent(candidate))'
+          /\ \/ candidate \in
+                   (SequenceSet(
+                      RestartSignatureReplay(asyncRecoveryNode)))'
+             \/ (RestartLockedBodyPipelineCandidate(
+                   asyncRecoveryNode, candidate))'
+BY RestartSignatureReplayCommandsAreSignatures,
+   RestartLockedBodyReplayCandidateShape,
+   RestartReplayReplayingCandidateShape,
+   SMTT(180), Isa
+   DEF AsyncRunnerStep, RunNode, RunHistoricalRecoveryNode,
+       RunNodeWork, LocalAdmissionStep, AdmitProducerCompletion,
+       AdmitCausalHead, IngressDrainStep, DrainFairIngressSelected,
+       SerializedRuntimeStep, RuntimeStep, DeferredDrainStep,
+       FifoRuntimeStep, DeferredTagStep, DeferredTimeoutStep,
+       DeferredRetransmitStep, DirectTimeoutStep,
+       DirectRetransmitStep, IdleRuntimeStep,
+       RemoveNextDeferredCommand, RemoveNextNodeCommand,
+       DeferCommand, DiscardCommand, AdvanceNextDeferredClass,
+       ExecuteCommand, ExecuteRegularCommand, ExecuteDecisionFetch,
+       ExecuteSignProposal, ExecuteSignVote, ExecuteFormPrepareQC,
+       ExecuteSignTimeout, ExecutePersistInstall,
+       ExecutePersistDecision, ExecuteRequestCertifiedBody,
+       ExecuteApply, ExecuteCoreDelivery, ExecuteChunkDelivery,
+       ExecuteRejectAuthenticatedJunk,
+       PublishCertifiedRequests, CertifiedRequestOutbox,
+       CertifiedRecoveryFetchFrontier, LockedPrepareFetchFrontier,
+       AppendCausalSuccessors, FreshCommandSuccessors,
+       CommandSuccessors, FreshCandidateSequence,
+       CausalCandidate, AsyncCandidateFrom,
+       AsyncNonRunnerStep, AsyncNetworkStep, AdmitIngressPacket,
+       AdmitHiddenPacket, CoalesceHiddenPacket,
+       ServiceIoWorker, ServiceHistoricalRecoveryIoWorker,
+       EnqueueIoLocalControl, EnqueueHistoricalRecoveryIoLocalControl,
+       OpenHistoricalRecovery,
+       DirectCommitCertificateDiscoveryStep,
+       DirectHistoricalCommitCertificateDiscoveryStep,
+       CommitCertificateDiscoveryStepWork,
+       ResponsiveReplayQuarantined, ResponsiveReplayDraining,
+       RestartLockedCertifiedRequest,
+       RestartLockedBodyPipelineCandidate,
+       RestartLockedPrepareQCs, LockedPrepareRecoverySource,
+       ResponsiveReplayScheduledCandidates,
+       QueuedCandidates, DeferredCandidates, CausalCandidates,
+       TrackedWorkCandidates, CandidateScheduled,
+       CandidateConsumerCurrent, NodeHasApplication, RestartDecisions,
+       AsyncRecoveryTypeInvariant,
+       AsyncRecoveryExecutionInvariant, AsyncRecoveryVars,
+       SequenceSet, vars
+
 THEOREM AsyncNextPreservesRecoveryInvariants ==
   /\ StrongInductiveInvariant
   /\ AsyncTypeInvariant
@@ -749,6 +1786,9 @@ PROOF
                AsyncRecoveryVars, AsyncRunnerStep, AsyncNonRunnerStep,
                ResponsiveReplayScheduledCandidates,
                ResponsiveReplayQuarantined, ResponsiveReplayDraining,
+               RestartLockedCertifiedRequest,
+               RestartLockedBodyPipelineCandidate,
+               NodeHasApplication, RestartDecisions,
                StrongInductiveInvariant, Safety, TypeInvariant,
                ReducerProvenanceInvariant,
                PendingCertificateWritesAuthorized, vars
@@ -763,7 +1803,9 @@ PROOF
                ResumeProposal, ResumeVote, ResumeTimeout,
                RestartSignatureReplay,
                ResponsiveReplayScheduledCandidates,
-               CandidateConsumerCurrent, SequenceSet, vars
+               CandidateConsumerCurrent,
+               NodeHasApplication, RestartDecisions,
+               SequenceSet, vars
       <3>3. CASE /\ FinishResponsiveReplay
                    /\ UNCHANGED up
         BY <1>1, <3>3,
@@ -783,7 +1825,8 @@ PROOF
                AsyncRestartAuthorityInvariant, AsyncRecoveryPhases,
                AsyncRecoveryVars, ResponsiveReplayScheduledCandidates,
                NodeIdle, PendingNodes, SigningNodes,
-               CandidateConsumerCurrent, RestartSignatureReplay, vars
+               CandidateConsumerCurrent, RestartSignatureReplay,
+               NodeHasApplication, RestartDecisions, vars
     <2>3. CASE \E node \in ValidatorIds:
                   PreGstResponsiveCrash(node)
       <3>1. PICK node \in ValidatorIds:
@@ -809,6 +1852,7 @@ PROOF
     <2>5. CASE PreGstResponsiveReplay
       BY <1>1, <2>5, RestartSignatureReplayProperties,
          RestartReplayIsTypedOwnedAndUnique, TypedQueueTailFacts,
+         RestartReplayReplayingCandidateShape,
          SMTT(120), Isa
          DEF PreGstResponsiveReplay, RecoveryCoreReplay,
              ResetNodeSchedulerForRestart,
@@ -816,6 +1860,10 @@ PROOF
              AsyncRestartAuthorityInvariant, AsyncRecoveryPhases,
              AsyncRecoveryVars, ResumeProposal, ResumeVote, ResumeTimeout,
              RestartSignatureReplay, RestartReplay,
+             RestartLockedBodyReplay,
+             RestartLockedBodyPipelineCandidate,
+             RestartLockedCertifiedRequest, RestartLockedPrepareQCs,
+             RestartDecisions,
              ResponsiveReplayScheduledCandidates,
              QueuedCandidates, DeferredCandidates, CausalCandidates,
              TrackedWorkCandidates, CandidateConsumerCurrent,
@@ -946,19 +1994,21 @@ PROOF
                     source, recipient, qc, nonce)
       BY <2>5, Isa DEF InjectByzantineCertifiedRequest, vars
     <2>6. CASE \E signer \in ValidatorIds, roundView \in Views,
-                  subject \in Subjects, justifyRank \in Ranks,
-                  justifySubject \in SubjectOrNone:
+                  subject \in Subjects,
+                  timeoutCertificate \in TimeoutCertificateOptionSet,
+                  highestPrepare \in PrepareQcOptionSet:
                   AsyncByzantineProposal(
-                    signer, roundView, subject, justifyRank, justifySubject)
+                    signer, roundView, subject,
+                    timeoutCertificate, highestPrepare)
       BY <2>6, Isa DEF AsyncByzantineProposal
     <2>7. CASE \E signer \in ValidatorIds, roundView \in Views,
                   phase \in Phases, subject \in Subjects:
                   AsyncByzantineVote(signer, roundView, phase, subject)
       BY <2>7, Isa DEF AsyncByzantineVote
     <2>8. CASE \E signer \in ValidatorIds, roundView \in Views,
-                  highRank \in Ranks, highSubject \in SubjectOrNone:
+                  highestPrepare \in PrepareQcOptionSet:
                   AsyncByzantineTimeout(
-                    signer, roundView, highRank, highSubject)
+                    signer, roundView, highestPrepare)
       BY <2>8, Isa DEF AsyncByzantineTimeout
     <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>3c, <2>4, <2>5,
                 <2>6, <2>7, <2>8
@@ -989,7 +2039,7 @@ PROOF
       BY <2>5, Isa
          DEF DirectHistoricalCommitCertificateDiscoveryStep,
              CommitCertificateDiscoveryStepWork
-    <2>6. CASE \E node \in AsyncCurrentResponsiveVoters:
+    <2>6. CASE \E node \in AsyncArchiveIoServiceNodes:
                   ServiceIoWorker(node)
       BY <2>6, Isa DEF ServiceIoWorker, ServiceIoWorkerWork
     <2>7. CASE \E node \in asyncHistoricalRecoveryTargets:
@@ -1125,7 +2175,7 @@ BY SequenceSetAfterAppend, SMTT(30), Isa
        AsyncRecoveryTypeInvariant, AsyncCommandQueueOwnership,
        AsyncCausalQueueOwnership, IngressLane, SequenceSet, vars
 
-THEOREM ReplayingSerializedRuntimeDoesNotCreateRecoveryCandidate ==
+THEOREM ReplayingSerializedRuntimePreservesRecoveryCandidateFreshness ==
   \A node:
     /\ StrongInductiveInvariant
     /\ AsyncTypeInvariant
@@ -1133,9 +2183,8 @@ THEOREM ReplayingSerializedRuntimeDoesNotCreateRecoveryCandidate ==
     /\ AsyncRecoveryExecutionInvariant
     /\ asyncRecoveryPhase = "Replaying"
     /\ SerializedRuntimeStep(node)
-    => ResponsiveReplayScheduledCandidates(asyncRecoveryNode)'
-         \subseteq
-           ResponsiveReplayScheduledCandidates(asyncRecoveryNode)
+    => SequenceSet(asyncRecoveryReplayQueue)' \cap
+         ResponsiveReplayScheduledCandidates(asyncRecoveryNode)' = {}
 BY HeadTailProperties, SequenceSetAfterAppend, SMTT(45), Isa
    DEF SerializedRuntimeStep, RuntimeStep,
        DeferredDrainStep, FifoRuntimeStep,
@@ -1152,6 +2201,15 @@ BY HeadTailProperties, SequenceSetAfterAppend, SMTT(45), Isa
        ExecuteRejectAuthenticatedJunk,
        AppendCausalSuccessors, FreshCommandSuccessors,
        CommandSuccessors, FreshCandidateSequence,
+       CausalCandidate, AsyncCandidateFrom,
+       CertifiedRecoveryFetchFrontier, DecisionFetchFrontier,
+       LockedPrepareFetchFrontier,
+       PersistDecisionRecoverySuccessor,
+       PersistDecisionRecoveryKind, PersistDecisionValidationHeld,
+       PersistDecisionBody, PersistDecisionRequest,
+       PersistDecisionRequests,
+       InstallCommandSuccessors, InstallLockedFetchSuccessors,
+       InstallCommitSignSuccessors, InstallProposalSuccessor,
        ResponsiveReplayQuarantined,
        ResponsiveReplayScheduledCandidates,
        QueuedCandidates, DeferredCandidates, CausalCandidates,
@@ -1166,9 +2224,18 @@ BY HeadTailProperties, SequenceSetAfterAppend, SMTT(45), Isa
        AsyncDeferredTopologyTypeInvariant,
        AsyncDeferredContentTypeInvariant,
        AsyncRecoveryTypeInvariant, AsyncCommandQueueOwnership,
-       AsyncCausalQueueOwnership, SequenceSet, vars
+       AsyncCausalQueueOwnership,
+       RestartLockedBodyPipelineCandidate,
+       RestartLockedCertifiedRequest,
+       RestartSignatureReplay, RestartTimeoutOrProposalReplay,
+       RestartPrepareReplayIfActive, RestartLockedCommitReplayIfActive,
+       RestartTimeoutReplay, RestartProposalReplay,
+       RestartPrepareReplay, RestartLockedCommitReplay,
+       RestartCandidate, AsyncCandidateAtConsumer,
+       AsyncCandidateWithIdentity, CandidateConsumerCurrent,
+       SequenceSet, vars
 
-THEOREM ReplayingRunNodeWorkDoesNotCreateRecoveryCandidate ==
+THEOREM ReplayingRunNodeWorkPreservesRecoveryCandidateFreshness ==
   \A node:
     /\ StrongInductiveInvariant
     /\ AsyncTypeInvariant
@@ -1176,32 +2243,14 @@ THEOREM ReplayingRunNodeWorkDoesNotCreateRecoveryCandidate ==
     /\ AsyncRecoveryExecutionInvariant
     /\ asyncRecoveryPhase = "Replaying"
     /\ RunNodeWork(node)
-    => ResponsiveReplayScheduledCandidates(asyncRecoveryNode)'
-         \subseteq
-           ResponsiveReplayScheduledCandidates(asyncRecoveryNode)
-PROOF
-  <1>1. ASSUME NEW node,
-                StrongInductiveInvariant,
-                AsyncTypeInvariant,
-                AsyncRecoveryTypeInvariant,
-                AsyncRecoveryExecutionInvariant,
-                asyncRecoveryPhase = "Replaying",
-                RunNodeWork(node)
-         PROVE ResponsiveReplayScheduledCandidates(asyncRecoveryNode)'
-                 \subseteq
-                   ResponsiveReplayScheduledCandidates(
-                     asyncRecoveryNode)
-    <2>1. CASE LocalAdmissionStep(node)
-      BY <1>1, <2>1,
-         ReplayingLocalAdmissionDoesNotCreateRecoveryCandidate
-    <2>2. CASE IngressDrainStep(node)
-      BY <1>1, <2>2,
-         ReplayingIngressDrainDoesNotCreateRecoveryCandidate
-    <2>3. CASE SerializedRuntimeStep(node)
-      BY <1>1, <2>3,
-         ReplayingSerializedRuntimeDoesNotCreateRecoveryCandidate
-    <2> QED BY <1>1, <2>1, <2>2, <2>3 DEF RunNodeWork
-  <1> QED BY <1>1
+    => SequenceSet(asyncRecoveryReplayQueue)' \cap
+         ResponsiveReplayScheduledCandidates(asyncRecoveryNode)' = {}
+BY ReplayingLocalAdmissionDoesNotCreateRecoveryCandidate,
+   ReplayingIngressDrainDoesNotCreateRecoveryCandidate,
+   ReplayingSerializedRuntimePreservesRecoveryCandidateFreshness,
+   Isa
+   DEF RunNodeWork, AsyncRecoveryExecutionInvariant,
+       AsyncRecoveryVars, vars
 
 THEOREM AsyncRunnerStepPreservesReplayCandidateFreshness ==
   /\ StrongInductiveInvariant
@@ -1234,12 +2283,12 @@ PROOF
         BY <2>2
       <3>2. RunNodeWork(node)
         BY <3>1 DEF RunNode
-      <3>3. ResponsiveReplayScheduledCandidates(asyncRecoveryNode)'
-               \subseteq
-                 ResponsiveReplayScheduledCandidates(asyncRecoveryNode)
+      <3>3. SequenceSet(asyncRecoveryReplayQueue)' \cap
+               ResponsiveReplayScheduledCandidates(
+                 asyncRecoveryNode)' = {}
         BY <1>1, <3>2,
-           ReplayingRunNodeWorkDoesNotCreateRecoveryCandidate
-      <3> QED BY <2>1, <3>3, Isa DEF AsyncRecoveryVars
+           ReplayingRunNodeWorkPreservesRecoveryCandidateFreshness
+      <3> QED BY <3>3
     <2>3. CASE \E node \in asyncHistoricalRecoveryTargets:
                   RunHistoricalRecoveryNode(node)
       <3>1. PICK node \in asyncHistoricalRecoveryTargets:
@@ -1247,15 +2296,15 @@ PROOF
         BY <2>3
       <3>2. RunNodeWork(node)
         BY <3>1 DEF RunHistoricalRecoveryNode
-      <3>3. ResponsiveReplayScheduledCandidates(asyncRecoveryNode)'
-               \subseteq
-                 ResponsiveReplayScheduledCandidates(asyncRecoveryNode)
+      <3>3. SequenceSet(asyncRecoveryReplayQueue)' \cap
+               ResponsiveReplayScheduledCandidates(
+                 asyncRecoveryNode)' = {}
         BY <1>1, <3>2,
-           ReplayingRunNodeWorkDoesNotCreateRecoveryCandidate
-      <3> QED BY <2>1, <3>3, Isa DEF AsyncRecoveryVars
-    <2>4. CASE \E node \in AsyncCurrentResponsiveVoters:
+           ReplayingRunNodeWorkPreservesRecoveryCandidateFreshness
+      <3> QED BY <3>3
+    <2>4. CASE \E node \in AsyncResponsiveAppliedArchiveServers:
                   RunHistoricalServer(node)
-      <3>1. PICK node \in AsyncCurrentResponsiveVoters:
+      <3>1. PICK node \in AsyncResponsiveAppliedArchiveServers:
                RunHistoricalServer(node)
         BY <2>4
       <3>2. UNCHANGED AsyncRecoveryScheduledVars
@@ -1394,9 +2443,9 @@ PROOF
         BY <3>1 DEF RunHistoricalRecoveryNode
       <3> QED BY <1>1, <3>2,
            ReplayingRunNodeWorkPreservesRecoveryTags
-    <2>3. CASE \E node \in AsyncCurrentResponsiveVoters:
+    <2>3. CASE \E node \in AsyncResponsiveAppliedArchiveServers:
                   RunHistoricalServer(node)
-      <3>1. PICK node \in AsyncCurrentResponsiveVoters:
+      <3>1. PICK node \in AsyncResponsiveAppliedArchiveServers:
                RunHistoricalServer(node)
         BY <2>3
       <3>2. UNCHANGED asyncOutstandingTags
@@ -1556,6 +2605,56 @@ PROOF
          DEF AsyncRecoveryExecutionInvariant
   <1> QED BY <1>1
 
+THEOREM RestartSignatureTailIsFreshAgainstRestartReplay ==
+  \A node \in ValidatorIds:
+    /\ TypeInvariant
+    /\ Len(RestartSignatureReplay(node)) > 0
+    => SequenceSet(Tail(RestartSignatureReplay(node))) \cap
+         SequenceSet(RestartReplay(node)) = {}
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                TypeInvariant,
+                Len(RestartSignatureReplay(node)) > 0
+         PROVE SequenceSet(Tail(RestartSignatureReplay(node))) \cap
+                 SequenceSet(RestartReplay(node)) = {}
+    <2> DEFINE Signatures == RestartSignatureReplay(node)
+    <2> DEFINE Locked == RestartLockedBodyReplay(node)
+    <2>1. /\ AsyncQueueTyped(Signatures)
+           /\ SequenceHasUniqueValues(Signatures)
+      BY <1>1, RestartSignatureReplayProperties DEF Signatures
+    <2>2. /\ Signatures \in Seq(Range(Signatures))
+           /\ IsInjective(Signatures)
+           /\ Signatures # <<>>
+      BY <1>1, <2>1, UniqueSequenceLengthImpliesInjective,
+         PositiveSequenceIsNonempty
+         DEF AsyncQueueTyped, SequenceHasUniqueValues, Signatures
+    <2>3. /\ IsInjective(Tail(Signatures))
+           /\ Range(Tail(Signatures)) =
+                Range(Signatures) \ {Head(Signatures)}
+      BY <2>2, TailInjectiveSeq
+    <2>4. SequenceSet(Tail(Signatures)) =
+             SequenceSet(Signatures) \ {Head(Signatures)}
+      BY <2>2, <2>3, HeadTailProperties, SeqOfRange,
+         RangeEquality, Isa DEF SequenceSet
+    <2>5. SequenceSet(Tail(Signatures)) \cap
+             SequenceSet(Locked) = {}
+      BY <2>4, RestartLockedBodyAndSignatureReplayAreDisjoint, SMT
+         DEF Locked, Signatures
+    <2>6. Head(Signatures)
+             \notin SequenceSet(Tail(Signatures))
+      BY <2>4, Isa
+    <2>7. RestartReplay(node) =
+             Locked \o <<Head(Signatures)>>
+      BY <1>1, <2>2, Isa
+         DEF RestartReplay, RestartSignatureReplay, Signatures, Locked
+    <2>8. SequenceSet(RestartReplay(node)) =
+             SequenceSet(Locked) \cup {Head(Signatures)}
+      BY <2>1, <2>2, <2>7, RangeConcatenation, RangeEquality,
+         SingletonSequenceFacts, Isa
+         DEF AsyncQueueTyped, SequenceSet
+    <2> QED BY <2>5, <2>6, <2>8, Isa
+  <1> QED BY <1>1
+
 THEOREM PreGstResponsiveReplayEstablishesRecoveryExecutionInvariant ==
   /\ AsyncTypeInvariant
   /\ AsyncRecoveryTypeInvariant
@@ -1622,21 +2721,30 @@ PROOF
            DEF PreGstResponsiveReplay, Signatures,
                ResponsiveReplayScheduledCandidates, SequenceSet
       <3>3. CASE Len(Signatures) > 0
-        BY <1>1, <3>1, <3>3, Isa
-           DEF PreGstResponsiveReplay, ResetNodeSchedulerForRestart,
-               RestartReplay, RestartSignatureReplay,
-               ResponsiveReplayScheduledCandidates,
-               QueuedCandidates, DeferredCandidates, CausalCandidates,
-               TrackedWorkCandidates,
-               AsyncSchedulerTypeInvariant, AsyncRuntimeTypeInvariant,
-               AsyncRuntimeScalarTypeInvariant,
-               AsyncCommandQueueOwnership,
-               AsyncIoTypeInvariant, AsyncIoContentTypeInvariant,
-               AsyncIoWorkContentTypeInvariant,
-               AsyncDeferredTypeInvariant,
-               AsyncDeferredContentTypeInvariant,
-               AsyncCausalQueueOwnership,
-               SequenceHasUniqueValues, SequenceSet, Node, Signatures
+        <4>1. SequenceSet(Tail(Signatures)) \cap
+                 SequenceSet(RestartReplay(Node)) = {}
+          BY <3>1, <3>3,
+             RestartSignatureTailIsFreshAgainstRestartReplay
+             DEF Node, Signatures
+        <4>2. asyncRecoveryReplayQueue' = Tail(Signatures)
+          BY <1>1, <3>3
+             DEF PreGstResponsiveReplay, Node, Signatures
+        <4>3. ResponsiveReplayScheduledCandidates(Node)' =
+                 SequenceSet(RestartReplay(Node))
+          BY <1>1, <3>1, Isa
+             DEF PreGstResponsiveReplay, ResetNodeSchedulerForRestart,
+                 ResponsiveReplayScheduledCandidates,
+                 QueuedCandidates, DeferredCandidates, CausalCandidates,
+                 TrackedWorkCandidates,
+                 AsyncSchedulerTypeInvariant, AsyncRuntimeTypeInvariant,
+                 AsyncRuntimeScalarTypeInvariant,
+                 AsyncCommandQueueOwnership,
+                 AsyncIoTypeInvariant, AsyncIoContentTypeInvariant,
+                 AsyncIoWorkContentTypeInvariant,
+                 AsyncDeferredTypeInvariant,
+                 AsyncDeferredContentTypeInvariant,
+                 AsyncCausalQueueOwnership, SequenceSet, Node
+        <4> QED BY <2>6, <4>1, <4>2, <4>3
       <3>4. Len(Signatures) = 0 \/ Len(Signatures) > 0
         BY <3>1, SMT DEF AsyncQueueTyped
       <3> QED BY <3>2, <3>3, <3>4
@@ -1796,6 +2904,105 @@ PROOF
     <2> QED BY <2>2, <2>3
   <1> QED BY <1>1
 
+THEOREM AsyncNextPreservesGstRecoveryPhaseInvariant ==
+  /\ AsyncGstRecoveryPhaseInvariant
+  /\ AsyncNext
+  => AsyncGstRecoveryPhaseInvariant'
+BY SMTT(60), Isa
+   DEF AsyncGstRecoveryPhaseInvariant,
+       AsyncNext, AsyncNonCrashStep,
+       AsyncRunnerStep, AsyncNonRunnerStep,
+       AsyncSetGST, SetGST, AsyncTick,
+       OpenHistoricalRecovery,
+       DirectCommitCertificateDiscoveryStep,
+       DirectHistoricalCommitCertificateDiscoveryStep,
+       CommitCertificateDiscoveryStepWork,
+       ServiceIoWorker, ServiceHistoricalRecoveryIoWorker,
+       EnqueueIoLocalControl, EnqueueHistoricalRecoveryIoLocalControl,
+       AsyncNetworkStep, AsyncFaultStep,
+       DriveResponsiveReplayHead, FinishResponsiveReplay,
+       RearmResponsiveRecovery,
+       PreGstCrash, PreGstResponsiveCrash,
+       PreGstResponsiveRestart, PreGstResponsiveReplay,
+       Crash, Restart, RecoveryCoreReplay,
+       ResumeProposal, ResumeVote, ResumeTimeout,
+       AsyncRecoveryVars, vars
+
+THEOREM ResetNodeSchedulerPreservesClaimIngressOwnership ==
+  \A node \in ValidatorIds:
+  \A replay:
+    /\ AsyncTypeInvariant
+    /\ AsyncCertifiedResponseClaimIngressOwnershipInvariant
+    /\ ResetNodeSchedulerForRestart(node, replay)
+    => AsyncCertifiedResponseClaimIngressOwnershipInvariant'
+BY SMTT(120), IsaT(180)
+   DEF ResetNodeSchedulerForRestart,
+       AsyncCertifiedResponseClaimIngressOwnershipInvariant,
+       CertifiedResponseClaimIngressOwner,
+       CertifiedResponseClaimForRequests,
+       ActiveCertifiedRequestHashesIn,
+       CertifiedResponseClaimProjectionAuthenticated,
+       MatchingCertifiedRequests, FrozenCertifiedRequestRegistration,
+       FrozenCertifiedResponseBinding,
+       AsyncCertifiedResponseCanonicalWireIdentity,
+       AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+       AsyncIngressTypeInvariant, AsyncIngressTopologyTypeInvariant,
+       AsyncIngressContentTypeInvariant,
+       IngressLane, IngressLaneDepth, SequenceSet
+
+THEOREM PreGstResponsiveReplayPreservesClaimIngressOwnership ==
+  /\ AsyncTypeInvariant
+  /\ AsyncCertifiedResponseClaimIngressOwnershipInvariant
+  /\ PreGstResponsiveReplay
+    => AsyncCertifiedResponseClaimIngressOwnershipInvariant'
+BY ResetNodeSchedulerPreservesClaimIngressOwnership, Isa
+   DEF PreGstResponsiveReplay, RecoveryCoreReplay
+
+THEOREM AsyncNextPreservesCertifiedResponseClaimIngressOwnershipInvariant ==
+  /\ AsyncTypeInvariant
+  /\ AsyncCertifiedResponseClaimIngressOwnershipInvariant
+  /\ AsyncNext
+  => AsyncCertifiedResponseClaimIngressOwnershipInvariant'
+PROOF
+  <1>1. ASSUME AsyncTypeInvariant,
+              AsyncCertifiedResponseClaimIngressOwnershipInvariant,
+              AsyncNext
+         PROVE AsyncCertifiedResponseClaimIngressOwnershipInvariant'
+    <2>1. CASE AsyncNonCrashStep
+      <3>1. CASE AsyncRunnerStep
+        BY <1>1, <3>1,
+           AsyncRunnerStepPreservesClaimIngressOwnership
+      <3>2. CASE AsyncNonRunnerStep
+        BY <1>1, <3>2,
+           AsyncNonRunnerStepPreservesClaimIngressOwnership
+      <3>3. CASE ~(AsyncRunnerStep \/ AsyncNonRunnerStep)
+        BY <1>1, <2>1, <3>3,
+           CertifiedResponseClaimIngressOwnershipStutter, Isa
+           DEF AsyncNonCrashStep, DriveResponsiveReplayHead,
+               FinishResponsiveReplay, RearmResponsiveRecovery,
+               AsyncSchedulerVars
+      <3> QED BY <2>1, <3>1, <3>2, <3>3
+           DEF AsyncNonCrashStep
+    <2>2. CASE \E node \in ValidatorIds: PreGstCrash(node)
+      BY <1>1, <2>2,
+         CertifiedResponseClaimIngressOwnershipStutter, Isa
+         DEF PreGstCrash, AsyncSchedulerVars
+    <2>3. CASE \E node \in ValidatorIds:
+                    PreGstResponsiveCrash(node)
+      BY <1>1, <2>3,
+         CertifiedResponseClaimIngressOwnershipStutter, Isa
+         DEF PreGstResponsiveCrash, AsyncSchedulerVars
+    <2>4. CASE PreGstResponsiveRestart
+      BY <1>1, <2>4,
+         CertifiedResponseClaimIngressOwnershipStutter, Isa
+         DEF PreGstResponsiveRestart, AsyncSchedulerVars
+    <2>5. CASE PreGstResponsiveReplay
+      BY <2>5,
+         PreGstResponsiveReplayPreservesClaimIngressOwnership
+    <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, <2>5
+         DEF AsyncNext
+  <1> QED BY <1>1
+
 THEOREM AsyncNextPreservesStrongTypeInvariant ==
   AsyncStrongTypeInvariant /\ AsyncNext
     => AsyncStrongTypeInvariant'
@@ -1816,6 +3023,12 @@ PROOF
     <2>2d. /\ AsyncHistoricalLockRestartAuthorityTypeInvariant
             /\ HistoricalLockRestartAuthoritySourceRetentionInvariant
       BY <1>1 DEF AsyncStrongTypeInvariant
+    <2>2e. AsyncGstRecoveryPhaseInvariant
+      BY <1>1 DEF AsyncStrongTypeInvariant
+    <2>2f. AsyncSerializedBusyKernelInvariant
+      BY <1>1 DEF AsyncStrongTypeInvariant
+    <2>2g. AsyncCertifiedResponseClaimIngressOwnershipInvariant
+      BY <1>1 DEF AsyncStrongTypeInvariant
     <2>3. StrongInductiveInvariant'
       BY <1>1, <2>1, AsyncNextPreservesStrongInductiveInvariant
     <2>4. AsyncSchedulerTypeInvariant'
@@ -1834,7 +3047,17 @@ PROOF
            /\ HistoricalLockRestartAuthoritySourceRetentionInvariant'
       BY <1>1, <2>1, <2>2d,
          AsyncNextPreservesHistoricalLockRestartAuthorityInvariants
-    <2> QED BY <2>3, <2>4, <2>5, <2>6, <2>7, <2>8
+    <2>9. AsyncSerializedBusyKernelInvariant'
+      BY <1>1, <2>1, <2>2f,
+         AsyncNextPreservesSerializedBusyKernelInvariant
+    <2>10. AsyncGstRecoveryPhaseInvariant'
+      BY <1>1, <2>2e,
+         AsyncNextPreservesGstRecoveryPhaseInvariant
+    <2>11. AsyncCertifiedResponseClaimIngressOwnershipInvariant'
+      BY <1>1, <2>2, <2>2g,
+         AsyncNextPreservesCertifiedResponseClaimIngressOwnershipInvariant
+    <2> QED BY <2>3, <2>4, <2>5, <2>6, <2>7, <2>8, <2>9, <2>10,
+                <2>11
          DEF AsyncStrongTypeInvariant
   <1> QED BY <1>1
 
@@ -1951,8 +3174,33 @@ THEOREM ValidationSchedulesPrepareAndLockedCommitAttempts ==
     command.kind = "ValidateBody"
       => CommandSuccessors(command) =
            <<CausalCandidate("Normal", "BeginPrepare", command),
-             CausalCandidate("Progress", "BeginLockCommit", command),
+             CausalCandidate("Completion", "BeginLockCommit", command),
              CausalCandidate("Completion", "Apply", command)>>
+BY DEF CommandSuccessors
+
+(***************************************************************************
+The production adapter classifies `ValidationCompleted` as Completion, and
+the reducer calls `persist_commit_intent` inside that event.  PrepareQC
+processing likewise calls the same persistence routine directly when the
+body is already validated.  The split Core commands therefore keep every
+internal BeginLockCommit continuation in the Completion lane; treating one
+as independent Progress could defer the exact persistence completion behind
+an unrelated Progress-capacity fence.
+***************************************************************************)
+THEOREM PrepareQcDeliverySchedulesCompletionLockedCommitAttempt ==
+  \A command:
+    /\ command.kind = "DeliverQC"
+    /\ command.item.envelope.qc.phase = "Prepare"
+    => CommandSuccessors(command) =
+         <<CausalCandidate("Progress", "BeginObservePrepare", command),
+           CausalCandidate("Completion", "BeginLockCommit", command)>>
+BY DEF CommandSuccessors
+
+THEOREM PersistedPrepareObservationSchedulesCompletionLockedCommitAttempt ==
+  \A command:
+    command.kind = "PersistObservePrepare"
+      => CommandSuccessors(command) =
+           <<CausalCandidate("Completion", "BeginLockCommit", command)>>
 BY DEF CommandSuccessors
 
 THEOREM ReadyRetainedBodyRebindEnablesExecution ==
@@ -2215,17 +3463,102 @@ THEOREM HistoricalLockedCommitUsesProgressReserve ==
 BY DEF DeliveryClass
 
 (***************************************************************************
-The imported historical-lock witness begins only after the exact locked body
-has been durably validated.  Keep the earlier certified-body pipeline visible
-as a separate, source-neutral obligation.  A scheduled occurrence counts only
-for the current consumer epoch.  An outstanding request is keyed by canonical
-height/view/subject identity and retains its authenticated certificate
-authority; it is deliberately not tied to one arbitrarily chosen PrepareQC
-signer-set encoding.  This matters because two valid PrepareQC records may
-have the same semantic lock while naming different signer sets.  Responsive
-crash recovery additionally carries the exact generation-free semantic
-projection of the already-durable lock until post-replay retransmit
-materializes the current-generation FetchBody owner.
+Executing a scheduled historical BeginLockCommit may select a different
+valid Prepare QcRecord than the candidate's concrete evidence when both
+records have the same production CertificateRef.  The action persists the
+selected exact record, while progress ownership transfers by the stable
+Prepare reference.  StrongInductiveInvariant supplies the redundant
+`height = context.height` fact for both authenticated QCs; coordinate matching
+alone would not establish the full reference over the broad QcRecord carrier.
+***************************************************************************)
+THEOREM HistoricalBeginLockExecutionCreatesSameRefPending ==
+  \A node \in ValidatorIds, sourceQc \in QcRecordSet,
+     command \in AsyncCandidateSet:
+    /\ StrongInductiveInvariant
+    /\ HistoricalLockedPrepareForCommit(node, sourceQc)
+    /\ HistoricalBeginLockRecoveryCandidate(node, sourceQc, command)
+    /\ ExecuteCommand(command)
+    => \E request \in pendingLockCommit':
+         /\ request.node = node
+         /\ SamePrepareRecoveryRef(request.qc, sourceQc)
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                NEW sourceQc \in QcRecordSet,
+                NEW command \in AsyncCandidateSet,
+                StrongInductiveInvariant,
+                HistoricalLockedPrepareForCommit(node, sourceQc),
+                HistoricalBeginLockRecoveryCandidate(
+                  node, sourceQc, command),
+                ExecuteCommand(command)
+         PROVE \E request \in pendingLockCommit':
+                 /\ request.node = node
+                 /\ SamePrepareRecoveryRef(request.qc, sourceQc)
+    <2>1. PICK selectedQc \in LockCommitQcValues:
+             /\ CommandMatches(command, command.node,
+                               selectedQc.view, selectedQc.subject)
+             /\ BeginLockCommit(command.node, selectedQc)
+      BY <1>1, IsaT(60)
+         DEF HistoricalBeginLockRecoveryCandidate,
+             ExecuteCommand, ExecuteRegularCommand, RegularCoreCommand
+    <2>2. /\ command.node = node
+           /\ command.view = sourceQc.view
+           /\ command.subject = sourceQc.subject
+      BY <1>1 DEF HistoricalBeginLockRecoveryCandidate
+    <2>3. /\ selectedQc.context = context
+           /\ selectedQc.phase = "Prepare"
+           /\ pendingLockCommit' =
+                pendingLockCommit
+                  \cup {LockCommitWal(
+                          command.node, selectedQc,
+                          Vote(context, selectedQc.view, "Commit",
+                               selectedQc.subject, command.node))}
+      BY <2>1 DEF BeginLockCommit
+    <2>4. selectedQc \in prepareQCs
+      BY <1>1, <2>1, IsaT(90)
+         DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
+             LineageInvariant, QcTransportBacked,
+             CertificatePhasesCorrect, LockCommitQcValues,
+             ReceivedQcValues, CurrentOpenPrepareForCommit,
+             HistoricalLockedPrepareForCommit,
+             HistoricalLockedPrepareSource, LockedPrepareRecoverySource,
+             BeginLockCommit
+    <2>5. /\ sourceQc.context = context
+           /\ sourceQc \in prepareQCs
+           /\ sourceQc.height = sourceQc.context.height
+           /\ selectedQc.height = selectedQc.context.height
+           /\ selectedQc \in QcRecordSet
+      BY <1>1, <2>4, IsaT(90)
+         DEF StrongInductiveInvariant, Safety, TypeInvariant,
+             ReducerProvenanceInvariant, CertificatesBackedByIntents,
+             HistoricalQcValid, HistoricalLockedPrepareForCommit,
+             HistoricalLockedPrepareSource, LockedPrepareRecoverySource
+    <2>6. SamePrepareRecoveryRef(selectedQc, sourceQc)
+      BY <1>1, <2>1, <2>2, <2>3, <2>5, SMT
+         DEF CommandMatches, SamePrepareRecoveryRef,
+             SameCertificateRef, CertificateRefOf
+    <2> DEFINE SelectedVote ==
+           Vote(context, selectedQc.view, "Commit",
+                selectedQc.subject, command.node)
+    <2> DEFINE SelectedRequest ==
+           LockCommitWal(command.node, selectedQc, SelectedVote)
+    <2>7. /\ SelectedRequest \in pendingLockCommit'
+           /\ SelectedRequest.node = node
+           /\ SamePrepareRecoveryRef(SelectedRequest.qc, sourceQc)
+      BY <2>2, <2>3, <2>6, Isa
+         DEF SelectedRequest, SelectedVote, LockCommitWal
+    <2> QED BY <2>7
+  <1> QED BY <1>1
+
+(***************************************************************************
+The imported historical-lock witness begins only after the locked body has
+been durably validated.  Keep the earlier certified-body pipeline visible as
+a separate, source-neutral obligation.  A scheduled occurrence counts only
+for the current consumer epoch; an outstanding request retains one concrete
+QcRecord and is matched to the source by its full stable Prepare reference.
+Exact wire authentication and exact WAL bytes remain cross-tool obligations;
+the reference quotient itself is explicit above.  This invariant is specified
+below but intentionally not added to the proved progress bundle: preservation
+across every fetch/serve/ingress/store/validate transition remains proof debt.
 ***************************************************************************)
 
 HistoricalLockedSemanticPrepareAuthority(node, qc, authorityQc) ==
@@ -2278,6 +3611,13 @@ HistoricalLockedBodyPipelineCandidate(node, qc, candidate) ==
        [] OTHER -> TRUE
   /\ CandidateConsumerCurrent(candidate)
   /\ CandidateScheduled(candidate)
+
+HistoricalLockedBodyRecoveryAuthority(node, qc) ==
+  /\ asyncRecoveryPhase
+       \in {"RestartRequired", "ReplayRequired", "Replaying"}
+  /\ asyncRecoveryNode = node
+  /\ generation[node] = asyncRecoveryGeneration
+  /\ HistoricalLockedPrepareSource(node, qc)
 
 HistoricalLockedCertifiedRequestActive(node, qc) ==
   \E request \in asyncActiveRequests:
@@ -2348,6 +3688,7 @@ HistoricalLockedBodyRecoveryTerminal(node, qc) ==
 HistoricalLockedBodyRecoveryStage(node, qc) ==
   \/ HistoricalLockedBodyRecoveryTerminal(node, qc)
   \/ HistoricalLockedCommitRecoveryWitness(node, qc)
+  \/ HistoricalLockedBodyRecoveryAuthority(node, qc)
   \/ HistoricalLockedCertifiedRequestActive(node, qc)
   \/ HistoricalLockedBodyRestartAuthority(node, qc)
   \/ HistoricalLockedBodyFetchOwned(node, qc)
@@ -2621,7 +3962,7 @@ THEOREM HistoricalLockedServeExecutionPublishesResponse ==
     /\ HistoricalLockedCertifiedRequestActive(node, qc)
     /\ HistoricalLockedBodyServeHeadOwned(server, node, qc)
     /\ CertifiedServeCanRespond(
-         Head(asyncIoQueues[server]).candidate.item)
+         server, Head(asyncIoQueues[server]).candidate.item)
     /\ [AsyncNext]_AsyncAllVars
     /\ ServiceIoWorkerWork(server)
     => /\ HistoricalLockedCertifiedRequestActive(node, qc)'
@@ -2871,184 +4212,16 @@ PROOF
     <2> QED BY <2>2
          DEF HistoricalLockedBodyRecoveryStageInvariant
   <1> QED BY <1>1
-
-THEOREM VoteDeliveryConsumesCurrentPoolEpoch ==
-  \A envelope:
-    DeliverVote(envelope)
-      => /\ VoteAt(envelope.recipient, envelope.vote)
-               \notin receivedVotes
-         /\ VoteAt(envelope.recipient, envelope.vote)
-               \in receivedVotes'
-BY SMT DEF DeliverVote
-
-THEOREM VoteDeliveryRetainsAuthenticatedHistory ==
-  \A envelope:
-    DeliverVote(envelope) => voteNetwork' = voteNetwork
-BY DEF DeliverVote
-
-THEOREM ReceivedVoteSuppressesSameEpochRedelivery ==
-  \A envelope:
-    VoteAt(envelope.recipient, envelope.vote) \in receivedVotes
-      => ~DeliverVote(envelope)
-BY SMT DEF DeliverVote
-
-THEOREM CompletedVoteSignatureReconstructsLocalPool ==
-  \A request:
-    CompleteVoteSignature(request)
-      => VoteAt(request.node, request.vote) \in receivedVotes'
-BY SMT DEF CompleteVoteSignature
-
-THEOREM CompletedVoteSignatureExcludesLocalNetworkDelivery ==
-  \A request:
-    CompleteVoteSignature(request)
-      => \A envelope \in BroadcastVotes(request.vote):
-           envelope.recipient # request.node
-BY SMT DEF CompleteVoteSignature, BroadcastVotes, VoteEnvelope
-
-THEOREM InstallClearsLocalVolatileVotePool ==
-  \A request:
-    PersistInstallTC(request)
-      => \A received \in receivedVotes':
-           received.node # request.node
-BY SMT DEF PersistInstallTC
-
-THEOREM InstallPreservesOtherNodesVotePools ==
-  \A request, received:
-    (PersistInstallTC(request)
-      /\ received \in receivedVotes
-      /\ received.node # request.node)
-      => received \in receivedVotes'
-BY SMT DEF PersistInstallTC
-
-THEOREM InstallOpensFreshVoteDeliveryPool ==
-  \A request:
-    PersistInstallTC(request)
-      => \A envelope \in VoteEnvelopeSet:
-           envelope.recipient = request.node
-             => VoteAt(envelope.recipient, envelope.vote)
-                  \notin receivedVotes'
-BY SMT DEF PersistInstallTC, VoteAt
-
-THEOREM InstallQueuesExactActiveLockedCommitForResigning ==
-  \A request:
-    PersistInstallTC(request)
-      => ActiveLockedCommitSignRequestsAfterInstall(
-           request.node, request.tc) \subseteq signVotes'
-BY SMT DEF PersistInstallTC
-
-THEOREM HonestVoteOutboxExcludesSigner ==
-  \A request:
-    \A item \in VoteOutbox(request):
-      item.envelope.recipient # request.node
-BY SMT DEF VoteOutbox, AsyncNetworkItem, VoteEnvelope
-
-THEOREM InstallSchedulesAuthorizedCommitResignBeforeProposal ==
-  \A command:
-    /\ command.kind = "PersistInstallTC"
-    /\ InstallCommitSignRequests(command) # {}
-    => /\ IF InstallResultingLockedPrepareQCs(command) = {}
-          THEN CommandSuccessors(command) =
-                 <<InstallCommitSignSuccessor(command),
-                   InstallProposalSuccessor(command)>>
-          ELSE CommandSuccessors(command) =
-                 <<InstallLockedFetchSuccessor(command),
-                   InstallCommitSignSuccessor(command),
-                   InstallProposalSuccessor(command)>>
-       /\ InstallCommitSignSuccessor(command).kind = "SignVote"
-       /\ InstallCommitSignSuccessor(command).class = "Completion"
-BY Isa DEF CommandSuccessors, InstallCommandSuccessors,
-           InstallLockedFetchSuccessors, InstallCommitSignSuccessors,
-           InstallCommitSignSuccessor,
-           AsyncCandidateAtConsumer, AsyncCandidateWithIdentity,
-           NoItemCandidate, AsyncCandidate
-
-THEOREM InstallAdvancesDeliveryGenerationBeforeSaturation ==
-  \A request:
-    (PersistInstallTC(request)
-      /\ generation[request.node] < MaxGeneration)
-      => generation'[request.node] = generation[request.node] + 1
-BY Isa DEF PersistInstallTC
-
-THEOREM PersistLockCommitPrunesSupersededVotePools ==
-  \A request:
-    PersistLockCommit(request)
-      => \A received \in receivedVotes':
-           VoteReceiptSurvivesLockCommit(
-             received, request.node, request.qc.view,
-             request.qc.subject)
-BY SMT DEF PersistLockCommit, VoteReceiptSurvivesLockCommit
-
-THEOREM PersistLockCommitPreservesSurvivingVotePools ==
-  \A request, received:
-    (/\ PersistLockCommit(request)
-     /\ received \in receivedVotes
-     /\ VoteReceiptSurvivesLockCommit(
-          received, request.node, request.qc.view,
-          request.qc.subject))
-      => received \in receivedVotes'
-BY SMT DEF PersistLockCommit, VoteReceiptSurvivesLockCommit
-
-THEOREM PersistLockCommitPreservesOtherNodesVotePools ==
-  \A request, received:
-    (PersistLockCommit(request)
-      /\ received \in receivedVotes
-      /\ received.node # request.node)
-      => received \in receivedVotes'
-BY SMT DEF PersistLockCommit, VoteReceiptSurvivesLockCommit
-
-THEOREM PersistLockCommitPreservesCurrentViewVotePools ==
-  \A request, received:
-    (PersistLockCommit(request)
-      /\ received \in receivedVotes
-      /\ received.node = request.node
-      /\ received.vote.view = nodeView[request.node])
-      => received \in receivedVotes'
-BY SMT DEF PersistLockCommit, VoteReceiptSurvivesLockCommit
-
-THEOREM PersistLockCommitPreservesExactLockedCommitPool ==
-  \A request, received:
-    (PersistLockCommit(request)
-      /\ received \in receivedVotes
-      /\ received.node = request.node
-      /\ received.vote.phase = "Commit"
-      /\ received.vote.view = request.qc.view
-      /\ received.vote.subject = request.qc.subject)
-      => received \in receivedVotes'
-BY SMT DEF PersistLockCommit, VoteReceiptSurvivesLockCommit
-
-THEOREM DeliveredVoteRebuildsItsRoundPool ==
-  \A envelope:
-    DeliverVote(envelope)
-      => VoteAt(envelope.recipient, envelope.vote) \in receivedVotes'
-BY SMT DEF DeliverVote
-
-THEOREM VoteDeliveryEpochActionIsSemantic ==
-  VoteDeliveryEpochAction
-BY PrepareVoteAdmissionIsCurrentView,
-   CommitVoteAdmissionIsExactLockedCommit,
-   CommitFormationIsExactLockedRound,
-   VoteDeliveryConsumesCurrentPoolEpoch,
-   VoteDeliveryRetainsAuthenticatedHistory,
-   CompletedVoteSignatureReconstructsLocalPool,
-   CompletedVoteSignatureExcludesLocalNetworkDelivery,
-   InstallClearsLocalVolatileVotePool,
-   InstallQueuesExactActiveLockedCommitForResigning,
-   InstallAdvancesDeliveryGenerationBeforeSaturation,
-   PersistLockCommitPrunesSupersededVotePools,
-   PersistLockCommitPreservesSurvivingVotePools
-   DEF VoteDeliveryEpochAction
-
-THEOREM AsyncStepHasVoteDeliveryEpochSemantics ==
-  [AsyncNext]_AsyncAllVars
-    => [VoteDeliveryEpochAction]_AsyncAllVars
-BY VoteDeliveryEpochActionIsSemantic
-
-THEOREM RetainedCommitVoteIsRetryable ==
-  \A node, item:
-    (item \in asyncRetainedControl
-      /\ item.source = node
-      /\ item.kind = "CommitVote")
-      => item \in RetryableItems(node)
-BY DEF RetryableItems, RetainedControlEmissionItems, SendableItems
+THEOREM HistoricalHigherConflictValidationIsTerminal ==
+  \A node \in AsyncCurrentResponsiveVoters, qc \in prepareQCs:
+    /\ HistoricalLockedPrepareSource(node, qc)
+    /\ BodyHeldBy(durableBodies, node, context, qc.view, qc.subject)
+    /\ BodyValidatedBy(validatedBodies, node, context, qc.view,
+                       generation[node], qc.subject)
+    /\ ~NoHigherConflictingPrepareKnown(node, qc)
+      => /\ HistoricalLockedBodyRecoveryTerminal(node, qc)
+         /\ HistoricalLockedBodyRecoveryStage(node, qc)
+BY DEF HistoricalLockedBodyRecoveryTerminal,
+       HistoricalLockedBodyRecoveryStage
 
 =============================================================================

@@ -3,8 +3,10 @@
 //! Global blocks carry only a compact [`CertifiedMergeLedgerReference`].  A
 //! validator that does not yet have the referenced full entry asks one of the
 //! exact merge-QC signers for it.  Transfer sessions are deliberately
-//! in-memory: only a completely reassembled, canonical, reference-matching
-//! entry may be handed to Kura's atomic pending-sidecar store.
+//! byte-ephemeral: semantic stream floors, cursors, and pending identities are
+//! crash-safe, while incomplete payload bytes remain in memory. Only a
+//! completely reassembled, canonical, reference-matching entry may be handed
+//! to Kura's atomic pending-sidecar store.
 
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
@@ -13,12 +15,12 @@ use std::{
     num::{NonZeroU64, NonZeroUsize},
     path::{Path, PathBuf},
     sync::Arc,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
-    block::{BlockHeader, CertifiedMergeLedgerReference},
+    block::{BlockHeader, CertifiedMergeLedgerReference, consensus_v2::MAX_VALIDATORS_PER_HEIGHT},
     consensus::VALIDATOR_SET_HASH_VERSION_V1,
     merge::{MAX_MERGE_LEDGER_ENTRY_BYTES, MergeLedgerEntry},
     peer::PeerId,
@@ -63,13 +65,40 @@ pub const MAX_CERTIFIED_MERGE_CHUNK_BYTES: usize = 64 * 1024;
 pub const MAX_CERTIFIED_MERGE_CHUNKS: usize =
     MAX_MERGE_LEDGER_ENTRY_BYTES.div_ceil(MAX_CERTIFIED_MERGE_CHUNK_BYTES);
 
+/// Durable requester-issued incarnation of one semantic request stream.
+///
+/// Epochs are globally monotonic at one requester and are never reused, even
+/// across crashes or height rollover. Sequence and cumulative-close values are
+/// meaningful only inside the exact `(requester, responder, stream_epoch)`
+/// tuple.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
+#[repr(transparent)]
+pub struct CertifiedMergeSidecarStreamEpochV1(pub NonZeroU64);
+
+impl CertifiedMergeSidecarStreamEpochV1 {
+    /// Return the non-zero wire value.
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0.get()
+    }
+}
+
 const REFERENCE_DIGEST_DOMAIN: &[u8] = b"iroha:merge:sidecar-reference:v1\0";
 const REQUEST_ID_DOMAIN: &[u8] = b"iroha:merge:sidecar-request:v1\0";
+const CLOSE_ID_DOMAIN: &[u8] = b"iroha:merge:sidecar-close:v1\0";
 const SIGNING_CONTEXT_DOMAIN: &[u8] = b"iroha:merge:signing-context:v2\0";
 
 const RESERVED_DECIDED_INBOUND_SESSIONS: usize = 1;
 const RESERVED_DECIDED_INBOUND_BYTES: usize = MAX_MERGE_LEDGER_ENTRY_BYTES;
 const RESERVED_DECIDED_DEFERRED_BLOCKS: usize = 1;
+/// Semantic request streams are validator-scoped, not connection-scoped.
+///
+/// A bounded relay topology can reach more validators over time than it owns
+/// concurrent authenticated reply sources. Retaining one non-regressing
+/// sequence stream per protocol-sized height roster prevents Byzantine
+/// holders from exhausting the connection bound before an honest holder is
+/// selected.
+const MAX_CERTIFIED_MERGE_SEMANTIC_PEERS: usize = MAX_VALIDATORS_PER_HEIGHT;
 
 #[cfg(test)]
 const DEFAULT_REPLY_SOURCE_CAPACITY: usize = 8;
@@ -90,6 +119,14 @@ const SIGNING_GUARD_RECORD_EXT: &str = "norito";
 const SIGNING_GUARD_TEMP_EXT: &str = "norito.tmp";
 const SIGNING_GUARD_HIGH_WATER_FILE: &str = "committed-high-water.norito";
 const SIGNING_GUARD_HIGH_WATER_TEMP: &str = "committed-high-water.norito.tmp";
+const LIFECYCLE_JOURNAL_VERSION_V2: u8 = 2;
+const LIFECYCLE_JOURNAL_DIR: &str = "sumeragi_v2_merge_sidecar_lifecycle_v2";
+const LEGACY_LIFECYCLE_JOURNAL_DIRS: &[&str] = &["sumeragi_v2_merge_sidecar_lifecycle_v1"];
+const LIFECYCLE_JOURNAL_FILE: &str = "state.norito";
+const LIFECYCLE_JOURNAL_TEMP: &str = "state.norito.tmp";
+const LIFECYCLE_JOURNAL_BASE_BYTES: usize = 64 * 1024;
+const LIFECYCLE_JOURNAL_GATE_BYTES: usize = 16 * 1024;
+const LIFECYCLE_JOURNAL_STREAM_BYTES: usize = 2 * 1024;
 #[cfg(test)]
 const MAX_INBOUND_SESSIONS: usize =
     iroha_config::parameters::defaults::sumeragi::V2_MERGE_SIDECAR_INBOUND_SESSION_CAPACITY.get();
@@ -110,9 +147,6 @@ const MAX_SERVER_REQUEST_GATES_PER_SOURCE: usize =
 #[cfg(test)]
 const REQUEST_TIMEOUT: Duration =
     iroha_config::parameters::defaults::sumeragi::V2_MERGE_SIDECAR_REQUEST_TIMEOUT;
-#[cfg(test)]
-const SERVER_REQUEST_GATE_TTL: Duration =
-    iroha_config::parameters::defaults::sumeragi::V2_MERGE_SIDECAR_SERVER_REQUEST_GATE_TTL;
 #[cfg(test)]
 const MAX_SIGNING_GUARD_RECORDS: usize =
     iroha_config::parameters::defaults::sumeragi::V2_MERGE_SIGNING_GUARD_RECORD_CAPACITY.get();
@@ -136,7 +170,6 @@ pub(crate) struct MergeSidecarLimits {
     outbound_sessions_per_source: usize,
     outbound_bytes_per_source: usize,
     server_request_gates_per_source: usize,
-    server_request_gate_ttl: Duration,
 }
 
 impl MergeSidecarLimits {
@@ -154,7 +187,6 @@ impl MergeSidecarLimits {
         outbound_sessions_per_source: NonZeroUsize,
         outbound_bytes_per_source: NonZeroUsize,
         server_request_gates_per_source: NonZeroUsize,
-        server_request_gate_ttl: Duration,
     ) -> Result<Self, MergeSidecarError> {
         let inbound_session_capacity = inbound_session_capacity.get();
         let inbound_sessions_per_peer = inbound_sessions_per_peer.get();
@@ -180,7 +212,6 @@ impl MergeSidecarLimits {
             || outbound_bytes_per_source < MAX_MERGE_LEDGER_ENTRY_BYTES
             || server_request_gates_per_source < outbound_sessions_per_source
             || request_timeout.is_zero()
-            || server_request_gate_ttl < request_timeout
         {
             return Err(MergeSidecarError::Capacity(
                 "invalid merge-sidecar runtime geometry",
@@ -197,7 +228,6 @@ impl MergeSidecarLimits {
             outbound_sessions_per_source,
             outbound_bytes_per_source,
             server_request_gates_per_source,
-            server_request_gate_ttl,
         })
     }
 
@@ -216,7 +246,6 @@ impl MergeSidecarLimits {
             defaults::V2_MERGE_SIDECAR_OUTBOUND_SESSIONS_PER_SOURCE,
             defaults::V2_MERGE_SIDECAR_OUTBOUND_BYTES_PER_SOURCE,
             defaults::V2_MERGE_SIDECAR_SERVER_REQUEST_GATES_PER_SOURCE,
-            defaults::V2_MERGE_SIDECAR_SERVER_REQUEST_GATE_TTL,
         )
         .expect("default merge-sidecar limits are valid")
     }
@@ -288,7 +317,14 @@ fn retry_timeout(base: Duration, attempts: u32) -> Duration {
 pub struct CertifiedMergeSidecarRequestV1 {
     /// Protocol version; must equal [`CERTIFIED_MERGE_SIDECAR_VERSION_V1`].
     pub version: u8,
-    /// Request nonce generated by the requester.
+    /// Durable incarnation of the requester-to-responder semantic stream.
+    pub stream_epoch: CertifiedMergeSidecarStreamEpochV1,
+    /// Monotonic semantic sequence in the requester-to-responder stream.
+    pub semantic_sequence: u64,
+    /// Cumulative authenticated close floor for the same semantic stream.
+    pub closed_through: u64,
+    /// Canonical identity of the immutable semantic payload. Stream sequence
+    /// and cumulative close metadata are deliberately excluded.
     pub request_id: Hash,
     /// Canonical hash of the requested full entry.
     pub entry_hash: HashOf<MergeLedgerEntry>,
@@ -304,12 +340,116 @@ pub struct CertifiedMergeSidecarRequestV1 {
     pub responder: PeerId,
 }
 
+impl CertifiedMergeSidecarRequestV1 {
+    /// Derive the canonical identity of this immutable semantic projection.
+    #[must_use]
+    pub fn canonical_request_id(&self) -> Hash {
+        let version = [self.version];
+        let stream_epoch = self.stream_epoch.get().to_le_bytes();
+        let encoded_len = self.encoded_len.to_le_bytes();
+        let epoch_id = self.epoch_id.to_le_bytes();
+        let requester = self.requester.encode();
+        let responder = self.responder.encode();
+        Hash::new_from_chunks(&[
+            REQUEST_ID_DOMAIN,
+            &version,
+            &stream_epoch,
+            self.entry_hash.as_ref().as_ref(),
+            &encoded_len,
+            &epoch_id,
+            self.reference_digest.as_ref(),
+            requester.as_slice(),
+            responder.as_slice(),
+        ])
+    }
+
+    fn bind_canonical_request_id(&mut self) {
+        self.request_id = self.canonical_request_id();
+    }
+}
+
+/// Cumulative authenticated release of completed semantic request occurrences.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+pub struct CertifiedMergeSidecarCloseV1 {
+    /// Protocol version; must equal [`CERTIFIED_MERGE_SIDECAR_VERSION_V1`].
+    pub version: u8,
+    /// Durable incarnation of the requester-to-responder semantic stream.
+    pub stream_epoch: CertifiedMergeSidecarStreamEpochV1,
+    /// Highest contiguous semantic sequence which the requester has terminated.
+    pub closed_through: u64,
+    /// Canonical identity of this cumulative close witness.
+    pub close_id: Hash,
+    /// Authenticated peer which issued the request stream.
+    pub requester: PeerId,
+    /// Exact responder whose retained occurrences may be released.
+    pub responder: PeerId,
+}
+
+impl CertifiedMergeSidecarCloseV1 {
+    /// Derive the canonical identity of this cumulative close witness.
+    #[must_use]
+    pub(crate) fn canonical_close_id(&self) -> Hash {
+        let version = [self.version];
+        let stream_epoch = self.stream_epoch.get().to_le_bytes();
+        let closed_through = self.closed_through.to_le_bytes();
+        let requester = self.requester.encode();
+        let responder = self.responder.encode();
+        Hash::new_from_chunks(&[
+            CLOSE_ID_DOMAIN,
+            &version,
+            &stream_epoch,
+            &closed_through,
+            requester.as_slice(),
+            responder.as_slice(),
+        ])
+    }
+
+    fn bind_canonical_close_id(&mut self) {
+        self.close_id = self.canonical_close_id();
+    }
+}
+
+/// Idempotent responder acknowledgement for one cumulative close witness.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+pub struct CertifiedMergeSidecarCloseAckV1 {
+    /// Protocol version; must equal [`CERTIFIED_MERGE_SIDECAR_VERSION_V1`].
+    pub version: u8,
+    /// Durable incarnation of the acknowledged semantic stream.
+    pub stream_epoch: CertifiedMergeSidecarStreamEpochV1,
+    /// Cumulative close floor durably observed by the responder.
+    pub closed_through: u64,
+    /// Canonical identity copied from the acknowledged close witness.
+    pub close_id: Hash,
+    /// Authenticated peer which issued the request stream.
+    pub requester: PeerId,
+    /// Exact responder which applied the cumulative close floor.
+    pub responder: PeerId,
+}
+
+impl CertifiedMergeSidecarCloseAckV1 {
+    pub(crate) fn canonical_close_id(&self) -> Hash {
+        CertifiedMergeSidecarCloseV1 {
+            version: self.version,
+            stream_epoch: self.stream_epoch,
+            closed_through: self.closed_through,
+            close_id: self.close_id,
+            requester: self.requester.clone(),
+            responder: self.responder.clone(),
+        }
+        .canonical_close_id()
+    }
+}
+
 /// One fixed-boundary chunk of a certified merge sidecar response.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct CertifiedMergeSidecarChunkV1 {
     /// Protocol version; must equal [`CERTIFIED_MERGE_SIDECAR_VERSION_V1`].
     pub version: u8,
-    /// Request nonce copied verbatim from the request.
+    /// Durable incarnation copied verbatim from the request.
+    pub stream_epoch: CertifiedMergeSidecarStreamEpochV1,
+    /// Monotonic semantic sequence copied verbatim from the request.
+    pub semantic_sequence: u64,
+    /// Canonical request identity copied verbatim from the request.
     pub request_id: Hash,
     /// Canonical hash of the requested full entry.
     pub entry_hash: HashOf<MergeLedgerEntry>,
@@ -336,6 +476,10 @@ pub struct CertifiedMergeSidecarChunkV1 {
 pub enum CertifiedMergeSidecarMessage {
     /// Request an exact full entry from one merge-QC signer.
     Request(CertifiedMergeSidecarRequestV1),
+    /// Release a contiguous prefix of terminated request occurrences.
+    Close(CertifiedMergeSidecarCloseV1),
+    /// Acknowledge durable application of a cumulative close floor.
+    CloseAck(CertifiedMergeSidecarCloseAckV1),
     /// Return one bounded chunk of the requested entry.
     Chunk(CertifiedMergeSidecarChunkV1),
 }
@@ -375,6 +519,10 @@ pub(crate) struct CertifiedMergeSidecarChunkFlushProjection {
     pub(crate) stream_wire_bytes: usize,
     /// Semantic sidecar request nonce.
     pub(crate) request_id: Hash,
+    /// Durable incarnation of the semantic request stream.
+    pub(crate) stream_epoch: CertifiedMergeSidecarStreamEpochV1,
+    /// Monotonic requester-to-responder semantic request sequence.
+    pub(crate) semantic_sequence: u64,
     /// Canonical hash of the requested full merge-ledger entry.
     pub(crate) entry_hash: HashOf<MergeLedgerEntry>,
     /// Exact canonical byte length of the full entry.
@@ -497,6 +645,8 @@ impl CertifiedMergeSidecarChunkAdmission {
             canonical_request_digest: flush_identity.canonical_request_digest(),
             stream_wire_bytes: flush_identity.ticket_stream_wire_bytes(),
             request_id: chunk.request_id,
+            stream_epoch: chunk.stream_epoch,
+            semantic_sequence: chunk.semantic_sequence,
             entry_hash: chunk.entry_hash,
             encoded_len: chunk.encoded_len,
             epoch_id: chunk.epoch_id,
@@ -603,8 +753,9 @@ impl CertifiedMergeSidecarChunkAdmission {
     /// cursor exactly once.
     #[must_use]
     pub(crate) fn is_bound_to_source(&self, route: &NetworkReplyRoute) -> bool {
-        self.projection.semantic_target == *route.semantic_target()
-            && self.source_key == route.source_key()
+        self.is_bound_to_attempt(route)
+            || (self.projection.semantic_target == *route.semantic_target()
+                && self.source_key == route.source_key())
     }
 
     /// Whether one cached materialized carrier is the exact admitted response.
@@ -630,6 +781,8 @@ impl CertifiedMergeSidecarChunkAdmission {
         let projection = &self.projection;
         projection.semantic_target == chunk.requester
             && projection.request_id == chunk.request_id
+            && projection.stream_epoch == chunk.stream_epoch
+            && projection.semantic_sequence == chunk.semantic_sequence
             && projection.entry_hash == chunk.entry_hash
             && projection.encoded_len == chunk.encoded_len
             && projection.epoch_id == chunk.epoch_id
@@ -795,6 +948,9 @@ pub enum MergeSidecarError {
     /// Request identifier differs from the active request.
     #[error("certified merge-sidecar request identifier mismatch")]
     RequestIdMismatch,
+    /// A close or acknowledgement did not match its canonical stream witness.
+    #[error("certified merge-sidecar close identifier mismatch")]
+    CloseIdMismatch,
     /// Response metadata differs from the requested reference.
     #[error("certified merge-sidecar response metadata mismatch")]
     MetadataMismatch,
@@ -833,6 +989,9 @@ pub enum MergeSidecarError {
     /// Signing-guard persistence failed closed.
     #[error("merge committee signing guard persistence failed: {0}")]
     SigningGuard(String),
+    /// Durable semantic request lifecycle persistence failed closed.
+    #[error("certified merge-sidecar lifecycle journal failed: {0}")]
+    LifecycleJournal(String),
 }
 
 #[derive(Clone, Debug)]
@@ -845,6 +1004,8 @@ struct DeferredCarrier {
 #[derive(Clone, Debug)]
 struct RequestAttempt {
     id: Hash,
+    stream_epoch: CertifiedMergeSidecarStreamEpochV1,
+    semantic_sequence: u64,
     holder: PeerId,
     last_progress_at: Instant,
     previous_holder_cursor: usize,
@@ -872,9 +1033,118 @@ struct InboundAssembly {
     complete_pending_validation: bool,
 }
 
+#[derive(Debug)]
+struct RequestStreamState {
+    stream_epoch: CertifiedMergeSidecarStreamEpochV1,
+    next_sequence: u64,
+    closed_through: u64,
+    acknowledged_through: u64,
+    last_close_sent_at: Option<Instant>,
+    open_sequences: BTreeSet<u64>,
+}
+
+impl RequestStreamState {
+    fn new(stream_epoch: CertifiedMergeSidecarStreamEpochV1) -> Self {
+        Self {
+            stream_epoch,
+            next_sequence: 0,
+            closed_through: 0,
+            acknowledged_through: 0,
+            last_close_sent_at: None,
+            open_sequences: BTreeSet::new(),
+        }
+    }
+
+    fn allocate(&mut self) -> Result<(u64, u64), MergeSidecarError> {
+        let semantic_sequence =
+            self.next_sequence
+                .checked_add(1)
+                .ok_or(MergeSidecarError::Capacity(
+                    "semantic request sequence exhausted",
+                ))?;
+        self.next_sequence = semantic_sequence;
+        let inserted = self.open_sequences.insert(semantic_sequence);
+        debug_assert!(inserted, "new semantic sequence must be unique");
+        Ok((semantic_sequence, self.closed_through))
+    }
+
+    fn close(&mut self, semantic_sequence: u64) {
+        if semantic_sequence == 0 || semantic_sequence > self.next_sequence {
+            return;
+        }
+        self.open_sequences.remove(&semantic_sequence);
+        let prior = self.closed_through;
+        self.closed_through = self
+            .open_sequences
+            .first()
+            .map_or(self.next_sequence, |first_open| {
+                first_open.saturating_sub(1)
+            });
+        if self.closed_through > prior {
+            self.last_close_sent_at = None;
+        }
+    }
+
+    fn close_due(&self, now: Instant, retry_after: Duration) -> bool {
+        self.closed_through > self.acknowledged_through
+            && self
+                .last_close_sent_at
+                .is_none_or(|last_sent| now.saturating_duration_since(last_sent) >= retry_after)
+    }
+
+    fn emit_close(
+        &mut self,
+        requester: &PeerId,
+        responder: &PeerId,
+        now: Instant,
+    ) -> CertifiedMergeSidecarCloseV1 {
+        debug_assert!(self.closed_through > self.acknowledged_through);
+        self.last_close_sent_at = Some(now);
+        let mut close = CertifiedMergeSidecarCloseV1 {
+            version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
+            stream_epoch: self.stream_epoch,
+            closed_through: self.closed_through,
+            close_id: Hash::prehashed([0; Hash::LENGTH]),
+            requester: requester.clone(),
+            responder: responder.clone(),
+        };
+        close.bind_canonical_close_id();
+        close
+    }
+
+    fn acknowledge_close(&mut self, closed_through: u64) -> bool {
+        if closed_through <= self.acknowledged_through || closed_through > self.closed_through {
+            return false;
+        }
+        self.acknowledged_through = closed_through;
+        if self.acknowledged_through == self.closed_through {
+            self.last_close_sent_at = None;
+        }
+        true
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ServerStreamState {
+    stream_epoch: CertifiedMergeSidecarStreamEpochV1,
+    closed_through: u64,
+    highest_sequence: u64,
+}
+
 type InboundSidecarKey = (HashOf<MergeLedgerEntry>, Hash);
 type ServerRequestKey = (PeerId, Hash);
 type OutboundAttemptKey = (ServerRequestKey, ServerRequestSource);
+
+/// One authenticated server-stream prefix whose queued output is no longer owned.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CertifiedMergeSidecarClosedPrefix {
+    /// Requester whose semantic occurrences were closed.
+    pub(crate) requester: PeerId,
+    /// Durable stream incarnation whose occurrences were closed.
+    pub(crate) stream_epoch: CertifiedMergeSidecarStreamEpochV1,
+    /// Highest contiguous semantic sequence covered by the close.
+    pub(crate) closed_through: u64,
+}
 
 #[derive(Debug)]
 struct OutboundTransfer {
@@ -899,11 +1169,39 @@ struct OutboundAttempt {
 enum ServerRequestSource {
     Synthetic(PeerId),
     Authenticated(NetworkReplySourceKey),
+    /// Stable authenticated hub restored without any process-local capability.
+    RecoveredAuthenticated(PeerId),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum ServerRequestBudgetSource {
+    Synthetic(PeerId),
+    Authenticated(PeerId),
+}
+
+impl ServerRequestSource {
+    fn budget_source(&self) -> ServerRequestBudgetSource {
+        match self {
+            Self::Synthetic(peer) => ServerRequestBudgetSource::Synthetic(peer.clone()),
+            Self::Authenticated(source) => {
+                ServerRequestBudgetSource::Authenticated(source.authenticated_source_peer().clone())
+            }
+            Self::RecoveredAuthenticated(peer) => {
+                ServerRequestBudgetSource::Authenticated(peer.clone())
+            }
+        }
+    }
+
+    fn shares_budget_with(&self, other: &Self) -> bool {
+        self.budget_source() == other.budget_source()
+    }
 }
 
 #[derive(Clone, Debug)]
 struct ServerRequestGate {
     request_hash: HashOf<CertifiedMergeSidecarRequestV1>,
+    stream_epoch: CertifiedMergeSidecarStreamEpochV1,
+    semantic_sequence: u64,
     source_capacity: Option<usize>,
     attempts: BTreeMap<ServerRequestSource, ServerRequestGateAttempt>,
 }
@@ -913,10 +1211,11 @@ struct ServerRequestGateAttempt {
     reply_route: Option<NetworkReplyRoute>,
     materialization_authorized: bool,
     authorized_materialization_route: Option<NetworkReplyRoute>,
-    /// A local lookup failed before immutable response bytes were installed.
+    /// This source failed to acquire immutable response output.
     ///
-    /// This keeps the bounded route/cursor history while allowing the exact
-    /// authenticated delivery to retry the same terminating local work.
+    /// A failed local lookup or transient source reservation keeps the bounded
+    /// route/cursor history while allowing the exact authenticated delivery to
+    /// retry the same terminating local work.
     materialization_retryable: bool,
     /// First chunk still lacking an exact writer-flush acknowledgement, or a
     /// terminal cursor after this authenticated source completed the transfer.
@@ -946,6 +1245,8 @@ enum ServerResponseCursor {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ServerPendingChunkIdentity {
     request_id: Hash,
+    stream_epoch: CertifiedMergeSidecarStreamEpochV1,
+    semantic_sequence: u64,
     entry_hash: HashOf<MergeLedgerEntry>,
     encoded_len: u64,
     epoch_id: u64,
@@ -969,6 +1270,8 @@ impl ServerPendingChunkIdentity {
         let data = crate::NetworkMessage::CertifiedMergeSidecar(Arc::clone(message));
         Some(Self {
             request_id: chunk.request_id,
+            stream_epoch: chunk.stream_epoch,
+            semantic_sequence: chunk.semantic_sequence,
             entry_hash: chunk.entry_hash,
             encoded_len: chunk.encoded_len,
             epoch_id: chunk.epoch_id,
@@ -991,6 +1294,8 @@ impl ServerPendingChunkIdentity {
     fn matches_admission(&self, admission: &CertifiedMergeSidecarChunkAdmission) -> bool {
         let projection = admission.projection();
         self.request_id == projection.request_id
+            && self.stream_epoch == projection.stream_epoch
+            && self.semantic_sequence == projection.semantic_sequence
             && self.entry_hash == projection.entry_hash
             && self.encoded_len == projection.encoded_len
             && self.epoch_id == projection.epoch_id
@@ -1004,6 +1309,341 @@ impl ServerPendingChunkIdentity {
             && self.chunk_index == projection.chunk_index
             && self.chunk_count == projection.chunk_count
             && self.topic == projection.ticket_topic
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[norito(deny_unknown_fields)]
+struct MergeSidecarLifecycleGeometryV2 {
+    reply_source_capacity: u64,
+    semantic_peer_capacity: u64,
+    inbound_session_capacity: u64,
+    inbound_sessions_per_peer: u64,
+    inbound_assembly_bytes: u64,
+    inbound_assembly_bytes_per_peer: u64,
+    deferred_block_capacity: u64,
+    future_block_distance: u64,
+    request_timeout_secs: u64,
+    request_timeout_nanos: u32,
+    outbound_sessions_per_source: u64,
+    outbound_bytes_per_source: u64,
+    server_request_gates_per_source: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[norito(deny_unknown_fields)]
+struct RequestStreamLifecycleV2 {
+    responder: PeerId,
+    stream_epoch: CertifiedMergeSidecarStreamEpochV1,
+    next_sequence: u64,
+    closed_through: u64,
+    acknowledged_through: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+enum DurableServerRequestSourceV2 {
+    Synthetic(PeerId),
+    Authenticated(PeerId),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
+enum DurableServerResponseCursorV2 {
+    Pending(u64),
+    Complete,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[norito(deny_unknown_fields)]
+struct ServerPendingChunkLifecycleV2 {
+    request_id: Hash,
+    stream_epoch: CertifiedMergeSidecarStreamEpochV1,
+    semantic_sequence: u64,
+    entry_hash: HashOf<MergeLedgerEntry>,
+    encoded_len: u64,
+    epoch_id: u64,
+    reference_digest: Hash,
+    requester: PeerId,
+    responder: PeerId,
+    canonical_response_hash: HashOf<crate::NetworkMessage>,
+    sidecar_response_hash: HashOf<CertifiedMergeSidecarMessage>,
+    chunk_hash: HashOf<CertifiedMergeSidecarChunkV1>,
+    payload_digest: Hash,
+    chunk_index: u32,
+    chunk_count: u32,
+}
+
+impl From<&ServerPendingChunkIdentity> for ServerPendingChunkLifecycleV2 {
+    fn from(identity: &ServerPendingChunkIdentity) -> Self {
+        Self {
+            request_id: identity.request_id,
+            stream_epoch: identity.stream_epoch,
+            semantic_sequence: identity.semantic_sequence,
+            entry_hash: identity.entry_hash,
+            encoded_len: identity.encoded_len,
+            epoch_id: identity.epoch_id,
+            reference_digest: identity.reference_digest,
+            requester: identity.requester.clone(),
+            responder: identity.responder.clone(),
+            canonical_response_hash: identity.canonical_response_hash,
+            sidecar_response_hash: identity.sidecar_response_hash,
+            chunk_hash: identity.chunk_hash,
+            payload_digest: identity.payload_digest,
+            chunk_index: identity.chunk_index,
+            chunk_count: identity.chunk_count,
+        }
+    }
+}
+
+impl From<ServerPendingChunkLifecycleV2> for ServerPendingChunkIdentity {
+    fn from(identity: ServerPendingChunkLifecycleV2) -> Self {
+        Self {
+            request_id: identity.request_id,
+            stream_epoch: identity.stream_epoch,
+            semantic_sequence: identity.semantic_sequence,
+            entry_hash: identity.entry_hash,
+            encoded_len: identity.encoded_len,
+            epoch_id: identity.epoch_id,
+            reference_digest: identity.reference_digest,
+            requester: identity.requester,
+            responder: identity.responder,
+            canonical_response_hash: identity.canonical_response_hash,
+            sidecar_response_hash: identity.sidecar_response_hash,
+            chunk_hash: identity.chunk_hash,
+            payload_digest: identity.payload_digest,
+            chunk_index: identity.chunk_index,
+            chunk_count: identity.chunk_count,
+            topic: Topic::ConsensusChunk,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[norito(deny_unknown_fields)]
+struct ServerRequestAttemptLifecycleV2 {
+    source: DurableServerRequestSourceV2,
+    cursor: DurableServerResponseCursorV2,
+    pending_flush_chunk: Option<ServerPendingChunkLifecycleV2>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[norito(deny_unknown_fields)]
+struct ServerRequestGateLifecycleV2 {
+    requester: PeerId,
+    request_id: Hash,
+    request_hash: HashOf<CertifiedMergeSidecarRequestV1>,
+    stream_epoch: CertifiedMergeSidecarStreamEpochV1,
+    semantic_sequence: u64,
+    source_capacity: Option<u64>,
+    attempts: Vec<ServerRequestAttemptLifecycleV2>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[norito(deny_unknown_fields)]
+struct ServerStreamLifecycleV2 {
+    requester: PeerId,
+    stream_epoch: CertifiedMergeSidecarStreamEpochV1,
+    closed_through: u64,
+    highest_sequence: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[norito(deny_unknown_fields)]
+struct MergeSidecarLifecyclePayloadV2 {
+    version: u8,
+    geometry: MergeSidecarLifecycleGeometryV2,
+    next_stream_epoch: u64,
+    request_streams: Vec<RequestStreamLifecycleV2>,
+    server_streams: Vec<ServerStreamLifecycleV2>,
+    server_request_gates: Vec<ServerRequestGateLifecycleV2>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[norito(deny_unknown_fields)]
+struct MergeSidecarLifecycleSnapshotV2 {
+    payload: MergeSidecarLifecyclePayloadV2,
+    payload_hash: HashOf<MergeSidecarLifecyclePayloadV2>,
+}
+
+impl MergeSidecarLifecycleSnapshotV2 {
+    fn new(payload: MergeSidecarLifecyclePayloadV2) -> Self {
+        let payload_hash = HashOf::new(&payload);
+        Self {
+            payload,
+            payload_hash,
+        }
+    }
+
+    fn integrity_is_valid(&self) -> bool {
+        self.payload_hash == HashOf::new(&self.payload)
+    }
+}
+
+/// Integrity-bound, atomic, source-bounded lifecycle snapshot under the Kura root.
+#[derive(Debug)]
+struct MergeSidecarLifecycleJournal {
+    directory: PathBuf,
+    max_snapshot_bytes: usize,
+}
+
+impl MergeSidecarLifecycleJournal {
+    fn open(store_root: &Path, max_snapshot_bytes: usize) -> Result<Self, MergeSidecarError> {
+        for legacy in LEGACY_LIFECYCLE_JOURNAL_DIRS {
+            let legacy = store_root.join(legacy);
+            match fs::symlink_metadata(&legacy) {
+                Ok(_) => {
+                    return Err(MergeSidecarError::LifecycleJournal(format!(
+                        "unsupported legacy lifecycle journal {}",
+                        legacy.display()
+                    )));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(MergeSidecarError::LifecycleJournal(error.to_string()));
+                }
+            }
+        }
+        let directory = store_root.join(LIFECYCLE_JOURNAL_DIR);
+        match fs::symlink_metadata(&directory) {
+            Ok(metadata) if metadata.file_type().is_dir() && !metadata.file_type().is_symlink() => {
+            }
+            Ok(_) => {
+                return Err(MergeSidecarError::LifecycleJournal(format!(
+                    "unsafe lifecycle journal directory {}",
+                    directory.display()
+                )));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                fs::create_dir(&directory)
+                    .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
+                Self::sync_directory(store_root)?;
+            }
+            Err(error) => {
+                return Err(MergeSidecarError::LifecycleJournal(error.to_string()));
+            }
+        }
+        let journal = Self {
+            directory,
+            max_snapshot_bytes,
+        };
+        journal.remove_stale_temp()?;
+        Ok(journal)
+    }
+
+    fn state_path(&self) -> PathBuf {
+        self.directory.join(LIFECYCLE_JOURNAL_FILE)
+    }
+
+    fn temp_path(&self) -> PathBuf {
+        self.directory.join(LIFECYCLE_JOURNAL_TEMP)
+    }
+
+    fn sync_directory(path: &Path) -> Result<(), MergeSidecarError> {
+        let directory = OpenOptions::new()
+            .read(true)
+            .open(path)
+            .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
+        directory
+            .sync_all()
+            .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))
+    }
+
+    fn remove_stale_temp(&self) -> Result<(), MergeSidecarError> {
+        let temp = self.temp_path();
+        match fs::symlink_metadata(&temp) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(MergeSidecarError::LifecycleJournal(error.to_string())),
+            Ok(metadata)
+                if metadata.file_type().is_file() && !metadata.file_type().is_symlink() =>
+            {
+                if usize::try_from(metadata.len())
+                    .ok()
+                    .is_none_or(|len| len > self.max_snapshot_bytes)
+                {
+                    return Err(MergeSidecarError::LifecycleJournal(
+                        "stale lifecycle journal temp exceeds its geometry".to_owned(),
+                    ));
+                }
+                fs::remove_file(temp)
+                    .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))
+            }
+            Ok(_) => Err(MergeSidecarError::LifecycleJournal(
+                "unsafe lifecycle journal temp artifact".to_owned(),
+            )),
+        }
+    }
+
+    fn load(&self) -> Result<Option<MergeSidecarLifecycleSnapshotV2>, MergeSidecarError> {
+        let path = self.state_path();
+        let metadata = match fs::symlink_metadata(&path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(MergeSidecarError::LifecycleJournal(error.to_string()));
+            }
+            Ok(metadata) => metadata,
+        };
+        if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+            return Err(MergeSidecarError::LifecycleJournal(
+                "unsafe lifecycle journal state artifact".to_owned(),
+            ));
+        }
+        let len = usize::try_from(metadata.len()).map_err(|_| {
+            MergeSidecarError::LifecycleJournal(
+                "lifecycle journal length is not representable".to_owned(),
+            )
+        })?;
+        if len == 0 || len > self.max_snapshot_bytes {
+            return Err(MergeSidecarError::LifecycleJournal(
+                "lifecycle journal length exceeds its geometry".to_owned(),
+            ));
+        }
+        let bytes = fs::read(path)
+            .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
+        let snapshot = norito::decode_from_bytes::<MergeSidecarLifecycleSnapshotV2>(&bytes)
+            .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
+        let canonical = norito::to_bytes(&snapshot)
+            .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
+        if canonical != bytes {
+            return Err(MergeSidecarError::LifecycleJournal(
+                "lifecycle journal is not canonical Norito".to_owned(),
+            ));
+        }
+        if !snapshot.integrity_is_valid() {
+            return Err(MergeSidecarError::LifecycleJournal(
+                "lifecycle journal payload digest mismatch".to_owned(),
+            ));
+        }
+        Ok(Some(snapshot))
+    }
+
+    fn persist(&self, snapshot: &MergeSidecarLifecycleSnapshotV2) -> Result<(), MergeSidecarError> {
+        if !snapshot.integrity_is_valid() {
+            return Err(MergeSidecarError::LifecycleJournal(
+                "lifecycle journal payload digest mismatch".to_owned(),
+            ));
+        }
+        let bytes = norito::to_bytes(snapshot)
+            .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
+        if bytes.is_empty() || bytes.len() > self.max_snapshot_bytes {
+            return Err(MergeSidecarError::LifecycleJournal(
+                "lifecycle journal snapshot exceeds its geometry".to_owned(),
+            ));
+        }
+        self.remove_stale_temp()?;
+        let temp = self.temp_path();
+        {
+            let mut file = OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(&temp)
+                .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
+            file.write_all(&bytes)
+                .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
+            file.sync_all()
+                .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
+        }
+        fs::rename(&temp, self.state_path())
+            .map_err(|error| MergeSidecarError::LifecycleJournal(error.to_string()))?;
+        Self::sync_directory(&self.directory)
     }
 }
 
@@ -1062,6 +1702,10 @@ impl ReliableFlushProjectionBytes {
                 self.u8(2);
                 self.hash(key.process_local_identity_hash());
             }
+            ServerRequestSource::RecoveredAuthenticated(peer) => {
+                self.u8(3);
+                self.encoded(peer);
+            }
         }
     }
 
@@ -1082,6 +1726,8 @@ impl ReliableFlushProjectionBytes {
         };
         self.bool(true);
         self.hash(pending.request_id);
+        self.u64(pending.stream_epoch.get());
+        self.u64(pending.semantic_sequence);
         self.typed_hash(pending.entry_hash);
         self.u64(pending.encoded_len);
         self.u64(pending.epoch_id);
@@ -1261,6 +1907,8 @@ struct ReliableFlushChunkArcIdentity {
     message: Arc<CertifiedMergeSidecarMessage>,
     payload_len: usize,
     request_id: Hash,
+    stream_epoch: CertifiedMergeSidecarStreamEpochV1,
+    semantic_sequence: u64,
     entry_hash: HashOf<MergeLedgerEntry>,
     encoded_len: u64,
     epoch_id: u64,
@@ -1280,6 +1928,8 @@ impl ReliableFlushChunkArcIdentity {
             message: Arc::clone(message),
             payload_len: chunk.bytes.len(),
             request_id: chunk.request_id,
+            stream_epoch: chunk.stream_epoch,
+            semantic_sequence: chunk.semantic_sequence,
             entry_hash: chunk.entry_hash,
             encoded_len: chunk.encoded_len,
             epoch_id: chunk.epoch_id,
@@ -1295,6 +1945,8 @@ impl ReliableFlushChunkArcIdentity {
         bytes.usize(Arc::as_ptr(&self.message) as usize);
         bytes.usize(self.payload_len);
         bytes.hash(self.request_id);
+        bytes.u64(self.stream_epoch.get());
+        bytes.u64(self.semantic_sequence);
         bytes.typed_hash(self.entry_hash);
         bytes.u64(self.encoded_len);
         bytes.u64(self.epoch_id);
@@ -1311,6 +1963,8 @@ impl PartialEq for ReliableFlushChunkArcIdentity {
         Arc::ptr_eq(&self.message, &other.message)
             && self.payload_len == other.payload_len
             && self.request_id == other.request_id
+            && self.stream_epoch == other.stream_epoch
+            && self.semantic_sequence == other.semantic_sequence
             && self.entry_hash == other.entry_hash
             && self.encoded_len == other.encoded_len
             && self.epoch_id == other.epoch_id
@@ -2353,9 +3007,17 @@ pub(crate) struct MergeSidecarTransport {
     /// moves to the tail and every new source starts behind all current owners.
     outbound_order: VecDeque<OutboundAttemptKey>,
     tick_response_next: bool,
+    tick_close_next: bool,
+    /// True after one timeout retry was allowed to run before a due Close.
+    timeout_retry_close_deferred: bool,
     server_request_gates: BTreeMap<ServerRequestKey, ServerRequestGate>,
-    next_request_nonce: u64,
-    boot_nonce: Hash,
+    /// Last requester-issued stream epoch. Zero means no epoch was issued yet.
+    next_stream_epoch: u64,
+    request_streams: BTreeMap<PeerId, RequestStreamState>,
+    server_streams: BTreeMap<PeerId, ServerStreamState>,
+    pending_server_closures:
+        BTreeMap<(PeerId, CertifiedMergeSidecarStreamEpochV1), u64>,
+    lifecycle_journal: Option<MergeSidecarLifecycleJournal>,
 }
 
 impl MergeSidecarTransport {
@@ -2398,12 +3060,6 @@ impl MergeSidecarTransport {
         let server_request_gate_capacity = reply_source_capacity
             .checked_mul(limits.server_request_gates_per_source)
             .ok_or(MergeSidecarError::Capacity("server request gate geometry"))?;
-        let unix_nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-            .to_le_bytes();
-        let process_id = std::process::id().to_le_bytes();
         Ok(Self {
             limits,
             reply_source_capacity,
@@ -2415,14 +3071,490 @@ impl MergeSidecarTransport {
             outbound: BTreeMap::new(),
             outbound_order: VecDeque::new(),
             tick_response_next: true,
+            // When request and close work first become simultaneously ready,
+            // service the progress-bearing request before alternating to the
+            // close stream. A standalone close remains immediately eligible.
+            tick_close_next: false,
+            timeout_retry_close_deferred: false,
             server_request_gates: BTreeMap::new(),
-            next_request_nonce: 0,
-            boot_nonce: Hash::new_from_chunks(&[
-                REQUEST_ID_DOMAIN,
-                unix_nanos.as_slice(),
-                process_id.as_slice(),
-            ]),
+            next_stream_epoch: 0,
+            request_streams: BTreeMap::new(),
+            server_streams: BTreeMap::new(),
+            pending_server_closures: BTreeMap::new(),
+            lifecycle_journal: None,
         })
+    }
+
+    fn lifecycle_geometry(&self) -> Result<MergeSidecarLifecycleGeometryV2, MergeSidecarError> {
+        let as_u64 = |value: usize| {
+            u64::try_from(value)
+                .map_err(|_| MergeSidecarError::Capacity("lifecycle journal geometry"))
+        };
+        Ok(MergeSidecarLifecycleGeometryV2 {
+            reply_source_capacity: as_u64(self.reply_source_capacity)?,
+            semantic_peer_capacity: as_u64(MAX_CERTIFIED_MERGE_SEMANTIC_PEERS)?,
+            inbound_session_capacity: as_u64(self.limits.inbound_session_capacity)?,
+            inbound_sessions_per_peer: as_u64(self.limits.inbound_sessions_per_peer)?,
+            inbound_assembly_bytes: as_u64(self.limits.inbound_assembly_bytes)?,
+            inbound_assembly_bytes_per_peer: as_u64(self.limits.inbound_assembly_bytes_per_peer)?,
+            deferred_block_capacity: as_u64(self.limits.deferred_block_capacity)?,
+            future_block_distance: self.limits.future_block_distance,
+            request_timeout_secs: self.limits.request_timeout.as_secs(),
+            request_timeout_nanos: self.limits.request_timeout.subsec_nanos(),
+            outbound_sessions_per_source: as_u64(self.limits.outbound_sessions_per_source)?,
+            outbound_bytes_per_source: as_u64(self.limits.outbound_bytes_per_source)?,
+            server_request_gates_per_source: as_u64(self.limits.server_request_gates_per_source)?,
+        })
+    }
+
+    fn lifecycle_max_snapshot_bytes(&self) -> Result<usize, MergeSidecarError> {
+        let gate_bytes = self
+            .server_request_gate_capacity
+            .checked_mul(LIFECYCLE_JOURNAL_GATE_BYTES)
+            .ok_or(MergeSidecarError::Capacity(
+                "lifecycle journal gate byte geometry",
+            ))?;
+        // Requester and responder semantic-stream records are independently
+        // bounded; each record includes its durable non-zero stream epoch.
+        let stream_bytes = MAX_CERTIFIED_MERGE_SEMANTIC_PEERS
+            .checked_mul(2)
+            .and_then(|count| count.checked_mul(LIFECYCLE_JOURNAL_STREAM_BYTES))
+            .ok_or(MergeSidecarError::Capacity(
+                "lifecycle journal stream byte geometry",
+            ))?;
+        LIFECYCLE_JOURNAL_BASE_BYTES
+            .checked_add(gate_bytes)
+            .and_then(|bytes| bytes.checked_add(stream_bytes))
+            .ok_or(MergeSidecarError::Capacity(
+                "lifecycle journal total byte geometry",
+            ))
+    }
+
+    fn lifecycle_snapshot(&self) -> Result<MergeSidecarLifecycleSnapshotV2, MergeSidecarError> {
+        let request_streams = self
+            .request_streams
+            .iter()
+            .map(|(responder, stream)| RequestStreamLifecycleV2 {
+                responder: responder.clone(),
+                stream_epoch: stream.stream_epoch,
+                next_sequence: stream.next_sequence,
+                closed_through: stream.closed_through,
+                acknowledged_through: stream.acknowledged_through,
+            })
+            .collect();
+        let server_streams = self
+            .server_streams
+            .iter()
+            .map(|(requester, stream)| ServerStreamLifecycleV2 {
+                requester: requester.clone(),
+                stream_epoch: stream.stream_epoch,
+                closed_through: stream.closed_through,
+                highest_sequence: stream.highest_sequence,
+            })
+            .collect();
+        let mut server_request_gates = Vec::with_capacity(self.server_request_gates.len());
+        for ((requester, request_id), gate) in &self.server_request_gates {
+            let mut attempts = Vec::with_capacity(gate.attempts.len());
+            for (source, attempt) in &gate.attempts {
+                let source = match source {
+                    ServerRequestSource::Synthetic(peer) => {
+                        DurableServerRequestSourceV2::Synthetic(peer.clone())
+                    }
+                    ServerRequestSource::Authenticated(_) => {
+                        let route = attempt.reply_route.as_ref().ok_or_else(|| {
+                            MergeSidecarError::LifecycleJournal(
+                                "authenticated lifecycle attempt lost its route source".to_owned(),
+                            )
+                        })?;
+                        DurableServerRequestSourceV2::Authenticated(
+                            route.authenticated_source_peer().clone(),
+                        )
+                    }
+                    ServerRequestSource::RecoveredAuthenticated(peer) => {
+                        DurableServerRequestSourceV2::Authenticated(peer.clone())
+                    }
+                };
+                let cursor = match attempt.cursor {
+                    ServerResponseCursor::Pending(index) => DurableServerResponseCursorV2::Pending(
+                        u64::try_from(index).map_err(|_| {
+                            MergeSidecarError::LifecycleJournal(
+                                "server response cursor is not representable".to_owned(),
+                            )
+                        })?,
+                    ),
+                    ServerResponseCursor::Complete => DurableServerResponseCursorV2::Complete,
+                };
+                attempts.push(ServerRequestAttemptLifecycleV2 {
+                    source,
+                    cursor,
+                    pending_flush_chunk: attempt
+                        .pending_flush_chunk
+                        .as_ref()
+                        .map(ServerPendingChunkLifecycleV2::from),
+                });
+            }
+            server_request_gates.push(ServerRequestGateLifecycleV2 {
+                requester: requester.clone(),
+                request_id: *request_id,
+                request_hash: gate.request_hash,
+                stream_epoch: gate.stream_epoch,
+                semantic_sequence: gate.semantic_sequence,
+                source_capacity: gate.source_capacity.map(|capacity| {
+                    u64::try_from(capacity)
+                        .expect("validated reply-source capacity is representable as u64")
+                }),
+                attempts,
+            });
+        }
+        Ok(MergeSidecarLifecycleSnapshotV2::new(
+            MergeSidecarLifecyclePayloadV2 {
+                version: LIFECYCLE_JOURNAL_VERSION_V2,
+                geometry: self.lifecycle_geometry()?,
+                next_stream_epoch: self.next_stream_epoch,
+                request_streams,
+                server_streams,
+                server_request_gates,
+            },
+        ))
+    }
+
+    fn restore_lifecycle_snapshot(
+        &mut self,
+        snapshot: MergeSidecarLifecycleSnapshotV2,
+        now: Instant,
+    ) -> Result<(), MergeSidecarError> {
+        if !snapshot.integrity_is_valid() {
+            return Err(MergeSidecarError::LifecycleJournal(
+                "lifecycle journal payload digest mismatch".to_owned(),
+            ));
+        }
+        let snapshot = snapshot.payload;
+        if snapshot.version != LIFECYCLE_JOURNAL_VERSION_V2
+            || snapshot.geometry != self.lifecycle_geometry()?
+        {
+            return Err(MergeSidecarError::LifecycleJournal(
+                "unsupported lifecycle journal version or geometry drift".to_owned(),
+            ));
+        }
+        if snapshot.request_streams.len() > MAX_CERTIFIED_MERGE_SEMANTIC_PEERS
+            || snapshot.server_closed_through.len() > MAX_CERTIFIED_MERGE_SEMANTIC_PEERS
+            || snapshot.server_highest_sequence.len() > MAX_CERTIFIED_MERGE_SEMANTIC_PEERS
+            || snapshot.server_request_gates.len() > self.server_request_gate_capacity
+        {
+            return Err(MergeSidecarError::LifecycleJournal(
+                "lifecycle journal exceeds configured source geometry".to_owned(),
+            ));
+        }
+        let mut request_streams = BTreeMap::new();
+        for stream in snapshot.request_streams {
+            if stream.acknowledged_through > stream.closed_through
+                || stream.closed_through > stream.next_sequence
+            {
+                return Err(MergeSidecarError::LifecycleJournal(
+                    "request stream lifecycle regressed".to_owned(),
+                ));
+            }
+            let recovered = RequestStreamState {
+                next_sequence: stream.next_sequence,
+                closed_through: stream.next_sequence,
+                acknowledged_through: stream.acknowledged_through,
+                last_close_sent_at: None,
+                open_sequences: BTreeSet::new(),
+            };
+            if request_streams
+                .insert(stream.responder, recovered)
+                .is_some()
+            {
+                return Err(MergeSidecarError::LifecycleJournal(
+                    "duplicate request stream lifecycle".to_owned(),
+                ));
+            }
+        }
+        let restore_sequences =
+            |entries: Vec<PeerSequenceLifecycleV1>| -> Result<BTreeMap<PeerId, u64>, _> {
+                let mut restored = BTreeMap::new();
+                for entry in entries {
+                    if restored.insert(entry.peer, entry.sequence).is_some() {
+                        return Err(MergeSidecarError::LifecycleJournal(
+                            "duplicate server stream lifecycle".to_owned(),
+                        ));
+                    }
+                }
+                Ok(restored)
+            };
+        let server_closed_through = restore_sequences(snapshot.server_closed_through)?;
+        let server_highest_sequence = restore_sequences(snapshot.server_highest_sequence)?;
+        if server_closed_through
+            .keys()
+            .ne(server_highest_sequence.keys())
+            || server_closed_through.iter().any(|(peer, closed)| {
+                server_highest_sequence
+                    .get(peer)
+                    .is_none_or(|highest| highest < closed)
+            })
+        {
+            return Err(MergeSidecarError::LifecycleJournal(
+                "server stream floor/high-water lifecycle diverged".to_owned(),
+            ));
+        }
+        let max_chunk_count =
+            MAX_MERGE_LEDGER_ENTRY_BYTES.div_ceil(MAX_CERTIFIED_MERGE_CHUNK_BYTES);
+        let mut server_request_gates = BTreeMap::new();
+        let mut source_gate_counts = BTreeMap::<ServerRequestBudgetSource, usize>::new();
+        let mut total_attempts = 0usize;
+        for gate in snapshot.server_request_gates {
+            let closed = server_closed_through
+                .get(&gate.requester)
+                .copied()
+                .ok_or_else(|| {
+                    MergeSidecarError::LifecycleJournal(
+                        "server request gate has no stream floor".to_owned(),
+                    )
+                })?;
+            let highest = server_highest_sequence
+                .get(&gate.requester)
+                .copied()
+                .ok_or_else(|| {
+                    MergeSidecarError::LifecycleJournal(
+                        "server request gate has no stream high-water".to_owned(),
+                    )
+                })?;
+            if gate.semantic_sequence == 0
+                || gate.semantic_sequence <= closed
+                || gate.semantic_sequence > highest
+                || gate.attempts.is_empty()
+                || gate.source_capacity.is_some_and(|capacity| {
+                    usize::try_from(capacity).ok() != Some(self.reply_source_capacity)
+                })
+            {
+                return Err(MergeSidecarError::LifecycleJournal(
+                    "invalid durable server request gate".to_owned(),
+                ));
+            }
+            total_attempts = total_attempts
+                .checked_add(gate.attempts.len())
+                .ok_or_else(|| {
+                    MergeSidecarError::LifecycleJournal(
+                        "server request attempt count overflowed".to_owned(),
+                    )
+                })?;
+            if total_attempts > self.server_request_gate_capacity {
+                return Err(MergeSidecarError::LifecycleJournal(
+                    "durable server attempts exceed configured geometry".to_owned(),
+                ));
+            }
+            let mut attempts = BTreeMap::new();
+            for attempt in gate.attempts {
+                let source = match attempt.source {
+                    DurableServerRequestSourceV2::Synthetic(peer) => {
+                        ServerRequestSource::Synthetic(peer)
+                    }
+                    DurableServerRequestSourceV2::Authenticated(peer) => {
+                        ServerRequestSource::RecoveredAuthenticated(peer)
+                    }
+                };
+                let cursor = match attempt.cursor {
+                    DurableServerResponseCursorV2::Pending(index) => {
+                        let index = usize::try_from(index).map_err(|_| {
+                            MergeSidecarError::LifecycleJournal(
+                                "durable server cursor is not representable".to_owned(),
+                            )
+                        })?;
+                        if index >= max_chunk_count {
+                            return Err(MergeSidecarError::LifecycleJournal(
+                                "durable server cursor exceeds the maximum response".to_owned(),
+                            ));
+                        }
+                        ServerResponseCursor::Pending(index)
+                    }
+                    DurableServerResponseCursorV2::Complete => ServerResponseCursor::Complete,
+                };
+                let pending_flush_chunk = attempt
+                    .pending_flush_chunk
+                    .map(ServerPendingChunkIdentity::from);
+                if matches!(cursor, ServerResponseCursor::Complete) && pending_flush_chunk.is_some()
+                {
+                    return Err(MergeSidecarError::LifecycleJournal(
+                        "terminal durable cursor retained an in-flight chunk".to_owned(),
+                    ));
+                }
+                if let Some(pending) = &pending_flush_chunk {
+                    let ServerResponseCursor::Pending(index) = cursor else {
+                        unreachable!("terminal pending identity rejected above")
+                    };
+                    if pending.request_id != gate.request_id
+                        || pending.semantic_sequence != gate.semantic_sequence
+                        || pending.requester != gate.requester
+                        || usize::try_from(pending.chunk_index).ok() != Some(index)
+                        || pending.chunk_count == 0
+                        || pending.chunk_index >= pending.chunk_count
+                    {
+                        return Err(MergeSidecarError::LifecycleJournal(
+                            "durable pending chunk differs from its request gate".to_owned(),
+                        ));
+                    }
+                }
+                let materialization_retryable = matches!(cursor, ServerResponseCursor::Pending(_));
+                if attempts
+                    .insert(
+                        source.clone(),
+                        ServerRequestGateAttempt {
+                            reply_route: None,
+                            materialization_authorized: false,
+                            authorized_materialization_route: None,
+                            materialization_retryable,
+                            cursor,
+                            pending_flush_chunk,
+                            inserted: now,
+                        },
+                    )
+                    .is_some()
+                {
+                    return Err(MergeSidecarError::LifecycleJournal(
+                        "duplicate durable server source attempt".to_owned(),
+                    ));
+                }
+                if attempts
+                    .keys()
+                    .filter(|retained| retained.shares_budget_with(&source))
+                    .count()
+                    != 1
+                {
+                    return Err(MergeSidecarError::LifecycleJournal(
+                        "durable server gate duplicates an authenticated source budget".to_owned(),
+                    ));
+                }
+            }
+            for source in attempts
+                .keys()
+                .map(ServerRequestSource::budget_source)
+                .collect::<BTreeSet<_>>()
+            {
+                let count = source_gate_counts.entry(source).or_default();
+                *count = count.checked_add(1).ok_or_else(|| {
+                    MergeSidecarError::LifecycleJournal(
+                        "durable source gate count overflowed".to_owned(),
+                    )
+                })?;
+                if *count > self.limits.server_request_gates_per_source {
+                    return Err(MergeSidecarError::LifecycleJournal(
+                        "durable source gates exceed configured per-source geometry".to_owned(),
+                    ));
+                }
+            }
+            let source_capacity = gate
+                .source_capacity
+                .map(|capacity| {
+                    usize::try_from(capacity).map_err(|_| {
+                        MergeSidecarError::LifecycleJournal(
+                            "durable source capacity is not representable".to_owned(),
+                        )
+                    })
+                })
+                .transpose()?;
+            let key = (gate.requester, gate.request_id);
+            if server_request_gates
+                .insert(
+                    key,
+                    ServerRequestGate {
+                        request_hash: gate.request_hash,
+                        semantic_sequence: gate.semantic_sequence,
+                        source_capacity,
+                        attempts,
+                    },
+                )
+                .is_some()
+            {
+                return Err(MergeSidecarError::LifecycleJournal(
+                    "duplicate durable server request gate".to_owned(),
+                ));
+            }
+        }
+        self.request_streams = request_streams;
+        self.server_closed_through = server_closed_through;
+        self.server_highest_sequence = server_highest_sequence;
+        self.server_request_gates = server_request_gates;
+        self.outbound.clear();
+        self.outbound_order.clear();
+        self.pending_server_closures.clear();
+        Ok(())
+    }
+
+    /// Open the crash-safe semantic lifecycle journal under the Kura root.
+    pub(crate) fn open_durable(
+        store_root: &Path,
+        reply_source_capacity: usize,
+        limits: MergeSidecarLimits,
+    ) -> Result<Self, MergeSidecarError> {
+        let mut transport = Self::with_limits(reply_source_capacity, limits)?;
+        let journal = MergeSidecarLifecycleJournal::open(
+            store_root,
+            transport.lifecycle_max_snapshot_bytes()?,
+        )?;
+        if let Some(snapshot) = journal.load()? {
+            transport.restore_lifecycle_snapshot(snapshot, Instant::now())?;
+        }
+        transport.lifecycle_journal = Some(journal);
+        transport.persist_lifecycle_state()?;
+        Ok(transport)
+    }
+
+    /// Atomically persist all semantic request ownership and non-regressing cursors.
+    pub(crate) fn persist_lifecycle_state(&self) -> Result<(), MergeSidecarError> {
+        let Some(journal) = &self.lifecycle_journal else {
+            return Ok(());
+        };
+        journal.persist(&self.lifecycle_snapshot()?)
+    }
+
+    /// Obstruct the next durable lifecycle write for lane fail-stop tests.
+    #[cfg(test)]
+    pub(crate) fn obstruct_lifecycle_journal_temp_for_test(&self) {
+        let journal = self
+            .lifecycle_journal
+            .as_ref()
+            .expect("durable merge-sidecar transport has a lifecycle journal");
+        fs::create_dir(journal.temp_path())
+            .expect("create an unsafe lifecycle journal temp artifact");
+    }
+
+    /// Reuse process-local semantic ownership across a height rollover while
+    /// rejecting any geometry drift which could weaken its reservations.
+    pub(crate) fn rehydrate_with_exact_geometry(
+        mut self,
+        reply_source_capacity: usize,
+        limits: MergeSidecarLimits,
+    ) -> Result<Self, MergeSidecarError> {
+        if self.reply_source_capacity != reply_source_capacity || self.limits != limits {
+            return Err(MergeSidecarError::Capacity(
+                "merge-sidecar retained-height geometry drift",
+            ));
+        }
+        // The height-local exact-output worker has already relinquished its
+        // writer occurrences under the durable rollover authority. Preserve
+        // each source's current chunk, but make every formerly in-flight item
+        // eligible for an exact retry in this height. The receiver deduplicates
+        // the immutable chunk identity if the prior writer flushed before its
+        // acknowledgement was observed.
+        let mut retained_order = BTreeSet::new();
+        self.outbound_order.retain(|attempt_key| {
+            let valid = self
+                .outbound
+                .get(&attempt_key.0)
+                .is_some_and(|transfer| transfer.attempts.contains_key(&attempt_key.1));
+            valid && retained_order.insert(attempt_key.clone())
+        });
+        for (key, transfer) in &mut self.outbound {
+            for (source, attempt) in &mut transfer.attempts {
+                attempt.in_flight_chunk = None;
+                let attempt_key = (key.clone(), source.clone());
+                if retained_order.insert(attempt_key.clone()) {
+                    self.outbound_order.push_back(attempt_key);
+                }
+                attempt.queued = true;
+            }
+        }
+        Ok(self)
     }
 
     fn validate_reference_len(
@@ -2438,16 +3570,118 @@ impl MergeSidecarTransport {
         Ok(len)
     }
 
-    fn request_id(&self, requester: &PeerId, key: InboundSidecarKey, nonce: u64) -> Hash {
-        let (entry_hash, reference_digest) = key;
-        Hash::new_from_chunks(&[
-            REQUEST_ID_DOMAIN,
-            self.boot_nonce.as_ref(),
-            requester.to_string().as_bytes(),
-            entry_hash.as_ref().as_ref(),
-            reference_digest.as_ref(),
-            &nonce.to_le_bytes(),
-        ])
+    fn allocate_request_sequence(
+        &mut self,
+        responder: &PeerId,
+    ) -> Result<(u64, u64), MergeSidecarError> {
+        if !self.request_streams.contains_key(responder)
+            && self.request_streams.len() >= MAX_CERTIFIED_MERGE_SEMANTIC_PEERS
+        {
+            return Err(MergeSidecarError::Capacity(
+                "requester semantic responder geometry",
+            ));
+        }
+        self.request_streams
+            .entry(responder.clone())
+            .or_default()
+            .allocate()
+    }
+
+    fn close_request_sequence(&mut self, responder: &PeerId, semantic_sequence: u64) {
+        if let Some(stream) = self.request_streams.get_mut(responder) {
+            stream.close(semantic_sequence);
+        }
+    }
+
+    fn due_close_responders(&self, now: Instant) -> VecDeque<PeerId> {
+        self.request_streams
+            .iter()
+            .filter(|(_, stream)| stream.close_due(now, self.limits.request_timeout))
+            .map(|(responder, _)| responder.clone())
+            .collect()
+    }
+
+    fn begin_close(
+        &mut self,
+        requester: &PeerId,
+        responder: &PeerId,
+        now: Instant,
+    ) -> Option<MergeSidecarPost> {
+        let stream = self.request_streams.get_mut(responder)?;
+        if !stream.close_due(now, self.limits.request_timeout) {
+            return None;
+        }
+        let close = stream.emit_close(requester, responder, now);
+        Some(MergeSidecarPost {
+            peer: responder.clone(),
+            reply_route: None,
+            message: Arc::new(CertifiedMergeSidecarMessage::Close(close)),
+        })
+    }
+
+    fn begin_request_or_close(
+        &mut self,
+        requester: &PeerId,
+        idle: &mut VecDeque<InboundSidecarKey>,
+        close_responders: &mut VecDeque<PeerId>,
+        now: Instant,
+    ) -> Result<Option<MergeSidecarPost>, MergeSidecarError> {
+        let contended = !idle.is_empty() && !close_responders.is_empty();
+        let close_first = !close_responders.is_empty() && (idle.is_empty() || self.tick_close_next);
+        if close_first {
+            while let Some(responder) = close_responders.pop_front() {
+                if let Some(post) = self.begin_close(requester, &responder, now) {
+                    self.timeout_retry_close_deferred = false;
+                    if contended {
+                        self.tick_close_next = false;
+                    }
+                    return Ok(Some(post));
+                }
+            }
+        }
+        while let Some(key) = idle.pop_front() {
+            if let Some(post) = self.begin_request(key, requester, now)? {
+                if contended {
+                    self.tick_close_next = true;
+                }
+                return Ok(Some(post));
+            }
+        }
+        if !close_first {
+            while let Some(responder) = close_responders.pop_front() {
+                if let Some(post) = self.begin_close(requester, &responder, now) {
+                    self.timeout_retry_close_deferred = false;
+                    return Ok(Some(post));
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    pub(crate) fn acknowledge_close(
+        &mut self,
+        sender: &PeerId,
+        ack: &CertifiedMergeSidecarCloseAckV1,
+        local_peer: &PeerId,
+    ) -> Result<bool, MergeSidecarError> {
+        if ack.version != CERTIFIED_MERGE_SIDECAR_VERSION_V1 {
+            return Err(MergeSidecarError::UnsupportedVersion(ack.version));
+        }
+        if &ack.requester != local_peer || &ack.responder != sender {
+            return Err(MergeSidecarError::PeerIdentityMismatch);
+        }
+        if ack.closed_through == 0 || ack.close_id != ack.canonical_close_id() {
+            return Err(MergeSidecarError::CloseIdMismatch);
+        }
+        let stream = self
+            .request_streams
+            .get_mut(sender)
+            .ok_or(MergeSidecarError::UnsolicitedResponse)?;
+        let advanced = stream.acknowledge_close(ack.closed_through);
+        if advanced {
+            self.persist_lifecycle_state()?;
+        }
+        Ok(advanced)
     }
 
     fn inbound_peer_session_count(&self, peer: &PeerId) -> usize {
@@ -2609,8 +3843,7 @@ impl MergeSidecarTransport {
         let Some((holder_index, holder)) = selected else {
             return Ok(None);
         };
-        self.next_request_nonce = self.next_request_nonce.wrapping_add(1);
-        let request_id = self.request_id(requester, key, self.next_request_nonce);
+        let (semantic_sequence, closed_through) = self.allocate_request_sequence(&holder)?;
         let assembly = self
             .inbound
             .get_mut(&key)
@@ -2618,19 +3851,14 @@ impl MergeSidecarTransport {
         let previous_attempts = assembly.attempts;
         assembly.attempts = assembly.attempts.saturating_add(1);
         assembly.holder_cursor = (holder_index + 1) % holders.len();
-        assembly.current = Some(RequestAttempt {
-            id: request_id,
-            holder: holder.clone(),
-            last_progress_at: now,
-            previous_holder_cursor: start_cursor,
-            previous_attempts,
-        });
         assembly.chunks.clear();
         assembly.received_bytes = 0;
         let reference = &assembly.reference;
-        let request = CertifiedMergeSidecarRequestV1 {
+        let mut request = CertifiedMergeSidecarRequestV1 {
             version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
-            request_id,
+            semantic_sequence,
+            closed_through,
+            request_id: Hash::prehashed([0; Hash::LENGTH]),
             entry_hash: key.0,
             encoded_len: reference.encoded_len,
             epoch_id: reference.epoch_id,
@@ -2638,7 +3866,17 @@ impl MergeSidecarTransport {
             requester: requester.clone(),
             responder: holder.clone(),
         };
+        request.bind_canonical_request_id();
+        assembly.current = Some(RequestAttempt {
+            id: request.request_id,
+            semantic_sequence,
+            holder: holder.clone(),
+            last_progress_at: now,
+            previous_holder_cursor: start_cursor,
+            previous_attempts,
+        });
         self.inbound_cursor = Some(key);
+        self.persist_lifecycle_state()?;
         Ok(Some(MergeSidecarPost {
             peer: holder,
             reply_route: None,
@@ -2650,15 +3888,18 @@ impl MergeSidecarTransport {
     /// queue could not retain the post. No network attempt occurred, so a
     /// later bounded tick may select a holder immediately without waiting for
     /// the ordinary response timeout.
-    pub(crate) fn release_unsent_request(&mut self, request: &CertifiedMergeSidecarRequestV1) {
+    pub(crate) fn release_unsent_request(
+        &mut self,
+        request: &CertifiedMergeSidecarRequestV1,
+    ) -> Result<(), MergeSidecarError> {
         let key = (request.entry_hash, request.reference_digest);
         let Some(assembly) = self.inbound.get_mut(&key) else {
-            return;
+            return Ok(());
         };
         if !assembly.current.as_ref().is_some_and(|attempt| {
             attempt.id == request.request_id && attempt.holder == request.responder
         }) {
-            return;
+            return Ok(());
         }
         let attempt = assembly
             .current
@@ -2669,6 +3910,8 @@ impl MergeSidecarTransport {
         assembly.chunks.clear();
         assembly.received_bytes = 0;
         assembly.complete_pending_validation = false;
+        self.close_request_sequence(&attempt.holder, attempt.semantic_sequence);
+        self.persist_lifecycle_state()
     }
 
     /// Register a block whose exact sidecar is missing and begin a bounded
@@ -2871,6 +4114,9 @@ impl MergeSidecarTransport {
         if attempt.id != chunk.request_id {
             return Err(MergeSidecarError::RequestIdMismatch);
         }
+        if attempt.semantic_sequence != chunk.semantic_sequence {
+            return Err(MergeSidecarError::MetadataMismatch);
+        }
         let reference = &snapshot.reference;
         if chunk.encoded_len != reference.encoded_len
             || chunk.epoch_id != reference.epoch_id
@@ -2954,59 +4200,80 @@ impl MergeSidecarTransport {
         success: bool,
         requester: &PeerId,
         now: Instant,
-    ) -> (
-        Vec<(HashOf<BlockHeader>, u64, u64)>,
-        Option<MergeSidecarPost>,
-    ) {
+    ) -> Result<
+        (
+            Vec<(HashOf<BlockHeader>, u64, u64)>,
+            Option<MergeSidecarPost>,
+        ),
+        MergeSidecarError,
+    > {
         let key = (entry_hash, reference_digest);
         if success {
-            let deferred = self
-                .inbound
-                .remove(&key)
-                .map(|assembly| {
-                    assembly
-                        .deferred
-                        .into_values()
-                        .map(|carrier| (carrier.hash, carrier.height, carrier.view))
-                        .collect()
-                })
-                .unwrap_or_default();
-            return (deferred, None);
+            let deferred = self.inbound.remove(&key).map_or_else(Vec::new, |assembly| {
+                if let Some(attempt) = &assembly.current {
+                    self.close_request_sequence(&attempt.holder, attempt.semantic_sequence);
+                }
+                assembly
+                    .deferred
+                    .into_values()
+                    .map(|carrier| (carrier.hash, carrier.height, carrier.view))
+                    .collect()
+            });
+            self.persist_lifecycle_state()?;
+            return Ok((deferred, None));
         }
-        if let Some(assembly) = self.inbound.get_mut(&key) {
-            assembly.current = None;
+        let closed = self.inbound.get_mut(&key).and_then(|assembly| {
+            let closed = assembly
+                .current
+                .take()
+                .map(|attempt| (attempt.holder, attempt.semantic_sequence));
             assembly.chunks.clear();
             assembly.received_bytes = 0;
             assembly.complete_pending_validation = false;
+            closed
+        });
+        if let Some((holder, semantic_sequence)) = closed {
+            self.close_request_sequence(&holder, semantic_sequence);
         }
-        let request = self.begin_request(key, requester, now).ok().flatten();
-        (Vec::new(), request)
+        let request = self.begin_request(key, requester, now)?;
+        if request.is_none() {
+            self.persist_lifecycle_state()?;
+        }
+        Ok((Vec::new(), request))
     }
 
     /// Drop an invalid exact reference and return all affected carrier blocks.
     pub(crate) fn discard_invalid(
         &mut self,
         entry_hash: HashOf<MergeLedgerEntry>,
-    ) -> Vec<(HashOf<BlockHeader>, u64, u64)> {
+    ) -> Result<Vec<(HashOf<BlockHeader>, u64, u64)>, MergeSidecarError> {
         let keys = self
             .inbound
             .keys()
             .filter(|key| key.0 == entry_hash)
             .copied()
             .collect::<Vec<_>>();
-        keys.into_iter()
-            .filter_map(|key| self.inbound.remove(&key))
-            .flat_map(|assembly| {
+        let mut affected = Vec::new();
+        for key in keys {
+            let Some(assembly) = self.inbound.remove(&key) else {
+                continue;
+            };
+            if let Some(attempt) = &assembly.current {
+                self.close_request_sequence(&attempt.holder, attempt.semantic_sequence);
+            }
+            affected.extend(
                 assembly
                     .deferred
                     .into_values()
-                    .map(|carrier| (carrier.hash, carrier.height, carrier.view))
-            })
-            .collect()
+                    .map(|carrier| (carrier.hash, carrier.height, carrier.view)),
+            );
+        }
+        self.persist_lifecycle_state()?;
+        Ok(affected)
     }
 
-    fn retire_inactive_outbound_attempts(&mut self, now: Instant) {
-        let retired = self
+    fn park_inactive_outbound_attempts(&mut self, now: Instant) {
+        let inactive = self
             .outbound
             .iter()
             .flat_map(|(key, transfer)| {
@@ -3025,7 +4292,7 @@ impl MergeSidecarTransport {
                 })
             })
             .collect::<Vec<_>>();
-        for (key, source, resume_chunk) in retired {
+        for (key, source, resume_chunk) in inactive {
             if let Some(gate_attempt) = self
                 .server_request_gates
                 .get_mut(&key)
@@ -3034,11 +4301,17 @@ impl MergeSidecarTransport {
                 gate_attempt.cursor = ServerResponseCursor::Pending(resume_chunk);
                 gate_attempt.inserted = now;
             }
-            if let Some(transfer) = self.outbound.get_mut(&key) {
-                transfer.attempts.remove(&source);
-                if transfer.attempts.is_empty() {
-                    self.outbound.remove(&key);
-                }
+            if let Some(attempt) = self
+                .outbound
+                .get_mut(&key)
+                .and_then(|transfer| transfer.attempts.get_mut(&source))
+            {
+                // Retain the immutable shared payload and this source's
+                // bounded session/byte reservation. The old writer may still
+                // report a successful in-flight flush; otherwise a reconnect
+                // replaces only the tenure and requeues this exact cursor.
+                attempt.next_chunk = resume_chunk;
+                attempt.queued = false;
             }
         }
         self.outbound_order.retain(|(key, source)| {
@@ -3050,22 +4323,179 @@ impl MergeSidecarTransport {
     }
 
     fn prune_server_gates(&mut self, now: Instant) {
-        self.retire_inactive_outbound_attempts(now);
-        let outbound = &self.outbound;
-        self.server_request_gates.retain(|key, gate| {
-            // A pending cursor is the source's bounded progress reservation,
-            // including while its tenure is inactive and shared bytes have
-            // been released. Only terminal no-outbound tombstones age out.
-            gate.attempts.retain(|source, attempt| {
-                outbound
-                    .get(key)
-                    .is_some_and(|transfer| transfer.attempts.contains_key(source))
-                    || attempt.cursor != ServerResponseCursor::Complete
-                    || now.saturating_duration_since(attempt.inserted)
-                        <= self.limits.server_request_gate_ttl
-            });
-            !gate.attempts.is_empty()
-        });
+        self.park_inactive_outbound_attempts(now);
+        // Semantic ownership has no wall-clock expiry. A completed source
+        // remains terminal until the authenticated requester advances its
+        // cumulative close floor; elapsed time must never reset its cursor.
+    }
+
+    fn preflight_server_request_stream(
+        &self,
+        sender: &PeerId,
+        request: &CertifiedMergeSidecarRequestV1,
+    ) -> Result<(), MergeSidecarError> {
+        if request.semantic_sequence == 0
+            || request.closed_through >= request.semantic_sequence
+            || request.request_id != request.canonical_request_id()
+        {
+            return Err(MergeSidecarError::RequestIdMismatch);
+        }
+        let prior_floor = self
+            .server_closed_through
+            .get(sender)
+            .copied()
+            .unwrap_or_default();
+        if request.closed_through < prior_floor {
+            return Err(MergeSidecarError::UnsolicitedResponse);
+        }
+        if !self.server_closed_through.contains_key(sender)
+            && self.server_closed_through.len() >= MAX_CERTIFIED_MERGE_SEMANTIC_PEERS
+        {
+            return Err(MergeSidecarError::Capacity(
+                "server semantic requester geometry",
+            ));
+        }
+        let forward_window = u64::try_from(self.limits.inbound_sessions_per_peer)
+            .map_err(|_| MergeSidecarError::Capacity("semantic request forward window"))?;
+        let window_end = request.closed_through.checked_add(forward_window).ok_or(
+            MergeSidecarError::Capacity("semantic request forward window"),
+        )?;
+        if request.semantic_sequence > window_end {
+            return Err(MergeSidecarError::Capacity(
+                "semantic request forward window",
+            ));
+        }
+        if self.server_request_gates.iter().any(|(key, gate)| {
+            &key.0 == sender
+                && gate.semantic_sequence == request.semantic_sequence
+                && (key.1 != request.request_id || gate.request_hash != HashOf::new(request))
+        }) {
+            return Err(MergeSidecarError::UnsolicitedResponse);
+        }
+        Ok(())
+    }
+
+    fn advance_server_close_floor(&mut self, sender: &PeerId, closed_through: u64) {
+        let prior = self
+            .server_closed_through
+            .get(sender)
+            .copied()
+            .unwrap_or_default();
+        if closed_through == prior {
+            self.server_closed_through
+                .entry(sender.clone())
+                .or_insert(prior);
+            return;
+        }
+        debug_assert!(closed_through > prior);
+        let retired = self
+            .server_request_gates
+            .iter()
+            .filter(|(key, gate)| &key.0 == sender && gate.semantic_sequence <= closed_through)
+            .map(|(key, _)| key.clone())
+            .collect::<BTreeSet<_>>();
+        for key in &retired {
+            self.server_request_gates.remove(key);
+            self.outbound.remove(key);
+        }
+        if !retired.is_empty() {
+            self.outbound_order
+                .retain(|(key, _)| !retired.contains(key));
+        }
+        self.server_closed_through
+            .insert(sender.clone(), closed_through);
+        self.pending_server_closures
+            .entry(sender.clone())
+            .and_modify(|pending| *pending = (*pending).max(closed_through))
+            .or_insert(closed_through);
+    }
+
+    /// Apply an authenticated standalone close and return its topology ACK.
+    pub(crate) fn admit_server_close(
+        &mut self,
+        sender: &PeerId,
+        close: &CertifiedMergeSidecarCloseV1,
+        local_peer: &PeerId,
+    ) -> Result<MergeSidecarPost, MergeSidecarError> {
+        if close.version != CERTIFIED_MERGE_SIDECAR_VERSION_V1 {
+            return Err(MergeSidecarError::UnsupportedVersion(close.version));
+        }
+        if &close.requester != sender || &close.responder != local_peer {
+            return Err(MergeSidecarError::PeerIdentityMismatch);
+        }
+        if close.closed_through == 0 || close.close_id != close.canonical_close_id() {
+            return Err(MergeSidecarError::CloseIdMismatch);
+        }
+        let prior = self.server_closed_through.get(sender).copied();
+        let highest = self.server_highest_sequence.get(sender).copied();
+        let first_observation = match (prior, highest) {
+            (None, None) => {
+                if self.server_closed_through.len() >= MAX_CERTIFIED_MERGE_SEMANTIC_PEERS {
+                    return Err(MergeSidecarError::Capacity(
+                        "server semantic requester geometry",
+                    ));
+                }
+                true
+            }
+            (Some(prior), Some(highest)) => {
+                if close.closed_through > highest {
+                    return Err(MergeSidecarError::UnsolicitedResponse);
+                }
+                if close.closed_through < prior {
+                    return Err(MergeSidecarError::UnsolicitedResponse);
+                }
+                false
+            }
+            (None, Some(_)) | (Some(_), None) => {
+                return Err(MergeSidecarError::UnsolicitedResponse);
+            }
+        };
+        let prior = prior.unwrap_or_default();
+        if close.closed_through < prior {
+            return Err(MergeSidecarError::UnsolicitedResponse);
+        }
+        if first_observation {
+            // The requester may crash after durably allocating a sequence but
+            // before its request reaches this responder. Its authenticated
+            // standalone Close is therefore the responder's first observation
+            // of that stream. Install the asserted high-water and floor
+            // atomically so a delayed copy of the unsent request remains stale.
+            self.server_closed_through.insert(sender.clone(), 0);
+            self.server_highest_sequence
+                .insert(sender.clone(), close.closed_through);
+        }
+        if close.closed_through > prior {
+            self.advance_server_close_floor(sender, close.closed_through);
+            self.persist_lifecycle_state()?;
+        }
+        let ack = CertifiedMergeSidecarCloseAckV1 {
+            version: close.version,
+            closed_through: close.closed_through,
+            close_id: close.close_id,
+            requester: close.requester.clone(),
+            responder: close.responder.clone(),
+        };
+        Ok(MergeSidecarPost {
+            peer: sender.clone(),
+            reply_route: None,
+            message: Arc::new(CertifiedMergeSidecarMessage::CloseAck(ack)),
+        })
+    }
+
+    /// Drain coalesced server prefixes so every downstream queue can cancel
+    /// covered response chunks before dispatching newer work.
+    pub(crate) fn drain_closed_server_prefixes(
+        &mut self,
+    ) -> Vec<CertifiedMergeSidecarClosedPrefix> {
+        std::mem::take(&mut self.pending_server_closures)
+            .into_iter()
+            .map(
+                |(requester, closed_through)| CertifiedMergeSidecarClosedPrefix {
+                    requester,
+                    closed_through,
+                },
+            )
+            .collect()
     }
 
     fn server_request_source(
@@ -3081,7 +4511,11 @@ impl MergeSidecarTransport {
     fn source_gate_count(&self, source: &ServerRequestSource) -> usize {
         self.server_request_gates
             .values()
-            .filter(|gate| gate.attempts.contains_key(source))
+            .filter(|gate| {
+                gate.attempts
+                    .keys()
+                    .any(|retained| retained.shares_budget_with(source))
+            })
             .count()
     }
 
@@ -3090,6 +4524,32 @@ impl MergeSidecarTransport {
             .values()
             .map(|gate| gate.attempts.len())
             .sum()
+    }
+
+    fn server_gate_attempt_count_after_close(&self, sender: &PeerId, closed_through: u64) -> usize {
+        self.server_request_gates
+            .iter()
+            .filter(|(key, gate)| &key.0 != sender || gate.semantic_sequence > closed_through)
+            .map(|(_, gate)| gate.attempts.len())
+            .sum()
+    }
+
+    fn source_gate_count_after_close(
+        &self,
+        source: &ServerRequestSource,
+        sender: &PeerId,
+        closed_through: u64,
+    ) -> usize {
+        self.server_request_gates
+            .iter()
+            .filter(|(key, gate)| {
+                (&key.0 != sender || gate.semantic_sequence > closed_through)
+                    && gate
+                        .attempts
+                        .keys()
+                        .any(|retained| retained.shares_budget_with(source))
+            })
+            .count()
     }
 
     fn outbound_attempt_count(&self) -> usize {
@@ -3102,7 +4562,12 @@ impl MergeSidecarTransport {
     fn source_outbound_count(&self, source: &ServerRequestSource) -> usize {
         self.outbound
             .values()
-            .filter(|transfer| transfer.attempts.contains_key(source))
+            .filter(|transfer| {
+                transfer
+                    .attempts
+                    .keys()
+                    .any(|retained| retained.shares_budget_with(source))
+            })
             .count()
     }
 
@@ -3116,7 +4581,12 @@ impl MergeSidecarTransport {
     fn source_outbound_bytes(&self, source: &ServerRequestSource) -> usize {
         self.outbound
             .values()
-            .filter(|transfer| transfer.attempts.contains_key(source))
+            .filter(|transfer| {
+                transfer
+                    .attempts
+                    .keys()
+                    .any(|retained| retained.shares_budget_with(source))
+            })
             .map(|transfer| transfer.response_len)
             .sum()
     }
@@ -3139,16 +4609,19 @@ impl MergeSidecarTransport {
         candidate: Option<&NetworkReplyRoute>,
     ) -> bool {
         match candidate {
-            Some(candidate) => gate.attempts.values().all(|attempt| {
-                attempt.reply_route.as_ref().is_some_and(|prior| {
-                    candidate.same_request_authority(prior)
-                        && !candidate.equal_ordinal_different_tenure(prior)
-                })
+            Some(candidate) => gate.attempts.iter().all(|(source, attempt)| {
+                attempt.reply_route.as_ref().map_or_else(
+                    || matches!(source, ServerRequestSource::RecoveredAuthenticated(_)),
+                    |prior| {
+                        candidate.same_request_authority(prior)
+                            && !candidate.equal_ordinal_different_tenure(prior)
+                            && !candidate.equal_connection_ordinal_different_tenure(prior)
+                    },
+                )
             }),
-            None => gate
-                .attempts
-                .values()
-                .all(|attempt| attempt.reply_route.is_none()),
+            None => gate.attempts.iter().all(|(source, attempt)| {
+                matches!(source, ServerRequestSource::Synthetic(_)) && attempt.reply_route.is_none()
+            }),
         }
     }
 
@@ -3212,8 +4685,45 @@ impl MergeSidecarTransport {
         if source_capacity.is_some_and(|capacity| capacity != self.reply_source_capacity) {
             return Err(MergeSidecarError::UnsolicitedResponse);
         }
-        if let Some(existing) = self.server_request_gates.get(&key).cloned() {
+        self.preflight_server_request_stream(sender, request)?;
+        if self.server_request_gates.get(&key).is_some_and(|existing| {
+            existing.semantic_sequence != request.semantic_sequence
+                && existing.semantic_sequence > request.closed_through
+        }) {
+            return Err(MergeSidecarError::UnsolicitedResponse);
+        }
+        if let Some(route) = reply_route
+            && let Some(gate) = self.server_request_gates.get_mut(&key).filter(|gate| {
+                gate.semantic_sequence == request.semantic_sequence
+                    && gate.request_hash == request_hash
+                    && gate.source_capacity == source_capacity
+            })
+        {
+            let recovered_source = ServerRequestSource::RecoveredAuthenticated(
+                route.authenticated_source_peer().clone(),
+            );
+            if !gate.attempts.contains_key(&source)
+                && let Some(mut recovered) = gate.attempts.remove(&recovered_source)
+            {
+                recovered.reply_route = Some(route.clone());
+                recovered.materialization_authorized = false;
+                recovered.authorized_materialization_route = None;
+                recovered.materialization_retryable =
+                    matches!(recovered.cursor, ServerResponseCursor::Pending(_));
+                recovered.inserted = now;
+                gate.attempts.insert(source.clone(), recovered);
+            }
+        }
+        if let Some(existing) = self
+            .server_request_gates
+            .get(&key)
+            .filter(|existing| existing.semantic_sequence == request.semantic_sequence)
+            .cloned()
+        {
             if existing.request_hash != request_hash {
+                return Err(MergeSidecarError::UnsolicitedResponse);
+            }
+            if existing.semantic_sequence != request.semantic_sequence {
                 return Err(MergeSidecarError::UnsolicitedResponse);
             }
             if existing.source_capacity != source_capacity {
@@ -3476,16 +4986,25 @@ impl MergeSidecarTransport {
                 );
             return Ok(!materialization_in_progress);
         }
-        let source_count = self.source_gate_count(&source);
-        if self.server_gate_attempt_count() >= self.server_request_gate_capacity
+        let source_count =
+            self.source_gate_count_after_close(&source, sender, request.closed_through);
+        if self.server_gate_attempt_count_after_close(sender, request.closed_through)
+            >= self.server_request_gate_capacity
             || source_count >= self.limits.server_request_gates_per_source
         {
             return Err(MergeSidecarError::Capacity("server request rate gate"));
         }
+        self.advance_server_close_floor(sender, request.closed_through);
+        debug_assert!(!self.server_request_gates.contains_key(&key));
+        self.server_highest_sequence
+            .entry(sender.clone())
+            .and_modify(|highest| *highest = (*highest).max(request.semantic_sequence))
+            .or_insert(request.semantic_sequence);
         self.server_request_gates.insert(
             key,
             ServerRequestGate {
                 request_hash,
+                semantic_sequence: request.semantic_sequence,
                 source_capacity,
                 attempts: BTreeMap::from([(
                     source,
@@ -3526,15 +5045,20 @@ impl MergeSidecarTransport {
             .get_mut(&key)
             .filter(|gate| gate.request_hash == request_hash)
         {
-            for attempt in gate
-                .attempts
-                .values_mut()
-                .filter(|attempt| attempt.materialization_authorized)
-            {
-                attempt.materialization_authorized = false;
-                attempt.authorized_materialization_route = None;
-                attempt.materialization_retryable = true;
-            }
+            Self::release_authorized_server_request_attempts(gate);
+        }
+    }
+
+    fn release_authorized_server_request_attempts(gate: &mut ServerRequestGate) {
+        for attempt in gate
+            .attempts
+            .values_mut()
+            .filter(|attempt| attempt.materialization_authorized)
+        {
+            attempt.materialization_authorized = false;
+            attempt.authorized_materialization_route = None;
+            attempt.materialization_retryable =
+                matches!(attempt.cursor, ServerResponseCursor::Pending(_));
         }
     }
 
@@ -3556,9 +5080,9 @@ impl MergeSidecarTransport {
     /// The admission gate binds the canonical request and exact authenticated
     /// delivery. Materialized bytes are shared by every admitted source, while
     /// each source receives its own source-local non-regressing chunk cursor.
-    /// After the bounded duplicate window expires, an exact live delivery may authorize
-    /// another durable lookup, so local admission never becomes height-long
-    /// deduplication.
+    /// Completed attempts remain terminal until the authenticated requester's
+    /// cumulative close floor covers their semantic sequence. No timer,
+    /// reconnect, or height reconstruction may reset a source cursor.
     pub(crate) fn enqueue_response(
         &mut self,
         request: CertifiedMergeSidecarRequestV1,
@@ -3613,6 +5137,7 @@ impl MergeSidecarTransport {
                 Arc::new(CertifiedMergeSidecarMessage::Chunk(
                     CertifiedMergeSidecarChunkV1 {
                         version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
+                        semantic_sequence: request.semantic_sequence,
                         request_id: request.request_id,
                         entry_hash: request.entry_hash,
                         encoded_len: request.encoded_len,
@@ -3678,18 +5203,18 @@ impl MergeSidecarTransport {
                 .server_request_gates
                 .get_mut(&key)
                 .expect("validated server request gate remains present");
-            Self::park_authorized_server_request_attempts(gate, now);
             // A successful old-writer receipt may have completed the source
             // represented by this exact authorization while terminating local
             // materialization was in flight. That callback is a consumed
             // no-op. A still-pending authorization with no live route instead
             // lost its delivery authority and must fail closed after releasing
             // every response reservation.
-            return if exact_attempt_completed {
-                Ok(())
-            } else {
-                Err(MergeSidecarError::UnsolicitedResponse)
-            };
+            if exact_attempt_completed {
+                Self::park_authorized_server_request_attempts(gate, now);
+                return Ok(());
+            }
+            Self::release_authorized_server_request_attempts(gate);
+            return Err(MergeSidecarError::UnsolicitedResponse);
         }
         if admitted_attempts.is_empty()
             || self.global_outbound_bytes().saturating_add(response_len)
@@ -3699,7 +5224,11 @@ impl MergeSidecarTransport {
                 .server_request_gates
                 .get_mut(&key)
                 .expect("validated server request gate remains present");
-            Self::park_authorized_server_request_attempts(gate, now);
+            // Capacity pressure is transient. Release terminating lookup
+            // authority, but retain a retryable semantic gate so the exact
+            // authenticated delivery can make progress once an older response
+            // relinquishes its source reservation.
+            Self::release_authorized_server_request_attempts(gate);
             return Err(MergeSidecarError::Capacity("outbound response budget"));
         }
         let gate = self
@@ -3713,6 +5242,14 @@ impl MergeSidecarTransport {
         // after they leave) without restarting. A completed source remains
         // terminal across connection tenures while this semantic gate exists.
         Self::park_authorized_server_request_attempts(gate, now);
+        for source in capacity_rejected_attempts {
+            let attempt = gate
+                .attempts
+                .get_mut(&source)
+                .expect("capacity-rejected source remains in its semantic gate");
+            attempt.materialization_retryable =
+                matches!(attempt.cursor, ServerResponseCursor::Pending(_));
+        }
         let mut attempts = BTreeMap::new();
         for (source, reply_route, resume_chunk) in admitted_attempts {
             self.outbound_order.push_back((key.clone(), source.clone()));
@@ -3739,24 +5276,25 @@ impl MergeSidecarTransport {
         Ok(())
     }
 
-    /// Emit at most `limit` response chunks in deterministic session order.
+    /// Select at most `limit` response chunks in deterministic session order.
     ///
-    /// The owned queue, rather than an index into a rebuilt map snapshot, makes
-    /// each source attempt's service rank decrease even when another source
-    /// completes or experiences backpressure. Reconnect retries only that
-    /// source's retained current chunk.
-    pub(crate) fn drain_outbound_chunks(
+    /// The returned boolean reports whether the durable gate cursor or pending
+    /// writer identity changed. Production callers must persist such a change
+    /// before handing any returned post to exact output.
+    fn drain_outbound_chunks_inner(
         &mut self,
         limit: usize,
         now: Instant,
-    ) -> Vec<MergeSidecarPost> {
+    ) -> (Vec<MergeSidecarPost>, bool) {
         let mut posts = Vec::new();
+        let mut lifecycle_changed = false;
         while posts.len() < limit {
             let Some((key, source)) = self.outbound_order.pop_front() else {
                 break;
             };
             let mut completed = false;
-            let mut retired = false;
+            let mut inactive = false;
+            let mut identity_mismatch = false;
             let cursor;
             let mut emitted_chunk_identity = None;
             let retained_chunk_identity = self
@@ -3776,7 +5314,7 @@ impl MergeSidecarTransport {
                     .as_ref()
                     .is_some_and(|route| !route.is_active())
                 {
-                    retired = true;
+                    inactive = true;
                     cursor = ServerResponseCursor::Pending(
                         attempt.in_flight_chunk.unwrap_or(attempt.next_chunk),
                     );
@@ -3804,7 +5342,7 @@ impl MergeSidecarTransport {
                             // and preserve the exact marker so its genuine late
                             // receipt can still advance; subsequent lookup also
                             // fails closed on the same mismatch.
-                            retired = true;
+                            identity_mismatch = true;
                         } else {
                             emitted_chunk_identity = Some(identity);
                             posts.push(MergeSidecarPost {
@@ -3827,17 +5365,21 @@ impl MergeSidecarTransport {
                 .get_mut(&key)
                 .and_then(|gate| gate.attempts.get_mut(&source))
             {
+                let cursor_before = gate_attempt.cursor;
+                let pending_flush_before = gate_attempt.pending_flush_chunk.clone();
                 gate_attempt.cursor = cursor;
                 if completed {
                     gate_attempt.pending_flush_chunk = None;
                 } else if let Some(identity) = emitted_chunk_identity {
                     gate_attempt.pending_flush_chunk = Some(identity);
                 }
-                if retired || completed {
+                lifecycle_changed |= gate_attempt.cursor != cursor_before
+                    || gate_attempt.pending_flush_chunk != pending_flush_before;
+                if inactive || identity_mismatch || completed {
                     gate_attempt.inserted = now;
                 }
             }
-            if retired || completed {
+            if identity_mismatch || completed {
                 let transfer = self
                     .outbound
                     .get_mut(&key)
@@ -3848,7 +5390,26 @@ impl MergeSidecarTransport {
                 }
             }
         }
-        posts
+        (posts, lifecycle_changed)
+    }
+
+    /// Emit at most `limit` response chunks after durably publishing their
+    /// pending writer identities and non-regressing source cursors.
+    pub(crate) fn drain_outbound_chunks_durable(
+        &mut self,
+        limit: usize,
+        now: Instant,
+    ) -> Result<Vec<MergeSidecarPost>, MergeSidecarError> {
+        let (posts, lifecycle_changed) = self.drain_outbound_chunks_inner(limit, now);
+        if lifecycle_changed {
+            self.persist_lifecycle_state()?;
+        }
+        Ok(posts)
+    }
+
+    #[cfg(test)]
+    fn drain_outbound_chunks(&mut self, limit: usize, now: Instant) -> Vec<MergeSidecarPost> {
+        self.drain_outbound_chunks_inner(limit, now).0
     }
 
     /// Advance one source cursor after its exact peer writer flushes the current chunk.
@@ -3951,6 +5512,7 @@ impl MergeSidecarTransport {
                 "writer flush application disconnected from its accepted worker transition",
             ));
         }
+        self.persist_lifecycle_state()?;
         Ok(true)
     }
 
@@ -3964,14 +5526,29 @@ impl MergeSidecarTransport {
         &mut self,
         pending_blocks: &BTreeSet<HashOf<BlockHeader>>,
         committed_height: u64,
-    ) {
+    ) -> Result<(), MergeSidecarError> {
         for assembly in self.inbound.values_mut() {
             assembly.deferred.retain(|hash, carrier| {
                 carrier.height > committed_height && pending_blocks.contains(hash)
             });
         }
+        let retired = self
+            .inbound
+            .iter()
+            .filter(|(_, assembly)| assembly.deferred.is_empty())
+            .filter_map(|(_, assembly)| {
+                assembly
+                    .current
+                    .as_ref()
+                    .map(|attempt| (attempt.holder.clone(), attempt.semantic_sequence))
+            })
+            .collect::<Vec<_>>();
         self.inbound
             .retain(|_, assembly| !assembly.deferred.is_empty());
+        for (holder, semantic_sequence) in retired {
+            self.close_request_sequence(&holder, semantic_sequence);
+        }
+        self.persist_lifecycle_state()
     }
 
     /// Rotate stalled holders and emit bounded, indefinitely retried requests.
@@ -3980,7 +5557,7 @@ impl MergeSidecarTransport {
         requester: &PeerId,
         now: Instant,
         limit: usize,
-    ) -> Vec<MergeSidecarPost> {
+    ) -> Result<Vec<MergeSidecarPost>, MergeSidecarError> {
         self.prune_server_gates(now);
         let timed_out: Vec<_> = self
             .inbound
@@ -3993,13 +5570,34 @@ impl MergeSidecarTransport {
             })
             .map(|(hash, _)| *hash)
             .collect();
+        let mut closed = Vec::new();
         for hash in &timed_out {
             if let Some(assembly) = self.inbound.get_mut(hash) {
-                assembly.current = None;
+                if let Some(attempt) = assembly.current.take() {
+                    closed.push((attempt.holder, attempt.semantic_sequence));
+                }
                 assembly.chunks.clear();
                 assembly.received_bytes = 0;
                 assembly.complete_pending_validation = false;
             }
+        }
+        let closed_any = !closed.is_empty();
+        for (holder, semantic_sequence) in closed {
+            self.close_request_sequence(&holder, semantic_sequence);
+        }
+        if closed_any {
+            // A newly timed-out fetch has exhausted its current holder and
+            // must rotate without spending the caller's sole bounded slot on
+            // administrative stream closure. At most one such retry may
+            // preempt a due Close: if another retry times out before the Close
+            // runs, the retained debt forces Close service first.
+            if self.timeout_retry_close_deferred {
+                self.tick_close_next = true;
+            } else {
+                self.tick_close_next = false;
+                self.timeout_retry_close_deferred = true;
+            }
+            self.persist_lifecycle_state()?;
         }
         let idle_keys = self
             .inbound
@@ -4017,10 +5615,12 @@ impl MergeSidecarTransport {
             .chain(&idle_keys[..start])
             .copied()
             .collect::<VecDeque<_>>();
+        let mut close_responders = self.due_close_responders(now);
         let mut posts = Vec::new();
+        let mut lifecycle_changed = false;
         while posts.len() < limit {
-            let request_ready = !idle.is_empty();
-            let response_ready = !self.outbound.is_empty();
+            let request_ready = !idle.is_empty() || !close_responders.is_empty();
+            let response_ready = !self.outbound_order.is_empty();
             if !request_ready && !response_ready {
                 break;
             }
@@ -4029,23 +5629,22 @@ impl MergeSidecarTransport {
             let mut emitted = false;
 
             if response_first {
-                if let Some(post) = self.drain_outbound_chunks(1, now).pop() {
+                let (mut drained, changed) = self.drain_outbound_chunks_inner(1, now);
+                lifecycle_changed |= changed;
+                if let Some(post) = drained.pop() {
                     posts.push(post);
                     emitted = true;
                     if contended {
                         self.tick_response_next = false;
                     }
                 }
-            } else {
-                while let Some(hash) = idle.pop_front() {
-                    if let Ok(Some(post)) = self.begin_request(hash, requester, now) {
-                        posts.push(post);
-                        emitted = true;
-                        if contended {
-                            self.tick_response_next = true;
-                        }
-                        break;
-                    }
+            } else if let Some(post) =
+                self.begin_request_or_close(requester, &mut idle, &mut close_responders, now)?
+            {
+                posts.push(post);
+                emitted = true;
+                if contended {
+                    self.tick_response_next = true;
                 }
             }
 
@@ -4053,23 +5652,29 @@ impl MergeSidecarTransport {
             // per-peer reservations are inspected. Preserve useful capacity
             // by trying the other class without advancing its fairness turn.
             if !emitted && response_first {
-                while let Some(hash) = idle.pop_front() {
-                    if let Ok(Some(post)) = self.begin_request(hash, requester, now) {
-                        posts.push(post);
-                        emitted = true;
-                        break;
-                    }
+                if let Some(post) =
+                    self.begin_request_or_close(requester, &mut idle, &mut close_responders, now)?
+                {
+                    posts.push(post);
+                    emitted = true;
                 }
-            } else if !emitted && let Some(post) = self.drain_outbound_chunks(1, now).pop() {
-                posts.push(post);
-                emitted = true;
+            } else if !emitted {
+                let (mut drained, changed) = self.drain_outbound_chunks_inner(1, now);
+                lifecycle_changed |= changed;
+                if let Some(post) = drained.pop() {
+                    posts.push(post);
+                    emitted = true;
+                }
             }
 
             if !emitted {
                 break;
             }
         }
-        posts
+        if lifecycle_changed {
+            self.persist_lifecycle_state()?;
+        }
+        Ok(posts)
     }
 
     #[cfg(test)]
@@ -4863,8 +6468,7 @@ mod tests {
                               request_timeout,
                               outbound_sessions,
                               outbound_bytes,
-                              request_gates,
-                              gate_ttl| {
+                              request_gates| {
             MergeSidecarLimits::new(
                 NonZeroUsize::new(inbound_sessions).expect("non-zero fixture"),
                 NonZeroUsize::new(inbound_sessions_per_peer).expect("non-zero fixture"),
@@ -4876,7 +6480,6 @@ mod tests {
                 NonZeroUsize::new(outbound_sessions).expect("non-zero fixture"),
                 NonZeroUsize::new(outbound_bytes).expect("non-zero fixture"),
                 NonZeroUsize::new(request_gates).expect("non-zero fixture"),
-                gate_ttl,
             )
         };
         let minimum_inbound = 2 * MAX_MERGE_LEDGER_ENTRY_BYTES;
@@ -4891,7 +6494,6 @@ mod tests {
                 1,
                 MAX_MERGE_LEDGER_ENTRY_BYTES,
                 1,
-                Duration::from_secs(1),
             )
             .is_err()
         );
@@ -4906,7 +6508,6 @@ mod tests {
                 1,
                 MAX_MERGE_LEDGER_ENTRY_BYTES,
                 1,
-                Duration::from_secs(1),
             )
             .is_err()
         );
@@ -4921,7 +6522,6 @@ mod tests {
                 1,
                 MAX_MERGE_LEDGER_ENTRY_BYTES,
                 1,
-                Duration::from_secs(1),
             )
             .is_err()
         );
@@ -4936,7 +6536,6 @@ mod tests {
                 1,
                 MAX_MERGE_LEDGER_ENTRY_BYTES,
                 1,
-                Duration::from_secs(1),
             )
             .is_err()
         );
@@ -4951,7 +6550,6 @@ mod tests {
                 1,
                 MAX_MERGE_LEDGER_ENTRY_BYTES,
                 1,
-                Duration::from_secs(1),
             )
             .is_err()
         );
@@ -4966,7 +6564,6 @@ mod tests {
                 1,
                 MAX_MERGE_LEDGER_ENTRY_BYTES - 1,
                 1,
-                Duration::from_secs(1),
             )
             .is_err()
         );
@@ -4981,22 +6578,6 @@ mod tests {
                 2,
                 MAX_MERGE_LEDGER_ENTRY_BYTES,
                 1,
-                Duration::from_secs(1),
-            )
-            .is_err()
-        );
-        assert!(
-            sidecar_limits(
-                2,
-                2,
-                minimum_inbound,
-                minimum_inbound,
-                2,
-                Duration::from_secs(2),
-                1,
-                MAX_MERGE_LEDGER_ENTRY_BYTES,
-                1,
-                Duration::from_secs(1),
             )
             .is_err()
         );
@@ -5132,6 +6713,7 @@ mod tests {
             .enumerate()
             .map(|(index, chunk)| CertifiedMergeSidecarChunkV1 {
                 version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
+                semantic_sequence: request.semantic_sequence,
                 request_id: request.request_id,
                 entry_hash: request.entry_hash,
                 encoded_len: request.encoded_len,
@@ -5200,13 +6782,15 @@ mod tests {
     fn routed_server_request(
         base: &CertifiedMergeSidecarRequestV1,
         requester: PeerId,
-        request_label: &[u8],
+        _request_label: &[u8],
         encoded_len: usize,
     ) -> CertifiedMergeSidecarRequestV1 {
         let mut request = base.clone();
         request.requester = requester;
-        request.request_id = Hash::new(request_label);
+        request.semantic_sequence = 1;
+        request.closed_through = 0;
         request.encoded_len = encoded_len as u64;
+        request.bind_canonical_request_id();
         request
     }
 
@@ -5272,6 +6856,7 @@ mod tests {
         let mut transport = MergeSidecarTransport::new();
         let chunk = CertifiedMergeSidecarChunkV1 {
             version: 1,
+            semantic_sequence: 1,
             request_id: Hash::new(b"request"),
             entry_hash: HashOf::from_untyped_unchecked(Hash::new(b"entry")),
             encoded_len: 1,
@@ -5376,13 +6961,15 @@ mod tests {
         };
         assert_eq!(complete.reference, reference);
         assert_eq!(complete.bytes, bytes);
-        let (deferred, retry) = transport.finish_completed(
-            reference.entry_hash,
-            certified_merge_reference_digest(&reference),
-            true,
-            &requester,
-            now,
-        );
+        let (deferred, retry) = transport
+            .finish_completed(
+                reference.entry_hash,
+                certified_merge_reference_digest(&reference),
+                true,
+                &requester,
+                now,
+            )
+            .expect("persist completed request lifecycle");
         assert_eq!(deferred.len(), 1);
         assert!(retry.is_none());
         assert_eq!(transport.inbound_len(), 0);
@@ -5391,12 +6978,16 @@ mod tests {
     #[test]
     fn timeout_rotates_to_another_qc_holder() {
         let (mut transport, requester, reference, first, now) = start_session(1, 3);
-        let posts = transport.tick_bounded(&requester, now + REQUEST_TIMEOUT, usize::MAX);
+        let posts = transport
+            .tick_bounded(&requester, now + REQUEST_TIMEOUT, usize::MAX)
+            .expect("rotate timed-out request");
         let next = posts
             .into_iter()
             .find_map(|post| match Arc::unwrap_or_clone(post.message) {
                 CertifiedMergeSidecarMessage::Request(request) => Some(request),
-                CertifiedMergeSidecarMessage::Chunk(_) => None,
+                CertifiedMergeSidecarMessage::Close(_)
+                | CertifiedMergeSidecarMessage::CloseAck(_)
+                | CertifiedMergeSidecarMessage::Chunk(_) => None,
             })
             .expect("rotated request");
         assert_ne!(next.request_id, first.request_id);
@@ -5416,13 +7007,18 @@ mod tests {
         // maximum interval; the deferred carrier identity must remain present.
         for attempt in 1..=8 {
             now += retry_timeout(REQUEST_TIMEOUT, attempt);
-            transport.retain_pending_blocks(&pending_blocks, 1);
+            transport
+                .retain_pending_blocks(&pending_blocks, 1)
+                .expect("persist retained carrier lifecycle");
             request = transport
                 .tick_bounded(&requester, now, usize::MAX)
+                .expect("service retained request")
                 .into_iter()
                 .find_map(|post| match Arc::unwrap_or_clone(post.message) {
                     CertifiedMergeSidecarMessage::Request(request) => Some(request),
-                    CertifiedMergeSidecarMessage::Chunk(_) => None,
+                    CertifiedMergeSidecarMessage::Close(_)
+                    | CertifiedMergeSidecarMessage::CloseAck(_)
+                    | CertifiedMergeSidecarMessage::Chunk(_) => None,
                 })
                 .expect("withheld holder must be retried indefinitely");
         }
@@ -5434,13 +7030,15 @@ mod tests {
             .ingest_chunk(&responder, chunks(&request, &[1]).remove(0), now)
             .expect("eventually available holder response");
         assert!(matches!(complete, ChunkIngestOutcome::Complete(_)));
-        let (deferred, retry) = transport.finish_completed(
-            reference.entry_hash,
-            certified_merge_reference_digest(&reference),
-            true,
-            &requester,
-            now,
-        );
+        let (deferred, retry) = transport
+            .finish_completed(
+                reference.entry_hash,
+                certified_merge_reference_digest(&reference),
+                true,
+                &requester,
+                now,
+            )
+            .expect("persist completed request lifecycle");
         assert_eq!(deferred, vec![(block_hash, 2, 0)]);
         assert!(retry.is_none());
         assert_eq!(transport.inbound_len(), 0);
@@ -5455,7 +7053,9 @@ mod tests {
             .defer_block(replacement, 2, 1, reference.clone(), &requester, 1, now)
             .expect("share exact sidecar session");
 
-        transport.retain_pending_blocks(&BTreeSet::from([replacement]), 1);
+        transport
+            .retain_pending_blocks(&BTreeSet::from([replacement]), 1)
+            .expect("persist replacement carrier lifecycle");
         let responder = request.responder.clone();
         assert!(matches!(
             transport
@@ -5463,18 +7063,22 @@ mod tests {
                 .expect("complete retained fetch"),
             ChunkIngestOutcome::Complete(_)
         ));
-        let (deferred, _) = transport.finish_completed(
-            reference.entry_hash,
-            certified_merge_reference_digest(&reference),
-            true,
-            &requester,
-            now,
-        );
+        let (deferred, _) = transport
+            .finish_completed(
+                reference.entry_hash,
+                certified_merge_reference_digest(&reference),
+                true,
+                &requester,
+                now,
+            )
+            .expect("persist completed replacement lifecycle");
         assert_eq!(deferred, vec![(replacement, 2, 1)]);
         assert!(!deferred.iter().any(|(hash, _, _)| *hash == original));
 
         let (mut transport, _, _, _, _) = start_session(1, 2);
-        transport.retain_pending_blocks(&BTreeSet::from([original]), 2);
+        transport
+            .retain_pending_blocks(&BTreeSet::from([original]), 2)
+            .expect("persist retired carrier lifecycle");
         assert_eq!(transport.inbound_len(), 0);
     }
 
@@ -5671,6 +7275,119 @@ mod tests {
         assert!(acknowledge_reply_chunk(&mut server, &continued[1], now));
         assert!(server.outbound.is_empty());
         assert!(server.outbound_order.is_empty());
+    }
+
+    #[test]
+    fn height_rollover_retries_only_each_sources_current_in_flight_chunk() {
+        let len = MAX_CERTIFIED_MERGE_CHUNK_BYTES + 1;
+        let (_, requester, _, request, now) = start_session(len, 3);
+        let local_peer = request.responder.clone();
+        let hub_a = peer(b"height rollover hub a");
+        let hub_b = peer(b"height rollover hub b");
+        let mut routes = NetworkReplyRouteTestFixture::new(hub_a.clone());
+        let route_a = routes.mint_via(requester.clone(), hub_a);
+        let route_b = routes.mint_via(requester.clone(), hub_b);
+        let source_a = ServerRequestSource::Authenticated(route_a.source_key());
+        let source_b = ServerRequestSource::Authenticated(route_b.source_key());
+        let key = (requester.clone(), request.request_id);
+        let mut server = MergeSidecarTransport::new();
+
+        assert!(
+            server
+                .admit_server_request(&requester, &request, Some(&route_a), &local_peer, now)
+                .expect("admit source A")
+        );
+        assert!(
+            !server
+                .admit_server_request(&requester, &request, Some(&route_b), &local_peer, now)
+                .expect("attach source B")
+        );
+        server
+            .enqueue_response(request, Some(route_a.clone()), vec![0xC7; len], now)
+            .expect("materialize shared response");
+
+        let first = server.drain_outbound_chunks(2, now);
+        let first_a = first
+            .iter()
+            .find(|post| {
+                post.reply_route
+                    .as_ref()
+                    .is_some_and(|route| route.same_delivery(&route_a))
+            })
+            .expect("source A receives chunk zero");
+        let first_b = first
+            .iter()
+            .find(|post| {
+                post.reply_route
+                    .as_ref()
+                    .is_some_and(|route| route.same_delivery(&route_b))
+            })
+            .expect("source B receives chunk zero");
+        assert!(matches!(
+            first_b.message.as_ref(),
+            CertifiedMergeSidecarMessage::Chunk(chunk) if chunk.chunk_index == 0
+        ));
+        assert!(acknowledge_reply_chunk(&mut server, first_a, now));
+
+        let second_a = server
+            .drain_outbound_chunks(1, now)
+            .pop()
+            .expect("source A advances to chunk one");
+        assert!(matches!(
+            &second_a,
+            MergeSidecarPost {
+                reply_route: Some(route),
+                message,
+                ..
+            } if route.same_delivery(&route_a)
+                && matches!(message.as_ref(), CertifiedMergeSidecarMessage::Chunk(chunk) if chunk.chunk_index == 1)
+        ));
+        assert_eq!(
+            server.outbound[&key].attempts[&source_a].in_flight_chunk,
+            Some(1)
+        );
+        assert_eq!(
+            server.outbound[&key].attempts[&source_b].in_flight_chunk,
+            Some(0)
+        );
+
+        let mut rehydrated = server
+            .rehydrate_with_exact_geometry(
+                DEFAULT_REPLY_SOURCE_CAPACITY,
+                MergeSidecarLimits::defaults(),
+            )
+            .expect("retain exact source geometry across height rollover");
+        assert_eq!(rehydrated.outbound[&key].attempts[&source_a].next_chunk, 1);
+        assert_eq!(rehydrated.outbound[&key].attempts[&source_b].next_chunk, 0);
+        assert_eq!(
+            rehydrated.outbound[&key].attempts[&source_a].in_flight_chunk,
+            None
+        );
+        assert_eq!(
+            rehydrated.outbound[&key].attempts[&source_b].in_flight_chunk,
+            None
+        );
+
+        let retried = rehydrated.drain_outbound_chunks(2, now);
+        assert_eq!(retried.len(), 2);
+        assert!(retried.iter().any(|post| {
+            post.reply_route
+                .as_ref()
+                .is_some_and(|route| route.same_delivery(&route_a))
+                && matches!(
+                    post.message.as_ref(),
+                    CertifiedMergeSidecarMessage::Chunk(chunk) if chunk.chunk_index == 1
+                )
+        }));
+        assert!(retried.iter().any(|post| {
+            post.reply_route
+                .as_ref()
+                .is_some_and(|route| route.same_delivery(&route_b))
+                && matches!(
+                    post.message.as_ref(),
+                    CertifiedMergeSidecarMessage::Chunk(chunk) if chunk.chunk_index == 0
+                )
+        }));
     }
 
     #[test]
@@ -6071,12 +7788,13 @@ mod tests {
     }
 
     #[test]
-    fn equal_ordinal_different_tenure_alternate_source_is_rejected_atomically() {
+    fn reused_actor_ordinals_under_different_tenures_are_rejected_atomically() {
         let len = MAX_CERTIFIED_MERGE_CHUNK_BYTES + 1;
         let (_, requester, _, request, now) = start_session(len, 3);
         let local_peer = request.responder.clone();
         let hub_a = peer(b"ordinal collision hub a");
         let hub_b = peer(b"ordinal collision hub b");
+        let hub_c = peer(b"connection ordinal collision hub c");
         let mut routes = NetworkReplyRouteTestFixture::new(hub_a.clone());
         let route_a = routes.mint_via(requester.clone(), hub_a);
         let source_a = ServerRequestSource::Authenticated(route_a.source_key());
@@ -6098,30 +7816,43 @@ mod tests {
             CertifiedMergeSidecarMessage::Chunk(chunk) if chunk.chunk_index == 0
         ));
 
-        let forged = routes
+        let forged_delivery_ordinal = routes
             .forge_equal_ordinal_different_tenure(&route_a, requester.clone(), hub_b)
             .expect("forge an actor-global ordinal collision for the adversarial test");
-        assert!(route_a.equal_ordinal_different_tenure(&forged));
-        let forged_source = ServerRequestSource::Authenticated(forged.source_key());
-        assert_ne!(source_a, forged_source);
+        assert!(route_a.equal_ordinal_different_tenure(&forged_delivery_ordinal));
+        let forged_connection_ordinal = routes
+            .forge_equal_connection_ordinal_different_tenure(&route_a, requester.clone(), hub_c)
+            .expect("forge an actor-global connection ordinal collision for the adversarial test");
+        assert!(route_a.equal_connection_ordinal_different_tenure(&forged_connection_ordinal));
+        let forged_sources = [
+            ServerRequestSource::Authenticated(forged_delivery_ordinal.source_key()),
+            ServerRequestSource::Authenticated(forged_connection_ordinal.source_key()),
+        ];
+        assert!(forged_sources.iter().all(|source| source != &source_a));
 
         let key = (requester.clone(), request.request_id);
-        let gate_attempts_before = server.server_gate_attempt_count();
-        let outbound_attempts_before = server.outbound_attempt_count();
-        let outbound_bytes_before = server.global_outbound_bytes();
-        let outbound_order_before = server.outbound_order.len();
-        assert!(matches!(
-            server.admit_server_request(&requester, &request, Some(&forged), &local_peer, now,),
-            Err(MergeSidecarError::UnsolicitedResponse)
-        ));
+        for forged in [&forged_delivery_ordinal, &forged_connection_ordinal] {
+            let gate_attempts_before = server.server_gate_attempt_count();
+            let outbound_attempts_before = server.outbound_attempt_count();
+            let outbound_bytes_before = server.global_outbound_bytes();
+            let outbound_order_before = server.outbound_order.len();
+            assert!(matches!(
+                server.admit_server_request(&requester, &request, Some(forged), &local_peer, now,),
+                Err(MergeSidecarError::UnsolicitedResponse)
+            ));
 
-        assert_eq!(server.server_gate_attempt_count(), gate_attempts_before);
-        assert_eq!(server.outbound_attempt_count(), outbound_attempts_before);
-        assert_eq!(server.global_outbound_bytes(), outbound_bytes_before);
-        assert_eq!(server.outbound_order.len(), outbound_order_before);
+            assert_eq!(server.server_gate_attempt_count(), gate_attempts_before);
+            assert_eq!(server.outbound_attempt_count(), outbound_attempts_before);
+            assert_eq!(server.global_outbound_bytes(), outbound_bytes_before);
+            assert_eq!(server.outbound_order.len(), outbound_order_before);
+        }
         let gate = &server.server_request_gates[&key];
         assert_eq!(gate.attempts.len(), 1);
-        assert!(!gate.attempts.contains_key(&forged_source));
+        assert!(
+            forged_sources
+                .iter()
+                .all(|source| !gate.attempts.contains_key(source))
+        );
         let gate_attempt = &gate.attempts[&source_a];
         assert!(
             gate_attempt
@@ -6132,7 +7863,11 @@ mod tests {
         assert_eq!(gate_attempt.cursor, ServerResponseCursor::Pending(0));
         let transfer = &server.outbound[&key];
         assert_eq!(transfer.attempts.len(), 1);
-        assert!(!transfer.attempts.contains_key(&forged_source));
+        assert!(
+            forged_sources
+                .iter()
+                .all(|source| !transfer.attempts.contains_key(source))
+        );
         let attempt = &transfer.attempts[&source_a];
         assert!(
             attempt
@@ -6163,7 +7898,7 @@ mod tests {
     }
 
     #[test]
-    fn inactive_source_teardown_releases_budget_and_reconnect_resumes_cursor() {
+    fn inactive_source_parking_retains_budget_and_reconnect_reuses_shared_bytes() {
         let len = MAX_CERTIFIED_MERGE_CHUNK_BYTES + 1;
         let (_, requester, _, request, now) = start_session(len, 3);
         let local_peer = request.responder.clone();
@@ -6171,6 +7906,7 @@ mod tests {
         let mut routes = NetworkReplyRouteTestFixture::new(hub);
         let route = routes.mint(requester.clone());
         let source = ServerRequestSource::Authenticated(route.source_key());
+        let key = (requester.clone(), request.request_id);
         let mut server = MergeSidecarTransport::new();
         assert!(
             server
@@ -6193,16 +7929,26 @@ mod tests {
         assert_eq!(server.source_outbound_bytes(&source), len);
 
         assert!(routes.retire(&route));
-        assert!(server.tick_bounded(&local_peer, now, 0).is_empty());
-        assert!(server.outbound.is_empty());
-        assert!(server.outbound_order.is_empty());
-        assert_eq!(server.source_outbound_count(&source), 0);
-        assert_eq!(server.source_outbound_bytes(&source), 0);
-
-        let reconnect_at = now + SERVER_REQUEST_GATE_TTL + Duration::from_nanos(1);
-        let reconnected = routes.mint(requester.clone());
         assert!(
             server
+                .tick_bounded(&local_peer, now, 0)
+                .expect("park retired source")
+                .is_empty()
+        );
+        assert!(server.outbound.contains_key(&key));
+        assert!(server.outbound_order.is_empty());
+        assert_eq!(server.source_outbound_count(&source), 1);
+        assert_eq!(server.source_outbound_bytes(&source), len);
+        assert_eq!(server.outbound[&key].attempts[&source].next_chunk, 1);
+        assert_eq!(
+            server.outbound[&key].attempts[&source].in_flight_chunk,
+            None
+        );
+
+        let reconnect_at = now + Duration::from_secs(301);
+        let reconnected = routes.mint(requester.clone());
+        assert!(
+            !server
                 .admit_server_request(
                     &requester,
                     &request,
@@ -6210,16 +7956,8 @@ mod tests {
                     &local_peer,
                     reconnect_at,
                 )
-                .expect("delayed reconnect rematerializes bytes at the retained cursor")
+                .expect("delayed reconnect reuses the retained bytes and cursor")
         );
-        server
-            .enqueue_response(
-                request,
-                Some(reconnected.clone()),
-                vec![0xA4; len],
-                reconnect_at,
-            )
-            .expect("queue rematerialized response at the retained cursor");
         let continued = server
             .drain_outbound_chunks(1, reconnect_at)
             .pop()
@@ -6240,6 +7978,8 @@ mod tests {
         ));
         assert!(server.outbound.is_empty());
         assert!(server.outbound_order.is_empty());
+        assert_eq!(server.source_outbound_count(&source), 0);
+        assert_eq!(server.source_outbound_bytes(&source), 0);
     }
 
     #[test]
@@ -6397,17 +8137,18 @@ mod tests {
         assert!(routes.retire(&old_route));
         let reconnected = routes.mint(requester.clone());
         assert!(
-            server
+            !server
                 .admit_server_request(&requester, &request, Some(&reconnected), &local_peer, now)
-                .expect("reauthorize materialization at the retained cursor")
+                .expect("reconnect reuses immutable bytes at the retained cursor")
         );
-        server
-            .enqueue_response(request, Some(reconnected.clone()), vec![0xC7; len], now)
-            .expect("queue rematerialized bytes for the new tenure");
         let new_one = server
             .drain_outbound_chunks(1, now)
             .pop()
             .expect("new tenure retries the retained current chunk");
+        assert!(
+            Arc::ptr_eq(&old_one.message, &new_one.message),
+            "reconnect must reuse the exact cached chunk carrier"
+        );
         assert!(matches!(
             &new_one,
             MergeSidecarPost {
@@ -6501,8 +8242,14 @@ mod tests {
                 .expect("hand the final old-tenure chunk to exact output");
             let old_receipt = reply_chunk_admission(&old_post);
             assert!(routes.retire(&old_route));
-            assert!(server.tick_bounded(&local_peer, now, 0).is_empty());
-            assert!(server.outbound.is_empty());
+            assert!(
+                server
+                    .tick_bounded(&local_peer, now, 0)
+                    .expect("park retired source")
+                    .is_empty()
+            );
+            assert!(server.outbound.contains_key(&key));
+            assert!(server.outbound_order.is_empty());
             assert_eq!(
                 server.server_request_gates[&key].attempts[&source].cursor,
                 ServerResponseCursor::Pending(0)
@@ -6510,8 +8257,9 @@ mod tests {
             assert!(
                 server
                     .acknowledge_outbound_chunk(&old_receipt, now)
-                    .expect("the byte-free gate accepts the old successful flush after pruning")
+                    .expect("the parked payload accepts the old successful flush after pruning")
             );
+            assert!(server.outbound.is_empty());
             assert_eq!(
                 server.server_request_gates[&key].attempts[&source].cursor,
                 ServerResponseCursor::Complete
@@ -6583,6 +8331,7 @@ mod tests {
                 .iter()
                 .find(|post| post.peer == requester_a)
                 .expect("source A owns its old writer item");
+            let old_a_message = Arc::clone(&old_a.message);
             let sibling_b = posts
                 .iter()
                 .find(|post| post.peer == requester_b)
@@ -6591,12 +8340,17 @@ mod tests {
             let sibling_b_receipt = reply_chunk_admission(sibling_b);
 
             assert!(routes.retire(&route_a));
-            assert!(server.tick_bounded(&local_peer, now, 0).is_empty());
-            assert!(!server.outbound.contains_key(&key_a));
+            assert!(
+                server
+                    .tick_bounded(&local_peer, now, 0)
+                    .expect("park retired source")
+                    .is_empty()
+            );
+            assert!(server.outbound.contains_key(&key_a));
             assert!(server.outbound.contains_key(&key_b));
             let reconnected_a = routes.mint(requester_a.clone());
             assert!(
-                server
+                !server
                     .admit_server_request(
                         &requester_a,
                         &request_a,
@@ -6604,30 +8358,34 @@ mod tests {
                         &local_peer,
                         now,
                     )
-                    .expect("reconnect authorizes terminating rematerialization")
+                    .expect("reconnect reuses the exact retained payload")
             );
+            let retry_a = server
+                .drain_outbound_chunks(1, now)
+                .pop()
+                .expect("reconnect retries source A's retained current item");
             assert!(matches!(
-                server.enqueue_response(
-                    request_a.clone(),
-                    Some(reconnected_a.clone()),
-                    vec![0xFF],
-                    now,
-                ),
-                Err(MergeSidecarError::FlushIdentityMismatch(_))
+                &retry_a,
+                MergeSidecarPost {
+                    reply_route: Some(route),
+                    ..
+                } if route.same_delivery(&reconnected_a)
             ));
+            assert!(Arc::ptr_eq(&old_a_message, &retry_a.message));
             assert!(
                 server
                     .acknowledge_outbound_chunk(&old_a_receipt, now)
-                    .expect("old flush wins before rematerialization or reconnect redrain")
+                    .expect("old flush wins before the reconnect retry completes")
             );
             assert!(
                 !server
                     .acknowledge_outbound_chunk(&old_a_receipt, now)
                     .expect("the pre-rematerialization receipt advances exactly once")
             );
-            server
-                .enqueue_response(request_a, Some(reconnected_a), vec![0xE1], now)
-                .expect("the completed in-flight materialization callback is a benign no-op");
+            assert!(
+                !acknowledge_reply_chunk(&mut server, &retry_a, now),
+                "the queued reconnect retry is terminal after the old flush wins"
+            );
             assert!(!server.outbound.contains_key(&key_a));
             assert!(server.outbound.contains_key(&key_b));
             assert!(
@@ -6751,7 +8509,7 @@ mod tests {
     }
 
     #[test]
-    fn conflicting_server_request_id_reuse_is_rejected_before_materialization() {
+    fn equal_sequence_with_different_semantic_identity_is_rejected_before_materialization() {
         let (_, requester, _, request, now) = start_session(1, 3);
         let local_peer = request.responder.clone();
         let mut server = MergeSidecarTransport::new();
@@ -6762,11 +8520,197 @@ mod tests {
         );
         let mut conflicting = request;
         conflicting.reference_digest = Hash::new(b"conflicting sidecar reference");
+        conflicting.bind_canonical_request_id();
         assert!(matches!(
             server.admit_server_request(&requester, &conflicting, None, &local_peer, now,),
             Err(MergeSidecarError::UnsolicitedResponse)
         ));
         assert_eq!(server.server_request_gates.len(), 1);
+    }
+
+    #[test]
+    fn request_stream_close_floor_advances_only_over_a_contiguous_terminal_prefix() {
+        let mut stream = RequestStreamState::default();
+        let (first, first_floor) = stream.allocate().expect("allocate sequence one");
+        let (second, second_floor) = stream.allocate().expect("allocate sequence two");
+        let (third, third_floor) = stream.allocate().expect("allocate sequence three");
+        assert_eq!((first, second, third), (1, 2, 3));
+        assert_eq!((first_floor, second_floor, third_floor), (0, 0, 0));
+
+        stream.close(second);
+        assert_eq!(stream.closed_through, 0);
+        stream.close(first);
+        assert_eq!(stream.closed_through, 2);
+        stream.close(third);
+        assert_eq!(stream.closed_through, 3);
+        assert!(stream.open_sequences.is_empty());
+    }
+
+    #[test]
+    fn authenticated_close_floor_retires_covered_output_and_rejects_replay_or_regression() {
+        let (_, requester, _, first, now) = start_session(1, 3);
+        let local_peer = first.responder.clone();
+        let first_key = (requester.clone(), first.request_id);
+        let mut server = MergeSidecarTransport::new();
+        assert!(
+            server
+                .admit_server_request(&requester, &first, None, &local_peer, now)
+                .expect("admit sequence one")
+        );
+        server
+            .enqueue_response(first.clone(), None, vec![0x41], now)
+            .expect("retain sequence-one output");
+        assert!(server.outbound.contains_key(&first_key));
+
+        let mut second = first.clone();
+        second.semantic_sequence = 2;
+        second.closed_through = 1;
+        assert_eq!(
+            second.request_id,
+            second.canonical_request_id(),
+            "stream metadata must not alter semantic identity"
+        );
+        assert!(
+            server
+                .admit_server_request(&requester, &second, None, &local_peer, now)
+                .expect("the next occurrence authenticates the cumulative close floor")
+        );
+        assert_eq!(server.server_closed_through.get(&requester), Some(&1));
+        assert!(!server.outbound.contains_key(&first_key));
+        assert_eq!(
+            server.server_request_gates[&first_key].semantic_sequence, 2,
+            "the covered occurrence is replaced without creating a second semantic gate"
+        );
+        assert!(server.drain_outbound_chunks(usize::MAX, now).is_empty());
+
+        assert!(matches!(
+            server.admit_server_request(&requester, &first, None, &local_peer, now),
+            Err(MergeSidecarError::UnsolicitedResponse)
+        ));
+
+        let mut regressed = second;
+        regressed.semantic_sequence = 3;
+        regressed.closed_through = 0;
+        assert!(matches!(
+            server.admit_server_request(&requester, &regressed, None, &local_peer, now),
+            Err(MergeSidecarError::UnsolicitedResponse)
+        ));
+        assert_eq!(server.server_closed_through.get(&requester), Some(&1));
+    }
+
+    #[test]
+    fn standalone_close_retries_until_exact_ack_then_terminates() {
+        let (mut client, requester, _, request, now) = start_session(1, 3);
+        let responder = request.responder.clone();
+        let mut server = MergeSidecarTransport::new();
+        assert!(
+            server
+                .admit_server_request(&requester, &request, None, &responder, now)
+                .expect("server observes sequence one")
+        );
+        client.close_request_sequence(&responder, request.semantic_sequence);
+
+        let close_post = client
+            .tick_bounded(&requester, now, 1)
+            .expect("schedule standalone close")
+            .pop()
+            .expect("terminal local work emits a standalone close");
+        let CertifiedMergeSidecarMessage::Close(close) = Arc::unwrap_or_clone(close_post.message)
+        else {
+            panic!("close work must not be encoded as a data request")
+        };
+        assert_eq!(close_post.peer, responder);
+        assert!(close_post.reply_route.is_none());
+
+        let ack_post = server
+            .admit_server_close(&requester, &close, &responder)
+            .expect("server applies the authenticated close");
+        assert_eq!(
+            server.drain_closed_server_prefixes(),
+            vec![CertifiedMergeSidecarClosedPrefix {
+                requester: requester.clone(),
+                closed_through: request.semantic_sequence,
+            }]
+        );
+        let CertifiedMergeSidecarMessage::CloseAck(ack) = Arc::unwrap_or_clone(ack_post.message)
+        else {
+            panic!("standalone close must produce an explicit ACK")
+        };
+        assert!(
+            client
+                .acknowledge_close(&responder, &ack, &requester)
+                .expect("accept exact close ACK")
+        );
+        assert!(
+            client
+                .tick_bounded(&requester, now + REQUEST_TIMEOUT, 1)
+                .expect("service acknowledged close stream")
+                .into_iter()
+                .all(|post| !matches!(
+                    post.message.as_ref(),
+                    CertifiedMergeSidecarMessage::Close(_)
+                )),
+            "an exact ACK terminates local close retry work"
+        );
+
+        let duplicate_ack = server
+            .admit_server_close(&requester, &close, &responder)
+            .expect("an exact close retry remains idempotent");
+        assert!(server.drain_closed_server_prefixes().is_empty());
+        let CertifiedMergeSidecarMessage::CloseAck(duplicate_ack) =
+            Arc::unwrap_or_clone(duplicate_ack.message)
+        else {
+            unreachable!("idempotent close returns the same ACK kind")
+        };
+        assert!(
+            !client
+                .acknowledge_close(&responder, &duplicate_ack, &requester)
+                .expect("duplicate ACK is a harmless no-op")
+        );
+    }
+
+    #[test]
+    fn close_beyond_the_highest_observed_sequence_is_rejected_atomically() {
+        let (_, requester, _, request, now) = start_session(1, 3);
+        let responder = request.responder.clone();
+        let mut server = MergeSidecarTransport::new();
+        assert!(
+            server
+                .admit_server_request(&requester, &request, None, &responder, now)
+                .expect("server observes sequence one")
+        );
+        let mut close = CertifiedMergeSidecarCloseV1 {
+            version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
+            closed_through: request.semantic_sequence + 1,
+            close_id: Hash::prehashed([0; Hash::LENGTH]),
+            requester: requester.clone(),
+            responder: responder.clone(),
+        };
+        close.bind_canonical_close_id();
+        assert!(matches!(
+            server.admit_server_close(&requester, &close, &responder),
+            Err(MergeSidecarError::UnsolicitedResponse)
+        ));
+        assert_eq!(server.server_closed_through.get(&requester), Some(&0));
+        assert!(server.pending_server_closures.is_empty());
+        assert_eq!(server.server_request_gates.len(), 1);
+    }
+
+    #[test]
+    fn rejected_request_does_not_consume_server_stream_state() {
+        let (_, requester, _, mut request, now) = start_session(1, 3);
+        let local_peer = request.responder.clone();
+        request.semantic_sequence =
+            u64::try_from(MAX_INBOUND_SESSIONS_PER_PEER).expect("bounded test geometry") + 1;
+        let mut server = MergeSidecarTransport::new();
+        assert!(matches!(
+            server.admit_server_request(&requester, &request, None, &local_peer, now),
+            Err(MergeSidecarError::Capacity(
+                "semantic request forward window"
+            ))
+        ));
+        assert!(!server.server_closed_through.contains_key(&requester));
+        assert!(server.server_request_gates.is_empty());
     }
 
     #[test]
@@ -6793,6 +8737,66 @@ mod tests {
                 .admit_server_request(&requester, &request, None, &local_peer, now)
                 .expect("the same occurrence remains admissible after failed lookup")
         );
+    }
+
+    #[test]
+    fn transient_response_capacity_rejection_retries_on_the_same_delivery() {
+        let (_, _, _, base, now) = start_session(1, 3);
+        let local_peer = base.responder.clone();
+        let hub = peer(b"capacity retry hub");
+        let mut routes = NetworkReplyRouteTestFixture::new(hub.clone());
+        let mut server = MergeSidecarTransport::new();
+
+        for index in 0..MAX_OUTBOUND_SESSIONS_PER_SOURCE {
+            let requester = peer(format!("capacity retry filler {index}").as_bytes());
+            let request = routed_server_request(
+                &base,
+                requester.clone(),
+                format!("capacity retry filler request {index}").as_bytes(),
+                1,
+            );
+            let route = routes.mint_via(requester.clone(), hub.clone());
+            assert!(
+                server
+                    .admit_server_request(&requester, &request, Some(&route), &local_peer, now,)
+                    .expect("admit one bounded filler response")
+            );
+            server
+                .enqueue_response(request, Some(route), vec![0x31], now)
+                .expect("fill the authenticated source response corridor");
+        }
+
+        let requester = peer(b"capacity retry requester");
+        let request = routed_server_request(&base, requester.clone(), b"capacity retry request", 1);
+        let route = routes.mint_via(requester.clone(), hub);
+        assert!(
+            server
+                .admit_server_request(&requester, &request, Some(&route), &local_peer, now,)
+                .expect("admit terminating lookup before exact response accounting")
+        );
+        assert!(matches!(
+            server.enqueue_response(request.clone(), Some(route.clone()), vec![0x42], now),
+            Err(MergeSidecarError::Capacity("outbound response budget"))
+        ));
+        server.cancel_unmaterialized_server_request(&requester, &request);
+        let source = ServerRequestSource::Authenticated(route.source_key());
+        let key = (requester.clone(), request.request_id);
+        assert!(
+            server.server_request_gates[&key].attempts[&source].materialization_retryable,
+            "transient capacity pressure must not require a reconnect"
+        );
+
+        let released = server.drain_outbound_chunks(1, now);
+        assert_eq!(released.len(), 1);
+        assert!(acknowledge_reply_chunk(&mut server, &released[0], now));
+        assert!(
+            server
+                .admit_server_request(&requester, &request, Some(&route), &local_peer, now,)
+                .expect("the exact delivery retries after an older response releases capacity")
+        );
+        server
+            .enqueue_response(request, Some(route), vec![0x42], now)
+            .expect("the retried response acquires the released source reservation");
     }
 
     #[test]
@@ -7044,7 +9048,7 @@ mod tests {
     }
 
     #[test]
-    fn exact_delivery_retry_rematerializes_after_rate_gate_expiry() {
+    fn exact_delivery_retry_stays_terminal_beyond_retired_ttl_horizon() {
         let (_, requester, _, request, now) = start_session(1, 3);
         let local_peer = request.responder.clone();
         let mut routes = NetworkReplyRouteTestFixture::new(requester.clone());
@@ -7068,30 +9072,23 @@ mod tests {
                 .expect("the first exact writer receipt advances")
         );
 
-        let retry_at = now + SERVER_REQUEST_GATE_TTL + Duration::from_nanos(1);
+        let retry_at = now + Duration::from_secs(301);
+        assert!(
+            !server
+                .admit_server_request(&requester, &request, Some(&route), &local_peer, retry_at,)
+                .expect("elapsed time cannot reopen a completed semantic request")
+        );
         assert!(
             server
-                .admit_server_request(&requester, &request, Some(&route), &local_peer, retry_at,)
-                .expect("expired delivery dedup admits exact durable rematerialization")
+                .drain_outbound_chunks(usize::MAX, retry_at)
+                .is_empty()
         );
-        server
-            .enqueue_response(request, Some(route.clone()), vec![0x11], retry_at)
-            .expect("same live delivery rematerializes from durable source");
-        let retry = server.drain_outbound_chunks(usize::MAX, retry_at);
-        assert!(matches!(
-            retry.as_slice(),
-            [MergeSidecarPost {
-                reply_route: Some(emitted),
-                ..
-            }] if emitted.same_delivery(&route)
-        ));
         assert!(
             !server
                 .acknowledge_outbound_chunk(&stale_first_admission, retry_at)
                 .expect("a consumed old receipt is a harmless no-op"),
-            "a cloned receipt from the expired gate cannot advance its byte-identical replacement"
+            "a cloned receipt cannot reopen or advance the terminal source"
         );
-        assert!(acknowledge_reply_chunk(&mut server, &retry[0], retry_at));
     }
 
     #[test]
@@ -7345,10 +9342,10 @@ mod tests {
         }
 
         server
-            .enqueue_response(request.clone(), Some(route_a), vec![0x82], now)
+            .enqueue_response(request.clone(), Some(route_a.clone()), vec![0x82], now)
             .expect("source B remains eligible for the shared materialized bytes");
 
-        let key = (requester, request.request_id);
+        let key = (requester.clone(), request.request_id);
         let transfer = &server.outbound[&key];
         assert!(matches!(
             transfer.chunks.as_slice(),
@@ -7368,14 +9365,61 @@ mod tests {
             MAX_OUTBOUND_SESSIONS_PER_SOURCE
         );
         assert_eq!(server.source_outbound_count(&source_b), 1);
-        assert!(server.drain_outbound_chunks(3, now).iter().any(|post| {
+        let posts = server.drain_outbound_chunks(3, now);
+        let shared_post = posts
+            .iter()
+            .find(|post| {
+                matches!(
+                    post,
+                    MergeSidecarPost {
+                        reply_route: Some(route),
+                        message,
+                        ..
+                    } if route.same_delivery(&route_b)
+                        && matches!(message.as_ref(), CertifiedMergeSidecarMessage::Chunk(chunk)
+                            if chunk.request_id == request.request_id)
+                )
+            })
+            .expect("source B receives the shared response");
+        let filler_post = posts
+            .iter()
+            .find(|post| {
+                matches!(
+                    post.message.as_ref(),
+                    CertifiedMergeSidecarMessage::Chunk(chunk)
+                        if chunk.request_id != request.request_id
+                )
+            })
+            .expect("one source A filler is available to release");
+        assert!(acknowledge_reply_chunk(&mut server, shared_post, now));
+        assert!(
+            !server.outbound.contains_key(&key),
+            "the shared transfer retires after its only admitted source completes"
+        );
+        assert!(acknowledge_reply_chunk(&mut server, filler_post, now));
+        assert_eq!(
+            server.source_outbound_count(&source_a),
+            MAX_OUTBOUND_SESSIONS_PER_SOURCE - 1
+        );
+
+        assert!(
+            server
+                .admit_server_request(&requester, &request, Some(&route_a), &local_peer, now)
+                .expect(
+                    "the unchanged capacity-partitioned delivery rematerializes after shared bytes retire"
+                )
+        );
+        server
+            .enqueue_response(request.clone(), Some(route_a.clone()), vec![0x82], now)
+            .expect("the original source acquires the released reservation");
+        assert!(server.drain_outbound_chunks(1, now).iter().any(|post| {
             matches!(
                 post,
                 MergeSidecarPost {
                     reply_route: Some(route),
                     message,
                     ..
-                } if route.same_delivery(&route_b)
+                } if route.same_delivery(&route_a)
                     && matches!(message.as_ref(), CertifiedMergeSidecarMessage::Chunk(chunk)
                         if chunk.request_id == request.request_id)
             )
@@ -7419,6 +9463,8 @@ mod tests {
             b"byte saturation request",
             MAX_OUTBOUND_BYTES_PER_SOURCE,
         );
+        let filler_request_id = filler.request_id;
+        let filler_key = (filler_requester.clone(), filler_request_id);
         let filler_route = routes.mint_via(filler_requester.clone(), hub_a);
         assert!(
             server
@@ -7441,10 +9487,10 @@ mod tests {
             .expect("fill source A's exact byte corridor");
 
         server
-            .enqueue_response(request.clone(), Some(route_a), vec![0x92], now)
+            .enqueue_response(request.clone(), Some(route_a.clone()), vec![0x92], now)
             .expect("source B retains the shared materialized bytes");
 
-        let key = (requester, request.request_id);
+        let key = (requester.clone(), request.request_id);
         let transfer = &server.outbound[&key];
         assert!(matches!(
             transfer.chunks.as_slice(),
@@ -7468,14 +9514,72 @@ mod tests {
             server.global_outbound_bytes(),
             MAX_OUTBOUND_BYTES_PER_SOURCE + 1
         );
-        assert!(server.drain_outbound_chunks(2, now).iter().any(|post| {
+        let posts = server.drain_outbound_chunks(2, now);
+        let shared_post = posts
+            .iter()
+            .find(|post| {
+                matches!(
+                    post,
+                    MergeSidecarPost {
+                        reply_route: Some(route),
+                        message,
+                        ..
+                    } if route.same_delivery(&route_b)
+                        && matches!(message.as_ref(), CertifiedMergeSidecarMessage::Chunk(chunk)
+                            if chunk.request_id == request.request_id)
+                )
+            })
+            .expect("source B receives the shared response");
+        let filler_post = posts
+            .iter()
+            .find(|post| {
+                matches!(
+                    post.message.as_ref(),
+                    CertifiedMergeSidecarMessage::Chunk(chunk)
+                        if chunk.request_id == filler_request_id && chunk.chunk_index == 0
+                )
+            })
+            .expect("source A's byte-filling response starts at chunk zero");
+        assert!(acknowledge_reply_chunk(&mut server, shared_post, now));
+        assert!(
+            !server.outbound.contains_key(&key),
+            "the shared transfer retires after its only admitted source completes"
+        );
+        assert!(acknowledge_reply_chunk(&mut server, filler_post, now));
+        let filler_chunk_count =
+            MAX_OUTBOUND_BYTES_PER_SOURCE.div_ceil(MAX_CERTIFIED_MERGE_CHUNK_BYTES);
+        for expected_index in 1..filler_chunk_count {
+            let continued = server.drain_outbound_chunks(1, now);
+            assert!(matches!(
+                continued.as_slice(),
+                [MergeSidecarPost { message, .. }]
+                    if matches!(message.as_ref(), CertifiedMergeSidecarMessage::Chunk(chunk)
+                        if chunk.request_id == filler_request_id
+                            && usize::try_from(chunk.chunk_index).ok() == Some(expected_index))
+            ));
+            assert!(acknowledge_reply_chunk(&mut server, &continued[0], now));
+        }
+        assert!(!server.outbound.contains_key(&filler_key));
+        assert_eq!(server.source_outbound_bytes(&source_a), 0);
+
+        assert!(
+            server
+                .admit_server_request(&requester, &request, Some(&route_a), &local_peer, now)
+                .expect(
+                    "the unchanged byte-partitioned delivery rematerializes after shared bytes retire"
+                )
+        );
+        server
+            .enqueue_response(request.clone(), Some(route_a.clone()), vec![0x92], now)
+            .expect("the original source acquires the released byte reservation");
+        assert!(server.drain_outbound_chunks(1, now).iter().any(|post| {
             matches!(
                 post,
                 MergeSidecarPost {
                     reply_route: Some(route),
                     message,
                     ..
-                } if route.same_delivery(&route_b)
+                } if route.same_delivery(&route_a)
                     && matches!(message.as_ref(), CertifiedMergeSidecarMessage::Chunk(chunk)
                         if chunk.request_id == request.request_id)
             )
@@ -7483,7 +9587,7 @@ mod tests {
     }
 
     #[test]
-    fn partitioned_materialization_preserves_rejected_source_resume_cursor() {
+    fn parked_source_retains_capacity_and_cursor_while_alternate_source_progresses() {
         let (_, _, _, base, now) = start_session(1, 3);
         let local_peer = base.responder.clone();
         let requester = peer(b"partitioned resume origin");
@@ -7500,6 +9604,7 @@ mod tests {
         let mut routes = NetworkReplyRouteTestFixture::new(hub_a.clone());
         let route_a = routes.mint_via(requester.clone(), hub_a.clone());
         let source_a = ServerRequestSource::Authenticated(route_a.source_key());
+        let key = (requester.clone(), request.request_id);
         let mut server = MergeSidecarTransport::new();
 
         assert!(
@@ -7526,16 +9631,22 @@ mod tests {
                 && matches!(message.as_ref(), CertifiedMergeSidecarMessage::Chunk(chunk)
                     if chunk.chunk_index == 0)
         ));
+        let first_message = Arc::clone(&first[0].message);
         assert!(acknowledge_reply_chunk(&mut server, &first[0], now));
-        assert_eq!(
-            server.outbound[&(requester.clone(), request.request_id)].attempts[&source_a]
-                .next_chunk,
-            1
-        );
+        assert_eq!(server.outbound[&key].attempts[&source_a].next_chunk, 1);
         assert!(routes.retire(&route_a));
+        assert!(
+            server
+                .tick_bounded(&local_peer, now, 0)
+                .expect("park retired source")
+                .is_empty()
+        );
+        assert_eq!(server.source_outbound_count(&source_a), 1);
+        assert_eq!(server.outbound[&key].attempts[&source_a].next_chunk, 1);
+        assert!(server.outbound_order.is_empty());
 
         let mut filler_ids = BTreeSet::new();
-        for index in 0..MAX_OUTBOUND_SESSIONS_PER_SOURCE {
+        for index in 0..MAX_OUTBOUND_SESSIONS_PER_SOURCE - 1 {
             let filler_requester = peer(format!("partitioned resume filler {index}").as_bytes());
             let filler = routed_server_request(
                 &base,
@@ -7561,15 +9672,47 @@ mod tests {
                 .expect("queue one source A filler session");
         }
         assert_eq!(
-            server.server_request_gates[&(requester.clone(), request.request_id)].attempts
-                [&source_a]
-                .cursor,
+            server.source_outbound_count(&source_a),
+            MAX_OUTBOUND_SESSIONS_PER_SOURCE
+        );
+        assert_eq!(
+            server.server_request_gates[&key].attempts[&source_a].cursor,
             ServerResponseCursor::Pending(1)
         );
 
-        let route_a_reconnected = routes.mint_via(requester.clone(), hub_a);
+        let overflow_requester = peer(b"partitioned resume overflow origin");
+        let overflow_request = routed_server_request(
+            &base,
+            overflow_requester.clone(),
+            b"partitioned resume overflow request",
+            1,
+        );
+        let overflow_route = routes.mint_via(overflow_requester.clone(), hub_a.clone());
         assert!(
             server
+                .admit_server_request(
+                    &overflow_requester,
+                    &overflow_request,
+                    Some(&overflow_route),
+                    &local_peer,
+                    now,
+                )
+                .expect("admit terminating work before the source-session capacity check")
+        );
+        assert!(matches!(
+            server.enqueue_response(
+                overflow_request.clone(),
+                Some(overflow_route),
+                vec![0xC6],
+                now,
+            ),
+            Err(MergeSidecarError::Capacity("outbound response budget"))
+        ));
+        server.cancel_unmaterialized_server_request(&overflow_requester, &overflow_request);
+
+        let route_a_reconnected = routes.mint_via(requester.clone(), hub_a);
+        assert!(
+            !server
                 .admit_server_request(
                     &requester,
                     &request,
@@ -7577,72 +9720,15 @@ mod tests {
                     &local_peer,
                     now,
                 )
-                .expect("source A reconnect authorizes rematerialization at its retained cursor")
-        );
-        assert!(matches!(
-            server.enqueue_response(
-                request.clone(),
-                Some(route_a_reconnected.clone()),
-                response_bytes.clone(),
-                now,
-            ),
-            Err(MergeSidecarError::Capacity("outbound response budget"))
-        ));
-        server.cancel_unmaterialized_server_request(&requester, &request);
-        let key = (requester.clone(), request.request_id);
-        assert_eq!(
-            server.server_request_gates[&key].attempts[&source_a].cursor,
-            ServerResponseCursor::Pending(1)
-        );
-        assert!(!server.server_request_gates[&key].attempts[&source_a].materialization_authorized);
-
-        let route_a_partitioned = routes
-            .redeliver(&route_a_reconnected)
-            .expect("later source A delivery retries the parked materialization");
-        assert!(
-            server
-                .admit_server_request(
-                    &requester,
-                    &request,
-                    Some(&route_a_partitioned),
-                    &local_peer,
-                    now,
-                )
-                .expect("source A reauthorizes after the production cancel path")
-        );
-        server.cancel_unmaterialized_server_request(&requester, &request);
-        assert_eq!(
-            server.server_request_gates[&key].attempts[&source_a].cursor,
-            ServerResponseCursor::Pending(1),
-            "durable lookup failure cannot erase the reconnect cursor"
-        );
-        assert!(server.server_request_gates[&key].attempts[&source_a].materialization_retryable);
-        assert!(
-            server
-                .admit_server_request(
-                    &requester,
-                    &request,
-                    Some(&route_a_partitioned),
-                    &local_peer,
-                    now,
-                )
-                .expect("the exact delivery retries failed terminating local work")
+                .expect("source A reconnect reuses its parked response and cursor")
         );
         let route_b = routes.mint_via(requester.clone(), hub_b);
         assert!(
             !server
                 .admit_server_request(&requester, &request, Some(&route_b), &local_peer, now)
-                .expect("source B joins source A's semantic materialization")
+                .expect("source B attaches independently to source A's immutable response")
         );
-        server
-            .enqueue_response(
-                request.clone(),
-                Some(route_a_partitioned.clone()),
-                response_bytes,
-                now,
-            )
-            .expect("source B acquires shared bytes while source A is saturated");
-        assert!(!server.outbound[&key].attempts.contains_key(&source_a));
+        assert!(server.outbound[&key].attempts.contains_key(&source_a));
         assert_eq!(
             server.server_request_gates[&key].attempts[&source_a].cursor,
             ServerResponseCursor::Pending(1)
@@ -7651,6 +9737,8 @@ mod tests {
 
         let posts = server.drain_outbound_chunks(usize::MAX, now);
         let mut released_fillers = 0usize;
+        let mut retried_a = 0usize;
+        let mut started_b = 0usize;
         for post in &posts {
             let CertifiedMergeSidecarMessage::Chunk(chunk) = post.message.as_ref() else {
                 continue;
@@ -7658,34 +9746,43 @@ mod tests {
             if filler_ids.contains(&chunk.request_id) {
                 assert!(acknowledge_reply_chunk(&mut server, post, now));
                 released_fillers += 1;
+            } else if post
+                .reply_route
+                .as_ref()
+                .is_some_and(|route| route.same_delivery(&route_a_reconnected))
+            {
+                assert_eq!(chunk.chunk_index, 1);
+                assert!(acknowledge_reply_chunk(&mut server, post, now));
+                retried_a += 1;
+            } else if post
+                .reply_route
+                .as_ref()
+                .is_some_and(|route| route.same_delivery(&route_b))
+            {
+                assert_eq!(chunk.chunk_index, 0);
+                assert!(Arc::ptr_eq(&first_message, &post.message));
+                assert!(acknowledge_reply_chunk(&mut server, post, now));
+                started_b += 1;
             }
         }
-        assert_eq!(released_fillers, MAX_OUTBOUND_SESSIONS_PER_SOURCE);
+        assert_eq!(released_fillers, MAX_OUTBOUND_SESSIONS_PER_SOURCE - 1);
+        assert_eq!(retried_a, 1);
+        assert_eq!(started_b, 1);
         assert_eq!(server.source_outbound_count(&source_a), 0);
 
-        let exact_a = route_a_partitioned.clone();
-        assert!(
-            !server
-                .admit_server_request(&requester, &request, Some(&exact_a), &local_peer, now)
-                .expect("exact source delivery reattaches to the materialized response")
-        );
-        assert_eq!(server.outbound[&key].attempts[&source_a].next_chunk, 1);
-        assert_eq!(
-            server.outbound[&key].attempts[&source_a].in_flight_chunk,
-            None
-        );
-        let resumed = server.drain_outbound_chunks(usize::MAX, now);
+        let continued_b = server.drain_outbound_chunks(usize::MAX, now);
         assert!(matches!(
-            resumed.as_slice(),
+            continued_b.as_slice(),
             [MergeSidecarPost {
                 reply_route: Some(route),
                 message,
                 ..
-            }] if route.same_delivery(&exact_a)
+            }] if route.same_delivery(&route_b)
                 && matches!(message.as_ref(), CertifiedMergeSidecarMessage::Chunk(chunk)
                     if chunk.chunk_index == 1)
         ));
-        assert!(acknowledge_reply_chunk(&mut server, &resumed[0], now));
+        assert!(acknowledge_reply_chunk(&mut server, &continued_b[0], now));
+        assert!(!server.outbound.contains_key(&key));
         assert!(server.drain_outbound_chunks(usize::MAX, now).is_empty());
     }
 
@@ -7868,7 +9965,7 @@ mod tests {
     fn outbound_chunk_drain_is_fair_across_bounded_sessions() {
         let (_, _, _, first, now) = start_session(MAX_CERTIFIED_MERGE_CHUNK_BYTES * 3, 3);
         let (_, _, _, mut second, _) = start_session(1, 3);
-        second.request_id = Hash::new(b"second fair outbound request");
+        second.semantic_sequence = 2;
         let mut server = MergeSidecarTransport::new();
         for request in [&first, &second] {
             assert!(
@@ -7901,7 +9998,11 @@ mod tests {
             .into_iter()
             .map(|post| match Arc::unwrap_or_clone(post.message) {
                 CertifiedMergeSidecarMessage::Chunk(chunk) => chunk.request_id,
-                CertifiedMergeSidecarMessage::Request(_) => panic!("response emitted a request"),
+                CertifiedMergeSidecarMessage::Request(_)
+                | CertifiedMergeSidecarMessage::Close(_)
+                | CertifiedMergeSidecarMessage::CloseAck(_) => {
+                    panic!("response emitted a control message")
+                }
             })
             .collect::<BTreeSet<_>>();
         assert_eq!(
@@ -7914,8 +10015,8 @@ mod tests {
     fn completed_short_session_replacement_cannot_starve_an_older_long_session() {
         let (_, _, _, mut short, now) = start_session(1, 3);
         let (_, _, _, mut long, _) = start_session(MAX_CERTIFIED_MERGE_CHUNK_BYTES * 3, 3);
-        short.request_id = Hash::prehashed([0; Hash::LENGTH]);
-        long.request_id = Hash::prehashed([u8::MAX; Hash::LENGTH]);
+        short.semantic_sequence = 1;
+        long.semantic_sequence = 2;
         let mut routes = NetworkReplyRouteTestFixture::new(peer(b"replacement fairness hub"));
         let short_route = routes.mint(short.requester.clone());
         let long_route = routes.mint(long.requester.clone());
@@ -7956,7 +10057,8 @@ mod tests {
         assert!(acknowledge_reply_chunk(&mut server, &first, now));
 
         let mut replacement = short;
-        replacement.request_id = Hash::prehashed([1; Hash::LENGTH]);
+        replacement.semantic_sequence = 3;
+        replacement.closed_through = 1;
         let replacement_route = routes.mint(replacement.requester.clone());
         assert!(
             server
@@ -8031,7 +10133,9 @@ mod tests {
         let timed_out_at = now + REQUEST_TIMEOUT;
         let mut kinds = Vec::new();
         for _ in 0..6 {
-            let posts = transport.tick_bounded(&requester, timed_out_at, 1);
+            let posts = transport
+                .tick_bounded(&requester, timed_out_at, 1)
+                .expect("service one fair transport item");
             assert_eq!(posts.len(), 1, "bounded tick must use its one slot");
             let is_chunk = matches!(
                 posts[0].message.as_ref(),
@@ -8133,13 +10237,15 @@ mod tests {
                 .expect("complete honest exact-reference response"),
             ChunkIngestOutcome::Complete(_)
         ));
-        let (deferred, _) = transport.finish_completed(
-            honest.entry_hash,
-            certified_merge_reference_digest(&honest),
-            true,
-            &requester,
-            now,
-        );
+        let (deferred, _) = transport
+            .finish_completed(
+                honest.entry_hash,
+                certified_merge_reference_digest(&honest),
+                true,
+                &requester,
+                now,
+            )
+            .expect("persist honest request lifecycle");
         assert_eq!(deferred, vec![(honest_block, 2, 0)]);
         assert_eq!(
             transport.inbound_len(),
@@ -8201,7 +10307,9 @@ mod tests {
     #[test]
     fn unsent_request_restores_holder_and_backoff_state() {
         let (mut transport, requester, reference, first, now) = start_session(1, 3);
-        transport.release_unsent_request(&first);
+        transport
+            .release_unsent_request(&first)
+            .expect("persist unsent request lifecycle");
         let key = (
             reference.entry_hash,
             certified_merge_reference_digest(&reference),
@@ -8212,24 +10320,57 @@ mod tests {
 
         let reissued = transport
             .tick_bounded(&requester, now, 1)
+            .expect("reissue released request")
             .into_iter()
             .find_map(|post| match Arc::unwrap_or_clone(post.message) {
                 CertifiedMergeSidecarMessage::Request(request) => Some(request),
-                CertifiedMergeSidecarMessage::Chunk(_) => None,
+                CertifiedMergeSidecarMessage::Close(_)
+                | CertifiedMergeSidecarMessage::CloseAck(_)
+                | CertifiedMergeSidecarMessage::Chunk(_) => None,
             })
             .expect("unsent request is immediately reissued");
         assert_eq!(reissued.responder, first.responder);
-        assert_ne!(reissued.request_id, first.request_id);
+        assert_eq!(reissued.request_id, first.request_id);
+        assert!(reissued.semantic_sequence > first.semantic_sequence);
+        assert_eq!(reissued.closed_through, first.semantic_sequence);
 
         let rotated = transport
             .tick_bounded(&requester, now + REQUEST_TIMEOUT, 1)
+            .expect("rotate timed-out request")
             .into_iter()
             .find_map(|post| match Arc::unwrap_or_clone(post.message) {
                 CertifiedMergeSidecarMessage::Request(request) => Some(request),
-                CertifiedMergeSidecarMessage::Chunk(_) => None,
+                CertifiedMergeSidecarMessage::Close(_)
+                | CertifiedMergeSidecarMessage::CloseAck(_)
+                | CertifiedMergeSidecarMessage::Chunk(_) => None,
             })
             .expect("first real attempt expires at the base timeout");
         assert_ne!(rotated.responder, reissued.responder);
+
+        let second_timeout = now + REQUEST_TIMEOUT + retry_timeout(REQUEST_TIMEOUT, 2);
+        let forced_close = transport
+            .tick_bounded(&requester, second_timeout, 1)
+            .expect("service retained close debt before another late rotation")
+            .pop()
+            .expect("one bounded item remains ready");
+        assert!(
+            matches!(
+                forced_close.message.as_ref(),
+                CertifiedMergeSidecarMessage::Close(_)
+            ),
+            "consecutive late timeout ticks may defer a due Close at most once"
+        );
+        assert!(
+            transport
+                .tick_bounded(&requester, second_timeout, 1)
+                .expect("resume the timed-out fetch after servicing one Close")
+                .into_iter()
+                .any(|post| matches!(
+                    post.message.as_ref(),
+                    CertifiedMergeSidecarMessage::Request(_)
+                )),
+            "Close debt service must retain the timed-out fetch for its next fair turn"
+        );
     }
 
     #[test]
@@ -8261,10 +10402,13 @@ mod tests {
 
         let request = transport
             .tick_bounded(&requester, now + REQUEST_TIMEOUT, 1)
+            .expect("service fairness successor")
             .into_iter()
             .find_map(|post| match Arc::unwrap_or_clone(post.message) {
                 CertifiedMergeSidecarMessage::Request(request) => Some(request),
-                CertifiedMergeSidecarMessage::Chunk(_) => None,
+                CertifiedMergeSidecarMessage::Close(_)
+                | CertifiedMergeSidecarMessage::CloseAck(_)
+                | CertifiedMergeSidecarMessage::Chunk(_) => None,
             })
             .expect("one timed-out or idle request is scheduled");
         assert_eq!((request.entry_hash, request.reference_digest), expected);
@@ -8283,6 +10427,740 @@ mod tests {
         assert_eq!(transport.inbound_len(), 1);
         let restarted = MergeSidecarTransport::new();
         assert_eq!(restarted.inbound_len(), 0);
+    }
+
+    #[test]
+    fn durable_requester_restart_advances_sequence_and_carries_close_floor() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let now = Instant::now();
+        let requester = peer(b"durable requester");
+        let reference = reference(64, 1);
+        let mut durable_requester = MergeSidecarTransport::open_durable(
+            temp.path(),
+            DEFAULT_REPLY_SOURCE_CAPACITY,
+            MergeSidecarLimits::defaults(),
+        )
+        .expect("open requester lifecycle journal");
+        let first = durable_requester
+            .defer_block(
+                HashOf::from_untyped_unchecked(Hash::new(b"durable requester block one")),
+                2,
+                0,
+                reference.clone(),
+                &requester,
+                1,
+                now,
+            )
+            .expect("defer first block")
+            .expect("emit first request");
+        let CertifiedMergeSidecarMessage::Request(first_request) =
+            Arc::unwrap_or_clone(first.message)
+        else {
+            panic!("expected first request")
+        };
+        assert_eq!(first_request.semantic_sequence, 1);
+        assert_eq!(first_request.closed_through, 0);
+
+        let local_peer = first_request.responder.clone();
+        let hub = peer(b"durable requester live responder hub");
+        let mut routes = NetworkReplyRouteTestFixture::new(hub);
+        let first_route = routes.mint(requester.clone());
+        let mut live_responder = MergeSidecarTransport::new();
+        assert!(
+            live_responder
+                .admit_server_request(
+                    &requester,
+                    &first_request,
+                    Some(&first_route),
+                    &local_peer,
+                    now,
+                )
+                .expect("live responder admits sequence one")
+        );
+
+        drop(durable_requester);
+        let mut restarted_requester = MergeSidecarTransport::open_durable(
+            temp.path(),
+            DEFAULT_REPLY_SOURCE_CAPACITY,
+            MergeSidecarLimits::defaults(),
+        )
+        .expect("restart requester lifecycle journal");
+        let recovered = &restarted_requester.request_streams[&local_peer];
+        assert_eq!(recovered.next_sequence, 1);
+        assert_eq!(recovered.closed_through, 1);
+        assert_eq!(recovered.acknowledged_through, 0);
+        assert!(recovered.open_sequences.is_empty());
+
+        let second = restarted_requester
+            .defer_block(
+                HashOf::from_untyped_unchecked(Hash::new(b"durable requester block two")),
+                2,
+                0,
+                reference,
+                &requester,
+                1,
+                now,
+            )
+            .expect("defer block after requester restart")
+            .expect("emit request after requester restart");
+        let CertifiedMergeSidecarMessage::Request(second_request) =
+            Arc::unwrap_or_clone(second.message)
+        else {
+            panic!("expected second request")
+        };
+        assert_eq!(second_request.request_id, first_request.request_id);
+        assert_eq!(second_request.semantic_sequence, 2);
+        assert_eq!(second_request.closed_through, 1);
+
+        let second_route = routes
+            .redeliver(&first_route)
+            .expect("same live responder connection delivers sequence two");
+        assert!(
+            live_responder
+                .admit_server_request(
+                    &requester,
+                    &second_request,
+                    Some(&second_route),
+                    &local_peer,
+                    now,
+                )
+                .expect("live responder accepts the recovered close floor")
+        );
+        assert_eq!(
+            live_responder.server_closed_through.get(&requester),
+            Some(&1)
+        );
+        assert_eq!(
+            live_responder.server_highest_sequence.get(&requester),
+            Some(&2)
+        );
+        assert_eq!(
+            live_responder.server_request_gates[&(requester.clone(), second_request.request_id)]
+                .semantic_sequence,
+            2
+        );
+    }
+
+    #[test]
+    fn durable_requester_crash_before_send_closes_unobserved_sequence() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let now = Instant::now();
+        let requester = peer(b"durable pre-send requester");
+        let reference = reference(64, 1);
+        let mut client = MergeSidecarTransport::open_durable(
+            temp.path(),
+            DEFAULT_REPLY_SOURCE_CAPACITY,
+            MergeSidecarLimits::defaults(),
+        )
+        .expect("open requester lifecycle journal");
+        let unsent = client
+            .defer_block(
+                HashOf::from_untyped_unchecked(Hash::new(b"durable unsent block")),
+                2,
+                0,
+                reference,
+                &requester,
+                1,
+                now,
+            )
+            .expect("persist request before send")
+            .expect("allocate request before crash");
+        let CertifiedMergeSidecarMessage::Request(unsent_request) =
+            Arc::unwrap_or_clone(unsent.message)
+        else {
+            panic!("expected an unsent request")
+        };
+        let responder = unsent_request.responder.clone();
+        drop(client);
+
+        let mut restarted = MergeSidecarTransport::open_durable(
+            temp.path(),
+            DEFAULT_REPLY_SOURCE_CAPACITY,
+            MergeSidecarLimits::defaults(),
+        )
+        .expect("restart requester after pre-send crash");
+        let close_post = restarted
+            .tick_bounded(&requester, now, 1)
+            .expect("schedule recovered close")
+            .pop()
+            .expect("unobserved durable sequence still requires a close");
+        let CertifiedMergeSidecarMessage::Close(close) = Arc::unwrap_or_clone(close_post.message)
+        else {
+            panic!("recovered work must emit Close")
+        };
+        assert_eq!(close.closed_through, unsent_request.semantic_sequence);
+
+        let mut fresh_responder = MergeSidecarTransport::new();
+        let ack_post = fresh_responder
+            .admit_server_close(&requester, &close, &responder)
+            .expect("first stream observation may be its authenticated close");
+        let CertifiedMergeSidecarMessage::CloseAck(ack) = Arc::unwrap_or_clone(ack_post.message)
+        else {
+            panic!("first-observation close must be acknowledged")
+        };
+        assert!(
+            restarted
+                .acknowledge_close(&responder, &ack, &requester)
+                .expect("acknowledge recovered close")
+        );
+        assert!(
+            restarted
+                .tick_bounded(&requester, now + REQUEST_TIMEOUT, 1)
+                .expect("service terminated recovered stream")
+                .is_empty(),
+            "the exact close ACK terminates local recovery work"
+        );
+        assert!(matches!(
+            fresh_responder.admit_server_request(
+                &requester,
+                &unsent_request,
+                None,
+                &responder,
+                now,
+            ),
+            Err(MergeSidecarError::UnsolicitedResponse)
+        ));
+    }
+
+    #[test]
+    fn durable_semantic_peer_history_is_roster_bounded_not_connection_bounded() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let now = Instant::now();
+        let reply_source_capacity = 1;
+        let limits = MergeSidecarLimits::defaults();
+        let mut transport = MergeSidecarTransport::with_limits(reply_source_capacity, limits)
+            .expect("construct one-connection transport");
+
+        let responders = (0..MAX_CERTIFIED_MERGE_SEMANTIC_PEERS)
+            .map(|index| peer(format!("semantic responder {index}").as_bytes()))
+            .collect::<Vec<_>>();
+        for responder in &responders {
+            let (sequence, closed_through) = transport
+                .allocate_request_sequence(responder)
+                .expect("every validator in the roster owns a semantic request stream");
+            assert_eq!(sequence, 1);
+            assert_eq!(closed_through, 0);
+            transport.close_request_sequence(responder, sequence);
+        }
+        assert_eq!(
+            transport.request_streams.len(),
+            MAX_CERTIFIED_MERGE_SEMANTIC_PEERS
+        );
+        assert!(matches!(
+            transport.allocate_request_sequence(&peer(b"semantic responder beyond roster")),
+            Err(MergeSidecarError::Capacity(
+                "requester semantic responder geometry"
+            ))
+        ));
+
+        let (_, _, _, base_request, _) = start_session(1, 1);
+        let local_peer = base_request.responder.clone();
+        let hub = peer(b"single authenticated semantic-peer hub");
+        let mut routes =
+            NetworkReplyRouteTestFixture::with_source_capacity(hub.clone(), reply_source_capacity);
+        for index in 0..MAX_CERTIFIED_MERGE_SEMANTIC_PEERS {
+            let requester = peer(format!("semantic requester {index}").as_bytes());
+            let request = routed_server_request(&base_request, requester.clone(), b"semantic", 1);
+            let route = routes.mint_via(requester.clone(), hub.clone());
+            assert!(
+                transport
+                    .admit_server_request(&requester, &request, Some(&route), &local_peer, now,)
+                    .expect("a sequential semantic requester is not a concurrent source")
+            );
+            let mut close = CertifiedMergeSidecarCloseV1 {
+                version: CERTIFIED_MERGE_SIDECAR_VERSION_V1,
+                closed_through: request.semantic_sequence,
+                close_id: Hash::prehashed([0; Hash::LENGTH]),
+                requester: requester.clone(),
+                responder: local_peer.clone(),
+            };
+            close.bind_canonical_close_id();
+            transport
+                .admit_server_close(&requester, &close, &local_peer)
+                .expect("retire the requester's only active semantic gate");
+            assert_eq!(transport.drain_closed_server_prefixes().len(), 1);
+            assert!(transport.server_request_gates.is_empty());
+        }
+        assert_eq!(
+            transport.server_closed_through.len(),
+            MAX_CERTIFIED_MERGE_SEMANTIC_PEERS
+        );
+        assert_eq!(
+            transport.server_highest_sequence.len(),
+            MAX_CERTIFIED_MERGE_SEMANTIC_PEERS
+        );
+        let extra_requester = peer(b"semantic requester beyond roster");
+        let extra_request =
+            routed_server_request(&base_request, extra_requester.clone(), b"extra", 1);
+        let extra_route = routes.mint_via(extra_requester.clone(), hub);
+        assert!(matches!(
+            transport.admit_server_request(
+                &extra_requester,
+                &extra_request,
+                Some(&extra_route),
+                &local_peer,
+                now,
+            ),
+            Err(MergeSidecarError::Capacity(
+                "server semantic requester geometry"
+            ))
+        ));
+
+        let journal = MergeSidecarLifecycleJournal::open(
+            temp.path(),
+            transport
+                .lifecycle_max_snapshot_bytes()
+                .expect("semantic-peer journal geometry is representable"),
+        )
+        .expect("open semantic-peer lifecycle journal");
+        transport.lifecycle_journal = Some(journal);
+        transport
+            .persist_lifecycle_state()
+            .expect("persist every semantic-peer stream atomically");
+        drop(transport);
+
+        let restarted =
+            MergeSidecarTransport::open_durable(temp.path(), reply_source_capacity, limits)
+                .expect("restore semantic-peer history beyond one connection");
+        assert_eq!(
+            restarted.request_streams.len(),
+            MAX_CERTIFIED_MERGE_SEMANTIC_PEERS
+        );
+        assert_eq!(
+            restarted.server_closed_through.len(),
+            MAX_CERTIFIED_MERGE_SEMANTIC_PEERS
+        );
+        assert_eq!(
+            restarted.server_highest_sequence.len(),
+            MAX_CERTIFIED_MERGE_SEMANTIC_PEERS
+        );
+        assert!(restarted.server_request_gates.is_empty());
+
+        let snapshot = restarted
+            .lifecycle_snapshot()
+            .expect("snapshot the complete semantic roster");
+        assert_eq!(
+            snapshot.payload.geometry.semantic_peer_capacity,
+            u64::try_from(MAX_CERTIFIED_MERGE_SEMANTIC_PEERS)
+                .expect("protocol roster bound fits u64")
+        );
+
+        let mut oversized_requesters = snapshot.payload.clone();
+        oversized_requesters
+            .request_streams
+            .push(RequestStreamLifecycleV2 {
+                responder: peer(b"oversized durable responder"),
+                next_sequence: 1,
+                closed_through: 1,
+                acknowledged_through: 0,
+            });
+        let mut fresh = MergeSidecarTransport::with_limits(reply_source_capacity, limits)
+            .expect("construct fresh restore target");
+        assert!(matches!(
+            fresh.restore_lifecycle_snapshot(
+                MergeSidecarLifecycleSnapshotV2::new(oversized_requesters),
+                now,
+            ),
+            Err(MergeSidecarError::LifecycleJournal(ref error))
+                if error.contains("exceeds configured source geometry")
+        ));
+
+        let extra_server = peer(b"oversized durable requester");
+        let mut oversized_responders = snapshot.payload;
+        oversized_responders
+            .server_closed_through
+            .push(PeerSequenceLifecycleV1 {
+                peer: extra_server.clone(),
+                sequence: 1,
+            });
+        oversized_responders
+            .server_highest_sequence
+            .push(PeerSequenceLifecycleV1 {
+                peer: extra_server,
+                sequence: 1,
+            });
+        assert!(matches!(
+            fresh.restore_lifecycle_snapshot(
+                MergeSidecarLifecycleSnapshotV2::new(oversized_responders),
+                now,
+            ),
+            Err(MergeSidecarError::LifecycleJournal(ref error))
+                if error.contains("exceeds configured source geometry")
+        ));
+    }
+
+    #[test]
+    fn durable_lifecycle_rejects_canonical_payload_with_stale_digest() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let now = Instant::now();
+        let requester = peer(b"durable corrupt lifecycle requester");
+        let mut transport = MergeSidecarTransport::open_durable(
+            temp.path(),
+            DEFAULT_REPLY_SOURCE_CAPACITY,
+            MergeSidecarLimits::defaults(),
+        )
+        .expect("open lifecycle journal");
+        transport
+            .defer_block(
+                HashOf::from_untyped_unchecked(Hash::new(b"durable corrupt lifecycle block")),
+                2,
+                0,
+                reference(64, 1),
+                &requester,
+                1,
+                now,
+            )
+            .expect("persist one semantic request")
+            .expect("request has a holder");
+
+        let journal = transport
+            .lifecycle_journal
+            .as_ref()
+            .expect("durable transport owns its journal");
+        let mut snapshot = journal
+            .load()
+            .expect("load valid lifecycle snapshot")
+            .expect("snapshot exists");
+        snapshot.payload.request_streams[0].next_sequence = snapshot.payload.request_streams[0]
+            .next_sequence
+            .checked_add(1)
+            .expect("test sequence remains representable");
+        assert!(
+            !snapshot.integrity_is_valid(),
+            "the semantic mutation must leave the prior payload digest stale"
+        );
+        assert!(matches!(
+            journal.persist(&snapshot),
+            Err(MergeSidecarError::LifecycleJournal(ref error))
+                if error.contains("payload digest mismatch")
+        ));
+        let canonical =
+            norito::to_bytes(&snapshot).expect("mutated snapshot still has canonical Norito bytes");
+        assert_eq!(
+            norito::decode_from_bytes::<MergeSidecarLifecycleSnapshotV2>(&canonical)
+                .expect("mutated canonical bytes remain structurally decodable"),
+            snapshot
+        );
+        fs::write(journal.state_path(), canonical)
+            .expect("replace state with canonical corruption");
+        drop(transport);
+
+        assert!(matches!(
+            MergeSidecarTransport::open_durable(
+                temp.path(),
+                DEFAULT_REPLY_SOURCE_CAPACITY,
+                MergeSidecarLimits::defaults(),
+            ),
+            Err(MergeSidecarError::LifecycleJournal(ref error))
+                if error.contains("payload digest mismatch")
+        ));
+    }
+
+    #[test]
+    fn durable_responder_restart_preserves_same_hub_gate_budget() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let (_, _, _, base_request, now) = start_session(1, 1);
+        let local_peer = base_request.responder.clone();
+        let hub_a = peer(b"durable gate budget hub a");
+        let hub_b = peer(b"durable gate budget hub b");
+        let mut first_actor = NetworkReplyRouteTestFixture::new(hub_a.clone());
+        let mut server = MergeSidecarTransport::open_durable(
+            temp.path(),
+            DEFAULT_REPLY_SOURCE_CAPACITY,
+            MergeSidecarLimits::defaults(),
+        )
+        .expect("open responder lifecycle journal");
+
+        for index in 0..MAX_SERVER_REQUEST_GATES_PER_SOURCE {
+            let origin = peer(format!("durable gate origin {index}").as_bytes());
+            let request = routed_server_request(&base_request, origin.clone(), b"gate", 1);
+            let route = first_actor.mint_via(origin.clone(), hub_a.clone());
+            assert!(
+                server
+                    .admit_server_request(&origin, &request, Some(&route), &local_peer, now,)
+                    .expect("admit one same-hub gate before restart")
+            );
+            server
+                .persist_lifecycle_state()
+                .expect("persist same-hub gate");
+        }
+        drop(server);
+
+        let mut restarted = MergeSidecarTransport::open_durable(
+            temp.path(),
+            DEFAULT_REPLY_SOURCE_CAPACITY,
+            MergeSidecarLimits::defaults(),
+        )
+        .expect("restart responder with full same-hub gate budget");
+        let mut restarted_actor = NetworkReplyRouteTestFixture::new(hub_a.clone());
+        let fifth_origin = peer(b"durable fifth gate origin");
+        let fifth_request = routed_server_request(&base_request, fifth_origin.clone(), b"fifth", 1);
+        let fifth_route = restarted_actor.mint_via(fifth_origin.clone(), hub_a);
+        assert!(matches!(
+            restarted.admit_server_request(
+                &fifth_origin,
+                &fifth_request,
+                Some(&fifth_route),
+                &local_peer,
+                now,
+            ),
+            Err(MergeSidecarError::Capacity("server request rate gate"))
+        ));
+
+        let independent_origin = peer(b"durable independent gate origin");
+        let independent_request =
+            routed_server_request(&base_request, independent_origin.clone(), b"independent", 1);
+        let independent_route = restarted_actor.mint_via(independent_origin.clone(), hub_b.clone());
+        assert!(
+            restarted
+                .admit_server_request(
+                    &independent_origin,
+                    &independent_request,
+                    Some(&independent_route),
+                    &local_peer,
+                    now,
+                )
+                .expect("independent hub retains its reserved gate corridor")
+        );
+        let independent_source = ServerRequestSource::Authenticated(independent_route.source_key());
+        assert_eq!(restarted.source_gate_count(&independent_source), 1);
+        assert_eq!(
+            independent_route.authenticated_source_peer(),
+            &hub_b,
+            "the admitted gate is charged to the independent authenticated hub"
+        );
+    }
+
+    #[test]
+    fn durable_responder_restart_allows_new_source_while_recovered_source_is_offline() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let len = MAX_CERTIFIED_MERGE_CHUNK_BYTES + 1;
+        let (_, requester, _, request, now) = start_session(len, 1);
+        let local_peer = request.responder.clone();
+        let hub_a = peer(b"durable offline source a");
+        let hub_b = peer(b"durable responsive source b");
+        let mut first_actor = NetworkReplyRouteTestFixture::new(hub_a.clone());
+        let route_a = first_actor.mint(requester.clone());
+        let mut server = MergeSidecarTransport::open_durable(
+            temp.path(),
+            DEFAULT_REPLY_SOURCE_CAPACITY,
+            MergeSidecarLimits::defaults(),
+        )
+        .expect("open responder lifecycle journal");
+        assert!(
+            server
+                .admit_server_request(&requester, &request, Some(&route_a), &local_peer, now)
+                .expect("admit source A")
+        );
+        server
+            .persist_lifecycle_state()
+            .expect("persist source A gate");
+        server
+            .enqueue_response(request.clone(), Some(route_a), vec![0xE5; len], now)
+            .expect("materialize source A response");
+        let first_a = server
+            .drain_outbound_chunks(1, now)
+            .pop()
+            .expect("source A receives chunk zero");
+        assert!(acknowledge_reply_chunk(&mut server, &first_a, now));
+        drop(server);
+
+        let mut restarted = MergeSidecarTransport::open_durable(
+            temp.path(),
+            DEFAULT_REPLY_SOURCE_CAPACITY,
+            MergeSidecarLimits::defaults(),
+        )
+        .expect("restart responder with source A offline");
+        let key = (requester.clone(), request.request_id);
+        let recovered_a = ServerRequestSource::RecoveredAuthenticated(hub_a);
+        assert_eq!(
+            restarted.server_request_gates[&key].attempts[&recovered_a].cursor,
+            ServerResponseCursor::Pending(1)
+        );
+
+        let mut restarted_actor = NetworkReplyRouteTestFixture::new(hub_b.clone());
+        let route_b = restarted_actor.mint(requester.clone());
+        assert!(
+            restarted
+                .admit_server_request(&requester, &request, Some(&route_b), &local_peer, now)
+                .expect("responsive source B attaches while recovered A stays offline")
+        );
+        let source_b = ServerRequestSource::Authenticated(route_b.source_key());
+        assert_eq!(
+            restarted.server_request_gates[&key].attempts[&recovered_a].cursor,
+            ServerResponseCursor::Pending(1)
+        );
+        assert_eq!(
+            restarted.server_request_gates[&key].attempts[&source_b].cursor,
+            ServerResponseCursor::Pending(0)
+        );
+        restarted
+            .enqueue_response(request, Some(route_b.clone()), vec![0xE5; len], now)
+            .expect("materialize shared bytes through source B");
+        let first_b = restarted
+            .drain_outbound_chunks(1, now)
+            .pop()
+            .expect("source B starts at chunk zero");
+        assert!(matches!(
+            &first_b,
+            MergeSidecarPost {
+                reply_route: Some(route),
+                message,
+                ..
+            } if route.same_delivery(&route_b)
+                && matches!(message.as_ref(), CertifiedMergeSidecarMessage::Chunk(chunk) if chunk.chunk_index == 0)
+        ));
+        assert_eq!(
+            restarted.server_request_gates[&key].attempts[&recovered_a].cursor,
+            ServerResponseCursor::Pending(1),
+            "source B materialization cannot reset offline source A"
+        );
+    }
+
+    #[test]
+    fn durable_response_drain_persists_pending_identity_before_handoff() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let len = MAX_CERTIFIED_MERGE_CHUNK_BYTES + 1;
+        let (_, requester, _, request, now) = start_session(len, 1);
+        let local_peer = request.responder.clone();
+        let hub = peer(b"durable pending response hub");
+        let mut first_actor = NetworkReplyRouteTestFixture::new(hub.clone());
+        let route = first_actor.mint(requester.clone());
+        let mut server = MergeSidecarTransport::open_durable(
+            temp.path(),
+            DEFAULT_REPLY_SOURCE_CAPACITY,
+            MergeSidecarLimits::defaults(),
+        )
+        .expect("open durable responder");
+        assert!(
+            server
+                .admit_server_request(&requester, &request, Some(&route), &local_peer, now,)
+                .expect("admit durable request")
+        );
+        server
+            .persist_lifecycle_state()
+            .expect("persist request admission before materialization");
+        server
+            .enqueue_response(request.clone(), Some(route), vec![0xA7; len], now)
+            .expect("materialize durable response");
+        let first = server
+            .drain_outbound_chunks_durable(1, now)
+            .expect("persist pending chunk before handoff")
+            .pop()
+            .expect("emit first response chunk");
+        let pending = ServerPendingChunkIdentity::from_message(&first.message)
+            .expect("response post has a pending chunk identity");
+        drop(server);
+
+        let mut restarted = MergeSidecarTransport::open_durable(
+            temp.path(),
+            DEFAULT_REPLY_SOURCE_CAPACITY,
+            MergeSidecarLimits::defaults(),
+        )
+        .expect("restart durable responder");
+        let key = (requester.clone(), request.request_id);
+        let recovered_source = ServerRequestSource::RecoveredAuthenticated(hub.clone());
+        let recovered = &restarted.server_request_gates[&key].attempts[&recovered_source];
+        assert_eq!(recovered.cursor, ServerResponseCursor::Pending(0));
+        assert_eq!(recovered.pending_flush_chunk.as_ref(), Some(&pending));
+
+        let mut restarted_actor = NetworkReplyRouteTestFixture::new(hub);
+        let rebound = restarted_actor.mint(requester.clone());
+        assert!(
+            restarted
+                .admit_server_request(&requester, &request, Some(&rebound), &local_peer, now,)
+                .expect("rebind recovered pending source")
+        );
+        restarted
+            .persist_lifecycle_state()
+            .expect("persist rebound source before rematerialization");
+        restarted
+            .enqueue_response(request, Some(rebound), vec![0xA7; len], now)
+            .expect("rematerialize identical response");
+        let retried = restarted
+            .drain_outbound_chunks_durable(1, now)
+            .expect("persist retried pending chunk")
+            .pop()
+            .expect("retry the retained current chunk");
+        assert_eq!(
+            ServerPendingChunkIdentity::from_message(&retried.message),
+            Some(pending),
+            "restart may retry only the exact durably retained chunk identity"
+        );
+    }
+
+    #[test]
+    fn durable_responder_restart_preserves_terminal_source_cursor_and_rebinds_capability() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let len = MAX_CERTIFIED_MERGE_CHUNK_BYTES + 1;
+        let (_, requester, _, request, now) = start_session(len, 1);
+        let local_peer = request.responder.clone();
+        let hub = peer(b"durable responder hub");
+        let mut first_actor = NetworkReplyRouteTestFixture::new(hub.clone());
+        let route = first_actor.mint(requester.clone());
+        let mut server = MergeSidecarTransport::open_durable(
+            temp.path(),
+            DEFAULT_REPLY_SOURCE_CAPACITY,
+            MergeSidecarLimits::defaults(),
+        )
+        .expect("open responder lifecycle journal");
+        assert!(
+            server
+                .admit_server_request(&requester, &request, Some(&route), &local_peer, now)
+                .expect("admit request before responder restart")
+        );
+        server
+            .persist_lifecycle_state()
+            .expect("persist admitted responder gate");
+        server
+            .enqueue_response(request.clone(), Some(route), vec![0xD3; len], now)
+            .expect("materialize response before responder restart");
+        loop {
+            let Some(post) = server.drain_outbound_chunks(1, now).pop() else {
+                break;
+            };
+            assert!(acknowledge_reply_chunk(&mut server, &post, now));
+        }
+        assert!(server.outbound.is_empty());
+        let key = (requester.clone(), request.request_id);
+        assert!(
+            server.server_request_gates[&key]
+                .attempts
+                .values()
+                .all(|attempt| attempt.cursor == ServerResponseCursor::Complete
+                    && attempt.pending_flush_chunk.is_none())
+        );
+        drop(server);
+
+        let mut restarted = MergeSidecarTransport::open_durable(
+            temp.path(),
+            DEFAULT_REPLY_SOURCE_CAPACITY,
+            MergeSidecarLimits::defaults(),
+        )
+        .expect("restart responder lifecycle journal");
+        assert!(matches!(
+            restarted.server_request_gates[&key]
+                .attempts
+                .keys()
+                .next(),
+            Some(ServerRequestSource::RecoveredAuthenticated(peer)) if peer == &hub
+        ));
+        let mut restarted_actor = NetworkReplyRouteTestFixture::new(hub);
+        let rebound = restarted_actor.mint(requester.clone());
+        assert!(
+            !restarted
+                .admit_server_request(&requester, &request, Some(&rebound), &local_peer, now,)
+                .expect("rebind terminal source to the new process-local capability")
+        );
+        let rebound_source = ServerRequestSource::Authenticated(rebound.source_key());
+        let rebound_attempt = &restarted.server_request_gates[&key].attempts[&rebound_source];
+        assert_eq!(rebound_attempt.cursor, ServerResponseCursor::Complete);
+        assert!(rebound_attempt.pending_flush_chunk.is_none());
+        assert!(restarted.outbound.is_empty());
+        assert!(
+            restarted.drain_outbound_chunks(1, now).is_empty(),
+            "terminal durable progress must never rematerialize or replay response bytes"
+        );
     }
 
     #[test]

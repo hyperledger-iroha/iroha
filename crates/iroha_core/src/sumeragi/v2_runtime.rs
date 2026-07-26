@@ -372,6 +372,7 @@ pub(crate) struct RuntimeIngressOwnershipEvidence {
 enum RuntimeIngressMergeError {
     Capacity,
     Conflict,
+    IndependentOccurrence,
 }
 
 impl RuntimeIngressOwnershipEvidence {
@@ -417,9 +418,9 @@ impl RuntimeIngressOwnershipEvidence {
             return Err(RuntimeIngressMergeError::Conflict);
         }
         // Distinct semantic origins are independent requests for proposal,
-        // vote, timeout-vote, and transport traffic. QCs and TCs are
+        // vote, timeout-vote, and transport traffic. Aggregate QCs and TCs are
         // idempotent authenticated facts which can legitimately arrive from
-        // every voter, so each retains a bounded set of disjoint source
+        // every voter, so certificates retain a bounded set of disjoint source
         // carriers in one serialized runtime command.
         let allow_disjoint_carriers = matches!(
             runtime.payload,
@@ -553,7 +554,7 @@ fn merge_runtime_ingress_slot(
             continue;
         };
         if !allow_disjoint_carriers && !retained.is_empty() {
-            return Err(RuntimeIngressMergeError::Conflict);
+            return Err(RuntimeIngressMergeError::IndependentOccurrence);
         }
         if retained.len() == MAX_RUNTIME_INGRESS_CARRIERS_PER_FORM {
             return Err(RuntimeIngressMergeError::Capacity);
@@ -1945,19 +1946,28 @@ impl BoundedIngress<AdapterCommand> {
         })
     }
 
-    fn compatible_authenticated_wire_tag(
+    fn authenticated_wire_merge_preflight(
         &self,
         message: &wire::ConsensusMessageV2,
         ownership: &RuntimeIngressOwnershipEvidence,
-    ) -> Option<EventTag> {
-        self.commands.iter().find_map(|queued| {
-            (queued.command.matches_wire_envelope(message)
-                && queued
-                    .ingress_ownership
-                    .as_ref()
-                    .is_some_and(|retained| retained.can_merge_downstream(ownership)))
-            .then_some(queued.tag)
-        })
+    ) -> Option<Result<(), RuntimeIngressMergeError>> {
+        let mut matching_envelope = false;
+        for queued in &self.commands {
+            if !queued.command.matches_wire_envelope(message) {
+                continue;
+            }
+            matching_envelope = true;
+            let Some(retained) = queued.ingress_ownership.as_ref() else {
+                return Some(Err(RuntimeIngressMergeError::Conflict));
+            };
+            let mut preview = retained.clone();
+            match preview.merge_downstream(ownership.clone()) {
+                Ok(()) => return Some(Ok(())),
+                Err(RuntimeIngressMergeError::IndependentOccurrence) => {}
+                Err(error) => return Some(Err(error)),
+            }
+        }
+        matching_envelope.then_some(Err(RuntimeIngressMergeError::IndependentOccurrence))
     }
 
     /// Check whether an independently authenticated form of `message` can
@@ -1973,11 +1983,15 @@ impl BoundedIngress<AdapterCommand> {
         default_class: CommandClass,
         may_use_progress: bool,
     ) -> Result<(), EnqueueError> {
-        if self
-            .compatible_authenticated_wire_tag(message, ownership)
-            .is_some()
-        {
-            return Ok(());
+        if let Some(preflight) = self.authenticated_wire_merge_preflight(message, ownership) {
+            match preflight {
+                Ok(()) => return Ok(()),
+                Err(RuntimeIngressMergeError::Capacity) => return Err(EnqueueError::Full),
+                // Authentication remains mandatory before a conflicting
+                // process-local carrier can latch the runtime fail-closed.
+                Err(RuntimeIngressMergeError::Conflict) => return Ok(()),
+                Err(RuntimeIngressMergeError::IndependentOccurrence) => {}
+            }
         }
         match self.check_capacity(default_class) {
             Ok(()) => Ok(()),
@@ -2020,22 +2034,18 @@ impl BoundedIngress<AdapterCommand> {
         if !ingress_ownership.matches_authenticated(&authenticated) {
             return Err(EnqueueError::FailClosed);
         }
-        for index in 0..self.commands.len() {
-            if !self.commands[index]
-                .command
-                .is_same_authenticated_envelope(&authenticated)
-            {
-                continue;
-            }
-            let Some(retained) = self.commands[index].ingress_ownership.as_ref() else {
-                return Err(EnqueueError::FailClosed);
-            };
-            let mut merged = retained.clone();
-            match merged.merge_downstream(ingress_ownership.clone()) {
-                Ok(()) => {}
-                Err(RuntimeIngressMergeError::Capacity) => return Err(EnqueueError::Full),
-                Err(RuntimeIngressMergeError::Conflict) => continue,
-            }
+        let matching_indices = self
+            .commands
+            .iter()
+            .enumerate()
+            .filter_map(|(index, queued)| {
+                queued
+                    .command
+                    .is_same_authenticated_envelope(&authenticated)
+                    .then_some(index)
+            })
+            .collect::<Vec<_>>();
+        for index in matching_indices {
             let queued = self
                 .commands
                 .get_mut(index)
@@ -2043,8 +2053,14 @@ impl BoundedIngress<AdapterCommand> {
             let Some(retained) = queued.ingress_ownership.as_mut() else {
                 return Err(EnqueueError::FailClosed);
             };
-            *retained = merged;
-            return Ok(queued.tag);
+            match retained.merge_downstream(ingress_ownership.clone()) {
+                Ok(()) => return Ok(queued.tag),
+                Err(RuntimeIngressMergeError::Capacity) => return Err(EnqueueError::Full),
+                Err(RuntimeIngressMergeError::Conflict) => {
+                    return Err(EnqueueError::FailClosed);
+                }
+                Err(RuntimeIngressMergeError::IndependentOccurrence) => {}
+            }
         }
         self.enqueue(TaggedCommand::with_ingress_ownership(
             tag,
@@ -3351,10 +3367,10 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
     ///
     /// Traffic which passes the bounded capacity check, exactly matches an
     /// already-owned authenticated envelope, or exactly matches a
-    /// Busy-deferred authenticated certificate is cryptographically
-    /// authenticated and then checked against canonical authority. Rejections
-    /// do not poison the runtime. Once admitted, any adapter transition
-    /// failure is fatal when the serialized command is executed.
+    /// Busy-deferred aggregate certificate is cryptographically authenticated
+    /// and then checked against canonical authority. Rejections do not poison
+    /// the runtime. Once admitted, any adapter transition failure is fatal when
+    /// the serialized command is executed.
     pub(crate) fn enqueue_network_with_ingress_ownership(
         &mut self,
         message: wire::ConsensusMessageV2,
@@ -3370,11 +3386,22 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
                 })?;
         let default_class = classify_reducer_network_ingress(self.fail_closed, &message.payload)?;
         let deferred_owner = self.driver.deferred_authenticated_message_owner(&message);
+        if let wire::ConsensusMessageV2Payload::QuorumCertificate(certificate) = &message.payload {
+            let projected_owner_tag = self
+                .driver
+                .deferred_quorum_certificate_owner_tag(certificate);
+            if projected_owner_tag != deferred_owner.map(|(tag, _)| tag) {
+                self.latch_fail_closed(
+                    "deferred certificate owner projection disagreed with its exact owner",
+                );
+                return Err(NetworkIngressError::FailClosed);
+            }
+        }
         // An exact queued retransmission may always spend authentication work
         // so it can release its ingress occurrence. An exact Busy-deferred
-        // authenticated certificate may likewise spend authentication work
-        // without claiming a second queue slot. Otherwise, only the adapter's
-        // exact active-lock match may proceed after the normal prefix fills.
+        // aggregate certificate may likewise spend authentication work without
+        // claiming a second queue slot. Otherwise, only the adapter's exact
+        // active-lock match may proceed after the normal prefix fills.
         // Authentication below remains mandatory before either form of
         // coalescing.
         let may_be_exact_locked_commit =
@@ -3405,7 +3432,7 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             // disagreement would invalidate the raw-capacity hint rather than
             // authorizing an unchecked queue insertion.
             self.latch_fail_closed(
-                "network authentication changed deferred QC ownership classification",
+                "network authentication changed deferred certificate ownership classification",
             );
             return Err(NetworkIngressError::FailClosed);
         }
@@ -3417,9 +3444,12 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
                 Err(RuntimeIngressMergeError::Capacity) => {
                     return Err(NetworkIngressError::Backpressure(EnqueueError::Full));
                 }
-                Err(RuntimeIngressMergeError::Conflict) => {
+                Err(
+                    RuntimeIngressMergeError::Conflict
+                    | RuntimeIngressMergeError::IndependentOccurrence,
+                ) => {
                     self.latch_fail_closed(
-                        "deferred QC admission lost authenticated ingress ownership",
+                        "deferred certificate admission lost authenticated ingress ownership",
                     );
                     return Err(NetworkIngressError::FailClosed);
                 }
@@ -3879,9 +3909,9 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
 
     /// Retire authenticated proposals which a newly installed lock makes unsafe.
     ///
-    /// Only the exact locked subject at its authenticated proposal origin
-    /// remains queued. Prepared-value authority is installed and committed
-    /// directly; it never authorizes a competing proposal origin.
+    /// The exact locked subject may remain queued for unchanged reproposal.
+    /// A competing subject survives only with the strictly higher matching
+    /// PrepareQC required by the shared safe-value rule.
     pub(crate) fn retire_unsafe_proposals_for_lock(
         &mut self,
         locked_round: wire::ConsensusRound,
@@ -4085,7 +4115,9 @@ mod tests {
     use crate::sumeragi::v2_core::Generation;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::peer::PeerId;
-    use iroha_p2p::network::{NetworkReplyRoute, NetworkReplyRouteTestFixture};
+    use iroha_p2p::network::{
+        NetworkReplyRoute, NetworkReplyRouteError, NetworkReplyRouteTestFixture,
+    };
     use tempfile::TempDir;
 
     use super::*;
@@ -4551,7 +4583,7 @@ mod tests {
                 highest_prepare_qc: None,
                 signers,
                 aggregate_signature: iroha_crypto::bls_normal_aggregate_signatures(&share_refs)
-                    .expect("aggregate runtime timeout certificate"),
+                    .expect("aggregate runtime fixture timeout certificate"),
             }],
         }
     }
@@ -6546,11 +6578,20 @@ mod tests {
             .forge_equal_ordinal_different_tenure(&first_route, source.clone(), source.clone())
             .expect("fixture owns the conflicting route authority");
 
+        assert!(matches!(
+            super::super::InboundBlockMessage::try_from_transport_with_reply_route(
+                super::super::message::BlockMessage::V2(message.clone()),
+                source.clone(),
+                source.clone(),
+                conflicting_route.clone(),
+            ),
+            Err(NetworkReplyRouteError::EqualOrdinalDifferentTenure)
+        ));
         let first_ownership = fair_network_ownership_with_route(
             &message,
             source.clone(),
             source.clone(),
-            first_route.clone(),
+            first_route,
         );
         runtime
             .enqueue_network_with_ingress_ownership(message.clone(), first_ownership.clone())
@@ -6563,14 +6604,13 @@ mod tests {
             .expect("the queued QC retains its first route")
             .clone();
 
-        let mut conflicting_ownership = first_ownership;
-        conflicting_ownership
-            .latest
-            .attempts_after
-            .first_mut()
-            .expect("routed ownership retains one reply attempt")
-            .route = conflicting_route;
-        assert!(!conflicting_ownership.validate_exact());
+        let mut conflicting_ownership = retained_before.direct[0].clone();
+        conflicting_ownership.attempts[0].route = conflicting_route.clone();
+        conflicting_ownership.latest.attempts_after[0].route = conflicting_route;
+        assert!(
+            !conflicting_ownership.validate_exact(),
+            "the runtime must reject a carrier whose cursor projection substitutes a forged tenure"
+        );
         assert!(matches!(
             runtime.enqueue_network_with_ingress_ownership(message.clone(), conflicting_ownership),
             Err(NetworkIngressError::FailClosed)
@@ -6625,6 +6665,7 @@ mod tests {
             .expect("the queued QC retains the full carrier set");
         assert_eq!(retained.direct.len(), MAX_RUNTIME_INGRESS_CARRIERS_PER_FORM);
         let retained_before = retained.clone();
+        let queued_before = runtime.queued_commands();
         let excess_carrier = carrier();
 
         assert!(matches!(
@@ -6638,6 +6679,11 @@ mod tests {
             .and_then(|queued| queued.ingress_ownership.as_ref())
             .expect("backpressure preserves the full exact carrier set");
         assert_eq!(retained_after, &retained_before);
+        assert_eq!(
+            runtime.queued_commands(),
+            queued_before,
+            "carrier saturation must not create a duplicate runtime command"
+        );
         assert!(retained_after.validate_exact());
         assert!(!runtime.fail_closed);
         assert!(runtime.fail_closed_reason.is_none());
@@ -8906,6 +8952,13 @@ mod tests {
                 .map(|(tag, _)| tag),
             Some(owner_tag)
         );
+        assert_eq!(
+            runtime
+                .driver
+                .deferred_quorum_certificate_owner_tag(&exact_certificate),
+            Some(owner_tag),
+            "the exact canonical QC retains its Busy-deferred owner"
+        );
         let distinct_message = wire::ConsensusMessageV2::new(
             wire::ConsensusMessageV2Payload::QuorumCertificate(distinct_certificate.clone()),
         );
@@ -9080,6 +9133,89 @@ mod tests {
             ))
         ));
         assert_eq!(runtime.queued_commands(), queued_before);
+    }
+
+    #[test]
+    fn exact_authenticated_timeout_certificate_from_distinct_sources_coalesces_in_one_runtime_slot()
+    {
+        let directory = TempDir::new().expect("temporary multi-source TC directory");
+        let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(
+            &directory,
+            RuntimeQueueConfig::new(4, 1, 1),
+            Some(0),
+        );
+        let now = Instant::now();
+        runtime
+            .arm_live_clocks(now)
+            .expect("arm runtime before authenticated ingress");
+        let round_tag = runtime.round_tag();
+        let timeout_effects = runtime
+            .driver
+            .timeout_elapsed(round_tag)
+            .expect("install a local signing fence")
+            .into_effects();
+        assert!(matches!(
+            timeout_effects.as_slice(),
+            [AdapterEffect::Sign {
+                request: SignRequest::TimeoutVote(_),
+                ..
+            }]
+        ));
+
+        let message =
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::TimeoutCertificate(
+                signed_runtime_timeout_certificate(&context, &keys),
+            ));
+        let first_source = PeerId::new(keys[1].public_key().clone());
+        let second_source = PeerId::new(keys[2].public_key().clone());
+        assert_eq!(
+            runtime
+                .enqueue_network_with_ingress_ownership(
+                    message.clone(),
+                    fair_network_ownership(&message, first_source),
+                )
+                .expect("the first authenticated TC carrier owns the runtime command"),
+            round_tag
+        );
+        assert_eq!(
+            runtime
+                .enqueue_network_with_ingress_ownership(
+                    message.clone(),
+                    fair_network_ownership(&message, second_source),
+                )
+                .expect("the same TC from another source coalesces"),
+            round_tag
+        );
+        assert_eq!(
+            runtime.queued_commands(),
+            1,
+            "one exact aggregate TC must retain every bounded source carrier"
+        );
+        let retained = runtime
+            .ingress
+            .commands
+            .front()
+            .and_then(|queued| queued.ingress_ownership.as_ref())
+            .expect("the coalesced TC retains exact ingress ownership");
+        assert!(retained.validate_exact());
+        assert_eq!(retained.direct.len(), 2);
+
+        assert!(matches!(
+            runtime.step(now),
+            Ok(RuntimeStep::Advanced(ref effects)) if effects.is_empty()
+        ));
+        let selected = runtime
+            .take_last_scheduler_ownership()
+            .expect("the Busy TC dispatch retains its exact runtime owner");
+        assert!(selected.validate_exact().is_ok());
+        let deferred = runtime
+            .deferred_ingress_ownership
+            .values()
+            .next()
+            .expect("the Busy TC retains the coalesced source carriers");
+        assert!(deferred.validate_exact());
+        assert_eq!(deferred.direct.len(), 2);
+        assert!(!runtime.fail_closed);
     }
 
     #[test]

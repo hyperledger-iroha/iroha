@@ -43,7 +43,7 @@ pub const MAX_COMMIT_QUORUM_GROUPS_PER_HEIGHT: usize = MAX_VALIDATORS_PER_HEIGHT
 const MAX_LIVENESS_IGNORE_REASONS: usize = 12;
 /// Tight allocation bound for one consensus signature or aggregate.
 pub const MAX_CONSENSUS_SIGNATURE_BYTES: usize = 256;
-const HEIGHT_CONTEXT_IDENTITY_VERSION: u16 = 3;
+const HEIGHT_CONTEXT_IDENTITY_VERSION: u16 = 4;
 /// Permissioned Sumeragi v2 handshake and domain-separation tag.
 pub const PERMISSIONED_TAG: &str = "iroha2-consensus::permissioned-sumeragi@v2";
 /// `NPoS` Sumeragi v2 handshake and domain-separation tag.
@@ -451,11 +451,11 @@ pub struct HeightContext {
 impl HeightContext {
     /// Return the typed hash that identifies every round in this context.
     ///
-    /// The identity commits to the parent `CommitQC`'s semantic finality key
-    /// (parent context, height, proposal origin, phase, subject, and execution commitment),
-    /// rather than its finality view, aggregate signature, or signer subset. Two nodes that
-    /// finalized the same proposal through different valid `CommitQCs` must derive the same
-    /// next-height context.
+    /// The identity commits to the parent CommitQC's semantic decision key
+    /// (parent context, height, phase, subject, and execution commitment),
+    /// rather than its round, aggregate signature, or signer subset. Two nodes
+    /// that decide the same immutable body before or after an unchanged
+    /// re-proposal therefore derive the same next-height context.
     #[must_use]
     pub fn id(&self) -> HeightContextId {
         let identity = HeightContextIdentity {
@@ -473,7 +473,6 @@ impl HeightContext {
                 .map(|certificate| ParentCommitIdentity {
                     context_id: certificate.round.context_id,
                     height: certificate.round.height,
-                    proposal_round: certificate.proposal_round,
                     phase: certificate.phase,
                     subject: certificate.subject,
                     execution_commitment: certificate.execution_commitment,
@@ -537,9 +536,7 @@ impl HeightContext {
             (_, Some(parent), None)
                 if parent.phase != GlobalPhase::Commit
                     || parent.round.height.checked_add(1) != Some(self.height)
-                    || parent.proposal_round.context_id != parent.round.context_id
-                    || parent.proposal_round.height != parent.round.height
-                    || parent.proposal_round.view > parent.round.view =>
+                    || parent.proposal_round != parent.round =>
             {
                 return Err(ValidationError::InvalidParentCommit);
             }
@@ -638,7 +635,6 @@ struct HeightContextIdentity {
 struct ParentCommitIdentity {
     context_id: HeightContextId,
     height: Height,
-    proposal_round: ConsensusRound,
     phase: GlobalPhase,
     subject: BlockSubject,
     execution_commitment: ExecutionCommitment,
@@ -1066,7 +1062,7 @@ impl ExecutionCommitment {
 pub struct Vote {
     /// Round in which the vote was issued.
     pub round: ConsensusRound,
-    /// Immutable round in which the certified proposal body originated.
+    /// Proposal round authenticated by the vote; equal to [`Self::round`].
     pub proposal_round: ConsensusRound,
     /// Prepare or Commit phase.
     pub phase: GlobalPhase,
@@ -1114,7 +1110,7 @@ impl Vote {
     /// oversized.
     pub fn validate(&self, context: &HeightContext) -> Result<(), ValidationError> {
         validate_round(self.round, context)?;
-        validate_proposal_round(self.proposal_round, self.round, self.phase, context)?;
+        validate_proposal_round(self.proposal_round, self.round, context)?;
         validate_validator_index(self.signer, context)?;
         self.execution_commitment.validate()?;
         require_signature(&self.signature)
@@ -1133,7 +1129,7 @@ pub struct VoteSignaturePayload {
     pub protocol_version: u16,
     /// Exact round being voted in.
     pub round: ConsensusRound,
-    /// Immutable proposal-body origin authenticated by the vote.
+    /// Proposal round authenticated by the vote; equal to [`Self::round`].
     pub proposal_round: ConsensusRound,
     /// Prepare or Commit phase.
     pub phase: GlobalPhase,
@@ -1153,7 +1149,7 @@ pub struct VoteSignaturePayload {
 pub struct QuorumCertificateRef {
     /// Certified round.
     pub round: ConsensusRound,
-    /// Immutable proposal-body origin authenticated by the certificate.
+    /// Proposal round authenticated by the certificate; equal to [`Self::round`].
     pub proposal_round: ConsensusRound,
     /// Certified phase.
     pub phase: GlobalPhase,
@@ -1166,16 +1162,16 @@ pub struct QuorumCertificateRef {
 impl QuorumCertificateRef {
     /// Return whether both references certify the same committed decision.
     ///
-    /// `CommitQCs` for one proposal may be assembled in different finality views
-    /// and from different signer subsets. Their stable decision identity binds
-    /// the immutable proposal origin while excluding only the finality view.
+    /// CommitQCs for one immutable body may be assembled before or after an
+    /// unchanged re-proposal. Their stable decision identity excludes the
+    /// round and signer evidence while retaining context, height, subject, and
+    /// deterministic execution.
     #[must_use]
     pub fn same_commit_decision(self, other: Self) -> bool {
         self.phase == GlobalPhase::Commit
             && other.phase == GlobalPhase::Commit
             && self.round.context_id == other.round.context_id
             && self.round.height == other.round.height
-            && self.proposal_round == other.proposal_round
             && self.subject == other.subject
             && self.execution_commitment == other.execution_commitment
     }
@@ -1191,7 +1187,7 @@ impl QuorumCertificateRef {
 pub struct QuorumCertificate {
     /// Certified round.
     pub round: ConsensusRound,
-    /// Immutable proposal-body origin shared by every aggregated vote.
+    /// Proposal round shared by every aggregated vote; equal to [`Self::round`].
     pub proposal_round: ConsensusRound,
     /// Certified phase.
     pub phase: GlobalPhase,
@@ -1229,7 +1225,7 @@ impl QuorumCertificate {
     /// valid under `context`.
     pub fn validate(&self, context: &HeightContext) -> Result<(), ValidationError> {
         validate_round(self.round, context)?;
-        validate_proposal_round(self.proposal_round, self.round, self.phase, context)?;
+        validate_proposal_round(self.proposal_round, self.round, context)?;
         self.execution_commitment.validate()?;
         context
             .quorum
@@ -1538,9 +1534,10 @@ pub struct TimeoutJustification {
     pub timeout_certificate: TimeoutCertificate,
     /// Full highest `PrepareQC` selected from the timeout groups.
     ///
-    /// First-release proposals require this to be absent: a timeout certificate
-    /// carrying prepared value authority installs and commits that exact origin
-    /// instead of authorizing another proposal origin.
+    /// When present, the proposal must re-propose this certificate's exact
+    /// subject. The value is repeated outside the grouped timeout votes so a
+    /// proposal authenticates the complete PrepareQC used by its safe-value
+    /// rule without requiring a receiver to reconstruct a signer subset.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub highest_prepare_qc: Option<QuorumCertificate>,
@@ -1850,11 +1847,21 @@ impl Proposal {
                     (None, None) => true,
                     (Some(carried), Some(frozen)) => {
                         // A subject can acquire valid CommitQCs in more than
-                        // one view. Context identity deliberately ignores that
-                        // view and the signer subset, so view-zero proposal
-                        // admission must use the same semantic finality key or
-                        // equal next-height contexts could reject each other.
-                        carried.as_ref().same_commit_decision(frozen.as_ref())
+                        // one same-round certificate before or after an
+                        // unchanged re-proposal. Context identity deliberately
+                        // ignores that round and the signer evidence, so
+                        // view-zero admission uses the semantic decision key.
+                        // The previous roster is unavailable here, but all
+                        // context-independent certificate shape checks remain
+                        // mandatory before authenticated ingress verifies it.
+                        carried.proposal_round == carried.round
+                            && carried.round.height.checked_add(1) == Some(context.height)
+                            && carried.execution_commitment.validate().is_ok()
+                            && !carried.signers.is_empty()
+                            && carried.signers.len() <= MAX_VALIDATORS_PER_HEIGHT
+                            && carried.signers.windows(2).all(|pair| pair[0] < pair[1])
+                            && require_aggregate_signature(&carried.aggregate_signature).is_ok()
+                            && carried.as_ref().same_commit_decision(frozen.as_ref())
                     }
                     (None, Some(_)) | (Some(_), None) => false,
                 };
@@ -1873,12 +1880,8 @@ impl Proposal {
                 }
                 timeout.timeout_certificate.validate(context)?;
                 let selected_highest = timeout.timeout_certificate.highest_prepare_qc();
-                if selected_highest.map(QuorumCertificate::as_ref)
-                    != timeout
-                        .highest_prepare_qc
-                        .as_ref()
-                        .map(QuorumCertificate::as_ref)
-                    || selected_highest.is_some()
+                if selected_highest != timeout.highest_prepare_qc.as_ref()
+                    || selected_highest.is_some_and(|highest| highest.subject != self.subject)
                 {
                     return Err(ValidationError::InvalidProposalJustification);
                 }
@@ -2013,9 +2016,7 @@ pub struct CertifiedBodyRequest {
     pub round: ConsensusRound,
     /// Requested subject.
     pub subject: BlockSubject,
-    /// Certificate proving that validators should retain the body.  Its view
-    /// may be later than `round` when finality re-certifies the same locked
-    /// proposal origin.
+    /// Same-round certificate proving that validators should retain the body.
     pub certificate: QuorumCertificate,
     /// Authenticated requester identity. Observers are allowed to fetch a
     /// certified body even though they are absent from the voting roster.
@@ -3111,8 +3112,7 @@ impl SumeragiV2Status {
                 || summary.certificate.round.height != self.last_committed_height
                 || summary.certificate.proposal_round.context_id
                     != summary.certificate.round.context_id
-                || summary.certificate.proposal_round.height != summary.certificate.round.height
-                || summary.certificate.proposal_round.view > summary.certificate.round.view
+                || summary.certificate.proposal_round != summary.certificate.round
                 || summary.certificate.subject != subject
                 || summary.certificate.execution_commitment.validate().is_err()
             {
@@ -3240,12 +3240,10 @@ impl SumeragiV2Status {
                 }
                 Ok(())
             };
-        let validate_vote_quorum = |quorum: &SumeragiV2VoteQuorumStatus, phase: GlobalPhase| {
+        let validate_vote_quorum = |quorum: &SumeragiV2VoteQuorumStatus| {
             validate_nonfuture_round(quorum.round)?;
             validate_round_binding(quorum.proposal_round)?;
-            if quorum.proposal_round.view > quorum.round.view
-                || (phase == GlobalPhase::Prepare && quorum.proposal_round != quorum.round)
-            {
+            if quorum.proposal_round != quorum.round {
                 return Err(Error::InvalidProposalRound);
             }
             quorum
@@ -3260,10 +3258,10 @@ impl SumeragiV2Status {
             )
         };
         for quorum in &self.liveness.prepare_quorums {
-            validate_vote_quorum(quorum, GlobalPhase::Prepare)?;
+            validate_vote_quorum(quorum)?;
         }
         for quorum in &self.liveness.commit_quorums {
-            validate_vote_quorum(quorum, GlobalPhase::Commit)?;
+            validate_vote_quorum(quorum)?;
         }
         for quorum in &self.liveness.timeout_quorums {
             validate_nonfuture_round(quorum.round)?;
@@ -3318,14 +3316,7 @@ impl SumeragiV2Status {
             }
             if let Some(proposal_round) = intent.proposal_round {
                 validate_round_binding(proposal_round)?;
-                if proposal_round.view > intent.round.view
-                    || (matches!(
-                        intent.kind,
-                        SumeragiV2OutboundIntentKind::Proposal
-                            | SumeragiV2OutboundIntentKind::PrepareVote
-                            | SumeragiV2OutboundIntentKind::PrepareQc
-                    ) && proposal_round != intent.round)
-                {
+                if proposal_round != intent.round {
                     return Err(Error::InvalidProposalRound);
                 }
             }
@@ -3426,7 +3417,7 @@ pub enum SumeragiV2StatusValidationError {
     CertificatePhaseMismatch,
     /// A QC reference came from a view above the current view.
     CertificateFromFutureView,
-    /// A vote-pool or certificate reference carried an invalid proposal origin.
+    /// A vote-pool or certificate reference was not bound to one exact round.
     InvalidProposalRound,
     /// A persisted lock was present without a highest `PrepareQC`.
     LockedCertificateWithoutHighest,
@@ -3529,7 +3520,7 @@ impl fmt::Display for SumeragiV2StatusValidationError {
                 f.write_str("Sumeragi status QC reference is from a future view")
             }
             Error::InvalidProposalRound => {
-                f.write_str("Sumeragi status carries an invalid proposal origin round")
+                f.write_str("Sumeragi status carries split-round proposal evidence")
             }
             Error::LockedCertificateWithoutHighest => {
                 f.write_str("Sumeragi status lock requires a highest PrepareQC")
@@ -3741,9 +3732,9 @@ pub enum ValidationError {
     /// A payload chunk does not carry a sender signature.
     MissingChunkSignature,
     /// A certified body request's QC does not certify its requested subject
-    /// at the same height or a later finality view.
+    /// in the exact requested round.
     CertifiedBodyCertificateMismatch,
-    /// A vote or certificate carries an invalid proposal-body origin round.
+    /// A vote or certificate is split across distinct proposal and vote rounds.
     InvalidProposalRound,
     /// Certified body bytes do not match the manifest payload hash.
     CertifiedBodyHashMismatch,
@@ -3910,7 +3901,7 @@ impl fmt::Display for ValidationError {
                 f.write_str("certified body request does not match its certificate")
             }
             Self::InvalidProposalRound => {
-                f.write_str("proposal body origin is incompatible with the certified round")
+                f.write_str("proposal and certified rounds must be identical")
             }
             Self::CertifiedBodyHashMismatch => {
                 f.write_str("certified body bytes do not match the manifest payload hash")
@@ -4036,13 +4027,10 @@ fn validate_round(round: ConsensusRound, context: &HeightContext) -> Result<(), 
 fn validate_proposal_round(
     proposal_round: ConsensusRound,
     certified_round: ConsensusRound,
-    phase: GlobalPhase,
     context: &HeightContext,
 ) -> Result<(), ValidationError> {
     validate_round(proposal_round, context)?;
-    if proposal_round.view > certified_round.view
-        || (phase == GlobalPhase::Prepare && proposal_round != certified_round)
-    {
+    if proposal_round != certified_round {
         return Err(ValidationError::InvalidProposalRound);
     }
     Ok(())
@@ -4575,9 +4563,9 @@ mod tests {
         assert_eq!(
             *context.id().0.as_ref(),
             [
-                0x78, 0xf2, 0x68, 0x02, 0x2b, 0x41, 0x63, 0x1a, 0xf9, 0xda, 0x37, 0x76, 0xdb, 0xd7,
-                0xaf, 0x17, 0x2e, 0xca, 0xa2, 0x9f, 0x6f, 0x1c, 0x25, 0xce, 0x20, 0x75, 0x83, 0x9e,
-                0x0d, 0x93, 0x3a, 0x97,
+                0xfd, 0x17, 0xf1, 0x0c, 0xb0, 0x48, 0x08, 0x31, 0x71, 0xfe, 0xd6, 0xf0, 0x7c, 0x41,
+                0x42, 0x7b, 0x32, 0xaf, 0x85, 0xac, 0xbb, 0xa6, 0x0a, 0x7a, 0x57, 0x25, 0x01, 0xa1,
+                0x58, 0xd0, 0xcb, 0x6b,
             ],
             "intentional identity-projection changes require updating this golden"
         );
@@ -4601,16 +4589,16 @@ mod tests {
         assert_eq!(
             *context.id().0.as_ref(),
             [
-                0xbf, 0xc3, 0x88, 0xf2, 0x21, 0xe5, 0x10, 0x01, 0x85, 0x76, 0xe9, 0x58, 0xff, 0x45,
-                0x59, 0x1d, 0xff, 0xfb, 0x89, 0xe4, 0xa0, 0xaa, 0xcf, 0x41, 0xbc, 0x3a, 0x45, 0xbb,
-                0x28, 0xf3, 0x57, 0x55,
+                0x31, 0x7a, 0x74, 0xcd, 0x4a, 0x34, 0xdd, 0xb2, 0x2f, 0xe5, 0xcc, 0x7f, 0xc2, 0xf2,
+                0x0e, 0x2c, 0xbd, 0x11, 0x0b, 0xa7, 0x69, 0x79, 0x62, 0xc3, 0xde, 0xad, 0xbc, 0xd7,
+                0x87, 0x92, 0xc6, 0x93,
             ],
             "intentional transition-identity changes require updating this golden"
         );
     }
 
     #[test]
-    fn height_context_id_ignores_equivalent_parent_qc_signer_subsets() {
+    fn height_context_id_ignores_equivalent_parent_qc_round_and_signer_evidence() {
         let mut left = context(&[1, 1, 1, 1]);
         left.height = 2;
         let parent_round = ConsensusRound {
@@ -4631,12 +4619,13 @@ mod tests {
             aggregate_signature: vec![0x11; 48],
         });
         let mut right = left.clone();
+        let redecided_round = ConsensusRound {
+            view: parent_round.view + 1,
+            ..parent_round
+        };
         right.parent_commit_qc = Some(QuorumCertificate {
-            round: ConsensusRound {
-                view: parent_round.view + 1,
-                ..parent_round
-            },
-            proposal_round: parent_round,
+            round: redecided_round,
+            proposal_round: redecided_round,
             phase: GlobalPhase::Commit,
             subject: parent_subject,
             execution_commitment: execution_commitment(0x44),
@@ -4686,7 +4675,7 @@ mod tests {
     }
 
     #[test]
-    fn height_context_identity_authenticates_the_parent_proposal_origin() {
+    fn height_context_identity_ignores_reproposal_round_and_rejects_split_rounds() {
         let mut original = context(&[1, 1, 1, 1]);
         original.height = 2;
         let parent_round = ConsensusRound {
@@ -4698,64 +4687,61 @@ mod tests {
         };
         original.parent_commit_qc = Some(QuorumCertificate {
             round: parent_round,
-            proposal_round: ConsensusRound {
-                view: 2,
-                ..parent_round
-            },
+            proposal_round: parent_round,
             phase: GlobalPhase::Commit,
             subject: subject(0x47),
             execution_commitment: execution_commitment(0x47),
             signers: vec![0, 1, 2],
             aggregate_signature: vec![0x47; 48],
         });
-        original.validate().expect("valid historical parent origin");
+        original.validate().expect("valid parent decision");
 
-        let mut different_origin = original.clone();
-        different_origin
+        let mut redecided = original.clone();
+        let certificate = redecided
             .parent_commit_qc
             .as_mut()
-            .expect("parent certificate")
-            .proposal_round
-            .view = 3;
-        different_origin
+            .expect("parent certificate");
+        certificate.round.view += 1;
+        certificate.proposal_round = certificate.round;
+        redecided
             .validate()
-            .expect("second valid historical parent origin");
-        assert_ne!(original.id(), different_origin.id());
+            .expect("unchanged re-proposal may decide in another round");
+        assert_eq!(original.id(), redecided.id());
 
         let mut cross_context_origin = original.clone();
-        cross_context_origin
+        let certificate = cross_context_origin
             .parent_commit_qc
             .as_mut()
-            .expect("parent certificate")
-            .proposal_round
-            .context_id = HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+            .expect("parent certificate");
+        certificate.round.context_id = HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
             b"foreign proposal-origin context",
         )));
-        assert_eq!(
-            cross_context_origin.validate(),
-            Err(ValidationError::InvalidParentCommit)
-        );
+        certificate.proposal_round = certificate.round;
+        cross_context_origin
+            .validate()
+            .expect("a structurally valid parent can belong to another prior context");
+        assert_ne!(original.id(), cross_context_origin.id());
 
         let mut wrong_height_origin = original.clone();
-        wrong_height_origin
+        let certificate = wrong_height_origin
             .parent_commit_qc
             .as_mut()
-            .expect("parent certificate")
-            .proposal_round
-            .height = 2;
+            .expect("parent certificate");
+        certificate.round.height = 2;
+        certificate.proposal_round = certificate.round;
         assert_eq!(
             wrong_height_origin.validate(),
             Err(ValidationError::InvalidParentCommit)
         );
 
-        let mut future_origin = original;
-        let parent = future_origin
+        let mut split_round = original;
+        let parent = split_round
             .parent_commit_qc
             .as_mut()
             .expect("parent certificate");
         parent.proposal_round.view = parent.round.view + 1;
         assert_eq!(
-            future_origin.validate(),
+            split_round.validate(),
             Err(ValidationError::InvalidParentCommit)
         );
     }
@@ -5176,7 +5162,7 @@ mod tests {
     }
 
     #[test]
-    fn timeout_proposal_rejects_a_selected_prepare_origin() {
+    fn timeout_proposal_accepts_only_the_selected_prepare_subject() {
         let context = context(&[1, 1, 1, 1]);
         let payload_manifest = manifest(&context);
         let timeout_round = round(&context, 0);
@@ -5200,7 +5186,25 @@ mod tests {
         };
         assert_eq!(proposal.validate(&context), Ok(()));
 
-        let highest_prepare = qc(&context, 0, GlobalPhase::Prepare, vec![0, 1, 2]);
+        let mut highest_prepare = qc(&context, 0, GlobalPhase::Prepare, vec![0, 1, 2]);
+        highest_prepare.subject = proposal.subject;
+        proposal.justification = ProposalJustification::Timeout(TimeoutJustification {
+            timeout_certificate: TimeoutCertificate {
+                round: timeout_round,
+                groups: vec![TimeoutVoteGroup {
+                    highest_prepare_qc: None,
+                    signers: vec![0, 1, 2],
+                    aggregate_signature: vec![0x43; 48],
+                }],
+            },
+            highest_prepare_qc: Some(highest_prepare.clone()),
+        });
+        assert_eq!(
+            proposal.validate(&context),
+            Err(ValidationError::InvalidProposalJustification),
+            "a proposal cannot invent a repeated high absent from its TC"
+        );
+
         proposal.justification = ProposalJustification::Timeout(TimeoutJustification {
             timeout_certificate: TimeoutCertificate {
                 round: timeout_round,
@@ -5210,7 +5214,70 @@ mod tests {
                     aggregate_signature: vec![0x43; 48],
                 }],
             },
-            highest_prepare_qc: Some(highest_prepare),
+            highest_prepare_qc: Some(highest_prepare.clone()),
+        });
+        assert_eq!(proposal.validate(&context), Ok(()));
+
+        let timeout_certificate = match &proposal.justification {
+            ProposalJustification::Timeout(timeout) => timeout.timeout_certificate.clone(),
+            ProposalJustification::ParentCommit(_) => {
+                unreachable!("prepared fixture carries a timeout")
+            }
+        };
+        proposal.justification = ProposalJustification::Timeout(TimeoutJustification {
+            timeout_certificate: timeout_certificate.clone(),
+            highest_prepare_qc: None,
+        });
+        assert_eq!(
+            proposal.validate(&context),
+            Err(ValidationError::InvalidProposalJustification),
+            "a proposal cannot omit the exact high selected by its TC"
+        );
+
+        let mut alternate_evidence = highest_prepare.clone();
+        alternate_evidence.signers = vec![0, 1, 3];
+        alternate_evidence.aggregate_signature = vec![0x46; 48];
+        assert_eq!(alternate_evidence.as_ref(), highest_prepare.as_ref());
+        assert_ne!(alternate_evidence, highest_prepare);
+        proposal.justification = ProposalJustification::Timeout(TimeoutJustification {
+            timeout_certificate,
+            highest_prepare_qc: Some(alternate_evidence),
+        });
+        assert_eq!(
+            proposal.validate(&context),
+            Err(ValidationError::InvalidProposalJustification),
+            "the repeated high must preserve the TC-selected full evidence"
+        );
+
+        let mismatched_prepare = qc(&context, 0, GlobalPhase::Prepare, vec![0, 1, 2]);
+        proposal.justification = ProposalJustification::Timeout(TimeoutJustification {
+            timeout_certificate: TimeoutCertificate {
+                round: timeout_round,
+                groups: vec![TimeoutVoteGroup {
+                    highest_prepare_qc: Some(mismatched_prepare.clone()),
+                    signers: vec![0, 1, 2],
+                    aggregate_signature: vec![0x44; 48],
+                }],
+            },
+            highest_prepare_qc: Some(mismatched_prepare),
+        });
+        assert_eq!(
+            proposal.validate(&context),
+            Err(ValidationError::InvalidProposalJustification)
+        );
+
+        let mut altered_carried = highest_prepare;
+        altered_carried.round.view = 1;
+        proposal.justification = ProposalJustification::Timeout(TimeoutJustification {
+            timeout_certificate: TimeoutCertificate {
+                round: timeout_round,
+                groups: vec![TimeoutVoteGroup {
+                    highest_prepare_qc: Some(qc(&context, 0, GlobalPhase::Prepare, vec![0, 1, 2])),
+                    signers: vec![0, 1, 2],
+                    aggregate_signature: vec![0x45; 48],
+                }],
+            },
+            highest_prepare_qc: Some(altered_carried),
         });
         assert_eq!(
             proposal.validate(&context),
@@ -5337,7 +5404,7 @@ mod tests {
     }
 
     #[test]
-    fn view_zero_proposal_accepts_equivalent_parent_finality_across_views() {
+    fn view_zero_proposal_accepts_equivalent_parent_decision_across_reproposal_rounds() {
         let mut context = context(&[1, 1, 1, 1]);
         context.height = 2;
         let parent_subject = subject(0x70);
@@ -5394,19 +5461,19 @@ mod tests {
 
         assert_eq!(proposal.validate(&context), Ok(()));
         if let ProposalJustification::ParentCommit(parent) = &mut proposal.justification {
-            parent
+            let certificate = parent
                 .certificate
                 .as_mut()
-                .expect("carried parent certificate")
-                .round
-                .view += 1;
+                .expect("carried parent certificate");
+            certificate.round.view += 1;
+            certificate.proposal_round = certificate.round;
         } else {
             unreachable!("fixture uses a parent justification")
         }
         assert_eq!(
             proposal.validate(&context),
             Ok(()),
-            "the same parent subject may have a valid CommitQC in another view"
+            "an unchanged re-proposal may decide the same parent body in another round"
         );
         if let ProposalJustification::ParentCommit(parent) = &mut proposal.justification {
             let carried = parent
@@ -5417,6 +5484,7 @@ mod tests {
             carried.round.context_id = HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
                 b"different proposal parent context",
             )));
+            carried.proposal_round = carried.round;
         } else {
             unreachable!("fixture uses a parent justification")
         }
@@ -5430,6 +5498,7 @@ mod tests {
                 .as_mut()
                 .expect("carried parent certificate");
             carried.round = parent_round;
+            carried.proposal_round = parent_round;
             carried.subject = subject(0x71);
         } else {
             unreachable!("fixture uses a parent justification")
@@ -5476,34 +5545,36 @@ mod tests {
             signature: vec![0x66; 48],
         };
         assert_eq!(request.validate(&context), Ok(()));
-        let mut later_finality_request = request.clone();
-        later_finality_request.certificate.phase = GlobalPhase::Commit;
-        later_finality_request.certificate.round.view = later_finality_request
+        let mut split_round_request = request.clone();
+        split_round_request.certificate.phase = GlobalPhase::Commit;
+        split_round_request.certificate.round.view = split_round_request
             .certificate
             .round
             .view
             .checked_add(1)
-            .expect("fixture finality view increment");
-        assert_eq!(later_finality_request.validate(&context), Ok(()));
-        let mut mismatched_request_origin = later_finality_request.clone();
-        mismatched_request_origin.round.view = mismatched_request_origin
-            .round
-            .view
-            .checked_add(1)
-            .expect("fixture request-origin view increment");
+            .expect("fixture split-round view increment");
         assert_eq!(
-            mismatched_request_origin.validate(&context),
-            Err(ValidationError::CertifiedBodyCertificateMismatch)
+            split_round_request.validate(&context),
+            Err(ValidationError::InvalidProposalRound)
         );
-        let mut body_after_finality = later_finality_request.clone();
-        body_after_finality.round.view = body_after_finality
-            .certificate
+        let mut reproposal_request = request.clone();
+        reproposal_request.round.view = reproposal_request
             .round
             .view
             .checked_add(1)
-            .expect("fixture body view increment");
+            .expect("fixture reproposal view increment");
+        reproposal_request.certificate.round = reproposal_request.round;
+        reproposal_request.certificate.proposal_round = reproposal_request.round;
+        reproposal_request.certificate.phase = GlobalPhase::Commit;
+        assert_eq!(reproposal_request.validate(&context), Ok(()));
+        let mut mismatched_request_round = reproposal_request.clone();
+        mismatched_request_round.round.view = mismatched_request_round
+            .round
+            .view
+            .checked_add(1)
+            .expect("fixture request-round increment");
         assert_eq!(
-            body_after_finality.validate(&context),
+            mismatched_request_round.validate(&context),
             Err(ValidationError::CertifiedBodyCertificateMismatch)
         );
         let observer_request = CertifiedBodyRequest {
@@ -5523,14 +5594,23 @@ mod tests {
             response.validate_against(&context, &request, &context.roster[0].validator),
             Ok(())
         );
-        let later_finality_response = CertifiedBodyResponse {
-            request_hash: HashOf::new(&later_finality_request),
+        let reproposal_manifest = PayloadManifest::derive(
+            &context,
+            reproposal_request.round,
+            response_subject,
+            u64::try_from(response.body.len()).expect("small body"),
+            &chunks,
+        )
+        .expect("valid reproposal response manifest");
+        let reproposal_response = CertifiedBodyResponse {
+            request_hash: HashOf::new(&reproposal_request),
+            manifest: reproposal_manifest,
             ..response.clone()
         };
         assert_eq!(
-            later_finality_response.validate_against(
+            reproposal_response.validate_against(
                 &context,
-                &later_finality_request,
+                &reproposal_request,
                 &context.roster[0].validator,
             ),
             Ok(())
@@ -5981,18 +6061,21 @@ mod tests {
             Err(Error::InvalidOutboundIntentShape)
         );
 
-        let mut historical_commit_origin = baseline.clone();
-        let intent = &mut historical_commit_origin.liveness.outbound_intents[0];
+        let mut same_round_commit = baseline.clone();
+        let intent = &mut same_round_commit.liveness.outbound_intents[0];
         intent.kind = SumeragiV2OutboundIntentKind::CommitVote;
-        intent
-            .proposal_round
-            .as_mut()
-            .expect("proposal origin")
-            .view -= 1;
         intent.execution_commitment = Some(execution_commitment(42));
-        assert_eq!(historical_commit_origin.validate(), Ok(()));
+        assert_eq!(same_round_commit.validate(), Ok(()));
 
-        let mut future_commit_origin = historical_commit_origin;
+        let mut stale_commit_round = same_round_commit.clone();
+        let intent = &mut stale_commit_round.liveness.outbound_intents[0];
+        intent.proposal_round.as_mut().expect("proposal round").view -= 1;
+        assert_eq!(
+            stale_commit_round.validate(),
+            Err(Error::InvalidProposalRound)
+        );
+
+        let mut future_commit_origin = same_round_commit;
         future_commit_origin.liveness.outbound_intents[0]
             .proposal_round
             .as_mut()

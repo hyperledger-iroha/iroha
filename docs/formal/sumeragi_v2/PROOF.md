@@ -790,10 +790,15 @@ consume progress ownership, while all three rank leaves consume their exact
 proved fair-action prerequisites. The aggregate
 `protected-service-rank` obligation waits for every leaf, while production
 admission, runtime, ingress, and actor-to-flush ownership remain outside these
-abstract results. The 54-entry ledger contains 33 `tlaps_proved`, 14
+abstract results. The 59-entry ledger contains 35 `tlaps_proved`, 17
 `specified_unproved`, 6
 `trusted_contract`, and 1 `out_of_scope` entries, so
 `machine_checked_completion` remains false.
+The aggregate temporal closure deliberately leaves
+`AdequateLeaderExactClosureResidualObligation` and
+`ExactDecisionOffSchedulerResidualConvergenceObligation` proofless. The
+theorems which consume them are dependency wiring, not evidence that either
+residual has been discharged.
 
 TLC runs exhaustive constant checks and bounded asynchronous counterexample
 searches. It cannot upgrade a proof status. The scheduler corridor runs nine
@@ -932,7 +937,7 @@ reconstruction-refinement, or starvation obligations; the added rollover and
 tip-recovery regressions remain executable evidence under
 `specified_unproved`, not a machine-checked completion claim.
 
-The current pre-network release inventory names 515 tests across thirty-eight Rust
+The current pre-network release inventory names 569 tests across thirty-nine Rust
 modules. The preceding 298-name inventory arose from the 264-name inventory by
 adding 37 positive regressions which
 comprise 10 per-target exact-output and historical/current typed-rollover tests,
@@ -987,10 +992,26 @@ aggregate signatures, finality/header geometry, compact offline QCs, and parent
 height-context identity to the signed origin.
 
 The final successor/recovery closure adds six exact regressions without adding
-a module. Six source-sealed command legs and the G-SCALE runner/validator
-preflight harden the release corridor, yielding the current 515-test, 38-module, 78-leg
-inventory. The canonical module/test TSV inventory SHA-256 is
-`ef281ddf030ca64e634581fa90197e6637f89cb10f937c2f370747fcdb8454a4`.
+a module. Crash-safe response handoff and same-delivery retry after transient
+capacity pressure add two more sidecar regressions. The lifecycle snapshot also
+binds its complete canonical Norito payload with a typed hash; recovery rejects
+canonical bytes carrying a stale digest before interpreting any semantic
+floor. The per-source
+route-attempt, exact PrepareQC recovery, locked-body reproposal, runner/worker,
+sidecar, and daemon closure, plus the certified sidecar control-bucket
+regression, yielded the 585-test checkpoint. The unsent-request restoration and
+fairness-cursor retry regressions yielded the 588-test checkpoint. The durable
+semantic-peer-history regression yields the current
+589-test, 39-module inventory. The complete source-sealed pre-network corridor
+contains 82 legs. Six source-sealed command legs and the G-SCALE
+runner/validator preflight harden that release corridor.
+Requester streams and responder close/high-water histories use the full
+128-validator protocol-roster bound, not the smaller concurrent P2P
+reply-source or active-gate capacities. This keeps sequential certified
+recovery rotation live through one active slot, rejects a 129th semantic
+identity, and restores the same separation after a crash.
+The canonical module/test TSV inventory SHA-256 is
+`4c8fadb0593206e7fcf616a2a1ba05db802aef1ea7fa0241ab275189aa271a70`.
 The added boundaries preserve the frozen predecessor CommitQC through
 wire-to-core conversion, block rollover until the decided lane session is
 durable, reopen a globally finalized tip whose lane evidence is incomplete,
@@ -1026,13 +1047,13 @@ through an authenticated non-validator hop, and retains the capacity-negative
 boundary. It
 also adds one four-validator exact PrepareQC count-and-power quorum regression.
 The five integration names share a module-filtered leg; the pre-network corridor
-now has 78 legs, including separate exact data-model status and atomic
+now has 82 legs, including separate exact data-model status and atomic
 lane-certificate decode contracts, two `iroha_config` geometry modules, three P2P
 geometry modules, the daemon genesis module, and source-sealed command-success
 legs. Its finality, offline compact-QC, and height-context proposal-origin
 modules each use a dedicated `iroha_data_model` leg. Its `iroha_p2p` legs use
 the crate's empty default feature set; feature-gated QUIC first-packet geometry
-tests are not claimed by the thirty-eight-module, sixty-five-leg corridor. It
+tests are not claimed by the thirty-nine-module, eighty-two-leg corridor. It
 includes
 exact completion ownership, body-owner binding and
 rebind, rejection of future physical completions, durable-recovery retry to the
@@ -1052,15 +1073,16 @@ request registration can retire the old request; durable reducer
 retransmission then reconstructs the blocked Fetch and lets it acquire both
 owners atomically. The
 preceding mutable-source discovery and direct execution evidence covered the
-earlier 168-name inventory. Fresh 515-name
+earlier 168-name inventory. Fresh 569-name
 discovery/execution and the clean committed, detached, source-sealed serial
 release leg remain pending. An
 earlier exact one-attempt
 four-validator genesis rerun is green at 1/1 in 456.76 seconds. Neither
 inventory presence nor regression evidence is a machine proof.
-For the current proposal-origin source, the isolated source-shared harness
+For the preceding proposal-origin source, the isolated source-shared harness
 passed 118/118 reducer/WAL/refinement tests and all 8 model-trace replay tests;
-fast-network passed all 9 named simulations. The 2026-07-21 100,000-height
+the current harness inventories 137 runnable reducer tests and requires a fresh
+source-sealed run. Fast-network passed all 9 named simulations. The 2026-07-21 100,000-height
 permissioned/NPoS chaos run completed both 50,000-height prefixes, 400,000
 validator finalizations, and zero failures in 91.29 seconds. These mutable-tree
 results are implementation evidence only. The pinned Verus receipt predates

@@ -7706,7 +7706,6 @@ class _SumeragiV2StatusParser:
                 proposal_round,
                 round_,
                 context=quorum_context,
-                require_equal=phase == "prepare",
             )
             return SumeragiV2VoteQuorumStatus(
                 round=round_,
@@ -7874,7 +7873,6 @@ class _SumeragiV2StatusParser:
                     proposal_round,
                     round_,
                     context=item_context,
-                    require_equal=kind in {"proposal", "prepare_vote", "prepare_qc"},
                 )
             outbound_intents.append(
                 SumeragiV2OutboundIntentStatus(
@@ -8348,7 +8346,6 @@ class _SumeragiV2StatusParser:
         round_: SumeragiV2Round,
         *,
         context: str,
-        require_equal: bool,
     ) -> None:
         if (
             proposal_round.context_id != round_.context_id
@@ -8357,14 +8354,8 @@ class _SumeragiV2StatusParser:
             raise RuntimeError(
                 f"{context}.proposal_round must match round context and height"
             )
-        if proposal_round.view > round_.view:
-            raise RuntimeError(
-                f"{context}.proposal_round.view must not exceed round.view"
-            )
-        if require_equal and proposal_round != round_:
-            raise RuntimeError(
-                f"{context}.proposal_round must equal round for prepare"
-            )
+        if proposal_round != round_:
+            raise RuntimeError(f"{context}.proposal_round must equal round")
 
     @classmethod
     def _subject(cls, value: Any, *, context: str) -> SumeragiV2BlockSubject:
@@ -8399,7 +8390,6 @@ class _SumeragiV2StatusParser:
             proposal_round,
             round_,
             context=context,
-            require_equal=phase == "prepare",
         )
         return SumeragiV2QcReference(
             round=round_,

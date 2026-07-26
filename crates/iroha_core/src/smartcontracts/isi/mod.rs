@@ -225,9 +225,13 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::sorafs::SubmitSorafsRepairAppeal>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::SetSorafsProofOutcomeSignerPolicy>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::SubmitSorafsProofOutcome>,
-    dispatch_instruction::<iroha_data_model::isi::sorafs::SetSorafsReputationJournalAuthorityPolicy>,
+    dispatch_instruction::<
+        iroha_data_model::isi::sorafs::SetSorafsReputationJournalAuthorityPolicy
+    >,
     dispatch_instruction::<iroha_data_model::isi::sorafs::AppendSorafsPorReputationJournalEntry>,
-    dispatch_instruction::<iroha_data_model::isi::sorafs::AppendSorafsStreamTokenReputationJournalEntry>,
+    dispatch_instruction::<
+        iroha_data_model::isi::sorafs::AppendSorafsStreamTokenReputationJournalEntry
+    >,
     dispatch_instruction::<iroha_data_model::isi::sorafs::SetSorafsPopIssuerPolicy>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::CommitSorafsPopCredentialBatch>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::PublishSorafsPopRevocationList>,

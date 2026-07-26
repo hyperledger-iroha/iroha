@@ -1576,7 +1576,6 @@ fn minimal_config_snapshot() {
                     merge_sidecar_outbound_sessions_per_source: 2,
                     merge_sidecar_outbound_bytes_per_source: 16777216,
                     merge_sidecar_server_request_gates_per_source: 4,
-                    merge_sidecar_server_request_gate_ttl: 10s,
                     pending_certified_merge_entry_capacity: 1024,
                     pending_queue_plan_admission_capacity: 1024,
                     pending_control_sidecar_bytes: 268435456,

@@ -5,7 +5,8 @@ set -euo pipefail
 
 readonly TLA2TOOLS_VERSION="1.7.4"
 readonly TLA2TOOLS_SHA256="936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88"
-readonly EXPECTED_JAVA_VERSION='openjdk version "21.0.11"'
+readonly EXPECTED_JAVA_VERSION='openjdk version "21.0.12"'
+readonly SANY_SUCCESS_MARKER="Semantic processing of module SumeragiV2IngressCausalFreshnessMutation"
 readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly FORMAL_DIR="${REPO_ROOT}/docs/formal/sumeragi_v2"
 readonly MODEL="SumeragiV2IngressCausalFreshnessMutation.tla"
@@ -44,7 +45,7 @@ actual_sha256="$(hash_file "$TLA2TOOLS_JAR")"
 }
 java_version="$($JAVA_BIN -version 2>&1)"
 grep -Fq "$EXPECTED_JAVA_VERSION" <<<"$java_version" || {
-  echo "frozen Java 21.0.11 is required" >&2
+  echo "frozen Java 21.0.12 is required" >&2
   printf '%s\n' "$java_version" >&2
   exit 1
 }
@@ -56,14 +57,13 @@ trap 'rm -rf -- "$run_dir"' EXIT
   cd "$FORMAL_DIR"
   "$JAVA_BIN" -cp "$TLA2TOOLS_JAR" tla2sany.SANY "$MODEL"
 ) >"${run_dir}/sany.log" 2>&1
-grep -Fq \
-  "Semantic processing of module SumeragiV2IngressCausalFreshnessMutation" \
-  "${run_dir}/sany.log" || {
-    echo "SANY missed the expected semantic-processing marker" >&2
-    cat "${run_dir}/sany.log" >&2
-    exit 1
-  }
-echo "[sany] ingress causal-freshness model parsed with frozen Java 21.0.11"
+sany_last_nonblank="$(awk 'NF { line = $0 } END { print line }' "${run_dir}/sany.log")"
+[[ "$sany_last_nonblank" == "$SANY_SUCCESS_MARKER" ]] || {
+  echo "SANY did not end at the expected semantic-processing marker" >&2
+  cat "${run_dir}/sany.log" >&2
+  exit 1
+}
+echo "[sany] ingress causal-freshness model parsed with frozen Java 21.0.12"
 
 common=(
   "$JAVA_BIN" -XX:+UseParallelGC -cp "$TLA2TOOLS_JAR" tlc2.TLC

@@ -930,7 +930,7 @@
         {
           "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
           "kind": "method",
-          "symbol": "V2LaneWorkAdapter::new_with_output_guard",
+          "symbol": "V2LaneWorkAdapter::new_with_output_guard_and_transport",
           "required_tokens": [
             "begin_fail_stop_operation",
             "prune_finalized_pending_certified_merge_entries",
