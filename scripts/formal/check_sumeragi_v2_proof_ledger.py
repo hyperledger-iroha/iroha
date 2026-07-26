@@ -3959,7 +3959,8 @@ SUPPORT_PROOF_OBLIGATION_INVENTORY = {
     ),
     "typed-rollover-handoff-conditional-local-liveness": (
         "SumeragiV2TypedRolloverHandoffProofs",
-        "ResponsiveChangedRosterRolloverLivenessObligation",
+        "ResponsiveDurableExactOutputRolloverLivenessObligation / "
+        "ResponsiveRestartRestoreRolloverLivenessObligation",
     ),
 }
 SUPPORT_PROOF_CONSUMER_BY_ID = {
@@ -4487,6 +4488,9 @@ _TYPED_ROLLOVER_HANDOFF_FORMAL_SOURCE_SHA256 = {
     "typed_rollover_handoff_fixed.cfg": (
         "b003dd8a6ea154ede9cc654acffe64db220db1c1347709b13352c0c92cff92d5"
     ),
+    "typed_rollover_handoff_accept_semantic_invalid_lifecycle_state_bug.cfg": (
+        "0000000000000000000000000000000000000000000000000000000000000000"
+    ),
     "typed_rollover_handoff_active_state_roll_bug.cfg": (
         "380206dd62e6063ae7a7591433c808d5d3c454c74c1c3f4d77f0f7ec8e556c0b"
     ),
@@ -4514,8 +4518,17 @@ _TYPED_ROLLOVER_HANDOFF_FORMAL_SOURCE_SHA256 = {
     "typed_rollover_handoff_clean_wrong_successor_reject_bug.cfg": (
         "22d775c14641b1d07e1c28f9eae4b4ed983ff045c28ce559661e3be1e4d58e96"
     ),
+    "typed_rollover_handoff_cleanup_before_root_parent_resync_bug.cfg": (
+        "0000000000000000000000000000000000000000000000000000000000000000"
+    ),
     "typed_rollover_handoff_cleanup_before_validation_bug.cfg": (
         "9c99ced2d012c4e4ae57be2131fc9cb37214d2229c7e0be154beb66063302536"
+    ),
+    "typed_rollover_handoff_cleanup_retains_inactive_slot_bug.cfg": (
+        "0000000000000000000000000000000000000000000000000000000000000000"
+    ),
+    "typed_rollover_handoff_cross_service_transport_owner_pair_bug.cfg": (
+        "0000000000000000000000000000000000000000000000000000000000000000"
     ),
     "typed_rollover_handoff_crossed_root_shape_bug.cfg": (
         "2a8f07cd4e5a6e6e1b8faf5fc598d14520e9cf9e51dbaae4b53280c9737b9565"
@@ -4523,7 +4536,7 @@ _TYPED_ROLLOVER_HANDOFF_FORMAL_SOURCE_SHA256 = {
     "typed_rollover_handoff_epoch_overflow_bug.cfg": (
         "51129a49fcf3a54c3c18252dfd358376340366d4927164727af9b7f98f08acf1"
     ),
-    "typed_rollover_handoff_epoch_reuse_after_crash_bug.cfg": (
+    "typed_rollover_handoff_lose_requester_incarnation_after_crash_bug.cfg": (
         "a72df6fa00cecc5de84538bd49752474ad5210682043229a3c1b37367eeb6be4"
     ),
     "typed_rollover_handoff_epoch_use_before_persist_bug.cfg": (
@@ -4562,6 +4575,9 @@ _TYPED_ROLLOVER_HANDOFF_FORMAL_SOURCE_SHA256 = {
     "typed_rollover_handoff_premature_mint_bug.cfg": (
         "832fafb0805ebea8afc5aa0b3c6d99ada493a4047411f671a2a51a0c13ffe49a"
     ),
+    "typed_rollover_handoff_preserve_process_receipt_across_crash_bug.cfg": (
+        "0000000000000000000000000000000000000000000000000000000000000000"
+    ),
     "typed_rollover_handoff_publish_memory_before_lifecycle_root_v3_commit_bug.cfg": (
         "3f6d264eb271442f8a13e0d500263ec1d184e28f0e21356c632fc83a097c94f4"
     ),
@@ -4580,6 +4596,9 @@ _TYPED_ROLLOVER_HANDOFF_FORMAL_SOURCE_SHA256 = {
     "typed_rollover_handoff_same_roster_generation_roll_bug.cfg": (
         "25a606cfaf35b3877b61a8567c922be51cd608f0cc57618ee22e4d5bfdd392f3"
     ),
+    "typed_rollover_handoff_skip_bootstrap_crash_history_bug.cfg": (
+        "0000000000000000000000000000000000000000000000000000000000000000"
+    ),
     "typed_rollover_handoff_skip_lifecycle_root_v3_crash_history_bug.cfg": (
         "b1e3f7c2db9ca82f97422713c75e13a590545f53b96f50d05701d1179165686a"
     ),
@@ -4592,6 +4611,9 @@ _TYPED_ROLLOVER_HANDOFF_FORMAL_SOURCE_SHA256 = {
     "typed_rollover_handoff_untyped_force_bug.cfg": (
         "1015baca619f5c1b79670d481fa4144ab9561d138089f18ae6f58383a676ce82"
     ),
+    "typed_rollover_handoff_wrong_bootstrap_lifecycle_projection_bug.cfg": (
+        "0000000000000000000000000000000000000000000000000000000000000000"
+    ),
 }
 
 _TYPED_ROLLOVER_HANDOFF_MUTATION_RUNNER_SHA256 = (
@@ -4601,12 +4623,21 @@ _TYPED_ROLLOVER_HANDOFF_MUTATION_RUNNER_SHA256 = (
 _TYPED_ROLLOVER_MODEL_SAFETY_PROOFLESS_THEOREMS = (
     "TypedRolloverInitEstablishesSafetyObligation",
     "BootstrapRootHasExactGenerationZeroShapeObligation",
+    "FreshBootstrapUsesTargetGeometryEpochZeroObligation",
+    "BootstrapStateReplacementRequiresDirectorySyncObligation",
+    "BootstrapCrashRecoveryObligation",
     "BootstrapFirstCommitSelectsExactInitialPairObligation",
-    "SuccessorStateSlotPrecedesRootCommitObligation",
-    "RootCommitSelectsExactSuccessorSlotObligation",
+    "ExactOwnerPairRequiredForRetainedHandoffObligation",
+    "EveryCrashDropsProcessLocalAuthorityObligation",
+    "OnlyValidatedRestartMayFenceAfterCrashObligation",
+    "StateReplacementRequiresDirectorySyncBeforeRootReplacementObligation",
+    "RootReplacementRequiresStoreSyncBeforeMemoryPublicationObligation",
     "RootSelectedPairBindsGenerationAndDigestObligation",
     "MissingRootSelectedStateCannotValidateOrCleanupObligation",
+    "ValidationFailurePreservesArtifactsObligation",
     "SemanticValidationPrecedesArtifactCleanupObligation",
+    "ValidatedCleanupRemovesInactiveSlotObligation",
+    "SecondCrashBeforeRootResyncPreservesPredecessorObligation",
     "RootGenerationAdvancesExactlyOnceAndAlternatesSlotObligation",
     "MemoryPublicationRequiresCommittedV3RootObligation",
     "OrdinaryRolloverRequiresAuthenticatedTerminalityObligation",
@@ -4615,17 +4646,21 @@ _TYPED_ROLLOVER_MODEL_SAFETY_PROOFLESS_THEOREMS = (
     "ActiveOrdinaryRolloverReturnsCapacityAtomicallyObligation",
     "SameRosterFullTableReturnsCapacityAtomicallyObligation",
     "ServiceGenerationOverflowReturnsCapacityAtomicallyObligation",
-    "RootGenerationOverflowReturnsCapacityAtomicallyObligation",
+    "RootGenerationExhaustionPoisonsJournalFailAtomicallyObligation",
     "EpochOverflowReturnsCapacityAtomicallyObligation",
     "CrashBeforeRootCommitRestoresPredecessorObligation",
     "CrashAfterRootCommitRestoresSuccessorObligation",
-    "FreshEpochPersistencePrecedesUseObligation",
-    "CrashAfterEpochPersistenceSkipsEpochObligation",
+    "FreshEpochPersistencePrecedesExactUseObligation",
+    "CrashRestoresExactRequesterIncarnationObligation",
     "SameRosterPreservesTransportWithoutGenerationRollObligation",
     "ForcedFenceCannotForgeAuthenticatedClosePrefixObligation",
     "LateOldCallbackCannotMutateSuccessorObligation",
     "TypedRolloverNextPreservesSafetyObligation",
     "TypedRolloverSpecAlwaysSafeObligation",
+)
+_TYPED_ROLLOVER_LOCAL_LIVENESS_PROOFLESS_THEOREMS = (
+    "ResponsiveDurableExactOutputRolloverLivenessObligation",
+    "ResponsiveRestartRestoreRolloverLivenessObligation",
 )
 _PROOFLESS_RELEASE_SUPPORT_BY_THEOREM = {
     (
@@ -4634,6 +4669,18 @@ _PROOFLESS_RELEASE_SUPPORT_BY_THEOREM = {
     ): "typed-rollover-handoff-model-safety"
     for symbol in _TYPED_ROLLOVER_MODEL_SAFETY_PROOFLESS_THEOREMS
 }
+_PROOFLESS_RELEASE_SUPPORT_BY_THEOREM.update(
+    {
+        (
+            "SumeragiV2TypedRolloverHandoffProofs",
+            "ResponsiveDurableExactOutputRolloverLivenessObligation",
+        ): "typed-rollover-handoff-conditional-local-liveness",
+        (
+            "SumeragiV2TypedRolloverHandoffProofs",
+            "ResponsiveRestartRestoreRolloverLivenessObligation",
+        ): "typed-rollover-handoff-restart-restore-local-liveness",
+    }
+)
 _PROOFLESS_RELEASE_SUPPORT_BY_THEOREM.update(
     {
         (module, symbol): support_id
@@ -19235,7 +19282,7 @@ def _reply_writer_deadline_formal_source_fidelity_errors(
 def _typed_rollover_handoff_formal_source_fidelity_errors(
     formal_dir: Path, repo_root: Path = ROOT_DIR
 ) -> list[str]:
-    """Pin the proofless root-anchored V3 rollover model and 35 TLC controls."""
+    """Pin the proofless root-anchored V3 rollover model and 42 TLC controls."""
 
     errors: list[str] = []
     sources: dict[str, str] = {}
@@ -19244,19 +19291,19 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
         _TYPED_ROLLOVER_HANDOFF_FORMAL_SOURCE_SHA256
     )
     if (
-        len(reviewed_artifacts) != 39
-        or sum(name.endswith(".cfg") for name in reviewed_artifacts) != 36
-        or sum(name.endswith("_bug.cfg") for name in reviewed_artifacts) != 35
+        len(reviewed_artifacts) != 46
+        or sum(name.endswith(".cfg") for name in reviewed_artifacts) != 43
+        or sum(name.endswith("_bug.cfg") for name in reviewed_artifacts) != 42
     ):
         errors.append(
             "internal typed rollover source seal must contain exactly "
-            "39 artifacts: three TLA modules, one fixed config, and "
-            "35 mutation configs"
+            "46 artifacts: three TLA modules, one fixed config, and "
+            "42 mutation configs"
         )
-    if len(_TYPED_ROLLOVER_MODEL_SAFETY_PROOFLESS_THEOREMS) != 27:
+    if len(_TYPED_ROLLOVER_MODEL_SAFETY_PROOFLESS_THEOREMS) != 36:
         errors.append(
             "internal typed rollover proof debt must contain exactly "
-            "27 safety theorem declarations"
+            "36 safety theorem declarations"
         )
     for name, expected_sha256 in (
         _TYPED_ROLLOVER_HANDOFF_FORMAL_SOURCE_SHA256.items()
@@ -19480,6 +19527,7 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
             "roster",
             "serviceGeneration",
             "nextStreamEpoch",
+            "requesterStreamEpoch",
             "serverStreams",
             "requestGates",
             "serverClosePrefix",
@@ -19494,6 +19542,7 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
          roster |-> roster,
          serviceGeneration |-> serviceGeneration,
          nextStreamEpoch |-> nextStreamEpoch,
+         requesterStreamEpoch |-> requesterStreamEpoch,
          serverStreams |-> serverStreams,
          requestGates |-> requestGates,
          serverClosePrefix |-> serverClosePrefix]
@@ -19516,6 +19565,7 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
             "version |-> 0",
             "rootGeneration |-> 0",
             "serviceGeneration |-> 0",
+            "requesterStreamEpoch |-> 0",
         ),
         "LifecycleStateSlot": (
             "rootGeneration % 2 = 0",
@@ -19551,16 +19601,16 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
         ),
         "LifecycleSnapshotSemanticallyValid": (
             "snapshot \\in LifecycleSnapshotV3Set",
-            'snapshot.roster = "ChangedRoster"',
-            "snapshot.serviceGeneration > InitialServiceGeneration",
-            'snapshot.serverStreams = "Empty"',
-            'snapshot.requestGates = "Empty"',
-            "snapshot.serverClosePrefix = 0",
+            "snapshot.version = 3",
+            "snapshot.rootGeneration # 0",
+            "snapshot.requesterStreamEpoch <= snapshot.nextStreamEpoch",
         ),
         "LifecycleJournalReady": (
             "s.durableJournalValidated",
             "RootSelectedLifecyclePairMatches(s)",
             "LifecycleSnapshotSemanticallyValid(DurableSnapshot(s))",
+            "LifecycleStateDirectoryIsSynced(s)",
+            "LifecycleRootDirectoryIsSynced(s)",
             "~s.crashArtifactsPresent",
         ),
         "DurableCandidateStateSlotAheadOfRoot": (
@@ -19579,18 +19629,19 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
         "PublishInitialLifecycleStateSlotV3": (
             'state.lifecycleCommitPhase = "Bootstrap"',
             "state.durableLifecycleRootV3 = BootstrapLifecycleRootV3",
-            "LifecycleStateSlot(InitialRootGeneration)",
-            '!.lifecycleCommitPhase = "BootstrapStatePublished"',
+            "InitialLifecycleSnapshotV3(state.targetRoster)",
+            '!.lifecycleCommitPhase = "BootstrapStateReplaced"',
+            "!.crashArtifactsPresent = TRUE",
         ),
         "ValidateBootstrapLifecycleCandidateV3": (
-            'state.lifecycleCommitPhase = "BootstrapStatePublished"',
+            '"BootstrapStatePublished", "Restarting"',
             "LifecycleSnapshotSemanticallyValid( "
-            "state.candidateLifecycleSnapshotV3)",
+            "InitialLifecycleSnapshotV3(state.targetRoster))",
             "!.candidateSemanticallyValidated = TRUE",
         ),
         "CommitInitialLifecycleRootV3": (
             "state.candidateSemanticallyValidated",
-            "LifecycleRootV3(state.candidateLifecycleSnapshotV3)",
+            "!.syncedLifecycleRootV3 = state.durableLifecycleRootV3",
             '!.lifecycleCommitPhase = "Current"',
             "!.durableJournalValidated = TRUE",
         ),
@@ -19604,7 +19655,11 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
             "state.durableJournalValidated",
             "RootSelectedLifecyclePairMatches(state)",
             "LifecycleSnapshotSemanticallyValid(DurableSnapshot(state))",
+            "state.restartStateDirectoryResynced",
+            "state.restartRootDirectoryResynced",
             "state.crashArtifactsPresent",
+            "!.durableLifecycleStateSlotsV3[ "
+            "InactiveLifecycleStateSlot(state)] = NoLifecycleSnapshot",
             "!.cleanupPerformed = TRUE",
         ),
         "PersistFreshRequesterEpoch": (
@@ -19612,19 +19667,20 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
             "state.durableLifecycleRootV3.rootGeneration < "
             "RootGenerationLimit",
             "LifecycleJournalReady(state)",
-            "state.nextStreamEpoch + 1",
+            "issuedEpoch == state.nextStreamEpoch + 1",
+            "issuedEpoch, issuedEpoch",
             "!.durableLifecycleStateSlotsV3[ "
             "LifecycleStateSlot(snapshot.rootGeneration)] = snapshot",
             "!.durableLifecycleRootV3 = LifecycleRootV3(snapshot)",
         ),
-        "PublishSuccessorLifecycleStateSlotV3": (
+        "PublishSuccessorLifecycleStateSlotV3WithAuthority": (
             "ChangedRosterAuthorityAvailable(authority)",
             "state.serviceGeneration < ServiceGenerationLimit",
             "state.durableLifecycleRootV3.rootGeneration < "
             "RootGenerationLimit",
             "LifecycleJournalReady(state)",
             "!.candidateSemanticallyValidated = TRUE",
-            '!.lifecycleCommitPhase = "StateSlotPublished"',
+            '!.lifecycleCommitPhase = "StateSlotReplaced"',
         ),
         "CrashAfterLifecycleStateSlotV3Publication": (
             "ValidatedCandidateSuccessorStateSlotAheadOfRoot",
@@ -19640,9 +19696,15 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
             "!.crashArtifactsPresent = FALSE",
             '!.lifecycleCommitPhase = "Current"',
         ),
-        "CommitSuccessorLifecycleRootV3": (
+        "ReplaceSuccessorLifecycleRootV3": (
             "ValidatedCandidateSuccessorStateSlotAheadOfRoot",
             "LifecycleRootV3(state.candidateLifecycleSnapshotV3)",
+            '!.lifecycleCommitPhase = "RootReplaced"',
+        ),
+        "CommitSuccessorLifecycleRootV3": (
+            'state.lifecycleCommitPhase = "RootReplaced"',
+            "RootSelectedLifecyclePairMatches(state)",
+            "!.syncedLifecycleRootV3 = state.durableLifecycleRootV3",
             '!.lifecycleCommitPhase = "RootCommitted"',
         ),
         "CrashAfterLifecycleRootV3Commit": (
@@ -19663,23 +19725,32 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
             "state.serviceGeneration = ServiceGenerationLimit",
             "!.capacityRejected = TRUE",
         ),
-        "RejectLifecycleRootGenerationOverflow": (
+        "FailLifecycleRootGenerationExhaustion": (
             "state.durableLifecycleRootV3.rootGeneration = "
             "RootGenerationLimit",
-            "!.capacityRejected = TRUE",
+            "CrashClearedProcessLocalRolloverState(state)",
+            "!.durableJournalValidated = FALSE",
+            "!.restartRequired = TRUE",
+            '!.failureReason = "LifecycleRootGenerationOverflow"',
         ),
         "RootAnchoredLifecycleV3Invariant": (
             "LifecycleRootShapeIsValid(state.durableLifecycleRootV3)",
+            "LifecycleRootShapeIsValid(state.syncedLifecycleRootV3)",
             "RootSelectedLifecyclePairMatches(state)",
             "LifecycleSnapshotSemanticallyValid(DurableSnapshot(state))",
         ),
         "SemanticValidationBeforeCleanupInvariant": (
-            "state.cleanupPerformed => state.durableJournalValidated",
+            "state.cleanupPerformed => "
+            "/\\ state.durableJournalValidated",
             "~state.durableJournalValidated => ~state.cleanupPerformed",
         ),
         "TypedRolloverSafetyInvariant": (
+            "ExactServiceTransportOwnerPairInvariant",
             "RootAnchoredLifecycleV3Invariant",
             "SemanticValidationBeforeCleanupInvariant",
+            "ValidatedCleanupRemovesInactiveSlotInvariant",
+            "InvalidLifecycleStartupFailsClosedInvariant",
+            "ProcessLocalAuthorityAfterCrashInvariant",
             "AuthorityGatedGenerationAdvanceInvariant",
             "RequesterEpochInvariant",
             "CrashRecoveryInvariant",
@@ -19695,22 +19766,52 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
             "LifecycleMemory(state') = LifecycleMemory(state)",
         ),
         "RootCommitBeforeMemoryPublicationStepSafety": (
-            'state.lifecycleCommitPhase = "StateSlotPublished"',
-            "state'.durableLifecycleRootV3 = "
-            "LifecycleRootV3(state.candidateLifecycleSnapshotV3)",
+            '"RootReplaced", "Restarting"',
+            "state'.syncedLifecycleRootV3 = "
+            "state.durableLifecycleRootV3",
             "state'.durableLifecycleStateSlotsV3 = "
             "state.durableLifecycleStateSlotsV3",
             "LifecycleMemory(state') = LifecycleMemory(state)",
         ),
         "RootGenerationMonotonicStepSafety": (
-            "state'.durableLifecycleRootV3.rootGeneration >= "
-            "state.durableLifecycleRootV3.rootGeneration",
-            "state'.durableLifecycleRootV3.rootGeneration = "
-            "state.durableLifecycleRootV3.rootGeneration + 1",
-            "SelectedLifecycleStateSlot(state') # "
-            "SelectedLifecycleStateSlot(state)",
-            "state'.durableLifecycleRootV3.snapshotDigest = "
-            "LifecycleSnapshotDigest( SelectedLifecycleSnapshotV3(state'))",
+            "state'.syncedLifecycleRootV3.rootGeneration >= "
+            "state.syncedLifecycleRootV3.rootGeneration",
+            "state'.syncedLifecycleRootV3.rootGeneration = "
+            "state.syncedLifecycleRootV3.rootGeneration + 1",
+            "SyncedSelectedLifecycleStateSlot(state') # "
+            "SyncedSelectedLifecycleStateSlot(state)",
+            "state'.syncedLifecycleRootV3.snapshotDigest = "
+            "LifecycleSnapshotDigest( "
+            "SyncedSelectedLifecycleSnapshotV3(state'))",
+        ),
+        "CrashClearedProcessLocalRolloverState": (
+            "!.serviceOwnerNonce = NoIdentity",
+            "!.transportOwnerNonce = NoIdentity",
+            "!.constructionParent = NoIdentity",
+            "!.constructionSuccessor = NoIdentity",
+            "!.receiptOwnerNonce = NoIdentity",
+            "!.candidatePresent = FALSE",
+            "!.pendingRolloverAuthority = \"None\"",
+            "!.restartFenceAuthorized = FALSE",
+        ),
+        "CrashDropsProcessLocalAuthorityStepSafety": (
+            "state.durableJournalValidated",
+            "~state'.durableJournalValidated",
+            "state'.serviceOwnerNonce = NoIdentity",
+            "state'.transportOwnerNonce = NoIdentity",
+            "~state'.candidatePresent",
+        ),
+        "ValidationFailurePreservesArtifactsStepSafety": (
+            "DurableLifecycle(state') = DurableLifecycle(state)",
+            "CandidateLifecycle(state') = CandidateLifecycle(state)",
+            "state'.crashArtifactsPresent",
+            "~state'.cleanupPerformed",
+        ),
+        "RequesterIncarnationRestoreStepSafety": (
+            'state.failureReason = "CrashAfterRequesterEpochPersistence"',
+            "state'.activeStreamEpoch = "
+            "DurableSnapshot(state).requesterStreamEpoch",
+            "state'.activeStreamEpoch = state'.nextStreamEpoch",
         ),
     }
     for symbol, fragments in model_contracts.items():
@@ -19724,68 +19825,95 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
             "ValidateBootstrapLifecycleCandidateV3",
             "CommitInitialLifecycleRootV3",
             "ValidateRootSelectedLifecycleV3",
+            "RejectLifecycleRootShapeMismatchV3",
+            "RejectLifecycleSelectedStateMissingV3",
+            "RejectLifecycleGenerationHashMismatchV3",
+            "RejectLifecycleSemanticValidationFailureV3",
+            "ResyncValidatedLifecycleStateDirectoryV3",
+            "ResyncValidatedLifecycleRootDirectoryV3",
+            "CrashDuringValidatedRestartBeforeRootResyncV3",
             "CleanupValidatedLifecycleArtifactsV3",
             "PublishSuccessorLifecycleStateSlotV3",
+            "ReplaceSuccessorLifecycleRootV3",
             "CommitSuccessorLifecycleRootV3",
             "RestoreSuccessorLifecycleV3AfterCrash",
             "RejectServiceGenerationOverflow",
-            "RejectLifecycleRootGenerationOverflow",
+            "FailLifecycleRootGenerationExhaustion",
         ),
-    )
-    require_exact_operator(
-        model,
-        "ResponsiveNoFailureNext",
-        r"""
-        \/ ValidateFinality
-        \/ CloseWorkerIngress
-        \/ ClearOneWorkerExactOutput
-        \/ BuildImmediateSuccessor
-        \/ SealAppliedHeightOutputHandoff
-        \/ RetainExactHandoffReceipt
-        \/ PublishInitialLifecycleStateSlotV3
-        \/ ValidateBootstrapLifecycleCandidateV3
-        \/ CommitInitialLifecycleRootV3
-        \/ ValidateRootSelectedLifecycleV3
-        \/ CleanupValidatedLifecycleArtifactsV3
-        \/ PublishSuccessorLifecycleStateSlotV3
-        \/ CommitSuccessorLifecycleRootV3
-        \/ PublishCommittedLifecycleV3ToMemory
-        """,
     )
     require_operator_fragments(
         model,
-        "ResponsiveNoFailureTypedRolloverSpec",
+        "ResponsiveDurableExactOutputNext",
         (
-            "Init",
-            "[][ResponsiveNoFailureNext]_typedRolloverVars",
-            "WF_typedRolloverVars(PublishInitialLifecycleStateSlotV3)",
+            "CreateServiceTransportOwnerPair",
+            "RetainExactHandoffReceipt",
+            "PublishDurableExactOutputSuccessorLifecycleStateSlotV3",
+            "SyncSuccessorLifecycleStateDirectoryV3",
+            "ReplaceSuccessorLifecycleRootV3",
+            "CommitSuccessorLifecycleRootV3",
+            "PublishCommittedLifecycleV3ToMemory",
+        ),
+    )
+    require_operator_fragments(
+        model,
+        "ResponsiveDurableExactOutputSpec",
+        (
+            "ResponsiveDurableExactOutputInit",
+            "[][ResponsiveDurableExactOutputNext]_typedRolloverVars",
+            "WF_typedRolloverVars( "
+            "PublishDurableExactOutputSuccessorLifecycleStateSlotV3)",
+            "WF_typedRolloverVars(CommitSuccessorLifecycleRootV3)",
+        ),
+    )
+    require_operator_fragments(
+        model,
+        "ResponsiveRestartRestoreNext",
+        (
+            "ValidateRootSelectedLifecycleV3",
+            "ResyncValidatedLifecycleStateDirectoryV3",
+            "ResyncValidatedLifecycleRootDirectoryV3",
+            "CleanupValidatedLifecycleArtifactsV3",
+            "RecoverPredecessorLifecycleV3",
+            "PublishRestartRestoreSuccessorLifecycleStateSlotV3",
+            "CommitSuccessorLifecycleRootV3",
+            "PublishCommittedLifecycleV3ToMemory",
+        ),
+    )
+    require_operator_fragments(
+        model,
+        "ResponsiveRestartRestoreSpec",
+        (
+            "ResponsiveRestartRestoreInit",
+            "[][ResponsiveRestartRestoreNext]_typedRolloverVars",
             "WF_typedRolloverVars(ValidateRootSelectedLifecycleV3)",
-            "WF_typedRolloverVars(CleanupValidatedLifecycleArtifactsV3)",
+            "WF_typedRolloverVars( "
+            "PublishRestartRestoreSuccessorLifecycleStateSlotV3)",
         ),
     )
     require_operator_fragments(
         model,
-        "ResponsiveTypedRolloverSpec",
-        ("ResponsiveNoFailureTypedRolloverSpec",),
+        "ResponsiveDurableExactOutputRolloverLiveness",
+        (
+            "ResponsiveDurableExactOutputSpec",
+            "state.finalityValidated",
+            "~> DurableExactOutputSuccessorActiveWithoutRestart",
+        ),
     )
     require_operator_fragments(
         model,
-        "ResponsiveChangedRosterRolloverLiveness",
+        "ResponsiveRestartRestoreRolloverLiveness",
         (
-            "ResponsiveNoFailureTypedRolloverSpec",
-            'state.targetRoster = "ChangedRoster"',
-            "state.finalityValidated",
-            "state.serviceGeneration < ServiceGenerationLimit",
-            "state.durableLifecycleRootV3.rootGeneration < "
-            "RootGenerationLimit",
-            "~> ChangedRosterSuccessorActiveWithoutRestart",
+            "ResponsiveRestartRestoreSpec",
+            "state.restartRequired",
+            "~> RestartRestoreSuccessorActiveWithoutRestart",
         ),
     )
 
     proofs_name = "SumeragiV2TypedRolloverHandoffProofs.tla"
     proofs_source = sources.get(proofs_name)
     expected_theorems = set(_TYPED_ROLLOVER_MODEL_SAFETY_PROOFLESS_THEOREMS) | {
-        "ResponsiveChangedRosterRolloverLivenessObligation"
+        "ResponsiveDurableExactOutputRolloverLivenessObligation",
+        "ResponsiveRestartRestoreRolloverLivenessObligation",
     }
     if proofs_source is not None:
         path = formal_dir / proofs_name
@@ -19829,6 +19957,36 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
             "RootSelectedLifecyclePairMatches(state')",
             "LifecycleMemory(state') = LifecycleMemory(state)",
         ),
+        "FreshBootstrapUsesTargetGeometryEpochZeroObligation": (
+            "PublishInitialLifecycleStateSlotV3",
+            "InitialLifecycleSnapshotV3(state.targetRoster)",
+            "state'.candidateLifecycleSnapshotV3.nextStreamEpoch = 0",
+            "state'.candidateLifecycleSnapshotV3.requesterStreamEpoch = 0",
+            'state\'.candidateLifecycleSnapshotV3.serverStreams = "Empty"',
+        ),
+        "EveryCrashDropsProcessLocalAuthorityObligation": (
+            "state.durableJournalValidated",
+            "~state'.durableJournalValidated",
+            "state'.serviceOwnerNonce = NoIdentity",
+            "state'.transportOwnerNonce = NoIdentity",
+            "~state'.candidatePresent",
+            "~state'.restartFenceAuthorized",
+        ),
+        "OnlyValidatedRestartMayFenceAfterCrashObligation": (
+            "~state.restartFenceAuthorized",
+            "state'.restartFenceAuthorized",
+            "state.durableJournalValidated",
+            "state.cleanupPerformed",
+            "state'.validatedRestartObserved",
+        ),
+        "SecondCrashBeforeRootResyncPreservesPredecessorObligation": (
+            "CrashDuringValidatedRestartBeforeRootResyncV3",
+            "state'.durableLifecycleRootV3 = "
+            "state.syncedLifecycleRootV3",
+            "state'.durableLifecycleStateSlotsV3 = "
+            "state.syncedLifecycleStateSlotsV3",
+            "state'.secondCrashObserved",
+        ),
         "RootSelectedPairBindsGenerationAndDigestObligation": (
             "RootSelectedLifecyclePairIsPresent(state)",
             "LifecycleSnapshotDigest( SelectedLifecycleSnapshotV3(state))",
@@ -19847,18 +20005,28 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
             "RootSelectedLifecyclePairMatches(state)",
             "LifecycleSnapshotSemanticallyValid(DurableSnapshot(state))",
         ),
-        "RootGenerationOverflowReturnsCapacityAtomicallyObligation": (
-            "RejectLifecycleRootGenerationOverflow",
+        "RootGenerationExhaustionPoisonsJournalFailAtomicallyObligation": (
+            "FailLifecycleRootGenerationExhaustion",
+            "state'.restartRequired",
+            'state\'.failureReason = "LifecycleRootGenerationOverflow"',
+            "state'.capacityRejected = state.capacityRejected",
             "DurableLifecycle(state') = DurableLifecycle(state)",
-            "CandidateLifecycle(state') = CandidateLifecycle(state)",
         ),
         "CrashBeforeRootCommitRestoresPredecessorObligation": (
             "RecoverPredecessorLifecycleV3",
-            "LifecycleMemoryMatchesDurableSnapshotV3'",
+            "state'.currentRoster = DurableSnapshot(state).roster",
         ),
         "CrashAfterRootCommitRestoresSuccessorObligation": (
             "RestoreSuccessorLifecycleV3AfterCrash",
             'state\'.lifecycleCommitPhase = "Restored"',
+        ),
+        "CrashRestoresExactRequesterIncarnationObligation": (
+            "RestoreRequesterEpochCounterAfterCrash",
+            "state'.nextStreamEpoch = "
+            "DurableSnapshot(state).nextStreamEpoch",
+            "state'.activeStreamEpoch = "
+            "DurableSnapshot(state).requesterStreamEpoch",
+            "state'.activeStreamEpoch = state'.nextStreamEpoch",
         ),
     }
     for theorem, fragments in theorem_contracts.items():
@@ -19900,7 +20068,9 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
         "RootGenerationOverflowWrap": "WrapLifecycleRootGenerationCounter",
         "ForgeAuthenticatedClosePrefix": "ForgeClosePrefixDuringDurableFence",
         "EpochUseBeforePersist": "UseRequesterEpochBeforePersistence",
-        "EpochReuseAfterCrash": "ReuseRequesterEpochAfterCrash",
+        "LoseRequesterIncarnationAfterCrash": (
+            "LoseRequesterIncarnationAfterCrash"
+        ),
         "EpochOverflowWrap": "WrapRequesterEpochCounter",
         "CrossedLifecycleRootShape": "CrossLifecycleRootShape",
         "SplitLifecycleGenerationHash": "SplitLifecycleGenerationAndHash",
@@ -19910,6 +20080,17 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
         ),
         "ChangedRosterWithoutGenerationAdvance": (
             "ChangeRosterWithoutServiceGenerationAdvance"
+        ),
+        "CrossServiceTransportOwnerPair": "CrossServiceTransportOwnerPair",
+        "PreserveProcessReceiptAcrossCrash": "PreserveProcessReceiptAcrossCrash",
+        "CleanupRetainsInactiveSlot": "CleanupRetainsInactiveSlot",
+        "WrongBootstrapLifecycleProjection": (
+            "WrongBootstrapLifecycleProjection"
+        ),
+        "SkipBootstrapCrashHistory": "SkipBootstrapCrashHistory",
+        "CleanupBeforeRootParentResync": "CleanupBeforeRootParentResync",
+        "AcceptSemanticInvalidLifecycleState": (
+            "AcceptSemanticInvalidLifecycleState"
         ),
     }
     mutation_source = sources.get(mutation_name)
@@ -19929,7 +20110,7 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
             if observed_modes != set(mutation_modes):
                 errors.append(
                     f"{path}:{line}: MutationModes must equal exact reviewed "
-                    f"35-mode root-anchored V3 set {sorted(mutation_modes)!r}; "
+                    f"42-mode root-anchored V3 set {sorted(mutation_modes)!r}; "
                     f"found {sorted(observed_modes)!r}"
                 )
         selected = _top_level_operator_body(
@@ -19957,27 +20138,22 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
         mutation_name,
         "CrossLifecycleRootShape",
         (
-            'state.durableLifecycleRootV3.shape = "Committed"',
-            '!.durableLifecycleRootV3.shape = "Bootstrap"',
+            'AcceptInvalidLifecycleStartup("LifecycleRootShapeMismatch")',
         ),
     )
     require_operator_fragments(
         mutation_name,
         "SplitLifecycleGenerationAndHash",
         (
-            "nextGeneration == "
-            "state.durableLifecycleRootV3.rootGeneration + 1",
-            "!.durableLifecycleStateSlotsV3[ "
-            "LifecycleStateSlot(nextGeneration)] = selectedSnapshot",
-            "!.durableLifecycleRootV3.rootGeneration = nextGeneration",
+            "AcceptInvalidLifecycleStartup( "
+            '"LifecycleGenerationHashMismatch")',
         ),
     )
     require_operator_fragments(
         mutation_name,
         "RemoveRootSelectedLifecycleState",
         (
-            "!.durableLifecycleStateSlotsV3[ "
-            "SelectedLifecycleStateSlot(state)] = NoLifecycleSnapshot",
+            'AcceptInvalidLifecycleStartup("LifecycleSelectedStateMissing")',
         ),
     )
     require_operator_fragments(
@@ -19995,11 +20171,42 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
         "ChangeRosterWithoutServiceGenerationAdvance",
         (
             "ChangedRosterReplacementNeeded",
-            "state.serviceGeneration = InitialServiceGeneration",
+            "state.serviceGeneration",
             'LifecycleSnapshotV3( '
             "state.durableLifecycleRootV3.rootGeneration + 1, "
-            '"ChangedRoster", InitialServiceGeneration,',
-            '!.currentRoster = "ChangedRoster"',
+            "state.targetRoster, state.serviceGeneration,",
+            "!.currentRoster = state.targetRoster",
+        ),
+    )
+    require_operator_fragments(
+        mutation_name,
+        "AcceptInvalidLifecycleStartup",
+        (
+            'state.startupMode = "UnvalidatedRestart"',
+            "state.startupValidationFault = reason",
+            "!.durableJournalValidated = TRUE",
+            "!.crashArtifactsPresent = FALSE",
+            "!.cleanupPerformed = TRUE",
+        ),
+    )
+    require_operator_fragments(
+        mutation_name,
+        "PreserveProcessReceiptAcrossCrash",
+        (
+            "RequesterEpochPersistenceAheadOfMemory",
+            "ExactRetainedMergeSidecars",
+            "!.durableJournalValidated = FALSE",
+            "!.restartRequired = TRUE",
+        ),
+    )
+    require_operator_fragments(
+        mutation_name,
+        "CleanupBeforeRootParentResync",
+        (
+            "state.restartStateDirectoryResynced",
+            "~state.restartRootDirectoryResynced",
+            "InactiveLifecycleStateSlot(state)",
+            "!.cleanupPerformed = TRUE",
         ),
     )
 
@@ -20011,18 +20218,26 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
         "PROPERTY LifecycleV3PublicationActionProperty",
         "PROPERTY ForcedFenceDoesNotForgeCloseActionProperty",
         "PROPERTY RequesterEpochUseActionProperty",
+        "PROPERTY CrashDropsProcessLocalAuthorityActionProperty",
+        "PROPERTY ValidationFailurePreservesArtifactsActionProperty",
+        "PROPERTY ValidatedCleanupActionProperty",
+        "PROPERTY RequesterIncarnationRestoreActionProperty",
     )
     fixed_lines = (
         "SPECIFICATION TypedRolloverSpec",
         "CHECK_DEADLOCK FALSE",
         "INVARIANT TypedRolloverTypeInvariant",
         "INVARIANT CompactionGeometryInvariant",
+        "INVARIANT ExactServiceTransportOwnerPairInvariant",
         "INVARIANT ReceiptLifecycleInvariant",
         "INVARIANT FinalSealRejectsLateEnqueueInvariant",
         "INVARIANT MismatchRejectionInvariant",
         "INVARIANT FailureLatchInvariant",
         "INVARIANT RootAnchoredLifecycleV3Invariant",
         "INVARIANT SemanticValidationBeforeCleanupInvariant",
+        "INVARIANT ValidatedCleanupRemovesInactiveSlotInvariant",
+        "INVARIANT InvalidLifecycleStartupFailsClosedInvariant",
+        "INVARIANT ProcessLocalAuthorityAfterCrashInvariant",
         "INVARIANT LifecycleCommitPhaseInvariant",
         "INVARIANT AuthorityGatedGenerationAdvanceInvariant",
         "INVARIANT SameRosterTransportPreservationInvariant",
@@ -20040,12 +20255,16 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
             errors.append(
                 f"{formal_dir / fixed_name}: fixed typed rollover "
                 "configuration must contain exactly the reviewed root-anchored "
-                "V3 invariants and seven action properties"
+                "V3 invariants and eleven action properties"
             )
 
     mutation_config_modes = {
         name: mode
         for name, mode in (
+            (
+                "typed_rollover_handoff_accept_semantic_invalid_lifecycle_state_bug.cfg",
+                "AcceptSemanticInvalidLifecycleState",
+            ),
             (
                 "typed_rollover_handoff_active_state_roll_bug.cfg",
                 "ActiveOrdinaryRoll",
@@ -20083,8 +20302,20 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
                 "CleanWrongSuccessorReject",
             ),
             (
+                "typed_rollover_handoff_cleanup_before_root_parent_resync_bug.cfg",
+                "CleanupBeforeRootParentResync",
+            ),
+            (
                 "typed_rollover_handoff_cleanup_before_validation_bug.cfg",
                 "CleanupBeforeSemanticValidation",
+            ),
+            (
+                "typed_rollover_handoff_cleanup_retains_inactive_slot_bug.cfg",
+                "CleanupRetainsInactiveSlot",
+            ),
+            (
+                "typed_rollover_handoff_cross_service_transport_owner_pair_bug.cfg",
+                "CrossServiceTransportOwnerPair",
             ),
             (
                 "typed_rollover_handoff_crossed_root_shape_bug.cfg",
@@ -20093,10 +20324,6 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
             (
                 "typed_rollover_handoff_epoch_overflow_bug.cfg",
                 "EpochOverflowWrap",
-            ),
-            (
-                "typed_rollover_handoff_epoch_reuse_after_crash_bug.cfg",
-                "EpochReuseAfterCrash",
             ),
             (
                 "typed_rollover_handoff_epoch_use_before_persist_bug.cfg",
@@ -20131,6 +20358,10 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
                 "LateEnqueue",
             ),
             (
+                "typed_rollover_handoff_lose_requester_incarnation_after_crash_bug.cfg",
+                "LoseRequesterIncarnationAfterCrash",
+            ),
+            (
                 "typed_rollover_handoff_missing_selected_state_bug.cfg",
                 "MissingRootSelectedState",
             ),
@@ -20145,6 +20376,10 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
             (
                 "typed_rollover_handoff_premature_mint_bug.cfg",
                 "PrematureSeal",
+            ),
+            (
+                "typed_rollover_handoff_preserve_process_receipt_across_crash_bug.cfg",
+                "PreserveProcessReceiptAcrossCrash",
             ),
             (
                 "typed_rollover_handoff_publish_memory_before_lifecycle_root_v3_commit_bug.cfg",
@@ -20171,6 +20406,10 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
                 "SameRosterGenerationRoll",
             ),
             (
+                "typed_rollover_handoff_skip_bootstrap_crash_history_bug.cfg",
+                "SkipBootstrapCrashHistory",
+            ),
+            (
                 "typed_rollover_handoff_skip_lifecycle_root_v3_crash_history_bug.cfg",
                 "SkipLifecycleRootV3CrashHistory",
             ),
@@ -20186,11 +20425,15 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
                 "typed_rollover_handoff_untyped_force_bug.cfg",
                 "UntypedForce",
             ),
+            (
+                "typed_rollover_handoff_wrong_bootstrap_lifecycle_projection_bug.cfg",
+                "WrongBootstrapLifecycleProjection",
+            ),
         )
     }
     if set(mutation_config_modes) != expected_config_names - {fixed_name}:
         errors.append(
-            f"{formal_dir}: internal typed rollover 35-config contract does "
+            f"{formal_dir}: internal typed rollover 42-config contract does "
             "not match the SHA-sealed inventory"
         )
     for config_name, mode in mutation_config_modes.items():
@@ -20210,7 +20453,7 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
         if observed_lines != expected_lines:
             errors.append(
                 f"{formal_dir / config_name}: mutation config must select "
-                f"exact mode {mode} and the seven root-anchored V3 action "
+                f"exact mode {mode} and the eleven root-anchored V3 action "
                 "properties"
             )
 
@@ -20238,7 +20481,7 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
         runner = payload.decode("utf-8")
         collapsed_runner = " ".join(runner.split())
         runner_fragments = (
-            "then run the fixed TLC model and all 35 deterministic mutation "
+            "then run the fixed TLC model and all 42 deterministic mutation "
             "configurations.",
             "for module in \\ SumeragiV2TypedRolloverHandoff \\ "
             "SumeragiV2TypedRolloverHandoffMutation \\ "
@@ -20246,7 +20489,7 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
             'run_case typed-rollover-fixed \\ "$FIXED_MODEL" '
             'typed_rollover_handoff_fixed.cfg 0 \\ '
             '"Model checking completed. No error has been found."',
-            "readonly EXPECTED_MUTATION_COUNT=35",
+            "readonly EXPECTED_MUTATION_COUNT=42",
             'readonly INVARIANT_MARKER="Error: Invariant '
             'TypedRolloverSafetyInvariant is violated."',
             'actual_configs=("${FORMAL_DIR}"/'
@@ -20254,17 +20497,21 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
             "for case_spec in \"${mutation_cases[@]}\"; do",
             'run_case "$label" "$MUTATION_MODEL" "$config" '
             '"$expected_status" "$expected_marker"',
-            'echo "[tlc] typed rollover-handoff fixed model and 35-mutant '
+            'echo "[tlc] typed rollover-handoff fixed model and 42-mutant '
             'root-anchored V3 matrix passed"',
         )
         for fragment in runner_fragments:
             if " ".join(fragment.split()) not in collapsed_runner:
                 errors.append(
                     f"{runner_path}: typed rollover-handoff runner must retain "
-                    f"exact 35-case root-anchored V3 fragment {fragment!r}"
+                    f"exact 42-case root-anchored V3 fragment {fragment!r}"
                 )
 
         runner_cases = (
+            (
+                "accept-semantic-invalid-lifecycle-state",
+                "typed_rollover_handoff_accept_semantic_invalid_lifecycle_state_bug.cfg",
+            ),
             (
                 "active-state-roll",
                 "typed_rollover_handoff_active_state_roll_bug.cfg",
@@ -20302,8 +20549,20 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
                 "typed_rollover_handoff_clean_wrong_successor_reject_bug.cfg",
             ),
             (
+                "cleanup-before-root-parent-resync",
+                "typed_rollover_handoff_cleanup_before_root_parent_resync_bug.cfg",
+            ),
+            (
                 "cleanup-before-semantic-validation",
                 "typed_rollover_handoff_cleanup_before_validation_bug.cfg",
+            ),
+            (
+                "cleanup-retains-inactive-slot",
+                "typed_rollover_handoff_cleanup_retains_inactive_slot_bug.cfg",
+            ),
+            (
+                "cross-service-transport-owner-pair",
+                "typed_rollover_handoff_cross_service_transport_owner_pair_bug.cfg",
             ),
             (
                 "crossed-lifecycle-root-shape",
@@ -20312,10 +20571,6 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
             (
                 "epoch-overflow",
                 "typed_rollover_handoff_epoch_overflow_bug.cfg",
-            ),
-            (
-                "epoch-reuse-after-crash",
-                "typed_rollover_handoff_epoch_reuse_after_crash_bug.cfg",
             ),
             (
                 "epoch-use-before-persist",
@@ -20350,6 +20605,10 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
                 "typed_rollover_handoff_late_enqueue_bug.cfg",
             ),
             (
+                "lose-requester-incarnation-after-crash",
+                "typed_rollover_handoff_lose_requester_incarnation_after_crash_bug.cfg",
+            ),
+            (
                 "missing-root-selected-state",
                 "typed_rollover_handoff_missing_selected_state_bug.cfg",
             ),
@@ -20364,6 +20623,10 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
             (
                 "premature-mint",
                 "typed_rollover_handoff_premature_mint_bug.cfg",
+            ),
+            (
+                "preserve-process-receipt-across-crash",
+                "typed_rollover_handoff_preserve_process_receipt_across_crash_bug.cfg",
             ),
             (
                 "publish-memory-before-lifecycle-root-v3-commit",
@@ -20390,6 +20653,10 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
                 "typed_rollover_handoff_same_roster_generation_roll_bug.cfg",
             ),
             (
+                "skip-bootstrap-crash-history",
+                "typed_rollover_handoff_skip_bootstrap_crash_history_bug.cfg",
+            ),
+            (
                 "skip-lifecycle-root-v3-crash-history",
                 "typed_rollover_handoff_skip_lifecycle_root_v3_crash_history_bug.cfg",
             ),
@@ -20404,6 +20671,10 @@ def _typed_rollover_handoff_formal_source_fidelity_errors(
             (
                 "untyped-force",
                 "typed_rollover_handoff_untyped_force_bug.cfg",
+            ),
+            (
+                "wrong-bootstrap-lifecycle-projection",
+                "typed_rollover_handoff_wrong_bootstrap_lifecycle_projection_bug.cfg",
             ),
         )
         offsets: list[int] = []
@@ -55376,12 +55647,12 @@ def _production_liveness_release_inventory_errors(
         )
 
     typed_rollover_release_fragments = (
-        "readonly expected_typed_rollover_formal_mutation_count=35",
+        "readonly expected_typed_rollover_formal_mutation_count=42",
         "observed_typed_rollover_formal_mutation_count=\"$(",
         "    scripts/formal/"
         "run_sumeragi_v2_typed_rollover_handoff_mutations.sh\n)",
         "!= expected_typed_rollover_formal_mutation_count)); then",
-        'echo "[tlc] typed rollover-handoff fixed model and 35-mutant '
+        'echo "[tlc] typed rollover-handoff fixed model and 42-mutant '
         'root-anchored V3 matrix passed"',
         "  scripts/formal/"
         "run_sumeragi_v2_typed_rollover_handoff_mutations.sh; then",
@@ -55390,7 +55661,7 @@ def _production_liveness_release_inventory_errors(
         if source.count(fragment) != 1:
             errors.append(
                 f"{release_path}: release corridor must retain the exact "
-                f"35-mutation typed rollover contract fragment {fragment!r}"
+                f"42-mutation typed rollover contract fragment {fragment!r}"
             )
 
     multilane_focus_rows: list[tuple[str, str, str]] = []

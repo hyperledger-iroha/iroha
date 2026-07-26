@@ -2199,6 +2199,7 @@ impl MergeSidecarLifecycleJournal {
         }
     }
 
+    #[cfg(test)]
     fn state_path(&self) -> PathBuf {
         let generation = self
             .committed

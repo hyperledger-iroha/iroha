@@ -12594,16 +12594,16 @@ pub(super) mod tests {
             .expect("one dedicated responder-control slot");
         assert_eq!(pending.enqueue(old), Ok(ExactFanoutOwnership::Owned));
 
-        let ticket_fixture = NetworkActorAdmissionTicketTestFixture::new();
-        let ticket = ticket_fixture.issue();
-        assert_eq!(ticket.rank(), Some(1));
-        assert_eq!(ticket_fixture.waiter_count(), 1);
-        assert_eq!(ticket_fixture.ticket_drop_cancellations(), 0);
         let old_post = Post {
             data: pending.fanouts[0].messages[0].clone(),
             peer_id: target.clone(),
             priority: Priority::High,
         };
+        let (ticket_fixture, ticket) =
+            NetworkActorAdmissionTicketTestFixture::for_reply(&old_post, &old_route);
+        assert_eq!(ticket.rank(), Some(1));
+        assert_eq!(ticket_fixture.waiter_count(), 1);
+        assert_eq!(ticket_fixture.ticket_drop_cancellations(), 0);
         pending.fanouts[0].targets[0].current = Some(old_post);
         pending.fanouts[0].targets[0].ticket = Some(ticket);
         assert!(routes.mark_reply_unwritable_while_delivery_active(&old_route));
@@ -12631,11 +12631,30 @@ pub(super) mod tests {
             .fifo_id
             .expect("replacement owns a committed FIFO identity");
         assert_eq!(
+            pending.next_fanout_fifo_id,
+            replacement_fifo_id
+                .checked_add(1)
+                .expect("bounded replacement FIFO identity must advance")
+        );
+        assert_eq!(
             pending.source_fifo_owners,
             BTreeMap::from([(replacement_source, BTreeSet::from([replacement_fifo_id]))])
         );
+        assert_eq!(pending.target_is_global_head(0, 0), Ok(true));
+        assert_eq!(
+            pending.reservation_owner_counts,
+            BTreeMap::from([(
+                ExactTargetReservation {
+                    semantic_target: target,
+                    class: ExactOutputClass::Lane,
+                    kind: ExactTargetReservationKind::SidecarReplyControl,
+                },
+                1,
+            )])
+        );
         assert_eq!(pending.ownership_units, 1);
         assert_eq!(pending.shared_ownership_units, 0);
+        assert!(pending.fanouts[0].targets[0].ticket.is_none());
         assert_eq!(
             retired.targets[0]
                 .ticket
