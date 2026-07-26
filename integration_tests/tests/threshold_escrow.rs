@@ -117,7 +117,7 @@ async fn deploy_threshold_escrow(
         "universal",
     )
     .expect("threshold escrow alias");
-    let (contract_address, _, _) = tokio::task::spawn_blocking({
+    let (contract_address, _, _, _) = tokio::task::spawn_blocking({
         let client = client.clone();
         move || {
             super::contracts::deploy_contract_locally_signed(

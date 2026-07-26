@@ -8,12 +8,14 @@
 
 use rand_core_06::{CryptoRng, RngCore};
 use thiserror::Error;
+use zeroize::Zeroizing;
 
 use super::{
     JINDO_ENCODING_BASE_V1, JINDO_ENCODING_EXPONENT_V1, JINDO_ENCODING_SLOTS_V1,
-    JINDO_RING_DEGREE_V1, JindoFieldElementV1, JindoRnsPolynomialV1,
+    JINDO_RING_DEGREE_V1,
     encoding::encode_coefficient_slots_v1,
-    ring::{JINDO_INNER_MODULI_V1, JindoPrimeModulusV1},
+    field::JindoFieldElementV1,
+    ring::{JINDO_INNER_MODULI_V1, JindoPrimeModulusV1, JindoRnsPolynomialV1},
 };
 
 /// Standard deviation for ordinary randomized coefficient encodings.
@@ -30,6 +32,8 @@ pub(crate) const JINDO_MLWE_STD_DEV_V1: f64 = f64::from_bits(0x401b_14c2_f863_e9
 pub(crate) const JINDO_MASK_MLWE_STD_DEV_V1: f64 = f64::from_bits(0x40a3_2633_e6df_28bf);
 
 const MAX_GAUSSIAN_ATTEMPTS_V1: usize = 4_096;
+const MAX_UNIFORM_REJECTION_ATTEMPTS_V1: usize = 4_096;
+const MAX_FIELD_REJECTION_ATTEMPTS_V1: usize = 65_536;
 const GAUSSIAN_TAIL_STANDARD_DEVIATIONS_V1: f64 = 14.0;
 
 // Only the non-negligible `-b^i / p` entries survive the paper's threshold.
@@ -54,7 +58,7 @@ const DELTA_INVERSE_V1: [f64; JINDO_ENCODING_EXPONENT_V1] = [
 
 /// Bounded prover-side sampling failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
-pub(crate) enum JindoSamplingErrorV1 {
+pub enum JindoSamplingErrorV1 {
     /// The supplied randomness stream failed every bounded rejection attempt.
     #[error("Jindo Gaussian rejection sampler exhausted its fixed attempt budget")]
     RejectionBudgetExhausted,
@@ -64,6 +68,26 @@ pub(crate) enum JindoSamplingErrorV1 {
     /// A sampled coefficient exceeded the fixed signed representation.
     #[error("Jindo Gaussian sample exceeded the fixed signed coefficient range")]
     SampleOutOfRange,
+    /// Uniform coefficient-field sampling exhausted its fixed retry budget.
+    #[error("Jindo coefficient-field rejection sampler exhausted its fixed attempt budget")]
+    FieldRejectionBudgetExhausted,
+}
+
+/// Sample one uniform canonical coefficient-field element.
+pub(crate) fn sample_uniform_field_element_v1<R>(
+    rng: &mut R,
+) -> Result<JindoFieldElementV1, JindoSamplingErrorV1>
+where
+    R: CryptoRng + RngCore,
+{
+    for _ in 0..MAX_FIELD_REJECTION_ATTEMPTS_V1 {
+        let mut bytes = Zeroizing::new([0_u8; 32]);
+        rng.fill_bytes(bytes.as_mut());
+        if let Some(value) = JindoFieldElementV1::from_canonical_bytes(*bytes) {
+            return Ok(value);
+        }
+    }
+    Err(JindoSamplingErrorV1::FieldRejectionBudgetExhausted)
 }
 
 /// Sample one discrete Gaussian integer by bounded uniform rejection.
@@ -102,7 +126,7 @@ where
     }
 
     for _ in 0..MAX_GAUSSIAN_ATTEMPTS_V1 {
-        let offset = sample_bounded_u64_v1(width, rng);
+        let offset = sample_bounded_u64_v1(width, rng)?;
         let candidate = i128::from(lower) + i128::from(offset);
         let candidate =
             i64::try_from(candidate).map_err(|_| JindoSamplingErrorV1::SampleOutOfRange)?;
@@ -124,14 +148,16 @@ pub(crate) fn randomized_encode_coefficient_slots_v1<R>(
 where
     R: CryptoRng + RngCore,
 {
-    let deterministic = encode_coefficient_slots_v1(values)
-        .ok_or(JindoSamplingErrorV1::InvalidGaussianParameters)?;
-    let mut encoded_coefficients = [0_i128; JINDO_RING_DEGREE_V1];
+    let deterministic = Zeroizing::new(
+        encode_coefficient_slots_v1(values)
+            .ok_or(JindoSamplingErrorV1::InvalidGaussianParameters)?,
+    );
+    let mut encoded_coefficients = Zeroizing::new([0_i128; JINDO_RING_DEGREE_V1]);
     for (index, coefficient) in encoded_coefficients.iter_mut().enumerate() {
         *coefficient = deterministic.balanced_coefficient(index, JINDO_INNER_MODULI_V1);
     }
 
-    let mut centers = [0_f64; JINDO_RING_DEGREE_V1];
+    let mut centers = Zeroizing::new([0_f64; JINDO_RING_DEGREE_V1]);
     for (digit, delta_inverse) in DELTA_INVERSE_V1.into_iter().enumerate() {
         if delta_inverse == 0.0 {
             continue;
@@ -146,8 +172,8 @@ where
         }
     }
 
-    let mut lattice = [0_i128; JINDO_RING_DEGREE_V1];
-    for (sample, center) in lattice.iter_mut().zip(centers) {
+    let mut lattice = Zeroizing::new([0_i128; JINDO_RING_DEGREE_V1]);
+    for (sample, center) in lattice.iter_mut().zip(centers.iter().copied()) {
         *sample = i128::from(sample_discrete_gaussian_v1(
             -center,
             standard_deviation,
@@ -155,7 +181,7 @@ where
         )?);
     }
 
-    let mut randomized = encoded_coefficients;
+    let mut randomized = Zeroizing::new(*encoded_coefficients);
     for index in 0..JINDO_RING_DEGREE_V1 {
         randomized[index] -= i128::from(JINDO_ENCODING_BASE_V1) * lattice[index];
         if index >= JINDO_ENCODING_SLOTS_V1 {
@@ -165,7 +191,7 @@ where
         }
     }
     Ok(JindoRnsPolynomialV1::from_balanced_coefficients(
-        randomized,
+        *randomized,
         JINDO_INNER_MODULI_V1,
     ))
 }
@@ -179,25 +205,26 @@ pub(crate) fn sample_gaussian_polynomial_v1<R>(
 where
     R: CryptoRng + RngCore,
 {
-    let mut coefficients = [0_i128; JINDO_RING_DEGREE_V1];
-    for coefficient in &mut coefficients {
+    let mut coefficients = Zeroizing::new([0_i128; JINDO_RING_DEGREE_V1]);
+    for coefficient in coefficients.iter_mut() {
         *coefficient = i128::from(sample_discrete_gaussian_v1(0.0, standard_deviation, rng)?);
     }
     Ok(JindoRnsPolynomialV1::from_balanced_coefficients(
-        coefficients,
+        *coefficients,
         moduli,
     ))
 }
 
-fn sample_bounded_u64_v1(bound: u64, rng: &mut impl RngCore) -> u64 {
+fn sample_bounded_u64_v1(bound: u64, rng: &mut impl RngCore) -> Result<u64, JindoSamplingErrorV1> {
     debug_assert!(bound > 0);
     let acceptance_limit = u64::MAX - (u64::MAX % bound);
-    loop {
+    for _ in 0..MAX_UNIFORM_REJECTION_ATTEMPTS_V1 {
         let candidate = rng.next_u64();
         if candidate < acceptance_limit {
-            return candidate % bound;
+            return Ok(candidate % bound);
         }
     }
+    Err(JindoSamplingErrorV1::RejectionBudgetExhausted)
 }
 
 fn uniform_open_v1(rng: &mut impl RngCore) -> f64 {
@@ -282,6 +309,29 @@ mod tests {
 
     impl CryptoRng for StuckRng {}
 
+    struct RejectingFieldRng;
+
+    impl RngCore for RejectingFieldRng {
+        fn next_u32(&mut self) -> u32 {
+            u32::MAX
+        }
+
+        fn next_u64(&mut self) -> u64 {
+            u64::MAX
+        }
+
+        fn fill_bytes(&mut self, destination: &mut [u8]) {
+            destination.fill(u8::MAX);
+        }
+
+        fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), RngError> {
+            self.fill_bytes(destination);
+            Ok(())
+        }
+    }
+
+    impl CryptoRng for RejectingFieldRng {}
+
     #[test]
     fn invalid_parameters_and_failed_randomness_are_rejected() {
         let mut rng = TestRng::new(1);
@@ -297,6 +347,26 @@ mod tests {
             sample_discrete_gaussian_v1(0.0, 1.0, &mut StuckRng),
             Err(JindoSamplingErrorV1::RejectionBudgetExhausted)
         );
+        assert_eq!(
+            sample_uniform_field_element_v1(&mut RejectingFieldRng),
+            Err(JindoSamplingErrorV1::FieldRejectionBudgetExhausted)
+        );
+    }
+
+    #[test]
+    fn uniform_field_sampler_is_canonical_and_reproducible() {
+        let mut first = TestRng::new(0xfeed_face_cafe_babe);
+        let mut replay = first.clone();
+        let first_values: Vec<_> = (0..64)
+            .map(|_| sample_uniform_field_element_v1(&mut first).expect("field sample"))
+            .collect();
+        let replay_values: Vec<_> = (0..64)
+            .map(|_| sample_uniform_field_element_v1(&mut replay).expect("field sample"))
+            .collect();
+        assert_eq!(first_values, replay_values);
+        assert!(first_values.iter().all(|value| {
+            JindoFieldElementV1::from_canonical_bytes(value.to_canonical_bytes()).is_some()
+        }));
     }
 
     #[test]

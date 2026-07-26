@@ -2798,6 +2798,21 @@ mod tests {
         let expected = payload
             .privacy_transaction_intent_digest_v1()
             .expect("canonical finalized projection");
+        let mut normalized = payload.clone();
+        normalized.instructions =
+            normalize_privacy_executable_for_intent_v1(&normalized.instructions)
+                .expect("canonical normalized executable");
+        let normalized_bytes = norito::to_bytes(&normalized).expect("canonical normalized payload");
+        assert_eq!(
+            normalized_bytes.len(),
+            14_176,
+            "the canonical fixture wire length is part of the cross-SDK KAT"
+        );
+        assert_eq!(
+            hex::encode(expected.as_bytes()),
+            "0b67937ee1c33dfc78baa1c928c55f6365712bc31139cc2dae81fc809adeb2e6",
+            "canonical privacy transaction-intent V1 digest"
+        );
 
         let mut changed_proof = payload.clone();
         mutate_direct_privacy_submission(&mut changed_proof, |submission| {

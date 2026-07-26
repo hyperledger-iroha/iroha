@@ -7,6 +7,7 @@
 
 use std::sync::OnceLock;
 
+use sha2::{Digest, Sha256};
 use sha3::{
     Shake256,
     digest::{ExtendableOutput, Update, XofReader},
@@ -24,6 +25,7 @@ const CRS_DOMAIN_V1: &[u8] = b"iroha.privacy.jindo.transparent-crs.v1";
 const INNER_MATRIX_LABEL_V1: &[u8] = b"inner-msis-A";
 const MLWE_MATRIX_LABEL_V1: &[u8] = b"mlwe-B-prime";
 const OUTER_MATRIX_LABEL_V1: &[u8] = b"outer-msis-D";
+const CRS_DIGEST_DOMAIN_V1: &[u8] = b"iroha.privacy.jindo.transparent-crs-digest.v1";
 
 /// Fixed transparent commitment matrices.
 pub(crate) struct JindoCommitKeyV1 {
@@ -58,6 +60,52 @@ pub(crate) fn commit_key_v1() -> &'static JindoCommitKeyV1 {
             JINDO_OUTER_MODULI_V1,
         ),
     })
+}
+
+/// Digest the exact generated matrices in canonical row-major RNS order.
+pub(crate) fn crs_digest_v1() -> [u8; 32] {
+    static DIGEST: OnceLock<[u8; 32]> = OnceLock::new();
+    *DIGEST.get_or_init(|| {
+        let key = commit_key_v1();
+        let mut hash = Sha256::new();
+        digest_field(&mut hash, CRS_DIGEST_DOMAIN_V1);
+        digest_field(&mut hash, JINDO_PARAMETER_MANIFEST_V1);
+        digest_matrix(&mut hash, INNER_MATRIX_LABEL_V1, &key.inner);
+        digest_matrix(&mut hash, MLWE_MATRIX_LABEL_V1, &key.mlwe);
+        digest_matrix(&mut hash, OUTER_MATRIX_LABEL_V1, &key.outer);
+        hash.finalize().into()
+    })
+}
+
+fn digest_matrix(hash: &mut Sha256, label: &[u8], matrix: &[Vec<JindoRnsPolynomialV1>]) {
+    digest_field(hash, label);
+    Digest::update(
+        hash,
+        u64::try_from(matrix.len())
+            .expect("fixed Jindo matrix row count fits u64")
+            .to_le_bytes(),
+    );
+    Digest::update(
+        hash,
+        u64::try_from(matrix.first().map_or(0, Vec::len))
+            .expect("fixed Jindo matrix column count fits u64")
+            .to_le_bytes(),
+    );
+    for polynomial in matrix.iter().flatten() {
+        for residue in polynomial.residues().iter().flatten() {
+            Digest::update(hash, residue.to_le_bytes());
+        }
+    }
+}
+
+fn digest_field(hash: &mut Sha256, value: &[u8]) {
+    Digest::update(
+        hash,
+        u64::try_from(value.len())
+            .expect("fixed Jindo digest field length fits u64")
+            .to_le_bytes(),
+    );
+    Digest::update(hash, value);
 }
 
 fn matrix(
@@ -160,39 +208,46 @@ mod tests {
         assert_eq!(
             &key.inner[0][0].residues()[0][..4],
             &[
-                3_862_051_738_244_720,
-                5_321_306_480_899_619,
-                5_541_784_871_683_320,
-                224_906_574_373_555,
+                1_656_286_019_833_764,
+                4_486_025_086_061_423,
+                6_814_835_603_980_997,
+                1_821_317_666_329_292,
             ]
         );
         assert_eq!(
             &key.inner[0][0].residues()[1][..4],
             &[
-                7_023_830_855_416_107,
-                3_370_406_265_254_300,
-                5_062_519_883_560_651,
-                5_805_905_058_714_077,
+                5_973_323_088_166_780,
+                5_058_573_361_112_276,
+                3_825_338_305_017_188,
+                2_071_958_967_845_032,
             ]
         );
         assert_eq!(
             &key.mlwe[0][0].residues()[0][..4],
             &[
-                8_986_845_384_690_251,
-                8_469_688_292_813_836,
-                2_016_649_566_139_119,
-                2_057_875_793_794_830,
+                2_394_974_766_279_949,
+                7_818_408_958_877_438,
+                730_294_517_836_175,
+                4_902_874_127_411_198,
             ]
         );
         assert_eq!(
             &key.outer[0][0].residues()[0][..4],
             &[
-                49_910_582_761_703,
-                27_986_712_440_174,
-                38_220_646_799_511,
-                136_787_570_400_795,
+                33_145_190_560_289,
+                35_138_507_136_595,
+                40_467_859_243_040,
+                90_750_014_707_343,
             ]
         );
+    }
+
+    #[test]
+    fn transparent_crs_digest_is_nonzero_and_cached() {
+        let first = crs_digest_v1();
+        assert_ne!(first, [0; 32]);
+        assert_eq!(first, crs_digest_v1());
     }
 
     #[test]

@@ -6,12 +6,16 @@ use std::{num::NonZeroU64, str::FromStr as _};
 
 use eyre::{Result, eyre};
 use integration_tests::sandbox;
-use iroha::crypto::{Algorithm, Hash, KeyPair};
+use iroha::crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha::data_model::prelude::*;
 use iroha::data_model::{
-    block::consensus_v2::SumeragiV2GenesisContextParameters,
+    block::{
+        consensus::{SumeragiCommittedLaneBlock, committed_lane_block_status_counts_as_progress},
+        consensus_v2::SumeragiV2GenesisContextParameters,
+    },
     parameter::system::{ConsensusHandshakeMetadata, SumeragiConsensusMode, consensus_metadata},
 };
+use iroha_core::sumeragi::network_topology::commit_quorum_from_len;
 use iroha_executor_data_model::permission::{
     account::{AccountAliasPermissionScope, CanManageAccountAlias},
     governance::CanEnactGovernance,
@@ -185,6 +189,14 @@ fn typed_query_page_parts(
     result: &norito::json::Value,
     view_name: &str,
 ) -> Result<(Vec<String>, Option<i64>)> {
+    let result = result
+        .as_object()
+        .ok_or_else(|| eyre!("typed {view_name} page is not an object: {result:?}"))?;
+    if result.len() != 2 || !result.contains_key("items") || !result.contains_key("next_offset") {
+        return Err(eyre!(
+            "typed {view_name} page must contain exactly items and next_offset: {result:?}"
+        ));
+    }
     let items = result
         .get("items")
         .and_then(norito::json::Value::as_array)
@@ -290,6 +302,7 @@ fn typed_query_page_parts_require_canonical_active_only_option_int() {
         r#"{"items":[],"next_offset":{"none":false}}"#,
         r#"{"items":[],"next_offset":{"some":"3","none":true}}"#,
         r#"{"items":[],"next_offset":{"unknown":true}}"#,
+        r#"{"items":[],"next_offset":{"none":true},"cursor":null}"#,
         r#"{"items":[{"id":"item"}],"next_offset":{"some":"-3"}}"#,
         r#"{"items":[],"next_offset":{"some":"3"}}"#,
         r#"{"items":[{"id":"a"},{"id":"b"}],"next_offset":{"some":"1"}}"#,
@@ -387,9 +400,13 @@ fn signed_consensus_handshake(
 async fn wait_for_cross_peer_rbc_diagnostics(
     network: &sandbox::SerializedNetwork,
     timeout: Duration,
-) -> Result<()> {
+    after: Option<&SumeragiCommittedLaneBlock>,
+    required_transaction: Option<(u64, &Hash)>,
+) -> Result<SumeragiCommittedLaneBlock> {
     let expected_validator_count = u32::try_from(network.peers().len())
         .map_err(|_| eyre!("peer count does not fit in u32"))?;
+    let expected_min_quorum = u32::try_from(commit_quorum_from_len(network.peers().len()).max(1))
+        .map_err(|_| eyre!("commit quorum does not fit in u32"))?;
     let zero_hash = Hash::prehashed([0; Hash::LENGTH]);
     let deadline = Instant::now() + timeout;
 
@@ -407,14 +424,52 @@ async fn wait_for_cross_peer_rbc_diagnostics(
         for task in tasks {
             match task.await {
                 Ok(Ok(diagnostics)) if diagnostics.npos.is_some() => {
+                    let ownerships = diagnostics.lane_payload_ownerships;
                     let evidence = diagnostics
                         .committed_lane_blocks
                         .into_iter()
                         .filter(|record| {
-                            record.validator_count == expected_validator_count
-                                && record.min_quorum > 0
+                            after.is_none_or(|baseline| {
+                                record.lane_id == baseline.lane_id
+                                    && record.dataspace_id == baseline.dataspace_id
+                                    && record.lane_incarnation == baseline.lane_incarnation
+                                    && (record.lane_block_height, record.lane_block_view)
+                                        > (baseline.lane_block_height, baseline.lane_block_view)
+                            }) && required_transaction.is_none_or(
+                                |(proposal_height, transaction_hash)| {
+                                    ownerships.iter().any(|ownership| {
+                                        ownership.proposal_height == proposal_height
+                                            && ownership
+                                                .accepted_transaction_hashes
+                                                .contains(transaction_hash)
+                                            && ownership.validate_replay_material().is_ok()
+                                            && ownership.lane_id == record.lane_id
+                                            && ownership.dataspace_id == record.dataspace_id
+                                            && ownership.lane_incarnation == record.lane_incarnation
+                                            && ownership.lane_block_height
+                                                == record.lane_block_height
+                                            && ownership.lane_block_view == record.lane_block_view
+                                            && ownership.lane_block_descriptor_hash
+                                                == Some(record.descriptor_hash)
+                                            && ownership.subject_hash == record.subject_hash
+                                            && ownership.payload_ownership_hash
+                                                == record.payload_ownership_hash
+                                            && ownership.rbc_instance_hash
+                                                == record.rbc_instance_hash
+                                            && ownership.qc_mode_tag == record.qc_mode_tag
+                                    })
+                                },
+                            ) && record.executable_payload_available
+                                && committed_lane_block_status_counts_as_progress(
+                                    &record.execution_status,
+                                    record.executable_payload_available,
+                                )
+                                && record.validator_count == expected_validator_count
+                                && record.min_quorum == expected_min_quorum
                                 && record.prepare_qc_signer_count >= record.min_quorum
+                                && record.prepare_qc_signer_count <= record.validator_count
                                 && record.commit_qc_signer_count >= record.min_quorum
+                                && record.commit_qc_signer_count <= record.validator_count
                                 && record.descriptor_hash != zero_hash
                                 && record.proposal_hash != zero_hash
                                 && record.subject_hash != zero_hash
@@ -444,7 +499,7 @@ async fn wait_for_cross_peer_rbc_diagnostics(
                 .iter()
                 .all(|observation| observation.as_ref() == Some(first))
         {
-            return Ok(());
+            return Ok(first.clone());
         }
         let last_observed = format!("evidence={observations:?}; errors={errors:?}");
         if Instant::now() >= deadline {
@@ -618,6 +673,7 @@ pub(super) fn deploy_contract_locally_signed(
     iroha_data_model::smart_contract::ContractAddress,
     String,
     String,
+    HashOf<iroha_data_model::transaction::SignedTransaction>,
 )> {
     use iroha_data_model::isi::smart_contract_code::{
         CommitContractDeployment, FinalizeSmartContractCodeUpload, RegisterSmartContractCode,
@@ -689,7 +745,7 @@ pub(super) fn deploy_contract_locally_signed(
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         metadata.clone(),
     )?;
-    client.submit_blocking_with_metadata(
+    let deployment_tx_hash = client.submit_blocking_with_metadata(
         CommitContractDeployment {
             expected_deploy_nonce: deploy_nonce,
             contract_address: contract_address.clone(),
@@ -706,6 +762,7 @@ pub(super) fn deploy_contract_locally_signed(
         contract_address,
         hex::encode(verified.code_hash.as_ref()),
         hex::encode(verified.abi_hash.as_ref()),
+        deployment_tx_hash,
     ))
 }
 
@@ -715,22 +772,33 @@ async fn deploy_contract_artifact(
     artifact: &[u8],
     alias_name: &str,
     stage: &str,
-) -> Result<iroha_data_model::smart_contract::ContractAddress> {
+) -> Result<(iroha_data_model::smart_contract::ContractAddress, Hash, u64)> {
     let contract_alias = iroha_data_model::smart_contract::ContractAlias::from_components(
         alias_name,
         None,
         "universal",
     )
     .map_err(|error| eyre!("{stage}: invalid contract alias: {error}"))?;
-    let (contract_address, _, _) = tokio::task::spawn_blocking({
+    let (contract_address, _, _, deployment_tx_hash) = tokio::task::spawn_blocking({
         let client = client.clone();
         let artifact = artifact.to_vec();
         move || deploy_contract_locally_signed(&client, &artifact, contract_alias)
     })
     .await
     .expect("deploy contract task")?;
-    let _ = (http, stage);
-    Ok(contract_address)
+    let deployment_block_height = wait_for_tx_applied(
+        http,
+        &client.torii_url,
+        &hex::encode(deployment_tx_hash.as_ref()),
+        Duration::from_secs(60),
+        stage,
+    )
+    .await?;
+    Ok((
+        contract_address,
+        Hash::from(deployment_tx_hash),
+        deployment_block_height,
+    ))
 }
 
 async fn contract_state_json_value(
@@ -810,7 +878,7 @@ async fn deploy_and_get_contract_manifest_via_torii() -> Result<()> {
         "universal",
     )
     .expect("contract alias");
-    let (_, code_hash_hex, _) = tokio::task::spawn_blocking({
+    let (_, code_hash_hex, _, _) = tokio::task::spawn_blocking({
         let client = client.clone();
         move || deploy_contract_locally_signed(&client, &code_bytes, contract_alias)
     })
@@ -968,7 +1036,7 @@ async fn dynamic_and_helper_hidden_contract_writes_serialize_on_four_peers() -> 
     let bob_client = network.peers()[1].client();
     let http = integration_tests::http::client();
     let artifact = dynamic_access_counter_artifact();
-    let contract_address = deploy_contract_artifact(
+    let (contract_address, _, deploy_height) = deploy_contract_artifact(
         &alice_client,
         &http,
         &artifact,
@@ -977,7 +1045,6 @@ async fn dynamic_and_helper_hidden_contract_writes_serialize_on_four_peers() -> 
     )
     .await?;
 
-    let deploy_height = alice_client.get_status()?.blocks;
     network.ensure_blocks(deploy_height).await?;
 
     let alice_submission = tokio::task::spawn_blocking({
@@ -1165,9 +1232,11 @@ async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<
     );
 
     network.ensure_blocks(1).await?;
+    let rbc_baseline =
+        wait_for_cross_peer_rbc_diagnostics(&network, Duration::from_secs(120), None, None).await?;
     let deploy_client = network.peers()[0].client();
     let http = integration_tests::http::client();
-    let contract_address = deploy_contract_artifact(
+    let (contract_address, deployment_tx_hash, deploy_height) = deploy_contract_artifact(
         &deploy_client,
         &http,
         &typed_core_query_pager_artifact(),
@@ -1175,9 +1244,14 @@ async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<
         "deploy typed core-query pager",
     )
     .await?;
-    let deploy_height = deploy_client.get_status()?.blocks;
     network.ensure_blocks(deploy_height).await?;
-    wait_for_cross_peer_rbc_diagnostics(&network, Duration::from_secs(120)).await?;
+    wait_for_cross_peer_rbc_diagnostics(
+        &network,
+        Duration::from_secs(120),
+        Some(&rbc_baseline),
+        Some((deploy_height, &deployment_tx_hash)),
+    )
+    .await?;
 
     let (account_ids, asset_ids, asset_definition_ids, domain_ids, nft_ids) =
         tokio::task::spawn_blocking({
@@ -1433,7 +1507,7 @@ async fn contract_state_survives_across_calls_in_sora_profile_network() -> Resul
         "universal",
     )
     .expect("contract alias");
-    let (_, code_hash_hex, _) = tokio::task::spawn_blocking({
+    let (_, code_hash_hex, _, _) = tokio::task::spawn_blocking({
         let client = client.clone();
         move || deploy_contract_locally_signed(&client, &code_bytes, contract_alias)
     })

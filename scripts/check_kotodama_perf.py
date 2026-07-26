@@ -73,6 +73,20 @@ BENCHMARK_SOURCES = (
     / "benches"
     / "queries.rs",
 )
+TYPED_QUERY_BENCHMARK_MARKER = "c.bench_function(family.benchmark_name, |b| {"
+TYPED_QUERY_TIMED_BODY_MARKER = "|mut vm| {"
+TYPED_QUERY_TIMED_BODY_END = "BatchSize::SmallInput,"
+TYPED_QUERY_TIMED_CONTRACT_MARKERS = (
+    ".syscall(ivm::syscalls::SYSCALL_CORE_QUERY_PAGE, &mut vm)",
+    "ivm::list::read_words(&vm, vm.register(10), page_layout)",
+    "items.len(), QUERY_PAGE_CAPACITY_V1",
+    ".core_query_page_metrics()",
+    "metrics.host_queries, 1",
+    "metrics.projection_decodes, 1",
+    "metrics.leaf_tlv_bytes > 0",
+    "metrics.projection_payload_bytes < raw_query_response_bytes",
+    "std::hint::black_box((gas, items, vm.register(11), metrics));",
+)
 PROTECTED_BENCHMARK_PATTERN = re.compile(
     r'"(kotodama_(?:(?:decimal|runtime_phase)_[a-z0-9_]+|phase_interface_summary))"'
 )
@@ -161,6 +175,36 @@ def _require_identity_counts(
         )
 
 
+def _typed_query_timed_body(sources: Sequence[Path], revision: str) -> str:
+    """Extract and validate the comparable typed-query Criterion workload."""
+
+    text = _read_sources(sources, revision)
+    if text.count(TYPED_QUERY_BENCHMARK_MARKER) != 1:
+        raise GateError(
+            f"{revision} typed-query family benchmark must be declared exactly once"
+        )
+    benchmark_start = text.index(TYPED_QUERY_BENCHMARK_MARKER)
+    body_end = text.find(TYPED_QUERY_TIMED_BODY_END, benchmark_start)
+    if body_end < 0:
+        raise GateError(f"{revision} typed-query timed body end is missing")
+    body_start = text.find(
+        TYPED_QUERY_TIMED_BODY_MARKER, benchmark_start, body_end
+    )
+    if body_start < 0:
+        raise GateError(f"{revision} typed-query timed body is missing")
+    body = " ".join(text[body_start:body_end].split())
+    cursor = 0
+    for marker in TYPED_QUERY_TIMED_CONTRACT_MARKERS:
+        offset = body.find(marker, cursor)
+        if offset < 0:
+            raise GateError(
+                f"{revision} typed-query timed contract is missing or reordered: "
+                f"{marker}"
+            )
+        cursor = offset + len(marker)
+    return body
+
+
 def validate_benchmark_policy(sources: Sequence[Path] = BENCHMARK_SOURCES) -> None:
     """Reject duplicate, incomplete, stale, or misclassified benchmark coverage."""
 
@@ -212,6 +256,7 @@ def validate_benchmark_policy(sources: Sequence[Path] = BENCHMARK_SOURCES) -> No
         raise GateError(
             "candidate-only benchmark coverage drift (" + "; ".join(details) + ")"
         )
+    _typed_query_timed_body(sources, "candidate")
 
 
 def validate_revision_inventories(
@@ -237,6 +282,16 @@ def validate_revision_inventories(
             "candidate-only benchmarks are present in the base revision and "
             "must be reclassified: "
             + ", ".join(invented)
+        )
+    base_timed_body = _typed_query_timed_body(base_sources, "base")
+    candidate_timed_body = _typed_query_timed_body(
+        candidate_sources, "candidate"
+    )
+    if candidate_timed_body != base_timed_body:
+        raise GateError(
+            "comparable typed-query timed body drift; preserve the exact "
+            "predecessor workload or rename and reclassify all five typed "
+            "query benchmark identities"
         )
 
 

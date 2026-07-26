@@ -6,11 +6,7 @@
 //! consensus code: its selected output is pinned here and covered by the engine
 //! manifest and known-answer tests.
 
-use super::{
-    JINDO_ENCODING_EXPONENT_V1, JINDO_ENCODING_SLOTS_V1, JINDO_MAX_COEFFICIENTS_V1,
-    JINDO_RING_DEGREE_V1,
-    ring::{JINDO_INNER_MODULI_V1, JINDO_OUTER_MODULI_V1},
-};
+use super::JINDO_MAX_BATCH_SIZE_V1;
 
 /// Exact compiled Jindo parameter tuple.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -36,13 +32,13 @@ pub(crate) struct JindoParametersV1 {
     pub(crate) response_two_norm_bound: u128,
     /// Strict two-norm ceiling for the outer decomposed commitment relation.
     pub(crate) decomposed_commitment_two_norm_bound: u128,
-    /// Absolute coefficient bound of every Fiat--Shamir challenge polynomial.
+    /// Maximum absolute coefficient in a Fiat--Shamir challenge polynomial.
     pub(crate) challenge_coefficient_bound: u16,
 }
 
 /// The only native Jindo parameter profile compiled for the first release.
 pub(crate) const JINDO_PARAMETERS_V1: JindoParametersV1 = JindoParametersV1 {
-    max_batch_size: 4,
+    max_batch_size: JINDO_MAX_BATCH_SIZE_V1,
     rows: 17,
     columns: 1,
     inner_msis_rank: 15,
@@ -50,19 +46,25 @@ pub(crate) const JINDO_PARAMETERS_V1: JindoParametersV1 = JindoParametersV1 {
     mlwe_rank: 32,
     log_inner_cutoff: 40,
     log_outer_cutoff: 65,
-    // Conservative integer ceilings around the paper's selected bounds:
-    // 6.118692882274416e19 and 5.482137275941817e24 respectively.
-    response_two_norm_bound: 1_u128 << 66,
-    decomposed_commitment_two_norm_bound: 1_u128 << 83,
-    // floor(min(60272, 2^(120/16)) / 2) = floor(2^7.5 / 2).
-    challenge_coefficient_bound: 90,
+    // Exact integers represented by the selected binary64 parameter output.
+    response_two_norm_bound: 61_186_928_822_744_162_304,
+    decomposed_commitment_two_norm_bound: 5_482_137_275_941_817_004_589_056,
+    // The first mixed-radix coefficient reaches 91; the other fifteen reach
+    // 90. Their maximum squared two-norm is 129_781 < 131_072, the bound used
+    // by the published parameter search.
+    challenge_coefficient_bound: 91,
 };
 
 /// Domain-separated, reviewable parameter manifest input.
-pub(crate) const JINDO_PARAMETER_MANIFEST_V1: &[u8] = b"iroha-jindo-v0|paper=eprint-2026-044-figures-1-5|coefficient-field=p=60272^16+1,le32|ring=Zq[X]/(X^256+1)|degree-bound=256|max-batch=4|rows=17|columns=1|inner-msis-rank=15|outer-msis-rank=13|mlwe-rank=32|inner-primes=9007199254740481,9007199254746113|outer-primes=140737488357377,140737488360961|inner-cutoff=2^40|outer-cutoff=2^65|response-two-norm-lt=2^66|decomposed-two-norm-lt=2^83|challenge-coefficients=[-90,90]|crs=shake256-domain-separated|wire=canonical-norito-strict-v1|assurance=experimental";
+pub const JINDO_PARAMETER_MANIFEST_V1: &[u8] = b"iroha-jindo-v0|paper=eprint-2026-044-v1-figures-1-5|coefficient-field=p=60272^16+1,le32|ring=Zq[X]/(X^256+1)|degree-bound=256|max-batch=4|rows=17|columns=1|inner-msis-rank=15|outer-msis-rank=13|mlwe-rank=32|inner-primes=9007199254740481,9007199254746113|outer-primes=140737488357377,140737488360961|inner-cutoff=2^40|outer-cutoff=2^65|response-two-norm-lt=61186928822744162304|decomposed-two-norm-lt=5482137275941817004589056|challenge=mixed-radix-120-bit-injective,c0=[-91,91],c1..15=[-90,90],two-norm-squared-lt=131072|crs=shake256-domain-separated|wire=IJP1-fixed-rns-le-v1|assurance=experimental-testnet-only";
 
 #[cfg(test)]
 mod tests {
+    use super::super::{
+        JINDO_ENCODING_EXPONENT_V1, JINDO_ENCODING_SLOTS_V1, JINDO_MAX_COEFFICIENTS_V1,
+        JINDO_RING_DEGREE_V1,
+        ring::{JINDO_INNER_MODULI_V1, JINDO_OUTER_MODULI_V1},
+    };
     use super::*;
 
     #[test]
@@ -91,7 +93,7 @@ mod tests {
     #[test]
     fn all_profile_counts_and_bounds_are_nonzero_and_bounded() {
         let profile = JINDO_PARAMETERS_V1;
-        assert!((1..=4).contains(&profile.max_batch_size));
+        assert_eq!(profile.max_batch_size, JINDO_MAX_BATCH_SIZE_V1);
         assert_eq!(profile.inner_msis_rank * (profile.columns + 1), 30);
         assert!(profile.outer_msis_rank > 0);
         assert!(profile.mlwe_rank > profile.inner_msis_rank);
@@ -100,6 +102,7 @@ mod tests {
         assert!(profile.challenge_coefficient_bound > 0);
         assert!(profile.response_two_norm_bound > 0);
         assert!(profile.decomposed_commitment_two_norm_bound > 0);
+        assert_eq!(profile.challenge_coefficient_bound, 91);
         assert!(JINDO_PARAMETER_MANIFEST_V1.starts_with(b"iroha-jindo-v0|"));
     }
 }

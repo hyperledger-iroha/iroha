@@ -58,6 +58,9 @@ pub const RANDOMNESS_NORM_SQUARED_BOUND_V1: u64 = 11_881;
 pub const SIGNATURE_NORM_SQUARED_BOUND_V1: u64 = 34_034_726;
 /// Response squared-norm bound.
 pub const RESPONSE_NORM_SQUARED_BOUND_V1: u64 = 143_158_532_224_272_924;
+/// `z1` squared-norm bound computed as
+/// `floor(2 * 50 * 64 * 962 * 2^(2*23) / 400)`.
+pub const Z1_NORM_SQUARED_BOUND_V1: u64 = 1_083_115_710_382_604_288;
 /// `z3` squared-norm bound.
 pub const Z3_NORM_SQUARED_BOUND_V1: u64 = 113_676_554_463_109;
 /// `z4` infinity-norm bound.

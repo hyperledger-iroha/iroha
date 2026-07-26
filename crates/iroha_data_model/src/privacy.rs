@@ -29,6 +29,8 @@ pub const PRIVACY_PGC_ACCOUNT_STATE_ROOT_DOMAIN_V1: &[u8] =
 /// Domain separator for canonical Bootle/Lantern issuer-policy record digests.
 pub const BOOTLE_LANTERN_ISSUER_POLICY_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha:privacy:bootle-lantern:issuer-policy:v1";
+/// Domain separator for canonical ZK-AMS Personhood Credential hashes.
+pub const ZK_AMS_PHC_HASH_DOMAIN_V1: &[u8] = b"iroha:privacy:zk-ams:phc:v1";
 
 /// Maximum privacy actions admitted in one Taira transaction.
 pub const TAIRA_PRIVACY_MAX_ACTIONS_PER_TRANSACTION_V1: u32 = 1;
@@ -93,7 +95,7 @@ pub enum PrivacyProtocolIdV1 {
     /// Native Iroha P-256 X.509 predicate STARK protocol v0.
     #[cfg_attr(feature = "json", norito(rename = "iroha-zk-x509-stark-p256-v0"))]
     IrohaZkX509StarkP256V0,
-    /// Native Iroha Jindo multilinear lattice polynomial-commitment protocol v0.
+    /// Native Iroha Jindo batched univariate lattice polynomial-commitment protocol v0.
     #[cfg_attr(
         feature = "json",
         norito(rename = "iroha-jindo-polynomial-commitment-v0")
@@ -196,7 +198,7 @@ impl PrivacyProtocolIdV1 {
                 PrivacyProofSystemIdV1::LanternLnp22ModuleLinearNorm
             }
             Self::IrohaZkAmsV1 => {
-                PrivacyProofSystemIdV1::ZkAmsTransparentStarkPoseidon2GoldilocksMlsagsRistretto255Sha3_512
+                PrivacyProofSystemIdV1::ZkAmsMaskedRelaxedSpartanT256Ristretto255Sha3_512
             }
             Self::AnonymousPgcKOutOfNV1 => PrivacyProofSystemIdV1::AnonymousPgcP256,
             Self::VeRangeTransparentRangeV1 => PrivacyProofSystemIdV1::IrohaVeRangeP256,
@@ -220,7 +222,9 @@ impl PrivacyProtocolIdV1 {
             | Self::IrohaIvmPrivateNoteStarkV1
             | Self::PqMaspStarkV0 => PrivacyEngineIdV1::NativeGoldilocksStarkFri,
             Self::IrohaBootleLanternAnoncredV1 => PrivacyEngineIdV1::NativeLanternLnp22,
-            Self::IrohaZkAmsV1 => PrivacyEngineIdV1::NativeZkAmsTransparentStarkMlsagsRistretto255,
+            Self::IrohaZkAmsV1 => {
+                PrivacyEngineIdV1::NativeZkAmsMaskedRelaxedSpartanT256Ristretto255
+            }
             Self::AnonymousPgcKOutOfNV1 => PrivacyEngineIdV1::NativeAnonymousPgcP256,
             Self::VeRangeTransparentRangeV1 => PrivacyEngineIdV1::NativeVeRangeP256,
             Self::VegaExistingCredentialZkV0 => PrivacyEngineIdV1::NativeVega,
@@ -251,7 +255,7 @@ pub enum PrivacyProofSystemIdV1 {
     /// STARK/FRI over Goldilocks with Poseidon2 transcript and commitments.
     #[cfg_attr(feature = "json", norito(rename = "stark-fri-poseidon2-goldilocks"))]
     StarkFriPoseidon2Goldilocks,
-    /// ZK-AMS transparent STARK batch admission plus Ristretto255 MLSAGS provisioning.
+    /// ZK-AMS masked relaxed-R1CS admission plus Ristretto255 possession and LSAG.
     ///
     /// Batch admission uses Poseidon2/Goldilocks commitment digests and a
     /// transparent STARK/FRI proof. Account provisioning uses MLSAGS over
@@ -259,10 +263,10 @@ pub enum PrivacyProofSystemIdV1 {
     #[cfg_attr(
         feature = "json",
         norito(
-            rename = "zk-ams-transparent-stark-poseidon2-goldilocks-mlsags-ristretto255-sha3-512"
+            rename = "zk-ams-masked-relaxed-spartan-t256-ristretto255-sha3-512"
         )
     )]
-    ZkAmsTransparentStarkPoseidon2GoldilocksMlsagsRistretto255Sha3_512,
+    ZkAmsMaskedRelaxedSpartanT256Ristretto255Sha3_512,
     /// Anonymous PGC k-out-of-n proof system over P-256.
     #[cfg_attr(feature = "json", norito(rename = "anonymous-pgc-p256"))]
     AnonymousPgcP256,
@@ -277,7 +281,7 @@ pub enum PrivacyProofSystemIdV1 {
         norito(rename = "vega-neutron-nova-spartan-hyrax-t256")
     )]
     VegaNeutronNovaSpartanHyraxT256,
-    /// Jindo multilinear lattice polynomial-commitment proof system.
+    /// Jindo batched univariate lattice polynomial-commitment proof system.
     #[cfg_attr(feature = "json", norito(rename = "jindo-polynomial-commitment"))]
     JindoPolynomialCommitment,
     /// Halo2 IPA proof system over the Pasta curve cycle.
@@ -311,12 +315,12 @@ pub enum PrivacyEngineIdV1 {
     /// Native Goldilocks STARK/FRI verifier.
     #[cfg_attr(feature = "json", norito(rename = "native-goldilocks-stark-fri"))]
     NativeGoldilocksStarkFri,
-    /// Native ZK-AMS transparent-STARK and Ristretto255-MLSAGS verifier suite.
+    /// Native ZK-AMS masked relaxed-R1CS and Ristretto255 verifier suite.
     #[cfg_attr(
         feature = "json",
-        norito(rename = "native-zk-ams-transparent-stark-mlsags-ristretto255")
+        norito(rename = "native-zk-ams-masked-relaxed-spartan-t256-ristretto255")
     )]
-    NativeZkAmsTransparentStarkMlsagsRistretto255,
+    NativeZkAmsMaskedRelaxedSpartanT256Ristretto255,
     /// Native Anonymous PGC verifier over P-256.
     #[cfg_attr(feature = "json", norito(rename = "native-anonymous-pgc-p256"))]
     NativeAnonymousPgcP256,
@@ -535,16 +539,20 @@ define_privacy_digest!(
     PrivacyZkAmsPhcHashV1
 );
 define_privacy_digest!(
-    /// Poseidon2/Goldilocks digest of source object `I_acc,N`.
-    PrivacyZkAmsAccumulatedInstanceDigestV1
+    /// Hidden subject commitment carried by a canonical ZK-AMS credential.
+    PrivacyZkAmsSubjectCommitmentV1
 );
 define_privacy_digest!(
-    /// Poseidon2/Goldilocks digest of source object `Tbar_(N+1)`.
-    PrivacyZkAmsPaddingCrossTermDigestV1
+    /// Issuer-selected nonce making one canonical ZK-AMS credential unique.
+    PrivacyZkAmsCredentialNonceV1
 );
 define_privacy_digest!(
-    /// Poseidon2/Goldilocks digest of source object `I_acc,N+1`.
-    PrivacyZkAmsFinalFoldedInstanceDigestV1
+    /// Digest of an authoritative ZK-AMS issuer-policy record.
+    PrivacyZkAmsIssuerPolicyRecordDigestV1
+);
+define_privacy_digest!(
+    /// Digest of an authoritative ZK-AMS registry snapshot record.
+    PrivacyZkAmsRegistryRecordDigestV1
 );
 
 macro_rules! define_ristretto255_encoding {
@@ -3856,8 +3864,17 @@ pub const IROHA_JINDO_COMMITMENT_COEFFICIENT_BYTES_V1: usize = 4;
 pub const IROHA_JINDO_LATTICE_COMMITMENT_BYTES_V1: usize = IROHA_JINDO_OUTER_COMMITMENT_RANK_V1
     * IROHA_JINDO_RING_DEGREE_V1
     * IROHA_JINDO_COMMITMENT_COEFFICIENT_BYTES_V1;
-/// Maximum absolute rounded outer-commitment coefficient.
-pub const IROHA_JINDO_MAX_ROUNDED_COMMITMENT_COEFFICIENT_V1: i64 = 1 << 28;
+/// Minimum canonical rounded outer-commitment coefficient.
+///
+/// This is the arithmetic-floor quotient of the smallest balanced residue
+/// modulo the fixed 95-bit outer modulus by `2^65`.
+pub const IROHA_JINDO_MIN_ROUNDED_COMMITMENT_COEFFICIENT_V1: i32 = -268_435_457;
+/// Maximum canonical rounded outer-commitment coefficient.
+///
+/// The one-value asymmetry relative to the minimum is required by the odd
+/// outer modulus and arithmetic-floor rounding; accepting a wider symmetric
+/// interval would admit encodings the commitment algorithm cannot produce.
+pub const IROHA_JINDO_MAX_ROUNDED_COMMITMENT_COEFFICIENT_V1: i32 = 268_435_456;
 /// Exact direct 64-bit attribute count in the Bootle/Lantern credential profile.
 pub const BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1: usize = 8;
 /// Exact byte width of one direct Bootle/Lantern attribute.
@@ -4117,6 +4134,56 @@ pub struct VeRangeTransparentRangeStatementV1 {
     pub aggregation_count: u32,
 }
 
+/// Exact wire version of [`PrivacyZkAmsPersonhoodCredentialV1`].
+pub const ZK_AMS_PHC_VERSION_V1: u8 = 1;
+
+/// Fixed typed Personhood Credential admitted by the Iroha ZK-AMS profile.
+///
+/// The issuer authenticates the domain-separated SHA-256 digest of the exact
+/// canonical Norito encoding. The holder proves possession of the Ristretto
+/// seed secret over the same digest in the composed admission proof. No
+/// variable-length or free-form field is admitted by this first-release type.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct PrivacyZkAmsPersonhoodCredentialV1 {
+    /// Closed credential wire version; must equal one.
+    pub version: u8,
+    /// Governed issuer that authenticated the credential.
+    pub issuer_id: PrivacyIssuerIdV1,
+    /// Governed policy under which the credential was issued.
+    pub policy_id: PrivacyPolicyIdV1,
+    /// Hidden commitment to the issuer-validated personhood subject.
+    pub subject_commitment: PrivacyZkAmsSubjectCommitmentV1,
+    /// Ristretto seed key later used for anonymous provisioning.
+    pub seed_public_key: PrivacyZkAmsSeedPublicKeyV1,
+    /// Issuer-selected uniqueness nonce.
+    pub credential_nonce: PrivacyZkAmsCredentialNonceV1,
+}
+
+impl PrivacyZkAmsPersonhoodCredentialV1 {
+    /// Hash the exact typed Norito credential with domain and length framing.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Norito error if canonical credential encoding unexpectedly
+    /// fails.
+    pub fn digest(&self) -> Result<PrivacyZkAmsPhcHashV1, norito::Error> {
+        let encoded = norito::to_bytes(self)?;
+        let mut hasher = Sha256::new();
+        hasher.update(ZK_AMS_PHC_HASH_DOMAIN_V1);
+        hasher.update(
+            u64::try_from(encoded.len())
+                .expect("Norito output length fits u64 on supported targets")
+                .to_le_bytes(),
+        );
+        hasher.update(encoded);
+        Ok(PrivacyZkAmsPhcHashV1::new(hasher.finalize().into()))
+    }
+}
+
 /// One ordered public admission anchor from ZK-AMS batch input `X`.
 ///
 /// The order of these pairs is part of the Fiat-Shamir transcript certified
@@ -4134,13 +4201,13 @@ pub struct PrivacyZkAmsAdmissionAnchorV1 {
     pub seed_public_key: PrivacyZkAmsSeedPublicKeyV1,
 }
 
-/// Transparent Iroha instantiation of ZK-AMS batch settlement.
+/// Setup-free Iroha instantiation of ZK-AMS batch settlement.
 ///
-/// The source relation exposes the complete committed relaxed-R1CS objects
-/// `I_acc,N`, `Tbar_(N+1)`, and `I_acc,N+1`. The Iroha transparent-STARK
-/// profile carries distinct Poseidon2/Goldilocks digests here; the STARK
-/// witness contains the full canonical objects and proves each digest preimage,
-/// the folding and public-padding equations, and the admission relation.
+/// The native proof recursively folds one fixed credential relation for every
+/// ordered anchor and proves the final relaxed instance with a freshly masked
+/// Relaxed Spartan proof. Intermediate accumulator and cross-term commitments
+/// are already canonical proof sections; duplicating caller-selected digests
+/// in the public statement would be circular and is deliberately forbidden.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -4157,12 +4224,6 @@ pub struct PrivacyZkAmsBatchAdmissionV1 {
     pub next_account_registry_root_epoch: u64,
     /// Ordered `{hash_PHC, pk_seed}` batch input `X`.
     pub anchors: Vec<PrivacyZkAmsAdmissionAnchorV1>,
-    /// Digest of materialized accumulated instance `I_acc,N`.
-    pub accumulated_instance_digest: PrivacyZkAmsAccumulatedInstanceDigestV1,
-    /// Digest of final public padding cross-term `Tbar_(N+1)`.
-    pub padding_cross_term_digest: PrivacyZkAmsPaddingCrossTermDigestV1,
-    /// Digest of final folded instance `I_acc,N+1`.
-    pub final_folded_instance_digest: PrivacyZkAmsFinalFoldedInstanceDigestV1,
 }
 
 /// ZK-AMS Phase-V anonymous account-provisioning public input.
@@ -4214,10 +4275,21 @@ pub struct IrohaZkAmsStatementV1 {
     pub context: PrivacyStatementContextV1,
     /// Credential issuer governing the common admission relation.
     pub issuer_id: PrivacyIssuerIdV1,
+    /// Canonical compressed P-256 issuer key copied from authoritative state.
+    ///
+    /// Consensus must match this value to `issuer_policy_record_digest`; it is
+    /// a transcript input, not a caller-selected trust anchor.
+    pub issuer_public_key: PrivacyP256PointV1,
+    /// Digest of the authoritative issuer/policy/key record.
+    pub issuer_policy_record_digest: PrivacyZkAmsIssuerPolicyRecordDigestV1,
     /// Admitted-identity and provisioning registry.
     pub registry_id: PrivacyZkAmsRegistryIdV1,
+    /// Digest of the authoritative registry snapshot referenced by the action.
+    pub registry_record_digest: PrivacyZkAmsRegistryRecordDigestV1,
     /// Admission policy identifier.
     pub policy_id: PrivacyPolicyIdV1,
+    /// Digest of the exact governed admission policy.
+    pub policy_digest: PrivacyPolicyDigestV1,
     /// Exact batch-settlement or account-provisioning action.
     pub action: PrivacyZkAmsActionV1,
 }
@@ -5228,7 +5300,7 @@ pub enum PrivacyStatementV1 {
     VegaExistingCredentialZkV0(VegaExistingCredentialStatementV1),
     /// Native Iroha P-256 X.509 predicate STARK statement.
     IrohaZkX509StarkP256V0(IrohaZkX509StarkP256StatementV1),
-    /// Native Iroha Jindo multilinear lattice polynomial-commitment statement.
+    /// Native Iroha Jindo batched univariate lattice polynomial-commitment statement.
     IrohaJindoPolynomialCommitmentV0(IrohaJindoPolynomialCommitmentStatementV1),
     /// Native Bootle Lantern/LNP22 anonymous-credential statement.
     IrohaBootleLanternAnoncredV1(IrohaBootleLanternAnoncredStatementV1),
@@ -5506,11 +5578,26 @@ fn validate_zk_ams(
     statement: &IrohaZkAmsStatementV1,
 ) -> Result<(), PrivacyStatementValidationError> {
     require_nonzero_id(statement.issuer_id.is_zero(), PrivacyTypedFieldV1::IssuerId)?;
+    if statement.issuer_public_key.is_zero() {
+        return Err(PrivacyStatementValidationError::ZeroP256Point { index: 0 });
+    }
+    require_nonzero_id(
+        statement.issuer_policy_record_digest.is_zero(),
+        PrivacyTypedFieldV1::ZkAmsIssuerPolicyRecordDigest,
+    )?;
     require_nonzero_id(
         statement.registry_id.is_zero(),
         PrivacyTypedFieldV1::RegistryId,
     )?;
+    require_nonzero_id(
+        statement.registry_record_digest.is_zero(),
+        PrivacyTypedFieldV1::ZkAmsRegistryRecordDigest,
+    )?;
     require_nonzero_id(statement.policy_id.is_zero(), PrivacyTypedFieldV1::PolicyId)?;
+    require_nonzero_id(
+        statement.policy_digest.is_zero(),
+        PrivacyTypedFieldV1::PolicyDigest,
+    )?;
     match &statement.action {
         PrivacyZkAmsActionV1::BatchAdmission(batch) => {
             require_nonzero_id(
@@ -5558,18 +5645,7 @@ fn validate_zk_ams(
                     return Err(PrivacyStatementValidationError::DuplicateZkAmsSeedPublicKey);
                 }
             }
-            require_nonzero_id(
-                batch.accumulated_instance_digest.is_zero(),
-                PrivacyTypedFieldV1::ZkAmsAccumulatedInstanceDigest,
-            )?;
-            require_nonzero_id(
-                batch.padding_cross_term_digest.is_zero(),
-                PrivacyTypedFieldV1::ZkAmsPaddingCrossTermDigest,
-            )?;
-            require_nonzero_id(
-                batch.final_folded_instance_digest.is_zero(),
-                PrivacyTypedFieldV1::ZkAmsFinalFoldedInstanceDigest,
-            )
+            Ok(())
         }
         PrivacyZkAmsActionV1::ProvisionAccount(provision) => {
             require_nonzero_id(
@@ -5803,12 +5879,16 @@ fn validate_jindo(
                     .try_into()
                     .expect("Jindo commitment width is a multiple of four"),
             );
-            if i64::from(coefficient).abs() > IROHA_JINDO_MAX_ROUNDED_COMMITMENT_COEFFICIENT_V1 {
+            if !(IROHA_JINDO_MIN_ROUNDED_COMMITMENT_COEFFICIENT_V1
+                ..=IROHA_JINDO_MAX_ROUNDED_COMMITMENT_COEFFICIENT_V1)
+                .contains(&coefficient)
+            {
                 return Err(
                     PrivacyStatementValidationError::JindoCommitmentCoefficientOutOfRange {
                         commitment_index: u32_index(index)?,
                         coefficient_index: u32_index(coefficient_index)?,
                         value: coefficient,
+                        min: IROHA_JINDO_MIN_ROUNDED_COMMITMENT_COEFFICIENT_V1,
                         max: IROHA_JINDO_MAX_ROUNDED_COMMITMENT_COEFFICIENT_V1,
                     },
                 );
@@ -6524,10 +6604,10 @@ impl PrivacyProofBytesV1 {
 )]
 #[cfg_attr(feature = "json", norito(tag = "action", content = "proof"))]
 pub enum IrohaZkAmsProofV1 {
-    /// Transparent Poseidon2/Goldilocks STARK batch-admission proof.
-    TransparentStarkBatchAdmission(PrivacyProofBytesV1),
-    /// Canonical Ristretto255 MLSAGS account-provisioning signature.
-    Ristretto255MlsagsProvisionAccount(PrivacyProofBytesV1),
+    /// Setup-free masked Relaxed Spartan batch-admission proof.
+    MaskedRelaxedSpartanBatchAdmission(PrivacyProofBytesV1),
+    /// Canonical one-layer MLSAGS/LSAG Ristretto255 provisioning signature.
+    Ristretto255LsagProvisionAccount(PrivacyProofBytesV1),
 }
 
 impl IrohaZkAmsProofV1 {
@@ -6535,8 +6615,8 @@ impl IrohaZkAmsProofV1 {
     #[must_use]
     pub const fn bytes(&self) -> &PrivacyProofBytesV1 {
         match self {
-            Self::TransparentStarkBatchAdmission(bytes)
-            | Self::Ristretto255MlsagsProvisionAccount(bytes) => bytes,
+            Self::MaskedRelaxedSpartanBatchAdmission(bytes)
+            | Self::Ristretto255LsagProvisionAccount(bytes) => bytes,
         }
     }
 
@@ -6544,8 +6624,8 @@ impl IrohaZkAmsProofV1 {
     #[must_use]
     pub const fn bytes_mut(&mut self) -> &mut PrivacyProofBytesV1 {
         match self {
-            Self::TransparentStarkBatchAdmission(bytes)
-            | Self::Ristretto255MlsagsProvisionAccount(bytes) => bytes,
+            Self::MaskedRelaxedSpartanBatchAdmission(bytes)
+            | Self::Ristretto255LsagProvisionAccount(bytes) => bytes,
         }
     }
 
@@ -6555,10 +6635,10 @@ impl IrohaZkAmsProofV1 {
         matches!(
             (self, action),
             (
-                Self::TransparentStarkBatchAdmission(_),
+                Self::MaskedRelaxedSpartanBatchAdmission(_),
                 PrivacyZkAmsActionV1::BatchAdmission(_)
             ) | (
-                Self::Ristretto255MlsagsProvisionAccount(_),
+                Self::Ristretto255LsagProvisionAccount(_),
                 PrivacyZkAmsActionV1::ProvisionAccount(_)
             )
         )
@@ -6585,7 +6665,7 @@ pub enum PrivacyProofV1 {
     VegaExistingCredentialZkV0(PrivacyProofBytesV1),
     /// Native Iroha P-256 X.509 predicate STARK proof.
     IrohaZkX509StarkP256V0(PrivacyProofBytesV1),
-    /// Native Iroha Jindo multilinear lattice polynomial-commitment proof.
+    /// Native Iroha Jindo batched univariate lattice polynomial-commitment proof.
     IrohaJindoPolynomialCommitmentV0(PrivacyProofBytesV1),
     /// Native Bootle Lantern/LNP22 anonymous-credential proof.
     IrohaBootleLanternAnoncredV1(PrivacyProofBytesV1),
@@ -6702,12 +6782,10 @@ pub enum PrivacyTypedFieldV1 {
     AuthorizationKeyDigest,
     /// Post-quantum note-encryption-key digest.
     NoteEncryptionKeyDigest,
-    /// ZK-AMS accumulated relaxed-R1CS instance digest.
-    ZkAmsAccumulatedInstanceDigest,
-    /// ZK-AMS final padding cross-term digest.
-    ZkAmsPaddingCrossTermDigest,
-    /// ZK-AMS final folded relaxed-R1CS instance digest.
-    ZkAmsFinalFoldedInstanceDigest,
+    /// Digest of the authoritative ZK-AMS issuer-policy record.
+    ZkAmsIssuerPolicyRecordDigest,
+    /// Digest of the authoritative ZK-AMS registry record.
+    ZkAmsRegistryRecordDigest,
 }
 
 /// Epoch or height field used by statement validation diagnostics.
@@ -7154,7 +7232,7 @@ pub enum PrivacyStatementValidationError {
     DuplicateJindoLatticeCommitment,
     /// A rounded public Jindo commitment coefficient is outside the fixed bound.
     #[error(
-        "Jindo commitment {commitment_index} coefficient {coefficient_index} is {value}; absolute value exceeds {max}"
+        "Jindo commitment {commitment_index} coefficient {coefficient_index} is {value}; expected {min}..={max}"
     )]
     JindoCommitmentCoefficientOutOfRange {
         /// Zero-based commitment index.
@@ -7163,8 +7241,10 @@ pub enum PrivacyStatementValidationError {
         coefficient_index: u32,
         /// Decoded signed little-endian coefficient.
         value: i32,
-        /// Fixed absolute-value bound.
-        max: i64,
+        /// Inclusive fixed lower bound.
+        min: i32,
+        /// Inclusive fixed upper bound.
+        max: i32,
     },
     /// Bootle/Lantern disclosed attribute count exceeds its fixed profile.
     #[error("Bootle/Lantern disclosed attribute count {count} exceeds {max}")]
@@ -7729,8 +7809,12 @@ mod tests {
         PrivacyStatementV1::IrohaZkAmsV1(IrohaZkAmsStatementV1 {
             context: context(),
             issuer_id: PrivacyIssuerIdV1::new(raw(40)),
+            issuer_public_key: p256_point(42),
+            issuer_policy_record_digest: PrivacyZkAmsIssuerPolicyRecordDigestV1::new(raw(43)),
             registry_id: PrivacyZkAmsRegistryIdV1::new(raw(41)),
-            policy_id: PrivacyPolicyIdV1::new(raw(43)),
+            registry_record_digest: PrivacyZkAmsRegistryRecordDigestV1::new(raw(44)),
+            policy_id: PrivacyPolicyIdV1::new(raw(45)),
+            policy_digest: PrivacyPolicyDigestV1::new(raw(46)),
             action: PrivacyZkAmsActionV1::ProvisionAccount(PrivacyZkAmsProvisionAccountV1 {
                 account_registry_root: PrivacyRootV1::new(raw(144)),
                 account_registry_root_epoch: 10,
@@ -7847,21 +7931,18 @@ mod tests {
             PrivacyStatementV1::IrohaZkAmsV1(IrohaZkAmsStatementV1 {
                 context: context(),
                 issuer_id: PrivacyIssuerIdV1::new(raw(40)),
+                issuer_public_key: p256_point(42),
+                issuer_policy_record_digest: PrivacyZkAmsIssuerPolicyRecordDigestV1::new(raw(43)),
                 registry_id: PrivacyZkAmsRegistryIdV1::new(raw(41)),
-                policy_id: PrivacyPolicyIdV1::new(raw(43)),
+                registry_record_digest: PrivacyZkAmsRegistryRecordDigestV1::new(raw(44)),
+                policy_id: PrivacyPolicyIdV1::new(raw(45)),
+                policy_digest: PrivacyPolicyDigestV1::new(raw(46)),
                 action: PrivacyZkAmsActionV1::BatchAdmission(PrivacyZkAmsBatchAdmissionV1 {
                     account_registry_root: PrivacyRootV1::new(raw(144)),
                     account_registry_root_epoch: 10,
                     next_account_registry_root: PrivacyRootV1::new(raw(145)),
                     next_account_registry_root_epoch: 11,
                     anchors: vec![zk_ams_anchor(44), zk_ams_anchor(45)],
-                    accumulated_instance_digest: PrivacyZkAmsAccumulatedInstanceDigestV1::new(raw(
-                        46,
-                    )),
-                    padding_cross_term_digest: PrivacyZkAmsPaddingCrossTermDigestV1::new(raw(47)),
-                    final_folded_instance_digest: PrivacyZkAmsFinalFoldedInstanceDigestV1::new(
-                        raw(48),
-                    ),
                 }),
             }),
             PrivacyStatementV1::VegaExistingCredentialZkV0(VegaExistingCredentialStatementV1 {
@@ -8119,7 +8200,7 @@ mod tests {
                 PrivacyProofV1::VeRangeTransparentRangeV1(bytes)
             }
             PrivacyProtocolIdV1::IrohaZkAmsV1 => PrivacyProofV1::IrohaZkAmsV1(
-                IrohaZkAmsProofV1::TransparentStarkBatchAdmission(bytes),
+                IrohaZkAmsProofV1::MaskedRelaxedSpartanBatchAdmission(bytes),
             ),
             PrivacyProtocolIdV1::VegaExistingCredentialZkV0 => {
                 PrivacyProofV1::VegaExistingCredentialZkV0(bytes)
@@ -8227,7 +8308,7 @@ mod tests {
                 action: PrivacyZkAmsActionV1::ProvisionAccount(_),
                 ..
             }) => {
-                PrivacyProofV1::IrohaZkAmsV1(IrohaZkAmsProofV1::Ristretto255MlsagsProvisionAccount(
+                PrivacyProofV1::IrohaZkAmsV1(IrohaZkAmsProofV1::Ristretto255LsagProvisionAccount(
                     PrivacyProofBytesV1::new(vec![0xA5, 0x5A, 1]),
                 ))
             }
@@ -8476,8 +8557,8 @@ mod tests {
                 "stark-fri-poseidon2-goldilocks",
             ),
             (
-                PrivacyProofSystemIdV1::ZkAmsTransparentStarkPoseidon2GoldilocksMlsagsRistretto255Sha3_512,
-                "zk-ams-transparent-stark-poseidon2-goldilocks-mlsags-ristretto255-sha3-512",
+                PrivacyProofSystemIdV1::ZkAmsMaskedRelaxedSpartanT256Ristretto255Sha3_512,
+                "zk-ams-masked-relaxed-spartan-t256-ristretto255-sha3-512",
             ),
             (
                 PrivacyProofSystemIdV1::AnonymousPgcP256,
@@ -8524,8 +8605,8 @@ mod tests {
                 "native-goldilocks-stark-fri",
             ),
             (
-                PrivacyEngineIdV1::NativeZkAmsTransparentStarkMlsagsRistretto255,
-                "native-zk-ams-transparent-stark-mlsags-ristretto255",
+                PrivacyEngineIdV1::NativeZkAmsMaskedRelaxedSpartanT256Ristretto255,
+                "native-zk-ams-masked-relaxed-spartan-t256-ristretto255",
             ),
             (
                 PrivacyEngineIdV1::NativeAnonymousPgcP256,
@@ -8800,11 +8881,11 @@ mod tests {
         );
         assert_eq!(
             PrivacyProtocolIdV1::IrohaZkAmsV1.expected_proof_system(),
-            PrivacyProofSystemIdV1::ZkAmsTransparentStarkPoseidon2GoldilocksMlsagsRistretto255Sha3_512
+            PrivacyProofSystemIdV1::ZkAmsMaskedRelaxedSpartanT256Ristretto255Sha3_512
         );
         assert_eq!(
             PrivacyProtocolIdV1::IrohaZkAmsV1.expected_engine(),
-            PrivacyEngineIdV1::NativeZkAmsTransparentStarkMlsagsRistretto255
+            PrivacyEngineIdV1::NativeZkAmsMaskedRelaxedSpartanT256Ristretto255
         );
     }
 
@@ -8841,9 +8922,10 @@ mod tests {
         check_type!(PrivacyRootV1, 11);
         check_type!(PrivacyChallengeV1, 12);
         check_type!(PrivacyZkAmsPhcHashV1, 13);
-        check_type!(PrivacyZkAmsAccumulatedInstanceDigestV1, 14);
-        check_type!(PrivacyZkAmsPaddingCrossTermDigestV1, 15);
-        check_type!(PrivacyZkAmsFinalFoldedInstanceDigestV1, 16);
+        check_type!(PrivacyZkAmsSubjectCommitmentV1, 14);
+        check_type!(PrivacyZkAmsCredentialNonceV1, 15);
+        check_type!(PrivacyZkAmsIssuerPolicyRecordDigestV1, 16);
+        check_type!(PrivacyZkAmsRegistryRecordDigestV1, 19);
     }
 
     #[test]
@@ -8886,14 +8968,14 @@ mod tests {
         }
 
         let mut batch =
-            PrivacyProofV1::IrohaZkAmsV1(IrohaZkAmsProofV1::TransparentStarkBatchAdmission(
+            PrivacyProofV1::IrohaZkAmsV1(IrohaZkAmsProofV1::MaskedRelaxedSpartanBatchAdmission(
                 PrivacyProofBytesV1::new(vec![1, 2, 3]),
             ));
         batch.bytes_mut().bytes.clear();
         assert!(batch.bytes().as_bytes().is_empty());
 
         let mut provisioning =
-            PrivacyProofV1::IrohaZkAmsV1(IrohaZkAmsProofV1::Ristretto255MlsagsProvisionAccount(
+            PrivacyProofV1::IrohaZkAmsV1(IrohaZkAmsProofV1::Ristretto255LsagProvisionAccount(
                 PrivacyProofBytesV1::new(vec![4, 5, 6]),
             ));
         provisioning.bytes_mut().bytes.clear();
@@ -8917,9 +8999,9 @@ mod tests {
         let mut batch_envelope = envelope(batch_statement);
         batch_envelope
             .validate_with_limits(&limits)
-            .expect("batch STARK proof variant");
+            .expect("batch masked Relaxed Spartan proof variant");
         batch_envelope.proof =
-            PrivacyProofV1::IrohaZkAmsV1(IrohaZkAmsProofV1::Ristretto255MlsagsProvisionAccount(
+            PrivacyProofV1::IrohaZkAmsV1(IrohaZkAmsProofV1::Ristretto255LsagProvisionAccount(
                 PrivacyProofBytesV1::new(vec![1]),
             ));
         assert!(matches!(
@@ -8931,9 +9013,9 @@ mod tests {
         let mut provision_envelope = envelope(provision_statement);
         provision_envelope
             .validate_with_limits(&limits)
-            .expect("provisioning MLSAGS proof variant");
+            .expect("provisioning LSAG proof variant");
         provision_envelope.proof = PrivacyProofV1::IrohaZkAmsV1(
-            IrohaZkAmsProofV1::TransparentStarkBatchAdmission(PrivacyProofBytesV1::new(vec![1])),
+            IrohaZkAmsProofV1::MaskedRelaxedSpartanBatchAdmission(PrivacyProofBytesV1::new(vec![1])),
         );
         assert!(matches!(
             provision_envelope.validate_with_limits(&limits),
@@ -9788,7 +9870,7 @@ mod tests {
     }
 
     #[test]
-    fn zk_ams_batch_binds_source_objects_and_rejects_malformed_anchors() {
+    fn zk_ams_batch_rejects_malformed_or_duplicate_anchors() {
         let limits = PrivacyConsensusLimitsV1::taira_default();
         let base = statement_for(PrivacyProtocolIdV1::IrohaZkAmsV1);
         let mutate = |f: fn(&mut PrivacyZkAmsBatchAdmissionV1)| {
@@ -9825,15 +9907,6 @@ mod tests {
                 batch.anchors[1].seed_public_key = batch.anchors[0].seed_public_key;
             }),
             Err(PrivacyStatementValidationError::DuplicateZkAmsSeedPublicKey)
-        ));
-        assert!(matches!(
-            mutate(|batch| {
-                batch.accumulated_instance_digest =
-                    PrivacyZkAmsAccumulatedInstanceDigestV1::new([0; 32]);
-            }),
-            Err(PrivacyStatementValidationError::ZeroTypedField {
-                field: PrivacyTypedFieldV1::ZkAmsAccumulatedInstanceDigest
-            })
         ));
     }
 
@@ -9942,7 +10015,9 @@ mod tests {
         ));
 
         assert!(matches!(
-            mutate(|statement| statement.claimed_evaluations.pop()),
+            mutate(|statement| {
+                statement.claimed_evaluations.pop();
+            }),
             Err(PrivacyStatementValidationError::DeclaredCountMismatch {
                 field: PrivacyCountFieldV1::JindoClaimedEvaluations,
                 declared: 2,
@@ -9998,25 +10073,22 @@ mod tests {
 
         for boundary in [
             IROHA_JINDO_MAX_ROUNDED_COMMITMENT_COEFFICIENT_V1,
-            -IROHA_JINDO_MAX_ROUNDED_COMMITMENT_COEFFICIENT_V1,
+            IROHA_JINDO_MIN_ROUNDED_COMMITMENT_COEFFICIENT_V1,
         ] {
             let mut value = base.clone();
             let PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(statement) = &mut value else {
                 unreachable!()
             };
-            statement.polynomial_commitments[0].encoding[..4].copy_from_slice(
-                &i32::try_from(boundary)
-                    .expect("Jindo rounded-coefficient bound fits i32")
-                    .to_le_bytes(),
-            );
+            statement.polynomial_commitments[0].encoding[..4]
+                .copy_from_slice(&boundary.to_le_bytes());
             value
                 .validate(&limits)
                 .expect("inclusive Jindo rounded-coefficient boundary");
         }
 
         for outside in [
-            IROHA_JINDO_MAX_ROUNDED_COMMITMENT_COEFFICIENT_V1 + 1,
-            -IROHA_JINDO_MAX_ROUNDED_COMMITMENT_COEFFICIENT_V1 - 1,
+            i64::from(IROHA_JINDO_MAX_ROUNDED_COMMITMENT_COEFFICIENT_V1) + 1,
+            i64::from(IROHA_JINDO_MIN_ROUNDED_COMMITMENT_COEFFICIENT_V1) - 1,
         ] {
             let mut value = base.clone();
             let PrivacyStatementV1::IrohaJindoPolynomialCommitmentV0(statement) = &mut value else {
@@ -10034,6 +10106,7 @@ mod tests {
                         commitment_index: 0,
                         coefficient_index: 0,
                         value: observed,
+                        min: IROHA_JINDO_MIN_ROUNDED_COMMITMENT_COEFFICIENT_V1,
                         max: IROHA_JINDO_MAX_ROUNDED_COMMITMENT_COEFFICIENT_V1
                     }
                 ) if i64::from(observed) == outside

@@ -970,6 +970,78 @@ test("buildTransferNftInstruction covers nft transfer", () => {
   });
 });
 
+test("NftId implicit universal and Name rules match native V1", () => {
+  const implicit = buildTransferNftInstruction({
+    sourceAccountId: ACCOUNT_ID,
+    nftId: "dragon$wonderland",
+    destinationAccountId: ACCOUNT_ID,
+  });
+  const explicit = buildTransferNftInstruction({
+    sourceAccountId: ACCOUNT_ID,
+    nftId: "dragon$wonderland.universal",
+    destinationAccountId: ACCOUNT_ID,
+  });
+  const pureImplicit = Buffer.from(
+    withPureJsInstructionCodec(() => noritoEncodeInstruction(implicit)),
+  );
+  const nativeImplicit = Buffer.from(
+    nativeBinding.noritoEncodeInstruction(JSON.stringify(implicit)),
+  );
+  const pureExplicit = Buffer.from(
+    withPureJsInstructionCodec(() => noritoEncodeInstruction(explicit)),
+  );
+  assert.deepEqual(pureImplicit, nativeImplicit);
+  assert.deepEqual(pureImplicit, pureExplicit);
+  assert.deepEqual(
+    JSON.parse(nativeBinding.noritoDecodeInstruction(pureImplicit)),
+    explicit,
+  );
+  assert.deepEqual(
+    withPureJsInstructionCodec(() => noritoDecodeInstruction(nativeImplicit)),
+    explicit,
+  );
+
+  const decomposed = buildTransferNftInstruction({
+    sourceAccountId: ACCOUNT_ID,
+    nftId: "e\u0301$wonderland",
+    destinationAccountId: ACCOUNT_ID,
+  });
+  const composed = buildTransferNftInstruction({
+    sourceAccountId: ACCOUNT_ID,
+    nftId: "é$wonderland.universal",
+    destinationAccountId: ACCOUNT_ID,
+  });
+  assert.deepEqual(
+    Buffer.from(
+      withPureJsInstructionCodec(() => noritoEncodeInstruction(decomposed)),
+    ),
+    Buffer.from(nativeBinding.noritoEncodeInstruction(JSON.stringify(decomposed))),
+  );
+  assert.deepEqual(
+    Buffer.from(
+      withPureJsInstructionCodec(() => noritoEncodeInstruction(decomposed)),
+    ),
+    Buffer.from(
+      withPureJsInstructionCodec(() => noritoEncodeInstruction(composed)),
+    ),
+  );
+
+  const invalid = buildTransferNftInstruction({
+    sourceAccountId: ACCOUNT_ID,
+    nftId: "bad@name$wonderland",
+    destinationAccountId: ACCOUNT_ID,
+  });
+  assert.throws(
+    () =>
+      withPureJsInstructionCodec(() => noritoEncodeInstruction(invalid)),
+    /reserved Name character/u,
+  );
+  assert.throws(
+    () => nativeBinding.noritoEncodeInstruction(JSON.stringify(invalid)),
+    /parse|name|Nft/u,
+  );
+});
+
 test("nominal DomainId pure-JS frames byte-match native V1", () => {
   const instructions = [
     [
@@ -1046,6 +1118,11 @@ test("buildRegisterRwaInstruction normalizes richer lot payloads", () => {
       },
     },
   });
+  const encoded = assertNativeAndPureInstructionParity(
+    instruction,
+    "RegisterRwa",
+  );
+  assert.equal(encoded[39], 0x02, "RegisterRwa must use compact Norito framing");
 });
 
 test("buildTransferRwaInstruction covers rwa transfer", () => {
@@ -1419,6 +1496,11 @@ test("buildCreateKaigiInstruction normalizes relay manifest and metadata", () =>
   };
   assert.deepEqual(instruction, expected);
   assert.deepEqual(encodeAndDecode(instruction), expected);
+  const encoded = assertNativeAndPureInstructionParity(
+    instruction,
+    "Kaigi.CreateKaigi",
+  );
+  assert.equal(encoded[39], 0x02, "Kaigi.CreateKaigi must use compact Norito framing");
 });
 
 test("noritoDecodeInstruction decodes Kaigi manifests", () => {

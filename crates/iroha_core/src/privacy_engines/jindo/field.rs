@@ -7,10 +7,17 @@
 //! four-limb Montgomery representation internally.
 
 use core::ops::{Add, Mul, Neg, Sub};
+use zeroize::Zeroize;
 
 /// Canonical field element in Montgomery form.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct JindoFieldElementV1([u64; 4]);
+
+impl Zeroize for JindoFieldElementV1 {
+    fn zeroize(&mut self) {
+        self.0.zeroize();
+    }
+}
 
 impl JindoFieldElementV1 {
     /// Field modulus in little-endian 64-bit limbs.
@@ -41,6 +48,7 @@ impl JindoFieldElementV1 {
     const MONTGOMERY_NEG_INV: u64 = 0xffff_ffff_ffff_ffff;
 
     /// Exponent `p - 2`, in little-endian limbs.
+    #[cfg(test)]
     const INVERSE_EXPONENT: [u64; 4] = [
         0xffff_ffff_ffff_ffff,
         0x8e96_30dc_8c37_3280,
@@ -113,6 +121,7 @@ impl JindoFieldElementV1 {
     }
 
     /// Multiplicative inverse, or `None` for zero.
+    #[cfg(test)]
     pub(crate) fn invert(self) -> Option<Self> {
         if self.is_zero() {
             return None;
@@ -265,6 +274,7 @@ impl Neg for JindoFieldElementV1 {
 
 #[cfg(test)]
 mod tests {
+    use super::super::{JINDO_ENCODING_BASE_V1, JINDO_ENCODING_EXPONENT_V1};
     use super::*;
 
     fn canonical_from_limbs(limbs: [u64; 4]) -> [u8; 32] {
@@ -283,8 +293,8 @@ mod tests {
     #[test]
     fn modulus_matches_the_jindo_friendly_base_relation() {
         let mut value = JindoFieldElementV1::ONE;
-        let base = JindoFieldElementV1::from_u64(60_272);
-        for _ in 0..16 {
+        let base = JindoFieldElementV1::from_u64(JINDO_ENCODING_BASE_V1);
+        for _ in 0..JINDO_ENCODING_EXPONENT_V1 {
             value = value * base;
         }
         assert_eq!(value + JindoFieldElementV1::ONE, JindoFieldElementV1::ZERO);
