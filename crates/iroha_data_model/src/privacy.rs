@@ -4088,6 +4088,7 @@ struct PrivacyZkAcePolicyDigestMaterialV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 pub struct PrivacyZkAcePolicyRecordV1 {
     /// Stable lookup key for this policy lineage.
     pub policy_id: PrivacyPolicyIdV1,
@@ -11088,7 +11089,9 @@ mod tests {
         let decoded: PrivacyZkAcePolicyRecordV1 =
             norito::decode_from_bytes(&encoded).expect("decode ZK-ACE policy");
         assert_eq!(decoded, record);
-        decoded.validate_initial().expect("decoded policy validates");
+        decoded
+            .validate_initial()
+            .expect("decoded policy validates");
 
         let json = norito::json::to_json(&record).expect("encode ZK-ACE policy JSON");
         let decoded_json: PrivacyZkAcePolicyRecordV1 =
@@ -11097,6 +11100,14 @@ mod tests {
         decoded_json
             .validate_initial()
             .expect("JSON-decoded policy validates");
+        let object_prefix = json
+            .strip_suffix('}')
+            .expect("policy JSON is a top-level object");
+        let unknown_field = format!("{object_prefix},\"unexpected_policy_alias\":true}}");
+        assert!(
+            norito::json::from_json::<PrivacyZkAcePolicyRecordV1>(&unknown_field).is_err(),
+            "unknown JSON fields must not create an alternate first-release policy encoding"
+        );
 
         let mut zero_digest = record.clone();
         zero_digest.record_digest = PrivacyZkAcePolicyRecordDigestV1::new([0; 32]);
@@ -11105,12 +11116,38 @@ mod tests {
             Err(PrivacyZkAcePolicyRecordValidationErrorV1::ZeroRecordDigest)
         );
 
-        let mut tampered = record;
-        tampered.policy_digest = PrivacyPolicyDigestV1::new(raw(99));
-        assert_eq!(
-            tampered.validate(),
-            Err(PrivacyZkAcePolicyRecordValidationErrorV1::RecordDigestMismatch)
+        let mut tamperings = Vec::new();
+        let mut tampered = record.clone();
+        tampered.policy_id = PrivacyPolicyIdV1::new(raw(90));
+        tamperings.push(tampered);
+        let mut tampered = record.clone();
+        tampered.identity_commitment = commitment(91);
+        tamperings.push(tampered);
+        let mut tampered = record.clone();
+        tampered.policy_digest = PrivacyPolicyDigestV1::new(raw(92));
+        tamperings.push(tampered);
+        let mut tampered = record.clone();
+        tampered.authorization_epoch = 2;
+        tamperings.push(tampered);
+        let mut tampered = record.clone();
+        tampered.asset_definition_id = AssetDefinitionId::new(
+            DomainId::try_new("privacy", "universal").expect("domain"),
+            Name::from_str("other_asset").expect("asset name"),
         );
+        tamperings.push(tampered);
+        let mut tampered = record.clone();
+        tampered.source_allowlist.push(account(99));
+        tampered.source_allowlist.sort_unstable();
+        tamperings.push(tampered);
+        let mut tampered = record;
+        tampered.lifecycle = PrivacyZkAcePolicyLifecycleV1::Revoked;
+        tamperings.push(tampered);
+        for tampered in tamperings {
+            assert_eq!(
+                tampered.validate(),
+                Err(PrivacyZkAcePolicyRecordValidationErrorV1::RecordDigestMismatch)
+            );
+        }
     }
 
     #[test]
@@ -11120,14 +11157,12 @@ mod tests {
         let digest = PrivacyPolicyDigestV1::new(raw(12));
         let asset = asset_definition_id();
         let allowlist = zk_ace_allowlist();
-        let construct = |
-            policy_id,
-            identity_commitment,
-            policy_digest,
-            authorization_epoch,
-            source_allowlist,
-            lifecycle,
-        | {
+        let construct = |policy_id,
+                         identity_commitment,
+                         policy_digest,
+                         authorization_epoch,
+                         source_allowlist,
+                         lifecycle| {
             PrivacyZkAcePolicyRecordV1::new(
                 policy_id,
                 identity_commitment,
@@ -11224,9 +11259,7 @@ mod tests {
                 reversed,
                 PrivacyZkAcePolicyLifecycleV1::Active,
             ),
-            Err(
-                PrivacyZkAcePolicyRecordValidationErrorV1::NonCanonicalSourceAllowlist
-            )
+            Err(PrivacyZkAcePolicyRecordValidationErrorV1::NonCanonicalSourceAllowlist)
         );
         let duplicate = vec![allowlist[0].clone(), allowlist[0].clone()];
         assert_eq!(
@@ -11238,20 +11271,13 @@ mod tests {
                 duplicate,
                 PrivacyZkAcePolicyLifecycleV1::Active,
             ),
-            Err(
-                PrivacyZkAcePolicyRecordValidationErrorV1::NonCanonicalSourceAllowlist
-            )
+            Err(PrivacyZkAcePolicyRecordValidationErrorV1::NonCanonicalSourceAllowlist)
         );
 
-        let noncanonical_epoch =
-            zk_ace_policy(2, 11, PrivacyZkAcePolicyLifecycleV1::Active);
+        let noncanonical_epoch = zk_ace_policy(2, 11, PrivacyZkAcePolicyLifecycleV1::Active);
         assert_eq!(
             noncanonical_epoch.validate_initial(),
-            Err(
-                PrivacyZkAcePolicyRecordValidationErrorV1::NonCanonicalInitialEpoch {
-                    actual: 2
-                }
-            )
+            Err(PrivacyZkAcePolicyRecordValidationErrorV1::NonCanonicalInitialEpoch { actual: 2 })
         );
         let initially_revoked = zk_ace_policy(
             PRIVACY_ZK_ACE_POLICY_INITIAL_EPOCH_V1,
@@ -11313,32 +11339,24 @@ mod tests {
             ));
         }
 
-        let revoked_successor =
-            zk_ace_policy(2, 21, PrivacyZkAcePolicyLifecycleV1::Revoked);
+        let revoked_successor = zk_ace_policy(2, 21, PrivacyZkAcePolicyLifecycleV1::Revoked);
         assert_eq!(
             validate_zk_ace_policy_rotation_v1(&current, &revoked_successor),
-            Err(
-                PrivacyZkAcePolicyTransitionValidationErrorV1::RotationSuccessorNotActive
-            )
+            Err(PrivacyZkAcePolicyTransitionValidationErrorV1::RotationSuccessorNotActive)
         );
         let no_op = zk_ace_policy(2, 11, PrivacyZkAcePolicyLifecycleV1::Active);
         assert_eq!(
             validate_zk_ace_policy_rotation_v1(&current, &no_op),
-            Err(
-                PrivacyZkAcePolicyTransitionValidationErrorV1::IdentityCommitmentUnchanged
-            )
+            Err(PrivacyZkAcePolicyTransitionValidationErrorV1::IdentityCommitmentUnchanged)
         );
 
-        let revoked_current =
-            zk_ace_policy(1, 11, PrivacyZkAcePolicyLifecycleV1::Revoked);
+        let revoked_current = zk_ace_policy(1, 11, PrivacyZkAcePolicyLifecycleV1::Revoked);
         assert_eq!(
             validate_zk_ace_policy_rotation_v1(&revoked_current, &successor),
             Err(PrivacyZkAcePolicyTransitionValidationErrorV1::CurrentNotActive)
         );
-        let max_epoch =
-            zk_ace_policy(u64::MAX, 11, PrivacyZkAcePolicyLifecycleV1::Active);
-        let max_successor =
-            zk_ace_policy(u64::MAX, 21, PrivacyZkAcePolicyLifecycleV1::Active);
+        let max_epoch = zk_ace_policy(u64::MAX, 11, PrivacyZkAcePolicyLifecycleV1::Active);
+        let max_successor = zk_ace_policy(u64::MAX, 21, PrivacyZkAcePolicyLifecycleV1::Active);
         assert_eq!(
             validate_zk_ace_policy_rotation_v1(&max_epoch, &max_successor),
             Err(PrivacyZkAcePolicyTransitionValidationErrorV1::EpochOverflow)
@@ -11352,13 +11370,10 @@ mod tests {
         validate_zk_ace_policy_revocation_v1(&current, &successor)
             .expect("canonical one-epoch revocation");
 
-        let active_successor =
-            zk_ace_policy(2, 11, PrivacyZkAcePolicyLifecycleV1::Active);
+        let active_successor = zk_ace_policy(2, 11, PrivacyZkAcePolicyLifecycleV1::Active);
         assert_eq!(
             validate_zk_ace_policy_revocation_v1(&current, &active_successor),
-            Err(
-                PrivacyZkAcePolicyTransitionValidationErrorV1::RevocationSuccessorNotRevoked
-            )
+            Err(PrivacyZkAcePolicyTransitionValidationErrorV1::RevocationSuccessorNotRevoked)
         );
 
         let mut mutations = Vec::new();
@@ -11385,9 +11400,7 @@ mod tests {
         for mutation in mutations {
             assert_eq!(
                 validate_zk_ace_policy_revocation_v1(&current, &mutation),
-                Err(
-                    PrivacyZkAcePolicyTransitionValidationErrorV1::RevocationContentsChanged
-                )
+                Err(PrivacyZkAcePolicyTransitionValidationErrorV1::RevocationContentsChanged)
             );
         }
 
@@ -11399,8 +11412,7 @@ mod tests {
             Err(PrivacyZkAcePolicyTransitionValidationErrorV1::PolicyIdMismatch)
         );
         for epoch in [1, 3] {
-            let candidate =
-                zk_ace_policy(epoch, 11, PrivacyZkAcePolicyLifecycleV1::Revoked);
+            let candidate = zk_ace_policy(epoch, 11, PrivacyZkAcePolicyLifecycleV1::Revoked);
             assert!(matches!(
                 validate_zk_ace_policy_revocation_v1(&current, &candidate),
                 Err(
@@ -11411,16 +11423,13 @@ mod tests {
                 ) if actual == epoch
             ));
         }
-        let revoked_current =
-            zk_ace_policy(1, 11, PrivacyZkAcePolicyLifecycleV1::Revoked);
+        let revoked_current = zk_ace_policy(1, 11, PrivacyZkAcePolicyLifecycleV1::Revoked);
         assert_eq!(
             validate_zk_ace_policy_revocation_v1(&revoked_current, &successor),
             Err(PrivacyZkAcePolicyTransitionValidationErrorV1::CurrentNotActive)
         );
-        let max_epoch =
-            zk_ace_policy(u64::MAX, 11, PrivacyZkAcePolicyLifecycleV1::Active);
-        let max_successor =
-            zk_ace_policy(u64::MAX, 11, PrivacyZkAcePolicyLifecycleV1::Revoked);
+        let max_epoch = zk_ace_policy(u64::MAX, 11, PrivacyZkAcePolicyLifecycleV1::Active);
+        let max_successor = zk_ace_policy(u64::MAX, 11, PrivacyZkAcePolicyLifecycleV1::Revoked);
         assert_eq!(
             validate_zk_ace_policy_revocation_v1(&max_epoch, &max_successor),
             Err(PrivacyZkAcePolicyTransitionValidationErrorV1::EpochOverflow)

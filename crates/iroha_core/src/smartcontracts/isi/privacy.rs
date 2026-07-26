@@ -2256,21 +2256,23 @@ mod tests {
     use iroha_data_model::{
         Registrable,
         account::Account,
-        asset::AssetDefinitionId,
+        asset::{AssetDefinition, AssetDefinitionId},
         block::BlockHeader,
-        domain::DomainId,
+        domain::{Domain, DomainId},
         name::Name,
         privacy::{
             AnonymousPgcActivationLimitsV1, AnonymousPgcKOutOfNStatementV1,
             PrivacyActiveLifecycleV1, PrivacyCommitmentV1, PrivacyConsensusLimitsV1,
-            PrivacyNamespaceScopeV1, PrivacyNamespaceV1, PrivacyP256CiphertextV1,
-            PrivacyP256PointV1, PrivacyPgcAccountBootstrapV1, PrivacyPgcAccountV1,
-            PrivacyPgcBootstrapProofBytesV1, PrivacyPolicyDigestV1, PrivacyPolicyIdV1,
-            PrivacyPoolIdV1, PrivacyPoolNamespaceV1, PrivacyProofBytesV1, PrivacyProofEnvelopeV1,
-            PrivacyProofV1, PrivacyProposedLifecycleV1, PrivacyProtocolActivationLimitsV1,
-            PrivacyProtocolIdV1, PrivacyRootV1, PrivacyStatementContextV1, PrivacyStatementV1,
-            PrivacyTransactionIntentDigestV1, PrivacyZkAcePolicyLifecycleV1,
-            PrivacyZkAcePolicyRecordV1, TAIRA_PRIVACY_MAX_PGC_BOOTSTRAP_PROOF_BYTES_V1,
+            PrivacyEngineIdV1, PrivacyNamespaceScopeV1, PrivacyNamespaceV1,
+            PrivacyP256CiphertextV1, PrivacyP256PointV1, PrivacyPgcAccountBootstrapV1,
+            PrivacyPgcAccountV1, PrivacyPgcBootstrapProofBytesV1, PrivacyPolicyDigestV1,
+            PrivacyPolicyIdV1, PrivacyPoolIdV1, PrivacyPoolNamespaceV1, PrivacyProofBytesV1,
+            PrivacyProofEnvelopeV1, PrivacyProofSystemIdV1, PrivacyProofV1,
+            PrivacyProposedLifecycleV1, PrivacyProtocolActivationLimitsV1,
+            PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1, PrivacyRootV1,
+            PrivacyStatementContextV1, PrivacyStatementV1, PrivacyTransactionIntentDigestV1,
+            PrivacyZkAcePolicyLifecycleV1, PrivacyZkAcePolicyRecordV1,
+            TAIRA_PRIVACY_MAX_PGC_BOOTSTRAP_PROOF_BYTES_V1,
         },
     };
     use iroha_test_samples::ALICE_ID;
@@ -2680,6 +2682,62 @@ mod tests {
         state
     }
 
+    fn zk_ace_asset_definition_id() -> AssetDefinitionId {
+        AssetDefinitionId::new(
+            DomainId::try_new("privacy", "universal").expect("domain"),
+            Name::from_str("asset").expect("asset name"),
+        )
+    }
+
+    fn zk_ace_policy(
+        epoch: u64,
+        identity_byte: u8,
+        lifecycle: PrivacyZkAcePolicyLifecycleV1,
+    ) -> PrivacyZkAcePolicyRecordV1 {
+        PrivacyZkAcePolicyRecordV1::new(
+            PrivacyPolicyIdV1::new([0xA1; 32]),
+            PrivacyCommitmentV1::new([identity_byte; 32]),
+            PrivacyPolicyDigestV1::new([0xA3; 32]),
+            epoch,
+            zk_ace_asset_definition_id(),
+            vec![ALICE_ID.clone()],
+            lifecycle,
+        )
+        .expect("canonical ZK-ACE policy fixture")
+    }
+
+    fn valid_zk_ace_policy() -> PrivacyZkAcePolicyRecordV1 {
+        zk_ace_policy(1, 0xA2, PrivacyZkAcePolicyLifecycleV1::Active)
+    }
+
+    fn state_with_exact_zk_ace_activation() -> State {
+        let protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV0;
+        let activation = compiled_privacy_profile_v1(protocol_id)
+            .expect("compiled ZK-ACE profile")
+            .activation_record(active_lifecycle());
+        validate_compiled_privacy_activation_v1(&activation).expect("exact compiled activation");
+
+        let domain_id = DomainId::try_new("privacy", "universal").expect("domain");
+        let domain = Domain::new(domain_id).build(&ALICE_ID);
+        let alice = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let asset_definition =
+            AssetDefinition::numeric(zk_ace_asset_definition_id()).build(&ALICE_ID);
+        let mut world = World::with([domain], [alice], [asset_definition]);
+        world
+            .privacy_activations
+            .insert(PrivacyActivationKeyV1::new(protocol_id), activation);
+        let mut state = State::new_with_chain_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            TEST_CHAIN_ID.into(),
+        );
+        state.push_block_hash_for_testing(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::prehashed(TEST_GENESIS_HASH),
+        ));
+        state
+    }
+
     fn test_header() -> BlockHeader {
         BlockHeader::new(
             NonZeroU64::new(TEST_BLOCK_HEIGHT).expect("non-zero height"),
@@ -2722,6 +2780,185 @@ mod tests {
     fn assert_empty_and_unbudgeted(state_transaction: &StateTransaction<'_, '_>) {
         assert_eq!(privacy_map_counts(state_transaction), (0, 0, 0, 0));
         assert_eq!(state_transaction.privacy_budget_for_testing(), (0, 0, 0, 0));
+    }
+
+    #[test]
+    fn zk_ace_policy_governance_registers_rotates_revokes_and_is_failure_atomic() {
+        let state = state_with_exact_zk_ace_activation();
+        let mut block = state.block(test_header());
+        let mut transaction = block.transaction();
+        let initial = valid_zk_ace_policy();
+        let policy_key =
+            PrivacyCommitmentKeyV1::zk_ace_policy(initial.policy_id).expect("policy key");
+
+        let error = RegisterPrivacyZkAcePolicyV1::new(initial.clone())
+            .execute(&ALICE_ID, &mut transaction)
+            .expect_err("governance permission is mandatory");
+        assert!(error.to_string().contains("CanEnactGovernance"), "{error}");
+        assert_eq!(transaction.world.privacy_commitments.get(&policy_key), None);
+        assert_eq!(transaction.privacy_budget_for_testing(), (0, 0, 0, 0));
+
+        grant_governance(&mut transaction);
+        RegisterPrivacyZkAcePolicyV1::new(initial.clone())
+            .execute(&ALICE_ID, &mut transaction)
+            .expect("exact compiled-profile policy registration");
+        assert_eq!(
+            load_privacy_zk_ace_policy_v1(
+                initial.policy_id,
+                &transaction.world.privacy_commitments,
+            )
+            .expect("registered policy"),
+            initial
+        );
+        let budget_after_registration = transaction.privacy_budget_for_testing();
+
+        let error = RegisterPrivacyZkAcePolicyV1::new(initial.clone())
+            .execute(&ALICE_ID, &mut transaction)
+            .expect_err("duplicate policy registration");
+        assert!(error.to_string().contains("already registered"), "{error}");
+        assert_eq!(
+            transaction.privacy_budget_for_testing(),
+            budget_after_registration,
+            "duplicate rejection must not reserve budget"
+        );
+
+        let rotated = zk_ace_policy(2, 0xA4, PrivacyZkAcePolicyLifecycleV1::Active);
+        RotatePrivacyZkAcePolicyV1::new(initial.record_digest, rotated.clone())
+            .execute(&ALICE_ID, &mut transaction)
+            .expect("one-epoch policy rotation");
+        assert_eq!(
+            load_privacy_zk_ace_policy_v1(
+                initial.policy_id,
+                &transaction.world.privacy_commitments,
+            )
+            .expect("rotated policy"),
+            rotated
+        );
+        let budget_after_rotation = transaction.privacy_budget_for_testing();
+
+        let stale_successor = zk_ace_policy(3, 0xA5, PrivacyZkAcePolicyLifecycleV1::Active);
+        let error = RotatePrivacyZkAcePolicyV1::new(initial.record_digest, stale_successor)
+            .execute(&ALICE_ID, &mut transaction)
+            .expect_err("stale expected-current digest");
+        assert!(
+            error.to_string().contains("stale or substituted"),
+            "{error}"
+        );
+        assert_eq!(
+            transaction.privacy_budget_for_testing(),
+            budget_after_rotation,
+            "stale rotation must not reserve budget"
+        );
+        assert_eq!(
+            load_privacy_zk_ace_policy_v1(
+                initial.policy_id,
+                &transaction.world.privacy_commitments,
+            )
+            .expect("unchanged rotated policy"),
+            rotated
+        );
+
+        let revoked = zk_ace_policy(3, 0xA4, PrivacyZkAcePolicyLifecycleV1::Revoked);
+        RevokePrivacyZkAcePolicyV1::new(rotated.record_digest, revoked.clone())
+            .execute(&ALICE_ID, &mut transaction)
+            .expect("one-epoch irreversible revocation");
+        assert_eq!(
+            load_privacy_zk_ace_policy_v1(
+                initial.policy_id,
+                &transaction.world.privacy_commitments,
+            )
+            .expect("revoked policy"),
+            revoked
+        );
+        let budget_after_revocation = transaction.privacy_budget_for_testing();
+
+        let post_terminal = zk_ace_policy(4, 0xA5, PrivacyZkAcePolicyLifecycleV1::Active);
+        let error = RotatePrivacyZkAcePolicyV1::new(revoked.record_digest, post_terminal)
+            .execute(&ALICE_ID, &mut transaction)
+            .expect_err("revoked policy is terminal");
+        assert!(error.to_string().contains("not active"), "{error}");
+        assert_eq!(
+            transaction.privacy_budget_for_testing(),
+            budget_after_revocation,
+            "terminal-policy rejection must not reserve budget"
+        );
+        assert_eq!(
+            load_privacy_zk_ace_policy_v1(
+                initial.policy_id,
+                &transaction.world.privacy_commitments,
+            )
+            .expect("terminal policy remains unchanged"),
+            revoked
+        );
+    }
+
+    #[test]
+    fn zk_ace_policy_governance_rejects_every_profile_substitution_without_mutation() {
+        let mutations: [(&str, fn(&mut PrivacyProtocolActivationRecordV1)); 8] = [
+            ("proof system", |record| {
+                record.proof_system_id = PrivacyProofSystemIdV1::StarkFriPoseidon2Goldilocks;
+            }),
+            ("engine", |record| {
+                record.engine_id = PrivacyEngineIdV1::NativeJindo;
+            }),
+            ("parameter id", |record| record.parameter_id.0[0] ^= 1),
+            ("parameter digest", |record| {
+                record.parameter_digest.0[0] ^= 1;
+            }),
+            ("verifier digest", |record| record.verifier_digest.0[0] ^= 1),
+            ("statement schema", |record| {
+                record.statement_schema_digest.0[0] ^= 1;
+            }),
+            ("engine manifest", |record| {
+                record.engine_manifest_digest.0[0] ^= 1;
+            }),
+            ("protocol limits", |record| {
+                record.protocol_limits = PrivacyProtocolActivationLimitsV1::AnonymousPgcKOutOfNV1(
+                    AnonymousPgcActivationLimitsV1 {
+                        max_anonymity_set_size: 16,
+                        max_recipient_count: 8,
+                    },
+                );
+            }),
+        ];
+
+        for (label, mutate) in mutations {
+            let state = state_with_exact_zk_ace_activation();
+            let mut block = state.block(test_header());
+            let mut transaction = block.transaction();
+            grant_governance(&mut transaction);
+            let activation_key =
+                PrivacyActivationKeyV1::new(PrivacyProtocolIdV1::ZkAcePqAuthorizationV0);
+            let mut substituted = *transaction
+                .world
+                .privacy_activations
+                .get(&activation_key)
+                .expect("exact ZK-ACE activation");
+            mutate(&mut substituted);
+            transaction
+                .world
+                .privacy_activations
+                .insert(activation_key, substituted);
+            let budget_before = transaction.privacy_budget_for_testing();
+
+            let error = RegisterPrivacyZkAcePolicyV1::new(valid_zk_ace_policy())
+                .execute(&ALICE_ID, &mut transaction)
+                .expect_err("substituted activation must fail closed");
+            assert!(
+                matches!(error, Error::InvariantViolation(_)),
+                "profile substitution `{label}` returned {error:?}"
+            );
+            assert_eq!(
+                transaction.world.privacy_commitments.iter().count(),
+                0,
+                "profile substitution `{label}` created policy state"
+            );
+            assert_eq!(
+                transaction.privacy_budget_for_testing(),
+                budget_before,
+                "profile substitution `{label}` reserved budget"
+            );
+        }
     }
 
     #[test]

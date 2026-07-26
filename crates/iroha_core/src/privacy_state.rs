@@ -1064,33 +1064,43 @@ pub(crate) fn privacy_zk_ace_policy_count_v1(
     commitments: &impl StorageReadOnly<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>,
 ) -> Result<usize, String> {
     let mut policy_count = 0usize;
-    for (candidate, record) in commitments.iter() {
-        if let PrivacyCommitmentKeyV1::ZkAcePolicy {
+    for (candidate, record) in commitments.range(PrivacyCommitmentKeyV1::zk_ace_policy_range()) {
+        let PrivacyCommitmentKeyV1::ZkAcePolicy {
             policy_id: candidate_policy_id,
         } = candidate
-        {
-            policy_count = policy_count
-                .checked_add(1)
-                .ok_or_else(|| "ZK-ACE policy count overflow".to_owned())?;
-            if policy_count > PRIVACY_ZK_ACE_MAX_POLICIES_V1 {
-                return Err(format!(
-                    "ZK-ACE policy count exceeds {}",
-                    PRIVACY_ZK_ACE_MAX_POLICIES_V1
-                ));
-            }
-            let PrivacyStateItemRecordV1::ZkAcePolicyGovernance { policy, .. } = record else {
-                return Err(format!(
-                    "ZK-ACE policy {candidate_policy_id:?} has wrong-role provenance"
-                ));
-            };
-            policy.validate().map_err(|error| {
-                format!("ZK-ACE policy {candidate_policy_id:?} is invalid: {error}")
-            })?;
-            if policy.policy_id != *candidate_policy_id {
-                return Err(format!(
-                    "ZK-ACE policy key {candidate_policy_id:?} does not match its record"
-                ));
-            }
+        else {
+            return Err("ZK-ACE policy range crossed a typed key boundary".to_owned());
+        };
+        policy_count = policy_count
+            .checked_add(1)
+            .ok_or_else(|| "ZK-ACE policy count overflow".to_owned())?;
+        if policy_count > PRIVACY_ZK_ACE_MAX_POLICIES_V1 {
+            return Err(format!(
+                "ZK-ACE policy count exceeds {}",
+                PRIVACY_ZK_ACE_MAX_POLICIES_V1
+            ));
+        }
+        let PrivacyStateItemRecordV1::ZkAcePolicyGovernance {
+            policy,
+            admitted_at_height,
+        } = record
+        else {
+            return Err(format!(
+                "ZK-ACE policy {candidate_policy_id:?} has wrong-role provenance"
+            ));
+        };
+        if *admitted_at_height == 0 {
+            return Err(format!(
+                "ZK-ACE policy {candidate_policy_id:?} has zero admission height"
+            ));
+        }
+        policy.validate().map_err(|error| {
+            format!("ZK-ACE policy {candidate_policy_id:?} is invalid: {error}")
+        })?;
+        if policy.policy_id != *candidate_policy_id {
+            return Err(format!(
+                "ZK-ACE policy key {candidate_policy_id:?} does not match its record"
+            ));
         }
     }
     Ok(policy_count)
@@ -1738,11 +1748,7 @@ pub(crate) fn validate_privacy_persisted_state_v1(
     for (key, record) in nullifiers.iter() {
         match key {
             PrivacyNullifierKeyV1::ZkAceReplay { policy_id, .. } => {
-                validate_privacy_zk_ace_replay_binding_v1(
-                    &zk_ace_policy_ids,
-                    *policy_id,
-                    record,
-                )?;
+                validate_privacy_zk_ace_replay_binding_v1(&zk_ace_policy_ids, *policy_id, record)?;
             }
             PrivacyNullifierKeyV1::ZkAmsKeyImage { namespace, .. } => {
                 let bootstrap_digest = zk_ams_bootstraps.get(namespace).ok_or_else(|| {
@@ -2077,6 +2083,16 @@ impl PrivacyCommitmentKeyV1 {
             return Err("ZK-ACE policy id must be non-zero");
         }
         Ok(Self::ZkAcePolicy { policy_id })
+    }
+
+    /// Ordered bounds covering exactly the complete ZK-ACE policy table.
+    #[must_use]
+    pub fn zk_ace_policy_range() -> core::ops::RangeInclusive<Self> {
+        Self::ZkAcePolicy {
+            policy_id: PrivacyPolicyIdV1::new([0; 32]),
+        }..=Self::ZkAcePolicy {
+            policy_id: PrivacyPolicyIdV1::new([u8::MAX; 32]),
+        }
     }
 
     /// Construct the exact governed ZK-AMS issuer-policy record key.
@@ -3370,12 +3386,6 @@ mod tests {
     use std::str::FromStr as _;
 
     use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::{
-        account::AccountId,
-        asset::AssetDefinitionId,
-        domain::DomainId,
-        name::Name,
-    };
     use iroha_data_model::privacy::{
         PrivacyActiveLifecycleV1, PrivacyCommitmentV1, PrivacyConsensusLimitsV1, PrivacyIssuerIdV1,
         PrivacyIssuerRegistryPolicyNamespaceV1, PrivacyNamespaceScopeV1, PrivacyParameterIdV1,
@@ -3384,6 +3394,9 @@ mod tests {
         PrivacyRootV1, PrivacyTrustAnchorPolicyNamespaceV1, PrivacyVerifierDigestV1,
         PrivacyZkAcePolicyLifecycleV1, PrivacyZkAcePolicyRecordDigestV1,
         PrivacyZkAcePolicyRecordV1, PrivacyZkAmsKeyImageV1, PrivacyZkAmsRegistryIdV1,
+    };
+    use iroha_data_model::{
+        account::AccountId, asset::AssetDefinitionId, domain::DomainId, name::Name,
     };
     use mv::{json::JsonKeyCodec, storage::Storage};
     use p256::{ProjectivePoint, Scalar, elliptic_curve::Group};
@@ -4903,11 +4916,9 @@ mod tests {
             PrivacyProtocolIdV1::ZkAcePqAuthorizationV0
         );
         assert_eq!(replay_a.zk_ams_namespace(), None);
-        assert!(PrivacyNullifierKeyV1::zk_ace_replay(
-            PrivacyPolicyIdV1::new([0; 32]),
-            replay,
-        )
-        .is_err());
+        assert!(
+            PrivacyNullifierKeyV1::zk_ace_replay(PrivacyPolicyIdV1::new([0; 32]), replay,).is_err()
+        );
         assert!(
             PrivacyNullifierKeyV1::zk_ace_replay(policy_a, PrivacyNullifierV1::new([0; 32]))
                 .is_err()
@@ -4930,8 +4941,7 @@ mod tests {
         let record = PrivacyStateItemRecordV1::zk_ace_policy_governance(policy.clone(), 7)
             .expect("governance provenance");
 
-        let mut commitments =
-            Storage::<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>::new();
+        let mut commitments = Storage::<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>::new();
         assert!(
             load_privacy_zk_ace_policy_v1(policy_id, &commitments.view())
                 .expect_err("missing policy must reject")
@@ -4967,8 +4977,7 @@ mod tests {
             1
         );
 
-        let mut wrong_role =
-            Storage::<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>::new();
+        let mut wrong_role = Storage::<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>::new();
         wrong_role.insert(
             key,
             PrivacyStateItemRecordV1::zk_ams_governance(
@@ -4984,8 +4993,7 @@ mod tests {
         );
 
         let mismatched_policy_id = zk_ace_policy_id(2);
-        let mut mismatched =
-            Storage::<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>::new();
+        let mut mismatched = Storage::<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>::new();
         mismatched.insert(
             key,
             PrivacyStateItemRecordV1::zk_ace_policy_governance(
@@ -5002,8 +5010,7 @@ mod tests {
 
         let mut corrupted_policy = zk_ace_policy_record(policy_id);
         corrupted_policy.record_digest = PrivacyZkAcePolicyRecordDigestV1::new(nonzero(25));
-        let mut corrupted =
-            Storage::<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>::new();
+        let mut corrupted = Storage::<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>::new();
         corrupted.insert(
             key,
             PrivacyStateItemRecordV1::ZkAcePolicyGovernance {
@@ -5016,15 +5023,28 @@ mod tests {
                 .expect_err("self-digest corruption must reject")
                 .contains("self-digest mismatch")
         );
+
+        let mut zero_height = Storage::<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>::new();
+        zero_height.insert(
+            key,
+            PrivacyStateItemRecordV1::ZkAcePolicyGovernance {
+                policy,
+                admitted_at_height: 0,
+            },
+        );
+        assert!(
+            load_privacy_zk_ace_policy_v1(policy_id, &zero_height.view())
+                .expect_err("zero policy admission height must reject")
+                .contains("zero admission height")
+        );
     }
 
     #[test]
     fn zk_ace_policy_count_rejects_state_above_the_closed_global_bound() {
         let template = zk_ace_policy_record(zk_ace_policy_id(1));
-        let mut commitments =
-            Storage::<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>::new();
-        for index in 1..=u64::try_from(PRIVACY_ZK_ACE_MAX_POLICIES_V1 + 1)
-            .expect("policy bound fits u64")
+        let mut commitments = Storage::<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>::new();
+        for index in
+            1..=u64::try_from(PRIVACY_ZK_ACE_MAX_POLICIES_V1 + 1).expect("policy bound fits u64")
         {
             let policy_id = zk_ace_policy_id(index);
             let mut policy = template.clone();
@@ -5052,14 +5072,10 @@ mod tests {
     fn zk_ace_provenance_rejects_zero_fields_and_cross_role_reuse() {
         let policy_id = zk_ace_policy_id(1);
         let policy = zk_ace_policy_record(policy_id);
-        assert!(
-            PrivacyStateItemRecordV1::zk_ace_policy_governance(policy.clone(), 0).is_err()
-        );
+        assert!(PrivacyStateItemRecordV1::zk_ace_policy_governance(policy.clone(), 0).is_err());
         let mut corrupted_policy = policy.clone();
         corrupted_policy.record_digest = PrivacyZkAcePolicyRecordDigestV1::new(nonzero(31));
-        assert!(
-            PrivacyStateItemRecordV1::zk_ace_policy_governance(corrupted_policy, 7).is_err()
-        );
+        assert!(PrivacyStateItemRecordV1::zk_ace_policy_governance(corrupted_policy, 7).is_err());
 
         let record_digest = policy.record_digest;
         let statement_digest = PrivacyStatementDigestV1::new(nonzero(32));
@@ -5071,40 +5087,50 @@ mod tests {
             0,
         )
         .expect("canonical replay provenance");
-        valid.validate().expect("canonical replay provenance validates");
+        valid
+            .validate()
+            .expect("canonical replay provenance validates");
 
-        assert!(PrivacyStateItemRecordV1::zk_ace_verified_authorization(
-            PrivacyPolicyIdV1::new([0; 32]),
-            record_digest,
-            statement_digest,
-            7,
-            0,
-        )
-        .is_err());
-        assert!(PrivacyStateItemRecordV1::zk_ace_verified_authorization(
-            policy_id,
-            PrivacyZkAcePolicyRecordDigestV1::new([0; 32]),
-            statement_digest,
-            7,
-            0,
-        )
-        .is_err());
-        assert!(PrivacyStateItemRecordV1::zk_ace_verified_authorization(
-            policy_id,
-            record_digest,
-            PrivacyStatementDigestV1::new([0; 32]),
-            7,
-            0,
-        )
-        .is_err());
-        assert!(PrivacyStateItemRecordV1::zk_ace_verified_authorization(
-            policy_id,
-            record_digest,
-            statement_digest,
-            0,
-            0,
-        )
-        .is_err());
+        assert!(
+            PrivacyStateItemRecordV1::zk_ace_verified_authorization(
+                PrivacyPolicyIdV1::new([0; 32]),
+                record_digest,
+                statement_digest,
+                7,
+                0,
+            )
+            .is_err()
+        );
+        assert!(
+            PrivacyStateItemRecordV1::zk_ace_verified_authorization(
+                policy_id,
+                PrivacyZkAcePolicyRecordDigestV1::new([0; 32]),
+                statement_digest,
+                7,
+                0,
+            )
+            .is_err()
+        );
+        assert!(
+            PrivacyStateItemRecordV1::zk_ace_verified_authorization(
+                policy_id,
+                record_digest,
+                PrivacyStatementDigestV1::new([0; 32]),
+                7,
+                0,
+            )
+            .is_err()
+        );
+        assert!(
+            PrivacyStateItemRecordV1::zk_ace_verified_authorization(
+                policy_id,
+                record_digest,
+                statement_digest,
+                0,
+                0,
+            )
+            .is_err()
+        );
 
         let registered = BTreeSet::from([policy_id]);
         validate_privacy_zk_ace_replay_binding_v1(&registered, policy_id, &valid)
@@ -5129,13 +5155,9 @@ mod tests {
                 .contains("wrong-role")
         );
         assert!(
-            validate_privacy_zk_ace_replay_binding_v1(
-                &BTreeSet::new(),
-                policy_id,
-                &valid,
-            )
-            .expect_err("orphan replay marker must reject")
-            .contains("missing policy")
+            validate_privacy_zk_ace_replay_binding_v1(&BTreeSet::new(), policy_id, &valid,)
+                .expect_err("orphan replay marker must reject")
+                .contains("missing policy")
         );
         assert_eq!(valid.zk_ace_policy(), None);
     }

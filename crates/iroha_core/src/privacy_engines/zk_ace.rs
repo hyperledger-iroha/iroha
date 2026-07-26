@@ -18,9 +18,10 @@ use iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID;
 use sha2::{Digest as _, Sha256};
 
 #[cfg(test)]
-use super::zk_ace_stark::{BLOWUP_LOG2, QUERY_COUNT, SECURITY_LANES, TRACE_LOG2};
+use super::zk_ace_stark::proof_test_guard;
 use super::zk_ace_stark::{
-    MAX_PROOF_BYTES, prove_zk_ace_stark_v1_with_rng, verify_zk_ace_stark_v1,
+    COMPILED_STARK_PROFILE_DESCRIPTOR_V1, MAX_PROOF_BYTES, prove_zk_ace_stark_v1_with_rng,
+    verify_zk_ace_stark_v1,
 };
 
 /// Transcript family frozen into the dedicated proof implementation.
@@ -40,12 +41,21 @@ pub const ZK_ACE_POSEIDON_MANIFEST_SHA256_V1: &str =
 /// Native and consensus proof byte ceiling.
 pub const ZK_ACE_PRIVACY_MAX_PROOF_BYTES_V1: u32 = MAX_PROOF_BYTES as u32;
 /// Frozen digest of every compiled verifier-profile field below.
-pub const ZK_ACE_COMPILED_PROFILE_DIGEST_V1: [u8; 32] = [0; 32];
+pub const ZK_ACE_COMPILED_PROFILE_DIGEST_V1: [u8; 32] = [
+    0x28, 0x38, 0x55, 0x11, 0x4c, 0xc1, 0x85, 0x37, 0x5e, 0xf0, 0x6c, 0xb2, 0x1e, 0x03, 0xf2, 0x9d,
+    0x73, 0xe9, 0x77, 0x54, 0x9a, 0x13, 0xd5, 0xa9, 0xde, 0xb1, 0xca, 0x66, 0x8b, 0x51, 0x90, 0xb2,
+];
 
 /// Return the frozen digest of the exact compiled native verifier profile.
 #[must_use]
 pub const fn zk_ace_compiled_profile_digest_v1() -> [u8; 32] {
     ZK_ACE_COMPILED_PROFILE_DIGEST_V1
+}
+
+/// Return the complete human-auditable compiled algebraic profile.
+#[must_use]
+pub const fn zk_ace_stark_profile_descriptor_v1() -> &'static [u8] {
+    COMPILED_STARK_PROFILE_DESCRIPTOR_V1
 }
 
 #[cfg(test)]
@@ -62,19 +72,7 @@ fn recompute_zk_ace_compiled_profile_digest_v1() -> [u8; 32] {
         ZK_ACE_PQ_AUTHORIZATION_V0_CIRCUIT_ID.as_bytes(),
     );
     hash_field(&mut hasher, ZK_ACE_PRIVACY_TRANSCRIPT_LABEL_V1.as_bytes());
-    hash_field(
-        &mut hasher,
-        &[
-            1,
-            TRACE_LOG2,
-            BLOWUP_LOG2,
-            2,
-            u8::try_from(QUERY_COUNT).expect("query count fits u8"),
-            2,
-            u8::try_from(SECURITY_LANES).expect("lane count fits u8"),
-            1,
-        ],
-    );
+    hash_field(&mut hasher, zk_ace_stark_profile_descriptor_v1());
     hash_field(
         &mut hasher,
         &ZK_ACE_PRIVACY_MAX_PROOF_BYTES_V1.to_be_bytes(),
@@ -297,6 +295,7 @@ mod tests {
 
     fn fixture() -> &'static (ZkAcePrivacyPublicInputsV1, Vec<u8>) {
         static FIXTURE: OnceLock<(ZkAcePrivacyPublicInputsV1, Vec<u8>)> = OnceLock::new();
+        let _guard = proof_test_guard();
         FIXTURE.get_or_init(|| {
             let (public_inputs, witness) = public_inputs_and_witness();
             let proof =
